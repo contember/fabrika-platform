@@ -421,8 +421,10 @@ refuses a schema-less config; it never meets one, because Control refuses a
 framework release newer than the platform, and an installation deploys its runner
 with its Control from one `fabrika.ref`. A local run (`oblaka.ts`, Lopata) takes the
 proxy and application Workers from `composeLocalApplication({ config, contract,
-iamOrigin, env })`, the deploy's own composition, with the framework values and a
-fresh proxy secret written as variables.
+assets, iamOrigin, env })`, the deploy's own composition, with the framework values and a
+fresh proxy secret written as variables. `assets` is what `await stageLocalAssets(contract,
+root)` staged at the top of `oblaka.ts`: the deploy's own staging of the SPA and link
+mounts into `fabrika/assets` beside the generated config, bound as `ASSETS`.
 
 Cloudflare app resources are composed as a public proxy Worker with a private
 application Worker child (ADR-0048). The config's `resources` returns only the

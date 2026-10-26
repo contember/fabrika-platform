@@ -12,22 +12,23 @@ The rules an agent follows when it changes this application are `@fabrika/app`'s
 
 ## What is where
 
-| File                                                         | What it is                                                                                                        |
-| ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
-| `src/vocabulary.ts`                                          | The vocabulary: dimensions (a `note` lies in a `project`), actions, roles.                                        |
-| `db/migrations/*.sql`                                        | The application's SQLite migrations (STRICT tables, timestamps as UTC ISO text), applied by its Durable Object.   |
-| `src/db/tables.ts`                                           | The table policies over `src/db/schema.generated.ts`, which `fabrika db codegen` writes from the migrations.      |
-| `src/app-kit.ts`                                             | `defineApp(vocabulary, tables)`: the kit.                                                                         |
-| `src/schemas.ts`                                             | The input and output schemas.                                                                                     |
-| `src/access/endpoints.ts`                                    | The endpoints that answer from the caller's own grants, each with its callers, access form and `.handle(…)`.      |
-| `src/notes/endpoints.ts`                                     | A project's notes: a write that may carry a file, a read, the file's download, and the `review` job.              |
-| `fabrika.contract.ts`                                        | `app.contract(…)`: the `/api` and `/notes` mounts, the health check, the `attachments` file kind and the job.     |
-| `src/app.ts`                                                 | `serve(contract, { database: scoped(tables) })`.                                                                  |
-| `fabrika/entry.generated.ts`                                 | The Worker entrypoint `fabrika app build` writes, with `fabrika/migrations.generated.ts`. Do not edit them.       |
-| `fabrika.config.ts`                                          | The deploy surface: `defineApp({ id: 'example-app' })`, the whole of it.                                          |
-| `oblaka.ts`, `lopata.config.ts`                              | A local run of the proxy, the application with its Durable Object and bucket, and IAM over service bindings.      |
-| `src/__tests__/app.test.ts`                                  | The endpoints behind the production proxy decision (`testKit`) on `@fabrika/db/testing-sqlite`, denials included. |
-| `src/__tests__/endpoint-access.test.ts`, `src/db/__tests__/` | The generated tests `fabrika db test-scaffold` writes; do not edit them.                                          |
+| File                                                         | What it is                                                                                                          |
+| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------- |
+| `src/vocabulary.ts`                                          | The vocabulary: dimensions (a `note` lies in a `project`), actions, roles.                                          |
+| `db/migrations/*.sql`                                        | The application's SQLite migrations (STRICT tables, timestamps as UTC ISO text), applied by its Durable Object.     |
+| `src/db/tables.ts`                                           | The table policies over `src/db/schema.generated.ts`, which `fabrika db codegen` writes from the migrations.        |
+| `src/app-kit.ts`                                             | `defineApp(vocabulary, tables)`: the kit.                                                                           |
+| `src/schemas.ts`                                             | The input and output schemas.                                                                                       |
+| `src/access/endpoints.ts`                                    | The endpoints that answer from the caller's own grants, each with its callers, access form and `.handle(…)`.        |
+| `src/notes/endpoints.ts`                                     | A project's notes: a write that may carry a file, a read, the file's download, and the `review` job.                |
+| `fabrika.contract.ts`                                        | `app.contract(…)`: the `/api` and `/notes` mounts, the SPA, the health check, the `attachments` file kind, the job. |
+| `web/`, `build-web.ts`                                       | The SPA (`site`, at `/`, for every member): a page that names the signed-in person; `bun run build:web` builds it.  |
+| `src/app.ts`                                                 | `serve(contract, { database: scoped(tables) })`.                                                                    |
+| `fabrika/entry.generated.ts`                                 | The Worker entrypoint `fabrika app build` writes, with `fabrika/migrations.generated.ts`. Do not edit them.         |
+| `fabrika.config.ts`                                          | The deploy surface: `defineApp({ id: 'example-app' })` and the SPA build as `pipeline.build`, the whole of it.      |
+| `oblaka.ts`, `lopata.config.ts`                              | A local run of the proxy, the application with its Durable Object and bucket, and IAM over service bindings.        |
+| `src/__tests__/app.test.ts`                                  | The endpoints behind the production proxy decision (`testKit`) on `@fabrika/db/testing-sqlite`, denials included.   |
+| `src/__tests__/endpoint-access.test.ts`, `src/db/__tests__/` | The generated tests `fabrika db test-scaffold` writes; do not edit them.                                            |
 
 The application runs in one Durable Object per environment, over its SQLite
 ([ADR-0065](../../docs/decisions/0065-an-application-on-cloudflare-runs-in-one-durable-object-per-environment.md)). The
@@ -45,7 +46,8 @@ builds the proxy Worker from `contractProxyTable(artifact)` and binds the applic
 key as Worker secrets, and binds the `FABRIKA_APPLICATION` object, the `FABRIKA_FILES` bucket and the hourly repair
 tick; `boot` refuses to start when the digest is not the contract it compiled. The config declares none of them, and
 declaring one is refused. `defineApp` builds the application Worker `example-app` itself (the entry, no route, no
-public URL, IAM at its application entrypoint). The config declares no IAM schema: Control writes the approved
+public URL, IAM at its application entrypoint). The deploy runs `pipeline.build` (`bun run build:web`), stages the
+`site` mount's `dist/web` into `fabrika/assets` and binds it as `ASSETS`. The config declares no IAM schema: Control writes the approved
 contract's, `schemaFromContract(artifact)` with `contract: true`, so IAM refuses every wildcard written for this
 application.
 
@@ -68,7 +70,7 @@ not compile under this strict configuration.
 ```bash
 # from the repo root: generate the IAM config, then the proxy + app configs
 cd packages/iam && bun run oblaka
-cd ../../examples/app && bun run oblaka
+cd ../../examples/app && bun run build:web && bun run oblaka
 
 bun run dev          # lopata on http://127.0.0.1:18190
 ```
@@ -76,8 +78,9 @@ bun run dev          # lopata on http://127.0.0.1:18190
 `oblaka.ts` takes the composition from the provider (`composeLocalApplication`), the code a deploy composes with: the
 proxy Worker `example-app-proxy` over the contract's endpoint table, and the application Worker `example-app` with
 the `FABRIKA_APPLICATION` object (class `FabrikaApplication`, a SQLite class migration), the `FABRIKA_FILES` bucket,
-the hourly repair tick, and a `FABRIKA_PROXY_SECRET` that each `bun run oblaka` draws anew into the ignored
-`wrangler.jsonc`. It writes the framework variables into the application Worker itself, because no deploy runs, and
+the hourly repair tick, `ASSETS` over the SPA, and a `FABRIKA_PROXY_SECRET` that each `bun run oblaka` draws anew
+into the ignored `wrangler.jsonc`. Before it composes, `oblaka.ts` stages `dist/web` into the ignored `fabrika/assets`
+with `stageLocalAssets`, the deploy's code, so a file the build's `.assetsignore` lists is not served there either. It writes the framework variables into the application Worker itself, because no deploy runs, and
 expects IAM's issuer at `http://localhost:18191`. The application boots only with the `review` job's workload key, which a deploy writes:
 locally, issue one with IAM's `workloads.issueKey` for `example-app@local` after the schema is reconciled, and put it
 in `.dev.vars` as `FABRIKA_JOB_REVIEW_KEY`. The IAM Worker's D1 needs its migrations applied first.

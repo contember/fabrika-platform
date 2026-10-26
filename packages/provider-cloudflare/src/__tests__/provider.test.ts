@@ -29,6 +29,8 @@ import {
 	IAM_APPLICATION_ENTRYPOINT,
 	iamServiceReference,
 	isCloudflareAppConfig,
+	type StagedLocalAssets,
+	stageLocalAssets,
 } from '..'
 import { deployOrder } from '../deploy-order'
 import type { PlatformIamTarget } from '../provider'
@@ -2128,11 +2130,13 @@ describe('the application Worker `defineApp` builds for a config without `resour
 	test('the local composition is the deploy’s: its proxy, object, files bucket and repair tick', async () => {
 		await deploy(rec, defineApp({ id: 'demo' }), { contract: notesArtifact, framework: '0.9.0', declaresSchema: false, domain: null })
 		const deployed = (await generated()).find((config) => config.name === 'stage-demo')
-		const local = composeLocalApplication({ config: defineApp({ id: 'demo' }), contract: notesArtifact, iamOrigin: LOCAL_IAM, env: 'stage' })
+		const root = await localCheckout()
+		const assets = await stageLocalAssets(notesArtifact, root)
+		const local = composeLocalApplication({ config: defineApp({ id: 'demo' }), contract: notesArtifact, assets, iamOrigin: LOCAL_IAM, env: 'stage' })
 		expect(local.options.name).toBe('demo-proxy')
 		const configs = (await generateWranglerConfigs(local, 'stage')).configs.map((item) => item.config)
 		const application = configs.find((config) => config.name === 'stage-demo')
-		for (const key of ['main', 'durable_objects', 'migrations', 'r2_buckets', 'triggers', 'services'] as const) {
+		for (const key of ['main', 'durable_objects', 'migrations', 'r2_buckets', 'triggers', 'services', 'assets'] as const) {
 			expect(application?.[key]).toEqual(deployed?.[key])
 		}
 		expect(application?.triggers).toEqual({ crons: [STAGE_DEMO_REPAIR_TICK] })
@@ -2143,13 +2147,68 @@ describe('the application Worker `defineApp` builds for a config without `resour
 		})
 		expect(application?.vars?.['FABRIKA_PROXY_SECRET']).toMatch(/^[0-9a-f]{64}$/)
 		const loose = config({ schema: { scopes: [], actions: [], roles: {} } })
-		expect(() => composeLocalApplication({ config: loose, contract: notesArtifact, iamOrigin: LOCAL_IAM, env: 'stage' })).toThrow(
+		expect(() => composeLocalApplication({ config: loose, contract: notesArtifact, assets, iamOrigin: LOCAL_IAM, env: 'stage' })).toThrow(
 			'this deployment serves a contract',
 		)
+	})
+
+	test("a local run stages the SPA mounts with the deploy's code, and its ASSETS directory holds no ignored file", async () => {
+		const root = await localCheckout(async (dir) => {
+			const app = join(dir, 'dist', 'app')
+			await writeFile(join(app, '.assetsignore'), 'private.txt\n')
+			await writeFile(join(app, 'private.txt'), 'private')
+			await writeFile(join(app, 'app.js'), 'export {}')
+			await mkdir(join(app, '.git'))
+			await writeFile(join(app, '.git', 'config'), '[core]')
+		})
+		const assets = await stageLocalAssets(notesArtifact, root)
+		expect(assets).toEqual({
+			mounts: [{ name: 'shared', prefix: '/s', dir: 'dist/share' }, { name: 'spa', prefix: '/', dir: 'dist/app' }],
+			files: 3,
+		})
+		const local = composeLocalApplication({ config: defineApp({ id: 'demo' }), contract: notesArtifact, assets, iamOrigin: LOCAL_IAM, env: 'local' })
+		const application = (await generateWranglerConfigs(local, 'local')).configs.find((item) => item.config.name === 'local-demo')?.config
+		expect(application?.assets).toEqual({ directory: 'fabrika/assets', binding: 'ASSETS', run_worker_first: true })
+		// The generated config sits in the application root (the Worker's `dir: '.'`), so this is the directory Workers
+		// Assets serves the request paths from.
+		const served = join(root, application?.assets?.directory ?? 'none')
+		expect(await readFile(join(served, 'index.html'), 'utf8')).toBe('<!doctype html><title>dist/app</title>')
+		expect(await readFile(join(served, 'app.js'), 'utf8')).toBe('export {}')
+		expect(await readFile(join(served, 's', 'index.html'), 'utf8')).toBe('<!doctype html><title>dist/share</title>')
+		for (const path of ['private.txt', '.assetsignore', '.git']) {
+			expect({ path, served: existsSync(join(served, path)) }).toEqual({ path, served: false })
+		}
+	})
+
+	test("a local run of a contract with SPA mounts refuses to compose without what was staged, or with another contract's", async () => {
+		const compose = (assets?: StagedLocalAssets) => () =>
+			composeLocalApplication({
+				config: defineApp({ id: 'demo' }),
+				contract: notesArtifact,
+				...(assets === undefined ? {} : { assets }),
+				iamOrigin: LOCAL_IAM,
+				env: 'local',
+			})
+		expect(compose()).toThrow('composeLocalApplication: the contract serves SPA files; stage them first')
+		expect(compose({ mounts: [{ name: 'spa', prefix: '/', dir: 'dist/app' }], files: 1 })).toThrow('stage them first')
+		const authored = defineApp({ id: 'demo', resources: () => assetsApp().resources({ env: 'local' }) })
+		expect(() =>
+			composeLocalApplication({ config: authored, contract: notesArtifact, assets: { mounts: [], files: 0 }, iamOrigin: LOCAL_IAM, env: 'local' })
+		)
+			.toThrow('declares its own `assets`, so nothing is staged')
 	})
 })
 
 const LOCAL_IAM = 'http://localhost:18191'
+
+/** An application root whose SPA build wrote `notesArtifact`'s two mount directories, then `extra`. */
+const localCheckout = async (extra: (root: string) => Promise<void> = async () => {}): Promise<string> => {
+	const root = await mkdtemp(join(tmpdir(), 'fabrika-local-'))
+	fixtures.push(root)
+	await withBuiltMounts(root)
+	await extra(root)
+	return root
+}
 
 describe('the order of the first deploy (deployOrder)', () => {
 	test('deploys the application Worker before the proxy that binds it as `APP`, although oblaka lists the proxy first', async () => {
