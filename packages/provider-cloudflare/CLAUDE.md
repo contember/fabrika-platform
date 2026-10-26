@@ -188,7 +188,10 @@ this one import.
   `assets: { directory: 'fabrika/assets', binding: 'ASSETS', run_worker_first: true }`, and the `deploy-worker` step,
   after `pipeline.build` and right before the walk below, empties that directory and copies each mount's build
   directory (from the application root) into it at the mount's prefix: the most specific mount owns a path, a `.map`
-  and Workers Assets' own `_headers`, `_redirects` and `.assetsignore` at the root are left out, a symbolic link
+  and Workers Assets' own `_headers`, `_redirects` and `.assetsignore` at the root are left out, and so are what the
+  mount's own `.assetsignore` excludes (the `ignore` package, wrangler's matcher, relative to the mount's directory;
+  a directory is tested with its trailing `/`) and `.git`, `.hg`, `.svn`, `.bzr` at any depth (`VCS_NAMES`, outside
+  the ignore rules so a `!` cannot bring them back); a symbolic link
   anywhere on a mount's path (`x/etc` with `x -> /`: `resolve` reads only text, so every segment is `lstat`ed), on the
   way to `fabrika/assets`, or in the tree, and a special file, are refused, and a missing directory fails the step
   naming the mount. A page route that names no file gets the mount's `index.html`; a missing asset stays 404.

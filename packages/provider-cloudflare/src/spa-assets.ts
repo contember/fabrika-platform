@@ -5,8 +5,9 @@
 
 import { CLOUDFLARE_ASSETS_BINDING } from '@fabrika/app/build'
 import type { ContractArtifact } from '@fabrika/auth-core'
+import ignore, { type Ignore } from 'ignore'
 import type { Stats } from 'node:fs'
-import { copyFile, lstat, mkdir, readdir, rm } from 'node:fs/promises'
+import { copyFile, lstat, mkdir, readdir, readFile, rm } from 'node:fs/promises'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 
 /** Where the deploy stages the mounts' files, beside the generated `wrangler.jsonc` of the application Worker. */
@@ -20,6 +21,12 @@ export const SPA_ASSETS = { directory: SPA_ASSETS_DIRECTORY, binding: CLOUDFLARE
  * steer the platform's asset routing and headers, so they are never staged.
  */
 const ASSET_CONFIG_PATHS: ReadonlySet<string> = new Set(['/_headers', '/_redirects', '/.assetsignore'])
+
+/** A mount's own ignore file, read as wrangler reads the one at the root of an `assets.directory`. */
+const ASSETS_IGNORE_FILE = '.assetsignore'
+
+/** Version control metadata, never staged under any name or depth, whatever a mount's ignore file says. */
+const VCS_NAMES: ReadonlySet<string> = new Set(['.git', '.hg', '.svn', '.bzr'])
 
 /** A ceiling on the staging walk, as on the check of a published directory. */
 const MAX_ASSET_ENTRIES = 50_000
@@ -74,6 +81,21 @@ const linkOnPath = async (base: string, relativePath: string): Promise<string | 
 	return null
 }
 
+/**
+ * The mount's `.assetsignore` with wrangler's semantics (the `ignore` package, gitignore syntax, relative to the mount's
+ * directory), which also ignores the file itself. Workers Assets reads only the one at the root of the uploaded
+ * directory, so the deploy applies each mount's before it stages anything: a build excludes its files as it would with
+ * its own `assets`.
+ */
+const mountIgnore = async (source: string, refuse: (detail: string) => Error): Promise<Ignore> => {
+	const rules = ignore().add(`/${ASSETS_IGNORE_FILE}`)
+	const path = join(source, ASSETS_IGNORE_FILE)
+	const stats = await lstatOrNull(path)
+	if (stats === null) return rules
+	if (!stats.isFile()) throw refuse(`contains \`${ASSETS_IGNORE_FILE}\`, which is not a regular file`)
+	return rules.add(await readFile(path, 'utf8'))
+}
+
 const isWithin = (root: string, path: string): boolean => {
 	const between = relative(root, path)
 	return between === '' || (!between.startsWith('..') && !isAbsolute(between))
@@ -83,7 +105,8 @@ const isWithin = (root: string, path: string): boolean => {
  * Copy each mount's build directory under `root` into `target` at its prefix, after removing whatever `target` held. A
  * file of a mount that lies under a longer mount's prefix is that mount's path, so it is left out; a source map is never
  * served (the platform build uploads it to Operations), so it is left out too, and so is Workers Assets' own
- * configuration at the root (`ASSET_CONFIG_PATHS`). A mount whose directory is missing, a symbolic link anywhere on
+ * configuration at the root (`ASSET_CONFIG_PATHS`), what the mount's `.assetsignore` excludes, and version control
+ * metadata (`VCS_NAMES`) at any depth. A mount whose directory is missing, a symbolic link anywhere on
  * its path or in its tree, or anything but a regular file or a directory is refused: the staged tree is uploaded
  * publicly, and a link would publish its target. `target` is `SPA_ASSETS_DIRECTORY` under `base`, with no link on the
  * way either. Returns how many files it staged.
@@ -122,6 +145,7 @@ export const stageSpaAssets = async (mounts: readonly AssetMount[], root: string
 		if (!stats.isDirectory()) {
 			throw refuse(stats.isSymbolicLink() ? 'is a symbolic link; the deploy would publish its target' : 'is not a directory')
 		}
+		const ignored = await mountIgnore(source, refuse)
 		const longer = mounts.filter((other) => other.prefix.length > mount.prefix.length).map((other) => other.prefix)
 		const walk = async (prefix: string): Promise<void> => {
 			for (const name of (await readdir(join(source, prefix))).sort()) {
@@ -129,8 +153,10 @@ export const stageSpaAssets = async (mounts: readonly AssetMount[], root: string
 				if (entries > MAX_ASSET_ENTRIES) throw refuse(`holds more than ${MAX_ASSET_ENTRIES} entries with the other mounts`)
 				const file = prefix === '' ? name : `${prefix}/${name}`
 				const path = requestPath(mount.prefix, file)
-				if (longer.some((other) => isUnder(path, other)) || ASSET_CONFIG_PATHS.has(path)) continue
+				if (VCS_NAMES.has(name) || longer.some((other) => isUnder(path, other)) || ASSET_CONFIG_PATHS.has(path)) continue
 				const entry = await lstat(join(source, file))
+				// The trailing `/` is how the matcher tells a directory, so `secret/` excludes the directory and all below it.
+				if (ignored.ignores(entry.isDirectory() ? `${file}/` : file)) continue
 				if (entry.isSymbolicLink()) throw refuse(`contains \`${file}\`, a symbolic link; the deploy would publish its target`)
 				if (entry.isDirectory()) {
 					await walk(file)

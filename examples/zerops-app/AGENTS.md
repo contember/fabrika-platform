@@ -626,7 +626,9 @@ the default). A binding of the application's own, or another `compatibility_date
 
 It also serves the SPA: the deploy copies the build directory of each SPA and
 link mount (`dir`, a link's `spa`) into `fabrika/assets/` at the mount's prefix (`/admin` into `fabrika/assets/admin/`)
-after `pipeline.build`, and binds it as `ASSETS`. A deploy whose mount directory the build did not write fails and
+after `pipeline.build`, and binds it as `ASSETS`. A `.assetsignore` at the root of a mount's directory excludes files
+as it does for wrangler (gitignore syntax, relative to that directory); `.git`, `.hg`, `.svn` and `.bzr` are never
+copied. A deploy whose mount directory the build did not write fails and
 names the mount. A config that composes its own Worker with `resources` and declares `assets` keeps them instead, and the object reads each
 request path from that directory as it is (`/admin/app.js` is `admin/app.js` there), so a hand-written `assets` works
 only for a root mount, or for mounts whose directories nest like their prefixes; it needs `binding: 'ASSETS'` and

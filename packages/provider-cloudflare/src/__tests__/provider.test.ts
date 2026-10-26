@@ -2287,6 +2287,52 @@ describe("the SPA mounts' files on Workers Assets", () => {
 		expect(existsSync(join(checkoutDir, 'fabrika', 'assets', 'index.html'))).toBe(true)
 	})
 
+	test("what a mount's .assetsignore excludes, and version control metadata at any depth, never reach the staged directory", async () => {
+		const checkoutDir = await builtCheckout(async (root) => {
+			const app = join(root, 'dist', 'app')
+			// A negation cannot bring version control metadata back.
+			await writeFile(join(app, '.assetsignore'), '.env\nprivate.txt\nsecret/\n!.git\n')
+			await writeFile(join(app, '.env'), 'TOKEN=app')
+			await writeFile(join(app, 'private.txt'), 'private')
+			await mkdir(join(app, 'secret'))
+			await writeFile(join(app, 'secret', 'key.txt'), 'key')
+			await mkdir(join(app, '.git'))
+			await writeFile(join(app, '.git', 'config'), '[remote "origin"]\n\turl = https://x-access-token:token@example.com/repo')
+			await mkdir(join(app, 'assets', '.svn'), { recursive: true })
+			await writeFile(join(app, 'assets', '.svn', 'entries'), 'svn')
+			await writeFile(join(app, 'assets', 'private.txt'), 'nested private')
+			await writeFile(join(app, 'kept.txt'), 'kept')
+			// Each mount reads its own ignore file: the link mount's `.env` is excluded by its rules, a `.git` file too.
+			const share = join(root, 'dist', 'share')
+			await writeFile(join(share, '.assetsignore'), '/.env\n')
+			await writeFile(join(share, '.env'), 'TOKEN=share')
+			await writeFile(join(share, '.git'), 'gitdir: ../../.git/worktrees/share')
+			await writeFile(join(share, '.assetsignore-not'), 'served')
+		})
+		const result = await deploy(rec, config(), { checkoutDir })
+		expect(result.status).toBe('succeeded')
+		const staged = join(checkoutDir, 'fabrika', 'assets')
+		for (
+			const path of [
+				'.env',
+				'private.txt',
+				'secret',
+				'.git',
+				'.assetsignore',
+				join('assets', '.svn'),
+				join('assets', 'private.txt'),
+				join('s', '.env'),
+				join('s', '.git'),
+				join('s', '.assetsignore'),
+			]
+		) {
+			expect({ path, staged: existsSync(join(staged, path)) }).toEqual({ path, staged: false })
+		}
+		expect(await readFile(join(staged, 'kept.txt'), 'utf8')).toBe('kept')
+		expect(await readFile(join(staged, 's', '.assetsignore-not'), 'utf8')).toBe('served')
+		expect(rec.logs).toContain('  staged 4 SPA files into fabrika/assets: /s from dist/share, / from dist/app')
+	})
+
 	test('a dry run names what it would stage and writes nothing', async () => {
 		const checkoutDir = await builtCheckout()
 		await deploy(rec, config(), { checkoutDir, dryRun: true })

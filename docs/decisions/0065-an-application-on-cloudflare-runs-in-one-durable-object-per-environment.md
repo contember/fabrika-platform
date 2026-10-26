@@ -122,7 +122,8 @@ SQLite database. The Worker only forwards each request to it.**
    contract may declare several SPA and link mounts, each with a build directory of its own. When the application
    Worker declares no `assets`, the deploy binds `ASSETS` to a directory beside its config and, after the
    application's build, copies each mount's directory into it at the mount's prefix, the most specific mount owning a
-   path; the object asks the binding for the request path as it is, and for a path that names no file for the mount's
+   path, without what the mount's own `.assetsignore` excludes (wrangler's rules, which read only the uploaded
+   directory's root) and without version control metadata; the object asks the binding for the request path as it is, and for a path that names no file for the mount's
    `index.html`. A Worker that declares its own `assets` keeps them.
 
 ## Consequences
