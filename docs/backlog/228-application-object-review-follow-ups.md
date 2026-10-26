@@ -114,11 +114,15 @@ statement and a `PRAGMA` before anything runs, so these gaps are defence in dept
 29. Every `inspect` counts up to 100,000 rows per table synchronously, and a `data.read` holder can call it without a
     bound. Cache the view or rate-limit the call.
 30. Deleting an environment leaves its ops keys' vault rows behind, as it does for token keys.
-31. `servesOps` counts a prerelease as its minor, so a Cloudflare environment pinned to 0.9.0-dev.0 to 0.9.0-dev.4 gets the
-    ops row, the key digests and a required vault, although those prereleases were published before the object served
-    the ops channel. The ops row then reaches an application that answers no ops request. Gate on the first release
-    that ships the ops handler, prerelease included. Not by SemVer order alone: `0.9.0-cloudflare.1` sorts
-    below `0.9.0-dev.0`, and the cloudflare channel ships the handler (`contract-support.test.ts` pins it as served).
+31. The three minor gates count a prerelease as its minor, and 0.9.0-dev.0 to 0.9.0-dev.4 have no application object:
+    their tags hold `packages/app/src/cloudflare.ts` and no `src/cloudflare/application.ts`, which 0.9.0-cloudflare.1
+    is the first to ship. `runsInObject` and `pinsGeneratedEntry` therefore deploy such an environment on the object
+    runtime with the generated entry, which its framework does not export; `servesOps` gives it the ops row, the key
+    digests and a required vault, so the ops row reaches an application that answers no ops request. Gate each on the
+    first release that ships what it serves, prerelease included. Not by SemVer order alone: `0.9.0-cloudflare.1`
+    sorts below `0.9.0-dev.0`, and the cloudflare channel ships the object (`contract-support.test.ts` pins it as
+    served). [Backlog 240](240-channel-prereleases-sort-below-the-release-floors.md) is the same ordering problem for
+    the release floors.
 
 ## Approach / acceptance
 

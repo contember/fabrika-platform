@@ -19,6 +19,6 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 
 ## Active
 
-- [The application Durable Object](sprint-2026-10-24-application-object.md) — the Cloudflare application object sleeps unless it has work, queries stop blocking it, and Control inspects, backs up and side-restores its data. Waits on decision D0 and the proposal's open questions.
+- [The application Durable Object](sprint-2026-10-24-application-object.md) — the Cloudflare application object sleeps unless it has work, queries stop blocking it, and Control inspects, backs up and side-restores its data. D0 and the proposal's open questions are settled.
 - [Provider-neutral core](sprint-2026-10-23-provider-neutral-core.md) — what is the same on every cloud moves out of the provider packages into Control or a neutral library (ADR-0011).
 - [Terminals](sprint-2026-10-21-terminals.md) — an enrolled shared computer signs a person in on an application's word, bounded by a ceiling, through the unchanged handoff (ADR-0067).
