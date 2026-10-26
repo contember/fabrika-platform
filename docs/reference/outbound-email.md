@@ -605,8 +605,16 @@ idempotent, `queued`, `maxBatch` 1, `listUnsubscribe`, and `maxAttachmentBytes` 
   `UNIQUE (sender, idempotency_key)`, with the SHA-256 of the canonical body as its
   fingerprint. A repeat with the same fingerprint answers the first `messageId`; a
   different one answers `idempotency_conflict`. The recipient, the subject, the bodies
-  and the attachments live only in `content`; the row also keeps the recipient's
-  domain, lowercase.
+  and the attachments live only in the canonical request: on Postgres in the row's
+  `content`, on the Worker in an R2 object of `<env>-fabrika-mail-content` that the
+  row's `content_ref` names (`messages/<id>.json`), because a D1 row holds at most
+  2,000,000 bytes and the relay accepts 10 MiB of attachments. The row also keeps the
+  recipient's domain, lowercase.
+- On the Worker the object is written before its row, and a `mail_content_uploads`
+  record of it before the object. The batch that inserts the row deletes the record
+  only once the row names the object. A repeated key discards the new object; an object
+  whose row never committed is collected by maintenance an hour later, and only when no
+  row names it.
 - The gate decides once, when the message is first recorded:
   1. an installation sender: `queued`;
   2. Control has no valid transport (`MAIL_TRANSPORT` none or invalid): `held`;
@@ -630,7 +638,9 @@ idempotent, `queued`, `maxBatch` 1, `listUnsubscribe`, and `maxAttachmentBytes` 
 
 - The dispatcher consumes the `vozka-mail` queue (`PostgresJobQueue`, in Control's jobs
   table) on its own loop beside `vozka-deploy`, so a long deploy never delays a sign-in
-  link. One job sends one `queued`, due message.
+  link. On the Worker it consumes the `<env>-fabrika-mail` Cloudflare Queue in `queue()`,
+  and runs only with that queue and the content bucket both bound. One job sends one
+  `queued`, due message.
 - A message can have more than one job (a retry, a release, maintenance), and Control can
   run two consumers. Before the send, a job claims the attempt: one guarded update moves
   the message `queued` → `sending` and counts the attempt, only while the message is due
@@ -660,7 +670,10 @@ idempotent, `queued`, `maxBatch` 1, `listUnsubscribe`, and `maxAttachmentBytes` 
   it for its retries, and the console withholds it from every caller.
 - Control's maintenance pass (cron) re-enqueues `queued` messages unchanged for 10
   minutes whose retry is due, and `sending` messages whose claim is stale, at most 100 a
-  pass. It purges the content of final messages 30 days after their last change. A held
+  pass. It purges the content of final messages 30 days after their last change (on the
+  Worker at most 100 objects a pass, each object before its row lets go of it, so an
+  interrupted purge leaves a row naming a missing object, which reads as purged). It
+  collects content objects recorded more than an hour ago that no row names. A held
   message keeps its content.
 
 ### The console

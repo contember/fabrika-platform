@@ -104,8 +104,8 @@ no idempotency key.
 ### 5. Which deploys get it
 
 - On Zerops, on the namespace-proxy path. On Cloudflare, mail goes to every environment once Control's Worker runs the
-  relay (it has its `vozka-mail` queue): a Cloudflare environment reaches Control's public origin directly. A Worker
-  without the queue hands installation mail as the installation's `FABRIKA_EMAIL_*`
+  relay (it has its `fabrika-mail` queue and `fabrika-mail-content` bucket): a Cloudflare environment reaches Control's
+  public origin directly. A Worker without them hands installation mail as the installation's `FABRIKA_EMAIL_*`
   ([ADR-0019](0019-portable-outbound-email.md) §4). The `source` receiver goes to no Cloudflare environment: Cloudflare
   runs no `dev` environment.
 - Only an application whose approved snapshot records framework release 0.7.0 or newer gets the platform transport. A
@@ -171,9 +171,9 @@ only: it reads the bound workspace's files between two heads, and nothing else.
 1. **Generated files.** The transport changes no installation file. Control's console table gains the `mail-relay`
    row, so `platform deploy` rewrites `FABRIKA_SERVICE_TABLE_DIGEST` with the regenerated manifest. IAM's setup in
    the release's generated `zerops.yaml` gains `FABRIKA_CONTROL_URL`; the sidecar builds IAM from the tag's checkout,
-   so `platform upgrade` carries it. On Cloudflare, Control's committed `wrangler.jsonc` gains the `vozka-mail` queue
-   (producer and consumer) and no Durable Object migration; the sidecar's workflow deploys Control from the tag's
-   checkout, so its file is unchanged.
+   so `platform upgrade` carries it. On Cloudflare, Control's committed `wrangler.jsonc` gains the `fabrika-mail` queue
+   (producer and consumer) and the `fabrika-mail-content` R2 bucket, and no Durable Object migration; the sidecar's
+   workflow deploys Control from the tag's checkout, so its file is unchanged.
 2. **Environment variables.** An existing application environment converges at its next deploy. A 0.7 release gets
    `FABRIKA_EMAIL_PROVIDER=platform` and the `FABRIKA_PLATFORM_MAIL_*` pair, and the deploy removes the provider's
    variables, which it no longer hands. The key is sensitive and cannot be read back, so every deploy writes it.
@@ -181,12 +181,15 @@ only: it reads the bound workspace's files between two heads, and nothing else.
    `FABRIKA_EMAIL_*` vars, and the deploy deletes each `FABRIKA_EMAIL_*` secret it no longer writes (the provider's
    credential among them). An older release keeps its `FABRIKA_EMAIL_*`. Control itself gains no variable: its relay
    sends with the `FABRIKA_EMAIL_*` it already holds.
-3. **Provider state.** Migration `0013_mail_relay.sql` only adds tables. On Zerops the dispatch queue `vozka-mail`
-   lives in the existing jobs table. On Cloudflare the next Control deploy provisions the `<env>-vozka-mail` queue
-   (oblaka adopts one that exists by name), and until that deploy Control has no queue, runs no relay and hands
-   applications the installation's `FABRIKA_EMAIL_*` as before. `vozka-mail` joins the platform resource names an
-   application may not bind, so an application deploy that names it is refused. No resource an older version created
-   is checked again.
+3. **Provider state.** Migration `0013_mail_relay.sql` only adds tables, and `0024_mail_content_objects.sql` a nullable
+   column and a table; existing rows keep their content in the row and read as before. On Zerops the dispatch queue
+   `vozka-mail` lives in the existing jobs table, and content stays in the row. On Cloudflare the next Control deploy
+   provisions two new resources, the `<env>-fabrika-mail` queue and the `<env>-fabrika-mail-content` bucket (its
+   `provision-resources` step runs oblaka, which creates a missing one and adopts one that exists by name), and applies
+   `0024` to D1 in its migrate step. Until that deploy Control runs no relay and hands applications the installation's
+   `FABRIKA_EMAIL_*` as before; a Worker with only one of the two runs none either. Only Control binds the bucket.
+   `fabrika-mail` and `fabrika-mail-content` join the platform resource names an application may not bind, so an
+   application deploy that names either is refused. No resource an older version created is checked again.
 4. **Floating pins.** None. The choice reads the framework release recorded in the approved snapshot, not a pin that
    floats. A snapshot recorded before Control recorded the release reads as an older application.
 

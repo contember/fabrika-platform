@@ -165,7 +165,7 @@ as `dropped`: an operator's decision, never a silent loss.
     Control hands it whether or not its own transport is valid, because the relay holds what it cannot send;
   - **the set**, for an older release or a snapshot that records no release: every `FABRIKA_EMAIL_*` Control holds,
     service-level and always sensitive ([ADR-0062](0062-a-platform-release-serves-older-framework-releases.md));
-  - **the set** on Cloudflare when Control's Worker runs no relay (it has no `vozka-mail` queue), whatever the release.
+  - **the set** on Cloudflare when Control's Worker runs no relay (it lacks the `fabrika-mail` queue or the `fabrika-mail-content` bucket), whatever the release.
     The deploy writes every name as a Worker secret, and the provider refuses it to a release before 0.9, whose
     stateless Worker runs no job.
 
@@ -217,8 +217,9 @@ origin is registered is sent in IAM's own wording.
 
 Control owns the relay. It already holds the installation's transport, the console, and the deploy that hands an
 application its variables. The relay runs in Control's Bun process, on Zerops and in the local stack, and in Control's
-Worker on Cloudflare when the Worker has its dispatch queue (`<env>-vozka-mail`, consumed by the Worker's `queue()`
-next to the deploy queue); a Worker without it answers the row with 404. Its senders reach it over the platform transport
+Worker on Cloudflare when the Worker has its dispatch queue (`<env>-fabrika-mail`, consumed by the Worker's `queue()`
+next to the deploy queue) and its content bucket (`<env>-fabrika-mail-content`); a Worker without them answers the row
+with 404. Its senders reach it over the platform transport
 ([ADR-0064](0064-applications-reach-the-platform-over-a-receiver-verified-transport-key.md)).
 
 - **Senders.** An application environment on framework 0.7 (`<app>@<env>`, by its transport key), and IAM on Zerops
@@ -227,7 +228,9 @@ next to the deploy queue); a Worker without it answers the row with 404. Its sen
   unchanged.
 - **Every message is a row.** The relay records the canonical request, its fingerprint, the sender, the recipient's
   domain, the rule that decided it and its state, with or without a provider. A repeat under the same key answers the
-  first message id; other content under the key is `idempotency_conflict`.
+  first message id; other content under the key is `idempotency_conflict`. On the Worker the canonical request lives in
+  an R2 object the row names, written before the row: a D1 row holds at most 2,000,000 bytes, and the relay accepts
+  10 MiB of attachments. Postgres keeps it in the row.
 - **The gate decides once, at acceptance.** An installation sender always passes: IAM's sign-in links do not wait for
   a person. A Control without a valid transport holds every application message. Otherwise the most specific rule by
   sender scope and recipient domain decides: the exact environment with the exact domain, then the environment with
@@ -369,9 +372,13 @@ applications on every cloud.
 Cloudflare applications get the relay's URL and key instead of the credential, as on Zerops. First deferred; adopted
 once an installation needed to hold one application's mail while another kept sending (an imported application whose
 old installation still sent the same notifications). The relay's tables were already in Control's D1 schema; the Worker
-gained the `vozka-mail` Cloudflare Queue, a consumer in its `queue()` that runs the same dispatcher, and the relay in
-its `Env`, so the console's release and requeue and the maintenance re-enqueue work there unchanged. The application
-needed no change, because it reads either from `FABRIKA_EMAIL_PROVIDER`.
+gained the `fabrika-mail` Cloudflare Queue, a consumer in its `queue()` that runs the same dispatcher, the
+`fabrika-mail-content` R2 bucket that holds each message's content (a D1 row holds at most 2,000,000 bytes, the relay
+accepts 10 MiB of attachments), and the relay in its `Env`, so the console's release and requeue and the maintenance
+re-enqueue work there unchanged. The application needed no change, because it reads either from
+`FABRIKA_EMAIL_PROVIDER`. The content bucket is its own: the run-logs bucket is bound by the runner Worker too, which
+would then read every message. Splitting content across D1 rows, and lowering the Worker's attachment limit below what
+applications advertise, were rejected.
 
 ### Drop a message without a record
 
