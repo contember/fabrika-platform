@@ -28,7 +28,7 @@ import { buildRunDeps, iamSchemaDeps, locks, operationsReleaseDeps, opsTransport
  * ports everything downstream is written against. Two of the five need no adapter at all.
  */
 /** The mail relay's queue, whatever environment prefix the deploy gives it. */
-const MAIL_QUEUE_SUFFIX = 'vozka-mail'
+const MAIL_QUEUE_SUFFIX = 'fabrika-mail'
 
 export class Vozka extends WorkerEntrypoint<WorkerBindings> {
 	/** The runtime-neutral view of this Worker's bindings. Cheap — three closures and a spread. */
@@ -46,7 +46,7 @@ export class Vozka extends WorkerEntrypoint<WorkerBindings> {
 	}
 
 	/**
-	 * The two consumers. The mail relay's queue (`<env>-vozka-mail`) carries one relayed message per job: every send
+	 * The two consumers. The mail relay's queue (`<env>-fabrika-mail`) carries one relayed message per job: every send
 	 * failure settles or requeues its row, so only an unexpected throw is retried (maintenance re-enqueues a lost one).
 	 * The control queue carries deploy and namespace jobs, one per message (maxBatchSize 1): ack on a handled message,
 	 * including a `deferred` one, whose re-enqueue `runControlJob` has already done, and on an undecodable one; retry only

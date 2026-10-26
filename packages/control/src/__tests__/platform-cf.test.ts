@@ -84,6 +84,27 @@ function workerBindings(harness: ReturnType<typeof createHarness>): WorkerBindin
 }
 
 describe("the Cloudflare composition's mail transport", () => {
+	test('runs the relay only with both its queue and its content bucket', () => {
+		const harness = createHarness()
+		const unexpected = (): never => {
+			throw new Error('unexpected binding access')
+		}
+		const queue = { send: unexpected, sendBatch: unexpected, metrics: unexpected }
+		const bucket = {
+			head: unexpected,
+			get: unexpected,
+			put: unexpected,
+			createMultipartUpload: unexpected,
+			resumeMultipartUpload: unexpected,
+			delete: unexpected,
+			list: unexpected,
+		}
+		// Without the bucket the relay would record into D1 rows, which hold at most 2,000,000 bytes.
+		expect(controlEnv({ ...workerBindings(harness), MAIL_QUEUE: queue }, () => {}).MAIL_RELAY).toBeUndefined()
+		expect(controlEnv({ ...workerBindings(harness), MAIL_CONTENT: bucket }, () => {}).MAIL_RELAY).toBeUndefined()
+		expect(controlEnv({ ...workerBindings(harness), MAIL_QUEUE: queue, MAIL_CONTENT: bucket }, () => {}).MAIL_RELAY).toBeDefined()
+	})
+
 	test("reads the installation's FABRIKA_EMAIL_* from the Worker's vars and secrets, and hands it to every deploy", async () => {
 		const harness = createHarness()
 		try {

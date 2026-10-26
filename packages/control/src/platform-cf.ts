@@ -53,10 +53,13 @@ export interface WorkerBindings
 	/** Deploy job queue — producer here, consumer via the Worker's `queue()` handler. */
 	DEPLOY_QUEUE: Queue<ControlJobMessage>
 	/**
-	 * The mail relay's dispatch queue (`vozka-mail`), producer and consumer here. Without it the Worker runs no relay and
-	 * a deploy hands applications the installation's `FABRIKA_EMAIL_*`, as before the relay ran on Cloudflare.
+	 * The mail relay's dispatch queue (`fabrika-mail`), producer and consumer here. Without it, or without `MAIL_CONTENT`,
+	 * the Worker runs no relay and a deploy hands applications the installation's `FABRIKA_EMAIL_*`, as before the relay
+	 * ran on Cloudflare.
 	 */
 	MAIL_QUEUE?: Queue<MailDispatchMessage>
+	/** The relay's message content (`fabrika-mail-content`), one object per message: a D1 row holds at most 2,000,000 bytes. */
+	MAIL_CONTENT?: R2Bucket
 	/** The single Cloudflare account selected by this composition root. */
 	CLOUDFLARE_ACCOUNT_ID?: string
 	/** Account-wide deploy credential. It is passed to the runner only for a live deploy. */
@@ -89,7 +92,7 @@ function installationSender(bindings: WorkerBindings): EmailSender | null {
  * never sends through the relay, so no key authenticates as IAM (`installationSecret: null`).
  */
 function mailRelay(bindings: WorkerBindings): MailRelay | undefined {
-	if (bindings.MAIL_QUEUE === undefined) return undefined
+	if (bindings.MAIL_QUEUE === undefined || bindings.MAIL_CONTENT === undefined) return undefined
 	return { queue: cfJobQueue(bindings.MAIL_QUEUE), installationSecret: null, sender: installationSender(bindings) }
 }
 
@@ -114,7 +117,10 @@ export function controlEnv(bindings: WorkerBindings, waitUntil: Env['WAIT_UNTIL'
 		// is where a `local` claim from a publicly-served console fails. Same shape as IAM's `buildOidc`.
 		ENVIRONMENT: readEnvironmentName(bindings.ENVIRONMENT, controlPublicOrigin(bindings)),
 		DB: bindings.DB,
-		REPOSITORIES: createControlRepositories(bindings.DB),
+		REPOSITORIES: createControlRepositories(
+			bindings.DB,
+			bindings.MAIL_CONTENT === undefined ? {} : { mailContent: r2BlobStore(bindings.MAIL_CONTENT) },
+		),
 		ASSETS: bindings.ASSETS,
 		RUN_LOGS: r2BlobStore(bindings.RUN_LOGS),
 		DEPLOY_QUEUE: cfJobQueue(bindings.DEPLOY_QUEUE),

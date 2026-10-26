@@ -573,12 +573,28 @@ describe('Cloudflare provider', () => {
 			'R2 bucket `vozka-run-logs` becomes `stage-vozka-run-logs`, which would take over the Fabrika platform resource `vozka-run-logs`',
 		)
 
-		// Control's mail relay queue carries every relayed message; a consumer of it would read them all.
-		const platformMailQueue = config({
+		// Control's mail relay queue and content bucket carry every relayed message; a binding of either would read them all.
+		const mailQueue = config({
 			resources: () =>
-				new Worker({ dir: '.', ...PRIVATE, name: 'demo', compatibility_flags: [], bindings: { MAIL: new Queue({ name: 'vozka-mail' }) }, main: ENTRY }),
+				new Worker({ dir: '.', ...PRIVATE, name: 'demo', compatibility_flags: [], bindings: { MAIL: new Queue({ name: 'fabrika-mail' }) }, main: ENTRY }),
 		})
-		await expect(deploy(rec, platformMailQueue)).rejects.toThrow('which would take over the Fabrika platform resource `vozka-mail`')
+		await expect(deploy(rec, mailQueue)).rejects.toThrow(
+			'queue `fabrika-mail` becomes `stage-fabrika-mail`, which would take over the Fabrika platform resource `fabrika-mail`',
+		)
+		const mailContent = config({
+			resources: () =>
+				new Worker({
+					dir: '.',
+					...PRIVATE,
+					name: 'demo',
+					compatibility_flags: [],
+					bindings: { MAIL: new R2Bucket({ name: 'fabrika-mail-content' }) },
+					main: ENTRY,
+				}),
+		})
+		await expect(deploy(rec, mailContent)).rejects.toThrow(
+			'R2 bucket `fabrika-mail-content` becomes `stage-fabrika-mail-content`, which would take over the Fabrika platform resource `fabrika-mail-content`',
+		)
 		expect(rec.provisions).toHaveLength(0)
 	})
 

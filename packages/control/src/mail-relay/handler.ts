@@ -53,7 +53,7 @@ export interface MailAcceptDeps {
 	readonly now: () => number
 }
 
-/** `POST /platform/mail/send`; any other path under the row, and the Worker, which has no relay, answer 404. */
+/** `POST /platform/mail/send`; any other path under the row, and a Control without a relay, answer 404. */
 export function handleMailRelay(ctx: ControlAppContext): Promise<Response> {
 	const relay = ctx.env.MAIL_RELAY
 	if (relay === undefined || ctx.request.method !== 'POST' || new URL(ctx.request.url).pathname !== PLATFORM_MAIL_SEND_PATH) {

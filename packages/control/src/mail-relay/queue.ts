@@ -1,7 +1,7 @@
 import type { EmailSender } from '@fabrika/email'
 import type { JobQueue } from '@fabrika/platform'
 import { z } from 'zod'
-import type { MailMessageRepository, MailMessageRow } from '../db'
+import { hasMailContent, type MailMessageRepository, type MailMessageRow } from '../db'
 
 /** Whether a sender is an installation service (`installation:<service>`), not an application environment. */
 export function isInstallationSender(sender: string): boolean {
@@ -20,7 +20,7 @@ export function decodeMailDispatchMessage(payload: unknown): MailDispatchMessage
 	return dispatchMessageSchema.parse(payload)
 }
 
-/** The relay's process half. Only the Bun process has one; the Worker answers the relay's row with 404. */
+/** The relay's process half: the Bun process's, or the Worker's when it binds its queue and content bucket; without one the row answers 404. */
 export interface MailRelay {
 	readonly queue: JobQueue<MailDispatchMessage>
 	/**
@@ -61,7 +61,7 @@ export function requeueableMailStates(sender: EmailSender | null): readonly ('fa
 
 /** Whether `requeueMailMessage` would requeue the message now. */
 export function mayRequeueMail(row: MailMessageRow, sender: EmailSender | null): boolean {
-	return row.content !== null && requeueableMailStates(sender).some((state) => state === row.state)
+	return hasMailContent(row) && requeueableMailStates(sender).some((state) => state === row.state)
 }
 
 export interface MailRequeueDeps {

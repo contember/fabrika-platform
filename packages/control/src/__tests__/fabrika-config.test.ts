@@ -84,6 +84,12 @@ describe('defineApp(vozka config)', () => {
 		expect(binding(app, 'RUN_LOGS')).toBeInstanceOf(R2Bucket)
 		expect(binding(app, 'DB')).toBeInstanceOf(D1Database)
 		expect(binding(app, 'DEPLOY_QUEUE')).toBeInstanceOf(Queue)
+		// The mail relay: its dispatch queue and the bucket its message content lives in, both new resources under `fabrika-`.
+		const mailQueue = binding(app, 'MAIL_QUEUE')
+		const mailContent = binding(app, 'MAIL_CONTENT')
+		if (!(mailQueue instanceof Queue) || !(mailContent instanceof R2Bucket)) throw new Error('the mail relay bindings are missing')
+		expect(mailQueue.options.name).toBe('fabrika-mail')
+		expect(mailContent.options.name).toBe('fabrika-mail-content')
 		// Off-local stages bind the propustka IAM ServiceReference.
 		expect(binding(app, 'IAM')).toBeInstanceOf(ServiceReference)
 		expect(binding(app, 'OPERATIONS')).toBeInstanceOf(ServiceReference)

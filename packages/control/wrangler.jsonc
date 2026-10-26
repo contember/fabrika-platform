@@ -60,6 +60,10 @@
 		{
 			"binding": "RUN_LOGS",
 			"bucket_name": "vozka-run-logs"
+		},
+		{
+			"binding": "MAIL_CONTENT",
+			"bucket_name": "fabrika-mail-content"
 		}
 	],
 	"d1_databases": [
@@ -78,7 +82,7 @@
 			},
 			{
 				"binding": "MAIL_QUEUE",
-				"queue": "vozka-mail"
+				"queue": "fabrika-mail"
 			}
 		],
 		"consumers": [
@@ -89,7 +93,7 @@
 				"retry_delay": 30
 			},
 			{
-				"queue": "vozka-mail",
+				"queue": "fabrika-mail",
 				"max_batch_size": 1,
 				"max_retries": 5,
 				"retry_delay": 60

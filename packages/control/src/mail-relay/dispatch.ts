@@ -1,5 +1,5 @@
 // The dispatcher: one job sends one `queued` message through the installation's own transport and settles its row.
-// Runtime-neutral; the Bun process runs it from the `vozka-mail` queue.
+// Runtime-neutral; the Bun process runs it from its `vozka-mail` job queue, the Worker from its `fabrika-mail` queue.
 //
 // A message can have more than one job (a retry, a release, maintenance), and Control can run two consumers. Each
 // attempt is claimed before the send (`queued` → `sending`), so exactly one consumer sends it, and its outcome is
@@ -79,7 +79,7 @@ async function settleStaleClaim(deps: MailDispatchDeps, row: MailMessageRow): Pr
 
 /** Runs the claimed attempt `attempts` and records its outcome against that claim. */
 async function attempt(deps: MailDispatchDeps, sender: EmailSender, row: MailMessageRow, attempts: number): Promise<MailDispatchResult> {
-	const message = await storedMessage(row)
+	const message = await storedMessage(row, await deps.messages.content(row))
 	if (message === null) return await settleUndelivered(deps, row, 'failed', 'invalid_message', attempts)
 
 	let providerMessageId: string
@@ -129,11 +129,11 @@ async function forgetInstallationContent(deps: MailDispatchDeps, row: MailMessag
 }
 
 /** The stored request, parsed again at the row boundary, under the relay's own key. `null`: none, or unreadable. */
-async function storedMessage(row: MailMessageRow): Promise<EmailMessage | null> {
-	if (row.content === null) return null
+async function storedMessage(row: MailMessageRow, content: string | null): Promise<EmailMessage | null> {
+	if (content === null) return null
 	let json: unknown
 	try {
-		json = JSON.parse(row.content)
+		json = JSON.parse(content)
 	} catch {
 		return null
 	}
