@@ -296,8 +296,8 @@ bunx tsc --noEmit                                           # once, at the end
 bunx fabrika-check .                                        # once, after tsc; refusals fail; hints print below them
 ```
 
-**On Cloudflare** (`fabrika.config.ts` imports `defineApp` from `@fabrika/provider-cloudflare`) the application runs in
-one Durable Object over SQLite. Its `db/migrations/*.sql` are SQLite (`references/table-and-migration.md`), and the
+**On Cloudflare** (`fabrika.config.ts` imports `defineApp` from `@fabrika/provider-cloudflare`, as
+`references/app-setup.md` shows) the application runs in one Durable Object over SQLite. Its `db/migrations/*.sql` are SQLite (`references/table-and-migration.md`), and the
 object applies them when it boots, so there is no `migrate` and no command needs a database URL or `FABRIKA_APP_ID`.
 The tests run on `@fabrika/db/testing-sqlite` (`references/tests.md`), in memory, and never skip. A handler holds the
 object's transaction, so its `limits.timeoutMs` is at most 25 s. A job's is at most 14 minutes, its default: longer
