@@ -22,15 +22,7 @@
 		"directory": "../dashboard/dist",
 		"binding": "ASSETS",
 		"not_found_handling": "single-page-application",
-		"run_worker_first": [
-			"/api/*",
-			"/iam/admin/*",
-			"/operations/api/*",
-			"/platform/*",
-			"/webhooks/*",
-			"/webhooks",
-			"/mcp*"
-		]
+		"run_worker_first": true
 	},
 	"vars": {
 		"ENVIRONMENT": "local",

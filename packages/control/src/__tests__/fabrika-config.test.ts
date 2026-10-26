@@ -105,6 +105,8 @@ describe('defineApp(vozka config)', () => {
 		}
 		expect(worker.options.assets?.binding).toBe('ASSETS')
 		expect(worker.options.assets?.directory).toBe('../dashboard/dist')
+		// A path list here would drift from the service table: one it misses (`/builder/connect` did) gets the SPA.
+		expect(worker.options.assets?.run_worker_first).toBe(true)
 	})
 
 	test('IAM is bound locally too, with a resolvable issuer — the app has no local mode to fall back on', () => {

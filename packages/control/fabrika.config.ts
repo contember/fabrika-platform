@@ -28,7 +28,7 @@ import {
 } from '@fabrika/provider-cloudflare'
 import { serviceProxyTable } from '@fabrika/proxy-core/manifest'
 import { controlSchema } from './fabrika.schema'
-import { CONTROL_MCP_PATH, controlServiceContract } from './fabrika.service'
+import { controlServiceContract } from './fabrika.service'
 import { CLOUDFLARE_MAIL_REMEDY, type InstallationMail, readInstallationMail } from './src/mail-transport'
 
 /**
@@ -128,10 +128,11 @@ export const buildControlApplicationWorker = (ctx: ResourceContext): Worker => {
 			directory: '../dashboard/dist',
 			binding: 'ASSETS',
 			not_found_handling: 'single-page-application',
-			// Workers Assets answers a GET before the Worker runs, and its SPA fallback would hand `index.html` to a
-			// browser navigation to a server path (the GitHub manifest handoff, the callback): the reserved prefixes
-			// of `fabrika.service.ts` always reach the Worker.
-			run_worker_first: ['/api/*', '/iam/admin/*', '/operations/api/*', '/platform/*', '/webhooks/*', '/webhooks', `${CONTROL_MCP_PATH}*`],
+			// Every request reaches the Worker first. Workers Assets would otherwise answer a browser navigation itself, and
+			// its SPA fallback hands `index.html` to every server path a browser opens (the GitHub manifest handoff,
+			// `/builder/connect`, `/healthz`). `controlApp` routes every path by `fabrika.service.ts`, and its `console` row
+			// hands the rest to `ASSETS`, which applies the SPA fallback: the table decides, as on the Bun process.
+			run_worker_first: true,
 		},
 		vars: {
 			...controlEmailVars(isLocal),
