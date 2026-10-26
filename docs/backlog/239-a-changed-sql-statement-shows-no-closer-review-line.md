@@ -1,10 +1,10 @@
 ---
-id: 238
+id: 239
 title: A changed SQL statement shows no closer-review line
 blocked-by: []
 ---
 
-# 238 — A changed SQL statement shows no closer-review line
+# 239 — A changed SQL statement shows no closer-review line
 
 **Summary.** A site whose `sql:` declaration is unchanged can change its statements freely, and the approval diff shows
 nothing; since `ctx.sql` no longer checks where a scope fragment stands, the approver is the only reader of that text.
