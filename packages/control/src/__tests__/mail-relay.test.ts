@@ -40,6 +40,8 @@ interface RelayOptions {
 	relay?: boolean
 	/** Control's sender; none by default. */
 	sender?: EmailSender
+	/** `null`: IAM does not send through the relay (Cloudflare). */
+	installationSecret?: string | null
 }
 
 async function relay(options: RelayOptions = {}): Promise<Relay> {
@@ -70,7 +72,15 @@ async function relay(options: RelayOptions = {}): Promise<Relay> {
 		WAIT_UNTIL: () => {},
 		ENVIRONMENT: 'local',
 		MAIL_TRANSPORT: options.transport ?? TRANSPORT,
-		...(options.relay === false ? {} : { MAIL_RELAY: { queue, installationSecret: RPC_SECRET, sender: options.sender ?? null } }),
+		...(options.relay === false
+			? {}
+			: {
+				MAIL_RELAY: {
+					queue,
+					installationSecret: options.installationSecret === undefined ? RPC_SECRET : options.installationSecret,
+					sender: options.sender ?? null,
+				},
+			}),
 	}
 	return {
 		harness,
@@ -156,6 +166,14 @@ describe('the mail relay: authentication', () => {
 			expect(await answer(response)).toEqual({ status: 401, answer: { error: { code: 'provider_unauthorized' } } })
 		}
 		expect(await r.harness.repositories.mailMessages.list({ limit: 10 })).toEqual([])
+	})
+
+	test('where IAM does not send through the relay (Cloudflare), no key authenticates as IAM, whatever secret derived it', async () => {
+		const r = await relay({ installationSecret: null })
+		for (const key of [await installationMailKey(RPC_SECRET), await installationMailKey(`${RPC_SECRET}-other`)]) {
+			expect(await answer(await r.send({ key }))).toEqual({ status: 401, answer: { error: { code: 'provider_unauthorized' } } })
+		}
+		expect(await acceptedId(await r.send({}))).toBeString()
 	})
 
 	test('a key lookup that fails is provider_unavailable, which the sender retries', async () => {

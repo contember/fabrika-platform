@@ -130,6 +130,8 @@ export interface RunDeps {
 	 * `FABRIKA_EMAIL_PROVIDER=none`. An invalid one refuses only the deploys that need it.
 	 */
 	mailTransport?: InstallationMail
+	/** Whether this Control runs the mail relay (the Bun process always; the Worker when it has its dispatch queue). */
+	mailRelay?: boolean
 	/**
 	 * The platform transport keys an environment behind a namespace proxy calls Control's relay with; absent without a
 	 * vault, and then a contract whose job sends through the relay does not deploy there.
@@ -727,7 +729,7 @@ async function deployUnder(
 		}
 		// From the approved contract only, like every other access the deploy publishes (ADR-0050); a dry run issues none.
 		const approvedContract = registration.environment.access?.contract ?? null
-		const relayedMail = relaysMail(deps.provider, approvedRow)
+		const relayedMail = relaysMail(deps, approvedRow)
 		const mailEnvironment = relayedMail
 			? {}
 			: installationMailEnvironment(deps.mailTransport ?? NO_INSTALLATION_MAIL, approvedContract, approvedSnapshot(approvedRow).snapshot.framework)
@@ -1008,11 +1010,16 @@ async function devSourceKey(deps: Pick<RunDeps, 'platformTransport'>, appEnv: Ap
 	return deps.platformTransport.issue(appEnv.app_id, appEnv.env, 'source')
 }
 
-/** Whether the environment's approved version sends its jobs' mail through Control's relay: only behind a namespace proxy. */
-function relaysMail(provider: ControlProvider, appEnv: AppEnvRow): boolean {
-	const namespaceProxy = appEnv.namespace_id !== null && provider.namespaces?.republish !== undefined
+/**
+ * Whether the environment's approved version sends its jobs' mail through Control's relay: behind a namespace proxy,
+ * and, on a provider without deployment namespaces (Cloudflare), whenever this Control runs the relay: there every
+ * environment reaches Control's public origin.
+ */
+function relaysMail(deps: Pick<RunDeps, 'provider' | 'mailRelay'>, appEnv: AppEnvRow): boolean {
+	const namespaceProxy = appEnv.namespace_id !== null && deps.provider.namespaces?.republish !== undefined
+	const publicRelay = deps.provider.namespaces === undefined && deps.mailRelay === true
 	const { snapshot } = approvedSnapshot(appEnv)
-	return namespaceProxy && relaysInstallationMail(snapshot.contract, snapshot.framework)
+	return (namespaceProxy || publicRelay) && relaysInstallationMail(snapshot.contract, snapshot.framework)
 }
 
 /**
@@ -1020,8 +1027,12 @@ function relaysMail(provider: ControlProvider, appEnv: AppEnvRow): boolean {
  * its version runs, the previous one sends with its key. `appEnv` is the run's own publication, which no other run can
  * replace before this one settles. A failure leaves the keys to their expiry or the next succeeded run.
  */
-async function retirePlatformKeys(deps: Pick<RunDeps, 'platformTransport' | 'provider'>, appEnv: AppEnvRow, runId: string): Promise<void> {
-	if (deps.platformTransport === undefined || relaysMail(deps.provider, appEnv)) return
+async function retirePlatformKeys(
+	deps: Pick<RunDeps, 'platformTransport' | 'provider' | 'mailRelay'>,
+	appEnv: AppEnvRow,
+	runId: string,
+): Promise<void> {
+	if (deps.platformTransport === undefined || relaysMail(deps, appEnv)) return
 	try {
 		await deps.platformTransport.revoke(appEnv.app_id, appEnv.env, 'mail')
 	} catch {
