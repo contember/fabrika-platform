@@ -569,15 +569,18 @@ const runStep = async (spec: CloudflareStep, env: StepEnv): Promise<void> => {
 				return
 			}
 			const application = `${run.env}-${applicationWorker(worker).options.name}`
+			let applicationDir: string | undefined
 			for (const generated of deployOrder(configs)) {
 				const generatedDir = dirname(resolve(dir, generated.path))
 				// The checkout's own build step has run by now, so this is the last moment the tree is still ours to check.
 				if (env.platformResources === 'refuse') await assertLiteralAssets(generated, generatedDir)
 				const isApplication = generated.config.name === application
 				await wranglerDeploy(env, generatedDir, isApplication ? env.managedSecrets : {})
-				// A platform component's own secrets carry framework names (IAM's mail transport), so only an application's are swept.
-				if (isApplication && env.platformResources === 'refuse') await deleteStaleSecrets(env, generatedDir)
+				if (isApplication) applicationDir = generatedDir
 			}
+			// Swept only once every Worker is deployed: a failed sweep must not leave the new application behind the old proxy.
+			// A platform component's own secrets carry framework names (IAM's mail transport), so only an application's are swept.
+			if (applicationDir !== undefined && env.platformResources === 'refuse') await deleteStaleSecrets(env, applicationDir)
 			return
 		}
 		case 'reconcile-schema': {
