@@ -38,6 +38,7 @@ import {
 	checkCurrentTimestampDefaults,
 	checkFileColumnMigrations,
 	checkMigrationNames,
+	checkSqliteFrameworkNames,
 	type ConflictInsert,
 	type FileColumn,
 } from './rules/migrations'
@@ -271,6 +272,7 @@ export const checkApplication = async (input: CheckInput): Promise<Finding[]> =>
 	if (applicationDialect(tree.files) === 'sqlite') {
 		if (artifact !== null) findings.push(...checkCloudflareContract(artifact))
 		findings.push(...checkCurrentTimestampDefaults(tree.files))
+		findings.push(...checkSqliteFrameworkNames(tree.files))
 	}
 	if (declaredTables !== null) {
 		const policies = tablePolicies(declaredTables)
