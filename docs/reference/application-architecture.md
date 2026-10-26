@@ -227,16 +227,17 @@ An import is judged by the file or package Bun loads for it:
   first, external calls after: IAM, object storage and connector effects do not roll back with the invocation.
 - **Off-road reach is declared on the procedure** in the shell, and the runtime builds the handle only there:
 
-  | Declaration                                | Gives the handler                                |
-  | ------------------------------------------ | ------------------------------------------------ |
-  | `sql: 'read' \| 'write'`                   | `ctx.sql`; a query or export takes only `'read'` |
-  | `unscoped: { <table>: 'read' \| 'write' }` | `ctx.db.unscoped.<table>`, in that mode          |
-  | `connect: ['<connector>']`                 | `ctx.connect.<connector>`                        |
-  | `issues: '<mount>'`                        | `ctx.links.issue` and `revoke`; also on a job    |
-  | `binds: '<webhook>'`                       | `ctx.webhooks('<webhook>').bind` and `unbind`    |
-  | `signs: ['<purpose>']`                     | `ctx.tokens.sign`; also on a job and a webhook   |
-  | `kicks: ['<job>']`                         | `ctx.kick`; also on a webhook and a job          |
-  | `egress: ['https://<host>']`               | `fetch` to those origins; also on a job, webhook |
+  | Declaration                                | Gives the handler                                   |
+  | ------------------------------------------ | --------------------------------------------------- |
+  | `sql: 'read' \| 'write'`                   | `ctx.sql`; a query or export takes only `'read'`    |
+  | `unscoped: { <table>: 'read' \| 'write' }` | `ctx.db.unscoped.<table>`, in that mode             |
+  | `connect: ['<connector>']`                 | `ctx.connect.<connector>`                           |
+  | `issues: '<mount>'`                        | `ctx.links.issue` and `revoke`; also on a job       |
+  | `binds: '<webhook>'`                       | `ctx.webhooks('<webhook>').bind` and `unbind`       |
+  | `signs: ['<purpose>']`                     | `ctx.tokens.sign`; also on a job and a webhook      |
+  | `kicks: ['<job>']`                         | `ctx.kick`; also on a webhook and a job             |
+  | `egress: ['https://<host>']`               | `fetch` to those origins; also on a job, webhook    |
+  | `egress: 'public'`                         | `fetch` to public hosts; a cron job only (ADR-0071) |
 
 - **Logic** (`logic.ts`) is pure: values in, values out. It does not see `ctx`, a handle or a row it did not get as an
   argument. Its tests need no database.

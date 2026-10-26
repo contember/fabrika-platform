@@ -15,6 +15,11 @@ const NETWORK: Forbidden = {
 	what: 'a raw network module',
 	allowed: 'endpoints declared in the contract; another application through a connector import',
 }
+/** `Bun.fetch`: Bun's own `fetch`, which the egress guard on the global one does not wrap. */
+const BUN_FETCH: Forbidden = {
+	what: "Bun's own fetch, past the egress guard",
+	allowed: "the global fetch, under the site's egress: ['<origin>'] or a cron job's egress: 'public'",
+}
 const PROCESSES: Forbidden = { what: 'a process-spawning module', allowed: 'a job declared in the contract (c.cron)' }
 
 const FORBIDDEN_PACKAGES: ReadonlyMap<string, Forbidden> = new Map([
@@ -78,6 +83,7 @@ export const FORBIDDEN_BUN_MEMBERS: ReadonlyMap<string, Forbidden> = new Map([
 	...['sql', 'SQL'].map((name): [string, Forbidden] => [name, DATABASE]),
 	...['S3Client', 's3'].map((name): [string, Forbidden] => [name, STORAGE]),
 	...['serve', 'connect', 'listen', 'udpSocket'].map((name): [string, Forbidden] => [name, NETWORK]),
+	['fetch', BUN_FETCH],
 	...['spawn', 'spawnSync', '$'].map((name): [string, Forbidden] => [name, PROCESSES]),
 ])
 

@@ -18,6 +18,7 @@ import {
 	type ContractArtifact,
 	type CspExtensions,
 	type CspSource,
+	type DeclaredEgress,
 	type DeclaredReach,
 	type DimensionArtifact,
 	directoryReach,
@@ -52,6 +53,7 @@ import {
 	planEndpoint,
 	type ProcedureArtifact,
 	type ProcedureChallenge,
+	PUBLIC_EGRESS,
 	type RoleArtifact,
 	type SchemaShape,
 	type ScopeBinding,
@@ -147,7 +149,7 @@ const FRAMEWORK_TABLE_PREFIX = 'fabrika_'
 /** The most origins one site calls: a site that reaches more is an integration hub, which a connector import serves. */
 const MAX_EGRESS_ORIGINS = 16
 const DECLARED_ALLOWED =
-	"sql: 'read' | 'write', unscoped: { <table>: 'read' | 'write' }, connect: ['<import>'], issues: '<link mount>', mailer: 'installation' | 'own', kicks: ['<cron job>'], binds: '<webhook>', signs: ['<token purpose>'], egress: ['https://<host>']"
+	"sql: 'read' | 'write', unscoped: { <table>: 'read' | 'write' }, connect: ['<import>'], issues: '<link mount>', mailer: 'installation' | 'own', kicks: ['<cron job>'], binds: '<webhook>', signs: ['<token purpose>'], egress: ['https://<host>'] | 'public' (a cron job)"
 const CSP_FIELDS = ['connectSrc', 'imgSrc', 'frameAncestors', 'scriptSrc', 'frameSrc', 'styleSrc', 'fontSrc']
 /** An environment variable an application reads; a challenge names its secret by one. */
 const APPLICATION_VARIABLE = /^[A-Z][A-Z0-9_]*$/
@@ -2110,7 +2112,7 @@ class ArtifactBuilder {
 			...(kicks.length === 0 ? {} : { kicks }),
 			...(binds === undefined ? {} : { binds }),
 			...(signs.length === 0 ? {} : { signs }),
-			...(egress.length === 0 ? {} : { egress }),
+			...(egress === null ? {} : { egress }),
 		}
 		if (place.kind !== 'rpc') {
 			this.#rpcOnly(where, 'connect', value['connect'])
@@ -2309,12 +2311,13 @@ class ArtifactBuilder {
 
 	/**
 	 * The HTTPS origins a site's code calls: a credentialed procedure of an RPC mount, a webhook or a job, never a public,
-	 * export or link procedure. Each is an exact origin with no path or wildcard, once; `[]` when it declares none or after
-	 * a problem.
+	 * export or link procedure. Each is an exact origin with no path or wildcard, once. Or `'public'`, every public host
+	 * (ADR-0071), which only a cron job declares: it calls outside any transaction, and its schedule, not a caller,
+	 * decides when. `null` when it declares none or after a problem.
 	 */
-	#egress(where: string, value: unknown, place: DeclaringSite): string[] {
+	#egress(where: string, value: unknown, place: DeclaringSite): DeclaredEgress | null {
 		if (value === undefined) {
-			return []
+			return null
 		}
 		const refusedBy = place.kind === 'export'
 			? 'an export procedure'
@@ -2325,15 +2328,35 @@ class ArtifactBuilder {
 			: null
 		if (refusedBy !== null) {
 			this.#problem(where, `declares egress, which ${refusedBy} never does: a credentialed procedure, a webhook or a job calls out`)
-			return []
+			return null
+		}
+		if (value === PUBLIC_EGRESS) {
+			if (place.kind !== 'job') {
+				this.#problem(
+					where,
+					`declares egress: '${PUBLIC_EGRESS}', which only a cron job declares: a procedure or a webhook names its origins (allowed: egress: ['https://api.example.com'])`,
+				)
+				return null
+			}
+			return PUBLIC_EGRESS
 		}
 		if (!Array.isArray(value) || value.length === 0 || !value.every((origin) => typeof origin === 'string')) {
-			this.#problem(where, "egress is not a list of origins (allowed: egress: ['https://api.example.com'])")
-			return []
+			this.#problem(
+				where,
+				place.kind === 'job'
+					? "egress is not a list of origins or 'public' (allowed: egress: ['https://api.example.com'] or egress: 'public')"
+					: "egress is not a list of origins (allowed: egress: ['https://api.example.com'])",
+			)
+			return null
 		}
 		const origins: string[] = value.filter((origin) => typeof origin === 'string')
 		if (origins.length > MAX_EGRESS_ORIGINS) {
-			this.#problem(where, `${origins.length} egress origins exceed the limit of ${MAX_EGRESS_ORIGINS}`)
+			this.#problem(
+				where,
+				`${origins.length} egress origins exceed the limit of ${MAX_EGRESS_ORIGINS}${
+					place.kind === 'job' ? " (a cron job that calls the websites its operators name declares egress: 'public')" : ''
+				}`,
+			)
 		}
 		for (const origin of origins) {
 			if (!isPolicyOrigin(origin)) {

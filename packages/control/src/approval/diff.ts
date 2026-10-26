@@ -14,6 +14,7 @@ import {
 	compileEndpointTable,
 	type ContractArtifact,
 	type CrossOriginForm,
+	type DeclaredEgress,
 	type DeclaredReach,
 	type DimensionArtifact,
 	type EndpointAuthorization,
@@ -42,6 +43,7 @@ import {
 	planEndpoint,
 	type ProcedureArtifact,
 	type ProcedureChallenge,
+	PUBLIC_EGRESS,
 	type RedirectShape,
 	type RoleArtifact,
 	type SchemaShape,
@@ -577,9 +579,15 @@ function compareDeclared(
 
 /**
  * The origins a site's code calls (`egress`): a new one is a place the site's data may go, so it widens with closer
- * review; a dropped one narrows.
+ * review; a dropped one narrows. Beside a job's `'public'`, which reaches every public origin, a dropped origin is no
+ * change, and `reachSteps` shows the move to it. Leaving `'public'` widens by every listed origin: the origin guard
+ * admits what public egress refuses (an IP address, a port, the installation's hosts, a name that resolves privately),
+ * so no listed origin is provably within it.
  */
-function egressChanges(site: string, from: readonly string[], to: readonly string[]): RuledLine[] {
+function egressChanges(site: string, before: DeclaredEgress, after: DeclaredEgress): RuledLine[] {
+	if (after === PUBLIC_EGRESS) return []
+	const from: readonly string[] = before === PUBLIC_EGRESS ? [] : before
+	const to: readonly string[] = after
 	const name = siteName(site)
 	return ruled(
 		'reach.egress',
@@ -671,8 +679,25 @@ function reachSteps(from: DeclaredReach, to: DeclaredReach): RuledLine[] {
 		changes.push(...ruled('reach.issues', issues))
 	}
 	changes.push(...ruled('reach.mailer', mailerChange(from.mailer, to.mailer)))
+	changes.push(...ruled('reach.public-egress', publicEgressChange(from.egress, to.egress)))
 	return changes
 }
+
+/**
+ * A job's `egress: 'public'` (ADR-0071): its code may send what it holds to any public host, wherever an operator, a row
+ * or a page it fetched points it, so gaining it widens with closer review. Losing it narrows; `egressChanges` shows
+ * each origin the job calls instead as a widening of its own. The guard keeps it off private addresses and the
+ * installation's own hosts, as listed at the environment's deploy.
+ */
+function publicEgressChange(from: DeclaredEgress | undefined, to: DeclaredEgress | undefined): Line[] {
+	if ((from === PUBLIC_EGRESS) === (to === PUBLIC_EGRESS)) return []
+	if (to === PUBLIC_EGRESS) return [closer('off-road', PUBLIC_EGRESS_LINE)]
+	return [narrowing('no longer calls any public website')]
+}
+
+/** What a job with `egress: 'public'` reaches, as the approver reads it. */
+export const PUBLIC_EGRESS_LINE =
+	"calls any public website over HTTPS or HTTP (`egress: 'public'`): whoever can write the rows it reads, or the pages it fetches, can make it fetch any public URL and read the answer. The installation's hosts are refused as listed at this environment's deploy; a domain added later is refused from its next deploy"
 
 /** Undeclared reaches no transport, `own` the application's, and `installation` the installation's credentials. */
 function mailerChange(from: JobMailer | undefined, to: JobMailer | undefined): Line[] {
