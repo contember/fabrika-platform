@@ -171,13 +171,22 @@ only: it reads the bound workspace's files between two heads, and nothing else.
 1. **Generated files.** The transport changes no installation file. Control's console table gains the `mail-relay`
    row, so `platform deploy` rewrites `FABRIKA_SERVICE_TABLE_DIGEST` with the regenerated manifest. IAM's setup in
    the release's generated `zerops.yaml` gains `FABRIKA_CONTROL_URL`; the sidecar builds IAM from the tag's checkout,
-   so `platform upgrade` carries it.
+   so `platform upgrade` carries it. On Cloudflare, Control's committed `wrangler.jsonc` gains the `vozka-mail` queue
+   (producer and consumer) and no Durable Object migration; the sidecar's workflow deploys Control from the tag's
+   checkout, so its file is unchanged.
 2. **Environment variables.** An existing application environment converges at its next deploy. A 0.7 release gets
    `FABRIKA_EMAIL_PROVIDER=platform` and the `FABRIKA_PLATFORM_MAIL_*` pair, and the deploy removes the provider's
    variables, which it no longer hands. The key is sensitive and cannot be read back, so every deploy writes it.
-   An older release keeps its `FABRIKA_EMAIL_*`.
-3. **Provider state.** Migration `0013_mail_relay.sql` only adds tables. The dispatch queue `vozka-mail` lives in the
-   existing jobs table. No resource an older version created is checked again.
+   On Cloudflare the pair is a Worker secret and a var of the new version, the version drops the old plain
+   `FABRIKA_EMAIL_*` vars, and the deploy deletes each `FABRIKA_EMAIL_*` secret it no longer writes (the provider's
+   credential among them). An older release keeps its `FABRIKA_EMAIL_*`. Control itself gains no variable: its relay
+   sends with the `FABRIKA_EMAIL_*` it already holds.
+3. **Provider state.** Migration `0013_mail_relay.sql` only adds tables. On Zerops the dispatch queue `vozka-mail`
+   lives in the existing jobs table. On Cloudflare the next Control deploy provisions the `<env>-vozka-mail` queue
+   (oblaka adopts one that exists by name), and until that deploy Control has no queue, runs no relay and hands
+   applications the installation's `FABRIKA_EMAIL_*` as before. `vozka-mail` joins the platform resource names an
+   application may not bind, so an application deploy that names it is refused. No resource an older version created
+   is checked again.
 4. **Floating pins.** None. The choice reads the framework release recorded in the approved snapshot, not a pin that
    floats. A snapshot recorded before Control recorded the release reads as an older application.
 
