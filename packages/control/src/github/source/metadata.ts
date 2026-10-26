@@ -226,7 +226,8 @@ export class GitHubMetadataClient {
 			try {
 				response = await this.fetchImplementation(`${GITHUB_API_ORIGIN}${path}`, {
 					headers,
-					redirect: 'error',
+					// Workers refuse `redirect: 'error'`; a redirect is a response that is not `ok` and fails below.
+					redirect: 'manual',
 					signal: controller.signal,
 				})
 			} catch {

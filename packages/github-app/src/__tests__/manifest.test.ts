@@ -98,7 +98,7 @@ describe('GitHub App manifest contract', () => {
 		})
 		expect(calls[0]?.url).toBe('https://api.github.com/app-manifests/one-time-code/conversions')
 		expect(calls[0]?.init?.method).toBe('POST')
-		expect(calls[0]?.init?.redirect).toBe('error')
+		expect(calls[0]?.init?.redirect).toBe('manual')
 		const headers = new Headers(calls[0]?.init?.headers)
 		expect(headers.get('authorization')).toBeNull()
 		expect(headers.get('user-agent')).toBe('fabrika')
@@ -126,6 +126,8 @@ describe('GitHub App manifest contract', () => {
 		const sentinel = 'private-upstream-detail'
 		const cases: GitHubAppFetch[] = [
 			() => Promise.resolve(new Response(sentinel, { status: 500 })),
+			// `redirect: 'manual'` hands a redirect back as a response; it fails like any other answer that is not `ok`.
+			() => Promise.resolve(new Response(null, { status: 302, headers: { location: `https://evil.example/${sentinel}` } })),
 			() => Promise.resolve(Response.json(conversion({ html_url: `https://evil.example/${sentinel}` }))),
 			() => Promise.resolve(new Response(JSON.stringify({ value: sentinel }).repeat(20_000))),
 		]

@@ -227,7 +227,6 @@ export class TarballRepositorySource {
 			const response = await this.request(
 				`${GITHUB_API_ORIGIN}${path}`,
 				token,
-				'manual',
 				redirect.signal,
 				callerSignal,
 				timeout,
@@ -243,7 +242,6 @@ export class TarballRepositorySource {
 		const archive = await this.request(
 			location,
 			undefined,
-			'error',
 			signal,
 			callerSignal,
 		)
@@ -259,7 +257,6 @@ export class TarballRepositorySource {
 	private async request(
 		url: string,
 		token: string | undefined,
-		redirect: 'manual' | 'error',
 		signal: AbortSignal,
 		callerSignal: AbortSignal,
 		timeout?: AbortSignal,
@@ -271,7 +268,8 @@ export class TarballRepositorySource {
 		})
 		if (token !== undefined) headers.set('authorization', `Bearer ${token}`)
 		try {
-			return await this.downloadFetch(url, { headers, redirect, signal })
+			// Every hop is `manual`: Workers refuse `redirect: 'error'`, and the archive's own redirect is followed by hand above.
+			return await this.downloadFetch(url, { headers, redirect: 'manual', signal })
 		} catch {
 			if (callerSignal.aborted) throw cancelled('archive')
 			throw new SourceFailure('internal', 'archive')

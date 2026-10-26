@@ -158,7 +158,8 @@ export class SourceTransport {
 					method: 'PUT',
 					body: gzipStream(source),
 					duplex: 'half',
-					redirect: 'error',
+					// Workers refuse `redirect: 'error'`; a redirect is a response that is not `ok` and fails below.
+					redirect: 'manual',
 					signal: combined.signal,
 				})
 			} catch {

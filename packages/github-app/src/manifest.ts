@@ -57,7 +57,8 @@ export async function exchangeGitHubAppManifestCode(
 						'user-agent': GITHUB_MANIFEST_USER_AGENT,
 						'x-github-api-version': GITHUB_API_VERSION,
 					},
-					redirect: 'error',
+					// Workers refuse `redirect: 'error'`; a redirect is a response that is not `ok` and fails below.
+					redirect: 'manual',
 					signal: cancellation.signal,
 				},
 			)

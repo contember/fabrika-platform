@@ -224,7 +224,8 @@ export class GitHubAppClient {
 				response = await this.fetchImplementation(`${this.apiBaseUrl}${path}`, {
 					...init,
 					headers,
-					redirect: 'error',
+					// Workers refuse `redirect: 'error'`; a redirect is a response that is not `ok` and fails below.
+					redirect: 'manual',
 					signal: cancellation.signal,
 				})
 			} catch {

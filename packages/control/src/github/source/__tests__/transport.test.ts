@@ -189,7 +189,7 @@ describe('source upload', () => {
 			uploadFetch: async (destination, init) => {
 				expect(destination).toBe(uploadUrl)
 				expect(init.method).toBe('PUT')
-				expect(init.redirect).toBe('error')
+				expect(init.redirect).toBe('manual')
 				expect(init.duplex).toBe('half')
 				expect(new Headers(init.headers).has('authorization')).toBe(false)
 				compressed = new Uint8Array(await new Response(init.body).arrayBuffer())

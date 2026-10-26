@@ -186,7 +186,7 @@ describe('GitHubAppClient requests', () => {
 			expect(headers.get('accept')).toBe('application/vnd.github+json')
 			expect(headers.get('x-github-api-version')).toBe('2022-11-28')
 			expect(headers.get('user-agent')).toBe('vozka')
-			expect(request.init?.redirect).toBe('error')
+			expect(request.init?.redirect).toBe('manual')
 			expect(request.init?.signal).toBeInstanceOf(AbortSignal)
 		}
 		expect(new Headers(mint.init?.headers).get('content-type')).toBe('application/json')
@@ -238,11 +238,11 @@ describe('GitHubAppClient operator verification', () => {
 		expect(authenticated.url).toBe('https://github.example/api/v3/app')
 		expect(authenticated.init?.method).toBeUndefined()
 		expect(new Headers(authenticated.init?.headers).get('authorization')).toStartWith('Bearer ')
-		expect(authenticated.init?.redirect).toBe('error')
+		expect(authenticated.init?.redirect).toBe('manual')
 		const visibility = requestAt(capture.requests, 1)
 		expect(visibility.url).toBe('https://github.example/api/v3/apps/fabrika-test')
 		expect(new Headers(visibility.init?.headers).has('authorization')).toBe(false)
-		expect(visibility.init?.redirect).toBe('error')
+		expect(visibility.init?.redirect).toBe('manual')
 	})
 
 	test('accepts an App with repository write authority and binds its public permissions', async () => {

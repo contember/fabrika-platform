@@ -221,7 +221,7 @@ function downloadFetchFor(gzipped: SourceBytes, options: SourceOptions): SourceD
 				?? new Response(null, { status: 302, headers: { location: options.location ?? codeloadUrl } })
 		}
 		expect(input).toBe(codeloadUrl)
-		expect(init.redirect).toBe('error')
+		expect(init.redirect).toBe('manual')
 		options.onDownload?.()
 		return new Response(gzipped, { status: 200 })
 	}
