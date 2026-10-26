@@ -13,6 +13,7 @@ import { bunSqliteStorage } from '../../../db/src/sqlite-bun'
 import { applicationMigrations } from '../build'
 import { type ApplicationState, type ApplicationStorage, type ContractWorkerOptions, createContractWorker, FabrikaApplication } from '../cloudflare'
 import { TICK_HEADER } from '../cloudflare/application'
+import { bindingAssets } from '../cloudflare/bindings'
 import { CLOUDFLARE_FILES_BINDING } from '../cloudflare/names'
 import { FILE_SWEEP_JOB } from '../files/kinds'
 import type { CrashEvents, ProcessCrashKind } from '../implement/crashes'
@@ -540,5 +541,69 @@ describe('the crash reports of the environment object', () => {
 			}
 			expect(envelopes.map(tagsOf)).toEqual([{ crash: 'boot_failed' }, { crash: 'boot_failed' }])
 		})
+	})
+})
+
+describe('the SPA files from the ASSETS binding', () => {
+	/** Workers Assets over a directory that mirrors the request paths: a file by its path, a directory's index by `<dir>/`. */
+	const files: Readonly<Record<string, string>> = {
+		'/': 'root index',
+		'/app.js': 'root script',
+		'/admin/': 'admin index',
+		'/admin/app.js': 'admin script',
+	}
+	const asked: string[] = []
+	const binding = {
+		fetch: (request: Request) => {
+			const url = new URL(request.url)
+			asked.push(`${request.method} ${url.pathname}${url.search}`)
+			const body = files[url.pathname]
+			return Promise.resolve(body === undefined ? new Response('Not found', { status: 404 }) : new Response(body))
+		},
+	}
+	const assets = bindingAssets(binding)
+	const serve = async (prefix: string, path: string, method = 'GET', accept?: string): Promise<string> => {
+		if (assets === undefined) throw new Error('a binding with fetch is an asset server')
+		const headers = new Headers(accept === undefined ? [] : [['Accept', accept]])
+		const response = await assets.serve({ prefix, dir: 'ignored on Cloudflare' }, new Request(`https://notes.test${path}`, { method, headers }))
+		return `${response.status} ${method === 'HEAD' ? '' : await response.text()}`
+	}
+
+	test("a file by its path, every other page route of a mount by the mount's index, and the prefix keeps each mount apart", async () => {
+		asked.length = 0
+		expect(await serve('/', '/app.js')).toBe('200 root script')
+		expect(await serve('/admin', '/admin/app.js')).toBe('200 admin script')
+		expect(await serve('/', '/deals/42?tab=notes')).toBe('200 root index')
+		expect(await serve('/admin', '/admin/users/7')).toBe('200 admin index')
+		expect(await serve('/admin', '/admin/users/7', 'HEAD')).toBe('200 ')
+		// A navigation to a route with a dot in it is still a page.
+		expect(await serve('/', '/releases/v1.2', 'GET', 'text/html,application/xhtml+xml')).toBe('200 root index')
+		expect(asked).toEqual([
+			'GET /app.js',
+			'GET /admin/app.js',
+			'GET /deals/42?tab=notes',
+			'GET /',
+			'GET /admin/users/7',
+			'GET /admin/',
+			'HEAD /admin/users/7',
+			'HEAD /admin/',
+			'GET /releases/v1.2',
+			'GET /',
+		])
+	})
+
+	test('a missing asset stays 404 and is never answered with the index; neither is a mount without its index, nor a POST', async () => {
+		asked.length = 0
+		expect(await serve('/admin', '/admin/missing.js')).toBe('404 Not found')
+		expect(await serve('/', '/chunk-old.css', 'GET', 'text/css,*/*;q=0.1')).toBe('404 Not found')
+		expect(await serve('/docs', '/docs/page')).toBe('404 Not found')
+		expect(await serve('/docs', '/docs/')).toBe('404 Not found')
+		expect(await serve('/', '/missing', 'POST')).toBe('404 Not found')
+		expect(asked).toEqual(['GET /admin/missing.js', 'GET /chunk-old.css', 'GET /docs/page', 'GET /docs/', 'GET /docs/', 'POST /missing'])
+	})
+
+	test('a binding without fetch is no asset server', () => {
+		expect(bindingAssets({})).toBeUndefined()
+		expect(bindingAssets(undefined)).toBeUndefined()
 	})
 })

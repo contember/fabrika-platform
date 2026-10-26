@@ -8,6 +8,8 @@ export const TABLES_FILE = 'src/db/tables.ts'
 /** The named export of the tables module that holds `defineTables(…)(…)`. */
 export const TABLES_EXPORT = 'tables'
 export const GENERATED_ENTRY_FILE = 'fabrika/entry.generated.ts'
+/** Where a Cloudflare deploy stages the SPA mounts' built files (`@fabrika/provider-cloudflare`): build output, never source. */
+export const STAGED_ASSETS_DIR = 'fabrika/assets/'
 export const MIGRATIONS_DIR = 'db/migrations/'
 /** Where `fabrika db test-scaffold` writes the policy isolation tests, `<table>.policy-isolation.test.ts`. */
 export const POLICY_TESTS_DIR = 'src/db/__tests__/'
@@ -42,6 +44,9 @@ const TEST_FILE = /(?:^|\/)__tests__\/|\.(?:test|spec)\.[mc]?[jt]sx?$/
 /** Build output, installed packages and tool state are not application source and are never read. */
 export const isIgnoredSegment = (segment: string): boolean => segment === 'node_modules' || segment === 'dist' || segment.startsWith('.')
 
+/** Whether the checker skips `path` (relative to the root): under a skipped segment, or the staged SPA files. */
+export const isSkippedPath = (path: string): boolean => path.split('/').some(isIgnoredSegment) || path.startsWith(STAGED_ASSETS_DIR)
+
 export const isSourceFile = (path: string): boolean => SOURCE_EXTENSION.test(path)
 
 export const isTestFile = (path: string): boolean => TEST_FILE.test(path)
@@ -55,7 +60,7 @@ export const isJsonFile = (path: string): boolean => path.endsWith('.json')
 export const isCheckedFile = (path: string): boolean => {
 	// The registry configuration and the lockfile decide what a trusted package name installs.
 	if (path === '.npmrc' || path === 'bun.lock') return true
-	if (path.split('/').some(isIgnoredSegment)) return false
+	if (isSkippedPath(path)) return false
 	return isSourceFile(path) || isJsonFile(path) || path.startsWith(MIGRATIONS_DIR) || ZEROPS_FILES.some((name) => name === path)
 		|| path === 'bunfig.toml'
 }

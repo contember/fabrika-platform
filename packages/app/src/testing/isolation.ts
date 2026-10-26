@@ -6,7 +6,14 @@ import { refuseInProduction } from '@fabrika/db/production'
 
 refuseInProduction('@fabrika/app/testing/isolation')
 
-export { type DeniedOutcome, type EndpointAccessKit, endpointAccessKit, type LeakOutcome, type ReachOutcome } from './endpoint-access'
+export {
+	type DeniedOutcome,
+	type EndpointAccessKit,
+	endpointAccessKit,
+	type EndpointAccessOptions,
+	type LeakOutcome,
+	type ReachOutcome,
+} from './endpoint-access'
 export {
 	type AppCaller,
 	type AppCountOutcome,

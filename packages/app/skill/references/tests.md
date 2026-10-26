@@ -12,7 +12,7 @@ longer writes. Commit them; never edit, format or import them (`generated-test-h
   `app` or `creates` endpoint refuses a holder of its action in one scope only (403) and answers a global holder. An
   endpoint of several `capabilities` adds a denied case per capability. A public procedure answers anyone without a
   credential, or, behind a challenge, refuses a caller without a solved one. A file input is sent as a generated file
-  of its kind; a `GET` procedure's input goes in its URL.
+  of its kind, or as the file the fixtures name (`files`, below); a `GET` procedure's input goes in its URL.
 - Their kit stands in for IAM, as `testKit` does (below): it creates a scope, assigns or invites a member and issues a
   link under IAM's rules for the caller's grants. A repeated invitation answers the open one, `resend` restarts its
   7 days, and an organization's address is refused for an external role (`internal_mailbox`). So the caller of an endpoint with the dimension's `members.manage`
@@ -67,6 +67,27 @@ export const members = { 'api.tasks.assign': ['assignee'] }
   to another holds that row's key. A text column may be given; the key, the version, the creator and a file column may
   not (a file column holds a live, scanned file). Only application tables, and only for an endpoint with a leak or an
   own-object case: the checker refuses a table in a scope, which `rows` and `seeds` address (`endpoint-fixture`).
+- `files['<endpoint id>']` names, by file field, a file of the repository that every case of the endpoint sends there
+  instead of the generated one, a path from the application's root:
+  `export const files = { 'api.skills.publish': { package: 'src/__tests__/fixtures/skill.zip' } }`. Give one when the
+  handler inspects the content (a package it unpacks, a document it parses) and answers 400 to the generated file, which
+  has only the leading bytes of its type. Commit the file; keep it small and free of real data. The kit sends it with the
+  first type of the field's kind its bytes are, and a file it cannot read, or of none of those types, fails the case. The
+  checker refuses a field that holds no file and a path that leaves the application, starts with `.` or has characters
+  other than letters, digits, `_`, `-`, `.` and `/` (`endpoint-fixture`).
+- `pins['<endpoint id>']` gives text columns of the row the endpoint addresses (the row of the table that owns its
+  dimension) a known value instead of the seed's marker: `export const pins = { 'api.skills.publish': { slug:
+  'published-skill' } }`, when the handler ties the column to the input or to the file in `files` (a package whose
+  `SKILL.md` names the skill's slug). The own scope's row holds the value, the other scope's `<value>-other`, which a
+  leak case still looks for in the own scope's answer. A pin of a column that places the row, or of no text column,
+  fails the case; the checker refuses one of an endpoint without an addressed row (`endpoint-fixture`).
+- `refusals['<endpoint id>']` lists the error types of the 400s the endpoint's handler answers with when its rule ties
+  the row to the input and the scope is the other one: `export const refusals = { 'api.skills.publish':
+  ['skill_frontmatter'] }`, beside the pin above. A leak case asks from the other scope first, whose pinned value the
+  package does not name; that request may answer one of them. The own case passes on 200 or one of them, and the
+  denial cases still expect 404 or 403. The answer a leak case checks, the own scope's, still fails on it, because an
+  answer that holds nothing proves no isolation: pin the row and give the file so that the own scope succeeds. Any
+  other 400 fails the case, and the checker refuses `validation`, an input the schema refuses (`endpoint-fixture`).
 - The endpoint id is `<mount>.<group>.<endpoint>` (`api.tasks.close`).
 - The seed of the tests fills every text column with a marker and every other required column with a sample of its
   type: an enum's first label, `1`, `false`, today. A column with a `DEFAULT` keeps it (`status` is `open`). A column

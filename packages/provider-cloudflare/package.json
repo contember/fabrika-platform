@@ -51,6 +51,7 @@
 		"@fabrika/installation-init": "workspace:*",
 		"@fabrika/proxy-core": "workspace:*",
 		"@fabrika/provider-contract": "workspace:*",
+		"ignore": "^5.3.2",
 		"oblaka-iac": "^0.0.18"
 	},
 	"devDependencies": {

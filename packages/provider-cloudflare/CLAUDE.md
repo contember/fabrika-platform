@@ -183,6 +183,21 @@ this one import.
   publicly; the walk uses `lstat` and refuses the first link, or anything that is neither a regular file nor
   a directory, bounded at 50 000 entries. A missing directory is wrangler's own error and is left to it.
   `platformResources: 'allow'` skips the walk.
+- **The platform stages a contract application's SPA files** (`src/spa-assets.ts`, ADR-0065 §9). On the object runtime,
+  an application Worker that declares no `assets` and whose contract has an SPA or link mount gets
+  `assets: { directory: 'fabrika/assets', binding: 'ASSETS', run_worker_first: true }`, and the `deploy-worker` step,
+  after `pipeline.build` and right before the walk below, empties that directory and copies each mount's build
+  directory (from the application root) into it at the mount's prefix: the most specific mount owns a path, a `.map`
+  and Workers Assets' own `_headers`, `_redirects` and `.assetsignore` at the root are left out, and so are what the
+  mount's own `.assetsignore` excludes (the `ignore` package, wrangler's matcher, relative to the mount's directory;
+  a directory is tested with its trailing `/`) and `.git`, `.hg`, `.svn`, `.bzr` at any depth (`VCS_NAMES`, outside
+  the ignore rules so a `!` cannot bring them back); a symbolic link
+  anywhere on a mount's path (`x/etc` with `x -> /`: `resolve` reads only text, so every segment is `lstat`ed), on the
+  way to `fabrika/assets`, or in the tree, and a special file, are refused, and a missing directory fails the step
+  naming the mount. A page route that names no file gets the mount's `index.html`; a missing asset stays 404.
+  `bindingAssets` of `@fabrika/app` reads the request path from it as it is, with the mount's `index.html` for a path
+  that names no file. An authored `assets` is kept as it is (a committed config of an application that needed it
+  before the platform derived it); never merge the two.
 - **That walk runs in the `deploy-worker` step, immediately before each `wrangler deploy` spawn** — NOT in
   the deployer's checks before the first step, which stay pure of it. The checkout's own `pipeline.build` runs between the two, so a build
   line `ln -s /proc/self/environ public/x` would defeat a check made any earlier. One check, at the only

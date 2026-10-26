@@ -44,9 +44,18 @@ const withApplicationCli = async (dir: string): Promise<string> => {
 	return cli
 }
 
+/** The build directories of `notesArtifact`'s SPA and link mounts, as the checkout's build writes them. */
+const withBuiltMounts = async (dir: string): Promise<void> => {
+	for (const mount of ['dist/app', 'dist/share']) {
+		await mkdir(join(dir, mount), { recursive: true })
+		await writeFile(join(dir, mount, 'index.html'), `<!doctype html><title>${mount}</title>`)
+	}
+}
+
 /** The checkout on disk the runner installed: the entry build looks for the application's CLI in it. */
 const REPO = await mkdtemp(join(tmpdir(), 'fabrika-checkout-'))
 await withApplicationCli(join(REPO, 'app'))
+await withBuiltMounts(join(REPO, 'app'))
 
 afterAll(async () => {
 	await rm(REPO, { recursive: true, force: true })
@@ -1908,7 +1917,7 @@ describe('the generated entry of a gated release (pinsGeneratedEntry)', () => {
 		fixtures.push(checkout)
 		const cli = await withApplicationCli(checkout)
 		const demo = join(checkout, 'apps', 'demo')
-		await mkdir(demo, { recursive: true })
+		await withBuiltMounts(demo)
 		const nested = { checkoutDir: demo, cwd: checkout, configPath: 'apps/demo/fabrika.config.ts' }
 		const result = await deploy(rec, config(), nested)
 		expect(result.status).toBe('succeeded')
@@ -2172,5 +2181,185 @@ describe('the order of the first deploy (deployOrder)', () => {
 		expect(() => deployOrder([generated('a', 'b'), generated('b', 'c'), generated('c', 'a')])).toThrow(
 			'deploy-worker: the generated Workers bind each other as services in a cycle (`a` → `b` → `c` → `a`), so none can deploy first',
 		)
+	})
+})
+
+describe("the SPA mounts' files on Workers Assets", () => {
+	/** A checkout whose build wrote `notesArtifact`'s two mount directories with `extra` files beside their index. */
+	const builtCheckout = async (extra: (root: string) => Promise<void> = async () => {}): Promise<string> => {
+		const root = await mkdtemp(join(tmpdir(), 'fabrika-spa-'))
+		fixtures.push(root)
+		await withApplicationCli(root)
+		await withBuiltMounts(root)
+		await extra(root)
+		return root
+	}
+
+	test('a Worker that declares no assets gets the staged directory, each mount at its prefix, with no source map', async () => {
+		const checkoutDir = await builtCheckout(async (root) => {
+			await mkdir(join(root, 'dist', 'app', 'assets'))
+			await writeFile(join(root, 'dist', 'app', 'assets', 'app.js'), 'export {}')
+			await writeFile(join(root, 'dist', 'app', 'assets', 'app.js.map'), '{}')
+			// The root mount's copy of a path under `/s` is never served: the proxy routes `/s/*` to the link mount.
+			await mkdir(join(root, 'dist', 'app', 's'))
+			await writeFile(join(root, 'dist', 'app', 's', 'index.html'), 'shadowed')
+			// A stale tree of an earlier deploy is replaced, not merged.
+			await mkdir(join(root, 'fabrika', 'assets'), { recursive: true })
+			await writeFile(join(root, 'fabrika', 'assets', 'stale.txt'), 'old')
+		})
+		const result = await deploy(rec, config(), { checkoutDir })
+		expect(result.status).toBe('succeeded')
+		expect((await generatedConfig('stage-demo')).assets).toEqual({ directory: 'fabrika/assets', binding: 'ASSETS', run_worker_first: true })
+		const staged = join(checkoutDir, 'fabrika', 'assets')
+		expect(await readFile(join(staged, 'index.html'), 'utf8')).toBe('<!doctype html><title>dist/app</title>')
+		expect(await readFile(join(staged, 'assets', 'app.js'), 'utf8')).toBe('export {}')
+		expect(await readFile(join(staged, 's', 'index.html'), 'utf8')).toBe('<!doctype html><title>dist/share</title>')
+		expect(existsSync(join(staged, 'assets', 'app.js.map'))).toBe(false)
+		expect(existsSync(join(staged, 'stale.txt'))).toBe(false)
+		expect(rec.logs).toContain('  staged 3 SPA files into fabrika/assets: /s from dist/share, / from dist/app')
+	})
+
+	test('a Worker that declares its own assets keeps them, and nothing is staged', async () => {
+		const checkoutDir = await builtCheckout(async (root) => {
+			await mkdir(join(root, 'public'))
+			await writeFile(join(root, 'public', 'index.html'), 'authored')
+		})
+		const result = await deploy(rec, assetsApp(), { checkoutDir })
+		expect(result.status).toBe('succeeded')
+		expect((await generatedConfig('stage-demo')).assets).toEqual({ binding: 'ASSETS', directory: 'public' })
+		expect(existsSync(join(checkoutDir, 'fabrika', 'assets'))).toBe(false)
+	})
+
+	test('a contract without a mount that serves files gets no assets', async () => {
+		const mounts = Object.fromEntries(Object.entries(notesArtifact.mounts).filter(([, mount]) => mount.kind !== 'spa' && mount.kind !== 'link'))
+		const endpoints = notesArtifact.endpoints.filter((row) => row.kind !== 'spa' && row.source.name !== 'shared')
+		const result = await deploy(rec, config(), { contract: { ...notesArtifact, mounts, endpoints } })
+		expect(result.status).toBe('succeeded')
+		expect((await generatedConfig('stage-demo')).assets).toBeUndefined()
+	})
+
+	test('a mount directory the build did not write, or one holding a symbolic link, fails the deploy before wrangler runs', async () => {
+		const unbuilt = await mkdtemp(join(tmpdir(), 'fabrika-spa-'))
+		fixtures.push(unbuilt)
+		await withApplicationCli(unbuilt)
+		const missing = await deploy(rec, config(), { checkoutDir: unbuilt })
+		expect(stepError(missing, 'deploy-worker')).toBe(
+			'cloudflare: mount `shared` serves `dist/share`, which the build did not produce; build it in `pipeline.build`',
+		)
+		const linked = await builtCheckout(async (root) => await symlink('/etc/passwd', join(root, 'dist', 'app', 'leak.txt')))
+		rec.commands.splice(0)
+		const refused = await deploy(rec, config(), { checkoutDir: linked })
+		expect(stepError(refused, 'deploy-worker')).toBe(
+			'cloudflare: mount `spa` serves `dist/app`, which contains `leak.txt`, a symbolic link; the deploy would publish its target',
+		)
+		expect(rec.commands.some((command) => command.args[0] === 'deploy' && command.cwd === linked)).toBe(false)
+	})
+
+	test('a mount directory outside the application, or one over the staged directory, is refused', async () => {
+		for (
+			const [dir, detail] of [
+				['../outside', 'which is no directory inside the application'],
+				['.', 'which is no directory inside the application'],
+				['fabrika', 'which overlaps `fabrika/assets`, where the deploy stages the SPA files'],
+			] as const
+		) {
+			const mounts = { ...notesArtifact.mounts, spa: { kind: 'spa' as const, prefix: '/', dir } }
+			const result = await deploy(rec, config(), { contract: { ...notesArtifact, mounts } })
+			expect(stepError(result, 'deploy-worker')).toBe(`cloudflare: mount \`spa\` serves \`${dir}\`, ${detail}`)
+		}
+	})
+
+	test('a symbolic link in the middle of a mount directory, or on the way to the staged directory, is refused', async () => {
+		const outside = await mkdtemp(join(tmpdir(), 'fabrika-outside-'))
+		fixtures.push(outside)
+		await mkdir(join(outside, 'web'))
+		await writeFile(join(outside, 'web', 'index.html'), 'not the application')
+		for (const [link, to, dir] of [['x', '/', 'x/etc'], ['x', outside, 'x/web'], ['dist', join(outside), 'dist/web']] as const) {
+			const checkoutDir = await builtCheckout(async (root) => {
+				await rm(join(root, link), { recursive: true, force: true })
+				await symlink(to, join(root, link))
+			})
+			const mounts = { ...notesArtifact.mounts, spa: { kind: 'spa' as const, prefix: '/', dir } }
+			const result = await deploy(rec, config(), { checkoutDir, contract: { ...notesArtifact, mounts } })
+			expect(stepError(result, 'deploy-worker')).toBe(
+				link === 'dist'
+					? `cloudflare: mount \`shared\` serves \`dist/share\`, which passes \`dist\`, a symbolic link; the deploy would publish its target`
+					: `cloudflare: mount \`spa\` serves \`${dir}\`, which passes \`x\`, a symbolic link; the deploy would publish its target`,
+			)
+			expect(existsSync(join(checkoutDir, 'fabrika', 'assets', 'passwd'))).toBe(false)
+			expect(existsSync(join(checkoutDir, 'fabrika', 'assets', 'index.html'))).toBe(false)
+		}
+		const redirected = await builtCheckout(async (root) => {
+			await mkdir(join(root, 'fabrika'), { recursive: true })
+			await symlink(outside, join(root, 'fabrika', 'assets'))
+		})
+		const result = await deploy(rec, config(), { checkoutDir: redirected })
+		expect(stepError(result, 'deploy-worker')).toBe(
+			'cloudflare: `fabrika/assets` is a symbolic link, and the deploy stages the SPA files into `fabrika/assets`',
+		)
+		expect(existsSync(join(outside, 'web', 'index.html'))).toBe(true)
+	})
+
+	test("Workers Assets' own configuration files of the build are never staged at the root", async () => {
+		const checkoutDir = await builtCheckout(async (root) => {
+			for (const name of ['_headers', '_redirects', '.assetsignore']) await writeFile(join(root, 'dist', 'app', name), '/* /elsewhere 302')
+		})
+		const result = await deploy(rec, config(), { checkoutDir })
+		expect(result.status).toBe('succeeded')
+		for (const name of ['_headers', '_redirects', '.assetsignore']) expect(existsSync(join(checkoutDir, 'fabrika', 'assets', name))).toBe(false)
+		expect(existsSync(join(checkoutDir, 'fabrika', 'assets', 'index.html'))).toBe(true)
+	})
+
+	test("what a mount's .assetsignore excludes, and version control metadata at any depth, never reach the staged directory", async () => {
+		const checkoutDir = await builtCheckout(async (root) => {
+			const app = join(root, 'dist', 'app')
+			// A negation cannot bring version control metadata back.
+			await writeFile(join(app, '.assetsignore'), '.env\nprivate.txt\nsecret/\n!.git\n')
+			await writeFile(join(app, '.env'), 'TOKEN=app')
+			await writeFile(join(app, 'private.txt'), 'private')
+			await mkdir(join(app, 'secret'))
+			await writeFile(join(app, 'secret', 'key.txt'), 'key')
+			await mkdir(join(app, '.git'))
+			await writeFile(join(app, '.git', 'config'), '[remote "origin"]\n\turl = https://x-access-token:token@example.com/repo')
+			await mkdir(join(app, 'assets', '.svn'), { recursive: true })
+			await writeFile(join(app, 'assets', '.svn', 'entries'), 'svn')
+			await writeFile(join(app, 'assets', 'private.txt'), 'nested private')
+			await writeFile(join(app, 'kept.txt'), 'kept')
+			// Each mount reads its own ignore file: the link mount's `.env` is excluded by its rules, a `.git` file too.
+			const share = join(root, 'dist', 'share')
+			await writeFile(join(share, '.assetsignore'), '/.env\n')
+			await writeFile(join(share, '.env'), 'TOKEN=share')
+			await writeFile(join(share, '.git'), 'gitdir: ../../.git/worktrees/share')
+			await writeFile(join(share, '.assetsignore-not'), 'served')
+		})
+		const result = await deploy(rec, config(), { checkoutDir })
+		expect(result.status).toBe('succeeded')
+		const staged = join(checkoutDir, 'fabrika', 'assets')
+		for (
+			const path of [
+				'.env',
+				'private.txt',
+				'secret',
+				'.git',
+				'.assetsignore',
+				join('assets', '.svn'),
+				join('assets', 'private.txt'),
+				join('s', '.env'),
+				join('s', '.git'),
+				join('s', '.assetsignore'),
+			]
+		) {
+			expect({ path, staged: existsSync(join(staged, path)) }).toEqual({ path, staged: false })
+		}
+		expect(await readFile(join(staged, 'kept.txt'), 'utf8')).toBe('kept')
+		expect(await readFile(join(staged, 's', '.assetsignore-not'), 'utf8')).toBe('served')
+		expect(rec.logs).toContain('  staged 4 SPA files into fabrika/assets: /s from dist/share, / from dist/app')
+	})
+
+	test('a dry run names what it would stage and writes nothing', async () => {
+		const checkoutDir = await builtCheckout()
+		await deploy(rec, config(), { checkoutDir, dryRun: true })
+		expect(rec.logs).toContain('  [dry-run] would stage the SPA files into fabrika/assets: /s from dist/share, / from dist/app')
+		expect(existsSync(join(checkoutDir, 'fabrika', 'assets'))).toBe(false)
 	})
 })

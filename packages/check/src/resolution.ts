@@ -1,7 +1,7 @@
 import { isBuiltin } from 'node:module'
 import { z } from 'zod/v4'
 import { parseJsonc } from './jsonc'
-import { isIgnoredSegment, isRelativeSpecifier, joinRelative, resolveRelative } from './layout'
+import { isRelativeSpecifier, isSkippedPath, joinRelative, resolveRelative } from './layout'
 
 /** Pattern → targets. A target is a bare specifier, an absolute path, or `./<path from the root>` (`../…` above it). */
 type MappingTable = ReadonlyMap<string, readonly string[]>
@@ -139,7 +139,7 @@ export const readImportMappings = (files: ReadonlyMap<string, string>): ImportMa
 		},
 		mayExist: (target) => {
 			const path = target.startsWith('/') ? undefined : joinRelative('package.json', target)
-			if (path === undefined || path.split('/').some(isIgnoredSegment)) return true
+			if (path === undefined || isSkippedPath(path)) return true
 			return resolveRelative((candidate) => files.has(candidate), 'package.json', `./${path}`).kind !== 'missing'
 		},
 	}
