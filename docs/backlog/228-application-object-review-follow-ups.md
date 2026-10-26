@@ -16,8 +16,9 @@ a release; each is small.
 1. `cloudflare-current-timestamp` skips exactly one parenthesis: `DEFAULT ((CURRENT_TIMESTAMP))` passes
    (`src/rules/migrations.ts:60`).
 2. The refusal tokenizes SQLite with the shared Postgres lexer. A bracket or backtick identifier gives a false
-   positive, and a non-nested `/* */` comment gives a false negative (`migrations.ts:57`). It needs a SQLite mode in
-   the tokenizer (shared with [214](214-raw-sql-on-sqlite.md)).
+   positive, and a non-nested `/* */` comment gives a false negative (`migrations.ts:57`). `lexSqlite`
+   (`@fabrika/platform-node/sql`) is the SQLite lexer `cloudflare-framework-name` already reads with; this rule should
+   too.
 
 **Timers.**
 
@@ -36,8 +37,8 @@ a release; each is small.
 
 **Read-only invocations on SQLite (`packages/db/src/sqlite.ts`).**
 
-Only framework SQL reaches the read path ([214](214-raw-sql-on-sqlite.md) refuses `ctx.sql` on SQLite), so these
-gaps are defence in depth.
+Application SQL reaches the read path only through a `'read'` site's `ctx.sql`, whose text rules refuse a second
+statement and a `PRAGMA` before anything runs, so these gaps are defence in depth.
 
 6. On workerd, a multi-statement string reports only the last statement's `rowsWritten`, so `INSERT …; SELECT 1`
    escapes the backstop (`:141-144`). Refuse more than one statement on the read path.

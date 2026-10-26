@@ -291,7 +291,11 @@ application query runs as anything else:
 - **The runtime role `run_<id>`** has `USAGE` on the schema and `SELECT`,
   `INSERT`, `UPDATE` and `DELETE` on every table of it except the ledger,
   and nothing else: no DDL, no `TRIGGER`, `TRUNCATE` or `REFERENCES`, no
-  grant on the ledger. The server and every job connect as it. Before the
+  grant on the ledger. The server and every job connect as it. The
+  framework's `fabrika_*` tables are tables of that schema, and the framework
+  writes them as this role, so the role reaches them too: what keeps an
+  application's `ctx.sql` and its migrations off them is the name rule, which
+  refuses every `fabrika_*` reference before anything runs, not the grant. Before the
   plan runs, the runner clears `PUBLIC` from the migration role's default
   privileges, globally and in the schema, so no table a migration creates is
   born readable or writable through `PUBLIC`. After every run it revokes
