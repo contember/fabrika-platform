@@ -94,6 +94,15 @@ describe('the release gates', () => {
 		})
 	}
 
+	// SemVer orders a cloudflare or alpha prerelease below every dev prerelease of the version; the minor gates count it as 0.9.
+	for (const release of ['0.9.0-cloudflare.1', '0.9.0-alpha.1']) {
+		test(`${release}: runsInObject, pinsGeneratedEntry and servesOps are all true`, () => {
+			expect(runsInObject(release)).toBe(true)
+			expect(pinsGeneratedEntry(release)).toBe(true)
+			expect(servesOps(release)).toBe(true)
+		})
+	}
+
 	// Their object runs jobs only from the minute tick, has no alarm and answers `state` and `migrate` 501.
 	for (const release of PUBLISHED_PRERELEASES) {
 		test(`published ${release} runs in the object with the ops channel, and without alarms, the segment cap, the data operations or raw SQL`, () => {

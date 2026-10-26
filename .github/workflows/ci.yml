@@ -3,9 +3,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'channel/**']
   pull_request:
-    branches: [main]
+    branches: [main, 'channel/**']
   workflow_call:
 
 permissions:
