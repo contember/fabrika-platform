@@ -82,7 +82,7 @@ name, the subject, the body and the idempotency key before any provider I/O.
 
 A composition hands the package a provider registry, a name-to-factory map. The
 registry is open: a composition can add its own provider. `@fabrika/email/providers`
-exports `builtinEmailProviders` (`ahasend`, `lettermint`, `postmark`, `resend`, `smartemailing`), sorted by name, the
+exports `builtinEmailProviders` (`ahasend`, `cloudflare`, `lettermint`, `postmark`, `resend`, `smartemailing`), sorted by name, the
 order every help text and refusal lists them in. Memory is never
 selected by a variable. Directory is a composition input of IAM, and a `directory`
 provider that only a local composition registers (below).
@@ -104,6 +104,8 @@ sender, which does no I/O.
 | `FABRIKA_EMAIL_AHASEND_API_KEY`            | yes    | required for `ahasend`; an API key v2 scoped to `messages:send:{domain}` at least                                             |
 | `FABRIKA_EMAIL_AHASEND_ACCOUNT_ID`         | no     | required for `ahasend`; `[A-Za-z0-9-]{1,64}`                                                                                  |
 | `FABRIKA_EMAIL_AHASEND_BROADCAST_FROM`     | no     | optional, the address a `broadcast` message is sent from, on the account's Marketing domain; without it, `ahasend` sends none |
+| `FABRIKA_EMAIL_CLOUDFLARE_API_TOKEN`       | yes    | required for `cloudflare`; an account API token with only the Email Sending Write permission                                  |
+| `FABRIKA_EMAIL_CLOUDFLARE_ACCOUNT_ID`      | no     | required for `cloudflare`; the account's ID, 32 hexadecimal digits                                                            |
 | `FABRIKA_EMAIL_LETTERMINT_PROJECT_TOKEN`   | yes    | required for `lettermint`; a project API token                                                                                |
 | `FABRIKA_EMAIL_LETTERMINT_BROADCAST_ROUTE` | no     | optional, the project's broadcast route slug (`[A-Za-z0-9_-]{1,64}`), default `broadcast`                                     |
 | `FABRIKA_EMAIL_POSTMARK_SERVER_TOKEN`      | yes    | required for `postmark`; a server token                                                                                       |
@@ -122,13 +124,14 @@ What each built-in provider offers, and what it has been checked against. "Live"
 recorded on a real account and the received messages inspected; "stubbed" means only the unit tests and the
 conformance kit against a stubbed `fetch`.
 
-| provider        | idempotent | confirmation | unsubscribe | attachments | broadcast                            | checked against                                                                               |
-| --------------- | ---------- | ------------ | ----------- | ----------- | ------------------------------------ | --------------------------------------------------------------------------------------------- |
-| `ahasend`       | yes        | `sync`       | yes         | 12 MiB      | from its Marketing domain, unchecked | live, 2026-10-22                                                                              |
-| `lettermint`    | yes        | `sync`       | yes         | 15 MiB      | its broadcast route, unchecked       | live, 2026-10-22                                                                              |
-| `postmark`      | no         | `sync`       | yes         | 10 MiB      | its broadcast stream                 | live, 2026-10-22                                                                              |
-| `resend`        | yes        | `sync`       | yes         | 25 MiB      | tagged `category: broadcast`         | live, 2026-10-22                                                                              |
-| `smartemailing` | no         | `queued`     | no          | none        | no                                   | stubbed ([backlog 180](../backlog/180-verify-the-smartemailing-adapter-on-a-live-account.md)) |
+| provider        | idempotent | confirmation | unsubscribe | attachments | broadcast                            | checked against                                                                                                                             |
+| --------------- | ---------- | ------------ | ----------- | ----------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ahasend`       | yes        | `sync`       | yes         | 12 MiB      | from its Marketing domain, unchecked | live, 2026-10-22                                                                                                                            |
+| `cloudflare`    | no         | `sync`       | yes         | 3 MiB       | no                                   | accepted answer live, 2026-10-25; refusals stubbed ([backlog 241](../backlog/241-verify-the-cloudflare-email-adapter-on-a-live-account.md)) |
+| `lettermint`    | yes        | `sync`       | yes         | 15 MiB      | its broadcast route, unchecked       | live, 2026-10-22                                                                                                                            |
+| `postmark`      | no         | `sync`       | yes         | 10 MiB      | its broadcast stream                 | live, 2026-10-22                                                                                                                            |
+| `resend`        | yes        | `sync`       | yes         | 25 MiB      | tagged `category: broadcast`         | live, 2026-10-22                                                                                                                            |
+| `smartemailing` | no         | `queued`     | no          | none        | no                                   | stubbed ([backlog 180](../backlog/180-verify-the-smartemailing-adapter-on-a-live-account.md))                                               |
 
 A provider that is not idempotent leaves a message whose outcome is unknown (a timeout, a lost answer, a 5xx) to a
 person: it is never sent again automatically (`mayRetryDelivery`). When a provider is checked live, update its row and
@@ -151,7 +154,8 @@ error text never reaches an error.
 A new provider is one module (its sender and its `EmailProvider` declaration), its entry in
 `builtinEmailProviders` (`builtinEmailProviderVariables` lists every provider's variables from it), its release in
 `builtinEmailProviderSince` (the release after the newest one published without it; the type refuses a provider
-without one), its
+without one; Control compares releases without their prerelease tag, so `0.9.0` also admits the `0.9.0-dev.*`
+prereleases published before `cloudflare`), its
 `package.json` export, a unit test and a conformance harness. The installers, the
 Cloudflare workflow and its README read the registry, so neither needs an edit.
 
@@ -254,6 +258,38 @@ A `broadcast` message goes through the project's broadcast route (`route`), `bro
 created; a route the project lacks is a 422 that the adapter answers as `provider_rejected`, naming the variable. Not
 checked live: the test project had no broadcast route, so how Lettermint treats the unsubscribe headers there is not
 known.
+
+## Cloudflare adapter
+
+`CloudflareEmailSender` (`@fabrika/email/cloudflare`) calls Cloudflare Email Service's Email Sending REST API,
+`POST https://api.cloudflare.com/client/v4/accounts/{account}/email/sending/send`, with a bearer API token. Create
+the token on the account with the Email Sending Write permission and nothing else; the account needs Workers Paid and
+an onboarded sending domain to send to any recipient. It sends the REST API, not the Workers `send_email` binding, so
+IAM's Worker, Control on either cloud and an application read one set of `FABRIKA_EMAIL_*`. The sender is
+`from: {address, name}`, the reply-to `reply_to`, the unsubscribe URL the two message headers, and an attachment
+`content` (base64), `filename`, `type` and `disposition: attachment`.
+
+Cloudflare has no idempotency key. Capabilities: not idempotent, `sync`, `listUnsubscribe`, and `maxAttachmentBytes`
+of 3 MiB: Cloudflare counts the whole message, attachments included, against 5 MiB, and 3 MiB of files become about
+4.1 MiB once base64 and MIME-wrapped, which leaves about 0.9 MiB for the bodies and the headers. A message over the
+bound anyway is a 400, a clean `provider_rejected`. Cloudflare bounds a header value at 2,048 bytes, so an unsubscribe
+URL longer than 2,046 bytes (the value is `<url>`) is `invalid_message` before any request. It takes transactional
+mail only, so it has no `broadcast` capability and refuses a broadcast message before any request.
+
+A 200 groups the recipients into `delivered`, `queued`, `permanent_bounces` and `suppressed_recipients`. A message
+whose recipient is a permanent bounce or suppressed is `provider_rejected`, without the address. Otherwise
+`result.message_id` is the message ID when the answer carries one. Checked live (2026-10-25, one recipient): a fresh
+send answers 200 with `message_id`, an RFC 5322 `Message-ID` in angle brackets on the sender's domain, and the
+recipient in `queued`, not `delivered`. The REST guide's example answers only the recipients' status, so the adapter
+also takes that shape: without `message_id`, a recipient in
+`delivered` or `queued` is accepted under `cloudflare:<idempotency key>`, which names the send and is the same on a
+retry of it. A 200 that names neither a message ID nor the recipient is `malformed_response`. A refusal carries numeric codes
+in `errors`, which the adapter does not read: per the documentation a malformed request, an invalid or oversized
+message is a 400, `provider_rejected`; a bad token a 401, and a token without the permission, an account not entitled
+to Email Sending, or sending disabled or paused a 403, `provider_unauthorized`; a 404 (no such account under the path)
+`provider_unauthorized`; a 429 `rate_limited`; a 500 or 503 `provider_unavailable`. A repeated request is delivered
+again. Only the accepted answer is checked live; the refusals follow the documentation
+([backlog 241](../backlog/241-verify-the-cloudflare-email-adapter-on-a-live-account.md)).
 
 ## SmartEmailing adapter
 
@@ -392,11 +428,40 @@ whose jobs declare `mailer: 'installation'`.
 - **Cloudflare.** `fabrika platform init` requires `--email-provider` (`none` or a
   built-in provider). It writes the provider's secret variables as GitHub Environment
   secrets and the rest as variables, and the workflow passes every built-in
-  provider's variables to IAM; an unset one arrives empty and counts as absent. A
-  re-run writes the values it is given and deletes none, so an old provider's
-  variables, a display name or a tag stay until the operator deletes them. Control
-  on Cloudflare holds no transport, so a deploy there hands a `mailer: 'installation'`
-  job `FABRIKA_EMAIL_PROVIDER=none` (below).
+  provider's variables to IAM's deploy and to the control plane's; an unset one
+  arrives empty and counts as absent. A re-run writes the values it is given and
+  deletes none, so an old provider's variables, a display name or a tag stay until
+  the operator deletes them.
+- **Control's Worker.** Control's deploy (`packages/control/fabrika.config.ts`) reads
+  the set with `readInstallationMail` and writes the provider, the sender and the
+  provider's non-secret variables as Worker vars, or `FABRIKA_EMAIL_PROVIDER=none`, and
+  the provider's credentials as Worker secrets (`pipeline.secrets`), never as vars. An
+  invalid set fails that deploy, naming the variables; IAM's stage refuses the same set
+  first. A local Worker gets no transport. The Worker reads its `FABRIKA_EMAIL_*` per
+  invocation (`controlEnv`, `src/platform-cf.ts`): none, a transport, or invalid,
+  as the Bun process does at boot. An invalid one makes Control refuse each deploy that
+  hands the set, and the refusal names the Cloudflare operator step
+  (`CLOUDFLARE_MAIL_REMEDY`). A provider no longer selected leaves its credentials as
+  Worker secrets of IAM (`prod-propustka-worker`) and of Control (`prod-vozka`); neither
+  reads them, and `wrangler secret delete <NAME> --name <worker>` removes each one
+  (`CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` name the account).
+- **The deploy's order.** Control's deploy uploads the Worker version before it writes
+  the secrets (`deploy-worker`, then `sync-secrets`). On the first rollout the new
+  version briefly holds the provider's vars without its credential: a mailer deploy
+  in that window is refused with the Cloudflare operator step and can be run again.
+  After a rotation the old credential serves for the same moment.
+- **Adding or rotating it on Cloudflare.** Re-run `fabrika platform init` with the new
+  values: the workflow redeploys IAM and Control. The environments that use it get the
+  new set at their next deploy: `fabrika control deploy --app=<id> --env=<name>`, or
+  **Deploy** on the environment in the console.
+- **Rollout on Cloudflare.** A `fabrika.ref` bump does not rewrite the workflow, and an
+  older release's `init` writes the workflow without Control's copy. Bump `fabrika.ref`
+  to a release that holds it, then re-run `fabrika platform init --provider=cloudflare`
+  with that release's CLI ([release process](release-process.md)), which refreshes
+  `.github/workflows/platform.yml` and dispatches it. Until then Control's deploy gets no
+  `FABRIKA_EMAIL_*` and writes `FABRIKA_EMAIL_PROVIDER=none`, and an application's mailer
+  jobs see no mail, as before. After that workflow run, redeploy each environment whose
+  contract has a `mailer: 'installation'` job, as above.
 
 ## Applications
 
@@ -427,6 +492,10 @@ never sends. `mailer: 'own'` takes the application's own `EmailSender` from
   release the approved snapshot records (`builtinEmailProviderSince`, `@fabrika/email/providers`),
   naming the provider, the pinned release and the one it needs. The running version
   keeps running.
+- A Cloudflare deploy hands the set: the Worker runs no relay. An application on
+  framework 0.9 or newer runs its jobs in its Durable Object (ADR-0065) and reads the
+  set from its Worker's vars and secrets; the provider refuses the set to an older
+  release, whose stateless Worker runs no job (`assertStatelessEnvironment`).
 - Zerops removes the variables a deploy no longer hands, so an environment that moves
   to framework 0.7 loses the provider's credential at that deploy. A Cloudflare deploy
   writes every `FABRIKA_EMAIL_*` and `FABRIKA_PLATFORM_*` it hands, but a platform URL, as
@@ -435,8 +504,9 @@ never sends. `mailer: 'own'` takes the application's own `EmailSender` from
 - Without a transport, a deploy that hands the set hands
   `FABRIKA_EMAIL_PROVIDER=none` and nothing else. The application boots, its mailer
   jobs see `ctx.mail.available` false, and every send fails `mail_not_configured`. An
-  installation from before the transport has no `FABRIKA_EMAIL_*` on `control`, so it
-  lands here with no operator step.
+  installation from before the transport has no `FABRIKA_EMAIL_*` on `control`, and a
+  Cloudflare installation whose workflow predates Control's copy hands Control none, so
+  each lands here with no operator step.
 - With an invalid transport, Control refuses a deploy that hands the set before any
   effect, naming the jobs and the operator step. It does not refuse the approval: the
   transport can change after it.

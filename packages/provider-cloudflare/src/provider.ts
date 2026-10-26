@@ -11,11 +11,14 @@ import {
 	FABRIKA_APPLICATION_OBJECT,
 	FABRIKA_APPLICATION_OBJECTS,
 	FABRIKA_CONTRACT_DIGEST,
+	FABRIKA_IAM_APP_ID,
 	FABRIKA_IAM_ISSUER,
+	FABRIKA_PROXY_SECRET,
 	isFrameworkVariableName,
 	isManagedCredential,
 	managedValue,
 	OPS_REHEARSAL_OBJECT,
+	parseManagedEnvironment,
 } from '@fabrika/auth-core'
 import { type DeployStepResult, type ProviderManagedEnvironment, runSteps, type SchemaReconciler } from '@fabrika/provider-contract'
 import { isPolicyOrigin } from '@fabrika/proxy-core/headers'
@@ -48,6 +51,7 @@ import {
 	servesOps,
 	servesRawSql,
 } from './contract-support'
+import { deployOrder } from './deploy-order'
 import { parseSecretNames, splitManagedEnvironment, staleManagedSecrets, withSecretsFile } from './managed-secrets'
 import { buildPlan, type CloudflareStep, findMigratableDatabases } from './plan'
 import { createCloudflareProxyWorker, IamApplicationReference, PROXY_MANIFEST_DEFINE } from './proxy'
@@ -82,11 +86,17 @@ const assertRunning = (signal: AbortSignal): void => {
 	}
 }
 
+/** What composing an application's Worker graph reads of a run; a local run (`composeLocalApplication`) supplies it too. */
+type ApplicationTarget = Pick<
+	CloudflareDeployRun,
+	'appId' | 'env' | 'domain' | 'crossOrigins' | 'operationsOrigin' | 'managedEnvironment' | 'vars' | 'secrets' | 'applicationObjects'
+>
+
 /** The bindings the platform writes into a contract application's Worker (ADR-0065). */
 const PLATFORM_BINDINGS: ReadonlySet<string> = new Set([CLOUDFLARE_APPLICATION_BINDING, CLOUDFLARE_FILES_BINDING])
 
 /** An application never names a variable only the platform writes, whether or not this deploy writes it. */
-const assertNoFrameworkVariables = (config: CloudflareAppConfig, application: Worker, run: CloudflareDeployRun): void => {
+const assertNoFrameworkVariables = (config: CloudflareAppConfig, application: Worker, run: ApplicationTarget): void => {
 	const authored = [
 		...(config.pipeline?.vars ?? []),
 		...(config.pipeline?.secrets ?? []),
@@ -111,7 +121,7 @@ const assertNoFrameworkVariables = (config: CloudflareAppConfig, application: Wo
 const withManagedEnvironment = (
 	config: CloudflareAppConfig,
 	authored: Worker,
-	run: CloudflareDeployRun,
+	run: ApplicationTarget,
 	managed: ProviderManagedEnvironment,
 ): { readonly worker: Worker; readonly secrets: Readonly<Record<string, string>> } => {
 	const declared = new Set([...(config.pipeline?.vars ?? []), ...(config.pipeline?.secrets ?? [])])
@@ -142,7 +152,7 @@ const R2_BUCKET_NAME = /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/
 const filesBucketName = (appId: string): string => `${appId}-files`
 
 /** The remote name oblaka gives the files bucket; it prefixes a bucket with the environment, `local` included. */
-const filesBucketRemote = (run: CloudflareDeployRun): string => {
+const filesBucketRemote = (run: ApplicationTarget): string => {
 	const remote = `${run.env}-${filesBucketName(run.appId)}`
 	if (!R2_BUCKET_NAME.test(remote)) {
 		throw new Error(
@@ -158,7 +168,7 @@ const MINUTE_TICK = '* * * * *'
  * The hourly repair tick of an environment that serves alarms, at a minute derived from `<env>-<app>`: stable across
  * deploys, and spread so the fleet's environments do not all wake at once.
  */
-const repairTick = (run: CloudflareDeployRun): string => {
+const repairTick = (run: ApplicationTarget): string => {
 	const minute = createHash('sha256').update(`${run.env}-${run.appId}`).digest().readUInt32BE(0) % 60
 	return `${minute} * * * *`
 }
@@ -167,7 +177,7 @@ const repairTick = (run: CloudflareDeployRun): string => {
  * What the platform gives a contract application's Worker; the deployer writes exactly this and the bounds check it.
  * Only a release Control names serves alarms; a local deploy keeps the minute tick.
  */
-const applicationRuntime = (run: CloudflareDeployRun, contract: ContractArtifact, entry: string | null, alarms: boolean): ApplicationRuntime => ({
+const applicationRuntime = (run: ApplicationTarget, contract: ContractArtifact, entry: string | null, alarms: boolean): ApplicationRuntime => ({
 	filesBucket: filesBucketRemote(run),
 	crons: needsMinuteTick(contract) ? [alarms ? repairTick(run) : MINUTE_TICK] : [],
 	entry,
@@ -257,7 +267,7 @@ const objectVariables = (objects: ApplicationObjects): Readonly<Record<string, s
  * and its cron trigger (ADR-0065), and on a release that serves ops name its objects. The object is bound first, so
  * oblaka numbers its migration `v0001` whatever else the application binds, and the tag never moves.
  */
-const withApplicationRuntime = (authored: Worker, run: CloudflareDeployRun, runtime: ApplicationRuntime, ops: boolean): Worker => {
+const withApplicationRuntime = (authored: Worker, run: ApplicationTarget, runtime: ApplicationRuntime, ops: boolean): Worker => {
 	const application = applicationWorker(authored)
 	const configured = new Worker({
 		...application.options,
@@ -331,14 +341,16 @@ const contractEnvironment = (managed: ProviderManagedEnvironment, served: Served
 
 /**
  * The lock-down follows the contract, not the config: a contract whose IAM schema does not say `contract: true`, or a
- * platform service's schema that does, would leave the proxy and IAM deciding under different rules.
+ * platform service's schema that does, would leave the proxy and IAM deciding under different rules. An application
+ * (`refuse`) may declare no schema, because Control writes the approved contract's own (ADR-0050); a platform deploy
+ * (`allow`) registers the schema itself (ADR-0058), so it must declare one.
  */
-const assertContractSchema = (schema: AppSchema | null, contract: ContractArtifact | null): void => {
+const assertContractSchema = (schema: AppSchema | null, contract: ContractArtifact | null, platformResources: 'refuse' | 'allow'): void => {
 	const declared = schema?.contract === true
 	if (contract === null && declared) {
 		throw new Error('cloudflare: the IAM schema says `contract: true`, but the checkout has no `fabrika.contract.ts`')
 	}
-	if (contract !== null && !declared) {
+	if (contract !== null && !declared && (schema !== null || platformResources === 'allow')) {
 		throw new Error('cloudflare: this deployment serves a contract, so its IAM schema is `schemaFromContract(artifact)` (`contract: true`)')
 	}
 }
@@ -348,7 +360,7 @@ const assertContractSchema = (schema: AppSchema | null, contract: ContractArtifa
  * application Worker the config returns, never taken from the checkout. A config that returns a proxy is refused.
  * `ops` adds Control's ops row to the table.
  */
-const platformProxied = (authored: Worker, served: ServedContract, run: CloudflareDeployRun, ops: boolean): Worker => {
+const platformProxied = (authored: Worker, served: ServedContract, run: ApplicationTarget, ops: boolean): Worker => {
 	if (authored.options.bindings?.['APP'] !== undefined) {
 		throw new Error(
 			`cloudflare: \`resources\` returns the Worker \`${authored.options.name}\` binding \`APP\`, a proxy of its own; return the application Worker, and the platform builds the proxy Worker from its contract`,
@@ -372,7 +384,7 @@ const platformProxied = (authored: Worker, served: ServedContract, run: Cloudfla
 }
 
 /** The origin of the environment's Operations ingest, which the proxy's `connect-src` admits, as the framework's does. */
-const operationsOrigin = (run: CloudflareDeployRun): { readonly operationsOrigin?: string } => {
+const operationsOrigin = (run: ApplicationTarget): { readonly operationsOrigin?: string } => {
 	if (run.operationsOrigin !== undefined) return { operationsOrigin: run.operationsOrigin }
 	// A job from an older Control names no origin; derive it from the DSN until no release in the window omits it.
 	const dsn = managedValue(run.managedEnvironment, 'FABRIKA_OPERATIONS_DSN')
@@ -557,15 +569,18 @@ const runStep = async (spec: CloudflareStep, env: StepEnv): Promise<void> => {
 				return
 			}
 			const application = `${run.env}-${applicationWorker(worker).options.name}`
-			for (const generated of configs) {
+			let applicationDir: string | undefined
+			for (const generated of deployOrder(configs)) {
 				const generatedDir = dirname(resolve(dir, generated.path))
 				// The checkout's own build step has run by now, so this is the last moment the tree is still ours to check.
 				if (env.platformResources === 'refuse') await assertLiteralAssets(generated, generatedDir)
 				const isApplication = generated.config.name === application
 				await wranglerDeploy(env, generatedDir, isApplication ? env.managedSecrets : {})
-				// A platform component's own secrets carry framework names (IAM's mail transport), so only an application's are swept.
-				if (isApplication && env.platformResources === 'refuse') await deleteStaleSecrets(env, generatedDir)
+				if (isApplication) applicationDir = generatedDir
 			}
+			// Swept only once every Worker is deployed: a failed sweep must not leave the new application behind the old proxy.
+			// A platform component's own secrets carry framework names (IAM's mail transport), so only an application's are swept.
+			if (applicationDir !== undefined && env.platformResources === 'refuse') await deleteStaleSecrets(env, applicationDir)
 			return
 		}
 		case 'reconcile-schema': {
@@ -721,7 +736,7 @@ export const createCloudflareDeployer = (options: CloudflareDeployerOptions) => 
 	if (platformResources === 'refuse' && contract !== null) assertCloudflareContract(contract, gates)
 	// Read once, before `resources()` runs the checkout's code again: nothing below reads the config's schema.
 	const schema = configSchema(loaded.config)
-	assertContractSchema(schema, contract)
+	assertContractSchema(schema, contract, platformResources)
 	const authored = runnerWorkerGraph(loaded.config.resources({ env: run.env, domain: run.domain }))
 	// Only a release Control named pins the entry or serves ops; a local deploy names none and keeps its authored `main`.
 	const release = run.approved?.framework
@@ -781,4 +796,54 @@ export const createCloudflareDeployer = (options: CloudflareDeployerOptions) => 
 	}
 	const result = await runSteps(buildPlan(loaded.config, worker, env.entryBuild !== null), run, (step) => runStep(step, env))
 	return { appId: run.appId, env: run.env, ...result }
+}
+
+/** What `composeLocalApplication` needs: the config, the contract it serves, and the IAM a local run reaches. */
+export interface LocalApplicationOptions {
+	readonly config: CloudflareAppConfig
+	readonly contract: ContractArtifact
+	/** IAM's origin, the issuer of the local run's tokens. */
+	readonly iamOrigin: string
+	readonly env: string
+	readonly domain?: string
+}
+
+/**
+ * The proxy Worker and the application Worker of a local run (`oblaka.ts`, lopata), composed by the code a deploy runs:
+ * the platform's proxy over the contract's endpoint table, and the application's object, files bucket and repair tick,
+ * as a release that serves alarms gets them. No deploy takes it. With no Control to write them, the framework values
+ * come from here, and the proxy secret, which a deploy uploads as a Worker secret, is drawn anew on each call and
+ * written as a variable into the ignored `wrangler.jsonc`.
+ */
+export const composeLocalApplication = (options: LocalApplicationOptions): Worker => {
+	const { config, contract, env } = options
+	const domain = options.domain === undefined ? {} : { domain: options.domain }
+	const iamAppId = appEnvironmentId(config.id, env)
+	const target: ApplicationTarget = {
+		appId: config.id,
+		env,
+		...domain,
+		vars: {},
+		secrets: {},
+		managedEnvironment: parseManagedEnvironment({
+			[FABRIKA_IAM_ISSUER]: options.iamOrigin,
+			[FABRIKA_IAM_APP_ID]: iamAppId,
+			[FABRIKA_PROXY_SECRET]: `${crypto.randomUUID()}${crypto.randomUUID()}`.replaceAll('-', ''),
+		}),
+	}
+	// The local run reads the contract with this release, so it is gated as a local deploy is.
+	assertCloudflareContract(contract, { capsSegments: true, servesSql: true })
+	assertContractSchema(configSchema(config), contract, 'refuse')
+	const served: ServedContract = { contract, digest: contractDigest(contract) }
+	const proxied = platformProxied(config.resources({ env, ...domain }), served, target, false)
+	assertNoFrameworkVariables(config, applicationWorker(proxied), target)
+	const managed = withManagedEnvironment(config, proxied, target, contractEnvironment(target.managedEnvironment, served))
+	const application = applicationWorker(managed.worker)
+	const withSecrets = replaceApplicationWorker(
+		managed.worker,
+		new Worker({ ...application.options, vars: { ...application.options.vars, ...managed.secrets } }),
+	)
+	const identified = withIamIdentity(withSecrets, iamAppId)
+	const connected = withConnectorBindings(identified, connectorBindings(contract))
+	return withApplicationRuntime(connected, target, applicationRuntime(target, contract, null, true), false)
 }

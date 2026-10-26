@@ -288,8 +288,8 @@ bunx tsc --noEmit                                           # once, at the end
 bunx fabrika-check .                                        # once, after tsc; refusals fail; hints print below them
 ```
 
-**On Cloudflare** (`fabrika.config.ts` imports `defineApp` from `@fabrika/provider-cloudflare`) the application runs in
-one Durable Object over SQLite. Its `db/migrations/*.sql` are SQLite (`references/table-and-migration.md`), and the
+**On Cloudflare** (`fabrika.config.ts` imports `defineApp` from `@fabrika/provider-cloudflare`, as
+`references/app-setup.md` shows) the application runs in one Durable Object over SQLite. Its `db/migrations/*.sql` are SQLite (`references/table-and-migration.md`), and the
 object applies them when it boots, so there is no `migrate` and no command needs a database URL or `FABRIKA_APP_ID`.
 The tests run on `@fabrika/db/testing-sqlite` (`references/tests.md`), in memory, and never skip. A handler holds the
 object's transaction, so its `limits.timeoutMs` is at most 25 s. A job's is at most 14 minutes, its default: longer
@@ -603,6 +603,25 @@ zerops:
 The platform's build runs the tests, writes the entrypoint, runs `fabrika-check` and the type check. Its init commands
 run `fabrika db migrate`, `fabrika db codegen --verify` and `fabrika db test-isolation` before the server starts: a
 version does not go live until every generated test passes. It writes every `FABRIKA_*` variable; never set one.
+
+## The deploy surface (Cloudflare)
+
+```ts fabrika.config.ts
+import { defineApp } from '@fabrika/provider-cloudflare'
+
+export default defineApp({ id: 'tasks' })
+```
+
+That is the whole config. `defineApp` builds the application Worker: named after the id, running
+`fabrika/entry.generated.ts`, with no route and no public URL, and IAM bound at its application entrypoint. The deploy
+builds the proxy Worker from `fabrika.contract.ts` and writes the application's Durable Object, its files bucket, its
+cron trigger and every `FABRIKA_*` variable; Control writes the IAM schema from the approved contract. Declare none of
+them: a config that does is refused. Write no `resources`, `schema` or `pipeline.workerDir` (the config's directory is
+the default). A binding of the application's own, or another `compatibility_date` or `compatibility_flags`, goes in
+`worker: { bindings, compatibility_date, compatibility_flags }`; `IAM` stays the platform's. `package.json` names
+`@fabrika/provider-cloudflare` where the Zerops one names `@fabrika/provider-zerops`, the entry is written by
+`fabrika app build --provider=cloudflare` (the deploy runs it again from the pinned commit), and there is no
+`zerops.yaml`.
 
 ## The SPA (added when the application has one)
 

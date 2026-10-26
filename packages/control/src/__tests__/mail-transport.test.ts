@@ -2,6 +2,7 @@ import { CONTRACT_FORMAT, type ContractArtifact, type DeclaredReach } from '@fab
 import { builtinEmailProviders, builtinEmailProviderSince } from '@fabrika/email/providers'
 import { describe, expect, test } from 'bun:test'
 import {
+	CLOUDFLARE_MAIL_REMEDY,
 	type InstallationMail,
 	installationMailEnvironment,
 	installationMailJobs,
@@ -11,6 +12,7 @@ import {
 	platformMailOrigin,
 	readInstallationMail,
 	relaysInstallationMail,
+	ZEROPS_MAIL_REMEDY,
 } from '../mail-transport'
 
 const REACH: DeclaredReach = { sql: null, unscoped: {}, connect: [], issues: null }
@@ -36,26 +38,35 @@ const artifact = (declared: Record<string, DeclaredReach>): ContractArtifact => 
 
 const VARIABLES = { FABRIKA_EMAIL_PROVIDER: 'resend', FABRIKA_EMAIL_FROM: 'mail@example.test', FABRIKA_EMAIL_RESEND_API_KEY: 're_key' }
 const TRANSPORT: InstallationMail = { kind: 'transport', transport: { variables: VARIABLES, secretNames: new Set(['FABRIKA_EMAIL_RESEND_API_KEY']) } }
-const INVALID: InstallationMail = { kind: 'invalid', reason: 'Email configuration is invalid: FABRIKA_EMAIL_RESEND_API_KEY is missing' }
+const INVALID: InstallationMail = {
+	kind: 'invalid',
+	reason: 'Email configuration is invalid: FABRIKA_EMAIL_RESEND_API_KEY is missing',
+	remedy: ZEROPS_MAIL_REMEDY,
+}
 
 describe('the installation mail transport', () => {
 	test('none, or no provider at all, reads as none', () => {
-		expect(readInstallationMail({}, builtinEmailProviders)).toEqual({ kind: 'none' })
-		expect(readInstallationMail({ FABRIKA_EMAIL_PROVIDER: 'none', FABRIKA_EMAIL_FROM: 'mail@example.test' }, builtinEmailProviders)).toEqual({
-			kind: 'none',
-		})
+		expect(readInstallationMail({}, builtinEmailProviders, ZEROPS_MAIL_REMEDY)).toEqual({ kind: 'none' })
+		expect(readInstallationMail({ FABRIKA_EMAIL_PROVIDER: 'none', FABRIKA_EMAIL_FROM: 'mail@example.test' }, builtinEmailProviders, ZEROPS_MAIL_REMEDY))
+			.toEqual({
+				kind: 'none',
+			})
 	})
 
 	test("a transport takes only the selected provider's variables, and names its secret ones", () => {
-		const mail = readInstallationMail({
-			FABRIKA_EMAIL_PROVIDER: 'smartemailing',
-			FABRIKA_EMAIL_FROM: 'mail@example.test',
-			FABRIKA_EMAIL_FROM_NAME: 'Notes',
-			FABRIKA_EMAIL_SMARTEMAILING_USERNAME: 'user@example.test',
-			FABRIKA_EMAIL_SMARTEMAILING_API_KEY: 'se-key',
-			FABRIKA_EMAIL_RESEND_API_KEY: 'stale-resend-key',
-			FABRIKA_EMAIL_SMARTEMAILING_TAG: '',
-		}, builtinEmailProviders)
+		const mail = readInstallationMail(
+			{
+				FABRIKA_EMAIL_PROVIDER: 'smartemailing',
+				FABRIKA_EMAIL_FROM: 'mail@example.test',
+				FABRIKA_EMAIL_FROM_NAME: 'Notes',
+				FABRIKA_EMAIL_SMARTEMAILING_USERNAME: 'user@example.test',
+				FABRIKA_EMAIL_SMARTEMAILING_API_KEY: 'se-key',
+				FABRIKA_EMAIL_RESEND_API_KEY: 'stale-resend-key',
+				FABRIKA_EMAIL_SMARTEMAILING_TAG: '',
+			},
+			builtinEmailProviders,
+			ZEROPS_MAIL_REMEDY,
+		)
 		if (mail.kind !== 'transport') throw new Error(`expected a transport, read ${mail.kind}`)
 		expect(mail.transport.variables).toEqual({
 			FABRIKA_EMAIL_PROVIDER: 'smartemailing',
@@ -68,12 +79,17 @@ describe('the installation mail transport', () => {
 	})
 
 	test('an invalid transport reads as invalid, with a reason that names the variable and never a value', () => {
-		const mail = readInstallationMail({ FABRIKA_EMAIL_PROVIDER: 'resend', FABRIKA_EMAIL_FROM: 'private@example.test' }, builtinEmailProviders)
-		expect(mail).toEqual({ kind: 'invalid', reason: expect.stringContaining('FABRIKA_EMAIL_RESEND_API_KEY is missing') })
+		const mail = readInstallationMail(
+			{ FABRIKA_EMAIL_PROVIDER: 'resend', FABRIKA_EMAIL_FROM: 'private@example.test' },
+			builtinEmailProviders,
+			ZEROPS_MAIL_REMEDY,
+		)
+		expect(mail).toEqual({ kind: 'invalid', reason: expect.stringContaining('FABRIKA_EMAIL_RESEND_API_KEY is missing'), remedy: ZEROPS_MAIL_REMEDY })
 		expect(JSON.stringify(mail)).not.toContain('private@example.test')
-		expect(readInstallationMail({ FABRIKA_EMAIL_PROVIDER: 'smtp' }, builtinEmailProviders)).toEqual({
+		expect(readInstallationMail({ FABRIKA_EMAIL_PROVIDER: 'smtp' }, builtinEmailProviders, ZEROPS_MAIL_REMEDY)).toEqual({
 			kind: 'invalid',
 			reason: expect.stringContaining('FABRIKA_EMAIL_PROVIDER must be none or one of'),
+			remedy: ZEROPS_MAIL_REMEDY,
 		})
 	})
 
@@ -109,6 +125,17 @@ describe('the installation mail transport', () => {
 		expect(() => installationMailEnvironment(INVALID, artifact({ 'job:digest': { ...REACH, mailer: 'installation' } }), '0.8.1')).toThrow(
 			"the contract's job `digest` sends mail through the installation (mailer: 'installation'), and Control's mail transport is invalid: Email configuration is invalid: FABRIKA_EMAIL_RESEND_API_KEY is missing; set FABRIKA_EMAIL_* on both iam and control: see `fabrika platform guide --provider=zerops`, 'Set or rotate the mail transport', then restart control and deploy again",
 		)
+		// The operator step is the composition's: on Cloudflare the GitHub Environment and the platform workflow.
+		expect(() =>
+			installationMailEnvironment(
+				{ ...INVALID, remedy: CLOUDFLARE_MAIL_REMEDY },
+				artifact({ 'job:digest': { ...REACH, mailer: 'installation' } }),
+				'0.8.1',
+			)
+		)
+			.toThrow(
+				"FABRIKA_EMAIL_RESEND_API_KEY is missing; correct FABRIKA_EMAIL_* in the installation's GitHub Environment (re-run `fabrika platform init --provider=cloudflare` with the transport), re-run its platform workflow so Control's Worker holds the set, then deploy again",
+			)
 		const both = artifact({ 'job:b': { ...REACH, mailer: 'installation' }, 'job:a': { ...REACH, mailer: 'installation' } })
 		expect(() => installationMailEnvironment(INVALID, both, '0.8.1')).toThrow("the contract's jobs `a`, `b` send mail through the installation")
 	})
@@ -143,6 +170,25 @@ describe('a provider newer than the application', () => {
 		expect(installationMailEnvironment(TRANSPORT, needs, '0.5.0')).toEqual(VARIABLES)
 		const directory: InstallationMail = { kind: 'transport', transport: { variables: { FABRIKA_EMAIL_PROVIDER: 'directory' }, secretNames: new Set() } }
 		expect(installationMailEnvironment(directory, needs, '0.5.0')).toEqual({ FABRIKA_EMAIL_PROVIDER: 'directory' })
+	})
+
+	test('Cloudflare is handed from framework 0.9 on, and refused to an older release', () => {
+		const cloudflareVariables = {
+			FABRIKA_EMAIL_PROVIDER: 'cloudflare',
+			FABRIKA_EMAIL_FROM: 'mail@example.test',
+			FABRIKA_EMAIL_CLOUDFLARE_API_TOKEN: 'cf-private-token',
+			FABRIKA_EMAIL_CLOUDFLARE_ACCOUNT_ID: '023e105f4ecef8ad9ca31a8372d0c353',
+		}
+		const cloudflare: InstallationMail = {
+			kind: 'transport',
+			transport: { variables: cloudflareVariables, secretNames: new Set(['FABRIKA_EMAIL_CLOUDFLARE_API_TOKEN']) },
+		}
+		for (const framework of ['0.9.0', '0.9.0-cloudflare.1', '0.9.1', '1.0.0']) {
+			expect(installationMailEnvironment(cloudflare, needs, framework)).toEqual(cloudflareVariables)
+		}
+		const refusal = (): unknown => installationMailEnvironment(cloudflare, needs, '0.8.2')
+		expect(refusal).toThrow("the installation's provider `cloudflare` is unknown to framework 0.8.2, which this version pins: it needs 0.9.0 or newer")
+		expect(refusal).not.toThrow('cf-private-token')
 	})
 
 	test('every built-in provider states its release', () => {

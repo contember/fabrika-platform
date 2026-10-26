@@ -10,6 +10,8 @@
 
 import type { IamRpc } from '@fabrika/auth'
 import { type AppEnvironment, readEnvironmentName } from '@fabrika/auth-core'
+import { pickEmailEnvironment } from '@fabrika/email'
+import { builtinEmailProviders } from '@fabrika/email/providers'
 import type { GitHubAppFetch } from '@fabrika/github-app'
 import type { BlobStore, HttpService, JobQueue } from '@fabrika/platform'
 import {
@@ -30,12 +32,16 @@ import { SourceFailure } from './github/source/failure'
 import { GitHubMetadataClient, type GitHubMetadataFetch } from './github/source/metadata'
 import type { SourceRepository } from './github/source/types'
 import { controlPublicOrigin } from './iam'
+import { CLOUDFLARE_MAIL_REMEDY, type InstallationMail, readInstallationMail } from './mail-transport'
 import type { ControlJobMessage } from './run-lifecycle'
 
 /** The control-plane Worker's raw Cloudflare bindings + vars/secrets — what `WorkerEntrypoint` fills `this.env` with. */
 export interface WorkerBindings
-	extends Omit<Env, 'DB' | 'REPOSITORIES' | 'ASSETS' | 'RUN_LOGS' | 'DEPLOY_QUEUE' | 'WAIT_UNTIL' | 'IAM' | 'IAM_ADMIN'>
+	extends Omit<Env, 'DB' | 'REPOSITORIES' | 'ASSETS' | 'RUN_LOGS' | 'DEPLOY_QUEUE' | 'WAIT_UNTIL' | 'IAM' | 'IAM_ADMIN' | 'MAIL_TRANSPORT'>
 {
+	// The installation's mail transport arrives as `FABRIKA_EMAIL_*` Worker vars and secrets, which Control's own deploy
+	// writes from the installation's GitHub Environment (`fabrika.config.ts`). The provider's variables belong to an open
+	// registry, so no field names them: `controlEnv` reads the family by prefix (`pickEmailEnvironment`).
 	/** Registry + run history + vault + deploy locks. Migrations in `./migrations` (SQLite dialect). */
 	DB: D1Database
 	/** Control-plane SPA static assets. */
@@ -58,6 +64,17 @@ export interface WorkerBindings
 	IAM?: IamRpc & HttpService
 }
 
+/** The transport each bindings object holds, parsed once: workerd hands every invocation of an isolate the same `env`. */
+const mailByBindings = new WeakMap<WorkerBindings, InstallationMail>()
+
+function installationMail(bindings: WorkerBindings): InstallationMail {
+	const known = mailByBindings.get(bindings)
+	if (known !== undefined) return known
+	const mail = readInstallationMail(pickEmailEnvironment(bindings), builtinEmailProviders, CLOUDFLARE_MAIL_REMEDY)
+	mailByBindings.set(bindings, mail)
+	return mail
+}
+
 /** Present the Worker's bindings as the runtime-neutral `Env` the shared layer consumes. */
 export function controlEnv(bindings: WorkerBindings, waitUntil: Env['WAIT_UNTIL']): Env {
 	const env: Env = {
@@ -72,6 +89,8 @@ export function controlEnv(bindings: WorkerBindings, waitUntil: Env['WAIT_UNTIL'
 		DEPLOY_QUEUE: cfJobQueue(bindings.DEPLOY_QUEUE),
 		WAIT_UNTIL: waitUntil,
 		...(bindings.IAM === undefined ? {} : { IAM: bindings.IAM, IAM_ADMIN: bindings.IAM }),
+		// A Worker has no boot to log an invalid transport at: the deploys that need it are refused, naming the variables.
+		MAIL_TRANSPORT: installationMail(bindings),
 	}
 	return { ...env, COMMITS: gitHubCommitSource(new GitHubMetadataClient({}), vaultGitHubCredentials(env, { createClient: gitHubAppClientFactory() })) }
 }

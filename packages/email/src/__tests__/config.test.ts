@@ -27,7 +27,7 @@ describe('readEmailTransportConfig', () => {
 	test('an unknown provider names the registry', () => {
 		const error = refusal(() => readEmailTransportConfig({ FABRIKA_EMAIL_PROVIDER: 'smtp' }, builtinEmailProviders))
 		expect(error.code).toBe('invalid_configuration')
-		expect(error.message).toBe('FABRIKA_EMAIL_PROVIDER must be none or one of: ahasend, lettermint, postmark, resend, smartemailing')
+		expect(error.message).toBe('FABRIKA_EMAIL_PROVIDER must be none or one of: ahasend, cloudflare, lettermint, postmark, resend, smartemailing')
 	})
 
 	test('a name an object inherits is not a provider', () => {

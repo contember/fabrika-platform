@@ -1,4 +1,5 @@
 import { ahaSendEmailProvider } from './ahasend.js'
+import { cloudflareEmailProvider } from './cloudflare.js'
 import type { EmailProviderRegistry, EmailProviderVariable } from './config.js'
 import { lettermintEmailProvider } from './lettermint.js'
 import { postmarkEmailProvider } from './postmark.js'
@@ -11,6 +12,7 @@ import { smartEmailingEmailProvider } from './smartemailing.js'
  */
 export const builtinEmailProviders = {
 	ahasend: ahaSendEmailProvider,
+	cloudflare: cloudflareEmailProvider,
 	lettermint: lettermintEmailProvider,
 	postmark: postmarkEmailProvider,
 	resend: resendEmailProvider,
@@ -30,6 +32,7 @@ export const builtinEmailProviderVariables: readonly EmailProviderVariable[] = O
  */
 export const builtinEmailProviderSince = {
 	ahasend: '0.8.2',
+	cloudflare: '0.9.0',
 	lettermint: '0.8.2',
 	postmark: '0.8.2',
 	resend: null,

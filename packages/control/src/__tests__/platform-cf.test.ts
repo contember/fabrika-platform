@@ -7,6 +7,7 @@ import type { RelayResult, RunnerStatus } from '@fabrika/runner-cloudflare'
 import { describe, expect, test } from 'bun:test'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import { SourceFailure } from '../github/source/failure'
+import { CLOUDFLARE_MAIL_REMEDY } from '../mail-transport'
 import {
 	cancelRunOnRunner,
 	cloudflareControlProvider,
@@ -18,6 +19,7 @@ import {
 	startRunOnRunner,
 	type WorkerBindings,
 } from '../platform-cf'
+import { buildRunDeps } from '../services'
 import { createHarness } from './helpers/harness'
 
 const envelope = <T>(codec: { version: number; encode(value: T): ProviderEnvelope['payload'] }, value: T): ProviderEnvelope => ({
@@ -80,6 +82,60 @@ function workerBindings(harness: ReturnType<typeof createHarness>): WorkerBindin
 		CLOUDFLARE_API_TOKEN: 'token',
 	}
 }
+
+describe("the Cloudflare composition's mail transport", () => {
+	test("reads the installation's FABRIKA_EMAIL_* from the Worker's vars and secrets, and hands it to every deploy", async () => {
+		const harness = createHarness()
+		try {
+			// The provider's own variables are Worker secrets the bindings type does not name: an open registry owns them.
+			const providerSecrets = {
+				FABRIKA_EMAIL_RESEND_API_KEY: 're_key',
+				// A provider no longer selected leaves its secret on the Worker; it is never handed on.
+				FABRIKA_EMAIL_POSTMARK_SERVER_TOKEN: 'pm_stale',
+			}
+			const sender = { FABRIKA_EMAIL_PROVIDER: 'resend', FABRIKA_EMAIL_FROM: 'mail@example.test', FABRIKA_EMAIL_FROM_NAME: 'Fabrika' }
+			const bindings: WorkerBindings = { ...workerBindings(harness), ...sender, ...providerSecrets }
+			const env = controlEnv(bindings, () => {})
+			const deps = await buildRunDeps(env, cloudflareControlProvider(bindings, env))
+			expect(deps.mailTransport).toEqual({
+				kind: 'transport',
+				transport: {
+					variables: {
+						FABRIKA_EMAIL_PROVIDER: 'resend',
+						FABRIKA_EMAIL_FROM: 'mail@example.test',
+						FABRIKA_EMAIL_FROM_NAME: 'Fabrika',
+						FABRIKA_EMAIL_RESEND_API_KEY: 're_key',
+					},
+					secretNames: new Set(['FABRIKA_EMAIL_RESEND_API_KEY']),
+				},
+			})
+		} finally {
+			harness.sqlite.close()
+		}
+	})
+
+	test('no provider, or an empty one, is none; an invalid set names the variables and keeps the Worker serving', () => {
+		const harness = createHarness()
+		try {
+			expect(controlEnv(workerBindings(harness), () => {}).MAIL_TRANSPORT).toEqual({ kind: 'none' })
+			const empty = { FABRIKA_EMAIL_PROVIDER: '' }
+			expect(controlEnv({ ...workerBindings(harness), ...empty }, () => {}).MAIL_TRANSPORT).toEqual({ kind: 'none' })
+			const keyWithoutSender = { FABRIKA_EMAIL_PROVIDER: 'resend', FABRIKA_EMAIL_RESEND_API_KEY: 're_private' }
+			const bindings: WorkerBindings = { ...workerBindings(harness), ...keyWithoutSender }
+			const invalid = controlEnv(bindings, () => {})
+			// Parsed once per bindings object, not on every fetch, queue batch or cron tick.
+			expect(controlEnv(bindings, () => {}).MAIL_TRANSPORT).toBe(invalid.MAIL_TRANSPORT)
+			expect(invalid.MAIL_TRANSPORT).toEqual({
+				kind: 'invalid',
+				reason: expect.stringContaining('FABRIKA_EMAIL_FROM is missing'),
+				remedy: CLOUDFLARE_MAIL_REMEDY,
+			})
+			expect(JSON.stringify(invalid.MAIL_TRANSPORT)).not.toContain('re_private')
+		} finally {
+			harness.sqlite.close()
+		}
+	})
+})
 
 describe("the Cloudflare composition's registry", () => {
 	test('lists every Cloudflare deployment, and no deployment of another provider', async () => {

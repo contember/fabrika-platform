@@ -289,7 +289,8 @@ src/
   `skill-code.test.ts` compiles the blocks as one application against the workspace (the base files: `SKILL.md`,
   `app-setup.md`, `table-and-migration.md`, `endpoint.md`, `tests.md`; each other reference file is a variant over
   it, except a `STANDALONE` one such as `public-intake.md`, an application of its own over the base's `package.json`,
-  `tsconfig.json` and `src/app-kit.ts`), classifies each application's migrations, and on Postgres checks that they
+  `tsconfig.json` and `src/app-kit.ts`; and `app-setup.md`'s Cloudflare section, an application of its own over
+  `examples/app` with oblaka's two relaxed flags), classifies each application's migrations, and on Postgres checks that they
   migrate to its catalog (`src/__tests__/skill-app/catalog.json`, `skill-app/<name>/catalog.json`), from which the
   generated schema is rendered. Change a migration block, then regenerate that catalog.
 

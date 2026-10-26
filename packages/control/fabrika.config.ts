@@ -14,6 +14,8 @@
 // are not among them: each source connection's key lives in the vault (ADR-0029).
 
 import { CONTROL_APP_ID } from '@fabrika/control-contract'
+import { EMAIL_PROVIDER_VARIABLE, NO_EMAIL_PROVIDER, pickEmailEnvironment } from '@fabrika/email'
+import { builtinEmailProviders } from '@fabrika/email/providers'
 import {
 	createCloudflareProxyWorker,
 	D1Database,
@@ -27,6 +29,7 @@ import {
 import { serviceProxyTable } from '@fabrika/proxy-core/manifest'
 import { controlSchema } from './fabrika.schema'
 import { controlServiceContract } from './fabrika.service'
+import { CLOUDFLARE_MAIL_REMEDY, type InstallationMail, readInstallationMail } from './src/mail-transport'
 
 /**
  * IAM's origin — the issuer both this Worker and the proxy in front of it verify tokens against.
@@ -36,6 +39,60 @@ import { controlServiceContract } from './fabrika.service'
 const LOCAL_IAM_URL = 'http://localhost:18191'
 
 const resolveIamUrl = (isLocal: boolean): string => process.env['FABRIKA_IAM_ISSUER'] ?? (isLocal ? LOCAL_IAM_URL : '')
+
+type EnvironmentSource = Readonly<Record<string, string | undefined>>
+
+/** The installation's mail transport, from the same `FABRIKA_EMAIL_*` the workflow hands IAM. */
+const installationMail = (source: EnvironmentSource): InstallationMail =>
+	readInstallationMail(pickEmailEnvironment(source), builtinEmailProviders, CLOUDFLARE_MAIL_REMEDY)
+
+/**
+ * The transport's plain Worker vars: the provider, the sender and the provider's non-secret variables, or
+ * `FABRIKA_EMAIL_PROVIDER=none`. Control hands the set to the deploys whose contract has a `mailer: 'installation'` job.
+ * An invalid set refuses this deploy, naming variables only (IAM's stage refuses the same set first). Locally none, and
+ * no check: the local Worker hands no transport, and the committed wrangler.jsonc stays the same whatever the shell holds.
+ */
+export const controlEmailVars = (isLocal: boolean, source: EnvironmentSource = process.env): Record<string, string> => {
+	if (isLocal) return {}
+	const mail = installationMail(source)
+	if (mail.kind === 'invalid') throw new Error(`the installation's mail transport is invalid: ${mail.reason}`)
+	if (mail.kind === 'none') return { [EMAIL_PROVIDER_VARIABLE]: NO_EMAIL_PROVIDER }
+	const { variables, secretNames } = mail.transport
+	return Object.fromEntries(Object.entries(variables).filter(([name]) => !secretNames.has(name)))
+}
+
+/**
+ * The provider's credentials, which the deploy writes as Worker secrets, never into plain vars. Read when this module
+ * loads, before the environment is known, so it never throws: an invalid set names no secret, and `controlEmailVars`
+ * refuses that deploy when the resource graph is built, before any secret is written.
+ */
+export const controlEmailSecrets = (source: EnvironmentSource = process.env): string[] => {
+	const mail = installationMail(source)
+	return mail.kind === 'transport' ? [...mail.transport.secretNames].sort() : []
+}
+
+/**
+ * Runtime Worker secrets fabrika needs, provisioned via `wrangler secret put` at deploy. Their VALUES are read from the
+ * environment by name at deploy time (never inlined here):
+ *   - FABRIKA_CONTROL_VAULT_KEY — the vault master key (KEK) for the encrypted D1 secret vault, which also holds every
+ *     GitHub source connection's App key.
+ *   - CLOUDFLARE_API_TOKEN — the account-wide CF token fabrika deploys every app with (single account → one token; the
+ *     same token that authenticated THIS deploy).
+ *   - FABRIKA_IAM_PROVISIONING_KEY — fabrika's seeded IAM provisioning `px_` key, injected into deploys that reconcile
+ *     schema. Omit at deploy to run without reconcile.
+ *   - FABRIKA_RUNNER_KEY — shared with vozka-runner, which refuses any RPC without it (the service binding alone
+ *     authenticates nobody).
+ *   - OPERATIONS_SYNC_KEY — the private Control → Operations catalog bearer.
+ *   - the installation mail provider's credentials (`FABRIKA_EMAIL_*`), when the installation has a valid transport.
+ */
+export const controlPipelineSecrets = (source: EnvironmentSource): string[] => [
+	'FABRIKA_CONTROL_VAULT_KEY',
+	'CLOUDFLARE_API_TOKEN',
+	'FABRIKA_IAM_PROVISIONING_KEY',
+	'FABRIKA_RUNNER_KEY',
+	'OPERATIONS_SYNC_KEY',
+	...controlEmailSecrets(source),
+]
 
 /**
  * Build fabrika's full Cloudflare resource graph for one environment. This is the SINGLE source of the
@@ -73,6 +130,7 @@ export const buildControlApplicationWorker = (ctx: ResourceContext): Worker => {
 			not_found_handling: 'single-page-application',
 		},
 		vars: {
+			...controlEmailVars(isLocal),
 			ENVIRONMENT: env,
 			// The public domain this stage serves on (drives absolute URLs); empty when unknown.
 			FABRIKA_CONTROL_DOMAIN: domain ?? '',
@@ -149,22 +207,6 @@ export default defineApp({
 		workerDir: '.',
 		// Build the dashboard SPA into ../dashboard/dist (the ASSETS directory) before deploy.
 		build: 'bun run --filter @fabrika/dashboard build',
-		// Runtime Worker secrets fabrika needs, provisioned via `wrangler secret put` at deploy:
-		//   - FABRIKA_CONTROL_VAULT_KEY — the M4 vault master key (KEK) for the encrypted D1 secret vault,
-		//                               which also holds every GitHub source connection's App key.
-		//   - CLOUDFLARE_API_TOKEN    — the account-wide CF token fabrika deploys every app with (single
-		//                               account → one token; same token that authenticated THIS deploy).
-		//   - FABRIKA_IAM_PROVISIONING_KEY — fabrika's seeded IAM provisioning `px_` key, injected into
-		//                               deploys that reconcile schema. Omit at deploy to run without reconcile.
-		//   - FABRIKA_RUNNER_KEY      — shared with vozka-runner, which refuses any RPC without it (the
-		//                               service binding alone authenticates nobody).
-		// Their VALUES are read from the environment by name at deploy time (never inlined here).
-		secrets: [
-			'FABRIKA_CONTROL_VAULT_KEY',
-			'CLOUDFLARE_API_TOKEN',
-			'FABRIKA_IAM_PROVISIONING_KEY',
-			'FABRIKA_RUNNER_KEY',
-			'OPERATIONS_SYNC_KEY',
-		],
+		secrets: controlPipelineSecrets(process.env),
 	},
 })

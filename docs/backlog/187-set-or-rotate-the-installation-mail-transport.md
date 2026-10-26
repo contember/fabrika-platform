@@ -24,7 +24,9 @@ one step:
   that is not redeployed keeps the old set, so a provider key that was revoked fails its mail with
   `provider_unauthorized` until someone deploys it.
 - **Cloudflare.** Re-running `platform init` rewrites the values it is given and deletes none, so an old provider's
-  variables, a display name or a tag stay in the Environment until the operator deletes them.
+  variables, a display name or a tag stay in the Environment until the operator deletes them, and the old credential
+  stays a Worker secret of IAM and Control. The workflow redeploys IAM and Control, but each application environment
+  that sends installation mail keeps the old set until someone redeploys it.
 
 ## Approach / acceptance
 
@@ -34,12 +36,14 @@ one step:
 2. **Zerops:** it writes the set on `iam` and `control` (credentials sensitive), deletes the `FABRIKA_EMAIL_*` names
    the new set does not hold, restarts both, and enqueues a deploy for every environment whose approved contract
    `installationMailJobs` names. It prints the environments it redeployed, never a value.
-3. **Cloudflare:** it writes the Environment, deletes the old provider's names, and triggers the workflow. Control
-   there holds no transport, so there is nothing to redeploy.
+3. **Cloudflare:** it writes the Environment, deletes the old provider's names (and their Worker secrets on IAM and
+   Control), triggers the workflow, and once IAM and Control run the new set, enqueues a deploy for every environment
+   whose approved contract `installationMailJobs` names, as on Zerops.
 4. Removing the transport while an approved contract still declares `installation` mail names the environments that
    will run without mail (their jobs leave their mail queued) and asks the operator to confirm.
-5. `--check` validates the set without writing it, so an operator can test a value before a restart: Control keeps
-   running on an invalid transport but refuses every deploy that needs it.
+5. `--check` validates the set without writing it, so an operator can test a value before a restart: on Zerops Control
+   keeps running on an invalid transport but refuses every deploy that needs it; on Cloudflare an invalid set fails
+   Control's own deploy in the workflow.
 
 Witness: an install test with the emulated Zerops API sees the set on both services, a stale provider variable
 deleted, and one deploy enqueued per environment that declares `mailer: 'installation'`; a run with `none` while such

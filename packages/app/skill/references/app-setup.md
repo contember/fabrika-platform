@@ -249,6 +249,25 @@ The platform's build runs the tests, writes the entrypoint, runs `fabrika-check`
 run `fabrika db migrate`, `fabrika db codegen --verify` and `fabrika db test-isolation` before the server starts: a
 version does not go live until every generated test passes. It writes every `FABRIKA_*` variable; never set one.
 
+## The deploy surface (Cloudflare)
+
+```ts fabrika.config.ts
+import { defineApp } from '@fabrika/provider-cloudflare'
+
+export default defineApp({ id: 'tasks' })
+```
+
+That is the whole config. `defineApp` builds the application Worker: named after the id, running
+`fabrika/entry.generated.ts`, with no route and no public URL, and IAM bound at its application entrypoint. The deploy
+builds the proxy Worker from `fabrika.contract.ts` and writes the application's Durable Object, its files bucket, its
+cron trigger and every `FABRIKA_*` variable; Control writes the IAM schema from the approved contract. Declare none of
+them: a config that does is refused. Write no `resources`, `schema` or `pipeline.workerDir` (the config's directory is
+the default). A binding of the application's own, or another `compatibility_date` or `compatibility_flags`, goes in
+`worker: { bindings, compatibility_date, compatibility_flags }`; `IAM` stays the platform's. `package.json` names
+`@fabrika/provider-cloudflare` where the Zerops one names `@fabrika/provider-zerops`, the entry is written by
+`fabrika app build --provider=cloudflare` (the deploy runs it again from the pinned commit), and there is no
+`zerops.yaml`.
+
 ## The SPA (added when the application has one)
 
 The SPA is React, built from the screens and hooks of the framework: `@fabrika/app/react` runs the typed client's
