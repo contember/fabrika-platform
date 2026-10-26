@@ -10,11 +10,11 @@ export default {
 	cron: false,
 	workers: [
 		{
-			name: 'propustka-example-proxy',
+			name: 'example-app-proxy',
 			config: '../../packages/provider-cloudflare/src/wrangler.jsonc',
 		},
 		{
-			name: 'propustka-example-app',
+			name: 'example-app',
 			config: '../../examples/app/wrangler.jsonc',
 		},
 	],
