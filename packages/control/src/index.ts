@@ -1,7 +1,7 @@
 import { WorkerEntrypoint } from 'cloudflare:workers'
 import { controlApp } from './app'
 import { runBackupSchedule } from './backups'
-import { controlJobLogLine, runControlJob } from './consumer'
+import { controlJobLogLine, decodeControlJobMessage, runControlJob } from './consumer'
 import { runMaintenance } from './cron'
 import type { Env } from './env'
 import { gitHubAppClientFactory } from './github/connections/credentials'
@@ -49,8 +49,8 @@ export class Vozka extends WorkerEntrypoint<WorkerBindings> {
 	 * The two consumers. The mail relay's queue (`<env>-vozka-mail`) carries one relayed message per job: every send
 	 * failure settles or requeues its row, so only an unexpected throw is retried (maintenance re-enqueues a lost one).
 	 * The control queue carries deploy and namespace jobs, one per message (maxBatchSize 1): ack on a handled message,
-	 * including a `deferred` one, whose re-enqueue `runControlJob` has already done; retry only on an unexpected throw
-	 * (Cloudflare redelivers, bounded by the queue's maxRetries).
+	 * including a `deferred` one, whose re-enqueue `runControlJob` has already done, and on an undecodable one; retry only
+	 * on an unexpected throw (Cloudflare redelivers, bounded by the queue's maxRetries).
 	 */
 	override async queue(batch: MessageBatch<unknown>): Promise<void> {
 		const env = this.control
@@ -60,8 +60,17 @@ export class Vozka extends WorkerEntrypoint<WorkerBindings> {
 		}
 		const provider = cloudflareControlProvider(this.env, env)
 		for (const message of batch.messages) {
+			let job: ControlJobMessage
 			try {
-				console.info(controlJobLogLine(await runControlJob(env, provider, message.body as ControlJobMessage)))
+				job = decodeControlJobMessage(message.body)
+			} catch (err) {
+				// A redelivery cannot make it decodable; the Bun consumer abandons the same payload.
+				console.error('control job: undecodable payload, dropped', err instanceof Error ? err.message : 'unknown error')
+				message.ack()
+				continue
+			}
+			try {
+				console.info(controlJobLogLine(await runControlJob(env, provider, job)))
 				message.ack()
 			} catch (err) {
 				console.error('control consumer error', err instanceof Error ? err.message : 'unknown error')
