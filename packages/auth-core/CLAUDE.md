@@ -187,8 +187,8 @@ bun test               # app-environment · canonical-path · contract-canonical
 - `json.ts` mirrors readers that also exist in `@fabrika/iam` and `@fabrika/proxy-core/manifest`. That
   duplication is deliberate — the alternative is a runtime dependency, which the first invariant
   forbids.
-- Several comments in `token.ts` and `rpc.ts` still say "propustka" and describe the pre-merge
-  Cloudflare-Access world in the present tense. The active wire names (`__Host-px_session`,
+- Some comments in `token.ts` and `rpc.ts` describe the pre-merge Cloudflare-Access world in the present
+  tense. The active wire names (`__Host-px_session`,
   `__Host-px_handoff_`, `px_`) are durable and must not be renamed; the historical framing around
   them is not a description of current behaviour. `token.ts` says "parent cookie domain" nowhere any more:
   ADR-0023 made every session cookie host-only and the `__Host-` prefix is the browser-enforced

@@ -82,7 +82,7 @@ writes a `pending` run to the
 database then enqueues. ONE queue (`DEPLOY_QUEUE`) carries both kinds of work — deploy jobs and
 namespace provisioning jobs — as a discriminated union; a payload with no `kind` is a deploy job.
 The consumer resolves the statically selected `ControlProvider` and calls its
-capabilities. Cloudflare hands the provider-owned job to vozka-runner. Zerops runs the
+capabilities. Cloudflare hands the provider-owned job to the runner Worker. Zerops runs the
 whole deploy in process. Core owns registry/run writes, locking, secret resolution, and generic envelopes.
 
 Runtime surface: `src/env.ts` (ports + vars) · `src/platform-cf.ts` (the raw CF bindings + their
@@ -350,7 +350,7 @@ other environment, before the provider prepares anything, and the write maps a r
 - **Control is the only writer of a run's row (ADR-0044).** A Cloudflare run settles in exactly two ways,
   both under the run's lease: the awaited `startRun` result (`executeDeploy`), or — after a Control
   restart such as a self-deploy — `reconcileProviderRuns`, where the provider's `reconcile` reads the
-  status vozka-runner persisted in R2 (`recoverRun`, parsed in `platform-cf.ts`). Either way Control
+  status the runner Worker persisted in R2 (`recoverRun`, parsed in `platform-cf.ts`). Either way Control
   writes the IAM schema BEFORE it marks the run terminal, so a terminal row is never re-opened. An invalid
   runner report fails the run. IAM replaces the app's whole vocabulary, so a re-application after a lost
   lease is harmless. A redelivery or a second reconcile finds the row terminal and applies nothing. A dry
@@ -361,10 +361,10 @@ other environment, before the provider prepares anything, and the write maps a r
   `@fabrika/runner-cloudflare` owns the executor Worker.
   The control plane has NO `Container` binding. The split exists because a deploy's final
   step runs `wrangler deploy` INSIDE the container, and when the target is fabrika that resets fabrika's DOs —
-  so a container hosted in fabrika would reset ITSELF mid-deploy. Hosting it in vozka-runner means a fabrika
+  so a container hosted in fabrika would reset ITSELF mid-deploy. Hosting it in the runner Worker means a fabrika
   deploy never touches it. As a consequence fabrika has no `Container` → no docker → it's deployable THROUGH
-  the runner. vozka-runner writes only R2 (logs and the terminal `status.json`), never the database.
-  vozka-runner is deployed out-of-band (its own bootstrap).
+  the runner. The runner Worker writes only R2 (logs and the terminal `status.json`), never the database.
+  The runner Worker is deployed out-of-band (its own bootstrap).
 - **Per-app-env deploy lock** (`@fabrika/platform`'s `SqlDeployLocks`, wired in `src/services.ts`; one
   `deploy_locks` ROW per `<app>:<env>`, NOT a DO — the implementation needs nothing but the `SqlDatabase`
   port, so it is portable and lives with the ports, not in this Worker):

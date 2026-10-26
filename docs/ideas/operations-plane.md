@@ -6,7 +6,7 @@ Fabrika owns three parts of an application's lifecycle:
 - **Access** decides who and what may reach it.
 - **Operations** reports what happens after a release reaches production.
 
-The shipped Operations foundation absorbs the useful first slice from Poplach:
+The shipped Operations foundation absorbs the useful first slice from the predecessor error tracker (ADR-0016):
 error ingestion, grouping, source maps, issue triage, regressions, alerts,
 release correlation, and active health checks.
 
@@ -26,7 +26,7 @@ The console exposes three equal planes:
 
 Operations is deliberately broader than observability. It includes observing a
 system, deciding that it needs attention, and recording the response. The
-initial Poplach capability appears as **Errors**, not as the whole definition of
+initial error-tracker capability appears as **Errors**, not as the whole definition of
 the plane.
 
 Possible modules:
@@ -114,7 +114,7 @@ requirement that every provider use the same database product or query plan.
 
 ## Application integration
 
-An application should not need a separately managed Poplach project.
+An application should not need a separately managed error-tracker project.
 Registration or environment provisioning could create a write-only ingest
 credential and inject the endpoint, application id, environment id, and service
 id through the selected provider.
@@ -135,9 +135,9 @@ existing ecosystem clients where that meaningfully reduces adoption cost.
 
 The broad shape should not force a broad first implementation:
 
-1. Absorb Poplach as Errors without losing its existing Sentry-compatible
+1. Absorb the predecessor error tracker as Errors without losing its existing Sentry-compatible
    behaviour.
-2. Replace Poplach projects with Fabrika application/environment/service
+2. Replace error-tracker projects with Fabrika application/environment/service
    coordinates.
 3. Correlate errors, source maps, releases, and deploy runs.
 4. Add active service health and portable pipeline-health reporting.
