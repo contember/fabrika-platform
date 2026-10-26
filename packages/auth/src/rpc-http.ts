@@ -366,7 +366,7 @@ function transportEndpoint(options: HttpIamRpcOptions, prefix: string): Transpor
 		prefix,
 		key: options.key,
 		timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-		fetch: options.fetch ?? globalThis.fetch,
+		fetch: options.fetch ?? globalThis.fetch.bind(globalThis),
 	}
 }
 

@@ -130,7 +130,7 @@ export class HttpIamGateway implements IamGateway, DelegationIssuer {
 		this.origin = options.origin.replace(/\/+$/, '')
 		this.timeoutMs = options.timeoutMs ?? DEFAULT_IAM_TIMEOUT_MS
 		this.key = options.key
-		this.fetchImpl = options.fetch ?? globalThis.fetch
+		this.fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis)
 	}
 
 	async mintToken(input: MintTokenInput): Promise<MintTokenResult> {
