@@ -85,7 +85,9 @@ An application on Cloudflare that raises its pin to 0.9:
    contract's schema, as it already did. Without `resources`, `defineApp` names the application Worker `<app>`: an
    environment already deployed under another Worker name keeps `resources` and its name, because a Worker of a new
    name binds a new Durable Object namespace, whose database starts empty. A local run takes its proxy and application
-   Worker from `composeLocalApplication` (`@fabrika/provider-cloudflare`) instead of composing them by hand.
+   Worker from `composeLocalApplication` (`@fabrika/provider-cloudflare`) instead of composing them by hand. A contract
+   with an SPA or link mount stages its files first, at the top of `oblaka.ts`, with
+   `const assets = await stageLocalAssets(contract, import.meta.dir)`, and passes `assets` to `composeLocalApplication`.
 
 The first deploy at 0.9 adds what the object needs: the `FabrikaApplication` class and its Durable Object migration
 (`v0001`, `new_sqlite_classes`), the environment's bucket (`<env>-<app>-files`), the hourly repair tick when the contract

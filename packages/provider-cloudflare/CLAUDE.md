@@ -219,7 +219,10 @@ this one import.
   the IAM identity, the connector bindings, the object, the files bucket and the repair tick of a release that serves
   alarms, with the framework values and a fresh proxy secret written as plain vars into the ignored `wrangler.jsonc`.
   The composition helpers take an `ApplicationTarget`, the part of a run they read, so both paths share them. No deploy
-  calls it.
+  calls it. Its SPA files are staged by `stageLocalAssets`, the deploy's `stageSpaAssets` over the application root,
+  awaited at the top of `oblaka.ts` (oblaka imports the module before it calls the synchronous `define` callback);
+  `composeLocalApplication` binds `ASSETS` as a deploy does and refuses a contract with an SPA or link mount without
+  what was staged for exactly those mounts, or with it beside an authored `assets`.
 - **This package is one of the four that relax two strict flags for oblaka** — see the root
   CLAUDE.md. Keep our own code strict; never work around oblaka with a cast.
 - **The plan is ordered step kinds**, not free-form work: `build` → `provision-resources` →

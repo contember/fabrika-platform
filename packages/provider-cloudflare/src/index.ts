@@ -39,6 +39,8 @@ export {
 	composeLocalApplication,
 	createCloudflareDeployer,
 	type LocalApplicationOptions,
+	type StagedLocalAssets,
+	stageLocalAssets,
 } from './provider'
 export { createCloudflareProxyWorker, IAM_APPLICATION_ENTRYPOINT, iamServiceReference, proxyManifestJson } from './proxy'
 export type { CloudflareProxyWorkerOptions } from './proxy'

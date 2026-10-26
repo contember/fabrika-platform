@@ -830,10 +830,31 @@ export const createCloudflareDeployer = (options: CloudflareDeployerOptions) => 
 	return { appId: run.appId, env: run.env, ...result }
 }
 
+/** The SPA files `stageLocalAssets` staged for a local run: the mounts it copied, in the order a deploy stages them. */
+export interface StagedLocalAssets {
+	readonly mounts: readonly AssetMount[]
+	readonly files: number
+}
+
+/**
+ * Stage the contract's SPA and link mounts for a local run, with the code a deploy stages them with: each mount's
+ * built directory under `root` into `root/fabrika/assets`, where the generated `wrangler.jsonc` beside the config points
+ * its `ASSETS`. Run it before oblaka generates the config (`await` at the top of `oblaka.ts`) and after the SPA build.
+ */
+export const stageLocalAssets = async (contract: ContractArtifact, root: string): Promise<StagedLocalAssets> => {
+	const mounts = assetMounts(contract)
+	return { mounts, files: mounts.length === 0 ? 0 : await stageSpaAssets(mounts, root, root) }
+}
+
+const sameMounts = (left: readonly AssetMount[], right: readonly AssetMount[]): boolean =>
+	left.length === right.length && left.every((mount, index) => mount.prefix === right[index]?.prefix && mount.dir === right[index]?.dir)
+
 /** What `composeLocalApplication` needs: the config, the contract it serves, and the IAM a local run reaches. */
 export interface LocalApplicationOptions {
 	readonly config: CloudflareAppConfig
 	readonly contract: ContractArtifact
+	/** What `stageLocalAssets` staged; required when the contract has an SPA or link mount and the Worker no `assets`. */
+	readonly assets?: StagedLocalAssets
 	/** IAM's origin, the issuer of the local run's tokens. */
 	readonly iamOrigin: string
 	readonly env: string
@@ -877,5 +898,17 @@ export const composeLocalApplication = (options: LocalApplicationOptions): Worke
 	)
 	const identified = withIamIdentity(withSecrets, iamAppId)
 	const connected = withConnectorBindings(identified, connectorBindings(contract))
-	return withApplicationRuntime(connected, target, applicationRuntime(target, contract, null, true), false, false)
+	// As a deploy: a Worker that declares its own `assets` keeps them; otherwise the staged mounts are bound as `ASSETS`.
+	const mounts = assetMounts(contract)
+	const authoredAssets = applicationWorker(connected).options.assets !== undefined
+	if (authoredAssets && options.assets !== undefined) {
+		throw new Error('composeLocalApplication: the application Worker declares its own `assets`, so nothing is staged; drop `assets`')
+	}
+	const spaAssets = mounts.length > 0 && !authoredAssets
+	if (spaAssets && (options.assets === undefined || !sameMounts(options.assets.mounts, mounts))) {
+		throw new Error(
+			'composeLocalApplication: the contract serves SPA files; stage them first with `await stageLocalAssets(contract, <application root>)` and pass its result as `assets`',
+		)
+	}
+	return withApplicationRuntime(connected, target, applicationRuntime(target, contract, null, true), false, spaAssets)
 }
