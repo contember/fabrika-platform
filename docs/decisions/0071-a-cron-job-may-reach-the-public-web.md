@@ -104,8 +104,10 @@ A refusal is `capability_refused: refused_egress`, and the job fails with it.
 - The approval diff shows gaining `'public'` as one line for closer review, "calls any public website over HTTPS or
   HTTP", instead of a line per origin. The line says that whoever can write the rows the job reads, or the pages it
   fetches, can make it fetch any public URL and read the answer (a stored, blind request proxy), and that a domain
-  added later is refused only from the next deploy. Losing it narrows and names the origins the job calls instead. The environment's "off the paved road" list shows it while
-  it is published.
+  added later is refused only from the next deploy. Losing it narrows, but each origin the job lists instead widens
+  with closer review: the origin guard admits an IP address, a port, the installation's hosts and a name that resolves
+  privately, all of which `'public'` refuses, so no listed origin is provably within the reach it replaces. The
+  environment's "off the paved road" list shows `'public'` while it is published.
 - The checker's `cross-app-fetch` accepts, where some job declares `'public'`, a static URL prefix of http(s) whose
   host is not yet complete or that the URL rules admit. It still refuses one they refuse, such as `http://localhost/`.
 
