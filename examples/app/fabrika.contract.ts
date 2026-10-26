@@ -9,6 +9,7 @@ import { notes, review } from './src/notes/endpoints'
 export const contract = app.contract((c) => ({
 	api: c.rpc('/api', access),
 	notes: c.rpc('/notes', notes),
+	site: c.spa('/', { dir: 'dist/web', access: { member: true } }),
 	health: c.health('/healthz'),
 	files: { attachments: c.files({ maxBytes: 1048576, types: ['text/plain', 'image/png'] }) },
 	jobs: { review },

@@ -4,6 +4,7 @@
 	"type": "module",
 	"scripts": {
 		"build": "fabrika app build --provider=cloudflare",
+		"build:web": "bun build-web.ts",
 		"check": "fabrika-check .",
 		"dev": "bunx lopata dev --env local --port 18190 --listen 127.0.0.1",
 		"oblaka": "bunx oblaka oblaka.ts",

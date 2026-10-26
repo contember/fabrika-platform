@@ -65,5 +65,7 @@ describe('the example application', () => {
 		expect(options?.name).toBe('example-app')
 		expect(options?.main).toBe('./fabrika/entry.generated.ts')
 		expect(options?.vars?.[FABRIKA_CONTRACT_DIGEST]).toBe(contractDigest(artifact))
+		// The contract's `site` mount: its files are staged into `fabrika/assets` after `pipeline.build`.
+		expect(options?.assets).toEqual({ directory: 'fabrika/assets', binding: 'ASSETS', run_worker_first: true })
 	})
 })

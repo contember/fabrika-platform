@@ -417,11 +417,12 @@ repair tick, and IAM, over service bindings
 
 ```bash
 cd packages/iam && bun run oblaka
-cd ../../examples/app && bun run oblaka && bun run dev
+cd ../../examples/app && bun run build:web && bun run oblaka && bun run dev
 ```
 
 `bun run oblaka` composes both Workers with `composeLocalApplication` (`@fabrika/provider-cloudflare`), the code a deploy
-composes them with, from the minimal `fabrika.config.ts` and the compiled contract. It writes the framework variables
+composes them with, from the minimal `fabrika.config.ts` and the compiled contract. Before that, it stages the SPA that
+`bun run build:web` wrote into `fabrika/assets` with `stageLocalAssets`, the deploy's staging, and binds it as `ASSETS`. It writes the framework variables
 into the application Worker's ignored `wrangler.jsonc`, with a `FABRIKA_PROXY_SECRET` it draws anew each time; the Worker sends it on its hop to the object, and the proxy Worker sends
 none. Lopata must show `APP -> example-app`, `IAM -> propustka-worker (PropustkaApplication)`,
 `FABRIKA_APPLICATION -> FabrikaApplication` and `FABRIKA_FILES (example-app-files)`; the app Worker config has no
