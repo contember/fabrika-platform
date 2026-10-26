@@ -1119,6 +1119,18 @@ describe('a contract application on Cloudflare (ADR-0048)', () => {
 		expect(rec.provisions).toHaveLength(0)
 	})
 
+	test('only an application omits the schema: Control writes it; a platform deploy registers its own, so it must declare one', async () => {
+		await expect(deploy(rec, config(), { platformResources: 'allow', checkoutContract: notesArtifact })).rejects.toThrow(
+			'this deployment serves a contract, so its IAM schema is `schemaFromContract(artifact)`',
+		)
+		expect(rec.provisions).toHaveLength(0)
+		expect(rec.reconciled).toEqual([])
+		const application = await deploy(rec, config(), { contract: notesArtifact, declaresSchema: false })
+		expect(application.status).toBe('succeeded')
+		expect(application.steps.map((step) => step.id)).not.toContain('reconcile-schema')
+		expect(rec.outcomes).toEqual([])
+	})
+
 	test('the contract digest is the platform’s: an authored one is refused, a different one sent with the run too', async () => {
 		const authored = config({
 			schema: CONTRACT_SCHEMA,

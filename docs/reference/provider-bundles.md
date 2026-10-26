@@ -412,10 +412,14 @@ the deployment's own prefix), `main` `./fabrika/entry.generated.ts`, no route,
 `workers_dev` and `preview_urls` off, and IAM at its application entrypoint. The
 author may add bindings and change `compatibility_date` and `compatibility_flags`
 (`worker: { … }`); `IAM` stays the platform's. The returned config still carries
-a `resources` function, so a runner that narrows it with `isCloudflareAppConfig`
-reads it as before. A contract application declares no `schema`: Control writes
-the approved contract's (ADR-0050), and the deployer refuses only a declared one
-that does not say `contract: true`. A local run (`oblaka.ts`, Lopata) takes the
+a `resources` function, so `isCloudflareAppConfig` reads it as before. A contract
+application declares no `schema`: Control writes the approved contract's
+(ADR-0050), and the deployer refuses only a declared one that does not say
+`contract: true`. A platform deploy (`allow`) that serves a contract still declares
+one, because it registers the schema itself. An executor older than this release
+refuses a schema-less config; it never meets one, because Control refuses a
+framework release newer than the platform, and an installation deploys its runner
+with its Control from one `fabrika.ref`. A local run (`oblaka.ts`, Lopata) takes the
 proxy and application Workers from `composeLocalApplication({ config, contract,
 iamOrigin, env })`, the deploy's own composition, with the framework values and a
 fresh proxy secret written as variables.

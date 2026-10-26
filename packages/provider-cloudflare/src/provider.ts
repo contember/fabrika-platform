@@ -340,15 +340,16 @@ const contractEnvironment = (managed: ProviderManagedEnvironment, served: Served
 
 /**
  * The lock-down follows the contract, not the config: a contract whose IAM schema does not say `contract: true`, or a
- * platform service's schema that does, would leave the proxy and IAM deciding under different rules. A contract
- * application may declare no schema: Control writes the approved contract's own (ADR-0050).
+ * platform service's schema that does, would leave the proxy and IAM deciding under different rules. An application
+ * (`refuse`) may declare no schema, because Control writes the approved contract's own (ADR-0050); a platform deploy
+ * (`allow`) registers the schema itself (ADR-0058), so it must declare one.
  */
-const assertContractSchema = (schema: AppSchema | null, contract: ContractArtifact | null): void => {
+const assertContractSchema = (schema: AppSchema | null, contract: ContractArtifact | null, platformResources: 'refuse' | 'allow'): void => {
 	const declared = schema?.contract === true
 	if (contract === null && declared) {
 		throw new Error('cloudflare: the IAM schema says `contract: true`, but the checkout has no `fabrika.contract.ts`')
 	}
-	if (contract !== null && schema !== null && !declared) {
+	if (contract !== null && !declared && (schema !== null || platformResources === 'allow')) {
 		throw new Error('cloudflare: this deployment serves a contract, so its IAM schema is `schemaFromContract(artifact)` (`contract: true`)')
 	}
 }
@@ -731,7 +732,7 @@ export const createCloudflareDeployer = (options: CloudflareDeployerOptions) => 
 	if (platformResources === 'refuse' && contract !== null) assertCloudflareContract(contract, gates)
 	// Read once, before `resources()` runs the checkout's code again: nothing below reads the config's schema.
 	const schema = configSchema(loaded.config)
-	assertContractSchema(schema, contract)
+	assertContractSchema(schema, contract, platformResources)
 	const authored = runnerWorkerGraph(loaded.config.resources({ env: run.env, domain: run.domain }))
 	// Only a release Control named pins the entry or serves ops; a local deploy names none and keeps its authored `main`.
 	const release = run.approved?.framework
@@ -828,7 +829,7 @@ export const composeLocalApplication = (options: LocalApplicationOptions): Worke
 	}
 	// The local run reads the contract with this release, so it is gated as a local deploy is.
 	assertCloudflareContract(contract, { capsSegments: true, servesSql: true })
-	assertContractSchema(configSchema(config), contract)
+	assertContractSchema(configSchema(config), contract, 'refuse')
 	const served: ServedContract = { contract, digest: contractDigest(contract) }
 	const proxied = platformProxied(config.resources({ env, ...domain }), served, target, false)
 	assertNoFrameworkVariables(config, applicationWorker(proxied), target)
