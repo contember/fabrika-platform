@@ -1,21 +1,25 @@
 import { describe, expect, test } from 'bun:test'
 import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
+import { z } from 'zod'
 
-interface Migration {
-	readonly tag: string
-	readonly new_sqlite_classes?: readonly string[]
-	readonly new_classes?: readonly string[]
-	readonly deleted_classes?: readonly string[]
-	readonly renamed_classes?: ReadonlyArray<{ readonly from: string; readonly to: string }>
-}
+const migrationSchema = z.object({
+	tag: z.string(),
+	new_sqlite_classes: z.array(z.string()).optional(),
+	new_classes: z.array(z.string()).optional(),
+	deleted_classes: z.array(z.string()).optional(),
+	renamed_classes: z.array(z.object({ from: z.string(), to: z.string() })).optional(),
+})
 
-interface WranglerConfig {
-	readonly migrations?: readonly Migration[]
-	readonly durable_objects?: { readonly bindings?: ReadonlyArray<{ readonly class_name: string }> }
-}
+type Migration = z.infer<typeof migrationSchema>
 
-const readConfig = async (path: string): Promise<WranglerConfig> => Bun.JSONC.parse(await readFile(path, 'utf8')) as WranglerConfig
+const wranglerConfigSchema = z.object({
+	migrations: z.array(migrationSchema).optional(),
+	durable_objects: z.object({ bindings: z.array(z.object({ class_name: z.string() })).optional() }).optional(),
+})
+
+const readConfig = async (path: string): Promise<z.infer<typeof wranglerConfigSchema>> =>
+	wranglerConfigSchema.parse(Bun.JSONC.parse(await readFile(path, 'utf8')))
 
 /**
  * Replays the history as Cloudflare does on a script with no deployment: every step from the first tag. A class is
