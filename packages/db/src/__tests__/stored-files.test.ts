@@ -401,6 +401,18 @@ describeDb('the sweep', () => {
 		expect(await due(10, 0)).toEqual([key])
 	})
 
+	test('a key is due at the very millisecond it was queued: its recorded instant is no finer than a cutoff', async () => {
+		const key = await removed()
+		const [row]: { recorded_at: Date }[] = await admin((sql) =>
+			sql.unsafe(`select recorded_at from ${schema}.fabrika_file_deletions where object_key = $1`, [key])
+		)
+		if (row === undefined) {
+			throw new Error('the removal queued no key')
+		}
+		expect(await files.dueDeletions(10, row.recorded_at)).toEqual([key])
+		expect(await files.claimDeletion(key, row.recorded_at)).toBe(true)
+	})
+
 	test('a cancelled tombstone is never due nor claimed, and the others stay queued', async () => {
 		const cancelled = await removed()
 		const other = await removed()
