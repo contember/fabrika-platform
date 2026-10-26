@@ -23,7 +23,6 @@ import { createTestEnv, TestClock, type TestEnv } from 'lopata/testing'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { z } from 'zod/v4'
 import { bunSqliteStorage } from '../../../db/src/sqlite-bun'
 import {
 	applicationMigrations,
@@ -464,21 +463,32 @@ describe('the R2 file store', () => {
 	})
 })
 
-describe('boot on SQLite', () => {
-	const Title = z.strictObject({ title: z.string() })
-	const Titles = z.strictObject({ titles: z.array(z.string()) })
-
-	test('refuses a site that declares raw SQL', () => {
-		const raw = notesKit.group({ callers: ['human'] }, (r) => ({
-			titles: r.query({ output: Titles, access: { action: 'notes.read', over: 'workspace' }, sql: 'read' })
-				.handle(async ({ ctx }) => ({ titles: (await ctx.sql(Title)`select title from notes`).map((row) => row.title) })),
-		}))
-		const implementation = serve(notesKit.contract((c) => ({ api: c.rpc('/api', { raw }) })), { database: scoped(tables) })
-		expect(() =>
-			boot(implementation, { environment: environment(frameworkEnvFor(implementation)), iam: keySource, database: openSqlite(bunSqliteStorage()) })
-		).toThrow("'api.raw.titles' declares sql: 'read'; ctx.sql runs only on Postgres")
+describe('ctx.sql in the object, on its SQLite', () => {
+	test("reads and writes under a capability's scope fragment, and another workspace's rows stay out", async () => {
+		await keepingProcessEnvironment(async () => {
+			const target = await deploy()
+			await call(target, 'create', { workspaceId: 'w1', title: 'b' })
+			await call(target, 'create', { workspaceId: 'w1', title: 'a' })
+			const other = [grant('notes.read', { type: 'workspace', value: 'w2' }), grant('notes.write', { type: 'workspace', value: 'w2' })]
+			expect((await call(target, 'create', { workspaceId: 'w2', title: 'elsewhere' }, other)).status).toBe(200)
+			expect(await (await call(target, 'sqlTitles', { workspaceId: 'w1' })).json()).toEqual({ result: { titles: ['a', 'b'] } })
+			expect(await (await call(target, 'sqlRename', { workspaceId: 'w1', from: 'a', title: 'renamed' })).json()).toEqual({ result: { count: 1 } })
+			expect(await (await call(target, 'sqlRename', { workspaceId: 'w1', from: 'elsewhere', title: 'x' })).json()).toEqual({ result: { count: 0 } })
+			expect(await titles(target)).toEqual({ result: { titles: ['b', 'renamed'] } })
+		})
 	})
 
+	test("a 'read' site in a writing invocation reads on the read path, and sees the handler's own write", async () => {
+		await keepingProcessEnvironment(async () => {
+			const target = await deploy()
+			await call(target, 'create', { workspaceId: 'w1', title: 'first' })
+			expect(await (await call(target, 'createAndCount', { workspaceId: 'w1', title: 'second' })).json()).toEqual({ result: { count: 2 } })
+			expect(await titles(target)).toEqual({ result: { titles: ['first', 'second'] } })
+		})
+	})
+})
+
+describe('boot on SQLite', () => {
 	test('refuses a file kind that scans', () => {
 		const contract = notesKit.contract((c) => ({
 			health: c.health('/healthz'),

@@ -35,6 +35,11 @@ export interface DatabaseEngine {
 	readonly transaction: TransactionRunner
 	/** The application's schema, the connection's `search_path`; `undefined` where the database has none. */
 	readonly schema?: string
+	/**
+	 * SQLite's: runs each statement in a transaction of its own (a savepoint inside an open one) and refuses, rolling it
+	 * back, one that wrote. A `ctx.sql` site that declares `'read'` runs on it in a writable invocation too.
+	 */
+	readonly reads?: Executor
 }
 
 /**
@@ -180,6 +185,7 @@ export function sessionOf(source: SessionSource): Session {
 }
 
 let executeFixed: (session: Session, compiled: CompiledQuery) => Promise<readonly unknown[]>
+let executeRead: (session: Session, compiled: CompiledQuery) => Promise<readonly unknown[]>
 
 /** What a session reports to, and asks, the transaction it runs in. */
 interface SessionHooks {
@@ -226,6 +232,7 @@ export class Session {
 
 	static {
 		executeFixed = async (session, compiled) => (await session.#execute(compiled)).rows
+		executeRead = async (session, compiled) => (await session.#execute(compiled, session.#engine.reads ?? session.#executor)).rows
 	}
 
 	get readOnly(): boolean {
@@ -242,12 +249,12 @@ export class Session {
 		this.#hooks.failed?.()
 	}
 
-	async #execute<O>(compiled: CompiledQuery<O>): Promise<{ readonly rows: O[] }> {
+	async #execute<O>(compiled: CompiledQuery<O>, executor: Executor = this.#executor): Promise<{ readonly rows: O[] }> {
 		if (this.#hooks.open?.() === false) {
 			throw new QueryRefusedError('ended', 'the transaction of this session has ended; it runs nothing more')
 		}
 		try {
-			return await this.#executor.executeQuery(compiled)
+			return await executor.executeQuery(compiled)
 		} catch (error) {
 			this.#hooks.failed?.()
 			throw databaseError(error)
@@ -571,8 +578,15 @@ export type SqlParameter = string | number | boolean | bigint | null
 
 /**
  * One `ctx.sql` statement, whose text `sql.ts` classified and whose values are bound parameters only. It runs through the
- * session's one path to the connection, so a statement the database refuses fails the invocation it runs in.
+ * session's one path to the connection, so a statement the database refuses fails the invocation it runs in. A `'read'`
+ * statement runs on the engine's `reads` where it has one (SQLite), so one that wrote is refused and rolled back.
  */
-export function runApplicationStatement(session: Session, text: string, parameters: readonly SqlParameter[]): Promise<readonly unknown[]> {
-	return executeFixed(session, CompiledQuery.raw(text, [...parameters]))
+export function runApplicationStatement(
+	session: Session,
+	text: string,
+	parameters: readonly SqlParameter[],
+	mode: 'read' | 'write',
+): Promise<readonly unknown[]> {
+	const compiled = CompiledQuery.raw(text, [...parameters])
+	return mode === 'read' ? executeRead(session, compiled) : executeFixed(session, compiled)
 }

@@ -1,6 +1,6 @@
-// `ctx.sql.scope` on an UPDATE target under a column's own write action: the action scopes the statement when every
-// column the UPDATE assigns declares it, the rule `updatingRef` applies to the handles. No database: the statements
-// are recorded.
+// `ctx.sql.scope(…, { use: 'update' })` under a column's own write action: the fragment takes the table's update action
+// or any column's own write action. Which columns the statement then sets is the author's and the approver's, as the
+// statement is not read for it. No database: the statements are recorded.
 
 import { describe, expect, test } from 'bun:test'
 import { z } from 'zod/v4'
@@ -27,6 +27,7 @@ const columnWritten = defineTables(vocabulary, columns)({
 })
 
 const Row = z.object({})
+const update = { use: 'update' } as const
 
 /** A `'write'` site over `layer`, a data layer `scoped(…)` made. */
 function writeSite(layer: unknown) {
@@ -42,125 +43,30 @@ function writeSite(layer: unknown) {
 }
 
 describe('a table with only column writes is updated through ctx.sql under the columns’ own action', () => {
-	test('an UPDATE whose every assigned column declares the action is scoped by it, for a Within and for a Ref', async () => {
+	test('a column write action scopes an UPDATE fragment, for a Within and for a Ref', async () => {
 		const { sql, inProject, task, sent } = writeSite(scoped(columnWritten))
-		await sql(Row)`update tasks set assignee = ${'bob'} where ${sql.scope(inProject('tasks.assign'), 'tasks')}`
-		await sql(Row)`update tasks t set status = 'done', closed_at = now() where ${sql.scope(inProject('tasks.write'), 'tasks', 't')}`
-		await sql(Row)`update tasks set (status, closed_at) = ('done', now()) where ${sql.scope(task('tasks.write'), 'tasks')}`
-		await sql(Row)`insert into tasks (id, project_id, org_id, title, created_by, version) values ('t1', 'p1', 'o1', 'x', 'u', 1)
-			on conflict (id) do update set assignee = excluded.assignee where ${sql.scope(task('tasks.assign'), 'tasks')}`
-		expect(sent()).toHaveLength(4)
+		await sql(Row)`update tasks set assignee = ${'bob'} where ${sql.scope(inProject('tasks.assign'), 'tasks', update)}`
+		await sql(Row)`update tasks set (status, closed_at) = ('done', now()) where ${sql.scope(task('tasks.write'), 'tasks', update)}`
+		expect(sent()).toHaveLength(2)
 		expect(sent()[0]).toBe('update tasks set assignee = $1 where ((tasks.project_id = any($2)))')
 	})
 
-	test('an action that does not write every assigned column is refused before anything is sent', async () => {
-		const { sql, inProject, task, sent } = writeSite(scoped(columnWritten))
-		await expect(
-			sql(Row)`update tasks set assignee = ${'bob'}, status = 'done' where ${sql.scope(inProject('tasks.assign'), 'tasks')}`,
-		).rejects.toThrow('UPDATE of tasks assigns status, which tasks.assign does not write')
-		await expect(sql(Row)`update tasks set title = ${'x'} where ${sql.scope(task('tasks.write'), 'tasks')}`).rejects.toThrow(
-			'UPDATE of tasks assigns title, which tasks.write does not write',
-		)
-		await expect(sql(Row)`update tasks set assignee = ${'bob'} where ${sql.scope(inProject('tasks.read'), 'tasks')}`).rejects.toThrow(
+	test('an action that writes no column, and a table without any update, are refused when the fragment is built', () => {
+		const { sql, inProject } = writeSite(scoped(columnWritten))
+		expect(() => sql.scope(inProject('tasks.read'), 'tasks', update)).toThrow(
 			"UPDATE of tasks needs a column's own write action (tasks.assign, tasks.write); the capability holds tasks.read",
 		)
-		expect(sent()).toEqual([])
-	})
-
-	test('a table without an update action and without a column write still refuses every UPDATE fragment', async () => {
-		const { sql, inProject } = writeSite(scoped(columnWritten))
-		await expect(sql(Row)`update task_comments set body = ${'x'} where ${sql.scope(inProject('tasks.read'), 'task_comments')}`).rejects.toThrow(
-			'UPDATE of task_comments: its policy declares no update action',
-		)
-	})
-})
-
-describe('the SET list is read to its end, past every expression that holds a clause word', () => {
-	const refused = 'UPDATE of tasks assigns title, which tasks.assign does not write'
-
-	test('an UPDATE that hides a column after IS [NOT] DISTINCT FROM, a CASE or a FROM inside a call is refused', async () => {
-		const { sql, inProject, sent } = writeSite(scoped(tables))
-		const scope = () => sql.scope(inProject('tasks.assign'), 'tasks')
-		await expect(
-			sql(Row)`update tasks set assignee = case when title is distinct from 'x' then 'bob' else 'alice' end, title = 'forbidden' where ${scope()}`,
-		).rejects.toThrow(refused)
-		await expect(sql(Row)`update tasks set assignee = case when title is not distinct from 'x' then 'bob' end, title = 'no' where ${scope()}`)
-			.rejects.toThrow(refused)
-		await expect(sql(Row)`update tasks set assignee = (title is distinct from 'x')::text, title = 'no' where ${scope()}`).rejects.toThrow(refused)
-		await expect(sql(Row)`update tasks set assignee = title is distinct from 'x', title = 'no' where ${scope()}`).rejects.toThrow(refused)
-		await expect(
-			sql(Row)`update tasks set assignee = substring(assignee from 2) || extract(epoch from now()) || trim(both from title), title = 'no'
-				where ${scope()}`,
-		).rejects.toThrow(refused)
-		expect(sent()).toEqual([])
-	})
-
-	test('a tuple assignment after such an expression is refused for every column it names', async () => {
-		const { sql, inProject, sent } = writeSite(scoped(tables))
-		await expect(
-			sql(Row)`update tasks set assignee = case when status is distinct from 'done' then 'bob' end, (title, status) = ('no', 'done')
-				where ${sql.scope(inProject('tasks.assign'), 'tasks')}`,
-		).rejects.toThrow('UPDATE of tasks assigns title, status, which tasks.assign does not write')
-		await expect(
-			sql(Row)`update tasks set (assignee) = (select 'bob'), title = case when title is distinct from 'x' then 'y' end
-				where ${sql.scope(inProject('tasks.assign'), 'tasks')}`,
-		).rejects.toThrow(refused)
-		expect(sent()).toEqual([])
-	})
-
-	test('ON CONFLICT DO UPDATE that hides a column after such an expression is refused', async () => {
-		const { sql, task, sent } = writeSite(scoped(tables))
-		await expect(
-			sql(Row)`insert into tasks (id, project_id, org_id, title, created_by, version) values ('t1', 'p1', 'o1', 'x', 'u', 1)
-				on conflict (id) do update set assignee = case when excluded.title is distinct from tasks.title then excluded.assignee end,
-				title = excluded.title where ${sql.scope(task('tasks.assign'), 'tasks')}`,
-		).rejects.toThrow(refused)
-		expect(sent()).toEqual([])
-	})
-
-	test('a SET list that cannot be read with certainty refuses a column action and admits the update action', async () => {
-		const { sql, inProject, sent } = writeSite(scoped(tables))
-		const unreadable = 'UPDATE of tasks assigns no column it can name, which tasks.assign does not write'
-		await expect(sql(Row)`update tasks set ${'assignee'} = 'bob' where ${sql.scope(inProject('tasks.assign'), 'tasks')}`).rejects.toThrow(
-			unreadable,
-		)
-		await expect(sql(Row)`update tasks set assignee = 'bob' end, title = 'no' where ${sql.scope(inProject('tasks.assign'), 'tasks')}`).rejects
-			.toThrow(unreadable)
-		await expect(sql(Row)`update tasks set assignee + 1 = 'bob' where ${sql.scope(inProject('tasks.assign'), 'tasks')}`).rejects.toThrow(
-			unreadable,
-		)
-		expect(sent()).toEqual([])
-		await sql(Row)`update tasks set assignee = 'bob' end, title = 'no' where ${sql.scope(inProject('tasks.write'), 'tasks')}`
-		expect(sent()).toHaveLength(1)
-	})
-
-	test('an expression with a clause word still admits an UPDATE of the action’s own columns', async () => {
-		const { sql, inProject, sent } = writeSite(scoped(tables))
-		await sql(Row)`update tasks set assignee = case when title is distinct from 'x' then 'bob' else 'alice' end
-			where ${sql.scope(inProject('tasks.assign'), 'tasks')}`
-		await sql(Row)`update tasks t set assignee = substring(t.assignee from 2) from projects p where p.id = t.project_id
-			and ${sql.scope(inProject('tasks.assign'), 'tasks', 't')}`
-		await sql(Row)`update tasks set "assignee"[1] = 'b' where ${sql.scope(inProject('tasks.assign'), 'tasks')};`
-		expect(sent()).toHaveLength(3)
+		expect(() => sql.scope(inProject('tasks.read'), 'task_comments', update)).toThrow('UPDATE of task_comments: its policy declares no update action')
 	})
 })
 
 describe('a table with an update action and a column write', () => {
-	test('the update action scopes any UPDATE, and a column write action only its own columns', async () => {
-		const { sql, inProject, sent } = writeSite(scoped(tables))
-		await sql(Row)`update tasks set title = ${'x'} where ${sql.scope(inProject('tasks.write'), 'tasks')}`
-		await sql(Row)`update tasks set assignee = ${'bob'} where ${sql.scope(inProject('tasks.assign'), 'tasks')}`
-		expect(sent()).toHaveLength(2)
-		await expect(sql(Row)`update tasks set title = ${'x'} where ${sql.scope(inProject('tasks.assign'), 'tasks')}`).rejects.toThrow(
-			'UPDATE of tasks assigns title, which tasks.assign does not write',
-		)
-		await expect(sql(Row)`update tasks set title = ${'x'} where ${sql.scope(inProject('tasks.read'), 'tasks')}`).rejects.toThrow(
+	test('the update action and a column write action both take an UPDATE fragment; a read action does not', () => {
+		const { sql, inProject } = writeSite(scoped(tables))
+		expect(() => sql.scope(inProject('tasks.write'), 'tasks', update)).not.toThrow()
+		expect(() => sql.scope(inProject('tasks.assign'), 'tasks', update)).not.toThrow()
+		expect(() => sql.scope(inProject('tasks.read'), 'tasks', update)).toThrow(
 			"UPDATE of tasks needs its update action tasks.write or a column's own write action (tasks.assign); the capability holds tasks.read",
 		)
-	})
-
-	test("ctx.sql.scope itself takes a column's write action on a 'write' site, before any statement names the columns", () => {
-		const { sql, inProject } = writeSite(scoped(tables))
-		expect(() => sql.scope(inProject('tasks.assign'), 'tasks')).not.toThrow()
 	})
 })

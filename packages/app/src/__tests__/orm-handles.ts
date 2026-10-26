@@ -32,7 +32,7 @@ export type SqlHandles = [
 ]
 
 /** A helper typed by the app's own tables scopes a table for a literal capability. */
-export const scopeDeals = (sql: SqlHandle<typeof app, 'read'>, org: Ref<'org', 'crm.read'>): SqlScope => sql.scope(org, 'deals', 'd')
+export const scopeDeals = (sql: SqlHandle<typeof app, 'read'>, org: Ref<'org', 'crm.read'>): SqlScope => sql.scope(org, 'deals', { alias: 'd' })
 
 /** On a `'write'` site the fragment of an UPDATE target takes the table's update action. */
 export const scopeDealUpdate = (sql: SqlHandle<typeof app, 'write'>, within: Within<'company', 'deals.write'>): SqlScope => sql.scope(within, 'deals')

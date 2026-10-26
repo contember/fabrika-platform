@@ -31,10 +31,10 @@ The refusals agents meet most, and their fix:
 | `on-conflict-index`            | `insert(…, { onConflict: { columns } })` whose columns are no unique index the migrations create                                                                 | a `UNIQUE` constraint or a `CREATE UNIQUE INDEX` without `WHERE` on exactly those columns |
 | `cross-app-fetch`              | a `fetch` of an absolute URL under no origin a site declares in `egress`                                                                                         | `egress: ['https://…']` on the site that calls it (`references/endpoint.md`)              |
 | `url-endpoint`                 | `ctx.url('<id>')` names no procedure of the contract                                                                                                             | the endpoint id `<mount>.<group>.<procedure>`                                             |
-| `cloudflare-sql`               | on Cloudflare, a site that declares `sql`                                                                                                                        | the handles (`ctx.db`), without `sql`                                                     |
 | `cloudflare-scan`              | on Cloudflare, a file kind with `scan: true`                                                                                                                     | the kind without `scan`, and no public procedure that takes its files                     |
 | `cloudflare-job-segment`       | on Cloudflare, a job whose `limits.timeoutMs` exceeds one 14-minute segment                                                                                      | at most 14 minutes: claim a bounded batch per run, and the next run takes the rest        |
 | `cloudflare-current-timestamp` | on Cloudflare, `DEFAULT CURRENT_TIMESTAMP` in a migration: SQLite stores `YYYY-MM-DD HH:MM:SS`, which every read of the table refuses                            | `DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`, in a new migration                     |
+| `cloudflare-framework-name`    | on Cloudflare, a `fabrika_*` name in a migration, quoted or not                                                                                                  | your own tables, and `REFERENCES fabrika_files (id)` for a file column                    |
 
 The hints:
 
@@ -104,11 +104,11 @@ A 500 answers a fixed message; the server log has one line, `fabrika: <endpoint>
 fixed failure code and, for a framework refusal, its reason and the reason's fixed text, never a value or your error's
 message. The codes you meet most:
 
-| Code                 | Means                                                                                                                                                                                                                                  |
-| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `query_refused`      | the data layer refused a statement or an operation: `undeclared_reach`, `sql_read_only`, `unknown_column`, `read_only`, `sql_outside_transaction`, `sql_dialect` (`ctx.sql` on SQLite, Cloudflare) …; the reason's text names the rule |
-| `capability_refused` | a capability of another kind, dimension or action than the call takes (`wrong_capability`, `wrong_action`, `out_of_reach`), or one kept past its request (`ended`, `foreign_work`)                                                     |
-| `handler_failed`     | your handler threw something else; the log has no more: the Operations issue has the stack, or test the handler                                                                                                                        |
+| Code                 | Means                                                                                                                                                                                                          |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `query_refused`      | the data layer refused a statement or an operation: `undeclared_reach`, `sql_read_only`, `unknown_column`, `read_only`, `sql_outside_transaction`, `sql_scope`, `sql_name` …; the reason's text names the rule |
+| `capability_refused` | a capability of another kind, dimension or action than the call takes (`wrong_capability`, `wrong_action`, `out_of_reach`), or one kept past its request (`ended`, `foreign_work`)                             |
+| `handler_failed`     | your handler threw something else; the log has no more: the Operations issue has the stack, or test the handler                                                                                                |
 
 With an Operations DSN the same 500 is a `RequestFailed` issue in Operations. Its event also carries what your handler
 threw: the error's type, its message, its stack and its `cause` chain. Read the stack there, not in the log. A crash

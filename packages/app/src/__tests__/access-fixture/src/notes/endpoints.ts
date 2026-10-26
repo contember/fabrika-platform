@@ -38,8 +38,9 @@ export const notes = app.group({ callers: ['human'] }, (r) => ({
 		sql: 'read',
 	})
 		.handle(async ({ ctx }) => ({
-			titles: (await ctx.sql(Note)`select n.id, n.title, n.trashed from notes n where ${ctx.sql.scope(ctx.target, 'notes', 'n')} order by n.title`)
-				.map((note) => note.title),
+			titles:
+				(await ctx.sql(Note)`select n.id, n.title, n.trashed from notes n where ${ctx.sql.scope(ctx.target, 'notes', { alias: 'n' })} order by n.title`)
+					.map((note) => note.title),
 		})),
 	workspaceTitles: r.query({
 		input: InWorkspace,
@@ -58,7 +59,7 @@ export const notes = app.group({ callers: ['human'] }, (r) => ({
 	})
 		.handle(async ({ ctx }) => ({
 			titles: (await ctx.sql(Title)`select n.title from notes n
-				where (n.trashed or n.title <> ${''}) and ${ctx.sql.scope(ctx.target, 'notes', 'n')} order by n.title`).map((row) => row.title),
+				where (n.trashed or n.title <> ${''}) and ${ctx.sql.scope(ctx.target, 'notes', { alias: 'n' })} order by n.title`).map((row) => row.title),
 		})),
 	orTitles: r.query({
 		input: InOrganization,
@@ -68,7 +69,7 @@ export const notes = app.group({ callers: ['human'] }, (r) => ({
 	})
 		.handle(async ({ ctx }) => ({
 			titles: (await ctx.sql(Title)`select n.title from notes n
-				where n.title <> ${''} or ${ctx.sql.scope(ctx.target, 'notes', 'n')} order by n.title`).map((row) => row.title),
+				where n.title <> ${''} or ${ctx.sql.scope(ctx.target, 'notes', { alias: 'n' })} order by n.title`).map((row) => row.title),
 		})),
 	everyTitle: r.query({
 		input: InOrganization,

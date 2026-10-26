@@ -165,22 +165,19 @@ export function dataAccess(parts: DataLayerParts): DataAccess {
 		direct: () => parts.newSession(parts.runtime()),
 		transaction: <T>(work: (session: Session) => Promise<T>) => parts.fenced(parts.runtime(), work),
 		handles: (site: DataSite) => handlesOf(parts, site),
-		sql: (site: SqlSite) =>
-			sqlTag(
+		sql: (site: SqlSite) => {
+			const database = parts.runtime().database
+			return sqlTag(
 				site,
-				parts.runtime().database.schema,
-				(capability, table, use, assigned) => {
+				database.dialect === 'postgres' ? { dialect: 'postgres', schema: database.schema ?? '' } : { dialect: 'sqlite' },
+				(capability, table, use) => {
 					if (!hasOwn(parts.models, table)) {
 						throw new QueryRefusedError('unknown_table', `ctx.sql.scope: ${table} is not a table of src/db/tables.ts`)
 					}
-					return scopeTerms(parts.contextOf(table), capability, use, assigned)
+					return scopeTerms(parts.contextOf(table), capability, use)
 				},
-				(table) => {
-					if (modelOf(parts.models, table)?.scope.mode === 'reference') {
-						throw new QueryRefusedError('read_only', `ctx.sql: ${table} is a reference table, which no statement writes: its rows come from a migration`)
-					}
-				},
-			),
+			)
+		},
 	})
 }
 
