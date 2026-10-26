@@ -36,7 +36,9 @@ this one import.
   contract's endpoint table. `platformResources: 'allow'` (fabrika deploying its own components) needs none.
   `configSchema` refuses a config that declares `gates` on either path, and reads the IAM `schema` ONCE, before
   `resources()` runs the checkout's code (parsed with `appSchemaSchema`, deep-frozen); never read `config.schema`
-  after it. `createCloudflareProxyWorker` takes an endpoint table or an installation table, and refuses `gates`.
+  after it. A contract application may declare no schema: the plan then has no `reconcile-schema`, nothing is
+  reported, and Control writes the approved contract's schema as it always does. A declared one must say
+  `contract: true` (`assertContractSchema`). `createCloudflareProxyWorker` takes an endpoint table or an installation table, and refuses `gates`.
 - **The job carries Control's approved access** (`CloudflareRunnerJob.approvedAccess`: the contract and its
   digest). Control refuses a non-dry deploy without it, the job schema refuses one too, and it parses the contract and
   checks its digest. The runner writes it to `<workspace>/<runId>.access.json` beside the checkout and names it in
@@ -187,6 +189,18 @@ this one import.
   those checks cannot give.
 - **Codecs validate on the way in.** A module default imported from a runner checkout is untrusted —
   narrow it with `isCloudflareAppConfig`, never assume the shape.
+- **`defineApp` without `resources` builds the application Worker itself** (`src/authoring.ts`), from the values the
+  bounds require: name `<app>` (remote `<env>-<app>`, the deployment's own prefix), `main`
+  `./fabrika/entry.generated.ts`, `routes: []`, `workers_dev` and `preview_urls` off, `IAM` as
+  `iamServiceReference()` after the author's `worker.bindings`; only `worker.bindings`, `compatibility_date` and
+  `compatibility_flags` are the author's. It does so inside the checkout's own package, and the config it returns
+  always carries `resources`, so a runner of any release reads it through `isCloudflareAppConfig` unchanged
+  (ADR-0062). Never move the default into the deployer: an older runner would refuse the config.
+- **The local run is composed by the deploy's code** (`composeLocalApplication`, `src/provider.ts`): the platform proxy,
+  the IAM identity, the connector bindings, the object, the files bucket and the repair tick of a release that serves
+  alarms, with the framework values and a fresh proxy secret written as plain vars into the ignored `wrangler.jsonc`.
+  The composition helpers take an `ApplicationTarget`, the part of a run they read, so both paths share them. No deploy
+  calls it.
 - **This package is one of the four that relax two strict flags for oblaka** — see the root
   CLAUDE.md. Keep our own code strict; never work around oblaka with a cast.
 - **The plan is ordered step kinds**, not free-form work: `build` → `provision-resources` →
