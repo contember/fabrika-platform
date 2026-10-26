@@ -350,17 +350,18 @@ describe('Cloudflare provider', () => {
 			APP_BUILD,
 			['wrangler', 'd1', 'migrations', 'apply', 'DB', '--remote'],
 			['wrangler', 'deploy'],
-			SECRET_LIST,
 			['wrangler', 'deploy'],
+			SECRET_LIST,
 			['wrangler', 'secret', 'put', 'API_KEY'],
 		])
 		expect(rec.commands[0]?.cwd).toBe(`${REPO}/app/worker`)
 		expect(rec.commands[1]?.cwd).toBe(`${REPO}/app`)
 		expect(rec.commands[2]?.cwd).toBe(`${REPO}/app/worker`)
-		// The application is deployed first, from the checkout; the proxy that binds it after, from the platform's own copy of this package.
+		// The application is deployed first, from the checkout; the proxy that binds it after, from the platform's own copy of
+		// this package; the application's secrets are swept last.
 		expect(rec.commands[3]?.cwd).toBe(`${REPO}/app/worker`)
-		expect(rec.commands[4]?.cwd).toBe(`${REPO}/app/worker`)
-		expect(rec.commands[5]?.cwd).toBe(CLOUDFLARE_PROXY_WORKER_DIR)
+		expect(rec.commands[4]?.cwd).toBe(CLOUDFLARE_PROXY_WORKER_DIR)
+		expect(rec.commands[5]?.cwd).toBe(`${REPO}/app/worker`)
 		expect(rec.commands[6]?.cwd).toBe(`${REPO}/app/worker`)
 	})
 
@@ -408,8 +409,8 @@ describe('Cloudflare provider', () => {
 			['sh', '-c', 'bun run build'],
 			APP_BUILD,
 			['wrangler', 'deploy'],
-			SECRET_LIST,
 			['wrangler', 'deploy'],
+			SECRET_LIST,
 			['wrangler', 'secret', 'put', 'API_KEY'],
 		])
 		expect(rec.commands[2]?.env).toEqual({ CLOUDFLARE_API_TOKEN: 'tok-1', CLOUDFLARE_ACCOUNT_ID: 'acc-1' })
@@ -426,8 +427,8 @@ describe('Cloudflare provider', () => {
 		expect(rec.commands.map((command) => [command.command, ...command.args])).toEqual([
 			APP_BUILD,
 			['wrangler', 'deploy'],
-			SECRET_LIST,
 			['wrangler', 'deploy'],
+			SECRET_LIST,
 		])
 	})
 
@@ -961,8 +962,8 @@ describe('Cloudflare provider', () => {
 		expect(rec.commands.map((command) => [command.command, ...command.args, command.cwd === CLOUDFLARE_PROXY_WORKER_DIR])).toEqual([
 			[join(checkoutDir, 'node_modules', '.bin', 'fabrika'), ...APP_BUILD.slice(1), false],
 			['wrangler', 'deploy', false],
-			[...SECRET_LIST, false],
 			['wrangler', 'deploy', true],
+			[...SECRET_LIST, false],
 		])
 	})
 
@@ -1548,10 +1549,10 @@ describe('a full contract application on Cloudflare (ADR-0065)', () => {
 		expect(commands).toEqual([
 			APP_BUILD,
 			['wrangler', 'deploy', '--secrets-file'],
+			['wrangler', 'deploy'],
 			SECRET_LIST,
 			['wrangler', 'secret', 'delete', 'FABRIKA_JOB_RETIRED_KEY'],
 			['wrangler', 'secret', 'delete', 'FABRIKA_TOKEN_KEYS'],
-			['wrangler', 'deploy'],
 		])
 		const deletes = rec.commands.filter((command) => command.args[1] === 'delete')
 		expect(deletes.every((command) => command.stdin === '' && command.cwd === `${REPO}/app`)).toBe(true)
@@ -1560,6 +1561,22 @@ describe('a full contract application on Cloudflare (ADR-0065)', () => {
 	test('a platform component sweeps no secret: its own carry framework names', async () => {
 		await deploy(rec, config(), { platformResources: 'allow' })
 		expect(rec.commands.some(isSecretList)).toBe(false)
+	})
+
+	test('a failed secret sweep fails the run only after the application and its proxy are both deployed', async () => {
+		// Swept before the proxy, a failure would leave the new application behind the old proxy's endpoint table.
+		const result = await deploy(rec, config(), {
+			commandResult: (spec) => isSecretList(spec) ? { exitCode: 1, stdout: '', stderr: 'listing refused' } : succeeded(spec),
+		})
+		expect(result.status).toBe('failed')
+		expect(stepError(result, 'deploy-worker')).toBe('wrangler secret list failed (exit 1): listing refused')
+		expect(rec.commands.map((command) => [command.command, ...command.args])).toEqual([
+			APP_BUILD,
+			['wrangler', 'deploy'],
+			['wrangler', 'deploy'],
+			SECRET_LIST,
+		])
+		expect(rec.commands.map((command) => command.cwd === CLOUDFLARE_PROXY_WORKER_DIR)).toEqual([false, false, true, false])
 	})
 
 	test('an unreadable secret list fails the deploy rather than leaving a stale credential', async () => {
@@ -1882,8 +1899,8 @@ describe('the generated entry of a gated release (pinsGeneratedEntry)', () => {
 		expect(rec.commands.map((command) => [command.command, ...command.args])).toEqual([
 			APP_BUILD,
 			['wrangler', 'deploy'],
-			SECRET_LIST,
 			['wrangler', 'deploy'],
+			SECRET_LIST,
 		])
 	})
 

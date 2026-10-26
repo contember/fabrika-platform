@@ -199,6 +199,8 @@ this one import.
   which lists the proxy first. wrangler refuses a service binding to a script with no deployment yet (code 10145),
   so on a first deploy every Worker another generated config binds as a service goes before its binder: the
   application Worker, then `<app>-proxy` (Control's `vozka`, then `vozka-proxy`). A cycle among them is refused.
+  The application's stale secrets are swept only after every Worker is deployed, so a failed sweep fails the run
+  without leaving the new application behind the old proxy.
 - **Every application's proxy Worker is the platform's (ADR-0048).** The config's `resources` returns the
   application Worker; a Worker that binds `APP` (a proxy of its own) is refused. The deployer wraps it in
   `createCloudflareProxyWorker`, named `<app>-proxy`, from this package's own entrypoint and directory — the
