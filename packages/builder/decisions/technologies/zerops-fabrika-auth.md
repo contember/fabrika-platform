@@ -6,7 +6,7 @@ slot: authz
 provides: [authentication, authorization, proxy-enforcement]
 requires: [zerops-platform]
 recommends: []
-conflicts: [propustka, cloudflare-access, auth-password-kv]
+conflicts: [fabrika-iam, cloudflare-access, auth-password-kv]
 npm: ["@fabrika/app@0.9.0-dev.9", "@fabrika/db@0.9.0-dev.9", "zod@^3.25.76"]
 status: wip
 sources:

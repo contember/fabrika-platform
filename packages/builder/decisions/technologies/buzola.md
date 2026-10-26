@@ -14,7 +14,7 @@ sources:
     read: "The createPage() builder + the React surface (useNavigate/useParams/useRoute, Link, Outlet, BuzolaProvider)."
   - where: "buzola/packages/{vite-plugin,bun-plugin,codegen}/src/"
     read: "How codegen emits src/buzola.gen.ts + the virtual:buzola/routes module, wired via EITHER the vite-plugin OR the bun-plugin (the non-vite path)."
-  - where: "propustka/packages/admin-ui/src/{buzola.gen.ts,routes/principals/detail.tsx,routes/_layout.tsx}"
+  - where: "the predecessor IAM repository's packages/admin-ui/src/{buzola.gen.ts,routes/principals/detail.tsx,routes/_layout.tsx}"
     read: "A real app: codegen output, chained loaders + error boundary + type-safe Link, layout nesting."
 ---
 
@@ -26,7 +26,7 @@ A **type-safe SPA router for React** built over the browser **Navigation API**, 
 **file-based routing** and **type codegen**. Routes are defined with a `createPage()`
 builder; codegen emits `src/buzola.gen.ts` + a `virtual:buzola/routes` module and
 augments a `BuzolaPageMap` so `navigate(pageId, params)` and `<Link to params>` are
-fully typechecked. It is suitable for Contember-style admin SPAs, including Propustka's public admin UI.
+fully typechecked. It is suitable for Contember-style admin SPAs, including the predecessor IAM's public admin UI.
 Ships **both** a `@buzola/vite-plugin` and a **`@buzola/bun-plugin`** — the bun-plugin
 is the **non-vite path** that fits our bun preference.
 

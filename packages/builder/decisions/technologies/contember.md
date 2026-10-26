@@ -62,4 +62,4 @@ you compose, a stack you adopt.
 
 - **requires `postgres`** — the entire schema/migration/ACL story is Postgres-specific (transitively excludes `d1`, same `relational-db` slot).
 - **recommends `react` + `bindx`** — the admin UI and data binding are React; `bindx`/`@contember/react-binding` is the typed binding layer over its GraphQL API.
-- **slot `backend`** — the backend choice (one backend per app). It also subsumes auth/identity, so it overlaps `auth-password-kv`/`propustka` conceptually — if Contember owns tenancy, don't double up.
+- **slot `backend`** — the backend choice (one backend per app). It also subsumes auth/identity, so it overlaps `auth-password-kv`/`fabrika-iam` conceptually — if Contember owns tenancy, don't double up.

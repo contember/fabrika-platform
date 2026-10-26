@@ -72,8 +72,8 @@ sources:                  # live truth to READ before scaffolding (anti-stalenes
 
 ## The three edge types (everything the graph needs)
 
-- **`requires`** — hard dependency. Pick A ⇒ B must be in the stack. `vozka →
-  {cloudflare, oblaka, wrangler, propustka}`, `buzola → react`, `write-split → analytics-engine`.
+- **`requires`** — hard dependency. Pick A ⇒ B must be in the stack. `fabrika-control →
+  {cloudflare, oblaka, wrangler, fabrika-iam}`, `buzola → react`, `write-split → analytics-engine`.
 - **`recommends`** — soft suggestion. Pick A ⇒ offer B. `cloudflare → d1, durable-objects`.
 - **`conflicts`** — declared incompatibility. `buzola ✕ react-router` (both routers).
   Often _implied_ by two decisions sharing an exclusive **`slot`**, so `conflicts` is
@@ -97,23 +97,23 @@ See `../stacks/README.md`.
 
 ### Technologies (`technologies/`)
 
-| slot / area                        | decisions                                                                        |
-| ---------------------------------- | -------------------------------------------------------------------------------- |
-| platform / edge auth               | `cloudflare`, `cloudflare-access` (legacy alternative to native Propustka)       |
-| relational store (`relational-db`) | `d1`, `postgres`                                                                 |
-| storage / state                    | `kv`, `r2`, `durable-objects`, `analytics-engine`                                |
-| messaging / jobs                   | `queue`, `cron-triggers`                                                         |
-| AI runtime                         | `workers-ai`                                                                     |
-| runtime / build / iac / deploy     | `bun`, `vite`, `lopata`, `cloudflare-vite-plugin`, `oblaka`, `wrangler`, `vozka` |
-| ui framework                       | `react`, `preact`                                                                |
-| router                             | `react-router`, `buzola`                                                         |
-| styling                            | `tailwind`                                                                       |
-| backend / data API (`backend`)     | `contember`, `bindx`                                                             |
-| site / content (`site-framework`)  | `pletivo`, `nuasite`                                                             |
-| agents (`agent-sdk`)               | `roj`                                                                            |
-| native authn/authz                 | `propustka`                                                                      |
-| error tracking (`error-tracking`)  | `sentry`                                                                         |
-| testing                            | `opice`                                                                          |
+| slot / area                        | decisions                                                                                  |
+| ---------------------------------- | ------------------------------------------------------------------------------------------ |
+| platform / edge auth               | `cloudflare`, `cloudflare-access` (legacy alternative to native Fabrika IAM)               |
+| relational store (`relational-db`) | `d1`, `postgres`                                                                           |
+| storage / state                    | `kv`, `r2`, `durable-objects`, `analytics-engine`                                          |
+| messaging / jobs                   | `queue`, `cron-triggers`                                                                   |
+| AI runtime                         | `workers-ai`                                                                               |
+| runtime / build / iac / deploy     | `bun`, `vite`, `lopata`, `cloudflare-vite-plugin`, `oblaka`, `wrangler`, `fabrika-control` |
+| ui framework                       | `react`, `preact`                                                                          |
+| router                             | `react-router`, `buzola`                                                                   |
+| styling                            | `tailwind`                                                                                 |
+| backend / data API (`backend`)     | `contember`, `bindx`                                                                       |
+| site / content (`site-framework`)  | `pletivo`, `nuasite`                                                                       |
+| agents (`agent-sdk`)               | `roj`                                                                                      |
+| native authn/authz                 | `fabrika-iam`                                                                              |
+| error tracking (`error-tracking`)  | `sentry`                                                                                   |
+| testing                            | `opice`                                                                                    |
 
 The platform-managed Zerops path adds [`zerops-platform`](technologies/zerops-platform.md) and [`zerops-fabrika-auth`](technologies/zerops-fabrika-auth.md).
 
@@ -127,7 +127,7 @@ Applied _over_ the technologies they `require` (no package; `kind: pattern`).
 | data / seeds            | `named-seeds`                                                                               |
 | CF write patterns       | `count-store`, `write-split`                                                                |
 | auth                    | `auth-password-kv`                                                                          |
-| CI / CD                 | `app-deploy` (direct), `vozka-app-deploy` (control plane), `lib-publish`                    |
+| CI / CD                 | `app-deploy` (direct), `fabrika-app-deploy` (control plane), `lib-publish`                  |
 | observability           | `structured-logging`, `observability`                                                       |
 
 Zerops composition uses [`zerops-local-app`](patterns/zerops-local-app.md), [`zerops-control-deploy`](patterns/zerops-control-deploy.md), and [`zerops-postgres-seeds`](patterns/zerops-postgres-seeds.md).

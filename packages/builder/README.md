@@ -55,7 +55,7 @@ fabrika builder induce [--force]
 fabrika builder build [--issue <ID>] [--assisted]
 ```
 
-Use `--profile cf-internal-app` for the full Buzola, Propustka, and Vozka internal-app stack. The default is `cf-lightweight`.
+Use `--profile cf-internal-app` for the full Buzola, Fabrika IAM, and Fabrika Control internal-app stack. The default is `cf-lightweight`.
 
 Connected initialization uses `zerops-app` for a new project. A person approves the application and environment in the installed console; the local daemon receives a thirty-day app-scoped credential. The agent and application stay local. Deployment requires a clean, remotely available Git revision and runs through Control. `disconnect` removes the local key only; revoke server access in the console. See [the connected workflow](../../docs/reference/local-builder.md) for prerequisites, custody and recovery.
 

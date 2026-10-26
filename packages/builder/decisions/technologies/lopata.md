@@ -44,7 +44,7 @@ the whole stack run locally with **no CF credentials**.
 - `CF=1` can swap lopata → `@cloudflare/vite-plugin` (real workerd) in stacks that
   explicitly implement that seam. The two share the `cf-dev-runtime` slot.
 - Local D1 under `.lopata/d1/*.sqlite`; CLI `bunx lopata d1 migrations apply` / `execute DB --file …`.
-- Generate `wrangler.jsonc` from oblaka/the shared Vozka resource builder before
+- Generate `wrangler.jsonc` from oblaka/the shared Fabrika Control resource builder before
   starting lopata. Never maintain local bindings in a second hand-written config.
 
 ## Relationships — why

@@ -1,35 +1,35 @@
 ---
-id: propustka
+id: fabrika-iam
 kind: technology
-title: Propustka — native login, authorization and audit
+title: Fabrika IAM — native login, authorization and audit
 slot: authz
 provides: [authentication, sso, authorization, audit, api-tokens]
 requires: [cloudflare, d1]
-recommends: [vozka, buzola]
+recommends: [fabrika-control, buzola]
 conflicts: [cloudflare-access, auth-password-kv]
 npm: ["@propustka/client@^0.0.6", "@propustka/core@^0.0.6"]
 status: wip
 sources:
-  - where: "propustka — README.md, architecture.md, packages/core/src/, packages/worker/src/"
+  - where: "the predecessor IAM repository — README.md, architecture.md, packages/core/src/, packages/worker/src/"
     read: "Native session/login architecture, app gates, token/JWKS contract, central human identity and D1 policy/audit model."
   - where: "@propustka/client (installed packages/client/src/{session,client,fake,types}.ts)"
     read: "The current PropustkaAuth, AuthContext, AppGates, setCookie/loginUrl and FakeIamClient surfaces. Version 0.x moves quickly; read the source."
-  - where: "propustka examples"
+  - where: "the predecessor IAM examples"
     read: "Runtime gates, local operator context, SSO redirects, response cookies, schemas, and IAM bindings."
 ---
 
-# Propustka
+# Fabrika IAM
 
 ## What it is
 
 The native identity, authorization and audit service for Cloudflare Workers apps.
-There is **no Cloudflare Access edge** in front of a native Propustka app.
-Propustka owns human SSO sessions, per-app permission tokens, `px_` service keys,
+There is **no Cloudflare Access edge** in front of a native Fabrika IAM app.
+Fabrika IAM owns human SSO sessions, per-app permission tokens, `px_` service keys,
 authorization policy and audit logs.
 
 An app integrates over an `IAM` Worker-to-Worker service binding and uses
 `PropustkaAuth` as its single request-auth seam. `PropustkaAuth` applies ordered
-per-path gates, verifies cached permission JWTs locally against Propustka's JWKS,
+per-path gates, verifies cached permission JWTs locally against Fabrika IAM's JWKS,
 and only calls the binding when it must exchange a session/key or write audit.
 
 ## When & why to use
@@ -38,7 +38,7 @@ and only calls the binding when it must exchange a session/key or write audit.
 - The same API supports logged-in people and `px_` service credentials.
 - You want a central people directory, app-defined roles/scopes, revocable keys
   and an audit trail.
-- The target Cloudflare account already runs Propustka (normally alongside Vozka).
+- The target Cloudflare account already runs Fabrika IAM (normally alongside Fabrika Control).
 
 ## When NOT to use
 
@@ -46,7 +46,7 @@ and only calls the binding when it must exchange a session/key or write audit.
 - There are no real authz/audit needs and a central IAM dependency is unjustified.
 - The product requires app-owned signup/password recovery; use a product auth
   system instead.
-- Strict hierarchical scopes are fundamental. Propustka scope dimensions are
+- Strict hierarchical scopes are fundamental. Fabrika IAM scope dimensions are
   flat; containment must be resolved by the app.
 
 ## Runtime integration
@@ -105,13 +105,13 @@ can make login appear broken.
 ## Authorization model
 
 - Keep action ids, scope dimensions and the app id as shared constants. Runtime
-  `can()` checks and Vozka's `AppSchema` must use the same vocabulary.
+  `can()` checks and Fabrika Control's `AppSchema` must use the same vocabulary.
 - `can(action, scope?)` and `scopedTo(action, dimension)` are local pure checks on
   the minted permission set. `scopedTo` returns `null` (all), `[]` (none), or an
   exact list.
 - Audit is the operation that reaches the binding on the hot path; schedule it
   with `ctx.waitUntil`.
-- The app's `schema` (actions/scopes/roles) is reconciled by Vozka during deploy.
+- The app's `schema` (actions/scopes/roles) is reconciled by Fabrika Control during deploy.
 
 ## Local development and opice
 
@@ -127,11 +127,11 @@ local runtime cannot resolve it. Off-local, fail loudly if `IAM` or
 ## Relationships — why
 
 - **requires `cloudflare`** — request auth and audit use a Worker service binding.
-- **requires `d1`** — the separately deployed Propustka service stores identity,
+- **requires `d1`** — the separately deployed Fabrika IAM service stores identity,
   policy, sessions and audit data in D1.
-- **conflicts `cloudflare-access`** — native Propustka replaces the Access edge;
+- **conflicts `cloudflare-access`** — native Fabrika IAM replaces the Access edge;
   combining both creates two competing login/gate systems.
-- **conflicts `auth-password-kv`** — Propustka owns login and sessions; do not add
+- **conflicts `auth-password-kv`** — Fabrika IAM owns login and sessions; do not add
   a parallel app-owned password session.
-- **recommends `vozka`** for schema reconciliation and **`buzola`** for internal
+- **recommends `fabrika-control`** for schema reconciliation and **`buzola`** for internal
   app SPAs.

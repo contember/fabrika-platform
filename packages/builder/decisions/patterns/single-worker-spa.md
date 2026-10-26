@@ -5,7 +5,7 @@ title: Single-Worker SPA in production, split frontend/backend in development
 slot: app-delivery-shape
 provides: [spa-hosting, worker-api, local-dev-split, single-deployable]
 requires: [cloudflare, vite, buzola]
-recommends: [lopata, vozka]
+recommends: [lopata, fabrika-control]
 conflicts: []
 status: stable
 sources:
@@ -70,5 +70,5 @@ deployable Worker in production:
 - **requires `buzola` + `vite`** — this is specifically a client-rendered Buzola
   bundle served by Vite locally and built as Worker assets.
 - **requires `cloudflare`** — production delivery uses a Worker assets binding.
-- **recommends `lopata`** for the local Worker and **`vozka`** for the single
+- **recommends `lopata`** for the local Worker and **`fabrika-control`** for the single
   production deployable.

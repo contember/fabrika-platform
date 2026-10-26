@@ -106,16 +106,16 @@ test('every stack preset is requires-closed, conflict-free and slot-safe', () =>
 	}
 })
 
-test('cf-internal-app is a selectable Vozka + native Propustka preset', () => {
+test('cf-internal-app is a selectable Fabrika Control + native Fabrika IAM preset', () => {
 	const pointer = resolveStackPointer('cf-internal-app')
 	expect(pointer?.stackFileExists).toBe(true)
 	const yaml = frontmatter(pointer!.stackFile)
 	const selected = list(yaml, 'decisions')
-	expect(selected).toContain('vozka')
-	expect(selected).toContain('propustka')
+	expect(selected).toContain('fabrika-control')
+	expect(selected).toContain('fabrika-iam')
 	expect(selected).toContain('single-worker-spa')
 	expect(selected).toContain('typed-worker-rpc')
-	expect(selected).toContain('vozka-app-deploy')
+	expect(selected).toContain('fabrika-app-deploy')
 	expect(selected).not.toContain('cloudflare-access')
 	expect(selected).not.toContain('app-deploy')
 })
