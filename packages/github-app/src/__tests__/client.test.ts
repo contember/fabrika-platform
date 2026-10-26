@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, spyOn, test } from 'bun:test'
 import { generateKeyPairSync } from 'node:crypto'
 import { GitHubAppClient, type GitHubAppClientConfig, type GitHubAppFetch, GitHubRequestError, pemToPkcs8 } from '..'
 
@@ -127,6 +127,24 @@ describe('GitHubAppClient boot and JWT', () => {
 		}
 		expect(await importsAndSigns(PKCS1_KEY)).toBe(true)
 		expect(await importsAndSigns(PKCS8_KEY)).toBe(true)
+	})
+
+	test('calls the global fetch with no `this`, as a Worker requires', async () => {
+		// workerd refuses the global `fetch` called with any other `this` ("Illegal invocation"); Bun does not, so the
+		// stand-in refuses it here the same way.
+		const workerFetch = function(this: unknown, input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+			if (this !== undefined && this !== globalThis) return Promise.reject(new TypeError('Illegal invocation'))
+			expect(String(input)).toBe('https://api.github.com/repos/contember/fabrika/installation')
+			expect(init?.redirect).toBe('manual')
+			return Promise.resolve(Response.json(installation(42)))
+		}
+		const spy = spyOn(globalThis, 'fetch').mockImplementation(Object.assign(workerFetch, { preconnect: fetch.preconnect }))
+		try {
+			const github = await GitHubAppClient.create({ appId: '123456', privateKeyPem: PKCS1_KEY })
+			expect(await github.resolveInstallationId('contember', 'fabrika')).toBe(42)
+		} finally {
+			spy.mockRestore()
+		}
 	})
 
 	test('fails boot on syntactically valid PEM with invalid DER', async () => {

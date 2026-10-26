@@ -74,7 +74,8 @@ export async function runMaintenance(env: Env, options: MaintenanceOptions = {})
 	await warnBareTriggerRefs(persistence.registry)
 	const poll = await pollPublicRepos({
 		repositories: persistence,
-		fetch: options.fetch ?? fetch,
+		// Wrapped: the poller calls it as `deps.fetch`, and a Worker refuses the global `fetch` with that `this`.
+		fetch: options.fetch ?? ((input, init) => fetch(input, init)),
 		queue: env.DEPLOY_QUEUE,
 		now,
 	})

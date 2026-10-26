@@ -65,7 +65,10 @@ export class GitHubAppClient {
 		} catch {
 			throw configurationError()
 		}
-		return new GitHubAppClient(config.appId, privateKey, apiBaseUrl, config.fetch ?? fetch, config.now ?? Date.now, timeoutMs)
+		// The global `fetch` is wrapped: a Worker refuses it with any other `this` ("Illegal invocation"), and the client calls
+		// it as its own property, and hands it to the repository client.
+		const fetchImplementation = config.fetch ?? ((input, init) => fetch(input, init))
+		return new GitHubAppClient(config.appId, privateKey, apiBaseUrl, fetchImplementation, config.now ?? Date.now, timeoutMs)
 	}
 
 	/** Read and bind the public identity represented by this client's App credentials. */

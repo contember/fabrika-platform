@@ -52,7 +52,8 @@ export class GitHubMetadataClient {
 	private readonly validatedPlatformTrees = new Set<string>()
 
 	constructor(options: GitHubMetadataClientOptions) {
-		this.fetchImplementation = options.fetch ?? fetch
+		// Wrapped: a Worker refuses the global `fetch` called as this object's property ("Illegal invocation").
+		this.fetchImplementation = options.fetch ?? ((input, init) => fetch(input, init))
 		const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
 		if (
 			!Number.isSafeInteger(timeoutMs)
