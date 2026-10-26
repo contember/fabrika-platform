@@ -411,8 +411,8 @@ records the new profile id), provide HA, or reproduce Zerops logs.
 
 The local stack above exercises the Zerops-shaped Caddy boundary. The Cloudflare composition of `examples/app` runs
 separately in Lopata (0.30 or newer): the proxy Worker, the application Worker with the environment's Durable Object
-(`FABRIKA_APPLICATION`, class `FabrikaApplication`, a SQLite class migration), its `FABRIKA_FILES` bucket and minute
-tick, and IAM, over service bindings
+(`FABRIKA_APPLICATION`, class `FabrikaApplication`, a SQLite class migration), its `FABRIKA_FILES` bucket and hourly
+repair tick, and IAM, over service bindings
 ([ADR-0065](../decisions/0065-an-application-on-cloudflare-runs-in-one-durable-object-per-environment.md)):
 
 ```bash
@@ -420,9 +420,10 @@ cd packages/iam && bun run oblaka
 cd ../../examples/app && bun run oblaka && bun run dev
 ```
 
-`bun run oblaka` writes the framework variables into the application Worker's ignored `wrangler.jsonc`, with a
-`FABRIKA_PROXY_SECRET` it draws anew each time; the Worker sends it on its hop to the object, and the proxy Worker sends
-none. Lopata must show `APP -> propustka-example-app`, `IAM -> propustka-worker (PropustkaApplication)`,
+`bun run oblaka` composes both Workers with `composeLocalApplication` (`@fabrika/provider-cloudflare`), the code a deploy
+composes them with, from the minimal `fabrika.config.ts` and the compiled contract. It writes the framework variables
+into the application Worker's ignored `wrangler.jsonc`, with a `FABRIKA_PROXY_SECRET` it draws anew each time; the Worker sends it on its hop to the object, and the proxy Worker sends
+none. Lopata must show `APP -> example-app`, `IAM -> propustka-worker (PropustkaApplication)`,
 `FABRIKA_APPLICATION -> FabrikaApplication` and `FABRIKA_FILES (example-app-files)`; the app Worker config has no
 public route and sets `workers_dev: false` and `preview_urls: false`. `lopata.config.ts` gives the app Worker the local
 host `app.localhost`, so a request can skip the proxy, and IAM `iam.localhost`.
@@ -432,8 +433,8 @@ Before the application boots, IAM's D1 needs its migrations, the example's schem
 `/admin/rpc`) in `examples/app/.dev.vars` as `FABRIKA_JOB_REVIEW_KEY`. A caller key comes from `POST /admin/api-keys`.
 Then, through the proxy: a `POST /notes/create` with the caller's key writes a note (a multipart body adds a file),
 `POST /notes/list` reads it back, `GET /notes/attachment?id=…` downloads the file, and
-`/cdn-cgi/handler/scheduled?cron=*+*+*+*+*&worker=propustka-example-app` sends the minute tick, after which the list
-shows each note's `reviewedAt`. Straight to the app Worker (`Host: app.localhost`), a request without the proxy's
+within a minute the object's alarm runs the `review` job (`/cdn-cgi/handler/scheduled?worker=example-app` sends the
+repair tick, which re-arms it), after which the list shows each note's `reviewedAt`. Straight to the app Worker (`Host: app.localhost`), a request without the proxy's
 endpoint header is 503 and one with a forged token is 401.
 
 `bun run dev` does not serve that yet. Lopata does not apply wrangler's `define`, which carries the proxy manifest, so

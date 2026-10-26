@@ -8,7 +8,7 @@ export default {
 	main: '../../packages/provider-cloudflare/src/wrangler.jsonc',
 	workers: [
 		{
-			name: 'propustka-example-app',
+			name: 'example-app',
 			config: 'wrangler.jsonc',
 			// Local only: a deployed application Worker has no route, so this host stands in for a request that skips the
 			// proxy, which the application must refuse.

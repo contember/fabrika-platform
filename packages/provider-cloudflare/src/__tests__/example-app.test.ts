@@ -62,7 +62,7 @@ describe('the example application', () => {
 	test('its application Worker starts the generated entrypoint as the contract the deploy read', async () => {
 		const app = (await deployedRoot())?.options.bindings?.['APP']
 		const options = app instanceof Worker ? app.options : undefined
-		expect(options?.name).toBe('propustka-example-app')
+		expect(options?.name).toBe('example-app')
 		expect(options?.main).toBe('./fabrika/entry.generated.ts')
 		expect(options?.vars?.[FABRIKA_CONTRACT_DIGEST]).toBe(contractDigest(artifact))
 	})
