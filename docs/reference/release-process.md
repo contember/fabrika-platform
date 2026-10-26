@@ -148,7 +148,12 @@ The version decides the npm dist-tag a release publishes under. One function, `r
 | `<version>-alpha.<n>` (`0.9.0-alpha.1`)                 | `alpha`      | `channel/alpha`      |
 | any other prerelease (`0.9.0-dev.4`, CI's `0.0.0-ci.0`) | `next`       | any branch           |
 
-A prerelease never moves `latest`, and the `example-mirror` job of `release.yml` skips every prerelease, so the standalone example keeps following `latest` ([Pinning the standalone example](#pinning-the-standalone-example)). Control and the providers read a prerelease as its `major.minor.patch` and do not tell the channels apart: a `0.9.0-cloudflare.1` application is a 0.9 application to them. Adding a channel is a deliberate edit of `RELEASE_CHANNELS`.
+A prerelease never moves `latest`, and the `example-mirror` job of `release.yml` skips every prerelease, so the standalone example keeps following `latest` ([Pinning the standalone example](#pinning-the-standalone-example)). Adding a channel is a deliberate edit of `RELEASE_CHANNELS`.
+
+The Cloudflare provider's release gates (`packages/provider-cloudflare/src/contract-support.ts`) read the application's pin in two ways, and only one of them ignores the channel:
+
+- **Minor gates** (`releaseAtLeast`: the object runtime, the pinned entry, the ops channel) read a prerelease as its minor, so every 0.9.0 prerelease is a 0.9 application to them, whatever its channel.
+- **Release floors** (`releaseFrom`) compare SemVer precedence, prerelease included. The alarm, the job segment cap, the data operations and raw SQL start at `0.9.0-dev.5`. Every `0.9.0-cloudflare.<n>` and `0.9.0-alpha.<n>` sorts below it ([Ordering](#ordering)), so an application pinned to one gets none of them, even when its channel release was cut from a `main` that has them. Before the next channel release, see [backlog 240](../backlog/240-channel-prereleases-sort-below-the-release-floors.md).
 
 ### A channel branch
 
