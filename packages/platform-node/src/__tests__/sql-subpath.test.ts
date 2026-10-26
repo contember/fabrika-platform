@@ -34,6 +34,7 @@ describe('@fabrika/platform-node/sql', () => {
 			'postgres-migration-error.ts',
 			'sql-names.ts',
 			'sql.ts',
+			'sqlite-sql.ts',
 		])
 	})
 

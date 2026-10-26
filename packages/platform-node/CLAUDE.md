@@ -124,7 +124,8 @@ Read this before moving a service onto this driver.
   concurrent run's provisioner may have no session between its creation and the tests' first connection. Grant or revoke on the database only through
   `changeCreateOnDatabase`: it holds an advisory lock every run shares, since concurrent changes of the one `pg_database`
   row fail with `tuple concurrently updated`.
-- **`@fabrika/platform-node/sql` is runtime-neutral.** `sql.ts` reaches only `migration-sql.ts`,
+- **`@fabrika/platform-node/sql` is runtime-neutral.** `sql.ts` reaches only `migration-sql.ts`, `sqlite-sql.ts` (`lexSqlite`, SQLite's lexical rules for
+  `ctx.sql` and the checker),
   `sql-names.ts`, `pg-catalog-names.ts`, `migration-classify.ts`, `application-schema.ts` (`applicationDatabaseSchema`,
   so Control classifies against the runner's schema name) and `postgres-migration-error.ts`, which import
   nothing outside themselves: Control loads it in
