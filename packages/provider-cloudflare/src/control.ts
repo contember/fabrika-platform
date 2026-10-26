@@ -27,6 +27,7 @@ import {
 	runsInObject,
 	servesDataOperations,
 	servesOps,
+	servesRawSql,
 } from './contract-support'
 // `./runner` is this module: keep every import here clear of `oblaka-iac`, which the runner packages
 // cannot typecheck (they do not relax the two strict flags the raw TS needs).
@@ -297,7 +298,12 @@ const buildJob = async (options: CloudflareControlOptions, input: ProviderDeploy
 	const approvedAccess = runnerApprovedAccess(input.environment)
 	const release = input.environment.access?.checker
 	// The deployer refuses it again from the contract it serves; this fails before the clone.
-	if (approvedAccess !== undefined) assertCloudflareContract(approvedAccess.contract, release !== undefined && capsJobSegments(release))
+	if (approvedAccess !== undefined) {
+		assertCloudflareContract(approvedAccess.contract, {
+			capsSegments: release !== undefined && capsJobSegments(release),
+			servesSql: release !== undefined && servesRawSql(release),
+		})
+	}
 	const stateless = release !== undefined && !runsInObject(release)
 	if (stateless) assertStatelessEnvironment(input.managedEnvironment, release)
 	const source = await awaitWithSignal(input.signal, () => options.prepareClone(input.app.source, input.signal, input.sourceBinding))

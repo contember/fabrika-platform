@@ -1647,16 +1647,26 @@ describe('a full contract application on Cloudflare (ADR-0065)', () => {
 		expect(rec.provisions).toEqual([])
 	})
 
-	test('a local deploy refuses a scanning file kind and raw SQL from the contract it reads, as Control does', async () => {
+	test('a local deploy refuses a scanning file kind from the contract it reads, as Control does', async () => {
 		const scanning: ContractArtifact = { ...notesArtifact, fileKinds: { scans: { types: ['application/pdf'], maxBytes: 1024, scan: true } } }
 		await expect(deploy(rec, config({ schema: CONTRACT_SCHEMA }), { checkoutContract: scanning })).rejects.toThrow(
 			'cloudflare: file kind `scans` scans its uploads (`scan: true`), and no scanner runs on Cloudflare yet',
 		)
-		const raw: ContractArtifact = { ...notesArtifact, declared: { 'api.notes.report': { sql: 'write', unscoped: {}, connect: [], issues: null } } }
-		await expect(deploy(rec, config({ schema: CONTRACT_SCHEMA }), { checkoutContract: raw })).rejects.toThrow(
-			'cloudflare: `api.notes.report` declares raw SQL (`ctx.sql`)',
-		)
 		expect(rec.provisions).toEqual([])
+	})
+
+	test('raw SQL deploys from the release that runs it on SQLite (ADR-0062), and a local deploy runs as this release', async () => {
+		const raw: ContractArtifact = { ...notesArtifact, declared: { 'api.notes.report': { sql: 'write', unscoped: {}, connect: [], issues: null } } }
+		for (const framework of ['0.8.2', null, ...PUBLISHED_PRERELEASES]) {
+			await expect(deploy(rec, config(), { contract: raw, framework })).rejects.toThrow(
+				'cloudflare: `api.notes.report` declares raw SQL (`ctx.sql`), which an application on Cloudflare runs from framework 0.9.0-dev.5 on',
+			)
+		}
+		expect(rec.provisions).toEqual([])
+		for (const framework of ['0.9.0-dev.5', '0.9.0']) {
+			expect((await deploy(rec, config(), { contract: raw, framework })).status).toBe('succeeded')
+		}
+		expect((await deploy(rec, config({ schema: CONTRACT_SCHEMA }), { checkoutContract: raw })).status).toBe('succeeded')
 	})
 
 	test('a job longer than one 14-minute segment is refused before anything runs, only at a release that caps segments (ADR-0062)', async () => {

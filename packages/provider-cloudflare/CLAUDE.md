@@ -52,11 +52,12 @@ this one import.
   access (a local deploy) deploys the object.
 - **What an application on Cloudflare cannot run is refused twice** (`assertCloudflareContract`): in `control.ts`
   before the clone, and in the deployer from the contract it serves. A file kind or collection with `scan: true` (no
-  scanner runs there), a site that declares `sql` (`ctx.sql`, which SQLite does not serve), and a procedure's or a
-  webhook's `timeoutMs` above `CLOUDFLARE_MAX_HANDLER_MS` (25 s): the handler holds the object's transaction, and
-  workerd resets an object whose transaction runs about 30 s. From `capsJobSegments` (`0.9.0-dev.5`, see below), a job's `timeoutMs` above
-  `CLOUDFLARE_MAX_JOB_SEGMENT_MS` (14 min) too; a local deploy runs the object, so it is capped as well, while an older
-  pin and a Control that names no release are not (ADR-0062).
+  scanner runs there), and a procedure's or a webhook's `timeoutMs` above `CLOUDFLARE_MAX_HANDLER_MS` (25 s): the
+  handler holds the object's transaction, and workerd resets an object whose transaction runs about 30 s. By the release
+  it runs as (`CloudflareContractGates`): from `capsJobSegments` (`0.9.0-dev.5`, see below), a job's `timeoutMs` above
+  `CLOUDFLARE_MAX_JOB_SEGMENT_MS` (14 min) too, while an older pin and a Control that names no release are not capped;
+  below `servesRawSql` (`0.9.0-dev.5`), a site that declares `sql`, whose boot that release refuses on SQLite, and a
+  Control that names no release refuses it too. A local deploy runs the object as this release (ADR-0062).
 - **The platform writes the application Worker's runtime** (`withApplicationRuntime` in `src/provider.ts`, from 0.9):
   `FABRIKA_APPLICATION` bound first to its own `FabrikaApplication` (`new_sqlite_classes`, so oblaka numbers its one
   migration `v0001` whatever else the application binds, and the tag never moves), `FABRIKA_FILES` to the environment's
@@ -74,7 +75,7 @@ this one import.
 - **Two kinds of release gate** (`src/contract-support.ts`). `releaseAtLeast` counts a prerelease as its minor:
   `runsInObject`, `pinsGeneratedEntry` and `servesOps` hold from every 0.9.0 prerelease. `releaseFrom` compares the whole
   version in semver precedence: `servesDataOperations` (the barrier's `state` and `migrate`, the backups, the migration
-  phase, the side restore), `servesAlarms` and `capsJobSegments` hold from `0.9.0-dev.5`, because the prereleases on
+  phase, the side restore), `servesAlarms`, `capsJobSegments` and `servesRawSql` hold from `0.9.0-dev.5`, because the prereleases on
   npm before it (`dev.0`–`dev.4`, `cloudflare.1`–`cloudflare.2`) run in the object without any of them, and a platform
   upgrade keeps deploying them as they ran (ADR-0062). Every `cloudflare.<n>` sorts below `dev.5` and keeps the older
   behaviour. A new gate on something those prereleases lack uses `releaseFrom`; `published-prereleases.ts` lists them

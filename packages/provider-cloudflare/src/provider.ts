@@ -46,6 +46,7 @@ import {
 	runsInObject,
 	servesAlarms,
 	servesOps,
+	servesRawSql,
 } from './contract-support'
 import { parseSecretNames, splitManagedEnvironment, staleManagedSecrets, withSecretsFile } from './managed-secrets'
 import { buildPlan, type CloudflareStep, findMigratableDatabases } from './plan'
@@ -712,9 +713,12 @@ export const createCloudflareDeployer = (options: CloudflareDeployerOptions) => 
 	if (platformResources === 'refuse' && served === null) {
 		throw new Error('cloudflare: the checkout has no `fabrika.contract.ts`; Fabrika deploys an application only with a contract')
 	}
-	// A local deploy reads the contract with this release and runs it in the object, so it is capped as this release is.
-	const capsSegments = run.approved === undefined || (run.approved.framework !== undefined && capsJobSegments(run.approved.framework))
-	if (platformResources === 'refuse' && contract !== null) assertCloudflareContract(contract, capsSegments)
+	// A local deploy reads the contract with this release and runs it in the object, so it is gated as this release is.
+	const framework = run.approved === undefined ? undefined : run.approved.framework
+	const gates = run.approved === undefined
+		? { capsSegments: true, servesSql: true }
+		: { capsSegments: framework !== undefined && capsJobSegments(framework), servesSql: framework !== undefined && servesRawSql(framework) }
+	if (platformResources === 'refuse' && contract !== null) assertCloudflareContract(contract, gates)
 	// Read once, before `resources()` runs the checkout's code again: nothing below reads the config's schema.
 	const schema = configSchema(loaded.config)
 	assertContractSchema(schema, contract)

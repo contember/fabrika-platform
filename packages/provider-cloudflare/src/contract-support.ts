@@ -17,13 +17,20 @@ import type { ProviderManagedEnvironment } from '@fabrika/provider-contract'
  */
 export const CLOUDFLARE_MAX_HANDLER_MS = 25_000
 
+/** What the release a caller runs a contract as decides about it; each caller reads them off that release. */
+export interface CloudflareContractGates {
+	/** The release caps a job at one segment (`capsJobSegments`). */
+	readonly capsSegments: boolean
+	/** The release runs `ctx.sql` on the object's SQLite (`servesRawSql`). */
+	readonly servesSql: boolean
+}
+
 /**
  * Refuse what a contract declares that an application on Cloudflare cannot run yet (ADR-0065): a file kind that scans
- * its uploads, raw SQL (`ctx.sql`), a handler allowed to outlive the object's transaction limit, and, from the release
- * that caps job segments on, a job longer than one segment (`capsSegments`, which each caller decides from the release
- * it runs the contract as).
+ * its uploads, a handler allowed to outlive the object's transaction limit, and, by the release it runs as, a job longer
+ * than one segment and raw SQL (`ctx.sql`).
  */
-export const assertCloudflareContract = (contract: ContractArtifact, capsSegments: boolean): void => {
+export const assertCloudflareContract = (contract: ContractArtifact, { capsSegments, servesSql }: CloudflareContractGates): void => {
 	const handlers: [string, number][] = [
 		...Object.entries(contract.procedures ?? {}).map(([id, procedure]): [string, number] => [`procedure \`${id}\``, procedure.timeoutMs]),
 		...Object.entries(contract.mounts).flatMap(([name, mount]): [string, number][] =>
@@ -56,11 +63,13 @@ export const assertCloudflareContract = (contract: ContractArtifact, capsSegment
 			throw new Error(`cloudflare: file collection \`${name}\` scans its uploads (\`scan: true\`), and no scanner runs on Cloudflare yet`)
 		}
 	}
-	for (const [site, reach] of Object.entries(contract.declared ?? {})) {
-		if (reach.sql !== null) {
-			throw new Error(
-				`cloudflare: \`${site}\` declares raw SQL (\`ctx.sql\`), which an application on Cloudflare cannot run: its SQLite has no runtime role to bound it`,
-			)
+	if (!servesSql) {
+		for (const [site, reach] of Object.entries(contract.declared ?? {})) {
+			if (reach.sql !== null) {
+				throw new Error(
+					`cloudflare: \`${site}\` declares raw SQL (\`ctx.sql\`), which an application on Cloudflare runs from framework ${RAW_SQL_SINCE} on; upgrade its framework`,
+				)
+			}
 		}
 	}
 }
@@ -178,6 +187,15 @@ export const servesAlarms = (release: string): boolean => releaseFrom(release, O
  * (`CLOUDFLARE_MAX_JOB_SEGMENT_MS`). An older release deploys as it did (ADR-0062).
  */
 export const capsJobSegments = (release: string): boolean => releaseFrom(release, OBJECT_OPERATIONS_SINCE)
+
+/**
+ * The first framework release whose object runs `ctx.sql` on its SQLite (ADR-0065 decision 7). An older one refuses a
+ * site that declares `sql` at boot, so the deploy refuses it first.
+ */
+const RAW_SQL_SINCE = '0.9.0-dev.5'
+
+/** Whether an application on release `release` may declare `sql` on Cloudflare. */
+export const servesRawSql = (release: string): boolean => releaseFrom(release, RAW_SQL_SINCE)
 
 /**
  * Refuse what a stateless Worker of an older release cannot run: a job, a webhook, a public procedure, installation

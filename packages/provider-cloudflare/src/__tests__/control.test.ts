@@ -763,15 +763,23 @@ describe('Cloudflare control provider', () => {
 		expect(jobs).toEqual([])
 	})
 
-	test('refuses an application that declares raw SQL before any runner call: its SQLite has no role to bound it', async () => {
+	test('refuses raw SQL before any runner call below the release that runs it on SQLite, and sends it from that release on', async () => {
 		const jobs: CloudflareRunnerJob[] = []
 		const input = deployInput()
 		const contract = { ...notesArtifact, declared: { 'api.notes.report': { sql: 'read' as const, unscoped: {}, connect: [], issues: null } } }
-		const access = { ...APPROVED, contract, contractDigest: contractDigest(contract) }
-		await expect(recordingProvider(jobs).deploy({ ...input, environment: { ...input.environment, access } })).rejects.toThrow(
-			'cloudflare: `api.notes.report` declares raw SQL (`ctx.sql`), which an application on Cloudflare cannot run',
-		)
+		const deployAt = (checker: string) => {
+			const access = { ...APPROVED, contract, contractDigest: contractDigest(contract), checker }
+			return recordingProvider(jobs).deploy({ ...input, environment: { ...input.environment, access } })
+		}
+		for (const checker of ['0.8.1', ...PUBLISHED_PRERELEASES]) {
+			await expect(deployAt(checker)).rejects.toThrow(
+				'cloudflare: `api.notes.report` declares raw SQL (`ctx.sql`), which an application on Cloudflare runs from framework 0.9.0-dev.5 on',
+			)
+		}
 		expect(jobs).toEqual([])
+		await deployAt('0.9.0-dev.5')
+		await deployAt('0.9.0')
+		expect(jobs.map((job) => job.approvedAccess?.framework)).toEqual(['0.9.0-dev.5', '0.9.0'])
 	})
 
 	test("sends every Cloudflare deployment of Control's registry with the job", async () => {

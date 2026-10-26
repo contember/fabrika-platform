@@ -11,6 +11,7 @@ import {
 	servesAlarms,
 	servesDataOperations,
 	servesOps,
+	servesRawSql,
 } from '../contract-support'
 import { PUBLISHED_PRERELEASES } from './published-prereleases'
 
@@ -88,18 +89,20 @@ describe('the release gates', () => {
 			expect(capsJobSegments(release)).toBe(expected)
 			expect(servesAlarms(release)).toBe(expected)
 			expect(servesDataOperations(release)).toBe(expected)
+			expect(servesRawSql(release)).toBe(expected)
 		})
 	}
 
 	// Their object runs jobs only from the minute tick, has no alarm and answers `state` and `migrate` 501.
 	for (const release of PUBLISHED_PRERELEASES) {
-		test(`published ${release} runs in the object with the ops channel, and without alarms, the segment cap or the data operations`, () => {
+		test(`published ${release} runs in the object with the ops channel, and without alarms, the segment cap, the data operations or raw SQL`, () => {
 			expect(runsInObject(release)).toBe(true)
 			expect(pinsGeneratedEntry(release)).toBe(true)
 			expect(servesOps(release)).toBe(true)
 			expect(capsJobSegments(release)).toBe(false)
 			expect(servesAlarms(release)).toBe(false)
 			expect(servesDataOperations(release)).toBe(false)
+			expect(servesRawSql(release)).toBe(false)
 		})
 	}
 })
