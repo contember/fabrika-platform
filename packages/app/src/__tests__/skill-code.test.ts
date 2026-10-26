@@ -28,12 +28,28 @@ const appRoot = join(templateDir, '.skill-app')
 /** The files whose blocks are the one application; every other reference file is a variant of it, or standalone. */
 const BASE = ['SKILL.md', 'references/app-setup.md', 'references/table-and-migration.md', 'references/endpoint.md', 'references/tests.md']
 /**
- * A reference file that is an application of its own: the directory of `skill-app/` that holds its catalog (`null` for
- * one without tables), and the base's files it uses as they are.
+ * The section of a base file that is an application of its own, read as the source `CLOUDFLARE.source`: a Cloudflare
+ * application's config, which the Zerops template cannot resolve.
  */
-const STANDALONE: Readonly<Record<string, { readonly catalog: string | null; readonly shared: readonly string[]; readonly run?: true }>> = {
+const CLOUDFLARE = { file: 'references/app-setup.md', heading: '## The deploy surface (Cloudflare)', source: 'references/app-setup.md (Cloudflare)' }
+
+interface Standalone {
+	/** The directory of `skill-app/` that holds its catalog, `null` for one without tables. */
+	readonly catalog: string | null
+	/** The base's files it uses as they are. */
+	readonly shared: readonly string[]
+	readonly run?: true
+	/** The template under `examples/` whose packages it resolves: `zerops-app` by default. */
+	readonly template?: string
+	/** It imports oblaka's raw TypeScript, compiled with the two flags the root CLAUDE.md relaxes for it. */
+	readonly oblaka?: true
+}
+
+/** A reference file, or the Cloudflare section, that is an application of its own. */
+const STANDALONE: Readonly<Record<string, Standalone>> = {
 	'references/public-intake.md': { catalog: 'public-intake', shared: ['package.json', 'tsconfig.json', 'src/app-kit.ts'], run: true },
 	'references/start.md': { catalog: null, shared: ['package.json', 'tsconfig.json'] },
+	[CLOUDFLARE.source]: { catalog: null, shared: [], template: 'app', oblaka: true },
 }
 
 interface Block {
@@ -49,8 +65,21 @@ function blocksOf(file: string, text: string): Block[] {
 	return [...text.matchAll(FENCE)].map((match) => ({ file, language: match[1] ?? '', path: match[2] ?? null, code: match[3] ?? '' }))
 }
 
+/** `source` without the Cloudflare section, and the section as a source of its own. */
+function splitCloudflare(source: { readonly path: string; readonly text: string }): { readonly path: string; readonly text: string }[] {
+	if (source.path !== CLOUDFLARE.file) return [source]
+	const start = source.text.indexOf(`\n${CLOUDFLARE.heading}\n`)
+	if (start < 0) throw new Error(`${CLOUDFLARE.file} has no section ${CLOUDFLARE.heading}`)
+	const next = source.text.indexOf('\n## ', start + 1)
+	const end = next < 0 ? source.text.length : next
+	return [
+		{ path: source.path, text: source.text.slice(0, start) + source.text.slice(end) },
+		{ path: CLOUDFLARE.source, text: source.text.slice(start, end) },
+	]
+}
+
 const skill = readAppAgentSkill()
-const sources = [{ path: 'SKILL.md', text: skill.text }, ...skill.references]
+const sources = [{ path: 'SKILL.md', text: skill.text }, ...skill.references].flatMap(splitCloudflare)
 const blocks = sources.flatMap((source) => blocksOf(source.path, source.text))
 const CHECKED_LANGUAGES: readonly string[] = ['ts', 'tsx', 'sql', 'json']
 const checked = blocks.filter((block) => CHECKED_LANGUAGES.includes(block.language))
@@ -88,6 +117,9 @@ interface SkillApp {
 	readonly catalog: Catalog | null
 	readonly shared: readonly string[]
 	readonly vendored: ReadonlyMap<string, string>
+	/** The directory it is compiled and checked in, under the template whose packages it resolves. */
+	readonly root: string
+	readonly oblaka: boolean
 }
 
 const standalone = Object.keys(STANDALONE)
@@ -102,14 +134,18 @@ const apps: readonly SkillApp[] = [
 		vendored: new Map([
 			['fabrika/connect/catalog.products.v1.ts', readFileSync(join(fixtureDir, 'fabrika', 'connect', 'catalog.products.v1.ts'), 'utf-8')],
 		]),
+		root: appRoot,
+		oblaka: false,
 	},
-	...Object.entries(STANDALONE).map(([path, { catalog, shared }]) => ({
+	...Object.entries(STANDALONE).map(([path, { catalog, shared, template, oblaka }]) => ({
 		name: path,
 		sources: [path],
 		schema: `app_${(catalog ?? 'tableless').replaceAll('-', '_')}`,
 		catalog: catalog === null ? null : catalogOf(join(fixtureDir, catalog)),
 		shared,
 		vendored: new Map<string, string>(),
+		root: template === undefined ? appRoot : join(repoRoot, 'examples', template, '.skill-app'),
+		oblaka: oblaka === true,
 	})),
 ]
 
@@ -134,19 +170,19 @@ function filesOf(sourcePaths: readonly string[]): Map<string, string> {
 
 const base = filesOf(BASE)
 
-function compilerOptions(): ts.CompilerOptions {
+function compilerOptions(app: SkillApp): ts.CompilerOptions {
 	const tsconfig = base.get('tsconfig.json')
 	if (tsconfig === undefined) throw new Error('the skill shows no tsconfig.json')
 	const parsed = z.object({ compilerOptions: z.record(z.string(), z.unknown()) }).parse(JSON.parse(tsconfig))
-	const converted = ts.convertCompilerOptionsFromJson(parsed.compilerOptions, appRoot)
+	const converted = ts.convertCompilerOptionsFromJson(parsed.compilerOptions, app.root)
 	expect(converted.errors).toEqual([])
-	return converted.options
+	return app.oblaka ? { ...converted.options, noUncheckedIndexedAccess: false, noPropertyAccessFromIndexSignature: false } : converted.options
 }
 
 /** The diagnostics of `app`'s `files` (path → source), one line each: `<path>:<line> <message>`. */
 function compile(app: SkillApp, files: ReadonlyMap<string, string>): string[] {
-	const options = compilerOptions()
-	const virtual = new Map([...generatedFiles(app), ...files].map(([path, code]) => [join(appRoot, path), code]))
+	const options = compilerOptions(app)
+	const virtual = new Map([...generatedFiles(app), ...files].map(([path, code]) => [join(app.root, path), code]))
 	const host = ts.createCompilerHost(options)
 	const readFile = host.readFile.bind(host)
 	const fileExists = host.fileExists.bind(host)
@@ -156,7 +192,7 @@ function compile(app: SkillApp, files: ReadonlyMap<string, string>): string[] {
 	host.readFile = (path) => virtual.get(path) ?? readFile(path)
 	host.fileExists = (path) => virtual.has(path) || fileExists(path)
 	host.directoryExists = (path) => isVirtualDirectory(path) || (directoryExists?.(path) ?? true)
-	host.getCurrentDirectory = () => appRoot
+	host.getCurrentDirectory = () => app.root
 	host.getSourceFile = (path, language, onError, create) => {
 		const code = virtual.get(path)
 		return code === undefined ? getSourceFile(path, language, onError, create) : ts.createSourceFile(path, code, language)
@@ -165,7 +201,7 @@ function compile(app: SkillApp, files: ReadonlyMap<string, string>): string[] {
 	const program = ts.createProgram(roots, { ...options, noEmit: true }, host)
 	return ts.getPreEmitDiagnostics(program).flatMap((diagnostic) => {
 		const file = diagnostic.file?.fileName ?? ''
-		const relative = file.startsWith(`${appRoot}/`) ? file.slice(appRoot.length + 1) : file
+		const relative = file.startsWith(`${app.root}/`) ? file.slice(app.root.length + 1) : file
 		const line = diagnostic.file === undefined || diagnostic.start === undefined
 			? 0
 			: diagnostic.file.getLineAndCharacterOfPosition(diagnostic.start).line + 1
@@ -212,7 +248,7 @@ describe('the code blocks of the agent skill', () => {
 	// over them the rules of the whole application are left out.
 	const WHOLE_APPLICATION_RULES: readonly string[] = ['contract', 'file-column-migration']
 	const checkerFindings = async (app: SkillApp, files: ReadonlyMap<string, string>, skipped: readonly string[] = []): Promise<string[]> => {
-		const findings = await checkApplication({ root: appRoot, files: new Map([...generatedFiles(app), ...files]) })
+		const findings = await checkApplication({ root: app.root, files: new Map([...generatedFiles(app), ...files]) })
 		return findings.filter((finding) => finding.rule !== 'generated-test-hash' && !skipped.includes(finding.rule)).map(formatFinding)
 	}
 

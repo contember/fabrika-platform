@@ -79,6 +79,13 @@ An application on Cloudflare that raises its pin to 0.9:
 4. Declares no `FABRIKA_APPLICATION` or `FABRIKA_FILES` binding and no cron trigger in `fabrika.config.ts`: the
    platform writes them, and refuses a config that sets them.
 5. Runs locally on Lopata 0.30 or newer, which implements the object's `storage.transaction`.
+6. May shrink `fabrika.config.ts` to `export default defineApp({ id: '<app>' })` (the skill's
+   `references/app-setup.md`). Nothing requires it: a config that still returns its Worker from `resources` and
+   declares `schema: schemaFromContract(artifact)` deploys as before. Without `schema`, Control writes the approved
+   contract's schema, as it already did. Without `resources`, `defineApp` names the application Worker `<app>`: an
+   environment already deployed under another Worker name keeps `resources` and its name, because a Worker of a new
+   name binds a new Durable Object namespace, whose database starts empty. A local run takes its proxy and application
+   Worker from `composeLocalApplication` (`@fabrika/provider-cloudflare`) instead of composing them by hand.
 
 The first deploy at 0.9 adds what the object needs: the `FabrikaApplication` class and its Durable Object migration
 (`v0001`, `new_sqlite_classes`), the environment's bucket (`<env>-<app>-files`), the hourly repair tick when the contract
