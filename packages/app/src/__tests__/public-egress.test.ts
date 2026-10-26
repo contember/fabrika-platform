@@ -298,6 +298,44 @@ describe('the guard under public egress', () => {
 		expect(signal?.aborted).toBe(true)
 	})
 
+	describe('a stage that stalls ends with the request signal', () => {
+		const stalled = (): ReadableStream<Uint8Array> => new ReadableStream({ pull: () => new Promise<void>(() => {}) })
+		const ended = (caller: AbortController): void => void setTimeout(() => caller.abort(new Error('caller gave up')), 20)
+
+		test('the resolver', async () => {
+			const { calls, stub } = stubFetch(() => new Response('ok'))
+			restore = () => stub.mockRestore()
+			const rules: PublicEgressRules = { refusedHosts: new Set(), resolve: () => new Promise(() => {}) }
+			const caller = new AbortController()
+			ended(caller)
+			expect(await refusalOf(() => runAsSite(site, rules, () => fetch('https://www.example.com/', { signal: caller.signal })))).toMatchObject({
+				message: 'caller gave up',
+			})
+			expect(calls).toEqual([])
+		})
+
+		test("the request's body", async () => {
+			const { calls, stub } = stubFetch(() => new Response('ok'))
+			restore = () => stub.mockRestore()
+			const caller = new AbortController()
+			ended(caller)
+			const init: RequestInit = { method: 'POST', body: stalled(), signal: caller.signal }
+			expect(await refusalOf(() => runAsSite(site, NO_RULES, () => fetch('https://www.example.com/', init)))).toMatchObject({
+				message: 'caller gave up',
+			})
+			expect(calls).toEqual([])
+		})
+
+		test("the answer's body, which the runtime does not abort itself", async () => {
+			const { stub } = stubFetch(() => new Response(stalled()))
+			restore = () => stub.mockRestore()
+			const caller = new AbortController()
+			const response = await runAsSite(site, NO_RULES, () => fetch('https://www.example.com/', { signal: caller.signal }))
+			ended(caller)
+			expect(await refusalOf(() => response.arrayBuffer())).toMatchObject({ message: 'caller gave up' })
+		})
+	})
+
 	test('with a resolver, refuses a public name of a private address, at every hop', async () => {
 		const { calls, stub } = stubFetch((url) =>
 			url === 'https://www.example.com/'
