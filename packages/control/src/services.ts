@@ -100,6 +100,7 @@ export async function buildRunDeps(env: Env, provider: ControlProvider): Promise
 		runLogs: env.RUN_LOGS,
 		...(env.COMMITS === undefined ? {} : { commits: env.COMMITS }),
 		...(env.MAIL_TRANSPORT === undefined ? {} : { mailTransport: env.MAIL_TRANSPORT }),
+		...(env.MAIL_RELAY === undefined ? {} : { mailRelay: true }),
 		operations: operationsReleaseDeps(env),
 		// The installation's own IAM issuer, which every application it deploys verifies against (ADR-0035).
 		...(env.FABRIKA_IAM_ISSUER === undefined ? {} : { iamIssuer: env.FABRIKA_IAM_ISSUER }),
@@ -160,11 +161,13 @@ function controlOriginDeps(env: Env): { controlOrigin?: string } {
 }
 
 /** Control issues the platform transport keys itself and seals them in the vault; without a vault it issues none. */
-export function platformTransportDeps(env: Env): { platformTransport?: PlatformTransportPort } {
+export function platformTransportDeps(env: Env): { platformTransport?: PlatformTransportPort; mailRelay?: boolean } {
+	// Whoever retires relay keys must know whether the relay runs, or it would revoke the keys of relayed environments.
+	const relay = env.MAIL_RELAY === undefined ? {} : { mailRelay: true }
 	if (env.FABRIKA_CONTROL_VAULT_KEY === undefined) {
-		return {}
+		return relay
 	}
-	return { platformTransport: new VaultPlatformTransport(repositories(env).platformTransportKeys, () => vault(env)) }
+	return { platformTransport: new VaultPlatformTransport(repositories(env).platformTransportKeys, () => vault(env)), ...relay }
 }
 
 /**

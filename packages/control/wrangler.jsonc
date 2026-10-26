@@ -69,6 +69,10 @@
 			{
 				"binding": "DEPLOY_QUEUE",
 				"queue": "vozka-deploy"
+			},
+			{
+				"binding": "MAIL_QUEUE",
+				"queue": "vozka-mail"
 			}
 		],
 		"consumers": [
@@ -77,6 +81,12 @@
 				"max_batch_size": 1,
 				"max_retries": 3,
 				"retry_delay": 30
+			},
+			{
+				"queue": "vozka-mail",
+				"max_batch_size": 1,
+				"max_retries": 5,
+				"retry_delay": 60
 			}
 		]
 	},

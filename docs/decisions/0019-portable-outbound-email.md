@@ -159,13 +159,15 @@ as `dropped`: an operator's decision, never a silent loss.
   and Control is where a deploy reads the transport from on every cloud.
 - Control is the source for applications. A deploy of an environment whose approved contract has a job that declares
   `mailer: 'installation'` hands it one of two things:
-  - **the relay**, on Zerops, when the approved snapshot records framework 0.7.0 or newer:
+  - **the relay**, when the approved snapshot records framework 0.7.0 or newer and the environment reaches it: on
+    Zerops behind a namespace proxy, and on Cloudflare whenever Control's Worker runs the relay (§8):
     `FABRIKA_EMAIL_PROVIDER=platform`, the platform transport's URL and key, and nothing of the provider (ADR-0064).
     Control hands it whether or not its own transport is valid, because the relay holds what it cannot send;
   - **the set**, for an older release or a snapshot that records no release: every `FABRIKA_EMAIL_*` Control holds,
     service-level and always sensitive ([ADR-0062](0062-a-platform-release-serves-older-framework-releases.md));
-  - **the set** on Cloudflare, whatever the release: the Worker runs no relay (§8). The deploy writes every name as a
-    Worker secret, and the provider refuses it to a release before 0.9, whose stateless Worker runs no job.
+  - **the set** on Cloudflare when Control's Worker runs no relay (it has no `vozka-mail` queue), whatever the release.
+    The deploy writes every name as a Worker secret, and the provider refuses it to a release before 0.9, whose
+    stateless Worker runs no job.
 
   Once the contract stops declaring it, the deploy hands nothing and Zerops removes the stale variables with the rest
   of the framework's families. The names are framework variables
@@ -214,8 +216,9 @@ origin is registered is sent in IAM's own wording.
 ### 8. Control relays installation mail
 
 Control owns the relay. It already holds the installation's transport, the console, and the deploy that hands an
-application its variables. The relay runs in Control's Bun process, on Zerops and in the local stack; the Worker has
-none and answers its row with 404. Its senders reach it over the platform transport
+application its variables. The relay runs in Control's Bun process, on Zerops and in the local stack, and in Control's
+Worker on Cloudflare when the Worker has its dispatch queue (`<env>-vozka-mail`, consumed by the Worker's `queue()`
+next to the deploy queue); a Worker without it answers the row with 404. Its senders reach it over the platform transport
 ([ADR-0064](0064-applications-reach-the-platform-over-a-receiver-verified-transport-key.md)).
 
 - **Senders.** An application environment on framework 0.7 (`<app>@<env>`, by its transport key), and IAM on Zerops
@@ -303,8 +306,10 @@ none and answers its row with 404. Its senders reach it over the platform transp
 - A Cloudflare installation cannot drop a mail setting by re-running `platform init`: it writes the values it is given
   and deletes none, so an old provider's variables, a display name or a tag stay in the GitHub Environment until the
   operator deletes them.
-- An application on Cloudflare holds the provider credential and sends directly, so the gate of §8 does not cover it,
-  as it does not cover an older release on Zerops. A relay on the Worker would close that gap (Alternatives).
+- On Cloudflare the gate of §8 covers an application once Control's Worker runs the relay. IAM there still holds the
+  installation's transport and sends directly: the Worker's relay authenticates no IAM key (`installationSecret` is
+  absent), so an IAM message never passes the gate there and is never held. A Worker without the queue hands the set,
+  and its applications send directly, as an older release on Zerops does.
 - **Rollout on Cloudflare.** A `fabrika.ref` bump does not rewrite the generated workflow. The operator bumps
   `fabrika.ref` to a release that holds Control's copy, then re-runs `fabrika platform init --provider=cloudflare` with
   that release's CLI, which refreshes `.github/workflows/platform.yml`; an older CLI writes the old workflow. Until
@@ -357,11 +362,12 @@ applications on every cloud.
 
 ### Run the relay on Control's Worker
 
-Cloudflare applications would get the relay's URL and key instead of the credential, as on Zerops. The relay's queue,
-claims and maintenance are written against Control's Postgres job queue and its Bun consumer loop. A Worker version
-needs a D1 schema, a Cloudflare Queue consumer and the console's release and requeue on it. Deferred, not rejected:
-handing the set is the path an older release already takes on Zerops, and the relay can replace it later without an
-application change, because the application reads either from `FABRIKA_EMAIL_PROVIDER`.
+Cloudflare applications get the relay's URL and key instead of the credential, as on Zerops. First deferred; adopted
+once an installation needed to hold one application's mail while another kept sending (an imported application whose
+old installation still sent the same notifications). The relay's tables were already in Control's D1 schema; the Worker
+gained the `vozka-mail` Cloudflare Queue, a consumer in its `queue()` that runs the same dispatcher, and the relay in
+its `Env`, so the console's release and requeue and the maintenance re-enqueue work there unchanged. The application
+needed no change, because it reads either from `FABRIKA_EMAIL_PROVIDER`.
 
 ### Drop a message without a record
 

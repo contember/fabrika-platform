@@ -31,7 +31,7 @@ import { parseClassification } from '../approval/publish'
 import { MIGRATION_GUIDE } from '../approval/readers'
 import { type AccessSnapshot, approvedSnapshot, serializeSnapshot } from '../approval/snapshot'
 import type { AppEnvRow, ControlRepositories, RunRow } from '../db'
-import type { InstallationMail } from '../mail-transport'
+import { type InstallationMail, NO_INSTALLATION_MAIL } from '../mail-transport'
 import { type MembershipKeyIssuer, VaultMembershipTransport } from '../membership-transport'
 import { VaultPlatformTransport } from '../platform-transport'
 import { type ProviderReconcileDeps, reconcileProviderRuns } from '../provider-reconcile'
@@ -955,7 +955,7 @@ export const contract = app.contract((c) => ({
 		expect(await w.db.platformTransportKeys.listForAppEnv('notes', 'stage')).toEqual([])
 	})
 
-	test('a 0.9 application without a namespace proxy (Cloudflare) gets the whole transport, never the relay, and no run log keeps its credential', async () => {
+	test('a 0.9 application without a namespace proxy, on a Control that runs no relay, gets the whole transport, and no run log keeps its credential', async () => {
 		const w = mailingWorld('0.9.0')
 		await seed(w)
 		// A Cloudflare environment belongs to no deployment namespace.
@@ -969,7 +969,7 @@ export const contract = app.contract((c) => ({
 			providerArtifactJson: HARBOR_ARTIFACT,
 		})
 		const { workloadCredentials } = await credentialed(w)
-		// Cloudflare's provider has no namespace proxy: Control's Worker runs no relay, so it hands the set.
+		// No namespace proxy and no relay (a Cloudflare Worker without its mail queue): Control hands the set.
 		const { namespaces: _namespaces, ...withoutNamespaces } = provider(w)
 		const result = await executeDeploy({
 			...deps(w),
@@ -993,6 +993,71 @@ export const contract = app.contract((c) => ({
 		expect(stored).toContain('mail=[redacted]')
 		expect(stored).not.toContain(RESEND_KEY)
 		expect(await w.db.platformTransportKeys.listForAppEnv('notes', 'stage')).toEqual([])
+	})
+
+	/** A Cloudflare environment: no deployment namespace, and a provider without a namespace proxy. */
+	async function cloudflareWorld(framework: string): Promise<{ w: World; cloudflare: Omit<ControlProvider, 'namespaces'> }> {
+		const w = mailingWorld(framework)
+		await seed(w)
+		await w.db.registry.upsertAppEnv({
+			appId: 'notes',
+			env: 'stage',
+			domain: 'stage.notes.example.test',
+			namespaceId: null,
+			provider: 'harbor',
+			providerTargetJson: JSON.stringify({ provider: 'harbor', version: 1, payload: {} }),
+			providerArtifactJson: HARBOR_ARTIFACT,
+		})
+		const { namespaces: _namespaces, ...withoutNamespaces } = provider(w)
+		return { w, cloudflare: withoutNamespaces }
+	}
+
+	test("a 0.7 application on Cloudflare sends through the relay when Control's Worker runs it: its key, nothing of the provider", async () => {
+		const { w, cloudflare } = await cloudflareWorld('0.9.0')
+		const { workloadCredentials } = await credentialed(w)
+		const result = await executeDeploy(
+			{ ...deps(w), workloadCredentials, mailTransport, mailRelay: true, ...(await relayed(w)), provider: cloudflare },
+			{
+				runId: await createdRun(w, 'stage'),
+			},
+		)
+		expect(result.status).toBe('succeeded')
+		const managed = w.deploys[0]?.managedEnvironment
+		expect(mailVariables(w.deploys[0])).toEqual(['FABRIKA_EMAIL_PROVIDER', 'FABRIKA_PLATFORM_MAIL_KEY', 'FABRIKA_PLATFORM_MAIL_URL'])
+		expect(managed?.['FABRIKA_EMAIL_PROVIDER']?.value).toBe('platform')
+		expect(managed?.['FABRIKA_PLATFORM_MAIL_URL']?.value).toBe(CONTROL_ORIGIN)
+		expect(managed?.['FABRIKA_EMAIL_RESEND_API_KEY']).toBeUndefined()
+		expect(await w.db.platformTransportKeys.listForAppEnv('notes', 'stage')).toHaveLength(1)
+	})
+
+	test('the relay on Cloudflare holds what Control cannot send: an application deploys with no installation transport', async () => {
+		const { w, cloudflare } = await cloudflareWorld('0.9.0')
+		const { workloadCredentials } = await credentialed(w)
+		const result = await executeDeploy({
+			...deps(w),
+			workloadCredentials,
+			mailTransport: NO_INSTALLATION_MAIL,
+			mailRelay: true,
+			...(await relayed(w)),
+			provider: cloudflare,
+		}, {
+			runId: await createdRun(w, 'stage'),
+		})
+		expect(result.status).toBe('succeeded')
+		expect(w.deploys[0]?.managedEnvironment['FABRIKA_EMAIL_PROVIDER']?.value).toBe('platform')
+	})
+
+	test('an application on Cloudflare whose release predates the relay keeps the whole transport', async () => {
+		const { w, cloudflare } = await cloudflareWorld('0.5.2')
+		const { workloadCredentials } = await credentialed(w)
+		const result = await executeDeploy(
+			{ ...deps(w), workloadCredentials, mailTransport, mailRelay: true, ...(await relayed(w)), provider: cloudflare },
+			{
+				runId: await createdRun(w, 'stage'),
+			},
+		)
+		expect(result.status).toBe('succeeded')
+		expect(w.deploys[0]?.managedEnvironment['FABRIKA_EMAIL_PROVIDER']?.value).toBe('resend')
 	})
 
 	test('an environment outside any namespace gets the whole transport even where the provider has namespaces: no proxy carries the relay', async () => {
