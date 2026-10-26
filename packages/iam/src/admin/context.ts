@@ -16,7 +16,7 @@ export interface AdminContext {
 	admin: { id: string; type: PrincipalType; label: string | null; permissions: PermissionEntry[] }
 	/** The installation, or the people of some applications (ADR-0058); every user-admin rule reads it. */
 	administration: Administration
-	/** propustka's own app id — the audience the admin was resolved against; used for audit labeling. */
+	/** IAM's own app id — the audience the admin was resolved against; used for audit labeling. */
 	app: string
 	/** Correlation id supplied by the proxy/edge or generated at IAM. */
 	requestId: string

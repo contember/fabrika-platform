@@ -24,7 +24,7 @@ export type DeployQueue = JobQueue<ControlJobMessage>
 
 /**
  * The blob-store slice the log reads need. Narrowed to `get` on purpose: the control plane only READS
- * run logs (vozka-runner's relay is what writes them), so a handler that could overwrite a log would be
+ * run logs (the runner Worker's relay is what writes them), so a handler that could overwrite a log would be
  * a wider dependency than the code has any use for.
  */
 export type LogReader = Pick<BlobStore, 'get'>

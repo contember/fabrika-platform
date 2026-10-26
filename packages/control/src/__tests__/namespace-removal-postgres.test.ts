@@ -20,7 +20,7 @@ let db: ControlRepositories
 
 beforeAll(async () => {
 	if (!hasPostgres) return
-	fixture = await createPostgres('vozka_ns_remove')
+	fixture = await createPostgres('control_ns_remove')
 	db = createControlRepositories(fixture.db)
 })
 

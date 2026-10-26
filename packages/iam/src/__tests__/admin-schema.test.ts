@@ -475,7 +475,7 @@ describe('grant create — role XOR inline, catalog validation, scope both-or-ne
 		await run(h, req('/admin/apps/opice/schema', 'PUT', token, SCHEMA))
 		await run(
 			h,
-			req('/admin/apps/poplach/schema', 'PUT', token, {
+			req('/admin/apps/reports/schema', 'PUT', token, {
 				scopes: [],
 				actions: [{ action: 'deploy.read' }],
 				roles: {},

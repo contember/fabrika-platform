@@ -61,31 +61,31 @@ afterEach(() => {
 describe('reconcileSchema', () => {
 	test('PUTs the declaration to /admin/apps/:app/schema (trailing slash trimmed)', async () => {
 		const spy = stubFetch(200)
-		await reconcileSchema({ url: 'https://propustka.example.com/', app: 'opice', schema: SCHEMA })
+		await reconcileSchema({ url: 'https://iam.example.com/', app: 'opice', schema: SCHEMA })
 		expect(spy.mock.calls).toHaveLength(1)
 		const req = captured(spy)
-		expect(req.url).toBe('https://propustka.example.com/admin/apps/opice/schema')
+		expect(req.url).toBe('https://iam.example.com/admin/apps/opice/schema')
 		expect(req.method).toBe('PUT')
 		expect(req.body).toEqual(SCHEMA)
 	})
 
 	test('forwards the admin key as an Authorization: Bearer header when provided', async () => {
 		const spy = stubFetch(200)
-		await reconcileSchema({ url: 'https://propustka.example.com', app: 'opice', schema: SCHEMA, adminKey: 'px_admin-key' })
+		await reconcileSchema({ url: 'https://iam.example.com', app: 'opice', schema: SCHEMA, adminKey: 'px_admin-key' })
 		const req = captured(spy)
 		expect(req.headers.get('Authorization')).toBe('Bearer px_admin-key')
 	})
 
 	test('no admin key → no Authorization header (IAM refuses it)', async () => {
 		const spy = stubFetch(200)
-		await reconcileSchema({ url: 'https://propustka.example.com', app: 'opice', schema: SCHEMA })
+		await reconcileSchema({ url: 'https://iam.example.com', app: 'opice', schema: SCHEMA })
 		const req = captured(spy)
 		expect(req.headers.get('Authorization')).toBeNull()
 	})
 
 	test('a non-2xx response throws ReconcileSchemaError carrying status + message', async () => {
 		stubFetch(502, { error: 'admin said no' })
-		const err = await reconcileSchema({ url: 'https://propustka.example.com', app: 'opice', schema: SCHEMA }).catch((e: unknown) => e)
+		const err = await reconcileSchema({ url: 'https://iam.example.com', app: 'opice', schema: SCHEMA }).catch((e: unknown) => e)
 		expect(err).toBeInstanceOf(ReconcileSchemaError)
 		if (err instanceof ReconcileSchemaError) {
 			expect(err.status).toBe(502)
@@ -95,14 +95,14 @@ describe('reconcileSchema', () => {
 
 	test('no returnOrigins → the registry is never touched (one call, the schema PUT)', async () => {
 		const spy = stubFetch(200)
-		await reconcileSchema({ url: 'https://propustka.example.com', app: 'opice', schema: SCHEMA })
+		await reconcileSchema({ url: 'https://iam.example.com', app: 'opice', schema: SCHEMA })
 		expect(spy.mock.calls).toHaveLength(1)
 	})
 
 	test('returnOrigins → a SECOND call to apps.setReturnOrigins, after the schema PUT registers the app', async () => {
 		const spy = stubFetchSequence({ status: 200 }, { status: 200, body: { result: { app: 'opice', origins: ['https://opice.test'] } } })
 		await reconcileSchema({
-			url: 'https://propustka.example.com/',
+			url: 'https://iam.example.com/',
 			app: 'opice',
 			schema: SCHEMA,
 			returnOrigins: ['https://opice.test', 'https://stage.opice.test'],
@@ -111,9 +111,9 @@ describe('reconcileSchema', () => {
 		expect(spy.mock.calls).toHaveLength(2)
 		// Ordering is load-bearing: `apps.setReturnOrigins` 404s for an app IAM has not been told about,
 		// and the schema PUT is what registers it.
-		expect(captured(spy, 0).url).toBe('https://propustka.example.com/admin/apps/opice/schema')
+		expect(captured(spy, 0).url).toBe('https://iam.example.com/admin/apps/opice/schema')
 		const registration = captured(spy, 1)
-		expect(registration.url).toBe('https://propustka.example.com/admin/rpc')
+		expect(registration.url).toBe('https://iam.example.com/admin/rpc')
 		expect(registration.method).toBe('POST')
 		expect(registration.headers.get('Authorization')).toBe('Bearer px_admin-key')
 		expect(registration.body).toEqual({
@@ -128,7 +128,7 @@ describe('reconcileSchema', () => {
 	test('a rejected registration throws with the RPC envelope message and its status', async () => {
 		stubFetchSequence({ status: 200 }, { status: 400, body: { error: { type: 'validation', message: 'not an absolute http(s) origin: nope' } } })
 		const err = await reconcileSchema({
-			url: 'https://propustka.example.com',
+			url: 'https://iam.example.com',
 			app: 'opice',
 			schema: SCHEMA,
 			returnOrigins: ['nope'],
@@ -144,7 +144,7 @@ describe('reconcileSchema', () => {
 	test('an error envelope answered with 200 is still a failure, never a silent no-op', async () => {
 		stubFetchSequence({ status: 200 }, { status: 200, body: { error: { type: 'forbidden', message: 'admin permission required' } } })
 		const err = await reconcileSchema({
-			url: 'https://propustka.example.com',
+			url: 'https://iam.example.com',
 			app: 'opice',
 			schema: SCHEMA,
 			returnOrigins: ['https://opice.test'],
@@ -156,7 +156,7 @@ describe('reconcileSchema', () => {
 	test('a failed schema PUT never reaches the registry', async () => {
 		const spy = stubFetchSequence({ status: 403, body: { error: 'admin permission required' } })
 		await expect(
-			reconcileSchema({ url: 'https://propustka.example.com', app: 'opice', schema: SCHEMA, returnOrigins: ['https://opice.test'] }),
+			reconcileSchema({ url: 'https://iam.example.com', app: 'opice', schema: SCHEMA, returnOrigins: ['https://opice.test'] }),
 		).rejects.toBeInstanceOf(ReconcileSchemaError)
 		expect(spy.mock.calls).toHaveLength(1)
 	})
@@ -164,7 +164,7 @@ describe('reconcileSchema', () => {
 	test('an EMPTY returnOrigins array is a caller error, refused before any request', async () => {
 		const spy = stubFetch(200)
 		await expect(
-			reconcileSchema({ url: 'https://propustka.example.com', app: 'opice', schema: SCHEMA, returnOrigins: [] }),
+			reconcileSchema({ url: 'https://iam.example.com', app: 'opice', schema: SCHEMA, returnOrigins: [] }),
 		).rejects.toThrow('must not be empty')
 		expect(spy.mock.calls).toHaveLength(0)
 	})

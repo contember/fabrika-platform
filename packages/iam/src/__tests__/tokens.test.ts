@@ -28,7 +28,7 @@ async function setup(action = 'project.read', app = 'example-app') {
 describe('mintToken', () => {
 	test('mints a per-app token carrying the resolved permissions; the JWKS verifies it', async () => {
 		const { h, principalId, sessionToken } = await setup()
-		const services = h.makeServices({ issuer: 'https://propustka.test' })
+		const services = h.makeServices({ issuer: 'https://iam.test' })
 
 		const { result, principalId: loggedId } = await mintToken(services, ENV, { app: 'example-app', session: sessionToken, requestId: 'r1' })
 		expect(result.ok).toBe(true)
@@ -40,7 +40,7 @@ describe('mintToken', () => {
 		// Verify EXACTLY as the SDK will: local JWKS from the issuer's published keys, checking aud.
 		const signer = await getSigner(ENV)
 		const { payload } = await jwtVerify(result.token, createLocalJWKSet(signer.jwks()), {
-			issuer: 'https://propustka.test',
+			issuer: 'https://iam.test',
 			audience: 'example-app',
 		})
 		const claims = parseAccessClaims(payload)
@@ -56,14 +56,14 @@ describe('mintToken', () => {
 
 	test('resolves permissions PER APP — a grant on another app does not leak', async () => {
 		const { h, sessionToken } = await setup('project.read', 'app-a')
-		const services = h.makeServices({ issuer: 'https://propustka.test' })
+		const services = h.makeServices({ issuer: 'https://iam.test' })
 		const { result } = await mintToken(services, ENV, { app: 'app-b', session: sessionToken, requestId: 'r' })
 		expect(result.ok).toBe(true)
 		if (!result.ok) {
 			throw new Error('expected ok')
 		}
 		const claims = parseAccessClaims(
-			(await jwtVerify(result.token, createLocalJWKSet((await getSigner(ENV)).jwks()), { issuer: 'https://propustka.test', audience: 'app-b' })).payload,
+			(await jwtVerify(result.token, createLocalJWKSet((await getSigner(ENV)).jwks()), { issuer: 'https://iam.test', audience: 'app-b' })).payload,
 		)
 		expect(claims?.perms).toEqual([])
 	})
@@ -177,14 +177,14 @@ describe('mintFromKey', () => {
 
 	test('an anonymous key mints ONLY for the app it was issued for', async () => {
 		const { h, key } = await shareLink('app-a')
-		const services = h.makeServices({ issuer: 'https://propustka.test' })
+		const services = h.makeServices({ issuer: 'https://iam.test' })
 
 		const mine = await mintFromKey(services, ENV, { app: 'app-a', key, requestId: 'r' })
 		expect(mine.result.ok).toBe(true)
 		if (!mine.result.ok) throw new Error('expected ok')
 		const claims = parseAccessClaims(
 			(await jwtVerify(mine.result.token, createLocalJWKSet((await getSigner(ENV)).jwks()), {
-				issuer: 'https://propustka.test',
+				issuer: 'https://iam.test',
 				audience: 'app-a',
 			})).payload,
 		)
@@ -207,7 +207,7 @@ describe('mintFromKey', () => {
 			app: 'app-a',
 			grants: [{ action: 'report.read' }],
 		})
-		const services = h.makeServices({ issuer: 'https://propustka.test' })
+		const services = h.makeServices({ issuer: 'https://iam.test' })
 		const mint = () => mintFromKey(services, ENV, { app: 'app-a', key, requestId: 'r' })
 
 		// The token ends when the issuer's grant does.
@@ -238,13 +238,13 @@ describe('mintFromKey', () => {
 			grants: [{ action: 'report.read' }],
 		})
 		h.sqlite.run('UPDATE credentials SET issued_by = NULL WHERE id = ?', [id])
-		const services = h.makeServices({ issuer: 'https://propustka.test' })
+		const services = h.makeServices({ issuer: 'https://iam.test' })
 		expect((await mintFromKey(services, ENV, { app: 'app-a', key, requestId: 'r' })).result).toEqual({ ok: false, reason: 'invalid_key' })
 	})
 
 	test('an anonymous key with NO app is dead everywhere — the hard cutover', async () => {
 		const { h, key } = await shareLink(null)
-		const services = h.makeServices({ issuer: 'https://propustka.test' })
+		const services = h.makeServices({ issuer: 'https://iam.test' })
 		for (const app of ['app-a', 'app-b']) {
 			expect((await mintFromKey(services, ENV, { app, key, requestId: 'r' })).result).toEqual({ ok: false, reason: 'invalid_key' })
 		}
@@ -258,7 +258,7 @@ describe('mintFromKey', () => {
 		seedInlineGrant(h.sqlite, principalId, ['project.read'], null, 'app-a')
 		const key = 'px_cross-app-personal-key'
 		await h.repositories.credentials.createCredential({ tokenHash: await hashToken(key), principalId, issuedBy: principalId, grants: [] })
-		const services = h.makeServices({ issuer: 'https://propustka.test' })
+		const services = h.makeServices({ issuer: 'https://iam.test' })
 
 		const atA = await mintFromKey(services, ENV, { app: 'app-a', key, requestId: 'r' })
 		expect(atA.result.ok).toBe(true)
@@ -267,7 +267,7 @@ describe('mintFromKey', () => {
 		if (!atB.result.ok) throw new Error('expected ok')
 		const claims = parseAccessClaims(
 			(await jwtVerify(atB.result.token, createLocalJWKSet((await getSigner(ENV)).jwks()), {
-				issuer: 'https://propustka.test',
+				issuer: 'https://iam.test',
 				audience: 'app-b',
 			})).payload,
 		)
@@ -292,7 +292,7 @@ describe('the access token size bound', () => {
 
 	test('mintToken refuses a token above MAX_ACCESS_TOKEN_BYTES with its own reason', async () => {
 		const { h, principalId } = await memberOfManyWorkspaces()
-		const services = h.makeServices({ issuer: 'https://propustka.test' })
+		const services = h.makeServices({ issuer: 'https://iam.test' })
 		const session = await h.signSession(principalId)
 		const { result } = await mintToken(services, ENV, { app: 'example-app', session, requestId: 'wide' })
 		expect(result).toEqual({ ok: false, reason: 'token_too_large' })
@@ -308,35 +308,35 @@ describe('the access token size bound', () => {
 			issuedBy: principalId,
 			grants: [],
 		})
-		const services = h.makeServices({ issuer: 'https://propustka.test' })
+		const services = h.makeServices({ issuer: 'https://iam.test' })
 		const { result } = await mintFromKey(services, ENV, { app: 'example-app', key, requestId: 'wide-key' })
 		expect(result).toEqual({ ok: false, reason: 'token_too_large' })
 	})
 
 	test('at an installation service the bound stays MAX_ACCESS_TOKEN_BYTES', async () => {
 		const { h, principalId } = await memberOfManyWorkspaces(80)
-		const services = h.makeServices({ issuer: 'https://propustka.test' })
+		const services = h.makeServices({ issuer: 'https://iam.test' })
 		const { result } = await mintToken(services, ENV, { app: 'example-app', session: await h.signSession(principalId), requestId: 'svc' })
 		expect(result).toEqual({ ok: false, reason: 'token_too_large' })
 	})
 
 	test('at a contract application a token above MAX_APPLICATION_TOKEN_BYTES is refused', async () => {
 		const { h, principalId } = await memberOfManyWorkspaces(400, true)
-		const services = h.makeServices({ issuer: 'https://propustka.test' })
+		const services = h.makeServices({ issuer: 'https://iam.test' })
 		const { result } = await mintToken(services, ENV, { app: 'example-app', session: await h.signSession(principalId), requestId: 'app-wide' })
 		expect(result).toEqual({ ok: false, reason: 'token_too_large' })
 	})
 
 	test('at a contract application a token between 8 KiB and MAX_APPLICATION_TOKEN_BYTES is signed, and verifies with every entry', async () => {
 		const { h, principalId } = await memberOfManyWorkspaces(80, true)
-		const services = h.makeServices({ issuer: 'https://propustka.test' })
+		const services = h.makeServices({ issuer: 'https://iam.test' })
 		const session = await h.signSession(principalId)
 		const { result } = await mintToken(services, ENV, { app: 'example-app', session, requestId: 'wide-fits' })
 		if (!result.ok) throw new Error(`expected a token: ${result.reason}`)
 		expect(result.token.length).toBeGreaterThan(MAX_ACCESS_TOKEN_BYTES)
 		expect(result.token.length).toBeLessThanOrEqual(MAX_APPLICATION_TOKEN_BYTES)
 		const { payload } = await jwtVerify(result.token, createLocalJWKSet((await getSigner(ENV)).jwks()), {
-			issuer: 'https://propustka.test',
+			issuer: 'https://iam.test',
 			audience: 'example-app',
 		})
 		const perms = parseAccessClaims(payload)?.perms ?? []
@@ -346,7 +346,7 @@ describe('the access token size bound', () => {
 
 	test('a token at the bound still mints', async () => {
 		const { h, principalId } = await setup()
-		const services = h.makeServices({ issuer: 'https://propustka.test' })
+		const services = h.makeServices({ issuer: 'https://iam.test' })
 		const session = await h.signSession(principalId)
 		const { result } = await mintToken(services, ENV, { app: 'example-app', session, requestId: 'narrow' })
 		expect(result.ok).toBe(true)
@@ -356,14 +356,14 @@ describe('the access token size bound', () => {
 
 describe("a user token carries the principal's mailbox", () => {
 	async function claimsOf(token: string, app: string) {
-		const { payload } = await jwtVerify(token, createLocalJWKSet((await getSigner(ENV)).jwks()), { issuer: 'https://propustka.test', audience: app })
+		const { payload } = await jwtVerify(token, createLocalJWKSet((await getSigner(ENV)).jwks()), { issuer: 'https://iam.test', audience: app })
 		return parseAccessClaims(payload)
 	}
 
 	test('a session mints the mailbox IAM stores beside the spelling it labels the person with', async () => {
 		const h = createHarness()
 		const principalId = seedUser(h.sqlite, { sub: 'g-ann', email: 'ann@b.cz', label: 'Ann@B.cz' })
-		const services = h.makeServices({ issuer: 'https://propustka.test' })
+		const services = h.makeServices({ issuer: 'https://iam.test' })
 		const { result } = await mintToken(services, ENV, { app: 'example-app', session: await h.signSession(principalId), requestId: 'r' })
 		if (!result.ok) throw new Error('expected ok')
 		const claims = await claimsOf(result.token, 'example-app')
@@ -383,7 +383,7 @@ describe("a user token carries the principal's mailbox", () => {
 			issuedBy: principal.id,
 			grants: [],
 		})
-		const services = h.makeServices({ issuer: 'https://propustka.test' })
+		const services = h.makeServices({ issuer: 'https://iam.test' })
 		const session = await mintToken(services, ENV, { app: 'example-app', session: await h.signSession(principal.id), requestId: 'r' })
 		const personal = await mintFromKey(services, ENV, { app: 'example-app', key, requestId: 'r' })
 		if (!session.result.ok || !personal.result.ok) throw new Error('expected ok')
@@ -398,7 +398,7 @@ describe("a user token carries the principal's mailbox", () => {
 		for (const [principalId, key] of [[person, 'px_person-key'], [machine, 'px_service-key']] as const) {
 			await h.repositories.credentials.createCredential({ tokenHash: await hashToken(key), principalId, issuedBy: person, grants: [] })
 		}
-		const services = h.makeServices({ issuer: 'https://propustka.test' })
+		const services = h.makeServices({ issuer: 'https://iam.test' })
 		const personal = await mintFromKey(services, ENV, { app: 'example-app', key: 'px_person-key', requestId: 'r' })
 		const scripted = await mintFromKey(services, ENV, { app: 'example-app', key: 'px_service-key', requestId: 'r' })
 		if (!personal.result.ok || !scripted.result.ok) throw new Error('expected ok')

@@ -11,7 +11,7 @@
 // what fills them.
 //
 // SECURITY MODEL (unchanged by the move): the management RPCs (`issueKey`/`revokeKey`/`listPrincipals`)
-// resolve the CALLER server-side from a forwarded propustka-native credential (`resolveCaller` — a
+// resolve the CALLER server-side from a forwarded IAM-native credential (`resolveCaller` — a
 // `px_token` verified against our own signing keys, or a `px_` key), never app-asserted. On a valid `px_token` the credential's `aud` identifies the app and supersedes the
 // SDK-passed `app` for the audit row. `audit` takes its app from the caller's verified token the same
 // way (`verifiedTokenApp`). Note what this does NOT cover: `mintToken`, `mintFromKey` and `getJwks`
@@ -182,7 +182,7 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoff
 			}
 		},
 		/**
-		 * Mint a per-app permission token from the browser's SSO session (propustka-native auth). The
+		 * Mint a per-app permission token from the browser's SSO session (IAM-native auth). The
 		 * session is validated, the principal's permissions for the calling app resolved, and a
 		 * short-lived token signed; the SDK then authorizes locally off it until it expires. Never
 		 * throws — fails closed to `invalid_session` (the SDK then bounces the user to /auth/login).

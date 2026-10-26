@@ -361,7 +361,7 @@ describe('the Cloudflare source composition', () => {
 	})
 })
 
-// The runner port. vozka-runner refuses any RPC that does not present FABRIKA_RUNNER_KEY, so both
+// The runner port. the runner Worker refuses any RPC that does not present FABRIKA_RUNNER_KEY, so both
 // directions are pinned here: the key control sends on a cancel, and the terminal outcome it reads
 // back — the executor's compiled IAM reconcile rides on the status, because core, not the untrusted
 // container, is what applies it with the IAM admin key.

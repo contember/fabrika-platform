@@ -2,7 +2,7 @@ import { responseError } from './errors'
 
 export const GITHUB_ACCEPT = 'application/vnd.github+json'
 export const GITHUB_API_VERSION = '2022-11-28'
-export const GITHUB_USER_AGENT = 'vozka'
+export const GITHUB_USER_AGENT = 'fabrika'
 const MAX_RESPONSE_BYTES = 64 * 1024
 
 interface RequestCancellation {

@@ -8,7 +8,7 @@ import { mintFromKey } from '../tokens'
 import { createHarness, type Harness, seedAppAction, seedInlineGrant, seedService, seedUser } from './helpers/harness'
 
 const ENV = { FABRIKA_IAM_SIGNING_KEYS: '', ENVIRONMENT: 'local' }
-const ISSUER = 'https://propustka.test'
+const ISSUER = 'https://iam.test'
 
 function perm(action: string, scope: Scope | null = null): PermissionEntry {
 	return { action, scope, source: 'grant' }

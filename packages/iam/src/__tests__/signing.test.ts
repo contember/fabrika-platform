@@ -3,7 +3,7 @@ import { describe, expect, test } from 'bun:test'
 import { createLocalJWKSet, exportJWK, generateKeyPair, jwtVerify } from 'jose'
 import { parseSigningKeys, Signer } from '../signing'
 
-const ISS = 'https://propustka.test'
+const ISS = 'https://iam.test'
 const perms: PermissionEntry[] = [{ action: 'project.read', scope: { type: 'project', value: 'demo' }, source: 'grant' }]
 
 /** Generate a real ES256 keypair and return its PRIVATE jwk (with `d`), as the secret would hold. */

@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { buildAccessClaims, buildResourceAccessClaims, matchesTokenAudience, parseAccessClaims, type ResourceAccessTokenParams } from '../token'
 
 const APP = 'vozka'
-const RESOURCE = 'https://vozka.test/mcp'
+const RESOURCE = 'https://control.test/mcp'
 
 const PARAMS: ResourceAccessTokenParams = {
 	iss: 'https://iam.test',

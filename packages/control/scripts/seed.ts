@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * Seed the control-plane registry with the durable `vozka` and `propustka` app IDs that let a GitHub push
+ * Seed the control-plane registry with the durable Control (`vozka`) and IAM (`propustka`) app IDs that let a GitHub push
  * self-deploy them. Runs AFTER fabrika is live (scripts/bootstrap.ts) — it calls `register` at `/api/rpc`,
  * so it goes through the real ACL + audit path (it does NOT write D1 directly). The
  * bootstrap admin (or an IAM-granted admin) is the caller.
@@ -13,7 +13,7 @@
  *
  * ─────────────────────────────────────────────────────────────────────────────────────────────────
  * This needs REAL values at run time — DO NOT run it against a real control plane from here without
- * them. Everything is parameterized via env; the app SET is declared below (the fabrika + propustka
+ * them. Everything is parameterized via env; the app SET is declared below (the fabrika + IAM
  * apps), but the repo URLs and domains are all env-driven so nothing real is hardcoded.
  * ─────────────────────────────────────────────────────────────────────────────────────────────────
  *
@@ -99,7 +99,7 @@ async function main(): Promise<void> {
 	const seedEnv = optional('SEED_ENV', 'prod')
 	const sharedConfigPath = process.env['SEED_CONFIG_PATH']
 
-	// The known apps. fabrika registers ITSELF (self-deploy on push); propustka is registered too so
+	// The known apps. fabrika registers ITSELF (self-deploy on push); IAM is registered too so
 	// fabrika can deploy it. Repo URLs + domains are env-driven. The deploy target account is fabrika's own.
 	const apps: SeedApp[] = [
 		{
@@ -132,7 +132,7 @@ async function main(): Promise<void> {
 		})
 	}
 
-	console.log('\nDone. Pushes to the registered repos now self-deploy through vozka.')
+	console.log('\nDone. Pushes to the registered repos now self-deploy through Control.')
 }
 
 main().catch((error: unknown) => {

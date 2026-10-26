@@ -1,4 +1,4 @@
-// The Worker→container run relay — the testable core of vozka-runner's `startRun`, decoupled from the
+// The Worker→container run relay — the testable core of the runner Worker's `startRun`, decoupled from the
 // real DO so it can be unit-tested with fakes (no Cloudflare, no Docker).
 //
 // Given a started container stub and an R2-like bucket, it POSTs the provider job to `/run`, tails

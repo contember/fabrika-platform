@@ -438,7 +438,7 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 
 		const global = await db.grants.createGrant({ principalId: p.id, roleKey: 'admin' })
 		await db.grants.createGrant({ principalId: p.id, roleKey: 'editor', app: 'opice' })
-		await db.grants.createGrant({ principalId: p.id, roleKey: 'viewer', app: 'poplach', expiresAt: past })
+		await db.grants.createGrant({ principalId: p.id, roleKey: 'viewer', app: 'reports', expiresAt: past })
 		await db.grants.createGrant({ principalId: p.id, roleKey: 'auditor', app: 'opice', expiresAt: future })
 
 		expect(await db.grants.listGrants(p.id)).toHaveLength(4)
@@ -583,7 +583,7 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 		const anonymous = await db.credentials.createCredential({
 			tokenHash: 'hash-anon',
 			issuedBy: p.id,
-			app: 'poplach',
+			app: 'reports',
 			grants: [{ action: 'report.read' }],
 		})
 		expect((await db.credentials.listAnonymousCredentials({ limit: 50 })).map((c) => c.id)).toEqual([anonymous])

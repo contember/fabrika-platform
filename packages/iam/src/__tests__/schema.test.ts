@@ -223,7 +223,7 @@ test('the same GLOBAL role for DIFFERENT apps is allowed; the same app twice is 
 	seedP1(db)
 	db.run(`INSERT INTO grants (id, principal_id, role_key, app, created_at) VALUES ('g1', 'p1', 'editor', 'opice', ${T})`)
 	// Same (principal, role) for a different app — allowed (the app dimension differentiates).
-	expect(() => db.run(`INSERT INTO grants (id, principal_id, role_key, app, created_at) VALUES ('g2', 'p1', 'editor', 'poplach', ${T})`)).not.toThrow()
+	expect(() => db.run(`INSERT INTO grants (id, principal_id, role_key, app, created_at) VALUES ('g2', 'p1', 'editor', 'reports', ${T})`)).not.toThrow()
 	// …but the same app twice is rejected.
 	expect(() => db.run(`INSERT INTO grants (id, principal_id, role_key, app, created_at) VALUES ('g3', 'p1', 'editor', 'opice', ${T})`)).toThrow()
 	// A NULL-app (all-apps) grant collides with another NULL-app one (COALESCE folds NULL→'*').

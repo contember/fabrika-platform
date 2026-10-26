@@ -19,4 +19,4 @@ Bun.serve({
 	idleTimeout: 255,
 })
 
-console.info(`vozka runner listening on :${port} (workspace ${workspace})`)
+console.info(`runner listening on :${port} (workspace ${workspace})`)

@@ -35,7 +35,7 @@ const backends: { name: string; skip: boolean; open(): Promise<Backend> }[] = [
 		name: 'postgres',
 		skip: !hasPostgres,
 		open: async () => {
-			const fixture = await createPostgres('vozka_mail')
+			const fixture = await createPostgres('control_mail')
 			return { repositories: createControlRepositories(fixture.db), db: fixture.db, close: () => fixture.close() }
 		},
 	},

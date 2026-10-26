@@ -1,5 +1,5 @@
 /**
- * The vozka-runner Worker's CF bindings. vozka-runner is the deploy EXECUTOR — a worker SEPARATE from
+ * The runner Worker's CF bindings. It is the deploy EXECUTOR — a worker SEPARATE from
  * the fabrika control plane, split out so that deploying fabrika itself never resets the Durable Object
  * that is actively running that deploy (the self-reset that orphaned fabrika's own runs). fabrika calls it
  * over a service binding (`RUNNER_SVC.startRun(job)`); this worker boots the per-run container and relays

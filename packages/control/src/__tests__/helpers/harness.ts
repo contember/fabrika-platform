@@ -19,7 +19,7 @@ function allMigrations(): string {
 		.join('\n')
 }
 
-// ── D1-compatible adapter over bun:sqlite (mirrors propustka's harness) ─────────
+// ── D1-compatible adapter over bun:sqlite (mirrors IAM's harness) ─────────
 
 class TestD1PreparedStatement implements D1PreparedStatement {
 	private params: SQLQueryBindings[] = []
@@ -210,7 +210,7 @@ export async function pushWebhookRequest(options: {
 		...(options.installationId !== undefined ? { installation: { id: options.installationId } } : {}),
 	})
 	const signature = options.signatureOverride ?? (await signWebhook(body, options.secret))
-	return new Request('https://vozka.example/webhooks/github', {
+	return new Request('https://control.example/webhooks/github', {
 		method: 'POST',
 		headers: { 'content-type': 'application/json', 'X-Hub-Signature-256': signature, 'X-GitHub-Event': options.event ?? 'push' },
 		body,

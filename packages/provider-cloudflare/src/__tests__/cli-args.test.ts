@@ -34,8 +34,8 @@ describe('parseCloudflareArgs', () => {
 
 	test('keeps platform components in dependency order', () => {
 		expect(platformComponents({ runnerConfig: 'runner.ts', workerConfig: 'control.ts', componentConfig: undefined })).toEqual([
-			{ label: 'vozka-runner', configPath: 'runner.ts' },
-			{ label: 'vozka', configPath: 'control.ts' },
+			{ label: 'runner', configPath: 'runner.ts' },
+			{ label: 'control', configPath: 'control.ts' },
 		])
 	})
 

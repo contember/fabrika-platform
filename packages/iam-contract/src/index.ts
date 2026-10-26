@@ -183,7 +183,7 @@ export interface UpdateGrantInput extends Omit<CreateGrantRequest, 'principalId'
 
 // ── Apps (read-only; the live registry derived from the schema tables) ────────
 
-/** The set of app ids propustka knows about — the choices for a grant's `app`. */
+/** The set of app ids IAM knows about — the choices for a grant's `app`. */
 export interface AppDto {
 	id: string
 	/** The name the app's schema declares for people; null when it declares none. */
@@ -304,7 +304,7 @@ export interface ProvisionApiKeyRequest {
 /**
  * Provisioning result. `apiKey` (a `px_…` credential bound to the new service principal) is shown
  * exactly ONCE — copy it now, it is not retrievable later. Carried as a bearer (or a declared
- * header) directly to apps on the propustka-native path (`mintFromKey`), no Cloudflare Access in
+ * header) directly to apps on the IAM-native path (`mintFromKey`), no Cloudflare Access in
  * front.
  */
 export interface ProvisionApiKeyResponse {

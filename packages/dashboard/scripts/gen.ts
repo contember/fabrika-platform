@@ -2,7 +2,7 @@
 /**
  * Run Buzola's codegen via Bun so the page-metadata extractor can actually `import()` our .tsx
  * route files (the shipped `bunx buzola` CLI uses Node and fails to load TSX). Mirrors the
- * propustka admin-ui gen step.
+ * predecessor IAM admin UI gen step.
  */
 import { generate } from '@buzola/codegen'
 import path from 'node:path'

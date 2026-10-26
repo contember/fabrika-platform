@@ -46,10 +46,10 @@ export function sessionUsable(
  */
 export const PROVISIONING_ADMIN_ID = 'provisioning-admin'
 
-// ── Native caller resolution (propustka-native credentials, no Cloudflare Access) ──────────────
+// ── Native caller resolution (IAM-native credentials, no Cloudflare Access) ──────────────
 //
 // Resolve the CALLER for the management RPCs (`issueKey`/`revokeKey`/`listPrincipals`)
-// and the admin gate from a propustka-native credential the SDK forwards — a `px_token` access JWT
+// and the admin gate from an IAM-native credential the SDK forwards — a `px_token` access JWT
 // (verified against our OWN signing keys) or an opaque `px_` key (resolved via the same
 // `resolveCredential` core as `mintFromKey`). There is no Cloudflare Access JWT anymore.
 

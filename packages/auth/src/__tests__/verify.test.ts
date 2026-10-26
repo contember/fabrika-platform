@@ -9,7 +9,7 @@ import { exportJWK, generateKeyPair, type KeyLike, SignJWT } from 'jose'
 import { TokenVerifier } from '../verify'
 import { IamRpcStub } from './stub'
 
-const ISSUER = 'https://propustka.test'
+const ISSUER = 'https://iam.test'
 const APP = 'example-app'
 
 const { publicKey, privateKey } = await generateKeyPair('ES256')

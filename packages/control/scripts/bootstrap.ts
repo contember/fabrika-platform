@@ -107,7 +107,7 @@ async function main(): Promise<void> {
 			return 0
 		}
 	})()
-	console.log(`Deploying vozka → ${env}${DRY_RUN ? ' (dry-run)' : ''} (idempotent — safe to re-run).`)
+	console.log(`Deploying control → ${env}${DRY_RUN ? ' (dry-run)' : ''} (idempotent — safe to re-run).`)
 	if (adminCount > 0) {
 		// Escape hatch OPEN: these operators are admin even before IAM grants them anything. Correct
 		// for a FIRST bring-up (or recovery); on a routine redeploy it needlessly reopens the hatch.
@@ -115,7 +115,7 @@ async function main(): Promise<void> {
 	} else {
 		// Escape hatch CLOSED: the SAFE state for redeploying an already-live fabrika (authorization stays
 		// fully IAM-owned). But a FIRST bring-up with 0 admins locks the operator out — warn loudly.
-		console.warn('  ⚠ No bootstrap admins (escape hatch CLOSED) — safe for a REDEPLOY of a live vozka.')
+		console.warn('  ⚠ No bootstrap admins (escape hatch CLOSED) — safe for a REDEPLOY of a live control plane.')
 		console.warn('    If this is the FIRST bring-up, abort now and set FABRIKA_CONTROL_BOOTSTRAP_ADMINS, or you will lock yourself out.')
 	}
 
