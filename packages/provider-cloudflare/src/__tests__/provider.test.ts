@@ -18,16 +18,9 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { D1Database, DurableObject, type GeneratedConfig, KVNamespace, Queue, R2Bucket, ServiceReference, Worker } from 'oblaka-iac'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
-import type {
-	CloudflareAppConfig,
-	CloudflareAppConfigInput,
-	CloudflareCollaborators,
-	CommandResult,
-	CommandRunner,
-	CommandSpec,
-	ProvisionInput,
-} from '..'
+import type { CloudflareAppConfig, CloudflareCollaborators, CommandResult, CommandRunner, CommandSpec, ProvisionInput } from '..'
 import {
+	composeLocalApplication,
 	createCloudflareDeployer,
 	createCloudflareProxyWorker,
 	defaultCloudflareCollaborators,
@@ -35,6 +28,7 @@ import {
 	generateWranglerConfigs,
 	IAM_APPLICATION_ENTRYPOINT,
 	iamServiceReference,
+	isCloudflareAppConfig,
 } from '..'
 import type { PlatformIamTarget } from '../provider'
 import { CLOUDFLARE_PROXY_WORKER_DIR, PROXY_MANIFEST_DEFINE, proxyManifestJson } from '../proxy'
@@ -67,7 +61,7 @@ interface Recorded {
 	readonly applicationVars: Array<Record<string, unknown> | undefined>
 }
 
-const config = (overrides: Partial<CloudflareAppConfigInput> = {}): CloudflareAppConfig =>
+const config = (overrides: Partial<Pick<CloudflareAppConfig, 'id' | 'schema' | 'pipeline' | 'resources'>> = {}): CloudflareAppConfig =>
 	defineApp({
 		id: 'demo',
 		resources: () => new Worker({ dir: '.', ...PRIVATE, name: 'demo', compatibility_flags: [], bindings: {}, main: ENTRY }),
@@ -190,6 +184,8 @@ const deploy = (
 		readonly contractDigest?: string
 		/** The application's framework release Control names with `contract`: `0.9.0` by default, `null` for none. */
 		readonly framework?: string | null
+		/** `false` deploys the config as it is, without the schema the helper adds to a contract application's. */
+		readonly declaresSchema?: false
 		readonly installationApps?: readonly AppEnvironment[]
 		readonly platformIam?: PlatformIamTarget
 		/** The pointer Control records; none by default. */
@@ -197,7 +193,9 @@ const deploy = (
 	} = {},
 ) => {
 	const contract = options.contract ?? (options.platformResources === 'allow' || options.checkoutContract !== undefined ? undefined : notesArtifact)
-	const served = contract === undefined || appConfig.schema !== undefined ? appConfig : { ...appConfig, schema: schemaFromContract(contract) }
+	const served = contract === undefined || appConfig.schema !== undefined || options.declaresSchema === false
+		? appConfig
+		: { ...appConfig, schema: schemaFromContract(contract) }
 	return createCloudflareDeployer({
 		accountId: 'acc-1',
 		apiToken: 'tok-1',
@@ -1115,11 +1113,9 @@ describe('a contract application on Cloudflare (ADR-0048)', () => {
 			'the IAM schema says `contract: true`, but the checkout has no `fabrika.contract.ts`',
 		)
 		const loose = { scopes: [], actions: [], roles: {} }
-		for (const schema of [loose, undefined]) {
-			await expect(deploy(rec, config(schema === undefined ? {} : { schema }), { checkoutContract: notesArtifact })).rejects.toThrow(
-				'this deployment serves a contract, so its IAM schema is `schemaFromContract(artifact)`',
-			)
-		}
+		await expect(deploy(rec, config({ schema: loose }), { checkoutContract: notesArtifact })).rejects.toThrow(
+			'this deployment serves a contract, so its IAM schema is `schemaFromContract(artifact)`',
+		)
 		expect(rec.provisions).toHaveLength(0)
 	})
 
@@ -1992,3 +1988,104 @@ describe('the ops channel of a gated release (servesOps, ADR-0069)', () => {
 		expect(rec.provisions).toEqual([])
 	})
 })
+
+describe('the application Worker `defineApp` builds for a config without `resources`', () => {
+	/** The application Worker the example application spelled out before `defineApp` built it. */
+	const spelledOut = (): CloudflareAppConfig =>
+		defineApp({
+			id: 'demo',
+			resources: () =>
+				new Worker({
+					dir: '.',
+					name: 'demo',
+					main: './fabrika/entry.generated.ts',
+					compatibility_flags: ['nodejs_compat_v2'],
+					compatibility_date: '2025-10-01',
+					observability: { enabled: true },
+					workers_dev: false,
+					preview_urls: false,
+					routes: [],
+					bindings: { IAM: iamServiceReference() },
+				}),
+		})
+
+	const generated = async (): Promise<ReadonlyArray<GeneratedConfig['config']>> =>
+		(await generateWranglerConfigs(provisioned().root, 'stage')).configs.map((item) => item.config)
+
+	test('plans and generates what the spelled-out Worker did, at a gated release and at an older pin, without a schema', async () => {
+		for (const framework of ['0.9.0', '0.8.2']) {
+			const minimal = await deploy(rec, defineApp({ id: 'demo' }), { contract: notesArtifact, framework, declaresSchema: false })
+			expect(minimal.status).toBe('succeeded')
+			const configs = await generated()
+			rec.provisions.shift()
+			const spelled = await deploy(rec, spelledOut(), { contract: notesArtifact, framework, declaresSchema: false })
+			expect(spelled.steps.map((step) => step.id)).toEqual(minimal.steps.map((step) => step.id))
+			expect(await generated()).toEqual(configs)
+			rec.provisions.shift()
+			// Control writes the approved contract's schema itself; the runner reports none.
+			expect(minimal.steps.map((step) => step.id)).not.toContain('reconcile-schema')
+			expect(configs.find((config) => config.name === 'stage-demo')).toMatchObject({
+				main: './fabrika/entry.generated.ts',
+				routes: [],
+				workers_dev: false,
+				preview_urls: false,
+				services: expect.arrayContaining([
+					{ binding: 'IAM', service: 'stage-propustka-worker', entrypoint: IAM_APPLICATION_ENTRYPOINT, props: { app: 'demo@stage' } },
+				]),
+			})
+		}
+		expect(rec.outcomes).toEqual([])
+	})
+
+	test('a local deploy of a contract application without a schema reports none', async () => {
+		const result = await deploy(rec, defineApp({ id: 'demo' }), { checkoutContract: notesArtifact })
+		expect(result.status).toBe('succeeded')
+		expect(result.steps.map((step) => step.id)).toEqual(['provision-resources', 'deploy-worker'])
+		expect(rec.outcomes).toEqual([])
+	})
+
+	test('passes the runner check, takes the author’s bindings and compatibility beside the platform’s IAM, and yields to `resources`', () => {
+		const minimal = defineApp({ id: 'demo' })
+		expect(isCloudflareAppConfig(minimal)).toBe(true)
+		expect(minimal.resources({ env: 'stage' }).options).toMatchObject({ name: 'demo', dir: '.', compatibility_date: '2025-10-01' })
+		const own = new KVNamespace({ name: 'demo-cache' })
+		const tuned = defineApp({
+			id: 'demo',
+			worker: {
+				bindings: { CACHE: own, IAM: new ServiceReference('elsewhere') },
+				compatibility_date: '2026-01-01',
+				compatibility_flags: ['nodejs_compat'],
+			},
+		}).resources({ env: 'stage' }).options
+		expect(tuned).toMatchObject({ compatibility_date: '2026-01-01', compatibility_flags: ['nodejs_compat'] })
+		expect(tuned.bindings['CACHE']).toBe(own)
+		expect(tuned.bindings['IAM']).toEqual(iamServiceReference())
+		const authored = appWorker()
+		expect(defineApp({ id: 'demo', resources: () => authored }).resources({ env: 'stage' })).toBe(authored)
+	})
+
+	test('the local composition is the deploy’s: its proxy, object, files bucket and repair tick', async () => {
+		await deploy(rec, defineApp({ id: 'demo' }), { contract: notesArtifact, framework: '0.9.0', declaresSchema: false, domain: null })
+		const deployed = (await generated()).find((config) => config.name === 'stage-demo')
+		const local = composeLocalApplication({ config: defineApp({ id: 'demo' }), contract: notesArtifact, iamOrigin: LOCAL_IAM, env: 'stage' })
+		expect(local.options.name).toBe('demo-proxy')
+		const configs = (await generateWranglerConfigs(local, 'stage')).configs.map((item) => item.config)
+		const application = configs.find((config) => config.name === 'stage-demo')
+		for (const key of ['main', 'durable_objects', 'migrations', 'r2_buckets', 'triggers', 'services'] as const) {
+			expect(application?.[key]).toEqual(deployed?.[key])
+		}
+		expect(application?.triggers).toEqual({ crons: [STAGE_DEMO_REPAIR_TICK] })
+		expect(application?.vars).toMatchObject({
+			FABRIKA_IAM_ISSUER: LOCAL_IAM,
+			FABRIKA_IAM_APP_ID: 'demo@stage',
+			FABRIKA_CONTRACT_DIGEST: contractDigest(notesArtifact),
+		})
+		expect(application?.vars?.['FABRIKA_PROXY_SECRET']).toMatch(/^[0-9a-f]{64}$/)
+		const loose = config({ schema: { scopes: [], actions: [], roles: {} } })
+		expect(() => composeLocalApplication({ config: loose, contract: notesArtifact, iamOrigin: LOCAL_IAM, env: 'stage' })).toThrow(
+			'this deployment serves a contract',
+		)
+	})
+})
+
+const LOCAL_IAM = 'http://localhost:18191'
