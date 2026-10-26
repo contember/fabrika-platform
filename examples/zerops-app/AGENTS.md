@@ -228,11 +228,12 @@ the access check. `references/spa.md` shows the stack.
 | a job run after the commit     | `kicks: ['<job>']`                                      | `ctx.kick('<job>')`, `ctx.kick('<job>', { at })`   |
 | a trigger, function or view    | its migration                                           | —                                                  |
 
-Scope every scoped table a raw statement reads with `${ctx.sql.scope(<capability>, '<table>', '<alias>')}`, a conjunct
-of its WHERE or JOIN … ON (`where (<filter>) and ${…}`): `ctx.target` for `on` and `in`, `ctx.within` for `over`, a
-job's minted `Ref` or `Within` with `tx.sql.scope`. It binds the capability's whole predicate, chain included, as the
-handles apply it, and on an `update` or `delete` target it needs that operation's action; a reference table needs
-none. A deviation is fine: declare it, and do not contort the code to avoid it. The approver sees every declaration
+Scope every scoped table a raw statement reads with `${ctx.sql.scope(<capability>, '<table>', { alias: '<alias>' })}`,
+a conjunct of its WHERE or JOIN … ON (`where (<filter>) and ${…}`): `ctx.target` for `on` and `in`, `ctx.within` for
+`over`, a job's minted `Ref` or `Within` with `tx.sql.scope`. It binds the capability's whole predicate, chain
+included, as the handles apply it. The table an `update` or `delete` writes takes `{ use: 'update' }` or
+`{ use: 'delete' }`, which needs that operation's action; a reference table needs none. The runtime does not check
+where you put a fragment: the approver reads it. A deviation is fine: declare it, and do not contort the code to avoid it. The approver sees every declaration
 marked "needs closer review". Do not hide reach in a helper; the runtime builds `ctx.sql` and `ctx.db.unscoped` only
 where they are declared. A query or an export declares only `'read'`.
 
@@ -292,8 +293,9 @@ one Durable Object over SQLite. Its `db/migrations/*.sql` are SQLite (`reference
 object applies them when it boots, so there is no `migrate` and no command needs a database URL or `FABRIKA_APP_ID`.
 The tests run on `@fabrika/db/testing-sqlite` (`references/tests.md`), in memory, and never skip. A handler holds the
 object's transaction, so its `limits.timeoutMs` is at most 25 s. A job's is at most 14 minutes, its default: longer
-work claims a bounded batch per run, and the next run takes the rest (`references/jobs.md`). No `sql` (`ctx.sql`) and
-no `scan: true`: the checker, the deploy and the boot refuse both.
+work claims a bounded batch per run, and the next run takes the rest (`references/jobs.md`). `ctx.sql` is SQLite there
+(`references/endpoint.md`). No `scan: true`: the checker, the deploy and the boot refuse it. A migration names no
+`fabrika_*` table but `REFERENCES fabrika_files (id)`.
 
 The object runs one transaction at a time, so every `await` in a handler that may write holds the whole environment:
 IAM, R2, a `fetch`, a `ctx.connect` call, a binding. One 2 s call caps the environment at half a request a second. A
@@ -342,7 +344,7 @@ e-mails them, a link holder's files, HR's review with its history.
 ## Not built yet
 
 - On Cloudflare, where the application runs in one Durable Object over its SQLite and its `db/migrations/*.sql` are
-  SQLite, `sql` (`ctx.sql`) and a file kind with `scan: true` are refused. Everything else on the road runs there.
+  SQLite, a file kind with `scan: true` is refused. Everything else on the road runs there.
 - Jobs are cron only and app-wide: no `ctx.jobs.enqueue`, no job per scope. A `ctx.kick` starts a run of its job, now
   or at `{ at }`; it carries nothing, and the job finds its work in a queue table with `claim`. A list write is off the road (`sql`).
 - A read across tables (a join, a filter over a related table, an aggregate over several) is off the road (`sql`).
@@ -1267,7 +1269,7 @@ export const workloadRows = (
 			count(*) filter (where t.status <> 'done')::int as open,
 			count(*) filter (where t.status <> 'done' and t.due_on < current_date)::int as overdue
 		from tasks t
-		where ${sql.scope(org, 'tasks', 't')}
+		where ${sql.scope(org, 'tasks', { alias: 't' })}
 			and (${status}::text is null or t.status::text = ${status})
 		group by t.assignee
 		order by t.assignee`
@@ -1282,7 +1284,7 @@ export const workloadRows = (
 ## Raw SQL: `sql: 'read'`
 
 Raw SQL is legitimate for a join, a report, an `OR` or `IS NULL` filter, or a bulk write. Declare it on the endpoint;
-`ctx.sql` exists only there. It runs on Postgres only: on Cloudflare a site that declares `sql` is refused.
+`ctx.sql` exists only there. It runs on Postgres and, on Cloudflare, on SQLite (the rules of each are below).
 
 ```ts src/reports/endpoints.ts
 import { attachment } from '@fabrika/app/contract'
@@ -1336,7 +1338,7 @@ export const reports = app.group({ callers: ['human'] }, (r) => ({
 			const rows = await ctx.sql(TaskExportRow)`
 				select t.title, t.status, t.assignee, t.due_on::text as due_on
 				from tasks t
-				where ${ctx.sql.scope(ctx.target, 'tasks', 't')}
+				where ${ctx.sql.scope(ctx.target, 'tasks', { alias: 't' })}
 				order by t.title
 				limit 10000`
 			await ctx.db.target.project_exports.insert({ row_count: rows.length })
@@ -1348,7 +1350,7 @@ export const reports = app.group({ callers: ['human'] }, (r) => ({
 - Every `${…}` of a value is a bound parameter, never SQL text. The one exception is `${ctx.sql.scope(…)}`: it is SQL
   (the predicate) around its own bound values, and it may have no value at all (`(true)`, `(false)`). Put no
   interpolation inside quotes, a quoted name, a dollar body or a comment: the tag refuses it.
-- **Scope every scoped table the statement reads with `${ctx.sql.scope(capability, '<table>', '<alias>')}`.**
+- **Scope every scoped table the statement reads with `${ctx.sql.scope(capability, '<table>', { alias: '<alias>' })}`.**
   `ctx.sql` has no scope predicate of its own. The fragment is the capability's whole predicate on that table: for a
   `Ref` the object's column and every link of its chain, so a project moved to another org is out; for a `Within` its
   values, each container grant on its own column, every row for a global grant and none for an empty one. The
@@ -1356,29 +1358,31 @@ export const reports = app.group({ callers: ['human'] }, (r) => ({
   `Within` it minted to `tx.sql.scope`. A table the capability does not reach is a type error at the table name. A
   reference table is shared by every scope and needs no fragment, and no statement writes it. An application table
   needs none either (the intake job of `references/public-intake.md`).
-- **A fragment carries its action into the statement.** On the table an `update` or `delete` writes it needs the
-  table's own update or delete action (`ctx.within('tasks.write', 'project')` for `update tasks`), so a read action
-  never scopes a write. A column's own write action (`columns: { assignee: { write: 'tasks.assign' } }`) scopes an
-  `update` too, when every column its `set` assigns declares that action: a table with only column writes is updated
-  this way; anywhere else it needs an action the handles read the table with. `insert … on conflict do
-  update … where ${…}` is an update of the inserted table. The fragment answers for its own query block: a CTE that
-  updates and a statement that deletes take one capability each, and another occurrence of the written table (a
-  subquery, `from tasks other`) reads with a read capability under its own alias. A refused fragment fails the call
-  before anything is sent.
-- **A fragment is a conjunct.** It stands alone, joined by AND, at the top level of a WHERE or JOIN … ON clause whose
-  top level holds no OR: `where (<the whole filter>) and ${…}`, `join projects p on p.id = t.project_id and ${…}`.
-  The tag refuses `where a or ${…}`, `where a or b and ${…}`, `not ${…}`, a fragment in parentheses or outside such a
-  clause. Never scope by hand with `ctx.target.value` alone: it drops the chain. The generated tests check that an `in`
-  endpoint with `sql` leaks nothing of another scope.
+- **A fragment states what it scopes.** `use` is `'read'` by default; the table an `update` or `delete` writes takes
+  `{ use: 'update' }` or `{ use: 'delete' }`, which needs the table's own update or delete action
+  (`ctx.within('tasks.write', 'project')` for `update tasks`) on a `'write'` site, so a read action never scopes a
+  write. A column's own write action (`columns: { assignee: { write: 'tasks.assign' } }`) is enough for `use: 'update'`
+  too; set only the columns it writes. `insert … on conflict do update … where ${…}` scopes the inserted table with
+  `use: 'update'`. Each block takes its own fragment: a CTE that updates and a statement that deletes take one
+  capability each, and another occurrence of the written table (a subquery, `from tasks other`) reads under its own
+  alias. A refused fragment fails the call before anything is sent.
+- **A fragment is a conjunct.** Put it alone, joined by AND, at the top level of a WHERE or JOIN … ON clause whose top
+  level holds no OR: `where (<the whole filter>) and ${…}`, `join projects p on p.id = t.project_id and ${…}`. The tag
+  does not read where it stands, which relation it filters or which columns a `set` assigns: the approver does, and a
+  fragment under an `or` widens the statement to every row. Never scope by hand with `ctx.target.value` alone: it drops
+  the chain. The generated tests check that an `in` endpoint with `sql` leaks nothing of another scope.
 - Rows are parsed like `fromRow` (snake_case to camelCase), then by the schema. Postgres sends `bigint` and `numeric`
   as text: cast a count (`count(*)::int`), and a sum to the type its output declares (`::int` for an integer sum that
   fits, `::float8` for a fractional one), or keep it a string. A sum over no rows is `null`: `coalesce(sum(…), 0)`.
 - An optional filter is `(${value}::text is null or <column> = ${value})`.
 - One statement: `select`, `with`, `values`, plus `insert`, `update` and `delete` on a `'write'` site (a mutation, a
-  job or a webhook). Refused before anything is sent: DDL, `SET`, `COPY`, transaction control, another schema, any
-  `fabrika_*` or `pg_*` name, and calls outside the reviewed built-ins. A function your migrations declare is refused
-  too: call it from a view. These name rules are defense in depth; the runtime role (DML only) is the boundary.
-- A query runs in a read-only transaction; a mutation's `ctx.sql` runs in the same transaction as its handles.
+  job or a webhook). Refused before anything is sent: DDL, `SET`, `COPY`, transaction control, and any `fabrika_*`
+  name. On Postgres also another schema, any `pg_*` name, and calls outside the reviewed built-ins; a function your migrations declare is refused too: call it from a view. On SQLite also any `sqlite_*`
+  name, `PRAGMA`, `ATTACH`, and a parameter you write yourself (`?`, `:x`, `@x`, `$x`): interpolate every value.
+- On SQLite write SQLite: `count(*)` is already an integer, there is no `::` cast (`cast(x as text)`), and a list value
+  binds as JSON (`t.status in (select value from json_each(${list}))`).
+- A query runs in a read-only transaction; a mutation's `ctx.sql` runs in the same transaction as its handles. A
+  `'read'` statement writes nothing, even in a mutation: one that tries fails the call.
 
 ## A file download: `attachment`
 
@@ -1686,10 +1690,10 @@ The refusals agents meet most, and their fix:
 | `on-conflict-index`            | `insert(…, { onConflict: { columns } })` whose columns are no unique index the migrations create                                                                 | a `UNIQUE` constraint or a `CREATE UNIQUE INDEX` without `WHERE` on exactly those columns |
 | `cross-app-fetch`              | a `fetch` of an absolute URL under no origin a site declares in `egress`                                                                                         | `egress: ['https://…']` on the site that calls it (`references/endpoint.md`)              |
 | `url-endpoint`                 | `ctx.url('<id>')` names no procedure of the contract                                                                                                             | the endpoint id `<mount>.<group>.<procedure>`                                             |
-| `cloudflare-sql`               | on Cloudflare, a site that declares `sql`                                                                                                                        | the handles (`ctx.db`), without `sql`                                                     |
 | `cloudflare-scan`              | on Cloudflare, a file kind with `scan: true`                                                                                                                     | the kind without `scan`, and no public procedure that takes its files                     |
 | `cloudflare-job-segment`       | on Cloudflare, a job whose `limits.timeoutMs` exceeds one 14-minute segment                                                                                      | at most 14 minutes: claim a bounded batch per run, and the next run takes the rest        |
 | `cloudflare-current-timestamp` | on Cloudflare, `DEFAULT CURRENT_TIMESTAMP` in a migration: SQLite stores `YYYY-MM-DD HH:MM:SS`, which every read of the table refuses                            | `DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`, in a new migration                     |
+| `cloudflare-framework-name`    | on Cloudflare, a `fabrika_*` name in a migration, quoted or not                                                                                                  | your own tables, and `REFERENCES fabrika_files (id)` for a file column                    |
 
 The hints:
 
@@ -1759,11 +1763,11 @@ A 500 answers a fixed message; the server log has one line, `fabrika: <endpoint>
 fixed failure code and, for a framework refusal, its reason and the reason's fixed text, never a value or your error's
 message. The codes you meet most:
 
-| Code                 | Means                                                                                                                                                                                                                                  |
-| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `query_refused`      | the data layer refused a statement or an operation: `undeclared_reach`, `sql_read_only`, `unknown_column`, `read_only`, `sql_outside_transaction`, `sql_dialect` (`ctx.sql` on SQLite, Cloudflare) …; the reason's text names the rule |
-| `capability_refused` | a capability of another kind, dimension or action than the call takes (`wrong_capability`, `wrong_action`, `out_of_reach`), or one kept past its request (`ended`, `foreign_work`)                                                     |
-| `handler_failed`     | your handler threw something else; the log has no more: the Operations issue has the stack, or test the handler                                                                                                                        |
+| Code                 | Means                                                                                                                                                                                                          |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `query_refused`      | the data layer refused a statement or an operation: `undeclared_reach`, `sql_read_only`, `unknown_column`, `read_only`, `sql_outside_transaction`, `sql_scope`, `sql_name` …; the reason's text names the rule |
+| `capability_refused` | a capability of another kind, dimension or action than the call takes (`wrong_capability`, `wrong_action`, `out_of_reach`), or one kept past its request (`ended`, `foreign_work`)                             |
+| `handler_failed`     | your handler threw something else; the log has no more: the Operations issue has the stack, or test the handler                                                                                                |
 
 With an Operations DSN the same 500 is a `RequestFailed` issue in Operations. Its event also carries what your handler
 threw: the error's type, its message, its stack and its `cause` chain. Read the stack there, not in the log. A crash

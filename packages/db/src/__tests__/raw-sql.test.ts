@@ -12,7 +12,7 @@ import { z } from 'zod/v4'
 import { Database, type InvocationTransaction, runApplicationStatement, type Session } from '../database'
 import { CapabilityError, DatabaseError, QueryRefusedError, SqlRowError } from '../errors'
 import { bindScopedDatabase, type DataAccess, dataAccessOf, type DataSite } from '../framework'
-import { classifySql, type ScopeTerms, type SqlMode, type SqlTag, sqlTag } from '../sql'
+import { classifySql, type ScopeTerms, type SqlDatabase, type SqlMode, type SqlTag, sqlTag } from '../sql'
 import { scoped } from '../store'
 import { type TestDatabase, testDatabase } from '../testing'
 import { TestAuthority } from './fixtures/authority'
@@ -21,6 +21,8 @@ import { migration } from './fixtures/schema'
 import { tables } from './fixtures/tables'
 
 const SCHEMA = 'app_notes'
+const PG: SqlDatabase = { dialect: 'postgres', schema: SCHEMA }
+const LITE: SqlDatabase = { dialect: 'sqlite' }
 
 /** The parts of a tagged template, as the engine hands them to a tag. */
 function parts(text: TemplateStringsArray, ..._values: unknown[]): readonly string[] {
@@ -28,9 +30,9 @@ function parts(text: TemplateStringsArray, ..._values: unknown[]): readonly stri
 }
 
 /** The refusal `classifySql` gives the template, or `undefined` when it admits it. */
-function refusal(text: readonly string[], mode: SqlMode = 'write'): string | undefined {
+function refusal(text: readonly string[], mode: SqlMode = 'write', dialect: SqlDatabase = PG): string | undefined {
 	try {
-		classifySql(text, mode, SCHEMA)
+		classifySql(text, mode, dialect)
 		return undefined
 	} catch (error) {
 		if (error instanceof QueryRefusedError) {
@@ -55,11 +57,10 @@ function unsentTag(mode: SqlMode): { sql: SqlTag; sent: () => number } {
 	return {
 		sql: sqlTag(
 			site,
-			SCHEMA,
+			PG,
 			() => {
 				throw new QueryRefusedError('unknown_table', 'no table reaches this tag')
 			},
-			() => {},
 		),
 		sent: () => sent,
 	}
@@ -81,7 +82,7 @@ const Title = z.object({ title: z.string() })
 describe('the static text', () => {
 	test('a query, a join report and a write are admitted, with each value a $n placeholder', () => {
 		const org = 'o1'
-		const report = (text: TemplateStringsArray, ..._values: unknown[]) => classifySql(parts(text), 'read', SCHEMA)
+		const report = (text: TemplateStringsArray, ..._values: unknown[]) => classifySql(parts(text), 'read', PG)
 		expect(
 			report`select w.name, count(*)::int as notes from notes n join workspaces w on w.id = n.workspace_id where n.organization_id = ${org} group by w.name`,
 		).toBe(
@@ -191,6 +192,95 @@ describe('the static text', () => {
 	})
 })
 
+describe("the static text on SQLite: SQLite's lexical rules, the hard rules, and nothing of Postgres's", () => {
+	const lite = (text: readonly string[], mode: SqlMode = 'write') => refusal(text, mode, LITE)
+
+	test('a query and a write are admitted, with each value a ?n placeholder', () => {
+		const report = (text: TemplateStringsArray, ..._values: unknown[]) => classifySql(parts(text), 'read', LITE)
+		expect(report`select n.title from notes n where n.workspace_id = ${'w1'} and n.title like ${'a%'}`).toBe(
+			'select n.title from notes n where n.workspace_id = ?1 and n.title like ?2',
+		)
+		expect(lite(parts`with recent as (select * from notes) select count(*) from recent where id in (select value from json_each(${'[]'}))`, 'read'))
+			.toBeUndefined()
+		expect(lite(parts`insert or replace into notes (id, title) values (${'n1'}, ${'t'}) returning id`)).toBeUndefined()
+		expect(lite(parts`update notes set title = ${'x'} where id = ${'n1'}`)).toBeUndefined()
+		// No function allowlist and no schema rule: workerd's authorizer bounds functions, and a Durable Object has one database.
+		expect(lite(parts`select upper(title), strftime('%Y', created_at) from notes`, 'read')).toBeUndefined()
+	})
+
+	test("SQLite's quoting is read as SQLite reads it: a second statement it would run is refused, a name it reads as one is not", () => {
+		const two = 'it runs one statement, and the template holds'
+		expect(lite(parts`select E'\'; drop table notes; --'`)).toContain(two)
+		expect(lite(parts`select 1 /* /* */ ; drop table notes */`)).toContain(two)
+		expect(lite(parts`select 1 -- a comment\n; drop table notes`)).toContain(two)
+		expect(refusal(parts`select \`a;b\` from notes`)).toContain(two)
+		expect(lite(parts`select \`a;b\`, [c;d], "e;f" from notes`)).toBeUndefined()
+		// A carriage return does not end SQLite's comment, so what follows it is comment.
+		expect(lite(['select 1 -- a comment\r; drop table notes'])).toBeUndefined()
+		expect(lite(parts`select 'open`)).toContain('at line 1 never closes')
+		expect(lite(parts`select [open`)).toContain('at line 1 never closes')
+		expect(lite(parts`select 1 /* open`)).toContain('at line 1 never closes')
+	})
+
+	test('framework and catalog names in every form SQLite reads one: plain, any case, quoted, bracketed, as a string, past a byte-order mark', () => {
+		const refused: readonly [readonly string[], string][] = [
+			[parts`select * from fabrika_webhook_bindings`, "'fabrika_webhook_bindings' at line 1 is the framework's"],
+			[parts`select * from FABRIKA_Job_Leases`, "'fabrika_job_leases' at line 1 is the framework's"],
+			[parts`select * from "fabrika_migrations"`, "'fabrika_migrations' at line 1 is the framework's"],
+			[parts`select * from \`fabrika_wakes\``, "'fabrika_wakes' at line 1 is the framework's"],
+			[parts`select * from [fabrika_files]`, "'fabrika_files' at line 1 is the framework's"],
+			[parts`select * from 'fabrika_webhook_bindings'`, "'fabrika_webhook_bindings' at line 1 is the framework's"],
+			[['select * from ﻿fabrika_wakes'], "'fabrika_wakes' at line 1 is the framework's"],
+			[parts`select * from main.fabrika_wakes`, "'fabrika_wakes' at line 1 is the framework's"],
+			[parts`select sql from sqlite_master`, "'sqlite_master' at line 1 is SQLite's catalog"],
+			[parts`select * from "SQLITE_SCHEMA"`, "'SQLITE_SCHEMA' at line 1 is SQLite's catalog"],
+			[parts`select * from [sqlite_sequence]`, "'sqlite_sequence' at line 1 is SQLite's catalog"],
+			[parts`select * from 'sqlite_temp_master'`, "'sqlite_temp_master' at line 1 is SQLite's catalog"],
+		]
+		for (const [text, expected] of refused) {
+			expect({ text: text.join('${…}'), refused: lite(text) }).toEqual({ text: text.join('${…}'), refused: expect.stringContaining(expected) })
+		}
+	})
+
+	test('every statement but a query, an INSERT, an UPDATE or a DELETE is refused: DDL, PRAGMA, ATTACH, a transaction', () => {
+		const refused: readonly [readonly string[], string][] = [
+			[parts`create table t (id int)`, 'CREATE TABLE is refused'],
+			[parts`create trigger t after insert on notes begin delete from notes; end`, 'the template holds 2'],
+			[parts`create temp trigger t after insert on notes begin select 1 end`, 'CREATE TEMP is refused'],
+			[parts`create view v as select * from notes`, 'CREATE VIEW is refused'],
+			[parts`drop table notes`, 'DROP TABLE is refused'],
+			[parts`alter table notes add column x int`, 'ALTER TABLE is refused'],
+			[parts`pragma foreign_keys = off`, 'PRAGMA is refused'],
+			[parts`attach database 'x' as y`, 'ATTACH is refused'],
+			[parts`begin`, 'BEGIN is refused'],
+			[parts`commit`, 'COMMIT is refused'],
+			[parts`savepoint s`, 'SAVEPOINT is refused'],
+			[parts`replace into notes (id) values (${'x'})`, 'REPLACE is refused'],
+			[parts`vacuum`, 'VACUUM is refused'],
+			[parts`table notes`, 'TABLE is refused; it runs SELECT, WITH or VALUES'],
+			[parts`select 1; select 2`, 'it runs one statement, and the template holds 2'],
+		]
+		for (const [text, expected] of refused) {
+			expect({ text: text.join('${…}'), refused: lite(text) }).toEqual({ text: text.join('${…}'), refused: expect.stringContaining(expected) })
+		}
+	})
+
+	test("a 'read' statement writes nothing; a value is only a parameter the tag binds", () => {
+		expect(lite(parts`insert into notes (id) values (${'x'})`, 'read')).toContain("sql: 'read' runs queries only, and the statement holds INSERT")
+		expect(lite(parts`with x as (select 1) delete from notes`, 'read')).toContain('holds DELETE at line 1')
+		const written = 'starts a parameter the text writes, which nothing binds'
+		expect(lite(parts`select * from notes where id = ?`)).toContain(`? at line 1 ${written}`)
+		expect(lite(parts`select * from notes where id = :id`)).toContain(`: at line 1 ${written}`)
+		expect(lite(parts`select * from notes where id = @id`)).toContain(`@ at line 1 ${written}`)
+		expect(lite(parts`select * from notes where id = $id`)).toContain(`$ at line 1 ${written}`)
+		expect(lite(parts`select * from notes where id = #id`)).toContain(`# at line 1 ${written}`)
+		expect(lite(parts`select * from notes where id = ?1`)).toContain('the text holds ? and a digit')
+		expect(lite(parts`select * from notes where id = ':id' and title = '?'`)).toBeUndefined()
+		expect(lite(parts`select * from notes where title = '${'x'}'`)).toContain('is not bound; interpolate a whole value')
+		expect(lite(parts`select * from notes where title = [${'x'}]`)).toContain('is not bound; interpolate a whole value')
+	})
+})
+
 /** A tag whose scopes answer `terms` for every capability and table, over a session that is never reached. */
 function scopedTag(terms: ScopeTerms): { sql: SqlTag; sent: () => number } {
 	let sent = 0
@@ -204,7 +294,7 @@ function scopedTag(terms: ScopeTerms): { sql: SqlTag; sent: () => number } {
 			return Promise.reject(new Error('the statement reached the session'))
 		},
 	}
-	return { sql: sqlTag(site, SCHEMA, () => terms, () => {}), sent: () => sent }
+	return { sql: sqlTag(site, PG, () => terms), sent: () => sent }
 }
 
 const REACHED = 'the statement reached the session'
@@ -213,7 +303,7 @@ const ONE: ScopeTerms = [[{ column: 'organization_id', value: 'o1' }]]
 describe('ctx.sql.scope, before anything is sent', () => {
 	test('a fragment is a frozen object without a prototype, and nothing an application builds or patches passes for one', async () => {
 		const { sql, sent } = scopedTag('all')
-		const fragment = sql.scope({}, 'notes', 'n')
+		const fragment = sql.scope({}, 'notes', { alias: 'n' })
 		expect(Object.getPrototypeOf(fragment)).toBeNull()
 		expect(Object.isFrozen(fragment)).toBe(true)
 		expect(Reflect.set(fragment, 'kind', 'other')).toBe(false)
@@ -231,7 +321,7 @@ describe('ctx.sql.scope, before anything is sent', () => {
 	test('a fragment of another site is refused, whether that site still runs or ended', async () => {
 		const own = scopedTag(ONE)
 		const other = scopedTag('all')
-		await expect(own.sql(Row)`select n.id as v from notes n where ${other.sql.scope({}, 'notes', 'n')}`).rejects.toThrow(
+		await expect(own.sql(Row)`select n.id as v from notes n where ${other.sql.scope({}, 'notes', { alias: 'n' })}`).rejects.toThrow(
 			'a ctx.sql.scope(…) of another invocation or site is refused',
 		)
 		expect(own.sent()).toBe(0)
@@ -240,7 +330,7 @@ describe('ctx.sql.scope, before anything is sent', () => {
 	test('a fragment inside a literal, a quoted name, a dollar body or a comment is refused, also one with no value', async () => {
 		for (const terms of ['all', [], ONE] satisfies ScopeTerms[]) {
 			const { sql, sent } = scopedTag(terms)
-			const scope = sql.scope({}, 'notes', 'n')
+			const scope = sql.scope({}, 'notes', { alias: 'n' })
 			const refused = [
 				() => sql(Row)`select n.id as v from notes n where '${scope}' <> ''`,
 				() => sql(Row)`select n.id as v from notes n where "${scope}" is null`,
@@ -253,28 +343,32 @@ describe('ctx.sql.scope, before anything is sent', () => {
 		}
 	})
 
-	test('a fragment stands alone, joined by AND, at the top of a WHERE or JOIN … ON clause without a top-level OR', async () => {
+	test("where a fragment stands in the statement is its author's and its approver's: no placement is policed", async () => {
 		const { sql } = scopedTag(ONE)
-		const scope = () => sql.scope({}, 'notes', 'n')
+		const scope = () => sql.scope({}, 'notes', { alias: 'n' })
 		const admitted = [
 			() => sql(Row)`select n.id as v from notes n where ${scope()}`,
-			() => sql(Row)`select n.id as v from notes n where (n.title = ${'a'} or n.title = ${'b'}) and ${scope()} order by n.id`,
-			() => sql(Row)`select n.id as v from notes n where ${scope()} and n.trashed is distinct from true`,
 			() => sql(Row)`select w.id as v from workspaces w join notes n on n.workspace_id = w.id and ${scope()} where w.name = ${'x'}`,
-			() => sql(Row)`select w.id as v from workspaces w where w.id in (select n.workspace_id from notes n where ${scope()})`,
+			() => sql(Row)`select n.id as v from notes n where n.title = ${'public'} or ${scope()}`,
+			() => sql(Row)`select n.id as v from notes n where not ${scope()}`,
+			() => sql(Row)`select ${scope()} as v from notes n`,
 		]
 		for (const statement of admitted) await expect(statement()).rejects.toThrow(REACHED)
-		const refused: readonly [() => Promise<unknown>, string][] = [
-			[() => sql(Row)`select n.id as v from notes n where n.title = ${'public'} or ${scope()}`, 'has an OR at its top level'],
-			[() => sql(Row)`select n.id as v from notes n where n.title = ${'a'} or n.trashed and ${scope()}`, 'has an OR at its top level'],
-			[() => sql(Row)`select n.id as v from notes n where ${scope()} and n.title = ${'a'} or true`, 'has an OR at its top level'],
-			[() => sql(Row)`select n.id as v from notes n where not ${scope()}`, 'must stand alone, joined by AND'],
-			[() => sql(Row)`select n.id as v from notes n where ${scope()} = false`, 'must stand alone, joined by AND'],
-			[() => sql(Row)`select n.id as v from notes n where (${scope()})`, 'stands inside parentheses'],
-			[() => sql(Row)`select ${scope()} as v from notes n`, 'stands outside a WHERE or JOIN … ON clause'],
-			[() => sql(Row)`select n.id as v from notes n where n.word_count between 1 and ${scope()}`, 'put BETWEEN … AND … in parentheses'],
-		]
-		for (const [statement, message] of refused) await expect(statement()).rejects.toThrow(message)
+	})
+
+	test('the options are { alias, use }: the alias as a bare string, another key and an accessor are refused', () => {
+		const { sql } = scopedTag(ONE)
+		expect(() => Reflect.apply(sql.scope, undefined, [{}, 'notes', 'n'])).toThrow("write ctx.sql.scope(capability, table, { alias: 'n' })")
+		expect(() => Reflect.apply(sql.scope, undefined, [{}, 'notes', { as: 'n' }])).toThrow("use 'read', 'update' or 'delete'")
+		expect(() => Reflect.apply(sql.scope, undefined, [{}, 'notes', { use: 'insert' }])).toThrow("use 'read', 'update' or 'delete'")
+		expect(() =>
+			Reflect.apply(sql.scope, undefined, [{}, 'notes', {
+				get alias() {
+					return 'n'
+				},
+			}])
+		).toThrow("use 'read', 'update' or 'delete'")
+		expect(() => sql.scope({}, 'notes', { use: 'update' })).toThrow("sql: 'read' runs queries only, and ctx.sql.scope(…, { use: 'update' })")
 	})
 })
 
@@ -312,9 +406,9 @@ describe('ctx.sql.scope of an app capability reaches what ctx.db.app reaches', (
 
 	test('a dimension or child table by its read action: every row', async () => {
 		dialect.log.length = 0
-		await sql(z.object({}))`select n.id from notes n where ${sql.scope(authority.app('notes.read'), 'notes', 'n')}`
-		await sql(z.object({}))`select c.id from note_comments c where ${sql.scope(authority.app('notes.read'), 'note_comments', 'c')}`
-		await sql(z.object({}))`select f.id from note_flags f where ${sql.scope(authority.app('notes.delete'), 'note_flags', 'f')}`
+		await sql(z.object({}))`select n.id from notes n where ${sql.scope(authority.app('notes.read'), 'notes', { alias: 'n' })}`
+		await sql(z.object({}))`select c.id from note_comments c where ${sql.scope(authority.app('notes.read'), 'note_comments', { alias: 'c' })}`
+		await sql(z.object({}))`select f.id from note_flags f where ${sql.scope(authority.app('notes.delete'), 'note_flags', { alias: 'f' })}`
 		expect(dialect.log.map((statement) => statement.sql)).toEqual([
 			'select n.id from notes n where (true)',
 			'select c.id from note_comments c where (true)',
@@ -335,7 +429,7 @@ describe('ctx.sql.scope of an app capability reaches what ctx.db.app reaches', (
 
 	test('an action of the appRead of a dimension table reads every row; one of its appCount reads none, so it is refused', async () => {
 		dialect.log.length = 0
-		await sql(z.object({}))`select n.id from notes n where ${sql.scope(authority.app('notes.export'), 'notes', 'n')}`
+		await sql(z.object({}))`select n.id from notes n where ${sql.scope(authority.app('notes.export'), 'notes', { alias: 'n' })}`
 		expect(dialect.log.map((statement) => statement.sql)).toEqual(['select n.id from notes n where (true)'])
 		expect(() => sql.scope(authority.app('notes.count'), 'notes')).toThrow(
 			'an app capability of notes.count only counts notes (its appCount): it reads no row, so list, aggregate and a scope fragment need its read action notes.read',
@@ -344,8 +438,8 @@ describe('ctx.sql.scope of an app capability reaches what ctx.db.app reaches', (
 
 	test('an application table by any action its policy names, and by no other', async () => {
 		dialect.log.length = 0
-		await sql(z.object({}))`select s.id from settings s where ${sql.scope(authority.app('settings.read'), 'settings', 's')}`
-		await sql(z.object({}))`select s.id from settings s where ${sql.scope(authority.app('settings.edit'), 'settings', 's')}`
+		await sql(z.object({}))`select s.id from settings s where ${sql.scope(authority.app('settings.read'), 'settings', { alias: 's' })}`
+		await sql(z.object({}))`select s.id from settings s where ${sql.scope(authority.app('settings.edit'), 'settings', { alias: 's' })}`
 		expect(dialect.log.map((statement) => statement.sql)).toEqual([
 			'select s.id from settings s where (true)',
 			'select s.id from settings s where (true)',
@@ -362,7 +456,7 @@ describe('ctx.sql.scope of an app capability reaches what ctx.db.app reaches', (
 	})
 })
 
-describe("ctx.sql.scope takes the statement's operation: a fragment on its UPDATE or DELETE target needs that operation's action", () => {
+describe("ctx.sql.scope takes the operation its author states: a fragment marked use: 'update' or 'delete' needs that operation's action", () => {
 	const dialect = new RecordingDialect()
 	const authority = new TestAuthority('user:alice')
 	const layer = scoped(tables)
@@ -375,43 +469,37 @@ describe("ctx.sql.scope takes the statement's operation: a fragment on its UPDAT
 	const note = <const A extends string>(action: A) => authority.ref('note', action, 'n1', { workspace: 'w1', organization: 'o1' })
 	const sent = () => dialect.log.map((statement) => statement.sql)
 
-	test('a write under a read action is refused, whatever the grant kind', async () => {
-		dialect.log.length = 0
-		await expect(sql(Row)`update notes set title = ${'x'} where ${sql.scope(authority.app('notes.read'), 'notes')}`).rejects.toThrow(
-			'an app capability writes application tables only: UPDATE of notes',
-		)
-		await expect(sql(Row)`update notes set title = ${'x'} where ${sql.scope(note('notes.read'), 'notes')}`).rejects.toThrow(
+	test('a write target under a read action is refused when the fragment is built, whatever the grant kind', () => {
+		const update = { use: 'update' } as const
+		expect(() => sql.scope(authority.app('notes.read'), 'notes', update)).toThrow('an app capability writes application tables only: UPDATE of notes')
+		expect(() => sql.scope(note('notes.read'), 'notes', update)).toThrow(
 			'UPDATE of notes needs its update action notes.write; the capability holds notes.read',
 		)
-		await expect(sql(Row)`delete from notes where ${sql.scope(note('notes.write'), 'notes')}`).rejects.toThrow(
+		expect(() => sql.scope(note('notes.write'), 'notes', { use: 'delete' })).toThrow(
 			'DELETE of notes needs its delete action notes.delete; the capability holds notes.write',
 		)
-		const within = authority.within('workspace', 'notes.read', ['w1'])
-		await expect(sql(Row)`update notes set title = ${'x'} where ${sql.scope(within, 'notes')}`).rejects.toThrow(
+		expect(() => sql.scope(authority.within('workspace', 'notes.read', ['w1']), 'notes', update)).toThrow(
 			'UPDATE of notes needs its update action notes.write; the capability holds notes.read',
 		)
-		await expect(sql(Row)`update settings set value = ${'x'} where ${sql.scope(authority.app('settings.read'), 'settings')}`).rejects.toThrow(
+		expect(() => sql.scope(authority.app('settings.read'), 'settings', update)).toThrow(
 			'UPDATE of settings needs its update action settings.edit; the capability holds settings.read',
 		)
-		await expect(
-			sql(Row)`update settings set value = ${'x'} where ${sql.scope(authority.within('workspace', 'settings.read', ['w1']), 'settings')}`,
-		).rejects.toThrow('a scoped site writes no application table: UPDATE of settings')
-		expect(sent()).toEqual([])
+		expect(() => sql.scope(authority.within('workspace', 'settings.read', ['w1']), 'settings', update)).toThrow(
+			'a scoped site writes no application table: UPDATE of settings',
+		)
+		expect(() => sql.scope(authority.app('notes.read'), 'countries', update)).toThrow(CapabilityError)
 	})
 
-	test("the operation's own action writes its rows, and a fragment elsewhere in the statement reads", async () => {
+	test("the operation's own action writes its rows; the statement is not read for which fragment it writes", async () => {
 		dialect.log.length = 0
-		await sql(Row)`update notes set title = ${'x'} where ${sql.scope(note('notes.write'), 'notes')}`
-		await sql(Row)`delete from notes n where ${sql.scope(note('notes.delete'), 'notes', 'n')}`
-		await sql(Row)`update notes set title = ${'x'} where ${sql.scope(authority.within('workspace', 'notes.write', ['w1']), 'notes')}`
-		await sql(Row)`update settings set value = ${'x'} where ${sql.scope(authority.app('settings.edit'), 'settings')}`
-		await sql(Row)`delete from note_comments c where c.note_id in (select n.id from notes n where ${
-			sql.scope(authority.within('workspace', 'notes.read', ['w1']), 'notes', 'n')
-		})`
-		await sql(Row)`insert into note_comments (id, note_id, workspace_id, organization_id, body)
-			select ${'c1'}, n.id, n.workspace_id, n.organization_id, ${'copied'} from notes n where ${sql.scope(note('notes.read'), 'notes', 'n')}`
-		expect(sent()).toHaveLength(6)
-		expect(sent()[3]).toBe('update settings set value = $1 where (true)')
+		await sql(Row)`update notes set title = ${'x'} where ${sql.scope(note('notes.write'), 'notes', { use: 'update' })}`
+		await sql(Row)`delete from notes n where ${sql.scope(note('notes.delete'), 'notes', { alias: 'n', use: 'delete' })}`
+		await sql(Row)`update settings set value = ${'x'} where ${sql.scope(authority.app('settings.edit'), 'settings', { use: 'update' })}`
+		// A read fragment on the written table is admitted: using the fragment as its author marked it is the approver's to check.
+		await sql(Row)`update notes set title = ${'x'} where ${sql.scope(note('notes.read'), 'notes')}`
+		await sql(Row)`update countries set name = ${'x'} where code = ${'CZ'}`
+		expect(sent()).toHaveLength(5)
+		expect(sent()[2]).toBe('update settings set value = $1 where (true)')
 	})
 
 	test('a read under an action the table does not name, or a list under one its Within does not read with, is refused', async () => {
@@ -419,28 +507,18 @@ describe("ctx.sql.scope takes the statement's operation: a fragment on its UPDAT
 		expect(() => reader.scope(authority.within('workspace', 'notes.write', ['w1']), 'notes')).toThrow(
 			'a Within of notes.write does not read notes: it reads with its read action notes.read',
 		)
-		await expect(
-			sql(Row)`select n.id from notes n where ${sql.scope(authority.within('workspace', 'notes.write', ['w1']), 'notes', 'n')}`,
-		).rejects.toThrow('a Within of notes.write does not read notes: it reads with its read action notes.read')
+		expect(() => sql.scope(authority.within('workspace', 'notes.write', ['w1']), 'notes', { alias: 'n' })).toThrow(
+			'a Within of notes.write does not read notes: it reads with its read action notes.read',
+		)
 	})
 
 	test('a scoped site reads an application table with its read action, as ctx.db.app does', async () => {
 		dialect.log.length = 0
-		await reader(Row)`select s.id from settings s where ${reader.scope(authority.within('workspace', 'settings.read', ['w1']), 'settings', 's')}`
+		await reader(Row)`select s.id from settings s where ${
+			reader.scope(authority.within('workspace', 'settings.read', ['w1']), 'settings', { alias: 's' })
+		}`
 		expect(sent()).toEqual(['select s.id from settings s where (true)'])
 		expect(() => reader.scope(note('notes.read'), 'settings')).toThrow('a scoped site reads settings with its read action settings.read only')
-	})
-
-	test('a reference table as a write target is refused, with a fragment or without', async () => {
-		dialect.log.length = 0
-		await expect(sql(Row)`update countries set name = ${'x'} where code = ${'CZ'}`).rejects.toThrow(
-			'countries is a reference table, which no statement writes: its rows come from a migration',
-		)
-		await expect(sql(Row)`insert into countries (code, name) values (${'PL'}, ${'Poland'})`).rejects.toThrow('countries is a reference table')
-		await expect(sql(Row)`delete from countries where code = ${'CZ'}`).rejects.toThrow('countries is a reference table')
-		await expect(sql(Row)`with gone as (delete from countries returning code) select code from gone`).rejects.toThrow(
-			'countries is a reference table',
-		)
 	})
 })
 
@@ -555,7 +633,7 @@ describe.skipIf(opened === null)('ctx.sql on Postgres, as the runtime role', () 
 
 		const query = invocation('read', true)
 		const session = await query.transaction.session()
-		const write = runApplicationStatement(session, "insert into organizations (id, name) values ('o9', 'Nine')", [])
+		const write = runApplicationStatement(session, "insert into organizations (id, name) values ('o9', 'Nine')", [], 'write')
 		await expect(write).rejects.toBeInstanceOf(DatabaseError)
 		await expect(write).rejects.toMatchObject({ sqlState: '25006' })
 		await expect(query.transaction.commit()).rejects.toThrow('a statement of this invocation failed')
@@ -606,7 +684,7 @@ describe.skipIf(opened === null)('ctx.sql on Postgres, as the runtime role', () 
 		const work = invocation('write')
 		await expect(work.sql(z.object({}))`delete from fabrika_migrations`).rejects.toThrow("'fabrika_migrations' at line 1 is the framework's")
 		const session = await work.transaction.session()
-		await expect(runApplicationStatement(session, 'delete from fabrika_migrations', [])).rejects.toMatchObject({ sqlState: '42501' })
+		await expect(runApplicationStatement(session, 'delete from fabrika_migrations', [], 'write')).rejects.toMatchObject({ sqlState: '42501' })
 		await expect(work.transaction.commit()).rejects.toThrow('a statement of this invocation failed')
 	})
 	test('a caught refusal still fails the invocation: a refused statement after a write, a refused value before any', async () => {
@@ -682,31 +760,37 @@ describe.skipIf(opened === null)("ctx.sql.scope: the capability's whole predicat
 
 	test("a Ref matches its object's column and every link of its chain, so a moved container is out", async () => {
 		const w1 = alice.ref('workspace', 'notes.read', 'w1', { organization: 'o1' })
-		expect(await ids((sql) => sql.scope(w1, 'notes', 'n'))).toEqual(['scope-1'])
+		expect(await ids((sql) => sql.scope(w1, 'notes', { alias: 'n' }))).toEqual(['scope-1'])
 		const stale = alice.ref('workspace', 'notes.read', 'w1', { organization: 'o2' })
-		expect(await ids((sql) => sql.scope(stale, 'notes', 'n'))).toEqual([])
+		expect(await ids((sql) => sql.scope(stale, 'notes', { alias: 'n' }))).toEqual([])
 		const note = alice.ref('note', 'notes.write', 'scope-2', { workspace: 'w2', organization: 'o1' })
-		expect(await ids((sql) => sql.scope(note, 'notes', 'n'))).toEqual(['scope-2'])
+		expect(await ids((sql) => sql.scope(note, 'notes', { alias: 'n' }))).toEqual(['scope-2'])
 		const organization = alice.ref('organization', 'notes.read', 'o1')
-		expect(await ids((sql) => sql.scope(organization, 'notes', 'n'))).toEqual(['scope-1', 'scope-2'])
+		expect(await ids((sql) => sql.scope(organization, 'notes', { alias: 'n' }))).toEqual(['scope-1', 'scope-2'])
 	})
 
 	test("a Within matches its values, each container grant on its own column, every row for 'all' and none when empty", async () => {
 		const mixed = alice.within('workspace', 'notes.read', ['w2'], [{ dimension: 'organization', values: ['o2'] }])
-		expect(await ids((sql) => sql.scope(mixed, 'notes', 'n'))).toEqual(['scope-2', 'scope-3'])
-		expect(await ids((sql) => sql.scope(alice.within('organization', 'notes.read', 'all'), 'notes', 'n'))).toEqual(['scope-1', 'scope-2', 'scope-3'])
-		expect(await ids((sql) => sql.scope(alice.within('workspace', 'notes.read', []), 'notes', 'n'))).toEqual([])
+		expect(await ids((sql) => sql.scope(mixed, 'notes', { alias: 'n' }))).toEqual(['scope-2', 'scope-3'])
+		expect(await ids((sql) => sql.scope(alice.within('organization', 'notes.read', 'all'), 'notes', { alias: 'n' }))).toEqual([
+			'scope-1',
+			'scope-2',
+			'scope-3',
+		])
+		expect(await ids((sql) => sql.scope(alice.within('workspace', 'notes.read', []), 'notes', { alias: 'n' }))).toEqual([])
 	})
 
 	test('an app capability matches every row of a table ctx.db.app lists for its action, and is refused any other', async () => {
-		expect(await ids((sql) => sql.scope(alice.app('notes.read'), 'notes', 'n'))).toEqual(['scope-1', 'scope-2', 'scope-3'])
+		expect(await ids((sql) => sql.scope(alice.app('notes.read'), 'notes', { alias: 'n' }))).toEqual(['scope-1', 'scope-2', 'scope-3'])
 		const writer = invocation('write')
 		await writer.sql(z.object({}))`insert into settings (id, value) values ('setting-1', 'a'), ('setting-2', 'b')`
 		await writer.transaction.commit()
 		const work = invocation('read', true)
 		try {
 			const settings = async (action: string) =>
-				(await work.sql(Id)`select s.id from settings s where ${work.sql.scope(alice.app(action), 'settings', 's')} order by s.id`).map((row) => row.id)
+				(await work.sql(Id)`select s.id from settings s where ${work.sql.scope(alice.app(action), 'settings', { alias: 's' })} order by s.id`).map((
+					row,
+				) => row.id)
 			expect(await settings('settings.read')).toEqual(['setting-1', 'setting-2'])
 			expect(await settings('settings.edit')).toEqual(['setting-1', 'setting-2'])
 			expect(() => work.sql.scope(alice.app('notes.read'), 'settings')).toThrow('settings does not name the action')
@@ -721,7 +805,7 @@ describe.skipIf(opened === null)("ctx.sql.scope: the capability's whole predicat
 
 	test('the values are parameters: a value that would be SQL matches nothing', async () => {
 		const hostile = alice.ref('workspace', 'notes.read', "w1' or true --", { organization: 'o1' })
-		expect(await ids((sql) => sql.scope(hostile, 'notes', 'n'))).toEqual([])
+		expect(await ids((sql) => sql.scope(hostile, 'notes', { alias: 'n' }))).toEqual([])
 	})
 
 	test('a table the capability does not reach, an unknown table, a bad alias and a foreign scope are refused', async () => {
@@ -730,10 +814,10 @@ describe.skipIf(opened === null)("ctx.sql.scope: the capability's whole predicat
 		expect(() => work.sql.scope(note, 'workspaces')).toThrow('a Ref of note does not reach workspaces')
 		expect(() => work.sql.scope(alice.within('workspace', 'notes.read', ['w1']), 'secrets')).toThrow('a Within of workspace does not reach secrets')
 		expect(() => work.sql.scope(note, 'invoices')).toThrow('invoices is not a table of src/db/tables.ts')
-		expect(() => work.sql.scope(note, 'notes', 'n; drop')).toThrow('an alias of lowercase letters')
+		expect(() => work.sql.scope(note, 'notes', { alias: 'n; drop' })).toThrow('an alias of lowercase letters')
 		await work.transaction.rollback()
 		const other = invocation('read', true)
-		const foreign = other.sql.scope(note, 'notes', 'n')
+		const foreign = other.sql.scope(note, 'notes', { alias: 'n' })
 		const mine = invocation('read', true)
 		await expect(mine.sql(Id)`select n.id from notes n where ${foreign}`).rejects.toThrow('a ctx.sql.scope(…) of another invocation or site is refused')
 		await other.transaction.rollback()
@@ -741,7 +825,7 @@ describe.skipIf(opened === null)("ctx.sql.scope: the capability's whole predicat
 	})
 })
 
-describe.skipIf(opened === null)('ctx.sql.scope on Postgres: each fragment answers for the relation of its own query block', () => {
+describe.skipIf(opened === null)("ctx.sql.scope on Postgres: a fragment marked use: 'update' or 'delete' writes under that action", () => {
 	const Id = z.object({ id: z.string() })
 	const Title = z.object({ id: z.string(), title: z.string() })
 	const inW1 = <const A extends string>(action: A) => alice.within('workspace', action, ['w1'])
@@ -756,92 +840,49 @@ describe.skipIf(opened === null)('ctx.sql.scope on Postgres: each fragment answe
 		await writer.transaction.commit()
 	}
 
-	test('ON CONFLICT … DO UPDATE is an UPDATE of the INSERT target: a read capability is refused for every grant kind', async () => {
-		await seedBlock('conflict')
-		const refusals: [(sql: SqlTag) => Promise<unknown>, string][] = [
-			[
-				(sql) =>
-					sql(Id)`insert into settings (id, value) values ('conflict', 'changed')
-						on conflict (id) do update set value = excluded.value where ${sql.scope(alice.app('settings.read'), 'settings')} returning id`,
-				'UPDATE of settings needs its update action settings.edit; the capability holds settings.read',
-			],
-			[
-				(sql) =>
-					sql(Id)`insert into settings as s (id, value) values ('conflict', 'changed')
-						on conflict (id) do update set value = excluded.value where ${sql.scope(inW1('settings.read'), 'settings', 's')} returning id`,
-				'a scoped site writes no application table: UPDATE of settings',
-			],
-			[
-				(sql) =>
-					sql(Id)`insert into notes (id, workspace_id, organization_id, title, created_by, version)
-						values ('conflict-a', 'w1', 'o1', 'changed', 'u', 1)
-						on conflict (id) do update set title = excluded.title where ${sql.scope(noteRef('notes.read', 'conflict-a'), 'notes')} returning id`,
-				'UPDATE of notes needs its update action notes.write; the capability holds notes.read',
-			],
-			[
-				(sql) =>
-					sql(Id)`insert into notes (id, workspace_id, organization_id, title, created_by, version)
-						select id, workspace_id, organization_id, 'changed', created_by, version from notes where id = 'conflict-b'
-						on conflict (id) do update set title = excluded.title where ${sql.scope(inW1('notes.read'), 'notes')} returning id`,
-				'UPDATE of notes needs its update action notes.write; the capability holds notes.read',
-			],
-		]
-		for (const [statement, message] of refusals) {
-			const work = invocation('write')
-			await expect(statement(work.sql)).rejects.toThrow(message)
-			await work.transaction.rollback()
-		}
-		const reader = invocation('write')
-		expect(await titles(reader, 'conflict')).toEqual(['conflict-a:before', 'conflict-b:before'])
-		await reader.transaction.rollback()
-	})
-
 	test('ON CONFLICT … DO UPDATE under the update action writes the conflicting row', async () => {
 		await seedBlock('upsert')
 		const work = invocation('write')
 		await work.sql(Id)`insert into settings as s (id, value) values ('upsert', 'changed')
-			on conflict (id) do update set value = excluded.value where ${work.sql.scope(alice.app('settings.edit'), 'settings', 's')} returning id`
+			on conflict (id) do update set value = excluded.value where ${
+			work.sql.scope(alice.app('settings.edit'), 'settings', { alias: 's', use: 'update' })
+		} returning id`
 		await work.sql(Id)`insert into notes (id, workspace_id, organization_id, title, created_by, version)
 			values ('upsert-a', 'w1', 'o1', 'changed', 'u', 1)
-			on conflict (id) do update set title = excluded.title where ${work.sql.scope(noteRef('notes.write', 'upsert-a'), 'notes')} returning id`
+			on conflict (id) do update set title = excluded.title where ${
+			work.sql.scope(noteRef('notes.write', 'upsert-a'), 'notes', { use: 'update' })
+		} returning id`
 		expect(await work.sql(z.object({ value: z.string() }))`select value from settings where id = 'upsert'`).toEqual([{ value: 'changed' }])
 		expect(await titles(work, 'upsert')).toEqual(['upsert-a:changed', 'upsert-b:before'])
 		await work.transaction.rollback()
 	})
 
-	test('two data-modifying CTE blocks of one table each answer for their own capability', async () => {
+	test('each block of a data-modifying CTE carries its own capability, and the wrong one fails before anything is sent', async () => {
 		await seedBlock('cte')
 		const work = invocation('write')
 		await work.sql(Id)`with changed as (
-				update notes set title = 'updated' where id = 'cte-a' and ${work.sql.scope(inW1('notes.write'), 'notes')} returning id
+				update notes set title = 'updated' where id = 'cte-a' and ${work.sql.scope(inW1('notes.write'), 'notes', { use: 'update' })} returning id
 			)
-			delete from notes where id = 'cte-b' and ${work.sql.scope(inW1('notes.delete'), 'notes')} returning id`
+			delete from notes where id = 'cte-b' and ${work.sql.scope(inW1('notes.delete'), 'notes', { use: 'delete' })} returning id`
 		expect(await titles(work, 'cte')).toEqual(['cte-a:updated'])
 		await work.transaction.rollback()
 		const swapped = invocation('write')
-		await expect(
-			swapped.sql(Id)`with changed as (
-				update notes set title = 'updated' where id = 'cte-a' and ${swapped.sql.scope(inW1('notes.delete'), 'notes')} returning id
-			)
-			delete from notes where id = 'cte-b' and ${swapped.sql.scope(inW1('notes.write'), 'notes')} returning id`,
-		).rejects.toThrow('UPDATE of notes needs its update action notes.write; the capability holds notes.delete')
-		await swapped.transaction.rollback()
+		expect(() => swapped.sql.scope(inW1('notes.delete'), 'notes', { use: 'update' })).toThrow(
+			'UPDATE of notes needs its update action notes.write; the capability holds notes.delete',
+		)
+		await expect(swapped.transaction.commit()).rejects.toThrow('a statement of this invocation failed')
 	})
 
-	test('another occurrence of the written table reads: a subquery or a self-join takes its read action', async () => {
+	test('a read fragment and a write fragment of one table side by side: a subquery or a self-join', async () => {
 		await seedBlock('self')
 		const work = invocation('write')
 		await work.sql(Id)`update notes set title = 'from-subquery'
-			where id in (select m.id from notes m where m.id = 'self-a' and ${work.sql.scope(inW1('notes.read'), 'notes', 'm')})
-				and ${work.sql.scope(inW1('notes.write'), 'notes')} returning id`
+			where id in (select m.id from notes m where m.id = 'self-a' and ${work.sql.scope(inW1('notes.read'), 'notes', { alias: 'm' })})
+				and ${work.sql.scope(inW1('notes.write'), 'notes', { use: 'update' })} returning id`
 		await work.sql(Id)`update notes set title = 'from-join' from notes m
-			where notes.id = m.id and m.id = 'self-b' and ${work.sql.scope(inW1('notes.read'), 'notes', 'm')}
-				and ${work.sql.scope(inW1('notes.write'), 'notes')} returning notes.id`
+			where notes.id = m.id and m.id = 'self-b' and ${work.sql.scope(inW1('notes.read'), 'notes', { alias: 'm' })}
+				and ${work.sql.scope(inW1('notes.write'), 'notes', { use: 'update' })} returning notes.id`
 		expect(await titles(work, 'self')).toEqual(['self-a:from-subquery', 'self-b:from-join'])
-		await expect(
-			work.sql(Id)`update notes set title = 'x' from notes m
-				where notes.id = m.id and ${work.sql.scope(inW1('notes.read'), 'notes', 'm')} and ${work.sql.scope(inW1('notes.read'), 'notes')}`,
-		).rejects.toThrow('UPDATE of notes needs its update action notes.write; the capability holds notes.read')
 		await work.transaction.rollback()
 	})
 })

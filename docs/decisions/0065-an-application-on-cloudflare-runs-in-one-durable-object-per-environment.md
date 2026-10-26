@@ -101,9 +101,18 @@ SQLite database. The Worker only forwards each request to it.**
    for again within 15 s.
 6. **Files are R2 objects.** The provider binds a bucket per application environment; the object's file store is R2.
    A kind that scans its uploads is refused on Cloudflare until a scanner runs there.
-7. **`ctx.sql` is refused on SQLite.** On Postgres the runtime role is the boundary under an application's raw SQL
-   ([ADR-0017](0017-service-owned-postgres-migrations.md)); a Durable Object has no roles, so the classifier would be
-   the only boundary, and it reads Postgres's lexical rules. Raw SQL on Cloudflare waits for a SQLite lexer of its own.
+7. **`ctx.sql` runs on SQLite under text rules of its own.** A Durable Object has no roles, so the boundary under an
+   application's raw SQL is what runs before and around it: workerd's authorizer (no `ATTACH`, no `PRAGMA` that writes,
+   no `_cf_*` table, no transaction statement), the maintenance fence on every write, and the tag's text rules over a
+   SQLite lexer (`lexSqlite` in `@fabrika/platform-node/sql`, beside Postgres's): one statement, a read or DML first
+   keyword, values only as `?N` parameters it binds (a `?`, `:x`, `@x`, `$x` or `#x` the text writes is refused), and no
+   `fabrika_*` or `sqlite_*` name in any spelling, a string included, because SQLite reads `FROM 'name'` as a table.
+   There is no function list on SQLite: its built-ins reach nothing outside the database. A `'read'` site's statement
+   runs in a `transactionSync` of its own, also inside a writing invocation, and one whose cursor reports
+   `rowsWritten` rolls back and fails the invocation. An application migration runs verbatim, so the checker refuses
+   one that names a `fabrika_*` table but `REFERENCES fabrika_files`, the file column's key (`cloudflare-framework-name`).
+   The provider deploys a site that declares `sql` from the release that serves it (`servesRawSql`, `0.9.0-dev.5`) on
+   and refuses it for an older pin, whose boot would refuse it.
 8. **The platform's services stay on D1.** IAM, Control and Operations write through repository operations that are
    atomic per statement or batch ([portability surface](../reference/portability-surface.md)); they promise no
    interactive transaction, serve every application of the installation, and keep D1's export, Time Travel and

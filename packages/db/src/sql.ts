@@ -1,26 +1,27 @@
 // `ctx.sql(Row)`…``: one statement of the application's own SQL, for a site that declares `sql: 'read' | 'write'`. The
-// template's static text is classified before anything is sent: an interpolation is always a bound parameter (`$n`),
-// never SQL. The statement runs in the site's session — the invocation's transaction, or a job's fenced one — so it
-// commits and rolls back with every `ctx.db` handle. The name rules are defense in depth; the runtime role
-// (`run_<id>`, DML only) is what bounds a statement they admit.
+// template's static text is classified before anything is sent: an interpolation is always a bound parameter (`$n` on
+// Postgres, `?n` on SQLite), never SQL. The statement runs in the site's session — the invocation's transaction, or a
+// job's fenced one — so it commits and rolls back with every `ctx.db` handle. The hard rules keep it inside the
+// platform (the framework's tables, the catalog, the transaction); what it does with the application's own data is the
+// approver's to review, since the `sql:` declaration marks the site for a closer look (ADR-0012, ADR-0050).
 
 import {
 	dmlForeignSchema,
 	frameworkReference,
 	lexSql,
+	lexSqlite,
 	nameReferences,
-	nameText,
 	nestedStatement,
 	parenthesizedTarget,
 	refusedFunctionCall,
 	type SqlToken,
 	statementKind,
-	topLevelStatements,
+	statementsOf,
 	unicodeIdentifier,
 	upperWord,
 } from '@fabrika/platform-node/sql'
 import { z } from 'zod/v4'
-import { freeze, hasOwn, isArray, ownDescriptor, ownKeys, parseList } from './builtins'
+import { freeze, hasOwn, isArray, isSafeInteger, OBJECT_PROTOTYPE, ownDescriptor, ownKeys, parseList, prototypeOf } from './builtins'
 import { runApplicationStatement, type Session, type SqlParameter } from './database'
 import { type QueryRefusal, QueryRefusedError, SqlRowError } from './errors'
 import { isPlainIdentifier } from './identifier'
@@ -29,8 +30,11 @@ import { dayText } from './temporal'
 /** What a site declares: `'read'` runs queries only, `'write'` also `INSERT`, `UPDATE` and `DELETE`. */
 export type SqlMode = 'read' | 'write'
 
-/** A value an interpolation binds: a scalar, a `Date` (bound as ISO text), or a list of strings or numbers (an array). */
+/** A value an interpolation binds: a scalar, a `Date` (bound as ISO text), or a list of strings or numbers. */
 export type SqlValue = string | number | boolean | bigint | Date | null | readonly (string | number)[]
+
+/** The database a statement is classified for: Postgres in the application's schema, or a Durable Object's SQLite. */
+export type SqlDatabase = { readonly dialect: 'postgres'; readonly schema: string } | { readonly dialect: 'sqlite' }
 
 /** One test of a capability's scope on a table: the column holds the value, or one of the list. */
 export interface ScopeTest {
@@ -41,25 +45,23 @@ export interface ScopeTest {
 /** A capability's predicate on one table: every row (`'all'`), or an OR of AND groups; no group matches nothing. */
 export type ScopeTerms = 'all' | readonly (readonly ScopeTest[])[]
 
-/** What a fragment's table is to its statement: read, or the target of its UPDATE or DELETE. */
+/** What a fragment's table is to its statement, as its author states it: read, or the target of an UPDATE or DELETE. */
 export type ScopeUse = 'read' | 'update' | 'delete'
 
-/**
- * The scope of `capability` on `table` for `use`, as the data layer predicates its handles; throws when it does not
- * reach it for that use. `assigned` is the columns an UPDATE's SET names (none when the SET cannot be read with
- * certainty), and `undefined` before a statement is known.
- */
-export type ScopeOf = (capability: unknown, table: string, use: ScopeUse, assigned?: readonly string[]) => ScopeTerms
+/** The scope of `capability` on `table` for `use`, as the data layer predicates its handles; throws when it does not reach it. */
+export type ScopeOf = (capability: unknown, table: string, use: ScopeUse) => ScopeTerms
 
-/** The operation a write statement performs on one of its targets. */
-export type WriteOperation = 'insert' | 'update' | 'delete'
-
-/** Throws for a table no statement may write with `operation`: a reference table. */
-export type WriteTarget = (table: string, operation: WriteOperation) => void
+/** The third argument of `ctx.sql.scope`: the table's alias in the statement, and what the statement does with it. */
+export interface SqlScopeOptions {
+	/** The table's name in the statement; the table's own name by default. */
+	readonly alias?: string
+	/** `'update'` or `'delete'` where the statement writes the table, which needs that operation's action; `'read'` by default. */
+	readonly use?: ScopeUse
+}
 
 /**
- * `ctx.sql.scope(capability, table, alias?)`: the capability's whole predicate on one table, as SQL with bound values.
- * A fragment is a frozen object with no prototype; what it holds lives in this module's registry, read through
+ * `ctx.sql.scope(capability, table, { alias, use })`: the capability's whole predicate on one table, as SQL with bound
+ * values. A fragment is a frozen object with no prototype; what it holds lives in this module's registry, read through
  * methods captured at load, so no object an application builds or changes is ever taken for one.
  */
 export interface SqlScope {
@@ -68,9 +70,8 @@ export interface SqlScope {
 
 interface ScopeData {
 	readonly site: SqlSite
-	readonly capability: unknown
-	readonly table: string
 	readonly alias: string
+	readonly terms: ScopeTerms
 }
 
 const scopes = new WeakMap<object, ScopeData>()
@@ -83,7 +84,7 @@ function newScope(data: ScopeData): SqlScope {
 	const scope: SqlScope = { kind: 'sql-scope' }
 	withoutPrototype(scope, null)
 	freeze(scope)
-	register(scope, freeze({ site: data.site, capability: data.capability, table: data.table, alias: data.alias }))
+	register(scope, freeze({ site: data.site, alias: data.alias, terms: data.terms }))
 	return scope
 }
 
@@ -95,7 +96,7 @@ function scopeOf(value: unknown): ScopeData | undefined {
 /** `ctx.sql(Row)`: the tag for rows of `Row`, and `scope` for the capability's predicate inside its text. */
 export interface SqlTag {
 	<S extends z.core.$ZodType>(row: S): (text: TemplateStringsArray, ...values: readonly (SqlValue | SqlScope)[]) => Promise<z.output<S>[]>
-	scope(capability: unknown, table: string, alias?: string): SqlScope
+	scope(capability: unknown, table: string, options?: SqlScopeOptions): SqlScope
 }
 
 /** The site a tag is made for: its mode, its binding to the invocation, and the session its statements run in. */
@@ -108,15 +109,16 @@ export interface SqlSite {
 	fail(): void
 }
 
-const READ_STATEMENTS: ReadonlySet<string> = new Set(['SELECT', 'WITH', 'VALUES', 'TABLE'])
+const POSTGRES_READS: ReadonlySet<string> = new Set(['SELECT', 'WITH', 'VALUES', 'TABLE'])
+const SQLITE_READS: ReadonlySet<string> = new Set(['SELECT', 'WITH', 'VALUES'])
 const WRITE_STATEMENTS: ReadonlySet<string> = new Set(['INSERT', 'UPDATE', 'DELETE'])
 const WRITE_WORDS: ReadonlySet<string> = new Set(['INSERT', 'UPDATE', 'DELETE', 'MERGE'])
 /** `FOR UPDATE`, `FOR NO KEY UPDATE`, `FOR SHARE`, `FOR KEY SHARE`: what follows `FOR` in a locking clause. */
 const LOCK_WORDS: ReadonlySet<string> = new Set(['UPDATE', 'NO', 'SHARE', 'KEY'])
 /** ctx.sql calls reviewed built-ins only: the functions the migrations declare are not known at runtime. */
 const NO_DECLARED_FUNCTIONS: ReadonlySet<string> = new Set()
-
-const ALLOWED_STATEMENTS = "SELECT, WITH, VALUES or TABLE, and INSERT, UPDATE or DELETE on a site that declares sql: 'write'"
+/** What starts a parameter SQLite binds by name or by position (`?`, `:x`, `@x`, `$x`, `#x`): only the tag writes one. */
+const SQLITE_PARAMETER_STARTS: ReadonlySet<string> = new Set(['?', ':', '@', '$', '#'])
 
 function refuse(reason: QueryRefusal, message: string): never {
 	throw new QueryRefusedError(reason, `ctx.sql: ${message}`)
@@ -124,6 +126,9 @@ function refuse(reason: QueryRefusal, message: string): never {
 
 const isPunct = (token: SqlToken | undefined, char: string): boolean => token?.kind === 'punct' && token.char === char
 const isDigit = (token: SqlToken | undefined): boolean => token?.kind === 'punct' && token.char >= '0' && token.char <= '9'
+
+/** The character that opens a placeholder the tag writes: `$1` on Postgres, `?1` on SQLite. */
+const markerOf = (database: SqlDatabase): string => (database.dialect === 'postgres' ? '$' : '?')
 
 /** The template's static parts. A call with a plain array, or a text with an invalid escape, is refused. */
 function templateParts(text: unknown): readonly string[] {
@@ -142,26 +147,57 @@ function templateParts(text: unknown): readonly string[] {
 	return parts
 }
 
-/** The statement's text, each interpolation a `$n` placeholder between the static parts. */
-function statementText(parts: readonly string[]): string {
+/** The statement's text, each interpolation a placeholder (`$n` or `?n`) between the static parts. */
+function statementText(parts: readonly string[], marker: string): string {
 	let text = parts[0] ?? ''
 	for (let index = 1; index < parts.length; index++) {
 		const part = parts[index] ?? ''
 		if (/^[0-9]/.test(part)) {
 			refuse('sql_template', `a digit right after the value \${…} number ${index} would join its placeholder; put a space between them`)
 		}
-		text += `$${index}${part}`
+		text += `${marker}${index}${part}`
 	}
 	return text
 }
 
-/** How many `$n` placeholders the lexer sees outside literals, quoted names, dollar-quoted bodies and comments. */
-function placeholderCount(tokens: readonly SqlToken[]): number {
-	let count = 0
-	for (let index = 0; index + 1 < tokens.length; index++) {
-		if (isPunct(tokens[index], '$') && isDigit(tokens[index + 1])) count++
+/**
+ * The tokens of the statement `parts` make, refused unless each placeholder the tag writes is one the lexer sees at
+ * code level (not in a literal, a quoted name, a dollar body or a comment) and the text writes none of its own.
+ */
+function placedTokens(parts: readonly string[], database: SqlDatabase): readonly SqlToken[] {
+	const marker = markerOf(database)
+	const written = database.dialect === 'postgres' ? /\$[0-9]/ : /\?[0-9]/
+	for (const part of parts) {
+		if (written.test(part)) {
+			refuse(
+				'sql_template',
+				`the text holds ${marker} and a digit, which reads as a positional parameter; interpolate the value with \${…}, a literal one too`,
+			)
+		}
 	}
-	return count
+	const { tokens, unterminated } = database.dialect === 'postgres' ? lexSql(statementText(parts, marker)) : lexSqlite(statementText(parts, marker))
+	if (unterminated !== undefined) {
+		refuse('sql_template', `a string, quoted name, dollar-quoted body or comment at line ${unterminated} never closes`)
+	}
+	let placed = 0
+	for (let index = 0; index < tokens.length; index++) {
+		const token = tokens[index]
+		if (isPunct(token, marker) && isDigit(tokens[index + 1])) {
+			placed++
+		} else if (database.dialect === 'sqlite' && token?.kind === 'punct' && SQLITE_PARAMETER_STARTS.has(token.char)) {
+			refuse(
+				'sql_template',
+				`${token.char} at line ${token.line} starts a parameter the text writes, which nothing binds; interpolate the value with \${…}`,
+			)
+		}
+	}
+	if (placed !== parts.length - 1) {
+		refuse(
+			'sql_template',
+			'a value ${…} inside a string literal, a quoted name, a dollar-quoted body or a comment is not bound; interpolate a whole value',
+		)
+	}
+	return tokens
 }
 
 /** The first `SELECT … INTO`: it creates a table. `INSERT INTO` is the one `INTO` a statement may hold. */
@@ -185,29 +221,32 @@ function readRefusal(tokens: readonly SqlToken[]): string | undefined {
 }
 
 /**
- * The SQL `parts` make, with `$1…$n` for the values, or a `QueryRefusedError` that names what is refused: more than
- * one statement, any statement but a query (and `INSERT`/`UPDATE`/`DELETE` for `'write'`), a nested statement of
- * another kind, a qualified name outside `schema`, a `fabrika_*` or `pg_*` name, a function call outside the reviewed
- * built-ins, and a value placed where it would not be bound.
+ * The first name, quoted name or string literal SQLite could read as a framework (`fabrika_*`) or catalog (`sqlite_*`)
+ * object. SQLite folds names case-insensitively, quoted ones too, and takes a string where only a name may stand
+ * (`FROM 'fabrika_x'`), so every form counts.
  */
-export function classifySql(parts: readonly string[], mode: SqlMode, schema: string): string {
-	for (const part of parts) {
-		if (/\$[0-9]/.test(part)) {
-			refuse('sql_template', 'the text holds $ and a digit, which reads as a positional parameter; interpolate the value with ${…}, a literal one too')
-		}
+function sqliteNameRefusal(tokens: readonly SqlToken[]): { readonly name: string; readonly line: number; readonly catalog: boolean } | undefined {
+	for (const token of tokens) {
+		const text = token.kind === 'word' || token.kind === 'quoted' || token.kind === 'string' ? token.text : undefined
+		const name = text?.toLowerCase()
+		if (name === undefined) continue
+		if (name.startsWith('fabrika_')) return { name: text ?? name, line: token.line, catalog: false }
+		if (name.startsWith('sqlite_')) return { name: text ?? name, line: token.line, catalog: true }
 	}
-	const text = statementText(parts)
-	const { tokens: all, unterminated } = lexSql(text)
-	if (unterminated !== undefined) {
-		refuse('sql_template', `a string, quoted name, dollar-quoted body or comment at line ${unterminated} never closes`)
-	}
-	if (placeholderCount(all) !== parts.length - 1) {
-		refuse(
-			'sql_template',
-			'a value ${…} inside a string literal, a quoted name, a dollar-quoted body or a comment is not bound; interpolate a whole value',
-		)
-	}
-	const statements = topLevelStatements(text)
+	return undefined
+}
+
+/**
+ * The SQL `parts` make, with a bound placeholder for each value, or a `QueryRefusedError` that names what is refused.
+ * On both dialects: more than one statement, any statement but a query (and `INSERT`/`UPDATE`/`DELETE` for
+ * `'write'`), a `'read'` statement that writes or locks, a value placed where it would not be bound, and a `fabrika_*`
+ * name. On Postgres also a nested statement of another kind, `SELECT … INTO`, a `U&` name, a `pg_*` name, a qualified
+ * name outside `schema` and a function outside the reviewed built-ins; on SQLite also a `sqlite_*` name, and a
+ * parameter the text writes itself. workerd's authorizer bounds SQLite's functions, PRAGMAs and DDL.
+ */
+export function classifySql(parts: readonly string[], mode: SqlMode, database: SqlDatabase): string {
+	const all = placedTokens(parts, database)
+	const statements = statementsOf(all)
 	const [statement] = statements
 	if (statement === undefined) {
 		refuse('sql_statement', 'the template holds no statement')
@@ -217,12 +256,34 @@ export function classifySql(parts: readonly string[], mode: SqlMode, schema: str
 	}
 	const tokens = statement.tokens
 	const first = upperWord(tokens[0]) ?? ''
-	if (!READ_STATEMENTS.has(first) && !WRITE_STATEMENTS.has(first)) {
-		refuse('sql_statement', `${statementKind(tokens)} is refused; it runs ${ALLOWED_STATEMENTS}`)
+	const reads = database.dialect === 'postgres' ? POSTGRES_READS : SQLITE_READS
+	if (!reads.has(first) && !WRITE_STATEMENTS.has(first)) {
+		refuse(
+			'sql_statement',
+			`${statementKind(tokens)} is refused; it runs ${
+				database.dialect === 'postgres' ? 'SELECT, WITH, VALUES or TABLE' : 'SELECT, WITH or VALUES'
+			}, and INSERT, UPDATE or DELETE on a site that declares sql: 'write'`,
+		)
 	}
 	const writes = mode === 'read' ? (WRITE_STATEMENTS.has(first) ? `${first} at line ${statement.line}` : readRefusal(tokens)) : undefined
 	if (writes !== undefined) {
 		refuse('sql_read_only', `sql: 'read' runs queries only, and the statement holds ${writes}; declare sql: 'write' on a mutation, a job or a webhook`)
+	}
+	const framework = frameworkReference(tokens)
+	if (framework !== undefined) {
+		refuse('sql_name', `'${framework.name}' at line ${framework.line} is the framework's; ctx.sql reaches only the application's own tables`)
+	}
+	if (database.dialect === 'sqlite') {
+		const name = sqliteNameRefusal(tokens)
+		if (name !== undefined) {
+			refuse(
+				'sql_name',
+				`'${name.name}' at line ${name.line} ${
+					name.catalog ? "is SQLite's catalog" : "is the framework's"
+				}; ctx.sql reaches only the application's own tables`,
+			)
+		}
+		return statementText(parts, markerOf(database))
 	}
 	const nested = nestedStatement(tokens) ?? parenthesizedTarget(tokens)
 	if (nested !== undefined) {
@@ -235,43 +296,56 @@ export function classifySql(parts: readonly string[], mode: SqlMode, schema: str
 	if (unicodeIdentifier(tokens) !== undefined) {
 		refuse('sql_name', 'a U&"…" name is refused: write the name plainly')
 	}
-	const framework = frameworkReference(tokens)
-	if (framework !== undefined) {
-		refuse('sql_name', `'${framework.name}' at line ${framework.line} is the framework's; ctx.sql reaches only the application's own tables`)
-	}
 	for (const reference of nameReferences(tokens)) {
 		if (reference.role !== 'call' && reference.name.startsWith('pg_')) {
 			refuse('sql_name', `'${reference.name}' at line ${reference.line} is a catalog name; ctx.sql reaches only the application's own tables`)
 		}
 	}
-	const foreign = dmlForeignSchema(tokens, schema)
+	const foreign = dmlForeignSchema(tokens, database.schema)
 	if (foreign !== undefined) {
 		refuse('sql_name', `the schema '${foreign}' is outside the application's; write its tables' names unqualified`)
 	}
-	const call = refusedFunctionCall(tokens, schema, NO_DECLARED_FUNCTIONS)
+	const call = refusedFunctionCall(tokens, database.schema, NO_DECLARED_FUNCTIONS)
 	if (call !== undefined) {
 		refuse(
 			'sql_function',
 			`${call.qualifier === undefined ? '' : `${call.qualifier}.`}${call.name}(…) at line ${call.line} is not a reviewed built-in function`,
 		)
 	}
-	return text
+	return statementText(parts, markerOf(database))
 }
 
-function arrayElement(item: unknown): string {
+function arrayElement(item: unknown): string | number {
 	if (typeof item === 'string') {
-		return `"${item.replace(/["\\]/g, (char) => `\\${char}`)}"`
+		return item
 	}
 	if (typeof item === 'number' && Number.isFinite(item)) {
-		return String(item)
+		return item
 	}
 	return refuse('invalid_value', 'a list value holds only strings and finite numbers')
 }
 
-/** A value as the driver binds it. Unprepared, `Bun.SQL` mis-binds a JS array and sends a `Date` as `Date#toString()`. */
-function parameterOf(value: unknown, position: number): SqlParameter {
-	if (value === null || typeof value === 'string' || typeof value === 'boolean' || typeof value === 'bigint') {
+/** A Postgres array literal's element: a string quoted, its `"` and `\` escaped. */
+function postgresElement(item: string | number): string {
+	return typeof item === 'string' ? `"${item.replace(/["\\]/g, (char) => `\\${char}`)}"` : String(item)
+}
+
+/**
+ * A value as the driver binds it. Unprepared, `Bun.SQL` mis-binds a JS array and sends a `Date` as `Date#toString()`,
+ * so a list is a Postgres array literal; SQLite binds no boolean and no bigint, and reads a list as JSON
+ * (`json_each`).
+ */
+function parameterOf(value: unknown, position: number, database: SqlDatabase): SqlParameter {
+	if (value === null || typeof value === 'string') {
 		return value
+	}
+	if (typeof value === 'boolean') {
+		return database.dialect === 'sqlite' ? (value ? 1 : 0) : value
+	}
+	if (typeof value === 'bigint') {
+		if (database.dialect === 'postgres') return value
+		const integer = Number(value)
+		return isSafeInteger(integer) ? integer : refuse('invalid_value', `the value \${…} number ${position} is a bigint outside the safe integer range`)
 	}
 	if (typeof value === 'number') {
 		return Number.isFinite(value) ? value : refuse('invalid_value', `the value \${…} number ${position} is not a finite number`)
@@ -281,13 +355,13 @@ function parameterOf(value: unknown, position: number): SqlParameter {
 	}
 	const items = parseList(value, arrayElement)
 	if (items !== undefined) {
-		return `{${items.join(',')}}`
+		return database.dialect === 'sqlite' ? JSON.stringify(items) : `{${items.map(postgresElement).join(',')}}`
 	}
 	return refuse(
 		'invalid_value',
 		`the value \${…} number ${position} is ${
 			value === undefined ? 'undefined' : 'an object'
-		}; bind a string, number, boolean, bigint, Date, null or a plain list (JSON as JSON.stringify(v) with ::jsonb)`,
+		}; bind a string, number, boolean, bigint, Date, null or a plain list (JSON as JSON.stringify(v))`,
 	)
 }
 
@@ -366,10 +440,18 @@ function rowIssue(
 	return `ctx.sql: row ${index + 1} does not match the row schema${where}: ${kind}`
 }
 
-/** The predicate `terms` make over `alias`'s columns: static parts around one bound value per test. */
-function scopeFragment(terms: ScopeTerms, alias: string): { readonly parts: readonly string[]; readonly values: readonly SqlValue[] } {
+/**
+ * The predicate `terms` make over `alias`'s columns: static parts around one bound value per test. A list is
+ * `= any($n)` on Postgres and `in (select value from json_each(?n))` on SQLite, one parameter either way.
+ */
+function scopeFragment(
+	terms: ScopeTerms,
+	alias: string,
+	database: SqlDatabase,
+): { readonly parts: readonly string[]; readonly values: readonly SqlValue[] } {
 	if (terms === 'all') return { parts: ['(true)'], values: [] }
 	if (terms.length === 0) return { parts: ['(false)'], values: [] }
+	const [listOpen, listClose] = database.dialect === 'postgres' ? [' = any(', ')'] : [' in (select value from json_each(', '))']
 	const parts: string[] = []
 	const values: SqlValue[] = []
 	let text = '('
@@ -380,10 +462,11 @@ function scopeFragment(terms: ScopeTerms, alias: string): { readonly parts: read
 		for (let testIndex = 0; testIndex < group.length; testIndex++) {
 			const test = group[testIndex]
 			if (test === undefined) continue
-			text += `${testIndex === 0 ? '' : ' and '}${alias}.${test.column} = ${typeof test.value === 'string' ? '' : 'any('}`
+			const single = typeof test.value === 'string'
+			text += `${testIndex === 0 ? '' : ' and '}${alias}.${test.column}${single ? ' = ' : listOpen}`
 			parts[parts.length] = text
 			values[values.length] = test.value
-			text = typeof test.value === 'string' ? '' : ')'
+			text = single ? '' : listClose
 		}
 		text += ')'
 	}
@@ -391,366 +474,18 @@ function scopeFragment(terms: ScopeTerms, alias: string): { readonly parts: read
 	return { parts, values }
 }
 
-/** One table a write statement writes, at any depth (a data-modifying CTE too), and how. */
-interface Target {
-	readonly table: string
-	readonly operation: WriteOperation
-}
-
-/** The relation an UPDATE or DELETE writes: its table, under its alias (the table's name without one), and what it sets. */
-interface Written {
-	readonly table: string
-	readonly alias: string
-	readonly operation: 'update' | 'delete'
-	/** The columns an UPDATE's SET assigns; none for a DELETE. */
-	readonly assigned: readonly string[]
-}
-
-/** What a statement writes, and for each interpolation, in order, the UPDATE or DELETE of the query block it stands in. */
-interface StatementWrites {
-	readonly targets: readonly Target[]
-	readonly blocks: readonly (Written | undefined)[]
-}
-
-/** Words that cannot be an alias: what follows a target that has none. */
-const NOT_ALIASES: ReadonlySet<string> = new Set(['SET', 'WHERE', 'USING', 'RETURNING', 'DEFAULT', 'VALUES', 'SELECT', 'ON', 'OVERRIDING'])
-
-/** The target name at `index` (`ONLY` and a schema skipped) and its alias, or `undefined` when no name is there. */
-function targetAt(tokens: readonly SqlToken[], index: number): { readonly table: string; readonly alias: string } | undefined {
-	const at = upperWord(tokens[index]) === 'ONLY' ? index + 1 : index
-	const qualified = isPunct(tokens[at + 1], '.')
-	const table = qualified ? nameText(tokens[at + 2]) : nameText(tokens[at])
-	if (table === undefined) return undefined
-	let next = qualified ? at + 3 : at + 1
-	if (upperWord(tokens[next]) === 'AS') next++
-	const word = upperWord(tokens[next])
-	const alias = tokens[next]?.kind === 'quoted' || (word !== undefined && !NOT_ALIASES.has(word)) ? nameText(tokens[next]) : undefined
-	return { table, alias: alias ?? table }
-}
-
 /**
- * Every `INSERT INTO`, `UPDATE` and `DELETE FROM` target of the statement, and the query block of each interpolation.
- * A block opens at a `SELECT`, `INSERT`, `UPDATE` or `DELETE` and closes with the parenthesis it stands in, or at the
- * next block of its depth: a subquery, a data-modifying CTE and an `INSERT`'s `SELECT` are blocks of their own.
- * `ON CONFLICT … DO UPDATE` is an UPDATE of the INSERT's target; a locking clause (`FOR UPDATE`) writes nothing.
- */
-function statementWrites(tokens: readonly SqlToken[]): StatementWrites {
-	const targets: Target[] = []
-	const blocks: (Written | undefined)[] = []
-	const open: { readonly depth: number; readonly write: Written | undefined }[] = []
-	const inserts = new Map<number, { readonly table: string; readonly alias: string }>()
-	let depth = 0
-	const enter = (write: Written | undefined) => {
-		while ((open[open.length - 1]?.depth ?? -1) >= depth) open.pop()
-		open.push({ depth, write })
-	}
-	for (let index = 0; index < tokens.length; index++) {
-		const token = tokens[index]
-		if (isPunct(token, '(')) {
-			depth++
-			continue
-		}
-		if (isPunct(token, ')')) {
-			depth--
-			while ((open[open.length - 1]?.depth ?? -1) > depth) open.pop()
-			for (const level of inserts.keys()) if (level > depth) inserts.delete(level)
-			continue
-		}
-		if (isPunct(token, '$') && isDigit(tokens[index + 1])) {
-			blocks.push(open[open.length - 1]?.write)
-			continue
-		}
-		const word = upperWord(token)
-		const next = upperWord(tokens[index + 1])
-		if (word === 'SELECT') {
-			enter(undefined)
-		} else if (word === 'INSERT' && next === 'INTO') {
-			const target = targetAt(tokens, index + 2)
-			enter(undefined)
-			if (target !== undefined) {
-				inserts.set(depth, target)
-				targets.push({ table: target.table, operation: 'insert' })
-			}
-		} else if (word === 'DELETE' && next === 'FROM') {
-			const target = targetAt(tokens, index + 2)
-			enter(target === undefined ? undefined : { ...target, operation: 'delete', assigned: [] })
-			if (target !== undefined) targets.push({ table: target.table, operation: 'delete' })
-		} else if (word === 'UPDATE') {
-			const before = upperWord(tokens[index - 1])
-			if (before === 'FOR' || before === 'KEY') continue
-			const target = before === 'DO' ? inserts.get(depth) : targetAt(tokens, index + 1)
-			enter(target === undefined ? undefined : { ...target, operation: 'update', assigned: assignedColumns(tokens, index + 1) })
-			if (target !== undefined) targets.push({ table: target.table, operation: 'update' })
-		}
-	}
-	return { targets, blocks }
-}
-
-/** Words that end an UPDATE's SET list at its own depth, outside a CASE; `IS [NOT] DISTINCT FROM` does not. */
-const SET_ENDS: ReadonlySet<string> = new Set(['FROM', 'WHERE', 'RETURNING'])
-
-/**
- * The columns the SET of the UPDATE whose target starts at `from` assigns: `a = …` and `(a, b) = …` items, a column's
- * subfield or subscript by the column. A SET it cannot read to its end with certainty assigns no column it can name,
- * which refuses a column's own write action: an item that is not a name, an unmatched bracket, a CASE without END.
- */
-function assignedColumns(tokens: readonly SqlToken[], from: number): readonly string[] {
-	const set = setKeyword(tokens, from)
-	if (set === undefined) return []
-	const columns: string[] = []
-	let index = set + 1
-	for (;;) {
-		const item = assignmentTarget(tokens, index)
-		const end = item === undefined ? undefined : expressionEnd(tokens, item.equals + 1)
-		if (item === undefined || end === undefined) return []
-		columns.push(...item.columns)
-		if (!isPunct(tokens[end], ',')) return columns
-		index = end + 1
-	}
-}
-
-/**
- * The index of what ends the assigned expression that starts at `index`: the `,` before the next item, or the end of the
- * SET list (`FROM`, `WHERE`, `RETURNING`, the `)` around the statement, `;`, the end of the text). A clause word inside
- * brackets or a CASE, and the `FROM` of `IS [NOT] DISTINCT FROM`, belong to the expression. `undefined` when a bracket
- * or a CASE does not close before the end.
- */
-function expressionEnd(tokens: readonly SqlToken[], index: number): number | undefined {
-	let depth = 0
-	let cases = 0
-	for (let position = index; position < tokens.length; position++) {
-		const token = tokens[position]
-		const word = upperWord(token)
-		if (isPunct(token, '(') || isPunct(token, '[')) {
-			depth++
-		} else if (isPunct(token, ')') || isPunct(token, ']')) {
-			if (--depth < 0) return cases === 0 && isPunct(token, ')') ? position : undefined
-		} else if (depth > 0) {
-			continue
-		} else if (word === 'CASE') {
-			cases++
-		} else if (word === 'END') {
-			if (--cases < 0) return undefined
-		} else if (isPunct(token, ',') || isPunct(token, ';')) {
-			return cases === 0 ? position : undefined
-		} else if (cases === 0 && word !== undefined && SET_ENDS.has(word) && !distinctFrom(tokens, position)) {
-			return position
-		}
-	}
-	return depth === 0 && cases === 0 ? tokens.length : undefined
-}
-
-/** The index of the SET of the UPDATE whose target starts at `from`, at the UPDATE's depth. */
-function setKeyword(tokens: readonly SqlToken[], from: number): number | undefined {
-	let depth = 0
-	for (let index = from; index < tokens.length; index++) {
-		const token = tokens[index]
-		const word = upperWord(token)
-		if (depth === 0 && word === 'SET') return index
-		if (isPunct(token, '(')) depth++
-		if (isPunct(token, ')') && --depth < 0) return undefined
-		if (depth === 0 && word !== undefined && SET_ENDS.has(word)) return undefined
-	}
-	return undefined
-}
-
-/** Whether the `FROM` at `index` ends `IS [NOT] DISTINCT FROM`, a comparison, not a clause. */
-function distinctFrom(tokens: readonly SqlToken[], index: number): boolean {
-	if (upperWord(tokens[index]) !== 'FROM' || upperWord(tokens[index - 1]) !== 'DISTINCT') return false
-	const before = upperWord(tokens[index - 2])
-	return before === 'IS' || (before === 'NOT' && upperWord(tokens[index - 3]) === 'IS')
-}
-
-/**
- * The columns one SET item at `index` assigns and the index of its `=`: a name with any `.field` and `[…]` after it,
- * or a parenthesized list of them. `undefined` when the item has no such form.
- */
-function assignmentTarget(tokens: readonly SqlToken[], index: number): { readonly columns: readonly string[]; readonly equals: number } | undefined {
-	if (!isPunct(tokens[index], '(')) {
-		const name = nameText(tokens[index])
-		if (name === undefined) return undefined
-		const equals = afterIndirection(tokens, index + 1)
-		return equals !== undefined && isPunct(tokens[equals], '=') ? { columns: [name], equals } : undefined
-	}
-	const columns: string[] = []
-	let position = index
-	do {
-		const name = nameText(tokens[position + 1])
-		const next = name === undefined ? undefined : afterIndirection(tokens, position + 2)
-		if (name === undefined || next === undefined) return undefined
-		columns.push(name)
-		position = next
-	} while (isPunct(tokens[position], ','))
-	return isPunct(tokens[position], ')') && isPunct(tokens[position + 1], '=') ? { columns, equals: position + 1 } : undefined
-}
-
-/** The index past a column's `.field` and `[…]` subscripts from `index`, or `undefined` when a bracket never closes. */
-function afterIndirection(tokens: readonly SqlToken[], index: number): number | undefined {
-	let position = index
-	for (;;) {
-		if (isPunct(tokens[position], '.') && nameText(tokens[position + 1]) !== undefined) {
-			position += 2
-		} else if (isPunct(tokens[position], '[')) {
-			let depth = 0
-			for (; position < tokens.length; position++) {
-				if (isPunct(tokens[position], '[')) depth++
-				if (isPunct(tokens[position], ']') && --depth === 0) break
-			}
-			if (position >= tokens.length) return undefined
-			position++
-		} else {
-			return position
-		}
-	}
-}
-
-/** What a fragment on `table` under `alias` is to its block: the relation its UPDATE or DELETE writes, or else read. */
-function fragmentUse(written: Written | undefined, table: string, alias: string): Written | undefined {
-	return written !== undefined && written.table === table && written.alias === alias ? written : undefined
-}
-
-/** Words that open the clause a scope may stand in. */
-const SCOPE_CLAUSES: ReadonlySet<string> = new Set(['WHERE', 'ON'])
-/** Words that end a WHERE or ON clause at its own depth. */
-const CLAUSE_ENDS: ReadonlySet<string> = new Set([
-	'GROUP',
-	'ORDER',
-	'LIMIT',
-	'OFFSET',
-	'FETCH',
-	'HAVING',
-	'WINDOW',
-	'UNION',
-	'INTERSECT',
-	'EXCEPT',
-	'RETURNING',
-	'FOR',
-	'JOIN',
-	'LEFT',
-	'RIGHT',
-	'INNER',
-	'FULL',
-	'CROSS',
-	'NATURAL',
-	'WHERE',
-	'ON',
-	'USING',
-	'SET',
-	'FROM',
-	'SELECT',
-	'VALUES',
-])
-const CONJUNCT_FORM = 'write it as a conjunct of its WHERE or JOIN … ON clause: where (<filter>) and ${ctx.sql.scope(…)}'
-
-/** Whether the token at `position` ends a WHERE or ON clause at its depth; `IS DISTINCT FROM` does not. */
-function endsClause(tokens: readonly SqlToken[], position: number): boolean {
-	const token = tokens[position]
-	const word = upperWord(token)
-	if (isPunct(token, ';')) return true
-	if (word === undefined || !CLAUSE_ENDS.has(word)) return false
-	return word !== 'FROM' || upperWord(tokens[position - 1]) !== 'DISTINCT'
-}
-
-/** The index of the token after the `$n` placeholder at `index`. */
-function afterPlaceholder(tokens: readonly SqlToken[], index: number): number {
-	let next = index + 1
-	while (isDigit(tokens[next])) next++
-	return next
-}
-
-/**
- * A scope must restrict every row its clause admits: it stands alone, joined by AND, at the top level of a WHERE or
- * JOIN … ON clause whose top level holds no OR (`where (<filter>) and ${scope}`). Anything else could reach past it.
- */
-function checkConjunct(tokens: readonly SqlToken[], index: number): void {
-	const line = tokens[index]?.line
-	let depth = 0
-	let start = -1
-	for (let position = index - 1; position >= 0 && start === -1; position--) {
-		const token = tokens[position]
-		const word = upperWord(token)
-		if (isPunct(token, ')')) depth++
-		else if (isPunct(token, '(')) {
-			if (depth === 0) refuse('sql_scope', `ctx.sql.scope(…) at line ${line} stands inside parentheses; ${CONJUNCT_FORM}`)
-			depth--
-		} else if (depth === 0 && word !== undefined && SCOPE_CLAUSES.has(word)) start = position
-		else if (depth === 0 && endsClause(tokens, position)) break
-	}
-	if (start === -1) refuse('sql_scope', `ctx.sql.scope(…) at line ${line} stands outside a WHERE or JOIN … ON clause; ${CONJUNCT_FORM}`)
-	const next = afterPlaceholder(tokens, index)
-	let end = tokens.length
-	depth = 0
-	for (let position = next; position < tokens.length && end === tokens.length; position++) {
-		const token = tokens[position]
-		if (isPunct(token, '(')) depth++
-		else if (isPunct(token, ')')) {
-			if (depth === 0) end = position
-			else depth--
-		} else if (depth === 0 && endsClause(tokens, position)) end = position
-	}
-	depth = 0
-	for (let position = start + 1; position < end; position++) {
-		const token = tokens[position]
-		if (isPunct(token, '(')) depth++
-		else if (isPunct(token, ')')) depth--
-		else if (depth === 0 && upperWord(token) === 'OR') {
-			refuse(
-				'sql_scope',
-				`the clause that holds ctx.sql.scope(…) at line ${line} has an OR at its top level, which reaches past the scope; ${CONJUNCT_FORM}`,
-			)
-		} else if (depth === 0 && upperWord(token) === 'BETWEEN') {
-			refuse('sql_scope', `put BETWEEN … AND … in parentheses in the clause that holds ctx.sql.scope(…) at line ${line}`)
-		}
-	}
-	const before = upperWord(tokens[index - 1])
-	const after = next === end ? 'END' : upperWord(tokens[next])
-	if ((index - 1 !== start && before !== 'AND') || (after !== 'END' && after !== 'AND')) {
-		refuse('sql_scope', `ctx.sql.scope(…) at line ${line} must stand alone, joined by AND; ${CONJUNCT_FORM}`)
-	}
-}
-
-/**
- * Before any scope is spliced in, each interpolation must stand where a value binds (not in a literal, a quoted name,
- * a dollar-quoted body or a comment), and each scope where it restricts every row of its clause.
- */
-function checkInterpolations(parts: readonly string[], values: readonly unknown[]): void {
-	for (const part of parts) {
-		if (/\$[0-9]/.test(part)) {
-			refuse('sql_template', 'the text holds $ and a digit, which reads as a positional parameter; interpolate the value with ${…}, a literal one too')
-		}
-	}
-	const { tokens, unterminated } = lexSql(statementText(parts))
-	if (unterminated !== undefined) {
-		refuse('sql_template', `a string, quoted name, dollar-quoted body or comment at line ${unterminated} never closes`)
-	}
-	if (placeholderCount(tokens) !== parts.length - 1) {
-		refuse(
-			'sql_template',
-			'a value ${…} inside a string literal, a quoted name, a dollar-quoted body or a comment is not bound; interpolate a whole value',
-		)
-	}
-	let interpolation = 0
-	for (let index = 0; index + 1 < tokens.length; index++) {
-		if (!isPunct(tokens[index], '$') || !isDigit(tokens[index + 1])) continue
-		if (scopeOf(values[interpolation]) !== undefined) checkConjunct(tokens, index)
-		interpolation++
-	}
-}
-
-/**
- * The template with every scope spliced in as text around its own values, and the values a parameter each. Each
- * fragment is rendered for what its relation is to its query block: the one its UPDATE or DELETE writes, or read.
+ * The template with every scope spliced in as text around its own values, and the values a parameter each. Before
+ * anything is spliced, each interpolation must stand where a value binds (not in a literal, a quoted name, a dollar
+ * body or a comment), fragments with no value included, and each fragment must be this site's.
  */
 function expandScopes(
 	site: SqlSite,
 	parts: readonly string[],
 	values: readonly unknown[],
-	termsOf: ScopeOf,
-	writeTarget: WriteTarget,
+	database: SqlDatabase,
 ): { parts: string[]; values: unknown[] } {
-	checkInterpolations(parts, values)
-	const writes: StatementWrites = site.mode === 'write' ? statementWrites(lexSql(statementText(parts)).tokens) : { targets: [], blocks: [] }
-	for (const target of writes.targets) writeTarget(target.table, target.operation)
+	placedTokens(parts, database)
 	const expanded: string[] = [parts[0] ?? '']
 	const bound: unknown[] = []
 	for (let index = 0; index < values.length; index++) {
@@ -765,11 +500,7 @@ function expandScopes(
 		if (fragment.site !== site) {
 			refuse('sql_scope', 'a ctx.sql.scope(…) of another invocation or site is refused; build it with this ctx.sql')
 		}
-		const written = fragmentUse(writes.blocks[index], fragment.table, fragment.alias)
-		const terms = written === undefined
-			? termsOf(fragment.capability, fragment.table, 'read')
-			: termsOf(fragment.capability, fragment.table, written.operation, written.assigned)
-		const rendered = scopeFragment(terms, fragment.alias)
+		const rendered = scopeFragment(fragment.terms, fragment.alias, database)
 		expanded[expanded.length - 1] += rendered.parts[0] ?? ''
 		for (let position = 0; position < rendered.values.length; position++) {
 			bound.push(rendered.values[position])
@@ -793,34 +524,39 @@ async function failing<T>(site: SqlSite, work: () => Promise<T>): Promise<T> {
 	}
 }
 
-const WRITE_USES: readonly ScopeUse[] = ['update', 'delete']
+const SCOPE_FORM =
+	"ctx.sql.scope(capability, table, { alias?, use? }) takes an alias of lowercase letters, digits and _ and use 'read', 'update' or 'delete'"
 
-/**
- * Throws unless `capability` reaches `table` for some use the site may make of it: reading, or on a `'write'` site
- * the target of an UPDATE or a DELETE. The statement's own use is checked when the tag renders the fragment.
- */
-function reaches(site: SqlSite, termsOf: ScopeOf, capability: unknown, table: string): void {
-	try {
-		termsOf(capability, table, 'read')
-	} catch (error) {
-		if (site.mode !== 'write') throw error
-		for (const use of WRITE_USES) {
-			try {
-				termsOf(capability, table, use)
-				return
-			} catch {
-				// The read refusal names what a read needs, which is what most fragments are.
-			}
-		}
-		throw error
+/** The options of `ctx.sql.scope`, read from a plain object's own data properties; anything else is refused. */
+function scopeOptions(options: unknown): { readonly alias: string | undefined; readonly use: ScopeUse } {
+	if (options === undefined) {
+		return { alias: undefined, use: 'read' }
 	}
+	if (typeof options === 'string') {
+		refuse('invalid_argument', `ctx.sql.scope takes its alias as an option: write ctx.sql.scope(capability, table, { alias: '${options}' })`)
+	}
+	if (
+		typeof options !== 'object' || options === null || isArray(options) || (prototypeOf(options) !== OBJECT_PROTOTYPE && prototypeOf(options) !== null)
+	) {
+		refuse('invalid_argument', SCOPE_FORM)
+	}
+	let alias: string | undefined
+	let use: ScopeUse = 'read'
+	for (const key of ownKeys(options)) {
+		const descriptor = ownDescriptor(options, key)
+		const value: unknown = descriptor !== undefined && hasOwn(descriptor, 'value') ? descriptor.value : refuse('invalid_argument', SCOPE_FORM)
+		if (key === 'alias' && typeof value === 'string') alias = value
+		else if (key === 'use' && (value === 'read' || value === 'update' || value === 'delete')) use = value
+		else if (value !== undefined) refuse('invalid_argument', SCOPE_FORM)
+	}
+	return { alias, use }
 }
 
 /**
  * `ctx.sql` of one site. Every call first checks that the work running now is the site's invocation, then classifies
  * the text, then binds the values; only then does it reach the session, so a refused statement sends nothing.
  */
-export function sqlTag(site: SqlSite, schema: string | undefined, termsOf: ScopeOf, writeTarget: WriteTarget): SqlTag {
+export function sqlTag(site: SqlSite, database: SqlDatabase, termsOf: ScopeOf): SqlTag {
 	const tag = <S extends z.core.$ZodType>(row: S) => {
 		site.check()
 		if (!(row instanceof z.core.$ZodType)) {
@@ -830,31 +566,30 @@ export function sqlTag(site: SqlSite, schema: string | undefined, termsOf: Scope
 		return async (text: TemplateStringsArray, ...values: readonly (SqlValue | SqlScope)[]): Promise<z.output<S>[]> => {
 			site.check()
 			return failing(site, async () => {
-				const expanded = expandScopes(site, templateParts(text), values, termsOf, writeTarget)
-				const statement = classifySql(expanded.parts, site.mode, schema ?? '')
-				const parameters = expanded.values.map((value, index) => parameterOf(value, index + 1))
+				const expanded = expandScopes(site, templateParts(text), values, database)
+				const statement = classifySql(expanded.parts, site.mode, database)
+				const parameters = expanded.values.map((value, index) => parameterOf(value, index + 1, database))
 				const session = await site.session()
-				// ADR-0065: the classifier reads Postgres's grammar, so nothing of it is sent to SQLite.
-				if (session.dialect !== 'postgres') {
-					refuse('sql_dialect', 'raw SQL runs only on Postgres; an application on Cloudflare reads and writes through ctx.db')
-				}
 				if (session.readOnly && site.mode === 'write') {
 					refuse('read_only', 'this invocation is read-only')
 				}
-				const rows = await runApplicationStatement(session, statement, parameters)
+				const rows = await runApplicationStatement(session, statement, parameters, site.mode)
 				return rows.map((value, index) => parseRow(row, value, index))
 			})
 		}
 	}
-	const scope = (capability: unknown, table: string, alias?: string): SqlScope => {
+	const scope = (capability: unknown, table: string, options?: SqlScopeOptions): SqlScope => {
 		site.check()
 		try {
+			const { alias, use } = scopeOptions(options)
 			const name = alias ?? table
 			if (!isPlainIdentifier(table) || !isPlainIdentifier(name)) {
-				refuse('invalid_argument', 'ctx.sql.scope(capability, table, alias?) takes a table name and an alias of lowercase letters, digits and _')
+				refuse('invalid_argument', SCOPE_FORM)
 			}
-			reaches(site, termsOf, capability, table)
-			return newScope({ site, capability, table, alias: name })
+			if (use !== 'read' && site.mode !== 'write') {
+				refuse('sql_read_only', `sql: 'read' runs queries only, and ctx.sql.scope(…, { use: '${use}' }) is the target of a write; declare sql: 'write'`)
+			}
+			return newScope({ site, alias: name, terms: termsOf(capability, table, use) })
 		} catch (error) {
 			site.fail()
 			throw error

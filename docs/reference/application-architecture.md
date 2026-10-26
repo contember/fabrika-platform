@@ -117,7 +117,7 @@ export const canReopen = (stage: string): boolean =>
 A query function types its handle parameter with the kit's `DbHandle` (`@fabrika/app/contract`): the same handle
 the handler's `ctx.db` holds for that access form, dimension, action and kind. `DbHandle<typeof app, 'over', D, A>`
 is `ctx.db.within`, `ReferenceHandle<typeof app>` is `ctx.db.reference`, and `SqlHandle<typeof app, 'read' | 'write'>` is
-`ctx.sql`, whose `scope(capability, table)` checks the table against the app's own tables:
+`ctx.sql`, whose `scope(capability, table, { alias, use })` checks the table against the app's own tables:
 
 ```ts
 // src/deals/queries.ts
@@ -161,7 +161,7 @@ export const deals = app.group({ callers: ['human'] }, (r) => ({
 			rows: await ctx.sql(PipelineRow)`
 				select d.stage, count(*)::int as deals
 				from deals d
-				where ${ctx.sql.scope(ctx.target, 'deals', 'd')}
+				where ${ctx.sql.scope(ctx.target, 'deals', { alias: 'd' })}
 				group by d.stage`,
 		})),
 }))

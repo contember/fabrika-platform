@@ -2,6 +2,7 @@ import type { ContractArtifact } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import {
+	applicationRelease,
 	capsJobSegments,
 	needsMinuteTick,
 	pinsGeneratedEntry,
@@ -11,6 +12,7 @@ import {
 	servesAlarms,
 	servesDataOperations,
 	servesOps,
+	servesRawSql,
 } from '../contract-support'
 import { PUBLISHED_PRERELEASES } from './published-prereleases'
 
@@ -88,20 +90,48 @@ describe('the release gates', () => {
 			expect(capsJobSegments(release)).toBe(expected)
 			expect(servesAlarms(release)).toBe(expected)
 			expect(servesDataOperations(release)).toBe(expected)
+			expect(servesRawSql(release)).toBe(expected)
 		})
 	}
 
 	// Their object runs jobs only from the minute tick, has no alarm and answers `state` and `migrate` 501.
 	for (const release of PUBLISHED_PRERELEASES) {
-		test(`published ${release} runs in the object with the ops channel, and without alarms, the segment cap or the data operations`, () => {
+		test(`published ${release} runs in the object with the ops channel, and without alarms, the segment cap, the data operations or raw SQL`, () => {
 			expect(runsInObject(release)).toBe(true)
 			expect(pinsGeneratedEntry(release)).toBe(true)
 			expect(servesOps(release)).toBe(true)
 			expect(capsJobSegments(release)).toBe(false)
 			expect(servesAlarms(release)).toBe(false)
 			expect(servesDataOperations(release)).toBe(false)
+			expect(servesRawSql(release)).toBe(false)
 		})
 	}
+})
+
+describe("the gates read the application's pin (applicationRelease), never the newer reader", () => {
+	const fromGates = (release: string) => [capsJobSegments, servesAlarms, servesDataOperations, servesRawSql].map((gate) => gate(release))
+	const minorGates = (release: string) => [runsInObject, pinsGeneratedEntry, servesOps].map((gate) => gate(release))
+
+	for (const framework of PUBLISHED_PRERELEASES) {
+		test(`a ${framework} pin read by a 0.9.0 reader passes no releaseFrom gate`, () => {
+			const release = applicationRelease({ checker: '0.9.0', framework })
+			expect(fromGates(release)).toEqual([false, false, false, false])
+			expect(minorGates(release)).toEqual([true, true, true])
+		})
+	}
+
+	test('a 0.9.0-dev.5 pin passes every gate', () => {
+		const release = applicationRelease({ checker: '0.9.0', framework: '0.9.0-dev.5' })
+		expect([...fromGates(release), ...minorGates(release)]).toEqual([true, true, true, true, true, true, true])
+	})
+
+	test("an access without a pin is the oldest release of its reader's minor: the minor gates hold, the others fail closed", () => {
+		expect(applicationRelease({ checker: '0.9.0' })).toBe('0.9.0-0')
+		expect(fromGates('0.9.0-0')).toEqual([false, false, false, false])
+		expect(minorGates('0.9.0-0')).toEqual([true, true, true])
+		expect(applicationRelease({ checker: '0.8.4' })).toBe('0.8.0-0')
+		expect(minorGates('0.8.0-0')).toEqual([false, false, false])
+	})
 })
 
 describe('needsMinuteTick', () => {

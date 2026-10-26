@@ -81,7 +81,7 @@ describe('patched built-ins do not disable the guard', () => {
 		const inOrganization = authority.within('workspace', 'notes.read', [], [{ dimension: 'organization', values: ['o1'] }])
 		await patchedChecks(
 			{ find: { dimension: 'organization', column: 'title' } },
-			() => sql(z.object({}))`select n.id from notes n where ${sql.scope(inOrganization, 'notes', 'n')}`,
+			() => sql(z.object({}))`select n.id from notes n where ${sql.scope(inOrganization, 'notes', { alias: 'n' })}`,
 		)
 		const sent = dialect.log.map((statement) => statement.sql)
 		expect(sent).toHaveLength(1)

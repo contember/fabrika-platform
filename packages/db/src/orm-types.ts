@@ -686,8 +686,8 @@ type RefFragment<Ix extends AnyDbIndex, D extends string, A extends string> = {
 }[TableName<Ix>]
 
 /**
- * What a `Within` writes on a `'write'` site: the target of an UPDATE or DELETE whose action it holds, a column's own
- * write action included (the statement's SET is checked against its columns at run time).
+ * What a `Within` writes on a `'write'` site: the table of a fragment of `use: 'update'` or `'delete'` whose action it
+ * holds, a column's own write action included (the statement's columns are the approver's to review, not checked).
  */
 type WithinWrites<E extends IndexedTable, M extends 'read' | 'write'> = M extends 'write'
 	? E['actions']['update'] | E['actions']['delete'] | (keyof E['writes'] & string)

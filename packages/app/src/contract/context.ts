@@ -118,18 +118,29 @@ export type SqlValue = string | number | boolean | bigint | Date | null | readon
 export interface SqlTag<Ix extends AnyDbIndex = AnyDbIndex, M extends SqlMode = SqlMode> {
 	<Row extends Schema>(row: Row): (text: TemplateStringsArray, ...values: readonly (SqlValue | SqlScope)[]) => Promise<z.output<Row>[]>
 	/**
-	 * The capability's whole predicate on `table` (`alias` its name in the statement, the table's by default): the
-	 * object's key and every link of its chain for a `Ref`, what `ctx.db.within` matches for a `Within`, every row for
-	 * `ctx.app`. Interpolated as `where ${ctx.sql.scope(ctx.target, 'tasks', 't')}`, its values are bound parameters.
-	 * A table the capability reaches for no use of this site is a type error here; at run time the fragment on the
-	 * statement's UPDATE or DELETE target needs that operation's action, and anywhere else an action the table reads
-	 * with.
+	 * The capability's whole predicate on `table`: the object's key and every link of its chain for a `Ref`, what
+	 * `ctx.db.within` matches for a `Within`, every row for `ctx.app`. Interpolated as
+	 * `where ${ctx.sql.scope(ctx.target, 'tasks', { alias: 't' })}`, its values are bound parameters. `alias` is the
+	 * table's name in the statement (the table's own by default). `use` states what the statement does with the table:
+	 * `'read'` (the default) needs an action the table reads with, `'update'` or `'delete'` (a `'write'` site only) that
+	 * operation's action, checked when the fragment is built. The statement is not read for where the fragment stands:
+	 * using it as stated is the author's and the approver's to check. A table the capability reaches for no use of this
+	 * site is a type error here.
 	 */
 	scope<C extends Ref<string, string> | Within<string, string> | AppCapability<string>, T extends FragmentTable<Ix, C, M>>(
 		capability: C,
 		table: T,
-		alias?: string,
+		options?: SqlScopeOptions,
 	): SqlScope
+}
+
+/**
+ * The third argument of `ctx.sql.scope`: the table's alias in the statement, and what the statement does with it. A
+ * `'read'` site's `ctx.sql` is refused `'update'` and `'delete'` at run time; a `'write'` site's stays assignable to it.
+ */
+export interface SqlScopeOptions {
+	readonly alias?: string
+	readonly use?: 'read' | 'update' | 'delete'
 }
 
 declare const sqlScope: unique symbol

@@ -652,8 +652,8 @@ vocabulary (`packages/db/CLAUDE.md`).
   whose dimension no table owns, a webhook or a procedure with buckets without a `scoped(tables)` layer, a public
   procedure whose challenge names an application variable (its secret or its site key) that is not set, a job that cannot run (see Jobs), an endpoint that asks IAM with no
   membership transport (`BootOptions.membership`), a handler outside the contract, a
-  missing handler, an access form whose containment no table locates; on a SQLite database (`sqliteProblems`) a site
-  that declares `sql` and a file kind with `scan: true`. Each refusal lifts when its work unit ships the runtime.
+  missing handler, an access form whose containment no table locates; on a SQLite database (`sqliteProblems`) a file
+  kind with `scan: true`. Each refusal lifts when its work unit ships the runtime.
 - **The framework asks IAM; IAM decides** (`membership.ts`). Every request carries the
   verified token, the proxy's `X-Request-Id` (a delegation grant is bound to it) and the
   proxy's `X-Fabrika-Delegation`; `creates` without one is 503 and IAM is not asked.

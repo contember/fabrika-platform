@@ -2,11 +2,13 @@ import {
 	afterName,
 	closingParenthesis,
 	isPunct,
+	lexSqlite,
 	nameText,
 	objectNameAt,
 	skipWords,
 	splitAtCommas,
 	type SqlToken,
+	statementsOf,
 	topLevelStatements,
 	upperWord,
 } from '@fabrika/platform-node/sql'
@@ -67,6 +69,36 @@ export const checkCurrentTimestampDefaults = (files: ReadonlyMap<string, string>
 					rule: 'cloudflare-current-timestamp',
 					message: 'DEFAULT CURRENT_TIMESTAMP stores YYYY-MM-DD HH:MM:SS on SQLite, which every read of the table refuses as unexpected_row',
 					allowed: SQLITE_NOW_DEFAULT,
+				})
+			})
+		}
+	}
+	return findings
+}
+
+/**
+ * On SQLite an application migration runs verbatim, with no name rule, so a view or a trigger over a framework table
+ * would reach what `ctx.sql`'s name rule keeps it from. Every `fabrika_*` name is refused (any case, quoted, bracketed,
+ * or as a string SQLite may read as a name) but `fabrika_files` right after `REFERENCES`, a file column's foreign key.
+ */
+export const checkSqliteFrameworkNames = (files: ReadonlyMap<string, string>): Finding[] => {
+	const findings: Finding[] = []
+	for (const [path, sql] of files) {
+		if (!path.startsWith(MIGRATIONS_DIR) || !path.endsWith('.sql')) continue
+		for (const { tokens } of statementsOf(lexSqlite(sql).tokens)) {
+			tokens.forEach((token, index) => {
+				const text = token.kind === 'word' || token.kind === 'quoted' || token.kind === 'string' ? token.text : undefined
+				const name = text?.toLowerCase()
+				if (name === undefined || !name.startsWith('fabrika_')) return
+				if (name === FILES_TABLE && token.kind !== 'string' && upperWord(tokens[index - 1]) === 'REFERENCES') return
+				findings.push({
+					file: path,
+					line: token.line,
+					column: 1,
+					severity: 'refusal',
+					rule: 'cloudflare-framework-name',
+					message: `'${text}' is the framework's: a migration on Cloudflare names no fabrika_* table, which ctx.sql could then reach through it`,
+					allowed: `the application's own tables, and REFERENCES ${FILES_TABLE} (id) for a file column`,
 				})
 			})
 		}

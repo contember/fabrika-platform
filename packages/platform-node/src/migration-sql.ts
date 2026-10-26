@@ -165,9 +165,14 @@ export interface Statement {
  * makes a check stricter.
  */
 export function topLevelStatements(sql: string): Statement[] {
+	return statementsOf(sqlTokens(sql))
+}
+
+/** Splits lexed text into its statements at every `;` token: `topLevelStatements` over any lexer's tokens. */
+export function statementsOf(all: readonly SqlToken[]): Statement[] {
 	const statements: Statement[] = []
 	let tokens: SqlToken[] = []
-	for (const token of sqlTokens(sql)) {
+	for (const token of all) {
 		if (token.kind === 'punct' && token.char === ';') {
 			if (tokens[0] !== undefined) statements.push({ tokens, line: tokens[0].line })
 			tokens = []

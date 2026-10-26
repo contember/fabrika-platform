@@ -684,12 +684,6 @@ const cases: readonly RuleCase[] = [
 		},
 	},
 	{
-		rule: 'cloudflare-sql',
-		bad: { ...ARCHITECTURE_APPLICATION, 'fabrika.config.ts': CLOUDFLARE_CONFIG },
-		expected: ['fabrika.contract.ts:1:1'],
-		good: ARCHITECTURE_APPLICATION,
-	},
-	{
 		rule: 'cloudflare-scan',
 		bad: await cloudflareApplication("c.files({ types: ['image/png'], maxBytes: 1024, scan: true })"),
 		expected: ['fabrika.contract.ts:1:1'],
@@ -724,6 +718,30 @@ const cases: readonly RuleCase[] = [
 			...(await cloudflareApplication("c.files({ types: ['image/png'], maxBytes: 1024 })")),
 			'db/migrations/20261024120000_audit.sql':
 				"CREATE TABLE audit (\n\tid TEXT PRIMARY KEY,\n\tat TIMESTAMP NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))\n);\n",
+		},
+	},
+	{
+		rule: 'cloudflare-framework-name',
+		bad: {
+			...(await cloudflareApplication("c.files({ types: ['image/png'], maxBytes: 1024 })")),
+			'db/migrations/20261024120000_leases.sql': [
+				'CREATE VIEW leases AS SELECT * FROM fabrika_job_leases;',
+				'CREATE TRIGGER wipe AFTER INSERT ON notes BEGIN DELETE FROM [Fabrika_Wakes]; END;',
+				"CREATE VIEW kicks AS SELECT * FROM 'fabrika_job_kicks';",
+				'CREATE TABLE avatars (id TEXT PRIMARY KEY, file_id TEXT REFERENCES "fabrika_files_avatars" (id));',
+				'',
+			].join('\n'),
+		},
+		expected: [
+			'db/migrations/20261024120000_leases.sql:1:1',
+			'db/migrations/20261024120000_leases.sql:2:1',
+			'db/migrations/20261024120000_leases.sql:3:1',
+			'db/migrations/20261024120000_leases.sql:4:1',
+		],
+		good: {
+			...(await cloudflareApplication("c.files({ types: ['image/png'], maxBytes: 1024 })")),
+			'db/migrations/20261024120000_avatars.sql':
+				'CREATE TABLE avatars (\n\tid TEXT PRIMARY KEY,\n\tfile_id TEXT NOT NULL REFERENCES "FABRIKA_FILES" (id)\n);\n',
 		},
 	},
 	{

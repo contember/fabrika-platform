@@ -24,8 +24,8 @@ this page.
 
 ## 0.8 → 0.9
 
-0.9 changes no 0.8 form of an application's contract or handlers. On Zerops, raise the pin; the one other change is
-for code that opens a database itself: `Database.postgres(options)` and the root `PostgresOptions` type moved to
+0.9 changes no 0.8 form of an application's contract. On Zerops, raise the pin and rewrite each `ctx.sql.scope` call
+(below); the one other change is for code that opens a database itself: `Database.postgres(options)` and the root `PostgresOptions` type moved to
 `openPostgres(options)` and `PostgresOptions` in `@fabrika/db/postgres`. On Cloudflare an application environment now
 runs in one Durable Object over its own SQLite
 ([ADR-0065](../decisions/0065-an-application-on-cloudflare-runs-in-one-durable-object-per-environment.md)): `ctx.db`
@@ -37,6 +37,22 @@ authorization model): a holder of `crm.read` on one deal sees that deal in the `
 grants count toward `MAX_WITHIN_VALUES` (1000 scope values per `Within`) with the direct and container values. A caller
 whose grants on inner dimensions push one action past 1000 values gets 403 (`CapabilityLimitError`) from a list that
 answered on 0.8; give such a caller a grant on a container instead of per-object grants.
+
+`ctx.sql.scope` takes an options object, and the fragment says what the statement does with its table:
+
+| 0.8                                         | 0.9                                                          |
+| ------------------------------------------- | ------------------------------------------------------------ |
+| `ctx.sql.scope(cap, 'tasks', 't')`          | `ctx.sql.scope(cap, 'tasks', { alias: 't' })`                |
+| the target of `update tasks t … where ${…}` | `ctx.sql.scope(cap, 'tasks', { alias: 't', use: 'update' })` |
+| the target of `delete from tasks …`         | `ctx.sql.scope(cap, 'tasks', { use: 'delete' })`             |
+| `insert … on conflict do update … ${…}`     | `ctx.sql.scope(cap, '<inserted table>', { use: 'update' })`  |
+
+A string third argument is refused with a message that shows the object form. `use` is `'read'` by default; a write use
+needs the operation's action, and on a `'read'` site it is refused (`sql_read_only`). 0.8 read the statement to find
+which relation a fragment filtered, which columns a `SET` assigned and whether the fragment stood as a conjunct; 0.9
+reads none of that. A fragment it refused for its place (under an `OR`, in parentheses) now runs, and its placement is
+the approver's to review: keep each fragment a top-level conjunct of its WHERE or JOIN … ON. A write of a reference
+table is no longer refused by the tag; write none. `ctx.sql` now runs on Cloudflare too (step 3 below).
 
 A job without `limits.timeoutMs` now gets 14 minutes per attempt, not 15, on both providers, so the contract and its
 digest change at the pin raise. A job that needs more on Zerops declares it.
@@ -52,9 +68,12 @@ An application on Cloudflare that raises its pin to 0.9:
    application's migrations when it boots. `fabrika db test-scaffold` writes the generated tests on
    `@fabrika/db/testing-sqlite`, which runs in memory; the application's own tests import `testDatabase` from there.
    An application without tables skips this step.
-3. Keeps every procedure's and webhook's `limits.timeoutMs` at or below 25 s, declares no `sql` and no file kind with
-   `scan: true`: a handler holds the object's transaction, and a Durable Object has no runtime role under raw SQL and no
-   scanner. The checker (`cloudflare-sql`, `cloudflare-scan`), the deploy and the boot refuse each. Keeps every job's
+3. Keeps every procedure's and webhook's `limits.timeoutMs` at or below 25 s and declares no file kind with
+   `scan: true`: a handler holds the object's transaction, and no scanner runs there. The checker (`cloudflare-scan`),
+   the deploy and the boot refuse it. A site may declare `sql` from `0.9.0-dev.5` on (an older pin's deploy refuses
+   it): its statements are SQLite, bind `?N` for each `${…}`, write no parameter of their own and name no `fabrika_*`
+   or `sqlite_*` table. A migration names no `fabrika_*` table but `REFERENCES fabrika_files (id)`
+   (`cloudflare-framework-name`). The checker dropped `cloudflare-sql`. Keeps every job's
    `limits.timeoutMs` at or below 14 minutes, one segment: longer work claims a bounded batch per run, and the next
    run takes the rest. The checker (`cloudflare-job-segment`) and the deploy refuse a longer one.
 4. Declares no `FABRIKA_APPLICATION` or `FABRIKA_FILES` binding and no cron trigger in `fabrika.config.ts`: the

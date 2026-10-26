@@ -98,7 +98,6 @@ import {
 	type TableModels,
 	tableModels,
 	type Tables,
-	updatableBy,
 	updateActions,
 	type UpdateValues,
 	type VersionArguments,
@@ -513,12 +512,12 @@ export function reachPredicate(context: TableContext, capability: unknown): Oper
 }
 
 /**
- * A fragment on an UPDATE or DELETE target: the capability's action is that operation's, and an application table is
- * written by an `app` capability only, a dimension or child table never by one. An UPDATE may instead hold a column's
- * own write action when every column it assigns declares that action (`updatingRef`'s rule); `assigned` is
- * `undefined` before the statement is known, and then any such action is taken.
+ * A fragment its author marks as an UPDATE or DELETE target: the capability's action is that operation's, and an
+ * application table is written by an `app` capability only, a dimension or child table never by one. An UPDATE may
+ * instead hold a column's own write action; which columns the statement sets is the author's and the approver's to
+ * keep to that action's (`updatableBy`), as the statement is not read for it.
  */
-function checkWriteTarget(context: TableContext, grant: CapabilityGrant, use: 'update' | 'delete', assigned: readonly string[] | undefined): void {
+function checkWriteTarget(context: TableContext, grant: CapabilityGrant, use: 'update' | 'delete'): void {
 	const model = context.model
 	const statement = `${use === 'update' ? 'UPDATE' : 'DELETE'} of ${model.name}`
 	if (grant.kind === 'app' && model.scope.mode !== 'app') {
@@ -545,42 +544,26 @@ function checkWriteTarget(context: TableContext, grant: CapabilityGrant, use: 'u
 		if (columnWrites.length > 0) needs[needs.length] = `a column's own write action (${columnWrites.join(', ')})`
 		throw new CapabilityError('wrong_action', `${statement} needs ${needs.join(' or ')}; the capability holds ${grant.action}`)
 	}
-	if (assigned === undefined) {
-		return
-	}
-	const written = updatableBy(model, grant.action)
-	const outside: string[] = assigned.length === 0 ? ['no column it can name'] : []
-	for (let index = 0; index < assigned.length; index++) {
-		const column = assigned[index]
-		if (column !== undefined && !inSet(written, column)) outside[outside.length] = column
-	}
-	if (outside.length > 0) {
-		throw new CapabilityError(
-			'wrong_action',
-			`${statement} assigns ${
-				outside.join(', ')
-			}, which ${grant.action} does not write: a column's own write action scopes an UPDATE of its columns only`,
-		)
-	}
 }
 
 /**
  * `ctx.sql.scope`'s predicate: what the handles of `capability` match in the table for `use`, as column tests. A
  * fragment that reads (`'read'`) needs an action the handles read the table with: any action it names for a `Ref`,
  * its read action for a `Within`, an action `ctx.db.app` lists it for with an `app` capability, and its read action
- * for a scoped site's read of an application table. A fragment on the statement's UPDATE or DELETE target needs that
- * operation's own action, and an `app` capability writes application tables only. A `Ref` matches its object's column
- * and every link of the chain it carries; a `Within` matches like `ctx.db.within` (its values, each container grant on
- * its own column, or every row for `all`); an `app` capability, and a scoped read of an application table, every row.
+ * for a scoped site's read of an application table. A fragment its author marks `use: 'update'` or `'delete'` needs
+ * that operation's own action, and an `app` capability writes application tables only. A `Ref` matches its object's
+ * column and every link of the chain it carries; a `Within` matches like `ctx.db.within` (its values, each container
+ * grant on its own column, or every row for `all`); an `app` capability, and a scoped read of an application table,
+ * every row.
  */
-export function scopeTerms(context: TableContext, capability: unknown, use: ScopeUse, assigned?: readonly string[]): ScopeTerms {
+export function scopeTerms(context: TableContext, capability: unknown, use: ScopeUse): ScopeTerms {
 	const grant = runtimeOf(context.connection).capabilities.resolve(capability)
 	const model = context.model
 	if (grant.kind === 'row') {
 		throw new CapabilityError('wrong_capability', `ctx.sql.scope takes a Ref, a Within or an app capability, got ${describeGrant(grant)}`)
 	}
 	if (use !== 'read') {
-		checkWriteTarget(context, grant, use, assigned)
+		checkWriteTarget(context, grant, use)
 	}
 	if (grant.kind === 'app') {
 		if (use === 'read') {

@@ -1,4 +1,4 @@
-// @fabrika/platform-node/sql — the SQL lexer and the migration classifier, RUNTIME-NEUTRAL: no Bun, no Node, no
+// @fabrika/platform-node/sql — the SQL lexers (Postgres, SQLite) and the migration classifier, RUNTIME-NEUTRAL: no Bun, no Node, no
 // driver, so a Cloudflare Worker (Control reading a commit) loads it as the runner does. `sql-subpath.test.ts` holds
 // the import graph to that.
 
@@ -31,7 +31,7 @@ export {
 	type MigrationRefusal,
 	type MigrationSetClassification,
 } from './migration-classify'
-export { lexSql, type SqlToken, sqlTokens, type Statement, topLevelStatements, upperWord } from './migration-sql'
+export { lexSql, type SqlToken, sqlTokens, type Statement, statementsOf, topLevelStatements, upperWord } from './migration-sql'
 export { PG_CATALOG_FUNCTIONS, SQL_KEYWORDS } from './pg-catalog-names'
 export {
 	afterName,
@@ -57,3 +57,4 @@ export {
 	statementKind,
 	unicodeIdentifier,
 } from './sql-names'
+export { lexSqlite } from './sqlite-sql'

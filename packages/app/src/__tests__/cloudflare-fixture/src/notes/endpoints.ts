@@ -1,4 +1,4 @@
-// A write and a read in a workspace, a write that throws after it wrote, a write and a put that throw after them, two
+// A write and a read in a workspace, the same through ctx.sql, a write that throws after it wrote, a write and a put that throw after them, two
 // jobs that count the notes (one due at 03:00 UTC, one at minute 30 of every hour), and a job whose transaction puts a
 // file and throws (minute 15).
 
@@ -10,6 +10,10 @@ const NewNote = z.strictObject({ workspaceId: z.string().min(1), title: z.string
 const InWorkspace = z.strictObject({ workspaceId: z.string().min(1) })
 const Created = z.strictObject({ id: z.uuid() })
 const Titles = z.strictObject({ titles: z.array(z.string()) })
+const Rename = z.strictObject({ workspaceId: z.string().min(1), from: z.string().min(1), title: z.string().min(1) })
+const Count = z.strictObject({ count: z.number() })
+const Title = z.object({ title: z.string() })
+const Id = z.object({ id: z.string() })
 
 export const notes = app.group({ callers: ['human'] }, (r) => ({
 	create: r.mutation({ input: NewNote, output: Created, access: { action: 'notes.write', in: 'workspace', from: 'workspaceId' } })
@@ -31,6 +35,24 @@ export const notes = app.group({ callers: ['human'] }, (r) => ({
 		}),
 	titles: r.query({ input: InWorkspace, output: Titles, access: { action: 'notes.read', in: 'workspace', from: 'workspaceId' } })
 		.handle(async ({ ctx }) => ({ titles: (await ctx.db.target.notes.list({ orderBy: [['title', 'asc']] })).items.map((note) => note.title) })),
+	sqlTitles: r.query({ input: InWorkspace, output: Titles, access: { action: 'notes.read', in: 'workspace', from: 'workspaceId' }, sql: 'read' })
+		.handle(async ({ ctx }) => {
+			const rows = await ctx.sql(Title)`select n.title from notes n where ${ctx.sql.scope(ctx.target, 'notes', { alias: 'n' })} order by n.title`
+			return { titles: rows.map((row) => row.title) }
+		}),
+	sqlRename: r.mutation({ input: Rename, output: Count, access: { action: 'notes.write', in: 'workspace', from: 'workspaceId' }, sql: 'write' })
+		.handle(async ({ input, ctx }) => {
+			const rows = await ctx.sql(Id)`update notes set title = ${input.title}, version = version + 1
+				where title = ${input.from} and ${ctx.sql.scope(ctx.target, 'notes', { use: 'update' })} returning id`
+			return { count: rows.length }
+		}),
+	// A read site in a writing invocation: its statement runs on the read path and sees the handler's own write.
+	createAndCount: r.mutation({ input: NewNote, output: Count, access: { action: 'notes.write', in: 'workspace', from: 'workspaceId' }, sql: 'read' })
+		.handle(async ({ input, ctx }) => {
+			await ctx.db.target.notes.insert({ title: input.title })
+			const [row] = await ctx.sql(Count)`select count(*) as count from notes where ${ctx.sql.scope(ctx.target, 'notes')}`
+			return { count: row?.count ?? 0 }
+		}),
 }))
 
 export const nightly = app.cron('0 3 * * *', { actions: ['notes.read'] })

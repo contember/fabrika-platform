@@ -218,7 +218,7 @@ export function openSqlite(storage: SqliteStorage): Database {
 	const kysely = new Kysely<LooseDB>({ dialect: new SqliteDialect(storage, false) })
 	const reads = new Kysely<LooseDB>({ dialect: new SqliteDialect(storage, true) })
 	const transaction: TransactionRunner = (options, body) => options.readOnly ? body(reads) : storage.transaction(() => body(kysely))
-	return Database.fromEngine({ dialect: 'sqlite', kysely, compiler: sqliteCompiler, transaction })
+	return Database.fromEngine({ dialect: 'sqlite', kysely, compiler: sqliteCompiler, transaction, reads })
 }
 // Application modules load after this one: a replaced opener would receive the object's storage.
 Object.freeze(openSqlite)

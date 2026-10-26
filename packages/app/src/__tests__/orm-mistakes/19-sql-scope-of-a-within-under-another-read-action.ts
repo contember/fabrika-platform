@@ -9,6 +9,6 @@ export const review = app.group({ callers: ['human'] }, (r) => ({
 		.handle(async ({ ctx }) => ({
 			ids: (await ctx.sql(Id)`select r.id from reasons r where ${
 				// mistake: a scoped site reads reasons with their read action, candidates.review
-				ctx.sql.scope(ctx.within, 'reasons', 'r')}`).map((row) => row.id),
+				ctx.sql.scope(ctx.within, 'reasons', { alias: 'r' })}`).map((row) => row.id),
 		})),
 }))

@@ -236,11 +236,12 @@ the access check. `references/spa.md` shows the stack.
 | a job run after the commit     | `kicks: ['<job>']`                                      | `ctx.kick('<job>')`, `ctx.kick('<job>', { at })`   |
 | a trigger, function or view    | its migration                                           | —                                                  |
 
-Scope every scoped table a raw statement reads with `${ctx.sql.scope(<capability>, '<table>', '<alias>')}`, a conjunct
-of its WHERE or JOIN … ON (`where (<filter>) and ${…}`): `ctx.target` for `on` and `in`, `ctx.within` for `over`, a
-job's minted `Ref` or `Within` with `tx.sql.scope`. It binds the capability's whole predicate, chain included, as the
-handles apply it, and on an `update` or `delete` target it needs that operation's action; a reference table needs
-none. A deviation is fine: declare it, and do not contort the code to avoid it. The approver sees every declaration
+Scope every scoped table a raw statement reads with `${ctx.sql.scope(<capability>, '<table>', { alias: '<alias>' })}`,
+a conjunct of its WHERE or JOIN … ON (`where (<filter>) and ${…}`): `ctx.target` for `on` and `in`, `ctx.within` for
+`over`, a job's minted `Ref` or `Within` with `tx.sql.scope`. It binds the capability's whole predicate, chain
+included, as the handles apply it. The table an `update` or `delete` writes takes `{ use: 'update' }` or
+`{ use: 'delete' }`, which needs that operation's action; a reference table needs none. The runtime does not check
+where you put a fragment: the approver reads it. A deviation is fine: declare it, and do not contort the code to avoid it. The approver sees every declaration
 marked "needs closer review". Do not hide reach in a helper; the runtime builds `ctx.sql` and `ctx.db.unscoped` only
 where they are declared. A query or an export declares only `'read'`.
 
@@ -300,8 +301,9 @@ one Durable Object over SQLite. Its `db/migrations/*.sql` are SQLite (`reference
 object applies them when it boots, so there is no `migrate` and no command needs a database URL or `FABRIKA_APP_ID`.
 The tests run on `@fabrika/db/testing-sqlite` (`references/tests.md`), in memory, and never skip. A handler holds the
 object's transaction, so its `limits.timeoutMs` is at most 25 s. A job's is at most 14 minutes, its default: longer
-work claims a bounded batch per run, and the next run takes the rest (`references/jobs.md`). No `sql` (`ctx.sql`) and
-no `scan: true`: the checker, the deploy and the boot refuse both.
+work claims a bounded batch per run, and the next run takes the rest (`references/jobs.md`). `ctx.sql` is SQLite there
+(`references/endpoint.md`). No `scan: true`: the checker, the deploy and the boot refuse it. A migration names no
+`fabrika_*` table but `REFERENCES fabrika_files (id)`.
 
 The object runs one transaction at a time, so every `await` in a handler that may write holds the whole environment:
 IAM, R2, a `fetch`, a `ctx.connect` call, a binding. One 2 s call caps the environment at half a request a second. A
@@ -350,7 +352,7 @@ e-mails them, a link holder's files, HR's review with its history.
 ## Not built yet
 
 - On Cloudflare, where the application runs in one Durable Object over its SQLite and its `db/migrations/*.sql` are
-  SQLite, `sql` (`ctx.sql`) and a file kind with `scan: true` are refused. Everything else on the road runs there.
+  SQLite, a file kind with `scan: true` is refused. Everything else on the road runs there.
 - Jobs are cron only and app-wide: no `ctx.jobs.enqueue`, no job per scope. A `ctx.kick` starts a run of its job, now
   or at `{ at }`; it carries nothing, and the job finds its work in a queue table with `claim`. A list write is off the road (`sql`).
 - A read across tables (a join, a filter over a related table, an aggregate over several) is off the road (`sql`).

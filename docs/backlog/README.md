@@ -99,7 +99,6 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [211](211-zerops-preset-review-follow-ups.md): Minor findings of the Zerops presets review: adoption refusal on republish/update, the backup live row, restore history, hourly on `standard`, the admin hop's request id.
 - [212](212-the-console-shows-no-database-backups.md): The console shows no database backups; a provider-owned read of each database's schedule, newest and oldest restore point.
 - [213](213-the-cloudflare-application-runtime-is-unverified-on-a-live-account.md): The secrets upload, the object's migration on an existing Worker and a large upload are unverified on a live account.
-- [214](214-raw-sql-on-sqlite.md): `ctx.sql` is refused on SQLite: it needs a SQLite lexer, and a Durable Object has no role under it.
 - [215](215-file-scanning-on-cloudflare.md): A scanning file kind is refused on Cloudflare: no ClamAV runs in a Worker.
 - [216](216-cloudflare-application-runtime-follow-ups.md): Smaller gaps of the Cloudflare application runtime.
 - [217](217-postmark-managed-unsubscribes-never-reach-the-application.md): An unsubscribe through Postmark's own link or footer reaches only Postmark; the application's consent records drift.
@@ -121,4 +120,5 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [235](235-a-long-job-on-cloudflare-has-no-workflow-escape-hatch.md): A job that cannot chunk through claims has no form on Cloudflare; a contract-declared Workflow generated into the entry.
 - [237](237-application-object-waves-4-7-follow-ups.md): The application object's waves 4–7 follow-ups: no R2 lifecycle rule for dumps yet (needs oblaka), dump and restore edge cases, the CLI's strict parse, the deploy-time reconcile, migrate recovery, the console's modal focus.
 - [236](236-an-in-handler-upload-leaves-bytes-after-an-eviction.md): A `ctx.files.put` inside a writing handler on Cloudflare leaves its bytes in the bucket when the object is evicted before the release; an R2 intent the sweep lists.
+- [239](239-a-changed-sql-statement-shows-no-closer-review-line.md): A changed statement of a site whose `sql:` declaration is unchanged shows no closer-review line in the approval diff.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.

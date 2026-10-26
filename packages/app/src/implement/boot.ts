@@ -286,15 +286,10 @@ function readProxySecret(framework: Readonly<Record<string, string>>, required: 
 	return proxySecretDigest(secret)
 }
 
-/** What an application's SQLite database (a Durable Object's, ADR-0065) cannot serve: raw SQL and a scanning file kind. */
+/** What an application's SQLite database (a Durable Object's, ADR-0065) cannot serve: a scanning file kind. */
 function sqliteProblems(artifact: ContractArtifact, database: Database | undefined, problems: string[]): void {
 	if (database?.dialect !== 'sqlite') {
 		return
-	}
-	for (const [site, reach] of Object.entries(artifact.declared ?? {})) {
-		if (reach.sql !== null) {
-			problems.push(`'${site}' declares sql: '${reach.sql}'; ctx.sql runs only on Postgres, and this application's database is SQLite (Cloudflare)`)
-		}
 	}
 	for (const [name, kind] of Object.entries(artifact.fileKinds ?? {})) {
 		if (kind.scan === true) {

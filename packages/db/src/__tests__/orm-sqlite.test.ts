@@ -1,9 +1,10 @@
 // The mini-ORM on SQLite (ADR-0065), over a bun:sqlite stand-in for a Durable Object's storage: a handler reads and
 // writes the values it does on Postgres — timestamps as `Date`, booleans as `true`/`false`, days as `YYYY-MM-DD`, a
-// count as a number — a keyset page orders nulls as Postgres does, and `ctx.sql` is refused.
+// count as a number — a keyset page orders nulls as Postgres does, and `ctx.sql` reads and writes.
 
 import { beforeEach, describe, expect, test } from 'bun:test'
 import { z } from 'zod/v4'
+import { runApplicationStatement } from '../database'
 import { QueryRefusedError } from '../errors'
 import { bindScopedDatabase, type DataAccess, dataAccessOf, type DataHandles, type DataSite } from '../framework'
 import type { DataKind } from '../orm-types'
@@ -14,6 +15,7 @@ import { TestAuthority } from './fixtures/authority'
 import { sqliteMigration, sqliteTables } from './fixtures/sqlite-layer'
 
 const alice = new TestAuthority('user:alice')
+const HOLD = { site: 'test', held: () => {} }
 let storage: BunSqliteStorage
 let data: DataAccess
 
@@ -277,23 +279,68 @@ describe('a scoped read still sees only its scope on SQLite', () => {
 })
 
 describe('ctx.sql on SQLite', () => {
-	test('is refused before anything is sent, and fails the invocation', async () => {
-		const transaction = data.invocation(false)
-		let failed = false
-		const tag = data.sql({
-			mode: 'write',
-			check() {},
-			session: () => transaction.session(),
-			fail() {
-				failed = true
-				transaction.fail()
-			},
-		})
-		const error = await tag(z.object({ id: z.string() }))`select p.id from projects p`.catch((caught: unknown) => caught)
-		expect(error).toBeInstanceOf(QueryRefusedError)
-		expect(error).toMatchObject({ reason: 'sql_dialect' })
-		expect(String(error)).toContain('raw SQL runs only on Postgres; an application on Cloudflare reads and writes through ctx.db')
-		expect(failed).toBe(true)
-		await transaction.rollback()
+	/** One invocation's `ctx.sql` of `mode`, bound to it as the framework binds it. */
+	function sqlInvocation(mode: 'read' | 'write', readOnly: boolean) {
+		const transaction = data.invocation(readOnly)
+		const sql = data.sql({ mode, check() {}, session: () => transaction.session(), fail: () => transaction.fail() })
+		return { transaction, sql }
+	}
+	const Name = z.object({ name: z.string() })
+
+	test("reads and writes in the object's database, each fragment's values bound as ?n parameters", async () => {
+		await insertProject({ name: 'one' })
+		await insertProject({ name: 'two' })
+		await insertProject({ name: 'elsewhere' }, 'o2')
+		const writer = sqlInvocation('write', false)
+		await writer.transaction.enclose(async () => {
+			const renamed = await writer.sql(z.object({ id: z.string() }))`update projects set name = ${'renamed'}, version = version + 1
+				where name = ${'one'} and ${writer.sql.scope(organization('projects.write'), 'projects', { use: 'update' })} returning id`
+			expect(renamed).toHaveLength(1)
+			await writer.transaction.commit()
+		}, HOLD)
+		const reader = sqlInvocation('read', true)
+		const names = await reader.sql(Name)`select p.name from projects p
+			where ${reader.sql.scope(inOrganizations('projects.read', ['o1']), 'projects', { alias: 'p' })} order by p.name`
+		expect(names).toEqual([{ name: 'renamed' }, { name: 'two' }])
+		await reader.transaction.rollback()
+	})
+
+	test('a boolean, a bigint, a Date and a list bind as SQLite stores them; a list is JSON that json_each reads', async () => {
+		const reader = sqlInvocation('read', true)
+		const Bound = z.object({ flag: z.number(), big: z.number(), at: z.string(), listed: z.number() })
+		const at = new Date('2026-10-12T08:30:00.000Z')
+		expect(
+			await reader.sql(Bound)`select ${true} as flag, ${9007199254740991n} as big, ${at} as at,
+			(select count(*) from json_each(${['a', 'b"', 'c']})) as listed`,
+		).toEqual([{ flag: 1, big: 9007199254740991, at: at.toISOString(), listed: 3 }])
+		await expect(reader.sql(Bound)`select ${9007199254740993n} as big`).rejects.toThrow('a bigint outside the safe integer range')
+		await reader.transaction.rollback()
+	})
+
+	test('a statement SQLite refuses, and one the classifier refuses, fail the invocation: nothing it wrote commits', async () => {
+		const id = await insertProject({ name: 'kept' })
+		const writer = sqlInvocation('write', false)
+		await writer.transaction.enclose(async () => {
+			await writer.sql(z.object({}))`update projects set name = ${'changed'} where id = ${id}`
+			await writer.sql(z.object({}))`select * from sqlite_master`.catch(() => undefined)
+			await expect(writer.transaction.commit()).rejects.toThrow('a statement of this invocation failed')
+		}, HOLD)
+		expect(stored(`select name from projects where id = '${id}'`)).toEqual([{ name: 'kept' }])
+	})
+
+	test("a 'read' statement that writes in a writing invocation is refused and rolled back, past the classifier", async () => {
+		const id = await insertProject({ name: 'kept' })
+		const writer = sqlInvocation('read', false)
+		await writer.transaction.enclose(async () => {
+			const session = await writer.transaction.session()
+			// The classifier refuses this text on a 'read' site; the backstop is what holds for one it would miss.
+			const written = runApplicationStatement(session, `update projects set name = 'changed' where id = '${id}'`, [], 'read')
+			await expect(written).rejects.toMatchObject({ sqlState: '25006' })
+			expect(stored(`select name from projects where id = '${id}'`)).toEqual([{ name: 'kept' }])
+			const [count] = await writer.sql(z.object({ n: z.number() }))`select count(*) as n from projects where id = ${id}`
+			expect(count).toEqual({ n: 1 })
+			await expect(writer.transaction.commit()).rejects.toThrow('a statement of this invocation failed')
+		}, HOLD)
+		expect(stored(`select name from projects where id = '${id}'`)).toEqual([{ name: 'kept' }])
 	})
 })
