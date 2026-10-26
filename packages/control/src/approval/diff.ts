@@ -579,12 +579,14 @@ function compareDeclared(
 
 /**
  * The origins a site's code calls (`egress`): a new one is a place the site's data may go, so it widens with closer
- * review; a dropped one narrows. A job's `'public'` reaches every public origin, so beside it no origin is a change;
- * `reachSteps` shows the move to or from it.
+ * review; a dropped one narrows. Beside a job's `'public'`, which reaches every public origin, a dropped origin is no
+ * change, and `reachSteps` shows the move to it. Leaving `'public'` widens by every listed origin: the origin guard
+ * admits what public egress refuses (an IP address, a port, the installation's hosts, a name that resolves privately),
+ * so no listed origin is provably within it.
  */
 function egressChanges(site: string, before: DeclaredEgress, after: DeclaredEgress): RuledLine[] {
-	if (before === PUBLIC_EGRESS || after === PUBLIC_EGRESS) return []
-	const from: readonly string[] = before
+	if (after === PUBLIC_EGRESS) return []
+	const from: readonly string[] = before === PUBLIC_EGRESS ? [] : before
 	const to: readonly string[] = after
 	const name = siteName(site)
 	return ruled(
@@ -683,14 +685,14 @@ function reachSteps(from: DeclaredReach, to: DeclaredReach): RuledLine[] {
 
 /**
  * A job's `egress: 'public'` (ADR-0071): its code may send what it holds to any public host, wherever an operator, a row
- * or a page it fetched points it, so gaining it widens with closer review. Losing it narrows, and names the origins the
- * job calls instead. The guard keeps it off private addresses and the installation's own hosts, as listed at the
- * environment's deploy.
+ * or a page it fetched points it, so gaining it widens with closer review. Losing it narrows; `egressChanges` shows
+ * each origin the job calls instead as a widening of its own. The guard keeps it off private addresses and the
+ * installation's own hosts, as listed at the environment's deploy.
  */
 function publicEgressChange(from: DeclaredEgress | undefined, to: DeclaredEgress | undefined): Line[] {
 	if ((from === PUBLIC_EGRESS) === (to === PUBLIC_EGRESS)) return []
 	if (to === PUBLIC_EGRESS) return [closer('off-road', PUBLIC_EGRESS_LINE)]
-	return [narrowing(to === undefined ? 'no longer calls any public website' : `no longer calls any public website, only ${to.join(', ')}`)]
+	return [narrowing('no longer calls any public website')]
 }
 
 /** What a job with `egress: 'public'` reaches, as the approver reads it. */
