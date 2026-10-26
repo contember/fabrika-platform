@@ -26,6 +26,7 @@
 			"/api/*",
 			"/iam/admin/*",
 			"/operations/api/*",
+			"/platform/*",
 			"/webhooks/*",
 			"/webhooks",
 			"/mcp*"

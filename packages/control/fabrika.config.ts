@@ -131,7 +131,7 @@ export const buildControlApplicationWorker = (ctx: ResourceContext): Worker => {
 			// Workers Assets answers a GET before the Worker runs, and its SPA fallback would hand `index.html` to a
 			// browser navigation to a server path (the GitHub manifest handoff, the callback): the reserved prefixes
 			// of `fabrika.service.ts` always reach the Worker.
-			run_worker_first: ['/api/*', '/iam/admin/*', '/operations/api/*', '/webhooks/*', '/webhooks', `${CONTROL_MCP_PATH}*`],
+			run_worker_first: ['/api/*', '/iam/admin/*', '/operations/api/*', '/platform/*', '/webhooks/*', '/webhooks', `${CONTROL_MCP_PATH}*`],
 		},
 		vars: {
 			...controlEmailVars(isLocal),
