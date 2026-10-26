@@ -10,8 +10,20 @@ export class GitHubRequestError extends Error {
 	}
 }
 
-export function requestStatusError(status: number): GitHubRequestError {
-	return new GitHubRequestError(status)
+/**
+ * GitHub refused a request for its rate limit: a 429, or a 403 with no requests remaining. An unauthenticated limit is the
+ * caller's address's, which every tenant of a cloud's shared egress spends.
+ */
+export class GitHubRateLimitError extends GitHubRequestError {
+	constructor(status: number) {
+		super(status)
+		this.name = 'GitHubRateLimitError'
+	}
+}
+
+export function requestStatusError(status: number, headers?: Headers): GitHubRequestError {
+	const limited = status === 429 || (status === 403 && headers?.get('x-ratelimit-remaining') === '0')
+	return limited ? new GitHubRateLimitError(status) : new GitHubRequestError(status)
 }
 
 export function responseError(): Error {

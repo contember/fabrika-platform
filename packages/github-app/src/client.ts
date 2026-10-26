@@ -1,4 +1,4 @@
-import { configurationError, requestStatusError, responseError } from './errors'
+import { configurationError, GitHubRateLimitError, requestStatusError, responseError } from './errors'
 import { createRepositoryClient } from './repository'
 import type { GitHubRepositoryClient, GitHubRepositoryOpenRequest } from './repository-types'
 import { pemToPkcs8, signAppJwt } from './signing'
@@ -26,6 +26,8 @@ import {
 	validateWebhookSecret,
 } from './validation'
 
+/** Anonymous reads of the App's public page before a rate limit is the caller's answer. */
+const PUBLIC_APP_ATTEMPTS = 4
 const DEFAULT_API_BASE_URL = 'https://api.github.com'
 const DEFAULT_REQUEST_TIMEOUT_MS = 15_000
 const MAX_REQUEST_TIMEOUT_MS = 120_000
@@ -77,11 +79,26 @@ export class GitHubAppClient {
 		if (body === NOT_FOUND) throw responseError()
 		const identity = decodeAppIdentity(body)
 		if (identity === null || String(identity.id) !== this.appId) throw responseError()
-		const publicBody = await this.requestJson(`/apps/${identity.slug}`, {}, signal, true, false)
+		const publicBody = await this.publicApp(identity.slug, signal)
 		if (publicBody === NOT_FOUND) return { ...identity, public: false }
 		const publicIdentity = decodeAppIdentity(publicBody)
 		if (publicIdentity === null || !sameAppIdentity(identity, publicIdentity)) throw responseError()
 		return { ...identity, public: true }
+	}
+
+	/**
+	 * The App's public page, read without credentials: GitHub answers it only for a public App. The read is anonymous,
+	 * so it spends the caller's address's limit, which a Worker shares with every tenant of its egress; a refused read is
+	 * tried again, since the next one usually leaves from another address.
+	 */
+	private async publicApp(slug: string, signal?: AbortSignal): Promise<unknown | typeof NOT_FOUND> {
+		for (let attempt = 1;; attempt++) {
+			try {
+				return await this.requestJson(`/apps/${slug}`, {}, signal, true, false)
+			} catch (error) {
+				if (!(error instanceof GitHubRateLimitError) || attempt >= PUBLIC_APP_ATTEMPTS) throw error
+			}
+		}
 	}
 
 	/** Read the App webhook transport settings without exposing GitHub's masked secret field. */
@@ -240,7 +257,7 @@ export class GitHubAppClient {
 				return NOT_FOUND
 			}
 			if (!response.ok) {
-				throw requestStatusError(response.status)
+				throw requestStatusError(response.status, response.headers)
 			}
 			return await readBoundedJson(response, cancellation)
 		} finally {

@@ -1,6 +1,6 @@
 import { describe, expect, spyOn, test } from 'bun:test'
 import { generateKeyPairSync } from 'node:crypto'
-import { GitHubAppClient, type GitHubAppClientConfig, type GitHubAppFetch, GitHubRequestError, pemToPkcs8 } from '..'
+import { GitHubAppClient, type GitHubAppClientConfig, type GitHubAppFetch, GitHubRateLimitError, GitHubRequestError, pemToPkcs8 } from '..'
 
 const NOW = Date.UTC(2026, 7, 11, 10, 20, 30)
 const EXPIRES_AT = '2026-08-11T11:20:30.000Z'
@@ -261,6 +261,25 @@ describe('GitHubAppClient operator verification', () => {
 		expect(visibility.url).toBe('https://github.example/api/v3/apps/fabrika-test')
 		expect(new Headers(visibility.init?.headers).has('authorization')).toBe(false)
 		expect(visibility.init?.redirect).toBe('manual')
+	})
+
+	test('tries the anonymous public read again past a rate limit, which a shared egress address spends', async () => {
+		const limited = () => new Response(null, { status: 403, headers: { 'x-ratelimit-remaining': '0' } })
+		const capture = capturingFetch([Response.json(appIdentity()), limited(), new Response(null, { status: 429 }), new Response(null, { status: 404 })])
+		expect((await (await client(capture.fetch)).getAuthenticatedApp()).public).toBe(false)
+		expect(capture.requests.map((request) => new Headers(request.init?.headers).get('authorization') === null)).toEqual([false, true, true, true])
+
+		const exhausted = capturingFetch([Response.json(appIdentity()), limited(), limited(), limited(), limited()])
+		const raised = await errorOf((await client(exhausted.fetch)).getAuthenticatedApp())
+		expect(raised).toBeInstanceOf(GitHubRateLimitError)
+		expect(exhausted.requests).toHaveLength(5)
+
+		// A 403 with requests left is no rate limit: it is answered at once.
+		const refused = capturingFetch([Response.json(appIdentity()), new Response(null, { status: 403, headers: { 'x-ratelimit-remaining': '12' } })])
+		const plain = await errorOf((await client(refused.fetch)).getAuthenticatedApp())
+		expect(plain).toBeInstanceOf(GitHubRequestError)
+		expect(plain).not.toBeInstanceOf(GitHubRateLimitError)
+		expect(refused.requests).toHaveLength(2)
 	})
 
 	test('accepts an App with repository write authority and binds its public permissions', async () => {

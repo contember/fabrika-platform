@@ -1,4 +1,4 @@
-import type { GitHubAppIdentity, GitHubAppInstallation, GitHubAppWebhookConfig } from '@fabrika/github-app'
+import { type GitHubAppIdentity, type GitHubAppInstallation, type GitHubAppWebhookConfig, GitHubRateLimitError } from '@fabrika/github-app'
 import { describe, expect, test } from 'bun:test'
 import { createHarness } from '../../../__tests__/helpers/harness'
 import { Vault } from '../../../vault'
@@ -88,12 +88,27 @@ describe('GitHub App administration over vault-held keys', () => {
 
 	test.each([
 		{ name: 'another App id', app: identity({ id: 456 }) },
-		{ name: 'a user-owned App', app: identity({ owner: { login: 'someone', type: 'User' } }) },
 		{ name: 'extra events', app: identity({ events: ['push', 'pull_request'] }) },
 	])('refuses $name', async ({ app }) => {
 		const f = await fixture(client({ getAuthenticatedApp: async () => app }))
 		await expect(f.port.verifyApp({ credentialRef: f.credentialRef, connectionId: 'connection-1', signal: signal() })).rejects.toMatchObject({
 			code: 'credentials_invalid',
+			stage: 'credentials',
+		})
+	})
+
+	test('names an App GitHub made on a personal account, so the console says what to fix', async () => {
+		const f = await fixture(client({ getAuthenticatedApp: async () => identity({ owner: { login: 'someone', type: 'User' } }) }))
+		await expect(f.port.verifyApp({ credentialRef: f.credentialRef, connectionId: 'connection-1', signal: signal() })).rejects.toMatchObject({
+			code: 'app_owner_not_organization',
+			stage: 'credentials',
+		})
+	})
+
+	test("reads GitHub's rate limit as no verdict on the credentials", async () => {
+		const f = await fixture(client({ getAuthenticatedApp: () => Promise.reject(new GitHubRateLimitError(403)) }))
+		await expect(f.port.verifyApp({ credentialRef: f.credentialRef, connectionId: 'connection-1', signal: signal() })).rejects.toMatchObject({
+			code: 'rate_limited',
 			stage: 'credentials',
 		})
 	})
