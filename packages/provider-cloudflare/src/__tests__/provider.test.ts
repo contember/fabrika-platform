@@ -572,6 +572,13 @@ describe('Cloudflare provider', () => {
 		await expect(deploy(rec, platformBucket)).rejects.toThrow(
 			'R2 bucket `vozka-run-logs` becomes `stage-vozka-run-logs`, which would take over the Fabrika platform resource `vozka-run-logs`',
 		)
+
+		// Control's mail relay queue carries every relayed message; a consumer of it would read them all.
+		const platformMailQueue = config({
+			resources: () =>
+				new Worker({ dir: '.', ...PRIVATE, name: 'demo', compatibility_flags: [], bindings: { MAIL: new Queue({ name: 'vozka-mail' }) }, main: ENTRY }),
+		})
+		await expect(deploy(rec, platformMailQueue)).rejects.toThrow('which would take over the Fabrika platform resource `vozka-mail`')
 		expect(rec.provisions).toHaveLength(0)
 	})
 
