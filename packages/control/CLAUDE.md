@@ -27,13 +27,13 @@ bun run maintenance                                # the cron one-shot: repo pol
 Migration commands and the Postgres-backed test setup are in [`DATABASE.md`](./DATABASE.md).
 
 `wrangler.jsonc` is auto-generated from `oblaka.ts` — DO NOT edit it by hand.
-Its `migrations` array is the one exception: oblaka keeps whatever history the committed file holds, and it is the only
-record of the Durable Object history. The full list must replay on a fresh account, where wrangler applies every step
-from the first tag: a class is created before it is deleted (10074 otherwise). When oblaka removes a class, it also
-removes that class's creating migration, so put that migration back by hand, under its original tag. Tags that are
-already deployed are never renumbered or dropped. wrangler sends only the steps after the script's own tag, so this
-leaves an existing installation alone (v0002 creates `DeployLock`, v0004 deletes it). `src/__tests__/worker-migrations.test.ts`
-replays the list.
+Its `migrations` array is the only record of the Durable Object history, and the full list must replay on a fresh
+account, where wrangler applies every step from the first tag (deleting a class no earlier step created fails with
+10074). `src/__tests__/worker-migrations.test.ts` replays it. One historical repair: when `DeployLock` was removed, its
+creating step `v0002 new_sqlite_classes [DeployLock]` was lost; it was restored to match the file's git history, and
+oblaka keeps it on regeneration. Existing installations were unaffected: wrangler sends only the steps after the
+script's own tag. If a step is lost again, regenerate with `bun run oblaka` from a resource graph that keeps the
+history, and ask the owner.
 
 ## Two entrypoints, one body of code
 
