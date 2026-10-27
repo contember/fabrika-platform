@@ -98,7 +98,8 @@ function mailRelay(bindings: WorkerBindings): MailRelay | undefined {
 	if (relayByBindings.has(bindings)) return relayByBindings.get(bindings)
 	const relay = bindings.MAIL_QUEUE === undefined || bindings.MAIL_CONTENT === undefined ? undefined : {
 		queue: cfJobQueue(bindings.MAIL_QUEUE),
-		iamKeyHash: iamMailKeyHash(bindings.FABRIKA_IAM_PROVISIONING_KEY),
+		// Trimmed, as IAM's Worker trims it before deriving its key.
+		iamKeyHash: iamMailKeyHash(bindings.FABRIKA_IAM_PROVISIONING_KEY?.trim()),
 		sender: installationSender(bindings),
 	}
 	relayByBindings.set(bindings, relay)

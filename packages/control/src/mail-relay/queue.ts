@@ -31,13 +31,12 @@ export interface MailRelay {
 }
 
 /**
- * The hash of IAM's mail key, `installationMailKey` of the secret it derives from: `FABRIKA_IAM_RPC_KEY` in the Bun
- * process, the provisioning key on the Worker, whose IAM holds no RPC key. `null` for a blank or absent secret, so no
- * key authenticates as IAM. The relay keeps the hash, never the secret.
+ * The hash of IAM's mail key, `installationMailKey` of the secret it derives from, as IAM reads that secret:
+ * `FABRIKA_IAM_RPC_KEY` in the Bun process, the trimmed provisioning key on the Worker, whose IAM holds no RPC key.
+ * `null` for a blank or absent secret, so no key authenticates as IAM. The relay keeps the hash, never the secret.
  */
 export function iamMailKeyHash(secret: string | undefined): Promise<string> | null {
-	const trimmed = secret?.trim() ?? ''
-	return trimmed === '' ? null : installationMailKey(trimmed).then(hashPlatformKey)
+	return secret === undefined || secret.trim() === '' ? null : installationMailKey(secret).then(hashPlatformKey)
 }
 
 export function enqueueMailDispatch(queue: JobQueue<MailDispatchMessage>, messageId: string, delaySeconds = 0): Promise<void> {
