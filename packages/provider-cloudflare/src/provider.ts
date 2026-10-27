@@ -532,6 +532,15 @@ const stageAssets = async (env: StepEnv, assets: NonNullable<StepEnv['spaAssets'
 	env.run.log(`  staged ${staged} SPA files into ${SPA_ASSETS_DIRECTORY}: ${mounts}`)
 }
 
+/**
+ * The secrets stored for the environment that `fabrika.config.ts` does not name in `pipeline.secrets`, by name. The deploy
+ * writes only declared ones, so these never reach the Worker; the run log says so, as an author would otherwise wonder.
+ */
+export const undeclaredSecrets = (config: CloudflareAppConfig, run: Pick<CloudflareDeployRun, 'secrets'>): string[] => {
+	const declared = new Set(config.pipeline?.secrets ?? [])
+	return Object.keys(run.secrets).filter((name) => !declared.has(name)).sort()
+}
+
 const runStep = async (spec: CloudflareStep, env: StepEnv): Promise<void> => {
 	const { config, run, credentials, worker, dir, cf } = env
 	const { signal, dryRun } = run
@@ -587,6 +596,9 @@ const runStep = async (spec: CloudflareStep, env: StepEnv): Promise<void> => {
 			return
 		}
 		case 'deploy-worker': {
+			for (const name of undeclaredSecrets(config, run)) {
+				run.log(`  the secret ${name} is stored for this environment but not named in pipeline.secrets, so the Worker does not get it`)
+			}
 			const configs = env.generatedConfigs
 			// The configs oblaka wrote, not the generation checked before the run: a stateful binding can emit differently twice.
 			assertGeneratedConfigs(configs, env.bounds)

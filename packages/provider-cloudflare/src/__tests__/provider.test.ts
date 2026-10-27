@@ -374,6 +374,25 @@ describe('Cloudflare provider', () => {
 		expect(rec.commands[6]?.cwd).toBe(`${REPO}/app/worker`)
 	})
 
+	test('names a stored secret pipeline.secrets does not declare in the run log, never its value, and does not write it', async () => {
+		for (const secrets of [['API_KEY'], []]) {
+			rec = { commands: [], provisions: [], outcomes: [], reconciled: [], logs: [], provisionedVars: [], applicationVars: [] }
+			const app = config({
+				pipeline: { build: 'bun run build', secrets },
+				resources: () => new Worker({ dir: '.', ...PRIVATE, name: 'demo', compatibility_flags: [], main: ENTRY, bindings: {} }),
+			})
+			const result = await deploy(rec, app, { secrets: { API_KEY: 'api-key-value', FIO_TOKENS: 'fio-token-value' } })
+
+			expect(result.status).toBe('succeeded')
+			const undeclared = secrets.length === 0 ? ['API_KEY', 'FIO_TOKENS'] : ['FIO_TOKENS']
+			expect(rec.logs.filter((line) => line.includes('not named in pipeline.secrets'))).toEqual(
+				undeclared.map((name) => `  the secret ${name} is stored for this environment but not named in pipeline.secrets, so the Worker does not get it`),
+			)
+			expect(rec.logs.join('\n')).not.toContain('token-value')
+			expect(rec.commands.filter((command) => command.args[1] === 'put').map((command) => command.args[2])).toEqual(secrets)
+		}
+	})
+
 	test('loads the checkout config and preserves the canonical Cloudflare plan', async () => {
 		const app = config({
 			schema: { scopes: [], actions: [], roles: {}, contract: true },
