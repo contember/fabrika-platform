@@ -81,17 +81,18 @@ const emailVariableNames = (email: EmailTransportConfig, secret: boolean): strin
 	email.kind === 'none' ? [] : email.variables.filter((variable) => variable.secret === secret).map((variable) => variable.name)
 
 /**
- * `FABRIKA_CONTROL_URL` as an http(s) origin, or undefined when unset. The relay knows IAM by a key derived from the
- * provisioning key, so the origin without that key would leave IAM's mail refused.
+ * `FABRIKA_CONTROL_URL` as an https origin, or undefined when unset. IAM's Worker reaches Control across the internet
+ * with a key that sends mail past the relay's gate, so never in cleartext. The relay knows IAM by a key derived from the
+ * provisioning key, so the origin without that key would leave the relay unused.
  */
 const controlUrl = (source: EnvironmentSource): string | undefined => {
 	const raw = source['FABRIKA_CONTROL_URL']
 	if (raw === undefined || raw === '') return undefined
 	const url = URL.canParse(raw) ? new URL(raw) : undefined
-	if (url === undefined || (url.protocol !== 'https:' && url.protocol !== 'http:') || url.origin !== raw) {
-		throw new Error('FABRIKA_CONTROL_URL must be an http(s) origin, with no path and no trailing slash')
+	if (url === undefined || url.protocol !== 'https:' || url.origin !== raw) {
+		throw new Error('FABRIKA_CONTROL_URL must be an https origin, with no path and no trailing slash')
 	}
-	if (!source['FABRIKA_IAM_PROVISIONING_KEY']) {
+	if (!source['FABRIKA_IAM_PROVISIONING_KEY']?.trim()) {
 		throw new Error('FABRIKA_CONTROL_URL needs FABRIKA_IAM_PROVISIONING_KEY, which the mail relay authenticates IAM by')
 	}
 	return raw

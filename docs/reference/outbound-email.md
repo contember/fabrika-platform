@@ -391,8 +391,11 @@ When IAM has a provider configured and `FABRIKA_CONTROL_URL` is set, its sender 
   or the key, IAM sends with its own provider.
 
 The relay always passes IAM's mail and dispatches it with Control's copy of the
-transport. An `unknown` outcome then means only that the relay was unreachable. Without
-a provider, IAM keeps its manual action-link flow.
+transport. An `unknown` outcome then means only that the relay was unreachable. When
+the relay refuses a message for good, IAM sends it with its own provider
+([rollout](#rollout-of-an-existing-installation)); on the Worker an `http:` URL counts
+as such a refusal, so the key never crosses the internet in cleartext. Without a
+provider, IAM keeps its manual action-link flow.
 
 IAM owns its enrollment and reset templates, one-time action state, and delivery
 behavior. An installation without a sender uses an explicit manual action-link
@@ -741,13 +744,16 @@ Only `admin` holds them by default. The procedures (`controlRpc.mail`):
   with the release's CLI rewrites the workflow and dispatches it; IAM's
   `FABRIKA_EMAIL_*` stay.
 - Before the upgrade, give Control the same `FABRIKA_EMAIL_*` as IAM. Without a
-  transport, Control refuses IAM's messages with `mail_not_configured`.
-- IAM deploys before Control. Until Control runs the new release, IAM's messages
-  fail.
-- IAM offers the manual link only when it has no sender of its own. While the relay
-  refuses, an administrator's enrollment, reset or invitation answers 502
-  `password action email delivery failed`, and a self-service password reset shows
-  its usual answer while no mail leaves (backlog 194).
+  transport, Control refuses IAM's messages with `mail_not_configured`, and IAM sends
+  each one with its own provider.
+- IAM deploys before Control. Until Control runs the new release (a 404, or no key it
+  knows), and after the secret IAM's key derives from is rotated until Control holds
+  it too, IAM sends with its own provider and logs a warning per message
+  (`relayWithFallback`, `packages/iam/src/relay-mail.ts`). It falls back only on such a
+  definite refusal, or on its own relay settings being unusable; a timeout, a network
+  failure or another answer may have reached the relay, and fails the send as before:
+  an administrator's enrollment, reset or invitation answers 502
+  `password action email delivery failed`.
 - A provider's refusal of a relayed message shows in Control's Mail page, not in
   IAM's log.
 

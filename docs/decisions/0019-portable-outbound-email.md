@@ -225,8 +225,10 @@ with 404. Its senders reach it over the platform transport
 - **Senders.** An application environment on framework 0.7 (`<app>@<env>`, by its transport key), and IAM
   (`installation:iam`, by its derived key) on both clouds. IAM sends through the relay when it has an email provider
   configured and `FABRIKA_CONTROL_URL` is set (on Cloudflare also its provisioning key, which its key derives from);
-  otherwise it sends as before. Its manual action-link flow without a provider is
-  unchanged.
+  otherwise it sends as before. When the relay refuses a message for good (no such key, no transport, no relay, or
+  IAM's own relay settings unusable), IAM sends that message with its own provider, so sign-in mail survives IAM
+  deploying ahead of Control and a rotated secret reaching IAM first. It never falls back on an answer that may mean
+  the relay took the message. Its manual action-link flow without a provider is unchanged.
 - **Every message is a row.** The relay records the canonical request, its fingerprint, the sender, the recipient's
   domain, the rule that decided it and its state, with or without a provider. A repeat under the same key answers the
   first message id; other content under the key is `idempotency_conflict`. On the Worker the canonical request lives in
@@ -314,8 +316,8 @@ with 404. Its senders reach it over the platform transport
   hands IAM's deploy `FABRIKA_CONTROL_URL`. IAM's Worker holds no RPC key, so its mail key derives from the provisioning
   key, which both Workers hold as a secret ([ADR-0064](0064-applications-reach-the-platform-over-a-receiver-verified-transport-key.md)
   §3). A Worker without the queue or the bucket hands the set, and its applications send directly, as an older release on
-  Zerops does. IAM's messages to such a Worker are refused (404); the deploy that creates them is the Control stage of
-  the same workflow run.
+  Zerops does. Such a Worker answers IAM 404, and IAM sends with its own provider until the Control stage of the same
+  workflow run creates them.
 - **Rollout on Cloudflare.** A `fabrika.ref` bump does not rewrite the generated workflow. The operator bumps
   `fabrika.ref` to a release that holds Control's copy, then re-runs `fabrika platform init --provider=cloudflare` with
   that release's CLI, which refreshes `.github/workflows/platform.yml`; an older CLI writes the old workflow. Until

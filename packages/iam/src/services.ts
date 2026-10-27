@@ -7,6 +7,7 @@ import { type OAuthConfig, parseOAuthConfig } from './oauth-config'
 import { OidcClient } from './oidc'
 import { BUN_PBKDF2_COST, type PasswordHasher, WebCryptoPasswordHasher } from './password-crypto'
 import { passwordMinLengthFloor } from './password-minimum'
+import { relayWithFallback } from './relay-mail'
 import { parseRetention, type Retention } from './retention'
 
 /**
@@ -189,6 +190,8 @@ function buildEmailSender(env: Env, environment: string): EmailSender | null {
 		}
 		return env.EMAIL_SENDER
 	}
-	if (env.PLATFORM_EMAIL_SENDER !== undefined) return env.PLATFORM_EMAIL_SENDER
-	return emailSenderFromEnv(config, providers)
+	const direct = emailSenderFromEnv(config, providers)
+	// The provider stays the switch for delivery on both runtimes, and the relay's fallback for a refused message.
+	if (direct === null || env.PLATFORM_EMAIL_SENDER === undefined) return direct
+	return relayWithFallback(env.PLATFORM_EMAIL_SENDER, direct)
 }

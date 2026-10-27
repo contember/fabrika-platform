@@ -1,6 +1,7 @@
 // The platform transport's mail receiver: an application environment, or IAM, posts one message; the relay
 // authenticates the key, records the message under its idempotency key, decides the gate once, and queues it for the
-// dispatcher when it passes. Runtime-neutral, but only the Bun process hands it a `MailRelay`.
+// dispatcher when it passes. Runtime-neutral: the Bun process hands it a `MailRelay`, and so does the Worker when it
+// binds its queue and content bucket.
 
 import type { EmailMessage, EmailSenderCapabilities } from '@fabrika/email'
 import {
@@ -43,7 +44,7 @@ export interface MailAcceptDeps {
 	readonly messages: MailMessageRepository
 	readonly rules: MailRuleRepository
 	readonly queue: JobQueue<MailDispatchMessage>
-	/** `null`: IAM does not send through this relay, and no key authenticates as IAM. */
+	/** The secret IAM's key derives from (`MailRelay.installationSecret`); `null`: no key authenticates as IAM. */
 	readonly installationSecret: string | null
 	/** Whether Control has a mail transport; without one, every application message is held. */
 	readonly hasTransport: boolean
@@ -150,12 +151,25 @@ async function gate(deps: MailAcceptDeps, sender: string, domain: string): Promi
 /** The sender a key authenticates, or `null`. */
 async function authenticate(deps: MailAcceptDeps, bearer: string): Promise<string | null> {
 	const hash = await hashPlatformKey(bearer)
-	if (deps.installationSecret !== null && sameDigest(hash, await hashPlatformKey(await installationMailKey(deps.installationSecret)))) {
+	if (deps.installationSecret !== null && sameDigest(hash, await installationKeyHash(deps.installationSecret))) {
 		return INSTALLATION_IAM_SENDER
 	}
 	const key = await deps.keys.findValidByHash(hash, deps.now())
 	if (key === null || key.receiver !== MAIL_RECEIVER) return null
 	return `${key.app_id}@${key.env}`
+}
+
+/** The hash of IAM's key per installation secret, derived once: the secret changes only with a new deploy. */
+const installationKeyHashes = new Map<string, Promise<string>>()
+
+function installationKeyHash(secret: string): Promise<string> {
+	const known = installationKeyHashes.get(secret)
+	if (known !== undefined) return known
+	const derived = installationMailKey(secret).then(hashPlatformKey)
+	installationKeyHashes.set(secret, derived)
+	// A failed derivation is not kept: the next request derives it again.
+	derived.catch(() => installationKeyHashes.delete(secret))
+	return derived
 }
 
 /** Compares two hex digests of equal length without stopping at the first difference. */

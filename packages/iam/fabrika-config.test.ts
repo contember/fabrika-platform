@@ -289,16 +289,19 @@ describe('IAM resource graph', () => {
 		expect(JSON.stringify(worker.options)).not.toContain('px_provisioning')
 		expect(buildPropustkaWorker({ env: 'prod', domain: REMOTE_DOMAIN }, REMOTE_SOURCE).options.vars?.['FABRIKA_CONTROL_URL']).toBeUndefined()
 
-		for (const url of ['control.example.com', 'https://control.example.com/', 'https://control.example.com/platform', 'ftp://control.example.com']) {
+		const refused = ['control.example.com', 'https://control.example.com/', 'https://control.example.com/platform', 'http://control.example.com']
+		for (const url of refused) {
 			expect(() => buildPropustkaWorker({ env: 'prod', domain: REMOTE_DOMAIN }, { ...relayed, FABRIKA_CONTROL_URL: url })).toThrow(
-				'FABRIKA_CONTROL_URL must be an http(s) origin',
+				'FABRIKA_CONTROL_URL must be an https origin',
 			)
 		}
 		const keyless = { ...relayed }
 		delete keyless['FABRIKA_IAM_PROVISIONING_KEY']
-		expect(() => buildPropustkaWorker({ env: 'prod', domain: REMOTE_DOMAIN }, keyless)).toThrow(
-			'FABRIKA_CONTROL_URL needs FABRIKA_IAM_PROVISIONING_KEY',
-		)
+		for (const source of [keyless, { ...relayed, FABRIKA_IAM_PROVISIONING_KEY: ' \n' }]) {
+			expect(() => buildPropustkaWorker({ env: 'prod', domain: REMOTE_DOMAIN }, source)).toThrow(
+				'FABRIKA_CONTROL_URL needs FABRIKA_IAM_PROVISIONING_KEY',
+			)
+		}
 	})
 
 	test('remote secrets are required but never enter plaintext Worker vars', () => {

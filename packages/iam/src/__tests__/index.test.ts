@@ -612,6 +612,21 @@ describe('the IAM Worker environment', () => {
 		}])
 	})
 
+	test('never sends the relay key over an http origin: the message goes out with its own provider', async () => {
+		const urls: string[] = []
+		const answer = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+			urls.push(new Request(input, init).url)
+			return Promise.resolve(Response.json({ id: 'resend-message-1' }))
+		}
+		spyOn(globalThis, 'fetch').mockImplementation(Object.assign(answer, { preconnect: fetch.preconnect }))
+		spyOn(console, 'warn').mockImplementation(() => {})
+		const env = iamEnv({ ...workerBindings(freshDb()), ...RELAYED, FABRIKA_CONTROL_URL: 'http://control.example.com' })
+		const message = { to: 'ada@example.com', subject: 'Reset', text: 'Open the link', idempotencyKey: 'iam-reset-2' }
+
+		expect(await buildServices(env).email?.send(message, AbortSignal.timeout(5_000))).toMatchObject({ provider: 'resend' })
+		expect(urls).toEqual(['https://api.resend.com/emails'])
+	})
+
 	test("keeps its provider's sender without Control's origin or the provisioning key, and has none without a provider", () => {
 		const withoutUrl = { ...RELAYED, FABRIKA_CONTROL_URL: '' }
 		const withoutKey = { ...RELAYED, FABRIKA_IAM_PROVISIONING_KEY: '' }

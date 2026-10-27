@@ -179,8 +179,9 @@ only: it reads the bound workspace's files between two heads, and nothing else.
    generated workflow that passes its deploy `FABRIKA_CONTROL_URL` (`https://` and the GitHub Environment's
    `FABRIKA_CONTROL_DOMAIN`, which `init` always writes). A `fabrika.ref` bump keeps the old workflow, so IAM keeps
    sending directly until the operator re-runs `fabrika platform init --provider=cloudflare` with the release's CLI,
-   which rewrites the workflow and dispatches it. That run deploys IAM before Control: on the first one, IAM's messages
-   are refused until Control's stage finishes, as on Zerops.
+   which rewrites the workflow and dispatches it. That run deploys IAM before Control: until Control's stage finishes,
+   the relay refuses IAM's key, and IAM sends with its own provider, on both clouds
+   ([ADR-0019](0019-portable-outbound-email.md) §8).
 2. **Environment variables.** An existing application environment converges at its next deploy. A 0.7 release gets
    `FABRIKA_EMAIL_PROVIDER=platform` and the `FABRIKA_PLATFORM_MAIL_*` pair, and the deploy removes the provider's
    variables, which it no longer hands. The key is sensitive and cannot be read back, so every deploy writes it.

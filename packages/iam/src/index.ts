@@ -50,8 +50,8 @@ import type {
 	RevokeMemberResult,
 	TerminalFailure,
 } from '@fabrika/auth-core'
-import { type EmailSender, pickEmailEnvironment } from '@fabrika/email'
-import { installationMailKey, PLATFORM_MAIL_CAPABILITIES, PlatformEmailSender } from '@fabrika/email/platform'
+import { EmailDeliveryError, type EmailSender, pickEmailEnvironment } from '@fabrika/email'
+import { installationMailSender, PLATFORM_MAIL_CAPABILITIES } from '@fabrika/email/platform'
 import { builtinEmailProviders } from '@fabrika/email/providers'
 import { WorkerEntrypoint } from 'cloudflare:workers'
 import { createIamApp } from './app'
@@ -107,29 +107,27 @@ export interface WorkerBindings extends
 const relayByBindings = new WeakMap<WorkerBindings, EmailSender | undefined>()
 
 /**
- * The sender to Control's mail relay, when IAM knows Control's origin, holds the provisioning key and has delivery
- * switched on by a provider, as on Zerops. The relay knows IAM by `installationMailKey` of the provisioning key, the
- * secret both Workers hold (Zerops derives it from `FABRIKA_IAM_RPC_KEY`, which a Cloudflare installation has none of).
- * The key is derived on the first send, since deriving it is asynchronous.
+ * The sender to Control's mail relay, when IAM knows Control's origin and holds the provisioning key; `buildServices`
+ * uses it only while a provider is configured, as on Zerops. The relay knows IAM by `installationMailKey` of the
+ * provisioning key, the secret both Workers hold (Zerops derives it from `FABRIKA_IAM_RPC_KEY`, which a Cloudflare
+ * installation has none of).
  */
 function relaySender(bindings: WorkerBindings): EmailSender | undefined {
 	if (relayByBindings.has(bindings)) return relayByBindings.get(bindings)
-	const url = bindings.FABRIKA_CONTROL_URL ?? ''
+	const url = bindings.FABRIKA_CONTROL_URL?.trim() ?? ''
 	const secret = bindings.FABRIKA_IAM_PROVISIONING_KEY?.trim() ?? ''
-	const provider = bindings['FABRIKA_EMAIL_PROVIDER'] ?? ''
-	let sender: EmailSender | undefined
-	if (url !== '' && secret !== '' && provider !== '' && provider !== 'none') {
-		let relay: Promise<PlatformEmailSender> | undefined
-		sender = {
-			capabilities: PLATFORM_MAIL_CAPABILITIES,
-			async send(message, signal) {
-				relay ??= installationMailKey(secret).then((key) => new PlatformEmailSender({ url, key }))
-				return (await relay).send(message, signal)
-			},
-		}
-	}
+	const sender = url === '' || secret === '' ? undefined : url.startsWith('https://') ? installationMailSender({ url, secret }) : cleartextRelay
 	relayByBindings.set(bindings, sender)
 	return sender
+}
+
+/**
+ * What a Worker does with an `http:` Control origin (the deploy refuses one; a var edited by hand can still be one): it
+ * never sends the relay key in cleartext across the internet, and the refusal sends the message with IAM's own provider.
+ */
+const cleartextRelay: EmailSender = {
+	capabilities: PLATFORM_MAIL_CAPABILITIES,
+	send: () => Promise.reject(new EmailDeliveryError('Platform mail URL is not an https origin', { code: 'invalid_configuration' })),
 }
 
 /** Present native Worker bindings as the runtime-neutral IAM environment. */

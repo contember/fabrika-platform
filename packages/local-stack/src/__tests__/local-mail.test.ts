@@ -5,7 +5,7 @@
 
 import { readEmailTransportConfig } from '@fabrika/email'
 import type { CapturedEmail } from '@fabrika/email/directory'
-import { PlatformEmailSender } from '@fabrika/email/platform'
+import { PLATFORM_MAIL_CAPABILITIES } from '@fabrika/email/platform'
 import { createRuntime } from '@fabrika/iam/node/runtime'
 import { describe, expect, test } from 'bun:test'
 import { relative, resolve } from 'node:path'
@@ -63,7 +63,7 @@ describe("the composition's mail transport", () => {
 			FABRIKA_IAM_RPC_KEY: 'rpc-key-with-at-least-thirty-two-characters',
 		}, { emailProviders: LOCAL_EMAIL_PROVIDERS })
 		try {
-			expect(runtime.env.PLATFORM_EMAIL_SENDER).toBeInstanceOf(PlatformEmailSender)
+			expect(runtime.env.PLATFORM_EMAIL_SENDER?.capabilities).toBe(PLATFORM_MAIL_CAPABILITIES)
 		} finally {
 			await runtime.shutdown()
 		}

@@ -7,7 +7,13 @@ import {
 	type EmailSenderCapabilities,
 } from './email.js'
 import { parseTimeout, postToProvider } from './http.js'
-import { encodePlatformMailRequest, parsePlatformMailAnswer, PLATFORM_MAIL_CAPABILITIES, PLATFORM_MAIL_SEND_PATH } from './platform-wire.js'
+import {
+	encodePlatformMailRequest,
+	installationMailKey,
+	parsePlatformMailAnswer,
+	PLATFORM_MAIL_CAPABILITIES,
+	PLATFORM_MAIL_SEND_PATH,
+} from './platform-wire.js'
 import { isVisibleAscii, validateEmailAttachments, validateEmailBroadcast, validateEmailMessage } from './validation.js'
 
 export {
@@ -96,6 +102,42 @@ export class PlatformEmailSender implements EmailSender {
 			})
 		}
 		return { status: 'accepted', provider: 'platform', messageId: answer.messageId }
+	}
+}
+
+export interface InstallationMailSenderOptions {
+	/** Control's http(s) origin; the send path is appended to it. */
+	readonly url: string
+	/** The secret the service shares with Control, which its key derives from (`installationMailKey`). */
+	readonly secret: string
+	readonly fetch?: EmailFetch
+	readonly timeoutMs?: number
+}
+
+/**
+ * An installation service's sender to Control's relay: a `PlatformEmailSender` under `installationMailKey(secret)`,
+ * built at the first send because deriving the key is asynchronous. A send that cannot build it (a URL that is not an
+ * origin, a secret that is not usable) throws and keeps nothing, so the next send builds it again.
+ */
+export function installationMailSender(options: InstallationMailSenderOptions): EmailSender {
+	let sender: Promise<PlatformEmailSender> | undefined
+	return {
+		capabilities: PLATFORM_MAIL_CAPABILITIES,
+		async send(message, signal) {
+			sender ??= installationMailKey(options.secret).then((key) =>
+				new PlatformEmailSender({
+					url: options.url,
+					key,
+					...(options.fetch === undefined ? {} : { fetch: options.fetch }),
+					...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+				})
+			)
+			const ready = await sender.catch((error: unknown) => {
+				sender = undefined
+				throw error
+			})
+			return ready.send(message, signal)
+		},
 	}
 }
 
