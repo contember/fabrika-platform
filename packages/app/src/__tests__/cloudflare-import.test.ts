@@ -143,18 +143,21 @@ function ddlOf(storage: SqliteStorage): OpsDumpSchemaEntry[] {
 	})
 }
 
-/** A table's rows in keyset order, each its rowid then its columns, read with the producer's projection. */
+/**
+ * A table's rows in keyset order, each its rowid then its columns, read with the producer's projection one column at a
+ * time, so a table at workerd's column limit reads too, independently of how the producer splits its statements.
+ */
 function tableRows(storage: SqliteStorage, table: OpsDumpTablePlan): (readonly OpsDumpValue[])[] {
 	const keyset = `"${table.keyset}"`
-	const projections = table.columns.map((column) => opsDumpColumnProjection(column)).join(', ')
-	const names = table.columns.flatMap((_, index) => [`t${index}`, `v${index}`]).join(', ')
 	// Qualified, so a table named `page` is not the CTE itself.
 	const source = `main."${table.name}"`
-	return storage.sql.exec(
-		`WITH page(k, ${names}) AS (SELECT CAST(${keyset} AS TEXT), ${projections} FROM ${source} ORDER BY ${keyset}) SELECT * FROM page`,
-	).toArray().map((
-		row,
-	) => [readOpsDumpValue('integer', row['k']), ...table.columns.map((_, index) => readOpsDumpValue(row[`t${index}`], row[`v${index}`]))])
+	const read = (projection: string, names: string) =>
+		storage.sql.exec(`WITH page(${names}) AS (SELECT ${projection} FROM ${source} ORDER BY ${keyset}) SELECT * FROM page`).toArray()
+	const columns = table.columns.map((column) => read(opsDumpColumnProjection(column), 't, v'))
+	return read(`CAST(${keyset} AS TEXT)`, 'k').map((row, index) => [
+		readOpsDumpValue('integer', row['k']),
+		...columns.map((rows) => readOpsDumpValue(rows[index]?.['t'], rows[index]?.['v'])),
+	])
 }
 
 function planOf(storage: SqliteStorage): readonly OpsDumpTablePlan[] {
@@ -988,6 +991,30 @@ describe('values and ranges', () => {
 
 		expect(await importAll(target)).toEqual([...manifest.tables])
 		expect(one(target.storage, 'SELECT count(*) FROM page')).toBe(2)
+	})
+
+	test("a table at workerd's 100 columns without an INTEGER PRIMARY KEY: read in several statements, loaded by its rowid", async () => {
+		// Each column reads as two result columns, and a row loads with its rowid beside every column: both past the limit.
+		const columns = Array.from({ length: 100 }, (_, index) => `c${index}`)
+		const migrations = release([...APP_MIGRATIONS, { name: '0004_wide.sql', sql: `CREATE TABLE wide (${columns.join(', ')});` }])
+		const { storage } = objectStorage()
+		await migrateSqlite(
+			{ exec: (query, ...bindings) => storage.sql.exec(query, ...bindings), transactionSync: (fn) => storage.transactionSync(fn) },
+			migrations,
+		)
+		const values = columns.map((_, index) => [`${index}`, `'t${index}'`, `${index}.5`, `x'0${index % 10}'`][index % 4])
+		storage.sql.exec(`INSERT INTO wide (rowid, ${columns.join(', ')}) VALUES (5, ${values.join(', ')})`)
+		storage.sql.exec(`INSERT INTO wide (rowid, c99) VALUES (9, 'last')`)
+		const objects = new Map<string, Uint8Array>()
+		const manifest = writeDump(objects, storage)
+		const target = freshTarget(objects, { migrations })
+
+		expect(await importAll(target)).toEqual([...manifest.tables])
+		expect(tablesOf(target.storage)).toEqual(tablesOf(storage))
+		expect(target.storage.sql.exec('SELECT rowid, c0, c49, c50, c98, c99 FROM wide ORDER BY rowid').toArray()).toEqual([
+			{ rowid: 5, c0: 0, c49: 't49', c50: 50.5, c98: 98.5, c99: new Uint8Array([9]).buffer },
+			{ rowid: 9, c0: null, c49: null, c50: null, c98: null, c99: 'last' },
+		])
 	})
 
 	test('a range R2 answers short is refused', async () => {

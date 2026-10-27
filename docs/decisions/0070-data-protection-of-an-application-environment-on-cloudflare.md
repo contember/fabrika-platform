@@ -65,7 +65,11 @@ restore.
    schema it cannot dump, starts the multipart upload of the data object, and answers the upload id and the object's
    bookmark (`getCurrentBookmark()`).
 2. **`part`** _n_ starts at a cursor and reads keyset pages of at most 1 000 rows, table after table in load order. It
-   writes each row as one line, compresses the lines into one gzip member, and uploads it as part _n_. A retried step
+   writes each row as one line, compresses the lines into one gzip member, and uploads it as part _n_. workerd's
+   SQLite answers at most 100 result columns and each column reads as two, so a page of a table wider than 49 columns
+   reads in several statements over the same rows, in one synchronous turn (`readOpsDumpPage`, which the importer's
+   verification reads with too); a row loads with its rowid inline, so a table at 100 columns binds no more than 100
+   parameters. A retried step
    replaces its part. It answers the part's size, SHA-256 and ETag, every table it finished with its row count and
    hash, and the cursor where the next part starts. An answer with a next cursor whose part is not exactly 8 MiB does
    not parse.

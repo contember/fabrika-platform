@@ -729,6 +729,23 @@ describe('reading a table', () => {
 			hash: foldOpsTableHash(OPS_EMPTY_TABLE_HASH, rows),
 		})
 	})
+
+	test("a table at workerd's 100 columns, two result columns each, dumps in several statements over the same rows", async () => {
+		const target = await harness()
+		const columns = Array.from({ length: 100 }, (_, index) => `c${index}`)
+		target.database.run(`CREATE TABLE wide (${columns.join(', ')})`)
+		const values = columns.map((_, index) => [`${index}`, `'t${index}'`, `${index}.5`, `x'0${index % 10}'`][index % 4])
+		target.database.run(`INSERT INTO wide (rowid, ${columns.join(', ')}) VALUES (5, ${values.join(', ')})`)
+		target.database.run(`INSERT INTO wide (rowid, c99) VALUES (9, 'last')`)
+		const { manifest } = await dump(target, consistent)
+		const rows = directRows(target, 'wide')
+		expect(rows).toHaveLength(2)
+		expect(manifest.tables.find((table) => table.name === 'wide')).toEqual({
+			name: 'wide',
+			rows: 2,
+			hash: foldOpsTableHash(OPS_EMPTY_TABLE_HASH, rows),
+		})
+	})
 })
 
 describe('the schema rule reads clauses as the importer does', () => {

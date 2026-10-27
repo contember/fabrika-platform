@@ -15,12 +15,11 @@ import {
 	OPS_EMPTY_TABLE_HASH,
 	OPS_STALE_STATUS,
 	type OpsDataRefusal,
-	opsDumpColumnProjection,
 	type OpsDumpCursor,
+	type OpsDumpPageRow,
 	type OpsDumpSchemaEntry,
 	type OpsDumpTable,
 	type OpsDumpTablePlan,
-	type OpsDumpValue,
 	opsDumpValueBinding,
 	type OpsExportBegin,
 	type OpsExportComplete,
@@ -33,7 +32,7 @@ import {
 	parseOpsExportCompleteAck,
 	parseOpsExportPartAck,
 	planOpsDump,
-	readOpsDumpValue,
+	readOpsDumpPage,
 	sha256Hex,
 } from '@fabrika/auth-core'
 import type { SqliteValue } from '@fabrika/db/sqlite'
@@ -428,29 +427,10 @@ function rowBounds(storage: Storage, table: OpsDumpTablePlan, after: string | nu
 	})
 }
 
-interface ReadValues {
-	readonly rowid: string
-	readonly values: readonly OpsDumpValue[]
-}
-
-/**
- * The next `limit` rows: each its rowid as decimal text, then the rowid and every column through the wire's projection.
- * The column-name list of the common table expression names every result column, which an expression alone does not.
- */
-function readRows(storage: Storage, table: OpsDumpTablePlan, after: string | null, limit: number): ReadValues[] {
-	const keyset = quoted(table.keyset)
-	const names = ['k', 'r', ...table.columns.flatMap((_, index) => [`t${index}`, `v${index}`])]
-	const projections = [keyset, `CAST(${keyset} AS TEXT)`, ...table.columns.map(opsDumpColumnProjection)]
+/** The next `limit` rows: each its rowid as decimal text, then the rowid and every column through the wire's projection. */
+function readRows(storage: Storage, table: OpsDumpTablePlan, after: string | null, limit: number): OpsDumpPageRow[] {
 	const condition = keysetCondition(table, after)
-	const query = `WITH page(${names.join(', ')}) AS (SELECT ${projections.join(', ')} FROM ${source(table)} ${condition.sql}
-		ORDER BY ${keyset} LIMIT ${limit}) SELECT ${names.slice(1).join(', ')} FROM page ORDER BY k`
-	return storage.sql.exec(query, ...condition.bindings).toArray().map((row) => {
-		const rowid = readOpsDumpValue('integer', row['r'])
-		if (rowid === null || rowid.type !== 'integer') {
-			throw new Error('a rowid reads as an integer')
-		}
-		return { rowid: rowid.value, values: [rowid, ...table.columns.map((_, index) => readOpsDumpValue(row[`t${index}`], row[`v${index}`]))] }
-	})
+	return readOpsDumpPage((query) => storage.sql.exec(query, ...condition.bindings).toArray(), table, condition.sql, limit)
 }
 
 /** The tables a part finished, with their counts and hashes, and the cursor where the next part starts. */

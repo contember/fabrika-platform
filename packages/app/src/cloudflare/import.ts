@@ -19,10 +19,10 @@ import {
 	type OpsDataRefusal,
 	type OpsDataRefusalReason,
 	type OpsDumpBinding,
-	opsDumpColumnProjection,
 	type OpsDumpCursor,
 	type OpsDumpLine,
 	type OpsDumpManifest,
+	opsDumpRowidSql,
 	type OpsDumpSchema,
 	type OpsDumpSchemaColumn,
 	type OpsDumpSchemaEntry,
@@ -48,7 +48,7 @@ import {
 	parseOpsImportVerifyAck,
 	planOpsDump,
 	readOpsDumpManifest,
-	readOpsDumpValue,
+	readOpsDumpPage,
 	sha256Hex,
 } from '@fabrika/auth-core'
 import type { SqliteStorage, SqliteValue } from '@fabrika/db/sqlite'
@@ -330,9 +330,11 @@ async function loadPart(target: ImportTarget, source: OpsDumpSource, manifest: O
 /** Writes one row; answers whether it has a deferred key for the link pass to set. */
 function insertRow(storage: SqliteStorage, table: OpsDumpTablePlan, row: readonly OpsDumpValue[]): boolean {
 	const [rowid, ...values] = row
-	const key = opsDumpValueBinding(rowid ?? null)
+	// Inline, so a row of a table at workerd's column limit binds no more parameters than its columns.
+	const key = opsDumpRowidSql(rowid ?? null)
 	const columns: string[] = [table.keyset]
-	const bindings = [key]
+	const keys: string[] = [key]
+	const bindings: OpsDumpBinding[] = []
 	let waits = false
 	for (const [index, column] of table.columns.entries()) {
 		const value = values[index] ?? null
@@ -342,16 +344,18 @@ function insertRow(storage: SqliteStorage, table: OpsDumpTablePlan, row: readonl
 		}
 		const deferred = table.deferred.includes(column)
 		waits ||= deferred && value !== null
+		const binding = opsDumpValueBinding(deferred ? null : value)
 		columns.push(column)
-		bindings.push(opsDumpValueBinding(deferred ? null : value))
+		keys.push(binding.sql)
+		bindings.push(binding)
 	}
 	if (table.name === SQLITE_SEQUENCE) {
 		// Loading an AUTOINCREMENT table writes its own counter row; the source's row replaces it, whichever table loads first.
 		const name = opsDumpValueBinding(values[0] ?? null)
-		storage.sql.exec(`DELETE FROM ${SQLITE_SEQUENCE} WHERE rowid = ${key.sql} OR name = ${name.sql}`, ...params([key, name]))
+		storage.sql.exec(`DELETE FROM ${SQLITE_SEQUENCE} WHERE rowid = ${key} OR name = ${name.sql}`, ...params([name]))
 	}
 	storage.sql.exec(
-		`INSERT INTO ${quote(table.name)} (${columns.map(quote).join(', ')}) VALUES (${bindings.map((binding) => binding.sql).join(', ')})`,
+		`INSERT INTO ${quote(table.name)} (${columns.map(quote).join(', ')}) VALUES (${keys.join(', ')})`,
 		...params(bindings),
 	)
 	return waits
@@ -396,12 +400,11 @@ async function linkPart(target: ImportTarget, source: OpsDumpSource, manifest: O
 				continue
 			}
 			const sets = deferred.map(({ column, value }) => ({ column, binding: opsDumpValueBinding(value) }))
-			const key = opsDumpValueBinding(rowid ?? null)
 			storage.sql.exec(
 				`UPDATE ${quote(table.name)} SET ${sets.map(({ column, binding }) => `${quote(column)} = ${binding.sql}`).join(', ')} WHERE ${
 					quote(table.keyset)
-				} = ${key.sql}`,
-				...params([...sets.map(({ binding }) => binding), key]),
+				} = ${opsDumpRowidSql(rowid ?? null)}`,
+				...params(sets.map(({ binding }) => binding)),
 			)
 			linked++
 		}
@@ -495,20 +498,9 @@ function cursorKey(cursor: OpsDumpCursor): string {
 
 /** One keyset page of `table` after the rowid `after`: each row its rowid, then its columns, as the producer reads them. */
 function readPage(storage: SqliteStorage, table: OpsDumpTablePlan, after: string | null): (readonly OpsDumpValue[])[] {
-	const keyset = quote(table.keyset)
-	// The CTE names each projected column, so no two result columns share a name whatever the table's columns are called.
-	const names = table.columns.flatMap((_, index) => [`t${index}`, `v${index}`])
-	const select = [keyset, `CAST(${keyset} AS TEXT)`, ...table.columns.map((column) => opsDumpColumnProjection(column))].join(', ')
-	const where = after === null ? '' : ` WHERE ${keyset} > CAST(? AS INTEGER)`
-	// Qualified, so a table named `page` is not the CTE itself.
-	const query =
-		`WITH page(r, k, ${names.join(', ')}) AS (SELECT ${select} FROM main.${quote(table.name)}${where} ORDER BY ${keyset} LIMIT ${OPS_DUMP_PAGE_ROWS}) `
-		+ `SELECT k, ${names.join(', ')} FROM page ORDER BY r`
-	const rows = after === null ? storage.sql.exec(query).toArray() : storage.sql.exec(query, after).toArray()
-	return rows.map((row) => [
-		readOpsDumpValue('integer', row['k']),
-		...table.columns.map((_, index) => readOpsDumpValue(row[`t${index}`], row[`v${index}`])),
-	])
+	const condition = after === null ? '' : `WHERE ${quote(table.keyset)} > CAST(? AS INTEGER)`
+	const query = (sql: string) => after === null ? storage.sql.exec(sql).toArray() : storage.sql.exec(sql, after).toArray()
+	return readOpsDumpPage(query, table, condition, OPS_DUMP_PAGE_ROWS).map((row) => row.values)
 }
 
 /**
