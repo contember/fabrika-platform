@@ -60,15 +60,7 @@ import { applicationMigrations } from '../build'
 import { type ApplicationState, createContractWorker, FabrikaApplication } from '../cloudflare'
 import { TICK_HEADER } from '../cloudflare/application'
 import { exportStep } from '../cloudflare/export'
-import {
-	checkNamesOf,
-	describeDumpSchema,
-	IMPORT_MARKER_KEY,
-	importStep,
-	type ImportStorage,
-	type ImportTarget,
-	serveImport,
-} from '../cloudflare/import'
+import { describeDumpSchema, IMPORT_MARKER_KEY, importStep, type ImportStorage, type ImportTarget, serveImport } from '../cloudflare/import'
 import { MaintenanceBarrier } from '../cloudflare/maintenance'
 import { CLOUDFLARE_FILES_BINDING } from '../cloudflare/names'
 import { OPS_ENDPOINT, type OpsTarget } from '../cloudflare/ops'
@@ -1035,26 +1027,6 @@ describe('values and ranges', () => {
 
 		expect(await refusal(target, { ...scope(), step: 'part', part: 1 })).toEqual({ refused: 'part_mismatch', table: null })
 		expect(one(target.storage, 'SELECT count(*) FROM employees')).toBe(0)
-	})
-})
-
-describe('the names a CHECK reads', () => {
-	test('every word and quoted identifier inside each CHECK, lowercase; a string literal and a comment name nothing', () => {
-		expect(
-			checkNamesOf(`CREATE TABLE t (a TEXT CHECK (a IN ('B', 'c')), "Q""x" INT, [w] INT, CONSTRAINT k CHECK ("Q""x" > [w] AND \`Z\` /* y */ > 0))`),
-		)
-			.toEqual(['a', 'in', 'q"x', 'w', 'and', 'z', '0'])
-		expect(checkNamesOf('CREATE TABLE t (n INTEGER CHECK (abs(n) < (10 + m)), m INTEGER) -- CHECK (z)')).toEqual(['abs', 'n', '10', 'm'])
-	})
-
-	test('a column named check, or the word in a string, is no CHECK', () => {
-		expect(checkNamesOf(`CREATE TABLE t ("check" TEXT DEFAULT 'CHECK (a)', [check] INT, check_kind TEXT)`)).toEqual([])
-	})
-
-	test('text that does not scan names every column', () => {
-		for (const sql of ["CREATE TABLE t (a TEXT CHECK (a = 'x)", 'CREATE TABLE t (a TEXT CHECK (a > (0)', 'CREATE TABLE t (a /* open']) {
-			expect(checkNamesOf(sql)).toBeNull()
-		}
 	})
 })
 

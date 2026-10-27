@@ -3,7 +3,9 @@
 import { Database } from 'bun:sqlite'
 import { describe, expect, test } from 'bun:test'
 import {
+	checkNamesOf,
 	decodeOpsDumpLine,
+	describeOpsDumpSchema,
 	encodeOpsDumpLine,
 	encodeOpsDumpRow,
 	foldOpsTableHash,
@@ -526,5 +528,35 @@ describe("a page read stays within workerd's column limit", () => {
 		expect(() => opsDumpRowidSql({ type: 'integer', value: "1' OR 1 = 1 --" })).toThrow()
 		expect(() => opsDumpRowidSql({ type: 'text', value: '31' })).toThrow()
 		expect(() => opsDumpRowidSql(null)).toThrow()
+	})
+})
+
+describe('the names a CHECK reads', () => {
+	test('a reader over bun:sqlite, as the checker runs it, plans a self-reference beside CHECKs on other columns', () => {
+		const db = database(`CREATE TABLE invoices (id TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN ('invoice', 'proforma')),
+			proforma_id TEXT REFERENCES invoices (id) ON DELETE SET NULL)`)
+		const schema = describeOpsDumpSchema((query, ...bindings) => db.query<Record<string, unknown>, string[]>(query).all(...bindings))
+		expect(schema.tables[0]?.checkNames).toEqual(['kind', 'in'])
+		expect(planOpsDump(schema)).toEqual({
+			tables: [{ name: 'invoices', keyset: 'rowid', columns: ['id', 'kind', 'proforma_id'], deferred: ['proforma_id'] }],
+		})
+	})
+
+	test('every word and quoted identifier inside each CHECK, lowercase; a string literal and a comment name nothing', () => {
+		expect(
+			checkNamesOf(`CREATE TABLE t (a TEXT CHECK (a IN ('B', 'c')), "Q""x" INT, [w] INT, CONSTRAINT k CHECK ("Q""x" > [w] AND \`Z\` /* y */ > 0))`),
+		)
+			.toEqual(['a', 'in', 'q"x', 'w', 'and', 'z', '0'])
+		expect(checkNamesOf('CREATE TABLE t (n INTEGER CHECK (abs(n) < (10 + m)), m INTEGER) -- CHECK (z)')).toEqual(['abs', 'n', '10', 'm'])
+	})
+
+	test('a column named check, or the word in a string, is no CHECK', () => {
+		expect(checkNamesOf(`CREATE TABLE t ("check" TEXT DEFAULT 'CHECK (a)', [check] INT, check_kind TEXT)`)).toEqual([])
+	})
+
+	test('text that does not scan names every column', () => {
+		for (const sql of ["CREATE TABLE t (a TEXT CHECK (a = 'x)", 'CREATE TABLE t (a TEXT CHECK (a > (0)', 'CREATE TABLE t (a /* open']) {
+			expect(checkNamesOf(sql)).toBeNull()
+		}
 	})
 })

@@ -1653,6 +1653,228 @@ function loadOrder(tables: readonly DescribedTable[], cycle: ReadonlyMap<string,
 	return order
 }
 
+/**
+ * The schema `planOpsDump` reads, from the PRAGMAs workerd admits, of every table a dump holds. An `INITIALLY DEFERRED`
+ * clause is read from the table's SQL outside its quotes and comments, and marks every foreign key of its table; the
+ * names a `CHECK` reads come from the same SQL (`checkNamesOf`).
+ */
+export function describeOpsDumpSchema(query: OpsDumpSchemaQuery): OpsDumpSchema {
+	const tables: OpsDumpSchemaTable[] = []
+	for (const row of query('PRAGMA table_list')) {
+		const name = schemaText(row['name'])
+		const type = schemaText(row['type'])
+		if (schemaText(row['schema']) !== 'main' || type === 'view' || !dumpedTable(name)) {
+			continue
+		}
+		const virtual = type === 'virtual'
+		const sql = query(`SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = ?`, name)[0]?.['sql']
+		const clauses = typeof sql === 'string' ? unquotedSql(sql) : null
+		tables.push({
+			name,
+			virtual,
+			withoutRowid: schemaFlag(row['wr']),
+			checkNames: typeof sql === 'string' ? checkNamesOf(sql) : null,
+			// A virtual table is refused whatever it holds, and its module may not be loaded to describe it.
+			columns: virtual ? [] : describeColumns(query, name),
+			indexes: virtual ? [] : describeIndexes(query, name),
+			foreignKeys: virtual ? [] : describeForeignKeys(query, name, clauses === null || /\binitially\s+deferred\b/i.test(clauses)),
+		})
+	}
+	return { tables }
+}
+
+function describeColumns(query: OpsDumpSchemaQuery, table: string): OpsDumpSchemaColumn[] {
+	return query(`PRAGMA table_xinfo(${sqlLiteral(table)})`).map((row) => {
+		const hidden = schemaInteger(row['hidden'])
+		return {
+			name: schemaText(row['name']),
+			type: schemaText(row['type']),
+			notNull: schemaFlag(row['notnull']),
+			primaryKey: schemaInteger(row['pk']),
+			generated: hidden === 2 || hidden === 3,
+		}
+	})
+}
+
+function describeIndexes(query: OpsDumpSchemaQuery, table: string): OpsDumpSchemaIndex[] {
+	return query(`PRAGMA index_list(${sqlLiteral(table)})`).map((row) => {
+		const origin = row['origin']
+		if (origin !== 'c' && origin !== 'u' && origin !== 'pk') {
+			throw new Error('PRAGMA index_list answered an origin SQLite does not write')
+		}
+		const columns = query(`PRAGMA index_xinfo(${sqlLiteral(schemaText(row['name']))})`)
+			.filter((column) => schemaFlag(column['key']))
+			.sort((left, right) => schemaInteger(left['seqno']) - schemaInteger(right['seqno']))
+			.map((column) => typeof column['name'] === 'string' ? column['name'] : null)
+		return { unique: schemaFlag(row['unique']), origin, partial: schemaFlag(row['partial']), columns }
+	})
+}
+
+function describeForeignKeys(query: OpsDumpSchemaQuery, table: string, initiallyDeferred: boolean): OpsDumpSchemaForeignKey[] {
+	const keys = new Map<number, { parent: string; rows: { seq: number; from: string; to: string | null }[] }>()
+	for (const row of query(`PRAGMA foreign_key_list(${sqlLiteral(table)})`)) {
+		const id = schemaInteger(row['id'])
+		const to = row['to']
+		const entry = { seq: schemaInteger(row['seq']), from: schemaText(row['from']), to: typeof to === 'string' ? to : null }
+		const key = keys.get(id)
+		if (key === undefined) {
+			keys.set(id, { parent: schemaText(row['table']), rows: [entry] })
+		} else {
+			key.rows.push(entry)
+		}
+	}
+	return [...keys.entries()].sort(([left], [right]) => left - right).map(([, key]) => {
+		const rows = key.rows.sort((left, right) => left.seq - right.seq)
+		const references = rows.flatMap((row) => row.to === null ? [] : [row.to])
+		if (references.length !== 0 && references.length !== rows.length) {
+			throw new Error('PRAGMA foreign_key_list named the parent columns of a key only in part')
+		}
+		return { parent: key.parent, columns: rows.map((row) => row.from), references: references.length === 0 ? null : references, initiallyDeferred }
+	})
+}
+
+type SqlToken =
+	| { readonly kind: 'name'; readonly text: string; readonly quoted: boolean }
+	| { readonly kind: 'open' | 'close' | 'other' }
+
+const WORD_CHAR = /[A-Za-z0-9_$\u0080-\uffff]/
+
+/**
+ * The names the `CHECK` clauses of a table's `sql` read: every word and quoted identifier between a `CHECK` keyword's
+ * parentheses, ASCII-lowercase, keywords and numbers included, so it lists at least every column a `CHECK` reads. A
+ * string literal and a comment name nothing; a double-quoted string, which SQLite may read as either, counts as a name.
+ * `null` when the text does not scan (an unclosed quote, comment or parenthesis), which counts as naming every column.
+ */
+export function checkNamesOf(sql: string): string[] | null {
+	const tokens = sqlTokens(sql)
+	if (tokens === null) return null
+	const names: string[] = []
+	for (let index = 0; index < tokens.length; index++) {
+		const token = tokens[index]
+		if (token?.kind !== 'name' || token.quoted || asciiLower(token.text) !== 'check' || tokens[index + 1]?.kind !== 'open') continue
+		let depth = 0
+		let end = index + 1
+		for (; end < tokens.length; end++) {
+			const inner = tokens[end]
+			if (inner?.kind === 'open') depth++
+			else if (inner?.kind === 'close' && --depth === 0) break
+			else if (inner?.kind === 'name') names.push(asciiLower(inner.text))
+		}
+		if (end === tokens.length) return null
+		index = end
+	}
+	return names
+}
+
+/** `sql` as words, quoted identifiers and parentheses; string literals, comments and whitespace dropped. */
+function sqlTokens(sql: string): SqlToken[] | null {
+	const tokens: SqlToken[] = []
+	let index = 0
+	while (index < sql.length) {
+		const char = sql.charAt(index)
+		if (sql.startsWith('--', index)) {
+			const end = sql.indexOf('\n', index)
+			index = end < 0 ? sql.length : end + 1
+		} else if (sql.startsWith('/*', index)) {
+			const end = sql.indexOf('*/', index + 2)
+			if (end < 0) return null
+			index = end + 2
+		} else if (char === "'" || char === '"' || char === '`' || char === '[') {
+			const close = char === '[' ? ']' : char
+			let end = index + 1
+			let text = ''
+			for (;;) {
+				const next = sql.indexOf(close, end)
+				if (next < 0) return null
+				text += sql.slice(end, next)
+				if (close !== ']' && sql.charAt(next + 1) === close) {
+					text += close
+					end = next + 2
+					continue
+				}
+				end = next + 1
+				break
+			}
+			if (char !== "'") tokens.push({ kind: 'name', text, quoted: true })
+			index = end
+		} else if (WORD_CHAR.test(char)) {
+			let end = index + 1
+			while (end < sql.length && WORD_CHAR.test(sql.charAt(end))) end++
+			tokens.push({ kind: 'name', text: sql.slice(index, end), quoted: false })
+			index = end
+		} else {
+			if (char === '(') tokens.push({ kind: 'open' })
+			else if (char === ')') tokens.push({ kind: 'close' })
+			else if (!/\s/.test(char)) tokens.push({ kind: 'other' })
+			index++
+		}
+	}
+	return tokens
+}
+
+/** `sql` with its string literals, quoted identifiers and comments blanked, so a keyword search finds only clauses. */
+function unquotedSql(sql: string): string {
+	let out = ''
+	let index = 0
+	while (index < sql.length) {
+		const char = sql.charAt(index)
+		const close = char === "'" ? "'" : char === '"' ? '"' : char === '`' ? '`' : char === '[' ? ']' : null
+		if (close !== null) {
+			let end = index + 1
+			for (;;) {
+				end = sql.indexOf(close, end)
+				if (end < 0 || close === ']' || sql.charAt(end + 1) !== close) break
+				end += 2
+			}
+			index = end < 0 ? sql.length : end + 1
+			out += ' '
+		} else if (sql.startsWith('--', index)) {
+			const end = sql.indexOf('\n', index)
+			index = end < 0 ? sql.length : end + 1
+			out += ' '
+		} else if (sql.startsWith('/*', index)) {
+			const end = sql.indexOf('*/', index + 2)
+			index = end < 0 ? sql.length : end + 2
+			out += ' '
+		} else {
+			out += char
+			index++
+		}
+	}
+	return out
+}
+
+/** One statement's rows, as a Durable Object's `sql.exec(...).toArray()` or a `bun:sqlite` query answers them. */
+export type OpsDumpSchemaQuery = (sql: string, ...bindings: string[]) => readonly Readonly<Record<string, unknown>>[]
+
+/** Whether a dump holds `name`: no SQLite internal table but `sqlite_sequence`, and none of Cloudflare's `_cf_` ones. */
+function dumpedTable(name: string): boolean {
+	return !name.startsWith('_cf_') && (!name.startsWith('sqlite_') || name === 'sqlite_sequence')
+}
+
+function sqlLiteral(value: string): string {
+	return `'${value.replaceAll("'", "''")}'`
+}
+
+// SQLite's own answers: a value of another type is a broken runtime, never input to refuse.
+function schemaText(value: unknown): string {
+	if (typeof value !== 'string') {
+		throw new Error('SQLite answered a schema name or SQL that is not text')
+	}
+	return value
+}
+
+function schemaInteger(value: unknown): number {
+	if (typeof value !== 'number' || !Number.isSafeInteger(value)) {
+		throw new Error('SQLite answered a schema number that is not an integer')
+	}
+	return value
+}
+
+function schemaFlag(value: unknown): boolean {
+	return schemaInteger(value) !== 0
+}
+
 /** Whether every deferred column of `table` can hold `NULL` from its part until the link pass, with nothing to violate. */
 function takesTemporaryNull(table: OpsDumpSchemaTable, deferred: readonly OpsDumpSchemaColumn[], referenced: ReadonlySet<string>): boolean {
 	// A `CHECK` answers the same for a `NULL` in a column it does not read; a generated column may read a deferred one.
