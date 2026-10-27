@@ -13,6 +13,9 @@ export interface BunSqliteStorage extends SqliteStorage {
 /** workerd's authorizer refuses these in `sql.exec`: a transaction runs through `transaction` or `transactionSync`. */
 const TRANSACTION_CONTROL = /(?:^|;)(?:\s|--[^\n]*(?:\n|$)|\/\*[\s\S]*?\*\/)*(?:begin|commit|end|rollback|savepoint|release)\b/i
 
+/** workerd's `SQLITE_LIMIT_COLUMN` and `SQLITE_LIMIT_VARIABLE_NUMBER`, both 100. */
+const WORKERD_MAX_COLUMNS = 100
+
 function bunBinding(value: SqliteValue): SQLQueryBindings {
 	return value instanceof ArrayBuffer ? new Uint8Array(value) : value
 }
@@ -59,6 +62,13 @@ export function bunSqliteStorage(database: Database = new Database(':memory:')):
 		const statement = database.prepare<Record<string, unknown>, SQLQueryBindings[]>(query)
 		let rows: Record<string, SqliteValue>[] = []
 		try {
+			// workerd's SQLite answers at most 100 result columns and binds at most 100 parameters; bun:sqlite allows more.
+			if (statement.columnNames.length > WORKERD_MAX_COLUMNS) {
+				throw new Error('too many columns in result set: SQLITE_ERROR')
+			}
+			if (statement.paramsCount > WORKERD_MAX_COLUMNS) {
+				throw new Error('too many SQL variables: SQLITE_ERROR')
+			}
 			if (statement.columnNames.length > 0) {
 				rows = statement.all(...values).map(storageRow)
 			} else {

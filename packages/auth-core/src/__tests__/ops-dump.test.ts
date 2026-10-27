@@ -7,14 +7,18 @@ import {
 	encodeOpsDumpLine,
 	encodeOpsDumpRow,
 	foldOpsTableHash,
+	OPS_DUMP_READ_COLUMNS,
 	OPS_EMPTY_TABLE_HASH,
+	OPS_SQLITE_MAX_COLUMNS,
 	opsDumpColumnProjection,
 	type OpsDumpPlan,
+	opsDumpRowidSql,
 	type OpsDumpSchema,
 	type OpsDumpSchemaTable,
 	type OpsDumpValue,
 	opsDumpValueBinding,
 	planOpsDump,
+	readOpsDumpPage,
 	readOpsDumpValue,
 } from '../ops'
 
@@ -449,5 +453,57 @@ describe('lossless values in SQLite', () => {
 		for (const [type, value] of [['integer', 3], ['real', '0.1'], ['text', 'hi'], ['blob', 'ab'], ['null', 0], ['real', Number.NaN]] as const) {
 			expect(() => readOpsDumpValue(type, value)).toThrow(/^(?!.*hi)/)
 		}
+	})
+})
+
+describe("a page read stays within workerd's column limit", () => {
+	const wide = { name: 'wide', keyset: 'rowid', columns: Array.from({ length: 100 }, (_, index) => `c${index}`), deferred: [] }
+
+	test('a table at the limit reads in statements of at most 100 result columns, joined by rowid', () => {
+		const database = new Database(':memory:')
+		database.run(`CREATE TABLE wide (${wide.columns.join(', ')})`)
+		database.run(`INSERT INTO wide (rowid, c0, c49, c50, c99) VALUES (7, 1, 'a', 2.5, x'FF')`)
+		const statements: number[] = []
+		const rows = readOpsDumpPage(
+			(sql) => {
+				const statement = database.prepare<Record<string, unknown>, []>(sql)
+				statements.push(statement.columnNames.length)
+				return statement.all()
+			},
+			wide,
+			'',
+			10,
+		)
+
+		expect(statements).toEqual([1 + 2 * OPS_DUMP_READ_COLUMNS, 1 + 2 * OPS_DUMP_READ_COLUMNS, 1 + 2 * 2])
+		expect(Math.max(...statements)).toBeLessThanOrEqual(OPS_SQLITE_MAX_COLUMNS)
+		expect(rows).toHaveLength(1)
+		expect(rows[0]?.rowid).toBe('7')
+		expect(rows[0]?.values).toHaveLength(101)
+		expect(rows[0]?.values[1]).toEqual({ type: 'integer', value: '1' })
+		expect(rows[0]?.values[50]).toEqual({ type: 'text', value: '61' })
+		expect(rows[0]?.values[51]).toEqual({ type: 'real', value: 2.5 })
+		expect(rows[0]?.values[100]).toEqual({ type: 'blob', value: 'FF' })
+	})
+
+	test('statements that disagree on their rows are refused, never joined', () => {
+		const nulls = Object.fromEntries(wide.columns.flatMap((_, index) => [[`t${index}`, 'null'], [`v${index}`, null]]))
+		let call = 0
+		const read = () => {
+			call++
+			return [{ ...nulls, r: call === 2 ? '8' : '7' }]
+		}
+		expect(() => readOpsDumpPage(read, wide, '', 10)).toThrow('the reads of one dump page disagree on its rows')
+		call = 0
+		expect(() => readOpsDumpPage(() => (++call === 3 ? [] : [{ ...nulls, r: '7' }]), wide, '', 10)).toThrow(
+			'the reads of one dump page disagree on its rows',
+		)
+	})
+
+	test('a rowid is named inline only as the checked text of a 64-bit integer', () => {
+		expect(opsDumpRowidSql({ type: 'integer', value: '-9223372036854775808' })).toBe(`CAST('-9223372036854775808' AS INTEGER)`)
+		expect(() => opsDumpRowidSql({ type: 'integer', value: "1' OR 1 = 1 --" })).toThrow()
+		expect(() => opsDumpRowidSql({ type: 'text', value: '31' })).toThrow()
+		expect(() => opsDumpRowidSql(null)).toThrow()
 	})
 })

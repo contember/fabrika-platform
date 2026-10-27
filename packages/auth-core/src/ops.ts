@@ -402,6 +402,71 @@ export function readOpsDumpValue(type: unknown, value: unknown): OpsDumpValue {
 	throw new Error('a projected dump value does not match its type')
 }
 
+/**
+ * The most result columns, and the most parameters, one statement of workerd's SQLite takes; a table holds at most as
+ * many columns.
+ */
+export const OPS_SQLITE_MAX_COLUMNS = 100
+
+/** The most columns of a table one statement of a page read projects: two result columns each, beside the rowid twice. */
+export const OPS_DUMP_READ_COLUMNS = (OPS_SQLITE_MAX_COLUMNS - 2) / 2
+
+/** One row of a keyset page: its rowid as decimal text, then the rowid and every column as the dump writes them. */
+export interface OpsDumpPageRow {
+	readonly rowid: string
+	readonly values: readonly OpsDumpValue[]
+}
+
+/** Runs one statement of a page read, with the parameters of the read's condition, and answers its rows. */
+export type OpsDumpPageQuery = (sql: string) => readonly Readonly<Record<string, unknown>>[]
+
+/**
+ * One keyset page of `table`: the first `limit` rows by rowid that `condition` (`WHERE …`, or empty) admits, read the
+ * way the producer and the importer's verification both read them. Each column reads as two result columns, so a table
+ * wider than `OPS_DUMP_READ_COLUMNS` reads in several statements over the same rows, which the caller runs in one
+ * synchronous turn, so no write falls between them. The common table expression names every result column, which an
+ * expression alone does not.
+ */
+export function readOpsDumpPage(query: OpsDumpPageQuery, table: OpsDumpTablePlan, condition: string, limit: number): OpsDumpPageRow[] {
+	if (!Number.isSafeInteger(limit) || limit < 1) throw new Error('a dump page reads at least one row')
+	const keyset = quoteIdentifier(table.keyset)
+	const reads: { readonly start: number; readonly count: number; readonly rows: readonly Readonly<Record<string, unknown>>[] }[] = []
+	for (let start = 0; start === 0 || start < table.columns.length; start += OPS_DUMP_READ_COLUMNS) {
+		const columns = table.columns.slice(start, start + OPS_DUMP_READ_COLUMNS)
+		const names = columns.flatMap((_, offset) => [`t${start + offset}`, `v${start + offset}`])
+		const projections = [keyset, `CAST(${keyset} AS TEXT)`, ...columns.map(opsDumpColumnProjection)]
+		const rows = query(
+			`WITH page(${['k', 'r', ...names].join(', ')}) AS (SELECT ${projections.join(', ')} FROM main.${quoteIdentifier(table.name)} ${condition}
+		ORDER BY ${keyset} LIMIT ${limit}) SELECT ${['r', ...names].join(', ')} FROM page ORDER BY k`,
+		)
+		reads.push({ start, count: columns.length, rows })
+	}
+	const first = reads[0]?.rows ?? []
+	if (reads.some(({ rows }) => rows.length !== first.length)) throw new Error('the reads of one dump page disagree on its rows')
+	return first.map((row, index) => {
+		const rowid = readOpsDumpValue('integer', row['r'])
+		if (rowid === null || rowid.type !== 'integer') throw new Error('a rowid reads as an integer')
+		const values: OpsDumpValue[] = [rowid]
+		for (const { start, count, rows } of reads) {
+			const read = rows[index]
+			if (read?.['r'] !== rowid.value) throw new Error('the reads of one dump page disagree on its rows')
+			for (let column = start; column < start + count; column++) {
+				values.push(readOpsDumpValue(read[`t${column}`], read[`v${column}`]))
+			}
+		}
+		return { rowid: rowid.value, values }
+	})
+}
+
+/**
+ * The SQL that names a dump's rowid inline, so a row of a table at `OPS_SQLITE_MAX_COLUMNS` binds no more parameters
+ * than it has columns. It is the checked decimal text in a string literal, cast as `opsDumpValueBinding` casts it.
+ */
+export function opsDumpRowidSql(rowid: OpsDumpValue): string {
+	if (rowid === null || rowid.type !== 'integer' || !isInt64Text(rowid.value)) throw new Error('a dump rowid must be an integer')
+	return `CAST('${rowid.value}' AS INTEGER)`
+}
+
 /** What a statement binds for one value of a dump. */
 export type OpsDumpParam = string | number | Uint8Array | null
 
