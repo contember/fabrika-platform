@@ -24,8 +24,8 @@ export function decodeMailDispatchMessage(payload: unknown): MailDispatchMessage
 export interface MailRelay {
 	readonly queue: JobQueue<MailDispatchMessage>
 	/**
-	 * Control's `FABRIKA_IAM_RPC_KEY`, which IAM's mail key is derived from (`installationMailKey`). `null` where IAM does
-	 * not send through the relay (Cloudflare: IAM holds the installation's transport itself), so no key authenticates IAM.
+	 * The secret IAM's mail key is derived from (`installationMailKey`): `FABRIKA_IAM_RPC_KEY` in the Bun process, the
+	 * provisioning key on the Worker, whose IAM holds no RPC key. `null` without one, so no key authenticates IAM.
 	 */
 	readonly installationSecret: string | null
 	/** The installation's sender over Control's own `FABRIKA_EMAIL_*`; `null` when Control has no transport. */

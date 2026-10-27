@@ -69,8 +69,9 @@ export interface Env {
 	 */
 	EMAIL_SENDER?: EmailSender
 	/**
-	 * The platform mail relay's sender, which replaces the configured provider's: the Bun composition builds it when
-	 * `FABRIKA_CONTROL_URL` is set beside a configured provider. Control then delivers through its own transport.
+	 * The platform mail relay's sender, which replaces the configured provider's: both compositions build it when
+	 * `FABRIKA_CONTROL_URL` is set beside a configured provider (the Worker's also needs the provisioning key, which its
+	 * relay key derives from). Control then delivers through its own transport.
 	 */
 	PLATFORM_EMAIL_SENDER?: EmailSender
 	/**

@@ -83,14 +83,14 @@ function workerBindings(harness: ReturnType<typeof createHarness>): WorkerBindin
 	}
 }
 
-describe("the Cloudflare composition's mail transport", () => {
-	test('runs the relay only with both its queue and its content bucket', () => {
-		const harness = createHarness()
-		const unexpected = (): never => {
-			throw new Error('unexpected binding access')
-		}
-		const queue = { send: unexpected, sendBatch: unexpected, metrics: unexpected }
-		const bucket = {
+/** The relay's queue and content bucket, which these tests never reach. */
+function relayBindings() {
+	const unexpected = (): never => {
+		throw new Error('unexpected binding access')
+	}
+	return {
+		queue: { send: unexpected, sendBatch: unexpected, metrics: unexpected },
+		bucket: {
 			head: unexpected,
 			get: unexpected,
 			put: unexpected,
@@ -98,11 +98,30 @@ describe("the Cloudflare composition's mail transport", () => {
 			resumeMultipartUpload: unexpected,
 			delete: unexpected,
 			list: unexpected,
-		}
+		},
+	}
+}
+
+describe("the Cloudflare composition's mail transport", () => {
+	test('runs the relay only with both its queue and its content bucket', () => {
+		const harness = createHarness()
+		const { queue, bucket } = relayBindings()
 		// Without the bucket the relay would record into D1 rows, which hold at most 2,000,000 bytes.
 		expect(controlEnv({ ...workerBindings(harness), MAIL_QUEUE: queue }, () => {}).MAIL_RELAY).toBeUndefined()
 		expect(controlEnv({ ...workerBindings(harness), MAIL_CONTENT: bucket }, () => {}).MAIL_RELAY).toBeUndefined()
 		expect(controlEnv({ ...workerBindings(harness), MAIL_QUEUE: queue, MAIL_CONTENT: bucket }, () => {}).MAIL_RELAY).toBeDefined()
+	})
+
+	test('knows IAM by the provisioning key both Workers hold, and no caller as IAM without it', () => {
+		const harness = createHarness()
+		const { queue, bucket } = relayBindings()
+		const relayOf = (provisioningKey: string | undefined) =>
+			controlEnv({ ...workerBindings(harness), MAIL_QUEUE: queue, MAIL_CONTENT: bucket, FABRIKA_IAM_PROVISIONING_KEY: provisioningKey }, () => {})
+				.MAIL_RELAY
+		expect(relayOf('px_provisioning')?.installationSecret).toBe('px_provisioning')
+		expect(relayOf(' px_provisioning\n')?.installationSecret).toBe('px_provisioning')
+		expect(relayOf('')?.installationSecret).toBeNull()
+		expect(relayOf(undefined)?.installationSecret).toBeNull()
 	})
 
 	test("reads the installation's FABRIKA_EMAIL_* from the Worker's vars and secrets, and hands it to every deploy", async () => {

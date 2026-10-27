@@ -50,7 +50,8 @@ import type {
 	RevokeMemberResult,
 	TerminalFailure,
 } from '@fabrika/auth-core'
-import { pickEmailEnvironment } from '@fabrika/email'
+import { type EmailSender, pickEmailEnvironment } from '@fabrika/email'
+import { installationMailKey, PLATFORM_MAIL_CAPABILITIES, PlatformEmailSender } from '@fabrika/email/platform'
 import { builtinEmailProviders } from '@fabrika/email/providers'
 import { WorkerEntrypoint } from 'cloudflare:workers'
 import { createIamApp } from './app'
@@ -96,12 +97,44 @@ export interface WorkerBindings extends
 	DB: D1Database
 	FABRIKA_IAM_SIGNING_KEYS?: string
 	FABRIKA_IAM_PROVISIONING_KEY?: string
+	/** Control's public origin: with a provider and the provisioning key, IAM's mail goes through Control's relay. */
+	FABRIKA_CONTROL_URL?: string
 	/** The mail transport's vars and secrets, whichever provider they name. */
 	[emailVariable: `FABRIKA_EMAIL_${string}`]: string | undefined
 }
 
+/** IAM's relay sender per bindings object, built once; absent where IAM sends with its own provider. */
+const relayByBindings = new WeakMap<WorkerBindings, EmailSender | undefined>()
+
+/**
+ * The sender to Control's mail relay, when IAM knows Control's origin, holds the provisioning key and has delivery
+ * switched on by a provider, as on Zerops. The relay knows IAM by `installationMailKey` of the provisioning key, the
+ * secret both Workers hold (Zerops derives it from `FABRIKA_IAM_RPC_KEY`, which a Cloudflare installation has none of).
+ * The key is derived on the first send, since deriving it is asynchronous.
+ */
+function relaySender(bindings: WorkerBindings): EmailSender | undefined {
+	if (relayByBindings.has(bindings)) return relayByBindings.get(bindings)
+	const url = bindings.FABRIKA_CONTROL_URL ?? ''
+	const secret = bindings.FABRIKA_IAM_PROVISIONING_KEY?.trim() ?? ''
+	const provider = bindings['FABRIKA_EMAIL_PROVIDER'] ?? ''
+	let sender: EmailSender | undefined
+	if (url !== '' && secret !== '' && provider !== '' && provider !== 'none') {
+		let relay: Promise<PlatformEmailSender> | undefined
+		sender = {
+			capabilities: PLATFORM_MAIL_CAPABILITIES,
+			async send(message, signal) {
+				relay ??= installationMailKey(secret).then((key) => new PlatformEmailSender({ url, key }))
+				return (await relay).send(message, signal)
+			},
+		}
+	}
+	relayByBindings.set(bindings, sender)
+	return sender
+}
+
 /** Present native Worker bindings as the runtime-neutral IAM environment. */
 export function iamEnv(bindings: WorkerBindings): Env {
+	const relay = relaySender(bindings)
 	return {
 		...bindings,
 		DB: bindings.DB,
@@ -111,6 +144,7 @@ export function iamEnv(bindings: WorkerBindings): Env {
 		EMAIL_CONFIG: pickEmailEnvironment(bindings),
 		EMAIL_PROVIDERS: builtinEmailProviders,
 		PASSWORD_COST: WORKERS_PBKDF2_COST,
+		...(relay === undefined ? {} : { PLATFORM_EMAIL_SENDER: relay }),
 	}
 }
 

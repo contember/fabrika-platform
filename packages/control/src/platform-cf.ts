@@ -88,12 +88,17 @@ function installationSender(bindings: WorkerBindings): EmailSender | null {
 }
 
 /**
- * The relay, when the Worker has its dispatch queue. IAM on Cloudflare holds the installation's transport itself and
- * never sends through the relay, so no key authenticates as IAM (`installationSecret: null`).
+ * The relay, when the Worker has its dispatch queue and content bucket. IAM's Worker sends through it under a key derived
+ * from the provisioning key, the secret both Workers hold; without that key no caller authenticates as IAM.
  */
 function mailRelay(bindings: WorkerBindings): MailRelay | undefined {
 	if (bindings.MAIL_QUEUE === undefined || bindings.MAIL_CONTENT === undefined) return undefined
-	return { queue: cfJobQueue(bindings.MAIL_QUEUE), installationSecret: null, sender: installationSender(bindings) }
+	const installationSecret = bindings.FABRIKA_IAM_PROVISIONING_KEY?.trim() ?? ''
+	return {
+		queue: cfJobQueue(bindings.MAIL_QUEUE),
+		installationSecret: installationSecret === '' ? null : installationSecret,
+		sender: installationSender(bindings),
+	}
 }
 
 const relayOf = (bindings: WorkerBindings): { MAIL_RELAY?: MailRelay } => {

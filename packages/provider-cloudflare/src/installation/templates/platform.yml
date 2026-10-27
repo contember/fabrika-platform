@@ -146,6 +146,9 @@ jobs:
           FABRIKA_IAM_SIGNING_KEYS: ${{ secrets.FABRIKA_IAM_SIGNING_KEYS }}
           OIDC_CLIENT_SECRET: ${{ secrets.FABRIKA_IAM_OIDC_CLIENT_SECRET }}
           FABRIKA_IAM_PROVISIONING_KEY: ${{ secrets.FABRIKA_IAM_PROVISIONING_KEY }}
+          # Control's public origin: IAM hands its mail to Control's relay there, under a key derived from the
+          # provisioning key, and the relay sends it with Control's copy of the transport.
+          FABRIKA_CONTROL_URL: https://${{ vars.FABRIKA_CONTROL_DOMAIN }}
           # Every built-in mail provider's variables, written by init from the provider registry: IAM reads only the
           # selected provider's, and an unset one is ''.
           # {{EMAIL_PROVIDER_ENV}}
