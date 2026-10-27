@@ -377,13 +377,25 @@ link may have arrived, so the invitation stays open. Any other failure deletes
 it. Both answer `delivery_failed`. When the message cannot be rendered, nothing
 was sent: IAM deletes the new invitation and the call fails.
 
-On Zerops, when IAM has a provider configured and `FABRIKA_CONTROL_URL` is set
-(`http://control:3000`, in IAM's setup of the generated `zerops.yaml`), its sender is a
-`PlatformEmailSender` to Control's relay with the installation key
-`installationMailKey(FABRIKA_IAM_RPC_KEY)` ([the relay](#the-relay)). The relay always
-passes IAM's mail and dispatches it with Control's copy of the transport. An `unknown`
-outcome then means only that the relay was unreachable. Without a provider, IAM keeps
-its manual action-link flow.
+When IAM has a provider configured and `FABRIKA_CONTROL_URL` is set, its sender is a
+`PlatformEmailSender` to Control's relay with an installation key ([the relay](#the-relay)):
+
+- On Zerops `FABRIKA_CONTROL_URL` is `http://control:3000`, in IAM's setup of the
+  generated `zerops.yaml`, and the key is `installationMailKey(FABRIKA_IAM_RPC_KEY)`.
+- On Cloudflare the platform workflow passes IAM's deploy
+  `https://<FABRIKA_CONTROL_DOMAIN>`, which `packages/iam/fabrika.config.ts` writes as a
+  Worker var after checking that it is an origin and that the provisioning key is set.
+  The Worker (`iamEnv`, `packages/iam/src/index.ts`) keys it
+  `installationMailKey(FABRIKA_IAM_PROVISIONING_KEY)`, derived at the first send: Control
+  reaches IAM over a service binding, so neither Worker holds an RPC key. Without the URL
+  or the key, IAM sends with its own provider.
+
+The relay always passes IAM's mail and dispatches it with Control's copy of the
+transport. An `unknown` outcome then means only that the relay was unreachable. When
+the relay refuses a message for good, IAM sends it with its own provider
+([rollout](#rollout-of-an-existing-installation)); on the Worker an `http:` URL counts
+as such a refusal, so the key never crosses the internet in cleartext. Without a
+provider, IAM keeps its manual action-link flow.
 
 IAM owns its enrollment and reset templates, one-time action state, and delivery
 behavior. An installation without a sender uses an explicit manual action-link
@@ -548,9 +560,10 @@ URL and `FABRIKA_EMAIL_PROVIDER` and redacts the key.
 ## The relay
 
 Control's mail relay receives installation mail from applications on framework 0.7
-and from IAM on Zerops, records it, gates it and dispatches it through Control's own
-transport (`packages/control/src/mail-relay/`). Only the Bun process (Zerops and the
-local stack) runs it; on the Worker its row answers 404.
+and from IAM, records it, gates it and dispatches it through Control's own transport
+(`packages/control/src/mail-relay/`). Control's Bun process runs it (Zerops and the
+local stack), and so does Control's Worker when it binds its `fabrika-mail` queue and
+`fabrika-mail-content` bucket; a Worker without them answers the row with 404.
 
 ### The wire
 
@@ -598,9 +611,11 @@ idempotent, `queued`, `maxBatch` 1, `listUnsubscribe`, and `maxAttachmentBytes` 
 
 - The bearer is an application environment's transport key (hash lookup, unexpired,
   receiver `mail`), recorded as the sender `<app>@<env>`, or IAM's installation key,
-  `px_` and the hex of `HMAC-SHA256(FABRIKA_IAM_RPC_KEY, 'fabrika-platform-mail')`
+  `px_` and the hex of `HMAC-SHA256(<secret>, 'fabrika-platform-mail')`
   (`installationMailKey`), compared in constant time and recorded as
-  `installation:iam`.
+  `installation:iam`. The secret is `FABRIKA_IAM_RPC_KEY` in the Bun process and
+  `FABRIKA_IAM_PROVISIONING_KEY` on the Worker (`mailRelay`, `src/platform-cf.ts`);
+  without it the relay knows no IAM key.
 - The relay records the message in `mail_messages` under
   `UNIQUE (sender, idempotency_key)`, with the SHA-256 of the canonical body as its
   fingerprint. A repeat with the same fingerprint answers the first `messageId`; a
@@ -723,14 +738,24 @@ Only `admin` holds them by default. The procedures (`controlRpc.mail`):
   An older release keeps the set and sends directly; the gate does not cover it.
 - IAM moves to the relay with the release whose `zerops.yaml` gives it
   `FABRIKA_CONTROL_URL`. Its `FABRIKA_EMAIL_*` stay.
+- On Cloudflare, IAM moves with the workflow that passes its deploy
+  `FABRIKA_CONTROL_URL`. A `fabrika.ref` bump keeps the old workflow, and IAM keeps
+  sending with its own provider. Re-running `fabrika platform init --provider=cloudflare`
+  with the release's CLI rewrites the workflow and dispatches it; IAM's
+  `FABRIKA_EMAIL_*` stay.
 - Before the upgrade, give Control the same `FABRIKA_EMAIL_*` as IAM. Without a
-  transport, Control refuses IAM's messages with `mail_not_configured`.
-- IAM deploys before Control. Until Control runs the new release, IAM's messages
-  fail.
-- IAM offers the manual link only when it has no sender of its own. While the relay
-  refuses, an administrator's enrollment, reset or invitation answers 502
-  `password action email delivery failed`, and a self-service password reset shows
-  its usual answer while no mail leaves (backlog 194).
+  transport, Control refuses IAM's messages with `mail_not_configured`, and IAM sends
+  each one with its own provider.
+- IAM deploys before Control. Until Control runs the new release (a 404, or no key it
+  knows), and after the secret IAM's key derives from is rotated until Control holds
+  it too, IAM sends with its own provider, logs a warning and writes an audit event
+  `iam.mail.relay_fallback` per message (`relayWithFallback`,
+  `packages/iam/src/relay-mail.ts`). Fallbacks that continue after the rollout mean the
+  relay is misconfigured: its gate and Control's Mail page do not see IAM's mail. It falls back only on such a
+  definite refusal, or on its own relay settings being unusable; a timeout, a network
+  failure or another answer may have reached the relay, and fails the send as before:
+  an administrator's enrollment, reset or invitation answers 502
+  `password action email delivery failed`.
 - A provider's refusal of a relayed message shows in Control's Mail page, not in
   IAM's log.
 

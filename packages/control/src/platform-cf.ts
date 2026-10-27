@@ -32,7 +32,7 @@ import { SourceFailure } from './github/source/failure'
 import { GitHubMetadataClient, type GitHubMetadataFetch } from './github/source/metadata'
 import type { SourceRepository } from './github/source/types'
 import { controlPublicOrigin } from './iam'
-import type { MailDispatchMessage, MailRelay } from './mail-relay/queue'
+import { iamMailKeyHash, type MailDispatchMessage, type MailRelay } from './mail-relay/queue'
 import { CLOUDFLARE_MAIL_REMEDY, type InstallationMail, readInstallationMail } from './mail-transport'
 import type { ControlJobMessage } from './run-lifecycle'
 
@@ -87,13 +87,23 @@ function installationSender(bindings: WorkerBindings): EmailSender | null {
 	return sender
 }
 
+/** The relay per bindings object, built once, so IAM's key hash is derived once. */
+const relayByBindings = new WeakMap<WorkerBindings, MailRelay | undefined>()
+
 /**
- * The relay, when the Worker has its dispatch queue. IAM on Cloudflare holds the installation's transport itself and
- * never sends through the relay, so no key authenticates as IAM (`installationSecret: null`).
+ * The relay, when the Worker has its dispatch queue and content bucket. IAM's Worker sends through it under a key derived
+ * from the provisioning key, the secret both Workers hold; without that key no caller authenticates as IAM.
  */
 function mailRelay(bindings: WorkerBindings): MailRelay | undefined {
-	if (bindings.MAIL_QUEUE === undefined || bindings.MAIL_CONTENT === undefined) return undefined
-	return { queue: cfJobQueue(bindings.MAIL_QUEUE), installationSecret: null, sender: installationSender(bindings) }
+	if (relayByBindings.has(bindings)) return relayByBindings.get(bindings)
+	const relay = bindings.MAIL_QUEUE === undefined || bindings.MAIL_CONTENT === undefined ? undefined : {
+		queue: cfJobQueue(bindings.MAIL_QUEUE),
+		// Trimmed, as IAM's Worker trims it before deriving its key.
+		iamKeyHash: iamMailKeyHash(bindings.FABRIKA_IAM_PROVISIONING_KEY?.trim()),
+		sender: installationSender(bindings),
+	}
+	relayByBindings.set(bindings, relay)
+	return relay
 }
 
 const relayOf = (bindings: WorkerBindings): { MAIL_RELAY?: MailRelay } => {

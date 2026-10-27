@@ -48,7 +48,7 @@ We will publish a separate `@fabrika/email` package with one runtime-neutral `Em
 Email availability is an explicit optional service capability. A missing sender never silently drops a message and never changes whether an authentication or notification feature is enabled. The consuming domain must select a defined non-email flow or report that delivery is unavailable. An application
 that declares a mailer has no such flow, so it does not start without a sender (§3).
 
-Installation mail from an application on framework 0.7 and from IAM on Zerops goes through Control's relay (§8). The
+Installation mail from an application on framework 0.7 and from IAM goes through Control's relay (§8). The
 relay records every message. A `drop` rule sends nothing, but the message stays recorded and visible in the console
 as `dropped`: an operator's decision, never a silent loss.
 
@@ -222,10 +222,14 @@ next to the deploy queue) and its content bucket (`<env>-fabrika-mail-content`);
 with 404. Its senders reach it over the platform transport
 ([ADR-0064](0064-applications-reach-the-platform-over-a-receiver-verified-transport-key.md)).
 
-- **Senders.** An application environment on framework 0.7 (`<app>@<env>`, by its transport key), and IAM on Zerops
-  (`installation:iam`, by its derived key). IAM sends through the relay when it has an email provider configured and
-  `FABRIKA_CONTROL_URL` is set; otherwise it sends as before. Its manual action-link flow without a provider is
-  unchanged.
+- **Senders.** An application environment on framework 0.7 (`<app>@<env>`, by its transport key), and IAM
+  (`installation:iam`, by its derived key) on both clouds. IAM sends through the relay when it has an email provider
+  configured and `FABRIKA_CONTROL_URL` is set (on Cloudflare also its provisioning key, which its key derives from);
+  otherwise it sends as before. When the relay refuses a message for good (no such key, no transport, no relay, or
+  IAM's own relay settings unusable), IAM sends that message with its own provider, so sign-in mail survives IAM
+  deploying ahead of Control and a rotated secret reaching IAM first. It never falls back on an answer that may mean
+  the relay took the message. Each fallback is an audit event (`iam.mail.relay_fallback`, its refusal's code and status),
+  so a relay that stays unused past a rollout shows in the console's audit log, not only in IAM's log. Its manual action-link flow without a provider is unchanged.
 - **Every message is a row.** The relay records the canonical request, its fingerprint, the sender, the recipient's
   domain, the rule that decided it and its state, with or without a provider. A repeat under the same key answers the
   first message id; other content under the key is `idempotency_conflict`. On the Worker the canonical request lives in
@@ -309,10 +313,12 @@ with 404. Its senders reach it over the platform transport
 - A Cloudflare installation cannot drop a mail setting by re-running `platform init`: it writes the values it is given
   and deletes none, so an old provider's variables, a display name or a tag stay in the GitHub Environment until the
   operator deletes them.
-- On Cloudflare the gate of §8 covers an application once Control's Worker runs the relay. IAM there still holds the
-  installation's transport and sends directly: the Worker's relay authenticates no IAM key (`installationSecret` is
-  absent), so an IAM message never passes the gate there and is never held. A Worker without the queue hands the set,
-  and its applications send directly, as an older release on Zerops does.
+- On Cloudflare the gate of §8 covers an application once Control's Worker runs the relay, and IAM once the workflow
+  hands IAM's deploy `FABRIKA_CONTROL_URL`. IAM's Worker holds no RPC key, so its mail key derives from the provisioning
+  key, which both Workers hold as a secret ([ADR-0064](0064-applications-reach-the-platform-over-a-receiver-verified-transport-key.md)
+  §3). A Worker without the queue or the bucket hands the set, and its applications send directly, as an older release on
+  Zerops does. Such a Worker answers IAM 404, and IAM sends with its own provider until the Control stage of the same
+  workflow run creates them.
 - **Rollout on Cloudflare.** A `fabrika.ref` bump does not rewrite the generated workflow. The operator bumps
   `fabrika.ref` to a release that holds Control's copy, then re-runs `fabrika platform init --provider=cloudflare` with
   that release's CLI, which refreshes `.github/workflows/platform.yml`; an older CLI writes the old workflow. Until
@@ -379,6 +385,15 @@ re-enqueue work there unchanged. The application needed no change, because it re
 `FABRIKA_EMAIL_PROVIDER`. The content bucket is its own: the run-logs bucket is bound by the runner Worker too, which
 would then read every message. Splitting content across D1 rows, and lowering the Worker's attachment limit below what
 applications advertise, were rejected.
+
+### IAM's Worker reaches the relay over a service binding
+
+A binding from IAM's Worker to Control's would keep IAM's relay key off the internet and need neither an https check nor
+`FABRIKA_CONTROL_URL`. Rejected because the platform workflow deploys IAM first, before Operations and Control: on a
+fresh installation Control's Worker does not exist yet when IAM deploys, and Control already binds IAM, so the binding
+would be circular. IAM's Worker posts to Control's public origin instead, which is a Custom Domain, so a fetch from the
+same zone reaches Control's Worker. Its key is derived from the provisioning key, whose holder administers IAM already,
+and the deploy refuses an origin that is not https.
 
 ### Drop a message without a record
 

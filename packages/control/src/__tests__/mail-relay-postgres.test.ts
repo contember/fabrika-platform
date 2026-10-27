@@ -9,7 +9,7 @@ import { createMailConsumer } from '../bun/server'
 import { createControlRepositories } from '../db'
 import type { Env } from '../env'
 import { handleMailRelay } from '../mail-relay/handler'
-import { enqueueMailDispatch, type MailDispatchMessage, releaseMailMessage } from '../mail-relay/queue'
+import { enqueueMailDispatch, iamMailKeyHash, type MailDispatchMessage, releaseMailMessage } from '../mail-relay/queue'
 import { createPostgres, hasPostgres, type PostgresFixture, skipReason } from './helpers/postgres'
 import { fakeControlProvider } from './helpers/provider'
 import { unusedSourceConnection } from './helpers/source-connection'
@@ -58,7 +58,7 @@ describe.skipIf(!hasPostgres)('the mail relay on Postgres', () => {
 			WAIT_UNTIL: () => {},
 			ENVIRONMENT: 'local',
 			MAIL_TRANSPORT: { kind: 'transport', transport: { variables: {}, secretNames: new Set() } },
-			MAIL_RELAY: { queue, installationSecret: 'iam-rpc-key-with-at-least-thirty-two-characters', sender },
+			MAIL_RELAY: { queue, iamKeyHash: iamMailKeyHash('iam-rpc-key-with-at-least-thirty-two-characters'), sender },
 		}
 		const send = async (to: string, idempotencyKey: string): Promise<string> => {
 			const request = new Request('http://control:3000/platform/mail/send', {

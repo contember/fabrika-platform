@@ -109,6 +109,8 @@ describe('platform scaffold', () => {
 			expect(iamStep).toContain('fabrika platform deploy --provider=cloudflare --env=prod --component-config=fabrika.config.ts')
 			expect(iamStep).toContain('FABRIKA_IAM_SIGNING_KEYS: ${{ secrets.FABRIKA_IAM_SIGNING_KEYS }}')
 			expect(iamStep).toContain('FABRIKA_IAM_PROVISIONING_KEY: ${{ secrets.FABRIKA_IAM_PROVISIONING_KEY }}')
+			// IAM's mail goes through Control's relay, at the console's public origin.
+			expect(iamStep).toContain('FABRIKA_CONTROL_URL: https://${{ vars.FABRIKA_CONTROL_DOMAIN }}')
 			expect(iamStep).toContain('FABRIKA_IAM_OIDC_ENABLED: ${{ vars.FABRIKA_IAM_OIDC_ENABLED }}')
 			expect(iamStep).toContain('FABRIKA_IAM_PASSWORD_ENABLED: ${{ vars.FABRIKA_IAM_PASSWORD_ENABLED }}')
 			expect(iamStep).toContain('FABRIKA_EMAIL_PROVIDER: ${{ vars.FABRIKA_EMAIL_PROVIDER }}')

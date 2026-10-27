@@ -3,7 +3,13 @@
 
 import { describe, expect, test } from 'bun:test'
 import { EmailDeliveryError, type EmailFetch } from '../email.js'
-import { encodePlatformMailRequest, PlatformEmailSender, platformMailAnswerResponse } from '../platform.js'
+import {
+	encodePlatformMailRequest,
+	installationMailKey,
+	installationMailSender,
+	PlatformEmailSender,
+	platformMailAnswerResponse,
+} from '../platform.js'
 
 const KEY = 'px_unit_secret_31f0'
 const message = { to: 'ada@example.com', subject: 'Welcome', text: 'Hello Ada', idempotencyKey: 'fabrika:abc:n-1' }
@@ -55,5 +61,29 @@ describe('PlatformEmailSender', () => {
 			expect(refusal).toMatchObject({ code: 'invalid_configuration' })
 			if (key !== '') expect(JSON.stringify(refusal) + String(refusal)).not.toContain(key)
 		}
+	})
+})
+
+describe('installationMailSender', () => {
+	test('posts under the key derived from the secret, and derives it once', async () => {
+		const { fetch, requests } = recording()
+		const sender = installationMailSender({ url: 'https://control.example', secret: 'installation-secret', fetch })
+		await sender.send(message, new AbortController().signal)
+		await sender.send({ ...message, idempotencyKey: 'fabrika:abc:n-2' }, new AbortController().signal)
+		const key = await installationMailKey('installation-secret')
+		expect(requests.map((request) => [request.url, request.headers.get('authorization')])).toEqual([
+			['https://control.example/platform/mail/send', `Bearer ${key}`],
+			['https://control.example/platform/mail/send', `Bearer ${key}`],
+		])
+	})
+
+	test('a URL that is not an origin fails each send as invalid_configuration, not once for good', async () => {
+		const { fetch, requests } = recording()
+		const sender = installationMailSender({ url: 'https://control.example/', secret: 'installation-secret', fetch })
+		for (let attempt = 0; attempt < 2; attempt++) {
+			const refusal = await sender.send(message, new AbortController().signal).then(() => undefined, (error: unknown) => error)
+			expect(refusal).toMatchObject({ code: 'invalid_configuration' })
+		}
+		expect(requests).toEqual([])
 	})
 })

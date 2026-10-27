@@ -1,5 +1,6 @@
 import { LOCAL_ENVIRONMENT, parseJsonStringArray, readEnvironmentName } from '@fabrika/auth-core'
 import { type EmailSender, emailSenderFromEnv, readEmailTransportConfig } from '@fabrika/email'
+import { uuidv7 } from '@fabrika/platform'
 import type { IamRepositories } from './db'
 import { normalizeEmailIdentity } from './email-identity'
 import type { Env } from './env'
@@ -7,6 +8,7 @@ import { type OAuthConfig, parseOAuthConfig } from './oauth-config'
 import { OidcClient } from './oidc'
 import { BUN_PBKDF2_COST, type PasswordHasher, WebCryptoPasswordHasher } from './password-crypto'
 import { passwordMinLengthFloor } from './password-minimum'
+import { relayFallbackEvent, relayWithFallback } from './relay-mail'
 import { parseRetention, type Retention } from './retention'
 
 /**
@@ -189,6 +191,9 @@ function buildEmailSender(env: Env, environment: string): EmailSender | null {
 		}
 		return env.EMAIL_SENDER
 	}
-	if (env.PLATFORM_EMAIL_SENDER !== undefined) return env.PLATFORM_EMAIL_SENDER
-	return emailSenderFromEnv(config, providers)
+	const direct = emailSenderFromEnv(config, providers)
+	// The provider stays the switch for delivery on both runtimes, and the relay's fallback for a refused message.
+	if (direct === null || env.PLATFORM_EMAIL_SENDER === undefined) return direct
+	const audit = env.REPOSITORIES.audit
+	return relayWithFallback(env.PLATFORM_EMAIL_SENDER, direct, (refusal) => audit.writeAuditEvent(relayFallbackEvent(uuidv7(), refusal)))
 }

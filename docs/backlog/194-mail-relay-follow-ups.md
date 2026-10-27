@@ -85,12 +85,6 @@ blocked-by: []
 
 ### Upgrade, keys and senders
 
-21. **IAM has no fallback while the relay refuses.** IAM moves to the relay with the `zerops.yaml` that gives it
-    `FABRIKA_CONTROL_URL`, and IAM deploys before Control. Until Control runs the new release, or while Control has no
-    transport (`mail_not_configured`), an administrator's enrollment, reset or invitation answers 502 and a self-service
-    reset sends nothing. IAM still holds its provider credential: send directly on a definite refusal (404 from an older
-    Control, `mail_not_configured`), never on an unknown outcome; or have `platform upgrade` refuse when `iam` has
-    `FABRIKA_EMAIL_PROVIDER` and `control` does not.
 22. **A retry after Control loses its transport answers `mail_not_configured`** instead of the recorded message id: the
     refusal in the relay's handler runs before the idempotency lookup.
 23. **`installation:iam` means "anyone who holds `FABRIKA_IAM_RPC_KEY`".** Operations holds that key too, so it can
