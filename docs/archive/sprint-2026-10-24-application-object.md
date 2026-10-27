@@ -1,10 +1,14 @@
-<!--
-On close, prepend an OUTCOME block here, then `git mv` this file to ../archive/:
-
-> **OUTCOME — shipped YYYY-MM-DD.** <one-paragraph result.> Commit map: WU1 → <sha>,
-> WU2 → <sha>, … Verification: <the gate command + numbers>. Backlog closed:
-> <ids deleted/rescoped>. Deferred: <honest notes>.
--->
+> **OUTCOME — shipped 2026-10-26.** Every unit of waves 0–7 shipped: the object sleeps unless it has work (one
+> alarm over durable pending work, an hourly repair tick instead of the minute cron, 14-minute job segments), a query
+> runs without holding the object (read-only invocations), Control reaches the object over the ops channel
+> (ADR-0069) behind a generation-fenced maintenance barrier, takes daily consistent backups, imports, and side-restores
+> to time T (ADR-0070). The gates hold from `0.9.0-dev.5` (`releaseFrom`), and since #69 they read the application's
+> pin, not the reader's release. Commit map: waves 0–3 → #59 (`3e0870572`); waves 3–7 → #66 (`c6ebd296e`); the
+> prerelease gate fix → `075daf224`. Verification: CI's verify workflow on each merge (typecheck, lint, both Postgres
+> suites, release artifacts); tests ran on Lopata and a local workerd only. Backlog: review follow-ups in 228 and 237,
+> the Workflow escape hatch in 235, the in-handler upload in 236. Deferred: Phase 0's live probes (0.2) and a deploy
+> to a real account were never run; they moved to [backlog 213](../backlog/213-the-cloudflare-application-runtime-is-unverified-on-a-live-account.md),
+> which is P1 before a Cloudflare installation serves an application.
 
 # Sprint — the application Durable Object (2026-10-24)
 
@@ -12,7 +16,7 @@ On close, prepend an OUTCOME block here, then `git mv` this file to ../archive/:
 Control a way to inspect, back up and recover its data.
 
 **Theme.** The design and its rationale are in
-[`../ideas/application-object-runtime-and-operations.md`](../ideas/application-object-runtime-and-operations.md); every
+[`application-object-runtime-and-operations.md`](application-object-runtime-and-operations.md); every
 § below refers to it. The batch succeeds when an environment sleeps unless it has work, a query no longer blocks the
 environment, Control can take and restore a consistent backup, and a side restore recovers data from time T without
 rewinding the serving database.

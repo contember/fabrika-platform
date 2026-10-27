@@ -107,4 +107,4 @@ release.
 `packages/auth-core` (`ops.ts`), `packages/control` (`data-operations.ts`), `packages/cli` (`env.ts`, `connect.ts`),
 `packages/dashboard` (`components/Modal.tsx`), `packages/control-contract` (`rpc.ts`).
 
-<!-- Origin: ../sprints/sprint-2026-10-24-application-object.md, run log of waves 4–7. -->
+<!-- Origin: ../archive/sprint-2026-10-24-application-object.md, run log of waves 4–7. -->

@@ -136,4 +136,4 @@ the sprint, and item 16 is settled with it.
 `packages/app` (`cloudflare/ops.ts`, `cloudflare/invocation.ts`), `packages/auth-core` (`ops.ts`), `packages/control`
 (`ops-key.ts`, `data-operations.ts`).
 
-<!-- Origin: ../sprints/sprint-2026-10-24-application-object.md, run log of waves 0–3. -->
+<!-- Origin: ../archive/sprint-2026-10-24-application-object.md, run log of waves 0–3. -->
