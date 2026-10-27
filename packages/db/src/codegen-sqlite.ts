@@ -5,6 +5,7 @@
 import { Database } from 'bun:sqlite'
 import { z } from 'zod/v4'
 import { CodegenError, type DescribedColumn, type ForeignKeyColumns, type NamedColumn, renderTables, type ScalarType } from './codegen'
+import { execStatements } from './sqlite-bun'
 import { migrateSqlite, type SqliteMigrationBundle, type SqliteMigrationTarget } from './sqlite-migrate'
 
 const STRING: ScalarType = { select: 'string' }
@@ -55,17 +56,8 @@ const foreignKeySchema = z.object({ id: z.number(), seq: z.number(), table: z.st
 function bunTarget(db: Database): SqliteMigrationTarget {
 	return {
 		exec(query, ...bindings) {
-			const statement = db.prepare<Record<string, unknown>, (string | number | null)[]>(query)
-			try {
-				if (bindings.length > 0 || statement.columnNames.length > 0) {
-					const rows = statement.all(...bindings)
-					return { toArray: () => rows }
-				}
-			} finally {
-				statement.finalize()
-			}
-			db.run(query)
-			return { toArray: () => [] }
+			const rows = execStatements(db, query, bindings)
+			return { toArray: () => rows }
 		},
 		transactionSync: (fn) => db.transaction(fn)(),
 	}

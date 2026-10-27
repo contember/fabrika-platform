@@ -271,6 +271,19 @@ describe('the engine', () => {
 		}
 	})
 
+	test('sql.exec runs every statement of a text and answers the rows of the last, as workerd does', () => {
+		const fresh = bunSqliteStorage()
+		const added = fresh.sql.exec(
+			"CREATE TABLE notes (id INTEGER PRIMARY KEY);\nALTER TABLE notes ADD COLUMN state TEXT CHECK (state IN ('draft', 'sent'));\nALTER TABLE notes ADD COLUMN body TEXT; -- the last\n",
+		)
+		expect(added.toArray()).toEqual([])
+		const columns = fresh.sql.exec('SELECT name FROM pragma_table_info(?) ORDER BY cid', 'notes').toArray()
+		expect(columns.map((column) => column['name'])).toEqual(['id', 'state', 'body'])
+		const inserted = fresh.sql.exec("INSERT INTO notes (id, body) VALUES (1, 'a;b'); /* ; */ SELECT body FROM notes")
+		expect(inserted.toArray()).toEqual([{ body: 'a;b' }])
+		expect(inserted.rowsWritten).toBe(1)
+	})
+
 	test('transactionSync commits what it wrote, or nothing when it throws', () => {
 		expect(() =>
 			storage.transactionSync(() => {

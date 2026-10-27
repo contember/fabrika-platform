@@ -16,6 +16,41 @@ const TRANSACTION_CONTROL = /(?:^|;)(?:\s|--[^\n]*(?:\n|$)|\/\*[\s\S]*?\*\/)*(?:
 /** workerd's `SQLITE_LIMIT_COLUMN` and `SQLITE_LIMIT_VARIABLE_NUMBER`, both 100. */
 const WORKERD_MAX_COLUMNS = 100
 
+/** What may follow a text's last statement: whitespace, comments and semicolons. */
+const NO_STATEMENT = /^(?:\s|;|--[^\n]*(?:\n|$)|\/\*[\s\S]*?\*\/)*$/
+
+/**
+ * Runs each statement of `query` in turn and answers the rows of the last one, as a Durable Object's `sql.exec` does.
+ * bun:sqlite's `prepare` compiles only the first statement of a text, and its column count cannot tell a migration from a
+ * read (`ALTER TABLE … ADD COLUMN … CHECK (…)` reports one column), so the text is split at the end of each compiled
+ * statement. `bindings` belong to a text of one statement. Refuses what workerd's SQLite refuses: more than 100 result
+ * columns or parameters in one statement.
+ */
+export function execStatements(database: Database, query: string, bindings: readonly SQLQueryBindings[] = []): Record<string, unknown>[] {
+	let text = query
+	for (;;) {
+		const statement = database.prepare<Record<string, unknown>, SQLQueryBindings[]>(text)
+		try {
+			if (statement.columnNames.length > WORKERD_MAX_COLUMNS) {
+				throw new Error('too many columns in result set: SQLITE_ERROR')
+			}
+			if (statement.paramsCount > WORKERD_MAX_COLUMNS) {
+				throw new Error('too many SQL variables: SQLITE_ERROR')
+			}
+			// The compiled statement's own text, with no parameter to expand: the rest of `text` follows it verbatim.
+			const compiled = statement.toString()
+			const rest = bindings.length === 0 && text.startsWith(compiled) ? text.slice(compiled.length) : ''
+			const rows = statement.all(...bindings)
+			if (NO_STATEMENT.test(rest)) {
+				return rows
+			}
+			text = rest
+		} finally {
+			statement.finalize()
+		}
+	}
+}
+
 function bunBinding(value: SqliteValue): SQLQueryBindings {
 	return value instanceof ArrayBuffer ? new Uint8Array(value) : value
 }
@@ -44,8 +79,8 @@ interface OpenTransaction {
 /**
  * `database` (a fresh `:memory:` one by default) with foreign keys enforced, as a Durable Object enforces them. One
  * `transaction` runs at a time; one started inside a callback nests in a savepoint, as workerd nests it, and its
- * siblings wait for each other. A statement outside one runs at once. A text of several statements runs whole when its
- * first statement answers no rows, as a migration's does; otherwise only its first statement runs.
+ * siblings wait for each other. A statement outside one runs at once. A text of several statements runs each of them and
+ * answers the rows of the last (`execStatements`).
  */
 export function bunSqliteStorage(database: Database = new Database(':memory:')): BunSqliteStorage {
 	database.run('PRAGMA foreign_keys = ON')
@@ -57,26 +92,8 @@ export function bunSqliteStorage(database: Database = new Database(':memory:')):
 		if (TRANSACTION_CONTROL.test(query)) {
 			throw new Error('sql.exec runs no transaction statement: use storage.transaction() or storage.transactionSync()')
 		}
-		const values = bindings.map(bunBinding)
 		const before = totalChanges()
-		const statement = database.prepare<Record<string, unknown>, SQLQueryBindings[]>(query)
-		let rows: Record<string, SqliteValue>[] = []
-		try {
-			// workerd's SQLite answers at most 100 result columns and binds at most 100 parameters; bun:sqlite allows more.
-			if (statement.columnNames.length > WORKERD_MAX_COLUMNS) {
-				throw new Error('too many columns in result set: SQLITE_ERROR')
-			}
-			if (statement.paramsCount > WORKERD_MAX_COLUMNS) {
-				throw new Error('too many SQL variables: SQLITE_ERROR')
-			}
-			if (statement.columnNames.length > 0) {
-				rows = statement.all(...values).map(storageRow)
-			} else {
-				database.run(query, values)
-			}
-		} finally {
-			statement.finalize()
-		}
+		const rows = execStatements(database, query, bindings.map(bunBinding)).map(storageRow)
 		const rowsWritten = totalChanges() - before
 		return { toArray: () => rows, rowsWritten }
 	}
