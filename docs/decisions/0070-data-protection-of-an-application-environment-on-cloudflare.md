@@ -155,14 +155,21 @@ carry):
   none, and one whose column counts differ;
 - a foreign key that is `DEFERRABLE INITIALLY DEFERRED`: SQLite checks it at commit, which is the end of the request,
   so a violation would reset the object instead of failing its step (§6);
-- a deferred column that cannot hold a temporary `NULL`: one that is `NOT NULL`, part of the primary key, or referenced
-  by any foreign key as its parent key (two unique keys `a.k` and `b.k` referencing each other), or one in a table with
-  a `CHECK`, a `NOT NULL` generated column, or a partial or expression unique index, any of which a temporary `NULL`
-  may violate. A composite key in a cycle is therefore accepted only when every column of it is nullable and none is a
-  referenced key.
+- a deferred column that cannot hold a temporary `NULL`: one that is `NOT NULL`, part of the primary key, referenced
+  by any foreign key as its parent key (two unique keys `a.k` and `b.k` referencing each other), or named by a `CHECK`;
+  or one in a table with a `NOT NULL` generated column, a generated column a `CHECK` names, or a partial, expression or
+  generated-column unique index, any of which a temporary `NULL` may violate. A composite key in a cycle is therefore
+  accepted only when every column of it is nullable and none is a referenced key.
+
+A `CHECK` fails only when its expression reads false, and an expression that does not read a column answers the same
+whatever that column holds, so a `CHECK` that names no deferred column (and no generated column, which may read one) is
+no reason to refuse. The reader (`checkNamesOf`) lists every word and quoted identifier inside each `CHECK` of the
+table's SQL, keywords and numbers included, which over-approximates the columns it reads; text it cannot scan counts as
+naming every column. Until 0.9.0-dev.7 any `CHECK` refused the table, which refused a self-reference added to a table
+whose `CHECK`s constrain other columns.
 
 An acyclic graph is always accepted, and so is a cycle of one table or several whose deferred columns are nullable,
-unchecked and unreferenced.
+named by no `CHECK` and unreferenced.
 
 ### 3. Lossless values
 

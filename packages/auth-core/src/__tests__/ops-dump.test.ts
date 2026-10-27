@@ -69,7 +69,8 @@ function readSchema(db: Database): OpsDumpSchema {
 				name: row.name,
 				virtual: row.type === 'virtual',
 				withoutRowid: row.wr === 1,
-				checked: /\bCHECK\b/i.test(sql),
+				// The application's reader lists the names a CHECK reads; this one cannot tell, so a CHECK names every column.
+				checkNames: /\bCHECK\b/i.test(sql) ? null : [],
 				columns: columns.map((column) => ({
 					name: column.name,
 					type: column.type,
@@ -224,6 +225,26 @@ describe('the schema rule refuses what a NULL-then-link load cannot write', () =
 		})
 	})
 
+	test('a cycle column a CHECK names, a generated column a CHECK names, or a reader that cannot tell', () => {
+		const ddl = `CREATE TABLE invoices (id TEXT PRIMARY KEY, kind TEXT, proforma_id TEXT REFERENCES invoices (id),
+			label TEXT AS (kind || coalesce(proforma_id, '')))`
+		const withChecks = (checkNames: readonly string[] | null) => {
+			const schema = readSchema(database(ddl))
+			return planOpsDump({ tables: schema.tables.map((table) => ({ ...table, checkNames })) })
+		}
+		for (const checkNames of [['proforma_id', 'is', 'not', 'null'], ['label', 'like', 'x'], ['PROFORMA_ID'.toLowerCase()], null]) {
+			expect(withChecks(checkNames)).toEqual({ refused: 'unsupported_schema', table: 'invoices' })
+		}
+		expect(withChecks(['kind', 'in'])).toMatchObject({ tables: [{ name: 'invoices', deferred: ['proforma_id'] }] })
+	})
+
+	test('a cycle column beside a unique index over a generated column, which may collide while the column is NULL', () => {
+		expect(refusal(`
+			CREATE TABLE nodes (id INTEGER PRIMARY KEY, parent INTEGER REFERENCES nodes (id), slot INTEGER AS (coalesce(parent, 0)));
+			CREATE UNIQUE INDEX by_slot ON nodes (slot);
+		`)).toEqual({ refused: 'unsupported_schema', table: 'nodes' })
+	})
+
 	test('a cycle whose parent key is itself a cycle column: a.k and b.k reference each other', () => {
 		expect(refusal(`
 			CREATE TABLE a (id INTEGER PRIMARY KEY, k TEXT UNIQUE REFERENCES b (k));
@@ -283,7 +304,7 @@ describe('the schema rule refuses what a NULL-then-link load cannot write', () =
 			table: 'notes',
 		})
 		expect(refusal('CREATE TABLE "Notes" (id INTEGER PRIMARY KEY)')).toEqual({ refused: 'unsupported_schema', table: null })
-		const plain: OpsDumpSchemaTable = { name: 'docs', virtual: true, withoutRowid: false, checked: false, columns: [], indexes: [], foreignKeys: [] }
+		const plain: OpsDumpSchemaTable = { name: 'docs', virtual: true, withoutRowid: false, checkNames: [], columns: [], indexes: [], foreignKeys: [] }
 		expect(planOpsDump({ tables: [plain] })).toEqual({ refused: 'unsupported_schema', table: 'docs' })
 	})
 })

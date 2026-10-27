@@ -60,7 +60,15 @@ import { applicationMigrations } from '../build'
 import { type ApplicationState, createContractWorker, FabrikaApplication } from '../cloudflare'
 import { TICK_HEADER } from '../cloudflare/application'
 import { exportStep } from '../cloudflare/export'
-import { describeDumpSchema, IMPORT_MARKER_KEY, importStep, type ImportStorage, type ImportTarget, serveImport } from '../cloudflare/import'
+import {
+	checkNamesOf,
+	describeDumpSchema,
+	IMPORT_MARKER_KEY,
+	importStep,
+	type ImportStorage,
+	type ImportTarget,
+	serveImport,
+} from '../cloudflare/import'
 import { MaintenanceBarrier } from '../cloudflare/maintenance'
 import { CLOUDFLARE_FILES_BINDING } from '../cloudflare/names'
 import { OPS_ENDPOINT, type OpsTarget } from '../cloudflare/ops'
@@ -1030,7 +1038,55 @@ describe('values and ranges', () => {
 	})
 })
 
+describe('the names a CHECK reads', () => {
+	test('every word and quoted identifier inside each CHECK, lowercase; a string literal and a comment name nothing', () => {
+		expect(
+			checkNamesOf(`CREATE TABLE t (a TEXT CHECK (a IN ('B', 'c')), "Q""x" INT, [w] INT, CONSTRAINT k CHECK ("Q""x" > [w] AND \`Z\` /* y */ > 0))`),
+		)
+			.toEqual(['a', 'in', 'q"x', 'w', 'and', 'z', '0'])
+		expect(checkNamesOf('CREATE TABLE t (n INTEGER CHECK (abs(n) < (10 + m)), m INTEGER) -- CHECK (z)')).toEqual(['abs', 'n', '10', 'm'])
+	})
+
+	test('a column named check, or the word in a string, is no CHECK', () => {
+		expect(checkNamesOf(`CREATE TABLE t ("check" TEXT DEFAULT 'CHECK (a)', [check] INT, check_kind TEXT)`)).toEqual([])
+	})
+
+	test('text that does not scan names every column', () => {
+		for (const sql of ["CREATE TABLE t (a TEXT CHECK (a = 'x)", 'CREATE TABLE t (a TEXT CHECK (a > (0)', 'CREATE TABLE t (a /* open']) {
+			expect(checkNamesOf(sql)).toBeNull()
+		}
+	})
+})
+
 describe('the schema description', () => {
+	test('a self-reference in a table whose CHECKs read other columns is dumped and linked again', async () => {
+		const migrations = release([...APP_MIGRATIONS, {
+			name: '0004_invoices.sql',
+			sql: `CREATE TABLE invoices (id TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN ('invoice', 'proforma')),
+				status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'paid')));
+				ALTER TABLE invoices ADD COLUMN proforma_id TEXT REFERENCES invoices (id) ON DELETE SET NULL;
+				ALTER TABLE invoices ADD COLUMN final_invoice_id TEXT REFERENCES invoices (id) ON DELETE SET NULL;`,
+		}])
+		const { storage } = objectStorage()
+		await migrateSqlite(
+			{ exec: (query, ...bindings) => storage.sql.exec(query, ...bindings), transactionSync: (fn) => storage.transactionSync(fn) },
+			migrations,
+		)
+		storage.sql.exec(`INSERT INTO invoices (id, kind) VALUES ('p1', 'proforma'), ('i1', 'invoice')`)
+		storage.sql.exec(`UPDATE invoices SET final_invoice_id = 'i1' WHERE id = 'p1'`)
+		storage.sql.exec(`UPDATE invoices SET proforma_id = 'p1' WHERE id = 'i1'`)
+		expect(planOf(storage).find((table) => table.name === 'invoices')?.deferred).toEqual(['proforma_id', 'final_invoice_id'])
+		const objects = new Map<string, Uint8Array>()
+		const manifest = writeDump(objects, storage)
+		const target = freshTarget(objects, { migrations })
+
+		expect(await importAll(target)).toEqual([...manifest.tables])
+		expect(target.storage.sql.exec('SELECT id, proforma_id, final_invoice_id FROM invoices ORDER BY id').toArray()).toEqual([
+			{ id: 'i1', proforma_id: 'p1', final_invoice_id: null },
+			{ id: 'p1', proforma_id: null, final_invoice_id: 'i1' },
+		])
+	})
+
 	test('plans the self-reference and the cycle as deferred, and the rowid of a table without an INTEGER PRIMARY KEY', async () => {
 		const { storage } = await sourceDatabase()
 		const plan = planOf(storage)
@@ -1051,8 +1107,8 @@ describe('the schema description', () => {
 		storage.sql.exec('CREATE TABLE later (id INTEGER PRIMARY KEY, p INTEGER REFERENCES later (id) DEFERRABLE INITIALLY DEFERRED)')
 		const tables = new Map(describeDumpSchema(storage).tables.map((table) => [table.name, table]))
 
-		expect(tables.get('check')?.checked).toBe(false)
-		expect(tables.get('checked')?.checked).toBe(true)
+		expect(tables.get('check')?.checkNames).toEqual([])
+		expect(tables.get('checked')?.checkNames).toEqual(['n', '0'])
 		expect(tables.get('later')?.foreignKeys.map((key) => key.initiallyDeferred)).toEqual([true])
 		expect(planOpsDump(describeDumpSchema(storage))).toEqual({ refused: 'unsupported_schema', table: 'later' })
 	})
