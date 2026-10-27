@@ -15,7 +15,7 @@ import { describe, expect, test } from 'bun:test'
 import type { MailRuleAction } from '../db'
 import type { Env } from '../env'
 import { handleMailRelay, MAIL_RELAY_MAX_BODY_BYTES } from '../mail-relay/handler'
-import type { MailDispatchMessage } from '../mail-relay/queue'
+import { iamMailKeyHash, type MailDispatchMessage } from '../mail-relay/queue'
 import type { InstallationMail } from '../mail-transport'
 import { createHarness, type Harness } from './helpers/harness'
 import { fakeControlProvider } from './helpers/provider'
@@ -77,7 +77,7 @@ async function relay(options: RelayOptions = {}): Promise<Relay> {
 			: {
 				MAIL_RELAY: {
 					queue,
-					installationSecret: options.installationSecret === undefined ? RPC_SECRET : options.installationSecret,
+					iamKeyHash: iamMailKeyHash(options.installationSecret === undefined ? RPC_SECRET : options.installationSecret ?? undefined),
 					sender: options.sender ?? null,
 				},
 			}),

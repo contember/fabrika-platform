@@ -1,5 +1,6 @@
 import { schemaFromContract } from '@fabrika/app/contract'
 import { contractDigest } from '@fabrika/auth-core'
+import { hashPlatformKey, installationMailKey } from '@fabrika/email/platform'
 import { uuidv7 } from '@fabrika/platform'
 import { cloudflareArtifact, cloudflareArtifactCodec, type CloudflareRunnerJob, cloudflareStoredTargetCodec } from '@fabrika/provider-cloudflare'
 import { type ProviderDeployInput, type ProviderEnvelope, ProviderInvocationAbort } from '@fabrika/provider-contract'
@@ -112,16 +113,17 @@ describe("the Cloudflare composition's mail transport", () => {
 		expect(controlEnv({ ...workerBindings(harness), MAIL_QUEUE: queue, MAIL_CONTENT: bucket }, () => {}).MAIL_RELAY).toBeDefined()
 	})
 
-	test('knows IAM by the provisioning key both Workers hold, and no caller as IAM without it', () => {
+	test('knows IAM by the provisioning key both Workers hold, and no caller as IAM without it', async () => {
 		const harness = createHarness()
 		const { queue, bucket } = relayBindings()
 		const relayOf = (provisioningKey: string | undefined) =>
 			controlEnv({ ...workerBindings(harness), MAIL_QUEUE: queue, MAIL_CONTENT: bucket, FABRIKA_IAM_PROVISIONING_KEY: provisioningKey }, () => {})
 				.MAIL_RELAY
-		expect(relayOf('px_provisioning')?.installationSecret).toBe('px_provisioning')
-		expect(relayOf(' px_provisioning\n')?.installationSecret).toBe('px_provisioning')
-		expect(relayOf('')?.installationSecret).toBeNull()
-		expect(relayOf(undefined)?.installationSecret).toBeNull()
+		const expected = await hashPlatformKey(await installationMailKey('px_provisioning'))
+		expect(await relayOf('px_provisioning')?.iamKeyHash).toBe(expected)
+		expect(await relayOf(' px_provisioning\n')?.iamKeyHash).toBe(expected)
+		expect(relayOf(' ')?.iamKeyHash).toBeNull()
+		expect(relayOf(undefined)?.iamKeyHash).toBeNull()
 	})
 
 	test("reads the installation's FABRIKA_EMAIL_* from the Worker's vars and secrets, and hands it to every deploy", async () => {

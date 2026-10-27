@@ -620,11 +620,16 @@ describe('the IAM Worker environment', () => {
 		}
 		spyOn(globalThis, 'fetch').mockImplementation(Object.assign(answer, { preconnect: fetch.preconnect }))
 		spyOn(console, 'warn').mockImplementation(() => {})
-		const env = iamEnv({ ...workerBindings(freshDb()), ...RELAYED, FABRIKA_CONTROL_URL: 'http://control.example.com' })
+		const db = freshDb()
+		const env = iamEnv({ ...workerBindings(db), ...RELAYED, FABRIKA_CONTROL_URL: 'http://control.example.com' })
 		const message = { to: 'ada@example.com', subject: 'Reset', text: 'Open the link', idempotencyKey: 'iam-reset-2' }
 
 		expect(await buildServices(env).email?.send(message, AbortSignal.timeout(5_000))).toMatchObject({ provider: 'resend' })
 		expect(urls).toEqual(['https://api.resend.com/emails'])
+		// The fallback is in the audit log, where an operator sees the relay go unused.
+		expect(db.query('SELECT action, principal_label, metadata FROM audit_events').all()).toEqual([
+			{ action: 'iam.mail.relay_fallback', principal_label: 'mail-relay', metadata: JSON.stringify({ code: 'invalid_configuration' }) },
+		])
 	})
 
 	test("keeps its provider's sender without Control's origin or the provisioning key, and has none without a provider", () => {

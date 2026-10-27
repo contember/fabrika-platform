@@ -7,7 +7,6 @@ import type { EmailMessage, EmailSenderCapabilities } from '@fabrika/email'
 import {
 	encodePlatformMailRequest,
 	hashPlatformKey,
-	installationMailKey,
 	parsePlatformMailRequest,
 	PLATFORM_MAIL_CAPABILITIES,
 	PLATFORM_MAIL_SEND_PATH,
@@ -44,8 +43,8 @@ export interface MailAcceptDeps {
 	readonly messages: MailMessageRepository
 	readonly rules: MailRuleRepository
 	readonly queue: JobQueue<MailDispatchMessage>
-	/** The secret IAM's key derives from (`MailRelay.installationSecret`); `null`: no key authenticates as IAM. */
-	readonly installationSecret: string | null
+	/** The hash IAM's key authenticates by (`MailRelay.iamKeyHash`); `null`: no key authenticates as IAM. */
+	readonly iamKeyHash: Promise<string> | null
 	/** Whether Control has a mail transport; without one, every application message is held. */
 	readonly hasTransport: boolean
 	/** What Control's sender sends; `null` without one, when a held message waits for the transport to decide. */
@@ -66,7 +65,7 @@ export function handleMailRelay(ctx: ControlAppContext): Promise<Response> {
 		messages: persistence.mailMessages,
 		rules: persistence.mailRules,
 		queue: relay.queue,
-		installationSecret: relay.installationSecret,
+		iamKeyHash: relay.iamKeyHash,
 		hasTransport: ctx.env.MAIL_TRANSPORT?.kind === 'transport',
 		transportCapabilities: relay.sender?.capabilities ?? null,
 		now: () => Math.floor(Date.now() / 1000),
@@ -151,25 +150,12 @@ async function gate(deps: MailAcceptDeps, sender: string, domain: string): Promi
 /** The sender a key authenticates, or `null`. */
 async function authenticate(deps: MailAcceptDeps, bearer: string): Promise<string | null> {
 	const hash = await hashPlatformKey(bearer)
-	if (deps.installationSecret !== null && sameDigest(hash, await installationKeyHash(deps.installationSecret))) {
+	if (deps.iamKeyHash !== null && sameDigest(hash, await deps.iamKeyHash)) {
 		return INSTALLATION_IAM_SENDER
 	}
 	const key = await deps.keys.findValidByHash(hash, deps.now())
 	if (key === null || key.receiver !== MAIL_RECEIVER) return null
 	return `${key.app_id}@${key.env}`
-}
-
-/** The hash of IAM's key per installation secret, derived once: the secret changes only with a new deploy. */
-const installationKeyHashes = new Map<string, Promise<string>>()
-
-function installationKeyHash(secret: string): Promise<string> {
-	const known = installationKeyHashes.get(secret)
-	if (known !== undefined) return known
-	const derived = installationMailKey(secret).then(hashPlatformKey)
-	installationKeyHashes.set(secret, derived)
-	// A failed derivation is not kept: the next request derives it again.
-	derived.catch(() => installationKeyHashes.delete(secret))
-	return derived
 }
 
 /** Compares two hex digests of equal length without stopping at the first difference. */

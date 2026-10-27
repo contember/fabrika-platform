@@ -7,6 +7,7 @@
 // standalone Oblaka adapter).
 
 import { type EmailTransportConfig, readEmailTransportConfig } from '@fabrika/email'
+import { isHttpOrigin } from '@fabrika/email/platform'
 import { builtinEmailProviders } from '@fabrika/email/providers'
 import { D1Database, defineApp, type ResourceContext, Worker } from '@fabrika/provider-cloudflare'
 
@@ -88,8 +89,7 @@ const emailVariableNames = (email: EmailTransportConfig, secret: boolean): strin
 const controlUrl = (source: EnvironmentSource): string | undefined => {
 	const raw = source['FABRIKA_CONTROL_URL']
 	if (raw === undefined || raw === '') return undefined
-	const url = URL.canParse(raw) ? new URL(raw) : undefined
-	if (url === undefined || url.protocol !== 'https:' || url.origin !== raw) {
+	if (!isHttpOrigin(raw) || !raw.startsWith('https://')) {
 		throw new Error('FABRIKA_CONTROL_URL must be an https origin, with no path and no trailing slash')
 	}
 	if (!source['FABRIKA_IAM_PROVISIONING_KEY']?.trim()) {

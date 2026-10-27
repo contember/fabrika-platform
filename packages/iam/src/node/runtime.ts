@@ -12,7 +12,7 @@
 
 import { IAM_PROXY_SECRET_VARIABLE, LOCAL_ENVIRONMENT, readEnvironmentName } from '@fabrika/auth-core'
 import { type EmailProviderRegistry, type EmailSender, emailSenderFromEnv, pickEmailEnvironment, readEmailTransportConfig } from '@fabrika/email'
-import { installationMailSender } from '@fabrika/email/platform'
+import { installationMailSender, isHttpOrigin } from '@fabrika/email/platform'
 import { builtinEmailProviders } from '@fabrika/email/providers'
 import { createBackgroundTasks, PostgresDatabase } from '@fabrika/platform-node'
 import { createPostgresIamRepositories } from '../db'
@@ -69,8 +69,7 @@ const MIN_RPC_KEY_LENGTH = 32
 
 /**
  * Read `process.env`, open the Postgres pool, mount the asset directory, and return the pair of
- * handles every shared entrypoint function takes. Asynchronous so that a refusal reaches the caller as a
- * rejected promise; everything that can refuse the boot runs before the pool opens.
+ * handles every shared entrypoint function takes. Everything that can refuse the boot runs before the pool opens.
  *
  * Fails LOUDLY and early on missing required configuration: a service that boots half-configured and
  * then refuses logins at 3am is strictly worse than one that never came up. Nothing here ever logs a
@@ -198,10 +197,7 @@ function relaySender(controlUrl: string, rpcKey: string): EmailSender {
 function httpOrigin(source: Record<string, string | undefined>, name: string): string | undefined {
 	const raw = source[name]
 	if (raw === undefined || raw === '') return undefined
-	const url = URL.parse(raw)
-	if (url === null || (url.protocol !== 'http:' && url.protocol !== 'https:') || url.origin !== raw) {
-		throw new Error(`${name} must be an http(s) origin, such as http://control:3000`)
-	}
+	if (!isHttpOrigin(raw)) throw new Error(`${name} must be an http(s) origin, such as http://control:3000`)
 	return raw
 }
 

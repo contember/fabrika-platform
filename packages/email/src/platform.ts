@@ -124,7 +124,7 @@ export function installationMailSender(options: InstallationMailSenderOptions): 
 	return {
 		capabilities: PLATFORM_MAIL_CAPABILITIES,
 		async send(message, signal) {
-			sender ??= installationMailKey(options.secret).then((key) =>
+			const pending = sender ??= installationMailKey(options.secret).then((key) =>
 				new PlatformEmailSender({
 					url: options.url,
 					key,
@@ -132,8 +132,9 @@ export function installationMailSender(options: InstallationMailSenderOptions): 
 					...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
 				})
 			)
-			const ready = await sender.catch((error: unknown) => {
-				sender = undefined
+			const ready = await pending.catch((error: unknown) => {
+				// Only the build that failed is dropped; a send that started a newer one keeps it.
+				if (sender === pending) sender = undefined
 				throw error
 			})
 			return ready.send(message, signal)
@@ -141,8 +142,11 @@ export function installationMailSender(options: InstallationMailSenderOptions): 
 	}
 }
 
-/** `http(s)://host[:port]` exactly as written: no path, query, fragment or credentials. */
-function isHttpOrigin(value: string): boolean {
+/**
+ * `http(s)://host[:port]` exactly as written: no path, query, fragment or credentials. The one check of a relay's origin,
+ * for the sender, IAM's boot and IAM's Cloudflare deploy (which also requires `https:`).
+ */
+export function isHttpOrigin(value: string): boolean {
 	try {
 		const url = new URL(value)
 		return (url.protocol === 'http:' || url.protocol === 'https:') && url.origin === value

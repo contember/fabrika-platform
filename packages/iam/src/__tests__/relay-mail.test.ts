@@ -4,7 +4,7 @@
 import { EmailDeliveryError, type EmailDeliveryErrorCode, type EmailMessage, type EmailSender } from '@fabrika/email'
 import { PLATFORM_MAIL_CAPABILITIES } from '@fabrika/email/platform'
 import { describe, expect, spyOn, test } from 'bun:test'
-import { relayRefused, relayWithFallback } from '../relay-mail'
+import { relayFallbackEvent, relayRefused, relayWithFallback } from '../relay-mail'
 
 const message: EmailMessage = { to: 'ada@example.com', subject: 'Reset', text: 'Open the link', idempotencyKey: 'iam-reset-1' }
 
@@ -25,6 +25,7 @@ const refusing = (code: EmailDeliveryErrorCode, httpStatus?: number) =>
 	fake(() =>
 		Promise.reject(new EmailDeliveryError('Platform mail relay refused the message', { code, ...(httpStatus === undefined ? {} : { httpStatus }) }))
 	)
+const unexpectedRecord = (): Promise<void> => Promise.reject(new Error('no fallback was expected'))
 const direct = () => fake(() => Promise.resolve({ status: 'accepted', provider: 'resend', messageId: 'resend-1' }))
 
 describe("IAM's relay fallback", () => {
@@ -40,9 +41,14 @@ describe("IAM's relay fallback", () => {
 				]
 			) {
 				const own = direct()
-				const result = await relayWithFallback(relay, own).send(message, AbortSignal.timeout(5_000))
+				const refusals: string[] = []
+				const record = (refusal: EmailDeliveryError) => {
+					refusals.push(refusal.code)
+					return Promise.resolve()
+				}
+				const result = await relayWithFallback(relay, own, record).send(message, AbortSignal.timeout(5_000))
 				expect(result).toEqual({ status: 'accepted', provider: 'resend', messageId: 'resend-1' })
-				expect([relay.sent, own.sent]).toEqual([1, 1])
+				expect([relay.sent, own.sent, refusals.length]).toEqual([1, 1, 1])
 			}
 			expect(warn).toHaveBeenCalledTimes(4)
 			expect(warn.mock.calls.flat().join('\n')).not.toContain(message.to)
@@ -63,15 +69,31 @@ describe("IAM's relay fallback", () => {
 			]
 		) {
 			const own = direct()
-			await expect(relayWithFallback(relay, own).send(message, AbortSignal.timeout(5_000))).rejects.toThrow()
+			await expect(relayWithFallback(relay, own, unexpectedRecord).send(message, AbortSignal.timeout(5_000))).rejects.toThrow()
 			expect(own.sent).toBe(0)
 		}
+	})
+
+	test('a record that fails never stops the message, and the record names the refusal, never the message', async () => {
+		const warn = spyOn(console, 'warn').mockImplementation(() => {})
+		try {
+			const own = direct()
+			const failing = () => Promise.reject(new Error('audit store unavailable'))
+			const result = await relayWithFallback(refusing('provider_unauthorized', 401), own, failing).send(message, AbortSignal.timeout(5_000))
+			expect(result).toMatchObject({ provider: 'resend' })
+			expect(own.sent).toBe(1)
+		} finally {
+			warn.mockRestore()
+		}
+		const event = relayFallbackEvent('request-1', new EmailDeliveryError('refused', { code: 'malformed_response', httpStatus: 404 }))
+		expect(event).toMatchObject({ action: 'iam.mail.relay_fallback', metadata: { code: 'malformed_response', httpStatus: 404 } })
+		expect(JSON.stringify(event)).not.toContain(message.to)
 	})
 
 	test('a message the relay accepted is not sent again', async () => {
 		const relay = fake(() => Promise.resolve({ status: 'accepted', provider: 'platform', messageId: 'relay-1' }))
 		const own = direct()
-		expect(await relayWithFallback(relay, own).send(message, AbortSignal.timeout(5_000))).toMatchObject({ provider: 'platform' })
+		expect(await relayWithFallback(relay, own, unexpectedRecord).send(message, AbortSignal.timeout(5_000))).toMatchObject({ provider: 'platform' })
 		expect(own.sent).toBe(0)
 		expect(relayRefused(new Error('not a delivery error'))).toBe(false)
 	})

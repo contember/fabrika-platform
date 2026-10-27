@@ -748,8 +748,10 @@ Only `admin` holds them by default. The procedures (`controlRpc.mail`):
   each one with its own provider.
 - IAM deploys before Control. Until Control runs the new release (a 404, or no key it
   knows), and after the secret IAM's key derives from is rotated until Control holds
-  it too, IAM sends with its own provider and logs a warning per message
-  (`relayWithFallback`, `packages/iam/src/relay-mail.ts`). It falls back only on such a
+  it too, IAM sends with its own provider, logs a warning and writes an audit event
+  `iam.mail.relay_fallback` per message (`relayWithFallback`,
+  `packages/iam/src/relay-mail.ts`). Fallbacks that continue after the rollout mean the
+  relay is misconfigured: its gate and Control's Mail page do not see IAM's mail. It falls back only on such a
   definite refusal, or on its own relay settings being unusable; a timeout, a network
   failure or another answer may have reached the relay, and fails the send as before:
   an administrator's enrollment, reset or invitation answers 502

@@ -95,7 +95,7 @@ async function worker(options: { objects?: boolean; d1?: (d1: SqlDatabase) => Sq
 		WAIT_UNTIL: () => {},
 		ENVIRONMENT: 'local',
 		MAIL_TRANSPORT: { kind: 'transport', transport: { variables: {}, secretNames: new Set() } },
-		MAIL_RELAY: { queue, installationSecret: null, sender },
+		MAIL_RELAY: { queue, iamKeyHash: null, sender },
 	}
 	return {
 		harness,

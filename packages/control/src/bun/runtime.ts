@@ -44,7 +44,7 @@ import type { GitHubMetadataFetch, SourceDownloadFetch, SourceUploadFetch } from
 import type { CommitSource } from '../github/source/commit-files'
 import { githubWorkspaceSource, workspaceGitHubClientFactory } from '../github/workspace'
 import { controlPublicOrigin } from '../iam'
-import type { MailDispatchMessage } from '../mail-relay/queue'
+import { iamMailKeyHash, type MailDispatchMessage } from '../mail-relay/queue'
 import { readInstallationMail } from '../mail-transport'
 import type { ControlJobMessage } from '../run-lifecycle'
 import { vault } from '../services'
@@ -206,7 +206,7 @@ export function createRuntime(
 		MAIL_TRANSPORT: mailTransport,
 		MAIL_RELAY: {
 			queue: mailQueue,
-			installationSecret: iamRpcConfig.key,
+			iamKeyHash: iamMailKeyHash(iamRpcConfig.key),
 			sender: mailTransport.kind === 'transport' ? emailSenderFromEnv(emailEnvironment, emailProviders) : null,
 		},
 	}

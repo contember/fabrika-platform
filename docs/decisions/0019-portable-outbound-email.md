@@ -228,7 +228,8 @@ with 404. Its senders reach it over the platform transport
   otherwise it sends as before. When the relay refuses a message for good (no such key, no transport, no relay, or
   IAM's own relay settings unusable), IAM sends that message with its own provider, so sign-in mail survives IAM
   deploying ahead of Control and a rotated secret reaching IAM first. It never falls back on an answer that may mean
-  the relay took the message. Its manual action-link flow without a provider is unchanged.
+  the relay took the message. Each fallback is an audit event (`iam.mail.relay_fallback`, its refusal's code and status),
+  so a relay that stays unused past a rollout shows in the console's audit log, not only in IAM's log. Its manual action-link flow without a provider is unchanged.
 - **Every message is a row.** The relay records the canonical request, its fingerprint, the sender, the recipient's
   domain, the rule that decided it and its state, with or without a provider. A repeat under the same key answers the
   first message id; other content under the key is `idempotency_conflict`. On the Worker the canonical request lives in
@@ -384,6 +385,15 @@ re-enqueue work there unchanged. The application needed no change, because it re
 `FABRIKA_EMAIL_PROVIDER`. The content bucket is its own: the run-logs bucket is bound by the runner Worker too, which
 would then read every message. Splitting content across D1 rows, and lowering the Worker's attachment limit below what
 applications advertise, were rejected.
+
+### IAM's Worker reaches the relay over a service binding
+
+A binding from IAM's Worker to Control's would keep IAM's relay key off the internet and need neither an https check nor
+`FABRIKA_CONTROL_URL`. Rejected because the platform workflow deploys IAM first, before Operations and Control: on a
+fresh installation Control's Worker does not exist yet when IAM deploys, and Control already binds IAM, so the binding
+would be circular. IAM's Worker posts to Control's public origin instead, which is a Custom Domain, so a fetch from the
+same zone reaches Control's Worker. Its key is derived from the provisioning key, whose holder administers IAM already,
+and the deploy refuses an origin that is not https.
 
 ### Drop a message without a record
 

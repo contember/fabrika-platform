@@ -1,4 +1,5 @@
 import type { EmailSender } from '@fabrika/email'
+import { hashPlatformKey, installationMailKey } from '@fabrika/email/platform'
 import type { JobQueue } from '@fabrika/platform'
 import { z } from 'zod'
 import { hasMailContent, type MailMessageRepository, type MailMessageRow } from '../db'
@@ -23,13 +24,20 @@ export function decodeMailDispatchMessage(payload: unknown): MailDispatchMessage
 /** The relay's process half: the Bun process's, or the Worker's when it binds its queue and content bucket; without one the row answers 404. */
 export interface MailRelay {
 	readonly queue: JobQueue<MailDispatchMessage>
-	/**
-	 * The secret IAM's mail key is derived from (`installationMailKey`): `FABRIKA_IAM_RPC_KEY` in the Bun process, the
-	 * provisioning key on the Worker, whose IAM holds no RPC key. `null` without one, so no key authenticates IAM.
-	 */
-	readonly installationSecret: string | null
+	/** The hash IAM's mail key authenticates by (`iamMailKeyHash`), derived once with the relay; `null`: no key is IAM's. */
+	readonly iamKeyHash: Promise<string> | null
 	/** The installation's sender over Control's own `FABRIKA_EMAIL_*`; `null` when Control has no transport. */
 	readonly sender: EmailSender | null
+}
+
+/**
+ * The hash of IAM's mail key, `installationMailKey` of the secret it derives from: `FABRIKA_IAM_RPC_KEY` in the Bun
+ * process, the provisioning key on the Worker, whose IAM holds no RPC key. `null` for a blank or absent secret, so no
+ * key authenticates as IAM. The relay keeps the hash, never the secret.
+ */
+export function iamMailKeyHash(secret: string | undefined): Promise<string> | null {
+	const trimmed = secret?.trim() ?? ''
+	return trimmed === '' ? null : installationMailKey(trimmed).then(hashPlatformKey)
 }
 
 export function enqueueMailDispatch(queue: JobQueue<MailDispatchMessage>, messageId: string, delaySeconds = 0): Promise<void> {
