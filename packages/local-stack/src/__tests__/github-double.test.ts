@@ -103,7 +103,7 @@ describe('a private fixture repository behind the double', () => {
 		expect((await metadataFetch(`${APPLICATION}/commits/${FIXTURE.commitSha}`, withToken(undefined))).status).toBe(404)
 		expect((await metadataFetch(`${APPLICATION}/commits/${FIXTURE.commitSha}`, withToken('ghs_unminted'))).status).toBe(404)
 		expect((await downloadFetch(`${APPLICATION}/tarball/${FIXTURE.commitSha}`, { redirect: 'manual' })).status).toBe(404)
-		expect((await downloadFetch(CODELOAD, { redirect: 'error' })).status).toBe(404)
+		expect((await downloadFetch(CODELOAD, { redirect: 'manual' })).status).toBe(404)
 		expect(() =>
 			createFixtureTransports([{ repository: LOCAL_SOURCE_APPLICATION_REPOSITORY, fixture: FIXTURE, archive: new Blob(), visibility: 'private' }])
 		)
@@ -122,11 +122,11 @@ describe('a private fixture repository behind the double', () => {
 		const redirect = await downloadFetch(`${APPLICATION}/tarball/${FIXTURE.commitSha}`, { redirect: 'manual', ...withToken(token) })
 		const grant = new URL(redirect.headers.get('location') ?? '').searchParams.get('token')
 		const secondCodeload = `https://codeload.github.com/${second.owner}/${second.name}/legacy.tar.gz/${secondFixture.commitSha}`
-		expect((await downloadFetch(`${secondCodeload}?token=${grant}`, { redirect: 'error' })).status).toBe(404)
+		expect((await downloadFetch(`${secondCodeload}?token=${grant}`, { redirect: 'manual' })).status).toBe(404)
 		const otherCommit =
 			`https://codeload.github.com/${second.owner}/${LOCAL_SOURCE_APPLICATION_REPOSITORY.name}/legacy.tar.gz/${secondFixture.commitSha}`
-		expect((await downloadFetch(`${otherCommit}?token=${grant}`, { redirect: 'error' })).status).toBe(404)
-		const own = await downloadFetch(`${CODELOAD}?token=${grant}`, { redirect: 'error' })
+		expect((await downloadFetch(`${otherCommit}?token=${grant}`, { redirect: 'manual' })).status).toBe(404)
+		const own = await downloadFetch(`${CODELOAD}?token=${grant}`, { redirect: 'manual' })
 		expect(new Uint8Array(await own.arrayBuffer())).toEqual(new Uint8Array([1]))
 	})
 
@@ -140,10 +140,10 @@ describe('a private fixture repository behind the double', () => {
 		const location = redirect.headers.get('location') ?? ''
 		expect(location.startsWith(`${CODELOAD}?token=`)).toBe(true)
 		// Codeload never takes the installation token, and its grant is spent by one download.
-		expect((await downloadFetch(location, { redirect: 'error', ...withToken(token) })).status).toBe(404)
-		const archive = await downloadFetch(location, { redirect: 'error' })
+		expect((await downloadFetch(location, { redirect: 'manual', ...withToken(token) })).status).toBe(404)
+		const archive = await downloadFetch(location, { redirect: 'manual' })
 		expect(new Uint8Array(await archive.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3, 4]))
-		expect((await downloadFetch(location, { redirect: 'error' })).status).toBe(404)
+		expect((await downloadFetch(location, { redirect: 'manual' })).status).toBe(404)
 	})
 
 	test('answers the branch with the commit a push moved it to, and every pinned commit by its sha', async () => {
