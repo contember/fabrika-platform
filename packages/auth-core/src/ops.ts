@@ -586,8 +586,12 @@ export interface OpsDumpSchemaTable {
 	readonly name: string
 	readonly virtual: boolean
 	readonly withoutRowid: boolean
-	/** Whether the table's SQL declares a `CHECK` constraint; a reader that cannot tell answers `true`. */
-	readonly checked: boolean
+	/**
+	 * Every name a `CHECK` constraint of the table's SQL reads, ASCII-lowercase and unquoted (keywords included), so a
+	 * column it does not list cannot change what a `CHECK` answers. Empty for a table without one; `null` from a reader
+	 * that cannot tell, which counts as naming every column.
+	 */
+	readonly checkNames: readonly string[] | null
 	readonly columns: readonly OpsDumpSchemaColumn[]
 	readonly indexes: readonly OpsDumpSchemaIndex[]
 	readonly foreignKeys: readonly OpsDumpSchemaForeignKey[]
@@ -618,8 +622,9 @@ export interface OpsDumpPlan {
  * The one rule both the producer, at export `begin`, and the importer, at import `begin`, apply to a schema: the plan
  * a dump is written and loaded by, or an `unsupported_schema` refusal naming the table. A foreign key whose parent lies
  * in its own table's cycle (the table itself included) is loaded `NULL` and linked once every row is in, so each of its
- * columns must take a temporary `NULL`: nullable, outside the primary key, referenced by no foreign key, in a table
- * without a `CHECK`, a `NOT NULL` generated column, or a partial or expression unique index. A `WITHOUT ROWID` or
+ * columns must take a temporary `NULL`: nullable, outside the primary key, referenced by no foreign key, named by no
+ * `CHECK`, in a table without a `NOT NULL` generated column, a generated column a `CHECK` names, or a partial, expression
+ * or generated-column unique index. A `WITHOUT ROWID` or
  * virtual table, a table without a name that reads its rowid, a foreign key to a table outside the dump or without the
  * named key, and a foreign key checked only at commit are refused.
  */
@@ -1650,9 +1655,16 @@ function loadOrder(tables: readonly DescribedTable[], cycle: ReadonlyMap<string,
 
 /** Whether every deferred column of `table` can hold `NULL` from its part until the link pass, with nothing to violate. */
 function takesTemporaryNull(table: OpsDumpSchemaTable, deferred: readonly OpsDumpSchemaColumn[], referenced: ReadonlySet<string>): boolean {
-	if (table.checked || table.columns.some((column) => column.generated && column.notNull)) return false
-	if (table.indexes.some((index) => index.unique && (index.partial || index.columns.includes(null)))) return false
-	return deferred.every((column) => !column.notNull && column.primaryKey === 0 && !referenced.has(columnKey(table.name, column.name)))
+	// A `CHECK` answers the same for a `NULL` in a column it does not read; a generated column may read a deferred one.
+	const checkReads = (column: OpsDumpSchemaColumn): boolean => table.checkNames === null || table.checkNames.includes(asciiLower(column.name))
+	if (table.columns.some((column) => column.generated && (column.notNull || checkReads(column)))) return false
+	// A generated column that reads a deferred one may take one value for many rows while that column is `NULL`.
+	const generated = new Set(table.columns.filter((column) => column.generated).map((column) => asciiLower(column.name)))
+	const indexedGenerated = (index: OpsDumpSchemaIndex): boolean => index.columns.some((name) => name !== null && generated.has(asciiLower(name)))
+	if (table.indexes.some((index) => index.unique && (index.partial || index.columns.includes(null) || indexedGenerated(index)))) return false
+	return deferred.every((column) =>
+		!column.notNull && column.primaryKey === 0 && !referenced.has(columnKey(table.name, column.name)) && !checkReads(column)
+	)
 }
 
 function columnKey(table: string, column: string): string {

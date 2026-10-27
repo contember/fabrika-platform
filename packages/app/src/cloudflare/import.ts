@@ -762,9 +762,9 @@ function sameDdl(left: readonly OpsDumpSchemaEntry[], right: readonly OpsDumpSch
 }
 
 /**
- * The schema `planOpsDump` reads, from the PRAGMAs workerd admits, of every table a dump holds. A `CHECK` or an
- * `INITIALLY DEFERRED` clause is read from the table's SQL outside its quotes and comments; one such clause marks every
- * foreign key of its table.
+ * The schema `planOpsDump` reads, from the PRAGMAs workerd admits, of every table a dump holds. An `INITIALLY DEFERRED`
+ * clause is read from the table's SQL outside its quotes and comments, and marks every foreign key of its table; the
+ * names a `CHECK` reads come from the same SQL (`checkNamesOf`).
  */
 export function describeDumpSchema(storage: SqliteStorage): OpsDumpSchema {
 	const tables: OpsDumpSchemaTable[] = []
@@ -781,7 +781,7 @@ export function describeDumpSchema(storage: SqliteStorage): OpsDumpSchema {
 			name,
 			virtual,
 			withoutRowid: flag(row['wr']),
-			checked: clauses === null || /\bcheck\b/i.test(clauses),
+			checkNames: typeof sql === 'string' ? checkNamesOf(sql) : null,
 			// A virtual table is refused whatever it holds, and its module may not be loaded to describe it.
 			columns: virtual ? [] : describeColumns(storage, name),
 			indexes: virtual ? [] : describeIndexes(storage, name),
@@ -839,6 +839,90 @@ function describeForeignKeys(storage: SqliteStorage, table: string, initiallyDef
 		}
 		return { parent: key.parent, columns: rows.map((row) => row.from), references: references.length === 0 ? null : references, initiallyDeferred }
 	})
+}
+
+type SqlToken =
+	| { readonly kind: 'name'; readonly text: string; readonly quoted: boolean }
+	| { readonly kind: 'open' | 'close' | 'other' }
+
+const WORD_CHAR = /[A-Za-z0-9_$\u0080-\uffff]/
+
+/**
+ * The names the `CHECK` clauses of a table's `sql` read: every word and quoted identifier between a `CHECK` keyword's
+ * parentheses, ASCII-lowercase, keywords and numbers included, so it lists at least every column a `CHECK` reads. A
+ * string literal and a comment name nothing; a double-quoted string, which SQLite may read as either, counts as a name.
+ * `null` when the text does not scan (an unclosed quote, comment or parenthesis), which counts as naming every column.
+ */
+export function checkNamesOf(sql: string): string[] | null {
+	const tokens = sqlTokens(sql)
+	if (tokens === null) return null
+	const names: string[] = []
+	for (let index = 0; index < tokens.length; index++) {
+		const token = tokens[index]
+		if (token?.kind !== 'name' || token.quoted || asciiLower(token.text) !== 'check' || tokens[index + 1]?.kind !== 'open') continue
+		let depth = 0
+		let end = index + 1
+		for (; end < tokens.length; end++) {
+			const inner = tokens[end]
+			if (inner?.kind === 'open') depth++
+			else if (inner?.kind === 'close' && --depth === 0) break
+			else if (inner?.kind === 'name') names.push(asciiLower(inner.text))
+		}
+		if (end === tokens.length) return null
+		index = end
+	}
+	return names
+}
+
+/** `sql` as words, quoted identifiers and parentheses; string literals, comments and whitespace dropped. */
+function sqlTokens(sql: string): SqlToken[] | null {
+	const tokens: SqlToken[] = []
+	let index = 0
+	while (index < sql.length) {
+		const char = sql.charAt(index)
+		if (sql.startsWith('--', index)) {
+			const end = sql.indexOf('\n', index)
+			index = end < 0 ? sql.length : end + 1
+		} else if (sql.startsWith('/*', index)) {
+			const end = sql.indexOf('*/', index + 2)
+			if (end < 0) return null
+			index = end + 2
+		} else if (char === "'" || char === '"' || char === '`' || char === '[') {
+			const close = char === '[' ? ']' : char
+			let end = index + 1
+			let text = ''
+			for (;;) {
+				const next = sql.indexOf(close, end)
+				if (next < 0) return null
+				text += sql.slice(end, next)
+				if (close !== ']' && sql.charAt(next + 1) === close) {
+					text += close
+					end = next + 2
+					continue
+				}
+				end = next + 1
+				break
+			}
+			if (char !== "'") tokens.push({ kind: 'name', text, quoted: true })
+			index = end
+		} else if (WORD_CHAR.test(char)) {
+			let end = index + 1
+			while (end < sql.length && WORD_CHAR.test(sql.charAt(end))) end++
+			tokens.push({ kind: 'name', text: sql.slice(index, end), quoted: false })
+			index = end
+		} else {
+			if (char === '(') tokens.push({ kind: 'open' })
+			else if (char === ')') tokens.push({ kind: 'close' })
+			else if (!/\s/.test(char)) tokens.push({ kind: 'other' })
+			index++
+		}
+	}
+	return tokens
+}
+
+/** SQLite compares identifiers case-insensitively in ASCII only. */
+function asciiLower(value: string): string {
+	return value.replace(/[A-Z]/g, (letter) => letter.toLowerCase())
 }
 
 /** `sql` with its string literals, quoted identifiers and comments blanked, so a keyword search finds only clauses. */
