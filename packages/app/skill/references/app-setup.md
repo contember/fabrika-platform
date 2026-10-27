@@ -19,20 +19,20 @@ the SPA is added with it.
 		"test": "bun test --isolate"
 	},
 	"dependencies": {
-		"@fabrika/app": "0.9.0-dev.5",
-		"@fabrika/db": "0.9.0-dev.5",
-		"@fabrika/provider-zerops": "0.9.0-dev.5",
-		"@fabrika/proxy-core": "0.9.0-dev.5",
-		"@fabrika/ui": "0.9.0-dev.5",
+		"@fabrika/app": "0.9.0-dev.6",
+		"@fabrika/db": "0.9.0-dev.6",
+		"@fabrika/provider-zerops": "0.9.0-dev.6",
+		"@fabrika/proxy-core": "0.9.0-dev.6",
+		"@fabrika/ui": "0.9.0-dev.6",
 		"kysely": "0.29.6",
 		"react": "^19.0.0",
 		"react-dom": "^19.0.0",
 		"zod": "^3.25.76"
 	},
 	"devDependencies": {
-		"@fabrika/check": "0.9.0-dev.5",
-		"@fabrika/cli": "0.9.0-dev.5",
-		"@fabrika/platform": "0.9.0-dev.5",
+		"@fabrika/check": "0.9.0-dev.6",
+		"@fabrika/cli": "0.9.0-dev.6",
+		"@fabrika/platform": "0.9.0-dev.6",
 		"@happy-dom/global-registrator": "^20.11.2",
 		"@types/bun": "^1.4.3",
 		"@types/react": "^19.0.0",
