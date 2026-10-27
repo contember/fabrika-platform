@@ -17,7 +17,5 @@ decided work or status.
   behind it share: serializable grants, declarative rules, and code that narrows freely but widens only when declared.
 - [A compact installation](compact-installation.md) — applications beside the platform on one HA database; reviewed,
   gated by two live-account facts, and only worth it if platform data must also be HA.
-- [The application Durable Object](application-object-runtime-and-operations.md) — runtime gaps, cost rules, an alarm
-  scheduler, read-only invocations, an ops channel, backups with an importer, and side restore on Cloudflare.
 - [A dev environment for MCP authoring](mcp-dev-containers.md) — a `dev` environment that takes each workspace
   commit in about two seconds through an in-container launcher that pulls from Control; measured on Zerops.

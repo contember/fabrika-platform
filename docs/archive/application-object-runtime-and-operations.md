@@ -694,7 +694,7 @@ Each phase names the probes it depends on. No phase waits for all of Phase 0.
 ## 8. How to build it
 
 The decomposition into work units, seams, waves and agent roles is the sprint
-[`../sprints/sprint-2026-10-24-application-object.md`](../sprints/sprint-2026-10-24-application-object.md).
+[`sprint-2026-10-24-application-object.md`](sprint-2026-10-24-application-object.md).
 
 ## Deferred review findings
 

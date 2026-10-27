@@ -33,4 +33,4 @@ The owner decided to plan this escape hatch on 2026-10-24 (sprint decision Q5); 
 `packages/app` (contract kinds, the generated entry, the job runner), `packages/provider-cloudflare` (`bounds.ts`, the
 generated config), `packages/check`, ADR-0065 §5.
 
-<!-- Origin: ../sprints/sprint-2026-10-24-application-object.md, decision Q5. -->
+<!-- Origin: ../archive/sprint-2026-10-24-application-object.md, decision Q5. -->
