@@ -317,20 +317,20 @@
         "@fabrika/app-0.5": "npm:@fabrika/app@0.5.5",
         "@fabrika/app-0.6": "npm:@fabrika/app@0.6.0",
         "@fabrika/app-0.7": "npm:@fabrika/app@0.7.0",
-        "@fabrika/app-0.8": "npm:@fabrika/app@0.8.1",
+        "@fabrika/app-0.8": "npm:@fabrika/app@0.8.2",
         "@fabrika/auth": "workspace:*",
         "@fabrika/auth-core": "workspace:*",
         "@fabrika/auth-core-0.4": "npm:@fabrika/auth-core@0.4.8",
         "@fabrika/auth-core-0.5": "npm:@fabrika/auth-core@0.5.5",
         "@fabrika/auth-core-0.6": "npm:@fabrika/auth-core@0.6.0",
         "@fabrika/auth-core-0.7": "npm:@fabrika/auth-core@0.7.0",
-        "@fabrika/auth-core-0.8": "npm:@fabrika/auth-core@0.8.1",
+        "@fabrika/auth-core-0.8": "npm:@fabrika/auth-core@0.8.2",
         "@fabrika/check": "workspace:*",
         "@fabrika/check-0.4": "npm:@fabrika/check@0.4.8",
         "@fabrika/check-0.5": "npm:@fabrika/check@0.5.5",
         "@fabrika/check-0.6": "npm:@fabrika/check@0.6.0",
         "@fabrika/check-0.7": "npm:@fabrika/check@0.7.0",
-        "@fabrika/check-0.8": "npm:@fabrika/check@0.8.1",
+        "@fabrika/check-0.8": "npm:@fabrika/check@0.8.2",
         "@fabrika/control-contract": "workspace:*",
         "@fabrika/email": "workspace:*",
         "@fabrika/github-app": "workspace:*",
@@ -346,7 +346,7 @@
         "@fabrika/proxy-core-0.5": "npm:@fabrika/proxy-core@0.5.5",
         "@fabrika/proxy-core-0.6": "npm:@fabrika/proxy-core@0.6.0",
         "@fabrika/proxy-core-0.7": "npm:@fabrika/proxy-core@0.7.0",
-        "@fabrika/proxy-core-0.8": "npm:@fabrika/proxy-core@0.8.1",
+        "@fabrika/proxy-core-0.8": "npm:@fabrika/proxy-core@0.8.2",
         "@fabrika/runner-cloudflare": "workspace:*",
         "@modelcontextprotocol/server": "2.2.0",
         "zod": "^3.25.76",
@@ -883,7 +883,7 @@
 
     "@fabrika/app-0.7": ["@fabrika/app@0.7.0", "", { "dependencies": { "@fabrika/auth": "0.7.0", "@fabrika/auth-core": "0.7.0", "@fabrika/db": "0.7.0", "@fabrika/email": "0.7.0", "@fabrika/jwks": "0.7.0", "@fabrika/platform": "0.7.0", "@fabrika/platform-node": "0.7.0", "@fabrika/proxy-core": "0.7.0", "jose": "^5.9.0" }, "peerDependencies": { "@happy-dom/global-registrator": "^20.11.2", "react": "^19.0.0", "zod": "^3.25.76" }, "optionalPeers": ["@happy-dom/global-registrator", "react"] }, "sha512-iyauOFxgUpx/Lm9G30OOgYAavbFQiYzzGD2a6/Dl8IaAalesp6wiySfU2BlOw/wPHcFEDnXK5dT5cQPantCyLQ=="],
 
-    "@fabrika/app-0.8": ["@fabrika/app@0.8.1", "", { "dependencies": { "@fabrika/auth": "0.8.1", "@fabrika/auth-core": "0.8.1", "@fabrika/db": "0.8.1", "@fabrika/email": "0.8.1", "@fabrika/jwks": "0.8.1", "@fabrika/platform": "0.8.1", "@fabrika/platform-node": "0.8.1", "@fabrika/proxy-core": "0.8.1", "altcha-lib": "2.6.0", "jose": "^5.9.0" }, "peerDependencies": { "@happy-dom/global-registrator": "^20.11.2", "react": "^19.0.0", "zod": "^3.25.76" }, "optionalPeers": ["@happy-dom/global-registrator", "react"] }, "sha512-0xKFDStdgEQ+X8oNJHADTFqzIb2yzhNkC6uksBfavRl/09Sz3788D7OlHcy2JUPVBrR4mQes3I35g9UnR52zog=="],
+    "@fabrika/app-0.8": ["@fabrika/app@0.8.2", "", { "dependencies": { "@fabrika/auth": "0.8.2", "@fabrika/auth-core": "0.8.2", "@fabrika/db": "0.8.2", "@fabrika/email": "0.8.2", "@fabrika/jwks": "0.8.2", "@fabrika/platform": "0.8.2", "@fabrika/platform-node": "0.8.2", "@fabrika/proxy-core": "0.8.2", "altcha-lib": "2.6.0", "jose": "^5.9.0" }, "peerDependencies": { "@happy-dom/global-registrator": "^20.11.2", "react": "^19.0.0", "zod": "^3.25.76" }, "optionalPeers": ["@happy-dom/global-registrator", "react"] }, "sha512-YBW2HvCALDcm12P3uQzY/nuqelTGK+kbzGynzdtE2nios7XjX/Onv0ugVGySIaDGTdDb1kEW8hZsp7wZ4fHd8w=="],
 
     "@fabrika/auth": ["@fabrika/auth@workspace:packages/auth"],
 
@@ -897,7 +897,7 @@
 
     "@fabrika/auth-core-0.7": ["@fabrika/auth-core@0.7.0", "", {}, "sha512-6w6eEfQVl9epNrO24bUAcIHx2KnAquZVbM8IJuQ5I/nYYeO6Atmc7eqcnWvoFyBCVzW/giyuMGVgQqWEecszOQ=="],
 
-    "@fabrika/auth-core-0.8": ["@fabrika/auth-core@0.8.1", "", {}, "sha512-vbZ6Jt++Vth24aRbzF+gQNfpp0PEwGxeKUtcf4eDNJCK+wUewN+pMdIb55NISHdfY+N4mDukL82Rs/mFrPPISQ=="],
+    "@fabrika/auth-core-0.8": ["@fabrika/auth-core@0.8.2", "", {}, "sha512-EEH9QdjPcWWV3y1SEPYYqxDdcyUUp3ogrfTYpMfT4aOAOeqcVA6lh7TYusjmm4kikhJJln9nERqay2BEbpzV4Q=="],
 
     "@fabrika/builder": ["@fabrika/builder@workspace:packages/builder"],
 
@@ -915,7 +915,7 @@
 
     "@fabrika/check-0.7": ["@fabrika/check@0.7.0", "", { "dependencies": { "@babel/parser": "8.0.7", "@fabrika/app": "0.7.0", "@fabrika/auth-core": "0.7.0", "@fabrika/db": "0.7.0", "@fabrika/operations-contract": "0.7.0", "@fabrika/platform-node": "0.7.0", "zod": "^3.25.76" }, "bin": { "fabrika-check": "src/cli.ts", "fabrika-source-maps": "src/source-maps-cli.ts" } }, "sha512-XEAn4n/+M0jsU83saWaBh76Ap3MC5Rlc1opIPjYkAttAYwRtHtP2/oA3UWVaEv6ecWO0KenzIyeiuvumQ3h57g=="],
 
-    "@fabrika/check-0.8": ["@fabrika/check@0.8.1", "", { "dependencies": { "@babel/parser": "8.0.7", "@fabrika/app": "0.8.1", "@fabrika/auth-core": "0.8.1", "@fabrika/db": "0.8.1", "@fabrika/operations-contract": "0.8.1", "@fabrika/platform-node": "0.8.1", "zod": "^3.25.76" }, "bin": { "fabrika-check": "src/cli.ts", "fabrika-source-maps": "src/source-maps-cli.ts" } }, "sha512-uFu+Ai0Nrpio7Vc42AIdAb5OkMH8s3Z+gPiE2eZNqBkGa/ZrPyHM/Bd7sLI13OJH3p/tFISZLyk/mhIKKX1p7g=="],
+    "@fabrika/check-0.8": ["@fabrika/check@0.8.2", "", { "dependencies": { "@babel/parser": "8.0.7", "@fabrika/app": "0.8.2", "@fabrika/auth-core": "0.8.2", "@fabrika/db": "0.8.2", "@fabrika/operations-contract": "0.8.2", "@fabrika/platform-node": "0.8.2", "zod": "^3.25.76" }, "bin": { "fabrika-check": "src/cli.ts", "fabrika-source-maps": "src/source-maps-cli.ts" } }, "sha512-7VAwt1Dp93t3/2BtIk4cP5czyc4nAA1dAN/YFkjM9oHSyzOUzxS1fbvFZDZcoDIfJMhRIvDDWFlq25WxieM/yw=="],
 
     "@fabrika/cli": ["@fabrika/cli@workspace:packages/cli"],
 
@@ -971,7 +971,7 @@
 
     "@fabrika/proxy-core-0.7": ["@fabrika/proxy-core@0.7.0", "", { "dependencies": { "@fabrika/auth-core": "0.7.0", "@fabrika/jwks": "0.7.0", "@fabrika/platform": "0.7.0", "jose": "^5.9.0", "zod": "^3.25.76" } }, "sha512-VjbkojsNeUDEOgL16NDj/PQQPaDkL4ttHqdBEt3kiKTmoKzVa0Ek7qXrnOAaPQhcHw5BxgUET5ZZ7ohc1FonkA=="],
 
-    "@fabrika/proxy-core-0.8": ["@fabrika/proxy-core@0.8.1", "", { "dependencies": { "@fabrika/auth-core": "0.8.1", "@fabrika/jwks": "0.8.1", "@fabrika/platform": "0.8.1", "jose": "^5.9.0", "zod": "^3.25.76" } }, "sha512-kAUptoj7cdj8Zb/C8KOrWAWpyha7nQ3k85hQ812X/8MYH4ALIfR4MWKs8AU2z6cWS/IqOFj/AGkoefNtT81wQg=="],
+    "@fabrika/proxy-core-0.8": ["@fabrika/proxy-core@0.8.2", "", { "dependencies": { "@fabrika/auth-core": "0.8.2", "@fabrika/jwks": "0.8.2", "@fabrika/platform": "0.8.2", "jose": "^5.9.0", "zod": "^3.25.76" } }, "sha512-j50w4TpSNbKdwYkqfBF794K8TLZvcuB+c6ikk7f615rRzpiIChGTN9FVmOAhDJaw2loXUaVs+n0SWhBZiY01/Q=="],
 
     "@fabrika/runner-cloudflare": ["@fabrika/runner-cloudflare@workspace:packages/runner-cloudflare"],
 
@@ -1547,21 +1547,21 @@
 
     "@fabrika/app-0.7/@fabrika/proxy-core": ["@fabrika/proxy-core@0.7.0", "", { "dependencies": { "@fabrika/auth-core": "0.7.0", "@fabrika/jwks": "0.7.0", "@fabrika/platform": "0.7.0", "jose": "^5.9.0", "zod": "^3.25.76" } }, "sha512-VjbkojsNeUDEOgL16NDj/PQQPaDkL4ttHqdBEt3kiKTmoKzVa0Ek7qXrnOAaPQhcHw5BxgUET5ZZ7ohc1FonkA=="],
 
-    "@fabrika/app-0.8/@fabrika/auth": ["@fabrika/auth@0.8.1", "", { "dependencies": { "@fabrika/auth-core": "0.8.1", "@fabrika/jwks": "0.8.1", "jose": "^5.9.0", "zod": "^3.25.76" } }, "sha512-qrjF7pKgF6Hu9MFZm6x+c0z4eN/90IfTEGFyNQ5DKCv1juNUnO12JV7DlEpIkQtS4dFyn12ALBsKKzmRLHYe7g=="],
+    "@fabrika/app-0.8/@fabrika/auth": ["@fabrika/auth@0.8.2", "", { "dependencies": { "@fabrika/auth-core": "0.8.2", "@fabrika/jwks": "0.8.2", "jose": "^5.9.0", "zod": "^3.25.76" } }, "sha512-AbIPqVqZpgiYX69ug/9hvO2ZVv0uyq6h/CdhntEvXJlhHtPaR0of5YC626YGwUZh2ikhw9Bm1thhh4SUfQBgMQ=="],
 
-    "@fabrika/app-0.8/@fabrika/auth-core": ["@fabrika/auth-core@0.8.1", "", {}, "sha512-vbZ6Jt++Vth24aRbzF+gQNfpp0PEwGxeKUtcf4eDNJCK+wUewN+pMdIb55NISHdfY+N4mDukL82Rs/mFrPPISQ=="],
+    "@fabrika/app-0.8/@fabrika/auth-core": ["@fabrika/auth-core@0.8.2", "", {}, "sha512-EEH9QdjPcWWV3y1SEPYYqxDdcyUUp3ogrfTYpMfT4aOAOeqcVA6lh7TYusjmm4kikhJJln9nERqay2BEbpzV4Q=="],
 
-    "@fabrika/app-0.8/@fabrika/db": ["@fabrika/db@0.8.1", "", { "dependencies": { "@fabrika/auth-core": "0.8.1", "@fabrika/platform-node": "0.8.1", "kysely": "0.29.6", "kysely-postgres-js": "5.0.1", "zod": "^3.25.76" } }, "sha512-ID6r6eAOcIBql4AMyywrNQL0V+zBGKs2Vp+0JE+1HBfumzD3VsGSGqz2W0xnkaC4ZB4pJxyVB4Up3q5UZMPXmQ=="],
+    "@fabrika/app-0.8/@fabrika/db": ["@fabrika/db@0.8.2", "", { "dependencies": { "@fabrika/auth-core": "0.8.2", "@fabrika/platform-node": "0.8.2", "kysely": "0.29.6", "kysely-postgres-js": "5.0.1", "zod": "^3.25.76" } }, "sha512-Kid9zlWsbw6L6J3D8IjMZQC3kDpf6mYWGaVuK3vA7j0Eg4ydTW4V4C4E6OCrZNugUDGBukUDuzLmW25A2wP0+A=="],
 
-    "@fabrika/app-0.8/@fabrika/email": ["@fabrika/email@0.8.1", "", { "dependencies": { "zod": "^3.25.76" } }, "sha512-2bLzzqGGQ5dSwdXVfMxkBSDGZ/TUa490YcMKnU7kTVn313giCZ/dDD10/Lbp8xf2JbF+V44j+FlmjKjP3/HCqQ=="],
+    "@fabrika/app-0.8/@fabrika/email": ["@fabrika/email@0.8.2", "", { "dependencies": { "zod": "^3.25.76" } }, "sha512-vmwzpWP+bM/XKRPjli098N4oP0NkgdRNHU/EuXNt/OGGeHGi6KXyg+qaYPULzX4ggFJmmiwhiXNhl4PtblmvXA=="],
 
-    "@fabrika/app-0.8/@fabrika/jwks": ["@fabrika/jwks@0.8.1", "", { "dependencies": { "@fabrika/auth-core": "0.8.1", "jose": "^5.9.0", "zod": "^3.25.76" } }, "sha512-8XjWRtsYgfpXzylTqv0xvfB2BUHLYb5XmgoWCfcB00qLvks7mxOCv+fKbUAy+leW1ifYJZD4g7UB4Us6rQsQkw=="],
+    "@fabrika/app-0.8/@fabrika/jwks": ["@fabrika/jwks@0.8.2", "", { "dependencies": { "@fabrika/auth-core": "0.8.2", "jose": "^5.9.0", "zod": "^3.25.76" } }, "sha512-j+kG/+TDxc+064DYm/9FsJAlAhRm+71kZNS5pzGKQY5FRTu4tJZ8q0mIGdWGeQp/Lq9B9LZ5LSjOpSGFCsb11Q=="],
 
-    "@fabrika/app-0.8/@fabrika/platform": ["@fabrika/platform@0.8.1", "", {}, "sha512-k24i2vfD0X4oBwLOpEHfzckH4rIJmLbj0Nhq056B2xOZLkAvPJdpS76gdw2M3Rv37snA7L8K6+ztloZZdw2glw=="],
+    "@fabrika/app-0.8/@fabrika/platform": ["@fabrika/platform@0.8.2", "", {}, "sha512-CPz2e3OnzEvkCs1fxQCn9+wWWc7LoBDstkeoG0WwN3M1If6hJ0WGFrCR8P81xVb7xPpGaZ1vrJrbLWYjVq8k7Q=="],
 
-    "@fabrika/app-0.8/@fabrika/platform-node": ["@fabrika/platform-node@0.8.1", "", { "dependencies": { "@fabrika/platform": "0.8.1" } }, "sha512-PLNQJHrhqi3otlB/y14vTBKPLDadHJx+7wGtxLymG6D9dkwJ9EDLrWUTN42rh7agC2Z/Uf71jbSLh2DJnb0c9Q=="],
+    "@fabrika/app-0.8/@fabrika/platform-node": ["@fabrika/platform-node@0.8.2", "", { "dependencies": { "@fabrika/platform": "0.8.2" } }, "sha512-lWrKyreaVd3aU/VO4THsDNVEvPPbhAwsg4Do0NbV0BZoXgDeQxTn8lZse57BqXi4Z6uLcY3GBOJJPFxqLno2Aw=="],
 
-    "@fabrika/app-0.8/@fabrika/proxy-core": ["@fabrika/proxy-core@0.8.1", "", { "dependencies": { "@fabrika/auth-core": "0.8.1", "@fabrika/jwks": "0.8.1", "@fabrika/platform": "0.8.1", "jose": "^5.9.0", "zod": "^3.25.76" } }, "sha512-kAUptoj7cdj8Zb/C8KOrWAWpyha7nQ3k85hQ812X/8MYH4ALIfR4MWKs8AU2z6cWS/IqOFj/AGkoefNtT81wQg=="],
+    "@fabrika/app-0.8/@fabrika/proxy-core": ["@fabrika/proxy-core@0.8.2", "", { "dependencies": { "@fabrika/auth-core": "0.8.2", "@fabrika/jwks": "0.8.2", "@fabrika/platform": "0.8.2", "jose": "^5.9.0", "zod": "^3.25.76" } }, "sha512-j50w4TpSNbKdwYkqfBF794K8TLZvcuB+c6ikk7f615rRzpiIChGTN9FVmOAhDJaw2loXUaVs+n0SWhBZiY01/Q=="],
 
     "@fabrika/check-0.4/@fabrika/app": ["@fabrika/app@0.4.8", "", { "dependencies": { "@fabrika/auth": "0.4.8", "@fabrika/auth-core": "0.4.8", "@fabrika/db": "0.4.8", "@fabrika/jwks": "0.4.8", "@fabrika/platform": "0.4.8", "@fabrika/platform-node": "0.4.8", "@fabrika/proxy-core": "0.4.8", "jose": "^5.9.0" }, "peerDependencies": { "@happy-dom/global-registrator": "^20.11.2", "react": "^19.0.0", "zod": "^3.25.76" }, "optionalPeers": ["@happy-dom/global-registrator", "react"] }, "sha512-7x/M6nP5SzUhPig+oRvn+J+JLxZG3NYYhSqhBHeQn5NWiZZPyG2C7DcjMked1qHgcwJj/+ywdNzvRvBbmcYMsw=="],
 
@@ -1603,15 +1603,15 @@
 
     "@fabrika/check-0.7/@fabrika/platform-node": ["@fabrika/platform-node@0.7.0", "", { "dependencies": { "@fabrika/platform": "0.7.0" } }, "sha512-eXBh5B/yq7gKb4MBI4gbBJEqg8uYakkhz7CUcXzEH/oTTlpuG19p6DjVT/zQ59CBDMMl3GdvMPbZcmKwW2MUXg=="],
 
-    "@fabrika/check-0.8/@fabrika/app": ["@fabrika/app@0.8.1", "", { "dependencies": { "@fabrika/auth": "0.8.1", "@fabrika/auth-core": "0.8.1", "@fabrika/db": "0.8.1", "@fabrika/email": "0.8.1", "@fabrika/jwks": "0.8.1", "@fabrika/platform": "0.8.1", "@fabrika/platform-node": "0.8.1", "@fabrika/proxy-core": "0.8.1", "altcha-lib": "2.6.0", "jose": "^5.9.0" }, "peerDependencies": { "@happy-dom/global-registrator": "^20.11.2", "react": "^19.0.0", "zod": "^3.25.76" }, "optionalPeers": ["@happy-dom/global-registrator", "react"] }, "sha512-0xKFDStdgEQ+X8oNJHADTFqzIb2yzhNkC6uksBfavRl/09Sz3788D7OlHcy2JUPVBrR4mQes3I35g9UnR52zog=="],
+    "@fabrika/check-0.8/@fabrika/app": ["@fabrika/app@0.8.2", "", { "dependencies": { "@fabrika/auth": "0.8.2", "@fabrika/auth-core": "0.8.2", "@fabrika/db": "0.8.2", "@fabrika/email": "0.8.2", "@fabrika/jwks": "0.8.2", "@fabrika/platform": "0.8.2", "@fabrika/platform-node": "0.8.2", "@fabrika/proxy-core": "0.8.2", "altcha-lib": "2.6.0", "jose": "^5.9.0" }, "peerDependencies": { "@happy-dom/global-registrator": "^20.11.2", "react": "^19.0.0", "zod": "^3.25.76" }, "optionalPeers": ["@happy-dom/global-registrator", "react"] }, "sha512-YBW2HvCALDcm12P3uQzY/nuqelTGK+kbzGynzdtE2nios7XjX/Onv0ugVGySIaDGTdDb1kEW8hZsp7wZ4fHd8w=="],
 
-    "@fabrika/check-0.8/@fabrika/auth-core": ["@fabrika/auth-core@0.8.1", "", {}, "sha512-vbZ6Jt++Vth24aRbzF+gQNfpp0PEwGxeKUtcf4eDNJCK+wUewN+pMdIb55NISHdfY+N4mDukL82Rs/mFrPPISQ=="],
+    "@fabrika/check-0.8/@fabrika/auth-core": ["@fabrika/auth-core@0.8.2", "", {}, "sha512-EEH9QdjPcWWV3y1SEPYYqxDdcyUUp3ogrfTYpMfT4aOAOeqcVA6lh7TYusjmm4kikhJJln9nERqay2BEbpzV4Q=="],
 
-    "@fabrika/check-0.8/@fabrika/db": ["@fabrika/db@0.8.1", "", { "dependencies": { "@fabrika/auth-core": "0.8.1", "@fabrika/platform-node": "0.8.1", "kysely": "0.29.6", "kysely-postgres-js": "5.0.1", "zod": "^3.25.76" } }, "sha512-ID6r6eAOcIBql4AMyywrNQL0V+zBGKs2Vp+0JE+1HBfumzD3VsGSGqz2W0xnkaC4ZB4pJxyVB4Up3q5UZMPXmQ=="],
+    "@fabrika/check-0.8/@fabrika/db": ["@fabrika/db@0.8.2", "", { "dependencies": { "@fabrika/auth-core": "0.8.2", "@fabrika/platform-node": "0.8.2", "kysely": "0.29.6", "kysely-postgres-js": "5.0.1", "zod": "^3.25.76" } }, "sha512-Kid9zlWsbw6L6J3D8IjMZQC3kDpf6mYWGaVuK3vA7j0Eg4ydTW4V4C4E6OCrZNugUDGBukUDuzLmW25A2wP0+A=="],
 
-    "@fabrika/check-0.8/@fabrika/operations-contract": ["@fabrika/operations-contract@0.8.1", "", { "dependencies": { "@fabrika/app": "0.8.1", "zod": "^3.25.76" } }, "sha512-8Nz0FUOpXDfh8m4RglYHp0+5xCNN6r2oiUaDBA4cJ0dk1uYjv10GEamm6EFGN4zPAs2I8CAwkd8SohWzq66gMw=="],
+    "@fabrika/check-0.8/@fabrika/operations-contract": ["@fabrika/operations-contract@0.8.2", "", { "dependencies": { "@fabrika/app": "0.8.2", "zod": "^3.25.76" } }, "sha512-WP25tegqgWEpz5nxNkrDQ3Xyd7rfVqWPCvWBu+7TwK0dqy1kzkgmbgND4x4+s0cDIs+fyF18Q1YPgYd5XT8CSQ=="],
 
-    "@fabrika/check-0.8/@fabrika/platform-node": ["@fabrika/platform-node@0.8.1", "", { "dependencies": { "@fabrika/platform": "0.8.1" } }, "sha512-PLNQJHrhqi3otlB/y14vTBKPLDadHJx+7wGtxLymG6D9dkwJ9EDLrWUTN42rh7agC2Z/Uf71jbSLh2DJnb0c9Q=="],
+    "@fabrika/check-0.8/@fabrika/platform-node": ["@fabrika/platform-node@0.8.2", "", { "dependencies": { "@fabrika/platform": "0.8.2" } }, "sha512-lWrKyreaVd3aU/VO4THsDNVEvPPbhAwsg4Do0NbV0BZoXgDeQxTn8lZse57BqXi4Z6uLcY3GBOJJPFxqLno2Aw=="],
 
     "@fabrika/control/lopata": ["lopata@0.21.0", "", { "dependencies": { "smol-toml": "^1.6.0" }, "bin": { "lopata": "src/cli.ts" } }, "sha512-2KZLRDdtwetdVKGjsjuibtWy3YVno+CgWsxSKdfDy8dgtUl0cLfDzwP5JmvfF1s6QA4f506wTjuGdgqDQEPcXA=="],
 
@@ -1645,11 +1645,11 @@
 
     "@fabrika/proxy-core-0.7/@fabrika/platform": ["@fabrika/platform@0.7.0", "", {}, "sha512-ZBzC1y3GZhcgnTsFedwGTY1I8sj5h3MV2d83GBEDgAfUMxXgq7QR+5jxA2WdsBuRhb9hyTHFGLQ6srDtb7xRkg=="],
 
-    "@fabrika/proxy-core-0.8/@fabrika/auth-core": ["@fabrika/auth-core@0.8.1", "", {}, "sha512-vbZ6Jt++Vth24aRbzF+gQNfpp0PEwGxeKUtcf4eDNJCK+wUewN+pMdIb55NISHdfY+N4mDukL82Rs/mFrPPISQ=="],
+    "@fabrika/proxy-core-0.8/@fabrika/auth-core": ["@fabrika/auth-core@0.8.2", "", {}, "sha512-EEH9QdjPcWWV3y1SEPYYqxDdcyUUp3ogrfTYpMfT4aOAOeqcVA6lh7TYusjmm4kikhJJln9nERqay2BEbpzV4Q=="],
 
-    "@fabrika/proxy-core-0.8/@fabrika/jwks": ["@fabrika/jwks@0.8.1", "", { "dependencies": { "@fabrika/auth-core": "0.8.1", "jose": "^5.9.0", "zod": "^3.25.76" } }, "sha512-8XjWRtsYgfpXzylTqv0xvfB2BUHLYb5XmgoWCfcB00qLvks7mxOCv+fKbUAy+leW1ifYJZD4g7UB4Us6rQsQkw=="],
+    "@fabrika/proxy-core-0.8/@fabrika/jwks": ["@fabrika/jwks@0.8.2", "", { "dependencies": { "@fabrika/auth-core": "0.8.2", "jose": "^5.9.0", "zod": "^3.25.76" } }, "sha512-j+kG/+TDxc+064DYm/9FsJAlAhRm+71kZNS5pzGKQY5FRTu4tJZ8q0mIGdWGeQp/Lq9B9LZ5LSjOpSGFCsb11Q=="],
 
-    "@fabrika/proxy-core-0.8/@fabrika/platform": ["@fabrika/platform@0.8.1", "", {}, "sha512-k24i2vfD0X4oBwLOpEHfzckH4rIJmLbj0Nhq056B2xOZLkAvPJdpS76gdw2M3Rv37snA7L8K6+ztloZZdw2glw=="],
+    "@fabrika/proxy-core-0.8/@fabrika/platform": ["@fabrika/platform@0.8.2", "", {}, "sha512-CPz2e3OnzEvkCs1fxQCn9+wWWc7LoBDstkeoG0WwN3M1If6hJ0WGFrCR8P81xVb7xPpGaZ1vrJrbLWYjVq8k7Q=="],
 
     "@fabrika/runner-cloudflare/wrangler": ["wrangler@4.74.0", "", { "dependencies": { "@cloudflare/kv-asset-handler": "0.4.2", "@cloudflare/unenv-preset": "2.15.0", "blake3-wasm": "2.1.5", "esbuild": "0.27.3", "miniflare": "4.20260312.1", "path-to-regexp": "6.3.0", "unenv": "2.0.0-rc.24", "workerd": "1.20260312.1" }, "optionalDependencies": { "fsevents": "~2.3.2" }, "peerDependencies": { "@cloudflare/workers-types": "^4.20260312.1" }, "optionalPeers": ["@cloudflare/workers-types"], "bin": { "wrangler": "bin/wrangler.js", "wrangler2": "bin/wrangler.js" } }, "sha512-3qprbhgdUyqYGHZ+Y1k0gsyHLMOlLrKL/HU0LDqLlCkbsKPprUA0/ThE4IZsxD84xAAXY6pv5JUuxS2+OnMa3A=="],
 
@@ -1773,17 +1773,17 @@
 
     "@fabrika/check-0.7/@fabrika/platform-node/@fabrika/platform": ["@fabrika/platform@0.7.0", "", {}, "sha512-ZBzC1y3GZhcgnTsFedwGTY1I8sj5h3MV2d83GBEDgAfUMxXgq7QR+5jxA2WdsBuRhb9hyTHFGLQ6srDtb7xRkg=="],
 
-    "@fabrika/check-0.8/@fabrika/app/@fabrika/auth": ["@fabrika/auth@0.8.1", "", { "dependencies": { "@fabrika/auth-core": "0.8.1", "@fabrika/jwks": "0.8.1", "jose": "^5.9.0", "zod": "^3.25.76" } }, "sha512-qrjF7pKgF6Hu9MFZm6x+c0z4eN/90IfTEGFyNQ5DKCv1juNUnO12JV7DlEpIkQtS4dFyn12ALBsKKzmRLHYe7g=="],
+    "@fabrika/check-0.8/@fabrika/app/@fabrika/auth": ["@fabrika/auth@0.8.2", "", { "dependencies": { "@fabrika/auth-core": "0.8.2", "@fabrika/jwks": "0.8.2", "jose": "^5.9.0", "zod": "^3.25.76" } }, "sha512-AbIPqVqZpgiYX69ug/9hvO2ZVv0uyq6h/CdhntEvXJlhHtPaR0of5YC626YGwUZh2ikhw9Bm1thhh4SUfQBgMQ=="],
 
-    "@fabrika/check-0.8/@fabrika/app/@fabrika/email": ["@fabrika/email@0.8.1", "", { "dependencies": { "zod": "^3.25.76" } }, "sha512-2bLzzqGGQ5dSwdXVfMxkBSDGZ/TUa490YcMKnU7kTVn313giCZ/dDD10/Lbp8xf2JbF+V44j+FlmjKjP3/HCqQ=="],
+    "@fabrika/check-0.8/@fabrika/app/@fabrika/email": ["@fabrika/email@0.8.2", "", { "dependencies": { "zod": "^3.25.76" } }, "sha512-vmwzpWP+bM/XKRPjli098N4oP0NkgdRNHU/EuXNt/OGGeHGi6KXyg+qaYPULzX4ggFJmmiwhiXNhl4PtblmvXA=="],
 
-    "@fabrika/check-0.8/@fabrika/app/@fabrika/jwks": ["@fabrika/jwks@0.8.1", "", { "dependencies": { "@fabrika/auth-core": "0.8.1", "jose": "^5.9.0", "zod": "^3.25.76" } }, "sha512-8XjWRtsYgfpXzylTqv0xvfB2BUHLYb5XmgoWCfcB00qLvks7mxOCv+fKbUAy+leW1ifYJZD4g7UB4Us6rQsQkw=="],
+    "@fabrika/check-0.8/@fabrika/app/@fabrika/jwks": ["@fabrika/jwks@0.8.2", "", { "dependencies": { "@fabrika/auth-core": "0.8.2", "jose": "^5.9.0", "zod": "^3.25.76" } }, "sha512-j+kG/+TDxc+064DYm/9FsJAlAhRm+71kZNS5pzGKQY5FRTu4tJZ8q0mIGdWGeQp/Lq9B9LZ5LSjOpSGFCsb11Q=="],
 
-    "@fabrika/check-0.8/@fabrika/app/@fabrika/platform": ["@fabrika/platform@0.8.1", "", {}, "sha512-k24i2vfD0X4oBwLOpEHfzckH4rIJmLbj0Nhq056B2xOZLkAvPJdpS76gdw2M3Rv37snA7L8K6+ztloZZdw2glw=="],
+    "@fabrika/check-0.8/@fabrika/app/@fabrika/platform": ["@fabrika/platform@0.8.2", "", {}, "sha512-CPz2e3OnzEvkCs1fxQCn9+wWWc7LoBDstkeoG0WwN3M1If6hJ0WGFrCR8P81xVb7xPpGaZ1vrJrbLWYjVq8k7Q=="],
 
-    "@fabrika/check-0.8/@fabrika/app/@fabrika/proxy-core": ["@fabrika/proxy-core@0.8.1", "", { "dependencies": { "@fabrika/auth-core": "0.8.1", "@fabrika/jwks": "0.8.1", "@fabrika/platform": "0.8.1", "jose": "^5.9.0", "zod": "^3.25.76" } }, "sha512-kAUptoj7cdj8Zb/C8KOrWAWpyha7nQ3k85hQ812X/8MYH4ALIfR4MWKs8AU2z6cWS/IqOFj/AGkoefNtT81wQg=="],
+    "@fabrika/check-0.8/@fabrika/app/@fabrika/proxy-core": ["@fabrika/proxy-core@0.8.2", "", { "dependencies": { "@fabrika/auth-core": "0.8.2", "@fabrika/jwks": "0.8.2", "@fabrika/platform": "0.8.2", "jose": "^5.9.0", "zod": "^3.25.76" } }, "sha512-j50w4TpSNbKdwYkqfBF794K8TLZvcuB+c6ikk7f615rRzpiIChGTN9FVmOAhDJaw2loXUaVs+n0SWhBZiY01/Q=="],
 
-    "@fabrika/check-0.8/@fabrika/platform-node/@fabrika/platform": ["@fabrika/platform@0.8.1", "", {}, "sha512-k24i2vfD0X4oBwLOpEHfzckH4rIJmLbj0Nhq056B2xOZLkAvPJdpS76gdw2M3Rv37snA7L8K6+ztloZZdw2glw=="],
+    "@fabrika/check-0.8/@fabrika/platform-node/@fabrika/platform": ["@fabrika/platform@0.8.2", "", {}, "sha512-CPz2e3OnzEvkCs1fxQCn9+wWWc7LoBDstkeoG0WwN3M1If6hJ0WGFrCR8P81xVb7xPpGaZ1vrJrbLWYjVq8k7Q=="],
 
     "@fabrika/control/wrangler/fsevents": ["fsevents@2.3.3", "", { "os": "darwin" }, "sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw=="],
 
