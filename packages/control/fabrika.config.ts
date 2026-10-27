@@ -128,11 +128,12 @@ export const buildControlApplicationWorker = (ctx: ResourceContext): Worker => {
 			directory: '../dashboard/dist',
 			binding: 'ASSETS',
 			not_found_handling: 'single-page-application',
-			// Every request reaches the Worker first. Workers Assets would otherwise answer a browser navigation itself, and
-			// its SPA fallback hands `index.html` to every server path a browser opens (the GitHub manifest handoff,
-			// `/builder/connect`, `/healthz`). `controlApp` routes every path by `fabrika.service.ts`, and its `console` row
-			// hands the rest to `ASSETS`, which applies the SPA fallback: the table decides, as on the Bun process.
-			run_worker_first: true,
+			// Every request but a built file reaches the Worker first. Workers Assets would otherwise answer a browser
+			// navigation itself, and its SPA fallback hands `index.html` to every server path a browser opens (the GitHub
+			// manifest handoff, `/builder/connect`, `/healthz`). `controlApp` routes every path by `fabrika.service.ts`, and
+			// its `console` row hands the rest to `ASSETS`, which applies the SPA fallback: the table decides, as on the Bun
+			// process. Vite's hashed bundles under `/assets/` match no other row, so they skip the Worker.
+			run_worker_first: ['/*', '!/assets/*'],
 		},
 		vars: {
 			...controlEmailVars(isLocal),
