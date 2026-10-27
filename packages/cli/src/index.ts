@@ -255,7 +255,7 @@ const runNamespace = async (parsed: ParsedCommand): Promise<void> => {
 	const { runNamespaceCommand } = await import('./namespace.js')
 	await runNamespaceCommand(cli, parsed.command, parsed.rest, {
 		source: process.env,
-		fetch: globalThis.fetch,
+		fetch: (input, init) => fetch(input, init),
 		write: (value) => console.info(value.trimEnd()),
 	})
 }
