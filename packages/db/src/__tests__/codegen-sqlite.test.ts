@@ -99,6 +99,19 @@ describe('generateSqliteSchema', () => {
 		expect(source).toContain('export interface DB {\n\tnotes: NotesTable\n}\n')
 	})
 
+	test('runs every statement of a migration whose first statement adds a column with a CHECK', async () => {
+		// bun:sqlite reports one result column for this ALTER TABLE, which once sent the text down the read path and ran
+		// only its first statement.
+		const source = await generateSqliteSchema([
+			app(
+				'CREATE TABLE notes (id INTEGER PRIMARY KEY);',
+				"ALTER TABLE notes ADD COLUMN state TEXT NOT NULL DEFAULT 'draft' CHECK (state IN ('draft', 'sent'));\nALTER TABLE notes ADD COLUMN sent_at TIMESTAMP;\nCREATE TABLE tags (id INTEGER PRIMARY KEY);",
+			),
+		])
+		expect(interfaceOf(source, 'NotesTable')).toContain('\tsent_at: ')
+		expect(source).toContain('export interface TagsTable {')
+	})
+
 	test('the generated module compiles', async () => {
 		const source = await generateSqliteSchema([framework, app(SCHEMA)])
 		const { diagnostics } = ts.transpileModule(source, { reportDiagnostics: true, compilerOptions: { module: ts.ModuleKind.ESNext } })

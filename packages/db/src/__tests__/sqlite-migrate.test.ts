@@ -4,23 +4,15 @@
 import { Database } from 'bun:sqlite'
 import { describe, expect, spyOn, test } from 'bun:test'
 import { SQLITE_FRAMEWORK_MIGRATIONS } from '../migrations-sqlite'
+import { execStatements } from '../sqlite-bun'
 import { migrateSqlite, type SqliteMigrationBundle, SqliteMigrationError, type SqliteMigrationTarget } from '../sqlite-migrate'
 
-/** `prepare` compiles only the first statement, so text without bindings or rows runs through `run`, as `sql.exec` would. */
+/** Each statement of a text runs, and the last one answers, as `sql.exec` would. */
 function target(db: Database): SqliteMigrationTarget {
 	return {
 		exec(query, ...bindings) {
-			const statement = db.prepare<Record<string, unknown>, (string | number | null)[]>(query)
-			try {
-				if (bindings.length > 0 || statement.columnNames.length > 0) {
-					const rows = statement.all(...bindings)
-					return { toArray: () => rows }
-				}
-			} finally {
-				statement.finalize()
-			}
-			db.run(query)
-			return { toArray: () => [] }
+			const rows = execStatements(db, query, bindings)
+			return { toArray: () => rows }
 		},
 		transactionSync: (fn) => db.transaction(fn)(),
 	}
