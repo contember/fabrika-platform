@@ -141,6 +141,14 @@ describe('GitHub App manifest contract', () => {
 		}
 	})
 
+	test('releases the body of a refused conversion', async () => {
+		let cancelled = false
+		const body = new ReadableStream({ cancel: () => void (cancelled = true) })
+		await expect(exchangeGitHubAppManifestCode('one-time-code', { fetch: () => Promise.resolve(new Response(body, { status: 302 })) }))
+			.rejects.toThrow('conversion failed')
+		expect(cancelled).toBe(true)
+	})
+
 	test('rejects invalid and missing conversion credentials', async () => {
 		for (
 			const overrides of [

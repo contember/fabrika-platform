@@ -284,6 +284,8 @@ function parseOptionalErrorCode(value: string | null): GitHubSetupErrorCode | nu
 		'configuration_verification',
 		'installation_verification',
 		'configuration_conflict',
+		'rate_limited',
+		'app_owner_not_organization',
 	]).nullable().safeParse(value)
 	if (parsed.success) return parsed.data
 	throw new Error('invalid GitHub setup error code')

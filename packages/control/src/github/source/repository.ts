@@ -268,7 +268,8 @@ export class TarballRepositorySource {
 		})
 		if (token !== undefined) headers.set('authorization', `Bearer ${token}`)
 		try {
-			// Every hop is `manual`: Workers refuse `redirect: 'error'`, and the archive's own redirect is followed by hand above.
+			// Every hop is `manual`, like every GitHub request Control makes (a Worker refuses `redirect: 'error'`, though this
+			// download runs in the Bun process only): the archive's redirect is followed by hand above, and any other 3xx fails.
 			return await this.downloadFetch(url, { headers, redirect: 'manual', signal })
 		} catch {
 			if (callerSignal.aborted) throw cancelled('archive')

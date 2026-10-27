@@ -2,7 +2,7 @@ import { configurationError, GitHubRateLimitError, requestStatusError, responseE
 import { createRepositoryClient } from './repository'
 import type { GitHubRepositoryClient, GitHubRepositoryOpenRequest } from './repository-types'
 import { pemToPkcs8, signAppJwt } from './signing'
-import { createCancellation, GITHUB_ACCEPT, GITHUB_API_VERSION, GITHUB_USER_AGENT, readBoundedJson } from './transport'
+import { createCancellation, GITHUB_ACCEPT, GITHUB_API_VERSION, GITHUB_USER_AGENT, pause, readBoundedJson } from './transport'
 import type {
 	GitHubAppClientConfig,
 	GitHubAppFetch,
@@ -26,8 +26,12 @@ import {
 	validateWebhookSecret,
 } from './validation'
 
-/** Anonymous reads of the App's public page before a rate limit is the caller's answer. */
-const PUBLIC_APP_ATTEMPTS = 4
+/** The most anonymous reads of the App's public page a client may make before a rate limit is the caller's answer. */
+const MAX_PUBLIC_APP_ATTEMPTS = 4
+/** The wait before the next anonymous read when GitHub names none; it doubles with each read. */
+const PUBLIC_APP_BACKOFF_MS = 500
+/** A `retry-after` longer than this is GitHub's answer: the read is not tried again. */
+const MAX_PUBLIC_APP_WAIT_MS = 5_000
 const DEFAULT_API_BASE_URL = 'https://api.github.com'
 const DEFAULT_REQUEST_TIMEOUT_MS = 15_000
 const MAX_REQUEST_TIMEOUT_MS = 120_000
@@ -43,6 +47,7 @@ export class GitHubAppClient {
 		private readonly fetchImplementation: GitHubAppFetch,
 		private readonly clock: () => number,
 		private readonly timeoutMs: number,
+		private readonly publicAppAttempts: number,
 	) {}
 
 	/** Validate all configuration and import the RSA key before a credential-owning service boots. */
@@ -53,6 +58,10 @@ export class GitHubAppClient {
 		const apiBaseUrl = normalizeApiBaseUrl(config.apiBaseUrl ?? DEFAULT_API_BASE_URL)
 		const timeoutMs = config.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
 		if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > MAX_REQUEST_TIMEOUT_MS) {
+			throw configurationError()
+		}
+		const publicAppAttempts = config.publicAppAttempts ?? 1
+		if (!Number.isSafeInteger(publicAppAttempts) || publicAppAttempts < 1 || publicAppAttempts > MAX_PUBLIC_APP_ATTEMPTS) {
 			throw configurationError()
 		}
 		let privateKey: CryptoKey
@@ -70,7 +79,7 @@ export class GitHubAppClient {
 		// The global `fetch` is wrapped: a Worker refuses it with any other `this` ("Illegal invocation"), and the client calls
 		// it as its own property, and hands it to the repository client.
 		const fetchImplementation = config.fetch ?? ((input, init) => fetch(input, init))
-		return new GitHubAppClient(config.appId, privateKey, apiBaseUrl, fetchImplementation, config.now ?? Date.now, timeoutMs)
+		return new GitHubAppClient(config.appId, privateKey, apiBaseUrl, fetchImplementation, config.now ?? Date.now, timeoutMs, publicAppAttempts)
 	}
 
 	/** Read and bind the public identity represented by this client's App credentials. */
@@ -88,15 +97,18 @@ export class GitHubAppClient {
 
 	/**
 	 * The App's public page, read without credentials: GitHub answers it only for a public App. The read is anonymous,
-	 * so it spends the caller's address's limit, which a Worker shares with every tenant of its egress; a refused read is
-	 * tried again, since the next one usually leaves from another address.
+	 * so it spends the caller's address's limit. Where the next read may leave from another address (a Worker on a cloud's
+	 * shared egress), the client is configured to try a rate-limited read again after a short wait.
 	 */
 	private async publicApp(slug: string, signal?: AbortSignal): Promise<unknown | typeof NOT_FOUND> {
 		for (let attempt = 1;; attempt++) {
 			try {
 				return await this.requestJson(`/apps/${slug}`, {}, signal, true, false)
 			} catch (error) {
-				if (!(error instanceof GitHubRateLimitError) || attempt >= PUBLIC_APP_ATTEMPTS) throw error
+				if (!(error instanceof GitHubRateLimitError) || attempt >= this.publicAppAttempts) throw error
+				const wait = error.retryAfterMs ?? PUBLIC_APP_BACKOFF_MS * 2 ** (attempt - 1)
+				if (wait > MAX_PUBLIC_APP_WAIT_MS) throw error
+				await pause(wait, signal)
 			}
 		}
 	}
@@ -257,7 +269,9 @@ export class GitHubAppClient {
 				return NOT_FOUND
 			}
 			if (!response.ok) {
-				throw requestStatusError(response.status, response.headers)
+				// An unread body holds its connection open on workerd, and a retried read would hold another.
+				void response.body?.cancel().catch(() => {})
+				throw requestStatusError(response.status, response.headers, !authenticate, () => this.now())
 			}
 			return await readBoundedJson(response, cancellation)
 		} finally {

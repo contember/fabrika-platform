@@ -2,6 +2,7 @@ import { type GitHubAppIdentity, type GitHubAppInstallation, type GitHubAppWebho
 import { describe, expect, test } from 'bun:test'
 import { createHarness } from '../../../__tests__/helpers/harness'
 import { Vault } from '../../../vault'
+import { SourceRateLimited } from '../../source/failure'
 import { encodeGitHubAppCredential, type GitHubAppCredential, type SourceGitHubClient } from '../credentials'
 import { createSourceConnections, type SourceConnectionPort } from '../port'
 import { githubAppCredentialSecretLabel } from '../secrets'
@@ -105,12 +106,14 @@ describe('GitHub App administration over vault-held keys', () => {
 		})
 	})
 
-	test("reads GitHub's rate limit as no verdict on the credentials", async () => {
-		const f = await fixture(client({ getAuthenticatedApp: () => Promise.reject(new GitHubRateLimitError(403)) }))
-		await expect(f.port.verifyApp({ credentialRef: f.credentialRef, connectionId: 'connection-1', signal: signal() })).rejects.toMatchObject({
-			code: 'rate_limited',
-			stage: 'credentials',
-		})
+	test("reads GitHub's rate limit as no verdict on the credentials, and keeps when it resets", async () => {
+		const resetAt = new Date(Date.UTC(2026, 9, 27, 12))
+		const f = await fixture(client({ getAuthenticatedApp: () => Promise.reject(new GitHubRateLimitError(403, true, resetAt, undefined)) }))
+		const failure = await f.port.verifyApp({ credentialRef: f.credentialRef, connectionId: 'connection-1', signal: signal() }).catch((error: unknown) =>
+			error
+		)
+		expect(failure).toBeInstanceOf(SourceRateLimited)
+		expect(failure).toMatchObject({ code: 'rate_limited', stage: 'credentials', anonymous: true, resetAt })
 	})
 
 	test('reads a key only under the purpose of the connection it was sealed for', async () => {

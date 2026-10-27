@@ -1,7 +1,7 @@
 import type { GitHubSourceConnectionStatusDto } from '@fabrika/control-contract'
 import { vault } from '../../services'
 import { consoleRedirect } from './browser'
-import { advanceWithDeadline, CONFIGURATION_DEADLINE_MS, errorForPhase, matchesConnectionIdentity, webhookUrl } from './configuration'
+import { advanceWithDeadline, CONFIGURATION_DEADLINE_MS, matchesConnectionIdentity, settleFailedStep, webhookUrl } from './configuration'
 import { audit, linkedDeadline, requireHuman, type SourceConnectionWorkflowDeps, throwIfAborted } from './context'
 import { reconcileUnavailable, repairFailed, SourceConnectionWorkflowError, sourceUnavailable } from './errors'
 import { type GitHubSetupAttempt, type GitHubSetupPhase, type GitHubSourceConnection } from './model'
@@ -123,9 +123,7 @@ export async function repairSourceConnection(deps: SourceConnectionWorkflowDeps,
 	} catch (error) {
 		failure = error
 		const current = await deps.env.REPOSITORIES.githubConnections.getAttempt(resumed.id).catch(() => null)
-		if (current !== null && current.status === 'active') {
-			await deps.env.REPOSITORIES.githubConnections.markRepairRequired(current.id, current.version, errorForPhase(current.phase)).catch(() => null)
-		}
+		if (current !== null && current.status === 'active') await settleFailedStep(deps, current, error).catch(() => null)
 		throwIfAborted(deps.request.signal)
 	}
 	await audit(deps.auth, 'source.connection.repair', attempt.id)

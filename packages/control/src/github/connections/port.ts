@@ -1,6 +1,6 @@
 import { type GitHubAppIdentity, type GitHubAppInstallation, GitHubRateLimitError } from '@fabrika/github-app'
 import type { Vault } from '../../vault'
-import { cancelled, SourceFailure, throwIfAborted } from '../source/failure'
+import { cancelled, SourceFailure, SourceRateLimited, throwIfAborted } from '../source/failure'
 import { readGitHubAppCredential, type SourceGitHubClient, type SourceGitHubClientFactory } from './credentials'
 
 export interface SourceGitHubAppIdentity {
@@ -132,7 +132,6 @@ function verifiedIdentity(identity: GitHubAppIdentity, expectedAppId: string): S
 	}
 	if (
 		String(identity.id) !== expectedAppId
-		|| identity.owner.type !== 'Organization'
 		|| identity.events.length !== 1
 		|| identity.events[0] !== 'push'
 	) {
@@ -173,6 +172,6 @@ function credentialFailure(error: unknown, signal: AbortSignal): SourceFailure {
 	if (error instanceof SourceFailure) return error
 	if (error instanceof Error && error.name === 'TimeoutError') return new SourceFailure('internal', 'credentials')
 	// GitHub's rate limit is no verdict on the credentials: the setup resumes once it passes.
-	if (error instanceof GitHubRateLimitError) return new SourceFailure('rate_limited', 'credentials')
+	if (error instanceof GitHubRateLimitError) return new SourceRateLimited('credentials', error.anonymous, error.resetAt)
 	return new SourceFailure('credentials_invalid', 'credentials')
 }

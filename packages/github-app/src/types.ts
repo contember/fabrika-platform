@@ -11,6 +11,12 @@ export interface GitHubAppClientConfig {
 	now?: () => number
 	/** Upper bound for each GitHub API request, including its response body. */
 	timeoutMs?: number
+	/**
+	 * Anonymous reads of the App's public page before a rate limit is the answer, 1–4; 1 by default. Raise it only where
+	 * each read may leave from another address (a Worker on a cloud's shared egress): from one fixed address a spent limit
+	 * stays spent until it resets.
+	 */
+	publicAppAttempts?: number
 }
 
 export interface GitHubInstallationToken {

@@ -30,6 +30,9 @@ import { buildRunDeps, iamSchemaDeps, locks, operationsReleaseDeps, opsTransport
 /** The mail relay's queue, whatever environment prefix the deploy gives it. */
 const MAIL_QUEUE_SUFFIX = 'fabrika-mail'
 
+/** Anonymous reads of a GitHub App's public page before GitHub's rate limit is the answer (the client's maximum). */
+const SHARED_EGRESS_PUBLIC_APP_ATTEMPTS = 4
+
 export class Vozka extends WorkerEntrypoint<WorkerBindings> {
 	/** The runtime-neutral view of this Worker's bindings. Cheap — three closures and a spread. */
 	private get control(): Env {
@@ -41,7 +44,13 @@ export class Vozka extends WorkerEntrypoint<WorkerBindings> {
 		return controlApp.fetch(request, {
 			env,
 			provider: cloudflareControlProvider(this.env, env),
-			sourceConnection: createSourceConnections({ provider: 'cloudflare', vault: () => vault(env), createClient: gitHubAppClientFactory() }),
+			sourceConnection: createSourceConnections({
+				provider: 'cloudflare',
+				vault: () => vault(env),
+				// Verifying the App reads its public page anonymously, from Cloudflare's shared egress: a read another
+				// tenant's traffic has limited is tried again, and usually leaves from another address.
+				createClient: gitHubAppClientFactory(undefined, SHARED_EGRESS_PUBLIC_APP_ATTEMPTS),
+			}),
 		}, this.ctx)
 	}
 

@@ -9,6 +9,10 @@ export type GitHubSetupErrorCode =
 	| 'configuration_verification'
 	| 'installation_verification'
 	| 'configuration_conflict'
+	/** GitHub's rate limit stopped a step; a repair once it resets resumes the setup. */
+	| 'rate_limited'
+	/** GitHub made the App on a personal account; the attempt cannot pass and has failed. */
+	| 'app_owner_not_organization'
 
 export type GitHubSetupPhase =
 	| 'awaiting_manifest_callback'

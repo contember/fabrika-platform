@@ -11,19 +11,41 @@ export class GitHubRequestError extends Error {
 }
 
 /**
- * GitHub refused a request for its rate limit: a 429, or a 403 with no requests remaining. An unauthenticated limit is the
- * caller's address's, which every tenant of a cloud's shared egress spends.
+ * GitHub refused a request for its rate limit: a 429, or a 403 that says the limit is spent (`x-ratelimit-remaining: 0`)
+ * or when to come back (`retry-after`, GitHub's secondary limit). An anonymous read spends the caller's address's limit,
+ * which every tenant of a cloud's shared egress spends with it.
  */
 export class GitHubRateLimitError extends GitHubRequestError {
-	constructor(status: number) {
+	constructor(
+		status: number,
+		readonly anonymous: boolean,
+		/** When GitHub admits the next request: `retry-after` when it sends one, else `x-ratelimit-reset`. */
+		readonly resetAt: Date | undefined,
+		/** GitHub's `retry-after`, in milliseconds; only the secondary limit sends it. */
+		readonly retryAfterMs: number | undefined,
+	) {
 		super(status)
 		this.name = 'GitHubRateLimitError'
 	}
 }
 
-export function requestStatusError(status: number, headers?: Headers): GitHubRequestError {
-	const limited = status === 429 || (status === 403 && headers?.get('x-ratelimit-remaining') === '0')
-	return limited ? new GitHubRateLimitError(status) : new GitHubRequestError(status)
+export function requestStatusError(
+	status: number,
+	headers?: Headers,
+	anonymous = false,
+	now: () => number = Date.now,
+): GitHubRequestError {
+	const retryAfter = headers?.get('retry-after') ?? null
+	const limited = status === 429 || (status === 403 && (headers?.get('x-ratelimit-remaining') === '0' || retryAfter !== null))
+	if (!limited) return new GitHubRequestError(status)
+	const retryAfterMs = retryAfter !== null && /^\d{1,6}$/.test(retryAfter) ? Number(retryAfter) * 1000 : undefined
+	const reset = headers?.get('x-ratelimit-reset') ?? null
+	const resetAt = retryAfterMs !== undefined
+		? new Date(now() + retryAfterMs)
+		: reset !== null && /^\d{1,12}$/.test(reset)
+		? new Date(Number(reset) * 1000)
+		: undefined
+	return new GitHubRateLimitError(status, anonymous, resetAt, retryAfterMs)
 }
 
 export function responseError(): Error {

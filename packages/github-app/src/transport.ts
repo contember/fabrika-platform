@@ -135,6 +135,22 @@ function readChunk(
 	})
 }
 
+/** Wait `milliseconds`, or reject as soon as the caller aborts. */
+export function pause(milliseconds: number, signal: AbortSignal | undefined): Promise<void> {
+	if (signal?.aborted === true) return Promise.reject(abortError())
+	return new Promise((resolve, reject) => {
+		const abort = (): void => {
+			clearTimeout(timer)
+			reject(abortError())
+		}
+		const timer = setTimeout(() => {
+			signal?.removeEventListener('abort', abort)
+			resolve()
+		}, milliseconds)
+		signal?.addEventListener('abort', abort, { once: true })
+	})
+}
+
 function abortError(): DOMException {
 	return new DOMException('GitHub App request was aborted', 'AbortError')
 }

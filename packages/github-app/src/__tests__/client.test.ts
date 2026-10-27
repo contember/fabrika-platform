@@ -263,23 +263,57 @@ describe('GitHubAppClient operator verification', () => {
 		expect(visibility.init?.redirect).toBe('manual')
 	})
 
-	test('tries the anonymous public read again past a rate limit, which a shared egress address spends', async () => {
-		const limited = () => new Response(null, { status: 403, headers: { 'x-ratelimit-remaining': '0' } })
-		const capture = capturingFetch([Response.json(appIdentity()), limited(), new Response(null, { status: 429 }), new Response(null, { status: 404 })])
-		expect((await (await client(capture.fetch)).getAuthenticatedApp()).public).toBe(false)
+	test('tries the anonymous public read again past a rate limit only where it is configured to', async () => {
+		const shared = (fetch: GitHubAppFetch) => GitHubAppClient.create({ ...config(fetch), publicAppAttempts: 4 })
+		const limited = () => new Response(null, { status: 403, headers: { 'x-ratelimit-remaining': '0', 'retry-after': '0' } })
+		const capture = capturingFetch([
+			Response.json(appIdentity()),
+			limited(),
+			new Response(null, { status: 429, headers: { 'retry-after': '0' } }),
+			new Response(null, { status: 404 }),
+		])
+		expect((await (await shared(capture.fetch)).getAuthenticatedApp()).public).toBe(false)
 		expect(capture.requests.map((request) => new Headers(request.init?.headers).get('authorization') === null)).toEqual([false, true, true, true])
 
 		const exhausted = capturingFetch([Response.json(appIdentity()), limited(), limited(), limited(), limited()])
-		const raised = await errorOf((await client(exhausted.fetch)).getAuthenticatedApp())
+		const raised = await errorOf((await shared(exhausted.fetch)).getAuthenticatedApp())
 		expect(raised).toBeInstanceOf(GitHubRateLimitError)
+		expect(raised).toMatchObject({ anonymous: true, resetAt: new Date(NOW) })
 		expect(exhausted.requests).toHaveLength(5)
 
-		// A 403 with requests left is no rate limit: it is answered at once.
+		// From one fixed address a spent limit stays spent: by default the first refusal is the answer.
+		const fixed = capturingFetch([Response.json(appIdentity()), limited()])
+		expect(await errorOf((await client(fixed.fetch)).getAuthenticatedApp())).toBeInstanceOf(GitHubRateLimitError)
+		expect(fixed.requests).toHaveLength(2)
+
+		// A `retry-after` longer than a short wait is GitHub's answer too.
+		const later = capturingFetch([Response.json(appIdentity()), new Response(null, { status: 403, headers: { 'retry-after': '60' } })])
+		const deferred = await errorOf((await shared(later.fetch)).getAuthenticatedApp())
+		expect(deferred).toMatchObject({ retryAfterMs: 60_000, resetAt: new Date(NOW + 60_000) })
+		expect(later.requests).toHaveLength(2)
+
+		// A 403 with requests left and no `retry-after` is no rate limit: it is answered at once.
 		const refused = capturingFetch([Response.json(appIdentity()), new Response(null, { status: 403, headers: { 'x-ratelimit-remaining': '12' } })])
-		const plain = await errorOf((await client(refused.fetch)).getAuthenticatedApp())
+		const plain = await errorOf((await shared(refused.fetch)).getAuthenticatedApp())
 		expect(plain).toBeInstanceOf(GitHubRequestError)
 		expect(plain).not.toBeInstanceOf(GitHubRateLimitError)
 		expect(refused.requests).toHaveLength(2)
+
+		await expect(GitHubAppClient.create({ ...config(capture.fetch), publicAppAttempts: 5 })).rejects.toThrow('configuration is invalid')
+	})
+
+	test('releases the body of a refused response', async () => {
+		let cancelled = false
+		const body = new ReadableStream({ cancel: () => void (cancelled = true) })
+		const capture = capturingFetch([new Response(body, { status: 500 })])
+		expect(await errorOf((await client(capture.fetch)).getAuthenticatedApp())).toBeInstanceOf(GitHubRequestError)
+		expect(cancelled).toBe(true)
+	})
+
+	test("dates an authenticated rate limit by its reset, and marks it as the App's own", async () => {
+		const capture = capturingFetch([new Response(null, { status: 403, headers: { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': '1792101600' } })])
+		expect(await errorOf((await client(capture.fetch)).getAuthenticatedApp()))
+			.toMatchObject({ anonymous: false, resetAt: new Date(1_792_101_600_000), retryAfterMs: undefined })
 	})
 
 	test('accepts an App with repository write authority and binds its public permissions', async () => {
