@@ -503,5 +503,6 @@ function phaseCopy(phase: Extract<GitHubSourceConnectionStatusDto, { state: 'set
 function repairCopy(reason: Extract<GitHubSourceConnectionStatusDto, { state: 'repair-required' }>['reason']): string {
 	if (reason === 'credential-activation') return 'The durable App credentials are not active on the private source.'
 	if (reason === 'installation-verification') return 'The App installation no longer matches the configured organization or repositories.'
+	if (reason === 'rate-limited') return "GitHub's rate limit stopped the setup. Repair it in a few minutes, once the limit resets."
 	return 'A previous setup stopped after GitHub created the App. Resume from the durable checkpoint.'
 }

@@ -101,7 +101,7 @@ export async function boundedJson(response: Response): Promise<unknown> {
 }
 
 export class PlatformRemote {
-	constructor(private readonly fetcher: RpcFetch = fetch, readonly signal: AbortSignal) {}
+	constructor(private readonly fetcher: RpcFetch = (input, init) => fetch(input, init), readonly signal: AbortSignal) {}
 
 	async json(url: string, body?: unknown): Promise<unknown> {
 		try {

@@ -57,7 +57,8 @@ export async function exchangeGitHubAppManifestCode(
 						'user-agent': GITHUB_MANIFEST_USER_AGENT,
 						'x-github-api-version': GITHUB_API_VERSION,
 					},
-					redirect: 'error',
+					// Workers refuse `redirect: 'error'`; a redirect is a response that is not `ok` and fails below.
+					redirect: 'manual',
 					signal: cancellation.signal,
 				},
 			)
@@ -66,7 +67,10 @@ export async function exchangeGitHubAppManifestCode(
 			throw new Error('GitHub App manifest conversion failed')
 		}
 		cancellation.throwIfCancelled()
-		if (!response.ok) throw new Error('GitHub App manifest conversion failed')
+		if (!response.ok) {
+			void response.body?.cancel().catch(() => {})
+			throw new Error('GitHub App manifest conversion failed')
+		}
 		const app = decodeManifestConversion(await readManifestConversionJson(response, cancellation))
 		if (app === null) throw new Error('GitHub App manifest conversion returned an invalid response')
 		return app
@@ -109,6 +113,7 @@ async function readManifestConversionJson(response: Response, cancellation: Mani
 	cancellation.throwIfCancelled()
 	const contentLength = response.headers.get('content-length')
 	if (contentLength !== null && /^[0-9]+$/.test(contentLength) && Number(contentLength) > MAX_MANIFEST_CONVERSION_BYTES) {
+		void response.body?.cancel().catch(() => {})
 		throw new Error('GitHub App manifest conversion returned an invalid response')
 	}
 	const reader = response.body?.getReader()

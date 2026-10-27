@@ -1,6 +1,6 @@
-import type { GitHubAppIdentity, GitHubAppInstallation } from '@fabrika/github-app'
+import { type GitHubAppIdentity, type GitHubAppInstallation, GitHubRateLimitError } from '@fabrika/github-app'
 import type { Vault } from '../../vault'
-import { cancelled, SourceFailure, throwIfAborted } from '../source/failure'
+import { cancelled, SourceFailure, SourceRateLimited, throwIfAborted } from '../source/failure'
 import { readGitHubAppCredential, type SourceGitHubClient, type SourceGitHubClientFactory } from './credentials'
 
 export interface SourceGitHubAppIdentity {
@@ -125,9 +125,13 @@ async function resolveRepositoryInstallations(
 
 /** The App the vault key authenticates as must be the stored App, organization-owned, subscribed to `push` only. */
 function verifiedIdentity(identity: GitHubAppIdentity, expectedAppId: string): SourceGitHubAppIdentity {
+	// Its own code, so the console says what to fix: GitHub made the App on a personal account (an organization the
+	// user may not create Apps in, or a mistyped one, sends the manifest there).
+	if (String(identity.id) === expectedAppId && identity.owner.type !== 'Organization') {
+		throw new SourceFailure('app_owner_not_organization', 'credentials')
+	}
 	if (
 		String(identity.id) !== expectedAppId
-		|| identity.owner.type !== 'Organization'
 		|| identity.events.length !== 1
 		|| identity.events[0] !== 'push'
 	) {
@@ -167,5 +171,7 @@ function credentialFailure(error: unknown, signal: AbortSignal): SourceFailure {
 	if (signal.aborted || (error instanceof Error && error.name === 'AbortError')) return cancelled('credentials')
 	if (error instanceof SourceFailure) return error
 	if (error instanceof Error && error.name === 'TimeoutError') return new SourceFailure('internal', 'credentials')
+	// GitHub's rate limit is no verdict on the credentials: the setup resumes once it passes.
+	if (error instanceof GitHubRateLimitError) return new SourceRateLimited('credentials', error.anonymous, error.resetAt)
 	return new SourceFailure('credentials_invalid', 'credentials')
 }

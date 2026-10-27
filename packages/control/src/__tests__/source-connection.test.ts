@@ -20,7 +20,7 @@ import type {
 import { githubAppCredentialSecretLabel } from '../github/connections/secrets'
 import { sourceConnectionList } from '../github/connections/status'
 import { GitHubConnectionStore } from '../github/connections/store'
-import { SourceFailure } from '../github/source/failure'
+import { SourceFailure, SourceRateLimited } from '../github/source/failure'
 import type { PreparedVaultSecret } from '../vault'
 import { Vault } from '../vault'
 import { createHarness } from './helpers/harness'
@@ -62,6 +62,7 @@ class FakeSourceConnection implements SourceConnectionPort {
 	githubAppId = 123
 	githubAppSlug = 'fabrika-source'
 	verifyFails = false
+	verifyFailure: unknown | undefined
 	webhookFailure: unknown | undefined
 	readonly webhookSecrets: string[] = []
 	readonly webhookUrls: string[] = []
@@ -70,6 +71,7 @@ class FakeSourceConnection implements SourceConnectionPort {
 		this.calls.push('verify')
 		if (input.signal.aborted) return Promise.reject(new DOMException('aborted', 'AbortError'))
 		if (this.verifyFails) return Promise.reject(new Error('verify failed with private material'))
+		if (this.verifyFailure !== undefined) return Promise.reject(this.verifyFailure)
 		this.credentialRefs.push(input.credentialRef)
 		return Promise.resolve(identity(this.githubOwner, this.githubAppId, this.githubAppSlug))
 	}
@@ -451,6 +453,74 @@ describe('GitHub source connection workflow', () => {
 		const connection = await env.REPOSITORIES.githubConnections.getConnectionById(started.connectionId)
 		expect(connection?.appCredentialRef).toBe(attempt.appCredentialRef)
 		expect(await readGitHubAppCredential(vault, attempt.appCredentialRef, attempt.id)).toEqual({ appId: '123', privateKeyPem: 'private-pem' })
+	})
+
+	test('fails an App GitHub made on a personal account, drops its key, and says what to fix', async () => {
+		const env = environment()
+		const source = new FakeSourceConnection()
+		source.verifyFailure = new SourceFailure('app_owner_not_organization', 'credentials')
+		const started = await startSourceConnection(
+			deps(env, source, mutationRequest('/api/rpc')),
+			{ organization: 'acme', appName: 'fabrika-source', visibility: 'private', repositories: [] },
+		)
+		await expect(manifestCallback({
+			...deps(env, source, new Request(`${ORIGIN}/api/source/github/callback?code=one&state=${token(32)}`)),
+			exchangeManifest: () => Promise.resolve(createdApp()),
+		})).rejects.toMatchObject({ httpStatus: 422, message: expect.stringContaining('personal account, not in the organization acme') })
+		// Parked for a repair it would be stuck: no repair can move an App to an organization, and it held the one slot.
+		expect(await env.REPOSITORIES.githubConnections.getAttempt(started.connectionId))
+			.toMatchObject({ status: 'failed', lastErrorCode: 'app_owner_not_organization' })
+		expect(await queryRowsFromEnv(env, `SELECT label FROM vault WHERE label LIKE '%:app-credential'`)).toEqual([])
+		expect((await sourceConnectionList(deps(env, source, new Request(`${ORIGIN}/api/rpc`)), {})).workflow).toMatchObject({ state: 'anonymous' })
+	})
+
+	test('parks a setup that GitHub rate-limited under its own reason, and a repair resumes it', async () => {
+		const env = environment()
+		const source = new FakeSourceConnection()
+		source.verifyFailure = new SourceRateLimited('credentials', true, new Date(Date.UTC(2026, 9, 27, 12)))
+		const started = await startSourceConnection(
+			deps(env, source, mutationRequest('/api/rpc')),
+			{ organization: 'acme', appName: 'fabrika-source', visibility: 'private', repositories: [] },
+		)
+		const callback = await manifestCallback({
+			...deps(env, source, new Request(`${ORIGIN}/api/source/github/callback?code=one&state=${token(32)}`)),
+			exchangeManifest: () => Promise.resolve(createdApp()),
+		})
+		expect(callback.headers.get('location')).toBe('/settings/source')
+		expect(await env.REPOSITORIES.githubConnections.getAttempt(started.connectionId))
+			.toMatchObject({ status: 'repair_required', lastErrorCode: 'rate_limited' })
+		expect((await sourceConnectionList(deps(env, source, new Request(`${ORIGIN}/api/rpc`)), {})).workflow)
+			.toMatchObject({ state: 'repair-required', reason: 'rate-limited' })
+
+		// Still limited: the repair says so and parks it again under the same reason.
+		await expect(repairSourceConnection(deps(env, source, mutationRequest('/api/rpc')), started.connectionId))
+			.rejects.toMatchObject({ httpStatus: 502, message: expect.stringContaining('rate_limited') })
+		expect((await env.REPOSITORIES.githubConnections.getAttempt(started.connectionId))?.lastErrorCode).toBe('rate_limited')
+
+		source.verifyFailure = undefined
+		expect(await repairSourceConnection(deps(env, source, mutationRequest('/api/rpc')), started.connectionId))
+			.toMatchObject({ state: 'installation-required', connectionId: started.connectionId })
+	})
+
+	test('fails a repair that finds the App on a personal account, and drops its key', async () => {
+		const env = environment()
+		const source = new FakeSourceConnection()
+		source.verifyFails = true
+		const started = await startSourceConnection(
+			deps(env, source, mutationRequest('/api/rpc')),
+			{ organization: 'acme', appName: 'fabrika-source', visibility: 'private', repositories: [] },
+		)
+		await manifestCallback({
+			...deps(env, source, new Request(`${ORIGIN}/api/source/github/callback?code=one&state=${token(32)}`)),
+			exchangeManifest: () => Promise.resolve(createdApp()),
+		})
+		source.verifyFails = false
+		source.verifyFailure = new SourceFailure('app_owner_not_organization', 'credentials')
+		await expect(repairSourceConnection(deps(env, source, mutationRequest('/api/rpc')), started.connectionId))
+			.rejects.toMatchObject({ httpStatus: 502, message: expect.stringContaining('app_owner_not_organization') })
+		expect(await env.REPOSITORIES.githubConnections.getAttempt(started.connectionId))
+			.toMatchObject({ status: 'failed', lastErrorCode: 'app_owner_not_organization' })
+		expect(await queryRowsFromEnv(env, `SELECT label FROM vault WHERE label LIKE '%:app-credential'`)).toEqual([])
 	})
 
 	test('reports unavailable and refuses to start without a vault', async () => {

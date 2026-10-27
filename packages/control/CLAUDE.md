@@ -60,7 +60,8 @@ one connection's vault secret (ADR-0029); any other `/webhooks/*` path is a 404 
 `/iam/admin/*` → transport-only IAM gateway · `/operations/api/rpc` →
 transport-only Operations RPC gateway · `/api/rpc` → ACL-gated control RPC surface.
 Unmatched `/api` and `/operations/api` paths return 404; they never reach dashboard `ASSETS`.
-Other paths fall back to `ASSETS`. `/healthz` is a liveness-only route on
+Other paths fall back to `ASSETS`: on Cloudflare every request but Vite's bundles under `/assets/` reaches the Worker first
+(`run_worker_first`), so the service table, not Workers Assets, decides which paths the SPA gets. `/healthz` is a liveness-only route on
 the shared app and is exposed by both the Cloudflare and Bun compositions.
 Neither gateway changes service ownership;
 IAM and Operations authenticate, authorize, and audit their own requests. Both preserve the browser's

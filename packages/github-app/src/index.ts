@@ -1,5 +1,5 @@
 export { GitHubAppClient } from './client'
-export { GitHubBranchConflictError, GitHubNotFoundError, GitHubRequestError, GitHubStaleHeadError } from './errors'
+export { GitHubBranchConflictError, GitHubNotFoundError, GitHubRateLimitError, GitHubRequestError, GitHubStaleHeadError } from './errors'
 export { buildGitHubAppManifest, exchangeGitHubAppManifestCode } from './manifest'
 export type {
 	GitHubBlobRead,

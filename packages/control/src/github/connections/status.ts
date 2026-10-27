@@ -148,8 +148,11 @@ function publicPhase(phase: GitHubSetupPhase): 'starting' | 'awaiting-manifest-c
 	return 'activating'
 }
 
-function repairReason(error: GitHubSetupErrorCode | null): 'interrupted-setup' | 'credential-activation' | 'installation-verification' {
+function repairReason(
+	error: GitHubSetupErrorCode | null,
+): 'interrupted-setup' | 'credential-activation' | 'installation-verification' | 'rate-limited' {
 	if (error === 'installation_verification') return 'installation-verification'
+	if (error === 'rate_limited') return 'rate-limited'
 	if (error === 'credential_activation' || error === 'credential_persistence' || error === 'configuration_conflict') return 'credential-activation'
 	return 'interrupted-setup'
 }

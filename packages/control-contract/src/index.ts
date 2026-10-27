@@ -137,7 +137,7 @@ export interface GitHubSourceConnectionListResponse {
 export interface GitHubSourceConnectionRepairRequiredDto extends GitHubSourceConnectionBaseDto {
 	readonly state: 'repair-required'
 	readonly connectionId: string
-	readonly reason: 'interrupted-setup' | 'credential-activation' | 'installation-verification'
+	readonly reason: 'interrupted-setup' | 'credential-activation' | 'installation-verification' | 'rate-limited'
 	readonly app?: GitHubSourceConnectionAppDto
 }
 

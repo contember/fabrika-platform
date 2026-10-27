@@ -34,7 +34,7 @@ describe('platform Git tree preflight', () => {
 			fetch: async (input, init) => {
 				calls.push(input.toString())
 				expect(new Headers(init?.headers).get('authorization')).toBeNull()
-				expect(init?.redirect).toBe('error')
+				expect(init?.redirect).toBe('manual')
 				return input.toString().includes('/commits/')
 					? Response.json({ sha: commitSha, commit: { tree: { sha: treeSha } } })
 					: Response.json({ ...treeResponse, tree: [blob, { ...blob, path: 'AGENTS.md', mode: '120000' }] })

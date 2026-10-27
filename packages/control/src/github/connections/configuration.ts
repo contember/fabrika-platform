@@ -1,4 +1,5 @@
 import { vault } from '../../services'
+import { SourceFailure } from '../source/failure'
 import { linkedDeadline, randomToken, type SourceConnectionWorkflowDeps } from './context'
 import { type GitHubSetupAttempt, type GitHubSetupErrorCode, type GitHubSetupPhase, type GitHubSourceConnection } from './model'
 import type { SourceGitHubAppIdentity } from './port'
@@ -101,6 +102,22 @@ function validRemoteIdentity(app: SourceGitHubAppIdentity): boolean {
 		&& /^[a-z0-9](?:[a-z0-9-]{0,98}[a-z0-9])?$/.test(app.slug)
 		&& app.htmlUrl === `https://github.com/apps/${app.slug}`
 		&& /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(app.owner.login)
+}
+
+/**
+ * Park an attempt whose step failed with `error` where an operator can act on it. An App GitHub made on a personal
+ * account can never pass, so its attempt fails and its key leaves the vault; GitHub's rate limit waits for a repair under
+ * its own code; anything else waits for a repair from its phase. `null` when the attempt moved meanwhile.
+ */
+export async function settleFailedStep(
+	deps: SourceConnectionWorkflowDeps,
+	attempt: GitHubSetupAttempt,
+	error: unknown,
+): Promise<GitHubSetupAttempt | null> {
+	const store = deps.env.REPOSITORIES.githubConnections
+	const code = error instanceof SourceFailure ? error.code : undefined
+	if (code === 'app_owner_not_organization') return await store.failWithCredential(attempt, code)
+	return await store.markRepairRequired(attempt.id, attempt.version, code === 'rate_limited' ? code : errorForPhase(attempt.phase))
 }
 
 export function errorForPhase(phase: GitHubSetupPhase): GitHubSetupErrorCode {

@@ -158,7 +158,9 @@ export class SourceTransport {
 					method: 'PUT',
 					body: gzipStream(source),
 					duplex: 'half',
-					redirect: 'error',
+					// `manual`, like every GitHub request Control makes (a Worker refuses `redirect: 'error'`, though the upload runs
+					// in the Bun process only): a redirect is a response that is not `ok` and fails below.
+					redirect: 'manual',
 					signal: combined.signal,
 				})
 			} catch {

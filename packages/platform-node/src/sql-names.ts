@@ -539,6 +539,9 @@ export function unicodeIdentifier(tokens: readonly SqlToken[]): { readonly line:
  */
 const PAVED_FUNCTIONS: ReadonlySet<string> = new Set([
 	'now',
+	// SQLite's clock in a Cloudflare application's DEFAULT, the form the checker's `cloudflare-current-timestamp` rule
+	// prescribes (`strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`); no side effect, no other row.
+	'strftime',
 	'gen_random_uuid',
 	'lower',
 	'upper',

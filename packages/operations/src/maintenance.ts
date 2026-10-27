@@ -98,7 +98,8 @@ export class WebhookNotificationSender implements NotificationSender {
 	private readonly timeoutMs: number
 
 	constructor(
-		private readonly fetch: NotificationFetch = globalThis.fetch,
+		// `globalThis`: a bare `fetch` here is this parameter itself.
+		private readonly fetch: NotificationFetch = (request) => globalThis.fetch(request),
 		options: WebhookNotificationSenderOptions = {},
 	) {
 		this.timeoutMs = options.timeoutMs ?? DEFAULT_WEBHOOK_TIMEOUT_MS
