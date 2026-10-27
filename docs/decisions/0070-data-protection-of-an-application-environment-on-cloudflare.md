@@ -168,6 +168,10 @@ table's SQL, keywords and numbers included, which over-approximates the columns 
 naming every column. Until 0.9.0-dev.7 any `CHECK` refused the table, which refused a self-reference added to a table
 whose `CHECK`s constrain other columns.
 
+`fabrika-check` runs the same rule over the schema an application's migrations build in memory (rule `backup-schema`),
+with the same reader (`describeOpsDumpSchema`), so a schema the backup refuses is found before the migration that makes
+it deploys: once deployed, every later migration deploy is refused at its pre-migration backup.
+
 An acyclic graph is always accepted, and so is a cycle of one table or several whose deferred columns are nullable,
 named by no `CHECK` and unreferenced.
 

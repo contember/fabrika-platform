@@ -28,6 +28,8 @@ export const REFUSAL_RULE_IDS = [
 	'unsafe-html',
 	'dynamic-code',
 	'migration-name',
+	'migration-refused',
+	'backup-schema',
 	'file-column-migration',
 	'crontab',
 	'package-replacement',
