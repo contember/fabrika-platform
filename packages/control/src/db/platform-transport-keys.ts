@@ -13,18 +13,23 @@ export interface PlatformTransportKeyRow {
 	/** Unix seconds; the key is valid strictly before it. */
 	expires_at: number
 	created_at: number
+	/** The workspace a dev sandbox's `source` key authenticates its launcher to; null for every other key. */
+	workspace_id: string | null
 }
+
+/** A key to record; only a dev sandbox's key names a workspace. */
+export type PlatformTransportKeyInsert = Omit<PlatformTransportKeyRow, 'workspace_id'> & { workspace_id?: string | null }
 
 export class PlatformTransportKeyRepository {
 	constructor(private readonly d1: SqlDatabase) {}
 
-	async insert(row: PlatformTransportKeyRow): Promise<void> {
+	async insert(row: PlatformTransportKeyInsert): Promise<void> {
 		await this.d1
 			.prepare(
-				`INSERT INTO platform_transport_keys (app_id, env, receiver, key_id, key_hash, value_ref, expires_at, created_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+				`INSERT INTO platform_transport_keys (app_id, env, receiver, key_id, key_hash, value_ref, expires_at, created_at, workspace_id)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			)
-			.bind(row.app_id, row.env, row.receiver, row.key_id, row.key_hash, row.value_ref, row.expires_at, row.created_at)
+			.bind(row.app_id, row.env, row.receiver, row.key_id, row.key_hash, row.value_ref, row.expires_at, row.created_at, row.workspace_id ?? null)
 			.run()
 	}
 

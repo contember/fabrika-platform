@@ -41,6 +41,8 @@ export interface RunRow {
 	superseded_by: string | null
 	/** Whether the version the run deploys installs the maintenance barrier (0 or 1); NULL for a dry run and for older runs. */
 	migration_barrier: number | null
+	/** The workspace id of a dev bootstrap run: only a newer succeeded run of the same lane supersedes it. NULL otherwise. */
+	lane: string | null
 	// `pending_access_json` is no longer read or written; the column stays until a later migration release drops it.
 }
 
@@ -122,12 +124,13 @@ export class RunRepository {
 		commitSha?: string | null
 		trigger: RunTrigger
 		actor: string
+		lane?: string | null
 	}): Promise<RunRow> {
 		return firstRow<RunRow>(
 			this.d1
-				.prepare(`INSERT INTO runs (id, app_id, env, ref, commit_sha, trigger, status, actor)
-					VALUES (?, ?, ?, ?, ?, ?, 'pending', ?) RETURNING *`)
-				.bind(input.id, input.appId, input.env, input.ref, input.commitSha ?? null, input.trigger, input.actor),
+				.prepare(`INSERT INTO runs (id, app_id, env, ref, commit_sha, trigger, status, actor, lane)
+					VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?) RETURNING *`)
+				.bind(input.id, input.appId, input.env, input.ref, input.commitSha ?? null, input.trigger, input.actor, input.lane ?? null),
 		)
 	}
 
@@ -251,23 +254,24 @@ export class RunRepository {
 				AND NOT EXISTS (SELECT 1 FROM runs active
 					WHERE active.app_id = runs.app_id AND active.env = runs.env AND active.status = 'running' AND active.id <> runs.id)
 				AND NOT EXISTS (SELECT 1 FROM runs newer
-					WHERE newer.app_id = runs.app_id AND newer.env = runs.env AND newer.id > runs.id AND newer.status = 'succeeded')`,
+					WHERE newer.app_id = runs.app_id AND newer.env = runs.env AND newer.lane IS NOT DISTINCT FROM runs.lane
+						AND newer.id > runs.id AND newer.status = 'succeeded')`,
 			[this.now(), logKey, id],
 			fence,
 		)
 	}
 
-	/** The newest run of the same environment, created after this one, that succeeded: the run that supersedes it. */
+	/** The newest run of the same environment and lane, created after this one, that succeeded: the run that supersedes it. */
 	async getSupersedingRun(id: string): Promise<RunRow | null> {
 		return this.d1.prepare(`SELECT newer.* FROM runs newer
-			JOIN runs older ON older.app_id = newer.app_id AND older.env = newer.env
+			JOIN runs older ON older.app_id = newer.app_id AND older.env = newer.env AND older.lane IS NOT DISTINCT FROM newer.lane
 			WHERE older.id = ? AND newer.id > older.id AND newer.status = 'succeeded'
 			ORDER BY newer.id DESC LIMIT 1`).bind(id).first<RunRow>()
 	}
 
 	/**
-	 * Fail a pending run that a newer succeeded run of its environment supersedes, before it starts: an older run never
-	 * deploys over a newer success, and a rollback is a new run (ADR-0050 §6).
+	 * Fail a pending run that a newer succeeded run of its environment and lane supersedes, before it starts: an older run
+	 * never deploys over a newer success, and a rollback is a new run (ADR-0050 §6).
 	 */
 	async markRunSuperseded(id: string, supersededBy: string, fence: LeaseFence): Promise<boolean> {
 		return this.mutateRun(
@@ -275,8 +279,8 @@ export class RunRepository {
 			`UPDATE runs SET status = 'failed', finished_at = ?, superseded_by = ?
 			WHERE id = ? AND status = 'pending' AND cancel_requested_at IS NULL
 				AND EXISTS (SELECT 1 FROM runs newer
-					WHERE newer.id = ? AND newer.app_id = runs.app_id AND newer.env = runs.env AND newer.id > runs.id
-						AND newer.status = 'succeeded')`,
+					WHERE newer.id = ? AND newer.app_id = runs.app_id AND newer.env = runs.env AND newer.lane IS NOT DISTINCT FROM runs.lane
+						AND newer.id > runs.id AND newer.status = 'succeeded')`,
 			[this.now(), supersededBy, id, supersededBy],
 			fence,
 		)

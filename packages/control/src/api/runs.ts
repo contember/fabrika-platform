@@ -202,7 +202,7 @@ export async function triggerDeployUseCase(c: RunsUseCaseContext, input: Trigger
  */
 export async function createManualRun(
 	c: RunTriggerContext,
-	input: { appId: string; env: string; ref: string; commitSha?: string },
+	input: { appId: string; env: string; ref: string; commitSha?: string; lane?: string },
 ): Promise<RunDto> {
 	const { appId, env, ref } = input
 	const run = await c.repositories.runs.createRun({
@@ -213,6 +213,7 @@ export async function createManualRun(
 		...(input.commitSha === undefined ? {} : { commitSha: input.commitSha }),
 		trigger: 'manual',
 		actor: runActor(c.auth),
+		lane: input.lane ?? null,
 	})
 	await c.queue.send({ runId: run.id })
 	await c.auth.audit({
