@@ -1132,9 +1132,9 @@ a real Postgres; `cloudflare-postgres-runtime.test.ts` runs them in Lopata.
   to boot without the binding, opens the data layer with `openHyperdrive` on `app_<id>` of `FABRIKA_IAM_APP_ID`'s
   application, and boots with `connections: HYPERDRIVE_CLIENT_MAX` and `kickRuns: 'scheduler'`.
 - **Every event opens its own postgres.js client and ends it only once the work it handed to `waitUntil` settled**
-  (`PostgresEvent`); the engine reaches the event's client through `AsyncLocalStorage`. `connectHyperdrive` keeps
-  postgres.js's `fetch_types` (with it off, 3.4.9 never answers a `reserve` that opens a connection) and sends a JSON
-  parameter's text as Bun.SQL does.
+  (`PostgresEvent`); the engine reaches the event's client through `AsyncLocalStorage`. `connectHyperdrive` opens it
+  with `@fabrika/db/hyperdrive`'s `HYPERDRIVE_CLIENT_OPTIONS` (`fetch_types` on: with it off, postgres.js 3.4.9 never
+  answers a `reserve` that opens a connection).
 - **A request's kick is only its wake** (`kickRuns: 'scheduler'`): the request's projection records the earliest wake its
   writes left, and once its tracked work settled the Worker POSTs `WAKE_PATH` with `WAKE_DELAY_HEADER` to the object
   `application`, which lowers its alarm to it. The object's alarm only ever goes down from outside its handler: every

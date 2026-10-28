@@ -6,7 +6,7 @@
 import { FABRIKA_IAM_APP_ID, FABRIKA_PROXY_SECRET, parseAppEnvironmentId, PROXY_SECRET_HEADER } from '@fabrika/auth-core'
 import { applicationSchema } from '@fabrika/db'
 import { isScopedDatabase, type Session } from '@fabrika/db/framework'
-import { type HyperdriveClient, openHyperdrive } from '@fabrika/db/hyperdrive'
+import { HYPERDRIVE_CLIENT_OPTIONS, type HyperdriveClient, openHyperdrive } from '@fabrika/db/hyperdrive'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import postgres from 'postgres'
 import type { RequestExecutionContext } from '../fetch.js'
@@ -34,7 +34,9 @@ export interface PostgresWorkerOptions {
 	readonly clock?: JobClock
 	/**
 	 * Opens one event's client from `FABRIKA_DATABASE.connectionString`; `connectHyperdrive` by default:
-	 * `postgres(url, { max: HYPERDRIVE_CLIENT_MAX, prepare: false })`, JSON parameters sent as Bun.SQL sends them.
+	 * `postgres(url, { max: HYPERDRIVE_CLIENT_MAX, ...HYPERDRIVE_CLIENT_OPTIONS })`. A client of its own must take
+	 * `HYPERDRIVE_CLIENT_OPTIONS` too: with `fetch_types` off, postgres.js 3.4.9 never answers a `reserve` that opens a
+	 * connection (porsager/postgres#1219).
 	 */
 	readonly connect?: (connectionString: string) => PostgresEventClient
 }
@@ -65,24 +67,13 @@ const BOOT_RETRY_CAP_MS = 60_000
 const FRAMEWORK_BINDINGS: ReadonlySet<string> = new Set(['IAM', CLOUDFLARE_ASSETS_BINDING])
 
 /**
- * A JSON parameter as Bun.SQL sends it: a string is the JSON text itself, so the server parses it; postgres.js would
- * encode it once more and send a JSON string. Rows parse as with Bun.SQL.
- */
-const JSON_AS_BUN_SQL = {
-	to: 114,
-	from: [114, 3802],
-	serialize: (value: unknown): string => typeof value === 'string' ? value : JSON.stringify(value),
-	parse: (text: string): unknown => JSON.parse(text),
-}
-
-/**
- * One event's client over the Hyperdrive connection string: at most `HYPERDRIVE_CLIENT_MAX` connections, no prepared
- * statement. It keeps postgres.js's `fetch_types`: with it off, a `reserve` that opens a connection never resolves
- * (3.4.9: its ReadyForQuery returns before it hands the connection over), and every statement of the engine reserves one.
+ * One event's client over the Hyperdrive connection string: at most `HYPERDRIVE_CLIENT_MAX` connections, with the
+ * engine's `HYPERDRIVE_CLIENT_OPTIONS` (no prepared statement, `fetch_types` on, parameters and arrays as Bun.SQL
+ * reads them).
  */
 export function connectHyperdrive(connectionString: string): PostgresEventClient {
 	// A notice may quote a value, so none is logged.
-	return postgres(connectionString, { max: HYPERDRIVE_CLIENT_MAX, prepare: false, types: { json: JSON_AS_BUN_SQL }, onnotice: () => {} })
+	return postgres(connectionString, { max: HYPERDRIVE_CLIENT_MAX, ...HYPERDRIVE_CLIENT_OPTIONS, onnotice: () => {} })
 }
 
 /** The connection string of the environment's Hyperdrive binding; it is a credential, so no message quotes it. */
