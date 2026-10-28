@@ -20,6 +20,8 @@ export interface GitHubSourceOptions {
 	readonly credentials: GitHubSourceCredentials
 	readonly descriptor: SourceDescriptorRule
 	readonly isUploadDestination: (url: string) => boolean
+	/** A dev sandbox host's file endpoint; without it, an upload that carries a bearer is refused. */
+	readonly isSandboxUploadDestination?: (url: string) => boolean
 	/** Default 2; further uploads queue and leave the queue when their caller aborts. */
 	readonly maxConcurrentUploads?: number
 	/** Transport seams for tests and the local stack; the GitHub origins stay fixed. */
@@ -47,6 +49,7 @@ export function createGitHubSource(options: GitHubSourceOptions): GitHubSource {
 	const transport = new SourceTransport({
 		repository,
 		isUploadDestination: options.isUploadDestination,
+		...(options.isSandboxUploadDestination === undefined ? {} : { isSandboxUploadDestination: options.isSandboxUploadDestination }),
 		...(options.uploadFetch === undefined ? {} : { uploadFetch: options.uploadFetch }),
 		...(options.maxConcurrentUploads === undefined ? {} : { maxConcurrentUploads: options.maxConcurrentUploads }),
 	})

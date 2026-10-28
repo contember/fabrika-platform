@@ -50,6 +50,11 @@ export interface SourceUploadInput {
 	readonly archive: SourceArchiveKind
 	/** A credential in transit: never logged, persisted, or returned in an error. */
 	readonly uploadUrl: string
+	/**
+	 * Present for a dev sandbox: `uploadUrl` is the sandbox host's file endpoint for one sandbox, and the PUT carries this
+	 * bearer. A credential in transit, like `uploadUrl`.
+	 */
+	readonly uploadBearer?: string
 	readonly signal: AbortSignal
 }
 

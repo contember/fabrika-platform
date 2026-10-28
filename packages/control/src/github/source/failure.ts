@@ -8,6 +8,8 @@ export type SourceFailureCode =
 	| 'archive_rejected'
 	| 'upload_rejected'
 	| 'upload_failed'
+	/** The sandbox host refused the archive for its size (413); a smaller repository is the remedy, not a retry. */
+	| 'upload_too_large'
 	| 'credentials_invalid'
 	/** The GitHub App belongs to a personal account; Control connects an organization's App only. */
 	| 'app_owner_not_organization'
@@ -78,6 +80,10 @@ export function atStage(error: unknown, stage: SourceFailureStage): unknown {
 	if (error instanceof SourceRateLimited) return new SourceRateLimited(stage, error.anonymous, error.resetAt)
 	if (error instanceof SourceFailure) return new SourceFailure(error.code, stage)
 	return error
+}
+
+export function uploadTooLarge(): SourceFailure {
+	return new SourceFailure('upload_too_large', 'upload', 'the source archive is larger than the sandbox host accepts (50 MiB)')
 }
 
 export function cancelled(stage: SourceFailureStage): SourceFailure {
