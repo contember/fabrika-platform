@@ -39,14 +39,14 @@ The refusals agents meet most, and their fix:
 
 The hints:
 
-| Hint                   | Means                                                                                                    | Fix                                                                                    |
-| ---------------------- | -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| `handler-location`     | a `.handle(…)` outside a slice's `endpoints.ts`                                                          | move the endpoint into `src/<slice>/endpoints.ts`                                      |
-| `data-access-location` | `ctx.db` or `ctx.sql` outside `endpoints.ts` and `queries.ts`                                            | pass the handle into a function of the slice's `queries.ts`                            |
-| `logic-data-access`    | `logic.ts` reaches data                                                                                  | keep `logic.ts` pure; pass it plain values                                             |
-| `cross-slice-queries`  | a slice loads another slice's `queries.ts`                                                               | move the function, or call that slice's endpoint                                       |
-| `sql-undeclared`       | `ctx.sql` in a handler whose endpoint declares no `sql`                                                  | add `sql: 'read'` (or `'write'`) to that endpoint                                      |
-| `cloudflare-held-call` | on Cloudflare, a mutation that declares `egress` or `connect` holds the whole environment while it waits | record a row and `ctx.kick('<job>')`; the job makes the call outside `ctx.transaction` |
+| Hint                   | Means                                                                                                             | Fix                                                                                    |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `handler-location`     | a `.handle(…)` outside a slice's `endpoints.ts`                                                                   | move the endpoint into `src/<slice>/endpoints.ts`                                      |
+| `data-access-location` | `ctx.db` or `ctx.sql` outside `endpoints.ts` and `queries.ts`                                                     | pass the handle into a function of the slice's `queries.ts`                            |
+| `logic-data-access`    | `logic.ts` reaches data                                                                                           | keep `logic.ts` pure; pass it plain values                                             |
+| `cross-slice-queries`  | a slice loads another slice's `queries.ts`                                                                        | move the function, or call that slice's endpoint                                       |
+| `sql-undeclared`       | `ctx.sql` in a handler whose endpoint declares no `sql`                                                           | add `sql: 'read'` (or `'write'`) to that endpoint                                      |
+| `cloudflare-held-call` | on Cloudflare's SQLite, a mutation that declares `egress` or `connect` holds the whole environment while it waits | record a row and `ctx.kick('<job>')`; the job makes the call outside `ctx.transaction` |
 
 The first run may report only the contract's refusals: the generated-test findings appear once the contract compiles.
 

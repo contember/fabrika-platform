@@ -177,8 +177,10 @@ Decisions 1–9 describe the SQLite environment, the default; §10 says what dif
       `fabrika app build --provider=cloudflare --database=postgres` for an environment it composed on Postgres, and
       nothing new for one on SQLite. Control compares an application's release with its own by major.minor.patch
       only, so a platform release before `0.9.0-dev.9` accepts an application pinned to it, reads no `database` and
-      composes none; its deployer never passes the option, and the application's CLI refuses the build instead of deploying a
-      Postgres entry without its database. A local `fabrika app build` passes the option itself.
+      composes none. A platform that regenerates the entry (from `0.9.0-dev.5` and `0.9.0-cloudflare.1`) never passes
+      the option, and the application's CLI refuses the build instead of deploying a Postgres entry without its
+      database. A platform at `0.9.0-dev.0`–`dev.4` runs no entry build and deploys a committed entry as it is
+      ([backlog 240](../backlog/240-channel-prereleases-sort-below-the-release-floors.md)). A local `fabrika app build` passes the option itself.
     - **No ops channel and no data operations** ([ADR-0069](0069-control-reaches-an-application-environments-object.md),
       [ADR-0070](0070-data-protection-of-an-application-environment-on-cloudflare.md)): no ops row, no ops key, no
       barrier, no migration phase. Backups, exports and recovery are the database provider's. Control answers the
@@ -189,12 +191,12 @@ Decisions 1–9 describe the SQLite environment, the default; §10 says what dif
 - The paved road runs on Cloudflare: `ctx.db`, jobs, kicks, webhooks, public procedures, files and signed tokens.
 - `@fabrika/db` has two dialects. Every framework statement has a SQLite text beside its Postgres one, and its tests
   run on both; the guard and the scoped query surface are shared.
-- An application environment's throughput is one object's: one thread, about a thousand small requests a second.
-  An application that needs more is not served by this road.
-- An environment's data lives in one location, chosen when the object is first created; moving it is an export and an
-  import.
-- Operators read an environment's data in the dashboard's Data Studio. Control exports, backs up and imports an
-  object's SQLite over the ops channel
+- On the object's SQLite, an application environment's throughput is one object's: one thread, about a thousand small
+  requests a second. An application that needs more chooses Postgres (§10).
+- On the object's SQLite, an environment's data lives in one location, chosen when the object is first created; moving
+  it is an export and an import.
+- On the object's SQLite, operators read an environment's data in the dashboard's Data Studio, and Control exports,
+  backs up and imports an object's SQLite over the ops channel
   ([ADR-0070](0070-data-protection-of-an-application-environment-on-cloudflare.md)).
 - Local runs and tests need Lopata 0.30 or newer, which implements an object's `storage.transaction` over
   `bun:sqlite` and nests it as workerd does.

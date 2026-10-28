@@ -126,7 +126,8 @@ this one import.
   `TMPDIR` only. For an environment it composed on Postgres it appends `--database=postgres`
   (`appBuildDatabaseArgument`, `@fabrika/provider-contract/app-cli`), and nothing for one on SQLite: the application's
   CLI writes the Postgres entry only when asked, so a deployer older than `0.9.0-dev.9`, which composes no database,
-  fails the build instead of deploying it. An older release, a Control that
+  fails the build instead of deploying it, provided it regenerates the entry (from `0.9.0-dev.5` and `cloudflare.1`;
+  `0.9.0-dev.0`–`dev.4` deploy a committed entry as it is, [backlog 240](../../docs/backlog/240-channel-prereleases-sort-below-the-release-floors.md)). An older release, a Control that
   names no release, and a local deploy keep their authored `main` and the old plan (ADR-0062).
 - **Every managed credential is a Worker secret, uploaded with the version** (`src/managed-secrets.ts`): token keys,
   workload keys, mail, the platform transport, the Operations DSN, the IAM RPC key and the proxy secret. The executor

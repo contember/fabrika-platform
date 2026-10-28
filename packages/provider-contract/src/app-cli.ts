@@ -14,7 +14,9 @@ const APP_BUILD_DATABASE_OPTION = '--database='
 /**
  * What a deployer appends to `fabrika app build --provider=cloudflare` for an application it composed on Postgres. The
  * application's own CLI writes the Postgres entry only when it is asked to: a deployer older than `0.9.0-dev.9` never
- * asks and composes no database, so the build fails there instead of deploying an entry without its database. A deploy
+ * asks and composes no database, so the build fails there instead of deploying an entry without its database, on a
+ * platform that regenerates the entry (`0.9.0-dev.5`, `cloudflare.1` and later; `dev.0`–`dev.4` deploy a committed
+ * entry as it is, docs/backlog/240). A deploy
  * on the object's SQLite passes nothing, as every older deployer does.
  */
 export const appBuildDatabaseArgument = (database: AppBuildDatabase): string => `${APP_BUILD_DATABASE_OPTION}${database}`

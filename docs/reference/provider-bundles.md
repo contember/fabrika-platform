@@ -421,9 +421,11 @@ refuses a schema-less config; it never meets one, because Control refuses a
 framework release whose major.minor.patch is newer than the platform's, and an
 installation deploys its runner with its Control from one `fabrika.ref`. Control
 does not order two prereleases of one version (backlog 240), so a feature a later
-prerelease adds must fail closed on an older platform by itself, as Postgres does:
+prerelease adds must fail closed on an older platform by itself. Postgres does on
+a platform that regenerates the entry (from `0.9.0-dev.5` and `0.9.0-cloudflare.1`):
 the application's CLI writes its Postgres entry only when the deployer passes
-`--database=postgres`. The config's `id` names every remote the
+`--database=postgres`. A platform at `0.9.0-dev.0`–`dev.4` deploys a committed
+entry as it is ([backlog 240](../backlog/240-channel-prereleases-sort-below-the-release-floors.md)). The config's `id` names every remote the
 deploy writes, and the runner reads it from the checkout: an application deploy
 refuses an `id` other than the approved contract's `app`, or one whose
 `<id>@<env>` is not the `FABRIKA_IAM_APP_ID` Control handed (a local deploy carries

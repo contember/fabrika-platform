@@ -243,7 +243,7 @@ describe.skipIf(!hasPostgres)('the application role family', () => {
 					])
 				const expected = [{ rolname: roles.runtime, setconfig: [`search_path=${roles.schema}`] }]
 				expect(await settings()).toEqual(expected)
-				// No startup parameter, as through a pooler that refuses them: the role's default names the schema.
+				// No startup parameter, as the engine sends none through Hyperdrive: the role's default names the schema.
 				expect([...await as(runtimeUrl(notes), (sql) => sql.unsafe('SELECT current_schema() AS schema'))]).toEqual([{ schema: roles.schema }])
 				await as(runtimeUrl(notes), (sql) => sql.unsafe('ALTER ROLE CURRENT_USER SET search_path TO public'))
 				await as(migrationUrl(notes), (sql) => sql.unsafe('ALTER ROLE CURRENT_USER SET search_path TO public'))
