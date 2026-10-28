@@ -144,13 +144,15 @@ Decisions 1–9 describe the SQLite environment, the default; §10 says what dif
       so it runs near the database. The generated entry is `cloudflare-postgres` (`@fabrika/app/cloudflare-postgres`):
       the isolate boots the application once, each request opens its own postgres.js client and ends it when the
       work it handed to `waitUntil` settled. A handler's transaction is a Postgres transaction, as on Zerops, so
-      there is no 25 s handler cap; the database's own statement limit (Hyperdrive's 60 s) stays.
+      there is no 25 s handler cap; the database's own statement limit (Hyperdrive's 60 s) stays. The isolate has no pool
+      of its own, so the public procedures' in-flight share (ADR-0063 rule 1) is two calls per isolate, as on the object.
     - **The schema is the runtime role's default `search_path`.** Hyperdrive documents no startup parameters and pools per
       transaction, and the data layer names its tables unqualified, also in autocommit statements, so neither a
       startup parameter nor `SET LOCAL` reaches every statement. Provisioning sets `ALTER ROLE run_<id> SET
       search_path TO app_<id>` in the transaction that resets the role's defaults, and the engine
-      (`@fabrika/db/hyperdrive`) checks `current_schema()` on its first connection and refuses every statement after a
-      mismatch. Every statement runs unprepared, because the next transaction may get another origin connection.
+      (`@fabrika/db/hyperdrive`) checks `current_schema()` on each connection, on the event that reserved it, until one
+      check of the isolate passed, and refuses every statement after a mismatch. An event never waits on another event's
+      check, whose I/O belongs to that event. Every statement runs unprepared, because the next transaction may get another origin connection.
     - **The object keeps the class and binding names and runs only the jobs.** A request's kick writes its wake in the
       request's transaction and runs nothing in the Worker (`kickRuns: 'scheduler'`); once the request's work settled,
       the Worker sends the object one wake notice with the earliest wake its writes left, and the object lowers its

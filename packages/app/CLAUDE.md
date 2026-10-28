@@ -1130,7 +1130,8 @@ a real Postgres; `cloudflare-postgres-runtime.test.ts` runs them in Lopata.
 - **One boot per isolate, shared by the Worker and the object** (`PostgresApplication` in `postgres-runtime.ts`), like the
   SQLite object's: a failed boot is reported once per streak and retried after a backoff that doubles to 60 s. It refuses
   to boot without the binding, opens the data layer with `openHyperdrive` on `app_<id>` of `FABRIKA_IAM_APP_ID`'s
-  application, and boots with `connections: HYPERDRIVE_CLIENT_MAX` and `kickRuns: 'scheduler'`.
+  application, and boots with `kickRuns: 'scheduler'` and no `connections`: the isolate has no pool, so the public in-flight share is
+  the default two per isolate.
 - **Every event opens its own postgres.js client and ends it only once the work it handed to `waitUntil` settled**
   (`PostgresEvent`); the engine reaches the event's client through `AsyncLocalStorage`. `connectHyperdrive` opens it
   with `@fabrika/db/hyperdrive`'s `HYPERDRIVE_CLIENT_OPTIONS` (`fetch_types` on: with it off, postgres.js 3.4.9 never

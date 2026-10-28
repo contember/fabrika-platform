@@ -67,7 +67,7 @@ local runs, where Lopata's binding hands the Worker a direct connection string.
   connection is reset when it returns to the pool, so a `SET` lasts one transaction or one query
   ([connection pooling](https://developers.cloudflare.com/hyperdrive/concepts/connection-pooling/)). The data layer
   therefore never sets session state: the schema is the runtime role's default `search_path`, which provisioning sets
-  (`ALTER ROLE run_<id> SET search_path TO app_<id>`), and the engine checks `current_schema()` on its first connection.
+  (`ALTER ROLE run_<id> SET search_path TO app_<id>`), and the engine checks `current_schema()` until one connection passed.
   _Not verified live:_ that Hyperdrive's origin sessions apply the role default and keep it across resets.
 - **Unsupported:** SQL-level `PREPARE`, `EXECUTE`, `DEALLOCATE` and `DISCARD`, advisory locks, `LISTEN`/`NOTIFY`, and
   any other per-session state

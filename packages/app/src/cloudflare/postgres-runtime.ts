@@ -247,7 +247,8 @@ export class PostgresApplication {
 				requireProxySecret: true,
 				// The proxy Worker sets `X-Fabrika-Client-Ip` from `CF-Connecting-IP`, the visitor Cloudflare saw.
 				clientAddress: 'vouched',
-				connections: HYPERDRIVE_CLIENT_MAX,
+				// No `connections`: the public in-flight share is a quarter of a pool, and the isolate has none. Each event opens
+				// its own client, so the share takes the default, two calls per isolate, as on the SQLite object.
 				projectWakes: (transaction) => currentEvent().project(transaction),
 				// A request's kick is its wake; the job object runs it from its alarm.
 				kickRuns: 'scheduler',

@@ -6,6 +6,7 @@
 import { applicationRuntimeUrl, definePostgresApplicationMigrations, dropApplicationDatabase } from '@fabrika/platform-node'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import postgres from 'postgres'
 import { applicationSchema, type Database, InvocationTransaction, runApplicationStatement, sessionOf, type SqlParameter } from '../database'
 import { DatabaseError, LeaseLostError } from '../errors'
@@ -148,6 +149,41 @@ describe.skipIf(!hasPostgres)('the Hyperdrive engine on Postgres', () => {
 		const select = () => runApplicationStatement(sessionOf({ database: engine }), 'select 1 as one', [], 'read')
 		expect(await refusal(select())).toMatchObject({ sqlState: null })
 		expect(await select()).toEqual([{ one: 1 }])
+	})
+
+	test("an event whose check never settles holds up no other event's statement", async () => {
+		// The Worker selects each event's client as the runtime does; the first event's check hangs, as it would if its
+		// request were cancelled mid-read, and is then abandoned.
+		const events = new AsyncLocalStorage<HyperdriveClient>()
+		let hung: () => void = () => undefined
+		const reached = new Promise<void>((resolve) => {
+			hung = resolve
+		})
+		let abandon: () => void = () => undefined
+		const stalled: HyperdriveClient = {
+			reserve: async () => {
+				const connection = await runtimeClient(1).reserve()
+				abandon = () => connection.release()
+				return Object.assign(connection, {
+					unsafe: () => {
+						hung()
+						return new Promise<never>(() => undefined)
+					},
+				})
+			},
+		}
+		const healthy = runtimeClient(1)
+		const engine = openHyperdrive({ schema, client: () => events.getStore() ?? healthy })
+		const select = () => runApplicationStatement(sessionOf({ database: engine }), 'select 1 as one', [], 'read')
+		void events.run(stalled, select)
+		await reached
+		const served = events.run(healthy, select)
+		const timedOut = new Promise<'timed out'>((resolve) => setTimeout(() => resolve('timed out'), 2_000))
+		try {
+			expect(await Promise.race([served, timedOut])).toEqual([{ one: 1 }])
+		} finally {
+			abandon()
+		}
 	})
 
 	test("an invocation's transaction commits, rolls back, and refuses a write when read-only", async () => {

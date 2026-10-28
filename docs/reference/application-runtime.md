@@ -473,12 +473,13 @@ An application whose `fabrika.config.ts` states `database: { kind: 'postgres', p
   on `app_<id>` of `FABRIKA_IAM_APP_ID`'s application and the R2 file store; it refuses to boot without the
   `FABRIKA_DATABASE` binding, and a failed boot is reported once per streak and retried after a backoff that doubles
   to 60 s. Each request opens its own postgres.js client from the binding's `connectionString` (at most
-  `HYPERDRIVE_CLIENT_MAX`, 5, connections) and ends it once everything it handed to `waitUntil` settled. The Worker
+  `HYPERDRIVE_CLIENT_MAX`, 5, connections) and ends it once everything it handed to `waitUntil` settled; with no pool
+  of its own, the isolate's public in-flight share is the default two calls. The Worker
   removes `X-Fabrika-Tick`, sets `X-Fabrika-Proxy-Secret` for the framework's hop check as the SQLite Worker does, and
   answers an ops request with `opsRefusal()`. A handler's transaction is a Postgres transaction, so the 25 s handler
   cap does not apply; Hyperdrive ends a statement after 60 s.
-- **The engine** runs every statement unprepared and checks, on its first connection, that `current_schema()` is the
-  runtime role's default `search_path`; after a mismatch it refuses every statement (`DatabaseError` `3F000`, saying to
+- **The engine** runs every statement unprepared and checks, on each connection until one check of the isolate passed,
+  that `current_schema()` is the runtime role's default `search_path`; after a mismatch it refuses every statement (`DatabaseError` `3F000`, saying to
   redeploy). The default is set by every `fabrika db migrate`, which the deploy's `provision-database` step runs.
 - **Jobs run on the job object** (`FabrikaJobObject`, exported as `FabrikaApplication`, `cloudflare/postgres-object.ts`).
   A request's `ctx.kick` writes its wake and runs nothing in the Worker (`kickRuns: 'scheduler'`); the request's

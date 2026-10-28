@@ -10,7 +10,7 @@ import { OPS_PREFIX, PROXY_SECRET_HEADER } from '@fabrika/auth-core'
 import { FRAMEWORK_MIGRATION_BUNDLE, FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
 import { applicationRuntimeUrl, definePostgresApplicationMigrations, dropApplicationDatabase } from '@fabrika/platform-node'
 import { SQL } from 'bun'
-import { afterAll, beforeAll, beforeEach, describe, expect, spyOn, test } from 'bun:test'
+import { afterAll, beforeAll, beforeEach, describe, expect, setSystemTime, spyOn, test } from 'bun:test'
 import { createTestEnv, type TestEnv } from 'lopata/testing'
 import { join } from 'node:path'
 import { applicationMigrations, CLOUDFLARE_APPLICATION_BINDING, CLOUDFLARE_DATABASE_BINDING, CLOUDFLARE_FILES_BINDING } from '../build'
@@ -377,7 +377,7 @@ describe.skipIf(!hasPostgres)('the Worker', () => {
 	)
 
 	test(
-		'tells the object only once the work that wrote the wake settled, and only of the earliest wake',
+		'tells the object only once the work that wrote the wake settled',
 		inProcess(async () => {
 			const target = deploy()
 			const notice = gate()
@@ -393,9 +393,50 @@ describe.skipIf(!hasPostgres)('the Worker', () => {
 	)
 })
 
+describe.skipIf(!hasPostgres)('public procedures on the Worker', () => {
+	test(
+		'an isolate serves two anonymous calls at once; the share of the third is full',
+		inProcess(async () => {
+			const target = deploy()
+			const held = gate()
+			target.world.hold = held.wait
+			const path = '/api/notes.ping'
+			const ping = () =>
+				target.worker.fetch(
+					new Request(`${ORIGIN}${path}`, {
+						method: 'POST',
+						headers: {
+							'X-Fabrika-Endpoint': endpointHeaderFor(target.served.implementation, 'POST', path) ?? '',
+							'Content-Type': 'application/json',
+							'Sec-Fetch-Site': 'same-origin',
+						},
+						body: '{}',
+					}),
+					target.env,
+					target.exec,
+				)
+			const log = spyOn(console, 'error').mockImplementation(() => {})
+			try {
+				const first = ping()
+				await held.reached
+				const second = ping()
+				// The share is two per isolate, as on the SQLite object: each event opens its own client, so no pool of the
+				// isolate is shared with staff.
+				expect((await ping()).status).toBe(503)
+				held.open()
+				expect(await (await first).json()).toEqual({ result: { pong: true } })
+				expect(await (await second).json()).toEqual({ result: { pong: true } })
+				await target.settled()
+			} finally {
+				log.mockRestore()
+			}
+		}),
+	)
+})
+
 describe.skipIf(!hasPostgres)('the boot of an isolate', () => {
 	test(
-		'without the Hyperdrive binding fails, is reported once, and boots again only after its backoff',
+		'without the Hyperdrive binding fails before it loads the application, and is reported once without the URL',
 		inProcess(async () => {
 			const envelopes: string[] = []
 			const target = deploy({
@@ -406,13 +447,53 @@ describe.skipIf(!hasPostgres)('the boot of an isolate', () => {
 				},
 			})
 			await expect(call(target, 'titles', { workspaceId: 'w1' })).rejects.toThrow('the FABRIKA_DATABASE Hyperdrive binding is missing')
-			await expect(call(target, 'titles', { workspaceId: 'w1' })).rejects.toThrow('the FABRIKA_DATABASE Hyperdrive binding is missing')
 			await target.settled()
 			expect(target.loads).toBe(0)
 			expect(target.clients).toEqual([])
 			expect(envelopes).toHaveLength(1)
 			expect(envelopes[0]).toContain('boot_failed')
 			expect(envelopes[0]).not.toContain(runtimeUrl)
+		}),
+	)
+
+	test(
+		'that failed boots again only once its backoff passed, which doubles, and is reported once per streak',
+		inProcess(async () => {
+			const envelopes: string[] = []
+			const target = deploy({
+				// Refused after the application loaded: the schema is read from the application environment id.
+				vars: { FABRIKA_IAM_APP_ID: 'no-environment', FABRIKA_OPERATIONS_DSN: DSN },
+				operationsFetch: async (request) => {
+					envelopes.push(await request.text())
+					return new Response(null, { status: 202 })
+				},
+			})
+			const refused = () => expect(call(target, 'titles', { workspaceId: 'w1' })).rejects.toThrow('is not an application environment id')
+			const start = Date.now()
+			try {
+				setSystemTime(start)
+				await refused()
+				expect(target.loads).toBe(1)
+				// Within the first backoff (1 s) no event boots again.
+				setSystemTime(start + 999)
+				await refused()
+				expect(target.loads).toBe(1)
+				setSystemTime(start + 1_000)
+				await refused()
+				expect(target.loads).toBe(2)
+				// The second failure doubled it to 2 s.
+				setSystemTime(start + 2_999)
+				await refused()
+				expect(target.loads).toBe(2)
+				setSystemTime(start + 3_000)
+				await refused()
+				expect(target.loads).toBe(3)
+			} finally {
+				setSystemTime()
+			}
+			await target.settled()
+			expect(envelopes).toHaveLength(1)
+			expect(envelopes[0]).toContain('boot_failed')
 		}),
 	)
 })

@@ -190,15 +190,21 @@ class NoClientError extends DatabaseError {
 /**
  * The data layer over the clients `options.client` hands out, dialect `postgres`. Every reserved connection runs
  * unprepared (`prepare: false`), whatever the dialect asks: a pooler that hands each transaction another connection
- * would not find a statement prepared on the last one. The first connection checks `current_schema()` against
- * `options.schema` and the engine fails closed on a mismatch, for every later connection too. Frozen like `openPostgres`.
+ * would not find a statement prepared on the last one. Until one connection of the isolate has passed it, each connection checks
+ * `current_schema()` against `options.schema` on its own event; a mismatch fails the engine closed for every later
+ * connection too. Frozen like `openPostgres`.
  */
 export function openHyperdrive(options: HyperdriveOptions): Database {
 	const { schema, client, end } = options
 	if (!isPlainIdentifier(schema)) {
 		throw new QueryRefusedError('invalid_name', 'the schema must match ^[a-z_][a-z0-9_]*$')
 	}
-	let verified: Promise<void> | undefined
+	// Only a settled outcome is shared. The check runs on the connection of the event that reserves, and an event's I/O
+	// belongs to that event: another event that awaited its in-flight check would hang with it if it were cancelled, or
+	// fail with its lost connection. So until one check has passed, every connection checks itself; a few concurrent
+	// events at isolate start pay one round trip each.
+	let checked = false
+	let refused: SearchPathError | undefined
 	const verify = async (connection: PostgresJSReservedSql): Promise<void> => {
 		const rows: unknown = await connection.unsafe('select current_schema() as schema', [], { prepare: false })
 		const current = firstSchema(rows)
@@ -210,6 +216,7 @@ export function openHyperdrive(options: HyperdriveOptions): Database {
 			await end?.()
 		},
 		reserve: async () => {
+			if (refused !== undefined) throw refused
 			let current: HyperdriveClient
 			try {
 				current = client()
@@ -218,19 +225,16 @@ export function openHyperdrive(options: HyperdriveOptions): Database {
 				throw new NoClientError()
 			}
 			const connection = await current.reserve()
-			if (verified === undefined) {
-				const check = verify(connection)
-				verified = check
-				// A refused schema stays refused; a lost connection is checked again on the next one.
-				check.catch((error: unknown) => {
-					if (!(error instanceof SearchPathError) && verified === check) verified = undefined
-				})
-			}
-			try {
-				await verified
-			} catch (error) {
-				connection.release()
-				throw error
+			if (!checked) {
+				try {
+					await verify(connection)
+					checked = true
+				} catch (error) {
+					connection.release()
+					// A refused schema stays refused; a lost connection is checked again on the next one.
+					if (error instanceof SearchPathError && !checked) refused = error
+					throw error
+				}
 			}
 			return unprepared(connection)
 		},
