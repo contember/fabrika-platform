@@ -19,7 +19,7 @@ import { abortableWait, decodeEnvelope, isLeaseLoss, ProviderInvocationAbort } f
 import { isCrossOrigin, isPolicyOrigin, MAX_CROSS_ORIGINS } from '@fabrika/proxy-core/headers'
 import { isProxyHost } from '@fabrika/proxy-core/manifest'
 import { z } from 'zod'
-import { cloudflareArtifactCodec } from './codec'
+import { cloudflareArtifactCodec, DEFAULT_CONFIG_PATH } from './codec'
 import {
 	accessDatabase,
 	applicationRelease,
@@ -399,6 +399,7 @@ const assertDatabaseRelease = (access: ProviderApprovedAccess): void => {
 const validateDatabase = (environment: ProviderEnvironment, access: ProviderApprovedAccess): void => {
 	assertDatabaseRelease(access)
 	const database = accessDatabase(access)
+	if (database === 'postgres') assertRootConfig(environment)
 	const published = environment.access
 	if (published !== undefined && accessDatabase(published) !== database) {
 		throw new Error(
@@ -407,6 +408,18 @@ const validateDatabase = (environment: ProviderEnvironment, access: ProviderAppr
 			}; an environment's database cannot change, so create a new environment`,
 		)
 	}
+}
+
+/**
+ * Control reads the database from the `fabrika.config.ts` at the application's root, so only an environment that deploys
+ * that file runs on Postgres: one deploying another config would run on a database its own config never chose.
+ */
+const assertRootConfig = (environment: ProviderEnvironment): void => {
+	const { configPath } = decodeEnvelope('artifact', 'cloudflare', environment.artifact, cloudflareArtifactCodec)
+	if (checkoutRelativeDirectory(configPath) === DEFAULT_CONFIG_PATH) return
+	throw new Error(
+		`environment \`${environment.env}\` deploys the config \`${configPath}\`, and Postgres through Hyperdrive is read from \`${DEFAULT_CONFIG_PATH}\` at the application's root: an environment on Postgres deploys that config`,
+	)
 }
 
 const databaseName = (database: 'sqlite' | 'postgres'): string =>

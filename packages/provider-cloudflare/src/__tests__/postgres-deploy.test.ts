@@ -205,6 +205,19 @@ describe('an application on Postgres through Hyperdrive', () => {
 		expect(rec.logs).toContain(`  wrote the Hyperdrive config stage-notes-database (${HYPERDRIVE})`)
 	})
 
+	test("the entry build asks the application's own CLI for Postgres, which a deployer that composes no database never does", async () => {
+		const result = await deploy(appConfig())
+		expect(failure(result)).toBe('')
+		const build = rec.commands.find((command) => command.args[0] === 'app' && command.args[1] === 'build')
+		expect(build?.command).toBe(CLI)
+		expect(build?.args).toEqual(['app', 'build', '--provider=cloudflare', '--config=fabrika.config.ts', '--database=postgres'])
+		rec = { commands: [], upserts: [], provisioned: [], logs: [] }
+		await deploy(appConfig(), { dryRun: true })
+		expect(rec.logs).toContain(
+			`  [dry-run] would run: fabrika app build --provider=cloudflare --config=fabrika.config.ts --database=postgres in ${APP_DIR}`,
+		)
+	})
+
 	test('the Hyperdrive config connects as the runtime role, and the Worker binds exactly its id with Smart Placement', async () => {
 		const result = await deploy(appConfig())
 		expect(failure(result)).toBe('')
@@ -325,8 +338,8 @@ describe('an application on Postgres through Hyperdrive', () => {
 		})
 
 		test('when the config and the approval disagree', async () => {
-			await refused(appConfig(), { approvedDatabase: null }, 'Control approved no database: upgrade Control')
-			await refused(appConfig({ database: null }), {}, 'Control approved Postgres for this application, and its config names no `database`')
+			await refused(appConfig(), { approvedDatabase: null }, 'Control approved no database: Control reads it statically from the `fabrika.config.ts`')
+			await refused(appConfig({ database: null }), {}, 'Control approved Postgres for this application, read from the `fabrika.config.ts` at its root')
 		})
 
 		test('below the release that serves Postgres', async () => {

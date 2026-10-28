@@ -182,7 +182,11 @@ arguments and reports.
   `fabrika.contract.ts` sits next to the config: the Bun entrypoint on Zerops, then
   the provider's build; on Cloudflare the Worker entrypoint, which exports `FabrikaApplication`, and
   `fabrika/migrations.generated.ts` (the `.sql` files of `db/migrations`, which the object applies when it boots), and
-  nothing else. An application without a contract builds as before.
+  nothing else. A Cloudflare config that chooses Postgres (`applicationTarget`) gets the `cloudflare-postgres` entry only
+  with `--database=postgres` (`requestedAppBuildDatabase`, `@fabrika/provider-contract/app-cli`), which a deployer
+  passes when it composed the database; without it, or with `--database=postgres` for a config on SQLite, the build
+  fails before it writes anything. A platform older than `0.9.0-dev.9` never passes it (ADR-0065 §10). An application
+  without a contract builds as before.
 - `app dev` (`src/app-dev.ts`) resolves no provider: it loads `src/app.ts` with `@fabrika/app/bun`'s
   `implementationAt` and serves it through `@fabrika/app/testing`'s `devKit` (the test kit and its stand-in IAM), on
   a throwaway schema of `FABRIKA_TEST_POSTGRES_URL` (`@fabrika/db/testing`), or for an application on Cloudflare (the

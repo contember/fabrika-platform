@@ -94,15 +94,44 @@ describe('app build for a contract application', () => {
 		})
 	})
 
+	const POSTGRES_CONFIG =
+		"import { defineApp } from '@fabrika/provider-cloudflare'\n\nexport default defineApp({ id: 'notes', database: { kind: 'postgres', provisioningSecret: 'DATABASE_URL' }, resources: () => [] })\n"
+
 	test('writes the Postgres Worker entrypoint, and no migrations module, for an application over Hyperdrive', async () => {
 		await withRoot(true, async (config, root) => {
-			writeFileSync(
-				config,
-				"import { defineApp } from '@fabrika/provider-cloudflare'\n\nexport default defineApp({ id: 'notes', database: { kind: 'postgres', provisioningSecret: 'DATABASE_URL' }, resources: () => [] })\n",
-			)
-			await runCli(['app', 'build', '--provider=cloudflare', `--config=${config}`])
+			writeFileSync(config, POSTGRES_CONFIG)
+			await runCli(['app', 'build', '--provider=cloudflare', `--config=${config}`, '--database=postgres'])
 			expect(readFileSync(join(root, 'fabrika', 'entry.generated.ts'), 'utf8')).toBe(generatedEntry('cloudflare-postgres'))
 			expect(existsSync(join(root, 'fabrika', 'migrations.generated.ts'))).toBe(false)
+		})
+	})
+
+	test('refuses the Postgres entrypoint unless the build was asked for Postgres, as a deployer that composes no database never asks', async () => {
+		await withRoot(true, async (config, root) => {
+			writeFileSync(config, POSTGRES_CONFIG)
+			// The argv a platform older than 0.9.0-dev.9 runs the build with.
+			await expect(runCli(['app', 'build', '--provider=cloudflare', `--config=${config}`])).rejects.toThrow(
+				'app build: fabrika.config.ts runs the application on Postgres through Hyperdrive, and this build was not asked for it (--database=postgres). A platform older than 0.9.0-dev.9',
+			)
+			await expect(runCli(['app', 'build', '--provider=cloudflare', `--config=${config}`, '--database=sqlite'])).rejects.toThrow(
+				'this build was not asked for it',
+			)
+			expect(existsSync(join(root, 'fabrika'))).toBe(false)
+		})
+	})
+
+	test('refuses a build asked for Postgres when the config chooses none, and a database it does not know', async () => {
+		await withRoot(true, async (config, root) => {
+			await expect(runCli(['app', 'build', '--provider=cloudflare', `--config=${config}`, '--database=postgres'])).rejects.toThrow(
+				"app build: this build was asked for Postgres (--database=postgres), and fabrika.config.ts states no `database: { kind: 'postgres', … }` inline",
+			)
+			await expect(runCli(['app', 'build', '--provider=cloudflare', `--config=${config}`, '--database=mysql'])).rejects.toThrow(
+				'--database=mysql: expected sqlite or postgres',
+			)
+			expect(existsSync(join(root, 'fabrika'))).toBe(false)
+			// Asked for the object's SQLite, the build writes its entry as without the option.
+			await runCli(['app', 'build', '--provider=cloudflare', `--config=${config}`, '--database=sqlite'])
+			expect(readFileSync(join(root, 'fabrika', 'entry.generated.ts'), 'utf8')).toBe(generatedEntry('cloudflare'))
 		})
 	})
 

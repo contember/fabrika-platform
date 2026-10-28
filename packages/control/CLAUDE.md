@@ -406,6 +406,11 @@ other environment, before the provider prepares anything, and the write maps a r
   and every denial is the 404 of an absent environment; `data.view` refuses an answer that carries content.
   An object whose release does not serve `state` or `migrate` answers 501 `{refused:'not_implemented'}`; the operation
   fails `not_served` at once instead of staying running, `recordedMaintenance` skips it, and deploys stay open.
+  Before any request, `data.view`, `data.content` and `data.start` ask the provider (`refuseUnserved` in
+  `control-rpc.ts`, as a restore's `operationDeploys.servesDataOperations` does): an environment whose approved access
+  has no ops channel (views) or no data operations (every start) answers 409 `not_served`, never the transport's
+  `unreachable` for an environment it holds no ops key for. A Cloudflare environment on Postgres is one. An environment
+  that published nothing is still the transport's to answer.
 - **A daily backup is a `backup` data operation the maintenance pass starts (`src/backups.ts`, ADR-0070 §7–§8).** Its
   steps are `restrict` (`read-only`), `backup` (the export's steps), `open` at a new generation, then `verify`, the
   rehearsal into the object `rehearsal`. Every step and part is recorded fenced on the lease (`app_env_backups`,
@@ -604,8 +609,13 @@ other environment, before the provider prepares anything, and the write maps a r
   fails the read (`config-unreadable`). Every other application, and a root without the file, records none, and the
   digest appends `database:<kind>` only when it is present, so no stored digest moves. `approvedAccess` hands it to the
   provider as `ProviderApprovedAccess.database`, a platform-protocol field: change it additively only (ADR-0062). The
-  Cloudflare provider's `validateAccess` refuses Postgres below its release gate and a database other than the
+  Cloudflare provider's `validateAccess` refuses Postgres below its release gate, for an environment whose artifact
+  deploys a config other than the root `fabrika.config.ts` (the file this read takes), and a database other than the
   published access's, and serves a Postgres environment no ops channel and no data operations.
+  A Control rolled back below this release cannot parse a Postgres environment's snapshot (`snapshotSchema` is strict):
+  that environment's deploys fail, and so do the reads that parse several environments' snapshots (`toAppEnvDto` over
+  the application's environment list, `edgesInto` for deploys into an environment of the same name, `namespaceMembers`
+  for its namespace's republish) until the environment is removed or Control is upgraded.
   The read takes the file of every application, whatever its provider, under `SNAPSHOT_LIMITS.readerFileBytes`: a
   config over it, or not UTF-8, fails the snapshot read. A change of `database` is
   the neutral approval line `application.database` (`classifyAccess`), so a first publication on Postgres says

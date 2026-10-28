@@ -14,5 +14,8 @@ export const cloudflareArtifactCodec: ProviderCodec<CloudflareArtifact> = {
 	decode: (payload) => artifactSchema.parse(payload),
 }
 
+/** The config an environment deploys unless its artifact names another: the one Control reads the database from. */
+export const DEFAULT_CONFIG_PATH = 'fabrika.config.ts'
+
 /** Build the default checkout recipe used by the Cloudflare runner. */
-export const cloudflareArtifact = (configPath = 'fabrika.config.ts'): CloudflareArtifact => ({ configPath })
+export const cloudflareArtifact = (configPath = DEFAULT_CONFIG_PATH): CloudflareArtifact => ({ configPath })

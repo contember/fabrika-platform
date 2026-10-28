@@ -27,6 +27,7 @@ import {
 	parseManagedEnvironment,
 } from '@fabrika/auth-core'
 import { type DeployStepResult, type ProviderManagedEnvironment, runSteps, type SchemaReconciler } from '@fabrika/provider-contract'
+import { appBuildDatabaseArgument } from '@fabrika/provider-contract/app-cli'
 import { isPolicyOrigin } from '@fabrika/proxy-core/headers'
 import { contractProxyTable } from '@fabrika/proxy-core/manifest'
 import { createHash } from 'node:crypto'
@@ -274,8 +275,14 @@ const entryBuildEnvironment = (): { readonly env: Record<string, string>; readon
 }
 
 /** Regenerate the entry and the inlined migrations from the checkout, with the application's own release of the CLI. */
-const buildEntry = async (build: EntryBuild, run: CloudflareDeployRun, cf: CloudflareCollaborators): Promise<void> => {
-	const args = [...ENTRY_BUILD_ARGS, `--config=${build.config}`]
+const buildEntry = async (
+	build: EntryBuild,
+	postgres: boolean,
+	run: CloudflareDeployRun,
+	cf: CloudflareCollaborators,
+): Promise<void> => {
+	// Asked for Postgres, the application's own CLI writes its entry; one on the object's SQLite is built as before.
+	const args = [...ENTRY_BUILD_ARGS, `--config=${build.config}`, ...(postgres ? [appBuildDatabaseArgument('postgres')] : [])]
 	if (run.dryRun) {
 		run.log(`  [dry-run] would run: fabrika ${args.join(' ')} in ${build.cwd}`)
 		return
@@ -679,7 +686,7 @@ const runStep = async (spec: CloudflareStep, env: StepEnv): Promise<void> => {
 				const result = await cf.runCommand({ command: 'sh', args: ['-c', build], cwd: dir, omitEnv, signal })
 				if (result.exitCode !== 0) throw commandError(`build (\`${build}\`)`, result)
 			}
-			if (env.entryBuild !== null) await buildEntry(env.entryBuild, run, cf)
+			if (env.entryBuild !== null) await buildEntry(env.entryBuild, env.database !== null, run, cf)
 			return
 		}
 		case 'provision-database': {
@@ -899,11 +906,13 @@ const deploymentDatabase = (
 		const approved = accessDatabase(run.approved)
 		if (database !== null && approved === 'sqlite') {
 			throw new Error(
-				"cloudflare: the config runs on Postgres (`database`), and Control approved no database: upgrade Control, or state `database: { kind: 'postgres', provisioningSecret: '<SECRET>' }` inline in `defineApp`, where Control reads it",
+				"cloudflare: the config runs on Postgres (`database`), and Control approved no database: Control reads it statically from the `fabrika.config.ts` at the application's root, so deploy that config and state `database: { kind: 'postgres', provisioningSecret: '<SECRET>' }` inline in its `defineApp`",
 			)
 		}
 		if (database === null && approved === 'postgres') {
-			throw new Error('cloudflare: Control approved Postgres for this application, and its config names no `database`')
+			throw new Error(
+				'cloudflare: Control approved Postgres for this application, read from the `fabrika.config.ts` at its root, and the config this deploy loaded names no `database`',
+			)
 		}
 	}
 	if (database === null) return null

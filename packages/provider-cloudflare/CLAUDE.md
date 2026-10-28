@@ -78,7 +78,8 @@ this one import.
 - **An application on Postgres runs through Hyperdrive, and its provisioning URL stays in the runner** (ADR-0065,
   `src/database.ts`). `database: { kind: 'postgres', provisioningSecret }` (validated by `configDatabase`, in `defineApp`
   and again in the deployer, which reads the config once) must agree with Control's approval (`accessDatabase`), and holds
-  from `servesPostgresDatabase` (`0.9.0-dev.9`; a local deploy passes). The secret is the application's own (Control's
+  from `servesPostgresDatabase` (`0.9.0-dev.9`; a local deploy passes). Control reads it from the root
+  `fabrika.config.ts`, so `validateAccess` refuses Postgres for an environment whose artifact `configPath` is another file. The secret is the application's own (Control's
   vault, read by `command.ts` beside `pipeline.secrets`): refused in `pipeline.secrets`/`vars` or as a Worker variable or
   binding, and required for a real deploy. The plan gains `provision-database` after `build`: the application's own
   `fabrika db migrate` with exactly `PATH`, `HOME`, `TMPDIR`, `FABRIKA_APP_ID`, `FABRIKA_APP_DATABASE_URL` (never an
@@ -122,7 +123,10 @@ this one import.
   The CLI is the first `node_modules/.bin/fabrika` from the config's directory up to the executor's working directory
   (where the runner installed), never above. It is checkout code whose failed output is logged, so it inherits nothing
   of the executor's environment, which carries the application's and the managed secrets: it gets `PATH`, `HOME` and
-  `TMPDIR` only. An older release, a Control that
+  `TMPDIR` only. For an environment it composed on Postgres it appends `--database=postgres`
+  (`appBuildDatabaseArgument`, `@fabrika/provider-contract/app-cli`), and nothing for one on SQLite: the application's
+  CLI writes the Postgres entry only when asked, so a deployer older than `0.9.0-dev.9`, which composes no database,
+  fails the build instead of deploying it. An older release, a Control that
   names no release, and a local deploy keep their authored `main` and the old plan (ADR-0062).
 - **Every managed credential is a Worker secret, uploaded with the version** (`src/managed-secrets.ts`): token keys,
   workload keys, mail, the platform transport, the Operations DSN, the IAM RPC key and the proxy secret. The executor

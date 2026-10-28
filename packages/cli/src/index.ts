@@ -3,7 +3,14 @@
 import { CONTRACT_FILE, type EntryRuntime, writeGeneratedEntry } from '@fabrika/app/build'
 import { applicationTarget, CONFIG_FILE } from '@fabrika/check'
 import { authoredAppProvider } from '@fabrika/provider-contract'
-import { type AppCli, appCliFromModule, type NamespaceCli } from '@fabrika/provider-contract/app-cli'
+import {
+	type AppBuildDatabase,
+	appBuildDatabaseArgument,
+	type AppCli,
+	appCliFromModule,
+	type NamespaceCli,
+	requestedAppBuildDatabase,
+} from '@fabrika/provider-contract/app-cli'
 import { installationCliFromModule, isInstallationCommand, supportsInstallationCommand } from '@fabrika/provider-contract/installation'
 import { dirname, join, relative, resolve } from 'node:path'
 import { CONTROL_USAGE, registerCompiledManifest, runControlCli } from './control.js'
@@ -20,7 +27,7 @@ Usage:
   fabrika platform upgrade --provider=zerops --to=<tag> [<installation>] [--sidecar=<path>|<owner>/<name>]
   fabrika app deploy [--provider=cloudflare] --env=<env> [--config=<path>] [--dry-run]
   fabrika app build [--provider=zerops] --env=<env> [--config=<path>] [--output=<path>]
-  fabrika app build --provider=cloudflare [--config=<path>]
+  fabrika app build --provider=cloudflare [--config=<path>] [--database=postgres]
   fabrika app dev [--port=<n>] [--host=<loopback address>]
   fabrika app register [--provider=zerops] --env=<env> --app=<id> --repo=<url> [--config=<path>]
                        [--domain=<host>] [--public-origin=<url>] [--trigger-ref=<ref>]
@@ -40,7 +47,8 @@ For app commands, the provider is read from the config returned by the selected 
 An explicit --provider is required only when no app config is available.
 
 \`app build\` first writes fabrika/entry.generated.ts for a contract application (one with fabrika.contract.ts next
-to its config); on Cloudflare that is all it does.
+to its config); on Cloudflare that is all it does. An application whose config chooses Postgres builds only with
+\`--database=postgres\`, which the deploy passes when it composed the database.
 
 \`app dev\` serves a contract application through its test kit on a loopback port, to click through its screens.
 Run \`fabrika app dev --help\` for its surface.
@@ -209,22 +217,36 @@ const runAppRegister = async (parsed: ParsedCommand): Promise<void> => {
 /** A contract application gets its generated entrypoint before the provider builds it. False when it is none. */
 /**
  * The provider names its runtime; on Cloudflare the application's own `fabrika.config.ts`, read as the checker reads
- * it, picks the entry: the Durable Object's SQLite (ADR-0065), or Postgres through Hyperdrive when its `database` says so.
+ * it, picks the entry: the Durable Object's SQLite (ADR-0065), or Postgres through Hyperdrive when its `database` says so
+ * and the build was asked for Postgres (`appBuildDatabaseArgument`): a deployer that composed no database never asks.
  */
-const entryRuntimeAt = async (root: string, runtime: EntryRuntime): Promise<EntryRuntime> => {
+const entryRuntimeAt = async (root: string, runtime: EntryRuntime, requested: AppBuildDatabase | undefined): Promise<EntryRuntime> => {
 	if (runtime !== 'cloudflare') return runtime
 	const config = Bun.file(join(root, CONFIG_FILE))
 	const target = applicationTarget(new Map((await config.exists()) ? [[CONFIG_FILE, await config.text()]] : []))
 	if (target.unreadable !== undefined) throw new Error(`app build: ${CONFIG_FILE}: ${target.unreadable}`)
-	return target.cloudflare && target.dialect === 'postgres' ? 'cloudflare-postgres' : 'cloudflare'
+	const chosen = target.cloudflare && target.dialect === 'postgres' ? 'postgres' : 'sqlite'
+	const asked = appBuildDatabaseArgument('postgres')
+	if (chosen === 'postgres' && requested !== 'postgres') {
+		throw new Error(
+			`app build: ${CONFIG_FILE} runs the application on Postgres through Hyperdrive, and this build was not asked for it (${asked}). A platform older than 0.9.0-dev.9 deploys no database for it on Cloudflare: upgrade the platform first. A build of your own passes ${asked}`,
+		)
+	}
+	if (chosen === 'sqlite' && requested === 'postgres') {
+		throw new Error(
+			`app build: this build was asked for Postgres (${asked}), and ${CONFIG_FILE} states no \`database: { kind: 'postgres', … }\` inline`,
+		)
+	}
+	return chosen === 'postgres' ? 'cloudflare-postgres' : 'cloudflare'
 }
 
 const writeContractEntry = async (argv: readonly string[], runtime: EntryRuntime): Promise<boolean> => {
+	const requested = requestedAppBuildDatabase(argv)
 	const root = dirname(resolve(process.cwd(), configPath(argv)))
 	if (!(await Bun.file(join(root, CONTRACT_FILE)).exists())) {
 		return false
 	}
-	const written = await writeGeneratedEntry(root, await entryRuntimeAt(root, runtime))
+	const written = await writeGeneratedEntry(root, await entryRuntimeAt(root, runtime, requested))
 	console.error(`fabrika: wrote ${relative(process.cwd(), written)}`)
 	return true
 }

@@ -1038,7 +1038,9 @@ describe('Cloudflare control provider', () => {
 	test("validateAccess refuses Postgres below the release that serves it, and a database other than the published access's", () => {
 		const validate = recordingProvider([]).validateAccess
 		if (validate === undefined) throw new Error('the Cloudflare provider validates a candidate')
-		const { environment: { access: _published, ...unpublished } } = deployInput()
+		const { environment: { access: _published, ...deployed } } = deployInput()
+		// Control reads the database from the root `fabrika.config.ts`, the config this environment deploys.
+		const unpublished = { ...deployed, artifact: envelope(cloudflareArtifactCodec, cloudflareArtifact()) }
 		const postgres = { ...APPROVED, database: 'postgres' as const }
 		// A first publication may choose either database.
 		expect(() => validate({ environment: unpublished, access: postgres })).not.toThrow()
@@ -1061,6 +1063,26 @@ describe('Cloudflare control provider', () => {
 		expect(() => validate({ environment: { ...unpublished, access: postgres }, access: APPROVED })).toThrow(
 			"runs on Postgres through Hyperdrive, and this commit chooses its Durable Object's SQLite",
 		)
+	})
+
+	test('validateAccess refuses Postgres for an environment that deploys a config other than the root fabrika.config.ts', () => {
+		const validate = recordingProvider([]).validateAccess
+		if (validate === undefined) throw new Error('the Cloudflare provider validates a candidate')
+		const { environment: { access: _published, ...deployed } } = deployInput()
+		const deploying = (configPath: string) => ({ ...deployed, artifact: envelope(cloudflareArtifactCodec, cloudflareArtifact(configPath)) })
+		const postgres = { ...APPROVED, database: 'postgres' as const }
+		for (const configPath of ['fabrika.config.ts', './fabrika.config.ts']) {
+			expect(() => validate({ environment: deploying(configPath), access: postgres })).not.toThrow()
+		}
+		// Control read Postgres from the root config; the environment would run another one's choice.
+		for (const configPath of ['deploy.config.ts', 'fabrika.staging.ts', 'staging/fabrika.config.ts']) {
+			expect(() => validate({ environment: deploying(configPath), access: postgres })).toThrow(
+				`environment \`production\` deploys the config \`${configPath}\`, and Postgres through Hyperdrive is read from \`fabrika.config.ts\` at the application's root`,
+			)
+			expect(() => validate({ environment: { ...deploying(configPath), access: postgres }, access: postgres })).toThrow('deploys the config')
+			// On the object's SQLite any config is deployed, as before.
+			expect(() => validate({ environment: deploying(configPath), access: APPROVED })).not.toThrow()
+		}
 	})
 
 	test('the job carries the database Control approved, refuses Postgres below its release before any runner call, and the boundary refuses another', async () => {
