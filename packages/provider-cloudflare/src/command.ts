@@ -1,7 +1,7 @@
 import { type AppEnvironment, type ApplicationObjects, parseAppEnvironmentId, parseManagedEnvironment } from '@fabrika/auth-core'
 import { readFile } from 'node:fs/promises'
 import { z } from 'zod'
-import type { CloudflareAppConfig } from './authoring'
+import { type CloudflareAppConfig, configDatabase } from './authoring'
 import { loadCloudflareConfig } from './collaborators'
 import { type CloudflareDeployResult, createCloudflareDeployer, type PlatformIamTarget } from './provider'
 import {
@@ -131,6 +131,12 @@ export const readApprovedAccess = async (path: string | undefined): Promise<Runn
 	return access.data
 }
 
+/** The name of the secret holding the database's provisioning URL, for a config on Postgres. */
+const provisioningSecret = (config: CloudflareAppConfig): readonly string[] => {
+	const database = configDatabase(config.database)
+	return database === null ? [] : [database.provisioningSecret]
+}
+
 /** The approved access as the deployer takes it: the contract Control read at the commit, and its application's digest. */
 const approvedRun = (access: RunnerApprovedAccess | undefined): { readonly approved?: RunnerApprovedAccess } =>
 	access === undefined ? {} : { approved: access }
@@ -190,7 +196,8 @@ export const deployCloudflareConfig = async (options: CloudflareCommandDeployOpt
 		cwd: loaded.cwd,
 		configPath: loaded.absolutePath,
 		...(options.stateNamespace === undefined ? {} : { stateNamespace: options.stateNamespace }),
-		secrets: declaredValues(loaded.config.pipeline?.secrets),
+		// The database's provisioning secret is the application's own and no Worker's: the deployer reads it, and keeps it in the runner.
+		secrets: declaredValues([...(loaded.config.pipeline?.secrets ?? []), ...provisioningSecret(loaded.config)]),
 		vars: declaredValues(loaded.config.pipeline?.vars),
 		// The runner hands what Control handed its job; parsed here, where it enters the executor.
 		managedEnvironment: parseManagedEnvironment(requiredValues(options.managedVarNames)),

@@ -1,7 +1,14 @@
 import { Worker } from 'oblaka-iac'
 import type { CloudflareAppConfig } from './authoring'
 
-export type CloudflareStepKind = 'build' | 'provision-resources' | 'migrate' | 'deploy-worker' | 'reconcile-schema' | 'sync-secrets'
+export type CloudflareStepKind =
+	| 'build'
+	| 'provision-database'
+	| 'provision-resources'
+	| 'migrate'
+	| 'deploy-worker'
+	| 'reconcile-schema'
+	| 'sync-secrets'
 
 export interface CloudflareStep {
 	readonly id: string
@@ -72,8 +79,17 @@ export const PLATFORM_RESOURCE_NAMES: ReadonlySet<string> = new Set([
 
 const ENTRY_BUILD = '`fabrika app build --provider=cloudflare`'
 
-/** `regeneratesEntry`: the release pins the generated entry, so the build step always runs, after `pipeline.build`. */
-export const buildPlan = (config: CloudflareAppConfig, worker: Worker, regeneratesEntry: boolean): readonly CloudflareStep[] => {
+/**
+ * `regeneratesEntry`: the release pins the generated entry, so the build step always runs, after `pipeline.build`.
+ * `provisionsDatabase`: the application runs on Postgres through Hyperdrive, so its migrations run and its Hyperdrive
+ * config is written before oblaka writes the configs that bind it.
+ */
+export const buildPlan = (
+	config: CloudflareAppConfig,
+	worker: Worker,
+	regeneratesEntry: boolean,
+	provisionsDatabase: boolean,
+): readonly CloudflareStep[] => {
 	const steps: CloudflareStep[] = []
 
 	const build = config.pipeline?.build
@@ -83,6 +99,14 @@ export const buildPlan = (config: CloudflareAppConfig, worker: Worker, regenerat
 		steps.push({ id: 'build', kind: 'build', description: `Build the Worker (\`${build}\`)` })
 	} else if (regeneratesEntry) {
 		steps.push({ id: 'build', kind: 'build', description: `Regenerate the Worker's entry (${ENTRY_BUILD})` })
+	}
+
+	if (provisionsDatabase) {
+		steps.push({
+			id: 'provision-database',
+			kind: 'provision-database',
+			description: 'Migrate the Postgres database (`fabrika db migrate`) and write its Hyperdrive config',
+		})
 	}
 
 	steps.push({ id: 'provision-resources', kind: 'provision-resources', description: 'Provision Cloudflare resources via oblaka' })

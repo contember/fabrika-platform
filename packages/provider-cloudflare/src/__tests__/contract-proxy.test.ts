@@ -77,6 +77,7 @@ async function deployedProxy(): Promise<Worker> {
 				return { wranglerConfigs: [...configs], wranglerConfig: configs[0]?.config ?? {} }
 			},
 			writeOutcome: async () => {},
+			hyperdrive: { upsert: () => Promise.reject(new Error('an application on SQLite writes no Hyperdrive config')) },
 		},
 	})({
 		appId: deployment.app,
