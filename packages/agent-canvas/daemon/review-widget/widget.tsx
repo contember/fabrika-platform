@@ -1,13 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { z } from 'zod'
-import {
-	isUnsentNote,
-	type ReviewAnchor,
-	reviewAnchorSchema,
-	type ReviewSource,
-	type ReviewThread,
-	type ReviewThreadState,
-} from '../src/review/model'
+import { type ReviewAnchor, reviewAnchorSchema, type ReviewSource, type ReviewThread, type ReviewThreadState } from '../src/review/model'
+import { isUnsentNote } from '../src/review/threads'
 import { describe, find } from './anchor'
 import type { ReviewClient } from './client'
 import { captureElement } from './screenshot'

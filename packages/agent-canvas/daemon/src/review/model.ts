@@ -102,11 +102,6 @@ export const reviewThreadSchema = z.object({
 })
 export type ReviewThread = z.infer<typeof reviewThreadSchema>
 
-/** A note the person saved and has not sent: open, with their own comment last rather than the agent's answer. */
-export function isUnsentNote(thread: ReviewThread): boolean {
-	return thread.state === 'open' && thread.comments.at(-1)?.author === 'user'
-}
-
 export const reviewThreadsFileSchema = z.object({ threads: z.array(reviewThreadSchema) })
 
 const commentBody = z.string().trim().min(1).max(20_000)
