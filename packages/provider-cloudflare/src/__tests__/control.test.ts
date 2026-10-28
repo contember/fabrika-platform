@@ -733,6 +733,20 @@ describe('Cloudflare control provider', () => {
 		expect(jobs).toEqual([])
 	})
 
+	test('an application on Postgres takes no handler cap: only the object SQLite holds a transaction with a time limit', async () => {
+		const jobs: CloudflareRunnerJob[] = []
+		const input = deployInput()
+		const contract = {
+			...notesArtifact,
+			procedures: {
+				'api.slow': { rate: { perClient: null, perCaller: null, perEndpoint: null, bytesPerHour: null }, challenge: null, timeoutMs: 25_001 },
+			},
+		}
+		const access = { ...APPROVED, contract, contractDigest: contractDigest(contract), database: 'postgres' as const }
+		await recordingProvider(jobs).deploy({ ...input, environment: { ...input.environment, access } })
+		expect(jobs).toHaveLength(1)
+	})
+
 	test('refuses a job longer than one 14-minute segment before any runner call, only at a release that caps segments (ADR-0062)', async () => {
 		const jobs: CloudflareRunnerJob[] = []
 		const input = deployInput()
@@ -1010,6 +1024,66 @@ describe('Cloudflare control provider', () => {
 		)
 			.toBe(false)
 		expect(cloudflareRunnerJobSchema.safeParse({ ...job, approvedAccess: { kind: 'artifact', contract: notesArtifact } }).success).toBe(false)
+	})
+
+	test('an application on Postgres gets no ops channel and no data operations, whatever its release', () => {
+		const provider = recordingProvider([])
+		const postgres = { ...APPROVED, database: 'postgres' as const }
+		expect(provider.opsChannel?.(postgres)).toBe(false)
+		expect(provider.dataOperations?.(postgres)).toBe(false)
+		expect(provider.opsChannel?.(APPROVED)).toBe(true)
+		expect(provider.dataOperations?.(APPROVED)).toBe(true)
+	})
+
+	test("validateAccess refuses Postgres below the release that serves it, and a database other than the published access's", () => {
+		const validate = recordingProvider([]).validateAccess
+		if (validate === undefined) throw new Error('the Cloudflare provider validates a candidate')
+		const { environment: { access: _published, ...unpublished } } = deployInput()
+		const postgres = { ...APPROVED, database: 'postgres' as const }
+		// A first publication may choose either database.
+		expect(() => validate({ environment: unpublished, access: postgres })).not.toThrow()
+		expect(() => validate({ environment: unpublished, access: APPROVED })).not.toThrow()
+		expect(() => validate({ environment: unpublished, access: { ...postgres, framework: '0.9.0-dev.9' } })).not.toThrow()
+		for (const framework of ['0.9.0-dev.8', '0.8.2', ...PUBLISHED_PRERELEASES]) {
+			expect(() => validate({ environment: unpublished, access: { ...postgres, framework } })).toThrow(
+				`@fabrika/app ${framework} cannot run on Postgres through Hyperdrive`,
+			)
+		}
+		// An access approved before Control recorded the pin reads as its minor's floor, below the gate.
+		const { framework: _pin, ...unpinned } = postgres
+		expect(() => validate({ environment: unpublished, access: unpinned })).toThrow('cannot run on Postgres through Hyperdrive')
+		// The same database again is no change.
+		expect(() => validate({ environment: { ...unpublished, access: postgres }, access: postgres })).not.toThrow()
+		expect(() => validate({ environment: { ...unpublished, access: APPROVED }, access: APPROVED })).not.toThrow()
+		expect(() => validate({ environment: { ...unpublished, access: APPROVED }, access: postgres })).toThrow(
+			"environment `production` runs on its Durable Object's SQLite, and this commit chooses Postgres through Hyperdrive; an environment's database cannot change, so create a new environment",
+		)
+		expect(() => validate({ environment: { ...unpublished, access: postgres }, access: APPROVED })).toThrow(
+			"runs on Postgres through Hyperdrive, and this commit chooses its Durable Object's SQLite",
+		)
+	})
+
+	test('the job carries the database Control approved, refuses Postgres below its release before any runner call, and the boundary refuses another', async () => {
+		const jobs: CloudflareRunnerJob[] = []
+		const input = deployInput()
+		const postgres = { ...APPROVED, database: 'postgres' as const }
+		await recordingProvider(jobs).deploy({ ...input, dryRun: false, environment: { ...input.environment, access: postgres } })
+		expect(jobs[0]?.approvedAccess?.database).toBe('postgres')
+		const parsed = cloudflareRunnerJobSchema.safeParse(jobs[0])
+		expect(parsed.success && parsed.data.approvedAccess?.database).toBe('postgres')
+		expect(cloudflareRunnerJobSchema.safeParse({ ...jobs[0], approvedAccess: { ...jobs[0]?.approvedAccess, database: 'mysql' } }).success).toBe(false)
+		expect(cloudflareRunnerJobSchema.safeParse({ ...jobs[0], approvedAccess: { ...jobs[0]?.approvedAccess, database: 'sqlite' } }).success).toBe(false)
+		// An application on the object's SQLite sends no database.
+		await recordingProvider(jobs).deploy({ ...input, dryRun: false })
+		expect(jobs[1]?.approvedAccess === undefined ? 'missing' : 'database' in jobs[1].approvedAccess).toBe(false)
+		await expect(
+			recordingProvider(jobs).deploy({
+				...input,
+				dryRun: false,
+				environment: { ...input.environment, access: { ...postgres, framework: '0.9.0-dev.8' } },
+			}),
+		).rejects.toThrow('@fabrika/app 0.9.0-dev.8 cannot run on Postgres through Hyperdrive')
+		expect(jobs).toHaveLength(2)
 	})
 
 	test('a reconcile fails a run whose runner reported a schema for an environment Control approved nothing for', async () => {

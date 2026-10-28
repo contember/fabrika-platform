@@ -597,6 +597,15 @@ other environment, before the provider prepares anything, and the write maps a r
   reads as the empty baseline (`approvedSnapshot`). `runs.pending_access_json` is no longer read or written. The
   published snapshot lives in `app_envs.published_snapshot_json`. Snapshot log lines are codes and counts only. A new write path must take it the same way; reading access
   from the provider artifact is a bug. An approval names both digests and holds only for them.
+- **The snapshot records the database a Cloudflare application chose (`AccessSnapshot.database`, `read.ts`).** The read
+  takes `fabrika.config.ts` at the root, when present, through `applicationTarget` of `@fabrika/check/contract`, the
+  checker's own static read: `'postgres'` only for a `@fabrika/provider-cloudflare` `defineApp` that states
+  `database: { kind: 'postgres', … }` inline; a Cloudflare config that names `database` in a form the read cannot settle
+  fails the read (`config-unreadable`). Every other application, and a root without the file, records none, and the
+  digest appends `database:<kind>` only when it is present, so no stored digest moves. `approvedAccess` hands it to the
+  provider as `ProviderApprovedAccess.database`, a platform-protocol field: change it additively only (ADR-0062). The
+  Cloudflare provider's `validateAccess` refuses Postgres below its release gate and a database other than the
+  published access's, and serves a Postgres environment no ops channel and no data operations.
 - **An application is read by the reader of the framework release it pins (ADR-0062, `readers.ts`, `formats.ts`).**
   `readAccessSnapshot` reads the `@fabrika/app` release from `<root>/bun.lock` and picks this release's reader for its
   own minor, or the bundled npm alias of an older one (`@fabrika/check-0.4`, `@fabrika/check-0.5`,

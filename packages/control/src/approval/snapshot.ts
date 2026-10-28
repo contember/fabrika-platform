@@ -38,6 +38,12 @@ export interface AccessSnapshot {
 	 * there is none. Not part of the digest: it follows from the migration files, whose checksums the digest covers.
 	 */
 	readonly fileAdoptions?: readonly FileAdoption[]
+	/**
+	 * The database the application chose in `fabrika.config.ts`, read statically: Postgres through Hyperdrive on
+	 * Cloudflare. Absent means the provider's default, so a snapshot that chose none keeps the digest it had before the
+	 * field existed.
+	 */
+	readonly database?: 'postgres'
 	/** The `@fabrika/check` release of the reader that read it; empty for the empty snapshot. */
 	readonly checker: string
 	/** The `@fabrika/app` release the application's `bun.lock` pins. Absent in a snapshot read before Control recorded it. */
@@ -72,6 +78,7 @@ const snapshotSchema = z.object({
 	migrations: z.array(z.object({ name: z.string().min(1), checksum: z.string().regex(/^[0-9a-f]{64}$/) }).strict()),
 	databaseCode: z.array(deviationSchema).optional(),
 	fileAdoptions: z.array(fileAdoptionSchema).optional(),
+	database: z.literal('postgres').optional(),
 	checker: z.string(),
 	framework: z.string().regex(FRAMEWORK_RELEASE_PATTERN).optional(),
 	// The gates and IAM schema of an application without a contract, in a snapshot stored before those were refused.
@@ -90,6 +97,7 @@ export function parseSnapshot(raw: string): AccessSnapshot {
 		migrations: parsed.migrations,
 		...(parsed.databaseCode === undefined || parsed.databaseCode.length === 0 ? {} : { databaseCode: parsed.databaseCode }),
 		...(parsed.fileAdoptions === undefined || parsed.fileAdoptions.length === 0 ? {} : { fileAdoptions: parsed.fileAdoptions }),
+		...(parsed.database === undefined ? {} : { database: parsed.database }),
 		checker: parsed.checker,
 		...(parsed.framework === undefined ? {} : { framework: parsed.framework }),
 	}
@@ -112,17 +120,19 @@ export function serializePublished(snapshot: AccessSnapshot): string {
 }
 
 /**
- * The digest of the access a snapshot grants: the canonical contract, the migration list and the database code. The
- * checker version is not part of it, so reading the same commit with a newer checker approves nothing new. The
- * trailing `null` stood for artifact access; it stays, and the database code follows only when there is some, so that
- * the digests stored approvals name do not change.
+ * The digest of the access a snapshot grants: the canonical contract, the migration list, the database code and the
+ * database the application chose. The checker version is not part of it, so reading the same commit with a newer
+ * checker approves nothing new. The trailing `null` stood for artifact access; it stays, and the database code and the
+ * database follow only when there are some, so that the digests stored approvals name do not change.
  */
 export function snapshotDigest(snapshot: AccessSnapshot): string {
 	const migrations = [...snapshot.migrations].sort((a, b) => compareText(a.name, b.name))
 	const contract = snapshot.contract === null ? 'null' : readArtifactJson(snapshot.contract, snapshot.older)
 	const deviations = [...snapshot.databaseCode ?? []].sort((a, b) => compareText(deviationKey(a), deviationKey(b)))
 	const databaseCode = deviations.length === 0 ? '' : `\n${canonicalJson(deviations)}`
-	return `sha256:${sha256Hex(`${contract}\n${canonicalJson(migrations)}\nnull${databaseCode}`)}`
+	// Never a JSON array, so it cannot read as database code.
+	const database = snapshot.database === undefined ? '' : `\ndatabase:${snapshot.database}`
+	return `sha256:${sha256Hex(`${contract}\n${canonicalJson(migrations)}\nnull${databaseCode}${database}`)}`
 }
 
 /** A deviation's identity across snapshots: its file, kind and object. Its line moves only with an edit of the file. */
@@ -134,8 +144,8 @@ export const compareText = (a: string, b: string): number => (a < b ? -1 : a > b
 
 /**
  * What a provider publishes for a snapshot: the contract in this release's model and the IAM schema compiled from it,
- * the digest the application's own release computes, the reader's release, which its build checks with, and the
- * application's pinned release, which the provider's release gates read.
+ * the digest the application's own release computes, the reader's release, which its build checks with, the
+ * application's pinned release, which the provider's release gates read, and the database the application chose.
  */
 export function approvedAccess(snapshot: AccessSnapshot): ProviderApprovedAccess | undefined {
 	const contract = snapshot.contract
@@ -146,6 +156,7 @@ export function approvedAccess(snapshot: AccessSnapshot): ProviderApprovedAccess
 		schema: schemaFromContract(contract),
 		checker: snapshot.checker,
 		...(snapshot.framework === undefined ? {} : { framework: snapshot.framework }),
+		...(snapshot.database === undefined ? {} : { database: snapshot.database }),
 	}
 }
 
