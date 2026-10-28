@@ -406,7 +406,7 @@ export const workloadRows = (
 			count(*) filter (where t.status <> 'done')::int as open,
 			count(*) filter (where t.status <> 'done' and t.due_on < current_date)::int as overdue
 		from tasks t
-		where ${sql.scope(org, 'tasks', 't')}
+		where ${sql.scope(org, 'tasks', { alias: 't' })}
 			and (${status}::text is null or t.status::text = ${status})
 		group by t.assignee
 		order by t.assignee`
@@ -421,7 +421,7 @@ export const workloadRows = (
 ## Raw SQL: `sql: 'read'`
 
 Raw SQL is legitimate for a join, a report, an `OR` or `IS NULL` filter, or a bulk write. Declare it on the endpoint;
-`ctx.sql` exists only there. It runs on Postgres only: on Cloudflare a site that declares `sql` is refused.
+`ctx.sql` exists only there. It runs on Postgres and, on Cloudflare, on SQLite (the rules of each are below).
 
 ```ts src/reports/endpoints.ts
 import { attachment } from '@fabrika/app/contract'
@@ -475,7 +475,7 @@ export const reports = app.group({ callers: ['human'] }, (r) => ({
 			const rows = await ctx.sql(TaskExportRow)`
 				select t.title, t.status, t.assignee, t.due_on::text as due_on
 				from tasks t
-				where ${ctx.sql.scope(ctx.target, 'tasks', 't')}
+				where ${ctx.sql.scope(ctx.target, 'tasks', { alias: 't' })}
 				order by t.title
 				limit 10000`
 			await ctx.db.target.project_exports.insert({ row_count: rows.length })
@@ -487,7 +487,7 @@ export const reports = app.group({ callers: ['human'] }, (r) => ({
 - Every `${…}` of a value is a bound parameter, never SQL text. The one exception is `${ctx.sql.scope(…)}`: it is SQL
   (the predicate) around its own bound values, and it may have no value at all (`(true)`, `(false)`). Put no
   interpolation inside quotes, a quoted name, a dollar body or a comment: the tag refuses it.
-- **Scope every scoped table the statement reads with `${ctx.sql.scope(capability, '<table>', '<alias>')}`.**
+- **Scope every scoped table the statement reads with `${ctx.sql.scope(capability, '<table>', { alias: '<alias>' })}`.**
   `ctx.sql` has no scope predicate of its own. The fragment is the capability's whole predicate on that table: for a
   `Ref` the object's column and every link of its chain, so a project moved to another org is out; for a `Within` its
   values, each container grant on its own column, every row for a global grant and none for an empty one. The
@@ -495,29 +495,31 @@ export const reports = app.group({ callers: ['human'] }, (r) => ({
   `Within` it minted to `tx.sql.scope`. A table the capability does not reach is a type error at the table name. A
   reference table is shared by every scope and needs no fragment, and no statement writes it. An application table
   needs none either (the intake job of `references/public-intake.md`).
-- **A fragment carries its action into the statement.** On the table an `update` or `delete` writes it needs the
-  table's own update or delete action (`ctx.within('tasks.write', 'project')` for `update tasks`), so a read action
-  never scopes a write. A column's own write action (`columns: { assignee: { write: 'tasks.assign' } }`) scopes an
-  `update` too, when every column its `set` assigns declares that action: a table with only column writes is updated
-  this way; anywhere else it needs an action the handles read the table with. `insert … on conflict do
-  update … where ${…}` is an update of the inserted table. The fragment answers for its own query block: a CTE that
-  updates and a statement that deletes take one capability each, and another occurrence of the written table (a
-  subquery, `from tasks other`) reads with a read capability under its own alias. A refused fragment fails the call
-  before anything is sent.
-- **A fragment is a conjunct.** It stands alone, joined by AND, at the top level of a WHERE or JOIN … ON clause whose
-  top level holds no OR: `where (<the whole filter>) and ${…}`, `join projects p on p.id = t.project_id and ${…}`.
-  The tag refuses `where a or ${…}`, `where a or b and ${…}`, `not ${…}`, a fragment in parentheses or outside such a
-  clause. Never scope by hand with `ctx.target.value` alone: it drops the chain. The generated tests check that an `in`
-  endpoint with `sql` leaks nothing of another scope.
+- **A fragment states what it scopes.** `use` is `'read'` by default; the table an `update` or `delete` writes takes
+  `{ use: 'update' }` or `{ use: 'delete' }`, which needs the table's own update or delete action
+  (`ctx.within('tasks.write', 'project')` for `update tasks`) on a `'write'` site, so a read action never scopes a
+  write. A column's own write action (`columns: { assignee: { write: 'tasks.assign' } }`) is enough for `use: 'update'`
+  too; set only the columns it writes. `insert … on conflict do update … where ${…}` scopes the inserted table with
+  `use: 'update'`. Each block takes its own fragment: a CTE that updates and a statement that deletes take one
+  capability each, and another occurrence of the written table (a subquery, `from tasks other`) reads under its own
+  alias. A refused fragment fails the call before anything is sent.
+- **A fragment is a conjunct.** Put it alone, joined by AND, at the top level of a WHERE or JOIN … ON clause whose top
+  level holds no OR: `where (<the whole filter>) and ${…}`, `join projects p on p.id = t.project_id and ${…}`. The tag
+  does not read where it stands, which relation it filters or which columns a `set` assigns: the approver does, and a
+  fragment under an `or` widens the statement to every row. Never scope by hand with `ctx.target.value` alone: it drops
+  the chain. The generated tests check that an `in` endpoint with `sql` leaks nothing of another scope.
 - Rows are parsed like `fromRow` (snake_case to camelCase), then by the schema. Postgres sends `bigint` and `numeric`
   as text: cast a count (`count(*)::int`), and a sum to the type its output declares (`::int` for an integer sum that
   fits, `::float8` for a fractional one), or keep it a string. A sum over no rows is `null`: `coalesce(sum(…), 0)`.
 - An optional filter is `(${value}::text is null or <column> = ${value})`.
 - One statement: `select`, `with`, `values`, plus `insert`, `update` and `delete` on a `'write'` site (a mutation, a
-  job or a webhook). Refused before anything is sent: DDL, `SET`, `COPY`, transaction control, another schema, any
-  `fabrika_*` or `pg_*` name, and calls outside the reviewed built-ins. A function your migrations declare is refused
-  too: call it from a view. These name rules are defense in depth; the runtime role (DML only) is the boundary.
-- A query runs in a read-only transaction; a mutation's `ctx.sql` runs in the same transaction as its handles.
+  job or a webhook). Refused before anything is sent: DDL, `SET`, `COPY`, transaction control, and any `fabrika_*`
+  name. On Postgres also another schema, any `pg_*` name, and calls outside the reviewed built-ins; a function your migrations declare is refused too: call it from a view. On SQLite also any `sqlite_*`
+  name, `PRAGMA`, `ATTACH`, and a parameter you write yourself (`?`, `:x`, `@x`, `$x`): interpolate every value.
+- On SQLite write SQLite: `count(*)` is already an integer, there is no `::` cast (`cast(x as text)`), and a list value
+  binds as JSON (`t.status in (select value from json_each(${list}))`).
+- A query runs in a read-only transaction; a mutation's `ctx.sql` runs in the same transaction as its handles. A
+  `'read'` statement writes nothing, even in a mutation: one that tries fails the call.
 
 ## A file download: `attachment`
 

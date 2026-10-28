@@ -3,8 +3,9 @@
 import type { TablePolicyArtifact } from '@fabrika/auth-core'
 import { ContractError, readContractSource } from '@fabrika/check/contract'
 import { describe, expect, test } from 'bun:test'
-import { classifyAccess, probePaths } from '../approval/diff'
+import { probePaths } from '../approval/diff'
 import { type AccessSnapshot, EMPTY_SNAPSHOT, type MigrationEntry } from '../approval/snapshot'
+import { classifyAccess } from './helpers/access'
 import { BASE, edited } from './helpers/contracts'
 
 const NOTES_TABLE: TablePolicyArtifact = {

@@ -6,6 +6,7 @@ import type { Admissions } from './admissions'
 import type { Session } from './database'
 import type { WebhookTables } from './framework-tables'
 import type { JobLeases } from './job-leases'
+import type { JobWakes } from './job-wakes'
 import type { DataAccess } from './orm'
 import type { DataLayerRuntime, TableContext, TableProbe } from './store'
 import type { StoredFiles } from './stored-files'
@@ -20,6 +21,8 @@ export type Locator = (dimension: string, id: string, using?: Session) => Promis
 export interface FrameworkTables {
 	readonly webhooks: WebhookTables
 	readonly jobs: JobLeases
+	/** A job's durable pending work (`fabrika_wakes`), which follows its lease, and the scheduler's next wake over both. */
+	readonly wakes: JobWakes
 	/** A procedure's admission buckets, the challenge tokens it accepted and its byte budget. */
 	readonly admissions: Admissions
 	/** Every stored file (`fabrika_files`): staged before its object, claimed at its first reference, swept unreferenced. */

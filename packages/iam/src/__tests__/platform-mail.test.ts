@@ -1,7 +1,7 @@
 // IAM on Bun sends through Control's mail relay when it knows Control's origin and has delivery switched on, and
 // otherwise keeps its own provider (or none, with the manual action-link flow).
 
-import { installationMailKey, PLATFORM_MAIL_SEND_PATH, PlatformEmailSender } from '@fabrika/email/platform'
+import { installationMailKey, PLATFORM_MAIL_SEND_PATH } from '@fabrika/email/platform'
 import { ResendEmailSender } from '@fabrika/email/resend'
 import { afterEach, describe, expect, mock, spyOn, test } from 'bun:test'
 import { createRuntime } from '../node/runtime'
@@ -53,7 +53,6 @@ describe("IAM's mail through the platform relay", () => {
 		const runtime = await createRuntime({ ...base, ...resend, FABRIKA_CONTROL_URL: CONTROL_URL })
 		try {
 			const sender = buildServices(runtime.env).email
-			expect(sender).toBeInstanceOf(PlatformEmailSender)
 			const result = await sender?.send(message, AbortSignal.timeout(5_000))
 			expect(result).toEqual({ status: 'accepted', provider: 'platform', messageId: 'relay-message-1' })
 			expect(requests).toEqual([{
@@ -61,6 +60,27 @@ describe("IAM's mail through the platform relay", () => {
 				authorization: `Bearer ${await installationMailKey(RPC_KEY)}`,
 				body: message,
 			}])
+		} finally {
+			await runtime.shutdown()
+		}
+	})
+
+	test('when the relay knows no such key, as before Control is deployed, the message goes out with IAM own provider', async () => {
+		const urls: string[] = []
+		const answer = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+			const request = new Request(input, init)
+			urls.push(request.url)
+			return request.url.startsWith(CONTROL_URL)
+				? Response.json({ error: { code: 'provider_unauthorized' } }, { status: 401 })
+				: Response.json({ id: 'resend-message-1' })
+		}
+		spyOn(globalThis, 'fetch').mockImplementation(Object.assign(answer, { preconnect: fetch.preconnect }))
+		spyOn(console, 'warn').mockImplementation(() => {})
+		const runtime = await createRuntime({ ...base, ...resend, FABRIKA_CONTROL_URL: CONTROL_URL })
+		try {
+			const result = await buildServices(runtime.env).email?.send(message, AbortSignal.timeout(5_000))
+			expect(result).toEqual({ status: 'accepted', provider: 'resend', messageId: 'resend-message-1' })
+			expect(urls).toEqual([`${CONTROL_URL}${PLATFORM_MAIL_SEND_PATH}`, 'https://api.resend.com/emails'])
 		} finally {
 			await runtime.shutdown()
 		}

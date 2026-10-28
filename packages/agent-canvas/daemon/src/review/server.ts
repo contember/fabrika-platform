@@ -12,7 +12,8 @@ import {
 	type ReviewWaitFrame,
 } from './model'
 import type { ReviewProxies } from './proxy'
-import { ReviewError, type ReviewStore } from './store'
+import type { ReviewStore } from './store'
+import { ReviewError } from './threads'
 
 export interface ReviewSocketData {
 	type: 'review'

@@ -30,6 +30,17 @@ export const PROCEDURE_LIMITS = {
 } as const
 
 /**
+ * The slowest body a procedure or a webhook waits for: its deadline is `maxBytes` at `bytesPerSecond`, `minMs` at least.
+ * The handler's own `timeoutMs` starts after the last byte, so the approval diff names both.
+ */
+export const BODY_DEADLINE = { bytesPerSecond: 16 * 1024, minMs: 30_000 } as const
+
+/** How long a body of at most `maxBytes` may take to arrive. */
+export function bodyDeadlineMs(maxBytes: number): number {
+	return Math.max(BODY_DEADLINE.minMs, Math.ceil((maxBytes / BODY_DEADLINE.bytesPerSecond) * 1000))
+}
+
+/**
  * A procedure with file fields is `multipart/form-data`: its JSON input travels in the first part, named `input`, and
  * each file in a part named after its field. A field of several files sends one part per file, under its name.
  */
@@ -46,9 +57,18 @@ export const WEBHOOK_LIMITS = {
 	timeoutMs: PROCEDURE_LIMITS.timeoutMs,
 } as const
 
-/** A job attempt's time limit (`limits.timeoutMs`) and its ceiling, which keeps a lease and a timer within a day. */
+/**
+ * The longest job segment on Cloudflare: setup, one attempt and its finish. A framework policy inside the 15 minutes
+ * `waitUntil` keeps an object alive, not a platform guarantee; longer work chunks through claims.
+ */
+export const CLOUDFLARE_MAX_JOB_SEGMENT_MS = 14 * 60_000
+
+/**
+ * A job attempt's time limit (`limits.timeoutMs`) and its ceiling, which keeps a lease and a timer within a day. The
+ * default is one Cloudflare segment, so a job that declares no limit deploys on either provider.
+ */
 export const JOB_LIMITS = {
-	timeoutMs: 15 * 60_000,
+	timeoutMs: CLOUDFLARE_MAX_JOB_SEGMENT_MS,
 	maxTimeoutMs: 24 * 60 * 60_000,
 } as const
 

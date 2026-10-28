@@ -2,8 +2,10 @@
 // environment's active one and answers plain-language lines for the approver. Anything it cannot show to narrow
 // access widens it.
 
+import { bodyDeadlineMs } from '@fabrika/app/contract'
 import {
 	type AdmissionRate,
+	APP_CALLER_PREFIX,
 	type AttachmentShape,
 	canonicalizeArtifact,
 	canonicalJson,
@@ -51,7 +53,16 @@ import {
 	type TablePolicyArtifact,
 	type WebhookScheme,
 } from '@fabrika/auth-core'
-import type { DeviationSubjectDto } from '@fabrika/control-contract'
+import {
+	type ChangeAudienceDto,
+	type ChangeConsequenceDto,
+	type ChangeSubjectDto,
+	type ChangeSubjectKind,
+	type DeviationSubjectDto,
+	type ReviewReason,
+	SURFACE_REACHES,
+	type SurfaceReach,
+} from '@fabrika/control-contract'
 import type { MigrationDeviation } from '@fabrika/platform-node/sql'
 import { type AccessSnapshot, deviationKey } from './snapshot'
 
@@ -63,19 +74,28 @@ import { type AccessSnapshot, deviationKey } from './snapshot'
 export type AccessEffect = 'widens' | 'narrows' | 'neutral'
 
 /**
- * One plain-language line and its effect. `review: 'closer'` marks a step off the paved road (declared reach, database
- * code) or a change the diff cannot classify: the approver reads the code behind it, not only the line.
+ * One plain-language line before it is placed: its effect and words. `review: 'closer'` marks a line the approver reads
+ * the code behind, not only the line (a step off the paved road, a call anyone sets off, …), and `reason` says which. `environmentOrigins` marks a line that opens an endpoint to the pages on the origins
+ * the environment lists (`crossOrigin: 'environment'`): the list is the environment's, not the contract's, so the
+ * approval page shows it beside this line.
  */
-export interface AccessChange {
-	readonly effect: AccessEffect
-	readonly line: string
-	readonly review?: 'closer'
-	/**
-	 * The line opens an endpoint to the pages on the origins the environment lists (`crossOrigin: 'environment'`). The
-	 * list is the environment's, not the contract's, so the approval page shows it beside this line.
-	 */
-	readonly environmentOrigins?: true
-}
+type Line =
+	& {
+		readonly effect: AccessEffect
+		readonly line: string
+		readonly environmentOrigins?: true
+		readonly consequence?: ChangeConsequenceDto
+	}
+	& ({ readonly review?: undefined; readonly reason?: undefined } | { readonly review: 'closer'; readonly reason: ReviewReason })
+
+/** A line and the comparison that produced it, a stable code (`endpoint.body-limit`). */
+type RuledLine = Line & { readonly rule: string }
+
+/**
+ * One line of an access change, placed (ADR-0050 §3): its words, the comparison that produced it and what it is about.
+ * An endpoint's line also says who reaches the endpoint. A line is built where its words are, so the two never drift.
+ */
+export type AccessChange = RuledLine & { readonly subject: ChangeSubjectDto; readonly audience?: ChangeAudienceDto }
 
 /**
  * `none`: no line at all. `no-widening`: lines, none of which widens (they narrow or leave access unchanged). Both
@@ -91,136 +111,229 @@ export interface AccessClassification {
 export function classifyAccess(baseline: AccessSnapshot, candidate: AccessSnapshot): AccessClassification {
 	const changes = new Changes()
 	compareContracts(changes, baseline.contract, candidate.contract)
-	compareKeyed(changes, byName(baseline.migrations), byName(candidate.migrations), {
+	compareKeyed(changes, 'migration', byName(baseline.migrations), byName(candidate.migrations), {
 		added: (name) => `New migration \`${name}\``,
 		removed: (name) => `Migration \`${name}\` is removed`,
-		changed: (name, before, after) => (before.checksum === after.checksum ? [] : [widening(`Migration \`${name}\` changes`)]),
+		changed: (
+			name,
+			before,
+			after,
+		) => (before.checksum === after.checksum ? [] : ruled('migration.changed', [widening(`Migration \`${name}\` changes`)])),
 	})
 	compareDatabaseCode(changes, baseline, candidate)
-	const list = changes.list
+	compareFileAdoptions(changes, baseline, candidate)
+	// The candidate's row of an endpoint, or the baseline's for a removed one.
+	const rows = new Map([...baseline.contract?.endpoints ?? [], ...candidate.contract?.endpoints ?? []].map((row) => [row.id, row]))
+	const list = changes.list.map((change) => withAudience(change, changes.reaching.get(subjectKey(change.subject)), rows))
 	return { outcome: list.length === 0 ? 'none' : list.some((change) => change.effect === 'widens') ? 'widening' : 'no-widening', changes: list }
 }
 
+/** The lines of a classification, each placed on its subject. Only a ruled line is placed. */
 class Changes {
 	readonly list: AccessChange[] = []
+	/** The audience of each subject whose removal widens, by `subjectKey`: every line of that subject is placed there. */
+	readonly reaching = new Map<string, ChangeAudienceDto>()
 
-	add(...changes: readonly AccessChange[]): void {
-		this.list.push(...changes)
+	add(subject: ChangeSubjectDto, ...changes: readonly RuledLine[]): void {
+		this.list.push(...changes.map((change) => ({ ...change, subject })))
+	}
+
+	/**
+	 * A removal whose paths now reach a more exposed endpoint: its lines, and every other line of its subject, stand with
+	 * whoever reaches it now, so one subject is never in two caller groups.
+	 */
+	addReaching(subject: ChangeSubjectDto, audience: ChangeAudienceDto, ...changes: readonly RuledLine[]): void {
+		this.reaching.set(subjectKey(subject), audience)
+		this.add(subject, ...changes)
 	}
 }
 
-const widening = (line: string): AccessChange => ({ effect: 'widens', line })
-const neutral = (line: string): AccessChange => ({ effect: 'neutral', line })
-const narrowing = (line: string): AccessChange => ({ effect: 'narrows', line })
-const closerWidening = (line: string): AccessChange => ({ effect: 'widens', line, review: 'closer' })
+const widening = (line: string): Line => ({ effect: 'widens', line })
+const neutral = (line: string): Line => ({ effect: 'neutral', line })
+const narrowing = (line: string): Line => ({ effect: 'narrows', line })
+/** A line the approver reads the code behind; it widens unless it can only take access away. */
+const closer = (reason: ReviewReason, line: string, effect: AccessEffect = 'widens'): Line => ({ effect, line, review: 'closer', reason })
+
+/** The lines one comparison produced, under its rule. */
+function ruled(rule: string, lines: readonly Line[]): RuledLine[] {
+	return lines.map((line) => ({ ...line, rule }))
+}
+
+const subjectOf = (kind: ChangeSubjectKind, name: string): ChangeSubjectDto => ({ kind, name })
+const subjectKey = (subject: ChangeSubjectDto): string => `${subject.kind}:${subject.name}`
+
+/**
+ * An endpoint's route and audience, read from its row: the approval page groups an endpoint's lines by who reaches it.
+ * A subject whose removal widens has the audience its paths reach now (`reaching`) instead.
+ */
+function withAudience(change: AccessChange, reaching: ChangeAudienceDto | undefined, rows: ReadonlyMap<string, EndpointRow>): AccessChange {
+	const placed = reaching === undefined ? change : { ...change, audience: reaching }
+	const row = change.subject.kind === 'endpoint' ? rows.get(change.subject.name) : undefined
+	if (row === undefined) return placed
+	return { ...placed, subject: { ...change.subject, method: row.method, path: row.path }, audience: reaching ?? audienceOf(row) }
+}
+
+/** Who reaches a row, in the surface's terms. */
+function audienceOf(row: EndpointRow): ChangeAudienceDto {
+	const reach = endpointReach(row)
+	return {
+		reach,
+		...(reach === 'link' && row.source.kind === 'mount' ? { mount: row.source.name } : {}),
+		requirement: row.requirement === null ? null : requirementPhrase(row.requirement),
+	}
+}
+
+/** The most exposed of the rows, the first among equals. */
+function mostExposed(rows: readonly EndpointRow[]): EndpointRow | undefined {
+	const rank = (row: EndpointRow) => SURFACE_REACHES.indexOf(endpointReach(row))
+	return rows.reduce<EndpointRow | undefined>((best, row) => (best === undefined || rank(row) < rank(best) ? row : best), undefined)
+}
+
+/**
+ * The audience of a removal that widens: the most exposed endpoint its paths reach now, so the approval page places the
+ * line with whoever gains access. A removal that does not widen keeps the removed row's.
+ */
+function wideningAudience(fates: readonly Fate[]): ChangeAudienceDto | undefined {
+	const exposed = mostExposed(fates.filter((fate) => fate.effect === 'widens').flatMap((fate) => fate.answering))
+	return exposed === undefined ? undefined : audienceOf(exposed)
+}
+
+/** Who reaches an endpoint, its most exposed caller: anyone for an anonymous kind, `app` for an `app:<id>` caller. */
+export function endpointReach(row: EndpointRow): SurfaceReach {
+	if (row.requirement === null) return 'anyone'
+	if (row.callers.includes('link')) return 'link'
+	if (row.callers.some((caller) => caller.startsWith(APP_CALLER_PREFIX))) return 'app'
+	return row.callers.includes('machine') ? 'machine' : 'human'
+}
 
 function compareContracts(changes: Changes, before: ContractArtifact | null, after: ContractArtifact | null): void {
 	if (before === null && after === null) return
 	if (after === null) {
-		changes.add(widening('The contract is removed: the proxy no longer applies an endpoint table to this application'))
+		const app = before === null ? '' : before.app
+		changes.add(
+			subjectOf('application', app),
+			...ruled('application.contract', [widening('The contract is removed: the proxy no longer applies an endpoint table to this application')]),
+		)
 		return
 	}
 	const candidate = canonicalizeArtifact(after)
 	const baseline = before === null ? emptyArtifact(candidate) : canonicalizeArtifact(before)
-	if (before === null) changes.add(widening(`The application becomes the contract application \`${candidate.app}\``))
-	else if (baseline.app !== candidate.app) changes.add(widening(`The contract's application changes from \`${baseline.app}\` to \`${candidate.app}\``))
-	changes.add(...presentationChanges(baseline, candidate))
-	changes.add(...peopleChanges(baseline, candidate))
-	changes.add(...terminalChanges(baseline, candidate))
+	const application = subjectOf('application', candidate.app)
+	if (before === null) {
+		changes.add(application, ...ruled('application.contract', [widening(`The application becomes the contract application \`${candidate.app}\``)]))
+	} else if (baseline.app !== candidate.app) {
+		changes.add(
+			application,
+			...ruled('application.contract', [widening(`The contract's application changes from \`${baseline.app}\` to \`${candidate.app}\``)]),
+		)
+	}
+	changes.add(application, ...presentationChanges(baseline, candidate))
+	changes.add(application, ...peopleChanges(baseline, candidate))
+	changes.add(application, ...terminalChanges(baseline, candidate))
 	const mountsShown = compareEndpoints(changes, baseline, candidate)
-	compareSet(changes, baseline.reservedPrefixes, candidate.reservedPrefixes, {
-		// A reserved prefix restricts which endpoints compete under it, so losing one widens.
-		added: (prefix) => narrowing(`Reserved prefix \`${prefix}\` is added`),
-		removed: (prefix) => widening(`Reserved prefix \`${prefix}\` is removed`),
-	})
-	compareKeyed(changes, record(baseline.dimensions), record(candidate.dimensions), {
+	changes.add(
+		application,
+		...ruled(
+			'application.reserved-prefix',
+			setLines(baseline.reservedPrefixes, candidate.reservedPrefixes, {
+				// A reserved prefix restricts which endpoints compete under it, so losing one widens.
+				added: (prefix) => narrowing(`Reserved prefix \`${prefix}\` is added`),
+				removed: (prefix) => widening(`Reserved prefix \`${prefix}\` is removed`),
+			}),
+		),
+	)
+	compareKeyed(changes, 'dimension', record(baseline.dimensions), record(candidate.dimensions), {
 		added: (name) => `New dimension \`${name}\``,
 		removed: (name) => `Dimension \`${name}\` is removed`,
 		changed: dimensionChanges,
 	})
 	for (const [name, dimension] of Object.entries(candidate.dimensions)) {
-		if (!Object.hasOwn(baseline.dimensions, name)) changes.add(...directoryChange(name, undefined, dimension.directory))
+		if (!Object.hasOwn(baseline.dimensions, name)) changes.add(subjectOf('dimension', name), ...directoryChange(name, undefined, dimension.directory))
 	}
-	compareSet(changes, opaqueRoots(baseline), opaqueRoots(candidate), {
-		added: (name) => widening(`Dimension \`${name}\` is an opaque root: an application-wide grant admits any value, unchecked`),
-		removed: (name) =>
-			Object.hasOwn(candidate.dimensions, name)
-				? narrowing(`Dimension \`${name}\` is no longer an opaque root: a value is read from its table`)
-				: narrowing(`Dimension \`${name}\` is no longer an opaque root`),
-	})
-	compareKeyed(changes, record(baseline.actions), record(candidate.actions), {
+	for (const name of union(opaqueRoots(baseline), opaqueRoots(candidate))) {
+		changes.add(subjectOf('dimension', name), ...opaqueRootChange(name, baseline, candidate))
+	}
+	compareKeyed(changes, 'action', record(baseline.actions), record(candidate.actions), {
 		added: (name) => `New action \`${name}\``,
 		removed: (name) => `Action \`${name}\` is removed`,
 		changed: () => [],
 	})
-	compareKeyed(changes, record(baseline.roles), record(candidate.roles), {
+	compareKeyed(changes, 'role', record(baseline.roles), record(candidate.roles), {
 		added: (name, role) => `New role \`${name}\` with ${listOf(role.grants, 'no actions')}`,
 		removed: (name) => `Role \`${name}\` is removed`,
 		changed: roleChanges,
 	})
 	for (const [name, role] of Object.entries(candidate.roles)) {
-		if (!Object.hasOwn(baseline.roles, name)) changes.add(...externalChange(name, undefined, role.external))
+		if (!Object.hasOwn(baseline.roles, name)) changes.add(subjectOf('role', name), ...externalChange(name, undefined, role.external))
 	}
-	compareKeyed(changes, record(baseline.mounts), record(candidate.mounts), {
+	compareKeyed(changes, 'mount', record(baseline.mounts), record(candidate.mounts), {
 		added: (name, mount) => `New ${mount.kind} mount \`${name}\`${servedVariables(mount)}${takenFiles(mount)}${webhookPhrase(mount)}`,
 		removed: (name) => (mountsShown.has(name) ? [] : `Mount \`${name}\` is removed`),
 		changed: mountChanges,
 	})
-	compareKeyed(changes, record(baseline.files), record(candidate.files), {
+	compareKeyed(changes, 'file-collection', record(baseline.files), record(candidate.files), {
 		added: (name, files) => `New file collection \`${name}\`${files.link === false ? '' : `, reachable through ${linkReach(files.link)}`}`,
 		removed: (name) => `File collection \`${name}\` is removed`,
 		changed: fileChanges,
 	})
 	// A file kind adds no authority of its own: who writes and reads its files is the reach of the columns that hold them.
-	compareKeyed(changes, record(baseline.fileKinds ?? {}), record(candidate.fileKinds ?? {}), {
+	compareKeyed(changes, 'file-kind', record(baseline.fileKinds ?? {}), record(candidate.fileKinds ?? {}), {
 		added: (name, kind) => neutral(`New file kind \`${name}\`: ${fileKindPhrase(kind)}`),
 		removed: (name) => `File kind \`${name}\` is removed`,
 		changed: fileKindChanges,
 	})
-	compareKeyed(changes, record(baseline.jobs), record(candidate.jobs), {
+	compareKeyed(changes, 'job', record(baseline.jobs), record(candidate.jobs), {
 		added: (name, job) => `New job \`${name}\` with ${listOf(job.actions, 'no actions')}, running at most ${seconds(job.timeoutMs)}`,
 		removed: (name) => `Job \`${name}\` is removed`,
 		changed: (name, from, to) => [
-			...setChanges(`Job \`${name}\``, from.actions, to.actions, 'gains action', 'loses action'),
-			...valueChange(`Job \`${name}\` scope`, from.scope, to.scope),
-			...timeLimitChange(`Job \`${name}\``, from.timeoutMs, to.timeoutMs),
+			...ruled('job.actions', setChanges(`Job \`${name}\``, from.actions, to.actions, 'gains action', 'loses action')),
+			...ruled('job.scope', valueChange(`Job \`${name}\` scope`, from.scope, to.scope)),
+			...ruled('job.time-limit', timeLimitChange(`Job \`${name}\``, from.timeoutMs, to.timeoutMs)),
 		],
 	})
-	compareKeyed(changes, record(baseline.exports), record(candidate.exports), {
+	compareKeyed(changes, 'export', record(baseline.exports), record(candidate.exports), {
 		added: (name, declaration) => `New export \`${name}\` for ${listOf(declaration.consumers, 'no consumers')}`,
 		removed: (name) => `Export \`${name}\` is removed`,
 		changed: (name, from, to) => [
-			...setChanges(`Export \`${name}\``, from.consumers, to.consumers, 'gains consumer', 'loses consumer'),
-			...valueChange(`Export \`${name}\` audience`, from.audience, to.audience),
-			...valueChange(`Export \`${name}\` version`, from.version, to.version),
+			...ruled('export.consumers', setChanges(`Export \`${name}\``, from.consumers, to.consumers, 'gains consumer', 'loses consumer')),
+			...ruled('export.audience', valueChange(`Export \`${name}\` audience`, from.audience, to.audience)),
+			...ruled('export.version', valueChange(`Export \`${name}\` version`, from.version, to.version)),
 		],
 	})
-	compareKeyed(changes, record(baseline.imports), record(candidate.imports), {
+	compareKeyed(changes, 'import', record(baseline.imports), record(candidate.imports), {
 		added: (name, declaration) => `New import \`${name}\` of \`${declaration.app}\`'s export \`${declaration.export}\``,
 		removed: (name) => `Import \`${name}\` is removed`,
 		changed: (name, from, to) => [
-			...setChanges(`Import \`${name}\``, from.procedures, to.procedures, 'gains procedure', 'loses procedure'),
-			...setChanges(`Import \`${name}\``, from.usedBy, to.usedBy, 'is used by', 'is no longer used by'),
-			...valueChange(`Import \`${name}\``, { ...from, procedures: [], usedBy: [], timeoutMs: null }, {
-				...to,
-				procedures: [],
-				usedBy: [],
-				timeoutMs: null,
-			}),
+			...ruled('import.procedures', setChanges(`Import \`${name}\``, from.procedures, to.procedures, 'gains procedure', 'loses procedure')),
+			...ruled('import.used-by', setChanges(`Import \`${name}\``, from.usedBy, to.usedBy, 'is used by', 'is no longer used by')),
+			...ruled(
+				'import.declaration',
+				valueChange(`Import \`${name}\``, { ...from, procedures: [], usedBy: [], timeoutMs: null }, {
+					...to,
+					procedures: [],
+					usedBy: [],
+					timeoutMs: null,
+				}),
+			),
 		],
 	})
 	for (const directive of ['connectSrc', 'imgSrc', 'frameAncestors', 'scriptSrc', 'frameSrc', 'styleSrc', 'fontSrc', 'workerSrc'] as const) {
-		compareSet(
-			changes,
-			(baseline.csp[directive] ?? []).map((source) => source.origin),
-			(candidate.csp[directive] ?? []).map((source) => source.origin),
-			{
-				added: (origin) => widening(`CSP \`${directive}\` allows \`${origin}\``),
-				removed: (origin) => narrowing(`CSP \`${directive}\` no longer allows \`${origin}\``),
-			},
+		changes.add(
+			subjectOf('csp', directive),
+			...ruled(
+				'csp.source',
+				setLines(
+					(baseline.csp[directive] ?? []).map((source) => source.origin),
+					(candidate.csp[directive] ?? []).map((source) => source.origin),
+					{
+						added: (origin) => widening(`CSP \`${directive}\` allows \`${origin}\``),
+						removed: (origin) => narrowing(`CSP \`${directive}\` no longer allows \`${origin}\``),
+					},
+				),
+			),
 		)
 	}
-	compareKeyed(changes, record(baseline.tables), record(candidate.tables), {
+	compareKeyed(changes, 'table', record(baseline.tables), record(candidate.tables), {
 		added: (name, table) => newTableLine(name, table),
 		removed: (name) => `Table policy \`${name}\` is removed`,
 		changed: tableChanges,
@@ -228,19 +341,22 @@ function compareContracts(changes: Changes, before: ContractArtifact | null, aft
 	for (const [name, table] of Object.entries(candidate.tables)) {
 		const before = Object.hasOwn(baseline.tables, name) ? baseline.tables[name] : undefined
 		const shown = new Set(before === undefined ? [] : fileColumnLines(name, before).map((change) => change.line))
-		changes.add(...fileColumnLines(name, table).filter((change) => !shown.has(change.line)))
+		changes.add(subjectOf('table', name), ...ruled('table.file-writers', fileColumnLines(name, table).filter((change) => !shown.has(change.line))))
 	}
-	compareKeyed(changes, record(baseline.tokens ?? {}), record(candidate.tokens ?? {}), {
+	compareKeyed(changes, 'token', record(baseline.tokens ?? {}), record(candidate.tokens ?? {}), {
 		added: (name, purpose) => `New token purpose \`${name}\`, a token of it valid up to ${purpose.maxDays} days`,
 		removed: (name) => `Token purpose \`${name}\` is removed`,
 		changed: (name, from, to) => [
-			...(from.maxDays === to.maxDays
-				? []
-				: [(to.maxDays > from.maxDays ? widening : narrowing)(`Token purpose \`${name}\` lifetime changes from ${from.maxDays} to ${to.maxDays} days`)]),
-			...schemaChanges({ endpoint: `Token purpose \`${name}\` claims`, side: 'input', path: '' }, from.claims, to.claims),
+			...ruled(
+				'token.lifetime',
+				from.maxDays === to.maxDays
+					? []
+					: [(to.maxDays > from.maxDays ? widening : narrowing)(`Token purpose \`${name}\` lifetime changes from ${from.maxDays} to ${to.maxDays} days`)],
+			),
+			...ruled('token.claims', schemaChanges({ endpoint: `Token purpose \`${name}\` claims`, side: 'input', path: '' }, from.claims, to.claims)),
 		],
 	})
-	compareDeclared(changes, baseline.declared, candidate.declared)
+	compareDeclared(changes, application, baseline.declared, candidate.declared)
 	compareProcedures(changes, baseline, candidate)
 	compareDirectories(changes, baseline, candidate)
 }
@@ -257,16 +373,18 @@ function compareProcedures(changes: Changes, baseline: ContractArtifact, candida
 	for (const [id, rules] of Object.entries(candidate.procedures ?? {})) {
 		const row = candidate.endpoints.find((endpoint) => endpoint.id === id)
 		const from = Object.hasOwn(before, id) ? before[id] : undefined
+		const subject = subjectOf('endpoint', id)
 		if (from === undefined) {
 			changes.add(
-				neutral(
-					`\`${id}\` admits ${ratePhrase(rules.rate)}${challengePhrase(rules.challenge)}; it runs at most ${seconds(rules.timeoutMs)}${bodyPhrase(row)}`,
-				),
-				...(rules.changesStateOnGet === true ? [closerWidening(stateOnGet(`\`${id}\``))] : []),
+				subject,
+				...ruled('procedure.admission', [
+					neutral(`\`${id}\` admits ${ratePhrase(rules.rate)}${challengePhrase(rules.challenge)}; it ${runPhrase(row, rules.timeoutMs)}`),
+				]),
+				...ruled('procedure.get-mutation', rules.changesStateOnGet === true ? [closer('get-mutation', stateOnGet(`\`${id}\``))] : []),
 			)
 			continue
 		}
-		changes.add(...procedureChanges(`\`${id}\``, from, rules))
+		changes.add(subject, ...procedureChanges(`\`${id}\``, from, rules))
 	}
 }
 
@@ -277,16 +395,24 @@ const BUCKETS = [
 	['bytesPerHour', 'bytes per hour'],
 ] as const
 
-/** `10 calls per minute per client and 100 in all`, or `any number of calls` without a bucket. */
-function ratePhrase(rate: AdmissionRate): string {
-	const counted = BUCKETS.flatMap(([bucket, words]) => {
+/**
+ * A procedure's buckets as bounds, `at most 10 calls a minute per client`: the approval's line and the environment's
+ * surface say them alike.
+ */
+export function bucketBounds(rate: AdmissionRate): string[] {
+	return BUCKETS.flatMap(([bucket, words]) => {
 		const value = rate[bucket]
 		if (value === null) return []
-		if (bucket === 'bytesPerHour') return [`${value} ${words}`]
-		// On Zerops the proxy sees the balancer, not the visitor, until its range is trusted.
-		return [bucket === 'perClient' ? `${value} ${words} (one client on Zerops)` : `${value} ${words}`]
+		if (bucket === 'bytesPerHour') return [`at most ${value} bytes an hour`]
+		// On Zerops the proxy sees the balancer, not the visitor, until its range is trusted: every visitor is one client.
+		return [`at most ${value} calls a minute ${words}${bucket === 'perClient' ? ' (one client on Zerops)' : ''}`]
 	})
-	return counted.length === 0 ? 'any number of calls' : `calls per minute: ${andList(counted)}`
+}
+
+/** `at most 10 calls a minute per client and at most 100 calls a minute in all`, or `any number of calls`. */
+function ratePhrase(rate: AdmissionRate): string {
+	const bounds = bucketBounds(rate)
+	return bounds.length === 0 ? 'any number of calls' : andList(bounds)
 }
 
 function challengePhrase(challenge: ProcedureChallenge | null): string {
@@ -297,9 +423,15 @@ function challengePhrase(challenge: ProcedureChallenge | null): string {
 		: `, after a ${challenge.provider} challenge`
 }
 
-function bodyPhrase(row: EndpointRow | undefined): string {
+/**
+ * How long a call may take: the body's deadline, which the runtime derives from its limit, then the handler's time
+ * limit, which starts after the last byte. The deadline is the platform's own release's. Procedures start at 0.7, and a
+ * test fails once a bundled release from 0.7 on derives it otherwise; that release is then read with its own (ADR-0062).
+ */
+export function runPhrase(row: EndpointRow | undefined, timeoutMs: number): string {
 	const limit = row?.admission?.maxBytes ?? null
-	return limit === null ? '' : `, with a body of at most ${bytes(limit)}`
+	const runs = `runs at most ${seconds(timeoutMs)}`
+	return limit === null ? runs : `waits at most ${seconds(bodyDeadlineMs(limit))} for a body of at most ${bytes(limit)}, then ${runs}`
 }
 
 function seconds(ms: number): string {
@@ -307,13 +439,13 @@ function seconds(ms: number): string {
 }
 
 /** A longer time limit widens: the site holds its connection, its lease or its claim longer. */
-function timeLimitChange(name: string, before: number, after: number): AccessChange[] {
+function timeLimitChange(name: string, before: number, after: number): Line[] {
 	if (before === after) return []
 	return [(after > before ? widening : narrowing)(`${name} time limit changes from ${seconds(before)} to ${seconds(after)}`)]
 }
 
-function procedureChanges(name: string, from: ProcedureArtifact, to: ProcedureArtifact): AccessChange[] {
-	const buckets = BUCKETS.flatMap(([bucket, words]): AccessChange[] => {
+function procedureChanges(name: string, from: ProcedureArtifact, to: ProcedureArtifact): RuledLine[] {
+	const buckets = BUCKETS.flatMap(([bucket, words]): Line[] => {
 		const before = from.rate[bucket]
 		const after = to.rate[bucket]
 		if (before === after) return []
@@ -333,9 +465,15 @@ function procedureChanges(name: string, from: ProcedureArtifact, to: ProcedureAr
 	const onGet = from.changesStateOnGet === to.changesStateOnGet
 		? []
 		: to.changesStateOnGet === true
-		? [closerWidening(stateOnGet(name))]
+		? [closer('get-mutation', stateOnGet(name))]
 		: [narrowing(`${name} no longer changes state on GET`)]
-	return [...buckets, ...challenge, ...time, ...query, ...onGet]
+	return [
+		...ruled('procedure.bucket', buckets),
+		...ruled('procedure.challenge', challenge),
+		...ruled('procedure.time-limit', time),
+		...ruled('procedure.query', query),
+		...ruled('procedure.get-mutation', onGet),
+	]
 }
 
 /** What a public mutation served on `GET` means: whoever follows its URL, a mail client's link scanner too, changes state. */
@@ -375,18 +513,19 @@ function compareDirectories(changes: Changes, baseline: ContractArtifact, candid
 	for (const endpoint of union(Object.keys(before), Object.keys(after))) {
 		const from = before[endpoint]
 		const to = after[endpoint]
+		const place = (line: Line) => changes.add(subjectOf('endpoint', endpoint), ...ruled('endpoint.directory', [line]))
 		if (to === undefined) {
-			if (from !== undefined) changes.add(narrowing(`Endpoint \`${endpoint}\` no longer reads the members of \`${from.dimension}\``))
+			if (from !== undefined) place(narrowing(`Endpoint \`${endpoint}\` no longer reads the members of \`${from.dimension}\``))
 			continue
 		}
 		if (from !== undefined && from.dimension === to.dimension && (from.lists || !to.lists)) {
-			if (from.lists && !to.lists) changes.add(narrowing(`Endpoint \`${endpoint}\` no longer lists the members of \`${to.dimension}\``))
+			if (from.lists && !to.lists) place(narrowing(`Endpoint \`${endpoint}\` no longer lists the members of \`${to.dimension}\``))
 			continue
 		}
 		const labels = candidate.dimensions[to.dimension]?.directory === 'labels'
-		changes.add(
+		place(
 			labels
-				? closerWidening(`Endpoint \`${endpoint}\` ${reachOf(to)}, with their labels, which spell users' email addresses`)
+				? closer('people', `Endpoint \`${endpoint}\` ${reachOf(to)}, with their labels, which spell users' email addresses`)
 				: widening(`Endpoint \`${endpoint}\` ${reachOf(to)}`),
 		)
 	}
@@ -402,56 +541,78 @@ function compareDirectories(changes: Changes, baseline: ContractArtifact, candid
  */
 function compareDeclared(
 	changes: Changes,
+	application: ChangeSubjectDto,
 	before: Readonly<Record<string, DeclaredReach>> | undefined,
 	after: Readonly<Record<string, DeclaredReach>> | undefined,
 ): void {
 	if (before !== undefined && after === undefined) {
 		// A `defineContract` contract records no reach: its sites reach what the handlers say, unreviewed.
-		changes.add(closerWidening("The contract leaves the staged kit: its sites' reach off the paved road is no longer declared"))
+		changes.add(
+			application,
+			...ruled('application.staged-kit', [
+				closer('off-road', "The contract leaves the staged kit: its sites' reach off the paved road is no longer declared"),
+			]),
+		)
 		return
 	}
 	if (after === undefined) return
-	if (before === undefined) changes.add(narrowing('The contract moves to the staged kit: each site reaches only what it declares'))
+	if (before === undefined) {
+		changes.add(
+			application,
+			...ruled('application.staged-kit', [narrowing('The contract moves to the staged kit: each site reaches only what it declares')]),
+		)
+	}
 	const sites = before ?? {}
 	for (const site of union(Object.keys(sites), Object.keys(after))) {
-		changes.add(...reachChanges(site, sites[site] ?? NO_REACH, after[site] ?? NO_REACH))
-		changes.add(...endpointKickChange(site, sites[site]?.then, after[site]?.then))
-		changes.add(...kicksChanges(site, sites[site]?.kicks ?? [], after[site] ?? NO_REACH))
-		changes.add(...workloadActionChanges(site, sites[site]?.actions ?? [], after[site]?.actions ?? []))
-		changes.add(...bindsChange(site, sites[site]?.binds, after[site]?.binds))
-		changes.add(...signsChanges(site, sites[site]?.signs ?? [], after[site]?.signs ?? []))
-		changes.add(...egressChanges(site, sites[site]?.egress ?? [], after[site]?.egress ?? []))
+		changes.add(
+			siteSubject(site),
+			...reachChanges(site, sites[site] ?? NO_REACH, after[site] ?? NO_REACH),
+			...endpointKickChange(site, sites[site]?.then, after[site]?.then),
+			...kicksChanges(site, sites[site]?.kicks ?? [], after[site] ?? NO_REACH),
+			...workloadActionChanges(site, sites[site]?.actions ?? [], after[site]?.actions ?? []),
+			...bindsChange(site, sites[site]?.binds, after[site]?.binds),
+			...signsChanges(site, sites[site]?.signs ?? [], after[site]?.signs ?? []),
+			...egressChanges(site, sites[site]?.egress ?? [], after[site]?.egress ?? []),
+		)
 	}
 }
 
 /**
  * The origins a site's code calls (`egress`): a new one is a place the site's data may go, so it widens with closer
- * review; a dropped one narrows. A job's `'public'` reaches every public origin, so beside it no origin is a change;
- * `reachSteps` shows the move to or from it.
+ * review; a dropped one narrows. Beside a job's `'public'`, which reaches every public origin, a dropped origin is no
+ * change, and `reachSteps` shows the move to it. Leaving `'public'` widens by every listed origin: the origin guard
+ * admits what public egress refuses (an IP address, a port, the installation's hosts, a name that resolves privately),
+ * so no listed origin is provably within it.
  */
-function egressChanges(site: string, before: DeclaredEgress, after: DeclaredEgress): AccessChange[] {
-	if (before === PUBLIC_EGRESS || after === PUBLIC_EGRESS) return []
-	const from: readonly string[] = before
+function egressChanges(site: string, before: DeclaredEgress, after: DeclaredEgress): RuledLine[] {
+	if (after === PUBLIC_EGRESS) return []
+	const from: readonly string[] = before === PUBLIC_EGRESS ? [] : before
 	const to: readonly string[] = after
 	const name = siteName(site)
-	return union(from, to).flatMap((origin) => {
-		if (!from.includes(origin)) return [closerWidening(`${name} calls ${origin}`)]
-		if (!to.includes(origin)) return [narrowing(`${name} no longer calls ${origin}`)]
-		return []
-	})
+	return ruled(
+		'reach.egress',
+		union(from, to).flatMap((origin) => {
+			if (!from.includes(origin)) return [closer('off-road', `${name} calls ${origin}`)]
+			if (!to.includes(origin)) return [narrowing(`${name} no longer calls ${origin}`)]
+			return []
+		}),
+	)
 }
 
 /**
  * The token purposes a site signs (`signs`): whoever holds a token it signs may call what verifies one, a public
  * procedure included, so a new purpose widens; a dropped one narrows, while the tokens already signed stay valid.
  */
-function signsChanges(site: string, from: readonly string[], to: readonly string[]): AccessChange[] {
+function signsChanges(site: string, from: readonly string[], to: readonly string[]): RuledLine[] {
 	const name = siteName(site)
-	return union(from, to).flatMap((purpose) => {
-		if (!from.includes(purpose)) return [widening(`${name} signs \`${purpose}\` tokens`)]
-		if (!to.includes(purpose)) return [narrowing(`${name} no longer signs \`${purpose}\` tokens`)]
-		return []
-	})
+	return ruled(
+		'reach.signs',
+		union(from, to).flatMap((purpose) => {
+			if (!from.includes(purpose)) return [widening(`${name} signs \`${purpose}\` tokens`)]
+			if (!to.includes(purpose)) return [narrowing(`${name} no longer signs \`${purpose}\` tokens`)]
+			return []
+		}),
+	)
 }
 
 /**
@@ -459,19 +620,20 @@ function signsChanges(site: string, from: readonly string[], to: readonly string
  * deliveries, which run as the webhook's workload, and the mutation sees the binding's secret once or sets the one the
  * provider issued.
  */
-function bindsChange(site: string, before: string | undefined, after: string | undefined): AccessChange[] {
+function bindsChange(site: string, before: string | undefined, after: string | undefined): RuledLine[] {
 	if (before === after) return []
 	const name = siteName(site)
-	return [
+	return ruled('reach.binds', [
 		...(after === undefined
 			? []
 			: [
-				closerWidening(
+				closer(
+					'off-road',
 					`${name} binds webhook \`${after}\`: it creates and removes its bindings, replaces a binding's secret with one the provider issued, and sees each new binding's secret`,
 				),
 			]),
 		...(before === undefined ? [] : [narrowing(`${name} no longer binds webhook \`${before}\``)]),
-	]
+	])
 }
 
 /**
@@ -479,51 +641,58 @@ function bindsChange(site: string, before: string | undefined, after: string | u
  * anyone who calls it. A gained action widens with closer review; a lost one narrows. They are no step off the paved
  * road, so `snapshotDeviations` does not list them.
  */
-function workloadActionChanges(site: string, from: readonly string[], to: readonly string[]): AccessChange[] {
+function workloadActionChanges(site: string, from: readonly string[], to: readonly string[]): RuledLine[] {
 	const name = siteName(site)
-	return union(from, to).flatMap((action) => {
-		if (!from.includes(action)) return [closerWidening(`${name} runs as its own workload with \`${action}\`, for anyone who calls it`)]
-		if (!to.includes(action)) return [narrowing(`${name} no longer runs with \`${action}\``)]
-		return []
-	})
+	return ruled(
+		'reach.actions',
+		union(from, to).flatMap((action) => {
+			if (!from.includes(action)) return [closer('anyone-calls', `${name} runs as its own workload with \`${action}\`, for anyone who calls it`)]
+			if (!to.includes(action)) return [narrowing(`${name} no longer runs with \`${action}\``)]
+			return []
+		}),
+	)
 }
 
 const NO_REACH: DeclaredReach = { sql: null, unscoped: {}, connect: [], issues: null }
 
-function reachChanges(site: string, from: DeclaredReach, to: DeclaredReach): AccessChange[] {
+function reachChanges(site: string, from: DeclaredReach, to: DeclaredReach): RuledLine[] {
 	const name = siteName(site)
 	return reachSteps(from, to).map((step) => ({ ...step, line: `${name} ${step.line}` }))
 }
 
 /** The changes of one site's declared reach, each line phrased to follow the site's name. */
-function reachSteps(from: DeclaredReach, to: DeclaredReach): AccessChange[] {
-	const changes: AccessChange[] = [...modeChange('raw SQL', from.sql, to.sql)]
+function reachSteps(from: DeclaredReach, to: DeclaredReach): RuledLine[] {
+	const changes: RuledLine[] = [...ruled('reach.sql', modeChange('raw SQL', from.sql, to.sql))]
 	for (const table of union(Object.keys(from.unscoped), Object.keys(to.unscoped))) {
-		changes.push(...modeChange(`table \`${table}\` unscoped`, from.unscoped[table] ?? null, to.unscoped[table] ?? null))
+		changes.push(...ruled('reach.unscoped', modeChange(`table \`${table}\` unscoped`, from.unscoped[table] ?? null, to.unscoped[table] ?? null)))
 	}
+	const connect: Line[] = []
 	for (const connector of union(from.connect, to.connect)) {
-		if (!from.connect.includes(connector)) changes.push(closerWidening(`calls connector \`${connector}\``))
-		else if (!to.connect.includes(connector)) changes.push(narrowing(`no longer calls connector \`${connector}\``))
+		if (!from.connect.includes(connector)) connect.push(closer('off-road', `calls connector \`${connector}\``))
+		else if (!to.connect.includes(connector)) connect.push(narrowing(`no longer calls connector \`${connector}\``))
 	}
+	changes.push(...ruled('reach.connect', connect))
 	if (from.issues !== to.issues) {
-		if (to.issues !== null) changes.push(closerWidening(`issues share links of mount \`${to.issues}\``))
-		if (from.issues !== null) changes.push(narrowing(`no longer issues share links of mount \`${from.issues}\``))
+		const issues: Line[] = []
+		if (to.issues !== null) issues.push(closer('off-road', `issues share links of mount \`${to.issues}\``))
+		if (from.issues !== null) issues.push(narrowing(`no longer issues share links of mount \`${from.issues}\``))
+		changes.push(...ruled('reach.issues', issues))
 	}
-	changes.push(...mailerChange(from.mailer, to.mailer))
-	changes.push(...publicEgressChange(from.egress, to.egress))
+	changes.push(...ruled('reach.mailer', mailerChange(from.mailer, to.mailer)))
+	changes.push(...ruled('reach.public-egress', publicEgressChange(from.egress, to.egress)))
 	return changes
 }
 
 /**
- * A job's `egress: 'public'` (ADR-0070): its code may send what it holds to any public host, wherever an operator, a row
- * or a page it fetched points it, so gaining it widens with closer review. Losing it narrows, and names the origins the
- * job calls instead. The guard keeps it off private addresses and the installation's own hosts, as listed at the
- * environment's deploy.
+ * A job's `egress: 'public'` (ADR-0071): its code may send what it holds to any public host, wherever an operator, a row
+ * or a page it fetched points it, so gaining it widens with closer review. Losing it narrows; `egressChanges` shows
+ * each origin the job calls instead as a widening of its own. The guard keeps it off private addresses and the
+ * installation's own hosts, as listed at the environment's deploy.
  */
-function publicEgressChange(from: DeclaredEgress | undefined, to: DeclaredEgress | undefined): AccessChange[] {
+function publicEgressChange(from: DeclaredEgress | undefined, to: DeclaredEgress | undefined): Line[] {
 	if ((from === PUBLIC_EGRESS) === (to === PUBLIC_EGRESS)) return []
-	if (to === PUBLIC_EGRESS) return [closerWidening(PUBLIC_EGRESS_LINE)]
-	return [narrowing(to === undefined ? 'no longer calls any public website' : `no longer calls any public website, only ${to.join(', ')}`)]
+	if (to === PUBLIC_EGRESS) return [closer('off-road', PUBLIC_EGRESS_LINE)]
+	return [narrowing('no longer calls any public website')]
 }
 
 /** What a job with `egress: 'public'` reaches, as the approver reads it. */
@@ -531,56 +700,75 @@ export const PUBLIC_EGRESS_LINE =
 	"calls any public website over HTTPS or HTTP (`egress: 'public'`): whoever can write the rows it reads, or the pages it fetches, can make it fetch any public URL and read the answer. The installation's hosts are refused as listed at this environment's deploy; a domain added later is refused from its next deploy"
 
 /** Undeclared reaches no transport, `own` the application's, and `installation` the installation's credentials. */
-function mailerChange(from: JobMailer | undefined, to: JobMailer | undefined): AccessChange[] {
+function mailerChange(from: JobMailer | undefined, to: JobMailer | undefined): Line[] {
 	if (from === to) return []
 	if (to === undefined) return [narrowing('no longer sends e-mail')]
-	if (to === 'installation') return [closerWidening("sends e-mail through the installation's mail transport")]
+	if (to === 'installation') return [closer('off-road', "sends e-mail through the installation's mail transport")]
 	if (from === undefined) return [widening('sends e-mail through its own transport')]
 	return [narrowing("sends e-mail through its own transport, no longer the installation's")]
 }
 
 /** A kick starts a job the contract already schedules, so it widens nothing, like a form's `then`. */
-function endpointKickChange(site: string, before: string | undefined, after: string | undefined): AccessChange[] {
+function endpointKickChange(site: string, before: string | undefined, after: string | undefined): RuledLine[] {
 	if (before === after) return []
 	const name = siteName(site)
-	const line = after === undefined
-		? `${name} no longer starts job \`${before}\` after a call`
-		: `${name} starts job \`${after}\` after each committed call, beside its schedule`
-	return [neutral(line)]
+	return ruled('reach.then', [
+		after === undefined
+			? neutral(`${name} no longer starts job \`${before}\` after a call`)
+			: startsJob(neutral(`${name} starts job \`${after}\` after each committed call, beside its schedule`), after),
+	])
+}
+
+/** A line that says a call sets off a job. */
+function startsJob(line: Line, job: string): Line {
+	return { ...line, consequence: { kind: 'starts-job', job } }
 }
 
 /**
  * The jobs a site kicks after its commit (`kicks`). A job runs under its own approved actions, so a kick widens nothing,
  * except from a public procedure: anyone who calls it then decides when the job runs, which widens with closer review.
  */
-function kicksChanges(site: string, from: readonly string[], to: DeclaredReach): AccessChange[] {
+function kicksChanges(site: string, from: readonly string[], to: DeclaredReach): RuledLine[] {
 	const name = siteName(site)
 	const kicks = to.kicks ?? []
-	return union(from, kicks).flatMap((job) => {
-		if (!from.includes(job)) {
-			return to.actions === undefined
-				? [neutral(`${name} starts job \`${job}\` after each committed run, beside its schedule`)]
-				: [closerWidening(`${name} starts job \`${job}\` whenever anyone calls it`)]
-		}
-		if (!kicks.includes(job)) return [narrowing(`${name} no longer starts job \`${job}\``)]
-		return []
-	})
+	return ruled(
+		'reach.kicks',
+		union(from, kicks).flatMap((job) => {
+			if (!from.includes(job)) {
+				return [
+					startsJob(
+						to.actions === undefined
+							? neutral(`${name} starts job \`${job}\` after each committed run, beside its schedule`)
+							: closer('anyone-calls', `${name} starts job \`${job}\` whenever anyone calls it`),
+						job,
+					),
+				]
+			}
+			if (!kicks.includes(job)) return [narrowing(`${name} no longer starts job \`${job}\``)]
+			return []
+		}),
+	)
 }
 
 /** `null` is undeclared; `write` reaches more than `read`. */
-function modeChange(reach: string, from: 'read' | 'write' | null, to: 'read' | 'write' | null): AccessChange[] {
+function modeChange(reach: string, from: 'read' | 'write' | null, to: 'read' | 'write' | null): Line[] {
 	if (from === to) return []
 	if (to === null) return [narrowing(`no longer declares ${reach}`)]
-	if (from === null) return [closerWidening(`declares ${reach} (\`${to}\`)`)]
+	if (from === null) return [closer('off-road', `declares ${reach} (\`${to}\`)`)]
 	return [
 		to === 'write'
-			? closerWidening(`${reach} changes from \`read\` to \`write\``)
+			? closer('off-road', `${reach} changes from \`read\` to \`write\``)
 			: narrowing(`${reach} changes from \`write\` to \`read\``),
 	]
 }
 
 function siteName(site: string): string {
 	return site.startsWith(JOB_SITE_PREFIX) ? `Job \`${site.slice(JOB_SITE_PREFIX.length)}\`` : `Endpoint \`${site}\``
+}
+
+/** A site is an endpoint by its id, or a job (`job:<name>`). */
+function siteSubject(site: string): ChangeSubjectDto {
+	return site.startsWith(JOB_SITE_PREFIX) ? subjectOf('job', site.slice(JOB_SITE_PREFIX.length)) : subjectOf('endpoint', site)
 }
 
 /**
@@ -595,12 +783,44 @@ function compareDatabaseCode(changes: Changes, baseline: AccessSnapshot, candida
 	for (const key of union([...before.keys()], [...after.keys()])) {
 		const from = before.get(key)
 		const to = after.get(key)
+		const place = (file: string, line: Line) => changes.add(subjectOf('migration', file), ...ruled('migration.database-code', [line]))
 		if (to === undefined) {
-			if (from !== undefined) changes.add(narrowing(`${migrationName(from.file)} no longer declares ${databaseObject(from)}`))
-		} else if (from === undefined) changes.add(closerWidening(`${migrationName(to.file)} declares ${databaseObject(to)}`))
+			if (from !== undefined) place(from.file, narrowing(`${migrationName(from.file)} no longer declares ${databaseObject(from)}`))
+		} else if (from === undefined) place(to.file, closer('off-road', `${migrationName(to.file)} declares ${databaseObject(to)}`))
 		else if (beforeFiles.get(to.file)?.checksum !== afterFiles.get(to.file)?.checksum) {
-			changes.add(closerWidening(`${migrationName(to.file)} changes, and declares ${databaseObject(to)}`))
+			place(to.file, closer('off-road', `${migrationName(to.file)} changes, and declares ${databaseObject(to)}`))
 		}
+	}
+}
+
+/**
+ * The adoption steps of a migration file that is new or changed (ADR-0061). An adopted file is read under its table's
+ * policy from then on, and a release deletes every file of the collection no column adopted, so each needs closer
+ * review. A file the baseline holds unchanged has run already: the classifier may only have learned to report it.
+ */
+function compareFileAdoptions(changes: Changes, baseline: AccessSnapshot, candidate: AccessSnapshot): void {
+	const beforeFiles = byName(baseline.migrations)
+	const afterFiles = byName(candidate.migrations)
+	for (const adoption of candidate.fileAdoptions ?? []) {
+		if (beforeFiles.get(adoption.file)?.checksum === afterFiles.get(adoption.file)?.checksum) continue
+		const name = migrationName(adoption.file)
+		changes.add(
+			subjectOf('migration', adoption.file),
+			...(adoption.step === 'adopt'
+				? ruled('migration.adopt', [
+					closer(
+						'adoption',
+						`${name} adopts the files of collection \`${adoption.collection}\` into \`${adoption.table}\`: whoever the policy of \`${adoption.table}\` lets read a row reads its file`,
+					),
+				])
+				: ruled('migration.release', [
+					closer(
+						'adoption',
+						`${name} releases file collection \`${adoption.collection}\`: its table is dropped, with every file no column adopted`,
+						'narrows',
+					),
+				])),
+		)
 	}
 }
 
@@ -641,11 +861,11 @@ export function snapshotDeviations(snapshot: AccessSnapshot): DeviationSubjectDt
  * so the mount comparison does not show them a second time.
  */
 function compareEndpoints(changes: Changes, baseline: ContractArtifact, candidate: ContractArtifact): ReadonlySet<string> {
-	compareKeyed(changes, endpointMap(baseline.endpoints), endpointMap(candidate.endpoints), {
+	compareKeyed(changes, 'endpoint', endpointMap(baseline.endpoints), endpointMap(candidate.endpoints), {
 		added: (id, row) => {
 			const line = `New endpoint \`${id}\` (${route(row)}) ${audience(row)}${answersFile(row)}${callableFrom(row)}${reusedFor(row.cache)}`
 			// Code anyone can call gets a closer review than code a signed-in caller reaches.
-			const change = row.kind === 'public' ? closerWidening(line) : widening(line)
+			const change = row.kind === 'public' ? closer('anyone-calls', line) : widening(line)
 			return row.crossOrigin === 'environment' ? { ...change, environmentOrigins: true } : change
 		},
 		removed: () => [],
@@ -661,9 +881,19 @@ function compareEndpoints(changes: Changes, baseline: ContractArtifact, candidat
 			continue
 		}
 		const fate = fallThrough(row, baseline, candidate)
-		changes.add(withOrigins({ effect: fate.effect, line: `Endpoint \`${row.id}\` (${route(row)}) is removed; its paths ${fate.words(true)}` }, fate))
+		const lines = ruled('endpoint.removed', [
+			withOrigins({ effect: fate.effect, line: `Endpoint \`${row.id}\` (${route(row)}) is removed; its paths ${fate.words(true)}` }, fate),
+		])
+		const exposed = wideningAudience([fate])
+		if (exposed === undefined) changes.add(subjectOf('endpoint', row.id), ...lines)
+		else changes.addReaching(subjectOf('endpoint', row.id), exposed, ...lines)
 	}
-	for (const [mount, rows] of removedMounts) changes.add(removedMountChange(mount, rows, baseline, candidate))
+	for (const [mount, rows] of removedMounts) {
+		const removal = removedMountChange(mount, rows, baseline, candidate)
+		const lines = ruled('mount.removed', [removal.line])
+		if (removal.audience === undefined) changes.add(subjectOf('mount', mount), ...lines)
+		else changes.addReaching(subjectOf('mount', mount), removal.audience, ...lines)
+	}
 	return new Set(removedMounts.keys())
 }
 
@@ -673,7 +903,12 @@ function compareEndpoints(changes: Changes, baseline: ContractArtifact, candidat
  * more than its routes with it (the public variables its pages read, a form's admission, a link mount's grants), so
  * only an SPA mount that served no public variable can leave access unchanged; any other narrows at least.
  */
-function removedMountChange(mount: string, rows: readonly EndpointRow[], baseline: ContractArtifact, candidate: ContractArtifact): AccessChange {
+function removedMountChange(
+	mount: string,
+	rows: readonly EndpointRow[],
+	baseline: ContractArtifact,
+	candidate: ContractArtifact,
+): { readonly line: Line; readonly audience?: ChangeAudienceDto } {
 	const artifact: MountArtifact | undefined = baseline.mounts[mount]
 	const groups = new Map<string, { readonly fate: Fate; readonly routes: string[] }>()
 	for (const row of rows) {
@@ -695,11 +930,15 @@ function removedMountChange(mount: string, rows: readonly EndpointRow[], baselin
 		? 'narrows'
 		: 'neutral'
 	const line = `Mount \`${mount}\` is removed: ${parts.map((part) => part.text).join('; ')}`
-	return withOrigins({ effect, line }, { environmentOrigins: [...groups.values()].some(({ fate }) => fate.environmentOrigins) })
+	const audience = wideningAudience([...groups.values()].map(({ fate }) => fate))
+	return {
+		line: withOrigins({ effect, line }, { environmentOrigins: [...groups.values()].some(({ fate }) => fate.environmentOrigins) }),
+		...(audience === undefined ? {} : { audience }),
+	}
 }
 
 /** A change, marked when its paths now reach an endpoint open to the environment's cross-origin list. */
-function withOrigins(change: AccessChange, fate: Pick<Fate, 'environmentOrigins'>): AccessChange {
+function withOrigins(change: Line, fate: Pick<Fate, 'environmentOrigins'>): Line {
 	return fate.environmentOrigins ? { ...change, environmentOrigins: true } : change
 }
 
@@ -711,6 +950,8 @@ interface Fate {
 	readonly effect: AccessEffect
 	words(plural: boolean): string
 	readonly environmentOrigins: boolean
+	/** The endpoints that answer the paths now. */
+	readonly answering: readonly EndpointRow[]
 }
 
 /**
@@ -733,7 +974,9 @@ function fallThrough(row: EndpointRow, baseline: ContractArtifact, candidate: Co
 		if (now.outcome === 'endpoint') reached.set(now.endpoint.id, now.endpoint)
 		else denied = true
 	}
-	if (reached.size === 0) return { effect: 'narrows', words: (plural) => (plural ? 'are denied' : 'is denied'), environmentOrigins: false }
+	if (reached.size === 0) {
+		return { effect: 'narrows', words: (plural) => (plural ? 'are denied' : 'is denied'), environmentOrigins: false, answering: [] }
+	}
 	const answering = [...reached.values()]
 	const reach = (plural: boolean) => (plural ? 'now reach' : 'now reaches')
 	const rest = (plural: boolean) => (denied ? `, and ${plural ? 'are' : 'is'} otherwise denied` : '')
@@ -746,13 +989,14 @@ function fallThrough(row: EndpointRow, baseline: ContractArtifact, candidate: Co
 	const effect: AccessEffect = !fewer ? 'widens' : same && !denied ? 'neutral' : 'narrows'
 	if (same && answering.every((other) => audience(other) === was)) {
 		const ids = listOf(answering.map((other) => other.id), 'none')
-		return { effect, words: (plural) => `${reach(plural)} ${ids} ${was}, as before${rest(plural)}`, environmentOrigins }
+		return { effect, words: (plural) => `${reach(plural)} ${ids} ${was}, as before${rest(plural)}`, environmentOrigins, answering }
 	}
 	const answers = answering.map((other) => `\`${other.id}\` ${audience(other)}`).join(', ')
 	return {
 		effect,
 		words: (plural) => `${reach(plural)} ${answers}, where ${plural ? 'they were' : 'it was'} ${was}${rest(plural)}`,
 		environmentOrigins,
+		answering,
 	}
 }
 
@@ -906,23 +1150,26 @@ function andList(values: readonly string[]): string {
 	return values.length < 2 ? values.join('') : `${values.slice(0, -1).join(', ')} and ${values.at(-1)}`
 }
 
-function endpointChanges(id: string, from: EndpointRow, to: EndpointRow): AccessChange[] {
+function endpointChanges(id: string, from: EndpointRow, to: EndpointRow): RuledLine[] {
 	const name = `Endpoint \`${id}\``
 	const becomesPublic = from.requirement !== null && (to.kind === 'public-spa' || to.kind === 'public')
 	return [
-		...(!becomesPublic ? [] : to.kind === 'public'
-			? [closerWidening(`${name} becomes public: anyone calls it without signing in`)]
-			: [widening(`${name} becomes public: anyone opens it without signing in`)]),
-		...valueChange(`${name} kind`, from.kind, to.kind),
-		...valueChange(`${name} route`, `${from.method} ${from.path}`, `${to.method} ${to.path}`),
-		...setChanges(name, from.callers, to.callers, 'gains caller', 'loses caller'),
-		...valueChange(`${name} requirement`, from.requirement, to.requirement),
+		...ruled(
+			'endpoint.public',
+			!becomesPublic ? [] : to.kind === 'public'
+				? [closer('anyone-calls', `${name} becomes public: anyone calls it without signing in`)]
+				: [widening(`${name} becomes public: anyone opens it without signing in`)],
+		),
+		...ruled('endpoint.kind', valueChange(`${name} kind`, from.kind, to.kind)),
+		...ruled('endpoint.route', valueChange(`${name} route`, `${from.method} ${from.path}`, `${to.method} ${to.path}`)),
+		...ruled('endpoint.callers', setChanges(name, from.callers, to.callers, 'gains caller', 'loses caller')),
+		...ruled('endpoint.requirement', valueChange(`${name} requirement`, from.requirement, to.requirement)),
 		...admissionChanges(name, from, to),
-		...crossOriginChanges(name, from.crossOrigin, to.crossOrigin),
-		...cacheChange(name, from.cache, to.cache),
-		...authorizationChange(name, from.authorization, to.authorization),
-		...schemaChanges({ endpoint: name, side: 'input', path: '' }, from.input, to.input),
-		...outputChanges(name, from.output, to.output),
+		...ruled('endpoint.cross-origin', crossOriginChanges(name, from.crossOrigin, to.crossOrigin)),
+		...ruled('endpoint.cache', cacheChange(name, from.cache, to.cache)),
+		...ruled('endpoint.authorization', authorizationChange(name, from.authorization, to.authorization)),
+		...ruled('endpoint.input', schemaChanges({ endpoint: name, side: 'input', path: '' }, from.input, to.input)),
+		...ruled('endpoint.output', outputChanges(name, from.output, to.output)),
 	]
 }
 
@@ -939,7 +1186,7 @@ export function crossOriginReach(form: CrossOriginForm): string {
 }
 
 /** Opening an endpoint to another origin widens, and so does `environment` → `any`; the reverse narrows. */
-function crossOriginChanges(name: string, from: CrossOriginForm | undefined, to: CrossOriginForm | undefined): AccessChange[] {
+function crossOriginChanges(name: string, from: CrossOriginForm | undefined, to: CrossOriginForm | undefined): Line[] {
 	if (from === to) return []
 	if (to === undefined) return [narrowing(`${name} is no longer callable from another origin`)]
 	const line = from === 'any'
@@ -960,13 +1207,13 @@ function reusedFor(cache: EndpointCache | undefined): string {
 }
 
 /** A changed `http.cache` reaches no data: the line shows how long a copy may outlive a change. */
-function cacheChange(name: string, from: EndpointCache | undefined, to: EndpointCache | undefined): AccessChange[] {
+function cacheChange(name: string, from: EndpointCache | undefined, to: EndpointCache | undefined): Line[] {
 	if (canonicalJson(from ?? null) === canonicalJson(to ?? null)) return []
 	return [neutral(to === undefined ? `${name} answers are no longer reused` : `${name}${reusedFor(to)}`)]
 }
 
 /** A webhook row that forwards the sender's `Authorization` hands application code a credential the proxy never reads. */
-function authorizationChange(name: string, from: EndpointAuthorization | undefined, to: EndpointAuthorization | undefined): AccessChange[] {
+function authorizationChange(name: string, from: EndpointAuthorization | undefined, to: EndpointAuthorization | undefined): Line[] {
 	if (from === to) return []
 	return to === undefined
 		? [narrowing(`${name} no longer receives the sender's own Authorization header`)]
@@ -990,7 +1237,7 @@ export function attachmentName(row: EndpointRow): string | null {
  * An output: two schemas compare as schemas; two attachments by their limits and columns; a change between a JSON
  * answer and a file widens. A file's name and its column order grant nothing, so they narrow at most.
  */
-function outputChanges(name: string, from: OutputShape | null, to: OutputShape | null): AccessChange[] {
+function outputChanges(name: string, from: OutputShape | null, to: OutputShape | null): Line[] {
 	if (from !== null && isFileShape(from) && to !== null && isFileShape(to)) {
 		return valueChange(`${name} file kind`, from.kind, to.kind)
 	}
@@ -1024,7 +1271,7 @@ function redirectReach(shape: RedirectShape): string {
 	return shape.origins.length === 0 ? 'a redirect to its own origin' : `a redirect to its own origin or ${listOf(shape.origins, '')}`
 }
 
-function attachmentChanges(name: string, from: AttachmentShape, to: AttachmentShape): AccessChange[] {
+function attachmentChanges(name: string, from: AttachmentShape, to: AttachmentShape): Line[] {
 	const file = `${name} file`
 	const renamed = from.filename === to.filename ? [] : [narrowing(`${file} name changes from \`${from.filename}\` to \`${to.filename}\``)]
 	const columns = (shape: AttachmentShape) => Object.fromEntries(shape.columns.map((column) => [column.name, column.shape]))
@@ -1037,18 +1284,23 @@ function attachmentChanges(name: string, from: AttachmentShape, to: AttachmentSh
 	]
 }
 
-function admissionChanges(name: string, from: EndpointRow, to: EndpointRow): AccessChange[] {
+function admissionChanges(name: string, from: EndpointRow, to: EndpointRow): RuledLine[] {
 	const before = from.admission
 	const after = to.admission
 	if (before === null || after === null) {
 		if (before === after) return []
-		return [after === null ? narrowing(`${name} no longer admits a body`) : widening(`${name} admits a body of ${after.contentTypes.join(', ')}`)]
+		return ruled('endpoint.body', [
+			after === null ? narrowing(`${name} no longer admits a body`) : widening(`${name} admits a body of ${after.contentTypes.join(', ')}`),
+		])
 	}
 	const bigger = after.maxBytes === null ? before.maxBytes !== null : before.maxBytes !== null && after.maxBytes > before.maxBytes
 	const sizeChange = before.maxBytes === after.maxBytes
 		? []
 		: [(bigger ? widening : narrowing)(`${name} body limit changes from ${bytes(before.maxBytes)} to ${bytes(after.maxBytes)}`)]
-	return [...setChanges(name, before.contentTypes, after.contentTypes, 'admits', 'no longer admits'), ...sizeChange]
+	return [
+		...ruled('endpoint.body-types', setChanges(name, before.contentTypes, after.contentTypes, 'admits', 'no longer admits')),
+		...ruled('endpoint.body-limit', sizeChange),
+	]
 }
 
 // ── Schemas ─────────────────────────────────────────────────────────────────────────────────────
@@ -1079,7 +1331,7 @@ function itemsSite(site: SchemaSite): SchemaSite {
  * The values a schema admits, compared structurally: a change that can only admit fewer values narrows, any other
  * change widens. No logical implication between schemas is attempted, so an equivalent rewrite widens too.
  */
-function schemaChanges(site: SchemaSite, from: SchemaShape | null, to: SchemaShape | null): AccessChange[] {
+function schemaChanges(site: SchemaSite, from: SchemaShape | null, to: SchemaShape | null): Line[] {
 	if (canonicalJson(from) === canonicalJson(to)) return []
 	if (from === null || to === null) return valueChange(siteLabel(site), from, to)
 	const before = unwrapped(from)
@@ -1110,11 +1362,11 @@ function unwrapped(shape: SchemaShape): Unwrapped {
 	}
 }
 
-function flagChange(before: boolean, after: boolean, gained: AccessChange, lost: AccessChange): AccessChange[] {
+function flagChange(before: boolean, after: boolean, gained: Line, lost: Line): Line[] {
 	return before === after ? [] : [after ? gained : lost]
 }
 
-function coreChanges(site: SchemaSite, from: SchemaShape, to: SchemaShape): AccessChange[] {
+function coreChanges(site: SchemaSite, from: SchemaShape, to: SchemaShape): Line[] {
 	if (canonicalJson(from) === canonicalJson(to)) return []
 	const label = siteLabel(site)
 	const fromValues = finiteValues(from)
@@ -1135,9 +1387,9 @@ function coreChanges(site: SchemaSite, from: SchemaShape, to: SchemaShape): Acce
 	return valueChange(label, from, to)
 }
 
-function fieldChanges(site: SchemaSite, from: Readonly<Record<string, SchemaShape>>, to: Readonly<Record<string, SchemaShape>>): AccessChange[] {
+function fieldChanges(site: SchemaSite, from: Readonly<Record<string, SchemaShape>>, to: Readonly<Record<string, SchemaShape>>): Line[] {
 	const label = siteLabel(site)
-	const changes: AccessChange[] = []
+	const changes: Line[] = []
 	for (const field of union(Object.keys(from), Object.keys(to))) {
 		const before = from[field]
 		const after = to[field]
@@ -1157,16 +1409,14 @@ function finiteValues(shape: SchemaShape): string[] | null {
 	return null
 }
 
-function valueSetChanges(label: string, from: readonly string[], to: readonly string[]): AccessChange[] {
-	const changes = new Changes()
-	compareSet(changes, from, to, {
+function valueSetChanges(label: string, from: readonly string[], to: readonly string[]): Line[] {
+	return setLines(from, to, {
 		added: (value) => widening(`${label} admits ${shownValue(value)}`),
 		removed: (value) => narrowing(`${label} no longer admits ${shownValue(value)}`),
 	})
-	return changes.list
 }
 
-function stringChanges(label: string, from: StringShape, to: StringShape): AccessChange[] {
+function stringChanges(label: string, from: StringShape, to: StringShape): Line[] {
 	return [
 		...constraintChange(`${label} format`, from.format, to.format),
 		...lowerLimitChange(`${label} minimum length`, from.minLength, to.minLength),
@@ -1178,7 +1428,7 @@ function stringChanges(label: string, from: StringShape, to: StringShape): Acces
 	]
 }
 
-function numberChanges(label: string, from: NumberShape, to: NumberShape): AccessChange[] {
+function numberChanges(label: string, from: NumberShape, to: NumberShape): Line[] {
 	const integer = flagChange(from.int, to.int, narrowing(`${label} admits only integers`), widening(`${label} admits non-integers`))
 	return [
 		...integer,
@@ -1189,7 +1439,7 @@ function numberChanges(label: string, from: NumberShape, to: NumberShape): Acces
 }
 
 /** A constraint added where there was none narrows; any other change of it widens. */
-function constraintChange(subject: string, before: string | number | null, after: string | number | null): AccessChange[] {
+function constraintChange(subject: string, before: string | number | null, after: string | number | null): Line[] {
 	if (before === after) return []
 	return [
 		(before === null ? narrowing : widening)(`${subject} changes from ${shownValue(canonicalJson(before))} to ${shownValue(canonicalJson(after))}`),
@@ -1205,7 +1455,7 @@ interface Bound {
  * A numeric bound: `direction` is 1 for a minimum (a higher one narrows) and -1 for a maximum. At the same value an
  * exclusive bound is the tighter one.
  */
-function boundChange(subject: string, before: Bound, after: Bound, direction: 1 | -1): AccessChange[] {
+function boundChange(subject: string, before: Bound, after: Bound, direction: 1 | -1): Line[] {
 	if (before.value === after.value && before.exclusive === after.exclusive) return []
 	const tighter = after.value !== null && (before.value === null || (after.value - before.value) * direction > 0
 		|| (after.value === before.value && after.exclusive))
@@ -1217,7 +1467,7 @@ function boundText(bound: Bound): string {
 }
 
 /** A higher minimum narrows; a lower or removed one widens. `null` is no limit. */
-function lowerLimitChange(subject: string, before: number | null, after: number | null): AccessChange[] {
+function lowerLimitChange(subject: string, before: number | null, after: number | null): Line[] {
 	if (before === after) return []
 	const higher = after !== null && (before === null || after > before)
 	return [(higher ? narrowing : widening)(`${subject} changes from ${before ?? 'none'} to ${after ?? 'none'}`)]
@@ -1258,29 +1508,31 @@ function endpointMap(rows: readonly EndpointRow[]): Map<string, EndpointRow> {
 
 // ── Roles, files, tables ────────────────────────────────────────────────────────────────────────
 
-function roleChanges(name: string, from: RoleArtifact, to: RoleArtifact): AccessChange[] {
+function roleChanges(name: string, from: RoleArtifact, to: RoleArtifact): RuledLine[] {
 	const role = `Role \`${name}\``
 	const external = externalChange(name, from.external, to.external)
+	const grants = ruled('role.grants', setChanges(role, from.grants, to.grants, 'gains', 'loses'))
 	if (from.member === null || to.member === null || from.member.scope !== to.member.scope) {
-		return [
-			...setChanges(role, from.grants, to.grants, 'gains', 'loses'),
-			...valueChange(`${role} membership`, from.member, to.member),
-			...external,
-		]
+		return [...grants, ...ruled('role.membership', valueChange(`${role} membership`, from.member, to.member)), ...external]
 	}
 	return [
-		...setChanges(role, from.grants, to.grants, 'gains', 'loses'),
-		...setChanges(role, from.member.assignableBy, to.member.assignableBy, 'can be assigned by', 'can no longer be assigned by'),
+		...grants,
+		...ruled(
+			'role.assignable-by',
+			setChanges(role, from.member.assignableBy, to.member.assignableBy, 'can be assigned by', 'can no longer be assigned by'),
+		),
 		...external,
 	]
 }
 
 /** An external role may be held by a person from outside the organization (ADR-0051). */
-function externalChange(name: string, before: true | undefined, after: true | undefined): AccessChange[] {
+function externalChange(name: string, before: true | undefined, after: true | undefined): RuledLine[] {
 	if (before === after) return []
-	return after === true
-		? [widening(`Role \`${name}\` may be held by external principals, people from outside the organization`)]
-		: [narrowing(`Role \`${name}\` may no longer be held by external principals`)]
+	return ruled('role.external', [
+		after === true
+			? widening(`Role \`${name}\` may be held by external principals, people from outside the organization`)
+			: narrowing(`Role \`${name}\` may no longer be held by external principals`),
+	])
 }
 
 /** `image/png, at most 262144 bytes, served only after a clean scan`. */
@@ -1288,16 +1540,19 @@ function fileKindPhrase(kind: FileKindArtifact): string {
 	return `${listOf(kind.types, 'no types')}, at most ${bytes(kind.maxBytes)}${kind.scan === true ? ', served only after a clean scan' : ''}`
 }
 
-function fileKindChanges(name: string, from: FileKindArtifact, to: FileKindArtifact): AccessChange[] {
+function fileKindChanges(name: string, from: FileKindArtifact, to: FileKindArtifact): RuledLine[] {
 	const kind = `File kind \`${name}\``
 	return [
-		...setChanges(kind, from.types, to.types, 'admits', 'no longer admits'),
-		...limitChange(`${kind} size limit`, from.maxBytes, to.maxBytes),
-		...flagChange(
-			from.scan === true,
-			to.scan === true,
-			narrowing(`${kind} serves a file only after a clean scan`),
-			widening(`${kind} no longer waits for a scan`),
+		...ruled('file-kind.types', setChanges(kind, from.types, to.types, 'admits', 'no longer admits')),
+		...ruled('file-kind.size-limit', limitChange(`${kind} size limit`, from.maxBytes, to.maxBytes)),
+		...ruled(
+			'file-kind.scan',
+			flagChange(
+				from.scan === true,
+				to.scan === true,
+				narrowing(`${kind} serves a file only after a clean scan`),
+				widening(`${kind} no longer waits for a scan`),
+			),
 		),
 	]
 }
@@ -1306,7 +1561,7 @@ function fileKindChanges(name: string, from: FileKindArtifact, to: FileKindArtif
  * `` `deals.write` writes `deal_attachments.file` (attachments) ``, for each action that inserts or updates the column: a
  * file's reach is the reach of the column that holds it.
  */
-function fileColumnLines(name: string, table: TablePolicyArtifact): AccessChange[] {
+function fileColumnLines(name: string, table: TablePolicyArtifact): Line[] {
 	return Object.entries(table.files ?? {}).map(([column, kind]) => {
 		const ownWrite = table.columns[column]?.write
 		const writers = [
@@ -1321,7 +1576,7 @@ function fileColumnLines(name: string, table: TablePolicyArtifact): AccessChange
 	})
 }
 
-function fileChanges(name: string, from: FileCollectionArtifact, to: FileCollectionArtifact): AccessChange[] {
+function fileChanges(name: string, from: FileCollectionArtifact, to: FileCollectionArtifact): RuledLine[] {
 	const files = `File collection \`${name}\``
 	const linkChange = fileLinkChanges(files, from.link, to.link)
 	// Without scanning, an upload is served the moment it is written.
@@ -1333,15 +1588,15 @@ function fileChanges(name: string, from: FileCollectionArtifact, to: FileCollect
 				: widening(`${files} stops scanning uploads for malware`),
 		]
 	return [
-		...valueChange(`${files} owner`, from.owner, to.owner),
-		...valueChange(`${files} read action`, from.read, to.read),
-		...valueChange(`${files} write action`, from.write, to.write),
-		...valueChange(`${files} delete action`, from.delete, to.delete),
-		...limitChange(`${files} size limit`, from.maxBytes, to.maxBytes),
-		...limitChange(`${files} limit per owner`, from.maxPerOwner, to.maxPerOwner),
-		...setChanges(files, from.types, to.types, 'accepts', 'no longer accepts'),
-		...linkChange,
-		...scanChange,
+		...ruled('file-collection.owner', valueChange(`${files} owner`, from.owner, to.owner)),
+		...ruled('file-collection.read', valueChange(`${files} read action`, from.read, to.read)),
+		...ruled('file-collection.write', valueChange(`${files} write action`, from.write, to.write)),
+		...ruled('file-collection.delete', valueChange(`${files} delete action`, from.delete, to.delete)),
+		...ruled('file-collection.size-limit', limitChange(`${files} size limit`, from.maxBytes, to.maxBytes)),
+		...ruled('file-collection.per-owner', limitChange(`${files} limit per owner`, from.maxPerOwner, to.maxPerOwner)),
+		...ruled('file-collection.types', setChanges(files, from.types, to.types, 'accepts', 'no longer accepts')),
+		...ruled('file-collection.link', linkChange),
+		...ruled('file-collection.scan', scanChange),
 	]
 }
 
@@ -1350,7 +1605,7 @@ function linkReach(link: true | readonly string[]): string {
 	return link === true ? 'share links' : `the share links of mount ${listOf(link, 'none')}`
 }
 
-function fileLinkChanges(files: string, from: boolean | readonly string[], to: boolean | readonly string[]): AccessChange[] {
+function fileLinkChanges(files: string, from: boolean | readonly string[], to: boolean | readonly string[]): Line[] {
 	if (from === to) return []
 	if (to === false) return [narrowing(`${files} is no longer reachable through share links`)]
 	if (from === false) return [widening(`${files} becomes reachable through ${linkReach(to)}`)]
@@ -1392,7 +1647,7 @@ function newTableLine(name: string, table: TablePolicyArtifact): string {
  * One operation's actions: a single action replaced by another reads as the change it always was; otherwise each action
  * the operation gains widens and each it loses narrows.
  */
-function operationChanges(table: string, operation: string, from: TableActionArtifact | null, to: TableActionArtifact | null): AccessChange[] {
+function operationChanges(table: string, operation: string, from: TableActionArtifact | null, to: TableActionArtifact | null): Line[] {
 	if ((from === null || typeof from === 'string') && (to === null || typeof to === 'string')) {
 		return valueChange(`${table} ${operation} action`, from, to)
 	}
@@ -1400,51 +1655,59 @@ function operationChanges(table: string, operation: string, from: TableActionArt
 	return setChanges(table, tableActions(from), tableActions(to), `is ${verb} with`, `is no longer ${verb} with`)
 }
 
-function tableChanges(name: string, from: TablePolicyArtifact, to: TablePolicyArtifact): AccessChange[] {
+function tableChanges(name: string, from: TablePolicyArtifact, to: TablePolicyArtifact): RuledLine[] {
 	const table = `Table \`${name}\``
-	const columns: AccessChange[] = []
+	const columns: RuledLine[] = []
 	for (const column of union(Object.keys(from.columns), Object.keys(to.columns))) {
 		const subject = `Column \`${name}.${column}\``
 		const before: ColumnPolicyArtifact = from.columns[column] ?? {}
 		const after: ColumnPolicyArtifact = to.columns[column] ?? {}
 		if (before.read === undefined && after.read !== undefined) {
-			columns.push(narrowing(`${subject} is read with \`${after.read}\` instead of ${actionsText(from.actions.read)}`))
+			columns.push(...ruled('table.column-read', [narrowing(`${subject} is read with \`${after.read}\` instead of ${actionsText(from.actions.read)}`)]))
 		} else if (before.read !== undefined && after.read === undefined) {
 			// Without its own policy the column falls back to the table's read action (ADR-0050 §3).
-			columns.push(widening(`${subject} loses its read policy \`${before.read}\` and is read with ${actionsText(to.actions.read)}`))
+			columns.push(
+				...ruled('table.column-read', [widening(`${subject} loses its read policy \`${before.read}\` and is read with ${actionsText(to.actions.read)}`)]),
+			)
 		} else if (before.read !== undefined && after.read !== undefined) {
-			columns.push(...valueChange(`${subject} read action`, before.read, after.read))
+			columns.push(...ruled('table.column-read', valueChange(`${subject} read action`, before.read, after.read)))
 		}
 		// A column's own write action is one more action that updates the table; the update list's lines cover the rest.
 		if (before.write === undefined && after.write !== undefined) {
-			columns.push(widening(`${subject} is updated with its own write action \`${after.write}\``))
+			columns.push(...ruled('table.column-write', [widening(`${subject} is updated with its own write action \`${after.write}\``)]))
 		} else if (before.write !== undefined && after.write === undefined) {
-			columns.push(narrowing(`${subject} is no longer updated with its own write action \`${before.write}\``))
+			columns.push(...ruled('table.column-write', [narrowing(`${subject} is no longer updated with its own write action \`${before.write}\``)]))
 		} else if (before.write !== undefined && after.write !== undefined) {
-			columns.push(...valueChange(`${subject} write action`, before.write, after.write))
+			columns.push(...ruled('table.column-write', valueChange(`${subject} write action`, before.write, after.write)))
 		}
 	}
 	return [
-		...valueChange(`${table} scope`, from.scope, to.scope),
-		...operationChanges(table, 'read', from.actions.read, to.actions.read),
-		...operationChanges(table, 'insert', from.actions.insert, to.actions.insert),
-		...operationChanges(table, 'update', from.actions.update, to.actions.update),
-		...operationChanges(table, 'delete', from.actions.delete, to.actions.delete),
+		...ruled('table.scope', valueChange(`${table} scope`, from.scope, to.scope)),
+		...ruled('table.read', operationChanges(table, 'read', from.actions.read, to.actions.read)),
+		...ruled('table.insert', operationChanges(table, 'insert', from.actions.insert, to.actions.insert)),
+		...ruled('table.update', operationChanges(table, 'update', from.actions.update, to.actions.update)),
+		...ruled('table.delete', operationChanges(table, 'delete', from.actions.delete, to.actions.delete)),
 		// An appRead action reads every row app-wide and an appCount action counts it: each new one widens.
-		...setChanges(table, from.actions.appRead ?? [], to.actions.appRead ?? [], 'is read app-wide with', 'is no longer read app-wide with'),
-		...setChanges(table, from.actions.appCount ?? [], to.actions.appCount ?? [], 'is counted app-wide with', 'is no longer counted app-wide with'),
-		...setChanges(table, from.insert, to.insert, 'accepts inserts of', 'no longer accepts inserts of'),
-		...setChanges(table, from.update, to.update, 'accepts updates of', 'no longer accepts updates of'),
-		...valueChange(`${table} version column`, from.version, to.version),
-		...valueChange(`${table} creator column`, from.createdBy, to.createdBy),
+		...ruled(
+			'table.app-read',
+			setChanges(table, from.actions.appRead ?? [], to.actions.appRead ?? [], 'is read app-wide with', 'is no longer read app-wide with'),
+		),
+		...ruled(
+			'table.app-count',
+			setChanges(table, from.actions.appCount ?? [], to.actions.appCount ?? [], 'is counted app-wide with', 'is no longer counted app-wide with'),
+		),
+		...ruled('table.insert-columns', setChanges(table, from.insert, to.insert, 'accepts inserts of', 'no longer accepts inserts of')),
+		...ruled('table.update-columns', setChanges(table, from.update, to.update, 'accepts updates of', 'no longer accepts updates of')),
+		...ruled('table.version', valueChange(`${table} version column`, from.version, to.version)),
+		...ruled('table.creator', valueChange(`${table} creator column`, from.createdBy, to.createdBy)),
 		...columns,
-		...fileColumnChanges(name, from.files ?? {}, to.files ?? {}),
+		...ruled('table.file-column', fileColumnChanges(name, from.files ?? {}, to.files ?? {})),
 	]
 }
 
 /** A column that starts or stops holding files, or holds another kind; who writes it is `fileColumnLines`'. */
-function fileColumnChanges(name: string, from: Readonly<Record<string, string>>, to: Readonly<Record<string, string>>): AccessChange[] {
-	return union(Object.keys(from), Object.keys(to)).flatMap((column): AccessChange[] => {
+function fileColumnChanges(name: string, from: Readonly<Record<string, string>>, to: Readonly<Record<string, string>>): Line[] {
+	return union(Object.keys(from), Object.keys(to)).flatMap((column): Line[] => {
 		const subject = `Column \`${name}.${column}\``
 		const before = from[column]
 		const after = to[column]
@@ -1457,71 +1720,87 @@ function fileColumnChanges(name: string, from: Readonly<Record<string, string>>,
 // ── Generic comparisons ─────────────────────────────────────────────────────────────────────────
 
 interface KeyedLines<T> {
-	added(key: string, value: T): string | AccessChange
-	removed(key: string, value: T): string | readonly AccessChange[]
-	changed(key: string, before: T, after: T): readonly AccessChange[]
+	added(key: string, value: T): string | Line
+	removed(key: string, value: T): string | readonly Line[]
+	changed(key: string, before: T, after: T): readonly RuledLine[]
 }
 
-/** A new key widens, a removed key narrows; a key in both is compared by `changed` unless the two are equal. */
-function compareKeyed<T>(changes: Changes, before: ReadonlyMap<string, T>, after: ReadonlyMap<string, T>, lines: KeyedLines<T>): void {
+/**
+ * A new key widens, a removed key narrows; a key in both is compared by `changed` unless the two are equal. Each line is
+ * placed on the key as a subject of `kind`; an added or removed key's line is under `<kind>.added` or `<kind>.removed`.
+ */
+function compareKeyed<T>(
+	changes: Changes,
+	kind: ChangeSubjectKind,
+	before: ReadonlyMap<string, T>,
+	after: ReadonlyMap<string, T>,
+	lines: KeyedLines<T>,
+): void {
 	for (const key of union([...before.keys()], [...after.keys()])) {
 		const from = before.get(key)
 		const to = after.get(key)
+		const subject = subjectOf(kind, key)
 		if (from === undefined && to !== undefined) {
 			const added = lines.added(key, to)
-			changes.add(typeof added === 'string' ? widening(added) : added)
+			changes.add(subject, ...ruled(`${kind}.added`, [typeof added === 'string' ? widening(added) : added]))
 		} else if (from !== undefined && to === undefined) {
 			const removed = lines.removed(key, from)
-			if (typeof removed === 'string') changes.add(narrowing(removed))
-			else changes.add(...removed)
-		} else if (from !== undefined && to !== undefined && canonicalJson(from) !== canonicalJson(to)) changes.add(...lines.changed(key, from, to))
+			changes.add(subject, ...ruled(`${kind}.removed`, typeof removed === 'string' ? [narrowing(removed)] : removed))
+		} else if (from !== undefined && to !== undefined && canonicalJson(from) !== canonicalJson(to)) {
+			changes.add(subject, ...lines.changed(key, from, to))
+		}
 	}
 }
 
-function compareSet(
-	changes: Changes,
+/** The values one list gains and loses, in order. */
+function setLines(
 	before: readonly string[],
 	after: readonly string[],
-	lines: { added(value: string): AccessChange; removed(value: string): AccessChange },
-): void {
-	for (const value of union(before, after)) {
-		if (!before.includes(value)) changes.add(lines.added(value))
-		else if (!after.includes(value)) changes.add(lines.removed(value))
-	}
+	lines: { added(value: string): Line; removed(value: string): Line },
+): Line[] {
+	return union(before, after).flatMap((value) => {
+		if (!before.includes(value)) return [lines.added(value)]
+		if (!after.includes(value)) return [lines.removed(value)]
+		return []
+	})
 }
 
-function setChanges(subject: string, before: readonly string[], after: readonly string[], gains: string, loses: string): AccessChange[] {
-	const changes = new Changes()
-	compareSet(changes, before, after, {
+function setChanges(subject: string, before: readonly string[], after: readonly string[], gains: string, loses: string): Line[] {
+	return setLines(before, after, {
 		added: (value) => widening(`${subject} ${gains} \`${value}\``),
 		removed: (value) => narrowing(`${subject} ${loses} \`${value}\``),
 	})
-	return changes.list
 }
 
 /**
  * The words IAM shows a person signing in, setting a password or accepting an invitation of this application, and the
  * wording of its e-mails, which carry IAM's one-time links. They grant nothing, but the approver reads every change.
  */
-function presentationChanges(baseline: ContractArtifact, candidate: ContractArtifact): AccessChange[] {
-	const changes: AccessChange[] = []
+function presentationChanges(baseline: ContractArtifact, candidate: ContractArtifact): RuledLine[] {
+	const changes: RuledLine[] = []
 	if (baseline.displayName !== candidate.displayName) {
-		changes.push(widening(
-			candidate.displayName === undefined
-				? 'IAM no longer names the application on its sign-in, password and invitation pages and e-mails'
-				: `IAM names the application ${shown(JSON.stringify(candidate.displayName))} on its sign-in, password and invitation pages and e-mails`,
-		))
+		changes.push(...ruled('application.display-name', [
+			widening(
+				candidate.displayName === undefined
+					? 'IAM no longer names the application on its sign-in, password and invitation pages and e-mails'
+					: `IAM names the application ${shown(JSON.stringify(candidate.displayName))} on its sign-in, password and invitation pages and e-mails`,
+			),
+		]))
 	}
 	if (baseline.locale !== candidate.locale) {
 		changes.push(
-			widening(`IAM speaks \`${candidate.locale ?? 'its default language'}\` on the application's sign-in, password and invitation pages and e-mails`),
+			...ruled('application.locale', [
+				widening(`IAM speaks \`${candidate.locale ?? 'its default language'}\` on the application's sign-in, password and invitation pages and e-mails`),
+			]),
 		)
 	}
 	const changed = MESSAGE_KINDS.flatMap((kind) =>
 		LOCALES.filter((locale) => canonicalJson(baseline.mail?.[kind]?.[locale] ?? null) !== canonicalJson(candidate.mail?.[kind]?.[locale] ?? null))
 			.map((locale) => `\`${kind}\` in \`${locale}\``)
 	)
-	if (changed.length > 0) changes.push(widening(`The application's wording of IAM's e-mails changes: ${changed.join(', ')}`))
+	if (changed.length > 0) {
+		changes.push(...ruled('application.mail', [widening(`The application's wording of IAM's e-mails changes: ${changed.join(', ')}`)]))
+	}
 	return changes
 }
 
@@ -1529,24 +1808,29 @@ function presentationChanges(baseline: ContractArtifact, candidate: ContractArti
  * The application's own people: who administers its global roles in IAM's console, who lists everyone holding one of
  * its roles, and whether that list shows labels, which spell users' addresses.
  */
-function peopleChanges(baseline: ContractArtifact, candidate: ContractArtifact): AccessChange[] {
-	const changes: AccessChange[] = []
+function peopleChanges(baseline: ContractArtifact, candidate: ContractArtifact): RuledLine[] {
+	const changes: RuledLine[] = []
 	const before = baseline.members
 	const after = candidate.members
 	if (canonicalJson(before ?? null) !== canonicalJson(after ?? null)) {
 		changes.push(
-			after === undefined
-				? narrowing('The application no longer declares its own people: only an IAM administrator grants its roles, and nobody lists them')
-				: closerWidening(
-					`Holders of \`${after.manage}\` grant and revoke the application's global roles in IAM's console, and holders of \`${after.list}\` list everyone holding one of its roles`,
-				),
+			...ruled('application.people', [
+				after === undefined
+					? narrowing('The application no longer declares its own people: only an IAM administrator grants its roles, and nobody lists them')
+					: closer(
+						'people',
+						`Holders of \`${after.manage}\` grant and revoke the application's global roles in IAM's console, and holders of \`${after.list}\` list everyone holding one of its roles`,
+					),
+			]),
 		)
 	}
 	if (baseline.directory !== candidate.directory) {
 		changes.push(
-			candidate.directory === 'labels'
-				? closerWidening("Holders of the application's members.list action see each person's label, which spells a user's email address")
-				: narrowing("Holders of the application's members.list action no longer see labels"),
+			...ruled('application.directory', [
+				candidate.directory === 'labels'
+					? closer('people', "Holders of the application's members.list action see each person's label, which spells a user's email address")
+					: narrowing("Holders of the application's members.list action no longer see labels"),
+			]),
 		)
 	}
 	return changes
@@ -1556,16 +1840,17 @@ function peopleChanges(baseline: ContractArtifact, candidate: ContractArtifact):
  * The terminal identification page (ADR-0067): with it, an administrator may list the application on an enrolled
  * terminal, and the application then names which person signs in there, within the terminal's ceiling.
  */
-function terminalChanges(baseline: ContractArtifact, candidate: ContractArtifact): AccessChange[] {
+function terminalChanges(baseline: ContractArtifact, candidate: ContractArtifact): RuledLine[] {
 	const before = baseline.terminal?.identify
 	const after = candidate.terminal?.identify
 	if (before === after) return []
-	if (after === undefined) return [narrowing('The application no longer identifies people at enrolled terminals')]
-	return [
-		closerWidening(
+	if (after === undefined) return ruled('application.terminal', [narrowing('The application no longer identifies people at enrolled terminals')])
+	return ruled('application.terminal', [
+		closer(
+			'terminal',
 			`The application identifies people at enrolled terminals on \`${after}\` and asserts who signs in there, within each terminal's ceiling`,
 		),
-	]
+	])
 }
 
 /**
@@ -1580,25 +1865,40 @@ export function opaqueRoots(artifact: ContractArtifact): string[] {
 		.map(([name]) => name)
 }
 
-function dimensionChanges(name: string, from: DimensionArtifact, to: DimensionArtifact): AccessChange[] {
+function opaqueRootChange(name: string, baseline: ContractArtifact, candidate: ContractArtifact): RuledLine[] {
+	const before = opaqueRoots(baseline).includes(name)
+	const after = opaqueRoots(candidate).includes(name)
+	if (before === after) return []
+	if (after) {
+		return ruled('dimension.opaque-root', [widening(`Dimension \`${name}\` is an opaque root: an application-wide grant admits any value, unchecked`)])
+	}
+	return ruled('dimension.opaque-root', [
+		Object.hasOwn(candidate.dimensions, name)
+			? narrowing(`Dimension \`${name}\` is no longer an opaque root: a value is read from its table`)
+			: narrowing(`Dimension \`${name}\` is no longer an opaque root`),
+	])
+}
+
+function dimensionChanges(name: string, from: DimensionArtifact, to: DimensionArtifact): RuledLine[] {
 	const { directory: before, ...fromRest } = from
 	const { directory: after, ...toRest } = to
-	return [...valueChange(`Dimension \`${name}\``, fromRest, toRest), ...directoryChange(name, before, after)]
+	return [...ruled('dimension.declaration', valueChange(`Dimension \`${name}\``, fromRest, toRest)), ...directoryChange(name, before, after)]
 }
 
 /**
  * A directory that shows labels lets every `members.list` holder read each member's label, which spells an address, and
  * every endpoint on, in or below the dimension read the label of a member it looks up (`ctx.members.get`).
  */
-function directoryChange(name: string, before: 'labels' | undefined, after: 'labels' | undefined): AccessChange[] {
+function directoryChange(name: string, before: 'labels' | undefined, after: 'labels' | undefined): RuledLine[] {
 	if (before === after) return []
-	return after === 'labels'
-		? [
-			closerWidening(
+	return ruled('dimension.directory', [
+		after === 'labels'
+			? closer(
+				'people',
 				`Holders of the members.list action of \`${name}\` see each member's label, and every endpoint on, in or below \`${name}\` reads the label of a member it looks up; a label spells a user's email address`,
-			),
-		]
-		: [narrowing(`Holders of the members.list action of \`${name}\` and the endpoints below \`${name}\` no longer see member labels`)]
+			)
+			: narrowing(`Holders of the members.list action of \`${name}\` and the endpoints below \`${name}\` no longer see member labels`),
+	])
 }
 
 /** The collections a new form puts an anonymous visitor's files into. */
@@ -1638,39 +1938,46 @@ function servedNames(mount: MountArtifact): readonly string[] {
  * coalesces on its lease, so a change of it alone widens nothing. An SPA's public variables and a form's site key
  * get a line each, by name. The rest of a mount is compared as a value.
  */
-function mountChanges(name: string, from: MountArtifact, to: MountArtifact): AccessChange[] {
+function mountChanges(name: string, from: MountArtifact, to: MountArtifact): RuledLine[] {
+	const declaration = (before: unknown, after: unknown) => ruled('mount.declaration', valueChange(`Mount \`${name}\``, before, after))
 	if (from.kind === 'rpc' && to.kind === 'rpc') {
 		const { compatibility: before, ...fromRest } = from
 		const { compatibility: after, ...toRest } = to
-		return [...valueChange(`Mount \`${name}\``, fromRest, toRest), ...compatibilityChange(name, before, after)]
+		return [...declaration(fromRest, toRest), ...ruled('mount.compatibility', compatibilityChange(name, before, after))]
 	}
 	if (from.kind === 'webhook' && to.kind === 'webhook') {
 		const { timeoutMs: before, ...fromRest } = from
 		const { timeoutMs: after, ...toRest } = to
-		return [...valueChange(`Mount \`${name}\``, fromRest, toRest), ...timeLimitChange(`Webhook \`${name}\``, before, after)]
+		return [...declaration(fromRest, toRest), ...ruled('mount.time-limit', timeLimitChange(`Webhook \`${name}\``, before, after))]
 	}
 	if (from.kind === 'spa' && to.kind === 'spa') {
 		const { public: before = [], ...fromRest } = from
 		const { public: after = [], ...toRest } = to
 		return [
-			...valueChange(`Mount \`${name}\``, fromRest, toRest),
-			...setChanges(`Mount \`${name}\``, before, after, 'serves its pages the public variable', 'no longer serves the public variable'),
+			...declaration(fromRest, toRest),
+			...ruled(
+				'mount.public-variables',
+				setChanges(`Mount \`${name}\``, before, after, 'serves its pages the public variable', 'no longer serves the public variable'),
+			),
 		]
 	}
-	if (from.kind !== 'form' || to.kind !== 'form') return valueChange(`Mount \`${name}\``, from, to)
+	if (from.kind !== 'form' || to.kind !== 'form') return declaration(from, to)
 	const { then: before, files: filesBefore = {}, ...fromRest } = withoutSiteKey(from)
 	const { then: after, files: filesAfter = {}, ...toRest } = withoutSiteKey(to)
 	return [
-		...valueChange(`Mount \`${name}\``, fromRest, toRest),
-		...formFileChanges(name, filesBefore, filesAfter),
-		...setChanges(
-			`Form \`${name}\``,
-			siteKeyOf(from),
-			siteKeyOf(to),
-			'serves every page its challenge site key from',
-			'no longer serves its site key from',
+		...declaration(fromRest, toRest),
+		...ruled('mount.form-files', formFileChanges(name, filesBefore, filesAfter)),
+		...ruled(
+			'mount.public-variables',
+			setChanges(
+				`Form \`${name}\``,
+				siteKeyOf(from),
+				siteKeyOf(to),
+				'serves every page its challenge site key from',
+				'no longer serves its site key from',
+			),
 		),
-		...kickChange(name, before, after),
+		...ruled('mount.then', kickChange(name, before, after)),
 	]
 }
 
@@ -1682,8 +1989,8 @@ type FormFiles = NonNullable<FormMountArtifact['files']>
  * A form's file field lets an anonymous visitor put a file into a collection, which its readers then open: a new or
  * moved field widens, a field a submission must now carry is shown, a removed one narrows.
  */
-function formFileChanges(name: string, before: FormFiles, after: FormFiles): AccessChange[] {
-	const changes: AccessChange[] = []
+function formFileChanges(name: string, before: FormFiles, after: FormFiles): Line[] {
+	const changes: Line[] = []
 	for (const [field, file] of Object.entries(after)) {
 		const was = before[field]
 		if (was === undefined || was.collection !== file.collection) {
@@ -1720,17 +2027,18 @@ export function isJobStartLine(line: string): boolean {
 	return /^(Form|Endpoint) `[^`]+` (no longer )?starts job `/.test(line)
 }
 
-function kickChange(name: string, before: string | undefined, after: string | undefined): AccessChange[] {
+function kickChange(name: string, before: string | undefined, after: string | undefined): Line[] {
 	if (before === after) return []
-	const line = after === undefined
-		? `Form \`${name}\` no longer starts job \`${before}\` after a submission`
-		: `Form \`${name}\` starts job \`${after}\` after each accepted submission, beside its schedule`
-	return [neutral(line)]
+	return [
+		after === undefined
+			? neutral(`Form \`${name}\` no longer starts job \`${before}\` after a submission`)
+			: startsJob(neutral(`Form \`${name}\` starts job \`${after}\` after each accepted submission, beside its schedule`), after),
+	]
 }
 
 /** Any change of a value the diff does not order widens. */
 /** A mount's promise to its callers reaches no data: it is shown, and Control enforces it at publication. */
-function compatibilityChange(name: string, before: MountCompatibility | undefined, after: MountCompatibility | undefined): AccessChange[] {
+function compatibilityChange(name: string, before: MountCompatibility | undefined, after: MountCompatibility | undefined): Line[] {
 	if (before === after) return []
 	return [
 		neutral(
@@ -1741,14 +2049,14 @@ function compatibilityChange(name: string, before: MountCompatibility | undefine
 	]
 }
 
-function valueChange(subject: string, before: unknown, after: unknown): AccessChange[] {
+function valueChange(subject: string, before: unknown, after: unknown): Line[] {
 	const from = canonicalJson(before)
 	const to = canonicalJson(after)
 	return from === to ? [] : [widening(`${subject} changes from ${shown(from)} to ${shown(to)}`)]
 }
 
 /** A larger or removed limit widens; a smaller one narrows. `null` is no limit. */
-function limitChange(subject: string, before: number | null, after: number | null): AccessChange[] {
+function limitChange(subject: string, before: number | null, after: number | null): Line[] {
 	if (before === after) return []
 	const larger = after === null || (before !== null && after > before)
 	return [(larger ? widening : narrowing)(`${subject} changes from ${before ?? 'none'} to ${after ?? 'none'}`)]

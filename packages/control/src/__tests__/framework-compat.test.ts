@@ -219,6 +219,8 @@ for (const release of CASES) {
 			expect(access?.contractDigest).toBe(live.contractDigest)
 			expect(access?.contractDigest).toBe(fixture.platform.contractDigest)
 			expect(access?.checker).toBe(release.checker)
+			// The provider's release gates read the pin, which a prerelease keeps below the newer reader.
+			expect(access?.framework).toBe(release.framework)
 		})
 
 		test('gets the proxy rows and the IAM schema its own platform compiles', async () => {
@@ -245,6 +247,7 @@ for (const release of CASES) {
 			expect(stored.framework).toBe(release.format === 'current' ? release.framework : undefined)
 			expect(approvedAccess(stored)?.contract).toEqual(approvedAccess(snapshot)?.contract)
 			expect(approvedAccess(stored)?.contractDigest).toBe(release.startupDigest)
+			expect(approvedAccess(stored)?.framework).toBe(stored.framework)
 			expect(classifyAccess(stored, snapshot)).toEqual({ outcome: 'none', changes: [] })
 		})
 

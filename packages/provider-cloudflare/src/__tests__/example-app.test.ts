@@ -62,8 +62,10 @@ describe('the example application', () => {
 	test('its application Worker starts the generated entrypoint as the contract the deploy read', async () => {
 		const app = (await deployedRoot())?.options.bindings?.['APP']
 		const options = app instanceof Worker ? app.options : undefined
-		expect(options?.name).toBe('propustka-example-app')
+		expect(options?.name).toBe('example-app')
 		expect(options?.main).toBe('./fabrika/entry.generated.ts')
 		expect(options?.vars?.[FABRIKA_CONTRACT_DIGEST]).toBe(contractDigest(artifact))
+		// The contract's `site` mount: its files are staged into `fabrika/assets` after `pipeline.build`.
+		expect(options?.assets).toEqual({ directory: 'fabrika/assets', binding: 'ASSETS', run_worker_first: true })
 	})
 })

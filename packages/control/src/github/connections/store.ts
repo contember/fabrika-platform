@@ -399,6 +399,29 @@ export class GitHubConnectionStore {
 		return this.markTerminalLike(id, expectedVersion, 'failed', errorCode, true)
 	}
 
+	/**
+	 * Fail an attempt whose stored App can never be verified, and drop its key from the vault in the same batch. The
+	 * attempt keeps the ref (its phase says a key was stored) to a key that no longer exists, and frees the one setup
+	 * slot for a fresh connection.
+	 */
+	async failWithCredential(attempt: GitHubSetupAttempt, errorCode: GitHubSetupErrorCode): Promise<GitHubSetupAttempt | null> {
+		if (attempt.appCredentialRef === null) return null
+		const ref = attempt.appCredentialRef
+		const now = this.now()
+		const fail = this.db.prepare(`UPDATE github_source_setup_attempts SET
+			status = 'failed', state_hash = NULL, last_error_code = ?, version = version + 1, updated_at = ?, terminal_at = ?
+			WHERE id = ? AND version = ? AND status = 'active' AND phase = 'credential_stored'
+				AND app_credential_ref = ? AND webhook_secret_ref IS NULL RETURNING *`)
+			.bind(errorCode, now, now, attempt.id, attempt.version, ref)
+		const remove = this.db.prepare(`DELETE FROM vault WHERE id = ? AND scope = 'platform' AND label = ? AND EXISTS (
+			SELECT 1 FROM github_source_setup_attempts WHERE id = ? AND version = ? AND status = 'failed'
+				AND app_credential_ref = ?
+		) RETURNING id`).bind(ref.slice('vault:'.length), githubAppCredentialSecretLabel(attempt.id), attempt.id, attempt.version + 1, ref)
+		const results = await this.db.batch<GitHubSetupAttemptRow>([fail, remove]).catch(() => null)
+		const row = results?.[0]?.results[0]
+		return results?.[0]?.results.length === 1 && row !== undefined ? decodeAttempt(row) : null
+	}
+
 	async publishConnection(input: PublishGitHubConnectionInput): Promise<GitHubSourceConnection | null> {
 		if (!Number.isSafeInteger(input.installationId) || input.installationId <= 0) throw new Error('invalid installation id')
 		validateNonEmpty(input.installationAccountLogin, 'installation account')

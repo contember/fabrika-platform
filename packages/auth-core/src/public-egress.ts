@@ -1,5 +1,5 @@
 // `egress: 'public'`: a cron job that calls the websites its operators name (a crawler, an auditor, a link checker)
-// reaches any public host over HTTPS or HTTP, and never the installation or a private network (ADR-0070). These are the
+// reaches any public host over HTTPS or HTTP, and never the installation or a private network (ADR-0071). These are the
 // rules a URL alone decides, which the runtime guard and the checker share. The guard adds the installation's own hosts
 // and, where the runtime exposes name resolution, the addresses a name resolves to.
 

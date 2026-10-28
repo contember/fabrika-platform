@@ -1,7 +1,9 @@
 import { MAX_KEY_LIFETIME_SECONDS, type PermissionEntry } from '@fabrika/auth-core'
+import { installationMailKey, PLATFORM_MAIL_SEND_PATH } from '@fabrika/email/platform'
 import { builtinEmailProviders } from '@fabrika/email/providers'
+import { ResendEmailSender } from '@fabrika/email/resend'
 import { Database } from 'bun:sqlite'
-import { beforeEach, describe, expect, mock, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test'
 import { PROVISIONING_ADMIN_ID } from '../auth'
 import { createIamRepositories } from '../db'
 import type { Env, RequestContext } from '../env'
@@ -555,7 +557,19 @@ describe('Propustka RPC entrypoint (TEST-4)', () => {
 	})
 })
 
+const RELAYED = {
+	FABRIKA_CONTROL_URL: 'https://control.example.com',
+	FABRIKA_IAM_PROVISIONING_KEY: 'px_provisioning',
+	FABRIKA_EMAIL_PROVIDER: 'resend',
+	FABRIKA_EMAIL_FROM: 'Fabrika <auth@example.com>',
+	FABRIKA_EMAIL_RESEND_API_KEY: 'private-resend-key',
+}
+
 describe('the IAM Worker environment', () => {
+	afterEach(() => {
+		mock.restore()
+	})
+
 	test('maps the secret bindings onto the runtime-neutral env', () => {
 		const env = iamEnv({
 			...workerBindings(freshDb()),
@@ -575,6 +589,56 @@ describe('the IAM Worker environment', () => {
 
 		expect(env.EMAIL_CONFIG?.['FABRIKA_EMAIL_RESEND_API_KEY']).toBe('private-resend-key')
 		expect(env.EMAIL_PROVIDERS).toBe(builtinEmailProviders)
+	})
+
+	test("sends through Control's relay under the key derived from the provisioning key, as Zerops does from the RPC key", async () => {
+		const requests: { url: string; authorization: string | null; body: unknown }[] = []
+		const relay = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+			const request = new Request(input, init)
+			requests.push({ url: request.url, authorization: request.headers.get('Authorization'), body: await request.json() })
+			return Response.json({ status: 'accepted', messageId: 'relay-message-1' })
+		}
+		spyOn(globalThis, 'fetch').mockImplementation(Object.assign(relay, { preconnect: fetch.preconnect }))
+		const env = iamEnv({ ...workerBindings(freshDb()), ...RELAYED })
+		const message = { to: 'ada@example.com', subject: 'Reset', text: 'Open the link', idempotencyKey: 'iam-reset-1' }
+
+		const result = await buildServices(env).email?.send(message, AbortSignal.timeout(5_000))
+
+		expect(result).toEqual({ status: 'accepted', provider: 'platform', messageId: 'relay-message-1' })
+		expect(requests).toEqual([{
+			url: `https://control.example.com${PLATFORM_MAIL_SEND_PATH}`,
+			authorization: `Bearer ${await installationMailKey('px_provisioning')}`,
+			body: message,
+		}])
+	})
+
+	test('never sends the relay key over an http origin: the message goes out with its own provider', async () => {
+		const urls: string[] = []
+		const answer = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+			urls.push(new Request(input, init).url)
+			return Promise.resolve(Response.json({ id: 'resend-message-1' }))
+		}
+		spyOn(globalThis, 'fetch').mockImplementation(Object.assign(answer, { preconnect: fetch.preconnect }))
+		spyOn(console, 'warn').mockImplementation(() => {})
+		const db = freshDb()
+		const env = iamEnv({ ...workerBindings(db), ...RELAYED, FABRIKA_CONTROL_URL: 'http://control.example.com' })
+		const message = { to: 'ada@example.com', subject: 'Reset', text: 'Open the link', idempotencyKey: 'iam-reset-2' }
+
+		expect(await buildServices(env).email?.send(message, AbortSignal.timeout(5_000))).toMatchObject({ provider: 'resend' })
+		expect(urls).toEqual(['https://api.resend.com/emails'])
+		// The fallback is in the audit log, where an operator sees the relay go unused.
+		expect(db.query('SELECT action, principal_label, metadata FROM audit_events').all()).toEqual([
+			{ action: 'iam.mail.relay_fallback', principal_label: 'mail-relay', metadata: JSON.stringify({ code: 'invalid_configuration' }) },
+		])
+	})
+
+	test("keeps its provider's sender without Control's origin or the provisioning key, and has none without a provider", () => {
+		const withoutUrl = { ...RELAYED, FABRIKA_CONTROL_URL: '' }
+		const withoutKey = { ...RELAYED, FABRIKA_IAM_PROVISIONING_KEY: '' }
+		for (const bindings of [withoutUrl, withoutKey]) {
+			expect(buildServices(iamEnv({ ...workerBindings(freshDb()), ...bindings })).email).toBeInstanceOf(ResendEmailSender)
+		}
+		expect(buildServices(iamEnv({ ...workerBindings(freshDb()), ...RELAYED, FABRIKA_EMAIL_PROVIDER: 'none' })).email).toBeNull()
 	})
 
 	// A Worker has no boot, so `local` from a public issuer fails where a Worker fails everything else:

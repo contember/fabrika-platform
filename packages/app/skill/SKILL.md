@@ -1,6 +1,6 @@
 ---
 name: fabrika-app
-version: 0.9.0-cloudflare.2
+version: 0.9.0-dev.8
 description: >
   How to write and change a Fabrika application: src/vocabulary.ts, db/migrations/, src/db/tables.ts, the
   slices' endpoints.ts with their handlers, fabrika.contract.ts, jobs, files, webhooks, share links, connectors
@@ -234,14 +234,15 @@ the access check. `references/spa.md` shows the stack.
 | any public website (a job)     | `egress: 'public'`                                      | `fetch` to public hosts, never the installation    |
 | a signed link (unsubscribe)    | `signs: ['<purpose>']`                                  | `ctx.tokens.sign`                                  |
 | a webhook binding              | `binds: '<webhook>'`                                    | `ctx.webhooks('<webhook>').bind` and `.unbind`     |
-| a job run after the commit     | `kicks: ['<job>']`                                      | `ctx.kick('<job>')`                                |
+| a job run after the commit     | `kicks: ['<job>']`                                      | `ctx.kick('<job>')`, `ctx.kick('<job>', { at })`   |
 | a trigger, function or view    | its migration                                           | —                                                  |
 
-Scope every scoped table a raw statement reads with `${ctx.sql.scope(<capability>, '<table>', '<alias>')}`, a conjunct
-of its WHERE or JOIN … ON (`where (<filter>) and ${…}`): `ctx.target` for `on` and `in`, `ctx.within` for `over`, a
-job's minted `Ref` or `Within` with `tx.sql.scope`. It binds the capability's whole predicate, chain included, as the
-handles apply it, and on an `update` or `delete` target it needs that operation's action; a reference table needs
-none. A deviation is fine: declare it, and do not contort the code to avoid it. The approver sees every declaration
+Scope every scoped table a raw statement reads with `${ctx.sql.scope(<capability>, '<table>', { alias: '<alias>' })}`,
+a conjunct of its WHERE or JOIN … ON (`where (<filter>) and ${…}`): `ctx.target` for `on` and `in`, `ctx.within` for
+`over`, a job's minted `Ref` or `Within` with `tx.sql.scope`. It binds the capability's whole predicate, chain
+included, as the handles apply it. The table an `update` or `delete` writes takes `{ use: 'update' }` or
+`{ use: 'delete' }`, which needs that operation's action; a reference table needs none. The runtime does not check
+where you put a fragment: the approver reads it. A deviation is fine: declare it, and do not contort the code to avoid it. The approver sees every declaration
 marked "needs closer review". Do not hide reach in a helper; the runtime builds `ctx.sql` and `ctx.db.unscoped` only
 where they are declared. A query or an export declares only `'read'`.
 
@@ -296,13 +297,15 @@ bunx tsc --noEmit                                           # once, at the end
 bunx fabrika-check .                                        # once, after tsc; refusals fail; hints print below them
 ```
 
-**On Cloudflare** (`fabrika.config.ts` imports `defineApp` from `@fabrika/provider-cloudflare`) the application runs in
-one Durable Object over SQLite. Its `db/migrations/*.sql` are SQLite (`references/table-and-migration.md`), and the
+**On Cloudflare** (`fabrika.config.ts` imports `defineApp` from `@fabrika/provider-cloudflare`, as
+`references/app-setup.md` shows) the application runs in one Durable Object over SQLite. Its `db/migrations/*.sql` are SQLite (`references/table-and-migration.md`), and the
 object applies them when it boots, so there is no `migrate` and no command needs a database URL or `FABRIKA_APP_ID`.
 The tests run on `@fabrika/db/testing-sqlite` (`references/tests.md`), in memory, and never skip. A handler holds the
-object's transaction, so its `limits.timeoutMs` is at most 25 s. No `sql` (`ctx.sql`) and no `scan: true`: the
-checker, the deploy and the boot refuse both. The deploy serves each SPA mount's built `dir` itself; declare no
-`assets` on the Worker (`references/app-setup.md`).
+object's transaction, so its `limits.timeoutMs` is at most 25 s. A job's is at most 14 minutes, its default: longer
+work claims a bounded batch per run, and the next run takes the rest (`references/jobs.md`). `ctx.sql` is SQLite there
+(`references/endpoint.md`). No `scan: true`: the checker, the deploy and the boot refuse it. A migration names no
+`fabrika_*` table but `REFERENCES fabrika_files (id)`. The deploy serves each SPA mount's
+built `dir` itself; declare no `assets` on the Worker (`references/app-setup.md`).
 
 The object runs one transaction at a time, so every `await` in a handler that may write holds the whole environment:
 IAM, R2, a `fetch`, a `ctx.connect` call, a binding. One 2 s call caps the environment at half a request a second. A
@@ -322,9 +325,8 @@ bun test --isolate                                          # no database URL; t
 
 A generated file changes only through its command (`codegen`, `test-scaffold`); running it is the loop, not an edit.
 Format and lint only the files you wrote, with the repository's own tools: in the fabrika-platform repository
-`bunx dprint fmt <files>` and `bunx biome lint <files>`, never `biome check` (its formatter fights dprint), and never a
-generated file. An application outside that repository has neither configuration: use the formatter its own
-repository configures, or none, and never add a configuration unasked; tsc and `fabrika-check` are its gates. `FABRIKA_APP_ID` is lowercase letters, digits and `-`. An applied file is immutable: while you still
+`bunx dprint fmt <files>` and `bunx oxlint <files>`, and never a generated file. An application outside that
+repository has neither configuration: use the formatter its own repository configures, or none, and never add a configuration unasked; tsc and `fabrika-check` are its gates. `FABRIKA_APP_ID` is lowercase letters, digits and `-`. An applied file is immutable: while you still
 change an uncommitted migration, migrate into a fresh schema with another `FABRIKA_APP_ID`. Read a refusal's
 "allowed form" and use it; fix hints too. `references/errors.md` explains the findings and the type errors.
 
@@ -352,9 +354,9 @@ e-mails them, a link holder's files, HR's review with its history.
 ## Not built yet
 
 - On Cloudflare, where the application runs in one Durable Object over its SQLite and its `db/migrations/*.sql` are
-  SQLite, `sql` (`ctx.sql`) and a file kind with `scan: true` are refused. Everything else on the road runs there.
-- Jobs are cron only and app-wide: no `ctx.jobs.enqueue`, no job per scope. A `ctx.kick` starts a run of its job; it
-  carries nothing, and the job finds its work in a queue table with `claim`. A list write is off the road (`sql`).
+  SQLite, a file kind with `scan: true` is refused. Everything else on the road runs there.
+- Jobs are cron only and app-wide: no `ctx.jobs.enqueue`, no job per scope. A `ctx.kick` starts a run of its job, now
+  or at `{ at }`; it carries nothing, and the job finds its work in a queue table with `claim`. A list write is off the road (`sql`).
 - A read across tables (a join, a filter over a related table, an aggregate over several) is off the road (`sql`).
 - An MCP workspace has no shell, so `codegen` and `test-scaffold` cannot run there. Tell the human; never write a
   generated file by hand.

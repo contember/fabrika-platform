@@ -34,7 +34,7 @@ export function fakeExec(): RequestExecutionContext {
 	}
 }
 
-export function jsonRequest(url: string, body: unknown, method = 'POST'): Request {
+export function jsonRequest(url: string, body: unknown, method: 'POST' | 'PUT' | 'PATCH' | 'DELETE' = 'POST'): Request {
 	return new Request(url, {
 		method,
 		body: JSON.stringify(body),

@@ -40,6 +40,12 @@ import {
 const FIXTURE_ROOT = join(import.meta.dir, 'cloudflare-fixture')
 const DSN = 'https://0123456789abcdef0123456789abcdef@operations.test/42'
 
+/** The environment's bucket holding no maintenance state, so every object reads `open`; no file call is expected. */
+function filesBucket() {
+	const unused = () => Promise.reject(new Error('not called'))
+	return { head: unused, get: (key: string) => key.startsWith('__fabrika/ops/') ? Promise.resolve(null) : unused(), put: unused, delete: unused }
+}
+
 interface Started {
 	readonly object: FabrikaApplication
 	/** What the object handed to `waitUntil`. */
@@ -55,7 +61,15 @@ function start(implementation: ContractImplementation, env: Readonly<Record<stri
 		blockConcurrencyWhile: (callback) => callback(),
 		waitUntil: (promise) => void pending.push(promise),
 	}
-	return { object: new FabrikaApplication(state, { ...frameworkEnvFor(implementation), FABRIKA_PROXY_SECRET: PROXY_SECRET, ...env }), pending }
+	return {
+		object: new FabrikaApplication(state, {
+			...frameworkEnvFor(implementation),
+			FABRIKA_PROXY_SECRET: PROXY_SECRET,
+			[CLOUDFLARE_FILES_BINDING]: filesBucket(),
+			...env,
+		}),
+		pending,
+	}
 }
 
 /** A request as the Worker forwards it: the proxy's headers and the proxy secret. */
@@ -69,14 +83,13 @@ function forwarded(
 /** An object of the SQLite fixture's `implementation` over `storage`, with every binding its boot needs. */
 function sqliteObject(implementation: ContractImplementation, storage: ApplicationStorage, env: Readonly<Record<string, unknown>> = {}): Started {
 	const tokens = workloadTokensFor(implementation)
-	const unused = () => Promise.reject(new Error('not called'))
 	const pending: Promise<unknown>[] = []
 	const state: ApplicationState = { storage, blockConcurrencyWhile: (callback) => callback(), waitUntil: (promise) => void pending.push(promise) }
 	const object = new FabrikaApplication(state, {
 		...frameworkEnvFor(implementation),
 		FABRIKA_PROXY_SECRET: PROXY_SECRET,
+		[CLOUDFLARE_FILES_BINDING]: filesBucket(),
 		IAM: { getJwks: () => keySource.getJwks(), mintFromKey: (input: { app: string; key: string }) => tokens.exchange(input) },
-		[CLOUDFLARE_FILES_BINDING]: { head: unused, get: unused, put: unused, delete: unused },
 		...env,
 	})
 	return { object, pending }
@@ -136,7 +149,6 @@ const startingApp = implement(starting, {
 
 describe('two environment objects in one isolate', () => {
 	const WORKSPACE = { type: 'workspace', value: 'w1' }
-	const unused = () => Promise.reject(new Error('not called'))
 
 	test('each reads and writes only its own database, its waitUntil work included', async () => {
 		await keepingProcessEnvironment(async () => {
@@ -155,6 +167,7 @@ describe('two environment objects in one isolate', () => {
 				...frameworkEnvFor(served.implementation),
 				...served.variables,
 				FABRIKA_PROXY_SECRET: PROXY_SECRET,
+				[CLOUDFLARE_FILES_BINDING]: filesBucket(),
 				IAM: {
 					getJwks: () => keySource.getJwks(),
 					mintFromKey: async (input: { app: string; key: string }) => {
@@ -162,14 +175,14 @@ describe('two environment objects in one isolate', () => {
 						return await tokens.exchange(input)
 					},
 				},
-				[CLOUDFLARE_FILES_BINDING]: { head: unused, get: unused, put: unused, delete: unused },
 			}
 			const objectOver = (storage: ApplicationStorage) => {
 				const pending: Promise<unknown>[] = []
 				const state: ApplicationState = { storage, blockConcurrencyWhile: (callback) => callback(), waitUntil: (promise) => void pending.push(promise) }
 				return { object: new FabrikaApplication(state, env), pending }
 			}
-			const a = objectOver(bunSqliteStorage())
+			const aDatabase = new BunDatabase(':memory:')
+			const a = objectOver(bunSqliteStorage(aDatabase))
 			const b = objectOver(bunSqliteStorage())
 			const call = async (object: FabrikaApplication, procedure: string, input: unknown): Promise<unknown> => {
 				const path = `/api/notes.${procedure}`
@@ -193,9 +206,11 @@ describe('two environment objects in one isolate', () => {
 			await call(b.object, 'create', { workspaceId: 'w1', title: 'b-second' })
 			expect(await call(b.object, 'titles', { workspaceId: 'w1' })).toEqual({ result: { titles: ['b-first', 'b-second'] } })
 
+			// A's first event repaired its jobs' wakes; its nightly job's wake is now made due, and its alarm fires.
+			await Promise.all(a.pending.splice(0))
+			aDatabase.query("update fabrika_wakes set due_at = ? where job = 'nightly'").run(Date.now() - 1_000)
 			const release = hold()
-			const tick = await a.object.fetch(forwarded('/', { method: 'POST', headers: { [TICK_HEADER]: String(Date.UTC(2026, 9, 22, 3, 0, 0)) } }))
-			expect(tick.status).toBe(204)
+			await a.object.alarm()
 			await call(b.object, 'create', { workspaceId: 'w1', title: 'b-third' })
 			expect(await call(b.object, 'titles', { workspaceId: 'w1' })).toEqual({ result: { titles: ['b-first', 'b-second', 'b-third'] } })
 			expect(world.runs).toEqual([])
@@ -207,17 +222,21 @@ describe('two environment objects in one isolate', () => {
 	})
 })
 
-describe('the minute tick of the environment object', () => {
-	test('runs the due ones of exactly the jobs boot bound, the file sweep of a file kind included', async () => {
+describe('the repair tick and the alarm of the environment object', () => {
+	test('the tick keeps one cron wake for exactly the jobs boot bound, the file sweep included; the alarm runs the due ones', async () => {
 		await keepingProcessEnvironment(async () => {
 			const served = sqliteNotesApp({ runs: [] })
 			createContractWorker(() => Promise.resolve({ default: served.implementation }), { migrations: await applicationMigrations(FIXTURE_ROOT) })
 			const tokens = workloadTokensFor(served.implementation)
-			const unused = () => Promise.reject(new Error('not called'))
 			const database = new BunDatabase(':memory:')
 			const pending: Promise<unknown>[] = []
+			const alarms: (number | null)[] = []
 			const state: ApplicationState = {
-				storage: bunSqliteStorage(database),
+				storage: {
+					...bunSqliteStorage(database),
+					setAlarm: (time) => Promise.resolve(void alarms.push(time)),
+					deleteAlarm: () => Promise.resolve(void alarms.push(null)),
+				},
 				blockConcurrencyWhile: (callback) => callback(),
 				waitUntil: (promise) => void pending.push(promise),
 			}
@@ -225,22 +244,38 @@ describe('the minute tick of the environment object', () => {
 				...frameworkEnvFor(served.implementation),
 				...served.variables,
 				FABRIKA_PROXY_SECRET: PROXY_SECRET,
+				[CLOUDFLARE_FILES_BINDING]: filesBucket(),
 				IAM: { getJwks: () => keySource.getJwks(), mintFromKey: (input: { app: string; key: string }) => tokens.exchange(input) },
-				[CLOUDFLARE_FILES_BINDING]: { head: unused, get: unused, put: unused, delete: unused },
 			})
-			const tickAt = async (time: number) => {
-				const response = await object.fetch(forwarded('/', { method: 'POST', headers: { [TICK_HEADER]: String(time) } }))
-				expect(response.status).toBe(204)
-				await Promise.all(pending.splice(0))
-			}
 			const leases = () =>
 				database.query<{ job: string; last_started_at: string | null }, []>('select job, last_started_at from fabrika_job_leases order by job').all()
+			const wakes = () =>
+				database.query<{ job: string; dedupe: string; due_at: number }, []>('select job, dedupe, due_at from fabrika_wakes order by job').all()
 
-			await tickAt(Date.UTC(2026, 9, 22, 3, 41, 0))
+			const before = Date.now()
+			const response = await object.fetch(forwarded('/', { method: 'POST', headers: { [TICK_HEADER]: String(before) } }))
+			expect(response.status).toBe(204)
 			expect(leases().map((row) => row.job)).toEqual(['fabrika-file-sweep', 'halfPast', 'nightly', 'putThenFail'].sort())
-			expect(leases().filter((row) => row.last_started_at !== null).map((row) => row.job)).toEqual([FILE_SWEEP_JOB])
-			await tickAt(Date.UTC(2026, 9, 22, 4, 30, 0))
+			expect(leases().filter((row) => row.last_started_at !== null)).toEqual([])
+			expect(wakes().map(({ job, dedupe }) => ({ job, dedupe }))).toEqual([
+				{ job: FILE_SWEEP_JOB, dedupe: `cron:${FILE_SWEEP_JOB}:41 * * * *` },
+				{ job: 'halfPast', dedupe: 'cron:halfPast:30 * * * *' },
+				{ job: 'nightly', dedupe: 'cron:nightly:0 3 * * *' },
+				{ job: 'putThenFail', dedupe: 'cron:putThenFail:15 * * * *' },
+			])
+			// Each at its next fire, and the alarm at the earliest of them.
+			for (const wake of wakes()) {
+				expect(wake.due_at).toBeGreaterThan(before)
+				expect(wake.due_at % 60_000).toBe(0)
+			}
+			expect(alarms.at(-1)).toBe(Math.min(...wakes().map((wake) => wake.due_at)))
+
+			database.query('update fabrika_wakes set due_at = ? where job in (?, ?)').run(Date.now() - 1_000, FILE_SWEEP_JOB, 'halfPast')
+			await object.alarm()
+			await Promise.all(pending.splice(0))
 			expect(leases().filter((row) => row.last_started_at !== null).map((row) => row.job).sort()).toEqual([FILE_SWEEP_JOB, 'halfPast'].sort())
+			// Both completed: their next fires are scheduled, and the other two jobs' wakes did not move.
+			expect(wakes().every((wake) => wake.due_at > before)).toBe(true)
 		})
 	})
 })
@@ -348,7 +383,12 @@ describe('the crash reports of the environment object', () => {
 					blockConcurrencyWhile: (callback) => callback(),
 					waitUntil: (promise) => void failing.push(promise),
 				}
-				const object = new FabrikaApplication(state, { ...frameworkEnvFor(notesApp(new Map())), FABRIKA_PROXY_SECRET: PROXY_SECRET, ...env })
+				const object = new FabrikaApplication(state, {
+					...frameworkEnvFor(notesApp(new Map())),
+					FABRIKA_PROXY_SECRET: PROXY_SECRET,
+					[CLOUDFLARE_FILES_BINDING]: filesBucket(),
+					...env,
+				})
 				await expect(object.fetch(forwarded('/healthz'))).rejects.toThrow('the IAM binding is missing')
 			}
 			await Promise.all(failing)
@@ -359,6 +399,7 @@ describe('the crash reports of the environment object', () => {
 			const object = new FabrikaApplication(state, {
 				...frameworkEnvFor(notesApp(new Map())),
 				FABRIKA_PROXY_SECRET: PROXY_SECRET,
+				[CLOUDFLARE_FILES_BINDING]: filesBucket(),
 				...env,
 				IAM: keySource,
 			})
@@ -398,6 +439,7 @@ describe('the crash reports of the environment object', () => {
 				const object = new FabrikaApplication(state, {
 					...frameworkEnvFor(app),
 					FABRIKA_PROXY_SECRET: PROXY_SECRET,
+					[CLOUDFLARE_FILES_BINDING]: filesBucket(),
 					FABRIKA_OPERATIONS_DSN: DSN,
 					IAM: keySource,
 					ASSETS: { fetch: () => Promise.resolve(new Response('asset')) },

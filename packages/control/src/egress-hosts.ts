@@ -1,4 +1,4 @@
-// The installation's own hosts, which a cron job's public egress refuses (ADR-0070). An application knows the hosts its
+// The installation's own hosts, which a cron job's public egress refuses (ADR-0071). An application knows the hosts its
 // framework variables name (IAM, Operations, its own origin); Control adds the ones it does not: Control's own and every
 // application environment's domain and public origin. A deploy writes them as `FABRIKA_EGRESS_REFUSED_HOSTS`, only for
 // a contract with such a job, and removes them from one without.

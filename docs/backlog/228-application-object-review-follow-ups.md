@@ -16,8 +16,9 @@ a release; each is small.
 1. `cloudflare-current-timestamp` skips exactly one parenthesis: `DEFAULT ((CURRENT_TIMESTAMP))` passes
    (`src/rules/migrations.ts:60`).
 2. The refusal tokenizes SQLite with the shared Postgres lexer. A bracket or backtick identifier gives a false
-   positive, and a non-nested `/* */` comment gives a false negative (`migrations.ts:57`). It needs a SQLite mode in
-   the tokenizer (shared with [214](214-raw-sql-on-sqlite.md)).
+   positive, and a non-nested `/* */` comment gives a false negative (`migrations.ts:57`). `lexSqlite`
+   (`@fabrika/platform-node/sql`) is the SQLite lexer `cloudflare-framework-name` already reads with; this rule should
+   too.
 
 **Timers.**
 
@@ -36,8 +37,8 @@ a release; each is small.
 
 **Read-only invocations on SQLite (`packages/db/src/sqlite.ts`).**
 
-Only framework SQL reaches the read path ([214](214-raw-sql-on-sqlite.md) refuses `ctx.sql` on SQLite), so these
-gaps are defence in depth.
+Application SQL reaches the read path only through a `'read'` site's `ctx.sql`, whose text rules refuse a second
+statement and a `PRAGMA` before anything runs, so these gaps are defence in depth.
 
 6. On workerd, a multi-statement string reports only the last statement's `rowsWritten`, so `INSERT …; SELECT 1`
    escapes the backstop (`:141-144`). Refuse more than one statement on the read path.
@@ -113,11 +114,15 @@ gaps are defence in depth.
 29. Every `inspect` counts up to 100,000 rows per table synchronously, and a `data.read` holder can call it without a
     bound. Cache the view or rate-limit the call.
 30. Deleting an environment leaves its ops keys' vault rows behind, as it does for token keys.
-31. `servesOps` counts a prerelease as its minor, so a Cloudflare environment pinned to 0.9.0-dev.0 to 0.9.0-dev.4 gets the
-    ops row, the key digests and a required vault, although those prereleases were published before the object served
-    the ops channel. The ops row then reaches an application that answers no ops request. Gate on the first release
-    that ships the ops handler, prerelease included. Not by SemVer order alone: `0.9.0-cloudflare.1` sorts
-    below `0.9.0-dev.0`, and the cloudflare channel ships the handler (`contract-support.test.ts` pins it as served).
+31. The three minor gates count a prerelease as its minor, and 0.9.0-dev.0 to 0.9.0-dev.4 have no application object:
+    their tags hold `packages/app/src/cloudflare.ts` and no `src/cloudflare/application.ts`, which 0.9.0-cloudflare.1
+    is the first to ship. `runsInObject` and `pinsGeneratedEntry` therefore deploy such an environment on the object
+    runtime with the generated entry, which its framework does not export; `servesOps` gives it the ops row, the key
+    digests and a required vault, so the ops row reaches an application that answers no ops request. Gate each on the
+    first release that ships what it serves, prerelease included. Not by SemVer order alone: `0.9.0-cloudflare.1`
+    sorts below `0.9.0-dev.0`, and the cloudflare channel ships the object (`contract-support.test.ts` pins it as
+    served). [Backlog 240](240-channel-prereleases-sort-below-the-release-floors.md) is the same ordering problem for
+    the release floors.
 
 ## Approach / acceptance
 
@@ -131,4 +136,4 @@ the sprint, and item 16 is settled with it.
 `packages/app` (`cloudflare/ops.ts`, `cloudflare/invocation.ts`), `packages/auth-core` (`ops.ts`), `packages/control`
 (`ops-key.ts`, `data-operations.ts`).
 
-<!-- Origin: ../sprints/sprint-2026-10-24-application-object.md, run log of waves 0–3. -->
+<!-- Origin: ../archive/sprint-2026-10-24-application-object.md, run log of waves 0–3. -->

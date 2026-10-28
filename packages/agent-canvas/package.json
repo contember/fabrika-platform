@@ -1,6 +1,6 @@
 {
 	"name": "agent-canvas",
-	"version": "0.9.0-cloudflare.2",
+	"version": "0.9.0-dev.8",
 	"description": "Interactive visual canvas for Claude Code — rich annotatable documents in the browser",
 	"license": "MIT",
 	"repository": {
@@ -21,7 +21,11 @@
 		"skills"
 	],
 	"exports": {
-		"./package.json": "./package.json"
+		"./package.json": "./package.json",
+		"./review/model": "./daemon/src/review/model.ts",
+		"./review/remote": "./daemon/src/review/remote.ts",
+		"./review/sealing": "./daemon/src/review/sealing.ts",
+		"./review/threads": "./daemon/src/review/threads.ts"
 	},
 	"scripts": {
 		"build": "bun daemon/build.ts",

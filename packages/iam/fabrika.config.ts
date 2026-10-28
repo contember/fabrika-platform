@@ -7,6 +7,7 @@
 // standalone Oblaka adapter).
 
 import { type EmailTransportConfig, readEmailTransportConfig } from '@fabrika/email'
+import { isHttpOrigin } from '@fabrika/email/platform'
 import { builtinEmailProviders } from '@fabrika/email/providers'
 import { D1Database, defineApp, type ResourceContext, Worker } from '@fabrika/provider-cloudflare'
 
@@ -27,6 +28,8 @@ interface RemoteConfig {
 	oidcIssuer: string
 	oidcClientId: string
 	email: EmailTransportConfig
+	/** Control's public origin, which IAM's mail goes through when set; absent keeps IAM on its own provider. */
+	controlUrl?: string
 }
 
 interface AuthenticationConfig {
@@ -78,9 +81,27 @@ const emailVars = (email: EmailTransportConfig, source: EnvironmentSource): Reco
 const emailVariableNames = (email: EmailTransportConfig, secret: boolean): string[] =>
 	email.kind === 'none' ? [] : email.variables.filter((variable) => variable.secret === secret).map((variable) => variable.name)
 
+/**
+ * `FABRIKA_CONTROL_URL` as an https origin, or undefined when unset. IAM's Worker reaches Control across the internet
+ * with a key that sends mail past the relay's gate, so never in cleartext. The relay knows IAM by a key derived from the
+ * provisioning key, so the origin without that key would leave the relay unused.
+ */
+const controlUrl = (source: EnvironmentSource): string | undefined => {
+	const raw = source['FABRIKA_CONTROL_URL']
+	if (raw === undefined || raw === '') return undefined
+	if (!isHttpOrigin(raw) || !raw.startsWith('https://')) {
+		throw new Error('FABRIKA_CONTROL_URL must be an https origin, with no path and no trailing slash')
+	}
+	if (!source['FABRIKA_IAM_PROVISIONING_KEY']?.trim()) {
+		throw new Error('FABRIKA_CONTROL_URL needs FABRIKA_IAM_PROVISIONING_KEY, which the mail relay authenticates IAM by')
+	}
+	return raw
+}
+
 const remoteConfig = (env: string, domain: string | undefined, source: EnvironmentSource): RemoteConfig => {
 	const authentication = authenticationConfig(source)
 	const email = emailConfig(source)
+	const control = controlUrl(source)
 	const humanEmailDomains = source['FABRIKA_IAM_HUMAN_EMAIL_DOMAINS']
 	const oidcIssuer = source['FABRIKA_IAM_OIDC_ISSUER']
 	const oidcClientId = source['FABRIKA_IAM_OIDC_CLIENT_ID']
@@ -110,6 +131,7 @@ const remoteConfig = (env: string, domain: string | undefined, source: Environme
 		oidcIssuer: oidcIssuer ?? '',
 		oidcClientId: oidcClientId ?? '',
 		email,
+		...(control === undefined ? {} : { controlUrl: control }),
 	}
 }
 
@@ -154,6 +176,7 @@ const buildVars = (config: RemoteConfig | 'local', source: EnvironmentSource): R
 		OIDC_SCOPES: source['FABRIKA_IAM_OIDC_SCOPES'] ?? '',
 		OIDC_REQUIRE_VERIFIED_EMAIL: source['FABRIKA_IAM_OIDC_REQUIRE_VERIFIED_EMAIL'] ?? 'true',
 		...emailVars(config.email, source),
+		...(config.controlUrl === undefined ? {} : { FABRIKA_CONTROL_URL: config.controlUrl }),
 	}
 }
 
@@ -178,6 +201,7 @@ export const iamPipelineVars = (source: EnvironmentSource): string[] => {
 		'FABRIKA_IAM_OIDC_ENABLED',
 		'FABRIKA_IAM_PASSWORD_ENABLED',
 		'FABRIKA_EMAIL_PROVIDER',
+		'FABRIKA_CONTROL_URL',
 		...(authentication.oidcEnabled
 			? ['FABRIKA_IAM_HUMAN_EMAIL_DOMAINS', 'FABRIKA_IAM_OIDC_ISSUER', 'FABRIKA_IAM_OIDC_CLIENT_ID']
 			: []),

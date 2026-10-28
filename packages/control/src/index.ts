@@ -1,6 +1,7 @@
 import { WorkerEntrypoint } from 'cloudflare:workers'
 import { controlApp } from './app'
-import { controlJobLogLine, runControlJob } from './consumer'
+import { runBackupSchedule } from './backups'
+import { controlJobLogLine, decodeControlJobMessage, runControlJob } from './consumer'
 import { runMaintenance } from './cron'
 import type { Env } from './env'
 import { gitHubAppClientFactory } from './github/connections/credentials'
@@ -9,8 +10,8 @@ import { dispatchMail } from './mail-relay/dispatch'
 import { decodeMailDispatchMessage, type MailDispatchMessage } from './mail-relay/queue'
 import { cloudflareControlProvider, controlEnv, type WorkerBindings } from './platform-cf'
 import { reconcileProviderRuns } from './provider-reconcile'
-import type { ControlJobMessage } from './run-lifecycle'
-import { iamSchemaDeps, locks, operationsReleaseDeps, platformTransportDeps, repositories, vault } from './services'
+import { type ControlJobMessage, operationDeploys } from './run-lifecycle'
+import { buildRunDeps, iamSchemaDeps, locks, operationsReleaseDeps, opsTransportDeps, platformTransportDeps, repositories, vault } from './services'
 
 /**
  * The fabrika control plane — the CLOUDFLARE entrypoint, and nothing more. A single `WorkerEntrypoint`
@@ -27,7 +28,10 @@ import { iamSchemaDeps, locks, operationsReleaseDeps, platformTransportDeps, rep
  * ports everything downstream is written against. Two of the five need no adapter at all.
  */
 /** The mail relay's queue, whatever environment prefix the deploy gives it. */
-const MAIL_QUEUE_SUFFIX = 'vozka-mail'
+const MAIL_QUEUE_SUFFIX = 'fabrika-mail'
+
+/** Anonymous reads of a GitHub App's public page before GitHub's rate limit is the answer (the client's maximum). */
+const SHARED_EGRESS_PUBLIC_APP_ATTEMPTS = 4
 
 export class Vozka extends WorkerEntrypoint<WorkerBindings> {
 	/** The runtime-neutral view of this Worker's bindings. Cheap — three closures and a spread. */
@@ -40,16 +44,22 @@ export class Vozka extends WorkerEntrypoint<WorkerBindings> {
 		return controlApp.fetch(request, {
 			env,
 			provider: cloudflareControlProvider(this.env, env),
-			sourceConnection: createSourceConnections({ provider: 'cloudflare', vault: () => vault(env), createClient: gitHubAppClientFactory() }),
+			sourceConnection: createSourceConnections({
+				provider: 'cloudflare',
+				vault: () => vault(env),
+				// Verifying the App reads its public page anonymously, from Cloudflare's shared egress: a read another
+				// tenant's traffic has limited is tried again, and usually leaves from another address.
+				createClient: gitHubAppClientFactory(undefined, SHARED_EGRESS_PUBLIC_APP_ATTEMPTS),
+			}),
 		}, this.ctx)
 	}
 
 	/**
-	 * The two consumers. The mail relay's queue (`<env>-vozka-mail`) carries one relayed message per job: every send
+	 * The two consumers. The mail relay's queue (`<env>-fabrika-mail`) carries one relayed message per job: every send
 	 * failure settles or requeues its row, so only an unexpected throw is retried (maintenance re-enqueues a lost one).
 	 * The control queue carries deploy and namespace jobs, one per message (maxBatchSize 1): ack on a handled message,
-	 * including a `deferred` one, whose re-enqueue `runControlJob` has already done; retry only on an unexpected throw
-	 * (Cloudflare redelivers, bounded by the queue's maxRetries).
+	 * including a `deferred` one, whose re-enqueue `runControlJob` has already done, and on an undecodable one; retry only
+	 * on an unexpected throw (Cloudflare redelivers, bounded by the queue's maxRetries).
 	 */
 	override async queue(batch: MessageBatch<unknown>): Promise<void> {
 		const env = this.control
@@ -59,8 +69,17 @@ export class Vozka extends WorkerEntrypoint<WorkerBindings> {
 		}
 		const provider = cloudflareControlProvider(this.env, env)
 		for (const message of batch.messages) {
+			let job: ControlJobMessage
 			try {
-				console.info(controlJobLogLine(await runControlJob(env, provider, message.body as ControlJobMessage)))
+				job = decodeControlJobMessage(message.body)
+			} catch (err) {
+				// A redelivery cannot make it decodable; the Bun consumer abandons the same payload.
+				console.error('control job: undecodable payload, dropped', err instanceof Error ? err.message : 'unknown error')
+				message.ack()
+				continue
+			}
+			try {
+				console.info(controlJobLogLine(await runControlJob(env, provider, job)))
 				message.ack()
 			} catch (err) {
 				console.error('control consumer error', err instanceof Error ? err.message : 'unknown error')
@@ -102,7 +121,22 @@ export class Vozka extends WorkerEntrypoint<WorkerBindings> {
 	/** The cron handler (`triggers.crons`, every 5 min): poll public repos, then sweep orphaned runs. */
 	override async scheduled(_controller: ScheduledController): Promise<void> {
 		const env = this.control
+		const { opsTransport } = opsTransportDeps(env)
 		await runMaintenance(env, {
+			// Without a vault Control holds no ops key, so it reaches no object and drives no data operation.
+			...(opsTransport === undefined ? {} : {
+				backups: async () => {
+					const provider = cloudflareControlProvider(this.env, env)
+					return await runBackupSchedule({
+						repositories: env.REPOSITORIES,
+						lock: locks(env),
+						ops: opsTransport,
+						provider,
+						// A restore's own deploys run in the pass that owns it.
+						deploys: operationDeploys(await buildRunDeps(env, provider)),
+					})
+				},
+			}),
 			reconcile: () =>
 				reconcileProviderRuns({
 					repositories: env.REPOSITORIES,

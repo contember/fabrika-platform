@@ -1,4 +1,4 @@
-<!-- Generated from skill/ of @fabrika/app 0.9.0-cloudflare.2. Change those files, not this one. -->
+<!-- Generated from skill/ of @fabrika/app 0.9.0-dev.8. Change those files, not this one. -->
 
 # Fabrika application rules
 
@@ -226,14 +226,15 @@ the access check. `references/spa.md` shows the stack.
 | any public website (a job)     | `egress: 'public'`                                      | `fetch` to public hosts, never the installation    |
 | a signed link (unsubscribe)    | `signs: ['<purpose>']`                                  | `ctx.tokens.sign`                                  |
 | a webhook binding              | `binds: '<webhook>'`                                    | `ctx.webhooks('<webhook>').bind` and `.unbind`     |
-| a job run after the commit     | `kicks: ['<job>']`                                      | `ctx.kick('<job>')`                                |
+| a job run after the commit     | `kicks: ['<job>']`                                      | `ctx.kick('<job>')`, `ctx.kick('<job>', { at })`   |
 | a trigger, function or view    | its migration                                           | —                                                  |
 
-Scope every scoped table a raw statement reads with `${ctx.sql.scope(<capability>, '<table>', '<alias>')}`, a conjunct
-of its WHERE or JOIN … ON (`where (<filter>) and ${…}`): `ctx.target` for `on` and `in`, `ctx.within` for `over`, a
-job's minted `Ref` or `Within` with `tx.sql.scope`. It binds the capability's whole predicate, chain included, as the
-handles apply it, and on an `update` or `delete` target it needs that operation's action; a reference table needs
-none. A deviation is fine: declare it, and do not contort the code to avoid it. The approver sees every declaration
+Scope every scoped table a raw statement reads with `${ctx.sql.scope(<capability>, '<table>', { alias: '<alias>' })}`,
+a conjunct of its WHERE or JOIN … ON (`where (<filter>) and ${…}`): `ctx.target` for `on` and `in`, `ctx.within` for
+`over`, a job's minted `Ref` or `Within` with `tx.sql.scope`. It binds the capability's whole predicate, chain
+included, as the handles apply it. The table an `update` or `delete` writes takes `{ use: 'update' }` or
+`{ use: 'delete' }`, which needs that operation's action; a reference table needs none. The runtime does not check
+where you put a fragment: the approver reads it. A deviation is fine: declare it, and do not contort the code to avoid it. The approver sees every declaration
 marked "needs closer review". Do not hide reach in a helper; the runtime builds `ctx.sql` and `ctx.db.unscoped` only
 where they are declared. A query or an export declares only `'read'`.
 
@@ -288,13 +289,15 @@ bunx tsc --noEmit                                           # once, at the end
 bunx fabrika-check .                                        # once, after tsc; refusals fail; hints print below them
 ```
 
-**On Cloudflare** (`fabrika.config.ts` imports `defineApp` from `@fabrika/provider-cloudflare`) the application runs in
-one Durable Object over SQLite. Its `db/migrations/*.sql` are SQLite (`references/table-and-migration.md`), and the
+**On Cloudflare** (`fabrika.config.ts` imports `defineApp` from `@fabrika/provider-cloudflare`, as
+`references/app-setup.md` shows) the application runs in one Durable Object over SQLite. Its `db/migrations/*.sql` are SQLite (`references/table-and-migration.md`), and the
 object applies them when it boots, so there is no `migrate` and no command needs a database URL or `FABRIKA_APP_ID`.
 The tests run on `@fabrika/db/testing-sqlite` (`references/tests.md`), in memory, and never skip. A handler holds the
-object's transaction, so its `limits.timeoutMs` is at most 25 s. No `sql` (`ctx.sql`) and no `scan: true`: the
-checker, the deploy and the boot refuse both. The deploy serves each SPA mount's built `dir` itself; declare no
-`assets` on the Worker (`references/app-setup.md`).
+object's transaction, so its `limits.timeoutMs` is at most 25 s. A job's is at most 14 minutes, its default: longer
+work claims a bounded batch per run, and the next run takes the rest (`references/jobs.md`). `ctx.sql` is SQLite there
+(`references/endpoint.md`). No `scan: true`: the checker, the deploy and the boot refuse it. A migration names no
+`fabrika_*` table but `REFERENCES fabrika_files (id)`. The deploy serves each SPA mount's
+built `dir` itself; declare no `assets` on the Worker (`references/app-setup.md`).
 
 The object runs one transaction at a time, so every `await` in a handler that may write holds the whole environment:
 IAM, R2, a `fetch`, a `ctx.connect` call, a binding. One 2 s call caps the environment at half a request a second. A
@@ -314,9 +317,8 @@ bun test --isolate                                          # no database URL; t
 
 A generated file changes only through its command (`codegen`, `test-scaffold`); running it is the loop, not an edit.
 Format and lint only the files you wrote, with the repository's own tools: in the fabrika-platform repository
-`bunx dprint fmt <files>` and `bunx biome lint <files>`, never `biome check` (its formatter fights dprint), and never a
-generated file. An application outside that repository has neither configuration: use the formatter its own
-repository configures, or none, and never add a configuration unasked; tsc and `fabrika-check` are its gates. `FABRIKA_APP_ID` is lowercase letters, digits and `-`. An applied file is immutable: while you still
+`bunx dprint fmt <files>` and `bunx oxlint <files>`, and never a generated file. An application outside that
+repository has neither configuration: use the formatter its own repository configures, or none, and never add a configuration unasked; tsc and `fabrika-check` are its gates. `FABRIKA_APP_ID` is lowercase letters, digits and `-`. An applied file is immutable: while you still
 change an uncommitted migration, migrate into a fresh schema with another `FABRIKA_APP_ID`. Read a refusal's
 "allowed form" and use it; fix hints too. `references/errors.md` explains the findings and the type errors.
 
@@ -344,9 +346,9 @@ e-mails them, a link holder's files, HR's review with its history.
 ## Not built yet
 
 - On Cloudflare, where the application runs in one Durable Object over its SQLite and its `db/migrations/*.sql` are
-  SQLite, `sql` (`ctx.sql`) and a file kind with `scan: true` are refused. Everything else on the road runs there.
-- Jobs are cron only and app-wide: no `ctx.jobs.enqueue`, no job per scope. A `ctx.kick` starts a run of its job; it
-  carries nothing, and the job finds its work in a queue table with `claim`. A list write is off the road (`sql`).
+  SQLite, a file kind with `scan: true` is refused. Everything else on the road runs there.
+- Jobs are cron only and app-wide: no `ctx.jobs.enqueue`, no job per scope. A `ctx.kick` starts a run of its job, now
+  or at `{ at }`; it carries nothing, and the job finds its work in a queue table with `claim`. A list write is off the road (`sql`).
 - A read across tables (a join, a filter over a related table, an aggregate over several) is off the road (`sql`).
 - An MCP workspace has no shell, so `codegen` and `test-scaffold` cannot run there. Tell the human; never write a
   generated file by hand.
@@ -374,20 +376,20 @@ the SPA is added with it.
 		"test": "bun test --isolate"
 	},
 	"dependencies": {
-		"@fabrika/app": "0.9.0-cloudflare.2",
-		"@fabrika/db": "0.9.0-cloudflare.2",
-		"@fabrika/provider-zerops": "0.9.0-cloudflare.2",
-		"@fabrika/proxy-core": "0.9.0-cloudflare.2",
-		"@fabrika/ui": "0.9.0-cloudflare.2",
+		"@fabrika/app": "0.9.0-dev.8",
+		"@fabrika/db": "0.9.0-dev.8",
+		"@fabrika/provider-zerops": "0.9.0-dev.8",
+		"@fabrika/proxy-core": "0.9.0-dev.8",
+		"@fabrika/ui": "0.9.0-dev.8",
 		"kysely": "0.29.6",
 		"react": "^19.0.0",
 		"react-dom": "^19.0.0",
 		"zod": "^3.25.76"
 	},
 	"devDependencies": {
-		"@fabrika/check": "0.9.0-cloudflare.2",
-		"@fabrika/cli": "0.9.0-cloudflare.2",
-		"@fabrika/platform": "0.9.0-cloudflare.2",
+		"@fabrika/check": "0.9.0-dev.8",
+		"@fabrika/cli": "0.9.0-dev.8",
+		"@fabrika/platform": "0.9.0-dev.8",
 		"@happy-dom/global-registrator": "^20.11.2",
 		"@types/bun": "^1.4.3",
 		"@types/react": "^19.0.0",
@@ -606,16 +608,29 @@ version does not go live until every generated test passes. It writes every `FAB
 
 ## The deploy surface (Cloudflare)
 
-On Cloudflare `fabrika.config.ts` imports `defineApp`, `Worker` and `iamServiceReference` from
-`@fabrika/provider-cloudflare`, and `resources` returns the application Worker: `main: './fabrika/entry.generated.ts'`,
-`workers_dev: false`, `preview_urls: false`, `routes: []` and `bindings: { IAM: iamServiceReference() }`, with
-`pipeline: { workerDir: '.', build: 'bun run build:web' }` when the application has an SPA. The deploy adds the
-Durable Object, the files bucket, the minute tick, every `FABRIKA_*` variable and the proxy Worker.
+```ts fabrika.config.ts
+import { defineApp } from '@fabrika/provider-cloudflare'
 
-It also serves the SPA: when the Worker declares no `assets`, the deploy copies the build directory of each SPA and
+export default defineApp({ id: 'tasks' })
+```
+
+That is the whole config. `defineApp` builds the application Worker: named after the id, running
+`fabrika/entry.generated.ts`, with no route and no public URL, and IAM bound at its application entrypoint. The deploy
+builds the proxy Worker from `fabrika.contract.ts` and writes the application's Durable Object, its files bucket, its
+cron trigger and every `FABRIKA_*` variable; Control writes the IAM schema from the approved contract. Declare none of
+them: a config that does is refused. Write no `resources`, `schema` or `pipeline.workerDir` (the config's directory is
+the default). A binding of the application's own, or another `compatibility_date` or `compatibility_flags`, goes in
+`worker: { bindings, compatibility_date, compatibility_flags }`; `IAM` stays the platform's. `package.json` names
+`@fabrika/provider-cloudflare` where the Zerops one names `@fabrika/provider-zerops`, the entry is written by
+`fabrika app build --provider=cloudflare` (the deploy runs it again from the pinned commit), and there is no
+`zerops.yaml`.
+
+It also serves the SPA: the deploy copies the build directory of each SPA and
 link mount (`dir`, a link's `spa`) into `fabrika/assets/` at the mount's prefix (`/admin` into `fabrika/assets/admin/`)
-after `pipeline.build`, and binds it as `ASSETS`. A deploy whose mount directory the build did not write fails and
-names the mount. Do not declare `assets` yourself. A Worker that declares them keeps them, and the object reads each
+after `pipeline.build`, and binds it as `ASSETS`. A `.assetsignore` at the root of a mount's directory excludes files
+as it does for wrangler (gitignore syntax, relative to that directory); `.git`, `.hg`, `.svn` and `.bzr` are never
+copied. A deploy whose mount directory the build did not write fails and
+names the mount. A config that composes its own Worker with `resources` and declares `assets` keeps them instead, and the object reads each
 request path from that directory as it is (`/admin/app.js` is `admin/app.js` there), so a hand-written `assets` works
 only for a root mount, or for mounts whose directories nest like their prefixes; it needs `binding: 'ASSETS'` and
 `run_worker_first: true`.
@@ -1287,7 +1302,7 @@ export const workloadRows = (
 			count(*) filter (where t.status <> 'done')::int as open,
 			count(*) filter (where t.status <> 'done' and t.due_on < current_date)::int as overdue
 		from tasks t
-		where ${sql.scope(org, 'tasks', 't')}
+		where ${sql.scope(org, 'tasks', { alias: 't' })}
 			and (${status}::text is null or t.status::text = ${status})
 		group by t.assignee
 		order by t.assignee`
@@ -1302,7 +1317,7 @@ export const workloadRows = (
 ## Raw SQL: `sql: 'read'`
 
 Raw SQL is legitimate for a join, a report, an `OR` or `IS NULL` filter, or a bulk write. Declare it on the endpoint;
-`ctx.sql` exists only there. It runs on Postgres only: on Cloudflare a site that declares `sql` is refused.
+`ctx.sql` exists only there. It runs on Postgres and, on Cloudflare, on SQLite (the rules of each are below).
 
 ```ts src/reports/endpoints.ts
 import { attachment } from '@fabrika/app/contract'
@@ -1356,7 +1371,7 @@ export const reports = app.group({ callers: ['human'] }, (r) => ({
 			const rows = await ctx.sql(TaskExportRow)`
 				select t.title, t.status, t.assignee, t.due_on::text as due_on
 				from tasks t
-				where ${ctx.sql.scope(ctx.target, 'tasks', 't')}
+				where ${ctx.sql.scope(ctx.target, 'tasks', { alias: 't' })}
 				order by t.title
 				limit 10000`
 			await ctx.db.target.project_exports.insert({ row_count: rows.length })
@@ -1368,7 +1383,7 @@ export const reports = app.group({ callers: ['human'] }, (r) => ({
 - Every `${…}` of a value is a bound parameter, never SQL text. The one exception is `${ctx.sql.scope(…)}`: it is SQL
   (the predicate) around its own bound values, and it may have no value at all (`(true)`, `(false)`). Put no
   interpolation inside quotes, a quoted name, a dollar body or a comment: the tag refuses it.
-- **Scope every scoped table the statement reads with `${ctx.sql.scope(capability, '<table>', '<alias>')}`.**
+- **Scope every scoped table the statement reads with `${ctx.sql.scope(capability, '<table>', { alias: '<alias>' })}`.**
   `ctx.sql` has no scope predicate of its own. The fragment is the capability's whole predicate on that table: for a
   `Ref` the object's column and every link of its chain, so a project moved to another org is out; for a `Within` its
   values, each container grant on its own column, every row for a global grant and none for an empty one. The
@@ -1376,29 +1391,31 @@ export const reports = app.group({ callers: ['human'] }, (r) => ({
   `Within` it minted to `tx.sql.scope`. A table the capability does not reach is a type error at the table name. A
   reference table is shared by every scope and needs no fragment, and no statement writes it. An application table
   needs none either (the intake job of `references/public-intake.md`).
-- **A fragment carries its action into the statement.** On the table an `update` or `delete` writes it needs the
-  table's own update or delete action (`ctx.within('tasks.write', 'project')` for `update tasks`), so a read action
-  never scopes a write. A column's own write action (`columns: { assignee: { write: 'tasks.assign' } }`) scopes an
-  `update` too, when every column its `set` assigns declares that action: a table with only column writes is updated
-  this way; anywhere else it needs an action the handles read the table with. `insert … on conflict do
-  update … where ${…}` is an update of the inserted table. The fragment answers for its own query block: a CTE that
-  updates and a statement that deletes take one capability each, and another occurrence of the written table (a
-  subquery, `from tasks other`) reads with a read capability under its own alias. A refused fragment fails the call
-  before anything is sent.
-- **A fragment is a conjunct.** It stands alone, joined by AND, at the top level of a WHERE or JOIN … ON clause whose
-  top level holds no OR: `where (<the whole filter>) and ${…}`, `join projects p on p.id = t.project_id and ${…}`.
-  The tag refuses `where a or ${…}`, `where a or b and ${…}`, `not ${…}`, a fragment in parentheses or outside such a
-  clause. Never scope by hand with `ctx.target.value` alone: it drops the chain. The generated tests check that an `in`
-  endpoint with `sql` leaks nothing of another scope.
+- **A fragment states what it scopes.** `use` is `'read'` by default; the table an `update` or `delete` writes takes
+  `{ use: 'update' }` or `{ use: 'delete' }`, which needs the table's own update or delete action
+  (`ctx.within('tasks.write', 'project')` for `update tasks`) on a `'write'` site, so a read action never scopes a
+  write. A column's own write action (`columns: { assignee: { write: 'tasks.assign' } }`) is enough for `use: 'update'`
+  too; set only the columns it writes. `insert … on conflict do update … where ${…}` scopes the inserted table with
+  `use: 'update'`. Each block takes its own fragment: a CTE that updates and a statement that deletes take one
+  capability each, and another occurrence of the written table (a subquery, `from tasks other`) reads under its own
+  alias. A refused fragment fails the call before anything is sent.
+- **A fragment is a conjunct.** Put it alone, joined by AND, at the top level of a WHERE or JOIN … ON clause whose top
+  level holds no OR: `where (<the whole filter>) and ${…}`, `join projects p on p.id = t.project_id and ${…}`. The tag
+  does not read where it stands, which relation it filters or which columns a `set` assigns: the approver does, and a
+  fragment under an `or` widens the statement to every row. Never scope by hand with `ctx.target.value` alone: it drops
+  the chain. The generated tests check that an `in` endpoint with `sql` leaks nothing of another scope.
 - Rows are parsed like `fromRow` (snake_case to camelCase), then by the schema. Postgres sends `bigint` and `numeric`
   as text: cast a count (`count(*)::int`), and a sum to the type its output declares (`::int` for an integer sum that
   fits, `::float8` for a fractional one), or keep it a string. A sum over no rows is `null`: `coalesce(sum(…), 0)`.
 - An optional filter is `(${value}::text is null or <column> = ${value})`.
 - One statement: `select`, `with`, `values`, plus `insert`, `update` and `delete` on a `'write'` site (a mutation, a
-  job or a webhook). Refused before anything is sent: DDL, `SET`, `COPY`, transaction control, another schema, any
-  `fabrika_*` or `pg_*` name, and calls outside the reviewed built-ins. A function your migrations declare is refused
-  too: call it from a view. These name rules are defense in depth; the runtime role (DML only) is the boundary.
-- A query runs in a read-only transaction; a mutation's `ctx.sql` runs in the same transaction as its handles.
+  job or a webhook). Refused before anything is sent: DDL, `SET`, `COPY`, transaction control, and any `fabrika_*`
+  name. On Postgres also another schema, any `pg_*` name, and calls outside the reviewed built-ins; a function your migrations declare is refused too: call it from a view. On SQLite also any `sqlite_*`
+  name, `PRAGMA`, `ATTACH`, and a parameter you write yourself (`?`, `:x`, `@x`, `$x`): interpolate every value.
+- On SQLite write SQLite: `count(*)` is already an integer, there is no `::` cast (`cast(x as text)`), and a list value
+  binds as JSON (`t.status in (select value from json_each(${list}))`).
+- A query runs in a read-only transaction; a mutation's `ctx.sql` runs in the same transaction as its handles. A
+  `'read'` statement writes nothing, even in a mutation: one that tries fails the call.
 
 ## A file download: `attachment`
 
@@ -1711,9 +1728,10 @@ The refusals agents meet most, and their fix:
 | `on-conflict-index`            | `insert(…, { onConflict: { columns } })` whose columns are no unique index the migrations create                                                                                                                                                          | a `UNIQUE` constraint or a `CREATE UNIQUE INDEX` without `WHERE` on exactly those columns |
 | `cross-app-fetch`              | a `fetch` of an absolute URL under no origin a site declares in `egress`, or one a job's `egress: 'public'` refuses (an IP address, `localhost`)                                                                                                          | `egress: ['https://…']` on the site that calls it (`references/endpoint.md`)              |
 | `url-endpoint`                 | `ctx.url('<id>')` names no procedure of the contract                                                                                                                                                                                                      | the endpoint id `<mount>.<group>.<procedure>`                                             |
-| `cloudflare-sql`               | on Cloudflare, a site that declares `sql`                                                                                                                                                                                                                 | the handles (`ctx.db`), without `sql`                                                     |
 | `cloudflare-scan`              | on Cloudflare, a file kind with `scan: true`                                                                                                                                                                                                              | the kind without `scan`, and no public procedure that takes its files                     |
+| `cloudflare-job-segment`       | on Cloudflare, a job whose `limits.timeoutMs` exceeds one 14-minute segment                                                                                                                                                                               | at most 14 minutes: claim a bounded batch per run, and the next run takes the rest        |
 | `cloudflare-current-timestamp` | on Cloudflare, `DEFAULT CURRENT_TIMESTAMP` in a migration: SQLite stores `YYYY-MM-DD HH:MM:SS`, which every read of the table refuses                                                                                                                     | `DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`, in a new migration                     |
+| `cloudflare-framework-name`    | on Cloudflare, a `fabrika_*` name in a migration, quoted or not                                                                                                                                                                                           | your own tables, and `REFERENCES fabrika_files (id)` for a file column                    |
 
 The hints:
 
@@ -1785,7 +1803,7 @@ message. The codes you meet most:
 
 | Code                 | Means                                                                                                                                                                                                                                                                          |
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `query_refused`      | the data layer refused a statement or an operation: `undeclared_reach`, `sql_read_only`, `unknown_column`, `read_only`, `sql_outside_transaction`, `sql_dialect` (`ctx.sql` on SQLite, Cloudflare) …; the reason's text names the rule                                         |
+| `query_refused`      | the data layer refused a statement or an operation: `undeclared_reach`, `sql_read_only`, `unknown_column`, `read_only`, `sql_outside_transaction`, `sql_scope`, `sql_name` …; the reason's text names the rule                                                                 |
 | `capability_refused` | a capability of another kind, dimension or action than the call takes (`wrong_capability`, `wrong_action`, `out_of_reach`), one kept past its request (`ended`, `foreign_work`), or a `fetch` its `egress` refuses (`undeclared_egress`, `refused_egress`, `oversized_egress`) |
 | `handler_failed`     | your handler threw something else; the log has no more: the Operations issue has the stack, or test the handler                                                                                                                                                                |
 
@@ -2234,8 +2252,8 @@ Background work is a cron job: `app.cron(schedule, { actions })` with its `.hand
 `endpoints.ts` of the slice whose data it works on, mounted under `jobs` in the contract. There are no timers, loops,
 `setInterval` or self-scheduled work, and no `ctx.jobs.enqueue`: work for later is a row that a run picks up, usually
 from a queue table with `claim` (below). A mutation, a webhook or another job that declares `kicks: ['<job>']` and
-calls `ctx.kick('<job>')` starts a run within seconds of its commit (the outbox below); the schedule picks up whatever
-that run leaves.
+calls `ctx.kick('<job>')` starts a run within seconds of its commit (the outbox below), and `ctx.kick('<job>', { at })`
+starts one at `at`; the schedule picks up whatever that run leaves.
 
 ```ts src/overdue/endpoints.ts
 import { app } from '../app-kit'
@@ -2348,7 +2366,7 @@ export const contract = app.contract((c) => ({
   one, since no zone is a day further ahead.
 - **Reads run outside the transaction; every write runs inside `ctx.transaction((tx) => …)`**, through `tx.db`, fenced
   by the attempt's lease. A write outside it is a type error that names `tx.db`.
-- An attempt that fails or outlives `limits.timeoutMs` (default 15 minutes, at most a day) is retried up to `retries` times, so every write is
+- An attempt that fails or outlives `limits.timeoutMs` (default 14 minutes, at most a day; at most 14 minutes on Cloudflare) is retried up to `retries` times, so every write is
   idempotent. **Re-read each row under its lock before you write it:** `tx.db.on(ref).getForUpdate()` inside the
   transaction, decide again on what it answers with the list's whole filter (`isOverdue`), and write with its
   `version`. The listed row is already old: someone
@@ -2468,6 +2486,8 @@ for (const row of await ctx.db.app('mail.send').outbox.claim({ limit: 50 })) {
   later.
 - A failure or a crash leaves the row as the claim left it, due again after the backoff; nothing retries at once.
   Attempts count claims, so claim only what the run will reach.
+- A claim that leased rows runs the job again when the same claim would next find one (its `where`, its scope, below
+  `maxAttempts`), no sooner than a second later; a claim that took its full `limit` runs it again at once.
 - A row past `maxAttempts` stays in the table, no longer due, for the application to show or requeue.
 - One recipe covers an outbox, a per-record reminder (`<due>` is the reminder time) and asynchronous work: a mutation
   inserts a request row and kicks; the job claims it, renders, puts the result into a file column with
@@ -2483,8 +2503,16 @@ row, in its own transaction: a public procedure's row (`registrations`), an outb
 transaction committed, the job runs within seconds, under its own key, and the answer does not wait for it. A thrown
 handler, a refused answer and a failed commit kick nothing. Kicks coalesce: at most one run is active and one pending,
 however many calls arrive. A kick carries nothing; the job reads its rows, and its schedule stays the recovery.
+The kick is written in the site's transaction, so a crash right after the commit still runs the job.
 `kicks` names cron jobs of the contract, as literals (`r.mutation({ …, kicks: ['testMails'] })`); a mutation, a
 webhook and a job declare it, and the kick edges never form a cycle.
+
+**A kick for later.** `ctx.kick('<job>', { at })`, with `at` a `Date`, runs the job at that time instead of after the
+commit: a reminder, a retry the application times itself. Kicks of one job in the same second are one; kicks at
+different times stay apart, and a run takes only those already due. The second argument is the time and nothing else;
+what to do stays in the job's rows (`where <due> <= now()`, or a queue table's `<due>`). On Cloudflare the object's
+alarm runs it within seconds of `at`; on Bun the serving process that wrote it runs it at `at`, and another process
+finds it within a minute.
 
 The rules of the job:
 
@@ -6035,6 +6063,13 @@ if (postgres !== null) {
 - A mutation that kicks (`kicks`, `ctx.kick`) starts its job in the background of the call. `kit.drain()` waits for
   those runs, and `kit.runJob` first waits for them; every generated access case drains before it answers. The kicked
   run may start at once, so arm a fault before the call, never between the call and the run.
+- `await kit.runDueJobs({ within: 3 * 3600000 })` runs every job with a wake due now or within `within` milliseconds
+  (0 by default) once, as the Cloudflare object's alarm runs it: a cron job's next fire, a kick, a failed run's retry.
+  It answers `[{ job, result }]` for the runs it started, and first waits for the kicked runs. Without it the kit fires
+  no wake: a cron job runs only through `runJob` or `runDueJobs`. Only the wakes move, never the clock: a handler's
+  `new Date()` and a queue row's due time stay real, so a row due later is not claimed early. A second call does not run
+  a cron fire the first one ran early. A failed run of a job with `retries` is due again after its backoff, at most a
+  second for the first retry, so `runDueJobs({ within: 2000 })` runs it. It needs the application's data layer.
 - `kit.mail` is the stand-in for every job's mail transport (`MemoryEmailSender` of `@fabrika/app/testing`), so a test
   needs no mail variable. `kit.mail.accepted` is what reached the inbox, once per key, and `kit.mail.handoffs` every
   send with its `answer`. `refuse(code?)`, `unavailable()`, `unreachable()`, `loseAnswers(n)` and `during(hook)`

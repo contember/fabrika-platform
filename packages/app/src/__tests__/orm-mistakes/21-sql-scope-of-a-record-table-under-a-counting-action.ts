@@ -9,7 +9,7 @@ export const operations = app.group({ callers: ['human'] }, (r) => ({
 		.handle(async ({ ctx }) => {
 			const [row] = await ctx.sql(Counted)`select count(*)::int as count from candidates c where ${
 				// mistake: candidates.count only counts candidates through ctx.db.app; a fragment reads rows
-				ctx.sql.scope(ctx.app, 'candidates', 'c')}`
+				ctx.sql.scope(ctx.app, 'candidates', { alias: 'c' })}`
 			return { count: row?.count ?? 0 }
 		}),
 }))

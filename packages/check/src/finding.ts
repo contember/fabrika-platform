@@ -40,9 +40,10 @@ export const REFUSAL_RULE_IDS = [
 	'layer-import',
 	'generated-test-import',
 	'shared-import',
-	'cloudflare-sql',
 	'cloudflare-scan',
+	'cloudflare-job-segment',
 	'cloudflare-current-timestamp',
+	'cloudflare-framework-name',
 ] as const
 
 /** Rules that report a step out of the application architecture. */

@@ -1,7 +1,7 @@
 # @fabrika/cli
 
 The single public `fabrika` executable. It parses the top-level `platform`,
-`app`, `namespace`, `control`, `builder`, `db`, `job`, and `connect` command areas, resolves one provider where a
+`app`, `namespace`, `control`, `env`, `builder`, `db`, `job`, and `connect` command areas, resolves one provider where a
 command has one, then delegates to an installation or provider package. It
 contains no provider implementation and never branches on a provider id. `src/namespace.ts` is the Control RPC
 half of `fabrika namespace`: the provider's `NamespaceCli` plans and builds the namespace, this package holds
@@ -24,6 +24,10 @@ label the envelope a registration carries.
   stays 0 and stderr names the command that follows up (`namespaces reconcile`, `runs log`).
 - Credentials come from the ENVIRONMENT ONLY and have no flag, so they cannot
   reach a CI log or a process listing. The origin is not a credential and takes both.
+- `connectControl` is the one Control client, shared with the `env` area. It parses the origin before the key goes
+  anywhere: `https:`, or `http:` to `localhost`, `*.localhost` (RFC 6761 loopback), 127.0.0.0/8 or `[::1]` only, and scheme, host and port alone (no
+  userinfo, path, query or fragment). It follows no redirect. A JSON answer that carries `FABRIKA_CONTROL_KEY`, also
+  behind a JSON escape, is dropped whole, and every error the area raises has the key cut out (`withoutControlKey`).
 - `control key issue` is the bootstrap: a fresh installation's provisioning key is
   held in env and never in the DB, so the proxy — which resolves bearers through
   IAM's `mintFromKey` — cannot admit it. The command mints a DB-backed key instead.
@@ -59,6 +63,25 @@ label the envelope a registration carries.
   message has `FABRIKA_CONTROL_KEY`'s value cut out before it is reported.
 - **Do not add source-connection verbs.** Creating a GitHub App connection needs a
   human principal (ADR-0029); the console owns it.
+
+## The `env` area
+
+`src/data.ts` reads and operates one application environment's data through Control
+([ADR-0069](../../docs/decisions/0069-control-reaches-an-application-environments-object.md),
+[ADR-0070](../../docs/decisions/0070-data-protection-of-an-application-environment-on-cloudflare.md)): `inspect`
+(`data.view`, or `data.content` with `--content`), `maintenance`, `operations`, `recover`, `backups`, `backups schedule`
+and `restore --at=<time>`, each one `data.*` procedure. It resolves no provider.
+
+- It uses the `control` area's client (`connectControl`): the same origin rule, environment-only key, no redirect and
+  dropped key-carrying answers. Every diagnostic has the key cut out.
+- An answer is parsed before it prints: the view by `@fabrika/auth-core`'s strict `parseOpsView` / `parseOpsContentView`,
+  an operation or a backup by a projection of its DTO's known fields (a field an older Control lacks gets a default
+  only where the field is newer than the procedure) (ids are UUIDs, an error code is Control's
+  snake_case rule, the coordinates are the ones asked about).
+- Human output and every diagnostic have control characters removed but tab and line feed: the content view's boot
+  failure text is the application's own. `--json` prints the parsed value.
+- A 501 means the control plane's release does not offer the procedure: the command exits 1 and says retrying will not
+  help. A failed or running operation is an answer: exit 0, and stderr names the follow-up command.
 
 ## The `db` area
 

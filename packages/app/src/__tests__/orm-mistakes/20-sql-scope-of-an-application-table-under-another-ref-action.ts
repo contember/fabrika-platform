@@ -10,6 +10,6 @@ export const candidates = app.group({ callers: ['human'] }, (r) => ({
 		.handle(async ({ ctx }) => ({
 			ids: (await ctx.sql(Id)`select p.id from positions p where ${
 				// mistake: a scoped site reads positions with their read action, positions.read
-				ctx.sql.scope(ctx.target, 'positions', 'p')}`).map((row) => row.id),
+				ctx.sql.scope(ctx.target, 'positions', { alias: 'p' })}`).map((row) => row.id),
 		})),
 }))

@@ -36,39 +36,64 @@ this one import.
   contract's endpoint table. `platformResources: 'allow'` (fabrika deploying its own components) needs none.
   `configSchema` refuses a config that declares `gates` on either path, and reads the IAM `schema` ONCE, before
   `resources()` runs the checkout's code (parsed with `appSchemaSchema`, deep-frozen); never read `config.schema`
-  after it. `createCloudflareProxyWorker` takes an endpoint table or an installation table, and refuses `gates`.
+  after it. An application (`refuse`) may declare no schema: the plan then has no `reconcile-schema`, nothing is
+  reported, and Control writes the approved contract's schema as it always does. A platform deploy (`allow`) that
+  serves a contract registers the schema itself, so it must declare one. A declared one must say `contract: true`
+  (`assertContractSchema`). `createCloudflareProxyWorker` takes an endpoint table or an installation table, and refuses `gates`.
 - **The job carries Control's approved access** (`CloudflareRunnerJob.approvedAccess`: the contract and its
   digest). Control refuses a non-dry deploy without it, the job schema refuses one too, and it parses the contract and
   checks its digest. The runner writes it to `<workspace>/<runId>.access.json` beside the checkout and names it in
   `FABRIKA_APPROVED_ACCESS_FILE`, set after every job-supplied name; the executor reads it (`readApprovedAccess`)
   before the config runs. Unset outside a runner (a local deploy).
 - **A contract application from framework 0.9 runs in its Durable Object; an older one keeps its stateless Worker**
-  (ADR-0065, ADR-0062). The release gate is `runsInObject` (`src/contract-support.ts`), read from the release Control
-  read the application with: `ProviderEnvironment.access.checker` in `control.ts`, and
-  `CloudflareRunnerJob.approvedAccess.framework` in the deployer. Before 0.9, `control.ts` refuses a job's, a webhook's
+  (ADR-0065, ADR-0062). The release gate is `runsInObject` (`src/contract-support.ts`), read from the release the
+  application pins: `applicationRelease(ProviderEnvironment.access)` in `control.ts`, which also fills
+  `CloudflareRunnerJob.approvedAccess.framework`, the release the deployer reads. Before 0.9, `control.ts` refuses a job's, a webhook's
   or a public procedure's key, installation mail and token purposes (`assertStatelessEnvironment`) before the runner is
   asked, and sends no `FABRIKA_PROXY_SECRET`; the deployer gives that Worker no object, bucket or tick. An approved
   access that names no release (a Control older than the runner) deploys the stateless shape; a run without approved
   access (a local deploy) deploys the object.
 - **What an application on Cloudflare cannot run is refused twice** (`assertCloudflareContract`): in `control.ts`
   before the clone, and in the deployer from the contract it serves. A file kind or collection with `scan: true` (no
-  scanner runs there), a site that declares `sql` (`ctx.sql`, which SQLite does not serve), and a procedure's or a
-  webhook's `timeoutMs` above `CLOUDFLARE_MAX_HANDLER_MS` (25 s): the handler holds the object's transaction, and
-  workerd resets an object whose transaction runs about 30 s.
+  scanner runs there), and a procedure's or a webhook's `timeoutMs` above `CLOUDFLARE_MAX_HANDLER_MS` (25 s): the
+  handler holds the object's transaction, and workerd resets an object whose transaction runs about 30 s. By the release
+  it runs as (`CloudflareContractGates`): from `capsJobSegments` (`0.9.0-dev.5`, see below), a job's `timeoutMs` above
+  `CLOUDFLARE_MAX_JOB_SEGMENT_MS` (14 min) too, while an older pin and a Control that names no release are not capped;
+  below `servesRawSql` (`0.9.0-dev.5`), a site that declares `sql`, whose boot that release refuses on SQLite, and a
+  Control that names no release refuses it too. A local deploy runs the object as this release (ADR-0062).
 - **The platform writes the application Worker's runtime** (`withApplicationRuntime` in `src/provider.ts`, from 0.9):
   `FABRIKA_APPLICATION` bound first to its own `FabrikaApplication` (`new_sqlite_classes`, so oblaka numbers its one
   migration `v0001` whatever else the application binds, and the tag never moves), `FABRIKA_FILES` to the environment's
-  bucket `<env>-<app>-files`, and `triggers.crons` always written: `* * * * *` when the contract has a job or a file
-  kind, else `[]`, which clears an older tick (wrangler leaves schedules alone when `triggers` is absent). The names are
+  bucket `<env>-<app>-files`, and `triggers.crons` always written when the contract has a job or a file kind: from
+  `servesAlarms`, for a release Control names, the hourly repair tick `<m> * * * *` at a minute derived from
+  `<env>-<app>` (stable across deploys; the object's alarm runs the jobs); otherwise, for a local deploy or a 0.9.0
+  prerelease before the alarm, `* * * * *`.
+  Without a job or a file kind it is `[]`, which clears an older tick (wrangler leaves schedules alone when `triggers`
+  is absent). The names are
   `@fabrika/app/build`'s. `assertNoFrameworkVariables` refuses an authored binding of either name and authored
   `triggers` before anything is generated; `assertApplicationRuntime` (`src/bounds.ts`) refuses any other object binding of that name or
   class, a `script_name` on it, a migration history that does not open with that `v0001` or names the class again
   (a committed `wrangler.jsonc` with a history of its own), another `FABRIKA_FILES` bucket, and triggers the platform
   did not write.
+- **Two kinds of release gate** (`src/contract-support.ts`). `releaseAtLeast` counts a prerelease as its minor:
+  `runsInObject`, `pinsGeneratedEntry` and `servesOps` hold from every 0.9.0 prerelease. `releaseFrom` compares the whole
+  version in semver precedence: `servesDataOperations` (the barrier's `state` and `migrate`, the backups, the migration
+  phase, the side restore), `servesAlarms`, `capsJobSegments` and `servesRawSql` hold from `0.9.0-dev.5`, because the prereleases on
+  npm before it (`dev.0`–`dev.4`, `cloudflare.1`–`cloudflare.2`) run in the object without any of them, and a platform
+  upgrade keeps deploying them as they ran (ADR-0062). Every `cloudflare.<n>` sorts below `dev.5` and keeps the older
+  behaviour. A new gate on something those prereleases lack uses `releaseFrom`; `published-prereleases.ts` lists them
+  for the tests. Every gate reads the application's pin (`applicationRelease`: `ProviderApprovedAccess.framework`),
+  never `checker`, which is this platform's patch of the pin's minor and would pass every `releaseFrom` gate for a
+  prerelease pin. An access approved before Control recorded the pin reads as `<major>.<minor>.0-0` of its reader:
+  the minor gates hold, every `releaseFrom` gate fails closed. An older Control still sends `checker` as the job's
+  `framework`, so its runs keep that error until Control is upgraded; an older runner reads the pin as it read
+  `checker`. `dataOperations` on the control provider answers `servesOps && servesDataOperations`.
 - **From `servesOps` the platform composes Control's ops channel** (ADR-0069, `src/provider.ts`): `platformProxied`
   builds the proxy's table with `contractProxyTable(…, { ops: true })`, which adds the canonical ops row, and
-  `withApplicationRuntime` writes `FABRIKA_APPLICATION_OBJECT` and `FABRIKA_APPLICATION_OBJECTS` (`application`) as plain
-  vars. Only for a release Control names; an environment without a domain gets no row (no Custom Domain carries it). An
+  `withApplicationRuntime` writes `FABRIKA_APPLICATION_OBJECT` and `FABRIKA_APPLICATION_OBJECTS` as plain vars from the
+  pointer Control records (`ProviderDeployInput.applicationObjects`, which the runner forwards as
+  `FABRIKA_RUNNER_APPLICATION_OBJECTS`), by default `application` and `application,rehearsal` (the ops channel also
+  reaches the object a backup is rehearsed in, ADR-0070); a side restore moves it (ADR-0070 §9). Only for a release Control names; an environment without a domain gets no row (no Custom Domain carries it). An
   older pin, a Control that names no release and a local deploy get neither, and a later deploy without them drops
   them with the version's vars. The proxy Worker forwards the row's request to `APP` with `Authorization` and no token,
   as the decision marks every `protocol` row; authored copies of the variables are refused by the framework-variable
@@ -163,7 +188,10 @@ this one import.
   `assets: { directory: 'fabrika/assets', binding: 'ASSETS', run_worker_first: true }`, and the `deploy-worker` step,
   after `pipeline.build` and right before the walk below, empties that directory and copies each mount's build
   directory (from the application root) into it at the mount's prefix: the most specific mount owns a path, a `.map`
-  and Workers Assets' own `_headers`, `_redirects` and `.assetsignore` at the root are left out, a symbolic link
+  and Workers Assets' own `_headers`, `_redirects` and `.assetsignore` at the root are left out, and so are what the
+  mount's own `.assetsignore` excludes (the `ignore` package, wrangler's matcher, relative to the mount's directory;
+  a directory is tested with its trailing `/`) and `.git`, `.hg`, `.svn`, `.bzr` at any depth (`VCS_NAMES`, outside
+  the ignore rules so a `!` cannot bring them back); a symbolic link
   anywhere on a mount's path (`x/etc` with `x -> /`: `resolve` reads only text, so every segment is `lstat`ed), on the
   way to `fabrika/assets`, or in the tree, and a special file, are refused, and a missing directory fails the step
   naming the mount. A page route that names no file gets the mount's `index.html`; a missing asset stays 404.
@@ -177,6 +205,24 @@ this one import.
   those checks cannot give.
 - **Codecs validate on the way in.** A module default imported from a runner checkout is untrusted —
   narrow it with `isCloudflareAppConfig`, never assume the shape.
+- **`defineApp` without `resources` builds the application Worker itself** (`src/authoring.ts`), from the values the
+  bounds require: name `<app>` (remote `<env>-<app>`, the deployment's own prefix), `main`
+  `./fabrika/entry.generated.ts`, `routes: []`, `workers_dev` and `preview_urls` off, `IAM` as
+  `iamServiceReference()` after the author's `worker.bindings`; only `worker.bindings`, `compatibility_date` and
+  `compatibility_flags` are the author's. It does so inside the checkout's own package, and the config it returns
+  always carries `resources`, so `isCloudflareAppConfig` reads it as before. Never move the default into the
+  deployer. An executor older than this release still refuses a schema-less contract config (`assertContractSchema`);
+  it never meets one, because such an application pins a framework release Control refuses until the platform is at
+  least as new (`readerFor`, ADR-0062), and an installation deploys its runner with its Control from one `fabrika.ref`
+  (the pair form: the runner first, then Control).
+- **The local run is composed by the deploy's code** (`composeLocalApplication`, `src/provider.ts`): the platform proxy,
+  the IAM identity, the connector bindings, the object, the files bucket and the repair tick of a release that serves
+  alarms, with the framework values and a fresh proxy secret written as plain vars into the ignored `wrangler.jsonc`.
+  The composition helpers take an `ApplicationTarget`, the part of a run they read, so both paths share them. No deploy
+  calls it. Its SPA files are staged by `stageLocalAssets`, the deploy's `stageSpaAssets` over the application root,
+  awaited at the top of `oblaka.ts` (oblaka imports the module before it calls the synchronous `define` callback);
+  `composeLocalApplication` binds `ASSETS` as a deploy does and refuses a contract with an SPA or link mount without
+  what was staged for exactly those mounts, or with it beside an authored `assets`.
 - **This package is one of the four that relax two strict flags for oblaka** — see the root
   CLAUDE.md. Keep our own code strict; never work around oblaka with a cast.
 - **The plan is ordered step kinds**, not free-form work: `build` → `provision-resources` →
@@ -185,6 +231,12 @@ this one import.
   order supplied and never interprets a step's `kind`.
 - **The proxy topology is: public Worker owns the route, private application Worker is bound to it.**
   IAM remains a global service binding, at its application entrypoint. See ADR-0022.
+- **`deploy-worker` deploys the generated configs in dependency order** (`src/deploy-order.ts`), not oblaka's,
+  which lists the proxy first. wrangler refuses a service binding to a script with no deployment yet (code 10145),
+  so on a first deploy every Worker another generated config binds as a service goes before its binder: the
+  application Worker, then `<app>-proxy` (Control's `vozka`, then `vozka-proxy`). A cycle among them is refused.
+  The application's stale secrets are swept only after every Worker is deployed, so a failed sweep fails the run
+  without leaving the new application behind the old proxy.
 - **Every application's proxy Worker is the platform's (ADR-0048).** The config's `resources` returns the
   application Worker; a Worker that binds `APP` (a proxy of its own) is refused. The deployer wraps it in
   `createCloudflareProxyWorker`, named `<app>-proxy`, from this package's own entrypoint and directory — the

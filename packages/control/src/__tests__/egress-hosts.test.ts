@@ -1,5 +1,5 @@
 // The installation's own hosts, which Control hands a deploy whose approved contract has a cron job with
-// `egress: 'public'` (ADR-0070): Control's, IAM's, Operations' and every environment's domain and public origin.
+// `egress: 'public'` (ADR-0071): Control's, IAM's, Operations' and every environment's domain and public origin.
 
 import type { ContractArtifact, DeclaredReach } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'

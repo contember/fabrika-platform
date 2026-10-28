@@ -43,7 +43,9 @@ describe('the connection factory cannot be replaced by an application module', (
 			return original(options)
 		}
 		expect(Object.isFrozen(Database)).toBe(true)
+		// oxlint-disable-next-line no-import-assign -- The test is the attack: it asserts that the namespace refuses the write.
 		expect(Reflect.set(postgres, 'openPostgres', wrapper)).toBe(false)
+		// oxlint-disable-next-line no-import-assign -- The test is the attack: it asserts that the namespace refuses the write.
 		expect(Reflect.defineProperty(postgres, 'openPostgres', { value: wrapper })).toBe(false)
 		expect(Reflect.defineProperty(Database, 'fromDialect', { value: wrapper })).toBe(false)
 		expect(Reflect.set(Database, 'fromEngine', wrapper)).toBe(false)
@@ -79,7 +81,7 @@ describe('patched built-ins do not disable the guard', () => {
 		const inOrganization = authority.within('workspace', 'notes.read', [], [{ dimension: 'organization', values: ['o1'] }])
 		await patchedChecks(
 			{ find: { dimension: 'organization', column: 'title' } },
-			() => sql(z.object({}))`select n.id from notes n where ${sql.scope(inOrganization, 'notes', 'n')}`,
+			() => sql(z.object({}))`select n.id from notes n where ${sql.scope(inOrganization, 'notes', { alias: 'n' })}`,
 		)
 		const sent = dialect.log.map((statement) => statement.sql)
 		expect(sent).toHaveLength(1)

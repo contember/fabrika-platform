@@ -75,9 +75,11 @@ call under the caller's idempotency key. The receivers are `mail` and `source`.*
 - The receiver hashes the bearer and looks up an unexpired row of its own receiver. A key of another receiver, an
   expired key and an unknown key are all refused alike.
 - An installation service has no application environment. It authenticates with a key derived from a secret it
-  already shares with Control. IAM's key is `px_` and the hex of `HMAC-SHA256(FABRIKA_IAM_RPC_KEY,
-  'fabrika-platform-mail')` (`installationMailKey`). The receiver compares it in constant time and records the caller
-  as `installation:iam`.
+  already shares with Control. IAM's key is `px_` and the hex of `HMAC-SHA256(<secret>, 'fabrika-platform-mail')`
+  (`installationMailKey`), where the secret is `FABRIKA_IAM_RPC_KEY` on Zerops and `FABRIKA_IAM_PROVISIONING_KEY` on
+  Cloudflare: there Control reaches IAM over a service binding and neither Worker holds an RPC key, while both hold the
+  provisioning key as a Worker secret. Whoever holds the provisioning key administers IAM already, so the mail key
+  grants it nothing more. The receiver compares it in constant time and records the caller as `installation:iam`.
 - An application's URL is Control's public origin (`FABRIKA_CONTROL_DOMAIN`), as its membership transport's is IAM's
   public origin. An application namespace is a Zerops project of its own, and projects share no private network
   ([ADR-0014](0014-provider-owned-deployment-namespaces.md)). The platform proxy serves the receiver's `protocol` row
@@ -104,8 +106,8 @@ no idempotency key.
 ### 5. Which deploys get it
 
 - On Zerops, on the namespace-proxy path. On Cloudflare, mail goes to every environment once Control's Worker runs the
-  relay (it has its `vozka-mail` queue): a Cloudflare environment reaches Control's public origin directly. A Worker
-  without the queue hands installation mail as the installation's `FABRIKA_EMAIL_*`
+  relay (it has its `fabrika-mail` queue and `fabrika-mail-content` bucket): a Cloudflare environment reaches Control's
+  public origin directly. A Worker without them hands installation mail as the installation's `FABRIKA_EMAIL_*`
   ([ADR-0019](0019-portable-outbound-email.md) §4). The `source` receiver goes to no Cloudflare environment: Cloudflare
   runs no `dev` environment.
 - Only an application whose approved snapshot records framework release 0.7.0 or newer gets the platform transport. A
@@ -171,13 +173,31 @@ only: it reads the bound workspace's files between two heads, and nothing else.
 1. **Generated files.** The transport changes no installation file. Control's console table gains the `mail-relay`
    row, so `platform deploy` rewrites `FABRIKA_SERVICE_TABLE_DIGEST` with the regenerated manifest. IAM's setup in
    the release's generated `zerops.yaml` gains `FABRIKA_CONTROL_URL`; the sidecar builds IAM from the tag's checkout,
-   so `platform upgrade` carries it.
+   so `platform upgrade` carries it. On Cloudflare, Control's committed `wrangler.jsonc` gains the `fabrika-mail` queue
+   (producer and consumer) and the `fabrika-mail-content` R2 bucket, and no Durable Object migration; the sidecar's
+   workflow deploys Control from the tag's checkout, so its file is unchanged. IAM's Worker moves to the relay with the
+   generated workflow that passes its deploy `FABRIKA_CONTROL_URL` (`https://` and the GitHub Environment's
+   `FABRIKA_CONTROL_DOMAIN`, which `init` always writes). A `fabrika.ref` bump keeps the old workflow, so IAM keeps
+   sending directly until the operator re-runs `fabrika platform init --provider=cloudflare` with the release's CLI,
+   which rewrites the workflow and dispatches it. That run deploys IAM before Control: until Control's stage finishes,
+   the relay refuses IAM's key, and IAM sends with its own provider, on both clouds
+   ([ADR-0019](0019-portable-outbound-email.md) §8).
 2. **Environment variables.** An existing application environment converges at its next deploy. A 0.7 release gets
    `FABRIKA_EMAIL_PROVIDER=platform` and the `FABRIKA_PLATFORM_MAIL_*` pair, and the deploy removes the provider's
    variables, which it no longer hands. The key is sensitive and cannot be read back, so every deploy writes it.
-   An older release keeps its `FABRIKA_EMAIL_*`.
-3. **Provider state.** Migration `0013_mail_relay.sql` only adds tables. The dispatch queue `vozka-mail` lives in the
-   existing jobs table. No resource an older version created is checked again.
+   On Cloudflare the pair is a Worker secret and a var of the new version, the version drops the old plain
+   `FABRIKA_EMAIL_*` vars, and the deploy deletes each `FABRIKA_EMAIL_*` secret it no longer writes (the provider's
+   credential among them). An older release keeps its `FABRIKA_EMAIL_*`. Control itself gains no variable: its relay
+   sends with the `FABRIKA_EMAIL_*` it already holds.
+3. **Provider state.** Migration `0013_mail_relay.sql` only adds tables, and `0024_mail_content_objects.sql` a nullable
+   column and a table; existing rows keep their content in the row and read as before. On Zerops the dispatch queue
+   `vozka-mail` lives in the existing jobs table, and content stays in the row. On Cloudflare the next Control deploy
+   provisions two new resources, the `<env>-fabrika-mail` queue and the `<env>-fabrika-mail-content` bucket (its
+   `provision-resources` step runs oblaka, which creates a missing one and adopts one that exists by name), and applies
+   `0024` to D1 in its migrate step. Until that deploy Control runs no relay and hands applications the installation's
+   `FABRIKA_EMAIL_*` as before; a Worker with only one of the two runs none either. Only Control binds the bucket.
+   `fabrika-mail` and `fabrika-mail-content` join the platform resource names an application may not bind, so an
+   application deploy that names either is refused. No resource an older version created is checked again.
 4. **Floating pins.** None. The choice reads the framework release recorded in the approved snapshot, not a pin that
    floats. A snapshot recorded before Control recorded the release reads as an older application.
 

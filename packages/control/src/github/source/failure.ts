@@ -9,6 +9,8 @@ export type SourceFailureCode =
 	| 'upload_rejected'
 	| 'upload_failed'
 	| 'credentials_invalid'
+	/** The GitHub App belongs to a personal account; Control connects an organization's App only. */
+	| 'app_owner_not_organization'
 	| 'rate_limited'
 	| 'cancelled'
 	| 'internal'

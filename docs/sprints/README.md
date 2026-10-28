@@ -19,9 +19,5 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 
 ## Active
 
-- [The application Durable Object](sprint-2026-10-24-application-object.md) — the Cloudflare application object sleeps unless it has work, queries stop blocking it, and Control inspects, backs up and side-restores its data. Waits on decision D0 and the proposal's open questions.
 - [Provider-neutral core](sprint-2026-10-23-provider-neutral-core.md) — what is the same on every cloud moves out of the provider packages into Control or a neutral library (ADR-0011).
-- [Platform transport and mail relay](sprint-2026-10-20-platform-transport-mail-relay.md) — applications send installation mail to Control over a platform transport key; Control records, gates (pass/hold/drop by domain) and dispatches it; IAM sends through it. Zerops only.
 - [Terminals](sprint-2026-10-21-terminals.md) — an enrolled shared computer signs a person in on an application's word, bounded by a ceiling, through the unchanged handoff (ADR-0067).
-- [Declare the surface](sprint-2026-10-19-declare-the-surface.md) — the pre-1.0 revision of the contract kinds as one breaking framework minor; the platform keeps serving framework 0.4, 0.5 and 0.6 (ADR-0062).
-- [MCP application authoring](sprint-2026-10-07-mcp-authoring.md) — employees author apps from Claude/ChatGPT through MCP in Control: Git workspaces, stage deploys, pull requests; Zerops first. Decisions in ADR-0049.

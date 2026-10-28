@@ -34,6 +34,7 @@ const ACTION_LABELS = new Map<string, string>([
 	['iam.password.reset.issue', 'Password reset link issued'],
 	['iam.password.reset.complete', 'Password reset completed'],
 	['iam.password.reset.delivery_failed', 'Password reset email failed'],
+	['iam.mail.relay_fallback', "Email sent past Control's mail relay"],
 	['iam.password.disable', 'Password sign-in disabled'],
 	['iam.password.rehash', 'Password hash upgraded'],
 	['iam.session.revoke', 'Browser session ended'],

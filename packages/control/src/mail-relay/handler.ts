@@ -1,12 +1,12 @@
 // The platform transport's mail receiver: an application environment, or IAM, posts one message; the relay
 // authenticates the key, records the message under its idempotency key, decides the gate once, and queues it for the
-// dispatcher when it passes. Runtime-neutral, but only the Bun process hands it a `MailRelay`.
+// dispatcher when it passes. Runtime-neutral: the Bun process hands it a `MailRelay`, and so does the Worker when it
+// binds its queue and content bucket.
 
 import type { EmailMessage, EmailSenderCapabilities } from '@fabrika/email'
 import {
 	encodePlatformMailRequest,
 	hashPlatformKey,
-	installationMailKey,
 	parsePlatformMailRequest,
 	PLATFORM_MAIL_CAPABILITIES,
 	PLATFORM_MAIL_SEND_PATH,
@@ -43,8 +43,8 @@ export interface MailAcceptDeps {
 	readonly messages: MailMessageRepository
 	readonly rules: MailRuleRepository
 	readonly queue: JobQueue<MailDispatchMessage>
-	/** `null`: IAM does not send through this relay, and no key authenticates as IAM. */
-	readonly installationSecret: string | null
+	/** The hash IAM's key authenticates by (`MailRelay.iamKeyHash`); `null`: no key authenticates as IAM. */
+	readonly iamKeyHash: Promise<string> | null
 	/** Whether Control has a mail transport; without one, every application message is held. */
 	readonly hasTransport: boolean
 	/** What Control's sender sends; `null` without one, when a held message waits for the transport to decide. */
@@ -53,7 +53,7 @@ export interface MailAcceptDeps {
 	readonly now: () => number
 }
 
-/** `POST /platform/mail/send`; any other path under the row, and the Worker, which has no relay, answer 404. */
+/** `POST /platform/mail/send`; any other path under the row, and a Control without a relay, answer 404. */
 export function handleMailRelay(ctx: ControlAppContext): Promise<Response> {
 	const relay = ctx.env.MAIL_RELAY
 	if (relay === undefined || ctx.request.method !== 'POST' || new URL(ctx.request.url).pathname !== PLATFORM_MAIL_SEND_PATH) {
@@ -65,7 +65,7 @@ export function handleMailRelay(ctx: ControlAppContext): Promise<Response> {
 		messages: persistence.mailMessages,
 		rules: persistence.mailRules,
 		queue: relay.queue,
-		installationSecret: relay.installationSecret,
+		iamKeyHash: relay.iamKeyHash,
 		hasTransport: ctx.env.MAIL_TRANSPORT?.kind === 'transport',
 		transportCapabilities: relay.sender?.capabilities ?? null,
 		now: () => Math.floor(Date.now() / 1000),
@@ -150,7 +150,7 @@ async function gate(deps: MailAcceptDeps, sender: string, domain: string): Promi
 /** The sender a key authenticates, or `null`. */
 async function authenticate(deps: MailAcceptDeps, bearer: string): Promise<string | null> {
 	const hash = await hashPlatformKey(bearer)
-	if (deps.installationSecret !== null && sameDigest(hash, await hashPlatformKey(await installationMailKey(deps.installationSecret)))) {
+	if (deps.iamKeyHash !== null && sameDigest(hash, await deps.iamKeyHash)) {
 		return INSTALLATION_IAM_SENDER
 	}
 	const key = await deps.keys.findValidByHash(hash, deps.now())

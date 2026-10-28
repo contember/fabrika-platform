@@ -120,7 +120,7 @@ export interface EgressField {
 
 /**
  * A cron job's `egress`: its exact HTTPS origins, or `'public'`, every public host over HTTPS or HTTP on its default
- * port, for a job that calls the websites its operators name (ADR-0070). The guard refuses IP addresses, local and
+ * port, for a job that calls the websites its operators name (ADR-0071). The guard refuses IP addresses, local and
  * internal names and the installation's own hosts, checks each redirect, and bounds each request's time and body.
  */
 export interface JobEgressField {

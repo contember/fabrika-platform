@@ -272,7 +272,7 @@ describe('compileContract refuses what the types let through', () => {
 			schedule: '0 3 * * *',
 			actions: ['tasks.write'],
 			scope: { kind: 'app' },
-			timeoutMs: 900000,
+			timeoutMs: 840000,
 			retries: 0,
 		})
 		expect(artifact.endpoints[0]?.admission).toEqual({ contentTypes: ['application/json'], maxBytes: 1048576 })

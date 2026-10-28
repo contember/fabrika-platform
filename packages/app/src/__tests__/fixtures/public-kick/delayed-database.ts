@@ -1,15 +1,21 @@
-// A `Database` on a real Postgres whose statements run as sent, while `hook` may hold back a statement's answer: a
-// test interleaves two runs at a point no application hook reaches (a run's finish, its last pending check).
+// A `Database` on a real Postgres whose statements run as sent, while a hook may hold back a statement before it runs or
+// its answer after: a test interleaves two runs at a point no application hook reaches (a run's finish, its pending check).
 
 import { Database } from '@fabrika/db'
 import { SQL } from 'bun'
 import type { CompiledQuery, DatabaseConnection, Dialect, Driver, QueryResult } from 'kysely'
 import { PostgresJSDialect } from 'kysely-postgres-js'
 
-/** Runs after `query` executed and before its caller sees the answer. */
 export type StatementHook = (query: CompiledQuery) => Promise<void>
 
-function delayed(base: Dialect, hook: StatementHook): Dialect {
+export interface StatementHooks {
+	/** Runs before `query` is sent. */
+	readonly before?: StatementHook
+	/** Runs after `query` executed and before its caller sees the answer. */
+	readonly after?: StatementHook
+}
+
+function delayed(base: Dialect, hooks: StatementHooks): Dialect {
 	return {
 		createAdapter: () => base.createAdapter(),
 		createQueryCompiler: () => base.createQueryCompiler(),
@@ -29,8 +35,9 @@ function delayed(base: Dialect, hook: StatementHook): Dialect {
 					const connection = await driver.acquireConnection()
 					const wrapped: DatabaseConnection = {
 						async executeQuery<R>(query: CompiledQuery): Promise<QueryResult<R>> {
+							await hooks.before?.(query)
 							const result = await connection.executeQuery<R>(query)
-							await hook(query)
+							await hooks.after?.(query)
 							return result
 						},
 						streamQuery: (query, chunkSize) => connection.streamQuery(query, chunkSize),
@@ -47,7 +54,7 @@ function delayed(base: Dialect, hook: StatementHook): Dialect {
 	}
 }
 
-export function delayedDatabase(url: string, schema: string, hook: StatementHook): Database {
+export function delayedDatabase(url: string, schema: string, hooks: StatementHooks): Database {
 	const pool = new SQL({ url, adapter: 'postgres', prepare: false, max: 4, connection: { search_path: schema } })
-	return Database.fromDialect(delayed(new PostgresJSDialect({ postgres: pool }), hook))
+	return Database.fromDialect(delayed(new PostgresJSDialect({ postgres: pool }), hooks))
 }

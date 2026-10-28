@@ -95,6 +95,35 @@ describe('a file kind that scans its files', () => {
 	})
 })
 
+describe('a reserved file kind', () => {
+	const named = (name: string) =>
+		defineContract({
+			app: 'notes',
+			dimensions: { workspace: {} },
+			actions: { 'notes.read': 'Read' },
+			roles: { editor: { grants: ['notes.read'] } },
+		}, (c) => ({
+			files: { [name]: c.files({ types: ['application/pdf'], maxBytes: 1024 }) },
+			health: c.health('/healthz'),
+		}))
+
+	test('refuses a kind named __fabrika or starting with it: the framework keeps its own objects under that prefix', () => {
+		for (const name of ['__fabrika', '__fabrika_backups']) {
+			expect(() => compileContract(named(name), {})).toThrow(`files '${name}': is a file kind name the framework reserves (__fabrika*)`)
+		}
+		expect(() => compileContract(named('fabrika'), {})).not.toThrow()
+	})
+
+	test('a current artifact that carries one does not parse', () => {
+		const artifact = compileContract(named('attachments'), {})
+		const { attachments, ...others } = artifact.fileKinds ?? {}
+		expect(() => parseContractArtifact({ ...artifact, fileKinds: { ...others, __fabrika_backups: attachments } })).toThrow(
+			'a file kind name the framework reserves (__fabrika*)',
+		)
+		expect(parseContractArtifact(artifact)).toEqual(artifact)
+	})
+})
+
 describe('compileContract over defineTables output', () => {
 	test('gives the artifact the artifact form of the same policies gives', () => {
 		const artifact = compileContract(scopedContract, scopedTables)

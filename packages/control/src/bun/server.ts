@@ -9,7 +9,7 @@
 //                                     On Workers the platform calls `queue()` with a batch; here
 //                                     `PostgresJobConsumer` polls a table and calls the same function.
 //                                     See below for the ack/retry mapping.
-//   dispatchMail (src/mail-relay/)  — one relayed message from the `vozka-mail` queue; only this process has one.
+//   dispatchMail (src/mail-relay/)  — one relayed message from the `vozka-mail` queue; the Worker has its own on Cloudflare.
 //   runMaintenance(src/cron.ts)     — the `scheduled` handler's work. NOT scheduled from in here: the
 //                                     platform cron drives it (on Zerops `run.crontab` → `zerops/cron.ts`),
 //                                     which is the same shape as `triggers.crons` driving `scheduled`.

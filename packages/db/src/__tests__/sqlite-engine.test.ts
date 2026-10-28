@@ -271,6 +271,19 @@ describe('the engine', () => {
 		}
 	})
 
+	test('sql.exec runs every statement of a text and answers the rows of the last, as workerd does', () => {
+		const fresh = bunSqliteStorage()
+		const added = fresh.sql.exec(
+			"CREATE TABLE notes (id INTEGER PRIMARY KEY);\nALTER TABLE notes ADD COLUMN state TEXT CHECK (state IN ('draft', 'sent'));\nALTER TABLE notes ADD COLUMN body TEXT; -- the last\n",
+		)
+		expect(added.toArray()).toEqual([])
+		const columns = fresh.sql.exec('SELECT name FROM pragma_table_info(?) ORDER BY cid', 'notes').toArray()
+		expect(columns.map((column) => column['name'])).toEqual(['id', 'state', 'body'])
+		const inserted = fresh.sql.exec("INSERT INTO notes (id, body) VALUES (1, 'a;b'); /* ; */ SELECT body FROM notes")
+		expect(inserted.toArray()).toEqual([{ body: 'a;b' }])
+		expect(inserted.rowsWritten).toBe(1)
+	})
+
 	test('transactionSync commits what it wrote, or nothing when it throws', () => {
 		expect(() =>
 			storage.transactionSync(() => {
@@ -338,6 +351,47 @@ describe('an invocation encloses its work in the transaction on SQLite', () => {
 			await insertItem(own, 'a').catch(() => undefined)
 			await invocation.commit()
 		}, { site: 'test', held: () => {} })).rejects.toThrow(QueryRefusedError)
+		expect(ids()).toEqual([])
+	})
+
+	test('a DatabaseError the storage throws for a statement or at a commit reaches the caller as thrown, with its class', async () => {
+		// What the application object's write fence throws: dispatch answers it by its class, so nothing may rewrap it.
+		class StorageRefusal extends DatabaseError {
+			override name = 'StorageRefusal'
+
+			constructor() {
+				super(null)
+			}
+		}
+		const refusal = new StorageRefusal()
+		let refuseCommit = false
+		const refusing = openSqlite({
+			sql: {
+				exec: (query, ...bindings) => {
+					if (query.includes("'refused'")) {
+						throw refusal
+					}
+					return storage.sql.exec(query, ...bindings)
+				},
+			},
+			transaction: (closure) =>
+				storage.transaction(async () => {
+					const result = await closure()
+					if (refuseCommit) {
+						throw refusal
+					}
+					return result
+				}),
+			transactionSync: (closure) => storage.transactionSync(closure),
+		})
+		await expect(runFixedStatement(sessionOf({ database: refusing }), "select 'refused' as answer", [])).rejects.toBe(refusal)
+		refuseCommit = true
+		const invocation = new InvocationTransaction(refusing, false)
+		await expect(invocation.enclose(async () => {
+			await insertItem(await invocation.session(), 'a')
+			await invocation.commit()
+		}, { site: 'test', held: () => {} })).rejects.toBe(refusal)
+		await expect(sessionOf({ database: refusing }).transaction((nested) => insertItem(nested, 'b'))).rejects.toBe(refusal)
 		expect(ids()).toEqual([])
 	})
 

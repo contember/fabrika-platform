@@ -1,7 +1,9 @@
 // Cloudflare Email Service's Email Sending REST API (https://developers.cloudflare.com/email-service/api/send-emails/rest-api/),
-// built from its documentation in October 2026 and verified only against a stubbed fetch. It has no idempotency key,
-// and Cloudflare takes transactional mail only. The REST API, not the Workers `send_email` binding, so the transport is
-// one set of `FABRIKA_EMAIL_*` on every runtime that sends: a Worker, a Bun process on Zerops, an application.
+// built from its documentation in October 2026. Only the accepted answer is checked live (2026-10-25): a 200 counts by its
+// `message_id`, or without one by a delivered or queued recipient; the refusals follow the documentation (backlog 241).
+// It has no idempotency key, and Cloudflare takes transactional mail only. The REST API, not the Workers `send_email`
+// binding, so the transport is one set of `FABRIKA_EMAIL_*` on every runtime that sends: a Worker, a Bun process on
+// Zerops, an application.
 
 import { z } from 'zod'
 import { type EmailProvider, parseProviderVariables } from './config.js'

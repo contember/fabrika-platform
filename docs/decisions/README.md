@@ -24,8 +24,8 @@ a commit message suffices.
 - **Application framework:** [0012](0012-fabrika-app-runtime.md) — one contract built with the staged kit,
   a declaration that states the surface and never an operation, handlers beside their endpoints on a paved road, and
   every step off it (raw SQL, `unscoped`, connectors, link issuing, database code) declared;
-  [0017](0017-service-owned-postgres-migrations.md) for migrations and the application's database roles, the
-  privilege boundary under raw SQL; [0063](0063-a-public-procedure-runs-as-its-own-workload.md) for public
+  [0017](0017-service-owned-postgres-migrations.md) for migrations and the application's database roles, which bound raw
+  SQL on Postgres beside the name rules; [0063](0063-a-public-procedure-runs-as-its-own-workload.md) for public
   procedures; [0060](0060-a-handler-kicks-a-declared-job-after-its-commit.md) for kicks and claims;
   [0061](0061-a-file-is-a-value-in-a-table-column.md) for files; [0019](0019-portable-outbound-email.md) for e-mail
   sent through `ctx.mail`; and [0062](0062-a-platform-release-serves-older-framework-releases.md) for applications on
@@ -91,4 +91,5 @@ a commit message suffices.
 | [0067](0067-a-terminal-signs-a-person-in-on-an-application-s-word.md)                   | A terminal signs a person in on an application's word                                                     |
 | [0068](0068-public-packages-ship-declarations-beside-their-sources.md)                  | Public packages ship declarations beside their TypeScript sources; Bun runs the sources                   |
 | [0069](0069-control-reaches-an-application-environments-object.md)                      | Control reaches an application environment's object over a composed ops row, and freezes it by generation |
-| [0070](0070-a-cron-job-may-reach-the-public-web.md)                                     | A cron job may reach the public web; the guard keeps it off the installation and private networks         |
+| [0070](0070-data-protection-of-an-application-environment-on-cloudflare.md)             | Back up an environment's object daily, verify each backup by importing it, and restore into a clone       |
+| [0071](0071-a-cron-job-may-reach-the-public-web.md)                                     | A cron job may reach the public web; the guard keeps it off the installation and private networks         |

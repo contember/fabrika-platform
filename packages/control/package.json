@@ -1,6 +1,6 @@
 {
 	"name": "@fabrika/control",
-	"version": "0.9.0-cloudflare.2",
+	"version": "0.9.0-dev.8",
 	"private": true,
 	"type": "module",
 	"exports": {

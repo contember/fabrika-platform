@@ -47,6 +47,8 @@ bun test src/__tests__/challenge.test.ts        # the client key and the Turnsti
 bun test src/__tests__/public-kick.test.ts      # a public procedure's kicks: kicked runs, coalescing on the lease, the cron recovery (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/multipart.test.ts        # the streaming multipart reader a procedure with file fields reads its body through, no database
 bun test src/__tests__/mutation-kick.test.ts    # a mutation's ctx.kick: a run after the commit, nothing on a refusal, stopKicks (needs FABRIKA_TEST_POSTGRES_URL)
+bun test src/__tests__/claim-rearm.test.ts      # a claim re-arms its job from its own eligibility, on Postgres and under the Cloudflare alarm (Postgres half needs FABRIKA_TEST_POSTGRES_URL)
+bun test src/__tests__/test-kit-due-jobs.test.ts # kit.runDueJobs: wakes due within a window run once through the alarm's scheduler (SQLite; FABRIKA_TEST_POSTGRES_URL adds Postgres)
 bun test src/__tests__/job-mail.test.ts         # ctx.mail: the kit's stand-in, prefixed keys, the installation's and the own transport, an installation without mail, fail-closed boot (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/jobs.test.ts             # the job runner: leases, fenced writes, retries (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/error-reports.test.ts    # what a report carries: scrubbing, frames, causes, caps; crash reports of both adapters
@@ -59,8 +61,15 @@ bun test src/__tests__/job-types.test.ts        # the job handler mistakes, comp
 bun test src/__tests__/connect.test.ts          # an export and an import, each in its own test kit
 bun test src/__tests__/connect-hardening.test.ts # captured connect methods, a hostile owner, budgets and deadlines
 bun test src/__tests__/export-read-only.test.ts # an export handler cannot write (needs FABRIKA_TEST_POSTGRES_URL)
-bun test src/__tests__/cloudflare-runtime.test.ts          # the environment's Durable Object in Lopata: hop, migrations, ctx.db, tick, R2
+bun test src/__tests__/cloudflare-runtime.test.ts          # the environment's Durable Object in Lopata: hop, migrations, ctx.db, alarm, R2
 bun test src/__tests__/cloudflare-runtime-adapter.test.ts  # the object's bindings and crash reports, over bun:sqlite
+bun test src/__tests__/cloudflare-alarm.test.ts            # the object's alarm and repair tick: crash points, durable retries, the segment deadline
+bun test src/__tests__/cloudflare-ops.test.ts       # the ops channel at the object: authentication, the uniform refusal, inspect
+bun test src/__tests__/cloudflare-maintenance.test.ts  # the barrier: transitions published to R2, the drain, the write fence, cold starts
+bun test src/__tests__/cloudflare-export.test.ts    # the dump producer over bun:sqlite and Lopata's R2: hashes, lossless values, part sizes, refusals
+bun test src/__tests__/cloudflare-import.test.ts    # the importer: each step, retries, refusals, and a round trip through the producer
+bun test src/__tests__/cloudflare-restore.test.ts   # the point-in-time restore steps over a recovery double: sentinel, bookmarks, barrier turn
+bun test src/__tests__/cloudflare-tracker.test.ts   # the isolate's pending-work tracker: timers and waitUntil, scrubbed bounded stacks
 bun test src/__tests__/dev-launcher.test.ts     # the dev launcher against a stub of Control's source receiver: the digest decision, migrate and reset (the last two need FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/dev-changes.test.ts      # what a dev sync's paths mean: a bootstrap, a migration, an SPA build
 ```
@@ -77,11 +86,11 @@ src/
   agent-skill.ts      @fabrika/app/agent-skill — reads skill/; installedAppAgentSkill; renderAgentsFile (node:fs)
   fetch.ts            FetchService and RequestExecutionContext: what both runtime adapters serve
   cloudflare.ts       Worker module adapter and lifecycle types; createContractWorker: the Worker that forwards each
-                      request and the minute tick to the environment's Durable Object, and an ops request to the
+                      request and the repair tick to the environment's Durable Object, and an ops request to the
                       object its body names; re-exports FabrikaApplication
   cloudflare/         what @fabrika/app/cloudflare runs (ADR-0065)
     application.ts    FabrikaApplication, the environment's one Durable Object: verifies the hop, migrates its SQLite,
-                      boots the application once per isolate, serves requests and the tick; registerApplication
+                      boots the application once per isolate, serves requests, the alarm and the repair tick; registerApplication
     bindings.ts       the bindings the object boots with, read structurally: IAM (keys, membership, workload tokens),
                       ASSETS (a mount's index for a path that names no file), FABRIKA_CONNECT_<IMPORT>
     r2-files.ts       r2FileObjectStore: the FileObjectStore port over the FABRIKA_FILES bucket (conditional puts,
@@ -89,7 +98,20 @@ src/
     names.ts          the class and binding names the provider shares: FabrikaApplication, FABRIKA_APPLICATION,
                       FABRIKA_FILES, ASSETS (re-exported by @fabrika/app/build)
     ops.ts            Control's ops channel at the object (ADR-0069): authentication, the uniform refusal, the
-                      inspect view read from storage alone
+                      inspect view read from storage alone, `state` and `migrate` over the barrier; routes `export`,
+                      `import`, `restore` and `timers` (ADR-0070) to their modules
+    maintenance.ts    MaintenanceBarrier: the object's mode and generation, published to the environment's bucket
+                      before it is acknowledged, the drain, and the gate every invocation and write passes; runs a
+                      data step in its turn (`step`)
+    export.ts         the ops operation `export` (ADR-0070 §2–§4): begin, keyset parts as fixed-size gzip members,
+                      complete with the manifest; reads sqlite_schema and the PRAGMAs, never boots the application
+    import.ts         the ops operation `import` (ADR-0070 §6): a consistent backup loaded into a fresh object step by
+                      step; the import marker in KV commits with each step's rows
+    restore.ts        the original object's point-in-time restore (ADR-0070 §9): prepare keeps the operation's
+                      sentinel and bookmarks under its own KV key, arm arms the restore and resets the object in the
+                      barrier's turn, verify reads the sentinel
+    tracker.ts        the ops operation `timers` (ADR-0070 §10): the isolate's live timers and `waitUntil` promises
+                      with scrubbed, bounded stacks, while switched on
   bun.ts              Bun handler, background-task tracking, graceful drain; serveContract; the local `directory`
                       mail provider, which boot honours only under a loopback issuer
   disk-assets.ts      diskAssets: the SPA mounts from their build directories, as the Bun deploy and the test kit serve them
@@ -132,7 +154,10 @@ src/
     types.ts          ProcedureInput, ProcedureResult, PagedProcedure: the types read off a client procedure
   testing/            @fabrika/app/testing — no test-runner dependency
     kit.ts            testKit: boot behind the production proxy decision and a stand-in IAM; the module re-exports
-                      the types its options take (IamMembershipRpc, ChallengeFetch, FileScanner)
+                      the types its options take (IamMembershipRpc, ChallengeFetch, FileScanner); runDueJobs: repair,
+                      then the wakes due within the window moved to the database's now (JobWakes.hasten, test-only),
+                      then take and run for each due job; handlers keep real time, and a cron fire already run early
+                      is skipped
     proxy.ts          endpointProxy: proxy-core's verify service over contractProxyTable
     caller.ts         test callers and their grants
     membership.ts     kitMembership, every kit's stand-in IAM transport: member directories from the kit's callers,
@@ -208,7 +233,8 @@ src/
     sniff.ts          the declared type checked against the first bytes
     treatment.ts      FileDownload and the file treatment of ADR-0022
   jobs/               c.cron at runtime; bound by boot, run by `fabrika job run <name>` (runContractJob), on
-                      Cloudflare by the object at the minute tick (isDueAt)
+                      Bun also by the serving process's WakeTimer, on Cloudflare by the object's alarm over the
+                      durable wakes (JobScheduler)
     types.ts          JobContext, JobHandler, JobHandlersOf: handlers.jobs.<name>
     runner.ts         bindJobs, the run: lease, attempts, timeout, retries, reports, a site's kick; the framework's own jobs
     schedule.ts       five-field cron in UTC: the due minutes and the period
@@ -265,7 +291,8 @@ src/
   `skill-code.test.ts` compiles the blocks as one application against the workspace (the base files: `SKILL.md`,
   `app-setup.md`, `table-and-migration.md`, `endpoint.md`, `tests.md`; each other reference file is a variant over
   it, except a `STANDALONE` one such as `public-intake.md`, an application of its own over the base's `package.json`,
-  `tsconfig.json` and `src/app-kit.ts`), classifies each application's migrations, and on Postgres checks that they
+  `tsconfig.json` and `src/app-kit.ts`; and `app-setup.md`'s Cloudflare section, an application of its own over
+  `examples/app` with oblaka's two relaxed flags), classifies each application's migrations, and on Postgres checks that they
   migrate to its catalog (`src/__tests__/skill-app/catalog.json`, `skill-app/<name>/catalog.json`), from which the
   generated schema is rendered. Change a migration block, then regenerate that catalog.
 
@@ -628,8 +655,8 @@ vocabulary (`packages/db/CLAUDE.md`).
   whose dimension no table owns, a webhook or a procedure with buckets without a `scoped(tables)` layer, a public
   procedure whose challenge names an application variable (its secret or its site key) that is not set, a job that cannot run (see Jobs), an endpoint that asks IAM with no
   membership transport (`BootOptions.membership`), a handler outside the contract, a
-  missing handler, an access form whose containment no table locates; on a SQLite database (`sqliteProblems`) a site
-  that declares `sql` and a file kind with `scan: true`. Each refusal lifts when its work unit ships the runtime.
+  missing handler, an access form whose containment no table locates; on a SQLite database (`sqliteProblems`) a file
+  kind with `scan: true`. Each refusal lifts when its work unit ships the runtime.
 - **The framework asks IAM; IAM decides** (`membership.ts`). Every request carries the
   verified token, the proxy's `X-Request-Id` (a delegation grant is bound to it) and the
   proxy's `X-Fabrika-Delegation`; `creates` without one is 503 and IAM is not asked.
@@ -667,7 +694,10 @@ vocabulary (`packages/db/CLAUDE.md`).
 - **`ctx.kick` sends its jobs only after the commit, and the answer never depends on it** (`#kickAll`): each declared
   job once, to the request's `waitUntil` or detached, never rejecting, and nothing for a refused, rolled-back or
   cancelled request. The kicked run is the job's own (its key, its lease, its retries), never the request's. Never
-  await the kick, and never give it a payload: the job reads its rows.
+  await the kick, and never give it a payload: the job reads its rows. Every kick writes a `kick` wake in the site's
+  transaction (`#recordKicks`, before the answer), due now by the database's clock (`JobWakes.now`);
+  `ctx.kick(job, { at })` writes only that wake, deduplicated per job and due second (`kick:<job>:<s>`). A job's kicks
+  are written after its attempt succeeded, before its finish.
 - **A public procedure's challenge is verified after its buckets and its body, before its handler, and recorded once it
   passed** (`challenge.ts`). The provider list is closed (`turnstile`, `altcha`) and each one's browser sources are
   fixed (`CHALLENGE_ORIGINS`: Turnstile's origin, which `buildArtifact` adds to `scriptSrc`/`frameSrc`; ALTCHA's
@@ -718,7 +748,7 @@ vocabulary (`packages/db/CLAUDE.md`).
   connector, IAM, the object store, the JWKS) runs through `platformCall`/`platformFacility`, outside the site's scope;
   a new facility that makes its own requests must too, or every site that uses it needs an egress it never declared.
   It is no sandbox: code that kept the `fetch` it found before boot, or opens sockets, escapes it.
-- **A cron job's `egress: 'public'` reaches public hosts only** (ADR-0070): `runAsSite` takes the job runner's
+- **A cron job's `egress: 'public'` reaches public hosts only** (ADR-0071): `runAsSite` takes the job runner's
   `PublicEgressRules` (`publicEgressRules`: the hosts the framework variables and `FABRIKA_EGRESS_REFUSED_HOSTS` name,
   and the adapter's `resolveHost`, which only the Bun adapter passes). Each hop goes out with `redirect: 'manual'` after
   `publicEgressRefusal` (`@fabrika/auth-core`, shared with the checker) and the resolver admit it; the guard follows
@@ -855,9 +885,11 @@ vocabulary (`packages/db/CLAUDE.md`).
   handler's transaction. A known rollback deletes what the request staged (`StoredFileKinds.release`), and so does a
   job's `ctx.transaction` the job threw out of (from its `FileWork.mark`); after an uncertain outcome nothing is deleted
   and the sweep decides from the database, past `FILE_PENDING_GRACE_MS`. Never write an object without a row first.
-  On SQLite there is one database, so the pending row is written in the work's own transaction and rolls back with it:
-  the work records each object it wrote (`FileWork.wrote`), and a known rollback deletes an object whose row is gone
-  (`writtenKey`).
+  On SQLite there is one database, so a put inside a handler's enclosure writes its pending row in that transaction and
+  it rolls back with it: the work records each object it wrote (`FileWork.wrote`), and a known rollback deletes an
+  object whose row is gone (`writtenKey`). A commit the maintenance fence refused (`MaintenanceFenceError`) is a known
+  rollback. An incoming file is staged before the enclosure opens, so its pending row commits on its own; such a put's
+  object has no durable intent until its commit, and an eviction before it leaks the bytes.
 - **Every answer of a file output carries the file treatment**, denials and errors included: `ContractRuntime.fetch`
   chooses it by the planned endpoint's row, and a file is a `FileDownload`, never a `Response`, so no handler or store
   can set its headers. Keep the treatment equal to ADR-0022's.
@@ -868,8 +900,11 @@ vocabulary (`packages/db/CLAUDE.md`).
   holds and may read (an input file, a put, or a file column read under its table's read action), and refuses any
   other (`wrong_capability`). A query creates no file. Never read a file by its id alone.
 - **The sweep job is a framework job** (`FILE_SWEEP_JOB`, hourly, `StoredFileKinds.sweep(signal)`): it deletes the
-  files no declared column references once past the grace, row and deletion record first, object after, in bounded
-  batches. Its name and schedule are in `files/job-names.ts`, which `contractRecipe` schedules: platform protocol, so change them only additively (ADR-0062).
+  files no declared column references once past the grace, row and deletion record first, in bounded batches; the
+  deletion record is a tombstone, and the object goes only once its key was queued longer than `fileRetentionMs`
+  (`boot`'s option: zero on Bun, `FILE_TOMBSTONE_RETENTION_MS` on Cloudflare, the backups' retention), claimed before
+  the delete so a restore's `cancelDeletions` wins over a sweep that already read the key. A file kind named `__fabrika`
+  or starting with it is refused: the framework keeps its own objects under that prefix. Its name and schedule are in `files/job-names.ts`, which `contractRecipe` schedules: platform protocol, so change them only additively (ADR-0062).
   `serveContract` opens the object storage from `FABRIKA_APP_STORAGE_*` (all or none). Never return a storage URL or
   presign one.
 - **Only a completed clean verdict promotes a file** (`scan.ts`). A file of a `scan: true` kind is
@@ -1030,7 +1065,7 @@ object directly over `bunSqliteStorage` (the IAM binding, the assets, the crash 
   their text verbatim, so their checksums stay the files'. `createContractWorker(load, { migrations })` registers the
   loader; the Worker's `fetch` removes `X-Fabrika-Tick` (`TICK_HEADER`), sets the proxy secret and forwards the request
   to the object `FABRIKA_APPLICATION_OBJECT` names in `FABRIKA_APPLICATION` (`application` without the object
-  variables, an older deploy); its `scheduled` sends the tick there with the `scheduledTime`. Without
+  variables, an older deploy); its `scheduled` sends the repair tick there with the `scheduledTime`. Without
   `FABRIKA_PROXY_SECRET` or the binding it forwards nothing.
 - **An ops request reaches only framework code and never boots the application** (ADR-0069, `cloudflare/ops.ts`). The
   Worker first runs `opsAuthenticated` (the ops row's method and `X-Fabrika-Endpoint` from `opsProxyRow()`, the key's
@@ -1038,13 +1073,28 @@ object directly over `bunSqliteStorage` (the IAM binding, the assets, the crash 
   names, only when `FABRIKA_APPLICATION_OBJECTS` lists it. The object checks the hop secret and `opsAuthenticated` again,
   and only then waits for a boot under way; it never starts one or a retry. Every refusal is `opsRefusal()`. `inspect`
   reads storage only, never writes, skips a table name the wire refuses, and shows the last boot failure's text only in
-  the content view; `state` and `migrate` answer 501 until the barrier lands.
+  the content view; `state` and `migrate` go to the barrier.
+- **The barrier holds the object's mode** (ADR-0069 §3, `cloudflare/maintenance.ts`). The published state is
+  `__fabrika/ops/<object>.json` in `FABRIKA_FILES`, written by a conditional put on the version last read or written; a
+  conflict re-reads it and adopts what `opsTransitionRefused` refuses (a higher generation, or the same in another mode),
+  answering the 409; it never overwrites it. A transition is acknowledged only after that put succeeds and, for
+  a restriction, after the drain: every invocation the new mode forbids has finished or `DRAIN_BOUND_MS` passed, and
+  every kicked or scheduled run has been aborted through its admission's signal. A request below the published
+  generation is the 409 `stale_generation` naming the published state. A cold start reads the state before anything
+  else: absent is `open`, any other failure answers 503 to every request, ops included, and is retried by the next one.
+  `dispatch.ts`'s `runGated` admits each invocation by kind (`read`, `write`, `webhook`, `kick`, `job`,
+  `framework-job`): `read-only` admits reads only, `closed` and `inspect` nothing, and `inspect` never boots. Every
+  SQLite write of the object goes through the fenced storage adapter, which checks the mode and the generation the event
+  was admitted under after the statement or transaction and before its commit, so a write admitted before a restriction
+  rolls back. The fence throws `MaintenanceFenceError`, a `DatabaseError` `@fabrika/db` passes through unchanged, which
+  dispatch answers as `maintenanceRefusal()` (503 with `Retry-After`) and records as no failure. Outside `open` the object applies no migration; a boot that finds one pending refuses ordinary traffic
+  until `migrate` runs it under the published generation.
 - **The object answers only its own Worker.** A request without the environment's proxy secret is an empty 404 before
   anything else, the digests compared in constant time, so another Worker that binds the class learns nothing.
 - **It boots once per isolate.** The first request or tick that needs the application starts the boot in
   `blockConcurrencyWhile`, and every later event shares it; the boot settles either way: a
   failed boot answers every request with its failure, is reported once, and is not kept, so the next instance boots
-  again. For an application with a data layer, before the boot and for every later instance of the isolate, it applies `SQLITE_FRAMEWORK_MIGRATIONS` and the
+  again. For an application with a data layer, before the boot and for every later instance of the isolate, it applies (in `open`) `SQLITE_FRAMEWORK_MIGRATIONS` and the
   application's bundle through `migrateSqlite`, then binds the layer to `openSqlite` over a storage it resolves
   per event from the object's `AsyncLocalStorage` scope (the layer binds once; a statement outside any event throws),
   so two objects in one isolate never share a database. It captures the environment without `IAM` and `ASSETS` (`CLOUDFLARE_ASSETS_BINDING`), and boots with
@@ -1055,9 +1105,16 @@ object directly over `bunSqliteStorage` (the IAM binding, the assets, the crash 
   asks for the request as it came, and a page route the binding answers 404 (`isPageRoute` in `spa-fallback.ts`: a GET
   or HEAD whose last segment has no extension, or that accepts `text/html`) asks once more for `<prefix>/`, which
   Workers Assets answers with the mount's `index.html`, as `diskAssets` serves it; a missing asset stays 404 under both.
-- **Jobs run on the minute tick.** The object runs every contract job whose schedule `isDueAt` the tick's UTC minute,
-  and the file sweep when the contract has file kinds, each in `waitUntil`, then `jobs.check()`; a kick runs in the
-  object after its commit. A scanning file kind does not boot there (`sqliteProblems`).
+- **Jobs run on the object's alarm** (ADR-0065 §5, `jobs.scheduler` in `runner.ts`). Every wake or lease change
+  arms the alarm in its own transaction (`BootOptions.projectWakes`). `alarm()` runs jobs only in the object whose name,
+  recorded in its KV at its first verified event (`OBJECT_NAME_KEY`), is the one ordinary traffic reaches, and only in
+  `open`; otherwise, per job with a due wake (and per removed job a crashed run still holds, `orphans()`), it reaps, takes the lease or marks the job pending, and re-arms in one transaction, then
+  runs the job in `waitUntil`. It consumes no wake (the fenced finish does), waits out a wake within `ALARM_SLACK_MS`,
+  and never throws: an internal error in `open` re-arms `ALARM_RETRY_MS` later and is reported as `AlarmFailed`, a fence
+  refusal is none. A run it started retries durably (`finish(fence, { kind: 'retry', at })`), a kicked run inline; its
+  attempt ends `SEGMENT_FINISH_RESERVE_MS` before the segment, and no finish starts past it. The repair tick, and the object's first
+  event after a boot or a reopen, reap, reconcile the cron wakes against the declared jobs and their expressions, and
+  re-arm. A kick runs in the object after its commit. A scanning file kind does not boot there (`sqliteProblems`).
 - **Every handler holds the object's transaction.** workerd resets an object whose transaction runs about 30 s, so the
   provider refuses a procedure's or a webhook's `timeoutMs` above 25 s (`CLOUDFLARE_MAX_HANDLER_MS`).
 
@@ -1071,7 +1128,7 @@ object directly over `bunSqliteStorage` (the IAM binding, the assets, the crash 
   running when the attempt ends (`attemptOnce` calls `cancelInFlight` before the runner touches the lease again). A
   retry renews the lease to a new generation before its backoff. Never run a handler outside `attemptOnce`.
 - **Lease times are the database's**: the runner passes durations, never a timestamp, so a container whose clock is
-  minutes off cannot take a live lease over. `JobClock` has only the waits and the jitter.
+  minutes off cannot take a live lease over. `JobClock` has the waits, the jitter and the clock an attempt's one deadline (IAM exchange, handler, finish) is measured on.
 - **Kicks coalesce on one shared flag: at most one run and one pending, across instances.** A kick takes the lease
   with `tryAcquire`, which never waits for a lock: it shares the request pool, and a run's attempt holds the lease
   row as its fence while it writes. Without the lease it sets `fabrika_job_kicks.pending` (`markPending`, a row no
@@ -1080,13 +1137,23 @@ object directly over `bunSqliteStorage` (the IAM binding, the assets, the crash 
   that took the flag but finds a newer run holding the lease sets it again (`handOver`): that run may have read before
   the kick's row. There is no process-local kick state; every kick asks the lease. Never let a kick wait on the lease, and never drop the cron of a kicked job: it is the recovery path. `serveContract` drains
   kicked runs on SIGTERM before it closes the database, and `kit.runJob` waits for them before it runs.
+- **A claim that leased rows re-arms its job** (`rearmClaim` in `@fabrika/db`'s `job-wakes.ts`): in its fenced
+  transaction it sets `claim:<job>` to its own next eligible due, at least now + 1 s; a full claim makes it due
+  now + 1 ms; a claim that found nothing writes none. An attempt's claims keep the earliest re-arm (by its fence); its
+  first replaces what an earlier run left.
+- **On Bun the serving process's `WakeTimer` kicks due jobs through the kick path** (`ContractJobs.wake`):
+  `projectWakes` lowers it by `JobScheduler.untilNext` (the database's clock), the 60 s check refreshes it, and an
+  already-due wake waits `WAKE_RETRY_MS`. A projected wake a refresh cannot see yet (its write still committing) is
+  looked for again at 1, 2, 4 and 8 s within `WAKE_SETTLE_MS`. `stop()` refuses new refreshes and resolves once the one
+  under way ended; the server awaits it before `stopKicks` and the drain. `take` and `wake` skip a job whose holder
+  owns every due wake (`Wake.owned`). A run failed past its inline retries consumes the wakes it owned.
 - **A job acts only with what IAM signs for its key** (`implement/workload.ts`, ADR-0022 "Principal kinds"). Control
   writes `FABRIKA_JOB_<NAME>_KEY`; each attempt exchanges it through the adapter's `WorkloadTokenSource` (on Bun
   `issuerWorkloadTokens`, IAM's public `WORKLOAD_TOKEN_PATH`), verifies the token with the application's own
   verifier and requires `ptype: 'job'` and `workload: <name>`. `ctx.within(action, dim)` is a `Within` over every
   value, `ctx.ref(action, dim, id)` a located `Ref`; both refuse an undeclared action, an action the token lacks, an
   unknown dimension and an ended attempt. A refused key fails the attempt `unauthorized`, an unreachable IAM
-  `iam_unavailable`; no handler runs. The token is cached until `TOKEN_REFRESH_SKEW_SECONDS` before it expires. The
+  `iam_unavailable`; no handler runs. The token is cached until `TOKEN_REFRESH_SKEW_SECONDS` before it expires; an exchange an attempt stopped waiting for is tracked in its admission and not reused (`abandon`). The
   grants' principal is `job:<name>`. There is no in-process mint and no unscoped handle; keep no second path. A job
   creates no scope and manages no member. **It issues links only for the mount the approved artifact says it
   `issues`** (`jobLinks` in `runner.ts`, by the artifact whatever the leaf; `boot` refuses one without a membership
@@ -1123,7 +1190,7 @@ object directly over `bunSqliteStorage` (the IAM binding, the assets, the crash 
   handles) reads each statement on its own and refuses every write; `ctx.transaction((tx) => …)` is one transaction
   fenced by the attempt's lease (`DataAccess.transaction`), refused outside the attempt, whose `tx.db` writes and whose
   handles refuse once it returned.
-- An attempt is cancelled after its `limits.timeoutMs` (`JOB_LIMITS`: 15 min by default, at most a day), which the artifact
+- An attempt is cancelled after its `limits.timeoutMs` (`JOB_LIMITS`: 14 min by default, one Cloudflare segment, `CLOUDFLARE_MAX_JOB_SEGMENT_MS`; at most a day), which the artifact
   records as the job's `timeoutMs`; the lease lasts the timeout
   plus `LEASE_GRACE_MS`. Retries back off exponentially from one second, capped at five minutes, half jittered.
 - The type witnesses live in `src/__tests__/job-mistakes/`, compiled by `job-types.test.ts`.

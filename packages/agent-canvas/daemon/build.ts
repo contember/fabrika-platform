@@ -183,6 +183,8 @@ ${themeCss}
 				'components.js',
 				'client.js',
 				'client.css',
+				// Remote review: deployed applications load the widget from the worker.
+				'review.js',
 			]
 		) {
 			cpSync(join(DIST, f), join(WORKER_PUBLIC, f))

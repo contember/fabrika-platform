@@ -373,7 +373,7 @@ class RepositoryClient implements GitHubRepositoryClient {
 					method: options.method ?? 'GET',
 					headers,
 					...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
-					// Workers' fetch rejects `redirect: 'error'`; a 3xx is not `ok` and fails below.
+					// Workers refuse `redirect: 'error'`; a redirect is a response that is not `ok` and fails below.
 					redirect: 'manual',
 					signal: cancellation.signal,
 				})

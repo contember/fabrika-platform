@@ -1,6 +1,6 @@
 import { ConflictError } from '@fabrika/app'
 import { app } from './app-kit'
-import { Message, Queued, Waiting } from './schemas'
+import { Message, Queued, Reminder, Waiting } from './schemas'
 
 export const outbox = app.group({ callers: ['human'] }, (r) => ({
 	enqueue: r.mutation({ input: Message, output: Queued, access: { action: 'outbox.write', app: true }, sql: 'write', kicks: ['deliver'] })
@@ -23,6 +23,14 @@ export const outbox = app.group({ callers: ['human'] }, (r) => ({
 			if (input.body.startsWith('later')) return { id }
 			ctx.kick('deliver')
 			if (input.body === 'refused') throw new ConflictError('the message is refused after its kick')
+			return { id }
+		}),
+	remind: r.mutation({ input: Reminder, output: Queued, access: { action: 'outbox.write', app: true }, sql: 'write', kicks: ['deliver'] })
+		.handle(async ({ input, ctx }) => {
+			const id = Bun.randomUUIDv7()
+			await ctx.sql(Queued)`insert into outbox (id, body) values (${id}, ${input.body}) returning id`
+			for (const at of input.at) ctx.kick('deliver', { at: new Date(at) })
+			if (input.body === 'refused') throw new ConflictError('the reminder is refused after its kicks')
 			return { id }
 		}),
 	peek: r.query({ output: Waiting, access: { action: 'outbox.read', app: true }, sql: 'read' })

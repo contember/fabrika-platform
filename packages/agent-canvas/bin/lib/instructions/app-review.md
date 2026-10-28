@@ -86,3 +86,34 @@ With the one-shot watcher, start `review watch` again for the next batch.
 
 If the user says they already sent comments and no watcher was running, take them with `review fetch`. `review list`
 shows every thread that is not resolved, notes included.
+
+## Remote review — a deployed application
+
+When the user wants comments on a deployed application (a prototype on a public URL, a staging site), make the project
+remote. Its threads then live on the share worker, end-to-end encrypted: the reviewer's browser and this machine hold
+the key, the worker stores ciphertext.
+
+```bash
+bunx agent-canvas review share <deployed-url> --project <name>
+```
+
+It prints two things:
+
+1. The `<script>` tag the application needs on every page. Add it to the application's HTML and deploy it the way the
+   project deploys. The tag is inert for every visitor without the link, so it may stay in production.
+2. The reviewer's link: the application with `#agent-canvas-review=<project>.<key>` in the fragment. The fragment never
+   reaches a server; the widget reads it, keeps it for that origin and removes it from the address bar. Give the link
+   to the user only; anyone holding it can read and write the threads. `#agent-canvas-review=off` makes a browser
+   forget it.
+
+Running `share` again prints both again. The project allows only the origin of `<deployed-url>`; for another
+deployment, share it under another `--project`.
+
+The loop is the same as above: `review watch` (with `--follow` under Claude Code's Monitor), `review reply`,
+`review fetch` and `review list` talk to the share worker once the project is remote, and need no daemon. A change
+reaches the reviewer only after it is deployed, so deploy before you reply, and say in the reply when it is live.
+Remote threads carry no `Source` positions unless the deployed build ships source maps.
+
+`share` creates the project on `CANVAS_SHARE_ENDPOINT` (default `https://canvas.contember.com`); a worker that gates
+share creation needs `CANVAS_SHARE_AUTH_TOKEN`. The project's key and agent token are stored in the agent-canvas data
+directory under `reviews/<name>/remote.json`.

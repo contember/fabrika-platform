@@ -25,6 +25,7 @@
  * For deployment instructions see packages/canvas-share/README.md.
  */
 
+import { handleCreateReviewProject, matchReviewPath, reviewProjectStub } from './review'
 import type { Env, FeedbackEntry, ShareRecord } from './types'
 import { LIMITS } from './types'
 import {
@@ -421,6 +422,11 @@ export default {
 		const url = new URL(req.url)
 		const origin = `${url.protocol}//${url.host}`
 
+		// Remote review answers its own preflights: only a project's allowed origins may call it.
+		const reviewProjectId = matchReviewPath(url.pathname)
+		if (reviewProjectId !== null) return reviewProjectStub(env, reviewProjectId).fetch(req)
+		if (url.pathname === '/reviews' && req.method === 'POST') return handleCreateReviewProject(req, env)
+
 		if (req.method === 'OPTIONS') {
 			return new Response(null, { status: 204, headers: CORS_HEADERS })
 		}
@@ -513,3 +519,5 @@ export default {
 		return json({ error: 'Not found' }, { status: 404 })
 	},
 }
+
+export { ReviewProject } from './review'

@@ -1,10 +1,10 @@
 ---
-id: 236
+id: 241
 title: Verify the Cloudflare email adapter on a live account
 blocked-by: []
 ---
 
-# 236 — Verify the Cloudflare email adapter on a live account
+# 241 — Verify the Cloudflare email adapter on a live account
 
 **Summary.** The Cloudflare adapter follows Cloudflare's Email Sending REST API documentation (October 2026) and passes
 the conformance kit against a stubbed `fetch`; only its accepted answer has been checked live (2026-10-25). Confirm its unverified points on a live account before an

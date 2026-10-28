@@ -1,4 +1,4 @@
-import type { AppSchema, ContractArtifact, ManagedEnvironment } from '@fabrika/auth-core'
+import type { ApplicationObjects, AppSchema, ContractArtifact, ManagedEnvironment } from '@fabrika/auth-core'
 import type { InstallationBrand } from '@fabrika/proxy-core/brand'
 import type { JsonValue, ProviderEnvelope } from './json'
 
@@ -67,6 +67,12 @@ export interface ProviderApprovedAccess {
 	 * the framework minor it pins (ADR-0062). Its build checks with that release.
 	 */
 	readonly checker: string
+	/**
+	 * The `@fabrika/app` release the application's `bun.lock` pins (`FRAMEWORK_RELEASE_PATTERN`), which a release gate
+	 * reads: `checker` is this platform's patch of that minor, newer than a prerelease pin. Absent in an access Control
+	 * approved before it recorded the pin.
+	 */
+	readonly framework?: string
 }
 
 /**
@@ -154,6 +160,11 @@ export interface ProviderDeployInput {
 	readonly vars: Readonly<Record<string, string>>
 	/** Platform-owned runtime configuration, separate from operator-managed application vars. */
 	readonly managedEnvironment: ProviderManagedEnvironment
+	/**
+	 * The object that serves the environment's ordinary traffic and the objects its ops channel reaches, as Control records
+	 * them (ADR-0070 §9). A provider whose application runs in no object ignores it; absent, the provider's defaults.
+	 */
+	readonly applicationObjects?: ApplicationObjects
 	readonly dryRun: boolean
 	readonly sourceBinding?: ProviderSourceBinding
 	/** Optional short-lived, run-scoped Operations artifact destination. */
@@ -573,6 +584,13 @@ export interface ControlProvider {
 	 * release logic. Absent means no environment of this provider is.
 	 */
 	opsChannel?(access: ProviderApprovedAccess): boolean
+	/**
+	 * Whether the object at this approved access, served the ops channel, also holds the maintenance barrier (`state`,
+	 * `migrate`) and serves Control's data operations: the daily backups, a deploy's migration phase and the side restore
+	 * (ADR-0069 §3, ADR-0070). A release can serve the channel without them. Absent means no environment of this
+	 * provider is.
+	 */
+	dataOperations?(access: ProviderApprovedAccess): boolean
 	/** Absent means the provider deploys public sources only. */
 	readonly source?: ProviderSourceCapabilities
 	/**

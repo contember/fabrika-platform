@@ -36,15 +36,18 @@ import {
 	sha256Hex,
 	type WebhookScheme,
 } from '@fabrika/auth-core'
+import { DatabaseError } from '@fabrika/db'
 import { type CapabilityAuthority, type ContainerGrant, MAX_WITHIN_VALUES } from '@fabrika/db/capability'
 import type { DataAccess, FileBinding, FrameworkTables } from '@fabrika/db/framework'
 import type { DataKind } from '@fabrika/db/tables'
 import type { TokenVerifier } from '@fabrika/jwks'
 import { applyAnswerCache, withResponseHeaders } from '@fabrika/proxy-core/headers'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { createHash, timingSafeEqual } from 'node:crypto'
 import { z } from 'zod/v4'
 import { fileFieldsOf } from '../contract/build'
 import {
+	bodyDeadlineMs,
 	BROWSER_CONFIG_FILE,
 	CHALLENGE_FIELD,
 	FILE_INPUT_PART,
@@ -68,7 +71,7 @@ import {
 import type { RequestExecutionContext } from '../fetch'
 import { FileWork, type StoredFileKinds, storedFilesHandle } from '../files/kinds'
 import { FileDownload, fileResponse, withFileTreatment } from '../files/treatment'
-import { abortedBody, bodyDeadlineMs, bootstrapPath, bootstrapResponse, readBodyInTime, withBootstrap } from './anonymous'
+import { abortedBody, bootstrapPath, bootstrapResponse, readBodyInTime, withBootstrap } from './anonymous'
 import { attachmentResponse } from './attachment'
 import { boundedStream, type Deadline, deadline, handlerSignal, readBoundedBytes } from './bounded'
 import type { BrowserConfig } from './browser-config'
@@ -89,7 +92,17 @@ import type { FailureReports } from './failures'
 import { ServerFault } from './faults'
 import { type HeaderPolicy, withHeaderPolicy } from './headers'
 import type { ContractDatabase } from './implement'
-import { boundTo, boundWebhookApp, endpointData, Invocation, kickRecorder, siteData, type SiteDeclaration, undeclaredSql } from './invocation'
+import {
+	boundTo,
+	boundWebhookApp,
+	endpointData,
+	Invocation,
+	type KickRecorder,
+	kickRecorder,
+	siteData,
+	type SiteDeclaration,
+	undeclaredSql,
+} from './invocation'
 import {
 	applicationDirectory,
 	createScope,
@@ -120,6 +133,76 @@ import {
 	webhookSubject,
 } from './webhook'
 import type { WorkloadCredential } from './workload'
+
+/** The classes of invocation an object's maintenance barrier admits per mode, counts and drains (ADR-0069 §3). */
+export type InvocationKind = 'read' | 'write' | 'webhook' | 'kick' | 'job' | 'framework-job'
+
+/** One admitted invocation, counted until it settles. */
+export interface InvocationAdmission {
+	/** Aborts when a drain stops the invocation. */
+	readonly signal: AbortSignal
+	/** Counts `work` the invocation handed on until it settles, past the invocation's own end. */
+	track(work: Promise<unknown>): void
+	/** Ends the invocation's own count; called once it settled. */
+	release(): void
+}
+
+/** What a Cloudflare object's barrier puts around each of its events; `null` refuses an invocation. */
+export interface InvocationGate {
+	admit(kind: InvocationKind): InvocationAdmission | null
+}
+
+const invocationGate = new AsyncLocalStorage<InvocationGate>()
+
+const UNGATED: InvocationAdmission = Object.freeze({ signal: new AbortController().signal, track: () => {}, release: () => {} })
+
+/** Runs `work` with `gate` admitting every invocation it starts, the background work it hands on included. */
+export function runGated<T>(gate: InvocationGate, work: () => T): T {
+	return invocationGate.run(gate, work)
+}
+
+/** Admits an invocation of `kind` at the current event's gate; outside an object every invocation is admitted, uncounted. */
+export function admitInvocation(kind: InvocationKind): InvocationAdmission | null {
+	const gate = invocationGate.getStore()
+	return gate === undefined ? UNGATED : gate.admit(kind)
+}
+
+/** How long a refused caller waits before it tries again, in seconds. */
+const MAINTENANCE_RETRY_AFTER_S = 30
+
+/** The answer while maintenance refuses an invocation: 503 with `Retry-After`, the fixed body of every 503. */
+export function maintenanceRefusal(): Response {
+	const response = serverError(503)
+	response.headers.set('Retry-After', String(MAINTENANCE_RETRY_AFTER_S))
+	return response
+}
+
+/**
+ * A write the object's write fence refused: the invocation was admitted before a restrictive transition (ADR-0069 §3).
+ * A `DatabaseError`, so `@fabrika/db` passes it through its normalization of statement and commit failures unchanged;
+ * its fixed text names no statement or value. Dispatch answers it as `maintenanceRefusal()`.
+ */
+export class MaintenanceFenceError extends DatabaseError {
+	override name = 'MaintenanceFenceError'
+
+	constructor() {
+		super(null)
+	}
+}
+
+/** The class an endpoint's invocation counts in: a writing endpoint, a webhook, or one that only reads. */
+function invocationKind(served: ServedEndpoint): InvocationKind {
+	switch (served.kind) {
+		case 'webhook':
+			return 'webhook'
+		case 'procedure':
+			return served.site?.kind === 'mutation' && served.readOnly !== true ? 'write' : 'read'
+		case 'public':
+			return served.site.kind === 'mutation' ? 'write' : 'read'
+		default:
+			return 'read'
+	}
+}
 
 /** SHA-256 of a proxy secret: 32 bytes whatever the secret's length, as `timingSafeEqual` needs. */
 export function proxySecretDigest(secret: string): Uint8Array {
@@ -357,36 +440,21 @@ export class ContractRuntime {
 			}
 			where = served.row.id
 			this.#checkEndpoint(served, request)
-			switch (served.kind) {
-				case 'health':
-					return jsonResponse({ status: 'ok' }, 200)
-				case 'spa': {
-					const caller = await this.#authorize(served.row, request)
-					return await this.#spaFile(served, request, caller)
-				}
-				case 'public-spa':
-					return await this.#spaFile(served, request, null)
-				case 'spa-prefix':
-					return new Response(null, { status: 308, headers: { Location: `${served.prefix}/${new URL(request.url).search}` } })
-				case 'link-spa':
-					if (rawRequestTarget(request.url).pathname === bootstrapPath(served.prefix)) {
-						return bootstrapResponse()
-					}
-					return await withBootstrap(await this.#asset(served, request), served.prefix)
-				case 'procedure':
-					return await this.#procedure(served, request, exec)
-				case 'public':
-					return await this.#public(served, request, exec)
-				case 'challenge':
-					return await this.#issueChallenge(served, request)
-				case 'webhook':
-					return await this.#webhook(served, request, plan.params, exec)
-				case 'description':
-					await this.#authorize(served.row, request)
-					await readInput({ row: served.row, input: null }, request)
-					return jsonResponse({ result: served.description }, 200)
+			// Counted from here, while it authorizes and uploads too, until it settled.
+			const admission = admitInvocation(invocationKind(served))
+			if (admission === null) {
+				return maintenanceRefusal()
+			}
+			try {
+				return await this.#served(served, request, plan, exec)
+			} finally {
+				admission.release()
 			}
 		} catch (error) {
+			if (error instanceof MaintenanceFenceError) {
+				// An expected refusal, not a failure: nothing it wrote was kept, and the caller retries.
+				return maintenanceRefusal()
+			}
 			const response = errorResponse(error, where)
 			if (response.status >= 500) {
 				const failure = { endpoint: where, requestId: request.headers.get(REQUEST_ID_HEADER), status: response.status, error }
@@ -394,6 +462,43 @@ export class ContractRuntime {
 				exec?.waitUntil(delivery)
 			}
 			return response
+		}
+	}
+
+	async #served(
+		served: ServedEndpoint,
+		request: Request,
+		plan: Extract<EndpointPlan, { outcome: 'endpoint' }>,
+		exec: RequestExecutionContext | undefined,
+	): Promise<Response | FileDownload> {
+		switch (served.kind) {
+			case 'health':
+				return jsonResponse({ status: 'ok' }, 200)
+			case 'spa': {
+				const caller = await this.#authorize(served.row, request)
+				return await this.#spaFile(served, request, caller)
+			}
+			case 'public-spa':
+				return await this.#spaFile(served, request, null)
+			case 'spa-prefix':
+				return new Response(null, { status: 308, headers: { Location: `${served.prefix}/${new URL(request.url).search}` } })
+			case 'link-spa':
+				if (rawRequestTarget(request.url).pathname === bootstrapPath(served.prefix)) {
+					return bootstrapResponse()
+				}
+				return await withBootstrap(await this.#asset(served, request), served.prefix)
+			case 'procedure':
+				return await this.#procedure(served, request, exec)
+			case 'public':
+				return await this.#public(served, request, exec)
+			case 'challenge':
+				return await this.#issueChallenge(served, request)
+			case 'webhook':
+				return await this.#webhook(served, request, plan.params, exec)
+			case 'description':
+				await this.#authorize(served.row, request)
+				await readInput({ row: served.row, input: null }, request)
+				return jsonResponse({ result: served.description }, 200)
 		}
 	}
 
@@ -596,6 +701,8 @@ export class ContractRuntime {
 				} finally {
 					frame.end()
 				}
+				// Before the answer opens a file's stream: a failed write then has nothing to cancel.
+				await this.#recordKicks(invocation, kicks)
 				const answer = await this.#answerOf(served, result, request, work, carried)
 				outcome = 'committing'
 				await commitAnswer(invocation, signal, answer)
@@ -603,6 +710,12 @@ export class ContractRuntime {
 			})
 			this.#kickAll(kicks.kicked(), exec)
 			return answer
+		} catch (error) {
+			// The fence refuses inside the transaction, before its COMMIT: a known rollback, so what it staged goes now.
+			if (error instanceof MaintenanceFenceError) {
+				outcome = 'open'
+			}
+			throw error
 		} finally {
 			budget?.clear()
 			await invocation?.rollback()
@@ -985,8 +1098,24 @@ export class ContractRuntime {
 	}
 
 	/**
-	 * Sends each job once, after the commit: in the background, never awaited and never rejecting. Without an execution
-	 * context a kick runs detached.
+	 * Writes each kick's wake in the invocation's transaction, after the handler and before the commit: a rollback leaves
+	 * none, and a crash between the commit and the kick's start leaves the wake to the scheduler. A kick due now is due by
+	 * the database's clock, which takes the lease and marks the wakes a run owns.
+	 */
+	async #recordKicks(invocation: Invocation | null, kicks: KickRecorder): Promise<void> {
+		const framework = this.#parts.framework
+		if (invocation === null || framework === null || !kicks.recorded()) {
+			return
+		}
+		const transaction = await invocation.frameworkSite('ctx.kick').session()
+		for (const wake of kicks.wakes(await framework.wakes.now(transaction))) {
+			await framework.wakes.schedule(wake, transaction)
+		}
+	}
+
+	/**
+	 * Sends each job kicked without `at` once, after the commit: in the background, never awaited and never rejecting.
+	 * Without an execution context a kick runs detached.
 	 */
 	#kickAll(jobs: readonly string[], exec: RequestExecutionContext | undefined): void {
 		for (const job of new Set(jobs)) {
@@ -1092,6 +1221,7 @@ export class ContractRuntime {
 				} finally {
 					frame.end()
 				}
+				await this.#recordKicks(invocation, kicks)
 				const output = served.row.output
 				const answer = output !== null && isFileShape(output)
 					? await this.#fileKinds(served.row.id).download(work, served.row.id, output.kind, result)
@@ -1102,6 +1232,12 @@ export class ContractRuntime {
 			})
 			this.#kickAll(kicks.kicked(), exec)
 			return answer
+		} catch (error) {
+			// The fence refuses inside the transaction, before its COMMIT: a known rollback, so what it staged goes now.
+			if (error instanceof MaintenanceFenceError) {
+				outcome = 'open'
+			}
+			throw error
 		} finally {
 			budget?.clear()
 			await invocation.rollback()
@@ -1244,6 +1380,7 @@ export class ContractRuntime {
 				if (!(await tables.completeDelivery(claim, using))) {
 					throw new ServerFault('webhook_claim_lost', `the claim of a delivery to '${served.webhook}' expired and another copy took it over`)
 				}
+				await this.#recordKicks(invocation, kicks)
 				committing = true
 				await invocation?.commit(signal)
 			})
@@ -1251,7 +1388,8 @@ export class ContractRuntime {
 		} catch (error) {
 			await invocation?.rollback()
 			// Only a known rollback deletes what the delivery staged; after a commit that may have happened, the sweep decides.
-			if (!committing) {
+			// The fence refuses inside the transaction, before its COMMIT, so its refusal is a known rollback.
+			if (!committing || error instanceof MaintenanceFenceError) {
 				await this.#parts.fileKinds?.release(work)
 			}
 			// The provider redelivers a failed delivery; giving the claim back lets the redelivery run at once. The unsigned

@@ -285,6 +285,12 @@ export interface ControlRpcContract {
 		content: RpcProcedure<AppEnvironmentInput, OpsContentView>
 		start: RpcProcedure<StartDataOperationInput, DataOperationDto>
 		recover: RpcProcedure<RecoverDataOperationInput, DataOperationDto>
+		/** Consistent backups (ADR-0070): listed and their schedule read under `data.read`, the schedule set under `data.manage`. */
+		backups: {
+			list: RpcProcedure<DataOperationListInput, CursorList<DataBackupDto>>
+			schedule: RpcProcedure<AppEnvironmentInput, DataBackupScheduleDto>
+			setSchedule: RpcProcedure<SetDataBackupScheduleInput, DataBackupScheduleDto>
+		}
 	}
 }
 
@@ -311,9 +317,28 @@ export type DataOperationKind = 'maintenance' | 'backup' | 'migrate' | 'recovery
  * Where an operation stands: `reconcile` reads the record and the object's published state (a recovery's first step),
  * `restrict` publishes a generation in a restricting mode, `backup` and `verify` take and check a consistent backup,
  * `deploy` runs the operation's own deploy, `migrate` runs the pending migrations, `resume` continues the interrupted
- * operation from its recorded step, and `open` publishes the generation that opens the object.
+ * operation from its recorded step, and `open` publishes the generation that opens the object. A side restore (ADR-0070
+ * §9) also `list`s its clone with a deploy, `import`s the backup into it, `promote`s it (the clone `open`, the original
+ * `inspect`), `point`s ordinary traffic at it with a deploy, waits for it to `serve`, `rewind`s the original to the
+ * target time and `check`s the original's schema; `revert` points traffic back at the original with a deploy.
  */
-export type DataOperationStep = 'reconcile' | 'restrict' | 'backup' | 'verify' | 'deploy' | 'migrate' | 'resume' | 'open'
+export type DataOperationStep =
+	| 'reconcile'
+	| 'restrict'
+	| 'backup'
+	| 'verify'
+	| 'deploy'
+	| 'migrate'
+	| 'resume'
+	| 'open'
+	| 'list'
+	| 'import'
+	| 'promote'
+	| 'point'
+	| 'serve'
+	| 'rewind'
+	| 'check'
+	| 'revert'
 
 export type DataOperationState = 'running' | 'succeeded' | 'failed'
 
@@ -346,6 +371,8 @@ export interface DataOperationDto {
 	readonly recoversOperationId: string | null
 	/** A recovery's choice after its closed fence; `null` for every other kind. */
 	readonly resolution: DataOperationResolution | null
+	/** A `migrate` operation's deploy run; `null` for every other kind. */
+	readonly runId: string | null
 }
 
 export const DATA_OPERATION_MAX_PAGE_SIZE = 100
@@ -365,11 +392,12 @@ export type DataOperationListInput = z.infer<typeof dataOperationListInputSchema
 
 /**
  * An operation a person starts. A migration starts inside a deploy and a recovery has its own request, so neither is
- * started here.
+ * started here. A restore names the time `at` (ISO 8601 with an offset) its environment's data is recovered as of.
  */
 export const startDataOperationInputSchema = z.discriminatedUnion('kind', [
 	z.object({ appId: nonEmpty, env: nonEmpty, kind: z.literal('maintenance'), mode: maintenanceMode }).strict(),
 	z.object({ appId: nonEmpty, env: nonEmpty, kind: z.literal('backup') }).strict(),
+	z.object({ appId: nonEmpty, env: nonEmpty, kind: z.literal('restore'), at: z.string().datetime({ offset: true }) }).strict(),
 ])
 
 export type StartDataOperationInput = z.infer<typeof startDataOperationInputSchema>
@@ -386,3 +414,57 @@ export const recoverDataOperationInputSchema = z.object({
 }).strict()
 
 export type RecoverDataOperationInput = z.infer<typeof recoverDataOperationInputSchema>
+
+/** `succeeded` only once its rehearsal passed. */
+export type DataBackupState = 'running' | 'succeeded' | 'failed'
+
+export type DataRehearsalOutcome = 'pending' | 'passed' | 'failed'
+
+/**
+ * One consistent backup as `data.read` shows it: identifiers, states, codes, sizes and timestamps. It carries no free
+ * text and no content; downloading a dump is `data.content.read`.
+ */
+export interface DataBackupDto {
+	/** The backup's record. */
+	readonly id: string
+	readonly appId: string
+	readonly env: string
+	/** The `backup` operation that took it. */
+	readonly operationId: string
+	/** The object it was taken from. */
+	readonly object: string
+	/** The dump's key in the bucket; a resumed backup whose dump started again carries the new one. */
+	readonly dumpId: string
+	/** Taken by a deploy's migration phase, not by the daily schedule. */
+	readonly preMigration: boolean
+	readonly state: DataBackupState
+	/** A code once it failed, never an error message. */
+	readonly errorCode: string | null
+	readonly createdAt: number
+	readonly finishedAt: number | null
+	/** The object's bookmark when the dump began. */
+	readonly bookmark: string | null
+	/** Set once the upload completed. */
+	readonly sizeBytes: number | null
+	readonly parts: number | null
+	/** How many tables the manifest lists. */
+	readonly tables: number | null
+	readonly rehearsal: DataRehearsalOutcome
+	/** The code the rehearsal failed with. */
+	readonly rehearsalCode: string | null
+	/** Past its 30-day retention: never offered for a restore. */
+	readonly expired: boolean
+}
+
+/** Whether the environment takes daily backups: on unless it opted out. Opting out leaves the pre-migration backup. */
+export interface DataBackupScheduleDto {
+	readonly appId: string
+	readonly env: string
+	readonly daily: boolean
+	/** When it was last set; `null` while it keeps the default. */
+	readonly updatedAt: number | null
+}
+
+export interface SetDataBackupScheduleInput extends AppEnvironmentInput {
+	readonly daily: boolean
+}

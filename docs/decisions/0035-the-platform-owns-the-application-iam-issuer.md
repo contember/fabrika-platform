@@ -20,7 +20,7 @@ Three facts, established by reading both providers rather than assuming symmetry
 **`vars` are an input to CONFIG COMPILATION on both providers, not an application's runtime
 environment.** On Cloudflare the runner forwards each `vars` entry into the deploy child's environment
 by name (`packages/runner-container/src/runner.ts:238-241`), where the app's `fabrika.config.ts` reads
-it and maps it into the Worker's own `vars` — `examples/app/fabrika.config.ts` does exactly that. On
+it and maps it into the Worker's own `vars`. On
 Zerops `compileFabrikaManifest` sets `process.env[NAME]` to the literal `${NAME}` before compiling, and
 `interpolateManifest` substitutes the deploy-time value into the IMPORT DOCUMENT
 (`packages/provider-zerops/src/provider.ts:74-86`, `:462`). Both are the same idea. Neither writes an

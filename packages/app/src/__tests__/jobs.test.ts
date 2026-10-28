@@ -75,10 +75,15 @@ function gate() {
 	}
 }
 
-/** Real time, instant backoff; an attempt's timeout (a minute or more) fires only when the test calls `timeOut`. */
+/**
+ * Instant backoff; an attempt's timeout (a minute or more) fires only when the test calls `timeOut`, and until then no
+ * time passes on the clock its deadline is measured on.
+ */
 function testClock() {
 	const timeouts: (() => void)[] = []
+	const frozen = Date.now()
 	const clock: JobClock = {
+		now: () => frozen,
 		wait: (ms, signal) =>
 			new Promise<void>((resolve) => {
 				if (ms < 60_000 || signal.aborted) {

@@ -28,7 +28,7 @@ import {
 } from '@fabrika/provider-cloudflare'
 import { serviceProxyTable } from '@fabrika/proxy-core/manifest'
 import { controlSchema } from './fabrika.schema'
-import { CONTROL_MCP_PATH, controlServiceContract } from './fabrika.service'
+import { controlServiceContract } from './fabrika.service'
 import { CLOUDFLARE_MAIL_REMEDY, type InstallationMail, readInstallationMail } from './src/mail-transport'
 
 /**
@@ -128,10 +128,12 @@ export const buildControlApplicationWorker = (ctx: ResourceContext): Worker => {
 			directory: '../dashboard/dist',
 			binding: 'ASSETS',
 			not_found_handling: 'single-page-application',
-			// Workers Assets answers a GET before the Worker runs, and its SPA fallback would hand `index.html` to a
-			// browser navigation to a server path (the GitHub manifest handoff, the callback): the reserved prefixes
-			// of `fabrika.service.ts` always reach the Worker.
-			run_worker_first: ['/api/*', '/iam/admin/*', '/operations/api/*', '/platform/*', '/webhooks/*', '/webhooks', `${CONTROL_MCP_PATH}*`],
+			// Every request but a built file reaches the Worker first. Workers Assets would otherwise answer a browser
+			// navigation itself, and its SPA fallback hands `index.html` to every server path a browser opens (the GitHub
+			// manifest handoff, `/builder/connect`, `/healthz`). `controlApp` routes every path by `fabrika.service.ts`, and
+			// its `console` row hands the rest to `ASSETS`, which applies the SPA fallback: the table decides, as on the Bun
+			// process. Vite's hashed bundles under `/assets/` match no other row, so they skip the Worker.
+			run_worker_first: ['/*', '!/assets/*'],
 		},
 		vars: {
 			...controlEmailVars(isLocal),
@@ -176,10 +178,13 @@ export const buildControlApplicationWorker = (ctx: ResourceContext): Worker => {
 			// maintenance) and consumer (queue()). The dispatcher settles or requeues its row on every send failure, so a
 			// redelivery is only for an unexpected throw; maintenance re-enqueues a message whose job was lost.
 			MAIL_QUEUE: new Queue({
-				name: 'vozka-mail',
+				name: 'fabrika-mail',
 				binding: 'both',
 				consumer: { maxBatchSize: 1, maxRetries: 5, retryDelay: 60 },
 			}),
+			// The relay's message content, one object per message (src/db/mail-messages.ts): a D1 row holds at most
+			// 2,000,000 bytes, and the relay accepts more. Only this Worker binds it; the runner never does.
+			MAIL_CONTENT: new R2Bucket({ name: 'fabrika-mail-content' }),
 			// IAM is bound in EVERY environment, local included: src/iam.ts verifies an IAM-issued token
 			// and has no local mode to fall back on, and the proxy Worker in front of this one already
 			// binds the same service unconditionally. Local dev therefore wants `packages/iam`'s

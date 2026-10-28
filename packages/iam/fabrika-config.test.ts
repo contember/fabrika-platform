@@ -25,6 +25,8 @@ const ENV_NAMES = [
 	'FABRIKA_IAM_OIDC_REQUIRE_VERIFIED_EMAIL',
 	'FABRIKA_EMAIL_FROM',
 	'FABRIKA_EMAIL_FROM_NAME',
+	'FABRIKA_CONTROL_URL',
+	'FABRIKA_IAM_PROVISIONING_KEY',
 	...builtinEmailProviderVariables.map((variable) => variable.name),
 ]
 const originalEnvironment = new Map(ENV_NAMES.map((name) => [name, process.env[name]]))
@@ -66,6 +68,7 @@ describe('IAM resource graph', () => {
 			'FABRIKA_IAM_OIDC_ENABLED',
 			'FABRIKA_IAM_PASSWORD_ENABLED',
 			'FABRIKA_EMAIL_PROVIDER',
+			'FABRIKA_CONTROL_URL',
 			'FABRIKA_IAM_HUMAN_EMAIL_DOMAINS',
 			'FABRIKA_IAM_OIDC_ISSUER',
 			'FABRIKA_IAM_OIDC_CLIENT_ID',
@@ -176,6 +179,7 @@ describe('IAM resource graph', () => {
 			'FABRIKA_IAM_OIDC_ENABLED',
 			'FABRIKA_IAM_PASSWORD_ENABLED',
 			'FABRIKA_EMAIL_PROVIDER',
+			'FABRIKA_CONTROL_URL',
 		])
 		expect(iamPipelineSecrets(source)).toEqual(['FABRIKA_IAM_SIGNING_KEYS', 'FABRIKA_IAM_PROVISIONING_KEY'])
 	})
@@ -276,6 +280,28 @@ describe('IAM resource graph', () => {
 		const noAccount = { ...cloudflare }
 		delete noAccount['FABRIKA_EMAIL_CLOUDFLARE_ACCOUNT_ID']
 		expect(() => buildPropustkaWorker({ env: 'prod', domain: REMOTE_DOMAIN }, noAccount)).toThrow('FABRIKA_EMAIL_CLOUDFLARE_ACCOUNT_ID is missing')
+	})
+
+	test("writes Control's origin for the mail relay only where the deploy names one, beside the provisioning key", () => {
+		const relayed = { ...REMOTE_SOURCE, FABRIKA_CONTROL_URL: 'https://control.example.com', FABRIKA_IAM_PROVISIONING_KEY: 'px_provisioning' }
+		const worker = buildPropustkaWorker({ env: 'prod', domain: REMOTE_DOMAIN }, relayed)
+		expect(worker.options.vars?.['FABRIKA_CONTROL_URL']).toBe('https://control.example.com')
+		expect(JSON.stringify(worker.options)).not.toContain('px_provisioning')
+		expect(buildPropustkaWorker({ env: 'prod', domain: REMOTE_DOMAIN }, REMOTE_SOURCE).options.vars?.['FABRIKA_CONTROL_URL']).toBeUndefined()
+
+		const refused = ['control.example.com', 'https://control.example.com/', 'https://control.example.com/platform', 'http://control.example.com']
+		for (const url of refused) {
+			expect(() => buildPropustkaWorker({ env: 'prod', domain: REMOTE_DOMAIN }, { ...relayed, FABRIKA_CONTROL_URL: url })).toThrow(
+				'FABRIKA_CONTROL_URL must be an https origin',
+			)
+		}
+		const keyless = { ...relayed }
+		delete keyless['FABRIKA_IAM_PROVISIONING_KEY']
+		for (const source of [keyless, { ...relayed, FABRIKA_IAM_PROVISIONING_KEY: ' \n' }]) {
+			expect(() => buildPropustkaWorker({ env: 'prod', domain: REMOTE_DOMAIN }, source)).toThrow(
+				'FABRIKA_CONTROL_URL needs FABRIKA_IAM_PROVISIONING_KEY',
+			)
+		}
 	})
 
 	test('remote secrets are required but never enter plaintext Worker vars', () => {

@@ -127,7 +127,7 @@ conformance kit against a stubbed `fetch`.
 | provider        | idempotent | confirmation | unsubscribe | attachments | broadcast                            | checked against                                                                                                                             |
 | --------------- | ---------- | ------------ | ----------- | ----------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
 | `ahasend`       | yes        | `sync`       | yes         | 12 MiB      | from its Marketing domain, unchecked | live, 2026-10-22                                                                                                                            |
-| `cloudflare`    | no         | `sync`       | yes         | 3 MiB       | no                                   | accepted answer live, 2026-10-25; refusals stubbed ([backlog 236](../backlog/236-verify-the-cloudflare-email-adapter-on-a-live-account.md)) |
+| `cloudflare`    | no         | `sync`       | yes         | 3 MiB       | no                                   | accepted answer live, 2026-10-25; refusals stubbed ([backlog 241](../backlog/241-verify-the-cloudflare-email-adapter-on-a-live-account.md)) |
 | `lettermint`    | yes        | `sync`       | yes         | 15 MiB      | its broadcast route, unchecked       | live, 2026-10-22                                                                                                                            |
 | `postmark`      | no         | `sync`       | yes         | 10 MiB      | its broadcast stream                 | live, 2026-10-22                                                                                                                            |
 | `resend`        | yes        | `sync`       | yes         | 25 MiB      | tagged `category: broadcast`         | live, 2026-10-22                                                                                                                            |
@@ -289,7 +289,7 @@ message is a 400, `provider_rejected`; a bad token a 401, and a token without th
 to Email Sending, or sending disabled or paused a 403, `provider_unauthorized`; a 404 (no such account under the path)
 `provider_unauthorized`; a 429 `rate_limited`; a 500 or 503 `provider_unavailable`. A repeated request is delivered
 again. Only the accepted answer is checked live; the refusals follow the documentation
-([backlog 236](../backlog/236-verify-the-cloudflare-email-adapter-on-a-live-account.md)).
+([backlog 241](../backlog/241-verify-the-cloudflare-email-adapter-on-a-live-account.md)).
 
 ## SmartEmailing adapter
 
@@ -377,13 +377,25 @@ link may have arrived, so the invitation stays open. Any other failure deletes
 it. Both answer `delivery_failed`. When the message cannot be rendered, nothing
 was sent: IAM deletes the new invitation and the call fails.
 
-On Zerops, when IAM has a provider configured and `FABRIKA_CONTROL_URL` is set
-(`http://control:3000`, in IAM's setup of the generated `zerops.yaml`), its sender is a
-`PlatformEmailSender` to Control's relay with the installation key
-`installationMailKey(FABRIKA_IAM_RPC_KEY)` ([the relay](#the-relay)). The relay always
-passes IAM's mail and dispatches it with Control's copy of the transport. An `unknown`
-outcome then means only that the relay was unreachable. Without a provider, IAM keeps
-its manual action-link flow.
+When IAM has a provider configured and `FABRIKA_CONTROL_URL` is set, its sender is a
+`PlatformEmailSender` to Control's relay with an installation key ([the relay](#the-relay)):
+
+- On Zerops `FABRIKA_CONTROL_URL` is `http://control:3000`, in IAM's setup of the
+  generated `zerops.yaml`, and the key is `installationMailKey(FABRIKA_IAM_RPC_KEY)`.
+- On Cloudflare the platform workflow passes IAM's deploy
+  `https://<FABRIKA_CONTROL_DOMAIN>`, which `packages/iam/fabrika.config.ts` writes as a
+  Worker var after checking that it is an origin and that the provisioning key is set.
+  The Worker (`iamEnv`, `packages/iam/src/index.ts`) keys it
+  `installationMailKey(FABRIKA_IAM_PROVISIONING_KEY)`, derived at the first send: Control
+  reaches IAM over a service binding, so neither Worker holds an RPC key. Without the URL
+  or the key, IAM sends with its own provider.
+
+The relay always passes IAM's mail and dispatches it with Control's copy of the
+transport. An `unknown` outcome then means only that the relay was unreachable. When
+the relay refuses a message for good, IAM sends it with its own provider
+([rollout](#rollout-of-an-existing-installation)); on the Worker an `http:` URL counts
+as such a refusal, so the key never crosses the internet in cleartext. Without a
+provider, IAM keeps its manual action-link flow.
 
 IAM owns its enrollment and reset templates, one-time action state, and delivery
 behavior. An installation without a sender uses an explicit manual action-link
@@ -548,9 +560,10 @@ URL and `FABRIKA_EMAIL_PROVIDER` and redacts the key.
 ## The relay
 
 Control's mail relay receives installation mail from applications on framework 0.7
-and from IAM on Zerops, records it, gates it and dispatches it through Control's own
-transport (`packages/control/src/mail-relay/`). Only the Bun process (Zerops and the
-local stack) runs it; on the Worker its row answers 404.
+and from IAM, records it, gates it and dispatches it through Control's own transport
+(`packages/control/src/mail-relay/`). Control's Bun process runs it (Zerops and the
+local stack), and so does Control's Worker when it binds its `fabrika-mail` queue and
+`fabrika-mail-content` bucket; a Worker without them answers the row with 404.
 
 ### The wire
 
@@ -598,15 +611,25 @@ idempotent, `queued`, `maxBatch` 1, `listUnsubscribe`, and `maxAttachmentBytes` 
 
 - The bearer is an application environment's transport key (hash lookup, unexpired,
   receiver `mail`), recorded as the sender `<app>@<env>`, or IAM's installation key,
-  `px_` and the hex of `HMAC-SHA256(FABRIKA_IAM_RPC_KEY, 'fabrika-platform-mail')`
+  `px_` and the hex of `HMAC-SHA256(<secret>, 'fabrika-platform-mail')`
   (`installationMailKey`), compared in constant time and recorded as
-  `installation:iam`.
+  `installation:iam`. The secret is `FABRIKA_IAM_RPC_KEY` in the Bun process and
+  `FABRIKA_IAM_PROVISIONING_KEY` on the Worker (`mailRelay`, `src/platform-cf.ts`);
+  without it the relay knows no IAM key.
 - The relay records the message in `mail_messages` under
   `UNIQUE (sender, idempotency_key)`, with the SHA-256 of the canonical body as its
   fingerprint. A repeat with the same fingerprint answers the first `messageId`; a
   different one answers `idempotency_conflict`. The recipient, the subject, the bodies
-  and the attachments live only in `content`; the row also keeps the recipient's
-  domain, lowercase.
+  and the attachments live only in the canonical request: on Postgres in the row's
+  `content`, on the Worker in an R2 object of `<env>-fabrika-mail-content` that the
+  row's `content_ref` names (`messages/<id>.json`), because a D1 row holds at most
+  2,000,000 bytes and the relay accepts 10 MiB of attachments. The row also keeps the
+  recipient's domain, lowercase.
+- On the Worker the object is written before its row, and a `mail_content_uploads`
+  record of it before the object. The batch that inserts the row deletes the record
+  only once the row names the object. A repeated key discards the new object; an object
+  whose row never committed is collected by maintenance an hour later, and only when no
+  row names it.
 - The gate decides once, when the message is first recorded:
   1. an installation sender: `queued`;
   2. Control has no valid transport (`MAIL_TRANSPORT` none or invalid): `held`;
@@ -630,7 +653,9 @@ idempotent, `queued`, `maxBatch` 1, `listUnsubscribe`, and `maxAttachmentBytes` 
 
 - The dispatcher consumes the `vozka-mail` queue (`PostgresJobQueue`, in Control's jobs
   table) on its own loop beside `vozka-deploy`, so a long deploy never delays a sign-in
-  link. One job sends one `queued`, due message.
+  link. On the Worker it consumes the `<env>-fabrika-mail` Cloudflare Queue in `queue()`,
+  and runs only with that queue and the content bucket both bound. One job sends one
+  `queued`, due message.
 - A message can have more than one job (a retry, a release, maintenance), and Control can
   run two consumers. Before the send, a job claims the attempt: one guarded update moves
   the message `queued` → `sending` and counts the attempt, only while the message is due
@@ -660,7 +685,10 @@ idempotent, `queued`, `maxBatch` 1, `listUnsubscribe`, and `maxAttachmentBytes` 
   it for its retries, and the console withholds it from every caller.
 - Control's maintenance pass (cron) re-enqueues `queued` messages unchanged for 10
   minutes whose retry is due, and `sending` messages whose claim is stale, at most 100 a
-  pass. It purges the content of final messages 30 days after their last change. A held
+  pass. It purges the content of final messages 30 days after their last change (on the
+  Worker at most 100 objects a pass, each object before its row lets go of it, so an
+  interrupted purge leaves a row naming a missing object, which reads as purged). It
+  collects content objects recorded more than an hour ago that no row names. A held
   message keeps its content.
 
 ### The console
@@ -710,14 +738,24 @@ Only `admin` holds them by default. The procedures (`controlRpc.mail`):
   An older release keeps the set and sends directly; the gate does not cover it.
 - IAM moves to the relay with the release whose `zerops.yaml` gives it
   `FABRIKA_CONTROL_URL`. Its `FABRIKA_EMAIL_*` stay.
+- On Cloudflare, IAM moves with the workflow that passes its deploy
+  `FABRIKA_CONTROL_URL`. A `fabrika.ref` bump keeps the old workflow, and IAM keeps
+  sending with its own provider. Re-running `fabrika platform init --provider=cloudflare`
+  with the release's CLI rewrites the workflow and dispatches it; IAM's
+  `FABRIKA_EMAIL_*` stay.
 - Before the upgrade, give Control the same `FABRIKA_EMAIL_*` as IAM. Without a
-  transport, Control refuses IAM's messages with `mail_not_configured`.
-- IAM deploys before Control. Until Control runs the new release, IAM's messages
-  fail.
-- IAM offers the manual link only when it has no sender of its own. While the relay
-  refuses, an administrator's enrollment, reset or invitation answers 502
-  `password action email delivery failed`, and a self-service password reset shows
-  its usual answer while no mail leaves (backlog 194).
+  transport, Control refuses IAM's messages with `mail_not_configured`, and IAM sends
+  each one with its own provider.
+- IAM deploys before Control. Until Control runs the new release (a 404, or no key it
+  knows), and after the secret IAM's key derives from is rotated until Control holds
+  it too, IAM sends with its own provider, logs a warning and writes an audit event
+  `iam.mail.relay_fallback` per message (`relayWithFallback`,
+  `packages/iam/src/relay-mail.ts`). Fallbacks that continue after the rollout mean the
+  relay is misconfigured: its gate and Control's Mail page do not see IAM's mail. It falls back only on such a
+  definite refusal, or on its own relay settings being unusable; a timeout, a network
+  failure or another answer may have reached the relay, and fails the send as before:
+  an administrator's enrollment, reset or invitation answers 502
+  `password action email delivery failed`.
 - A provider's refusal of a relayed message shows in Control's Mail page, not in
   IAM's log.
 

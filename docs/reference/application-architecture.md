@@ -117,7 +117,7 @@ export const canReopen = (stage: string): boolean =>
 A query function types its handle parameter with the kit's `DbHandle` (`@fabrika/app/contract`): the same handle
 the handler's `ctx.db` holds for that access form, dimension, action and kind. `DbHandle<typeof app, 'over', D, A>`
 is `ctx.db.within`, `ReferenceHandle<typeof app>` is `ctx.db.reference`, and `SqlHandle<typeof app, 'read' | 'write'>` is
-`ctx.sql`, whose `scope(capability, table)` checks the table against the app's own tables:
+`ctx.sql`, whose `scope(capability, table, { alias, use })` checks the table against the app's own tables:
 
 ```ts
 // src/deals/queries.ts
@@ -161,7 +161,7 @@ export const deals = app.group({ callers: ['human'] }, (r) => ({
 			rows: await ctx.sql(PipelineRow)`
 				select d.stage, count(*)::int as deals
 				from deals d
-				where ${ctx.sql.scope(ctx.target, 'deals', 'd')}
+				where ${ctx.sql.scope(ctx.target, 'deals', { alias: 'd' })}
 				group by d.stage`,
 		})),
 }))
@@ -237,7 +237,7 @@ An import is judged by the file or package Bun loads for it:
   | `signs: ['<purpose>']`                     | `ctx.tokens.sign`; also on a job and a webhook      |
   | `kicks: ['<job>']`                         | `ctx.kick`; also on a webhook and a job             |
   | `egress: ['https://<host>']`               | `fetch` to those origins; also on a job, webhook    |
-  | `egress: 'public'`                         | `fetch` to public hosts; a cron job only (ADR-0070) |
+  | `egress: 'public'`                         | `fetch` to public hosts; a cron job only (ADR-0071) |
 
 - **Logic** (`logic.ts`) is pure: values in, values out. It does not see `ctx`, a handle or a row it did not get as an
   argument. Its tests need no database.

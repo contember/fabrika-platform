@@ -1,5 +1,6 @@
 import type { SqlDatabase } from '@fabrika/platform'
 import { type LeaseFence, runLeaseKey } from '../lease'
+import { type BackupCheckpoint, backupCheckpoint } from './backups'
 import { firstRow } from './returning'
 
 /** What an environment's object admits (ADR-0069 §3). */
@@ -10,8 +11,26 @@ export type DataOperationKind = 'maintenance' | 'backup' | 'migrate' | 'recovery
 /**
  * `restrict` and `open` publish a generation; `backup`, `verify`, `deploy` and `migrate` run between them. A recovery
  * first `reconcile`s the record with the object's published state, and `resume` hands back to the interrupted operation.
+ * A restore also `list`s its clone, `import`s into it, `promote`s it, `point`s ordinary traffic at it, waits for it to
+ * `serve`, `rewind`s the original and `check`s its schema; `revert` points traffic back at the original.
  */
-export type DataOperationStep = 'reconcile' | 'restrict' | 'backup' | 'verify' | 'deploy' | 'migrate' | 'resume' | 'open'
+export type DataOperationStep =
+	| 'reconcile'
+	| 'restrict'
+	| 'backup'
+	| 'verify'
+	| 'deploy'
+	| 'migrate'
+	| 'resume'
+	| 'open'
+	| 'list'
+	| 'import'
+	| 'promote'
+	| 'point'
+	| 'serve'
+	| 'rewind'
+	| 'check'
+	| 'revert'
 
 export type DataOperationState = 'running' | 'succeeded' | 'failed'
 
@@ -40,6 +59,8 @@ export interface DataOperationRow {
 	recovers_operation_id: string | null
 	/** A recovery's choice after its closed fence; `null` for every other kind. */
 	resolution: DataOperationResolution | null
+	/** The run a `migrate` operation deploys, of the same environment; `null` for every other kind. */
+	run_id: string | null
 }
 
 export interface DataOperationFields {
@@ -57,8 +78,10 @@ export interface DataOperationFields {
 export type DataOperationInput =
 	& DataOperationFields
 	& (
-		| { kind: Exclude<DataOperationKind, 'recovery'> }
+		| { kind: Exclude<DataOperationKind, 'recovery' | 'migrate' | 'restore'> }
 		| { kind: 'recovery'; recovers: { operationId: string; resolution: DataOperationResolution } }
+		| { kind: 'migrate'; runId: string }
+		| { kind: 'restore'; restore: { at: string; original: string; clone: string } }
 	)
 
 export interface DataOperationAdvance {
@@ -68,6 +91,8 @@ export interface DataOperationAdvance {
 	targetMode?: MaintenanceMode
 	/** A freshly allocated generation, above the recorded one. */
 	generation?: number
+	/** The environment's pointer, recorded in the same batch only once the operation moved (a restore's deploys). */
+	objects?: { readonly serving: string; readonly listed: readonly string[] }
 }
 
 const ERROR_CODE = /^[a-z][a-z0-9_]{0,63}$/
@@ -86,11 +111,20 @@ export class DataOperationRepository {
 
 	/**
 	 * Records a running operation; `null` when `fence` does not hold the environment's lease. A recovery of an operation
-	 * that is not of the same environment fails on the foreign key and records nothing.
+	 * that is not of the same environment fails on the foreign key and records nothing. A restore's record is written in
+	 * the same batch, so no restore operation exists without it.
 	 */
 	async create(input: DataOperationInput, fence: LeaseFence): Promise<DataOperationRow | null> {
 		const key = runLeaseKey(input.appId, input.env)
 		const now = this.now()
+		const restore = input.kind === 'restore'
+			? [
+				this.d1
+					.prepare(`INSERT INTO app_env_restores (operation_id, app_id, env, at, original, clone, arms, created_at)
+						SELECT id, app_id, env, ?, ?, ?, 0, ? FROM app_env_data_operations WHERE id = ?`)
+					.bind(input.restore.at, input.restore.original, input.restore.clone, now, input.id),
+			]
+			: []
 		// The lease row must stay locked through the write: an EXISTS alone races a takeover on Postgres.
 		const results = await this.d1.batch<DataOperationRow>([
 			this.d1.prepare('UPDATE deploy_locks SET holder = holder WHERE lock_key = ? AND holder = ? AND expires_at > ?').bind(
@@ -101,8 +135,8 @@ export class DataOperationRepository {
 			this.d1
 				.prepare(`INSERT INTO app_env_data_operations
 					(id, app_id, env, kind, step, target_mode, generation, state, error_code, actor, created_at, updated_at, finished_at,
-						recovers_operation_id, resolution)
-				SELECT ?, ?, ?, ?, ?, ?, ?, 'running', NULL, ?, ?, ?, NULL, ?, ?
+						recovers_operation_id, resolution, run_id)
+				SELECT ?, ?, ?, ?, ?, ?, ?, 'running', NULL, ?, ?, ?, NULL, ?, ?, ?
 				WHERE EXISTS (SELECT 1 FROM deploy_locks WHERE lock_key = ? AND holder = ? AND expires_at > ?)
 				RETURNING *`)
 				.bind(
@@ -118,10 +152,12 @@ export class DataOperationRepository {
 					now,
 					input.kind === 'recovery' ? input.recovers.operationId : null,
 					input.kind === 'recovery' ? input.recovers.resolution : null,
+					input.kind === 'migrate' ? input.runId : null,
 					key,
 					fence.holder,
 					fence.nowMs,
 				),
+			...restore,
 		])
 		return results[1]?.results[0] ?? null
 	}
@@ -141,6 +177,15 @@ export class DataOperationRepository {
 		return results
 	}
 
+	/** Every environment's running operations of `kind`, oldest first. */
+	async listRunning(kind: DataOperationKind, limit: number): Promise<DataOperationRow[]> {
+		const { results } = await this.d1
+			.prepare(`SELECT * FROM app_env_data_operations WHERE state = 'running' AND kind = ? ORDER BY id LIMIT ?`)
+			.bind(kind, limit)
+			.all<DataOperationRow>()
+		return results
+	}
+
 	/**
 	 * The environment's next generation, in one atomic upsert. Unfenced: a generation nobody records is a harmless gap,
 	 * and no number is ever handed out twice.
@@ -156,8 +201,11 @@ export class DataOperationRepository {
 		return row.generation
 	}
 
-	/** Moves a running operation from `expectedStep` to the next. `false`: the lease, the step or the state was not as expected. */
-	async advance(id: string, change: DataOperationAdvance, fence: LeaseFence): Promise<boolean> {
+	/**
+	 * Moves a running operation from `expectedStep` to the next. `false`: the lease, the step or the state was not as
+	 * expected. A `checkpoint` records its backup's outcome in the same batch; each of these writes takes one.
+	 */
+	async advance(id: string, change: DataOperationAdvance, fence: LeaseFence, checkpoint?: BackupCheckpoint): Promise<boolean> {
 		const sets = ['step = ?', 'updated_at = ?']
 		const setValues: (string | number)[] = [change.step, this.now()]
 		const where = ['id = ?', "state = 'running'", 'step = ?']
@@ -172,25 +220,39 @@ export class DataOperationRepository {
 			where.push('generation < ?')
 			whereValues.push(change.generation)
 		}
-		return await this.mutate(id, `UPDATE app_env_data_operations SET ${sets.join(', ')} WHERE ${where.join(' AND ')}`, [
-			...setValues,
-			...whereValues,
-		], fence)
+		const sql = `UPDATE app_env_data_operations SET ${sets.join(', ')} WHERE ${where.join(' AND ')}`
+		if (change.objects === undefined) return await this.mutate(id, sql, [...setValues, ...whereValues], fence, checkpoint)
+		if (checkpoint !== undefined) throw new Error('an advance records a backup checkpoint or the pointer, not both')
+		// The pointer is written under the UPDATE's own predicate, read just before it in the batch, so it lands exactly when
+		// the UPDATE matches: the lease row stays locked between them and the pointer write leaves the operation untouched.
+		const matched = `${where.join(' AND ')} AND ${operationLease}`
+		const matchedValues = [...whereValues, fence.holder, fence.nowMs]
+		const results = await this.d1.batch<{ id: string }>([
+			this.lock(id, fence),
+			this.d1
+				.prepare(`INSERT INTO app_env_application_objects (app_id, env, serving, listed, updated_at)
+					SELECT app_id, env, ?, ?, ? FROM app_env_data_operations WHERE ${matched}
+					ON CONFLICT (app_id, env) DO UPDATE SET serving = excluded.serving, listed = excluded.listed, updated_at = excluded.updated_at`)
+				.bind(change.objects.serving, change.objects.listed.join(','), this.now(), ...matchedValues),
+			this.d1.prepare(`UPDATE app_env_data_operations SET ${sets.join(', ')} WHERE ${matched} RETURNING id`).bind(...setValues, ...matchedValues),
+		])
+		return (results[2]?.results.length ?? 0) > 0
 	}
 
 	/** A running operation succeeded. Terminal: `false` once it has finished or failed. */
-	async finish(id: string, fence: LeaseFence): Promise<boolean> {
+	async finish(id: string, fence: LeaseFence, checkpoint?: BackupCheckpoint): Promise<boolean> {
 		const now = this.now()
 		return await this.mutate(
 			id,
 			`UPDATE app_env_data_operations SET state = 'succeeded', updated_at = ?, finished_at = ? WHERE id = ? AND state = 'running'`,
 			[now, now, id],
 			fence,
+			checkpoint,
 		)
 	}
 
 	/** A running operation failed with `errorCode`. Terminal: `false` once it has finished or failed. */
-	async fail(id: string, errorCode: string, fence: LeaseFence): Promise<boolean> {
+	async fail(id: string, errorCode: string, fence: LeaseFence, checkpoint?: BackupCheckpoint): Promise<boolean> {
 		if (!ERROR_CODE.test(errorCode)) throw new Error('a data operation error code is lowercase snake_case, at most 64 characters')
 		const now = this.now()
 		return await this.mutate(
@@ -198,17 +260,33 @@ export class DataOperationRepository {
 			`UPDATE app_env_data_operations SET state = 'failed', error_code = ?, updated_at = ?, finished_at = ? WHERE id = ? AND state = 'running'`,
 			[errorCode, now, now, id],
 			fence,
+			checkpoint,
 		)
 	}
 
-	private async mutate(id: string, sql: string, values: (string | number)[], fence: LeaseFence): Promise<boolean> {
-		// As in `create`, the lease row stays locked through the write.
+	/** As in `create`, the lease row stays locked through the write. */
+	private lock(id: string, fence: LeaseFence) {
+		return this.d1.prepare(`UPDATE deploy_locks SET holder = holder
+			WHERE lock_key = (SELECT app_id || ':' || env FROM app_env_data_operations WHERE id = ?)
+				AND holder = ? AND expires_at > ?`).bind(id, fence.holder, fence.nowMs)
+	}
+
+	private async mutate(id: string, sql: string, values: (string | number)[], fence: LeaseFence, checkpoint?: BackupCheckpoint): Promise<boolean> {
+		const lock = this.lock(id, fence)
+		if (checkpoint === undefined) {
+			const results = await this.d1.batch<{ id: string }>([
+				lock,
+				this.d1.prepare(`${sql} AND ${operationLease} RETURNING id`).bind(...values, fence.holder, fence.nowMs),
+			])
+			return (results[1]?.results.length ?? 0) > 0
+		}
+		// The operation moves only once its backup's checkpoint is recorded, so neither write lands without the other.
+		const { write, recorded } = backupCheckpoint(this.d1, checkpoint, this.now(), fence)
 		const results = await this.d1.batch<{ id: string }>([
-			this.d1.prepare(`UPDATE deploy_locks SET holder = holder
-				WHERE lock_key = (SELECT app_id || ':' || env FROM app_env_data_operations WHERE id = ?)
-					AND holder = ? AND expires_at > ?`).bind(id, fence.holder, fence.nowMs),
-			this.d1.prepare(`${sql} AND ${operationLease} RETURNING id`).bind(...values, fence.holder, fence.nowMs),
+			lock,
+			write,
+			this.d1.prepare(`${sql} AND ${recorded.sql} AND ${operationLease} RETURNING id`).bind(...values, ...recorded.values, fence.holder, fence.nowMs),
 		])
-		return (results[1]?.results.length ?? 0) > 0
+		return (results[2]?.results.length ?? 0) > 0
 	}
 }

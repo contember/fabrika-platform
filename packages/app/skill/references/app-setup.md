@@ -19,20 +19,20 @@ the SPA is added with it.
 		"test": "bun test --isolate"
 	},
 	"dependencies": {
-		"@fabrika/app": "0.9.0-cloudflare.2",
-		"@fabrika/db": "0.9.0-cloudflare.2",
-		"@fabrika/provider-zerops": "0.9.0-cloudflare.2",
-		"@fabrika/proxy-core": "0.9.0-cloudflare.2",
-		"@fabrika/ui": "0.9.0-cloudflare.2",
+		"@fabrika/app": "0.9.0-dev.8",
+		"@fabrika/db": "0.9.0-dev.8",
+		"@fabrika/provider-zerops": "0.9.0-dev.8",
+		"@fabrika/proxy-core": "0.9.0-dev.8",
+		"@fabrika/ui": "0.9.0-dev.8",
 		"kysely": "0.29.6",
 		"react": "^19.0.0",
 		"react-dom": "^19.0.0",
 		"zod": "^3.25.76"
 	},
 	"devDependencies": {
-		"@fabrika/check": "0.9.0-cloudflare.2",
-		"@fabrika/cli": "0.9.0-cloudflare.2",
-		"@fabrika/platform": "0.9.0-cloudflare.2",
+		"@fabrika/check": "0.9.0-dev.8",
+		"@fabrika/cli": "0.9.0-dev.8",
+		"@fabrika/platform": "0.9.0-dev.8",
 		"@happy-dom/global-registrator": "^20.11.2",
 		"@types/bun": "^1.4.3",
 		"@types/react": "^19.0.0",
@@ -251,16 +251,29 @@ version does not go live until every generated test passes. It writes every `FAB
 
 ## The deploy surface (Cloudflare)
 
-On Cloudflare `fabrika.config.ts` imports `defineApp`, `Worker` and `iamServiceReference` from
-`@fabrika/provider-cloudflare`, and `resources` returns the application Worker: `main: './fabrika/entry.generated.ts'`,
-`workers_dev: false`, `preview_urls: false`, `routes: []` and `bindings: { IAM: iamServiceReference() }`, with
-`pipeline: { workerDir: '.', build: 'bun run build:web' }` when the application has an SPA. The deploy adds the
-Durable Object, the files bucket, the minute tick, every `FABRIKA_*` variable and the proxy Worker.
+```ts fabrika.config.ts
+import { defineApp } from '@fabrika/provider-cloudflare'
 
-It also serves the SPA: when the Worker declares no `assets`, the deploy copies the build directory of each SPA and
+export default defineApp({ id: 'tasks' })
+```
+
+That is the whole config. `defineApp` builds the application Worker: named after the id, running
+`fabrika/entry.generated.ts`, with no route and no public URL, and IAM bound at its application entrypoint. The deploy
+builds the proxy Worker from `fabrika.contract.ts` and writes the application's Durable Object, its files bucket, its
+cron trigger and every `FABRIKA_*` variable; Control writes the IAM schema from the approved contract. Declare none of
+them: a config that does is refused. Write no `resources`, `schema` or `pipeline.workerDir` (the config's directory is
+the default). A binding of the application's own, or another `compatibility_date` or `compatibility_flags`, goes in
+`worker: { bindings, compatibility_date, compatibility_flags }`; `IAM` stays the platform's. `package.json` names
+`@fabrika/provider-cloudflare` where the Zerops one names `@fabrika/provider-zerops`, the entry is written by
+`fabrika app build --provider=cloudflare` (the deploy runs it again from the pinned commit), and there is no
+`zerops.yaml`.
+
+It also serves the SPA: the deploy copies the build directory of each SPA and
 link mount (`dir`, a link's `spa`) into `fabrika/assets/` at the mount's prefix (`/admin` into `fabrika/assets/admin/`)
-after `pipeline.build`, and binds it as `ASSETS`. A deploy whose mount directory the build did not write fails and
-names the mount. Do not declare `assets` yourself. A Worker that declares them keeps them, and the object reads each
+after `pipeline.build`, and binds it as `ASSETS`. A `.assetsignore` at the root of a mount's directory excludes files
+as it does for wrangler (gitignore syntax, relative to that directory); `.git`, `.hg`, `.svn` and `.bzr` are never
+copied. A deploy whose mount directory the build did not write fails and
+names the mount. A config that composes its own Worker with `resources` and declares `assets` keeps them instead, and the object reads each
 request path from that directory as it is (`/admin/app.js` is `admin/app.js` there), so a hand-written `assets` works
 only for a root mount, or for mounts whose directories nest like their prefixes; it needs `binding: 'ASSETS'` and
 `run_worker_first: true`.

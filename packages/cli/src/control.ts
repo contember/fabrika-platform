@@ -278,20 +278,84 @@ const secret = (variable: string, env: Readonly<Record<string, string | undefine
 }
 
 /** The console's client with a bearer instead of a cookie, and no SSO bounce: there is no browser to send. */
-type ControlClient = InferRpcClient<ControlRpcContract>
+export type ControlClient = InferRpcClient<ControlRpcContract>
 
-const controlClient = (flags: Flags, env: Readonly<Record<string, string | undefined>>): ControlClient => {
-	const base = origin(flags, 'url', 'FABRIKA_CONTROL_URL', env, 'Control')
+/** Plain http may carry the key to loopback only: 127.0.0.0/8, [::1], and the names RFC 6761 reserves for it, `localhost` and `*.localhost`. */
+const LOOPBACK_HOST = /^(?:localhost|.+\.localhost|127\.\d{1,3}\.\d{1,3}\.\d{1,3}|\[::1\])$/
+
+/**
+ * Control's origin, checked before the key is sent anywhere: https, or http to a loopback host for local development,
+ * and nothing but scheme, host and port. A refusal never repeats the value, which may hold userinfo.
+ */
+export const controlOrigin = (raw: string | undefined): string => {
+	if (raw === undefined || raw.trim() === '') {
+		throw new Error('Control origin is required. Pass --url=<origin> or set FABRIKA_CONTROL_URL.')
+	}
+	let url: URL
+	try {
+		url = new URL(raw.trim())
+	} catch {
+		throw new Error('--url or FABRIKA_CONTROL_URL is not a URL')
+	}
+	if (url.protocol !== 'https:' && !(url.protocol === 'http:' && LOOPBACK_HOST.test(url.hostname))) {
+		throw new Error('--url or FABRIKA_CONTROL_URL must be https; plain http only to localhost, *.localhost, 127.0.0.0/8 or [::1]')
+	}
+	if (url.username !== '' || url.password !== '' || url.pathname !== '/' || url.search !== '' || url.hash !== '' || /[?#]/.test(raw)) {
+		throw new Error('--url or FABRIKA_CONTROL_URL must be an origin only: no credentials, path, query or fragment')
+	}
+	return url.origin
+}
+
+const KEY_LABEL = '[FABRIKA_CONTROL_KEY]'
+
+/** `text` with the control key cut out: every diagnostic of an area that holds the key passes through it. */
+export const withoutControlKey = (text: string, env: Readonly<Record<string, string | undefined>>): string => {
+	const key = env['FABRIKA_CONTROL_KEY']?.trim()
+	return key === undefined || key === '' ? text : text.replaceAll(key, KEY_LABEL)
+}
+
+/** Whether a JSON body holds `key`, also behind JSON escapes, which a plain search of the text would miss. */
+const carriesKey = (text: string, key: string): boolean => {
+	if (text.includes(key)) return true
+	try {
+		return JSON.stringify(JSON.parse(text)).includes(JSON.stringify(key).slice(1, -1))
+	} catch {
+		return false
+	}
+}
+
+/**
+ * A JSON answer that carries the key is dropped whole, so no row, `--json` output or error can repeat it. Any other
+ * body passes: the RPC client reports a non-JSON answer by its status alone.
+ */
+const withoutEchoedKey = async (response: Response, key: string): Promise<Response> => {
+	if (!(response.headers.get('content-type') ?? '').includes('application/json')) return response
+	const text = await response.text()
+	if (carriesKey(text, key)) {
+		return Response.json({ error: { type: 'transport', message: `Control's answer carried ${KEY_LABEL}; it was dropped` } }, { status: 502 })
+	}
+	return new Response(text, { status: response.status, statusText: response.statusText, headers: response.headers })
+}
+
+/**
+ * The one client of Control that `fabrika control` and `fabrika env` share: the origin from `url` or
+ * FABRIKA_CONTROL_URL, the key from FABRIKA_CONTROL_KEY in the environment only, no redirect followed.
+ */
+export const connectControl = (url: string | undefined, env: Readonly<Record<string, string | undefined>>): ControlClient => {
+	const base = controlOrigin(url ?? env['FABRIKA_CONTROL_URL'])
 	const key = secret('FABRIKA_CONTROL_KEY', env)
 	return createRpcClient<ControlRpcContract>({
 		baseUrl: `${base}/api/rpc`,
-		fetch: (input, init) => {
+		fetch: async (input, init) => {
 			const headers = new Headers(init?.headers)
 			headers.set('authorization', `Bearer ${key}`)
-			return fetch(input, { ...init, headers })
+			// A redirect would carry the bearer to wherever it points.
+			return await withoutEchoedKey(await fetch(input, { ...init, headers, redirect: 'manual' }), key)
 		},
 	})
 }
+
+const controlClient = (flags: Flags, env: Readonly<Record<string, string | undefined>>): ControlClient => connectControl(flags.values.get('url'), env)
 
 const readJsonFile = async (path: string): Promise<JsonValue> => {
 	const file = Bun.file(path)
@@ -962,9 +1026,9 @@ export const runControlCli = async (
 	env: Readonly<Record<string, string | undefined>> = process.env,
 	input: SecretValueInput = processStdin,
 ): Promise<void> => {
-	const flags = parseControlFlags(argv)
-	const verb = flags.positional[0]
 	try {
+		const flags = parseControlFlags(argv)
+		const verb = flags.positional[0]
 		switch (command) {
 			case undefined:
 				console.info(USAGE)
@@ -994,7 +1058,8 @@ export const runControlCli = async (
 	} catch (error) {
 		// An RPC denial is an ANSWER, not a transport fault; keep its type so a caller can tell "the
 		// control plane said no" from "the control plane was unreachable".
-		throw error instanceof RpcError ? new Error(`${error.type}: ${error.message}`) : error
+		const message = error instanceof RpcError ? `${error.type}: ${error.message}` : error instanceof Error ? error.message : String(error)
+		throw new Error(withoutControlKey(message, env))
 	}
 }
 

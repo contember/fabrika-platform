@@ -1,5 +1,5 @@
 // A deploy whose approved contract has a cron job with `egress: 'public'` hands the provider the installation's hosts
-// (`FABRIKA_EGRESS_REFUSED_HOSTS`, ADR-0070): Control's, IAM's and every environment's domain and public origin. A
+// (`FABRIKA_EGRESS_REFUSED_HOSTS`, ADR-0071): Control's, IAM's and every environment's domain and public origin. A
 // contract without such a job hands `null`, which removes a stale list.
 
 import { FABRIKA_EGRESS_REFUSED_HOSTS } from '@fabrika/auth-core'

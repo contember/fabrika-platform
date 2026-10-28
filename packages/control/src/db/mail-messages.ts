@@ -1,4 +1,4 @@
-import type { SqlDatabase } from '@fabrika/platform'
+import type { BlobStore, SqlDatabase } from '@fabrika/platform'
 
 /**
  * `held` waits for a person, `queued` for the dispatcher, `sending` is one attempt a dispatcher claimed. `sent`,
@@ -29,8 +29,13 @@ export interface MailMessageRow {
 	next_attempt_at: number | null
 	provider_message_id: string | null
 	error_code: string | null
-	/** The canonical request body; `null` once purged. The only column that carries recipient, subject or bodies. */
+	/**
+	 * The canonical request body, when the row holds it; `null` once purged, or while `content_ref` holds it. With
+	 * `content_ref`, the only columns that lead to recipient, subject or bodies.
+	 */
 	content: string | null
+	/** The object that holds the canonical request body, when the row cannot (D1); `null` once purged, or without one. */
+	content_ref: string | null
 	created_at: number
 	/** The last change; while `sending`, when the attempt was claimed. */
 	updated_at: number
@@ -47,6 +52,16 @@ export interface MailMessageInput {
 	content: string
 }
 
+/** Whether the message still has its content, in its row or in its object. */
+export function hasMailContent(row: Pick<MailMessageRow, 'content' | 'content_ref'>): boolean {
+	return row.content !== null || row.content_ref !== null
+}
+
+const CONTENT_KEPT = '(content IS NOT NULL OR content_ref IS NOT NULL)'
+/** An object written before its row is collected once it is this old and no row names it. */
+export const MAIL_CONTENT_UPLOAD_GRACE_S = 60 * 60
+const OBJECT_BATCH = 100
+
 export interface MailMessageListFilter {
 	state?: MailMessageState
 	sender?: string
@@ -55,14 +70,24 @@ export interface MailMessageListFilter {
 	limit: number
 }
 
+/**
+ * The relay's messages. With `objects` (the Worker, whose D1 row holds at most 2,000,000 bytes) every message keeps
+ * its content in an object its row names; without (Postgres) in the row. The object is written before its row and
+ * removed before its row lets go of it, so a row never names a missing object, except one whose purge was interrupted,
+ * which reads as purged. An object whose row never committed is collected by `collectUploads`.
+ */
 export class MailMessageRepository {
-	constructor(private readonly d1: SqlDatabase) {}
+	constructor(
+		private readonly d1: SqlDatabase,
+		private readonly objects: BlobStore | null = null,
+	) {}
 
 	/**
 	 * Records a message, or finds the one its sender already recorded under the same idempotency key. `created` tells
 	 * the two apart; the caller compares the found row's fingerprint.
 	 */
 	async insertOrFind(input: MailMessageInput, now: number): Promise<{ row: MailMessageRow; created: boolean }> {
+		if (this.objects !== null) return await this.insertWithObject(this.objects, input, now)
 		const inserted = await this.d1
 			.prepare(
 				`INSERT INTO mail_messages
@@ -86,6 +111,53 @@ export class MailMessageRepository {
 		const row = await this.find(input.sender, input.idempotency_key)
 		if (row === null) throw new Error('mail message vanished after its insert')
 		return { row, created: inserted.meta.changes > 0 }
+	}
+
+	private async insertWithObject(objects: BlobStore, input: MailMessageInput, now: number): Promise<{ row: MailMessageRow; created: boolean }> {
+		const key = mailContentKey(input.id)
+		// Recorded first, so an object whose row never commits is found by `collectUploads`, whatever stops this.
+		await this.d1.prepare('INSERT INTO mail_content_uploads (message_id, object_key, created_at) VALUES (?, ?, ?)').bind(input.id, key, now).run()
+		await objects.put(key, input.content)
+		// A throw may follow a commit, so the object stays: `collectUploads` removes it only when no row names it.
+		await this.d1.batch([
+			this.d1
+				.prepare(
+					`INSERT INTO mail_messages
+						(id, sender, idempotency_key, fingerprint, recipient_domain, state, rule_id, attempts, content, content_ref, created_at, updated_at)
+					VALUES (?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?)
+					ON CONFLICT (sender, idempotency_key) DO NOTHING`,
+				)
+				.bind(input.id, input.sender, input.idempotency_key, input.fingerprint, input.recipient_domain, input.state, input.rule_id, key, now, now),
+			// Only once the row names the object; under a conflict the upload stays, to be discarded.
+			this.d1
+				.prepare('DELETE FROM mail_content_uploads WHERE message_id = ? AND EXISTS (SELECT 1 FROM mail_messages WHERE id = ? AND content_ref = ?)')
+				.bind(input.id, input.id, key),
+		])
+		const row = await this.find(input.sender, input.idempotency_key)
+		if (row === null) throw new Error('mail message vanished after its insert')
+		// The id is a fresh UUIDv7, so the row is this insert's exactly when it carries it.
+		const created = row.id === input.id
+		if (!created) await this.discardUpload(objects, input.id, key)
+		return { row, created }
+	}
+
+	/** Best effort: what is left stays recorded in `mail_content_uploads`, and maintenance collects it. */
+	private async discardUpload(objects: BlobStore, messageId: string, key: string): Promise<void> {
+		try {
+			await objects.delete(key)
+			await this.d1.prepare('DELETE FROM mail_content_uploads WHERE message_id = ?').bind(messageId).run()
+		} catch {
+			console.warn(`mail relay: the content upload of ${messageId} is left to maintenance`)
+		}
+	}
+
+	/** The canonical request body of a message; `null` once purged. */
+	async content(row: Pick<MailMessageRow, 'content' | 'content_ref'>): Promise<string | null> {
+		if (row.content !== null) return row.content
+		if (row.content_ref === null) return null
+		if (this.objects === null) throw new Error('a mail message names a content object, and this Control has no store for one')
+		const object = await this.objects.get(row.content_ref)
+		return object === null ? null : await object.text()
 	}
 
 	/** The message its sender recorded under the key, if any. */
@@ -140,7 +212,7 @@ export class MailMessageRepository {
 		const result = await this.d1
 			.prepare(
 				`UPDATE mail_messages SET state = 'queued', attempts = 0, next_attempt_at = NULL, decided_by = ?, updated_at = ?
-				WHERE id = ? AND content IS NOT NULL AND state IN (${states.map(() => '?').join(', ')})`,
+				WHERE id = ? AND ${CONTENT_KEPT} AND state IN (${states.map(() => '?').join(', ')})`,
 			)
 			.bind(decidedBy, now, id, ...states)
 			.run()
@@ -244,15 +316,68 @@ export class MailMessageRepository {
 			.prepare(`UPDATE mail_messages SET content = NULL WHERE id = ? AND content IS NOT NULL AND state IN (${finalStates})`)
 			.bind(id)
 			.run()
-		return result.meta.changes > 0
+		const objects = await this.purgeObjects('id = ?', [id])
+		return result.meta.changes > 0 || objects > 0
 	}
 
-	/** Forgets the content of every final message unchanged since `finalBefore`; returns how many. */
+	/**
+	 * Forgets the content of final messages unchanged since `finalBefore`; returns how many. Every row content at once;
+	 * object content at most `OBJECT_BATCH` per call, and the next pass continues.
+	 */
 	async purgeFinalContent(finalBefore: number): Promise<number> {
 		const result = await this.d1
 			.prepare(`UPDATE mail_messages SET content = NULL WHERE content IS NOT NULL AND updated_at <= ? AND state IN (${finalStates})`)
 			.bind(finalBefore)
 			.run()
-		return result.meta.changes
+		return result.meta.changes + (await this.purgeObjects('updated_at <= ?', [finalBefore]))
 	}
+
+	/** The object goes first: a row whose update then fails names a missing object, which reads as purged. */
+	private async purgeObjects(where: string, binds: readonly (string | number)[]): Promise<number> {
+		if (this.objects === null) return 0
+		const { results } = await this.d1
+			.prepare(`SELECT id, content_ref FROM mail_messages WHERE content_ref IS NOT NULL AND ${where} AND state IN (${finalStates}) ORDER BY id LIMIT ?`)
+			.bind(...binds, OBJECT_BATCH)
+			.all<{ id: string; content_ref: string }>()
+		let purged = 0
+		for (const row of results) {
+			await this.objects.delete(row.content_ref)
+			const updated = await this.d1
+				.prepare(`UPDATE mail_messages SET content_ref = NULL WHERE id = ? AND content_ref = ? AND state IN (${finalStates})`)
+				.bind(row.id, row.content_ref)
+				.run()
+			purged += updated.meta.changes
+		}
+		return purged
+	}
+
+	/**
+	 * Collects content objects written before a row that never named them, recorded before `recordedBefore`: their
+	 * recording stopped, or a message under the same key won. Returns how many objects it removed.
+	 */
+	async collectUploads(recordedBefore: number): Promise<number> {
+		if (this.objects === null) return 0
+		const { results } = await this.d1
+			.prepare('SELECT message_id, object_key FROM mail_content_uploads WHERE created_at <= ? ORDER BY created_at LIMIT ?')
+			.bind(recordedBefore, OBJECT_BATCH)
+			.all<{ message_id: string; object_key: string }>()
+		let collected = 0
+		for (const upload of results) {
+			const named = await this.d1
+				.prepare('SELECT id FROM mail_messages WHERE id = ? AND content_ref = ?')
+				.bind(upload.message_id, upload.object_key)
+				.first<{ id: string }>()
+			if (named === null) {
+				await this.objects.delete(upload.object_key)
+				collected++
+			}
+			await this.d1.prepare('DELETE FROM mail_content_uploads WHERE message_id = ?').bind(upload.message_id).run()
+		}
+		return collected
+	}
+}
+
+/** One object per message, named by its id. */
+function mailContentKey(messageId: string): string {
+	return `messages/${messageId}.json`
 }

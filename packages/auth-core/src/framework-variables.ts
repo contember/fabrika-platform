@@ -19,7 +19,7 @@ export const FABRIKA_APP_ORIGIN = 'FABRIKA_APP_ORIGIN'
 /** The digests of the environment's ops keys, which the object checks Control's key against (`parseOpsKeyDigests`, ADR-0069). */
 export const FABRIKA_OPS_KEY_DIGESTS = 'FABRIKA_OPS_KEY_DIGESTS'
 /**
- * The installation's own hosts, which a cron job's public egress refuses (ADR-0070): Control's, IAM's, Operations' and
+ * The installation's own hosts, which a cron job's public egress refuses (ADR-0071): Control's, IAM's, Operations' and
  * every application environment's domain, normalized and joined by `,`. Written only for a contract with such a job.
  */
 export const FABRIKA_EGRESS_REFUSED_HOSTS = 'FABRIKA_EGRESS_REFUSED_HOSTS'

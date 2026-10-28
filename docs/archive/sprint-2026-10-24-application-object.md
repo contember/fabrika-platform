@@ -1,10 +1,14 @@
-<!--
-On close, prepend an OUTCOME block here, then `git mv` this file to ../archive/:
-
-> **OUTCOME — shipped YYYY-MM-DD.** <one-paragraph result.> Commit map: WU1 → <sha>,
-> WU2 → <sha>, … Verification: <the gate command + numbers>. Backlog closed:
-> <ids deleted/rescoped>. Deferred: <honest notes>.
--->
+> **OUTCOME — shipped 2026-10-26.** Every unit of waves 0–7 shipped: the object sleeps unless it has work (one
+> alarm over durable pending work, an hourly repair tick instead of the minute cron, 14-minute job segments), a query
+> runs without holding the object (read-only invocations), Control reaches the object over the ops channel
+> (ADR-0069) behind a generation-fenced maintenance barrier, takes daily consistent backups, imports, and side-restores
+> to time T (ADR-0070). The gates hold from `0.9.0-dev.5` (`releaseFrom`), and since #69 they read the application's
+> pin, not the reader's release. Commit map: waves 0–3 → #59 (`3e0870572`); waves 3–7 → #66 (`c6ebd296e`); the
+> prerelease gate fix → `075daf224`. Verification: CI's verify workflow on each merge (typecheck, lint, both Postgres
+> suites, release artifacts); tests ran on Lopata and a local workerd only. Backlog: review follow-ups in 228 and 237,
+> the Workflow escape hatch in 235, the in-handler upload in 236. Deferred: Phase 0's live probes (0.2) and a deploy
+> to a real account were never run; they moved to [backlog 213](../backlog/213-the-cloudflare-application-runtime-is-unverified-on-a-live-account.md),
+> which is P1 before a Cloudflare installation serves an application.
 
 # Sprint — the application Durable Object (2026-10-24)
 
@@ -12,7 +16,7 @@ On close, prepend an OUTCOME block here, then `git mv` this file to ../archive/:
 Control a way to inspect, back up and recover its data.
 
 **Theme.** The design and its rationale are in
-[`../ideas/application-object-runtime-and-operations.md`](../ideas/application-object-runtime-and-operations.md); every
+[`application-object-runtime-and-operations.md`](application-object-runtime-and-operations.md); every
 § below refers to it. The batch succeeds when an environment sleeps unless it has work, a query no longer blocks the
 environment, Control can take and restore a consistent backup, and a side restore recovers data from time T without
 rewinding the serving database.
@@ -61,13 +65,15 @@ parsed with its `json.ts` readers, not zod.
 (`app/cloudflare/ops.ts`) and Control's composition (`control/services.ts`) take one line per unit; the lead merges
 those lines. ADR-0065 is edited by 2.1, 4.x and 5.x, each in a different wave.
 
-**Release placement (decision D0, settled).** The object runtime ships as framework 0.9: the source carries 0.9 and
-Control bundles the 0.8.2 reader. 0.9 ships first on the `cloudflare` channel as 0.9.0-cloudflare.1, cut from the
-`channel/cloudflare` branch while `main` keeps its source version
-([release channels](../reference/release-process.md#release-channels)). The 0.9.0-dev.0 to 0.9.0-dev.4
-prereleases on `next` were cut from another branch and lack the object runtime. A unit that ships in 0.9.0 needs no
-gate of its own: `runsInObject` covers it, and S1's constants equal it. A unit after 0.9.0 gets the next minor. The
-SQLite `fabrika` bundle keeps `0001_framework.sql` unchanged; every new framework table is a new file (ADR-0017).
+**Release placement (decision D0, settled above).** The object runtime ships as framework 0.9, and Control reads 0.8
+applications with the 0.8.2 reader. 0.9 shipped first on the `cloudflare` channel, as 0.9.0-cloudflare.1 and .2, cut
+from `channel/cloudflare` ([release channels](../reference/release-process.md#release-channels)); how those
+prereleases sort against the release floors is [backlog 240](../backlog/240-channel-prereleases-sort-below-the-release-floors.md).
+The 0.9.0-dev.0 to 0.9.0-dev.4 prereleases on `next` were cut before the object runtime and lack it, although the
+minor gates (`runsInObject`, `pinsGeneratedEntry`, `servesOps`) admit them
+([backlog 228](../backlog/228-application-object-review-follow-ups.md)). A unit that ships in 0.9.0 needs no gate of
+its own: `runsInObject` covers it, and S1's constants equal it. A unit after 0.9.0 gets the next minor. The SQLite
+`fabrika` bundle keeps `0001_framework.sql` unchanged; every new framework table is a new file (ADR-0017).
 
 ## Work units
 
@@ -227,3 +233,7 @@ ADRs: rewrite ADR-0065 §5; amend ADR-0060. Rollout as §6 Phase 5.
 - 2026-10-24: 3.1: Control presents up to two candidate ops keys, newest first, instead of tracking which digest the running version activated; the transport tries the next one only after the uniform refusal. The digests are a public variable.
 - 2026-10-24: 4.4 must settle a Cloudflare deploy started under a data operation's lease under that same lease (`RunInvocation.underLease` + `settleUnfinishedRun`); otherwise the cron waits until the operation ends.
 - 2026-10-24: Merge review of #59: one started maintenance operation made the environment undeployable, because the object answers `state` with 501 until 3.3b and the record stays `running`. `data.start` and `data.recover` now answer 501. 3.3b lifts that only for an environment whose release serves `state`, and an object's "not implemented" must fail the record, not leave it running.
+- 2026-10-25: Waves 3–6 integrated on `feat/application-object-3` with local tests only: 3.3b, 3.4b, 3.4c, 3.5, 4.1–4.4, 5.1–5.6, 6.1–6.3. Live probes (0.2) and a deploy to a real account are the next part. Review P2s and open decisions → [backlog 237](../backlog/237-application-object-waves-4-7-follow-ups.md); the in-handler upload gap → [backlog 236](../backlog/236-an-in-handler-upload-leaves-bytes-after-an-eviction.md).
+- 2026-10-25: Integration found that a backup spanning two maintenance passes restarted forever: each pass published `read-only` at a new generation, which changed the dump's digest. A consistent dump now spans one stretch of modes that write nothing (ADR-0070 §2), and Control continues the recorded dump id, starting a new one only on `ledger_mismatch`.
+- 2026-10-25: 4.4b first guarded a deploy's migrations by the published ops snapshot; they now follow what the last succeeded deploy installed (`runs.migration_barrier`), so a domain added later does not block deploys. Its gap → backlog 237 item 16.
+- 2026-10-25: The merge review found that the 0.9.0 prereleases on npm (`dev.0`–`dev.4`, `cloudflare.1`–`cloudflare.2`) passed every 0.9 gate although their object has no alarm and answers `state` and `migrate` 501. The alarm, the segment cap and the data operations now hold from `0.9.0-dev.5` in semver precedence (`releaseFrom`); the channel stays at the minor. Transport P2s → backlog 237 items 20–21.

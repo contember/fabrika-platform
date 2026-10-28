@@ -23,13 +23,8 @@
 		"binding": "ASSETS",
 		"not_found_handling": "single-page-application",
 		"run_worker_first": [
-			"/api/*",
-			"/iam/admin/*",
-			"/operations/api/*",
-			"/platform/*",
-			"/webhooks/*",
-			"/webhooks",
-			"/mcp*"
+			"/*",
+			"!/assets/*"
 		]
 	},
 	"vars": {
@@ -44,6 +39,12 @@
 			"tag": "v0001",
 			"new_sqlite_classes": [
 				"RunnerContainer"
+			]
+		},
+		{
+			"tag": "v0002",
+			"new_sqlite_classes": [
+				"DeployLock"
 			]
 		},
 		{
@@ -63,6 +64,10 @@
 		{
 			"binding": "RUN_LOGS",
 			"bucket_name": "vozka-run-logs"
+		},
+		{
+			"binding": "MAIL_CONTENT",
+			"bucket_name": "fabrika-mail-content"
 		}
 	],
 	"d1_databases": [
@@ -81,7 +86,7 @@
 			},
 			{
 				"binding": "MAIL_QUEUE",
-				"queue": "vozka-mail"
+				"queue": "fabrika-mail"
 			}
 		],
 		"consumers": [
@@ -92,7 +97,7 @@
 				"retry_delay": 30
 			},
 			{
-				"queue": "vozka-mail",
+				"queue": "fabrika-mail",
 				"max_batch_size": 1,
 				"max_retries": 5,
 				"retry_delay": 60

@@ -135,6 +135,7 @@ for (const backend of backends) {
 				finished_at: null,
 				recovers_operation_id: null,
 				resolution: null,
+				run_id: null,
 			})
 			expect(await operations.get(refused.id)).toEqual(created)
 		})

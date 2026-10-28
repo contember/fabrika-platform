@@ -72,13 +72,17 @@ export interface SourceGitHubClient {
 
 export type SourceGitHubClientFactory = (credential: GitHubAppCredential) => Promise<SourceGitHubClient>
 
-/** Production always talks to `api.github.com`; only the transport is injectable. */
-export function gitHubAppClientFactory(fetch?: GitHubAppFetch): SourceGitHubClientFactory {
+/**
+ * Production always talks to `api.github.com`; only the transport is injectable. `publicAppAttempts` is for a Worker,
+ * whose anonymous reads leave from a cloud's shared egress (see `GitHubAppClientConfig`).
+ */
+export function gitHubAppClientFactory(fetch?: GitHubAppFetch, publicAppAttempts?: number): SourceGitHubClientFactory {
 	return (credential) =>
 		GitHubAppClient.create({
 			appId: credential.appId,
 			privateKeyPem: credential.privateKeyPem,
 			...(fetch === undefined ? {} : { fetch }),
+			...(publicAppAttempts === undefined ? {} : { publicAppAttempts }),
 		})
 }
 

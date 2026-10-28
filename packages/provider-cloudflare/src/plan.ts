@@ -57,6 +57,8 @@ export const PLATFORM_RESOURCE_NAMES: ReadonlySet<string> = new Set([
 	'vozka-runner',
 	'vozka-deploy',
 	'vozka-deploy-runner',
+	'fabrika-mail',
+	'fabrika-mail-content',
 	'vozka-run-logs',
 	'propustka',
 	'propustka-worker',

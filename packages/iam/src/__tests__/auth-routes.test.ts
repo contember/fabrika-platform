@@ -503,7 +503,7 @@ describe('/auth/logout', () => {
 	function logout(sessionToken: string, init: RequestInit = {}): Request {
 		return new Request(`${ISSUER}/auth/logout`, {
 			...init,
-			headers: { Cookie: `${SESSION_COOKIE}=${sessionToken}`, ...(init.headers ?? {}) },
+			headers: { Cookie: `${SESSION_COOKIE}=${sessionToken}`, ...init.headers },
 		})
 	}
 

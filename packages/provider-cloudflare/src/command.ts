@@ -1,10 +1,12 @@
-import { type AppEnvironment, parseAppEnvironmentId, parseManagedEnvironment } from '@fabrika/auth-core'
+import { type AppEnvironment, type ApplicationObjects, parseAppEnvironmentId, parseManagedEnvironment } from '@fabrika/auth-core'
 import { readFile } from 'node:fs/promises'
 import { z } from 'zod'
 import type { CloudflareAppConfig } from './authoring'
 import { loadCloudflareConfig } from './collaborators'
 import { type CloudflareDeployResult, createCloudflareDeployer, type PlatformIamTarget } from './provider'
 import {
+	APPLICATION_OBJECTS_ENV,
+	applicationObjectsSchema,
 	APPROVED_ACCESS_FILE_ENV,
 	CROSS_ORIGINS_ENV,
 	INSTALLATION_APPS_ENV,
@@ -71,6 +73,23 @@ export const parseCrossOrigins = (raw: string | undefined): readonly string[] | 
 	const origins = crossOriginsSchema.safeParse(decoded)
 	if (!origins.success) throw new Error(`${CROSS_ORIGINS_ENV} is not a JSON array of strings`)
 	return origins.data.length === 0 ? undefined : origins.data
+}
+
+/**
+ * Decode `FABRIKA_RUNNER_APPLICATION_OBJECTS`, the pointer Control recorded, as the runner writes it. Undefined when
+ * absent, and the deployer writes its defaults; anything malformed fails the deploy rather than move ordinary traffic.
+ */
+export const parseApplicationObjectsEnvironment = (raw: string | undefined): ApplicationObjects | undefined => {
+	if (raw === undefined || raw === '') return undefined
+	let decoded: unknown
+	try {
+		decoded = JSON.parse(raw)
+	} catch {
+		throw new Error(`${APPLICATION_OBJECTS_ENV} is not JSON`)
+	}
+	const objects = applicationObjectsSchema.safeParse(decoded)
+	if (!objects.success) throw new Error(`${APPLICATION_OBJECTS_ENV} is not a serving object and its object list`)
+	return objects.data
 }
 
 /**
@@ -157,6 +176,7 @@ export const deployCloudflareConfig = async (options: CloudflareCommandDeployOpt
 	const installationApps = parseInstallationApps(environmentValue(INSTALLATION_APPS_ENV))
 	const crossOrigins = parseCrossOrigins(environmentValue(CROSS_ORIGINS_ENV))
 	const operationsOrigin = environmentValue(OPERATIONS_ORIGIN_ENV)
+	const applicationObjects = parseApplicationObjectsEnvironment(environmentValue(APPLICATION_OBJECTS_ENV))
 	return deploy({
 		appId: loaded.config.id,
 		env: options.env,
@@ -165,6 +185,7 @@ export const deployCloudflareConfig = async (options: CloudflareCommandDeployOpt
 		...(operationsOrigin === undefined ? {} : { operationsOrigin }),
 		...(returnOrigins === undefined ? {} : { returnOrigins }),
 		...(installationApps === undefined ? {} : { installationApps }),
+		...(applicationObjects === undefined ? {} : { applicationObjects }),
 		...approved,
 		cwd: loaded.cwd,
 		configPath: loaded.absolutePath,

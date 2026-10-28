@@ -2,6 +2,7 @@
 // on a protected environment until a human approves it, and publish with a compare-and-swap on the generation.
 
 import { incompatibleMountChanges } from '@fabrika/app/contract'
+import { type AccessChangeDto, CHANGE_SUBJECT_KINDS, REVIEW_REASONS, SURFACE_REACHES } from '@fabrika/control-contract'
 import type { ProviderApprovedAccess } from '@fabrika/provider-contract'
 import { z } from 'zod'
 import { consumerEdgeProblems, ownerEdgeProblems } from '../connectors'
@@ -10,7 +11,7 @@ import { devLauncherRefusal } from '../dev/deploy'
 import type { CommitSource } from '../github/source/commit-files'
 import { SourceFailure, SourceRateLimited } from '../github/source/failure'
 import type { LeaseFence } from '../lease'
-import { type AccessChange, type AccessEffect, type AccessOutcome, classifyAccess, isJobStartLine } from './diff'
+import { type AccessEffect, type AccessOutcome, classifyAccess, isJobStartLine } from './diff'
 import { ContractMissing, readAccessSnapshot, snapshotReads, SnapshotRefused } from './read'
 import { FrameworkReleaseRefused } from './readers'
 import {
@@ -19,14 +20,18 @@ import {
 	approvedAccess,
 	approvedSnapshot,
 	parseSnapshot,
+	serializePublished,
 	serializeSnapshot,
 	snapshotDigest,
 } from './snapshot'
 
-/** What a run stores after classification: the diff, and the two digests an approval is bound to. */
+/**
+ * What a run stores after classification: the diff, and the two digests an approval is bound to. A line classified
+ * before lines carried facts has none, so a stored line is the DTO's shape.
+ */
 export interface StoredClassification {
 	readonly outcome: AccessOutcome
-	readonly changes: readonly AccessChange[]
+	readonly changes: readonly AccessChangeDto[]
 	readonly candidateDigest: string
 	readonly baselineDigest: string
 	/** The published run the candidate was compared with; null for the empty snapshot. */
@@ -51,9 +56,28 @@ const review = z.literal('closer').optional()
  * A change line. A run classified before lines carried an effect stored `widens: boolean`. Such a line reads as
  * `widens` or `narrows`, except a job a form or a mutation starts, which already widened nothing and is `neutral`.
  */
-const changeSchema: z.ZodType<AccessChange, z.ZodTypeDef, unknown> = z.union([
-	z.object({ effect: z.enum(['widens', 'narrows', 'neutral']), line: z.string(), review, environmentOrigins: z.literal(true).optional() }).strict(),
-	z.object({ widens: z.boolean(), line: z.string(), review }).strict().transform(({ widens, line, review }): AccessChange => ({
+const subjectSchema = z.object({
+	kind: z.enum(CHANGE_SUBJECT_KINDS),
+	name: z.string(),
+	method: z.enum(['GET', 'POST']).optional(),
+	path: z.string().optional(),
+}).strict()
+
+const audienceSchema = z.object({ reach: z.enum(SURFACE_REACHES), mount: z.string().optional(), requirement: z.string().nullable() }).strict()
+
+const changeSchema: z.ZodType<AccessChangeDto, z.ZodTypeDef, unknown> = z.union([
+	z.object({
+		effect: z.enum(['widens', 'narrows', 'neutral']),
+		line: z.string(),
+		review,
+		reason: z.enum(REVIEW_REASONS).optional(),
+		environmentOrigins: z.literal(true).optional(),
+		rule: z.string().min(1).optional(),
+		subject: subjectSchema.optional(),
+		audience: audienceSchema.optional(),
+		consequence: z.object({ kind: z.literal('starts-job'), job: z.string() }).strict().optional(),
+	}).strict(),
+	z.object({ widens: z.boolean(), line: z.string(), review }).strict().transform(({ widens, line, review }): AccessChangeDto => ({
 		effect: widens ? 'widens' : isJobStartLine(line) ? 'neutral' : 'narrows',
 		line,
 		...(review === undefined ? {} : { review }),
@@ -149,7 +173,7 @@ export async function publishRunSnapshot(
 		}
 		await invocation.write((fence) => runs.recordRunClassification(run.id, serialized, fence))
 		const expected = { generation: active.generation, protectionRevision: appEnv.protection_revision }
-		if (await runs.publishRunSnapshot(run.id, expected, serializeSnapshot(candidate), invocation.fence())) {
+		if (await runs.publishRunSnapshot(run.id, expected, serializePublished(candidate), invocation.fence())) {
 			input.log(`access: published as generation ${active.generation + 1} of \`${appEnv.env}\``)
 			return { kind: 'published', classification }
 		}

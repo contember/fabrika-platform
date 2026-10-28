@@ -404,7 +404,7 @@ An application environment on Cloudflare runs in one Durable Object
 Worker's `fetch` (`createContractWorker`, `packages/app/src/cloudflare.ts`) removes `X-Fabrika-Tick`, sets
 `X-Fabrika-Proxy-Secret` from `FABRIKA_PROXY_SECRET` and forwards the request to the object that
 `FABRIKA_APPLICATION_OBJECT` names in its `FABRIKA_APPLICATION` binding (`application` without the object variables, as
-an older deploy has); its `scheduled` sends that object the minute tick with the controller's `scheduledTime`. An ops
+an older deploy has); its `scheduled` sends that object the repair tick with the controller's `scheduledTime`. An ops
 request under `/__fabrika/ops/` goes to the object its body names
 ([ADR-0069](../decisions/0069-control-reaches-an-application-environments-object.md)); the Worker authenticates it
 first and the object again, and it never boots the application.
@@ -435,11 +435,30 @@ first and the object again, and it never boots the application.
   asks the binding for the request path as it is, and for a page route it answers 404 (a GET or HEAD whose last
   segment has no extension, or that accepts `text/html`: `isPageRoute`) asks for `<prefix>/`, the mount's
   `index.html` (`bindingAssets`), so a deep link renders as under `diskAssets`; a missing asset stays 404 under both.
-- **The minute tick** starts every job due in its UTC minute, the file sweep among them, and the jobs' check, each past
-  the 204 answer. A tick without an integer time is 400.
-- **Refused on SQLite.** `boot` refuses a site that declares `sql` (`ctx.sql` itself refuses with `sql_dialect`): the
-  classifier reads Postgres's grammar, and a Durable Object has no runtime role to bound raw SQL. It refuses a
-  `scan: true` file kind, because no scanner runs on Cloudflare. The Cloudflare deploy refuses both before any effect.
+- **Jobs run on the object's alarm** (ADR-0065 §5). A job's pending work is a row of `fabrika_wakes`: a `cron` row at
+  its next fire, a `kick`, `claim` or `retry` row. Every transaction that changes a wake or a lease arms the alarm at the
+  earliest due wake of a job whose lease is free or expired, or at the earliest expiry of a held lease, and the alarm
+  commits or rolls back with it. An alarm names no object, so each object records in its KV (`fabrika:object`) the name
+  its first verified event reached it under; `alarm()` does nothing in an object that is not the one ordinary traffic
+  reaches (a rehearsal, a former serving object), in one no verified event has named yet, or outside the `open` mode.
+  Otherwise, for each job with a due wake, and for a removed job whose lease a crashed run still holds, it reaps an
+  expired holder, takes the lease without waiting (or marks the job pending) and re-arms in one
+  transaction, and runs the job past its return. A run owns the wakes due when it took its lease, marked in that
+  transaction; a wake written or merged into afterwards is not its, except a cron wake scheduled again. Only that run's
+  fenced finish consumes or retries what it owns, and a finish or a reap leaves none owned, so a crash leaves the wake
+  or a held lease whose expiry is armed. A wake within 50 ms is waited for;
+  an internal error in `open` re-arms the alarm 30 s later and is an `AlarmFailed` error event; a transition that
+  restricted the object meanwhile is none. The file sweep is one of these jobs.
+- **The repair tick** (the Worker's cron trigger, and the object's first event after it boots or reopens) reaps every
+  expired holder, a removed job's too, deletes
+  the wakes of an undeclared job and the cron wake of a changed expression, inserts each missing cron wake at the next
+  fire, keeps an overdue one so missed fires coalesce into one run, and re-arms. It arms the first alarm of an
+  environment nobody called and recovers an alarm whose retries ran out. It answers 204; a tick without an integer time
+  is 400.
+- **`ctx.sql` on SQLite** reads the template with SQLite's lexer and binds `?N`; the rules it adds and the read backstop
+  are under the invocation's transaction below. The deploy admits a site that declares `sql` from `0.9.0-dev.5` on.
+- **Refused on SQLite.** `boot` refuses a `scan: true` file kind, because no scanner runs on Cloudflare. The Cloudflare
+  deploy refuses it before any effect.
 - `cloudflare-runtime.test.ts` of `packages/app` runs the Worker, the object and the bucket in Lopata
   (`lopata/testing`); `@fabrika/db`'s `*-sqlite.test.ts` run the framework's statements on `bun:sqlite`
   (`bunSqliteStorage`, foreign keys on, transactions nested as savepoints, as workerd nests them).
@@ -574,43 +593,44 @@ work first and the external call after. `ctx.sql` (`sql: 'read' | 'write'`) runs
 - **`` ctx.sql(Row)`…` ``** runs only on a site that declares `sql` (a job: `tx.sql`, inside `ctx.transaction`). On any
   other site the types make it an `Unavailable`, and at run time the call is refused (`undeclared_reach`, naming the
   declaration) before anything is sent; so is a job's `ctx.sql` outside `ctx.transaction` (`sql_outside_transaction`).
-  `ctx.sql` has no scope predicate of its own: `${ctx.sql.scope(capability, table, alias?)}` interpolates the
+  `ctx.sql` has no scope predicate of its own: `${ctx.sql.scope(capability, table, { alias, use })}` interpolates the
   capability's whole predicate on that table, as the handles apply it — a `Ref`'s object and every link of its chain,
   a `Within`'s values, its container grants on their own columns, every row for `all`, none when empty, an `app`
-  capability's every row — with each value a bound parameter. A fragment carries the action of its capability, and
-  the tag checks it against what its own query block does with its relation. The tag lexes the statement into blocks:
-  each `SELECT`, `INSERT`, `UPDATE` and `DELETE` opens one, which ends with the parenthesis it stands in or at the next
-  block of its depth, so a subquery, a data-modifying CTE and an `INSERT`'s `SELECT` are blocks of their own, and
-  `ON CONFLICT … DO UPDATE` is an `UPDATE` of its `INSERT`'s target. A fragment whose table and alias are the relation
-  its block's `UPDATE` or `DELETE` writes (the target's alias, or its name without one) needs that operation's own
-  action from the table's policy — for an `UPDATE`, also a column's own write action when every column its `SET`
-  assigns declares that action, the rule a handle's `update` follows (a `SET` the tag cannot read to its end with
-  certainty is refused to a column's own action) — and an `app` capability writes only application tables and a `Ref` or `Within`
-  none. Every other fragment reads, another occurrence of the written table too (`from notes m`, a subquery), with an
-  action the handles read
-  the table with (any action the table names for a `Ref`, its read action for a `Within`, what `ctx.db.app` lists it
-  for with an `app` capability, a scoped site's application table by its read action). A reference table as an
-  `INSERT`, `UPDATE` or `DELETE` target is refused. A fragment that reaches its table for no use the site may make
-  of it is a type error at the table argument (`FragmentTable`) and is refused by `scope` at run time; a fragment of
-  another site is refused. The statement's own tables are not declared: `sql: 'read' | 'write'` stays one declaration
-  per site, and an `INSERT` or a write without a fragment is the declared deviation the approver reviews.
-  The fragment must be a conjunct: alone, joined by AND, at the top level of a WHERE or JOIN … ON clause whose top
-  level holds no OR (`where (<filter>) and ${…}`); any interpolation inside a literal, a quoted name, a dollar body or a
-  comment is refused, a fragment with no value included. A reference table needs no fragment.
-  Every `${…}` is a bound parameter: the tag reads the template's static text with a `$n` placeholder for each value,
-  so a value never becomes SQL, and a value inside a literal, a quoted name or a comment is refused. Before anything
-  is sent the text is refused for more than one statement; any statement but `SELECT`, `WITH`, `VALUES` and `TABLE`,
-  plus `INSERT`, `UPDATE` and `DELETE` on a `'write'` site (so DDL, transaction control, `SET`, `COPY`,
-  `LISTEN`/`NOTIFY`, `LOCK`, `CALL`, `DO` and `MERGE`); a nested statement of another kind and `SELECT … INTO`; a
-  qualified name outside the application's schema; any `fabrika_*` or `pg_*` name; a call outside the reviewed
+  capability's every row — with each value a bound parameter. `use` states what the statement does with the table:
+  `'read'` (the default), `'update'` or `'delete'`. `scope` checks it against the capability's action when the
+  fragment is built, before anything is sent: a write use needs a `'write'` site and the operation's own action from
+  the table's policy (for `'update'` a column's own write action too, as a handle's `update` takes one), and an `app`
+  capability writes only application tables and a `Ref` or `Within` none; a read takes an action the handles read the
+  table with (any action the table names for a `Ref`, its read action for a `Within`, what `ctx.db.app` lists it for
+  with an `app` capability, a scoped site's application table by its read action). A fragment that reaches its table
+  for no use is a type error at the table argument (`FragmentTable`); a fragment of another site is refused. The tag
+  does not read the statement for where a fragment stands, which relation it filters or which columns a `SET`
+  assigns: the author states the scope, and its placement, like an `INSERT` or a write without a fragment, is what the
+  approver reviews. `sql: 'read' | 'write'` stays one declaration per site. Any interpolation inside a literal, a
+  quoted name, a dollar body or a comment is refused, a fragment with no value included.
+  Every `${…}` is a bound parameter: the tag reads the template's static text with a placeholder for each value (`$n`
+  on Postgres, `?N` on SQLite), so a value never becomes SQL. Before anything is sent the text is refused, on both
+  dialects, for more than one statement; any statement but `SELECT`, `WITH` and `VALUES` (and `TABLE` on Postgres),
+  plus `INSERT`, `UPDATE` and `DELETE` on a `'write'` site (so DDL, transaction control, `SET`, `COPY`, `PRAGMA`,
+  `ATTACH`, `LISTEN`/`NOTIFY`, `LOCK`, `CALL`, `DO`, `REPLACE` and `MERGE`); a write anywhere in a `'read'` site's
+  statement; any `fabrika_*` name. On Postgres also a nested statement of another kind and `SELECT … INTO`, a
+  qualified name outside the application's schema, any `pg_*` name, a `U&"…"` name and a call outside the reviewed
   built-ins of `@fabrika/platform-node/sql` (a function the migrations declare is not one: `ctx.sql` does not know
-  them). A `'read'` site also refuses a write anywhere in the statement and a locking clause; a query's transaction
-  is `READ ONLY` under it. Values bind as scalars, a `Date` as ISO text, a list of strings or numbers as a Postgres
-  array (`= any(${ids})`). Each row is parsed like `fromRow` (snake_case → camelCase, `Date` → ISO) and then by
-  `Row`; Postgres sends `bigint` and `numeric` as text, so `count(*)` needs `::int` (or `z.coerce.number()`), and the
-  error says so. The name rules are defense in depth; the runtime role (`run_<id>`, DML only) is the privilege
-  boundary that bounds what an admitted statement does
-  ([ADR-0017](../decisions/0017-service-owned-postgres-migrations.md)).
+  them); a `'read'` site's locking clause too, and a query's transaction is `READ ONLY` under it. On SQLite also any
+  `sqlite_*` name in any spelling (unquoted, `"…"`, `` `…` ``, `[…]`, or a string, which SQLite reads as a name in
+  `FROM`), and a parameter the text writes itself (`?`, `?5`, `:x`, `@x`, `$x`, `#x`), which nothing would bind; there
+  is no function list, as SQLite's built-ins reach nothing outside the database. A `'read'` statement on SQLite runs
+  in a `transactionSync` of its own, inside a writing invocation too, and one whose cursor reports `rowsWritten` rolls
+  back and fails the invocation (`DatabaseError` 25006). Values bind as scalars, a `Date` as ISO text, a list of
+  strings or numbers as a Postgres array (`= any(${ids})`) or, on SQLite, as JSON (`in (select value from
+  json_each(${ids}))`), a boolean on SQLite as 0 or 1. Each row is parsed like `fromRow` (snake_case → camelCase,
+  `Date` → ISO) and then by `Row`; Postgres sends `bigint` and `numeric` as text, so `count(*)` needs `::int` (or
+  `z.coerce.number()`), and the error says so. Those text rules are the hard refusals (ADR-0012). On Postgres the
+  runtime role (`run_<id>`, DML only) also bounds what an admitted statement does, a foreign schema and DDL included
+  ([ADR-0017](../decisions/0017-service-owned-postgres-migrations.md)), but it may write the framework's `fabrika_*`
+  tables, so for them the name rule is the boundary; on SQLite, with no role, it is the boundary for everything
+  workerd's authorizer does not refuse
+  ([ADR-0065](../decisions/0065-an-application-on-cloudflare-runs-in-one-durable-object-per-environment.md) decision 7).
 
 - **A webhook delivery is one transaction.** The delivery key is claimed first, outside it, under a lease (the
   handler's time limit plus 30 s); the handler's transaction completes the claim right before it commits. A handler
@@ -620,8 +640,9 @@ work first and the external call after. `ctx.sql` (`sql: 'read' | 'write'`) runs
 - **A job reads outside its transaction and writes inside it.** `ctx.db` of a job attempt reads, each statement on its
   own; every write and `tx.sql` runs in `ctx.transaction((tx) => …)`, fenced by the attempt's lease. An attempt
   retries, so its writes are idempotent. There is no `ctx.jobs.enqueue`: work for later is a row a run claims
-  ([Queues and claims](#queues-and-claims)). A site that declares `kicks` starts a run once it committed, and the
-  schedule picks up the rest. The kick carries no payload, so the row stays the only record of the work
+  ([Queues and claims](#queues-and-claims)). A site that declares `kicks` writes a durable wake in its transaction and
+  starts a run once it committed, or later with `ctx.kick(job, { at })` ([Kicks](#kicks)). The kick carries no payload,
+  so the row stays the only record of the work
   ([ADR-0060](../decisions/0060-a-handler-kicks-a-declared-job-after-its-commit.md)).
 - **Every handle is bound to its invocation.** A handle kept past its handler, called from another live request, from
   a request of another `boot`, or from an ended job attempt is refused (500, one log line) before it reads its
@@ -707,12 +728,14 @@ deal_attachments: {
 - **Removing.** Clearing the column or deleting the row removes the reference. The framework's sweep job
   (`fabrika-file-sweep`, `FILE_SWEEP_JOB`, a reserved name, hourly at minute 41) first finishes the deletions a crash
   interrupted, then adopts the legacy files a declared column references, then deletes, in batches, every file past the
-  pending grace that no declared column references. Each in three steps: one transaction deletes the file's row and
-  records its object key in `fabrika_file_deletions` (the foreign key refuses the delete while a reference exists, and
-  a write that holds the row `FOR SHARE` makes it wait); then the object is deleted; then the record. A failed sweep
-  fails the run (`file_sweep_failed`), and the next run finishes it. The grace counts from the file's creation. On
-  Zerops the crontab runs the sweep when the contract declares a file kind; on Cloudflare the object runs it on the
-  Worker's minute tick.
+  pending grace that no declared column references. One transaction deletes the file's row and records its object key
+  in `fabrika_file_deletions` (the foreign key refuses the delete while a reference exists, and a write that holds the
+  row `FOR SHARE` makes it wait). The record is a tombstone: the object is deleted only once its key has been queued
+  longer than the runtime's retention window (none on Bun; 30 days on Cloudflare, the backups' retention, so a restored
+  backup's rows still find their files), by claiming the record first, then deleting the object. A restore cancels the
+  tombstones of the keys its rows reference. A failed sweep fails the run (`file_sweep_failed`), and the next run
+  finishes it. The grace counts from the file's creation. On
+  Zerops the crontab runs the sweep when the contract declares a file kind; on Cloudflare the object's alarm runs it.
 - **Legacy files.** `0008_files.sql` copies the held files of every file collection of framework 0.6 and earlier into
   `fabrika_files` with their ids, marked `legacy`; the old `fabrika_files_<collection>` tables stay. The sweep never
   deletes a legacy file, and drops the marker once a declared column references it. The application adopts the files
@@ -789,6 +812,11 @@ is `null`.
 - **The work runs after the lease, one transaction per row.** A failure or a crash leaves the row as the claim left it,
   due again after the backoff. Attempts count claims, so a job claims only what its run will reach. ADR-0060's lease
   keeps two runs of one job off one row.
+- **A claim that leased rows re-arms its job.** In its fenced transaction it replaces the job's `claim` wake in
+  `fabrika_wakes` with one at the next row it could claim (its `<due>`, at least 1 s ahead); a claim that filled its
+  `limit` makes the job due again at once, and a claim that found nothing writes no wake. The claims of one attempt
+  keep the earliest re-arm; its first replaces what an earlier run left. So a row whose backoff ends,
+  or a backlog larger than one claim, runs its job without waiting for the schedule (`claim-rearm.test.ts`).
 - `claim` is refused inside `ctx.transaction`, in a request and in a query. A row past `maxAttempts` stays in the
   table, not due, for the application to show or requeue (`packages/db`'s `queue.test.ts`).
 
@@ -1114,20 +1142,37 @@ A mutation (of an RPC, link or public procedure), a webhook or a cron job declar
 
 - `ctx.kick` is request-bound and accepts only the declared names. A kick carries no payload: the row it looks at is
   the only record of the work.
-- Kicks are deduplicated per job and sent after the output validated and the transaction committed. A thrown handler,
-  a refused output, a cancelled request and a failed commit kick nothing. A procedure without a transaction kicks once
-  its answer is built. A job's kicks are sent after its lease is released.
+- **Every kick is a durable wake.** It writes a `kick` row of `fabrika_wakes` in the site's transaction, before the
+  answer, so it commits and rolls back with the writes it follows. A kick without a time is due now by the database's
+  clock, the one leases are taken by. A thrown handler, a refused output, a cancelled
+  request and a failed commit kick nothing. A job's kick wakes are written after its attempt succeeded, before its
+  finish.
+- Kicks without a time are deduplicated per job and sent after the output validated and the transaction committed. A
+  procedure without a transaction kicks once its answer is built. A job's kicks are sent after its lease is released.
+- **`ctx.kick(job, { at })` is a kick for later.** It writes only the wake, due at `at`, and starts nothing now.
+  Wakes of one job due in the same second merge into one at the earliest. An `at` that is not a valid `Date` is
+  refused `invalid_argument`. The scheduler runs the job when the wake comes due: the object's alarm on Cloudflare, the
+  serving process's wake timer on Bun.
 - The serving process starts one run in the background (`waitUntil` where the runtime has one, detached otherwise)
   under the job's own key, never the request's. A kick waits for no lock, so it never holds a connection requests
   need: when it cannot take the lease at once it sets the shared flag `fabrika_job_kicks.pending`, and the run holding
   the lease runs the job once more after it succeeded. Every run clears the flag when it starts, so at most one run is
   active and one is pending whatever the number of kicks and instances; after a failed run the flag waits for the
   schedule.
-- The schedule stays the recovery path: a kicked run that dies before its commit leaves its rows to the next scheduled
-  run (`public-kick.test.ts`, `mutation-kick.test.ts`). On SIGTERM a Bun server first aborts the kicked runs in flight:
-  a stopped run frees its lease as failed with the code `stopped`, logs that its schedule runs it again, and reports
-  nothing to Operations. It then stops accepting requests and waits at most 10 s for the rest of its background work
-  before it closes the database.
+- **On Bun the serving process keeps one timer to the next wake** (`WakeTimer`). A write of this process lowers it in
+  the write's transaction, by the delay to the next wake on the database's clock; the 60 s job check refreshes it,
+  which is when it finds a wake another container wrote. When it fires it reaps crashed holders and kicks each job with
+  a due wake through the kick path, so the lease admits one run across containers. A wake already due when the timer
+  is armed is looked at 1 s later, because its own kick is under way. A wake the timer was lowered for but a refresh
+  cannot see yet (its write still committing) is looked for again after 1, 2, 4 and 8 s, within 15 s. A stopping
+  server waits for the refresh under way before it drains the timer's kicks. On both runtimes the scheduler skips a
+  job whose lease holder owns every due wake: that run consumes them. The crontab still runs the schedule.
+- The wake is the recovery path: a kicked run that dies before its finish leaves its wake, and the scheduler runs the
+  job again once the lease expired; the schedule stays a second one. A run that fails past its inline retries consumes
+  the wakes it owned, so a failing job does not loop (`public-kick.test.ts`, `mutation-kick.test.ts`). On SIGTERM a Bun
+  server first aborts the kicked runs in flight: a stopped run frees its lease as failed with the code `stopped`, logs
+  that its schedule runs it again, and reports nothing to Operations. It then stops accepting requests and waits at
+  most 10 s for the rest of its background work before it closes the database.
 - The build and the checker refuse `kicks` on a query, a read-only site and an export, a name that is no cron job of
   the contract, and a cycle of kick edges between jobs. The artifact records the edges as
   `declared[<site>].kicks`, absent unless declared. The approval shows a new edge; from a public procedure it widens
@@ -1251,7 +1296,7 @@ approval lists every origin (`egress.test.ts`).
 
 `egress: 'public'` on a cron job, instead of a list, reaches every public host over HTTPS or HTTP on the scheme's
 default port: a job that calls the websites its operators name, such as a crawler or an auditor
-([ADR-0070](../decisions/0070-a-cron-job-may-reach-the-public-web.md)). A procedure, a mutation and a webhook name their
+([ADR-0071](../decisions/0071-a-cron-job-may-reach-the-public-web.md)). A procedure, a mutation and a webhook name their
 origins; the build and the types refuse `'public'` there. The artifact records `'public'` under the job's site, and the
 format stays 2. The guard (`implement/egress.ts`, over `publicEgressRefusal` in `@fabrika/auth-core`) refuses before
 each hop, with `capability_refused: refused_egress`:
@@ -1321,9 +1366,9 @@ export const contract = app.contract((c) => ({
 }))
 ```
 
-On Cloudflare the Worker's one `* * * * *` cron trigger forwards the minute tick to the environment's Durable Object,
-which starts every job due in that UTC minute and the jobs' check, each past its answer; the leases live in the
-object's SQLite. On Zerops each crontab entry runs `fabrika job run <name>` in the application's container, and the
+On Cloudflare the environment's Durable Object runs each job on its alarm when the job's wake is due, and the Worker's
+cron trigger forwards the repair tick that rebuilds the wakes ([On Cloudflare](#on-cloudflare)); the leases and the
+wakes live in the object's SQLite. On Zerops each crontab entry runs `fabrika job run <name>` in the application's container, and the
 lease lives in the application's Postgres schema. The command boots
 the application exactly as `serveContract` does — the framework variables leave the
 process first — and runs one job:
@@ -1334,7 +1379,7 @@ process first — and runs one job:
    A run clears the `fabrika_job_kicks.pending` flag a kick leaves when it starts,
    and runs once more when the flag is set again by the time it succeeded.
 2. Each attempt holds one generation of the lease and a deadline (its `limits.timeoutMs`,
-   15 minutes by default, at most 24 hours). Every insert, update and delete of the data layer checks the
+   14 minutes by default, at most 24 hours). Every insert, update and delete of the data layer checks the
    generation and the deadline inside its own transaction, before the write and again
    just before `COMMIT`, with `statement_timeout` set to the time left. When an attempt
    ends, the runner cancels the statements it still has running. An attempt that timed
@@ -1345,6 +1390,14 @@ process first — and runs one job:
    capabilities are refused) and fails. A failed attempt is retried up to `retries`
    times with jittered exponential backoff, under a new generation each time, except an
    attempt that failed with `mail_failed` the one retry rule refuses and a `stopped` one.
+   On Cloudflare a run the alarm started retries durably instead of sleeping: a failed
+   attempt keeps the wakes its run owned, moves them to now + backoff and counts the attempt,
+   and the alarm starts the next attempt; past `retries` the cron wake advances to the
+   next fire. One segment covers the attempt's IAM exchange, its handler and its finish:
+   the exchange and the handler end 30 s (at most a tenth) before it, so a slow exchange
+   leaves the handler only what remains, and no finish starts past it (the lease expires
+   and its reap runs the job again). An exchange the attempt stopped waiting for counts in
+   a maintenance drain, and the next attempt asks IAM afresh. A kicked run retries inline.
 4. Failures are fixed codes: `timeout`, `lease_lost`, `handler_failed`,
    `query_refused` and `capability_refused` (a framework refusal, chosen by class as a
    request's 5xx is, with the refusal's catalog reason in the result, the log line and the
@@ -1559,38 +1612,40 @@ environment, ADR-0050). The data layer runs in the application's process: it sto
 conspicuous, and the checker's refusal of casts, `any` and suppression comments
 (`packages/check/src/rules/types.ts:25`, `:29`, `:57`) keeps the types honest. The lift column names the declarations
 that step past a row; each is a closer-review line of the approval diff when it is new or its reach grows
-(`diff.ts:251`). A `sql` statement is bounded only by the runtime role, so where `sql` lifts a row, the approver's
-review is what holds. "None" means no declaration lifts it; a migration is then the only way, and its database code is
+(`diff.ts:251`). Within the application's own tables a `sql` statement is bounded only by the text rules and, on
+Postgres, the runtime role, so where `sql` lifts a row, the approver's review is what holds. "None" means no declaration lifts it; a migration is then the only way, and its database code is
 reviewed too (`diff.ts:292`).
 
-| Guarantee                                                                                                                                                                                                                                                                                                                     | Enforced by                  | Lifted by                                                                                             | Enforcing code or approval line                                                                                                                                                                                          |
-| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| A handler runs only for a caller the proxy admitted for its endpoint, and reads who it is from the verified token                                                                                                                                                                                                             | proxy, runtime               | none (an anonymous kind is declared as one: review)                                                   | `packages/auth-core/src/requirement.ts:14`; `packages/auth/src/iam.ts:136`; `packages/app/src/implement/dispatch.ts:372`; "Endpoint … becomes public" `diff.ts:361`                                                      |
-| An `app` endpoint runs only for a global grant of its action                                                                                                                                                                                                                                                                  | proxy                        | none                                                                                                  | `packages/auth-core/src/requirement.ts:21`; "the endpoint's audience (app-wide: a global grant)" `diff.ts:651`                                                                                                           |
-| The handles reach rows only through the capability: every statement they build carries its scope predicate as the top-level conjunct                                                                                                                                                                                          | types, runtime               | `unscoped: { <table>: 'read' \| 'write' }`; `sql: 'read' \| 'write'` (a statement without a fragment) | `packages/db/src/guard.ts:110`; `packages/db/src/orm.ts:575`; "declares table `…` unscoped" `diff.ts:255`; "declares raw SQL" `diff.ts:253`                                                                              |
-| A handle's operation needs the table's action for it (insert, update, delete; a column's own write action)                                                                                                                                                                                                                    | types, runtime               | `sql: 'write'` (a statement without a fragment); `unscoped: { <table>: 'write' }`                     | `packages/db/src/orm-types.ts:236`; `packages/db/src/store.ts:161`                                                                                                                                                       |
-| A handle reads a column with its own read action only under exactly that action                                                                                                                                                                                                                                               | types, runtime, review       | `sql: 'read' \| 'write'` (an `unscoped` read still omits it)                                          | `packages/db/src/orm-types.ts:219`; `packages/db/src/policy.ts:596`; "Column … loses its read policy" `diff.ts:745`                                                                                                      |
-| The key, the containment chain, `version` and `createdBy` are stamped, never written by a handle                                                                                                                                                                                                                              | types, runtime               | `unscoped: { <table>: 'write' }` takes the chain; `sql: 'write'` (a statement without a fragment)     | `packages/db/src/store.ts:665`; `packages/db/src/policy.ts:825`                                                                                                                                                          |
-| Every action is the vocabulary's, and a containment column is a foreign key to its container                                                                                                                                                                                                                                  | types, boot, checker         | none                                                                                                  | `packages/db/src/policy.ts:368`, `:448`, `:1099`; the checker reads `src/db/tables.ts` through the same parse                                                                                                            |
-| A handle writes an application table only from an `app` endpoint, by the table's action for the operation                                                                                                                                                                                                                     | types, runtime               | `sql: 'write'` (a statement without a fragment); `unscoped: { <table>: 'write' }`                     | `packages/db/src/orm-types.ts:428`; `packages/db/src/store.ts:538`                                                                                                                                                       |
-| `ctx.db.app` lists a dimension or child table under its read action or an `appRead` one, with the columns of that action, and only counts it (no aggregate) under an `appCount` one                                                                                                                                           | types, runtime, review       | `actions.appRead`, `actions.appCount` in the policy; `unscoped`, `sql` read it too                    | `packages/db/src/orm-types.ts:405`; `packages/db/src/store.ts:461`; `packages/db/src/orm.ts:427`; "is read app-wide with" `diff.ts:765`; "is counted app-wide with" `diff.ts:766`                                        |
-| A scoped site reads an application table only under its read action, and never writes it                                                                                                                                                                                                                                      | types, runtime               | `unscoped: { <table>: 'read' \| 'write' }`; `sql: 'read' \| 'write'` (a statement without a fragment) | `packages/db/src/orm-types.ts:457`; `packages/db/src/store.ts:565`                                                                                                                                                       |
-| A reference table is read-only: no handle and no statement writes it                                                                                                                                                                                                                                                          | types, runtime               | none (a migration)                                                                                    | `packages/db/src/orm-types.ts:492`; `packages/db/src/orm.ts:136`, `:625`                                                                                                                                                 |
-| A query and an export write nothing                                                                                                                                                                                                                                                                                           | types, runtime               | none                                                                                                  | `packages/db/src/database.ts:200`                                                                                                                                                                                        |
-| A job writes only inside its fenced transaction, while it holds its lease                                                                                                                                                                                                                                                     | types, runtime               | none                                                                                                  | `packages/db/src/orm-types.ts:236`; `packages/db/src/store.ts:647`                                                                                                                                                       |
-| `ctx.sql` exists only on a site that declares it, in that mode                                                                                                                                                                                                                                                                | types, boot, runtime, review | `sql: 'read' \| 'write'`                                                                              | `packages/app/src/contract/context.ts:128`; `packages/app/src/implement/invocation.ts:313`; "declares raw SQL (`…`)" `diff.ts:253`                                                                                       |
-| Every `ctx.sql` value is a bound parameter; one statement, the application's schema, no DDL, no `fabrika_*` or `pg_*` name                                                                                                                                                                                                    | runtime, checker             | none (a migration)                                                                                    | `packages/db/src/sql.ts:192`, `:591`; the runtime role (ADR-0017); raw SQL outside `ctx.sql` `packages/check/src/rules/runtime.ts:303`                                                                                   |
-| A scope fragment carries its action into its query block: on the relation the block's `UPDATE`, `DELETE` or `ON CONFLICT … DO UPDATE` writes (same table, same alias) it needs that operation's action (an UPDATE also a column's own write action every assigned column declares); elsewhere an action the handles read with | types, runtime               | `sql: 'write'` (a statement without a fragment)                                                       | `packages/db/src/orm-types.ts:591`; `packages/db/src/sql.ts:433`; `packages/db/src/store.ts:348`, `:401`                                                                                                                 |
-| A site's declared reach is the approved contract's, not the handler module's                                                                                                                                                                                                                                                  | boot                         | none                                                                                                  | `packages/app/src/implement/invocation.ts:137`                                                                                                                                                                           |
-| Another application is called only through a declared import                                                                                                                                                                                                                                                                  | types, runtime, review       | `connect: ['<import>']`                                                                               | `packages/app/src/contract/context.ts:310`; "calls connector `…`" `diff.ts:258`                                                                                                                                          |
-| A share link is issued only from a site that declares its mount                                                                                                                                                                                                                                                               | types, runtime, review       | `issues: '<link mount>'`                                                                              | `packages/app/src/contract/context.ts:297`; "issues share links of mount `…`" `diff.ts:262`                                                                                                                              |
-| An endpoint sends no e-mail; a job sends only through the transport it declares, under a key prefixed per installation and application environment                                                                                                                                                                            | types, boot, runtime, review | `mailer: 'installation' \| 'own'` (a cron job)                                                        | `packages/app/src/contract/context.ts:414`; `packages/app/src/jobs/runner.ts:747`, `mail.ts:37`; "sends e-mail through the installation's mail transport" `diff.ts:278`                                                  |
-| A public procedure's handler holds only its declared actions, on application tables: an insert reads nothing back, a read needs the table's read action, an update or a remove needs an id a verified signed token carries; no role holds a public action                                                                     | types, runtime, review       | none                                                                                                  | `packages/db/src/orm-types.ts` (`PublicApplicationRows`); `packages/app/src/implement/dispatch.ts` (`#publicInvocation`); `packages/auth/src/app-schema.ts` (an app schema whose role grants a public action is refused) |
-| A public procedure's file body is challenged, budgeted, and admitted only from an origin its row admits; its files are scanned before any byte is served                                                                                                                                                                      | build, proxy, runtime        | none                                                                                                  | `packages/app/src/contract/build.ts`; `packages/proxy-core/src/authorize.ts` (`admitFormOrigin`); `packages/app/src/files/kinds.ts`                                                                                      |
-| A stored file is served, opened or written into a column only through a reference the request holds and may read, of the column's kind, and served only when `live`                                                                                                                                                           | types, runtime               | `sql: 'write'` (a statement can write any file id)                                                    | `packages/db/src/file-columns.ts`; `packages/app/src/files/kinds.ts`                                                                                                                                                     |
-| A site's `fetch` reaches only the origins it declares, a job's `'public'` only public hosts                                                                                                                                                                                                                                   | runtime, checker, review     | `egress: ['https://…']`, `egress: 'public'` (a cron job)                                              | `packages/app/src/implement/egress.ts`; `packages/check/src/check.ts` (`cross-app-fetch`)                                                                                                                                |
-| The framework's binding of the data layer and its test kit stay out of application code                                                                                                                                                                                                                                       | checker, runtime             | none                                                                                                  | `packages/check/src/rules/modules.ts:58`, `:108`; `packages/check/src/rules/framework.ts:149`; `packages/db/src/production.ts:22`                                                                                        |
-| The application reads no environment variable and no other application's origin itself                                                                                                                                                                                                                                        | checker                      | none                                                                                                  | `packages/check/src/rules/runtime.ts:326`, `:131`                                                                                                                                                                        |
+| Guarantee                                                                                                                                                                                                                                                                                     | Enforced by                  | Lifted by                                                                                             | Enforcing code or approval line                                                                                                                                                                                          |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| A handler runs only for a caller the proxy admitted for its endpoint, and reads who it is from the verified token                                                                                                                                                                             | proxy, runtime               | none (an anonymous kind is declared as one: review)                                                   | `packages/auth-core/src/requirement.ts:14`; `packages/auth/src/iam.ts:136`; `packages/app/src/implement/dispatch.ts:372`; "Endpoint … becomes public" `diff.ts:361`                                                      |
+| An `app` endpoint runs only for a global grant of its action                                                                                                                                                                                                                                  | proxy                        | none                                                                                                  | `packages/auth-core/src/requirement.ts:21`; "the endpoint's audience (app-wide: a global grant)" `diff.ts:651`                                                                                                           |
+| The handles reach rows only through the capability: every statement they build carries its scope predicate as the top-level conjunct                                                                                                                                                          | types, runtime               | `unscoped: { <table>: 'read' \| 'write' }`; `sql: 'read' \| 'write'` (a statement without a fragment) | `packages/db/src/guard.ts:110`; `packages/db/src/orm.ts:575`; "declares table `…` unscoped" `diff.ts:255`; "declares raw SQL" `diff.ts:253`                                                                              |
+| A handle's operation needs the table's action for it (insert, update, delete; a column's own write action)                                                                                                                                                                                    | types, runtime               | `sql: 'write'` (a statement without a fragment); `unscoped: { <table>: 'write' }`                     | `packages/db/src/orm-types.ts:236`; `packages/db/src/store.ts:161`                                                                                                                                                       |
+| A handle reads a column with its own read action only under exactly that action                                                                                                                                                                                                               | types, runtime, review       | `sql: 'read' \| 'write'` (an `unscoped` read still omits it)                                          | `packages/db/src/orm-types.ts:219`; `packages/db/src/policy.ts:596`; "Column … loses its read policy" `diff.ts:745`                                                                                                      |
+| The key, the containment chain, `version` and `createdBy` are stamped, never written by a handle                                                                                                                                                                                              | types, runtime               | `unscoped: { <table>: 'write' }` takes the chain; `sql: 'write'` (a statement without a fragment)     | `packages/db/src/store.ts:665`; `packages/db/src/policy.ts:825`                                                                                                                                                          |
+| Every action is the vocabulary's, and a containment column is a foreign key to its container                                                                                                                                                                                                  | types, boot, checker         | none                                                                                                  | `packages/db/src/policy.ts:368`, `:448`, `:1099`; the checker reads `src/db/tables.ts` through the same parse                                                                                                            |
+| A handle writes an application table only from an `app` endpoint, by the table's action for the operation                                                                                                                                                                                     | types, runtime               | `sql: 'write'` (a statement without a fragment); `unscoped: { <table>: 'write' }`                     | `packages/db/src/orm-types.ts:428`; `packages/db/src/store.ts:538`                                                                                                                                                       |
+| `ctx.db.app` lists a dimension or child table under its read action or an `appRead` one, with the columns of that action, and only counts it (no aggregate) under an `appCount` one                                                                                                           | types, runtime, review       | `actions.appRead`, `actions.appCount` in the policy; `unscoped`, `sql` read it too                    | `packages/db/src/orm-types.ts:405`; `packages/db/src/store.ts:461`; `packages/db/src/orm.ts:427`; "is read app-wide with" `diff.ts:765`; "is counted app-wide with" `diff.ts:766`                                        |
+| A scoped site reads an application table only under its read action, and never writes it                                                                                                                                                                                                      | types, runtime               | `unscoped: { <table>: 'read' \| 'write' }`; `sql: 'read' \| 'write'` (a statement without a fragment) | `packages/db/src/orm-types.ts:457`; `packages/db/src/store.ts:565`                                                                                                                                                       |
+| A reference table is read-only: no handle writes it, and no fragment scopes a write of it                                                                                                                                                                                                     | types, runtime               | `sql: 'write'` (a statement without a fragment)                                                       | `packages/db/src/orm-types.ts:492`; `packages/db/src/orm.ts:136`, `:625`                                                                                                                                                 |
+| A query and an export write nothing                                                                                                                                                                                                                                                           | types, runtime               | none                                                                                                  | `packages/db/src/database.ts:200`                                                                                                                                                                                        |
+| A job writes only inside its fenced transaction, while it holds its lease                                                                                                                                                                                                                     | types, runtime               | none                                                                                                  | `packages/db/src/orm-types.ts:236`; `packages/db/src/store.ts:647`                                                                                                                                                       |
+| `ctx.sql` exists only on a site that declares it, in that mode                                                                                                                                                                                                                                | types, boot, runtime, review | `sql: 'read' \| 'write'`                                                                              | `packages/app/src/contract/context.ts:128`; `packages/app/src/implement/invocation.ts:313`; "declares raw SQL (`…`)" `diff.ts:253`                                                                                       |
+| Every `ctx.sql` value is a bound parameter; one statement, read or DML, no `fabrika_*` name; on Postgres the application's schema and no `pg_*` name, on SQLite no `sqlite_*` name and no written parameter                                                                                   | runtime, checker             | none (a migration)                                                                                    | `packages/db/src/sql.ts:244`; the runtime role on Postgres (ADR-0017); on SQLite workerd's authorizer (ADR-0065); raw SQL outside `ctx.sql` `packages/check/src/rules/runtime.ts:303`                                    |
+| A `'read'` statement writes nothing, also inside a writing invocation                                                                                                                                                                                                                         | runtime                      | none                                                                                                  | Postgres: the `READ ONLY` transaction of a query, `packages/db/src/sql.ts:267`; SQLite: `packages/db/src/database.ts:235`, `packages/db/src/sqlite.ts:144`                                                               |
+| An application migration on Cloudflare names no `fabrika_*` table but `REFERENCES fabrika_files`                                                                                                                                                                                              | checker                      | none                                                                                                  | `packages/check/src/rules/migrations.ts:84`                                                                                                                                                                              |
+| A scope fragment carries its action for the use it states: `use: 'update'` or `'delete'` needs that operation's action (`'update'` also a column's own write action) on a `'write'` site; `'read'` an action the handles read with. Where it stands in the statement is reviewed, not checked | types, runtime, review       | `sql: 'write'` (a statement without a fragment)                                                       | `packages/db/src/orm-types.ts:715`; `packages/db/src/store.ts:521`, `:560`; `packages/db/src/sql.ts:573`                                                                                                                 |
+| A site's declared reach is the approved contract's, not the handler module's                                                                                                                                                                                                                  | boot                         | none                                                                                                  | `packages/app/src/implement/invocation.ts:137`                                                                                                                                                                           |
+| Another application is called only through a declared import                                                                                                                                                                                                                                  | types, runtime, review       | `connect: ['<import>']`                                                                               | `packages/app/src/contract/context.ts:310`; "calls connector `…`" `diff.ts:258`                                                                                                                                          |
+| A share link is issued only from a site that declares its mount                                                                                                                                                                                                                               | types, runtime, review       | `issues: '<link mount>'`                                                                              | `packages/app/src/contract/context.ts:297`; "issues share links of mount `…`" `diff.ts:262`                                                                                                                              |
+| An endpoint sends no e-mail; a job sends only through the transport it declares, under a key prefixed per installation and application environment                                                                                                                                            | types, boot, runtime, review | `mailer: 'installation' \| 'own'` (a cron job)                                                        | `packages/app/src/contract/context.ts:414`; `packages/app/src/jobs/runner.ts:747`, `mail.ts:37`; "sends e-mail through the installation's mail transport" `diff.ts:278`                                                  |
+| A public procedure's handler holds only its declared actions, on application tables: an insert reads nothing back, a read needs the table's read action, an update or a remove needs an id a verified signed token carries; no role holds a public action                                     | types, runtime, review       | none                                                                                                  | `packages/db/src/orm-types.ts` (`PublicApplicationRows`); `packages/app/src/implement/dispatch.ts` (`#publicInvocation`); `packages/auth/src/app-schema.ts` (an app schema whose role grants a public action is refused) |
+| A public procedure's file body is challenged, budgeted, and admitted only from an origin its row admits; its files are scanned before any byte is served                                                                                                                                      | build, proxy, runtime        | none                                                                                                  | `packages/app/src/contract/build.ts`; `packages/proxy-core/src/authorize.ts` (`admitFormOrigin`); `packages/app/src/files/kinds.ts`                                                                                      |
+| A stored file is served, opened or written into a column only through a reference the request holds and may read, of the column's kind, and served only when `live`                                                                                                                           | types, runtime               | `sql: 'write'` (a statement can write any file id)                                                    | `packages/db/src/file-columns.ts`; `packages/app/src/files/kinds.ts`                                                                                                                                                     |
+| A site's `fetch` reaches only the origins it declares, a job's `'public'` only public hosts                                                                                                                                                                                                   | runtime, checker, review     | `egress: ['https://…']`, `egress: 'public'` (a cron job)                                              | `packages/app/src/implement/egress.ts`; `packages/check/src/check.ts` (`cross-app-fetch`)                                                                                                                                |
+| The framework's binding of the data layer and its test kit stay out of application code                                                                                                                                                                                                       | checker, runtime             | none                                                                                                  | `packages/check/src/rules/modules.ts:58`, `:108`; `packages/check/src/rules/framework.ts:149`; `packages/db/src/production.ts:22`                                                                                        |
+| The application reads no environment variable and no other application's origin itself                                                                                                                                                                                                        | checker                      | none                                                                                                  | `packages/check/src/rules/runtime.ts:326`, `:131`                                                                                                                                                                        |
 
 The generated isolation and endpoint access tests (`fabrika db test-scaffold`) catch a handler that breaks one of
 these rows in a way the layers above cannot see, such as a cache keyed by nothing; they are not an enforcer.
@@ -1607,7 +1662,7 @@ request behavior:
   Minimal structural types for the execution context, cron, and queues remain in
   this entrypoint. `createContractWorker()` is the Worker of a contract application: its
   `fetch` forwards every request to the environment's Durable Object, `FabrikaApplication`,
-  with the proxy secret, and its `scheduled` forwards the minute tick. The object boots the
+  with the proxy secret, and its `scheduled` forwards the repair tick. The object boots the
   application with its environment, verifying tokens through the `IAM` binding and serving
   the SPA from `ASSETS` ([On Cloudflare](#on-cloudflare)).
 - `@fabrika/app/bun` exports `createBunHandler()`. It binds one `FetchService` to

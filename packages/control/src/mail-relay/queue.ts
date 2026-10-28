@@ -1,7 +1,8 @@
 import type { EmailSender } from '@fabrika/email'
+import { hashPlatformKey, installationMailKey } from '@fabrika/email/platform'
 import type { JobQueue } from '@fabrika/platform'
 import { z } from 'zod'
-import type { MailMessageRepository, MailMessageRow } from '../db'
+import { hasMailContent, type MailMessageRepository, type MailMessageRow } from '../db'
 
 /** Whether a sender is an installation service (`installation:<service>`), not an application environment. */
 export function isInstallationSender(sender: string): boolean {
@@ -20,16 +21,22 @@ export function decodeMailDispatchMessage(payload: unknown): MailDispatchMessage
 	return dispatchMessageSchema.parse(payload)
 }
 
-/** The relay's process half. Only the Bun process has one; the Worker answers the relay's row with 404. */
+/** The relay's process half: the Bun process's, or the Worker's when it binds its queue and content bucket; without one the row answers 404. */
 export interface MailRelay {
 	readonly queue: JobQueue<MailDispatchMessage>
-	/**
-	 * Control's `FABRIKA_IAM_RPC_KEY`, which IAM's mail key is derived from (`installationMailKey`). `null` where IAM does
-	 * not send through the relay (Cloudflare: IAM holds the installation's transport itself), so no key authenticates IAM.
-	 */
-	readonly installationSecret: string | null
+	/** The hash IAM's mail key authenticates by (`iamMailKeyHash`), derived once with the relay; `null`: no key is IAM's. */
+	readonly iamKeyHash: Promise<string> | null
 	/** The installation's sender over Control's own `FABRIKA_EMAIL_*`; `null` when Control has no transport. */
 	readonly sender: EmailSender | null
+}
+
+/**
+ * The hash of IAM's mail key, `installationMailKey` of the secret it derives from, as IAM reads that secret:
+ * `FABRIKA_IAM_RPC_KEY` in the Bun process, the trimmed provisioning key on the Worker, whose IAM holds no RPC key.
+ * `null` for a blank or absent secret, so no key authenticates as IAM. The relay keeps the hash, never the secret.
+ */
+export function iamMailKeyHash(secret: string | undefined): Promise<string> | null {
+	return secret === undefined || secret.trim() === '' ? null : installationMailKey(secret).then(hashPlatformKey)
 }
 
 export function enqueueMailDispatch(queue: JobQueue<MailDispatchMessage>, messageId: string, delaySeconds = 0): Promise<void> {
@@ -61,7 +68,7 @@ export function requeueableMailStates(sender: EmailSender | null): readonly ('fa
 
 /** Whether `requeueMailMessage` would requeue the message now. */
 export function mayRequeueMail(row: MailMessageRow, sender: EmailSender | null): boolean {
-	return row.content !== null && requeueableMailStates(sender).some((state) => state === row.state)
+	return hasMailContent(row) && requeueableMailStates(sender).some((state) => state === row.state)
 }
 
 export interface MailRequeueDeps {

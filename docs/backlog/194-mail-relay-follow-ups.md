@@ -85,12 +85,6 @@ blocked-by: []
 
 ### Upgrade, keys and senders
 
-21. **IAM has no fallback while the relay refuses.** IAM moves to the relay with the `zerops.yaml` that gives it
-    `FABRIKA_CONTROL_URL`, and IAM deploys before Control. Until Control runs the new release, or while Control has no
-    transport (`mail_not_configured`), an administrator's enrollment, reset or invitation answers 502 and a self-service
-    reset sends nothing. IAM still holds its provider credential: send directly on a definite refusal (404 from an older
-    Control, `mail_not_configured`), never on an unknown outcome; or have `platform upgrade` refuse when `iam` has
-    `FABRIKA_EMAIL_PROVIDER` and `control` does not.
 22. **A retry after Control loses its transport answers `mail_not_configured`** instead of the recorded message id: the
     refusal in the relay's handler runs before the idempotency lookup.
 23. **`installation:iam` means "anyone who holds `FABRIKA_IAM_RPC_KEY`".** Operations holds that key too, so it can
@@ -109,6 +103,10 @@ blocked-by: []
     `runMaintenance`'s mail summary; an application-scoped `mail.content.read` that reads `withheld`; an environment
     grant that reads another environment (403); a non-ASCII key; an error body under 200; an acceptance with an empty
     `messageId`. `mail.test.ts`'s `<script>` check is trivial.
+21. **The sprint's success condition was not run end to end.** Its run log records no local-stack run of a 0.7
+    application's job whose mail the relay holds under a `hold` rule, an operator releases in the console and the
+    `directory` provider receives, beside a 0.5 application on the same Control that still sends with the direct
+    credential. The pieces have unit and integration tests; the whole path has none.
 
 ## Approach / acceptance
 

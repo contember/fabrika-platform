@@ -1,5 +1,14 @@
 import { schemaFromContract } from '@fabrika/app/contract'
-import { type AppActionDef, type AppEnvironment, type ContractArtifact, contractDigest, parseManagedEnvironment } from '@fabrika/auth-core'
+import {
+	type AppActionDef,
+	type AppEnvironment,
+	type ApplicationObjects,
+	type ContractArtifact,
+	contractDigest,
+	OPS_REHEARSAL_OBJECT,
+	parseApplicationObjects,
+	parseManagedEnvironment,
+} from '@fabrika/auth-core'
 import type { SchemaReconcileInput } from '@fabrika/provider-contract'
 import { contractProxyTable, isApplicationEntry, OPS_ROW_MAX_BYTES, opsProxyRow, parseProxyManifestJson } from '@fabrika/proxy-core/manifest'
 import { afterAll, afterEach, beforeEach, describe, expect, test } from 'bun:test'
@@ -9,16 +18,9 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { D1Database, DurableObject, type GeneratedConfig, KVNamespace, Queue, R2Bucket, ServiceReference, Worker } from 'oblaka-iac'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
-import type {
-	CloudflareAppConfig,
-	CloudflareAppConfigInput,
-	CloudflareCollaborators,
-	CommandResult,
-	CommandRunner,
-	CommandSpec,
-	ProvisionInput,
-} from '..'
+import type { CloudflareAppConfig, CloudflareCollaborators, CommandResult, CommandRunner, CommandSpec, ProvisionInput } from '..'
 import {
+	composeLocalApplication,
 	createCloudflareDeployer,
 	createCloudflareProxyWorker,
 	defaultCloudflareCollaborators,
@@ -26,10 +28,15 @@ import {
 	generateWranglerConfigs,
 	IAM_APPLICATION_ENTRYPOINT,
 	iamServiceReference,
+	isCloudflareAppConfig,
+	type StagedLocalAssets,
+	stageLocalAssets,
 } from '..'
+import { deployOrder } from '../deploy-order'
 import type { PlatformIamTarget } from '../provider'
 import { CLOUDFLARE_PROXY_WORKER_DIR, PROXY_MANIFEST_DEFINE, proxyManifestJson } from '../proxy'
 import type { RunnerOutcomeFile } from '../runner-protocol'
+import { PUBLISHED_PRERELEASES } from './published-prereleases'
 
 /** Link the application's CLI where the checkout's `bun install` would, under `dir`. */
 const withApplicationCli = async (dir: string): Promise<string> => {
@@ -66,7 +73,7 @@ interface Recorded {
 	readonly applicationVars: Array<Record<string, unknown> | undefined>
 }
 
-const config = (overrides: Partial<CloudflareAppConfigInput> = {}): CloudflareAppConfig =>
+const config = (overrides: Partial<Pick<CloudflareAppConfig, 'id' | 'schema' | 'pipeline' | 'resources'>> = {}): CloudflareAppConfig =>
 	defineApp({
 		id: 'demo',
 		resources: () => new Worker({ dir: '.', ...PRIVATE, name: 'demo', compatibility_flags: [], bindings: {}, main: ENTRY }),
@@ -189,12 +196,18 @@ const deploy = (
 		readonly contractDigest?: string
 		/** The application's framework release Control names with `contract`: `0.9.0` by default, `null` for none. */
 		readonly framework?: string | null
+		/** `false` deploys the config as it is, without the schema the helper adds to a contract application's. */
+		readonly declaresSchema?: false
 		readonly installationApps?: readonly AppEnvironment[]
 		readonly platformIam?: PlatformIamTarget
+		/** The pointer Control records; none by default. */
+		readonly applicationObjects?: ApplicationObjects
 	} = {},
 ) => {
 	const contract = options.contract ?? (options.platformResources === 'allow' || options.checkoutContract !== undefined ? undefined : notesArtifact)
-	const served = contract === undefined || appConfig.schema !== undefined ? appConfig : { ...appConfig, schema: schemaFromContract(contract) }
+	const served = contract === undefined || appConfig.schema !== undefined || options.declaresSchema === false
+		? appConfig
+		: { ...appConfig, schema: schemaFromContract(contract) }
 	return createCloudflareDeployer({
 		accountId: 'acc-1',
 		apiToken: 'tok-1',
@@ -237,6 +250,7 @@ const deploy = (
 				},
 			}),
 		...(options.installationApps === undefined ? {} : { installationApps: options.installationApps }),
+		...(options.applicationObjects === undefined ? {} : { applicationObjects: options.applicationObjects }),
 		dryRun: options.dryRun ?? false,
 		signal: options.signal ?? new AbortController().signal,
 		log: (line) => {
@@ -352,9 +366,10 @@ describe('Cloudflare provider', () => {
 		expect(rec.commands[0]?.cwd).toBe(`${REPO}/app/worker`)
 		expect(rec.commands[1]?.cwd).toBe(`${REPO}/app`)
 		expect(rec.commands[2]?.cwd).toBe(`${REPO}/app/worker`)
-		// The proxy is deployed from the platform's own copy of this package, the application from the checkout.
-		expect(rec.commands[3]?.cwd).toBe(CLOUDFLARE_PROXY_WORKER_DIR)
-		expect(rec.commands[4]?.cwd).toBe(`${REPO}/app/worker`)
+		// The application is deployed first, from the checkout; the proxy that binds it after, from the platform's own copy of
+		// this package; the application's secrets are swept last.
+		expect(rec.commands[3]?.cwd).toBe(`${REPO}/app/worker`)
+		expect(rec.commands[4]?.cwd).toBe(CLOUDFLARE_PROXY_WORKER_DIR)
 		expect(rec.commands[5]?.cwd).toBe(`${REPO}/app/worker`)
 		expect(rec.commands[6]?.cwd).toBe(`${REPO}/app/worker`)
 	})
@@ -567,6 +582,29 @@ describe('Cloudflare provider', () => {
 		})
 		await expect(deploy(rec, platformBucket)).rejects.toThrow(
 			'R2 bucket `vozka-run-logs` becomes `stage-vozka-run-logs`, which would take over the Fabrika platform resource `vozka-run-logs`',
+		)
+
+		// Control's mail relay queue and content bucket carry every relayed message; a binding of either would read them all.
+		const mailQueue = config({
+			resources: () =>
+				new Worker({ dir: '.', ...PRIVATE, name: 'demo', compatibility_flags: [], bindings: { MAIL: new Queue({ name: 'fabrika-mail' }) }, main: ENTRY }),
+		})
+		await expect(deploy(rec, mailQueue)).rejects.toThrow(
+			'queue `fabrika-mail` becomes `stage-fabrika-mail`, which would take over the Fabrika platform resource `fabrika-mail`',
+		)
+		const mailContent = config({
+			resources: () =>
+				new Worker({
+					dir: '.',
+					...PRIVATE,
+					name: 'demo',
+					compatibility_flags: [],
+					bindings: { MAIL: new R2Bucket({ name: 'fabrika-mail-content' }) },
+					main: ENTRY,
+				}),
+		})
+		await expect(deploy(rec, mailContent)).rejects.toThrow(
+			'R2 bucket `fabrika-mail-content` becomes `stage-fabrika-mail-content`, which would take over the Fabrika platform resource `fabrika-mail-content`',
 		)
 		expect(rec.provisions).toHaveLength(0)
 	})
@@ -955,8 +993,8 @@ describe('Cloudflare provider', () => {
 		await deploy(rec, assetsApp(), { checkoutDir })
 		expect(rec.commands.map((command) => [command.command, ...command.args, command.cwd === CLOUDFLARE_PROXY_WORKER_DIR])).toEqual([
 			[join(checkoutDir, 'node_modules', '.bin', 'fabrika'), ...APP_BUILD.slice(1), false],
-			['wrangler', 'deploy', true],
 			['wrangler', 'deploy', false],
+			['wrangler', 'deploy', true],
 			[...SECRET_LIST, false],
 		])
 	})
@@ -1111,12 +1149,22 @@ describe('a contract application on Cloudflare (ADR-0048)', () => {
 			'the IAM schema says `contract: true`, but the checkout has no `fabrika.contract.ts`',
 		)
 		const loose = { scopes: [], actions: [], roles: {} }
-		for (const schema of [loose, undefined]) {
-			await expect(deploy(rec, config(schema === undefined ? {} : { schema }), { checkoutContract: notesArtifact })).rejects.toThrow(
-				'this deployment serves a contract, so its IAM schema is `schemaFromContract(artifact)`',
-			)
-		}
+		await expect(deploy(rec, config({ schema: loose }), { checkoutContract: notesArtifact })).rejects.toThrow(
+			'this deployment serves a contract, so its IAM schema is `schemaFromContract(artifact)`',
+		)
 		expect(rec.provisions).toHaveLength(0)
+	})
+
+	test('only an application omits the schema: Control writes it; a platform deploy registers its own, so it must declare one', async () => {
+		await expect(deploy(rec, config(), { platformResources: 'allow', checkoutContract: notesArtifact })).rejects.toThrow(
+			'this deployment serves a contract, so its IAM schema is `schemaFromContract(artifact)`',
+		)
+		expect(rec.provisions).toHaveLength(0)
+		expect(rec.reconciled).toEqual([])
+		const application = await deploy(rec, config(), { contract: notesArtifact, declaresSchema: false })
+		expect(application.status).toBe('succeeded')
+		expect(application.steps.map((step) => step.id)).not.toContain('reconcile-schema')
+		expect(rec.outcomes).toEqual([])
 	})
 
 	test('the contract digest is the platform’s: an authored one is refused, a different one sent with the run too', async () => {
@@ -1237,7 +1285,7 @@ describe('a contract application on Cloudflare (ADR-0048)', () => {
 		const widened: ContractArtifact = { ...notesArtifact, endpoints: notesArtifact.endpoints.slice(0, 1) }
 		type Vars = NonNullable<Parameters<Bindable['configureBinding']>[0]['config']['vars']>
 		const rewriting = (vars: (current: Vars) => Vars): Bindable => ({
-			configureBinding: ({ config }) => ({ ...config, vars: vars({ ...(config.vars ?? {}) }) }),
+			configureBinding: ({ config }) => ({ ...config, vars: vars({ ...config.vars }) }),
 		})
 		const cases = [
 			rewriting((vars) => ({ ...vars, FABRIKA_CONTRACT_DIGEST: contractDigest(widened) })),
@@ -1516,10 +1564,9 @@ describe('a full contract application on Cloudflare (ADR-0065)', () => {
 		expect(files[0]?.mode).toBe(0o600)
 		// Gone with its directory, although the deploy failed.
 		expect(existsSync(dirname(files[0]?.path ?? '/'))).toBe(false)
-		// The proxy is deployed first and gets none of them.
+		// The application is deployed first, so its failure stops the deploy before the proxy.
 		const deploys = rec.commands.filter((command) => command.args[0] === 'deploy')
 		expect(deploys.map((command) => command.cwd === CLOUDFLARE_PROXY_WORKER_DIR ? command.args : command.args.slice(0, 2))).toEqual([
-			['deploy'],
 			['deploy', '--secrets-file'],
 		])
 		const printed = [...rec.logs, ...(result.steps.map((step) => step.error ?? ''))].join('\n')
@@ -1543,8 +1590,8 @@ describe('a full contract application on Cloudflare (ADR-0065)', () => {
 		const commands = rec.commands.map((command) => [command.command, ...command.args.filter((arg) => !arg.startsWith('/'))])
 		expect(commands).toEqual([
 			APP_BUILD,
-			['wrangler', 'deploy'],
 			['wrangler', 'deploy', '--secrets-file'],
+			['wrangler', 'deploy'],
 			SECRET_LIST,
 			['wrangler', 'secret', 'delete', 'FABRIKA_JOB_RETIRED_KEY'],
 			['wrangler', 'secret', 'delete', 'FABRIKA_TOKEN_KEYS'],
@@ -1558,18 +1605,34 @@ describe('a full contract application on Cloudflare (ADR-0065)', () => {
 		expect(rec.commands.some(isSecretList)).toBe(false)
 	})
 
+	test('a failed secret sweep fails the run only after the application and its proxy are both deployed', async () => {
+		// Swept before the proxy, a failure would leave the new application behind the old proxy's endpoint table.
+		const result = await deploy(rec, config(), {
+			commandResult: (spec) => isSecretList(spec) ? { exitCode: 1, stdout: '', stderr: 'listing refused' } : succeeded(spec),
+		})
+		expect(result.status).toBe('failed')
+		expect(stepError(result, 'deploy-worker')).toBe('wrangler secret list failed (exit 1): listing refused')
+		expect(rec.commands.map((command) => [command.command, ...command.args])).toEqual([
+			APP_BUILD,
+			['wrangler', 'deploy'],
+			['wrangler', 'deploy'],
+			SECRET_LIST,
+		])
+		expect(rec.commands.map((command) => command.cwd === CLOUDFLARE_PROXY_WORKER_DIR)).toEqual([false, false, true, false])
+	})
+
 	test('an unreadable secret list fails the deploy rather than leaving a stale credential', async () => {
 		const result = await deploy(rec, config(), { commandResult: (spec) => ({ exitCode: 0, stdout: isSecretList(spec) ? 'Not JSON' : '', stderr: '' }) })
 		expect(stepError(result, 'deploy-worker')).toBe('wrangler secret list printed no readable list of secrets')
 	})
 
-	test('the application Worker binds its object under a fixed migration, the files bucket, and the minute tick of a job or a file kind', async () => {
+	test('the application Worker binds its object under a fixed migration, the files bucket, and the repair tick of a job or a file kind', async () => {
 		await deploy(rec, config(), { contract: notesArtifact })
 		const application = await generatedConfig('stage-demo')
 		expect(application.durable_objects).toEqual({ bindings: [{ name: 'FABRIKA_APPLICATION', class_name: 'FabrikaApplication' }] })
 		expect(application.migrations).toEqual([{ tag: 'v0001', new_sqlite_classes: ['FabrikaApplication'] }])
 		expect(application.r2_buckets).toEqual([{ binding: 'FABRIKA_FILES', bucket_name: 'stage-demo-files' }])
-		expect(application.triggers).toEqual({ crons: ['* * * * *'] })
+		expect(application.triggers).toEqual({ crons: [STAGE_DEMO_REPAIR_TICK] })
 		const { resources } = await generateWranglerConfigs(provisioned().root, 'stage')
 		expect(resources.filter((resource) => resource.kind === 'r2_bucket').map((resource) => resource.remote)).toEqual(['stage-demo-files'])
 	})
@@ -1601,7 +1664,7 @@ describe('a full contract application on Cloudflare (ADR-0065)', () => {
 		await deploy(rec, config(), { contract: fileKind })
 		expect(rec.provisions).toHaveLength(2)
 		rec.provisions.shift()
-		expect((await generatedConfig('stage-demo')).triggers).toEqual({ crons: ['* * * * *'] })
+		expect((await generatedConfig('stage-demo')).triggers).toEqual({ crons: [STAGE_DEMO_REPAIR_TICK] })
 	})
 
 	test("an application authors none of its object's binding, migration, bucket or cron triggers", async () => {
@@ -1643,15 +1706,127 @@ describe('a full contract application on Cloudflare (ADR-0065)', () => {
 		expect(rec.provisions).toEqual([])
 	})
 
-	test('a local deploy refuses a scanning file kind and raw SQL from the contract it reads, as Control does', async () => {
+	test('a local deploy refuses a scanning file kind from the contract it reads, as Control does', async () => {
 		const scanning: ContractArtifact = { ...notesArtifact, fileKinds: { scans: { types: ['application/pdf'], maxBytes: 1024, scan: true } } }
 		await expect(deploy(rec, config({ schema: CONTRACT_SCHEMA }), { checkoutContract: scanning })).rejects.toThrow(
 			'cloudflare: file kind `scans` scans its uploads (`scan: true`), and no scanner runs on Cloudflare yet',
 		)
+		expect(rec.provisions).toEqual([])
+	})
+
+	test('raw SQL deploys from the release that runs it on SQLite (ADR-0062), and a local deploy runs as this release', async () => {
 		const raw: ContractArtifact = { ...notesArtifact, declared: { 'api.notes.report': { sql: 'write', unscoped: {}, connect: [], issues: null } } }
-		await expect(deploy(rec, config({ schema: CONTRACT_SCHEMA }), { checkoutContract: raw })).rejects.toThrow(
-			'cloudflare: `api.notes.report` declares raw SQL (`ctx.sql`)',
+		for (const framework of ['0.8.2', null, ...PUBLISHED_PRERELEASES]) {
+			await expect(deploy(rec, config(), { contract: raw, framework })).rejects.toThrow(
+				'cloudflare: `api.notes.report` declares raw SQL (`ctx.sql`), which an application on Cloudflare runs from framework 0.9.0-dev.5 on',
+			)
+		}
+		expect(rec.provisions).toEqual([])
+		for (const framework of ['0.9.0-dev.5', '0.9.0']) {
+			expect((await deploy(rec, config(), { contract: raw, framework })).status).toBe('succeeded')
+		}
+		expect((await deploy(rec, config({ schema: CONTRACT_SCHEMA }), { checkoutContract: raw })).status).toBe('succeeded')
+	})
+
+	test('a job longer than one 14-minute segment is refused before anything runs, only at a release that caps segments (ADR-0062)', async () => {
+		const purge = notesArtifact.jobs['purgeDeleted']
+		if (purge === undefined) throw new Error('the fixture has a job')
+		const lasting = (timeoutMs: number): ContractArtifact => ({ ...notesArtifact, jobs: { purgeDeleted: { ...purge, timeoutMs } } })
+		await expect(deploy(rec, config(), { contract: lasting(14 * 60_000 + 1), framework: '0.9.0' })).rejects.toThrow(
+			'cloudflare: job `purgeDeleted` runs up to 840001 ms, and a job segment on Cloudflare runs at most 840000 ms',
 		)
+		expect(rec.provisions).toEqual([])
+		expect((await deploy(rec, config(), { contract: lasting(14 * 60_000), framework: '0.9.0' })).status).toBe('succeeded')
+		for (const framework of ['0.8.2', null, ...PUBLISHED_PRERELEASES]) {
+			expect((await deploy(rec, config(), { contract: lasting(14 * 60_000 + 1), framework })).status).toBe('succeeded')
+		}
+	})
+
+	test('a local deploy runs the contract in the object, so it refuses a job longer than one segment too', async () => {
+		const purge = notesArtifact.jobs['purgeDeleted']
+		if (purge === undefined) throw new Error('the fixture has a job')
+		const lasting: ContractArtifact = { ...notesArtifact, jobs: { purgeDeleted: { ...purge, timeoutMs: 14 * 60_000 + 1 } } }
+		await expect(deploy(rec, config({ schema: CONTRACT_SCHEMA }), { checkoutContract: lasting })).rejects.toThrow(
+			'cloudflare: job `purgeDeleted` runs up to 840001 ms, and a job segment on Cloudflare runs at most 840000 ms',
+		)
+		expect(rec.provisions).toEqual([])
+	})
+})
+
+/** The hourly repair tick of `stage-demo` (servesAlarms): its minute is derived from the environment's name and never moves. */
+const STAGE_DEMO_REPAIR_TICK = '18 * * * *'
+
+describe('the cron trigger of a release that serves alarms (servesAlarms)', () => {
+	/** The cron triggers of the application Worker the last deploy provisioned, generated for `env`. */
+	const crons = async (env: string): Promise<unknown> => {
+		const { configs } = await generateWranglerConfigs(provisioned().root, env)
+		const found = configs.find((generated) => generated.config.name === `${env}-demo`)
+		if (found === undefined) throw new Error(`oblaka generated no config for \`${env}-demo\``)
+		return found.config.triggers
+	}
+
+	test("a release that serves alarms gets the hourly repair tick at its environment's minute, the same on every deploy", async () => {
+		await deploy(rec, config(), { contract: notesArtifact, framework: '0.9.0' })
+		expect(await crons('stage')).toEqual({ crons: [STAGE_DEMO_REPAIR_TICK] })
+		rec.provisions.shift()
+		await deploy(rec, config(), { contract: notesArtifact, framework: '0.9.3' })
+		expect(await crons('stage')).toEqual({ crons: [STAGE_DEMO_REPAIR_TICK] })
+		rec.provisions.shift()
+		// Another environment of the same application ticks at its own minute.
+		await deploy(rec, config(), { contract: notesArtifact, framework: '0.9.0', env: 'prod', domain: 'prod.example.com' })
+		expect(await crons('prod')).toEqual({ crons: ['56 * * * *'] })
+	})
+
+	test('a published 0.9.0 prerelease keeps the minute tick: its object runs jobs only from it and has no alarm (ADR-0062)', async () => {
+		for (const framework of PUBLISHED_PRERELEASES) {
+			await deploy(rec, config(), { contract: notesArtifact, framework })
+			expect(await crons('stage')).toEqual({ crons: ['* * * * *'] })
+			rec.provisions.shift()
+		}
+	})
+
+	test('a contract with neither a job nor a file kind still gets an empty cron list', async () => {
+		const quiet: ContractArtifact = {
+			...notesArtifact,
+			jobs: {},
+			files: {},
+			endpoints: notesArtifact.endpoints.filter((row) => row.source.kind !== 'files'),
+		}
+		await deploy(rec, config(), { contract: quiet, framework: '0.9.0' })
+		expect(await crons('stage')).toEqual({ crons: [] })
+	})
+
+	test('a local deploy names no release and keeps the minute tick; an older pin keeps its stateless Worker and no trigger (ADR-0062)', async () => {
+		await deploy(rec, config({ schema: CONTRACT_SCHEMA }), { checkoutContract: notesArtifact })
+		expect(await crons('stage')).toEqual({ crons: ['* * * * *'] })
+		rec.provisions.shift()
+		for (const framework of ['0.8.2', null]) {
+			await deploy(rec, config(), { contract: notesArtifact, framework })
+			expect(await crons('stage')).toBeUndefined()
+			rec.provisions.shift()
+		}
+	})
+
+	test('a generated config carries only the cron the platform wrote for its release', async () => {
+		const binds = (bindings: Record<string, Bindable>): CloudflareAppConfig =>
+			config({ resources: () => new Worker({ dir: '.', ...PRIVATE, name: 'demo', compatibility_flags: [], bindings, main: ENTRY }) })
+		for (const written of [['* * * * *'], ['19 * * * *'], [STAGE_DEMO_REPAIR_TICK, '* * * * *'], []]) {
+			await expect(deploy(rec, binds({ X: emitting({ triggers: { crons: written } }) }), { contract: notesArtifact, framework: '0.9.0' })).rejects
+				.toThrow('sets `triggers` the platform did not write')
+		}
+		const local = config({
+			schema: CONTRACT_SCHEMA,
+			resources: () =>
+				new Worker({
+					dir: '.',
+					...PRIVATE,
+					name: 'demo',
+					compatibility_flags: [],
+					bindings: { X: emitting({ triggers: { crons: [STAGE_DEMO_REPAIR_TICK] } }) },
+					main: ENTRY,
+				}),
+		})
+		await expect(deploy(rec, local, { checkoutContract: notesArtifact })).rejects.toThrow('sets `triggers` the platform did not write')
 		expect(rec.provisions).toEqual([])
 	})
 })
@@ -1809,9 +1984,9 @@ describe('the ops channel of a gated release (servesOps, ADR-0069)', () => {
 		if (entry === undefined || !isApplicationEntry(entry)) throw new Error('the proxy Worker serves no application entry')
 		return entry.endpoints
 	}
-	const OBJECT_VARIABLES = { FABRIKA_APPLICATION_OBJECT: 'application', FABRIKA_APPLICATION_OBJECTS: 'application' }
+	const OBJECT_VARIABLES = { FABRIKA_APPLICATION_OBJECT: 'application', FABRIKA_APPLICATION_OBJECTS: 'application,rehearsal' }
 
-	test('a gated release gets the ops row in its proxy and both object variables in its Worker', async () => {
+	test('a gated release gets the ops row in its proxy and both object variables, which list the rehearsal object, in its Worker', async () => {
 		const result = await deploy(rec, config(), { contract: notesArtifact, framework: '0.9.0' })
 		expect(result.status).toBe('succeeded')
 		expect(proxiedEndpoints()).toEqual(contractProxyTable(notesArtifact, undefined, { ops: true }).endpoints)
@@ -1819,8 +1994,27 @@ describe('the ops channel of a gated release (servesOps, ADR-0069)', () => {
 		expect(opsProxyRow().admission?.maxBytes).toBe(OPS_ROW_MAX_BYTES)
 		const application = await generatedConfig('stage-demo')
 		expect(application.vars).toMatchObject(OBJECT_VARIABLES)
+		// What the application object reads them with: ordinary traffic reaches `application`, the ops channel `rehearsal` too.
+		expect(parseApplicationObjects(OBJECT_VARIABLES.FABRIKA_APPLICATION_OBJECT, OBJECT_VARIABLES.FABRIKA_APPLICATION_OBJECTS)).toEqual({
+			object: 'application',
+			objects: ['application', OPS_REHEARSAL_OBJECT],
+		})
 		// Plain variables: a deploy without them removes them, as every var of a Worker version.
 		expect(rec.commands.some((command) => command.args.includes('FABRIKA_APPLICATION_OBJECT'))).toBe(false)
+	})
+
+	test('the object variables are the pointer Control hands, so a deploy keeps one a side restore moved (ADR-0070 §9)', async () => {
+		const clone = 'application-01a17337-44ab-7010-bf80-0ec571cf4049'
+		const applicationObjects = { object: clone, objects: ['application', 'rehearsal', clone] }
+		expect((await deploy(rec, config(), { contract: notesArtifact, framework: '0.9.0', applicationObjects })).status).toBe('succeeded')
+		expect((await generatedConfig('stage-demo')).vars).toMatchObject({
+			FABRIKA_APPLICATION_OBJECT: clone,
+			FABRIKA_APPLICATION_OBJECTS: `application,rehearsal,${clone}`,
+		})
+		rec.provisions.shift()
+		// An older pin's Worker reads neither, whatever Control records.
+		await deploy(rec, config(), { contract: notesArtifact, framework: '0.8.1', applicationObjects })
+		expect((await generatedConfig('stage-demo')).vars ?? {}).not.toHaveProperty('FABRIKA_APPLICATION_OBJECT')
 	})
 
 	test('a redeploy of an older pin, or from a Control that names no release, writes neither the row nor the variables (ADR-0062)', async () => {
@@ -1855,6 +2049,197 @@ describe('the ops channel of a gated release (servesOps, ADR-0069)', () => {
 		await expect(redirected('0.9.0')).rejects.toThrow('sets `FABRIKA_APPLICATION_OBJECT` to a value Fabrika did not write')
 		await expect(redirected('0.8.1')).rejects.toThrow('sets `FABRIKA_APPLICATION_OBJECT` to a value Fabrika did not write')
 		expect(rec.provisions).toEqual([])
+	})
+})
+
+describe('the application Worker `defineApp` builds for a config without `resources`', () => {
+	/** The application Worker the example application spelled out before `defineApp` built it. */
+	const spelledOut = (): CloudflareAppConfig =>
+		defineApp({
+			id: 'demo',
+			resources: () =>
+				new Worker({
+					dir: '.',
+					name: 'demo',
+					main: './fabrika/entry.generated.ts',
+					compatibility_flags: ['nodejs_compat_v2'],
+					compatibility_date: '2025-10-01',
+					observability: { enabled: true },
+					workers_dev: false,
+					preview_urls: false,
+					routes: [],
+					bindings: { IAM: iamServiceReference() },
+				}),
+		})
+
+	const generated = async (): Promise<ReadonlyArray<GeneratedConfig['config']>> =>
+		(await generateWranglerConfigs(provisioned().root, 'stage')).configs.map((item) => item.config)
+
+	test('plans and generates what the spelled-out Worker did, at a gated release and at an older pin, without a schema', async () => {
+		for (const framework of ['0.9.0', '0.8.2']) {
+			const minimal = await deploy(rec, defineApp({ id: 'demo' }), { contract: notesArtifact, framework, declaresSchema: false })
+			expect(minimal.status).toBe('succeeded')
+			const configs = await generated()
+			rec.provisions.shift()
+			const spelled = await deploy(rec, spelledOut(), { contract: notesArtifact, framework, declaresSchema: false })
+			expect(spelled.steps.map((step) => step.id)).toEqual(minimal.steps.map((step) => step.id))
+			expect(await generated()).toEqual(configs)
+			rec.provisions.shift()
+			// Control writes the approved contract's schema itself; the runner reports none.
+			expect(minimal.steps.map((step) => step.id)).not.toContain('reconcile-schema')
+			expect(configs.find((config) => config.name === 'stage-demo')).toMatchObject({
+				main: './fabrika/entry.generated.ts',
+				routes: [],
+				workers_dev: false,
+				preview_urls: false,
+				services: expect.arrayContaining([
+					{ binding: 'IAM', service: 'stage-propustka-worker', entrypoint: IAM_APPLICATION_ENTRYPOINT, props: { app: 'demo@stage' } },
+				]),
+			})
+		}
+		expect(rec.outcomes).toEqual([])
+	})
+
+	test('a local deploy of a contract application without a schema reports none', async () => {
+		const result = await deploy(rec, defineApp({ id: 'demo' }), { checkoutContract: notesArtifact })
+		expect(result.status).toBe('succeeded')
+		expect(result.steps.map((step) => step.id)).toEqual(['provision-resources', 'deploy-worker'])
+		expect(rec.outcomes).toEqual([])
+	})
+
+	test('passes the runner check, takes the author’s bindings and compatibility beside the platform’s IAM, and yields to `resources`', () => {
+		const minimal = defineApp({ id: 'demo' })
+		expect(isCloudflareAppConfig(minimal)).toBe(true)
+		expect(minimal.resources({ env: 'stage' }).options).toMatchObject({ name: 'demo', dir: '.', compatibility_date: '2025-10-01' })
+		const own = new KVNamespace({ name: 'demo-cache' })
+		const tuned = defineApp({
+			id: 'demo',
+			worker: {
+				bindings: { CACHE: own, IAM: new ServiceReference('elsewhere') },
+				compatibility_date: '2026-01-01',
+				compatibility_flags: ['nodejs_compat'],
+			},
+		}).resources({ env: 'stage' }).options
+		expect(tuned).toMatchObject({ compatibility_date: '2026-01-01', compatibility_flags: ['nodejs_compat'] })
+		expect(tuned.bindings['CACHE']).toBe(own)
+		expect(tuned.bindings['IAM']).toEqual(iamServiceReference())
+		const authored = appWorker()
+		expect(defineApp({ id: 'demo', resources: () => authored }).resources({ env: 'stage' })).toBe(authored)
+	})
+
+	test('the local composition is the deploy’s: its proxy, object, files bucket and repair tick', async () => {
+		await deploy(rec, defineApp({ id: 'demo' }), { contract: notesArtifact, framework: '0.9.0', declaresSchema: false, domain: null })
+		const deployed = (await generated()).find((config) => config.name === 'stage-demo')
+		const root = await localCheckout()
+		const assets = await stageLocalAssets(notesArtifact, root)
+		const local = composeLocalApplication({ config: defineApp({ id: 'demo' }), contract: notesArtifact, assets, iamOrigin: LOCAL_IAM, env: 'stage' })
+		expect(local.options.name).toBe('demo-proxy')
+		const configs = (await generateWranglerConfigs(local, 'stage')).configs.map((item) => item.config)
+		const application = configs.find((config) => config.name === 'stage-demo')
+		for (const key of ['main', 'durable_objects', 'migrations', 'r2_buckets', 'triggers', 'services', 'assets'] as const) {
+			expect(application?.[key]).toEqual(deployed?.[key])
+		}
+		expect(application?.triggers).toEqual({ crons: [STAGE_DEMO_REPAIR_TICK] })
+		expect(application?.vars).toMatchObject({
+			FABRIKA_IAM_ISSUER: LOCAL_IAM,
+			FABRIKA_IAM_APP_ID: 'demo@stage',
+			FABRIKA_CONTRACT_DIGEST: contractDigest(notesArtifact),
+		})
+		expect(application?.vars?.['FABRIKA_PROXY_SECRET']).toMatch(/^[0-9a-f]{64}$/)
+		const loose = config({ schema: { scopes: [], actions: [], roles: {} } })
+		expect(() => composeLocalApplication({ config: loose, contract: notesArtifact, assets, iamOrigin: LOCAL_IAM, env: 'stage' })).toThrow(
+			'this deployment serves a contract',
+		)
+	})
+
+	test("a local run stages the SPA mounts with the deploy's code, and its ASSETS directory holds no ignored file", async () => {
+		const root = await localCheckout(async (dir) => {
+			const app = join(dir, 'dist', 'app')
+			await writeFile(join(app, '.assetsignore'), 'private.txt\n')
+			await writeFile(join(app, 'private.txt'), 'private')
+			await writeFile(join(app, 'app.js'), 'export {}')
+			await mkdir(join(app, '.git'))
+			await writeFile(join(app, '.git', 'config'), '[core]')
+		})
+		const assets = await stageLocalAssets(notesArtifact, root)
+		expect(assets).toEqual({
+			mounts: [{ name: 'shared', prefix: '/s', dir: 'dist/share' }, { name: 'spa', prefix: '/', dir: 'dist/app' }],
+			files: 3,
+		})
+		const local = composeLocalApplication({ config: defineApp({ id: 'demo' }), contract: notesArtifact, assets, iamOrigin: LOCAL_IAM, env: 'local' })
+		const application = (await generateWranglerConfigs(local, 'local')).configs.find((item) => item.config.name === 'local-demo')?.config
+		expect(application?.assets).toEqual({ directory: 'fabrika/assets', binding: 'ASSETS', run_worker_first: true })
+		// The generated config sits in the application root (the Worker's `dir: '.'`), so this is the directory Workers
+		// Assets serves the request paths from.
+		const served = join(root, application?.assets?.directory ?? 'none')
+		expect(await readFile(join(served, 'index.html'), 'utf8')).toBe('<!doctype html><title>dist/app</title>')
+		expect(await readFile(join(served, 'app.js'), 'utf8')).toBe('export {}')
+		expect(await readFile(join(served, 's', 'index.html'), 'utf8')).toBe('<!doctype html><title>dist/share</title>')
+		for (const path of ['private.txt', '.assetsignore', '.git']) {
+			expect({ path, served: existsSync(join(served, path)) }).toEqual({ path, served: false })
+		}
+	})
+
+	test("a local run of a contract with SPA mounts refuses to compose without what was staged, or with another contract's", async () => {
+		const compose = (assets?: StagedLocalAssets) => () =>
+			composeLocalApplication({
+				config: defineApp({ id: 'demo' }),
+				contract: notesArtifact,
+				...(assets === undefined ? {} : { assets }),
+				iamOrigin: LOCAL_IAM,
+				env: 'local',
+			})
+		expect(compose()).toThrow('composeLocalApplication: the contract serves SPA files; stage them first')
+		expect(compose({ mounts: [{ name: 'spa', prefix: '/', dir: 'dist/app' }], files: 1 })).toThrow('stage them first')
+		const authored = defineApp({ id: 'demo', resources: () => assetsApp().resources({ env: 'local' }) })
+		expect(() =>
+			composeLocalApplication({ config: authored, contract: notesArtifact, assets: { mounts: [], files: 0 }, iamOrigin: LOCAL_IAM, env: 'local' })
+		)
+			.toThrow('declares its own `assets`, so nothing is staged')
+	})
+})
+
+const LOCAL_IAM = 'http://localhost:18191'
+
+/** An application root whose SPA build wrote `notesArtifact`'s two mount directories, then `extra`. */
+const localCheckout = async (extra: (root: string) => Promise<void> = async () => {}): Promise<string> => {
+	const root = await mkdtemp(join(tmpdir(), 'fabrika-local-'))
+	fixtures.push(root)
+	await withBuiltMounts(root)
+	await extra(root)
+	return root
+}
+
+describe('the order of the first deploy (deployOrder)', () => {
+	test('deploys the application Worker before the proxy that binds it as `APP`, although oblaka lists the proxy first', async () => {
+		// wrangler refuses a service binding to a script with no deployment yet (code 10145), so on a first deploy the
+		// proxy deployed first fails: "Could not resolve service binding 'APP'. Target script 'stage-demo' has no deployments".
+		const result = await deploy(rec, config())
+		expect(result.status).toBe('succeeded')
+		const { configs } = await generateWranglerConfigs(provisioned().root, 'stage')
+		expect(configs.map((generated) => generated.config.name)).toEqual(['stage-demo-proxy', 'stage-demo'])
+		expect(configs[0]?.config.services).toContainEqual(expect.objectContaining({ binding: 'APP', service: 'stage-demo' }))
+		const deploys = rec.commands.filter((command) => command.args[0] === 'deploy')
+		expect(deploys.map((command) => command.cwd === CLOUDFLARE_PROXY_WORKER_DIR ? 'proxy' : 'application')).toEqual(['application', 'proxy'])
+	})
+
+	const generated = (name: string, ...services: string[]): GeneratedConfig => ({
+		path: `${name}/wrangler.json`,
+		config: { name, services: services.map((service) => ({ binding: service.toUpperCase(), service })) },
+		content: '',
+	})
+	const names = (configs: readonly GeneratedConfig[]): Array<string | undefined> => configs.map((item) => item.config.name)
+
+	test('puts every Worker another generated config binds before its binder, and keeps oblaka order otherwise', () => {
+		const configs = [generated('proxy', 'app', 'stage-iam'), generated('other'), generated('app', 'worker'), generated('worker')]
+		expect(names(deployOrder(configs))).toEqual(['worker', 'app', 'proxy', 'other'])
+		expect(names(deployOrder([generated('a'), generated('b', 'b')]))).toEqual(['a', 'b'])
+	})
+
+	test('refuses a cycle of service bindings among the generated configs, naming it', () => {
+		expect(() => deployOrder([generated('a', 'b'), generated('b', 'c'), generated('c', 'a')])).toThrow(
+			'deploy-worker: the generated Workers bind each other as services in a cycle (`a` → `b` → `c` → `a`), so none can deploy first',
+		)
 	})
 })
 
@@ -1982,6 +2367,52 @@ describe("the SPA mounts' files on Workers Assets", () => {
 		expect(result.status).toBe('succeeded')
 		for (const name of ['_headers', '_redirects', '.assetsignore']) expect(existsSync(join(checkoutDir, 'fabrika', 'assets', name))).toBe(false)
 		expect(existsSync(join(checkoutDir, 'fabrika', 'assets', 'index.html'))).toBe(true)
+	})
+
+	test("what a mount's .assetsignore excludes, and version control metadata at any depth, never reach the staged directory", async () => {
+		const checkoutDir = await builtCheckout(async (root) => {
+			const app = join(root, 'dist', 'app')
+			// A negation cannot bring version control metadata back.
+			await writeFile(join(app, '.assetsignore'), '.env\nprivate.txt\nsecret/\n!.git\n')
+			await writeFile(join(app, '.env'), 'TOKEN=app')
+			await writeFile(join(app, 'private.txt'), 'private')
+			await mkdir(join(app, 'secret'))
+			await writeFile(join(app, 'secret', 'key.txt'), 'key')
+			await mkdir(join(app, '.git'))
+			await writeFile(join(app, '.git', 'config'), '[remote "origin"]\n\turl = https://x-access-token:token@example.com/repo')
+			await mkdir(join(app, 'assets', '.svn'), { recursive: true })
+			await writeFile(join(app, 'assets', '.svn', 'entries'), 'svn')
+			await writeFile(join(app, 'assets', 'private.txt'), 'nested private')
+			await writeFile(join(app, 'kept.txt'), 'kept')
+			// Each mount reads its own ignore file: the link mount's `.env` is excluded by its rules, a `.git` file too.
+			const share = join(root, 'dist', 'share')
+			await writeFile(join(share, '.assetsignore'), '/.env\n')
+			await writeFile(join(share, '.env'), 'TOKEN=share')
+			await writeFile(join(share, '.git'), 'gitdir: ../../.git/worktrees/share')
+			await writeFile(join(share, '.assetsignore-not'), 'served')
+		})
+		const result = await deploy(rec, config(), { checkoutDir })
+		expect(result.status).toBe('succeeded')
+		const staged = join(checkoutDir, 'fabrika', 'assets')
+		for (
+			const path of [
+				'.env',
+				'private.txt',
+				'secret',
+				'.git',
+				'.assetsignore',
+				join('assets', '.svn'),
+				join('assets', 'private.txt'),
+				join('s', '.env'),
+				join('s', '.git'),
+				join('s', '.assetsignore'),
+			]
+		) {
+			expect({ path, staged: existsSync(join(staged, path)) }).toEqual({ path, staged: false })
+		}
+		expect(await readFile(join(staged, 'kept.txt'), 'utf8')).toBe('kept')
+		expect(await readFile(join(staged, 's', '.assetsignore-not'), 'utf8')).toBe('served')
+		expect(rec.logs).toContain('  staged 4 SPA files into fabrika/assets: /s from dist/share, / from dist/app')
 	})
 
 	test('a dry run names what it would stage and writes nothing', async () => {

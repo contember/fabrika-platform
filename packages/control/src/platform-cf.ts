@@ -32,7 +32,7 @@ import { SourceFailure } from './github/source/failure'
 import { GitHubMetadataClient, type GitHubMetadataFetch } from './github/source/metadata'
 import type { SourceRepository } from './github/source/types'
 import { controlPublicOrigin } from './iam'
-import type { MailDispatchMessage, MailRelay } from './mail-relay/queue'
+import { iamMailKeyHash, type MailDispatchMessage, type MailRelay } from './mail-relay/queue'
 import { CLOUDFLARE_MAIL_REMEDY, type InstallationMail, readInstallationMail } from './mail-transport'
 import type { ControlJobMessage } from './run-lifecycle'
 
@@ -53,10 +53,13 @@ export interface WorkerBindings
 	/** Deploy job queue — producer here, consumer via the Worker's `queue()` handler. */
 	DEPLOY_QUEUE: Queue<ControlJobMessage>
 	/**
-	 * The mail relay's dispatch queue (`vozka-mail`), producer and consumer here. Without it the Worker runs no relay and
-	 * a deploy hands applications the installation's `FABRIKA_EMAIL_*`, as before the relay ran on Cloudflare.
+	 * The mail relay's dispatch queue (`fabrika-mail`), producer and consumer here. Without it, or without `MAIL_CONTENT`,
+	 * the Worker runs no relay and a deploy hands applications the installation's `FABRIKA_EMAIL_*`, as before the relay
+	 * ran on Cloudflare.
 	 */
 	MAIL_QUEUE?: Queue<MailDispatchMessage>
+	/** The relay's message content (`fabrika-mail-content`), one object per message: a D1 row holds at most 2,000,000 bytes. */
+	MAIL_CONTENT?: R2Bucket
 	/** The single Cloudflare account selected by this composition root. */
 	CLOUDFLARE_ACCOUNT_ID?: string
 	/** Account-wide deploy credential. It is passed to the runner only for a live deploy. */
@@ -84,13 +87,23 @@ function installationSender(bindings: WorkerBindings): EmailSender | null {
 	return sender
 }
 
+/** The relay per bindings object, built once, so IAM's key hash is derived once. */
+const relayByBindings = new WeakMap<WorkerBindings, MailRelay | undefined>()
+
 /**
- * The relay, when the Worker has its dispatch queue. IAM on Cloudflare holds the installation's transport itself and
- * never sends through the relay, so no key authenticates as IAM (`installationSecret: null`).
+ * The relay, when the Worker has its dispatch queue and content bucket. IAM's Worker sends through it under a key derived
+ * from the provisioning key, the secret both Workers hold; without that key no caller authenticates as IAM.
  */
 function mailRelay(bindings: WorkerBindings): MailRelay | undefined {
-	if (bindings.MAIL_QUEUE === undefined) return undefined
-	return { queue: cfJobQueue(bindings.MAIL_QUEUE), installationSecret: null, sender: installationSender(bindings) }
+	if (relayByBindings.has(bindings)) return relayByBindings.get(bindings)
+	const relay = bindings.MAIL_QUEUE === undefined || bindings.MAIL_CONTENT === undefined ? undefined : {
+		queue: cfJobQueue(bindings.MAIL_QUEUE),
+		// Trimmed, as IAM's Worker trims it before deriving its key.
+		iamKeyHash: iamMailKeyHash(bindings.FABRIKA_IAM_PROVISIONING_KEY?.trim()),
+		sender: installationSender(bindings),
+	}
+	relayByBindings.set(bindings, relay)
+	return relay
 }
 
 const relayOf = (bindings: WorkerBindings): { MAIL_RELAY?: MailRelay } => {
@@ -114,7 +127,10 @@ export function controlEnv(bindings: WorkerBindings, waitUntil: Env['WAIT_UNTIL'
 		// is where a `local` claim from a publicly-served console fails. Same shape as IAM's `buildOidc`.
 		ENVIRONMENT: readEnvironmentName(bindings.ENVIRONMENT, controlPublicOrigin(bindings)),
 		DB: bindings.DB,
-		REPOSITORIES: createControlRepositories(bindings.DB),
+		REPOSITORIES: createControlRepositories(
+			bindings.DB,
+			bindings.MAIL_CONTENT === undefined ? {} : { mailContent: r2BlobStore(bindings.MAIL_CONTENT) },
+		),
 		ASSETS: bindings.ASSETS,
 		RUN_LOGS: r2BlobStore(bindings.RUN_LOGS),
 		DEPLOY_QUEUE: cfJobQueue(bindings.DEPLOY_QUEUE),

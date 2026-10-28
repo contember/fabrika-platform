@@ -27,6 +27,7 @@ if (!hasPostgres) {
 
 const schema = `files_${Bun.randomUUIDv7().replaceAll('-', '').slice(-12)}`
 const GRACE = 3_600_000
+const RETENTION = 30 * 24 * 3_600_000
 
 /** A collection table as an earlier `fileTableSql` created it, with one live, one removed and one pending file. */
 const legacyCollection = `
@@ -213,6 +214,11 @@ function idOf(reference: unknown): string {
 	return id
 }
 
+/** The keys due under a window of `windowMs` now, as the sweep asks for them. */
+function due(limit: number, windowMs: number): Promise<readonly string[]> {
+	return files.dueDeletions(limit, new Date(Date.now() - windowMs))
+}
+
 const describeDb = hasPostgres ? describe : describe.skip
 
 describeDb('a file column', () => {
@@ -326,10 +332,105 @@ describeDb('the sweep', () => {
 		expect(await files.remove(idOf(fresh), GRACE)).toBeNull()
 		expect(await files.remove('01900000-0000-7000-8000-000000000001', GRACE)).toBeNull()
 		expect(await files.remove(idOf(orphan), GRACE)).toBe(`attachments/${idOf(orphan)}`)
-		expect(await files.unfinishedDeletions(10)).toEqual([`attachments/${idOf(orphan)}`])
+		expect(await due(10, 0)).toEqual([`attachments/${idOf(orphan)}`])
 		await files.forgetDeletion(`attachments/${idOf(orphan)}`)
-		expect(await files.unfinishedDeletions(10)).toEqual([])
+		expect(await due(10, 0)).toEqual([])
 		expect(await fileRow(idOf(orphan))).toBeUndefined()
+	})
+
+	/** An unreferenced file past the grace whose row the sweep removed: its key is queued, its object kept. */
+	async function removed(objectKey?: string): Promise<string> {
+		const id = Bun.randomUUIDv7()
+		await files.stage({
+			id,
+			kind: 'attachments',
+			objectKey: objectKey ?? `attachments/${id}`,
+			contentType: 'application/pdf',
+			name: null,
+			request: 'r',
+		})
+		await admin((sql) => sql.unsafe(`update ${schema}.fabrika_files set created_at = now() - interval '2 hours' where id = $1`, [id]))
+		const key = await files.remove(id, GRACE)
+		if (key === null) {
+			throw new Error('the sweep kept an unreferenced file')
+		}
+		return key
+	}
+
+	async function recordedAt(key: string, at: Date): Promise<void> {
+		await admin((sql) =>
+			sql.unsafe(`update ${schema}.fabrika_file_deletions set recorded_at = $2::timestamptz where object_key = $1`, [key, at.toISOString()])
+		)
+	}
+
+	async function backdateDeletion(key: string, days: number): Promise<void> {
+		await admin((sql) =>
+			sql.unsafe(`update ${schema}.fabrika_file_deletions set recorded_at = now() - $2::int * interval '1 day' where object_key = $1`, [key, days])
+		)
+	}
+
+	test('a queued key inside the retention window survives; past it, it is due, oldest first', async () => {
+		const inside = await removed()
+		const past = await removed()
+		const older = await removed()
+		await backdateDeletion(inside, 29)
+		await backdateDeletion(past, 31)
+		await backdateDeletion(older, 40)
+		expect(await due(10, RETENTION)).toEqual([older, past])
+		expect(await due(1, RETENTION)).toEqual([older])
+		await expect(files.dueDeletions(10, new Date(Number.NaN))).rejects.toBeInstanceOf(QueryRefusedError)
+	})
+
+	test('a key is due from exactly the end of its window: not 1 ms before, at it and 1 ms after', async () => {
+		const key = await removed()
+		const recorded = new Date('2026-01-01T00:00:00.000Z')
+		await recordedAt(key, recorded)
+		const cutoff = (now: number) => new Date(now - RETENTION)
+		const end = recorded.getTime() + RETENTION
+		expect(await files.dueDeletions(10, cutoff(end - 1))).toEqual([])
+		expect(await files.dueDeletions(10, cutoff(end))).toEqual([key])
+		expect(await files.dueDeletions(10, cutoff(end + 1))).toEqual([key])
+		expect(await files.claimDeletion(key, cutoff(end - 1))).toBe(false)
+		expect(await files.claimDeletion(key, cutoff(end))).toBe(true)
+		expect(await due(10, 0)).toEqual([])
+	})
+
+	test('with a zero window, as on Bun, a key queued now is due at once', async () => {
+		const key = await removed()
+		expect(await due(10, RETENTION)).toEqual([])
+		expect(await due(10, 0)).toEqual([key])
+	})
+
+	test('a key is due at the very millisecond it was queued: its recorded instant is no finer than a cutoff', async () => {
+		const key = await removed()
+		const [row]: { recorded_at: Date }[] = await admin((sql) =>
+			sql.unsafe(`select recorded_at from ${schema}.fabrika_file_deletions where object_key = $1`, [key])
+		)
+		if (row === undefined) {
+			throw new Error('the removal queued no key')
+		}
+		expect(await files.dueDeletions(10, row.recorded_at)).toEqual([key])
+		expect(await files.claimDeletion(key, row.recorded_at)).toBe(true)
+	})
+
+	test('a cancelled tombstone is never due nor claimed, and the others stay queued', async () => {
+		const cancelled = await removed()
+		const other = await removed()
+		await backdateDeletion(cancelled, 31)
+		await backdateDeletion(other, 31)
+		expect(await files.cancelDeletions([cancelled, `attachments/${Bun.randomUUIDv7()}`])).toBe(1)
+		expect(await files.cancelDeletions([])).toBe(0)
+		expect(await due(10, RETENTION)).toEqual([other])
+		expect(await files.claimDeletion(cancelled, new Date())).toBe(false)
+		expect(await due(10, 0)).toEqual([other])
+	})
+
+	test('a key queued again does not fail and restarts its window', async () => {
+		const key = await removed()
+		await backdateDeletion(key, 31)
+		expect(await removed(key)).toBe(key)
+		expect(await due(10, RETENTION)).toEqual([])
+		expect(await due(10, 0)).toEqual([key])
 	})
 })
 

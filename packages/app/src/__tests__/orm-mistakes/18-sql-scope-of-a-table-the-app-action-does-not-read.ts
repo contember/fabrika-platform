@@ -9,6 +9,6 @@ export const admin = app.group({ callers: ['human'] }, (r) => ({
 		.handle(async ({ ctx }) => ({
 			ids: (await ctx.sql(Id)`select p.id from positions p where ${
 				// mistake: positions does not name candidates.read, so no fragment of it reaches the table
-				ctx.sql.scope(ctx.app, 'positions', 'p')}`).map((row) => row.id),
+				ctx.sql.scope(ctx.app, 'positions', { alias: 'p' })}`).map((row) => row.id),
 		})),
 }))

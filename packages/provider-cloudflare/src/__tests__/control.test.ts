@@ -1,6 +1,7 @@
 import { contractDigest, parseManagedEnvironment } from '@fabrika/auth-core'
 import type {
 	ControlProvider,
+	ProviderApprovedAccess,
 	ProviderDeployInput,
 	ProviderEnvelope,
 	ProviderRegistration,
@@ -22,6 +23,7 @@ import {
 import { checkoutRelativeDirectory, cloudflareRunnerJobSchema, type CloudflareRunRecovery } from '../control'
 import { splitManagedEnvironment } from '../managed-secrets'
 import type { RunnerIamReconcile } from '../runner-protocol'
+import { PUBLISHED_PRERELEASES } from './published-prereleases'
 
 const normalizeRegistration = (provider: ControlProvider, input: ProviderRegistrationInput): ProviderRegistration => {
 	if (provider.normalizeRegistration === undefined) throw new Error('the Cloudflare provider normalizes registrations')
@@ -43,6 +45,7 @@ const APPROVED = {
 	contractDigest: contractDigest(notesArtifact),
 	schema: schemaFromContract(notesArtifact),
 	checker: '0.9.0',
+	framework: '0.9.0',
 }
 
 const RUN_ID = '0192f0c9-4d5e-7a10-9c3b-1f2e3d4c5b6a'
@@ -132,7 +135,20 @@ describe('Cloudflare control provider', () => {
 			cancelRun: async () => {},
 		})
 		expect(provider.opsChannel?.(APPROVED)).toBe(true)
-		expect(provider.opsChannel?.({ ...APPROVED, checker: '0.8.2' })).toBe(false)
+		expect(provider.opsChannel?.({ ...APPROVED, checker: '0.8.2', framework: '0.8.2' })).toBe(false)
+		expect(provider.dataOperations?.(APPROVED)).toBe(true)
+		expect(provider.dataOperations?.({ ...APPROVED, checker: '0.8.2', framework: '0.8.2' })).toBe(false)
+		// A published 0.9.0 prerelease answers `inspect` and refuses `state` and `migrate`: its deploys stay plain, though
+		// this platform's reader of its minor (`checker`) is newer.
+		for (const framework of PUBLISHED_PRERELEASES) {
+			expect(provider.opsChannel?.({ ...APPROVED, framework })).toBe(true)
+			expect(provider.dataOperations?.({ ...APPROVED, framework })).toBe(false)
+		}
+		expect(provider.dataOperations?.({ ...APPROVED, framework: '0.9.0-dev.5' })).toBe(true)
+		// An access approved before Control recorded the pin is the oldest release of its reader's minor.
+		const { framework: _pin, ...unpinned } = APPROVED
+		expect(provider.opsChannel?.(unpinned)).toBe(true)
+		expect(provider.dataOperations?.(unpinned)).toBe(false)
 		const digests = `sha256:${'a'.repeat(64)}`
 		// A plain var lives in the generated config, so a deploy after a downgrade, which hands `null`, leaves it out.
 		expect(splitManagedEnvironment(parseManagedEnvironment({ FABRIKA_OPS_KEY_DIGESTS: digests }))).toEqual({
@@ -593,7 +609,7 @@ describe('Cloudflare control provider', () => {
 			configPath: 'deploy.config.ts',
 			stateNamespace: 'api-state',
 			domain: 'api.example.com',
-			approvedAccess: { kind: 'contract', contract: notesArtifact, contractDigest: APPROVED.contractDigest, framework: APPROVED.checker },
+			approvedAccess: { kind: 'contract', contract: notesArtifact, contractDigest: APPROVED.contractDigest, framework: APPROVED.framework },
 			dryRun: true,
 			runnerKey: 'test-runner-key',
 			credentials: {
@@ -641,10 +657,22 @@ describe('Cloudflare control provider', () => {
 		expect(cloudflareRunnerJobSchema.safeParse(jobs[0]).success).toBe(true)
 	})
 
+	test("hands the runner the pointer Control records, and a job's pointer the application would refuse does not validate (ADR-0070 §9)", async () => {
+		const jobs: CloudflareRunnerJob[] = []
+		const applicationObjects = { object: 'application-x', objects: ['application', 'rehearsal', 'application-x'] }
+		await recordingProvider(jobs).deploy({ ...deployInput(), applicationObjects })
+		expect(jobs[0]?.applicationObjects).toEqual(applicationObjects)
+		expect(cloudflareRunnerJobSchema.safeParse(jobs[0]).success).toBe(true)
+		await recordingProvider(jobs).deploy(deployInput())
+		expect(jobs[1]).not.toHaveProperty('applicationObjects')
+		const outside = { ...jobs[0], applicationObjects: { object: 'application-x', objects: ['application'] } }
+		expect(cloudflareRunnerJobSchema.safeParse(outside).success).toBe(false)
+	})
+
 	test('an application on a framework before 0.9 keeps the stateless Worker: no hop secret, and what it cannot run is refused (ADR-0062)', async () => {
 		const jobs: CloudflareRunnerJob[] = []
 		const input = deployInput()
-		const access = { ...APPROVED, checker: '0.8.1' }
+		const access = { ...APPROVED, checker: '0.8.1', framework: '0.8.1' }
 		const environment = { ...input.environment, access }
 		await recordingProvider(jobs).deploy({
 			...input,
@@ -705,6 +733,26 @@ describe('Cloudflare control provider', () => {
 		expect(jobs).toEqual([])
 	})
 
+	test('refuses a job longer than one 14-minute segment before any runner call, only at a release that caps segments (ADR-0062)', async () => {
+		const jobs: CloudflareRunnerJob[] = []
+		const input = deployInput()
+		const purge = notesArtifact.jobs['purgeDeleted']
+		if (purge === undefined) throw new Error('the fixture has a job')
+		const deployWith = (timeoutMs: number, framework: string) => {
+			const contract = { ...notesArtifact, jobs: { purgeDeleted: { ...purge, timeoutMs } } }
+			const access = { ...APPROVED, contract, contractDigest: contractDigest(contract), framework }
+			return recordingProvider(jobs).deploy({ ...input, environment: { ...input.environment, access } })
+		}
+		await expect(deployWith(14 * 60_000 + 1, '0.9.0')).rejects.toThrow(
+			'cloudflare: job `purgeDeleted` runs up to 840001 ms, and a job segment on Cloudflare runs at most 840000 ms',
+		)
+		expect(jobs).toEqual([])
+		await deployWith(14 * 60_000, '0.9.0')
+		await deployWith(14 * 60_000 + 1, '0.8.1')
+		for (const framework of PUBLISHED_PRERELEASES) await deployWith(14 * 60_000 + 1, framework)
+		expect(jobs.map((job) => job.approvedAccess?.framework)).toEqual(['0.9.0', '0.8.1', ...PUBLISHED_PRERELEASES])
+	})
+
 	test('refuses a file kind or a file collection that scans its uploads before any runner call: no scanner runs on Cloudflare', async () => {
 		const jobs: CloudflareRunnerJob[] = []
 		const input = deployInput()
@@ -723,15 +771,33 @@ describe('Cloudflare control provider', () => {
 		expect(jobs).toEqual([])
 	})
 
-	test('refuses an application that declares raw SQL before any runner call: its SQLite has no role to bound it', async () => {
+	test("the job names the application's pin as its release, never the newer reader; an access without one names its minor's floor", async () => {
+		const jobs: CloudflareRunnerJob[] = []
+		const input = deployInput()
+		const deployAs = (access: ProviderApprovedAccess) => recordingProvider(jobs).deploy({ ...input, environment: { ...input.environment, access } })
+		for (const framework of PUBLISHED_PRERELEASES) await deployAs({ ...APPROVED, framework })
+		const { framework: _pin, ...unpinned } = APPROVED
+		await deployAs(unpinned)
+		expect(jobs.map((job) => job.approvedAccess?.framework)).toEqual([...PUBLISHED_PRERELEASES, '0.9.0-0'])
+	})
+
+	test('refuses raw SQL before any runner call below the release that runs it on SQLite, and sends it from that release on', async () => {
 		const jobs: CloudflareRunnerJob[] = []
 		const input = deployInput()
 		const contract = { ...notesArtifact, declared: { 'api.notes.report': { sql: 'read' as const, unscoped: {}, connect: [], issues: null } } }
-		const access = { ...APPROVED, contract, contractDigest: contractDigest(contract) }
-		await expect(recordingProvider(jobs).deploy({ ...input, environment: { ...input.environment, access } })).rejects.toThrow(
-			'cloudflare: `api.notes.report` declares raw SQL (`ctx.sql`), which an application on Cloudflare cannot run',
-		)
+		const deployAt = (framework: string) => {
+			const access = { ...APPROVED, contract, contractDigest: contractDigest(contract), framework }
+			return recordingProvider(jobs).deploy({ ...input, environment: { ...input.environment, access } })
+		}
+		for (const framework of ['0.8.1', ...PUBLISHED_PRERELEASES]) {
+			await expect(deployAt(framework)).rejects.toThrow(
+				'cloudflare: `api.notes.report` declares raw SQL (`ctx.sql`), which an application on Cloudflare runs from framework 0.9.0-dev.5 on',
+			)
+		}
 		expect(jobs).toEqual([])
+		await deployAt('0.9.0-dev.5')
+		await deployAt('0.9.0')
+		expect(jobs.map((job) => job.approvedAccess?.framework)).toEqual(['0.9.0-dev.5', '0.9.0'])
 	})
 
 	test("sends every Cloudflare deployment of Control's registry with the job", async () => {
@@ -910,7 +976,7 @@ describe('Cloudflare control provider', () => {
 			kind: 'contract',
 			contract: notesArtifact,
 			contractDigest: access.contractDigest,
-			framework: access.checker,
+			framework: access.framework,
 		})
 		expect(cloudflareRunnerJobSchema.safeParse(jobs[0]).success).toBe(true)
 	})

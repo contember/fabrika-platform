@@ -1,11 +1,11 @@
 ---
-id: 0070
+id: 0071
 title: A cron job may reach the public web
 status: proposed
 date: 2026-10-25
 ---
 
-# 0070 — A cron job may reach the public web
+# 0071 — A cron job may reach the public web
 
 ## Context
 
@@ -14,11 +14,11 @@ A site's `egress` names the exact HTTPS origins its code calls, at most 16
 other origin (`undeclared_egress`), the checker's `cross-app-fetch` accepts only a declared origin, and the approver
 sees each one ([ADR-0050](0050-approved-access.md)).
 
-Some applications call hosts nobody knows when the contract is written. Revizor, the website auditor, crawls the
-websites its operators enter in its UI (today 19 hosts, their `www` variants and redirects) and calls PageSpeed
-Insights. A static list cannot hold them, and the ways around the guard are worse: code that keeps the `fetch` it
-found before boot escapes it, which is exactly the hidden reach the skill forbids, and a second Worker beside the
-contract's is refused by the Cloudflare bounds.
+Some applications call hosts nobody knows when the contract is written. A crawler or auditor of operator-entered
+sites fetches the websites its operators enter in its UI (their `www` variants and redirects included) and calls a
+third-party analysis API. A static list cannot hold them, and the ways around the guard are worse: code that keeps the
+`fetch` it found before boot escapes it, which is exactly the hidden reach the skill forbids, and a second Worker beside
+the contract's is refused by the Cloudflare bounds.
 
 Opening `fetch` to arbitrary hosts is a server-side request forgery risk. The forces:
 
@@ -104,8 +104,10 @@ A refusal is `capability_refused: refused_egress`, and the job fails with it.
 - The approval diff shows gaining `'public'` as one line for closer review, "calls any public website over HTTPS or
   HTTP", instead of a line per origin. The line says that whoever can write the rows the job reads, or the pages it
   fetches, can make it fetch any public URL and read the answer (a stored, blind request proxy), and that a domain
-  added later is refused only from the next deploy. Losing it narrows and names the origins the job calls instead. The environment's "off the paved road" list shows it while
-  it is published.
+  added later is refused only from the next deploy. Losing it narrows, but each origin the job lists instead widens
+  with closer review: the origin guard admits an IP address, a port, the installation's hosts and a name that resolves
+  privately, all of which `'public'` refuses, so no listed origin is provably within the reach it replaces. The
+  environment's "off the paved road" list shows `'public'` while it is published.
 - The checker's `cross-app-fetch` accepts, where some job declares `'public'`, a static URL prefix of http(s) whose
   host is not yet complete or that the URL rules admit. It still refuses one they refuse, such as `http://localhost/`.
 

@@ -282,12 +282,13 @@ minted, the site's kind (query, mutation, job, webhook, export) and its declarat
 - **Raw SQL is legitimate.** `ctx.sql(Row)` is a tagged template whose every value is a bound parameter, run in the
   invocation's transaction and parsed by `Row`. It exists only on a site that declares `sql: 'read' | 'write'`; a
   query and an export may declare only `'read'`.
-  A scope fragment (`ctx.sql.scope`) carries its capability's action, and the tag holds it to what the statement does
-  with the relation in its own query block: the relation an `UPDATE`, `DELETE` or `ON CONFLICT … DO UPDATE` writes needs
-  that operation's action, any other an action the handles read it with, and a reference table is never a write
-  target. The blocks come from the lexer's parentheses, not from a SQL parser: the tag reads no grammar it does not
-  need, and a write without a fragment stays the declared deviation. `sql` stays one declaration per site; there is
-  no per-table `sql` declaration, so a write without a fragment is the declared deviation, not a checked one.
+  A scope fragment (`ctx.sql.scope(capability, table, { alias, use })`) is the author's statement of what the
+  capability scopes: `use` is `'read'` by default, `'update'` or `'delete'` for the relation a write targets, and the
+  fragment is refused when it is built if the capability's action does not allow that use. The tag does not infer
+  from the statement where a fragment stands, which relation it filters or which columns a `SET` assigns: that
+  inference, read from tokens without a grammar, was a guess an honest author could not predict and a careless one
+  could still miss. Placement is the approver's to read. `sql` stays one declaration per site, with no per-table form,
+  so a write without a fragment is the declared deviation, not a checked one.
 - **Every step off the road is declared in the shell**, as a plain literal the contract digest covers:
 
   | Field                                      | On                                       | What exists only there                                       |
@@ -302,7 +303,7 @@ minted, the site's kind (query, mutation, job, webhook, export) and its declarat
   | `binds: '<webhook>'`                       | credentialed mutation                    | `ctx.webhooks('<webhook>').bind` and `unbind` (§13)          |
   | `signs: ['<purpose>']`                     | procedure of an RPC mount, job, webhook  | `ctx.tokens.sign` (§14)                                      |
   | `egress: ['https://<host>']`               | credentialed RPC procedure, job, webhook | `fetch` to those origins (§15)                               |
-  | `egress: 'public'`                         | job                                      | `fetch` to public hosts (§15, ADR-0070)                      |
+  | `egress: 'public'`                         | job                                      | `fetch` to public hosts (§15, ADR-0071)                      |
 
   The runtime builds each handle only for the declaring site and enforces its mode. It takes the declaration from
   the approved artifact (`ContractArtifact.declared`), not from the handler module, and refuses to boot a site whose
@@ -311,16 +312,23 @@ minted, the site's kind (query, mutation, job, webhook, export) and its declarat
   ([ADR-0017](0017-service-owned-postgres-migrations.md)).
 - **A step off the road is a review signal, not a refusal.** Control puts each declaration and each piece of
   database code into the approval snapshot, and a new one, or one whose reach grows, is a widening the approver sees
-  marked for closer review ([ADR-0050](0050-approved-access.md) §3). Hard refusals stay only for platform
-  integrity: secrets, framework internals and `fabrika_*` objects, and escaping the application's schema or the
-  invocation's transaction.
-- **The name rules are defense in depth; the role is the privilege boundary.** `ctx.sql` refuses, from the
-  template's static text and before anything is sent, more than one statement, DDL, transaction control, `SET`,
-  `COPY`, a name outside the application's schema, any `fabrika_*` or `pg_*` relation and a call outside the reviewed
-  built-ins; migrations are classified the same way. Those rules see names, not rights. What an admitted statement
-  can do is bounded by the application's role family: the runtime role `run_<id>` has DML on the schema's tables
-  only, and the migration role `app_<id>` owns that schema and nothing else
-  ([ADR-0017](0017-service-owned-postgres-migrations.md)).
+  marked for closer review ([ADR-0050](0050-approved-access.md) §3). The threat it answers is an honest but fallible
+  author, often an agent, whose application must stay within what its deployers may do. Hard refusals stay only for
+  platform integrity: secrets, framework internals and `fabrika_*` objects, isolation from other applications and the
+  catalog, and escaping the application's schema or the invocation's transaction. Which of the application's own rows
+  a declared statement reaches is a review signal, never a refusal.
+- **The text rules are the hard refusals; the role bounds what they cannot see.** `ctx.sql` refuses, from the
+  template's static text and before anything is sent, more than one statement, a first keyword that is not a read or
+  a DML statement (so DDL, transaction control, `SET`, `COPY`, `PRAGMA`, `ATTACH`), a write on a `'read'` site, a value
+  that is not a bound parameter, and any `fabrika_*` name. On Postgres it also refuses a `pg_*` or foreign-schema name
+  and a call outside the reviewed built-ins, and migrations are classified the same way; on SQLite a `sqlite_*` name
+  and a parameter the text writes itself. Where a role sits under the statement, it bounds what a name rule misses:
+  on Postgres the runtime role `run_<id>` has DML on the schema's tables only and the migration role `app_<id>` owns
+  that schema and nothing else ([ADR-0017](0017-service-owned-postgres-migrations.md)), so a foreign schema and DDL
+  stay out whatever the text. It does not bound the framework's own tables: `run_<id>` may write `fabrika_*` like any
+  table of the schema, so for them the name rule is the boundary. On SQLite there is no role at all, and the name
+  rule is the boundary for everything; workerd's authorizer still refuses `ATTACH`, `PRAGMA` writes and the `_cf_*`
+  tables ([ADR-0065](0065-an-application-on-cloudflare-runs-in-one-durable-object-per-environment.md) decision 7).
 
 Where application code goes — vocabulary, tables, kit, slices with their `endpoints.ts`, `logic.ts` and `queries.ts`,
 the composition entry, the SPA — is the [application architecture](../reference/application-architecture.md). The
@@ -551,7 +559,7 @@ idempotently without `sql`.
 - **`egress: 'public'`** on a cron job reaches every public host over HTTPS or HTTP instead of a list, for a job that
   calls the websites its operators name. The guard refuses IP literals, local and internal names, non-default ports,
   the installation's own hosts and, on Bun, a name that resolves to a private address; it checks every redirect hop and
-  bounds each request ([ADR-0070](0070-a-cron-job-may-reach-the-public-web.md)).
+  bounds each request ([ADR-0071](0071-a-cron-job-may-reach-the-public-web.md)).
 - **Mail.** `ctx.mail.send` in a mailer job takes `attachments: [fileRef]` (only a `live` file the attempt holds, within
   the transport's `maxAttachmentBytes`) and `unsubscribe: { url }`, from which the transport writes `List-Unsubscribe`
   and `List-Unsubscribe-Post: List-Unsubscribe=One-Click` (RFC 8058). There are no free headers. A transport without

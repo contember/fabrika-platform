@@ -67,7 +67,7 @@ import {
 import { isPolicyOrigin, MAX_CSP_ORIGINS, WORKER_BLOB_SOURCE } from '@fabrika/proxy-core/headers'
 import { z } from 'zod/v4'
 import { CONTRACT_APP_ID_PATTERN as APP_ID } from './app-id'
-import { contractArtifactSchema } from './artifact-schema'
+import { contractArtifactSchema, RESERVED_FILE_KIND_PREFIX } from './artifact-schema'
 import {
 	type AccessDeclaration,
 	type Builder,
@@ -1714,6 +1714,10 @@ class ArtifactBuilder {
 		const kinds: Record<string, FileKindArtifact> = {}
 		for (const [name, declared] of Object.entries(this.#contract.files)) {
 			const where = `files '${name}'`
+			if (name.startsWith(RESERVED_FILE_KIND_PREFIX)) {
+				this.#problem(where, `is a file kind name the framework reserves (${RESERVED_FILE_KIND_PREFIX}*)`)
+				continue
+			}
 			if (!this.#name(where, name) || !this.#kind(where, declared, 'file-kind', 'c.files({ types, maxBytes, scan? })')) {
 				continue
 			}
@@ -2308,7 +2312,7 @@ class ArtifactBuilder {
 	/**
 	 * The HTTPS origins a site's code calls: a credentialed procedure of an RPC mount, a webhook or a job, never a public,
 	 * export or link procedure. Each is an exact origin with no path or wildcard, once. Or `'public'`, every public host
-	 * (ADR-0070), which only a cron job declares: it calls outside any transaction, and its schedule, not a caller,
+	 * (ADR-0071), which only a cron job declares: it calls outside any transaction, and its schedule, not a caller,
 	 * decides when. `null` when it declares none or after a problem.
 	 */
 	#egress(where: string, value: unknown, place: DeclaringSite): DeclaredEgress | null {

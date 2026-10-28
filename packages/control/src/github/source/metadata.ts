@@ -52,7 +52,8 @@ export class GitHubMetadataClient {
 	private readonly validatedPlatformTrees = new Set<string>()
 
 	constructor(options: GitHubMetadataClientOptions) {
-		this.fetchImplementation = options.fetch ?? fetch.bind(globalThis)
+		// Wrapped: a Worker refuses the global `fetch` called as this object's property ("Illegal invocation").
+		this.fetchImplementation = options.fetch ?? ((input, init) => fetch(input, init))
 		const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
 		if (
 			!Number.isSafeInteger(timeoutMs)
@@ -226,7 +227,7 @@ export class GitHubMetadataClient {
 			try {
 				response = await this.fetchImplementation(`${GITHUB_API_ORIGIN}${path}`, {
 					headers,
-					// Workers' fetch rejects `redirect: 'error'`; a 3xx is not `ok` and fails below.
+					// Workers refuse `redirect: 'error'`; a redirect is a response that is not `ok` and fails below.
 					redirect: 'manual',
 					signal: controller.signal,
 				})

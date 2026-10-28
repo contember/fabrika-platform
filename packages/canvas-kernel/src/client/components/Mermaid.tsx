@@ -1,4 +1,4 @@
-// biome-ignore-all lint/security/noDangerouslySetInnerHtml: Canvas modules already execute as code in this document.
+/* oxlint-disable react/no-danger -- Canvas modules already execute as code in this document. */
 import { useAnnotations, useCanvasFile } from '#canvas/runtime'
 import type { Annotation } from '#canvas/runtime'
 import { AnnotationCreatePopover } from '@fabrika/annotations'

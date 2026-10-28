@@ -97,6 +97,16 @@ Threads are stored per project under the daemon's data directory. The daemon acc
 origins (`localhost`, `127.0.0.1`, `*.localhost`) and agent requests only from clients that send no `Origin`, so a web
 page cannot queue work for the agent.
 
+#### Remote review
+
+The same loop works on a deployed application. `bunx agent-canvas review share https://prototype.example.com --project my-app`
+creates a project on the share worker and prints a `<script>` tag for the application and a link for the reviewer. The
+link carries the project and an AES-GCM key in its fragment, which never reaches a server: the widget seals every
+anchor, comment and screenshot before sending it, the CLI opens them, and the worker stores and relays ciphertext. The
+widget mounts only for a browser that opened the link, so the tag can stay in a public deployment. The worker accepts
+widget requests only from the origin the project was shared for, and agent requests only with the token `share`
+stored on this machine. `watch`, `reply`, `fetch` and `list` work as above.
+
 ## Theming
 
 Agent Canvas supports light and dark themes, automatically matching your system preference.

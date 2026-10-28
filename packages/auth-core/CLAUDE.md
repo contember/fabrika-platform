@@ -9,7 +9,7 @@ Published (`publishConfig.access: public`), so it ships to npm with `@fabrika/au
 
 ```bash
 bun run typecheck
-bun test               # app-environment · canonical-path · contract-canonical · device · endpoint-digest · endpoints · environment · framework-variables · json · locale · managed-environment · ops · permissions · requirement · resource-token · sha256 · token · wire · workloads
+bun test               # app-environment · canonical-path · contract-canonical · device · endpoint-digest · endpoints · environment · framework-variables · json · locale · managed-environment · ops · ops-dump · permissions · requirement · resource-token · sha256 · token · wire · workloads
 ```
 
 | Module                     | What it owns                                                                                                                                                                                                              |
@@ -24,7 +24,7 @@ bun test               # app-environment · canonical-path · contract-canonical
 | `locale.ts`                | `LOCALES`, `DEFAULT_LOCALE` and `displayNameProblem` — the languages IAM speaks and the display-name rule.                                                                                                                |
 | `path-segment.ts`          | `parameterName` — the one `:name` segment rule of every endpoint table.                                                                                                                                                   |
 | `permissions.ts`           | `matchAction` and `permits` — the authorization decision itself.                                                                                                                                                          |
-| `public-egress.ts`         | `PUBLIC_EGRESS`, `publicEgressRefusal` and `isPublicAddress` — what a cron job's `egress: 'public'` refuses by the URL and by an address (ADR-0070); the runtime guard and the checker share it.                          |
+| `public-egress.ts`         | `PUBLIC_EGRESS`, `publicEgressRefusal` and `isPublicAddress` — what a cron job's `egress: 'public'` refuses by the URL and by an address (ADR-0071); the runtime guard and the checker share it.                          |
 | `requirement.ts`           | `satisfies` — an endpoint requirement checked against a token's permissions — and `callerOf`, a token's caller kind.                                                                                                      |
 | `sha256.ts`                | `sha256Hex` — synchronous SHA-256, for the digests checked where nothing may await.                                                                                                                                       |
 | `token.ts`                 | The access-token claim shape, cookie/prefix/TTL names, the size bound, `buildAccessClaims`/`parse…`.                                                                                                                      |
@@ -32,7 +32,7 @@ bun test               # app-environment · canonical-path · contract-canonical
 | `rpc.ts`                   | `IamRpc`, `IamHandoffRpc`, and every input/result type they carry.                                                                                                                                                        |
 | `device.ts`                | The device-authorization inputs, results and their parsers (ADR-0042).                                                                                                                                                    |
 | `oauth.ts`                 | The OAuth 2.1 primitives IAM, the proxy and resource servers share: resource URIs, CIMD client ids, scopes.                                                                                                               |
-| `ops.ts`                   | The ops wire (ADR-0069): the composed `/__fabrika/ops/*` row's constants, the uniform and stale refusals, the formats of `FABRIKA_OPS_KEY_DIGESTS` and the object names, and the strict parsers.                          |
+| `ops.ts`                   | The ops wire (ADR-0069/0070): row constants, refusals, key digests, object names, strict parsers, the dump format and `planOpsDump`, its one schema rule.                                                                 |
 | `membership.ts`            | `IamMembershipRpc` — delegation grants, scope creation, membership and share links — and its input/result types; `endpointMembers`, `endpointDirectory` and `endpointAppDirectory` (what `ctx.members` an endpoint gets). |
 | `types.ts`                 | `AppSchema`, `Scope`, `PermissionEntry`, `PrincipalType`, `WorkloadKind`.                                                                                                                                                 |
 | `workloads.ts`             | `contractWorkloads` — a contract's jobs, webhooks and public procedures with their actions — and the workload name rules.                                                                                                 |

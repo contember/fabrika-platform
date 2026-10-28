@@ -106,7 +106,7 @@ export function createFixtureTransports(
 					codeloadGrants.set(grant, codeload)
 					return new Response(null, { status: 302, headers: { location: `${codeload}?token=${grant}` } })
 				}
-				if (!url.startsWith(codeload) || init.redirect !== 'error' || authorization !== null) continue
+				if (!url.startsWith(codeload) || init.redirect !== 'manual' || authorization !== null) continue
 				const authorized = source.visibility === 'public' ? url === codeload : spendCodeloadGrant(url, codeload)
 				if (authorized) return new Response(archive.stream(), { headers: { 'content-type': 'application/gzip' } })
 			}
@@ -119,7 +119,7 @@ export function createFixtureTransports(
 			if (
 				raw !== `${LOCAL_SOURCE_UPLOAD_URL}${url.search}`
 				|| init.method !== 'PUT'
-				|| init.redirect !== 'error'
+				|| init.redirect !== 'manual'
 				|| new Headers(init.headers).has('authorization')
 				|| (input instanceof Request && input.headers.has('authorization'))
 			) throw new Error('invalid local source upload destination')

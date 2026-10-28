@@ -184,9 +184,11 @@ describe.skipIf(accessPostgres === null)('the endpoint access kit over a kit app
 		expect(await kit.denied('api.notes.workspaceTitles', { workspaceId: 'x' })).toEqual({ status: 403 })
 	})
 
-	test('a scope ORed with a filter is refused before it is sent, so it leaks nothing; a parenthesized filter ANDed with it answers', async () => {
+	test("a scope ORed with a filter is its author's mistake, which the generated leak case catches; a filter ANDed with it answers", async () => {
 		const kit = accessKit()
-		expect(await kit.leaked('api.notes.orTitles', { organizationId: 'x' })).toEqual({ answered: false, leaked: [], status: 500 })
+		const leaky = await kit.leaked('api.notes.orTitles', { organizationId: 'x' })
+		expect(leaky.answered).toBe(true)
+		expect(leaky.leaked.length).toBeGreaterThan(0)
 		expect(await kit.leaked('api.notes.filteredTitles', { organizationId: 'x' })).toEqual({ answered: true, leaked: [] })
 	})
 

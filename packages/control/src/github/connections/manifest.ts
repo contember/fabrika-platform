@@ -2,8 +2,9 @@ import type { StartGitHubSourceConnectionRequest, StartGitHubSourceConnectionRes
 import { buildGitHubAppManifest, exchangeGitHubAppManifestCode } from '@fabrika/github-app'
 import { uuidv7 } from '@fabrika/platform'
 import { vault } from '../../services'
+import { SourceFailure } from '../source/failure'
 import { cleanRedirect, consoleRedirect } from './browser'
-import { advanceWithDeadline, errorForPhase } from './configuration'
+import { advanceWithDeadline, settleFailedStep } from './configuration'
 import {
 	abortable,
 	audit,
@@ -186,10 +187,10 @@ export async function manifestCallback(deps: SourceConnectionWorkflowDeps): Prom
 		}
 		if (stored === null) throw new Error('checkpoint failed')
 		await advanceWithDeadline(deps, stored)
-	} catch {
-		const disposition = await settleCallbackFailure(deps, claimed)
+	} catch (error) {
+		const disposition = await settleCallbackFailure(deps, claimed, error)
 		throwIfAborted(deps.request.signal)
-		if (disposition === 'failed') throw new SourceConnectionWorkflowError(503)
+		if (disposition === 'failed') throw callbackFailed(claimed, error)
 		return consoleRedirect()
 	}
 	// Straight on to the installation: GitHub returns the installer to the App's setup URL, where Control verifies it.
@@ -243,6 +244,7 @@ function buildManifest(organization: string, appName: string, origin: string, co
 async function settleCallbackFailure(
 	deps: SourceConnectionWorkflowDeps,
 	claimed: GitHubSetupAttempt,
+	error: unknown,
 ): Promise<'failed' | 'repair_required'> {
 	for (let attemptNumber = 0; attemptNumber < FAILURE_SETTLE_ATTEMPTS; attemptNumber++) {
 		const current = await deps.env.REPOSITORIES.githubConnections.getAttempt(claimed.id).catch(() => undefined)
@@ -254,12 +256,8 @@ async function settleCallbackFailure(
 		if (current.status === 'repair_required') return 'repair_required'
 		if (current.status !== 'active') throw new SourceConnectionWorkflowError(503)
 		if (current.appCredentialRef !== null) {
-			const repair = await deps.env.REPOSITORIES.githubConnections.markRepairRequired(
-				current.id,
-				current.version,
-				errorForPhase(current.phase),
-			).catch(() => null)
-			if (repair !== null) return 'repair_required'
+			const settled = await settleFailedStep(deps, current, error).catch(() => null)
+			if (settled !== null) return settled.status === 'failed' ? 'failed' : 'repair_required'
 		} else {
 			const failed = await deps.env.REPOSITORIES.githubConnections.markFailed(
 				current.id,
@@ -271,6 +269,18 @@ async function settleCallbackFailure(
 		await delay(FAILURE_SETTLE_DELAY_MS)
 	}
 	throw new SourceConnectionWorkflowError(503)
+}
+
+/**
+ * The browser's answer when the callback failed the attempt. An App on a personal account is the operator's to fix, so
+ * the answer says how; anything else names no cause.
+ */
+function callbackFailed(claimed: GitHubSetupAttempt, error: unknown): SourceConnectionWorkflowError {
+	if (!(error instanceof SourceFailure) || error.code !== 'app_owner_not_organization') return new SourceConnectionWorkflowError(503)
+	return new SourceConnectionWorkflowError(
+		422,
+		`GitHub created the App on a personal account, not in the organization ${claimed.desiredOwner}. Delete that App in your GitHub developer settings, check that you may create Apps in ${claimed.desiredOwner}, and connect again.`,
+	)
 }
 
 function delay(milliseconds: number): Promise<void> {

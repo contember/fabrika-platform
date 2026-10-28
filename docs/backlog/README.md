@@ -79,8 +79,9 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [189](189-cross-origin-endpoints-review-follow-ups.md) — Cross-origin endpoints review follow-ups: the `http://` host rule, `Vary: Origin` on every answer, a recorded release for a namespace proxy pin, and the preflight's request headers.
 - [190](190-the-overview-reads-each-applications-environments-separately.md): The console overview calls Control once per application for its environments; one read for many applications.
 - [192](192-a-signed-in-person-cannot-manage-their-own-account.md): No self-service password change or sign-in list; an IAM account page, after rewriting ADR-0020.
-- [193](193-loose-ends-of-the-declared-surface.md): The approval of an upgrade to 0.7, admission buckets and other P2s of the surface revision.
-- [194](194-mail-relay-follow-ups.md): Mail relay follow-ups: a claim before the dispatcher sends (two double-send paths), maintenance and console edges, the sender's error mapping, expired keys' vault values, no final-failure answer to IAM or an application.
+- [193](193-loose-ends-of-the-declared-surface.md): The legacy file marker, admission buckets, the platform rollback and other P2s of the surface revision.
+- [194](194-mail-relay-follow-ups.md): Mail relay follow-ups: maintenance and console edges, the sender's error mapping, expired keys' vault values, no final-failure answer to IAM or an application, and the sprint's end-to-end run.
+- [196](196-mcp-authoring-has-no-live-acceptance.md): MCP authoring was never run with a real client, GitHub App and Zerops build; the sprint's known limits.
 - [197](197-local-compat-has-no-0.7-release.md): `local:compat` deploys no Notes at v0.7.0: its proof needs a release without a file collection.
 - [198](198-an-in-container-env-write-may-reach-another-services-credentials.md): Measure whether `zsc` can write a `${host_KEY}` reference that Zerops resolves; if so, a `cheap` namespace's superuser is reachable by its applications.
 - [199](199-operations-keeps-every-event-forever.md): Operations prunes nothing; a retention window for occurrences, dead events, observations and raw bodies.
@@ -98,7 +99,6 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [211](211-zerops-preset-review-follow-ups.md): Minor findings of the Zerops presets review: adoption refusal on republish/update, the backup live row, restore history, hourly on `standard`, the admin hop's request id.
 - [212](212-the-console-shows-no-database-backups.md): The console shows no database backups; a provider-owned read of each database's schedule, newest and oldest restore point.
 - [213](213-the-cloudflare-application-runtime-is-unverified-on-a-live-account.md): The secrets upload, the object's migration on an existing Worker and a large upload are unverified on a live account.
-- [214](214-raw-sql-on-sqlite.md): `ctx.sql` is refused on SQLite: it needs a SQLite lexer, and a Durable Object has no role under it.
 - [215](215-file-scanning-on-cloudflare.md): A scanning file kind is refused on Cloudflare: no ClamAV runs in a Worker.
 - [216](216-cloudflare-application-runtime-follow-ups.md): Smaller gaps of the Cloudflare application runtime.
 - [217](217-postmark-managed-unsubscribes-never-reach-the-application.md): An unsubscribe through Postmark's own link or footer reaches only Postmark; the application's consent records drift.
@@ -112,11 +112,17 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [225](225-password-minimum-follow-ups.md): Smaller gaps of the installation's minimum password length: audit, an upper cap, the console page.
 - [226](226-a-failed-iam-reconcile-leaves-a-narrowing-unapplied.md): A narrowing is not in force while the IAM write after a deploy fails; decided: narrowings before the manifest is published, widenings after.
 - [227](227-authorization-model-follow-ups.md): Smaller gaps of the authorization model's fixes: the workload token bound, a stale doc line, an early terminal re-mint.
-- [228](228-application-object-review-follow-ups.md): The P2s and open decisions of the application object waves 0–1 reviews: checker lexer, timers, ledger digest, read path, entry pin.
+- [228](228-application-object-review-follow-ups.md): The P2s and open decisions of the application object waves 0–3 reviews: checker lexer, timers, ledger digest, read path, entry pin.
 - [219](219-the-cloudflare-executor-s-managed-environment-parse-is-untested.md): No test shows the Cloudflare executor refuses a managed value Control would not hand.
 - [220](220-the-provider-conformance-suite-checks-no-checkpoint-size.md): The provider conformance suite checks no checkpoint size, and Zerops' harness hands no upload bearer.
 - [229](229-provider-neutral-core-review-follow-ups.md): The provider-neutral core reviews' gaps; P2: a late cancel leaves a Cloudflare version without its IAM schema.
 - [234](234-mcp-authoring-review-follow-ups.md): Review follow-ups of MCP authoring and dev environments: one failing repository fails `list_workspaces`, a long `run_checks` reads as a gone launcher, a crash loop never idles, an abandoned workspace stays bound, a committed launcher state file or booted marker misleads a new container, and the SPA type check awaits an ADR-0062 decision.
 - [235](235-a-long-job-on-cloudflare-has-no-workflow-escape-hatch.md): A job that cannot chunk through claims has no form on Cloudflare; a contract-declared Workflow generated into the entry.
-- [236](236-verify-the-cloudflare-email-adapter-on-a-live-account.md): The Cloudflare email adapter is checked live only for an accepted send; its sender, quota, account and size refusals wait for a live check.
+- [237](237-application-object-waves-4-7-follow-ups.md): The application object's waves 4–7 follow-ups: no R2 lifecycle rule for dumps yet (needs oblaka), dump and restore edge cases, the CLI's strict parse, the deploy-time reconcile, migrate recovery, the console's modal focus.
+- [236](236-an-in-handler-upload-leaves-bytes-after-an-eviction.md): A `ctx.files.put` inside a writing handler on Cloudflare leaves its bytes in the bucket when the object is evicted before the release; an R2 intent the sweep lists.
+- [238](238-a-renamed-application-worker-starts-with-an-empty-object.md): A Cloudflare environment whose application Worker changes its name gets a new, empty Durable Object; a guard that refuses the rename once the environment holds one.
+- [239](239-a-changed-sql-statement-shows-no-closer-review-line.md): A changed statement of a site whose `sql:` declaration is unchanged shows no closer-review line in the approval diff.
+- [240](240-channel-prereleases-sort-below-the-release-floors.md): A channel prerelease (`0.9.0-cloudflare.<n>`) sorts below the `0.9.0-dev.5` release floors, so the Cloudflare gates deny it the alarm, segment cap, data operations and raw SQL its code has; decide before the next channel release.
+- [241](241-verify-the-cloudflare-email-adapter-on-a-live-account.md): The Cloudflare email adapter is checked live only for an accepted send; its sender, quota, account and size refusals wait for a live check.
+- [243](243-the-reader-and-classifier-fixes-of-pr-73-have-no-regression-tests.md): The vocabulary fields and the `strftime` allowance that #73 restored have no test that fails when they regress.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.

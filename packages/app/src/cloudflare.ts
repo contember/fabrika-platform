@@ -145,7 +145,8 @@ export interface ContractWorker {
 /**
  * The Worker module of a contract application, called only by the generated entrypoint, which also exports
  * `FabrikaApplication`. The application runs in the environment's Durable Object (ADR-0065): `fetch` forwards every
- * request to it with the proxy secret, the proxy's own headers unchanged, and `scheduled` forwards the minute tick.
+ * request to it with the proxy secret, the proxy's own headers unchanged, and `scheduled` forwards the repair tick: the
+ * object's alarm runs the jobs, and the tick repairs its wakes and arms an alarm nothing armed yet.
  * An ops request goes to the object its body names instead (ADR-0069). The object captures the environment, imports
  * the application and boots it.
  */
@@ -169,7 +170,7 @@ export function createContractWorker(load: ImplementationLoader, options: Contra
 			})
 			const response = await applicationObject(env, applicationObjects(env).object)(tick)
 			if (!response.ok) {
-				throw new Error(`the application's object answered the minute tick with ${response.status}`)
+				throw new Error(`the application's object answered the repair tick with ${response.status}`)
 			}
 		},
 	}

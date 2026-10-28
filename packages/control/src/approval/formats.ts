@@ -64,7 +64,7 @@ export function from07(artifact: ContractArtifact07): SnapshotContract {
 }
 
 /**
- * A 0.8 artifact is this release's format: 0.9 only added an optional form (a cron job's `egress: 'public'`, ADR-0070)
+ * A 0.8 artifact is this release's format: 0.9 only added an optional form (a cron job's `egress: 'public'`, ADR-0071)
  * that no 0.8 artifact holds, beside the dev launcher, which is not part of the contract, so its canonical form and
  * contract digest are 0.8's. It is kept as it is, read by this release's schema, which refuses one that is not.
  */

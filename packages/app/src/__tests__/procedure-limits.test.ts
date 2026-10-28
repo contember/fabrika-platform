@@ -2,8 +2,9 @@
 // that stalls past it is the sender's 408, and a body past `maxBytes` is a 413, before the handler runs.
 
 import { describe, expect, test } from 'bun:test'
+import { bodyDeadlineMs } from '../contract/defaults'
 import { HttpError } from '../errors'
-import { bodyDeadlineMs, readBoundedBody } from '../implement/anonymous'
+import { readBoundedBody } from '../implement/anonymous'
 
 /** A request whose body sends one chunk and then waits for good. */
 function stalled(): Request {

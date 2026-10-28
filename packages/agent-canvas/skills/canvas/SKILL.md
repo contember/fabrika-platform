@@ -44,4 +44,5 @@ bunx agent-canvas instructions --list
 ## Reviewing a running application
 
 When the user wants to comment on a running application instead of a canvas, follow
-`bunx agent-canvas instructions app-review`. Review mode needs no session ID; it uses a project name.
+`bunx agent-canvas instructions app-review`. Review mode needs no session ID; it uses a project name. It covers a
+deployed application too (`review share`), with the threads end-to-end encrypted on the share worker.

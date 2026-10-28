@@ -8,6 +8,7 @@ import type {
 	controlEmailVars as ControlEmailVars,
 	controlPipelineSecrets as ControlPipelineSecrets,
 } from '../../fabrika.config'
+import { controlServiceContract } from '../../fabrika.service'
 
 // fabrika's OWN deploy surface (packages/control/fabrika.config.ts). These
 // tests prove: defineApp accepts fabrika's config, the resource graph materializes with fabrika's full
@@ -84,6 +85,12 @@ describe('defineApp(vozka config)', () => {
 		expect(binding(app, 'RUN_LOGS')).toBeInstanceOf(R2Bucket)
 		expect(binding(app, 'DB')).toBeInstanceOf(D1Database)
 		expect(binding(app, 'DEPLOY_QUEUE')).toBeInstanceOf(Queue)
+		// The mail relay: its dispatch queue and the bucket its message content lives in, both new resources under `fabrika-`.
+		const mailQueue = binding(app, 'MAIL_QUEUE')
+		const mailContent = binding(app, 'MAIL_CONTENT')
+		if (!(mailQueue instanceof Queue) || !(mailContent instanceof R2Bucket)) throw new Error('the mail relay bindings are missing')
+		expect(mailQueue.options.name).toBe('fabrika-mail')
+		expect(mailContent.options.name).toBe('fabrika-mail-content')
 		// Off-local stages bind the propustka IAM ServiceReference.
 		expect(binding(app, 'IAM')).toBeInstanceOf(ServiceReference)
 		expect(binding(app, 'OPERATIONS')).toBeInstanceOf(ServiceReference)
@@ -99,6 +106,12 @@ describe('defineApp(vozka config)', () => {
 		}
 		expect(worker.options.assets?.binding).toBe('ASSETS')
 		expect(worker.options.assets?.directory).toBe('../dashboard/dist')
+		// A list of server paths here would drift from the service table: one it misses (`/builder/connect` did) gets the
+		// SPA. Only the built bundles skip the Worker, and no row of the table may live under them.
+		expect(worker.options.assets?.run_worker_first).toEqual(['/*', '!/assets/*'])
+		for (const mcp of [false, true]) {
+			for (const endpoint of controlServiceContract({ mcp }).endpoints) expect(endpoint.path.startsWith('/assets/')).toBe(false)
+		}
 	})
 
 	test('IAM is bound locally too, with a resolvable issuer — the app has no local mode to fall back on', () => {

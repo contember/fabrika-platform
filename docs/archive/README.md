@@ -9,6 +9,10 @@ that ships — only what genuinely helps a future reader. The git log holds the 
 
 <!-- optional: group by date or theme as it grows; one line per entry -->
 
+- [The application Durable Object (2026-10-26)](sprint-2026-10-24-application-object.md): the Cloudflare object sleeps unless it has work, queries stop blocking it, and Control inspects, backs up and side-restores its data; its design is [the archived proposal](application-object-runtime-and-operations.md). Live probes → backlog 213.
+- [Platform transport and mail relay (2026-10-20)](sprint-2026-10-20-platform-transport-mail-relay.md): applications send installation mail to Control over a transport key; Control records, gates and dispatches it; IAM sends through it. Shipped in v0.7.0.
+- [Declare the surface (2026-10-20)](sprint-2026-10-19-declare-the-surface.md): the revision of the contract kinds as framework 0.7.0, with the platform serving 0.4, 0.5 and 0.6.
+- [MCP application authoring (2026-10-08)](sprint-2026-10-07-mcp-authoring.md): MCP in Control, IAM OAuth for Claude and ChatGPT, Git workspaces, stage deploys and pull requests; the live acceptance is backlog 196.
 - [External people (2026-10-13)](sprint-2026-10-13-external-people.md)
   — external principals and roles, application-wide assigners, IAM in the application's language, plain-text e-mail templates, one-e-mail onboarding.
 - [The paved-road framework (2026-10-13)](sprint-2026-10-11-paved-road-framework.md)

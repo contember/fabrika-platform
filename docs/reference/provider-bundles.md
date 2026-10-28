@@ -398,11 +398,33 @@ while shared control modules reach neither concrete provider.
 ## Authoring and commands
 
 Cloudflare apps import their config surface from
-`@fabrika/provider-cloudflare`:
+`@fabrika/provider-cloudflare`. A contract application's whole config is:
 
 ```ts
-import { defineApp, Worker } from '@fabrika/provider-cloudflare'
+import { defineApp } from '@fabrika/provider-cloudflare'
+
+export default defineApp({ id: 'tasks' })
 ```
+
+Without `resources`, `defineApp` builds the application Worker from the values
+the bounds below require of it: the Worker name `<app>` (remote `<env>-<app>`,
+the deployment's own prefix), `main` `./fabrika/entry.generated.ts`, no route,
+`workers_dev` and `preview_urls` off, and IAM at its application entrypoint. The
+author may add bindings and change `compatibility_date` and `compatibility_flags`
+(`worker: { … }`); `IAM` stays the platform's. The returned config still carries
+a `resources` function, so `isCloudflareAppConfig` reads it as before. A contract
+application declares no `schema`: Control writes the approved contract's
+(ADR-0050), and the deployer refuses only a declared one that does not say
+`contract: true`. A platform deploy (`allow`) that serves a contract still declares
+one, because it registers the schema itself. An executor older than this release
+refuses a schema-less config; it never meets one, because Control refuses a
+framework release newer than the platform, and an installation deploys its runner
+with its Control from one `fabrika.ref`. A local run (`oblaka.ts`, Lopata) takes the
+proxy and application Workers from `composeLocalApplication({ config, contract,
+assets, iamOrigin, env })`, the deploy's own composition, with the framework values and a
+fresh proxy secret written as variables. `assets` is what `await stageLocalAssets(contract,
+root)` staged at the top of `oblaka.ts`: the deploy's own staging of the SPA and link
+mounts into `fabrika/assets` beside the generated config, bound as `ASSETS`.
 
 Cloudflare app resources are composed as a public proxy Worker with a private
 application Worker child (ADR-0048). The config's `resources` returns only the
@@ -442,8 +464,9 @@ A contract application runs in one Durable Object per environment
 The deployer writes into its Worker, and the application may author none of:
 `FABRIKA_APPLICATION`, bound to its own `FabrikaApplication` class under the fixed
 migration `v0001` (`new_sqlite_classes`); `FABRIKA_FILES`, bound to the R2 bucket
-`<env>-<app>-files`; and a `* * * * *` cron trigger when the contract declares a
-job, a file collection or a file kind. A config that binds either name or sets
+`<env>-<app>-files`; and a cron trigger when the contract declares a job, a file
+collection or a file kind: the hourly repair tick for a release that serves the
+object's alarm, `* * * * *` otherwise. A config that binds either name or sets
 `triggers` is refused, and so is a contract with a `scan: true` file kind or
 collection or a site that declares `sql`. The public managed values are vars;
 every other managed value is a Worker secret, uploaded with the version

@@ -1,4 +1,4 @@
-// What public egress (ADR-0070) decides from a URL and from an address: the rules the runtime guard and the checker share.
+// What public egress (ADR-0071) decides from a URL and from an address: the rules the runtime guard and the checker share.
 
 import { describe, expect, test } from 'bun:test'
 import { isPublicAddress, normalizedHost, publicEgressRefusal } from '../public-egress'

@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, spyOn, test } from 'bun:test'
 import { OperationsMaintenance, WebhookNotificationSender } from '../maintenance.js'
 import { runCloudflareScheduledMaintenance } from '../platform-cf.js'
 import { createHarness } from './helpers/sqlite.js'
@@ -141,6 +141,23 @@ describe('Operations notification maintenance', () => {
 		const requestBody: unknown = await request.json()
 		expect(requestBody).toEqual({ issue: 'fp-a' })
 		expect(responseCancelled).toBe(true)
+	})
+
+	test('calls the global fetch with no `this`, as a Worker requires', async () => {
+		// workerd refuses the global `fetch` called with any other `this` ("Illegal invocation"), and the Cloudflare
+		// Worker builds the sender with its default; Bun does not refuse it, so the stand-in refuses it here the same way.
+		const workerFetch = function(this: unknown, input: RequestInfo | URL): Promise<Response> {
+			if (this !== undefined && this !== globalThis) return Promise.reject(new TypeError('Illegal invocation'))
+			expect(input instanceof Request ? input.url : String(input)).toBe('https://example.test/hook')
+			return Promise.resolve(new Response(null, { status: 204 }))
+		}
+		const spy = spyOn(globalThis, 'fetch').mockImplementation(Object.assign(workerFetch, { preconnect: fetch.preconnect }))
+		try {
+			await new WebhookNotificationSender().send({ type: 'webhook', target: 'https://example.test/hook', payload: {}, idempotencyKey: 'worker' })
+			expect(spy).toHaveBeenCalledTimes(1)
+		} finally {
+			spy.mockRestore()
+		}
 	})
 
 	test('rejects redirects and cancels their response body', async () => {

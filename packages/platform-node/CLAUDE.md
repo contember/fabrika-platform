@@ -90,7 +90,8 @@ Read this before moving a service onto this driver.
   `file-table-ddl.ts`, which also holds those DDL fragments and `fileTableScanReady`, the checker's question); no other
   `ALTER` of one. An adoption migration may also reference `fabrika_files` as a file column's foreign key, read a
   collection table in an `INSERT … SELECT`, and call `SELECT fabrika_files_copy_legacy('<collection>');` and
-  `SELECT fabrika_files_release('<collection>');`, each as a statement of its own.
+  `SELECT fabrika_files_release('<collection>');`, each as a statement of its own. The classifier reports each adoption
+  (`INSERT … SELECT` from a collection table) and each release as the file's `adoptions`, which Control's approval shows.
 - **Function calls are an allowlist** (`functionUse`, `refusedFunctionCall`): a paved or reviewed
   `pg_catalog` built-in, or a function the migration set declares. A declaration may not take a
   `pg_catalog` function name or a keyword (`pg-catalog-names.ts`, the union over every supported major — 17
@@ -123,7 +124,8 @@ Read this before moving a service onto this driver.
   concurrent run's provisioner may have no session between its creation and the tests' first connection. Grant or revoke on the database only through
   `changeCreateOnDatabase`: it holds an advisory lock every run shares, since concurrent changes of the one `pg_database`
   row fail with `tuple concurrently updated`.
-- **`@fabrika/platform-node/sql` is runtime-neutral.** `sql.ts` reaches only `migration-sql.ts`,
+- **`@fabrika/platform-node/sql` is runtime-neutral.** `sql.ts` reaches only `migration-sql.ts`, `sqlite-sql.ts` (`lexSqlite`, SQLite's lexical rules for
+  `ctx.sql` and the checker),
   `sql-names.ts`, `pg-catalog-names.ts`, `migration-classify.ts`, `application-schema.ts` (`applicationDatabaseSchema`,
   so Control classifies against the runner's schema name) and `postgres-migration-error.ts`, which import
   nothing outside themselves: Control loads it in
