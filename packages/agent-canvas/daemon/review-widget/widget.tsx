@@ -444,7 +444,7 @@ export function ReviewWidget(props: { client: ReviewClient; host: HTMLElement })
 		if (pageKey(thread.anchor.url) !== page) navigate(thread.anchor.url, thread.id)
 	}
 
-	const presence = !connected ? 'Daemon offline' : watching ? 'Claude is listening' : 'Claude is not listening'
+	const presence = !connected ? client.offlineLabel : watching ? 'Claude is listening' : 'Claude is not listening'
 	const hoveredBox = hovered === null ? null : boxOf(hovered)
 
 	return (

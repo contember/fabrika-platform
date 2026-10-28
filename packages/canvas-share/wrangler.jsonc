@@ -1,0 +1,49 @@
+/**
+ * File is auto generated DO NOT EDIT
+ */
+{
+	"name": "canvas-share",
+	"main": "./src/index.ts",
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
+	"compatibility_date": "2025-01-01",
+	"observability": {
+		"enabled": true
+	},
+	"assets": {
+		"directory": "./public",
+		"binding": "ASSETS"
+	},
+	"vars": {
+		"ENVIRONMENT": "local"
+	},
+	"migrations": [
+		{
+			"tag": "v0001",
+			"new_sqlite_classes": [
+				"ReviewProject"
+			]
+		}
+	],
+	"r2_buckets": [
+		{
+			"binding": "BLOBS",
+			"bucket_name": "canvas-share-blobs"
+		}
+	],
+	"kv_namespaces": [
+		{
+			"binding": "FEEDBACK",
+			"id": "canvas-share-feedback"
+		}
+	],
+	"durable_objects": {
+		"bindings": [
+			{
+				"name": "REVIEWS",
+				"class_name": "ReviewProject"
+			}
+		]
+	}
+}

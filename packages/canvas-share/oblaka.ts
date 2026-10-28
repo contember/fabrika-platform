@@ -1,4 +1,4 @@
-import { define, KVNamespace, R2Bucket, Worker } from 'oblaka-iac'
+import { define, DurableObject, KVNamespace, R2Bucket, Worker } from 'oblaka-iac'
 
 /**
  * Per-environment overrides. `local` is what `bunx oblaka oblaka.ts` uses
@@ -30,6 +30,11 @@ export default define(({ env }) => {
 		name: 'canvas-share-feedback',
 	})
 
+	const reviews = new DurableObject({
+		name: 'canvas-share-reviews',
+		className: 'ReviewProject',
+	})
+
 	return new Worker({
 		dir: '.',
 		name: 'canvas-share',
@@ -47,6 +52,7 @@ export default define(({ env }) => {
 		bindings: {
 			BLOBS: blobs,
 			FEEDBACK: feedback,
+			REVIEWS: reviews,
 		},
 		vars: {
 			ENVIRONMENT: env,

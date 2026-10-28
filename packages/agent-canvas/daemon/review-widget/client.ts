@@ -31,8 +31,23 @@ function readFrame(data: unknown): ReviewBrowserFrame | undefined {
 	return parsed.success ? { type: 'threads', threads: parsed.data.threads } : undefined
 }
 
+/** Where the widget keeps threads: the local daemon, or a remote project on the share worker. */
+export interface ReviewClient {
+	/** The presence label while the widget cannot reach its store. */
+	readonly offlineLabel: string
+	connect(events: ReviewEvents): void
+	close(): void
+	createThread(anchor: ReviewAnchor, body: string, send: boolean, screenshot?: string): Promise<unknown>
+	comment(threadId: string, body: string, send: boolean): Promise<unknown>
+	send(threadId: string): Promise<unknown>
+	sendNotes(): Promise<unknown>
+	setResolved(threadId: string, resolved: boolean): Promise<unknown>
+	delete(threadId: string): Promise<unknown>
+}
+
 /** The widget's side of the daemon: thread mutations over HTTP, the thread list and agent presence over a WebSocket. */
-export class ReviewClient {
+export class DaemonReviewClient implements ReviewClient {
+	readonly offlineLabel = 'Daemon offline'
 	private socket: WebSocket | null = null
 	private closed = false
 

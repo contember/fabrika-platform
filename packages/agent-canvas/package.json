@@ -21,7 +21,11 @@
 		"skills"
 	],
 	"exports": {
-		"./package.json": "./package.json"
+		"./package.json": "./package.json",
+		"./review/model": "./daemon/src/review/model.ts",
+		"./review/remote": "./daemon/src/review/remote.ts",
+		"./review/sealing": "./daemon/src/review/sealing.ts",
+		"./review/threads": "./daemon/src/review/threads.ts"
 	},
 	"scripts": {
 		"build": "bun daemon/build.ts",
