@@ -7,7 +7,7 @@
 // The file gets its own schema, which the layer reaches through the connection's search_path. The URL is a
 // credential: it is never logged.
 
-import { openPostgres } from '@fabrika/db/postgres'
+import { openTestPostgres } from '@fabrika/db/testing'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import type { Ref } from '../capability'
@@ -54,7 +54,7 @@ beforeAll(async () => {
 		await sql.unsafe(`insert into ${schema}.organizations (id, name) values ('o1', 'One'), ('o2', 'Two')`)
 		await addWorkspaces(sql, ['w1', 'w2', 'w3', 'w4'])
 	})
-	database = openPostgres({ url: url ?? '', schema, max: 2 })
+	database = openTestPostgres({ url: url ?? '', schema, max: 2 })
 	stores = defineStores({ database, capabilities: alice })
 })
 

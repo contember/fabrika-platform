@@ -10,8 +10,8 @@ import { testKit } from '@fabrika/app/testing'
 import { FABRIKA_APPLICATION_OBJECT, FABRIKA_APPLICATION_OBJECTS, PROXY_SECRET_HEADER } from '@fabrika/auth-core'
 import { applicationSchema, type Database, scoped, type TypedColumnList } from '@fabrika/db'
 import { FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
-import { openPostgres } from '@fabrika/db/postgres'
 import { defineTables } from '@fabrika/db/tables'
+import { openTestPostgres } from '@fabrika/db/testing'
 import { SQL } from 'bun'
 import { Database as BunDatabase } from 'bun:sqlite'
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
@@ -185,7 +185,7 @@ async function pgNow(): Promise<number> {
 }
 
 function pgKit() {
-	const connection = openPostgres({ url, schema, max: 3 })
+	const connection = openTestPostgres({ url, schema, max: 3 })
 	connections.push(connection)
 	return testKit(serve(contract, { database: scoped(tables) }), { database: connection })
 }

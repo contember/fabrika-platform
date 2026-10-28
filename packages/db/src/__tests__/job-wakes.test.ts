@@ -1,7 +1,7 @@
 // The pending wakes of the jobs and their projection over the lease, against a REAL Postgres. Skips cleanly when
 // FABRIKA_TEST_POSTGRES_URL is unset (see postgres.test.ts).
 
-import { openPostgres } from '@fabrika/db/postgres'
+import { openTestPostgres } from '@fabrika/db/testing'
 import { applicationRuntimeUrl, definePostgresApplicationMigrations, dropApplicationDatabase } from '@fabrika/platform-node'
 import { SQL } from 'bun'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
@@ -54,7 +54,7 @@ beforeAll(async () => {
 			insert into organizations (id, name) values ('o1', 'Org');
 			insert into workspaces (id, organization_id, name, created_by) values ('w1', 'o1', 'W1', 'u');`)
 	})
-	database = openPostgres({ url, schema, max: 4 })
+	database = openTestPostgres({ url, schema, max: 4 })
 	const framework = frameworkTablesOf(connected(tables, { database, capabilities: authority }).database)
 	leases = framework.jobs
 	wakes = framework.wakes
@@ -171,7 +171,7 @@ async function fresh(): Promise<Fresh> {
 		await sql.unsafe(`create schema ${own}`)
 		await sql.unsafe(`set search_path to ${own}; ${FRAMEWORK_MIGRATIONS.map((file) => file.sql).join('\n')} ${migration}`)
 	})
-	const ownDatabase = openPostgres({ url, schema: own, max: 2 })
+	const ownDatabase = openTestPostgres({ url, schema: own, max: 2 })
 	const framework = frameworkTablesOf(connected(tables, { database: ownDatabase, capabilities: authority }).database)
 	const query = (statement: string) =>
 		admin(async (sql): Promise<Record<string, unknown>[]> => {
@@ -572,7 +572,7 @@ describe.skipIf(!hasPostgres)('the wakes migration', () => {
 			expect(await before.migrate(url, app)).toEqual([...earlier.map((file) => `fabrika/${file.name}`), `app/${app[0]?.name}`])
 			const after = migrationsOf(FRAMEWORK_MIGRATIONS)
 			expect(await after.migrate(url, app)).toEqual(['fabrika/0009_job_wakes.sql', 'fabrika/0010_job_wakes_owned.sql'])
-			const runtime = openPostgres({ url: applicationRuntimeUrl(url, appId), schema: after.schema, max: 1 })
+			const runtime = openTestPostgres({ url: applicationRuntimeUrl(url, appId), schema: after.schema, max: 1 })
 			try {
 				const migrated = frameworkTablesOf(connected(tables, { database: runtime, capabilities: authority }).database).wakes
 				const due = at(MINUTE)
