@@ -57,6 +57,7 @@ import type {
 	GroupBuild,
 	GroupInput,
 	GroupKit,
+	JobEgressField,
 	KicksField,
 	LimitsOption,
 	LinkGroupKit,
@@ -96,7 +97,7 @@ export type CronOptions<Acts, S, U, Is, Ix extends AnyDbIndex, M = never, Ks = n
 	& MailerField<M>
 	& KicksField<Ks>
 	& SignsField<Sg, Purposes>
-	& EgressField
+	& JobEgressField
 
 /** The mail transport a job reaches, inferred from its optional field and then required, like a declared field. */
 type MailerField<M> =

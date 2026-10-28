@@ -92,3 +92,4 @@ a commit message suffices.
 | [0068](0068-public-packages-ship-declarations-beside-their-sources.md)                  | Public packages ship declarations beside their TypeScript sources; Bun runs the sources                   |
 | [0069](0069-control-reaches-an-application-environments-object.md)                      | Control reaches an application environment's object over a composed ops row, and freezes it by generation |
 | [0070](0070-data-protection-of-an-application-environment-on-cloudflare.md)             | Back up an environment's object daily, verify each backup by importing it, and restore into a clone       |
+| [0071](0071-a-cron-job-may-reach-the-public-web.md)                                     | A cron job may reach the public web; the guard keeps it off the installation and private networks         |

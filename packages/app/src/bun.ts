@@ -14,6 +14,7 @@ import { directoryEmailProvider } from '@fabrika/email/directory'
 import { parseJwks } from '@fabrika/jwks'
 import type { FileObjectStore } from '@fabrika/platform'
 import { applicationRuntimeUrl, S3BlobStore } from '@fabrika/platform-node'
+import { lookup } from 'node:dns/promises'
 import { diskAssets } from './disk-assets.js'
 import type { FetchService, RequestExecutionContext } from './fetch.js'
 import { clamscanScanner } from './files/clamscan.js'
@@ -550,6 +551,7 @@ async function startContractServer(
 		membership,
 		terminals,
 		workloadTokens,
+		resolveHost,
 		requireProxySecret: true,
 		localEmailProviders: LOCAL_EMAIL_PROVIDERS,
 		connections: databaseConnections(environment.framework[DATABASE_CONNECTIONS]) ?? DEFAULT_DATABASE_CONNECTIONS,
@@ -584,6 +586,13 @@ async function startContractServer(
 	process.once('SIGTERM', () => void stop().then(() => process.exit(0)))
 	return { port: server.port ?? port, stop }
 }
+
+/**
+ * Every address `hostname` resolves to, as the operating system's resolver answers Bun's own `fetch`: a cron job's public
+ * egress refuses a hop whose name resolves to any private one (ADR-0071).
+ */
+const resolveHost = async (hostname: string): Promise<readonly string[]> =>
+	(await lookup(hostname, { all: true, verbatim: true })).map((entry) => entry.address)
 
 /** The application module at `path`, imported when the loader runs; its default export must be what `serve` returned. */
 export function implementationAt(path: string): ImplementationLoader {
@@ -631,6 +640,7 @@ export async function runContractJob(
 			membership,
 			terminals,
 			workloadTokens,
+			resolveHost,
 			requireProxySecret: true,
 			localEmailProviders: LOCAL_EMAIL_PROVIDERS,
 			// ClamAV on PATH, as the provider's build installs it for a `scan: true` file kind; missing, the scan fails closed.

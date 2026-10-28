@@ -65,7 +65,7 @@ export function canonicalizeArtifact(artifact: ContractArtifact): ContractArtifa
 					...(reach.actions === undefined ? {} : { actions: sorted(reach.actions) }),
 					...(reach.kicks === undefined ? {} : { kicks: sorted(reach.kicks) }),
 					...(reach.signs === undefined ? {} : { signs: sorted(reach.signs) }),
-					...(reach.egress === undefined ? {} : { egress: sorted(reach.egress) }),
+					...(reach.egress === undefined ? {} : { egress: typeof reach.egress === 'string' ? reach.egress : sorted(reach.egress) }),
 				})),
 			}),
 		...(artifact.directories === undefined ? {} : { directories: artifact.directories }),

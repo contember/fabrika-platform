@@ -66,7 +66,7 @@ import {
 	type ServedSite,
 	type SpaAssets,
 } from './dispatch'
-import { installEgressGuard, platformCall, platformFacility } from './egress'
+import { type HostResolver, installEgressGuard, platformCall, platformFacility, publicEgressRules, type SiteEgress, siteEgress } from './egress'
 import type { CapturedEnvironment } from './environment'
 import { FailureReports } from './failures'
 import { applicationPolicy } from './headers'
@@ -130,6 +130,11 @@ export interface BootOptions {
 	 * with a job or a webhook does not boot.
 	 */
 	readonly workloadTokens?: WorkloadTokenSource
+	/**
+	 * Resolves a host name to its addresses, which the Bun adapter supplies (`node:dns`): a cron job's public egress then
+	 * refuses a public name of a private address before each hop. A Worker exposes no resolution and passes none.
+	 */
+	readonly resolveHost?: HostResolver
 	/** What posts a report to Operations' ingest; `fetch` by default. */
 	readonly operationsFetch?: (request: Request) => Promise<Response>
 	/** What asks a public procedure's challenge provider to verify a token; `fetch` by default. */
@@ -472,8 +477,8 @@ function boundHandler(
 }
 
 /** The origins a staged-kit site's handler reaches, a kit without tables included; nothing for a bare handler. */
-function egressOf(bound: BoundHandler): { readonly egress?: readonly string[] } {
-	return !bound.site || bound.declaration === null ? {} : { egress: bound.declaration.egress }
+function egressOf(bound: BoundHandler): { readonly egress?: SiteEgress } {
+	return !bound.site || bound.declaration === null ? {} : { egress: siteEgress(bound.declaration.egress, null) }
 }
 
 /** A staged-kit contract's endpoint gets `ctx.links` only for the link mount it declares it `issues`. */
@@ -911,6 +916,7 @@ function bootOnce(app: ContractImplementation, options: BootOptions, binding: Bi
 		mail,
 		tokens,
 		url,
+		publicEgress: publicEgressRules(options.environment.framework, options.resolveHost ?? null),
 	}, problems)
 	for (const id of jobs.declared) {
 		declared.add(id)
