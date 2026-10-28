@@ -650,6 +650,51 @@ describe('a contract app — the endpoint table', () => {
 	})
 })
 
+describe('a dev sandbox entry — the upstream Host', () => {
+	const sandbox = (workspace: string, upstreamHost: string): ContractProxyApp => ({
+		id: `dev:notes:${workspace}`,
+		hosts: [`${workspace}.dev.example.com`],
+		audience: 'notes@dev',
+		upstream: 'zbox:8081',
+		upstreamHost,
+		scheme: 'https',
+		endpoints: [],
+		reservedPrefixes: [],
+		snapshot: `sha256:${'0'.repeat(64)}`,
+		csp: NO_CSP_ORIGINS,
+	})
+	const a = sandbox('01934f6e-7b1a-7c3d-8e4f-0123456789ab', '3000-sbxa.box.example.com')
+	const b = sandbox('01934f6e-7b1a-7c3d-8e4f-ba9876543210', '3000-sbxb.box.example.com')
+	const [routeA, routeB] = buildCaddyConfig({ apps: [a, b] }, OPTIONS).apps.http.servers['proxy']?.routes ?? []
+	const chain = (route: CaddyRoute | undefined) => {
+		if (route === undefined) throw new Error('missing route')
+		return subrouteOf(route).routes
+	}
+
+	test("the upstream hop sends the entry's upstreamHost as Host, beside its own proxy secret", () => {
+		expect(upstreamOf(chain(routeA)[2]).headers?.request?.set).toEqual({
+			[PROXY_SECRET_HEADER]: [`{env.${proxySecretVariable(a.id)}}`],
+			Host: ['3000-sbxa.box.example.com'],
+		})
+		expect(upstreamOf(chain(routeB)[2]).headers?.request?.set).toEqual({
+			[PROXY_SECRET_HEADER]: [`{env.${proxySecretVariable(b.id)}}`],
+			Host: ['3000-sbxb.box.example.com'],
+		})
+		expect(proxySecretVariable(a.id)).not.toBe(proxySecretVariable(b.id))
+	})
+
+	test('each route matches its own host and pins its own entry id, never the shared audience', () => {
+		expect(routeA?.match).toEqual([{ host: [a.hosts[0] ?? ''] }])
+		expect(routeB?.match).toEqual([{ host: [b.hosts[0] ?? ''] }])
+		expect(proxyHandler(chain(routeA)[1]).rewrite?.uri).toBe(`/verify?app=${encodeURIComponent(a.id)}`)
+		expect(proxyHandler(chain(routeB)[1]).rewrite?.uri).toBe(`/verify?app=${encodeURIComponent(b.id)}`)
+	})
+
+	test('the Host is set on the app upstream only, never on the auth subrequest', () => {
+		expect(proxyHandler(chain(routeA)[1]).headers?.request?.set?.['Host']).toBeUndefined()
+	})
+})
+
 describe('access-log redaction', () => {
 	test('the token header, Cookie and Authorization are deleted from log records', () => {
 		const fields = buildCaddyConfig(MANIFEST, OPTIONS).logging.logs['default']?.encoder.fields ?? {}

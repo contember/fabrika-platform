@@ -41,6 +41,7 @@ import { carriesPlatformKey, readBearer, readCookie } from './credentials'
 import { createHandoffAttempt, type HandoffAttempt, handoffCookieName, setHandoffParams, unmatchedVerifier } from './handoff'
 import { type DelegationIssuer, type IamGateway, IamUnavailableError } from './iam'
 import {
+	audienceOf,
 	isApplicationEntry,
 	type ManifestEndpointRow,
 	type OAuthBearerChallenge,
@@ -416,7 +417,10 @@ export class Authorizer {
 		if (issuer === undefined || issuer === null) {
 			return { ok: true, grant: null }
 		}
-		const result = await this.callIam('requestDelegation', () => issuer.requestDelegation({ app: app.id, credential: token, requestId, endpoint }))
+		const result = await this.callIam(
+			'requestDelegation',
+			() => issuer.requestDelegation({ app: audienceOf(app), credential: token, requestId, endpoint }),
+		)
 		return result.ok && result.grant !== ''
 			? { ok: true, grant: result.grant }
 			: { ok: false, denial: { outcome: 'deny', status: 403, reason: 'delegation_refused' } }
@@ -432,7 +436,7 @@ export class Authorizer {
 		if (bearer === null) {
 			return { ok: false, denial: { outcome: 'deny', status: 401, reason: 'no_credential', challenge } }
 		}
-		const verified = await this.verifier.verify(bearer, { kind: 'resource', app: app.id, resource: binding.resource.resource })
+		const verified = await this.verifier.verify(bearer, { kind: 'resource', app: audienceOf(app), resource: binding.resource.resource })
 		if (!verified.ok) {
 			return verified.reason === 'unavailable'
 				? { ok: false, denial: { outcome: 'deny', status: 503, reason: 'iam_unavailable' } }
@@ -458,7 +462,7 @@ export class Authorizer {
 		const key = cacheKey(app.id, 'key', bearer)
 		const cached = this.cache?.get(key)
 		if (cached !== undefined && cached.expiresAt - this.now() > TOKEN_REFRESH_SKEW_SECONDS) {
-			const verified = await this.verifier.verify(cached.token, app.id)
+			const verified = await this.verifier.verify(cached.token, audienceOf(app))
 			if (verified.ok) {
 				return { ok: true, token: cached.token, claims: verified.claims }
 			}
@@ -472,11 +476,11 @@ export class Authorizer {
 			this.cache?.delete(key)
 		}
 
-		const minted = await this.callIam('mintFromKey', () => this.options.iam.mintFromKey({ app: app.id, key: bearer, requestId }))
+		const minted = await this.callIam('mintFromKey', () => this.options.iam.mintFromKey({ app: audienceOf(app), key: bearer, requestId }))
 		if (!minted.ok) {
 			return { ok: false, denial: { outcome: 'deny', status: minted.reason === 'invalid_key' ? 401 : 403, reason: minted.reason } }
 		}
-		const verified = await this.verifier.verify(minted.token, app.id)
+		const verified = await this.verifier.verify(minted.token, audienceOf(app))
 		if (!verified.ok) {
 			// We just minted it, so a verification miss is a config/clock/key problem — not a client
 			// error. Either way: deny.
@@ -509,7 +513,7 @@ export class Authorizer {
 		const key = cacheKey(app.id, 'session', session)
 		const cached = this.cache?.get(key)
 		if (cached !== undefined && cached.expiresAt - now > TOKEN_REFRESH_SKEW_SECONDS) {
-			const verified = await this.verifier.verify(cached.token, app.id)
+			const verified = await this.verifier.verify(cached.token, audienceOf(app))
 			if (verified.ok && verified.claims.ptype === 'user') {
 				return { ok: true, token: cached.token, claims: verified.claims }
 			}
@@ -521,13 +525,13 @@ export class Authorizer {
 			this.cache?.delete(key)
 		}
 
-		const minted = await this.callIam('mintToken', () => this.options.iam.mintToken({ app: app.id, session, requestId: request.requestId }))
+		const minted = await this.callIam('mintToken', () => this.options.iam.mintToken({ app: audienceOf(app), session, requestId: request.requestId }))
 		if (!minted.ok) {
 			return minted.reason === 'token_too_large'
 				? { ok: false, status: 'refused', reason: minted.reason }
 				: { ok: false, status: 'miss', reason: minted.reason }
 		}
-		const verified = await this.verifier.verify(minted.token, app.id)
+		const verified = await this.verifier.verify(minted.token, audienceOf(app))
 		if (!verified.ok) {
 			// We just minted it, so this is a config/clock/key problem, not a bad session — and if the
 			// key set is unreachable it is an incident, not a reason to bounce the browser to login.
@@ -589,7 +593,7 @@ export class Authorizer {
 		const redeem = (presented: string) =>
 			this.callIam(
 				'exchangeAuthCode',
-				() => this.options.iam.exchangeAuthCode({ app: resolved.app.id, code, verifier: presented, requestId: request.requestId }),
+				() => this.options.iam.exchangeAuthCode({ app: audienceOf(resolved.app), code, verifier: presented, requestId: request.requestId }),
 			)
 		if (verifier === null) {
 			// This browser did not start the sign-in the code belongs to. The code is spent, so whoever started it cannot
@@ -598,7 +602,8 @@ export class Authorizer {
 			return { outcome: 'deny', status: 403, reason: 'invalid_session', clearHandoffState: state }
 		}
 		const result = await redeem(verifier)
-		if (!result.ok) {
+		// IAM binds a code to its audience only, which several dev sandbox entries share: the return must be this host.
+		if (!result.ok || !returnsToHost(resolved.app, request.url, result.returnUrl)) {
 			return { outcome: 'deny', status: 403, reason: 'invalid_session', clearHandoffState: state }
 		}
 		return { outcome: 'handoff', status: 302, location: result.returnUrl, session: result.session, expiresAt: result.expiresAt, handoffState: state }
@@ -629,7 +634,7 @@ export class Authorizer {
 			this.cache?.delete(cacheKey(app.id, 'session', session))
 		}
 		const release = new URL(SIGNOUT_RELEASE_PATH, this.options.issuer.replace(/\/+$/, ''))
-		release.searchParams.set('app', app.id)
+		release.searchParams.set('app', audienceOf(app))
 		release.searchParams.set(LOGIN_REDIRECT_PARAM, target)
 		return { outcome: 'signout', status: 302, location: release.toString() }
 	}
@@ -663,7 +668,7 @@ export class Authorizer {
 		// does not go through it (the Cloudflare Worker reads its env directly).
 		const issuer = this.options.issuer.replace(/\/+$/, '')
 		const login = new URL('/auth/login', issuer)
-		login.searchParams.set('app', app.id)
+		login.searchParams.set('app', audienceOf(app))
 		login.searchParams.set(LOGIN_REDIRECT_PARAM, target.toString())
 		setHandoffParams(login, handoff)
 		return login.toString()
@@ -693,6 +698,12 @@ function sameOriginTarget(origin: string, path: string | null): string | null {
 	}
 	const target = new URL(path, origin)
 	return target.origin === origin ? target.toString() : null
+}
+
+/** Whether a redeemed code's return URL is on the host the callback arrived at, and that host is one of the entry's. */
+function returnsToHost(app: ProxyApp, callback: URL, returnUrl: string): boolean {
+	const target = URL.canParse(returnUrl) ? new URL(returnUrl) : null
+	return target !== null && target.hostname === callback.hostname && app.hosts.includes(target.hostname)
 }
 
 function isControlOrSpace(character: string): boolean {

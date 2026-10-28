@@ -201,11 +201,19 @@ describe.skipIf(CADDY === '')('the generated chain in a running Caddy', () => {
 	const unreachable: ContractProxyApp = { ...contract, id: 'down@prod', hosts: ['down.example'], upstream: `127.0.0.1:${freePort()}` }
 	// The same application served over http, as the local stack serves it.
 	const plain: ContractProxyApp = { ...contract, id: 'plain@prod', hosts: ['plain.example'], scheme: 'http' }
+	// A dev sandbox, which the Box router routes by the Host the proxy sets.
+	const sandbox: ContractProxyApp = {
+		...contract,
+		id: 'dev:notes:01934f6e-7b1a-7c3d-8e4f-0123456789ab',
+		audience: 'notes@dev',
+		hosts: ['sandbox.example'],
+		upstreamHost: '3000-sbx.box.example',
+	}
 	const dir = mkdtempSync(join(tmpdir(), 'fabrika-caddy-'))
 	let caddy: ReturnType<typeof Bun.spawn> | undefined
 
 	beforeAll(async () => {
-		const config = buildCaddyConfig({ apps: [contract, unreachable, plain] }, {
+		const config = buildCaddyConfig({ apps: [contract, unreachable, plain, sandbox] }, {
 			authUpstream: `127.0.0.1:${auth.port}`,
 			listen: [`127.0.0.1:${port}`],
 			healthListen: [`127.0.0.1:${freePort()}`],
@@ -219,6 +227,7 @@ describe.skipIf(CADDY === '')('the generated chain in a running Caddy', () => {
 				XDG_CONFIG_HOME: dir,
 				[proxySecretVariable('notes@prod')]: SECRET,
 				[proxySecretVariable('plain@prod')]: SECRET,
+				[proxySecretVariable(sandbox.id)]: SECRET,
 			},
 			stdout: 'ignore',
 			stderr: 'pipe',
@@ -265,6 +274,18 @@ describe.skipIf(CADDY === '')('the generated chain in a running Caddy', () => {
 		expect(atApp?.get('X-Fabrika-Delegation')).toBeNull()
 		expect(atApp?.get('X-Request-Id')).toBe('proxy-request')
 		expect(atApp?.get('X-Fabrika-Proxy-Secret')).toBe(SECRET)
+	})
+
+	test("a sandbox's upstream reads its upstreamHost as Host in place of the client's; any other app reads the client's", async () => {
+		expect((await rawRequest(port, { Connection: 'close' }, '/api/me', 'sandbox.example')).status).toBe(200)
+		const [atSandbox] = seenByApp.splice(0)
+		expect(atSandbox?.get('Host')).toBe('3000-sbx.box.example')
+		expect(atSandbox?.get('X-Fabrika-Proxy-Secret')).toBe(SECRET)
+		expect(seenByAuth.splice(0)[0]?.get('X-Forwarded-Host')).toBe('sandbox.example')
+
+		expect((await rawRequest(port, { Connection: 'close' })).status).toBe(200)
+		expect(seenByApp.splice(0)[0]?.get('Host')).toBe('127.0.0.1')
+		seenByAuth.length = 0
 	})
 
 	test('a Connection header naming an asserted header is a 400 that reaches neither service', async () => {

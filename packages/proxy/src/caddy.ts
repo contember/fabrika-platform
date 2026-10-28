@@ -383,7 +383,8 @@ function proxySecretVariableOf(app: ProxyApp, ownsIamSession: boolean): string |
  *      `__Host-px_*` cookie on that upstream hop, except IAM's login cookie on its owning route. For a
  *      contract app it sets the proxy secret from the variable `proxySecretVariable(app.id)`, read at
  *      request time through `{env.…}`, so the secret is in no generated file (ADR-0022 rule 5). An unset
- *      variable sends an empty secret, which the application refuses. IAM's own route sets the secret from
+ *      variable sends an empty secret, which the application refuses. An entry with `upstreamHost` sends it as `Host`
+ *      in place of the client's (a dev sandbox, which the Box router routes by `Host`). IAM's own route sets the secret from
  *      `IAM_PROXY_SECRET_VARIABLE`, which proves only who wrote the client address and request id; IAM refuses
  *      nothing without it (`packages/iam/src/proxy-proof.ts`). A contract app's answer then gets
  *      the header policy, replacing whatever the app set; a download endpoint's gets the file treatment
@@ -399,12 +400,17 @@ function appRoute(app: ProxyApp, authUpstream: string, ownsIamSession: boolean):
 	const cookiePattern = ownsIamSession
 		? `((?:^|;[ \\t]*)${escapeRe2(SESSION_COOKIE)}=[^;]*)|${fabrikaCookiePattern}`
 		: fabrikaCookiePattern
+	const set: Record<string, string[]> = {
+		...(secretVariable === null ? {} : { [PROXY_SECRET_HEADER]: [`{env.${secretVariable}}`] }),
+		// Caddy writes a request's `Host` header op to the request's host, which the upstream routes by.
+		...(isApplicationEntry(app) && app.upstreamHost !== undefined ? { Host: [app.upstreamHost] } : {}),
+	}
 	const upstream = (response?: CaddyHeaderOps): CaddyReverseProxyHandler => ({
 		handler: 'reverse_proxy',
 		upstreams: [{ dial: app.upstream }],
 		headers: {
 			request: {
-				...(secretVariable === null ? {} : { set: { [PROXY_SECRET_HEADER]: [`{env.${secretVariable}}`] } }),
+				...(Object.keys(set).length === 0 ? {} : { set }),
 				replace: {
 					Cookie: [
 						{
