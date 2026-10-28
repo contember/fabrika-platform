@@ -542,7 +542,6 @@ export function createControlRpcRouter(
 			logs: deps.logs,
 			cancel: deps.cancelRun,
 			auth: ctx.auth,
-			devSandboxes: ctx.provider.devSandboxes !== undefined,
 		}
 	}
 

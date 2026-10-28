@@ -569,21 +569,6 @@ export interface ProviderAuthoring {
 	readonly protectedFiles: readonly string[]
 }
 
-/** One call on the service of a `dev` environment, between its bootstrap runs. */
-export interface ProviderDevEnvironmentInput {
-	readonly environment: ProviderEnvironment
-	readonly signal: AbortSignal
-}
-
-/**
- * The service of a `dev` environment outside a run (ADR-0049): Control stops it after an idle period and starts it on
- * the next commit. Files the launcher wrote survive both.
- */
-export interface ProviderDevEnvironments {
-	stop(input: ProviderDevEnvironmentInput): Promise<void>
-	start(input: ProviderDevEnvironmentInput): Promise<void>
-}
-
 /** The provider's handle on one workspace sandbox, which Control persists; stable for the workspace's life. */
 export interface ProviderDevSandboxRef {
 	readonly sandboxId: string
@@ -668,8 +653,6 @@ export interface ControlProvider {
 	 */
 	readonly applicationHopSecret?: true
 	/** Absent means the provider runs no `dev` environment, and Control refuses one. */
-	readonly devEnvironments?: ProviderDevEnvironments
-	/** Absent means the provider gives a `dev` environment no per-workspace sandboxes. */
 	readonly devSandboxes?: ProviderDevSandboxes
 	/**
 	 * Whether an environment at this approved access is served the ops channel through which Control reaches its object

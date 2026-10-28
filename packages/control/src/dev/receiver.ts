@@ -1,7 +1,6 @@
-// The platform transport's `source` receiver (ADR-0064): the launcher of a `dev` environment waits here for the next head
-// of the workspace it follows and reports what it serves. With one sandbox per workspace, its key names that workspace
-// and reads only its files; otherwise it reads the bound workspace's files of one `<app>@dev`, which is source that
-// environment already runs. Runtime-neutral, but only the Bun process hands it a `DevSource`.
+// The platform transport's `source` receiver (ADR-0064): the launcher of a workspace's `dev` sandbox waits here for the
+// next head of that workspace and reports what it serves. Its key names the workspace and reads only its files.
+// Runtime-neutral, but only the Bun process hands it a `DevSource`.
 
 import {
 	DEV_REPORT_MAX_LINES,
@@ -17,12 +16,12 @@ import {
 import { hashPlatformKey } from '@fabrika/email/platform'
 import { workspaceSourceTarget } from '../api/workspaces'
 import type { ControlAppContext } from '../app'
-import type { DevEnvironmentRepository, DevSandboxRepository, PlatformTransportKeyRepository, RunRow } from '../db'
+import type { DevSandboxRepository, PlatformTransportKeyRepository, RunRow } from '../db'
 import { errorLabel } from '../error-label'
 import { bearerOf, error, json, readBoundedText } from '../http'
 import { repositories } from '../services'
 import { WorkspaceSourceError, type WorkspaceSourcePort, type WorkspaceSourceTarget } from '../workspace-source-port'
-import { type DevRecord, type DevStore, environmentStore, sandboxStore } from './service'
+import { type DevRecord, type DevStore, sandboxStore } from './service'
 import { type DevSignals, waitForRecord } from './signals'
 import { buildDevSync, relayableSync } from './sync'
 
@@ -36,16 +35,11 @@ const REPORT_MAX_BODY_BYTES = 4 * 1024 * 1024
 export interface DevSource {
 	readonly source: WorkspaceSourcePort
 	readonly signals: DevSignals
-	/** True when the provider gives each workspace its own sandbox (`ControlProvider.devSandboxes`). */
-	readonly sandboxes: boolean
 }
 
 export interface DevReceiverDeps {
 	readonly keys: Pick<PlatformTransportKeyRepository, 'findValidByHash'>
-	readonly devEnvironments: DevEnvironmentRepository
 	readonly devSandboxes: DevSandboxRepository
-	/** True when a launcher's key must name its workspace: each workspace has its own sandbox. */
-	readonly sandboxes: boolean
 	/** The repository and connection of the application's GitHub source; null when it has none any more. */
 	readonly sourceTarget: (appId: string) => Promise<WorkspaceSourceTarget | null>
 	readonly source: WorkspaceSourcePort
@@ -67,9 +61,7 @@ export function handleDevSource(ctx: ControlAppContext): Promise<Response> {
 	const persistence = repositories(ctx.env)
 	const deps: DevReceiverDeps = {
 		keys: persistence.platformTransportKeys,
-		devEnvironments: persistence.devEnvironments,
 		devSandboxes: persistence.devSandboxes,
-		sandboxes: dev.sandboxes,
 		sourceTarget: (appId) => workspaceSourceTarget(persistence, appId),
 		source: dev.source,
 		signals: dev.signals,
@@ -143,9 +135,8 @@ function reportInput(report: DevReport) {
 const SUPERSEDED = 'a newer bootstrap run replaced this container'
 
 /**
- * A container is the environment's only while its bootstrap commit is the newest bootstrap run's. The one a new run
- * replaces keeps running until the platform swaps it, and a sync or report from it would overwrite the new one's. With
- * one sandbox per workspace, the newest bootstrap run is that workspace's.
+ * A launcher is the sandbox's only while its bootstrap commit is the workspace's newest bootstrap run's. The one a new
+ * run replaces may still run while the rebuild stops it, and a sync or report from it would overwrite the new one's.
  */
 async function superseded(deps: DevReceiverDeps, row: DevRecord | null, bootstrap: string): Promise<boolean> {
 	if (row === null || row.bootstrap_run_id === null) return false
@@ -183,8 +174,8 @@ function answersNow(row: DevRecord, request: DevWaitRequest): boolean {
 		|| request.checks === null || row.checks_generation > request.checks
 }
 
-function needsSync(row: DevRecord, head: string): row is DevRecord & { target_sha: string; workspace_id: string } {
-	return row.workspace_id !== null && row.target_sha !== null && row.target_sha !== head && row.target_sha !== row.refused_sha
+function needsSync(row: DevRecord, head: string): row is DevRecord & { target_sha: string } {
+	return row.target_sha !== null && row.target_sha !== head && row.target_sha !== row.refused_sha
 }
 
 async function answer(
@@ -234,8 +225,8 @@ interface Launcher {
 }
 
 /**
- * The launcher a `source` key names; a refusal response for any other bearer. With one sandbox per workspace the key
- * must name its workspace, whose sandbox, when it has one, is in the key's environment.
+ * The launcher a `source` key names; a refusal response for any other bearer. The key must name its workspace, whose
+ * sandbox, when it has one, is in the key's environment.
  */
 async function authenticate(deps: DevReceiverDeps, request: Request): Promise<Launcher | Response> {
 	const bearer = bearerOf(request)
@@ -244,10 +235,7 @@ async function authenticate(deps: DevReceiverDeps, request: Request): Promise<La
 		const key = await deps.keys.findValidByHash(await hashPlatformKey(bearer), deps.now())
 		if (key === null || key.receiver !== SOURCE_RECEIVER) return error(401, 'unauthorized')
 		const { app_id: appId, env, workspace_id: workspaceId } = key
-		if (workspaceId === null) {
-			if (deps.sandboxes) return error(401, 'unauthorized')
-			return { appId, label: `${appId}@${env}`, store: environmentStore(deps.devEnvironments, appId, env, null) }
-		}
+		if (workspaceId === null) return error(401, 'unauthorized')
 		const sandbox = await deps.devSandboxes.get(workspaceId)
 		if (sandbox !== null && (sandbox.app_id !== appId || sandbox.env !== env)) return error(401, 'unauthorized')
 		return { appId, label: `${appId}@${env} workspace ${workspaceId}`, store: sandboxStore(deps.devSandboxes, workspaceId) }

@@ -1,23 +1,20 @@
-// The `dev` environment of an application (ADR-0049). Where the provider gives each workspace its own sandbox, each
-// workspace is served by its own sandbox at its own URL; otherwise one workspace at a time is bound to the environment's
-// one service. Each commit to the workspace reaches the running sandbox or service through the dev launcher, without a
-// run. The first bind, and any change the launcher cannot apply, is a bootstrap: an ordinary run with every check.
-// Denied or foreign coordinates are a 404.
+// The `dev` environment of an application (ADR-0049). Each workspace is served by its own sandbox at its own URL. Each
+// commit to the workspace reaches the running sandbox through the dev launcher, without a run. The first bind, and any
+// change the launcher cannot apply, is a bootstrap: an ordinary run with every check. Denied or foreign coordinates are
+// a 404.
 
 import { type DevCheckResult, devCheckResultSchema, type DevLogLine, devLogLineSchema, type DevStatus } from '@fabrika/app/dev/wire'
 import type { RunDto } from '@fabrika/control-contract'
 import { CONTROL_ACTIONS } from '@fabrika/control-contract'
 import { PROVIDER_DEV_CAPACITY, ProviderNamespaceError } from '@fabrika/provider-contract'
 import { z } from 'zod/v4'
-import type { AppEnvRow, DevEnvironmentRow, DevSandboxRow, RunRow } from '../db'
+import type { AppEnvRow, DevSandboxRow, RunRow } from '../db'
 import { DEV_SANDBOX_VAULT_REQUIRED, devSandboxOrigin, workspacePublication } from '../dev/sandbox-keys'
 import {
 	type DevRecord,
 	type DevSandboxDeps,
 	type DevStore,
 	ensureDevSandbox,
-	environmentRecord,
-	environmentStore,
 	removeDevSandbox,
 	sandboxRecord,
 	sandboxStore,
@@ -48,7 +45,7 @@ import {
 export const DEV_APPLY_WAIT_MS = 10_000
 export const DEV_CHECKS_WAIT_MS = 50_000
 export const DEV_RESET_WAIT_MS = 20_000
-/** How long `bind_dev` waits for the first request of a launcher whose service it started, to learn whether it is usable. */
+/** How long `bind_dev` waits for the first request of a launcher whose sandbox it woke, to learn whether it is usable. */
 export const DEV_BOOT_WAIT_MS = 15_000
 /** The lines `apply_changes` returns with the dev state. */
 export const DEV_APPLY_LOG_LINES = 20
@@ -63,13 +60,10 @@ export const DEV_LAUNCHER_BUSY_SILENT_SECONDS = 15 * 60
 export const DEV_SANDBOX_CAPACITY = 'the sandbox host is full; abandon idle workspaces or ask the operator to size the zbox service'
 const DEV_SANDBOX_REMOVING = "the workspace's dev sandbox is being removed, or the workspace was abandoned; retry in a minute"
 
-/** What the dev use cases need beyond a workspace's: this process's wake-ups and the provider's start of the service. */
+/** What the dev use cases need beyond a workspace's: this process's wake-ups and the workspace sandboxes. */
 export interface DevUseCaseDeps {
 	readonly signals: DevSignals
-	/** Starts the environment's service when maintenance stopped it; true when it did. Without `sandboxes` only. */
-	readonly start: (row: DevEnvironmentRow, signal: AbortSignal) => Promise<boolean>
-	/** Present when the provider gives each workspace its own sandbox (`ControlProvider.devSandboxes`). */
-	readonly sandboxes?: DevSandboxDeps
+	readonly sandboxes: DevSandboxDeps
 	/** Unix seconds. */
 	readonly now: () => number
 }
@@ -80,9 +74,9 @@ export interface DevUseCaseContext extends WorkspaceUseCaseContext {
 }
 
 /**
- * Where the environment stands. `unbound`: no workspace is bound, or the workspace has no sandbox. `bootstrapping`: its
- * bootstrap run has not finished. `bootstrap_failed`: that run failed. `stopped`: idle, and the next commit starts or
- * wakes it. `pending`: the launcher has not reported the head yet. Otherwise the launcher's own status.
+ * Where the workspace's sandbox stands. `unbound`: the workspace has no sandbox. `bootstrapping`: its bootstrap run has
+ * not finished. `bootstrap_failed`: that run failed. `stopped`: parked while idle, and the next commit wakes it.
+ * `pending`: the launcher has not reported the head yet. Otherwise the launcher's own status.
  */
 export type DevStateDto = 'unbound' | 'bootstrapping' | 'bootstrap_failed' | 'stopped' | 'pending' | DevStatus
 
@@ -96,7 +90,7 @@ export interface DevChecksDto {
 export interface DevEnvironmentDto {
 	appId: string
 	env: string
-	/** The workspace served: the bound one, or the one whose sandbox this is; null when none is. */
+	/** The workspace whose sandbox this is; null when none is. */
 	workspaceId: string | null
 	/** True when that workspace is the caller's own. */
 	yours: boolean
@@ -155,23 +149,17 @@ export interface DevEnvironmentSummaryDto {
 	state: DevStateDto
 	summary: string
 	url: string | null
-	/** The bound workspace, or the caller's own workspace with a sandbox (the most recently active); null when none is. */
+	/** The caller's own workspace with a sandbox (the most recently active); null when none is. */
 	workspaceId: string | null
 	yours: boolean
 	head: string | null
 }
 
-/** Where a workspace's launcher runs in the application's dev environment. */
-interface DevPlace {
-	readonly appEnv: AppEnvRow
-	/** True when each workspace has its own sandbox. */
-	readonly sandboxes: boolean
-}
-
 /** The record one workspace's launcher follows, and how to get it running again. */
-interface DevTarget extends DevPlace {
+interface DevTarget {
+	readonly appEnv: AppEnvRow
 	readonly store: DevStore
-	/** Starts the stopped service or wakes the parked sandbox; true when it did. */
+	/** Wakes the parked sandbox; true when it was recorded as parked. */
 	readonly resume: (record: DevRecord, signal: AbortSignal) => Promise<boolean>
 }
 
@@ -185,11 +173,7 @@ async function devSummary(c: DevUseCaseContext, appId: string): Promise<DevEnvir
 	if (c.dev === undefined) return null
 	const appEnv = (await c.repositories.registry.listAppEnvs(appId)).find((row) => row.kind === 'dev')
 	if (appEnv === undefined || !canAtCoordinates(c.auth, CONTROL_ACTIONS.DEPLOY_READ, appId, appEnv.env)) return null
-	const place: DevPlace = { appEnv, sandboxes: c.dev.sandboxes !== undefined }
-	const record = place.sandboxes
-		? await ownNewestSandbox(c, appEnv)
-		: environmentRecordOrNull(await c.repositories.devEnvironments.get(appId, appEnv.env))
-	const described = await describe(c, place, record, { lines: 0, failuresOnly: false })
+	const described = await describe(c, appEnv, await ownNewestSandbox(c, appEnv), { lines: 0, failuresOnly: false })
 	return {
 		env: described.env,
 		kind: 'dev',
@@ -215,55 +199,16 @@ async function ownNewestSandbox(c: DevUseCaseContext, appEnv: AppEnvRow): Promis
 }
 
 /**
- * Bind the workspace to its application's dev environment. With one sandbox per workspace, this creates the workspace's
- * sandbox (or wakes it) and starts a bootstrap run of the workspace head when it needs one. Otherwise the first bind, a
- * bind after a failed bootstrap and a bind after a refused sync start a bootstrap run of the workspace head; any other
- * bind switches the running container to the workspace, which syncs its files and resets the schema.
+ * Bind the workspace to its application's dev environment: create the workspace's sandbox when it has none, wake it when
+ * maintenance parked it, and bootstrap it on the head when it needs one. Binding one workspace never touches another's
+ * sandbox.
  */
 export async function bindDevUseCase(c: DevUseCaseContext, input: { workspaceId: string }): Promise<DevEnvironmentDto> {
 	const dev = requireDev(c)
 	const owned = await requireWorkspace(c, input.workspaceId, CONTROL_ACTIONS.DEPLOY_TRIGGER)
 	const appEnv = await requireDevEnvironment(c, owned.workspace.app_id, CONTROL_ACTIONS.DEPLOY_TRIGGER)
 	const head = await requireHead(c, owned)
-	if (dev.sandboxes !== undefined) return bindSandbox(c, dev, dev.sandboxes, owned, appEnv, head)
-	const target = targetOf(c, dev, appEnv, owned.workspace.id)
-	const record = await target.store.read()
-	const switching = record !== null && record.workspace_id !== null && record.workspace_id !== owned.workspace.id
-	// A stopped service first starts: a rebind syncs the running container, and a bootstrap deploys into it.
-	const contact = record !== null && await target.resume(record, c.signal) ? await firstContact(c, dev, target.store) : { record, silent: false }
-	const run = contact.silent || await needsBootstrap(c, dev, appEnv, contact.record, owned, head)
-		? await createManualRun(c, { appId: appEnv.app_id, env: appEnv.env, ref: `refs/heads/${owned.workspace.branch}`, commitSha: head })
-		: null
-	const bound = await c.repositories.devEnvironments.bind({
-		appId: appEnv.app_id,
-		env: appEnv.env,
-		workspaceId: owned.workspace.id,
-		targetSha: head,
-		bootstrapRunId: run?.id ?? null,
-		reset: switching,
-	})
-	dev.signals.notify(target.store.targetKey)
-	await c.auth.audit({
-		action: 'dev.bind',
-		resourceType: 'workspace',
-		resourceId: owned.workspace.id,
-		metadata: { appId: appEnv.app_id, env: appEnv.env, head, bootstrapRunId: run?.id ?? null, switched: switching },
-	})
-	return describe(c, target, environmentRecord(bound), { lines: 0, failuresOnly: false })
-}
-
-/**
- * Create the workspace's sandbox when it has none, wake it when maintenance parked it, and bootstrap it on the head when
- * it needs one. Binding one workspace never touches another's sandbox.
- */
-async function bindSandbox(
-	c: DevUseCaseContext,
-	dev: DevUseCaseDeps,
-	sandboxes: DevSandboxDeps,
-	owned: OwnedWorkspace,
-	appEnv: AppEnvRow,
-	head: string,
-): Promise<DevEnvironmentDto> {
+	const sandboxes = dev.sandboxes
 	if (sandboxes.vault === undefined) fail(503, DEV_SANDBOX_VAULT_REQUIRED)
 	if (appEnv.domain === null || appEnv.domain === '') {
 		fail(409, 'the dev environment names no domain to serve workspace sandboxes under; an operator registers it with a wildcard domain')
@@ -306,7 +251,7 @@ async function bindSandbox(
 			replaced: ensured.replaced,
 		},
 	})
-	return describe(c, target, bound, { lines: 0, failuresOnly: false })
+	return describe(c, appEnv, bound, { lines: 0, failuresOnly: false })
 }
 
 export async function getDevStatusUseCase(c: DevUseCaseContext, input: { workspaceId: string; log: DeploymentLogQuery }): Promise<DevEnvironmentDto> {
@@ -314,7 +259,7 @@ export async function getDevStatusUseCase(c: DevUseCaseContext, input: { workspa
 	const owned = await requireWorkspace(c, input.workspaceId, CONTROL_ACTIONS.DEPLOY_READ)
 	const appEnv = await requireDevEnvironment(c, owned.workspace.app_id, CONTROL_ACTIONS.DEPLOY_READ)
 	const target = targetOf(c, dev, appEnv, owned.workspace.id)
-	return describe(c, target, await target.store.read(), input.log)
+	return describe(c, appEnv, await target.store.read(), input.log)
 }
 
 /**
@@ -333,7 +278,7 @@ export async function runChecksUseCase(c: DevUseCaseContext, input: { workspaceI
 		fail(
 			409,
 			`the dev environment holds ${record.head_sha ?? 'no commit yet'}, not the workspace's newest commit ${record.target_sha ?? 'unknown'} `
-				+ `(state ${state}): ${problem ?? summaryOf(state, record, target.sandboxes)} Run the checks once it serves that commit.`,
+				+ `(state ${state}): ${problem ?? summaryOf(state, record)} Run the checks once it serves that commit.`,
 		)
 	}
 	await target.resume(record, c.signal)
@@ -345,7 +290,7 @@ export async function runChecksUseCase(c: DevUseCaseContext, input: { workspaceI
 		const current = await target.store.read()
 		return current !== null && parseChecks(current.checks_json)?.request === requested.checks_generation ? current : null
 	}, c.signal)
-	return describe(c, target, done ?? await target.store.read(), { lines: 0, failuresOnly: false })
+	return describe(c, target.appEnv, done ?? await target.store.read(), { lines: 0, failuresOnly: false })
 }
 
 /** Drop the dev environment's schema and role family, and migrate the workspace's migrations from scratch. */
@@ -361,7 +306,7 @@ export async function resetDevUseCase(c: DevUseCaseContext, input: { workspaceId
 		const current = await target.store.read()
 		return current !== null && (current.reset_applied ?? -1) >= requested.reset_generation && !BUSY.has(current.status) ? current : null
 	}, c.signal)
-	return describe(c, target, done ?? await target.store.read(), {
+	return describe(c, target.appEnv, done ?? await target.store.read(), {
 		lines: DEV_APPLY_LOG_LINES,
 		failuresOnly: false,
 	})
@@ -378,7 +323,7 @@ export async function followDevCommit(
 ): Promise<DevApplyDto | null> {
 	const dev = c.dev
 	if (dev === undefined) return null
-	const followed = await followedRecord(c, dev, input.workspaceId)
+	const followed = await followedRecord(c, input.workspaceId)
 	if (followed === null || !canAtCoordinates(c.auth, CONTROL_ACTIONS.DEPLOY_READ, followed.appId, followed.env)) return null
 	const appEnv = await c.repositories.registry.getAppEnv(followed.appId, followed.env)
 	if (appEnv === null || appEnv.kind !== 'dev') return null
@@ -409,20 +354,12 @@ export async function followDevCommit(
 			return current !== null && servesOrRefused(current, input.commitSha) ? current : null
 		}, c.signal)
 	const current = settled ?? await target.store.read() ?? record
-	const described = await describe(c, target, current, { lines: DEV_APPLY_LOG_LINES, failuresOnly: false })
+	const described = await describe(c, appEnv, current, { lines: DEV_APPLY_LOG_LINES, failuresOnly: false })
 	return { head: described.head, state: described.state, summary: described.summary, url: described.url, log: described.log.lines }
 }
 
 /** The record that follows the workspace's commits, with its coordinates; null when nothing does. */
-async function followedRecord(
-	c: DevUseCaseContext,
-	dev: DevUseCaseDeps,
-	workspaceId: string,
-): Promise<{ appId: string; env: string; record: DevRecord } | null> {
-	if (dev.sandboxes === undefined) {
-		const bound = await c.repositories.devEnvironments.getByWorkspace(workspaceId)
-		return bound === null ? null : { appId: bound.app_id, env: bound.env, record: environmentRecord(bound) }
-	}
+async function followedRecord(c: DevUseCaseContext, workspaceId: string): Promise<{ appId: string; env: string; record: DevRecord } | null> {
 	const sandbox = await c.repositories.devSandboxes.get(workspaceId)
 	return sandbox === null || sandbox.state !== 'ready' ? null : { appId: sandbox.app_id, env: sandbox.env, record: sandboxRecord(sandbox) }
 }
@@ -452,26 +389,14 @@ function servesOrRefused(row: DevRecord, commitSha: string): boolean {
 	return row.head_sha === commitSha && (row.status === 'serving' || row.status === 'failed')
 }
 
-/** Where the workspace's launcher runs: its own sandbox, or the environment's one service. */
+/** Where the workspace's launcher runs: its own sandbox. */
 function targetOf(c: DevUseCaseContext, dev: DevUseCaseDeps, appEnv: AppEnvRow, workspaceId: string): DevTarget {
-	const sandboxes = dev.sandboxes
-	if (sandboxes === undefined) {
-		return {
-			appEnv,
-			sandboxes: false,
-			store: environmentStore(c.repositories.devEnvironments, appEnv.app_id, appEnv.env, workspaceId),
-			resume: (record, signal) => record.environment === null ? Promise.resolve(false) : dev.start(record.environment, signal),
-		}
-	}
 	return {
 		appEnv,
-		sandboxes: true,
 		store: sandboxStore(c.repositories.devSandboxes, workspaceId),
 		resume: async (record, signal) => {
-			const sandbox = record.sandbox
-			if (sandbox === null) return false
 			try {
-				return await sandboxCall(() => wakeDevSandbox(sandboxes, appEnv, sandbox, signal))
+				return await sandboxCall(() => wakeDevSandbox(dev.sandboxes, appEnv, record.sandbox, signal))
 			} catch (cause) {
 				if (cause instanceof ControlApiError) throw cause
 				const reference = logFailure('dev: waking a sandbox', cause)
@@ -492,8 +417,7 @@ async function sandboxCall<T>(operation: () => Promise<T>): Promise<T> {
 }
 
 /**
- * The record once the launcher of a service that just started, or a sandbox that just woke, sent its first request, or
- * Control refused it. `silent` when neither happened within `DEV_BOOT_WAIT_MS`: a launcher that does not talk after a
+ * The record once the launcher of a sandbox that just woke sent its first request, or Control refused it. `silent` when neither happened within `DEV_BOOT_WAIT_MS`: a launcher that does not talk after a
  * start cannot follow a bind.
  */
 async function firstContact(c: DevUseCaseContext, dev: DevUseCaseDeps, store: DevStore): Promise<{ record: DevRecord | null; silent: boolean }> {
@@ -556,27 +480,26 @@ async function bootstrapRunOf(c: DevUseCaseContext, row: DevRecord): Promise<Run
  * so when this workspace's own contract differs from it; null when they agree or either is unknown.
  */
 async function iamDigestNote(c: DevUseCaseContext, appEnv: AppEnvRow, row: DevRecord | null): Promise<string | null> {
-	if (row?.sandbox == null || appEnv.iam_digest === null) return null
+	if (row === null || appEnv.iam_digest === null) return null
 	const publication = await workspacePublication(c.repositories, row.sandbox)
 	if (publication === null || publication.access.contractDigest === appEnv.iam_digest) return null
 	return "Roles and actions follow the most recently bootstrapped workspace, whose contract differs from this one's; "
 		+ 'call bind_dev to refresh them.'
 }
 
-async function describe(c: DevUseCaseContext, place: DevPlace, row: DevRecord | null, log: DeploymentLogQuery): Promise<DevEnvironmentDto> {
-	const { appEnv } = place
-	const workspace = row?.workspace_id == null ? null : await c.repositories.workspaces.getWorkspace(row.workspace_id)
+async function describe(c: DevUseCaseContext, appEnv: AppEnvRow, row: DevRecord | null, log: DeploymentLogQuery): Promise<DevEnvironmentDto> {
+	const workspace = row === null ? null : await c.repositories.workspaces.getWorkspace(row.workspace_id)
 	const run = row === null ? null : await bootstrapRunOf(c, row)
 	const problem = row === null || c.dev === undefined ? null : launcherProblem(row, run, c.dev.now())
 	const state = stateOf(row, run, problem)
-	const note = place.sandboxes ? await iamDigestNote(c, appEnv, row) : null
-	const summary = problem ?? summaryOf(state, row, place.sandboxes)
+	const note = await iamDigestNote(c, appEnv, row)
+	const summary = problem ?? summaryOf(state, row)
 	return {
 		appId: appEnv.app_id,
 		env: appEnv.env,
 		workspaceId: workspace?.id ?? null,
 		yours: workspace !== null && workspace.owner_id === requireOwner(c.auth),
-		url: urlOf(place, row),
+		url: urlOf(appEnv, row),
 		state,
 		summary: note === null ? summary : `${summary} ${note}`,
 		head: row?.head_sha ?? null,
@@ -588,17 +511,15 @@ async function describe(c: DevUseCaseContext, place: DevPlace, row: DevRecord | 
 	}
 }
 
-/** The environment's public origin, or the workspace sandbox's own origin once it exists. */
-function urlOf(place: DevPlace, row: DevRecord | null): string | null {
-	const { appEnv } = place
-	if (!place.sandboxes) return appEnv.public_origin === null || appEnv.public_origin === '' ? null : appEnv.public_origin
+/** The workspace sandbox's own origin once it exists. */
+function urlOf(appEnv: AppEnvRow, row: DevRecord | null): string | null {
 	const sandbox = row?.sandbox ?? null
 	if (sandbox === null || sandbox.state !== 'ready' || appEnv.domain === null || appEnv.domain === '') return null
 	return devSandboxOrigin(appEnv, sandbox.workspace_id)
 }
 
 function stateOf(row: DevRecord | null, run: RunRow | null, problem: string | null): DevStateDto {
-	if (row === null || row.workspace_id === null || (row.sandbox !== null && row.sandbox.state !== 'ready')) return 'unbound'
+	if (row === null || row.sandbox.state !== 'ready') return 'unbound'
 	if (run !== null && run.status === 'failed') return 'bootstrap_failed'
 	if (run !== null && run.status !== 'succeeded') return 'bootstrapping'
 	if (row.idle_at !== null) return 'stopped'
@@ -608,20 +529,16 @@ function stateOf(row: DevRecord | null, run: RunRow | null, problem: string | nu
 	return isDevStatus(row.status) ? row.status : 'pending'
 }
 
-function summaryOf(state: DevStateDto, row: DevRecord | null, sandboxes: boolean): string {
+function summaryOf(state: DevStateDto, row: DevRecord | null): string {
 	switch (state) {
 		case 'unbound':
-			return sandboxes
-				? 'No dev sandbox serves this workspace yet; call bind_dev with your workspace.'
-				: 'No workspace is bound; call bind_dev with your workspace.'
+			return 'No dev sandbox serves this workspace yet; call bind_dev with your workspace.'
 		case 'bootstrapping':
 			return 'The bootstrap run builds the workspace head; follow it with get_deployment, then commits sync without a run.'
 		case 'bootstrap_failed':
 			return 'The bootstrap run failed; read it with get_deployment, fix the cause, and call bind_dev again.'
 		case 'stopped':
-			return sandboxes
-				? 'Parked after an idle period; the next apply_changes or bind_dev wakes it.'
-				: 'Stopped after an idle period; the next apply_changes starts it.'
+			return 'Parked after an idle period; the next apply_changes or bind_dev wakes it.'
 		case 'pending':
 			return 'The launcher has not reported the newest commit yet; call get_dev_status in a few seconds.'
 		case 'syncing':
@@ -680,10 +597,6 @@ function safeJson(text: string): unknown {
 	}
 }
 
-function environmentRecordOrNull(row: DevEnvironmentRow | null): DevRecord | null {
-	return row === null ? null : environmentRecord(row)
-}
-
 function recordOrNull(row: DevSandboxRow | null): DevRecord | null {
 	return row === null ? null : sandboxRecord(row)
 }
@@ -702,20 +615,13 @@ async function requireDevEnvironment(c: DevUseCaseContext, appId: string, action
 	return appEnv
 }
 
-/**
- * The record the workspace's launcher follows; refused when the workspace has no ready sandbox, or, with one service
- * per environment, when another workspace, or none, is bound.
- */
+/** The record the workspace's launcher follows; refused when the workspace has no ready sandbox. */
 async function requireBound(c: DevUseCaseContext, dev: DevUseCaseDeps, workspaceId: string): Promise<{ target: DevTarget; record: DevRecord }> {
 	const owned = await requireWorkspace(c, workspaceId, CONTROL_ACTIONS.DEPLOY_TRIGGER)
 	const appEnv = await requireDevEnvironment(c, owned.workspace.app_id, CONTROL_ACTIONS.DEPLOY_TRIGGER)
 	const target = targetOf(c, dev, appEnv, workspaceId)
 	const record = await target.store.read()
-	if (target.sandboxes) {
-		if (record === null || record.sandbox?.state !== 'ready') fail(409, 'the workspace has no dev sandbox yet; call bind_dev first')
-		return { target, record }
-	}
-	if (record === null || record.workspace_id !== workspaceId) fail(409, 'the workspace is not bound to the dev environment; call bind_dev first')
+	if (record === null || record.sandbox.state !== 'ready') fail(409, 'the workspace has no dev sandbox yet; call bind_dev first')
 	return { target, record }
 }
 

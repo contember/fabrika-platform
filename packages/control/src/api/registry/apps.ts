@@ -52,6 +52,7 @@ export async function updateAppUseCase(c: RegistryUseCaseContext, id: string, in
 export async function deleteAppUseCase(c: RegistryUseCaseContext, id: string): Promise<OkResponse> {
 	assertNoHeldResourceClaims(`app ${id}`, await c.repositories.registry.listNamespaceResourceClaimsForApp(id))
 	const envs = await c.repositories.registry.listAppEnvs(id)
+	await assertNoDevSandboxes(c, envs)
 	requireHumanForProtectedDelete(c.auth, c.admission, envs)
 	// Read the routed namespaces BEFORE the delete: afterwards the rows that name them are gone.
 	const namespaceIds = routedNamespaceIds(envs)
@@ -163,6 +164,24 @@ export function assertNoHeldResourceClaims(subject: string, claims: readonly Nam
 	}
 	const held = [...byNamespace].map(([namespaceId, keys]) => `${namespaceId} (${keys.join(', ')})`).join(', ')
 	fail(409, `${subject} still holds deployment namespace resource claims: ${held}`)
+}
+
+/**
+ * Deleting a `dev` environment would drop its sandbox records and leave their Box sandboxes, proxy secrets and source
+ * keys behind, so it waits until each workspace sandbox was removed: by abandoning the workspace, or by maintenance.
+ */
+export async function assertNoDevSandboxes(c: RegistryUseCaseContext, envs: readonly AppEnvRow[]): Promise<void> {
+	for (const appEnv of envs) {
+		if (appEnv.kind !== 'dev') continue
+		const sandboxes = await c.repositories.devSandboxes.listByEnvironment(appEnv.app_id, appEnv.env)
+		if (sandboxes.length === 0) continue
+		fail(
+			409,
+			`dev environment ${appEnv.app_id}/${appEnv.env} still has ${sandboxes.length} workspace sandbox(es) (workspaces `
+				+ `${sandboxes.map((row) => row.workspace_id).join(', ')}); delete those workspaces with delete_workspace, or wait for `
+				+ 'maintenance to remove idle ones, then retry',
+		)
+	}
 }
 
 export async function requireApp(c: RegistryUseCaseContext, appId: string): Promise<AppRow> {

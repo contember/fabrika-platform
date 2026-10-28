@@ -42,6 +42,8 @@ export const registrationResourceClaims = (registration: ProviderRegistration): 
 		appId: registration.app.id,
 		env: registration.environment.env,
 	})
+	// A dev environment owns no Zerops service: each workspace runs in a sandbox of the namespace's own sandbox host.
+	if (registration.environment.kind === 'dev') return []
 	// A proxy target is routed by HOST, so a registration with no domain has nothing the proxy can serve:
 	// refuse it here, where nothing has been created yet, instead of at the first deploy's manifest compile.
 	if (manifest.target.proxy !== undefined) {

@@ -166,6 +166,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			{ bundle: 'control', name: '0024_mail_content_objects.sql' },
 			{ bundle: 'control', name: '0025_dev_sandboxes.sql' },
 			{ bundle: 'control', name: '0026_namespace_sandbox_key.sql' },
+			{ bundle: 'control', name: '0027_drop_dev_environments.sql' },
 		])
 	})
 
@@ -179,7 +180,6 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			const table of [
 				'apps',
 				'app_envs',
-				'dev_environments',
 				'dev_sandboxes',
 				'deployment_namespaces',
 				'namespace_resource_claims',
@@ -209,6 +209,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 		) {
 			expect(names).toContain(table)
 		}
+		expect(names).not.toContain('dev_environments')
 	})
 })
 

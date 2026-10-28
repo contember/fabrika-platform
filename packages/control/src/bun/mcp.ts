@@ -5,7 +5,7 @@ import { controlMcpResource, controlMcpResourceMetadata } from '../../fabrika.se
 import { devSandboxRemoval } from '../api/dev-environments'
 import { ControlApiError } from '../api/domain'
 import type { McpRoute } from '../app'
-import { devSandboxDepsOf, startDevService } from '../dev/service'
+import { devSandboxDepsOf } from '../dev/service'
 import type { Env } from '../env'
 import { controlPublicOrigin } from '../iam'
 import { createControlMcpHandler } from '../mcp/handler'
@@ -45,10 +45,9 @@ export function controlMcpRoute(env: Env, source: WorkspaceSourcePort, provider:
 			consoleOrigin: publicOrigin,
 			protectedFiles,
 			...(sandboxes === undefined ? {} : { devSandboxRemoval: devSandboxRemoval(sandboxes) }),
-			dev: env.DEV_SOURCE === undefined ? undefined : {
+			dev: env.DEV_SOURCE === undefined || sandboxes === undefined ? undefined : {
 				signals: env.DEV_SOURCE.signals,
-				start: (row, startSignal) => startDevService({ repositories: env.REPOSITORIES, provider }, row, startSignal),
-				...(sandboxes === undefined ? {} : { sandboxes }),
+				sandboxes,
 				now: () => Math.floor(Date.now() / 1000),
 			},
 		}),

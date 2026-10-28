@@ -1,11 +1,11 @@
-// The `dev` environment (ADR-0049): its registration, the record Control keeps, the `source` receiver the launcher
-// waits on and reports to, and the MCP use cases, against SQLite always and Postgres when FABRIKA_TEST_POSTGRES_URL is
-// set. GitHub is the recording fake; the SQL runs against the real schema.
+// The `dev` environment (ADR-0049): its registration, the record Control keeps of a workspace's sandbox, the `source`
+// receiver the launcher waits on and reports to, and the MCP use cases, against SQLite always and Postgres when
+// FABRIKA_TEST_POSTGRES_URL is set. GitHub and the sandbox host are recording fakes; the SQL runs against the real schema.
 
 import { type DevLogLine, type DevReport, type DevWaitAnswer, encodeDevReport, encodeDevWaitRequest, parseDevWaitAnswer } from '@fabrika/app/dev/wire'
 import { hashPlatformKey } from '@fabrika/email/platform'
 import type { SqlDatabase } from '@fabrika/platform'
-import type { ControlProvider, ProviderDevEnvironmentInput } from '@fabrika/provider-contract'
+import type { ControlProvider, ProviderDevSandboxes, ProviderDevSandboxInput } from '@fabrika/provider-contract'
 import { afterEach, describe, expect, test } from 'bun:test'
 import {
 	bindDevUseCase,
@@ -22,11 +22,14 @@ import { createWorkspaceUseCase, getDeploymentUseCase } from '../api/workspaces'
 import { type ControlRepositories, createControlRepositories } from '../db'
 import { devLauncherRefusal } from '../dev/deploy'
 import { acceptDevReport, acceptDevWait, type DevReceiverDeps, LAUNCHER_UNREADABLE } from '../dev/receiver'
-import { stopIdleDevServices } from '../dev/service'
+import { DEV_IDLE_STOP_SECONDS, type DevSandboxDeps, maintainDevSandboxes } from '../dev/service'
 import { DevSignals } from '../dev/signals'
 import { DEV_SYNC_MAX_FILES } from '../dev/sync'
+import { VaultPlatformTransport } from '../platform-transport'
+import { Vault } from '../vault'
 import { createHarness } from './helpers/harness'
 import { createPostgres, hasPostgres, skipReason } from './helpers/postgres'
+import { testVaultKey } from './helpers/vault'
 import {
 	AUTHOR_ACTIONS,
 	CONNECTION_ID,
@@ -74,24 +77,44 @@ const backends: { name: string; skip: boolean; open(): Promise<Backend> }[] = [
 	},
 ]
 
-const SOURCE_KEY = 'px_dev-source-key-of-shop-dev'
+const DOMAIN = 'dev.shop.test'
+const NAMESPACE = 'apps-dev'
+const ENVELOPE = JSON.stringify({ provider: 'zerops', version: 1, payload: {} })
 
-/** A Zerops double that runs dev environments and records their stops and starts. */
-function devProvider(): ControlProvider & { calls: string[] } {
+/** A sandbox host double that records its calls; every sandbox it was asked for exists. */
+function sandboxHost(): ProviderDevSandboxes & { calls: string[] } {
 	const calls: string[] = []
-	const record = (kind: string) => (input: ProviderDevEnvironmentInput) => {
-		calls.push(`${kind} ${input.environment.appId}/${input.environment.env}`)
+	const record = (kind: string) => (input: ProviderDevSandboxInput) => {
+		calls.push(`${kind} ${input.sandbox.sandboxId}`)
 		return Promise.resolve()
 	}
-	return { ...zeropsProvider, calls, devEnvironments: { stop: record('stop'), start: record('start') } }
+	return {
+		calls,
+		ensure: (input) => {
+			calls.push(`ensure ${input.workspaceId}`)
+			const sandboxId = `sbx-${input.workspaceId}`
+			return Promise.resolve({ sandboxId, baseDigest: 'sha256:base', upstreamHost: `3000-${sandboxId}.box.test` })
+		},
+		park: record('park'),
+		wake: record('wake'),
+		remove: () => Promise.resolve(),
+	}
+}
+
+/** A Zerops double that runs dev environments as workspace sandboxes. */
+function devProvider(): ControlProvider {
+	return { ...zeropsProvider, devSandboxes: sandboxHost() }
 }
 
 interface DevWorld extends WorkspaceWorld {
-	provider: ControlProvider & { calls: string[] }
+	host: ProviderDevSandboxes & { calls: string[] }
+	deps: DevSandboxDeps
 	signals: DevSignals
 	dev(auth?: ReturnType<typeof oauthUser>): DevUseCaseContext
 	receiver(waitMs?: number): DevReceiverDeps
 	workspaceId: string
+	/** The workspace's own source key, as its bootstrap hands it to the launcher. */
+	key: string
 	/** The use cases' clock: real time moved by `skew` seconds. */
 	clock: { skew: number; readonly now: number }
 }
@@ -108,18 +131,34 @@ for (const backend of backends) {
 			opened = await backend.open()
 			const { repositories, db } = opened
 			const seeded = await seedWorkspaceWorld(repositories, db)
-			const provider = devProvider()
-			await putAppEnvUseCase(registryContext(repositories, provider), 'shop', 'dev', { ...zeropsEnvelopes(), kind: 'dev' })
-			await repositories.platformTransportKeys.insert({
-				app_id: 'shop',
+			const vault = await Vault.create(db, testVaultKey())
+			await repositories.registry.createDeploymentNamespaceWithResourceClaims({
+				id: NAMESPACE,
 				env: 'dev',
-				receiver: 'source',
-				key_id: 'key-1',
-				key_hash: await hashPlatformKey(SOURCE_KEY),
-				value_ref: 'vault:unused',
-				expires_at: Math.floor(Date.now() / 1000) + 3600,
-				created_at: Math.floor(Date.now() / 1000),
+				provider: 'zerops',
+				exclusiveAppId: null,
+				providerTargetJson: ENVELOPE,
+				state: 'ready',
+			}, [])
+			await repositories.registry.upsertAppEnv({
+				appId: 'shop',
+				env: 'dev',
+				kind: 'dev',
+				domain: DOMAIN,
+				namespaceId: NAMESPACE,
+				provider: 'zerops',
+				providerTargetJson: ENVELOPE,
+				providerArtifactJson: ENVELOPE,
 			})
+			const host = sandboxHost()
+			const transport = new VaultPlatformTransport(repositories.platformTransportKeys, () => Promise.resolve(vault))
+			const deps: DevSandboxDeps = {
+				repositories,
+				provider: { devSandboxes: host },
+				vault: () => Promise.resolve(vault),
+				platformTransport: transport,
+				namespaceProxyChanged: () => Promise.resolve(),
+			}
 			const signals = new DevSignals()
 			const clock = {
 				skew: 0,
@@ -129,22 +168,12 @@ for (const backend of backends) {
 			}
 			const dev = (auth = oauthUser(AUTHOR_ACTIONS)): DevUseCaseContext => ({
 				...seeded.context(auth),
-				dev: {
-					signals,
-					start: async (row, signal) => {
-						if (row.stopped_at === null) return false
-						await provider.devEnvironments?.start({ environment: { appId: row.app_id, env: row.env, ...zeropsEnvelopes() }, signal })
-						return repositories.devEnvironments.markStarted(row.app_id, row.env)
-					},
-					now: () => clock.now,
-				},
+				dev: { signals, sandboxes: deps, now: () => clock.now },
 			})
 			const workspace = await createWorkspaceUseCase(dev(), { appId: 'shop', env: 'stage', title: 'Notes' })
 			const receiver = (waitMs = 2_000): DevReceiverDeps => ({
 				keys: repositories.platformTransportKeys,
-				devEnvironments: repositories.devEnvironments,
 				devSandboxes: repositories.devSandboxes,
-				sandboxes: false,
 				sourceTarget: () => Promise.resolve({ connectionId: 'conn-acme', installationId: 45, owner: 'acme', repository: 'shop' }),
 				source: seeded.source,
 				signals,
@@ -152,7 +181,8 @@ for (const backend of backends) {
 				waitMs,
 				run: (runId) => repositories.runs.getRun(runId),
 			})
-			return { ...seeded, provider, signals, dev, receiver, workspaceId: workspace.id, clock }
+			const key = await transport.issue('shop', 'dev', 'source', { workspaceId: workspace.id })
+			return { ...seeded, host, deps, signals, dev, receiver, workspaceId: workspace.id, key, clock }
 		}
 
 		async function succeedRun(db: SqlDatabase, runId: string): Promise<void> {
@@ -163,7 +193,7 @@ for (const backend of backends) {
 		async function wait(
 			w: DevWorld,
 			body: { head: string; reset: number | null; checks: number | null; hold: boolean; bootstrap?: string },
-			key = SOURCE_KEY,
+			key = w.key,
 		) {
 			const response = await acceptDevWait(w.receiver(), receiverRequest('wait', encodeDevWaitRequest({ bootstrap: sha('b'), ...body }), key))
 			return { status: response.status, answer: response.ok ? answerOf(await response.json()) : null }
@@ -171,7 +201,7 @@ for (const backend of backends) {
 
 		async function report(w: DevWorld, fields: Partial<DevReport> & { head: string; status: DevReport['status'] }) {
 			const body = encodeDevReport({ bootstrap: sha('b'), target: null, message: null, log: [], reset: 0, checks: null, ...fields })
-			return acceptDevReport(w.receiver(), receiverRequest('report', body, SOURCE_KEY))
+			return acceptDevReport(w.receiver(), receiverRequest('report', body, w.key))
 		}
 
 		test('a dev environment is registered only where it can run, and never protected', async () => {
@@ -186,7 +216,7 @@ for (const backend of backends) {
 				githubInstallationId: INSTALLATION_ID,
 			})
 			const refused = (provider: ControlProvider, env: string, extra: object = {}, appId = 'shop') =>
-				putAppEnvUseCase(registryContext(repositories, provider), appId, env, { ...zeropsEnvelopes(), kind: 'dev', ...extra })
+				putAppEnvUseCase(registryContext(repositories, provider), appId, env, { ...zeropsEnvelopes(), kind: 'dev', domain: DOMAIN, ...extra })
 					.then(() => null, (cause: unknown) => cause instanceof ControlApiError ? cause.message : 'unexpected')
 			expect(await refused(zeropsProvider, 'dev')).toContain('runs no dev environment')
 			expect(await refused(devProvider(), 'prod', {}, 'blog')).toContain('never production')
@@ -263,7 +293,7 @@ for (const backend of backends) {
 				head: sha('c'),
 				state: 'serving',
 				summary: `Serving ${sha('c')}.`,
-				url: null,
+				url: `https://${w.workspaceId}.${DOMAIN}`,
 				log: [{ n: 0, stream: 'stdout', text: 'listening' }],
 			})
 
@@ -286,7 +316,7 @@ for (const backend of backends) {
 			await succeedRun(dbOf(opened), bound.bootstrapRun?.id ?? '')
 			w.source.changedFiles = [{ path: 'public/logo.png', previousPath: null, status: 'added', additions: 0, deletions: 0, patch: null }]
 			w.source.unreadable.set('public/logo.png', 'binary')
-			await w.repositories.devEnvironments.advanceTarget('shop', 'dev', w.workspaceId, sha('c'))
+			await w.repositories.devSandboxes.advanceTarget(w.workspaceId, sha('c'))
 			expect((await wait(w, { head: sha('b'), reset: 0, checks: 0, hold: false })).answer?.sync).toBeNull()
 			const status = await getDevStatusUseCase(w.dev(), { workspaceId: w.workspaceId, log: { lines: 10, failuresOnly: false } })
 			expect(status.state).toBe('needs_bootstrap')
@@ -308,7 +338,7 @@ for (const backend of backends) {
 			const serving = await getDevStatusUseCase(w.dev(), { workspaceId: w.workspaceId, log: { lines: 0, failuresOnly: false } })
 			expect(serving.state).toBe('serving')
 			expect(serving.head).toBe(sha('c'))
-			expect((await w.repositories.devEnvironments.get('shop', 'dev'))?.refused_sha).toBeNull()
+			expect((await w.repositories.devSandboxes.get(w.workspaceId))?.refused_sha).toBeNull()
 			expect((await wait(w, { bootstrap: sha('c'), head: sha('c'), reset: 0, checks: 0, hold: false })).answer?.sync).toBeNull()
 		})
 
@@ -326,13 +356,13 @@ for (const backend of backends) {
 					patch: null,
 				}))
 			w.source.changedFiles = changed(DEV_SYNC_MAX_FILES)
-			await w.repositories.devEnvironments.advanceTarget('shop', 'dev', w.workspaceId, sha('c'))
+			await w.repositories.devSandboxes.advanceTarget(w.workspaceId, sha('c'))
 			const served = await wait(w, { head: sha('b'), reset: 0, checks: 0, hold: false })
 			expect(served.status).toBe(200)
 			expect(served.answer?.sync?.files).toHaveLength(DEV_SYNC_MAX_FILES)
 
 			w.source.changedFiles = changed(DEV_SYNC_MAX_FILES + 1)
-			await w.repositories.devEnvironments.advanceTarget('shop', 'dev', w.workspaceId, sha('d'))
+			await w.repositories.devSandboxes.advanceTarget(w.workspaceId, sha('d'))
 			const refused = await wait(w, { head: sha('b'), reset: 0, checks: 0, hold: false })
 			expect({ status: refused.status, sync: refused.answer?.sync }).toEqual({ status: 200, sync: null })
 			const status = await getDevStatusUseCase(w.dev(), { workspaceId: w.workspaceId, log: { lines: 0, failuresOnly: false } })
@@ -341,47 +371,16 @@ for (const backend of backends) {
 			expect((await bindDevUseCase(w.dev(), { workspaceId: w.workspaceId })).bootstrapRun?.commitSha).toBe(sha('d'))
 		})
 
-		test('switching to a workspace with another lockfile, then its bootstrap, serves on the first try', async () => {
-			const w = await world()
-			w.source.branches.set(`fabrika/${w.workspaceId}`, sha('b'))
-			await succeedRun(dbOf(opened), (await bindDevUseCase(w.dev(), { workspaceId: w.workspaceId })).bootstrapRun?.id ?? '')
-			await report(w, { head: sha('b'), status: 'serving' })
-
-			const other = await createWorkspaceUseCase(w.dev(), { appId: 'shop', env: 'stage', title: 'Deps' })
-			w.source.branches.set(`fabrika/${other.id}`, sha('e'))
-			// A refusal left by the previous workspace makes this bind a bootstrap at once.
-			await w.repositories.devEnvironments.recordRefusal('shop', 'dev', sha('b'), 'bun.lock changed')
-			const switched = await bindDevUseCase(w.dev(), { workspaceId: other.id })
-			expect(switched.bootstrapRun?.commitSha).toBe(sha('e'))
-
-			// The old container (bootstrap b) wakes up during the build: it gets no sync, and its refusal is not recorded.
-			expect((await wait(w, { head: sha('b'), reset: 0, checks: 0, hold: false })).status).toBe(409)
-			expect((await report(w, { head: sha('b'), status: 'needs_bootstrap', target: sha('e'), message: 'bun.lock changed' })).status).toBe(409)
-			await succeedRun(dbOf(opened), switched.bootstrapRun?.id ?? '')
-			expect((await report(w, { bootstrap: sha('e'), head: sha('e'), status: 'serving' })).status).toBe(204)
-			// Even after the new container reported, the old one cannot overwrite it.
-			expect((await report(w, { head: sha('b'), status: 'needs_bootstrap', target: sha('e'), message: 'bun.lock changed' })).status).toBe(409)
-			const status = await getDevStatusUseCase(w.dev(), { workspaceId: other.id, log: { lines: 0, failuresOnly: false } })
-			expect({ state: status.state, head: status.head }).toEqual({ state: 'serving', head: sha('e') })
-		})
-
-		test("a switch that bootstraps still resets the schema the previous workspace's container left", async () => {
+		test('a launcher without a state file learns the reset generation its database applied, then the pending one', async () => {
 			const w = await world()
 			w.source.branches.set(`fabrika/${w.workspaceId}`, sha('b'))
 			await succeedRun(dbOf(opened), (await bindDevUseCase(w.dev(), { workspaceId: w.workspaceId })).bootstrapRun?.id ?? '')
 			await report(w, { head: sha('b'), status: 'serving', reset: 0 })
+			expect((await w.repositories.devSandboxes.advanceReset(w.workspaceId))?.reset_generation).toBe(1)
 
-			const other = await createWorkspaceUseCase(w.dev(), { appId: 'shop', env: 'stage', title: 'Deps' })
-			w.source.branches.set(`fabrika/${other.id}`, sha('e'))
-			await w.repositories.devEnvironments.recordRefusal('shop', 'dev', sha('b'), 'bun.lock changed')
-			const switched = await bindDevUseCase(w.dev(), { workspaceId: other.id })
-			await succeedRun(dbOf(opened), switched.bootstrapRun?.id ?? '')
-			expect((await w.repositories.devEnvironments.get('shop', 'dev'))?.reset_generation).toBe(1)
-
-			// The new container has no state file: it learns the generation the database holds, then the one to reach.
-			const first = await wait(w, { bootstrap: sha('e'), head: sha('e'), reset: null, checks: null, hold: false })
+			const first = await wait(w, { head: sha('b'), reset: null, checks: null, hold: false })
 			expect(first.answer?.reset).toBe(0)
-			const next = await wait(w, { bootstrap: sha('e'), head: sha('e'), reset: 0, checks: 0, hold: false })
+			const next = await wait(w, { head: sha('b'), reset: 0, checks: 0, hold: false })
 			expect(next.answer?.reset).toBe(1)
 		})
 
@@ -389,10 +388,10 @@ for (const backend of backends) {
 			const w = await world()
 			w.source.branches.set(`fabrika/${w.workspaceId}`, sha('b'))
 			await bindDevUseCase(w.dev(), { workspaceId: w.workspaceId })
-			await w.repositories.devEnvironments.advanceTarget('shop', 'dev', w.workspaceId, sha('c'))
+			await w.repositories.devSandboxes.advanceTarget(w.workspaceId, sha('c'))
 			const log = [0, 1, 2].map((n) => ({ n, stream: n === 1 ? 'stderr' as const : 'stdout' as const, text: n === 1 ? 'error: line 1' : `line ${n}` }))
 			await report(w, { head: sha('b'), status: 'needs_bootstrap', target: sha('c'), message: 'bun.lock changed', log })
-			const row = await w.repositories.devEnvironments.get('shop', 'dev')
+			const row = await w.repositories.devSandboxes.get(w.workspaceId)
 			expect(row?.refused_sha).toBe(sha('c'))
 			const status = await getDevStatusUseCase(w.dev(), { workspaceId: w.workspaceId, log: { lines: 10, failuresOnly: true } })
 			expect(status.log).toEqual({ lines: [{ n: 1, stream: 'stderr', text: 'error: line 1' }], from: 0, to: 3, total: 3 })
@@ -405,7 +404,7 @@ for (const backend of backends) {
 			const killed = [{ name: 'tsc', ok: false, exitCode: null, durationMs: 17609, output: ['check tsc was killed (SIGKILL)'] }]
 			const log: DevLogLine[] = [{ n: 0, stream: 'stdout', text: 'serving' }]
 			await report(w, { head: sha('b'), status: 'serving', log, checks: { request: 1, head: sha('b'), results: killed } })
-			await w.repositories.devEnvironments.recordRefusal('shop', 'dev', sha('b'), 'bun.lock changed')
+			await w.repositories.devSandboxes.recordRefusal(w.workspaceId, sha('b'), 'bun.lock changed')
 
 			const rebound = await bindDevUseCase(w.dev(), { workspaceId: w.workspaceId })
 			expect(rebound.bootstrapRun?.id).not.toBe(undefined)
@@ -448,26 +447,21 @@ for (const backend of backends) {
 			await report(w, { head: sha('b'), status: 'serving', reset: 1 })
 			expect((await resetting).state).toBe('serving')
 
-			await w.repositories.devEnvironments.advanceTarget('shop', 'dev', w.workspaceId, sha('c'))
+			await w.repositories.devSandboxes.advanceTarget(w.workspaceId, sha('c'))
 			await expect(runChecksUseCase(w.dev(), { workspaceId: w.workspaceId })).rejects.toThrow(
 				`holds ${sha('b')}, not the workspace's newest commit ${sha('c')}`,
 			)
 		})
 
-		test('switching the bound workspace resets the schema; another workspace cannot run checks', async () => {
+		test('a workspace without a sandbox cannot run checks, and its commits follow nothing', async () => {
 			const w = await world()
 			w.source.branches.set(`fabrika/${w.workspaceId}`, sha('b'))
-			const bound = await bindDevUseCase(w.dev(), { workspaceId: w.workspaceId })
-			await succeedRun(dbOf(opened), bound.bootstrapRun?.id ?? '')
+			await succeedRun(dbOf(opened), (await bindDevUseCase(w.dev(), { workspaceId: w.workspaceId })).bootstrapRun?.id ?? '')
 			const other = await createWorkspaceUseCase(w.dev(), { appId: 'shop', env: 'stage', title: 'Other' })
 			await expect(runChecksUseCase(w.dev(), { workspaceId: other.id })).rejects.toThrow('call bind_dev first')
-			w.source.branches.set(`fabrika/${other.id}`, sha('d'))
-			const switched = await bindDevUseCase(w.dev(), { workspaceId: other.id })
-			expect(switched.workspaceId).toBe(other.id)
-			expect(w.queued).toHaveLength(1)
-			expect((await w.repositories.devEnvironments.get('shop', 'dev'))?.reset_generation).toBe(1)
-			// A commit to the workspace that is no longer bound follows nothing.
-			expect(await followDevCommit(w.dev(), { workspaceId: w.workspaceId, commitSha: sha('e'), parentSha: sha('d'), written: [] })).toBeNull()
+			await expect(resetDevUseCase(w.dev(), { workspaceId: other.id })).rejects.toThrow('call bind_dev first')
+			expect(await followDevCommit(w.dev(), { workspaceId: other.id, commitSha: sha('e'), parentSha: sha('d'), written: [] })).toBeNull()
+			expect((await w.repositories.devSandboxes.get(w.workspaceId))?.target_sha).toBe(sha('b'))
 		})
 
 		test('the receiver answers only a source key', async () => {
@@ -484,27 +478,26 @@ for (const backend of backends) {
 			})
 			expect((await wait(w, { head: sha('b'), reset: null, checks: null, hold: false }, 'px_mail-key')).status).toBe(401)
 			expect((await wait(w, { head: sha('b'), reset: null, checks: null, hold: false }, 'px_unknown')).status).toBe(401)
-			const malformed = await acceptDevWait(w.receiver(), receiverRequest('wait', '{"head":"x"}', SOURCE_KEY))
+			const malformed = await acceptDevWait(w.receiver(), receiverRequest('wait', '{"head":"x"}', w.key))
 			expect(malformed.status).toBe(400)
 		})
 
-		test('binding a workspace whose lockfile differs from what the container holds starts a bootstrap run at once', async () => {
+		test('binding a head whose lockfile differs from what the sandbox holds starts a bootstrap run at once', async () => {
 			const w = await world()
 			w.source.branches.set(`fabrika/${w.workspaceId}`, sha('b'))
-			await succeedRun(dbOf(opened), (await bindDevUseCase(w.dev(), { workspaceId: w.workspaceId })).bootstrapRun?.id ?? '')
+			const first = await bindDevUseCase(w.dev(), { workspaceId: w.workspaceId })
+			await succeedRun(dbOf(opened), first.bootstrapRun?.id ?? '')
 			await report(w, { head: sha('b'), status: 'serving' })
 
-			const handlers = await createWorkspaceUseCase(w.dev(), { appId: 'shop', env: 'stage', title: 'Handlers' })
-			w.source.branches.set(`fabrika/${handlers.id}`, sha('c'))
+			w.source.branches.set(`fabrika/${w.workspaceId}`, sha('c'))
 			w.source.changedFiles = [{ path: 'src/notes/handler.ts', previousPath: null, status: 'modified', additions: 1, deletions: 1, patch: null }]
-			expect((await bindDevUseCase(w.dev(), { workspaceId: handlers.id })).bootstrapRun?.commitSha).toBe(sha('b'))
+			expect((await bindDevUseCase(w.dev(), { workspaceId: w.workspaceId })).bootstrapRun?.id).toBe(first.bootstrapRun?.id)
 
-			const deps = await createWorkspaceUseCase(w.dev(), { appId: 'shop', env: 'stage', title: 'Deps' })
-			w.source.branches.set(`fabrika/${deps.id}`, sha('e'))
+			w.source.branches.set(`fabrika/${w.workspaceId}`, sha('e'))
 			w.source.changedFiles = [{ path: 'bun.lock', previousPath: null, status: 'modified', additions: 3, deletions: 3, patch: null }]
-			const switched = await bindDevUseCase(w.dev(), { workspaceId: deps.id })
-			expect(switched.bootstrapRun?.commitSha).toBe(sha('e'))
-			expect(switched.state).toBe('bootstrapping')
+			const rebound = await bindDevUseCase(w.dev(), { workspaceId: w.workspaceId })
+			expect(rebound.bootstrapRun?.commitSha).toBe(sha('e'))
+			expect(rebound.state).toBe('bootstrapping')
 		})
 
 		test('a launcher this Control cannot read needs a bootstrap: apply_changes does not wait, and bind_dev bootstraps', async () => {
@@ -513,7 +506,7 @@ for (const backend of backends) {
 			await succeedRun(dbOf(opened), (await bindDevUseCase(w.dev(), { workspaceId: w.workspaceId })).bootstrapRun?.id ?? '')
 			// A launcher of an older wire sends no bootstrap commit.
 			const older = JSON.stringify({ head: sha('b'), reset: 0, checks: 0, hold: true })
-			expect((await acceptDevWait(w.receiver(), receiverRequest('wait', older, SOURCE_KEY))).status).toBe(400)
+			expect((await acceptDevWait(w.receiver(), receiverRequest('wait', older, w.key))).status).toBe(400)
 
 			const status = await getDevStatusUseCase(w.dev(), { workspaceId: w.workspaceId, log: { lines: 0, failuresOnly: false } })
 			expect({ state: status.state, summary: status.summary }).toEqual({ state: 'needs_bootstrap', summary: LAUNCHER_UNREADABLE })
@@ -528,7 +521,7 @@ for (const backend of backends) {
 			await succeedRun(dbOf(opened), rebound.bootstrapRun?.id ?? '')
 			expect((await wait(w, { bootstrap: sha('c'), head: sha('c'), reset: 0, checks: 0, hold: false })).status).toBe(200)
 			// Once the new container talks, an unreadable request comes from the one it replaced and changes nothing.
-			expect((await acceptDevWait(w.receiver(), receiverRequest('wait', older, SOURCE_KEY))).status).toBe(400)
+			expect((await acceptDevWait(w.receiver(), receiverRequest('wait', older, w.key))).status).toBe(400)
 			await report(w, { bootstrap: sha('c'), head: sha('c'), status: 'serving' })
 			const serving = await getDevStatusUseCase(w.dev(), { workspaceId: w.workspaceId, log: { lines: 0, failuresOnly: false } })
 			expect(serving.state).toBe('serving')
@@ -549,64 +542,45 @@ for (const backend of backends) {
 			expect((await bindDevUseCase(w.dev(), { workspaceId: w.workspaceId })).bootstrapRun?.commitSha).toBe(sha('b'))
 		})
 
-		test('bind_dev of a stopped service waits for its launcher, and bootstraps when Control cannot read it', async () => {
+		test('bind_dev of a parked sandbox waits for its launcher, and bootstraps when Control cannot read it', async () => {
 			const w = await world()
 			w.source.branches.set(`fabrika/${w.workspaceId}`, sha('b'))
 			await succeedRun(dbOf(opened), (await bindDevUseCase(w.dev(), { workspaceId: w.workspaceId })).bootstrapRun?.id ?? '')
 			await report(w, { head: sha('b'), status: 'serving' })
-			const deps = { repositories: w.repositories, provider: w.provider }
-			const idle = Math.floor(Date.now() / 1000) + 31 * 60
+			const idle = Math.floor(Date.now() / 1000) + DEV_IDLE_STOP_SECONDS + 60
 
-			expect(await stopIdleDevServices(deps, idle)).toEqual({ stopped: 1, failed: 0 })
+			expect(await maintainDevSandboxes(w.deps, idle)).toEqual({ parked: 1, removed: 0, failed: 0 })
 			const talking = bindDevUseCase(w.dev(), { workspaceId: w.workspaceId })
 			await Bun.sleep(1_100)
 			expect((await wait(w, { head: sha('b'), reset: 0, checks: 0, hold: false })).status).toBe(200)
 			expect((await talking).bootstrapRun?.commitSha).toBe(sha('b'))
 			expect(w.queued).toHaveLength(1)
 
-			// Control counts in whole seconds: the next start is after that wait.
+			// Control counts in whole seconds: the next wake is after that wait.
 			await Bun.sleep(1_000)
-			expect(await stopIdleDevServices(deps, idle + 31 * 60)).toEqual({ stopped: 1, failed: 0 })
+			expect(await maintainDevSandboxes(w.deps, idle + DEV_IDLE_STOP_SECONDS + 60)).toEqual({ parked: 1, removed: 0, failed: 0 })
 			const refused = bindDevUseCase(w.dev(), { workspaceId: w.workspaceId })
 			await Bun.sleep(1_100)
 			const older = JSON.stringify({ head: sha('b'), reset: 0, checks: 0, hold: false })
-			expect((await acceptDevWait(w.receiver(), receiverRequest('wait', older, SOURCE_KEY))).status).toBe(400)
+			expect((await acceptDevWait(w.receiver(), receiverRequest('wait', older, w.key))).status).toBe(400)
 			expect(w.queued).toHaveLength(1)
 			await refused
 			expect(w.queued).toHaveLength(2)
 		})
 
-		test('maintenance stops an idle dev service, and the next commit starts it', async () => {
-			const w = await world()
-			w.source.branches.set(`fabrika/${w.workspaceId}`, sha('b'))
-			const bound = await bindDevUseCase(w.dev(), { workspaceId: w.workspaceId })
-			await succeedRun(dbOf(opened), bound.bootstrapRun?.id ?? '')
-			const now = Math.floor(Date.now() / 1000)
-			const deps = { repositories: w.repositories, provider: w.provider }
-			expect(await stopIdleDevServices(deps, now)).toEqual({ stopped: 0, failed: 0 })
-			expect(await stopIdleDevServices(deps, now + 31 * 60)).toEqual({ stopped: 1, failed: 0 })
-			expect(w.provider.calls).toEqual(['stop shop/dev'])
-			expect((await getDevStatusUseCase(w.dev(), { workspaceId: w.workspaceId, log: { lines: 0, failuresOnly: false } })).state).toBe('stopped')
-
-			const following = followDevCommit(w.dev(), { workspaceId: w.workspaceId, commitSha: sha('c'), parentSha: sha('b'), written: [] })
-			await Bun.sleep(50)
-			await report(w, { head: sha('c'), status: 'serving' })
-			expect((await following)?.state).toBe('serving')
-			expect(w.provider.calls).toEqual(['stop shop/dev', 'start shop/dev'])
-		})
-
-		test('a commit by someone who may not trigger deploys does not advance or start the dev environment', async () => {
+		test('a commit by someone who may not trigger deploys does not advance or wake the dev sandbox', async () => {
 			const w = await world()
 			w.source.branches.set(`fabrika/${w.workspaceId}`, sha('b'))
 			await succeedRun(dbOf(opened), (await bindDevUseCase(w.dev(), { workspaceId: w.workspaceId })).bootstrapRun?.id ?? '')
-			const deps = { repositories: w.repositories, provider: w.provider }
-			expect(await stopIdleDevServices(deps, Math.floor(Date.now() / 1000) + 31 * 60)).toEqual({ stopped: 1, failed: 0 })
+			const idle = Math.floor(Date.now() / 1000) + DEV_IDLE_STOP_SECONDS + 60
+			expect(await maintainDevSandboxes(w.deps, idle)).toEqual({ parked: 1, removed: 0, failed: 0 })
+			const calls = w.host.calls.length
 
 			const reader = oauthUser(AUTHOR_ACTIONS.filter((action) => action !== 'deploy.trigger'), 'reader@acme.test')
 			const followed = await followDevCommit(w.dev(reader), { workspaceId: w.workspaceId, commitSha: sha('c'), parentSha: sha('b'), written: [] })
 			expect(followed?.state).toBe('not_followed')
-			expect((await w.repositories.devEnvironments.get('shop', 'dev'))?.target_sha).toBe(sha('b'))
-			expect(w.provider.calls).toEqual(['stop shop/dev'])
+			expect((await w.repositories.devSandboxes.get(w.workspaceId))?.target_sha).toBe(sha('b'))
+			expect(w.host.calls.slice(calls)).toEqual([])
 		})
 	})
 }

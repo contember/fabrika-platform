@@ -52,16 +52,10 @@ export class DevSignals {
 	}
 }
 
-/** The launcher waits on this key; a commit, a bind, a reset or a check request wakes it. */
-export const devTargetKey = (appId: string, env: string): string => `target:${appId}@${env}`
-
-/** `apply_changes`, `run_checks` and `get_dev_status` wait on this key; a launcher report wakes them. */
-export const devReportKey = (appId: string, env: string): string => `report:${appId}@${env}`
-
-/** `devTargetKey` of one workspace's sandbox. */
+/** A workspace sandbox's launcher waits on this key; a commit, a bind, a reset or a check request wakes it. */
 export const devSandboxTargetKey = (workspaceId: string): string => `target:${workspaceId}`
 
-/** `devReportKey` of one workspace's sandbox. */
+/** `apply_changes`, `run_checks` and `get_dev_status` wait on this key; the sandbox launcher's report wakes them. */
 export const devSandboxReportKey = (workspaceId: string): string => `report:${workspaceId}`
 
 /**

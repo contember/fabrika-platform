@@ -7,7 +7,6 @@ import type {
 	ProviderDeployInput,
 	ProviderDeploymentNamespace,
 	ProviderDeployOutcome,
-	ProviderDevEnvironmentInput,
 	ProviderEnvelope,
 	ProviderEnvironment,
 	ProviderReconcileOutcome,
@@ -322,7 +321,14 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 
 	/** The namespace's sandbox host, which runs the workspace sandboxes of its dev environment. */
 	const sandboxHostOf = (environment: ProviderEnvironment): ZeropsNamespaceSandboxHost => {
-		const { namespace, namespaceTarget } = decodeNamespace(environment)
+		const { target, namespace, namespaceTarget } = decodeEnvironment(environment)
+		// An older release registered a dev environment as its own Zerops service; it never runs in a sandbox.
+		if (environment.kind === 'dev' && !('kind' in target)) {
+			throw new Error(
+				`zerops: dev environment \`${environment.appId}/${environment.env}\` was registered with its own Zerops service, which this release `
+					+ 'no longer runs; delete the environment and register it again with --kind=dev and a wildcard domain',
+			)
+		}
 		const host = namespaceTarget.sandboxHost
 		if (host === undefined) throw new Error(`zerops: deployment namespace \`${namespace.id}\` has no sandbox host, so it runs no workspace sandbox`)
 		return host
@@ -336,26 +342,6 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 		sleep: options.sleep ?? defaultSleep,
 		log: options.log ?? ((line) => console.warn(line)),
 	})
-
-	/** Stop or start the service of a `dev` environment outside a run, and wait for the platform's process. */
-	const runningState = async (input: ProviderDevEnvironmentInput, action: 'start' | 'stop'): Promise<void> => {
-		if (input.environment.kind !== 'dev') throw new Error('zerops: only a dev environment is stopped and started outside a run')
-		const placement = resolvedEnvironment(input.environment, { requireReady: false })
-		const serviceId = serviceTargetOf(placement.target).serviceId
-		// Idempotent: Control's record of a stopped service can lag behind a start from elsewhere.
-		const status = (await api.getService({ serviceId, signal: input.signal })).status
-		if (status === (action === 'stop' ? 'STOPPED' : 'ACTIVE')) return
-		const process = action === 'stop'
-			? await api.stopService({ serviceId, signal: input.signal })
-			: await api.startService({ serviceId, signal: input.signal })
-		await waitForProcess({
-			api,
-			processId: process.id,
-			sleep: options.sleep ?? defaultSleep,
-			signal: input.signal,
-			label: `the ${action} of ${input.environment.appId}/${input.environment.env}`,
-		})
-	}
 
 	/**
 	 * A dev environment imports no service: each workspace gets a sandbox when it binds. What a sandbox cannot give the
@@ -485,10 +471,6 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 			})
 			input.signal.throwIfAborted()
 			return { state: result.status, ...(result.artifactState === undefined ? {} : { artifactState: result.artifactState }) }
-		},
-		devEnvironments: {
-			stop: (input) => runningState(input, 'stop'),
-			start: (input) => runningState(input, 'start'),
 		},
 		devSandboxes,
 		cancel: async (input): Promise<ProviderCancelOutcome> => {

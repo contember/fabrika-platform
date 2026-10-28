@@ -9,6 +9,7 @@ import type { ControlProvider, ProviderDeployInput, ProviderDevSandboxes, Provid
 import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import { ControlApiError } from '../api/domain'
 import { triggerDeployUseCase } from '../api/runs'
+import { deleteAppSecretUseCase, rotateAppSecretValueUseCase, setAppSecretValueUseCase } from '../api/vault'
 import { parseClassification } from '../approval/publish'
 import type { ControlRepositories } from '../db'
 import {
@@ -28,7 +29,7 @@ import { projectedReturnOrigins } from '../return-origins'
 import { executeDeploy, type RunDeps } from '../run-lifecycle'
 import { VaultSecretResolver } from '../secret-resolver'
 import { Vault } from '../vault'
-import { memoryCommits } from './helpers/commits'
+import { frameworkLockfile, memoryCommits } from './helpers/commits'
 import { BASE, edited } from './helpers/contracts'
 import { createHarness, queryRows } from './helpers/harness'
 import { allowAllAuth } from './helpers/iam'
@@ -82,11 +83,11 @@ async function world(): Promise<World> {
 	return w
 }
 
-/** A provider that serves workspace sandboxes, or, with `sandboxes: false`, one that predates them. */
-function provider(w: World, sandboxes = true): ControlProvider {
+/** A provider that serves workspace sandboxes. */
+function provider(w: World): ControlProvider {
 	return {
 		id: 'harbor',
-		...(sandboxes ? { devSandboxes: noSandboxEffects } : {}),
+		devSandboxes: noSandboxEffects,
 		normalizeRegistration: (input) => input,
 		applicationRoot: () => '',
 		resolveSource: () => Promise.resolve({ commitSha: COMMIT }),
@@ -236,6 +237,40 @@ describe('a dev bootstrap', () => {
 		const appEnv = await w.db.registry.getAppEnv('notes', 'dev')
 		expect(appEnv?.iam_digest).toBe(input?.environment.access?.contractDigest ?? 'missing')
 		expect(w.iam).toEqual([{ app: 'notes@dev', returnOrigins: [origin] }])
+	})
+
+	test('an app secret of a dev environment is sealed in the vault, though the provider keeps secrets, and reaches the sandbox', async () => {
+		const w = await world()
+		const workspaceId = await readySandbox(w)
+		const providerCalls: string[] = []
+		const keeping: ControlProvider = {
+			...provider(w),
+			secrets: {
+				put: (input) => {
+					providerCalls.push(`put ${input.name}`)
+					return Promise.reject(new Error('a dev environment has no service to keep a secret'))
+				},
+				delete: (input) => {
+					providerCalls.push(`delete ${input.name}`)
+					return Promise.resolve()
+				},
+			},
+		}
+		const secrets = { repositories: w.db, vault: () => Promise.resolve(w.vault), provider: keeping, auth: allowAllAuth() }
+		await setAppSecretValueUseCase(secrets, 'notes', 'API_TOKEN', { value: 'first-token', env: 'dev' })
+		await rotateAppSecretValueUseCase(secrets, 'notes', 'API_TOKEN', { value: 'rotated-token', env: 'dev' })
+		const [row] = await w.db.registry.listAppSecrets('notes')
+		expect(row?.value_ref.startsWith('vault:')).toBe(true)
+
+		const result = await bootstrap(w, workspaceId, { ...deps(w), provider: keeping, secrets: new VaultSecretResolver({ vault: w.vault }) })
+		expect(result.status).toBe('succeeded')
+		expect(w.deploys.at(-1)?.secrets).toEqual({ API_TOKEN: 'rotated-token' })
+		expect(printed.join('\n')).not.toContain('rotated-token')
+
+		await deleteAppSecretUseCase(secrets, 'notes', 'API_TOKEN', 'dev')
+		expect(await w.db.registry.listAppSecrets('notes')).toEqual([])
+		expect(await w.vault.getSecret(row?.value_ref ?? '').then(() => 'kept', () => 'deleted')).toBe('deleted')
+		expect(providerCalls).toEqual([])
 	})
 
 	test('two workspaces get their own secrets and keys, and the namespace proxy routes both', async () => {
@@ -414,11 +449,9 @@ describe('a dev bootstrap beside the rest of the namespace', () => {
 		for (const spy of quiet) spy.mockRestore()
 	})
 
-	test('a dev environment without sandboxes is published as before, and a standard deploy opens no vault and hands no host key', async () => {
+	test('beside a dev environment without sandboxes, a standard deploy opens no vault and hands no host key', async () => {
 		const w = await world()
 		await seedCrm(w)
-		// The dev environment published by a provider that predates sandboxes.
-		expect((await deployRun(w, 'notes', null, { ...deps(w), provider: provider(w, false) })).status).toBe('succeeded')
 		let opened = 0
 		const counted: RunDeps = {
 			...deps(w),
@@ -435,8 +468,6 @@ describe('a dev bootstrap beside the rest of the namespace', () => {
 		const notes = last?.members.find((member) => member.appId === 'notes')
 		expect(notes?.devSandboxes).toBeUndefined()
 		expect(notes?.domain).toBe(DOMAIN)
-		expect(typeof notes?.proxySecret).toBe('string')
-		expect(notes?.access?.contractDigest).toMatch(/^sha256:/)
 	})
 
 	test('a dev member routed by sandboxes carries neither the environment secret nor its access', async () => {
@@ -465,10 +496,22 @@ describe('a dev bootstrap beside the rest of the namespace', () => {
 			cancel: () => Promise.resolve(),
 			auth: allowAllAuth(),
 		}
-		const refused = await triggerDeployUseCase({ ...context, devSandboxes: true }, { appId: 'notes', env: 'dev' }).catch((error: unknown) => error)
+		const refused = await triggerDeployUseCase(context, { appId: 'notes', env: 'dev' }).catch((error: unknown) => error)
 		expect(refused).toBeInstanceOf(ControlApiError)
 		expect(refused instanceof ControlApiError ? [refused.httpStatus, refused.message] : []).toEqual([409, DEV_RUN_NEEDS_WORKSPACE])
-		expect((await triggerDeployUseCase(context, { appId: 'notes', env: 'dev' })).status).toBe('pending')
+	})
+
+	test('a framework release without the dev launcher fails the bootstrap and publishes nothing', async () => {
+		const w = await world()
+		const workspaceId = await readySandbox(w)
+		const commits = memoryCommits({ 'fabrika.contract.ts': BASE, 'bun.lock': frameworkLockfile('0.8.1') })
+		expect((await bootstrap(w, workspaceId, { ...deps(w), commits })).status).toBe('failed')
+		expect(w.deploys).toEqual([])
+		const log = [...w.logs.values()].join('\n')
+		expect(log).toContain('access: a dev environment starts the dev launcher of @fabrika/app 0.9.0 or newer, and the application pins 0.8.1')
+		expect(log).not.toContain('access: published')
+		expect((await w.db.registry.getAppEnv('notes', 'dev'))?.generation).toBe(0)
+		expect(await w.db.platformTransportKeys.listForAppEnv('notes', 'dev')).toEqual([])
 	})
 
 	test('a dry run of a workspace bootstrap is refused in one line', async () => {

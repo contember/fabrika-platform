@@ -52,7 +52,7 @@ async function fixture(
 		WAIT_UNTIL: () => {},
 		ENVIRONMENT: 'stage',
 		FABRIKA_CONTROL_DOMAIN: ORIGIN,
-		...(options.dev === true ? { DEV_SOURCE: { source: world.source, signals: new DevSignals(), sandboxes } } : {}),
+		...(options.dev === true ? { DEV_SOURCE: { source: world.source, signals: new DevSignals() } } : {}),
 		...(sandboxes ? { FABRIKA_CONTROL_VAULT_KEY: testVaultKey() } : {}),
 	}
 	const mcp = controlMcpRoute(env, world.source, provider)
@@ -328,10 +328,12 @@ describe('the MCP endpoint', () => {
 	})
 
 	test('apply_changes answers a persisted commit even when following the dev environment fails', async () => {
-		const { fetch, world } = await fixture(undefined, { dev: true })
+		const unused = () => Promise.reject(new Error('unused'))
+		const host: ProviderDevSandboxes = { ensure: unused, park: unused, wake: unused, remove: unused }
+		const { fetch, world } = await fixture(undefined, { dev: true, provider: { ...zeropsProvider, devSandboxes: host } })
 		const token = await testResourceToken({ resource: RESOURCE, label: 'author@acme.test', actions: AUTHOR_ACTIONS })
 		const errorLog = spyOn(console, 'error').mockImplementation(() => {})
-		const failing = spyOn(world.repositories.devEnvironments, 'getByWorkspace').mockRejectedValue(new Error('cached plan must not change result type'))
+		const failing = spyOn(world.repositories.devSandboxes, 'get').mockRejectedValue(new Error('cached plan must not change result type'))
 		try {
 			const workspace = toolJson(
 				await rpc(fetch, token, 'tools/call', { name: 'create_workspace', arguments: { appId: 'shop', env: 'stage', title: 'Banner' } }),

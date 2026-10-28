@@ -1,85 +1,25 @@
-// What runs a `dev` environment outside a run. With one service per environment, maintenance stops it once no commit
-// reached it for a while, and the next commit, bind or reset starts it again. With one sandbox per workspace, `bind_dev`
-// creates the workspace's sandbox, maintenance parks an idle one and removes one idle for weeks, and abandoning the
-// workspace removes it. None of it is a deploy, so none of it takes the namespace lease.
+// What runs a `dev` environment outside a run: one sandbox per workspace. `bind_dev` creates the workspace's sandbox,
+// maintenance parks an idle one and removes one idle for weeks, and abandoning the workspace removes it. None of it is a
+// deploy, so none of it takes the namespace lease.
 
 import type { ControlProvider, ProviderDevSandboxes } from '@fabrika/provider-contract'
 import { type NamespaceProxyChanged, republishNamespace } from '../api/namespaces'
-import type {
-	AppEnvRow,
-	ControlRepositories,
-	DevEnvironmentRepository,
-	DevEnvironmentRow,
-	DevReportInput,
-	DevSandboxRepository,
-	DevSandboxRow,
-} from '../db'
+import type { AppEnvRow, ControlRepositories, DevSandboxReportInput, DevSandboxRepository, DevSandboxRow } from '../db'
 import type { Env } from '../env'
 import type { PlatformTransportPort } from '../platform-transport'
 import { providerEnvironment } from '../run-lifecycle'
 import { installationBrandDeps, locks, platformTransportDeps, proxySecretDeps, repositories } from '../services'
 import { deleteDevSandboxProxySecret, type DevSandboxKeyDeps, devSandboxProxySecret, requireVault, sandboxHostKey } from './sandbox-keys'
-import { devReportKey, devSandboxReportKey, devSandboxTargetKey, devTargetKey } from './signals'
+import { devSandboxReportKey, devSandboxTargetKey } from './signals'
 
-/** How long a `dev` environment runs with no sync before maintenance stops it, or a workspace sandbox before it is parked. */
+/** How long a workspace sandbox runs with no activity before maintenance parks it. */
 export const DEV_IDLE_STOP_SECONDS = 30 * 60
 /** How long a workspace sandbox may see no activity before maintenance removes it; the workspace itself stays. */
 export const DEV_SANDBOX_STALE_SECONDS = 14 * 24 * 60 * 60
 /** How long one provider call of maintenance may take. */
 const MAINTENANCE_CALL_MS = 60_000
 
-export interface DevServiceDeps {
-	readonly repositories: Pick<ControlRepositories, 'registry' | 'runs' | 'devEnvironments'>
-	readonly provider: Pick<ControlProvider, 'devEnvironments'>
-}
-
-export interface DevIdleSummary {
-	readonly stopped: number
-	readonly failed: number
-}
-
-/**
- * Start the service when maintenance recorded it stopped; returns whether it did. A provider without dev environments
- * has nothing to start.
- */
-export async function startDevService(deps: DevServiceDeps, row: DevEnvironmentRow, signal: AbortSignal): Promise<boolean> {
-	const capability = deps.provider.devEnvironments
-	if (row.stopped_at === null || capability === undefined) return false
-	const appEnv = await deps.repositories.registry.getAppEnv(row.app_id, row.env)
-	if (appEnv === null) return false
-	await capability.start({ environment: await providerEnvironment(deps.repositories, appEnv), signal })
-	return deps.repositories.devEnvironments.markStarted(row.app_id, row.env)
-}
-
-/** Stop every bound `dev` environment that saw no activity for `idleSeconds`. One failure does not stop the others. */
-export async function stopIdleDevServices(deps: DevServiceDeps, now: number, idleSeconds = DEV_IDLE_STOP_SECONDS): Promise<DevIdleSummary> {
-	const capability = deps.provider.devEnvironments
-	if (capability === undefined) return { stopped: 0, failed: 0 }
-	const before = now - idleSeconds
-	let stopped = 0
-	let failed = 0
-	for (const row of await deps.repositories.devEnvironments.listIdle(before)) {
-		try {
-			const appEnv = await deps.repositories.registry.getAppEnv(row.app_id, row.env)
-			if (appEnv === null) continue
-			// Recorded first: a commit that arrives meanwhile sees the service as stopped and starts it again.
-			if (!await deps.repositories.devEnvironments.markStopped(row.app_id, row.env, before)) continue
-			await capability.stop({ environment: await providerEnvironment(deps.repositories, appEnv), signal: AbortSignal.timeout(MAINTENANCE_CALL_MS) })
-			stopped += 1
-		} catch {
-			// Never the error object: a provider failure may carry a request detail.
-			console.error(`dev environments: stopping ${row.app_id}/${row.env} failed; the next maintenance pass retries`)
-			await deps.repositories.devEnvironments.clearStopped(row.app_id, row.env).catch(() => {})
-			failed += 1
-		}
-	}
-	return { stopped, failed }
-}
-
-/**
- * What the dev use cases and the `source` receiver read of the record a launcher follows: the environment's, with one
- * bound workspace, or one workspace sandbox's.
- */
+/** What the dev use cases and the `source` receiver read of the record a workspace sandbox's launcher follows. */
 export type DevRecord =
 	& Pick<
 		DevSandboxRow,
@@ -96,18 +36,14 @@ export type DevRecord =
 		| 'reset_applied'
 		| 'launcher_seen_at'
 		| 'launcher_refused'
+		| 'workspace_id'
 	>
 	& {
-		/** The workspace the launcher follows; null while no workspace is bound to the environment. */
-		readonly workspace_id: string | null
-		/** When maintenance stopped the service or parked the sandbox; null while it runs. */
+		/** When maintenance parked the sandbox; null while it runs. */
 		readonly idle_at: number | null
-		/** When the service last started, or the sandbox last woke, after that. */
+		/** When the sandbox last woke after that. */
 		readonly resumed_at: number | null
-		/** The environment's own record; null for a workspace sandbox's. */
-		readonly environment: DevEnvironmentRow | null
-		/** The workspace's sandbox; null for the environment's own record. */
-		readonly sandbox: DevSandboxRow | null
+		readonly sandbox: DevSandboxRow
 	}
 
 /** One launcher's record and the keys its waiters wake on. */
@@ -121,40 +57,14 @@ export interface DevStore {
 	recordRefusal(refusedSha: string, message: string): Promise<void>
 	recordLauncherSeen(): Promise<void>
 	recordLauncherRefused(reason: string, since: number): Promise<boolean>
-	recordReport(report: DevReportInput): Promise<void>
-}
-
-export function environmentRecord(row: DevEnvironmentRow): DevRecord {
-	return { ...row, idle_at: row.stopped_at, resumed_at: row.service_started_at, environment: row, sandbox: null }
+	recordReport(report: DevSandboxReportInput): Promise<void>
 }
 
 export function sandboxRecord(row: DevSandboxRow): DevRecord {
-	return { ...row, idle_at: row.parked_at, resumed_at: row.woke_at, environment: null, sandbox: row }
+	return { ...row, idle_at: row.parked_at, resumed_at: row.woke_at, sandbox: row }
 }
 
 const mapped = <Row>(map: (row: Row) => DevRecord) => (row: Row | null): DevRecord | null => row === null ? null : map(row)
-
-/** The record of an environment that serves its one bound workspace. */
-export function environmentStore(repository: DevEnvironmentRepository, appId: string, env: string, workspaceId: string | null): DevStore {
-	const record = mapped(environmentRecord)
-	return {
-		targetKey: devTargetKey(appId, env),
-		reportKey: devReportKey(appId, env),
-		read: async () => record(await repository.get(appId, env)),
-		advanceTarget: async (targetSha) => {
-			if (workspaceId === null) return null
-			return record(await repository.advanceTarget(appId, env, workspaceId, targetSha))
-		},
-		advanceReset: async () => record(await repository.advanceReset(appId, env)),
-		advanceChecks: async () => record(await repository.advanceChecks(appId, env)),
-		recordRefusal: (refusedSha, message) => repository.recordRefusal(appId, env, refusedSha, message),
-		recordLauncherSeen: () => repository.recordLauncherSeen(appId, env),
-		recordLauncherRefused: (reason, since) => repository.recordLauncherRefused(appId, env, reason, since),
-		recordReport: async (report) => {
-			await repository.recordReport(appId, env, report)
-		},
-	}
-}
 
 /** The record of one workspace's sandbox. */
 export function sandboxStore(repository: DevSandboxRepository, workspaceId: string): DevStore {
@@ -357,8 +267,6 @@ export async function removeDevSandbox(
 }
 
 export interface DevMaintenanceSummary {
-	/** Services stopped after their idle period (one service per environment). */
-	readonly stopped: number
 	/** Sandboxes parked after their idle period. */
 	readonly parked: number
 	/** Sandboxes removed: stale, of an abandoned workspace, or left `removing` by an earlier attempt. */
@@ -391,7 +299,7 @@ export async function maintainDevSandboxes(deps: DevSandboxDeps, now: number, id
 		}
 	}
 	const parked = await parkIdleDevSandboxes(deps, now, idleSeconds)
-	return { stopped: 0, parked: parked.parked, removed, failed: failed + parked.failed }
+	return { parked: parked.parked, removed, failed: failed + parked.failed }
 }
 
 /** Park every ready sandbox that saw no activity for `idleSeconds`. */

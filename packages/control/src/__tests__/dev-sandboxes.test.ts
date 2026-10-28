@@ -27,7 +27,8 @@ import {
 	runChecksUseCase,
 } from '../api/dev-environments'
 import { ControlApiError } from '../api/domain'
-import { putAppEnvUseCase } from '../api/registry/environments'
+import { deleteAppUseCase } from '../api/registry/apps'
+import { deleteAppEnvUseCase, putAppEnvUseCase } from '../api/registry/environments'
 import { abandonWorkspaceUseCase, createWorkspaceUseCase } from '../api/workspaces'
 import { approvedAccess, parseSnapshot } from '../approval/snapshot'
 import { acceptDevReport, acceptDevWait, type DevReceiverDeps } from '../dev/receiver'
@@ -182,13 +183,11 @@ async function world(): Promise<World> {
 			},
 		}),
 		devSandboxRemoval: devSandboxRemoval(sandboxes),
-		dev: { signals, start: () => Promise.resolve(false), sandboxes, now: () => Math.floor(Date.now() / 1000) },
+		dev: { signals, sandboxes, now: () => Math.floor(Date.now() / 1000) },
 	})
 	const receiver = (): DevReceiverDeps => ({
 		keys: repositories.platformTransportKeys,
-		devEnvironments: repositories.devEnvironments,
 		devSandboxes: repositories.devSandboxes,
-		sandboxes: true,
 		sourceTarget: () => Promise.resolve({ connectionId: 'conn-acme', installationId: 45, owner: 'acme', repository: 'shop' }),
 		source: seeded.source,
 		signals,
@@ -265,6 +264,24 @@ describe('dev sandboxes', () => {
 		await w.repositories.registry.deleteAppEnv('shop', 'dev', (await w.repositories.registry.getAppEnv('shop', 'dev'))?.generation ?? 0)
 		expect(await put('dev', {})).toContain('it needs a domain: the wildcard base')
 		expect(await put('dev', { domain: 'dev.example.com' })).toBeNull()
+	})
+
+	test('a dev environment, or its app, is not deleted while a workspace sandbox is left; once removed, it is', async () => {
+		const w = await world()
+		const { workspaceId } = await serving(w, 'Kept', sha('b'))
+		const registry = registryContext(w.repositories, { ...zeropsProvider, devSandboxes: w.host })
+		const refusal = (cause: unknown) => cause instanceof ControlApiError ? [cause.httpStatus, cause.message] : null
+		const deletingEnv = refusal(await deleteAppEnvUseCase(registry, 'shop', 'dev').catch((cause: unknown) => cause))
+		expect(deletingEnv?.[0]).toBe(409)
+		expect(String(deletingEnv?.[1])).toContain(`dev environment shop/dev still has 1 workspace sandbox(es) (workspaces ${workspaceId})`)
+		expect(refusal(await deleteAppUseCase(registry, 'shop').catch((cause: unknown) => cause))?.[0]).toBe(409)
+		expect(await w.repositories.registry.getAppEnv('shop', 'dev')).not.toBeNull()
+		expect((await w.repositories.devSandboxes.get(workspaceId))?.state).toBe('ready')
+		expect(w.host.calls.filter((call) => call.startsWith('remove'))).toEqual([])
+
+		await abandonWorkspaceUseCase(w.dev(), { workspaceId })
+		expect(await deleteAppEnvUseCase(registry, 'shop', 'dev')).toEqual({ ok: true })
+		expect(await w.repositories.registry.getAppEnv('shop', 'dev')).toBeNull()
 	})
 
 	test('two workspaces of one app each get their own sandbox, run lane, key, signals and status', async () => {
@@ -375,8 +392,8 @@ describe('dev sandboxes', () => {
 		const w = await world()
 		const { workspaceId, key } = await serving(w, 'Idle', sha('b'))
 		const now = Math.floor(Date.now() / 1000)
-		expect(await maintainDevSandboxes(w.deps, now)).toEqual({ stopped: 0, parked: 0, removed: 0, failed: 0 })
-		expect(await maintainDevSandboxes(w.deps, now + DEV_IDLE_STOP_SECONDS + 60)).toEqual({ stopped: 0, parked: 1, removed: 0, failed: 0 })
+		expect(await maintainDevSandboxes(w.deps, now)).toEqual({ parked: 0, removed: 0, failed: 0 })
+		expect(await maintainDevSandboxes(w.deps, now + DEV_IDLE_STOP_SECONDS + 60)).toEqual({ parked: 1, removed: 0, failed: 0 })
 		expect(w.host.calls).toEqual([`ensure ${workspaceId}`, `wake sbx-${workspaceId}`, `park sbx-${workspaceId}`])
 		const parked = await status(w, workspaceId)
 		expect({ state: parked.state, summary: parked.summary }).toEqual({
@@ -393,8 +410,8 @@ describe('dev sandboxes', () => {
 
 		// A failed park keeps the mark, so it is not retried every pass; a launcher that still talks clears it.
 		const failing = spyOn(w.host, 'park').mockRejectedValue(new Error('box answered 500'))
-		expect(await maintainDevSandboxes(w.deps, now + 2 * DEV_IDLE_STOP_SECONDS)).toEqual({ stopped: 0, parked: 0, removed: 0, failed: 1 })
-		expect(await maintainDevSandboxes(w.deps, now + 2 * DEV_IDLE_STOP_SECONDS)).toEqual({ stopped: 0, parked: 0, removed: 0, failed: 0 })
+		expect(await maintainDevSandboxes(w.deps, now + 2 * DEV_IDLE_STOP_SECONDS)).toEqual({ parked: 0, removed: 0, failed: 1 })
+		expect(await maintainDevSandboxes(w.deps, now + 2 * DEV_IDLE_STOP_SECONDS)).toEqual({ parked: 0, removed: 0, failed: 0 })
 		failing.mockRestore()
 		expect((await wait(w, key, { bootstrap: sha('b'), head: sha('c'), reset: 0, checks: 0, hold: false })).status).toBe(200)
 		expect((await w.repositories.devSandboxes.get(workspaceId))?.parked_at).toBeNull()
@@ -422,7 +439,7 @@ describe('dev sandboxes', () => {
 		const secretRef = (await w.repositories.devSandboxes.get(stale.workspaceId))?.proxy_secret_ref ?? ''
 
 		w.host.failRemove = true
-		expect(await maintainDevSandboxes(w.deps, now)).toEqual({ stopped: 0, parked: 0, removed: 0, failed: 1 })
+		expect(await maintainDevSandboxes(w.deps, now)).toEqual({ parked: 0, removed: 0, failed: 1 })
 		expect((await w.repositories.devSandboxes.get(stale.workspaceId))?.state).toBe('removing')
 		// Box failed, yet the launcher's key is revoked and the proxy republished; the secret stays for the retry.
 		expect(await w.repositories.platformTransportKeys.findValidByHash(await hashPlatformKey(stale.key), now)).toBeNull()
@@ -431,7 +448,7 @@ describe('dev sandboxes', () => {
 		// Marked `removing` is retried whatever its age.
 		await w.harness.d1.prepare('UPDATE dev_sandboxes SET activity_at = ? WHERE workspace_id = ?').bind(now, stale.workspaceId).run()
 		w.host.failRemove = false
-		expect(await maintainDevSandboxes(w.deps, now)).toEqual({ stopped: 0, parked: 0, removed: 1, failed: 0 })
+		expect(await maintainDevSandboxes(w.deps, now)).toEqual({ parked: 0, removed: 1, failed: 0 })
 
 		expect(await w.repositories.devSandboxes.get(stale.workspaceId)).toBeNull()
 		expect([...w.host.held.values()]).toEqual([`sbx-${kept.workspaceId}`])
@@ -585,8 +602,8 @@ describe('dev sandboxes', () => {
 		const { workspaceId } = await serving(w, 'Lost', sha('b'))
 		w.host.lose(workspaceId)
 		const idle = Math.floor(Date.now() / 1000) + DEV_IDLE_STOP_SECONDS + 60
-		expect(await maintainDevSandboxes(w.deps, idle)).toEqual({ stopped: 0, parked: 0, removed: 0, failed: 1 })
-		expect(await maintainDevSandboxes(w.deps, idle + 600)).toEqual({ stopped: 0, parked: 0, removed: 0, failed: 0 })
+		expect(await maintainDevSandboxes(w.deps, idle)).toEqual({ parked: 0, removed: 0, failed: 1 })
+		expect(await maintainDevSandboxes(w.deps, idle + 600)).toEqual({ parked: 0, removed: 0, failed: 0 })
 		expect(w.host.calls.filter((call) => call.startsWith('park'))).toHaveLength(1)
 	})
 
@@ -634,7 +651,7 @@ describe('dev sandboxes', () => {
 
 		// An abandon that raced a bind left a sandbox behind.
 		await w.repositories.workspaces.markAbandoned(abandoned.workspaceId)
-		expect(await maintainDevSandboxes(w.deps, now)).toEqual({ stopped: 0, parked: 0, removed: 1, failed: 0 })
+		expect(await maintainDevSandboxes(w.deps, now)).toEqual({ parked: 0, removed: 1, failed: 0 })
 		expect(await w.repositories.devSandboxes.get(abandoned.workspaceId)).toBeNull()
 		expect(await w.repositories.devSandboxes.get(active.workspaceId)).not.toBeNull()
 		expect(await w.repositories.devSandboxes.insertCreating({ workspaceId: abandoned.workspaceId, appId: 'shop', env: 'dev', now })).toBeNull()

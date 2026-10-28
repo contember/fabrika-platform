@@ -122,6 +122,15 @@ const noZerops = createZeropsApi({
 
 const providerLog: string[] = []
 
+/** A dev environment an older release registered with its own Zerops service. */
+const pinnedServiceTarget: ProviderEnvironment['target'] = {
+	provider: 'zerops',
+	version: zeropsStoredTargetCodec.version,
+	payload: zeropsStoredTargetCodec.encode({ serviceId: 'service-1' }),
+}
+const REREGISTER = 'zerops: dev environment `notes/dev` was registered with its own Zerops service, which this release no longer runs; '
+	+ 'delete the environment and register it again with --kind=dev and a wildcard domain'
+
 interface Harness {
 	box: FakeBox
 	uploads: ZeropsSourceUploadInput[]
@@ -330,6 +339,14 @@ describe('dev sandbox lifecycle', () => {
 			}),
 		)
 			.rejects.toThrow('only a dev environment')
+		await expect(
+			sandboxes(control).ensure({
+				environment: devEnvironment({ target: pinnedServiceTarget }),
+				workspaceId: WORKSPACE,
+				sandboxKey: SANDBOX_KEY,
+				signal: signal(),
+			}),
+		).rejects.toThrow(REREGISTER)
 	})
 })
 
@@ -559,6 +576,10 @@ describe('dev sandbox deploy', () => {
 				error: 'zerops: a dev environment deploys only into a workspace sandbox, through bind_dev',
 			},
 			{
+				input: (events) => deployInput(events, { environment: devEnvironment({ target: pinnedServiceTarget }) }),
+				error: REREGISTER,
+			},
+			{
 				input: (events) => deployInput(events, { environment: devEnvironment({}, devConfig([], ['ffmpeg'])) }),
 				error:
 					"zerops: a dev environment runs in workspace sandboxes, which install no runtime package; remove runtimePackages (ffmpeg) from the dev environment's config",
@@ -649,6 +670,14 @@ describe('dev environment registration', () => {
 		expect(registered.environment.target).toEqual({ provider: 'zerops', version: 2, payload: { kind: 'devSandboxes' } })
 		expect(zeropsStoredTargetCodec.decode(registered.environment.target.payload)).toEqual({ kind: 'devSandboxes' })
 		expect(box.requests).toEqual([])
+	})
+
+	test("claims no Zerops service: the namespace's sandbox host runs every workspace", () => {
+		const { control } = harness()
+		const app = { id: 'notes', source: { repoUrl: 'https://github.com/acme/notes', ref: 'main' } }
+		expect(compileFabrikaManifest(devConfig(), 'dev', DESCRIPTOR).target.importDocument.services.length).toBeGreaterThan(0)
+		expect(control.namespaces?.registrationResourceClaims({ app, environment: devEnvironment() })).toEqual([])
+		expect(control.namespaces?.registrationResourceClaims({ app, environment: devEnvironment({ kind: 'standard' }) })).not.toEqual([])
 	})
 
 	test('refuses object storage and a zerops-subdomain namespace', async () => {

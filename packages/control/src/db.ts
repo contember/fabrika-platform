@@ -26,7 +26,6 @@ export {
 	type DataOperationStep,
 	type MaintenanceMode,
 } from './db/data-operations'
-export { type DevBindInput, DevEnvironmentRepository, type DevEnvironmentRow, type DevReportInput } from './db/dev-environments'
 export {
 	type DevSandboxBootstrapInput,
 	type DevSandboxReadyInput,

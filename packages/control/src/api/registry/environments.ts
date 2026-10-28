@@ -12,7 +12,7 @@ import {
 } from '../../db'
 import { fail } from '../domain'
 import { syncChangedNamespaceProxies } from '../namespaces'
-import { assertNoHeldResourceClaims, requireApp } from './apps'
+import { assertNoDevSandboxes, assertNoHeldResourceClaims, requireApp } from './apps'
 import { notifyCatalogChanged, type RegistryUseCaseContext } from './context'
 import {
 	normalizeRegistration,
@@ -156,6 +156,7 @@ async function assertTriggerRefFree(c: RegistryUseCaseContext, appId: string, en
 export async function deleteAppEnvUseCase(c: RegistryUseCaseContext, appId: string, env: string): Promise<OkResponse> {
 	assertNoHeldResourceClaims(`app env ${appId}/${env}`, await c.repositories.registry.listNamespaceResourceClaimsForApp(appId, env))
 	const existing = await c.repositories.registry.getAppEnv(appId, env)
+	if (existing !== null) await assertNoDevSandboxes(c, [existing])
 	requireHumanForProtectedDelete(c.auth, c.admission, existing === null ? [] : [existing])
 	if (existing === null) fail(404, 'app env not found')
 	const routed = existing.namespace_id
@@ -195,7 +196,7 @@ function assertAuthoringTarget(provider: ControlProvider, app: AppRow): void {
 /**
  * ADR-0049: one `dev` environment per app, on a provider that runs one, for an app whose workspaces Control can read.
  * It is never production, never protected (ADR-0050), never an authoring target, and deploys only through `bind_dev`.
- * Where each workspace gets its own sandbox, served at `<workspace id>.<domain>`, its domain is that wildcard base.
+ * Each workspace gets its own sandbox, served at `<workspace id>.<domain>`, so its domain is that wildcard base.
  */
 async function assertDevEnvironment(
 	c: RegistryUseCaseContext,
@@ -206,10 +207,8 @@ async function assertDevEnvironment(
 	triggerRef: string | null,
 	domain: string | null,
 ): Promise<void> {
-	if (c.provider.devSandboxes === undefined && c.provider.devEnvironments === undefined) {
-		fail(409, `the ${c.provider.id} provider runs no dev environment; it runs on Zerops only`)
-	}
-	if (c.provider.devSandboxes !== undefined && (domain === null || domain === '')) {
+	if (c.provider.devSandboxes === undefined) fail(409, `the ${c.provider.id} provider runs no dev environment; it runs on Zerops only`)
+	if (domain === null || domain === '') {
 		fail(409, 'a dev environment serves each workspace at <workspace id>.<domain>, so it needs a domain: the wildcard base, such as dev.example.com')
 	}
 	if (app.github_connection_id === null || app.github_installation_id === null) {

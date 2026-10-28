@@ -12,7 +12,7 @@
 
 import { runBackupSchedule } from '../backups'
 import { runMaintenance } from '../cron'
-import { devSandboxDepsOf, maintainDevSandboxes, stopIdleDevServices } from '../dev/service'
+import { devSandboxDepsOf, maintainDevSandboxes } from '../dev/service'
 import { reconcileProviderRuns } from '../provider-reconcile'
 import { operationDeploys } from '../run-lifecycle'
 import { buildRunDeps, iamSchemaDeps, locks, operationsReleaseDeps, opsTransportDeps, platformTransportDeps, repositories } from '../services'
@@ -45,13 +45,8 @@ async function main(createRuntime: () => Runtime): Promise<void> {
 					...platformTransportDeps(runtime.env),
 					...iamSchemaDeps(runtime.env),
 				}),
-			// A provider with workspace sandboxes parks and removes them; the one-service-per-environment path stops services.
-			devIdle: async () => {
-				const now = Math.floor(Date.now() / 1000)
-				if (sandboxes !== undefined) return maintainDevSandboxes(sandboxes, now)
-				const stopped = await stopIdleDevServices({ repositories: repositories(runtime.env), provider: runtime.provider }, now)
-				return { ...stopped, parked: 0, removed: 0 }
-			},
+			// A provider with workspace sandboxes parks and removes them.
+			...(sandboxes === undefined ? {} : { devIdle: () => maintainDevSandboxes(sandboxes, Math.floor(Date.now() / 1000)) }),
 		})
 	} finally {
 		await runtime.shutdown()
