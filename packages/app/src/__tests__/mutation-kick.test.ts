@@ -9,7 +9,7 @@ import { ENDPOINT_HEADER, PROXY_TOKEN_HEADER } from '@fabrika/auth-core'
 import { applicationSchema, Database } from '@fabrika/db'
 import { QueryRefusedError, type Session } from '@fabrika/db/framework'
 import { FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
-import { openPostgres } from '@fabrika/db/postgres'
+import { openTestPostgres } from '@fabrika/db/testing'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, beforeEach, describe, expect, setSystemTime, spyOn, test } from 'bun:test'
 import { WakeTimer } from '../bun'
@@ -172,7 +172,7 @@ function start(
 ): Running {
 	const world = new World()
 	const { implementation, variables } = outboxApp(world)
-	const connection = openPostgres({ url, schema, max: 4 })
+	const connection = openTestPostgres({ url, schema, max: 4 })
 	opened.push(connection)
 	const exchanged: string[] = []
 	const tokens = workloadTokensFor(implementation)
@@ -497,7 +497,7 @@ describe.skipIf(!hasPostgres)('a mutation that kicks its job', () => {
 	test("the test kit's drain waits for the run a mutation kicked", async () => {
 		const world = new World()
 		const { implementation, variables } = outboxApp(world)
-		const connection = openPostgres({ url, schema, max: 4 })
+		const connection = openTestPostgres({ url, schema, max: 4 })
 		opened.push(connection)
 		const kit = testKit(implementation, { database: connection, env: variables })
 		const held = gate()

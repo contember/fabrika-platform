@@ -419,6 +419,7 @@
       "devDependencies": {
         "@fabrika/check": "workspace:*",
         "@types/bun": "^1.4.3",
+        "postgres": "3.4.9",
         "typescript": "^5.9.3",
       },
     },

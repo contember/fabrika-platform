@@ -7,6 +7,7 @@ import { BootError, type ContractApp, type JobClock, type OperationsReport } fro
 import { applicationSchema, Database, type Within } from '@fabrika/db'
 import { FRAMEWORK_MIGRATION_BUNDLE, FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
 import { openPostgres } from '@fabrika/db/postgres'
+import { openTestPostgres } from '@fabrika/db/testing'
 import { applicationRuntimeUrl, definePostgresApplicationMigrations, dropApplicationDatabase } from '@fabrika/platform-node'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, beforeEach, describe, expect, setSystemTime, spyOn, test } from 'bun:test'
@@ -206,7 +207,7 @@ describe.skipIf(!hasPostgres)('the job runner on Postgres', () => {
 			name: '20261011120000_notes.sql',
 			sql: migration,
 		}])
-		database = openPostgres({ url: applicationRuntimeUrl(url, appId), schema, max: 4 })
+		database = openTestPostgres({ url: applicationRuntimeUrl(url, appId), schema, max: 4 })
 	})
 
 	afterAll(async () => {

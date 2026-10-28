@@ -11,6 +11,7 @@ import { BootError, type ContractApp, type JobClock } from '@fabrika/app/impleme
 import { applicationSchema, Database } from '@fabrika/db'
 import { FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
 import { openPostgres } from '@fabrika/db/postgres'
+import { openTestPostgres } from '@fabrika/db/testing'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test'
 import { createHmac } from 'node:crypto'
@@ -44,7 +45,7 @@ async function admin<T>(work: (sql: SQL) => Promise<T>): Promise<T> {
 
 /** A fresh boot of the fixture over the shared schema, with its own data layer and connection. */
 function start(hooks: OrmHooks = ormHooks()): { app: ContractApp; hooks: OrmHooks } {
-	const connection = openPostgres({ url, schema, max: 4 })
+	const connection = openTestPostgres({ url, schema, max: 4 })
 	opened.push(connection)
 	return { app: bootApp(ormApp(hooks), { database: connection }), hooks }
 }

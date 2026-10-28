@@ -55,6 +55,11 @@
 			"types": "./src/postgres.ts",
 			"default": "./src/postgres.ts"
 		},
+		"./hyperdrive": {
+			"bun": "./src/hyperdrive.ts",
+			"types": "./src/hyperdrive.ts",
+			"default": "./src/hyperdrive.ts"
+		},
 		"./sqlite": {
 			"bun": "./src/sqlite.ts",
 			"types": "./src/sqlite.ts",
@@ -99,8 +104,9 @@
 		"zod": "^3.25.76"
 	},
 	"devDependencies": {
+		"@fabrika/check": "workspace:*",
 		"@types/bun": "^1.4.3",
-		"typescript": "^5.9.3",
-		"@fabrika/check": "workspace:*"
+		"postgres": "3.4.9",
+		"typescript": "^5.9.3"
 	}
 }

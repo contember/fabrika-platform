@@ -5,7 +5,7 @@
 //   docker run --rm -d -p 55433:5432 -e POSTGRES_PASSWORD=postgres postgres:17
 //   FABRIKA_TEST_POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:55433/postgres bun test packages/db/src/__tests__/data-ergonomics.test.ts
 
-import { openPostgres } from '@fabrika/db/postgres'
+import { openTestPostgres } from '@fabrika/db/testing'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { z } from 'zod/v4'
@@ -48,7 +48,7 @@ beforeAll(async () => {
 		await sql.unsafe(`set search_path to ${schema}; ${migration}`)
 		await sql.unsafe(`insert into ${schema}.projects (id, org_id, title) values ('p1', 'o1', 'One'), ('p2', 'o1', 'Two'), ('p3', 'o2', 'Three')`)
 	})
-	database = openPostgres({ url: url ?? '', schema, max: 4 })
+	database = openTestPostgres({ url: url ?? '', schema, max: 4 })
 	const layer = scoped(tables)
 	bindScopedDatabase(layer, { database, capabilities: alice })
 	data = dataAccessOf(layer)
