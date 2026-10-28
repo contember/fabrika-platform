@@ -8,6 +8,7 @@ import { z } from 'zod/v4'
 import { Database } from '../database'
 import { CapabilityError, QueryRefusedError } from '../errors'
 import { bindScopedDatabase, dataAccessOf } from '../framework'
+import * as hyperdrive from '../hyperdrive'
 import * as postgres from '../postgres'
 import { defineStore, scoped } from '../store'
 import { TestAuthority } from './fixtures/authority'
@@ -55,6 +56,24 @@ describe('the connection factory cannot be replaced by an application module', (
 		expect(postgres.openPostgres).toBe(original)
 		expect(() => postgres.openPostgres({ url: 'postgres://user:synthetic-secret@127.0.0.1:1/x', schema: 'Bad-Schema' })).toThrow(QueryRefusedError)
 		expect(observed).toEqual([])
+	})
+})
+
+describe('the Hyperdrive engine cannot be replaced or reconfigured by an application module', () => {
+	test('openHyperdrive and the client options are frozen, and the namespace refuses a write', () => {
+		const original = hyperdrive.openHyperdrive
+		const wrapper = (options: hyperdrive.HyperdriveOptions): Database => original(options)
+		expect(Object.isFrozen(original)).toBe(true)
+		// oxlint-disable-next-line no-import-assign -- The test is the attack: it asserts that the namespace refuses the write.
+		expect(Reflect.set(hyperdrive, 'openHyperdrive', wrapper)).toBe(false)
+		expect(hyperdrive.openHyperdrive).toBe(original)
+		const options = hyperdrive.HYPERDRIVE_CLIENT_OPTIONS
+		expect(Object.isFrozen(options)).toBe(true)
+		expect(Object.isFrozen(options.types)).toBe(true)
+		for (const type of Object.values(options.types)) expect(Object.isFrozen(type)).toBe(true)
+		expect(() => hyperdrive.openHyperdrive({ schema: 'Bad-Schema', client: () => ({ reserve: () => Promise.reject(new Error('unused')) }) })).toThrow(
+			QueryRefusedError,
+		)
 	})
 })
 

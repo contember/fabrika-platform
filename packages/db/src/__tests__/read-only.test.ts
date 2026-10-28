@@ -6,7 +6,7 @@
 //
 // The URL is a credential: it is never logged.
 
-import { openPostgres } from '@fabrika/db/postgres'
+import { openTestPostgres } from '@fabrika/db/testing'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { Database } from '../database'
@@ -96,7 +96,7 @@ beforeAll(async () => {
 		await sql.unsafe(`insert into ${schema}.organizations (id, name) values ('o1', 'One')`)
 		await sql.unsafe(`insert into ${schema}.workspaces (id, organization_id, name, created_by) values ('w1', 'o1', 'w1', 'user:alice')`)
 	})
-	database = openPostgres({ url, schema, max: 2 })
+	database = openTestPostgres({ url, schema, max: 2 })
 })
 
 afterAll(async () => {

@@ -103,11 +103,19 @@ export async function provisionPostgresRoles(
 			// Defaults are NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS; `verifyRoles` holds an existing role to them.
 			if (exists === null) {
 				await admin.prepare(`CREATE ROLE ${role} LOGIN NOINHERIT PASSWORD '${verifier}'`).run()
-				continue
+			} else {
+				await admin.prepare(`ALTER ROLE ${role} WITH LOGIN PASSWORD '${verifier}'`).run()
 			}
-			await admin.prepare(`ALTER ROLE ${role} WITH LOGIN PASSWORD '${verifier}'`).run()
-			// A role may set its own session defaults (`ALTER ROLE CURRENT_USER SET …`); each deploy starts it clean.
-			await admin.prepare(`ALTER ROLE ${role} RESET ALL`).run()
+			// A role may set its own session defaults (`ALTER ROLE CURRENT_USER SET …`); each deploy starts it clean. The
+			// runtime role's one default is its schema: a pooler that forbids startup parameters (Hyperdrive) leaves the
+			// role's default as the only search_path, and the data layer names its tables unqualified. Reset and set run in
+			// one transaction, so no session starts in between without it.
+			const reset = admin.prepare(`ALTER ROLE ${role} RESET ALL`)
+			if (role === roles.runtime) {
+				await admin.batch([reset, admin.prepare(`ALTER ROLE ${role} SET search_path TO ${roles.schema}`)])
+			} else {
+				await reset.run()
+			}
 		}
 		// A CREATEROLE role holds only ADMIN on a role it created; creating a schema for it needs SET (Postgres 16).
 		if (!self.rolsuper) await admin.prepare(`GRANT ${roles.migration} TO CURRENT_USER`).run()
