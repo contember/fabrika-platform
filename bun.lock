@@ -22,19 +22,19 @@
     "examples/app": {
       "name": "fabrika-example-app",
       "dependencies": {
-        "@fabrika/app": "0.9.0-dev.7",
-        "@fabrika/auth-core": "0.9.0-dev.7",
-        "@fabrika/db": "0.9.0-dev.7",
-        "@fabrika/provider-cloudflare": "0.9.0-dev.7",
-        "@fabrika/proxy-core": "0.9.0-dev.7",
+        "@fabrika/app": "0.9.0-dev.8",
+        "@fabrika/auth-core": "0.9.0-dev.8",
+        "@fabrika/db": "0.9.0-dev.8",
+        "@fabrika/provider-cloudflare": "0.9.0-dev.8",
+        "@fabrika/proxy-core": "0.9.0-dev.8",
         "kysely": "0.29.6",
         "zod": "^3.25.76",
       },
       "devDependencies": {
         "@cloudflare/workers-types": "^4.20260702.1",
-        "@fabrika/check": "0.9.0-dev.7",
-        "@fabrika/cli": "0.9.0-dev.7",
-        "@fabrika/platform": "0.9.0-dev.7",
+        "@fabrika/check": "0.9.0-dev.8",
+        "@fabrika/cli": "0.9.0-dev.8",
+        "@fabrika/platform": "0.9.0-dev.8",
         "@types/bun": "^1.4.3",
         "lopata": "^0.30.1",
         "oblaka-iac": "^0.0.18",
@@ -45,20 +45,20 @@
     "examples/crm": {
       "name": "fabrika-example-crm",
       "dependencies": {
-        "@fabrika/app": "0.9.0-dev.7",
-        "@fabrika/db": "0.9.0-dev.7",
-        "@fabrika/provider-zerops": "0.9.0-dev.7",
-        "@fabrika/proxy-core": "0.9.0-dev.7",
-        "@fabrika/ui": "0.9.0-dev.7",
+        "@fabrika/app": "0.9.0-dev.8",
+        "@fabrika/db": "0.9.0-dev.8",
+        "@fabrika/provider-zerops": "0.9.0-dev.8",
+        "@fabrika/proxy-core": "0.9.0-dev.8",
+        "@fabrika/ui": "0.9.0-dev.8",
         "kysely": "0.29.6",
         "react": "^19.0.0",
         "react-dom": "^19.0.0",
         "zod": "^3.25.76",
       },
       "devDependencies": {
-        "@fabrika/check": "0.9.0-dev.7",
-        "@fabrika/cli": "0.9.0-dev.7",
-        "@fabrika/platform": "0.9.0-dev.7",
+        "@fabrika/check": "0.9.0-dev.8",
+        "@fabrika/cli": "0.9.0-dev.8",
+        "@fabrika/platform": "0.9.0-dev.8",
         "@happy-dom/global-registrator": "^20.11.2",
         "@types/bun": "^1.4.3",
         "@types/react": "^19.0.0",
@@ -69,20 +69,20 @@
     "examples/zerops-app": {
       "name": "fabrika-example-zerops",
       "dependencies": {
-        "@fabrika/app": "0.9.0-dev.7",
-        "@fabrika/db": "0.9.0-dev.7",
-        "@fabrika/provider-zerops": "0.9.0-dev.7",
-        "@fabrika/proxy-core": "0.9.0-dev.7",
-        "@fabrika/ui": "0.9.0-dev.7",
+        "@fabrika/app": "0.9.0-dev.8",
+        "@fabrika/db": "0.9.0-dev.8",
+        "@fabrika/provider-zerops": "0.9.0-dev.8",
+        "@fabrika/proxy-core": "0.9.0-dev.8",
+        "@fabrika/ui": "0.9.0-dev.8",
         "kysely": "0.29.6",
         "react": "^19.0.0",
         "react-dom": "^19.0.0",
         "zod": "^3.25.76",
       },
       "devDependencies": {
-        "@fabrika/check": "0.9.0-dev.7",
-        "@fabrika/cli": "0.9.0-dev.7",
-        "@fabrika/platform": "0.9.0-dev.7",
+        "@fabrika/check": "0.9.0-dev.8",
+        "@fabrika/cli": "0.9.0-dev.8",
+        "@fabrika/platform": "0.9.0-dev.8",
         "@happy-dom/global-registrator": "^20.11.2",
         "@types/bun": "^1.4.3",
         "@types/react": "^19.0.0",
@@ -92,7 +92,7 @@
     },
     "packages/agent-canvas": {
       "name": "agent-canvas",
-      "version": "0.9.0-dev.7",
+      "version": "0.9.0-dev.8",
       "bin": {
         "agent-canvas": "./bin/agent-canvas.js",
       },
@@ -118,7 +118,7 @@
     },
     "packages/annotations": {
       "name": "@fabrika/annotations",
-      "version": "0.9.0-dev.7",
+      "version": "0.9.0-dev.8",
       "dependencies": {
         "zod": "^3.25.76",
       },
@@ -141,7 +141,7 @@
     },
     "packages/app": {
       "name": "@fabrika/app",
-      "version": "0.9.0-dev.7",
+      "version": "0.9.0-dev.8",
       "dependencies": {
         "@fabrika/auth": "workspace:*",
         "@fabrika/auth-core": "workspace:*",
@@ -180,7 +180,7 @@
     },
     "packages/auth": {
       "name": "@fabrika/auth",
-      "version": "0.9.0-dev.7",
+      "version": "0.9.0-dev.8",
       "dependencies": {
         "@fabrika/auth-core": "workspace:*",
         "@fabrika/jwks": "workspace:*",
@@ -193,11 +193,11 @@
     },
     "packages/auth-core": {
       "name": "@fabrika/auth-core",
-      "version": "0.9.0-dev.7",
+      "version": "0.9.0-dev.8",
     },
     "packages/builder": {
       "name": "@fabrika/builder",
-      "version": "0.9.0-dev.7",
+      "version": "0.9.0-dev.8",
       "dependencies": {
         "@fabrika/annotations": "workspace:*",
         "@fabrika/app": "workspace:*",
@@ -221,7 +221,7 @@
     },
     "packages/canvas-kernel": {
       "name": "@fabrika/canvas-kernel",
-      "version": "0.9.0-dev.7",
+      "version": "0.9.0-dev.8",
       "dependencies": {
         "@fabrika/annotations": "workspace:*",
         "@fabrika/daemon-kit": "workspace:*",
@@ -246,7 +246,7 @@
     },
     "packages/canvas-share": {
       "name": "@fabrika/canvas-share",
-      "version": "0.9.0-dev.7",
+      "version": "0.9.0-dev.8",
       "dependencies": {
         "agent-canvas": "workspace:*",
         "zod": "^3.25.76",
@@ -261,7 +261,7 @@
     },
     "packages/check": {
       "name": "@fabrika/check",
-      "version": "0.9.0-dev.7",
+      "version": "0.9.0-dev.8",
       "bin": {
         "fabrika-check": "./src/cli.ts",
         "fabrika-source-maps": "./src/source-maps-cli.ts",
@@ -278,7 +278,7 @@
     },
     "packages/cli": {
       "name": "@fabrika/cli",
-      "version": "0.9.0-dev.7",
+      "version": "0.9.0-dev.8",
       "bin": {
         "fabrika": "./src/index.ts",
       },
@@ -312,7 +312,7 @@
     },
     "packages/control": {
       "name": "@fabrika/control",
-      "version": "0.9.0-dev.7",
+      "version": "0.9.0-dev.8",
       "dependencies": {
         "@fabrika/app": "workspace:*",
         "@fabrika/app-0.4": "npm:@fabrika/app@0.4.8",
@@ -363,7 +363,7 @@
     },
     "packages/control-contract": {
       "name": "@fabrika/control-contract",
-      "version": "0.9.0-dev.7",
+      "version": "0.9.0-dev.8",
       "dependencies": {
         "@fabrika/app": "workspace:*",
         "@fabrika/auth-core": "workspace:*",
@@ -373,14 +373,14 @@
     },
     "packages/daemon-kit": {
       "name": "@fabrika/daemon-kit",
-      "version": "0.9.0-dev.7",
+      "version": "0.9.0-dev.8",
       "devDependencies": {
         "@types/bun": "^1.4.3",
       },
     },
     "packages/dashboard": {
       "name": "@fabrika/dashboard",
-      "version": "0.9.0-dev.7",
+      "version": "0.9.0-dev.8",
       "dependencies": {
         "@buzola/router": "^0.0.16",
         "@fabrika/app": "workspace:*",
@@ -406,7 +406,7 @@
     },
     "packages/db": {
       "name": "@fabrika/db",
-      "version": "0.9.0-dev.7",
+      "version": "0.9.0-dev.8",
       "dependencies": {
         "@fabrika/auth-core": "workspace:*",
         "@fabrika/platform": "workspace:*",
@@ -423,7 +423,7 @@
     },
     "packages/email": {
       "name": "@fabrika/email",
-      "version": "0.9.0-dev.7",
+      "version": "0.9.0-dev.8",
       "dependencies": {
         "zod": "^3.25.76",
       },
@@ -433,7 +433,7 @@
     },
     "packages/github-app": {
       "name": "@fabrika/github-app",
-      "version": "0.9.0-dev.7",
+      "version": "0.9.0-dev.8",
       "dependencies": {
         "zod": "^3.25.76",
       },
@@ -443,7 +443,7 @@
     },
     "packages/iam": {
       "name": "@fabrika/iam",
-      "version": "0.9.0-dev.7",
+      "version": "0.9.0-dev.8",
       "dependencies": {
         "@fabrika/app": "workspace:*",
         "@fabrika/auth": "workspace:*",
@@ -469,7 +469,7 @@
     },
     "packages/iam-contract": {
       "name": "@fabrika/iam-contract",
-      "version": "0.9.0-dev.7",
+      "version": "0.9.0-dev.8",
       "dependencies": {
         "@fabrika/app": "workspace:*",
         "@fabrika/auth-core": "workspace:*",
@@ -478,7 +478,7 @@
     },
     "packages/installation-init": {
       "name": "@fabrika/installation-init",
-      "version": "0.9.0-dev.7",
+      "version": "0.9.0-dev.8",
       "dependencies": {
         "@fabrika/app": "workspace:*",
         "@fabrika/auth-core": "workspace:*",
@@ -493,7 +493,7 @@
     },
     "packages/jwks": {
       "name": "@fabrika/jwks",
-      "version": "0.9.0-dev.7",
+      "version": "0.9.0-dev.8",
       "dependencies": {
         "@fabrika/auth-core": "workspace:*",
         "jose": "^5.9.0",
@@ -534,7 +534,7 @@
     },
     "packages/operations": {
       "name": "@fabrika/operations",
-      "version": "0.9.0-dev.7",
+      "version": "0.9.0-dev.8",
       "dependencies": {
         "@fabrika/app": "workspace:*",
         "@fabrika/auth": "workspace:*",
@@ -557,7 +557,7 @@
     },
     "packages/operations-contract": {
       "name": "@fabrika/operations-contract",
-      "version": "0.9.0-dev.7",
+      "version": "0.9.0-dev.8",
       "dependencies": {
         "@fabrika/app": "workspace:*",
         "zod": "^3.25.76",
@@ -565,7 +565,7 @@
     },
     "packages/platform": {
       "name": "@fabrika/platform",
-      "version": "0.9.0-dev.7",
+      "version": "0.9.0-dev.8",
       "devDependencies": {
         "@types/bun": "^1.4.3",
       },
@@ -592,7 +592,7 @@
     },
     "packages/platform-node": {
       "name": "@fabrika/platform-node",
-      "version": "0.9.0-dev.7",
+      "version": "0.9.0-dev.8",
       "dependencies": {
         "@fabrika/platform": "workspace:*",
       },
@@ -602,7 +602,7 @@
     },
     "packages/provider-cloudflare": {
       "name": "@fabrika/provider-cloudflare",
-      "version": "0.9.0-dev.7",
+      "version": "0.9.0-dev.8",
       "dependencies": {
         "@fabrika/app": "workspace:*",
         "@fabrika/auth": "workspace:*",
@@ -625,7 +625,7 @@
     },
     "packages/provider-contract": {
       "name": "@fabrika/provider-contract",
-      "version": "0.9.0-dev.7",
+      "version": "0.9.0-dev.8",
       "dependencies": {
         "@fabrika/auth-core": "workspace:*",
         "@fabrika/proxy-core": "workspace:*",
@@ -636,7 +636,7 @@
     },
     "packages/provider-zerops": {
       "name": "@fabrika/provider-zerops",
-      "version": "0.9.0-dev.7",
+      "version": "0.9.0-dev.8",
       "dependencies": {
         "@fabrika/app": "workspace:*",
         "@fabrika/auth": "workspace:*",
@@ -656,7 +656,7 @@
     },
     "packages/proxy": {
       "name": "@fabrika/proxy",
-      "version": "0.9.0-dev.7",
+      "version": "0.9.0-dev.8",
       "dependencies": {
         "@fabrika/auth-core": "workspace:*",
         "@fabrika/proxy-core": "workspace:*",
@@ -668,7 +668,7 @@
     },
     "packages/proxy-core": {
       "name": "@fabrika/proxy-core",
-      "version": "0.9.0-dev.7",
+      "version": "0.9.0-dev.8",
       "dependencies": {
         "@fabrika/auth-core": "workspace:*",
         "@fabrika/jwks": "workspace:*",
@@ -682,7 +682,7 @@
     },
     "packages/runner-cloudflare": {
       "name": "@fabrika/runner-cloudflare",
-      "version": "0.9.0-dev.7",
+      "version": "0.9.0-dev.8",
       "dependencies": {
         "@cloudflare/containers": "^0.0.30",
         "@fabrika/control-contract": "workspace:*",
@@ -698,7 +698,7 @@
     },
     "packages/runner-container": {
       "name": "@fabrika/runner-container",
-      "version": "0.9.0-dev.7",
+      "version": "0.9.0-dev.8",
       "dependencies": {
         "@fabrika/check": "workspace:*",
         "@fabrika/control-contract": "workspace:*",
@@ -711,7 +711,7 @@
     },
     "packages/ui": {
       "name": "@fabrika/ui",
-      "version": "0.9.0-dev.7",
+      "version": "0.9.0-dev.8",
       "devDependencies": {
         "@happy-dom/global-registrator": "^20.11.2",
         "@types/bun": "^1.4.3",
