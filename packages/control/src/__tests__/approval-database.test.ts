@@ -52,12 +52,28 @@ describe('the database in the access snapshot', () => {
 		expect((await snapshotOf({ 'fabrika.config.ts': POSTGRES }, 'worker')).database).toBe('postgres')
 	})
 
+	test('Postgres stated through const bindings, a namespace import or a spread of an object literal is recorded too', async () => {
+		const DATABASE = "database: { kind: 'postgres', provisioningSecret: 'DATABASE_URL' }"
+		const IMPORT = "import { defineApp } from '@fabrika/provider-cloudflare'\n"
+		for (
+			const config of [
+				`${IMPORT}const app = defineApp({ id: 'notes', ${DATABASE} })\nexport default app\n`,
+				`import * as cf from '@fabrika/provider-cloudflare'\nexport default cf.defineApp({ id: 'notes', ${DATABASE} })\n`,
+				`${IMPORT}const settings = { id: 'notes', ${DATABASE} } as const\nexport default defineApp(settings)\n`,
+				`${IMPORT}const base = { ${DATABASE} }\nexport default defineApp({ id: 'notes', ...base })\n`,
+			]
+		) {
+			expect([config, (await snapshotOf({ 'fabrika.config.ts': config })).database]).toEqual([config, 'postgres'])
+		}
+	})
+
 	test('every other application chooses none, and its snapshot and digest are what they were before the field existed', async () => {
 		const without = await snapshotOf({})
 		const configs = {
 			sqlite: cloudflareConfig(`{ id: 'notes' }`),
-			variable:
-				`import { defineApp } from '@fabrika/provider-cloudflare'\n\nconst config = { id: 'notes', database: { kind: 'postgres' } }\nexport default defineApp(config)\n`,
+			variable: `import { defineApp } from '@fabrika/provider-cloudflare'\n\nconst config = { id: 'notes' }\nexport default defineApp(config)\n`,
+			// The read cannot tell whether it names a database: none is approved, and the deployer refuses a loaded one.
+			unsettled: `import { defineApp } from '@fabrika/provider-cloudflare'\n\nexport default defineApp({ id: 'notes', ...load() })\n`,
 			zerops:
 				`import { defineApp } from '@fabrika/provider-zerops'\n\nexport default defineApp({ id: 'notes', database: { kind: 'postgres', provisioningSecret: 'X' } })\n`,
 			unparsable: 'export default defineApp({',

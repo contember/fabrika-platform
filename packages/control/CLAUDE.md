@@ -604,9 +604,10 @@ other environment, before the provider prepares anything, and the write maps a r
   from the provider artifact is a bug. An approval names both digests and holds only for them.
 - **The snapshot records the database a Cloudflare application chose (`AccessSnapshot.database`, `read.ts`).** The read
   takes `fabrika.config.ts` at the root, when present, through `applicationTarget` of `@fabrika/check/contract`, the
-  checker's own static read: `'postgres'` only for a `@fabrika/provider-cloudflare` `defineApp` that states
-  `database: { kind: 'postgres', … }` inline; a Cloudflare config that names `database` in a form the read cannot settle
-  fails the read (`config-unreadable`). Every other application, and a root without the file, records none, and the
+  checker's own static read: `'postgres'` only for a `@fabrika/provider-cloudflare` `defineApp` whose argument states
+  `database: { kind: 'postgres', … }`, followed through `const` bindings and spreads of object literals; a Cloudflare
+  config that names `database` in a form the read cannot settle fails the read (`config-unreadable`). An argument the
+  read cannot follow (`unsettled`) records none, and the deployer refuses a `database` the loaded config names. Every other application, and a root without the file, records none, and the
   digest appends `database:<kind>` only when it is present, so no stored digest moves. `approvedAccess` hands it to the
   provider as `ProviderApprovedAccess.database`, a platform-protocol field: change it additively only (ADR-0062). The
   Cloudflare provider's `validateAccess` refuses Postgres below its release gate, for an environment whose artifact

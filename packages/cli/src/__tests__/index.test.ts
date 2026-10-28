@@ -123,7 +123,7 @@ describe('app build for a contract application', () => {
 	test('refuses a build asked for Postgres when the config chooses none, and a database it does not know', async () => {
 		await withRoot(true, async (config, root) => {
 			await expect(runCli(['app', 'build', '--provider=cloudflare', `--config=${config}`, '--database=postgres'])).rejects.toThrow(
-				"app build: this build was asked for Postgres (--database=postgres), and fabrika.config.ts states no `database: { kind: 'postgres', … }` inline",
+				"app build: this build was asked for Postgres (--database=postgres), and fabrika.config.ts names no `database: { kind: 'postgres', … }`",
 			)
 			await expect(runCli(['app', 'build', '--provider=cloudflare', `--config=${config}`, '--database=mysql'])).rejects.toThrow(
 				'--database=mysql: expected sqlite or postgres',
@@ -139,12 +139,49 @@ describe('app build for a contract application', () => {
 		await withRoot(true, async (config, root) => {
 			writeFileSync(
 				config,
-				"import { defineApp } from '@fabrika/provider-cloudflare'\n\nconst database = { kind: 'postgres', provisioningSecret: 'DATABASE_URL' } as const\n\nexport default defineApp({ id: 'notes', database, resources: () => [] })\n",
+				"import { defineApp } from '@fabrika/provider-cloudflare'\n\nlet database = { kind: 'postgres', provisioningSecret: 'DATABASE_URL' } as const\n\nexport default defineApp({ id: 'notes', database, resources: () => [] })\n",
 			)
 			await expect(runCli(['app', 'build', '--provider=cloudflare', `--config=${config}`])).rejects.toThrow(
 				'app build: fabrika.config.ts: `database` is not an object literal',
 			)
 			expect(existsSync(join(root, 'fabrika'))).toBe(false)
+		})
+	})
+
+	test('reads Postgres through a const default export and a const argument, so a flagless build refuses them', async () => {
+		const shapes = [
+			"import { defineApp } from '@fabrika/provider-cloudflare'\n\nconst app = defineApp({ id: 'notes', database: { kind: 'postgres', provisioningSecret: 'DATABASE_URL' }, resources: () => [] })\nexport default app\n",
+			"import { defineApp } from '@fabrika/provider-cloudflare'\n\nconst settings = { id: 'notes', database: { kind: 'postgres', provisioningSecret: 'DATABASE_URL' }, resources: () => [] } as const\nexport default defineApp(settings)\n",
+		]
+		for (const shape of shapes) {
+			await withRoot(true, async (config, root) => {
+				writeFileSync(config, shape)
+				await expect(runCli(['app', 'build', '--provider=cloudflare', `--config=${config}`])).rejects.toThrow('this build was not asked for it')
+				expect(existsSync(join(root, 'fabrika'))).toBe(false)
+				await runCli(['app', 'build', '--provider=cloudflare', `--config=${config}`, '--database=postgres'])
+				expect(readFileSync(join(root, 'fabrika', 'entry.generated.ts'), 'utf8')).toBe(generatedEntry('cloudflare-postgres'))
+			})
+		}
+	})
+
+	test('refuses a loaded database the static read cannot follow, naming the readable shape; one without a database stays on SQLite', async () => {
+		await withRoot(true, async (config, root) => {
+			writeFileSync(
+				config,
+				"import { defineApp } from '@fabrika/provider-cloudflare'\n\nconst load = () => ({ database: { kind: 'postgres' as const, provisioningSecret: 'DATABASE_URL' } })\nexport default defineApp({ id: 'notes', resources: () => [], ...load() })\n",
+			)
+			await expect(runCli(['app', 'build', '--provider=cloudflare', `--config=${config}`, '--database=postgres'])).rejects.toThrow(
+				"app build: fabrika.config.ts names a `database` when it loads, and the static read that Control, the checker and the build share does not see it (it spreads a value the read cannot follow): write it as `export default defineApp({ …, database: { kind: 'postgres', provisioningSecret: '<SECRET>' } })`",
+			)
+			expect(existsSync(join(root, 'fabrika'))).toBe(false)
+		})
+		await withRoot(true, async (config, root) => {
+			writeFileSync(
+				config,
+				"import { defineApp } from '@fabrika/provider-cloudflare'\n\nconst load = () => ({ resources: () => [] })\nexport default defineApp({ id: 'notes', ...load() })\n",
+			)
+			await runCli(['app', 'build', '--provider=cloudflare', `--config=${config}`])
+			expect(readFileSync(join(root, 'fabrika', 'entry.generated.ts'), 'utf8')).toBe(generatedEntry('cloudflare'))
 		})
 	})
 

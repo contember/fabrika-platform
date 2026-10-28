@@ -20,7 +20,7 @@ import { checkTrustedResolution } from './trust'
 
 export { ContractError } from '@fabrika/app/contract'
 // Control reads the database a Cloudflare application chose from `fabrika.config.ts` with the same static read.
-export { type ApplicationTarget, applicationTarget } from './dialect'
+export { type ApplicationTarget, applicationTarget, READABLE_DATABASE_SHAPE } from './dialect'
 export { type Finding, formatFinding } from './finding'
 export { contractReaderInputs } from './inputs'
 export { CONFIG_FILE, CONTRACT_FILE, MIGRATIONS_DIR, TABLES_FILE } from './layout'

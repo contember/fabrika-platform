@@ -10,12 +10,12 @@ import { implementationAt } from '@fabrika/app/bun'
 import type { AnyContract } from '@fabrika/app/contract'
 import { BootError, type ContractImplementation } from '@fabrika/app/implement'
 import { DEV_OUTBOX_ORIGIN, type DevKit, devKit, type DevOutside, type LabelledTestCaller, type TestCaller } from '@fabrika/app/testing'
-import { type ApplicationDialect, applicationTarget, CONFIG_FILE } from '@fabrika/check'
+import { type ApplicationDialect, CONFIG_FILE } from '@fabrika/check'
 import { SqliteMigrationError } from '@fabrika/db/sqlite-migrate'
 import { TEST_POSTGRES_URL, type TestDatabase, testDatabase } from '@fabrika/db/testing'
 import { PostgresMigrationError } from '@fabrika/platform-node'
 import { MemoryFileObjects } from '@fabrika/platform/testing'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { z } from 'zod/v4'
 import { DEV_ENV_FILE, DevEnvProblem, type DevOutbox, devOutbox, mailHeadOf, readDevEnv, shownBody } from './app-dev-outside'
@@ -36,6 +36,7 @@ import {
 	toolbarState,
 	withToolbar,
 } from './app-dev-ui'
+import { settleTarget } from './config-database'
 
 export const APP_DEV_USAGE = `fabrika app dev — the application on a local port, to click through its screens
 
@@ -195,19 +196,18 @@ function addressedHere(request: Request, port: number): boolean {
 const plain = (status: number, text: string): Response =>
 	new Response(`${text}\n`, { status, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' } })
 
-/** The dialect the application's `fabrika.config.ts` names, as the checker reads it. */
-function dialectAt(root: string): ApplicationDialect {
-	const path = join(root, CONFIG_FILE)
-	const target = applicationTarget(new Map(existsSync(path) ? [[CONFIG_FILE, readFileSync(path, 'utf8')]] : []))
-	if (target.unreadable !== undefined) throw new AppDevError(`${CONFIG_FILE}: ${target.unreadable}`)
-	return target.dialect
+/** The dialect the application's `fabrika.config.ts` names, as the checker reads it, settled against the loaded config. */
+async function dialectAt(root: string): Promise<ApplicationDialect> {
+	const settled = await settleTarget(root, 'unsettled')
+	if ('refusal' in settled) throw new AppDevError(settled.refusal)
+	return settled.target.dialect
 }
 
 /** Serves `app` through its test kit on a loopback port until `stop`. */
 export async function startAppDev(app: ContractImplementation<AnyContract>, options: AppDevOptions): Promise<AppDevServer> {
 	if (!LOOPBACK.has(options.host)) throw new AppDevError(`app dev serves this machine only, not ${options.host}`)
 	let testDb: TestDatabase | null = null
-	if (app.database !== null && dialectAt(options.root) === 'sqlite') {
+	if (app.database !== null && (await dialectAt(options.root)) === 'sqlite') {
 		// The SQLite twin of the kit opens an in-memory database: no URL, and nothing left behind to drop.
 		const sqlite = await import('@fabrika/db/testing-sqlite')
 		testDb = await sqlite.testDatabase({ migrations: join(options.root, 'db', 'migrations'), label: 'fabrika app dev' })

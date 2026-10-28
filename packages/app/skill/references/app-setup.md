@@ -278,7 +278,8 @@ migrations are Postgres, as on Zerops (`references/table-and-migration.md`), and
 before it deploys. A local build is `fabrika app build --provider=cloudflare --database=postgres`; without the option the
 build refuses, as it does under a platform older than 0.9.0-dev.9, which cannot deploy it. Keep the config at the
 root `fabrika.config.ts`: an environment that deploys another config file cannot run on Postgres. An environment's database never changes once it published: moving is a new environment. A
-`database` the checker cannot read is refused (`cloudflare-database`).
+`database` the checker cannot read is refused (`cloudflare-database`), and so is one the config only names when it loads
+(a spread of a function's result): the `db` commands, the build and the deploy refuse it.
 
 It also serves the SPA: the deploy copies the build directory of each SPA and
 link mount (`dir`, a link's `spa`) into `fabrika/assets/` at the mount's prefix (`/admin` into `fabrika/assets/admin/`)

@@ -1,4 +1,5 @@
 import { type ContractArtifact, contractDigest, FABRIKA_APPLICATION_OBJECT, OPS_PREFIX, parseManagedEnvironment } from '@fabrika/auth-core'
+import { READABLE_DATABASE_SHAPE } from '@fabrika/check/contract'
 import { parseProxyManifestJson } from '@fabrika/proxy-core/manifest'
 import { afterAll, beforeEach, describe, expect, test } from 'bun:test'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
@@ -340,6 +341,9 @@ describe('an application on Postgres through Hyperdrive', () => {
 		test('when the config and the approval disagree', async () => {
 			await refused(appConfig(), { approvedDatabase: null }, 'Control approved no database: Control reads it statically from the `fabrika.config.ts`')
 			await refused(appConfig({ database: null }), {}, 'Control approved Postgres for this application, read from the `fabrika.config.ts` at its root')
+			// Both name the shape the static read settles, the wording of the checker and the CLI.
+			await refused(appConfig(), { approvedDatabase: null }, `that read does not see it. Deploy that config, written as ${READABLE_DATABASE_SHAPE}`)
+			await refused(appConfig({ database: null }), {}, `names no \`database\`: write it as ${READABLE_DATABASE_SHAPE}`)
 		})
 
 		test('below the release that serves Postgres', async () => {

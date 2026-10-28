@@ -89,6 +89,28 @@ describe('fabrika db on Cloudflare', () => {
 		expect(await failure(run(unreadable, 'migrate'))).toContain("db: fabrika.config.ts: `database` states a `kind` other than the literal 'postgres'")
 	})
 
+	test('a loaded database the static read cannot follow is refused by every command; a config without one stays on SQLite', async () => {
+		const hidden = appRoot(
+			"import { defineApp } from '@fabrika/provider-cloudflare'\n\nconst load = () => ({ database: { kind: 'postgres' as const, provisioningSecret: 'DATABASE_URL' } })\nexport default defineApp({ id: 'notes', resources: () => [], ...load() })\n",
+		)
+		// The command loads the config, which imports the provider.
+		symlinkSync(join(import.meta.dir, '..', '..', 'node_modules'), join(hidden, 'node_modules'))
+		writeMigration(hidden, '20261022120000_notes.sql', NOTES)
+		for (const command of ['migrate', 'codegen', 'test-scaffold']) {
+			expect([command, await failure(run(hidden, command))]).toEqual([
+				command,
+				"db: fabrika.config.ts names a `database` when it loads, and the static read that Control, the checker and the build share does not see it (it spreads a value the read cannot follow): write it as `export default defineApp({ …, database: { kind: 'postgres', provisioningSecret: '<SECRET>' } })`, its argument an object literal (directly or through a `const`) with no spread of a value the read cannot follow",
+			])
+		}
+		const sqlite = appRoot(
+			"import { defineApp } from '@fabrika/provider-cloudflare'\n\nconst load = () => ({ resources: () => [] })\nexport default defineApp({ id: 'notes', ...load() })\n",
+		)
+		symlinkSync(join(import.meta.dir, '..', '..', 'node_modules'), join(sqlite, 'node_modules'))
+		writeMigration(sqlite, '20261022120000_notes.sql', NOTES)
+		expect(await failure(run(sqlite, 'migrate'))).toContain('migrates its own SQLite database')
+		expect(await run(sqlite, 'codegen')).toBe(`${SCHEMA}\n`)
+	})
+
 	test('a Zerops application still needs the Postgres environment for migrate and codegen', async () => {
 		const root = appRoot(ZEROPS_CONFIG)
 		expect(await failure(run(root, 'migrate'))).toBe('FABRIKA_APP_ID is required')

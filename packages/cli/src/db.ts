@@ -1,7 +1,6 @@
 import { applicationMigrations as sqliteApplicationMigrations } from '@fabrika/app/build'
 import {
 	type ApplicationDialect,
-	applicationTarget,
 	CONFIG_FILE,
 	type Finding,
 	formatFinding,
@@ -36,6 +35,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { settleTarget } from './config-database'
 import { readJunitCases } from './junit'
 
 /** The checker's `migration-name` contract (`@fabrika/check`, `db/migrations/`). */
@@ -69,7 +69,10 @@ never as failed cases.
 
 An application whose ${CONFIG_FILE} default-exports @fabrika/provider-cloudflare's defineApp runs on SQLite in its
 Durable Object, which applies the migrations itself when it boots: \`migrate\` refuses, \`codegen\` applies them to an
-in-memory database, and the generated tests run on @fabrika/db/testing-sqlite; none of them needs a database URL.
+in-memory database, and the generated tests run on @fabrika/db/testing-sqlite; none of them needs a database URL,
+unless its config names \`database: { kind: 'postgres', … }\` in defineApp's argument, an object literal (directly or
+through a const): then it takes the Postgres path above, and the deploy runs \`migrate\` with the provisioning secret
+as FABRIKA_APP_DATABASE_URL.
 `
 
 export interface DbCommandDependencies {
@@ -90,12 +93,14 @@ const refuseArguments = (command: string, argv: readonly string[]): void => {
 	if (argv.length > 0) throw new Error(`db ${command} takes no argument ${argv[0]}\n\n${DB_USAGE}`)
 }
 
-/** The dialect `fabrika.config.ts` names, read as the checker reads it; Postgres without a config. */
+/**
+ * The dialect `fabrika.config.ts` names, read as the checker reads it and checked against the loaded config where the
+ * read cannot follow it (`settleTarget`); Postgres without a config.
+ */
 const dialectAt = async (cwd: string): Promise<ApplicationDialect> => {
-	const config = await readFile(join(cwd, CONFIG_FILE), 'utf8').catch(() => undefined)
-	const target = applicationTarget(new Map(config === undefined ? [] : [[CONFIG_FILE, config]]))
-	if (target.unreadable !== undefined) throw new Error(`db: ${CONFIG_FILE}: ${target.unreadable}`)
-	return target.dialect
+	const settled = await settleTarget(cwd, 'unsettled')
+	if ('refusal' in settled) throw new Error(`db: ${settled.refusal}`)
+	return settled.target.dialect
 }
 
 const timestamp = (date: Date): string => date.toISOString().replace(/\.\d{3}Z$/, '').replaceAll(/[-:T]/g, '')
@@ -212,6 +217,8 @@ const expectedTests = async (
 
 const testScaffold = async (argv: readonly string[], deps: DbCommandDependencies): Promise<void> => {
 	refuseArguments('test-scaffold', argv)
+	// The scaffold reads the dialect statically; a config whose loaded database that read misses is refused first.
+	await dialectAt(deps.cwd)
 	const { files, tests, missing } = await expectedTests(deps.cwd)
 	for (const [path, text] of files) {
 		if (text.startsWith(GENERATED_TEST_HEADER) && !tests.has(path)) {

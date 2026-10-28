@@ -137,7 +137,9 @@ Decisions 1–9 describe the SQLite environment, the default; §10 says what dif
    `index.html`. A Worker that declares its own `assets` keeps them.
 
 10. **An application may choose Postgres through Hyperdrive.** `defineApp({ id, database: { kind: 'postgres',
-    provisioningSecret: '<SECRET>' } })`, inline, so the checker and Control read it statically. The secret is an
+    provisioningSecret: '<SECRET>' } })`, an object literal (directly or through a `const`), so the checker and
+    Control read it statically; a `database` the config names only when it loads (a spread of a function's result) is
+    refused by the CLI and the deployer, which load the config. The secret is an
     application secret the operator sets per environment in Control's vault: the direct (non-pooler) URL of a role
     that may create roles. Then:
     - **The Worker serves every request itself**, over the `FABRIKA_DATABASE` Hyperdrive binding, with Smart Placement

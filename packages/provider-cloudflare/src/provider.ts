@@ -26,6 +26,7 @@ import {
 	OPS_REHEARSAL_OBJECT,
 	parseManagedEnvironment,
 } from '@fabrika/auth-core'
+import { READABLE_DATABASE_SHAPE } from '@fabrika/check/contract'
 import { type DeployStepResult, type ProviderManagedEnvironment, runSteps, type SchemaReconciler } from '@fabrika/provider-contract'
 import { appBuildDatabaseArgument } from '@fabrika/provider-contract/app-cli'
 import { isPolicyOrigin } from '@fabrika/proxy-core/headers'
@@ -906,12 +907,12 @@ const deploymentDatabase = (
 		const approved = accessDatabase(run.approved)
 		if (database !== null && approved === 'sqlite') {
 			throw new Error(
-				"cloudflare: the config runs on Postgres (`database`), and Control approved no database: Control reads it statically from the `fabrika.config.ts` at the application's root, so deploy that config and state `database: { kind: 'postgres', provisioningSecret: '<SECRET>' }` inline in its `defineApp`",
+				`cloudflare: the config runs on Postgres (\`database\`), and Control approved no database: Control reads it statically from the \`fabrika.config.ts\` at the application's root, and that read does not see it. Deploy that config, written as ${READABLE_DATABASE_SHAPE}`,
 			)
 		}
 		if (database === null && approved === 'postgres') {
 			throw new Error(
-				'cloudflare: Control approved Postgres for this application, read from the `fabrika.config.ts` at its root, and the config this deploy loaded names no `database`',
+				`cloudflare: Control approved Postgres for this application, read from the \`fabrika.config.ts\` at its root, and the config this deploy loaded names no \`database\`: write it as ${READABLE_DATABASE_SHAPE}, and nothing that removes it at runtime`,
 			)
 		}
 	}

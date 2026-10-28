@@ -316,18 +316,19 @@ mutation calls `ctx.kick('<job>')`, and the job makes the call outside `ctx.tran
 checker hints on a mutation that declares `egress` or `connect` (`cloudflare-held-call`), and refuses
 `DEFAULT CURRENT_TIMESTAMP` in a migration (`cloudflare-current-timestamp`).
 
-**On Cloudflare over Postgres** (`database: { kind: 'postgres', … }` in `defineApp`, `references/app-setup.md`) the
-stateless Worker serves every request through Hyperdrive and the object runs only the jobs. Migrations, codegen and the
-tests are Postgres, exactly as on Zerops; the deploy runs `migrate`. A handler is not capped at 25 s and holds no
-environment while it waits; the job segment (14 minutes) and the `scan: true` refusal stay. A `ctx.kick` runs its job
-on the object within seconds of the commit, never in the request.
-
 ```bash
 bunx fabrika db new <slug>                                  # a new SQLite migration file
 bunx fabrika db codegen                                     # applies the migrations in memory; writes src/db/schema.generated.ts
 bunx fabrika db test-scaffold                               # the generated tests, on @fabrika/db/testing-sqlite
 bun test --isolate                                          # no database URL; then tsc and fabrika-check as above
 ```
+
+**On Cloudflare over Postgres** (`database: { kind: 'postgres', … }` in `defineApp`, `references/app-setup.md`) the
+stateless Worker serves every request through Hyperdrive and the object runs only the jobs. Migrations, codegen and the
+tests are Postgres, exactly as on Zerops; the deploy runs `migrate`. A handler is not capped at 25 s and holds no
+environment while it waits; the job segment (14 minutes) and the `scan: true` refusal stay. A `ctx.kick` runs its job
+on the object within seconds of the commit, never in the request. Run the loop above with `FABRIKA_APP_ID` and
+`FABRIKA_APP_DATABASE_URL`, not the SQLite one; the local build passes `--database=postgres`.
 
 A generated file changes only through its command (`codegen`, `test-scaffold`); running it is the loop, not an edit.
 Format and lint only the files you wrote, with the repository's own tools: in the fabrika-platform repository

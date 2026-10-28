@@ -161,9 +161,10 @@ export async function readAccessSnapshot(
 
 /**
  * The database a Cloudflare application chose in `fabrika.config.ts`, read statically as the checker reads it: Postgres
- * only when the `defineApp` call states it inline. Every other configuration, and a root without one, chooses none. A
- * Cloudflare configuration that names `database` in a form the read cannot settle is refused: the deployer would load a
- * database Control never approved.
+ * only when the `defineApp` argument states it, followed through `const` bindings. Every other configuration, an argument
+ * the read cannot follow (`unsettled`) and a root without one choose none; the deployer refuses a `database` the loaded
+ * config names that Control did not approve. A Cloudflare configuration that names `database` in a form the read cannot
+ * settle is refused: the deployer would load a database Control never approved.
  */
 async function readDatabase(
 	commit: CommitFiles,

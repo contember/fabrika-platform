@@ -28,7 +28,8 @@ export const cloudflareDatabaseRefusal = (message: string): Finding => ({
 	severity: 'refusal',
 	rule: 'cloudflare-database',
 	message,
-	allowed: "database: { kind: 'postgres', provisioningSecret: '<SECRET>' } inline in defineApp, or no database (the Durable Object's SQLite)",
+	allowed:
+		"database: { kind: 'postgres', provisioningSecret: '<SECRET>' } in defineApp's argument (an object literal, directly or through a const), or no database (the Durable Object's SQLite)",
 })
 
 /**

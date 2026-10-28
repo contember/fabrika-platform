@@ -751,7 +751,7 @@ const cases: readonly RuleCase[] = [
 		bad: {
 			...ARCHITECTURE_APPLICATION,
 			'fabrika.config.ts':
-				"import { defineApp } from '@fabrika/provider-cloudflare'\n\nconst database = { kind: 'postgres', provisioningSecret: 'DATABASE_URL' } as const\n\nexport default defineApp({ id: 'notes', database, resources: () => [] })\n",
+				"import { defineApp } from '@fabrika/provider-cloudflare'\n\nlet database = { kind: 'postgres', provisioningSecret: 'DATABASE_URL' } as const\n\nexport default defineApp({ id: 'notes', database, resources: () => [] })\n",
 		},
 		expected: ['fabrika.config.ts:1:1'],
 		good: { ...ARCHITECTURE_APPLICATION, 'fabrika.config.ts': CLOUDFLARE_POSTGRES_CONFIG },

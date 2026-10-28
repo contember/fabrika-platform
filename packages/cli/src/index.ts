@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 
 import { CONTRACT_FILE, type EntryRuntime, writeGeneratedEntry } from '@fabrika/app/build'
-import { applicationTarget, CONFIG_FILE } from '@fabrika/check'
+import { CONFIG_FILE } from '@fabrika/check'
 import { authoredAppProvider } from '@fabrika/provider-contract'
 import {
 	type AppBuildDatabase,
@@ -13,6 +13,7 @@ import {
 } from '@fabrika/provider-contract/app-cli'
 import { installationCliFromModule, isInstallationCommand, supportsInstallationCommand } from '@fabrika/provider-contract/installation'
 import { dirname, join, relative, resolve } from 'node:path'
+import { settleTarget } from './config-database.js'
 import { CONTROL_USAGE, registerCompiledManifest, runControlCli } from './control.js'
 
 const USAGE = `fabrika — application platform CLI
@@ -222,9 +223,10 @@ const runAppRegister = async (parsed: ParsedCommand): Promise<void> => {
  */
 const entryRuntimeAt = async (root: string, runtime: EntryRuntime, requested: AppBuildDatabase | undefined): Promise<EntryRuntime> => {
 	if (runtime !== 'cloudflare') return runtime
-	const config = Bun.file(join(root, CONFIG_FILE))
-	const target = applicationTarget(new Map((await config.exists()) ? [[CONFIG_FILE, await config.text()]] : []))
-	if (target.unreadable !== undefined) throw new Error(`app build: ${CONFIG_FILE}: ${target.unreadable}`)
+	// The build loads the config anyway to infer the provider, so it checks the static read against it every time.
+	const settled = await settleTarget(root, 'always')
+	if ('refusal' in settled) throw new Error(`app build: ${settled.refusal}`)
+	const { target } = settled
 	const chosen = target.cloudflare && target.dialect === 'postgres' ? 'postgres' : 'sqlite'
 	const asked = appBuildDatabaseArgument('postgres')
 	if (chosen === 'postgres' && requested !== 'postgres') {
@@ -234,7 +236,7 @@ const entryRuntimeAt = async (root: string, runtime: EntryRuntime, requested: Ap
 	}
 	if (chosen === 'sqlite' && requested === 'postgres') {
 		throw new Error(
-			`app build: this build was asked for Postgres (${asked}), and ${CONFIG_FILE} states no \`database: { kind: 'postgres', … }\` inline`,
+			`app build: this build was asked for Postgres (${asked}), and ${CONFIG_FILE} names no \`database: { kind: 'postgres', … }\``,
 		)
 	}
 	return chosen === 'postgres' ? 'cloudflare-postgres' : 'cloudflare'
