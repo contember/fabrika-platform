@@ -34,6 +34,31 @@ export function randomHexId(byteLen = 12): string {
 	return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
 }
 
+/**
+ * UUIDv7s that sort in the order they were made: the millisecond timestamp first, then a counter in `rand_a` for ids
+ * made within one millisecond. One generator per Durable Object, which runs one request at a time.
+ */
+export function monotonicUuidv7(clock: () => number = Date.now): () => string {
+	let lastTime = -1
+	let sequence = 0
+	return () => {
+		const now = clock()
+		sequence = now === lastTime ? sequence + 1 : 0
+		lastTime = now
+		const bytes = crypto.getRandomValues(new Uint8Array(16))
+		let time = now
+		for (let i = 5; i >= 0; i--) {
+			bytes[i] = time % 256
+			time = Math.floor(time / 256)
+		}
+		bytes[6] = 0x70 | ((sequence >> 8) & 0x0f)
+		bytes[7] = sequence & 0xff
+		bytes[8] = (bytes[8] & 0x3f) | 0x80
+		const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+		return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+	}
+}
+
 /** SHA-256(message) hex */
 export async function sha256Hex(message: string | Uint8Array): Promise<string> {
 	const data = typeof message === 'string' ? new TextEncoder().encode(message) : message

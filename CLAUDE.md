@@ -132,7 +132,7 @@ needed only when there is no app config. Platform commands load the provider's
 
 ## Critical Invariants
 
-- **`wrangler.jsonc` is generated but COMMITTED for `control` and `runner-cloudflare`** (and ignored everywhere
+- **`wrangler.jsonc` is generated but COMMITTED for `control`, `runner-cloudflare` and `canvas-share`** (and ignored everywhere
   else — see `.gitignore`). Its `migrations` array is the only durable record of a worker's Durable
   Object migration history; regenerating from scratch shifts tags when a DO class is added or removed
   and `wrangler deploy` fails with code 10074. Regenerate with `bun run oblaka` after a resource-graph

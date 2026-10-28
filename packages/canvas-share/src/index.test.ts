@@ -8,7 +8,7 @@
 
 import { describe, expect, test } from 'bun:test'
 import { LIMITS } from './types'
-import { randomHexId, sha256Hex, timingSafeEqual } from './util'
+import { monotonicUuidv7, randomHexId, sha256Hex, timingSafeEqual } from './util'
 import { validateFeedbackBody, validateShareId, validateSharePayload } from './validation'
 
 describe('validateSharePayload', () => {
@@ -226,5 +226,14 @@ describe('util', () => {
 		expect(timingSafeEqual('hello', 'hello')).toBe(true)
 		expect(timingSafeEqual('hello', 'world')).toBe(false)
 		expect(timingSafeEqual('hello', 'hi')).toBe(false)
+	})
+})
+
+describe('monotonicUuidv7', () => {
+	test('ids made within one millisecond sort in the order they were made', () => {
+		const next = monotonicUuidv7(() => 1_700_000_000_000)
+		const ids = Array.from({ length: 300 }, () => next())
+		expect([...ids].sort()).toEqual(ids)
+		expect(ids.every((id) => /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(id))).toBe(true)
 	})
 })

@@ -14,10 +14,12 @@
 		"test": "bun test"
 	},
 	"dependencies": {
+		"agent-canvas": "workspace:*",
 		"zod": "^3.25.76"
 	},
 	"devDependencies": {
 		"@cloudflare/workers-types": "^4.20260702.1",
+		"lopata": "^0.21.0",
 		"oblaka-iac": "^0.0.18",
 		"typescript": "^5.9.3",
 		"wrangler": "^4.24.0"

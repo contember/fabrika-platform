@@ -6,7 +6,8 @@ Cloudflare Worker that hosts shared agent-canvas snapshots.
 
 - **R2 (`BLOBS`)** stores share payloads, compiled canvas JS, JSX source, and reviewer-uploaded annotation images.
 - **KV (`FEEDBACK`)** stores individual feedback entries (sortable keys for `since` queries) and rate limit counters (TTL 120s).
-- **Static assets (`ASSETS`)** serve runtime bundles (`runtime.js`, `components.js`, `preact-compat.js`, `client.js`, `client.css`) — these are mirrored from `daemon/dist/` automatically by `bun run build`.
+- **Static assets (`ASSETS`)** serve runtime bundles (`runtime.js`, `components.js`, `preact-compat.js`, `client.js`, `client.css`) and the review widget (`review.js`) — these are mirrored from `daemon/dist/` automatically by `bun run build`.
+- **Durable Object (`REVIEWS`, class `ReviewProject`)** keeps one remote review project per instance: its sealed threads, the origins allowed to write and the agent token's hash, and the WebSockets of its reviewers and waiting agent. Sealed screenshots go to R2 under `reviews/{projectId}/screenshots/`.
 
 Validation is enforced with [Zod](https://zod.dev). Limits are centralized in [`src/types.ts`](src/types.ts).
 
@@ -15,7 +16,9 @@ Validation is enforced with [Zod](https://zod.dev). Limits are centralized in [`
 The Cloudflare config is defined programmatically in [`oblaka.ts`](oblaka.ts)
 using [`oblaka-iac`](https://github.com/contember/oblaka). The committed
 [`oblaka.ts`](oblaka.ts) is the source of truth; `wrangler.jsonc` is
-auto-generated and **gitignored** — never edit it by hand.
+auto-generated — never edit it by hand. It is **committed** (env `local`), because its `migrations` array is the only
+record of the `ReviewProject` Durable Object's migration history: oblaka reads it back when it regenerates the config
+for a deploy. After changing `oblaka.ts`, run `bun run oblaka` and commit the result.
 
 | Command                | Generates                      | Used for                |
 | ---------------------- | ------------------------------ | ----------------------- |
@@ -137,6 +140,28 @@ The Share button in the canvas UI lights up once the daemon sees `CANVAS_SHARE_E
 | POST   | `/s/:shareId/feedback`             | Submit feedback (called by reviewer browser)    | none               |
 | POST   | `/s/:shareId/upload`               | Upload annotation image                         | none               |
 | GET    | `/s/:shareId/uploads/:filename`    | Serve uploaded image                            | none               |
+
+### Remote review
+
+A remote review project is created by `agent-canvas review share` and lives in its own `ReviewProject` Durable Object.
+Every body field the worker stores (anchors, comments, screenshots) is ciphertext sealed by the reviewer's browser or
+the agent's CLI; the worker reads only thread ids, states, comment authors and timestamps.
+
+| Method          | Path                                                            | Purpose                                     | Auth                                              |
+| --------------- | --------------------------------------------------------------- | ------------------------------------------- | ------------------------------------------------- |
+| POST            | `/reviews`                                                      | Create a project for a list of origins      | `SHARE_AUTH_TOKEN`                                |
+| GET, POST       | `/review/:projectId/threads`                                    | List threads, create one                    | allowed `Origin`                                  |
+| POST            | `/review/:projectId/threads/:id/{comments,send,resolve,reopen}` | Reviewer actions                            | allowed `Origin`                                  |
+| DELETE          | `/review/:projectId/threads/:id`                                | Delete a thread and its screenshot          | allowed `Origin`                                  |
+| POST            | `/review/:projectId/notes/send`                                 | Send every unsent note                      | allowed `Origin`                                  |
+| GET (WebSocket) | `/review/:projectId/ws`                                         | Threads and agent presence for the widget   | allowed `Origin`                                  |
+| GET, POST       | `/review/:projectId/agent/{threads,claim}`                      | List threads, claim the sent ones           | `Bearer <agent token>`                            |
+| POST, GET       | `/review/:projectId/agent/threads/:id/{reply,screenshot}`       | Answer a thread, read its screenshot        | `Bearer <agent token>`                            |
+| GET (WebSocket) | `/review/:projectId/agent/ws`                                   | Wakes a waiting agent when threads are sent | subprotocols `agent-canvas-review, <agent token>` |
+
+The project id is the reviewer's write capability, carried only by the reviewer's link together with the key; browser
+requests must also come from an origin the project was created for. Writes are limited to 120 a minute per project, a
+project to 1000 threads, a thread to 200 comments.
 
 ## Rate limits
 

@@ -1,22 +1,16 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import {
-	isUnsentNote,
 	PROJECT_RE,
 	type ReviewAnchor,
 	type ReviewAuthor,
+	type ReviewComment,
 	type ReviewProxy,
 	reviewProxySchema,
 	type ReviewThread,
 	reviewThreadsFileSchema,
-	type ReviewThreadState,
 } from './model'
-
-export class ReviewError extends Error {
-	constructor(message: string, readonly status: 400 | 404 | 409) {
-		super(message)
-	}
-}
+import { agentReplied, claimed, notesSent, openingState, resolvedAs, ReviewError, sent, userCommented } from './threads'
 
 /**
  * Review threads of each project: `<directory>/<project>/threads.json`, attached screenshots beside it, and the
@@ -37,7 +31,7 @@ export class ReviewStore {
 		const thread: ReviewThread = {
 			id,
 			anchor,
-			state: send ? 'queued' : 'open',
+			state: openingState(send),
 			comments: [{ id: Bun.randomUUIDv7(), author: 'user', body, createdAt }],
 			...(screenshot === undefined ? {} : { screenshot: this.writeScreenshot(project, id, screenshot) }),
 			createdAt,
@@ -49,31 +43,22 @@ export class ReviewStore {
 
 	/** A comment from the person reopens a resolved thread; with `send` it goes to the agent. */
 	addUserComment(project: string, threadId: string, body: string, send: boolean): ReviewThread {
-		return this.update(project, threadId, (thread) => {
-			const state: ReviewThreadState = send ? 'queued' : thread.state === 'resolved' ? 'open' : thread.state
-			return { ...this.withComment(thread, 'user', body), state }
-		})
+		return this.update(project, threadId, (thread) => userCommented(thread, this.comment('user', body), send))
 	}
 
 	send(project: string, threadId: string): ReviewThread {
-		return this.update(project, threadId, (thread) => {
-			if (thread.state === 'working') throw new ReviewError('The agent is already working on this thread', 409)
-			return { ...thread, state: 'queued', updatedAt: this.timestamp() }
-		})
+		return this.update(project, threadId, (thread) => sent(thread, this.timestamp()))
 	}
 
 	/** Sends every unsent note at once, so the agent picks them up as one batch. */
 	sendNotes(project: string): readonly ReviewThread[] {
-		const threads = this.list(project)
-		const updatedAt = this.timestamp()
-		const sent = threads.filter(isUnsentNote).map((thread): ReviewThread => ({ ...thread, state: 'queued', updatedAt }))
-		const sentById = new Map(sent.map((thread) => [thread.id, thread]))
-		this.save(project, threads.map((thread) => sentById.get(thread.id) ?? thread))
-		return sent
+		const result = notesSent(this.list(project), this.timestamp())
+		this.save(project, result.threads)
+		return result.sent
 	}
 
 	setResolved(project: string, threadId: string, resolved: boolean): ReviewThread {
-		return this.update(project, threadId, (thread) => ({ ...thread, state: resolved ? 'resolved' : 'open', updatedAt: this.timestamp() }))
+		return this.update(project, threadId, (thread) => resolvedAs(thread, resolved, this.timestamp()))
 	}
 
 	delete(project: string, threadId: string): void {
@@ -86,18 +71,15 @@ export class ReviewStore {
 
 	/** Hands every queued thread to the agent: they become `working` and are returned in creation order. */
 	claimQueued(project: string): readonly ReviewThread[] {
-		const threads = this.list(project)
-		const claimed = threads.filter((thread) => thread.state === 'queued')
-		if (claimed.length === 0) return []
-		const updatedAt = this.timestamp()
-		const claimedIds = new Set(claimed.map((thread) => thread.id))
-		this.save(project, threads.map((thread) => (claimedIds.has(thread.id) ? { ...thread, state: 'working', updatedAt } : thread)))
-		return claimed.map((thread) => ({ ...thread, state: 'working', updatedAt }))
+		const result = claimed(this.list(project), this.timestamp())
+		if (result.claimed.length === 0) return []
+		this.save(project, result.threads)
+		return result.claimed
 	}
 
 	/** The agent's answer. Without `resolve` the thread goes back to the person as `open`. */
 	agentReply(project: string, threadId: string, body: string, resolve: boolean): ReviewThread {
-		return this.update(project, threadId, (thread) => ({ ...this.withComment(thread, 'agent', body), state: resolve ? 'resolved' : 'open' }))
+		return this.update(project, threadId, (thread) => agentReplied(thread, this.comment('agent', body), resolve))
 	}
 
 	proxyOf(project: string): ReviewProxy | undefined {
@@ -125,9 +107,8 @@ export class ReviewStore {
 		return next
 	}
 
-	private withComment(thread: ReviewThread, author: ReviewAuthor, body: string): ReviewThread {
-		const createdAt = this.timestamp()
-		return { ...thread, comments: [...thread.comments, { id: Bun.randomUUIDv7(), author, body, createdAt }], updatedAt: createdAt }
+	private comment(author: ReviewAuthor, body: string): ReviewComment {
+		return { id: Bun.randomUUIDv7(), author, body, createdAt: this.timestamp() }
 	}
 
 	private writeScreenshot(project: string, threadId: string, png: Uint8Array): string {

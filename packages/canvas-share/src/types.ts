@@ -9,6 +9,8 @@ export interface Env {
 	BLOBS: R2Bucket
 	FEEDBACK: KVNamespace
 	ASSETS: Fetcher
+	/** One `ReviewProject` per remote review project, named by its project id. */
+	REVIEWS: DurableObjectNamespace
 	/** Optional. If set, share creation requires this token in
 	 *  `Authorization: Bearer <token>`. Recommended in production. */
 	SHARE_AUTH_TOKEN?: string

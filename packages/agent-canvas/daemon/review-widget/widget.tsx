@@ -1,13 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { z } from 'zod'
-import {
-	isUnsentNote,
-	type ReviewAnchor,
-	reviewAnchorSchema,
-	type ReviewSource,
-	type ReviewThread,
-	type ReviewThreadState,
-} from '../src/review/model'
+import { type ReviewAnchor, reviewAnchorSchema, type ReviewSource, type ReviewThread, type ReviewThreadState } from '../src/review/model'
+import { isUnsentNote } from '../src/review/threads'
 import { describe, find } from './anchor'
 import type { ReviewClient } from './client'
 import { captureElement } from './screenshot'
@@ -450,7 +444,7 @@ export function ReviewWidget(props: { client: ReviewClient; host: HTMLElement })
 		if (pageKey(thread.anchor.url) !== page) navigate(thread.anchor.url, thread.id)
 	}
 
-	const presence = !connected ? 'Daemon offline' : watching ? 'Claude is listening' : 'Claude is not listening'
+	const presence = !connected ? client.offlineLabel : watching ? 'Claude is listening' : 'Claude is not listening'
 	const hoveredBox = hovered === null ? null : boxOf(hovered)
 
 	return (
