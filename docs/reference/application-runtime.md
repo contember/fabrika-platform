@@ -463,6 +463,38 @@ first and the object again, and it never boots the application.
   (`lopata/testing`); `@fabrika/db`'s `*-sqlite.test.ts` run the framework's statements on `bun:sqlite`
   (`bunSqliteStorage`, foreign keys on, transactions nested as savepoints, as workerd nests them).
 
+#### On Postgres through Hyperdrive
+
+An application whose `fabrika.config.ts` states `database: { kind: 'postgres', provisioningSecret }` inline (ADR-0065
+§10) gets the generated entry `cloudflare-postgres` and no `migrations.generated.ts`:
+
+- **The Worker serves every request itself** (`createPostgresContractWorker`, `packages/app/src/cloudflare-postgres.ts`).
+  The isolate boots the application once, shared with the job object, with `openHyperdrive` (`@fabrika/db/hyperdrive`)
+  on `app_<id>` of `FABRIKA_IAM_APP_ID`'s application and the R2 file store; it refuses to boot without the
+  `FABRIKA_DATABASE` binding, and a failed boot is reported once per streak and retried after a backoff that doubles
+  to 60 s. Each request opens its own postgres.js client from the binding's `connectionString` (at most
+  `HYPERDRIVE_CLIENT_MAX`, 5, connections) and ends it once everything it handed to `waitUntil` settled. The Worker
+  removes `X-Fabrika-Tick`, sets `X-Fabrika-Proxy-Secret` for the framework's hop check as the SQLite Worker does, and
+  answers an ops request with `opsRefusal()`. A handler's transaction is a Postgres transaction, so the 25 s handler
+  cap does not apply; Hyperdrive ends a statement after 60 s.
+- **The engine** runs every statement unprepared and checks, on its first connection, that `current_schema()` is the
+  runtime role's default `search_path`; after a mismatch it refuses every statement (`DatabaseError` `3F000`, saying to
+  redeploy). The default is set by every `fabrika db migrate`, which the deploy's `provision-database` step runs.
+- **Jobs run on the job object** (`FabrikaJobObject`, exported as `FabrikaApplication`, `cloudflare/postgres-object.ts`).
+  A request's `ctx.kick` writes its wake and runs nothing in the Worker (`kickRuns: 'scheduler'`); the request's
+  projection records the earliest wake its writes left, and after its work settled the Worker POSTs `/__fabrika/wake`
+  with `X-Fabrika-Wake-Delay` to the object `application`, which lowers its alarm to it and never raises it. The alarm
+  repairs once per instance, takes each due job's lease (each lease statement its own transaction), runs the taken jobs
+  past its return, and arms the next wake from the database, at most `POSTGRES_ALARM_REFRESH_MS` (60 s) ahead while the
+  contract has a job. It never throws: an error re-arms 30 s later and is an `AlarmFailed` event. The Worker's cron
+  trigger sends the repair tick, as on SQLite. The object answers only a request with the proxy secret (else an empty
+  404), and the ops prefix with `opsRefusal()`.
+- **No ops channel, barrier or data operations.** Control issues no ops key and runs no migrate data operation for such
+  an environment; backups are the database provider's.
+- `cloudflare-postgres-adapter.test.ts` constructs the Worker and the object over a real Postgres;
+  `cloudflare-postgres-runtime.test.ts` runs them in Lopata (`bun run test:lopata`), both with
+  `FABRIKA_TEST_POSTGRES_URL`.
+
 ### The staged kit's data handles (`ctx.db`)
 
 A handler of the staged kit (`app.group(…)` with `.handle(…)`, its cron jobs and webhooks) reaches data through
@@ -1333,7 +1365,8 @@ export const contract = app.contract((c) => ({
 
 On Cloudflare the environment's Durable Object runs each job on its alarm when the job's wake is due, and the Worker's
 cron trigger forwards the repair tick that rebuilds the wakes ([On Cloudflare](#on-cloudflare)); the leases and the
-wakes live in the object's SQLite. On Zerops each crontab entry runs `fabrika job run <name>` in the application's container, and the
+wakes live in the object's SQLite. An application on Postgres through Hyperdrive keeps them in its Postgres schema, and
+its job object runs them ([On Postgres through Hyperdrive](#on-postgres-through-hyperdrive)). On Zerops each crontab entry runs `fabrika job run <name>` in the application's container, and the
 lease lives in the application's Postgres schema. The command boots
 the application exactly as `serveContract` does — the framework variables leave the
 process first — and runs one job:
@@ -1630,6 +1663,9 @@ request behavior:
   with the proxy secret, and its `scheduled` forwards the repair tick. The object boots the
   application with its environment, verifying tokens through the `IAM` binding and serving
   the SPA from `ASSETS` ([On Cloudflare](#on-cloudflare)).
+- `@fabrika/app/cloudflare-postgres` exports `createPostgresContractWorker()`, the Worker of a contract application on
+  Postgres, which serves every request itself over the `FABRIKA_DATABASE` Hyperdrive binding, and `FabrikaJobObject`,
+  its job object ([On Postgres through Hyperdrive](#on-postgres-through-hyperdrive)).
 - `@fabrika/app/bun` exports `createBunHandler()`. It binds one `FetchService` to
   its process dependencies and returns `fetch()` plus `drain()`. It tracks every
   `waitUntil()` promise, reports rejected background tasks through a required

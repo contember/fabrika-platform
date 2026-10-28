@@ -254,7 +254,7 @@ webhook and a job declare it, and the kick edges never form a cycle.
 commit: a reminder, a retry the application times itself. Kicks of one job in the same second are one; kicks at
 different times stay apart, and a run takes only those already due. The second argument is the time and nothing else;
 what to do stays in the job's rows (`where <due> <= now()`, or a queue table's `<due>`). On Cloudflare the object's
-alarm runs it within seconds of `at`; on Bun the serving process that wrote it runs it at `at`, and another process
+alarm runs it within seconds of `at` (over Postgres too: a request's kick never runs in the request); on Bun the serving process that wrote it runs it at `at`, and another process
 finds it within a minute.
 
 The rules of the job:

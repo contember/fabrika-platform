@@ -147,7 +147,8 @@ that stops being true — it is the guard, not a description of one.
   statement count and atomicity. The rejection covers the platform's own
   dual-dialect services only. Applications use Kysely through `@fabrika/db`
   (`packages/db/CLAUDE.md`), whose job is a scoped query surface: on Postgres on
-  Zerops, and on a Durable Object's SQLite on Cloudflare
+  Zerops (Bun.SQL), on a Durable Object's SQLite on Cloudflare, or on Postgres
+  through Hyperdrive on Cloudflare (postgres.js, the same dialect as Zerops)
   ([ADR-0065](../decisions/0065-an-application-on-cloudflare-runs-in-one-durable-object-per-environment.md)),
   each framework statement written once per dialect.
 

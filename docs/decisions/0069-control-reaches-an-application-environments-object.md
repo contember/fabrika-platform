@@ -41,6 +41,9 @@ The constraints:
 domain. The object authenticates Control with an ops key before it boots, serves a metadata view of its state, and
 holds a maintenance barrier that Control drives by generations it allocates.**
 
+An environment whose application chose Postgres through Hyperdrive ([ADR-0065](0065-an-application-on-cloudflare-runs-in-one-durable-object-per-environment.md)
+§10) has no object database, so it gets none of this: no ops row, no ops key, no barrier and no migration phase.
+
 ### 1. The channel
 
 - **The row.** Platform composition adds one canonical `protocol` row to the application's manifest entry: a fixed

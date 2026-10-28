@@ -268,6 +268,16 @@ the default). A binding of the application's own, or another `compatibility_date
 `fabrika app build --provider=cloudflare` (the deploy runs it again from the pinned commit), and there is no
 `zerops.yaml`.
 
+The application runs in its Durable Object over SQLite by default. When the human asks for Postgres (an existing
+database, more than one object's throughput), add one property, inline and literal, so the checker and Control can read
+it: `defineApp({ id: 'tasks', database: { kind: 'postgres', provisioningSecret: 'DATABASE_URL' } })`. The Worker then
+serves every request over Hyperdrive and the object runs only the jobs. `DATABASE_URL` is an application secret the
+operator sets per environment in Control: the direct (non-pooler) URL of a role that may create roles, one Postgres
+cluster per environment. Never put it in `pipeline.secrets`, `vars` or a Worker binding; the deploy refuses that. The
+migrations are Postgres, as on Zerops (`references/table-and-migration.md`), and the deploy runs `fabrika db migrate`
+before it deploys. An environment's database never changes once it published: moving is a new environment. A
+`database` the checker cannot read is refused (`cloudflare-database`).
+
 It also serves the SPA: the deploy copies the build directory of each SPA and
 link mount (`dir`, a link's `spa`) into `fabrika/assets/` at the mount's prefix (`/admin` into `fabrika/assets/admin/`)
 after `pipeline.build`, and binds it as `ASSETS`. A `.assetsignore` at the root of a mount's directory excludes files

@@ -57,6 +57,54 @@ it to fact without a probe.
 - **`sql.exec` binds `?` parameters**, as Kysely's SQLite compiler emits them. Probed on local workerd through the
   application's own statements.
 
+## Hyperdrive
+
+What a Cloudflare application on Postgres ([ADR-0065](../decisions/0065-an-application-on-cloudflare-runs-in-one-durable-object-per-environment.md)
+§10) rests on. Nothing here is probed on a live account yet; the sources are Cloudflare's documentation (2026-10) and
+local runs, where Lopata's binding hands the Worker a direct connection string.
+
+- **The pooler runs in transaction mode.** A client holds one origin connection from `BEGIN` to `COMMIT`, and the
+  connection is reset when it returns to the pool, so a `SET` lasts one transaction or one query
+  ([connection pooling](https://developers.cloudflare.com/hyperdrive/concepts/connection-pooling/)). The data layer
+  therefore never sets session state: the schema is the runtime role's default `search_path`, which provisioning sets
+  (`ALTER ROLE run_<id> SET search_path TO app_<id>`), and the engine checks `current_schema()` on its first connection.
+  _Not verified live:_ that Hyperdrive's origin sessions apply the role default and keep it across resets.
+- **Unsupported:** SQL-level `PREPARE`, `EXECUTE`, `DEALLOCATE` and `DISCARD`, advisory locks, `LISTEN`/`NOTIFY`, and
+  any other per-session state
+  ([supported features](https://developers.cloudflare.com/hyperdrive/reference/supported-databases-and-features/)).
+  The engine runs every statement unprepared (postgres.js `prepare: false`). Startup parameters are not documented;
+  the engine sends none.
+- **Limits** ([limits](https://developers.cloudflare.com/hyperdrive/platform/limits/)): 10 configs per account on the
+  free plan, 25 on paid; about 20 origin connections per config on free, about 100 on paid (a soft limit); a statement
+  runs at most 60 s; an idle origin connection closes after 10 minutes; the initial connection times out after 15 s;
+  user and database names at most 63 bytes. A Worker invocation opens at most six simultaneous connections
+  ([Workers limits](https://developers.cloudflare.com/workers/platform/limits/)); a request's client opens up to
+  `HYPERDRIVE_CLIENT_MAX` (5).
+- **One config per environment, one Postgres cluster per environment.** The deploy names the config
+  `<env>-<app>-database`, its origin the runtime role `run_<id>` on the provisioning URL's host and database, caching
+  disabled (read back after each write). The roles are named by the application only, so two environments of one
+  application cannot share a cluster.
+- **The provisioning URL is a direct connection.** The application's `fabrika db migrate` creates roles and takes
+  advisory locks, which a pooler (a provider's or Hyperdrive's) refuses or breaks; the provisioning secret names the
+  database's direct, non-pooler endpoint, with a role that may create roles.
+- **The API token.** The deploy creates and updates the config over
+  `https://api.cloudflare.com/client/v4/accounts/<account>/hyperdrive/configs` with the installation's account token,
+  which needs the Hyperdrive Edit (Write) permission
+  ([permissions](https://developers.cloudflare.com/fundamentals/api/reference/permissions/)).
+- **Smart Placement** (`placement: { mode: 'smart' }`) moves a Worker towards the backend it calls over the network, so
+  the deploy sets it on a Postgres application's Worker
+  ([placement](https://developers.cloudflare.com/workers/configuration/placement/)).
+
+_Not verified live_, beyond the role default above: that one origin connection holds across a handler's awaits inside
+a transaction; transaction-local `set_config` and the lease fence's `pg_backend_pid()` through the pooler; cancelling a
+running statement through `pg_stat_activity` from another connection; postgres.js 3.4.9 (`prepare: false`, the type
+catalog fetched per connection) through Hyperdrive and its row types; the latency of a client per request; the REST
+shapes of the configs API and the permission's exact name for an account token; wrangler accepting the `hyperdrive`
+and `placement` keys oblaka writes, and Smart Placement moving the Worker; the runner container reaching an external
+Postgres over TLS on 5432; the cost of the job object's minute alarm; the Worker and the job object sharing an isolate;
+role creation (`CREATEROLE`, `GRANT app_<id> TO CURRENT_USER`) on hosted providers; and the origin connection limits
+under load.
+
 ## R2
 
 - **A conditional put refuses an existing key.** Probed on local workerd: `put(key, body, { onlyIf: { etagDoesNotMatch:

@@ -181,7 +181,7 @@ that runs (`@fabrika/app/cloudflare-postgres` opens one per request). It is dial
 must answer alike: every suite that opens its database through `openTestPostgres` or `testDatabase` runs once with
 `FABRIKA_TEST_POSTGRES_DRIVER=postgres-js`, and `hyperdrive.test.ts` compares the two drivers' rows type by type.
 
-- **The schema is the runtime role's default `search_path`, never a session setting.** Hyperdrive refuses startup
+- **The schema is the runtime role's default `search_path`, never a session setting.** Hyperdrive documents no startup
   parameters and pools per transaction, and many statements run in autocommit, so neither a startup `search_path` nor a
   `SET LOCAL` covers them; the layer names its tables unqualified. `provisionPostgresRoles` (platform-node) sets the
   role's default on every migrate. The first connection of an engine checks `current_schema()` and the engine refuses

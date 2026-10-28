@@ -45,6 +45,9 @@ in the environment's bucket. Framework code writes and loads every dump over the
 Control drives. The one recovery flow built is a side restore: the data moves into a clone that takes over serving,
 and point-in-time recovery is applied only to the frozen original.**
 
+An environment on Postgres through Hyperdrive ([ADR-0065](0065-an-application-on-cloudflare-runs-in-one-durable-object-per-environment.md)
+§10) is outside this decision: its data lives in the operator's Postgres, whose provider backs it up and restores it.
+
 ### 1. Two kinds of dump
 
 | Kind              | Taken                                                                                                                        | Restorable                  |

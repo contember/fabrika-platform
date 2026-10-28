@@ -606,6 +606,10 @@ other environment, before the provider prepares anything, and the write maps a r
   provider as `ProviderApprovedAccess.database`, a platform-protocol field: change it additively only (ADR-0062). The
   Cloudflare provider's `validateAccess` refuses Postgres below its release gate and a database other than the
   published access's, and serves a Postgres environment no ops channel and no data operations.
+  The read takes the file of every application, whatever its provider, under `SNAPSHOT_LIMITS.readerFileBytes`: a
+  config over it, or not UTF-8, fails the snapshot read. A change of `database` is
+  the neutral approval line `application.database` (`classifyAccess`), so a first publication on Postgres says
+  where the data lives.
 - **An application is read by the reader of the framework release it pins (ADR-0062, `readers.ts`, `formats.ts`).**
   `readAccessSnapshot` reads the `@fabrika/app` release from `<root>/bun.lock` and picks this release's reader for its
   own minor, or the bundled npm alias of an older one (`@fabrika/check-0.4`, `@fabrika/check-0.5`,

@@ -101,6 +101,23 @@ secret, and refuses its jobs, webhooks, public procedures, installation mail and
 0.9 also adds the dev launcher (`@fabrika/app/dev`), which a `dev` environment starts
 ([MCP authoring](mcp-authoring.md#the-dev-environment)); an application needs 0.9 only for a `dev` environment.
 
+From `0.9.0-dev.9` an application on Cloudflare may run on Postgres through Hyperdrive instead of its object's SQLite
+([ADR-0065](../decisions/0065-an-application-on-cloudflare-runs-in-one-durable-object-per-environment.md) §10). A new
+environment chooses it; an environment that published on SQLite cannot move, so the move is a new environment and an
+export and import of the data by the operator. The application:
+
+1. States `database: { kind: 'postgres', provisioningSecret: '<SECRET>' }` inline in `defineApp`, and the operator sets
+   that application secret per environment in Control to the direct (non-pooler) URL of a role that may create roles,
+   one Postgres cluster per environment. The secret goes in neither `pipeline.secrets` nor `vars`.
+2. Writes its migrations in Postgres, as on Zerops, and runs `fabrika db codegen` against a Postgres URL; its tests use
+   `@fabrika/db/testing` and `FABRIKA_TEST_POSTGRES_URL`. `fabrika app build` writes the `cloudflare-postgres` entry and
+   no `migrations.generated.ts` (delete a committed one).
+3. Keeps the Cloudflare refusals that do not depend on the database (`cloudflare-scan`, `cloudflare-job-segment`); the
+   25 s handler cap, `cloudflare-held-call`, `cloudflare-current-timestamp` and `cloudflare-framework-name` do not apply.
+
+The installation's Cloudflare API token needs the Hyperdrive Edit permission. Such an environment has no ops channel,
+no backups or restore by Control, and no Data Studio: its database's provider backs it up.
+
 ## 0.7 → 0.8
 
 0.8 changed no 0.7 form: it added the ALTCHA challenge provider. Raise the pin; nothing else changes. To move a public

@@ -1,6 +1,6 @@
 // @fabrika/db/hyperdrive — the data layer over postgres.js, as a Cloudflare Worker reaches Postgres through Hyperdrive
 // (ADR-0065). It imports neither `bun` nor `postgres`, so it loads in workerd: the runtime hands it the client of the
-// event that runs. Hyperdrive pools connections per transaction and refuses startup parameters, so the schema is the
+// event that runs. Hyperdrive pools connections per transaction and documents no startup parameters, so the schema is the
 // runtime role's own default `search_path` (`provisionPostgresRoles` sets it), never a session setting.
 
 import type { PostgresJSReservedSql, PostgresJSSql } from 'kysely-postgres-js'

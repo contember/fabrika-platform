@@ -448,3 +448,16 @@ the R2 bucket in process:
 ```bash
 bun test packages/app/src/__tests__/cloudflare-runtime.test.ts
 ```
+
+An application on Postgres through Hyperdrive (ADR-0065 §10) runs locally on a Postgres of its own.
+`fabrika app dev` serves it through its test kit on a throwaway schema of `FABRIKA_TEST_POSTGRES_URL`, as on Zerops,
+and `fabrika db migrate` provisions and migrates it with `FABRIKA_APP_ID` and `FABRIKA_APP_DATABASE_URL`. For a Lopata
+run, `composeLocalApplication({ …, database: { connectionString } })` writes the `FABRIKA_DATABASE` binding with
+`localConnectionString`, the runtime role's URL (`localDatabaseConnection(<provisioning URL>, <app id>)`), so the Worker
+connects to Postgres directly, without a pooler; it refuses the option for an application on SQLite. `lopata/testing`'s
+`createTestEnv` reads no `hyperdrive` config, so the runtime's Lopata suite sets the binding itself:
+
+```bash
+FABRIKA_TEST_POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:55433/postgres \
+  bun test packages/app/src/__tests__/cloudflare-postgres-runtime.test.ts
+```

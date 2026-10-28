@@ -426,6 +426,18 @@ fresh proxy secret written as variables. `assets` is what `await stageLocalAsset
 root)` staged at the top of `oblaka.ts`: the deploy's own staging of the SPA and link
 mounts into `fabrika/assets` beside the generated config, bound as `ASSETS`.
 
+A contract application may state `database: { kind: 'postgres', provisioningSecret }` in `defineApp` (ADR-0065 §10;
+`configDatabase` in `src/database.ts` validates it). Control records the choice in the access snapshot and hands it to
+the deployer as `ProviderApprovedAccess.database`; the deployer refuses a config that disagrees with it, a framework
+release below `0.9.0-dev.9`, a missing provisioning secret, and the secret named in `pipeline.secrets`, `vars` or a
+Worker variable or binding. The plan gains `provision-database` after `build`: the application's own
+`fabrika db migrate` in the runner, with exactly `PATH`, `HOME`, `TMPDIR`, `FABRIKA_APP_ID` and
+`FABRIKA_APP_DATABASE_URL`, then the create-or-replace of the Hyperdrive config `<env>-<app>-database` over the runtime
+role, through the Cloudflare API with the installation's token. The application Worker then gets the `FABRIKA_DATABASE`
+binding with that config's id and `placement: { mode: 'smart' }`, and no ops row or object variables; the bounds admit
+both keys only in exactly that form. `pipeline.build` runs without the secret. A local run passes
+`database: { connectionString }` to `composeLocalApplication`, which binds it as `localConnectionString`.
+
 Cloudflare app resources are composed as a public proxy Worker with a private
 application Worker child (ADR-0048). The config's `resources` returns only the
 application Worker; the deployer builds the proxy Worker `<app>-proxy` from this
