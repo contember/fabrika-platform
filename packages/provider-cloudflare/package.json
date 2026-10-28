@@ -49,6 +49,7 @@
 		"@fabrika/email": "workspace:*",
 		"@fabrika/iam-contract": "workspace:*",
 		"@fabrika/installation-init": "workspace:*",
+		"@fabrika/platform-node": "workspace:*",
 		"@fabrika/proxy-core": "workspace:*",
 		"@fabrika/provider-contract": "workspace:*",
 		"ignore": "^5.3.2",

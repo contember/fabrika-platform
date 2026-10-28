@@ -159,6 +159,7 @@ const makeCollaborators = (
 	writeOutcome: async (outcome) => {
 		rec.outcomes.push(outcome)
 	},
+	hyperdrive: { upsert: () => Promise.reject(new Error('an application on SQLite writes no Hyperdrive config')) },
 })
 
 const deploy = (

@@ -6,6 +6,7 @@ import { lstat, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { type Definition, deploy as oblakaDeploy, type DeployResult as OblakaDeployResult } from 'oblaka-iac'
 import { type CloudflareAppConfig, isCloudflareAppConfig } from './authoring'
+import { cloudflareHyperdriveConfigs, type HyperdriveConfigs } from './database'
 import { RUNNER_OUTCOME_FILE_ENV, type RunnerOutcomeFile } from './runner-protocol'
 
 export interface CommandSpec {
@@ -58,6 +59,8 @@ export interface CloudflareCollaborators {
 	readonly runCommand: CommandRunner
 	readonly provision: OblakaProvisioner
 	readonly writeOutcome: OutcomeWriter
+	/** The account's Hyperdrive configs, which a Postgres application's `provision-database` step writes. */
+	readonly hyperdrive: HyperdriveConfigs
 }
 
 export const loadCloudflareConfig = async (cwd: string, configPath: string): Promise<LoadedCloudflareConfig & { readonly absolutePath: string }> => {
@@ -153,6 +156,7 @@ export const defaultCloudflareCollaborators: CloudflareCollaborators = {
 	runCommand: defaultRunCommand,
 	provision: defaultProvision,
 	writeOutcome: defaultWriteOutcome,
+	hyperdrive: cloudflareHyperdriveConfigs,
 }
 
 export type { SchemaReconciler }

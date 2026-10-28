@@ -1,4 +1,10 @@
-import { CLOUDFLARE_APPLICATION_BINDING, CLOUDFLARE_APPLICATION_CLASS, CLOUDFLARE_FILES_BINDING, GENERATED_ENTRY_FILE } from '@fabrika/app/build'
+import {
+	CLOUDFLARE_APPLICATION_BINDING,
+	CLOUDFLARE_APPLICATION_CLASS,
+	CLOUDFLARE_DATABASE_BINDING,
+	CLOUDFLARE_FILES_BINDING,
+	GENERATED_ENTRY_FILE,
+} from '@fabrika/app/build'
 import {
 	type AppEnvironment,
 	appEnvironmentId,
@@ -28,7 +34,7 @@ import { stat } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, relative, resolve } from 'node:path'
 import { DurableObject, type GeneratedConfig, R2Bucket, ServiceReference, Worker } from 'oblaka-iac'
 import { assertLiteralAssets } from './assets'
-import type { CloudflareAppConfig } from './authoring'
+import { type CloudflareAppConfig, type CloudflarePostgresDatabase, configDatabase } from './authoring'
 import {
 	type ApplicationRuntime,
 	assertGeneratedConfigs,
@@ -37,11 +43,13 @@ import {
 	type DeploymentBounds,
 	frameworkValues,
 	generateWranglerConfigs,
+	type PostgresRuntime,
 } from './bounds'
 import { runnerWorkerGraph } from './checkout'
-import { type CloudflareCollaborators, defaultCloudflareCollaborators } from './collaborators'
+import { type CloudflareCollaborators, type CommandResult, defaultCloudflareCollaborators } from './collaborators'
 import { configSchema } from './config-schema'
 import {
+	accessDatabase,
 	assertCloudflareContract,
 	capsJobSegments,
 	type CloudflareContractGates,
@@ -50,8 +58,10 @@ import {
 	runsInObject,
 	servesAlarms,
 	servesOps,
+	servesPostgresDatabase,
 	servesRawSql,
 } from './contract-support'
+import { HYPERDRIVE_ID, hyperdriveConfigName, HyperdriveDatabase, runtimeOrigin } from './database'
 import { deployOrder } from './deploy-order'
 import { parseSecretNames, splitManagedEnvironment, staleManagedSecrets, withSecretsFile } from './managed-secrets'
 import { buildPlan, type CloudflareStep, findMigratableDatabases } from './plan'
@@ -95,7 +105,7 @@ type ApplicationTarget = Pick<
 >
 
 /** The bindings the platform writes into a contract application's Worker (ADR-0065). */
-const PLATFORM_BINDINGS: ReadonlySet<string> = new Set([CLOUDFLARE_APPLICATION_BINDING, CLOUDFLARE_FILES_BINDING])
+const PLATFORM_BINDINGS: ReadonlySet<string> = new Set([CLOUDFLARE_APPLICATION_BINDING, CLOUDFLARE_FILES_BINDING, CLOUDFLARE_DATABASE_BINDING])
 
 /** An application never names a variable only the platform writes, whether or not this deploy writes it. */
 const assertNoFrameworkVariables = (config: CloudflareAppConfig, application: Worker, run: ApplicationTarget): void => {
@@ -179,10 +189,17 @@ const repairTick = (run: ApplicationTarget): string => {
  * What the platform gives a contract application's Worker; the deployer writes exactly this and the bounds check it.
  * Only a release Control names serves alarms; a local deploy keeps the minute tick.
  */
-const applicationRuntime = (run: ApplicationTarget, contract: ContractArtifact, entry: string | null, alarms: boolean): ApplicationRuntime => ({
+const applicationRuntime = (
+	run: ApplicationTarget,
+	contract: ContractArtifact,
+	entry: string | null,
+	alarms: boolean,
+	database: CloudflarePostgresDatabase | null,
+): ApplicationRuntime => ({
 	filesBucket: filesBucketRemote(run),
 	crons: needsMinuteTick(contract) ? [alarms ? repairTick(run) : MINUTE_TICK] : [],
 	entry,
+	database: database === null ? 'sqlite' : { kind: 'postgres', name: hyperdriveConfigName(run), hyperdrive: { id: null } },
 })
 
 /** Where `fabrika app build` runs: the application directory, beside its config and contract, and the config it reads. */
@@ -265,10 +282,12 @@ const objectVariables = (objects: ApplicationObjects): Readonly<Record<string, s
 })
 
 /**
- * Bind the application's Durable Object, which runs the application over its SQLite, the environment's files bucket,
- * and its cron trigger (ADR-0065), and on a release that serves ops name its objects. The object is bound first, so
- * oblaka numbers its migration `v0001` whatever else the application binds, and the tag never moves. With `assets`,
- * the Worker also gets the Workers Assets the deploy stages the mounts' files into (`SPA_ASSETS`).
+ * Bind the application's Durable Object, which runs the application over its SQLite (on Postgres, its jobs), the
+ * environment's files bucket, and its cron trigger (ADR-0065), and on a release that serves ops name its objects. The
+ * object is bound first, so oblaka numbers its migration `v0001` whatever else the application binds, and the tag never
+ * moves. With `assets`, the Worker also gets the Workers Assets the deploy stages the mounts' files into (`SPA_ASSETS`).
+ * On Postgres it binds the environment's Hyperdrive config as `FABRIKA_DATABASE` and runs with Smart Placement; a local
+ * run's binding connects to `local.connectionString` directly.
  */
 const withApplicationRuntime = (
 	authored: Worker,
@@ -276,16 +295,20 @@ const withApplicationRuntime = (
 	runtime: ApplicationRuntime,
 	ops: boolean,
 	assets: boolean,
+	local?: { readonly connectionString: string },
 ): Worker => {
 	const application = applicationWorker(authored)
+	const postgres = runtime.database === 'sqlite' ? null : runtime.database
 	const configured = new Worker({
 		...application.options,
 		...(ops ? { vars: { ...application.options.vars, ...objectVariables(run.applicationObjects ?? DEFAULT_OBJECTS) } } : {}),
 		...(assets ? { assets: { ...SPA_ASSETS } } : {}),
+		...(postgres === null ? {} : { placement: { mode: 'smart' } }),
 		bindings: {
 			[CLOUDFLARE_APPLICATION_BINDING]: new DurableObject({ name: `${run.appId}-application`, className: CLOUDFLARE_APPLICATION_CLASS }),
 			...application.options.bindings,
 			[CLOUDFLARE_FILES_BINDING]: new R2Bucket({ name: filesBucketName(run.appId) }),
+			...(postgres === null ? {} : { [CLOUDFLARE_DATABASE_BINDING]: new HyperdriveDatabase(postgres.hyperdrive, local) }),
 		},
 		// Always written: wrangler leaves a Worker's schedules alone when `triggers` is absent, and clears them on `[]`.
 		triggers: { crons: [...runtime.crons] },
@@ -467,7 +490,15 @@ interface StepEnv {
 	 * when the Worker declares its own `assets` or no mount serves files.
 	 */
 	readonly spaAssets: { readonly mounts: readonly AssetMount[]; readonly root: string } | null
+	/** An application on Postgres: the secret holding its provisioning URL, its Hyperdrive config, and where its CLI runs. */
+	readonly database: DatabaseProvision | null
 	generatedConfigs: readonly GeneratedConfig[]
+}
+
+interface DatabaseProvision {
+	readonly secret: string
+	readonly runtime: PostgresRuntime
+	readonly cli: EntryBuild
 }
 
 /**
@@ -533,6 +564,79 @@ const stageAssets = async (env: StepEnv, assets: NonNullable<StepEnv['spaAssets'
 	env.run.log(`  staged ${staged} SPA files into ${SPA_ASSETS_DIRECTORY}: ${mounts}`)
 }
 
+const REDACTED = '[redacted]'
+
+/** A command's output with every listed value replaced: the application's CLI is checkout code, and its failure is logged. */
+const scrubbed = (result: CommandResult, values: readonly string[]): CommandResult => {
+	const sensitive = [...new Set(values.filter((value) => value.length >= 4))].sort((left, right) => right.length - left.length)
+	const scrub = (text: string): string => sensitive.reduce((current, value) => current.replaceAll(value, REDACTED), text)
+	return { exitCode: result.exitCode, stdout: scrub(result.stdout), stderr: scrub(result.stderr) }
+}
+
+/** The provisioning URL and the passwords in and derived from it: none may reach a log line. */
+const credentialForms = (url: string, derived: string): readonly string[] => {
+	let raw = ''
+	try {
+		raw = new URL(url).password
+	} catch {
+		raw = ''
+	}
+	let decoded = raw
+	try {
+		decoded = decodeURIComponent(raw)
+	} catch {
+		decoded = raw
+	}
+	return [url, raw, decoded, derived, encodeURIComponent(derived)]
+}
+
+const DB_MIGRATE_ARGS = ['db', 'migrate']
+
+/**
+ * Migrate the application's Postgres database with its own release of the CLI, as the Zerops build does, then write its
+ * Hyperdrive config over the runtime role and hand its id to the binding oblaka writes next. The provisioning URL reaches
+ * the CLI only as `FABRIKA_APP_DATABASE_URL`, never its argv; the runtime role's password only the Hyperdrive API's body.
+ */
+const provisionDatabase = async (env: StepEnv, database: DatabaseProvision): Promise<void> => {
+	const { run, cf, credentials } = env
+	const name = database.runtime.name
+	if (run.dryRun) {
+		run.log(`  [dry-run] would run: fabrika ${DB_MIGRATE_ARGS.join(' ')} in ${database.cli.cwd} (the provisioning URL from \`${database.secret}\`)`)
+		run.log(`  [dry-run] would write the Hyperdrive config ${name} (caching disabled) over the runtime role`)
+		return
+	}
+	assertRunning(run.signal)
+	const url = run.secrets[database.secret]
+	if (url === undefined || url === '') {
+		throw new Error(`provision-database: the application secret \`${database.secret}\` is not set for this environment`)
+	}
+	// Derived before the migration, so a provisioning URL that cannot be used fails before anything runs.
+	const origin = runtimeOrigin(url, run.appId)
+	const command = await applicationCli(database.cli)
+	const base = entryBuildEnvironment()
+	const result = await cf.runCommand({
+		command,
+		args: DB_MIGRATE_ARGS,
+		cwd: database.cli.cwd,
+		env: { ...base.env, FABRIKA_APP_ID: run.appId, FABRIKA_APP_DATABASE_URL: url },
+		omitEnv: base.omitEnv,
+		signal: run.signal,
+	})
+	if (result.exitCode !== 0) throw commandError('fabrika db migrate', scrubbed(result, credentialForms(url, origin.password)))
+	run.log('  migrated the Postgres database')
+	assertRunning(run.signal)
+	const { id } = await cf.hyperdrive.upsert({
+		accountId: credentials.accountId,
+		apiToken: credentials.apiToken,
+		name,
+		origin,
+		signal: run.signal,
+	})
+	if (!HYPERDRIVE_ID.test(id)) throw new Error(`provision-database: the Hyperdrive config \`${name}\` has an unreadable id`)
+	database.runtime.hyperdrive.id = id
+	run.log(`  wrote the Hyperdrive config ${name} (${id})`)
+}
+
 const runStep = async (spec: CloudflareStep, env: StepEnv): Promise<void> => {
 	const { config, run, credentials, worker, dir, cf } = env
 	const { signal, dryRun } = run
@@ -544,10 +648,17 @@ const runStep = async (spec: CloudflareStep, env: StepEnv): Promise<void> => {
 				run.log(`  [dry-run] would run build: \`${build}\` in ${dir}`)
 			} else if (build !== undefined) {
 				assertRunning(signal)
-				const result = await cf.runCommand({ command: 'sh', args: ['-c', build], cwd: dir, omitEnv: PLATFORM_CREDENTIAL_NAMES, signal })
+				// Nor does it get the provisioning URL of an application on Postgres.
+				const omitEnv = env.database === null ? PLATFORM_CREDENTIAL_NAMES : [...PLATFORM_CREDENTIAL_NAMES, env.database.secret]
+				const result = await cf.runCommand({ command: 'sh', args: ['-c', build], cwd: dir, omitEnv, signal })
 				if (result.exitCode !== 0) throw commandError(`build (\`${build}\`)`, result)
 			}
 			if (env.entryBuild !== null) await buildEntry(env.entryBuild, run, cf)
+			return
+		}
+		case 'provision-database': {
+			if (env.database === null) throw new Error('provision-database: the application runs on no Postgres database')
+			await provisionDatabase(env, env.database)
 			return
 		}
 		case 'provision-resources': {
@@ -591,6 +702,9 @@ const runStep = async (spec: CloudflareStep, env: StepEnv): Promise<void> => {
 			const configs = env.generatedConfigs
 			// The configs oblaka wrote, not the generation checked before the run: a stateful binding can emit differently twice.
 			assertGeneratedConfigs(configs, env.bounds)
+			if (!dryRun && env.database !== null && env.database.runtime.hyperdrive.id === null) {
+				throw new Error('deploy-worker: no Hyperdrive config was written for the database; `provision-database` runs first')
+			}
 			if (configs.length === 0) {
 				await wranglerDeploy(env, dir, env.managedSecrets)
 				return
@@ -744,6 +858,70 @@ const servedContract = async (
 	return read === null ? null : { contract: read, digest: contractDigest(read) }
 }
 
+/**
+ * The database a deploy runs the application on: the config's, read once and validated (checkout code), which must agree
+ * with what Control approved from its static read. Postgres is an application's choice from `servesPostgresDatabase`;
+ * a local deploy runs as this release.
+ */
+const deploymentDatabase = (
+	config: CloudflareAppConfig,
+	run: CloudflareDeployRun,
+	application: boolean,
+): CloudflarePostgresDatabase | null => {
+	const database = configDatabase(config.database)
+	if (run.approved !== undefined) {
+		const approved = accessDatabase(run.approved)
+		if (database !== null && approved === 'sqlite') {
+			throw new Error(
+				"cloudflare: the config runs on Postgres (`database`), and Control approved no database: upgrade Control, or state `database: { kind: 'postgres', provisioningSecret: '<SECRET>' }` inline in `defineApp`, where Control reads it",
+			)
+		}
+		if (database === null && approved === 'postgres') {
+			throw new Error('cloudflare: Control approved Postgres for this application, and its config names no `database`')
+		}
+	}
+	if (database === null) return null
+	if (!application) throw new Error('cloudflare: only a contract application runs on Postgres through Hyperdrive')
+	const release = run.approved?.framework
+	if (run.approved !== undefined && (release === undefined || !servesPostgresDatabase(release))) {
+		throw new Error(
+			`cloudflare: the application runs on Postgres, which an application on framework ${
+				release ?? '(a release Control does not name)'
+			} cannot run on Cloudflare; upgrade its framework`,
+		)
+	}
+	return database
+}
+
+/**
+ * The provisioning URL stays in the runner: the secret is the application's own (Control's vault), never a variable or a
+ * secret of the Worker, and must be set for a real deploy.
+ */
+const assertProvisioningSecret = (
+	config: CloudflareAppConfig,
+	application: Worker,
+	run: ApplicationTarget & { readonly dryRun?: boolean },
+	secret: string,
+): void => {
+	const declared = [
+		...(config.pipeline?.secrets ?? []),
+		...(config.pipeline?.vars ?? []),
+		...Object.keys(application.options.vars ?? {}),
+		...Object.keys(application.options.bindings ?? {}),
+		...Object.keys(run.vars),
+	]
+	if (declared.includes(secret)) {
+		throw new Error(
+			`cloudflare: \`${secret}\` holds the database's provisioning URL, which never reaches the Worker; drop it from \`pipeline.secrets\`, \`pipeline.vars\` and the Worker's variables and bindings`,
+		)
+	}
+	if (run.dryRun !== true && (run.secrets[secret] === undefined || run.secrets[secret] === '')) {
+		throw new Error(
+			`cloudflare: the application secret \`${secret}\` (\`database.provisioningSecret\`) is not set for environment \`${run.env}\`; set it in Control`,
+		)
+	}
+}
+
 export const createCloudflareDeployer = (options: CloudflareDeployerOptions) => async (run: CloudflareDeployRun): Promise<CloudflareDeployResult> => {
 	const cf = options.collaborators ?? defaultCloudflareCollaborators
 	const loaded = await cf.loadConfig(run.cwd, run.configPath)
@@ -757,14 +935,16 @@ export const createCloudflareDeployer = (options: CloudflareDeployerOptions) => 
 	if (platformResources === 'refuse' && served === null) {
 		throw new Error('cloudflare: the checkout has no `fabrika.contract.ts`; Fabrika deploys an application only with a contract')
 	}
+	const database = deploymentDatabase(loaded.config, run, platformResources === 'refuse' && contract !== null)
+	const kind = database === null ? 'sqlite' : 'postgres'
 	// A local deploy reads the contract with this release and runs it in the object, so it is gated as this release is.
 	const framework = run.approved === undefined ? undefined : run.approved.framework
 	const gates: CloudflareContractGates = run.approved === undefined
-		? { capsSegments: true, servesSql: true, database: 'sqlite' }
+		? { capsSegments: true, servesSql: true, database: kind }
 		: {
 			capsSegments: framework !== undefined && capsJobSegments(framework),
 			servesSql: framework !== undefined && servesRawSql(framework),
-			database: 'sqlite',
+			database: kind,
 		}
 	if (platformResources === 'refuse' && contract !== null) assertCloudflareContract(contract, gates)
 	// Read once, before `resources()` runs the checkout's code again: nothing below reads the config's schema.
@@ -773,19 +953,27 @@ export const createCloudflareDeployer = (options: CloudflareDeployerOptions) => 
 	const authored = runnerWorkerGraph(loaded.config.resources({ env: run.env, domain: run.domain }))
 	// Only a release Control named pins the entry or serves ops; a local deploy names none and keeps its authored `main`.
 	const release = run.approved?.framework
-	const opsRelease = release !== undefined && servesOps(release)
+	// An environment on Postgres has no ops channel and no data operations: backups are its database provider's (ADR-0065).
+	const opsRelease = release !== undefined && servesOps(release) && database === null
 	// Fabrika's own components compose their own proxies; every application gets the platform's. Without a domain no
 	// Custom Domain carries the ops channel, so the proxy gets no ops row (ADR-0069).
 	const proxied = platformResources === 'refuse' && served !== null
 		? platformProxied(authored, served, run, opsRelease && run.domain !== undefined)
 		: authored
 	if (platformResources === 'refuse') assertNoFrameworkVariables(loaded.config, applicationWorker(proxied), run)
+	if (database !== null) assertProvisioningSecret(loaded.config, applicationWorker(proxied), run, database.provisioningSecret)
 	const connectors = platformResources === 'refuse' ? connectorBindings(contract) : {}
 	// An older release's entry exports no object, and a Control older than the runner names no release (ADR-0062).
 	const objectRuntime = run.approved === undefined || (run.approved.framework !== undefined && runsInObject(run.approved.framework))
 	const entry = release !== undefined && pinsGeneratedEntry(release) ? resolve(loaded.cwd, GENERATED_ENTRY_FILE) : null
 	const alarms = release !== undefined && servesAlarms(release)
-	const runtime = platformResources === 'refuse' && contract !== null && objectRuntime ? applicationRuntime(run, contract, entry, alarms) : null
+	const runtime = platformResources === 'refuse' && contract !== null && objectRuntime
+		? applicationRuntime(run, contract, entry, alarms, database)
+		: null
+	const postgres = runtime === null || runtime.database === 'sqlite' ? null : runtime.database
+	if (database !== null && postgres === null) {
+		throw new Error('cloudflare: an application on Postgres runs its jobs in its object; this release runs none')
+	}
 	const managed = withManagedEnvironment(loaded.config, proxied, run, contractEnvironment(run.managedEnvironment, served))
 	const identified = platformResources === 'refuse' ? withIamIdentity(managed.worker, appEnvironmentId(run.appId, run.env)) : managed.worker
 	const connected = withConnectorBindings(identified, connectors)
@@ -829,9 +1017,16 @@ export const createCloudflareDeployer = (options: CloudflareDeployerOptions) => 
 			? { cwd: loaded.cwd, config: basename(resolve(run.cwd, run.configPath)), root: resolve(run.cwd) }
 			: null,
 		spaAssets,
+		database: database === null || postgres === null
+			? null
+			: {
+				secret: database.provisioningSecret,
+				runtime: postgres,
+				cli: { cwd: loaded.cwd, config: basename(resolve(run.cwd, run.configPath)), root: resolve(run.cwd) },
+			},
 		generatedConfigs: [],
 	}
-	const result = await runSteps(buildPlan(loaded.config, worker, env.entryBuild !== null), run, (step) => runStep(step, env))
+	const result = await runSteps(buildPlan(loaded.config, worker, env.entryBuild !== null, env.database !== null), run, (step) => runStep(step, env))
 	return { appId: run.appId, env: run.env, ...result }
 }
 
@@ -864,6 +1059,11 @@ export interface LocalApplicationOptions {
 	readonly iamOrigin: string
 	readonly env: string
 	readonly domain?: string
+	/**
+	 * The runtime role's connection URL, for a config on Postgres (`localDatabaseConnection(<provisioning URL>, appId)`):
+	 * the `FABRIKA_DATABASE` binding connects to it directly. Refused for a config on its object's SQLite.
+	 */
+	readonly database?: { readonly connectionString: string }
 }
 
 /**
@@ -889,8 +1089,17 @@ export const composeLocalApplication = (options: LocalApplicationOptions): Worke
 			[FABRIKA_PROXY_SECRET]: `${crypto.randomUUID()}${crypto.randomUUID()}`.replaceAll('-', ''),
 		}),
 	}
+	const database = configDatabase(config.database)
+	if (database === null && options.database !== undefined) {
+		throw new Error("composeLocalApplication: the config runs on its object's SQLite; drop `database`")
+	}
+	if (database !== null && options.database === undefined) {
+		throw new Error(
+			'composeLocalApplication: the config runs on Postgres; pass `database: { connectionString: localDatabaseConnection(<provisioning URL>, <app id>) }`',
+		)
+	}
 	// The local run reads the contract with this release, so it is gated as a local deploy is.
-	assertCloudflareContract(contract, { capsSegments: true, servesSql: true, database: 'sqlite' })
+	assertCloudflareContract(contract, { capsSegments: true, servesSql: true, database: database === null ? 'sqlite' : 'postgres' })
 	assertContractSchema(configSchema(config), contract, 'refuse')
 	const served: ServedContract = { contract, digest: contractDigest(contract) }
 	const proxied = platformProxied(config.resources({ env, ...domain }), served, target, false)
@@ -915,5 +1124,5 @@ export const composeLocalApplication = (options: LocalApplicationOptions): Worke
 			'composeLocalApplication: the contract serves SPA files; stage them first with `await stageLocalAssets(contract, <application root>)` and pass its result as `assets`',
 		)
 	}
-	return withApplicationRuntime(connected, target, applicationRuntime(target, contract, null, true), false, spaAssets)
+	return withApplicationRuntime(connected, target, applicationRuntime(target, contract, null, true, database), false, spaAssets, options.database)
 }

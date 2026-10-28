@@ -1,10 +1,17 @@
-import { CLOUDFLARE_APPLICATION_BINDING, CLOUDFLARE_APPLICATION_CLASS, CLOUDFLARE_FILES_BINDING, GENERATED_ENTRY_FILE } from '@fabrika/app/build'
+import {
+	CLOUDFLARE_APPLICATION_BINDING,
+	CLOUDFLARE_APPLICATION_CLASS,
+	CLOUDFLARE_DATABASE_BINDING,
+	CLOUDFLARE_FILES_BINDING,
+	GENERATED_ENTRY_FILE,
+} from '@fabrika/app/build'
 import { type AppEnvironment, appEnvironmentId, FRAMEWORK_VARIABLE_NAMES, isFrameworkVariableName, parseAppEnvironmentId } from '@fabrika/auth-core'
 import { isProxyHost } from '@fabrika/proxy-core/manifest'
 import { dirname, resolve } from 'node:path'
 import type { GeneratedConfig, Worker } from 'oblaka-iac'
 import { CloudflareClient } from 'oblaka-iac/src/client'
 import { ResourceProcessor } from 'oblaka-iac/src/commands/resource-processor'
+import { type HyperdriveIdHolder, PENDING_HYPERDRIVE_ID } from './database'
 import { PLATFORM_RESOURCE_NAMES } from './plan'
 import { CLOUDFLARE_PROXY_WORKER_DIR, IAM_APPLICATION_ENTRYPOINT, IAM_SERVICE, PROXY_MANIFEST_DEFINE } from './proxy'
 
@@ -59,7 +66,23 @@ export interface ApplicationRuntime {
 	 * null for a release whose Worker keeps its authored `main`.
 	 */
 	readonly entry: string | null
+	/**
+	 * The database the application runs on: its object's SQLite, or Postgres through the Hyperdrive config `name`, whose id
+	 * `provision-database` puts into `hyperdrive` before oblaka writes the configs. The Worker binds exactly that id as
+	 * `FABRIKA_DATABASE`, and runs with Smart Placement, near its database.
+	 */
+	readonly database: 'sqlite' | PostgresRuntime
 }
+
+/** The Hyperdrive config of an application on Postgres: its remote name, and the id this run handed out (null before). */
+export interface PostgresRuntime {
+	readonly kind: 'postgres'
+	readonly name: string
+	readonly hyperdrive: HyperdriveIdHolder
+}
+
+/** The placement of an application Worker on Postgres: Smart Placement runs it near its database. */
+const SMART_PLACEMENT = { mode: 'smart' } as const
 
 /**
  * The one migration of the application's object. Its tag is fixed: Cloudflare records the last tag a script applied, so
@@ -104,6 +127,9 @@ const CONFIG_KEYS: ReadonlySet<string> = new Set([
 	'durable_objects',
 	'containers',
 	'workflows',
+	// Written only by the platform, for an application on Postgres: exactly its own Hyperdrive config, and Smart Placement.
+	'hyperdrive',
+	'placement',
 ])
 
 /** The platform proxy's config also carries the `define` that bakes its manifest into the bundle. */
@@ -415,6 +441,39 @@ const isPlatformTriggers = (triggers: unknown, crons: readonly string[]): boolea
 }
 
 /**
+ * The Hyperdrive binding and the placement are the platform's: on Postgres exactly `FABRIKA_DATABASE` to the config this run
+ * handed out (`PENDING_HYPERDRIVE_ID` before `provision-database`), with no `localConnectionString`, and Smart Placement;
+ * otherwise neither. An id this run did not hand out would bind another environment's database.
+ */
+const assertDatabase = (worker: string, config: WranglerConfig, database: 'sqlite' | PostgresRuntime): void => {
+	const hyperdrive = entries(config.hyperdrive, worker, 'hyperdrive')
+	if (database === 'sqlite') {
+		if (config.hyperdrive !== undefined) {
+			throw new Error(`cloudflare: Worker \`${worker}\` binds Hyperdrive; only the platform binds it, for an application on Postgres`)
+		}
+		if (config.placement !== undefined) {
+			throw new Error(`cloudflare: Worker \`${worker}\` sets \`placement\`; only the platform sets it, for an application on Postgres`)
+		}
+		return
+	}
+	const entry = hyperdrive[0]
+	const keys = typeof entry === 'object' && entry !== null ? Object.keys(entry).sort().join(',') : ''
+	if (
+		hyperdrive.length !== 1 || keys !== 'binding,id' || field(entry, 'binding') !== CLOUDFLARE_DATABASE_BINDING
+		|| field(entry, 'id') !== (database.hyperdrive.id ?? PENDING_HYPERDRIVE_ID)
+	) {
+		throw new Error(
+			`cloudflare: application Worker \`${worker}\` must bind \`${CLOUDFLARE_DATABASE_BINDING}\` once, to the Hyperdrive config \`${database.name}\` this deploy wrote; the platform writes that binding`,
+		)
+	}
+	const placement: unknown = config.placement
+	const placementKeys = typeof placement === 'object' && placement !== null ? Object.keys(placement) : []
+	if (placementKeys.length !== 1 || field(placement, 'mode') !== SMART_PLACEMENT.mode) {
+		throw new Error(`cloudflare: application Worker \`${worker}\` must run with \`placement: { mode: 'smart' }\`, which the platform writes`)
+	}
+}
+
+/**
  * A contract application's Worker binds its own object (`FABRIKA_APPLICATION`, the class the generated entry exports)
  * under the one fixed migration, the environment's files bucket, and exactly the platform's cron triggers.
  */
@@ -513,6 +572,7 @@ export const assertGeneratedConfigs = (configs: readonly GeneratedConfig[], boun
 		assertResourceBindings(worker, config, names)
 		assertBoundedAssets(worker, config.assets)
 		if (isPlatformProxy(generated, bounds)) {
+			assertDatabase(worker, config, 'sqlite')
 			assertRoutedHere(worker, config, bounds)
 			assertFrameworkVariables(worker, config.vars, bounds.frameworkVariables.proxy ?? {})
 			assertBakedManifest(worker, config.define, bounds.proxyManifest)
@@ -523,6 +583,7 @@ export const assertGeneratedConfigs = (configs: readonly GeneratedConfig[], boun
 		}
 		assertUnexposed(worker, config)
 		assertFrameworkVariables(worker, config.vars, bounds.frameworkVariables.application)
+		assertDatabase(worker, config, bounds.application?.database ?? 'sqlite')
 		if (bounds.application === null) continue
 		assertApplicationRuntime(worker, config, bounds.application)
 		if (bounds.application.entry !== null) assertGeneratedEntry(worker, generated, bounds.cwd, bounds.application.entry)
@@ -556,6 +617,9 @@ export const assertGeneration = (generation: ConfigGeneration, bounds: Deploymen
 			if (resource.kind === 'durable_object') continue
 			assertOwnRemote(`${RESOURCE_LABELS[resource.kind] ?? resource.kind} \`${resource.name}\` becomes`, resource.remote, names)
 		}
+		// Not an oblaka resource: the deployer names it, and it falls under the same rules as one.
+		const database = bounds.application?.database
+		if (database !== undefined && database !== 'sqlite') assertOwnRemote('the Hyperdrive config is named', database.name, names)
 	}
 	assertGeneratedConfigs(generation.configs, bounds)
 	if (bounds.platformResources === 'refuse') assertGeneratedIds(generation)
