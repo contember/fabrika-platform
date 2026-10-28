@@ -43,3 +43,26 @@ test('serves the application and its seed without a database URL', async () => {
 		await child.exited
 	}
 })
+
+test('an application on Cloudflare over Postgres takes the Postgres path: it needs FABRIKA_TEST_POSTGRES_URL', async () => {
+	const postgres = mkdtempSync(join(tmpdir(), 'fabrika-app-dev-cloudflare-postgres-'))
+	try {
+		cpSync(DEV_APP, postgres, { recursive: true })
+		symlinkSync(join(import.meta.dir, '..', '..', 'node_modules'), join(postgres, 'node_modules'))
+		writeFileSync(
+			join(postgres, 'fabrika.config.ts'),
+			"import { defineApp } from '@fabrika/provider-cloudflare'\n\nexport default defineApp({ id: 'cards', database: { kind: 'postgres', provisioningSecret: 'DATABASE_URL' }, resources: () => [] })\n",
+		)
+		const child = Bun.spawn(['bun', CLI, 'app', 'dev', '--port=0'], {
+			cwd: postgres,
+			stdin: 'ignore',
+			stdout: 'pipe',
+			stderr: 'pipe',
+			env: { PATH: process.env['PATH'] ?? '' },
+		})
+		expect(await child.exited).not.toBe(0)
+		expect(await new Response(child.stderr).text()).toContain('app dev needs FABRIKA_TEST_POSTGRES_URL')
+	} finally {
+		rmSync(postgres, { recursive: true, force: true })
+	}
+})

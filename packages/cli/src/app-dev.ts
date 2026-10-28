@@ -10,7 +10,7 @@ import { implementationAt } from '@fabrika/app/bun'
 import type { AnyContract } from '@fabrika/app/contract'
 import { BootError, type ContractImplementation } from '@fabrika/app/implement'
 import { DEV_OUTBOX_ORIGIN, type DevKit, devKit, type DevOutside, type LabelledTestCaller, type TestCaller } from '@fabrika/app/testing'
-import { type ApplicationDialect, applicationDialect, CONFIG_FILE } from '@fabrika/check'
+import { type ApplicationDialect, applicationTarget, CONFIG_FILE } from '@fabrika/check'
 import { SqliteMigrationError } from '@fabrika/db/sqlite-migrate'
 import { TEST_POSTGRES_URL, type TestDatabase, testDatabase } from '@fabrika/db/testing'
 import { PostgresMigrationError } from '@fabrika/platform-node'
@@ -45,7 +45,8 @@ Usage:
 Run from the application root. It serves ${IMPLEMENTATION_FILE} through its test kit: the production proxy decision,
 the kit's stand-in IAM, each SPA from its built directory (run the SPA build first; an unbuilt one is an empty page),
 and a throwaway schema of the database in ${TEST_POSTGRES_URL}, migrated from db/migrations/ and dropped on exit; an
-application on Cloudflare (its ${CONFIG_FILE} is @fabrika/provider-cloudflare's) gets an in-memory SQLite database instead.
+application on Cloudflare (its ${CONFIG_FILE} is @fabrika/provider-cloudflare's) gets an in-memory SQLite database instead,
+unless its config names database: { kind: 'postgres', … }, which takes the Postgres path above.
 The seed module (--seed, or ${DEFAULT_SEED} when it exists) default-exports a DevSeed of @fabrika/app/testing: it
 receives the kit, writes through the endpoints, and answers the personas, link pages and scope values to offer.
 Pick who the browser is at /__fabrika/dev; every SPA page shows a toolbar that switches the caller and lists the
@@ -197,7 +198,9 @@ const plain = (status: number, text: string): Response =>
 /** The dialect the application's `fabrika.config.ts` names, as the checker reads it. */
 function dialectAt(root: string): ApplicationDialect {
 	const path = join(root, CONFIG_FILE)
-	return applicationDialect(new Map(existsSync(path) ? [[CONFIG_FILE, readFileSync(path, 'utf8')]] : []))
+	const target = applicationTarget(new Map(existsSync(path) ? [[CONFIG_FILE, readFileSync(path, 'utf8')]] : []))
+	if (target.unreadable !== undefined) throw new AppDevError(`${CONFIG_FILE}: ${target.unreadable}`)
+	return target.dialect
 }
 
 /** Serves `app` through its test kit on a loopback port until `stop`. */

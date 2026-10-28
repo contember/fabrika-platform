@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
 import { CONTRACT_FILE, type EntryRuntime, writeGeneratedEntry } from '@fabrika/app/build'
+import { applicationTarget, CONFIG_FILE } from '@fabrika/check'
 import { authoredAppProvider } from '@fabrika/provider-contract'
 import { type AppCli, appCliFromModule, type NamespaceCli } from '@fabrika/provider-contract/app-cli'
 import { installationCliFromModule, isInstallationCommand, supportsInstallationCommand } from '@fabrika/provider-contract/installation'
@@ -206,12 +207,24 @@ const runAppRegister = async (parsed: ParsedCommand): Promise<void> => {
 }
 
 /** A contract application gets its generated entrypoint before the provider builds it. False when it is none. */
+/**
+ * The provider names its runtime; on Cloudflare the application's own `fabrika.config.ts`, read as the checker reads
+ * it, picks the entry: the Durable Object's SQLite (ADR-0065), or Postgres through Hyperdrive when its `database` says so.
+ */
+const entryRuntimeAt = async (root: string, runtime: EntryRuntime): Promise<EntryRuntime> => {
+	if (runtime !== 'cloudflare') return runtime
+	const config = Bun.file(join(root, CONFIG_FILE))
+	const target = applicationTarget(new Map((await config.exists()) ? [[CONFIG_FILE, await config.text()]] : []))
+	if (target.unreadable !== undefined) throw new Error(`app build: ${CONFIG_FILE}: ${target.unreadable}`)
+	return target.cloudflare && target.dialect === 'postgres' ? 'cloudflare-postgres' : 'cloudflare'
+}
+
 const writeContractEntry = async (argv: readonly string[], runtime: EntryRuntime): Promise<boolean> => {
 	const root = dirname(resolve(process.cwd(), configPath(argv)))
 	if (!(await Bun.file(join(root, CONTRACT_FILE)).exists())) {
 		return false
 	}
-	const written = await writeGeneratedEntry(root, runtime)
+	const written = await writeGeneratedEntry(root, await entryRuntimeAt(root, runtime))
 	console.error(`fabrika: wrote ${relative(process.cwd(), written)}`)
 	return true
 }

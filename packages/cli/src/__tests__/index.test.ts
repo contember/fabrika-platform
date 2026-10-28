@@ -1,6 +1,6 @@
 import { generatedEntry } from '@fabrika/app/build'
 import { describe, expect, test } from 'bun:test'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { parseCliArgs, providerFromConfig, runCli } from '..'
@@ -76,6 +76,7 @@ describe('app build for a contract application', () => {
 		const stderr = console.error
 		console.error = () => {}
 		try {
+			symlinkSync(join(import.meta.dir, '..', '..', 'node_modules'), join(root, 'node_modules'))
 			if (contract) {
 				writeFileSync(join(root, 'fabrika.contract.ts'), 'export {}\n')
 			}
@@ -90,6 +91,31 @@ describe('app build for a contract application', () => {
 		await withRoot(true, async (config, root) => {
 			await runCli(['app', 'build', '--provider=cloudflare', `--config=${config}`])
 			expect(readFileSync(join(root, 'fabrika', 'entry.generated.ts'), 'utf8')).toBe(generatedEntry('cloudflare'))
+		})
+	})
+
+	test('writes the Postgres Worker entrypoint, and no migrations module, for an application over Hyperdrive', async () => {
+		await withRoot(true, async (config, root) => {
+			writeFileSync(
+				config,
+				"import { defineApp } from '@fabrika/provider-cloudflare'\n\nexport default defineApp({ id: 'notes', database: { kind: 'postgres', provisioningSecret: 'DATABASE_URL' }, resources: () => [] })\n",
+			)
+			await runCli(['app', 'build', '--provider=cloudflare', `--config=${config}`])
+			expect(readFileSync(join(root, 'fabrika', 'entry.generated.ts'), 'utf8')).toBe(generatedEntry('cloudflare-postgres'))
+			expect(existsSync(join(root, 'fabrika', 'migrations.generated.ts'))).toBe(false)
+		})
+	})
+
+	test('refuses app build on Cloudflare when the static read cannot settle the database', async () => {
+		await withRoot(true, async (config, root) => {
+			writeFileSync(
+				config,
+				"import { defineApp } from '@fabrika/provider-cloudflare'\n\nconst database = { kind: 'postgres', provisioningSecret: 'DATABASE_URL' } as const\n\nexport default defineApp({ id: 'notes', database, resources: () => [] })\n",
+			)
+			await expect(runCli(['app', 'build', '--provider=cloudflare', `--config=${config}`])).rejects.toThrow(
+				'app build: fabrika.config.ts: `database` is not an object literal',
+			)
+			expect(existsSync(join(root, 'fabrika'))).toBe(false)
 		})
 	})
 
