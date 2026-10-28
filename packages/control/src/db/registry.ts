@@ -1007,6 +1007,33 @@ export class ControlRegistryRepository {
 		return (result.meta.changes ?? 0) > 0
 	}
 
+	async getNamespaceSandboxKeyRef(namespaceId: string): Promise<string | null> {
+		const row = await this.d1
+			.prepare('SELECT sandbox_key_ref FROM deployment_namespaces WHERE id = ?')
+			.bind(namespaceId)
+			.first<{ sandbox_key_ref: string | null }>()
+		return row?.sandbox_key_ref ?? null
+	}
+
+	/** Records `valueRef` as the namespace's sandbox host key unless it has one; true when this call recorded it. */
+	async claimNamespaceSandboxKeyRef(namespaceId: string, valueRef: string): Promise<boolean> {
+		const result = await this.d1
+			.prepare('UPDATE deployment_namespaces SET sandbox_key_ref = ? WHERE id = ? AND sandbox_key_ref IS NULL')
+			.bind(valueRef, namespaceId)
+			.run()
+		return (result.meta.changes ?? 0) > 0
+	}
+
+	/** The contract digest IAM accepted for the environment's schema; written under the environment's coordinate lock. */
+	async recordAppEnvIamDigest(appId: string, env: string, digest: string): Promise<boolean> {
+		const lock = coordinateLockStatements(this.d1, appId, env)
+		const results = await this.d1.batch<{ app_id: string }>([
+			...lock,
+			this.d1.prepare('UPDATE app_envs SET iam_digest = ? WHERE app_id = ? AND env = ? RETURNING app_id').bind(digest, appId, env),
+		])
+		return (results[lock.length]?.results.length ?? 0) > 0
+	}
+
 	// ── App vars (non-secret deploy-time config; PLAINTEXT, mirrors app_secrets' env layering) ──
 
 	/**

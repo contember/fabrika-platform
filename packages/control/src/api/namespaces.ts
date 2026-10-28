@@ -25,6 +25,7 @@ import {
 	type ProviderClaimedResource,
 	type ProviderDeploymentNamespace,
 	type ProviderNamespaceCapabilities,
+	type ProviderNamespaceDevSandbox,
 	ProviderNamespaceError,
 	type ProviderNamespaceHost,
 	type ProviderNamespaceMember,
@@ -41,14 +42,17 @@ import {
 	crossOriginsField,
 	type DeploymentNamespaceRow,
 	type DeploymentNamespaceState,
+	type DevSandboxRow,
 	isUnconfirmedNamespaceUpdate,
 	NamespaceResourceClaimConflictError,
 } from '../db'
+import { devSandboxHost, openDevSandboxProxySecret, requireVault, sandboxHostKey, workspacePublication } from '../dev/sandbox-keys'
 import type { InstallationBrandSource } from '../installation-brand'
 import { acquireLease, type Lease, type LeaseClock, namespaceLeaseKey } from '../lease'
 import { ingestOrigin } from '../operations-catalog'
 import type { ProxySecrets } from '../proxy-secret'
 import type { ControlJobMessage, NamespaceJobMessage, NamespaceJobMutation } from '../run-lifecycle'
+import type { Vault } from '../vault'
 import { fail } from './domain'
 import { parseStoredEnvelope } from './provider-envelope'
 
@@ -346,6 +350,8 @@ export interface NamespaceJobDeps {
 	readonly leaseClock?: LeaseClock
 	/** Absent without a vault; then no member carries a proxy secret, and the provider refuses a contract member. */
 	readonly proxySecrets?: ProxySecrets
+	/** Control's vault, where a dev member's sandbox credentials are opened; absent, a namespace with a dev member fails. */
+	readonly vault?: () => Promise<Vault>
 	/** The installation's client logo (ADR-0066); absent without IAM's provisioning key, and the proxy draws the mark. */
 	readonly brand?: InstallationBrandSource
 }
@@ -397,28 +403,72 @@ async function writeNamespace(
 /**
  * Every app environment the namespace's entry point routes, read under its lease, with the secret its proxy sends and
  * its approved access: the proxy table of a contract application comes from `approvedSnapshot`, never from its artifact (ADR-0050).
+ * A `dev` member with workspace sandboxes is routed only through them, each from its own published bootstrap run, and
+ * only then does the provider get the namespace's sandbox host key. A `dev` member without any is handed as before.
  */
 async function namespaceMembers(
-	deps: Pick<NamespaceJobDeps, 'repositories' | 'proxySecrets'>,
+	deps: Pick<NamespaceJobDeps, 'repositories' | 'proxySecrets' | 'vault'>,
 	namespaceId: string,
-): Promise<ProviderNamespaceMember[]> {
+): Promise<{ readonly members: ProviderNamespaceMember[]; readonly sandboxKey?: string }> {
 	const members: ProviderNamespaceMember[] = []
+	let sandboxed = false
 	for (const row of await deps.repositories.registry.listAppEnvsByNamespace(namespaceId)) {
-		const proxySecret = await deps.proxySecrets?.forAppEnv(row.app_id, row.env)
+		const sandboxes = row.kind === 'dev'
+			? (await deps.repositories.devSandboxes.listByEnvironment(row.app_id, row.env)).filter((sandbox) =>
+				sandbox.state === 'creating' || sandbox.state === 'ready'
+			)
+			: []
 		const operationsOrigin = ingestOrigin(await deps.repositories.operationsCatalog.getActiveIngestConfig(row.app_id, row.env))
-		const access = approvedProviderAccess(row)
-		members.push({
+		const base = {
 			appId: row.app_id,
 			env: row.env,
 			...(row.domain === null ? {} : { domain: row.domain }),
 			...crossOriginsField(row),
 			artifact: parseStoredEnvelope(row.provider_artifact_json, `artifact for ${row.app_id}/${row.env}`),
-			...(proxySecret === undefined ? {} : { proxySecret }),
 			...(operationsOrigin === undefined ? {} : { operationsOrigin }),
-			...access,
-		})
+		}
+		if (sandboxes.length > 0) {
+			sandboxed = true
+			members.push({ ...base, devSandboxes: await memberSandboxes(deps, row, sandboxes) })
+			continue
+		}
+		const proxySecret = await deps.proxySecrets?.forAppEnv(row.app_id, row.env)
+		members.push({ ...base, ...(proxySecret === undefined ? {} : { proxySecret }), ...approvedProviderAccess(row) })
 	}
-	return members
+	return sandboxed ? { members, sandboxKey: await sandboxHostKey(deps, namespaceId) } : { members }
+}
+
+/**
+ * The ready sandboxes of a dev member that have published a bootstrap run; the others have no proxy table yet. A sandbox
+ * whose secret or publication cannot be read is not routed, and the rest of the namespace still is.
+ */
+async function memberSandboxes(
+	deps: Pick<NamespaceJobDeps, 'repositories' | 'vault'>,
+	row: { readonly app_id: string; readonly env: string; readonly domain: string | null },
+	rows: readonly DevSandboxRow[],
+): Promise<ProviderNamespaceDevSandbox[]> {
+	const vault = await requireVault(deps)
+	const domain = row.domain
+	if (domain === null || domain === '') return []
+	const sandboxes: ProviderNamespaceDevSandbox[] = []
+	for (const sandbox of rows) {
+		const upstreamHost = sandbox.upstream_host
+		if (sandbox.state !== 'ready' || upstreamHost === null) continue
+		try {
+			const publication = await workspacePublication(deps.repositories, sandbox)
+			if (publication === null) continue
+			sandboxes.push({
+				workspaceId: sandbox.workspace_id,
+				host: devSandboxHost(domain, sandbox.workspace_id),
+				upstreamHost,
+				proxySecret: await openDevSandboxProxySecret(vault, sandbox),
+				access: publication.access,
+			})
+		} catch {
+			console.error(`dev sandbox of workspace ${sandbox.workspace_id}: its proxy secret or published snapshot cannot be read, so it is not routed`)
+		}
+	}
+	return sandboxes
 }
 
 /**
@@ -468,9 +518,11 @@ async function mutateNamespace(
 	if (capabilities === undefined) return 'skipped'
 	let current = toProviderNamespace(row)
 	await writeNamespace(deps.repositories, lease, row, current, 'provisioning', { claim: true })
+	const { members, sandboxKey } = await namespaceMembers(deps, row.id)
 	const providerInput: ProviderNamespaceMutationInput = {
 		namespace: current,
-		members: await namespaceMembers(deps, row.id),
+		members,
+		...(sandboxKey === undefined ? {} : { sandboxKey }),
 		// The signal belongs to the JOB, never to a request — a caller that hangs up must not cancel this.
 		signal: lease.signal,
 		events: {
@@ -566,7 +618,7 @@ export async function republishUnderLease(
 	}
 	if (row.state === 'failed') throw new Error(namespaceNotReady(row))
 	let current = toProviderNamespace(row)
-	const members = await namespaceMembers(deps, row.id)
+	const { members, sandboxKey } = await namespaceMembers(deps, row.id)
 	await writeNamespace(deps.repositories, lease, row, current, 'provisioning')
 	const reconcileLater = (): Promise<void> => deps.queue.send({ kind: 'namespace', namespaceId, mutation: 'reconcile' })
 	let settled: boolean
@@ -580,6 +632,7 @@ export async function republishUnderLease(
 		const result = await capabilities.republish({
 			namespace: current,
 			members,
+			...(sandboxKey === undefined ? {} : { sandboxKey }),
 			brand: options.brand === undefined ? await installationBrand(deps, row.id) : options.brand,
 			wait: options.wait,
 			signal: options.signal === undefined ? lease.signal : AbortSignal.any([lease.signal, options.signal]),

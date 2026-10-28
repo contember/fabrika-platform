@@ -536,7 +536,14 @@ export function createControlRpcRouter(
 
 	function runsContext(ctx: ControlRpcContext): RunsUseCaseContext {
 		const deps = buildDeps(ctx.env, ctx.provider, ctx.auth)
-		return { repositories: deps.repositories, queue: deps.queue, logs: deps.logs, cancel: deps.cancelRun, auth: ctx.auth }
+		return {
+			repositories: deps.repositories,
+			queue: deps.queue,
+			logs: deps.logs,
+			cancel: deps.cancelRun,
+			auth: ctx.auth,
+			devSandboxes: ctx.provider.devSandboxes !== undefined,
+		}
 	}
 
 	function approvalContext(ctx: ControlRpcContext): ApprovalUseCaseContext {

@@ -13,6 +13,7 @@ import {
 } from '@fabrika/control-contract'
 import { type BlobStore, type JobQueue, uuidv7 } from '@fabrika/platform'
 import type { ControlRepositories, RunRow } from '../db'
+import { DEV_RUN_NEEDS_WORKSPACE } from '../dev/sandbox-keys'
 import { appScope, envScope } from '../iam'
 import { isRefPattern } from '../ref-match'
 import { type ControlJobMessage, logsKey } from '../run-lifecycle'
@@ -35,6 +36,8 @@ export interface RunsUseCaseContext {
 	/** Cancel seam: destroy the run's container (off-local) + mark it failed + free the deploy lock. */
 	cancel(run: RunRow): Promise<void>
 	auth: AuthContext
+	/** Whether the provider serves a `dev` environment as workspace sandboxes; then only `bind_dev` starts its runs. */
+	devSandboxes?: boolean
 }
 
 /** The slice a run read needs; a reader never holds the cancel seam. */
@@ -188,6 +191,7 @@ export async function triggerDeployUseCase(c: RunsUseCaseContext, input: Trigger
 		fail(404, 'app env not found')
 	}
 	if (!canAtCoordinates(c.auth, CONTROL_ACTIONS.DEPLOY_TRIGGER, appId, env)) fail(404, 'app env not found')
+	if (appEnv.kind === 'dev' && c.devSandboxes === true) fail(409, DEV_RUN_NEEDS_WORKSPACE)
 	// Explicit ref wins; else the env's trigger_ref when it's a concrete ref; else the app's default
 	// branch. A GLOB trigger_ref (e.g. `refs/tags/v*`) is never a deployable ref, so it falls through to
 	// the default branch — pass an explicit `ref` to manually deploy a specific tag of a pattern env.

@@ -16,6 +16,7 @@ import {
 import type { MembershipKeyRepository } from './db'
 import { iamProvisioningClient, type IamProvisioningOptions } from './iam-provisioning'
 import type { Vault, VaultSecretPurpose } from './vault'
+import type { KeyReconcileOptions } from './workload-credentials'
 
 /** A key with less than this left is replaced, so a running version never holds one that IAM stops honouring. */
 export const MEMBERSHIP_KEY_ROTATE_BELOW_SECONDS = MAX_KEY_LIFETIME_SECONDS / 2
@@ -34,8 +35,9 @@ export interface MembershipTransportPort {
 	/**
 	 * The environment's key while `needed`: the recorded key while it is fresh, or a newly issued one. Without need the
 	 * record is dropped (IAM deletes the key with the schema reconcile that leaves the application no such operation).
+	 * `additive` (see `KeyReconcileOptions`): the record is never dropped, and a recorded key that has not expired is not rotated.
 	 */
-	reconcile(appId: string, env: string, needed: boolean): Promise<string | null>
+	reconcile(appId: string, env: string, needed: boolean, options?: KeyReconcileOptions): Promise<string | null>
 }
 
 /**
@@ -69,10 +71,11 @@ export class VaultMembershipTransport implements MembershipTransportPort {
 		private readonly now: () => number = () => Math.floor(Date.now() / 1000),
 	) {}
 
-	async reconcile(appId: string, env: string, needed: boolean): Promise<string | null> {
+	async reconcile(appId: string, env: string, needed: boolean, options: KeyReconcileOptions = {}): Promise<string | null> {
+		const additive = options.additive === true
 		const row = await this.records.get(appId, env)
 		if (!needed) {
-			if (row !== null) {
+			if (row !== null && !additive) {
 				await this.records.delete(appId, env)
 				await (await this.vault()).delete(row.value_ref)
 			}
@@ -81,7 +84,7 @@ export class VaultMembershipTransport implements MembershipTransportPort {
 		const vault = await this.vault()
 		const purpose = membershipKeyPurpose(appId, env)
 		const now = this.now()
-		if (row !== null && row.expires_at - now > MEMBERSHIP_KEY_ROTATE_BELOW_SECONDS) {
+		if (row !== null && row.expires_at - now > (additive ? 0 : MEMBERSHIP_KEY_ROTATE_BELOW_SECONDS)) {
 			return vault.getSecretForPurpose(row.value_ref, purpose)
 		}
 		// The recorded key stays IAM's active one until the record below names the new key; a failure in between leaves

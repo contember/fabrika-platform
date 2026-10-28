@@ -172,4 +172,19 @@ describe('VaultMembershipTransport', () => {
 		expect(queryRows(harness.sqlite, 'SELECT * FROM vault')).toEqual([])
 		expect(issuer.issued).toHaveLength(1)
 	})
+
+	test('additive, for a workspace sandbox: keeps the record without need, and rotates nothing until the key expires', async () => {
+		const { harness, issuer, clock, transport } = await setup()
+		expect(await transport.reconcile('notes', 'prod', true)).toBe('px_membership_1')
+		expect(await transport.reconcile('notes', 'prod', false, { additive: true })).toBeNull()
+		expect(queryRows(harness.sqlite, 'SELECT * FROM app_env_membership_keys')).toHaveLength(1)
+		clock.now = T0 + MAX_KEY_LIFETIME_SECONDS - MEMBERSHIP_KEY_ROTATE_BELOW_SECONDS + 1
+		expect(await transport.reconcile('notes', 'prod', true, { additive: true })).toBe('px_membership_1')
+		expect(issuer.issued).toHaveLength(1)
+		clock.now = T0 + MAX_KEY_LIFETIME_SECONDS
+		expect(await transport.reconcile('notes', 'prod', true, { additive: true })).toBe('px_membership_2')
+		// Without the option the same state rotates, as before.
+		clock.now = T0 + 2 * MAX_KEY_LIFETIME_SECONDS - MEMBERSHIP_KEY_ROTATE_BELOW_SECONDS + 1
+		expect(await transport.reconcile('notes', 'prod', true)).toBe('px_membership_3')
+	})
 })

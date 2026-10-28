@@ -13,19 +13,30 @@ export const PLATFORM_KEY_LIFETIME_SECONDS = MAX_KEY_LIFETIME_SECONDS
 /** A key with less than this left is replaced, so a running version never holds one that is about to expire. */
 export const PLATFORM_KEY_ROTATE_BELOW_SECONDS = PLATFORM_KEY_LIFETIME_SECONDS / 2
 
+/** A key bound to one MCP workspace of a `dev` environment: its sandbox's launcher authenticates with it. */
+export interface PlatformKeyScope {
+	readonly workspaceId?: string
+}
+
 export interface PlatformTransportPort {
-	/** The environment's key for `receiver`: the newest one while it is fresh, or a newly issued one. */
-	issue(appId: string, env: string, receiver: PlatformReceiver): Promise<string>
+	/**
+	 * The environment's key for `receiver`, or the workspace's when `scope` names one: the newest one while it is fresh,
+	 * or a newly issued one.
+	 */
+	issue(appId: string, env: string, receiver: PlatformReceiver, scope?: PlatformKeyScope): Promise<string>
 	/**
 	 * Delete every key of the receiver and its vault row. Called only once a version that holds none of them runs:
 	 * until then the previous version calls the receiver with its key.
 	 */
 	revoke(appId: string, env: string, receiver: PlatformReceiver): Promise<void>
+	/** Delete every `source` key of the workspace and its vault rows, once its sandbox is gone. */
+	revokeWorkspaceSourceKeys(appId: string, env: string, workspaceId: string): Promise<void>
 }
 
 /** The `{ scope, label }` the key is sealed under — the only record of which environment owns its vault row. */
-export function platformKeyPurpose(appId: string, env: string, receiver: PlatformReceiver): VaultSecretPurpose {
-	return { scope: 'platform', label: `platform:platform-key:${appEnvironmentId(appId, env)}:${receiver}` }
+export function platformKeyPurpose(appId: string, env: string, receiver: PlatformReceiver, scope: PlatformKeyScope = {}): VaultSecretPurpose {
+	const workspace = scope.workspaceId === undefined ? '' : `:${scope.workspaceId}`
+	return { scope: 'platform', label: `platform:platform-key:${appEnvironmentId(appId, env)}:${receiver}${workspace}` }
 }
 
 /** `px_` and 160 random bits as 27 base64url characters, the format of the keys IAM issues. */
@@ -36,15 +47,19 @@ export function generatePlatformKey(): string {
 
 export class VaultPlatformTransport implements PlatformTransportPort {
 	constructor(
-		private readonly records: Pick<PlatformTransportKeyRepository, 'insert' | 'listForAppEnv' | 'deleteForAppEnv' | 'deleteExpired'>,
+		private readonly records: Pick<
+			PlatformTransportKeyRepository,
+			'insert' | 'listForAppEnv' | 'deleteForAppEnv' | 'deleteForWorkspace' | 'deleteExpired'
+		>,
 		private readonly vault: () => Promise<Vault>,
 		private readonly now: () => number = () => Math.floor(Date.now() / 1000),
 	) {}
 
-	async issue(appId: string, env: string, receiver: PlatformReceiver): Promise<string> {
-		const rows = await this.receiverKeys(appId, env, receiver)
+	async issue(appId: string, env: string, receiver: PlatformReceiver, scope: PlatformKeyScope = {}): Promise<string> {
+		const workspaceId = scope.workspaceId ?? null
+		const rows = (await this.receiverKeys(appId, env, receiver)).filter((row) => row.workspace_id === workspaceId)
 		const vault = await this.vault()
-		const purpose = platformKeyPurpose(appId, env, receiver)
+		const purpose = platformKeyPurpose(appId, env, receiver, scope)
 		const now = this.now()
 		const newest = rows[0]
 		if (newest !== undefined && newest.expires_at - now > PLATFORM_KEY_ROTATE_BELOW_SECONDS) {
@@ -62,6 +77,7 @@ export class VaultPlatformTransport implements PlatformTransportPort {
 				value_ref: ref,
 				expires_at: now + PLATFORM_KEY_LIFETIME_SECONDS,
 				created_at: now,
+				workspace_id: workspaceId,
 			})
 		} catch (error) {
 			await vault.delete(ref)
@@ -77,6 +93,14 @@ export class VaultPlatformTransport implements PlatformTransportPort {
 		const rows = await this.receiverKeys(appId, env, receiver)
 		if (rows.length === 0) return
 		await this.records.deleteForAppEnv(appId, env, receiver)
+		const vault = await this.vault()
+		for (const row of rows) await vault.delete(row.value_ref)
+	}
+
+	async revokeWorkspaceSourceKeys(appId: string, env: string, workspaceId: string): Promise<void> {
+		const rows = (await this.receiverKeys(appId, env, 'source')).filter((row) => row.workspace_id === workspaceId)
+		if (rows.length === 0) return
+		await this.records.deleteForWorkspace(appId, env, 'source', workspaceId)
 		const vault = await this.vault()
 		for (const row of rows) await vault.delete(row.value_ref)
 	}

@@ -1,4 +1,5 @@
 import type { SqlDatabase } from '@fabrika/platform'
+import type { LeaseFence } from '../lease'
 import { firstRow } from './returning'
 
 export type DevSandboxState = 'creating' | 'ready' | 'removing'
@@ -108,10 +109,11 @@ export class DevSandboxRepository {
 		return firstRow<DevSandboxRow>(this.d1.prepare('SELECT * FROM dev_sandboxes WHERE workspace_id = ?').bind(input.workspaceId))
 	}
 
-	/** Box created the sandbox. Null when the row is gone or being removed. */
+	/** Box created the sandbox. Null when the row is gone or being removed. A proxy secret the row records stays. */
 	async markReady(input: DevSandboxReadyInput): Promise<DevSandboxRow | null> {
 		return this.d1
-			.prepare(`UPDATE dev_sandboxes SET state = 'ready', sandbox_id = ?, base_digest = ?, upstream_host = ?, proxy_secret_ref = ?
+			.prepare(`UPDATE dev_sandboxes SET state = 'ready', sandbox_id = ?, base_digest = ?, upstream_host = ?,
+					proxy_secret_ref = COALESCE(proxy_secret_ref, ?)
 				WHERE workspace_id = ? AND state IN ('creating', 'ready') RETURNING *`)
 			.bind(input.sandboxId, input.baseDigest, input.upstreamHost, input.proxySecretRef, input.workspaceId)
 			.first<DevSandboxRow>()
@@ -151,13 +153,34 @@ export class DevSandboxRepository {
 			.first<DevSandboxRow>()
 	}
 
-	/** The run whose snapshot the workspace's proxy table now follows. */
+	/** The run whose snapshot the workspace's proxy table now follows; a sandbox being removed follows none. */
 	async recordPublishedRun(workspaceId: string, runId: string): Promise<boolean> {
 		const result = await this.d1
-			.prepare('UPDATE dev_sandboxes SET published_run_id = ? WHERE workspace_id = ?')
+			.prepare(`UPDATE dev_sandboxes SET published_run_id = ? WHERE workspace_id = ? AND state <> 'removing'`)
 			.bind(runId, workspaceId)
 			.run()
 		return result.meta.changes > 0
+	}
+
+	/**
+	 * `recordPublishedRun` for the bootstrap run itself, fenced on its `<app>:<env>` lease: only a running run of the
+	 * workspace's lane, whose holder still holds the lease, records itself.
+	 */
+	async recordPublishedRunUnderLease(workspaceId: string, runId: string, fence: LeaseFence): Promise<boolean> {
+		const results = await this.d1.batch<{ workspace_id: string }>([
+			this.d1.prepare(`UPDATE deploy_locks SET holder = holder
+				WHERE lock_key = (SELECT app_id || ':' || env FROM runs WHERE id = ?)
+					AND holder = ? AND expires_at > ?`).bind(runId, fence.holder, fence.nowMs),
+			this.d1.prepare(`UPDATE dev_sandboxes SET published_run_id = ?
+				WHERE workspace_id = ? AND state <> 'removing'
+					AND EXISTS (SELECT 1 FROM runs
+						WHERE runs.id = ? AND runs.app_id = dev_sandboxes.app_id AND runs.env = dev_sandboxes.env
+							AND runs.lane = dev_sandboxes.workspace_id AND runs.status = 'running')
+					AND EXISTS (SELECT 1 FROM deploy_locks
+						WHERE lock_key = dev_sandboxes.app_id || ':' || dev_sandboxes.env AND holder = ? AND expires_at > ?)
+				RETURNING workspace_id`).bind(runId, workspaceId, runId, fence.holder, fence.nowMs),
+		])
+		return (results.at(-1)?.results.length ?? 0) > 0
 	}
 
 	/** A new head of the workspace; returns the row, or null when it has no sandbox. */

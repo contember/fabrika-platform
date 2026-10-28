@@ -163,6 +163,22 @@ describe('VaultWorkloadCredentials', () => {
 	})
 })
 
+describe('VaultWorkloadCredentials, additive for a workspace sandbox', () => {
+	test('drops no record and hands a recorded key until it expires', async () => {
+		const { harness, issuer, clock, credentials } = await setup()
+		const first = await credentials.reconcile('notes', 'prod', workloadsOnly)
+		clock.now = T0 + MAX_KEY_LIFETIME_SECONDS - WORKLOAD_KEY_ROTATE_BELOW_SECONDS + 1
+		expect(await credentials.reconcile('notes', 'prod', workloadsOnly, { additive: true })).toEqual(first)
+		expect(await credentials.reconcile('notes', 'prod', null, { additive: true })).toEqual({})
+		expect(queryRows(harness.sqlite, 'SELECT name FROM app_env_workload_credentials')).toHaveLength(2)
+		expect(issuer.issued).toHaveLength(2)
+		expect(issuer.revoked).toEqual([])
+		clock.now = T0 + MAX_KEY_LIFETIME_SECONDS
+		expect(await credentials.reconcile('notes', 'prod', workloadsOnly, { additive: true })).not.toEqual(first)
+		expect(issuer.issued).toHaveLength(4)
+	})
+})
+
 describe('VaultWorkloadCredentials for public procedures', () => {
 	const reach = { sql: null, unscoped: {}, connect: [], issues: null }
 	/** The notes contract with one public procedure, `api.stats.cta`, beside its jobs and webhook. */

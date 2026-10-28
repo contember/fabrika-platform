@@ -49,6 +49,8 @@ export interface AppEnvRow {
 	protected: number
 	/** Advanced by every change of `protected`; a publication names the revision it classified under. */
 	protection_revision: number
+	/** The contract digest IAM last received for the environment; NULL until Control writes its schema. */
+	iam_digest: string | null
 	created_at: number
 }
 
@@ -82,6 +84,8 @@ export interface DeploymentNamespaceRow {
 	update_target_json: string | null
 	/** 1 when a proxy repair was requested while the row was marked; the update's clearing write replays it. */
 	repair_requested: number
+	/** The vault reference of the namespace's sandbox host API key; NULL until a dev environment needs one. */
+	sandbox_key_ref: string | null
 }
 
 export interface NamespaceResourceClaimRow {

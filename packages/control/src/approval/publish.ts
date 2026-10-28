@@ -124,6 +124,12 @@ export interface PublicationInput {
 	readonly root: string | null
 	readonly commitSha: string
 	readonly sourceBinding?: { readonly connectionId: string; readonly installationId: number }
+	/**
+	 * A dev bootstrap's own workspace publication: the candidate is classified against it rather than against the
+	 * environment's, which follows whichever workspace bootstrapped last. The compare-and-swap still names the
+	 * environment's generation.
+	 */
+	readonly workspaceBaseline?: { readonly runId: string; readonly snapshot: AccessSnapshot } | null
 	/** Refuse a candidate the placement cannot serve before it becomes any publisher's source of truth. */
 	validateAccess?(access: ProviderApprovedAccess, environment: AppEnvRow): Promise<void>
 	log(line: string): void
@@ -158,7 +164,11 @@ export async function publishRunSnapshot(
 	for (let attempt = 0; attempt < MAX_PUBLICATION_ATTEMPTS; attempt++) {
 		const run = await invocation.boundary()
 		const appEnv = await requireAppEnv(deps.repositories, run)
-		const active = approvedSnapshot(appEnv)
+		const published = approvedSnapshot(appEnv)
+		const baseline = input.workspaceBaseline
+		const active: ActiveSnapshot = baseline === undefined || baseline === null
+			? published
+			: { runId: baseline.runId, generation: published.generation, snapshot: baseline.snapshot }
 		await assertConnectorEdges(deps.repositories.registry, run, candidate, active, input.log)
 		assertMountCompatibility(candidate, active, input.log)
 		assertDevLauncher(candidate, appEnv, input.log)

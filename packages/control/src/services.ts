@@ -197,9 +197,13 @@ export function installationBrandDeps(env: Env): { brand?: InstallationBrandSour
 	return origin === '' || provisioningKey === '' ? {} : { brand: iamBrandSource({ origin, provisioningKey }) }
 }
 
-/** The proxy secrets live in the vault, so an installation without one hands the providers none. */
-export function proxySecretDeps(env: Env): { proxySecrets?: ProxySecrets } {
-	return env.FABRIKA_CONTROL_VAULT_KEY === undefined ? {} : { proxySecrets: new VaultProxySecrets(repositories(env).registry, () => vault(env)) }
+/**
+ * The proxy secrets live in the vault, so an installation without one hands the providers none. The vault itself goes
+ * along: a dev environment's workspace sandboxes open their own proxy secrets and the namespace's sandbox host key there.
+ */
+export function proxySecretDeps(env: Env): { proxySecrets?: ProxySecrets; vault?: () => Promise<Vault> } {
+	if (env.FABRIKA_CONTROL_VAULT_KEY === undefined) return {}
+	return { proxySecrets: new VaultProxySecrets(repositories(env).registry, () => vault(env)), vault: () => vault(env) }
 }
 
 export async function cancelRun(env: Env, provider: ControlProvider, run: RunRow): Promise<void> {
