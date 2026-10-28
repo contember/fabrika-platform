@@ -165,6 +165,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			{ bundle: 'control', name: '0023_side_restore.sql' },
 			{ bundle: 'control', name: '0024_mail_content_objects.sql' },
 			{ bundle: 'control', name: '0025_dev_sandboxes.sql' },
+			{ bundle: 'control', name: '0026_namespace_sandbox_key.sql' },
 		])
 	})
 

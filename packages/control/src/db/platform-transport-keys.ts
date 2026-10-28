@@ -59,6 +59,15 @@ export class PlatformTransportKeyRepository {
 		return result.meta.changes
 	}
 
+	/** Deletes every key of one receiver that authenticates one workspace of the environment; returns how many. */
+	async deleteForWorkspace(appId: string, env: string, receiver: string, workspaceId: string): Promise<number> {
+		const result = await this.d1
+			.prepare('DELETE FROM platform_transport_keys WHERE app_id = ? AND env = ? AND receiver = ? AND workspace_id = ?')
+			.bind(appId, env, receiver, workspaceId)
+			.run()
+		return result.meta.changes
+	}
+
 	/** Deletes every key expired at `now`; returns how many. */
 	async deleteExpired(now: number): Promise<number> {
 		const result = await this.d1.prepare('DELETE FROM platform_transport_keys WHERE expires_at <= ?').bind(now).run()
