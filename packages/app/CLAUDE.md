@@ -1139,7 +1139,9 @@ a real Postgres; `cloudflare-postgres-runtime.test.ts` runs them in Lopata.
 - **A request's kick is only its wake** (`kickRuns: 'scheduler'`): the request's projection records the earliest wake its
   writes left, and once its tracked work settled the Worker POSTs `WAKE_PATH` with `WAKE_DELAY_HEADER` to the object
   `application`, which lowers its alarm to it. The object's alarm only ever goes down from outside its handler: every
-  projection and notice lowers it, one at a time.
+  projection and notice lowers it, one at a time. The first request an isolate serves also sends a notice with delay 0
+  when the scheduler has a job (`startScheduler`; a failed one is retried by the next request), so the alarm's startup
+  repair schedules the cron wakes with the first traffic: nothing else reaches the object of a fresh environment.
 - **The alarm**: the startup repair once per instance, then per job a take (each lease statement its own transaction)
   and the run handed to the event; then it arms the next wake from the database, at most `POSTGRES_ALARM_REFRESH_MS`
   ahead while the contract has a job, so a wake nothing projected still runs. The alarm's own statements project nothing

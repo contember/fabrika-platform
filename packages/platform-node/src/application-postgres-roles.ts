@@ -110,8 +110,8 @@ export async function provisionPostgresRoles(
 			}
 			// A role may set its own session defaults, for every database (`ALTER ROLE CURRENT_USER SET …`) or for this one
 			// (`… IN DATABASE`), which overrides the first; each deploy starts it clean of both. The runtime role's one default
-			// is its schema: Hyperdrive documents no startup parameters, so the engine sends none and the role's default as the only
-			// search_path, and the data layer names its tables unqualified. Resets and set run in one transaction, so no
+			// is its schema. Hyperdrive documents no startup parameters, so the engine sends none, the role's default is the
+			// only search_path, and the data layer names its tables unqualified. Resets and set run in one transaction, so no
 			// session starts in between without it.
 			const reset = [admin.prepare(`ALTER ROLE ${role} RESET ALL`), admin.prepare(`ALTER ROLE ${role} IN DATABASE ${database.name} RESET ALL`)]
 			await admin.batch(role === roles.runtime ? [...reset, admin.prepare(`ALTER ROLE ${role} SET search_path TO ${roles.schema}`)] : reset)

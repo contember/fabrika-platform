@@ -484,7 +484,9 @@ An application whose `fabrika.config.ts` states `database: { kind: 'postgres', p
 - **Jobs run on the job object** (`FabrikaJobObject`, exported as `FabrikaApplication`, `cloudflare/postgres-object.ts`).
   A request's `ctx.kick` writes its wake and runs nothing in the Worker (`kickRuns: 'scheduler'`); the request's
   projection records the earliest wake its writes left, and after its work settled the Worker POSTs `/__fabrika/wake`
-  with `X-Fabrika-Wake-Delay` to the object `application`, which lowers its alarm to it and never raises it. The alarm
+  with `X-Fabrika-Wake-Delay` to the object `application`, which lowers its alarm to it and never raises it. The first
+  request an isolate serves sends one notice due now when the contract has a job (a framework job too), so a fresh
+  environment's alarm repairs and arms with its first traffic, not at the hourly repair tick. The alarm
   repairs once per instance, takes each due job's lease (each lease statement its own transaction), runs the taken jobs
   past its return, and arms the next wake from the database, at most `POSTGRES_ALARM_REFRESH_MS` (60 s) ahead while the
   contract has a job. It never throws: an error re-arms 30 s later and is an `AlarmFailed` event. The Worker's cron

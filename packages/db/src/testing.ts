@@ -131,8 +131,9 @@ function lazyPostgresJs(url: string, options: { readonly max: number; readonly s
 /**
  * The framework's own suites' connection to a schema they created: `openPostgres`, or with
  * `FABRIKA_TEST_POSTGRES_DRIVER=postgres-js` the Hyperdrive engine over postgres.js. A role without a default search_path
- * (the superuser of a suite's own schema) gets `schema` as a startup parameter there; Hyperdrive documents no startup parameters, so the engine sends none to it, and
- * `testDatabase`'s runtime role, whose default it is, never needs. `Database#close()` ends the client either way.
+ * (the superuser of a suite's own schema) gets `schema` as a startup parameter there. Hyperdrive documents no startup
+ * parameters, so the engine sends none to it, and `testDatabase`'s runtime role, whose default `search_path` is its
+ * schema, needs none. `Database#close()` ends the client either way.
  */
 export function openTestPostgres(options: PostgresOptions): Database {
 	if (!usesPostgresJs()) return openPostgres(options)

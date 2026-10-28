@@ -342,7 +342,14 @@ describe.skipIf(!hasPostgres)('the Worker', () => {
 			const response = await call(target, 'titles', { workspaceId: 'w1' }, { [TICK_HEADER]: '1', [PROXY_SECRET_HEADER]: 'forged' })
 			expect(response.status).toBe(200)
 			await target.settled()
-			expect(target.sent).toEqual([])
+			// The isolate's first request starts the scheduler with a wake notice due now; no tick reaches the object.
+			expect(target.sent.map((request) => [new URL(request.url).pathname, request.headers.get(WAKE_DELAY_HEADER)])).toEqual([[WAKE_PATH, '0']])
+			expect(target.sent.filter((request) => request.headers.get(TICK_HEADER) !== null)).toEqual([])
+
+			// Its later requests send no start notice again.
+			expect((await call(target, 'titles', { workspaceId: 'w1' })).status).toBe(200)
+			await target.settled()
+			expect(target.sent).toHaveLength(1)
 
 			const ops = deploy()
 			const refused = await ops.worker.fetch(new Request(`${ORIGIN}${OPS_PREFIX}state`, { method: 'POST', body: '{}' }), ops.env, ops.exec)
@@ -356,6 +363,11 @@ describe.skipIf(!hasPostgres)('the Worker', () => {
 		"a mutation's ctx.kick writes its wake and runs nothing in the Worker; the object hears of it once, after the commit",
 		inProcess(async () => {
 			const target = deploy()
+			// The isolate's first request sends its start notice; the kick's notice is the one after it.
+			expect((await call(target, 'titles', { workspaceId: 'w1' })).status).toBe(200)
+			await target.settled()
+			target.sent.splice(0)
+			target.state.alarm = null
 			const before = Date.now()
 			expect((await call(target, 'create', { workspaceId: 'w1', title: 'first' })).status).toBe(200)
 			await target.settled()
@@ -381,15 +393,18 @@ describe.skipIf(!hasPostgres)('the Worker', () => {
 		"the request's client stays open until its wake notice is answered",
 		inProcess(async () => {
 			const target = deploy()
+			// The isolate's start notice goes first, so the held one is the kick's.
+			expect((await call(target, 'titles', { workspaceId: 'w1' })).status).toBe(200)
+			await target.settled()
 			const notice = gate()
 			target.holdObject = notice
 			expect((await call(target, 'create', { workspaceId: 'w1', title: 'first' })).status).toBe(200)
 			await notice.reached
 			// The notice is under way and the request's client still open: it ends after the notice.
-			expect(target.clients[0]?.ended).toBe(false)
+			expect(target.clients[1]?.ended).toBe(false)
 			notice.open()
 			await target.settled()
-			expect(target.clients[0]?.ended).toBe(true)
+			expect(target.clients[1]?.ended).toBe(true)
 		}),
 	)
 })

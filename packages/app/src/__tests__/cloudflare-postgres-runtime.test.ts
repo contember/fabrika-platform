@@ -190,6 +190,24 @@ describe.skipIf(!hasPostgres)('an application on Postgres in Lopata', () => {
 		})
 	})
 
+	test("an isolate's first request starts the scheduler without a kick or the repair tick", async () => {
+		await keepingProcessEnvironment(async () => {
+			const target = await deploy()
+			// A query writes no wake: only the isolate's start notice reaches the object.
+			expect(await (await call(target, 'titles', { workspaceId: 'w1' })).json()).toEqual({ result: { titles: [] } })
+			const object = objectOf(target)
+			const notified = await eventually(() => object.getAlarm(), (at) => at !== null)
+			expect(notified ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(Date.now())
+			await object.triggerAlarm()
+			const cron = () => admin((sql) => sql.unsafe(`select reason from ${SCHEMA}.fabrika_wakes where job = 'tally'`))
+			expect(await eventually(cron, (rows) => rows.length > 0)).toEqual([{ reason: 'cron' }])
+			const armed = await eventually(() => object.getAlarm(), (at) => at !== null && at > Date.now())
+			expect(armed ?? 0).toBeGreaterThan(Date.now())
+			expect(armed ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(Date.now() + POSTGRES_ALARM_REFRESH_MS)
+			expect(target.world.runs).toEqual([])
+		})
+	})
+
 	test('the repair tick arms the alarm of an environment nobody called; the ops prefix is refused', async () => {
 		await keepingProcessEnvironment(async () => {
 			const target = await deploy()

@@ -33,11 +33,13 @@ export {
  * also exports `FabrikaJobObject` as `FabrikaApplication`. The Worker boots the application once per isolate and serves
  * each request itself, on a postgres.js client of its own that ends once the work the request handed to `waitUntil`
  * settled. A request whose writes changed a wake (a kick, a claim) tells the job object afterwards, which lowers its
- * alarm to the earliest; `scheduled` sends it the repair tick. An ops request is refused: a Postgres environment has no
- * ops channel.
+ * alarm to the earliest; `scheduled` sends it the repair tick. The first request an isolate serves also starts the
+ * scheduler (`startScheduler`). An ops request is refused: a Postgres environment has no ops channel.
  */
 export function createPostgresContractWorker(load: ImplementationLoader, options: PostgresWorkerOptions = {}): ContractWorker {
 	const application = registerPostgresApplication(load, options)
+	/** Whether this isolate told the job object to start its scheduler, or is telling it now. */
+	let started = false
 	return {
 		async fetch(request, env, exec) {
 			if (new URL(request.url).pathname.startsWith(OPS_PREFIX)) {
@@ -49,6 +51,12 @@ export function createPostgresContractWorker(load: ImplementationLoader, options
 				throw outcome.failure
 			}
 			const { app } = outcome
+			if (!started && (app.jobs.scheduler?.jobs.length ?? 0) > 0) {
+				started = true
+				exec.waitUntil(startScheduler(env, () => {
+					started = false
+				}))
+			}
 			// The earliest wake the request's writes left, in epoch milliseconds of this isolate's clock.
 			let wakeAt: number | null = null
 			const event = new PostgresEvent(application.connect(env), async (transaction) => {
@@ -79,6 +87,21 @@ export function createPostgresContractWorker(load: ImplementationLoader, options
 				throw new Error(`the application's job object answered the repair tick with ${response.status}`)
 			}
 		},
+	}
+}
+
+/**
+ * The job object hears of nothing on its own: its alarm is unarmed on a fresh environment, and after a redeploy that added
+ * the first job. A wake notice due now lowers its alarm to now, and that alarm runs the startup repair (a cron wake per
+ * declared job) and arms itself, so the scheduled jobs start with the first traffic of each isolate, not at the next
+ * hourly repair tick. A notice that fails lets the isolate's next request try again.
+ */
+async function startScheduler(env: Readonly<Record<string, unknown>>, failed: () => void): Promise<void> {
+	try {
+		await notifyWake(env, 0)
+	} catch {
+		failed()
+		console.error('fabrika: the job object did not hear of the first request: wake_failed; the repair tick starts it')
 	}
 }
 

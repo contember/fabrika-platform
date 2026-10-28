@@ -161,7 +161,11 @@ Decisions 1–9 describe the SQLite environment, the default; §10 says what dif
       the Worker sends the object one wake notice with the earliest wake its writes left, and the object lowers its
       alarm to it, never raising it. The alarm takes each due job's lease and runs it, then arms the next wake from
       the database, at most a minute ahead while the contract has a job, so a notice that was lost still runs within
-      it. The repair tick and the 14-minute job segment are as on SQLite. The object answers only its Worker.
+      it. The first request each isolate serves also sends a notice due now when the contract has a job (framework jobs
+      included), because nothing else reaches the object of a fresh environment, or of one that just gained its first
+      job: that alarm repairs, which schedules every cron wake, and arms itself, so the jobs start with the first traffic
+      as on SQLite, not at the hourly repair tick. The repair tick and the 14-minute job segment are as on SQLite. The
+      object answers only its Worker.
     - **The deploy provisions the database before it deploys.** A step `provision-database` runs the application's
       own `fabrika db migrate` in the runner with the provisioning URL as `FABRIKA_APP_DATABASE_URL` (never on an
       argv, never in a log), which creates the roles `app_<id>` and `run_<id>`, sets the default and migrates; then it
