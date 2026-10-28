@@ -120,6 +120,7 @@ export function classifyAccess(baseline: AccessSnapshot, candidate: AccessSnapsh
 	})
 	compareDatabaseCode(changes, baseline, candidate)
 	compareFileAdoptions(changes, baseline, candidate)
+	compareDatabase(changes, baseline, candidate)
 	// The candidate's row of an endpoint, or the baseline's for a removed one.
 	const rows = new Map([...baseline.contract?.endpoints ?? [], ...candidate.contract?.endpoints ?? []].map((row) => [row.id, row]))
 	const list = changes.list.map((change) => withAudience(change, changes.reaching.get(subjectKey(change.subject)), rows))
@@ -766,6 +767,22 @@ function compareDatabaseCode(changes: Changes, baseline: AccessSnapshot, candida
 			place(to.file, closer('off-road', `${migrationName(to.file)} changes, and declares ${databaseObject(to)}`))
 		}
 	}
+}
+
+/**
+ * The database the application chose (a Cloudflare application on Postgres through Hyperdrive, ADR-0065 §10). It admits
+ * no one, so the line is neutral, but the approver should know where the environment's data lives. The provider refuses
+ * a published environment's database to change, so in practice the line stands on a first publication.
+ */
+function compareDatabase(changes: Changes, baseline: AccessSnapshot, candidate: AccessSnapshot): void {
+	const before = baseline.database ?? null
+	const after = candidate.database ?? null
+	if (before === after) return
+	const application = subjectOf('application', candidate.contract?.app ?? baseline.contract?.app ?? '')
+	const line = after === 'postgres'
+		? "The application's data lives in Postgres through Cloudflare Hyperdrive, not in its Durable Object's SQLite"
+		: "The application's data moves from Postgres back to its Durable Object's SQLite"
+	changes.add(application, ...ruled('application.database', [neutral(line)]))
 }
 
 /**

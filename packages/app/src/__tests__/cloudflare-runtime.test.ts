@@ -73,10 +73,17 @@ interface Deployed {
 	readonly world: NotesWorld
 }
 
+// Each boot scrubs every FABRIKA_* variable from the shared process (`captureEnvironment`), the test runner's own
+// FABRIKA_TEST_* among them; put them back so a suite that runs after this one in the same process still sees them.
+const processEnvironment = Object.entries(process.env).filter(([name]) => name.startsWith('FABRIKA_'))
+
 const deployed: TestEnv[] = []
 afterEach(() => {
 	for (const testEnv of deployed.splice(0)) {
 		testEnv.dispose()
+	}
+	for (const [name, value] of processEnvironment) {
+		process.env[name] = value
 	}
 })
 
