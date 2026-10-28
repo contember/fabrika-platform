@@ -122,7 +122,8 @@
 		"@fabrika/platform-node": "workspace:*",
 		"@fabrika/proxy-core": "workspace:*",
 		"altcha-lib": "2.6.0",
-		"jose": "^5.9.0"
+		"jose": "^5.9.0",
+		"postgres": "3.4.9"
 	},
 	"peerDependencies": {
 		"@happy-dom/global-registrator": "^20.11.2",
