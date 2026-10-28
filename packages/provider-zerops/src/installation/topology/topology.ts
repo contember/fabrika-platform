@@ -69,7 +69,7 @@ import { assertTopologyInvariants } from './invariants'
  * `enableSubdomainAccess` on a service the document CREATES and then silently drops it, so the service
  * reads back `subdomainAccess: false` and stays there. The subdomain is established afterwards, by
  * `PUT /service-stack/{id}/enable-subdomain-access` on a service that already publishes an HTTP port —
- * which the namespace lifecycle does for itself (`ensureSubdomainAccess` in `src/namespace/provisioning.ts`)
+ * which the namespace lifecycle does for itself (`ensureSubdomainAccess` in `src/namespace/subdomain.ts`)
  * and which an operator applying the generated platform artifacts must do by hand; the artifact's header
  * names the call. So `true` here records the INTENT and feeds ADR-0022's `assertOnlyPublicService`; it
  * does not turn anything on.

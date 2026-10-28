@@ -95,6 +95,8 @@ interface FakeState {
 	autoscalingRefused: boolean
 	/** The PUT applies, then the connection drops while its process is polled — the ambiguous case. */
 	autoscalingProcessLost: boolean
+	/** The sandbox host's Box answers 502 to everything. */
+	boxDown: boolean
 }
 
 const freshState = (): FakeState => ({
@@ -117,6 +119,7 @@ const freshState = (): FakeState => ({
 	autoscalingIgnored: false,
 	autoscalingRefused: false,
 	autoscalingProcessLost: false,
+	boxDown: false,
 })
 
 const projectId = 'project-1'
@@ -2124,5 +2127,175 @@ describe('Zerops namespace update', () => {
 
 		expect(error.code).toBe(PROVIDER_NAMESPACE_UPDATE_UNCONFIRMED)
 		expect(error.detail).toContain('still reads oltp-hobby')
+	})
+})
+
+/** A pin whose proxy setup declares the dev sandboxes marker. */
+const MARKED: ZeropsNamespaceProxySource = {
+	...PIN,
+	descriptor: await createZeropsArtifactSourceDescriptor(
+		'zerops:\n  - setup: proxy\n    build:\n      envVariables:\n        FABRIKA_PROXY_MANIFEST_SANDBOXES: "1"\n',
+	),
+}
+
+describe('Zerops namespace dev sandbox host', () => {
+	const zboxId = 'zbox-service'
+	const sandboxKey = 'box-key-that-must-never-be-persisted'
+	const apiHost = 'zbox-1a2b-8080.prg1.zerops.app'
+	const WORKSPACE = '0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b'
+	const events = { checkpoint: async () => {}, boundary: async () => {} }
+
+	const readyNamespace = (publicAccess: 'custom-domain' | 'zerops-subdomain' = 'custom-domain', proxySource = MARKED) =>
+		namespace({
+			proxySource,
+			projectId,
+			projectName: 'apps-prod',
+			corePackage: 'SERIOUS',
+			publicAccess,
+			managed: true,
+			proxyServiceId: proxyId,
+			proxyConfigured: true,
+			ready: true,
+		})
+
+	/** A sandbox host an earlier attempt completed but did not record: published, keyed and carrying the DOT domain. */
+	const withSandboxHost = (state: FakeState): ZeropsNamespaceOptions => {
+		state.projects.set(projectId, project(projectId, 'apps-prod', 'Managed by Fabrika namespace apps-prod (prod).'))
+		state.services.set(projectId, [proxy(), { id: zboxId, name: 'zbox', projectId, base: 'ubuntu/zbox@1', status: 'ACTIVE', subdomainAccess: true }])
+		ensureServiceEnv(state, zboxId).set(ZEROPS_NAMESPACE_SUBDOMAIN_VARIABLE, {
+			id: `${zboxId}:sub`,
+			key: ZEROPS_NAMESPACE_SUBDOMAIN_VARIABLE,
+			content: `https://${apiHost}`,
+			sensitive: false,
+		})
+		return {
+			...options(state),
+			zboxFetch: async (url, init) => {
+				state.calls.push(`box:${init.method} ${new URL(url).pathname}`)
+				if (state.boxDown) return new Response('', { status: 502 })
+				if (init.headers['authorization'] !== `Bearer ${sandboxKey}`) return new Response('{}', { status: 401 })
+				return new Response(JSON.stringify({ version: '1', domains: [{ domain: 'sandbox.fabrika.internal', form: 'DOT' }] }), { status: 200 })
+			},
+		}
+	}
+
+	test('a republish handed the sandbox key records the sandbox host before it rebuilds the proxy', async () => {
+		const state = freshState()
+		const capabilities = createZeropsNamespaceCapabilities(withSandboxHost(state))
+		const checkpoints: ProviderDeploymentNamespace[] = []
+
+		const result = await capabilities.republish?.({
+			namespace: readyNamespace(),
+			members: [],
+			sandboxKey,
+			wait: 'active',
+			signal: new AbortController().signal,
+			events: { ...events, checkpoint: async (checkpoint) => void checkpoints.push(checkpoint) },
+		})
+
+		const recorded = { serviceId: zboxId, apiOrigin: `https://${apiHost}` }
+		expect(result === undefined ? undefined : zeropsNamespaceTargetCodec.decode(result.namespace.target.payload).sandboxHost).toEqual(recorded)
+		expect(zeropsNamespaceTargetCodec.decode(checkpoints[0]?.target.payload ?? {}).sandboxHost).toEqual(recorded)
+		expect(state.calls.indexOf('box:GET /api/rest/workspace')).toBeLessThan(state.calls.indexOf('buildAndDeployAppVersion:uploaded-version-1'))
+		expect(JSON.stringify(checkpoints)).not.toContain(sandboxKey)
+	})
+
+	test('a provision handed the sandbox key on a zerops-subdomain namespace is refused before any platform call', async () => {
+		const state = freshState()
+		const capabilities = createZeropsNamespaceCapabilities(options(state))
+
+		const error = await capabilities.provision({
+			namespace: readyNamespace('zerops-subdomain'),
+			members: [],
+			sandboxKey,
+			signal: new AbortController().signal,
+			events,
+		}).then(() => null, (cause: unknown) => cause)
+
+		expect(error).toBeInstanceOf(ProviderNamespaceError)
+		expect(error instanceof ProviderNamespaceError ? error.code : undefined).toBe('sandboxHostUnsupported')
+		expect(state.calls).toEqual([])
+	})
+
+	test('a republish with dev sandboxes on a pin whose proxy cannot parse them is refused, never published without them', async () => {
+		const state = freshState()
+		state.projects.set(projectId, project(projectId, 'apps-prod', 'Managed by Fabrika namespace apps-prod (prod).'))
+		state.services.set(projectId, [proxy()])
+		const capabilities = createZeropsNamespaceCapabilities(options(state))
+		const access = approvedContract()
+		const notes = compileFabrikaManifest(
+			{
+				id: 'notes',
+				target: {
+					platform: 'zerops',
+					services: () => [{ hostname: 'notes', type: 'alpine/bun@1.3' }],
+					contract: notesArtifact,
+					proxy: { upstream: 'notes:3000', ...contractProxyTable(notesArtifact) },
+				},
+			},
+			'dev',
+			SOURCE_DESCRIPTOR,
+		)
+
+		await expect(
+			capabilities.republish?.({
+				namespace: readyNamespace('custom-domain', PIN),
+				members: [{
+					appId: 'notes',
+					env: 'dev',
+					domain: 'dev.example.test',
+					artifact: { provider: 'zerops', version: zeropsArtifactCodec.version, payload: zeropsArtifactCodec.encode(notes) },
+					devSandboxes: [{
+						workspaceId: WORKSPACE,
+						host: `${WORKSPACE}.dev.example.test`,
+						upstreamHost: '3000-sbxa.sandbox.fabrika.internal',
+						proxySecret: 'sandbox-secret',
+						access,
+					}],
+				}],
+				wait: 'active',
+				signal: new AbortController().signal,
+				events,
+			}),
+		).rejects.toThrow('--proxy-source=current')
+		expect(state.calls.filter((call) => call.startsWith('createAppVersion') || call.startsWith('put:'))).toEqual([])
+	})
+
+	test('a sandbox key on a pin whose proxy cannot parse sandboxes is refused before any Zerops or Box call', async () => {
+		const state = freshState()
+		const capabilities = createZeropsNamespaceCapabilities(withSandboxHost(state))
+		const input = { namespace: readyNamespace('custom-domain', PIN), members: [], sandboxKey, signal: new AbortController().signal, events }
+
+		const refusals = [
+			await capabilities.reconcile(input).then(() => null, (cause: unknown) => cause),
+			await capabilities.republish?.({ ...input, wait: 'active' }).then(() => null, (cause: unknown) => cause),
+		]
+		for (const error of refusals) expect(error instanceof ProviderNamespaceError ? error.code : undefined).toBe('proxySandboxesUnsupported')
+		expect(state.calls).toEqual([])
+	})
+
+	test('a reconcile converges the proxy first; a sandbox host Box cannot answer fails it retryably afterwards', async () => {
+		const state = freshState()
+		state.boxDown = true
+		const capabilities = createZeropsNamespaceCapabilities(withSandboxHost(state))
+		const checkpoints: ProviderDeploymentNamespace[] = []
+
+		const error = await capabilities.reconcile({
+			namespace: readyNamespace(),
+			members: [],
+			sandboxKey,
+			signal: new AbortController().signal,
+			events: { ...events, checkpoint: async (checkpoint) => void checkpoints.push(checkpoint) },
+		}).then(() => null, (cause: unknown) => cause)
+
+		expect(error).toBeInstanceOf(ProviderNamespaceError)
+		expect(error instanceof ProviderNamespaceError ? error.retryable : undefined).toBe(true)
+		const firstBox = state.calls.findIndex((call) => call.startsWith('box:'))
+		expect(state.calls.indexOf('buildAndDeployAppVersion:uploaded-version-1')).toBeLessThan(firstBox)
+		const last = checkpoints.at(-1)
+		const recorded = last === undefined ? undefined : zeropsNamespaceTargetCodec.decode(last.target.payload)
+		expect(recorded?.ready).toBe(true)
+		expect(recorded?.proxyDeployment?.appVersionId).toBe('uploaded-version-1')
+		expect(recorded?.sandboxHost).toBeUndefined()
 	})
 })

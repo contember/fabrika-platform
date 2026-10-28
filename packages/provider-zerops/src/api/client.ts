@@ -453,7 +453,9 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 				await awaitUserDataSync(created, label, signal)
 				return
 			} catch (error) {
-				if (!(error instanceof ZeropsApiError) || error.code !== USER_DATA_DUPLICATE_KEY) {
+				// A key the platform generated itself (a managed service's own variable) answers an `errorList` that holds the
+				// duplicate beside `userDataUseOfSystemKey`; updating its record is allowed (measured on `zbox@1`).
+				if (!(error instanceof ZeropsApiError) || (error.code !== USER_DATA_DUPLICATE_KEY && !error.listedCodes.includes(USER_DATA_DUPLICATE_KEY))) {
 					throw error
 				}
 			}

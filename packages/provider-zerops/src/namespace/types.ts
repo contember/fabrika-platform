@@ -5,6 +5,7 @@ import type { ZeropsArtifactSourceDescriptor } from '../manifest'
 import type { ZeropsSourceRepository } from '../source'
 import type { ZeropsSourcePort } from '../source/port'
 import type { ZeropsSourceTarget } from '../types'
+import type { ZboxFetch } from '../zbox'
 
 export type ZeropsNamespacePublicAccess = 'custom-domain' | 'zerops-subdomain'
 
@@ -92,6 +93,8 @@ export interface ZeropsNamespaceOptions {
 	/** The installation's own project, which no namespace may create into or adopt. Absent until `platform deploy` writes it. */
 	readonly installationProjectId?: string
 	readonly api: ZeropsApi
+	/** The transport of the sandbox host's Box API; absent, the global `fetch`. */
+	readonly zboxFetch?: ZboxFetch
 	readonly sleep?: Sleeper
 }
 

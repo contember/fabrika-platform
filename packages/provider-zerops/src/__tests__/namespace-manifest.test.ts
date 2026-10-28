@@ -1,5 +1,5 @@
 import { type ContractArtifact, contractDigest } from '@fabrika/auth-core'
-import type { JsonValue, ProviderApprovedAccess, ProviderNamespaceMember } from '@fabrika/provider-contract'
+import type { JsonValue, ProviderApprovedAccess, ProviderNamespaceDevSandbox, ProviderNamespaceMember } from '@fabrika/provider-contract'
 import { contractProxyTable, parseProxyManifest } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
 import { schemaFromContract } from '../../../app/src/contract/platform'
@@ -8,6 +8,7 @@ import { defineApp } from '../authoring'
 import { FABRIKA_CHECK_VERSION } from '../execution'
 import { compileFabrikaManifest, zeropsArtifactCodec, type ZeropsArtifactSourceDescriptor } from '../manifest'
 import { compileNamespaceProxyManifest } from '../namespace/manifest'
+import { SANDBOX_UPSTREAM, sandboxUpstreamHost } from '../sandbox-host'
 
 const SOURCE_DESCRIPTOR: ZeropsArtifactSourceDescriptor = {
 	path: 'zerops.yaml',
@@ -193,5 +194,80 @@ describe('namespace proxy manifest', () => {
 		)
 		const foreign = { ...member('alpha', 'alpha.example.test'), artifact: { provider: 'other', version: 1, payload: {} } }
 		expect(() => compileNamespaceProxyManifest('apps-prod', [foreign])).toThrow('belongs to provider "other"')
+	})
+})
+
+describe('namespace proxy manifest: dev sandboxes', () => {
+	const WORKSPACE_A = '0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b'
+	const WORKSPACE_B = '0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5c'
+	const sandbox = (workspaceId: string, sandboxId: string, access: ProviderApprovedAccess): ProviderNamespaceDevSandbox => ({
+		workspaceId,
+		host: `${workspaceId}.Dev.Example.com`,
+		upstreamHost: sandboxUpstreamHost(sandboxId),
+		proxySecret: `${workspaceId}-secret`,
+		access,
+	})
+	const devMember = (sandboxes: readonly ProviderNamespaceDevSandbox[]): ProviderNamespaceMember => ({
+		...member('notes', 'dev.example.com'),
+		env: 'dev',
+		devSandboxes: sandboxes,
+	})
+
+	test("routes a dev member only through one entry per sandbox, each with its own table, audience and the sandbox host's router", () => {
+		const narrowed: ContractArtifact = { ...notesArtifact, endpoints: notesArtifact.endpoints.slice(0, 1) }
+		const manifest = compileNamespaceProxyManifest('apps-dev', [
+			devMember([sandbox(WORKSPACE_A, 'sbxa', approved(notesArtifact)), sandbox(WORKSPACE_B, 'sbxb', approved(narrowed))]),
+		])
+		expect(manifest.apps).toEqual([
+			{
+				id: `dev:notes:${WORKSPACE_A}`,
+				hosts: [`${WORKSPACE_A}.dev.example.com`],
+				upstream: SANDBOX_UPSTREAM,
+				scheme: 'https',
+				...TABLE,
+				audience: 'notes@dev',
+				upstreamHost: sandboxUpstreamHost('sbxa'),
+			},
+			{
+				id: `dev:notes:${WORKSPACE_B}`,
+				hosts: [`${WORKSPACE_B}.dev.example.com`],
+				upstream: SANDBOX_UPSTREAM,
+				scheme: 'https',
+				...contractProxyTable(narrowed),
+				audience: 'notes@dev',
+				upstreamHost: sandboxUpstreamHost('sbxb'),
+			},
+		])
+		expect(parseProxyManifest(manifest)).toEqual(manifest)
+	})
+
+	test("a dev member with no sandbox is not routed at all, and its artifact's upstream is never used", () => {
+		expect(compileNamespaceProxyManifest('apps-dev', [devMember([])])).toEqual({ apps: [] })
+		const broken = { ...devMember([sandbox(WORKSPACE_A, 'sbxa', approved(notesArtifact))]), artifact: { provider: 'other', version: 1, payload: {} } }
+		expect(compileNamespaceProxyManifest('apps-dev', [broken]).apps.map((app) => app.id)).toEqual([`dev:notes:${WORKSPACE_A}`])
+	})
+
+	test("a sandbox entry carries its member's operations origin and cross origins", () => {
+		const dev = {
+			...devMember([sandbox(WORKSPACE_A, 'sbxa', approved(notesArtifact))]),
+			operationsOrigin: 'https://operations.example.com',
+			crossOrigins: ['https://partner.example.org'],
+		}
+		expect(compileNamespaceProxyManifest('apps-dev', [dev]).apps[0]).toMatchObject({
+			operationsOrigin: 'https://operations.example.com',
+			crossOrigins: ['https://partner.example.org'],
+		})
+	})
+
+	test("refuses a sandbox host that collides with another entry's host", () => {
+		const colliding = { ...sandbox(WORKSPACE_A, 'sbxa', approved(notesArtifact)), host: 'Beta.example.com' }
+		expect(() => compileNamespaceProxyManifest('apps-dev', [member('beta', 'beta.example.com'), devMember([colliding])])).toThrow(
+			'duplicate proxy host `beta.example.com`',
+		)
+		expect(() =>
+			compileNamespaceProxyManifest('apps-dev', [
+				devMember([sandbox(WORKSPACE_A, 'sbxa', approved(notesArtifact)), sandbox(WORKSPACE_A, 'sbxb', approved(notesArtifact))]),
+			])
+		).toThrow('duplicate proxy app id')
 	})
 })

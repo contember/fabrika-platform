@@ -92,7 +92,7 @@
 // arrives fully resolved). Only the proxy needs this, and it declares it explicitly below.
 
 import type { ZeropsHealthCheckSpec, ZeropsReadinessCheckSpec, ZeropsYamlSetupSpec, ZeropsYamlSpec } from '../../index'
-import { FABRIKA_PROXY_MANIFEST_BRAND } from '../../proxy-manifest-carrier'
+import { FABRIKA_PROXY_MANIFEST_BRAND, FABRIKA_PROXY_MANIFEST_SANDBOXES } from '../../proxy-manifest-carrier'
 
 // ── Readiness and liveness: two mechanisms, two questions ──────────────────────────────────────────
 //
@@ -406,6 +406,8 @@ const proxy: ZeropsYamlSetupSpec = {
 			// `brand`, so Control may send the installation's client logo (ADR-0066). An older pin's parser refuses the
 			// key and fails its build, so it is sent only where this is (`zeropsProxyAcceptsBrand`).
 			[FABRIKA_PROXY_MANIFEST_BRAND]: '1',
+			// The same kind of marker for dev sandbox entries (`zeropsProxyAcceptsSandboxes`).
+			[FABRIKA_PROXY_MANIFEST_SANDBOXES]: '1',
 		},
 		// CGO off makes the binary static, which is what lets it run on Alpine/musl.
 		prepareCommands: ['CGO_ENABLED=0 GOBIN=/tmp/gobin go install github.com/caddyserver/caddy/v2/cmd/caddy@v2.10.2'],

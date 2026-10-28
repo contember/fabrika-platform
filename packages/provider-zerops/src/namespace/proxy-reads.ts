@@ -3,8 +3,10 @@
 // republish; and it has no terminal sign-out. So a deploy that would publish either, or a terminal, is refused before
 // publication while the namespace's proxy source is not this control plane's own.
 
-import type { ProviderApprovedAccess } from '@fabrika/provider-contract'
+import { type ProviderApprovedAccess, ProviderNamespaceError } from '@fabrika/provider-contract'
 import { contractProxyTable, type OlderProxyReaders } from '@fabrika/proxy-core/manifest'
+import { zeropsProxyAcceptsSandboxes } from '../proxy-manifest-carrier'
+import { ZEROPS_PROXY_SANDBOXES_UNSUPPORTED } from './errors'
 import type { ZeropsNamespaceProxySource } from './types'
 
 export type { OlderProxyReader, OlderProxyReaders } from '@fabrika/proxy-core/manifest'
@@ -51,5 +53,18 @@ export function assertNamespaceProxyReads(
 		`the proxy of deployment namespace \`${namespace}\` is pinned to an older source than this platform's, and no older release's proxy reads or serves ${
 			rows.map((row) => `\`${row}\``).join(', ')
 		}; re-pin it with \`fabrika control namespaces update --namespace=${namespace} --proxy-source=current\`, then deploy again`,
+	)
+}
+
+/**
+ * Refuses dev sandbox entries for a namespace whose pinned proxy cannot parse their `audience` and `upstreamHost`: its
+ * strict parser would fail the proxy build. The row and CSP judges above see neither field, so this marker is their gate.
+ */
+export function assertNamespaceProxyAcceptsSandboxes(namespace: string, pinned: ZeropsNamespaceProxySource): void {
+	if (zeropsProxyAcceptsSandboxes(pinned.descriptor.contents)) return
+	throw new ProviderNamespaceError(
+		`the proxy of deployment namespace \`${namespace}\` is pinned to a source that cannot serve dev sandboxes; re-pin it with \`fabrika control namespaces update --namespace=${namespace} --proxy-source=current\`, then try again`,
+		ZEROPS_PROXY_SANDBOXES_UNSUPPORTED,
+		false,
 	)
 }

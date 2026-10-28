@@ -3,7 +3,11 @@ import { ZEROPS_APPLICATION_PORT } from './execution'
 /** The hostname of a namespace's dev sandbox host: a Zerops Box Workspace, which runs one sandbox per MCP workspace. */
 export const SANDBOX_HOST_HOSTNAME = 'zbox'
 
+/** The type an import declares. */
 export const SANDBOX_HOST_TYPE = 'zbox@1'
+
+/** The type the platform reads back for it (measured live): the OS-qualified form of `SANDBOX_HOST_TYPE`. */
+export const SANDBOX_HOST_SERVICE_TYPE = 'ubuntu/zbox@1'
 
 /** The Box API port. Control reaches it over the service's public subdomain, with the key Fabrika generated for it. */
 export const SANDBOX_HOST_API_PORT = 8080

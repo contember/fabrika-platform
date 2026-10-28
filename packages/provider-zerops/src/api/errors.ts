@@ -21,8 +21,11 @@ export const isAppVersionNotFoundResponse = (value: unknown): boolean => {
  * branch on `userDataDuplicateKey` rather than matching a prose message.
  */
 export class ZeropsApiError extends Error {
-	constructor(message: string, readonly status: number, readonly code: string) {
+	/** The codes of an `errorList` answer's entries: the platform reports several refusals of one request there. */
+	readonly listedCodes: readonly string[]
+	constructor(message: string, readonly status: number, readonly code: string, listedCodes: readonly string[] = []) {
 		super(message)
+		this.listedCodes = listedCodes
 		this.name = 'ZeropsApiError'
 	}
 }
@@ -45,6 +48,7 @@ export const apiError = (label: string, status: number, body: unknown, redactDet
 	const { error: inner, ...outer } = errorEnvelopeSchema.parse(body)
 	const code = inner.code ?? outer.code ?? ''
 	const message = redactDetail ? '' : (inner.message ?? outer.message ?? '')
-	const detail = [code, message].filter((part) => part !== '').join(': ')
-	return new ZeropsApiError(`zerops: ${label} failed (${status})${detail === '' ? '' : ` — ${detail.slice(0, 300)}`}`, status, code)
+	const listed = [...inner.meta, ...outer.meta].flatMap((entry) => entry.code === undefined ? [] : [entry.code])
+	const detail = [code, ...listed, message].filter((part) => part !== '').join(': ')
+	return new ZeropsApiError(`zerops: ${label} failed (${status})${detail === '' ? '' : ` — ${detail.slice(0, 300)}`}`, status, code, listed)
 }
