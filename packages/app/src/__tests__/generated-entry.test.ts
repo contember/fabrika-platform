@@ -106,5 +106,34 @@ describe('a process the generated entrypoint serves from', () => {
 				rmSync(join(root, 'fabrika'), { recursive: true, force: true })
 			}
 		})
+
+		test(`the Postgres entry on Cloudflare loads its subpath, which marks the process: its first request refuses ${kit}`, async () => {
+			mkdirSync(join(root, 'fabrika'), { recursive: true })
+			writeFileSync(join(root, GENERATED_ENTRY_FILE), generatedEntry('cloudflare-postgres'))
+			// The Worker as workerd runs it: the module loads, then a request boots the application through the loader.
+			writeFileSync(
+				join(root, 'fabrika', 'request.ts'),
+				[
+					"import worker from './entry.generated'",
+					'',
+					'const env = { FABRIKA_PROXY_SECRET: "secret", FABRIKA_DATABASE: { connectionString: "postgres://run:pw@127.0.0.1:1/db" } }',
+					"await worker.fetch(new Request('https://app.test/'), env, { waitUntil: () => {}, passThroughOnException: () => {} })",
+					'',
+				].join('\n'),
+			)
+			try {
+				const child = Bun.spawn(['bun', join('fabrika', 'request.ts')], {
+					cwd: root,
+					env: { PATH: process.env['PATH'] ?? '', FABRIKA_RELEASE: 'r1', PRODUCTION_LOAD_KIT: kit },
+					stdout: 'pipe',
+					stderr: 'pipe',
+				})
+				const [stderr, code] = await Promise.all([new Response(child.stderr).text(), child.exited])
+				expect(code).not.toBe(0)
+				expect(stderr).toContain('is a test helper; this process serves an application')
+			} finally {
+				rmSync(join(root, 'fabrika'), { recursive: true, force: true })
+			}
+		})
 	}
 })

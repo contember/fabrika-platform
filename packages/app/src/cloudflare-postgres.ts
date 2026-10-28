@@ -3,74 +3,98 @@
 // The entry `fabrika app build` writes for a Cloudflare application whose config chooses Postgres: the stateless Worker
 // serves every request over the `FABRIKA_DATABASE` Hyperdrive binding, and a small Durable Object (the class and binding
 // names of ADR-0065) runs only the jobs from its alarm.
-//
-// A seam for now: the signatures are final, the runtime is not written yet.
 
-import type { PostgresJSSql } from 'kysely-postgres-js'
+import { OPS_PREFIX, opsRefusal, PROXY_SECRET_HEADER } from '@fabrika/auth-core'
 import type { ContractWorker } from './cloudflare.js'
 import type { ImplementationLoader } from './cloudflare/application.js'
-import type { CrashEvents } from './implement/crashes.js'
-import type { JobClock } from './jobs/runner.js'
+import { TICK_HEADER } from './cloudflare/application.js'
+import {
+	jobObject,
+	notifyWake,
+	PostgresEvent,
+	type PostgresWorkerOptions,
+	proxySecretOf,
+	registerPostgresApplication,
+} from './cloudflare/postgres-runtime.js'
 
 export { markProductionProcess } from '@fabrika/db/production'
+export { FabrikaJobObject, type JobObjectState } from './cloudflare/postgres-object.js'
+export {
+	HYPERDRIVE_CLIENT_MAX,
+	POSTGRES_ALARM_REFRESH_MS,
+	type PostgresEventClient,
+	type PostgresWorkerOptions,
+	WAKE_DELAY_HEADER,
+	WAKE_PATH,
+} from './cloudflare/postgres-runtime.js'
 
-/** The part of a postgres.js client the Hyperdrive engine reads: one reserved connection per transaction. */
-type HyperdriveClient = Pick<PostgresJSSql, 'reserve'>
-
-/** One event's postgres.js client, which the Worker ends after the event's tracked work settled. */
-export interface PostgresEventClient extends HyperdriveClient {
-	end(options?: { readonly timeout?: number }): Promise<void>
-}
-
-export interface PostgresWorkerOptions {
-	/** Where the isolate hears of an unhandled rejection; the global `unhandledrejection` event by default. */
-	readonly rejections?: CrashEvents
-	/** What posts a report to Operations' ingest; `fetch` by default. */
-	readonly operationsFetch?: (request: Request) => Promise<Response>
-	/** The jobs' and the alarm's waits and an attempt's deadline; the system clock by default. */
-	readonly clock?: JobClock
-	/**
-	 * Opens one event's client from `FABRIKA_DATABASE.connectionString`;
-	 * `postgres(url, { max: HYPERDRIVE_CLIENT_MAX, fetch_types: false, prepare: false })` by default.
-	 */
-	readonly connect?: (connectionString: string) => PostgresEventClient
-}
-
-/** The connections one event's client opens at most: Workers allow six simultaneous connections per invocation. */
-export const HYPERDRIVE_CLIENT_MAX = 5
-
-/** The job object re-arms its alarm at least this often, so a wake nothing projected still runs. */
-export const POSTGRES_ALARM_REFRESH_MS = 60_000
-
-/** The path on which the Worker tells the job object that a request projected a wake. */
-export const WAKE_PATH = '/__fabrika/wake'
-
-/** The milliseconds from now until the earliest wake the request projected. */
-export const WAKE_DELAY_HEADER = 'X-Fabrika-Wake-Delay'
-
-/** The Worker module of a Cloudflare contract application on Postgres, called only by the generated entrypoint. */
-export function createPostgresContractWorker(_load: ImplementationLoader, _options?: PostgresWorkerOptions): ContractWorker {
-	throw new Error('not implemented (WU2)')
-}
-
-/** What the job object reads of its Durable Object state. */
-export interface JobObjectState {
-	readonly storage: { setAlarm(at: number): Promise<void>; getAlarm(): Promise<number | null>; deleteAlarm(): Promise<void> }
-	waitUntil(promise: Promise<unknown>): void
-	blockConcurrencyWhile<T>(callback: () => Promise<T>): Promise<T>
-}
-
-/** The Durable Object of a Postgres application: it runs the jobs from its alarm and serves no request of its own. */
-export class FabrikaJobObject {
-	constructor(_state: JobObjectState, _env: Readonly<Record<string, unknown>>) {
-		throw new Error('not implemented (WU2)')
+/**
+ * The Worker module of a Cloudflare contract application on Postgres, called only by the generated entrypoint, which
+ * also exports `FabrikaJobObject` as `FabrikaApplication`. The Worker boots the application once per isolate and serves
+ * each request itself, on a postgres.js client of its own that ends once the work the request handed to `waitUntil`
+ * settled. A request whose writes changed a wake (a kick, a claim) tells the job object afterwards, which lowers its
+ * alarm to the earliest; `scheduled` sends it the repair tick. An ops request is refused: a Postgres environment has no
+ * ops channel.
+ */
+export function createPostgresContractWorker(load: ImplementationLoader, options: PostgresWorkerOptions = {}): ContractWorker {
+	const application = registerPostgresApplication(load, options)
+	return {
+		async fetch(request, env, exec) {
+			if (new URL(request.url).pathname.startsWith(OPS_PREFIX)) {
+				return opsRefusal()
+			}
+			const secret = proxySecretOf(env)
+			const outcome = await application.current(env, (promise) => exec.waitUntil(promise))
+			if ('failure' in outcome) {
+				throw outcome.failure
+			}
+			const { app } = outcome
+			// The earliest wake the request's writes left, in epoch milliseconds of this isolate's clock.
+			let wakeAt: number | null = null
+			const event = new PostgresEvent(application.connect(env), async (transaction) => {
+				const delay = await app.jobs.scheduler?.untilNext(transaction)
+				if (delay !== undefined && delay !== null) {
+					const at = Date.now() + Math.max(0, delay)
+					wakeAt = wakeAt === null ? at : Math.min(wakeAt, at)
+				}
+			})
+			const headers = new Headers(request.headers)
+			// Only the Worker's own `scheduled` reaches the tick.
+			headers.delete(TICK_HEADER)
+			headers.set(PROXY_SECRET_HEADER, secret)
+			try {
+				return await event.run(() => app.fetch(new Request(request, { headers }), event.exec))
+			} finally {
+				exec.waitUntil(finish(event, env, () => wakeAt))
+			}
+		},
+		async scheduled(controller, env) {
+			const tick = new Request('https://application.invalid/', {
+				method: 'POST',
+				headers: { [PROXY_SECRET_HEADER]: proxySecretOf(env), [TICK_HEADER]: String(controller.scheduledTime) },
+			})
+			const response = await jobObject(env)(tick)
+			await response.body?.cancel()
+			if (!response.ok) {
+				throw new Error(`the application's job object answered the repair tick with ${response.status}`)
+			}
+		},
 	}
+}
 
-	fetch(_request: Request): Promise<Response> {
-		return Promise.reject(new Error('not implemented (WU2)'))
+/**
+ * After the response: once every work the request handed on settled (its writes committed), the job object hears of
+ * the earliest wake they left, then the request's client ends. A notice that fails is caught by the object's refresh.
+ */
+async function finish(event: PostgresEvent, env: Readonly<Record<string, unknown>>, wakeAt: () => number | null): Promise<void> {
+	await event.settled()
+	const at = wakeAt()
+	if (at !== null) {
+		try {
+			await notifyWake(env, at - Date.now())
+		} catch {
+			console.error('fabrika: the job object did not hear of a wake: wake_failed; its alarm refresh runs it')
+		}
 	}
-
-	alarm(): Promise<void> {
-		return Promise.reject(new Error('not implemented (WU2)'))
-	}
+	await event.end()
 }

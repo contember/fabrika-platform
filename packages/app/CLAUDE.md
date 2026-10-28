@@ -9,7 +9,7 @@ target: an application declares `fabrika.contract.ts` with the staged kit and se
 `serve` (`@fabrika/app/implement`), booted by the generated entrypoint that
 `fabrika app build` writes (`@fabrika/app/build`). The installation's own services
 (IAM, Control, Operations) declare service contracts and serve them with `serveService`
-(`@fabrika/app/service`). The runtime adapters (`@fabrika/app/bun`, `@fabrika/app/cloudflare`) serve a
+(`@fabrika/app/service`). The runtime adapters (`@fabrika/app/bun`, `@fabrika/app/cloudflare`, `@fabrika/app/cloudflare-postgres`) serve a
 `FetchService` (`{ fetch(request, env, exec) }`, `src/fetch.ts`). How it works:
 [application runtime](../../docs/reference/application-runtime.md).
 
@@ -69,6 +69,8 @@ bun test src/__tests__/cloudflare-export.test.ts    # the dump producer over bun
 bun test src/__tests__/cloudflare-import.test.ts    # the importer: each step, retries, refusals, and a round trip through the producer
 bun test src/__tests__/cloudflare-restore.test.ts   # the point-in-time restore steps over a recovery double: sentinel, bookmarks, barrier turn
 bun test src/__tests__/cloudflare-tracker.test.ts   # the isolate's pending-work tracker: timers and waitUntil, scrubbed bounded stacks
+bun test src/__tests__/cloudflare-postgres-adapter.test.ts  # Postgres through Hyperdrive: the Worker's clients and wake notices, the job object's alarm (needs FABRIKA_TEST_POSTGRES_URL)
+bun test src/__tests__/cloudflare-postgres-runtime.test.ts  # the same in Lopata: ctx.db over the binding, a kick run in the object, R2 (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/dev-launcher.test.ts     # the dev launcher against a stub of Control's source receiver: the digest decision, migrate and reset (the last two need FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/dev-changes.test.ts      # what a dev sync's paths mean: a bootstrap, a migration, an SPA build
 ```
@@ -87,6 +89,9 @@ src/
   cloudflare.ts       Worker module adapter and lifecycle types; createContractWorker: the Worker that forwards each
                       request and the repair tick to the environment's Durable Object, and an ops request to the
                       object its body names; re-exports FabrikaApplication
+  cloudflare-postgres.ts  @fabrika/app/cloudflare-postgres: createPostgresContractWorker, the Worker of an application
+                      on Postgres that serves every request itself over the FABRIKA_DATABASE Hyperdrive binding;
+                      re-exports FabrikaJobObject
   cloudflare/         what @fabrika/app/cloudflare runs (ADR-0065)
     application.ts    FabrikaApplication, the environment's one Durable Object: verifies the hop, migrates its SQLite,
                       boots the application once per isolate, serves requests, the alarm and the repair tick; registerApplication
@@ -111,6 +116,10 @@ src/
                       barrier's turn, verify reads the sentinel
     tracker.ts        the ops operation `timers` (ADR-0070 §10): the isolate's live timers and `waitUntil` promises
                       with scrubbed, bounded stacks, while switched on
+    postgres-runtime.ts  what the Postgres Worker and its job object share: the isolate's one boot over
+                      openHyperdrive, the event scope (one postgres.js client per event), connectHyperdrive, the wake notice
+    postgres-object.ts  FabrikaJobObject: the job object of a Postgres application; the alarm, the repair tick, the
+                      wake notice that lowers its alarm
   bun.ts              Bun handler, background-task tracking, graceful drain; serveContract; the local `directory`
                       mail provider, which boot honours only under a loopback issuer
   disk-assets.ts      diskAssets: the SPA mounts from their build directories, as the Bun deploy and the test kit serve them
@@ -1109,6 +1118,34 @@ object directly over `bunSqliteStorage` (the IAM binding, the assets, the crash 
   re-arm. A kick runs in the object after its commit. A scanning file kind does not boot there (`sqliteProblems`).
 - **Every handler holds the object's transaction.** workerd resets an object whose transaction runs about 30 s, so the
   provider refuses a procedure's or a webhook's `timeoutMs` above 25 s (`CLOUDFLARE_MAX_HANDLER_MS`).
+
+## The Cloudflare runtime on Postgres
+
+A Cloudflare application whose `fabrika.config.ts` chooses `database: { kind: 'postgres', … }` gets the
+`cloudflare-postgres` entry (`@fabrika/app/cloudflare-postgres`): the stateless Worker serves every request over the
+`FABRIKA_DATABASE` Hyperdrive binding, and a Durable Object with the same class and binding names (`FabrikaJobObject`
+exported as `FabrikaApplication`) runs only the jobs. `cloudflare-postgres-adapter.test.ts` constructs both directly over
+a real Postgres; `cloudflare-postgres-runtime.test.ts` runs them in Lopata.
+
+- **One boot per isolate, shared by the Worker and the object** (`PostgresApplication` in `postgres-runtime.ts`), like the
+  SQLite object's: a failed boot is reported once per streak and retried after a backoff that doubles to 60 s. It refuses
+  to boot without the binding, opens the data layer with `openHyperdrive` on `app_<id>` of `FABRIKA_IAM_APP_ID`'s
+  application, and boots with `connections: HYPERDRIVE_CLIENT_MAX` and `kickRuns: 'scheduler'`.
+- **Every event opens its own postgres.js client and ends it only once the work it handed to `waitUntil` settled**
+  (`PostgresEvent`); the engine reaches the event's client through `AsyncLocalStorage`. `connectHyperdrive` opens it
+  with `@fabrika/db/hyperdrive`'s `HYPERDRIVE_CLIENT_OPTIONS` (`fetch_types` on: with it off, postgres.js 3.4.9 never
+  answers a `reserve` that opens a connection).
+- **A request's kick is only its wake** (`kickRuns: 'scheduler'`): the request's projection records the earliest wake its
+  writes left, and once its tracked work settled the Worker POSTs `WAKE_PATH` with `WAKE_DELAY_HEADER` to the object
+  `application`, which lowers its alarm to it. The object's alarm only ever goes down from outside its handler: every
+  projection and notice lowers it, one at a time.
+- **The alarm**: the startup repair once per instance, then per job a take (each lease statement its own transaction)
+  and the run handed to the event; then it arms the next wake from the database, at most `POSTGRES_ALARM_REFRESH_MS`
+  ahead while the contract has a job, so a wake nothing projected still runs. The alarm's own statements project nothing
+  (before its take, the wake it takes is still due); its runs project as every write. It never throws: an error arms
+  `ALARM_RETRY_MS` ahead and is reported as `AlarmFailed`. While the handler runs, the alarm that fired counts as none.
+- **No ops channel, no barrier, no handler cap**: the object answers only its Worker (the proxy secret, else an empty
+  404), the ops prefix with `opsRefusal()` at the Worker and the object alike; backups are the database provider's.
 
 ## Jobs
 

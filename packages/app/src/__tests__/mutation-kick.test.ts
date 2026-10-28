@@ -167,7 +167,9 @@ interface Running {
  * An instance of the application over the shared schema, booted as the proxy fronts it; `projectWakes` is the runtime's
  * projection of every wake and lease change.
  */
-function start(options: { readonly projectWakes?: (transaction: Session) => Promise<void> } = {}): Running {
+function start(
+	options: { readonly projectWakes?: (transaction: Session) => Promise<void>; readonly kickRuns?: 'inline' | 'scheduler' } = {},
+): Running {
 	const world = new World()
 	const { implementation, variables } = outboxApp(world)
 	const connection = openTestPostgres({ url, schema, max: 4 })
@@ -189,6 +191,7 @@ function start(options: { readonly projectWakes?: (transaction: Session) => Prom
 		workloadTokens: recording,
 		database: connection,
 		...(options.projectWakes === undefined ? {} : { projectWakes: options.projectWakes }),
+		...(options.kickRuns === undefined ? {} : { kickRuns: options.kickRuns }),
 	})
 	const background = new Set<Promise<unknown>>()
 	const exec: RequestExecutionContext = {
@@ -599,6 +602,33 @@ describe.skipIf(!hasPostgres)('a kick is a durable wake written in the site’s 
 		const next = await running.wake()
 		expect(next).toBeGreaterThan(t2 - Date.now() - 5_000)
 		expect(next).toBeLessThanOrEqual(t2 - Date.now() + 5_000)
+	})
+
+	test("kickRuns 'scheduler': a request's kick only writes its wake, which the projection sees; no run starts in its runtime", async () => {
+		const projected: (number | null)[] = []
+		const running: Running = start({
+			kickRuns: 'scheduler',
+			projectWakes: async (transaction) => {
+				projected.push(await running.app.jobs.scheduler?.untilNext(transaction) ?? null)
+			},
+		})
+		expect((await running.call('/api/outbox.enqueue', { body: 'ks' })).status).toBe(200)
+		await running.settled()
+		expect(running.world.runs).toEqual([])
+		expect(await wakes()).toEqual([expect.objectContaining({ reason: 'kick' })])
+		expect(await leaseOf()).toBeUndefined()
+		// The wake was projected in the mutation's transaction, due now.
+		expect(projected.length).toBeGreaterThan(0)
+		expect(Math.max(0, Math.min(...projected.map((delay) => delay ?? Number.POSITIVE_INFINITY)))).toBe(0)
+		// The scheduler (the job object's alarm on Cloudflare) runs it, as any other wake.
+		const scheduler = running.app.jobs.scheduler
+		if (scheduler === null) throw new Error('no scheduler')
+		const taken = await scheduler.take('deliver')
+		if (taken.fence === null) throw new Error('nothing taken')
+		expect(await scheduler.run('deliver', taken.fence)).toEqual({ status: 'succeeded', attempts: 1 })
+		expect(running.world.deliveredBodies).toEqual(['ks'])
+		// The run consumed the kick; a scheduled run leaves its job's next cron wake.
+		expect((await wakes()).map((wake) => wake.reason)).toEqual(['cron'])
 	})
 
 	test('a crash between the commit and the kick’s start leaves the wake, and the wake timer runs the job', async () => {
