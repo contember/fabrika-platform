@@ -23,6 +23,7 @@ export {
 	APPLICATION_MIGRATION_LEDGER,
 	applicationDatabaseRoles,
 	applicationMigrationLockKey,
+	applicationMigrationUrl,
 	applicationRuntimeUrl,
 	DEFAULT_MIGRATION_LOCK_TIMEOUT_MS,
 	DEFAULT_MIGRATION_STATEMENT_TIMEOUT_MS,

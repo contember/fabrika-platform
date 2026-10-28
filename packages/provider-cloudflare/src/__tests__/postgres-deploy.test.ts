@@ -8,7 +8,7 @@ import { type GeneratedConfig, Worker } from 'oblaka-iac'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import type { CloudflareAppConfig, CloudflareCollaborators, CommandResult, CommandSpec } from '..'
 import { composeLocalApplication, createCloudflareDeployer, defineApp, generateWranglerConfigs, stageLocalAssets } from '..'
-import { type HyperdriveUpsert, localDatabaseConnection, PENDING_HYPERDRIVE_ID, runtimeOrigin } from '../database'
+import { type HyperdriveUpsert, localDatabaseConnection, migrationDatabaseConnection, PENDING_HYPERDRIVE_ID, runtimeOrigin } from '../database'
 import { PROXY_MANIFEST_DEFINE } from '../proxy'
 
 const PROVISIONING = 'postgres://owner:pr%40vision-secret@db.example.com:5432/notes_db'
@@ -50,7 +50,7 @@ const appConfig = (
 	overrides: Partial<Pick<CloudflareAppConfig, 'pipeline' | 'resources'>> & { readonly database?: unknown } = {},
 ): CloudflareAppConfig => {
 	const { database, ...rest } = overrides
-	const config = defineApp({ id: 'demo', database: postgres, ...rest })
+	const config = defineApp({ id: 'notes', database: postgres, ...rest })
 	// A checkout's config is plain JavaScript: whatever it carries reaches the deployer.
 	return database === undefined ? config : { ...config, database: database === null ? undefined : postgresShape(database) }
 }
@@ -62,7 +62,7 @@ const postgresShape = (value: unknown): CloudflareAppConfig['database'] => {
 }
 
 const appWorker = (raw: Record<string, unknown> = {}): Worker => {
-	const worker = new Worker({ dir: '.', workers_dev: false, preview_urls: false, name: 'demo', compatibility_flags: [], bindings: {}, main: ENTRY })
+	const worker = new Worker({ dir: '.', workers_dev: false, preview_urls: false, name: 'notes', compatibility_flags: [], bindings: {}, main: ENTRY })
 	Object.assign(worker.options, raw)
 	return worker
 }
@@ -110,19 +110,24 @@ interface DeployOptions {
 	readonly approved?: false
 	readonly runCommand?: (spec: CommandSpec) => CommandResult
 	readonly contract?: ContractArtifact
+	/** The application's declared variables the runner read; none by default. */
+	readonly vars?: Readonly<Record<string, string>>
+	/** What Control hands the job as its managed environment; none by default. */
+	readonly managedEnvironment?: Readonly<Record<string, string>>
 }
 
 const deploy = (config: CloudflareAppConfig, options: DeployOptions = {}) => {
 	const contract = options.contract ?? notesArtifact
 	return createCloudflareDeployer({ accountId: 'acc-1', apiToken: 'tok-1', collaborators: collaborators(config, options.runCommand) })({
-		appId: 'demo',
+		// The runner takes the id from the checkout's config, as `deployCloudflareConfig` does.
+		appId: config.id,
 		env: 'stage',
 		domain: 'stage.example.com',
 		cwd: REPO,
 		configPath: 'app/fabrika.config.ts',
 		secrets: options.secrets ?? { DATABASE_URL: PROVISIONING },
-		vars: {},
-		managedEnvironment: parseManagedEnvironment({}),
+		vars: options.vars ?? {},
+		managedEnvironment: parseManagedEnvironment(options.managedEnvironment ?? {}),
 		...(options.approved === false ? {} : {
 			approved: {
 				kind: 'contract' as const,
@@ -144,10 +149,10 @@ const failure = (result: Awaited<ReturnType<ReturnType<typeof createCloudflareDe
 	result.steps.flatMap((step) => step.error === undefined ? [] : [step.error]).join('\n')
 
 const applicationConfig = (): GeneratedConfig['config'] | undefined =>
-	rec.provisioned.at(-1)?.find((generated) => generated.config.name === 'stage-demo')?.config
+	rec.provisioned.at(-1)?.find((generated) => generated.config.name === 'stage-notes')?.config
 
 const proxyConfig = (): GeneratedConfig['config'] | undefined =>
-	rec.provisioned.at(-1)?.find((generated) => generated.config.name === 'stage-demo-proxy')?.config
+	rec.provisioned.at(-1)?.find((generated) => generated.config.name === 'stage-notes-proxy')?.config
 
 /** The proxy's one manifest entry, from the `define` literal baked into its bundle. */
 const manifestApp = () => {
@@ -164,7 +169,7 @@ describe('an application on Postgres through Hyperdrive', () => {
 		expect(result.status).toBe('succeeded')
 		expect(result.steps.map((step) => step.id)).toEqual(['build', 'provision-database', 'provision-resources', 'deploy-worker'])
 		expect(rec.logs).toContain(`  [dry-run] would run: fabrika db migrate in ${APP_DIR} (the provisioning URL from \`DATABASE_URL\`)`)
-		expect(rec.logs).toContain('  [dry-run] would write the Hyperdrive config stage-demo-database (caching disabled) over the runtime role')
+		expect(rec.logs).toContain('  [dry-run] would write the Hyperdrive config stage-notes-database (caching disabled) over the runtime role')
 		expect(rec.upserts).toEqual([])
 		expect(everything()).not.toContain(PROVISIONING)
 		// A dry run hands out no id, so the configs carry the pending one.
@@ -178,7 +183,7 @@ describe('an application on Postgres through Hyperdrive', () => {
 		const migrate = rec.commands.find((command) => command.args.join(' ') === 'db migrate')
 		expect(migrate?.command).toBe(CLI)
 		expect(migrate?.cwd).toBe(APP_DIR)
-		const expected: Record<string, string> = { FABRIKA_APP_ID: 'demo', FABRIKA_APP_DATABASE_URL: PROVISIONING }
+		const expected: Record<string, string> = { FABRIKA_APP_ID: 'notes', FABRIKA_APP_DATABASE_URL: PROVISIONING }
 		for (const name of ['PATH', 'HOME', 'TMPDIR']) {
 			const value = process.env[name]
 			if (value !== undefined) expected[name] = value
@@ -193,29 +198,29 @@ describe('an application on Postgres through Hyperdrive', () => {
 		for (const command of rec.commands) {
 			if (command !== migrate) expect(JSON.stringify(command.env ?? {})).not.toContain(PROVISIONING)
 		}
-		const origin = runtimeOrigin(PROVISIONING, 'demo')
+		const origin = runtimeOrigin(PROVISIONING, 'notes')
 		expect(everything()).not.toContain(PROVISIONING)
 		expect(everything()).not.toContain(PROVISIONING_PASSWORD)
 		expect(everything()).not.toContain(origin.password)
-		expect(rec.logs).toContain(`  wrote the Hyperdrive config stage-demo-database (${HYPERDRIVE})`)
+		expect(rec.logs).toContain(`  wrote the Hyperdrive config stage-notes-database (${HYPERDRIVE})`)
 	})
 
 	test('the Hyperdrive config connects as the runtime role, and the Worker binds exactly its id with Smart Placement', async () => {
 		const result = await deploy(appConfig())
 		expect(failure(result)).toBe('')
 		expect(rec.upserts).toEqual([
-			expect.objectContaining({ accountId: 'acc-1', apiToken: 'tok-1', name: 'stage-demo-database', origin: runtimeOrigin(PROVISIONING, 'demo') }),
+			expect.objectContaining({ accountId: 'acc-1', apiToken: 'tok-1', name: 'stage-notes-database', origin: runtimeOrigin(PROVISIONING, 'notes') }),
 		])
-		expect(rec.upserts[0]?.origin.user).toBe('run_demo')
+		expect(rec.upserts[0]?.origin.user).toBe('run_notes')
 		const application = applicationConfig()
 		expect(application?.hyperdrive).toEqual([{ binding: 'FABRIKA_DATABASE', id: HYPERDRIVE }])
 		expect(application?.placement).toEqual({ mode: 'smart' })
 		// Its jobs still run in the object, with the files bucket and the repair tick.
 		expect(application?.durable_objects?.bindings).toEqual([{ name: 'FABRIKA_APPLICATION', class_name: 'FabrikaApplication' }])
-		expect(application?.r2_buckets).toEqual([{ binding: 'FABRIKA_FILES', bucket_name: 'stage-demo-files' }])
+		expect(application?.r2_buckets).toEqual([{ binding: 'FABRIKA_FILES', bucket_name: 'stage-notes-files' }])
 		// The URL and the runtime password reach no Worker.
 		expect(JSON.stringify(rec.provisioned)).not.toContain(PROVISIONING_PASSWORD)
-		expect(JSON.stringify(rec.provisioned)).not.toContain(runtimeOrigin(PROVISIONING, 'demo').password)
+		expect(JSON.stringify(rec.provisioned)).not.toContain(runtimeOrigin(PROVISIONING, 'notes').password)
 		expect(proxyConfig()?.hyperdrive).toBeUndefined()
 		expect(proxyConfig()?.placement).toBeUndefined()
 	})
@@ -226,7 +231,7 @@ describe('an application on Postgres through Hyperdrive', () => {
 		expect(applicationConfig()?.vars?.[FABRIKA_APPLICATION_OBJECT]).toBeUndefined()
 		expect(applicationConfig()?.vars?.['FABRIKA_APPLICATION_OBJECTS']).toBeUndefined()
 		const app = manifestApp()
-		expect(app?.id).toBe('demo@stage')
+		expect(app?.id).toBe('notes@stage')
 		expect(JSON.stringify(app)).not.toContain(OPS_PREFIX)
 		// The same contract on the object's SQLite, at the same release, gets the row and the variables.
 		rec = { commands: [], upserts: [], provisioned: [], logs: [] }
@@ -236,16 +241,25 @@ describe('an application on Postgres through Hyperdrive', () => {
 	})
 
 	test('a failed migration fails the run before any Hyperdrive config is written, with its output scrubbed', async () => {
-		const derived = runtimeOrigin(PROVISIONING, 'demo').password
+		const derived = runtimeOrigin(PROVISIONING, 'notes').password
+		// The migration role owns the schema; the CLI derives its URL from the provisioning one and connects with it.
+		const migration = migrationDatabaseConnection(PROVISIONING, 'notes')
+		const migrationPassword = new URL(migration).password
+		expect(migrationPassword).not.toBe(derived)
 		const result = await deploy(appConfig(), {
 			runCommand: (spec) =>
 				spec.args.join(' ') === 'db migrate'
-					? { exitCode: 1, stdout: '', stderr: `refused ${PROVISIONING} (${PROVISIONING_PASSWORD}, ${derived})` }
+					? {
+						exitCode: 1,
+						stdout: '',
+						stderr: `connecting to ${migration}: refused ${PROVISIONING} (${PROVISIONING_PASSWORD}, ${derived}, ${migrationPassword})`,
+					}
 					: succeeded(spec),
 		})
 		expect(result.status).toBe('failed')
 		const message = failure(result)
-		expect(message).toContain('fabrika db migrate failed (exit 1): refused [redacted] ([redacted], [redacted])')
+		expect(message).toContain('fabrika db migrate failed (exit 1): connecting to [redacted]: refused [redacted] ([redacted], [redacted], [redacted])')
+		expect(message).not.toContain(migrationPassword)
 		expect(rec.upserts).toEqual([])
 		expect(rec.provisioned).toEqual([])
 	})
@@ -278,6 +292,38 @@ describe('an application on Postgres through Hyperdrive', () => {
 			await refused(appConfig({ resources: () => appWorker({ vars: { DATABASE_URL: 'x' } }) }), {}, message)
 		})
 
+		test('with a config that names another application than the one Control deploys', async () => {
+			// The id names the Hyperdrive config the deploy overwrites and the roles it creates: another application's.
+			const other = defineApp({ id: 'other', database: postgres })
+			await refused(other, {}, 'the config declares app "other", and Control approved the contract of app "notes"')
+			await refused(appConfig(), { managedEnvironment: { FABRIKA_IAM_APP_ID: 'other@stage' } }, 'and Control deploys `other@stage`')
+			// The same on the object's SQLite: the id names its Workers too.
+			await refused(defineApp({ id: 'other' }), { approvedDatabase: null }, 'Control approved the contract of app "notes"')
+			// Control's own audience for this application is accepted.
+			expect(failure(await deploy(appConfig(), { managedEnvironment: { FABRIKA_IAM_APP_ID: 'notes@stage' } }))).toBe('')
+		})
+
+		test('with the provisioning URL or its password under another name', async () => {
+			const copied = (name: string) => `\`${name}\` holds the database's provisioning URL or its password (\`DATABASE_URL\`)`
+			await refused(
+				appConfig({ pipeline: { secrets: ['DB_URL'] } }),
+				{ secrets: { DATABASE_URL: PROVISIONING, DB_URL: PROVISIONING } },
+				copied('DB_URL'),
+			)
+			await refused(appConfig({ pipeline: { vars: ['DB_PASSWORD'] } }), { vars: { DB_PASSWORD: PROVISIONING_PASSWORD } }, copied('DB_PASSWORD'))
+			await refused(appConfig({ resources: () => appWorker({ vars: { DB: PROVISIONING } }) }), {}, copied('DB'))
+			// The password as the URL writes it, inside a longer value.
+			await refused(appConfig({ resources: () => appWorker({ vars: { DSN: `user=owner password=pr%40vision-secret` } }) }), {}, copied('DSN'))
+			// An ordinary value is no copy, and the error names the variable, never the value.
+			const message = await deploy(appConfig({ resources: () => appWorker({ vars: { DB: PROVISIONING } }) })).then(
+				() => '',
+				(error: unknown) => String(error),
+			)
+			expect(message).toContain(copied('DB'))
+			expect(message).not.toContain(PROVISIONING_PASSWORD)
+			expect(failure(await deploy(appConfig({ resources: () => appWorker({ vars: { MODE: 'postgres', HOST: 'db.example.com' } }) })))).toBe('')
+		})
+
 		test('when the config and the approval disagree', async () => {
 			await refused(appConfig(), { approvedDatabase: null }, 'Control approved no database: upgrade Control')
 			await refused(appConfig({ database: null }), {}, 'Control approved Postgres for this application, and its config names no `database`')
@@ -308,7 +354,7 @@ describe('an application on Postgres through Hyperdrive', () => {
 			await refused(
 				appConfig({ resources: () => appWorker({ hyperdrive: [{ binding: 'OTHER', id: HYPERDRIVE }] }) }),
 				{},
-				'must bind `FABRIKA_DATABASE` once, to the Hyperdrive config `stage-demo-database` this deploy wrote',
+				'must bind `FABRIKA_DATABASE` once, to the Hyperdrive config `stage-notes-database` this deploy wrote',
 			)
 			const local = [{ binding: 'FABRIKA_DATABASE', id: PENDING_HYPERDRIVE_ID, localConnectionString: 'postgres://x' }]
 			await refused(
@@ -361,7 +407,7 @@ describe('an application on Postgres through Hyperdrive', () => {
 				},
 			},
 		})({
-			appId: 'demo',
+			appId: 'notes',
 			env: 'stage',
 			domain: 'stage.example.com',
 			cwd: REPO,
@@ -382,8 +428,8 @@ describe('an application on Postgres through Hyperdrive', () => {
 
 describe('defineApp with a database', () => {
 	test('keeps a valid Postgres database and refuses any other shape', () => {
-		expect(defineApp({ id: 'demo', database: postgres }).database).toEqual(postgres)
-		expect(defineApp({ id: 'demo' }).database).toBeUndefined()
+		expect(defineApp({ id: 'notes', database: postgres }).database).toEqual(postgres)
+		expect(defineApp({ id: 'notes' }).database).toBeUndefined()
 		const invalid: unknown[] = [
 			{ kind: 'mysql', provisioningSecret: 'DATABASE_URL' },
 			{ kind: 'postgres' },
@@ -393,7 +439,7 @@ describe('defineApp with a database', () => {
 			'postgres',
 		]
 		for (const database of invalid) {
-			expect(() => defineApp(JSON.parse(JSON.stringify({ id: 'demo', database })))).toThrow('cloudflare: `database')
+			expect(() => defineApp(JSON.parse(JSON.stringify({ id: 'notes', database })))).toThrow('cloudflare: `database')
 		}
 	})
 })
@@ -403,9 +449,9 @@ describe('the local composition on Postgres', () => {
 
 	test('binds FABRIKA_DATABASE to the runtime role directly, with the deploy’s object, bucket and placement', async () => {
 		const assets = await stageLocalAssets(notesArtifact, APP_DIR)
-		const connectionString = localDatabaseConnection('postgres://owner:pw@127.0.0.1:55433/postgres', 'demo')
+		const connectionString = localDatabaseConnection('postgres://owner:pw@127.0.0.1:55433/postgres', 'notes')
 		const local = composeLocalApplication({
-			config: defineApp({ id: 'demo', database: postgres }),
+			config: defineApp({ id: 'notes', database: postgres }),
 			contract: notesArtifact,
 			assets,
 			iamOrigin: LOCAL_IAM,
@@ -417,16 +463,16 @@ describe('the local composition on Postgres', () => {
 		expect(application?.hyperdrive).toEqual([{ binding: 'FABRIKA_DATABASE', id: 'local', localConnectionString: connectionString }])
 		expect(application?.placement).toEqual({ mode: 'smart' })
 		expect(application?.durable_objects?.bindings).toEqual([{ name: 'FABRIKA_APPLICATION', class_name: 'FabrikaApplication' }])
-		expect(new URL(connectionString).username).toBe('run_demo')
+		expect(new URL(connectionString).username).toBe('run_notes')
 	})
 
 	test('requires the connection for a config on Postgres, and refuses it for one on SQLite', async () => {
 		const assets = await stageLocalAssets(notesArtifact, APP_DIR)
 		const base = { contract: notesArtifact, assets, iamOrigin: LOCAL_IAM, env: 'local' }
-		expect(() => composeLocalApplication({ ...base, config: defineApp({ id: 'demo', database: postgres }) })).toThrow(
+		expect(() => composeLocalApplication({ ...base, config: defineApp({ id: 'notes', database: postgres }) })).toThrow(
 			'the config runs on Postgres; pass `database',
 		)
-		expect(() => composeLocalApplication({ ...base, config: defineApp({ id: 'demo' }), database: { connectionString: 'postgres://x' } })).toThrow(
+		expect(() => composeLocalApplication({ ...base, config: defineApp({ id: 'notes' }), database: { connectionString: 'postgres://x' } })).toThrow(
 			"the config runs on its object's SQLite; drop `database`",
 		)
 	})

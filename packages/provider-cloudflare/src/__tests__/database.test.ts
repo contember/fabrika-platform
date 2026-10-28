@@ -102,7 +102,7 @@ describe('the Hyperdrive config of an application on Postgres', () => {
 	test('an absent config is created with caching disabled, over the runtime role', async () => {
 		const api = fakeApi((call) => call.method === 'GET' ? ok([{ id: OTHER, name: 'prod-notes-database' }]) : ok(written(ID)))
 		expect(await api.configs.upsert(upsert())).toEqual({ id: ID })
-		expect(api.calls.map((call) => `${call.method} ${call.url}`)).toEqual([`GET ${BASE}?page=1&per_page=100`, `POST ${BASE}`])
+		expect(api.calls.map((call) => `${call.method} ${call.url}`)).toEqual([`GET ${BASE}?page=1`, `POST ${BASE}`])
 		expect(api.calls.every((call) => call.authorization === 'Bearer tok-1')).toBe(true)
 		const origin = runtimeOrigin(PROVISIONING, 'notes')
 		expect(api.calls[1]?.body).toEqual({
@@ -121,11 +121,48 @@ describe('the Hyperdrive config of an application on Postgres', () => {
 		})
 		expect(await api.configs.upsert(upsert())).toEqual({ id: ID })
 		expect(api.calls.map((call) => `${call.method} ${call.url}`)).toEqual([
-			`GET ${BASE}?page=1&per_page=100`,
-			`GET ${BASE}?page=2&per_page=100`,
+			`GET ${BASE}?page=1`,
+			`GET ${BASE}?page=2`,
 			`PUT ${BASE}/${ID}`,
 		])
 		expect(api.calls[2]?.body).toMatchObject({ name: 'stage-notes-database', caching: { disabled: true } })
+	})
+
+	test('the server picks the page size: a short page with more to come is no last page', async () => {
+		// 25 configs, 20 a page, whatever the client asks for; ours is the 23rd.
+		const all = Array.from({ length: 25 }, (_, index) => ({ id: index.toString(16).padStart(32, '0'), name: `other-${index}` }))
+		all[22] = { id: ID, name: 'stage-notes-database' }
+		const api = fakeApi((call) => {
+			if (call.method !== 'GET') return ok(written(ID))
+			const page = Number(new URL(call.url).searchParams.get('page'))
+			return ok(all.slice((page - 1) * 20, page * 20), { result_info: { page, per_page: 20, count: 20, total_count: 25 } })
+		})
+		expect(await api.configs.upsert(upsert())).toEqual({ id: ID })
+		expect(api.calls.map((call) => `${call.method} ${call.url}`)).toEqual([`GET ${BASE}?page=1`, `GET ${BASE}?page=2`, `PUT ${BASE}/${ID}`])
+	})
+
+	test('a server that ignores the page ends the list when a page adds nothing, and a repeated config counts once', async () => {
+		const page = Array.from({ length: 100 }, (_, index) => ({ id: index.toString(16).padStart(32, '0'), name: `other-${index}` }))
+		page[7] = { id: ID, name: 'stage-notes-database' }
+		const api = fakeApi((call) => call.method === 'GET' ? ok(page, { result_info: { total_count: 1000 } }) : ok(written(ID)))
+		expect(await api.configs.upsert(upsert())).toEqual({ id: ID })
+		expect(api.calls.map((call) => `${call.method} ${call.url}`)).toEqual([`GET ${BASE}?page=1`, `GET ${BASE}?page=2`, `PUT ${BASE}/${ID}`])
+		// An empty page ends it as well.
+		const empty = fakeApi((call, index) => {
+			if (call.method !== 'GET') return ok(written(ID))
+			return ok(index === 0 ? [{ id: ID, name: 'stage-notes-database' }] : [], { result_info: { total_pages: 5 } })
+		})
+		expect(await empty.configs.upsert(upsert())).toEqual({ id: ID })
+		expect(empty.calls.map((call) => call.method)).toEqual(['GET', 'GET', 'PUT'])
+	})
+
+	test('a list that does not end is refused after a bounded number of pages', async () => {
+		const api = fakeApi((call) => {
+			const page = Number(new URL(call.url).searchParams.get('page'))
+			return ok([{ id: page.toString(16).padStart(32, '0'), name: `other-${page}` }], { result_info: { total_pages: 1_000_000 } })
+		})
+		await expect(api.configs.upsert(upsert())).rejects.toThrow('listing the Hyperdrive configs did not end within 100 pages')
+		expect(api.calls).toHaveLength(100)
 	})
 
 	test('two configs of the name are refused, not guessed between', async () => {

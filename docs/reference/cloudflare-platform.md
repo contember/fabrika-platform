@@ -82,7 +82,8 @@ local runs, where Lopata's binding hands the Worker a direct connection string.
   `HYPERDRIVE_CLIENT_MAX` (5).
 - **One config per environment, one Postgres cluster per environment.** The deploy names the config
   `<env>-<app>-database`, its origin the runtime role `run_<id>` on the provisioning URL's host and database, caching
-  disabled (read back after each write). The roles are named by the application only, so two environments of one
+  disabled (read back after each write). The list it finds the config in pages by the server's `result_info`, never by
+  a short page, and two configs of the name are refused. The roles are named by the application only, so two environments of one
   application cannot share a cluster.
 - **The provisioning URL is a direct connection.** The application's `fabrika db migrate` creates roles and takes
   advisory locks, which a pooler (a provider's or Hyperdrive's) refuses or breaks; the provisioning secret names the

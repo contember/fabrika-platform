@@ -39,6 +39,9 @@ import type { RunnerOutcomeFile } from '../runner-protocol'
 import { PUBLISHED_PRERELEASES } from './published-prereleases'
 
 /** Link the application's CLI where the checkout's `bun install` would, under `dir`. */
+/** `notesArtifact` as Control approves it for the application the tests deploy, `demo`. */
+const demoArtifact: ContractArtifact = { ...notesArtifact, app: 'demo' }
+
 const withApplicationCli = async (dir: string): Promise<string> => {
 	const cli = join(dir, 'node_modules', '.bin', 'fabrika')
 	await mkdir(dirname(cli), { recursive: true })
@@ -205,7 +208,9 @@ const deploy = (
 		readonly applicationObjects?: ApplicationObjects
 	} = {},
 ) => {
-	const contract = options.contract ?? (options.platformResources === 'allow' || options.checkoutContract !== undefined ? undefined : notesArtifact)
+	const approved = options.contract ?? (options.platformResources === 'allow' || options.checkoutContract !== undefined ? undefined : notesArtifact)
+	// Control approved the contract of the application the run deploys, so it names the config's id.
+	const contract = approved === undefined ? undefined : { ...approved, app: appConfig.id }
 	const served = contract === undefined || appConfig.schema !== undefined || options.declaresSchema === false
 		? appConfig
 		: { ...appConfig, schema: schemaFromContract(contract) }
@@ -325,6 +330,15 @@ describe('Cloudflare provider', () => {
 			'application variable `FABRIKA_OPERATIONS_DSN` is managed by Fabrika',
 		)
 		expect(rec.logs.join('\n')).not.toContain(dsn)
+	})
+
+	test("refuses the platform's own account token as a declared secret or variable, which would copy it into the Worker", async () => {
+		for (const pipeline of [{ secrets: ['CLOUDFLARE_API_TOKEN'] }, { vars: ['CLOUDFLARE_API_TOKEN'] }]) {
+			await expect(deploy(rec, config({ pipeline }), { secrets: { CLOUDFLARE_API_TOKEN: 'tok-1' } })).rejects.toThrow(
+				"`CLOUDFLARE_API_TOKEN` is the platform's own credential, which never reaches an application",
+			)
+		}
+		expect(rec.commands).toEqual([])
 	})
 
 	test('targets platform-managed values at the private application Worker behind the platform proxy', async () => {
@@ -1202,19 +1216,19 @@ describe('a contract application on Cloudflare (ADR-0048)', () => {
 			secrets: {},
 			vars: {},
 			managedEnvironment: {},
-			approved: { kind: 'contract', contract: notesArtifact, contractDigest: contractDigest(notesArtifact) },
+			approved: { kind: 'contract', contract: demoArtifact, contractDigest: contractDigest(demoArtifact) },
 			dryRun: true,
 			signal: new AbortController().signal,
 			log: () => {},
 		})
 		expect(result.status).toBe('succeeded')
-		expect(provisioned().app.options.vars?.['FABRIKA_CONTRACT_DIGEST']).toBe(contractDigest(notesArtifact))
+		expect(provisioned().app.options.vars?.['FABRIKA_CONTRACT_DIGEST']).toBe(contractDigest(demoArtifact))
 	})
 
 	test('what the checkout reads as cannot change the proxy table or the digest Control approved (ADR-0050)', async () => {
 		// Control classified the run `unchanged` against the approved contract; the checkout and its config moved on.
-		const widened: ContractArtifact = { ...notesArtifact, endpoints: notesArtifact.endpoints.slice(0, 1) }
-		const result = await deploy(rec, config({ schema: CONTRACT_SCHEMA }), { checkoutContract: widened, contract: notesArtifact })
+		const widened: ContractArtifact = { ...demoArtifact, endpoints: demoArtifact.endpoints.slice(0, 1) }
+		const result = await deploy(rec, config({ schema: CONTRACT_SCHEMA }), { checkoutContract: widened, contract: demoArtifact })
 		expect(result.status).toBe('succeeded')
 		const { root, app } = provisioned()
 		const manifest = proxyManifestJson(root)
@@ -1224,10 +1238,10 @@ describe('a contract application on Cloudflare (ADR-0048)', () => {
 				hosts: ['stage.example.com'],
 				upstream: 'APP',
 				scheme: 'https',
-				...contractProxyTable(notesArtifact, undefined, { ops: true }),
+				...contractProxyTable(demoArtifact, undefined, { ops: true }),
 			},
 		])
-		expect(app.options.vars?.['FABRIKA_CONTRACT_DIGEST']).toBe(contractDigest(notesArtifact))
+		expect(app.options.vars?.['FABRIKA_CONTRACT_DIGEST']).toBe(contractDigest(demoArtifact))
 	})
 
 	test("an application on an older framework release starts with its own release's digest, which no upcast contract recomputes", async () => {

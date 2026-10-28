@@ -419,7 +419,12 @@ application declares no `schema`: Control writes the approved contract's
 one, because it registers the schema itself. An executor older than this release
 refuses a schema-less config; it never meets one, because Control refuses a
 framework release newer than the platform, and an installation deploys its runner
-with its Control from one `fabrika.ref`. A local run (`oblaka.ts`, Lopata) takes the
+with its Control from one `fabrika.ref`. The config's `id` names every remote the
+deploy writes, and the runner reads it from the checkout: an application deploy
+refuses an `id` other than the approved contract's `app`, or one whose
+`<id>@<env>` is not the `FABRIKA_IAM_APP_ID` Control handed (a local deploy carries
+neither). It also refuses `CLOUDFLARE_API_TOKEN` in `pipeline.secrets` or
+`pipeline.vars`, which would copy the installation's token into the Worker. A local run (`oblaka.ts`, Lopata) takes the
 proxy and application Workers from `composeLocalApplication({ config, contract,
 assets, iamOrigin, env })`, the deploy's own composition, with the framework values and a
 fresh proxy secret written as variables. `assets` is what `await stageLocalAssets(contract,
@@ -429,8 +434,9 @@ mounts into `fabrika/assets` beside the generated config, bound as `ASSETS`.
 A contract application may state `database: { kind: 'postgres', provisioningSecret }` in `defineApp` (ADR-0065 §10;
 `configDatabase` in `src/database.ts` validates it). Control records the choice in the access snapshot and hands it to
 the deployer as `ProviderApprovedAccess.database`; the deployer refuses a config that disagrees with it, a framework
-release below `0.9.0-dev.9`, a missing provisioning secret, and the secret named in `pipeline.secrets`, `vars` or a
-Worker variable or binding. The plan gains `provision-database` after `build`: the application's own
+release below `0.9.0-dev.9`, a missing provisioning secret, the secret named in `pipeline.secrets`, `vars` or a
+Worker variable or binding, and its value (the URL, or its password raw or decoded) under any other declared secret,
+variable or Worker variable. The plan gains `provision-database` after `build`: the application's own
 `fabrika db migrate` in the runner, with exactly `PATH`, `HOME`, `TMPDIR`, `FABRIKA_APP_ID` and
 `FABRIKA_APP_DATABASE_URL`, then the create-or-replace of the Hyperdrive config `<env>-<app>-database` over the runtime
 role, through the Cloudflare API with the installation's token. The application Worker then gets the `FABRIKA_DATABASE`

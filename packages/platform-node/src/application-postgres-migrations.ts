@@ -79,6 +79,11 @@ export function applicationRuntimeUrl(provisioningUrl: string, appId: string): s
 	return postgresRoleUrl(provisioningUrl, applicationDatabaseRoles(appId).runtime)
 }
 
+/** The migration role's connection URL, derived from the same provisioning credential: the role that owns the schema. */
+export function applicationMigrationUrl(provisioningUrl: string, appId: string): string {
+	return postgresRoleUrl(provisioningUrl, applicationDatabaseRoles(appId).migration)
+}
+
 /** Drops an application's schema and both of its roles, as the provisioning credential: for throwaway test databases. */
 export async function dropApplicationDatabase(provisioningUrl: string, appId: string): Promise<void> {
 	const admin = PostgresDatabase.connect(provisioningUrl, { max: 1 })

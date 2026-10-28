@@ -61,7 +61,14 @@ import {
 	servesPostgresDatabase,
 	servesRawSql,
 } from './contract-support'
-import { HYPERDRIVE_ID, hyperdriveConfigName, HyperdriveDatabase, runtimeOrigin } from './database'
+import {
+	HYPERDRIVE_ID,
+	hyperdriveConfigName,
+	HyperdriveDatabase,
+	localDatabaseConnection,
+	migrationDatabaseConnection,
+	runtimeOrigin,
+} from './database'
 import { deployOrder } from './deploy-order'
 import { parseSecretNames, splitManagedEnvironment, staleManagedSecrets, withSecretsFile } from './managed-secrets'
 import { buildPlan, type CloudflareStep, findMigratableDatabases } from './plan'
@@ -107,8 +114,18 @@ type ApplicationTarget = Pick<
 /** The bindings the platform writes into a contract application's Worker (ADR-0065). */
 const PLATFORM_BINDINGS: ReadonlySet<string> = new Set([CLOUDFLARE_APPLICATION_BINDING, CLOUDFLARE_FILES_BINDING, CLOUDFLARE_DATABASE_BINDING])
 
+/**
+ * The installation's own credential in the executor's environment (`job.credentials`): a declared secret or variable
+ * of that name would copy it into the application Worker, since both read their value from the environment by name.
+ */
+const PLATFORM_CREDENTIALS: ReadonlySet<string> = new Set(['CLOUDFLARE_API_TOKEN'])
+
 /** An application never names a variable only the platform writes, whether or not this deploy writes it. */
 const assertNoFrameworkVariables = (config: CloudflareAppConfig, application: Worker, run: ApplicationTarget): void => {
+	const credential = [...(config.pipeline?.secrets ?? []), ...(config.pipeline?.vars ?? [])].find((name) => PLATFORM_CREDENTIALS.has(name))
+	if (credential !== undefined) {
+		throw new Error(`cloudflare: \`${credential}\` is the platform's own credential, which never reaches an application; rename the application's`)
+	}
 	const authored = [
 		...(config.pipeline?.vars ?? []),
 		...(config.pipeline?.secrets ?? []),
@@ -573,8 +590,8 @@ const scrubbed = (result: CommandResult, values: readonly string[]): CommandResu
 	return { exitCode: result.exitCode, stdout: scrub(result.stdout), stderr: scrub(result.stderr) }
 }
 
-/** The provisioning URL and the passwords in and derived from it: none may reach a log line. */
-const credentialForms = (url: string, derived: string): readonly string[] => {
+/** A URL's password as it is written in the URL and decoded; none when the URL does not parse. */
+const passwordForms = (url: string): readonly string[] => {
 	let raw = ''
 	try {
 		raw = new URL(url).password
@@ -587,7 +604,16 @@ const credentialForms = (url: string, derived: string): readonly string[] => {
 	} catch {
 		decoded = raw
 	}
-	return [url, raw, decoded, derived, encodeURIComponent(derived)]
+	return [raw, decoded]
+}
+
+/**
+ * The provisioning URL and the passwords in and derived from it, with both roles' URLs: none may reach a log line. The
+ * migration role owns the schema, and the application's CLI derives its URL and connects with it.
+ */
+const credentialForms = (url: string, appId: string): readonly string[] => {
+	const roles = [localDatabaseConnection(url, appId), migrationDatabaseConnection(url, appId)]
+	return [url, ...passwordForms(url), ...roles.flatMap((role) => [role, ...passwordForms(role)])]
 }
 
 const DB_MIGRATE_ARGS = ['db', 'migrate']
@@ -622,7 +648,7 @@ const provisionDatabase = async (env: StepEnv, database: DatabaseProvision): Pro
 		omitEnv: base.omitEnv,
 		signal: run.signal,
 	})
-	if (result.exitCode !== 0) throw commandError('fabrika db migrate', scrubbed(result, credentialForms(url, origin.password)))
+	if (result.exitCode !== 0) throw commandError('fabrika db migrate', scrubbed(result, credentialForms(url, run.appId)))
 	run.log('  migrated the Postgres database')
 	assertRunning(run.signal)
 	const { id } = await cf.hyperdrive.upsert({
@@ -915,10 +941,58 @@ const assertProvisioningSecret = (
 			`cloudflare: \`${secret}\` holds the database's provisioning URL, which never reaches the Worker; drop it from \`pipeline.secrets\`, \`pipeline.vars\` and the Worker's variables and bindings`,
 		)
 	}
-	if (run.dryRun !== true && (run.secrets[secret] === undefined || run.secrets[secret] === '')) {
+	const url = run.secrets[secret]
+	if (url === undefined || url === '') {
+		if (run.dryRun === true) return
 		throw new Error(
 			`cloudflare: the application secret \`${secret}\` (\`database.provisioningSecret\`) is not set for environment \`${run.env}\`; set it in Control`,
 		)
+	}
+	// The same value under another name reaches the Worker as well: refused by value, naming only the variable.
+	const values: Array<readonly [string, unknown]> = [
+		...(config.pipeline?.secrets ?? []).map((name): readonly [string, unknown] => [name, run.secrets[name]]),
+		...(config.pipeline?.vars ?? []).map((name): readonly [string, unknown] => [name, run.vars[name]]),
+		...Object.entries(application.options.vars ?? {}),
+	]
+	const copy = values.find(([name, value]) => name !== secret && holdsCredential(value, url))
+	if (copy !== undefined) {
+		throw new Error(
+			`cloudflare: \`${copy[0]}\` holds the database's provisioning URL or its password (\`${secret}\`), which never reaches the Worker; drop it`,
+		)
+	}
+}
+
+/** A password this long is a generated credential; a shorter one could appear by chance in an ordinary value. */
+const CREDENTIAL_SUBSTRING_LENGTH = 16
+
+/** Whether a Worker value carries the provisioning URL, or its password raw or decoded. */
+const holdsCredential = (value: unknown, url: string): boolean => {
+	let text = ''
+	try {
+		text = typeof value === 'string' ? value : (JSON.stringify(value) ?? '')
+	} catch {
+		text = ''
+	}
+	if (text === '') return false
+	if (text.includes(url)) return true
+	return passwordForms(url).some((password) =>
+		password !== '' && (text === password || (password.length >= CREDENTIAL_SUBSTRING_LENGTH && text.includes(password)))
+	)
+}
+
+/**
+ * The checkout's `id` names every remote the deploy writes (the Workers, the Hyperdrive config, the database roles), and
+ * the runner takes it from the checkout. Control approved one application's contract and handed that application's token
+ * audience, so a config that names another application is refused before anything runs. A local deploy carries neither.
+ */
+const assertDeployedApplication = (id: string, run: CloudflareDeployRun): void => {
+	const approved = run.approved?.contract.app
+	if (approved !== undefined && approved !== id) {
+		throw new Error(`cloudflare: the config declares app "${id}", and Control approved the contract of app "${approved}"`)
+	}
+	const audience = managedValue(run.managedEnvironment, FABRIKA_IAM_APP_ID)
+	if (audience !== null && audience !== appEnvironmentId(id, run.env)) {
+		throw new Error(`cloudflare: the config declares app "${id}", and Control deploys \`${audience}\``)
 	}
 }
 
@@ -929,6 +1003,7 @@ export const createCloudflareDeployer = (options: CloudflareDeployerOptions) => 
 		throw new Error(`Cloudflare config declares app "${loaded.config.id}", expected "${run.appId}"`)
 	}
 	const platformResources = options.platformResources ?? 'refuse'
+	if (platformResources === 'refuse') assertDeployedApplication(loaded.config.id, run)
 	const served = await servedContract(cf, loaded.cwd, run.approved)
 	const contract = served?.contract ?? null
 	// Fabrika's own components (`allow`) are its trusted installation path; an application needs a contract.

@@ -1,4 +1,4 @@
-import { applicationRuntimeUrl, PostgresMigrationError } from '@fabrika/platform-node'
+import { applicationMigrationUrl, applicationRuntimeUrl, PostgresMigrationError } from '@fabrika/platform-node'
 import type { Bindable, Config } from 'oblaka-iac/src/types'
 import { z } from 'zod'
 
@@ -33,12 +33,18 @@ const CLOUDFLARE_API = 'https://api.cloudflare.com/client/v4'
 /** A Hyperdrive config's id, as Cloudflare hands it out and a Worker's binding names it. */
 export const HYPERDRIVE_ID = /^[0-9a-f]{32}$/
 
-const LIST_PAGE_SIZE = 100
+/** More pages than any account lists: a server that keeps answering is refused, not followed forever. */
+const MAX_LIST_PAGES = 100
 
 const errorsSchema = z.array(z.object({ code: z.number() }).passthrough()).catch([])
 const envelopeSchema = z.object({ success: z.boolean(), errors: errorsSchema.optional(), result: z.unknown() }).passthrough()
 const listedSchema = z.array(z.object({ id: z.string(), name: z.string() }).passthrough())
-const resultInfoSchema = z.object({ total_count: z.number().optional() }).passthrough()
+const resultInfoSchema = z.object({
+	page: z.number().optional(),
+	per_page: z.number().optional(),
+	total_count: z.number().optional(),
+	total_pages: z.number().optional(),
+}).passthrough()
 const writtenSchema = z.object({
 	id: z.string().regex(HYPERDRIVE_ID),
 	name: z.string(),
@@ -85,31 +91,49 @@ const callCloudflare = async (
 
 const configsUrl = (accountId: string): string => `${CLOUDFLARE_API}/accounts/${encodeURIComponent(accountId)}/hyperdrive/configs`
 
-/** The id of the account's Hyperdrive config named `name`, or null; two of that name are refused, not guessed between. */
+/**
+ * Whether the list has a page after `page`, by the server's own `result_info` as wrangler reads it: the server picks the
+ * page size, so a short page is no last page. Without `result_info` the list is one page.
+ */
+const hasMorePages = (resultInfo: unknown, page: number, seen: number): boolean => {
+	const info = resultInfoSchema.safeParse(resultInfo)
+	if (!info.success) return false
+	const { total_pages: totalPages, total_count: totalCount, per_page: perPage } = info.data
+	if (totalPages !== undefined) return page < totalPages
+	if (totalCount !== undefined && perPage !== undefined && perPage > 0) return page * perPage < totalCount
+	if (totalCount !== undefined) return seen < totalCount
+	return false
+}
+
+/**
+ * The id of the account's Hyperdrive config named `name`, or null; two of that name are refused, not guessed between.
+ * An empty page, or one that adds no config not already listed, ends the list: a server that ignores `page` repeats it.
+ */
 const findConfig = async (fetcher: HyperdriveFetch, input: HyperdriveUpsert): Promise<string | null> => {
-	const found: string[] = []
+	const seen = new Set<string>()
+	const found = new Set<string>()
 	for (let page = 1;; page++) {
-		const { result, resultInfo } = await callCloudflare(
-			fetcher,
-			'listing the Hyperdrive configs',
-			`${configsUrl(input.accountId)}?page=${page}&per_page=${LIST_PAGE_SIZE}`,
-			{
-				method: 'GET',
-				apiToken: input.apiToken,
-				signal: input.signal,
-			},
-		)
+		if (page > MAX_LIST_PAGES) throw new Error(`cloudflare: listing the Hyperdrive configs did not end within ${MAX_LIST_PAGES} pages`)
+		const { result, resultInfo } = await callCloudflare(fetcher, 'listing the Hyperdrive configs', `${configsUrl(input.accountId)}?page=${page}`, {
+			method: 'GET',
+			apiToken: input.apiToken,
+			signal: input.signal,
+		})
 		const listed = listedSchema.safeParse(result)
 		if (!listed.success) throw new Error('cloudflare: listing the Hyperdrive configs returned an unreadable result')
-		for (const config of listed.data) if (config.name === input.name) found.push(config.id)
-		const info = resultInfoSchema.safeParse(resultInfo)
-		const total = info.success ? info.data.total_count : undefined
-		if (listed.data.length < LIST_PAGE_SIZE || (total !== undefined && page * LIST_PAGE_SIZE >= total)) break
+		let added = false
+		for (const config of listed.data) {
+			if (seen.has(config.id)) continue
+			seen.add(config.id)
+			added = true
+			if (config.name === input.name) found.add(config.id)
+		}
+		if (!added || !hasMorePages(resultInfo, page, seen.size)) break
 	}
-	if (found.length > 1) {
-		throw new Error(`cloudflare: the account holds ${found.length} Hyperdrive configs named \`${input.name}\`; delete all but one`)
+	if (found.size > 1) {
+		throw new Error(`cloudflare: the account holds ${found.size} Hyperdrive configs named \`${input.name}\`; delete all but one`)
 	}
-	const id = found[0]
+	const [id] = found
 	if (id !== undefined && !HYPERDRIVE_ID.test(id)) throw new Error(`cloudflare: the Hyperdrive config \`${input.name}\` has an unreadable id`)
 	return id ?? null
 }
@@ -199,9 +223,19 @@ export const runtimeOrigin = (provisioningUrl: string, appId: string): Hyperdriv
  * The runtime role's connection URL for a local run, where the Hyperdrive binding connects directly (lopata's
  * `localConnectionString`). Errors never quote the provisioning URL.
  */
-export const localDatabaseConnection = (provisioningUrl: string, appId: string): string => {
+export const localDatabaseConnection = (provisioningUrl: string, appId: string): string =>
+	roleConnection(applicationRuntimeUrl, provisioningUrl, appId)
+
+/**
+ * The migration role's connection URL, which the application's `fabrika db migrate` derives and connects with: the
+ * deploy scrubs it from that command's output. Errors never quote the provisioning URL.
+ */
+export const migrationDatabaseConnection = (provisioningUrl: string, appId: string): string =>
+	roleConnection(applicationMigrationUrl, provisioningUrl, appId)
+
+const roleConnection = (derive: (provisioningUrl: string, appId: string) => string, provisioningUrl: string, appId: string): string => {
 	try {
-		return applicationRuntimeUrl(provisioningUrl, appId)
+		return derive(provisioningUrl, appId)
 	} catch (error) {
 		// The platform's own messages name no credential; anything else is withheld.
 		const message = error instanceof PostgresMigrationError ? `: ${error.message}` : ''
