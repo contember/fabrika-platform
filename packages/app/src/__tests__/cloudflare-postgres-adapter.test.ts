@@ -29,6 +29,7 @@ import { TICK_HEADER } from '../cloudflare/application'
 import { ALARM_RETRY_MS } from '../cloudflare/application'
 import { connectHyperdrive } from '../cloudflare/postgres-runtime'
 import { type CfpgApp, cfpgApp } from './cloudflare-postgres-fixture/src/app'
+import { CFPG_APP } from './cloudflare-postgres-fixture/src/vocabulary'
 import type { CfpgWorld } from './cloudflare-postgres-fixture/src/world'
 import {
 	endpointHeaderFor,
@@ -52,8 +53,8 @@ if (!hasPostgres) {
 }
 
 const FIXTURE_ROOT = join(import.meta.dir, 'cloudflare-postgres-fixture')
-/** The fixture vocabulary's application id. */
-const APP = 'cfpg'
+/** The fixture vocabulary's application id, random per process. */
+const APP = CFPG_APP
 const APP_ENV = `${APP}@prod`
 const SCHEMA = `app_${APP}`
 const RUNTIME_ROLE = `run_${APP}`
@@ -377,7 +378,7 @@ describe.skipIf(!hasPostgres)('the Worker', () => {
 	)
 
 	test(
-		'tells the object only once the work that wrote the wake settled',
+		"the request's client stays open until its wake notice is answered",
 		inProcess(async () => {
 			const target = deploy()
 			const notice = gate()

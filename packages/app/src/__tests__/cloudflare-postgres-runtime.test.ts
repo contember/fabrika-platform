@@ -20,6 +20,7 @@ import {
 } from '../build'
 import { createPostgresContractWorker, FabrikaJobObject, POSTGRES_ALARM_REFRESH_MS } from '../cloudflare-postgres'
 import { type CfpgApp, cfpgApp } from './cloudflare-postgres-fixture/src/app'
+import { CFPG_APP } from './cloudflare-postgres-fixture/src/vocabulary'
 import type { CfpgWorld } from './cloudflare-postgres-fixture/src/world'
 import {
 	endpointHeaderFor,
@@ -43,8 +44,8 @@ if (!hasPostgres) {
 }
 
 const FIXTURE_ROOT = join(import.meta.dir, 'cloudflare-postgres-fixture')
-/** The fixture vocabulary's application id. */
-const APP = 'cfpg'
+/** The fixture vocabulary's application id, random per process. */
+const APP = CFPG_APP
 const APP_ENV = `${APP}@prod`
 const SCHEMA = `app_${APP}`
 const WORKSPACE = { type: 'workspace', value: 'w1' }
