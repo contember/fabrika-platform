@@ -135,7 +135,10 @@ upgraded first.
   redeploys only after it raises its pin into the window
   ([`framework-migrations.md`](../reference/framework-migrations.md)).
 - A `dev` environment adds no step for an existing installation or application: its record and variables exist only
-  once an operator registers one, and only an application on 0.9.0 or newer can run it.
+  once an operator registers one, and only an application on 0.9.0 or newer can run it. Moving to one sandbox per
+  workspace kept the launcher's wire, so a 0.9 application changes nothing; only a `dev` environment registered before
+  it is registered again by the operator ([ADR-0049](0049-author-applications-through-mcp-in-control.md),
+  "Consequences").
 
 ## Alternatives considered
 

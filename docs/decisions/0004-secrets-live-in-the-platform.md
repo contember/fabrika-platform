@@ -42,7 +42,9 @@ and the deploy resolves it into the Worker's secrets.
 
 Either way an app secret enters fabrika as a **value** — no API accepts a
 reference — and the installation's provider decides where it lands:
-provider-managed storage on Zerops, the vault otherwise.
+provider-managed storage on Zerops, the vault otherwise. A `dev` environment on Zerops counts as "otherwise": it runs
+in Box sandboxes, which have no service variables, so its values are kept in the vault and handed to a sandbox at deploy
+([ADR-0049](0049-author-applications-through-mcp-in-control.md) rule 10).
 
 **Invariant: fabrika never writes an app secret to project-level env on Zerops.**
 Project-level variables are injected into _every_ service in the project

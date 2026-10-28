@@ -174,15 +174,16 @@ commands (a 240 s init command behind a 60 s window activates). Both are verifie
 until a 2xx answers, for at most 9 s of each attempt; an `exec` check is verified to gate a deploy. An `httpGet` check
 would pass only at the second attempt, 10 s later, because the server rarely listens one second after `run.start`.
 
-**A `dev` environment changes only `run`** ([ADR-0049](0049-author-applications-through-mcp-in-control.md)). Control's
-environment kind selects the variant; an application never authors it and cannot select it. The build is the ordinary
-one with every check. `run.start` runs the generated dev launcher of the application's own `@fabrika/app` release
-instead of the serving entry, with its configuration (the bootstrap head, the authored SPA commands, the check chain)
-written by the build. The init commands migrate and verify only while the launcher's state file is absent: after the
-first sync the files on disk are no longer the bootstrap's, and the launcher migrates on every sync itself. The variant
-has no `healthCheck`, because the launcher reports health to Control and a platform restart would discard the synced
-head, and the deploy pins the service to one container, because the synced files live in one. The exposure refusals
-below, `startWithoutCode` included, apply unchanged: a `dev` environment is bootstrapped by an ordinary run.
+**A `dev` environment renders no `run`** ([ADR-0049](0049-author-applications-through-mcp-in-control.md) rule 10).
+Control's environment kind selects it; an application never authors it and cannot select it. Each workspace runs in its
+own Box sandbox, not in a Zerops service, so the provider renders neither `build` nor `run` for it. Of the authored
+descriptor it takes only the authored SPA commands of the selected setup, after the same check of authored variables (`assertAuthoredManagedDocument`). The
+build is `@fabrika/app/build`'s recipe with every check, run inside the sandbox, and the generated dev launcher of the
+application's own `@fabrika/app` release starts instead of the serving entry, with its configuration (the bootstrap
+head, the authored SPA commands, the check chain) written after the build passed. The launcher migrates and verifies at
+boot and on every sync itself, and reports health to Control. A sandbox refuses runtime packages, object storage, the
+ClamAV scan and a `${…}` reference, in one line each. The artifact passes the same compile as any other, so the exposure
+refusals below apply unchanged.
 
 ### Exposure is refused, with no approval path
 

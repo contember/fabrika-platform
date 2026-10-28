@@ -113,6 +113,14 @@ bun test   # deny-matrix (fail-closed), endpoint-matrix (application tables) and
   and mints no token. The allow carries `X-Fabrika-Endpoint: <id>@<digest>`. A `webhook` row with `authorization:
   'forward'` (a `basic` or `bearer` verifier) adds `X-Fabrika-Forward-Authorization: 1` when the request's
   `Authorization` goes on to the app, never when it carries `px_` (`carriesPlatformKey`, Basic credentials decoded).
+- **A dev sandbox entry names its audience; nothing else does** (ADR-0022 "Dev sandbox entries"). `audience` is
+  admitted only on an entry whose id parses as `dev:<app>:<workspace>` (`parseDevSandboxEntryId`; build one with
+  `devSandboxEntryId`), and such an entry must carry it, an `<app>@<env>` of the same `<app>`. Every app id handed to
+  IAM or the verifier (mint, key exchange, redemption, delegation, resource verification, the login and release URLs)
+  is `audienceOf(entry)`; routing, the cache key, logs and the proxy secret stay keyed by `entry.id`. Because several
+  entries share one audience, a redeemed code's return URL must name the host the callback arrived on, and that host
+  must be one of the entry's (`returnsToHost`). `upstreamHost` is an `isProxyHost` name the hop sends as `Host`.
+  Older proxies' strict parsers refuse both fields; a producer sends them only to a proxy that declares it reads them.
 - **The rows of the surface revision are new kinds or absent fields.** The `public` kind and the `capabilities`
   requirement (every named action in some scope) are new; a row's `response: 'file'` (the file treatment of
   `headers.ts` on every answer) and a public `GET` row's `cache` join the digest only when present. So every 0.4/0.5/0.6

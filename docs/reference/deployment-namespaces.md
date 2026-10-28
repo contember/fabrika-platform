@@ -317,7 +317,7 @@ artifact is not read. Before an app deploy, the control plane:
 1. verifies namespace coordinates and claims;
 2. compiles the proxy manifest from every assigned app with approved access;
 3. writes each contract application's proxy secret to the proxy service under
-   `proxySecretVariable('<app>@<env>')`;
+   `proxySecretVariable('<app>@<env>')` (a dev sandbox's under its entry id, below);
 4. rolls the proxy with the manifest as the data file of its build archive
    ([ADR-0045](../decisions/0045-upload-immutable-platform-and-namespace-proxy-sources.md)), and waits for its
    app version. A namespace pinned to a release whose proxy build lifts `FABRIKA_PROXY_MANIFEST_JSON` gets the
@@ -360,6 +360,33 @@ at proxy composition.
 The proxy source pin is persisted in the namespace target when the namespace is
 planned and every proxy build uploads exactly that source (ADR-0045). A target
 without a pin does not decode.
+
+### The dev sandbox host
+
+A namespace whose `dev` environment has a workspace sandbox record gets one more
+service: a Zerops Box Workspace, type `zbox@1`, hostname `zbox`, which runs one sandbox per
+MCP workspace ([MCP authoring](mcp-authoring.md#the-dev-environment),
+[ADR-0049](../decisions/0049-author-applications-through-mcp-in-control.md) rule 10).
+The namespace job imports it alone, after the proxy has converged, then writes
+the key Control generated as its sensitive `ZBOX_WORKSPACE_API_KEY`, restarts it,
+publishes its subdomain and adds the DOT domain `sandbox.fabrika.internal` by
+which its router routes a sandbox's port. Each step decides by reading back, so a
+reconcile converges a host an earlier attempt left half done. Control keeps the
+key's vault ref in `deployment_namespaces.sandbox_key_ref` and reaches the Box
+API (port 8080) over the service's public subdomain with it; the step refuses a
+host whose API answers without the key. A namespace with no sandbox record gets
+no Box host, and a `zerops-subdomain` namespace is refused one. A `dev`
+environment claims no Zerops service of its own.
+
+The proxy routes each workspace sandbox as its own entry,
+`dev:<app>:<workspace>` on the host `<workspace>.<domain>`, upstream `zbox:8081`
+with the sandbox's `upstreamHost` and the environment's `audience`. A `dev`
+member with sandboxes is routed only through those entries, never through its
+own domain; one without any is handed like any other member. Each
+entry's proxy secret is generated per workspace and written under
+`proxySecretVariable('dev:<app>:<workspace>')`. The entries reach only a proxy
+whose pinned source declares `FABRIKA_PROXY_MANIFEST_SANDBOXES`; a pin without
+it is refused before any platform write, naming `--proxy-source=current`.
 
 ## Operator interfaces
 
