@@ -33,6 +33,7 @@ import { checkClientIdentity } from './rules/identity'
 import { checkGeneratedTests } from './rules/isolation'
 import { checkJsonStrings } from './rules/json'
 import { checkLiteralGraph } from './rules/literal'
+import { checkMigrationHistory, type MigrationBase } from './rules/migration-history'
 import {
 	checkConflictIndexes,
 	checkCurrentTimestampDefaults,
@@ -63,6 +64,8 @@ export interface CheckInput {
 	readonly files?: ReadonlyMap<string, string>
 	/** A local pack whose tarballs `package-replacement` accepts (`fabrika-check --packed`); a deploy build gives none. */
 	readonly packed?: PackedSet
+	/** The migrations of a shared branch the tree must still hold unchanged (`fabrika-check`, from git); a deploy build gives none. */
+	readonly migrationBase?: MigrationBase
 }
 
 export interface ApplicationTree {
@@ -266,6 +269,7 @@ export const checkApplication = async (input: CheckInput): Promise<Finding[]> =>
 	for (const module of contract === undefined ? [] : contractModules(graph, contract)) findings.push(...checkClientIdentity(module, graph))
 	findings.push(...(await checkGeneratedTests(tree.files, literal.length === 0 && trust.length === 0 && contractRead.length === 0)))
 	findings.push(...checkMigrationNames(checkedPaths))
+	if (input.migrationBase !== undefined) findings.push(...checkMigrationHistory(tree.files, input.migrationBase))
 	const read = contract !== undefined && literal.length === 0 && contractRead.length === 0 ? readContractModule(graph) : undefined
 	const declaredTables = tables !== undefined && literal.length === 0 ? readTablesValue(graph, tables, new ReaderProblems()) : null
 	const artifact = read?.ok === true ? compiledArtifact(read.contract, declaredTables) : null

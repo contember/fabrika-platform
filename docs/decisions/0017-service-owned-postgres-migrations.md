@@ -430,7 +430,11 @@ migrated database.
 
 The pre-1.0 squash rule does not cover application ledgers. An application
 migration that has run is immutable: a changed checksum fails the run, and a
-change is a new file. Every new or changed
+change is a new file. The checksum is the file's raw text, so a comment counts:
+the rule stays "never touch it", not "touch only what does not run". Neither
+Control nor the build has the history to see the edit before the run fails,
+so `fabrika-check`, run in a git work tree, refuses a migration that differs
+from the merge base of HEAD and the remote's default branch (`migration-edited`). Every new or changed
 migration file is a widening in the approval diff
 ([ADR-0050](0050-approved-access.md)); that part is work unit B7.
 
