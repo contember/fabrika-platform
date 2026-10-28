@@ -97,6 +97,8 @@ export async function provisionPostgresRoles(
 				}, which is neither a superuser nor holds CREATEROLE, so it cannot create the application's database roles ${roles.migration} and ${roles.runtime}; nothing runs as the provisioning credential instead`,
 			)
 		}
+		const database = await admin.prepare('SELECT quote_ident(current_database()) AS name').first<{ name: string }>()
+		if (database === null) throw new PostgresMigrationError('the provisioning session names no current database')
 		for (const role of [roles.migration, roles.runtime]) {
 			const verifier = scramVerifier(derivedPassword(password, role))
 			const exists = await admin.prepare('SELECT true AS present FROM pg_roles WHERE rolname = ?').bind(role).first()
@@ -106,16 +108,13 @@ export async function provisionPostgresRoles(
 			} else {
 				await admin.prepare(`ALTER ROLE ${role} WITH LOGIN PASSWORD '${verifier}'`).run()
 			}
-			// A role may set its own session defaults (`ALTER ROLE CURRENT_USER SET …`); each deploy starts it clean. The
-			// runtime role's one default is its schema: a pooler that forbids startup parameters (Hyperdrive) leaves the
-			// role's default as the only search_path, and the data layer names its tables unqualified. Reset and set run in
-			// one transaction, so no session starts in between without it.
-			const reset = admin.prepare(`ALTER ROLE ${role} RESET ALL`)
-			if (role === roles.runtime) {
-				await admin.batch([reset, admin.prepare(`ALTER ROLE ${role} SET search_path TO ${roles.schema}`)])
-			} else {
-				await reset.run()
-			}
+			// A role may set its own session defaults, for every database (`ALTER ROLE CURRENT_USER SET …`) or for this one
+			// (`… IN DATABASE`), which overrides the first; each deploy starts it clean of both. The runtime role's one default
+			// is its schema: a pooler that forbids startup parameters (Hyperdrive) leaves the role's default as the only
+			// search_path, and the data layer names its tables unqualified. Resets and set run in one transaction, so no
+			// session starts in between without it.
+			const reset = [admin.prepare(`ALTER ROLE ${role} RESET ALL`), admin.prepare(`ALTER ROLE ${role} IN DATABASE ${database.name} RESET ALL`)]
+			await admin.batch(role === roles.runtime ? [...reset, admin.prepare(`ALTER ROLE ${role} SET search_path TO ${roles.schema}`)] : reset)
 		}
 		// A CREATEROLE role holds only ADMIN on a role it created; creating a schema for it needs SET (Postgres 16).
 		if (!self.rolsuper) await admin.prepare(`GRANT ${roles.migration} TO CURRENT_USER`).run()

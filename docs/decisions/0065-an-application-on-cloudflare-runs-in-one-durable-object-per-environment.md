@@ -152,7 +152,8 @@ Decisions 1–9 describe the SQLite environment, the default; §10 says what dif
       search_path TO app_<id>` in the transaction that resets the role's defaults, and the engine
       (`@fabrika/db/hyperdrive`) checks `current_schema()` on each connection, on the event that reserved it, until one
       check of the isolate passed, and refuses every statement after a mismatch. An event never waits on another event's
-      check, whose I/O belongs to that event. Every statement runs unprepared, because the next transaction may get another origin connection.
+      check, whose I/O belongs to that event. Every statement runs unprepared, because the next transaction may get another origin connection,
+      and binds each parameter with the type Bun.SQL gives it, so a statement answers as it does on Zerops.
     - **The object keeps the class and binding names and runs only the jobs.** A request's kick writes its wake in the
       request's transaction and runs nothing in the Worker (`kickRuns: 'scheduler'`); once the request's work settled,
       the Worker sends the object one wake notice with the earliest wake its writes left, and the object lowers its

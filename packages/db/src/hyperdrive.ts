@@ -10,8 +10,15 @@ import { Database } from './database'
 import { DatabaseError, QueryRefusedError } from './errors'
 import { isPlainIdentifier } from './identifier'
 
+/** A reserved postgres.js connection, with the `typed` that declares a parameter's type (`sql.typed(value, oid)`). */
+export interface HyperdriveConnection extends PostgresJSReservedSql {
+	typed(value: string, type: number): unknown
+}
+
 /** The part of a postgres.js client the engine reads: one reserved connection per transaction or statement. */
-export type HyperdriveClient = Pick<PostgresJSSql, 'reserve'>
+export interface HyperdriveClient {
+	reserve(options?: Parameters<PostgresJSSql['reserve']>[0]): Promise<HyperdriveConnection>
+}
 
 export interface HyperdriveOptions {
 	/** `app_<id>`: the runtime role's default search_path, which the first connection of the isolate verifies. */
@@ -205,7 +212,7 @@ export function openHyperdrive(options: HyperdriveOptions): Database {
 	// events at isolate start pay one round trip each.
 	let checked = false
 	let refused: SearchPathError | undefined
-	const verify = async (connection: PostgresJSReservedSql): Promise<void> => {
+	const verify = async (connection: HyperdriveConnection): Promise<void> => {
 		const rows: unknown = await connection.unsafe('select current_schema() as schema', [], { prepare: false })
 		const current = firstSchema(rows)
 		if (current !== schema) throw new SearchPathError(schema, current)
@@ -252,12 +259,38 @@ function firstSchema(rows: unknown): string | null {
 	return typeof value === 'string' ? value : null
 }
 
-/** The reserved connection with every statement unprepared and its array columns decoded as Bun.SQL decodes them. */
-function unprepared(connection: PostgresJSReservedSql): PostgresJSReservedSql {
+/** Bun.SQL's bounds of an integer it sends as `bigint` rather than `double precision`: ±2^51, not ±2^53. */
+const BUN_INT8_MIN = -(2 ** 51)
+const BUN_INT8_MAX = 2 ** 51 - 1
+
+/**
+ * The type oid Bun.SQL declares for a JS number: `integer` for an int32, `bigint` for a larger integer within ±2^51, and
+ * `double precision` for every other value (a fraction, -0, NaN, ±Infinity). postgres.js declares none, so the server
+ * would infer one from the statement: `int4_column < 1.5` would fail to parse `'1.5'` there, and `numeric_column = 0.1 +
+ * 0.2` would keep digits Bun's float8 rounds away.
+ */
+function numberType(value: number): number {
+	if (!Number.isInteger(value) || Object.is(value, -0)) return 701
+	if (value >= -(2 ** 31) && value <= 2 ** 31 - 1) return 23
+	return value >= BUN_INT8_MIN && value <= BUN_INT8_MAX ? 20 : 701
+}
+
+/** Each JS number declared with the type Bun.SQL gives it; postgres.js would send it untyped. */
+function typedParameters(connection: HyperdriveConnection, parameters: readonly unknown[] | undefined): unknown[] | undefined {
+	return parameters?.map((value) =>
+		typeof value === 'number' ? connection.typed(Object.is(value, -0) ? '-0' : String(value), numberType(value)) : value
+	)
+}
+
+/**
+ * The reserved connection with every statement unprepared, its numbers typed and its array columns decoded as Bun.SQL
+ * does.
+ */
+function unprepared(connection: HyperdriveConnection): PostgresJSReservedSql {
 	return {
 		release: () => connection.release(),
 		unsafe: (query, parameters, queryOptions) => {
-			const pending = connection.unsafe(query, parameters, { ...queryOptions, prepare: false })
+			const pending = connection.unsafe(query, typedParameters(connection, parameters), { ...queryOptions, prepare: false })
 			const decoded = pending.then((result) => {
 				decodeArrays(result)
 				return result
@@ -281,8 +314,8 @@ const asBytes: ElementParser = (text) => Buffer.from(text.slice(2), 'hex')
 
 /**
  * The array types Bun.SQL decodes, by type oid, with how it decodes their elements; any other array (`uuid[]`, a range,
- * an enum) stays its text, as there. postgres.js run with `fetch_types: false` knows no array type and returns each as
- * text, so without this a `text[]` column would read as `'{a,b}'` on Cloudflare and as `['a', 'b']` on Bun.
+ * an enum) stays its text, as there. `HYPERDRIVE_CLIENT_OPTIONS` keeps every built-in array type as text (`arrayText`),
+ * so without this a `text[]` column would read as `'{a,b}'` on Cloudflare and as `['a', 'b']` on Bun.
  */
 const ARRAY_ELEMENTS: ReadonlyMap<number, ElementParser> = new Map([
 	[1005, asNumber], // int2

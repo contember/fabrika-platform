@@ -178,8 +178,10 @@ pass a recording one); `Database.fromEngine` takes another engine (`openSqlite`)
 
 On Cloudflare a Postgres application runs `openHyperdrive({ schema, client })` over the postgres.js client of the event
 that runs (`@fabrika/app/cloudflare-postgres` opens one per request). It is dialect `postgres` like `openPostgres`, and
-must answer alike: every suite that opens its database through `openTestPostgres` or `testDatabase` runs once with
-`FABRIKA_TEST_POSTGRES_DRIVER=postgres-js`, and `hyperdrive.test.ts` compares the two drivers' rows type by type.
+must answer alike: `bun run test` (and so CI and `check:ci`) runs this package's suites and the app suites that drive
+jobs and the ORM through Postgres (`test:postgres-js` in the root `package.json`) a second time with
+`FABRIKA_TEST_POSTGRES_DRIVER=postgres-js`; a new suite that exercises a Postgres path of the engine belongs in that list.
+`hyperdrive.test.ts` compares the two drivers' rows and parameters type by type.
 
 - **The schema is the runtime role's default `search_path`, never a session setting.** Hyperdrive documents no startup
   parameters and pools per transaction, and many statements run in autocommit, so neither a startup `search_path` nor a
@@ -196,8 +198,11 @@ must answer alike: every suite that opens its database through `openTestPostgres
   `uuid[]`, ranges and the rest stay text, as there), because postgres.js's own array decoding reads a `NULL` element as
   `'NULL'`, a `bool[]` as all `false` and throws on a `json[]` holding a null. Booleans, bytea, JSON, dates and timestamps
   send their parameters as text, as Bun.SQL does, so the server parses them: postgres.js would pass a timestamp's text
-  through `new Date()` (its microseconds lost) and a bool's `'true'` as `'f'`. A number still goes untyped where Bun.SQL
-  types it (`$1::jsonb` with a number is refused only on Bun). An enum's array stays postgres.js's to decode.
+  through `new Date()` (its microseconds lost) and a bool's `'true'` as `'f'`. A JS number is declared with the type
+  Bun.SQL gives it (`numberType`): `int4` for an int32, `int8` for a larger integer within ±2^51 (not ±2^53), `float8`
+  for anything else, -0 and NaN included; postgres.js would send it untyped, so `int4_column < 1.5` would fail and a
+  computed `numeric` would keep other digits. The probes pin each boundary. An enum's array stays postgres.js's to
+  decode.
 - **postgres.js errors carry the SQLSTATE in `code`** of a `PostgresError`, Bun.SQL's in `errno`; `databaseError`
   reads both and nothing else of the error.
 

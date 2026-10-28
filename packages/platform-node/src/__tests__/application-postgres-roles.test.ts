@@ -249,6 +249,15 @@ describe.skipIf(!hasPostgres)('the application role family', () => {
 				await as(migrationUrl(notes), (sql) => sql.unsafe('ALTER ROLE CURRENT_USER SET search_path TO public'))
 				await notes.migrations.migrate(provisioner.url(), NOTES)
 				expect(await settings()).toEqual(expected)
+				// A setting for this database alone overrides the role's own, so the migrate clears it too.
+				const inDatabase =
+					'DO $$ BEGIN EXECUTE format($f$ALTER ROLE CURRENT_USER IN DATABASE %I SET search_path TO public$f$, current_database()); END $$'
+				await as(runtimeUrl(notes), (sql) => sql.unsafe(inDatabase))
+				await as(migrationUrl(notes), (sql) => sql.unsafe(inDatabase))
+				expect([...await as(runtimeUrl(notes), (sql) => sql.unsafe('SELECT current_schema() AS schema'))]).toEqual([{ schema: 'public' }])
+				await notes.migrations.migrate(provisioner.url(), NOTES)
+				expect(await settings()).toEqual(expected)
+				expect([...await as(runtimeUrl(notes), (sql) => sql.unsafe('SELECT current_schema() AS schema'))]).toEqual([{ schema: roles.schema }])
 				await notes.migrations.migrate(provisioner.url(), NOTES)
 				expect(await settings()).toEqual(expected)
 			})

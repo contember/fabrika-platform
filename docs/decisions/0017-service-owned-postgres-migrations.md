@@ -320,7 +320,8 @@ application query runs as anything else:
 `FABRIKA_APP_DATABASE_URL` is the **provisioning credential**. `fabrika db
 migrate` uses it on one connection, under the migration lock, only to create
 the two roles when absent, reset their passwords and their role-level
-settings (`ALTER ROLE … RESET ALL`, so a session default a role set on itself
+settings (`ALTER ROLE … RESET ALL` and `ALTER ROLE … IN DATABASE … RESET ALL`
+for the application's database, so a session default a role set on itself
 ends at the next deploy), create the schema owned by the migration role, and
 check the family: an attribute, a membership or a `CREATE` beyond the above,
 any privilege either role was granted or ownership it holds outside its schema

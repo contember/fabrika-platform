@@ -119,7 +119,7 @@ Read this before moving a service onto this driver.
   password and sent only as SCRAM verifiers; never put a derived password in SQL text. The derivation (`derivedPassword`,
   `postgresRoleUrl`, `applicationRuntimeUrl`) is platform protocol: the Cloudflare deploy derives the runtime role's
   password to hand it to Hyperdrive, so changing it breaks every installed application's connection. Each migrate resets
-  both roles' session defaults and gives the runtime role exactly one, `search_path` = its schema, in the same
+  both roles' session defaults, the role-wide ones and those for this database (which override them), and gives the runtime role exactly one, `search_path` = its schema, in the same
   transaction as the reset: through Hyperdrive, which documents no startup parameters, the role's default is the only
   `search_path` the data layer gets (`@fabrika/db/hyperdrive` checks it). An existing installation gets it on its next migrate. `apply(db)` grants nothing and
   exists for the runner's own tests. `dropApplicationDatabase` is for throwaway test databases; `createTestProvisioner` (Postgres 16+) makes the

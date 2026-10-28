@@ -258,6 +258,26 @@ describe.skipIf(!hasPostgres)('the Hyperdrive engine on Postgres', () => {
 })
 
 /** One statement for both engines; each row's every value must come back alike. */
+const NUMBERS: readonly number[] = [
+	0,
+	-0,
+	2 ** 31 - 1,
+	2 ** 31,
+	-(2 ** 31),
+	-(2 ** 31) - 1,
+	2 ** 51 - 1,
+	2 ** 51,
+	-(2 ** 51),
+	-(2 ** 51) - 1,
+	2 ** 53,
+	1.5,
+	0.1 + 0.2,
+	1e21,
+	Number.NaN,
+	Number.POSITIVE_INFINITY,
+	Number.NEGATIVE_INFINITY,
+]
+
 interface Probe {
 	readonly label: string
 	readonly text: string
@@ -339,9 +359,37 @@ const PROBES: readonly Probe[] = [
 		text: `select ('2026-01-02 03:04:05.123456+00'::timestamptz = $1) as same, $1::timestamptz::text as printed`,
 		parameters: ['2026-01-02 03:04:05.123456+00'],
 	},
+	// Bun.SQL declares a number's type by its value; each boundary of its int4, int8 and float8 ranges, both sides.
+	...NUMBERS.map((value): Probe => ({
+		label: `the number ${Object.is(value, -0) ? '-0' : String(value)} is declared as Bun.SQL declares it`,
+		text: 'select pg_typeof($1)::text as type, $1::text as printed',
+		parameters: [value],
+	})),
+	{
+		label: 'a fraction compared with or cast to an integer is a float8, not an integer that fails to parse',
+		text: 'select 1::int4 < $1 as less, $1::int4 as rounded, 2::int4 = $2 as same',
+		parameters: [1.5, 2],
+	},
+	{
+		label: 'a computed number cast to numeric has the digits of a float8',
+		text: 'select $1::numeric as a, $2::numeric as b',
+		parameters: [0.1 + 0.2, 1234567890.1234567],
+	},
 ]
 
 describe.skipIf(!hasPostgres)('postgres.js through the engine reads and binds as Bun.SQL does', () => {
+	test('a number where its type has no operator is refused on both, with the same SQLSTATE', async () => {
+		const bun = new SQL({ url: applicationRuntimeUrl(url, appId), adapter: 'postgres', max: 1, prepare: false })
+		try {
+			for (const [text, value] of [['select true = $1 as same', 1], ['select now() > $1 as later', 0]] as const) {
+				const expected = await refusal(bun.unsafe(text, [value]))
+				expect(expected).toMatchObject({ errno: '42883' })
+				expect(await refusal(runApplicationStatement(sessionOf({ database }), text, [value], 'read'))).toMatchObject({ sqlState: '42883' })
+			}
+		} finally {
+			await bun.close()
+		}
+	})
 	for (const probe of PROBES) {
 		test(probe.label, async () => {
 			const bun = new SQL({ url: applicationRuntimeUrl(url, appId), adapter: 'postgres', max: 1, prepare: false })
