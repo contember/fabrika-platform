@@ -231,7 +231,9 @@ checked, because a service is trusted platform code.
   trigger conditions and backfills alike: a name that `(` follows
   must be a paved or a reviewed built-in (pure string, number, date, JSON,
   array, text-search, window and aggregate functions, `pg_sleep`,
-  `suppress_redundant_updates_trigger`) or a function the migration set
+  `suppress_redundant_updates_trigger`; SQLite's `randomblob` and `hex`,
+  since SQLite has no `gen_random_uuid` and a backfill needs a key) or a
+  function the migration set
   declares in the schema. Anything else is refused, because a built-in such
   as `query_to_xml`, `cursor_to_xml`, `dblink`, `lo_import`, `pg_read_file`,
   `pg_advisory_lock` or `set_config` runs SQL from a string or reaches past

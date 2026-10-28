@@ -171,6 +171,16 @@ database enforces foreign keys.
   generated tests write its first value.
 - No transaction control (`BEGIN`, `COMMIT`, `SAVEPOINT`) and no Postgres syntax (`timestamptz`, `::` casts,
   `GENERATED ALWAYS AS IDENTITY`, `CREATE TYPE`).
+- SQLite has no `gen_random_uuid()`. A backfill that inserts rows gives each one a key with this expression, a UUID v4
+  that `z.uuid()` accepts (`hex(randomblob(16))` alone is not one). It is random, not time-ordered like the UUIDv7 an
+  insert of the data layer stamps, so nothing may depend on the order of these keys.
+
+  ```sql
+  INSERT INTO deal_tags (id, deal_id, tag)
+  SELECT lower(hex(randomblob(4)) || '-' || hex(randomblob(2)) || '-4' || substr(hex(randomblob(2)), 2) || '-'
+  	|| substr('89ab', 1 + (random() & 3), 1) || substr(hex(randomblob(2)), 2) || '-' || hex(randomblob(6))), id, label
+  FROM deals WHERE label IS NOT NULL;
+  ```
 
 ## Database code is a declared deviation
 
