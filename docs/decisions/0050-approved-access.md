@@ -43,7 +43,8 @@ Built in work unit B6 (`packages/control/src/approval/`). Details the sections b
 - The migration checksum is the SHA-256 of the file's text, the checksum the application's ledger records;
   every file under `db/migrations/` is listed.
 - The snapshot digest covers the canonical contract (each site's declared reach included) and the migration list,
-  and the database code only when there is some; not the checker version. It keeps the trailing `null` that once
+  the database code only when there is some, and the database a Cloudflare application chose only when it chose
+  Postgres (appended as `database:postgres`); not the checker version. It keeps the trailing `null` that once
   stood for artifact access, and the contract's `declared` section is absent for a contract that is not built with
   the staged kit, so a digest an approval recorded stays valid.
 - **Fabrika deploys an application only with a contract.** A commit without `fabrika.contract.ts` fails its
@@ -65,7 +66,9 @@ Built in work unit B6 (`packages/control/src/approval/`). Details the sections b
 - Control reads the snapshot at the provider's `applicationRoot`, the directory the provider executes
   from, with the same normalization (`checkoutRelativeDirectory` on Cloudflare). A root outside the
   repository fails the run.
-- The Cloudflare runner job carries the approved access: the contract and its digest. The runner hands it to the executor in a file beside the checkout. The deployer builds the
+- The Cloudflare runner job carries the approved access: the contract and its digest, the application's framework
+  release, and `database: 'postgres'` when the snapshot records it (absent, the application runs on its Durable
+  Object's SQLite). The runner hands it to the executor in a file beside the checkout. The deployer builds the
   proxy table and `FABRIKA_CONTRACT_DIGEST` from it, never from the checkout. Every framework variable
   in each generated wrangler config must equal the value the platform wrote, so a binding's
   `configureBinding` cannot overwrite the digest.
@@ -97,6 +100,10 @@ run stores the result as its **snapshot**:
   each `INSERT … SELECT` that copies a file collection's files into a table, and each release of a collection. They
   follow from the migration files, so the digest does not cover them beyond the files' checksums. The diff compares
   only a candidate's, so the run's snapshot keeps them and the environment's publication leaves them out;
+- the **database** a Cloudflare application chose (`database: 'postgres'`,
+  [ADR-0065](0065-an-application-on-cloudflare-runs-in-one-durable-object-per-environment.md) §10), read statically
+  from the `fabrika.config.ts` at the root; absent for every other application, so its snapshot and digest stay as
+  they were;
 - the checker version;
 - the baseline the candidate was compared with;
 - the approval, when one was needed.

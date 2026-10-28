@@ -167,12 +167,20 @@ Decisions 1–9 describe the SQLite environment, the default; §10 says what dif
       on Zerops, with caching disabled. The provisioning URL never reaches the Worker; the runtime password reaches
       only the HTTPS body of that API call. The Worker gets the binding and nothing else of the database.
     - **Control approves the database.** The access snapshot records `database: 'postgres'`, read statically from
-      `fabrika.config.ts`; the provider refuses Postgres below the framework release that serves it
-      (`0.9.0-dev.9`), and an environment's database never changes once it published a snapshot. The deployer
-      refuses a config that disagrees with the approval.
+      `fabrika.config.ts` at the application's root; the provider refuses Postgres below the framework release that
+      serves it (`0.9.0-dev.9`), for an environment that deploys another config file (its artifact's `configPath`),
+      and once an environment published a snapshot its database never changes. The deployer refuses a config that
+      disagrees with the approval.
+    - **The application's own CLI writes the Postgres entry only when the deploy asks for it.** The deployer runs
+      `fabrika app build --provider=cloudflare --database=postgres` for an environment it composed on Postgres, and
+      nothing new for one on SQLite. Control compares an application's release with its own by major.minor.patch
+      only, so a platform release before `0.9.0-dev.9` accepts an application pinned to it, reads no `database` and
+      composes none; its deployer never passes the option, and the application's CLI refuses the build instead of deploying a
+      Postgres entry without its database. A local `fabrika app build` passes the option itself.
     - **No ops channel and no data operations** ([ADR-0069](0069-control-reaches-an-application-environments-object.md),
       [ADR-0070](0070-data-protection-of-an-application-environment-on-cloudflare.md)): no ops row, no ops key, no
-      barrier, no migration phase. Backups, exports and recovery are the database provider's.
+      barrier, no migration phase. Backups, exports and recovery are the database provider's. Control answers the
+      environment's data views and operations `not_served` (409) from the provider's answer, before any request.
 
 ## Consequences
 
@@ -206,7 +214,10 @@ Decisions 1–9 describe the SQLite environment, the default; §10 says what dif
   The Hyperdrive config is created by an environment's first Postgres deploy and replaced in place by later ones; a
   removed environment's config stays until the operator deletes it. The installation's Cloudflare API token needs
   the Hyperdrive Edit permission before the first Postgres deploy. A Control rolled back below the release that reads
-  `database` cannot parse a snapshot that records it, which only a Postgres environment has.
+  `database` cannot parse the snapshot of a Postgres environment. That environment's deploys fail, and so does every
+  read that parses the snapshots of several environments: the environment listing of that application, the connector checks of deploys into an
+  environment of the same name, and the republish of its namespace. They work again once the environment is removed
+  or Control is upgraded. SQLite environments' snapshots parse as before.
 - The object runs from framework 0.9. An application on an older release keeps its stateless Worker: Control names the
   release it read the application with, and the deployer gives that Worker no object, bucket, tick or hop secret, and
   refuses what it cannot run (jobs, webhooks, public procedures, installation mail, token purposes), as before

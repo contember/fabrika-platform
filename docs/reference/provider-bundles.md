@@ -418,8 +418,12 @@ application declares no `schema`: Control writes the approved contract's
 `contract: true`. A platform deploy (`allow`) that serves a contract still declares
 one, because it registers the schema itself. An executor older than this release
 refuses a schema-less config; it never meets one, because Control refuses a
-framework release newer than the platform, and an installation deploys its runner
-with its Control from one `fabrika.ref`. The config's `id` names every remote the
+framework release whose major.minor.patch is newer than the platform's, and an
+installation deploys its runner with its Control from one `fabrika.ref`. Control
+does not order two prereleases of one version (backlog 240), so a feature a later
+prerelease adds must fail closed on an older platform by itself, as Postgres does:
+the application's CLI writes its Postgres entry only when the deployer passes
+`--database=postgres`. The config's `id` names every remote the
 deploy writes, and the runner reads it from the checkout: an application deploy
 refuses an `id` other than the approved contract's `app`, or one whose
 `<id>@<env>` is not the `FABRIKA_IAM_APP_ID` Control handed (a local deploy carries

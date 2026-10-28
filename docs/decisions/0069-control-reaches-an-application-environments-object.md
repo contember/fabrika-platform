@@ -43,6 +43,8 @@ holds a maintenance barrier that Control drives by generations it allocates.**
 
 An environment whose application chose Postgres through Hyperdrive ([ADR-0065](0065-an-application-on-cloudflare-runs-in-one-durable-object-per-environment.md)
 §10) has no object database, so it gets none of this: no ops row, no ops key, no barrier and no migration phase.
+Control asks the provider (`opsChannel`, `dataOperations`) before it sends anything, and answers its data views,
+maintenance, backups and restores `not_served` (409), as it answers an environment at a release before the channel.
 
 ### 1. The channel
 

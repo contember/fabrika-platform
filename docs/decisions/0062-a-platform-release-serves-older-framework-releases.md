@@ -59,7 +59,9 @@ application's framework release applies its own.
 
 **The window.** A platform release supports every framework minor released in the six months before it, and never
 fewer than the two minors before its own. A framework release newer than the platform is refused: the platform is
-upgraded first.
+upgraded first. Control compares major.minor.patch only and does not order two prereleases of one version
+([backlog 240](../backlog/240-channel-prereleases-sort-below-the-release-floors.md)), so what a later prerelease adds on
+the application side fails closed on an older platform by itself.
 
 **How the platform holds it:**
 
