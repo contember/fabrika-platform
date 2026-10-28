@@ -10,7 +10,7 @@ import {
 } from '@fabrika/app/build'
 import { checkApplication, CONTRACT_FILE, GENERATED_ENTRY_FILE as CHECKED_ENTRY_FILE } from '@fabrika/check'
 import { describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -49,7 +49,7 @@ describe('the generated entrypoint', () => {
 		expect(BUILT_CONTRACT_FILE).toBe(CONTRACT_FILE)
 	})
 
-	const runtimes: readonly EntryRuntime[] = ['bun', 'cloudflare']
+	const runtimes: readonly EntryRuntime[] = ['bun', 'cloudflare', 'cloudflare-postgres']
 	for (const runtime of runtimes) {
 		test(`an application with the ${runtime} entrypoint has no finding`, async () => {
 			expect(await checkApplication({ root: fixtures, files: applicationFiles(runtime) })).toEqual([])
@@ -69,6 +69,16 @@ describe('the generated entrypoint', () => {
 			const path = await writeGeneratedEntry(root, 'cloudflare')
 			expect(path).toBe(join(root, 'fabrika', 'entry.generated.ts'))
 			expect(readFileSync(path, 'utf8')).toBe(generatedEntry('cloudflare'))
+		} finally {
+			rmSync(root, { recursive: true, force: true })
+		}
+	})
+	test('the Postgres entrypoint on Cloudflare writes no migrations module: the deploy migrates the database', async () => {
+		const root = mkdtempSync(join(tmpdir(), 'fabrika-entry-'))
+		try {
+			const path = await writeGeneratedEntry(root, 'cloudflare-postgres')
+			expect(readFileSync(path, 'utf8')).toBe(generatedEntry('cloudflare-postgres'))
+			expect(existsSync(join(root, 'fabrika', 'migrations.generated.ts'))).toBe(false)
 		} finally {
 			rmSync(root, { recursive: true, force: true })
 		}

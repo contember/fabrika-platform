@@ -303,6 +303,7 @@ const buildJob = async (options: CloudflareControlOptions, input: ProviderDeploy
 		assertCloudflareContract(approvedAccess.contract, {
 			capsSegments: release !== undefined && capsJobSegments(release),
 			servesSql: release !== undefined && servesRawSql(release),
+			database: 'sqlite',
 		})
 	}
 	const stateless = release !== undefined && !runsInObject(release)

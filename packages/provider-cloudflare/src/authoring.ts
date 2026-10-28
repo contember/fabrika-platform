@@ -17,9 +17,26 @@ export interface ApplicationWorkerOptions {
 	readonly compatibility_flags?: Worker['options']['compatibility_flags']
 }
 
+/**
+ * Postgres through Cloudflare Hyperdrive instead of the Durable Object's SQLite. `fabrika.config.ts` states it inline in
+ * the `defineApp` argument, with literal values: Control reads it statically.
+ */
+export interface CloudflarePostgresDatabase {
+	readonly kind: 'postgres'
+	/**
+	 * The application secret (set in Control per environment; never in pipeline.secrets or vars) holding the provisioning
+	 * URL: a direct connection of a role that may create roles. An upper-case name, not a `FABRIKA_*` one.
+	 */
+	readonly provisioningSecret: string
+}
+
 /** A Cloudflare app config as `fabrika.config.ts` writes it. */
 export type CloudflareAppConfigInput =
 	& AppConfigBase
+	& {
+		/** The database the application runs on; absent = the Durable Object's SQLite (ADR-0065). */
+		readonly database?: CloudflarePostgresDatabase
+	}
 	& (
 		| {
 			/**
@@ -40,6 +57,8 @@ export type CloudflareAppConfigInput =
 export interface CloudflareAppConfig extends AppConfigBase, ProviderAuthoredApp<'cloudflare'> {
 	/** The application Worker. The deployer builds the proxy Worker in front of it from the contract (ADR-0048). */
 	readonly resources: (ctx: ResourceContext) => Worker
+	/** The database the application runs on; absent = the Durable Object's SQLite (ADR-0065). */
+	readonly database?: CloudflarePostgresDatabase
 }
 
 /**

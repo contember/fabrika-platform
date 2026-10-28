@@ -62,6 +62,8 @@ export interface RunnerApprovedAccess {
 	 * older shape.
 	 */
 	readonly framework?: string
+	/** The database the application chose in its config: Postgres through Hyperdrive. Absent = the object's SQLite (ADR-0065). */
+	readonly database?: 'postgres'
 }
 
 export const runnerApprovedAccessSchema = z.object({
@@ -69,6 +71,7 @@ export const runnerApprovedAccessSchema = z.object({
 	contract: z.unknown(),
 	contractDigest: z.string().refine(isDigest),
 	framework: z.string().regex(FRAMEWORK_RELEASE_PATTERN).optional(),
+	database: z.literal('postgres').optional(),
 })
 	.strict()
 	.transform((access, context): RunnerApprovedAccess => {
@@ -82,6 +85,7 @@ export const runnerApprovedAccessSchema = z.object({
 			contract: contract.data,
 			contractDigest: access.contractDigest,
 			...(access.framework === undefined ? {} : { framework: access.framework }),
+			...(access.database === undefined ? {} : { database: access.database }),
 		}
 	})
 

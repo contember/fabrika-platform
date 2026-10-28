@@ -32,6 +32,11 @@
 			"types": "./src/cloudflare.ts",
 			"default": "./src/cloudflare.ts"
 		},
+		"./cloudflare-postgres": {
+			"bun": "./src/cloudflare-postgres.ts",
+			"types": "./src/cloudflare-postgres.ts",
+			"default": "./src/cloudflare-postgres.ts"
+		},
 		"./contract": {
 			"bun": "./src/contract/index.ts",
 			"types": "./src/contract/index.ts",

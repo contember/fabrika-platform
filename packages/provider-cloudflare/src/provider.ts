@@ -44,6 +44,7 @@ import { configSchema } from './config-schema'
 import {
 	assertCloudflareContract,
 	capsJobSegments,
+	type CloudflareContractGates,
 	needsMinuteTick,
 	pinsGeneratedEntry,
 	runsInObject,
@@ -758,9 +759,13 @@ export const createCloudflareDeployer = (options: CloudflareDeployerOptions) => 
 	}
 	// A local deploy reads the contract with this release and runs it in the object, so it is gated as this release is.
 	const framework = run.approved === undefined ? undefined : run.approved.framework
-	const gates = run.approved === undefined
-		? { capsSegments: true, servesSql: true }
-		: { capsSegments: framework !== undefined && capsJobSegments(framework), servesSql: framework !== undefined && servesRawSql(framework) }
+	const gates: CloudflareContractGates = run.approved === undefined
+		? { capsSegments: true, servesSql: true, database: 'sqlite' }
+		: {
+			capsSegments: framework !== undefined && capsJobSegments(framework),
+			servesSql: framework !== undefined && servesRawSql(framework),
+			database: 'sqlite',
+		}
 	if (platformResources === 'refuse' && contract !== null) assertCloudflareContract(contract, gates)
 	// Read once, before `resources()` runs the checkout's code again: nothing below reads the config's schema.
 	const schema = configSchema(loaded.config)
@@ -885,7 +890,7 @@ export const composeLocalApplication = (options: LocalApplicationOptions): Worke
 		}),
 	}
 	// The local run reads the contract with this release, so it is gated as a local deploy is.
-	assertCloudflareContract(contract, { capsSegments: true, servesSql: true })
+	assertCloudflareContract(contract, { capsSegments: true, servesSql: true, database: 'sqlite' })
 	assertContractSchema(configSchema(config), contract, 'refuse')
 	const served: ServedContract = { contract, digest: contractDigest(contract) }
 	const proxied = platformProxied(config.resources({ env, ...domain }), served, target, false)

@@ -3,6 +3,7 @@ export {
 	type ApplicationWorkerOptions,
 	type CloudflareAppConfig,
 	type CloudflareAppConfigInput,
+	type CloudflarePostgresDatabase,
 	defineApp,
 	isCloudflareAppConfig,
 	type ResourceContext,

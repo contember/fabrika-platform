@@ -2,7 +2,7 @@
 // scaffold's tests import for it: the SQLite kit on Cloudflare (ADR-0065), the Postgres kit otherwise.
 
 import { describe, expect, test } from 'bun:test'
-import { applicationDialect } from '../dialect'
+import { applicationDialect, type ApplicationTarget, applicationTarget } from '../dialect'
 import { generatedTests, scaffoldInputs } from '../scaffold'
 import { CLEAN_APPLICATION } from './helpers'
 
@@ -22,6 +22,65 @@ describe('applicationDialect', () => {
 		expect(dialectOf('export default {')).toBe('postgres')
 		expect(dialectOf("import { defineApp } from './local'\nexport default defineApp({ id: 'notes' })\n")).toBe('postgres')
 		expect(dialectOf("import { Worker } from '@fabrika/provider-cloudflare'\nexport default new Worker({})\n")).toBe('postgres')
+	})
+})
+
+describe('applicationTarget', () => {
+	const targetOf = (config: string | undefined) => applicationTarget(new Map(config === undefined ? [] : [['fabrika.config.ts', config]]))
+	const cloudflare = (argument: string): string => `import { defineApp } from '@fabrika/provider-cloudflare'\nexport default defineApp(${argument})\n`
+
+	test('Postgres and not Cloudflare for a Zerops config, no config and a config that does not parse', () => {
+		expect(targetOf("import { defineApp } from '@fabrika/provider-zerops'\nexport default defineApp({ id: 'notes' })\n")).toEqual({
+			cloudflare: false,
+			dialect: 'postgres',
+		})
+		expect(targetOf(undefined)).toEqual({ cloudflare: false, dialect: 'postgres' })
+		expect(targetOf('export default {')).toEqual({ cloudflare: false, dialect: 'postgres' })
+	})
+
+	test('SQLite for a Cloudflare config that names no database, or one the read sees none of', () => {
+		expect(targetOf(cloudflare("{ id: 'notes' }"))).toEqual({ cloudflare: true, dialect: 'sqlite' })
+		expect(targetOf(cloudflare("{ id: 'notes', worker: { compatibility_date: '2025-10-01' } }"))).toEqual({ cloudflare: true, dialect: 'sqlite' })
+		expect(targetOf("import { defineApp } from '@fabrika/provider-cloudflare'\nconst config = { id: 'notes' }\nexport default defineApp(config)\n"))
+			.toEqual({
+				cloudflare: true,
+				dialect: 'sqlite',
+			})
+	})
+
+	test("Postgres for a Cloudflare config that states database: { kind: 'postgres', … } inline", () => {
+		const postgres: ApplicationTarget = { cloudflare: true, dialect: 'postgres' }
+		expect(targetOf(cloudflare("{ id: 'notes', database: { kind: 'postgres', provisioningSecret: 'DATABASE_URL' } }"))).toEqual(postgres)
+		expect(targetOf(cloudflare("{ id: 'notes', 'database': { kind: `postgres`, provisioningSecret: 'X' } } satisfies object"))).toEqual(postgres)
+		expect(targetOf(cloudflare("{ id: 'notes', database: { kind: 'postgres' as const, provisioningSecret: 'X' } }"))).toEqual(postgres)
+		expect(applicationDialect(new Map([['fabrika.config.ts', cloudflare("{ id: 'notes', database: { kind: 'postgres', provisioningSecret: 'X' } }")]])))
+			.toBe('postgres')
+	})
+
+	test('unreadable for a Cloudflare database the static read cannot settle, which reads as SQLite', () => {
+		const unreadable = (argument: string, preamble = ''): string | undefined => {
+			const target = targetOf(`import { defineApp } from '@fabrika/provider-cloudflare'\n${preamble}export default defineApp(${argument})\n`)
+			expect(target.cloudflare).toBe(true)
+			expect(target.dialect).toBe('sqlite')
+			return target.unreadable
+		}
+		expect(unreadable("{ id: 'notes', database }", "const database = { kind: 'postgres', provisioningSecret: 'X' } as const\n")).toContain(
+			'not an object literal',
+		)
+		expect(unreadable("{ id: 'notes', database: postgres }", "const postgres = { kind: 'postgres', provisioningSecret: 'X' } as const\n")).toContain(
+			'not an object literal',
+		)
+		expect(unreadable("{ id: 'notes', database: { ...base, provisioningSecret: 'X' } }", "const base = { kind: 'postgres' } as const\n")).toContain(
+			'spreads',
+		)
+		expect(unreadable("{ id: 'notes', database: { kind: 'mysql', provisioningSecret: 'X' } }")).toContain("other than the literal 'postgres'")
+		expect(unreadable("{ id: 'notes', database: { kind: KIND, provisioningSecret: 'X' } }", "const KIND = 'postgres'\n")).toContain(
+			"other than the literal 'postgres'",
+		)
+		expect(unreadable("{ id: 'notes', database: { provisioningSecret: 'X' } }")).toContain('names no `kind`')
+		expect(unreadable("{ id: 'notes', database: { kind: 'postgres', provisioningSecret: 'X' }, database: undefined }")).toContain(
+			'not an object literal',
+		)
 	})
 })
 

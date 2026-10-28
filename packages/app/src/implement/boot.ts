@@ -174,6 +174,11 @@ export interface BootOptions {
 	 * object arms its alarm there. Bun supplies none.
 	 */
 	readonly projectWakes?: (transaction: Session) => Promise<void>
+	/**
+	 * `scheduler`: a request's kick only writes its wake (always written) and the runtime's `projectWakes` tells the job
+	 * object; no run starts in the request's isolate. `inline` by default.
+	 */
+	readonly kickRuns?: 'inline' | 'scheduler'
 }
 
 /** The pool size a runtime adapter that names none is assumed to have: the Bun adapter's default. */
