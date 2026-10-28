@@ -167,6 +167,17 @@ export interface ProviderDeployInput {
 	readonly applicationObjects?: ApplicationObjects
 	readonly dryRun: boolean
 	readonly sourceBinding?: ProviderSourceBinding
+	/**
+	 * Present on a dev bootstrap: the provider deploys into this workspace's sandbox, which `devSandboxes.ensure` created
+	 * before the run, and serves it at `origin`. Absent on every other deploy.
+	 */
+	readonly devSandbox?: {
+		readonly workspaceId: string
+		readonly sandboxId: string
+		readonly origin: string
+		/** See `ProviderDevSandboxInput.sandboxKey`. */
+		readonly sandboxKey: string
+	}
 	/** Optional short-lived, run-scoped Operations artifact destination. */
 	readonly artifactUpload?: {
 		readonly url: string
@@ -344,6 +355,21 @@ export interface ProviderNamespaceMember {
 	readonly operationsOrigin?: string
 	/** See `ProviderEnvironment.access`: the proxy table of a contract application comes only from here. */
 	readonly access?: ProviderApprovedAccess
+	/** A dev member with sandboxes is routed ONLY through these entries, never through its own `domain` and `access`. */
+	readonly devSandboxes?: readonly ProviderNamespaceDevSandbox[]
+}
+
+/** One workspace sandbox of a `dev` member, which the namespace proxy routes as its own entry. */
+export interface ProviderNamespaceDevSandbox {
+	readonly workspaceId: string
+	/** The public host the proxy answers the workspace on (`<workspaceId>.<domain>`). */
+	readonly host: string
+	/** See `ProviderDevSandbox.upstreamHost`. */
+	readonly upstreamHost: string
+	/** See `ProviderNamespaceMember.proxySecret`: sealed per workspace. */
+	readonly proxySecret?: string
+	/** The access of the workspace's own published bootstrap run. */
+	readonly access: ProviderApprovedAccess
 }
 
 /** One idempotent namespace lifecycle invocation. */
@@ -356,6 +382,11 @@ export interface ProviderNamespaceMutationInput {
 	 * mutation; absent or null shows the fabrika mark. A provider passes it only to a proxy that can parse it.
 	 */
 	readonly brand?: InstallationBrand | null
+	/**
+	 * Present when a member is a `dev` environment: the namespace's sandbox host is provisioned with it as its API key, and
+	 * see `ProviderDevSandboxInput.sandboxKey`. Absent, the provider provisions no sandbox host.
+	 */
+	readonly sandboxKey?: string
 	readonly signal: AbortSignal
 	readonly events: ProviderNamespaceEvents
 }
@@ -383,6 +414,12 @@ export const PROVIDER_NAMESPACE_IMMUTABLE = 'namespaceImmutable'
  * and is not confirmed. Any other failure means nothing changed. Applying the same plan again must converge.
  */
 export const PROVIDER_NAMESPACE_UPDATE_UNCONFIRMED = 'namespaceUpdateUnconfirmed'
+
+/**
+ * The `code` of a `ProviderNamespaceError` a `devSandboxes` call throws when the namespace's sandbox host has no room
+ * to create or wake one more sandbox. Nothing changed; it succeeds once another sandbox is parked or removed.
+ */
+export const PROVIDER_DEV_CAPACITY = 'devCapacity'
 
 /** One provider-described change, safe to audit: names and values only, never a credential. */
 export interface ProviderNamespaceChange {
@@ -547,6 +584,50 @@ export interface ProviderDevEnvironments {
 	start(input: ProviderDevEnvironmentInput): Promise<void>
 }
 
+/** The provider's handle on one workspace sandbox, which Control persists; stable for the workspace's life. */
+export interface ProviderDevSandboxRef {
+	readonly sandboxId: string
+}
+
+/** One running workspace sandbox of a `dev` environment. */
+export interface ProviderDevSandbox {
+	readonly sandboxId: string
+	/** The base image the sandbox was created from. */
+	readonly baseDigest: string
+	/** The Host the namespace proxy sends to reach the sandbox's application port (e.g. `3000-<id>.<box domain>`). */
+	readonly upstreamHost: string
+}
+
+/** Create a workspace's sandbox, or return the one it already has. */
+export interface ProviderDevSandboxEnsureInput {
+	readonly environment: ProviderEnvironment
+	readonly workspaceId: string
+	/** See `ProviderDevSandboxInput.sandboxKey`. */
+	readonly sandboxKey: string
+	readonly signal: AbortSignal
+}
+
+/** One lifecycle call on an existing workspace sandbox. */
+export interface ProviderDevSandboxInput {
+	readonly environment: ProviderEnvironment
+	readonly sandbox: ProviderDevSandboxRef
+	/** The bearer of the namespace's sandbox host API, composed by Control from its vault for this call; never persisted or logged. */
+	readonly sandboxKey: string
+	readonly signal: AbortSignal
+}
+
+/**
+ * The per-workspace sandboxes of a `dev` environment outside a run. Every call is idempotent: `ensure` creates at most
+ * one sandbox per `workspaceId` and returns it running, `park` and `wake` converge on their state, and `remove` treats a
+ * sandbox already gone as removed. A full sandbox host throws `PROVIDER_DEV_CAPACITY`.
+ */
+export interface ProviderDevSandboxes {
+	ensure(input: ProviderDevSandboxEnsureInput): Promise<ProviderDevSandbox>
+	park(input: ProviderDevSandboxInput): Promise<void>
+	wake(input: ProviderDevSandboxInput): Promise<void>
+	remove(input: ProviderDevSandboxInput): Promise<void>
+}
+
 /**
  * The control-plane capability bundle selected statically by one composition root.
  *
@@ -578,6 +659,8 @@ export interface ControlProvider {
 	readonly applicationHopSecret?: true
 	/** Absent means the provider runs no `dev` environment, and Control refuses one. */
 	readonly devEnvironments?: ProviderDevEnvironments
+	/** Absent means the provider gives a `dev` environment no per-workspace sandboxes. */
+	readonly devSandboxes?: ProviderDevSandboxes
 	/**
 	 * Whether an environment at this approved access is served the ops channel through which Control reaches its object
 	 * (ADR-0069), so its deploy gets `FABRIKA_OPS_KEY_DIGESTS`. The release gate is the provider's, so core keeps no
