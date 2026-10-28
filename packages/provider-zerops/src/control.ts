@@ -319,9 +319,9 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 		return { commitSha: result.commitSha }
 	}
 
-	/** The namespace's sandbox host, which runs the workspace sandboxes of its dev environment. */
-	const sandboxHostOf = (environment: ProviderEnvironment): ZeropsNamespaceSandboxHost => {
-		const { target, namespace, namespaceTarget } = decodeEnvironment(environment)
+	/** The namespace's sandbox host, which runs the workspace sandboxes of its dev environment; null until it is created. */
+	const sandboxHostOf = (environment: ProviderEnvironment): ZeropsNamespaceSandboxHost | null => {
+		const { target, namespaceTarget } = decodeEnvironment(environment)
 		// An older release registered a dev environment as its own Zerops service; it never runs in a sandbox.
 		if (environment.kind === 'dev' && !('kind' in target)) {
 			throw new Error(
@@ -329,16 +329,17 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 					+ 'no longer runs; delete the environment and register it again with --kind=dev and a wildcard domain',
 			)
 		}
-		const host = namespaceTarget.sandboxHost
-		if (host === undefined) throw new Error(`zerops: deployment namespace \`${namespace.id}\` has no sandbox host, so it runs no workspace sandbox`)
-		return host
+		return namespaceTarget.sandboxHost ?? null
 	}
 
 	const sandboxClient = (apiOrigin: string, sandboxKey: string): ZboxClient =>
 		createZboxClient({ baseUrl: apiOrigin, apiKey: sandboxKey, ...(options.zboxFetch === undefined ? {} : { fetch: options.zboxFetch }) })
 
 	const devSandboxes = createZeropsDevSandboxes({
-		client: (environment, sandboxKey) => sandboxClient(sandboxHostOf(environment).apiOrigin, sandboxKey),
+		client: (environment, sandboxKey) => {
+			const host = sandboxHostOf(environment)
+			return host === null ? null : sandboxClient(host.apiOrigin, sandboxKey)
+		},
 		sleep: options.sleep ?? defaultSleep,
 		log: options.log ?? ((line) => console.warn(line)),
 	})
@@ -417,6 +418,7 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 			if (input.environment.kind === 'dev') {
 				if (input.devSandbox === undefined) throw new Error('zerops: a dev environment deploys only into a workspace sandbox, through bind_dev')
 				const host = sandboxHostOf(input.environment)
+				if (host === null) throw new Error("zerops: the namespace's sandbox host is not created yet; bind the workspace again")
 				const result = await deploySandbox({
 					appId: input.app.id,
 					env: input.environment.env,

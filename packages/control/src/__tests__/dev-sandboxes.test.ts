@@ -8,6 +8,7 @@ import { hashPlatformKey } from '@fabrika/email/platform'
 import {
 	type ControlProvider,
 	PROVIDER_DEV_CAPACITY,
+	PROVIDER_DEV_HOST_PENDING,
 	type ProviderDevSandboxes,
 	type ProviderDevSandboxInput,
 	type ProviderDevSandboxRemoveInput,
@@ -18,6 +19,7 @@ import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-a
 import {
 	bindDevUseCase,
 	DEV_SANDBOX_CAPACITY,
+	DEV_SANDBOX_HOST_PENDING,
 	devSandboxRemoval,
 	type DevUseCaseContext,
 	followDevCommit,
@@ -27,6 +29,7 @@ import {
 	runChecksUseCase,
 } from '../api/dev-environments'
 import { ControlApiError } from '../api/domain'
+import { NamespaceProxyBusyError } from '../api/namespaces'
 import { deleteAppUseCase } from '../api/registry/apps'
 import { deleteAppEnvUseCase, putAppEnvUseCase } from '../api/registry/environments'
 import { abandonWorkspaceUseCase, createWorkspaceUseCase } from '../api/workspaces'
@@ -61,6 +64,8 @@ class FakeSandboxHost implements ProviderDevSandboxes {
 	/** Workspace → the sandbox Box holds for it. */
 	readonly held = new Map<string, string>()
 	full = false
+	/** The namespace has no sandbox host yet: `ensure` says so until a republish created it. */
+	hostPending = false
 	failRemove = false
 	private readonly lost = new Set<string>()
 
@@ -68,6 +73,7 @@ class FakeSandboxHost implements ProviderDevSandboxes {
 		this.keys.add(input.sandboxKey)
 		this.calls.push(`ensure ${input.workspaceId}`)
 		if (this.full) return Promise.reject(new ProviderNamespaceError('the sandbox host is full', PROVIDER_DEV_CAPACITY, true))
+		if (this.hostPending) return Promise.reject(new ProviderNamespaceError('no sandbox host yet', PROVIDER_DEV_HOST_PENDING, true))
 		const sandboxId = this.held.get(input.workspaceId)
 			?? (this.lost.has(input.workspaceId) ? `sbx-${input.workspaceId}-again` : `sbx-${input.workspaceId}`)
 		this.held.set(input.workspaceId, sandboxId)
@@ -386,6 +392,41 @@ describe('dev sandboxes', () => {
 
 		w.host.full = false
 		expect((await bindDevUseCase(w.dev(), { workspaceId })).state).toBe('bootstrapping')
+	})
+
+	test("the first bind of a namespace republishes it, which creates the sandbox host, and then creates the workspace's sandbox", async () => {
+		const w = await world()
+		const workspaceId = await w.workspace('First')
+		w.source.branches.set(`fabrika/${workspaceId}`, sha('b'))
+		w.host.hostPending = true
+		const deps: DevSandboxDeps = {
+			...w.deps,
+			namespaceProxyChanged: (namespaceId) => {
+				w.republished.push(namespaceId)
+				w.host.hostPending = false
+				return Promise.resolve()
+			},
+		}
+		expect((await bindDevUseCase(w.dev(undefined, deps), { workspaceId })).state).toBe('bootstrapping')
+		expect(w.republished).toEqual([NAMESPACE])
+		expect(w.host.calls).toEqual([`ensure ${workspaceId}`, `ensure ${workspaceId}`, `wake sbx-${workspaceId}`])
+		expect((await w.repositories.devSandboxes.get(workspaceId))?.sandbox_id).toBe(`sbx-${workspaceId}`)
+	})
+
+	test('a busy namespace while its sandbox host is created is a 503 to retry, and the sealed proxy secret is not kept', async () => {
+		const w = await world()
+		const workspaceId = await w.workspace('Busy')
+		w.source.branches.set(`fabrika/${workspaceId}`, sha('b'))
+		w.host.hostPending = true
+		const deps: DevSandboxDeps = {
+			...w.deps,
+			namespaceProxyChanged: () => Promise.reject(new NamespaceProxyBusyError(`Namespace ${NAMESPACE} proxy is busy; a reconcile is queued`)),
+		}
+		const refused = await bindDevUseCase(w.dev(undefined, deps), { workspaceId }).catch((cause: unknown) => cause)
+		expect(refused instanceof ControlApiError ? [refused.httpStatus, refused.message] : refused).toEqual([503, DEV_SANDBOX_HOST_PENDING])
+		const labels = await w.harness.d1.prepare('SELECT label FROM vault').all<{ label: string }>()
+		expect(labels.results.map((row) => row.label).filter((label) => label.includes(workspaceId))).toEqual([])
+		expect(w.queued).toHaveLength(0)
 	})
 
 	test('maintenance parks an idle sandbox; a commit wakes it, and bind_dev wakes it and waits for its launcher', async () => {

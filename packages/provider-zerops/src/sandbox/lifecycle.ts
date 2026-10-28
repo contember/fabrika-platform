@@ -3,6 +3,7 @@
 
 import {
 	PROVIDER_DEV_CAPACITY,
+	PROVIDER_DEV_HOST_PENDING,
 	type ProviderDevSandbox,
 	type ProviderDevSandboxes,
 	type ProviderEnvironment,
@@ -55,7 +56,8 @@ export async function withSandboxCapacity<T>(run: () => Promise<T>): Promise<T> 
 
 export interface ZeropsDevSandboxesOptions {
 	/** The Box client of the environment's namespace sandbox host, authenticated with `sandboxKey`. */
-	readonly client: (environment: ProviderEnvironment, sandboxKey: string) => ZboxClient
+	/** Null while the namespace has no sandbox host yet. */
+	readonly client: (environment: ProviderEnvironment, sandboxKey: string) => ZboxClient | null
 	readonly sleep: Sleeper
 	/** Where `ensure` says it replaced a dead sandbox: the seam has no run log outside a run. */
 	readonly log: (line: string) => void
@@ -127,10 +129,22 @@ export function createZeropsDevSandboxes(options: ZeropsDevSandboxesOptions): Pr
 		return sandbox
 	}
 
+	const hostClient = (environment: ProviderEnvironment, sandboxKey: string): ZboxClient => {
+		const client = options.client(environment, sandboxKey)
+		if (client === null) {
+			throw new ProviderNamespaceError(
+				"zerops: the namespace's sandbox host is not created yet; a namespace republish creates it",
+				PROVIDER_DEV_HOST_PENDING,
+				true,
+			)
+		}
+		return client
+	}
+
 	return {
 		ensure: async (input) => {
 			assertDevEnvironment(input.environment)
-			const client = options.client(input.environment, input.sandboxKey)
+			const client = hostClient(input.environment, input.sandboxKey)
 			const found = await client.findSandboxByName(sandboxName(input.workspaceId), input.signal)
 			let replaced: string | null = null
 			if (found !== null) {
@@ -152,7 +166,7 @@ export function createZeropsDevSandboxes(options: ZeropsDevSandboxesOptions): Pr
 		},
 		park: async (input) => {
 			assertDevEnvironment(input.environment)
-			const client = options.client(input.environment, input.sandboxKey)
+			const client = hostClient(input.environment, input.sandboxKey)
 			const sandbox = await settledSandbox(client, await existingSandbox(client, input.sandbox.sandboxId, input.signal), options.sleep, input.signal)
 			if (sandbox.status === 'PARKED') return
 			if (sandbox.status !== 'RUNNING') throw new Error(`zerops: sandbox ${sandbox.id} is ${sandbox.status} and cannot be parked`)
@@ -160,12 +174,14 @@ export function createZeropsDevSandboxes(options: ZeropsDevSandboxesOptions): Pr
 		},
 		wake: async (input) => {
 			assertDevEnvironment(input.environment)
-			const client = options.client(input.environment, input.sandboxKey)
+			const client = hostClient(input.environment, input.sandboxKey)
 			await runningSandbox(client, input.sandbox.sandboxId, options.sleep, input.signal)
 		},
 		remove: async (input) => {
 			assertDevEnvironment(input.environment)
 			const client = options.client(input.environment, input.sandboxKey)
+			// No sandbox host, so no sandbox of the workspace can exist.
+			if (client === null) return
 			const sandboxId = input.sandbox?.sandboxId ?? (await client.findSandboxByName(sandboxName(input.workspaceId), input.signal))?.id
 			if (sandboxId === undefined) return
 			await client.deleteSandbox(sandboxId, sandboxIdempotencyKey('delete', sandboxId), input.signal)

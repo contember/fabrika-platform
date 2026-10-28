@@ -6,7 +6,7 @@
 import { type DevCheckResult, devCheckResultSchema, type DevLogLine, devLogLineSchema, type DevStatus } from '@fabrika/app/dev/wire'
 import type { RunDto } from '@fabrika/control-contract'
 import { CONTROL_ACTIONS } from '@fabrika/control-contract'
-import { PROVIDER_DEV_CAPACITY, ProviderNamespaceError } from '@fabrika/provider-contract'
+import { PROVIDER_DEV_CAPACITY, PROVIDER_DEV_HOST_PENDING, ProviderNamespaceError } from '@fabrika/provider-contract'
 import { z } from 'zod/v4'
 import type { AppEnvRow, DevSandboxRow, RunRow } from '../db'
 import { DEV_SANDBOX_VAULT_REQUIRED, devSandboxOrigin, workspacePublication } from '../dev/sandbox-keys'
@@ -24,6 +24,7 @@ import { type DevSignals, waitForRecord } from '../dev/signals'
 import { syncRefusal } from '../dev/sync'
 import { logFailure } from '../error-label'
 import { ControlApiError, fail } from './domain'
+import { NamespaceProxyBusyError } from './namespaces'
 import { canAtCoordinates, createManualRun, toRunDto } from './runs'
 import {
 	type AuthoringTargetDto,
@@ -58,6 +59,8 @@ export const DEV_LAUNCHER_BUSY_SILENT_SECONDS = 15 * 60
 
 /** Why a sandbox was not created or woken: the namespace's sandbox host has no room for one more. */
 export const DEV_SANDBOX_CAPACITY = 'the sandbox host is full; abandon idle workspaces or ask the operator to size the zbox service'
+/** Why the first sandbox of a namespace was not created: its sandbox host is still being created. */
+export const DEV_SANDBOX_HOST_PENDING = "the namespace's sandbox host is being created; retry bind_dev in a minute"
 const DEV_SANDBOX_REMOVING = "the workspace's dev sandbox is being removed, or the workspace was abandoned; retry in a minute"
 
 /** What the dev use cases need beyond a workspace's: this process's wake-ups and the workspace sandboxes. */
@@ -412,6 +415,9 @@ async function sandboxCall<T>(operation: () => Promise<T>): Promise<T> {
 		return await operation()
 	} catch (cause) {
 		if (cause instanceof ProviderNamespaceError && cause.code === PROVIDER_DEV_CAPACITY) fail(503, DEV_SANDBOX_CAPACITY)
+		// A busy namespace has queued the reconcile that creates the host.
+		if (cause instanceof ProviderNamespaceError && cause.code === PROVIDER_DEV_HOST_PENDING) fail(503, DEV_SANDBOX_HOST_PENDING)
+		if (cause instanceof NamespaceProxyBusyError) fail(503, DEV_SANDBOX_HOST_PENDING)
 		throw cause
 	}
 }

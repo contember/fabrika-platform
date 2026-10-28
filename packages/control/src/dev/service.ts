@@ -2,7 +2,13 @@
 // maintenance parks an idle one and removes one idle for weeks, and abandoning the workspace removes it. None of it is a
 // deploy, so none of it takes the namespace lease.
 
-import type { ControlProvider, ProviderDevSandboxes } from '@fabrika/provider-contract'
+import {
+	type ControlProvider,
+	PROVIDER_DEV_HOST_PENDING,
+	type ProviderDevSandbox,
+	type ProviderDevSandboxes,
+	ProviderNamespaceError,
+} from '@fabrika/provider-contract'
 import { type NamespaceProxyChanged, republishNamespace } from '../api/namespaces'
 import type { AppEnvRow, ControlRepositories, DevSandboxReportInput, DevSandboxRepository, DevSandboxRow } from '../db'
 import type { Env } from '../env'
@@ -161,14 +167,25 @@ export async function ensureDevSandbox(
 			console.error(`dev sandboxes: an unused proxy secret of workspace ${workspaceId} was kept`)
 		)
 	}
-	let created: Awaited<ReturnType<ProviderDevSandboxes['ensure']>>
-	try {
-		created = await deps.provider.devSandboxes.ensure({
+	const ensure = async (): Promise<ProviderDevSandbox> =>
+		deps.provider.devSandboxes.ensure({
 			environment: await providerEnvironment(deps.repositories, appEnv),
 			workspaceId,
 			sandboxKey,
 			signal,
 		})
+	let created: ProviderDevSandbox
+	try {
+		try {
+			created = await ensure()
+		} catch (cause) {
+			if (!(cause instanceof ProviderNamespaceError && cause.code === PROVIDER_DEV_HOST_PENDING) || deps.namespaceProxyChanged === undefined) {
+				throw cause
+			}
+			// The first sandbox of the namespace: this row hands the republish the host key, so it creates the host.
+			await deps.namespaceProxyChanged(namespaceId)
+			created = await ensure()
+		}
 	} catch (cause) {
 		await forget()
 		throw cause

@@ -421,6 +421,12 @@ export const PROVIDER_NAMESPACE_UPDATE_UNCONFIRMED = 'namespaceUpdateUnconfirmed
  */
 export const PROVIDER_DEV_CAPACITY = 'devCapacity'
 
+/**
+ * The `code` of a `ProviderNamespaceError` a `devSandboxes` call throws when the namespace has no sandbox host yet.
+ * Nothing changed; it succeeds once a namespace mutation handed the sandbox host key has created the host.
+ */
+export const PROVIDER_DEV_HOST_PENDING = 'devHostPending'
+
 /** One provider-described change, safe to audit: names and values only, never a credential. */
 export interface ProviderNamespaceChange {
 	readonly field: string
@@ -614,7 +620,8 @@ export interface ProviderDevSandboxRemoveInput {
 /**
  * The per-workspace sandboxes of a `dev` environment outside a run. Every call is idempotent: `ensure` creates at most
  * one sandbox per `workspaceId` and returns it running, `park` and `wake` converge on their state, and `remove` treats a
- * sandbox already gone as removed. A full sandbox host throws `PROVIDER_DEV_CAPACITY`.
+ * sandbox already gone as removed. A full sandbox host throws `PROVIDER_DEV_CAPACITY`, a namespace without one yet
+ * `PROVIDER_DEV_HOST_PENDING`; `remove` there is a no-op, since no sandbox can exist.
  */
 export interface ProviderDevSandboxes {
 	ensure(input: ProviderDevSandboxEnsureInput): Promise<ProviderDevSandbox>

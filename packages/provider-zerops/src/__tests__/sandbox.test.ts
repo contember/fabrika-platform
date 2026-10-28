@@ -6,6 +6,7 @@ import { parseManagedEnvironment } from '@fabrika/auth-core'
 import {
 	type JsonValue,
 	PROVIDER_DEV_CAPACITY,
+	PROVIDER_DEV_HOST_PENDING,
 	type ProviderDeployInput,
 	type ProviderDeploymentNamespace,
 	type ProviderEnvironment,
@@ -320,16 +321,18 @@ describe('dev sandbox lifecycle', () => {
 		expect(box.sandboxes.has('sb7')).toBe(true)
 	})
 
-	test('refuses a namespace without a sandbox host and an environment that is not dev', async () => {
+	test('a namespace without a sandbox host yet: ensure says so by code and remove has nothing to remove', async () => {
+		const { box, control } = harness()
+		const environment = devEnvironment({ namespace: namespace({ sandboxHost: false }) })
+		const pending = await sandboxes(control).ensure({ environment, workspaceId: WORKSPACE, sandboxKey: SANDBOX_KEY, signal: signal() })
+			.catch((cause: unknown) => cause)
+		expect(pending instanceof ProviderNamespaceError ? [pending.code, pending.retryable] : pending).toEqual([PROVIDER_DEV_HOST_PENDING, true])
+		await sandboxes(control).remove({ environment, workspaceId: WORKSPACE, sandbox: null, sandboxKey: SANDBOX_KEY, signal: signal() })
+		expect(box.requests).toEqual([])
+	})
+
+	test('refuses an environment that is not dev', async () => {
 		const { control } = harness()
-		await expect(
-			sandboxes(control).ensure({
-				environment: devEnvironment({ namespace: namespace({ sandboxHost: false }) }),
-				workspaceId: WORKSPACE,
-				sandboxKey: SANDBOX_KEY,
-				signal: signal(),
-			}),
-		).rejects.toThrow('zerops: deployment namespace `apps-dev` has no sandbox host, so it runs no workspace sandbox')
 		await expect(
 			sandboxes(control).ensure({
 				environment: devEnvironment({ kind: 'standard' }),
