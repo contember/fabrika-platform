@@ -10,7 +10,7 @@
 import { enqueueUnsettledNamespaces } from './api/namespaces'
 import type { BackupScheduleSummary } from './backups'
 import type { ControlRegistryRepository } from './db'
-import type { DevIdleSummary } from './dev/service'
+import type { DevMaintenanceSummary } from './dev/service'
 import type { Env } from './env'
 import { type FetchFn, pollPublicRepos, type PollSummary } from './github/triggers/poll'
 import { type MailMaintenanceSummary, runMailMaintenance } from './mail-relay/maintenance'
@@ -33,8 +33,8 @@ export interface MaintenanceSummary {
 	releases: OperationsReleaseProjectionSummary
 	/** Relayed mail: queued messages re-enqueued, final messages whose content was forgotten. */
 	mail: MailMaintenanceSummary
-	/** `dev` environments stopped after their idle period, and stops that failed. */
-	dev: DevIdleSummary
+	/** `dev` services stopped and workspace sandboxes parked after their idle period, sandboxes removed, and what failed. */
+	dev: DevMaintenanceSummary
 	/** Restores and orphaned migrations taken over, daily backups carried on and started (ADR-0070 §8–§9). */
 	backups: BackupScheduleSummary
 }
@@ -51,8 +51,8 @@ export interface MaintenanceOptions {
 	operations?: () => Promise<OperationsCatalogSyncSummary>
 	/** Test seam for the deploy-release maintenance replay. */
 	releases?: () => Promise<OperationsReleaseProjectionSummary>
-	/** A composition root whose provider runs `dev` environments injects their idle stop. */
-	devIdle?: () => Promise<DevIdleSummary>
+	/** A composition root whose provider runs `dev` environments injects their idle stop, park and stale removal. */
+	devIdle?: () => Promise<DevMaintenanceSummary>
 	/** A composition root whose provider serves the ops channel injects the data operations' pass (`runBackupSchedule`). */
 	backups?: () => Promise<BackupScheduleSummary>
 }
@@ -107,8 +107,10 @@ export async function runMaintenance(env: Env, options: MaintenanceOptions = {})
 	if (mail.requeued > 0 || mail.purged > 0 || mail.collected > 0) {
 		console.info(`mail maintenance: requeued=${mail.requeued} purged=${mail.purged} collected=${mail.collected}`)
 	}
-	const dev = options.devIdle === undefined ? { stopped: 0, failed: 0 } : await options.devIdle()
-	if (dev.stopped > 0 || dev.failed > 0) console.info(`dev environments: stopped=${dev.stopped} failed=${dev.failed}`)
+	const dev = options.devIdle === undefined ? { stopped: 0, parked: 0, removed: 0, failed: 0 } : await options.devIdle()
+	if (dev.stopped > 0 || dev.parked > 0 || dev.removed > 0 || dev.failed > 0) {
+		console.info(`dev environments: stopped=${dev.stopped} parked=${dev.parked} removed=${dev.removed} failed=${dev.failed}`)
+	}
 	// Last: a pass spends at most `BACKUP_PASS_MS` on dump requests, and what it leaves running the next pass continues.
 	const backups = options.backups === undefined
 		? { resumed: 0, continued: 0, started: 0, succeeded: 0, failed: 0, unfinished: 0, skipped: 0, errored: 0 }

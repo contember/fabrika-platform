@@ -143,6 +143,8 @@ for (const backend of backends) {
 			const receiver = (waitMs = 2_000): DevReceiverDeps => ({
 				keys: repositories.platformTransportKeys,
 				devEnvironments: repositories.devEnvironments,
+				devSandboxes: repositories.devSandboxes,
+				sandboxes: false,
 				sourceTarget: () => Promise.resolve({ connectionId: 'conn-acme', installationId: 45, owner: 'acme', repository: 'shop' }),
 				source: seeded.source,
 				signals,

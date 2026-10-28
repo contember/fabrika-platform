@@ -3,6 +3,7 @@
 
 import { readAppAgentSkill } from '@fabrika/app/agent-skill'
 import { PROXY_TOKEN_HEADER } from '@fabrika/auth'
+import type { ControlProvider, ProviderDevSandboxes } from '@fabrika/provider-contract'
 import { afterEach, describe, expect, spyOn, test } from 'bun:test'
 import { controlMcpResource, controlMcpResourceMetadata } from '../../fabrika.service'
 import type { DeployQueue } from '../api/runs'
@@ -15,6 +16,7 @@ import { allowAllAuth } from './helpers/iam'
 import { proxiedRequest } from './helpers/proxy'
 import { unusedSourceConnection } from './helpers/source-connection'
 import { adminToken, testIamEnv, testResourceToken } from './helpers/tokens'
+import { testVaultKey } from './helpers/vault'
 import { AUTHOR_ACTIONS, seedWorkspaceWorld, sha, type WorkspaceWorld, zeropsProvider } from './helpers/workspaces'
 
 const ORIGIN = 'https://console.example.com'
@@ -28,8 +30,10 @@ afterEach(() => {
 
 async function fixture(
 	queue?: DeployQueue,
-	options: { dev?: boolean } = {},
+	options: { dev?: boolean; provider?: ControlProvider } = {},
 ): Promise<{ world: WorkspaceWorld; fetch: (request: Request) => Promise<Response> }> {
+	const provider = options.provider ?? zeropsProvider
+	const sandboxes = provider.devSandboxes !== undefined
 	harness = createHarness()
 	const world = await seedWorkspaceWorld(harness.repositories, harness.d1)
 	// The world's queue and log reader stand in for the process ports.
@@ -48,10 +52,11 @@ async function fixture(
 		WAIT_UNTIL: () => {},
 		ENVIRONMENT: 'stage',
 		FABRIKA_CONTROL_DOMAIN: ORIGIN,
-		...(options.dev === true ? { DEV_SOURCE: { source: world.source, signals: new DevSignals() } } : {}),
+		...(options.dev === true ? { DEV_SOURCE: { source: world.source, signals: new DevSignals(), sandboxes } } : {}),
+		...(sandboxes ? { FABRIKA_CONTROL_VAULT_KEY: testVaultKey() } : {}),
 	}
-	const mcp = controlMcpRoute(env, world.source, zeropsProvider)
-	const served = createFetchHandler(env, zeropsProvider, unusedSourceConnection('zerops'), mcp)
+	const mcp = controlMcpRoute(env, world.source, provider)
+	const served = createFetchHandler(env, provider, unusedSourceConnection('zerops'), mcp)
 	return { world, fetch: (request) => served(proxiedRequest(request, { mcp: true })) }
 }
 
@@ -352,6 +357,57 @@ describe('the MCP endpoint', () => {
 			failing.mockRestore()
 			errorLog.mockRestore()
 		}
+	})
+
+	test('bind_dev gives the workspace its own sandbox at its own URL, and delete_workspace removes it', async () => {
+		const calls: string[] = []
+		const host: ProviderDevSandboxes = {
+			ensure: (input) => {
+				calls.push(`ensure ${input.workspaceId}`)
+				return Promise.resolve({ sandboxId: `sbx-${input.workspaceId}`, baseDigest: 'sha256:base', upstreamHost: 'upstream.box.test' })
+			},
+			park: () => Promise.reject(new Error('unused')),
+			wake: (input) => {
+				calls.push(`wake ${input.sandbox.sandboxId}`)
+				return Promise.resolve()
+			},
+			remove: (input) => {
+				calls.push(`remove ${input.sandbox?.sandboxId ?? input.workspaceId}`)
+				return Promise.resolve()
+			},
+		}
+		const { fetch, world } = await fixture(undefined, { dev: true, provider: { ...zeropsProvider, devSandboxes: host } })
+		const envelope = JSON.stringify({ provider: 'zerops', version: 1, payload: {} })
+		await world.repositories.registry.createDeploymentNamespaceWithResourceClaims({
+			id: 'apps-dev',
+			env: 'dev',
+			provider: 'zerops',
+			exclusiveAppId: null,
+			providerTargetJson: envelope,
+			state: 'ready',
+		}, [])
+		await world.repositories.registry.upsertAppEnv({
+			appId: 'shop',
+			env: 'dev',
+			kind: 'dev',
+			domain: 'dev.shop.test',
+			namespaceId: 'apps-dev',
+			provider: 'zerops',
+			providerTargetJson: envelope,
+			providerArtifactJson: envelope,
+		})
+		const token = await testResourceToken({ resource: RESOURCE, label: 'author@acme.test', actions: AUTHOR_ACTIONS })
+		const call = async (name: string, args: object) => toolJson(await rpc(fetch, token, 'tools/call', { name, arguments: args }))
+		const workspaceId = String(field(await call('create_workspace', { appId: 'shop', env: 'stage', title: 'Banner' }), 'id'))
+
+		const bound = await call('bind_dev', { workspaceId })
+		expect(field(bound, 'url')).toBe(`https://${workspaceId}.dev.shop.test`)
+		expect(field(bound, 'state')).toBe('bootstrapping')
+		expect((await world.repositories.devSandboxes.get(workspaceId))?.sandbox_id).toBe(`sbx-${workspaceId}`)
+
+		await call('delete_workspace', { workspaceId })
+		expect(calls).toEqual([`ensure ${workspaceId}`, `wake sbx-${workspaceId}`, `remove sbx-${workspaceId}`])
+		expect(await world.repositories.devSandboxes.get(workspaceId)).toBeNull()
 	})
 
 	test('an OAuth resource token is refused on the console RPC surface', async () => {

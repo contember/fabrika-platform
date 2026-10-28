@@ -43,6 +43,14 @@ export interface WorkspaceUseCaseContext {
 	readonly consoleOrigin?: string
 	/** The files that configure the provider's deploy (`ControlProvider.authoring`), protected at any depth. */
 	readonly protectedFiles: readonly string[]
+	/** Removes the workspace's dev sandbox, if it has one; absent where the provider gives workspaces no sandbox. */
+	readonly devSandboxRemoval?: DevSandboxRemovalPort
+}
+
+export interface DevSandboxRemovalPort {
+	/** Refuses, before the workspace changes, when its sandbox could not be removed. */
+	readonly prepare: (workspaceId: string) => Promise<void>
+	readonly remove: (workspaceId: string, signal: AbortSignal) => Promise<void>
 }
 
 export interface AuthoringTargetDto {
@@ -704,8 +712,9 @@ export async function createPullRequestUseCase(
 }
 
 /**
- * Abandon a workspace: delete its branch, which closes an open pull request from it on GitHub, then mark it so it is no
- * longer listed or usable. The stage environment keeps running whatever it last deployed. Repeating it is harmless.
+ * Abandon a workspace: delete its branch, which closes an open pull request from it on GitHub, remove its dev sandbox,
+ * then mark it so it is no longer listed or usable. The stage environment keeps running whatever it last deployed.
+ * Repeating it is harmless.
  */
 export async function abandonWorkspaceUseCase(
 	c: WorkspaceUseCaseContext,
@@ -715,8 +724,10 @@ export async function abandonWorkspaceUseCase(
 	const { branch } = owned.workspace
 	// Only ever a workspace branch: never the default branch or anything the operator owns.
 	if (!branch.startsWith(WORKSPACE_BRANCH_PREFIX)) fail(409, 'the workspace does not own a fabrika/ branch')
+	await c.devSandboxRemoval?.prepare(owned.workspace.id)
 	// The branch goes first, so a failure leaves the workspace usable and the call can be repeated.
 	const branchDeleted = await sourceCall(() => c.source.deleteBranch({ target: owned.source, branch, signal: c.signal }))
+	await c.devSandboxRemoval?.remove(owned.workspace.id, c.signal)
 	await c.repositories.workspaces.markAbandoned(owned.workspace.id)
 	await c.auth.audit({
 		action: 'source.workspace.abandon',

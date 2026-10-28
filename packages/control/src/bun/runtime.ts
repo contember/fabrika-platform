@@ -215,7 +215,9 @@ export function createRuntime(
 	const env: Env = {
 		...baseEnv,
 		COMMITS: composed.commits,
-		...(composed.provider.devEnvironments === undefined ? {} : { DEV_SOURCE: { source: workspaceSource, signals: new DevSignals() } }),
+		...(composed.provider.devEnvironments === undefined && composed.provider.devSandboxes === undefined ? {} : {
+			DEV_SOURCE: { source: workspaceSource, signals: new DevSignals(), sandboxes: composed.provider.devSandboxes !== undefined },
+		}),
 	}
 
 	return {

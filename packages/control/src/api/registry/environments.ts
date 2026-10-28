@@ -41,7 +41,7 @@ export async function putAppEnvUseCase(c: RegistryUseCaseContext, appId: string,
 		fail(409, `environment ${env} is ${existing.kind}; an environment's kind is set when it is created`)
 	}
 	const kind = existing?.kind ?? input.kind ?? 'standard'
-	if (kind === 'dev') await assertDevEnvironment(c, app, env, existing, input.authoring === true, triggerRef)
+	if (kind === 'dev') await assertDevEnvironment(c, app, env, existing, input.authoring === true, triggerRef, input.domain ?? null)
 	if (input.authoring === true) {
 		assertAuthoringTarget(c.provider, app)
 		// ADR-0049: one stage environment per app.
@@ -195,6 +195,7 @@ function assertAuthoringTarget(provider: ControlProvider, app: AppRow): void {
 /**
  * ADR-0049: one `dev` environment per app, on a provider that runs one, for an app whose workspaces Control can read.
  * It is never production, never protected (ADR-0050), never an authoring target, and deploys only through `bind_dev`.
+ * Where each workspace gets its own sandbox, served at `<workspace id>.<domain>`, its domain is that wildcard base.
  */
 async function assertDevEnvironment(
 	c: RegistryUseCaseContext,
@@ -203,8 +204,14 @@ async function assertDevEnvironment(
 	existing: AppEnvRow | null,
 	authoring: boolean,
 	triggerRef: string | null,
+	domain: string | null,
 ): Promise<void> {
-	if (c.provider.devEnvironments === undefined) fail(409, `the ${c.provider.id} provider runs no dev environment; it runs on Zerops only`)
+	if (c.provider.devSandboxes === undefined && c.provider.devEnvironments === undefined) {
+		fail(409, `the ${c.provider.id} provider runs no dev environment; it runs on Zerops only`)
+	}
+	if (c.provider.devSandboxes !== undefined && (domain === null || domain === '')) {
+		fail(409, 'a dev environment serves each workspace at <workspace id>.<domain>, so it needs a domain: the wildcard base, such as dev.example.com')
+	}
 	if (app.github_connection_id === null || app.github_installation_id === null) {
 		fail(409, 'a dev environment follows a workspace, so its app needs a GitHub connection')
 	}

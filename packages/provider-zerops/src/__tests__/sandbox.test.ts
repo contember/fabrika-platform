@@ -23,7 +23,7 @@ import { zeropsNamespaceTargetCodec } from '../namespace'
 import { readSandboxBaseContext, sandboxBaseName } from '../sandbox/base-image'
 import { SessionOutputRelay } from '../sandbox/deploy'
 import { assertSandboxArtifact } from '../sandbox/dev-artifact'
-import { sandboxIdempotencyKey } from '../sandbox/lifecycle'
+import { sandboxIdempotencyKey, sandboxName } from '../sandbox/lifecycle'
 import { readSandboxScripts, SANDBOX_SCRIPT_FILES } from '../sandbox/scripts'
 import type { ZeropsSourcePort, ZeropsSourceUploadInput } from '../source/port'
 import type { ZeropsAppConfig, ZeropsServiceSpec } from '../types'
@@ -294,9 +294,21 @@ describe('dev sandbox lifecycle', () => {
 		await lifecycle.wake(input)
 		await lifecycle.wake(input)
 		expect(box.requests.filter((request) => request.path === '/sandbox/sb5/wake')).toHaveLength(1)
-		await lifecycle.remove(input)
-		await lifecycle.remove(input)
+		await lifecycle.remove({ ...input, workspaceId: WORKSPACE })
+		await lifecycle.remove({ ...input, workspaceId: WORKSPACE })
 		expect(box.sandboxes.has('sb5')).toBe(false)
+	})
+
+	test('remove without a recorded sandbox finds the workspace sandbox by name, and treats none as removed', async () => {
+		const box = new FakeBox()
+		box.addSandbox({ id: 'sb6', name: sandboxName(WORKSPACE) })
+		box.addSandbox({ id: 'sb7', name: sandboxName('01a1a2b3-0000-7000-8000-0000000000ff') })
+		const lifecycle = sandboxes(harness(box).control)
+		const input = { environment: devEnvironment(), workspaceId: WORKSPACE, sandbox: null, sandboxKey: SANDBOX_KEY, signal: signal() }
+		await lifecycle.remove(input)
+		await lifecycle.remove(input)
+		expect(box.sandboxes.has('sb6')).toBe(false)
+		expect(box.sandboxes.has('sb7')).toBe(true)
 	})
 
 	test('refuses a namespace without a sandbox host and an environment that is not dev', async () => {

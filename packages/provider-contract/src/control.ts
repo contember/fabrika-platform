@@ -616,6 +616,16 @@ export interface ProviderDevSandboxInput {
 	readonly signal: AbortSignal
 }
 
+/** Remove a workspace's sandbox; with no recorded `sandbox`, the one an unrecorded `ensure` may have created. */
+export interface ProviderDevSandboxRemoveInput {
+	readonly environment: ProviderEnvironment
+	readonly workspaceId: string
+	readonly sandbox: ProviderDevSandboxRef | null
+	/** See `ProviderDevSandboxInput.sandboxKey`. */
+	readonly sandboxKey: string
+	readonly signal: AbortSignal
+}
+
 /**
  * The per-workspace sandboxes of a `dev` environment outside a run. Every call is idempotent: `ensure` creates at most
  * one sandbox per `workspaceId` and returns it running, `park` and `wake` converge on their state, and `remove` treats a
@@ -625,7 +635,7 @@ export interface ProviderDevSandboxes {
 	ensure(input: ProviderDevSandboxEnsureInput): Promise<ProviderDevSandbox>
 	park(input: ProviderDevSandboxInput): Promise<void>
 	wake(input: ProviderDevSandboxInput): Promise<void>
-	remove(input: ProviderDevSandboxInput): Promise<void>
+	remove(input: ProviderDevSandboxRemoveInput): Promise<void>
 }
 
 /**

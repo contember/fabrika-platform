@@ -130,7 +130,7 @@ describe.skipIf(box === null)('dev sandboxes, against a real Zerops Box workspac
 		const found = await client.findSandboxByName(sandboxName(workspaceId), signal)
 		for (const id of new Set([sandbox?.sandboxId, found?.id])) {
 			if (id === undefined) continue
-			await sandboxes.remove({ environment, sandbox: { sandboxId: id }, sandboxKey: live.apiKey, signal })
+			await sandboxes.remove({ environment, workspaceId, sandbox: { sandboxId: id }, sandboxKey: live.apiKey, signal })
 		}
 	}, CLEANUP_TIMEOUT_MS)
 
@@ -248,8 +248,8 @@ describe.skipIf(box === null)('dev sandboxes, against a real Zerops Box workspac
 	test('remove is idempotent', async () => {
 		const signal = AbortSignal.timeout(STEP_TIMEOUT_MS)
 		const id = sandboxId()
-		await sandboxes.remove({ environment, sandbox: { sandboxId: id }, sandboxKey: live.apiKey, signal })
-		await sandboxes.remove({ environment, sandbox: { sandboxId: id }, sandboxKey: live.apiKey, signal })
+		await sandboxes.remove({ environment, workspaceId, sandbox: { sandboxId: id }, sandboxKey: live.apiKey, signal })
+		await sandboxes.remove({ environment, workspaceId, sandbox: { sandboxId: id }, sandboxKey: live.apiKey, signal })
 		const found = await client.findSandboxByName(sandboxName(workspaceId), signal)
 		expect(found).toBeNull()
 	}, STEP_TIMEOUT_MS)

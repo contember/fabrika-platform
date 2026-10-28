@@ -1,4 +1,4 @@
-// Wakes a request that waits on a `dev` environment's record when this process changes it. Another Control process
+// Wakes a request that waits on a `dev` environment's or a workspace sandbox's record when this process changes it. Another Control process
 // does not see the wake-up, so every waiter also re-reads the record at least once a second.
 
 import type { DevSync } from '@fabrika/app/dev/wire'
@@ -8,7 +8,7 @@ export const DEV_RECHECK_MS = 1_000
 
 export class DevSignals {
 	private readonly waiters = new Map<string, Set<() => void>>()
-	/** The files of the newest commit this process made for each environment, until a wait takes them. */
+	/** The files of the newest commit this process made for each key, until a wait takes them. */
 	private readonly handoffs = new Map<string, DevSync>()
 
 	/** Resolves on `notify(key)`, after `ms`, or when `signal` aborts, whichever comes first. */
@@ -37,7 +37,7 @@ export class DevSignals {
 
 	/**
 	 * Hand a waiting launcher the files of a commit this process just made, so its answer needs no GitHub read. Held in
-	 * memory only, one per environment; another process, or a launcher at another head, reads the compare instead.
+	 * memory only, one per key; another process, or a launcher at another head, reads the compare instead.
 	 */
 	offer(key: string, sync: DevSync): void {
 		this.handoffs.set(key, sync)
@@ -57,6 +57,12 @@ export const devTargetKey = (appId: string, env: string): string => `target:${ap
 
 /** `apply_changes`, `run_checks` and `get_dev_status` wait on this key; a launcher report wakes them. */
 export const devReportKey = (appId: string, env: string): string => `report:${appId}@${env}`
+
+/** `devTargetKey` of one workspace's sandbox. */
+export const devSandboxTargetKey = (workspaceId: string): string => `target:${workspaceId}`
+
+/** `devReportKey` of one workspace's sandbox. */
+export const devSandboxReportKey = (workspaceId: string): string => `report:${workspaceId}`
 
 /**
  * Sleep in steps of at most `DEV_RECHECK_MS` until `ready` answers a value or `ms` passed; null on the timeout. A wake-up

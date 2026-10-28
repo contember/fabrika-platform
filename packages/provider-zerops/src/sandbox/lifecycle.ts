@@ -166,7 +166,9 @@ export function createZeropsDevSandboxes(options: ZeropsDevSandboxesOptions): Pr
 		remove: async (input) => {
 			assertDevEnvironment(input.environment)
 			const client = options.client(input.environment, input.sandboxKey)
-			await client.deleteSandbox(input.sandbox.sandboxId, sandboxIdempotencyKey('delete', input.sandbox.sandboxId), input.signal)
+			const sandboxId = input.sandbox?.sandboxId ?? (await client.findSandboxByName(sandboxName(input.workspaceId), input.signal))?.id
+			if (sandboxId === undefined) return
+			await client.deleteSandbox(sandboxId, sandboxIdempotencyKey('delete', sandboxId), input.signal)
 		},
 	}
 }

@@ -58,9 +58,10 @@ function devSandboxesContract(database: () => SqlDatabase): void {
 
 	test('a sandbox is recorded once per workspace, and needs the workspace', async () => {
 		const sandboxes = repositories.devSandboxes
-		await expect(sandboxes.insertCreating({ workspaceId: uuidv7(), appId, env: 'dev', now: T0 })).rejects.toThrow()
+		expect(await sandboxes.insertCreating({ workspaceId: uuidv7(), appId, env: 'dev', now: T0 })).toBeNull()
 		const workspaceId = await workspace()
 		const created = await sandboxes.insertCreating({ workspaceId, appId, env: 'dev', now: T0 })
+		if (created === null) throw new Error('expected the sandbox to be recorded')
 		expect(created).toMatchObject({ workspace_id: workspaceId, app_id: appId, env: 'dev', state: 'creating', sandbox_id: null, status: 'unbound' })
 		expect(created).toMatchObject({ log_json: '[]', reset_generation: 0, checks_generation: 0, activity_at: T0, parked_at: null })
 		expect(typeof created.created_at).toBe('number')
@@ -216,6 +217,28 @@ function devSandboxesContract(database: () => SqlDatabase): void {
 
 		expect(ownIds(await sandboxes.listStale(T0 + 50))).toEqual([creating])
 		expect(ownIds(await sandboxes.listStale(T0 + 201))).toEqual([busy, creating, idle].sort())
+	})
+
+	test('maintenance marks only a removable sandbox, and lists the removing and the abandoned', async () => {
+		const sandboxes = repositories.devSandboxes
+		const ownIds = (rows: DevSandboxRow[]) => rows.filter((row) => row.app_id === appId).map((row) => row.workspace_id)
+		const active = await readySandbox()
+		expect(await sandboxes.markRemovingIfRemovable(active, T0)).toBeNull()
+		expect((await sandboxes.get(active))?.state).toBe('ready')
+		expect((await sandboxes.markRemovingIfRemovable(active, T0 + 1))?.state).toBe('removing')
+		expect(await sandboxes.markRemovingIfRemovable(active, T0 - 100)).not.toBeNull()
+		expect(ownIds(await sandboxes.listRemoving())).toEqual([active])
+
+		const abandoned = await readySandbox()
+		await repositories.workspaces.markAbandoned(abandoned)
+		expect(ownIds(await sandboxes.listOfAbandonedWorkspaces())).toEqual([abandoned])
+		expect(await sandboxes.markRemovingIfRemovable(abandoned, T0 - 100)).not.toBeNull()
+		// An abandoned workspace gets no sandbox, and its existing one is not handed out again.
+		expect(await sandboxes.insertCreating({ workspaceId: abandoned, appId, env: 'dev', now: T0 })).toBeNull()
+		const late = await workspace()
+		await repositories.workspaces.markAbandoned(late)
+		expect(await sandboxes.insertCreating({ workspaceId: late, appId, env: 'dev', now: T0 })).toBeNull()
+		expect(await sandboxes.get(late)).toBeNull()
 	})
 
 	test('sandboxes go with their environment', async () => {

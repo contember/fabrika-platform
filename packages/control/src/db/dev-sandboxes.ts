@@ -1,6 +1,5 @@
 import type { SqlDatabase } from '@fabrika/platform'
 import type { LeaseFence } from '../lease'
-import { firstRow } from './returning'
 
 export type DevSandboxState = 'creating' | 'ready' | 'removing'
 
@@ -99,17 +98,28 @@ export class DevSandboxRepository {
 		return results
 	}
 
-	/** Record a sandbox about to be created; a row already there is returned unchanged. */
-	async insertCreating(input: { workspaceId: string; appId: string; env: string; now: number }): Promise<DevSandboxRow> {
+	/**
+	 * Record a sandbox about to be created; a row already there is returned unchanged. Null when the workspace does not
+	 * exist or was abandoned: an abandoned workspace gets no sandbox, even from a bind that raced the abandon.
+	 */
+	async insertCreating(input: { workspaceId: string; appId: string; env: string; now: number }): Promise<DevSandboxRow | null> {
 		await this.d1
-			.prepare(`INSERT INTO dev_sandboxes (workspace_id, app_id, env, state, activity_at) VALUES (?, ?, ?, 'creating', ?)
+			.prepare(`INSERT INTO dev_sandboxes (workspace_id, app_id, env, state, activity_at)
+				SELECT ?, ?, ?, 'creating', ? WHERE EXISTS (SELECT 1 FROM workspaces WHERE id = ? AND abandoned_at IS NULL)
 				ON CONFLICT (workspace_id) DO NOTHING`)
-			.bind(input.workspaceId, input.appId, input.env, input.now)
+			.bind(input.workspaceId, input.appId, input.env, input.now, input.workspaceId)
 			.run()
-		return firstRow<DevSandboxRow>(this.d1.prepare('SELECT * FROM dev_sandboxes WHERE workspace_id = ?').bind(input.workspaceId))
+		return this.d1
+			.prepare(`SELECT dev_sandboxes.* FROM dev_sandboxes JOIN workspaces ON workspaces.id = dev_sandboxes.workspace_id
+				WHERE dev_sandboxes.workspace_id = ? AND workspaces.abandoned_at IS NULL`)
+			.bind(input.workspaceId)
+			.first<DevSandboxRow>()
 	}
 
-	/** Box created the sandbox. Null when the row is gone or being removed. A proxy secret the row records stays. */
+	/**
+	 * Box created, or returned, the sandbox: its id and host replace the recorded ones (a sandbox Box lost is created
+	 * again). Null when the row is gone or being removed. A proxy secret the row records stays.
+	 */
 	async markReady(input: DevSandboxReadyInput): Promise<DevSandboxRow | null> {
 		return this.d1
 			.prepare(`UPDATE dev_sandboxes SET state = 'ready', sandbox_id = ?, base_digest = ?, upstream_host = ?,
@@ -125,6 +135,35 @@ export class DevSandboxRepository {
 			.prepare(`UPDATE dev_sandboxes SET state = 'removing' WHERE workspace_id = ? RETURNING *`)
 			.bind(workspaceId)
 			.first<DevSandboxRow>()
+	}
+
+	/**
+	 * Maintenance's mark: only while the sandbox is still removable, already `removing`, idle since `staleBefore`, or of
+	 * an abandoned workspace. Null when a bind or commit made it active again meanwhile.
+	 */
+	async markRemovingIfRemovable(workspaceId: string, staleBefore: number): Promise<DevSandboxRow | null> {
+		return this.d1
+			.prepare(`UPDATE dev_sandboxes SET state = 'removing'
+				WHERE workspace_id = ? AND (state = 'removing' OR activity_at < ?
+					OR EXISTS (SELECT 1 FROM workspaces WHERE workspaces.id = dev_sandboxes.workspace_id AND workspaces.abandoned_at IS NOT NULL))
+				RETURNING *`)
+			.bind(workspaceId, staleBefore)
+			.first<DevSandboxRow>()
+	}
+
+	/** Sandboxes an earlier removal left `removing`. */
+	async listRemoving(): Promise<DevSandboxRow[]> {
+		const { results } = await this.d1.prepare(`SELECT * FROM dev_sandboxes WHERE state = 'removing' ORDER BY workspace_id`).all<DevSandboxRow>()
+		return results
+	}
+
+	/** Sandboxes whose workspace was abandoned: a bind that raced the abandon may have left one. */
+	async listOfAbandonedWorkspaces(): Promise<DevSandboxRow[]> {
+		const { results } = await this.d1
+			.prepare(`SELECT dev_sandboxes.* FROM dev_sandboxes JOIN workspaces ON workspaces.id = dev_sandboxes.workspace_id
+				WHERE workspaces.abandoned_at IS NOT NULL ORDER BY dev_sandboxes.workspace_id`)
+			.all<DevSandboxRow>()
+		return results
 	}
 
 	async delete(workspaceId: string): Promise<boolean> {
