@@ -47,6 +47,14 @@ describe('the Bun version', () => {
 		}
 	})
 
+	test('the dev sandbox base image runs the same Bun, pinned by digest', async () => {
+		const version = (await readRepoFile('.bun-version')).trim()
+		const dockerfile = await readRepoFile('packages/provider-zerops/sandbox/Dockerfile')
+		const images = [...dockerfile.matchAll(/^FROM (\S+)/gm)].map((match) => match[1])
+		expect(images).toHaveLength(1)
+		expect(images[0]).toMatch(new RegExp(`^oven/bun:${version.replaceAll('.', '\\.')}-alpine@sha256:[0-9a-f]{64}$`))
+	})
+
 	test('the runner image installs the release .bun-version names', async () => {
 		const dockerfile = await readRepoFile('packages/runner-container/Dockerfile')
 		expect(dockerfile).toContain('COPY .bun-version /tmp/.bun-version')
