@@ -87,6 +87,7 @@ import {
 	listApprovalsUseCase,
 	setEnvironmentProtectionUseCase,
 } from './approval/api'
+import { approvedProviderAccess } from './approval/snapshot'
 import { listBackups, toBackupScheduleDto } from './backups'
 import { describeConnector } from './connectors'
 import { consoleAccess } from './console-access'
@@ -494,6 +495,7 @@ export function createControlRpcRouter(
 		return {
 			repositories: deps.repositories,
 			auth: ctx.auth,
+			provider: deps.provider,
 			...(deps.lock === undefined ? {} : { lock: deps.lock }),
 			...(deps.opsTransport === undefined ? {} : { ops: deps.opsTransport }),
 			...(deps.runDeps === undefined ? {} : { runDeps: deps.runDeps }),
@@ -711,6 +713,8 @@ interface DataUseCaseContext {
 	readonly ops?: OpsTransport
 	/** What a restore's own deploys run with; absent, a restore is refused. */
 	readonly runDeps?: () => Promise<RunDeps>
+	/** Whether an environment's approved access is served the ops channel and the data operations. */
+	readonly provider: Pick<ControlProvider, 'opsChannel' | 'dataOperations'>
 }
 
 /** An environment the caller may act on with `action`; any other, existing or not, is the same 404. */
@@ -781,6 +785,7 @@ async function readDataContentUseCase(c: DataUseCaseContext, input: { appId: str
 
 async function inspectData(c: DataUseCaseContext, target: { appId: string; env: string }, content: boolean): Promise<OpsInspection> {
 	if (c.ops === undefined) fail(503, 'data operations unavailable')
+	await refuseUnserved(c, target, 'inspect')
 	const { object } = await recordedObjects(c, target)
 	const answer = await c.ops.inspect(target, { object, content }, AbortSignal.timeout(DATA_VIEW_TIMEOUT_MS))
 	if (answer.kind === 'unavailable') failUnavailable(answer.reason)
@@ -789,6 +794,7 @@ async function inspectData(c: DataUseCaseContext, target: { appId: string; env: 
 
 async function startDataOperationUseCase(c: DataUseCaseContext, input: StartDataOperationInput): Promise<DataOperationDto> {
 	await requireDataEnvironment(c, CONTROL_ACTIONS.DATA_MANAGE, input.appId, input.env)
+	await refuseUnserved(c, input, 'data')
 	if (input.kind === 'backup') fail(501, 'backups are not available in this release')
 	if (input.kind === 'restore') {
 		const deps = await restoreDeps(c)
@@ -798,6 +804,21 @@ async function startDataOperationUseCase(c: DataUseCaseContext, input: StartData
 	}
 	const outcome = await startMaintenance(operationDeps(c), { appId: input.appId, env: input.env, mode: input.mode, actor: runActor(c.auth) })
 	return dataOperationResult(outcome)
+}
+
+/**
+ * The provider's answer, as a restore asks it (`operationDeploys`): an environment whose approved access has no ops
+ * channel (`inspect`), or no data operations (`data`: maintenance, backups, restores), is refused as `not_served` before
+ * any request, instead of meeting a transport that holds no ops key for it. One on Postgres is such an environment
+ * (ADR-0065), and so is one at a release before the channel. An environment that published nothing is the transport's.
+ */
+async function refuseUnserved(c: DataUseCaseContext, target: { appId: string; env: string }, scope: 'inspect' | 'data'): Promise<void> {
+	const row = await c.repositories.registry.getAppEnv(target.appId, target.env)
+	if (row === null) fail(404, 'app env not found')
+	const { access } = approvedProviderAccess(row)
+	if (access === undefined) return
+	const served = c.provider.opsChannel?.(access) === true && (scope === 'inspect' || c.provider.dataOperations?.(access) === true)
+	if (!served) failUnavailable('not_served')
 }
 
 /** A recovery may resume a restore, which deploys, so it carries the restore's deploys where the composition has them. */
@@ -835,7 +856,12 @@ function dataOperationResult(outcome: DataOperationOutcome): DataOperationDto {
 
 function failUnavailable(reason: OpsUnavailable): never {
 	if (reason === 'no_channel') fail(409, 'the environment has no ops channel: it needs a domain and a deploy at a release that serves one')
-	if (reason === 'not_served') fail(409, "the environment's release does not serve this operation: deploy it at a release that does")
+	if (reason === 'not_served') {
+		fail(
+			409,
+			'the environment does not serve this operation: deploy it at a release that does, unless it runs on Postgres, whose data its database provider keeps',
+		)
+	}
 	fail(502, reason === 'channel_refused' ? "the environment's ops channel refused Control" : "the environment's object gave no usable answer")
 }
 

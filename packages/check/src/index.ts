@@ -1,5 +1,5 @@
 export { type ApplicationTree, checkApplication, type CheckInput, readApplicationTree } from './check'
-export { type ApplicationDialect, applicationDialect } from './dialect'
+export { type ApplicationDialect, applicationDialect, type ApplicationTarget, applicationTarget, READABLE_DATABASE_SHAPE } from './dialect'
 export { type Finding, formatFinding, RULE_IDS, type RuleId } from './finding'
 export { CONFIG_FILE, CONTRACT_FILE, GENERATED_ENTRY_FILE, MIGRATIONS_DIR, TABLES_FILE, ZEROPS_FILES } from './layout'
 export { type PackedSet, type PackedTarball, readPackedSet } from './packed'

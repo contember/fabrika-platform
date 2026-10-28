@@ -121,7 +121,8 @@ The application then takes a public request in this order, each refusal with its
 
 1. The in-flight share: all public procedures of one process hold at most a quarter of its database connections
    (`FABRIKA_APP_DATABASE_CONNECTIONS`, 10 by default). The next public call answers 503, and signed-in staff keep the
-   rest.
+   rest. A runtime without a pool of its own counts the default: two calls per Durable Object on SQLite, and two per
+   Worker isolate on Postgres through Hyperdrive, where each request opens its own client (ADR-0065 §10).
 2. Every bucket the procedure has (`perClient`, `perEndpoint`, `bytesPerHour`), each charged before the body is read
    and kept whatever follows (429). A public mutation counts 10 per client and 100 for the endpoint per minute unless
    it declares its own; a public query has no bucket unless it declares one, because a bucket is a database write per
@@ -167,7 +168,7 @@ The application then takes a public request in this order, each refusal with its
   time limit, the endpoint bucket, the byte budget, the challenge for files, the cached workload token and coalesced
   kicks. On Zerops the client bucket counts one client until backlog 05, and the approval says so.
 - Each bucket is charged with its own statement, not in one admission transaction, and the in-flight share is counted
-  per process.
+  per process (per object or isolate on Cloudflare).
 - A public procedure does not reach a dimension or child table. Work on records goes through a submission table and a
   job, which holds its own actions.
 - A custom IAM policy is not checked against public actions; only the schema's roles are.

@@ -1,11 +1,11 @@
 ---
 id: 0065
-title: An application on Cloudflare runs in one Durable Object per environment, over its SQLite
+title: An application on Cloudflare runs in one Durable Object per environment, over its SQLite or Postgres through Hyperdrive
 status: proposed
 date: 2026-10-22
 ---
 
-# 0065 — An application on Cloudflare runs in one Durable Object per environment, over its SQLite
+# 0065 — An application on Cloudflare runs in one Durable Object per environment, over its SQLite or Postgres through Hyperdrive
 
 ## Context
 
@@ -22,8 +22,11 @@ interactive transaction: one that stays open across the handler's awaits and rol
 The databases Cloudflare offers a Worker:
 
 - **D1** runs statements and atomic batches. It has no `BEGIN`, so no interactive transaction.
-- **Hyperdrive** reaches a Postgres outside Cloudflare. The data layer would stay one dialect, but every installation
-  would run a database on another cloud, and every statement would cross to it.
+- **Hyperdrive** reaches a Postgres outside Cloudflare through a pooler in transaction mode. The data layer stays one
+  dialect with Zerops, and a transaction is a real Postgres transaction that holds one origin connection from `BEGIN`
+  to `COMMIT`. But every installation that uses it runs a database on another cloud, every statement crosses to it,
+  and the pooler keeps nothing a session would: it resets session `SET` at the end of each transaction and does not
+  support advisory locks, `LISTEN` or SQL-level `PREPARE`; startup parameters are not documented.
 - **A Durable Object's SQLite** runs in the object's own thread, next to its code. `ctx.storage.transaction(async)`
   is an interactive transaction: it rolls back across awaits, including a `fetch`, and the object serves no other
   event while it is open. Measured on a live account (2026-10): `BEGIN` in `sql.exec` is refused; a 10 s transaction
@@ -33,10 +36,17 @@ The databases Cloudflare offers a Worker:
 A Durable Object does not move, and placement cannot put a Worker next to one. A request that crosses from the Worker
 to the object for every statement pays that latency per statement, and cannot hold a transaction across the calls.
 
+One object is one thread and about a thousand small requests a second, and its data lives in one location, read only
+over the ops channel. An application that already runs a Postgres, or needs more throughput than one object, or wants
+its data in a database its operator queries and backs up with ordinary tools, is not served by the object's SQLite.
+
 ## Decision
 
 **On Cloudflare, an application environment runs in one Durable Object, which boots the application and owns its
-SQLite database. The Worker only forwards each request to it.**
+SQLite database. The Worker only forwards each request to it. An application that chooses Postgres in its config runs
+instead in a stateless Worker over Hyperdrive, and its object only runs its jobs (§10).**
+
+Decisions 1–9 describe the SQLite environment, the default; §10 says what differs on Postgres.
 
 1. **One object per `<app>@<env>`.** The application's Worker exports the object class; its `fetch` forwards every
    request to the object named by the environment, and its `scheduled` handler forwards the repair tick (§5). The object
@@ -126,17 +136,71 @@ SQLite database. The Worker only forwards each request to it.**
    directory's root) and without version control metadata; the object asks the binding for the request path as it is, and for a path that names no file for the mount's
    `index.html`. A Worker that declares its own `assets` keeps them.
 
+10. **An application may choose Postgres through Hyperdrive.** `defineApp({ id, database: { kind: 'postgres',
+    provisioningSecret: '<SECRET>' } })`, an object literal (directly or through a `const`), so the checker and
+    Control read it statically; a `database` the config names only when it loads (a spread of a function's result) is
+    refused by the CLI and the deployer, which load the config. The secret is an
+    application secret the operator sets per environment in Control's vault: the direct (non-pooler) URL of a role
+    that may create roles. Then:
+    - **The Worker serves every request itself**, over the `FABRIKA_DATABASE` Hyperdrive binding, with Smart Placement
+      so it runs near the database. The generated entry is `cloudflare-postgres` (`@fabrika/app/cloudflare-postgres`):
+      the isolate boots the application once, each request opens its own postgres.js client and ends it when the
+      work it handed to `waitUntil` settled. A handler's transaction is a Postgres transaction, as on Zerops, so
+      there is no 25 s handler cap; the database's own statement limit (Hyperdrive's 60 s) stays. The isolate has no pool
+      of its own, so the public procedures' in-flight share (ADR-0063 rule 1) is two calls per isolate, as on the object.
+    - **The schema is the runtime role's default `search_path`.** Hyperdrive documents no startup parameters and pools per
+      transaction, and the data layer names its tables unqualified, also in autocommit statements, so neither a
+      startup parameter nor `SET LOCAL` reaches every statement. Provisioning sets `ALTER ROLE run_<id> SET
+      search_path TO app_<id>` in the transaction that resets the role's defaults, and the engine
+      (`@fabrika/db/hyperdrive`) checks `current_schema()` on each connection, on the event that reserved it, until one
+      check of the isolate passed, and refuses every statement after a mismatch. An event never waits on another event's
+      check, whose I/O belongs to that event. Every statement runs unprepared, because the next transaction may get another origin connection,
+      and binds each parameter with the type Bun.SQL gives it, so a statement answers as it does on Zerops.
+    - **The object keeps the class and binding names and runs only the jobs.** A request's kick writes its wake in the
+      request's transaction and runs nothing in the Worker (`kickRuns: 'scheduler'`); once the request's work settled,
+      the Worker sends the object one wake notice with the earliest wake its writes left, and the object lowers its
+      alarm to it, never raising it. The alarm takes each due job's lease and runs it, then arms the next wake from
+      the database, at most a minute ahead while the contract has a job, so a notice that was lost still runs within
+      it. The first request each isolate serves also sends a notice due now when the contract has a job (framework jobs
+      included), because nothing else reaches the object of a fresh environment, or of one that just gained its first
+      job: that alarm repairs, which schedules every cron wake, and arms itself, so the jobs start with the first traffic
+      as on SQLite, not at the hourly repair tick. The repair tick and the 14-minute job segment are as on SQLite. The
+      object answers only its Worker.
+    - **The deploy provisions the database before it deploys.** A step `provision-database` runs the application's
+      own `fabrika db migrate` in the runner with the provisioning URL as `FABRIKA_APP_DATABASE_URL` (never on an
+      argv, never in a log), which creates the roles `app_<id>` and `run_<id>`, sets the default and migrates; then it
+      creates or replaces the Hyperdrive config `<env>-<app>-database` over the runtime role, its password derived as
+      on Zerops, with caching disabled. The provisioning URL never reaches the Worker; the runtime password reaches
+      only the HTTPS body of that API call. The Worker gets the binding and nothing else of the database.
+    - **Control approves the database.** The access snapshot records `database: 'postgres'`, read statically from
+      `fabrika.config.ts` at the application's root; the provider refuses Postgres below the framework release that
+      serves it (`0.9.0-dev.9`), for an environment that deploys another config file (its artifact's `configPath`),
+      and once an environment published a snapshot its database never changes. The deployer refuses a config that
+      disagrees with the approval.
+    - **The application's own CLI writes the Postgres entry only when the deploy asks for it.** The deployer runs
+      `fabrika app build --provider=cloudflare --database=postgres` for an environment it composed on Postgres, and
+      nothing new for one on SQLite. Control compares an application's release with its own by major.minor.patch
+      only, so a platform release before `0.9.0-dev.9` accepts an application pinned to it, reads no `database` and
+      composes none. A platform that regenerates the entry (from `0.9.0-dev.5` and `0.9.0-cloudflare.1`) never passes
+      the option, and the application's CLI refuses the build instead of deploying a Postgres entry without its
+      database. A platform at `0.9.0-dev.0`–`dev.4` runs no entry build and deploys a committed entry as it is
+      ([backlog 240](../backlog/240-channel-prereleases-sort-below-the-release-floors.md)). A local `fabrika app build` passes the option itself.
+    - **No ops channel and no data operations** ([ADR-0069](0069-control-reaches-an-application-environments-object.md),
+      [ADR-0070](0070-data-protection-of-an-application-environment-on-cloudflare.md)): no ops row, no ops key, no
+      barrier, no migration phase. Backups, exports and recovery are the database provider's. Control answers the
+      environment's data views and operations `not_served` (409) from the provider's answer, before any request.
+
 ## Consequences
 
 - The paved road runs on Cloudflare: `ctx.db`, jobs, kicks, webhooks, public procedures, files and signed tokens.
 - `@fabrika/db` has two dialects. Every framework statement has a SQLite text beside its Postgres one, and its tests
   run on both; the guard and the scoped query surface are shared.
-- An application environment's throughput is one object's: one thread, about a thousand small requests a second.
-  An application that needs more is not served by this road.
-- An environment's data lives in one location, chosen when the object is first created; moving it is an export and an
-  import.
-- Operators read an environment's data in the dashboard's Data Studio. Control exports, backs up and imports an
-  object's SQLite over the ops channel
+- On the object's SQLite, an application environment's throughput is one object's: one thread, about a thousand small
+  requests a second. An application that needs more chooses Postgres (§10).
+- On the object's SQLite, an environment's data lives in one location, chosen when the object is first created; moving
+  it is an export and an import.
+- On the object's SQLite, operators read an environment's data in the dashboard's Data Studio, and Control exports,
+  backs up and imports an object's SQLite over the ops channel
   ([ADR-0070](0070-data-protection-of-an-application-environment-on-cloudflare.md)).
 - Local runs and tests need Lopata 0.30 or newer, which implements an object's `storage.transaction` over
   `bun:sqlite` and nests it as workerd does.
@@ -144,6 +208,24 @@ SQLite database. The Worker only forwards each request to it.**
   without `assets` gets the staged directory, and one whose committed config declares `assets` keeps serving from it.
   The staged layout is the request path, which an older object asks for unchanged, so only the `index.html` of a deep
   link needs the framework that asks for `<prefix>/`.
+- An application on Postgres through Hyperdrive scales as the stateless Worker and its database do, keeps its data
+  where the operator's Postgres keeps it, and pays a network hop per statement (Smart Placement is meant to shorten it) and one
+  connection plus postgres.js's type-catalog query per request. Each environment needs a Postgres cluster of its own:
+  the roles `app_<id>` and `run_<id>` are named by the application only, so two environments of one application on
+  one cluster would share them. Moving an environment between SQLite and Postgres is a new environment.
+- Hyperdrive's behaviour that §10 rests on is recorded in [Cloudflare platform](../reference/cloudflare-platform.md#hyperdrive);
+  what is not verified on a live account is listed there.
+- Rollout of an existing installation: nothing converges, because nothing an existing environment runs changes. An
+  application on SQLite deploys as before: the new config keys are written only for a Postgres runtime, and its access
+  snapshot and digest are byte-identical. An existing runtime role on Zerops gets its default `search_path` on its
+  next `fabrika db migrate`, which every deploy runs, and the Bun.SQL startup parameter sets the same one meanwhile.
+  The Hyperdrive config is created by an environment's first Postgres deploy and replaced in place by later ones; a
+  removed environment's config stays until the operator deletes it. The installation's Cloudflare API token needs
+  the Hyperdrive Edit permission before the first Postgres deploy. A Control rolled back below the release that reads
+  `database` cannot parse the snapshot of a Postgres environment. That environment's deploys fail, and so does every
+  read that parses the snapshots of several environments: the environment listing of that application, the connector checks of deploys into an
+  environment of the same name, and the republish of its namespace. They work again once the environment is removed
+  or Control is upgraded. SQLite environments' snapshots parse as before.
 - The object runs from framework 0.9. An application on an older release keeps its stateless Worker: Control names the
   release it read the application with, and the deployer gives that Worker no object, bucket, tick or hop secret, and
   refuses what it cannot run (jobs, webhooks, public procedures, installation mail, token purposes), as before
@@ -154,8 +236,15 @@ SQLite database. The Worker only forwards each request to it.**
 
 - **D1 with batches.** Loses the interactive transaction the framework promises; every handler would have to be a
   single batch, which `getForUpdate`, fenced jobs and validated output cannot be.
-- **Hyperdrive to an external Postgres.** Keeps one dialect, but needs a database outside Cloudflare and a network
-  hop per statement; deferred, not rejected, for applications that already run a Postgres.
+- **Hyperdrive as the only database.** Keeps one dialect, but needs a database outside Cloudflare and a network hop per
+  statement for every application. It is the choice §10 offers, not the default.
+- **On Postgres, the handlers in the object over Hyperdrive.** Keeps one shape for both databases, but the object's
+  thread and location would bound an application that chose Postgres to scale past them, and every statement would
+  cross from the object's fixed location.
+- **A per-transaction `SET LOCAL search_path`.** Many framework statements run in autocommit (leases, wakes,
+  admissions, stored files), outside any transaction the engine opens, so a transaction-local setting misses them.
+- **Schema-qualified statement texts.** The framework's fixed texts and `ctx.sql` name tables unqualified by design,
+  and an application's raw SQL could not be rewritten safely; the role's default reaches all of them.
 - **The Worker handles the request and calls the object per domain operation.** Fewer round trips than per
   statement, but no transaction spans two calls, so the handler's transaction cannot be the object's.
 - **An `ASSETS` binding the application declares, which the checker or the deploy requires.** It cannot serve two

@@ -19,8 +19,9 @@ import { z } from 'zod/v4'
 import { type CatalogColumn, introspectSchema } from './codegen'
 import { applicationSchema, Database, openFirstConnection } from './database'
 import type { Primitive } from './description'
+import { HYPERDRIVE_CLIENT_OPTIONS, type HyperdriveClient, openHyperdrive } from './hyperdrive'
 import { FILES_TABLE, FRAMEWORK_MIGRATION_BUNDLE, FRAMEWORK_MIGRATIONS } from './migrations'
-import { openPostgres } from './postgres'
+import { openPostgres, type PostgresOptions } from './postgres'
 import { refuseInProduction } from './production'
 import type { TableProbe } from './store'
 import {
@@ -74,6 +75,77 @@ export interface TestDatabaseOptions {
 	 * default. Once one file of a process gave up, every later one fails at once.
 	 */
 	readonly connectionWaitMs?: number
+}
+
+/**
+ * The driver the runtime role's connections use: Bun.SQL through `openPostgres` by default, or `postgres-js`: postgres.js
+ * through `openHyperdrive`, unprepared and without a startup `search_path`, as a Cloudflare Worker reaches Postgres
+ * through Hyperdrive. The framework's own suites run once with each, so the two engines answer alike.
+ */
+export const TEST_POSTGRES_DRIVER = 'FABRIKA_TEST_POSTGRES_DRIVER'
+
+/** The part of a postgres.js client the test kit uses. */
+interface PostgresJsClient extends HyperdriveClient {
+	end(options?: { readonly timeout?: number }): Promise<void>
+}
+
+function isPostgresJsClient(value: unknown): value is PostgresJsClient {
+	return typeof value === 'function' && typeof Reflect.get(value, 'reserve') === 'function' && typeof Reflect.get(value, 'end') === 'function'
+}
+
+/** Whether `FABRIKA_TEST_POSTGRES_DRIVER` selects postgres.js; any value but the two names is refused. */
+function usesPostgresJs(): boolean {
+	const driver = process.env[TEST_POSTGRES_DRIVER] ?? ''
+	if (driver === '' || driver === 'bun') return false
+	if (driver === 'postgres-js') return true
+	throw new Error(`${TEST_POSTGRES_DRIVER} must be bun or postgres-js`)
+}
+
+/**
+ * A postgres.js client opened on its first reservation, so the opener stays synchronous. The module is named by a
+ * variable: an application's tests never load postgres.js, and its type checker never resolves it.
+ */
+function lazyPostgresJs(url: string, options: { readonly max: number; readonly searchPath?: string }): PostgresJsClient {
+	let opened: Promise<PostgresJsClient> | undefined
+	const open = async (): Promise<PostgresJsClient> => {
+		const specifier = 'postgres'
+		const loaded: unknown = await import(specifier)
+		const factory: unknown = typeof loaded === 'object' && loaded !== null ? Reflect.get(loaded, 'default') : undefined
+		if (typeof factory !== 'function') throw new Error('postgres.js has no default export')
+		const connection = options.searchPath === undefined ? undefined : { search_path: options.searchPath }
+		const client: unknown = factory(url, { ...HYPERDRIVE_CLIENT_OPTIONS, max: options.max, onnotice: () => undefined, connection })
+		if (!isPostgresJsClient(client)) throw new Error('postgres.js returned no client')
+		return client
+	}
+	return {
+		reserve: async (reserveOptions) => {
+			opened ??= open()
+			return (await opened).reserve(reserveOptions)
+		},
+		end: async (endOptions) => {
+			if (opened !== undefined) await (await opened).end(endOptions)
+		},
+	}
+}
+
+/**
+ * The framework's own suites' connection to a schema they created: `openPostgres`, or with
+ * `FABRIKA_TEST_POSTGRES_DRIVER=postgres-js` the Hyperdrive engine over postgres.js. A role without a default search_path
+ * (the superuser of a suite's own schema) gets `schema` as a startup parameter there. Hyperdrive documents no startup
+ * parameters, so the engine sends none to it, and `testDatabase`'s runtime role, whose default `search_path` is its
+ * schema, needs none. `Database#close()` ends the client either way.
+ */
+export function openTestPostgres(options: PostgresOptions): Database {
+	if (!usesPostgresJs()) return openPostgres(options)
+	const client = lazyPostgresJs(options.url, { max: options.max ?? 10, searchPath: options.schema })
+	return openHyperdrive({ schema: options.schema, client: () => client, end: () => client.end() })
+}
+
+/** The runtime role's database of a test database, through the driver `FABRIKA_TEST_POSTGRES_DRIVER` selects. */
+function openRuntimeDatabase(runtimeUrl: string, schema: string): Database {
+	if (!usesPostgresJs()) return openPostgres({ url: runtimeUrl, schema, max: RUNTIME_CONNECTIONS })
+	const client = lazyPostgresJs(runtimeUrl, { max: RUNTIME_CONNECTIONS })
+	return openHyperdrive({ schema, client: () => client, end: () => client.end() })
 }
 
 /** Set once a test database of this process gave up waiting for a connection slot. */
@@ -443,7 +515,7 @@ async function openTestDatabase(url: string, directory: string): Promise<OpenedT
 	const runtimeUrl = applicationRuntimeUrl(url, appId)
 	const admin = new SQL({ url, adapter: 'postgres', max: 1, prepare: false })
 	const seeder = new SQL({ url: runtimeUrl, adapter: 'postgres', max: 1, prepare: false })
-	const database = openPostgres({ url: runtimeUrl, schema, max: RUNTIME_CONNECTIONS })
+	const database = openRuntimeDatabase(runtimeUrl, schema)
 	let lock: ReservedSQL | undefined
 	try {
 		lock = await admin.reserve()

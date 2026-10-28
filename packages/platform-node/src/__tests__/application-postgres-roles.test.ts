@@ -231,6 +231,37 @@ describe.skipIf(!hasPostgres)('the application role family', () => {
 				await as(runtimeUrl(notes), (sql) => sql.unsafe(`INSERT INTO ${notes.migrations.schema}.tags (id) VALUES ('t1')`))
 			})
 
+			test("the runtime role's one session default is its schema, kept by every migrate; the migration role has none", async () => {
+				const roles = applicationDatabaseRoles(notes.appId)
+				const settings = (): Promise<unknown[]> =>
+					as(superuserUrl, async (sql) => [
+						...await sql.unsafe(
+							`SELECT r.rolname, s.setconfig FROM pg_db_role_setting s JOIN pg_roles r ON r.oid = s.setrole
+							WHERE r.rolname IN ($1, $2) ORDER BY r.rolname`,
+							[roles.migration, roles.runtime],
+						),
+					])
+				const expected = [{ rolname: roles.runtime, setconfig: [`search_path=${roles.schema}`] }]
+				expect(await settings()).toEqual(expected)
+				// No startup parameter, as the engine sends none through Hyperdrive: the role's default names the schema.
+				expect([...await as(runtimeUrl(notes), (sql) => sql.unsafe('SELECT current_schema() AS schema'))]).toEqual([{ schema: roles.schema }])
+				await as(runtimeUrl(notes), (sql) => sql.unsafe('ALTER ROLE CURRENT_USER SET search_path TO public'))
+				await as(migrationUrl(notes), (sql) => sql.unsafe('ALTER ROLE CURRENT_USER SET search_path TO public'))
+				await notes.migrations.migrate(provisioner.url(), NOTES)
+				expect(await settings()).toEqual(expected)
+				// A setting for this database alone overrides the role's own, so the migrate clears it too.
+				const inDatabase =
+					'DO $$ BEGIN EXECUTE format($f$ALTER ROLE CURRENT_USER IN DATABASE %I SET search_path TO public$f$, current_database()); END $$'
+				await as(runtimeUrl(notes), (sql) => sql.unsafe(inDatabase))
+				await as(migrationUrl(notes), (sql) => sql.unsafe(inDatabase))
+				expect([...await as(runtimeUrl(notes), (sql) => sql.unsafe('SELECT current_schema() AS schema'))]).toEqual([{ schema: 'public' }])
+				await notes.migrations.migrate(provisioner.url(), NOTES)
+				expect(await settings()).toEqual(expected)
+				expect([...await as(runtimeUrl(notes), (sql) => sql.unsafe('SELECT current_schema() AS schema'))]).toEqual([{ schema: roles.schema }])
+				await notes.migrations.migrate(provisioner.url(), NOTES)
+				expect(await settings()).toEqual(expected)
+			})
+
 			test('a role widened outside the platform is refused at the next migrate, before any migration runs', async () => {
 				const app = application()
 				await app.migrations.migrate(provisioner.url(), NOTES)

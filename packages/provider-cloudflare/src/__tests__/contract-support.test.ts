@@ -12,6 +12,7 @@ import {
 	servesAlarms,
 	servesDataOperations,
 	servesOps,
+	servesPostgresDatabase,
 	servesRawSql,
 } from '../contract-support'
 import { PUBLISHED_PRERELEASES } from './published-prereleases'
@@ -113,6 +114,31 @@ describe('the release gates', () => {
 			expect(servesAlarms(release)).toBe(false)
 			expect(servesDataOperations(release)).toBe(false)
 			expect(servesRawSql(release)).toBe(false)
+		})
+	}
+})
+
+describe('servesPostgresDatabase', () => {
+	// SemVer precedence from 0.9.0-dev.9: a channel prerelease sorts below it, whatever it was cut from (backlog 240).
+	const cases: ReadonlyArray<readonly [string, boolean]> = [
+		['0.8.2', false],
+		['0.9.0-dev.5', false],
+		['0.9.0-dev.8', false],
+		['0.9.0-dev.9', true],
+		['0.9.0-dev.10', true],
+		['0.9.0', true],
+		['0.9.1', true],
+		['0.10.0', true],
+		['1.0.0', true],
+		['0.9.0-alpha.1', false],
+		['0.9.0-cloudflare.4', false],
+		['0.9', false],
+		['v0.9.0', false],
+		...PUBLISHED_PRERELEASES.map((release) => [release, false] as const),
+	]
+	for (const [release, expected] of cases) {
+		test(`${release}: ${expected}`, () => {
+			expect(servesPostgresDatabase(release)).toBe(expected)
 		})
 	}
 })

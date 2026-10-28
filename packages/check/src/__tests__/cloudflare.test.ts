@@ -2,6 +2,7 @@
 // `cloudflare-current-timestamp` refuses. Over the two-slice application, whose deals.create is a mutation and
 // deals.pipeline a query.
 
+import type { ContractArtifact } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import { join } from 'node:path'
 import { checkApplication } from '../check'
@@ -12,6 +13,8 @@ import { readTree } from './colocated-helpers'
 
 const CLOUDFLARE_CONFIG =
 	"import { defineApp } from '@fabrika/provider-cloudflare'\n\nexport default defineApp({ id: 'notes', resources: () => [] })\n"
+const CLOUDFLARE_POSTGRES_CONFIG =
+	"import { defineApp } from '@fabrika/provider-cloudflare'\n\nexport default defineApp({ id: 'notes', database: { kind: 'postgres', provisioningSecret: 'DATABASE_URL' }, resources: () => [] })\n"
 const DEALS = 'src/deals/endpoints.ts'
 const CREATE_ACCESS = "access: { action: 'deals.write', in: 'company', from: 'companyId' } })"
 const PIPELINE_ACCESS = "access: { action: 'crm.read', in: 'org', from: 'orgId' }, sql: 'read' })"
@@ -93,5 +96,32 @@ describe('cloudflare-job-segment', () => {
 		])
 		expect(refusals[0]?.allowed).toContain('claim')
 		expect(refusals[0]?.allowed).toContain('backlog 230')
+	})
+})
+
+describe('an application on Cloudflare over Postgres (Hyperdrive)', () => {
+	const postgres = (edit?: (text: string) => string): Map<string, string> => {
+		const files = application(false, edit)
+		files.set('fabrika.config.ts', CLOUDFLARE_POSTGRES_CONFIG)
+		return files
+	}
+
+	test('keeps the contract refusals, drops the held-call hint', () => {
+		const artifact = scaffoldInputs(postgres()).artifact
+		if (artifact === null) throw new Error('the fixture compiles no contract')
+		const declared = { ...artifact.declared, 'api.deals.create': { sql: null, unscoped: {}, connect: ['catalog'], issues: null } }
+		const fileKinds: ContractArtifact['fileKinds'] = { avatar: { types: ['image/png'], maxBytes: 1024, scan: true } }
+		const rules = (database: 'postgres' | 'sqlite') =>
+			new Set(checkCloudflareContract({ ...artifact, declared, fileKinds }, { database }).map((finding) => finding.rule))
+		expect(rules('postgres')).toEqual(new Set(['cloudflare-scan']))
+		expect(rules('sqlite')).toEqual(new Set(['cloudflare-scan', 'cloudflare-held-call']))
+	})
+
+	test('runs no SQLite migration rule and no held-call hint', async () => {
+		const files = postgres((text) => text.replace(CREATE_ACCESS, CREATE_ACCESS.replace(' })', ", egress: ['https://api.example.com'] })")))
+		files.set(MIGRATION, 'create table audit (id uuid primary key, at timestamptz not null default current_timestamp);\n')
+		files.set('db/migrations/20261024120001_view.sql', 'create view leases as select * from fabrika_job_leases;\n')
+		const found = (await checkApplication({ root: '/application', files })).map((finding) => finding.rule)
+		expect(found.filter((rule) => rule.startsWith('cloudflare-'))).toEqual([])
 	})
 })

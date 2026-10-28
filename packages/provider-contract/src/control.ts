@@ -73,6 +73,8 @@ export interface ProviderApprovedAccess {
 	 * approved before it recorded the pin.
 	 */
 	readonly framework?: string
+	/** The database the application chose in its config (Cloudflare: Postgres through Hyperdrive); absent = the provider's default. */
+	readonly database?: 'postgres'
 }
 
 /**

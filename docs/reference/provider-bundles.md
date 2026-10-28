@@ -418,13 +418,37 @@ application declares no `schema`: Control writes the approved contract's
 `contract: true`. A platform deploy (`allow`) that serves a contract still declares
 one, because it registers the schema itself. An executor older than this release
 refuses a schema-less config; it never meets one, because Control refuses a
-framework release newer than the platform, and an installation deploys its runner
-with its Control from one `fabrika.ref`. A local run (`oblaka.ts`, Lopata) takes the
+framework release whose major.minor.patch is newer than the platform's, and an
+installation deploys its runner with its Control from one `fabrika.ref`. Control
+does not order two prereleases of one version (backlog 240), so a feature a later
+prerelease adds must fail closed on an older platform by itself. Postgres does on
+a platform that regenerates the entry (from `0.9.0-dev.5` and `0.9.0-cloudflare.1`):
+the application's CLI writes its Postgres entry only when the deployer passes
+`--database=postgres`. A platform at `0.9.0-dev.0`–`dev.4` deploys a committed
+entry as it is ([backlog 240](../backlog/240-channel-prereleases-sort-below-the-release-floors.md)). The config's `id` names every remote the
+deploy writes, and the runner reads it from the checkout: an application deploy
+refuses an `id` other than the approved contract's `app`, or one whose
+`<id>@<env>` is not the `FABRIKA_IAM_APP_ID` Control handed (a local deploy carries
+neither). It also refuses `CLOUDFLARE_API_TOKEN` in `pipeline.secrets` or
+`pipeline.vars`, which would copy the installation's token into the Worker. A local run (`oblaka.ts`, Lopata) takes the
 proxy and application Workers from `composeLocalApplication({ config, contract,
 assets, iamOrigin, env })`, the deploy's own composition, with the framework values and a
 fresh proxy secret written as variables. `assets` is what `await stageLocalAssets(contract,
 root)` staged at the top of `oblaka.ts`: the deploy's own staging of the SPA and link
 mounts into `fabrika/assets` beside the generated config, bound as `ASSETS`.
+
+A contract application may state `database: { kind: 'postgres', provisioningSecret }` in `defineApp` (ADR-0065 §10;
+`configDatabase` in `src/database.ts` validates it). Control records the choice in the access snapshot and hands it to
+the deployer as `ProviderApprovedAccess.database`; the deployer refuses a config that disagrees with it, a framework
+release below `0.9.0-dev.9`, a missing provisioning secret, the secret named in `pipeline.secrets`, `vars` or a
+Worker variable or binding, and its value (the URL, or its password raw or decoded) under any other declared secret,
+variable or Worker variable. The plan gains `provision-database` after `build`: the application's own
+`fabrika db migrate` in the runner, with exactly `PATH`, `HOME`, `TMPDIR`, `FABRIKA_APP_ID` and
+`FABRIKA_APP_DATABASE_URL`, then the create-or-replace of the Hyperdrive config `<env>-<app>-database` over the runtime
+role, through the Cloudflare API with the installation's token. The application Worker then gets the `FABRIKA_DATABASE`
+binding with that config's id and `placement: { mode: 'smart' }`, and no ops row or object variables; the bounds admit
+both keys only in exactly that form. `pipeline.build` runs without the secret. A local run passes
+`database: { connectionString }` to `composeLocalApplication`, which binds it as `localConnectionString`.
 
 Cloudflare app resources are composed as a public proxy Worker with a private
 application Worker child (ADR-0048). The config's `resources` returns only the

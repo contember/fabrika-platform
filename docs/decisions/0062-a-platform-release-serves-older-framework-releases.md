@@ -59,7 +59,10 @@ application's framework release applies its own.
 
 **The window.** A platform release supports every framework minor released in the six months before it, and never
 fewer than the two minors before its own. A framework release newer than the platform is refused: the platform is
-upgraded first.
+upgraded first. Control compares major.minor.patch only and does not order two prereleases of one version
+([backlog 240](../backlog/240-channel-prereleases-sort-below-the-release-floors.md)), so what a later prerelease adds on
+the application side has to fail closed on an older platform by itself. The Postgres entry does so on a platform that
+regenerates the entry (from `0.9.0-dev.5` and `0.9.0-cloudflare.1`), not on `0.9.0-dev.0`–`dev.4` (backlog 240).
 
 **How the platform holds it:**
 

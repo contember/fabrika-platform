@@ -406,6 +406,11 @@ other environment, before the provider prepares anything, and the write maps a r
   and every denial is the 404 of an absent environment; `data.view` refuses an answer that carries content.
   An object whose release does not serve `state` or `migrate` answers 501 `{refused:'not_implemented'}`; the operation
   fails `not_served` at once instead of staying running, `recordedMaintenance` skips it, and deploys stay open.
+  Before any request, `data.view`, `data.content` and `data.start` ask the provider (`refuseUnserved` in
+  `control-rpc.ts`, as a restore's `operationDeploys.servesDataOperations` does): an environment whose approved access
+  has no ops channel (views) or no data operations (every start) answers 409 `not_served`, never the transport's
+  `unreachable` for an environment it holds no ops key for. A Cloudflare environment on Postgres is one. An environment
+  that published nothing is still the transport's to answer.
 - **A daily backup is a `backup` data operation the maintenance pass starts (`src/backups.ts`, ADR-0070 §7–§8).** Its
   steps are `restrict` (`read-only`), `backup` (the export's steps), `open` at a new generation, then `verify`, the
   rehearsal into the object `rehearsal`. Every step and part is recorded fenced on the lease (`app_env_backups`,
@@ -597,6 +602,25 @@ other environment, before the provider prepares anything, and the write maps a r
   reads as the empty baseline (`approvedSnapshot`). `runs.pending_access_json` is no longer read or written. The
   published snapshot lives in `app_envs.published_snapshot_json`. Snapshot log lines are codes and counts only. A new write path must take it the same way; reading access
   from the provider artifact is a bug. An approval names both digests and holds only for them.
+- **The snapshot records the database a Cloudflare application chose (`AccessSnapshot.database`, `read.ts`).** The read
+  takes `fabrika.config.ts` at the root, when present, through `applicationTarget` of `@fabrika/check/contract`, the
+  checker's own static read: `'postgres'` only for a `@fabrika/provider-cloudflare` `defineApp` whose argument states
+  `database: { kind: 'postgres', … }`, followed through `const` bindings and spreads of object literals; a Cloudflare
+  config that names `database` in a form the read cannot settle fails the read (`config-unreadable`). An argument the
+  read cannot follow (`unsettled`) records none, and the deployer refuses a `database` the loaded config names. Every other application, and a root without the file, records none, and the
+  digest appends `database:<kind>` only when it is present, so no stored digest moves. `approvedAccess` hands it to the
+  provider as `ProviderApprovedAccess.database`, a platform-protocol field: change it additively only (ADR-0062). The
+  Cloudflare provider's `validateAccess` refuses Postgres below its release gate, for an environment whose artifact
+  deploys a config other than the root `fabrika.config.ts` (the file this read takes), and a database other than the
+  published access's, and serves a Postgres environment no ops channel and no data operations.
+  A Control rolled back below this release cannot parse a Postgres environment's snapshot (`snapshotSchema` is strict):
+  that environment's deploys fail, and so do the reads that parse several environments' snapshots (`toAppEnvDto` over
+  the application's environment list, `edgesInto` for deploys into an environment of the same name, `namespaceMembers`
+  for its namespace's republish) until the environment is removed or Control is upgraded.
+  The read takes the file of every application, whatever its provider, under `SNAPSHOT_LIMITS.readerFileBytes`: a
+  config over it, or not UTF-8, fails the snapshot read. A change of `database` is
+  the neutral approval line `application.database` (`classifyAccess`), so a first publication on Postgres says
+  where the data lives.
 - **An application is read by the reader of the framework release it pins (ADR-0062, `readers.ts`, `formats.ts`).**
   `readAccessSnapshot` reads the `@fabrika/app` release from `<root>/bun.lock` and picks this release's reader for its
   own minor, or the bundled npm alias of an older one (`@fabrika/check-0.4`, `@fabrika/check-0.5`,

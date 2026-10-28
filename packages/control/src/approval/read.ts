@@ -1,10 +1,19 @@
 // Reading a run's access snapshot at its pinned commit (ADR-0050 §1): the contract graph and `src/db/tables.ts` through
 // the static reader of the framework release the application pins (ADR-0062), which executes nothing (ADR-0005), the
-// migration list with checksums, and the database code the migrations declare, through the classifier the runner
-// applies them with (ADR-0017).
+// migration list with checksums, the database code the migrations declare, through the classifier the runner applies
+// them with (ADR-0017), and the database a Cloudflare application chose in `fabrika.config.ts`.
 
 import { sha256Hex } from '@fabrika/auth-core'
-import { CONTRACT_FILE, CONTRACT_LIMITS, lockedRegistryVersion, LOCKFILE, MIGRATIONS_DIR } from '@fabrika/check/contract'
+import {
+	type ApplicationTarget,
+	applicationTarget,
+	CONFIG_FILE,
+	CONTRACT_FILE,
+	CONTRACT_LIMITS,
+	lockedRegistryVersion,
+	LOCKFILE,
+	MIGRATIONS_DIR,
+} from '@fabrika/check/contract'
 import {
 	applicationDatabaseSchema,
 	classifyMigrations,
@@ -82,6 +91,7 @@ export type SnapshotRefusalCode =
 	| 'migrations-too-large'
 	| 'migrations-refused'
 	| 'migrations-unreadable'
+	| 'config-unreadable'
 
 /**
  * The commit cannot be read as an access snapshot. The run log gets only the code and the number of problems: the
@@ -136,15 +146,42 @@ export async function readAccessSnapshot(
 		throw new SnapshotRefused('contract-app-mismatch')
 	}
 	const { databaseCode, fileAdoptions } = readDatabaseCode(migrations, appId, settled)
+	const database = await readDatabase(commit, inRepository, files)
 	return {
 		version: 1,
 		...read,
 		migrations: migrations.map(({ name, checksum }) => ({ name, checksum })),
 		...(databaseCode.length === 0 ? {} : { databaseCode }),
 		...(fileAdoptions.length === 0 ? {} : { fileAdoptions }),
+		...(database === undefined ? {} : { database }),
 		checker: reader.checker,
 		framework,
 	}
+}
+
+/**
+ * The database a Cloudflare application chose in `fabrika.config.ts`, read statically as the checker reads it: Postgres
+ * only when the `defineApp` argument states it, followed through `const` bindings. Every other configuration, an argument
+ * the read cannot follow (`unsettled`) and a root without one choose none; the deployer refuses a `database` the loaded
+ * config names that Control did not approve. A Cloudflare configuration that names `database` in a form the read cannot
+ * settle is refused: the deployer would load a database Control never approved.
+ */
+async function readDatabase(
+	commit: CommitFiles,
+	inRepository: (path: string) => string,
+	readerFiles: ReadonlyMap<string, string>,
+): Promise<'postgres' | undefined> {
+	if (!commit.paths.has(inRepository(CONFIG_FILE))) return undefined
+	const text = readerFiles.get(CONFIG_FILE) ?? await commit.read(inRepository(CONFIG_FILE), SNAPSHOT_LIMITS.readerFileBytes)
+	let target: ApplicationTarget
+	try {
+		target = applicationTarget(new Map([[CONFIG_FILE, text]]))
+	} catch {
+		// An unexpected reader error may quote the checkout; only the code leaves this function.
+		throw new SnapshotRefused('config-unreadable')
+	}
+	if (target.unreadable !== undefined) throw new SnapshotRefused('config-unreadable')
+	return target.cloudflare && target.dialect === 'postgres' ? 'postgres' : undefined
 }
 
 function readContract(reader: ContractReader, files: ReadonlyMap<string, string>): SnapshotContract {

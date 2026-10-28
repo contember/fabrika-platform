@@ -13,8 +13,9 @@ import {
 	opsTransitionRefused,
 } from '@fabrika/auth-core'
 import { type SqlDatabase, SqlDeployLocks, uuidv7 } from '@fabrika/platform'
-import { ProviderInvocationAbort } from '@fabrika/provider-contract'
+import { type ControlProvider, ProviderInvocationAbort } from '@fabrika/provider-contract'
 import { afterEach, describe, expect, test } from 'bun:test'
+import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import {
 	advanceDataOperation,
 	type DataOperationDeps,
@@ -614,7 +615,7 @@ describe('the HTTP ops transport', () => {
 })
 
 describe('data RPC', () => {
-	function fixture() {
+	function fixture(provider: ControlProvider = fakeControlProvider) {
 		const harness = createHarness()
 		const repositories = harness.repositories
 		const object = new FakeObject()
@@ -624,7 +625,7 @@ describe('data RPC', () => {
 				auth,
 				queue: { send: () => Promise.resolve() },
 				logs: { get: () => Promise.resolve(null) },
-				provider: fakeControlProvider,
+				provider,
 				lock: new SqlDeployLocks(harness.d1),
 				cancelRun: () => Promise.resolve(),
 				opsTransport: object,
@@ -636,7 +637,23 @@ describe('data RPC', () => {
 			await repositories.registry.createApp({ id: APP, repoUrl: 'github.com/acme/crm' })
 			await repositories.registry.upsertAppEnv(providerEnvironment(APP, ENV, { domain: 'crm.example.com' }))
 		}
-		return { object, call, seed, repositories, lock: new SqlDeployLocks(harness.d1) }
+		/** Publish an access snapshot at framework `0.9.0`, on Postgres when `database` says so. */
+		const publish = async (database?: 'postgres'): Promise<void> => {
+			const snapshot = JSON.stringify({
+				version: 1,
+				contract: notesArtifact,
+				migrations: [],
+				...(database === undefined ? {} : { database }),
+				checker: '0.9.0',
+			})
+			await harness.d1.prepare('UPDATE app_envs SET published_run_id = ?, published_snapshot_json = ? WHERE app_id = ? AND env = ?').bind(
+				uuidv7(),
+				snapshot,
+				APP,
+				ENV,
+			).run()
+		}
+		return { object, call, seed, publish, repositories, lock: new SqlDeployLocks(harness.d1) }
 	}
 
 	const appGrant = (action: string) => ({ action, scope: { type: 'app', value: APP } })
@@ -732,6 +749,38 @@ describe('data RPC', () => {
 		const started = await f.call(manager, 'data.start', { ...TARGET, kind: 'maintenance', mode: 'read-only' })
 		expect(started).toMatchObject({ status: 200, body: { state: 'failed', errorCode: 'not_served' } })
 		expect(await recordedMaintenance({ repositories: f.repositories }, TARGET)).toBe('open')
+	})
+
+	test('inspect, maintenance, backup and restore on an environment its provider serves no ops answer not_served (409) before any request', async () => {
+		// As the Cloudflare provider answers: an environment on Postgres has no ops channel and no data operations.
+		const provider: ControlProvider = {
+			...fakeControlProvider,
+			opsChannel: (access) => access.database === undefined,
+			dataOperations: (access) => access.database === undefined,
+		}
+		const f = fixture(provider)
+		await f.seed()
+		await f.publish('postgres')
+		const manager = authWithPermissions([appGrant('data.read'), appGrant('data.manage')])
+		const notServed = {
+			status: 409,
+			body: expect.objectContaining({
+				error:
+					'the environment does not serve this operation: deploy it at a release that does, unless it runs on Postgres, whose data its database provider keeps',
+			}),
+		}
+		expect(await f.call(manager, 'data.view', TARGET)).toEqual(notServed)
+		expect(await f.call(authWithActions(['data.content.read']), 'data.content', TARGET)).toEqual(notServed)
+		expect(await f.call(manager, 'data.start', { ...TARGET, kind: 'maintenance', mode: 'read-only' })).toEqual(notServed)
+		expect(await f.call(manager, 'data.start', { ...TARGET, kind: 'backup' })).toEqual(notServed)
+		expect(await f.call(manager, 'data.start', { ...TARGET, kind: 'restore', at: '2026-01-01T00:00:00.000Z' })).toEqual(notServed)
+		expect(f.object.sent).toEqual([])
+		expect(await f.repositories.dataOperations.listForEnvironment(APP, ENV, { limit: 1 })).toEqual([])
+
+		// The same environment on the object's SQLite is served, as it was.
+		await f.publish()
+		expect((await f.call(manager, 'data.view', TARGET)).status).toBe(200)
+		expect(f.object.sent).toEqual([{ op: 'inspect', content: false }])
 	})
 
 	test('an environment the caller may not act on is the same 404 as one that does not exist', async () => {

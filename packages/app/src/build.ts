@@ -20,7 +20,8 @@ export const GENERATED_MIGRATIONS_FILE = 'fabrika/migrations.generated.ts'
 /** Where an application keeps its migrations, relative to its root; `fabrika db new` writes there. */
 export const MIGRATIONS_DIRECTORY = 'db/migrations'
 
-export type EntryRuntime = 'bun' | 'cloudflare'
+/** `cloudflare-postgres`: a Cloudflare application whose config chooses Postgres through Hyperdrive. */
+export type EntryRuntime = 'bun' | 'cloudflare' | 'cloudflare-postgres'
 
 export * from './build-recipe.js'
 
@@ -29,6 +30,7 @@ export {
 	CLOUDFLARE_APPLICATION_BINDING,
 	CLOUDFLARE_APPLICATION_CLASS,
 	CLOUDFLARE_ASSETS_BINDING,
+	CLOUDFLARE_DATABASE_BINDING,
 	CLOUDFLARE_FILES_BINDING,
 } from './cloudflare/names.js'
 
@@ -60,10 +62,25 @@ export function generatedEntry(runtime: EntryRuntime): string {
 				"export default createContractWorker(() => import('../src/app'), { migrations })",
 				'',
 			].join('\n')
+		case 'cloudflare-postgres':
+			return [
+				HEADER,
+				"import { createPostgresContractWorker, markProductionProcess } from '@fabrika/app/cloudflare-postgres'",
+				'',
+				"export { FabrikaJobObject as FabrikaApplication } from '@fabrika/app/cloudflare-postgres'",
+				'',
+				'// The test kits refuse to load from here on; the application is imported only after the framework took its variables.',
+				'markProductionProcess()',
+				"export default createPostgresContractWorker(() => import('../src/app'))",
+				'',
+			].join('\n')
 	}
 }
 
-/** Writes the entrypoint under `root` and returns its path; the Cloudflare one also writes the migrations module it imports. */
+/**
+ * Writes the entrypoint under `root` and returns its path; the Cloudflare one also writes the migrations module it
+ * imports. The Postgres one writes none: the deploy migrates the database before the Worker serves it.
+ */
 export async function writeGeneratedEntry(root: string, runtime: EntryRuntime): Promise<string> {
 	const path = join(root, GENERATED_ENTRY_FILE)
 	await mkdir(dirname(path), { recursive: true })

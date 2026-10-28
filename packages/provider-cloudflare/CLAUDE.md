@@ -75,6 +75,22 @@ this one import.
   class, a `script_name` on it, a migration history that does not open with that `v0001` or names the class again
   (a committed `wrangler.jsonc` with a history of its own), another `FABRIKA_FILES` bucket, and triggers the platform
   did not write.
+- **An application on Postgres runs through Hyperdrive, and its provisioning URL stays in the runner** (ADR-0065,
+  `src/database.ts`). `database: { kind: 'postgres', provisioningSecret }` (validated by `configDatabase`, in `defineApp`
+  and again in the deployer, which reads the config once) must agree with Control's approval (`accessDatabase`), and holds
+  from `servesPostgresDatabase` (`0.9.0-dev.9`; a local deploy passes). Control reads it from the root
+  `fabrika.config.ts`, so `validateAccess` refuses Postgres for an environment whose artifact `configPath` is another file. The secret is the application's own (Control's
+  vault, read by `command.ts` beside `pipeline.secrets`): refused in `pipeline.secrets`/`vars` or as a Worker variable or
+  binding, and required for a real deploy. The plan gains `provision-database` after `build`: the application's own
+  `fabrika db migrate` with exactly `PATH`, `HOME`, `TMPDIR`, `FABRIKA_APP_ID`, `FABRIKA_APP_DATABASE_URL` (never an
+  argv; a failure's output is scrubbed of the URL and both passwords), then `HyperdriveConfigs.upsert` of
+  `<env>-<app>-database` over the runtime role `run_<id>` (`applicationRuntimeUrl`), caching disabled and read back.
+  The runtime password goes only into that HTTPS body; API errors name the status and Cloudflare's codes. The id lands
+  in a `HyperdriveIdHolder` the `FABRIKA_DATABASE` binding reads when oblaka writes the configs, so the bounds require
+  exactly `[{ binding: 'FABRIKA_DATABASE', id }]` with the id this run handed out (`PENDING_HYPERDRIVE_ID` before), and
+  `placement: { mode: 'smart' }`; both keys are refused everywhere else. `pipeline.build` runs without the secret. Such an
+  environment gets no ops row and no object variables; the object (jobs), files bucket and tick stay. A local run binds
+  `localConnectionString` (`LocalApplicationOptions.database`, from `localDatabaseConnection`).
 - **Two kinds of release gate** (`src/contract-support.ts`). `releaseAtLeast` counts a prerelease as its minor:
   `runsInObject`, `pinsGeneratedEntry` and `servesOps` hold from every 0.9.0 prerelease. `releaseFrom` compares the whole
   version in semver precedence: `servesDataOperations` (the barrier's `state` and `migrate`, the backups, the migration
@@ -107,7 +123,11 @@ this one import.
   The CLI is the first `node_modules/.bin/fabrika` from the config's directory up to the executor's working directory
   (where the runner installed), never above. It is checkout code whose failed output is logged, so it inherits nothing
   of the executor's environment, which carries the application's and the managed secrets: it gets `PATH`, `HOME` and
-  `TMPDIR` only. An older release, a Control that
+  `TMPDIR` only. For an environment it composed on Postgres it appends `--database=postgres`
+  (`appBuildDatabaseArgument`, `@fabrika/provider-contract/app-cli`), and nothing for one on SQLite: the application's
+  CLI writes the Postgres entry only when asked, so a deployer older than `0.9.0-dev.9`, which composes no database,
+  fails the build instead of deploying it, provided it regenerates the entry (from `0.9.0-dev.5` and `cloudflare.1`;
+  `0.9.0-dev.0`–`dev.4` deploy a committed entry as it is, [backlog 240](../../docs/backlog/240-channel-prereleases-sort-below-the-release-floors.md)). An older release, a Control that
   names no release, and a local deploy keep their authored `main` and the old plan (ADR-0062).
 - **Every managed credential is a Worker secret, uploaded with the version** (`src/managed-secrets.ts`): token keys,
   workload keys, mail, the platform transport, the Operations DSN, the IAM RPC key and the proxy secret. The executor
@@ -225,7 +245,7 @@ this one import.
   what was staged for exactly those mounts, or with it beside an authored `assets`.
 - **This package is one of the four that relax two strict flags for oblaka** — see the root
   CLAUDE.md. Keep our own code strict; never work around oblaka with a cast.
-- **The plan is ordered step kinds**, not free-form work: `build` → `provision-resources` →
+- **The plan is ordered step kinds**, not free-form work: `build` → `provision-database` → `provision-resources` →
   `migrate` → `deploy-worker` → `reconcile-schema` → `sync-secrets`. `build` is present when the config sets
   `pipeline.build` or the release pins the generated entry. `runSteps` executes them in the
   order supplied and never interprets a step's `kind`.

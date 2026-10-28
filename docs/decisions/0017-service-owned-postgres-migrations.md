@@ -320,8 +320,11 @@ application query runs as anything else:
 `FABRIKA_APP_DATABASE_URL` is the **provisioning credential**. `fabrika db
 migrate` uses it on one connection, under the migration lock, only to create
 the two roles when absent, reset their passwords and their role-level
-settings (`ALTER ROLE … RESET ALL`, so a session default a role set on itself
-ends at the next deploy), create the schema owned by the migration role, and
+settings (`ALTER ROLE … RESET ALL` and `ALTER ROLE … IN DATABASE … RESET ALL`
+for the application's database, so a session default a role set on itself
+ends at the next deploy), give the runtime role exactly one default,
+`search_path` = its schema, in the same transaction as the reset
+([ADR-0065](0065-an-application-on-cloudflare-runs-in-one-durable-object-per-environment.md) §10), create the schema owned by the migration role, and
 check the family: an attribute, a membership or a `CREATE` beyond the above,
 any privilege either role was granted or ownership it holds outside its schema
 (a schema, a relation, a column, a routine, a type, the database, a large

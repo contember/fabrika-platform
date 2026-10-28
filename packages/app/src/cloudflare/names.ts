@@ -14,3 +14,6 @@ export const CLOUDFLARE_FILES_BINDING = 'FABRIKA_FILES'
  * the mount `/admin` serves `<directory>/admin/…`, the root mount `<directory>/…`.
  */
 export const CLOUDFLARE_ASSETS_BINDING = 'ASSETS'
+
+/** The Hyperdrive binding through which the Worker of an application on Postgres reaches its database. */
+export const CLOUDFLARE_DATABASE_BINDING = 'FABRIKA_DATABASE'

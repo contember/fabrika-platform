@@ -19,8 +19,9 @@ import { abortableWait, decodeEnvelope, isLeaseLoss, ProviderInvocationAbort } f
 import { isCrossOrigin, isPolicyOrigin, MAX_CROSS_ORIGINS } from '@fabrika/proxy-core/headers'
 import { isProxyHost } from '@fabrika/proxy-core/manifest'
 import { z } from 'zod'
-import { cloudflareArtifactCodec } from './codec'
+import { cloudflareArtifactCodec, DEFAULT_CONFIG_PATH } from './codec'
 import {
+	accessDatabase,
 	applicationRelease,
 	assertCloudflareContract,
 	assertStatelessEnvironment,
@@ -28,6 +29,7 @@ import {
 	runsInObject,
 	servesDataOperations,
 	servesOps,
+	servesPostgresDatabase,
 	servesRawSql,
 } from './contract-support'
 // `./runner` is this module: keep every import here clear of `oblaka-iac`, which the runner packages
@@ -284,6 +286,7 @@ const runnerApprovedAccess = (environment: ProviderEnvironment): RunnerApprovedA
 			contract: environment.access.contract,
 			contractDigest: environment.access.contractDigest,
 			framework: applicationRelease(environment.access),
+			...(environment.access.database === undefined ? {} : { database: environment.access.database }),
 		}
 
 const buildJob = async (options: CloudflareControlOptions, input: ProviderDeployInput): Promise<CloudflareRunnerJob> => {
@@ -299,10 +302,12 @@ const buildJob = async (options: CloudflareControlOptions, input: ProviderDeploy
 	const approvedAccess = runnerApprovedAccess(input.environment)
 	const release = input.environment.access === undefined ? undefined : applicationRelease(input.environment.access)
 	// The deployer refuses it again from the contract it serves; this fails before the clone.
+	if (input.environment.access !== undefined) assertDatabaseRelease(input.environment.access)
 	if (approvedAccess !== undefined) {
 		assertCloudflareContract(approvedAccess.contract, {
 			capsSegments: release !== undefined && capsJobSegments(release),
 			servesSql: release !== undefined && servesRawSql(release),
+			database: accessDatabase(approvedAccess),
 		})
 	}
 	const stateless = release !== undefined && !runsInObject(release)
@@ -376,15 +381,62 @@ const settleOutcome = async (
 	return terminal
 }
 
+/** Refuse Postgres from an application release whose Cloudflare entry cannot run on it. */
+const assertDatabaseRelease = (access: ProviderApprovedAccess): void => {
+	const release = applicationRelease(access)
+	if (accessDatabase(access) === 'postgres' && !servesPostgresDatabase(release)) {
+		throw new Error(
+			`@fabrika/app ${release} cannot run on Postgres through Hyperdrive; pin a newer release or remove \`database\` from fabrika.config.ts`,
+		)
+	}
+}
+
+/**
+ * Refuse a candidate whose database the environment cannot serve: Postgres from an application release that cannot run
+ * on it, or a database other than the one the environment's published access names. An environment's data stays where
+ * it was created; Fabrika moves none between the object's SQLite and Postgres.
+ */
+const validateDatabase = (environment: ProviderEnvironment, access: ProviderApprovedAccess): void => {
+	assertDatabaseRelease(access)
+	const database = accessDatabase(access)
+	if (database === 'postgres') assertRootConfig(environment)
+	const published = environment.access
+	if (published !== undefined && accessDatabase(published) !== database) {
+		throw new Error(
+			`environment \`${environment.env}\` runs on ${databaseName(accessDatabase(published))}, and this commit chooses ${
+				databaseName(database)
+			}; an environment's database cannot change, so create a new environment`,
+		)
+	}
+}
+
+/**
+ * Control reads the database from the `fabrika.config.ts` at the application's root, so only an environment that deploys
+ * that file runs on Postgres: one deploying another config would run on a database its own config never chose.
+ */
+const assertRootConfig = (environment: ProviderEnvironment): void => {
+	const { configPath } = decodeEnvelope('artifact', 'cloudflare', environment.artifact, cloudflareArtifactCodec)
+	if (checkoutRelativeDirectory(configPath) === DEFAULT_CONFIG_PATH) return
+	throw new Error(
+		`environment \`${environment.env}\` deploys the config \`${configPath}\`, and Postgres through Hyperdrive is read from \`${DEFAULT_CONFIG_PATH}\` at the application's root: an environment on Postgres deploys that config`,
+	)
+}
+
+const databaseName = (database: 'sqlite' | 'postgres'): string =>
+	database === 'sqlite' ? "its Durable Object's SQLite" : 'Postgres through Hyperdrive'
+
 /** Build the Cloudflare control capability over its runner and source-resolution ports. */
 export const createCloudflareControlProvider = (options: CloudflareControlOptions): ControlProvider => ({
 	id: 'cloudflare',
 	// The application's Worker forwards each request to its Durable Object with the environment's proxy secret.
 	applicationHopSecret: true,
-	// The environment's object serves Control's ops requests from the release that gets the composed row.
-	opsChannel: (access) => servesOps(applicationRelease(access)),
+	// The environment's object serves Control's ops requests from the release that gets the composed row. An application
+	// on Postgres has no ops channel: its object only schedules jobs, and its database is the database provider's to back up.
+	opsChannel: (access) => accessDatabase(access) === 'sqlite' && servesOps(applicationRelease(access)),
 	// From the release whose object holds the barrier; the 0.9.0 prereleases before it serve only `inspect`.
-	dataOperations: (access) => servesOps(applicationRelease(access)) && servesDataOperations(applicationRelease(access)),
+	dataOperations: (access) =>
+		accessDatabase(access) === 'sqlite' && servesOps(applicationRelease(access)) && servesDataOperations(applicationRelease(access)),
+	validateAccess: ({ environment, access }) => validateDatabase(environment, access),
 	normalizeRegistration,
 	applicationRoot: (source) => checkoutRelativeDirectory(source.workerDir),
 	source: { binding: 'connection' },

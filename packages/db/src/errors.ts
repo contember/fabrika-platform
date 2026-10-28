@@ -120,11 +120,19 @@ export class DatabaseError extends Error {
 	}
 }
 
-/** The driver's failure as a `DatabaseError`; the driver's error object goes no further. */
+/**
+ * The driver's failure as a `DatabaseError`; the driver's error object goes no further. Bun.SQL carries the SQLSTATE in
+ * `errno`, postgres.js (`@fabrika/db/hyperdrive`) in the `code` of its `PostgresError`; a socket error's `code`
+ * (`EPIPE`) is no SQLSTATE.
+ */
 export function databaseError(error: unknown): DatabaseError {
 	if (error instanceof DatabaseError) {
 		return error
 	}
-	const state: unknown = typeof error === 'object' && error !== null ? Reflect.get(error, 'errno') : undefined
+	if (typeof error !== 'object' || error === null) {
+		return new DatabaseError(null)
+	}
+	const errno: unknown = Reflect.get(error, 'errno')
+	const state: unknown = errno === undefined && error instanceof Error && error.name === 'PostgresError' ? Reflect.get(error, 'code') : errno
 	return new DatabaseError(typeof state === 'string' && SQLSTATE.test(state) ? state : null)
 }

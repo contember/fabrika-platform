@@ -174,7 +174,15 @@ export interface BootOptions {
 	 * object arms its alarm there. Bun supplies none.
 	 */
 	readonly projectWakes?: (transaction: Session) => Promise<void>
+	/**
+	 * `scheduler`: a request's kick only writes its wake (always written) and the runtime's `projectWakes` tells the job
+	 * object; no run starts in the request's isolate. `inline` by default.
+	 */
+	readonly kickRuns?: 'inline' | 'scheduler'
 }
+
+/** A request's kick under `kickRuns: 'scheduler'`: its wake, written in the request's transaction, is all of it. */
+const noKick = (): Promise<void> => Promise.resolve()
 
 /** The pool size a runtime adapter that names none is assumed to have: the Bun adapter's default. */
 const DEFAULT_CONNECTIONS = 10
@@ -994,7 +1002,8 @@ function bootOnce(app: ContractImplementation, options: BootOptions, binding: Bi
 		data,
 		fileKinds,
 		failures: new FailureReports(reporterFor('fabrika.requests')),
-		kick: jobs.kick,
+		// A request's kick is its durable wake, which the runtime's projection hands to the job object to run.
+		kick: options.kickRuns === 'scheduler' ? noKick : jobs.kick,
 		actions: Object.freeze(Object.keys(artifact.actions).sort()),
 		publicShare: new InFlightShare(publicShareOf(options.connections ?? DEFAULT_CONNECTIONS)),
 		clientVouched: options.clientAddress === 'vouched',

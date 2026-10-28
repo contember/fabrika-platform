@@ -10,12 +10,12 @@ import { implementationAt } from '@fabrika/app/bun'
 import type { AnyContract } from '@fabrika/app/contract'
 import { BootError, type ContractImplementation } from '@fabrika/app/implement'
 import { DEV_OUTBOX_ORIGIN, type DevKit, devKit, type DevOutside, type LabelledTestCaller, type TestCaller } from '@fabrika/app/testing'
-import { type ApplicationDialect, applicationDialect, CONFIG_FILE } from '@fabrika/check'
+import { type ApplicationDialect, CONFIG_FILE } from '@fabrika/check'
 import { SqliteMigrationError } from '@fabrika/db/sqlite-migrate'
 import { TEST_POSTGRES_URL, type TestDatabase, testDatabase } from '@fabrika/db/testing'
 import { PostgresMigrationError } from '@fabrika/platform-node'
 import { MemoryFileObjects } from '@fabrika/platform/testing'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { z } from 'zod/v4'
 import { DEV_ENV_FILE, DevEnvProblem, type DevOutbox, devOutbox, mailHeadOf, readDevEnv, shownBody } from './app-dev-outside'
@@ -36,6 +36,7 @@ import {
 	toolbarState,
 	withToolbar,
 } from './app-dev-ui'
+import { settleTarget } from './config-database'
 
 export const APP_DEV_USAGE = `fabrika app dev — the application on a local port, to click through its screens
 
@@ -45,7 +46,8 @@ Usage:
 Run from the application root. It serves ${IMPLEMENTATION_FILE} through its test kit: the production proxy decision,
 the kit's stand-in IAM, each SPA from its built directory (run the SPA build first; an unbuilt one is an empty page),
 and a throwaway schema of the database in ${TEST_POSTGRES_URL}, migrated from db/migrations/ and dropped on exit; an
-application on Cloudflare (its ${CONFIG_FILE} is @fabrika/provider-cloudflare's) gets an in-memory SQLite database instead.
+application on Cloudflare (its ${CONFIG_FILE} is @fabrika/provider-cloudflare's) gets an in-memory SQLite database instead,
+unless its config names database: { kind: 'postgres', … }, which takes the Postgres path above.
 The seed module (--seed, or ${DEFAULT_SEED} when it exists) default-exports a DevSeed of @fabrika/app/testing: it
 receives the kit, writes through the endpoints, and answers the personas, link pages and scope values to offer.
 Pick who the browser is at /__fabrika/dev; every SPA page shows a toolbar that switches the caller and lists the
@@ -194,17 +196,18 @@ function addressedHere(request: Request, port: number): boolean {
 const plain = (status: number, text: string): Response =>
 	new Response(`${text}\n`, { status, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' } })
 
-/** The dialect the application's `fabrika.config.ts` names, as the checker reads it. */
-function dialectAt(root: string): ApplicationDialect {
-	const path = join(root, CONFIG_FILE)
-	return applicationDialect(new Map(existsSync(path) ? [[CONFIG_FILE, readFileSync(path, 'utf8')]] : []))
+/** The dialect the application's `fabrika.config.ts` names, as the checker reads it, settled against the loaded config. */
+async function dialectAt(root: string): Promise<ApplicationDialect> {
+	const settled = await settleTarget(root, 'unsettled')
+	if ('refusal' in settled) throw new AppDevError(settled.refusal)
+	return settled.target.dialect
 }
 
 /** Serves `app` through its test kit on a loopback port until `stop`. */
 export async function startAppDev(app: ContractImplementation<AnyContract>, options: AppDevOptions): Promise<AppDevServer> {
 	if (!LOOPBACK.has(options.host)) throw new AppDevError(`app dev serves this machine only, not ${options.host}`)
 	let testDb: TestDatabase | null = null
-	if (app.database !== null && dialectAt(options.root) === 'sqlite') {
+	if (app.database !== null && (await dialectAt(options.root)) === 'sqlite') {
 		// The SQLite twin of the kit opens an in-memory database: no URL, and nothing left behind to drop.
 		const sqlite = await import('@fabrika/db/testing-sqlite')
 		testDb = await sqlite.testDatabase({ migrations: join(options.root, 'db', 'migrations'), label: 'fabrika app dev' })

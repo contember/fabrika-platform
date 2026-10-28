@@ -297,7 +297,8 @@ bunx fabrika-check .                                        # once, after tsc; r
 ```
 
 **On Cloudflare** (`fabrika.config.ts` imports `defineApp` from `@fabrika/provider-cloudflare`, as
-`references/app-setup.md` shows) the application runs in one Durable Object over SQLite. Its `db/migrations/*.sql` are SQLite (`references/table-and-migration.md`), and the
+`references/app-setup.md` shows) the application runs in one Durable Object over SQLite, unless its config chooses
+Postgres through Hyperdrive (below). Its `db/migrations/*.sql` are SQLite (`references/table-and-migration.md`), and the
 object applies them when it boots, so there is no `migrate` and no command needs a database URL or `FABRIKA_APP_ID`.
 The tests run on `@fabrika/db/testing-sqlite` (`references/tests.md`), in memory, and never skip. A handler holds the
 object's transaction, so its `limits.timeoutMs` is at most 25 s. A job's is at most 14 minutes, its default: longer
@@ -321,6 +322,13 @@ bunx fabrika db codegen                                     # applies the migrat
 bunx fabrika db test-scaffold                               # the generated tests, on @fabrika/db/testing-sqlite
 bun test --isolate                                          # no database URL; then tsc and fabrika-check as above
 ```
+
+**On Cloudflare over Postgres** (`database: { kind: 'postgres', … }` in `defineApp`, `references/app-setup.md`) the
+stateless Worker serves every request through Hyperdrive and the object runs only the jobs. Migrations, codegen and the
+tests are Postgres, exactly as on Zerops; the deploy runs `migrate`. A handler is not capped at 25 s and holds no
+environment while it waits; the job segment (14 minutes) and the `scan: true` refusal stay. A `ctx.kick` runs its job
+on the object within seconds of the commit, never in the request. Run the loop above with `FABRIKA_APP_ID` and
+`FABRIKA_APP_DATABASE_URL`, not the SQLite one; the local build passes `--database=postgres`.
 
 A generated file changes only through its command (`codegen`, `test-scaffold`); running it is the loop, not an edit.
 Format and lint only the files you wrote, with the repository's own tools: in the fabrika-platform repository

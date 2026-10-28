@@ -48,6 +48,14 @@ describe('classifyAccess', () => {
 		expect(classifyAccess(snapshot(), { ...snapshot(), checker: '9.9.9' })).toEqual({ outcome: 'none', changes: [] })
 	})
 
+	test('a first publication on Postgres says where the data lives, and admits no one', () => {
+		const postgres: AccessSnapshot = { ...snapshot(), database: 'postgres' }
+		const line = "The application's data lives in Postgres through Cloudflare Hyperdrive, not in its Durable Object's SQLite"
+		expect(classifyAccess(EMPTY_SNAPSHOT, postgres).changes).toContainEqual({ effect: 'neutral', line })
+		expect(classifyAccess(snapshot(), postgres)).toEqual({ outcome: 'no-widening', changes: [{ effect: 'neutral', line }] })
+		expect(classifyAccess(postgres, postgres)).toEqual({ outcome: 'none', changes: [] })
+	})
+
 	test('a role that gains an action widens; one that loses it only removes', () => {
 		const wider = snapshot(edited(`editor: { grants: ['notes.read', 'notes.write']`, `editor: { grants: ['notes.read', 'notes.write', 'notes.delete']`))
 		expect(classifyAccess(snapshot(), wider)).toEqual({

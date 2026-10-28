@@ -96,6 +96,10 @@ Object ([ADR-0065](../../docs/decisions/0065-an-application-on-cloudflare-runs-i
 and every other one, a missing config included, on Postgres. On SQLite no command needs a database URL or
 `FABRIKA_APP_ID`: `migrate` refuses, `codegen` runs the migrations in memory, and the generated tests run on
 `@fabrika/db/testing-sqlite`. `db-cloudflare.test.ts` holds those paths and that a Zerops application keeps its own.
+A Cloudflare config whose `defineApp` argument the read cannot follow (`unsettled`: no static object literal, a spread of
+a value it cannot read) is loaded (`settleTarget`, `src/config-database.ts`), and a loaded `database` the read did not
+see refuses every command, naming the shape the read settles (`READABLE_DATABASE_SHAPE`); one without a database stays on
+SQLite. `app dev` does the same, and `app build`, which loads the config anyway, checks the read against it every time.
 
 - `db new <slug>` writes `db/migrations/<UTC YYYYMMDDHHMMSS>_<slug>.sql`, the name the
   checker's `migration-name` rule accepts, and never overwrites.
@@ -182,7 +186,12 @@ arguments and reports.
   `fabrika.contract.ts` sits next to the config: the Bun entrypoint on Zerops, then
   the provider's build; on Cloudflare the Worker entrypoint, which exports `FabrikaApplication`, and
   `fabrika/migrations.generated.ts` (the `.sql` files of `db/migrations`, which the object applies when it boots), and
-  nothing else. An application without a contract builds as before.
+  nothing else. A Cloudflare config that chooses Postgres (`applicationTarget`) gets the `cloudflare-postgres` entry only
+  with `--database=postgres` (`requestedAppBuildDatabase`, `@fabrika/provider-contract/app-cli`), which a deployer
+  passes when it composed the database; without it, or with `--database=postgres` for a config on SQLite, the build
+  fails before it writes anything, as it does when the loaded config's `database` disagrees with the static read
+  (`settleTarget`). A platform older than `0.9.0-dev.9` never passes it (ADR-0065 §10). An application
+  without a contract builds as before.
 - `app dev` (`src/app-dev.ts`) resolves no provider: it loads `src/app.ts` with `@fabrika/app/bun`'s
   `implementationAt` and serves it through `@fabrika/app/testing`'s `devKit` (the test kit and its stand-in IAM), on
   a throwaway schema of `FABRIKA_TEST_POSTGRES_URL` (`@fabrika/db/testing`), or for an application on Cloudflare (the

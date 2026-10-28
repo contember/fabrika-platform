@@ -13,7 +13,8 @@ Published (`publishConfig.access: public`): applications depend on it.
 
 ```bash
 bun run typecheck
-bun test    # policy · derived-tables · tables · store · guard · hardening · type-attacks · codegen · testing · postgres, orm, data-ergonomics, testing-connections (need FABRIKA_TEST_POSTGRES_URL)
+bun test    # policy · derived-tables · tables · store · guard · hardening · type-attacks · codegen · testing · postgres, orm, data-ergonomics, testing-connections, hyperdrive (need FABRIKA_TEST_POSTGRES_URL)
+FABRIKA_TEST_POSTGRES_DRIVER=postgres-js bun test   # the same suites over postgres.js through openHyperdrive: the engines must answer alike
             # sqlite-engine · sqlite-migrate · codegen-sqlite · testing-sqlite · *-sqlite (bun:sqlite, no backend: they never skip)
 ```
 
@@ -33,6 +34,7 @@ bun test    # policy · derived-tables · tables · store · guard · hardening 
 | `guard.ts`             | The allowlist over the final operation tree, run immediately before compiling.                                                                                                                                                                                                                                                                                                                                               |
 | `database.ts`          | `Database` over a `DatabaseEngine` of its dialect (`fromEngine`, `fromDialect`; no public query method), `Session` (the only path to it), `InvocationTransaction` (`enclose`), `runFixedStatement`, `applicationSchema`, `openFirstConnection`; no Bun.                                                                                                                                                                      |
 | `postgres.ts`          | `@fabrika/db/postgres`: `openPostgres`, the Postgres engine over Bun.SQL (`prepare: false`, the schema as `search_path`); the only runtime module that imports `bun`.                                                                                                                                                                                                                                                        |
+| `hyperdrive.ts`        | `@fabrika/db/hyperdrive`: `openHyperdrive`, the Postgres engine over postgres.js as a Worker reaches Hyperdrive (unprepared, the schema the runtime role's default `search_path`, checked until one check passes), `HYPERDRIVE_CLIENT_OPTIONS`, the array decoding; imports neither `bun` nor `postgres`.                                                                                                                    |
 | `sqlite.ts`            | `@fabrika/db/sqlite`: `openSqlite(storage)`, the engine over a Durable Object's `ctx.storage`; its frozen `SqliteCompiler`, the constraint errors as SQLSTATEs; Worker-safe.                                                                                                                                                                                                                                                 |
 | `sqlite-bun.ts`        | `bunSqliteStorage`: a `bun:sqlite` database shaped like a Durable Object's storage (foreign keys on, `sql.exec` refusing transaction statements and, as workerd, more than 100 result columns or parameters, nested savepoints), for the tests and the SQLite kit; not a subpath. `execStatements` runs each statement of a text and answers the last one's rows, as `sql.exec` does; codegen applies migrations through it. |
 | `sqlite-migrate.ts`    | `@fabrika/db/sqlite-migrate`: `migrateSqlite`, the bundles applied in the object's own database, ledger `fabrika_migrations`, ADR-0017's identity and checksum; Worker-safe.                                                                                                                                                                                                                                                 |
@@ -49,7 +51,7 @@ bun test    # policy · derived-tables · tables · store · guard · hardening 
 | `migrations.ts`        | `@fabrika/db/migrations`: the framework's own tables (`fabrika_*`), the bundle `fabrika`; plain data.                                                                                                                                                                                                                                                                                                                        |
 | `codegen.ts`           | `@fabrika/db/codegen`: `src/db/schema.generated.ts` (types, `DB`, each table's columns and foreign keys as `TypedColumnList<DB>`) from a Postgres catalog; `renderTables`, the renderer both dialects share.                                                                                                                                                                                                                 |
 | `codegen-sqlite.ts`    | `@fabrika/db/codegen-sqlite`: `generateSqliteSchema`, the same file from the bundles applied to an in-memory `bun:sqlite` database, typed by each column's declared type.                                                                                                                                                                                                                                                    |
-| `testing.ts`           | `@fabrika/db/testing`, test files only: the Postgres `testDatabase`, the isolation fixtures, `tableProbe`, the framework's `defineStore`.                                                                                                                                                                                                                                                                                    |
+| `testing.ts`           | `@fabrika/db/testing`, test files only: the Postgres `testDatabase`, the isolation fixtures, `tableProbe`, the framework's `defineStore`, `openTestPostgres` and the `FABRIKA_TEST_POSTGRES_DRIVER` switch.                                                                                                                                                                                                                  |
 | `testing-sqlite.ts`    | `@fabrika/db/testing-sqlite`, test files only: the SQLite `testDatabase` (in memory, migrated by `migrateSqlite`, opened with `openSqlite`; never `null`), `tableProbe`.                                                                                                                                                                                                                                                     |
 | `testing-shared.ts`    | The kits' dialect-neutral half: the seeding plan over a `SeedingBackend`, `SeedLimitError`, the `TestDatabase` and world types, `probeTable`; not a subpath.                                                                                                                                                                                                                                                                 |
 | `production.ts`        | `@fabrika/db/production`: the mark of a process that serves an application, which the test kits refuse.                                                                                                                                                                                                                                                                                                                      |
@@ -168,9 +170,41 @@ pass a recording one); `Database.fromEngine` takes another engine (`openSqlite`)
   name): with no role under it, the name rule is the boundary. A list binds as JSON read by `json_each`. A `'read'`
   site's statement runs through the engine's `reads` executor, a `transactionSync` of its own even inside a writing
   invocation, so one that wrote throws `DatabaseError('25006')` and rolls back with it.
-- **A Worker loads no Bun module.** The root, `@fabrika/db/framework`, `/sqlite`, `/sqlite-migrate` and
+- **A Worker loads no Bun module.** The root, `@fabrika/db/framework`, `/sqlite`, `/sqlite-migrate`, `/hyperdrive` and
   `/migrations-sqlite` import neither `bun` nor `bun:sqlite`; Bun.SQL lives in `/postgres`, `bun:sqlite` in the tooling
   (`codegen-sqlite.ts`, `sqlite-bun.ts`, `testing-sqlite.ts`).
+
+## Postgres through Hyperdrive (`hyperdrive.ts`)
+
+On Cloudflare a Postgres application runs `openHyperdrive({ schema, client })` over the postgres.js client of the event
+that runs (`@fabrika/app/cloudflare-postgres` opens one per request). It is dialect `postgres` like `openPostgres`, and
+must answer alike: `bun run test` (and so CI and `check:ci`) runs this package's suites and the app suites that drive
+jobs and the ORM through Postgres (`test:postgres-js` in the root `package.json`) a second time with
+`FABRIKA_TEST_POSTGRES_DRIVER=postgres-js`; a new suite that exercises a Postgres path of the engine belongs in that list.
+`hyperdrive.test.ts` compares the two drivers' rows and parameters type by type.
+
+- **The schema is the runtime role's default `search_path`, never a session setting.** Hyperdrive documents no startup
+  parameters and pools per transaction, and many statements run in autocommit, so neither a startup `search_path` nor a
+  `SET LOCAL` covers them; the layer names its tables unqualified. `provisionPostgresRoles` (platform-node) sets the
+  role's default on every migrate. Each connection checks `current_schema()` on the event that reserved it until one check
+  of the engine passed, and the engine refuses every statement after a mismatch (a `DatabaseError`, SQLSTATE `3F000`,
+  with a message saying to redeploy). Only a settled outcome is shared: an event never awaits another event's check,
+  which would hang with that event if it were cancelled. Never add a `SET search_path` to the engine.
+- **Every reserved connection runs unprepared** (`prepare: false` over whatever Kysely asks): the pooler hands each
+  transaction another origin connection, which would not hold a statement prepared on the last one.
+- **The client is opened with `HYPERDRIVE_CLIENT_OPTIONS`.** `fetch_types` stays on: postgres.js 3.4.9 never resolves
+  `reserve()` on a pool without an open connection when it is off (porsager/postgres#1219), and Kysely reserves every
+  connection. Every built-in array type is kept as text and decoded by the engine as Bun.SQL decodes it (`ARRAY_ELEMENTS`;
+  `uuid[]`, ranges and the rest stay text, as there), because postgres.js's own array decoding reads a `NULL` element as
+  `'NULL'`, a `bool[]` as all `false` and throws on a `json[]` holding a null. Booleans, bytea, JSON, dates and timestamps
+  send their parameters as text, as Bun.SQL does, so the server parses them: postgres.js would pass a timestamp's text
+  through `new Date()` (its microseconds lost) and a bool's `'true'` as `'f'`. A JS number is declared with the type
+  Bun.SQL gives it (`numberType`): `int4` for an int32, `int8` for a larger integer within ±2^51 (not ±2^53), `float8`
+  for anything else, -0 and NaN included; postgres.js would send it untyped, so `int4_column < 1.5` would fail and a
+  computed `numeric` would keep other digits. The probes pin each boundary. An enum's array stays postgres.js's to
+  decode.
+- **postgres.js errors carry the SQLSTATE in `code`** of a `PostgresError`, Bun.SQL's in `errno`; `databaseError`
+  reads both and nothing else of the error.
 
 ## Invariants
 
@@ -407,7 +441,7 @@ pass a recording one); `Database.fromEngine` takes another engine (`openSqlite`)
   patches passes for one, and the tag refuses a fragment of another site. Before it splices anything, the tag checks
   every interpolation's place in the original text (code level, not a literal, a quoted name, a dollar body or a
   comment). Then `classifySql` reads the whole statement. Never let any other object splice text.
-- **`Database` is frozen, the class and its prototype, and so are `openPostgres` and `openSqlite`.** Application
+- **`Database` is frozen, the class and its prototype, and so are `openPostgres`, `openSqlite` and `openHyperdrive`.** Application
   modules load after them, and a replaced opener would receive the database URL or the object's storage;
   `@fabrika/app/bun` also takes `openPostgres` before it imports the application. Never add a writable static. `hardening.test.ts` is the witness; `@fabrika/check`'s
   `framework-write` refuses the write in source.

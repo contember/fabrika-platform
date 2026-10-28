@@ -3,6 +3,7 @@ export {
 	type ApplicationWorkerOptions,
 	type CloudflareAppConfig,
 	type CloudflareAppConfigInput,
+	type CloudflarePostgresDatabase,
 	defineApp,
 	isCloudflareAppConfig,
 	type ResourceContext,
@@ -30,6 +31,14 @@ export { deployCloudflareConfig, loadCloudflareCommandConfig } from './command'
 export type { CloudflareCommandDeployOptions, LoadedCloudflareCommandConfig } from './command'
 export { cloudflareStoredTargetCodec, createCloudflareControlProvider } from './control'
 export type { CloudflareCloneSource, CloudflareControlOptions, CloudflareRunnerJob, CloudflareStoredTarget } from './control'
+export {
+	cloudflareHyperdriveConfigs,
+	hyperdriveConfigName,
+	type HyperdriveConfigs,
+	type HyperdriveOrigin,
+	type HyperdriveUpsert,
+	localDatabaseConnection,
+} from './database'
 export { buildPlan, findMigratableDatabases, PLATFORM_RESOURCE_NAMES } from './plan'
 export type { CloudflareStep, CloudflareStepKind, MigratableDatabase } from './plan'
 export {

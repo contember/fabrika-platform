@@ -1,6 +1,6 @@
 import { generatedEntry } from '@fabrika/app/build'
 import { describe, expect, test } from 'bun:test'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { parseCliArgs, providerFromConfig, runCli } from '..'
@@ -76,6 +76,7 @@ describe('app build for a contract application', () => {
 		const stderr = console.error
 		console.error = () => {}
 		try {
+			symlinkSync(join(import.meta.dir, '..', '..', 'node_modules'), join(root, 'node_modules'))
 			if (contract) {
 				writeFileSync(join(root, 'fabrika.contract.ts'), 'export {}\n')
 			}
@@ -88,6 +89,97 @@ describe('app build for a contract application', () => {
 
 	test('writes the Worker entrypoint next to fabrika.contract.ts on Cloudflare', async () => {
 		await withRoot(true, async (config, root) => {
+			await runCli(['app', 'build', '--provider=cloudflare', `--config=${config}`])
+			expect(readFileSync(join(root, 'fabrika', 'entry.generated.ts'), 'utf8')).toBe(generatedEntry('cloudflare'))
+		})
+	})
+
+	const POSTGRES_CONFIG =
+		"import { defineApp } from '@fabrika/provider-cloudflare'\n\nexport default defineApp({ id: 'notes', database: { kind: 'postgres', provisioningSecret: 'DATABASE_URL' }, resources: () => [] })\n"
+
+	test('writes the Postgres Worker entrypoint, and no migrations module, for an application over Hyperdrive', async () => {
+		await withRoot(true, async (config, root) => {
+			writeFileSync(config, POSTGRES_CONFIG)
+			await runCli(['app', 'build', '--provider=cloudflare', `--config=${config}`, '--database=postgres'])
+			expect(readFileSync(join(root, 'fabrika', 'entry.generated.ts'), 'utf8')).toBe(generatedEntry('cloudflare-postgres'))
+			expect(existsSync(join(root, 'fabrika', 'migrations.generated.ts'))).toBe(false)
+		})
+	})
+
+	test('refuses the Postgres entrypoint unless the build was asked for Postgres, as a deployer that composes no database never asks', async () => {
+		await withRoot(true, async (config, root) => {
+			writeFileSync(config, POSTGRES_CONFIG)
+			// The argv a platform older than 0.9.0-dev.9 runs the build with.
+			await expect(runCli(['app', 'build', '--provider=cloudflare', `--config=${config}`])).rejects.toThrow(
+				'app build: fabrika.config.ts runs the application on Postgres through Hyperdrive, and this build was not asked for it (--database=postgres). A platform older than 0.9.0-dev.9',
+			)
+			await expect(runCli(['app', 'build', '--provider=cloudflare', `--config=${config}`, '--database=sqlite'])).rejects.toThrow(
+				'this build was not asked for it',
+			)
+			expect(existsSync(join(root, 'fabrika'))).toBe(false)
+		})
+	})
+
+	test('refuses a build asked for Postgres when the config chooses none, and a database it does not know', async () => {
+		await withRoot(true, async (config, root) => {
+			await expect(runCli(['app', 'build', '--provider=cloudflare', `--config=${config}`, '--database=postgres'])).rejects.toThrow(
+				"app build: this build was asked for Postgres (--database=postgres), and fabrika.config.ts names no `database: { kind: 'postgres', … }`",
+			)
+			await expect(runCli(['app', 'build', '--provider=cloudflare', `--config=${config}`, '--database=mysql'])).rejects.toThrow(
+				'--database=mysql: expected sqlite or postgres',
+			)
+			expect(existsSync(join(root, 'fabrika'))).toBe(false)
+			// Asked for the object's SQLite, the build writes its entry as without the option.
+			await runCli(['app', 'build', '--provider=cloudflare', `--config=${config}`, '--database=sqlite'])
+			expect(readFileSync(join(root, 'fabrika', 'entry.generated.ts'), 'utf8')).toBe(generatedEntry('cloudflare'))
+		})
+	})
+
+	test('refuses app build on Cloudflare when the static read cannot settle the database', async () => {
+		await withRoot(true, async (config, root) => {
+			writeFileSync(
+				config,
+				"import { defineApp } from '@fabrika/provider-cloudflare'\n\nlet database = { kind: 'postgres', provisioningSecret: 'DATABASE_URL' } as const\n\nexport default defineApp({ id: 'notes', database, resources: () => [] })\n",
+			)
+			await expect(runCli(['app', 'build', '--provider=cloudflare', `--config=${config}`])).rejects.toThrow(
+				'app build: fabrika.config.ts: `database` is not an object literal',
+			)
+			expect(existsSync(join(root, 'fabrika'))).toBe(false)
+		})
+	})
+
+	test('reads Postgres through a const default export and a const argument, so a flagless build refuses them', async () => {
+		const shapes = [
+			"import { defineApp } from '@fabrika/provider-cloudflare'\n\nconst app = defineApp({ id: 'notes', database: { kind: 'postgres', provisioningSecret: 'DATABASE_URL' }, resources: () => [] })\nexport default app\n",
+			"import { defineApp } from '@fabrika/provider-cloudflare'\n\nconst settings = { id: 'notes', database: { kind: 'postgres', provisioningSecret: 'DATABASE_URL' }, resources: () => [] } as const\nexport default defineApp(settings)\n",
+		]
+		for (const shape of shapes) {
+			await withRoot(true, async (config, root) => {
+				writeFileSync(config, shape)
+				await expect(runCli(['app', 'build', '--provider=cloudflare', `--config=${config}`])).rejects.toThrow('this build was not asked for it')
+				expect(existsSync(join(root, 'fabrika'))).toBe(false)
+				await runCli(['app', 'build', '--provider=cloudflare', `--config=${config}`, '--database=postgres'])
+				expect(readFileSync(join(root, 'fabrika', 'entry.generated.ts'), 'utf8')).toBe(generatedEntry('cloudflare-postgres'))
+			})
+		}
+	})
+
+	test('refuses a loaded database the static read cannot follow, naming the readable shape; one without a database stays on SQLite', async () => {
+		await withRoot(true, async (config, root) => {
+			writeFileSync(
+				config,
+				"import { defineApp } from '@fabrika/provider-cloudflare'\n\nconst load = () => ({ database: { kind: 'postgres' as const, provisioningSecret: 'DATABASE_URL' } })\nexport default defineApp({ id: 'notes', resources: () => [], ...load() })\n",
+			)
+			await expect(runCli(['app', 'build', '--provider=cloudflare', `--config=${config}`, '--database=postgres'])).rejects.toThrow(
+				"app build: fabrika.config.ts names a `database` when it loads, and the static read that Control, the checker and the build share does not see it (it spreads a value the read cannot follow): write it as `export default defineApp({ …, database: { kind: 'postgres', provisioningSecret: '<SECRET>' } })`",
+			)
+			expect(existsSync(join(root, 'fabrika'))).toBe(false)
+		})
+		await withRoot(true, async (config, root) => {
+			writeFileSync(
+				config,
+				"import { defineApp } from '@fabrika/provider-cloudflare'\n\nconst load = () => ({ resources: () => [] })\nexport default defineApp({ id: 'notes', ...load() })\n",
+			)
 			await runCli(['app', 'build', '--provider=cloudflare', `--config=${config}`])
 			expect(readFileSync(join(root, 'fabrika', 'entry.generated.ts'), 'utf8')).toBe(generatedEntry('cloudflare'))
 		})

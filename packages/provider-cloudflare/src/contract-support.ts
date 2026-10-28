@@ -17,21 +17,29 @@ import type { ProviderManagedEnvironment } from '@fabrika/provider-contract'
  */
 export const CLOUDFLARE_MAX_HANDLER_MS = 25_000
 
+/** The database a Cloudflare application runs on: its Durable Object's SQLite (ADR-0065), or Postgres through Hyperdrive. */
+export type CloudflareDatabaseKind = 'sqlite' | 'postgres'
+
+/** The database an approved access names; an access that names none runs on the object's SQLite. */
+export const accessDatabase = (access: { readonly database?: 'postgres' }): CloudflareDatabaseKind => access.database ?? 'sqlite'
+
 /** What the release a caller runs a contract as decides about it; each caller reads them off that release. */
 export interface CloudflareContractGates {
 	/** The release caps a job at one segment (`capsJobSegments`). */
 	readonly capsSegments: boolean
 	/** The release runs `ctx.sql` on the object's SQLite (`servesRawSql`). */
 	readonly servesSql: boolean
+	/** The database the application runs on; only on the object's SQLite does a handler hold a transaction with a time limit. */
+	readonly database: CloudflareDatabaseKind
 }
 
 /**
  * Refuse what a contract declares that an application on Cloudflare cannot run yet (ADR-0065): a file kind that scans
- * its uploads, a handler allowed to outlive the object's transaction limit, and, by the release it runs as, a job longer
- * than one segment and raw SQL (`ctx.sql`).
+ * its uploads, on the object's SQLite a handler allowed to outlive the object's transaction limit, and, by the release
+ * it runs as, a job longer than one segment and raw SQL (`ctx.sql`).
  */
-export const assertCloudflareContract = (contract: ContractArtifact, { capsSegments, servesSql }: CloudflareContractGates): void => {
-	const handlers: [string, number][] = [
+export const assertCloudflareContract = (contract: ContractArtifact, { capsSegments, servesSql, database }: CloudflareContractGates): void => {
+	const handlers: [string, number][] = database !== 'sqlite' ? [] : [
 		...Object.entries(contract.procedures ?? {}).map(([id, procedure]): [string, number] => [`procedure \`${id}\``, procedure.timeoutMs]),
 		...Object.entries(contract.mounts).flatMap(([name, mount]): [string, number][] =>
 			mount.kind === 'webhook' ? [[`webhook \`${name}\``, mount.timeoutMs]] : []
@@ -208,6 +216,12 @@ const RAW_SQL_SINCE = '0.9.0-dev.5'
 
 /** Whether an application on release `release` may declare `sql` on Cloudflare. */
 export const servesRawSql = (release: string): boolean => releaseFrom(release, RAW_SQL_SINCE)
+
+/** The first framework release whose Cloudflare entry serves an application from Postgres through Hyperdrive. */
+const POSTGRES_DATABASE_SINCE = '0.9.0-dev.9'
+
+/** Whether an application on release `release` may run on Postgres through Hyperdrive on Cloudflare. */
+export const servesPostgresDatabase = (release: string): boolean => releaseFrom(release, POSTGRES_DATABASE_SINCE)
 
 /**
  * Refuse what a stateless Worker of an older release cannot run: a job, a webhook, a public procedure, installation

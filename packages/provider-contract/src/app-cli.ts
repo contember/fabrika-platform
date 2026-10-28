@@ -6,6 +6,30 @@ import type { ProviderDeploymentNamespace, ProviderNamespacePlan } from './contr
 /** The runtime a contract application's generated entry is written for (`@fabrika/app/build`'s `EntryRuntime`). */
 export type AppEntryRuntime = 'bun' | 'cloudflare'
 
+/** The database a deployer composed a Cloudflare application for: its Durable Object's SQLite, or Postgres through Hyperdrive. */
+export type AppBuildDatabase = 'sqlite' | 'postgres'
+
+const APP_BUILD_DATABASE_OPTION = '--database='
+
+/**
+ * What a deployer appends to `fabrika app build --provider=cloudflare` for an application it composed on Postgres. The
+ * application's own CLI writes the Postgres entry only when it is asked to: a deployer older than `0.9.0-dev.9` never
+ * asks and composes no database, so the build fails there instead of deploying an entry without its database, on a
+ * platform that regenerates the entry (`0.9.0-dev.5`, `cloudflare.1` and later; `dev.0`–`dev.4` deploy a committed
+ * entry as it is, docs/backlog/240). A deploy
+ * on the object's SQLite passes nothing, as every older deployer does.
+ */
+export const appBuildDatabaseArgument = (database: AppBuildDatabase): string => `${APP_BUILD_DATABASE_OPTION}${database}`
+
+/** The database `fabrika app build` was asked for; none asked is undefined. Throws on any other value. */
+export const requestedAppBuildDatabase = (argv: readonly string[]): AppBuildDatabase | undefined => {
+	const option = argv.find((arg) => arg.startsWith(APP_BUILD_DATABASE_OPTION))
+	if (option === undefined) return undefined
+	const value = option.slice(APP_BUILD_DATABASE_OPTION.length)
+	if (value === 'sqlite' || value === 'postgres') return value
+	throw new Error(`${APP_BUILD_DATABASE_OPTION}${value}: expected sqlite or postgres`)
+}
+
 /** What a namespace command asks of Control. The `fabrika` command holds the Control origin, the credential and the transport. */
 export interface NamespaceControl {
 	create(namespace: ProviderDeploymentNamespace): Promise<unknown>

@@ -158,7 +158,9 @@ INSERT INTO priorities (code, label, rank) VALUES ('low', 'Low', 1), ('normal', 
 ## On Cloudflare: SQLite migrations
 
 An application on Cloudflare (its `fabrika.config.ts` imports `defineApp` from `@fabrika/provider-cloudflare`) writes
-its migrations in SQLite. Its Durable Object applies them when it boots, each file once in name order, in a transaction
+its migrations in SQLite, unless its config chooses `database: { kind: 'postgres', … }`: then they are Postgres, as
+everywhere above, and the deploy runs `fabrika db migrate` before it deploys; the rest of this section is SQLite only.
+On SQLite, its Durable Object applies them when it boots, each file once in name order, in a transaction
 of its own, so there is no `fabrika db migrate`; `fabrika db codegen` applies them to an in-memory database and needs
 no URL. The rules above for keys, chains, composite foreign keys, `version` and `created_by` hold unchanged, and the
 database enforces foreign keys.

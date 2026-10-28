@@ -16,6 +16,9 @@ import { CLOUDFLARE_PROXY_WORKER_DIR } from '../proxy'
 
 let checkout: string
 
+/** `notesArtifact` as Control approves it for the application the checkout declares, `demo`. */
+const demoArtifact = { ...notesArtifact, app: 'demo' }
+
 const RUNNER_OBLAKA = dirname(Bun.resolveSync('oblaka-iac/package.json', import.meta.dir))
 
 /** One file per case: Bun caches a module by its path. */
@@ -62,7 +65,7 @@ const deployCheckout = async (
 		vars: {},
 		managedEnvironment: parseManagedEnvironment({ FABRIKA_IAM_ISSUER: 'https://iam.example.test' }),
 		installationApps: [{ app: 'otherapp', env: 'stage' }],
-		approved: { kind: 'contract', contract: notesArtifact, contractDigest: contractDigest(notesArtifact) },
+		approved: { kind: 'contract', contract: demoArtifact, contractDigest: contractDigest(demoArtifact) },
 		dryRun: false,
 		signal: new AbortController().signal,
 		log: () => {},

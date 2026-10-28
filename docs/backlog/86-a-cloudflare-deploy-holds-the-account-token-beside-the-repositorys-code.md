@@ -44,6 +44,13 @@ What is still open:
   registry of Cloudflare deployments, and a remote name under another app's `${env}-${app}` prefix is
   refused (ADR-0048). An app whose resources are not named under its own id is not protected by it;
   it is still not an ownership record.
+- An application's vault secret or variable shares the executor's environment with the run's credentials, by name.
+  The deployer refuses `CLOUDFLARE_API_TOKEN` in `pipeline.secrets` and `pipeline.vars`, so `sync-secrets` cannot copy
+  the installation's token into the Worker. But Control still resolves every secret and variable of the environment into
+  the job, and the runner's `deployEnv` writes them after `job.credentials`: an application secret named
+  `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` or `CLOUDFLARE_STATE_NAMESPACE` replaces the platform's value in the
+  executor. Control should refuse those names as it refuses `FABRIKA_*` (`assertUnmanagedNames`), and the runner should
+  write the credentials last.
 - The bound is a name rule, not an account fact. The suffix rule refuses a legitimate app name that
   ends in a platform name (`crm-operations`), because without the platform's own env the two are
   indistinguishable; an ownership record makes the rule exact and lifts that refusal.

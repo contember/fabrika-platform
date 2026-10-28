@@ -34,7 +34,8 @@ import { reconcileProviderRuns } from '../provider-reconcile'
 import { cancelDeploy, type DeployJobMessage, executeDeploy, parseProviderEnvelope, type RunDeps, type RunOutcome } from '../run-lifecycle'
 import { appSecretPurpose, type SecretResolver, VaultSecretResolver } from '../secret-resolver'
 import { buildControlRpcDeps, buildRunDeps } from '../services'
-import { contractCommits } from './helpers/commits'
+import { contractCommits, frameworkLockfile, memoryCommits } from './helpers/commits'
+import { healthOnly } from './helpers/contracts'
 import { createHarness, queryRows } from './helpers/harness'
 import { allowAllAuth } from './helpers/iam'
 import { fixtureCatalogApplied, fixtureProtect, fixtureRuns, heldLeases, makeFakeLock } from './helpers/lock'
@@ -1023,6 +1024,83 @@ describe('provider-neutral run lifecycle', () => {
 		// A downgrade hands null, which removes the digests; the key stays for a later upgrade.
 		expect(await deploy(await createNextRun(db), false)).toBeNull()
 		expect(await db.opsKeys.list('app', 'prod')).toHaveLength(1)
+	})
+
+	test('a Cloudflare application on Postgres records no migration barrier and gets no ops key; one on SQLite does', async () => {
+		const { db } = createHarness()
+		const opsKeys = new VaultOpsKeys(db.opsKeys, () => Promise.resolve(vault))
+		const cloudflare = createCloudflareControlProvider({
+			accountId: 'account-1',
+			apiToken: 'token-1',
+			runnerKey: 'test-runner-key',
+			resolveSource: async () => ({ commitSha: 'a'.repeat(40) }),
+			prepareClone: async (source) => ({ repoUrl: source.repoUrl }),
+			startRun: async () => ({ state: 'succeeded' }),
+			cancelRun: async () => {},
+		})
+		const deploy = async (runId: string, config: string) => {
+			const inputs: ProviderDeployInput[] = []
+			// The Cloudflare provider's own judgement of the approved access, over a provider that records its input.
+			const provider: ControlProvider = {
+				...makeProvider(inputs, { state: 'succeeded' }),
+				opsChannel: (access) => cloudflare.opsChannel?.(access) === true,
+				dataOperations: (access) => cloudflare.dataOperations?.(access) === true,
+			}
+			const commits = memoryCommits({ 'fabrika.contract.ts': healthOnly('app'), 'fabrika.config.ts': config })
+			expect((await executeDeploy({ ...makeDeps(db, provider), opsKeys, commits }, { runId })).status).toBe('succeeded')
+			return { input: inputs[0], run: await requireRun(db, runId) }
+		}
+		const postgres = await deploy(
+			await seedRun(db),
+			"import { defineApp } from '@fabrika/provider-cloudflare'\nexport default defineApp({ id: 'app', database: { kind: 'postgres', provisioningSecret: 'DATABASE_URL' } })\n",
+		)
+		expect(postgres.input?.environment.access?.database).toBe('postgres')
+		expect(postgres.input?.managedEnvironment[FABRIKA_OPS_KEY_DIGESTS]?.value).toBeNull()
+		expect(postgres.run.migration_barrier).toBe(0)
+		expect(await db.opsKeys.list('app', 'prod')).toEqual([])
+		const published = await db.registry.getAppEnv('app', 'prod')
+		expect(JSON.parse(published?.published_snapshot_json ?? '{}')).toMatchObject({ database: 'postgres' })
+
+		const sqlite = await deploy(
+			await createNextRun(db),
+			"import { defineApp } from '@fabrika/provider-cloudflare'\nexport default defineApp({ id: 'app' })\n",
+		)
+		expect(sqlite.input?.environment.access?.database).toBeUndefined()
+		expect(sqlite.input?.managedEnvironment[FABRIKA_OPS_KEY_DIGESTS]?.value).toEqual(expect.any(String))
+		expect(sqlite.run.migration_barrier).toBe(1)
+	})
+
+	test('Cloudflare refuses Postgres from a release before it serves it before the snapshot is published or a runner starts', async () => {
+		const { db } = createHarness()
+		const runId = await seedRun(db, { provider: 'cloudflare' })
+		const effects: string[] = []
+		const stored = memoryLogs()
+		const provider = createCloudflareControlProvider({
+			accountId: 'account-1',
+			apiToken: 'token-1',
+			runnerKey: 'test-runner-key',
+			resolveSource: async () => ({ commitSha: 'a'.repeat(40) }),
+			prepareClone: async (source) => {
+				effects.push('clone')
+				return { repoUrl: source.repoUrl }
+			},
+			startRun: async () => {
+				effects.push('runner')
+				return { state: 'succeeded' }
+			},
+			cancelRun: async () => {},
+		})
+		const commits = memoryCommits({
+			'worker/fabrika.contract.ts': healthOnly('app'),
+			'worker/bun.lock': frameworkLockfile('0.9.0-dev.8'),
+			'worker/fabrika.config.ts':
+				"import { defineApp } from '@fabrika/provider-cloudflare'\nexport default defineApp({ id: 'app', database: { kind: 'postgres', provisioningSecret: 'DATABASE_URL' } })\n",
+		})
+		const deps = { ...makeDeps(db, provider), proxySecrets: fixedProxySecrets, commits, logs: stored.logs }
+		expect((await executeDeploy(deps, { runId })).status).toBe('failed')
+		expect(effects).toEqual([])
+		expect((await db.registry.getAppEnv('app', 'prod'))?.published_snapshot_json).toBeNull()
+		expect(stored.objects.get(`runs/${runId}/logs.ndjson`)).toContain('@fabrika/app 0.9.0-dev.8 cannot run on Postgres through Hyperdrive')
 	})
 
 	test('an environment without a domain has no ops channel, so its deploy issues no key', async () => {
