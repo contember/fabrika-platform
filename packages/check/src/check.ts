@@ -5,7 +5,7 @@ import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { type AstNode, type ParsedModule, parseModule, walk } from './ast'
 import { contractModules, readContractModule } from './contract'
-import { applicationDialect } from './dialect'
+import { applicationTarget } from './dialect'
 import { compareFindings, type Finding, reporter } from './finding'
 import { ModuleGraph } from './graph'
 import {
@@ -25,7 +25,7 @@ import { ReaderProblems } from './reader/problems'
 import { readTablesValue } from './reader/tables'
 import { type ModuleReference, moduleReferences } from './references'
 import { type ImportMappings, readImportMappings } from './resolution'
-import { checkCloudflareContract } from './rules/cloudflare'
+import { checkCloudflareContract, cloudflareDatabaseRefusal } from './rules/cloudflare'
 import { checkContractRead } from './rules/contract'
 import { checkCrontab, contractJobs } from './rules/crontab'
 import { checkFrameworkWrite, trustedBindings } from './rules/framework'
@@ -269,8 +269,10 @@ export const checkApplication = async (input: CheckInput): Promise<Finding[]> =>
 	const declaredTables = tables !== undefined && literal.length === 0 ? readTablesValue(graph, tables, new ReaderProblems()) : null
 	const artifact = read?.ok === true ? compiledArtifact(read.contract, declaredTables) : null
 	findings.push(...contractDependentFindings(dependent, artifact === null ? null : compiledReach(artifact)))
-	if (applicationDialect(tree.files) === 'sqlite') {
-		if (artifact !== null) findings.push(...checkCloudflareContract(artifact))
+	const target = applicationTarget(tree.files)
+	if (target.unreadable !== undefined) findings.push(cloudflareDatabaseRefusal(target.unreadable))
+	if (target.cloudflare && artifact !== null) findings.push(...checkCloudflareContract(artifact, { database: target.dialect }))
+	if (target.cloudflare && target.dialect === 'sqlite') {
 		findings.push(...checkCurrentTimestampDefaults(tree.files))
 		findings.push(...checkSqliteFrameworkNames(tree.files))
 	}

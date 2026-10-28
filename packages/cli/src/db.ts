@@ -1,7 +1,7 @@
 import { applicationMigrations as sqliteApplicationMigrations } from '@fabrika/app/build'
 import {
 	type ApplicationDialect,
-	applicationDialect,
+	applicationTarget,
 	CONFIG_FILE,
 	type Finding,
 	formatFinding,
@@ -93,7 +93,9 @@ const refuseArguments = (command: string, argv: readonly string[]): void => {
 /** The dialect `fabrika.config.ts` names, read as the checker reads it; Postgres without a config. */
 const dialectAt = async (cwd: string): Promise<ApplicationDialect> => {
 	const config = await readFile(join(cwd, CONFIG_FILE), 'utf8').catch(() => undefined)
-	return applicationDialect(new Map(config === undefined ? [] : [[CONFIG_FILE, config]]))
+	const target = applicationTarget(new Map(config === undefined ? [] : [[CONFIG_FILE, config]]))
+	if (target.unreadable !== undefined) throw new Error(`db: ${CONFIG_FILE}: ${target.unreadable}`)
+	return target.dialect
 }
 
 const timestamp = (date: Date): string => date.toISOString().replace(/\.\d{3}Z$/, '').replaceAll(/[-:T]/g, '')

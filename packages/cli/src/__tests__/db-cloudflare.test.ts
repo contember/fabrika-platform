@@ -80,6 +80,15 @@ describe('fabrika db on Cloudflare', () => {
 		)
 	})
 
+	test('an application over Postgres (Hyperdrive) takes the Postgres path; an unreadable database is refused', async () => {
+		const postgres = appRoot(
+			CLOUDFLARE_CONFIG.replace("id: 'notes',", "id: 'notes', database: { kind: 'postgres', provisioningSecret: 'DATABASE_URL' },"),
+		)
+		expect(await failure(run(postgres, 'migrate'))).toBe('FABRIKA_APP_ID is required')
+		const unreadable = appRoot(CLOUDFLARE_CONFIG.replace("id: 'notes',", "id: 'notes', database: { kind },"))
+		expect(await failure(run(unreadable, 'migrate'))).toContain("db: fabrika.config.ts: `database` states a `kind` other than the literal 'postgres'")
+	})
+
 	test('a Zerops application still needs the Postgres environment for migrate and codegen', async () => {
 		const root = appRoot(ZEROPS_CONFIG)
 		expect(await failure(run(root, 'migrate'))).toBe('FABRIKA_APP_ID is required')

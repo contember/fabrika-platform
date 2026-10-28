@@ -38,6 +38,8 @@ const FILE_COLUMN_APPLICATION: Readonly<Record<string, string>> = {
 /** A `fabrika.config.ts` that `@fabrika/provider-cloudflare`'s `defineApp` authors: the application runs on SQLite. */
 const CLOUDFLARE_CONFIG =
 	"import { defineApp } from '@fabrika/provider-cloudflare'\n\nexport default defineApp({ id: 'notes', resources: () => [] })\n"
+const CLOUDFLARE_POSTGRES_CONFIG =
+	"import { defineApp } from '@fabrika/provider-cloudflare'\n\nexport default defineApp({ id: 'notes', database: { kind: 'postgres', provisioningSecret: 'DATABASE_URL' }, resources: () => [] })\n"
 
 /** The two-slice application, whose pipeline query declares sql. */
 const ARCHITECTURE_APPLICATION: Readonly<Record<string, string>> = Object.fromEntries(
@@ -743,6 +745,16 @@ const cases: readonly RuleCase[] = [
 			'db/migrations/20261024120000_avatars.sql':
 				'CREATE TABLE avatars (\n\tid TEXT PRIMARY KEY,\n\tfile_id TEXT NOT NULL REFERENCES "FABRIKA_FILES" (id)\n);\n',
 		},
+	},
+	{
+		rule: 'cloudflare-database',
+		bad: {
+			...ARCHITECTURE_APPLICATION,
+			'fabrika.config.ts':
+				"import { defineApp } from '@fabrika/provider-cloudflare'\n\nconst database = { kind: 'postgres', provisioningSecret: 'DATABASE_URL' } as const\n\nexport default defineApp({ id: 'notes', database, resources: () => [] })\n",
+		},
+		expected: ['fabrika.config.ts:1:1'],
+		good: { ...ARCHITECTURE_APPLICATION, 'fabrika.config.ts': CLOUDFLARE_POSTGRES_CONFIG },
 	},
 	{
 		rule: 'crontab',
