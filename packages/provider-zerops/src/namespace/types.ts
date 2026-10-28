@@ -60,7 +60,15 @@ export interface ZeropsNamespaceTarget {
 	readonly proxyAppVersionId?: string
 	/** The hosts the published proxy answers on, recorded once so a namespace read needs no platform call. */
 	readonly proxyHosts?: readonly ProviderNamespaceHost[]
+	/** The namespace's dev sandbox host, recorded once provisioned; absent while no dev environment uses the namespace. */
+	readonly sandboxHost?: ZeropsNamespaceSandboxHost
 	readonly ready?: boolean
+}
+
+export interface ZeropsNamespaceSandboxHost {
+	readonly serviceId: string
+	/** The Box API origin: the service's public subdomain for `SANDBOX_HOST_API_PORT`. */
+	readonly apiOrigin: string
 }
 
 export type ZeropsNamespacePolicy = Omit<ZeropsNamespaceTarget, 'proxySource'>

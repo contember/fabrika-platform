@@ -45,6 +45,7 @@ const FIXED_FIELDS: { readonly [K in FixedField]: (target: ZeropsNamespaceTarget
 	proxyBaselineSequence: (target) => target.proxyBaselineSequence,
 	proxyAppVersionId: (target) => target.proxyAppVersionId,
 	proxyHosts: (target) => target.proxyHosts,
+	sandboxHost: (target) => target.sandboxHost,
 	ready: (target) => target.ready,
 }
 
