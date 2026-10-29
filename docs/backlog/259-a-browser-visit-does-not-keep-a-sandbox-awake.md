@@ -14,7 +14,8 @@ unusable for more than a few minutes.
 
 Box wakes a parked sandbox on a request to its port. The launcher's next request reaches `recordLauncherSeen`
 (`packages/control/src/db/dev-sandboxes.ts`), which clears `parked_at` but leaves `activity_at` as it was, more than 30
-minutes old. `listIdle` selects the row again and `runDevMaintenance` parks it. Someone who opens the dev URL half an hour
+minutes old. This assumes a Box wake resumes the running launcher (a restored memory snapshot), not a fresh boot,
+whose first `report` would bump `activity_at`. `listIdle` selects the row again and `maintainDevSandboxes` parks it. Someone who opens the dev URL half an hour
 after their last commit sees the application, then loses it within 5 minutes. `docs/reference/mcp-authoring.md` (the
 `stopped` state) and ADR-0049 present a request to the URL as a way to wake the sandbox.
 

@@ -13,7 +13,8 @@ operation, each retry is answered with that failure and the sandbox is never rem
 
 `createZeropsDevSandboxes` (`packages/provider-zerops/src/sandbox/lifecycle.ts`) deletes with
 `sandboxIdempotencyKey('delete', sandboxId)`, a key derived from the sandbox id alone. Box answers a repeated key with
-the first request's operation for as long as it retains the key, including a `FAILED` one. A removal that failed once
+the first request's operation for as long as it retains the key; that it also replays a `FAILED` one is an assumption
+not yet confirmed live (`docs/reference/zerops-platform.md` does not record it). A removal that failed once
 (Box was mid-transition, an internal error) is retried by maintenance, which gets the same failed answer; the row stays
 `removing`, the sandbox keeps its reservation, and a dev environment or application delete stays refused
 ([260](260-an-operator-cannot-remove-an-authors-sandbox.md)). The create key already
@@ -21,6 +22,8 @@ carries a fresh attempt for the same reason. The fake Box in the provider tests 
 
 ## Approach / acceptance
 
+First confirm the replay of a failed operation in the live Box suite (`zbox.live.test.ts`); if Box does not replay it,
+close this item.
 Make the delete key carry an attempt: a fresh key per removal attempt, or the key of the previous attempt only while
 its operation is still running. Model replay in the fake Box (a repeated key answers the recorded operation) and test
 that a delete whose first operation failed is retried with a new key and the sandbox is gone.

@@ -141,4 +141,5 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [258](258-maintenance-can-park-a-sandbox-mid-bootstrap.md): The idle park ignores a running bootstrap, so a sandbox waiting for the lease is parked mid-build.
 - [259](259-a-browser-visit-does-not-keep-a-sandbox-awake.md): A request that wakes a parked sandbox does not count as activity, so it is parked again within 5 minutes.
 - [260](260-an-operator-cannot-remove-an-authors-sandbox.md): An operator cannot delete a dev environment or app while an author keeps a sandbox; the 409 names an owner-only tool.
+- [261](261-a-dev-schema-reconcile-revokes-keys-other-sandboxes-hold.md): IAM's schema reconcile revokes keys that other sandboxes of a dev environment still get handed as fresh.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.

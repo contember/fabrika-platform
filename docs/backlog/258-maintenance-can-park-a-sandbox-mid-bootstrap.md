@@ -21,7 +21,7 @@ deadline. Workspace B, queued behind A's 25-minute bootstrap, is parked 5 minute
 
 Leave a sandbox whose `bootstrap_run_id` is pending or running out of `listIdle`, or bump `activity_at` when a laned run
 is claimed and when it finishes. A test: a sandbox whose bootstrap run is running and whose `activity_at` is older than
-the idle window is not parked by `runDevMaintenance`.
+the idle window is not parked by `maintainDevSandboxes`.
 
 ## Touch points
 
