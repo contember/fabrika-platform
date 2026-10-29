@@ -22,6 +22,8 @@ import { devSandboxReportKey, devSandboxTargetKey } from './signals'
 export const DEV_IDLE_STOP_SECONDS = 30 * 60
 /** How long a workspace sandbox may see no activity before maintenance removes it; the workspace itself stays. */
 export const DEV_SANDBOX_STALE_SECONDS = 14 * 24 * 60 * 60
+/** How long a sandbox may stay `creating` before maintenance removes it: a bind that died mid-create left it. */
+export const DEV_SANDBOX_CREATING_SECONDS = 60 * 60
 /** How long one provider call of maintenance may take. */
 const MAINTENANCE_CALL_MS = 60_000
 
@@ -149,9 +151,9 @@ export class DevSandboxRefusedError extends Error {}
  * The workspace's sandbox, created when it has none and created again when Box lost it: `ensure` is idempotent, and the
  * only call that replaces a failed or missing sandbox. The provider admits the placement before the row exists, because
  * every republish of the namespace hands a recorded sandbox on. Its proxy secret is sealed first and recorded with the
- * sandbox, or deleted when it is not the one recorded. A sandbox Box created for a row that a removal took meanwhile is
- * removed again. A replaced sandbox has a new upstream, so the namespace republishes. Null when the workspace was
- * abandoned or its sandbox is being removed.
+ * sandbox, or deleted when it is not the one recorded. A failed create removes the row it started, and a sandbox Box
+ * created for a row that a removal took meanwhile is removed again. A replaced sandbox has a new upstream, so the
+ * namespace republishes. Null when the workspace was abandoned or its sandbox is being removed.
  */
 export async function ensureDevSandbox(
 	deps: DevSandboxDeps,
@@ -199,6 +201,10 @@ export async function ensureDevSandbox(
 		}
 	} catch (cause) {
 		await forget()
+		// Only a row that never held a sandbox: one a concurrent bind made ready keeps it.
+		await removeDevSandbox(deps, workspaceId, AbortSignal.timeout(MAINTENANCE_CALL_MS), { kind: 'uncreated' }).catch(() =>
+			console.error(`dev sandboxes: the row of workspace ${workspaceId}'s failed create was kept; maintenance removes it`)
+		)
 		throw cause
 	}
 	const ready = await sandboxes.markReady({
@@ -251,21 +257,33 @@ async function republish(deps: DevSandboxDeps, namespaceId: string, workspaceId:
 export type DevSandboxRemoval = 'removed' | 'absent' | 'failed'
 
 /**
+ * Which rows a removal takes: `any` the workspace's row; `idle` maintenance's, only while the row is still removable
+ * (`DevSandboxRepository.markRemovingIfRemovable`); `uncreated` a failed create's, only while no sandbox was recorded.
+ */
+export type DevSandboxRemovalMark =
+	| { readonly kind: 'any' }
+	| { readonly kind: 'idle'; readonly staleBefore: number; readonly creatingBefore: number }
+	| { readonly kind: 'uncreated' }
+
+/**
  * Remove the workspace's sandbox: Box's sandbox (and any other under the workspace's name), the workspace's source
  * keys and proxy secret, the row, and then its entry in the namespace proxy. The proxy stops routing it from the
  * moment it is marked; the keys are revoked and the proxy republished even when Box failed, and the row stays
- * `removing` with its secret for maintenance to retry. `staleBefore` makes it maintenance's removal, which leaves a
- * sandbox a bind or commit made active again. Throws only without a vault.
+ * `removing` with its secret for maintenance to retry. Throws only without a vault.
  */
 export async function removeDevSandbox(
 	deps: DevSandboxDeps,
 	workspaceId: string,
 	signal: AbortSignal,
-	staleBefore?: number,
+	mark: DevSandboxRemovalMark = { kind: 'any' },
 ): Promise<DevSandboxRemoval> {
 	await requireVault(deps)
 	const sandboxes = deps.repositories.devSandboxes
-	const row = staleBefore === undefined ? await sandboxes.markRemoving(workspaceId) : await sandboxes.markRemovingIfRemovable(workspaceId, staleBefore)
+	const row = mark.kind === 'any'
+		? await sandboxes.markRemoving(workspaceId)
+		: mark.kind === 'idle'
+		? await sandboxes.markRemovingIfRemovable(workspaceId, mark.staleBefore, mark.creatingBefore)
+		: await sandboxes.markRemovingIfUncreated(workspaceId)
 	if (row === null) return 'absent'
 	let failed = false
 	const step = async (what: string, effect: () => Promise<unknown>): Promise<void> => {
@@ -313,22 +331,28 @@ export interface DevMaintenanceSummary {
 }
 
 /**
- * One maintenance pass over the workspace sandboxes: remove every one left `removing`, of an abandoned workspace, or
- * idle for `DEV_SANDBOX_STALE_SECONDS`, then park every one idle for `idleSeconds`. One failure does not stop the others.
+ * One maintenance pass over the workspace sandboxes: remove every one left `removing`, of an abandoned workspace, idle
+ * for `DEV_SANDBOX_STALE_SECONDS`, or `creating` for `DEV_SANDBOX_CREATING_SECONDS`, then park every one idle for
+ * `idleSeconds`. One failure does not stop the others.
  */
 export async function maintainDevSandboxes(deps: DevSandboxDeps, now: number, idleSeconds = DEV_IDLE_STOP_SECONDS): Promise<DevMaintenanceSummary> {
 	let removed = 0
 	let failed = 0
-	const stale = now - DEV_SANDBOX_STALE_SECONDS
+	const staleBefore = now - DEV_SANDBOX_STALE_SECONDS
+	const creatingBefore = now - DEV_SANDBOX_CREATING_SECONDS
+	const mark: DevSandboxRemovalMark = { kind: 'idle', staleBefore, creatingBefore }
 	const sandboxes = deps.repositories.devSandboxes
 	const candidates = new Set(
-		[...await sandboxes.listRemoving(), ...await sandboxes.listOfAbandonedWorkspaces(), ...await sandboxes.listStale(stale)].map((row) =>
-			row.workspace_id
-		),
+		[
+			...await sandboxes.listRemoving(),
+			...await sandboxes.listOfAbandonedWorkspaces(),
+			...await sandboxes.listStale(staleBefore),
+			...await sandboxes.listCreatingBefore(creatingBefore),
+		].map((row) => row.workspace_id),
 	)
 	for (const workspaceId of candidates) {
 		try {
-			const outcome = await removeDevSandbox(deps, workspaceId, AbortSignal.timeout(MAINTENANCE_CALL_MS), stale)
+			const outcome = await removeDevSandbox(deps, workspaceId, AbortSignal.timeout(MAINTENANCE_CALL_MS), mark)
 			if (outcome === 'removed') removed += 1
 			if (outcome === 'failed') failed += 1
 		} catch {

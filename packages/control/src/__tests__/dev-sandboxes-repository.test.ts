@@ -65,7 +65,8 @@ function devSandboxesContract(database: () => SqlDatabase): void {
 		expect(created).toMatchObject({ workspace_id: workspaceId, app_id: appId, env: 'dev', state: 'creating', sandbox_id: null, status: 'unbound' })
 		expect(created).toMatchObject({ log_json: '[]', reset_generation: 0, checks_generation: 0, activity_at: T0, parked_at: null })
 		expect(typeof created.created_at).toBe('number')
-		expect(await sandboxes.insertCreating({ workspaceId, appId, env: 'dev', now: T0 + 50 })).toEqual(created)
+		// A bind of a recorded sandbox counts as activity.
+		expect(await sandboxes.insertCreating({ workspaceId, appId, env: 'dev', now: T0 + 50 })).toEqual({ ...created, activity_at: T0 + 50 })
 
 		const ready = await sandboxes.markReady({
 			workspaceId,
@@ -223,22 +224,44 @@ function devSandboxesContract(database: () => SqlDatabase): void {
 		const sandboxes = repositories.devSandboxes
 		const ownIds = (rows: DevSandboxRow[]) => rows.filter((row) => row.app_id === appId).map((row) => row.workspace_id)
 		const active = await readySandbox()
-		expect(await sandboxes.markRemovingIfRemovable(active, T0)).toBeNull()
+		expect(await sandboxes.markRemovingIfRemovable(active, T0, T0)).toBeNull()
 		expect((await sandboxes.get(active))?.state).toBe('ready')
-		expect((await sandboxes.markRemovingIfRemovable(active, T0 + 1))?.state).toBe('removing')
-		expect(await sandboxes.markRemovingIfRemovable(active, T0 - 100)).not.toBeNull()
+		expect((await sandboxes.markRemovingIfRemovable(active, T0 + 1, T0))?.state).toBe('removing')
+		expect(await sandboxes.markRemovingIfRemovable(active, T0 - 100, T0 - 100)).not.toBeNull()
 		expect(ownIds(await sandboxes.listRemoving())).toEqual([active])
 
 		const abandoned = await readySandbox()
 		await repositories.workspaces.markAbandoned(abandoned)
 		expect(ownIds(await sandboxes.listOfAbandonedWorkspaces())).toEqual([abandoned])
-		expect(await sandboxes.markRemovingIfRemovable(abandoned, T0 - 100)).not.toBeNull()
+		expect(await sandboxes.markRemovingIfRemovable(abandoned, T0 - 100, T0 - 100)).not.toBeNull()
 		// An abandoned workspace gets no sandbox, and its existing one is not handed out again.
 		expect(await sandboxes.insertCreating({ workspaceId: abandoned, appId, env: 'dev', now: T0 })).toBeNull()
 		const late = await workspace()
 		await repositories.workspaces.markAbandoned(late)
 		expect(await sandboxes.insertCreating({ workspaceId: late, appId, env: 'dev', now: T0 })).toBeNull()
 		expect(await sandboxes.get(late)).toBeNull()
+	})
+
+	test('a create left behind is removable once it saw no bind for a while; a failed create marks only a row without a sandbox', async () => {
+		const sandboxes = repositories.devSandboxes
+		const ownIds = (rows: DevSandboxRow[]) => rows.filter((row) => row.app_id === appId).map((row) => row.workspace_id)
+		const stuck = await workspace()
+		await sandboxes.insertCreating({ workspaceId: stuck, appId, env: 'dev', now: T0 })
+		expect(ownIds(await sandboxes.listCreatingBefore(T0))).toEqual([])
+		expect(ownIds(await sandboxes.listCreatingBefore(T0 + 1))).toEqual([stuck])
+		expect(await sandboxes.markRemovingIfRemovable(stuck, T0 - 100, T0)).toBeNull()
+		// A retried bind counts as activity, so the create it runs is not taken from under it.
+		await sandboxes.insertCreating({ workspaceId: stuck, appId, env: 'dev', now: T0 + 10 })
+		expect(await sandboxes.markRemovingIfRemovable(stuck, T0 - 100, T0 + 1)).toBeNull()
+		expect((await sandboxes.markRemovingIfRemovable(stuck, T0 - 100, T0 + 11))?.state).toBe('removing')
+
+		const ready = await readySandbox()
+		expect(await sandboxes.markRemovingIfRemovable(ready, T0 - 100, T0 + 100)).toBeNull()
+		expect(await sandboxes.markRemovingIfUncreated(ready)).toBeNull()
+		expect((await sandboxes.get(ready))?.state).toBe('ready')
+		const failed = await workspace()
+		await sandboxes.insertCreating({ workspaceId: failed, appId, env: 'dev', now: T0 })
+		expect((await sandboxes.markRemovingIfUncreated(failed))?.state).toBe('removing')
 	})
 
 	test('sandboxes go with their environment', async () => {

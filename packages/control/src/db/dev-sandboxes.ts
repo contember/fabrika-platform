@@ -99,14 +99,15 @@ export class DevSandboxRepository {
 	}
 
 	/**
-	 * Record a sandbox about to be created; a row already there is returned unchanged. Null when the workspace does not
-	 * exist or was abandoned: an abandoned workspace gets no sandbox, even from a bind that raced the abandon.
+	 * Record a sandbox about to be created; a row already there is returned with the bind counted as activity, unless it
+	 * is being removed. Null when the workspace does not exist or was abandoned: an abandoned workspace gets no sandbox,
+	 * even from a bind that raced the abandon.
 	 */
 	async insertCreating(input: { workspaceId: string; appId: string; env: string; now: number }): Promise<DevSandboxRow | null> {
 		await this.d1
 			.prepare(`INSERT INTO dev_sandboxes (workspace_id, app_id, env, state, activity_at)
 				SELECT ?, ?, ?, 'creating', ? WHERE EXISTS (SELECT 1 FROM workspaces WHERE id = ? AND abandoned_at IS NULL)
-				ON CONFLICT (workspace_id) DO NOTHING`)
+				ON CONFLICT (workspace_id) DO UPDATE SET activity_at = excluded.activity_at WHERE dev_sandboxes.state <> 'removing'`)
 			.bind(input.workspaceId, input.appId, input.env, input.now, input.workspaceId)
 			.run()
 		return this.d1
@@ -138,17 +139,35 @@ export class DevSandboxRepository {
 	}
 
 	/**
-	 * Maintenance's mark: only while the sandbox is still removable, already `removing`, idle since `staleBefore`, or of
-	 * an abandoned workspace. Null when a bind or commit made it active again meanwhile.
+	 * Maintenance's mark: only while the sandbox is still removable, already `removing`, idle since `staleBefore`,
+	 * `creating` since `creatingBefore`, or of an abandoned workspace. Null when a bind or commit made it active again
+	 * meanwhile.
 	 */
-	async markRemovingIfRemovable(workspaceId: string, staleBefore: number): Promise<DevSandboxRow | null> {
+	async markRemovingIfRemovable(workspaceId: string, staleBefore: number, creatingBefore: number): Promise<DevSandboxRow | null> {
 		return this.d1
 			.prepare(`UPDATE dev_sandboxes SET state = 'removing'
-				WHERE workspace_id = ? AND (state = 'removing' OR activity_at < ?
+				WHERE workspace_id = ? AND (state = 'removing' OR activity_at < ? OR (state = 'creating' AND activity_at < ?)
 					OR EXISTS (SELECT 1 FROM workspaces WHERE workspaces.id = dev_sandboxes.workspace_id AND workspaces.abandoned_at IS NOT NULL))
 				RETURNING *`)
-			.bind(workspaceId, staleBefore)
+			.bind(workspaceId, staleBefore, creatingBefore)
 			.first<DevSandboxRow>()
+	}
+
+	/** A failed create's mark: only while the row is `creating` and records no sandbox, so a concurrent bind's stays. */
+	async markRemovingIfUncreated(workspaceId: string): Promise<DevSandboxRow | null> {
+		return this.d1
+			.prepare(`UPDATE dev_sandboxes SET state = 'removing' WHERE workspace_id = ? AND state = 'creating' AND sandbox_id IS NULL RETURNING *`)
+			.bind(workspaceId)
+			.first<DevSandboxRow>()
+	}
+
+	/** Sandboxes still `creating` with no activity since `before`: a bind died while creating them. */
+	async listCreatingBefore(before: number): Promise<DevSandboxRow[]> {
+		const { results } = await this.d1
+			.prepare(`SELECT * FROM dev_sandboxes WHERE state = 'creating' AND activity_at < ? ORDER BY workspace_id`)
+			.bind(before)
+			.all<DevSandboxRow>()
+		return results
 	}
 
 	/** Sandboxes an earlier removal left `removing`. */

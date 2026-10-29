@@ -36,7 +36,15 @@ import { abandonWorkspaceUseCase, createWorkspaceUseCase } from '../api/workspac
 import { approvedAccess, parseSnapshot } from '../approval/snapshot'
 import { acceptDevReport, acceptDevWait, type DevReceiverDeps } from '../dev/receiver'
 import { DEV_SANDBOX_VAULT_REQUIRED } from '../dev/sandbox-keys'
-import { DEV_IDLE_STOP_SECONDS, DEV_SANDBOX_STALE_SECONDS, type DevSandboxDeps, maintainDevSandboxes, removeDevSandbox } from '../dev/service'
+import {
+	DEV_IDLE_STOP_SECONDS,
+	DEV_SANDBOX_CREATING_SECONDS,
+	DEV_SANDBOX_STALE_SECONDS,
+	type DevSandboxDeps,
+	type DevSandboxRemovalMark,
+	maintainDevSandboxes,
+	removeDevSandbox,
+} from '../dev/service'
 import { DevSignals } from '../dev/signals'
 import { VaultPlatformTransport } from '../platform-transport'
 import { Vault } from '../vault'
@@ -394,7 +402,8 @@ describe('dev sandboxes', () => {
 		const refused = await bindDevUseCase(w.dev(), { workspaceId }).catch((cause: unknown) => cause)
 		expect(refused).toBeInstanceOf(ControlApiError)
 		expect(refused instanceof ControlApiError ? [refused.httpStatus, refused.message] : null).toEqual([503, DEV_SANDBOX_CAPACITY])
-		expect((await w.repositories.devSandboxes.get(workspaceId))?.proxy_secret_ref).toBeNull()
+		// The failed create removes the row it started, so nothing blocks the environment's deletion for weeks.
+		expect(await w.repositories.devSandboxes.get(workspaceId)).toBeNull()
 		const labels = await w.harness.d1.prepare('SELECT label FROM vault').all<{ label: string }>()
 		expect(labels.results.map((row) => row.label).filter((label) => label.includes(workspaceId))).toEqual([])
 		expect(w.queued).toHaveLength(0)
@@ -696,7 +705,12 @@ describe('dev sandboxes', () => {
 		const abandoned = await serving(w, 'Abandoned', sha('c'))
 		const now = Math.floor(Date.now() / 1000)
 		// Listed as stale a moment ago, bound since: maintenance's conditional mark leaves it.
-		expect(await removeDevSandbox(w.deps, active.workspaceId, AbortSignal.timeout(1_000), now - DEV_SANDBOX_STALE_SECONDS)).toBe('absent')
+		const mark = {
+			kind: 'idle',
+			staleBefore: now - DEV_SANDBOX_STALE_SECONDS,
+			creatingBefore: now - DEV_SANDBOX_CREATING_SECONDS,
+		} satisfies DevSandboxRemovalMark
+		expect(await removeDevSandbox(w.deps, active.workspaceId, AbortSignal.timeout(1_000), mark)).toBe('absent')
 		expect((await w.repositories.devSandboxes.get(active.workspaceId))?.state).toBe('ready')
 
 		// An abandon that raced a bind left a sandbox behind.
@@ -739,5 +753,26 @@ describe('dev sandboxes', () => {
 		expect(w.host.calls).toEqual([])
 		expect(w.republished).toEqual([])
 		expect(await w.repositories.registry.getNamespaceSandboxKeyRef(NAMESPACE)).toBeNull()
+	})
+
+	test("a failed bind leaves a concurrent bind's sandbox alone", async () => {
+		const w = await world()
+		const { workspaceId } = await serving(w, 'Kept', sha('b'))
+		w.host.full = true
+		const refused = await bindDevUseCase(w.dev(), { workspaceId }).catch((cause: unknown) => cause)
+		expect(refused instanceof ControlApiError ? refused.httpStatus : refused).toBe(503)
+		expect((await w.repositories.devSandboxes.get(workspaceId))?.state).toBe('ready')
+		expect(w.host.calls.filter((call) => call.startsWith('remove'))).toEqual([])
+	})
+
+	test('maintenance removes a sandbox a bind left creating for an hour', async () => {
+		const w = await world()
+		const workspaceId = await w.workspace('Stuck')
+		const now = Math.floor(Date.now() / 1000)
+		await w.repositories.devSandboxes.insertCreating({ workspaceId, appId: 'shop', env: 'dev', now: now - DEV_SANDBOX_CREATING_SECONDS + 60 })
+		expect(await maintainDevSandboxes(w.deps, now)).toEqual({ parked: 0, removed: 0, failed: 0 })
+		expect(await maintainDevSandboxes(w.deps, now + 61)).toEqual({ parked: 0, removed: 1, failed: 0 })
+		expect(await w.repositories.devSandboxes.get(workspaceId)).toBeNull()
+		expect(w.host.calls).toEqual([`remove workspace ${workspaceId}`])
 	})
 })
