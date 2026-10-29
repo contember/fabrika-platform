@@ -202,10 +202,11 @@ export const ensureSandboxHost = async (input: ZeropsSandboxHostInput): Promise<
 		throw new Error('Checkpointed namespace sandbox host service identity changed')
 	}
 	const service = found ?? await createSandboxHost(input, projectId)
+	// Before the start: a service of another type that holds the name is never touched.
+	validateService(service, projectId, SANDBOX_HOST_SERVICE_TYPE, false)
 	if (found?.status !== undefined && NOT_STARTED.has(found.status)) {
 		await waitFor(input, (await input.api.startService({ serviceId: found.id, signal })).id, 'sandbox host start')
 	}
-	validateService(service, projectId, SANDBOX_HOST_SERVICE_TYPE, false)
 	await ensureSubdomainAccess({
 		api: input.api,
 		serviceId: service.id,

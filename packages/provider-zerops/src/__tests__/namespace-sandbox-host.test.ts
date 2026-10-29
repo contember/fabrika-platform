@@ -228,6 +228,16 @@ describe('the namespace sandbox host', () => {
 		expect(state.calls).not.toContain(`stop:${zboxId}`)
 	})
 
+	test('a stopped service of another type under the host name is refused, and never started', async () => {
+		const state = freshState()
+		state.services.push({ id: zboxId, name: 'zbox', projectId, base: 'nodejs@22', status: 'STOPPED', subdomainAccess: false })
+
+		const refused = await ensure(state).then(() => null, (cause: unknown) => cause instanceof Error ? cause.message : cause)
+
+		expect(refused).toContain('uses nodejs@22, expected ubuntu/zbox@1')
+		expect(state.calls).toEqual([])
+	})
+
 	test('a key Box still refuses after the restart fails the namespace, naming no key', async () => {
 		const state = freshState()
 		state.refusesEveryKey = true
