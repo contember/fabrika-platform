@@ -445,6 +445,14 @@ describe('dev sandboxes', () => {
 		const labels = await w.harness.d1.prepare('SELECT label FROM vault').all<{ label: string }>()
 		expect(labels.results.map((row) => row.label).filter((label) => label.includes(workspaceId))).toEqual([])
 		expect(w.queued).toHaveLength(0)
+		// The row stays creating: it is what makes the queued reconcile publish the namespace with its sandbox host.
+		const kept = await w.repositories.devSandboxes.get(workspaceId)
+		expect([kept?.state, kept?.sandbox_id]).toEqual(['creating', null])
+		expect(w.host.calls.filter((call) => call.startsWith('remove'))).toEqual([])
+
+		w.host.hostPending = false
+		expect((await bindDevUseCase(w.dev(), { workspaceId })).state).toBe('bootstrapping')
+		expect((await w.repositories.devSandboxes.get(workspaceId))?.sandbox_id).toBe(`sbx-${workspaceId}`)
 	})
 
 	test('maintenance parks an idle sandbox; a commit wakes it, and bind_dev wakes it and waits for its launcher', async () => {
@@ -691,7 +699,7 @@ describe('dev sandboxes', () => {
 	test("a Box sandbox Control never recorded is removed by the workspace's name", async () => {
 		const w = await world()
 		const workspaceId = await w.workspace('Unrecorded')
-		await w.repositories.devSandboxes.insertCreating({ workspaceId, appId: 'shop', env: 'dev', now: Math.floor(Date.now() / 1000) })
+		await w.repositories.devSandboxes.insertCreating({ workspaceId, appId: 'shop', env: 'dev', now: Math.floor(Date.now() / 1000), attempt: 'bind' })
 		w.host.held.set(workspaceId, 'sbx-unrecorded')
 		await abandonWorkspaceUseCase(w.dev(), { workspaceId })
 		expect(w.host.calls).toEqual([`remove workspace ${workspaceId}`])
@@ -718,7 +726,8 @@ describe('dev sandboxes', () => {
 		expect(await maintainDevSandboxes(w.deps, now)).toEqual({ parked: 0, removed: 1, failed: 0 })
 		expect(await w.repositories.devSandboxes.get(abandoned.workspaceId)).toBeNull()
 		expect(await w.repositories.devSandboxes.get(active.workspaceId)).not.toBeNull()
-		expect(await w.repositories.devSandboxes.insertCreating({ workspaceId: abandoned.workspaceId, appId: 'shop', env: 'dev', now })).toBeNull()
+		expect(await w.repositories.devSandboxes.insertCreating({ workspaceId: abandoned.workspaceId, appId: 'shop', env: 'dev', now, attempt: 'bind' }))
+			.toBeNull()
 	})
 
 	test('the environment the workspaces belong to is not deleted while one of them has a sandbox; once removed, it is', async () => {
@@ -782,11 +791,37 @@ describe('dev sandboxes', () => {
 		expect(w.host.calls.filter((call) => call.startsWith('remove'))).toEqual([])
 	})
 
+	test("a bind that fails while another bind of the workspace is creating its sandbox leaves that bind's row", async () => {
+		const w = await world()
+		const workspaceId = await w.workspace('Concurrent')
+		w.source.branches.set(`fabrika/${workspaceId}`, sha('b'))
+		let created = (): void => {}
+		w.host.creating = new Promise((resolve) => {
+			created = resolve
+		})
+		const first = bindDevUseCase(w.dev(), { workspaceId })
+		while (!w.host.calls.includes(`ensure ${workspaceId}`)) await Bun.sleep(1)
+		w.host.full = true
+		const refused = await bindDevUseCase(w.dev(), { workspaceId }).catch((cause: unknown) => cause)
+		expect(refused instanceof ControlApiError ? refused.httpStatus : refused).toBe(503)
+		expect((await w.repositories.devSandboxes.get(workspaceId))?.state).toBe('creating')
+		created()
+		expect((await first).state).toBe('bootstrapping')
+		expect((await w.repositories.devSandboxes.get(workspaceId))?.sandbox_id).toBe(`sbx-${workspaceId}`)
+		expect(w.host.calls.filter((call) => call.startsWith('remove'))).toEqual([])
+	})
+
 	test('maintenance removes a sandbox a bind left creating for an hour', async () => {
 		const w = await world()
 		const workspaceId = await w.workspace('Stuck')
 		const now = Math.floor(Date.now() / 1000)
-		await w.repositories.devSandboxes.insertCreating({ workspaceId, appId: 'shop', env: 'dev', now: now - DEV_SANDBOX_CREATING_SECONDS + 60 })
+		await w.repositories.devSandboxes.insertCreating({
+			workspaceId,
+			appId: 'shop',
+			env: 'dev',
+			now: now - DEV_SANDBOX_CREATING_SECONDS + 60,
+			attempt: 'bind',
+		})
 		expect(await maintainDevSandboxes(w.deps, now)).toEqual({ parked: 0, removed: 0, failed: 0 })
 		expect(await maintainDevSandboxes(w.deps, now + 61)).toEqual({ parked: 0, removed: 1, failed: 0 })
 		expect(await w.repositories.devSandboxes.get(workspaceId)).toBeNull()
@@ -796,7 +831,7 @@ describe('dev sandboxes', () => {
 	test('no source key is issued for a sandbox being removed, and none is sealed', async () => {
 		const w = await world()
 		const workspaceId = await w.workspace('Removing')
-		await w.repositories.devSandboxes.insertCreating({ workspaceId, appId: 'shop', env: 'dev', now: Math.floor(Date.now() / 1000) })
+		await w.repositories.devSandboxes.insertCreating({ workspaceId, appId: 'shop', env: 'dev', now: Math.floor(Date.now() / 1000), attempt: 'bind' })
 		await w.repositories.devSandboxes.markRemoving(workspaceId)
 		await expect(sourceKey(w, workspaceId)).rejects.toThrow('or it is being removed')
 		expect((await w.repositories.platformTransportKeys.listForAppEnv('shop', 'dev')).filter((row) => row.workspace_id === workspaceId)).toEqual([])

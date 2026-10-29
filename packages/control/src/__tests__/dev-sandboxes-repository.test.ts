@@ -45,7 +45,7 @@ function devSandboxesContract(database: () => SqlDatabase): void {
 
 	async function readySandbox(): Promise<string> {
 		const workspaceId = await workspace()
-		await repositories.devSandboxes.insertCreating({ workspaceId, appId, env: 'dev', now: clock })
+		await repositories.devSandboxes.insertCreating({ workspaceId, appId, env: 'dev', now: clock, attempt: 'bind' })
 		await repositories.devSandboxes.markReady({
 			workspaceId,
 			sandboxId: `sbx-${workspaceId}`,
@@ -58,15 +58,19 @@ function devSandboxesContract(database: () => SqlDatabase): void {
 
 	test('a sandbox is recorded once per workspace, and needs the workspace', async () => {
 		const sandboxes = repositories.devSandboxes
-		expect(await sandboxes.insertCreating({ workspaceId: uuidv7(), appId, env: 'dev', now: T0 })).toBeNull()
+		expect(await sandboxes.insertCreating({ workspaceId: uuidv7(), appId, env: 'dev', now: T0, attempt: 'bind' })).toBeNull()
 		const workspaceId = await workspace()
-		const created = await sandboxes.insertCreating({ workspaceId, appId, env: 'dev', now: T0 })
+		const created = await sandboxes.insertCreating({ workspaceId, appId, env: 'dev', now: T0, attempt: 'bind' })
 		if (created === null) throw new Error('expected the sandbox to be recorded')
 		expect(created).toMatchObject({ workspace_id: workspaceId, app_id: appId, env: 'dev', state: 'creating', sandbox_id: null, status: 'unbound' })
 		expect(created).toMatchObject({ log_json: '[]', reset_generation: 0, checks_generation: 0, activity_at: T0, parked_at: null })
 		expect(typeof created.created_at).toBe('number')
-		// A bind of a recorded sandbox counts as activity.
-		expect(await sandboxes.insertCreating({ workspaceId, appId, env: 'dev', now: T0 + 50 })).toEqual({ ...created, activity_at: T0 + 50 })
+		expect(created.create_attempt).toBe('bind')
+		// A bind of a recorded sandbox counts as activity, and leaves the row to the bind that inserted it.
+		expect(await sandboxes.insertCreating({ workspaceId, appId, env: 'dev', now: T0 + 50, attempt: 'rebind' })).toEqual({
+			...created,
+			activity_at: T0 + 50,
+		})
 
 		const ready = await sandboxes.markReady({
 			workspaceId,
@@ -194,7 +198,7 @@ function devSandboxesContract(database: () => SqlDatabase): void {
 		const busy = await readySandbox()
 		await sandboxes.advanceTarget(busy, 'a'.repeat(40))
 		const creating = await workspace()
-		await sandboxes.insertCreating({ workspaceId: creating, appId, env: 'dev', now: T0 })
+		await sandboxes.insertCreating({ workspaceId: creating, appId, env: 'dev', now: T0, attempt: 'bind' })
 
 		expect(ownIds(await sandboxes.listIdle(T0 + 50))).toEqual([idle])
 		expect(await sandboxes.markParked(busy, T0 + 50)).toBe(false)
@@ -235,33 +239,36 @@ function devSandboxesContract(database: () => SqlDatabase): void {
 		expect(ownIds(await sandboxes.listOfAbandonedWorkspaces())).toEqual([abandoned])
 		expect(await sandboxes.markRemovingIfRemovable(abandoned, T0 - 100, T0 - 100)).not.toBeNull()
 		// An abandoned workspace gets no sandbox, and its existing one is not handed out again.
-		expect(await sandboxes.insertCreating({ workspaceId: abandoned, appId, env: 'dev', now: T0 })).toBeNull()
+		expect(await sandboxes.insertCreating({ workspaceId: abandoned, appId, env: 'dev', now: T0, attempt: 'bind' })).toBeNull()
 		const late = await workspace()
 		await repositories.workspaces.markAbandoned(late)
-		expect(await sandboxes.insertCreating({ workspaceId: late, appId, env: 'dev', now: T0 })).toBeNull()
+		expect(await sandboxes.insertCreating({ workspaceId: late, appId, env: 'dev', now: T0, attempt: 'bind' })).toBeNull()
 		expect(await sandboxes.get(late)).toBeNull()
 	})
 
-	test('a create left behind is removable once it saw no bind for a while; a failed create marks only a row without a sandbox', async () => {
+	test('a create left behind is removable once it saw no bind for a while; a failed create marks only its own row without a sandbox', async () => {
 		const sandboxes = repositories.devSandboxes
 		const ownIds = (rows: DevSandboxRow[]) => rows.filter((row) => row.app_id === appId).map((row) => row.workspace_id)
 		const stuck = await workspace()
-		await sandboxes.insertCreating({ workspaceId: stuck, appId, env: 'dev', now: T0 })
+		await sandboxes.insertCreating({ workspaceId: stuck, appId, env: 'dev', now: T0, attempt: 'bind' })
 		expect(ownIds(await sandboxes.listCreatingBefore(T0))).toEqual([])
 		expect(ownIds(await sandboxes.listCreatingBefore(T0 + 1))).toEqual([stuck])
 		expect(await sandboxes.markRemovingIfRemovable(stuck, T0 - 100, T0)).toBeNull()
 		// A retried bind counts as activity, so the create it runs is not taken from under it.
-		await sandboxes.insertCreating({ workspaceId: stuck, appId, env: 'dev', now: T0 + 10 })
+		await sandboxes.insertCreating({ workspaceId: stuck, appId, env: 'dev', now: T0 + 10, attempt: 'bind' })
 		expect(await sandboxes.markRemovingIfRemovable(stuck, T0 - 100, T0 + 1)).toBeNull()
 		expect((await sandboxes.markRemovingIfRemovable(stuck, T0 - 100, T0 + 11))?.state).toBe('removing')
 
 		const ready = await readySandbox()
 		expect(await sandboxes.markRemovingIfRemovable(ready, T0 - 100, T0 + 100)).toBeNull()
-		expect(await sandboxes.markRemovingIfUncreated(ready)).toBeNull()
+		expect(await sandboxes.markRemovingIfUncreated(ready, 'bind')).toBeNull()
 		expect((await sandboxes.get(ready))?.state).toBe('ready')
 		const failed = await workspace()
-		await sandboxes.insertCreating({ workspaceId: failed, appId, env: 'dev', now: T0 })
-		expect((await sandboxes.markRemovingIfUncreated(failed))?.state).toBe('removing')
+		await sandboxes.insertCreating({ workspaceId: failed, appId, env: 'dev', now: T0, attempt: 'bind' })
+		await sandboxes.insertCreating({ workspaceId: failed, appId, env: 'dev', now: T0, attempt: 'rebind' })
+		// A concurrent bind that failed does not take the row of the bind that inserted it.
+		expect(await sandboxes.markRemovingIfUncreated(failed, 'rebind')).toBeNull()
+		expect((await sandboxes.markRemovingIfUncreated(failed, 'bind'))?.state).toBe('removing')
 	})
 
 	test("the sandboxes of an environment's workspaces are listed by that environment, not the sandboxes'", async () => {
@@ -284,7 +291,7 @@ function devSandboxesContract(database: () => SqlDatabase): void {
 			baseSha: 'a'.repeat(40),
 			title: 't',
 		})
-		await repositories.devSandboxes.insertCreating({ workspaceId: staged, appId, env: 'dev', now: T0 })
+		await repositories.devSandboxes.insertCreating({ workspaceId: staged, appId, env: 'dev', now: T0, attempt: 'bind' })
 		expect((await repositories.devSandboxes.listByWorkspaceEnvironment(appId, 'stage')).map((row) => row.workspace_id)).toEqual([staged])
 		expect((await repositories.devSandboxes.listByWorkspaceEnvironment(appId, 'dev')).map((row) => row.workspace_id)).toEqual([workspaceId])
 	})
@@ -310,7 +317,7 @@ function devSandboxesContract(database: () => SqlDatabase): void {
 		const keys = repositories.platformTransportKeys
 		// A workspace's key is recorded only while the workspace has a sandbox in the environment that is not being removed.
 		expect(await keys.insert({ ...key('k0', 'h0'), workspace_id: workspaceId })).toBe(false)
-		await repositories.devSandboxes.insertCreating({ workspaceId, appId, env: 'dev', now: T0 })
+		await repositories.devSandboxes.insertCreating({ workspaceId, appId, env: 'dev', now: T0, attempt: 'bind' })
 		expect(await keys.insert({ ...key('k1', 'h1'), workspace_id: workspaceId })).toBe(true)
 		expect(await keys.insert(key('k2', 'h2'))).toBe(true)
 		expect(await keys.insert({ ...key('k3', 'h3'), workspace_id: uuidv7() })).toBe(false)

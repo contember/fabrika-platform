@@ -168,6 +168,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			{ bundle: 'control', name: '0026_namespace_sandbox_key.sql' },
 			{ bundle: 'control', name: '0027_drop_dev_environments.sql' },
 			{ bundle: 'control', name: '0028_workspace_key_cascade.sql' },
+			{ bundle: 'control', name: '0029_dev_sandbox_create_attempt.sql' },
 		])
 	})
 

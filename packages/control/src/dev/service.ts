@@ -2,6 +2,7 @@
 // maintenance parks an idle one and removes one idle for weeks, and abandoning the workspace removes it. None of it is a
 // deploy, so none of it takes the namespace lease.
 
+import { uuidv7 } from '@fabrika/platform'
 import {
 	type ControlProvider,
 	PROVIDER_DEV_HOST_PENDING,
@@ -9,7 +10,7 @@ import {
 	type ProviderDevSandboxes,
 	ProviderNamespaceError,
 } from '@fabrika/provider-contract'
-import { type NamespaceProxyChanged, republishNamespace } from '../api/namespaces'
+import { NamespaceProxyBusyError, type NamespaceProxyChanged, republishNamespace } from '../api/namespaces'
 import type { AppEnvRow, ControlRepositories, DevSandboxReportInput, DevSandboxRepository, DevSandboxRow } from '../db'
 import type { Env } from '../env'
 import type { PlatformTransportPort } from '../platform-transport'
@@ -169,7 +170,8 @@ export async function ensureDevSandbox(
 	} catch (cause) {
 		throw new DevSandboxRefusedError(cause instanceof Error ? cause.message : 'the provider cannot place a dev sandbox here')
 	}
-	const row = await sandboxes.insertCreating({ workspaceId, appId: appEnv.app_id, env: appEnv.env, now })
+	const attempt = uuidv7()
+	const row = await sandboxes.insertCreating({ workspaceId, appId: appEnv.app_id, env: appEnv.env, now, attempt })
 	if (row === null || row.state === 'removing') return null
 	const namespaceId = namespaceOf(appEnv)
 	const sandboxKey = await sandboxHostKey(deps, namespaceId)
@@ -201,10 +203,13 @@ export async function ensureDevSandbox(
 		}
 	} catch (cause) {
 		await forget()
-		// Only a row that never held a sandbox: one a concurrent bind made ready keeps it.
-		await removeDevSandbox(deps, workspaceId, AbortSignal.timeout(MAINTENANCE_CALL_MS), { kind: 'uncreated' }).catch(() =>
-			console.error(`dev sandboxes: the row of workspace ${workspaceId}'s failed create was kept; maintenance removes it`)
-		)
+		// A pending host or a busy namespace keeps the row: it hands the queued reconcile the host key, and so creates the
+		// host. Otherwise only the bind that inserted the row removes it, and only while it holds no sandbox.
+		if (!hostStillComing(cause)) {
+			await removeDevSandbox(deps, workspaceId, AbortSignal.timeout(MAINTENANCE_CALL_MS), { kind: 'uncreated', attempt }).catch(() =>
+				console.error(`dev sandboxes: the row of workspace ${workspaceId}'s failed create was kept; maintenance removes it`)
+			)
+		}
 		throw cause
 	}
 	const ready = await sandboxes.markReady({
@@ -247,6 +252,11 @@ export async function wakeDevSandbox(deps: DevSandboxDeps, appEnv: AppEnvRow, ro
 	return deps.repositories.devSandboxes.markWoke(row.workspace_id)
 }
 
+/** The namespace's sandbox host is not there yet, but a republish or the reconcile it queued creates it. */
+function hostStillComing(cause: unknown): boolean {
+	return (cause instanceof ProviderNamespaceError && cause.code === PROVIDER_DEV_HOST_PENDING) || cause instanceof NamespaceProxyBusyError
+}
+
 async function republish(deps: DevSandboxDeps, namespaceId: string, workspaceId: string): Promise<void> {
 	// A failed or busy republish has queued a reconcile, which publishes the namespace as the registry now says.
 	await deps.namespaceProxyChanged?.(namespaceId).catch(() =>
@@ -263,7 +273,7 @@ export type DevSandboxRemoval = 'removed' | 'absent' | 'failed'
 export type DevSandboxRemovalMark =
 	| { readonly kind: 'any' }
 	| { readonly kind: 'idle'; readonly staleBefore: number; readonly creatingBefore: number }
-	| { readonly kind: 'uncreated' }
+	| { readonly kind: 'uncreated'; readonly attempt: string }
 
 /**
  * Remove the workspace's sandbox: Box's sandbox (and any other under the workspace's name), the workspace's source
@@ -283,7 +293,7 @@ export async function removeDevSandbox(
 		? await sandboxes.markRemoving(workspaceId)
 		: mark.kind === 'idle'
 		? await sandboxes.markRemovingIfRemovable(workspaceId, mark.staleBefore, mark.creatingBefore)
-		: await sandboxes.markRemovingIfUncreated(workspaceId)
+		: await sandboxes.markRemovingIfUncreated(workspaceId, mark.attempt)
 	if (row === null) return 'absent'
 	let failed = false
 	const step = async (what: string, effect: () => Promise<unknown>): Promise<void> => {

@@ -571,8 +571,10 @@ other environment, before the provider prepares anything, and the write maps a r
   the launcher last reported (head, status, message, trimmed log), a refused head, the reset and check generations, and
   `parked_at`/`woke_at`. `src/api/dev-environments.ts` holds `bind_dev` (`ensureDevSandbox` on every bind: the
   provider's `admit` before the row exists, since every republish hands a recorded sandbox on and a pin that cannot parse
-  it would stop the namespace's publication; it creates the sandbox again when Box lost it, removes the row a failed
-  create started, and removes a sandbox Box finished after a removal took its row; then a wake, then a bootstrap run when the sandbox was replaced or
+  it would stop the namespace's publication; it creates the sandbox again when Box lost it,
+  removes the row a failed create started (only the bind that inserted it,
+  `create_attempt`, and never while the sandbox host is pending or the namespace busy: the row makes the queued
+  reconcile create the host), and removes a sandbox Box finished after a removal took its row; then a wake, then a bootstrap run when the sandbox was replaced or
   `needsBootstrap`: none succeeded, a head was refused, the launcher is gone or unreadable (`launcherProblem`), IAM
   holds another workspace's contract (`app_envs.iam_digest`), or `syncRefusal` of the paths from the held head),
   `get_dev_status`, `run_checks`, `reset_dev` and `followDevCommit`, which `apply_changes` calls; `src/dev/service.ts`

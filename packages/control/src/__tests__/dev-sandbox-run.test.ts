@@ -163,7 +163,7 @@ async function readySandbox(w: World): Promise<string> {
 		baseSha: 'a'.repeat(40),
 		title: 't',
 	})
-	await w.db.devSandboxes.insertCreating({ workspaceId, appId: 'notes', env: 'dev', now: 1 })
+	await w.db.devSandboxes.insertCreating({ workspaceId, appId: 'notes', env: 'dev', now: 1, attempt: 'bind' })
 	const { ref } = await devSandboxProxySecret(keyDeps(w), { appId: 'notes', env: 'dev', workspaceId })
 	await w.db.devSandboxes.markReady({
 		workspaceId,
@@ -332,7 +332,7 @@ describe('a dev bootstrap', () => {
 			baseSha: 'a'.repeat(40),
 			title: 't',
 		})
-		await w.db.devSandboxes.insertCreating({ workspaceId, appId: 'notes', env: 'dev', now: 1 })
+		await w.db.devSandboxes.insertCreating({ workspaceId, appId: 'notes', env: 'dev', now: 1, attempt: 'bind' })
 		expect((await bootstrap(w, workspaceId)).status).toBe('failed')
 		expect(w.deploys).toEqual([])
 		expect([...w.logs.values()].join('\n')).toContain(`deploy failed: the sandbox of workspace ${workspaceId} is not ready (creating)`)

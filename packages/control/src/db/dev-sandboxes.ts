@@ -45,6 +45,8 @@ export interface DevSandboxRow {
 	parked_at: number | null
 	/** Unix seconds of the last wake after an idle park. */
 	woke_at: number | null
+	/** The bind that inserted the row while it was `creating`: the one call whose failed create may remove it. */
+	create_attempt: string | null
 	/** Unix seconds of the launcher's last accepted wait or report. */
 	launcher_seen_at: number | null
 	/** Why Control cannot read the requests of the current launcher, in one line; null when it can. */
@@ -109,16 +111,16 @@ export class DevSandboxRepository {
 	}
 
 	/**
-	 * Record a sandbox about to be created; a row already there is returned with the bind counted as activity, unless it
-	 * is being removed. Null when the workspace does not exist or was abandoned: an abandoned workspace gets no sandbox,
-	 * even from a bind that raced the abandon.
+	 * Record a sandbox about to be created, under the bind's `attempt`; a row already there is returned with the bind
+	 * counted as activity, unless it is being removed, and keeps the attempt that inserted it. Null when the workspace does
+	 * not exist or was abandoned: an abandoned workspace gets no sandbox, even from a bind that raced the abandon.
 	 */
-	async insertCreating(input: { workspaceId: string; appId: string; env: string; now: number }): Promise<DevSandboxRow | null> {
+	async insertCreating(input: { workspaceId: string; appId: string; env: string; now: number; attempt: string }): Promise<DevSandboxRow | null> {
 		await this.d1
-			.prepare(`INSERT INTO dev_sandboxes (workspace_id, app_id, env, state, activity_at)
-				SELECT ?, ?, ?, 'creating', ? WHERE EXISTS (SELECT 1 FROM workspaces WHERE id = ? AND abandoned_at IS NULL)
+			.prepare(`INSERT INTO dev_sandboxes (workspace_id, app_id, env, state, activity_at, create_attempt)
+				SELECT ?, ?, ?, 'creating', ?, ? WHERE EXISTS (SELECT 1 FROM workspaces WHERE id = ? AND abandoned_at IS NULL)
 				ON CONFLICT (workspace_id) DO UPDATE SET activity_at = excluded.activity_at WHERE dev_sandboxes.state <> 'removing'`)
-			.bind(input.workspaceId, input.appId, input.env, input.now, input.workspaceId)
+			.bind(input.workspaceId, input.appId, input.env, input.now, input.attempt, input.workspaceId)
 			.run()
 		return this.d1
 			.prepare(`SELECT dev_sandboxes.* FROM dev_sandboxes JOIN workspaces ON workspaces.id = dev_sandboxes.workspace_id
@@ -163,11 +165,15 @@ export class DevSandboxRepository {
 			.first<DevSandboxRow>()
 	}
 
-	/** A failed create's mark: only while the row is `creating` and records no sandbox, so a concurrent bind's stays. */
-	async markRemovingIfUncreated(workspaceId: string): Promise<DevSandboxRow | null> {
+	/**
+	 * A failed create's mark: only while the row is `creating`, records no sandbox, and was inserted by `attempt`, so a
+	 * concurrent bind's sandbox stays, and a retried bind leaves the row to the bind that inserted it.
+	 */
+	async markRemovingIfUncreated(workspaceId: string, attempt: string): Promise<DevSandboxRow | null> {
 		return this.d1
-			.prepare(`UPDATE dev_sandboxes SET state = 'removing' WHERE workspace_id = ? AND state = 'creating' AND sandbox_id IS NULL RETURNING *`)
-			.bind(workspaceId)
+			.prepare(`UPDATE dev_sandboxes SET state = 'removing'
+				WHERE workspace_id = ? AND state = 'creating' AND sandbox_id IS NULL AND create_attempt = ? RETURNING *`)
+			.bind(workspaceId, attempt)
 			.first<DevSandboxRow>()
 	}
 

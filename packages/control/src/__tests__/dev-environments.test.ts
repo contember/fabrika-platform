@@ -183,7 +183,7 @@ for (const backend of backends) {
 				run: (runId) => repositories.runs.getRun(runId),
 			})
 			// The key a bootstrap would hand the launcher; Control issues one only while the workspace has a sandbox row.
-			await repositories.devSandboxes.insertCreating({ workspaceId: workspace.id, appId: 'shop', env: 'dev', now: clock.now })
+			await repositories.devSandboxes.insertCreating({ workspaceId: workspace.id, appId: 'shop', env: 'dev', now: clock.now, attempt: 'bind' })
 			const key = await transport.issue('shop', 'dev', 'source', { workspaceId: workspace.id })
 			await repositories.devSandboxes.delete(workspace.id)
 			return { ...seeded, host, deps, signals, dev, receiver, workspaceId: workspace.id, key, clock }
