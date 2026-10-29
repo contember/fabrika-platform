@@ -139,6 +139,10 @@ function devSandboxesContract(database: () => SqlDatabase): void {
 		expect(await sandboxes.recordPublishedRun(workspaceId, published)).toBe(true)
 		expect(await sandboxes.recordPublishedRun(uuidv7(), published)).toBe(false)
 		expect((await sandboxes.get(workspaceId))?.published_run_id).toBe(published)
+		expect(bootstrapped?.keys_expire_at).toBeNull()
+		expect(await sandboxes.recordKeysExpiry(workspaceId, T0 + 3600)).toBe(true)
+		expect((await sandboxes.get(workspaceId))?.keys_expire_at).toBe(T0 + 3600)
+		expect(await sandboxes.recordKeysExpiry(uuidv7(), T0)).toBe(false)
 	})
 
 	test('the launcher signals of one workspace leave the others alone', async () => {

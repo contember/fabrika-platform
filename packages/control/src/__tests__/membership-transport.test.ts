@@ -106,10 +106,10 @@ describe('needsMembershipTransport', () => {
 describe('VaultMembershipTransport', () => {
 	test('issues one key for <app>@<env> at the longest lifetime, and answers it while it is fresh', async () => {
 		const { issuer, clock, transport } = await setup()
-		expect(await transport.reconcile('notes', 'prod', true)).toBe('px_membership_1')
+		expect((await transport.reconcile('notes', 'prod', true))?.key).toBe('px_membership_1')
 		expect(issuer.issued).toEqual([{ app: 'notes@prod', expiresAt: T0 + MAX_KEY_LIFETIME_SECONDS, keep: null }])
 		clock.now = T0 + MAX_KEY_LIFETIME_SECONDS - MEMBERSHIP_KEY_ROTATE_BELOW_SECONDS - 1
-		expect(await transport.reconcile('notes', 'prod', true)).toBe('px_membership_1')
+		expect((await transport.reconcile('notes', 'prod', true))?.key).toBe('px_membership_1')
 		expect(issuer.issued).toHaveLength(1)
 	})
 
@@ -117,7 +117,7 @@ describe('VaultMembershipTransport', () => {
 		const { harness, issuer, clock, transport } = await setup()
 		await transport.reconcile('notes', 'prod', true)
 		clock.now = T0 + MAX_KEY_LIFETIME_SECONDS - MEMBERSHIP_KEY_ROTATE_BELOW_SECONDS + 1
-		expect(await transport.reconcile('notes', 'prod', true)).toBe('px_membership_2')
+		expect((await transport.reconcile('notes', 'prod', true))?.key).toBe('px_membership_2')
 		expect(issuer.issued.map((entry) => entry.keep)).toEqual([null, 'key-1'])
 		expect(queryRows(harness.sqlite, 'SELECT label FROM vault')).toEqual([{ label: 'platform:membership-key:notes@prod' }])
 	})
@@ -147,7 +147,7 @@ describe('VaultMembershipTransport', () => {
 		failNextPut = true
 		await expect(flaky.reconcile('notes', 'prod', true)).rejects.toThrow('the database went away')
 		expect([...issuer.valid].sort()).toEqual(['key-1', 'key-2'])
-		expect(await flaky.reconcile('notes', 'prod', true)).toBe('px_membership_3')
+		expect((await flaky.reconcile('notes', 'prod', true))?.key).toBe('px_membership_3')
 		expect(issuer.issued.map((entry) => entry.keep)).toEqual([null, 'key-1', 'key-1'])
 		expect([...issuer.valid].sort()).toEqual(['key-1', 'key-3'])
 		expect(queryRows(harness.sqlite, 'SELECT label FROM vault')).toHaveLength(1)
@@ -173,18 +173,20 @@ describe('VaultMembershipTransport', () => {
 		expect(issuer.issued).toHaveLength(1)
 	})
 
-	test('additive, for a workspace sandbox: keeps the record without need, and rotates nothing until the key expires', async () => {
+	test('additive, for a workspace sandbox: keeps the record without need, and rotates under the margin keeping the old key valid', async () => {
 		const { harness, issuer, clock, transport } = await setup()
-		expect(await transport.reconcile('notes', 'prod', true)).toBe('px_membership_1')
+		expect(await transport.reconcile('notes', 'prod', true)).toEqual({ key: 'px_membership_1', expiresAt: T0 + MAX_KEY_LIFETIME_SECONDS })
 		expect(await transport.reconcile('notes', 'prod', false, { additive: true })).toBeNull()
 		expect(queryRows(harness.sqlite, 'SELECT * FROM app_env_membership_keys')).toHaveLength(1)
-		clock.now = T0 + MAX_KEY_LIFETIME_SECONDS - MEMBERSHIP_KEY_ROTATE_BELOW_SECONDS + 1
-		expect(await transport.reconcile('notes', 'prod', true, { additive: true })).toBe('px_membership_1')
+		clock.now = T0 + MAX_KEY_LIFETIME_SECONDS - MEMBERSHIP_KEY_ROTATE_BELOW_SECONDS - 1
+		expect((await transport.reconcile('notes', 'prod', true, { additive: true }))?.key).toBe('px_membership_1')
 		expect(issuer.issued).toHaveLength(1)
-		clock.now = T0 + MAX_KEY_LIFETIME_SECONDS
-		expect(await transport.reconcile('notes', 'prod', true, { additive: true })).toBe('px_membership_2')
-		// Without the option the same state rotates, as before.
-		clock.now = T0 + 2 * MAX_KEY_LIFETIME_SECONDS - MEMBERSHIP_KEY_ROTATE_BELOW_SECONDS + 1
-		expect(await transport.reconcile('notes', 'prod', true)).toBe('px_membership_3')
+		// Under the margin a sandbox gets a new key, and IAM keeps the one other sandboxes still hold.
+		clock.now += 2
+		expect(await transport.reconcile('notes', 'prod', true, { additive: true })).toEqual({
+			key: 'px_membership_2',
+			expiresAt: clock.now + MAX_KEY_LIFETIME_SECONDS,
+		})
+		expect(issuer.issued.map((entry) => entry.keep)).toEqual([null, 'key-1'])
 	})
 })

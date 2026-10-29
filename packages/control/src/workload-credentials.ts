@@ -56,12 +56,19 @@ export interface WorkloadCredentialsPort {
 	 * the record of a workload or an owner the contract no longer names is dropped. A contract with no job, webhook,
 	 * public procedure or import needs none.
 	 */
-	reconcile(appId: string, env: string, artifact: ContractArtifact | null, options?: KeyReconcileOptions): Promise<Readonly<Record<string, string>>>
+	reconcile(appId: string, env: string, artifact: ContractArtifact | null, options?: KeyReconcileOptions): Promise<HandedWorkloadKeys>
+}
+
+/** The keys a deploy hands, by framework variable, and when the first of them expires (null when it hands none). */
+export interface HandedWorkloadKeys {
+	readonly variables: Readonly<Record<string, string>>
+	readonly expiresAt: number | null
 }
 
 /**
  * `additive`: for a deploy of one workspace sandbox of a `dev` environment, whose keys other sandboxes hold too. No record
- * is dropped or revoked, and a recorded key that has not expired is handed as it is instead of being rotated.
+ * is dropped or revoked. A rotation keeps the replaced key valid (IAM's `keep`) until its own expiry, and a sandbox that
+ * holds it is bootstrapped again before then.
  */
 export interface KeyReconcileOptions {
 	readonly additive?: boolean
@@ -147,26 +154,28 @@ export class VaultWorkloadCredentials implements WorkloadCredentialsPort {
 		env: string,
 		artifact: ContractArtifact | null,
 		options: KeyReconcileOptions = {},
-	): Promise<Readonly<Record<string, string>>> {
+	): Promise<HandedWorkloadKeys> {
 		const additive = options.additive === true
 		const slots = credentialSlots(appId, env, artifact)
 		const recorded = await this.records.list(appId, env)
 		const keys: Record<string, string> = {}
+		let expiresAt: number | null = null
 		if (slots.length === 0 && recorded.length === 0) {
-			return keys
+			return { variables: keys, expiresAt }
 		}
 		const vault = await this.vault()
 		const now = this.now()
 		for (const slot of slots) {
-			const key = await this.#keyOf(vault, appId, env, slot, recorded, now, additive ? 0 : WORKLOAD_KEY_ROTATE_BELOW_SECONDS)
+			const handed = await this.#keyOf(vault, appId, env, slot, recorded, now)
 			for (const variable of slot.variables) {
-				keys[variable] = key
+				keys[variable] = handed.key
 			}
+			expiresAt = expiresAt === null ? handed.expiresAt : Math.min(expiresAt, handed.expiresAt)
 		}
 		// IAM revokes the keys of a job, webhook or public procedure the reconciled schema no longer declares. An import removed here is
 		// still declared by its owner, so Control revokes the pair's keys itself, before it forgets the record: a failed
 		// revocation fails the deploy and keeps the record, and the retry revokes again.
-		if (additive) return keys
+		if (additive) return { variables: keys, expiresAt }
 		for (const row of recorded) {
 			if (!slots.some((slot) => slot.kind === row.kind && slot.name === row.name)) {
 				if (row.kind === 'app') {
@@ -176,7 +185,7 @@ export class VaultWorkloadCredentials implements WorkloadCredentialsPort {
 				await vault.delete(row.value_ref)
 			}
 		}
-		return keys
+		return { variables: keys, expiresAt }
 	}
 
 	async #keyOf(
@@ -186,12 +195,11 @@ export class VaultWorkloadCredentials implements WorkloadCredentialsPort {
 		slot: CredentialSlot,
 		recorded: readonly WorkloadCredentialRow[],
 		now: number,
-		rotateBelow: number,
-	): Promise<string> {
+	): Promise<{ readonly key: string; readonly expiresAt: number }> {
 		const purpose = workloadKeyPurpose(appId, env, slot.kind, slot.name)
 		const row = recorded.find((candidate) => candidate.kind === slot.kind && candidate.name === slot.name)
-		if (row !== undefined && row.expires_at - now > rotateBelow) {
-			return await vault.getSecretForPurpose(row.value_ref, purpose)
+		if (row !== undefined && row.expires_at - now > WORKLOAD_KEY_ROTATE_BELOW_SECONDS) {
+			return { key: await vault.getSecretForPurpose(row.value_ref, purpose), expiresAt: row.expires_at }
 		}
 		// The recorded key stays IAM's active one until the record below names the new key; a failure in between
 		// leaves the new key an orphan, which the next issuance revokes.
@@ -220,7 +228,7 @@ export class VaultWorkloadCredentials implements WorkloadCredentialsPort {
 		if (row !== undefined) {
 			await vault.delete(row.value_ref)
 		}
-		return issued.key
+		return { key: issued.key, expiresAt: issued.expiresAt }
 	}
 }
 

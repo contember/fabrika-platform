@@ -107,7 +107,11 @@ workspace its own running application, where one pinned service could show only 
       and proxy table, the one its own published bootstrap run approved.
     - **Identity.** All sandboxes of the environment share one IAM application id, `<app>@<env>`, so a grant applies in
       every sandbox. IAM holds one schema for it: the one the most recently bootstrapped workspace published. When a
-      workspace's contract differs from it, `get_dev_status` says so, and `bind_dev` refreshes it.
+      workspace's contract differs from it, `get_dev_status` says so, and `bind_dev` refreshes it. The environment's
+      workload and membership keys are shared the same way: a bootstrap rotates one with less than half its lifetime
+      left and IAM keeps the replaced one (`keep`) until its expiry, so the other sandboxes still hold a valid key.
+      Control records when the first key a sandbox holds expires (`dev_sandboxes.keys_expire_at`), and `bind_dev`
+      bootstraps a sandbox again once that is inside the same margin.
     - `bind_dev` ensures the workspace's sandbox on every call, before any run: it creates the sandbox when the
       workspace has none, creates it again when Box lost it, and wakes it. The run's namespace republish needs the
       sandbox id, which stays the same for the workspace's life unless Box lost the sandbox; a replaced sandbox holds

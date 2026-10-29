@@ -74,7 +74,7 @@ async function setup() {
 describe('VaultWorkloadCredentials', () => {
 	test('issues one key per job and webhook of the approved contract, for its <app>@<env>, at the longest lifetime', async () => {
 		const { issuer, credentials } = await setup()
-		expect(await credentials.reconcile('notes', 'prod', workloadsOnly)).toEqual({
+		expect((await credentials.reconcile('notes', 'prod', workloadsOnly)).variables).toEqual({
 			FABRIKA_JOB_PURGE_DELETED_KEY: 'px_job_purgeDeleted_1',
 			FABRIKA_WEBHOOK_GITHUB_KEY: 'px_webhook_github_2',
 		})
@@ -86,12 +86,12 @@ describe('VaultWorkloadCredentials', () => {
 
 	test('answers the recorded key while it is fresh, and rotates it once less than half its lifetime is left', async () => {
 		const { harness, issuer, clock, credentials } = await setup()
-		const first = await credentials.reconcile('notes', 'prod', workloadsOnly)
+		const first = (await credentials.reconcile('notes', 'prod', workloadsOnly)).variables
 		clock.now = T0 + MAX_KEY_LIFETIME_SECONDS - WORKLOAD_KEY_ROTATE_BELOW_SECONDS - 1
-		expect(await credentials.reconcile('notes', 'prod', workloadsOnly)).toEqual(first)
+		expect((await credentials.reconcile('notes', 'prod', workloadsOnly)).variables).toEqual(first)
 		expect(issuer.issued).toHaveLength(2)
 		clock.now += 2
-		const rotated = await credentials.reconcile('notes', 'prod', workloadsOnly)
+		const rotated = (await credentials.reconcile('notes', 'prod', workloadsOnly)).variables
 		expect(rotated['FABRIKA_JOB_PURGE_DELETED_KEY']).toBe('px_job_purgeDeleted_3')
 		expect(issuer.issued).toHaveLength(4)
 		// The rotated keys replaced their vault rows: two rows, one per workload.
@@ -122,7 +122,7 @@ describe('VaultWorkloadCredentials', () => {
 			issuer,
 			() => clock.now,
 		)
-		const first = await flaky.reconcile('notes', 'prod', workloadsOnly)
+		const first = (await flaky.reconcile('notes', 'prod', workloadsOnly)).variables
 		const active = 'job:purgeDeleted:1'
 		clock.now = T0 + MAX_KEY_LIFETIME_SECONDS
 		failNextPut = true
@@ -130,7 +130,7 @@ describe('VaultWorkloadCredentials', () => {
 		// B (job 3) was issued and not recorded; A is still the active key, and still valid.
 		expect(issuer.valid.has(active)).toBe(true)
 		expect(issuer.valid.has('job:purgeDeleted:3')).toBe(true)
-		const retried = await flaky.reconcile('notes', 'prod', workloadsOnly)
+		const retried = (await flaky.reconcile('notes', 'prod', workloadsOnly)).variables
 		expect(issuer.issued.map((entry) => entry.keep)).toEqual([null, null, active, active, 'webhook:github:2'])
 		expect(issuer.valid.has(active)).toBe(true)
 		expect(issuer.valid.has('job:purgeDeleted:3')).toBe(false)
@@ -141,7 +141,7 @@ describe('VaultWorkloadCredentials', () => {
 
 	test('stores only vault refs, and the vault only ciphertext', async () => {
 		const { harness, credentials } = await setup()
-		const keys = await credentials.reconcile('notes', 'prod', workloadsOnly)
+		const keys = (await credentials.reconcile('notes', 'prod', workloadsOnly)).variables
 		const stored = JSON.stringify([
 			...queryRows(harness.sqlite, 'SELECT * FROM app_env_workload_credentials'),
 			...queryRows(harness.sqlite, 'SELECT * FROM vault'),
@@ -155,8 +155,8 @@ describe('VaultWorkloadCredentials', () => {
 		const { harness, issuer, credentials } = await setup()
 		await credentials.reconcile('notes', 'prod', workloadsOnly)
 		const withoutJobs: ContractArtifact = { ...workloadsOnly, jobs: {} }
-		expect(Object.keys(await credentials.reconcile('notes', 'prod', withoutJobs))).toEqual(['FABRIKA_WEBHOOK_GITHUB_KEY'])
-		expect(await credentials.reconcile('notes', 'prod', null)).toEqual({})
+		expect(Object.keys((await credentials.reconcile('notes', 'prod', withoutJobs)).variables)).toEqual(['FABRIKA_WEBHOOK_GITHUB_KEY'])
+		expect((await credentials.reconcile('notes', 'prod', null)).variables).toEqual({})
 		expect(queryRows(harness.sqlite, 'SELECT * FROM app_env_workload_credentials')).toEqual([])
 		expect(queryRows(harness.sqlite, 'SELECT * FROM vault')).toEqual([])
 		expect(issuer.issued).toHaveLength(2)
@@ -164,18 +164,22 @@ describe('VaultWorkloadCredentials', () => {
 })
 
 describe('VaultWorkloadCredentials, additive for a workspace sandbox', () => {
-	test('drops no record and hands a recorded key until it expires', async () => {
+	test('drops no record, and rotates under the margin keeping the old keys valid for the sandboxes that hold them', async () => {
 		const { harness, issuer, clock, credentials } = await setup()
 		const first = await credentials.reconcile('notes', 'prod', workloadsOnly)
-		clock.now = T0 + MAX_KEY_LIFETIME_SECONDS - WORKLOAD_KEY_ROTATE_BELOW_SECONDS + 1
+		expect(first.expiresAt).toBe(T0 + MAX_KEY_LIFETIME_SECONDS)
+		clock.now = T0 + MAX_KEY_LIFETIME_SECONDS - WORKLOAD_KEY_ROTATE_BELOW_SECONDS - 1
 		expect(await credentials.reconcile('notes', 'prod', workloadsOnly, { additive: true })).toEqual(first)
-		expect(await credentials.reconcile('notes', 'prod', null, { additive: true })).toEqual({})
+		expect(await credentials.reconcile('notes', 'prod', null, { additive: true })).toEqual({ variables: {}, expiresAt: null })
 		expect(queryRows(harness.sqlite, 'SELECT name FROM app_env_workload_credentials')).toHaveLength(2)
 		expect(issuer.issued).toHaveLength(2)
 		expect(issuer.revoked).toEqual([])
-		clock.now = T0 + MAX_KEY_LIFETIME_SECONDS
-		expect(await credentials.reconcile('notes', 'prod', workloadsOnly, { additive: true })).not.toEqual(first)
-		expect(issuer.issued).toHaveLength(4)
+		clock.now += 2
+		const rotated = await credentials.reconcile('notes', 'prod', workloadsOnly, { additive: true })
+		expect(rotated.variables).not.toEqual(first.variables)
+		expect(rotated.expiresAt).toBe(clock.now + MAX_KEY_LIFETIME_SECONDS)
+		expect(issuer.issued.slice(2).map((entry) => entry.keep)).toEqual(['job:purgeDeleted:1', 'webhook:github:2'])
+		expect([...issuer.valid.keys()].sort()).toEqual(['job:purgeDeleted:1', 'job:purgeDeleted:3', 'webhook:github:2', 'webhook:github:4'])
 	})
 })
 
@@ -190,7 +194,7 @@ describe('VaultWorkloadCredentials for public procedures', () => {
 
 	test('issues one key per public procedure, named by its endpoint id, under its own variable', async () => {
 		const { issuer, credentials } = await setup()
-		const keys = await credentials.reconcile('notes', 'prod', withPublic)
+		const keys = (await credentials.reconcile('notes', 'prod', withPublic)).variables
 		expect(Object.keys(keys).sort()).toEqual(['FABRIKA_JOB_PURGE_DELETED_KEY', 'FABRIKA_WEBHOOK_GITHUB_KEY', cta].sort())
 		expect(keys[cta]).toBe('px_public_api.stats.cta_3')
 		expect(issuer.issued[2]).toEqual({ app: 'notes@prod', kind: 'public', name: 'api.stats.cta', expiresAt: T0 + MAX_KEY_LIFETIME_SECONDS, keep: null })
@@ -200,10 +204,10 @@ describe('VaultWorkloadCredentials for public procedures', () => {
 		const { harness, issuer, clock, credentials } = await setup()
 		await credentials.reconcile('notes', 'prod', withPublic)
 		clock.now = T0 + MAX_KEY_LIFETIME_SECONDS - WORKLOAD_KEY_ROTATE_BELOW_SECONDS + 1
-		const rotated = await credentials.reconcile('notes', 'prod', withPublic)
+		const rotated = (await credentials.reconcile('notes', 'prod', withPublic)).variables
 		expect(rotated[cta]).toBe('px_public_api.stats.cta_6')
 		expect(issuer.issued[5]?.keep).toBe('public:api.stats.cta:3')
-		expect(Object.keys(await credentials.reconcile('notes', 'prod', workloadsOnly))).not.toContain(cta)
+		expect(Object.keys((await credentials.reconcile('notes', 'prod', workloadsOnly)).variables)).not.toContain(cta)
 		expect(queryRows(harness.sqlite, "SELECT * FROM app_env_workload_credentials WHERE kind = 'public'")).toEqual([])
 		expect(queryRows(harness.sqlite, 'SELECT label FROM vault ORDER BY label').map((row) => row['label'])).toEqual([
 			'platform:workload-key:notes@prod:job:purgeDeleted',
@@ -219,11 +223,11 @@ describe('VaultWorkloadCredentials for connectors', () => {
 
 	test('issues one app key per owner at <owner>@<env>, naming the consumer, under each import of that owner', async () => {
 		const { harness, issuer, credentials } = await setup()
-		const keys = await credentials.reconcile(
+		const keys = (await credentials.reconcile(
 			'notes',
 			'prod',
 			importing({ catalog, pricing: { ...catalog, export: 'prices' }, crm: { ...catalog, app: 'crm', export: 'contacts' } }),
-		)
+		)).variables
 		expect(keys).toEqual({
 			FABRIKA_CONNECT_CATALOG_KEY: 'px_app_notes_1',
 			FABRIKA_CONNECT_PRICING_KEY: 'px_app_notes_1',
@@ -245,14 +249,14 @@ describe('VaultWorkloadCredentials for connectors', () => {
 
 	test('keeps the recorded key while it is fresh, and revokes every key of an owner the contract no longer imports from', async () => {
 		const { harness, issuer, clock, credentials } = await setup()
-		const first = await credentials.reconcile('notes', 'prod', importing({ catalog }))
-		expect(await credentials.reconcile('notes', 'prod', importing({ catalog }))).toEqual(first)
+		const first = (await credentials.reconcile('notes', 'prod', importing({ catalog }))).variables
+		expect((await credentials.reconcile('notes', 'prod', importing({ catalog }))).variables).toEqual(first)
 		expect(issuer.issued).toHaveLength(1)
 		// A rotation keeps the recorded key beside the new one; removing the import revokes both.
 		clock.now = T0 + MAX_KEY_LIFETIME_SECONDS
 		await credentials.reconcile('notes', 'prod', importing({ catalog }))
 		expect(issuer.valid.size).toBe(2)
-		expect(await credentials.reconcile('notes', 'prod', importing({}))).toEqual({})
+		expect((await credentials.reconcile('notes', 'prod', importing({}))).variables).toEqual({})
 		expect(issuer.revoked).toEqual([{ app: 'catalog@prod', kind: 'app', name: 'notes' }])
 		expect(issuer.valid.size).toBe(0)
 		expect(queryRows(harness.sqlite, 'SELECT * FROM app_env_workload_credentials')).toEqual([])
@@ -267,7 +271,7 @@ describe('VaultWorkloadCredentials for connectors', () => {
 		expect(queryRows(harness.sqlite, 'SELECT kind, name FROM app_env_workload_credentials')).toEqual([{ kind: 'app', name: 'catalog' }])
 		expect(issuer.valid.size).toBe(1)
 		issuer.failRevoke = false
-		expect(await credentials.reconcile('notes', 'prod', importing({}))).toEqual({})
+		expect((await credentials.reconcile('notes', 'prod', importing({}))).variables).toEqual({})
 		expect(issuer.valid.size).toBe(0)
 		expect(queryRows(harness.sqlite, 'SELECT * FROM app_env_workload_credentials')).toEqual([])
 	})

@@ -60,6 +60,8 @@ lifecycle stay in `CLAUDE.md`.
   that environment while a workspace of it has a row. `0027_drop_dev_environments.sql` dropped the one-service
   `dev_environments` table it replaced. `create_attempt` (`0029_dev_sandbox_create_attempt.sql`) names the bind that
   inserted a `creating` row; a later bind's conflict keeps it, so a failed create removes only the row its own bind made.
+  `keys_expire_at` (`0030_dev_sandbox_keys_expiry.sql`) is when the first IAM key the last bootstrap handed expires;
+  `bind_dev` bootstraps the sandbox again inside the rotation margin.
 - **A workspace's `source` key goes with its workspace** (`platform_transport_keys.workspace_id`, `ON DELETE CASCADE`
   since `0028_workspace_key_cascade.sql`, which rebuilds the table on SQLite). Such a key is recorded only while the
   workspace has a sandbox row that is not `removing` (`PlatformTransportKeyRepository.insert`), because the removal

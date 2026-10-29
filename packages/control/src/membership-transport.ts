@@ -35,9 +35,14 @@ export interface MembershipTransportPort {
 	/**
 	 * The environment's key while `needed`: the recorded key while it is fresh, or a newly issued one. Without need the
 	 * record is dropped (IAM deletes the key with the schema reconcile that leaves the application no such operation).
-	 * `additive` (see `KeyReconcileOptions`): the record is never dropped, and a recorded key that has not expired is not rotated.
+	 * `additive` (see `KeyReconcileOptions`): the record is never dropped.
 	 */
-	reconcile(appId: string, env: string, needed: boolean, options?: KeyReconcileOptions): Promise<string | null>
+	reconcile(appId: string, env: string, needed: boolean, options?: KeyReconcileOptions): Promise<HandedMembershipKey | null>
+}
+
+export interface HandedMembershipKey {
+	readonly key: string
+	readonly expiresAt: number
 }
 
 /**
@@ -71,7 +76,7 @@ export class VaultMembershipTransport implements MembershipTransportPort {
 		private readonly now: () => number = () => Math.floor(Date.now() / 1000),
 	) {}
 
-	async reconcile(appId: string, env: string, needed: boolean, options: KeyReconcileOptions = {}): Promise<string | null> {
+	async reconcile(appId: string, env: string, needed: boolean, options: KeyReconcileOptions = {}): Promise<HandedMembershipKey | null> {
 		const additive = options.additive === true
 		const row = await this.records.get(appId, env)
 		if (!needed) {
@@ -84,8 +89,8 @@ export class VaultMembershipTransport implements MembershipTransportPort {
 		const vault = await this.vault()
 		const purpose = membershipKeyPurpose(appId, env)
 		const now = this.now()
-		if (row !== null && row.expires_at - now > (additive ? 0 : MEMBERSHIP_KEY_ROTATE_BELOW_SECONDS)) {
-			return vault.getSecretForPurpose(row.value_ref, purpose)
+		if (row !== null && row.expires_at - now > MEMBERSHIP_KEY_ROTATE_BELOW_SECONDS) {
+			return { key: await vault.getSecretForPurpose(row.value_ref, purpose), expiresAt: row.expires_at }
 		}
 		// The recorded key stays IAM's active one until the record below names the new key; a failure in between leaves
 		// the new key an orphan, which the next issuance deletes.
@@ -100,7 +105,7 @@ export class VaultMembershipTransport implements MembershipTransportPort {
 		if (row !== null) {
 			await vault.delete(row.value_ref)
 		}
-		return issued.key
+		return { key: issued.key, expiresAt: issued.expiresAt }
 	}
 }
 

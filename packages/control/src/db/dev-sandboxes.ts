@@ -51,6 +51,8 @@ export interface DevSandboxRow {
 	launcher_seen_at: number | null
 	/** Why Control cannot read the requests of the current launcher, in one line; null when it can. */
 	launcher_refused: string | null
+	/** Unix seconds when the first IAM key the last bootstrap handed expires; null when it handed none. */
+	keys_expire_at: number | null
 	created_at: number
 }
 
@@ -225,6 +227,18 @@ export class DevSandboxRepository {
 				WHERE workspace_id = ? AND state <> 'removing' RETURNING *`)
 			.bind(input.runId, input.targetSha, input.now, input.workspaceId)
 			.first<DevSandboxRow>()
+	}
+
+	/**
+	 * When the first IAM key a bootstrap hands the sandbox expires. Bootstraps of one environment hold its lease in turn,
+	 * so the last one to write is the last to hand keys; a failed one is bootstrapped again regardless.
+	 */
+	async recordKeysExpiry(workspaceId: string, expiresAt: number | null): Promise<boolean> {
+		const result = await this.d1
+			.prepare(`UPDATE dev_sandboxes SET keys_expire_at = ? WHERE workspace_id = ? AND state <> 'removing'`)
+			.bind(expiresAt, workspaceId)
+			.run()
+		return result.meta.changes > 0
 	}
 
 	/** The run whose snapshot the workspace's proxy table now follows; a sandbox being removed follows none. */
