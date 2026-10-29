@@ -1,12 +1,13 @@
 import { isBuiltin } from 'node:module'
 import { type AstNode, child, identifierName, staticKey } from '../ast'
-import { type Report, STRUCTURE_HINT_RULE_IDS } from '../finding'
+import { type Finding, type Report, STRUCTURE_HINT_RULE_IDS } from '../finding'
 import {
 	CONTRACT_FILE,
 	DATABASE_DIR,
 	isRelativeSpecifier,
 	isSourceFile,
 	isTestFile,
+	isToolModule,
 	resolveRelative,
 	SCHEMAS_DIR,
 	SCHEMAS_FILE,
@@ -221,6 +222,21 @@ const checkSliceReference = (place: StructurePlace, reference: ModuleReference, 
 	)
 }
 
+/**
+ * A `package.json` under `tools/` makes a tool a package, which a workspace or a `file:` dependency lets the application
+ * load by its name, past `tool-import`, which judges the files an import resolves to.
+ */
+export const checkToolPackages = (paths: readonly string[]): Finding[] =>
+	paths.filter((path) => isToolModule(path) && path.endsWith('/package.json')).map((path) => ({
+		file: path,
+		line: 1,
+		column: 1,
+		severity: 'refusal',
+		rule: 'tool-import',
+		message: `'${path}' makes a developer's tool a package, which the application could load by its name`,
+		allowed: "tools/ without a package.json: a tool's dependencies go in the root package.json",
+	}))
+
 /** The architecture's rules over one module's imports, re-exports and loads, as Bun resolves them for that module. */
 export const checkStructureReferences = (graph: StructureGraph, place: StructurePlace, report: Report): void => {
 	for (const reference of graph.referencesOf(place.file)) {
@@ -234,6 +250,15 @@ export const checkStructureReferences = (graph: StructureGraph, place: Structure
 			)
 		}
 		if (reference.typeOnly) continue
+		const tool = isToolModule(place.file) ? undefined : targets.files.find(isToolModule)
+		if (tool !== undefined) {
+			report(
+				reference.node,
+				'tool-import',
+				`'${reference.specifier}' loads ${tool}, a developer's tool, which nothing outside tools/ loads`,
+				'what the application and a tool share under src/ (pure code in src/shared/), imported by the tool',
+			)
+		}
 		if (place.file.startsWith(SPA_DIR) && !place.exempt) checkSpaReference(graph, reference, targets, report)
 		if (isSharedModule(place.file) && !place.exempt) checkSharedReference(reference, targets, report)
 		if (isLayerModule(place.file)) checkLayerReference(graph, place, reference, targets, report)

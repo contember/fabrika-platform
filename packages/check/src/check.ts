@@ -17,6 +17,7 @@ import {
 	isServerModule,
 	isSourceFile,
 	isTestFile,
+	isToolModule,
 	TABLES_FILE,
 	ZEROPS_FILES,
 } from './layout'
@@ -46,8 +47,8 @@ import {
 import { checkModuleReferences } from './rules/modules'
 import { checkAmbientModule, checkPackageReplacement } from './rules/packages'
 import { checkBackupPlan, checkMigrationClassification } from './rules/platform-migrations'
-import { checkRuntimeNode, crossAppFetchMessage, rawSqlBindings } from './rules/runtime'
-import { checkStructureNode, checkStructureReferences, structurePlace } from './rules/structure'
+import { checkKeyLiteralNode, checkRuntimeNode, crossAppFetchMessage, rawSqlBindings } from './rules/runtime'
+import { checkStructureNode, checkStructureReferences, checkToolPackages, structurePlace } from './rules/structure'
 import { checkGeneratedTest, checkMockModule, checkTestNode, checkTestSuiteConfig } from './rules/tests'
 import { checkComments, checkTypeNode } from './rules/types'
 import { moduleSlice, sliceFinding } from './slice'
@@ -100,6 +101,26 @@ interface ContractDependent {
 	readonly urls: { readonly endpoint: string; readonly finding: Finding }[]
 	/** Each insert with literal `onConflict.columns`, checked against the migrations' unique indexes. */
 	readonly inserts: ConflictInsert[]
+}
+
+/**
+ * A module under `tools/` runs on a developer's machine, never in the application: it is held to how its source is
+ * written (`type-assertion`, `any-type`, `capability-widening`, `suppression-comment`), `key-literal`, a `declare
+ * module` of a trusted package and the rules of its tests. Every other module rule guards code that runs in the
+ * application. `generated-test-import` reaches it through `checkStructureReferences`, as every module.
+ */
+const checkToolModule = async (module: ParsedModule, text: string, files: ReadonlyMap<string, string>, findings: Finding[]): Promise<void> => {
+	const report = reporter(module.file, findings)
+	const isTest = isTestFile(module.file)
+	walk(module.program, (node, ancestors) => {
+		checkKeyLiteralNode(node, report)
+		checkTypeNode(node, report)
+		checkAmbientModule(node, report)
+		if (isTest) checkTestNode(node, ancestors, report)
+		checkMockModule(node, module.file, files, report)
+	})
+	checkComments(module.comments, report)
+	await checkGeneratedTest(text, module.comments, report)
 }
 
 const checkSourceModule = async (
@@ -243,7 +264,8 @@ export const checkApplication = async (input: CheckInput): Promise<Finding[]> =>
 		modules.set(path, parsed.module)
 		const referencesOfModule = moduleReferences(parsed.module.program)
 		references.set(path, referencesOfModule)
-		await checkSourceModule(parsed.module, referencesOfModule, text, mappings, tree.files, findings, dependent)
+		if (isToolModule(path)) await checkToolModule(parsed.module, text, tree.files, findings)
+		else await checkSourceModule(parsed.module, referencesOfModule, text, mappings, tree.files, findings, dependent)
 	}
 	const structure = { files: tree.files, mappings, referencesOf: (path: string) => references.get(path) ?? [] }
 	for (const path of modules.keys()) {
@@ -270,6 +292,7 @@ export const checkApplication = async (input: CheckInput): Promise<Finding[]> =>
 	findings.push(...(await checkGeneratedTests(tree.files, literal.length === 0 && trust.length === 0 && contractRead.length === 0)))
 	findings.push(...checkMigrationNames(checkedPaths))
 	if (input.migrationBase !== undefined) findings.push(...checkMigrationHistory(tree.files, input.migrationBase))
+	findings.push(...checkToolPackages(checkedPaths))
 	const read = contract !== undefined && literal.length === 0 && contractRead.length === 0 ? readContractModule(graph) : undefined
 	const declaredTables = tables !== undefined && literal.length === 0 ? readTablesValue(graph, tables, new ReaderProblems()) : null
 	const artifact = read?.ok === true ? compiledArtifact(read.contract, declaredTables) : null

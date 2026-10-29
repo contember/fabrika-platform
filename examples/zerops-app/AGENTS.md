@@ -22,6 +22,7 @@ below. When it does not reach far enough, declare the step off it. A declared st
 | `fabrika.contract.ts`      | `app.contract((c) => ({ api: c.rpc('/api', { … }), … }))`: mounts the groups             |
 | `src/app.ts`               | `export default serve(contract, { database: scoped(tables) })` and nothing else          |
 | `web/`                     | the SPA: React over `@fabrika/app/react` and `@fabrika/ui`, never a server module        |
+| `tools/`                   | a developer's tools, such as a command line; the application never loads them            |
 
 ## The paved road
 
@@ -248,7 +249,10 @@ Which promise the types, the checker, boot, the runtime or the approver keeps, a
 - An endpoint never sends e-mail; it has no `ctx.mail`. It records an outbox row, declares `kicks: ['<job>']` and calls `ctx.kick('<job>')`, which
   starts that job once its transaction committed. The job declares `mailer` and sends with `ctx.mail`, under a key
   derived from the row, and sends again only where `ctx.mail.mayRetry(error)` allows it (`references/jobs.md`).
-- No `as` (except `as const`), `any`, `@ts-ignore`, `@ts-expect-error`, `process.env` or `Bun.env`.
+- No `as` (except `as const`), `any`, `@ts-ignore`, `@ts-expect-error`, `process.env` or `Bun.env`. A developer's tool
+  under `tools/` (a command line that calls a deployed environment with a service key) may read the environment and
+  spawn a process; it still has no `as`, `any` or key literal, the application never imports it, and `tools/` holds
+  no `package.json`. Its tests run in the platform build, so they test its logic, without a keychain or a network.
 - Never log an error object, a request, headers or the environment.
 - Never edit a generated file (`src/db/schema.generated.ts`, the generated tests, `fabrika/entry.generated.ts`,
   `fabrika/migrations.generated.ts`, `fabrika/connect/`) or a committed migration. Regenerate the file; write a new migration.
@@ -1718,6 +1722,7 @@ The refusals agents meet most, and their fix:
 | `test-only-import`             | `@fabrika/app/testing`, `@fabrika/app/react/testing`, `@fabrika/db/testing` or `@fabrika/db/testing-sqlite` outside a test file                                                                                                                           | import them only from `*.test.ts` or `__tests__/`                                                                 |
 | `spa-server-import`            | the SPA loads a server module                                                                                                                                                                                                                             | the SPA imports `@fabrika/app/client`, the contract, `src/schemas.ts` and `src/shared/`                           |
 | `shared-import`                | a module under `src/shared/` loads a slice, `src/db/`, `@fabrika/*` or a builtin                                                                                                                                                                          | a shared module imports `zod/v4` and other shared modules only                                                    |
+| `tool-import`                  | a module outside `tools/` loads a developer's tool under `tools/`                                                                                                                                                                                         | move what both need under `src/` (`src/shared/`) and import it from the tool                                      |
 | `skipped-test`                 | `.skip`, `.only`, `.todo`                                                                                                                                                                                                                                 | run the test                                                                                                      |
 | `file-column-migration`        | a file column without `REFERENCES fabrika_files (id)` or without an index it leads                                                                                                                                                                        | both, in a new migration (`references/table-and-migration.md`)                                                    |
 | `on-conflict-index`            | `insert(…, { onConflict: { columns } })` whose columns are no unique index the migrations create                                                                                                                                                          | a `UNIQUE` constraint or a `CREATE UNIQUE INDEX` without `WHERE` on exactly those columns                         |

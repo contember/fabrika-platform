@@ -71,6 +71,8 @@ crm/
     index.html
     main.ts                                     the SPA: createClient(contract, 'api')
     view.ts
+  tools/
+    crm.ts                                      a developer's tool: a command line over the contract, never in the application
 ```
 
 ## A slice
@@ -203,6 +205,8 @@ import (`import type`) is erased and is free everywhere, except of a generated t
 | a test (`*.test.ts`, `__tests__/`) | anything, the test kits included                                                                                                | a generated test                                                                           | `generated-test-import` (refusal)                    |
 | any module but a test              | —                                                                                                                               | `@fabrika/app/testing`, `@fabrika/app/react/testing`, `@fabrika/db/testing`, a test module | `test-only-import` (refusal)                         |
 | any module                         | —                                                                                                                               | a generated test                                                                           | `generated-test-import` (refusal)                    |
+| `tools/**`                         | anything: the contract, `src/shared/`, `@fabrika/app/client`, builtins                                                          |                                                                                            |                                                      |
+| any module outside `tools/`        |                                                                                                                                 | a module under `tools/`, at runtime                                                        | `tool-import` (refusal)                              |
 
 An import is judged by the file or package Bun loads for it:
 
@@ -264,6 +268,12 @@ An import is judged by the file or package Bun loads for it:
 - **Shared code** (`src/shared/`) is what the SPA and the server must compute alike: one function, not two copies
   that drift. It loads `zod/v4` and other shared modules only, so it holds no data access, no framework call and no
   slice. It runs under the server-module rules (no global object, no environment read), so it is pure in both places.
+- **A developer's tool** (`tools/`) runs on a developer's machine, never in the application: a command line over the
+  contract (`createClient(contract, 'api', { baseUrl, key })` with a service key). Only the rules on how source is
+  written, a key literal and the test rules read it; it may read the environment, spawn a process and fetch any origin.
+  Nothing outside `tools/` loads it (`tool-import`), and it holds no `package.json`, so what the application and a
+  tool share lives under `src/`. Its tests run in the platform build like every test, without a keychain or a network
+  ([ADR-0071](../decisions/0071-an-application-keeps-its-developer-tools-in-tools.md)).
 
 ## Tests and fixtures
 
@@ -287,6 +297,7 @@ An import is judged by the file or package Bun loads for it:
 | `layer-import`          | refusal  | `src/<slice>/logic.ts` or `queries.ts` that loads, also through a local module, a `@fabrika/*` module other than `@fabrika/app` and `@fabrika/db` (the test kits are `test-only-import`'s)                                                                                                                                               |
 | `shared-import`         | refusal  | a module under `src/shared/` (not a test) that loads at runtime anything but `zod/v4` and other modules under `src/shared/`: a slice, `src/db/`, `@fabrika/db`, a builtin                                                                                                                                                                |
 | `generated-test-import` | refusal  | any module, a test included, that imports or re-exports a generated test, type-only too                                                                                                                                                                                                                                                  |
+| `tool-import`           | refusal  | any module outside `tools/`, a test and `fabrika.config.ts` included, that loads or re-exports a module under `tools/` at runtime; a `package.json` under `tools/`                                                                                                                                                                       |
 | `logic-data-access`     | hint     | `logic.ts` that loads `@fabrika/db`, a `queries.ts` or a module of `src/db/`, or uses `ctx.db` or `ctx.sql`                                                                                                                                                                                                                              |
 | `cross-slice-queries`   | hint     | a module of one slice that loads another slice's `queries.ts`                                                                                                                                                                                                                                                                            |
 | `handler-location`      | hint     | `.handle(…)` on a `query`, `mutation`, `cron`, `webhook` or `export` procedure outside `src/<slice>/endpoints.ts`                                                                                                                                                                                                                        |

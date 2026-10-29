@@ -881,6 +881,42 @@ const cases: readonly RuleCase[] = [
 		},
 	},
 	{
+		rule: 'tool-import',
+		bad: {
+			'package.json': JSON.stringify({ imports: { '#cli': './tools/cli.ts' }, dependencies: { 'notes-tools': 'file:./tools/notes' } }),
+			'tools/cli.ts': 'export const run = (): number => 1\n',
+			'tools/notes/package.json': JSON.stringify({ name: 'notes-tools', exports: './cli.ts' }),
+			'src/notes.ts': [
+				"import { run } from '../tools/cli.ts'",
+				"export { run as again } from '../tools/cli'",
+				"export const later = await import('#cli')",
+				'export const value = run()',
+				'',
+			].join('\n'),
+			'src/notes.test.ts':
+				"import { expect, test } from 'bun:test'\nimport { run } from '../tools/cli.ts'\n\ntest('runs', () => expect(run()).toBe(1))\n",
+		},
+		expected: ['src/notes.test.ts:2:1', 'src/notes.ts:1:1', 'src/notes.ts:2:1', 'src/notes.ts:3:28', 'tools/notes/package.json:1:1'],
+		good: {
+			'src/shared/money.ts': 'export const cents = (amount: number): number => Math.round(amount * 100)\n',
+			'src/notes.ts': "import type { Cents } from '../tools/cli.ts'\n\nexport const twice = (cents: Cents): number => cents(1) * 2\n",
+			'tools/cli.ts': [
+				"import { spawnSync } from 'node:child_process'",
+				"import { cents } from '../src/shared/money.ts'",
+				'export type Cents = typeof cents',
+				"const key = Bun.spawnSync(['security', 'find-generic-password', '-s', 'notes-ai', '-w']).stdout.toString().trim()",
+				"const origin = process.env.NOTES_URL ?? 'https://notes.example.com'",
+				'try {',
+				"\tconst response = await fetch('https://notes.example.com/api/rpc', { headers: { authorization: `Bearer ${key}` } })",
+				"\tconsole.info(response.status, cents(1.5), spawnSync('true').status, origin)",
+				'} catch (error) {',
+				'\tconsole.error(error)',
+				'}',
+				'',
+			].join('\n'),
+		},
+	},
+	{
 		rule: 'test-without-assertion',
 		bad: { 'src/notes.test.ts': "import { test } from 'bun:test'\n\ntest('lists', async () => {\n\tawait Promise.resolve()\n})\n" },
 		expected: ['src/notes.test.ts:3:1'],
@@ -912,6 +948,41 @@ describe('every rule has a refused and an allowed fixture', () => {
 			expect(await check(item.good)).toEqual([])
 		})
 	}
+})
+
+describe("a developer's tool", () => {
+	test('is still checked for how it is written, a key in it and the rules of its tests', async () => {
+		const findings = await check({
+			'tools/cli.ts': [
+				"const port = JSON.parse('1') as number",
+				'// @ts-ignore',
+				"export const key: any = 'px_live'",
+				'export { port }',
+				'',
+			].join('\n'),
+			'tools/cli.test.ts': "import { expect, test } from 'bun:test'\n\ntest.skip('runs', () => expect(1).toBe(1))\n",
+		})
+
+		expect(findings.map(({ file, line, rule }) => `${file}:${line} ${rule}`)).toEqual([
+			'tools/cli.test.ts:3 skipped-test',
+			'tools/cli.ts:1 type-assertion',
+			'tools/cli.ts:2 suppression-comment',
+			'tools/cli.ts:3 any-type',
+			'tools/cli.ts:3 key-literal',
+		])
+	})
+
+	test('may not import a generated test either', async () => {
+		const findings = await check({ ...CLEAN_APPLICATION, 'tools/seed.ts': "export { describe } from '../src/__tests__/endpoint-access.test.ts'\n" })
+
+		expect(locations(findings, 'generated-test-import')).toEqual(['tools/seed.ts:1:1'])
+	})
+
+	test('only at the root: a tools/ directory elsewhere is application code', async () => {
+		const findings = await check({ 'src/tools/cli.ts': 'export const url = process.env.NOTES_URL\n' })
+
+		expect(locations(findings, 'env-read')).toEqual(['src/tools/cli.ts:1:20'])
+	})
 })
 
 describe('literal: a schema method on an imported literal schema', () => {
@@ -1126,7 +1197,16 @@ describe('bunfig.toml is read as Bun reads it', () => {
 
 	test('a test preload into a skipped or generated path is refused, one into checked source is not', async () => {
 		const refused = 'a test preload outside the checked application files runs unchecked in the platform build'
-		for (const target of ['./dist/after-checks.js', './fabrika/entry.generated.ts', './node_modules/x/index.js', '../outside.ts', 'some-package']) {
+		for (
+			const target of [
+				'./dist/after-checks.js',
+				'./fabrika/entry.generated.ts',
+				'./tools/setup.ts',
+				'./node_modules/x/index.js',
+				'../outside.ts',
+				'some-package',
+			]
+		) {
 			expect(await bunfig(`[test]\npreload = ["${target}"]\n`)).toEqual([`2 ${refused}`])
 		}
 		expect(await bunfig(`test.preload = "./dist/after-checks.js"\n`)).toEqual([`1 ${refused}`])

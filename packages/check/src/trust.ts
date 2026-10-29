@@ -4,7 +4,7 @@
 
 import type { Finding } from './finding'
 import { parseJsonc } from './jsonc'
-import { isIgnoredSegment, isRelativeSpecifier, isSourceFile, joinRelative } from './layout'
+import { isIgnoredSegment, isRelativeSpecifier, isSourceFile, isToolModule, joinRelative } from './layout'
 import { isKey, parseToml } from './toml'
 
 /** Packages whose exports the reader trusts by name, and the packages they rely on. */
@@ -141,11 +141,15 @@ function checkTsconfig(path: string, text: string, files: ReadonlyMap<string, st
 	}
 }
 
-/** A test preload must be a checked application file: a skipped or generated one runs unchecked during the build. */
+/**
+ * A test preload must be a checked application file: a skipped or generated one runs unchecked during the build, and a
+ * developer's tool is not checked as application code.
+ */
 const isCheckedTestPreload = (target: string): boolean => {
 	if (!target.startsWith('./')) return false
 	const segments = target.slice(2).split('/')
-	return segments[0] !== 'fabrika' && segments.every((segment) => segment !== '' && segment !== '..' && !isIgnoredSegment(segment))
+	return segments[0] !== 'fabrika' && !isToolModule(target.slice(2))
+		&& segments.every((segment) => segment !== '' && segment !== '..' && !isIgnoredSegment(segment))
 		&& isSourceFile(target)
 }
 
@@ -180,7 +184,7 @@ function checkBunfig(text: string, report: (needle: string, message: string, all
 					report(
 						at(entry.line),
 						'a test preload outside the checked application files runs unchecked in the platform build',
-						"'./<path>' of a source file the checker reads, outside fabrika/, dist/, node_modules/ and dot directories",
+						"'./<path>' of a source file the checker reads, outside fabrika/, tools/, dist/, node_modules/ and dot directories",
 					)
 				}
 			}

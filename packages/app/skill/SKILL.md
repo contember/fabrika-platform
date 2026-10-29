@@ -30,6 +30,7 @@ below. When it does not reach far enough, declare the step off it. A declared st
 | `fabrika.contract.ts`      | `app.contract((c) => ({ api: c.rpc('/api', { … }), … }))`: mounts the groups             |
 | `src/app.ts`               | `export default serve(contract, { database: scoped(tables) })` and nothing else          |
 | `web/`                     | the SPA: React over `@fabrika/app/react` and `@fabrika/ui`, never a server module        |
+| `tools/`                   | a developer's tools, such as a command line; the application never loads them            |
 
 ## The paved road
 
@@ -256,7 +257,10 @@ Which promise the types, the checker, boot, the runtime or the approver keeps, a
 - An endpoint never sends e-mail; it has no `ctx.mail`. It records an outbox row, declares `kicks: ['<job>']` and calls `ctx.kick('<job>')`, which
   starts that job once its transaction committed. The job declares `mailer` and sends with `ctx.mail`, under a key
   derived from the row, and sends again only where `ctx.mail.mayRetry(error)` allows it (`references/jobs.md`).
-- No `as` (except `as const`), `any`, `@ts-ignore`, `@ts-expect-error`, `process.env` or `Bun.env`.
+- No `as` (except `as const`), `any`, `@ts-ignore`, `@ts-expect-error`, `process.env` or `Bun.env`. A developer's tool
+  under `tools/` (a command line that calls a deployed environment with a service key) may read the environment and
+  spawn a process; it still has no `as`, `any` or key literal, the application never imports it, and `tools/` holds
+  no `package.json`. Its tests run in the platform build, so they test its logic, without a keychain or a network.
 - Never log an error object, a request, headers or the environment.
 - Never edit a generated file (`src/db/schema.generated.ts`, the generated tests, `fabrika/entry.generated.ts`,
   `fabrika/migrations.generated.ts`, `fabrika/connect/`) or a committed migration. Regenerate the file; write a new migration.
