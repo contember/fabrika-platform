@@ -25,6 +25,7 @@ import {
 	SANDBOX_BIN_DIR,
 	SANDBOX_BIN_POINTER,
 	SANDBOX_BUILD_SCRIPT,
+	SANDBOX_DATABASE_PASSWORD_FILE,
 	SANDBOX_ENV_FILE,
 	SANDBOX_LAUNCHER_LOG,
 	SANDBOX_SOURCE_ARCHIVE,
@@ -328,7 +329,14 @@ const awaitBoot = async ({ run, secrets }: DeployContext): Promise<void> => {
 		if ((await run.client.getFile(run.sandbox.sandboxId, BOOTED_PATH, run.signal)) !== null) return
 		if (Date.now() > deadline) {
 			const logged = await run.client.getFile(run.sandbox.sandboxId, SANDBOX_LAUNCHER_LOG, run.signal).catch(() => null)
-			const tail = logged === null ? [] : lastLines(maskValues(new TextDecoder().decode(logged), secrets), LAUNCHER_LOG_LINES)
+			// The launcher's database URL carries a password Control never handed: masked too, or the tail is not shown.
+			const password = await run.client.getFile(run.sandbox.sandboxId, SANDBOX_DATABASE_PASSWORD_FILE, run.signal).then(
+				(bytes) => bytes === null ? '' : new TextDecoder().decode(bytes).trim(),
+				() => null,
+			)
+			const tail = logged === null || password === null
+				? []
+				: lastLines(maskValues(new TextDecoder().decode(logged), [...secrets, password]), LAUNCHER_LOG_LINES)
 			throw new Error(
 				`zerops: the dev launcher did not report its boot within ${SANDBOX_BOOT_DEADLINE_MS / 1000} s${
 					tail.length === 0 ? '' : `; its log ends: ${tail.join(' | ')}`

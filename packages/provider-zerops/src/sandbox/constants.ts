@@ -32,6 +32,9 @@ export const SANDBOX_LAUNCHER_LOG = `${SANDBOX_STATE_DIR}/launcher.log`
  */
 export const SANDBOX_DATABASE_URL = 'postgres://postgres@127.0.0.1:5432/postgres'
 
+/** The local superuser's password, which `postgres-auth.sh` generates and `run-launcher.sh` adds to that URL. */
+export const SANDBOX_DATABASE_PASSWORD_FILE = `${SANDBOX_STATE_DIR}/postgres-password`
+
 /** The connections each process opens: one launcher, one application and a migration share a local PostgreSQL of 100. */
 export const SANDBOX_DATABASE_CONNECTIONS = 10
 

@@ -535,15 +535,20 @@ describe('dev sandbox deploy', () => {
 
 	test('a launcher that never reports its boot fails the run after the readiness window, with its log masked', async () => {
 		const { box, control } = deployHarness({ bootAfterReads: null })
+		const password = 'local-superuser-password-1'
+		box.files.set('sb1:/var/lib/fabrika/postgres-password', { bytes: new TextEncoder().encode(`${password}\n`), mode: null })
 		box.files.set('sb1:/var/lib/fabrika/launcher.log', {
-			bytes: new TextEncoder().encode(`booting\nconnecting with ${PROXY_SECRET}\nfabrika dev: the application exited with code 1\n`),
+			bytes: new TextEncoder().encode(
+				`booting\nconnecting with ${PROXY_SECRET}\npostgres://postgres:${password}@127.0.0.1:5432/postgres refused\nfabrika dev: the application exited with code 1\n`,
+			),
 			mode: null,
 		})
 		const events = freshEvents()
 		expect(await control.deploy(deployInput(events))).toEqual({ state: 'failed' })
 		expect(events.logs).toContain(
 			'✗ await-boot: zerops: the dev launcher did not report its boot within 180 s; its log ends: '
-				+ 'booting | connecting with [redacted] | fabrika dev: the application exited with code 1',
+				+ 'booting | connecting with [redacted] | postgres://postgres:[redacted]@127.0.0.1:5432/postgres refused | '
+				+ 'fabrika dev: the application exited with code 1',
 		)
 	})
 
