@@ -77,6 +77,7 @@ describe('VaultPlatformTransport', () => {
 			{
 				listForAppEnv: (appId, env) => keys.listForAppEnv(appId, env),
 				deleteForAppEnv: (appId, env, receiver) => keys.deleteForAppEnv(appId, env, receiver),
+				deleteForWorkspace: (appId, env, receiver, workspaceId) => keys.deleteForWorkspace(appId, env, receiver, workspaceId),
 				deleteExpired: (now) => keys.deleteExpired(now),
 				insert: (row) => {
 					if (failNextInsert) {

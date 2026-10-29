@@ -13,19 +13,40 @@ export interface PlatformTransportKeyRow {
 	/** Unix seconds; the key is valid strictly before it. */
 	expires_at: number
 	created_at: number
+	/** The workspace a dev sandbox's `source` key authenticates its launcher to; null for every other key. */
+	workspace_id: string | null
 }
+
+/** A key to record; only a dev sandbox's key names a workspace. */
+export type PlatformTransportKeyInsert = Omit<PlatformTransportKeyRow, 'workspace_id'> & { workspace_id?: string | null }
 
 export class PlatformTransportKeyRepository {
 	constructor(private readonly d1: SqlDatabase) {}
 
-	async insert(row: PlatformTransportKeyRow): Promise<void> {
-		await this.d1
-			.prepare(
-				`INSERT INTO platform_transport_keys (app_id, env, receiver, key_id, key_hash, value_ref, expires_at, created_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			)
-			.bind(row.app_id, row.env, row.receiver, row.key_id, row.key_hash, row.value_ref, row.expires_at, row.created_at)
-			.run()
+	/**
+	 * Records the key; returns false only for a workspace's key when the workspace has no sandbox in the environment, or
+	 * its sandbox is being removed: the removal revokes the keys it finds, so a key recorded after its mark would outlive it.
+	 */
+	async insert(row: PlatformTransportKeyInsert): Promise<boolean> {
+		const columns = 'app_id, env, receiver, key_id, key_hash, value_ref, expires_at, created_at, workspace_id'
+		const workspaceId = row.workspace_id ?? null
+		const statement = workspaceId === null
+			? this.d1.prepare(`INSERT INTO platform_transport_keys (${columns}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+			: this.d1.prepare(`INSERT INTO platform_transport_keys (${columns}) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
+				WHERE EXISTS (SELECT 1 FROM dev_sandboxes WHERE workspace_id = ? AND app_id = ? AND env = ? AND state <> 'removing')`)
+		const bound = statement.bind(
+			row.app_id,
+			row.env,
+			row.receiver,
+			row.key_id,
+			row.key_hash,
+			row.value_ref,
+			row.expires_at,
+			row.created_at,
+			workspaceId,
+			...(workspaceId === null ? [] : [workspaceId, row.app_id, row.env]),
+		)
+		return (await bound.run()).meta.changes > 0
 	}
 
 	/** The key whose hash is `keyHash`, when it has not expired at `now`. */
@@ -50,6 +71,15 @@ export class PlatformTransportKeyRepository {
 		const result = await this.d1
 			.prepare('DELETE FROM platform_transport_keys WHERE app_id = ? AND env = ? AND receiver = ?')
 			.bind(appId, env, receiver)
+			.run()
+		return result.meta.changes
+	}
+
+	/** Deletes every key of one receiver that authenticates one workspace of the environment; returns how many. */
+	async deleteForWorkspace(appId: string, env: string, receiver: string, workspaceId: string): Promise<number> {
+		const result = await this.d1
+			.prepare('DELETE FROM platform_transport_keys WHERE app_id = ? AND env = ? AND receiver = ? AND workspace_id = ?')
+			.bind(appId, env, receiver, workspaceId)
 			.run()
 		return result.meta.changes
 	}

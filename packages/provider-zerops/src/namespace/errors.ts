@@ -1,6 +1,7 @@
 import { ProviderNamespaceError } from '@fabrika/provider-contract'
 import { ZeropsApiError, ZeropsServiceEnvValueTooLargeError } from '../api'
 import { ZeropsSourceRateLimitedError } from '../source/port'
+import { ZboxApiError, ZboxOperationFailed } from '../zbox'
 
 /**
  * Lifecycle codes this provider defines where the platform has none of its own. They are an
@@ -18,6 +19,24 @@ export const ZEROPS_PROXY_DEPLOY_FAILED = 'proxyDeployFailed'
 export const ZEROPS_SUBDOMAIN_NOT_PUBLISHED = 'subdomainNotPublished'
 
 export const ZEROPS_SOURCE_RATE_LIMITED = 'githubRateLimited'
+
+/** A dev sandbox entry would be published to a namespace whose pinned proxy cannot parse one. */
+export const ZEROPS_PROXY_SANDBOXES_UNSUPPORTED = 'proxySandboxesUnsupported'
+
+/** A sandbox host was asked of a namespace that serves no custom domain, which a dev environment's wildcard needs. */
+export const ZEROPS_SANDBOX_HOST_UNSUPPORTED = 'sandboxHostUnsupported'
+
+/** The Box API did not accept the namespace's key after the service restarted with it. */
+export const ZEROPS_SANDBOX_HOST_KEY_REFUSED = 'sandboxHostKeyRefused'
+
+/** The Box API answered a request that carried no key, even after a restart with the namespace's key. */
+export const ZEROPS_SANDBOX_HOST_API_OPEN = 'sandboxHostApiOpen'
+
+/** A dev environment an older release registered with its own Zerops service, which runs in no sandbox. */
+export const ZEROPS_DEV_TARGET_RETIRED = 'devTargetRetired'
+
+/** The sandbox host already routes the proxy's sandbox domain in the other form. */
+export const ZEROPS_SANDBOX_HOST_DOMAIN_FORM = 'sandboxHostDomainForm'
 
 export const namespaceError = (code: string, message: string, retryable: boolean, detail?: string): ProviderNamespaceError =>
 	new ProviderNamespaceError(message, code, retryable, detail)
@@ -48,6 +67,11 @@ export const asNamespaceError = (cause: unknown, mode: 'provision' | 'reconcile'
 	if (cause instanceof ZeropsServiceEnvValueTooLargeError) return namespaceError(cause.code, cause.message, false)
 	// The limit resets on its own: the namespace stays `provisioning` and the cron's reconcile retries it.
 	if (cause instanceof ZeropsSourceRateLimitedError) return namespaceError(ZEROPS_SOURCE_RATE_LIMITED, cause.message, true)
+	// The message is the operation, the status and Box's code only: Box echoes request data in its bodies.
+	if (cause instanceof ZboxApiError) {
+		return namespaceError(cause.code, cause.message, cause.status === 0 || cause.status === 429 || cause.status >= 500)
+	}
+	if (cause instanceof ZboxOperationFailed) return namespaceError(cause.code ?? 'zboxOperationFailed', cause.message, false)
 	if (cause instanceof ZeropsApiError) {
 		const { summary, detail } = splitApiMessage(cause.message, cause.code)
 		return namespaceError(

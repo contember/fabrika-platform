@@ -514,3 +514,135 @@ describe('source upload through the real archive rewrite', () => {
 		expect(new TextDecoder().decode(delivered.find((part) => part.path === 'zerops.yaml')?.content)).toBe(descriptor)
 	})
 })
+
+describe('source upload to a dev sandbox host', () => {
+	const bearer = 'zbox-bearer-private'
+	const sandboxUrl = 'https://zbox-2ec8-8080.prg1.zerops.app/api/rest/sandbox/abc123/file?path=%2Fsource%2Fprivate.tar.gz'
+	const isSandboxUploadDestination = (url: string): boolean => url === sandboxUrl
+	const leaks = (raised: unknown): string => `${String(raised)} ${JSON.stringify(raised)}`
+
+	test('streams gzip(tar) to the file endpoint with the bearer and an octet-stream body', async () => {
+		const prepared = preparedArchive('sandbox tar payload')
+		let compressed = new Uint8Array()
+		const result = await transport({
+			isSandboxUploadDestination,
+			repository: { resolve: noResolve, archive: async () => prepared.archive },
+			uploadFetch: async (destination, init) => {
+				expect(destination).toBe(sandboxUrl)
+				expect(init.method).toBe('PUT')
+				expect(init.redirect).toBe('manual')
+				expect(init.duplex).toBe('half')
+				const headers = new Headers(init.headers)
+				expect(headers.get('authorization')).toBe(`Bearer ${bearer}`)
+				expect(headers.get('content-type')).toBe('application/octet-stream')
+				compressed = new Uint8Array(await new Response(init.body).arrayBuffer())
+				return Response.json({ success: true })
+			},
+		}).upload(uploadInput({ uploadUrl: sandboxUrl, uploadBearer: bearer }))
+
+		expect(result).toEqual({ commitSha, descriptorSha256, entryCount: 1, expandedBytes: 19 })
+		expect(new TextDecoder().decode(Bun.gunzipSync(compressed))).toBe('sandbox tar payload')
+		expect(prepared.disposed()).toBe(true)
+	})
+
+	test.each([
+		{ name: 'a bearer to the object-storage destination', input: { uploadUrl, uploadBearer: bearer }, sandbox: true },
+		{ name: 'a sandbox file endpoint without a bearer', input: { uploadUrl: sandboxUrl }, sandbox: true },
+		{ name: 'an empty bearer', input: { uploadUrl: sandboxUrl, uploadBearer: '' }, sandbox: true },
+		{ name: 'a bearer where no sandbox destination is configured', input: { uploadUrl: sandboxUrl, uploadBearer: bearer }, sandbox: false },
+	])('refuses $name before preparing or uploading bytes, without naming either', async ({ input, sandbox }) => {
+		let prepares = 0
+		let uploads = 0
+		const raised = await transport({
+			...(sandbox ? { isSandboxUploadDestination } : {}),
+			repository: {
+				resolve: noResolve,
+				archive: async () => {
+					prepares++
+					return preparedArchive().archive
+				},
+			},
+			uploadFetch: async () => {
+				uploads++
+				return new Response(null, { status: 200 })
+			},
+		}).upload(uploadInput(input)).then(() => undefined, (error: unknown) => error)
+		expect(raised).toMatchObject({ code: 'upload_rejected', stage: 'upload' })
+		expect(leaks(raised)).not.toContain(bearer)
+		expect(leaks(raised)).not.toContain('private')
+		expect(prepares).toBe(0)
+		expect(uploads).toBe(0)
+	})
+
+	test('reports the 413 of an archive above the host limit as its own failure, after the archive is abandoned', async () => {
+		const prepared = preparedArchive()
+		const raised = await transport({
+			isSandboxUploadDestination,
+			repository: { resolve: noResolve, archive: async () => prepared.archive },
+			uploadFetch: async () => new Response('<html><body>413 Request Entity Too Large nginx-body-private</body></html>', { status: 413 }),
+		}).upload(uploadInput({ uploadUrl: sandboxUrl, uploadBearer: bearer })).then(() => undefined, (error: unknown) => error)
+		expect(raised).toBeInstanceOf(SourceFailure)
+		expect(raised).toMatchObject({
+			code: 'upload_too_large',
+			stage: 'upload',
+			message: 'the source archive is larger than the sandbox host accepts (50 MiB)',
+		})
+		expect(leaks(raised)).not.toContain(bearer)
+		expect(leaks(raised)).not.toContain('private')
+		expect(leaks(raised)).not.toContain('nginx')
+		expect(prepared.disposed()).toBe(true)
+	})
+
+	test('a 413 from the object-storage destination stays upload_failed', async () => {
+		await expect(
+			transport({
+				isSandboxUploadDestination,
+				repository: { resolve: noResolve, archive: async () => preparedArchive().archive },
+				uploadFetch: async () => new Response(null, { status: 413 }),
+			}).upload(uploadInput()),
+		).rejects.toMatchObject({ code: 'upload_failed', stage: 'upload' })
+	})
+
+	test.each(['transport', 'status'])('reports a %s failure as upload_failed without the bearer, URL or body', async (failureKind) => {
+		const raised = await transport({
+			isSandboxUploadDestination,
+			repository: { resolve: noResolve, archive: async () => preparedArchive().archive },
+			uploadFetch: async (destination, init) => {
+				if (failureKind === 'transport') throw new TypeError(`${destination} ${new Headers(init.headers).get('authorization')}`)
+				return Response.json({ error: { code: 'sandboxNotFound', message: 'body-private' } }, { status: 404 })
+			},
+		}).upload(uploadInput({ uploadUrl: sandboxUrl, uploadBearer: bearer })).then(() => undefined, (error: unknown) => error)
+		expect(raised).toMatchObject({ code: 'upload_failed', stage: 'upload', message: 'source upload failed (upload_failed)' })
+		expect(leaks(raised)).not.toContain(bearer)
+		expect(leaks(raised)).not.toContain('private')
+		expect(leaks(raised)).not.toContain('sandboxNotFound')
+	})
+
+	test('a rejected repository still outranks a 413 it caused', async () => {
+		const failure = new SourceFailure('archive_rejected', 'archive')
+		const outcome = Promise.withResolvers<ArchiveSummary>()
+		outcome.promise.catch(() => {})
+		await expect(
+			transport({
+				isSandboxUploadDestination,
+				repository: {
+					resolve: noResolve,
+					archive: async () => ({
+						body: new ReadableStream<SourceBytes>({
+							pull: (controller) => {
+								outcome.reject(failure)
+								controller.error(failure)
+							},
+						}),
+						completed: outcome.promise,
+						dispose: () => {},
+					}),
+				},
+				uploadFetch: async (_destination, init) => {
+					await new Response(init.body).arrayBuffer().catch(() => {})
+					return new Response(null, { status: 413 })
+				},
+			}).upload(uploadInput({ uploadUrl: sandboxUrl, uploadBearer: bearer })),
+		).rejects.toBe(failure)
+	})
+})

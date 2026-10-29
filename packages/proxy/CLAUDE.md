@@ -79,6 +79,11 @@ FABRIKA_TEST_CADDY_BIN=./caddy bun test src/__tests__/caddy.live.test.ts   # the
   A key bound to no app would otherwise let one app act as its principal at another (ADR-0022 rule 6). An installation entry
   (`isApplicationEntry` false) keeps it: IAM's `/admin/*` reads its
   own bearer, and a `protocol` row is one the service authenticates itself.
+- **A dev sandbox entry's hop sends its `upstreamHost` as `Host`** (ADR-0022 "Dev sandbox entries"): the Box router
+  on `zbox:8081` routes a sandbox's port by `Host` alone. It is a header op beside the proxy secret on the upstream
+  hop, for an application entry only, and proven in a running Caddy. Routing, the `?app=` pin and the secret variable
+  stay keyed by `app.id` (`dev:<app>:<workspace>`); only what goes to IAM or the verifier is `audienceOf(app)`. The
+  Box router then strips `Authorization` (an accepted limitation in dev), so the app sees only `X-Fabrika-Token`.
 - **Caddy's header order is code, not JSON, so the chain is proven in a running Caddy** (`caddy.live.test.ts`).
   Within one `HeaderOps` a named delete runs AFTER the set, so the strip and the client-address set are two
   handlers. `reverse_proxy` deletes every header `Connection` names after the asserted headers are set, so a
@@ -210,6 +215,8 @@ application's database.
   it on every terminal outcome. IAM receives only its S256 challenge. A callback without the matching
   state and verifier cannot redeem or replace a browser's session; its code is redeemed with a verifier made for no
   challenge (`unmatchedVerifier`), which only spends it, so whoever started that sign-in cannot redeem it elsewhere.
+  IAM binds a code to the audience, which the sandboxes of one dev environment share, so a redeemed code sets no
+  session unless its return URL names the host the callback arrived on, one of the entry's (`returnsToHost`).
 - **The sign-out clears it** (ADR-0067 §5): `GET /__fabrika/auth/signout?redirect=<path>`, answered before endpoint
   selection, only with `Sec-Fetch-Site: same-origin` (absent is refused), clears the session cookie, drops its cached
   token and redirects to IAM's `/auth/terminals/release`. A return that is not a path on the app's origin is a 400.

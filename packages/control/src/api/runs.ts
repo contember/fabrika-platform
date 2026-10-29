@@ -13,6 +13,7 @@ import {
 } from '@fabrika/control-contract'
 import { type BlobStore, type JobQueue, uuidv7 } from '@fabrika/platform'
 import type { ControlRepositories, RunRow } from '../db'
+import { DEV_RUN_NEEDS_WORKSPACE } from '../dev/sandbox-keys'
 import { appScope, envScope } from '../iam'
 import { isRefPattern } from '../ref-match'
 import { type ControlJobMessage, logsKey } from '../run-lifecycle'
@@ -188,6 +189,8 @@ export async function triggerDeployUseCase(c: RunsUseCaseContext, input: Trigger
 		fail(404, 'app env not found')
 	}
 	if (!canAtCoordinates(c.auth, CONTROL_ACTIONS.DEPLOY_TRIGGER, appId, env)) fail(404, 'app env not found')
+	// A dev environment deploys per workspace sandbox: only `bind_dev` starts its runs.
+	if (appEnv.kind === 'dev') fail(409, DEV_RUN_NEEDS_WORKSPACE)
 	// Explicit ref wins; else the env's trigger_ref when it's a concrete ref; else the app's default
 	// branch. A GLOB trigger_ref (e.g. `refs/tags/v*`) is never a deployable ref, so it falls through to
 	// the default branch — pass an explicit `ref` to manually deploy a specific tag of a pattern env.
@@ -202,7 +205,7 @@ export async function triggerDeployUseCase(c: RunsUseCaseContext, input: Trigger
  */
 export async function createManualRun(
 	c: RunTriggerContext,
-	input: { appId: string; env: string; ref: string; commitSha?: string },
+	input: { appId: string; env: string; ref: string; commitSha?: string; lane?: string },
 ): Promise<RunDto> {
 	const { appId, env, ref } = input
 	const run = await c.repositories.runs.createRun({
@@ -213,6 +216,7 @@ export async function createManualRun(
 		...(input.commitSha === undefined ? {} : { commitSha: input.commitSha }),
 		trigger: 'manual',
 		actor: runActor(c.auth),
+		lane: input.lane ?? null,
 	})
 	await c.queue.send({ runId: run.id })
 	await c.auth.audit({

@@ -72,7 +72,7 @@ bun test
   HTTP port (`400 serviceStackIsNotHttp` before that — and for up to a minute after the first version reads
   ACTIVE, so `enableSubdomainAccessWhenHttp` retries that answer for ~3 minutes). Its 2xx proves nothing — on an already-published
   service it returns a process that then fails — so decide by reading `subdomainAccess` back.
-  `ensureSubdomainAccess` in `src/namespace/provisioning.ts` is the one place that does this; it runs after the proxy
+  `ensureSubdomainAccess` in `src/namespace/subdomain.ts` is the one place that does this; it runs after the proxy
   deploy, on reconcile too, and throws rather than leaving a namespace with no public entry point.
 - **The published `zerops.yaml` schema is wrong about the six probe durations** (`integer`; the platform
   wants a Go duration string in `[10s, 1h]`). `src/types.ts` carries the corrected `ZeropsDuration` and
@@ -269,18 +269,41 @@ bun test
   a key or a value (`frameworkVariableReference`: `${NAME}`, `${RUNTIME_NAME}`, `${<host>_NAME}`, nested).
   Commands are not variables: `start: echo ${FABRIKA_RELEASE}` reads the service's own environment.
   `secrets.put` refuses the same references.
-- **A `dev` environment changes only `run`, selected by Control's environment kind (ADR-0049, ADR-0043).** The build
-  is the ordinary one with every check. `ZeropsDeployRun.dev` makes `run.start` run `@fabrika/app/dev` of the
-  application's own release, writes its configuration (`devLauncherConfig`) as base64, so authored SPA commands survive
-  any quoting, and drops the init commands: the database holds what the previous container left, and only the
-  launcher, after Control said whether a reset is pending, may migrate and verify over it, reporting a failure instead
-  of failing the activation. Its readiness check also passes on `DEV_LAUNCHER_BOOTED_FILE`, which the launcher writes
-  once it reported its boot. There is no `healthCheck`: the launcher reports health itself, and a platform restart
-  would discard the synced head. The deploy
-  pins the service to one container (`pinOneContainer`); `devEnvironments.stop/start` stop it when idle and start it
-  again, and the runtime files survive both (measured for ADR-0049). The app never authors any of this. The
-  launcher's `checks` (what `run_checks` runs) are the recipe's `checks`: the build's own check commands in the build's
-  order, on the runtime root.
+- **A `dev` environment runs one Box sandbox per MCP workspace, never a Zerops service (ADR-0049 rule 10, ADR-0043).**
+  `devSandboxes` (`src/sandbox/lifecycle.ts`) creates, parks, wakes and removes a workspace's sandbox, found again by
+  its name `fabrika-<workspace id>`, so every call converges: a create's `Idempotency-Key` is fresh per call (one that
+  repeated after a removal could replay an answer naming the removed sandbox), and `remove` deletes the recorded sandbox
+  and any other under the name. `admit` refuses a namespace whose pin lacks the sandbox marker, before Control records a
+  sandbox. A dev bootstrap's `deploy` runs the plan in
+  `src/sandbox/deploy.ts` instead of a Zerops build: wake, stop the previous launcher and build, upload the helper
+  scripts, upload the source archive, run the build as the unprivileged build user with a clean environment, and only
+  then write the launcher's environment file (0600, through the file API) and start the launcher. Recovery never
+  resumes (ADR-0044). `assertSandboxArtifact` refuses object storage, `scan: true` and `runtimePackages`, and
+  `assertNoSandboxReferences` a `${…}` value, one line each. The launcher's `checks` are the recipe's `checks`. A dev
+  environment's stored target is `{ kind: 'devSandboxes' }` and claims no service (`src/namespace/claims.ts`); a target
+  an older release stored for its own service still decodes, and `sandboxHostOf` refuses it with the re-register remedy.
+- **No credential reaches Box except in a file the deploy writes.** Box echoes a sandbox's launch environment and an
+  exec's environment in its API answers and session lists, so no call of `src/zbox/` accepts env, create pins
+  `secrets: { mode: 'NONE' }`, and the client never puts a response body into an error or a log: an error carries Box's
+  `code` and the HTTP status only. The build's output is relayed through `maskValues`. Never add an env parameter.
+- **The sandbox host is the namespace's `zbox` service** (`src/namespace/sandbox-host.ts`, constants in
+  `src/sandbox-host.ts`). It is imported alone, after the proxy has converged, by a namespace job that Control hands a `sandboxKey` (a `dev`
+  member has a workspace sandbox record). The platform
+  starts it ACTIVE with a key of its own, which a create of `ZBOX_WORKSPACE_API_KEY` cannot replace (`errorList`), so
+  the step rekeys with an update of the record and a restart. The key is Control's (handed per call as `sandboxKey`),
+  written sensitive and never read back or compared. The step requires that the API answers 401 without a key, and adds
+  the DOT domain `sandbox.fabrika.internal` the proxy routes by. A `zerops-subdomain` namespace is refused a host.
+- **Sandbox entries reach only a proxy that parses them.** A `dev` member that carries `devSandboxes` is routed only
+  through those entries (`dev:<app>:<workspace>`, `audience`, `upstreamHost`; `src/namespace/manifest.ts`), and only
+  when the pinned descriptor's proxy build declares `FABRIKA_PROXY_MANIFEST_SANDBOXES` (`zeropsProxyAcceptsSandboxes`,
+  `src/proxy-manifest-carrier.ts`); otherwise `assertNamespaceProxyAcceptsSandboxes` refuses before any platform write.
+  Never drop the marker from the generated proxy setup.
+- **The sandbox base image is named by its content; the helper scripts ship with every deploy.** The base is
+  `fabrika-dev-<12 hex>` of the sha256 over `sandbox/Dockerfile` and `sandbox/init.sh` (`src/sandbox/base-image.ts`),
+  built on the host on first use, so a release that changes either builds a new base and leaves the old one. The
+  scripts under `sandbox/bin/` are uploaded by every deploy into a directory named by their own hash
+  (`src/sandbox/scripts.ts`), so a fix reaches existing sandboxes without a new base. A path in
+  `src/sandbox/constants.ts` is spelled in those scripts too: change both together.
 
 ## Application CLI (`./cli`, `src/cli.ts`)
 

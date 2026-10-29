@@ -77,7 +77,7 @@ describe('the handoff callback', () => {
 		// which a browser honours only WITH `Secure`, so dropping it would produce a cookie nothing
 		// stores. Local development is unaffected: browsers treat `*.localhost` as potentially
 		// trustworthy and accept a `Secure` cookie there over plain HTTP.
-		const iam = new FakeIam({ exchangeAuthCode: { ok: true, session: 's', returnUrl: 'http://app.localhost/x', expiresAt: nowPlus(60) } })
+		const iam = new FakeIam({ exchangeAuthCode: { ok: true, session: 's', returnUrl: 'http://app.example.com/x', expiresAt: nowPlus(60) } })
 		const response = await service(iam, 'http')(callback('c'))
 		expect(cookie(response)?.attributes).toContain('Secure')
 	})

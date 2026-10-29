@@ -35,7 +35,7 @@ import {
 import { namespaceNotReady, redactNamespaceErrorText, republishUnderLease, unconfirmedUpdateRefusal } from './api/namespaces'
 import { lifecycleEnvelopeSchema } from './api/provider-envelope'
 import { publishRunSnapshot } from './approval/publish'
-import { approvedProviderAccess, approvedSnapshot, type ProviderAccessFields } from './approval/snapshot'
+import { type AccessSnapshot, approvedProviderAccess, approvedSnapshot, type ProviderAccessFields } from './approval/snapshot'
 import { connectorAddresses } from './connectors'
 import {
 	type DriveResult,
@@ -54,6 +54,7 @@ import {
 	crossOriginsField,
 	type DataOperationRow,
 	type DeploymentNamespaceRow,
+	type DevSandboxRow,
 	isUnconfirmedNamespaceUpdate,
 	type OperationsCatalogRepository,
 	parseProviderJson,
@@ -62,6 +63,14 @@ import {
 	serializeProviderJson,
 } from './db'
 import { devLauncherRefusal, platformSourceEnvironment, platformSourceOrigin } from './dev/deploy'
+import {
+	DEV_RUN_NEEDS_WORKSPACE,
+	devSandboxOrigin,
+	openDevSandboxProxySecret,
+	requireVault,
+	sandboxHostKey,
+	workspacePublication,
+} from './dev/sandbox-keys'
 import type { CommitSource } from './github/source/commit-files'
 import { type IamSchemaPort, isIamUnavailable } from './iam-schema'
 import type { InstallationBrandSource } from './installation-brand'
@@ -82,9 +91,10 @@ import { type OpsKeysPort, reconcileOpsKey } from './ops-key'
 import type { PlatformTransportPort } from './platform-transport'
 import type { ProxySecrets } from './proxy-secret'
 import { projectedReturnOrigins } from './return-origins'
-import { appSecretPurpose, type SecretResolver } from './secret-resolver'
+import { appSecretPurpose, providerKeepsSecrets, type SecretResolver } from './secret-resolver'
 import { longestTokenLifetime, type TokenKeysPort } from './token-keys'
-import { declaredConnectors, declaredWorkloads, type WorkloadCredentialsPort } from './workload-credentials'
+import type { Vault } from './vault'
+import { declaredConnectors, declaredWorkloads, type KeyReconcileOptions, type WorkloadCredentialsPort } from './workload-credentials'
 
 export type RunOutcome = ProviderTerminalOutcome
 
@@ -157,6 +167,8 @@ export interface RunDeps {
 	 * `FABRIKA_CONTROL_DOMAIN` names none, and then a contract whose job sends through the relay does not deploy there.
 	 */
 	controlOrigin?: string
+	/** Control's vault, where a dev bootstrap opens its workspace's credentials; absent, a dev bootstrap fails. */
+	vault?: () => Promise<Vault>
 }
 
 export interface DeployJobMessage {
@@ -410,11 +422,12 @@ async function operationsCatalogGap(catalog: OperationsCatalogRepository): Promi
 const resolveSecrets = async (
 	deps: RunDeps,
 	appId: string,
-	env: string,
+	appEnv: Pick<AppEnvRow, 'env' | 'kind'>,
 ): Promise<Record<string, string>> => {
-	if (deps.provider.secrets !== undefined) {
+	if (providerKeepsSecrets(deps.provider, appEnv)) {
 		return {}
 	}
+	const { env } = appEnv
 	const secrets: Record<string, string> = {}
 	for (const row of await deps.repositories.registry.getAppSecretsForEnv(appId, env)) {
 		// The row's OWN layer, not the deploying env: an all-env secret was sealed under scope `app`.
@@ -661,6 +674,7 @@ async function deployUnder(
 				`configured provider "${deps.provider.id}" cannot deploy ${app.id}/${appEnv.env} owned by "${appEnv.provider}"`,
 			)
 		}
+		const sandbox = await devBootstrapSandbox(deps, appEnv, run, dryRun)
 		// Read under the lease every data operation holds, so no transition moves while this deploy runs.
 		const maintenance = operationDeploy ? 'open' : await recordedMaintenance(deps, { appId: app.id, env: appEnv.env })
 		if (maintenance !== 'open') {
@@ -710,6 +724,7 @@ async function deployUnder(
 				root: deps.provider.applicationRoot === undefined ? '' : deps.provider.applicationRoot(registration.app.source),
 				commitSha,
 				...(sourceBinding === undefined ? {} : { sourceBinding }),
+				...(sandbox === null ? {} : { workspaceBaseline: sandbox.baseline }),
 				validateAccess: async (access, row) => {
 					if (deps.provider.validateAccess === undefined) return
 					const environment = await providerEnvironment(deps.repositories, row, { requireReadyNamespace: true })
@@ -722,6 +737,11 @@ async function deployUnder(
 				return { runId, status: 'awaiting_approval' }
 			}
 			startedRun = await invocation.boundary()
+			if (sandbox !== null) {
+				// The workspace's proxy table follows this run from now on; the namespace republish below reads it.
+				await invocation.write((fence) => deps.repositories.devSandboxes.recordPublishedRunUnderLease(sandbox.workspaceId, runId, fence))
+				startedRun = await invocation.boundary()
+			}
 			approvedRow = await currentAppEnv(deps.repositories, appEnv)
 			registration = { ...registration, environment: withAccess(registration.environment, approvedProviderAccess(approvedRow)) }
 		}
@@ -740,7 +760,7 @@ async function deployUnder(
 		const vars = await resolveVars(deps.repositories.registry, app.id, appEnv.env)
 		assertUnmanagedNames('variable', app.id, Object.keys(vars))
 		// Resolved here rather than at the provider call, so a reserved secret name fails before any effect.
-		const secrets = await resolveSecrets(deps, app.id, appEnv.env)
+		const secrets = await resolveSecrets(deps, app.id, appEnv)
 		assertUnmanagedNames('secret', app.id, Object.keys(secrets))
 		const managedEnvironment: Record<string, string | null> = {
 			[FABRIKA_RELEASE]: null,
@@ -754,7 +774,11 @@ async function deployUnder(
 		// A namespace proxy, or the provider's own hop to the application, authenticates itself with a secret; a dry run
 		// generates none.
 		const hopSecret = !dryRun && (namespaceProxy || deps.provider.applicationHopSecret === true)
-		const proxySecret = hopSecret ? (await deps.proxySecrets?.forAppEnv(app.id, appEnv.env)) ?? null : null
+		const proxySecret = !hopSecret
+			? null
+			: sandbox === null
+			? (await deps.proxySecrets?.forAppEnv(app.id, appEnv.env)) ?? null
+			: await openDevSandboxProxySecret(sandbox.vault, sandbox.row)
 		// The application would refuse every request its proxy sends (ADR-0022 rule 5).
 		if (hopSecret && proxySecret === null) throw new Error('a contract application needs its proxy secret, and none is configured')
 		managedEnvironment[FABRIKA_PROXY_SECRET] = proxySecret
@@ -794,21 +818,29 @@ async function deployUnder(
 			? {}
 			: installationMailEnvironment(deps.mailTransport ?? NO_INSTALLATION_MAIL, approvedContract, approvedSnapshot(approvedRow).snapshot.framework)
 		Object.assign(managedEnvironment, mailEnvironment)
-		const workloadKeys = dryRun ? {} : await reconcileWorkloadKeys(deps.workloadCredentials, app.id, appEnv.env, approvedContract)
+		const workloadKeys = dryRun
+			? {}
+			: await reconcileWorkloadKeys(deps.workloadCredentials, app.id, appEnv.env, approvedContract, { additive: sandbox !== null })
 		Object.assign(managedEnvironment, workloadKeys, await connectorAddresses(deps.repositories.registry, appEnv.env, approvedContract))
 		const membershipKey = dryRun
 			? null
-			: await reconcileMembershipKey(deps, app.id, appEnv.env, namespaceProxy && needsMembershipTransport(approvedContract))
+			: await reconcileMembershipKey(deps, app.id, appEnv.env, namespaceProxy && needsMembershipTransport(approvedContract), {
+				additive: sandbox !== null,
+			})
 		managedEnvironment[MEMBERSHIP_URL_VARIABLE] = membershipKey === null ? null : membershipTransportOrigin(deps.iamIssuer)
 		managedEnvironment[MEMBERSHIP_KEY_VARIABLE] = membershipKey
 		const relayOrigin = relayedMail ? platformMailOrigin(deps.controlOrigin) : null
 		// A version that no longer relays keeps the running one's key valid until it runs itself (`retirePlatformKeys`).
 		const platformMailKey = dryRun || !relayedMail ? null : await issuePlatformMailKey(deps, app.id, appEnv.env)
 		if (relayOrigin !== null) Object.assign(managedEnvironment, platformMailEnvironment(relayOrigin, platformMailKey))
-		const platformSourceKey = appEnv.kind === 'dev' ? await devSourceKey(deps, approvedRow, dryRun) : null
-		if (appEnv.kind === 'dev') Object.assign(managedEnvironment, platformSourceEnvironment(platformSourceOrigin(deps.controlOrigin), platformSourceKey))
+		const platformSourceKey = sandbox === null ? null : await devSourceKey(deps, approvedRow, dryRun, sandbox.workspaceId)
+		if (sandbox !== null) Object.assign(managedEnvironment, platformSourceEnvironment(platformSourceOrigin(deps.controlOrigin), platformSourceKey))
 		// The canonical origin `ctx.url` builds links on; `null` removes a stale one from an environment that has none.
-		managedEnvironment[FABRIKA_APP_ORIGIN] = appEnv.public_origin === null || appEnv.public_origin === '' ? null : appEnv.public_origin
+		managedEnvironment[FABRIKA_APP_ORIGIN] = sandbox !== null
+			? sandbox.origin
+			: appEnv.public_origin === null || appEnv.public_origin === ''
+			? null
+			: appEnv.public_origin
 		const tokenKeys = dryRun ? null : await reconcileTokenKeys(deps.tokenKeys, app.id, appEnv.env, approvedContract)
 		managedEnvironment[FABRIKA_TOKEN_KEYS] = tokenKeys
 		// Only an environment with a domain, at a release the provider serves the ops channel at, gets the digests (ADR-0069);
@@ -821,6 +853,7 @@ async function deployUnder(
 		const barrier = opsChannel && deps.provider.dataOperations?.(approvedAccess) === true
 		// Once the run succeeds, this is what the next deploy reads to know whether the running version holds the barrier.
 		if (!dryRun) await invocation.write((fence) => runs.recordRunMigrationBarrier(runId, barrier, fence))
+		const sandboxKey = sandbox === null || dryRun ? null : await sandboxHostKey(deps, sandbox.namespaceId)
 		// Parsed once, before any provider effect: a provider writes what it is handed and checks none of it again.
 		const handed = parseManagedEnvironment(managedEnvironment)
 		// A provider removes a managed name it is not handed, so a name missing here would delete the variable.
@@ -833,6 +866,7 @@ async function deployUnder(
 			membershipKey ?? '',
 			platformMailKey ?? '',
 			platformSourceKey ?? '',
+			sandboxKey ?? '',
 			tokenKeys ?? '',
 			...installationMailSecrets(deps.mailTransport ?? NO_INSTALLATION_MAIL, mailEnvironment),
 			// A Zerops build holds the source-map bearer, and the provider relays the build's log.
@@ -875,6 +909,9 @@ async function deployUnder(
 					applicationObjects: pointer,
 					dryRun,
 					...(sourceBinding === undefined ? {} : { sourceBinding }),
+					...(sandbox === null || sandboxKey === null
+						? {}
+						: { devSandbox: { workspaceId: sandbox.workspaceId, sandboxId: sandbox.sandboxId, origin: sandbox.origin, sandboxKey } }),
 					...(releaseContext?.artifactUpload === undefined ? {} : { artifactUpload: releaseContext.artifactUpload }),
 					signal: invocation.work.signal,
 					events: {
@@ -925,7 +962,7 @@ async function deployUnder(
 			}
 			const finished = state
 			await invocation.write((fence) => runs.markRunFinished(runId, finished, exitCode, fence))
-			if (finished === 'succeeded' && !dryRun) await retirePlatformKeys(deps, approvedRow, runId)
+			if (finished === 'succeeded' && !dryRun) await retirePlatformKeys(deps, approvedRow, run)
 			await projectTerminalRun(deps, runId, dryRun, finished, outcome.artifactState)
 			return finished
 		}
@@ -1072,7 +1109,7 @@ async function applyApprovedSchema(
 	signal: AbortSignal,
 ): Promise<SchemaFailure | null> {
 	if (access === undefined || deps.iamSchema === undefined) return null
-	const returnOrigins = await projectedReturnOrigins(deps.repositories.registry, appEnv.app_id, appEnv.env)
+	const returnOrigins = await projectedReturnOrigins(deps.repositories, appEnv.app_id, appEnv.env)
 	try {
 		await deps.iamSchema.apply({
 			app: appEnvironmentId(appEnv.app_id, appEnv.env),
@@ -1080,11 +1117,17 @@ async function applyApprovedSchema(
 			...(returnOrigins === undefined ? {} : { returnOrigins }),
 			signal,
 		})
-		return null
 	} catch (error) {
 		signal.throwIfAborted()
 		return { kind: isIamUnavailable(error) ? 'unavailable' : 'refused', reason: failureReason(error) }
 	}
+	// Informational: a dev workspace compares its own digest with it. IAM already holds the schema, so a lost write fails nothing.
+	try {
+		await deps.repositories.registry.recordAppEnvIamDigest(appEnv.app_id, appEnv.env, access.contractDigest)
+	} catch {
+		console.error(`recording the IAM digest of ${appEnv.app_id}/${appEnv.env} failed; the next schema write records it`)
+	}
+	return null
 }
 
 /** The environment's approved access as the provider reads it, read again after this run's publication. */
@@ -1093,9 +1136,10 @@ async function reconcileWorkloadKeys(
 	appId: string,
 	env: string,
 	contract: ContractArtifact | null,
+	options: KeyReconcileOptions,
 ): Promise<Readonly<Record<string, string>>> {
 	if (credentials !== undefined) {
-		return credentials.reconcile(appId, env, contract)
+		return credentials.reconcile(appId, env, contract, options)
 	}
 	if (declaredWorkloads(contract).size > 0 || declaredConnectors(contract).size > 0) {
 		throw new Error(
@@ -1130,9 +1174,10 @@ async function reconcileMembershipKey(
 	appId: string,
 	env: string,
 	needed: boolean,
+	options: KeyReconcileOptions,
 ): Promise<string | null> {
 	if (deps.membershipTransport !== undefined) {
-		return deps.membershipTransport.reconcile(appId, env, needed)
+		return deps.membershipTransport.reconcile(appId, env, needed, options)
 	}
 	if (needed) {
 		throw new Error(
@@ -1152,17 +1197,66 @@ async function issuePlatformMailKey(deps: Pick<RunDeps, 'platformTransport'>, ap
 }
 
 /**
- * The `source` key of a `dev` environment, after the refusal of a framework release without the launcher. The key is the
- * environment's for as long as it exists: a dev environment's kind never changes. A dry run issues none.
+ * The `source` key of a workspace's `dev` sandbox, after the refusal of a framework release without the launcher. The key
+ * reads only that workspace's files. A dry run issues none.
  */
-async function devSourceKey(deps: Pick<RunDeps, 'platformTransport'>, appEnv: AppEnvRow, dryRun: boolean): Promise<string | null> {
+async function devSourceKey(
+	deps: Pick<RunDeps, 'platformTransport'>,
+	appEnv: AppEnvRow,
+	dryRun: boolean,
+	workspaceId: string,
+): Promise<string | null> {
 	const refusal = devLauncherRefusal(approvedSnapshot(appEnv).snapshot.framework)
 	if (refusal !== null) throw new Error(refusal)
 	if (dryRun) return null
 	if (deps.platformTransport === undefined) {
 		throw new Error('a dev environment needs the platform transport key, and this installation cannot issue it (it needs FABRIKA_CONTROL_VAULT_KEY)')
 	}
-	return deps.platformTransport.issue(appEnv.app_id, appEnv.env, 'source')
+	return deps.platformTransport.issue(appEnv.app_id, appEnv.env, 'source', { workspaceId })
+}
+
+/** The workspace sandbox a dev bootstrap deploys into, and the snapshot its workspace last published. */
+interface DevBootstrapSandbox {
+	readonly row: DevSandboxRow
+	readonly workspaceId: string
+	readonly sandboxId: string
+	readonly namespaceId: string
+	readonly origin: string
+	readonly vault: Vault
+	readonly baseline: { readonly runId: string; readonly snapshot: AccessSnapshot } | null
+}
+
+/**
+ * The sandbox of a dev bootstrap: a run whose lane is a workspace of a `dev` environment. Null for every other run.
+ * Throws one line, before any effect, for a dev run the provider cannot serve: one without a workspace, a dry run, or a
+ * workspace without a ready sandbox (`bind_dev` creates it first).
+ */
+async function devBootstrapSandbox(
+	deps: Pick<RunDeps, 'repositories' | 'provider' | 'vault'>,
+	appEnv: AppEnvRow,
+	run: RunRow,
+	dryRun: boolean,
+): Promise<DevBootstrapSandbox | null> {
+	if (appEnv.kind !== 'dev') return null
+	if (run.lane === null) throw new Error(DEV_RUN_NEEDS_WORKSPACE)
+	if (dryRun) throw new Error(`a dev bootstrap has no dry run: workspace ${run.lane} is built in its sandbox only`)
+	const vault = await requireVault(deps)
+	const row = await deps.repositories.devSandboxes.get(run.lane)
+	if (row === null || row.app_id !== appEnv.app_id || row.env !== appEnv.env) {
+		throw new Error(`workspace ${run.lane} has no sandbox in ${appEnv.app_id}/${appEnv.env}; bind it with bind_dev first`)
+	}
+	if (row.state !== 'ready' || row.sandbox_id === null) throw new Error(`the sandbox of workspace ${run.lane} is not ready (${row.state})`)
+	if (appEnv.namespace_id === null) throw new Error(`dev environment ${appEnv.app_id}/${appEnv.env} has no deployment namespace`)
+	const publication = await workspacePublication(deps.repositories, row)
+	return {
+		row,
+		workspaceId: row.workspace_id,
+		sandboxId: row.sandbox_id,
+		namespaceId: appEnv.namespace_id,
+		origin: devSandboxOrigin(appEnv, row.workspace_id),
+		vault,
+		baseline: publication === null ? null : { runId: publication.runId, snapshot: publication.snapshot },
+	}
 }
 
 /**
@@ -1185,13 +1279,14 @@ function relaysMail(deps: Pick<RunDeps, 'provider' | 'mailRelay'>, appEnv: AppEn
 async function retirePlatformKeys(
 	deps: Pick<RunDeps, 'platformTransport' | 'provider' | 'mailRelay'>,
 	appEnv: AppEnvRow,
-	runId: string,
+	run: Pick<RunRow, 'id' | 'lane'>,
 ): Promise<void> {
-	if (deps.platformTransport === undefined || relaysMail(deps, appEnv)) return
+	// A workspace's bootstrap runs one sandbox: the others may still send with the environment's key.
+	if (deps.platformTransport === undefined || run.lane !== null || relaysMail(deps, appEnv)) return
 	try {
 		await deps.platformTransport.revoke(appEnv.app_id, appEnv.env, 'mail')
 	} catch {
-		console.error(`deploy run ${runId}: revoking the relay keys its version no longer needs failed; the next succeeded run retries`)
+		console.error(`deploy run ${run.id}: revoking the relay keys its version no longer needs failed; the next succeeded run retries`)
 	}
 }
 
@@ -1341,7 +1436,7 @@ export async function settleUnfinishedRun(deps: RunSettleDeps, invocation: RunIn
 		}
 		const finished = state
 		await invocation.write((fence) => deps.repositories.runs.markRunFinished(run.id, finished, exitCode, fence))
-		if (finished === 'succeeded' && outcome.dryRun !== true) await retirePlatformKeys(deps, appEnv, run.id)
+		if (finished === 'succeeded' && outcome.dryRun !== true) await retirePlatformKeys(deps, appEnv, run)
 		await projectSettled(deps, run.id, finished, outcome)
 		return finished
 	} catch (error) {
@@ -1426,7 +1521,7 @@ export async function settleRunCancellation(
 		}
 	}
 	await invocation.write((fence) => deps.repositories.runs.markRunCancellationFinished(cancelling.id, outcome, fence))
-	if (activated !== null) await retirePlatformKeys(deps, activated, cancelling.id)
+	if (activated !== null) await retirePlatformKeys(deps, activated, cancelling)
 	return outcome
 }
 

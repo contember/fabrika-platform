@@ -146,7 +146,15 @@ while the run waits and after it is approved. An approval is valid only for the 
 recorded. When the new diff still widens, the run needs a new approval.
 
 **Invariant: a pending change is published nowhere.** No path publishes a proxy table or reconciles IAM
-from anything other than `approvedSnapshot(app, env)`.
+from anything other than `approvedSnapshot(app, env)`, or, for a workspace sandbox of a `dev` environment, the
+snapshot that workspace's own bootstrap run published through it.
+
+A `dev` environment publishes per workspace ([ADR-0049](0049-author-applications-through-mcp-in-control.md) rule 10).
+A workspace's bootstrap run classifies against the snapshot its workspace last published (the environment's active
+snapshot when it has none), publishes through the same compare-and-swap on the environment, and is recorded as its
+workspace's published run (`dev_sandboxes.published_run_id`). The namespace proxy's entry for a workspace sandbox is
+compiled from that workspace's published run; IAM follows the environment's active snapshot, which is the most
+recently bootstrapped workspace's.
 
 ### 3. Classification is a conservative diff
 
@@ -401,7 +409,9 @@ workload can hold completes an approval.
 A rollback deploys an older commit as a new run. Control classifies it like any other run, against the
 environment's active snapshot. Publishing an older run's snapshot again is not a rollback path.
 
-An older run therefore never deploys after a newer run of the same environment succeeded. Before it starts, under the
+An older run therefore never deploys after a newer run of the same environment and lane succeeded. A run has no lane,
+except a `dev` bootstrap, whose lane is its workspace (`runs.lane`), so one workspace's bootstrap never supersedes
+another's. Before it starts, under the
 environment's lease, Control fails it with the run-log line `superseded by run <id>`. That covers a run the queue
 redelivered late and a parked run approved after a newer deploy went live: re-running the older commit is a new
 deploy.

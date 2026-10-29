@@ -1,6 +1,6 @@
-// The platform transport's `source` receiver (ADR-0064): the launcher of a `dev` environment waits here for the next head
-// of the workspace bound to it and reports what it serves. Its key reads the bound workspace's files of one `<app>@dev`,
-// which is source that environment already runs. Runtime-neutral, but only the Bun process hands it a `DevSource`.
+// The platform transport's `source` receiver (ADR-0064): the launcher of a workspace's `dev` sandbox waits here for the
+// next head of that workspace and reports what it serves. Its key names the workspace and reads only its files.
+// Runtime-neutral, but only the Bun process hands it a `DevSource`.
 
 import {
 	DEV_REPORT_MAX_LINES,
@@ -16,12 +16,13 @@ import {
 import { hashPlatformKey } from '@fabrika/email/platform'
 import { workspaceSourceTarget } from '../api/workspaces'
 import type { ControlAppContext } from '../app'
-import type { DevEnvironmentRepository, DevEnvironmentRow, PlatformTransportKeyRepository, RunRow } from '../db'
+import type { DevSandboxRepository, PlatformTransportKeyRepository, RunRow } from '../db'
 import { errorLabel } from '../error-label'
 import { bearerOf, error, json, readBoundedText } from '../http'
 import { repositories } from '../services'
 import { WorkspaceSourceError, type WorkspaceSourcePort, type WorkspaceSourceTarget } from '../workspace-source-port'
-import { devReportKey, type DevSignals, devTargetKey, waitForRecord } from './signals'
+import { type DevRecord, type DevStore, sandboxStore } from './service'
+import { type DevSignals, waitForRecord } from './signals'
 import { buildDevSync, relayableSync } from './sync'
 
 const SOURCE_RECEIVER = 'source'
@@ -38,7 +39,7 @@ export interface DevSource {
 
 export interface DevReceiverDeps {
 	readonly keys: Pick<PlatformTransportKeyRepository, 'findValidByHash'>
-	readonly devEnvironments: DevEnvironmentRepository
+	readonly devSandboxes: DevSandboxRepository
 	/** The repository and connection of the application's GitHub source; null when it has none any more. */
 	readonly sourceTarget: (appId: string) => Promise<WorkspaceSourceTarget | null>
 	readonly source: WorkspaceSourcePort
@@ -60,7 +61,7 @@ export function handleDevSource(ctx: ControlAppContext): Promise<Response> {
 	const persistence = repositories(ctx.env)
 	const deps: DevReceiverDeps = {
 		keys: persistence.platformTransportKeys,
-		devEnvironments: persistence.devEnvironments,
+		devSandboxes: persistence.devSandboxes,
 		sourceTarget: (appId) => workspaceSourceTarget(persistence, appId),
 		source: dev.source,
 		signals: dev.signals,
@@ -75,46 +76,46 @@ export function handleDevSource(ctx: ControlAppContext): Promise<Response> {
 }
 
 export async function acceptDevWait(deps: DevReceiverDeps, request: Request): Promise<Response> {
-	const environment = await authenticate(deps, request)
-	if (environment instanceof Response) return environment
+	const launcher = await authenticate(deps, request)
+	if (launcher instanceof Response) return launcher
 	const body = await readJson(request, WAIT_MAX_BODY_BYTES)
 	const parsed = body === undefined ? null : parseDevWaitRequest(body)
-	if (parsed === null || !parsed.ok) return refuseLauncher(deps, environment, 'wait')
-	const { appId, env } = environment
+	if (parsed === null || !parsed.ok) return refuseLauncher(deps, launcher, 'wait')
+	const { store } = launcher
 	try {
-		if (await superseded(deps, await deps.devEnvironments.get(appId, env), parsed.value.bootstrap)) return error(409, SUPERSEDED)
-		await deps.devEnvironments.recordLauncherSeen(appId, env)
+		if (await superseded(deps, await store.read(), parsed.value.bootstrap)) return error(409, SUPERSEDED)
+		await store.recordLauncherSeen()
 		const ready = async () => {
-			const row = await deps.devEnvironments.get(appId, env)
+			const row = await store.read()
 			return row === null || answersNow(row, parsed.value) ? { row } : null
 		}
 		const found = parsed.value.hold
-			? await waitForRecord(deps.signals, devTargetKey(appId, env), deps.waitMs, ready, request.signal)
+			? await waitForRecord(deps.signals, store.targetKey, deps.waitMs, ready, request.signal)
 			: await ready()
-		const row = found?.row ?? await deps.devEnvironments.get(appId, env)
-		return json(await answer(deps, appId, env, row, parsed.value, request.signal))
+		const row = found?.row ?? await store.read()
+		return json(await answer(deps, launcher, row, parsed.value, request.signal))
 	} catch (cause) {
 		const failure = cause instanceof WorkspaceSourceError ? `GitHub answered ${cause.kind}` : errorLabel(cause)
-		console.error(`dev source: answering a wait of ${appId}@${env} failed: ${failure}`)
+		console.error(`dev source: answering a wait of ${launcher.label} failed: ${failure}`)
 		return error(503, 'the source is unavailable; retry')
 	}
 }
 
 export async function acceptDevReport(deps: DevReceiverDeps, request: Request): Promise<Response> {
-	const environment = await authenticate(deps, request)
-	if (environment instanceof Response) return environment
+	const launcher = await authenticate(deps, request)
+	if (launcher instanceof Response) return launcher
 	const body = await readJson(request, REPORT_MAX_BODY_BYTES)
 	const parsed = body === undefined ? null : parseDevReport(body)
-	if (parsed === null || !parsed.ok) return refuseLauncher(deps, environment, 'report')
-	const { appId, env } = environment
+	if (parsed === null || !parsed.ok) return refuseLauncher(deps, launcher, 'report')
+	const { store } = launcher
 	try {
-		if (await superseded(deps, await deps.devEnvironments.get(appId, env), parsed.value.bootstrap)) return error(409, SUPERSEDED)
-		await deps.devEnvironments.recordReport(appId, env, reportInput(parsed.value))
+		if (await superseded(deps, await store.read(), parsed.value.bootstrap)) return error(409, SUPERSEDED)
+		await store.recordReport(reportInput(parsed.value))
 	} catch (cause) {
-		console.error(`dev source: recording a report of ${appId}@${env} failed: ${errorLabel(cause)}`)
+		console.error(`dev source: recording a report of ${launcher.label} failed: ${errorLabel(cause)}`)
 		return error(503, 'the report was not recorded; retry')
 	}
-	deps.signals.notify(devReportKey(appId, env))
+	deps.signals.notify(store.reportKey)
 	return new Response(null, { status: 204 })
 }
 
@@ -134,10 +135,10 @@ function reportInput(report: DevReport) {
 const SUPERSEDED = 'a newer bootstrap run replaced this container'
 
 /**
- * A container is the environment's only while its bootstrap commit is the newest bootstrap run's. The one a new run
- * replaces keeps running until the platform swaps it, and a sync or report from it would overwrite the new one's.
+ * A launcher is the sandbox's only while its bootstrap commit is the workspace's newest bootstrap run's. The one a new
+ * run replaces may still run while the rebuild stops it, and a sync or report from it would overwrite the new one's.
  */
-async function superseded(deps: DevReceiverDeps, row: DevEnvironmentRow | null, bootstrap: string): Promise<boolean> {
+async function superseded(deps: DevReceiverDeps, row: DevRecord | null, bootstrap: string): Promise<boolean> {
 	if (row === null || row.bootstrap_run_id === null) return false
 	const built = (await deps.run(row.bootstrap_run_id))?.commit_sha ?? null
 	return built !== null && built !== bootstrap
@@ -151,54 +152,52 @@ export const LAUNCHER_UNREADABLE = 'the container runs a launcher whose requests
  * A wait or report this release cannot parse is answered 400. When it comes from the container of the current
  * bootstrap run, that launcher can never sync again, so the environment records why and the next bind bootstraps.
  */
-async function refuseLauncher(deps: DevReceiverDeps, environment: { appId: string; env: string }, request: 'wait' | 'report'): Promise<Response> {
-	const { appId, env } = environment
+async function refuseLauncher(deps: DevReceiverDeps, launcher: Launcher, request: 'wait' | 'report'): Promise<Response> {
+	const { store } = launcher
 	try {
-		const row = await deps.devEnvironments.get(appId, env)
+		const row = await store.read()
 		const run = row?.bootstrap_run_id == null ? null : await deps.run(row.bootstrap_run_id)
 		if (row !== null && run !== null && run.status === 'succeeded' && run.finished_at !== null) {
-			const booted = Math.max(run.finished_at, row.service_started_at ?? 0)
-			if (await deps.devEnvironments.recordLauncherRefused(appId, env, LAUNCHER_UNREADABLE, booted)) {
-				deps.signals.notify(devReportKey(appId, env))
-			}
+			const booted = Math.max(run.finished_at, row.resumed_at ?? 0)
+			if (await store.recordLauncherRefused(LAUNCHER_UNREADABLE, booted)) deps.signals.notify(store.reportKey)
 		}
 	} catch (cause) {
-		console.error(`dev source: recording an unreadable ${request} of ${appId}@${env} failed: ${errorLabel(cause)}`)
+		console.error(`dev source: recording an unreadable ${request} of ${launcher.label} failed: ${errorLabel(cause)}`)
 	}
 	return error(400, `not a ${request} this release reads`)
 }
 
 /** Whether the record asks the launcher for something it has not done: a head to sync to, a reset, or checks. */
-function answersNow(row: DevEnvironmentRow, request: DevWaitRequest): boolean {
+function answersNow(row: DevRecord, request: DevWaitRequest): boolean {
 	return needsSync(row, request.head)
 		|| request.reset === null || row.reset_generation > request.reset
 		|| request.checks === null || row.checks_generation > request.checks
 }
 
-function needsSync(row: DevEnvironmentRow, head: string): row is DevEnvironmentRow & { target_sha: string; workspace_id: string } {
-	return row.workspace_id !== null && row.target_sha !== null && row.target_sha !== head && row.target_sha !== row.refused_sha
+function needsSync(row: DevRecord, head: string): row is DevRecord & { target_sha: string } {
+	return row.target_sha !== null && row.target_sha !== head && row.target_sha !== row.refused_sha
 }
 
 async function answer(
 	deps: DevReceiverDeps,
-	appId: string,
-	env: string,
-	row: DevEnvironmentRow | null,
+	launcher: Launcher,
+	row: DevRecord | null,
 	request: DevWaitRequest,
 	signal: AbortSignal,
 ): Promise<DevWaitAnswer> {
+	const { appId, store } = launcher
 	if (row === null) return { sync: null, reset: 0, checks: 0 }
 	// A container without a state file adopts the answer's generation as applied. Its database is the previous
 	// container's, so it learns the generation that one applied, and the next answer asks for any reset still pending.
 	const reset = request.reset === null ? Math.min(row.reset_applied ?? 0, row.reset_generation) : row.reset_generation
 	const generations = { reset, checks: row.checks_generation }
 	if (!needsSync(row, request.head)) return { sync: null, ...generations }
-	const handedOff = deps.signals.take(devTargetKey(appId, env), request.head, row.target_sha)
+	const handedOff = deps.signals.take(store.targetKey, request.head, row.target_sha)
 	const relayed = handedOff === null ? null : relayableSync(handedOff)
 	if (relayed !== null) return { sync: relayed, ...generations }
 	const target = await deps.sourceTarget(appId)
 	if (target === null) {
-		await deps.devEnvironments.recordRefusal(appId, env, row.target_sha, 'the application has no GitHub source any more')
+		await store.recordRefusal(row.target_sha, 'the application has no GitHub source any more')
 		return { sync: null, ...generations }
 	}
 	let outcome: Awaited<ReturnType<typeof buildDevSync>>
@@ -210,21 +209,36 @@ async function answer(
 		outcome = { kind: 'refused', reason: `GitHub does not know the commit ${request.head} this container holds; call bind_dev again` }
 	}
 	if (outcome.kind === 'refused') {
-		await deps.devEnvironments.recordRefusal(appId, env, row.target_sha, outcome.reason)
-		deps.signals.notify(devReportKey(appId, env))
+		await store.recordRefusal(row.target_sha, outcome.reason)
+		deps.signals.notify(store.reportKey)
 		return { sync: null, ...generations }
 	}
 	return { sync: outcome.sync, ...generations }
 }
 
-/** The environment a `source` key names; a refusal response for any other bearer. */
-async function authenticate(deps: DevReceiverDeps, request: Request): Promise<{ appId: string; env: string } | Response> {
+/** The launcher a `source` key authenticates, with the record it follows. */
+interface Launcher {
+	readonly appId: string
+	/** Names the launcher in a log line. */
+	readonly label: string
+	readonly store: DevStore
+}
+
+/**
+ * The launcher a `source` key names; a refusal response for any other bearer. The key must name its workspace, whose
+ * sandbox, when it has one, is in the key's environment.
+ */
+async function authenticate(deps: DevReceiverDeps, request: Request): Promise<Launcher | Response> {
 	const bearer = bearerOf(request)
 	if (bearer === null) return error(401, 'unauthorized')
 	try {
 		const key = await deps.keys.findValidByHash(await hashPlatformKey(bearer), deps.now())
 		if (key === null || key.receiver !== SOURCE_RECEIVER) return error(401, 'unauthorized')
-		return { appId: key.app_id, env: key.env }
+		const { app_id: appId, env, workspace_id: workspaceId } = key
+		if (workspaceId === null) return error(401, 'unauthorized')
+		const sandbox = await deps.devSandboxes.get(workspaceId)
+		if (sandbox !== null && (sandbox.app_id !== appId || sandbox.env !== env)) return error(401, 'unauthorized')
+		return { appId, label: `${appId}@${env} workspace ${workspaceId}`, store: sandboxStore(deps.devSandboxes, workspaceId) }
 	} catch {
 		console.error('dev source: key lookup failed')
 		return error(503, 'unavailable; retry')

@@ -116,7 +116,7 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [219](219-the-cloudflare-executor-s-managed-environment-parse-is-untested.md): No test shows the Cloudflare executor refuses a managed value Control would not hand.
 - [220](220-the-provider-conformance-suite-checks-no-checkpoint-size.md): The provider conformance suite checks no checkpoint size, and Zerops' harness hands no upload bearer.
 - [229](229-provider-neutral-core-review-follow-ups.md): The provider-neutral core reviews' gaps; P2: a late cancel leaves a Cloudflare version without its IAM schema.
-- [234](234-mcp-authoring-review-follow-ups.md): Review follow-ups of MCP authoring and dev environments: one failing repository fails `list_workspaces`, a long `run_checks` reads as a gone launcher, a crash loop never idles, an abandoned workspace stays bound, a committed launcher state file or booted marker misleads a new container, and the SPA type check awaits an ADR-0062 decision.
+- [234](234-mcp-authoring-review-follow-ups.md): Review follow-ups of MCP authoring and dev environments: one failing repository fails `list_workspaces`, a long `run_checks` reads as a gone launcher, a crash loop never idles, a committed launcher state file or booted marker misleads a new container, and the SPA type check awaits an ADR-0062 decision.
 - [235](235-a-long-job-on-cloudflare-has-no-workflow-escape-hatch.md): A job that cannot chunk through claims has no form on Cloudflare; a contract-declared Workflow generated into the entry.
 - [237](237-application-object-waves-4-7-follow-ups.md): The application object's waves 4–7 follow-ups: no R2 lifecycle rule for dumps yet (needs oblaka), dump and restore edge cases, the CLI's strict parse, the deploy-time reconcile, migrate recovery, the console's modal focus.
 - [236](236-an-in-handler-upload-leaves-bytes-after-an-eviction.md): A `ctx.files.put` inside a writing handler on Cloudflare leaves its bytes in the bucket when the object is evicted before the release; an R2 intent the sweep lists.
@@ -125,4 +125,15 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [240](240-channel-prereleases-sort-below-the-release-floors.md): A channel prerelease (`0.9.0-cloudflare.<n>`) sorts below the `0.9.0-dev.5` release floors, so the Cloudflare gates deny it the alarm, segment cap, data operations and raw SQL its code has; decide before the next channel release.
 - [241](241-verify-the-cloudflare-email-adapter-on-a-live-account.md): The Cloudflare email adapter is checked live only for an accepted send; its sender, quota, account and size refusals wait for a live check.
 - [243](243-the-reader-and-classifier-fixes-of-pr-73-have-no-regression-tests.md): The vocabulary fields and the `strftime` allowance that #73 restored have no test that fails when they regress.
+- [244](244-dev-sandbox-vault-rows-outlive-what-they-protect.md): A namespace's sandbox host key and removed sandboxes' return origins outlive their owners.
+- [245](245-a-namespace-keeps-its-box-host-after-its-last-dev-environment.md): Nothing removes a namespace's `zbox` service once its last dev environment is gone.
+- [246](246-a-dev-build-cannot-be-interrupted.md): Reconcile and cancel cannot interrupt a running dev build: no sandbox key on that path, no session interrupt in the Box client.
+- [247](247-dev-sandbox-size-is-not-a-namespace-policy.md): A dev sandbox's CPU, memory and disk are constants, not namespace policy.
+- [248](248-confirm-the-ops-key-reconcile-skips-laned-runs-on-zerops.md): Confirm, with a test, that a laned dev bootstrap on Zerops never reconciles an ops key.
+- [249](249-the-challenge-hostname-reads-the-request-host.md): `@fabrika/app` issues a challenge for the request's Host, which in a dev sandbox is the Box router's.
+- [250](250-the-box-router-strips-authorization.md): The Box router strips `Authorization`; the proxy renames the header and the launcher restores it.
+- [251](251-the-launcher-runs-authored-commands-as-root.md): In a dev sandbox the launcher runs `apply_changes`' SPA commands and `run_checks` as root with the app's secrets.
+- [252](252-a-bind-can-race-the-deletion-of-its-dev-environment.md): The dev environment delete checks for sandbox rows apart from the delete; a bind between them leaves an unnamed Box sandbox.
+- [254](254-confirm-the-box-router-port-stays-private.md): Confirm live that publishing the sandbox host's API subdomain does not also publish the Box router port 8081.
+- [255](255-a-failed-inserting-bind-removes-a-joined-binds-sandbox.md): A failed `bind_dev` that inserted the sandbox row removes the sandbox of a bind that joined it.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.

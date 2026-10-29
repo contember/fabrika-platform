@@ -1,10 +1,10 @@
-import { createZeropsArtifactSourceDescriptor } from '@fabrika/provider-zerops'
+import { createZeropsArtifactSourceDescriptor, type ZeropsSourceUploadInput } from '@fabrika/provider-zerops'
 import { describe, expect, spyOn, test } from 'bun:test'
 import { controlMcpSwitch, controlServiceDigest, ControlTableError } from '../../fabrika.service'
 import type { Env } from '../env'
 import { ZEROPS_MAIL_REMEDY } from '../mail-transport'
 import { buildControlRpcDeps, buildRunDeps } from '../services'
-import { zeropsControlProvider, zeropsGitHubSources, zeropsNamespaceProcessConfig } from '../zerops/provider'
+import { isZeropsSandboxFileDestination, zeropsControlProvider, zeropsGitHubSources, zeropsNamespaceProcessConfig } from '../zerops/provider'
 import { createRuntime } from '../zerops/runtime'
 import { createHarness } from './helpers/harness'
 import { allowAllAuth } from './helpers/iam'
@@ -260,5 +260,87 @@ describe('the one MCP switch: the table the proxy publishes', () => {
 	test('the two tables have two digests', () => {
 		expect(controlMcpSwitch(controlServiceDigest({ mcp: true }))).toBe(true)
 		expect(controlMcpSwitch(controlServiceDigest({ mcp: false }))).toBe(false)
+	})
+})
+
+describe('the dev sandbox file endpoint a bearer upload may name', () => {
+	const host = 'zbox-2ec8-8080.prg1.zerops.app'
+	const endpoint = `https://${host}/api/rest/sandbox/abc123/file?path=`
+	const cases = [
+		{ name: 'encoded absolute path', url: `${endpoint}%2Fsource%2Fapp.tar.gz`, accepted: true },
+		{ name: 'literal absolute path', url: `${endpoint}/source/app.tar.gz`, accepted: true },
+		{ name: 'single-label subdomain', url: endpoint.replace(host, 'zbox.zerops.app') + '/x', accepted: true },
+		{ name: 'relative path', url: `${endpoint}source/app.tar.gz`, accepted: false },
+		{ name: 'empty path', url: endpoint, accepted: false },
+		{ name: 'no query', url: endpoint.slice(0, -6), accepted: false },
+		{ name: 'second query parameter', url: `${endpoint}/x&mode=0600`, accepted: false },
+		{ name: 'other query parameter first', url: endpoint.replace('?path=', '?mode=0600&path=') + '/x', accepted: false },
+		{ name: 'trailing ampersand', url: `${endpoint}/x&`, accepted: false },
+		{ name: 'fragment', url: `${endpoint}/x#fragment`, accepted: false },
+		{ name: 'empty fragment', url: `${endpoint}/x#`, accepted: false },
+		{ name: 'HTTP', url: endpoint.replace('https:', 'http:') + '/x', accepted: false },
+		{ name: 'uppercase protocol', url: endpoint.replace('https:', 'HTTPS:') + '/x', accepted: false },
+		{ name: 'uppercase host', url: endpoint.replace(host, host.toUpperCase()) + '/x', accepted: false },
+		{ name: 'explicit HTTPS port', url: endpoint.replace('.app/', '.app:443/') + '/x', accepted: false },
+		{ name: 'nondefault port', url: endpoint.replace('.app/', '.app:8080/') + '/x', accepted: false },
+		{ name: 'userinfo', url: endpoint.replace('https://', 'https://user:secret@') + '/x', accepted: false },
+		{ name: 'empty userinfo', url: endpoint.replace('https://', 'https://@') + '/x', accepted: false },
+		{ name: 'bare zerops.app', url: endpoint.replace(host, 'zerops.app') + '/x', accepted: false },
+		{ name: 'host suffix', url: endpoint.replace('.app/', '.app.attacker.test/') + '/x', accepted: false },
+		{ name: 'lookalike host', url: endpoint.replace(host, 'zbox.attackerzerops.app') + '/x', accepted: false },
+		{ name: 'object storage host', url: endpoint.replace(host, 'proxy.app-prg1.zerops.io') + '/x', accepted: false },
+		{ name: 'uppercase sandbox id', url: endpoint.replace('abc123', 'ABC123') + '/x', accepted: false },
+		{ name: 'empty sandbox id', url: endpoint.replace('abc123', '') + '/x', accepted: false },
+		{ name: 'overlong sandbox id', url: endpoint.replace('abc123', 'a'.repeat(33)) + '/x', accepted: false },
+		{ name: 'other sandbox operation', url: endpoint.replace('/file?', '/exec?') + '/x', accepted: false },
+		{ name: 'trailing slash', url: endpoint.replace('/file?', '/file/?') + '/x', accepted: false },
+		{ name: 'encoded path segment', url: endpoint.replace('/file?', '/%66ile?') + '/x', accepted: false },
+		{ name: 'dot segment', url: endpoint.replace('/sandbox/', '/sandbox/../sandbox/') + '/x', accepted: false },
+		{ name: 'space in path', url: `${endpoint}/source app`, accepted: false },
+		{ name: 'leading whitespace', url: ` ${endpoint}/x`, accepted: false },
+		{ name: 'malformed URL', url: 'https://[invalid?secret', accepted: false },
+		{ name: 'empty value', url: '', accepted: false },
+	]
+
+	test.each(cases)('$name is accepted only when it is a sandbox file endpoint', ({ url, accepted }) => {
+		expect(isZeropsSandboxFileDestination(url)).toBe(accepted)
+	})
+
+	test('the composed source port refuses a bearer anywhere else, and a sandbox endpoint without one', async () => {
+		let uploads = 0
+		const harness = createHarness()
+		const env: Env = {
+			DB: harness.d1,
+			REPOSITORIES: harness.repositories,
+			ASSETS: { fetch: () => Promise.resolve(new Response()) },
+			RUN_LOGS: {
+				put: () => Promise.resolve(),
+				get: () => Promise.resolve(null),
+				delete: () => Promise.resolve(),
+			},
+			DEPLOY_QUEUE: { send: () => Promise.resolve() },
+			WAIT_UNTIL: () => {},
+			ENVIRONMENT: 'prod',
+		}
+		const { port } = zeropsGitHubSources(env, {
+			uploadFetch: async () => {
+				uploads++
+				return new Response(null, { status: 200 })
+			},
+		})
+		const base: Omit<ZeropsSourceUploadInput, 'uploadUrl'> = {
+			repository: { owner: 'example', name: 'app' },
+			commitSha: 'a'.repeat(40),
+			descriptorSha256: 'b'.repeat(64),
+			archive: { kind: 'application' },
+			signal: new AbortController().signal,
+		}
+		const objectStorage = 'https://proxy.app-prg1.zerops.io/api/rest/object-storage/upload?signature=private'
+		for (const input of [{ uploadUrl: objectStorage, uploadBearer: 'bearer-private' }, { uploadUrl: `${endpoint}/private` }]) {
+			const raised = await port.upload({ ...base, ...input }).then(() => undefined, (error: unknown) => error)
+			expect(raised).toMatchObject({ code: 'upload_rejected', stage: 'upload' })
+			expect(`${String(raised)} ${JSON.stringify(raised)}`).not.toContain('private')
+		}
+		expect(uploads).toBe(0)
 	})
 })

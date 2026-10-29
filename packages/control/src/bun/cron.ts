@@ -12,7 +12,7 @@
 
 import { runBackupSchedule } from '../backups'
 import { runMaintenance } from '../cron'
-import { stopIdleDevServices } from '../dev/service'
+import { devSandboxDepsOf, maintainDevSandboxes } from '../dev/service'
 import { reconcileProviderRuns } from '../provider-reconcile'
 import { operationDeploys } from '../run-lifecycle'
 import { buildRunDeps, iamSchemaDeps, locks, operationsReleaseDeps, opsTransportDeps, platformTransportDeps, repositories } from '../services'
@@ -21,6 +21,7 @@ import type { Runtime } from './runtime'
 async function main(createRuntime: () => Runtime): Promise<void> {
 	const runtime = createRuntime()
 	const { opsTransport } = opsTransportDeps(runtime.env)
+	const sandboxes = devSandboxDepsOf(runtime.env, runtime.provider)
 	try {
 		await runMaintenance(runtime.env, {
 			// The same pass as the Worker's, for a provider that serves the data operations and a Control that holds ops keys.
@@ -44,7 +45,8 @@ async function main(createRuntime: () => Runtime): Promise<void> {
 					...platformTransportDeps(runtime.env),
 					...iamSchemaDeps(runtime.env),
 				}),
-			devIdle: () => stopIdleDevServices({ repositories: repositories(runtime.env), provider: runtime.provider }, Math.floor(Date.now() / 1000)),
+			// A provider with workspace sandboxes parks and removes them.
+			...(sandboxes === undefined ? {} : { devIdle: () => maintainDevSandboxes(sandboxes, Math.floor(Date.now() / 1000)) }),
 		})
 	} finally {
 		await runtime.shutdown()

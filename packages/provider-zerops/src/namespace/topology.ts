@@ -57,7 +57,7 @@ export const projectMarker = (namespace: ProviderDeploymentNamespace): string =>
 // Imports provision services only. The reserved upload-backed build selects the proxy setup.
 //
 // `enableSubdomainAccess` is a DECLARATION here and not a mechanism: the platform accepts it and drops it,
-// including on the service this document creates. `ensureSubdomainAccess` below is what establishes the
+// including on the service this document creates. `ensureSubdomainAccess` (`subdomain.ts`) is what establishes the
 // subdomain, after the proxy's first deploy. Written anyway because it is what ADR-0022's
 // `assertOnlyPublicService` reads to prove no other service is claimed public.
 const proxyService = (publicAccess: ZeropsNamespacePublicAccess): ZeropsServiceSpec => ({

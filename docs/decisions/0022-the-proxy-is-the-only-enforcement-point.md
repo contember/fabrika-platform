@@ -107,6 +107,16 @@ ordinary request calls IAM only on the cold path; the warm path verifies a cache
 membership-management request is the exception: it obtains a fresh single-use delegation grant from IAM
 even when the token cache is warm (rule 6).
 
+**One other address of a namespace is public: the API of its dev sandbox host.** A namespace with a `dev` environment
+runs a Zerops Box Workspace, `zbox`, with one sandbox per MCP workspace
+([ADR-0049](0049-author-applications-through-mcp-in-control.md) rule 10). Control lives in another project, which shares
+no private network with the namespace, so it calls the Box API (port 8080) over the service's public `.zerops.app`
+subdomain. That API is not application ingress: it is a platform-internal administration API that authenticates every
+request itself, with a key Control generates and keeps in its vault, and it serves no application route. Provisioning
+refuses a host whose API answers a request without the key with anything but 401. A request to an application in a
+sandbox still enters only through the namespace proxy, which reaches the Box router on `zbox:8081`; a sandbox's
+application port has `PROJECT` access, which the router serves only to a request from inside the project.
+
 **Invariant: the proxy holds no state that a decision depends on.** Its token cache is best-effort,
 in memory and per process. Without it IAM is called more often; no decision changes. Never make it
 shared or persistent.
@@ -237,8 +247,9 @@ Besides its entries a manifest carries one presentation field, `brand`, the inst
 ([ADR-0066](0066-the-installation-shows-its-clients-logo.md)). No decision reads it; only the proxy's pages draw it.
 
 **Application tables.** The manifest carries `{ id, hosts, upstream, scheme, endpoints,
-reservedPrefixes, snapshot, csp, operationsOrigin?, crossOrigins? }` per application; `snapshot` is the contract
-digest, `csp` the contract's named origins and `crossOrigins` the environment's. Each endpoint row is `{ id, kind,
+reservedPrefixes, snapshot, csp, operationsOrigin?, crossOrigins?, audience?, upstreamHost? }` per application;
+`snapshot` is the contract digest, `csp` the contract's named origins and `crossOrigins` the environment's.
+`audience` and `upstreamHost` are a dev sandbox entry's (below). Each endpoint row is `{ id, kind,
 method, path, callers, requirement, admission, delegation, crossOrigin?, response?, cache?, authorization?, digest }`,
 and the manifest parser refuses a row whose digest does not describe its rules. `response`, `cache` and
 `authorization` are absent unless declared, so every other row keeps its digest. Array order has no meaning. The proxy makes one pass over one selected
@@ -423,6 +434,18 @@ that consumer, remove an imported procedure, accept less input, change an output
 procedure, a new optional input field and a new version are compatible; an output may not gain a field, because a
 consumer parses every answer strictly.
 
+**Dev sandbox entries.** Each workspace sandbox of a `dev` environment is an application table of its own, with the
+id `dev:<app>:<workspace>` and the host `<workspace>.<domain>`. Its `audience` is the environment's IAM application id,
+`<app>@<env>`, which all sandboxes of the environment share. Wherever the proxy hands an application id to IAM or to the
+token verifier (mint, key exchange, redemption, delegation, the login and sign-out URLs), it hands `audienceOf(entry)`:
+the `audience`, or else the id. Routing, the pin of an entry in Caddy, the token cache, logs and the proxy secret stay
+keyed by the entry id. Only an entry whose id parses as `dev:<app>:<workspace>` may carry `audience`, and it must, with
+an `<app>@<env>` of the same `<app>`; the parser refuses any other. `upstreamHost` replaces the `Host` the proxy sends
+upstream: the Box router routes a sandbox's port by `Host` (`3000-<sandbox>.sandbox.fabrika.internal`), and its upstream
+is the router, `zbox:8081`. An older proxy's strict parser refuses both fields, so on Zerops they reach only a namespace
+proxy whose pinned source declares `FABRIKA_PROXY_MANIFEST_SANDBOXES`, as `brand` reaches only one that declares
+`FABRIKA_PROXY_MANIFEST_BRAND`.
+
 **Installation entries.** An endpoint table that protects one of the installation's own services (IAM,
 Control, Operations) is a manifest entry `{ id, hosts, upstream, scheme, installation: true, endpoints, reservedPrefixes,
 oauthResources? }`. The marker comes from trusted platform composition — the installation's platform
@@ -519,7 +542,9 @@ IAM authenticates the human, issues a single-use code bound to `(session, app, r
 redirects to `/__fabrika/auth/callback` on the app's own host. The proxy answers that path before it
 selects an endpoint, redeems the code with IAM, sets the returned **child app session** as a host-only
 cookie and redirects to the stored return URL. [ADR-0023](0023-one-session-per-host.md) makes this the
-only session-delivery mechanism and binds each code to the browser that started the login.
+only session-delivery mechanism and binds each code to the browser that started the login. IAM binds the code to the
+application id, which the sandboxes of one `dev` environment share, so the proxy also redeems a code only on the host its
+return URL names, and only when that host is one of the entry's.
 
 Redemption yields a session, not an access token. An access token lives five minutes. A browser that
 held only that would be redirected on every expiry, and a redirect turns an in-flight `POST` into a
@@ -588,7 +613,8 @@ Work unit B3 built the hop. `FABRIKA_HOP_HEADERS` in `@fabrika/auth-core` is the
 travels as `X-Fabrika-Proxy-Secret`. Control seals it in its vault the first time an environment
 joins a namespace proxy, or is deployed by a provider that declares `applicationHopSecret` (Cloudflare), and never
 rotates it on its own. The proxy service holds one variable per
-application, `proxySecretVariable('<app>@<env>')`, because one proxy fronts a whole namespace; the
+application, `proxySecretVariable('<app>@<env>')`, because one proxy fronts a whole namespace (a dev sandbox entry's
+secret is generated per workspace and held under `proxySecretVariable('dev:<app>:<workspace>')`); the
 application holds `FABRIKA_PROXY_SECRET` and compares digests in constant time. The Bun adapter refuses to
 start without it, and so does the Cloudflare object. No authored variable may reference a framework-only variable, so the secret cannot be
 copied into one the application controls, and Control redacts it from run logs. A health
@@ -643,7 +669,8 @@ still refuses any `Authorization` header, as authorization.
 
 - **The IAM application id carries the environment:** `<app>@<env>`, for example `notes@prod`. `@` is
   reserved in application ids. One helper in `@fabrika/auth-core` builds and parses the id. The proxy
-  mints for that id, and Control registers schemas, return origins and keys under it. A staging key is
+  mints for that id, and Control registers schemas, return origins and keys under it. A dev sandbox entry mints for
+  its `audience`, so every workspace sandbox of a `dev` environment is that one id. A staging key is
   therefore refused at production.
 - **An application token carries only grants of that application id.** Cross-application grants and
   the bootstrap `admin` grant reach only a registry of platform audiences, separate from
@@ -829,6 +856,22 @@ nothing. The surface serves no `requestDelegation`: only the proxy obtains a gra
   refuses once exhausted, exactly as the balancer's address does today, because Zerops installations configure no
   trusted balancer range; if the proxy build fails, the state lasts until the next successful deploy. Once the proxy
   is deployed the headers count again. A rollback of IAM ignores the variable.
+- **The visitor's token reaches agent-authored code in a dev sandbox.** The proxy injects the verified token of whoever
+  opens a workspace's URL, and the code in that sandbox is an unreviewed workspace head. We accept this for a `dev`
+  environment: it is never production, and the token carries only that person's grants at `<app>@<env>`.
+- **The sandboxes of a `dev` environment share one audience.** A token minted at one workspace's host verifies at every
+  other's, and IAM issues and redeems per audience. A token carries no more than its person's grants in that one
+  environment, so this opens nothing the person did not hold. What binds a request to one sandbox is the proxy's routing
+  by host and the per-sandbox proxy secret, held under the entry id, not the audience; and a handoff is redeemed only
+  on the host it returns to.
+- **The Box router strips `Authorization`.** In a dev sandbox the application never sees the header: a key caller's
+  request looks like a session's, so it fails a non-`GET` admission, and a webhook verified by a bearer or basic
+  credential fails. Accepted for a `dev` environment for now. **Rollout:** nothing changes for an existing manifest:
+  only a dev sandbox entry carries `audience` or `upstreamHost`, and Control hands one only to a namespace whose pinned
+  proxy declares `FABRIKA_PROXY_MANIFEST_SANDBOXES`. `platform upgrade` regenerates the proxy setup with the marker; a
+  namespace keeps its pin until `fabrika control namespaces update --proxy-source=current`, and until then a namespace
+  job that would publish a sandbox entry, a dev bootstrap's republish included, refuses before any platform write and
+  names that remedy.
 - **The least-privilege split around redemption is real only on Zerops**, where `/rpc/*` takes
   `FABRIKA_IAM_RPC_KEY`, `/auth/mint/*` takes `FABRIKA_IAM_PROXY_KEY`, an unset key makes its surface
   404, and an application's own membership transport key reaches only `/membership/*`. On Cloudflare an application's proxy and application Workers bind one IAM `WorkerEntrypoint`,

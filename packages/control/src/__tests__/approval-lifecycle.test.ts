@@ -1607,25 +1607,4 @@ describe('a dev environment', () => {
 		await seedDev(w)
 		expect(await status(setEnvironmentProtectionUseCase(approvals(w, auth()), { appId: 'notes', env: 'dev', protected: true }))).toBe(409)
 	})
-
-	test('a framework release without the dev launcher fails the run and publishes nothing', async () => {
-		const w = world()
-		await seedDev(w)
-		w.files['bun.lock'] = frameworkLockfile('0.8.1')
-		const quiet = spyOn(console, 'error').mockImplementation(() => {})
-		try {
-			const result = await executeDeploy({ ...deps(w), controlOrigin: 'https://control.example.test' }, { runId: await createdRun(w, 'dev') })
-			expect(result.status).toBe('failed')
-		} finally {
-			quiet.mockRestore()
-		}
-		expect(w.deploys).toEqual([])
-		const log = [...w.logs.values()].join('\n')
-		expect(log).toContain(
-			'access: a dev environment starts the dev launcher of @fabrika/app 0.9.0 or newer, and the application pins 0.8.1',
-		)
-		expect(log).not.toContain('access: published')
-		expect((await w.db.registry.getAppEnv('notes', 'dev'))?.generation).toBe(0)
-		expect(await w.db.platformTransportKeys.listForAppEnv('notes', 'dev')).toEqual([])
-	})
 })

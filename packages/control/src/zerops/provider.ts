@@ -84,6 +84,7 @@ export function zeropsGitHubSources(env: Env, seams: GitHubSourceSeams = {}): { 
 		credentials: vaultGitHubCredentials(env, { createClient: gitHubAppClientFactory(seams.githubAppFetch) }),
 		descriptor: { path: 'zerops.yaml', maxBytes: ZEROPS_SOURCE_DESCRIPTOR_MAX_BYTES },
 		isUploadDestination: isZeropsUploadDestination,
+		isSandboxUploadDestination: isZeropsSandboxFileDestination,
 		...(seams.metadataFetch === undefined ? {} : { metadataFetch: seams.metadataFetch }),
 		...(seams.downloadFetch === undefined ? {} : { downloadFetch: seams.downloadFetch }),
 		...(seams.uploadFetch === undefined ? {} : { uploadFetch: seams.uploadFetch }),
@@ -95,6 +96,35 @@ export function zeropsGitHubSources(env: Env, seams: GitHubSourceSeams = {}): { 
 		},
 		commits: source.commits,
 	}
+}
+
+const SANDBOX_FILE_PATH = /^\/api\/rest\/sandbox\/[a-z0-9]{1,32}\/file$/
+const ZEROPS_APP_SUBDOMAIN = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+zerops\.app$/
+const SANDBOX_FILE_QUERY = /^\?path=[^&#]+$/
+
+/**
+ * A dev sandbox's file endpoint on the sandbox host's public `.zerops.app` subdomain, the one place a source upload's bearer
+ * may go: `https://<host>/api/rest/sandbox/<id>/file?path=<absolute path>`, written exactly as the URL parser would.
+ */
+export const isZeropsSandboxFileDestination = (value: string): boolean => {
+	let url: URL
+	try {
+		url = new URL(value)
+	} catch {
+		return false
+	}
+	// The parser rewrites case, a default port, empty userinfo, dot segments and whitespace; any such form is refused.
+	if (url.href !== value || value.includes('#')) return false
+	const path = url.searchParams.get('path')
+	return url.protocol === 'https:'
+		&& ZEROPS_APP_SUBDOMAIN.test(url.hostname)
+		&& url.username === ''
+		&& url.password === ''
+		&& url.port === ''
+		&& SANDBOX_FILE_PATH.test(url.pathname)
+		&& SANDBOX_FILE_QUERY.test(url.search)
+		&& path !== null
+		&& path.startsWith('/')
 }
 
 async function providerRateLimit<T>(operation: () => Promise<T>): Promise<T> {

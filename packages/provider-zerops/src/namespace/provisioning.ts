@@ -6,61 +6,25 @@ import {
 	type ProviderNamespaceRepublishInput,
 	type ProviderNamespaceRepublishResult,
 } from '@fabrika/provider-contract'
-import {
-	enableSubdomainAccessWhenHttp,
-	readableContent,
-	waitForProcess,
-	ZEROPS_SERVICE_NOT_HTTP,
-	ZEROPS_TERMINAL,
-	ZeropsApiError,
-	type ZeropsProject,
-	type ZeropsService,
-} from '../api'
+import { waitForProcess, ZEROPS_TERMINAL, type ZeropsProject, type ZeropsService } from '../api'
 import { defaultSleep } from '../collaborators'
+import { SANDBOX_HOST_HOSTNAME } from '../sandbox-host'
 import { claimedResources, namespaceResourceClaims, projectExists, registrationResourceClaims, ZEROPS_PROJECT_NOT_FOUND } from './claims'
 import { checkpoint, decodeEnvelope, normalizedNamespace, normalizeTarget } from './codec'
-import { ZEROPS_NAMESPACE_POSTGRES_HOSTNAME, ZEROPS_NAMESPACE_PROXY_HOSTNAME, ZEROPS_NAMESPACE_SUBDOMAIN_VARIABLE } from './constants'
-import { asNamespaceError, namespaceError, ZEROPS_NAMESPACE_CANCELLED, ZEROPS_SUBDOMAIN_NOT_PUBLISHED } from './errors'
+import { ZEROPS_NAMESPACE_POSTGRES_HOSTNAME, ZEROPS_NAMESPACE_PROXY_HOSTNAME } from './constants'
+import { asNamespaceError, namespaceError } from './errors'
 import { compileNamespaceProxyManifest } from './manifest'
 import { createZeropsNamespaceOperator } from './operator'
 import { republishProxy } from './proxy-attempt'
+import { assertNamespaceProxyAcceptsSandboxes } from './proxy-reads'
 import { namespaceProxySecrets } from './proxy-secrets'
 import { verifyZeropsNamespaceProxySource } from './proxy-source'
+import { assertSandboxHostAllowed, ensureSandboxHost } from './sandbox-host'
+import { ensureSubdomainAccess, readSubdomainHosts } from './subdomain'
 import { compileZeropsNamespaceTopology, projectMarker, PROXY_TYPE } from './topology'
-import type { NormalizedZeropsNamespaceTarget, ZeropsNamespaceOptions, ZeropsNamespaceProxySource } from './types'
+import type { NormalizedZeropsNamespaceTarget, ZeropsNamespaceOptions, ZeropsNamespaceProxySource, ZeropsNamespaceSandboxHost } from './types'
 import { createZeropsNamespaceUpdates } from './update'
 import { validateService } from './validation'
-
-const POLL_INTERVAL_MS = 3000
-
-/** The live enable finishes in under a second, but one run still read `false` once before flipping; ten reads is slack. */
-const SUBDOMAIN_READBACK_ATTEMPTS = 10
-
-/**
- * One host per published HTTP port, out of the newline-separated URLs the platform writes.
- *
- * The form is `<hostname>-<hash>-<port>.<region>.zerops.app` (e.g. `proxy-2ec8-8080`). Read as URLs
- * rather than split on `-`, so a hostname whose own first label ends in digits cannot be misread; a line
- * that is not a URL, or whose first label carries no trailing port — the single portless line a proxy
- * that has never deployed publishes — is skipped rather than guessed at.
- */
-const parseZeropsProxyHosts = (value: string): ProviderNamespaceHost[] => {
-	const hosts: ProviderNamespaceHost[] = []
-	for (const line of value.split('\n')) {
-		const trimmed = line.trim()
-		if (trimmed === '') continue
-		let hostname: string
-		try {
-			hostname = new URL(trimmed).hostname
-		} catch {
-			continue
-		}
-		const port = /-(\d+)$/.exec(hostname.split('.')[0] ?? '')?.[1]
-		if (port === undefined) continue
-		hosts.push({ host: hostname, port: Number.parseInt(port, 10) })
-	}
-	return hosts.sort((left, right) => left.port - right.port)
-}
 
 const validateProject = (
 	namespace: ProviderDeploymentNamespace,
@@ -168,6 +132,7 @@ const resolveServices = async (
 		const reserved = new Set([
 			ZEROPS_NAMESPACE_PROXY_HOSTNAME,
 			...(target.postgres === undefined ? [] : [ZEROPS_NAMESPACE_POSTGRES_HOSTNAME]),
+			...(target.sandboxHost === undefined ? [] : [SANDBOX_HOST_HOSTNAME]),
 		])
 		const unexpected = services.filter((service) => !reserved.has(service.name))
 		if (unexpected.length > 0) {
@@ -195,9 +160,7 @@ const readProxyHosts = async (
 		throw new Error('Zerops namespace has no proxy service id')
 	}
 	try {
-		const variables = await options.api.listServiceEnv({ serviceId: proxyServiceId, signal })
-		const subdomains = readableContent(variables.find((variable) => variable.key === ZEROPS_NAMESPACE_SUBDOMAIN_VARIABLE))
-		return subdomains === undefined ? [] : parseZeropsProxyHosts(subdomains)
+		return await readSubdomainHosts(options.api, proxyServiceId, signal)
 	} catch {
 		// A host listing is a convenience; the proxy is already built, deployed and published. Failing the
 		// namespace over it would report a placement that WORKS as broken. Never the cause: it can carry
@@ -256,6 +219,37 @@ const deployProxy = async (
 	return { namespace: currentNamespace, target: { ...target, ...result } }
 }
 
+/**
+ * Refused before any platform write: an older pin's strict parser would fail the build on a sandbox entry, and a sandbox
+ * host on such a pin could serve nothing. Never dropped silently.
+ */
+const assertSandboxesAccepted = (input: ProviderNamespaceMutationInput, namespaceId: string, target: NormalizedZeropsNamespaceTarget): void => {
+	if (input.sandboxKey === undefined && !input.members.some((member) => (member.devSandboxes?.length ?? 0) > 0)) return
+	assertNamespaceProxyAcceptsSandboxes(namespaceId, target.proxySource)
+}
+
+const sandboxHost = async (
+	input: ProviderNamespaceMutationInput,
+	sandboxKey: string,
+	namespace: ProviderDeploymentNamespace,
+	target: NormalizedZeropsNamespaceTarget,
+	options: ZeropsNamespaceOptions,
+): Promise<ZeropsNamespaceSandboxHost> => {
+	try {
+		return await ensureSandboxHost({
+			namespaceId: namespace.id,
+			target,
+			sandboxKey,
+			api: options.api,
+			...(options.zboxFetch === undefined ? {} : { zboxFetch: options.zboxFetch }),
+			...(options.sleep === undefined ? {} : { sleep: options.sleep }),
+			signal: input.signal,
+		})
+	} catch (cause) {
+		throw asNamespaceError(cause, 'reconcile')
+	}
+}
+
 /** Rebuild a ready namespace's proxy from its current members; provisioning stays with `provision`/`reconcile`. */
 const republishNamespace = async (
 	input: ProviderNamespaceRepublishInput,
@@ -266,70 +260,15 @@ const republishNamespace = async (
 	if (target.proxyServiceId === undefined || (target.proxyBuild === undefined && !target.ready)) {
 		throw new Error(`Namespace ${namespace.id} is not ready`)
 	}
-	const deployed = await deployProxy(input, namespace, target, options, input.wait, true)
+	assertSandboxesAccepted(input, namespace.id, target)
+	let current = namespace
+	let ready = target
+	if (input.sandboxKey !== undefined && target.sandboxHost === undefined) {
+		ready = { ...target, sandboxHost: await sandboxHost(input, input.sandboxKey, namespace, target, options) }
+		current = await checkpoint(input, namespace, ready)
+	}
+	const deployed = await deployProxy(input, current, ready, options, input.wait, true)
 	return { namespace: deployed.namespace, settled: deployed.target.proxyBuild === undefined && deployed.target.ready }
-}
-
-/**
- * Publish the proxy on its `*.zerops.app` subdomain — the ONE thing the import document cannot do.
- *
- * `enableSubdomainAccess: true` is accepted by the import and then silently dropped, on a service the
- * document CREATES as much as on one `override` leaves alone; a service imported with it reads back
- * `subdomainAccess: false` for ever. The subdomain is established by
- * `PUT /service-stack/{id}/enable-subdomain-access` and by nothing else, and that call needs a DEPLOYED
- * HTTP port — which is why this runs after `deployProxy` rather than beside the import.
- *
- * It runs on RECONCILE too, so a subdomain someone turned off in the GUI comes back. What it must never
- * do is finish quietly: `zerops-subdomain` is the only public entry a namespace has, so this either
- * observes `subdomainAccess === true` or throws naming what is missing.
- *
- * The decision is the READ-BACK, never the call returning. On an already-published service the platform
- * answers 2xx and then fails the process it handed back — live-verified — so a 2xx proves nothing.
- *
- * The HTTP ports lag the proxy's ACTIVE version, so `serviceStackIsNotHttp` is retried for a bounded
- * window (`enableSubdomainAccessWhenHttp`) before it fails the namespace.
- */
-const ensureSubdomainAccess = async (
-	target: NormalizedZeropsNamespaceTarget,
-	options: ZeropsNamespaceOptions,
-	signal: AbortSignal,
-): Promise<void> => {
-	const proxyServiceId = target.proxyServiceId
-	if (proxyServiceId === undefined) {
-		throw new Error('Zerops namespace has no proxy service id')
-	}
-	const published = async (): Promise<boolean> => (await options.api.getService({ serviceId: proxyServiceId, signal })).subdomainAccess === true
-	if (await published()) {
-		return
-	}
-	try {
-		await enableSubdomainAccessWhenHttp({ api: options.api, serviceId: proxyServiceId, sleep: options.sleep ?? defaultSleep, signal })
-	} catch (error) {
-		if (error instanceof ZeropsApiError && error.code === ZEROPS_SERVICE_NOT_HTTP) {
-			throw namespaceError(
-				ZEROPS_SERVICE_NOT_HTTP,
-				`Zerops namespace proxy ${proxyServiceId} cannot be published on a zerops.app subdomain: it still exposes no deployed HTTP port (${ZEROPS_SERVICE_NOT_HTTP}) minutes after its deploy`,
-				false,
-			)
-		}
-		throw error
-	}
-	for (let attempt = 0;; attempt += 1) {
-		if (signal.aborted) {
-			throw namespaceError(ZEROPS_NAMESPACE_CANCELLED, 'Zerops namespace provisioning was cancelled', true)
-		}
-		if (await published()) {
-			return
-		}
-		if (attempt >= SUBDOMAIN_READBACK_ATTEMPTS) {
-			throw namespaceError(
-				ZEROPS_SUBDOMAIN_NOT_PUBLISHED,
-				`Zerops namespace proxy ${proxyServiceId} accepted enable-subdomain-access but still reads subdomainAccess: false — the namespace has no public entry point`,
-				true,
-			)
-		}
-		await (options.sleep ?? defaultSleep)(POLL_INTERVAL_MS, signal)
-	}
 }
 
 /** Every exit from the lifecycle below is a `ProviderNamespaceError`, so a caller never has to guess. */
@@ -359,6 +298,8 @@ const runNamespaceMutation = async (
 		throw new Error('Proxy build is missing checkpointed project or service identity')
 	}
 	await verifyZeropsNamespaceProxySource(target.proxySource)
+	assertSandboxesAccepted(input, namespace.id, target)
+	if (input.sandboxKey !== undefined) assertSandboxHostAllowed(namespace.id, target)
 	input.signal.throwIfAborted()
 	if (target.proxyBuild === undefined && target.proxyDeployment !== undefined) {
 		try {
@@ -458,7 +399,16 @@ const runNamespaceMutation = async (
 	// After the deploy, because the platform refuses a service with no HTTP port — and never before `ready`
 	// is checkpointed, because a namespace with no public entry point is not ready.
 	if (target.publicAccess === 'zerops-subdomain') {
-		await ensureSubdomainAccess(target, options, input.signal)
+		const proxyServiceId = target.proxyServiceId
+		if (proxyServiceId === undefined) throw new Error('Zerops namespace has no proxy service id')
+		await ensureSubdomainAccess({
+			api: options.api,
+			serviceId: proxyServiceId,
+			label: 'Zerops namespace proxy',
+			consequence: 'the namespace has no public entry point',
+			...(options.sleep === undefined ? {} : { sleep: options.sleep }),
+			signal: input.signal,
+		})
 	}
 	const proxyHosts = target.publicAccess === 'zerops-subdomain' ? await readProxyHosts(namespace, target, options, input.signal) : []
 	target = {
@@ -469,7 +419,13 @@ const runNamespaceMutation = async (
 		proxyHosts: proxyHosts.length === 0 ? undefined : proxyHosts,
 		ready: true,
 	}
-	return checkpoint(input, namespace, target)
+	namespace = await checkpoint(input, namespace, target)
+	// After the proxy converged and `ready` is recorded, so a sandbox host failure never holds back the namespace's proxy.
+	if (input.sandboxKey !== undefined) {
+		target = { ...target, sandboxHost: await sandboxHost(input, input.sandboxKey, namespace, target, options) }
+		namespace = await checkpoint(input, namespace, target)
+	}
+	return namespace
 }
 
 /** Build the provider-owned namespace lifecycle capability. */

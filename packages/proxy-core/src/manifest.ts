@@ -63,6 +63,15 @@ export interface ContractProxyApp extends ProxyAppBase {
 	 * endpoints"), from Control's registry, never from the contract; absent when it lists none.
 	 */
 	crossOrigins?: string[]
+	/** The IAM app id `<app>@<env>` a dev sandbox entry (`dev:<app>:<workspace>`) mints for; absent on every other entry. */
+	audience?: string
+	/** The `Host` the proxy sends upstream in place of the client's; absent, the client's passes. */
+	upstreamHost?: string
+}
+
+/** The IAM app id an entry's tokens are minted for and verified against: its `audience`, or else its id. */
+export function audienceOf(entry: Pick<ContractProxyApp, 'id' | 'audience'>): string {
+	return entry.audience ?? entry.id
 }
 
 /**
@@ -173,6 +182,48 @@ const HOST_LABEL = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/
 /** Literal LDH hostnames only: Caddy reads wildcard labels and placeholders as routing patterns. */
 export function isProxyHost(host: string): boolean {
 	return host.length > 0 && host.length <= 253 && host.split('.').every((label) => label.length <= 63 && HOST_LABEL.test(label))
+}
+
+const DEV_SANDBOX_ID_PREFIX = 'dev'
+/** The contract's application id rule (`CONTRACT_APP_ID_PATTERN` of `@fabrika/app`), which this module cannot import. */
+const DEV_SANDBOX_APP_ID = /^[a-z0-9][a-z0-9-]*$/
+const DEV_SANDBOX_WORKSPACE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+
+export interface DevSandboxEntryId {
+	readonly appId: string
+	readonly workspaceId: string
+}
+
+/** The entry id of one workspace's dev sandbox, `dev:<appId>:<workspaceId>`. Throws on a part that would not parse back. */
+export function devSandboxEntryId(appId: string, workspaceId: string): string {
+	const id = `${DEV_SANDBOX_ID_PREFIX}:${appId}:${workspaceId}`
+	if (parseDevSandboxEntryId(id) === null) throw new Error('a dev sandbox entry id needs a contract application id and a workspace UUID')
+	return id
+}
+
+/** The parts of `dev:<appId>:<workspaceId>`, or null for any other string. */
+export function parseDevSandboxEntryId(id: string): DevSandboxEntryId | null {
+	const parts = id.split(':')
+	if (parts.length !== 3) return null
+	const [prefix = '', appId = '', workspaceId = ''] = parts
+	return prefix === DEV_SANDBOX_ID_PREFIX && DEV_SANDBOX_APP_ID.test(appId) && DEV_SANDBOX_WORKSPACE_ID.test(workspaceId)
+		? { appId, workspaceId }
+		: null
+}
+
+/**
+ * A dev sandbox entry names its application's audience, and only it does: the id itself is no IAM app id. An `@` id is
+ * already its own audience, and a plain id is a platform audience.
+ */
+function checkAudience(app: Pick<ContractProxyApp, 'id' | 'audience'>, ctx: z.RefinementCtx): void {
+	const sandbox = parseDevSandboxEntryId(app.id)
+	if (sandbox === null) {
+		if (app.audience !== undefined) ctx.addIssue({ code: 'custom', path: ['audience'], message: 'only a dev sandbox entry names an audience' })
+		return
+	}
+	if (app.audience === undefined || parseAppEnvironmentId(app.audience)?.app !== sandbox.appId) {
+		ctx.addIssue({ code: 'custom', path: ['audience'], message: "a dev sandbox entry's audience is its application's environment" })
+	}
 }
 
 /** An id that holds `@` must be a whole `<app>@<env>`; a malformed one would mint for an app IAM never registered. */
@@ -348,7 +399,10 @@ export const contractProxyAppSchema = z.object({
 	csp: cspOriginsSchema,
 	operationsOrigin: z.string().refine((value) => isPolicyOrigin(value, ['https:', 'http:'])).optional(),
 	crossOrigins: z.array(z.string().refine(isCrossOrigin)).nonempty().max(MAX_CROSS_ORIGINS).optional(),
+	audience: z.string().refine((value) => parseAppEnvironmentId(value) !== null).optional(),
+	upstreamHost: z.string().refine(isProxyHost).optional(),
 }).strict().superRefine((app, ctx) => {
+	checkAudience(app, ctx)
 	checkCrossOrigins(app, ctx)
 	// Only the ops row lies under the ops prefix: another row there would be an application route at a platform path.
 	if (app.endpoints.some((row) => row.path.startsWith(OPS_PREFIX) && row.kind !== 'protocol')) {
@@ -494,6 +548,9 @@ export interface ContractEntryPlacement {
 	readonly operationsOrigin?: string
 	/** The environment's list from Control's registry; an empty one is omitted. */
 	readonly crossOrigins?: readonly string[]
+	/** A dev sandbox entry's `<app>@<env>`; see `ContractProxyApp.audience`. */
+	readonly audience?: string
+	readonly upstreamHost?: string
 }
 
 /**
@@ -517,7 +574,7 @@ export type OlderProxyReaders = readonly [OlderProxyReader, ...OlderProxyReader[
  * would refuse it, naming the fields and never their values, because an origin with userinfo may carry a key.
  */
 export function contractProxyEntry(placement: ContractEntryPlacement): ContractProxyApp {
-	const { table, operationsOrigin, crossOrigins = [] } = placement
+	const { table, operationsOrigin, crossOrigins = [], audience, upstreamHost } = placement
 	const entry: ContractProxyApp = {
 		id: placement.id,
 		hosts: [...placement.hosts],
@@ -529,6 +586,8 @@ export function contractProxyEntry(placement: ContractEntryPlacement): ContractP
 		csp: table.csp,
 		...(operationsOrigin === undefined ? {} : { operationsOrigin }),
 		...(crossOrigins.length === 0 ? {} : { crossOrigins: [...crossOrigins] }),
+		...(audience === undefined ? {} : { audience }),
+		...(upstreamHost === undefined ? {} : { upstreamHost }),
 	}
 	const parsed = contractProxyAppSchema.safeParse(entry)
 	if (!parsed.success) {

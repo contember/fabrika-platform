@@ -89,7 +89,7 @@ for (const backend of backends) {
 				await registerEnvironment(repositories, 'notes', 'prod')
 				const keys = repositories.platformTransportKeys
 				await keys.insert(keyRow('k1', 'hash-1', T0 + 100, T0))
-				expect(await keys.findValidByHash('hash-1', T0 + 99)).toEqual(keyRow('k1', 'hash-1', T0 + 100, T0))
+				expect(await keys.findValidByHash('hash-1', T0 + 99)).toEqual({ ...keyRow('k1', 'hash-1', T0 + 100, T0), workspace_id: null })
 				expect(await keys.findValidByHash('hash-1', T0 + 100)).toBeNull()
 				expect(await keys.findValidByHash('hash-2', T0)).toBeNull()
 			})

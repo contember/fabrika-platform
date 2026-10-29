@@ -53,6 +53,17 @@ lifecycle stay in `CLAUDE.md`.
   or its app writes the `protected` flag and the counters there, `generation` advanced, in the delete's own batch;
   inserting an environment seeds all three from it. Recreation therefore never resets the publication
   compare-and-swap. Never add an `ON DELETE CASCADE` or a delete of it.
+- **`dev_sandboxes` cascades from `app_envs`, so the registry never lets the cascade run.** A cascaded row would drop
+  the only record of a Box sandbox and of its proxy secret's vault row, so `apps.environments.delete` and `apps.delete`
+  refuse a `dev` environment that still has a row (`assertNoDevSandboxes`). Its `workspace_id` references `workspaces`
+  with no action, and the workspaces cascade from their own (authoring) environment, so the same check refuses deleting
+  that environment while a workspace of it has a row. `0027_drop_dev_environments.sql` dropped the one-service
+  `dev_environments` table it replaced. `create_attempt` (`0029_dev_sandbox_create_attempt.sql`) names the bind that
+  inserted a `creating` row; a later bind's conflict keeps it, so a failed create removes only the row its own bind made.
+- **A workspace's `source` key goes with its workspace** (`platform_transport_keys.workspace_id`, `ON DELETE CASCADE`
+  since `0028_workspace_key_cascade.sql`, which rebuilds the table on SQLite). Such a key is recorded only while the
+  workspace has a sandbox row that is not `removing` (`PlatformTransportKeyRepository.insert`), because the removal
+  revokes the keys it finds after its mark.
 - **Every write of an environment takes its coordinate lock first** (`src/db/coordinate-lock.ts`): it ensures the
   `app_env_protection` row (`INSERT … ON CONFLICT DO NOTHING`), locks it (`UPDATE … SET generation = generation`,
   the portable row lock), and only then reads the tombstone or `app_envs`. That covers registry put, delete and

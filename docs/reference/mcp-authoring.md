@@ -41,13 +41,13 @@ commit that names the expected head; a stale head fails and the client re-reads.
 | `apply_changes`       | Commit writes, deletions and exact replacements against a head.     |
 | `deploy_stage`        | Start an ordinary run for the workspace head in the stage env.      |
 | `get_deployment`      | The run's state, a log window, approval link, `deviations`.         |
-| `delete_workspace`    | Abandon a workspace: delete its branch and stop listing it.         |
+| `delete_workspace`    | Abandon a workspace: delete its branch and sandbox, stop listing.   |
 | `create_pull_request` | Open a pull request from the workspace to the default branch.       |
 | `get_app_rules`       | The application rules or one topic, read-only, with a pin warning.  |
-| `bind_dev`            | Bind the workspace to the app's dev environment; bootstrap if due.  |
-| `get_dev_status`      | The dev environment's state, served head, checks and a log window.  |
-| `run_checks`          | Run tests, `tsc` and `fabrika-check` in the dev container; report.  |
-| `reset_dev`           | Drop the dev schema and roles, and migrate from scratch.            |
+| `bind_dev`            | Create or wake the workspace's dev sandbox; bootstrap if due.       |
+| `get_dev_status`      | The dev sandbox's state, URL, served head, checks and a log window. |
+| `run_checks`          | Run tests, `tsc` and `fabrika-check` in the dev sandbox; report.    |
+| `reset_dev`           | Drop the sandbox's schema and roles, and migrate from scratch.      |
 
 Every tool carries MCP tool annotations. A tool that only reads has `readOnlyHint: true`, so a client such as ChatGPT
 does not ask the user to confirm it. A writing tool states `destructiveHint` (it can overwrite or delete files, or replace
@@ -74,16 +74,16 @@ narrows which files carry one, and `incomplete` names the files left without a p
 The authoring environment shows one workspace at a time. `list_targets` answers what it runs now as `deployed`: the last
 successful run, the workspace whose branch it deployed (null for another branch), and whether that workspace is the
 caller's. A workspace says the same as `onStage`. Each target names its `kind` (a stage environment is `standard`) and,
-in `dev`, its application's dev environment when it has one the caller may read: its state, summary, URL, served head
-and bound workspace.
+in `dev`, its application's dev environment when it has one the caller may read: the state, summary, URL and served head
+of the caller's most recently active workspace sandbox there.
 
 `get_workspace` and `list_workspaces` name the pull request that `create_pull_request` opened or found, as Control
 recorded it; a pull request opened on GitHub by hand is not shown, and the record does not follow a merge or a close.
 `list_workspaces` reads every listed workspace's head through one GitHub token per repository.
 
 `delete_workspace` needs `source.workspace.write` and works on the caller's own workspace only. It deletes the branch
-first, which closes an open pull request from it on GitHub, and then marks the workspace abandoned: no list shows it and
-every other tool answers `410`. A failed delete leaves the workspace as it was, and a repeated call is harmless. The
+first, which closes an open pull request from it on GitHub, removes the workspace's dev sandbox, and then marks the
+workspace abandoned: no list shows it and every other tool answers `410`. A failed delete leaves the workspace as it was, and a repeated call is harmless. The
 stage environment keeps running what it last deployed; the runs of the branch stay readable.
 
 `deploy_stage` answers the run with its id as `runId` too, the name `get_deployment` takes. `get_deployment` says whether
@@ -109,40 +109,50 @@ make something pass; ask when a file is protected).
 ## The dev environment
 
 An application may have one environment of kind `dev`
-([ADR-0049](../decisions/0049-author-applications-through-mcp-in-control.md) rule 10). A commit to the workspace bound
-to it serves in seconds, without a run. `deploy_stage` stays the only path to a checked build, and nothing from the dev
-environment is promoted.
+([ADR-0049](../decisions/0049-author-applications-through-mcp-in-control.md) rule 10), on Zerops only. Each workspace
+gets its own **sandbox** in it, served at its own URL, `https://<workspace id>.<domain>`. A commit to the workspace
+reaches its sandbox in seconds, without a run. `deploy_stage` stays the only path to a checked build, and nothing from a
+sandbox is promoted.
 
-1. `bind_dev` binds the workspace. A bind starts a **bootstrap run** whenever the running launcher cannot serve the
-   workspace: the first bind, after a failed bootstrap or a refused sync, when the change from the head the container
-   holds to the workspace head needs one (below), and when the launcher is gone: Control cannot read its requests, or it
-   sent none for 90 s (15 min while it syncs or runs checks). A bind that starts an idle service waits up to 15 s for
-   the launcher's first request. A bootstrap run is an ordinary run of the workspace head with every check, which `get_deployment` follows
-   (`bootstrapRun.id`). Its service starts the dev launcher instead of the serving entry. Binding another workspace
-   replaces the bound one, syncs its tree and resets the schema; the answer says whose workspace was bound (`yours`).
-2. `apply_changes` commits as always. When the workspace is bound, Control records the new head and the launcher's long
-   poll on Control's public origin (the `source` receiver,
-   [ADR-0064](../decisions/0064-applications-reach-the-platform-over-a-receiver-verified-transport-key.md) §7) answers
-   with the changed files: the ones `apply_changes` just wrote, handed over in memory when the same Control process
-   holds the wait, or else read from a GitHub compare. They are never stored.
+A sandbox is a Zerops Box sandbox (a microVM) on the namespace's Box Workspace service, `zbox`. It runs the application
+with its own PostgreSQL inside, so each workspace has its own data. The namespace proxy fronts every sandbox under its
+own manifest entry, `dev:<app>:<workspace id>`
+([ADR-0022](../decisions/0022-the-proxy-is-the-only-enforcement-point.md), "Dev sandbox entries"). All sandboxes of the
+environment share one IAM application, `<app>@<env>`: a person's grants there apply in every sandbox, and the roles and
+actions IAM knows are those of the workspace bootstrapped last.
+
+1. `bind_dev` ensures the workspace's sandbox: it creates one when the workspace has none, creates it again when Box
+   lost it, and wakes it. A bind starts a **bootstrap run** whenever the sandbox's launcher cannot serve the workspace:
+   the first bind, a sandbox created again (it holds nothing), after a failed bootstrap or a refused sync, when the change from
+   the head the sandbox holds to the workspace head needs one (below), when IAM holds another workspace's contract, and
+   when the launcher is gone: Control cannot read its requests, or it sent none for 90 s (15 min while it syncs or runs
+   checks). A bind that wakes a parked sandbox waits up to 15 s for the launcher's first request. A bootstrap run is an
+   ordinary run of the workspace head with every check, which `get_deployment` follows (`bootstrapRun.id`). Its lane is
+   the workspace, so it never supersedes or fails another workspace's run; the bootstraps of one environment still run
+   one at a time. Binding one workspace never touches another's sandbox.
+2. `apply_changes` commits as always. When the workspace has a sandbox, Control records the new head, and the
+   launcher's long poll on Control's public origin (the `source` receiver,
+   [ADR-0064](../decisions/0064-applications-reach-the-platform-over-a-receiver-verified-transport-key.md) §7, with a key
+   bound to the workspace) answers with the changed files: the ones `apply_changes` just wrote, handed over in memory
+   when the same Control process holds the wait, or else read from a GitHub compare. They are never stored.
 3. The launcher writes the files, migrates when `db/migrations/` changed, runs the authored SPA commands when a file
-   outside `src/` and `db/` changed (beside the contract digest; a refusal rebuilds over the restored files), restarts the application and waits for its health endpoint. It reports the head,
-   its status and the last lines of output.
+   outside `src/` and `db/` changed (beside the contract digest; a refusal rebuilds over the restored files), restarts
+   the application and waits for its health endpoint. It reports the head, its status and the last lines of output.
 4. `apply_changes` waits up to 10 s for that report and answers `dev: { head, state, summary, url, log }` beside
-   `commitSha`. On a timeout `state` is `pending`, and `get_dev_status` reads the rest. Once the commit persisted, the
-   call never fails: when following the dev environment fails, `state` is `unavailable` with a `reference`, and when the
-   audit entry cannot be written the answer carries a `warning` with a reference. Advancing or starting the environment
-   needs `deploy.trigger` on it, as `bind_dev` does; a caller who holds only `deploy.read` gets `state` `not_followed`,
-   and the environment keeps its head.
+   `commitSha`; `url` is the sandbox's origin. On a timeout `state` is `pending`, and `get_dev_status` reads the rest.
+   Once the commit persisted, the call never fails: when following the sandbox fails, `state` is `unavailable` with a
+   `reference`, and when the audit entry cannot be written the answer carries a `warning` with a reference. Advancing
+   or waking the sandbox needs `deploy.trigger` on the environment, as `bind_dev` does; a caller who holds only
+   `deploy.read` gets `state` `not_followed`, and the sandbox keeps its head.
 
 `state` is one of:
 
 | State              | Meaning                                                                                                                                                                                      |
 | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `unbound`          | No workspace is bound.                                                                                                                                                                       |
+| `unbound`          | The workspace has no sandbox yet; call `bind_dev`.                                                                                                                                           |
 | `bootstrapping`    | The bootstrap run has not finished.                                                                                                                                                          |
 | `bootstrap_failed` | The bootstrap run failed; fix the cause and call `bind_dev` again.                                                                                                                           |
-| `stopped`          | Stopped after 30 minutes without a sync; the next `apply_changes` or `bind_dev` starts it.                                                                                                   |
+| `stopped`          | Parked after 30 minutes without activity; the next `apply_changes` or `bind_dev` wakes it, and so does a request to its URL.                                                                 |
 | `pending`          | The launcher has not reported the newest commit yet.                                                                                                                                         |
 | `syncing`          | The launcher is applying a commit.                                                                                                                                                           |
 | `serving`          | `head` serves and answers its health endpoint.                                                                                                                                               |
@@ -150,6 +160,9 @@ environment is promoted.
 | `needs_bootstrap`  | The commit changes what the build owns, Control cannot relay it, or the launcher is gone (Control cannot read it, or it went silent); `message` says why, and `apply_changes` does not wait. |
 | `resetting`        | `reset_dev` is dropping and migrating the schema.                                                                                                                                            |
 | `checking`         | `run_checks` is running.                                                                                                                                                                     |
+
+When the workspace's contract differs from the one IAM last received, the summary adds that roles and actions follow
+the most recently bootstrapped workspace, and that `bind_dev` refreshes them.
 
 A commit **needs a bootstrap run** when it changes `package.json`, `bun.lock`, `bunfig.toml`, a `zerops.yaml`, anything
 under `fabrika/` or another `fabrika.*` file, when it changes the contract digest, or when the change is more than 300
@@ -160,25 +173,57 @@ The launcher keeps serving the head it has, and `bind_dev` starts the bootstrap.
 
 `get_dev_status` answers a window of the launcher's and the application's output since the newest sync or reset (at most
 200 lines); `apply_changes` answers the newest 20 of them. The window is indexed by the launcher's line numbers, so
-`after: log.to` stays put across reports; a smaller `log.total` means a new container. A bootstrap bind drops the
-previous container's log and check results. Bun's echo of the script it runs (`$ bun build-web.ts`) is reported on
+`after: log.to` stays put across reports; a smaller `log.total` means a new launcher. A bootstrap bind drops the
+previous launcher's log and check results. Bun's echo of the script it runs (`$ bun build-web.ts`) is reported on
 stdout. The launcher never reports the environment. `run_checks` runs the build's check
-chain on the files the container holds and waits up to 50 s for the results; they gate nothing. It is refused while the
-container holds another commit than the workspace's newest, and `checks.head` names the commit the results are for. Each result carries its exit code, `durationMs` and the last
-lines of its output. A check killed by a signal (the out-of-memory killer, or the launcher's 10-minute timeout) has
-`exitCode: null`, fails, and its last output line says so. `reset_dev` drops the
-environment's schema and role family and migrates from scratch; call it after editing a migration that was already
-applied, which otherwise fails the sync. `bind_dev`, `run_checks` and `reset_dev` need `deploy.trigger`; `get_dev_status`
-needs `deploy.read`.
+chain on the files the sandbox holds and waits up to 50 s for the results; they gate nothing. It is refused while the
+sandbox holds another commit than the workspace's newest, and `checks.head` names the commit the results are for. Each
+result carries its exit code, `durationMs` and the last lines of its output. A check killed by a signal (the
+out-of-memory killer, or the launcher's 10-minute timeout) has `exitCode: null`, fails, and its last output line says
+so. `reset_dev` drops the schema and role family in the sandbox's own PostgreSQL and migrates from scratch; other
+workspaces keep their data. Call it after editing a migration that was already applied, which otherwise fails the sync.
+`bind_dev`, `run_checks` and `reset_dev` need `deploy.trigger`; `get_dev_status` needs `deploy.read`.
 
-At boot (after an idle stop, a restart or a new container) the launcher reconciles to the recorded head before it
-serves. A dev container runs no init command: the launcher migrates and checks the schema types
-(`fabrika db codegen --verify`) itself, after Control's answer, because the database still holds what the previous
-container left. A new container first runs any reset still pending, so binding another workspace resets the previous
-one's schema before it migrates. A migration or check that fails at boot, over another workspace's schema or an applied
-migration the commit edited, is the `failed` state, and its message names `reset_dev`; the readiness check passes once
-the launcher reported its boot, so the bootstrap run completes and `reset_dev` reaches the launcher. The generated
-isolation tests (`fabrika db test-isolation`) run in a stage build, not in a dev container.
+### Inside a sandbox
+
+A bootstrap deploys into the sandbox, not through a Zerops build. The provider wakes the sandbox, stops the previous
+launcher and build, uploads its helper scripts and the source archive of the exact commit (at most 50 MiB), and runs the
+build (the authored SPA commands, then `@fabrika/app/build`'s steps with every check) as an unprivileged user with a
+clean environment: the build reads no credential and cannot log in to PostgreSQL. Its output reaches the run log with
+every environment value masked. Only then does it write the launcher's environment to a root-only file, start the
+launcher, and wait up to 180 s for it to report its boot. A run whose invocation is lost settles failed; bind again.
+
+At boot (after a bootstrap or a restart) the launcher reconciles to the recorded head before it serves. It migrates and
+checks the schema types (`fabrika db codegen --verify`) itself, after Control's answer, because the sandbox's database
+still holds what the previous bootstrap left: it first runs any reset still pending. A migration or check that fails at
+boot, over an applied migration the commit edited, is the `failed` state, and its message names `reset_dev`; the
+launcher still reports its boot, so the bootstrap run completes and `reset_dev` reaches the launcher. The generated
+isolation tests (`fabrika db test-isolation`) run in a stage build, not in a sandbox.
+
+A sandbox gives an application less than a Zerops service:
+
+- A bootstrap refuses, in one line each, runtime packages (`runtimePackages`), object storage, the ClamAV scan (a
+  contract with `scan: true`), and a variable or secret whose value holds a `${…}` reference.
+- Jobs do not run: a sandbox has no crontab. A stage environment (`deploy_stage`) runs them.
+- The Box router strips `Authorization` before the request reaches the application. A key caller's request therefore
+  looks like a session's: a non-`GET` request with a `px_` key fails admission, and a webhook verified by a bearer or a
+  basic credential fails. Use a session in the browser, and `deploy_stage` for webhooks and key callers.
+- The environment's app secrets are kept in Control's vault and handed to the sandbox at each bootstrap.
+
+### Idle and removal
+
+Control parks a sandbox after 30 minutes without activity. A request to its URL wakes it in about a second, and
+every `apply_changes`, `bind_dev`, `reset_dev` and `run_checks` wakes it itself. Maintenance removes a sandbox whose
+workspace saw no activity for 14 days, unless a bind or commit made it active again before the removal began, and one
+a `bind_dev` left creating for an hour; the workspace stays, and the next `bind_dev` creates a new sandbox with an empty database. `delete_workspace` removes the
+workspace's sandbox at once, and maintenance also removes any sandbox of an abandoned workspace. A removal stops the
+proxy routing the sandbox's host, deletes the Box sandbox and revokes the workspace's `source` keys, then deletes its
+proxy secret and record, and republishes the namespace proxy. When Box fails, the keys are still revoked and the
+proxy still republished; the record stays for maintenance to finish, and the workspace is abandoned all the same. While
+a workspace of the authoring environment has a sandbox, that environment cannot be deleted either. A `bind_dev` on a
+namespace whose proxy is pinned to a release that cannot serve sandboxes is refused with the re-pin command, and records
+nothing. When the Box host has no room for one more running sandbox, `bind_dev` says so: abandon idle workspaces,
+or ask the operator to size the `zbox` service.
 
 ## Failures
 
@@ -247,13 +292,49 @@ retry helps, and never carries upstream text, which may hold a token or a clone 
    `source.pull-request.create`, `deploy.trigger` and `deploy.read`, scoped to the app. The token
    carries the intersection of these grants and the scope grant above.
 5. **Optionally, register a dev environment**:
-   `fabrika control apps environments put --provider=zerops --app=<id> --env=<name> --manifest=<path> --kind=dev`.
-   Control refuses it on a provider without dev environments (Cloudflare), on an app without a GitHub connection, under
-   the name `prod`, as an authoring target, with a trigger ref, and as a second dev environment of the app. Its
-   namespace's environment must equal the environment's name, as for any environment. The application must pin
-   `@fabrika/app` 0.9.0 or newer; the bootstrap run of an older release is refused before anything publishes, and the
-   application keeps `deploy_stage`. In a `zerops-subdomain` namespace the dev environment takes one of the six proxy
-   hosts. Control needs its public origin (`FABRIKA_CONTROL_DOMAIN`) and its vault for the `source` key.
+   `fabrika control apps environments put --provider=zerops --app=<id> --env=<name> --manifest=<path> --kind=dev --domain=<base>`.
+   `<base>` is a wildcard base such as `dev.example.com`: workspace `W` is served at `W.<base>`. Point DNS for
+   `*.<base>` at the namespace's `proxy` service and bind it there, as for any custom domain (whether Zerops issues a
+   certificate for a wildcard domain is not verified live). Control refuses the environment on a provider without dev
+   environments (Cloudflare), without a domain, on an app without a GitHub connection, under the name `prod`, as an
+   authoring target, with a trigger ref, and as a second dev environment of the app. Its namespace's environment must
+   equal the environment's name, as for any environment, and the namespace must publish custom domains: a
+   `zerops-subdomain` namespace is refused. The namespace's proxy must be built from a source that understands sandbox
+   entries; otherwise every namespace job that would publish a sandbox entry, a bootstrap run's republish included,
+   fails before any platform write and names
+   `fabrika control namespaces update --namespace=<id> --proxy-source=current`. The first `bind_dev` in the namespace
+   republishes it before creating its sandbox, and that namespace job creates the namespace's Box host (`zbox`), keys it
+   with a key Control generates and keeps in its vault, and restarts it; a busy namespace answers a 503 to retry. The
+   first sandbox builds the base image on the host. A dev environment claims no
+   Zerops service. Its app secrets live in Control's vault (`fabrika control apps secrets put … --env=<name>`), and
+   each bootstrap hands them to the sandbox. Deleting the environment, or its app, is refused while a workspace sandbox
+   of it is left: abandon those workspaces (`delete_workspace`), or wait for maintenance to remove idle ones. The application must pin `@fabrika/app` 0.9.0 or newer; the bootstrap run
+   of an older release is refused before anything publishes, and the application keeps `deploy_stage`. Control needs
+   its public origin (`FABRIKA_CONTROL_DOMAIN`) and its vault for the sandbox host key, the proxy secrets and the
+   `source` keys.
+
+### Upgrading an installation with a dev environment
+
+A `dev` environment registered before sandboxes ran on one Zerops service of its own and is not migrated. The upgrade
+drops Control's record of it (its bound workspace, target head and launcher report). `bind_dev` and a dev deploy refuse
+it and say to delete it and register it again with `--kind=dev` and a wildcard domain. Until the operator acts, its
+namespace resource claims stay held; the next republish of its namespace stops routing its old domain, because a `dev`
+environment is served only through workspace sandboxes. No deploy writes to the old service again, so its variables,
+app secrets included, stay until it is deleted. After `fabrika platform upgrade`:
+
+1. Re-pin each namespace that will hold a dev environment:
+   `fabrika control namespaces update --namespace=<id> --proxy-source=current`. Its proxy then reads sandbox entries.
+2. Remove the old dev environment as any environment is removed
+   ([deployment namespaces](deployment-namespaces.md#releasing-a-claim)): delete its Zerops service, release its
+   namespace resource claims (`fabrika control namespaces release-claims --namespace=<id> --app=<id> --env=<name>`),
+   then delete the environment (`apps.environments.delete`).
+3. Register it again with `--kind=dev` and a wildcard domain (step 5 above), and set up DNS for `*.<base>`.
+4. Set the environment's app secrets again (`fabrika control apps secrets put --app=<id> --name=<name> --env=<name>`).
+   They now live in Control's vault; a secret row that still names a Zerops variable fails the bootstrap with "set its
+   value again".
+5. Each author calls `bind_dev` again; the first bind bootstraps the workspace's new sandbox.
+
+Namespaces without a dev environment need none of this: no Box host is created and no manifest entry changes.
 
 ## Registering Claude and ChatGPT
 
@@ -341,6 +422,7 @@ paved road and need closer review, parked or not.
   Revocation stops refresh and new code exchanges.
 - Zerops only.
 - One authoring environment per app, never production; it shows one workspace at a time.
-- One dev environment per app, never production or protected, on Zerops only; it shows one workspace at a time and
-  runs on one container.
+- One dev environment per app, never production or protected, on Zerops only; each workspace gets its own sandbox,
+  and the sandboxes share one IAM application. In a sandbox jobs do not run and `Authorization` does not reach the
+  application.
 - Production is a human merge in GitHub followed by the existing Delivery trigger.

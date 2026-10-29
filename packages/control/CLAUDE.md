@@ -197,7 +197,8 @@ other environment, before the provider prepares anything, and the write maps a r
   A platform archive may carry ONE generated data file (`SourceDataFile`, the Zerops proxy manifest, ADR-0045),
   appended after every entry of the commit; a commit that holds its path is refused, and the upload reports its sha256.
 - **App secrets are vault-only** (`src/secret-resolver.ts`, D4). `apps.secrets.put` and `vault.set` take the
-  plaintext VALUE and seal it (or hand it to a provider that manages secrets itself); no API accepts a ref.
+  plaintext VALUE and seal it (or hand it to a provider that manages secrets itself, `providerKeepsSecrets`, never for
+  a `dev` environment, whose sandboxes keep none); no API accepts a ref.
   The resolver knows only `vault:`; any other stored ref — a row from before this rule — THROWS rather than
   deploy with a wrong or empty credential, and is never migrated. It handles ONLY per-app `pipeline.secrets`;
   platform creds are fabrika's own Worker config. `apps.secrets.delete` and `vault.delete` are one use case
@@ -339,7 +340,8 @@ other environment, before the provider prepares anything, and the write maps a r
   (`settleUnfinishedRun`: startup reconcile, cron, or the environment's next deploy), which first appends
   `RUN_INTERRUPTED_REASON` through `runLogs`; the stale-run sweep appends its own reason. Neither requeues the run
   (ADR-0044): every composition hands `runLogs`, or the reason reaches the console only.
-  A pending run older than a run of the same environment that already `succeeded` never starts: `markRunStarted`
+  A pending run older than a run of the same environment and lane that already `succeeded` never starts (`runs.lane`
+  is null except on a dev bootstrap, whose lane is its workspace): `markRunStarted`
   refuses it, also after `startRun` settled a newer run to succeeded, and then `markRunSuperseded` fails it, records
   that run in `runs.superseded_by` (the approval page's `ApprovalDto.supersededBy`), and its log says
   `superseded by run <id>` (ADR-0044). Queue order is not run order (a deferred run is enqueued again), and
@@ -559,26 +561,53 @@ other environment, before the provider prepares anything, and the write maps a r
   answers the body of `@fabrika/app`'s `skill/SKILL.md`; the server `instructions` stay under 2,000
   characters (some clients cut them at 2 KB) and point to it. Never restate the rules beyond those three lines.
   One authoring environment per app, on a provider that declares `authoring`: `apps.environments.put` answers 409 while another env holds the flag.
-- **A `dev` environment follows one workspace without a run (ADR-0049).** `app_envs.kind = 'dev'` is set at
-  creation and never changes; one per app, never `prod`, never protected, never authoring, no trigger ref, and only
-  on a provider with `devEnvironments` (Zerops). `dev_environments` holds metadata only: the bound workspace, the
-  target head, what the launcher last reported (head, status, one-line message, its trimmed log), a refused head,
-  and the reset and check generations. `src/api/dev-environments.ts` holds `bind_dev` (a bootstrap run when the launcher cannot serve the head: `needsBootstrap`
-  checks the paths from the held head with `syncRefusal`, and `launcherProblem` an unreadable or silent launcher, from
-  `launcher_refused`, `launcher_seen_at` and `service_started_at`; or when none
-  succeeded or a head was refused), `get_dev_status`, `run_checks`, `reset_dev` and `followDevCommit`, which
-  `apply_changes` calls. The launcher reaches the `source` receiver (`src/dev/receiver.ts`, the `dev-source`
-  protocol row, ADR-0064) with the environment's key: a held wait answers the files between the head it holds and
-  the target, never stored: the files `apply_changes` just wrote when this process holds them (`DevSignals.offer/take`,
-  only from the exact parent to the target), else a GitHub compare (`src/dev/sync.ts`) in one
-  `WorkspaceSourcePort.session`. Both requests carry the container's bootstrap commit; one that is not the current
-  bootstrap run's commit gets 409, because the provider runs the replaced container beside the new one. `apply_changes` reads its edited files and commits in one session too: one token, each commit and tree
-  read once. `run_checks` is refused while the served head is not the target. `DevSignals` wakes a wait in
-  this process; every wait also re-reads the row each second, for another Control container. A deploy of a `dev`
-  environment refuses a framework release before `DEV_LAUNCHER_SINCE` (`src/dev/deploy.ts`) before anything
-  publishes, and hands `FABRIKA_PLATFORM_SOURCE_URL`/`_KEY`. Maintenance stops a service idle for 30 minutes
-  (`src/dev/service.ts`); a bind, commit, reset or check request starts it. The Bun host sets `DEV_SOURCE` only for a
-  provider with `devEnvironments`.
+- **A `dev` environment gives each MCP workspace its own sandbox, which follows the workspace without a run
+  (ADR-0049 rule 10).** `app_envs.kind = 'dev'` is set at creation and never changes; one per app, never `prod`, never
+  protected, never authoring, no trigger ref, with a `domain` (the wildcard base), and only on a provider with
+  `devSandboxes` (Zerops); it claims no provider resource, and deleting it or its app, or the environment its workspaces
+  belong to, is refused while one of those has a sandbox row (`assertNoDevSandboxes`, `src/api/registry/apps.ts`). `dev_sandboxes` holds one row per workspace with a
+  sandbox (the one-service `dev_environments` was dropped by `0027_drop_dev_environments`), metadata only: the sandbox id,
+  state (`creating`/`ready`/`removing`), its proxy secret ref, its bootstrap and published runs, the target head, what
+  the launcher last reported (head, status, message, trimmed log), a refused head, the reset and check generations, and
+  `parked_at`/`woke_at`. `src/api/dev-environments.ts` holds `bind_dev` (`ensureDevSandbox` on every bind: the
+  provider's `admit` before the row exists, since every republish hands a recorded sandbox on and a pin that cannot parse
+  it would stop the namespace's publication, and only its non-retryable `ProviderNamespaceError` is the author's 409; it
+  creates the sandbox again when Box lost it, removes the row a failed create started (only the bind that inserted it,
+  `create_attempt`, and never while the sandbox host is pending or the namespace busy: the row makes the queued
+  reconcile create the host), and removes a sandbox Box finished after a removal took its row; then a wake, then a bootstrap run when the sandbox was replaced or
+  `needsBootstrap`: none succeeded, a head was refused, the launcher is gone or unreadable (`launcherProblem`), IAM
+  holds another workspace's contract (`app_envs.iam_digest`), or `syncRefusal` of the paths from the held head),
+  `get_dev_status`, `run_checks`, `reset_dev` and `followDevCommit`, which `apply_changes` calls; `src/dev/service.ts`
+  holds the sandbox lifecycle. Every sandbox call composes the namespace's sandbox host key from the vault
+  (`deployment_namespaces.sandbox_key_ref`, `src/dev/sandbox-keys.ts`), generated on first need and never logged.
+- **A dev bootstrap is an ordinary run in its workspace's lane.** `createManualRun` sets `runs.lane` to the workspace;
+  supersede (`src/db/runs.ts`) and publication are scoped to the lane: a bootstrap classifies against its workspace's
+  own published run, publishes through the environment's compare-and-swap (so IAM follows the newest bootstrap), and
+  records itself in `dev_sandboxes.published_run_id`, from which the namespace job compiles that sandbox's entry. A
+  dev run without a workspace is refused. The `<app>:<env>` lease still serializes the environment's bootstraps.
+- **Per workspace: the proxy secret, the `source` key and the return origin.** The namespace job hands one
+  `devSandboxes` entry per sandbox row `creating` or `ready`, with its own sealed proxy secret. `platformTransport.issue(…, { workspaceId })`
+  issues the `source` key bound to the workspace (`platform_transport_keys.workspace_id`), only while the workspace's
+  sandbox row exists and is not `removing`, and the receiver
+  (`src/dev/receiver.ts`, the `dev-source` protocol row, ADR-0064) authenticates it to `{ app, env, workspace }`; a key
+  without a workspace is refused. A held wait answers the files between the head the launcher holds and the target,
+  never stored: the files `apply_changes` just wrote when this process holds them (`DevSignals.offer/take`, only from
+  the exact parent to the target), else a GitHub compare (`src/dev/sync.ts`) in one `WorkspaceSourcePort.session`.
+  Both requests carry the bootstrap commit; one that is not the workspace's current bootstrap run's gets 409. The IAM
+  return origins of a dev environment are the origins of its ready sandboxes (`src/return-origins.ts`). `run_checks`
+  is refused while the served head is not the target. `DevSignals` wakes a wait in this process; every wait also
+  re-reads the row each second, for another Control container. A deploy of a `dev` environment refuses a framework
+  release before `DEV_LAUNCHER_SINCE` (`src/dev/deploy.ts`) before anything publishes.
+- **Maintenance parks and removes sandboxes; abandoning a workspace removes its sandbox.** `maintainDevSandboxes`
+  (`src/dev/service.ts`, the `devIdle` slot of `runMaintenance`) parks a sandbox idle for 30 minutes and removes one
+  left `removing`, of an abandoned workspace, idle for 14 days, or `creating` for an hour (a bind that died); a commit,
+  bind, reset or check request wakes a parked one. `removeDevSandbox` marks the row `removing` first (the proxy stops
+  routing it), then deletes the Box sandbox (the recorded one and any other under the workspace's name) and
+  the workspace's `source` keys, and only when both succeeded its proxy secret and the row; it republishes the
+  namespace either way, and a row left `removing` is retried by the next pass. Maintenance marks a row only while it is
+  still removable (`markRemovingIfRemovable`), so a bind or commit meanwhile keeps the sandbox. `delete_workspace`
+  calls it through `WorkspaceUseCaseContext.devSandboxRemoval` (refused up front without a vault when a sandbox
+  exists), and marks the workspace abandoned even when the Box call failed; maintenance then finishes the removal.
 - **Published access comes ONLY from `approvedSnapshot(app, env)` (ADR-0050, `src/approval/`).** Right after the
   commit is pinned, `executeDeploy` reads the run's snapshot (`readAccessSnapshot` over `env.COMMITS`;
   `contractReaderInputs` names the files: on Zerops one archive pass keeps the files `snapshotReads(root)` wants,

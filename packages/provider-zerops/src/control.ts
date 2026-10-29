@@ -7,7 +7,6 @@ import type {
 	ProviderDeployInput,
 	ProviderDeploymentNamespace,
 	ProviderDeployOutcome,
-	ProviderDevEnvironmentInput,
 	ProviderEnvelope,
 	ProviderEnvironment,
 	ProviderReconcileOutcome,
@@ -46,16 +45,25 @@ import {
 	type ZeropsNamespaceTarget,
 	zeropsNamespaceTargetCodec,
 } from './namespace'
-import { assertNamespaceProxyReads, type OlderProxyReaders } from './namespace/proxy-reads'
+import { namespaceError, ZEROPS_DEV_TARGET_RETIRED } from './namespace/errors'
+import { assertNamespaceProxyAcceptsSandboxes, assertNamespaceProxyReads, type OlderProxyReaders } from './namespace/proxy-reads'
+import type { ZeropsNamespaceSandboxHost } from './namespace/types'
 import { createZeropsDeployer, ZEROPS_VERSION_DEADLINE_MS } from './provider'
+import { deploySandbox, parseSandboxCheckpoint } from './sandbox/deploy'
+import { assertSandboxArtifact } from './sandbox/dev-artifact'
+import { createZeropsDevSandboxes } from './sandbox/lifecycle'
 import { allowedReferenceHosts, assertNoPlatformOnlyReference, foreignReferenceHost, serviceReferenceHosts } from './service-references'
 import { normalizeZeropsSourceRepository } from './source'
 import type { ZeropsSourcePort, ZeropsSourcePrivateBinding } from './source/port'
 import type { ZeropsRunState, ZeropsRuntimeTarget } from './types'
 import { deleteVersion, isVersionNotFound } from './version-attempt'
+import { createZboxClient, type ZboxClient, type ZboxFetch } from './zbox'
 
 /** Provider coordinates that are safe to persist. Credentials are composed only for a live run. */
-export interface ZeropsStoredTarget {
+export type ZeropsStoredTarget = ZeropsServiceTarget | ZeropsDevSandboxesTarget
+
+/** An environment served by its own Zerops service. */
+export interface ZeropsServiceTarget {
 	serviceId: string
 	/**
 	 * The object-storage service ids the first registration's collision-refusing import created: the creation evidence
@@ -64,19 +72,37 @@ export interface ZeropsStoredTarget {
 	createdBuckets?: string[]
 }
 
-const storedTargetSchema = z.object({ serviceId: z.string().min(1), createdBuckets: z.array(z.string().min(1)).min(1).optional() })
+/** A `dev` environment: it has no service, and each MCP workspace runs in a sandbox of the namespace's sandbox host. */
+export interface ZeropsDevSandboxesTarget {
+	kind: 'devSandboxes'
+}
 
+const storedTargetSchema = z.union([
+	z.object({ kind: z.literal('devSandboxes') }).strict(),
+	z.object({ serviceId: z.string().min(1), createdBuckets: z.array(z.string().min(1)).min(1).optional() }),
+])
+
+// The dev variant is additive: every stored service target still reads as it did, so the version stays.
 export const zeropsStoredTargetCodec: ProviderCodec<ZeropsStoredTarget> = {
 	version: 2,
-	encode: (target) => ({
-		serviceId: target.serviceId,
-		...(target.createdBuckets === undefined ? {} : { createdBuckets: [...target.createdBuckets] }),
-	}),
+	encode: (target): JsonValue => {
+		if ('kind' in target) return { kind: target.kind }
+		return {
+			serviceId: target.serviceId,
+			...(target.createdBuckets === undefined ? {} : { createdBuckets: [...target.createdBuckets] }),
+		}
+	},
 	decode: (payload) => {
 		const result = storedTargetSchema.safeParse(payload)
 		if (!result.success) throw new Error('Zerops stored target serviceId must be a non-empty string')
 		return result.data
 	},
+}
+
+/** The service of a target that has one; a dev environment's sandboxes are not one. */
+const serviceTargetOf = (target: ZeropsStoredTarget): ZeropsServiceTarget => {
+	if ('kind' in target) throw new Error('zerops: a dev environment runs in workspace sandboxes and has no Zerops service')
+	return target
 }
 
 const envelope = <T>(codec: ProviderCodec<T>, value: T): ProviderEnvelope => ({
@@ -102,6 +128,10 @@ export interface ZeropsControlProviderOptions {
 		/** The manifest parsers of the older releases' proxies, which a namespace pinned to an older source may run. */
 		readonly olderProxies: OlderProxyReaders
 	}
+	/** The transport of the sandbox host API; tests pass a fake. */
+	readonly zboxFetch?: ZboxFetch
+	/** Where a provider event outside a run is reported (a dev sandbox replaced); the process's stderr by default. */
+	readonly log?: (line: string) => void
 }
 
 interface DecodedZeropsEnvironment {
@@ -257,7 +287,7 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 	}
 
 	const assertVersionCoordinates = (environment: ProviderEnvironment, appVersionId: string, version: ZeropsAppVersion): void => {
-		const serviceId = decodeEnvironment(environment).target.serviceId
+		const serviceId = serviceTargetOf(decodeEnvironment(environment).target).serviceId
 		if (version.id !== appVersionId || (version.serviceStackId !== undefined && version.serviceStackId !== serviceId)) {
 			throw new Error('Zerops app-version response has different coordinates')
 		}
@@ -290,23 +320,58 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 		return { commitSha: result.commitSha }
 	}
 
-	/** Stop or start the service of a `dev` environment outside a run, and wait for the platform's process. */
-	const runningState = async (input: ProviderDevEnvironmentInput, action: 'start' | 'stop'): Promise<void> => {
-		if (input.environment.kind !== 'dev') throw new Error('zerops: only a dev environment is stopped and started outside a run')
-		const placement = resolvedEnvironment(input.environment, { requireReady: false })
-		const serviceId = placement.target.serviceId
-		// Idempotent: Control's record of a stopped service can lag behind a start from elsewhere.
-		const status = (await api.getService({ serviceId, signal: input.signal })).status
-		if (status === (action === 'stop' ? 'STOPPED' : 'ACTIVE')) return
-		const process = action === 'stop'
-			? await api.stopService({ serviceId, signal: input.signal })
-			: await api.startService({ serviceId, signal: input.signal })
-		await waitForProcess({
-			api,
-			processId: process.id,
-			sleep: options.sleep ?? defaultSleep,
-			signal: input.signal,
-			label: `the ${action} of ${input.environment.appId}/${input.environment.env}`,
+	/** The namespace's sandbox host, which runs the workspace sandboxes of its dev environment; null until it is created. */
+	const sandboxHostOf = (environment: ProviderEnvironment): ZeropsNamespaceSandboxHost | null => {
+		const { target, namespaceTarget } = decodeEnvironment(environment)
+		// An older release registered a dev environment as its own Zerops service; it never runs in a sandbox.
+		if (environment.kind === 'dev' && !('kind' in target)) {
+			throw namespaceError(
+				ZEROPS_DEV_TARGET_RETIRED,
+				`zerops: dev environment \`${environment.appId}/${environment.env}\` was registered with its own Zerops service, which this release `
+					+ 'no longer runs; delete the environment and register it again with --kind=dev and a wildcard domain',
+				false,
+			)
+		}
+		return namespaceTarget.sandboxHost ?? null
+	}
+
+	const sandboxClient = (apiOrigin: string, sandboxKey: string): ZboxClient =>
+		createZboxClient({ baseUrl: apiOrigin, apiKey: sandboxKey, ...(options.zboxFetch === undefined ? {} : { fetch: options.zboxFetch }) })
+
+	const devSandboxes = createZeropsDevSandboxes({
+		client: (environment, sandboxKey) => {
+			const host = sandboxHostOf(environment)
+			return host === null ? null : sandboxClient(host.apiOrigin, sandboxKey)
+		},
+		admit: (environment) => {
+			sandboxHostOf(environment)
+			const { namespace, namespaceTarget } = decodeNamespace(environment)
+			assertNamespaceProxyAcceptsSandboxes(namespace.id, namespaceTarget.proxySource)
+		},
+		sleep: options.sleep ?? defaultSleep,
+		log: options.log ?? ((line) => console.warn(line)),
+	})
+
+	/**
+	 * A dev environment imports no service: each workspace gets a sandbox when it binds. What a sandbox cannot give the
+	 * application is refused here, before anything is created.
+	 */
+	const prepareDevRegistration = (
+		registration: ProviderRegistration,
+		namespaceId: string,
+		namespaceTarget: ZeropsNamespaceTarget,
+	): ProviderRegistration => {
+		if (namespaceTarget.publicAccess === 'zerops-subdomain') {
+			throw new Error(
+				`zerops: a dev environment serves each workspace on its own host, so namespace \`${namespaceId}\` needs custom-domain public access`,
+			)
+		}
+		const manifest = decodeEnvelope('artifact', 'zerops', registration.environment.artifact, zeropsArtifactCodec)
+		assertFabrikaManifestCoordinates(manifest.app, { appId: registration.app.id, env: registration.environment.env })
+		assertSandboxArtifact(manifest)
+		return normalizeRegistration({
+			app: registration.app,
+			environment: { ...registration.environment, target: envelope(zeropsStoredTargetCodec, { kind: 'devSandboxes' }) },
 		})
 	}
 
@@ -355,18 +420,54 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 					...(binding === undefined ? {} : { privateBinding: binding }),
 				}
 			}
+			if (input.devSandbox !== undefined && input.environment.kind !== 'dev') {
+				throw new Error('zerops: only a dev environment deploys into a workspace sandbox')
+			}
+			if (input.environment.kind === 'dev') {
+				if (input.devSandbox === undefined) throw new Error('zerops: a dev environment deploys only into a workspace sandbox, through bind_dev')
+				const host = sandboxHostOf(input.environment)
+				if (host === null) throw new Error("zerops: the namespace's sandbox host is not created yet; bind the workspace again")
+				const result = await deploySandbox({
+					appId: input.app.id,
+					env: input.environment.env,
+					runId: input.runId,
+					artifact,
+					access: input.environment.access,
+					vars: input.vars,
+					secrets: input.secrets,
+					managedEnvironment: input.managedEnvironment,
+					...(source === undefined
+						? {}
+						: {
+							source: {
+								repository: source.repository,
+								commitSha: source.commitSha,
+								...(source.privateBinding === undefined ? {} : { privateBinding: source.privateBinding }),
+							},
+						}),
+					sandbox: { sandboxId: input.devSandbox.sandboxId, apiOrigin: host.apiOrigin, sandboxKey: input.devSandbox.sandboxKey },
+					client: sandboxClient(host.apiOrigin, input.devSandbox.sandboxKey),
+					sourcePort: options.source,
+					sleep: options.sleep ?? defaultSleep,
+					dryRun: input.dryRun,
+					signal: input.signal,
+					events: input.events,
+				})
+				input.signal.throwIfAborted()
+				return { state: result.status }
+			}
+			const serviceTarget = serviceTargetOf(placement.target)
 			const runtimeTarget: ZeropsRuntimeTarget = {
 				projectId: placement.projectId,
-				serviceId: placement.target.serviceId,
+				serviceId: serviceTarget.serviceId,
 				accessToken: options.accessToken,
-				...(placement.target.createdBuckets === undefined ? {} : { createdBuckets: placement.target.createdBuckets }),
+				...(serviceTarget.createdBuckets === undefined ? {} : { createdBuckets: serviceTarget.createdBuckets }),
 				...(source === undefined ? {} : { source }),
 				...(options.apiBaseUrl !== undefined ? { apiBaseUrl: options.apiBaseUrl } : {}),
 			}
 			const result = await deployRun({
 				appId: input.app.id,
 				env: input.environment.env,
-				...(input.environment.kind === 'dev' && source !== undefined ? { dev: { head: source.commitSha } } : {}),
 				secrets: input.secrets,
 				vars: input.vars,
 				managedEnvironment: input.managedEnvironment,
@@ -381,13 +482,12 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 			input.signal.throwIfAborted()
 			return { state: result.status, ...(result.artifactState === undefined ? {} : { artifactState: result.artifactState }) }
 		},
-		devEnvironments: {
-			stop: (input) => runningState(input, 'stop'),
-			start: (input) => runningState(input, 'start'),
-		},
+		devSandboxes,
 		cancel: async (input): Promise<ProviderCancelOutcome> => {
 			const signal = input.signal
 			signal.throwIfAborted()
+			// The deploy's own invocation stops a sandbox build on a cancel; nothing here holds the sandbox host's key.
+			if (parseSandboxCheckpoint(input) !== null) return { state: 'settled', outcome: 'failed' }
 			const checkpoint = runCheckpoint(input)
 			if (checkpoint === null) return { state: 'settled', outcome: 'failed' }
 			if (!checkpoint.triggered) {
@@ -414,6 +514,10 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 			signal.throwIfAborted()
 			const log = async (line: string): Promise<void> => {
 				await input.log?.(line).catch(() => {})
+			}
+			if (parseSandboxCheckpoint(input) !== null) {
+				await log('deploy interrupted: Control stopped while it deployed into the workspace sandbox; bind the workspace again')
+				return { state: 'failed' }
 			}
 			const checkpoint = runCheckpoint(input)
 			if (checkpoint === null) {
@@ -457,7 +561,14 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 				assertNoPlatformOnlyReference(input.name)
 				assertNoPlatformOnlyReference(input.value)
 				assertOwnReferencesOnly(input.environment, input.name, input.value)
-				const target = decodeEnvironment(input.environment).target
+				const stored = decodeEnvironment(input.environment).target
+				if ('kind' in stored) {
+					throw new ProviderSecretError(
+						'zerops: a dev environment runs in workspace sandboxes and keeps no secret on a Zerops service',
+						'devEnvironment',
+					)
+				}
+				const target = stored
 				try {
 					await api.putServiceEnv({
 						serviceId: target.serviceId,
@@ -474,7 +585,10 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 			},
 			delete: async (input) => {
 				assertAuthoredManagedName(input.name)
-				const target = decodeEnvironment(input.environment).target
+				const stored = decodeEnvironment(input.environment).target
+				// A dev environment's put refuses, so there is nothing to delete.
+				if ('kind' in stored) return
+				const target = stored
 				const variables = await api.listServiceEnv({ serviceId: target.serviceId, signal: abortSignal() })
 				const found = variables.find((variable) => variable.key === input.name)
 				if (found !== undefined) {
@@ -492,6 +606,7 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 						if (namespaceTarget.ready !== true || namespaceTarget.projectId === undefined) {
 							throw new Error(`Zerops deployment namespace \`${namespace.id}\` is not ready`)
 						}
+						if (input.registration.environment.kind === 'dev') return prepareDevRegistration(input.registration, namespace.id, namespaceTarget)
 						const projectId = namespaceTarget.projectId
 						const manifest = decodeEnvelope('artifact', 'zerops', input.registration.environment.artifact, zeropsArtifactCodec)
 						assertFabrikaManifestCoordinates(manifest.app, {

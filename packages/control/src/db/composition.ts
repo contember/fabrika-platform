@@ -3,7 +3,7 @@ import { GitHubConnectionStore } from '../github/connections/store'
 import { BackupRepository } from './backups'
 import { BuilderConnectionRepository } from './builder-connections'
 import { DataOperationRepository } from './data-operations'
-import { DevEnvironmentRepository } from './dev-environments'
+import { DevSandboxRepository } from './dev-sandboxes'
 import { MailMessageRepository } from './mail-messages'
 import { MailRuleRepository } from './mail-rules'
 import { MembershipKeyRepository } from './membership-keys'
@@ -29,7 +29,7 @@ export interface ControlRepositories {
 	operationsReleases: OperationsReleaseRepository
 	githubConnections: GitHubConnectionStore
 	workspaces: WorkspaceRepository
-	devEnvironments: DevEnvironmentRepository
+	devSandboxes: DevSandboxRepository
 	workloadCredentials: WorkloadCredentialRepository
 	membershipKeys: MembershipKeyRepository
 	tokenKeys: TokenKeyRepository
@@ -61,7 +61,7 @@ export function createControlRepositories(db: SqlDatabase, options: ControlRepos
 		operationsReleases: new OperationsReleaseRepository(db, now),
 		githubConnections: new GitHubConnectionStore(db, now),
 		workspaces: new WorkspaceRepository(db, now),
-		devEnvironments: new DevEnvironmentRepository(db, now),
+		devSandboxes: new DevSandboxRepository(db, now),
 		workloadCredentials: new WorkloadCredentialRepository(db),
 		membershipKeys: new MembershipKeyRepository(db),
 		tokenKeys: new TokenKeyRepository(db),

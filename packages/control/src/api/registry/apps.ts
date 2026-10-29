@@ -52,6 +52,7 @@ export async function updateAppUseCase(c: RegistryUseCaseContext, id: string, in
 export async function deleteAppUseCase(c: RegistryUseCaseContext, id: string): Promise<OkResponse> {
 	assertNoHeldResourceClaims(`app ${id}`, await c.repositories.registry.listNamespaceResourceClaimsForApp(id))
 	const envs = await c.repositories.registry.listAppEnvs(id)
+	await assertNoDevSandboxes(c, envs)
 	requireHumanForProtectedDelete(c.auth, c.admission, envs)
 	// Read the routed namespaces BEFORE the delete: afterwards the rows that name them are gone.
 	const namespaceIds = routedNamespaceIds(envs)
@@ -163,6 +164,28 @@ export function assertNoHeldResourceClaims(subject: string, claims: readonly Nam
 	}
 	const held = [...byNamespace].map(([namespaceId, keys]) => `${namespaceId} (${keys.join(', ')})`).join(', ')
 	fail(409, `${subject} still holds deployment namespace resource claims: ${held}`)
+}
+
+/**
+ * Deleting a `dev` environment would drop its sandbox records and leave their Box sandboxes, proxy secrets and source
+ * keys behind, and deleting the environment the workspaces belong to (the authoring one) would delete workspaces that a
+ * sandbox row still names. Either waits until each workspace sandbox was removed: by abandoning the workspace, or by
+ * maintenance.
+ */
+export async function assertNoDevSandboxes(c: RegistryUseCaseContext, envs: readonly AppEnvRow[]): Promise<void> {
+	for (const appEnv of envs) {
+		const sandboxes = appEnv.kind === 'dev'
+			? await c.repositories.devSandboxes.listByEnvironment(appEnv.app_id, appEnv.env)
+			: await c.repositories.devSandboxes.listByWorkspaceEnvironment(appEnv.app_id, appEnv.env)
+		if (sandboxes.length === 0) continue
+		const holder = appEnv.kind === 'dev' ? 'dev environment' : 'the workspaces of environment'
+		fail(
+			409,
+			`${holder} ${appEnv.app_id}/${appEnv.env} still ${appEnv.kind === 'dev' ? 'has' : 'have'} ${sandboxes.length} workspace sandbox(es) (workspaces `
+				+ `${sandboxes.map((row) => row.workspace_id).join(', ')}); delete those workspaces with delete_workspace, or wait for `
+				+ 'maintenance to remove idle ones, then retry',
+		)
+	}
 }
 
 export async function requireApp(c: RegistryUseCaseContext, appId: string): Promise<AppRow> {

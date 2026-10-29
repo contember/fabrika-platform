@@ -633,6 +633,53 @@ describe('Zerops service-level environment writes', () => {
 		expect(log[2]?.body).toEqual({ key: 'FABRIKA_RELEASE', content: 'v2', sensitive: true })
 	})
 
+	test('updates a key the platform generated itself, whose create answers an errorList holding the duplicate', async () => {
+		const log: { method: string; path: string; body: unknown }[] = []
+		const stored = [{ id: 'env-9', key: 'ZBOX_WORKSPACE_API_KEY', content: 'REDACTED', sensitive: true }]
+		const double = zeropsEnvDouble(stored, log)
+		// The answer measured on a `zbox@1` service: the system key and the duplicate, listed under `errorList`.
+		const fetchImpl: FetchLike = async (url, init) => {
+			if (init?.method === 'POST') {
+				await double(url, { method: 'GET' })
+				log.pop()
+				log.push({ method: 'POST', path: url.replace('https://zerops.test', ''), body: JSON.parse(init.body ?? 'null') })
+				return jsonResponse({
+					error: {
+						code: 'errorList',
+						message: 'See metadata',
+						meta: [{ code: 'userDataUseOfSystemKey', error: 'reserved' }, { code: 'userDataDuplicateKey', error: 'not unique' }],
+					},
+				}, 400)
+			}
+			return double(url, init)
+		}
+		const api = createZeropsApi({ token: 'secret', baseUrl: 'https://zerops.test', fetchImpl })
+
+		await api.putServiceEnv({ serviceId: 'service-1', key: 'ZBOX_WORKSPACE_API_KEY', value: 'k'.repeat(64), sensitive: true, signal: signal() })
+
+		expect(log.map((entry) => `${entry.method} ${entry.path}`)).toEqual([
+			'POST /service-stack/service-1/user-data',
+			'GET /service-stack/service-1/env',
+			'PUT /user-data/env-9',
+		])
+	})
+
+	test('an errorList without a duplicate is a refusal, not an update', async () => {
+		const log: { method: string; path: string; body: unknown }[] = []
+		const fetchImpl: FetchLike = async (url, init) => {
+			log.push({ method: init?.method ?? 'GET', path: url.replace('https://zerops.test', ''), body: undefined })
+			return jsonResponse({ error: { code: 'errorList', meta: [{ code: 'userDataUseOfSystemKey' }] } }, 400)
+		}
+		const api = createZeropsApi({ token: 'secret', baseUrl: 'https://zerops.test', fetchImpl })
+
+		const error = await api.putServiceEnv({ serviceId: 'service-1', key: 'ZEROPS_X', value: 'v', sensitive: false, signal: signal() }).catch((
+			caught: unknown,
+		) => caught)
+
+		expect(error instanceof ZeropsApiError && error.listedCodes).toEqual(['userDataUseOfSystemKey'])
+		expect(log.map((entry) => entry.method)).toEqual(['POST'])
+	})
+
 	test('an update sends the requested sensitivity, so a record an older release wrote sensitive becomes readable', async () => {
 		const log: { method: string; path: string; body: unknown }[] = []
 		const fetchImpl = zeropsEnvDouble([{ id: 'env-7', key: 'FABRIKA_STORAGE_PROVENANCE', content: 'REDACTED', sensitive: true }], log)

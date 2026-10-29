@@ -20,7 +20,7 @@ export function proxySecretPurpose(appId: string, env: string): VaultSecretPurpo
 	return { scope: 'platform', label: `platform:proxy-secret:${appEnvironmentId(appId, env)}` }
 }
 
-function generateSecret(): string {
+export function generateProxySecret(): string {
 	const bytes = crypto.getRandomValues(new Uint8Array(SECRET_BYTES))
 	return btoa(String.fromCharCode(...bytes)).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '')
 }
@@ -38,7 +38,7 @@ export class VaultProxySecrets implements ProxySecrets {
 		if (stored !== null) {
 			return vault.getSecretForPurpose(stored, purpose)
 		}
-		const secret = generateSecret()
+		const secret = generateProxySecret()
 		const ref = await vault.putSecret(purpose.scope, purpose.label, secret)
 		if (await this.refs.claimAppEnvProxySecretRef(appId, env, ref)) {
 			return secret

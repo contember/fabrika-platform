@@ -1173,9 +1173,11 @@ the outgoing container keeps logging past the new `pipelineStart`, so its own la
 A build longer than `limit` needs no `desc` — each poll re-reads the newest window and the caller
 dedupes. Consumed by `ZeropsApi.readBuildLog`.
 
-### Verified live (2026-10-21, a namespace project of a test installation, a throwaway `ubuntu/bun@1.3` service) — what a `dev` environment relies on
+### Verified live (2026-10-21, a namespace project of a test installation, a throwaway `ubuntu/bun@1.3` service) — a dev launcher in a namespace
 
-[ADR-0049](../decisions/0049-author-applications-through-mcp-in-control.md)'s `dev` environment rests on these facts:
+[ADR-0049](../decisions/0049-author-applications-through-mcp-in-control.md)'s dev launcher reaches Control over its
+public origin on the first two facts. The rest are facts of a long-lived Zerops service, which a dev environment does
+not use: it runs in a Box sandbox (below).
 
 | Fact                                                                                                    | Result                                                                                                                   |
 | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
@@ -1186,6 +1188,69 @@ dedupes. Consumed by `ZeropsApi.readBuildLog`.
 | `service restart`                                                                                       | 17–19 s (4 runs)                                                                                                         |
 | `zops deploy` of a prebuilt artefact; `zops push` with a one-line build                                 | 21–43 s; 51–53 s: the floor of a pipeline, which creates a build container and a new runtime container on every run      |
 | `sudo -n true` as the application user (uid `zerops`)                                                   | Exits 0: passwordless. The runtime environment also carries `ZEROPS_CertKey` and `ZEROPS_CertCrt`.                       |
+
+### Verified live (2026-10-28, a namespace project of a test installation) — the Box Workspace a `dev` environment runs on
+
+[ADR-0049](../decisions/0049-author-applications-through-mcp-in-control.md) rule 10 runs one sandbox per MCP workspace
+on a Zerops Box Workspace service, `zbox` ([deployment namespaces](deployment-namespaces.md#the-dev-sandbox-host)).
+These facts were measured by hand against a throwaway `zbox@1` service. They are not rows of the platform-facts table:
+`packages/provider-zerops/src/__tests__/zbox.live.test.ts` (behind `FABRIKA_LIVE_ZBOX_API_ORIGIN` and
+`FABRIKA_LIVE_ZBOX_API_KEY`) re-checks the sandbox lifecycle against a real Box host (create, file upload, exec, process
+output, park, wake, delete), and nothing re-checks the rest.
+
+**The service.**
+
+| Behaviour                                                                 | Result                                                                                                                                    |
+| ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| Import of a service of type `zbox@1`                                      | Reads back as **`ubuntu/zbox@1`**, and is **ACTIVE right after the import**, with a platform-generated sensitive `ZBOX_WORKSPACE_API_KEY` |
+| `POST /service-stack/{id}/user-data` of `ZBOX_WORKSPACE_API_KEY`          | **400**, an `errorList` of `userDataUseOfSystemKey` and `userDataDuplicateKey`                                                            |
+| `PUT /user-data/{id}` of that record                                      | Accepted. Box reads the key when it starts, so the new key takes effect only after a **restart**                                          |
+| A Box API request without a key                                           | **401**                                                                                                                                   |
+| The API                                                                   | Under `/api/rest/` on port 8080; a mutation requires an `Idempotency-Key` header; a request times out at **60 s**                         |
+| An asynchronous operation                                                 | Answered as an operation; `waitSeconds` is at most **30**                                                                                 |
+| Memory of a sandbox                                                       | Its reservation is **reserved in full** on the host                                                                                       |
+| Box's workspace secrets                                                   | Only an **allowlist of the workspace's own environment**: no store a caller writes a value into                                           |
+| A sandbox's launch environment and an exec's environment                  | **Echoed** by the API (sandbox reads, session lists), so neither carries a credential                                                     |
+| A sandbox in network mode `INTERNET` with a `PROJECT`-access ingress port | The ingress port still routes from inside the project; **sibling services of the project are unreachable** from the sandbox               |
+
+**The router** (port 8081).
+
+| Behaviour                                                           | Result                                              |
+| ------------------------------------------------------------------- | --------------------------------------------------- |
+| Routing                                                             | By `Host`: `<port>-<sandbox id>.<workspace domain>` |
+| A workspace domain in `DOT` form, used only from inside the project | Routes **without any DNS record**                   |
+| A port alias                                                        | **Accepted by the API, not routed**                 |
+| `Authorization` on a request through the router                     | **Stripped**: the sandbox never sees it             |
+| A request to a parked sandbox                                       | **Wakes it** (about 0.8 s) and is answered          |
+| A request to a parked sandbox while the workspace is full           | **500** `INTERNAL`                                  |
+
+**Files and sessions.**
+
+| Behaviour                                    | Result                                                        |
+| -------------------------------------------- | ------------------------------------------------------------- |
+| A session's output                           | **Cumulative and uncapped**; stdout and stderr are **merged** |
+| `PUT /sandbox/{id}/file` with a chunked body | Works                                                         |
+| An upload over **50 MiB**                    | **413**, with an nginx HTML body instead of Box's JSON error  |
+
+**Timings:**
+
+| Operation                                 | Time      |
+| ----------------------------------------- | --------- |
+| Pull of the base image                    | 2.6 s     |
+| Create a sandbox                          | 0.26 s    |
+| Bootstrap (the recipe's full build, warm) | about 8 s |
+| Snapshot                                  | 3 s       |
+| Restore                                   | about 1 s |
+| Park                                      | 1.3 s     |
+| Wake on a request                         | 0.8 s     |
+
+Fabrika depends on these as follows. The provider imports the service alone and then rekeys it with an update of the
+record and a restart, never a create (`src/namespace/sandbox-host.ts`), and refuses a host whose API answers without
+the key. A sandbox gets no credential through its launch or exec environment: the launcher's environment is a root-only
+file written through the file API. The Box client never puts a response body into an error or a log, because bodies
+echo a sandbox's environment. PostgreSQL runs inside each sandbox, because the `INTERNET` mode reaches no sibling
+service. The proxy sends each sandbox entry's `upstreamHost` (`3000-<sandbox id>.sandbox.fabrika.internal`, a `DOT`
+domain) as `Host`. A source archive over 50 MiB is reported as its own failure.
 
 ## Fabrika placement mapping
 
@@ -1218,7 +1283,8 @@ step covered by
 
 One Fabrika deployment namespace maps to one Zerops project and its
 namespace-owned proxy. The optional namespace-owned `postgres` service is present
-for the `cheap` preset. The app target envelope version 2 stores only its service
+for the `cheap` preset, and the `zbox` Box Workspace for a namespace with a `dev`
+environment. The app target envelope version 2 stores only its service
 id; the namespace target envelope version 1 supplies project, proxy, policy, and
 durable lifecycle coordinates. The app artifact envelope version 2 stores
 manifest version 2 with the structured import document used for claims and API

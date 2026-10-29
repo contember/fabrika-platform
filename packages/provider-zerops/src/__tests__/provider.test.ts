@@ -1183,19 +1183,6 @@ describe("the deploy service's minimum RAM", () => {
 		expect(recorded.logs).toContain(`  [dry-run] would raise the minimum RAM of api to ${ZEROPS_START_MIN_RAM_GB} GB where it is lower`)
 	})
 
-	test('a dev deploy pins the service to one container before the version is reserved, and starts the launcher', async () => {
-		const devRun = (): ZeropsDeployRun => ({ ...deployRun(recorded), dev: { head: 'd'.repeat(40) } })
-		expect((await deploy({ minRam: ZEROPS_START_MIN_RAM_GB, maxContainers: 4 }, devRun())).status).toBe('succeeded')
-		expect(recorded.autoscaling.map((autoscaling) => autoscaling.horizontal)).toEqual([{ minContainerCount: 1, maxContainerCount: 1 }])
-		expect(recorded.calls.indexOf('configureCustomAutoscaling')).toBeLessThan(recorded.calls.indexOf('createAppVersion:service-1'))
-		expect(recorded.logs).toContain('  api pinned to one container')
-		expect(recorded.builds[0]?.zeropsYaml).toContain('dev.generated.json')
-		recorded = fresh()
-		expect((await deploy({ minRam: ZEROPS_START_MIN_RAM_GB, maxContainers: 1 }, devRun())).status).toBe('succeeded')
-		expect(recorded.calls).not.toContain('configureCustomAutoscaling')
-		expect(recorded.logs).toContain('  api runs on one container, unchanged')
-	})
-
 	test('the deploy stops before reserving a version when the RAM cannot be raised', async () => {
 		const cases: Array<[Overrides, string]> = [
 			[

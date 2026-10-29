@@ -7,6 +7,7 @@ import type {
 import { isProxyHost } from '@fabrika/proxy-core/manifest'
 import { type ZeropsApi, ZeropsApiError } from '../api'
 import { assertFabrikaManifestCoordinates, manifestServiceHostnames, zeropsArtifactCodec } from '../manifest'
+import { SANDBOX_HOST_HOSTNAME } from '../sandbox-host'
 import { zeropsSharedServicePrefix } from '../service-names'
 import { decodeEnvelope } from './codec'
 import { ZEROPS_NAMESPACE_POSTGRES_HOSTNAME, ZEROPS_NAMESPACE_PROXY_HOSTNAME } from './constants'
@@ -17,6 +18,7 @@ export const namespaceResourceClaims = (namespace: ProviderDeploymentNamespace):
 	return [
 		`service:${ZEROPS_NAMESPACE_PROXY_HOSTNAME}`,
 		...(target.postgres === undefined ? [] : [`service:${ZEROPS_NAMESPACE_POSTGRES_HOSTNAME}`]),
+		...(target.sandboxHost === undefined ? [] : [`service:${SANDBOX_HOST_HOSTNAME}`]),
 	]
 }
 
@@ -40,6 +42,8 @@ export const registrationResourceClaims = (registration: ProviderRegistration): 
 		appId: registration.app.id,
 		env: registration.environment.env,
 	})
+	// A dev environment owns no Zerops service: each workspace runs in a sandbox of the namespace's own sandbox host.
+	if (registration.environment.kind === 'dev') return []
 	// A proxy target is routed by HOST, so a registration with no domain has nothing the proxy can serve:
 	// refuse it here, where nothing has been created yet, instead of at the first deploy's manifest compile.
 	if (manifest.target.proxy !== undefined) {

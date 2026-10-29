@@ -1,5 +1,5 @@
 import type { ArchiveSummary, SourceBytes } from './archive'
-import { cancelled, SourceFailure, type SourceFailureStage } from './failure'
+import { cancelled, SourceFailure, type SourceFailureStage, uploadTooLarge } from './failure'
 import type { RepositoryArchive, RepositoryArchiveInput } from './repository'
 import { pullThrough } from './streams'
 import type { SourceResolution, SourceResolveInput, SourceUploadInput, SourceUploadResult } from './types'
@@ -30,6 +30,8 @@ export interface SourceRepositoryReader {
 export interface SourceTransportOptions {
 	readonly repository: SourceRepositoryReader
 	readonly isUploadDestination: (url: string) => boolean
+	/** Accepts a dev sandbox host's file endpoint, the only destination a bearer upload may name. Absent, none is accepted. */
+	readonly isSandboxUploadDestination?: (url: string) => boolean
 	readonly uploadFetch?: SourceUploadFetch
 	readonly maxConcurrentUploads?: number
 	/** Tests shorten the bounds; none may exceed the production value. */
@@ -40,6 +42,7 @@ export interface SourceTransportOptions {
 export class SourceTransport {
 	private readonly repository: SourceRepositoryReader
 	private readonly isUploadDestination: (url: string) => boolean
+	private readonly isSandboxUploadDestination: ((url: string) => boolean) | undefined
 	private readonly uploadFetch: SourceUploadFetch
 	private readonly timeouts: typeof SOURCE_TIMEOUTS_MS
 	private readonly uploads: ConcurrencyLimit
@@ -47,6 +50,7 @@ export class SourceTransport {
 	constructor(options: SourceTransportOptions) {
 		this.repository = options.repository
 		this.isUploadDestination = options.isUploadDestination
+		this.isSandboxUploadDestination = options.isSandboxUploadDestination
 		this.uploadFetch = options.uploadFetch ?? ((input, init) => fetch(input, init))
 		this.timeouts = {
 			resolve: boundedTimeout(options.timeoutsMs?.resolve, SOURCE_TIMEOUTS_MS.resolve),
@@ -73,7 +77,7 @@ export class SourceTransport {
 	}
 
 	async upload(input: SourceUploadInput): Promise<SourceUploadResult> {
-		if (!this.isUploadDestination(input.uploadUrl)) throw new SourceFailure('upload_rejected', 'upload')
+		if (!this.acceptsDestination(input)) throw new SourceFailure('upload_rejected', 'upload')
 		// The deadline starts before the queue, so a waiting upload is bounded like a running one.
 		const deadline = operationDeadline(input.signal, this.timeouts.upload)
 		try {
@@ -92,6 +96,12 @@ export class SourceTransport {
 		} finally {
 			deadline.dispose()
 		}
+	}
+
+	/** A bearer goes only to a sandbox host's file endpoint, and a sandbox file endpoint is reached only with one. */
+	private acceptsDestination(input: SourceUploadInput): boolean {
+		if (input.uploadBearer === undefined) return this.isUploadDestination(input.uploadUrl)
+		return input.uploadBearer !== '' && this.isSandboxUploadDestination !== undefined && this.isSandboxUploadDestination(input.uploadUrl)
 	}
 
 	private async uploadOne(input: SourceUploadInput, deadline: OperationDeadline): Promise<SourceUploadResult> {
@@ -114,7 +124,7 @@ export class SourceTransport {
 			let putFailure: unknown
 			try {
 				putStarted = true
-				await this.put(input.uploadUrl, archive.body, deadline.signal)
+				await this.put(input.uploadUrl, input.uploadBearer, archive.body, deadline.signal)
 			} catch (error) {
 				putFailure = error
 			}
@@ -128,8 +138,11 @@ export class SourceTransport {
 			}
 			if (caller.aborted) throw cancelled('upload')
 			if (deadline.timedOut()) throw operationTimedOut('upload', false)
-			// A rejected repository aborts the PUT it is already inside, so the archive verdict is the reason.
-			if (archiveFailure instanceof SourceFailure) throw archiveFailure
+			const tooLarge = putFailure instanceof SourceFailure && putFailure.code === 'upload_too_large'
+			// A rejected repository aborts the PUT it is already inside, so the archive verdict is the reason. Abandoning the
+			// archive after a 413 settles its verdict as `upload_failed`, which must not hide the size refusal.
+			if (archiveFailure instanceof SourceFailure && !(tooLarge && archiveFailure.code === 'upload_failed')) throw archiveFailure
+			if (tooLarge) throw putFailure
 			if (putFailure !== undefined) {
 				if (putFailure instanceof Error && putFailure.name === 'AbortError') throw cancelled('upload')
 				throw new SourceFailure('upload_failed', 'upload')
@@ -149,13 +162,14 @@ export class SourceTransport {
 		}
 	}
 
-	private async put(uploadUrl: string, source: ReadableStream<SourceBytes>, signal: AbortSignal): Promise<void> {
+	private async put(uploadUrl: string, bearer: string | undefined, source: ReadableStream<SourceBytes>, signal: AbortSignal): Promise<void> {
 		const combined = linkedController(signal, AbortSignal.timeout(this.timeouts.pipe))
 		try {
 			let response: Response
 			try {
 				response = await this.uploadFetch(uploadUrl, {
 					method: 'PUT',
+					...(bearer === undefined ? {} : { headers: { authorization: `Bearer ${bearer}`, 'content-type': 'application/octet-stream' } }),
 					body: gzipStream(source),
 					duplex: 'half',
 					// `manual`, like every GitHub request Control makes (a Worker refuses `redirect: 'error'`, though the upload runs
@@ -176,7 +190,10 @@ export class SourceTransport {
 				throw new SourceFailure('upload_failed', 'upload')
 			}
 			if (signal.aborted) throw cancelled('upload')
-			if (combined.signal.aborted || !response.ok) throw new SourceFailure('upload_failed', 'upload')
+			if (combined.signal.aborted) throw new SourceFailure('upload_failed', 'upload')
+			// The sandbox host's nginx answers 413 above 50 MiB; its body is never read.
+			if (bearer !== undefined && response.status === 413) throw uploadTooLarge()
+			if (!response.ok) throw new SourceFailure('upload_failed', 'upload')
 		} finally {
 			combined.abort()
 		}

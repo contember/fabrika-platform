@@ -9,7 +9,7 @@ import {
 } from '@fabrika/provider-contract'
 import type { AppEnvRow, AppSecretRow, ControlRepositories } from '../db'
 import { providerEnvironment } from '../run-lifecycle'
-import { appSecretPurpose } from '../secret-resolver'
+import { appSecretPurpose, providerKeepsSecrets } from '../secret-resolver'
 import { parseVaultRef, type Vault, VaultSecretNotFoundError, type VaultSecretPurpose } from '../vault'
 import { fail } from './domain'
 import { toAppSecretDto } from './registry/configuration'
@@ -207,6 +207,7 @@ async function secretTarget(c: VaultUseCaseContext, appId: string, env: string |
 	const appEnv = await c.repositories.registry.getAppEnv(appId, env)
 	if (appEnv === null) fail(404, 'app env not found')
 	if (appEnv.provider !== c.provider.id) fail(409, `app env belongs to provider ${appEnv.provider}`)
+	if (!providerKeepsSecrets(c.provider, appEnv)) return { kind: 'vault' }
 	return { kind: 'provider', appEnv, secrets }
 }
 

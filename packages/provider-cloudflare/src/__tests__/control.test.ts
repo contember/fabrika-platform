@@ -121,7 +121,7 @@ describe('Cloudflare control provider', () => {
 			'Cloudflare runs no dev environment',
 		)
 		expect(calls).toEqual([])
-		expect(provider.devEnvironments).toBeUndefined()
+		expect(provider.devSandboxes).toBeUndefined()
 	})
 
 	test('serves the ops channel from the release that gets the composed row, and writes the key digests as a plain var', () => {

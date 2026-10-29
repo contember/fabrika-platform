@@ -2,9 +2,10 @@ import { createIam, type Iam } from '@fabrika/auth'
 import { CONTROL_APP_ID } from '@fabrika/control-contract'
 import type { ControlProvider } from '@fabrika/provider-contract'
 import { controlMcpResource, controlMcpResourceMetadata } from '../../fabrika.service'
+import { devSandboxRemoval } from '../api/dev-environments'
 import { ControlApiError } from '../api/domain'
 import type { McpRoute } from '../app'
-import { startDevService } from '../dev/service'
+import { devSandboxDepsOf } from '../dev/service'
 import type { Env } from '../env'
 import { controlPublicOrigin } from '../iam'
 import { createControlMcpHandler } from '../mcp/handler'
@@ -20,6 +21,7 @@ export function controlMcpRoute(env: Env, source: WorkspaceSourcePort, provider:
 	const publicOrigin = controlPublicOrigin(env)
 	if (publicOrigin === undefined) throw new Error('MCP authoring is on, but FABRIKA_CONTROL_DOMAIN names no public origin to derive its resource from')
 	const resource = controlMcpResource(publicOrigin)
+	const sandboxes = devSandboxDepsOf(env, provider)
 	let iam: Iam | undefined
 	return createControlMcpHandler({
 		authenticate: (request) => {
@@ -42,9 +44,10 @@ export function controlMcpRoute(env: Env, source: WorkspaceSourcePort, provider:
 			signal,
 			consoleOrigin: publicOrigin,
 			protectedFiles,
-			dev: env.DEV_SOURCE === undefined ? undefined : {
+			...(sandboxes === undefined ? {} : { devSandboxRemoval: devSandboxRemoval(sandboxes) }),
+			dev: env.DEV_SOURCE === undefined || sandboxes === undefined ? undefined : {
 				signals: env.DEV_SOURCE.signals,
-				start: (row, startSignal) => startDevService({ repositories: env.REPOSITORIES, provider }, row, startSignal),
+				sandboxes,
 				now: () => Math.floor(Date.now() / 1000),
 			},
 		}),

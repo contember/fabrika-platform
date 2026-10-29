@@ -26,7 +26,14 @@ export {
 	type DataOperationStep,
 	type MaintenanceMode,
 } from './db/data-operations'
-export { type DevBindInput, DevEnvironmentRepository, type DevEnvironmentRow, type DevReportInput } from './db/dev-environments'
+export {
+	type DevSandboxBootstrapInput,
+	type DevSandboxReadyInput,
+	type DevSandboxReportInput,
+	DevSandboxRepository,
+	type DevSandboxRow,
+	type DevSandboxState,
+} from './db/dev-sandboxes'
 export {
 	FINAL_MAIL_MESSAGE_STATES,
 	hasMailContent,
@@ -48,7 +55,7 @@ export {
 } from './db/operations-catalog'
 export { OperationsReleaseRepository, type OperationsReleaseSyncRow, type TerminalOperationsReleaseRow } from './db/operations-releases'
 export { type OpsKeyRecord, OpsKeyRepository, type OpsKeyRow } from './db/ops-keys'
-export { PlatformTransportKeyRepository, type PlatformTransportKeyRow } from './db/platform-transport-keys'
+export { type PlatformTransportKeyInsert, PlatformTransportKeyRepository, type PlatformTransportKeyRow } from './db/platform-transport-keys'
 export { RepoPollingRepository, type RepoPollStateRow } from './db/polling'
 export { ControlRegistryRepository, isUnconfirmedNamespaceUpdate } from './db/registry'
 export {

@@ -42,6 +42,21 @@ const singlePostgresSchema = z.object({
 	profile: z.enum(['oltp-hobby', 'oltp-staging', 'oltp-production', 'olap-production', 'writeheavy-production']).optional(),
 })
 
+/** The Box API origin is exactly an `https:` origin: the key is sent there as a bearer. */
+const isHttpsOrigin = (value: string): boolean => {
+	try {
+		const url = new URL(value)
+		return url.protocol === 'https:' && url.origin === value
+	} catch {
+		return false
+	}
+}
+
+const sandboxHostSchema = z.object({
+	serviceId: z.string().min(1),
+	apiOrigin: z.string().refine(isHttpsOrigin),
+}).strict()
+
 export const postgresSchema = z.discriminatedUnion('type', [haPostgresSchema, singlePostgresSchema]).transform((value) => {
 	if (value.profile === undefined) delete value.profile
 	return value
@@ -63,6 +78,7 @@ const namespaceTargetShape = z.object({
 	proxyBaselineSequence: z.number().int().min(-1).optional(),
 	proxyAppVersionId: z.string().min(1).optional(),
 	proxyHosts: z.array(z.object({ host: z.string().min(1), port: z.number().int().positive() })).optional(),
+	sandboxHost: sandboxHostSchema.optional(),
 	ready: z.boolean().optional(),
 })
 
@@ -120,6 +136,7 @@ export const zeropsNamespaceTargetCodec: ProviderCodec<ZeropsNamespaceTarget> = 
 		...(target.proxyBaselineSequence !== undefined ? { proxyBaselineSequence: target.proxyBaselineSequence } : {}),
 		...(target.proxyAppVersionId !== undefined ? { proxyAppVersionId: target.proxyAppVersionId } : {}),
 		...(target.proxyHosts === undefined ? {} : { proxyHosts: target.proxyHosts.map((entry) => ({ host: entry.host, port: entry.port })) }),
+		...(target.sandboxHost === undefined ? {} : { sandboxHost: { serviceId: target.sandboxHost.serviceId, apiOrigin: target.sandboxHost.apiOrigin } }),
 		...(target.ready !== undefined ? { ready: target.ready } : {}),
 	}),
 	decode: (payload) => {

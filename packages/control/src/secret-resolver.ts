@@ -4,12 +4,23 @@
 // refs become the values passed to a provider deploy (the app's `pipeline.secrets`). The only
 // backend is the encrypted vault (src/vault.ts): `apps.secrets.put` and `vault.set` seal the value
 // and store the `vault:<id>` ref. Resolved values are NEVER logged and live only in the provider
-// invocation. A provider that manages secrets itself (`ControlProvider.secrets`) is never resolved here.
+// invocation. A provider that manages secrets itself (`ControlProvider.secrets`) is never resolved here, except for a
+// `dev` environment (`providerKeepsSecrets`).
 //
 // Platform credentials (the CF API token, IAM provisioning creds) are NOT resolved here — they are
 // fabrika's own Worker secrets (src/env.ts). This seam only turns per-app secret refs into values.
 
+import type { ControlProvider } from '@fabrika/provider-contract'
+import type { AppEnvRow } from './db'
 import { parseVaultRef, type SecretScope, type Vault, type VaultSecretPurpose } from './vault'
+
+/**
+ * Whether the provider, not the vault, keeps the environment's app secret values. A `dev` environment runs in workspace
+ * sandboxes, which have no service to keep them, so the vault does and the deploy hands them over (ADR-0004).
+ */
+export function providerKeepsSecrets(provider: Pick<ControlProvider, 'secrets'>, appEnv: Pick<AppEnvRow, 'kind'>): boolean {
+	return provider.secrets !== undefined && appEnv.kind !== 'dev'
+}
 
 /**
  * The `{ scope, label }` an app secret's vault row is sealed under — the ONLY record of which app

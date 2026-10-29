@@ -34,17 +34,31 @@ export const zeropsProxyManifestCarrier = (descriptorContents: string, setup = '
 /** The build variable that marks a proxy source whose manifest parser knows `brand` (ADR-0066). */
 export const FABRIKA_PROXY_MANIFEST_BRAND = 'FABRIKA_PROXY_MANIFEST_BRAND'
 
-/**
- * Whether a pinned descriptor's proxy reads a manifest that carries the installation's client logo. An older parser
- * refuses the unknown key and fails the build, so a namespace kept on such a pin gets no logo and keeps the fabrika
- * mark until it is re-pinned (`--proxy-source=current`). Decided by the build section Zerops applies, as the carrier is.
- */
-export const zeropsProxyAcceptsBrand = (descriptorContents: string, setup = 'proxy'): boolean => {
+/** The build variable that marks a proxy source whose manifest parser knows a dev sandbox entry's `audience` and `upstreamHost`. */
+export const FABRIKA_PROXY_MANIFEST_SANDBOXES = 'FABRIKA_PROXY_MANIFEST_SANDBOXES'
+
+/** Whether the build section Zerops applies to the descriptor's proxy setup declares `marker: "1"`, as the carrier is decided. */
+const declaresMarker = (descriptorContents: string, marker: string, setup: string): boolean => {
 	const parsed = parseZeropsDescriptor(descriptorContents)
 	for (const entry of appliedZeropsSetups(parsed, selectZeropsDescriptorSetup(parsed, setup))) {
 		const read = buildSectionSchema.safeParse(entry)
 		if (!read.success) continue
-		return read.data.build.envVariables?.[FABRIKA_PROXY_MANIFEST_BRAND] === '1'
+		return read.data.build.envVariables?.[marker] === '1'
 	}
 	return false
 }
+
+/**
+ * Whether a pinned descriptor's proxy reads a manifest that carries the installation's client logo. An older parser
+ * refuses the unknown key and fails the build, so a namespace kept on such a pin gets no logo and keeps the fabrika
+ * mark until it is re-pinned (`--proxy-source=current`).
+ */
+export const zeropsProxyAcceptsBrand = (descriptorContents: string, setup = 'proxy'): boolean =>
+	declaresMarker(descriptorContents, FABRIKA_PROXY_MANIFEST_BRAND, setup)
+
+/**
+ * Whether a pinned descriptor's proxy reads dev sandbox entries. An older parser refuses their `audience` and
+ * `upstreamHost` and fails the build, so a namespace on such a pin serves no sandbox until it is re-pinned.
+ */
+export const zeropsProxyAcceptsSandboxes = (descriptorContents: string, setup = 'proxy'): boolean =>
+	declaresMarker(descriptorContents, FABRIKA_PROXY_MANIFEST_SANDBOXES, setup)

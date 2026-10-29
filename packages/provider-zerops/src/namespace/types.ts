@@ -5,6 +5,7 @@ import type { ZeropsArtifactSourceDescriptor } from '../manifest'
 import type { ZeropsSourceRepository } from '../source'
 import type { ZeropsSourcePort } from '../source/port'
 import type { ZeropsSourceTarget } from '../types'
+import type { ZboxFetch } from '../zbox'
 
 export type ZeropsNamespacePublicAccess = 'custom-domain' | 'zerops-subdomain'
 
@@ -60,7 +61,15 @@ export interface ZeropsNamespaceTarget {
 	readonly proxyAppVersionId?: string
 	/** The hosts the published proxy answers on, recorded once so a namespace read needs no platform call. */
 	readonly proxyHosts?: readonly ProviderNamespaceHost[]
+	/** The namespace's dev sandbox host, recorded once provisioned; absent while no dev environment uses the namespace. */
+	readonly sandboxHost?: ZeropsNamespaceSandboxHost
 	readonly ready?: boolean
+}
+
+export interface ZeropsNamespaceSandboxHost {
+	readonly serviceId: string
+	/** The Box API origin: the service's public subdomain for `SANDBOX_HOST_API_PORT`. */
+	readonly apiOrigin: string
 }
 
 export type ZeropsNamespacePolicy = Omit<ZeropsNamespaceTarget, 'proxySource'>
@@ -84,6 +93,8 @@ export interface ZeropsNamespaceOptions {
 	/** The installation's own project, which no namespace may create into or adopt. Absent until `platform deploy` writes it. */
 	readonly installationProjectId?: string
 	readonly api: ZeropsApi
+	/** The transport of the sandbox host's Box API; absent, the global `fetch`. */
+	readonly zboxFetch?: ZboxFetch
 	readonly sleep?: Sleeper
 }
 
