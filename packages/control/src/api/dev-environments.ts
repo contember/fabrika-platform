@@ -13,6 +13,7 @@ import { DEV_SANDBOX_VAULT_REQUIRED, devSandboxOrigin, workspacePublication } fr
 import {
 	type DevRecord,
 	type DevSandboxDeps,
+	DevSandboxRefusedError,
 	type DevStore,
 	ensureDevSandbox,
 	removeDevSandbox,
@@ -418,6 +419,7 @@ async function sandboxCall<T>(operation: () => Promise<T>): Promise<T> {
 		// A busy namespace has queued the reconcile that creates the host.
 		if (cause instanceof ProviderNamespaceError && cause.code === PROVIDER_DEV_HOST_PENDING) fail(503, DEV_SANDBOX_HOST_PENDING)
 		if (cause instanceof NamespaceProxyBusyError) fail(503, DEV_SANDBOX_HOST_PENDING)
+		if (cause instanceof DevSandboxRefusedError) fail(409, cause.message)
 		throw cause
 	}
 }

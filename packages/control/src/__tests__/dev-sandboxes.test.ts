@@ -67,7 +67,13 @@ class FakeSandboxHost implements ProviderDevSandboxes {
 	/** The namespace has no sandbox host yet: `ensure` says so until a republish created it. */
 	hostPending = false
 	failRemove = false
+	/** The namespace's placement cannot serve sandboxes: `admit` refuses with this. */
+	refusal: string | null = null
 	private readonly lost = new Set<string>()
+
+	admit() {
+		if (this.refusal !== null) throw new ProviderNamespaceError(this.refusal, 'proxySandboxesUnsupported', false)
+	}
 
 	ensure(input: { workspaceId: string; sandboxKey: string }) {
 		this.keys.add(input.sandboxKey)
@@ -696,5 +702,18 @@ describe('dev sandboxes', () => {
 		expect(await w.repositories.devSandboxes.get(abandoned.workspaceId)).toBeNull()
 		expect(await w.repositories.devSandboxes.get(active.workspaceId)).not.toBeNull()
 		expect(await w.repositories.devSandboxes.insertCreating({ workspaceId: abandoned.workspaceId, appId: 'shop', env: 'dev', now })).toBeNull()
+	})
+
+	test("a bind on a placement that cannot serve sandboxes is refused before its row exists, so the namespace's other members still publish", async () => {
+		const w = await world()
+		const workspaceId = await w.workspace('Unmarked')
+		w.source.branches.set(`fabrika/${workspaceId}`, sha('b'))
+		w.host.refusal = 'the proxy of deployment namespace `apps-dev` is pinned to a source that cannot serve dev sandboxes; re-pin it'
+		const refused = await bindDevUseCase(w.dev(), { workspaceId }).catch((cause: unknown) => cause)
+		expect(refused instanceof ControlApiError ? [refused.httpStatus, refused.message] : refused).toEqual([409, w.host.refusal])
+		expect(await w.repositories.devSandboxes.get(workspaceId)).toBeNull()
+		expect(w.host.calls).toEqual([])
+		expect(w.republished).toEqual([])
+		expect(await w.repositories.registry.getNamespaceSandboxKeyRef(NAMESPACE)).toBeNull()
 	})
 })

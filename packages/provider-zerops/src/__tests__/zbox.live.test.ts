@@ -93,7 +93,7 @@ describe.skipIf(box === null)('dev sandboxes, against a real Zerops Box workspac
 	const live = box ?? { origin: '', apiKey: '' }
 	const client: ZboxClient = createZboxClient({ baseUrl: live.origin, apiKey: live.apiKey })
 	const logged: string[] = []
-	const sandboxes = createZeropsDevSandboxes({ client: () => client, sleep: defaultSleep, log: (line) => logged.push(line) })
+	const sandboxes = createZeropsDevSandboxes({ client: () => client, admit: () => {}, sleep: defaultSleep, log: (line) => logged.push(line) })
 	// A fresh UUIDv7 per run: parallel runs never share a sandbox name.
 	const workspaceId = Bun.randomUUIDv7()
 	const marker = `m${workspaceId.replaceAll('-', '')}`

@@ -58,6 +58,8 @@ export interface ZeropsDevSandboxesOptions {
 	/** The Box client of the environment's namespace sandbox host, authenticated with `sandboxKey`. */
 	/** Null while the namespace has no sandbox host yet. */
 	readonly client: (environment: ProviderEnvironment, sandboxKey: string) => ZboxClient | null
+	/** Refuses an environment whose placement cannot serve a workspace sandbox; see `ProviderDevSandboxes.admit`. */
+	readonly admit: (environment: ProviderEnvironment) => void
 	readonly sleep: Sleeper
 	/** Where `ensure` says it replaced a dead sandbox: the seam has no run log outside a run. */
 	readonly log: (line: string) => void
@@ -142,8 +144,13 @@ export function createZeropsDevSandboxes(options: ZeropsDevSandboxesOptions): Pr
 	}
 
 	return {
+		admit: (input) => {
+			assertDevEnvironment(input.environment)
+			options.admit(input.environment)
+		},
 		ensure: async (input) => {
 			assertDevEnvironment(input.environment)
+			options.admit(input.environment)
 			const client = hostClient(input.environment, input.sandboxKey)
 			const found = await client.findSandboxByName(sandboxName(input.workspaceId), input.signal)
 			let replaced: string | null = null

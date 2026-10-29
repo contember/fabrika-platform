@@ -90,6 +90,7 @@ function sandboxHost(): ProviderDevSandboxes & { calls: string[] } {
 	}
 	return {
 		calls,
+		admit: () => {},
 		ensure: (input) => {
 			calls.push(`ensure ${input.workspaceId}`)
 			const sandboxId = `sbx-${input.workspaceId}`

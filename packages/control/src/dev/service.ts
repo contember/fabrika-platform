@@ -142,11 +142,15 @@ export interface EnsuredDevSandbox {
 	readonly replaced: boolean
 }
 
+/** The provider refused to place a sandbox in the environment; its message is the one-line refusal. */
+export class DevSandboxRefusedError extends Error {}
+
 /**
  * The workspace's sandbox, created when it has none and created again when Box lost it: `ensure` is idempotent, and the
- * only call that replaces a failed or missing sandbox. Its proxy secret is sealed first and recorded with the sandbox,
- * or deleted when it is not the one recorded. A replaced sandbox has a new upstream, so the namespace republishes.
- * Null when the workspace was abandoned or its sandbox is being removed.
+ * only call that replaces a failed or missing sandbox. The provider admits the placement before the row exists, because
+ * every republish of the namespace hands a recorded sandbox on. Its proxy secret is sealed first and recorded with the
+ * sandbox, or deleted when it is not the one recorded. A replaced sandbox has a new upstream, so the namespace
+ * republishes. Null when the workspace was abandoned or its sandbox is being removed.
  */
 export async function ensureDevSandbox(
 	deps: DevSandboxDeps,
@@ -156,6 +160,12 @@ export async function ensureDevSandbox(
 	signal: AbortSignal,
 ): Promise<EnsuredDevSandbox | null> {
 	const sandboxes = deps.repositories.devSandboxes
+	const environment = await providerEnvironment(deps.repositories, appEnv)
+	try {
+		deps.provider.devSandboxes.admit({ environment })
+	} catch (cause) {
+		throw new DevSandboxRefusedError(cause instanceof Error ? cause.message : 'the provider cannot place a dev sandbox here')
+	}
 	const row = await sandboxes.insertCreating({ workspaceId, appId: appEnv.app_id, env: appEnv.env, now })
 	if (row === null || row.state === 'removing') return null
 	const namespaceId = namespaceOf(appEnv)

@@ -45,7 +45,7 @@ import {
 	type ZeropsNamespaceTarget,
 	zeropsNamespaceTargetCodec,
 } from './namespace'
-import { assertNamespaceProxyReads, type OlderProxyReaders } from './namespace/proxy-reads'
+import { assertNamespaceProxyAcceptsSandboxes, assertNamespaceProxyReads, type OlderProxyReaders } from './namespace/proxy-reads'
 import type { ZeropsNamespaceSandboxHost } from './namespace/types'
 import { createZeropsDeployer, ZEROPS_VERSION_DEADLINE_MS } from './provider'
 import { deploySandbox, parseSandboxCheckpoint } from './sandbox/deploy'
@@ -339,6 +339,11 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 		client: (environment, sandboxKey) => {
 			const host = sandboxHostOf(environment)
 			return host === null ? null : sandboxClient(host.apiOrigin, sandboxKey)
+		},
+		admit: (environment) => {
+			sandboxHostOf(environment)
+			const { namespace, namespaceTarget } = decodeNamespace(environment)
+			assertNamespaceProxyAcceptsSandboxes(namespace.id, namespaceTarget.proxySource)
 		},
 		sleep: options.sleep ?? defaultSleep,
 		log: options.log ?? ((line) => console.warn(line)),

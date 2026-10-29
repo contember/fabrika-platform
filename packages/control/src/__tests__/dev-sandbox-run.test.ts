@@ -110,6 +110,7 @@ function provider(w: World): ControlProvider {
 }
 
 const noSandboxEffects: ProviderDevSandboxes = {
+	admit: () => {},
 	ensure: () => Promise.reject(new Error('not used')),
 	park: () => Promise.resolve(),
 	wake: () => Promise.resolve(),

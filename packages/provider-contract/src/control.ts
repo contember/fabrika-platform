@@ -627,6 +627,11 @@ export interface ProviderDevSandboxRemoveInput {
  * `PROVIDER_DEV_HOST_PENDING`; `remove` there is a no-op, since no sandbox can exist.
  */
 export interface ProviderDevSandboxes {
+	/**
+	 * Mutation-free check that the environment's placement can serve a workspace sandbox. Control calls it before it
+	 * records one, because a recorded sandbox reaches every later republish of the namespace. Throws a one-line refusal.
+	 */
+	admit(input: { readonly environment: ProviderEnvironment }): void
 	ensure(input: ProviderDevSandboxEnsureInput): Promise<ProviderDevSandbox>
 	park(input: ProviderDevSandboxInput): Promise<void>
 	wake(input: ProviderDevSandboxInput): Promise<void>

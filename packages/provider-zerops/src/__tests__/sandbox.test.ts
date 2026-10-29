@@ -40,8 +40,12 @@ const COMMIT_SHA = '0123456789abcdef0123456789abcdef01234567'
 const PROXY_SOURCE = {
 	repository: { owner: 'example', name: 'platform' },
 	commitSha: COMMIT_SHA,
-	descriptor: await createZeropsArtifactSourceDescriptor('zerops:\n  - setup: proxy\n'),
+	descriptor: await createZeropsArtifactSourceDescriptor(
+		'zerops:\n  - setup: proxy\n    build:\n      envVariables:\n        FABRIKA_PROXY_MANIFEST_SANDBOXES: "1"\n',
+	),
 }
+/** A pin of a release before dev sandboxes: its proxy cannot parse a sandbox entry. */
+const UNMARKED_PROXY_SOURCE = { ...PROXY_SOURCE, descriptor: await createZeropsArtifactSourceDescriptor('zerops:\n  - setup: proxy\n') }
 const DESCRIPTOR = await createZeropsArtifactSourceDescriptor(
 	'zerops:\n  - setup: notesapi\n    build:\n      buildCommands: ["bun run build:web"]\n',
 )
@@ -78,14 +82,16 @@ const devConfig = (extra: ZeropsServiceSpec[] = [], runtimePackages: ZeropsRunti
 	},
 })
 
-const namespace = (options: { sandboxHost?: boolean; publicAccess?: 'custom-domain' | 'zerops-subdomain' } = {}): ProviderDeploymentNamespace => ({
+const namespace = (
+	options: { sandboxHost?: boolean; publicAccess?: 'custom-domain' | 'zerops-subdomain'; proxySource?: typeof PROXY_SOURCE } = {},
+): ProviderDeploymentNamespace => ({
 	id: 'apps-dev',
 	env: 'dev',
 	target: {
 		provider: 'zerops',
 		version: zeropsNamespaceTargetCodec.version,
 		payload: zeropsNamespaceTargetCodec.encode({
-			proxySource: PROXY_SOURCE,
+			proxySource: options.proxySource ?? PROXY_SOURCE,
 			projectId: 'project-1',
 			proxyServiceId: 'proxy-1',
 			ready: true,
@@ -309,6 +315,25 @@ describe('dev sandbox lifecycle', () => {
 		expect(box.sandboxes.has('sb5')).toBe(false)
 	})
 
+	test('a namespace pinned to a proxy that cannot serve sandboxes is refused by admit and by ensure, before any Box call', async () => {
+		const { box, control } = harness()
+		const environment = devEnvironment({ namespace: namespace({ proxySource: UNMARKED_PROXY_SOURCE }) })
+		const refusal = (run: () => unknown) => {
+			try {
+				run()
+				return null
+			} catch (cause) {
+				return cause instanceof ProviderNamespaceError ? [cause.code, cause.retryable] : cause
+			}
+		}
+		expect(refusal(() => sandboxes(control).admit({ environment }))).toEqual(['proxySandboxesUnsupported', false])
+		expect(refusal(() => sandboxes(control).admit({ environment: devEnvironment() }))).toBeNull()
+		const ensured = await sandboxes(control).ensure({ environment, workspaceId: WORKSPACE, sandboxKey: SANDBOX_KEY, signal: signal() })
+			.catch((cause: unknown) => cause)
+		expect(ensured instanceof ProviderNamespaceError ? ensured.code : ensured).toBe('proxySandboxesUnsupported')
+		expect(box.requests).toEqual([])
+	})
+
 	test('remove without a recorded sandbox finds the workspace sandbox by name, and treats none as removed', async () => {
 		const box = new FakeBox()
 		box.addSandbox({ id: 'sb6', name: sandboxName(WORKSPACE) })
@@ -350,6 +375,8 @@ describe('dev sandbox lifecycle', () => {
 				signal: signal(),
 			}),
 		).rejects.toThrow(REREGISTER)
+		// Before Control records anything, so `bind_dev` answers the author with the remedy.
+		expect(() => sandboxes(control).admit({ environment: devEnvironment({ target: pinnedServiceTarget }) })).toThrow(REREGISTER)
 	})
 })
 

@@ -329,7 +329,7 @@ describe('the MCP endpoint', () => {
 
 	test('apply_changes answers a persisted commit even when following the dev environment fails', async () => {
 		const unused = () => Promise.reject(new Error('unused'))
-		const host: ProviderDevSandboxes = { ensure: unused, park: unused, wake: unused, remove: unused }
+		const host: ProviderDevSandboxes = { admit: () => {}, ensure: unused, park: unused, wake: unused, remove: unused }
 		const { fetch, world } = await fixture(undefined, { dev: true, provider: { ...zeropsProvider, devSandboxes: host } })
 		const token = await testResourceToken({ resource: RESOURCE, label: 'author@acme.test', actions: AUTHOR_ACTIONS })
 		const errorLog = spyOn(console, 'error').mockImplementation(() => {})
@@ -364,6 +364,7 @@ describe('the MCP endpoint', () => {
 	test('bind_dev gives the workspace its own sandbox at its own URL, and delete_workspace removes it', async () => {
 		const calls: string[] = []
 		const host: ProviderDevSandboxes = {
+			admit: () => {},
 			ensure: (input) => {
 				calls.push(`ensure ${input.workspaceId}`)
 				return Promise.resolve({ sandboxId: `sbx-${input.workspaceId}`, baseDigest: 'sha256:base', upstreamHost: 'upstream.box.test' })
