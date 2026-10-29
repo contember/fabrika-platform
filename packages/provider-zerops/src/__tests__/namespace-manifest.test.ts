@@ -213,6 +213,12 @@ describe('namespace proxy manifest: dev sandboxes', () => {
 		devSandboxes: sandboxes,
 	})
 
+	test('a dev member without a sandbox gets no entry, not one on its base domain, even with access', () => {
+		const manifest = compileNamespaceProxyManifest('apps-dev', [devMember([])])
+		expect(devMember([]).access).toBeDefined()
+		expect(manifest.apps).toEqual([])
+	})
+
 	test("routes a dev member only through one entry per sandbox, each with its own table, audience and the sandbox host's router", () => {
 		const narrowed: ContractArtifact = { ...notesArtifact, endpoints: notesArtifact.endpoints.slice(0, 1) }
 		const manifest = compileNamespaceProxyManifest('apps-dev', [

@@ -355,7 +355,10 @@ export interface ProviderNamespaceMember {
 	readonly operationsOrigin?: string
 	/** See `ProviderEnvironment.access`: the proxy table of a contract application comes only from here. */
 	readonly access?: ProviderApprovedAccess
-	/** A dev member with sandboxes is routed ONLY through these entries, never through its own `domain` and `access`. */
+	/**
+	 * Present for a dev member, which is routed ONLY through these entries (none while it has no sandbox), never through
+	 * its own `domain` and `access`.
+	 */
 	readonly devSandboxes?: readonly ProviderNamespaceDevSandbox[]
 }
 

@@ -314,10 +314,10 @@ retry helps, and never carries upstream text, which may hold a token or a clone 
 
 A `dev` environment registered before sandboxes ran on one Zerops service of its own and is not migrated. The upgrade
 drops Control's record of it (its bound workspace, target head and launcher report). `bind_dev` and a dev deploy refuse
-it and say to delete it and register it again with `--kind=dev` and a wildcard domain; through MCP the author sees only
-a failure with a reference, which Control's log names. Until the operator acts, its namespace resource claims stay held
-and its old domain stays routed to the old service, and no deploy writes to that service again, so its variables, app
-secrets included, stay until it is deleted. After `fabrika platform upgrade`:
+it and say to delete it and register it again with `--kind=dev` and a wildcard domain. Until the operator acts, its
+namespace resource claims stay held; the next republish of its namespace stops routing its old domain, because a `dev`
+environment is served only through workspace sandboxes. No deploy writes to the old service again, so its variables,
+app secrets included, stay until it is deleted. After `fabrika platform upgrade`:
 
 1. Re-pin each namespace that will hold a dev environment:
    `fabrika control namespaces update --namespace=<id> --proxy-source=current`. Its proxy then reads sandbox entries.

@@ -403,8 +403,9 @@ async function writeNamespace(
 /**
  * Every app environment the namespace's entry point routes, read under its lease, with the secret its proxy sends and
  * its approved access: the proxy table of a contract application comes from `approvedSnapshot`, never from its artifact (ADR-0050).
- * A `dev` member with workspace sandboxes is routed only through them, each from its own published bootstrap run, and
- * only then does the provider get the namespace's sandbox host key. A `dev` member without any is handed as before.
+ * A `dev` member is routed only through its workspace sandboxes, each from its own published bootstrap run, and never on
+ * its base domain: the environment-level publication of a bootstrap names no upstream. The provider gets the namespace's
+ * sandbox host key only while a sandbox is recorded.
  */
 async function namespaceMembers(
 	deps: Pick<NamespaceJobDeps, 'repositories' | 'proxySecrets' | 'vault'>,
@@ -427,9 +428,9 @@ async function namespaceMembers(
 			artifact: parseStoredEnvelope(row.provider_artifact_json, `artifact for ${row.app_id}/${row.env}`),
 			...(operationsOrigin === undefined ? {} : { operationsOrigin }),
 		}
-		if (sandboxes.length > 0) {
-			sandboxed = true
-			members.push({ ...base, devSandboxes: await memberSandboxes(deps, row, sandboxes) })
+		if (row.kind === 'dev') {
+			if (sandboxes.length > 0) sandboxed = true
+			members.push({ ...base, devSandboxes: sandboxes.length === 0 ? [] : await memberSandboxes(deps, row, sandboxes) })
 			continue
 		}
 		const proxySecret = await deps.proxySecrets?.forAppEnv(row.app_id, row.env)

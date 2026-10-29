@@ -449,7 +449,7 @@ describe('a dev bootstrap beside the rest of the namespace', () => {
 		for (const spy of quiet) spy.mockRestore()
 	})
 
-	test('beside a dev environment without sandboxes, a standard deploy opens no vault and hands no host key', async () => {
+	test('beside a dev environment without sandboxes, a standard deploy opens no vault, hands no host key and routes no dev entry', async () => {
 		const w = await world()
 		await seedCrm(w)
 		let opened = 0
@@ -466,8 +466,10 @@ describe('a dev bootstrap beside the rest of the namespace', () => {
 		expect(opened).toBe(0)
 		expect(await w.db.registry.getNamespaceSandboxKeyRef('apps-dev')).toBeNull()
 		const notes = last?.members.find((member) => member.appId === 'notes')
-		expect(notes?.devSandboxes).toBeUndefined()
-		expect(notes?.domain).toBe(DOMAIN)
+		// Never its base domain: the environment's access is a bootstrap's, and it names no upstream.
+		expect(notes?.devSandboxes).toEqual([])
+		expect(notes?.access).toBeUndefined()
+		expect(notes?.proxySecret).toBeUndefined()
 	})
 
 	test('a dev member routed by sandboxes carries neither the environment secret nor its access', async () => {
