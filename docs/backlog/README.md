@@ -135,4 +135,5 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [251](251-the-launcher-runs-authored-commands-as-root.md): In a dev sandbox the launcher runs `apply_changes`' SPA commands and `run_checks` as root with the app's secrets.
 - [252](252-a-bind-can-race-the-deletion-of-its-dev-environment.md): The dev environment delete checks for sandbox rows apart from the delete; a bind between them leaves an unnamed Box sandbox.
 - [254](254-confirm-the-box-router-port-stays-private.md): Confirm live that publishing the sandbox host's API subdomain does not also publish the Box router port 8081.
+- [255](255-a-failed-inserting-bind-removes-a-joined-binds-sandbox.md): A failed `bind_dev` that inserted the sandbox row removes the sandbox of a bind that joined it.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.
