@@ -229,6 +229,9 @@ this one import.
   `migrate` → `deploy-worker` → `reconcile-schema` → `sync-secrets`. `build` is present when the config sets
   `pipeline.build` or the release pins the generated entry. `runSteps` executes them in the
   order supplied and never interprets a step's `kind`.
+- **Only declared application secrets reach the Worker.** Control hands the deploy every secret stored for the
+  environment; `sync-secrets` writes those `pipeline.secrets` names, and `deploy-worker` logs every other one by name
+  (`undeclaredSecrets`), never its value, so a secret set in the console but not declared does not vanish silently.
 - **The proxy topology is: public Worker owns the route, private application Worker is bound to it.**
   IAM remains a global service binding, at its application entrypoint. See ADR-0022.
 - **`deploy-worker` deploys the generated configs in dependency order** (`src/deploy-order.ts`), not oblaka's,

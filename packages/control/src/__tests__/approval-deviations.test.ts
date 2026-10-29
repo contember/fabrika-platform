@@ -287,7 +287,7 @@ describe('database code in the reviewed snapshot', () => {
 		expect(refused.classification).toBeNull()
 		const log = w.logs.get(`runs/${refused.runId}/logs.ndjson`) ?? ''
 		expect(log).toContain(
-			'access: snapshot refused (migrations-refused, 1 problem); `fabrika db migrate` names each refused statement by file and line',
+			'access: snapshot refused (migrations-refused, 1 problem); `fabrika-check` names each refused statement by file and line (rule migration-refused)',
 		)
 		expect(log).not.toContain(secret)
 		expect((await environment(w, 'stage')).published_run_id).toBeNull()

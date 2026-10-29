@@ -228,8 +228,9 @@ async function readCandidate(
 
 /** Where the author finds what the run log does not name: the checkout's text stays out of the log. */
 function refusalHint(error: SnapshotRefused): string {
+	// `fabrika db migrate` names them too, but only on Postgres: on Cloudflare the object migrates itself and it runs nothing.
 	return error.code === 'migrations-refused' || error.code === 'migrations-unreadable'
-		? '`fabrika db migrate` names each refused statement by file and line'
+		? '`fabrika-check` names each refused statement by file and line (rule migration-refused)'
 		: '`fabrika-check` names the problems'
 }
 

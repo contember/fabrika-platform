@@ -721,6 +721,47 @@ const cases: readonly RuleCase[] = [
 		},
 	},
 	{
+		rule: 'migration-refused',
+		bad: {
+			...(await cloudflareApplication("c.files({ types: ['image/png'], maxBytes: 1024 })")),
+			'db/migrations/20261024120000_codes.sql': [
+				'CREATE TABLE codes (id TEXT PRIMARY KEY, code TEXT NOT NULL);',
+				'INSERT INTO codes (id, code) SELECT id, lower(hex(randomblob(16))) FROM notes;',
+				'',
+			].join('\n'),
+		},
+		expected: ['db/migrations/20261024120000_codes.sql:2:1'],
+		good: {
+			...(await cloudflareApplication("c.files({ types: ['image/png'], maxBytes: 1024 })")),
+			'db/migrations/20261024120000_codes.sql':
+				'CREATE TABLE codes (id TEXT PRIMARY KEY, code TEXT NOT NULL);\nINSERT INTO codes (id, code) SELECT id, id FROM notes;\n',
+		},
+	},
+	{
+		rule: 'backup-schema',
+		bad: {
+			...(await cloudflareApplication("c.files({ types: ['image/png'], maxBytes: 1024 })")),
+			'db/migrations/20261024120000_invoices.sql': [
+				'CREATE TABLE invoices (',
+				'\tid TEXT PRIMARY KEY,',
+				'\tkind TEXT NOT NULL,',
+				'\tproforma_id TEXT REFERENCES invoices (id),',
+				"\tCHECK (proforma_id IS NULL OR kind = 'invoice')",
+				');',
+				'',
+			].join('\n'),
+		},
+		expected: ['db/migrations/20261024120000_invoices.sql:1:1'],
+		good: {
+			...(await cloudflareApplication("c.files({ types: ['image/png'], maxBytes: 1024 })")),
+			'db/migrations/20261024120000_invoices.sql': [
+				"CREATE TABLE invoices (id TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN ('invoice', 'proforma')));",
+				'ALTER TABLE invoices ADD COLUMN proforma_id TEXT REFERENCES invoices (id);',
+				'',
+			].join('\n'),
+		},
+	},
+	{
 		rule: 'cloudflare-framework-name',
 		bad: {
 			...(await cloudflareApplication("c.files({ types: ['image/png'], maxBytes: 1024 })")),
@@ -741,7 +782,7 @@ const cases: readonly RuleCase[] = [
 		good: {
 			...(await cloudflareApplication("c.files({ types: ['image/png'], maxBytes: 1024 })")),
 			'db/migrations/20261024120000_avatars.sql':
-				'CREATE TABLE avatars (\n\tid TEXT PRIMARY KEY,\n\tfile_id TEXT NOT NULL REFERENCES "FABRIKA_FILES" (id)\n);\n',
+				'CREATE TABLE avatars (\n\tid TEXT PRIMARY KEY,\n\tfile_id TEXT NOT NULL REFERENCES fabrika_files (id)\n);\n',
 		},
 	},
 	{

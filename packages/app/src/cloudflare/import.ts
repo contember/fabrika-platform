@@ -5,6 +5,7 @@
 
 import {
 	decodeOpsDumpLine,
+	describeOpsDumpSchema,
 	encodeOpsDumpRow,
 	foldOpsTableHash,
 	OPS_DATA_REFUSED_STATUS,
@@ -24,11 +25,7 @@ import {
 	type OpsDumpManifest,
 	opsDumpRowidSql,
 	type OpsDumpSchema,
-	type OpsDumpSchemaColumn,
 	type OpsDumpSchemaEntry,
-	type OpsDumpSchemaForeignKey,
-	type OpsDumpSchemaIndex,
-	type OpsDumpSchemaTable,
 	type OpsDumpSource,
 	type OpsDumpTable,
 	type OpsDumpTablePlan,
@@ -761,200 +758,9 @@ function sameDdl(left: readonly OpsDumpSchemaEntry[], right: readonly OpsDumpSch
 	return left.length === right.length && canonical(left) === canonical(right)
 }
 
-/**
- * The schema `planOpsDump` reads, from the PRAGMAs workerd admits, of every table a dump holds. An `INITIALLY DEFERRED`
- * clause is read from the table's SQL outside its quotes and comments, and marks every foreign key of its table; the
- * names a `CHECK` reads come from the same SQL (`checkNamesOf`).
- */
+/** The schema `planOpsDump` reads, of every table a dump holds (`describeOpsDumpSchema`). */
 export function describeDumpSchema(storage: SqliteStorage): OpsDumpSchema {
-	const tables: OpsDumpSchemaTable[] = []
-	for (const row of storage.sql.exec('PRAGMA table_list').toArray()) {
-		const name = text(row['name'])
-		const type = text(row['type'])
-		if (text(row['schema']) !== 'main' || type === 'view' || !dumped(name)) {
-			continue
-		}
-		const virtual = type === 'virtual'
-		const sql = storage.sql.exec(`SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = ?`, name).toArray()[0]?.['sql']
-		const clauses = typeof sql === 'string' ? unquotedSql(sql) : null
-		tables.push({
-			name,
-			virtual,
-			withoutRowid: flag(row['wr']),
-			checkNames: typeof sql === 'string' ? checkNamesOf(sql) : null,
-			// A virtual table is refused whatever it holds, and its module may not be loaded to describe it.
-			columns: virtual ? [] : describeColumns(storage, name),
-			indexes: virtual ? [] : describeIndexes(storage, name),
-			foreignKeys: virtual ? [] : describeForeignKeys(storage, name, clauses === null || /\binitially\s+deferred\b/i.test(clauses)),
-		})
-	}
-	return { tables }
-}
-
-function describeColumns(storage: SqliteStorage, table: string): OpsDumpSchemaColumn[] {
-	return storage.sql.exec(`PRAGMA table_xinfo(${literal(table)})`).toArray().map((row) => {
-		const hidden = integer(row['hidden'])
-		return {
-			name: text(row['name']),
-			type: text(row['type']),
-			notNull: flag(row['notnull']),
-			primaryKey: integer(row['pk']),
-			generated: hidden === 2 || hidden === 3,
-		}
-	})
-}
-
-function describeIndexes(storage: SqliteStorage, table: string): OpsDumpSchemaIndex[] {
-	return storage.sql.exec(`PRAGMA index_list(${literal(table)})`).toArray().map((row) => {
-		const origin = row['origin']
-		if (origin !== 'c' && origin !== 'u' && origin !== 'pk') {
-			throw new Error('PRAGMA index_list answered an origin SQLite does not write')
-		}
-		const columns = storage.sql.exec(`PRAGMA index_xinfo(${literal(text(row['name']))})`).toArray()
-			.filter((column) => flag(column['key']))
-			.sort((left, right) => integer(left['seqno']) - integer(right['seqno']))
-			.map((column) => typeof column['name'] === 'string' ? column['name'] : null)
-		return { unique: flag(row['unique']), origin, partial: flag(row['partial']), columns }
-	})
-}
-
-function describeForeignKeys(storage: SqliteStorage, table: string, initiallyDeferred: boolean): OpsDumpSchemaForeignKey[] {
-	const keys = new Map<number, { parent: string; rows: { seq: number; from: string; to: string | null }[] }>()
-	for (const row of storage.sql.exec(`PRAGMA foreign_key_list(${literal(table)})`).toArray()) {
-		const id = integer(row['id'])
-		const to = row['to']
-		const entry = { seq: integer(row['seq']), from: text(row['from']), to: typeof to === 'string' ? to : null }
-		const key = keys.get(id)
-		if (key === undefined) {
-			keys.set(id, { parent: text(row['table']), rows: [entry] })
-		} else {
-			key.rows.push(entry)
-		}
-	}
-	return [...keys.entries()].sort(([left], [right]) => left - right).map(([, key]) => {
-		const rows = key.rows.sort((left, right) => left.seq - right.seq)
-		const references = rows.flatMap((row) => row.to === null ? [] : [row.to])
-		if (references.length !== 0 && references.length !== rows.length) {
-			throw new Error('PRAGMA foreign_key_list named the parent columns of a key only in part')
-		}
-		return { parent: key.parent, columns: rows.map((row) => row.from), references: references.length === 0 ? null : references, initiallyDeferred }
-	})
-}
-
-type SqlToken =
-	| { readonly kind: 'name'; readonly text: string; readonly quoted: boolean }
-	| { readonly kind: 'open' | 'close' | 'other' }
-
-const WORD_CHAR = /[A-Za-z0-9_$\u0080-\uffff]/
-
-/**
- * The names the `CHECK` clauses of a table's `sql` read: every word and quoted identifier between a `CHECK` keyword's
- * parentheses, ASCII-lowercase, keywords and numbers included, so it lists at least every column a `CHECK` reads. A
- * string literal and a comment name nothing; a double-quoted string, which SQLite may read as either, counts as a name.
- * `null` when the text does not scan (an unclosed quote, comment or parenthesis), which counts as naming every column.
- */
-export function checkNamesOf(sql: string): string[] | null {
-	const tokens = sqlTokens(sql)
-	if (tokens === null) return null
-	const names: string[] = []
-	for (let index = 0; index < tokens.length; index++) {
-		const token = tokens[index]
-		if (token?.kind !== 'name' || token.quoted || asciiLower(token.text) !== 'check' || tokens[index + 1]?.kind !== 'open') continue
-		let depth = 0
-		let end = index + 1
-		for (; end < tokens.length; end++) {
-			const inner = tokens[end]
-			if (inner?.kind === 'open') depth++
-			else if (inner?.kind === 'close' && --depth === 0) break
-			else if (inner?.kind === 'name') names.push(asciiLower(inner.text))
-		}
-		if (end === tokens.length) return null
-		index = end
-	}
-	return names
-}
-
-/** `sql` as words, quoted identifiers and parentheses; string literals, comments and whitespace dropped. */
-function sqlTokens(sql: string): SqlToken[] | null {
-	const tokens: SqlToken[] = []
-	let index = 0
-	while (index < sql.length) {
-		const char = sql.charAt(index)
-		if (sql.startsWith('--', index)) {
-			const end = sql.indexOf('\n', index)
-			index = end < 0 ? sql.length : end + 1
-		} else if (sql.startsWith('/*', index)) {
-			const end = sql.indexOf('*/', index + 2)
-			if (end < 0) return null
-			index = end + 2
-		} else if (char === "'" || char === '"' || char === '`' || char === '[') {
-			const close = char === '[' ? ']' : char
-			let end = index + 1
-			let text = ''
-			for (;;) {
-				const next = sql.indexOf(close, end)
-				if (next < 0) return null
-				text += sql.slice(end, next)
-				if (close !== ']' && sql.charAt(next + 1) === close) {
-					text += close
-					end = next + 2
-					continue
-				}
-				end = next + 1
-				break
-			}
-			if (char !== "'") tokens.push({ kind: 'name', text, quoted: true })
-			index = end
-		} else if (WORD_CHAR.test(char)) {
-			let end = index + 1
-			while (end < sql.length && WORD_CHAR.test(sql.charAt(end))) end++
-			tokens.push({ kind: 'name', text: sql.slice(index, end), quoted: false })
-			index = end
-		} else {
-			if (char === '(') tokens.push({ kind: 'open' })
-			else if (char === ')') tokens.push({ kind: 'close' })
-			else if (!/\s/.test(char)) tokens.push({ kind: 'other' })
-			index++
-		}
-	}
-	return tokens
-}
-
-/** SQLite compares identifiers case-insensitively in ASCII only. */
-function asciiLower(value: string): string {
-	return value.replace(/[A-Z]/g, (letter) => letter.toLowerCase())
-}
-
-/** `sql` with its string literals, quoted identifiers and comments blanked, so a keyword search finds only clauses. */
-function unquotedSql(sql: string): string {
-	let out = ''
-	let index = 0
-	while (index < sql.length) {
-		const char = sql.charAt(index)
-		const close = char === "'" ? "'" : char === '"' ? '"' : char === '`' ? '`' : char === '[' ? ']' : null
-		if (close !== null) {
-			let end = index + 1
-			for (;;) {
-				end = sql.indexOf(close, end)
-				if (end < 0 || close === ']' || sql.charAt(end + 1) !== close) break
-				end += 2
-			}
-			index = end < 0 ? sql.length : end + 1
-			out += ' '
-		} else if (sql.startsWith('--', index)) {
-			const end = sql.indexOf('\n', index)
-			index = end < 0 ? sql.length : end + 1
-			out += ' '
-		} else if (sql.startsWith('/*', index)) {
-			const end = sql.indexOf('*/', index + 2)
-			index = end < 0 ? sql.length : end + 2
-			out += ' '
-		} else {
-			out += char
-			index++
-		}
-	}
-	return out
+	return describeOpsDumpSchema((query, ...bindings) => storage.sql.exec(query, ...bindings).toArray())
 }
 
 /** The import marker, parsed strictly; `null` when the object holds none. A marker that does not parse is a corrupt object. */
@@ -1056,10 +862,6 @@ function quote(identifier: string): string {
 	return `"${identifier.replaceAll('"', '""')}"`
 }
 
-function literal(value: string): string {
-	return `'${value.replaceAll("'", "''")}'`
-}
-
 /** Code-unit order, which no locale changes; the migration runner orders files the same way. */
 function compareNames(left: string, right: string): number {
 	return left < right ? -1 : left > right ? 1 : 0
@@ -1083,15 +885,4 @@ function text(value: SqliteValue | undefined): string {
 		throw new Error('SQLite answered a schema name or SQL that is not text')
 	}
 	return value
-}
-
-function integer(value: SqliteValue | undefined): number {
-	if (typeof value !== 'number' || !Number.isSafeInteger(value)) {
-		throw new Error('SQLite answered a schema number that is not an integer')
-	}
-	return value
-}
-
-function flag(value: SqliteValue | undefined): boolean {
-	return integer(value) !== 0
 }

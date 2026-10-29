@@ -44,6 +44,7 @@ import {
 } from './rules/migrations'
 import { checkModuleReferences } from './rules/modules'
 import { checkAmbientModule, checkPackageReplacement } from './rules/packages'
+import { checkBackupPlan, checkMigrationClassification } from './rules/platform-migrations'
 import { checkRuntimeNode, crossAppFetchMessage, rawSqlBindings } from './rules/runtime'
 import { checkStructureNode, checkStructureReferences, structurePlace } from './rules/structure'
 import { checkGeneratedTest, checkMockModule, checkTestNode, checkTestSuiteConfig } from './rules/tests'
@@ -269,10 +270,12 @@ export const checkApplication = async (input: CheckInput): Promise<Finding[]> =>
 	const declaredTables = tables !== undefined && literal.length === 0 ? readTablesValue(graph, tables, new ReaderProblems()) : null
 	const artifact = read?.ok === true ? compiledArtifact(read.contract, declaredTables) : null
 	findings.push(...contractDependentFindings(dependent, artifact === null ? null : compiledReach(artifact)))
+	if (artifact !== null) findings.push(...checkMigrationClassification(tree.files, artifact.app))
 	if (applicationDialect(tree.files) === 'sqlite') {
 		if (artifact !== null) findings.push(...checkCloudflareContract(artifact))
 		findings.push(...checkCurrentTimestampDefaults(tree.files))
 		findings.push(...checkSqliteFrameworkNames(tree.files))
+		findings.push(...(await checkBackupPlan(tree.files)))
 	}
 	if (declaredTables !== null) {
 		const policies = tablePolicies(declaredTables)

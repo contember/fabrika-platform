@@ -133,13 +133,23 @@ function introspect(db: Database): { columns: SqliteColumn[]; foreignKeys: Forei
  * Applies `bundles` (the framework's `fabrika`, then the application's `app`) to a fresh in-memory database and renders
  * the module for `SCHEMA_FILE` from its application tables. Deterministic for given migrations.
  */
-export async function generateSqliteSchema(bundles: readonly SqliteMigrationBundle[]): Promise<string> {
+export function generateSqliteSchema(bundles: readonly SqliteMigrationBundle[]): Promise<string> {
+	return withMigratedSqlite(bundles, (db) => {
+		const { columns, foreignKeys } = introspect(db)
+		return renderTables(columns, foreignKeys, describeSqlite)
+	})
+}
+
+/**
+ * `read` of a fresh in-memory database with foreign keys enforced and `bundles` applied, as the Durable Object applies
+ * them; the database is closed after. `fabrika-check` plans the backup of an application's schema with it.
+ */
+export async function withMigratedSqlite<T>(bundles: readonly SqliteMigrationBundle[], read: (db: Database) => T): Promise<T> {
 	const db = new Database(':memory:')
 	try {
 		db.run('PRAGMA foreign_keys = ON')
 		await migrateSqlite(bunTarget(db), bundles)
-		const { columns, foreignKeys } = introspect(db)
-		return renderTables(columns, foreignKeys, describeSqlite)
+		return read(db)
 	} finally {
 		db.close()
 	}
