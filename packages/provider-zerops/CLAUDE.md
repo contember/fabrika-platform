@@ -271,7 +271,10 @@ bun test
   `secrets.put` refuses the same references.
 - **A `dev` environment runs one Box sandbox per MCP workspace, never a Zerops service (ADR-0049 rule 10, ADR-0043).**
   `devSandboxes` (`src/sandbox/lifecycle.ts`) creates, parks, wakes and removes a workspace's sandbox, found again by
-  its name `fabrika-<workspace id>`, so every call converges. A dev bootstrap's `deploy` runs the plan in
+  its name `fabrika-<workspace id>`, so every call converges: a create's `Idempotency-Key` is fresh per call (one that
+  repeated after a removal could replay an answer naming the removed sandbox), and `remove` deletes the recorded sandbox
+  and any other under the name. `admit` refuses a namespace whose pin lacks the sandbox marker, before Control records a
+  sandbox. A dev bootstrap's `deploy` runs the plan in
   `src/sandbox/deploy.ts` instead of a Zerops build: wake, stop the previous launcher and build, upload the helper
   scripts, upload the source archive, run the build as the unprivileged build user with a clean environment, and only
   then write the launcher's environment file (0600, through the file API) and start the launcher. Recovery never

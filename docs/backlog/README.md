@@ -134,5 +134,5 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [250](250-the-box-router-strips-authorization.md): The Box router strips `Authorization`; the proxy renames the header and the launcher restores it.
 - [251](251-the-launcher-runs-authored-commands-as-root.md): In a dev sandbox the launcher runs `apply_changes`' SPA commands and `run_checks` as root with the app's secrets.
 - [252](252-a-bind-can-race-the-deletion-of-its-dev-environment.md): The dev environment delete checks for sandbox rows apart from the delete; a bind between them leaves an unnamed Box sandbox.
-- [253](253-a-pre-sandbox-dev-environment-lingers.md): A dev environment registered before sandboxes keeps its old proxy entry, and `bind_dev` answers its re-register remedy as a generic failure.
+- [254](254-confirm-the-box-router-port-stays-private.md): Confirm live that publishing the sandbox host's API subdomain does not also publish the Box router port 8081.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.

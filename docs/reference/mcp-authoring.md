@@ -214,12 +214,15 @@ A sandbox gives an application less than a Zerops service:
 
 Control parks a sandbox after 30 minutes without activity. A request to its URL wakes it in about a second, and
 every `apply_changes`, `bind_dev`, `reset_dev` and `run_checks` wakes it itself. Maintenance removes a sandbox whose
-workspace saw no activity for 14 days, unless a bind or commit made it active again before the removal began; the
-workspace stays, and the next `bind_dev` creates a new sandbox with an empty database. `delete_workspace` removes the
+workspace saw no activity for 14 days, unless a bind or commit made it active again before the removal began, and one
+a `bind_dev` left creating for an hour; the workspace stays, and the next `bind_dev` creates a new sandbox with an empty database. `delete_workspace` removes the
 workspace's sandbox at once, and maintenance also removes any sandbox of an abandoned workspace. A removal stops the
 proxy routing the sandbox's host, deletes the Box sandbox and revokes the workspace's `source` keys, then deletes its
 proxy secret and record, and republishes the namespace proxy. When Box fails, the keys are still revoked and the
-proxy still republished; the record stays for maintenance to finish, and the workspace is abandoned all the same. When the Box host has no room for one more running sandbox, `bind_dev` says so: abandon idle workspaces,
+proxy still republished; the record stays for maintenance to finish, and the workspace is abandoned all the same. While
+a workspace of the authoring environment has a sandbox, that environment cannot be deleted either. A `bind_dev` on a
+namespace whose proxy is pinned to a release that cannot serve sandboxes is refused with the re-pin command, and records
+nothing. When the Box host has no room for one more running sandbox, `bind_dev` says so: abandon idle workspaces,
 or ask the operator to size the `zbox` service.
 
 ## Failures

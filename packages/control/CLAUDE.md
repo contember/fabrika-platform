@@ -564,13 +564,15 @@ other environment, before the provider prepares anything, and the write maps a r
 - **A `dev` environment gives each MCP workspace its own sandbox, which follows the workspace without a run
   (ADR-0049 rule 10).** `app_envs.kind = 'dev'` is set at creation and never changes; one per app, never `prod`, never
   protected, never authoring, no trigger ref, with a `domain` (the wildcard base), and only on a provider with
-  `devSandboxes` (Zerops); it claims no provider resource, and deleting it or its app is refused while it has a
-  sandbox row (`assertNoDevSandboxes`, `src/api/registry/apps.ts`). `dev_sandboxes` holds one row per workspace with a
+  `devSandboxes` (Zerops); it claims no provider resource, and deleting it or its app, or the environment its workspaces
+  belong to, is refused while one of those has a sandbox row (`assertNoDevSandboxes`, `src/api/registry/apps.ts`). `dev_sandboxes` holds one row per workspace with a
   sandbox (the one-service `dev_environments` was dropped by `0027_drop_dev_environments`), metadata only: the sandbox id,
   state (`creating`/`ready`/`removing`), its proxy secret ref, its bootstrap and published runs, the target head, what
   the launcher last reported (head, status, message, trimmed log), a refused head, the reset and check generations, and
-  `parked_at`/`woke_at`. `src/api/dev-environments.ts` holds `bind_dev` (`ensureDevSandbox` on every bind, which
-  creates the sandbox again when Box lost it, then a wake, then a bootstrap run when the sandbox was replaced or
+  `parked_at`/`woke_at`. `src/api/dev-environments.ts` holds `bind_dev` (`ensureDevSandbox` on every bind: the
+  provider's `admit` before the row exists, since every republish hands a recorded sandbox on and a pin that cannot parse
+  it would stop the namespace's publication; it creates the sandbox again when Box lost it, removes the row a failed
+  create started, and removes a sandbox Box finished after a removal took its row; then a wake, then a bootstrap run when the sandbox was replaced or
   `needsBootstrap`: none succeeded, a head was refused, the launcher is gone or unreadable (`launcherProblem`), IAM
   holds another workspace's contract (`app_envs.iam_digest`), or `syncRefusal` of the paths from the held head),
   `get_dev_status`, `run_checks`, `reset_dev` and `followDevCommit`, which `apply_changes` calls; `src/dev/service.ts`
@@ -583,7 +585,8 @@ other environment, before the provider prepares anything, and the write maps a r
   dev run without a workspace is refused. The `<app>:<env>` lease still serializes the environment's bootstraps.
 - **Per workspace: the proxy secret, the `source` key and the return origin.** The namespace job hands one
   `devSandboxes` entry per sandbox row `creating` or `ready`, with its own sealed proxy secret. `platformTransport.issue(…, { workspaceId })`
-  issues the `source` key bound to the workspace (`platform_transport_keys.workspace_id`), and the receiver
+  issues the `source` key bound to the workspace (`platform_transport_keys.workspace_id`), only while the workspace's
+  sandbox row exists and is not `removing`, and the receiver
   (`src/dev/receiver.ts`, the `dev-source` protocol row, ADR-0064) authenticates it to `{ app, env, workspace }`; a key
   without a workspace is refused. A held wait answers the files between the head the launcher holds and the target,
   never stored: the files `apply_changes` just wrote when this process holds them (`DevSignals.offer/take`, only from
@@ -595,8 +598,9 @@ other environment, before the provider prepares anything, and the write maps a r
   release before `DEV_LAUNCHER_SINCE` (`src/dev/deploy.ts`) before anything publishes.
 - **Maintenance parks and removes sandboxes; abandoning a workspace removes its sandbox.** `maintainDevSandboxes`
   (`src/dev/service.ts`, the `devIdle` slot of `runMaintenance`) parks a sandbox idle for 30 minutes and removes one
-  left `removing`, of an abandoned workspace, or idle for 14 days; a commit, bind, reset or check request wakes a parked
-  one. `removeDevSandbox` marks the row `removing` first (the proxy stops routing it), then deletes the Box sandbox and
+  left `removing`, of an abandoned workspace, idle for 14 days, or `creating` for an hour (a bind that died); a commit,
+  bind, reset or check request wakes a parked one. `removeDevSandbox` marks the row `removing` first (the proxy stops
+  routing it), then deletes the Box sandbox (the recorded one and any other under the workspace's name) and
   the workspace's `source` keys, and only when both succeeded its proxy secret and the row; it republishes the
   namespace either way, and a row left `removing` is retried by the next pass. Maintenance marks a row only while it is
   still removable (`markRemovingIfRemovable`), so a bind or commit meanwhile keeps the sandbox. `delete_workspace`

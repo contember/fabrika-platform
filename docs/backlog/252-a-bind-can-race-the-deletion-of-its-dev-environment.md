@@ -25,6 +25,10 @@ Make the check part of the delete's batch: delete the environment only where no 
 coordinate lock the delete already takes, and have `insertCreating` take the same lock. Test: a bind that inserts a row
 between the check and the delete makes the delete fail with the sandbox refusal, and leaves the row.
 
+The same gap exists for the environment the workspaces belong to: `assertNoDevSandboxes` refuses deleting it while a
+workspace of it has a row, and a bind between the check and the delete makes the delete fail on the `dev_sandboxes`
+foreign key to `workspaces` instead of the refusal. Nothing is orphaned there; the batch check covers it too.
+
 ## Touch points
 
 - `packages/control/src/api/registry/apps.ts`
