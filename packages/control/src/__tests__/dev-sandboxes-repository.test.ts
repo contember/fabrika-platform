@@ -264,6 +264,31 @@ function devSandboxesContract(database: () => SqlDatabase): void {
 		expect((await sandboxes.markRemovingIfUncreated(failed))?.state).toBe('removing')
 	})
 
+	test("the sandboxes of an environment's workspaces are listed by that environment, not the sandboxes'", async () => {
+		const workspaceId = await readySandbox()
+		await repositories.registry.upsertAppEnv({
+			appId,
+			env: 'stage',
+			namespaceId: null,
+			provider: 'test',
+			providerTargetJson: '{}',
+			providerArtifactJson: '{}',
+		})
+		const staged = uuidv7()
+		await repositories.workspaces.createWorkspace({
+			id: staged,
+			appId,
+			env: 'stage',
+			ownerId: 'user:ada',
+			branch: `fabrika/${staged}`,
+			baseSha: 'a'.repeat(40),
+			title: 't',
+		})
+		await repositories.devSandboxes.insertCreating({ workspaceId: staged, appId, env: 'dev', now: T0 })
+		expect((await repositories.devSandboxes.listByWorkspaceEnvironment(appId, 'stage')).map((row) => row.workspace_id)).toEqual([staged])
+		expect((await repositories.devSandboxes.listByWorkspaceEnvironment(appId, 'dev')).map((row) => row.workspace_id)).toEqual([workspaceId])
+	})
+
 	test('sandboxes go with their environment', async () => {
 		const workspaceId = await readySandbox()
 		await repositories.registry.deleteAppEnv(appId, 'dev')
@@ -295,6 +320,25 @@ function devSandboxesContract(database: () => SqlDatabase): void {
 		await repositories.devSandboxes.markRemoving(workspaceId)
 		expect(await keys.insert({ ...key('k4', 'h4'), workspace_id: workspaceId })).toBe(false)
 		expect(await keys.findValidByHash(`h4-${appId}`, T0)).toBeNull()
+	})
+
+	test("a workspace's keys go with the workspace", async () => {
+		const workspaceId = await readySandbox()
+		const keys = repositories.platformTransportKeys
+		const row = {
+			app_id: appId,
+			env: 'dev',
+			receiver: 'source',
+			key_id: 'k1',
+			key_hash: `gone-${appId}`,
+			value_ref: 'vault:k1',
+			expires_at: T0 + 100,
+			created_at: T0,
+		}
+		expect(await keys.insert({ ...row, workspace_id: workspaceId })).toBe(true)
+		await repositories.devSandboxes.delete(workspaceId)
+		await database().prepare('DELETE FROM workspaces WHERE id = ?').bind(workspaceId).run()
+		expect(await keys.findValidByHash(`gone-${appId}`, T0)).toBeNull()
 	})
 
 	test('an environment starts with no IAM digest', async () => {

@@ -98,6 +98,16 @@ export class DevSandboxRepository {
 		return results
 	}
 
+	/** The sandboxes of the workspaces of an environment (the authoring one), wherever each sandbox runs. */
+	async listByWorkspaceEnvironment(appId: string, env: string): Promise<DevSandboxRow[]> {
+		const { results } = await this.d1
+			.prepare(`SELECT dev_sandboxes.* FROM dev_sandboxes JOIN workspaces ON workspaces.id = dev_sandboxes.workspace_id
+				WHERE workspaces.app_id = ? AND workspaces.env = ? ORDER BY dev_sandboxes.workspace_id`)
+			.bind(appId, env)
+			.all<DevSandboxRow>()
+		return results
+	}
+
 	/**
 	 * Record a sandbox about to be created; a row already there is returned with the bind counted as activity, unless it
 	 * is being removed. Null when the workspace does not exist or was abandoned: an abandoned workspace gets no sandbox,

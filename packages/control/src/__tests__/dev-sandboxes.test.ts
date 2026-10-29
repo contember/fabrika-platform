@@ -721,6 +721,23 @@ describe('dev sandboxes', () => {
 		expect(await w.repositories.devSandboxes.insertCreating({ workspaceId: abandoned.workspaceId, appId: 'shop', env: 'dev', now })).toBeNull()
 	})
 
+	test('the environment the workspaces belong to is not deleted while one of them has a sandbox; once removed, it is', async () => {
+		const w = await world()
+		const { workspaceId } = await serving(w, 'Staged', sha('b'))
+		const registry = registryContext(w.repositories, { ...zeropsProvider, devSandboxes: w.host })
+		const refused = await deleteAppEnvUseCase(registry, 'shop', 'stage').catch((cause: unknown) => cause)
+		expect(refused instanceof ControlApiError ? [refused.httpStatus, refused.message] : refused).toEqual([
+			409,
+			`the workspaces of environment shop/stage still have 1 workspace sandbox(es) (workspaces ${workspaceId}); delete those workspaces `
+			+ 'with delete_workspace, or wait for maintenance to remove idle ones, then retry',
+		])
+		expect(await w.repositories.registry.getAppEnv('shop', 'stage')).not.toBeNull()
+
+		await abandonWorkspaceUseCase(w.dev(), { workspaceId })
+		expect(await deleteAppEnvUseCase(registry, 'shop', 'stage')).toEqual({ ok: true })
+		expect(await w.repositories.registry.getAppEnv('shop', 'stage')).toBeNull()
+	})
+
 	test('a sandbox Box finishes creating after the workspace was removed is removed too, and the bind says so', async () => {
 		const w = await world()
 		const workspaceId = await w.workspace('Raced')
