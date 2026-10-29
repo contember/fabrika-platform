@@ -41,6 +41,8 @@ const DOMAIN = 'dev.notes.test'
 const CONTROL_ORIGIN = 'https://control.example.test'
 const ENVELOPE = JSON.stringify({ provider: 'harbor', version: 1, payload: {} })
 const SOURCE_KEY = platformTransportVariables('source').key
+/** When the keys a fake reconcile hands expire. */
+const KEYS_EXPIRE_AT = 4_000_000_000
 
 interface IamWrite {
 	readonly app: string
@@ -525,7 +527,7 @@ describe('a dev bootstrap beside the rest of the namespace', () => {
 		expect([...w.logs.values()].join('\n')).toContain(`a dev bootstrap has no dry run: workspace ${workspaceId}`)
 	})
 
-	test("a workspace bootstrap keeps the environment's keys that other sandboxes hold; a standard deploy reconciles as before", async () => {
+	test("a workspace bootstrap keeps the environment's keys that other sandboxes hold and records their expiry; a standard deploy reconciles as before", async () => {
 		const w = await world()
 		await seedCrm(w)
 		const transport = new VaultPlatformTransport(w.db.platformTransportKeys, () => Promise.resolve(w.vault))
@@ -536,7 +538,7 @@ describe('a dev bootstrap beside the rest of the namespace', () => {
 			...deps(w),
 			workloadCredentials: {
 				reconcile: (appId, _env, _contract, options) =>
-					Promise.resolve(void asked.push({ appId, workload: options?.additive === true })).then(() => ({})),
+					Promise.resolve(void asked.push({ appId, workload: options?.additive === true })).then(() => ({ variables: {}, expiresAt: KEYS_EXPIRE_AT })),
 			},
 			membershipTransport: {
 				reconcile: (appId, _env, _needed, options) =>
@@ -545,6 +547,7 @@ describe('a dev bootstrap beside the rest of the namespace', () => {
 		}
 		const workspaceId = await readySandbox(w)
 		expect((await bootstrap(w, workspaceId, recording)).status).toBe('succeeded')
+		expect((await w.db.devSandboxes.get(workspaceId))?.keys_expire_at).toBe(KEYS_EXPIRE_AT)
 		expect((await deployRun(w, 'crm', null, recording)).status).toBe('succeeded')
 		expect(asked).toEqual([
 			{ appId: 'notes', workload: true },

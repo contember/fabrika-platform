@@ -24,6 +24,7 @@ import {
 import { type DevSignals, waitForRecord } from '../dev/signals'
 import { syncRefusal } from '../dev/sync'
 import { logFailure } from '../error-label'
+import { WORKLOAD_KEY_ROTATE_BELOW_SECONDS } from '../workload-credentials'
 import { ControlApiError, fail } from './domain'
 import { NamespaceProxyBusyError } from './namespaces'
 import { canAtCoordinates, createManualRun, toRunDto } from './runs'
@@ -57,6 +58,12 @@ export const DEV_APPLY_LOG_LINES = 20
  */
 export const DEV_LAUNCHER_SILENT_SECONDS = 90
 export const DEV_LAUNCHER_BUSY_SILENT_SECONDS = 15 * 60
+
+/**
+ * A sandbox whose first IAM key has less than this left is bootstrapped again by `bind_dev`. It is the rotation margin of
+ * the workload and membership keys, so the bootstrap hands a key with more left.
+ */
+export const DEV_KEY_REFRESH_SECONDS = WORKLOAD_KEY_ROTATE_BELOW_SECONDS
 
 /** Why a sandbox was not created or woken: the namespace's sandbox host has no room for one more. */
 export const DEV_SANDBOX_CAPACITY = 'the sandbox host is full; abandon idle workspaces or ask the operator to size the zbox service'
@@ -440,8 +447,8 @@ async function firstContact(c: DevUseCaseContext, dev: DevUseCaseDeps, store: De
 
 /**
  * Whether binding `head` needs a bootstrap run: none ran or the last one failed, a head was refused, the running
- * launcher is gone or unreadable, IAM holds another workspace's schema, or the files from what the container holds to
- * `head` change something the build owns.
+ * launcher is gone or unreadable, the IAM keys it holds are due for rotation, IAM holds another workspace's schema, or
+ * the files from what the container holds to `head` change something the build owns.
  */
 async function needsBootstrap(
 	c: DevUseCaseContext,
@@ -456,6 +463,7 @@ async function needsBootstrap(
 	if (run === null || run.status === 'failed') return true
 	if (run.status !== 'succeeded') return false
 	if (row.refused_sha !== null || launcherProblem(row, run, dev.now()) !== null) return true
+	if (keysNote(row, dev.now()) !== null) return true
 	if (await iamDigestNote(c, appEnv, row) !== null) return true
 	const held = row.head_sha ?? run.commit_sha
 	if (held === null) return true
@@ -479,6 +487,20 @@ function launcherProblem(row: DevRecord, run: RunRow | null, now: number): strin
 		+ 'framework release; call bind_dev to bootstrap the environment on the workspace head'
 }
 
+/**
+ * A line saying the IAM keys the sandbox holds are due for rotation or have expired, or null. A sandbox nobody binds keeps
+ * its keys to their expiry: maintenance removes an untouched one before that, but one that only receives commits does not.
+ */
+function keysNote(row: DevRecord | null, now: number): string | null {
+	const expiresAt = row?.sandbox.keys_expire_at ?? null
+	if (expiresAt === null || expiresAt - now > DEV_KEY_REFRESH_SECONDS) return null
+	if (expiresAt <= now) {
+		return "The sandbox's IAM keys have expired, so its webhooks, public procedures, imports and member operations fail; "
+			+ 'call bind_dev to refresh them.'
+	}
+	return `The sandbox's IAM keys expire in ${Math.ceil((expiresAt - now) / 86_400)} d; call bind_dev to refresh them.`
+}
+
 async function bootstrapRunOf(c: DevUseCaseContext, row: DevRecord): Promise<RunRow | null> {
 	return row.bootstrap_run_id === null ? null : c.repositories.runs.getRun(row.bootstrap_run_id)
 }
@@ -500,7 +522,7 @@ async function describe(c: DevUseCaseContext, appEnv: AppEnvRow, row: DevRecord 
 	const run = row === null ? null : await bootstrapRunOf(c, row)
 	const problem = row === null || c.dev === undefined ? null : launcherProblem(row, run, c.dev.now())
 	const state = stateOf(row, run, problem)
-	const note = await iamDigestNote(c, appEnv, row)
+	const notes = [c.dev === undefined ? null : keysNote(row, c.dev.now()), await iamDigestNote(c, appEnv, row)].filter((line) => line !== null)
 	const summary = problem ?? summaryOf(state, row)
 	return {
 		appId: appEnv.app_id,
@@ -509,7 +531,7 @@ async function describe(c: DevUseCaseContext, appEnv: AppEnvRow, row: DevRecord 
 		yours: workspace !== null && workspace.owner_id === requireOwner(c.auth),
 		url: urlOf(appEnv, row),
 		state,
-		summary: note === null ? summary : `${summary} ${note}`,
+		summary: [summary, ...notes].join(' '),
 		head: row?.head_sha ?? null,
 		target: row?.target_sha ?? null,
 		message: problem ?? row?.message ?? null,

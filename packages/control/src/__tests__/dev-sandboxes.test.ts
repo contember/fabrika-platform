@@ -18,6 +18,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import {
 	bindDevUseCase,
+	DEV_KEY_REFRESH_SECONDS,
 	DEV_SANDBOX_CAPACITY,
 	DEV_SANDBOX_HOST_PENDING,
 	devSandboxRemoval,
@@ -644,6 +645,31 @@ describe('dev sandboxes', () => {
 		expect(rebound.bootstrapRun?.id).not.toBe(runId)
 		expect(rebound.bootstrapRun?.commitSha).toBe(sha('b'))
 	})
+	test('bind_dev bootstraps a sandbox whose IAM keys are due for rotation, and get_dev_status says so', async () => {
+		const w = await world()
+		const { workspaceId } = await serving(w, 'Keys', sha('b'))
+		const runId = (await w.repositories.devSandboxes.get(workspaceId))?.bootstrap_run_id ?? ''
+		const now = Math.floor(Date.now() / 1000)
+		const expireIn = async (seconds: number) => {
+			expect(await w.repositories.devSandboxes.recordKeysExpiry(workspaceId, now + seconds)).toBe(true)
+		}
+
+		await expireIn(DEV_KEY_REFRESH_SECONDS + 3600)
+		expect((await status(w, workspaceId)).summary).toBe(`Serving ${sha('b')}.`)
+		expect((await bindDevUseCase(w.dev(), { workspaceId })).bootstrapRun?.id).toBe(runId)
+
+		await expireIn(-60)
+		expect((await status(w, workspaceId)).summary).toBe(
+			`Serving ${sha('b')}. The sandbox's IAM keys have expired, so its webhooks, public procedures, imports and member operations fail; `
+				+ 'call bind_dev to refresh them.',
+		)
+		await expireIn(3 * 86_400 - 60)
+		expect((await status(w, workspaceId)).summary).toBe(`Serving ${sha('b')}. The sandbox's IAM keys expire in 3 d; call bind_dev to refresh them.`)
+		const rebound = await bindDevUseCase(w.dev(), { workspaceId })
+		expect(rebound.bootstrapRun?.id).not.toBe(runId)
+		expect(rebound.bootstrapRun?.commitSha).toBe(sha('b'))
+	})
+
 	test('a sandbox Box lost is created again by bind_dev, republished and bootstrapped; a commit or check asks for bind_dev', async () => {
 		const w = await world()
 		const { workspaceId } = await serving(w, 'Lost', sha('b'))

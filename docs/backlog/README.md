@@ -136,4 +136,10 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [252](252-a-bind-can-race-the-deletion-of-its-dev-environment.md): The dev environment delete checks for sandbox rows apart from the delete; a bind between them leaves an unnamed Box sandbox.
 - [254](254-confirm-the-box-router-port-stays-private.md): Confirm live that publishing the sandbox host's API subdomain does not also publish the Box router port 8081.
 - [255](255-a-failed-inserting-bind-removes-a-joined-binds-sandbox.md): A failed `bind_dev` that inserted the sandbox row removes the sandbox of a bind that joined it.
+- [256](256-a-sandbox-host-fault-fails-the-shared-namespace.md): A Box sandbox host failure marks the whole namespace `failed`, refusing every member's deploy.
+- [257](257-a-failed-sandbox-delete-is-replayed-forever.md): The sandbox delete's fixed `Idempotency-Key` replays a failed delete, so the sandbox is never removed.
+- [258](258-maintenance-can-park-a-sandbox-mid-bootstrap.md): The idle park ignores a running bootstrap, so a sandbox waiting for the lease is parked mid-build.
+- [259](259-a-browser-visit-does-not-keep-a-sandbox-awake.md): A request that wakes a parked sandbox does not count as activity, so it is parked again within 5 minutes.
+- [260](260-an-operator-cannot-remove-an-authors-sandbox.md): An operator cannot delete a dev environment or app while an author keeps a sandbox; the 409 names an owner-only tool.
+- [261](261-a-dev-schema-reconcile-revokes-keys-other-sandboxes-hold.md): IAM's schema reconcile revokes keys that other sandboxes of a dev environment still get handed as fresh.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.

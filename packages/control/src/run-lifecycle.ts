@@ -84,7 +84,7 @@ import {
 	platformMailOrigin,
 	relaysInstallationMail,
 } from './mail-transport'
-import { type MembershipTransportPort, needsMembershipTransport } from './membership-transport'
+import { type HandedMembershipKey, type MembershipTransportPort, needsMembershipTransport } from './membership-transport'
 import { ingestOrigin } from './operations-catalog'
 import { type OperationsReleaseProjectionDeps, projectOperationsRun } from './operations-releases'
 import { type OpsKeysPort, reconcileOpsKey } from './ops-key'
@@ -94,7 +94,13 @@ import { projectedReturnOrigins } from './return-origins'
 import { appSecretPurpose, providerKeepsSecrets, type SecretResolver } from './secret-resolver'
 import { longestTokenLifetime, type TokenKeysPort } from './token-keys'
 import type { Vault } from './vault'
-import { declaredConnectors, declaredWorkloads, type KeyReconcileOptions, type WorkloadCredentialsPort } from './workload-credentials'
+import {
+	declaredConnectors,
+	declaredWorkloads,
+	type HandedWorkloadKeys,
+	type KeyReconcileOptions,
+	type WorkloadCredentialsPort,
+} from './workload-credentials'
 
 export type RunOutcome = ProviderTerminalOutcome
 
@@ -819,16 +825,22 @@ async function deployUnder(
 			: installationMailEnvironment(deps.mailTransport ?? NO_INSTALLATION_MAIL, approvedContract, approvedSnapshot(approvedRow).snapshot.framework)
 		Object.assign(managedEnvironment, mailEnvironment)
 		const workloadKeys = dryRun
-			? {}
+			? NO_WORKLOAD_KEYS
 			: await reconcileWorkloadKeys(deps.workloadCredentials, app.id, appEnv.env, approvedContract, { additive: sandbox !== null })
-		Object.assign(managedEnvironment, workloadKeys, await connectorAddresses(deps.repositories.registry, appEnv.env, approvedContract))
-		const membershipKey = dryRun
+		Object.assign(managedEnvironment, workloadKeys.variables, await connectorAddresses(deps.repositories.registry, appEnv.env, approvedContract))
+		const membership = dryRun
 			? null
 			: await reconcileMembershipKey(deps, app.id, appEnv.env, namespaceProxy && needsMembershipTransport(approvedContract), {
 				additive: sandbox !== null,
 			})
+		const membershipKey = membership?.key ?? null
 		managedEnvironment[MEMBERSHIP_URL_VARIABLE] = membershipKey === null ? null : membershipTransportOrigin(deps.iamIssuer)
 		managedEnvironment[MEMBERSHIP_KEY_VARIABLE] = membershipKey
+		if (sandbox !== null) {
+			// Other sandboxes of the environment may hold an older key: `bind_dev` bootstraps each before its first one expires.
+			const expiries = [workloadKeys.expiresAt, membership?.expiresAt ?? null].filter((at) => at !== null)
+			await deps.repositories.devSandboxes.recordKeysExpiry(sandbox.workspaceId, expiries.length === 0 ? null : Math.min(...expiries))
+		}
 		const relayOrigin = relayedMail ? platformMailOrigin(deps.controlOrigin) : null
 		// A version that no longer relays keeps the running one's key valid until it runs itself (`retirePlatformKeys`).
 		const platformMailKey = dryRun || !relayedMail ? null : await issuePlatformMailKey(deps, app.id, appEnv.env)
@@ -862,7 +874,7 @@ async function deployUnder(
 		runLogs.redact([
 			...Object.values(secrets),
 			managedEnvironment[FABRIKA_PROXY_SECRET] ?? '',
-			...Object.values(workloadKeys),
+			...Object.values(workloadKeys.variables),
 			membershipKey ?? '',
 			platformMailKey ?? '',
 			platformSourceKey ?? '',
@@ -1137,7 +1149,7 @@ async function reconcileWorkloadKeys(
 	env: string,
 	contract: ContractArtifact | null,
 	options: KeyReconcileOptions,
-): Promise<Readonly<Record<string, string>>> {
+): Promise<HandedWorkloadKeys> {
 	if (credentials !== undefined) {
 		return credentials.reconcile(appId, env, contract, options)
 	}
@@ -1146,8 +1158,10 @@ async function reconcileWorkloadKeys(
 			'the contract declares jobs, webhooks, public procedures or imports, and this installation cannot issue their keys (it needs FABRIKA_CONTROL_VAULT_KEY, FABRIKA_IAM_ISSUER and FABRIKA_IAM_PROVISIONING_KEY)',
 		)
 	}
-	return {}
+	return NO_WORKLOAD_KEYS
 }
+
+const NO_WORKLOAD_KEYS: HandedWorkloadKeys = { variables: {}, expiresAt: null }
 
 /** The signing and verifying keys of the contract's token purposes; `null` for a contract that declares none. */
 async function reconcileTokenKeys(
@@ -1175,7 +1189,7 @@ async function reconcileMembershipKey(
 	env: string,
 	needed: boolean,
 	options: KeyReconcileOptions,
-): Promise<string | null> {
+): Promise<HandedMembershipKey | null> {
 	if (deps.membershipTransport !== undefined) {
 		return deps.membershipTransport.reconcile(appId, env, needed, options)
 	}

@@ -124,8 +124,8 @@ actions IAM knows are those of the workspace bootstrapped last.
 1. `bind_dev` ensures the workspace's sandbox: it creates one when the workspace has none, creates it again when Box
    lost it, and wakes it. A bind starts a **bootstrap run** whenever the sandbox's launcher cannot serve the workspace:
    the first bind, a sandbox created again (it holds nothing), after a failed bootstrap or a refused sync, when the change from
-   the head the sandbox holds to the workspace head needs one (below), when IAM holds another workspace's contract, and
-   when the launcher is gone: Control cannot read its requests, or it sent none for 90 s (15 min while it syncs or runs
+   the head the sandbox holds to the workspace head needs one (below), when IAM holds another workspace's contract, when
+   the IAM keys the sandbox holds have less than 15 days left, and when the launcher is gone: Control cannot read its requests, or it sent none for 90 s (15 min while it syncs or runs
    checks). A bind that wakes a parked sandbox waits up to 15 s for the launcher's first request. A bootstrap run is an
    ordinary run of the workspace head with every check, which `get_deployment` follows (`bootstrapRun.id`). Its lane is
    the workspace, so it never supersedes or fails another workspace's run; the bootstraps of one environment still run
@@ -163,6 +163,10 @@ actions IAM knows are those of the workspace bootstrapped last.
 
 When the workspace's contract differs from the one IAM last received, the summary adds that roles and actions follow
 the most recently bootstrapped workspace, and that `bind_dev` refreshes them.
+When the IAM keys the sandbox holds (its webhooks', public procedures', imports' and membership key) have less than 15
+days left, or have expired, the summary says so and that `bind_dev` refreshes them. Only a bind does: a sandbox that
+keeps receiving commits without one runs until its keys expire. One left untouched is removed after 14 days, before
+then.
 
 A commit **needs a bootstrap run** when it changes `package.json`, `bun.lock`, `bunfig.toml`, a `zerops.yaml`, anything
 under `fabrika/` or another `fabrika.*` file, when it changes the contract digest, or when the change is more than 300
