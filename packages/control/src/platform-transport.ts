@@ -67,8 +67,9 @@ export class VaultPlatformTransport implements PlatformTransportPort {
 		}
 		const key = generatePlatformKey()
 		const ref = await vault.putSecret(purpose.scope, purpose.label, key)
+		let recorded: boolean
 		try {
-			await this.records.insert({
+			recorded = await this.records.insert({
 				app_id: appId,
 				env,
 				receiver,
@@ -82,6 +83,10 @@ export class VaultPlatformTransport implements PlatformTransportPort {
 		} catch (error) {
 			await vault.delete(ref)
 			throw error
+		}
+		if (!recorded) {
+			await vault.delete(ref)
+			throw new Error(`workspace ${workspaceId ?? ''} has no dev sandbox in ${appId}/${env}, or it is being removed`)
 		}
 		// A replaced key stays valid by its hash row until its own expiry, but Control never hands its value out again.
 		for (const row of rows) await vault.delete(row.value_ref)

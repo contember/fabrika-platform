@@ -23,14 +23,30 @@ export type PlatformTransportKeyInsert = Omit<PlatformTransportKeyRow, 'workspac
 export class PlatformTransportKeyRepository {
 	constructor(private readonly d1: SqlDatabase) {}
 
-	async insert(row: PlatformTransportKeyInsert): Promise<void> {
-		await this.d1
-			.prepare(
-				`INSERT INTO platform_transport_keys (app_id, env, receiver, key_id, key_hash, value_ref, expires_at, created_at, workspace_id)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			)
-			.bind(row.app_id, row.env, row.receiver, row.key_id, row.key_hash, row.value_ref, row.expires_at, row.created_at, row.workspace_id ?? null)
-			.run()
+	/**
+	 * Records the key; returns false only for a workspace's key when the workspace has no sandbox in the environment, or
+	 * its sandbox is being removed: the removal revokes the keys it finds, so a key recorded after its mark would outlive it.
+	 */
+	async insert(row: PlatformTransportKeyInsert): Promise<boolean> {
+		const columns = 'app_id, env, receiver, key_id, key_hash, value_ref, expires_at, created_at, workspace_id'
+		const workspaceId = row.workspace_id ?? null
+		const statement = workspaceId === null
+			? this.d1.prepare(`INSERT INTO platform_transport_keys (${columns}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+			: this.d1.prepare(`INSERT INTO platform_transport_keys (${columns}) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
+				WHERE EXISTS (SELECT 1 FROM dev_sandboxes WHERE workspace_id = ? AND app_id = ? AND env = ? AND state <> 'removing')`)
+		const bound = statement.bind(
+			row.app_id,
+			row.env,
+			row.receiver,
+			row.key_id,
+			row.key_hash,
+			row.value_ref,
+			row.expires_at,
+			row.created_at,
+			workspaceId,
+			...(workspaceId === null ? [] : [workspaceId, row.app_id, row.env]),
+		)
+		return (await bound.run()).meta.changes > 0
 	}
 
 	/** The key whose hash is `keyHash`, when it has not expired at `now`. */

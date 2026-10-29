@@ -775,4 +775,15 @@ describe('dev sandboxes', () => {
 		expect(await w.repositories.devSandboxes.get(workspaceId)).toBeNull()
 		expect(w.host.calls).toEqual([`remove workspace ${workspaceId}`])
 	})
+
+	test('no source key is issued for a sandbox being removed, and none is sealed', async () => {
+		const w = await world()
+		const workspaceId = await w.workspace('Removing')
+		await w.repositories.devSandboxes.insertCreating({ workspaceId, appId: 'shop', env: 'dev', now: Math.floor(Date.now() / 1000) })
+		await w.repositories.devSandboxes.markRemoving(workspaceId)
+		await expect(sourceKey(w, workspaceId)).rejects.toThrow('or it is being removed')
+		expect((await w.repositories.platformTransportKeys.listForAppEnv('shop', 'dev')).filter((row) => row.workspace_id === workspaceId)).toEqual([])
+		const labels = await w.harness.d1.prepare('SELECT label FROM vault').all<{ label: string }>()
+		expect(labels.results.map((row) => row.label).filter((label) => label.includes(workspaceId))).toEqual([])
+	})
 })

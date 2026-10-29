@@ -282,11 +282,19 @@ function devSandboxesContract(database: () => SqlDatabase): void {
 			expires_at: T0 + 100,
 			created_at: T0,
 		})
-		await repositories.platformTransportKeys.insert({ ...key('k1', 'h1'), workspace_id: workspaceId })
-		await repositories.platformTransportKeys.insert(key('k2', 'h2'))
-		await expect(repositories.platformTransportKeys.insert({ ...key('k3', 'h3'), workspace_id: uuidv7() })).rejects.toThrow()
-		expect((await repositories.platformTransportKeys.findValidByHash(`h1-${appId}`, T0))?.workspace_id).toBe(workspaceId)
-		expect((await repositories.platformTransportKeys.findValidByHash(`h2-${appId}`, T0))?.workspace_id).toBeNull()
+		const keys = repositories.platformTransportKeys
+		// A workspace's key is recorded only while the workspace has a sandbox in the environment that is not being removed.
+		expect(await keys.insert({ ...key('k0', 'h0'), workspace_id: workspaceId })).toBe(false)
+		await repositories.devSandboxes.insertCreating({ workspaceId, appId, env: 'dev', now: T0 })
+		expect(await keys.insert({ ...key('k1', 'h1'), workspace_id: workspaceId })).toBe(true)
+		expect(await keys.insert(key('k2', 'h2'))).toBe(true)
+		expect(await keys.insert({ ...key('k3', 'h3'), workspace_id: uuidv7() })).toBe(false)
+		expect((await keys.findValidByHash(`h1-${appId}`, T0))?.workspace_id).toBe(workspaceId)
+		expect((await keys.findValidByHash(`h2-${appId}`, T0))?.workspace_id).toBeNull()
+		expect(await keys.findValidByHash(`h0-${appId}`, T0)).toBeNull()
+		await repositories.devSandboxes.markRemoving(workspaceId)
+		expect(await keys.insert({ ...key('k4', 'h4'), workspace_id: workspaceId })).toBe(false)
+		expect(await keys.findValidByHash(`h4-${appId}`, T0)).toBeNull()
 	})
 
 	test('an environment starts with no IAM digest', async () => {
