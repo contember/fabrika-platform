@@ -332,6 +332,22 @@ describe('dev sandbox lifecycle', () => {
 		expect(new Set(keys).size).toBe(2)
 	})
 
+	test('remove deletes the recorded sandbox and one a racing ensure created under the workspace name', async () => {
+		const box = new FakeBox()
+		box.addSandbox({ id: 'sb3' })
+		box.addSandbox({ id: 'sb4', name: sandboxName(WORKSPACE) })
+		const lifecycle = sandboxes(harness(box).control)
+		await lifecycle.remove({
+			environment: devEnvironment(),
+			workspaceId: WORKSPACE,
+			sandbox: { sandboxId: 'sb3' },
+			sandboxKey: SANDBOX_KEY,
+			signal: signal(),
+		})
+		expect(box.sandboxes.has('sb3')).toBe(false)
+		expect(box.sandboxes.has('sb4')).toBe(false)
+	})
+
 	test('a namespace pinned to a proxy that cannot serve sandboxes is refused by admit and by ensure, before any Box call', async () => {
 		const { box, control } = harness()
 		const environment = devEnvironment({ namespace: namespace({ proxySource: UNMARKED_PROXY_SOURCE }) })

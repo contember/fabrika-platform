@@ -149,8 +149,9 @@ export class DevSandboxRefusedError extends Error {}
  * The workspace's sandbox, created when it has none and created again when Box lost it: `ensure` is idempotent, and the
  * only call that replaces a failed or missing sandbox. The provider admits the placement before the row exists, because
  * every republish of the namespace hands a recorded sandbox on. Its proxy secret is sealed first and recorded with the
- * sandbox, or deleted when it is not the one recorded. A replaced sandbox has a new upstream, so the namespace
- * republishes. Null when the workspace was abandoned or its sandbox is being removed.
+ * sandbox, or deleted when it is not the one recorded. A sandbox Box created for a row that a removal took meanwhile is
+ * removed again. A replaced sandbox has a new upstream, so the namespace republishes. Null when the workspace was
+ * abandoned or its sandbox is being removed.
  */
 export async function ensureDevSandbox(
 	deps: DevSandboxDeps,
@@ -209,7 +210,17 @@ export async function ensureDevSandbox(
 	})
 	// A concurrent bind recorded its secret first: this one is no sandbox's.
 	if (ready === null || ready.proxy_secret_ref !== ref) await forget()
-	if (ready === null) return null
+	if (ready === null) {
+		// A removal took the row while Box was creating: nothing records this sandbox, so it goes too.
+		await deps.provider.devSandboxes.remove({
+			environment: await providerEnvironment(deps.repositories, appEnv),
+			workspaceId,
+			sandbox: { sandboxId: created.sandboxId },
+			sandboxKey,
+			signal: AbortSignal.timeout(MAINTENANCE_CALL_MS),
+		}).catch(() => console.error(`dev sandboxes: sandbox ${created.sandboxId} of workspace ${workspaceId} outlived its removal`))
+		return null
+	}
 	const replaced = row.sandbox_id !== null && row.sandbox_id !== created.sandboxId
 	if (replaced) await republish(deps, namespaceId, workspaceId)
 	return { row: ready, replaced }
@@ -240,7 +251,7 @@ async function republish(deps: DevSandboxDeps, namespaceId: string, workspaceId:
 export type DevSandboxRemoval = 'removed' | 'absent' | 'failed'
 
 /**
- * Remove the workspace's sandbox: Box's sandbox (found by the workspace when none was recorded), the workspace's source
+ * Remove the workspace's sandbox: Box's sandbox (and any other under the workspace's name), the workspace's source
  * keys and proxy secret, the row, and then its entry in the namespace proxy. The proxy stops routing it from the
  * moment it is marked; the keys are revoked and the proxy republished even when Box failed, and the row stays
  * `removing` with its secret for maintenance to retry. `staleBefore` makes it maintenance's removal, which leaves a

@@ -69,21 +69,24 @@ class FakeSandboxHost implements ProviderDevSandboxes {
 	failRemove = false
 	/** The namespace's placement cannot serve sandboxes: `admit` refuses with this. */
 	refusal: string | null = null
+	/** Held until resolved: Box is still creating the sandbox. */
+	creating: Promise<void> | null = null
 	private readonly lost = new Set<string>()
 
 	admit() {
 		if (this.refusal !== null) throw new ProviderNamespaceError(this.refusal, 'proxySandboxesUnsupported', false)
 	}
 
-	ensure(input: { workspaceId: string; sandboxKey: string }) {
+	async ensure(input: { workspaceId: string; sandboxKey: string }) {
 		this.keys.add(input.sandboxKey)
 		this.calls.push(`ensure ${input.workspaceId}`)
-		if (this.full) return Promise.reject(new ProviderNamespaceError('the sandbox host is full', PROVIDER_DEV_CAPACITY, true))
-		if (this.hostPending) return Promise.reject(new ProviderNamespaceError('no sandbox host yet', PROVIDER_DEV_HOST_PENDING, true))
+		if (this.full) throw new ProviderNamespaceError('the sandbox host is full', PROVIDER_DEV_CAPACITY, true)
+		if (this.hostPending) throw new ProviderNamespaceError('no sandbox host yet', PROVIDER_DEV_HOST_PENDING, true)
+		await this.creating
 		const sandboxId = this.held.get(input.workspaceId)
 			?? (this.lost.has(input.workspaceId) ? `sbx-${input.workspaceId}-again` : `sbx-${input.workspaceId}`)
 		this.held.set(input.workspaceId, sandboxId)
-		return Promise.resolve({ sandboxId, baseDigest: 'sha256:base', upstreamHost: `3000-${sandboxId}.box.test` })
+		return { sandboxId, baseDigest: 'sha256:base', upstreamHost: `3000-${sandboxId}.box.test` }
 	}
 
 	/** Box lost the workspace's sandbox: the next `ensure` creates another. */
@@ -702,6 +705,27 @@ describe('dev sandboxes', () => {
 		expect(await w.repositories.devSandboxes.get(abandoned.workspaceId)).toBeNull()
 		expect(await w.repositories.devSandboxes.get(active.workspaceId)).not.toBeNull()
 		expect(await w.repositories.devSandboxes.insertCreating({ workspaceId: abandoned.workspaceId, appId: 'shop', env: 'dev', now })).toBeNull()
+	})
+
+	test('a sandbox Box finishes creating after the workspace was removed is removed too, and the bind says so', async () => {
+		const w = await world()
+		const workspaceId = await w.workspace('Raced')
+		w.source.branches.set(`fabrika/${workspaceId}`, sha('b'))
+		let created = (): void => {}
+		w.host.creating = new Promise((resolve) => {
+			created = resolve
+		})
+		const binding = bindDevUseCase(w.dev(), { workspaceId }).catch((cause: unknown) => cause)
+		while (!w.host.calls.includes(`ensure ${workspaceId}`)) await Bun.sleep(1)
+		await abandonWorkspaceUseCase(w.dev(), { workspaceId })
+		expect(await w.repositories.devSandboxes.get(workspaceId)).toBeNull()
+		created()
+		const refused = await binding
+		expect(refused instanceof ControlApiError ? refused.httpStatus : refused).toBe(409)
+		expect(w.host.calls).toEqual([`ensure ${workspaceId}`, `remove workspace ${workspaceId}`, `remove sbx-${workspaceId}`])
+		expect(w.host.held.size).toBe(0)
+		const labels = await w.harness.d1.prepare('SELECT label FROM vault').all<{ label: string }>()
+		expect(labels.results.map((row) => row.label).filter((label) => label.includes(workspaceId))).toEqual([])
 	})
 
 	test("a bind on a placement that cannot serve sandboxes is refused before its row exists, so the namespace's other members still publish", async () => {

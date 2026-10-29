@@ -190,9 +190,11 @@ export function createZeropsDevSandboxes(options: ZeropsDevSandboxesOptions): Pr
 			const client = options.client(input.environment, input.sandboxKey)
 			// No sandbox host, so no sandbox of the workspace can exist.
 			if (client === null) return
-			const sandboxId = input.sandbox?.sandboxId ?? (await client.findSandboxByName(sandboxName(input.workspaceId), input.signal))?.id
-			if (sandboxId === undefined) return
-			await client.deleteSandbox(sandboxId, sandboxIdempotencyKey('delete', sandboxId), input.signal)
+			const recorded = input.sandbox?.sandboxId
+			if (recorded !== undefined) await client.deleteSandbox(recorded, sandboxIdempotencyKey('delete', recorded), input.signal)
+			// An `ensure` that raced the removal may have created another sandbox under the workspace's name.
+			const named = (await client.findSandboxByName(sandboxName(input.workspaceId), input.signal))?.id
+			if (named !== undefined && named !== recorded) await client.deleteSandbox(named, sandboxIdempotencyKey('delete', named), input.signal)
 		},
 	}
 }
