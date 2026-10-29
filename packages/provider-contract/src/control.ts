@@ -629,7 +629,8 @@ export interface ProviderDevSandboxRemoveInput {
 export interface ProviderDevSandboxes {
 	/**
 	 * Mutation-free check that the environment's placement can serve a workspace sandbox. Control calls it before it
-	 * records one, because a recorded sandbox reaches every later republish of the namespace. Throws a one-line refusal.
+	 * records one, because a recorded sandbox reaches every later republish of the namespace. A refusal is a
+	 * `ProviderNamespaceError` that is not retryable, whose one-line message the author may read; any other throw is a failure.
 	 */
 	admit(input: { readonly environment: ProviderEnvironment }): void
 	ensure(input: ProviderDevSandboxEnsureInput): Promise<ProviderDevSandbox>

@@ -168,7 +168,9 @@ export async function ensureDevSandbox(
 	try {
 		deps.provider.devSandboxes.admit({ environment })
 	} catch (cause) {
-		throw new DevSandboxRefusedError(cause instanceof Error ? cause.message : 'the provider cannot place a dev sandbox here')
+		// Only a refusal reaches the author; a configuration or decode failure stays a failure.
+		if (cause instanceof ProviderNamespaceError && !cause.retryable) throw new DevSandboxRefusedError(cause.message)
+		throw cause
 	}
 	const attempt = uuidv7()
 	const row = await sandboxes.insertCreating({ workspaceId, appId: appEnv.app_id, env: appEnv.env, now, attempt })

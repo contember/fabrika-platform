@@ -77,12 +77,15 @@ class FakeSandboxHost implements ProviderDevSandboxes {
 	failRemove = false
 	/** The namespace's placement cannot serve sandboxes: `admit` refuses with this. */
 	refusal: string | null = null
+	/** `admit` cannot read the namespace's placement: a failure, not a refusal. */
+	admitFailure: Error | null = null
 	/** Held until resolved: Box is still creating the sandbox. */
 	creating: Promise<void> | null = null
 	private readonly lost = new Set<string>()
 
 	admit() {
 		if (this.refusal !== null) throw new ProviderNamespaceError(this.refusal, 'proxySandboxesUnsupported', false)
+		if (this.admitFailure !== null) throw this.admitFailure
 	}
 
 	async ensure(input: { workspaceId: string; sandboxKey: string }) {
@@ -809,6 +812,17 @@ describe('dev sandboxes', () => {
 		expect((await first).state).toBe('bootstrapping')
 		expect((await w.repositories.devSandboxes.get(workspaceId))?.sandbox_id).toBe(`sbx-${workspaceId}`)
 		expect(w.host.calls.filter((call) => call.startsWith('remove'))).toEqual([])
+	})
+
+	test('a placement admit cannot read is a failure, not a refusal the author is told to act on', async () => {
+		const w = await world()
+		const workspaceId = await w.workspace('Unreadable')
+		w.source.branches.set(`fabrika/${workspaceId}`, sha('b'))
+		w.host.admitFailure = new Error('the namespace target does not decode')
+		const failed = await bindDevUseCase(w.dev(), { workspaceId }).catch((cause: unknown) => cause)
+		expect(failed).toBe(w.host.admitFailure)
+		expect(await w.repositories.devSandboxes.get(workspaceId)).toBeNull()
+		expect(w.host.calls).toEqual([])
 	})
 
 	test('maintenance removes a sandbox a bind left creating for an hour', async () => {

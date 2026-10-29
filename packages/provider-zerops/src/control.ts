@@ -45,6 +45,7 @@ import {
 	type ZeropsNamespaceTarget,
 	zeropsNamespaceTargetCodec,
 } from './namespace'
+import { namespaceError, ZEROPS_DEV_TARGET_RETIRED } from './namespace/errors'
 import { assertNamespaceProxyAcceptsSandboxes, assertNamespaceProxyReads, type OlderProxyReaders } from './namespace/proxy-reads'
 import type { ZeropsNamespaceSandboxHost } from './namespace/types'
 import { createZeropsDeployer, ZEROPS_VERSION_DEADLINE_MS } from './provider'
@@ -324,9 +325,11 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 		const { target, namespaceTarget } = decodeEnvironment(environment)
 		// An older release registered a dev environment as its own Zerops service; it never runs in a sandbox.
 		if (environment.kind === 'dev' && !('kind' in target)) {
-			throw new Error(
+			throw namespaceError(
+				ZEROPS_DEV_TARGET_RETIRED,
 				`zerops: dev environment \`${environment.appId}/${environment.env}\` was registered with its own Zerops service, which this release `
 					+ 'no longer runs; delete the environment and register it again with --kind=dev and a wildcard domain',
+				false,
 			)
 		}
 		return namespaceTarget.sandboxHost ?? null

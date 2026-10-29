@@ -32,6 +32,9 @@ export const ZEROPS_SANDBOX_HOST_KEY_REFUSED = 'sandboxHostKeyRefused'
 /** The Box API answered a request that carried no key, even after a restart with the namespace's key. */
 export const ZEROPS_SANDBOX_HOST_API_OPEN = 'sandboxHostApiOpen'
 
+/** A dev environment an older release registered with its own Zerops service, which runs in no sandbox. */
+export const ZEROPS_DEV_TARGET_RETIRED = 'devTargetRetired'
+
 /** The sandbox host already routes the proxy's sandbox domain in the other form. */
 export const ZEROPS_SANDBOX_HOST_DOMAIN_FORM = 'sandboxHostDomainForm'
 
