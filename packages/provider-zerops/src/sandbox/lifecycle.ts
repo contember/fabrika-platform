@@ -31,7 +31,7 @@ export function sandboxName(workspaceId: string): string {
 	return `fabrika-${workspaceId}`
 }
 
-/** A deterministic `Idempotency-Key` in UUID form: the same request after a lost answer gets Box's first answer. */
+/** A deterministic `Idempotency-Key` in UUID form: the same delete after a lost answer gets Box's first answer. */
 export function sandboxIdempotencyKey(...parts: readonly string[]): string {
 	const hex = new Bun.CryptoHasher('sha256').update(['fabrika-dev-sandbox', ...parts].join('\u0000')).digest('hex')
 	const variant = ((Number.parseInt(hex.slice(16, 17), 16) & 0x3) | 0x8).toString(16)
@@ -113,7 +113,7 @@ const sandboxOf = (sandbox: ZboxSandbox): ProviderDevSandbox => ({
 export function createZeropsDevSandboxes(options: ZeropsDevSandboxesOptions): ProviderDevSandboxes {
 	const baseContext = options.baseContext ?? readSandboxBaseContext
 
-	const create = async (client: ZboxClient, workspaceId: string, replaced: string | null, signal: AbortSignal): Promise<ZboxSandbox> => {
+	const create = async (client: ZboxClient, workspaceId: string, signal: AbortSignal): Promise<ZboxSandbox> => {
 		const baseDigest = await ensureSandboxBase(client, await baseContext(), { signal, sleep: options.sleep })
 		const { sandbox } = await withSandboxCapacity(() =>
 			client.createSandbox({
@@ -124,8 +124,9 @@ export function createZeropsDevSandboxes(options: ZeropsDevSandboxesOptions): Pr
 				networkMode: 'INTERNET',
 				launch: { entrypoint: SANDBOX_INIT_COMMAND.slice(0, 1), cmd: SANDBOX_INIT_COMMAND.slice(1) },
 				ports: [{ port: ZEROPS_APPLICATION_PORT, access: 'PROJECT', wakeOnRequest: true }],
-				// The replaced sandbox is part of the request: the key of the first create would answer with the dead one.
-				idempotencyKey: sandboxIdempotencyKey('create', workspaceId, baseDigest, replaced ?? ''),
+				// Fresh per call: a key that repeats after a removal could replay Box's answer naming the removed sandbox. A lost
+				// answer is found again by name, which a live sandbox holds alone.
+				idempotencyKey: crypto.randomUUID(),
 			}, signal)
 		)
 		return sandbox
@@ -163,7 +164,7 @@ export function createZeropsDevSandboxes(options: ZeropsDevSandboxesOptions): Pr
 				await client.deleteSandbox(sandbox.id, sandboxIdempotencyKey('delete', sandbox.id), input.signal)
 				replaced = sandbox.id
 			}
-			const created = await create(client, input.workspaceId, replaced, input.signal)
+			const created = await create(client, input.workspaceId, input.signal)
 			if (replaced !== null) {
 				options.log(
 					`zerops: workspace ${input.workspaceId}'s sandbox ${replaced} had ended; it is replaced by sandbox ${created.id}, with an empty database`,

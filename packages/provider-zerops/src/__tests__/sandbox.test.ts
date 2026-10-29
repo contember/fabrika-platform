@@ -218,8 +218,7 @@ describe('dev sandbox lifecycle', () => {
 			policy: { ingress: { ports: [{ port: 3000, access: 'PROJECT', protocol: 'HTTP', wakeOnRequest: true }] }, secrets: { mode: 'NONE' } },
 			waitSeconds: 30,
 		})
-		expect(create?.headers['idempotency-key']).toBe(sandboxIdempotencyKey('create', WORKSPACE, 'sha256:built-base', ''))
-		expect(create?.headers['idempotency-key']).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+		expect(create?.headers['idempotency-key']).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
 		expect(create?.headers['authorization']).toBe(`Bearer ${SANDBOX_KEY}`)
 
 		const before = box.requests.length
@@ -245,7 +244,7 @@ describe('dev sandbox lifecycle', () => {
 		expect(box.requests.some((request) => request.path === '/base-build' || request.path === '/sandbox')).toBe(false)
 	})
 
-	test('ensure removes a FAILED sandbox and creates a new one under a key that names the one it replaced', async () => {
+	test('ensure removes a FAILED sandbox and creates a new one', async () => {
 		const box = new FakeBox()
 		box.addSandbox({ id: 'sb7', name: `fabrika-${WORKSPACE}`, status: 'FAILED' })
 		const { control } = harness(box)
@@ -259,9 +258,6 @@ describe('dev sandbox lifecycle', () => {
 		const deleted = box.requests.find((request) => request.method === 'DELETE')
 		expect(deleted?.path).toBe('/sandbox/sb7')
 		expect(deleted?.headers['idempotency-key']).toBe(sandboxIdempotencyKey('delete', 'sb7'))
-		const create = box.requests.find((request) => request.method === 'POST' && request.path === '/sandbox')
-		expect(create?.headers['idempotency-key']).toBe(sandboxIdempotencyKey('create', WORKSPACE, 'sha256:built-base', 'sb7'))
-		expect(create?.headers['idempotency-key']).not.toBe(sandboxIdempotencyKey('create', WORKSPACE, 'sha256:built-base', ''))
 		expect(providerLog).toEqual([`zerops: workspace ${WORKSPACE}'s sandbox sb7 had ended; it is replaced by sandbox sb1, with an empty database`])
 	})
 
@@ -313,6 +309,27 @@ describe('dev sandbox lifecycle', () => {
 		await lifecycle.remove({ ...input, workspaceId: WORKSPACE })
 		await lifecycle.remove({ ...input, workspaceId: WORKSPACE })
 		expect(box.sandboxes.has('sb5')).toBe(false)
+	})
+
+	test('a sandbox created again after a removal is created under another key, so Box replays no answer naming the removed one', async () => {
+		const box = new FakeBox()
+		const lifecycle = sandboxes(harness(box).control)
+		const ensure = () => lifecycle.ensure({ environment: devEnvironment(), workspaceId: WORKSPACE, sandboxKey: SANDBOX_KEY, signal: signal() })
+		const first = await ensure()
+		await lifecycle.remove({
+			environment: devEnvironment(),
+			workspaceId: WORKSPACE,
+			sandbox: { sandboxId: first.sandboxId },
+			sandboxKey: SANDBOX_KEY,
+			signal: signal(),
+		})
+		const second = await ensure()
+		expect(second.sandboxId).not.toBe(first.sandboxId)
+		const keys = box.requests.filter((request) => request.method === 'POST' && request.path === '/sandbox').map((request) =>
+			request.headers['idempotency-key']
+		)
+		expect(keys).toHaveLength(2)
+		expect(new Set(keys).size).toBe(2)
 	})
 
 	test('a namespace pinned to a proxy that cannot serve sandboxes is refused by admit and by ensure, before any Box call', async () => {
