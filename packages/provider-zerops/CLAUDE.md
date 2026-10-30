@@ -297,9 +297,10 @@ bun test
   older host keeps the DOT domain an earlier release added, unused. A `zerops-subdomain` namespace is refused a host.
 - **Sandbox entries reach only a proxy that parses them.** A `dev` member that carries `devSandboxes` is routed only
   through those entries (`dev:<app>:<workspace>`, `audience`, `upstreamHost`; `src/namespace/manifest.ts`), and only
-  when the pinned descriptor's proxy build declares `FABRIKA_PROXY_MANIFEST_SANDBOXES` (`zeropsProxyAcceptsSandboxes`,
+  when the pinned descriptor's proxy build declares `FABRIKA_PROXY_MANIFEST_SANDBOXES: "2"` (`zeropsProxyAcceptsSandboxes`,
   `src/proxy-manifest-carrier.ts`); otherwise `assertNamespaceProxyAcceptsSandboxes` refuses before any platform write.
-  Never drop the marker from the generated proxy setup.
+  A `"1"` source parses the entries but sends the `X-Forwarded-For` the Box router refuses. Never drop the marker from the
+  generated proxy setup; raise its value when a sandbox entry needs a newer proxy.
 - **The sandbox base image is named by its content; the helper scripts ship with every deploy.** The base is
   `fabrika-dev-<12 hex>` of the sha256 over `sandbox/Dockerfile` and `sandbox/init.sh` (`src/sandbox/base-image.ts`),
   built on the host on first use, so a release that changes either builds a new base and leaves the old one. The

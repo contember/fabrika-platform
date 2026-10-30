@@ -443,9 +443,9 @@ keyed by the entry id. Only an entry whose id parses as `dev:<app>:<workspace>` 
 an `<app>@<env>` of the same `<app>`; the parser refuses any other. `upstreamHost` replaces the `Host` the proxy sends
 upstream: the Box router routes a sandbox's port by `Host` (the bare `3000-<sandbox>`), and its upstream
 is the router, `zbox:8081`. The proxy drops the `X-Forwarded-For` it adds on that hop: the router refuses a request
-carrying one on a `project`-access port. An older proxy's strict parser refuses both fields, so on Zerops they reach only a namespace
-proxy whose pinned source declares `FABRIKA_PROXY_MANIFEST_SANDBOXES`, as `brand` reaches only one that declares
-`FABRIKA_PROXY_MANIFEST_BRAND`.
+carrying one on a `project`-access port. An older proxy's strict parser refuses both fields, and a source that declares
+the marker as `"1"` parses them but still sends that header, so on Zerops they reach only a namespace proxy whose pinned
+source declares `FABRIKA_PROXY_MANIFEST_SANDBOXES: "2"`, as `brand` reaches only one that declares `FABRIKA_PROXY_MANIFEST_BRAND`.
 
 **Installation entries.** An endpoint table that protects one of the installation's own services (IAM,
 Control, Operations) is a manifest entry `{ id, hosts, upstream, scheme, installation: true, endpoints, reservedPrefixes,
@@ -869,7 +869,7 @@ nothing. The surface serves no `requestDelegation`: only the proxy obtains a gra
   [backlog 262](../backlog/262-re-verify-the-box-release-facts-on-a-live-host.md)), so a key caller and a webhook
   verified by a bearer or basic credential behave in a dev sandbox as on a stage. **Rollout:** nothing changes for an existing manifest:
   only a dev sandbox entry carries `audience` or `upstreamHost`, and Control hands one only to a namespace whose pinned
-  proxy declares `FABRIKA_PROXY_MANIFEST_SANDBOXES`. `platform upgrade` regenerates the proxy setup with the marker; a
+  proxy declares `FABRIKA_PROXY_MANIFEST_SANDBOXES: "2"`. `platform upgrade` regenerates the proxy setup with the marker; a
   namespace keeps its pin until `fabrika control namespaces update --proxy-source=current`, and until then a namespace
   job that would publish a sandbox entry, a dev bootstrap's republish included, refuses before any platform write and
   names that remedy.

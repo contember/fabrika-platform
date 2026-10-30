@@ -41,7 +41,7 @@ const PROXY_SOURCE = {
 	repository: { owner: 'example', name: 'platform' },
 	commitSha: COMMIT_SHA,
 	descriptor: await createZeropsArtifactSourceDescriptor(
-		'zerops:\n  - setup: proxy\n    build:\n      envVariables:\n        FABRIKA_PROXY_MANIFEST_SANDBOXES: "1"\n',
+		'zerops:\n  - setup: proxy\n    build:\n      envVariables:\n        FABRIKA_PROXY_MANIFEST_SANDBOXES: "2"\n',
 	),
 }
 /** A pin of a release before dev sandboxes: its proxy cannot parse a sandbox entry. */

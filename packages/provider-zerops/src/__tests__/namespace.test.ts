@@ -2134,7 +2134,7 @@ describe('Zerops namespace update', () => {
 const MARKED: ZeropsNamespaceProxySource = {
 	...PIN,
 	descriptor: await createZeropsArtifactSourceDescriptor(
-		'zerops:\n  - setup: proxy\n    build:\n      envVariables:\n        FABRIKA_PROXY_MANIFEST_SANDBOXES: "1"\n',
+		'zerops:\n  - setup: proxy\n    build:\n      envVariables:\n        FABRIKA_PROXY_MANIFEST_SANDBOXES: "2"\n',
 	),
 }
 

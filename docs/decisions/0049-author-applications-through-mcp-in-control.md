@@ -87,7 +87,7 @@ workspace its own running application, where one pinned service could show only 
       workspace `W` is served at `https://<W>.<domain>` (a workspace id is a UUIDv7, a valid DNS label). It is never
       production, never protected (ADR-0050), never an authoring target and has no trigger ref; it has its own role
       family, schema and approved access. Its namespace must publish custom domains (a `zerops-subdomain` namespace is
-      refused) and its proxy must be built from a source that declares `FABRIKA_PROXY_MANIFEST_SANDBOXES`; otherwise
+      refused) and its proxy must be built from a source that declares `FABRIKA_PROXY_MANIFEST_SANDBOXES: "2"`; otherwise
       every namespace job that would publish a sandbox entry, the bootstrap run's republish included, refuses before any
       platform write and names `fabrika control namespaces update --proxy-source=current`. It claims no Zerops service.
       Deleting it, or its app, is refused while a workspace sandbox of it is left. Its app secrets are kept in Control's

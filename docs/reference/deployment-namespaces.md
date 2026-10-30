@@ -385,8 +385,9 @@ member with sandboxes is routed only through those entries, never through its
 own domain; one without any is handed like any other member. Each
 entry's proxy secret is generated per workspace and written under
 `proxySecretVariable('dev:<app>:<workspace>')`. The entries reach only a proxy
-whose pinned source declares `FABRIKA_PROXY_MANIFEST_SANDBOXES`; a pin without
-it is refused before any platform write, naming `--proxy-source=current`.
+whose pinned source declares `FABRIKA_PROXY_MANIFEST_SANDBOXES: "2"`; a pin without it, or with
+`"1"` (a source whose sandbox hop still sends the `X-Forwarded-For` the Box router
+refuses), is refused before any platform write, naming `--proxy-source=current`.
 
 ## Operator interfaces
 

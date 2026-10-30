@@ -307,12 +307,13 @@ describe('Box failures as namespace errors', () => {
 
 describe('the proxy sandboxes marker', () => {
 	test('the generated proxy setup declares it, and a pin without it does not accept sandbox entries', async () => {
+		const pinned = (value: string) =>
+			`zerops:\n  - setup: proxy\n    build:\n      envVariables:\n        ${FABRIKA_PROXY_MANIFEST_SANDBOXES}: "${value}"\n`
 		expect(zeropsProxyAcceptsSandboxes(renderYaml(fabrikaZeropsYaml))).toBe(true)
 		expect(zeropsProxyAcceptsSandboxes(PIN.descriptor.contents)).toBe(false)
-		expect(
-			zeropsProxyAcceptsSandboxes(`zerops:\n  - setup: proxy\n    build:\n      envVariables:\n        ${FABRIKA_PROXY_MANIFEST_SANDBOXES}: "1"\n`),
-		)
-			.toBe(true)
+		expect(zeropsProxyAcceptsSandboxes(pinned('2'))).toBe(true)
+		// A source whose sandbox hop still sends `X-Forwarded-For`, which the Box router refuses.
+		expect(zeropsProxyAcceptsSandboxes(pinned('1'))).toBe(false)
 	})
 
 	test('a namespace pinned without it is refused with the re-pin command', () => {
