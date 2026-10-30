@@ -80,7 +80,7 @@ export const controlEmailSecrets = (source: EnvironmentSource = process.env): st
  *     same token that authenticated THIS deploy).
  *   - FABRIKA_IAM_PROVISIONING_KEY — fabrika's seeded IAM provisioning `px_` key, injected into deploys that reconcile
  *     schema. Omit at deploy to run without reconcile.
- *   - FABRIKA_RUNNER_KEY — shared with vozka-runner, which refuses any RPC without it (the service binding alone
+ *   - FABRIKA_RUNNER_KEY — shared with the runner Worker, which refuses any RPC without it (the service binding alone
  *     authenticates nobody).
  *   - OPERATIONS_SYNC_KEY — the private Control → Operations catalog bearer.
  *   - the installation mail provider's credentials (`FABRIKA_EMAIL_*`), when the installation has a valid transport.
@@ -190,8 +190,8 @@ export const buildControlApplicationWorker = (ctx: ResourceContext): Worker => {
 			// binds the same service unconditionally. Local dev therefore wants `packages/iam`'s
 			// `bun run dev` running alongside, exactly as `examples/app` does.
 			IAM: new ServiceReference('propustka-worker'),
-			// Off-local only: Operations, and vozka-runner — the deploy executor the queue consumer hands
-			// each run to (RUNNER_SVC.startRun). vozka-runner is its OWN worker so a deploy of fabrika
+			// Off-local only: Operations, and the runner Worker — the deploy executor the queue consumer hands
+			// each run to (RUNNER_SVC.startRun). The runner is its OWN Worker so a deploy of fabrika
 			// never resets the container running it — deployed out-of-band (packages/runner-cloudflare bootstrap).
 			...(isLocal ? {} : {
 				OPERATIONS: new ServiceReference('operations'),

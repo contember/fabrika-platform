@@ -65,12 +65,12 @@ function makeDeps(auth: AuthContext): { deps: ControlRpcDeps; vault: Promise<Vau
 
 /** A caller granted exactly `secret.manage` + `app.manage` globally (covers the app-secret values). */
 function secretManager(): AuthContext {
-	return authWithActions(['secret.manage', 'app.manage'], 'sm@vozka.test')
+	return authWithActions(['secret.manage', 'app.manage'], 'sm@fabrika.test')
 }
 
 /** A caller that holds neither `secret.manage` nor `app.manage` (only `deploy.read`) → denied. */
 function noSecretManager(): AuthContext {
-	return authWithActions(['deploy.read'], 'ro@vozka.test')
+	return authWithActions(['deploy.read'], 'ro@fabrika.test')
 }
 
 describe('app secret value endpoints (secret.manage, app-scoped)', () => {

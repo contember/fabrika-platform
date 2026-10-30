@@ -137,7 +137,7 @@ describe('Db.reconcileAppSchema', () => {
 
 	test('reconciling with empty sets prunes all the app rows (but not custom policies)', async () => {
 		const h = createHarness()
-		const app = 'poplach'
+		const app = 'reports'
 
 		await h.repositories.appSchema.reconcileAppSchema({
 			app,
@@ -167,14 +167,14 @@ describe('Db.reconcileAppSchema', () => {
 		})
 		// A different app's reconcile leaves opice's roles intact.
 		await h.repositories.appSchema.reconcileAppSchema({
-			app: 'poplach',
+			app: 'reports',
 			scopes: [],
 			actions: [{ action: 'b.read', description: null }],
 			roles: [{ roleKey: 'editor', name: 'Editor', description: null, permissions: ['b.read'] }],
 		})
 		expect((await h.repositories.appSchema.listRoles('opice')).map((r) => r.role_key)).toEqual(['editor'])
 		expect((await h.repositories.appSchema.getRole('opice', 'editor'))?.permissions).toBe(JSON.stringify(['a.read']))
-		expect((await h.repositories.appSchema.getRole('poplach', 'editor'))?.permissions).toBe(JSON.stringify(['b.read']))
+		expect((await h.repositories.appSchema.getRole('reports', 'editor'))?.permissions).toBe(JSON.stringify(['b.read']))
 	})
 })
 

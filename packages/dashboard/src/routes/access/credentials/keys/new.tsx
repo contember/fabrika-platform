@@ -66,7 +66,7 @@ export default createPage()
 					</Link>
 					<h1>Provision API key</h1>
 					<p className="hint">
-						Creates a service principal with a propustka-native <code>px_…</code> key. The key is shown once, here, and never stored.
+						Creates a service principal with an IAM-native <code>px_…</code> key. The key is shown once, here, and never stored.
 					</p>
 				</div>
 
@@ -94,7 +94,7 @@ export default createPage()
 				{secret && (
 					<SecretModal
 						title="API key provisioned"
-						fields={[{ label: 'API key (propustka-native)', value: secret.apiKey, multiline: true }]}
+						fields={[{ label: 'API key (IAM-native)', value: secret.apiKey, multiline: true }]}
 						onClose={() => navigate('access/credentials')}
 					/>
 				)}

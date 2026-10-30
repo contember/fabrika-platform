@@ -7,7 +7,7 @@ fabrika control-plane base so the control plane never deploys itself:
 Stage 1 — IAM (root authz)
 Stage 2 — Operations
 Stage 3 — fabrika runner + control plane
-apps (poplach, revizor, …)              ← deployed through fabrika, not here
+apps (crm, notes, …)                    ← deployed through fabrika, not here
 ```
 
 Generated and maintained by **`fabrika platform init --provider=cloudflare {{ACCOUNT}}`** (`@fabrika/cli`). Secrets and variables live in

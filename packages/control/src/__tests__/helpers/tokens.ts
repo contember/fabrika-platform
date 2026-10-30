@@ -10,7 +10,7 @@ import type { IamRpc } from '@fabrika/auth'
 import { buildResourceAccessClaims, RESOURCE_ACCESS_TOKEN_TYP } from '@fabrika/auth-core'
 import { CONTROL_ACTIONS } from '@fabrika/control-contract'
 
-export const TEST_ISSUER = 'https://propustka.test'
+export const TEST_ISSUER = 'https://iam.test'
 
 const KEY_ID = 'control-test'
 const TEST_TOKEN_SECONDS = 24 * 60 * 60
@@ -93,9 +93,9 @@ export async function testToken(input: {
  * The three roles the console's authorization is worth testing against, as tokens. They mirror the
  * `origin='app'` roles fabrika reconciles into IAM (`fabrika.config.ts`) plus a read-only slice.
  */
-export const adminToken = await testToken({ label: 'admin@vozka.test', actions: ['*'] })
-export const operatorToken = await testToken({ label: 'operator@vozka.test', actions: ['deploy.*', 'operations.*'] })
-export const viewerToken = await testToken({ label: 'viewer@vozka.test', actions: [CONTROL_ACTIONS.DEPLOY_READ] })
+export const adminToken = await testToken({ label: 'admin@fabrika.test', actions: ['*'] })
+export const operatorToken = await testToken({ label: 'operator@fabrika.test', actions: ['deploy.*', 'operations.*'] })
+export const viewerToken = await testToken({ label: 'viewer@fabrika.test', actions: [CONTROL_ACTIONS.DEPLOY_READ] })
 
 /** Sign an OAuth resource access token the way IAM mints one for an MCP client (`typ: at+jwt`). */
 export async function testResourceToken(input: { resource: string; label: string; actions: readonly string[]; app?: string }): Promise<string> {

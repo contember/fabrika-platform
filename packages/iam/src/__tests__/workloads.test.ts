@@ -17,7 +17,7 @@ import { mintFromKey } from '../tokens'
 import { CONSOLE_APP, createHarness, type Harness, seedGrant, TEST_SIGNING_ENV, TEST_SIGNING_KEYS } from './helpers/harness'
 import { migrationFile, migrationsBefore } from './helpers/migrations'
 
-const ISSUER = 'https://propustka.test'
+const ISSUER = 'https://iam.test'
 const PROVISIONING_KEY = `px_${'p'.repeat(43)}`
 const APP = 'notes@prod'
 const DAY = 24 * 60 * 60

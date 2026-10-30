@@ -1,10 +1,10 @@
 /**
- * The propustka-issued token contract — the SECOND thing (after `IamRpc`) that must not drift
+ * The IAM-issued token contract — the SECOND thing (after `IamRpc`) that must not drift
  * between the Worker and the SDK.
  *
  * Background: today a request is authorized by the Worker resolving a Cloudflare Access JWT on
  * every call over RPC (the CF token carries only identity, so authz needs a round-trip). When
- * propustka issues its OWN token it can embed the already-resolved permission set, and the SDK
+ * IAM issues its OWN token it can embed the already-resolved permission set, and the SDK
  * authorizes LOCALLY — no per-request round-trip. This module is the wire shape of that token:
  *
  *   - the Worker BUILDS claims here and signs them (`buildAccessClaims`);
@@ -47,7 +47,7 @@ export const FABRIKA_COOKIE_PREFIX = '__Host-px_'
  * because those origins are potentially trustworthy.
  */
 export const SESSION_COOKIE = `${FABRIKA_COOKIE_PREFIX}session`
-/** Prefix marking a propustka opaque credential (API key / share link), e.g. `Bearer px_<random>`. */
+/** Prefix marking an IAM opaque credential (API key / share link), e.g. `Bearer px_<random>`. */
 export const API_KEY_PREFIX = 'px_'
 
 /**
@@ -56,7 +56,7 @@ export const API_KEY_PREFIX = 'px_'
  */
 export const WORKLOAD_TOKEN_PATH = '/auth/workload/token'
 
-/** Signing algorithm propustka issues with and the SDK verifies (ECDSA P-256 — compact, ubiquitous). */
+/** Signing algorithm IAM issues with and the SDK verifies (ECDSA P-256 — compact, ubiquitous). */
 export const TOKEN_ALG = 'ES256'
 /** JWT `typ` of an OAuth resource access token (RFC 9068). Native app tokens carry no `typ`. */
 export const RESOURCE_ACCESS_TOKEN_TYP = 'at+jwt'
@@ -90,12 +90,12 @@ export const APPLICATION_SERVER_MAX_HEADER_BYTES = 65536
 // ── Claim shape (one, no discriminator) ────────────────────────────────────────
 
 /**
- * The propustka access token. `perms` is always present (matched via `permits`); `ptype` is present
+ * The IAM access token. `perms` is always present (matched via `permits`); `ptype` is present
  * only when `sub` is a principal. `label` is the audit actor — the principal's label when bound, the
  * credential label otherwise (or null).
  */
 export interface AccessTokenClaims {
-	/** Issuer — propustka's own origin (e.g. `https://propustka.example.com`). */
+	/** Issuer — IAM's own origin (e.g. `https://iam.example.com`). */
 	iss: string
 	/** The app id this token is scoped to. The SDK REJECTS a token whose `aud` is not its app. */
 	aud: string
@@ -189,7 +189,7 @@ export type TokenAudienceProfile = { kind: 'app'; app: string } | { kind: 'resou
 //
 // Transport is the IAM service binding (`getJwks()` RPC), NOT a public HTTPS URL: app↔IAM is
 // RPC over the binding, which never traverses the Access edge — so the SDK reaches the key set
-// even while propustka's own hostname is still gated by Cloudflare Access. The Worker also
+// even while IAM's own hostname is still gated by Cloudflare Access. The Worker also
 // serves the standard `/.well-known/jwks.json`, for when Access is gone. Both emit this shape.
 
 /** A published public signing key (EC P-256 / ES256). A jose-compatible JWK subset. */
@@ -211,7 +211,7 @@ export interface Jwks {
 // ── Build (Worker side, pre-sign) ──────────────────────────────────────────────
 
 export interface AccessTokenParams {
-	/** Issuer (propustka origin). */
+	/** Issuer (IAM origin). */
 	iss: string
 	/** App id this token is for (becomes `aud`). */
 	app: string

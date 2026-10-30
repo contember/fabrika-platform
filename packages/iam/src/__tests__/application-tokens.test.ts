@@ -10,7 +10,7 @@ import { createHarness, type Harness, seedInlineGrant, seedService, seedUser } f
 // Cross-app grants and the bootstrap `admin` reach the platform audiences and nothing else.
 
 const ENV = { FABRIKA_IAM_SIGNING_KEYS: '', ENVIRONMENT: 'local' }
-const ISSUER = 'https://propustka.test'
+const ISSUER = 'https://iam.test'
 const PROD = appEnvironmentId('notes', 'prod')
 const STAGE = appEnvironmentId('notes', 'stage')
 const BOOTSTRAP_EMAIL = 'boss@platform.test'

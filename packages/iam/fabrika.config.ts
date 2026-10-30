@@ -224,7 +224,7 @@ export const iamPipelineSecrets = (source: EnvironmentSource): string[] => {
  * Build IAM's only Cloudflare resource graph. Both fabrika and the standalone Oblaka adapter
  * call this function.
  */
-export const buildPropustkaWorker = (ctx: ResourceContext, source: EnvironmentSource = process.env): Worker => {
+export const buildIamWorker = (ctx: ResourceContext, source: EnvironmentSource = process.env): Worker => {
 	const { env } = ctx
 	if (!KNOWN_ENVS.has(env)) {
 		throw new Error(`Unknown environment ${env}`)
@@ -256,7 +256,7 @@ export const buildPropustkaWorker = (ctx: ResourceContext, source: EnvironmentSo
 
 export default defineApp({
 	id: IAM_APP_ID,
-	resources: buildPropustkaWorker,
+	resources: buildIamWorker,
 	pipeline: {
 		workerDir: '.',
 		// Values stay in fabrika's vault and are provisioned out-of-band from Worker plaintext vars.

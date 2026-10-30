@@ -19,7 +19,7 @@ const { default: config } = await import('../fabrika.config')
 const collaborators: CloudflareCollaborators = {
 	...defaultCloudflareCollaborators,
 	provision: (input) => {
-		console.log(`  [fake-oblaka] materialized vozka graph for ${input.env}, dryRun=${input.dryRun}`)
+		console.log(`  [fake-oblaka] materialized control graph for ${input.env}, dryRun=${input.dryRun}`)
 		return Promise.resolve({
 			wranglerConfigs: [{ path: 'wrangler.jsonc', config: { name: `${input.env}-vozka` }, content: '{}' }],
 			wranglerConfig: { name: `${input.env}-vozka` },

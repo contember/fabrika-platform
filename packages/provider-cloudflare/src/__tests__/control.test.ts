@@ -945,7 +945,7 @@ describe('Cloudflare control provider', () => {
 		expect(cloudflareRunnerJobSchema.safeParse({ ...valid, domain: '*.example.com' }).success).toBe(false)
 		expect(cloudflareRunnerJobSchema.safeParse({ ...valid, domain: '' }).success).toBe(false)
 		expect(cloudflareRunnerJobSchema.safeParse({ ...valid, runnerKey: '' }).success).toBe(false)
-		// Absent is accepted at this boundary on purpose: `vozka-runner` re-checks the key itself and refuses.
+		// Absent is accepted at this boundary on purpose: the runner Worker re-checks the key itself and refuses.
 		const { runnerKey: _omit, ...noKey } = valid
 		expect(cloudflareRunnerJobSchema.safeParse(noKey).success).toBe(true)
 		// (7) a newline survives the URL parser and would reach git's argv and the "Cloning …" line.

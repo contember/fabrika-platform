@@ -64,7 +64,7 @@ export interface MaintenanceOptions {
  *
  * A poll-created run is serialized by the same per-app-env deploy lock as any other run (the consumer
  * takes it). The provider reconcile settles a run whose provider accepted it — on Cloudflare from the
- * status vozka-runner persists within ~18 min even when the relay is aborted. The sweep only fails runs
+ * status the runner Worker persists within ~18 min even when the relay is aborted. The sweep only fails runs
  * no provider ever accepted. Logs counts, coordinates and trigger refs only — never a feed URL or a secret.
  */
 export async function runMaintenance(env: Env, options: MaintenanceOptions = {}): Promise<MaintenanceSummary> {

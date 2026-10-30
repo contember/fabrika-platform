@@ -70,7 +70,7 @@ export async function toGrantDtos(rows: GrantRow[], services: Services, cache: R
 	return out
 }
 
-/** The set of app ids propustka knows about — the live registry derived from the schema tables. */
+/** The set of app ids IAM knows about — the live registry derived from the schema tables. */
 export function knownApps(c: AdminContext): Promise<string[]> {
 	return c.services.repositories.appSchema.listKnownApps()
 }

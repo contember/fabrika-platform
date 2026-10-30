@@ -1,16 +1,16 @@
-// The vozka-runner Worker — the deploy EXECUTOR, split out of the fabrika control plane.
+// The runner Worker — the deploy EXECUTOR, split out of the fabrika control plane.
 //
 // WHY IT'S SEPARATE: a deploy's final step is `wrangler deploy` of the target worker, run INSIDE the
 // per-run container. When the target is fabrika itself, that resets fabrika's Durable Objects — and the
 // container is a DO. So a fabrika self-deploy used to reset the very container running it, killing the
 // relay and orphaning the run. Hosting the container DO + relay in this SEPARATE worker means a deploy
-// of fabrika never touches vozka-runner: the container survives, the relay finishes, the status lands.
+// of fabrika never touches the runner Worker: the container survives, the relay finishes, the status lands.
 //
 // The control plane calls authenticated RPC methods over the `RUNNER_SVC` service binding:
 // `startRun(job)` boots a fresh container, relays its logs and terminal status → R2, and returns the
 // status; `recoverRun(runId, runnerKey)` reads that persisted status back after a control-plane restart;
 // `cancelRun(runId, runnerKey)` destroys an in-flight run's container. The control plane is the only
-// writer of the run's database row. There is no HTTP surface; vozka-runner has no public route and is
+// writer of the run's database row. There is no HTTP surface; the runner Worker has no public route and is
 // reachable ONLY via the binding — but the binding is not a credential, so every method verifies
 // `FABRIKA_RUNNER_KEY` first (see runner-key.ts).
 
@@ -91,10 +91,10 @@ export class VozkaRunner extends WorkerEntrypoint<Env> {
 		return (await runContainer(this.env, runId)).recoverDeploy(runId)
 	}
 
-	// vozka-runner is RPC-only (invoked via the RUNNER_SVC service binding). It has no public route;
+	// The runner Worker is RPC-only (invoked via the RUNNER_SVC service binding). It has no public route;
 	// a stray direct request just gets a 404 rather than crashing the worker.
 	override fetch(): Response {
-		return new Response('vozka-runner: rpc only', { status: 404 })
+		return new Response('runner: rpc only', { status: 404 })
 	}
 }
 

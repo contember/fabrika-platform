@@ -10,7 +10,7 @@ async function runMiddleware(env: Parameters<typeof controlAuthenticator>[0], re
 	return { auth, nextCalled: caller.ok, response: caller.ok ? new Response('ok') : caller.response }
 }
 
-const ISSUER = 'https://propustka.test'
+const ISSUER = 'https://iam.test'
 const serviceKeys = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify'])
 const servicePublicJwk = await crypto.subtle.exportKey('jwk', serviceKeys.publicKey)
 
@@ -112,17 +112,17 @@ describe('controlAuthenticator bootstrap semantics', () => {
 	})
 
 	test('a listed user is elevated while a non-listed user keeps their original permissions', async () => {
-		const admins = '["viewer@vozka.test"]'
+		const admins = '["viewer@fabrika.test"]'
 		const listed = await runMiddleware(
 			{ ...ENV, FABRIKA_CONTROL_BOOTSTRAP_ADMINS: admins },
 			new Request('https://control.test/api/apps', {
-				headers: { [PROXY_TOKEN_HEADER]: await token({ label: 'viewer@vozka.test', ptype: 'user' }) },
+				headers: { [PROXY_TOKEN_HEADER]: await token({ label: 'viewer@fabrika.test', ptype: 'user' }) },
 			}),
 		)
 		const notListed = await runMiddleware(
 			{ ...ENV, FABRIKA_CONTROL_BOOTSTRAP_ADMINS: admins },
 			new Request('https://control.test/api/apps', {
-				headers: { [PROXY_TOKEN_HEADER]: await token({ label: 'operator@vozka.test', ptype: 'user' }) },
+				headers: { [PROXY_TOKEN_HEADER]: await token({ label: 'operator@fabrika.test', ptype: 'user' }) },
 			}),
 		)
 
@@ -137,7 +137,7 @@ describe('controlAuthenticator bootstrap semantics', () => {
 	})
 
 	test('bootstrap elevation does not apply to a service caller, however it is listed', async () => {
-		const label = 'service@vozka.test'
+		const label = 'service@fabrika.test'
 		const service = await runMiddleware(
 			{ ...ENV, FABRIKA_CONTROL_BOOTSTRAP_ADMINS: `["${label}"]` },
 			new Request('https://control.test/api/apps', { headers: { [PROXY_TOKEN_HEADER]: await token({ label, ptype: 'service' }) } }),
@@ -151,9 +151,9 @@ describe('controlAuthenticator bootstrap semantics', () => {
 
 	test('elevation keys on the VERIFIED label, so a listed email nobody presented elevates nobody', async () => {
 		const result = await runMiddleware(
-			{ ...ENV, FABRIKA_CONTROL_BOOTSTRAP_ADMINS: '["missing@vozka.test"]' },
+			{ ...ENV, FABRIKA_CONTROL_BOOTSTRAP_ADMINS: '["missing@fabrika.test"]' },
 			new Request('https://control.test/api/apps', {
-				headers: { [PROXY_TOKEN_HEADER]: await token({ label: 'viewer@vozka.test', ptype: 'user' }) },
+				headers: { [PROXY_TOKEN_HEADER]: await token({ label: 'viewer@fabrika.test', ptype: 'user' }) },
 			}),
 		)
 

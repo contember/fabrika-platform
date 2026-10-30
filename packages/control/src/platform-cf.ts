@@ -48,7 +48,7 @@ export interface WorkerBindings
 	DB: D1Database
 	/** Control-plane SPA static assets. */
 	ASSETS: Fetcher
-	/** R2 bucket vozka-runner writes run logs + terminal status into, keyed by run id. */
+	/** R2 bucket the runner Worker writes run logs + terminal status into, keyed by run id. */
 	RUN_LOGS: R2Bucket
 	/** Deploy job queue — producer here, consumer via the Worker's `queue()` handler. */
 	DEPLOY_QUEUE: Queue<ControlJobMessage>
@@ -65,7 +65,7 @@ export interface WorkerBindings
 	/** Account-wide deploy credential. It is passed to the runner only for a live deploy. */
 	CLOUDFLARE_API_TOKEN?: string
 	/**
-	 * vozka-runner — the deploy EXECUTOR, over a service binding. Split into its own worker so a deploy
+	 * The runner Worker — the deploy EXECUTOR, over a service binding. Split into its own worker so a deploy
 	 * of fabrika never resets the container running that deploy. OPTIONAL because it is declared
 	 * off-local only (local dev has no runner worker, mirroring the IAM binding).
 	 */
@@ -143,7 +143,7 @@ export function controlEnv(bindings: WorkerBindings, waitUntil: Env['WAIT_UNTIL'
 	return { ...env, COMMITS: gitHubCommitSource(new GitHubMetadataClient({}), vaultGitHubCredentials(env, { createClient: gitHubAppClientFactory() })) }
 }
 
-/** Present an R2 bucket as a `BlobStore` (the control plane reads run logs; vozka-runner writes them). */
+/** Present an R2 bucket as a `BlobStore` (the control plane reads run logs; the runner Worker writes them). */
 export function r2BlobStore(bucket: R2Bucket): BlobStore {
 	return {
 		async put(key, value) {
@@ -168,7 +168,7 @@ export function cfJobQueue<T>(queue: Queue<T>): JobQueue<T> {
 }
 
 /**
- * The slice of vozka-runner the control plane calls. A real `Service<VozkaRunner>` satisfies it
+ * The slice of the runner Worker the control plane calls. A real `Service<VozkaRunner>` satisfies it
  * structurally; naming it keeps the two adapters below reachable without a Workers RPC stub.
  */
 export interface CloudflareRunnerService {

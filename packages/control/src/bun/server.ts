@@ -178,7 +178,7 @@ export async function startControlServer(runtime: Runtime): Promise<void> {
 	// turned something off, which is otherwise only visible as a 500 at 3am.
 	const state = (on: boolean): string => (on ? 'enabled' : 'disabled')
 	console.info(
-		`vozka listening on :${server.port} (env=${runtime.env.ENVIRONMENT}, iam=${state(runtime.env.IAM !== undefined)}, `
+		`control listening on :${server.port} (env=${runtime.env.ENVIRONMENT}, iam=${state(runtime.env.IAM !== undefined)}, `
 			+ `vault=${state(runtime.env.FABRIKA_CONTROL_VAULT_KEY !== undefined)}, provider=${runtime.provider.id})`,
 	)
 
@@ -188,7 +188,7 @@ export async function startControlServer(runtime: Runtime): Promise<void> {
 			return
 		}
 		stopping = true
-		console.info(`vozka shutting down (${signal})`)
+		console.info(`control shutting down (${signal})`)
 		void stopControlServer({ server, requests: appHandler, consumer, runtime })
 			.then(() => process.exit(0))
 			.catch((err: unknown) => {
@@ -235,7 +235,7 @@ export async function stopControlServer(parts: StoppingControlServer, catalogGra
 export function runControlServer(createRuntime: () => Runtime): void {
 	// Never log the error object: configuration errors can quote a connection string.
 	Promise.resolve().then(() => startControlServer(createRuntime())).catch((err: unknown) => {
-		console.error('vozka failed to start:', err instanceof Error ? err.message : 'unknown error')
+		console.error('control failed to start:', err instanceof Error ? err.message : 'unknown error')
 		process.exit(1)
 	})
 }

@@ -27,7 +27,7 @@ describe.skipIf(!hasPostgres)('the mail relay on Postgres', () => {
 	})
 
 	async function relay(sender = new MemoryEmailSender()) {
-		fixture = await createPostgres('vozka_mail_relay')
+		fixture = await createPostgres('control_mail_relay')
 		const repositories = createControlRepositories(fixture.db)
 		await repositories.registry.createApp({ id: 'notes', repoUrl: 'github.com/acme/notes' })
 		await repositories.registry.upsertAppEnv({

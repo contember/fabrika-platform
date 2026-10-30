@@ -147,7 +147,7 @@ export interface AppDelegationDef {
 	purpose: 'members' | 'creates'
 }
 
-/** An app's full authz vocabulary, declared in the app's code, reconciled into Propustka. */
+/** An app's full authz vocabulary, declared in the app's code, reconciled into IAM. */
 export interface AppSchema {
 	scopes: AppScopeDef[]
 	actions: AppActionDef[]

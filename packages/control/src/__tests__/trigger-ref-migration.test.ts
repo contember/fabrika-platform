@@ -97,7 +97,7 @@ describe('maintenance names an environment the migration left bare', () => {
 describe.skipIf(!hasPostgres)(`${MIGRATION} on Postgres`, () => {
 	test('rewrites every bare trigger ref to refs/heads/<name> except one whose full ref another environment holds', async () => {
 		if (postgresUrl === null) throw new Error('FABRIKA_TEST_POSTGRES_URL is not set')
-		const schema = `vozka_trigger_migration_${Math.random().toString(36).slice(2, 10)}`
+		const schema = `control_trigger_migration_${Math.random().toString(36).slice(2, 10)}`
 		const admin = PostgresDatabase.connect(postgresUrl)
 		await admin.prepare(`CREATE SCHEMA ${schema}`).run()
 		const db = PostgresDatabase.connect(postgresUrl, { connection: { search_path: schema }, max: 1 })

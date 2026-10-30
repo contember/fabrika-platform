@@ -12,7 +12,7 @@ import { anonymousContext, type AuthResult, createIam, type IamEnv } from '../ia
 import type { IamBinding } from '../types'
 import { IamRpcStub } from './stub'
 
-const ISSUER = 'https://propustka.test'
+const ISSUER = 'https://iam.test'
 const APP = 'example-app'
 
 // Two ES256 keys for the suite: `k1` is what the stub serves, `k2` is the rotated-in key.

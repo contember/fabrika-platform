@@ -189,7 +189,7 @@ export interface MakeServicesOptions {
 	/** The lowest minimum password length an administrator may set. Defaults to the Bun runtime's. */
 	passwordMinLengthFloor?: number
 	email?: EmailSender | null
-	/** propustka's own origin (token `iss` + OIDC redirect base). */
+	/** IAM's own origin (token `iss` + OIDC redirect base). */
 	issuer?: string
 	/** The OAuth authorization server config (`OAUTH_CONFIG`). Defaults to off. */
 	oauth?: OAuthConfig | null

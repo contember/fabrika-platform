@@ -1,5 +1,5 @@
 -- Dev-only seed data for local clicking-through (NOT a migration, never deployed).
--- Apply to the local lopata D1:  bunx lopata d1 execute propustka --file seed.dev.sql
+-- Apply to the local lopata D1:  bunx lopata d1 execute IAM --file seed.dev.sql
 -- Re-runnable (ON CONFLICT DO NOTHING) — except `credential_grants` and `auth_log`, which have
 -- no unique constraint to conflict on, so re-running duplicates their rows. `INSERT OR IGNORE`
 -- behaved exactly the same way; this is not a regression.
@@ -16,12 +16,12 @@
 
 -- ── App vocabulary (normally reconciled from each app's declared schema) ──────
 
--- opice scopes by organization/team; poplach scopes by project. The admin UI reads
+-- opice scopes by organization/team; reports scopes by project. The admin UI reads
 -- app_scopes to offer real scope-type dropdowns per app.
 INSERT INTO app_scopes (app, scope_type, label) VALUES
   ('opice',   'organization', 'Organization'),
   ('opice',   'team',         'Team'),
-  ('poplach', 'project',      'Project')
+  ('reports', 'project',      'Project')
   ON CONFLICT DO NOTHING;
 
 -- Action catalogs. Inline grants and role permissions reference these strings.
@@ -30,9 +30,9 @@ INSERT INTO app_actions (app, action, description) VALUES
   ('opice',   'project.settings.update', 'Update project settings'),
   ('opice',   'report.read',             'Read reports'),
   ('opice',   'report.export',           'Export reports'),
-  ('poplach', 'project.read',            'Read project data'),
-  ('poplach', 'report.read',             'Read reports'),
-  ('poplach', 'report.export',           'Export reports')
+  ('reports', 'project.read',            'Read project data'),
+  ('reports', 'report.read',             'Read reports'),
+  ('reports', 'report.export',           'Export reports')
   ON CONFLICT DO NOTHING;
 
 -- Roles. origin='app' are the canonical bundles the app ships; origin='custom' is an
@@ -40,8 +40,8 @@ INSERT INTO app_actions (app, action, description) VALUES
 INSERT INTO roles (app, role_key, name, description, permissions, origin, created_at) VALUES
   ('opice',   'editor', 'Editor', 'Read + manage settings',  '["project.read","project.settings.update","report.read"]', 'app',    1782806400),
   ('opice',   'viewer', 'Viewer', 'Read-only access',        '["project.read","report.read"]',                          'app',    1782806400),
-  ('poplach', 'editor', 'Editor', 'Read + export reports',   '["project.read","report.read","report.export"]',          'app',    1782806400),
-  ('poplach', 'viewer', 'Viewer', 'Read-only access',        '["project.read","report.read"]',                          'app',    1782806400),
+  ('reports', 'editor', 'Editor', 'Read + export reports',   '["project.read","report.read","report.export"]',          'app',    1782806400),
+  ('reports', 'viewer', 'Viewer', 'Read-only access',        '["project.read","report.read"]',                          'app',    1782806400),
   -- One admin-composed custom policy: exporters can read everything and export reports.
   ('opice',   'report-exporter', 'Report Exporter', 'Read all + export reports', '["project.read","report.*"]',        'custom', 1782846400)
   ON CONFLICT DO NOTHING;
@@ -58,7 +58,7 @@ INSERT INTO principals (id, type, external_id, email, label, disabled_at, activa
   ON CONFLICT DO NOTHING;
 
 -- ── Grants ───────────────────────────────────────────────────────────────────
--- Scope values (scope_value) are OPAQUE app-owned ids — Propustka never interprets
+-- Scope values (scope_value) are OPAQUE app-owned ids — IAM never interprets
 -- them. Demonstrates the new shapes:
 --   * role-based + scoped  — editor on organization=acme in opice
 --   * role-based + global  — viewer everywhere in opice (scope NULL)
@@ -67,9 +67,9 @@ INSERT INTO principals (id, type, external_id, email, label, disabled_at, activa
 INSERT INTO grants (id, principal_id, app, role_key, permissions, scope_type, scope_value, granted_by, expires_at, created_at) VALUES
   ('grant-alice-org',    'p-alice',       'opice',   'editor', NULL,                                  'organization', 'acme', 'local-dev-admin', NULL, 1782826400),
   ('grant-alice-global', 'p-alice',       'opice',   'viewer', NULL,                                  NULL,           NULL,   'local-dev-admin', NULL, 1782826400),
-  ('grant-bob-project',  'p-bob-invited', 'poplach', 'editor', NULL,                                  'project',      'p-42', 'local-dev-admin', NULL, 1782892800),
+  ('grant-bob-project',  'p-bob-invited', 'reports', 'editor', NULL,                                  'project',      'p-42', 'local-dev-admin', NULL, 1782892800),
   -- Inline grant: a one-off permission set with no named role (XOR — role_key NULL).
-  ('grant-svc-inline',   'p-svc-reports', 'poplach', NULL,     '["report.read","report.export"]',     'project',      'p-42', 'local-dev-admin', NULL, 1782836400),
+  ('grant-svc-inline',   'p-svc-reports', 'reports', NULL,     '["report.read","report.export"]',     'project',      'p-42', 'local-dev-admin', NULL, 1782836400),
   -- Cross-app super-admin: role_key MUST be a BUILT-IN here. A cross-app grant resolves with app=null,
   -- and role lookup at app=null sees the built-ins only (`loadRoleSource`) — so the 'editor' this row
   -- used to name resolved to zero permissions and the seeded "super-admin" could do nothing at all.
@@ -102,5 +102,5 @@ INSERT INTO audit_events (id, request_id, principal_id, principal_label, credent
 INSERT INTO auth_log (request_id, app, kind, principal_id, credential_id, decision, reason, created_at) VALUES
   ('req-seed-5', 'opice',   'authenticate', 'p-alice', NULL, 'allow', NULL, 1782895400),
   ('req-seed-6', 'opice',   'authenticate', NULL, NULL, 'deny', 'unknown_principal', 1782895500),
-  ('req-seed-7', 'poplach', 'authenticate', NULL, 'cred-q2', 'allow', 'mint_key', 1782895600)
+  ('req-seed-7', 'reports', 'authenticate', NULL, 'cred-q2', 'allow', 'mint_key', 1782895600)
   ON CONFLICT DO NOTHING;

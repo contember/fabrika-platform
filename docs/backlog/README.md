@@ -124,6 +124,7 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [239](239-a-changed-sql-statement-shows-no-closer-review-line.md): A changed statement of a site whose `sql:` declaration is unchanged shows no closer-review line in the approval diff.
 - [240](240-channel-prereleases-sort-below-the-release-floors.md): A channel prerelease (`0.9.0-cloudflare.<n>`) sorts below the `0.9.0-dev.5` release floors, so the Cloudflare gates deny it the alarm, segment cap, data operations and raw SQL its code has; decide before the next channel release.
 - [241](241-verify-the-cloudflare-email-adapter-on-a-live-account.md): The Cloudflare email adapter is checked live only for an accepted send; its sender, quota, account and size refusals wait for a live check.
+- [242](242-the-legacy-names-in-persisted-identities.md): 24 deployed or stored identities still carry `vozka` or `propustka`; each listed with what renaming it costs an existing installation. No decision yet.
 - [243](243-the-reader-and-classifier-fixes-of-pr-73-have-no-regression-tests.md): The vocabulary fields and the `strftime` allowance that #73 restored have no test that fails when they regress.
 - [244](244-dev-sandbox-vault-rows-outlive-what-they-protect.md): A namespace's sandbox host key and removed sandboxes' return origins outlive their owners.
 - [245](245-a-namespace-keeps-its-box-host-after-its-last-dev-environment.md): Nothing removes a namespace's `zbox` service once its last dev environment is gone.

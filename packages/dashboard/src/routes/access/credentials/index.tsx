@@ -10,7 +10,7 @@ import { Icon } from '../../../components/Icon'
 import { PrincipalStatus, Status } from '../../../components/Status'
 import { EmptyState, Table } from '../../../components/Table'
 
-// Every non-human way in, on one page. Both kinds are `px_…` credentials resolved by propustka and both
+// Every non-human way in, on one page. Both kinds are `px_…` credentials resolved by IAM and both
 // are shown exactly once at issue; they differ in what they are bound to. An API key belongs to a
 // service principal: a machine with a name in the audit trail. A share link belongs to nobody: it
 // carries a frozen set of (action, scope) pairs and is normally issued by an app on a user's behalf, so
@@ -177,7 +177,7 @@ function RotateButton({ apiKey }: { apiKey: ApiKeyDto }) {
 			{secret && (
 				<SecretModal
 					title="Key rotated"
-					fields={[{ label: 'API key (propustka-native)', value: secret.apiKey, multiline: true }]}
+					fields={[{ label: 'API key (IAM-native)', value: secret.apiKey, multiline: true }]}
 					onClose={() => setSecret(null)}
 				/>
 			)}

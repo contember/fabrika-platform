@@ -12,28 +12,28 @@ describe('Db.getPrincipalsForApp', () => {
 	test('a platform roster returns app + cross-app users, excludes other apps and services, dedups, flags disabled', () => {
 		const h = createHarness()
 
-		const inPoplach = seedUser(h.sqlite, { sub: 'a', email: 'a@poplach.test' })
-		seedInlineGrant(h.sqlite, inPoplach, ['project.read'], null, 'poplach')
+		const inReports = seedUser(h.sqlite, { sub: 'a', email: 'a@reports.test' })
+		seedInlineGrant(h.sqlite, inReports, ['project.read'], null, 'reports')
 
-		const crossApp = seedUser(h.sqlite, { sub: 'b', email: 'b@poplach.test' })
+		const crossApp = seedUser(h.sqlite, { sub: 'b', email: 'b@reports.test' })
 		seedInlineGrant(h.sqlite, crossApp, ['*'], null, null) // app NULL = all apps
 
 		const inOpice = seedUser(h.sqlite, { sub: 'c', email: 'c@opice.test' })
 		seedInlineGrant(h.sqlite, inOpice, ['project.read'], null, 'opice')
 
-		const disabled = seedUser(h.sqlite, { sub: 'd', email: 'd@poplach.test', disabled: true })
-		seedInlineGrant(h.sqlite, disabled, ['project.read'], null, 'poplach')
+		const disabled = seedUser(h.sqlite, { sub: 'd', email: 'd@reports.test', disabled: true })
+		seedInlineGrant(h.sqlite, disabled, ['project.read'], null, 'reports')
 
-		const multiGrant = seedUser(h.sqlite, { sub: 'e', email: 'e@poplach.test' })
-		seedInlineGrant(h.sqlite, multiGrant, ['project.read'], null, 'poplach')
-		seedInlineGrant(h.sqlite, multiGrant, ['member.manage'], null, 'poplach')
+		const multiGrant = seedUser(h.sqlite, { sub: 'e', email: 'e@reports.test' })
+		seedInlineGrant(h.sqlite, multiGrant, ['project.read'], null, 'reports')
+		seedInlineGrant(h.sqlite, multiGrant, ['member.manage'], null, 'reports')
 
 		const service = seedService(h.sqlite, { commonName: 'ci-bot' })
-		seedInlineGrant(h.sqlite, service, ['report.write'], null, 'poplach')
+		seedInlineGrant(h.sqlite, service, ['report.write'], null, 'reports')
 
-		return h.repositories.principals.getPrincipalsForApp('poplach', CROSS_APP).then((rows) => {
+		return h.repositories.principals.getPrincipalsForApp('reports', CROSS_APP).then((rows) => {
 			const ids = rows.map((r) => r.id)
-			expect(new Set(ids)).toEqual(new Set([inPoplach, crossApp, disabled, multiGrant]))
+			expect(new Set(ids)).toEqual(new Set([inReports, crossApp, disabled, multiGrant]))
 			expect(ids).not.toContain(inOpice) // other app's user excluded
 			expect(ids).not.toContain(service) // services are not people
 			expect(ids.filter((id) => id === multiGrant)).toHaveLength(1) // deduped across grants
@@ -65,26 +65,26 @@ describe('Db.getPrincipalsForApp', () => {
 
 	test('expired grants do not make a user a member', async () => {
 		const h = createHarness()
-		const expired = seedUser(h.sqlite, { sub: 'x', email: 'x@poplach.test' })
+		const expired = seedUser(h.sqlite, { sub: 'x', email: 'x@reports.test' })
 		// expires_at in the past → not an active member.
 		h.sqlite.run(
 			'INSERT INTO grants (id, principal_id, permissions, app, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-			['g-exp', expired, JSON.stringify(['project.read']), 'poplach', 1, Math.floor(Date.now() / 1000)],
+			['g-exp', expired, JSON.stringify(['project.read']), 'reports', 1, Math.floor(Date.now() / 1000)],
 		)
-		expect(await h.repositories.principals.getPrincipalsForApp('poplach', CROSS_APP)).toEqual([])
+		expect(await h.repositories.principals.getPrincipalsForApp('reports', CROSS_APP)).toEqual([])
 	})
 
-	test('the roster is app-scoped — a poplach read never includes an opice-only user', async () => {
+	test('the roster is app-scoped — a reports read never includes an opice-only user', async () => {
 		const h = createHarness()
-		const inPoplach = seedUser(h.sqlite, { sub: 'op-sub', email: 'op@poplach.test' })
-		seedInlineGrant(h.sqlite, inPoplach, ['project.read'], null, 'poplach')
-		const teammate = seedUser(h.sqlite, { sub: 't-sub', email: 'teammate@poplach.test' })
-		seedInlineGrant(h.sqlite, teammate, ['project.read'], null, 'poplach')
+		const inReports = seedUser(h.sqlite, { sub: 'op-sub', email: 'op@reports.test' })
+		seedInlineGrant(h.sqlite, inReports, ['project.read'], null, 'reports')
+		const teammate = seedUser(h.sqlite, { sub: 't-sub', email: 'teammate@reports.test' })
+		seedInlineGrant(h.sqlite, teammate, ['project.read'], null, 'reports')
 		const opicePerson = seedUser(h.sqlite, { sub: 'o-sub', email: 'someone@opice.test' })
 		seedInlineGrant(h.sqlite, opicePerson, ['project.read'], null, 'opice')
 
-		const emails = (await h.repositories.principals.getPrincipalsForApp('poplach', CROSS_APP)).map((r) => r.email)
-		expect(new Set(emails)).toEqual(new Set(['op@poplach.test', 'teammate@poplach.test']))
+		const emails = (await h.repositories.principals.getPrincipalsForApp('reports', CROSS_APP)).map((r) => r.email)
+		expect(new Set(emails)).toEqual(new Set(['op@reports.test', 'teammate@reports.test']))
 		expect(emails).not.toContain('someone@opice.test')
 	})
 })

@@ -5,7 +5,7 @@ import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-a
 import { contractDigest } from '../../../auth-core/src/endpoint-digest'
 import { type ContainerLike, logsKey, type R2Like, relayRun, statusKey } from '../relay'
 
-// The relay is the testable core of vozka-runner's `startRun`. These tests drive it against a FAKE
+// The relay is the testable core of the runner Worker's `startRun`. These tests drive it against a FAKE
 // container (its /run, /logs, /status endpoints) and a FAKE R2 — no Cloudflare, no Docker. This is the
 // part of the Worker↔DO path we can verify offline; the real DO + container provisioning is CF-only.
 

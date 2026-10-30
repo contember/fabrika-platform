@@ -10,7 +10,7 @@ blocked-by: []
 
 ## Problem
 
-Standalone Poplach can send alert email through a Cloudflare-specific binding. Operations currently supports webhook targets only, and its notification sender is shared by Cloudflare and Bun runtimes. `@fabrika/email` now supplies the portable sender and Resend adapter, but Operations still has no email target, durable payload, retry policy, or operator UI.
+The standalone predecessor error tracker could send alert email through a Cloudflare-specific binding. Operations currently supports webhook targets only, and its notification sender is shared by Cloudflare and Bun runtimes. `@fabrika/email` now supplies the portable sender and Resend adapter, but Operations still has no email target, durable payload, retry policy, or operator UI.
 
 ## Approach / acceptance
 

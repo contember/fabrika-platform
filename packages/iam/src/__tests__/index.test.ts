@@ -199,7 +199,7 @@ function workerBindings(db: Database) {
 }
 
 // A fake request context that records the fire-and-forget promises so we can await
-// them before querying the DB (all of Propustka's DB writes go through this.ctx.waitUntil).
+// them before querying the DB (all of IAM's DB writes go through this.ctx.waitUntil).
 interface FakeCtx extends RequestContext {
 	promises: Promise<unknown>[]
 }
@@ -552,7 +552,7 @@ describe('Propustka RPC entrypoint (TEST-4)', () => {
 		// The provisioning key resolves a global-admin caller whose verified app IS the SDK-passed `app`.
 		const platform = await worker.listPrincipals({ app: 'operations', credential: PROVISIONING_KEY, requestId: 'req-list-platform' })
 		expect(platform.ok).toBe(true)
-		const application = await worker.listPrincipals({ app: 'poplach', credential: PROVISIONING_KEY, requestId: 'req-list-local' })
+		const application = await worker.listPrincipals({ app: 'reports', credential: PROVISIONING_KEY, requestId: 'req-list-local' })
 		expect(application).toEqual({ ok: false, reason: 'not_allowed' })
 	})
 })

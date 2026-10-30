@@ -1,5 +1,5 @@
 /**
- * Generic OIDC relying-party client. propustka federates login to ANY OpenID Connect provider —
+ * Generic OIDC relying-party client. IAM federates login to ANY OpenID Connect provider —
  * Google, Auth0, Okta, Keycloak, Microsoft Entra, … — configured purely by env: an `issuer` URL plus
  * a client id/secret. Endpoints are not hardcoded; they come from the provider's discovery document
  * (`${issuer}/.well-known/openid-configuration`), so swapping IdP is a config change, not a code one.
@@ -55,7 +55,7 @@ export interface OidcIdentity {
 	email: string
 }
 
-/** The subset of the OIDC discovery document propustka needs. */
+/** The subset of the OIDC discovery document IAM needs. */
 export interface OidcMetadata {
 	issuer: string
 	authorizationEndpoint: string

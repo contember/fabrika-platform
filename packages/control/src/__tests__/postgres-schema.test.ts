@@ -51,7 +51,7 @@ beforeAll(async () => {
 	if (!hasPostgres) {
 		return
 	}
-	fixture = await createPostgres('vozka')
+	fixture = await createPostgres('control')
 	raw = fixture.db
 	db = createControlRepositories(raw)
 })

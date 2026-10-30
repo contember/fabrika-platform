@@ -45,7 +45,7 @@ function makeDeps(
 				return Promise.resolve()
 			},
 		},
-		// An in-memory stand-in for the `BlobStore` port's read side (the R2 bucket vozka-runner streams
+		// An in-memory stand-in for the `BlobStore` port's read side (the R2 bucket the runner Worker streams
 		// logs into). `body` is part of the port even though the log handlers only ever read `text()`.
 		logs: {
 			get: (key) => {

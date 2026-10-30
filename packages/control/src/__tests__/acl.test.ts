@@ -39,14 +39,14 @@ describe('ACL enforcement (resolved auth context)', () => {
 	})
 
 	test('a caller without app.manage cannot create an app', async () => {
-		const { deps } = makeDeps(authWithActions(['deploy.read'], 'ro@vozka.test'))
+		const { deps } = makeDeps(authWithActions(['deploy.read'], 'ro@fabrika.test'))
 		const response = await rpcResult(rpcRequest('apps.create', { id: 'app', repoUrl: 'https://github.com/acme/app' }), deps)
 		expect(response.status).toBe(403)
 	})
 
 	test('a caller with only deploy.read can read runs but cannot trigger a deploy', async () => {
 		// This caller holds deploy.read globally only.
-		const { deps } = makeDeps(authWithActions(['deploy.read'], 'r@vozka.test'))
+		const { deps } = makeDeps(authWithActions(['deploy.read'], 'r@fabrika.test'))
 		// Seed an app + env so the scoped guard can hide the resolved target.
 		await deps.repositories.registry.createApp({ id: 'app', repoUrl: 'github.com/acme/app' })
 		await deps.repositories.registry.upsertAppEnv(providerEnvironment('app', 'prod'))
@@ -104,7 +104,7 @@ describe('ACL enforcement (resolved auth context)', () => {
 	})
 
 	test('a caller with deploy.* can trigger a deploy (enqueues + creates the run)', async () => {
-		const { deps, queue } = makeDeps(authWithActions(['deploy.*'], 'op@vozka.test'))
+		const { deps, queue } = makeDeps(authWithActions(['deploy.*'], 'op@fabrika.test'))
 		await deps.repositories.registry.createApp({ id: 'app', repoUrl: 'github.com/acme/app', defaultBranch: 'main' })
 		await deps.repositories.registry.upsertAppEnv(providerEnvironment('app', 'prod'))
 

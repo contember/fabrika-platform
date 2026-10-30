@@ -84,7 +84,7 @@ export const platformComponents = (selection: PlatformComponentSelection): reado
 		throw new Error('Missing --worker-config=<path> for `platform deploy`')
 	}
 	return [
-		{ label: 'vozka-runner', configPath: runnerConfig },
-		{ label: 'vozka', configPath: workerConfig },
+		{ label: 'runner', configPath: runnerConfig },
+		{ label: 'control', configPath: workerConfig },
 	]
 }

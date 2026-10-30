@@ -20,7 +20,7 @@ sources:
 
 Cloudflare's official CLI: local D1 lifecycle (`wrangler d1 migrations apply DB
 --local`, `wrangler d1 execute DB --local --file …`), `wrangler dev` (workerd), and
-`wrangler deploy`. Used directly on the real-CF path and internally by Vozka for
+`wrangler deploy`. Used directly on the real-CF path and internally by Fabrika Control for
 remote D1 migrations, Worker deploy and secret sync; the local-first path uses
 the `lopata` CLI instead.
 
@@ -28,7 +28,7 @@ the `lopata` CLI instead.
 
 - The real-CF dev/deploy path (alongside `cloudflare-vite-plugin`).
 - Local D1 migrations/seeds when not using `lopata d1`.
-- A Vozka-managed app still includes a compatible wrangler dependency because
+- A Fabrika-managed app still includes a compatible wrangler dependency because
   the deploy engine invokes its binary against the materialized config.
 
 ## Impacts & gotchas

@@ -1,7 +1,7 @@
 import { builtinEmailProviderVariables } from '@fabrika/email/providers'
 import { D1Database, Worker } from '@fabrika/provider-cloudflare'
 import { afterAll, beforeEach, describe, expect, test } from 'bun:test'
-import config, { buildPropustkaWorker, iamPipelineSecrets, iamPipelineVars } from './fabrika.config'
+import config, { buildIamWorker, iamPipelineSecrets, iamPipelineVars } from './fabrika.config'
 import oblakaDefinition from './oblaka'
 
 const REMOTE_SOURCE: Record<string, string> = {
@@ -116,17 +116,17 @@ describe('IAM resource graph', () => {
 		) {
 			const source = { ...REMOTE_SOURCE }
 			delete source[name]
-			expect(() => buildPropustkaWorker({ env: 'stage', domain: REMOTE_DOMAIN }, source)).toThrow(name)
+			expect(() => buildIamWorker({ env: 'stage', domain: REMOTE_DOMAIN }, source)).toThrow(name)
 		}
 
-		expect(() => buildPropustkaWorker({ env: 'stage' }, REMOTE_SOURCE)).toThrow('FABRIKA_IAM_HOSTNAME')
+		expect(() => buildIamWorker({ env: 'stage' }, REMOTE_SOURCE)).toThrow('FABRIKA_IAM_HOSTNAME')
 	})
 
 	test('defaults missing authentication flags to OIDC-only', () => {
 		const source = { ...REMOTE_SOURCE }
 		delete source['FABRIKA_IAM_OIDC_ENABLED']
 		delete source['FABRIKA_IAM_PASSWORD_ENABLED']
-		const worker = buildPropustkaWorker({ env: 'stage', domain: REMOTE_DOMAIN }, source)
+		const worker = buildIamWorker({ env: 'stage', domain: REMOTE_DOMAIN }, source)
 
 		expect(worker.options.vars?.['OIDC_ENABLED']).toBe('true')
 		expect(worker.options.vars?.['PASSWORD_ENABLED']).toBe('false')
@@ -135,10 +135,10 @@ describe('IAM resource graph', () => {
 	test('omits ADMIN_AUDIENCES unless the deploy var names one', () => {
 		// An empty value means "no JWT may administer", so the var must be ABSENT when unset —
 		// IAM then falls back to the console's own app id instead of refusing the console.
-		const unset = buildPropustkaWorker({ env: 'stage', domain: REMOTE_DOMAIN }, REMOTE_SOURCE)
+		const unset = buildIamWorker({ env: 'stage', domain: REMOTE_DOMAIN }, REMOTE_SOURCE)
 		expect(unset.options.vars?.['ADMIN_AUDIENCES']).toBeUndefined()
 
-		const named = buildPropustkaWorker({ env: 'stage', domain: REMOTE_DOMAIN }, {
+		const named = buildIamWorker({ env: 'stage', domain: REMOTE_DOMAIN }, {
 			...REMOTE_SOURCE,
 			FABRIKA_IAM_ADMIN_AUDIENCES: 'vozka,second-gateway',
 		})
@@ -146,11 +146,11 @@ describe('IAM resource graph', () => {
 	})
 
 	test('passes the retention settings only where the deploy names them', () => {
-		const unset = buildPropustkaWorker({ env: 'stage', domain: REMOTE_DOMAIN }, REMOTE_SOURCE)
+		const unset = buildIamWorker({ env: 'stage', domain: REMOTE_DOMAIN }, REMOTE_SOURCE)
 		expect(unset.options.vars?.['AUTH_LOG_RETENTION_DAYS']).toBeUndefined()
 		expect(unset.options.vars?.['AUDIT_RETENTION_DAYS']).toBeUndefined()
 
-		const named = buildPropustkaWorker({ env: 'stage', domain: REMOTE_DOMAIN }, {
+		const named = buildIamWorker({ env: 'stage', domain: REMOTE_DOMAIN }, {
 			...REMOTE_SOURCE,
 			FABRIKA_IAM_AUTH_LOG_RETENTION_DAYS: '14',
 			FABRIKA_IAM_AUDIT_RETENTION_DAYS: '365',
@@ -166,7 +166,7 @@ describe('IAM resource graph', () => {
 			FABRIKA_IAM_SIGNING_KEYS: 'private-signing-key-material',
 			FABRIKA_EMAIL_PROVIDER: 'none',
 		}
-		const worker = buildPropustkaWorker({ env: 'stage', domain: REMOTE_DOMAIN }, source)
+		const worker = buildIamWorker({ env: 'stage', domain: REMOTE_DOMAIN }, source)
 
 		expect(worker.options.vars?.['OIDC_ENABLED']).toBe('false')
 		expect(worker.options.vars?.['PASSWORD_ENABLED']).toBe('true')
@@ -186,7 +186,7 @@ describe('IAM resource graph', () => {
 
 	test('rejects disabled or invalid authentication methods', () => {
 		expect(() =>
-			buildPropustkaWorker({ env: 'stage', domain: REMOTE_DOMAIN }, {
+			buildIamWorker({ env: 'stage', domain: REMOTE_DOMAIN }, {
 				...REMOTE_SOURCE,
 				FABRIKA_IAM_OIDC_ENABLED: 'false',
 				FABRIKA_IAM_PASSWORD_ENABLED: 'false',
@@ -204,7 +204,7 @@ describe('IAM resource graph', () => {
 			FABRIKA_EMAIL_FROM: 'Fabrika <auth@example.com>',
 			FABRIKA_EMAIL_RESEND_API_KEY: 'private-resend-key',
 		}
-		const worker = buildPropustkaWorker({ env: 'prod', domain: REMOTE_DOMAIN }, resend)
+		const worker = buildIamWorker({ env: 'prod', domain: REMOTE_DOMAIN }, resend)
 
 		expect(worker.options.vars?.['FABRIKA_EMAIL_PROVIDER']).toBe('resend')
 		expect(worker.options.vars?.['FABRIKA_EMAIL_FROM']).toBe('auth@example.com')
@@ -216,10 +216,10 @@ describe('IAM resource graph', () => {
 
 		const noFrom = { ...resend }
 		delete noFrom['FABRIKA_EMAIL_FROM']
-		expect(() => buildPropustkaWorker({ env: 'prod', domain: REMOTE_DOMAIN }, noFrom)).toThrow('FABRIKA_EMAIL_FROM')
+		expect(() => buildIamWorker({ env: 'prod', domain: REMOTE_DOMAIN }, noFrom)).toThrow('FABRIKA_EMAIL_FROM')
 		const noKey = { ...resend }
 		delete noKey['FABRIKA_EMAIL_RESEND_API_KEY']
-		expect(() => buildPropustkaWorker({ env: 'prod', domain: REMOTE_DOMAIN }, noKey)).toThrow('FABRIKA_EMAIL_RESEND_API_KEY')
+		expect(() => buildIamWorker({ env: 'prod', domain: REMOTE_DOMAIN }, noKey)).toThrow('FABRIKA_EMAIL_RESEND_API_KEY')
 		expect(() => iamPipelineVars({ ...REMOTE_SOURCE, FABRIKA_EMAIL_PROVIDER: 'smtp' })).toThrow(
 			'FABRIKA_EMAIL_PROVIDER must be none or one of: ahasend, cloudflare, lettermint, postmark, resend, smartemailing',
 		)
@@ -235,7 +235,7 @@ describe('IAM resource graph', () => {
 			FABRIKA_EMAIL_SMARTEMAILING_API_KEY: 'private-smartemailing-key',
 			FABRIKA_EMAIL_SMARTEMAILING_TAG: 'iam',
 		}
-		const worker = buildPropustkaWorker({ env: 'prod', domain: REMOTE_DOMAIN }, smartEmailing)
+		const worker = buildIamWorker({ env: 'prod', domain: REMOTE_DOMAIN }, smartEmailing)
 
 		expect(worker.options.vars).toMatchObject({
 			FABRIKA_EMAIL_PROVIDER: 'smartemailing',
@@ -253,7 +253,7 @@ describe('IAM resource graph', () => {
 		const noCredentials = { ...smartEmailing }
 		delete noCredentials['FABRIKA_EMAIL_SMARTEMAILING_USERNAME']
 		delete noCredentials['FABRIKA_EMAIL_SMARTEMAILING_API_KEY']
-		expect(() => buildPropustkaWorker({ env: 'prod', domain: REMOTE_DOMAIN }, noCredentials)).toThrow(
+		expect(() => buildIamWorker({ env: 'prod', domain: REMOTE_DOMAIN }, noCredentials)).toThrow(
 			'FABRIKA_EMAIL_SMARTEMAILING_USERNAME is missing; FABRIKA_EMAIL_SMARTEMAILING_API_KEY is missing',
 		)
 	})
@@ -266,7 +266,7 @@ describe('IAM resource graph', () => {
 			FABRIKA_EMAIL_CLOUDFLARE_API_TOKEN: 'private-cloudflare-token',
 			FABRIKA_EMAIL_CLOUDFLARE_ACCOUNT_ID: '023e105f4ecef8ad9ca31a8372d0c353',
 		}
-		const worker = buildPropustkaWorker({ env: 'prod', domain: REMOTE_DOMAIN }, cloudflare)
+		const worker = buildIamWorker({ env: 'prod', domain: REMOTE_DOMAIN }, cloudflare)
 
 		expect(worker.options.vars).toMatchObject({
 			FABRIKA_EMAIL_PROVIDER: 'cloudflare',
@@ -279,33 +279,33 @@ describe('IAM resource graph', () => {
 
 		const noAccount = { ...cloudflare }
 		delete noAccount['FABRIKA_EMAIL_CLOUDFLARE_ACCOUNT_ID']
-		expect(() => buildPropustkaWorker({ env: 'prod', domain: REMOTE_DOMAIN }, noAccount)).toThrow('FABRIKA_EMAIL_CLOUDFLARE_ACCOUNT_ID is missing')
+		expect(() => buildIamWorker({ env: 'prod', domain: REMOTE_DOMAIN }, noAccount)).toThrow('FABRIKA_EMAIL_CLOUDFLARE_ACCOUNT_ID is missing')
 	})
 
 	test("writes Control's origin for the mail relay only where the deploy names one, beside the provisioning key", () => {
 		const relayed = { ...REMOTE_SOURCE, FABRIKA_CONTROL_URL: 'https://control.example.com', FABRIKA_IAM_PROVISIONING_KEY: 'px_provisioning' }
-		const worker = buildPropustkaWorker({ env: 'prod', domain: REMOTE_DOMAIN }, relayed)
+		const worker = buildIamWorker({ env: 'prod', domain: REMOTE_DOMAIN }, relayed)
 		expect(worker.options.vars?.['FABRIKA_CONTROL_URL']).toBe('https://control.example.com')
 		expect(JSON.stringify(worker.options)).not.toContain('px_provisioning')
-		expect(buildPropustkaWorker({ env: 'prod', domain: REMOTE_DOMAIN }, REMOTE_SOURCE).options.vars?.['FABRIKA_CONTROL_URL']).toBeUndefined()
+		expect(buildIamWorker({ env: 'prod', domain: REMOTE_DOMAIN }, REMOTE_SOURCE).options.vars?.['FABRIKA_CONTROL_URL']).toBeUndefined()
 
 		const refused = ['control.example.com', 'https://control.example.com/', 'https://control.example.com/platform', 'http://control.example.com']
 		for (const url of refused) {
-			expect(() => buildPropustkaWorker({ env: 'prod', domain: REMOTE_DOMAIN }, { ...relayed, FABRIKA_CONTROL_URL: url })).toThrow(
+			expect(() => buildIamWorker({ env: 'prod', domain: REMOTE_DOMAIN }, { ...relayed, FABRIKA_CONTROL_URL: url })).toThrow(
 				'FABRIKA_CONTROL_URL must be an https origin',
 			)
 		}
 		const keyless = { ...relayed }
 		delete keyless['FABRIKA_IAM_PROVISIONING_KEY']
 		for (const source of [keyless, { ...relayed, FABRIKA_IAM_PROVISIONING_KEY: ' \n' }]) {
-			expect(() => buildPropustkaWorker({ env: 'prod', domain: REMOTE_DOMAIN }, source)).toThrow(
+			expect(() => buildIamWorker({ env: 'prod', domain: REMOTE_DOMAIN }, source)).toThrow(
 				'FABRIKA_CONTROL_URL needs FABRIKA_IAM_PROVISIONING_KEY',
 			)
 		}
 	})
 
 	test('remote secrets are required but never enter plaintext Worker vars', () => {
-		const worker = buildPropustkaWorker({ env: 'prod', domain: REMOTE_DOMAIN }, REMOTE_SOURCE)
+		const worker = buildIamWorker({ env: 'prod', domain: REMOTE_DOMAIN }, REMOTE_SOURCE)
 		const serializedOptions = JSON.stringify(worker.options)
 
 		expect(worker.options.vars?.['FABRIKA_IAM_SIGNING_KEYS']).toBeUndefined()

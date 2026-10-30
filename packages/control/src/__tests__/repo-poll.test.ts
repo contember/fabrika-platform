@@ -189,7 +189,7 @@ describe('pollPublicRepos', () => {
 		// First poll has no prior etag → no If-None-Match; the user-agent is sent.
 		expect(calls).toHaveLength(1)
 		expect(calls[0]?.ifNoneMatch).toBeNull()
-		expect(calls[0]?.userAgent).toBe('vozka')
+		expect(calls[0]?.userAgent).toBe('fabrika')
 
 		// A pending poll run for the resolved commit was created + enqueued.
 		const runs = await db.runs.listRuns({ limit: 10 })

@@ -40,7 +40,7 @@ is a **starting point**, not a lock-in — add/drop decisions freely.
 
 - **`cf-lightweight`** — buzola SPA + lopata + D1, **no SSR**. The preferred default and simplest end-to-end fabrika stack (bun/lopata path).
 - **`cf-internal-app`** — the full internal-app stack: Buzola SPA +
-  Worker API, D1/R2/Queue/Cron/Workers AI, native Propustka login and Vozka deploy.
+  Worker API, D1/R2/Queue/Cron/Workers AI, native Fabrika IAM login and Fabrika Control deploy.
 - **`cf-fat`** — RRv7 **SSR** + vite + `@cloudflare/vite-plugin` (workerd) + the full CF primitive set (D1/KV/R2/Queue/AE/Cron); counts behind `count-store` so it stays locally testable.
 - **`contember-app`** — a Contember (Postgres GraphQL CMS) backend + a buzola/React admin SPA bound via bindx. A Node-backend + static-SPA shape (not Workers/D1).
 - **`content-site`** — a Bun-native static content site: pletivo SSG + Preact islands + Tailwind. No SSR, no vite — fits the bun/non-vite preference.

@@ -5,7 +5,7 @@ title: Typed SPA-to-Worker RPC boundary
 slot: client-worker-api
 provides: [typed-rpc, client-worker-api, validated-input, centralized-auth]
 requires: [cloudflare, buzola]
-recommends: [propustka]
+recommends: [fabrika-iam]
 conflicts: []
 status: stable
 sources:
@@ -64,7 +64,7 @@ type InferRpcMethods<M> = {
   path or instantiate a handler from user input.
 - Normalize known failures (validation 400, unauthorized 401, forbidden 403,
   not found 404); log unexpected errors server-side and return a safe 500.
-- With Propustka, preserve `loginUrl` in the 401 envelope and attach a returned
+- With Fabrika IAM, preserve `loginUrl` in the 401 envelope and attach a returned
   `setCookie` to the final RPC response. The SPA redirects a human miss to login
   and guards against redirect loops.
 - Use relative `/rpc` URLs. The Vite proxy owns the local backend origin; this
@@ -83,5 +83,5 @@ exercise the envelope/auth seam in a smaller set of integration tests.
 - **requires `cloudflare`** — the server side is the app Worker.
 - **requires `buzola`** — the client surface is designed for loaders + SPA
   mutations, not SSR actions.
-- **recommends `propustka`** — central boundary authentication plus per-method
+- **recommends `fabrika-iam`** — central boundary authentication plus per-method
   capability checks is the intended secure shape.

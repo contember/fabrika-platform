@@ -17,7 +17,7 @@ export function readRunnerEnvironment(source: Readonly<Record<string, string | u
 const main = async (): Promise<void> => {
 	const env = readRunnerEnvironment(process.env)
 	const cwd = resolve(import.meta.dir, '..')
-	console.log(`Deploying vozka-runner → ${env}${dryRun ? ' (dry-run)' : ''} (idempotent — safe to re-run).`)
+	console.log(`Deploying the runner → ${env}${dryRun ? ' (dry-run)' : ''} (idempotent — safe to re-run).`)
 	console.log('  Building the account-owned container image from this checkout.')
 
 	process.chdir(cwd)

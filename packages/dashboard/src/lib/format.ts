@@ -1,4 +1,4 @@
-// Tiny formatting helpers shared across pages. Mirrors propustka admin-ui's lib/format.ts.
+// Tiny formatting helpers shared across pages. Mirrors the predecessor IAM admin UI's lib/format.ts.
 
 /** What a cell or a fact shows for a value that is not there. */
 export const NONE = 'none'

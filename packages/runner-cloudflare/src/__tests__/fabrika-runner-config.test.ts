@@ -2,7 +2,7 @@ import { Container, R2Bucket, type Worker } from '@fabrika/provider-cloudflare'
 import { describe, expect, test } from 'bun:test'
 import config, { buildRunnerWorker } from '../../fabrika-runner.config'
 
-// vozka-runner's own deploy surface uses the Cloudflare provider authoring API.
+// The runner Worker's own deploy surface uses the Cloudflare provider authoring API.
 // These tests prove: defineApp accepts it, the resource graph materializes the executor's binding set
 // (the RunnerContainer DO + the SHARED, adopted-by-name R2), and it is INFRA — no Access, no schema,
 // no runtime secrets. It binds no database: the control plane is the only writer of its own.
@@ -12,7 +12,7 @@ function binding(worker: Worker, name: string): unknown {
 	return worker.options.bindings?.[name]
 }
 
-describe('defineApp(vozka-runner config)', () => {
+describe('defineApp(runner config)', () => {
 	test('exports a valid AppConfig with id `vozka-runner` and the worker entry', () => {
 		expect(config.id).toBe('vozka-runner')
 		const worker = config.resources({ env: 'stage' })

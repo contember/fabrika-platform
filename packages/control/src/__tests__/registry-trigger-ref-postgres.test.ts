@@ -16,7 +16,7 @@ let db: ControlRepositories
 
 beforeAll(async () => {
 	if (!hasPostgres) return
-	fixture = await createPostgres('vozka_trigger_ref')
+	fixture = await createPostgres('control_trigger_ref')
 	db = createControlRepositories(fixture.db)
 })
 

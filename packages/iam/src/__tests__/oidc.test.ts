@@ -13,7 +13,7 @@ const CONFIG: OidcConfig = {
 	issuer: ISSUER,
 	clientId: 'client-123',
 	clientSecret: 'secret-xyz',
-	redirectUri: 'https://propustka.test/auth/callback',
+	redirectUri: 'https://iam.test/auth/callback',
 	scopes: '',
 	requireVerifiedEmail: true,
 }

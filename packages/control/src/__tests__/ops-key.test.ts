@@ -231,7 +231,7 @@ describe.skipIf(!hasPostgres)('VaultOpsKeys on Postgres', () => {
 	})
 
 	test('a failed rotating deploy keeps both digests and the old key, and the deploy after a succeeded one drops it', async () => {
-		fixture = await createPostgres('vozka_ops_keys')
+		fixture = await createPostgres('control_ops_keys')
 		const { clock, keys, deploy } = await environment(fixture.db, createControlRepositories(fixture.db))
 		const [old] = await deploy('succeeded')
 		clock.now = T0 + 15 * DAY

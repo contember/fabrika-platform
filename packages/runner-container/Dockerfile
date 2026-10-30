@@ -5,7 +5,7 @@
 #
 # BUILD CONTEXT = the fabrika-platform repo ROOT (so we can copy the workspace packages). Run via
 # `bun run docker:build` (from packages/runner-container):
-# docker build -f packages/runner-container/Dockerfile -t vozka-runner <repo-root>
+# docker build -f packages/runner-container/Dockerfile -t fabrika-runner <repo-root>
 #
 # Only oblaka-iac and wrangler resolve from npm. oblaka-iac is pinned in docker/package.json to the
 # version that ships the programmatic `deploy()` the Cloudflare provider calls.

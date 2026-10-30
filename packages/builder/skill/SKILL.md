@@ -38,7 +38,7 @@ ensure daemon → fabrika builder next → do packet work → gate → advance �
      Claude and Codex repo support by default, starts the daemon, and opens the
      dashboard. Use `--agent claude` or `--agent codex` only when the user wants
      a single host. When the brief explicitly calls for a full internal
-     Cloudflare app with native Propustka login and Vozka deployment, select
+     Cloudflare app with native Fabrika IAM login and Fabrika Control deployment, select
      `--profile cf-internal-app` instead of the lightweight default.
    - Otherwise run `bunx fabrika builder ensure-daemon`.
 

@@ -21,7 +21,7 @@ export function organizationMailbox(email: string, config: Pick<Config, 'human' 
 }
 
 /**
- * The human-admission allowlist for self-provisioning a brand-new identity. propustka owns this
+ * The human-admission allowlist for self-provisioning a brand-new identity. IAM owns this
  * centrally (the deploy vars `FABRIKA_IAM_HUMAN_EMAIL_DOMAINS` / `FABRIKA_IAM_HUMAN_EMAILS`):
  *   - a `*` entry in EITHER list = admit anyone (allow-all);
  *   - an exact email match in `emails`;

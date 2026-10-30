@@ -3,7 +3,7 @@ import { normalizeEmailIdentity } from '../membership'
 import { accessClaimsToResolved, type AccessTokenClaims, buildAccessClaims, parseAccessClaims, principalKind } from '../token'
 import type { PermissionEntry } from '../types'
 
-const ISS = 'https://propustka.example.com'
+const ISS = 'https://iam.example.com'
 
 const perms: PermissionEntry[] = [
 	{ action: '*', scope: null, source: 'bootstrap' },

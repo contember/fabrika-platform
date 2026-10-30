@@ -41,7 +41,7 @@ const backends: { name: string; skip: boolean; open(now: () => number): Promise<
 		name: 'postgres',
 		skip: !hasPostgres,
 		open: async (now) => {
-			const fixture = await createPostgres('vozka_data_ops')
+			const fixture = await createPostgres('control_data_ops')
 			const pools: PostgresDatabase[] = []
 			return {
 				repositories: createControlRepositories(fixture.db, { now }),

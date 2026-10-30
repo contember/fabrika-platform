@@ -29,7 +29,7 @@ export async function getAppSchema(c: AdminContext, app: string): Promise<Respon
 
 /**
  * Provision an API key: create a native service principal + grant and mint a `px_`
- * credential bound to it — resolved by the propustka-native path (`mintFromKey`), no
+ * credential bound to it — resolved by the IAM-native path (`mintFromKey`), no
  * Cloudflare Access in front. The plaintext `px_` token is returned ONCE.
  *
  * There is no distributed transaction; the writes are local D1 (principal → grant →

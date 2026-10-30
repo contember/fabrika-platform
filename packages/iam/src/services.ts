@@ -28,7 +28,7 @@ export interface Services {
 export interface Config {
 	/**
 	 * The central human-admission allowlist — who may self-provision as a HUMAN at login. A `*` entry
-	 * in either list means admit-all; otherwise an exact email or matching domain. Owned by propustka
+	 * in either list means admit-all; otherwise an exact email or matching domain. Owned by IAM
 	 * (deploy vars `FABRIKA_IAM_HUMAN_EMAIL_DOMAINS` / `FABRIKA_IAM_HUMAN_EMAILS`).
 	 */
 	readonly human: {
@@ -62,8 +62,8 @@ export interface Config {
 	readonly oauth: OAuthConfig | null
 	/** How long the maintenance cron keeps `auth_log` and `audit_events`. */
 	readonly retention: Retention
-	// ── propustka-native auth ──
-	/** propustka's own origin — the `iss` of minted tokens and the OIDC redirect base. */
+	// ── IAM-native auth ──
+	/** IAM's own origin — the `iss` of minted tokens and the OIDC redirect base. */
 	readonly issuer: string
 }
 

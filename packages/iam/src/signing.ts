@@ -1,5 +1,5 @@
 /**
- * Token signing key custody for propustka-issued tokens. The Worker is now an ISSUER: it signs
+ * Token signing key custody for IAM-issued tokens. The Worker is now an ISSUER: it signs
  * per-app permission tokens (and capability tokens) with its own ES256 (EC P-256) key, and
  * publishes the public half so the SDK verifies locally — no per-request round-trip.
  *
@@ -117,9 +117,9 @@ export class Signer {
 }
 
 /**
- * Verify a propustka-issued NATIVE access token (`px_token`) against THIS signer's own public keys and
+ * Verify an IAM-issued NATIVE access token (`px_token`) against THIS signer's own public keys and
  * narrow it to access claims; null on any failure. The server-side mirror of the SDK's local verify
- * (`session.ts`) — propustka issued the token, so it trusts the `perms`/`ptype`/`aud` it signed. The
+ * (`session.ts`) — IAM issued the token, so it trusts the `perms`/`ptype`/`aud` it signed. The
  * signer already holds the current + rotation public keys, so there is no JWKS fetch or kid-miss retry.
  *
  * An OAuth resource token is REFUSED here: it was minted for an MCP client and one resource, and must

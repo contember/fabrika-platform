@@ -10,7 +10,7 @@ import type {
 import type { Jwks } from './token'
 import type { PermissionEntry, PrincipalType, Scope } from './types'
 
-// ── propustka-native session auth (mint a per-app permission token from an SSO session) ──
+// ── IAM-native session auth (mint a per-app permission token from an SSO session) ──
 //
 // The SDK middleware presents the browser's opaque SSO session cookie; the Worker validates it,
 // resolves the principal's permissions FOR THE CALLING APP, and signs a short-lived per-app
@@ -33,7 +33,7 @@ export type MintTokenResult =
 	/** `token_too_large`: the principal holds more than fits in one header; a decided refusal, never a login bounce. */
 	| { ok: false; reason: 'no_session' | 'invalid_session' | 'unknown_principal' | 'disabled' | 'token_too_large' }
 
-// ── propustka-native key auth (mint an access token from an opaque `px_` credential) ──
+// ── IAM-native key auth (mint an access token from an opaque `px_` credential) ──
 //
 // The other front over the same resolve→sign core as `mintToken`: the SDK presents an opaque
 // credential (an API key as a bearer, or a share-link path token) and the Worker resolves its
@@ -154,8 +154,8 @@ export interface IssueKeyServiceSpec {
 export interface IssueKeyInput {
 	app: string
 	/**
-	 * The propustka-native credential the ISSUER is resolved from server-side (never self-asserted):
-	 * a `px_token` access JWT (verified against propustka's signing keys) or a `px_` key. Null = absent.
+	 * The IAM-native credential the ISSUER is resolved from server-side (never self-asserted):
+	 * a `px_token` access JWT (verified against IAM's signing keys) or a `px_` key. Null = absent.
 	 */
 	credential: string | null
 	requestId: string
@@ -227,7 +227,7 @@ export interface AuditInput {
 
 export interface RevokeKeyInput {
 	app: string
-	/** The propustka-native credential the CALLER (authorizer) is resolved from; null = absent. */
+	/** The IAM-native credential the CALLER (authorizer) is resolved from; null = absent. */
 	credential: string | null
 	requestId: string
 	/** The credential id (the `id` returned by `issueKey`), NOT the plaintext `px_` token. */
@@ -242,7 +242,7 @@ export type RevokeKeyResult =
 // ── List principals (the app's people directory) ───────────────────────────────
 //
 // A read-only enumeration of the USER principals who can access an app — its people
-// directory. Apps consume it for things propustka isn't the authority on but needs the
+// directory. Apps consume it for things IAM isn't the authority on but needs the
 // roster for: an assignee picker, an actor/owner label list. The caller is resolved from
 // the forwarded Access credentials and the listed app is the aud-VERIFIED app — an operator
 // can only enumerate the roster of an app it itself authenticates to (never a self-asserted
@@ -252,7 +252,7 @@ export type RevokeKeyResult =
 export interface ListPrincipalsInput {
 	/** Self-asserted caller app id; superseded by the credential's aud on a valid `px_token`. */
 	app: string
-	/** The propustka-native credential the CALLER is resolved from (px_token / px_ key); null = absent. */
+	/** The IAM-native credential the CALLER is resolved from (px_token / px_ key); null = absent. */
 	credential: string | null
 	requestId: string
 }
@@ -286,7 +286,7 @@ export interface IamRpc {
 	listOwnDeviceAuthorizations(input: ListOwnDeviceAuthorizationsInput): Promise<ListOwnDeviceAuthorizationsResult>
 	/**
 	 * Mint a short-lived, per-app permission token from the browser's SSO session — the
-	 * propustka-native auth path. The SDK middleware calls this only when its cached permission
+	 * IAM-native auth path. The SDK middleware calls this only when its cached permission
 	 * token is missing/near-expiry (≈ once per TTL), NOT per request: every other request verifies
 	 * the cached token locally against `getJwks`.
 	 */

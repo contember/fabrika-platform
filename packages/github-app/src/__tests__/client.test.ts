@@ -203,7 +203,7 @@ describe('GitHubAppClient requests', () => {
 			expect(headers.get('authorization')).toStartWith('Bearer ')
 			expect(headers.get('accept')).toBe('application/vnd.github+json')
 			expect(headers.get('x-github-api-version')).toBe('2022-11-28')
-			expect(headers.get('user-agent')).toBe('vozka')
+			expect(headers.get('user-agent')).toBe('fabrika')
 			expect(request.init?.redirect).toBe('manual')
 			expect(request.init?.signal).toBeInstanceOf(AbortSignal)
 		}

@@ -1,4 +1,4 @@
-// vozka-runner's caller check. A Cloudflare service binding is NOT a capability: any Worker deployed
+// The runner Worker's caller check. A Cloudflare service binding is NOT a capability: any Worker deployed
 // into the same account can declare `<env>-vozka-runner` and invoke these RPC methods, so "only the
 // control plane holds the binding" authenticates nothing. Every job carries the shared secret the
 // control plane holds and the Worker verifies it BEFORE it addresses a container or touches R2.

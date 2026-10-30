@@ -20,7 +20,7 @@ export interface Env {
 	REPOSITORIES: IamRepositories
 	/**
 	 * JSON array of email domains admitted as a HUMAN at login (e.g. `["example.com","contember.com"]`).
-	 * A `*` entry means admit anyone. propustka owns this centrally — the login-admission allowlist for
+	 * A `*` entry means admit anyone. IAM owns this centrally — the login-admission allowlist for
 	 * self-provisioning a new identity. Consumed by `/auth/callback`.
 	 */
 	HUMAN_EMAIL_DOMAINS: string
@@ -80,10 +80,10 @@ export interface Env {
 	 */
 	PASSWORD_COST?: Pbkdf2Cost
 
-	// ── propustka-native auth (propustka issues its own tokens; see token.ts / signing.ts) ──
+	// ── IAM-native auth (IAM issues its own tokens; see token.ts / signing.ts) ──
 
 	/**
-	 * propustka's OWN origin, e.g. `https://propustka.example.com` — the `iss` of every minted
+	 * IAM's OWN origin, e.g. `https://iam.example.com` — the `iss` of every minted
 	 * token AND the base for the OIDC redirect URI. Derived from `FABRIKA_IAM_HOSTNAME` at
 	 * deploy time; a localhost value locally.
 	 */
@@ -106,11 +106,11 @@ export interface Env {
 	FABRIKA_IAM_PROVISIONING_KEY: string
 	/**
 	 * OIDC provider issuer URL (e.g. `https://accounts.google.com`, an Auth0/Okta/Keycloak/Entra
-	 * tenant). propustka discovers the endpoints from `${OIDC_ISSUER}/.well-known/openid-configuration`
+	 * tenant). IAM discovers the endpoints from `${OIDC_ISSUER}/.well-known/openid-configuration`
 	 * — so ANY OIDC provider works via config, no per-provider code.
 	 */
 	OIDC_ISSUER?: string
-	/** OIDC client id (public). The SSO upstream — propustka federates here for human login. */
+	/** OIDC client id (public). The SSO upstream — IAM federates here for human login. */
 	OIDC_CLIENT_ID?: string
 	/** **Secret.** OIDC client secret (the code-exchange credential). */
 	OIDC_CLIENT_SECRET?: string

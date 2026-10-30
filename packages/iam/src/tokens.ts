@@ -1,5 +1,5 @@
 /**
- * Minting per-app access tokens — the heart of propustka-native auth.
+ * Minting per-app access tokens — the heart of IAM-native auth.
  *
  * Two fronts over one resolve→sign core:
  *   - `mintToken`   — from the browser's opaque SSO session cookie (a principal-bound credential in a

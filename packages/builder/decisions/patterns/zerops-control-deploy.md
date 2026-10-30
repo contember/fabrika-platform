@@ -6,7 +6,7 @@ slot: deploy-control-plane
 provides: [managed-deploy, release-tracking]
 requires: [zerops-platform, zerops-fabrika-auth]
 recommends: []
-conflicts: [app-deploy, vozka-app-deploy]
+conflicts: [app-deploy, fabrika-app-deploy]
 status: wip
 sources:
   - where: "packages/control-contract/src/rpc.ts + packages/provider-zerops/src/provider.ts in fabrika-platform"

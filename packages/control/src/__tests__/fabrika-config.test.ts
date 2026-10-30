@@ -25,7 +25,7 @@ let controlEmailSecrets: typeof ControlEmailSecrets
 let controlPipelineSecrets: typeof ControlPipelineSecrets
 
 beforeAll(async () => {
-	process.env['FABRIKA_CONTROL_DOMAIN'] = 'vozka.test.example.com'
+	process.env['FABRIKA_CONTROL_DOMAIN'] = 'control.test.example.com'
 	const mod = await import('../../fabrika.config')
 	config = mod.default
 	buildControlWorker = mod.buildControlWorker
@@ -59,18 +59,18 @@ function application(worker: Worker): Worker {
 	return value
 }
 
-describe('defineApp(vozka config)', () => {
+describe('defineApp(control config)', () => {
 	test('exports a valid AppConfig with id `vozka` and a resources builder', () => {
 		expect(config.id).toBe(CONTROL_APP_ID)
 		expect(config.id).toBe('vozka')
 		expect(typeof config.resources).toBe('function')
 	})
 
-	test('the resource graph puts a public proxy in front of the full vozka app Worker', () => {
-		const worker: Worker = config.resources({ env: 'stage', domain: 'vozka.test.example.com' })
+	test('the resource graph puts a public proxy in front of the full control app Worker', () => {
+		const worker: Worker = config.resources({ env: 'stage', domain: 'control.test.example.com' })
 		expect(worker.options.name).toBe('vozka-proxy')
 		expect(worker.options.main).toBe('./proxy-worker.ts')
-		expect(worker.options.routes).toEqual([{ pattern: 'vozka.test.example.com', custom_domain: true }])
+		expect(worker.options.routes).toEqual([{ pattern: 'control.test.example.com', custom_domain: true }])
 		expect(binding(worker, 'IAM')).toBeInstanceOf(ServiceReference)
 		const app = application(worker)
 		expect(app.options.name).toBe('vozka')
@@ -78,7 +78,7 @@ describe('defineApp(vozka config)', () => {
 		expect(app.options.routes).toEqual([])
 		expect(app.options.workers_dev).toBe(false)
 
-		// The deploy executor is a SEPARATE worker (vozka-runner): fabrika binds it as a SERVICE, not a
+		// The deploy executor is a SEPARATE Worker (the runner): fabrika binds it as a SERVICE, not a
 		// Container — so a deploy of fabrika never resets the container running it. No Container here anymore.
 		expect(binding(app, 'RUNNER_SVC')).toBeInstanceOf(ServiceReference)
 		expect(binding(app, 'RUNNER')).toBeUndefined()
@@ -91,7 +91,7 @@ describe('defineApp(vozka config)', () => {
 		if (!(mailQueue instanceof Queue) || !(mailContent instanceof R2Bucket)) throw new Error('the mail relay bindings are missing')
 		expect(mailQueue.options.name).toBe('fabrika-mail')
 		expect(mailContent.options.name).toBe('fabrika-mail-content')
-		// Off-local stages bind the propustka IAM ServiceReference.
+		// Off-local stages bind the IAM ServiceReference.
 		expect(binding(app, 'IAM')).toBeInstanceOf(ServiceReference)
 		expect(binding(app, 'OPERATIONS')).toBeInstanceOf(ServiceReference)
 	})
@@ -120,14 +120,14 @@ describe('defineApp(vozka config)', () => {
 		const worker = application(proxy)
 		expect(binding(worker, 'IAM')).toBeInstanceOf(ServiceReference)
 		expect(worker.options.vars?.['FABRIKA_IAM_ISSUER']).toBe('http://localhost:18191')
-		// Operations and vozka-runner stay off-local (no container deploys in dev).
+		// Operations and the runner Worker stay off-local (no container deploys in dev).
 		expect(binding(worker, 'OPERATIONS')).toBeUndefined()
 		expect(binding(worker, 'RUNNER_SVC')).toBeUndefined()
 	})
 
 	test('domain from ctx flows into the FABRIKA_CONTROL_DOMAIN var', () => {
-		const worker = application(config.resources({ env: 'stage', domain: 'vozka.test.example.com' }))
-		expect(worker.options.vars?.['FABRIKA_CONTROL_DOMAIN']).toBe('vozka.test.example.com')
+		const worker = application(config.resources({ env: 'stage', domain: 'control.test.example.com' }))
+		expect(worker.options.vars?.['FABRIKA_CONTROL_DOMAIN']).toBe('control.test.example.com')
 		expect(worker.options.vars?.['ENVIRONMENT']).toBe('stage')
 	})
 

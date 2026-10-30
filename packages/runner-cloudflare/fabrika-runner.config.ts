@@ -1,8 +1,8 @@
-// vozka-runner's OWN deploy surface — the deploy EXECUTOR, split out of the fabrika control plane so a
+// The runner Worker's OWN deploy surface — the deploy EXECUTOR, split out of the fabrika control plane so a
 // deploy of fabrika never resets the container running that deploy (see src/worker.ts for the why).
 //
-// vozka-runner is INFRA, not a registered app: no Cloudflare Access front door (it's reachable only via
-// fabrika's `RUNNER_SVC` service binding, never publicly) and no propustka access/schema. Its ONE runtime
+// The runner Worker is INFRA, not a registered app: no Cloudflare Access front door (it's reachable only via
+// fabrika's `RUNNER_SVC` service binding, never publicly) and no IAM access/schema. Its ONE runtime
 // secret is FABRIKA_RUNNER_KEY, which authenticates that caller — the binding alone proves nothing; every
 // other credential still arrives per-run in the provider job. It is deployed RARELY and OUT-OF-BAND
 // (scripts/bootstrap-runner.ts) — it can't deploy itself through itself (same self-reset), and it only
@@ -28,7 +28,7 @@ const instanceTypeFor = (env: string): 'dev' | 'basic' | 'standard' => {
 }
 
 /**
- * Build vozka-runner's Cloudflare resource graph for one environment. The SINGLE source of the graph —
+ * Build the runner Worker's Cloudflare resource graph for one environment. The SINGLE source of the graph —
  * both the provider deploy/bootstrap path (via `defineApp` below) and the local-dev `oblaka.ts` shim
  * call this, so the two never drift.
  */
@@ -42,7 +42,7 @@ export const buildRunnerWorker = (ctx: ResourceContext): Worker => {
 		main: './src/worker.ts',
 		compatibility_flags: ['nodejs_compat'],
 		compatibility_date: '2025-05-25',
-		// No public route — vozka-runner is reachable ONLY via fabrika's RUNNER_SVC service binding.
+		// No public route — the runner Worker is reachable ONLY via fabrika's RUNNER_SVC service binding.
 		// `routes: []` alone still publishes a workers.dev hostname and version preview URLs, so both are
 		// switched off explicitly, exactly as fabrika's own app Worker does.
 		routes: [],
@@ -79,7 +79,7 @@ export default defineApp({
 	id: 'vozka-runner',
 	resources: buildRunnerWorker,
 	pipeline: {
-		// vozka-runner's Worker source lives alongside this config. No build step (no assets).
+		// The runner Worker's source lives alongside this config. No build step (no assets).
 		workerDir: '.',
 		// The ONLY runtime secret: the shared key every RPC caller must present (src/runner-key.ts).
 		// Provisioned out-of-band with `wrangler secret put`, same value as fabrika's own.

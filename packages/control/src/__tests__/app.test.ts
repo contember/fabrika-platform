@@ -146,7 +146,7 @@ describe('controlApp', () => {
 	})
 
 	test('elevates only listed authenticated users through the bootstrap-admin middleware', async () => {
-		const fetch = application({ FABRIKA_CONTROL_BOOTSTRAP_ADMINS: '["viewer@vozka.test"]' })
+		const fetch = application({ FABRIKA_CONTROL_BOOTSTRAP_ADMINS: '["viewer@fabrika.test"]' })
 		const listed = await fetch(rpcRequest('apps.list', null, viewerToken))
 		const notListed = await fetch(rpcRequest('apps.list', null, operatorToken))
 

@@ -15,7 +15,7 @@ import { localPlatformProxyManifest } from '../prepare'
 const hostOf = (origin: string): string => new URL(origin).hostname
 
 describe('the locally registered apps', () => {
-	test('vozka is registered at the host the platform proxy fronts it on', () => {
+	test('the console app is registered at the host the platform proxy fronts it on', () => {
 		const vozka = localApps.find((app) => app.id === 'vozka')
 		expect(vozka).toBeDefined()
 		const fronted = localPlatformProxyManifest().apps.find((app) => app.id === 'vozka')

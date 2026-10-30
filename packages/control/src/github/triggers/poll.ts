@@ -180,7 +180,7 @@ export async function pollPublicRepos(deps: PollDeps): Promise<PollSummary> {
 		const prior = await deps.repositories.polling.getRepoPollState(app.id, appEnv.env)
 
 		try {
-			const headers: Record<string, string> = { 'user-agent': 'vozka' }
+			const headers: Record<string, string> = { 'user-agent': 'fabrika' }
 			if (prior?.etag != null && prior.etag !== '') {
 				headers['if-none-match'] = prior.etag
 			}

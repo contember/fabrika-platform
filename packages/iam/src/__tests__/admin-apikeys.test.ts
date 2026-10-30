@@ -12,7 +12,7 @@ import { getSigner } from '../signing'
 import { mintFromKey } from '../tokens'
 import { createHarness, type Harness, seedAppAction, seedGrant, seedUser, TEST_SIGNING_ENV, TEST_SIGNING_KEYS } from './helpers/harness'
 
-// End-to-end tests for the admin api-keys flow minting a propustka-NATIVE key: provision creates a
+// End-to-end tests for the admin api-keys flow minting an IAM-NATIVE key: provision creates a
 // native service principal + grant and returns a `px_` key that `mintFromKey` resolves to the service
 // principal's permissions; rotate invalidates the old one; revoke kills it. No Cloudflare Access.
 //
@@ -20,7 +20,7 @@ import { createHarness, type Harness, seedAppAction, seedGrant, seedUser, TEST_S
 // bootstrapped before a console exists. ROTATE is `/admin/rpc` — a console operation with no
 // bootstrap role, so it has no REST mirror to keep in step.
 
-const ISSUER = 'https://propustka.test'
+const ISSUER = 'https://iam.test'
 const ORIGIN = ISSUER
 const SIGN_ENV = { FABRIKA_IAM_SIGNING_KEYS: '', FABRIKA_IAM_PROVISIONING_KEY: '', ENVIRONMENT: 'local' }
 // env slice handleAdmin needs: a `stage` signer that verifies the console bearer `asAdmin` signs.

@@ -48,7 +48,7 @@ and AI adds a summary, prioritization or explanation afterwards.
   result first; store AI status/error separately and retry off the request path.
 - Long inference belongs in `queue()` or `scheduled()`, not an HTTP request's
   critical path.
-- If `vozka-config`/oblaka lacks a first-class Workers AI resource, use a small
+- If `@fabrika/provider-cloudflare`/oblaka lacks a first-class Workers AI resource, use a small
   structural `Bindable` that emits `{ ai: { binding } }`; keep that workaround
   isolated and remove it once the IaC package exposes a supported primitive.
 

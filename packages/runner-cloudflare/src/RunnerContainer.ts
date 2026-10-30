@@ -2,10 +2,10 @@
 // `defaultPort` matches the in-container server, with a generous `sleepAfter` so a long clone + install +
 // provider deploy is never reaped mid-run.
 //
-// One DO instance == one container == one run. The vozka-runner Worker addresses the instance by a KEYED
+// One DO instance == one container == one run. The runner Worker addresses the instance by a KEYED
 // name (`runnerInstanceName`, an HMAC of the run id) that no other Worker can compute,
 // `startAndWaitForPorts()`, then relays the job through it. This DO lives in
-// vozka-runner (NOT the fabrika control plane) so a deploy of fabrika never resets the container that is
+// the runner Worker (NOT the fabrika control plane) so a deploy of fabrika never resets the container that is
 // running that very deploy — the self-reset that previously orphaned fabrika's own runs.
 
 import { Container } from '@cloudflare/containers'
@@ -111,15 +111,15 @@ export class RunnerContainer extends Container<Env> {
 	override sleepAfter = '20m'
 
 	override onStart(): void {
-		console.info('vozka runner container started')
+		console.info('runner container started')
 	}
 
 	override onStop(params: { exitCode: number; reason: string }): void {
-		console.info(`vozka runner container stopped (exit ${params.exitCode}, ${params.reason})`)
+		console.info(`runner container stopped (exit ${params.exitCode}, ${params.reason})`)
 	}
 
 	override onError(error: unknown): void {
-		console.error('vozka runner container error:', error)
+		console.error('runner container error:', error)
 	}
 
 	/**
@@ -134,7 +134,7 @@ export class RunnerContainer extends Container<Env> {
 	 * Arm the run-completion BACKSTOP. The relay (logs + terminal status → R2) runs INSIDE the
 	 * `RUNNER_SVC.startRun` RPC from the control plane; when a deploy redeploys fabrika ITSELF, fabrika's
 	 * reset aborts that RPC and kills the relay before it persists the outcome — yet this container (a DO
-	 * in the SEPARATE vozka-runner worker) survives and the deploy completes. The backstop polls the
+	 * in the SEPARATE runner Worker) survives and the deploy completes. The backstop polls the
 	 * container from the DO's own caller-independent context and persists the terminal status the control
 	 * plane's reconcile reads back. Scheduled via the Container's own `schedule()` (NOT a raw `alarm()`
 	 * override — the base class owns the alarm).

@@ -40,7 +40,7 @@ import { error } from './http'
 // The installation administrator's action. Scope-less → satisfied by a GLOBAL permission only.
 export const ADMIN_ACTION = IAM_ACTIONS.ADMIN
 
-// propustka's own app id — the audience the admin caller is resolved against (the SSO session is
+// IAM's own app id — the audience the admin caller is resolved against (the SSO session is
 // minted for it in auth/routes.ts). The built-in `admin` role is cross-app, so a global admin grant
 // still resolves here regardless.
 export const IAM_APP = IAM_APP_ID
