@@ -41,3 +41,4 @@ export const SANDBOX_DATABASE_CONNECTIONS = 10
 /** The size of one workspace sandbox. */
 export const SANDBOX_CPUS = 2
 export const SANDBOX_MEMORY_BYTES = 2 * 1024 * 1024 * 1024
+export const SANDBOX_DISK_BYTES = 4 * 1024 * 1024 * 1024

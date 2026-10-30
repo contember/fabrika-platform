@@ -98,6 +98,8 @@ export interface ZboxCreateSandboxInput {
 	baseDigest: string
 	cpus: number
 	memoryBytes: number
+	/** Box refuses a create whose disk does not fit the workspace's data volume, and its default can exceed a small one. */
+	diskBytes: number
 	networkMode: ZboxNetworkMode
 	launch: ZboxLaunch
 	ports: ZboxIngressPort[]

@@ -175,6 +175,7 @@ export const createZboxClient = (options: ZboxClientOptions): ZboxClient => {
 						baseDigest: input.baseDigest,
 						cpus: input.cpus,
 						memoryBytes: input.memoryBytes,
+						diskBytes: input.diskBytes,
 						networkMode: input.networkMode,
 						integrations: [],
 						launch: { entrypoint: input.launch.entrypoint, cmd: input.launch.cmd, workingDir: input.launch.workingDir },

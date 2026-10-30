@@ -212,6 +212,7 @@ describe('dev sandbox lifecycle', () => {
 			baseDigest: 'sha256:built-base',
 			cpus: 2,
 			memoryBytes: 2 * 1024 * 1024 * 1024,
+			diskBytes: 4 * 1024 * 1024 * 1024,
 			networkMode: 'INTERNET',
 			integrations: [],
 			launch: { entrypoint: ['/bin/sh'], cmd: ['/usr/local/lib/fabrika/init.sh'] },
