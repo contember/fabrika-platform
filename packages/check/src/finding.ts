@@ -43,6 +43,7 @@ export const REFUSAL_RULE_IDS = [
 	'layer-import',
 	'generated-test-import',
 	'shared-import',
+	'tool-import',
 	'cloudflare-scan',
 	'cloudflare-job-segment',
 	'cloudflare-current-timestamp',

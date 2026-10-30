@@ -482,14 +482,23 @@ const checkPrototypeWrite = (node: AstNode, context: SourceContext): void => {
 
 const KEY_PREFIX = 'px_'
 
-const checkStringContent = (node: AstNode, texts: readonly (string | undefined)[], context: SourceContext): void => {
+const checkStringContent = (node: AstNode, texts: readonly (string | undefined)[], report: Report): void => {
 	if (texts.some((text) => text?.includes(KEY_PREFIX))) {
-		context.report(
+		report(
 			node,
 			'key-literal',
 			`'${KEY_PREFIX}' in a literal: a key or a session cookie name in source`,
 			'the credential the framework supplies; keys never appear in code',
 		)
+	}
+}
+
+/** `key-literal` over a string or a template's text: also the one rule of this module a developer's tool is held to. */
+export const checkKeyLiteralNode = (node: AstNode, report: Report): void => {
+	if (node.type === 'Literal') checkStringContent(node, [staticString(node)], report)
+	else if (node.type === 'TemplateElement') {
+		const { raw, cooked } = templateText(node)
+		checkStringContent(node, [raw, cooked], report)
 	}
 }
 
@@ -536,11 +545,8 @@ export const checkRuntimeNode = (node: AstNode, ancestors: readonly AstNode[], c
 			return
 		}
 		case 'Literal':
-			return checkStringContent(node, [staticString(node)], context)
-		case 'TemplateElement': {
-			const { raw, cooked } = templateText(node)
-			return checkStringContent(node, [raw, cooked], context)
-		}
+		case 'TemplateElement':
+			return checkKeyLiteralNode(node, context.report)
 		case 'JSXAttribute': {
 			const name = child(node, 'name')
 			if (name?.type === 'JSXIdentifier' && stringField(name, 'name') === 'dangerouslySetInnerHTML') {

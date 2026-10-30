@@ -37,6 +37,11 @@ export const SLICE_QUERIES_FILE = 'queries.ts'
 export const SPA_DIR = 'web/'
 /** The server half of an application: its modules run in the application's process. */
 export const SERVER_DIR = 'src/'
+/**
+ * A developer's tools, such as a command line over the contract: code that runs on a developer's machine and never in
+ * the application, so the rules for code that runs there do not apply, and no module outside it may load one.
+ */
+export const TOOLS_DIR = 'tools/'
 
 const SOURCE_EXTENSION = /\.(?:[mc]?[jt]s|[jt]sx)$/
 const TEST_FILE = /(?:^|\/)__tests__\/|\.(?:test|spec)\.[mc]?[jt]sx?$/
@@ -53,6 +58,9 @@ export const isTestFile = (path: string): boolean => TEST_FILE.test(path)
 
 /** A module that runs in the application's server process: under `src/`, not a test. */
 export const isServerModule = (path: string): boolean => path.startsWith(SERVER_DIR) && !isTestFile(path)
+
+/** A module under `tools/`, tests included. */
+export const isToolModule = (path: string): boolean => path.startsWith(TOOLS_DIR)
 
 export const isJsonFile = (path: string): boolean => path.endsWith('.json')
 
