@@ -1,6 +1,6 @@
 ---
 name: fabrika-app
-version: 0.9.0-dev.8
+version: 0.9.0-dev.9
 description: >
   How to write and change a Fabrika application: src/vocabulary.ts, db/migrations/, src/db/tables.ts, the
   slices' endpoints.ts with their handlers, fabrika.contract.ts, jobs, files, webhooks, share links, connectors
