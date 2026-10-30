@@ -742,6 +742,13 @@ function claiming(parts: DataLayerParts, context: TableContext, site: DataSite, 
 }
 
 /**
+ * How many claimed ids one lease update binds. SQLite in a Durable Object binds at most 100 parameters a statement, and
+ * the update binds the attempts, the due, the version step and the scope's values beside the ids: a claim of one
+ * update per attempt count failed every run once about 100 rows with the same attempts were due, and the queue stopped.
+ */
+const CLAIM_UPDATE_IDS = 50
+
+/**
  * Leases up to `limit` due rows in a transaction of its own, fenced by the job attempt's lease: each claimed row's
  * attempts grow by one and its `due` moves by the backoff, so a failure or a crash leaves it due again later. Answers
  * each row with the columns the capability's action reads, its new version and attempts, and its `ref`.
@@ -797,17 +804,20 @@ async function claimRows(
 		for (const [attempts, ids] of byAttempts) {
 			const due = new Date(now.getTime() + backoffMs(tickMs, attempts + 1))
 			const changes = new Map<string, Primitive>([[queue.attempts, attempts + 1], [queue.due, due]])
-			const updated = await session.run<Readonly<Record<string, unknown>>>(
-				updateNode(table, boundValues(context, changes), version, scopedWhere(inList(table, key, ids), scope), answer(context)),
-				{ root: 'UpdateQueryNode', table, joins: {}, scope },
-			)
-			for (const row of updated) {
-				const id = row['id']
-				const next = row['version']
-				if (typeof id !== 'string' || typeof next !== 'number' || !isSafeInteger(next)) {
-					throw new QueryRefusedError('unexpected_row', `${table}.${version} came back as ${typeof next}; a version column is INTEGER`)
+			for (let start = 0; start < ids.length; start += CLAIM_UPDATE_IDS) {
+				const chunk = ids.slice(start, start + CLAIM_UPDATE_IDS)
+				const updated = await session.run<Readonly<Record<string, unknown>>>(
+					updateNode(table, boundValues(context, changes), version, scopedWhere(inList(table, key, chunk), scope), answer(context)),
+					{ root: 'UpdateQueryNode', table, joins: {}, scope },
+				)
+				for (const row of updated) {
+					const id = row['id']
+					const next = row['version']
+					if (typeof id !== 'string' || typeof next !== 'number' || !isSafeInteger(next)) {
+						throw new QueryRefusedError('unexpected_row', `${table}.${version} came back as ${typeof next}; a version column is INTEGER`)
+					}
+					claimed.set(id, { version: next, attempts: attempts + 1, due })
 				}
-				claimed.set(id, { version: next, attempts: attempts + 1, due })
 			}
 		}
 		// The job runs again when this claim would next find a row; a claim that found nothing leaves the re-arm as it is.

@@ -326,6 +326,8 @@ class Alarm {
 	}
 }
 
+const WORKERD_MAX_PARAMETERS = 100
+
 interface Sqlite {
 	readonly database: BunDatabase
 	readonly alarm: Alarm
@@ -351,7 +353,13 @@ async function sqlite(): Promise<Sqlite> {
 	}
 	const inner = bunSqliteStorage(database)
 	const storage: ApplicationStorage = {
-		sql: inner.sql,
+		// workerd binds at most 100 parameters a statement; bun:sqlite allows far more.
+		sql: {
+			exec: (query, ...bindings) => {
+				if (bindings.length > WORKERD_MAX_PARAMETERS) throw new Error('too many SQL variables: SQLITE_ERROR')
+				return inner.sql.exec(query, ...bindings)
+			},
+		},
 		transactionSync: inner.transactionSync,
 		transaction: (closure) => alarm.within((run) => inner.transaction(run), closure),
 		getAlarm: () => Promise.resolve(alarm.scheduled),
@@ -460,6 +468,20 @@ describe('a claim re-arms its job under the Cloudflare alarm', () => {
 			expect(claims.claimed).toEqual([['r1'], ['r7']])
 			expect(sqliteWakes(database, 'claim')).toEqual([{ reason: 'claim', due_at: now + 2 * MINUTE, dedupe: 'claim:render' }])
 			expect(alarm.scheduled).toBe(now + 2 * MINUTE)
+		})
+	})
+	test('a claim of more rows than workerd binds parameters leases them all', async () => {
+		await keepingProcessEnvironment(async () => {
+			const { database, fire } = await sqlite()
+			const now = Date.now()
+			const ids = Array.from({ length: 150 }, (_, index) => `s${String(index).padStart(3, '0')}`)
+			sqliteRows(database, ids.map((id) => ({ id, kind: 'summary', due: now - MINUTE })))
+			claims.limit = ids.length
+			kickNow(database)
+			await fire()
+			expect(claims.claimed).toEqual([ids])
+			const attempts = database.query<{ attempts: number; n: number }, []>('select attempts, count(*) as n from report_requests group by attempts').all()
+			expect(attempts).toEqual([{ attempts: 1, n: ids.length }])
 		})
 	})
 })
