@@ -588,7 +588,8 @@ const PAVED_FUNCTIONS: ReadonlySet<string> = new Set([
  * Reviewed `pg_catalog` functions a function body, a view or a backfill may call, and a stored expression may call as
  * a deviation: pure string, number, date, JSON, array, text-search and aggregate functions, `pg_sleep`, and the
  * built-in trigger function. None runs SQL from a string, touches a file, a large object, a lock, a setting, another
- * database or a sequence named by a string.
+ * database or a sequence named by a string. SQLite's `randomblob` and `hex` are here beside `random`: SQLite has no
+ * `gen_random_uuid`, and a Cloudflare backfill builds a key from them.
  */
 const REVIEWED_FUNCTIONS: ReadonlySet<string> = new Set([
 	'concat',
@@ -630,6 +631,8 @@ const REVIEWED_FUNCTIONS: ReadonlySet<string> = new Set([
 	'sign',
 	'div',
 	'random',
+	'randomblob',
+	'hex',
 	'age',
 	'clock_timestamp',
 	'statement_timestamp',

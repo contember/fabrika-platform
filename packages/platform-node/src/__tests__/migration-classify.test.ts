@@ -1,3 +1,4 @@
+import { Database } from 'bun:sqlite'
 import { describe, expect, test } from 'bun:test'
 import { fileScanAlter } from '../file-table-ddl'
 import { classifyMigration, classifyMigrations, type MigrationDeviation } from '../migration-classify.js'
@@ -274,6 +275,32 @@ describe('refused: what escapes the schema, the transaction or the platform', ()
 			expect({ sql, reason: refusal(sql) }).toEqual({ sql, reason })
 		}
 		expect(refusal('CREATE TABLE deals (n int DEFAULT next_number())', ['next_number'])).toBeUndefined()
+	})
+
+	test("SQLite's randomblob and hex build a key in a backfill; in a stored expression they are a deviation", () => {
+		const backfill = [
+			'INSERT INTO deal_tags (id, deal_id, tag)',
+			"SELECT lower(hex(randomblob(4)) || '-' || hex(randomblob(2)) || '-4' || substr(hex(randomblob(2)), 2) || '-'",
+			"\t|| substr('89ab', 1 + (random() & 3), 1) || substr(hex(randomblob(2)), 2) || '-' || hex(randomblob(6))), id, label",
+			'FROM deals WHERE label IS NOT NULL;',
+		].join('\n')
+		expect(classify(backfill)).toMatchObject({ refused: [], deviations: [] })
+		expect(deviationKeys('CREATE TABLE tags (id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))))')).toEqual([
+			'expression tags.id calls hex',
+			'expression tags.id calls randomblob',
+		])
+
+		// The expression the skill documents (table-and-migration.md) is a UUID v4, which z.uuid() accepts.
+		const db = new Database(':memory:')
+		db.run('CREATE TABLE deals (id TEXT PRIMARY KEY, label TEXT); CREATE TABLE deal_tags (id TEXT PRIMARY KEY, deal_id TEXT, tag TEXT)')
+		db.run("WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 2000) INSERT INTO deals SELECT i, 'x' FROM n")
+		db.run(backfill)
+		const ids = db.query<{ id: string }, []>('SELECT id FROM deal_tags').all().map((row) => row.id)
+		db.close()
+		expect(ids).toHaveLength(2000)
+		expect(new Set(ids).size).toBe(2000)
+		expect(ids.filter((id) => !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(id))).toEqual([])
+		expect(new Set(ids.map((id) => id[19]))).toEqual(new Set(['8', '9', 'a', 'b']))
 	})
 
 	test('names the line of each refused statement', () => {

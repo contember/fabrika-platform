@@ -726,7 +726,7 @@ const cases: readonly RuleCase[] = [
 			...(await cloudflareApplication("c.files({ types: ['image/png'], maxBytes: 1024 })")),
 			'db/migrations/20261024120000_codes.sql': [
 				'CREATE TABLE codes (id TEXT PRIMARY KEY, code TEXT NOT NULL);',
-				'INSERT INTO codes (id, code) SELECT id, lower(hex(randomblob(16))) FROM notes;',
+				"INSERT INTO codes (id, code) SELECT id, load_extension('/tmp/codes.so') FROM notes;",
 				'',
 			].join('\n'),
 		},
@@ -734,7 +734,7 @@ const cases: readonly RuleCase[] = [
 		good: {
 			...(await cloudflareApplication("c.files({ types: ['image/png'], maxBytes: 1024 })")),
 			'db/migrations/20261024120000_codes.sql':
-				'CREATE TABLE codes (id TEXT PRIMARY KEY, code TEXT NOT NULL);\nINSERT INTO codes (id, code) SELECT id, id FROM notes;\n',
+				'CREATE TABLE codes (id TEXT PRIMARY KEY, code TEXT NOT NULL);\nINSERT INTO codes (id, code) SELECT id, lower(hex(randomblob(16))) FROM notes;\n',
 		},
 	},
 	{
