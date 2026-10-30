@@ -900,8 +900,8 @@ const cases: readonly RuleCase[] = [
 ]
 
 describe('every rule has a refused and an allowed fixture', () => {
-	test('the table covers every rule id except generated-test-hash and the architecture rules, which have their own suites', () => {
-		expect(new Set([...cases.map((item) => item.rule), 'generated-test-hash', ...STRUCTURE_RULE_IDS])).toEqual(new Set(RULE_IDS))
+	test('the table covers every rule id except generated-test-hash, migration-edited and the architecture rules, which have their own suites', () => {
+		expect(new Set([...cases.map((item) => item.rule), 'generated-test-hash', 'migration-edited', ...STRUCTURE_RULE_IDS])).toEqual(new Set(RULE_IDS))
 	})
 
 	for (const item of cases) {
