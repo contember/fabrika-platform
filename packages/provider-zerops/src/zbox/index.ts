@@ -7,7 +7,6 @@ export type {
 	ZboxClient,
 	ZboxClientOptions,
 	ZboxCreateSandboxInput,
-	ZboxDomain,
 	ZboxExecInput,
 	ZboxExecResult,
 	ZboxFetch,

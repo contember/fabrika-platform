@@ -25,6 +25,9 @@ const TRANSITION_POLL_MS = 1_000
 
 const TRANSITIONS: ReadonlySet<ZboxSandbox['status']> = new Set(['CREATING', 'PARKING', 'WAKING', 'FORKING', 'RESTORING'])
 
+/** A sandbox that will not run again. Box archives one past its absolute TTL. */
+const ENDED: ReadonlySet<ZboxSandbox['status']> = new Set(['FAILED', 'TERMINATED', 'ARCHIVED'])
+
 /** The sandbox name of a workspace: what `ensure` finds it again by. */
 export function sandboxName(workspaceId: string): string {
 	if (!WORKSPACE_ID.test(workspaceId)) throw new Error('zerops: a workspace id is a lower-case UUID')
@@ -157,7 +160,7 @@ export function createZeropsDevSandboxes(options: ZeropsDevSandboxesOptions): Pr
 			let replaced: string | null = null
 			if (found !== null) {
 				const sandbox = await settledSandbox(client, found, options.sleep, input.signal)
-				if (sandbox.status !== 'FAILED' && sandbox.status !== 'TERMINATED') {
+				if (!ENDED.has(sandbox.status)) {
 					// A sandbox on an older base is kept: a new one would change its id, which the published proxy entry names.
 					return sandboxOf(await runningSandbox(client, sandbox.id, options.sleep, input.signal))
 				}

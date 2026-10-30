@@ -194,7 +194,7 @@ describe('dev sandbox lifecycle', () => {
 	test('ensure builds the base once, creates the workspace sandbox, and finds it again by name', async () => {
 		const { box, control } = harness()
 		const first = await sandboxes(control).ensure({ environment: devEnvironment(), workspaceId: WORKSPACE, sandboxKey: SANDBOX_KEY, signal: signal() })
-		expect(first).toEqual({ sandboxId: 'sb1', baseDigest: 'sha256:built-base', upstreamHost: '3000-sb1.sandbox.fabrika.internal' })
+		expect(first).toEqual({ sandboxId: 'sb1', baseDigest: 'sha256:built-base', upstreamHost: '3000-sb1' })
 
 		const context = await readSandboxBaseContext()
 		expect(context.name).toMatch(/^fabrika-dev-[0-9a-f]{12}$/)
@@ -239,14 +239,14 @@ describe('dev sandbox lifecycle', () => {
 			sandboxKey: SANDBOX_KEY,
 			signal: signal(),
 		})
-		expect(ensured).toEqual({ sandboxId: 'sb9', baseDigest: 'sha256:old-base', upstreamHost: '3000-sb9.sandbox.fabrika.internal' })
+		expect(ensured).toEqual({ sandboxId: 'sb9', baseDigest: 'sha256:old-base', upstreamHost: '3000-sb9' })
 		expect(box.requests.map((request) => `${request.method} ${request.path}`)).toContain('POST /sandbox/sb9/wake')
 		expect(box.requests.some((request) => request.path === '/base-build' || request.path === '/sandbox')).toBe(false)
 	})
 
-	test('ensure removes a FAILED sandbox and creates a new one', async () => {
+	test.each(['FAILED', 'ARCHIVED'] as const)('ensure removes a %s sandbox and creates a new one', async (status) => {
 		const box = new FakeBox()
-		box.addSandbox({ id: 'sb7', name: `fabrika-${WORKSPACE}`, status: 'FAILED' })
+		box.addSandbox({ id: 'sb7', name: `fabrika-${WORKSPACE}`, status })
 		const { control } = harness(box)
 		const ensured = await sandboxes(control).ensure({
 			environment: devEnvironment(),

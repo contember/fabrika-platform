@@ -13,7 +13,7 @@ const errorBodySchema = z
  * A failed Box Workspace API call. `code` is Box's `error.code` when the body was Box's error JSON, `http_<status>`
  * when it was not, or one of the client's own: `unreadable` (a success body that does not parse), `timeout`,
  * `unreachable` (status 0 for the last two). The message names the operation and nothing the server sent beyond
- * the code: Box echoes request env and launch env in its bodies.
+ * the code: a body is the server's text, and a message may reach a log.
  */
 export class ZboxApiError extends Error {
 	constructor(readonly operation: string, readonly status: number, readonly code: string) {

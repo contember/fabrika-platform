@@ -12,7 +12,6 @@ import {
 	asNamespaceError,
 	ZEROPS_PROXY_SANDBOXES_UNSUPPORTED,
 	ZEROPS_SANDBOX_HOST_API_OPEN,
-	ZEROPS_SANDBOX_HOST_DOMAIN_FORM,
 	ZEROPS_SANDBOX_HOST_KEY_REFUSED,
 	ZEROPS_SANDBOX_HOST_UNSUPPORTED,
 } from '../namespace/errors'
@@ -20,8 +19,8 @@ import { assertNamespaceProxyAcceptsSandboxes } from '../namespace/proxy-reads'
 import { ensureSandboxHost, type ZeropsSandboxHostApi } from '../namespace/sandbox-host'
 import type { NormalizedZeropsNamespaceTarget, ZeropsNamespaceProxySource } from '../namespace/types'
 import { FABRIKA_PROXY_MANIFEST_SANDBOXES, zeropsProxyAcceptsSandboxes } from '../proxy-manifest-carrier'
-import { SANDBOX_HOST_DOMAIN, SANDBOX_HOST_KEY_VARIABLE } from '../sandbox-host'
-import { ZboxApiError, type ZboxDomain, type ZboxFetch } from '../zbox'
+import { SANDBOX_HOST_KEY_VARIABLE } from '../sandbox-host'
+import { ZboxApiError, type ZboxFetch } from '../zbox'
 
 const projectId = 'project-1'
 const zboxId = 'zbox-service'
@@ -52,8 +51,6 @@ interface FakeState {
 	openWithoutKey: 'never' | 'untilRestart' | 'always'
 	/** The subdomain lines the platform writes once the service is published. */
 	subdomainLines: string[]
-	domains: ZboxDomain[]
-	domainPuts: ZboxDomain[][]
 }
 
 const freshState = (): FakeState => ({
@@ -65,8 +62,6 @@ const freshState = (): FakeState => ({
 	refusesEveryKey: false,
 	openWithoutKey: 'never',
 	subdomainLines: [`https://zbox-1a2b-8081.prg1.zerops.app`, `https://${API_HOST}`],
-	domains: [{ domain: 'other.example.test', form: 'DASH' }],
-	domainPuts: [],
 })
 
 const service = (state: FakeState, serviceId: string): ZeropsService => {
@@ -126,26 +121,19 @@ const makeApi = (state: FakeState): ZeropsSandboxHostApi => ({
 const json = (status: number, body: unknown): Response =>
 	new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
 
-/** Box: accepts exactly the key it read at its last start, and replaces the domain list whole. */
+/** Box: accepts exactly the key it read at its last start. */
 const makeBox = (state: FakeState): ZboxFetch => async (url, init) => {
 	const path = new URL(url).pathname
 	state.calls.push(`box:${init.method} ${path}`)
 	if (new URL(url).host !== API_HOST) throw new Error(`unexpected Box origin ${url}`)
 	const live = state.liveKey
 	if (init.headers['authorization'] === undefined && state.openWithoutKey !== 'never' && init.method === 'GET' && path === '/api/rest/workspace') {
-		return json(200, { version: '1', domains: state.domains })
+		return json(200, { version: '1' })
 	}
 	if (state.refusesEveryKey || live === undefined || init.headers['authorization'] !== `Bearer ${live}`) {
 		return json(401, { error: { code: 'unauthorized', message: 'no' } })
 	}
-	if (init.method === 'GET' && path === '/api/rest/workspace') return json(200, { version: '1', domains: state.domains })
-	if (init.method === 'PUT' && path === '/api/rest/workspace/domains' && typeof init.body === 'string') {
-		const body: unknown = JSON.parse(init.body)
-		const domains = typeof body === 'object' && body !== null && 'domains' in body && Array.isArray(body.domains) ? body.domains : []
-		state.domains = domains
-		state.domainPuts.push(domains)
-		return json(200, { version: '2', domains })
-	}
+	if (init.method === 'GET' && path === '/api/rest/workspace') return json(200, { version: '1' })
 	return json(404, { error: { code: 'notFound' } })
 }
 
@@ -199,20 +187,18 @@ describe('the namespace sandbox host', () => {
 		expect(state.calls.indexOf(put)).toBeLessThan(state.calls.indexOf(`stop:${zboxId}`))
 		expect(state.calls.indexOf(`stop:${zboxId}`)).toBeLessThan(state.calls.indexOf(`start:${zboxId}`))
 		expect(state.calls).toContain(`enableSubdomain:${zboxId}`)
-		// Every domain already there is kept; the DOT domain is added.
-		expect(state.domainPuts).toEqual([[{ domain: 'other.example.test', form: 'DASH' }, { domain: SANDBOX_HOST_DOMAIN, form: 'DOT' }]])
+		// The router routes the bare Host, so Box is only read: no domain is added.
+		expect(state.calls.filter((call) => call.startsWith('box:') && !call.startsWith('box:GET'))).toEqual([])
 	})
 
 	test('a complete sandbox host is only read on a reconcile', async () => {
 		const state = freshState()
 		const host = await ensure(state)
 		state.calls.length = 0
-		state.domainPuts.length = 0
 
 		expect(await ensure(state, target({ sandboxHost: host }))).toEqual(host)
 
 		expect(state.calls.filter((call) => !call.startsWith('box:GET'))).toEqual([])
-		expect(state.domainPuts).toEqual([])
 	})
 
 	test('a stopped host is started before Box is reached', async () => {
@@ -270,17 +256,6 @@ describe('the namespace sandbox host', () => {
 		expect(error.code).toBe(ZEROPS_SANDBOX_HOST_API_OPEN)
 		// The fresh host's own rekey counts: no second restart.
 		expect(state.calls.filter((call) => call === `stop:${zboxId}`)).toHaveLength(1)
-		expect(state.domainPuts).toEqual([])
-	})
-
-	test('refuses a sandbox domain the host routes in DASH form rather than adding a duplicate', async () => {
-		const state = freshState()
-		state.domains = [{ domain: SANDBOX_HOST_DOMAIN, form: 'DASH' }]
-
-		const error = await failure(ensure(state))
-
-		expect(error.code).toBe(ZEROPS_SANDBOX_HOST_DOMAIN_FORM)
-		expect(state.domainPuts).toEqual([])
 	})
 
 	test('refuses a zerops-subdomain namespace before any platform call', async () => {

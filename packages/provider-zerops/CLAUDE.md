@@ -282,17 +282,19 @@ bun test
   `assertNoSandboxReferences` a `${…}` value, one line each. The launcher's `checks` are the recipe's `checks`. A dev
   environment's stored target is `{ kind: 'devSandboxes' }` and claims no service (`src/namespace/claims.ts`); a target
   an older release stored for its own service still decodes, and `sandboxHostOf` refuses it with the re-register remedy.
-- **No credential reaches Box except in a file the deploy writes.** Box echoes a sandbox's launch environment and an
-  exec's environment in its API answers and session lists, so no call of `src/zbox/` accepts env, create pins
-  `secrets: { mode: 'NONE' }`, and the client never puts a response body into an error or a log: an error carries Box's
-  `code` and the HTTP status only. The build's output is relayed through `maskValues`. Never add an env parameter.
+- **No credential reaches Box except in a file the deploy writes.** The launcher's environment is a root-only file
+  written through the file API and the build runs without it, so no call of `src/zbox/` accepts env, create pins
+  `secrets: { mode: 'NONE' }` (no per-sandbox secret aliases: each would be a `zbox` service variable), and the client
+  never puts a response body into an error or a log: an error carries Box's `code` and the HTTP status only. The
+  build's output is relayed through `maskValues`. Never add an env parameter.
 - **The sandbox host is the namespace's `zbox` service** (`src/namespace/sandbox-host.ts`, constants in
   `src/sandbox-host.ts`). It is imported alone, after the proxy has converged, by a namespace job that Control hands a `sandboxKey` (a `dev`
   member has a workspace sandbox record). The platform
   starts it ACTIVE with a key of its own, which a create of `ZBOX_WORKSPACE_API_KEY` cannot replace (`errorList`), so
   the step rekeys with an update of the record and a restart. The key is Control's (handed per call as `sandboxKey`),
-  written sensitive and never read back or compared. The step requires that the API answers 401 without a key, and adds
-  the DOT domain `sandbox.fabrika.internal` the proxy routes by. A `zerops-subdomain` namespace is refused a host.
+  written sensitive and never read back or compared. The step requires that the API answers 401 without a key. The
+  proxy routes a sandbox by the bare `Host` `3000-<sandbox id>` (`sandboxUpstreamHost`), so the host gets no domain; an
+  older host keeps the DOT domain an earlier release added, unused. A `zerops-subdomain` namespace is refused a host.
 - **Sandbox entries reach only a proxy that parses them.** A `dev` member that carries `devSandboxes` is routed only
   through those entries (`dev:<app>:<workspace>`, `audience`, `upstreamHost`; `src/namespace/manifest.ts`), and only
   when the pinned descriptor's proxy build declares `FABRIKA_PROXY_MANIFEST_SANDBOXES` (`zeropsProxyAcceptsSandboxes`,

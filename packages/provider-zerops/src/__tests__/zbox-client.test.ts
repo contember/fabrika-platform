@@ -7,7 +7,6 @@ import {
 	ZboxApiError,
 	type ZboxBody,
 	type ZboxCreateSandboxInput,
-	type ZboxDomain,
 	type ZboxFetch,
 	ZboxOperationFailed,
 	type ZboxSandbox,
@@ -50,7 +49,7 @@ const sandbox = (overrides: Record<string, unknown> = {}) => ({
 	networkMode: 'INTERNET',
 	policy: { ingress: { ports: [] } },
 	policyGeneration: 1,
-	launchContract: { env: { FABRIKA_APP_DATABASE_URL: SECRET } },
+	launchContract: { envNames: ['FABRIKA_APP_DATABASE_URL'] },
 	memoryBytes: 2147483648,
 	cpus: 2,
 	secretBearing: false,
@@ -250,7 +249,7 @@ describe('zbox client requests', () => {
 			status: 'OPEN',
 			hasOutput: true,
 			created: 'x',
-			command: { command: ['x'], env: { K: SECRET } },
+			command: { command: ['x'], envNames: ['K'] },
 		}
 		const { client, calls } = fakeBox(
 			() => jsonResponse(session),
@@ -272,15 +271,6 @@ describe('zbox client requests', () => {
 			'GET https://zbox.test/api/rest/session/sess-1/output',
 		])
 		expect(jsonBody(calls[0])).toEqual({ command: ['sh', '-c', 'build'] })
-	})
-
-	test('putDomains sends the whole list', async () => {
-		const domains: ZboxDomain[] = [{ domain: 'box.example.com', form: 'DOT' }]
-		const { client, calls } = fakeBox(() => jsonResponse({ version: '1', domains }))
-
-		await expect(client.putDomains(domains)).resolves.toEqual({ version: '1', domains })
-		expect(calls[0]?.method).toBe('PUT')
-		expect(jsonBody(calls[0])).toEqual({ domains })
 	})
 })
 
