@@ -23,7 +23,8 @@ test has seen on a real host, and four follow-ups wait on the answers. Small; ne
    `ARCHIVED` sandbox (`packages/provider-zerops/src/sandbox/lifecycle.ts`), but a default TTL would end every
    workspace sandbox on a schedule nobody chose.
 
-The live suite (`zbox.live.test.ts`) checks the lifecycle over the API only; it never sends a request through the router.
+`zbox.live.test.ts` checks the lifecycle over the API only. `zbox-router.live.test.ts` covers points 1 to 4: it sends raw
+requests to the router from a probe sandbox on the project network, and has not run yet.
 
 ## Approach / acceptance
 
@@ -47,7 +48,7 @@ Then settle what the review of the change that adopted the release left open:
 
 ## Touch points
 
-- `packages/provider-zerops/src/__tests__/zbox.live.test.ts`
+- `packages/provider-zerops/src/__tests__/zbox-router.live.test.ts`
 - `packages/provider-zerops/src/zbox/client.ts`
 - `packages/provider-zerops/src/sandbox-host.ts`, `src/namespace/sandbox-host.ts`
 - `docs/reference/zerops-platform.md`
