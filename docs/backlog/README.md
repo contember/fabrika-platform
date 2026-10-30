@@ -142,5 +142,5 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [259](259-a-browser-visit-does-not-keep-a-sandbox-awake.md): A request that wakes a parked sandbox does not count as activity, so it is parked again within 5 minutes.
 - [260](260-an-operator-cannot-remove-an-authors-sandbox.md): An operator cannot delete a dev environment or app while an author keeps a sandbox; the 409 names an owner-only tool.
 - [261](261-a-dev-schema-reconcile-revokes-keys-other-sandboxes-hold.md): IAM's schema reconcile revokes keys that other sandboxes of a dev environment still get handed as fresh.
-- [262](262-re-verify-the-box-release-facts-on-a-live-host.md): The bare sandbox Host, the `X-Forwarded-For` refusal, `Authorization` passing and the TTL defaults come from Box's release notes; check them live.
+- [262](262-re-verify-the-box-release-facts-on-a-live-host.md): The bare sandbox Host, the `X-Forwarded-For` refusal, `Authorization` passing and the TTL defaults come from Box's release notes; check them live, then settle TTLs, name lookup and operator steps.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.
