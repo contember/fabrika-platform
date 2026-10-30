@@ -146,15 +146,6 @@ export const createZboxClient = (options: ZboxClientOptions): ZboxClient => {
 	return {
 		getWorkspace: (signal) => call('get workspace', 'GET', '/workspace', { signal }, json('get workspace', zboxWorkspaceSchema)),
 
-		putDomains: (domains, signal) =>
-			call(
-				'put workspace domains',
-				'PUT',
-				'/workspace/domains',
-				{ json: { domains: domains.map(({ domain, form }) => ({ domain, form })) }, signal },
-				json('put workspace domains', zboxWorkspaceSchema),
-			),
-
 		pullBase: ({ imageRef, name }, signal) =>
 			call(
 				'pull base',
@@ -184,6 +175,7 @@ export const createZboxClient = (options: ZboxClientOptions): ZboxClient => {
 						baseDigest: input.baseDigest,
 						cpus: input.cpus,
 						memoryBytes: input.memoryBytes,
+						diskBytes: input.diskBytes,
 						networkMode: input.networkMode,
 						integrations: [],
 						launch: { entrypoint: input.launch.entrypoint, cmd: input.launch.cmd, workingDir: input.launch.workingDir },

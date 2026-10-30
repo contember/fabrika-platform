@@ -19,6 +19,12 @@ whose first `report` would bump `activity_at`. `listIdle` selects the row again 
 after their last commit sees the application, then loses it within 5 minutes. `docs/reference/mcp-authoring.md` (the
 `stopped` state) and ADR-0049 present a request to the URL as a way to wake the sandbox.
 
+Box enforces an idle TTL of its own since its 2026-10 release, and counts a request through its router
+([platform facts](../reference/zerops-platform.md)). Parking by it instead of by `listIdle` keeps a browsed sandbox
+awake, but Control then no longer knows that a sandbox is parked: a commit wakes one only when `parked_at` says so, and
+neither a commit nor the launcher's own requests to Control count as Box activity. Moving the idle park to Box is a
+decision of its own.
+
 ## Approach / acceptance
 
 Bump `activity_at` when `recordLauncherSeen` clears a park mark, so a woken sandbox gets a full idle window; a sandbox

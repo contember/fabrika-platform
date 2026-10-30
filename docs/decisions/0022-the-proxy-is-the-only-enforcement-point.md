@@ -441,10 +441,11 @@ token verifier (mint, key exchange, redemption, delegation, the login and sign-o
 the `audience`, or else the id. Routing, the pin of an entry in Caddy, the token cache, logs and the proxy secret stay
 keyed by the entry id. Only an entry whose id parses as `dev:<app>:<workspace>` may carry `audience`, and it must, with
 an `<app>@<env>` of the same `<app>`; the parser refuses any other. `upstreamHost` replaces the `Host` the proxy sends
-upstream: the Box router routes a sandbox's port by `Host` (`3000-<sandbox>.sandbox.fabrika.internal`), and its upstream
-is the router, `zbox:8081`. An older proxy's strict parser refuses both fields, so on Zerops they reach only a namespace
-proxy whose pinned source declares `FABRIKA_PROXY_MANIFEST_SANDBOXES`, as `brand` reaches only one that declares
-`FABRIKA_PROXY_MANIFEST_BRAND`.
+upstream: the Box router routes a sandbox's port by `Host` (the bare `3000-<sandbox>`), and its upstream
+is the router, `zbox:8081`. The proxy drops the `X-Forwarded-For` it adds on that hop: the router refuses a request
+carrying one on a `project`-access port. An older proxy's strict parser refuses both fields, and a source that declares
+the marker as `"1"` parses them but still sends that header, so on Zerops they reach only a namespace proxy whose pinned
+source declares `FABRIKA_PROXY_MANIFEST_SANDBOXES: "2"`, as `brand` reaches only one that declares `FABRIKA_PROXY_MANIFEST_BRAND`.
 
 **Installation entries.** An endpoint table that protects one of the installation's own services (IAM,
 Control, Operations) is a manifest entry `{ id, hosts, upstream, scheme, installation: true, endpoints, reservedPrefixes,
@@ -864,11 +865,10 @@ nothing. The surface serves no `requestDelegation`: only the proxy obtains a gra
   environment, so this opens nothing the person did not hold. What binds a request to one sandbox is the proxy's routing
   by host and the per-sandbox proxy secret, held under the entry id, not the audience; and a handoff is redeemed only
   on the host it returns to.
-- **The Box router strips `Authorization`.** In a dev sandbox the application never sees the header: a key caller's
-  request looks like a session's, so it fails a non-`GET` admission, and a webhook verified by a bearer or basic
-  credential fails. Accepted for a `dev` environment for now. **Rollout:** nothing changes for an existing manifest:
+- **The Box router passes `Authorization`** since Box's 2026-10 release (verified live), so a key caller and a webhook
+  verified by a bearer or basic credential behave in a dev sandbox as on a stage. **Rollout:** nothing changes for an existing manifest:
   only a dev sandbox entry carries `audience` or `upstreamHost`, and Control hands one only to a namespace whose pinned
-  proxy declares `FABRIKA_PROXY_MANIFEST_SANDBOXES`. `platform upgrade` regenerates the proxy setup with the marker; a
+  proxy declares `FABRIKA_PROXY_MANIFEST_SANDBOXES: "2"`. `platform upgrade` regenerates the proxy setup with the marker; a
   namespace keeps its pin until `fabrika control namespaces update --proxy-source=current`, and until then a namespace
   job that would publish a sandbox entry, a dev bootstrap's republish included, refuses before any platform write and
   names that remedy.

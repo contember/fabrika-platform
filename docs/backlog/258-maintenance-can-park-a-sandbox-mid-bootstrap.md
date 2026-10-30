@@ -17,6 +17,9 @@ environment hold its `<app>:<env>` lease in turn, and the build inside the sandb
 deadline. Workspace B, queued behind A's 25-minute bootstrap, is parked 5 minutes into its own build and ends
 `bootstrap_failed`. A long `run_checks` can be parked the same way once the launcher stops reporting while it runs.
 
+Box's own idle TTL ([platform facts](../reference/zerops-platform.md), the 2026-10 release) would not help: it does not
+count a running detached process, and the build runs as one (`startProcess`).
+
 ## Approach / acceptance
 
 Leave a sandbox whose `bootstrap_run_id` is pending or running out of `listIdle`, or bump `activity_at` when a laned run

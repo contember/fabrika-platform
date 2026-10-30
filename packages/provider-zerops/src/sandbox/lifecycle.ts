@@ -14,7 +14,7 @@ import { ZEROPS_APPLICATION_PORT } from '../execution'
 import { sandboxUpstreamHost } from '../sandbox-host'
 import { isZboxNotFound, isZboxWorkspaceFull, type ZboxClient, ZboxOperationFailed, type ZboxSandbox } from '../zbox'
 import { ensureSandboxBase, readSandboxBaseContext, type SandboxBaseContext } from './base-image'
-import { SANDBOX_CPUS, SANDBOX_INIT_COMMAND, SANDBOX_MEMORY_BYTES } from './constants'
+import { SANDBOX_CPUS, SANDBOX_DISK_BYTES, SANDBOX_INIT_COMMAND, SANDBOX_MEMORY_BYTES } from './constants'
 
 /** A workspace id is a UUIDv7, so the sandbox name it makes is a fixed shape. */
 const WORKSPACE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
@@ -24,6 +24,9 @@ const TRANSITION_DEADLINE_MS = 120_000
 const TRANSITION_POLL_MS = 1_000
 
 const TRANSITIONS: ReadonlySet<ZboxSandbox['status']> = new Set(['CREATING', 'PARKING', 'WAKING', 'FORKING', 'RESTORING'])
+
+/** A sandbox that will not run again. Box archives one past its absolute TTL. */
+const ENDED: ReadonlySet<ZboxSandbox['status']> = new Set(['FAILED', 'TERMINATED', 'ARCHIVED'])
 
 /** The sandbox name of a workspace: what `ensure` finds it again by. */
 export function sandboxName(workspaceId: string): string {
@@ -121,6 +124,7 @@ export function createZeropsDevSandboxes(options: ZeropsDevSandboxesOptions): Pr
 				baseDigest,
 				cpus: SANDBOX_CPUS,
 				memoryBytes: SANDBOX_MEMORY_BYTES,
+				diskBytes: SANDBOX_DISK_BYTES,
 				networkMode: 'INTERNET',
 				launch: { entrypoint: SANDBOX_INIT_COMMAND.slice(0, 1), cmd: SANDBOX_INIT_COMMAND.slice(1) },
 				ports: [{ port: ZEROPS_APPLICATION_PORT, access: 'PROJECT', wakeOnRequest: true }],
@@ -157,7 +161,7 @@ export function createZeropsDevSandboxes(options: ZeropsDevSandboxesOptions): Pr
 			let replaced: string | null = null
 			if (found !== null) {
 				const sandbox = await settledSandbox(client, found, options.sleep, input.signal)
-				if (sandbox.status !== 'FAILED' && sandbox.status !== 'TERMINATED') {
+				if (!ENDED.has(sandbox.status)) {
 					// A sandbox on an older base is kept: a new one would change its id, which the published proxy entry names.
 					return sandboxOf(await runningSandbox(client, sandbox.id, options.sleep, input.signal))
 				}

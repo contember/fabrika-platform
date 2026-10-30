@@ -22,39 +22,7 @@ import { SANDBOX_APP_ROOT, SANDBOX_BIN_DIR, SANDBOX_BIN_POINTER, SANDBOX_ENV_FIL
 import { createZeropsDevSandboxes, sandboxName } from '../sandbox/lifecycle'
 import { readSandboxScripts, SANDBOX_SCRIPT_FILES } from '../sandbox/scripts'
 import { createZboxClient, type ZboxClient } from '../zbox'
-
-const PREFIX = 'FABRIKA_LIVE_ZBOX_'
-const ORIGIN_VAR = `${PREFIX}API_ORIGIN`
-const KEY_VAR = `${PREFIX}API_KEY`
-const REQUIRED_NAMES = [ORIGIN_VAR, KEY_VAR]
-
-interface LiveBox {
-	origin: string
-	apiKey: string
-}
-
-/** No configuration skips; a PARTIAL configuration throws rather than producing a false green. */
-export function readLiveBox(environment: Record<string, string | undefined>): LiveBox | null {
-	const configured = REQUIRED_NAMES.filter((name) => present(environment[name]))
-	if (configured.length === 0) {
-		return null
-	}
-	const missing = REQUIRED_NAMES.filter((name) => !present(environment[name]))
-	if (missing.length > 0) {
-		throw new Error(`Incomplete live Zerops Box test configuration; missing ${missing.join(', ')}`)
-	}
-	const raw = environment[ORIGIN_VAR] ?? ''
-	const url = URL.parse(raw)
-	// The key goes to whatever this names, so it must be a bare https origin and nothing that could redirect the path.
-	if (url === null || url.protocol !== 'https:' || url.origin !== raw.replace(/\/$/, '')) {
-		throw new Error(`${ORIGIN_VAR} must be a bare https origin, such as https://zbox-xxxx-8080.prg1.zerops.app`)
-	}
-	return { origin: url.origin, apiKey: environment[KEY_VAR] ?? '' }
-}
-
-function present(value: string | undefined): boolean {
-	return value !== undefined && value !== ''
-}
+import { KEY_VAR, ORIGIN_VAR, readLiveBox } from './helpers/live-box'
 
 const box = readLiveBox(process.env)
 

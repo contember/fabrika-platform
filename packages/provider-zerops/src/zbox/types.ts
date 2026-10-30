@@ -36,10 +36,7 @@ export const zboxSandboxListSchema = z.object({ items: z.array(zboxSandboxSchema
 
 export const zboxSpawnSchema = z.object({ operation: zboxOperationSchema, sandboxes: z.array(zboxSandboxSchema) })
 
-const zboxDomainSchema = z.object({ domain: z.string().min(1), form: z.enum(['DASH', 'DOT']) })
-export type ZboxDomain = z.infer<typeof zboxDomainSchema>
-
-export const zboxWorkspaceSchema = z.object({ version: z.string(), domains: z.array(zboxDomainSchema) })
+export const zboxWorkspaceSchema = z.object({ version: z.string() })
 export type ZboxWorkspace = z.infer<typeof zboxWorkspaceSchema>
 
 export const zboxBaseSchema = z.object({
@@ -66,7 +63,6 @@ export const zboxExecResultSchema = z.object({
 })
 export type ZboxExecResult = z.infer<typeof zboxExecResultSchema>
 
-// The session's `command` echoes the env it ran with, so it is never read.
 export const zboxSessionSchema = z.object({
 	id: z.string().min(1),
 	status: z.enum(['OPEN', 'CLOSED', 'FAILED']),
@@ -90,7 +86,7 @@ export interface ZboxIngressPort {
 	wakeOnRequest: boolean
 }
 
-/** No `env`: Box echoes launch env in its answers, so credentials reach a sandbox only through the file API. */
+/** No `env`: a credential reaches a sandbox only in the root-only file a deploy writes through the file API. */
 export interface ZboxLaunch {
 	entrypoint?: string[]
 	cmd?: string[]
@@ -102,6 +98,8 @@ export interface ZboxCreateSandboxInput {
 	baseDigest: string
 	cpus: number
 	memoryBytes: number
+	/** Box refuses a create whose disk does not fit the workspace's data volume, and its default can exceed a small one. */
+	diskBytes: number
 	networkMode: ZboxNetworkMode
 	launch: ZboxLaunch
 	ports: ZboxIngressPort[]
@@ -146,7 +144,6 @@ export interface ZboxAwaitOptions {
 
 export interface ZboxClient {
 	getWorkspace(signal?: AbortSignal): Promise<ZboxWorkspace>
-	putDomains(domains: ZboxDomain[], signal?: AbortSignal): Promise<ZboxWorkspace>
 	pullBase(input: { imageRef: string; name: string }, signal?: AbortSignal): Promise<ZboxOperation>
 	buildBase(input: { context: ZboxBody; name: string }, signal?: AbortSignal): Promise<ZboxOperation>
 	listBases(signal?: AbortSignal): Promise<ZboxBase[]>

@@ -2,20 +2,13 @@ import { waitForProcess, type ZeropsApi, type ZeropsService, type ZeropsServiceS
 import { defaultSleep, type Sleeper } from '../collaborators'
 import {
 	SANDBOX_HOST_API_PORT,
-	SANDBOX_HOST_DOMAIN,
 	SANDBOX_HOST_HOSTNAME,
 	SANDBOX_HOST_KEY_VARIABLE,
 	SANDBOX_HOST_SERVICE_TYPE,
 	SANDBOX_HOST_TYPE,
 } from '../sandbox-host'
 import { createZboxClient, ZboxApiError, type ZboxClient, type ZboxFetch, type ZboxWorkspace } from '../zbox'
-import {
-	namespaceError,
-	ZEROPS_SANDBOX_HOST_API_OPEN,
-	ZEROPS_SANDBOX_HOST_DOMAIN_FORM,
-	ZEROPS_SANDBOX_HOST_KEY_REFUSED,
-	ZEROPS_SANDBOX_HOST_UNSUPPORTED,
-} from './errors'
+import { namespaceError, ZEROPS_SANDBOX_HOST_API_OPEN, ZEROPS_SANDBOX_HOST_KEY_REFUSED, ZEROPS_SANDBOX_HOST_UNSUPPORTED } from './errors'
 import { ensureSubdomainAccess, readSubdomainHosts } from './subdomain'
 import type { NormalizedZeropsNamespaceTarget, ZeropsNamespaceSandboxHost } from './types'
 import { validateService } from './validation'
@@ -136,23 +129,21 @@ const reachWorkspace = async (input: ZeropsSandboxHostInput, client: ZboxClient)
  * Box reads its key from its environment when it starts, so a refused key is written again and the service restarted.
  * Measured live: a fresh host always takes this path, since the platform generated its own key at import.
  */
-const rekey = async (input: ZeropsSandboxHostInput, client: ZboxClient, serviceId: string): Promise<ZboxWorkspace> => {
+const rekey = async (input: ZeropsSandboxHostInput, client: ZboxClient, serviceId: string): Promise<void> => {
 	console.info(`Zerops namespace ${input.namespaceId}: restarting sandbox host ${serviceId} with the namespace's key`)
 	await writeKey(input, serviceId)
 	await waitFor(input, (await input.api.stopService({ serviceId, signal: input.signal })).id, 'sandbox host stop')
 	await waitFor(input, (await input.api.startService({ serviceId, signal: input.signal })).id, 'sandbox host start')
-	const workspace = await reachWorkspace(input, client)
-	if (workspace === 'unauthorized') {
+	if (await reachWorkspace(input, client) === 'unauthorized') {
 		throw namespaceError(
 			ZEROPS_SANDBOX_HOST_KEY_REFUSED,
 			`Zerops sandbox host ${serviceId} still refuses the namespace's key after a restart with it`,
 			false,
 		)
 	}
-	return workspace
 }
 
-/** Whether Box refuses a request that carries no key. Body never read: Box echoes request data in it. */
+/** Whether Box refuses a request that carries no key. Only the status decides; the body is never read. */
 const refusesWithoutKey = async (input: ZeropsSandboxHostInput, apiOrigin: string): Promise<boolean> => {
 	let response: Response
 	try {
@@ -173,24 +164,10 @@ const refusesWithoutKey = async (input: ZeropsSandboxHostInput, apiOrigin: strin
 	return false
 }
 
-/** The DOT domain the proxy routes sandboxes by; the list is replaced whole, so every other domain is sent back. */
-const ensureDomain = async (client: ZboxClient, workspace: ZboxWorkspace, serviceId: string, signal: AbortSignal): Promise<void> => {
-	const existing = workspace.domains.find((domain) => domain.domain === SANDBOX_HOST_DOMAIN)
-	if (existing?.form === 'DOT') return
-	if (existing !== undefined) {
-		throw namespaceError(
-			ZEROPS_SANDBOX_HOST_DOMAIN_FORM,
-			`Zerops sandbox host ${serviceId} routes ${SANDBOX_HOST_DOMAIN} in ${existing.form} form; the namespace proxy needs DOT`,
-			false,
-		)
-	}
-	await client.putDomains([...workspace.domains, { domain: SANDBOX_HOST_DOMAIN, form: 'DOT' }], signal)
-}
-
 /**
- * Bring the namespace's sandbox host to what a dev environment needs: the `zbox` service, its key, its API subdomain,
- * and the DOT domain the namespace proxy routes sandboxes by. Each step decides by reading back, so a reconcile
- * converges a host any earlier attempt left half done and changes nothing on a complete one.
+ * Bring the namespace's sandbox host to what a dev environment needs: the `zbox` service, its key and its API
+ * subdomain. The router routes the bare `Host` the proxy sends, so the host needs no domain. Each step decides by
+ * reading back, so a reconcile converges a host any earlier attempt left half done and changes nothing on a complete one.
  */
 export const ensureSandboxHost = async (input: ZeropsSandboxHostInput): Promise<ZeropsNamespaceSandboxHost> => {
 	const { target, signal } = input
@@ -223,14 +200,13 @@ export const ensureSandboxHost = async (input: ZeropsSandboxHostInput): Promise<
 	})
 	const reached = await reachWorkspace(input, client)
 	const rekeyed = reached === 'unauthorized'
-	let workspace = reached === 'unauthorized' ? await rekey(input, client, service.id) : reached
+	if (rekeyed) await rekey(input, client, service.id)
 	// A host whose API answers without a key is never recorded: one rekey, then a refusal.
 	if (!(await refusesWithoutKey(input, apiOrigin))) {
-		if (!rekeyed) workspace = await rekey(input, client, service.id)
+		if (!rekeyed) await rekey(input, client, service.id)
 		if (!(await refusesWithoutKey(input, apiOrigin))) {
 			throw namespaceError(ZEROPS_SANDBOX_HOST_API_OPEN, `Zerops sandbox host ${service.id} answers its API without a key`, false)
 		}
 	}
-	await ensureDomain(client, workspace, service.id, signal)
 	return { serviceId: service.id, apiOrigin }
 }

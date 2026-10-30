@@ -18,14 +18,11 @@ export const SANDBOX_HOST_ROUTER_PORT = 8081
 /** The service variable Box reads its API key from; Fabrika writes it sensitive and never reads it back. */
 export const SANDBOX_HOST_KEY_VARIABLE = 'ZBOX_WORKSPACE_API_KEY'
 
-/** The DOT-form Box domain a sandbox port is routed by. Only the project network uses it, so it needs no DNS. */
-export const SANDBOX_HOST_DOMAIN = 'sandbox.fabrika.internal'
-
 /** The dial address of the Box router from the namespace proxy. */
 export const SANDBOX_UPSTREAM = `${SANDBOX_HOST_HOSTNAME}:${SANDBOX_HOST_ROUTER_PORT}`
 
-/** The Host the namespace proxy sends the Box router to reach a sandbox's application port. */
+/** The Host the namespace proxy sends the Box router to reach a sandbox's application port: the bare form, no domain. */
 export function sandboxUpstreamHost(sandboxId: string): string {
 	if (!/^[a-z0-9]{1,32}$/.test(sandboxId)) throw new Error('zerops: a sandbox id is lower-case letters and digits')
-	return `${ZEROPS_APPLICATION_PORT}-${sandboxId}.${SANDBOX_HOST_DOMAIN}`
+	return `${ZEROPS_APPLICATION_PORT}-${sandboxId}`
 }

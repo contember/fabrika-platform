@@ -2134,7 +2134,7 @@ describe('Zerops namespace update', () => {
 const MARKED: ZeropsNamespaceProxySource = {
 	...PIN,
 	descriptor: await createZeropsArtifactSourceDescriptor(
-		'zerops:\n  - setup: proxy\n    build:\n      envVariables:\n        FABRIKA_PROXY_MANIFEST_SANDBOXES: "1"\n',
+		'zerops:\n  - setup: proxy\n    build:\n      envVariables:\n        FABRIKA_PROXY_MANIFEST_SANDBOXES: "2"\n',
 	),
 }
 
@@ -2174,7 +2174,7 @@ describe('Zerops namespace dev sandbox host', () => {
 				state.calls.push(`box:${init.method} ${new URL(url).pathname}`)
 				if (state.boxDown) return new Response('', { status: 502 })
 				if (init.headers['authorization'] !== `Bearer ${sandboxKey}`) return new Response('{}', { status: 401 })
-				return new Response(JSON.stringify({ version: '1', domains: [{ domain: 'sandbox.fabrika.internal', form: 'DOT' }] }), { status: 200 })
+				return new Response(JSON.stringify({ version: '1' }), { status: 200 })
 			},
 		}
 	}
@@ -2248,7 +2248,7 @@ describe('Zerops namespace dev sandbox host', () => {
 					devSandboxes: [{
 						workspaceId: WORKSPACE,
 						host: `${WORKSPACE}.dev.example.test`,
-						upstreamHost: '3000-sbxa.sandbox.fabrika.internal',
+						upstreamHost: '3000-sbxa',
 						proxySecret: 'sandbox-secret',
 						access,
 					}],

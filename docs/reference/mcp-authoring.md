@@ -209,9 +209,6 @@ A sandbox gives an application less than a Zerops service:
 - A bootstrap refuses, in one line each, runtime packages (`runtimePackages`), object storage, the ClamAV scan (a
   contract with `scan: true`), and a variable or secret whose value holds a `${…}` reference.
 - Jobs do not run: a sandbox has no crontab. A stage environment (`deploy_stage`) runs them.
-- The Box router strips `Authorization` before the request reaches the application. A key caller's request therefore
-  looks like a session's: a non-`GET` request with a `px_` key fails admission, and a webhook verified by a bearer or a
-  basic credential fails. Use a session in the browser, and `deploy_stage` for webhooks and key callers.
 - The environment's app secrets are kept in Control's vault and handed to the sandbox at each bootstrap.
 
 ### Idle and removal
@@ -427,6 +424,5 @@ paved road and need closer review, parked or not.
 - Zerops only.
 - One authoring environment per app, never production; it shows one workspace at a time.
 - One dev environment per app, never production or protected, on Zerops only; each workspace gets its own sandbox,
-  and the sandboxes share one IAM application. In a sandbox jobs do not run and `Authorization` does not reach the
-  application.
+  and the sandboxes share one IAM application. In a sandbox jobs do not run.
 - Production is a human merge in GitHub followed by the existing Delivery trigger.

@@ -109,7 +109,7 @@ zerops:
       envVariables:
         FABRIKA_PROXY_SESSION_OWNER_JSON: "${RUNTIME_FABRIKA_PROXY_SESSION_OWNER_JSON}"
         FABRIKA_PROXY_MANIFEST_BRAND: "1"
-        FABRIKA_PROXY_MANIFEST_SANDBOXES: "1"
+        FABRIKA_PROXY_MANIFEST_SANDBOXES: "2"
       prepareCommands:
         - "CGO_ENABLED=0 GOBIN=/tmp/gobin go install github.com/caddyserver/caddy/v2/cmd/caddy@v2.10.2"
       buildCommands:

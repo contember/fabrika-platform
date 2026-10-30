@@ -37,13 +37,19 @@ export const FABRIKA_PROXY_MANIFEST_BRAND = 'FABRIKA_PROXY_MANIFEST_BRAND'
 /** The build variable that marks a proxy source whose manifest parser knows a dev sandbox entry's `audience` and `upstreamHost`. */
 export const FABRIKA_PROXY_MANIFEST_SANDBOXES = 'FABRIKA_PROXY_MANIFEST_SANDBOXES'
 
-/** Whether the build section Zerops applies to the descriptor's proxy setup declares `marker: "1"`, as the carrier is decided. */
-const declaresMarker = (descriptorContents: string, marker: string, setup: string): boolean => {
+/**
+ * The value a source that serves dev sandboxes declares. `2`: its sandbox hop also drops the `X-Forwarded-For` Caddy adds,
+ * which the Box router refuses on a `project` port; a `1` source parses the entries but every request to them fails.
+ */
+export const FABRIKA_PROXY_MANIFEST_SANDBOXES_VALUE = '2'
+
+/** Whether the build section Zerops applies to the descriptor's proxy setup declares `marker: "<value>"`, as the carrier is decided. */
+const declaresMarker = (descriptorContents: string, marker: string, setup: string, value = '1'): boolean => {
 	const parsed = parseZeropsDescriptor(descriptorContents)
 	for (const entry of appliedZeropsSetups(parsed, selectZeropsDescriptorSetup(parsed, setup))) {
 		const read = buildSectionSchema.safeParse(entry)
 		if (!read.success) continue
-		return read.data.build.envVariables?.[marker] === '1'
+		return read.data.build.envVariables?.[marker] === value
 	}
 	return false
 }
@@ -57,8 +63,9 @@ export const zeropsProxyAcceptsBrand = (descriptorContents: string, setup = 'pro
 	declaresMarker(descriptorContents, FABRIKA_PROXY_MANIFEST_BRAND, setup)
 
 /**
- * Whether a pinned descriptor's proxy reads dev sandbox entries. An older parser refuses their `audience` and
- * `upstreamHost` and fails the build, so a namespace on such a pin serves no sandbox until it is re-pinned.
+ * Whether a pinned descriptor's proxy serves dev sandbox entries. An older parser refuses their `audience` and
+ * `upstreamHost` and fails the build, and a `1` source reaches no sandbox, so a namespace on either pin serves no
+ * sandbox until it is re-pinned.
  */
 export const zeropsProxyAcceptsSandboxes = (descriptorContents: string, setup = 'proxy'): boolean =>
-	declaresMarker(descriptorContents, FABRIKA_PROXY_MANIFEST_SANDBOXES, setup)
+	declaresMarker(descriptorContents, FABRIKA_PROXY_MANIFEST_SANDBOXES, setup, FABRIKA_PROXY_MANIFEST_SANDBOXES_VALUE)

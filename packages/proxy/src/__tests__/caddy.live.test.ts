@@ -207,7 +207,7 @@ describe.skipIf(CADDY === '')('the generated chain in a running Caddy', () => {
 		id: 'dev:notes:01934f6e-7b1a-7c3d-8e4f-0123456789ab',
 		audience: 'notes@dev',
 		hosts: ['sandbox.example'],
-		upstreamHost: '3000-sbx.box.example',
+		upstreamHost: '3000-sbx',
 	}
 	const dir = mkdtempSync(join(tmpdir(), 'fabrika-caddy-'))
 	let caddy: ReturnType<typeof Bun.spawn> | undefined
@@ -279,12 +279,16 @@ describe.skipIf(CADDY === '')('the generated chain in a running Caddy', () => {
 	test("a sandbox's upstream reads its upstreamHost as Host in place of the client's; any other app reads the client's", async () => {
 		expect((await rawRequest(port, { Connection: 'close' }, '/api/me', 'sandbox.example')).status).toBe(200)
 		const [atSandbox] = seenByApp.splice(0)
-		expect(atSandbox?.get('Host')).toBe('3000-sbx.box.example')
+		expect(atSandbox?.get('Host')).toBe('3000-sbx')
 		expect(atSandbox?.get('X-Fabrika-Proxy-Secret')).toBe(SECRET)
+		// The Box router refuses a request carrying it on a `project`-access port.
+		expect(atSandbox?.get('X-Forwarded-For')).toBeNull()
 		expect(seenByAuth.splice(0)[0]?.get('X-Forwarded-Host')).toBe('sandbox.example')
 
 		expect((await rawRequest(port, { Connection: 'close' })).status).toBe(200)
-		expect(seenByApp.splice(0)[0]?.get('Host')).toBe('127.0.0.1')
+		const [atApp] = seenByApp.splice(0)
+		expect(atApp?.get('Host')).toBe('127.0.0.1')
+		expect(atApp?.get('X-Forwarded-For')).toBe('127.0.0.1')
 		seenByAuth.length = 0
 	})
 

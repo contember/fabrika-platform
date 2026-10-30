@@ -87,7 +87,7 @@ workspace its own running application, where one pinned service could show only 
       workspace `W` is served at `https://<W>.<domain>` (a workspace id is a UUIDv7, a valid DNS label). It is never
       production, never protected (ADR-0050), never an authoring target and has no trigger ref; it has its own role
       family, schema and approved access. Its namespace must publish custom domains (a `zerops-subdomain` namespace is
-      refused) and its proxy must be built from a source that declares `FABRIKA_PROXY_MANIFEST_SANDBOXES`; otherwise
+      refused) and its proxy must be built from a source that declares `FABRIKA_PROXY_MANIFEST_SANDBOXES: "2"`; otherwise
       every namespace job that would publish a sandbox entry, the bootstrap run's republish included, refuses before any
       platform write and names `fabrika control namespaces update --proxy-source=current`. It claims no Zerops service.
       Deleting it, or its app, is refused while a workspace sandbox of it is left. Its app secrets are kept in Control's
@@ -101,7 +101,7 @@ workspace its own running application, where one pinned service could show only 
       subdomain for port 8080 with that key ([ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md) rule 1).
     - **Routing.** The namespace proxy stays the only ingress. Each workspace sandbox is its own manifest entry,
       `dev:<app>:<workspace>`, on host `<workspace>.<domain>`, upstream `zbox:8081` (the Box router), with `upstreamHost`
-      `3000-<sandbox>.sandbox.fabrika.internal` and `audience` `<app>@<env>` (ADR-0022 rule 3). Each workspace has its
+      `3000-<sandbox>` and `audience` `<app>@<env>` (ADR-0022 rule 3). Each workspace has its
       own proxy secret, `source` key
       ([ADR-0064](0064-applications-reach-the-platform-over-a-receiver-verified-transport-key.md) §7), IAM return origin
       and proxy table, the one its own published bootstrap run approved.
@@ -132,8 +132,8 @@ workspace its own running application, where one pinned service could show only 
       as an unprivileged user with a clean environment: the build reads no credential and cannot log in to PostgreSQL.
       Its output is relayed to the run log with every environment value masked. Only then does the provider write the
       launcher's environment to a root-only file through Box's file API, write the launcher's configuration, start the
-      launcher and wait for it to report its boot. A credential never goes through Box's launch or exec environment,
-      which Box's API echoes. Recovery never resumes ([ADR-0044](0044-zerops-delivery-ownership-and-recovery.md)): a run
+      launcher and wait for it to report its boot. A credential never goes through Box's launch or exec environment:
+      only that root-only file holds one, and the build runs without it. Recovery never resumes ([ADR-0044](0044-zerops-delivery-ownership-and-recovery.md)): a run
       whose invocation is lost settles failed, and the workspace binds again.
     - A sandbox gives an application less than a Zerops service. A bootstrap refuses, in one line each, runtime packages,
       object storage, the ClamAV scan (`scan: true`) and a `${…}` reference in a variable or secret. Jobs do not run in
@@ -198,8 +198,7 @@ with the approval link.
 - A sandbox holds what a stage container holds, plus its workspace's `source` key. Unreviewed code there can read that
   key, which reads only that workspace's source. The visitor's token the proxy injects reaches that code too
   (ADR-0022, "Consequences").
-- In a sandbox, jobs do not run, and the Box router strips `Authorization`: a key caller's non-`GET` request and a
-  webhook verified by a bearer or basic credential fail there. Both are accepted for a dev environment.
+- In a sandbox, jobs do not run. That is accepted for a dev environment.
 - Rollout: Control's migrations add `dev_sandboxes`, `runs.lane`, `app_envs.iam_digest`,
   `platform_transport_keys.workspace_id` and `deployment_namespaces.sandbox_key_ref`, all empty or null on an existing
   installation. `platform upgrade` regenerates the namespace proxy setup with `FABRIKA_PROXY_MANIFEST_SANDBOXES`, but a
@@ -258,8 +257,10 @@ with the approval link.
   namespace project would hold a service per workspace.
 - **A PostgreSQL service in the namespace for the sandboxes.** Lost: a sandbox in the `INTERNET` network mode reaches
   no sibling service of the project, and a database inside the sandbox makes `reset_dev` local to its workspace.
-- **Box's own workspace secrets, or its launch environment, for the credentials.** Lost: Box's secrets are only an
-  allowlist of the workspace's environment, and its API echoes a sandbox's launch and exec environment.
+- **Box's own workspace secrets, or its launch environment, for the credentials.** Lost: a per-sandbox Box secret is an
+  alias of a variable of the `zbox` service, so each sandbox's credentials would be service variables Fabrika writes
+  through the Zerops API and removes with the sandbox, and any sandbox-scoped Box token can deliver them; the launch
+  environment is not limited to the launcher. The root-only file the deploy writes needs neither.
 - **Install dependencies in the long-lived container on a lockfile change.** Lost: a build step would run outside the
   checked build; a lockfile change takes a bootstrap run instead.
 - **Commit through GitHub's GraphQL `createCommitOnBranch`.** One mutation instead of the blob, tree, commit and ref

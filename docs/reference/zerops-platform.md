@@ -1210,7 +1210,7 @@ output, park, wake, delete), and nothing re-checks the rest.
 | An asynchronous operation                                                 | Answered as an operation; `waitSeconds` is at most **30**                                                                                 |
 | Memory of a sandbox                                                       | Its reservation is **reserved in full** on the host                                                                                       |
 | Box's workspace secrets                                                   | Only an **allowlist of the workspace's own environment**: no store a caller writes a value into                                           |
-| A sandbox's launch environment and an exec's environment                  | **Echoed** by the API (sandbox reads, session lists), so neither carries a credential                                                     |
+| A sandbox's launch environment and an exec's environment                  | **Echoed** by the API (sandbox reads, session lists); names only since the 2026-10 release (below)                                        |
 | A sandbox in network mode `INTERNET` with a `PROJECT`-access ingress port | The ingress port still routes from inside the project; **sibling services of the project are unreachable** from the sandbox               |
 
 **The router** (port 8081).
@@ -1220,7 +1220,7 @@ output, park, wake, delete), and nothing re-checks the rest.
 | Routing                                                             | By `Host`: `<port>-<sandbox id>.<workspace domain>` |
 | A workspace domain in `DOT` form, used only from inside the project | Routes **without any DNS record**                   |
 | A port alias                                                        | **Accepted by the API, not routed**                 |
-| `Authorization` on a request through the router                     | **Stripped**: the sandbox never sees it             |
+| `Authorization` on a request through the router                     | **Stripped**; passed since the 2026-10 release      |
 | A request to a parked sandbox                                       | **Wakes it** (about 0.8 s) and is answered          |
 | A request to a parked sandbox while the workspace is full           | **500** `INTERNAL`                                  |
 
@@ -1244,13 +1244,63 @@ output, park, wake, delete), and nothing re-checks the rest.
 | Park                                      | 1.3 s     |
 | Wake on a request                         | 0.8 s     |
 
+**The Box release of 2026-10.** These rows come from Box's release notes. The ones marked _verified_ held in the live
+check below; the others have not been re-checked.
+
+| Behaviour                                                       | Result                                                                                                                                                                                                       |
+| --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `Authorization` on a request through the router                 | **Passed** to the sandbox on every port (_verified_ on a `PROJECT` port). A `TOKEN`-access port reads its token from `X-Zerops-Box-Authorization` (or `?token=`) and strips only that and its session cookie |
+| `Host: <port>-<sandbox id>`, with no workspace domain           | **Routed**, in every access mode (_verified_ on a `PROJECT` port)                                                                                                                                            |
+| A request carrying `X-Forwarded-For` to a `PROJECT`-access port | _Verified._ **Refused**. The router now keeps the edge's `X-Forwarded-*` headers                                                                                                                             |
+| A sandbox's launch environment, a session's command             | Answered as **`envNames`** only, never values; a fork inherits the names                                                                                                                                     |
+| Per-sandbox secrets                                             | `policy.secrets.aliases` maps a name in the sandbox to a workspace variable; the workspace policy can cap them (`allowedModes`, `allowedNames`)                                                              |
+| A disk restore of a sandbox that holds secrets                  | Delivers the current secrets, as a cold wake does                                                                                                                                                            |
+| A workspace restart, stop, move or resize                       | **Parks** each running sandbox with its memory first (30 s budget; one that misses it parks without memory, its writes kept). Only after a **reload** of the service                                         |
+| `idleTtlSeconds`, `absoluteTtlSeconds` of a sandbox             | **Enforced** every 15 s: idle parks with memory, absolute ends the sandbox **`ARCHIVED`** and deletes its disk. `0` disables either. `PUT /sandbox/{id}` replaces the name and both                          |
+| What counts as activity for the idle TTL                        | A request through the router, an open shell or SSH, an API call into the sandbox, an exec at its **end**. A running detached process does **not**                                                            |
+| `POST /sandbox/{id}/fork`                                       | Takes `children[]` (a name and a size per child) instead of `count`/`names`                                                                                                                                  |
+| A token created `--scope sandbox`                               | Covers the sandbox lifecycle, exec, files, ports, snapshots, export and import; **not** bases, integrations or webhooks                                                                                      |
+| A sandbox's size                                                | CPU, memory and disk (`diskBytes`) per sandbox, changed only with a cold boot. Memory stays **reserved in full**: Box plans no overcommit                                                                    |
+| Export and import of a parked sandbox or a snapshot             | Available; refused for a source that ever held secrets (`secretBearing`). A template from a snapshot is not                                                                                                  |
+| Ended sandboxes and closed sessions                             | Deleted after 7 days                                                                                                                                                                                         |
+
+### Verified live (2026-10-30, Box `zerops-v3.1.0-238-g733a74992bcd`, a throwaway project)
+
+`zbox-router.live.test.ts` (requests sent from a sibling service through `helpers/router-relay.ts`, with
+`FABRIKA_LIVE_ZBOX_ARCHIVE=1`) and `zbox.live.test.ts` passed against a fresh `zbox@1` service; the rest was read with
+raw API calls in the same project.
+
+| Behaviour                                                                     | Result                                                                                                                                                                        |
+| ----------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A sibling service to `zbox.zerops:8081`, `Host: 3000-<sandbox id>`, no domain | **200** from the sandbox's `PROJECT` port. `zbox:8081`, the proxy's upstream, reached the router too (404 `NO_ROUTE` for an unknown Host); no sandbox request went through it |
+| The same with `Authorization: Bearer …`                                       | Arrives at the sandbox unchanged                                                                                                                                              |
+| The same with `X-Forwarded-For`                                               | **403**                                                                                                                                                                       |
+| The dotted `3000-<id>.<domain>` on a host that never had the domain           | **404** `NO_ROUTE`                                                                                                                                                            |
+| A sandbox to the router of its own host                                       | `zbox.zerops` resolves (bare `zbox` does not: no search domain); the connection to `:8081` **times out**                                                                      |
+| A create that names no TTL                                                    | `idleTtlSeconds` and `absoluteTtlSeconds` read `null`: none                                                                                                                   |
+| A create without `diskBytes` on the smallest `zbox` service (10 GB disk)      | **400 `invalidUserInput`**, `diskBytes` "must be between 1024 MiB and 10160 MiB, the data volume": the default does not fit                                                   |
+| `absoluteTtlSeconds: 60` set with `PUT /sandbox/{id}`                         | **`ARCHIVED`** about a minute later                                                                                                                                           |
+| `GET /sandbox-list` with no filter                                            | Lists neither `ARCHIVED` nor `TERMINATED` sandboxes; `?status=ARCHIVED` and `?status=TERMINATED` do                                                                           |
+| A create under the name of an `ARCHIVED` sandbox                              | **Succeeds**: an ended sandbox holds no name                                                                                                                                  |
+| `DELETE /sandbox/{id}` of an `ARCHIVED` sandbox                               | A finished `TERMINATE` operation with `result.destroyed: true`; the record still reads `ARCHIVED`                                                                             |
+| Subdomain access enabled on the `zbox` service                                | Publishes **both** 8080 and the router's 8081                                                                                                                                 |
+| A public request to the 8081 subdomain                                        | **404** `NO_ROUTE`; neither `X-Forwarded-Host` nor a `Host`/SNI of `3000-<id>` reaches a `PROJECT` port                                                                       |
+| `scale set` on the `zbox` service (4 CPU, 8 GB), then a restart               | The process finished, but the service and the workspace's `capacity` still read 2 CPUs and 4 GB                                                                               |
+| Rekeying `ZBOX_WORKSPACE_API_KEY`                                             | `PUT /user-data/{id}` with `{ key, content, sensitive: true }`; without `sensitive` it is refused. Box reads it after a restart                                               |
+
+Not checked: secrets delivered on a disk restore (Fabrika sandboxes take no secrets) and the restart parking of a
+reloaded service ([backlog 262](../backlog/262-report-a-replaced-archived-sandbox-and-the-box-operator-steps.md)).
+
 Fabrika depends on these as follows. The provider imports the service alone and then rekeys it with an update of the
 record and a restart, never a create (`src/namespace/sandbox-host.ts`), and refuses a host whose API answers without
 the key. A sandbox gets no credential through its launch or exec environment: the launcher's environment is a root-only
-file written through the file API. The Box client never puts a response body into an error or a log, because bodies
-echo a sandbox's environment. PostgreSQL runs inside each sandbox, because the `INTERNET` mode reaches no sibling
-service. The proxy sends each sandbox entry's `upstreamHost` (`3000-<sandbox id>.sandbox.fabrika.internal`, a `DOT`
-domain) as `Host`. A source archive over 50 MiB is reported as its own failure.
+file written through the file API, and the build runs without it. The Box client never puts a response body into an
+error or a log. PostgreSQL runs inside each sandbox, because the `INTERNET` mode reaches no sibling service. The proxy
+sends each sandbox entry's `upstreamHost` (the bare `3000-<sandbox id>`) as `Host`, and drops the `X-Forwarded-For`
+Caddy adds on that hop. A sandbox Box ended (`FAILED`, `TERMINATED`, `ARCHIVED`) is replaced on the next bind; a `TERMINATED` or `ARCHIVED` one is
+missing from the default list, so that bind does not report it ([backlog 262](../backlog/262-report-a-replaced-archived-sandbox-and-the-box-operator-steps.md)).
+Each sandbox is created with an explicit 4 GiB disk. A source
+archive over 50 MiB is reported as its own failure.
 
 ## Fabrika placement mapping
 

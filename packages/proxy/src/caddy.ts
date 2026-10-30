@@ -400,10 +400,11 @@ function appRoute(app: ProxyApp, authUpstream: string, ownsIamSession: boolean):
 	const cookiePattern = ownsIamSession
 		? `((?:^|;[ \\t]*)${escapeRe2(SESSION_COOKIE)}=[^;]*)|${fabrikaCookiePattern}`
 		: fabrikaCookiePattern
+	const upstreamHost = isApplicationEntry(app) ? app.upstreamHost : undefined
 	const set: Record<string, string[]> = {
 		...(secretVariable === null ? {} : { [PROXY_SECRET_HEADER]: [`{env.${secretVariable}}`] }),
 		// Caddy writes a request's `Host` header op to the request's host, which the upstream routes by.
-		...(isApplicationEntry(app) && app.upstreamHost !== undefined ? { Host: [app.upstreamHost] } : {}),
+		...(upstreamHost === undefined ? {} : { Host: [upstreamHost] }),
 	}
 	const upstream = (response?: CaddyHeaderOps): CaddyReverseProxyHandler => ({
 		handler: 'reverse_proxy',
@@ -411,6 +412,8 @@ function appRoute(app: ProxyApp, authUpstream: string, ownsIamSession: boolean):
 		headers: {
 			request: {
 				...(Object.keys(set).length === 0 ? {} : { set }),
+				// Caddy adds its own `X-Forwarded-For`; the Box router refuses a request carrying one on a `project` port.
+				...(upstreamHost === undefined ? {} : { delete: ['X-Forwarded-For'] }),
 				replace: {
 					Cookie: [
 						{

@@ -35,9 +35,6 @@ export const ZEROPS_SANDBOX_HOST_API_OPEN = 'sandboxHostApiOpen'
 /** A dev environment an older release registered with its own Zerops service, which runs in no sandbox. */
 export const ZEROPS_DEV_TARGET_RETIRED = 'devTargetRetired'
 
-/** The sandbox host already routes the proxy's sandbox domain in the other form. */
-export const ZEROPS_SANDBOX_HOST_DOMAIN_FORM = 'sandboxHostDomainForm'
-
 export const namespaceError = (code: string, message: string, retryable: boolean, detail?: string): ProviderNamespaceError =>
 	new ProviderNamespaceError(message, code, retryable, detail)
 
