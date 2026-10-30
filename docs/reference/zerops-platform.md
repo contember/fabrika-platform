@@ -1210,7 +1210,7 @@ output, park, wake, delete), and nothing re-checks the rest.
 | An asynchronous operation                                                 | Answered as an operation; `waitSeconds` is at most **30**                                                                                 |
 | Memory of a sandbox                                                       | Its reservation is **reserved in full** on the host                                                                                       |
 | Box's workspace secrets                                                   | Only an **allowlist of the workspace's own environment**: no store a caller writes a value into                                           |
-| A sandbox's launch environment and an exec's environment                  | **Echoed** by the API (sandbox reads, session lists), so neither carries a credential                                                     |
+| A sandbox's launch environment and an exec's environment                  | **Echoed** by the API (sandbox reads, session lists); names only since the 2026-10 release (below)                                        |
 | A sandbox in network mode `INTERNET` with a `PROJECT`-access ingress port | The ingress port still routes from inside the project; **sibling services of the project are unreachable** from the sandbox               |
 
 **The router** (port 8081).
@@ -1220,7 +1220,7 @@ output, park, wake, delete), and nothing re-checks the rest.
 | Routing                                                             | By `Host`: `<port>-<sandbox id>.<workspace domain>` |
 | A workspace domain in `DOT` form, used only from inside the project | Routes **without any DNS record**                   |
 | A port alias                                                        | **Accepted by the API, not routed**                 |
-| `Authorization` on a request through the router                     | **Stripped**: the sandbox never sees it             |
+| `Authorization` on a request through the router                     | **Stripped**; passed since the 2026-10 release      |
 | A request to a parked sandbox                                       | **Wakes it** (about 0.8 s) and is answered          |
 | A request to a parked sandbox while the workspace is full           | **500** `INTERNAL`                                  |
 
@@ -1244,13 +1244,34 @@ output, park, wake, delete), and nothing re-checks the rest.
 | Park                                      | 1.3 s     |
 | Wake on a request                         | 0.8 s     |
 
+**The Box release of 2026-10.** UNVERIFIED: these rows come from Box's release notes, and nothing re-checked them
+against a live host yet ([backlog 262](../backlog/262-re-verify-the-box-release-facts-on-a-live-host.md)).
+
+| Behaviour                                                       | Result                                                                                                                                                                              |
+| --------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Authorization` on a request through the router                 | **Passed** to the sandbox on every port. A `TOKEN`-access port reads its token from `X-Zerops-Box-Authorization` (or `?token=`) and strips only that and its session cookie         |
+| `Host: <port>-<sandbox id>`, with no workspace domain           | **Routed**, in every access mode                                                                                                                                                    |
+| A request carrying `X-Forwarded-For` to a `PROJECT`-access port | **Refused**. The router now keeps the edge's `X-Forwarded-*` headers                                                                                                                |
+| A sandbox's launch environment, a session's command             | Answered as **`envNames`** only, never values; a fork inherits the names                                                                                                            |
+| Per-sandbox secrets                                             | `policy.secrets.aliases` maps a name in the sandbox to a workspace variable; the workspace policy can cap them (`allowedModes`, `allowedNames`)                                     |
+| A disk restore of a sandbox that holds secrets                  | Delivers the current secrets, as a cold wake does                                                                                                                                   |
+| A workspace restart, stop, move or resize                       | **Parks** each running sandbox with its memory first (30 s budget; one that misses it parks without memory, its writes kept). Only after a **reload** of the service                |
+| `idleTtlSeconds`, `absoluteTtlSeconds` of a sandbox             | **Enforced** every 15 s: idle parks with memory, absolute ends the sandbox **`ARCHIVED`** and deletes its disk. `0` disables either. `PUT /sandbox/{id}` replaces the name and both |
+| What counts as activity for the idle TTL                        | A request through the router, an open shell or SSH, an API call into the sandbox, an exec at its **end**. A running detached process does **not**                                   |
+| `POST /sandbox/{id}/fork`                                       | Takes `children[]` (a name and a size per child) instead of `count`/`names`                                                                                                         |
+| A token created `--scope sandbox`                               | Covers the sandbox lifecycle, exec, files, ports, snapshots, export and import; **not** bases, integrations or webhooks                                                             |
+| A sandbox's size                                                | CPU, memory and disk (`diskBytes`) per sandbox, changed only with a cold boot. Memory stays **reserved in full**: Box plans no overcommit                                           |
+| Export and import of a parked sandbox or a snapshot             | Available; refused for a source that ever held secrets (`secretBearing`). A template from a snapshot is not                                                                         |
+| Ended sandboxes and closed sessions                             | Deleted after 7 days                                                                                                                                                                |
+
 Fabrika depends on these as follows. The provider imports the service alone and then rekeys it with an update of the
 record and a restart, never a create (`src/namespace/sandbox-host.ts`), and refuses a host whose API answers without
 the key. A sandbox gets no credential through its launch or exec environment: the launcher's environment is a root-only
-file written through the file API. The Box client never puts a response body into an error or a log, because bodies
-echo a sandbox's environment. PostgreSQL runs inside each sandbox, because the `INTERNET` mode reaches no sibling
-service. The proxy sends each sandbox entry's `upstreamHost` (`3000-<sandbox id>.sandbox.fabrika.internal`, a `DOT`
-domain) as `Host`. A source archive over 50 MiB is reported as its own failure.
+file written through the file API, and the build runs without it. The Box client never puts a response body into an
+error or a log. PostgreSQL runs inside each sandbox, because the `INTERNET` mode reaches no sibling service. The proxy
+sends each sandbox entry's `upstreamHost` (the bare `3000-<sandbox id>`) as `Host`, and drops the `X-Forwarded-For`
+Caddy adds on that hop. A sandbox Box ended (`FAILED`, `TERMINATED`, `ARCHIVED`) is replaced on the next bind. A source
+archive over 50 MiB is reported as its own failure.
 
 ## Fabrika placement mapping
 

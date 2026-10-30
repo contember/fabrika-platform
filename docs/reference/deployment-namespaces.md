@@ -368,9 +368,9 @@ service: a Zerops Box Workspace, type `zbox@1`, hostname `zbox`, which runs one 
 MCP workspace ([MCP authoring](mcp-authoring.md#the-dev-environment),
 [ADR-0049](../decisions/0049-author-applications-through-mcp-in-control.md) rule 10).
 The namespace job imports it alone, after the proxy has converged, then writes
-the key Control generated as its sensitive `ZBOX_WORKSPACE_API_KEY`, restarts it,
-publishes its subdomain and adds the DOT domain `sandbox.fabrika.internal` by
-which its router routes a sandbox's port. Each step decides by reading back, so a
+the key Control generated as its sensitive `ZBOX_WORKSPACE_API_KEY`, restarts it
+and publishes its subdomain. Its router routes a sandbox's port by the bare
+`Host` `3000-<sandbox id>`, so the host needs no domain. Each step decides by reading back, so a
 reconcile converges a host an earlier attempt left half done. Control keeps the
 key's vault ref in `deployment_namespaces.sandbox_key_ref` and reaches the Box
 API (port 8080) over the service's public subdomain with it; the step refuses a

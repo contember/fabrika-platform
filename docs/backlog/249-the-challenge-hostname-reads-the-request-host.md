@@ -15,7 +15,7 @@ names the wrong host. Small.
 `dispatch.ts` issues a challenge with `served.issuer.issue(new URL(request.url).hostname)`
 (`packages/app/src/implement/dispatch.ts`), and the verification compares the solved challenge's host with the check's
 (`packages/app/src/implement/challenge.ts`). In a dev sandbox the proxy sends `Host:
-3000-<sandbox>.sandbox.fabrika.internal` ([ADR-0022](../decisions/0022-the-proxy-is-the-only-enforcement-point.md), "Dev
+3000-<sandbox>` ([ADR-0022](../decisions/0022-the-proxy-is-the-only-enforcement-point.md), "Dev
 sandbox entries"), so the issued challenge names that host. Anywhere else the request's host is the public host only
 because the proxy passes the client's `Host` through.
 

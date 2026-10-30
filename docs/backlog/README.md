@@ -132,7 +132,6 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [247](247-dev-sandbox-size-is-not-a-namespace-policy.md): A dev sandbox's CPU, memory and disk are constants, not namespace policy.
 - [248](248-confirm-the-ops-key-reconcile-skips-laned-runs-on-zerops.md): Confirm, with a test, that a laned dev bootstrap on Zerops never reconciles an ops key.
 - [249](249-the-challenge-hostname-reads-the-request-host.md): `@fabrika/app` issues a challenge for the request's Host, which in a dev sandbox is the Box router's.
-- [250](250-the-box-router-strips-authorization.md): The Box router strips `Authorization`; the proxy renames the header and the launcher restores it.
 - [251](251-the-launcher-runs-authored-commands-as-root.md): In a dev sandbox the launcher runs `apply_changes`' SPA commands and `run_checks` as root with the app's secrets.
 - [252](252-a-bind-can-race-the-deletion-of-its-dev-environment.md): The dev environment delete checks for sandbox rows apart from the delete; a bind between them leaves an unnamed Box sandbox.
 - [254](254-confirm-the-box-router-port-stays-private.md): Confirm live that publishing the sandbox host's API subdomain does not also publish the Box router port 8081.
@@ -143,4 +142,5 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [259](259-a-browser-visit-does-not-keep-a-sandbox-awake.md): A request that wakes a parked sandbox does not count as activity, so it is parked again within 5 minutes.
 - [260](260-an-operator-cannot-remove-an-authors-sandbox.md): An operator cannot delete a dev environment or app while an author keeps a sandbox; the 409 names an owner-only tool.
 - [261](261-a-dev-schema-reconcile-revokes-keys-other-sandboxes-hold.md): IAM's schema reconcile revokes keys that other sandboxes of a dev environment still get handed as fresh.
+- [262](262-re-verify-the-box-release-facts-on-a-live-host.md): The bare sandbox Host, the `X-Forwarded-For` refusal, `Authorization` passing and the TTL defaults come from Box's release notes; check them live.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.
