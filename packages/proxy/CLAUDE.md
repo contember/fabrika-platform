@@ -83,7 +83,8 @@ FABRIKA_TEST_CADDY_BIN=./caddy bun test src/__tests__/caddy.live.test.ts   # the
   on `zbox:8081` routes a sandbox's port by `Host` alone. It is a header op beside the proxy secret on the upstream
   hop, for an application entry only, and proven in a running Caddy. Routing, the `?app=` pin and the secret variable
   stay keyed by `app.id` (`dev:<app>:<workspace>`); only what goes to IAM or the verifier is `audienceOf(app)`. The
-  Box router then strips `Authorization` (an accepted limitation in dev), so the app sees only `X-Fabrika-Token`.
+  same hop deletes the `X-Forwarded-For` Caddy adds: the Box router refuses a request carrying one on a `project`-access
+  port.
 - **Caddy's header order is code, not JSON, so the chain is proven in a running Caddy** (`caddy.live.test.ts`).
   Within one `HeaderOps` a named delete runs AFTER the set, so the strip and the client-address set are two
   handlers. `reverse_proxy` deletes every header `Connection` names after the asserted headers are set, so a

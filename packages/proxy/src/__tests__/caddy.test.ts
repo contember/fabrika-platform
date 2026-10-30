@@ -663,8 +663,8 @@ describe('a dev sandbox entry — the upstream Host', () => {
 		snapshot: `sha256:${'0'.repeat(64)}`,
 		csp: NO_CSP_ORIGINS,
 	})
-	const a = sandbox('01934f6e-7b1a-7c3d-8e4f-0123456789ab', '3000-sbxa.box.example.com')
-	const b = sandbox('01934f6e-7b1a-7c3d-8e4f-ba9876543210', '3000-sbxb.box.example.com')
+	const a = sandbox('01934f6e-7b1a-7c3d-8e4f-0123456789ab', '3000-sbxa')
+	const b = sandbox('01934f6e-7b1a-7c3d-8e4f-ba9876543210', '3000-sbxb')
 	const [routeA, routeB] = buildCaddyConfig({ apps: [a, b] }, OPTIONS).apps.http.servers['proxy']?.routes ?? []
 	const chain = (route: CaddyRoute | undefined) => {
 		if (route === undefined) throw new Error('missing route')
@@ -674,11 +674,11 @@ describe('a dev sandbox entry — the upstream Host', () => {
 	test("the upstream hop sends the entry's upstreamHost as Host, beside its own proxy secret", () => {
 		expect(upstreamOf(chain(routeA)[2]).headers?.request?.set).toEqual({
 			[PROXY_SECRET_HEADER]: [`{env.${proxySecretVariable(a.id)}}`],
-			Host: ['3000-sbxa.box.example.com'],
+			Host: ['3000-sbxa'],
 		})
 		expect(upstreamOf(chain(routeB)[2]).headers?.request?.set).toEqual({
 			[PROXY_SECRET_HEADER]: [`{env.${proxySecretVariable(b.id)}}`],
-			Host: ['3000-sbxb.box.example.com'],
+			Host: ['3000-sbxb'],
 		})
 		expect(proxySecretVariable(a.id)).not.toBe(proxySecretVariable(b.id))
 	})
@@ -688,6 +688,13 @@ describe('a dev sandbox entry — the upstream Host', () => {
 		expect(routeB?.match).toEqual([{ host: [b.hosts[0] ?? ''] }])
 		expect(proxyHandler(chain(routeA)[1]).rewrite?.uri).toBe(`/verify?app=${encodeURIComponent(a.id)}`)
 		expect(proxyHandler(chain(routeB)[1]).rewrite?.uri).toBe(`/verify?app=${encodeURIComponent(b.id)}`)
+	})
+
+	test('the upstream hop deletes the X-Forwarded-For Caddy adds; any other app keeps it', () => {
+		expect(upstreamOf(chain(routeA)[2]).headers?.request?.delete).toEqual(['X-Forwarded-For'])
+		const [plainRoute] = buildCaddyConfig({ apps: [{ ...a, id: 'notes@prod', upstreamHost: undefined }] }, OPTIONS).apps.http.servers['proxy']?.routes
+			?? []
+		expect(upstreamOf(chain(plainRoute)[2]).headers?.request?.delete).toBeUndefined()
 	})
 
 	test('the Host is set on the app upstream only, never on the auth subrequest', () => {
