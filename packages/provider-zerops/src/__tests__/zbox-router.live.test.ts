@@ -11,9 +11,9 @@
 // target is a workspace sandbox exactly as `ensure` creates it (a `PROJECT`-access port 3000), echoing its headers.
 //
 // WHAT IT DOES TO THE WORKSPACE. It builds this release's sandbox base when missing, creates the target sandbox, and
-// removes it again, including when a test failed. With `FABRIKA_LIVE_ZBOX_ARCHIVE=1` it also creates a
-// third throwaway sandbox, gives that one (and only that one) an absolute TTL of 60 s, waits until Box archives it, and
-// removes what is left. It never touches a sandbox it did not create, the workspace's TTLs or its bases.
+// removes it again, including when a test failed. With `FABRIKA_LIVE_ZBOX_ARCHIVE=1` it then removes the target and
+// creates a throwaway sandbox, gives that one (and only that one) an absolute TTL of 60 s, waits until Box archives it,
+// lets `ensure` create its replacement, and removes what is left. It never touches a sandbox it did not create, the workspace's TTLs or its bases.
 
 import type { ProviderDevSandbox, ProviderEnvironment } from '@fabrika/provider-contract'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
@@ -22,17 +22,15 @@ import { defaultSleep } from '../collaborators'
 import { zeropsStoredTargetCodec } from '../control'
 import { ZEROPS_APPLICATION_PORT } from '../execution'
 import { zeropsArtifactCodec } from '../manifest'
-import { SANDBOX_HOST_HOSTNAME, SANDBOX_HOST_ROUTER_PORT, sandboxUpstreamHost } from '../sandbox-host'
+import { SANDBOX_HOST_HOSTNAME, SANDBOX_HOST_ROUTER_PORT, SANDBOX_UPSTREAM, sandboxUpstreamHost } from '../sandbox-host'
 import { ensureSandboxBase, readSandboxBaseContext } from '../sandbox/base-image'
 import { createZeropsDevSandboxes, sandboxName } from '../sandbox/lifecycle'
 import { createZboxClient, type ZboxClient } from '../zbox'
-import { readLiveBox } from './helpers/live-box'
+import { readLiveBox, readLiveRelay } from './helpers/live-box'
 
 const box = readLiveBox(process.env)
 const archive = process.env['FABRIKA_LIVE_ZBOX_ARCHIVE'] === '1'
-const relayOrigin = process.env['FABRIKA_LIVE_ZBOX_RELAY_ORIGIN'] ?? ''
-const relayToken = process.env['FABRIKA_LIVE_ZBOX_RELAY_TOKEN'] ?? ''
-const relay = relayOrigin !== '' && relayToken !== ''
+const relay = readLiveRelay(process.env)
 
 if (box === null) {
 	console.warn('zbox-router.live.test.ts skipped: set FABRIKA_LIVE_ZBOX_API_ORIGIN and FABRIKA_LIVE_ZBOX_API_KEY (see zbox.live.test.ts)')
@@ -46,7 +44,6 @@ const CLEANUP_TIMEOUT_MS = 120_000
 /** The DOT domain releases before the Box 2026-10 one added to the host; a host keyed by them still routes it. */
 const LEGACY_DOMAIN = 'sandbox.fabrika.internal'
 
-/** Where the scripts are uploaded; Bun runs a file, so its arguments are `process.argv.slice(2)`. */
 const ECHO_PATH = '/tmp/fabrika-echo.ts'
 
 const ECHO_SERVER = `Bun.serve({ port: ${ZEROPS_APPLICATION_PORT}, fetch: (request) => Response.json(Object.fromEntries(request.headers)) })`
@@ -70,7 +67,6 @@ describe.skipIf(box === null)('the Box router and sandbox TTLs, against a real Z
 	const workspaceId = Bun.randomUUIDv7()
 	const archivedWorkspaceId = Bun.randomUUIDv7()
 	let target: ProviderDevSandbox | null = null
-	let router: string | null = null
 
 	/** Box API calls the client does not offer. The key goes in one header; the body is parsed, never printed. */
 	const raw = async (method: string, path: string, json?: unknown): Promise<unknown> => {
@@ -95,9 +91,10 @@ describe.skipIf(box === null)('the Box router and sandbox TTLs, against a real Z
 
 	/** One request through the relay to the router; `null` when the relay could not connect at all. */
 	const request = async (address: string, host: string, headers: readonly string[]) => {
-		const response = await fetch(relayOrigin, {
+		const { origin, token } = required(relay, 'the relay')
+		const response = await fetch(origin, {
 			method: 'POST',
-			headers: { authorization: `Bearer ${relayToken}`, 'content-type': 'application/json' },
+			headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
 			body: JSON.stringify({ address, host, headers }),
 			signal: AbortSignal.timeout(STEP_TIMEOUT_MS),
 		})
@@ -147,36 +144,30 @@ describe.skipIf(box === null)('the Box router and sandbox TTLs, against a real Z
 		expect(ttls.absoluteTtlSeconds ?? 0).toBe(0)
 	}, STEP_TIMEOUT_MS)
 
-	test.skipIf(!relay)('the relay reaches the router, and the router routes the bare Host the proxy sends', async () => {
+	test.skipIf(relay === null)("the router at the proxy's upstream routes the bare Host the proxy sends", async () => {
 		const host = sandboxUpstreamHost(required(target, 'the target').sandboxId)
-		for (const address of [`${SANDBOX_HOST_HOSTNAME}.zerops:${SANDBOX_HOST_ROUTER_PORT}`, `${SANDBOX_HOST_HOSTNAME}:${SANDBOX_HOST_ROUTER_PORT}`]) {
-			const answer = await request(address, host, [])
-			console.info(`zbox live: ${address} with Host ${host} answered ${answer === null ? 'no connection' : answer.status}`)
-			if (answer !== null) {
-				router = address
-				expect(answer.status).toBe(200)
-				break
-			}
-		}
-		expect(router).not.toBeNull()
+		const answer = await request(SANDBOX_UPSTREAM, host, [])
+		console.info(`zbox live: ${SANDBOX_UPSTREAM} with Host ${host} answered ${answer?.status ?? 'no connection'}`)
+		expect(answer?.status).toBe(200)
+		const qualified = await request(`${SANDBOX_HOST_HOSTNAME}.zerops:${SANDBOX_HOST_ROUTER_PORT}`, host, [])
+		console.info(`zbox live: ${SANDBOX_HOST_HOSTNAME}.zerops with Host ${host} answered ${qualified?.status ?? 'no connection'} (informational)`)
 	}, STEP_TIMEOUT_MS)
 
-	test.skipIf(!relay)('the legacy dotted Host still routes on a host that has the domain (informational)', async () => {
+	test.skipIf(relay === null)('the legacy dotted Host on this host (informational)', async () => {
 		const sandboxId = required(target, 'the target').sandboxId
-		const answer = await request(required(router, 'the router'), `${ZEROPS_APPLICATION_PORT}-${sandboxId}.${LEGACY_DOMAIN}`, [])
+		const answer = await request(SANDBOX_UPSTREAM, `${ZEROPS_APPLICATION_PORT}-${sandboxId}.${LEGACY_DOMAIN}`, [])
 		console.info(`zbox live: the dotted Host answered ${answer?.status ?? 'no connection'}`)
 	}, STEP_TIMEOUT_MS)
 
-	test.skipIf(!relay)('Authorization reaches the sandbox; X-Forwarded-For is refused on a PROJECT port', async () => {
-		const address = required(router, 'the router')
+	test.skipIf(relay === null)('Authorization reaches the sandbox; X-Forwarded-For is refused on a PROJECT port', async () => {
 		const host = sandboxUpstreamHost(required(target, 'the target').sandboxId)
 
-		const authorized = echoed(await request(address, host, ['Authorization: Bearer live-probe']))
+		const authorized = echoed(await request(SANDBOX_UPSTREAM, host, ['Authorization: Bearer live-probe']))
 		expect(authorized?.['authorization']).toBe('Bearer live-probe')
 
-		const forwarded = await request(address, host, ['X-Forwarded-For: 10.0.0.1'])
+		const forwarded = await request(SANDBOX_UPSTREAM, host, ['X-Forwarded-For: 10.0.0.1'])
 		console.info(`zbox live: a request carrying X-Forwarded-For answered ${forwarded?.status ?? 'no connection'}`)
-		expect(forwarded?.status).not.toBe(200)
+		expect(forwarded?.status).toBe(403)
 	}, STEP_TIMEOUT_MS)
 
 	test.skipIf(!archive)('an ARCHIVED sandbox is replaced by the next ensure, and the one after finds the live one', async () => {

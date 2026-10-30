@@ -6,11 +6,17 @@
 //   RELAY_TOKEN=<random> bun router-relay.ts
 //
 // `POST /` with `Authorization: Bearer <RELAY_TOKEN>` and `{ address, host, headers }` sends one raw HTTP/1.1 GET to
-// `address` (`host:port`), so that nothing adds or rewrites a header, and answers `{ status, body }`, or 502 when it
-// could not connect. It has no dependencies, so the file alone is the deployment.
+// `address`, which must be the Box router, so that nothing adds or rewrites a header, and answers `{ status, body }`,
+// or 502 when it could not connect. It needs nothing but Bun, so the file alone is the deployment.
+
+import { timingSafeEqual } from 'node:crypto'
 
 const token = process.env['RELAY_TOKEN'] ?? ''
 if (token.length < 16) throw new Error('router-relay: set RELAY_TOKEN to a random value of at least 16 characters')
+const expected = Buffer.from(`Bearer ${token}`)
+
+/** The router only: the relay is public, and a leaked token must not open the rest of the project network. */
+const ROUTER_ADDRESSES: ReadonlySet<string> = new Set(['zbox:8081', 'zbox.zerops:8081'])
 
 const CONNECT_TIMEOUT_MS = 10_000
 
@@ -57,18 +63,28 @@ async function send(address: string, host: string, headers: readonly string[]): 
 	return { status: Number(head.split(' ')[1]), body: /^transfer-encoding:\s*chunked/im.test(head) ? decodeChunked(body) : body }
 }
 
-function isStringArray(value: unknown): value is string[] {
-	return Array.isArray(value) && value.every((item) => typeof item === 'string')
+/** One header line or Host value: no line break, so a caller cannot write a second request into the stream. */
+function isLine(value: unknown): value is string {
+	return typeof value === 'string' && !/[\r\n]/.test(value)
+}
+
+function isLines(value: unknown): value is string[] {
+	return Array.isArray(value) && value.every(isLine)
+}
+
+function authorized(request: Request): boolean {
+	const given = Buffer.from(request.headers.get('authorization') ?? '')
+	return given.length === expected.length && timingSafeEqual(given, expected)
 }
 
 Bun.serve({
 	port: 8080,
 	fetch: async (request) => {
-		if (request.method !== 'POST' || request.headers.get('authorization') !== `Bearer ${token}`) return new Response(null, { status: 404 })
+		if (request.method !== 'POST' || !authorized(request)) return new Response(null, { status: 404 })
 		const input: unknown = await request.json()
 		if (
-			typeof input !== 'object' || input === null || !('address' in input) || typeof input.address !== 'string' || !('host' in input)
-			|| typeof input.host !== 'string' || !('headers' in input) || !isStringArray(input.headers)
+			typeof input !== 'object' || input === null || !('address' in input) || typeof input.address !== 'string'
+			|| !ROUTER_ADDRESSES.has(input.address) || !('host' in input) || !isLine(input.host) || !('headers' in input) || !isLines(input.headers)
 		) {
 			return new Response(null, { status: 400 })
 		}
