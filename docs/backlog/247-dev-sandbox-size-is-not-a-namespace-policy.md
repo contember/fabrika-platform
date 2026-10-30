@@ -11,8 +11,9 @@ namespace, and a host fills at a fixed count of running sandboxes. Small to medi
 
 ## Problem
 
-`SANDBOX_CPUS` and `SANDBOX_MEMORY_BYTES` (`packages/provider-zerops/src/sandbox/constants.ts`) are constants, and a
-sandbox's disk is Box's default, although Box takes a per-sandbox `diskBytes` since its 2026-10 release. A running
+`SANDBOX_CPUS`, `SANDBOX_MEMORY_BYTES` and `SANDBOX_DISK_BYTES` (`packages/provider-zerops/src/sandbox/constants.ts`) are
+constants. The disk is sent explicitly because Box refuses a create whose default disk does not fit a small workspace's
+data volume (4 GiB fits the smallest `zbox` service, whose data volume is about 10 GiB). A running
 sandbox reserves its whole memory on the host, and Box plans no overcommit, so the constants also decide
 how many sandboxes one `zbox` service runs before `bind_dev` answers that the host is full. An application whose build
 or tests need more memory has no remedy.

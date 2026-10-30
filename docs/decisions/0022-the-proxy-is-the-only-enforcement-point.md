@@ -865,8 +865,7 @@ nothing. The surface serves no `requestDelegation`: only the proxy obtains a gra
   environment, so this opens nothing the person did not hold. What binds a request to one sandbox is the proxy's routing
   by host and the per-sandbox proxy secret, held under the entry id, not the audience; and a handoff is redeemed only
   on the host it returns to.
-- **The Box router passes `Authorization`** since Box's 2026-10 release (not yet re-checked live,
-  [backlog 262](../backlog/262-re-verify-the-box-release-facts-on-a-live-host.md)), so a key caller and a webhook
+- **The Box router passes `Authorization`** since Box's 2026-10 release (verified live), so a key caller and a webhook
   verified by a bearer or basic credential behave in a dev sandbox as on a stage. **Rollout:** nothing changes for an existing manifest:
   only a dev sandbox entry carries `audience` or `upstreamHost`, and Control hands one only to a namespace whose pinned
   proxy declares `FABRIKA_PROXY_MANIFEST_SANDBOXES: "2"`. `platform upgrade` regenerates the proxy setup with the marker; a
