@@ -68,11 +68,23 @@ For each row of the table, the simulator builds the request a well-formed client
 - Path: the row's pattern with each `:name` segment and a terminal `*` filled with a placeholder. Before it calls
   `authorize`, it runs `planEndpoint` on that path; if another row wins (a more specific one), it tries a second
   placeholder, and otherwise reports the row as "shadowed by `<id>`" instead of a verdict.
-- Credential: a `__Host-px_session` cookie for a person, `Authorization: Bearer px_…` for a key, none for an anonymous
-  row.
-- Admission headers: `Sec-Fetch-Site: same-origin`, the first content type the row admits, no `Origin`. The page
-  states this assumption and offers one toggle, "from another origin", which sends the environment's first
-  cross-origin (or a foreign one) so `cross_site` and `cross_origin` show.
+- Content type: the first one the row admits.
+- Credential and browser headers: set together, by a named **client scenario**, because the decision reads them
+  together. A session write is refused unless `Sec-Fetch-Site` is `same-origin` (`authorize.ts:345`), and a request
+  from a listed origin is never session-authenticated (`endpointCaller`, `authorize.ts:371`). Changing `Origin` alone
+  would describe a request no browser sends. The scenarios:
+  - **Same-origin page** (the default for a person): the `__Host-px_session` cookie, `Sec-Fetch-Site: same-origin`, no
+    `Origin` on a `GET`, the entry's own origin otherwise.
+  - **Page on a listed origin**: `Origin` one of the entry's `crossOrigins`, `Sec-Fetch-Site: cross-site`, no cookie
+    (the cookie is `SameSite=Lax`, `service.ts:403`, and a session does not cross origins), the key as a bearer when
+    the principal has one.
+  - **Page on an unlisted site**: a foreign `Origin`, `Sec-Fetch-Site: cross-site`, the cookie only on a top-level
+    `GET` navigation (what `Lax` sends).
+  - **Non-browser client** (the default for a key): `Authorization: Bearer px_…`, no `Sec-Fetch-*`, no `Origin`, no
+    cookie.
+
+  The page names the scenario beside every verdict. `cross_site` and `cross_origin` appear only under the scenarios
+  that produce them.
 
 The verdict per row is the `Decision` (`authorize.ts:104`): allow, deny with its `DenyReason`
 (`authorize.ts:56`), or login. Each `DenyReason` gets one fixed sentence. Two get detail from the inputs:
@@ -106,9 +118,16 @@ A new admin procedure, `access.preview`, answers the claims a fresh mint would c
 - **Person**: `{ sub, ptype: 'user', session: true, perms, email }` from `resolveAuthorityAt` at `<app>@<env>`.
   `disabled` and `unknown_principal` come back as reasons. A terminal session is out of scope (ADR-0067); the page
   says the answer is for a session not asserted at a terminal.
-- **Key** (by credential id): `resolveCredential`'s subject, `ptype`, `workload`, `perms` and `link`. Its refusals
-  come back as they are, `wrong_app` and `issuer_unauthorized` included: the caller is an installation administrator,
-  so hiding them (as `mintFromKey` does toward a presenter) protects nobody.
+- **Key** (by credential id): first the validity `mintFromKey` gets from its lookup. The real mint reads the
+  credential with `getActiveCredentialByHash` (`packages/iam/src/tokens.ts:232`), whose SQL refuses a revoked or
+  expired row (`packages/iam/src/repositories/credentials.ts:178`); `getCredentialById` (`credentials.ts:186`) does
+  not, and `resolveCredential` checks no validity. So the preview reads the row through a new
+  `getActiveCredentialById` with the same predicate (`revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now)`),
+  and a revoked or expired key answers `revoked` or `expired` before anything is resolved. Then `resolveCredential`'s
+  subject, `ptype`, `workload`, `perms` and `link`. Its refusals come back as they are, `wrong_app` and
+  `issuer_unauthorized` included: the caller is an installation administrator, so hiding them (as `mintFromKey` does
+  toward a presenter) protects nobody. A workload key takes `mintFromWorkloadKey`'s kind and app checks too
+  (`tokens.ts:278`).
 - **Token size**: the preview reports when the claims exceed the application token bound
   (`MAX_APPLICATION_TOKEN_BYTES`), because the real mint would answer `token_too_large` (a 403).
 
@@ -124,10 +143,22 @@ Wildcards do not occur: a contract application's roles hold exact actions (`pack
 
 ### The table
 
-Control rebuilds the environment's table from its approved snapshot (`approvedSnapshot`, `snapshot.ts:170`) with
-`contractProxyTable(contract, applicationContractDigest(…), { ops: true })` (`packages/proxy-core/src/manifest.ts:504`),
-the call the providers make when they publish. _Assumed, not traced:_ that both providers pass exactly these
-arguments; PR 1's witness compares against each provider's published entry.
+The simulated table must be the one the proxy serves, and the providers build it differently:
+
+- Zerops builds a member's table with `contractProxyTable(access.contract, access.contractDigest)`, no ops row
+  (`packages/provider-zerops/src/namespace/manifest.ts:63`), and a dev sandbox's from that sandbox's own approved
+  access (`manifest.ts:34`).
+- Cloudflare passes `{ ops }`, which holds only for a release that serves the ops channel and an environment with a
+  domain (`packages/provider-cloudflare/src/provider.ts:389`).
+- A `dev` environment has no one table: each ready sandbox is routed by its workspace's own publication
+  (`memberSandboxes`, `packages/control/src/api/namespaces.ts:459`).
+
+So Control does not rebuild the table itself. A new optional control-provider capability, `proxyEntry(environment,
+{ workspaceId? })`, returns the `ContractProxyApp` the provider would publish, from the same composition inputs and
+the same code path the publish uses (Zerops: the member and sandbox branches of `namespace/manifest.ts`; Cloudflare:
+`platformProxied`'s inputs, the `ops` gate included). For a `dev` environment the caller names a workspace, and the
+entry comes from that sandbox's publication; a workspace without one has nothing to simulate. Control feeds the entry
+to the simulator unchanged.
 
 On Zerops a namespace runs the proxy of its pinned source (ADR-0045) until `namespaces update --proxy-source=current`.
 Control's copy of the decision can then be newer than the proxy's. The answer names the release it simulated, and on a
@@ -154,9 +185,15 @@ path on both providers for a feature that has not shown it needs one. Left as an
 On the approval page, beside each audience group: "N people gain this, M lose it". Control asks IAM for the preview
 claims of every principal holding a grant at the application, computed twice: with the active roles and with the
 candidate snapshot's roles. `computeAuthority` (`resolve.ts:86`) is pure over a `RoleSource`, so IAM can evaluate a
-candidate schema without reconciling it. Then `satisfies` per changed requirement, in Control. Counts only: the
-approver holds `access.approve`, not IAM administration, so the page shows no names. The count is capped (500) and
-says "500 or more" past it.
+candidate schema without reconciling it.
+
+The verdicts come from the simulator, never from `satisfies` alone. The decision checks the caller kind apart from the
+requirement (`authorize.ts:338`), so a row that moves from `human` to `machine` with the same requirement takes access
+from every person while `satisfies` still says yes. For each changed endpoint and each person, Control runs the
+simulator under the same-origin page scenario twice: the active claims against the active entry, the candidate claims
+against the candidate entry (`proxyEntry` over the candidate access). Allow → deny is a loss, deny → allow a gain.
+Counts only: the approver holds `access.approve`, not IAM administration, so the page shows no names. The count is
+capped (500) and says "500 or more" past it.
 
 ## API and contract changes
 
@@ -166,6 +203,9 @@ says "500 or more" past it.
 - **IAM `/admin/rpc`**: `access.preview` (input: app id, a person id or a credential id) and, for PR 5,
   `access.previewAudience` (input: app id, optional candidate schema; output: per-principal permission sets, ids only,
   capped). Both engines.
+- **Provider contract**: an optional `proxyEntry(environment, { workspaceId? })` on the control provider, returning the
+  entry it would publish. Both providers implement it from their publish code.
+- **IAM repository**: `getActiveCredentialById`, with `getActiveCredentialByHash`'s validity predicate.
 - **Control console RPC**: `access.explain` (target app/env, principal: role | person | key, optional request) and
   `access.audience` for the approval page. DTOs in `@fabrika/control-contract`.
 - **Console**: an "Access" tab on the environment page; a principal picker; "Explain a refused request".
@@ -215,25 +255,33 @@ token claim, no `FABRIKA_*` variable. `X-Request-Id` on a refusal goes to the cl
   the real `Authorizer` with the test IAM double and through `simulateRequest`, with equal outcome, status and reason.
 - **Shadowed rows**: a table where a more specific row wins the placeholder path reports "shadowed", never a verdict
   for the wrong row.
+- **Client scenarios**: a session `POST` under "page on an unlisted site" is `cross_site`; the same `POST` under
+  "same-origin page" is allowed; a listed origin with no key is `no_credential`, never a login bounce.
+- **The served table** (Control, per provider): `proxyEntry` equals the entry the provider publishes for a Zerops
+  member (no ops row), a Cloudflare environment on a release that serves ops (with it) and one on an older release
+  (without it); for a `dev` environment with two workspace publications, each workspace gets its own table.
 - **No token escapes**: the simulator's result type has no token field; a test signs with the simulation key and
   shows the production `TokenVerifier` refuses it (issuer and key).
 - **IAM preview, both engines**: a person's claims equal the `perms` a real `mintToken` puts in its token for the same
-  rows; a disabled principal answers `disabled`; a user administrator out of scope gets the same answer as an unknown
-  app; a key preview is `iam.admin` only; each call writes one `iam.admin.access` row.
+  rows; a disabled principal answers `disabled`; a revoked key answers `revoked` and an expired one `expired`, where
+  `mintFromKey` answers `invalid_key`; a user administrator out of scope gets the same answer as an unknown app; a key
+  preview is `iam.admin` only; each call writes one `iam.admin.access` row.
 - **Control**: `access.explain` for a role over a fixture snapshot; for a person through a stubbed IAM; the Zerops pin
   warning when the namespace's proxy source differs from the default.
 - **Proxy answers**: a 403 carries `X-Request-Id` and its page shows it; the `deny` log line has `subject` on
   `insufficient_permission` and none on `no_credential`; `logging.test.ts` still finds no secret.
-- **People counts**: a candidate role that adds an action raises "gain" by the holders of that role; the cap reads
+- **People counts**: a candidate role that adds an action raises "gain" by the holders of that role; a row whose
+  callers change from `human` to `machine` with the same requirement counts every holder as a loss; the cap reads
   "500 or more".
 
 ## Slicing into PRs
 
 1. **The simulator (S).** `@fabrika/proxy-core/simulate`, the in-memory gateway, placeholder paths, shadowing, the
-   reason sentences. Witness: the matrix-equivalence test.
-2. **Hypothetical roles in the console and MCP (M).** Control `access.explain` for roles, the environment "Access"
-   tab, the `explain_access` MCP tool and its row in `docs/reference/mcp-authoring.md`. Witness: Control use-case
-   test over a fixture snapshot; the MCP tool list test.
+   client scenarios, the reason sentences. Witness: the matrix-equivalence test and the scenario tests.
+2. **Hypothetical roles in the console and MCP (M).** The providers' `proxyEntry` capability, Control
+   `access.explain` for roles (a workspace for `dev`), the environment "Access" tab, the `explain_access` MCP tool and
+   its row in `docs/reference/mcp-authoring.md`. Witness: the served-table tests per provider; Control use-case test
+   over a fixture snapshot; the MCP tool list test.
 3. **Real principals (M).** IAM `access.preview` on both engines with its gates; Control forwards the console bearer;
    the principal picker. Witness: the IAM preview tests on SQLite and Postgres; the gate tests.
 4. **Refused-request reference (S).** `X-Request-Id` and the page reference on refusals, `subject` on the deny line,
@@ -243,7 +291,9 @@ token claim, no `FABRIKA_*` variable. `X-Request-Id` on a refusal goes to the cl
    `access.audience`, the counts beside each audience group. Witness: the count test above; ADR-0050 §7's grouping
    test still holds (counts decide nothing).
 
-PRs 1→2→3 are ordered; 4 and 5 depend only on 1.
+Order: 1 → 2 → 3, then 4 and 5 in either order. PR 4's proxy half (the reference and the `subject` on the log line)
+needs nothing and may land first; its console replay uses `access.explain` (2) and real principals (3). PR 5 needs the
+simulator (1), `proxyEntry` (2) and IAM's permission sets beside the preview (3).
 
 ## Open questions
 

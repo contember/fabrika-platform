@@ -64,15 +64,27 @@ consent Operations access the person never saw on the consent screen. A grant co
 `authoring` only; its Operations tools answer "this connection was authorized without the `operations` scope;
 reconnect to read errors". The `/mcp` row keeps requiring `authoring`.
 
+This follows one rule for the console's MCP resource: one scope per feature. `authoring` stays as it is,
+`operations` is this spec's, and `review` (`review.read`, `review.write`) is the
+[review widget's](./review-widget-on-stage-and-dev.md). A tool checks that the token's `oauth.scopes` holds its
+feature's scope. An [agent task key](./agent-task-keys.md) carries whichever of these scopes its form picks, and the
+exchange puts them in `oauth.scopes`, so the same check serves a person's connector and an agent's task.
+
 The person's own grants still bound the token: someone without `observer` at an app sees nothing of it.
 
 ### Which environments the tools read: stage and dev only
 
 Error payloads can carry end-user data: request paths, breadcrumbs, exception messages built from input. An MCP
 client sends tool results to a third-party model. The tools therefore read only the sources of environments the
-authoring flow already exposes: an application's authoring target (`AppEnvDto.authoring`) and its `dev` environment
-(`APP_ENV_KINDS`, `packages/control-contract/src/index.ts:214-231`). A source of any other environment, production
-included, answers `not_found`, as if it did not exist. Control applies this filter before it calls Operations; it is
+authoring flow already exposes: an application's authoring target that is not protected (`AppEnvDto.authoring` and
+`!protected`) and its `dev` environment (`APP_ENV_KINDS`, `packages/control-contract/src/index.ts:214-231`). A source
+of any other environment, production included, answers `not_found`, as if it did not exist.
+
+`authoring` alone does not prove "not production": Control refuses a second authoring environment per app
+(`packages/control/src/api/registry/environments.ts:45-50`) but not an authoring flag on a protected one; "never mark
+production" is only an operator instruction ([`reference/mcp-authoring.md`](../reference/mcp-authoring.md), setup
+step 3). So the filter checks `protected` too, and PR 2 makes `apps.environments.put` refuse `authoring: true` on a
+protected environment (and `protected: true` on an authoring one) with a 409. Control applies this filter before it calls Operations; it is
 authorization at the tool, not an enforcement decision.
 
 Reading production is an open question (below); the default is no.
@@ -104,11 +116,29 @@ injected instruction can at worst produce a wrong comment, which the issue's act
 ### The workspace names its stage issues
 
 `get_workspace` (`packages/control/src/api/workspaces.ts:267`) already returns the workspace's `latestRun` and whether
-it is `onStage`. When that run deployed the authoring target, Control looks up the Operations release with that
-`runId` (`OperationsReleaseSummaryDto.runId`, `packages/operations-contract/src/operator-api.ts:116-128`) and adds
-`stageIssues`: at most 10 issues of that release, each with id, title, count and whether it is new or a regression. A
-release whose detail lists issues is assumed to list the issues first seen or regressed in it; PR 3 verifies that
-against `release()` before relying on it.
+it is `onStage`. When that run deployed the authoring target, Control adds `stageIssues`: at most 10 issues the
+release of that run's commit introduced, each with id, title, count and `attribution`.
+
+The existing procedures cannot answer this. `releases` filters only by source and cursor
+(`releaseQuery`, `packages/operations/src/operator-rpc-input.ts:47-52`), and `release` lists every issue with an
+applied occurrence in the release (`listReleaseIssues`, `packages/operations/src/repositories/operator.ts:406-420`), so
+a long-standing issue that also fired on the new release is listed beside the ones it caused, without a bound.
+Operations therefore gains:
+
+- **A `commitSha` filter on `releases`.** A release is unique by source and commit, so `{ sourceId, commitSha }`
+  answers at most one release. Control looks up by commit, not by run: the release row keeps only the latest observed
+  `run_id` of its commit.
+- **A `releaseIssues` procedure**, `{ releaseId, limit }` (limit 1–50), answering only the issues the release
+  introduced, each with `attribution`:
+  - `new`: the issue's first occurrence is in this release (`issue.first_seen` equals an applied occurrence's
+    `received_at` of this release);
+  - `regressed`: an applied occurrence of this release has `transition_kind = 'regressed'`.
+
+  These are the predicates of the release's `newIssueCount` and `regressionCount`
+  (`packages/operations/src/repositories/operator.ts:497-508`), so the list and the counts cannot disagree. Ordered by
+  `last_seen` descending; an issue both new and regressed in one release is `new`. Authorized like `release`
+  (`operations.read` at the release's source). The [release watch window](./release-watch-window-and-rollback.md)
+  reads the same procedure.
 
 ## API and contract changes
 
@@ -121,14 +151,18 @@ New MCP tools (all `openWorldHint: false`):
 | `get_health`   | `appId`, `env`                                                                              | per source: HTTP checks (path, current state, last 10 observations), telemetry state                             | read-only                       |
 | `update_issue` | `issueId`, `{ kind: 'comment', text }` or `{ kind: 'resolve_in_release', releaseId }`       | the updated summary                                                                                              | not destructive, not idempotent |
 
-`update_issue` maps to `mutateIssue` (`packages/operations/src/operator-rpc.ts:33-35`). It offers no status change,
+`update_issue` maps to `mutateIssue` (`packages/operations/src/operator-rpc.ts:30-31`). It offers no status change,
 assignment, snooze or merge; those stay in the console. `resolve_in_release` names a release of the issue's own source.
 
 `get_workspace` and `list_workspaces` gain `stageIssues` (above). `WorkspaceDto` is a Control MCP output, not a
 console contract; nothing in `@fabrika/control-contract` changes.
 
-Operations: no new procedure. `createOperationsIam` gains the resource verifier. The Operations RPC contract
-(`@fabrika/operations-contract/rpc`) is unchanged.
+Operations: `createOperationsIam` gains the resource verifier. `OperationsRpcContract`
+(`@fabrika/operations-contract/rpc`) changes additively: `releases` takes an optional `commitSha`, and the new
+`releaseIssues` answers `{ items: (OperationsIssueSummaryDto & { attribution: 'new' | 'regressed' })[] }`. The console
+keeps working unchanged; both are installation-internal.
+
+Control: `apps.environments.put` refuses `authoring` together with `protected` (409).
 
 IAM: the console's MCP resource gains the `operations` scope and its grant, carried in `FABRIKA_IAM_OAUTH_CONFIG`
 (`packages/installation-init/src/mcp.ts:76-103`). No IAM code changes.
@@ -138,15 +172,15 @@ IAM: the console's MCP resource gains the `operations` scope and its grant, carr
 row of an application, `X-Fabrika-*` header, token claim or `FABRIKA_*` variable an application reads. The MCP tool
 list is an installation surface.
 
-No schema change and no migration.
+No schema change and no migration: `releaseIssues` reads existing columns.
 
 ## Security and permissions
 
 - **Enforcement** stays the proxy's: the `/mcp` row admits the `oauth` caller with the `authoring` scope; the
   `operations-rpc` row keeps admitting no `oauth` caller.
-- **Authorization** is Operations': `operations.read` for the three reads, `operations.triage` for `update_issue`, at
-  the source's app or environment, from the token's narrowed permissions. Control adds one rule: stage and dev
-  sources only.
+- **Authorization** is Operations': `operations.read` for the three reads and `releaseIssues`, `operations.triage` for `update_issue`, at
+  the source's app or environment, from the token's narrowed permissions. Control adds one rule: sources of an
+  unprotected authoring environment and of the dev environment only.
 - **Admission** is unchanged: the MCP row has its own; the private hop to Operations is not fronted.
 - **Ceiling.** A token never carries more than the person's live grants intersected with `operations.read` and
   `operations.triage`. `operations.manage` (alert channels, health checks) never reaches an MCP token.
@@ -170,7 +204,9 @@ No schema change and no migration.
    the same way; it is written only where MCP authoring is on. An installation that has not redeployed Operations has
    the variable unset, and the Operations tools answer "Operations does not accept MCP tokens yet; ask the operator to
    upgrade".
-3. **Provider state.** None.
+3. **Provider state.** An existing environment may already carry both `authoring` and `protected`. The tool filter
+   excludes it at once; the registry refusal applies at its next `apps.environments.put`, which then must clear one of
+   the two. No upgrade step changes registry rows.
 4. **Floating pins.** None.
 
 Existing MCP consents keep working for every authoring tool; they gain Operations only after the person reconnects.
@@ -190,8 +226,15 @@ Cloudflare installations have no MCP authoring (ADR-0049 rule 9), so nothing cha
   - `get_issue` drops `rawEvent`, `user` and the URL query, and every end-user string sits under `untrusted`;
   - a token without the `operations` scope gets the reconnect message;
   - `update_issue` refuses `status`, `assign` and `merge` kinds at the input schema;
-  - `get_workspace` names the issues of the release whose `runId` is the workspace's latest stage run, and none when
-    the run did not deploy the authoring target.
+  - `list_issues` on an authoring environment that is also protected answers `not_found`;
+  - `get_workspace` names the issues the release of the latest stage run's commit introduced, and none when the run
+    did not deploy the authoring target.
+- `packages/control/src/__tests__/` registry tests: `apps.environments.put` answers 409 for `authoring: true` on a
+  protected environment and for `protected: true` on an authoring one.
+- `packages/operations/src/__tests__/operator-api.test.ts`, on SQLite and on Postgres: for a release, a long-standing
+  issue with an occurrence in it is not in `releaseIssues`, an issue first seen in it is `new`, a resolved issue that
+  recurred in it is `regressed`; `limit` bounds the answer; `releases({ sourceId, commitSha })` answers the one
+  release of that commit; a caller without `operations.read` at the source gets `not_found`.
 - `packages/installation-init/src/__tests__/service-environment.test.ts` pins the new Operations variable name.
 
 ## Slicing into PRs
@@ -199,11 +242,14 @@ Cloudflare installations have no MCP authoring (ADR-0049 rule 9), so nothing cha
 1. **Operations accepts the MCP resource token; the `operations` scope** (S). The second verifier, the variable and
    its derivation, the scope and grant in the template, the regenerated Zerops template. Witness: the Operations
    resource-token tests, the manifest test, the proxy-core refusal test.
-2. **The three read tools** (M). Control's Operations client, the stage/dev filter, the event projection,
+2. **The three read tools** (M). Control's Operations client, the stage/dev filter, the registry refusal of
+   `authoring` on a protected environment, the event projection,
    `list_issues`, `get_issue`, `get_health`, server instructions, `reference/mcp-authoring.md` tool table, ADR-0049
    rewritten in place (Operations tools, the `operations` scope, the stage-only rule). Witness: `mcp.test.ts` cases
    above.
-3. **`update_issue` and `stageIssues`** (S). Witness: the triage and workspace cases of `mcp.test.ts`.
+3. **`update_issue` and `stageIssues`** (S–M). `releases`' `commitSha` filter and `releaseIssues` in Operations, then
+   the tool and the workspace field. Witness: the attribution cases of `operator-api.test.ts`, the triage and
+   workspace cases of `mcp.test.ts`.
 
 Each PR ships alone: after PR 1 nothing calls the new verifier; after PR 2 the agent reads; PR 3 adds the write.
 

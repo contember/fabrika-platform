@@ -7,8 +7,9 @@ of service before it is deleted. Size: M (the view) + M (retire).
 - **Depends on:** [backlog 203](../backlog/203-deleting-an-app-or-env-leaves-its-secrets-and-iam-keys.md) for the final
   delete of a retired environment (PR 6 only). Nothing else.
 - **Enables:** [backlog 266](../backlog/266-fleet-wide-framework-upgrades.md) (fleet framework upgrades read the
-  framework-lag column). [Release watch window](./release-watch-window-and-rollback.md) can add its verdict as a column
-  later; [agent task keys](./agent-task-keys.md) are refused by retire (a human action).
+  framework-lag column). [Release watch window](./release-watch-window-and-rollback.md) adds its release verdict as a
+  later column of this view (its own slice 5); this spec does not build it. [Agent task keys](./agent-task-keys.md) are
+  refused by retire (a human action).
 
 ## Problem
 
@@ -100,11 +101,16 @@ each of its environments.
    and the triggers, before anything else), `bind_dev`, workspace creation and authoring.
 4. **Revoke.** IAM's `workloads.revokeKeys` for each workload of the environment, and its membership key. This is item 3
    of [backlog 203](../backlog/203-deleting-an-app-or-env-leaves-its-secrets-and-iam-keys.md), done at retire instead of
-   at delete; PR 5 adds the membership-key revocation 203 names as missing. A restore re-issues them on the next deploy,
-   which already reconciles keys from the approved contract.
+   at delete; PR 5 adds the membership-key revocation 203 names as missing. In the same lease-fenced step, retire deletes
+   the environment's `app_env_workload_credentials` and `app_env_membership_keys` records and their vault rows. Without
+   that, the next deploy would hand the revoked keys back: both reconciles read a recorded key back while more than half
+   its life is left (`packages/control/src/workload-credentials.ts:200`, `packages/control/src/membership-transport.ts:92`).
+   With no record, the next deploy's reconcile issues fresh keys.
 5. **Retention.** The environment stays retired for 30 days (`RETIREMENT_DAYS`, the same span after which a backup reads
-   as expired). During it, **restore** reverses steps 2 and 3: the object opens at a new generation (Cloudflare), the
-   environment rejoins its namespace members (Zerops), and the next deploy issues fresh keys.
+   as expired). During it, **restore** reverses steps 2 and 3: it clears `retired_at`, opens the object at a new
+   generation (Cloudflare) or returns the environment to its namespace members (Zerops), and then redeploys the newest
+   succeeded run under the same lease, as a side restore's deploys do (`operationDeploys`). That deploy issues fresh keys,
+   so the running version never keeps a revoked one.
 6. **Delete.** After the retention the page offers the ordinary delete (`deleteAppEnvUseCase`,
    `packages/control/src/api/registry/environments.ts:156`; `deleteAppUseCase`, `apps.ts:52`). Maintenance never deletes
    on its own. The delete keeps its current rules: the human check for a protected environment, the dev-sandbox check
@@ -177,21 +183,23 @@ the existing ops channel at releases that serve it, and changes nothing an appli
   person's last sign-in. That is why it is answered only to an IAM administrator of the application, who can already read
   each person's sign-in on the principal page (`principals.ts:67`). The 30/90-day counts reveal no one.
 - **Retire and restore.** A human user principal in the console (no OAuth claims, no link claims, no bearer), holding
-  `app.manage` and `data.manage` at the environment: the check `requireHumanForProtectedDelete`
-  (`packages/control/src/approval/human.ts:33`) applies to every environment, protected or not. A builder key, an MCP
-  token or an agent task key is refused. Protected environments additionally need `access.approve`.
+  `app.manage` and `data.manage` at the environment. Retire and restore call `requireHumanApprover`
+  (`packages/control/src/approval/human.ts:19`) unconditionally, then `requireHumanForProtectedDelete` (`:33`) for
+  `access.approve` on a protected environment. The second check alone is not enough: it returns at once when no
+  environment is protected (`:35`), so on an unprotected environment it would let any credential through. A builder key,
+  an MCP token, a service key or an agent task key is refused.
 - **Confirmation.** The console asks for the environment id typed out, and on Zerops the explicit "no platform backup"
   acknowledgement (`acknowledgeNoBackup: true`), which the RPC refuses to infer.
 - **Audit.** `app.env.retire`, `app.env.restore`, `app.owner.set`, each with the actor; the backup and the maintenance
   transition audit as the data operations they are.
-- **No new secret.** Retire revokes credentials and deletes nothing from the vault; the vault rows go with the delete
-  (203).
+- **No new secret.** Retire revokes the environment's IAM keys and deletes their records and vault rows. App secrets,
+  proxy secrets and token keys stay for a restore; their vault rows go with the delete (203).
 
 ## Rollout on an existing installation
 
 1. **Generated files.** None change. No sidecar workflow, `zerops.yaml` or import YAML is touched.
-2. **Environment variables.** None added or renamed. A retired environment's revoked keys are re-issued by the next
-   deploy after a restore, through the existing reconcile.
+2. **Environment variables.** None added or renamed. Retire deletes the key records, so the redeploy a restore runs
+   issues fresh keys through the existing reconcile and writes them over the revoked ones.
 3. **Provider state.** Nothing a provider created is checked differently. On Zerops, a retired environment leaves the
    namespace members, so the next republish drops its routes; the services stay as they are.
 4. **Floating pins.** None.
@@ -213,9 +221,14 @@ the field. Migration `0031` is additive on both dialects.
 - **Retire on Cloudflare:** backup, `closed`, revocation, `retired_at`, in order; a failed backup leaves the environment
   `open` and serving; a deploy of a retired environment is refused; restore opens at a new generation; a Control
   restart mid-retire resumes from the recorded step.
+- **Keys after a restore:** retire → restore → its redeploy hands a workload key and a membership key that differ from
+  the revoked ones, and a job of the restored environment mints a token with its key. Retire leaves no
+  `app_env_workload_credentials` or `app_env_membership_keys` record and no vault row of theirs.
 - **Retire on Zerops:** refused without `acknowledgeNoBackup`; the namespace job's members omit the retired environment;
   the proxy answers its host 404 (the assumption above).
-- **Authorization:** retire is refused to an MCP token, a builder key and a session without `data.manage`.
+- **Authorization:** on an unprotected environment, retire and restore are refused to an MCP (OAuth) token, a builder
+  key, a service key and a session without `data.manage`; on a protected one, also to a person without
+  `access.approve`.
 - **Console:** the page renders each column's `forbidden` and `unavailable` state without hiding the others.
 
 ## Slicing into PRs

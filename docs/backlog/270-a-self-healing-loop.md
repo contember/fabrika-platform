@@ -1,7 +1,7 @@
 ---
 id: 270
 title: A self-healing loop
-blocked-by: [../specs/operations-tools-in-the-authoring-mcp.md, ../specs/release-watch-window-and-rollback.md, ../specs/agent-task-keys.md]
+blocked-by: []
 ---
 
 # 270 — A self-healing loop
@@ -27,11 +27,21 @@ next release closes the loop.
 Fabrika runs no model ([ADR-0049](../decisions/0049-author-applications-through-mcp-in-control.md)): the runner is an
 ordinary principal outside the platform, and every step it takes is authorized and audited as that task key.
 
+It waits for the [Operations MCP tools](../specs/operations-tools-in-the-authoring-mcp.md), the
+[watch window](../specs/release-watch-window-and-rollback.md) and [agent task keys](../specs/agent-task-keys.md) to ship.
+
+**Consent is the first design question.** A task key is issued only by a signed-in person, and an OAuth grant lives only
+while the consenting session does (`packages/iam/src/oauth.ts:235`). An alert has no person. Two shapes: a standing
+template a person approves in advance (application, scopes, ceiling, expiry, budget), from which IAM issues one task per
+alert and names that person as accountable; or a person issues each task from the alert in the console, and the loop
+starts there. Default: the human step first; a standing template only after its ceiling, expiry and revocation are
+designed as an ADR.
+
 Open: a budget per application per week, an issue the agent reopens in a loop, and who is accountable for the pull
 request. Decide them in the task key's budgets before building the channel.
 
-Acceptance: a new issue on a stage environment with an `agent` channel produces exactly one task key and one runner
-call; the resulting pull request and every write carry the task key's agent-for-person mark; a second alert for the same
+Acceptance: a new issue on a stage environment with an `agent` channel produces exactly one task key, issued under
+a person's consent and naming that person, and one runner call; the resulting pull request and every write carry the task key's agent-for-person mark; a second alert for the same
 issue while the task is open makes no second call.
 
 ## Touch points

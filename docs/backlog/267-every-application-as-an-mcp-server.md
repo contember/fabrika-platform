@@ -26,6 +26,14 @@ access, so the approval diff shows "now callable by agents"
 ([ADR-0050](../decisions/0050-approved-access.md)). Tool annotations follow from method and actions. Each call is an
 ordinary request through the proxy's one enforcement decision.
 
+The token is the unsolved part. Caller `oauth` is installation-only (`packages/auth-core/src/installation-endpoint.ts:11`),
+and an application's verifier refuses a resource token (`packages/auth-core/src/token.ts:280`). The design must say how
+the proxy turns an MCP client's OAuth authority into the application's own token (for example, IAM exchanges the
+resource token for an ordinary application token, as the proxy's session handoff does) while the proxy keeps the one
+enforcement decision. That is an additive change to the application↔platform protocol
+([ADR-0062](../decisions/0062-a-platform-release-serves-older-framework-releases.md)): a framework capability that an
+older application lacks, so only applications on a new enough release can opt in.
+
 Before any code: an ADR on the installation policy for application data reaching a third-party model (which
 applications may expose MCP, who decides, whether a person's consent names the model). Open: tool count on an
 application with about 100 endpoints, and human-written tool descriptions in the contract.

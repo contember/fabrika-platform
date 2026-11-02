@@ -25,6 +25,13 @@ uniqueness) and seeds a dev sandbox or stage with it (`reset_dev` with a source)
 ([ADR-0070](../decisions/0070-data-protection-of-an-application-environment-on-cloudflare.md),
 `packages/control/src/{backups,data-operations}.ts`).
 
+What exists does not yet form that path. The backup scheduler does nothing without the
+provider's data operations (`packages/control/src/backups.ts:63`), dev sandboxes are Zerops only
+(`packages/control/src/api/registry/environments.ts:210`), and `reset_dev` resets the schema and imports nothing
+(`packages/control/src/api/dev-environments.ts:308`). The first version names one provider pair (Zerops production into a
+Zerops dev sandbox needs a Zerops backup first; Cloudflare needs Cloudflare dev sandboxes,
+[271](271-fast-dev-sandboxes-on-cloudflare.md)) and refuses every other combination.
+
 Open: free-text columns hold personal data that no class catches (default: a `free` text column is masked unless
 declared otherwise); who may request a masked seed; the same classification could later drive per-person export and
 erasure, which is a separate item. Needs an ADR on the classification before code.

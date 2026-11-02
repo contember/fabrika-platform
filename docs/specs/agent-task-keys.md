@@ -55,24 +55,30 @@ A person issues a task in the console. The form is the consent screen of the tas
 (ADR-0042 §4). It names:
 
 - the application and its authoring environment (one per app, `packages/control/CLAUDE.md`, "MCP authoring");
-- the actions, a subset of the `authoring` scope's grants (`source.workspace.read`, `source.workspace.write`,
-  `source.pull-request.create`, `deploy.trigger`, `deploy.read`; `docs/reference/mcp-authoring.md`), plus the
-  Operations actions once [the Operations tools](./operations-tools-in-the-authoring-mcp.md) exist;
+- the scopes of the console's MCP resource the task carries, one per feature: `authoring` (unchanged:
+  `source.workspace.read`, `source.workspace.write`, `source.pull-request.create`, `deploy.trigger`, `deploy.read`;
+  `docs/reference/mcp-authoring.md`), `operations` (`operations.read`, `operations.triage`;
+  [the Operations tools](./operations-tools-in-the-authoring-mcp.md)) and `review` (`review.read`, `review.write`;
+  [the review widget](./review-widget-on-stage-and-dev.md)), each offered once its scope exists in
+  `FABRIKA_IAM_OAUTH_CONFIG`;
+- optionally, fewer actions than the chosen scopes grant;
 - the lifetime in hours (default 4, at most 24);
 - budgets: commits, deploys, workspaces (each optional, each at most 1000);
 - optional path globs that `apply_changes` may write (at most 16, each at most 200 characters);
 - the agent's label (what audit and commits show, e.g. the runner's name).
 
-The console calls IAM's `/admin/rpc` `tasks.issue` through Control's IAM gateway. Like `appPeople.*`, it is an
-exception to "every procedure requires `iam.admin`": a user behind a signed-in session's console token
+The console calls IAM's `/admin/rpc` `tasks.issue` through Control's IAM gateway. `tasks.*` is a third exception to
+"every procedure requires `iam.admin`", beside `appPeople.*` and the user administration procedures;
+`packages/iam/src/__tests__/admin-rpc-gates.test.ts`, which names exactly those two today, gains a `TASKS` list and a
+case that refuses every other caller. A user behind a signed-in session's console token
 (`AccessTokenClaims.session`, `packages/auth-core/src/token.ts`) issues tasks for itself only. A `px_` key, an OAuth
 token and a task token never issue one, so an agent cannot mint a longer or wider task for another agent. IAM refuses
 the issue when the person does not hold every listed action at the app now, so a task is never silently empty.
 
 IAM stores an `agent_tasks` row (both migration sets): id (UUIDv7), principal, app (`vozka`), resource, the frozen
-ceiling (actions, scope `app:<id>`), the target environment, budgets, globs, agent label, `expires_at`, `revoked_at`,
-and the SHA-256 of the secret. The secret (`pt_` + 27 base64url characters, a prefix the proxy's `px_` branch never
-takes) is shown once. `tasks.list` and `tasks.revoke` act on the caller's own tasks; `iam.admin` may list and revoke
+ceiling (scopes, actions, scope `app:<id>`), the target environment, budgets, globs, agent label, `expires_at`,
+`revoked_at`, and the SHA-256 of the secret. The secret (`pt_` + 27 base64url characters, a prefix the proxy's `px_`
+branch never takes) is shown once. `tasks.list` and `tasks.revoke` act on the caller's own tasks; `iam.admin` may list and revoke
 anyone's. Issue and revoke write `iam.task.create` / `iam.task.revoke` in their own transaction
 (`packages/iam/CLAUDE.md`, "every IAM-owned change").
 
@@ -93,11 +99,12 @@ resource=https://<console>/mcp
 ```
 
 IAM looks the secret up by hash, then resolves authority like `grantAuthority` does for a code or refresh
-(`packages/iam/src/oauth.ts:223`): the task live and unexpired, the resource still configured, the principal an active
-user, its live permissions at the app narrowed by the task's ceiling (`narrowPermissions`,
-`packages/iam/src/narrow-permissions.ts:8`). It mints the resource token as `mintForGrant` does
-(`packages/iam/src/oauth.ts:187`), with three differences: the TTL is 60 s instead of
-`DEFAULT_TOKEN_TTL_SECONDS` (300), `exp` is also capped at the task's expiry, and the token carries `act`. No refresh
+(`packages/iam/src/oauth.ts:223`): the task live and unexpired, the resource and each of the task's scopes still
+configured, the principal an active user, its live permissions at the app narrowed by the scopes' grants and then by
+the task's ceiling (`narrowPermissions`, `packages/iam/src/narrow-permissions.ts:8`). It mints the resource token as
+`mintForGrant` does (`packages/iam/src/oauth.ts:187`), with `oauth.scopes` the task's scopes, and with three
+differences: the TTL is 60 s instead of `DEFAULT_TOKEN_TTL_SECONDS` (300), `exp` is also capped at the task's expiry,
+and the token carries `act`. No refresh
 token is issued; the runner exchanges again. A failed exchange is `invalid_grant`, the same for an unknown, revoked,
 expired or foreign secret. The endpoint is public, so it takes the per-client bucket before the lookup, like
 `/auth/workload/token`.
@@ -105,6 +112,9 @@ expired or foreign secret. The endpoint is public, so it takes the per-client bu
 The OAuth claims need a `client_id`. A task has no client of its own, so IAM serves one fixed Client ID Metadata
 Document for task exchanges at `<iam>/oauth/clients/task` (public client, no redirect URI, the token-exchange grant
 only). That URL passes `isCimdClientId` (`packages/auth-core/src/oauth.ts:16`) unchanged.
+
+IAM serves `tasks.issue` and the exchange only while Control has reported that it enforces `act` (below, "No task
+token before its consumer").
 
 The agent then calls `https://<console>/mcp` with `Authorization: Bearer <token>`, one credential per request.
 Any MCP client that accepts a bearer works; an external agent runner (for example roj) needs only "exchange, then call
@@ -116,8 +126,16 @@ Control already authorizes every tool at the coordinates. A task token adds four
 `packages/control/src/api/workspaces.ts` and `packages/control/src/api/dev-environments.ts`, read from
 `AuthContext.actor`:
 
-1. **Target.** A use case refuses a workspace or target of another application than `act.target.app`, with the same
-   404 as a denied one.
+1. **Target.** The allowed set is exactly `act.target`, the app and the environment frozen at issue (its authoring
+   environment then), plus that app's `dev` environment reached only through a workspace of the target environment
+   (`bind_dev`, `get_dev_status`, `run_checks`, `reset_dev` take a workspace id, `dev-environments.ts:217`, whose
+   bootstrap runs count against the deploy budget). Every use case compares the coordinates it resolved (the
+   workspace's `app_id`/`env`, or `list_targets`' rows) with that set and answers the same 404 as a denied target.
+   This is needed because an app-scoped grant passes `canAtCoordinates` at every environment
+   (`packages/control/src/api/runs.ts:260`). The task does not follow the authoring flag: when an operator moves it
+   (`packages/control/src/api/registry/environments.ts:45`), the frozen environment is no longer an authoring target,
+   `findAuthoringTarget` answers null and every tool answers 404; the person issues a new task for the new
+   environment.
 2. **Path globs.** `applyChangesUseCase` refuses a batch with a path no glob matches (403, naming the paths), beside the
    protected-path check (`workspaces.ts:477`). Globs match with `Bun.Glob`, as `search_files` does (`workspaces.ts:419`);
    the MCP host is Bun-only.
@@ -134,6 +152,27 @@ Control already authorizes every tool at the coordinates. A task token adds four
 The usage row lives in Control because Control runs the effects. Its limits come from the signed token, so Control
 keeps no copy of the task.
 
+### No task token before its consumer
+
+A Control older than this feature would take a task token for the person's own grant: its `parseAccessClaims` builds
+its result from the fields it knows and drops `act` (`packages/auth-core/src/token.ts:376`), so target, globs and
+budgets would not apply. On Zerops, `platform deploy` builds IAM (with Operations) first, then the proxy, then Control
+(`packages/provider-zerops/src/installation/deploy.ts:121`, `:836`), so every upgrade has that window, and a failed
+Control build keeps it open.
+
+So IAM mints no task token until Control says it enforces them. Control reports its task capability (a version
+number, `1`) to IAM through its provisioning client (`iamProvisioningClient`) at boot and then every 60 s; IAM records
+it in a one-row `task_consumers` table. `tasks.issue` and the exchange answer `tasks_unavailable` (the exchange as
+`invalid_grant`) unless the latest report names a version IAM serves and is at most 180 s old. The cases:
+
+- **Upgrade in progress, or a failed Control build.** The old Control never reports, so IAM refuses.
+- **Rollback of the whole platform.** The older IAM has no exchange; a token minted before lives at most 60 s, and the
+  older Control starts only after IAM and the proxy have been rolled, which takes minutes.
+- **Control alone at an older release.** Its reports stop; IAM refuses within 180 s, and a token lives 60 s more.
+
+Operations is not a consumer: an Operations tool reaches it only through Control's MCP use case, which has applied the
+task's checks before it calls Operations.
+
 ### Audit
 
 `IamRpc.audit` already verifies the caller's token to find the app (`packages/iam/CLAUDE.md`, "`audit` records the app
@@ -144,25 +183,28 @@ of the caller's verified token"). It also reads `act` from that verified token a
 
 ## API and contract changes
 
-- **`@fabrika/auth-core`.** `AccessTokenClaims.act?: { sub: string; label: string; target: { app: string; env: string }; budgets: { commits?: number; deploys?: number; workspaces?: number }; paths?: string[] }`.
+- **`@fabrika/auth-core`.** `AccessTokenClaims.act?: { sub: string; label: string; target: { app: string; env: string }; budgets: { commits?: number; deploys?: number; workspaces?: number }; paths?: string[] }`
+  (the scopes stay in `oauth.scopes`).
   `sub` is the task id. `buildAccessClaims`/`buildResourceAccessClaims` and `parseAccessClaims` accept it **only beside
   OAuth claims**, and the parser refuses a malformed or misplaced one rather than dropping it. New constants: the
   task-key token type URN, `TASK_KEY_PREFIX`, `TASK_TOKEN_TTL_SECONDS` (60), `MAX_TASK_LIFETIME_SECONDS` (24 h).
 - **`@fabrika/auth`.** `AuthContext.actor?: { taskId; label; target; budgets; paths }`, from `claims.act`.
   Optional and additive.
 - **IAM.** `/admin/rpc` `tasks.issue | list | revoke`; `/oauth/token` gains the token-exchange grant;
-  `/oauth/clients/task` serves the CIMD document; the authorization server metadata lists the grant. Migrations:
-  `agent_tasks`, two `audit_events` columns.
+  `/oauth/clients/task` serves the CIMD document; the authorization server metadata lists the grant; an `IamRpc`
+  method for Control's capability report (provisioning key only). Migrations: `agent_tasks`, `task_consumers`, two
+  `audit_events` columns.
 - **Control.** Migrations: `agent_task_usage (task_id, commits, deploys, workspaces)`, `workspaces.created_by_task`.
-  No new RPC; the console reads tasks from IAM through the gateway.
+  The capability report at boot and every 60 s. No new RPC; the console reads tasks from IAM through the gateway.
+- **Operations.** `src/redact.ts` redacts `pt_` secrets as it redacts `px_` ones (`operations/src/redact.ts:7`, `:13`).
 - **Dashboard.** A "Tasks" panel on the application: issue (showing the secret once), list, revoke.
 
 **ADR-0062.** The change does not touch the protocol between an application and the platform. A task token is a
 resource token whose `aud` is the console's `/mcp` resource; an application row cannot admit the `oauth` caller (an
 installation-only form, `packages/auth-core/src/installation-endpoint.ts`), so no task token ever reaches an
 application, and `act` is refused on a native token. An older parser would drop `act` silently (`parseAccessClaims`
-builds its result from known fields only, `packages/auth-core/src/token.ts:337`), which is why only one platform
-release verifies these tokens: IAM, the platform proxy and Control upgrade together.
+builds its result from known fields only, `packages/auth-core/src/token.ts:337`), which is why IAM waits for
+Control's capability report before it mints one.
 
 ## Security and permissions
 
@@ -181,19 +223,23 @@ release verifies these tokens: IAM, the platform proxy and Control upgrade toget
   item 2). The cost is one exchange per minute per agent.
 - **Who issues.** A signed-in person, for themselves, from the console. No key, OAuth token or task token issues.
   Ending a person's IAM sessions does not end their tasks; their lifetime is bounded by 24 h and by revocation.
-- **Secret custody.** IAM stores the hash only, shows the plaintext once, and never logs it. A leaked secret reaches
-  one application's authoring target, within the budgets, for at most 24 h.
+- **Secret custody.** IAM stores the hash only, shows the plaintext once, and never logs it. Operations' ingest
+  redaction covers `pt_` like `px_`, so a secret an application prints into an error report is not kept. A leaked
+  secret reaches one application's target environment, within the budgets, for at most 24 h.
+- **Mixed releases.** IAM mints nothing while Control cannot enforce `act` ("No task token before its consumer").
 - **Prompt injection.** A task narrows what an injected instruction can do (globs, budgets, no approval), but it
   does not make repository text trustworthy; the server instructions keep saying so.
 
 ## Rollout on an existing installation
 
-1. **Generated files.** None change. `FABRIKA_IAM_OAUTH_CONFIG` keeps its shape: a task uses the existing resource and
-   its `authoring` scope.
+1. **Generated files.** None change here. `FABRIKA_IAM_OAUTH_CONFIG` keeps its shape: a task uses the existing
+   resource and the scopes it already lists; the `operations` and `review` scopes are added by their own specs.
 2. **Environment variables.** None added, renamed or removed.
 3. **Provider state.** None. The IAM and Control migrations are additive and run on `upgrade` like every migration
    (ADR-0017). An existing OAuth grant and its tokens are untouched.
 4. **Floating pins.** None.
+
+During the roll itself IAM refuses tasks until the new Control reports; a failed or partial upgrade keeps refusing.
 
 MCP is served only by the Bun host, so task keys work wherever `/mcp` does (Zerops today); IAM's half is portable.
 
@@ -203,22 +249,31 @@ MCP is served only by the Bun host, so task keys work wherever `/mcp` does (Zero
   without `target` are refused (`token.test.ts`, `resource-token.test.ts`).
 - IAM, both engines: issue refuses a `px_` caller, an OAuth caller, an action the person lacks, a lifetime above 24 h;
   exchange mints a 60 s token with `act`; revoked, expired and unknown secrets answer the same `invalid_grant`; a
-  person who lost a grant gets the narrower set; a disabled person gets nothing; the bucket refuses a burst.
+  person who lost a grant gets the narrower set; a disabled person gets nothing; the bucket refuses a burst; the
+  token's `oauth.scopes` are the task's scopes. `tasks.*` is refused to every caller but a session user
+  (`admin-rpc-gates.test.ts`).
+- Mixed releases, IAM at this release: with no capability report (an older Control), a report older than 180 s, or a
+  version IAM does not serve, `tasks.issue` and the exchange refuse; a fresh report admits them.
 - Control: a commit outside the globs is 403; the n+1th commit, deploy and workspace are 403 and spend nothing on a
-  concurrent pair (Postgres test); a task token for app A gets 404 on app B; trailers name the task; a task token cannot
-  complete an approval.
+  concurrent pair (Postgres test); a task token for app A gets 404 on app B; with an app-scoped grant, the token gets
+  404 at another environment of the same app; after the authoring flag moves to another environment, every tool
+  answers 404; `bind_dev` on a workspace of the target environment works and counts a deploy; trailers name the task;
+  a task token cannot complete an approval.
+- Operations: a `pt_` secret in an event's message, exception value, breadcrumb, request URL and extra data is stored
+  redacted (`packages/operations/src/__tests__/ingest.test.ts`, beside its `px_` cases).
 - Audit: `IamRpc.audit` with a task token writes `actor_task_id` from the token, whatever the event says.
 - End to end in the local stack: issue in the console, exchange with `curl`, drive `create_workspace` and
   `apply_changes` over `/mcp`, revoke, and see the next exchange fail.
 
 ## Slicing into PRs
 
-1. **The `act` claim (S).** `auth-core` claim, builders, parser, constants; `AuthContext.actor`. Nothing mints it yet.
-   Witness: the claim tests above.
-2. **Control enforcement (M).** Target, globs, budgets, attribution, migrations. Inert without task tokens.
-   Witness: Control tests with tokens the test signs.
-3. **IAM tasks and exchange (M).** `agent_tasks`, `tasks.*`, the token-exchange grant, the task CIMD document, the
-   bucket. Witness: IAM tests on both engines.
+1. **The `act` claim and `pt_` redaction (S).** `auth-core` claim, builders, parser, constants; `AuthContext.actor`;
+   Operations' redaction of `pt_`. Nothing mints it yet. Witness: the claim tests and the redaction test above.
+2. **Control enforcement (M).** Target, globs, budgets, attribution, migrations, and the capability report (which IAM
+   ignores until PR 3). Inert without task tokens. Witness: Control tests with tokens the test signs.
+3. **IAM tasks and exchange (M).** `agent_tasks`, `task_consumers`, `tasks.*` and the gates test, the token-exchange
+   grant gated on the report, the task CIMD document, the bucket. Witness: IAM tests on both engines, the
+   mixed-release cases included.
 4. **Audit attribution (S).** The two columns, IAM reading `act` in `audit` and its own records; the audit view
    column. Witness: the audit test above.
 5. **Console and docs (M).** The Tasks panel, `docs/reference/mcp-authoring.md` (how a runner uses a task key), the

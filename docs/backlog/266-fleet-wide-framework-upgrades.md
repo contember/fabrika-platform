@@ -1,7 +1,7 @@
 ---
 id: 266
 title: Fleet-wide framework upgrades
-blocked-by: [../specs/fleet-overview.md, ../specs/access-diff-as-a-github-check.md]
+blocked-by: []
 ---
 
 # 266 — Fleet-wide framework upgrades
@@ -27,8 +27,12 @@ anything beyond the version bump and mechanical steps is the agent's.
 
 Why it waits: it reads the framework lag from the [fleet overview](../specs/fleet-overview.md), and its pull requests
 should carry the [access-diff check](../specs/access-diff-as-a-github-check.md). An unattended run needs an
-[agent task key](../specs/agent-task-keys.md) rather than a person's grants. Dev sandboxes exist on Zerops only; on
-Cloudflare the checks would run on a stage deploy until [271](271-fast-dev-sandboxes-on-cloudflare.md).
+[agent task key](../specs/agent-task-keys.md) rather than a person's grants. It waits for those three specs to ship.
+
+The first version is Zerops only. Cloudflare has no authoring target at all: registration refuses `authoring` where the
+provider does not declare it (`packages/control/src/api/registry/environments.ts:190`), and Cloudflare's provider does not
+(`packages/provider-cloudflare/src/control.ts` sets no `authoring`). Cloudflare needs authoring workspaces first, then dev sandboxes
+([271](271-fast-dev-sandboxes-on-cloudflare.md)).
 
 Acceptance: an application one minor behind gets a workspace, a green `run_checks` and a pull request whose
 `bun.lock` names the platform's release; an application with a failing check gets an open workspace and no pull request.

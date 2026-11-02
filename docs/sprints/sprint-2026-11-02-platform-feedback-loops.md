@@ -29,7 +29,7 @@ Each spec carries its own citations; these are the facts the order depends on.
   human-approver rule).
 - ⚠ Control has no rollback verb: the only redeploy is inside a side restore
   (`packages/control/src/data-operations.ts`), and a `backup` data operation answers 501 —
-  `packages/control/src/control-rpc.ts:797`.
+  `packages/control/src/control-rpc.ts:798`.
 - ✔ The Zerops proxy runs stock Caddy 2.10.2, with no response-body rewrite —
   `packages/provider-zerops/src/installation/topology/setups.ts`.
 - ✔ MCP authoring and its dev sandboxes are Zerops only —
@@ -44,14 +44,16 @@ and its reference and ADR changes are in.
 
 - **Problem.** An agent acting for a person holds the person's own grant; audit, commits and the console cannot tell the
   agent from the person, and nothing bounds a task.
-- **Verify first.** `parseAccessClaims` ignores unknown claims, so an older verifier reads a task token as the person's:
-  confirm IAM, the proxy and Control verify from one release on both providers.
+- **Verify first.** `parseAccessClaims` ignores unknown claims, so an older Control reads a task token as the person's,
+  and Zerops upgrades IAM before Control. The spec gates issuance and exchange on Control's capability report; confirm
+  the report's timing on both providers' upgrade order.
 - **Scope.** [Spec](../specs/agent-task-keys.md), slices 1–5: the `act` claim, Control enforcement (target, path
-  globs, budgets), IAM tasks and the token exchange, audit attribution, the console panel. New ADR: an agent acts for a
+  globs, budgets, the frozen environment), IAM tasks and the token exchange, audit attribution, the console panel. A task
+  carries the scopes its form picks (`authoring`, `operations`, `review`). New ADR: an agent acts for a
   person through a task key.
 - **Acceptance / witness.** A task token exchanged from a `pt_` key reaches `/mcp`, its commits carry the task
   trailers, its audit rows name both the person and the agent, a spent budget refuses the next deploy, and a revoked
-  task's next exchange fails.
+  task's next exchange fails; a new IAM beside an old Control issues no task.
 
 ### WU2 — Operations tools in the authoring MCP (S–M)
 
@@ -59,8 +61,9 @@ and its reference and ADR changes are in.
 - **Verify first.** Whether Claude's and ChatGPT's connectors receive IAM's default scopes or request only
   `authoring` (decides whether the new `operations` scope reaches them without a client change).
 - **Scope.** [Spec](../specs/operations-tools-in-the-authoring-mcp.md), slices 1–3: Operations accepts the MCP resource
-  token under a new `operations` scope; `list_issues`, `get_issue`, `get_health` on stage and dev only; `update_issue`
-  and the workspace's stage issues. ADR-0049 rewritten in place.
+  token under a new `operations` scope; `list_issues`, `get_issue`, `get_health` on an unprotected authoring
+  environment and dev only (Control refuses `authoring` with `protected`); `update_issue` and the workspace's new and
+  regressed stage issues. ADR-0049 rewritten in place.
 - **Acceptance / witness.** The `mcp.test.ts` cases of the spec: a production environment is refused, end-user strings
   come back under `untrusted`, `rawEvent` never leaves Operations.
 
@@ -79,38 +82,42 @@ and its reference and ADR changes are in.
 
 - **Problem.** Nobody watches a release after it ships, and a rollback is a manual redeploy whose safety the operator
   works out alone.
-- **Verify first.** Whether an older release boots on a schema that ran newer migrations, on either provider (the spec
-  never relies on it: any migration between the runs makes the verdict `migrated`).
-- **Scope.** [Spec](../specs/release-watch-window-and-rollback.md), slices 1–6: watch windows and verdicts in
+- **Verify first.** Whether a run can record the applied migration ledger of every bundle on each provider; where it
+  cannot (Zerops today), the verdict is `migrations_unknown` and nothing rolls back automatically.
+- **Scope.** [Spec](../specs/release-watch-window-and-rollback.md), slices 1–6: watch windows anchored to the run's
+  finish time, with an observed verdict (health checks Operations runs itself; the only one that may roll back
+  automatically) and a reported verdict (ingested errors, which anyone holding the DSN can forge; alerts only), in
   Operations, the `suspect_release` alert, the rollback verdict and `runs.rollback` in Control, opt-in automatic
   rollback, the MCP and fleet read-outs, docs. New ADR: a suspect release rolls back only when nothing migrated or
   widened between.
 - **Acceptance / witness.** The scoring table tests; a rollback across a migration is refused automatically and offered
-  manually with the migration list; a rollback run records `rollback_of`.
+  manually with the migration list; forged browser errors never start an automatic rollback; a replayed projection opens no
+  second window; a rollback run records `rollback_of`.
 
 ### WU5 — Access simulator (M)
 
 - **Problem.** "Why can this person not reach this page" has no answer in the console, and an agent that meets a 403
   tends to loosen the contract.
 - **Verify first.** That `Authorizer.authorize` runs unchanged against an in-memory IAM double (the simulator must call
-  the decision, never restate it).
+  the decision, never restate it), over the entry the provider actually publishes.
 - **Scope.** [Spec](../specs/access-simulator.md), slices 1–5: `@fabrika/proxy-core/simulate`, role-based answers in the
   console and as `explain_access`, real principals through IAM `access.preview`, a refused-request reference, people
   counts on the approval page. ADR-0022 §3 and ADR-0050 §7 gain a paragraph each.
 - **Acceptance / witness.** Every application case of the proxy's endpoint and deny matrices gives the same result
   through the real decision and through the simulator.
 
-### WU6 — Review widget on stage and dev (M, plus S–M for Zerops)
+### WU6 — Review widget on stage and dev (M, plus M for Zerops)
 
 - **Problem.** Stakeholders report on a stage application in chat with screenshots; the agent never sees a page,
   element or commit.
 - **Verify first.** That `window.opener` survives the proxy's COOP header for the sign-in popup, or that the fragment
   redirect works instead; and that a Caddy response-rewrite module streams gzip answers.
-- **Scope.** [Spec](../specs/review-widget-on-stage-and-dev.md), slices 1–5: threads, tickets and MCP tools in
-  Control; the widget's Control client; the manifest field and `HTMLRewriter` injection on Cloudflare; Caddy injection on
-  Zerops; an opice suite. New ADR: review threads live in Control, and the proxy may rewrite HTML for presentation only.
+- **Scope.** [Spec](../specs/review-widget-on-stage-and-dev.md), slices 1–4: threads, short tickets, the `review` scope
+  and MCP tools in Control; the widget with its CSP and `HTMLRewriter` injection on Cloudflare; Caddy injection on Zerops;
+  an opice suite. Reviewers are internal people in v1. New ADR: review threads live in Control, and the proxy may rewrite HTML for presentation only.
 - **Acceptance / witness.** The proxy Worker matrix: a stage HTML answer carries the script tag, a protected
-  environment's never does; the MCP witness creates and answers a thread.
+  environment's or `prod`'s never does; a comment made after a later deploy keeps the run that served the page; the MCP
+  witness creates and answers a thread.
 
 ### WU7 — Fleet overview (M + M)
 
@@ -122,7 +129,8 @@ and its reference and ADR changes are in.
   after retention (blocked by [backlog 203](../backlog/203-deleting-an-app-or-env-leaves-its-secrets-and-iam-keys.md)
   items 1–2). New ADR: an application environment is retired before it is deleted.
 - **Acceptance / witness.** The fleet read flags a lagging framework and an idle environment from fixtures; retire on
-  both providers backs up (or records an explicit "no backup" on Zerops), stops serving and revokes keys; restore undoes
+  both providers backs up (or records an explicit "no backup" on Zerops), stops serving, revokes keys and deletes their
+  records, refuses any credential but a person's; restore deploys with fresh keys and undoes
   it.
 
 ## Out of scope (explicit)
@@ -144,7 +152,8 @@ cost per application (WU7), stopping Zerops services on retire (WU7).
 The defaults each spec recommends, which the WUs build on unless the review changes them:
 
 1. **MCP reads no production events** (WU2). A per-installation switch comes with 269/270, not before.
-2. **The authoring scope is not widened** (WU2). Operations gets its own `operations` scope, because IAM resolves a
+2. **One scope per feature; `authoring` is not widened** (WU1, WU2, WU6). Operations tools get an `operations` scope and
+   review tools a `review` scope, and a task key picks which scopes it carries, because IAM resolves a
    scope's grants at each refresh and existing consents would gain Operations access silently.
 3. **A task key is an OAuth grant kind, not a `px_` key** (WU1). Its token is the same resource token MCP uses, so the
    proxy, the console table and Control's `/mcp` gate do not change. Issued only by a signed-in person, at most 24 h.
@@ -164,7 +173,7 @@ Agent-facing features build on WU1's `act` claim, so it lands first. The rest is
 | ---- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
 | 1    | WU1 slice 1 (`act` claim) · WU2 slices 1–3 · WU3 slice 1 (wider App) · WU5 slice 1 | Foundations: the identity agents act under, the agent's view of errors, the GitHub permission change existing Apps must re-approve |
 | 2    | WU1 slices 2–5 · WU3 slices 2–5 · WU4 slices 1–4 · WU5 slices 2–5                  | Task keys complete before anything runs unattended; the watch window needs only Operations and the approval diff                   |
-| 3    | WU6 slices 1–5 · WU7 slices 1–5 · WU4 slices 5–6                                   | The widget's agent replies carry `act`; the fleet view reads the watch window's verdict; WU4's read-outs need WU2 and WU7          |
+| 3    | WU6 slices 1–4 · WU7 slices 1–5 · WU4 slices 5–6                                   | The widget's agent replies carry `act`; WU4 slice 5 adds the verdict as a fleet column; WU4's read-outs need WU2 and WU7           |
 | —    | WU7 slice 6                                                                        | Waits for backlog 203 items 1–2                                                                                                    |
 
 WU3 slice 1 lands early on purpose: every installation's operator must re-approve the GitHub App before the check runs,

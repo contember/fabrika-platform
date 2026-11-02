@@ -32,10 +32,10 @@ commit that is only proposed.
 
 ### What exists
 
-- `readAccessSnapshot(commit, root, appId, settled)` (`packages/control/src/approval/read.ts:298`) reads a commit's
+- `readAccessSnapshot(commit, root, appId, settled)` (`packages/control/src/approval/read.ts:113`) reads a commit's
   contract, tables and migrations through the reader of the framework release the commit's `bun.lock` pins
   (`readerFor`, `packages/control/src/approval/readers.ts:165`). It executes nothing from the checkout and refuses with
-  fixed codes only (`SnapshotRefused`, `read.ts:275`).
+  fixed codes only (`SnapshotRefused`, `read.ts:90`).
 - `approvedSnapshot(appEnv)` (`packages/control/src/approval/snapshot.ts:170`) is the environment's published
   baseline, or the empty one.
 - `classifyAccess(baseline, candidate)` (`packages/control/src/approval/diff.ts:109`) is pure. It returns the outcome
@@ -85,7 +85,7 @@ classification repeats.
 
 Cost per push to a pull request: one snapshot read of the head, as a deploy pays. On Zerops that is one archive pass
 (ADR-0029). On Cloudflare it is the tree and the wanted files through the metadata client, counted against the
-installation's own limit, not the anonymous one. Bounds are `SNAPSHOT_LIMITS` (`read.ts:206`).
+installation's own limit, not the anonymous one. Bounds are `SNAPSHOT_LIMITS` (`read.ts:21`).
 
 **Dedupe.** A row in a new table, unique on `(app_id, env, head_sha, baseline_digest)`, records the candidate digest,
 outcome, stored classification, check run id and pull request number. A redelivered webhook, a reopened pull request
@@ -94,7 +94,8 @@ or a second `synchronize` to the same head finds the row and only re-posts the c
 
 **Stale baseline.** When an environment publishes a new generation, an open pull request's check still names the
 older baseline. The check summary says which baseline it read ("compared with the access `prod` published on
-<date>"). Slice 5 refreshes open pull requests after a publication; until then, "Re-run" recomputes.
+<date>"). Slice 5 refreshes open pull requests after a publication, selecting them by the same rule as the initial
+check; until then, "Re-run" recomputes.
 
 ### The check run
 
@@ -170,7 +171,7 @@ digest pair that a later run consumes when its digests match. That rewrites ADR-
   questions. The console page needs `deploy.read` at the coordinates.
 - **Vocabulary (ADR-0022).** The check is information. It is not enforcement (the proxy still makes the only
   decision), not authorization (the deploy approval still needs `access.approve` from a human user principal,
-  `packages/control/src/approval/human.ts:416`), and not admission. The webhook stays the one HMAC-authenticated
+  `packages/control/src/approval/human.ts:19`), and not admission. The webhook stays the one HMAC-authenticated
   protocol route.
 - **Logs.** The job logs codes and counts, as the run log does (`publish.ts:227-233`); never checkout text, a token
   or the error object.
@@ -218,8 +219,11 @@ digest pair that a later run consumes when its digests match. That rewrites ADR-
 4. **Console page (M).** `apps.environments.pullRequestAccess.get` and a read-only page that renders the stored
    classification with the approval page's components; `details_url` points to it. Witness: the procedure answers 404
    without `deploy.read` at the coordinates; the page renders a fixture.
-5. **Refresh after publication (S).** After a publication, enqueue the job for the open pull requests (bounded) whose
-   base the environment's trigger matches. Witness: a publication re-posts a stale check.
+5. **Refresh after publication (S).** After an environment publishes, enqueue the job for every open pull request
+   (bounded) whose compared set, by the selection rule of "Which environments are compared", includes that
+   environment: those whose base its trigger matches and, for a protected environment, every open pull request of the
+   app's repository. Witness: a publication re-posts a stale check, including a `prod` publication triggered by a
+   `refs/tags/v*` tag (`webhook.ts:58`, `poll.ts:145`), which refreshes a pull request to `main`.
 
 ## Open questions
 
