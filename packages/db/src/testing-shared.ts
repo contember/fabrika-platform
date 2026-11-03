@@ -94,11 +94,18 @@ export interface IsolationWorlds {
 	readonly own: WorldRow
 	readonly other: WorldRow
 	/**
-	 * Deletes both rows of the table and every row that refers to them, however deep; the containers stay. A case whose
-	 * rows hold pinned values removes them, so the next case can pin the same values again under a unique index.
+	 * Deletes both rows of the table it inserted, the container rows it inserted for a known scope value, and every row
+	 * that refers to them, however deep; the other containers stay. A case whose rows hold pinned values or known scope
+	 * values removes them, so the next case can seed the same values again under a unique index.
 	 */
 	readonly remove: () => Promise<void>
 }
+
+/**
+ * Known values of dimensions, by dimension: the own world's and the other world's, which differ. A dimension whose values
+ * are a fixed set (an enum the input names it by) takes these instead of fresh ones.
+ */
+export type ScopeValues = Readonly<Record<string, { readonly own: string; readonly other: string }>>
 
 /** What a test kit seeds through, over its migrated schema. */
 export interface TestSeeding {
@@ -108,13 +115,16 @@ export interface TestSeeding {
 	 * marker, so a seed of one, or of a column that places the row, throws. `pins` (column → value) give a text column of
 	 * `table` a known value instead of its marker: the value in the own row, and `<value>-other` in the other row, which
 	 * counts among the other row's markers, so a leak of it is still found. A pin of a column that places the row, or of
-	 * no text column, throws.
+	 * no text column, throws. `scopes` place each world in known values of a dimension instead of fresh ones: a row of
+	 * the table that owns it with that key is used as it is stored (a migration wrote it), its containers' values with it,
+	 * and is inserted otherwise. A stored row of `table` itself takes no `values` or `pins`: they throw.
 	 */
 	seedWorlds<DB, P>(
 		tables: Tables<DB, P>,
 		table: string,
 		values?: Readonly<Record<string, SampleValue>>,
 		pins?: Readonly<Record<string, string>>,
+		scopes?: ScopeValues,
 	): Promise<IsolationWorlds>
 	/**
 	 * Seeds one row of the application table `table`: its key, version and creator stamped, `values` (column → value)
@@ -245,8 +255,12 @@ export interface SeedingBackend {
 	 * (`checkLimit`, `foreignKeyLimit`, `uniqueValueLimit`).
 	 */
 	insert(table: string, values: ReadonlyMap<string, SampleValue>): Promise<Readonly<Record<string, unknown>>>
-	/** One row of `table`, of `columns`, or `undefined` when it has none. */
-	firstRow(table: string, columns: readonly string[]): Promise<Readonly<Record<string, unknown>> | undefined>
+	/** One row of `table` that holds `where` (column → value; every row when empty), of `columns`, or `undefined` when none does. */
+	firstRow(
+		table: string,
+		columns: readonly string[],
+		where?: ReadonlyMap<string, SampleValue>,
+	): Promise<Readonly<Record<string, unknown>> | undefined>
 	insertFile(file: SeededFile): Promise<void>
 	/**
 	 * Deletes `rows` (each found by its `match`; one already gone is skipped) and every row that refers to one of them,
@@ -673,35 +687,113 @@ export function testSeeding(backend: SeedingBackend): TestSeeding {
 	/** The value a pin gives the row of `world`: as written in the own row, distinct in the other. */
 	const pinnedValue = (value: string, world: string): string => (world === 'own' ? value : `${value}-${world}`)
 
+	/**
+	 * The dimension values the row of `owner` keyed `key` lies in, as the table stores it: its own, then each container's;
+	 * `undefined` when the table holds no such row.
+	 */
+	async function storedChain(owner: TableModel, key: string): Promise<ReadonlyMap<string, string> | undefined> {
+		const scope = owner.scope
+		if (scope.mode !== 'dimension') return undefined
+		const row = await backend.firstRow(owner.name, [scope.key, ...owner.chain.map((link) => link.column)], new Map([[scope.key, key]]))
+		if (row === undefined) return undefined
+		const chain = new Map([[scope.dimension, key]])
+		for (const link of owner.chain) chain.set(link.dimension, String(keyValue(row[link.column], `${owner.name}.${link.column}`)))
+		return chain
+	}
+
+	/**
+	 * The dimension values a row of `model` lies in for `world`, as far as `scopes` know them: each known value, and every
+	 * value a stored row of a known one holds. `stored` are the dimensions whose row a table holds already.
+	 */
+	async function knownValues(
+		models: TableModels,
+		model: TableModel,
+		world: 'own' | 'other',
+		scopes: ScopeValues,
+	): Promise<{ readonly values: Map<string, string>; readonly stored: ReadonlySet<string> }> {
+		const own = model.scope.mode === 'dimension' ? [model.scope.dimension] : []
+		const dimensions = [...own, ...model.chain.map((link) => link.dimension)].filter((dimension) => Object.hasOwn(scopes, dimension))
+		const values = new Map<string, string>()
+		for (const dimension of dimensions) {
+			const known = scopes[dimension]
+			if (known !== undefined) values.set(dimension, world === 'own' ? known.own : known.other)
+		}
+		const stored = new Set<string>()
+		for (const dimension of dimensions) {
+			const owner = ownerOf(models, dimension)
+			const value = values.get(dimension)
+			const chain = owner === undefined || value === undefined ? undefined : await storedChain(owner, value)
+			for (const [type, found] of chain ?? []) {
+				const expected = values.get(type)
+				if (expected !== undefined && expected !== found) {
+					throw new Error(`the stored ${dimension} '${value}' lies in the ${type} '${found}', not in the known '${expected}'`)
+				}
+				values.set(type, found)
+				stored.add(type)
+			}
+		}
+		return { values, stored }
+	}
+
 	async function seedWorld(
 		models: TableModels,
 		model: TableModel,
-		world: string,
+		world: 'own' | 'other',
 		seed: Readonly<Record<string, SampleValue>>,
 		pins: Readonly<Record<string, string>>,
+		scopes: ScopeValues,
 		inserted: InsertedRow[],
 	): Promise<{ readonly world: Omit<WorldRow, 'updates'>; readonly row: ReadonlyMap<string, SampleValue> }> {
 		const markers: string[] = []
-		const values = new Map<string, string>()
-		const links: readonly Container[] = model.chain
-		for (const link of links) {
-			values.set(link.dimension, scopeValue(model.name, link.column, link.dimension, world))
-		}
 		const scope = model.scope
 		if (scope.mode !== 'dimension' && scope.mode !== 'child') {
 			throw new Error(`${model.name} is not a dimension or child table`)
 		}
-		const key = scopeValue(model.name, scope.key, scope.mode === 'dimension' ? scope.dimension : model.name, world)
-		if (scope.mode === 'dimension') {
-			values.set(scope.dimension, key)
+		const { values, stored } = await knownValues(models, model, world, scopes)
+		const links: readonly Container[] = model.chain
+		for (const link of links) {
+			if (!values.has(link.dimension)) values.set(link.dimension, scopeValue(model.name, link.column, link.dimension, world))
 		}
-		// Containers first, outermost first: a composite foreign key needs its target row.
+		const own = scope.mode === 'dimension' ? scope.dimension : undefined
+		const key = (own === undefined ? undefined : values.get(own)) ?? scopeValue(model.name, scope.key, own ?? model.name, world)
+		if (own !== undefined) {
+			values.set(own, key)
+		}
+		const worldRow = (row: ReadonlyMap<string, SampleValue>) => {
+			const chain = [
+				...(own === undefined ? [] : [{ type: own, value: key }]),
+				...links.flatMap((link) => {
+					const value = values.get(link.dimension)
+					return value === undefined ? [] : [{ type: link.dimension, value }]
+				}),
+			]
+			const seeded = {
+				key,
+				parent: scope.mode === 'child' ? (values.get(links[0]?.dimension ?? '') ?? null) : null,
+				scope: values.get(grantDimension(models, model)) ?? key,
+				chain,
+				markers,
+			}
+			return { world: seeded, row }
+		}
+		if (own !== undefined && stored.has(own)) {
+			if (Object.keys(seed).length > 0 || Object.keys(pins).length > 0) {
+				throw new Error(
+					`${model.name} already holds the ${own} '${key}' (a migration wrote it), so a case writes no seed or pin into it; seed the state of a row the case inserts`,
+				)
+			}
+			return worldRow(new Map())
+		}
+		// Containers first, outermost first: a composite foreign key needs its target row. A stored one is used as it is.
 		for (let index = links.length - 1; index >= 0; index--) {
 			const link = links[index]
 			const owner = link === undefined ? undefined : ownerOf(models, link.dimension)
 			const value = link === undefined ? undefined : values.get(link.dimension)
-			if (owner !== undefined && owner.name !== model.name && value !== undefined) {
-				await insert(models, owner.name, placement(owner, values, value), markers)
+			if (link === undefined || owner === undefined || owner.name === model.name || value === undefined || stored.has(link.dimension)) continue
+			await insert(models, owner.name, placement(owner, values, value), markers)
+			// A container of a known value goes with the worlds, so the next case can insert it again.
+			if (Object.hasOwn(scopes, link.dimension) && owner.scope.mode === 'dimension') {
+				inserted.push({ table: owner.name, match: new Map([[owner.scope.key, value]]) })
 			}
 		}
 		const assigned = placement(model, values, key)
@@ -731,22 +823,7 @@ export function testSeeding(backend: SeedingBackend): TestSeeding {
 		}
 		const { row } = await insert(models, model.name, assigned, markers)
 		inserted.push({ table: model.name, match: new Map([[scope.key, key]]) })
-		const dimension = grantDimension(models, model)
-		const chain = [
-			...(scope.mode === 'dimension' ? [{ type: scope.dimension, value: key }] : []),
-			...links.flatMap((link) => {
-				const value = values.get(link.dimension)
-				return value === undefined ? [] : [{ type: link.dimension, value }]
-			}),
-		]
-		const seeded = {
-			key,
-			parent: scope.mode === 'child' ? (values.get(links[0]?.dimension ?? '') ?? null) : null,
-			scope: values.get(dimension) ?? key,
-			chain,
-			markers,
-		}
-		return { world: seeded, row }
+		return worldRow(row)
 	}
 
 	/** A seeded row's values of the policy's update columns: as written, or a sample where the database filled the column. */
@@ -759,12 +836,15 @@ export function testSeeding(backend: SeedingBackend): TestSeeding {
 	}
 
 	return {
-		async seedWorlds(tables, table, values = {}, pins = {}) {
+		async seedWorlds(tables, table, values = {}, pins = {}, scopes = {}) {
 			const { models, model } = scopedModel(tables, table)
 			const dimension = grantDimension(models, model)
+			for (const [name, known] of Object.entries(scopes)) {
+				if (known.own === known.other) throw new Error(`the two worlds share the ${name} '${known.own}'; each needs a value of its own`)
+			}
 			const inserted: InsertedRow[] = []
-			const own = await seedWorld(models, model, 'own', values, pins, inserted)
-			const other = await seedWorld(models, model, 'other', values, pins, inserted)
+			const own = await seedWorld(models, model, 'own', values, pins, scopes, inserted)
+			const other = await seedWorld(models, model, 'other', values, pins, scopes, inserted)
 			// Sampled once both rows are written: a number a unique index covers is the next above what the table holds.
 			return {
 				dimension,

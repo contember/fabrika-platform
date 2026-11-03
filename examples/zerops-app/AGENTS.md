@@ -5832,6 +5832,11 @@ export const members = { 'api.tasks.assign': ['assignee'] }
   `{ 'api.integrations.connectGithub': { orgId: 'acme', account: 'installation:1' } }`. The checker names each missing one,
   and one of an endpoint that does not exist (`endpoint-fixture`). The access form's `from` field is
   replaced by the seeded scope.
+- A `from` field that admits a fixed set of values (`z.enum(['eu', 'us', 'apac'])`, a literal or a union of them) gets
+  two of them, the first two in sorted order, one per scope. A row the table that owns the dimension already holds
+  under that key (a migration wrote the regions) is used as it is; a row the case inserts is removed once it is over.
+  Such a stored row takes no `seeds` or `pins`, and a field of one value cannot be asked from two scopes: both fail the
+  case.
 - `members['<endpoint id>']` lists the input fields that name a picked person the handler checks with
   `ctx.members.get` (`assign`'s `assignee`). The generated cases send a real member of the object's org there; without
   it they send a sample, the handler answers 400, and the case fails.

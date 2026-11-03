@@ -19,7 +19,14 @@ import {
 } from '@fabrika/auth-core'
 import type { Tables } from '@fabrika/db'
 import { tablePolicies } from '@fabrika/db/tables'
-import { type IsolationWorlds, type SampleValue, SEEDED_OBJECT_VERSION, type TestDatabase, type WorldRow } from '@fabrika/db/testing'
+import {
+	type IsolationWorlds,
+	type SampleValue,
+	type ScopeValues,
+	SEEDED_OBJECT_VERSION,
+	type TestDatabase,
+	type WorldRow,
+} from '@fabrika/db/testing'
 import { MemoryFileObjects } from '@fabrika/platform/testing'
 import { readFile } from 'node:fs/promises'
 import { basename } from 'node:path'
@@ -150,18 +157,17 @@ type Refusals = 'declared' | 'none'
 
 /**
  * The pins of a case's endpoint (column → the own scope's value of a text column), and the removals of the case: rows
- * seeded with pins are removed once the case is over, so the next case can pin the same values under a unique index.
+ * seeded with pins or known scope values are removed once the case is over, so the next case can seed the same values
+ * under a unique index.
  */
 interface Pinning {
 	readonly pins: Readonly<Record<string, string>>
 	readonly removals: (() => Promise<void>)[]
 }
 
-const NO_PINNING: Pinning = { pins: {}, removals: [] }
-
-/** Seeded worlds, their removal taken by the case when they hold pinned values. */
-const pinned = <W extends { readonly remove: () => Promise<void> }>(worlds: W, pinning: Pinning): W => {
-	if (Object.keys(pinning.pins).length > 0) pinning.removals.push(worlds.remove)
+/** Seeded worlds, their removal taken by the case when they hold pinned values or known scope values. */
+const pinned = <W extends { readonly remove: () => Promise<void> }>(worlds: W, pinning: Pinning, scopes: ScopeValues): W => {
+	if (Object.keys(pinning.pins).length > 0 || Object.keys(scopes).length > 0) pinning.removals.push(worlds.remove)
 	return worlds
 }
 
@@ -252,6 +258,40 @@ function errorType(text: string): string | undefined {
 	}
 }
 
+/** The values a field admits when they are a fixed set: an enum, a string literal or a union of them; else `undefined`. */
+function fixedValues(field: SchemaShape | undefined): readonly string[] | undefined {
+	switch (field?.type) {
+		case 'enum':
+			return field.values
+		case 'literal':
+			return typeof field.value === 'string' ? [field.value] : undefined
+		case 'union': {
+			const options = field.options.map(fixedValues)
+			return options.every((values) => values !== undefined) ? [...new Set(options.flat())] : undefined
+		}
+		default:
+			return undefined
+	}
+}
+
+/**
+ * The values of `dimension` a case's two scopes take when the input field it is read from admits a fixed set: its first
+ * two, which a stored row of the table that owns it may already hold. None otherwise, so each scope gets a fresh value.
+ */
+function knownScopes(dimension: string, field: SchemaShape | undefined): ScopeValues {
+	const values = fixedValues(field)
+	if (values === undefined) return {}
+	const [own, other] = values
+	if (own === undefined || other === undefined) {
+		throw new Error(
+			`the input field a ${dimension} is read from admits only ${
+				values.map((value) => `'${value}'`).join(', ')
+			}, so no case can ask from two scopes of it; admit two values or more`,
+		)
+	}
+	return { [dimension]: { own, other } }
+}
+
 /** A scope value no table holds, in the format of the input field it is sent in. */
 function freshValue(dimension: string, world: 'own' | 'other', field: SchemaShape | undefined): string {
 	const format = field?.type === 'string' ? field.format : null
@@ -265,10 +305,15 @@ function fieldOf(input: SchemaShape | null, from: string | null): SchemaShape | 
 	return input?.type === 'object' && from !== null ? input.fields[from] : undefined
 }
 
-/** Every value of the other world a leak shows: its key, parent, every dimension value it lies in, and its markers. */
-function worldValues(worlds: IsolationWorlds, world: 'own' | 'other'): string[] {
+/**
+ * Every value of the other world a leak shows: its key, parent, every dimension value it lies in, and its markers. A
+ * known scope value is no such value: every case shares it, and as a short word it is part of unrelated text.
+ */
+function worldValues(worlds: IsolationWorlds, world: 'own' | 'other', scopes: ScopeValues): string[] {
 	const row = worlds[world]
-	return [...new Set([row.key, row.scope, ...(row.parent === null ? [] : [row.parent]), ...row.chain.map((link) => link.value), ...row.markers])]
+	const known = new Set(Object.values(scopes).flatMap((values) => [values.own, values.other]))
+	const values = [row.key, row.scope, ...(row.parent === null ? [] : [row.parent]), ...row.chain.map((link) => link.value), ...row.markers]
+	return [...new Set(values.filter((value) => !known.has(value)))]
 }
 
 /** The cases' scanner: a file it reads in full is clean, so a seeded upload of a `scan: true` collection is served. */
@@ -584,8 +629,9 @@ export function endpointAccessKit<DB, P>(
 	}
 
 	/**
-	 * Two scopes of `dimension`: rows of the table that owns it when one does, with `seed`, otherwise two fresh scope
-	 * values. Each row `input` names in the object (`rows`) is seeded in each scope's row.
+	 * Two scopes of `dimension`: rows of the table that owns it when one does, with `seed`, otherwise two scope values;
+	 * each fresh, or the known values of a field that admits a fixed set (`knownScopes`). Each row `input` names in the
+	 * object (`rows`) is seeded in each scope's row.
 	 */
 	const scopesOf = async (
 		action: string,
@@ -593,16 +639,17 @@ export function endpointAccessKit<DB, P>(
 		field: SchemaShape | undefined,
 		seed: Seed,
 		input: Readonly<Record<string, unknown>>,
-		pinning: Pinning = NO_PINNING,
+		pinning: Pinning,
 	): Promise<Scopes> => {
 		const named = rowFields(input)
 		const owner = ownerOf(dimension)
 		if (named.length > 0 && owner === undefined) {
 			throw new Error(`no table owns ${dimension}, so the kit seeds no ${named.map((row) => row.table).join(', ')} row in one`)
 		}
+		const scopes = knownScopes(dimension, field)
 		if (owner === undefined) {
-			const own = freshValue(dimension, 'own', field)
-			const other = freshValue(dimension, 'other', field)
+			const own = scopes[dimension]?.own ?? freshValue(dimension, 'own', field)
+			const other = scopes[dimension]?.other ?? freshValue(dimension, 'other', field)
 			return {
 				own: { target: own, grants: [{ action, scope: { type: dimension, value: own } }], chain: [{ type: dimension, value: own }], rows: {} },
 				other: {
@@ -614,7 +661,7 @@ export function endpointAccessKit<DB, P>(
 				},
 			}
 		}
-		const worlds = pinned(await postgres.seedWorlds(tables, owner, seed, pinning.pins), pinning)
+		const worlds = pinned(await postgres.seedWorlds(tables, owner, seed, pinning.pins, scopes), pinning, scopes)
 		const own = await rowsIn(worlds.own, named)
 		const other = await rowsIn(worlds.other, named)
 		return {
@@ -627,7 +674,7 @@ export function endpointAccessKit<DB, P>(
 			other: {
 				target: worlds.other.key,
 				grants: [{ action, scope: { type: worlds.dimension, value: worlds.other.scope } }],
-				values: [...worldValues(worlds, 'other'), ...other.values],
+				values: [...worldValues(worlds, 'other', scopes), ...other.values],
 				chain: worlds.other.chain,
 				rows: other.rows,
 			},
@@ -647,7 +694,7 @@ export function endpointAccessKit<DB, P>(
 	}
 
 	/** For a list of `dimension`: one row in each scope of every table listed by it; each caller holds every scope of its side. */
-	const listScopesOf = async (action: string, dimension: string): Promise<Scopes> => {
+	const listScopesOf = async (action: string, dimension: string, pinning: Pinning): Promise<Scopes> => {
 		const own: Grant[] = []
 		const other: Grant[] = []
 		const values: string[] = []
@@ -656,11 +703,11 @@ export function endpointAccessKit<DB, P>(
 				const worlds = await postgres.seedWorlds(tables, name)
 				own.push({ action, scope: { type: dimension, value: worlds.own.scope } })
 				other.push({ action, scope: { type: dimension, value: worlds.other.scope } })
-				values.push(...worldValues(worlds, 'other'))
+				values.push(...worldValues(worlds, 'other', {}))
 			}
 		}
 		if (own.length === 0) {
-			return scopesOf(action, dimension, undefined, {}, {})
+			return scopesOf(action, dimension, undefined, {}, {}, pinning)
 		}
 		return { own: { target: '', grants: own, chain: [], rows: {} }, other: { target: '', grants: other, values, chain: [], rows: {} } }
 	}
@@ -669,17 +716,19 @@ export function endpointAccessKit<DB, P>(
 	 * For a report `in` `dimension`: one row in each scope of every table that lies in it, the table that owns it with
 	 * `seed`. Each side's targets are its rows' values of `dimension`, and each caller holds all of them.
 	 */
-	const inScopesOf = async (action: string, dimension: string, field: SchemaShape | undefined, seed: Seed, pinning: Pinning = NO_PINNING) => {
+	const inScopesOf = async (action: string, dimension: string, field: SchemaShape | undefined, seed: Seed, pinning: Pinning) => {
 		const own: InTarget[] = []
 		const other: InTarget[] = []
 		const values: string[] = []
+		const scopes = knownScopes(dimension, field)
+		const unpinned = { pins: {}, removals: pinning.removals }
 		for (const name of tableNames) {
 			const mode = policies[name]?.scope.mode
 			if (mode !== 'dimension' && mode !== 'child') continue
 			const owned = name === ownerOf(dimension)
 			const worlds = owned
-				? pinned(await postgres.seedWorlds(tables, name, seed, pinning.pins), pinning)
-				: await postgres.seedWorlds(tables, name)
+				? pinned(await postgres.seedWorlds(tables, name, seed, pinning.pins, scopes), pinning, scopes)
+				: pinned(await postgres.seedWorlds(tables, name, {}, {}, scopes), unpinned, scopes)
 			const ownAt = worlds.own.chain.findIndex((link) => link.type === dimension)
 			const otherAt = worlds.other.chain.findIndex((link) => link.type === dimension)
 			const ownValue = worlds.own.chain[ownAt]?.value
@@ -687,7 +736,7 @@ export function endpointAccessKit<DB, P>(
 			if (ownValue !== undefined && otherValue !== undefined) {
 				own.push({ target: ownValue, chain: worlds.own.chain.slice(ownAt) })
 				other.push({ target: otherValue, chain: worlds.other.chain.slice(otherAt) })
-				values.push(...worldValues(worlds, 'other'))
+				values.push(...worldValues(worlds, 'other', scopes))
 			}
 		}
 		if (own.length === 0) {
@@ -824,7 +873,7 @@ export function endpointAccessKit<DB, P>(
 		if (owner === undefined) {
 			throw new Error(`${row.id}: no table owns ${access.dimension}, so no link can be bound to one`)
 		}
-		const { own } = pinned(await postgres.seedWorlds(tables, owner, seed, pinning.pins), pinning)
+		const { own } = pinned(await postgres.seedWorlds(tables, owner, seed, pinning.pins), pinning, {})
 		const holder = kit.testCaller([{ action: row.action, scope: { type: access.dimension, value: own.key } }], {
 			kind: 'link',
 			link: { mount, chain: own.chain },
@@ -843,6 +892,8 @@ export function endpointAccessKit<DB, P>(
 	const accessKitOf = (removals: (() => Promise<void>)[]): EndpointAccessKit => {
 		/** The pins of `endpoint`, whose seeded rows this call removes once it is over. */
 		const pinningOf = (endpoint: string): Pinning => ({ pins: options.pins?.[endpoint] ?? {}, removals })
+		/** No pins, and the removals of this call: for a scope a case seeds beside its endpoint's own. */
+		const unpinned: Pinning = { pins: {}, removals }
 
 		/** One row of each application table `appRows` names, for this call only. */
 		const seedAppRows = async (appRows: AppRows): Promise<void> => {
@@ -887,7 +938,7 @@ export function endpointAccessKit<DB, P>(
 				await seedAppRows(appRows)
 				const scopes = access.form === 'on'
 					? await scopesOf(action, access.dimension, fieldOf(row.input, access.from), seed, input, pinningOf(endpoint))
-					: await listScopesOf(action, access.dimension)
+					: await listScopesOf(action, access.dimension, unpinned)
 				const from = access.form === 'on' ? access.from : null
 				// The other scope asks first, to fill whatever a handler keeps between requests; its pins differ from the own
 				// scope's, so a refusal the fixtures declare is its answer too. The own scope's answer is the one checked.
@@ -977,7 +1028,7 @@ export function endpointAccessKit<DB, P>(
 					if (other.access.form === 'over') {
 						grants.push({ action: other.action, scope: { type: other.access.dimension, value: crypto.randomUUID() } })
 					} else if (other.access.form === 'on' || other.access.form === 'in') {
-						const { own } = await scopesOf(other.action, other.access.dimension, fieldOf(other.input, other.access.from), {}, input)
+						const { own } = await scopesOf(other.action, other.access.dimension, fieldOf(other.input, other.access.from), {}, input, unpinned)
 						asked = addressing(asked, other.access.from, own)
 						grants.push(...own.grants)
 					}

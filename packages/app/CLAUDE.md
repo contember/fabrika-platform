@@ -1020,7 +1020,8 @@ vocabulary (`packages/db/CLAUDE.md`).
   the answer a leak case checks, and a global or capability case, throw on it, as on every other 400.
   `EndpointAccessOptions.pins` give text columns of the addressed row known values (`seedWorlds`' `pins`: the own row's
   value, `<value>-other` in the other row, among its markers), so a handler that ties a column to a file fixture
-  answers the own scope in full. Its cases are `denied` (exact 404/403),
+  answers the own scope in full. A `from` field that admits a fixed set (an enum) gives the two scopes its first two
+  values (`knownScopes`), never counted as leaked values, and the case removes what it seeded in them. Its cases are `denied` (exact 404/403),
   `leaked` (`{ answered, leaked }`: answered unless a 401, 403, 404 or 5xx, so a precondition's 409 passes; `in`
   across every table that lies in the dimension), and `own` (a caller with only the endpoint's action, or a link
   holder, reaches its own object; on an endpoint that manages members, also on the target's value one assigning role
