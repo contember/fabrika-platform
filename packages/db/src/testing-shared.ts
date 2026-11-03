@@ -151,11 +151,11 @@ export interface TestSeeding {
 		rows: Readonly<Record<string, Readonly<Record<string, SampleValue>>>>,
 	): Promise<SeededApplicationRows>
 	/**
-	 * Seeds one row of `table`, a child or dimension table that lies in the object of `under` (a row `seedWorlds`
-	 * seeded), placed in that row's chain: the row a fixture names by id, such as a note's comment. Answers its key and
-	 * the markers it holds.
+	 * Seeds one row of `table`, a child or dimension table that lies in the object `under`'s chain starts at (a row
+	 * `seedWorlds` seeded, or a value of its chain with the values outside it), placed in that chain: the row a fixture
+	 * names by id, such as a note's comment. Answers its key and the markers it holds.
 	 */
-	seedUnder<DB, P>(tables: Tables<DB, P>, table: string, under: WorldRow): Promise<SeededRow>
+	seedUnder<DB, P>(tables: Tables<DB, P>, table: string, under: Pick<WorldRow, 'chain'>): Promise<SeededRow>
 	/**
 	 * Values for the policy's insert columns of `table` that its schema accepts: every required one, sampled; a file
 	 * column a seeded file. `beside` is a row `seedWorlds` seeded that the inserted row will lie beside, in the same

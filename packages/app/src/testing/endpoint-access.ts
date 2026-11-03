@@ -19,14 +19,7 @@ import {
 } from '@fabrika/auth-core'
 import type { Tables } from '@fabrika/db'
 import { tablePolicies } from '@fabrika/db/tables'
-import {
-	type IsolationWorlds,
-	type SampleValue,
-	type ScopeValues,
-	SEEDED_OBJECT_VERSION,
-	type TestDatabase,
-	type WorldRow,
-} from '@fabrika/db/testing'
+import { type IsolationWorlds, type SampleValue, type ScopeValues, SEEDED_OBJECT_VERSION, type TestDatabase } from '@fabrika/db/testing'
 import { MemoryFileObjects } from '@fabrika/platform/testing'
 import { readFile } from 'node:fs/promises'
 import { basename } from 'node:path'
@@ -41,6 +34,7 @@ import {
 	GENERATED_INVITATION,
 	GENERATED_LINK,
 	GENERATED_MEMBER,
+	GENERATED_ROW_CAPABILITY,
 	GENERATED_ROW_PREFIX,
 } from '../contract/defaults'
 import type { AnyContract } from '../contract/define'
@@ -209,11 +203,19 @@ interface Scopes {
 	readonly other: Side & { readonly values: readonly string[] }
 }
 
-/** The input fields that name a row the kit seeds in the case's object (`rows`), with the row's table. */
-function rowFields(input: Readonly<Record<string, unknown>>): readonly { readonly field: string; readonly table: string }[] {
-	return Object.entries(input).flatMap(([field, value]) =>
-		typeof value === 'string' && value.startsWith(GENERATED_ROW_PREFIX) ? [{ field, table: value.slice(GENERATED_ROW_PREFIX.length) }] : []
-	)
+/**
+ * The input fields that name a row the kit seeds in the case's scopes (`rows`), with the row's table and, on an endpoint
+ * of several capabilities, the capability whose scope it lies in.
+ */
+function rowFields(
+	input: Readonly<Record<string, unknown>>,
+): readonly { readonly field: string; readonly table: string; readonly capability: string | null }[] {
+	return Object.entries(input).flatMap(([field, value]) => {
+		if (typeof value !== 'string' || !value.startsWith(GENERATED_ROW_PREFIX)) return []
+		const named = value.slice(GENERATED_ROW_PREFIX.length)
+		const at = named.indexOf(GENERATED_ROW_CAPABILITY)
+		return [at === -1 ? { field, table: named, capability: null } : { field, table: named.slice(0, at), capability: named.slice(at + 1) }]
+	})
 }
 
 /** A case's input, and the values it named that only its own scope may see in an answer: a generated member's id and label. */
@@ -222,11 +224,15 @@ interface Addressed {
 	readonly marks: readonly string[]
 }
 
-/** One target of an `in` report, with its chain from the target outward. */
+/** One target of an `in` report, with its chain from the target outward, and the key of each row `rows` names in it. */
 interface InTarget {
 	readonly target: string
 	readonly chain: Chain
+	readonly rows: Readonly<Record<string, string>>
 }
+
+/** An input field that names a row the kit seeds (`rows`), with the row's table. */
+type RowField = ReturnType<typeof rowFields>[number]
 
 export type Grant =
 	| { readonly action: string; readonly scope: { readonly type: string; readonly value: string } }
@@ -638,18 +644,17 @@ export function endpointAccessKit<DB, P>(
 
 	/**
 	 * Two scopes of `dimension`: rows of the table that owns it when one does, with `seed`, otherwise two scope values;
-	 * each fresh, or the known values of a field that admits a fixed set (`knownScopes`). Each row `input` names in the
-	 * object (`rows`) is seeded in each scope's row.
+	 * each fresh, or the known values of a field that admits a fixed set (`knownScopes`). Each row `named` (`rows`) is
+	 * seeded in each scope's object.
 	 */
 	const scopesOf = async (
 		action: string,
 		dimension: string,
 		field: SchemaShape | undefined,
 		seed: Seed,
-		input: Readonly<Record<string, unknown>>,
+		named: readonly RowField[],
 		pinning: Pinning,
 	): Promise<Scopes> => {
-		const named = rowFields(input)
 		const owner = ownerOf(dimension)
 		if (named.length > 0 && owner === undefined) {
 			throw new Error(`no table owns ${dimension}, so the kit seeds no ${named.map((row) => row.table).join(', ')} row in one`)
@@ -672,8 +677,8 @@ export function endpointAccessKit<DB, P>(
 		const worlds = pinned(await postgres.seedWorlds(tables, owner, seed, pinning.pins, scopes), pinning, scopes)
 		// A row under a stored scope value outlives the worlds' removal, so the case removes it itself.
 		const removals = Object.keys(scopes).length > 0 ? pinning.removals : []
-		const own = await rowsIn(worlds.own, named, removals)
-		const other = await rowsIn(worlds.other, named, removals)
+		const own = await rowsIn(worlds.own.chain, named, removals)
+		const other = await rowsIn(worlds.other.chain, named, removals)
 		return {
 			own: {
 				target: worlds.own.key,
@@ -692,14 +697,14 @@ export function endpointAccessKit<DB, P>(
 	}
 
 	/**
-	 * One row of each named table seeded in `object`: its key by input field, and every key and marker it holds. Each
-	 * row's removal goes to `removals`.
+	 * One row of each named table seeded in the object `chain` starts at: its key by input field, and every key and marker
+	 * it holds. Each row's removal goes to `removals`.
 	 */
-	const rowsIn = async (object: WorldRow, named: ReturnType<typeof rowFields>, removals: (() => Promise<void>)[]) => {
+	const rowsIn = async (chain: Chain, named: readonly RowField[], removals: (() => Promise<void>)[]) => {
 		const rows: Record<string, string> = {}
 		const values: string[] = []
 		for (const { field, table } of named) {
-			const seeded = await postgres.seedUnder(tables, table, object)
+			const seeded = await postgres.seedUnder(tables, table, { chain })
 			removals.push(seeded.remove)
 			rows[field] = seeded.key
 			values.push(seeded.key, ...seeded.markers)
@@ -707,8 +712,11 @@ export function endpointAccessKit<DB, P>(
 		return { rows, values }
 	}
 
-	/** For a list of `dimension`: one row in each scope of every table listed by it; each caller holds every scope of its side. */
-	const listScopesOf = async (action: string, dimension: string, pinning: Pinning): Promise<Scopes> => {
+	/**
+	 * For a list of `dimension`: one row in each scope of every table listed by it, and of each table `named` (`rows`),
+	 * whose key goes in its field; each caller holds every scope of its side.
+	 */
+	const listScopesOf = async (action: string, dimension: string, named: readonly RowField[], pinning: Pinning): Promise<Scopes> => {
 		const own: Grant[] = []
 		const other: Grant[] = []
 		const values: string[] = []
@@ -721,16 +729,51 @@ export function endpointAccessKit<DB, P>(
 			}
 		}
 		if (own.length === 0) {
-			return scopesOf(action, dimension, undefined, {}, {}, pinning)
+			return scopesOf(action, dimension, undefined, {}, named, pinning)
 		}
-		return { own: { target: '', grants: own, chain: [], rows: {} }, other: { target: '', grants: other, values, chain: [], rows: {} } }
+		const listed = await listedRows(action, dimension, named)
+		return {
+			own: { target: '', grants: [...own, ...listed.own.grants], chain: [], rows: listed.own.rows },
+			other: { target: '', grants: [...other, ...listed.other.grants], values: [...values, ...listed.values], chain: [], rows: listed.other.rows },
+		}
+	}
+
+	/**
+	 * One row of each table `named` (`rows`) in each of two scopes of `dimension`, which lists it: the grants of `action`
+	 * that reach it, its key by input field, and every value of the other scope's rows.
+	 */
+	const listedRows = async (action: string, dimension: string, named: readonly RowField[]) => {
+		const ownGrants: Grant[] = []
+		const otherGrants: Grant[] = []
+		const ownRows: Record<string, string> = {}
+		const otherRows: Record<string, string> = {}
+		const values: string[] = []
+		for (const { field, table } of named) {
+			if (listDimensionOf(table) !== dimension) {
+				throw new Error(`a list of ${dimension} reaches no ${table} row, so the kit seeds none for ${field}`)
+			}
+			const worlds = await postgres.seedWorlds(tables, table)
+			ownGrants.push({ action, scope: { type: dimension, value: worlds.own.scope } })
+			otherGrants.push({ action, scope: { type: dimension, value: worlds.other.scope } })
+			ownRows[field] = worlds.own.key
+			otherRows[field] = worlds.other.key
+			values.push(...worldValues(worlds, 'other', {}))
+		}
+		return { own: { grants: ownGrants, rows: ownRows }, other: { grants: otherGrants, rows: otherRows }, values }
 	}
 
 	/**
 	 * For a report `in` `dimension`: one row in each scope of every table that lies in it, the table that owns it with
 	 * `seed`. Each side's targets are its rows' values of `dimension`, and each caller holds all of them.
 	 */
-	const inScopesOf = async (action: string, dimension: string, field: SchemaShape | undefined, seed: Seed, pinning: Pinning) => {
+	const inScopesOf = async (
+		action: string,
+		dimension: string,
+		field: SchemaShape | undefined,
+		seed: Seed,
+		named: readonly RowField[],
+		pinning: Pinning,
+	) => {
 		const own: InTarget[] = []
 		const other: InTarget[] = []
 		const values: string[] = []
@@ -750,13 +793,18 @@ export function endpointAccessKit<DB, P>(
 			const ownValue = worlds.own.chain[ownAt]?.value
 			const otherValue = worlds.other.chain[otherAt]?.value
 			if (ownValue !== undefined && otherValue !== undefined) {
-				own.push({ target: ownValue, chain: worlds.own.chain.slice(ownAt) })
-				other.push({ target: otherValue, chain: worlds.other.chain.slice(otherAt) })
-				values.push(...worldValues(worlds, 'other', scopes))
+				const ownChain = worlds.own.chain.slice(ownAt)
+				const otherChain = worlds.other.chain.slice(otherAt)
+				const removals = Object.keys(scopes).length > 0 ? pinning.removals : []
+				const ownRows = await rowsIn(ownChain, named, removals)
+				const otherRows = await rowsIn(otherChain, named, removals)
+				own.push({ target: ownValue, chain: ownChain, rows: ownRows.rows })
+				other.push({ target: otherValue, chain: otherChain, rows: otherRows.rows })
+				values.push(...worldValues(worlds, 'other', scopes), ...otherRows.values)
 			}
 		}
 		if (own.length === 0) {
-			const scopes = await scopesOf(action, dimension, field, seed, {}, pinning)
+			const scopes = await scopesOf(action, dimension, field, seed, named, pinning)
 			return { own: [scopes.own], other: [scopes.other], values: scopes.other.values }
 		}
 		return { own, other, values }
@@ -899,7 +947,7 @@ export function endpointAccessKit<DB, P>(
 			headers.set('Authorization', `Bearer ${holder.key ?? ''}`)
 			return kit.fetch(request, { ...init, headers })
 		}
-		return { fetch, rows: (await rowsIn(own, rowFields(input), [])).rows }
+		return { fetch, rows: (await rowsIn(own.chain, rowFields(input), [])).rows }
 	}
 
 	// The cases of one call: `removals` takes the removal of the application rows it seeds, which `drained` runs once
@@ -924,7 +972,7 @@ export function endpointAccessKit<DB, P>(
 				if (access.form !== 'on' && access.form !== 'in') {
 					throw new Error(`${endpoint} has the access form ${access.form}; only on and in name an object or a scope value`)
 				}
-				const scopes = await scopesOf(action, access.dimension, fieldOf(row.input, access.from), seed, input, pinningOf(endpoint))
+				const scopes = await scopesOf(action, access.dimension, fieldOf(row.input, access.from), seed, rowFields(input), pinningOf(endpoint))
 				const asked = addressing(input, access.from, scopes.other)
 				const { status } = await ask(row, holding(row, input, scopes.own.grants, scopes.own.chain), asked, scopes.own.chain)
 				return { status }
@@ -934,7 +982,7 @@ export function endpointAccessKit<DB, P>(
 				const { action, access } = row
 				if (access.form === 'in') {
 					await seedAppRows(appRows)
-					const scopes = await inScopesOf(action, access.dimension, fieldOf(row.input, access.from), seed, pinningOf(endpoint))
+					const scopes = await inScopesOf(action, access.dimension, fieldOf(row.input, access.from), seed, rowFields(input), pinningOf(endpoint))
 					const grants = (targets: readonly InTarget[]): Grant[] =>
 						targets.flatMap(({ target, chain }) => holding(row, input, [{ action, scope: { type: access.dimension, value: target } }], chain))
 					const marks: string[] = []
@@ -953,8 +1001,8 @@ export function endpointAccessKit<DB, P>(
 				}
 				await seedAppRows(appRows)
 				const scopes = access.form === 'on'
-					? await scopesOf(action, access.dimension, fieldOf(row.input, access.from), seed, input, pinningOf(endpoint))
-					: await listScopesOf(action, access.dimension, unpinned)
+					? await scopesOf(action, access.dimension, fieldOf(row.input, access.from), seed, rowFields(input), pinningOf(endpoint))
+					: await listScopesOf(action, access.dimension, rowFields(input), unpinned)
 				const from = access.form === 'on' ? access.from : null
 				// The other scope asks first, to fill whatever a handler keeps between requests; its pins differ from the own
 				// scope's, so a refusal the fixtures declare is its answer too. The own scope's answer is the one checked.
@@ -985,7 +1033,7 @@ export function endpointAccessKit<DB, P>(
 					const { status } = await askAs(row, holder.fetch, { ...input, ...holder.rows }, 'declared')
 					return { status }
 				}
-				const scopes = await scopesOf(action, access.dimension, fieldOf(row.input, access.from), seed, input, pinningOf(endpoint))
+				const scopes = await scopesOf(action, access.dimension, fieldOf(row.input, access.from), seed, rowFields(input), pinningOf(endpoint))
 				const { status } = await ask(
 					row,
 					holding(row, input, scopes.own.grants, scopes.own.chain),
@@ -1034,11 +1082,18 @@ export function endpointAccessKit<DB, P>(
 						`${endpoint}: capability '${capability}' has no denied case: '${ruledOutBy}' needs its action too, ${named.action}, in a related dimension, so every caller that passes it is answered the list`,
 					)
 				}
+				const fields = rowFields(input)
+				for (const { field, capability: placed } of fields) {
+					if (placed === null || !capabilities.has(placed)) {
+						throw new Error(`${endpoint}: ${field} names a row in the scope of no capability of it, so the kit does not know where to seed it`)
+					}
+				}
+				const rowsOf = (name: string): RowField[] => fields.filter((field) => field.capability === name)
 				const grants: Grant[] = []
 				let asked = input
 				// The named one first: a known value another one's seed inserted would pass for a stored row, which takes no seed.
 				if (access.form === 'on' || access.form === 'in') {
-					const scopes = await scopesOf(named.action, access.dimension, fieldOf(named.input, access.from), seed, input, pinningOf(endpoint))
+					const scopes = await scopesOf(named.action, access.dimension, fieldOf(named.input, access.from), seed, rowsOf(capability), pinningOf(endpoint))
 					asked = addressing(asked, access.from, scopes.other)
 					grants.push(...scopes.own.grants)
 				}
@@ -1046,14 +1101,20 @@ export function endpointAccessKit<DB, P>(
 					if (name === capability) continue
 					// Each other one in a scope of its own, apart from the named one's: a global grant would also meet the named
 					// capability when both share an action. An `over` one lists from any value it is held in, so a fresh uuid does,
-					// a valid key whether the dimension's is text or uuid, and no row of it is seeded.
+					// a valid key whether the dimension's is text or uuid; it also holds the scope of each row it names.
 					if (other.access.form === 'over') {
-						grants.push({ action: other.action, scope: { type: other.access.dimension, value: crypto.randomUUID() } })
+						const listed = await listedRows(other.action, other.access.dimension, rowsOf(name))
+						grants.push({ action: other.action, scope: { type: other.access.dimension, value: crypto.randomUUID() } }, ...listed.own.grants)
+						asked = { ...asked, ...listed.own.rows }
 					} else if (other.access.form === 'on' || other.access.form === 'in') {
-						const { own } = await scopesOf(other.action, other.access.dimension, fieldOf(other.input, other.access.from), {}, input, unpinned)
+						const { own } = await scopesOf(other.action, other.access.dimension, fieldOf(other.input, other.access.from), {}, rowsOf(name), unpinned)
 						asked = addressing(asked, other.access.from, own)
 						grants.push(...own.grants)
 					}
+				}
+				if (access.form === 'over') {
+					// The caller holds the named action nowhere it lists, so its rows lie in a scope of their own.
+					asked = { ...asked, ...(await listedRows(named.action, access.dimension, rowsOf(capability))).other.rows }
 				}
 				const { status } = await askAs(named, callerFor(named, grants).fetch, asked)
 				return { status }

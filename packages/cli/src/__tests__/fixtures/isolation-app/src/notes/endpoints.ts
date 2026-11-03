@@ -5,6 +5,7 @@ import { app } from '../app-kit'
 import {
 	ById,
 	ByNote,
+	ByRoot,
 	CancelInvitation,
 	Comments,
 	Count,
@@ -12,6 +13,7 @@ import {
 	EditComment,
 	Invite,
 	Invited,
+	LookUp,
 	Members,
 	Named,
 	NamedList,
@@ -19,6 +21,7 @@ import {
 	Note,
 	Notes,
 	Notice,
+	Relate,
 	RemoveMember,
 	Rename,
 	Share,
@@ -86,6 +89,36 @@ export const notes = app.group({ callers: ['human'] }, (r) => ({
 		}),
 	editComment: r.mutation({ input: EditComment, output: Done, access: { action: 'notes.write', on: 'note', from: 'id' } })
 		.handle(async ({ input, ctx }) => ({ id: (await ctx.db.target.note_comments.update(input.commentId, { body: input.body })).id })),
+	// A note of the workspace by its id, a row the generated cases seed in each scope (`rows`).
+	lookUp: r.query({ input: LookUp, output: Note, access: { action: 'notes.read', in: 'workspace', from: 'workspaceId' } })
+		.handle(async ({ input, ctx }) => {
+			const [note] = (await ctx.db.target.notes.list({ where: [['id', '=', input.noteId]] })).items
+			if (note === undefined) throw new NotFoundError('the workspace holds no such note')
+			return { id: note.id, title: note.title }
+		}),
+	// The thread from a root note, which answers 404 when the caller lists no workspace that holds it.
+	thread: r.query({ input: ByRoot, output: Notes, access: { action: 'notes.read', over: 'workspace' } })
+		.handle(async ({ input, ctx }) => {
+			const [root] = (await ctx.db.within.notes.list({ where: [['id', '=', input.rootId]] })).items
+			if (root === undefined) throw new NotFoundError('no listed workspace holds the root note')
+			return { items: [{ id: root.id, title: root.title }] }
+		}),
+	relate: r.query({
+		input: Relate,
+		output: Done,
+		access: {
+			capabilities: {
+				source: { action: 'notes.read', over: 'workspace' },
+				target: { action: 'workspaces.read', in: 'organization', from: 'organizationId' },
+			},
+		},
+	}).handle(async ({ input, ctx }) => {
+		const [note] = (await ctx.db.over(ctx.capabilities.source).notes.list({ where: [['id', '=', input.noteId]] })).items
+		if (note === undefined) throw new NotFoundError('no listed workspace holds the note')
+		const [workspace] = (await ctx.db.in(ctx.capabilities.target).workspaces.list({ where: [['id', '=', input.intoId]] })).items
+		if (workspace === undefined) throw new NotFoundError('the organization holds no such workspace')
+		return { id: `${note.id}:${workspace.id}` }
+	}),
 	share: r.mutation({ input: Share, output: Shared, access: { action: 'notes.share', on: 'note', from: 'id' }, issues: 'shared' })
 		.handle(async ({ input, ctx }) => {
 			const link = await ctx.links.issue(ctx.target, { mount: 'shared', days: input.days })

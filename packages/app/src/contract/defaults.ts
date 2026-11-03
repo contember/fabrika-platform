@@ -262,10 +262,13 @@ export const GENERATED_LINK = 'fabrika:link'
 
 /**
  * The prefix of the value a generated endpoint access case sends in an input field that names a row lying in its object
- * (`rows` of `endpoint-access.fixtures.ts`), followed by the row's table: `fabrika:row:note_comments`. The endpoint
- * access kit seeds one such row in each scope's object and sends that scope's key.
+ * or its list (`rows` of `endpoint-access.fixtures.ts`), followed by the row's table: `fabrika:row:note_comments`. The
+ * endpoint access kit seeds one such row in each scope and sends that scope's key.
  */
 export const GENERATED_ROW_PREFIX = 'fabrika:row:'
+
+/** What follows a row's table when the row lies in the scope of one capability of an endpoint of several: `@<name>`. */
+export const GENERATED_ROW_CAPABILITY = '@'
 
 /**
  * The prefix of the value a generated endpoint access case sends in a file field, followed by the field's file kind:

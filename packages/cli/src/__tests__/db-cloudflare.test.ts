@@ -143,6 +143,6 @@ describe('the generated tests on Cloudflare', () => {
 		const root = isolationApp(CLOUDFLARE_CONFIG)
 		symlinkSync(join(import.meta.dir, '..', '..', 'node_modules'), join(root, 'node_modules'))
 		await run(root, 'test-scaffold')
-		expect(await run(root, 'test-isolation', [], { PATH: process.env['PATH'] })).toBe('104 generated cases passed\n')
+		expect(await run(root, 'test-isolation', [], { PATH: process.env['PATH'] })).toBe('108 generated cases passed\n')
 	})
 })

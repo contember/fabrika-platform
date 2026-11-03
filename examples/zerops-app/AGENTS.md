@@ -5849,12 +5849,13 @@ export const members = { 'api.tasks.assign': ['assignee'] }
   endpoint's dimension in both scopes: `close` answers 409 for an open task, so the seed makes it `doing`. A seed
   sets neither a column that places the row nor a text column that holds a marker; a text column a CHECK lists the
   values of, and a foreign key, it may set.
-- `rows['<endpoint id>']` names the input fields that address a row lying in the endpoint's object, with that row's
-  table: `export const rows = { 'api.tasks.editComment': { commentId: 'task_comments' } }`. The generated cases seed
-  one row of the table in each scope's object and send its key there. The table lies directly in the object: a child
-  table of the table that owns it, or a table it contains; the checker refuses a row further down
-  (`endpoint-fixture`). Without it they send a sample, the handler
-  finds no row (404), and the case fails.
+- `rows['<endpoint id>']` names the input fields that address a row in the endpoint's scope, with that row's table:
+  `export const rows = { 'api.tasks.editComment': { commentId: 'task_comments' } }`. The generated cases seed one row
+  of the table in each scope and send its key there. Under `on` and `in` the table lies directly in the object or
+  target (a child table of the table that owns it, or a table it contains), and a table owns the dimension; under
+  `over` the dimension lists the table. The checker refuses anything else (`endpoint-fixture`). An endpoint with
+  `capabilities` names the capability whose scope the row lies in: `'api.tasks.copyToTask#from': { id:
+  'task_attachments' }`. Without it they send a sample, the handler finds no row (404), and the case fails.
 - `appRows['<endpoint id>']` gives the rows of application tables (`scope: { app }`) that the endpoint's handler reads
   for the caller's own scope, by table, with the columns they need: `export const appRows = { 'portal.guide': { guides:
   { active: true } } }`. Each of its leak and own-object cases seeds one row of each before it asks and removes them
