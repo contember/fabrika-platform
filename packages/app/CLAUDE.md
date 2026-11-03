@@ -631,10 +631,11 @@ vocabulary (`packages/db/CLAUDE.md`).
   `fabrika-request-failed`/endpoint/code, tags endpoint, code, reason, status and the proxy's request id when it is a bounded
   token, at most `MAX_FAILURE_REPORTS_PER_MINUTE` per process and minute. Never the input, a header or a row. The
   delivery is not awaited; the Worker adapter hands it to `waitUntil` (`ContractApp.fetch(request, exec)`).
-- **The author's own run sees a framework failure's message** through `BootOptions.revealHandlerErrors` (a
-  `HandlerErrorSink`), which only `fabrika app dev` and a test that passes it to the kit set: after the log line,
-  `FailureReports` hands it a request's framework failure (`failureReason` is not `null`) whole, and a job attempt hands
-  it what it threw, its handler's own error or a refusal. The log line is the same with or without it; a deployed
+- **The author's own run sees what was thrown** through `BootOptions.revealHandlerErrors` (a `HandlerErrorSink`,
+  `implement/failures.ts`), which only `fabrika app dev` and a test that passes it to the kit set: after the log line,
+  `FailureReports` hands it what a request's 5xx threw, whole, and a job attempt what it threw (never a lost lease or a
+  mail failure). Every call goes through `reveal`: a sink that throws logs one fixed line and changes nothing of the
+  failure, its classification, retries or report. The log line is the same with or without it; a deployed
   application never sets it. The kit leaves it off unless a test passes one: the platform build's test step echoes the
   test run's output into its build log, and a refusal's message may quote a value.
 - **A report carries what was thrown, scrubbed; a log line never does** (ADR-0059). `OperationsReport.error` is sent
@@ -1168,10 +1169,11 @@ object directly over `bunSqliteStorage` (the IAM binding, the assets, the crash 
   a missing handler and a `handlers.jobs` entry the contract does not declare. An Operations DSN that is not an
   ingest DSN stops every boot, jobs or not: no failure would reach anyone.
 - **A failure is a fixed code**: `timeout`, `lease_lost`, `handler_failed`, `query_refused`, `capability_refused`,
+  `framework_fault`, `unavailable`,
   `driver_failed`, `crashed`, `unauthorized`, `iam_unavailable` in the run's result, its log lines and its report, and
   `boot_failed` in the CLI. The code is chosen by `instanceof` against the framework's own classes (`LeaseLostError`,
-  then `failureCode`, so a refusal is named as a request names it), never by `name`. A refusal also carries its catalog
-  `reason`: in the result, in each log line with its fixed text, and as the report's `reason` tag. An application error's
+  then `failureCode`, so a refusal or a `ServerFault` is named as a request names it), never by `name`. A framework
+  failure also carries its catalog `reason`: in the result, in each log line with its fixed text, and as the report's `reason` tag. An application error's
   name and message are never logged or returned: either may carry a secret. The report carries them scrubbed.
 - **Reports go through the ingest every application has** (`FABRIKA_OPERATIONS_DSN`): a run that failed after its
   retries, or crashed (its lease expired before it finished, found by the next run or the check), is one `JobFailed`

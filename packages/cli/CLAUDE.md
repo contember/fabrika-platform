@@ -193,9 +193,9 @@ arguments and reports.
   - The seed (`src/app-dev-seed.ts`): `--seed=<module>`, or `dev/seed.ts` when it exists, default-exports a `DevSeed`
     that gets the kit before the first request. Its answer is parsed at the boundary: a persona is a person that kit
     made, a link is a local path. A seed that throws is printed whole, message and stack (the developer's code on the
-    developer's machine), and so is what a job's handler threw and a framework failure of a request or a job (a refused
-    `ctx.sql`, a capability refusal, a `ServerFault`), after the log line that names its reason (`revealHandlerErrors`);
-    a wrong answer names the entry's position, never what the seed wrote. Nothing else of the application's errors is
+    developer's machine), and so is what a request's 5xx or a job attempt threw (a handler's own error, or a framework
+    failure such as a refused `ctx.sql`), after the log line that names its code and reason (`revealHandlerErrors`); a
+    wrong answer names the entry's position, never what the seed wrote. Nothing else of the application's errors is
     printed.
   - The outside (`src/app-dev-outside.ts`): `dev/dev.env` (`NAME=value`, no `FABRIKA_*`) sets the application's
     variables over the environment's; the dev outbox replaces the process's `fetch` for `DEV_OUTBOX_ORIGIN`

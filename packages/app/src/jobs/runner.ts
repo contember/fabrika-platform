@@ -35,7 +35,7 @@ import {
 } from '../implement/capability'
 import { admitInvocation, type InvocationAdmission } from '../implement/dispatch'
 import { runAsSite } from '../implement/egress'
-import { failureCode, type FailureReason, failureReason } from '../implement/failures'
+import { failureCode, type FailureReason, failureReason, type HandlerErrorSink, reveal } from '../implement/failures'
 import { ServerFault } from '../implement/faults'
 import type { ContractDatabase } from '../implement/implement'
 import {
@@ -88,6 +88,10 @@ export type JobFailureCode =
 	| 'query_refused'
 	/** A capability or a handle was refused: forged, ended, of other work, or of another kind than the call takes. */
 	| 'capability_refused'
+	/** The framework failed the attempt (`ServerFault`): its reason names why, as a request's 500 names it. */
+	| 'framework_fault'
+	/** The framework could not reach a service it needs (a `ServerFault` with status 503), as a request's 503 names it. */
+	| 'unavailable'
 	| 'driver_failed'
 	| 'crashed'
 	/** IAM refused the job's key: the attempt mints no capability. */
@@ -266,11 +270,7 @@ interface RunnerContext {
 	readonly url: AppUrl
 }
 
-/**
- * Where the author's own run shows what a handler threw, or a framework failure's message, with where it happened:
- * `fabrika app dev` sets one, and a test may pass one to the kit. No deployed application has one.
- */
-export type HandlerErrorSink = (where: string, error: unknown) => void
+export type { HandlerErrorSink } from '../implement/failures'
 
 export interface JobBindingInput {
 	readonly artifact: ContractArtifact
@@ -298,7 +298,7 @@ export interface JobBindingInput {
 	readonly capabilities: CapabilityAuthority
 	/** Each dimension's containers, nearest first: a link's chain. */
 	readonly containers: ReadonlyMap<string, readonly string[]>
-	/** What a job's handler or a refusal threw, for the author's own run; without it the error is only its fixed code. */
+	/** What a job attempt threw, for the author's own run; without it the error is only its fixed code. */
 	readonly revealHandlerErrors?: HandlerErrorSink
 	/** The transports of the jobs that declare `mailer`, which `boot` resolved. */
 	readonly mail: MailTransports
@@ -1253,8 +1253,8 @@ async function attemptOnce(
 			kicked.recorder = kicks
 		}).then(() => null, (error: unknown) => {
 			const failed = failureOf(error, job.mailer === null ? null : (context.mail[job.mailer]?.sender.capabilities ?? null))
-			// What the attempt threw: the handler's own error, or a refusal whose message the log line withholds.
-			if ('thrown' in failed) context.revealHandlerErrors?.(`job '${job.name}' attempt ${attempt}`, error)
+			// What the attempt threw: the handler's own error, or a framework failure whose message the log line withholds.
+			if ('thrown' in failed) reveal(context.revealHandlerErrors, `job '${job.name}' attempt ${attempt}`, error)
 			return failed
 		})
 		// Its settlement, not only the end of its frame: a drain waits for a handler that outlived the attempt.
@@ -1274,8 +1274,9 @@ async function attemptOnce(
 const UNKNOWN_TRANSPORT: EmailSenderCapabilities = Object.freeze({ idempotent: false, confirmation: 'queued', maxBatch: 1 })
 
 /**
- * By class, never by name: an application error can call itself anything. A refusal is classified as a request's is
- * (`failureCode`), so both name it alike; every other thrown value is `handler_failed`.
+ * By class, never by name: an application error can call itself anything. A framework failure (a refusal or a
+ * `ServerFault`) is classified as a request's is (`failureCode`), so both name it alike, with its reason; every other
+ * thrown value, an `HttpError` of a 5xx status included, is `handler_failed`.
  */
 function failureOf(error: unknown, transport: EmailSenderCapabilities | null): JobFailure {
 	if (error instanceof LeaseLostError) {
@@ -1287,9 +1288,9 @@ function failureOf(error: unknown, transport: EmailSenderCapabilities | null): J
 		return { code: 'mail_failed', why: { reason: error.code, text }, final: !mayRetryDelivery(error, transport ?? UNKNOWN_TRANSPORT) }
 	}
 	const code = failureCode(error)
-	return code === 'query_refused' || code === 'capability_refused'
-		? { code, why: failureReason(error), thrown: error, final: false }
-		: { code: 'handler_failed', why: null, thrown: error, final: false }
+	return code === 'handler_failed' || code === 'handler_status'
+		? { code: 'handler_failed', why: null, thrown: error, final: false }
+		: { code, why: failureReason(error), thrown: error, final: false }
 }
 
 function jobContext(

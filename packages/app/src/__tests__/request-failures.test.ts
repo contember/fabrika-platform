@@ -13,11 +13,10 @@ import { TRANSACTION_HELD_REPORT_MS } from '../../../db/src/database'
 import { bunSqliteStorage } from '../../../db/src/sqlite-bun'
 import type { RequestExecutionContext } from '../fetch'
 import { CAPABILITY_REFUSALS, CapabilityRefusedError } from '../implement/capability'
-import { FailureReports, MAX_FAILURE_REPORTS_PER_MINUTE } from '../implement/failures'
+import { FailureReports, type HandlerErrorSink, MAX_FAILURE_REPORTS_PER_MINUTE } from '../implement/failures'
 import { SERVER_FAULTS, ServerFault } from '../implement/faults'
 import { implement } from '../implement/implement'
 import type { OperationsReport } from '../jobs/report'
-import type { HandlerErrorSink } from '../jobs/runner'
 import { app as notesKit } from './cloudflare-fixture/src/app-kit'
 import { tables } from './cloudflare-fixture/src/db/tables'
 import { contract } from './fixtures/implement/fabrika.contract'
@@ -196,6 +195,36 @@ describe('a request that answers 5xx', () => {
 		const reported = await run(thrown, {}, (where, error) => void revealed.push({ where, error }))
 		expect(revealed).toEqual([{ where: "endpoint 'api.me'", error: thrown }])
 		expect(reported.logged).toEqual([`fabrika: api.me: ${code}: ${reason}: ${texts[reason]}`])
+	})
+
+	test("a handler's own error reaches revealHandlerErrors whole too; the log line stays the same", async () => {
+		const thrown = leaking()
+		const revealed: { where: string; error: unknown }[] = []
+		const reported = await run(thrown, {}, (where, error) => void revealed.push({ where, error }))
+		expect(revealed).toEqual([{ where: "endpoint 'api.me'", error: thrown }])
+		expect(reported.logged).toEqual(['fabrika: api.me: handler_failed'])
+	})
+
+	test('a sink that throws leaves the answer, the log line and the report as they were', async () => {
+		const reported = await run(new QueryRefusedError('unknown_column', 'title2 is not a column of notes'), undefined, () => {
+			throw new Error('the sink broke')
+		})
+		expect(reported.status).toBe(500)
+		expect(reported.envelopes).toHaveLength(1)
+		expect(reported.logged).toEqual([
+			`fabrika: api.me: query_refused: unknown_column: ${QUERY_REFUSALS.unknown_column}`,
+			"fabrika: revealHandlerErrors threw while it showed endpoint 'api.me'; the failure stands as it was",
+		])
+		const failures = new FailureReports(null, Date.now, () => {
+			throw new Error('the sink broke')
+		})
+		const original = console.error
+		console.error = () => {}
+		try {
+			await expect(failures.record({ endpoint: 'api.me', requestId: null, status: 500, error: new Error('x') })).resolves.toBeUndefined()
+		} finally {
+			console.error = original
+		}
 	})
 
 	test('a 4xx sends nothing', async () => {

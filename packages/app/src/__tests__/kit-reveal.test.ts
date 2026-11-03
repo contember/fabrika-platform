@@ -1,16 +1,18 @@
 // `revealHandlerErrors`, the sink of the author's own run (`fabrika app dev`, a test that passes one): the message of a
-// framework refusal, which every log line withholds (ADR-0059), reaches it beside the line's reason, for a request and a
-// job alike. Without the sink the log line is the one it always was. On the object's SQLite, so it runs everywhere.
+// framework failure, which every log line withholds (ADR-0059), reaches it beside the line's reason, for a request and a
+// job alike, and a job names a `ServerFault` by its reason as a request does. A sink that throws changes nothing of the
+// failure. Without the sink the log line is the one it always was. On the object's SQLite, so it runs everywhere.
 
 import { createClient } from '@fabrika/app/client'
 import { defineApp } from '@fabrika/app/contract'
 import { serve } from '@fabrika/app/implement'
-import { testKit } from '@fabrika/app/testing'
+import { type HandlerErrorSink, testKit } from '@fabrika/app/testing'
 import { scoped } from '@fabrika/db'
 import { QUERY_REFUSALS, QueryRefusedError } from '@fabrika/db/framework'
 import { testDatabase } from '@fabrika/db/testing-sqlite'
 import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import { z } from 'zod/v4'
+import { SERVER_FAULTS, ServerFault } from '../implement/faults'
 import { tables } from './cloudflare-fixture/src/db/tables'
 import { vocabulary } from './cloudflare-fixture/src/vocabulary'
 
@@ -43,7 +45,19 @@ const catalog = app.cron('0 3 * * *', { actions: ['notes.read'], sql: 'read' }).
 	})
 })
 
-const contract = app.contract((c) => ({ api: c.rpc('/api', { notes }), health: c.health('/healthz'), jobs: { catalog } }))
+const faulty = app.cron('0 4 * * *', { actions: ['notes.read'] }).handle(() => {
+	throw new ServerFault('url_unbuildable', "ctx.url names 'api.nowhere', which is no procedure of the contract")
+})
+
+const unreachable = app.cron('0 5 * * *', { actions: ['notes.read'] }).handle(() => {
+	throw new ServerFault('iam_unavailable', 'IAM could not be asked to issue a link', 503)
+})
+
+const contract = app.contract((c) => ({
+	api: c.rpc('/api', { notes }),
+	health: c.health('/healthz'),
+	jobs: { catalog, faulty, unreachable },
+}))
 
 interface Revealed {
 	readonly where: string
@@ -65,25 +79,30 @@ describe("a refusal on the author's own run", () => {
 		await fresh.close()
 	})
 
-	function kitWith(revealed: Revealed[] | null) {
+	function kitWith(sink: HandlerErrorSink | null) {
 		return testKit(serve(contract, { database: scoped(tables) }), {
 			database: fresh.database,
-			...(revealed === null ? {} : {
-				revealHandlerErrors: (where: string, error: unknown) =>
-					revealed.push({
-						where,
-						message: error instanceof Error ? error.message : String(error),
-						reason: error instanceof QueryRefusedError ? error.reason : null,
-					}),
-			}),
+			...(sink === null ? {} : { revealHandlerErrors: sink }),
 		})
+	}
+
+	/** A sink that keeps what it was shown. */
+	const into = (revealed: Revealed[]): HandlerErrorSink => (where, error) =>
+		void revealed.push({
+			where,
+			message: error instanceof Error ? error.message : String(error),
+			reason: error instanceof QueryRefusedError || error instanceof ServerFault ? error.reason : null,
+		})
+
+	const throwing: HandlerErrorSink = () => {
+		throw new Error('the sink broke')
 	}
 
 	const line = `query_refused: sql_name: ${QUERY_REFUSALS.sql_name}`
 
 	test("a request's refused ctx.sql reaches the sink with its own message; the log line keeps the reason and its text", async () => {
 		const revealed: Revealed[] = []
-		const kit = kitWith(revealed)
+		const kit = kitWith(into(revealed))
 		const editor = kit.testCaller([{ role: 'editor', scope: kit.scope('workspace', 'w1') }])
 		const api = createClient(contract, 'api', { fetch: kit.browser(editor) })
 		await expect(api.notes.catalog({ workspaceId: 'w1' })).rejects.toMatchObject({ httpStatus: 500 })
@@ -93,10 +112,36 @@ describe("a refusal on the author's own run", () => {
 
 	test("a job's refused ctx.sql reaches the sink with its own message, and kit.runJob answers its code and reason", async () => {
 		const revealed: Revealed[] = []
-		const kit = kitWith(revealed)
+		const kit = kitWith(into(revealed))
 		expect(await kit.runJob('catalog')).toMatchObject({ status: 'failed', code: 'query_refused', reason: 'sql_name' })
 		expect(revealed[0]).toEqual({ where: "job 'catalog' attempt 1", message: MESSAGE, reason: 'sql_name' })
 		expect(logged.mock.calls.flat().join('\n')).not.toContain('sqlite_master')
+	})
+
+	test("a job's ServerFault is named by its code and reason, as a request names it, and reaches the sink whole", async () => {
+		const revealed: Revealed[] = []
+		const kit = kitWith(into(revealed))
+		expect(await kit.runJob('faulty')).toMatchObject({ status: 'failed', code: 'framework_fault', reason: 'url_unbuildable' })
+		expect(await kit.runJob('unreachable')).toMatchObject({ status: 'failed', code: 'unavailable', reason: 'iam_unavailable' })
+		expect(revealed).toEqual([
+			{ where: "job 'faulty' attempt 1", message: "ctx.url names 'api.nowhere', which is no procedure of the contract", reason: 'url_unbuildable' },
+			{ where: "job 'unreachable' attempt 1", message: 'IAM could not be asked to issue a link', reason: 'iam_unavailable' },
+		])
+		const lines = logged.mock.calls.flat().join('\n')
+		expect(lines).toContain(`framework_fault: url_unbuildable: ${SERVER_FAULTS.url_unbuildable}`)
+		expect(lines).not.toContain('api.nowhere')
+	})
+
+	test('a sink that throws leaves the failure as it was, for a request and a job', async () => {
+		const kit = kitWith(throwing)
+		const editor = kit.testCaller([{ role: 'editor', scope: kit.scope('workspace', 'w1') }])
+		const api = createClient(contract, 'api', { fetch: kit.browser(editor) })
+		await expect(api.notes.catalog({ workspaceId: 'w1' })).rejects.toMatchObject({ httpStatus: 500 })
+		expect(await kit.runJob('catalog')).toMatchObject({ status: 'failed', code: 'query_refused', reason: 'sql_name' })
+		expect(logged.mock.calls.flat()).toContain(`fabrika: api.notes.catalog: ${line}`)
+		expect(logged.mock.calls.flat()).toContain(
+			"fabrika: revealHandlerErrors threw while it showed endpoint 'api.notes.catalog'; the failure stands as it was",
+		)
 	})
 
 	test('without the sink nothing of the message is logged, for a request or a job', async () => {

@@ -321,8 +321,8 @@ if (postgres !== null) {
 - `testKit(app, { membership })` replaces the stand-in with your own `IamMembershipRpc`; that kit accepts no
   invitation. `@fabrika/app/testing` exports the types of the options: `IamMembershipRpc` (`membership`),
   `ChallengeFetch` (`challengeFetch`) and `FileScanner` (`scanner`). Import them from there, beside `testKit`.
-- A 500 or a failed `kit.runJob` names only its code and reason. To see the refusal's own message (a refused
-  `ctx.sql` names its line, a refused column its name) or what a job's handler threw, pass a sink while you debug:
+- A 500 or a failed `kit.runJob` names only its code and reason. To see what was thrown (your handler's error, or a
+  refusal's own message: a refused `ctx.sql` names its line, a refused column its name), pass a sink while you debug:
   `testKit(app, { database: postgres.database, revealHandlerErrors: (where, error) => console.error(where, error) })`
   (`HandlerErrorSink`). It is off unless passed.
 - `kit.testCaller(grants, { disabled: true })` is a person an operator disabled: the directory lists and finds them

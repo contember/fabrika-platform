@@ -53,11 +53,11 @@ import { boot, type BootOptions, type ContractApp } from '../implement/boot'
 import { type ChallengeFetch, MINIMAL_CHALLENGE_WORK } from '../implement/challenge'
 import { type ConnectFetch, connectVariables } from '../implement/connect'
 import type { SpaAssets } from '../implement/dispatch'
+import type { HandlerErrorSink } from '../implement/failures'
 import type { ApplicationEnvironment, ContractImplementation } from '../implement/implement'
 import { readTokenKeys, SignedTokens } from '../implement/tokens'
 import type { WorkloadKindOf, WorkloadTokenSource } from '../implement/workload'
 import type { MailKeyScope } from '../jobs/mail'
-import type { HandlerErrorSink } from '../jobs/runner'
 import type { JobRunOptions, JobRunResult } from '../jobs/runner'
 import {
 	type LabelledTestCaller,
@@ -137,8 +137,8 @@ export interface TestKitOptions {
 	/** What answers a public procedure's challenge verification in place of the provider: a stand-in for its siteverify. */
 	readonly challengeFetch?: ChallengeFetch
 	/**
-	 * Where the author's own run shows what a job's handler threw, and the message of a framework failure (a refused
-	 * `ctx.sql`, a capability refusal, a `ServerFault`) of a request or a job, which the log line names only by its reason.
+	 * Where the author's own run shows what a request's 5xx or a job attempt threw, whole: a handler's own error, or a
+	 * framework failure (a refused `ctx.sql`, a capability refusal, a `ServerFault`) whose message the log line withholds.
 	 * `fabrika app dev` sets it; a test passes one to see why a call failed. Off unless passed.
 	 */
 	readonly revealHandlerErrors?: HandlerErrorSink
