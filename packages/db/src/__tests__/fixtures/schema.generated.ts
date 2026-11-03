@@ -35,6 +35,7 @@ export interface NotesTable {
 	created_by: string
 	version: number
 	created_at: ColumnType<Date, Date | string | undefined, Date | string>
+	// search (tsvector, generated) is left out: the data layer does not read it; ctx.sql does
 }
 
 export interface OrganizationsTable {

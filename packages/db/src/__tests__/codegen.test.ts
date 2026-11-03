@@ -10,7 +10,15 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import ts from 'typescript'
-import { type CatalogColumn, CodegenError, generateSchema, introspectSchema, renderSchema } from '../codegen'
+import {
+	type CatalogColumn,
+	CodegenError,
+	generateSchema,
+	generateSchemaModule,
+	introspectSchema,
+	renderSchema,
+	renderSchemaModule,
+} from '../codegen'
 import { migration } from './fixtures/schema'
 import { migration as tasksMigration } from './fixtures/tasks'
 
@@ -22,6 +30,7 @@ const column = (table: string, name: string, type: string, extra: Partial<Catalo
 	type_category: 'S',
 	nullable: false,
 	generated: 'no',
+	computed: false,
 	enum_labels: [],
 	...extra,
 })
@@ -135,23 +144,31 @@ describe('renderSchema', () => {
 		)
 	})
 
-	test('leaves out a generated column of a type it does not read; a plain or defaulted one is still refused', () => {
-		const search = column('documents', 'search', 'tsvector', { generated: 'always' })
-		const source = renderSchema([column('documents', 'id', 'text'), column('documents', 'body', 'text'), search])
-		expect(interfaceOf(source, 'DocumentsTable')).toBe('export interface DocumentsTable {\n\tid: string\n\tbody: string\n}\n')
-		expect(source).not.toContain('search')
-		for (const generated of ['no', 'default'] as const) {
-			expect(() => renderSchema([column('documents', 'search', 'tsvector', { generated })])).toThrow(
+	test('leaves out a generated column of a type it does not read, naming it; any other column of one is refused', () => {
+		const search = column('documents', 'search', 'tsvector', { generated: 'always', computed: true })
+		const module = renderSchemaModule([column('documents', 'id', 'text'), search, column('documents', 'body', 'text')])
+		expect(module.leftOut).toEqual([{ table: 'documents', column: 'search', type: 'tsvector' }])
+		expect(interfaceOf(module.source, 'DocumentsTable')).toBe(
+			'export interface DocumentsTable {\n\tid: string\n\t// search (tsvector, generated) is left out: the data layer does not read it; ctx.sql does\n\tbody: string\n}\n',
+		)
+		expect(module.source).not.toContain("'search'")
+		// A plain column, a defaulted one, and one `always` without being computed (an identity column) are refused.
+		for (const extra of [{}, { generated: 'default' }, { generated: 'always' }] as const) {
+			expect(() => renderSchema([column('documents', 'search', 'tsvector', extra)])).toThrow(
 				'documents.search has type tsvector, which the data layer does not read or bind',
 			)
 		}
-		const key = { constraint_name: 'k', columns: ['search'], referenced_table: 'documents', referenced_columns: ['search'] }
-		expect(() =>
-			renderSchema([column('documents', 'id', 'text'), search, column('links', 'search', 'tsvector', { generated: 'always' })], [
-				{ ...key, table_name: 'links' },
-			])
-		).toThrow(
-			'links.search is a generated column of a type the data layer does not read, so codegen leaves it out, but a foreign key of links names it',
+	})
+
+	test('refuses a foreign key that names a left-out column, and a table it would leave with no column', () => {
+		const leftOut = (table: string) => column(table, 'search', 'tsvector', { generated: 'always', computed: true })
+		const key = { constraint_name: 'k', table_name: 'links', columns: ['search'], referenced_table: 'documents', referenced_columns: ['search'] }
+		expect(() => renderSchema([column('documents', 'id', 'text'), leftOut('documents'), column('links', 'id', 'text'), leftOut('links')], [key]))
+			.toThrow(
+				'links.search is a generated column of a type the data layer does not read, so codegen leaves it out, but a foreign key of links names it',
+			)
+		expect(() => renderSchema([leftOut('documents')])).toThrow(
+			'table documents has only generated columns of types the data layer does not read, which codegen leaves out',
 		)
 	})
 
@@ -385,22 +402,30 @@ describe.skipIf(!hasPostgres)('codegen against real Postgres', () => {
 		})
 	})
 
-	test('leaves out a stored generated tsvector under a GIN index; a plain one is refused', async () => {
+	test('leaves out a stored generated tsvector under a GIN index, by attgenerated; a plain one is refused', async () => {
 		const ddl = `CREATE TABLE documents (
 			id text PRIMARY KEY,
+			n int8 GENERATED ALWAYS AS IDENTITY,
 			body text,
 			search tsvector GENERATED ALWAYS AS (to_tsvector('simple', coalesce(body, ''))) STORED
 		);
 		CREATE INDEX documents_search ON documents USING gin (search);`
-		const source = await generateSchema(url, await migrated(ddl), [])
-		expect(interfaceOf(source, 'DocumentsTable')).toBe('export interface DocumentsTable {\n\tid: string\n\tbody: string | null\n}\n')
-		expect(source).not.toContain('search')
+		const schema = await migrated(ddl)
+		const computed = (await introspectSchema(url, schema, [])).filter((column) => column.table_name === 'documents').map((column) => [
+			column.column_name,
+			column.generated,
+			column.computed,
+		])
+		expect(computed).toEqual([['id', 'no', false], ['n', 'always', false], ['body', 'no', false], ['search', 'always', true]])
+		const module = await generateSchemaModule(url, schema, [])
+		expect(module.leftOut).toEqual([{ table: 'documents', column: 'search', type: 'tsvector' }])
+		expect(interfaceOf(module.source, 'DocumentsTable')).toBe(
+			'export interface DocumentsTable {\n\tid: string\n\tn: GeneratedAlways<string>\n\tbody: string | null\n'
+				+ '\t// search (tsvector, generated) is left out: the data layer does not read it; ctx.sql does\n}\n',
+		)
+		expect(module.source).not.toContain("'search'")
 		await expect(generateSchema(url, await migrated('CREATE TABLE documents (id text PRIMARY KEY, search tsvector);'), [])).rejects.toThrow(
 			'documents.search has type tsvector, which the data layer does not read or bind',
-		)
-		// Why `always` with such a type is a generated column: Postgres types an identity column smallint, integer or bigint.
-		await expect(migrated('CREATE TABLE documents (id text GENERATED ALWAYS AS IDENTITY);')).rejects.toThrow(
-			'identity column type must be smallint, integer, or bigint',
 		)
 	})
 

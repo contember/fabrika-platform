@@ -12,8 +12,8 @@ import {
 	readApplicationTree,
 	scaffoldInputs,
 } from '@fabrika/check'
-import { CodegenError, generateSchema, SCHEMA_FILE } from '@fabrika/db/codegen'
-import { generateSqliteSchema } from '@fabrika/db/codegen-sqlite'
+import { CodegenError, type GeneratedModule, generateSchemaModule, SCHEMA_FILE } from '@fabrika/db/codegen'
+import { generateSqliteSchemaModule } from '@fabrika/db/codegen-sqlite'
 import { FRAMEWORK_MIGRATION_BUNDLE, FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
 import { SQLITE_FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations-sqlite'
 import {
@@ -160,20 +160,20 @@ const migrate = async (argv: readonly string[], deps: DbCommandDependencies): Pr
 }
 
 /** The schema module of the migrated application schema, read with the provisioning credential. */
-const postgresSchema = async (deps: DbCommandDependencies): Promise<string> => {
+const postgresSchema = async (deps: DbCommandDependencies): Promise<GeneratedModule> => {
 	const migrations = applicationMigrations(required(deps.source, 'FABRIKA_APP_ID'), deps.cwd)
 	const url = required(deps.source, 'FABRIKA_APP_DATABASE_URL')
 	try {
 		// The migrations' manifest: the start check refuses any database object no migration declares.
-		return await generateSchema(url, migrations.schema, migrations.objects())
+		return await generateSchemaModule(url, migrations.schema, migrations.objects())
 	} catch (error) {
 		throw reportable(error)
 	}
 }
 
 /** The schema module of the bundles the Durable Object applies, in its order, run in an in-memory database. */
-const sqliteSchema = async (cwd: string): Promise<string> =>
-	generateSqliteSchema([
+const sqliteSchema = async (cwd: string): Promise<GeneratedModule> =>
+	generateSqliteSchemaModule([
 		{ bundle: FRAMEWORK_MIGRATION_BUNDLE, migrations: SQLITE_FRAMEWORK_MIGRATIONS },
 		{ bundle: APPLICATION_MIGRATION_BUNDLE, migrations: await sqliteApplicationMigrations(cwd) },
 	])
@@ -181,7 +181,7 @@ const sqliteSchema = async (cwd: string): Promise<string> =>
 const codegen = async (argv: readonly string[], deps: DbCommandDependencies): Promise<void> => {
 	const verify = argv.includes('--verify')
 	refuseArguments('codegen', argv.filter((arg) => arg !== '--verify'))
-	const source = (await dialectAt(deps.cwd)) === 'sqlite' ? await sqliteSchema(deps.cwd) : await postgresSchema(deps)
+	const { source, leftOut } = (await dialectAt(deps.cwd)) === 'sqlite' ? await sqliteSchema(deps.cwd) : await postgresSchema(deps)
 	const path = join(deps.cwd, SCHEMA_FILE)
 	if (verify) {
 		const committed = await readFile(path, 'utf8').catch(() => undefined)
@@ -192,6 +192,9 @@ const codegen = async (argv: readonly string[], deps: DbCommandDependencies): Pr
 	await mkdir(dirname(path), { recursive: true })
 	await writeFile(path, source)
 	deps.write(`${SCHEMA_FILE}\n`)
+	for (const column of leftOut) {
+		deps.write(`left out ${column.table}.${column.column} (${column.type}, generated): the data layer does not read it; ctx.sql does\n`)
+	}
 }
 
 const expectedTests = async (

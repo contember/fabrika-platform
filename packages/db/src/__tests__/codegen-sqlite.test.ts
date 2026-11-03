@@ -4,7 +4,7 @@
 import { describe, expect, test } from 'bun:test'
 import ts from 'typescript'
 import { CodegenError } from '../codegen'
-import { generateSqliteSchema } from '../codegen-sqlite'
+import { generateSqliteSchema, generateSqliteSchemaModule } from '../codegen-sqlite'
 import { SQLITE_FRAMEWORK_MIGRATIONS } from '../migrations-sqlite'
 import type { SqliteMigrationBundle } from '../sqlite-migrate'
 
@@ -134,16 +134,24 @@ describe('generateSqliteSchema', () => {
 		expect(untyped).toBeInstanceOf(CodegenError)
 	})
 
-	test('leaves out a generated column of a declared type it does not read', async () => {
-		const source = await generateSqliteSchema([
+	test('leaves out a generated column of a declared type it does not read, naming it; one with no declared type is refused', async () => {
+		const module = await generateSqliteSchemaModule([
 			app(`CREATE TABLE things (
 				id TEXT PRIMARY KEY NOT NULL,
 				body TEXT NOT NULL,
-				meta JSON GENERATED ALWAYS AS (json_object('body', body)) VIRTUAL,
-				size GENERATED ALWAYS AS (length(body)) STORED
+				meta JSON GENERATED ALWAYS AS (json_object('body', body)) VIRTUAL
 			);`),
 		])
-		expect(interfaceOf(source, 'ThingsTable')).toBe('export interface ThingsTable {\n\tid: string\n\tbody: string\n}\n')
-		expect(entryOf(source, 'things')).toBe("\t'things': {\n\t\tcolumns: [\n\t\t\t'id',\n\t\t\t'body',\n\t\t],\n\t\tforeignKeys: [],\n\t},\n")
+		expect(module.leftOut).toEqual([{ table: 'things', column: 'meta', type: 'JSON' }])
+		expect(interfaceOf(module.source, 'ThingsTable')).toBe(
+			'export interface ThingsTable {\n\tid: string\n\tbody: string\n\t// meta (JSON, generated) is left out: the data layer does not read it; ctx.sql does\n}\n',
+		)
+		expect(entryOf(module.source, 'things')).toBe("\t'things': {\n\t\tcolumns: [\n\t\t\t'id',\n\t\t\t'body',\n\t\t],\n\t\tforeignKeys: [],\n\t},\n")
+		const untyped = await generateSqliteSchema([
+			app('CREATE TABLE things (id TEXT PRIMARY KEY NOT NULL, body TEXT NOT NULL, size GENERATED ALWAYS AS (length(body)) STORED);'),
+		]).then(() => undefined, (rejected: unknown) => rejected)
+		expect(untyped).toBeInstanceOf(CodegenError)
+		expect(String(untyped)).toContain("things.size has declared type '', which the data layer does not read or bind on SQLite")
+		expect(String(untyped)).toContain('; declare the type of the generated column')
 	})
 })

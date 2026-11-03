@@ -785,11 +785,9 @@ describe.skipIf(opened === null)('ctx.sql on Postgres, as the runtime role', () 
 	})
 
 	test('a generated column codegen leaves out is read here: a search ranks by the stored vector', async () => {
-		const note = invocation('write')
-		await note.sql(z.object({}))`insert into notes (id, workspace_id, organization_id, title, body, created_by, version)
+		const work = invocation('write')
+		await work.sql(z.object({}))`insert into notes (id, workspace_id, organization_id, title, body, created_by, version)
 			values (${Bun.randomUUIDv7()}, 'w1', 'o1', 'ranked', 'the quarterly budget review', 'u', 1)`
-		await note.transaction.commit()
-		const work = invocation('read', true)
 		const Hit = z.object({ title: z.string(), rank: z.number() })
 		const query = 'budget review'
 		expect(
@@ -797,6 +795,7 @@ describe.skipIf(opened === null)('ctx.sql on Postgres, as the runtime role', () 
 				from notes where search @@ websearch_to_tsquery('simple', ${query}) order by rank desc`,
 		).toEqual([{ title: 'ranked', rank: expect.any(Number) }])
 		await work.transaction.rollback()
+		expect(await notesTitled('ranked')).toBe(0)
 	})
 
 	test('a statement the database refuses fails the invocation: nothing it wrote commits', async () => {

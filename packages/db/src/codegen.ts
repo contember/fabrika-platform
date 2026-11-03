@@ -61,6 +61,8 @@ const catalogColumnSchema = z.object({
 	type_category: z.string(),
 	nullable: z.boolean(),
 	generated: z.enum(['no', 'default', 'always']),
+	/** A column `GENERATED ALWAYS AS (…)` computes (`pg_attribute.attgenerated`); an identity column is not one. */
+	computed: z.boolean(),
 	enum_labels: z.array(z.string()),
 })
 
@@ -96,6 +98,7 @@ SELECT
 		WHEN a.atthasdef OR a.attidentity = 'd' THEN 'default'
 		ELSE 'no'
 	END AS generated,
+	a.attgenerated <> '' AS computed,
 	ARRAY(SELECT e.enumlabel::text FROM pg_enum e WHERE e.enumtypid = t.oid ORDER BY e.enumsortorder) AS enum_labels
 FROM pg_attribute a
 JOIN pg_class c ON c.oid = a.attrelid
@@ -186,10 +189,15 @@ function quote(value: string): string {
 	return `'${JSON.stringify(value).slice(1, -1).replaceAll('\\"', '"').replaceAll("'", "\\'")}'`
 }
 
+/** `table.column`: how a message names a column. */
+export function columnPath(column: NamedColumn): string {
+	return `${column.table_name}.${column.column_name}`
+}
+
 /** The column's types, or `undefined` for a type the data layer does not read or bind. */
 function scalarType(column: CatalogColumn): ScalarType | undefined {
 	if (column.type_type === 'e') {
-		if (column.enum_labels.length === 0) throw new CodegenError(`${column.table_name}.${column.column_name}: enum ${column.type_name} has no labels`)
+		if (column.enum_labels.length === 0) throw new CodegenError(`${columnPath(column)}: enum ${column.type_name} has no labels`)
 		return { select: column.enum_labels.map(quote).join(' | ') }
 	}
 	return column.type_category === 'A' || column.type_type !== 'b' ? undefined : SCALAR_TYPES.get(column.type_name)
@@ -209,6 +217,26 @@ export interface DescribedColumn {
 	readonly list: 'dates' | 'timestamps' | 'booleans' | undefined
 }
 
+/** A column `describe` leaves out of the module: a generated column of a type the data layer does not read. */
+export interface LeftOut {
+	/** The column's type, as the database names it. */
+	readonly leftOut: string
+}
+
+/** A column the module leaves out; only `ctx.sql` reaches it. */
+export interface LeftOutColumn {
+	readonly table: string
+	readonly column: string
+	/** Its type as the module's comment names it. */
+	readonly type: string
+}
+
+/** The text of `SCHEMA_FILE`, and the columns it leaves out, for the command to name. */
+export interface GeneratedModule {
+	readonly source: string
+	readonly leftOut: readonly LeftOutColumn[]
+}
+
 /** A foreign key as the renderer reads it: the columns of `table_name` that reference `referenced_table`. */
 export interface ForeignKeyColumns {
 	readonly table_name: string
@@ -223,13 +251,12 @@ export interface NamedColumn {
 	readonly column_name: string
 }
 
-function describePostgres(column: CatalogColumn): DescribedColumn | undefined {
+function describePostgres(column: CatalogColumn): DescribedColumn | LeftOut {
 	const scalar = scalarType(column)
 	if (scalar === undefined) {
-		// Postgres types an identity column smallint, integer or bigint, so `always` here is a generated column.
-		if (column.generated === 'always') return undefined
+		if (column.computed) return { leftOut: column.type_name }
 		throw new CodegenError(
-			`${column.table_name}.${column.column_name} has type ${column.type_name}, which the data layer does not read or bind (supported: ${
+			`${columnPath(column)} has type ${column.type_name}, which the data layer does not read or bind (supported: ${
 				[...SCALAR_TYPES.keys()].join(', ')
 			}, enums)`,
 		)
@@ -264,20 +291,26 @@ function columnType(column: DescribedColumn): Rendered {
  * `fabrika db codegen --verify` can compare text.
  */
 export function renderSchema(catalog: readonly CatalogColumn[], foreignKeys: readonly CatalogForeignKey[] = []): string {
+	return renderSchemaModule(catalog, foreignKeys).source
+}
+
+/** `renderSchema`, with the columns the module leaves out. */
+export function renderSchemaModule(catalog: readonly CatalogColumn[], foreignKeys: readonly CatalogForeignKey[] = []): GeneratedModule {
 	return renderTables(catalog, foreignKeys, describePostgres)
 }
 
 /**
  * `renderSchema` over columns of any database: `describe` gives each column's types and list field, refuses a type the
- * data layer does not read, or answers `undefined` for a generated column of such a type. That column is left out of
- * the module, so no handle reads or writes it and only `ctx.sql` reaches it; a foreign key that names it is refused. A
- * foreign key's `constraint_name` is not rendered; keys keep the given order.
+ * data layer does not read, or answers `LeftOut` for a generated column of such a type. That column is left out of the
+ * module but for a comment where it stands, so no handle reads or writes it and only `ctx.sql` reaches it; a foreign
+ * key that names it, and a table it would leave without a column, are refused. A foreign key's `constraint_name` is
+ * not rendered; keys keep the given order.
  */
 export function renderTables<C extends NamedColumn>(
 	catalog: readonly C[],
 	foreignKeys: readonly ForeignKeyColumns[],
-	describe: (column: C) => DescribedColumn | undefined,
-): string {
+	describe: (column: C) => DescribedColumn | LeftOut,
+): GeneratedModule {
 	const tables = new Map<string, C[]>()
 	for (const column of catalog) {
 		if (column.table_name.startsWith(FRAMEWORK_TABLE_PREFIX)) continue
@@ -296,7 +329,8 @@ export function renderTables<C extends NamedColumn>(
 	const used = new Set<string>()
 	const interfaces: string[] = []
 	const described = new Map<C, DescribedColumn>()
-	const leftOut = new Set<string>()
+	const leftOut: LeftOutColumn[] = []
+	const leftOutPaths = new Set<string>()
 	for (const table of names) {
 		const name = interfaceName(table)
 		const owner = owners.get(name)
@@ -306,8 +340,12 @@ export function renderTables<C extends NamedColumn>(
 		const fields: string[] = []
 		for (const column of tables.get(table) ?? []) {
 			const description = describe(column)
-			if (description === undefined) {
-				leftOut.add(`${table}.${column.column_name}`)
+			if ('leftOut' in description) {
+				// A type name is the database's text: one that could end the comment line is quoted.
+				const type = /^[\w (),.]+$/.test(description.leftOut) ? description.leftOut : quote(description.leftOut)
+				leftOut.push({ table, column: column.column_name, type })
+				leftOutPaths.add(columnPath(column))
+				fields.push(`\t// ${column.column_name} (${type}, generated) is left out: the data layer does not read it; ctx.sql does\n`)
 				continue
 			}
 			kept.push(column)
@@ -316,15 +354,18 @@ export function renderTables<C extends NamedColumn>(
 			if (rendered.uses !== undefined) used.add(rendered.uses)
 			fields.push(`\t${column.column_name}: ${rendered.type}\n`)
 		}
+		if (kept.length === 0) {
+			throw new CodegenError(`table ${table} has only generated columns of types the data layer does not read, which codegen leaves out`)
+		}
 		tables.set(table, kept)
 		interfaces.push(`export interface ${name} {\n${fields.join('')}}\n`)
 	}
 	for (const key of foreignKeys) {
 		if (!tables.has(key.table_name) || !tables.has(key.referenced_table)) continue
 		const named = [
-			...key.columns.map((column) => `${key.table_name}.${column}`),
-			...key.referenced_columns.map((column) => `${key.referenced_table}.${column}`),
-		].find((column) => leftOut.has(column))
+			...key.columns.map((column) => columnPath({ table_name: key.table_name, column_name: column })),
+			...key.referenced_columns.map((column) => columnPath({ table_name: key.referenced_table, column_name: column })),
+		].find((path) => leftOutPaths.has(path))
 		if (named !== undefined) {
 			throw new CodegenError(
 				`${named} is a generated column of a type the data layer does not read, so codegen leaves it out, but a foreign key of ${key.table_name} names it`,
@@ -362,17 +403,23 @@ export function renderTables<C extends NamedColumn>(
 			}${datesOf(table)}\t},\n`
 		)
 		.join('')
-	return [
+	const source = [
 		`${HEADER}\n`,
 		imports.join(''),
 		...interfaces,
 		`export interface DB {\n${db}}\n`,
 		`export const columns: TypedColumnList<DB> = {\n${columns}}\n`,
 	].join('\n')
+	return { source, leftOut }
 }
 
 /** Introspects the migrated schema, checked against the migrations' manifest, and renders the module for `SCHEMA_FILE`. */
-export async function generateSchema(url: string, schema: string, objects: readonly DatabaseObject[]): Promise<string> {
+export async function generateSchemaModule(url: string, schema: string, objects: readonly DatabaseObject[]): Promise<GeneratedModule> {
 	const catalog = await introspectCatalog(url, schema, objects)
-	return renderSchema(catalog.columns, catalog.foreignKeys)
+	return renderSchemaModule(catalog.columns, catalog.foreignKeys)
+}
+
+/** `generateSchemaModule`'s text alone. */
+export async function generateSchema(url: string, schema: string, objects: readonly DatabaseObject[]): Promise<string> {
+	return (await generateSchemaModule(url, schema, objects)).source
 }

@@ -94,6 +94,7 @@ const Catalog = z.strictObject({
 		type_category: z.string(),
 		nullable: z.boolean(),
 		generated: z.enum(['no', 'default', 'always']),
+		computed: z.boolean(),
 		enum_labels: z.array(z.string()),
 	})),
 	foreignKeys: z.array(z.strictObject({

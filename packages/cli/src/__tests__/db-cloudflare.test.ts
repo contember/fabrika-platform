@@ -72,6 +72,21 @@ describe('fabrika db on Cloudflare', () => {
 		expect(await failure(run(root, 'codegen', ['--verify']))).toBe(`${SCHEMA} is stale; run fabrika db codegen and commit the result`)
 	})
 
+	test('codegen names each generated column it leaves out', async () => {
+		const root = appRoot(CLOUDFLARE_CONFIG)
+		writeMigration(
+			root,
+			'20261022120000_notes.sql',
+			"create table notes (id text primary key, meta json generated always as (json_object('id', id)));\n",
+		)
+		expect(await run(root, 'codegen')).toBe(
+			`${SCHEMA}\nleft out notes.meta (json, generated): the data layer does not read it; ctx.sql does\n`,
+		)
+		expect(readFileSync(join(root, SCHEMA), 'utf8')).toContain(
+			'\t// meta (json, generated) is left out: the data layer does not read it; ctx.sql does\n',
+		)
+	})
+
 	test('migrate refuses: the Durable Object migrates its own database when it boots', async () => {
 		const root = appRoot(CLOUDFLARE_CONFIG)
 		writeMigration(root, '20261022120000_notes.sql', NOTES)

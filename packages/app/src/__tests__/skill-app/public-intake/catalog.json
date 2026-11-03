@@ -8,6 +8,7 @@
 			"type_category": "U",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -18,6 +19,7 @@
 			"type_category": "U",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -28,6 +30,7 @@
 			"type_category": "E",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": [
 				"new",
 				"screening",
@@ -44,6 +47,7 @@
 			"type_category": "S",
 			"nullable": true,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -54,6 +58,7 @@
 			"type_category": "U",
 			"nullable": true,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -64,6 +69,7 @@
 			"type_category": "S",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -74,6 +80,7 @@
 			"type_category": "D",
 			"nullable": false,
 			"generated": "default",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -84,6 +91,7 @@
 			"type_category": "U",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -94,6 +102,7 @@
 			"type_category": "N",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -104,6 +113,7 @@
 			"type_category": "S",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -114,6 +124,7 @@
 			"type_category": "D",
 			"nullable": false,
 			"generated": "default",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -124,6 +135,7 @@
 			"type_category": "U",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -134,6 +146,7 @@
 			"type_category": "U",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -144,6 +157,7 @@
 			"type_category": "U",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -154,6 +168,7 @@
 			"type_category": "S",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -164,6 +179,7 @@
 			"type_category": "D",
 			"nullable": false,
 			"generated": "default",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -174,6 +190,7 @@
 			"type_category": "U",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -184,6 +201,7 @@
 			"type_category": "S",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -194,6 +212,7 @@
 			"type_category": "S",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -204,6 +223,7 @@
 			"type_category": "E",
 			"nullable": false,
 			"generated": "default",
+			"computed": false,
 			"enum_labels": [
 				"new",
 				"screening",
@@ -220,6 +240,7 @@
 			"type_category": "D",
 			"nullable": true,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -230,6 +251,7 @@
 			"type_category": "E",
 			"nullable": false,
 			"generated": "default",
+			"computed": false,
 			"enum_labels": [
 				"due",
 				"issued",
@@ -246,6 +268,7 @@
 			"type_category": "S",
 			"nullable": true,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -256,6 +279,7 @@
 			"type_category": "S",
 			"nullable": true,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -266,6 +290,7 @@
 			"type_category": "S",
 			"nullable": true,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -276,6 +301,7 @@
 			"type_category": "N",
 			"nullable": false,
 			"generated": "default",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -286,6 +312,7 @@
 			"type_category": "D",
 			"nullable": false,
 			"generated": "default",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -296,6 +323,7 @@
 			"type_category": "N",
 			"nullable": false,
 			"generated": "default",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -306,6 +334,7 @@
 			"type_category": "D",
 			"nullable": false,
 			"generated": "default",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -316,6 +345,7 @@
 			"type_category": "S",
 			"nullable": true,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -326,6 +356,7 @@
 			"type_category": "U",
 			"nullable": true,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -336,6 +367,7 @@
 			"type_category": "S",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -346,6 +378,7 @@
 			"type_category": "N",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -356,6 +389,7 @@
 			"type_category": "S",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -366,6 +400,7 @@
 			"type_category": "D",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -376,6 +411,7 @@
 			"type_category": "U",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -386,6 +422,7 @@
 			"type_category": "S",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -396,6 +433,7 @@
 			"type_category": "S",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -406,6 +444,7 @@
 			"type_category": "S",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -416,6 +455,7 @@
 			"type_category": "N",
 			"nullable": true,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -426,6 +466,7 @@
 			"type_category": "S",
 			"nullable": true,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -436,6 +477,7 @@
 			"type_category": "S",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -446,6 +488,7 @@
 			"type_category": "S",
 			"nullable": true,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -456,6 +499,7 @@
 			"type_category": "S",
 			"nullable": true,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -466,6 +510,7 @@
 			"type_category": "S",
 			"nullable": true,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -476,6 +521,7 @@
 			"type_category": "D",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -486,6 +532,7 @@
 			"type_category": "S",
 			"nullable": true,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -496,6 +543,7 @@
 			"type_category": "N",
 			"nullable": false,
 			"generated": "default",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -506,6 +554,7 @@
 			"type_category": "D",
 			"nullable": true,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -516,6 +565,7 @@
 			"type_category": "S",
 			"nullable": true,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -526,6 +576,7 @@
 			"type_category": "S",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -536,6 +587,7 @@
 			"type_category": "S",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -546,6 +598,7 @@
 			"type_category": "D",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -556,6 +609,7 @@
 			"type_category": "N",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -566,6 +620,7 @@
 			"type_category": "S",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -576,6 +631,7 @@
 			"type_category": "D",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -586,6 +642,7 @@
 			"type_category": "N",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -596,6 +653,7 @@
 			"type_category": "S",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -606,6 +664,7 @@
 			"type_category": "S",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -616,6 +675,7 @@
 			"type_category": "D",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -626,6 +686,7 @@
 			"type_category": "U",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -636,6 +697,7 @@
 			"type_category": "S",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -646,6 +708,7 @@
 			"type_category": "S",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -656,6 +719,7 @@
 			"type_category": "S",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -666,6 +730,7 @@
 			"type_category": "S",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -676,6 +741,7 @@
 			"type_category": "N",
 			"nullable": true,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -686,6 +752,7 @@
 			"type_category": "S",
 			"nullable": true,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -696,6 +763,7 @@
 			"type_category": "S",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -706,6 +774,7 @@
 			"type_category": "S",
 			"nullable": true,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -716,6 +785,7 @@
 			"type_category": "D",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -726,6 +796,7 @@
 			"type_category": "D",
 			"nullable": true,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -736,6 +807,7 @@
 			"type_category": "S",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -746,6 +818,7 @@
 			"type_category": "B",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -756,6 +829,7 @@
 			"type_category": "S",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -766,6 +840,7 @@
 			"type_category": "N",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -776,6 +851,7 @@
 			"type_category": "S",
 			"nullable": true,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -786,6 +862,7 @@
 			"type_category": "D",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -796,6 +873,7 @@
 			"type_category": "D",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -806,6 +884,7 @@
 			"type_category": "D",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -816,6 +895,7 @@
 			"type_category": "D",
 			"nullable": true,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -826,6 +906,7 @@
 			"type_category": "D",
 			"nullable": true,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -836,6 +917,7 @@
 			"type_category": "S",
 			"nullable": true,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -846,6 +928,7 @@
 			"type_category": "D",
 			"nullable": true,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -856,6 +939,7 @@
 			"type_category": "N",
 			"nullable": true,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -866,6 +950,7 @@
 			"type_category": "D",
 			"nullable": true,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -876,6 +961,7 @@
 			"type_category": "S",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -886,6 +972,7 @@
 			"type_category": "S",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -896,6 +983,7 @@
 			"type_category": "S",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -906,6 +994,7 @@
 			"type_category": "N",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -916,6 +1005,7 @@
 			"type_category": "U",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -926,6 +1016,7 @@
 			"type_category": "S",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -936,6 +1027,7 @@
 			"type_category": "N",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -946,6 +1038,7 @@
 			"type_category": "S",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -956,6 +1049,7 @@
 			"type_category": "N",
 			"nullable": false,
 			"generated": "default",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -966,6 +1060,7 @@
 			"type_category": "S",
 			"nullable": true,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -976,6 +1071,7 @@
 			"type_category": "B",
 			"nullable": false,
 			"generated": "default",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -986,6 +1082,7 @@
 			"type_category": "S",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -996,6 +1093,7 @@
 			"type_category": "S",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -1006,6 +1104,7 @@
 			"type_category": "S",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -1016,6 +1115,7 @@
 			"type_category": "S",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -1026,6 +1126,7 @@
 			"type_category": "S",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -1036,6 +1137,7 @@
 			"type_category": "S",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -1046,6 +1148,7 @@
 			"type_category": "S",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -1056,6 +1159,7 @@
 			"type_category": "N",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -1066,6 +1170,7 @@
 			"type_category": "S",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -1076,6 +1181,7 @@
 			"type_category": "S",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -1086,6 +1192,7 @@
 			"type_category": "N",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -1096,6 +1203,7 @@
 			"type_category": "N",
 			"nullable": true,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -1106,6 +1214,7 @@
 			"type_category": "U",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -1116,6 +1225,7 @@
 			"type_category": "S",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -1126,6 +1236,7 @@
 			"type_category": "B",
 			"nullable": false,
 			"generated": "default",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -1136,6 +1247,7 @@
 			"type_category": "S",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -1146,6 +1258,7 @@
 			"type_category": "N",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -1156,6 +1269,7 @@
 			"type_category": "U",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -1166,6 +1280,7 @@
 			"type_category": "S",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -1176,6 +1291,7 @@
 			"type_category": "B",
 			"nullable": false,
 			"generated": "default",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -1186,6 +1302,7 @@
 			"type_category": "S",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -1196,6 +1313,7 @@
 			"type_category": "N",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -1206,6 +1324,7 @@
 			"type_category": "U",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -1216,6 +1335,7 @@
 			"type_category": "S",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -1226,6 +1346,7 @@
 			"type_category": "S",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -1236,6 +1357,7 @@
 			"type_category": "U",
 			"nullable": true,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -1246,6 +1368,7 @@
 			"type_category": "D",
 			"nullable": false,
 			"generated": "default",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -1256,6 +1379,7 @@
 			"type_category": "N",
 			"nullable": false,
 			"generated": "default",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -1266,6 +1390,7 @@
 			"type_category": "D",
 			"nullable": true,
 			"generated": "default",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -1276,6 +1401,7 @@
 			"type_category": "S",
 			"nullable": true,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -1286,6 +1412,7 @@
 			"type_category": "N",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -1296,6 +1423,7 @@
 			"type_category": "U",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -1306,6 +1434,7 @@
 			"type_category": "S",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -1316,6 +1445,7 @@
 			"type_category": "D",
 			"nullable": false,
 			"generated": "default",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -1326,6 +1456,7 @@
 			"type_category": "U",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -1336,6 +1467,7 @@
 			"type_category": "S",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -1346,6 +1478,7 @@
 			"type_category": "S",
 			"nullable": false,
 			"generated": "default",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -1356,6 +1489,7 @@
 			"type_category": "N",
 			"nullable": false,
 			"generated": "default",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -1366,6 +1500,7 @@
 			"type_category": "D",
 			"nullable": false,
 			"generated": "default",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -1376,6 +1511,7 @@
 			"type_category": "S",
 			"nullable": true,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -1386,6 +1522,7 @@
 			"type_category": "S",
 			"nullable": false,
 			"generated": "no",
+			"computed": false,
 			"enum_labels": []
 		},
 		{
@@ -1396,6 +1533,7 @@
 			"type_category": "D",
 			"nullable": false,
 			"generated": "default",
+			"computed": false,
 			"enum_labels": []
 		}
 	],

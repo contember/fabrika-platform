@@ -5580,9 +5580,13 @@ INSERT INTO priorities (code, label, rank) VALUES ('low', 'Low', 1), ('normal', 
 - A column with a fixed set of values is an `ENUM` type, not a `CHECK` on text: the generated tests fill text columns
   with markers, which a `CHECK` refuses.
 - Codegen types: `date` is a `YYYY-MM-DD` string; `timestamptz` reads a `Date` and takes a `Date` or a strict ISO 8601 string with `Z` or an offset;
-  `int8` and `numeric` are strings; an enum is its literal union. JSON, `bytea`, arrays and domains are refused. A
-  generated column (`GENERATED ALWAYS AS (…) STORED`) of another type, such as a `tsvector` for full-text search, is
-  left out of the generated types: no `ctx.db` handle reads or writes it, and only `ctx.sql` reaches it.
+  `int8` and `numeric` are strings; an enum is its literal union. JSON, `bytea`, arrays and domains are refused.
+- A generated column (`GENERATED ALWAYS AS (…) STORED`) of a type codegen does not type (a `tsvector` for full-text
+  search, a `jsonb`, an array) is left out of the generated types instead: codegen prints `left out <table>.<column>`
+  and writes a comment where the column would stand in `schema.generated.ts`. No `ctx.db` handle reads or writes it,
+  a policy cannot name it, and only `ctx.sql` reaches it. An identity column and a generated column of a type codegen
+  does type are never left out. A table whose every column would be left out, and a foreign key that names a left-out
+  column, are refused.
 - Plain SQL of the application's own schema only. Refused: another schema (`public.`, `app_…`), any `fabrika_*`
   object (a file column references `fabrika_files (id)`, `references/files.md`), `GRANT`, roles, `CREATE EXTENSION`, `COPY`,
   `SET`, transaction control, `SECURITY DEFINER`, a domain, `serial` and sequences (use `GENERATED ALWAYS AS IDENTITY`),
@@ -5600,8 +5604,8 @@ database enforces foreign keys.
 
 - The declared types codegen reads: `TEXT` (a UUID too), `INTEGER`, `REAL`, `BLOB`; `BOOLEAN`, stored as 0 or 1 and
   read as a boolean; `TIMESTAMP`, stored as UTC ISO text and read as a `Date`; `DATE`, `YYYY-MM-DD` text. Any other
-  declared type is refused, but a generated column of another declared type is left out, reachable only through
-  `ctx.sql`. A `STRICT` table admits only `INTEGER`, `REAL`, `TEXT` and `BLOB`, so a table with a
+  declared type is refused. A generated column of another declared type (`JSON`) is left out as on Postgres; one with
+  no declared type is refused, so declare it. A `STRICT` table admits only `INTEGER`, `REAL`, `TEXT` and `BLOB`, so a table with a
   `BOOLEAN`, `TIMESTAMP` or `DATE` column is not `STRICT`.
 - SQLite has no `ENUM`: a column with a fixed set of values is `TEXT` with `CHECK (<column> IN ('a', 'b'))`. The
   generated tests write its first value.
