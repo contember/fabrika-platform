@@ -382,7 +382,7 @@ describe.skipIf(!hasPostgres)('fabrika db against real Postgres', () => {
 		const root = runnableIsolationApp()
 		writeFileSync(join(root, 'skip-everything.ts'), "import { mock, test } from 'bun:test'\n\nmock.module('bun:test', () => ({ test: test.skip }))\n")
 		writeFileSync(join(root, 'bunfig.toml'), '[test]\npreload = ["./skip-everything.ts"]\nroot = "nowhere"\n')
-		expect(withoutSweep(await testIsolation(root))).toBe('104 generated cases passed\n')
+		expect(withoutSweep(await testIsolation(root))).toBe('108 generated cases passed\n')
 	})
 
 	test('test-isolation first drops the provisioner a killed run left behind, with the roles and schemas it created', async () => {
@@ -395,7 +395,7 @@ describe.skipIf(!hasPostgres)('fabrika db against real Postgres', () => {
 			await sql.unsafe(`ALTER ROLE ${name} VALID UNTIL '2000-01-01'`)
 			const output = await testIsolation(runnableIsolationApp())
 			expect(output).toMatch(new RegExp(`^dropped the test provisioners earlier runs left behind: [^\\n]*\\b${name}\\b`))
-			expect(output).toEndWith('\n104 generated cases passed\n')
+			expect(output).toEndWith('\n108 generated cases passed\n')
 			const left = await sql.unsafe(
 				'SELECT rolname FROM pg_roles WHERE rolname IN ($1, $2) UNION ALL SELECT nspname FROM pg_namespace WHERE nspname = $3',
 				[
@@ -441,7 +441,7 @@ describe.skipIf(!hasPostgres)('fabrika db against real Postgres', () => {
 		const root = editedApplication(mocked)
 		expect((await checkApplication({ root })).map((finding) => `${finding.file} ${finding.rule}`)).toContain('src/app.ts mock-module')
 		const failed = await failure(testIsolation(root))
-		expect(failed).toContain('db test-isolation: 103 of 104 generated cases passed')
+		expect(failed).toContain('db test-isolation: 107 of 108 generated cases passed')
 		expect(failed).toContain(`${ENDPOINTS}: api.notes.get: the answer to one scope holds nothing of the scope answered before it (failed)`)
 	})
 
@@ -464,7 +464,7 @@ describe.skipIf(!hasPostgres)('fabrika db against real Postgres', () => {
 			`import { readFileSync as readEnvironment, writeFileSync as writeEnvironment } from 'node:fs'\n${source}\nwriteEnvironment(${
 				JSON.stringify(seen)
 			}, JSON.stringify({ environ: readEnvironment('/proc/self/environ', 'latin1'), url: process.env['FABRIKA_TEST_POSTGRES_URL'] ?? '' }))\n`
-		expect(withoutSweep(await testIsolation(editedApplication(recording, false)))).toBe('104 generated cases passed\n')
+		expect(withoutSweep(await testIsolation(editedApplication(recording, false)))).toBe('108 generated cases passed\n')
 		const recorded = z.object({ environ: z.string(), url: z.string() }).parse(JSON.parse(readFileSync(seen, 'utf8')))
 		const password = decodeURIComponent(new URL(url).password)
 		expect(recorded.environ).not.toContain(url)
@@ -490,7 +490,7 @@ describe.skipIf(!hasPostgres)('fabrika db against real Postgres', () => {
 		writeFileSync(fixtures, `${original}export const fixtures = { 'api.notes.rename': { expectVersion: 1, id: '', title: 'not a T number' } }\n`)
 		await run(root, 'test-scaffold')
 		const failed = await failure(testIsolation(root))
-		expect(failed).toContain('db test-isolation: 101 of 104 generated cases passed')
+		expect(failed).toContain('db test-isolation: 105 of 108 generated cases passed')
 		expect(failed).toContain(`${ENDPOINTS}: api.notes.rename: the note of another scope is 404 (failed)`)
 	})
 
@@ -501,7 +501,7 @@ describe.skipIf(!hasPostgres)('fabrika db against real Postgres', () => {
 		expect(readFileSync(fixtures, 'utf8')).not.toContain('appRows')
 		await run(root, 'test-scaffold')
 		const failed = await failure(testIsolation(root))
-		expect(failed).toContain('db test-isolation: 101 of 104 generated cases passed')
+		expect(failed).toContain('db test-isolation: 105 of 108 generated cases passed')
 		expect(failed).toContain(`${ENDPOINTS}: api.notes.notice: the answer to one scope holds nothing of the scope answered before it (failed)`)
 		expect(failed).toContain(`${ENDPOINTS}: shared.notice: the holder of a link to a note reaches it (failed)`)
 	})
@@ -516,14 +516,14 @@ describe.skipIf(!hasPostgres)('fabrika db against real Postgres', () => {
 		await run(root, 'test-scaffold')
 		// api.notes.notice's cases run first and seed the published notice; each removes it once it is over.
 		const failed = await failure(testIsolation(root))
-		expect(failed).toContain('db test-isolation: 103 of 104 generated cases passed')
+		expect(failed).toContain('db test-isolation: 107 of 108 generated cases passed')
 		expect(failed).toContain(`${ENDPOINTS}: shared.notice: the holder of a link to a note reaches it (failed)`)
 	})
 
 	test('--verbose prints the test output locally', async () => {
 		const verbose = await testIsolation(runnableIsolationApp(), ['--verbose'])
-		expect(verbose).toContain('104 generated cases passed')
-		expect(verbose).toContain('104 pass')
+		expect(verbose).toContain('108 generated cases passed')
+		expect(verbose).toContain('108 pass')
 	})
 
 	test('the isolation fixture’s schema module is what codegen writes for its migrations', async () => {

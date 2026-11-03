@@ -49,7 +49,7 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [103](103-runs-keeps-an-unused-pending-access-column.md) — Nothing reads or writes `runs.pending_access_json` since contractless applications are refused; a later migration drops it.
 - [116](116-verify-the-paved-road-zerops-facts-on-a-real-account.md) — New roles on an HA service's direct port, ClamAV on a real service, and the pre-WU12 Notes schema need one live sitting.
 - [117](117-an-application-test-cannot-inject-a-database-fault.md) — The checker refuses Bun's SQL and `process.env` in tests too; only the job clock can fail an attempt.
-- [122](122-a-generated-case-cannot-seed-a-child-rows-state-or-a-row-under-an-in-target.md) — `rows` seeds no child row state and no row under an `in` target; the own case expects exactly 200.
+- [122](122-a-generated-case-cannot-seed-a-child-rows-state.md) — `rows` seeds no child row state; the own case expects exactly 200.
 - [135](135-deleting-a-zerops-secret-named-like-a-descriptor-variable-is-forbidden.md) — A Zerops secret named like a `run.envVariables` entry can fail to delete with `userDataDeleteForbidden`.
 - [154](154-an-endpoint-reads-its-own-target-only-under-an-action-its-table-names.md) — The skill's "reads its own target, whatever its action" holds only for actions the table names.
 - [155](155-creating-a-top-level-value-makes-the-creator-its-member.md) — `creates` makes the creator a member; staff cannot create a value without joining it.
@@ -142,6 +142,7 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [260](260-an-operator-cannot-remove-an-authors-sandbox.md): An operator cannot delete a dev environment or app while an author keeps a sandbox; the 409 names an owner-only tool.
 - [261](261-a-dev-schema-reconcile-revokes-keys-other-sandboxes-hold.md): IAM's schema reconcile revokes keys that other sandboxes of a dev environment still get handed as fresh.
 - [262](262-report-a-replaced-archived-sandbox-and-the-box-operator-steps.md): `ensure` replaces an `ARCHIVED` sandbox without reporting the lost database, and the Box release's operator steps (one reload, a base rebuild) are undocumented.
+- [263](263-rows-fixture-review-findings.md): An `in` report's leak case cannot seed a named row whose table allows one per target; the checker misses a field named under two capability keys.
 - [264](264-a-case-writes-into-a-stored-scope-row.md): A mutation's generated case writes into a scope row a migration wrote (a known enum value), and nothing restores it.
 - [265](265-known-scope-values-collide-in-a-container-or-a-shared-from-field.md): Known enum values stored in one container, or a `from` field two capabilities share, give both callers one grant.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.

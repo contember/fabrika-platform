@@ -1948,15 +1948,21 @@ not run`. Of them only the generated isolation tests run again, at container sta
   own-target case; the denial runs unseeded. A seed may not set a column that places the row in its scope, nor a text
   column that holds a marker the leak cases look for (a text column a CHECK lists the values of, or a foreign key, it
   may). A seed of no `on` or `in` endpoint is an `endpoint-fixture` finding.
-- **Rows.** A handler that addresses a row lying in its object by id (a note's comment) finds no row for a sampled id,
-  so the author names the field and the row's table: `export const rows = { '<endpoint id>': { <field>: '<table>' } }`.
-  The scaffold writes `GENERATED_ROW_PREFIX` and the table there (`'fabrika:row:note_comments'`), and the kit seeds one
-  row of the table in each scope's object (`seedUnder`) and sends, per case, the key of the row in the object the case
-  names: the other scope's in the denial, each scope's own in the leak case, which also looks for the other row's key
-  and markers, and the own in the own-target case, a link holder's included. A field of an endpoint that is not `on` an
-  object a table owns, one that is no string field, and a table whose rows do not lie directly in that object (a
-  child table of the table that owns it, or a dimension table it contains) are `endpoint-fixture` findings: the kit
-  seeds no container between, so a task row of an org endpoint, whose project it would need, is refused.
+- **Rows.** A handler that addresses a row in its scope by id (a note's comment, a note of a workspace, the root of a
+  listed tree) finds no row for a sampled id, so the author names the field and the row's table:
+  `export const rows = { '<endpoint id>': { <field>: '<table>' } }`. The scaffold writes `GENERATED_ROW_PREFIX` and the
+  table there (`'fabrika:row:note_comments'`), and the kit seeds one row of the table in each scope and sends, per case,
+  the key of the row in the scope the case names: the other scope's in the denial, each scope's own in the leak case,
+  which also looks for the other row's key and markers, and the own in the own-target case, a link holder's included.
+  Under `on` and `in` the row lies in the object or target (`seedUnder`); under `over` it is a row of its own in each
+  side's listed scope (`seedWorlds`), which the caller of that side holds. An endpoint with `capabilities` names the
+  capability a row lies in, `'<endpoint id>#<capability>'`, and the scaffold writes `GENERATED_ROW_CAPABILITY` and its
+  name after the table (`'fabrika:row:notes@source'`); `kit.capability` seeds each in its capability's scope, the named
+  one's in the other scope, as its target. A field of an endpoint with no scope (`creates`, `app`, `member`), a row of an
+  endpoint with capabilities whose key names none of them, a field that is no string field, a table whose rows do not lie
+  directly in the `on` or `in` object (a child table of the table that owns it, or a dimension table it contains), of a
+  dimension no table owns, and a table the `over` dimension does not list are `endpoint-fixture` findings: the kit seeds
+  no container between, so a task row of an org endpoint, whose project it would need, is refused.
 - **Members.** A handler that validates a picked person with `ctx.members.get` refuses a sampled id, so the author
   names the field in the same file: `export const members = { '<endpoint id>': ['<field>'] }`. The scaffold writes
   `GENERATED_MEMBER` (`'fabrika:member'`, `@fabrika/app/contract`) there, and the kit replaces it, per case, with a new

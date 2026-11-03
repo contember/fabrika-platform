@@ -1,15 +1,15 @@
 ---
 id: 122
-title: A generated case cannot seed a child row's state or a row under an `in` target
+title: A generated case cannot seed a child row's state
 blocked-by: []
 ---
 
-# 122 — A generated case cannot seed a child row's state or a row under an `in` target
+# 122 — A generated case cannot seed a child row's state
 
 **Summary.** The seed now leaves a foreign key outside the chain `null` or references a reference row, satisfies an
-`IN` list CHECK, names what it cannot seed (`SeedLimitError`), `rows` names a child row by id, and `appRows` seeds a row
-of an application table, in a state, that a leak and an own case read (the guide a link holder downloads). Three limits of the
-evidence remain. Effort: S–M.
+`IN` list CHECK, names what it cannot seed (`SeedLimitError`), `rows` names a row by id under every access form with
+a scope (`on`, `in`, `over` and each capability), and `appRows` seeds a row of an application table, in a state, that a
+leak and an own case read (the guide a link holder downloads). Two limits of the evidence remain. Effort: S–M.
 
 ## Problem
 
@@ -17,9 +17,6 @@ evidence remain. Effort: S–M.
   each scope's object with sampled values (`seedUnder`, `packages/db/src/testing.ts`). A link mutation whose
   precondition is a child row in a state (an open request, a delivery not yet sent) gets the first value of the
   state's enum or `IN` list, which may not be the one the handler needs.
-- **A row under an `in` target.** `rows` is accepted only for an endpoint `on` an object a table owns
-  (`missingEndpointFixtures`, `packages/check/src/scaffold.ts`). An `in` endpoint that names a row of the scope value
-  by id (`{ workspaceId, noteId }`) still gets a sample id.
 - **The own case expects exactly 200** (`packages/check/src/scaffold.ts`, `endpointCases`). A mutation whose honest
   answer to "nothing to do" is 409 needs a seed of the state that makes it act.
 
@@ -28,8 +25,7 @@ evidence remain. Effort: S–M.
 - Consider the general form of relational fixtures: named rows (a child row, a reference row, a row in a state) that
   the kit seeds in both worlds, with their own values, and a case refers to by name.
 - Witness: the isolation fixture (`packages/cli/src/__tests__/fixtures/isolation-app/`) gains a link mutation whose
-  precondition is a child row in a state, and an `in` endpoint that names a row of its scope value, and their
-  regenerated tests pass.
+  precondition is a child row in a state, and its regenerated tests pass.
 
 ## Touch points
 

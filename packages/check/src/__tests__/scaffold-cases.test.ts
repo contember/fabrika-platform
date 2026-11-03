@@ -186,19 +186,25 @@ describe('the invitations and links of the fixtures: input fields that name what
 	})
 })
 
-describe('the rows of the fixtures: input fields that name a row lying in the endpoint object', () => {
+describe('the rows of the fixtures: input fields that name a row in the scope of the endpoint', () => {
 	const ISOLATION_ROOT = join(import.meta.dir, '..', '..', '..', 'cli', 'src', '__tests__', 'fixtures', 'isolation-app')
 	const withFixtures = (text: string) => new Map([...tree(ISOLATION_ROOT), [ENDPOINT_FIXTURES_FILE, text]])
 	const findings = (text: string) => missingEndpointFixtures(scaffoldInputs(withFixtures(text))).map((finding) => finding.message)
 
-	test("each case sends the kit's row of the named table in the field", async () => {
+	test("each case sends the kit's row of the named table in the field, under every access form with a scope", async () => {
 		const text = await endpointTest(tree(ISOLATION_ROOT))
 		expect(text).toContain(
 			"expect(await kit.own('api.notes.editComment', { body: 'x', commentId: 'fabrika:row:note_comments', id: 'x' })).toEqual({ status: 200 })",
 		)
+		expect(text).toContain("expect(await kit.denied('api.notes.lookUp', { noteId: 'fabrika:row:notes', workspaceId: 'x' })).toEqual({ status: 403 })")
+		expect(text).toContain("expect(await kit.leaked('api.notes.thread', { rootId: 'fabrika:row:notes' })).toEqual({ answered: true, leaked: [] })")
+		// A capability's row names the capability it lies in.
+		expect(text).toContain(
+			"expect(await kit.capability('api.notes.relate', 'source', { intoId: 'fabrika:row:workspaces@target', noteId: 'fabrika:row:notes@source', organizationId: 'x' })).toEqual({ status: 403 })",
+		)
 	})
 
-	test('a row of a table outside the object, a field that is no string, and an endpoint not on an owned object are findings', () => {
+	test('a row of a table outside the scope, a field that is no string, and an endpoint without a scope are findings', () => {
 		expect(findings("export const rows = { 'api.notes.editComment': { commentId: 'workspaces', body: 'note_comments' } }\n")).toEqual([
 			"api.notes.editComment: workspaces is no dimension or child table that lies directly in a note, so the kit seeds none in the endpoint's object (it seeds no container between)",
 		])
@@ -210,8 +216,36 @@ describe('the rows of the fixtures: input fields that name a row lying in the en
 		expect(findings("export const rows = { 'api.notes.editComment': { missing: 'note_comments' } }\n")).toEqual([
 			'api.notes.editComment: missing is no string field of its input, so it cannot name a row',
 		])
-		expect(findings("export const rows = { 'api.notes.create': { title: 'notes' } }\n")).toEqual([
-			'api.notes.create is no tested endpoint on an object a table owns, in which the kit could seed a row',
+		expect(findings("export const rows = { 'api.organizations.create': { title: 'notes' } }\n")).toEqual([
+			'api.organizations.create is no tested endpoint on, in or over a scope, in which the kit could seed a row',
+		])
+	})
+
+	test('an in endpoint takes a row that lies directly in its target, an over endpoint one in a scope it lists', () => {
+		expect(findings("export const rows = { 'api.notes.create': { title: 'notes' } }\n")).toEqual([])
+		expect(findings("export const rows = { 'api.notes.create': { title: 'note_comments' } }\n")).toEqual([
+			"api.notes.create: note_comments is no dimension or child table that lies directly in a workspace, so the kit seeds none in the endpoint's object (it seeds no container between)",
+		])
+		expect(findings("export const rows = { 'api.notes.list': { rootId: 'notes' } }\n")).toEqual([
+			'api.notes.list: rootId is no string field of its input, so it cannot name a row',
+		])
+		expect(findings("export const rows = { 'api.notes.thread': { rootId: 'organizations' } }\n")).toEqual([
+			'api.notes.thread: a list of workspace reaches no organizations row, so the kit seeds none in the scopes it lists',
+		])
+	})
+
+	test("a capability's rows name the capability they lie in, one of the endpoint's", () => {
+		expect(findings("export const rows = { 'api.notes.relate': { noteId: 'notes' } }\n")).toEqual([
+			'api.notes.relate has several capabilities, so its rows name the one whose scope they lie in',
+		])
+		expect(findings("export const rows = { 'api.notes.relate#missing': { noteId: 'notes' } }\n")).toEqual([
+			'api.notes.relate#missing names no capability of a tested endpoint with several, in whose scope the kit could seed a row',
+		])
+		expect(findings("export const rows = { 'api.notes.thread#source': { rootId: 'notes' } }\n")).toEqual([
+			'api.notes.thread#source names no capability of a tested endpoint with several, in whose scope the kit could seed a row',
+		])
+		expect(findings("export const rows = { 'api.notes.relate#target': { intoId: 'notes' } }\n")).toEqual([
+			"api.notes.relate: notes is no dimension or child table that lies directly in a organization, so the kit seeds none in the endpoint's object (it seeds no container between)",
 		])
 	})
 })

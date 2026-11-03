@@ -9,9 +9,11 @@ import {
 	GENERATED_INVITATION,
 	GENERATED_LINK,
 	GENERATED_MEMBER,
+	GENERATED_ROW_CAPABILITY,
 	GENERATED_ROW_PREFIX,
 } from '@fabrika/app/contract'
 import {
+	type AccessForm,
 	type ContractArtifact,
 	endpointDirectory,
 	endpointMembers,
@@ -304,7 +306,8 @@ const isLinkProcedure = (row: EndpointRow): boolean =>
  * The input an endpoint's cases send: the author's fixture, else a sample of its schema; `undefined` when neither
  * exists. Each field its `members`, `invitations` or `links` name holds `GENERATED_MEMBER`, `GENERATED_INVITATION` or
  * `GENERATED_LINK`, which the kit replaces with a real member, an open invitation or a link it issued; each field its
- * `rows` name holds `GENERATED_ROW_PREFIX` and the table, which the kit replaces with the key of a row it seeded; each file
+ * `rows` name holds `GENERATED_ROW_PREFIX` and the table (and, under `<endpoint id>#<capability>`, the capability), which
+ * the kit replaces with the key of a row it seeded; each file
  * field its `files` name holds its kind's marker (in a list, for a list of files), even where the sample left an optional
  * one out, which the kit sends as the named file.
  */
@@ -320,6 +323,11 @@ const inputOf = (row: EndpointRow, fixtures: EndpointFixtures): Readonly<Record<
 			...generated(fixtures.invitations[row.id], GENERATED_INVITATION),
 			...generated(fixtures.links[row.id], GENERATED_LINK),
 			...Object.entries(fixtures.rows[row.id] ?? {}).map(([field, table]) => [field, `${GENERATED_ROW_PREFIX}${table}`]),
+			...Object.keys(row.requirement?.kind === 'capabilities' ? row.requirement.capabilities : {}).flatMap((name) =>
+				Object.entries(fixtures.rows[`${row.id}${CAPABILITY_KEY}${name}`] ?? {}).map((
+					[field, table],
+				) => [field, `${GENERATED_ROW_PREFIX}${table}${GENERATED_ROW_CAPABILITY}${name}`])
+			),
 			...Object.keys(fixtures.files[row.id] ?? {}).flatMap((field) => {
 				const file = fileFieldOf(row.input, field)
 				if (file === undefined) return []
@@ -329,6 +337,9 @@ const inputOf = (row: EndpointRow, fixtures: EndpointFixtures): Readonly<Record<
 		]),
 	}
 }
+
+/** What separates an endpoint id from a capability's name in a `rows` key: `api.tasks.copy#from`. */
+const CAPABILITY_KEY = '#'
 
 /** The file kind of a top-level file field of `input` (a file, an optional or nullable one, or a list of them), or `undefined`. */
 const fileFieldOf = (input: SchemaShape | null, field: string): { readonly kind: string; readonly list: boolean } | undefined => {
@@ -420,6 +431,29 @@ const liesDirectlyIn = (policies: Policies, table: string, dimension: string): b
 	const parent = scope?.mode === 'child' ? policies[scope.parent]?.scope : undefined
 	return parent?.mode === 'dimension' && parent.dimension === dimension
 }
+
+/**
+ * Whether a list of `dimension` (`over`) reaches the rows of `table`: a dimension table it contains or of its own when it
+ * has no container, or a child of one.
+ */
+const listedBy = (policies: Policies, table: string, dimension: string): boolean => {
+	const listedIn = (scope: Policies[string]['scope'] | undefined): string | undefined =>
+		scope?.mode === 'dimension' ? (scope.container?.dimension ?? scope.dimension) : undefined
+	const scope = policies[table]?.scope
+	return (scope?.mode === 'child' ? listedIn(policies[scope.parent]?.scope) : listedIn(scope)) === dimension
+}
+
+/**
+ * Whether the kit seeds a row of `table` for an endpoint of `access`: in its object (`on`, `in` an object a table owns,
+ * the table lying directly in it) or in the scopes it lists (`over`).
+ */
+const rowPlace = (policies: Policies, access: ScopedAccess, table: string): boolean =>
+	access.form === 'over'
+		? listedBy(policies, table, access.dimension)
+		: ownerRead(policies, access.dimension) !== undefined && liesDirectlyIn(policies, table, access.dimension)
+
+/** An access form that names a scope: an object (`on`), a value (`in`) or a list (`over`). */
+type ScopedAccess = Extract<AccessForm, { readonly form: 'on' | 'in' | 'over' }>
 
 /** The read action of the table that owns `dimension`, or `undefined` when no table owns it. */
 const ownerRead = (policies: Policies, dimension: string): string | undefined =>
@@ -714,6 +748,23 @@ const appRowAllowed = (refusal: ApplicationRowRefusal): string => {
 	}
 }
 
+/** The finding of a `rows` table the kit seeds no row of for an endpoint of `access`, and its allowed form. */
+const unplacedRow = (policies: Policies, id: string, table: string, access: ScopedAccess): readonly [string, string] => {
+	if (access.form === 'over') {
+		return [
+			`${id}: a list of ${access.dimension} reaches no ${table} row, so the kit seeds none in the scopes it lists`,
+			`a dimension table whose container is ${access.dimension}, or a child table of one`,
+		]
+	}
+	if (ownerRead(policies, access.dimension) === undefined) {
+		return [`${id}: no table owns ${access.dimension}, so the kit seeds no ${table} row in one`, `an endpoint on or in a dimension a table owns`]
+	}
+	return [
+		`${id}: ${table} is no dimension or child table that lies directly in a ${access.dimension}, so the kit seeds none in the endpoint's object (it seeds no container between)`,
+		`a child table of the table that owns ${access.dimension}, or a dimension table whose container is ${access.dimension}`,
+	]
+}
+
 /** What the scaffold reads from an application's files; throws `ContractSourceError` or `ContractError` as the reader does. */
 export const scaffoldInputs = (files: ReadonlyMap<string, string>): ScaffoldInputs => {
 	const tables = readTablesDefinition(files)
@@ -803,29 +854,43 @@ export const missingEndpointFixtures = ({ tables, policies, artifact, fixtures }
 			}
 		}
 	}
-	for (const [id, fields] of Object.entries(fixtures.rows).sort(byKey)) {
+	for (const [key, fields] of Object.entries(fixtures.rows).sort(byKey)) {
+		const split = key.indexOf(CAPABILITY_KEY)
+		const id = split === -1 ? key : key.slice(0, split)
+		const named = split === -1 ? null : key.slice(split + 1)
 		const row = tested.find((candidate) => candidate.id === id)
-		const access = row?.requirement?.kind === 'action' ? row.requirement.access : undefined
-		const owned = access?.form === 'on' && ownerRead(policies, access.dimension) !== undefined
-		if (row === undefined || access?.form !== 'on' || !owned) {
+		const requirement = row?.requirement
+		const severalCapabilities = requirement?.kind === 'capabilities'
+		const access = requirement?.kind === 'action' && named === null
+			? requirement.access
+			: requirement?.kind === 'capabilities' && named !== null && Object.hasOwn(requirement.capabilities, named)
+			? requirement.capabilities[named]?.access
+			: undefined
+		const scope = access?.form === 'on' || access?.form === 'in' || access?.form === 'over' ? access : undefined
+		if (row === undefined || scope === undefined) {
 			findings.push(
-				at(
-					`${id} is no tested endpoint on an object a table owns, in which the kit could seed a row`,
-					"export const rows = { '<endpoint id>': { <input field>: '<table>' } }, for an endpoint on a dimension a table owns",
-				),
+				severalCapabilities && named === null
+					? at(
+						`${id} has several capabilities, so its rows name the one whose scope they lie in`,
+						`export const rows = { '${id}${CAPABILITY_KEY}<capability>': { <input field>: '<table>' } }`,
+					)
+					: named !== null
+					? at(
+						`${key} names no capability of a tested endpoint with several, in whose scope the kit could seed a row`,
+						`export const rows = { '<endpoint id>${CAPABILITY_KEY}<capability>': { <input field>: '<table>' } }, a capability of the endpoint`,
+					)
+					: at(
+						`${id} is no tested endpoint on, in or over a scope, in which the kit could seed a row`,
+						"export const rows = { '<endpoint id>': { <input field>: '<table>' } }, for an endpoint on, in or over a dimension",
+					),
 			)
 			continue
 		}
 		for (const [field, table] of Object.entries(fields).sort(byKey)) {
 			if (row.input?.type !== 'object' || !admitsString(row.input.fields[field])) {
 				findings.push(at(`${id}: ${field} is no string field of its input, so it cannot name a row`, 'a top-level string field of the input'))
-			} else if (!liesDirectlyIn(policies, table, access.dimension)) {
-				findings.push(
-					at(
-						`${id}: ${table} is no dimension or child table that lies directly in a ${access.dimension}, so the kit seeds none in the endpoint's object (it seeds no container between)`,
-						`a child table of the table that owns ${access.dimension}, or a dimension table whose container is ${access.dimension}`,
-					),
-				)
+			} else if (!rowPlace(policies, scope, table)) {
+				findings.push(at(...unplacedRow(policies, id, table, scope)))
 			}
 		}
 	}
