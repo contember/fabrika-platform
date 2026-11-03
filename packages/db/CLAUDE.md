@@ -366,7 +366,9 @@ pass a recording one); `Database.fromEngine` takes another engine (`openSqlite`)
   days). Each row answers the columns its action reads, its new version and `ref`: a `RowGrant` the authority mints
   (`CapabilityAuthority.row`), bound to the row's key and the containment it had when claimed. `tx.db.on(row.ref)`
   updates (`done: true` clears `due` in the same statement), removes with the delete action, or requeues. Never add a
-  claim that waits for a lock or runs inside the work's transaction.
+  claim that waits for a lock or runs inside the work's transaction. Its file references are readable where the claim's
+  action or one of `DataSite.holds` (the actions the job holds over the whole application) is a read action of the table;
+  a column with its own read action is answered, and readable, only when that action is the claim's own.
 - **An insert's `onConflict` writes in SQL only `DO NOTHING`** (`insertOnConflict` in `store.ts`). `'update'` is a
   second statement in the same transaction: the table's update columns, by the conflict columns, within the insert's own
   containment, by a capability that also holds the update action. A conflicting row out of that reach is a 409.

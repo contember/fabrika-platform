@@ -1920,7 +1920,8 @@ task_attachments: {
   cascade) or clearing a nullable column removes the reference; the framework's sweep deletes a file no column
   references.
 - A file column takes only a file reference: an input file (`file('<kind>')`), a `ctx.files.put` of this request, or a
-  reference this request read from a file column under that table's `read` action. A string id is refused.
+  reference this request read from a file column under that table's `read` action (or claimed with its queue row while
+  the job declares that action). A string id is refused.
 
 ```ts src/attachments/endpoints.ts
 import { file } from '@fabrika/app/contract'
@@ -2053,7 +2054,8 @@ a view that maps them.
 | `put(kind, bytes, { type, name? })` | stores a new file of the kind and answers its reference; it is pending until a column holds it |
 | `open(ref, { maxBytes? })`          | `{ id, name, type, size, bytes }` of a live file, read whole                                   |
 
-`open` takes a reference the site read from a file column under that table's `read` action. It answers 409
+`open` takes a reference the site read from a file column under that table's `read` action, or a queue row a job
+claimed while it also declares that action (`references/jobs.md`). It answers 409
 `file_not_ready` until the scan called the file clean, 409 `file_rejected` for a rejected one, and 413 for a file over
 `maxBytes` (the kind's by default), before any byte is read. Pass the size you hold in memory.
 
@@ -2486,6 +2488,19 @@ for (const row of await ctx.db.app('mail.send').outbox.claim({ limit: 50 })) {
 - Claim through the capability you read the table with: `ctx.db.app('<action>').<table>` for an application table,
   `ctx.db.over(ctx.within('<action>', '<dimension>')).<table>` for a scoped one. The action is the table's `update`
   action. `claim` runs only in a job and never inside `ctx.transaction`.
+- A claimed row's file column is a reference the job opens (`ctx.files.open`) only when the job also declares the
+  table's `read` action. With only the update action it carries the metadata, and `open` refuses it. A column with
+  its own read action is in the claim's answer only when that action is the claim's own, and is then readable.
+
+  ```text
+  // uploads: read 'uploads.read', update 'uploads.process', files: { file: 'documents' }
+  app.cron('*/5 * * * *', { actions: ['uploads.read', 'uploads.process'] }).handle(async ({ ctx }) => {
+  	for (const row of await ctx.db.app('uploads.process').uploads.claim({ limit: 5 })) {
+  		const document = await ctx.files.open(row.file)
+  		…
+  	}
+  })
+  ```
 - Finish each row in its own transaction through `tx.db.on(row.ref)`: `.update(values, { expectVersion, done: true })`
   writes and clears `<due>`; `.remove({ expectVersion })` deletes the row (the table's delete action);
   `.requeue({ at? })` makes it due again at `at` (now by default) with no attempts, for a dead row or a reminder moved

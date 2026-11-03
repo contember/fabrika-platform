@@ -270,7 +270,7 @@ export class StoredFileKinds {
 		if (holding === undefined || !holdsFile(work.holder, holding.id)) {
 			throw new CapabilityRefusedError(
 				'wrong_capability',
-				`${where} takes a file reference this request holds and may read: an input file, a put, or a file column read under its table's read action`,
+				`${where} takes a file reference this request holds and may read: an input file, a put, or a file column read under its table's read action (or claimed by a job that holds it)`,
 			)
 		}
 		const file = await this.#files.find(holding.id)

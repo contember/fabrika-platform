@@ -76,7 +76,8 @@ task_attachments: {
   cascade) or clearing a nullable column removes the reference; the framework's sweep deletes a file no column
   references.
 - A file column takes only a file reference: an input file (`file('<kind>')`), a `ctx.files.put` of this request, or a
-  reference this request read from a file column under that table's `read` action. A string id is refused.
+  reference this request read from a file column under that table's `read` action (or claimed with its queue row while
+  the job declares that action). A string id is refused.
 
 ```ts src/attachments/endpoints.ts
 import { file } from '@fabrika/app/contract'
@@ -209,7 +210,8 @@ a view that maps them.
 | `put(kind, bytes, { type, name? })` | stores a new file of the kind and answers its reference; it is pending until a column holds it |
 | `open(ref, { maxBytes? })`          | `{ id, name, type, size, bytes }` of a live file, read whole                                   |
 
-`open` takes a reference the site read from a file column under that table's `read` action. It answers 409
+`open` takes a reference the site read from a file column under that table's `read` action, or a queue row a job
+claimed while it also declares that action (`references/jobs.md`). It answers 409
 `file_not_ready` until the scan called the file clean, 409 `file_rejected` for a rejected one, and 413 for a file over
 `maxBytes` (the kind's by default), before any byte is read. Pass the size you hold in memory.
 

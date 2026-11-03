@@ -3,7 +3,7 @@
 // and claims, locks and stamps the file in the write's own transaction. The file's row is `fabrika_files`
 // (`stored-files.ts`); the column is a foreign key to it, so a file some row references is never deleted.
 
-import { defineValue, ownDescriptor, ownKeys } from './builtins'
+import { defineValue, hasOwn, inSet, type NameSet, nameSet, ownDescriptor, ownKeys } from './builtins'
 import { runFixedStatement, type Session } from './database'
 import type { Primitive } from './description'
 import { NotFoundError, QueryRefusedError } from './errors'
@@ -24,17 +24,41 @@ export interface FileBinding {
 	scans(kind: string): boolean
 }
 
-/** Whether a reference read with `action` lets its holder serve, open and copy the file: the table's or the column's read action. */
-function readsFile(model: TableModel, column: string, action: string): boolean {
-	const own = Object.hasOwn(model.columnReads, column) ? model.columnReads[column] : undefined
-	return own === undefined ? model.actions.read.includes(action) : own === action
+/**
+ * Whether a reference read with `action` lets its holder serve, open and copy the file: the table's or the column's
+ * read action, or a table read action among `held`, the actions a job holds over the whole application. A column with
+ * its own read action is answered only under that action (`visibleFor`), so `held` never widens it.
+ */
+function readsFile(model: TableModel, column: string, action: string, held: NameSet): boolean {
+	const own = hasOwn(model.columnReads, column) ? model.columnReads[column] : undefined
+	if (own !== undefined) {
+		return own === action
+	}
+	const reads = model.actions.read
+	for (let index = 0; index < reads.length; index++) {
+		const read = reads[index]
+		if (read === action || inSet(held, read)) {
+			return true
+		}
+	}
+	return false
 }
+
+const NONE_HELD: NameSet = nameSet([])
 
 /**
  * Puts a file reference in each file column of `rows`, read with `action` in `session`: one statement loads every
- * file's metadata. Without a binding (a store's own runner) the columns keep their ids.
+ * file's metadata. Without a binding (a store's own runner) the columns keep their ids. `held` (a queue claim's) adds
+ * the actions the site holds over the whole application: a reference is readable when one of them reads the table.
  */
-export async function answerFiles<R>(model: TableModel, binding: FileBinding | undefined, session: Session, rows: R[], action: string): Promise<R[]> {
+export async function answerFiles<R>(
+	model: TableModel,
+	binding: FileBinding | undefined,
+	session: Session,
+	rows: R[],
+	action: string,
+	held: NameSet = NONE_HELD,
+): Promise<R[]> {
 	const columns = ownKeys(model.files)
 	if (binding === undefined || columns.length === 0 || rows.length === 0) {
 		return rows
@@ -62,7 +86,7 @@ export async function answerFiles<R>(model: TableModel, binding: FileBinding | u
 			if (meta === undefined) {
 				throw new QueryRefusedError('unexpected_row', `${model.name}.${column} references a file that is not stored`)
 			}
-			defineValue(row, column, fileReference(meta, binding.holder, readsFile(model, column, action)))
+			defineValue(row, column, fileReference(meta, binding.holder, readsFile(model, column, action, held)))
 		}
 	}
 	return rows

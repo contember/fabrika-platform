@@ -102,7 +102,8 @@ export type StoredFileBody = Uint8Array | ReadableStream<Uint8Array> | Blob
 /**
  * `ctx.files.put` and `ctx.files.open`: the stored files of a site (`c.files` kinds). A put stages a file this request
  * holds; writing its reference into a file column is what keeps it. `open` reads a live file whose reference this
- * request holds and may read: an input file, a put, or a file column read under its table's read action.
+ * request holds and may read: an input file, a put, or a file column read under its table's read action (or claimed by
+ * a job that holds it).
  */
 export interface StoredFilesHandle {
 	/** A file of `kind` with these bytes, which must be of `type`; it is pending until a column references it. */
