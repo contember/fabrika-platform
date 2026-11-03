@@ -5833,7 +5833,7 @@ export const members = { 'api.tasks.assign': ['assignee'] }
   and one of an endpoint that does not exist (`endpoint-fixture`). The access form's `from` field is
   replaced by the seeded scope.
 - A `from` field that admits a fixed set of values (`z.enum(['eu', 'us', 'apac'])`, a literal or a union of them) gets
-  two of them, the first two in sorted order, one per scope. A row the table that owns the dimension already holds
+  two of them, one per scope: an enum's first two in sorted order, a union's first two as written. A row the table that owns the dimension already holds
   under that key (a migration wrote the regions) is used as it is; a row the case inserts is removed once it is over.
   Such a stored row takes no `seeds` or `pins`, and a field of one value cannot be asked from two scopes: both fail the
   case.

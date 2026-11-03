@@ -308,12 +308,14 @@ function fieldOf(input: SchemaShape | null, from: string | null): SchemaShape | 
 /**
  * Every value of the other world a leak shows: its key, parent, every dimension value it lies in, and its markers. A
  * known scope value, and a text of a row the table already held, other rows may share, and a short word is part of
- * unrelated text: each counts only as a whole JSON string (`"eu"`).
+ * unrelated text: each counts only as a whole JSON string (`"eu"`). A stored text the own row holds too is no leak.
  */
 function worldValues(worlds: IsolationWorlds, world: 'own' | 'other', scopes: ScopeValues): string[] {
 	const row = worlds[world]
+	const shared = new Set(world === 'other' ? worlds.own.stored : worlds.other.stored)
 	const values = [row.key, row.scope, ...(row.parent === null ? [] : [row.parent]), ...row.chain.map((link) => link.value), ...row.markers]
-	return [...new Set([...values.map((value) => shownValue(value, scopes)), ...row.stored.map((value) => JSON.stringify(value))])]
+	const stored = row.stored.filter((value) => !shared.has(value))
+	return [...new Set([...values.map((value) => shownValue(value, scopes)), ...stored.map((value) => JSON.stringify(value))])]
 }
 
 /** A value of a scope as a leak shows it: a known scope value as a whole JSON string, any other as it is. */

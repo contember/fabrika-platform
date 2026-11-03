@@ -19,7 +19,7 @@ import { z } from 'zod/v4'
 // The enum holds a region the migration does not write, which the kit inserts for its case and removes after it. A
 // region holds one profile at most, so a profile a case leaves behind fails the next one.
 const migration = (rows: string) => `
-create table regions (id text primary key, name text not null, active boolean not null default false);
+create table regions (id text primary key, name text not null, kind text not null, active boolean not null default false);
 ${rows}
 create table items (
 	id uuid primary key,
@@ -39,13 +39,13 @@ const vocabulary = defineVocabulary({
 })
 
 interface DB {
-	regions: { id: string; name: string; active: boolean }
+	regions: { id: string; name: string; kind: string; active: boolean }
 	items: { id: string; region_id: string; title: string; created_by: string; version: number }
 	profiles: { id: string; region_id: string; bio: string }
 }
 
 const columns: TypedColumnList<DB> = {
-	regions: { columns: ['id', 'name', 'active'], foreignKeys: [] },
+	regions: { columns: ['id', 'name', 'kind', 'active'], foreignKeys: [] },
 	items: {
 		columns: ['id', 'region_id', 'title', 'created_by', 'version'],
 		foreignKeys: [{ columns: ['region_id'], table: 'regions', references: ['id'] }],
@@ -84,6 +84,8 @@ const regions = app.group({ callers: ['human'] }, (r) => ({
 	}).handle(async ({ input, ctx }) => ({ id: (await ctx.db.target.items.insert({ title: input.title })).id })),
 	titles: r.query({ input: InRegion, output: Titles, access: { action: 'items.read', in: 'region', from: 'region' } })
 		.handle(async ({ ctx }) => ({ titles: (await ctx.db.target.items.list()).items.map((item) => item.title) })),
+	kind: r.query({ input: InRegion, output: z.strictObject({ kind: z.string() }), access: { action: 'items.read', on: 'region', from: 'region' } })
+		.handle(async ({ ctx }) => ({ kind: (await ctx.db.target.get()).kind })),
 	everyName: r.query({
 		input: InRegion,
 		output: z.strictObject({ names: z.array(z.string()) }),
@@ -129,12 +131,17 @@ const database = async (rows: string) => {
 	writeFileSync(join(migrations, '20261103120000_regions.sql'), migration(rows))
 	return testDatabase({ migrations, label: 'endpoint-access-known-scopes.test.ts' })
 }
-const postgres = await database(`insert into regions (id, name) values ('eu', 'Europe'), ('us', 'United States');`)
+const postgres = await database(`insert into regions (id, name, kind) values ('eu', 'Europe', 'continent'), ('us', 'United States', 'country');`)
 const unwritten = await database('')
+// Both scopes' regions are stored, and they share a kind.
+const everyRegion = await database(
+	`insert into regions (id, name, kind) values ('apac', 'Asia', 'continent'), ('eu', 'Europe', 'continent'), ('us', 'United States', 'country');`,
+)
 
 afterAll(async () => {
 	await postgres?.close()
 	await unwritten?.close()
+	await everyRegion?.close()
 	for (const directory of directories) rmSync(directory, { recursive: true, force: true })
 })
 
@@ -180,6 +187,12 @@ describe.skipIf(postgres === null)('the endpoint access kit over a dimension who
 		const kit = accessKit(unwritten)
 		expect(await kit.denied('api.regions.titles', { region: 'eu' }, { active: true })).toEqual({ status: 403 })
 		expect(await kit.leaked('api.regions.titles', { region: 'eu' }, { active: true })).toEqual({ answered: true, leaked: [] })
+	})
+
+	test("a text both stored regions hold is no leak, and the other region's own text still is", async () => {
+		const kit = accessKit(everyRegion)
+		expect(await kit.leaked('api.regions.kind', { region: 'eu' })).toEqual({ answered: true, leaked: [] })
+		expect(await kit.leaked('api.regions.everyName', { region: 'eu' })).toEqual({ answered: true, leaked: ['"Europe"'] })
 	})
 
 	test('a dimension no table owns takes the values of the enum', async () => {
