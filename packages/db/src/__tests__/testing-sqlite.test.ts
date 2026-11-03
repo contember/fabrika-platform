@@ -306,6 +306,13 @@ describe('worlds in known values of a dimension whose rows a migration wrote', (
 			"the two worlds share the organization 'acme'",
 		)
 	})
+
+	test('a seed that fails in the other world removes the row it inserted in the first', async () => {
+		await expect(sqlite.seedWorlds(tables, 'organizations', {}, { name: 'Pinned' }, { organization: { own: 'globex', other: 'acme' } })).rejects
+			.toThrow("organizations already holds the organization 'acme'")
+		const organizations = tableProbe(layer, 'organizations')
+		expect(await organizations.select(authority.within('organization', 'notes.read', ['globex']))).toEqual([])
+	})
 })
 
 describe('the seed over the types of an application on SQLite', () => {

@@ -46,6 +46,11 @@ export interface WorldRow {
 	 * Each occurs in no other fixture, so one found in an answer to another scope is a leaked row.
 	 */
 	readonly markers: readonly string[]
+	/**
+	 * The values of the text columns of a row the table already held under a known scope value (`seedWorlds`' `scopes`),
+	 * which no fixture wrote and other rows may share; empty for a row the fixture inserted.
+	 */
+	readonly stored: readonly string[]
 }
 
 /** One seeded row of an application table, which lies in no dimension. */
@@ -73,6 +78,8 @@ export interface SeededApplicationRows {
 export interface SeededRow {
 	readonly key: string
 	readonly markers: readonly string[]
+	/** Deletes the row, the rows its foreign keys made the fixture insert, and every row that refers to them. */
+	readonly remove: () => Promise<void>
 }
 
 /**
@@ -94,9 +101,9 @@ export interface IsolationWorlds {
 	readonly own: WorldRow
 	readonly other: WorldRow
 	/**
-	 * Deletes both rows of the table it inserted, the container rows it inserted for a known scope value, and every row
-	 * that refers to them, however deep; the other containers stay. A case whose rows hold pinned values or known scope
-	 * values removes them, so the next case can seed the same values again under a unique index.
+	 * Deletes both rows of the table it inserted, every container row it inserted when it was given known scope values,
+	 * and every row that refers to them, however deep; the other containers stay. A case whose rows hold pinned values or
+	 * known scope values removes them, so the next case can seed the same values again under a unique index.
 	 */
 	readonly remove: () => Promise<void>
 }
@@ -117,7 +124,8 @@ export interface TestSeeding {
 	 * counts among the other row's markers, so a leak of it is still found. A pin of a column that places the row, or of
 	 * no text column, throws. `scopes` place each world in known values of a dimension instead of fresh ones: a row of
 	 * the table that owns it with that key is used as it is stored (a migration wrote it), its containers' values with it,
-	 * and is inserted otherwise. A stored row of `table` itself takes no `values` or `pins`: they throw.
+	 * and is inserted otherwise. A stored row of `table` itself takes no `values` or `pins`: they throw. A seed that throws
+	 * removes what it inserted.
 	 */
 	seedWorlds<DB, P>(
 		tables: Tables<DB, P>,
@@ -735,6 +743,22 @@ export function testSeeding(backend: SeedingBackend): TestSeeding {
 		return { values, stored }
 	}
 
+	/** The values of the text columns that would hold a marker in the stored row of `model` keyed `key`. */
+	async function storedTexts(model: TableModel, key: string): Promise<string[]> {
+		const scope = model.scope
+		if (scope.mode !== 'dimension') return []
+		const names: string[] = []
+		for (const column of columnsOf(model.name)) {
+			if (await holdsMarker(model, model.name, column)) names.push(column.name)
+		}
+		if (names.length === 0) return []
+		const row = await backend.firstRow(model.name, names, new Map([[scope.key, key]]))
+		return names.flatMap((name) => {
+			const value = row?.[name]
+			return typeof value === 'string' && value !== '' ? [value] : []
+		})
+	}
+
 	async function seedWorld(
 		models: TableModels,
 		model: TableModel,
@@ -759,7 +783,7 @@ export function testSeeding(backend: SeedingBackend): TestSeeding {
 		if (own !== undefined) {
 			values.set(own, key)
 		}
-		const worldRow = (row: ReadonlyMap<string, SampleValue>) => {
+		const worldRow = (row: ReadonlyMap<string, SampleValue>, stored: readonly string[]) => {
 			const chain = [
 				...(own === undefined ? [] : [{ type: own, value: key }]),
 				...links.flatMap((link) => {
@@ -773,6 +797,7 @@ export function testSeeding(backend: SeedingBackend): TestSeeding {
 				scope: values.get(grantDimension(models, model)) ?? key,
 				chain,
 				markers,
+				stored,
 			}
 			return { world: seeded, row }
 		}
@@ -782,7 +807,7 @@ export function testSeeding(backend: SeedingBackend): TestSeeding {
 					`${model.name} already holds the ${own} '${key}' (a migration wrote it), so a case writes no seed or pin into it; seed the state of a row the case inserts`,
 				)
 			}
-			return worldRow(new Map())
+			return worldRow(new Map(), await storedTexts(model, key))
 		}
 		// Containers first, outermost first: a composite foreign key needs its target row. A stored one is used as it is.
 		for (let index = links.length - 1; index >= 0; index--) {
@@ -790,10 +815,12 @@ export function testSeeding(backend: SeedingBackend): TestSeeding {
 			const owner = link === undefined ? undefined : ownerOf(models, link.dimension)
 			const value = link === undefined ? undefined : values.get(link.dimension)
 			if (link === undefined || owner === undefined || owner.name === model.name || value === undefined || stored.has(link.dimension)) continue
-			await insert(models, owner.name, placement(owner, values, value), markers)
-			// A container of a known value goes with the worlds, so the next case can insert it again.
-			if (Object.hasOwn(scopes, link.dimension) && owner.scope.mode === 'dimension') {
-				inserted.push({ table: owner.name, match: new Map([[owner.scope.key, value]]) })
+			// With known values, every container goes with the worlds: one of a known value, so the next case can insert it
+			// again, and one inside a stored row, which no removal of that row reaches.
+			const tracked = Object.keys(scopes).length > 0 ? inserted : undefined
+			await insert(models, owner.name, placement(owner, values, value), markers, 0, tracked)
+			if (tracked !== undefined && owner.scope.mode === 'dimension') {
+				tracked.push({ table: owner.name, match: new Map([[owner.scope.key, value]]) })
 			}
 		}
 		const assigned = placement(model, values, key)
@@ -823,7 +850,7 @@ export function testSeeding(backend: SeedingBackend): TestSeeding {
 		}
 		const { row } = await insert(models, model.name, assigned, markers)
 		inserted.push({ table: model.name, match: new Map([[scope.key, key]]) })
-		return worldRow(row)
+		return worldRow(row, [])
 	}
 
 	/** A seeded row's values of the policy's update columns: as written, or a sample where the database filled the column. */
@@ -843,8 +870,20 @@ export function testSeeding(backend: SeedingBackend): TestSeeding {
 				if (known.own === known.other) throw new Error(`the two worlds share the ${name} '${known.own}'; each needs a value of its own`)
 			}
 			const inserted: InsertedRow[] = []
-			const own = await seedWorld(models, model, 'own', values, pins, scopes, inserted)
-			const other = await seedWorld(models, model, 'other', values, pins, scopes, inserted)
+			let own: Awaited<ReturnType<typeof seedWorld>>
+			let other: Awaited<ReturnType<typeof seedWorld>>
+			try {
+				own = await seedWorld(models, model, 'own', values, pins, scopes, inserted)
+				other = await seedWorld(models, model, 'other', values, pins, scopes, inserted)
+			} catch (error) {
+				// A row of a known value left behind would pass for one a migration wrote in every later case.
+				try {
+					await backend.remove(inserted)
+				} catch (cleanup) {
+					throw new AggregateError([error, cleanup], 'the isolation fixture could not seed the worlds, nor remove what it had seeded')
+				}
+				throw error
+			}
 			// Sampled once both rows are written: a number a unique index covers is the next above what the table holds.
 			return {
 				dimension,
@@ -910,8 +949,10 @@ export function testSeeding(backend: SeedingBackend): TestSeeding {
 			}
 			const key = scopeValue(table, scope.key, scope.mode === 'dimension' ? scope.dimension : table, 'under')
 			const markers: string[] = []
-			await insert(models, table, placement(model, values, key), markers)
-			return { key, markers }
+			const inserted: InsertedRow[] = []
+			await insert(models, table, placement(model, values, key), markers, 0, inserted)
+			inserted.push({ table, match: new Map([[scope.key, key]]) })
+			return { key, markers, remove: () => backend.remove(inserted) }
 		},
 		async sampleInsert(tables, table, beside) {
 			const { models, model } = scopedModel(tables, table)

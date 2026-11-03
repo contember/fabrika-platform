@@ -307,13 +307,19 @@ function fieldOf(input: SchemaShape | null, from: string | null): SchemaShape | 
 
 /**
  * Every value of the other world a leak shows: its key, parent, every dimension value it lies in, and its markers. A
- * known scope value is no such value: every case shares it, and as a short word it is part of unrelated text.
+ * known scope value, and a text of a row the table already held, other rows may share, and a short word is part of
+ * unrelated text: each counts only as a whole JSON string (`"eu"`).
  */
 function worldValues(worlds: IsolationWorlds, world: 'own' | 'other', scopes: ScopeValues): string[] {
 	const row = worlds[world]
-	const known = new Set(Object.values(scopes).flatMap((values) => [values.own, values.other]))
 	const values = [row.key, row.scope, ...(row.parent === null ? [] : [row.parent]), ...row.chain.map((link) => link.value), ...row.markers]
-	return [...new Set(values.filter((value) => !known.has(value)))]
+	return [...new Set([...values.map((value) => shownValue(value, scopes)), ...row.stored.map((value) => JSON.stringify(value))])]
+}
+
+/** A value of a scope as a leak shows it: a known scope value as a whole JSON string, any other as it is. */
+function shownValue(value: string, scopes: ScopeValues): string {
+	const known = Object.values(scopes).some((values) => values.own === value || values.other === value)
+	return known ? JSON.stringify(value) : value
 }
 
 /** The cases' scanner: a file it reads in full is clean, so a seeded upload of a `scan: true` collection is served. */
@@ -655,15 +661,17 @@ export function endpointAccessKit<DB, P>(
 				other: {
 					target: other,
 					grants: [{ action, scope: { type: dimension, value: other } }],
-					values: [other],
+					values: [shownValue(other, scopes)],
 					chain: [{ type: dimension, value: other }],
 					rows: {},
 				},
 			}
 		}
 		const worlds = pinned(await postgres.seedWorlds(tables, owner, seed, pinning.pins, scopes), pinning, scopes)
-		const own = await rowsIn(worlds.own, named)
-		const other = await rowsIn(worlds.other, named)
+		// A row under a stored scope value outlives the worlds' removal, so the case removes it itself.
+		const removals = Object.keys(scopes).length > 0 ? pinning.removals : []
+		const own = await rowsIn(worlds.own, named, removals)
+		const other = await rowsIn(worlds.other, named, removals)
 		return {
 			own: {
 				target: worlds.own.key,
@@ -681,12 +689,16 @@ export function endpointAccessKit<DB, P>(
 		}
 	}
 
-	/** One row of each named table seeded in `object`: its key by input field, and every key and marker it holds. */
-	const rowsIn = async (object: WorldRow, named: ReturnType<typeof rowFields>) => {
+	/**
+	 * One row of each named table seeded in `object`: its key by input field, and every key and marker it holds. Each
+	 * row's removal goes to `removals`.
+	 */
+	const rowsIn = async (object: WorldRow, named: ReturnType<typeof rowFields>, removals: (() => Promise<void>)[]) => {
 		const rows: Record<string, string> = {}
 		const values: string[] = []
 		for (const { field, table } of named) {
 			const seeded = await postgres.seedUnder(tables, table, object)
+			removals.push(seeded.remove)
 			rows[field] = seeded.key
 			values.push(seeded.key, ...seeded.markers)
 		}
@@ -722,10 +734,12 @@ export function endpointAccessKit<DB, P>(
 		const values: string[] = []
 		const scopes = knownScopes(dimension, field)
 		const unpinned = { pins: {}, removals: pinning.removals }
-		for (const name of tableNames) {
+		// The owner first: a row of a known value another table's seed inserted would pass for a stored one, which takes no seed.
+		const owner = ownerOf(dimension)
+		for (const name of [...(owner === undefined ? [] : [owner]), ...tableNames.filter((candidate) => candidate !== owner)]) {
 			const mode = policies[name]?.scope.mode
 			if (mode !== 'dimension' && mode !== 'child') continue
-			const owned = name === ownerOf(dimension)
+			const owned = name === owner
 			const worlds = owned
 				? pinned(await postgres.seedWorlds(tables, name, seed, pinning.pins, scopes), pinning, scopes)
 				: pinned(await postgres.seedWorlds(tables, name, {}, {}, scopes), unpinned, scopes)
@@ -883,7 +897,7 @@ export function endpointAccessKit<DB, P>(
 			headers.set('Authorization', `Bearer ${holder.key ?? ''}`)
 			return kit.fetch(request, { ...init, headers })
 		}
-		return { fetch, rows: (await rowsIn(own, rowFields(input))).rows }
+		return { fetch, rows: (await rowsIn(own, rowFields(input), [])).rows }
 	}
 
 	// The cases of one call: `removals` takes the removal of the application rows it seeds, which `drained` runs once
@@ -1020,6 +1034,12 @@ export function endpointAccessKit<DB, P>(
 				}
 				const grants: Grant[] = []
 				let asked = input
+				// The named one first: a known value another one's seed inserted would pass for a stored row, which takes no seed.
+				if (access.form === 'on' || access.form === 'in') {
+					const scopes = await scopesOf(named.action, access.dimension, fieldOf(named.input, access.from), seed, input, pinningOf(endpoint))
+					asked = addressing(asked, access.from, scopes.other)
+					grants.push(...scopes.own.grants)
+				}
 				for (const [name, other] of capabilities) {
 					if (name === capability) continue
 					// Each other one in a scope of its own, apart from the named one's: a global grant would also meet the named
@@ -1032,11 +1052,6 @@ export function endpointAccessKit<DB, P>(
 						asked = addressing(asked, other.access.from, own)
 						grants.push(...own.grants)
 					}
-				}
-				if (access.form === 'on' || access.form === 'in') {
-					const scopes = await scopesOf(named.action, access.dimension, fieldOf(named.input, access.from), seed, input, pinningOf(endpoint))
-					asked = addressing(asked, access.from, scopes.other)
-					grants.push(...scopes.own.grants)
 				}
 				const { status } = await askAs(named, callerFor(named, grants).fetch, asked)
 				return { status }
