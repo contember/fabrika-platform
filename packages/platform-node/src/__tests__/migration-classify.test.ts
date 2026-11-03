@@ -657,6 +657,10 @@ describe('review round 2: coarse, fail-closed rules', () => {
 		// A policy's WITH CHECK and a CASE expression's THEN begin no query.
 		expect(refusal('CREATE POLICY p ON deals USING (true) WITH CHECK (mystery(1))')).toBe('a call of mystery')
 		expect(refusal('CREATE POLICY p ON deals WITH CHECK (true)')).toBeUndefined()
+		// A rule with several actions is split at its `;` as statements are, and its second action refused, before any
+		// CTE list is read; a CTE in a subquery of a single action is read.
+		expect(refusal('CREATE RULE r AS ON INSERT TO deals DO INSTEAD (SELECT 1; WITH u (a) AS (SELECT 1) SELECT * FROM u)')).toBe('WITH')
+		expect(refusal('CREATE RULE r AS ON INSERT TO deals DO INSTEAD (SELECT * FROM (WITH u (a) AS (SELECT 1) SELECT * FROM u) s)')).toBeUndefined()
 		for (const sql of bodies('BEGIN x := CASE WHEN true THEN 1 ELSE 2 END; END')) {
 			expect({ sql, reason: refusal(sql) }).toEqual({ sql, reason: undefined })
 		}

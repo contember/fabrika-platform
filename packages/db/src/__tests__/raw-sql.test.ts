@@ -196,6 +196,13 @@ describe('the static text', () => {
 				parts`with recursive t (a) as (select 1 union all select a + 1 from t where a < 3) cycle a set seen using path, u (b) as (select 1)
 					select * from t, u`,
 				parts`with recursive t (a) as (select 1) cycle a set c to U&'Y' default 'N' using p, u (b) as (select 1) select * from t, u`,
+				parts`with recursive t (a) as (select 1) cycle a set c to U&'Y' uescape '!' default null using p, u (b) as (select 1) select * from u`,
+				parts`with recursive t (a) as (select 1) cycle a set c to 1 default 0 using p, u (b) as (select 1) select * from u`,
+				parts`with recursive t (a) as (select 1) cycle a set c to 1.5 default 0.5 using p, u (b) as (select 1) select * from u`,
+				parts`with recursive t (a) as (select 1) cycle a set c to interval '1' day default interval '1:30' hour to minute using p, u (b) as (select 1)
+					select * from u`,
+				parts`with recursive t (a) as (select 1) cycle a set c to double precision '1' default character varying(3) 'N' using p, u (b) as (select 1)
+					select * from u`,
 				parts`with recursive t (a) as (select 1) cycle a set c to varchar(1) 'Y' default varchar(1) 'N' using p, u (b) as (select 1) select * from u`,
 				parts`with recursive t (a) as (select 1) cycle a set c to timestamp with time zone '2026-01-01' default 'epoch' using p, u (b) as (select 1)
 					select * from u`,
@@ -224,7 +231,17 @@ describe('the static text', () => {
 			[parts`select * from rows from (unnest(array[1])) with ordinality as materialized (a, n), my_fn(1) as (x int)`, 'my_fn(…) at line 1'],
 			[parts`select 1 from notes fetch first 1 rows with ties as (select 1), my_fn (x) as (select 1)`, 'my_fn(…) at line 1'],
 			[parts`select ${'x'}::timestamp(3) with my_fn (x) as (select 1) select 1`, 'my_fn(…) at line 1'],
-			[parts`with recursive t (a) as (select 1) cycle a set c to my_fn(1) default 0 using p, u (b) as (select 1) select * from u`, 'my_fn(…) at line 1'],
+			[
+				parts`with recursive t (a) as (select 1) cycle a set c to my_fn(1) 'Y' default 'N' using p, u (b) as (select 1) select * from u`,
+				'my_fn(…) at line 1',
+			],
+			// A CYCLE mark is one constant: no other word stands between TO, DEFAULT and USING.
+			[
+				parts`with recursive t (a) as (select 1) cycle a set c to 1 default 0 delete from notes using p select 1`,
+				'begins a CTE list that cannot be read',
+			],
+			[parts`with recursive t (a) as (select 1) cycle a set c to 'Y' 'Z' default 'N' using p select 1`, 'begins a CTE list that cannot be read'],
+			[parts`with recursive t (a) as (select 1) cycle a set c to select 'Y' default 'N' using p select 1`, 'begins a CTE list that cannot be read'],
 			[
 				parts`with recursive t as (select 1 as a) cycle a set c to varchar(1) 'Y' default varchar(1) 'N' using p merge into notes n using t on true when matched then delete`,
 				'MERGE at line 1 is refused inside another statement',

@@ -584,25 +584,63 @@ function afterColumnsSet(tokens: readonly SqlToken[], at: number): number | unde
 	return next + 3
 }
 
+const isString = (token: SqlToken | undefined): boolean => token?.kind === 'string' || token?.kind === 'dollar'
+const isDigit = (token: SqlToken | undefined): boolean => token?.kind === 'punct' && /^[0-9.]$/.test(token.char)
+
+/** An interval literal's fields (`'1' DAY`, `'1:30' HOUR TO MINUTE`, `'1.5' SECOND(3)`). */
+const INTERVAL_FIELDS: ReadonlySet<string> = new Set(['YEAR', 'MONTH', 'DAY', 'HOUR', 'MINUTE', 'SECOND'])
+
+/** The index past the parenthesized group at `at`, or `at` itself when none is there. */
+function afterGroup(tokens: readonly SqlToken[], at: number): number {
+	return isPunct(tokens[at], '(') ? (closingParenthesis(tokens, at) ?? tokens.length) + 1 : at
+}
+
 /**
- * The index of the word `word` past a `CYCLE` mark value at `at`, a constant as Postgres writes one (`true`, `'Y'`, `0`,
- * `U&'Y'`, `varchar(1) 'Y'`, `timestamp with time zone '…'`), or `undefined`. The name checks read its names like any.
+ * The index past the type name of a typed literal at `at`: a name, qualified or not and no reserved word, and the keyword forms of the
+ * standard types (`double precision`, `character varying`, `national char`, `bit varying`, `timestamp(3) with time
+ * zone`), each with its modifier or arguments in parentheses, or `undefined`.
  */
-function markUntil(tokens: readonly SqlToken[], at: number, word: string): number | undefined {
-	let next = at
-	while (next < tokens.length && upperWord(tokens[next]) !== word) {
-		const token = tokens[next]
-		if (isPunct(token, '(')) {
-			next = (closingParenthesis(tokens, next) ?? tokens.length) + 1
-			continue
-		}
-		const kind = token?.kind
-		const constant = kind === 'word' || kind === 'quoted' || kind === 'string' || kind === 'dollar'
-			|| (token?.kind === 'punct' && /^[0-9.&+-]$/.test(token.char))
-		if (!constant) return undefined
-		next++
+function afterTypeName(tokens: readonly SqlToken[], at: number): number | undefined {
+	const word = upperWord(tokens[at])
+	let next = cteName(tokens, at) === undefined ? undefined : afterName(tokens, at)
+	if (next === undefined) return undefined
+	if (word === 'DOUBLE') next = skipWords(tokens, next, 'PRECISION')
+	if (word === 'NATIONAL') next = Math.max(skipWords(tokens, next, 'CHARACTER'), skipWords(tokens, next, 'CHAR'))
+	if (word === 'NATIONAL' || word === 'CHARACTER' || word === 'CHAR' || word === 'NCHAR' || word === 'BIT') next = skipWords(tokens, next, 'VARYING')
+	next = afterGroup(tokens, next)
+	if (word === 'TIMESTAMP' || word === 'TIME') {
+		next = Math.max(skipWords(tokens, next, 'WITH', 'TIME', 'ZONE'), skipWords(tokens, next, 'WITHOUT', 'TIME', 'ZONE'))
 	}
-	return next > at && next < tokens.length ? next : undefined
+	return next
+}
+
+/**
+ * The index past a `CYCLE` mark value at `at`, which Postgres takes only as a constant (`AexprConst`): `TRUE`, `FALSE`,
+ * `NULL`, a number, a string (`'Y'`, `E'…'`, `$$…$$`, `U&'…' [UESCAPE '…']`), or a typed literal: a type name and a
+ * string (`varchar(1) 'Y'`, `func(args) 'lit'`, `timestamp with time zone '…'`, `interval '1' day`). Anything else is
+ * `undefined`, so no word but these stands between `TO`, `DEFAULT` and `USING`.
+ */
+function afterMark(tokens: readonly SqlToken[], at: number): number | undefined {
+	const word = upperWord(tokens[at])
+	if (word === 'TRUE' || word === 'FALSE' || word === 'NULL') return at + 1
+	if (isString(tokens[at])) return at + 1
+	if (isDigit(tokens[at])) {
+		let next = at
+		while (isDigit(tokens[next])) next++
+		return next
+	}
+	if (word === 'U' && isPunct(tokens[at + 1], '&') && isString(tokens[at + 2])) {
+		return upperWord(tokens[at + 3]) === 'UESCAPE' && isString(tokens[at + 4]) ? at + 5 : at + 3
+	}
+	const type = afterTypeName(tokens, at)
+	if (type === undefined || !isString(tokens[type])) return undefined
+	let next = type + 1
+	if (word !== 'INTERVAL') return next
+	if (INTERVAL_FIELDS.has(upperWord(tokens[next]) ?? '')) {
+		next = afterGroup(tokens, next + 1)
+		if (upperWord(tokens[next]) === 'TO' && INTERVAL_FIELDS.has(upperWord(tokens[next + 1]) ?? '')) next = afterGroup(tokens, next + 2)
+	}
+	return next
 }
 
 /**
@@ -619,8 +657,8 @@ function afterSearchAndCycle(tokens: readonly SqlToken[], at: number): number | 
 	if (next !== undefined && upperWord(tokens[next]) === 'CYCLE') {
 		next = afterColumnsSet(tokens, next + 1)
 		if (next !== undefined && upperWord(tokens[next]) === 'TO') {
-			const fallback = markUntil(tokens, next + 1, 'DEFAULT')
-			next = fallback === undefined ? undefined : markUntil(tokens, fallback + 1, 'USING')
+			const mark = afterMark(tokens, next + 1)
+			next = mark !== undefined && upperWord(tokens[mark]) === 'DEFAULT' ? afterMark(tokens, mark + 1) : undefined
 		}
 		if (next === undefined || upperWord(tokens[next]) !== 'USING' || !isName(tokens[next + 1])) return undefined
 		next += 2
