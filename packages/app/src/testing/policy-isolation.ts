@@ -690,7 +690,7 @@ export function policyIsolationKit<C extends AnyContract, DB, P>(
 				required('insert')
 				const worlds = await seed()
 				const api = session(worlds)
-				const tag = tagged(await postgres.sampleInsert(tables, table))
+				const tag = tagged(await postgres.sampleInsert(tables, table, worlds[into]))
 				return wrote(() => api.insert({ scope: worlds[into].scope, tag }))
 			},
 			async update(row) {
@@ -801,7 +801,7 @@ export function policyIsolationKit<C extends AnyContract, DB, P>(
 			required('insert')
 			const worlds = await seed()
 			const api = session(worlds)
-			const tag = tagged(await postgres.sampleInsert(tables, table))
+			const tag = tagged(await postgres.sampleInsert(tables, table, worlds[into]))
 			const { parent: parentKey } = address(worlds, into)
 			return wrote(() => api.insert({ parent: parentKey, tag }))
 		},

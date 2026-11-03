@@ -1852,10 +1852,20 @@ not run`. Of them only the generated isolation tests run again, at container sta
   unpoliced table, and is refused when it is a dimension or child table, whose row would lie
   in another chain. A column a CHECK names holds the first value of a one-column `IN` list,
   or `null` where it admits it. Every other text column the fixture fills, nullable or not,
-  holds a distinct marker; a required column of another type gets a sample of its type. A
-  CHECK or a foreign key the seeded values still fail, and a required key to a scoped table,
-  are generator limits (`SeedLimitError`, `@fabrika/db/testing`) that name the constraint or
-  the column, never a failure of the policy or the handler.
+  holds a distinct marker; a required column of another type gets a sample of its type (a
+  number is `1`). A required number column that a unique index or a primary key covers gets
+  instead the smallest whole number above the largest of its row's group, and at least 1: the
+  rows that hold the index's other key columns as this row does (under a freshly seeded parent,
+  none, so `1`), the whole column for a one-column index, rows the fixture did not write
+  included. Only a unique index of plain key columns with no predicate counts: a partial
+  index, one on an expression and an `INCLUDE` column are left alone. A CHECK or a foreign
+  key the seeded values still fail, a unique number column whose type holds no larger number
+  (or whose largest is `NaN` or infinite), a value another row holds under a unique index
+  where the fixture writes it (a constant sample of a date, an enum, a boolean or a listed
+  text), and a required key to a scoped table, are generator limits (`SeedLimitError`,
+  `@fabrika/db/testing`) that name the constraint or the column, never a failure of the
+  policy or the handler. The generated insert case writes through the handler, so a
+  collision there answers 500.
 - **Policy isolation tests**, `src/db/__tests__/<table>.policy-isolation.test.ts` for
   every dimension, child and application table, from the policies alone. They prove that the data
   layer enforces the declared policy, not that the application uses it:

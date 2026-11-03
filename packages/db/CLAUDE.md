@@ -242,7 +242,16 @@ pass a recording one); `Database.fromEngine` takes another engine (`openSqlite`)
   `@fabrika/check`'s `test-only-import` refuses the module outside a test file: it seeds rows past the data layer,
   through a raw connection of its own, as the runtime role. `@fabrika/db/testing-sqlite` refuses and is refused the
   same way. Its seeding fills a required column it does not place with a sample of the
-  column's type, and refuses a type codegen refuses.
+  column's type, and refuses a type codegen refuses. A number is `1`, except in a column a unique index covers (only an
+  index of plain key columns with no predicate; never an `INCLUDE` column): there it is the smallest whole number above
+  the largest of the row's group, and at least 1. The group is the rows that hold the index's other columns as the row
+  does (a null only under `NULLS NOT DISTINCT`), filled last so they are known (`sampleInsert` takes them from the
+  `beside` row's containers); a column not known widens it. A type that holds no such number and a largest that is
+  `NaN` or infinite are a `SeedLimitError` naming the index, and so is a seeded row's own unique violation (23505, or
+  SQLite's `UNIQUE constraint failed`). `sampleInsert` reads the number when it samples, so the caller inserts the values
+  before the next sample; `seedWorlds` samples both worlds' updates once both rows are written. Each kit reads its
+  unique indexes and the group's next number (`uniqueIndexes`, `nextNumber`); `testing-shared.ts` decides where they
+  apply.
 - **A throwaway schema is held by its advisory lock for its whole life.** The lock (SHA-256 of
   `fabrika-test-schema:<name>`) is taken on a reserved connection before the schema and its roles exist. Each
   `testDatabase` first drops every `app_test_*` schema and `app_test_*`/`run_test_*` role family whose lock it can

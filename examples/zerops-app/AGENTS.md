@@ -5837,13 +5837,19 @@ export const members = { 'api.tasks.assign': ['assignee'] }
   other 400 fails the case, and the checker refuses `validation`, an input the schema refuses (`endpoint-fixture`).
 - The endpoint id is `<mount>.<group>.<endpoint>` (`api.tasks.close`).
 - The seed of the tests fills every text column with a marker and every other required column with a sample of its
-  type: an enum's first label, `1`, `false`, today. A column with a `DEFAULT` keeps it (`status` is `open`). A column
-  a `CHECK` names gets the first value of an `IN (…)` list, or `null` where it is nullable. A foreign key outside
-  the containment chain is `null` where it is nullable, and otherwise references an existing or a seeded row of a
-  reference or application table. What the seed cannot satisfy (another `CHECK` on a required text column, a required
-  key to a dimension or child table outside the chain) fails the test with a `SeedLimitError` that names the
-  constraint: a limit of the generator, not a bug of the handler. Keep the column as the domain needs it, and ask the
-  human when the limit blocks the tests.
+  type: an enum's first label, `1`, `false`, today. A number column that a `UNIQUE` index or the primary key covers
+  gets the next number above the largest among the rows that share the index's other columns with it instead (`1`
+  under a fresh parent, `2` for the insert case beside the seeded row; the whole column for a one-column index), so
+  the row collides with no row of the table. A column with a `DEFAULT` keeps it (`status` is `open`). A column a
+  `CHECK` names gets the first value of an `IN (…)` list, or `null` where it is nullable. A foreign key outside the
+  containment chain is `null` where it is nullable, and otherwise references an existing or a seeded row of a
+  reference or application table. What the seed cannot satisfy (another `CHECK` on a required text column, a unique
+  number column whose type holds no larger number, a `UNIQUE` index whose sampled values another row holds, such as a
+  date, an enum or a boolean unique on its own, a required key to a dimension or child table outside the chain) fails
+  the test with a `SeedLimitError` that names the constraint: a limit of the generator, not a bug of the handler. The
+  numbering reads only a `UNIQUE` index of plain columns with no `WHERE`. A collision the seed does not write itself (a
+  non-number column unique within the parent, which the insert case's row shares with the seeded one) answers 500 in
+  the insert case. Keep the column as the domain needs it, and ask the human when the limit blocks the tests.
 - A generated case's input is a sample of the schema: no optional field, `null` for a nullable one, an enum's first
   value, the shortest string its bounds admit (`'x'`), the smallest number, `false`, a fixed value for a format
   (`uuid`, `email`, `iso.date`). When that input meets a precondition (`close` of an `open` task is 409), seed the

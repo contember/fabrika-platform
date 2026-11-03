@@ -22,6 +22,7 @@ import {
 	type CheckConstraint,
 	checkLimit,
 	foreignKeyLimit,
+	groupsWhere,
 	type InsertedRow,
 	MAX_REMOVED_ROWS,
 	probeTable,
@@ -34,6 +35,8 @@ import {
 	type TestDatabase,
 	testSeeding,
 	typeLimit,
+	type UniqueIndex,
+	uniqueValueLimit,
 } from './testing-shared'
 
 export { ChildTable, defineChildStore, defineStore, DimensionTable, type TableProbe } from './store'
@@ -114,6 +117,7 @@ function readColumns(exec: Exec): SeedColumn[] {
 				defaulted: rowid || column.dflt_value !== null || column.hidden === 2 || column.hidden === 3,
 				text: TEXT_TYPES.has(type),
 				uuid: type === 'UUID',
+				number: NUMBER_TYPES.has(type),
 				sample: () => sampleOf(table.name, column.name, column.type),
 			})
 		}
@@ -298,6 +302,50 @@ function tableChecks(table: string, sql: string, columns: readonly string[]): Ch
 	return checks
 }
 
+const indexRows = z.array(z.object({ name: z.string(), partial: z.number(), column: z.string().nullable() }))
+const maxRows = z.array(z.object({ largest: z.unknown() }))
+
+/**
+ * Every unique index of the tables (a primary key's and a UNIQUE constraint's are one) whose key columns are all plain
+ * columns and that has no predicate, with its key columns (`pragma_index_info` lists no others). An index on an
+ * expression (a key column with no name) or a partial one is left out. SQLite has no `NULLS NOT DISTINCT`.
+ */
+function readUniqueIndexes(exec: Exec, tables: readonly string[]): UniqueIndex[] {
+	const indexes: UniqueIndex[] = []
+	for (const table of tables) {
+		const covered = new Map<string, (string | null)[]>()
+		const rows = indexRows.parse(
+			exec(
+				'SELECT l.name AS name, l.partial AS partial, i.name AS "column" FROM pragma_index_list(?) l, pragma_index_info(l.name) i WHERE l."unique" = 1 ORDER BY l.name, i.seqno',
+				table,
+			),
+		)
+		for (const row of rows) {
+			if (row.partial === 0) covered.set(row.name, [...(covered.get(row.name) ?? []), row.column])
+		}
+		for (const [name, columns] of covered) {
+			const plain = columns.flatMap((column) => column ?? [])
+			if (plain.length === columns.length) indexes.push({ name, table, columns: plain, nullsNotDistinct: false })
+		}
+	}
+	return indexes
+}
+
+/**
+ * The smallest whole number above every value of the column in the rows that match one of `groups`, and at least 1;
+ * `undefined` past the safe integers, or where the largest is no finite number.
+ */
+function readNextNumber(exec: Exec, table: string, column: string, groups: readonly ReadonlyMap<string, SampleValue>[]): number | undefined {
+	const { where, values } = groupsWhere(groups, quoted, () => '?')
+	const [found] = maxRows.parse(exec(`SELECT max(${quoted(column)}) AS largest FROM ${quoted(table)} WHERE ${where}`, ...values.map(binding)))
+	const largest = found?.largest ?? null
+	if (largest === null) return 1
+	const value = typeof largest === 'bigint' ? Number(largest) : largest
+	if (typeof value !== 'number') return undefined
+	const next = Math.max(Math.floor(value) + 1, 1)
+	return Number.isSafeInteger(next) ? next : undefined
+}
+
 const foreignKeyRows = z.array(z.object({ id: z.number(), seq: z.number(), table: z.string(), from: z.string(), to: z.string().nullable() }))
 const keyRows = z.array(z.object({ name: z.string(), pk: z.number() }))
 const rowidRows = z.array(z.object({ id: z.number() }))
@@ -363,6 +411,9 @@ function seedLimit(error: unknown, table: string): SeedLimitError | undefined {
 	if (check !== null) return checkLimit(check[1] ?? 'unnamed', table)
 	// SQLite names no foreign key in its error.
 	if (message.startsWith('FOREIGN KEY constraint failed')) return foreignKeyLimit('unnamed', table)
+	// SQLite names a unique index by its columns in its error: `UNIQUE constraint failed: t.a, t.b`.
+	const unique = /^UNIQUE constraint failed: (.*)$/s.exec(message)
+	if (unique !== null) return uniqueValueLimit(`(${unique[1] ?? 'unnamed'})`, table)
 	return undefined
 }
 
@@ -418,6 +469,8 @@ export async function testDatabase(options: TestDatabaseOptions): Promise<TestDa
 	const backend: SeedingBackend = {
 		columns,
 		checks: async () => readChecks(exec, columns),
+		uniqueIndexes: async () => readUniqueIndexes(exec, [...new Set(columns.map((column) => column.table))]),
+		nextNumber: async (table, column, groups) => readNextNumber(exec, table, column, groups),
 		async insert(table, row) {
 			const names = [...row.keys()]
 			const target = quoted(table)
