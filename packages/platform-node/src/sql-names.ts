@@ -276,11 +276,13 @@ type RelationSlot = 'columns' | 'function' | 'list' | undefined
 /**
  * Every name of a DML statement, a query or an expression, with its role. A name in a relation position (after
  * `FROM`, `JOIN`, `USING`, `INTO`, `UPDATE`, `TABLE`, `REFERENCES`, or a `,` of a `FROM` list) is a relation; a name
- * that `(` follows is a call, unless it is syntax or a type with a modifier; a name after `::` or `AS` is a type. A
- * two-part name anywhere else is a column of a table or an alias (`d.note`, `NEW.stage`).
+ * that `(` follows is a call, unless it is syntax, a type with a modifier or a CTE's name before its column list
+ * (`WITH RECURSIVE tree (id, depth) AS`); a name after `::` or `AS` is a type. A two-part name anywhere else is a
+ * column of a table or an alias (`d.note`, `NEW.stage`).
  */
 export function nameReferences(tokens: readonly SqlToken[]): NameReference[] {
 	const references: NameReference[] = []
+	const ctes = cteNames(tokens)
 	const lists: { fromList: boolean; opener: string | undefined }[] = [{ fromList: false, opener: undefined }]
 	let slot: RelationSlot
 	for (let index = 0; index < tokens.length; index++) {
@@ -367,7 +369,7 @@ export function nameReferences(tokens: readonly SqlToken[]): NameReference[] {
 		let role: NameRole = 'other'
 		if (castTarget || typedLiteral) role = 'type'
 		else if (percentType) role = 'relation'
-		else if (followedByParenthesis && !syntax && inSlot !== 'columns') role = 'call'
+		else if (followedByParenthesis && !syntax && inSlot !== 'columns' && !ctes.has(index)) role = 'call'
 		else if (inSlot !== undefined) role = 'relation'
 		references.push({
 			qualifier: parts.length > 1 ? parts[0] : undefined,
@@ -450,20 +452,38 @@ const STATEMENT_WORDS: ReadonlySet<string> = new Set([
 ])
 const NESTED_STATEMENTS: ReadonlySet<string> = new Set(['SELECT', 'VALUES', 'WITH', 'TABLE', 'INSERT', 'UPDATE', 'DELETE'])
 
-/** The statement a `WITH name [(…)] AS [[NOT] MATERIALIZED] (…), …` at `index` ends in, or `undefined` if it is no CTE list. */
-function withTerminal(tokens: readonly SqlToken[], index: number): SqlToken | undefined {
+/** A CTE list: the index of each CTE's name and the token after the list, the statement it ends in. */
+interface CteList {
+	readonly names: readonly number[]
+	readonly terminal: SqlToken | undefined
+}
+
+/** The `WITH [RECURSIVE] name [(…)] AS [[NOT] MATERIALIZED] (…), …` at `index`, or `undefined` if it is no CTE list. */
+function cteList(tokens: readonly SqlToken[], index: number): CteList | undefined {
+	const names: number[] = []
 	let at = skipWords(tokens, index + 1, 'RECURSIVE')
 	for (;;) {
 		if (!isName(tokens[at])) return undefined
+		names.push(at)
 		at++
 		if (isPunct(tokens[at], '(')) at = (closingParenthesis(tokens, at) ?? tokens.length) + 1
 		if (upperWord(tokens[at]) !== 'AS') return undefined
 		at = skipWords(tokens, skipWords(tokens, at + 1, 'NOT'), 'MATERIALIZED')
 		if (!isPunct(tokens[at], '(')) return undefined
 		at = (closingParenthesis(tokens, at) ?? tokens.length) + 1
-		if (!isPunct(tokens[at], ',')) return tokens[at]
+		if (!isPunct(tokens[at], ',')) return { names, terminal: tokens[at] }
 		at++
 	}
+}
+
+/** The index of every CTE's name in `tokens`, nested lists too: a `(` after one opens its column list, not a call. */
+function cteNames(tokens: readonly SqlToken[]): ReadonlySet<number> {
+	const names = new Set<number>()
+	for (let index = 0; index < tokens.length; index++) {
+		if (upperWord(tokens[index]) !== 'WITH') continue
+		for (const name of cteList(tokens, index)?.names ?? []) names.add(name)
+	}
+	return names
 }
 
 /**
@@ -472,7 +492,7 @@ function withTerminal(tokens: readonly SqlToken[], index: number): SqlToken | un
  */
 export function nestedStatement(tokens: readonly SqlToken[]): { readonly statement: string; readonly line: number } | undefined {
 	for (let index = 0; index + 1 < tokens.length; index++) {
-		const next = isPunct(tokens[index], '(') ? tokens[index + 1] : upperWord(tokens[index]) === 'WITH' ? withTerminal(tokens, index) : undefined
+		const next = isPunct(tokens[index], '(') ? tokens[index + 1] : upperWord(tokens[index]) === 'WITH' ? cteList(tokens, index)?.terminal : undefined
 		const word = next?.kind === 'word' ? upperWord(next) : undefined
 		if (word !== undefined && STATEMENT_WORDS.has(word) && !NESTED_STATEMENTS.has(word)) return { statement: word, line: next?.line ?? 1 }
 		if (upperWord(tokens[index]) === 'WITH' && next !== undefined && word === undefined) return { statement: 'WITH', line: next.line }

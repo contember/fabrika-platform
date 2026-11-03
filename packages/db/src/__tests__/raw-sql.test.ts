@@ -177,6 +177,36 @@ describe('the static text', () => {
 		expect(refusal(parts`select lower(title), count(*), coalesce(body, ''), date_trunc('day', created_at) from notes group by 1, 4`)).toBeUndefined()
 	})
 
+	test("a CTE's column list is no call; a call in its body, or after a comma outside a CTE list, still is", () => {
+		for (
+			const text of [
+				parts`with recursive n(i) as (select 1 union all select i + 1 from n where i < ${5}) select i from n`,
+				parts`WITH RECURSIVE tree (id, parent_id, depth) AS (
+					select n.id, n.workspace_id, 0 from notes n where n.id = ${'x'}
+					union all
+					select n.id, n.workspace_id, t.depth + 1 from notes n join tree t on n.workspace_id = t.id
+				) select * from tree`,
+				parts`with a (x) as (select 1), b (y) as materialized (select 2), "C" (z) as not materialized (select 3) select * from a, b, "C"`,
+				parts`with a as (select 1 as x), b (y) as (select x from a) select y from b`,
+				parts`select * from (with t (a) as (select 1) select a from t) s`,
+			]
+		) {
+			expect({ text: text.join('${…}'), refused: refusal(text, 'read') }).toEqual({ text: text.join('${…}'), refused: undefined })
+		}
+		const refused: readonly [readonly string[], string][] = [
+			[parts`with t (a) as (select pg_read_file('x')) select * from t`, 'pg_read_file(…) at line 1'],
+			[parts`with t (a) as (select 1), u (b) as (select my_fn(a) from t) select * from u`, 'my_fn(…) at line 1'],
+			[parts`with t as (select 1) select a, my_fn(b) from t`, 'my_fn(…) at line 1'],
+			[parts`with t (a) as (select 1) values (1, my_fn(2))`, 'my_fn(…) at line 1'],
+			[parts`with t (a) as (select 1) select * from t, my_fn(1)`, 'my_fn(…) at line 1'],
+			[parts`select x from notes window w as (order by id), my_fn (x) as (order by id)`, 'my_fn(…) at line 1'],
+			[parts`select * from unnest(${['a']}::text[]) with ordinality as my_fn(a, n), lateral my_fn(1)`, 'my_fn(…) at line 1'],
+		]
+		for (const [text, expected] of refused) {
+			expect({ text: text.join('${…}'), refused: refusal(text) }).toEqual({ text: text.join('${…}'), refused: expect.stringContaining(expected) })
+		}
+	})
+
 	test('a value lands only where it is bound', () => {
 		const inside = 'is not bound; interpolate a whole value'
 		expect(refusal(parts`select * from notes where title = '${'x'}'`)).toContain(inside)
@@ -623,6 +653,21 @@ describe.skipIf(opened === null)('ctx.sql on Postgres, as the runtime role', () 
 		expect(row).toEqual({ text: hostile, flag: true, big: '9007199254740993', at: at.toISOString(), none: null, listed: true, count: 3 })
 		await work.transaction.rollback()
 		expect(await notesTitled(hostile)).toBe(0)
+	})
+
+	test('a recursive CTE that names its columns walks a tree, as the runtime role', async () => {
+		const work = invocation('read', true)
+		const Depth = z.object({ i: z.number(), depth: z.number() })
+		expect(
+			await work.sql(
+				Depth,
+			)`with recursive n (i, depth) as (select 1, 0 union all select i + 1, depth + 1 from n where i < ${3}) select i, depth from n order by i`,
+		).toEqual([
+			{ i: 1, depth: 0 },
+			{ i: 2, depth: 1 },
+			{ i: 3, depth: 2 },
+		])
+		await work.transaction.commit()
 	})
 
 	test("a 'read' site cannot write: refused in the text, and a query's transaction is READ ONLY under it", async () => {

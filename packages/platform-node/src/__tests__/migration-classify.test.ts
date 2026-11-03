@@ -601,6 +601,19 @@ describe('review round 2: coarse, fail-closed rules', () => {
 		expect(refusal('CREATE VIEW v AS SELECT 1 WITH CHECK OPTION')).toBeUndefined()
 	})
 
+	test("a CTE's column list is no call, in a view, a backfill and both body quotings; a call in its body still is", () => {
+		const tree =
+			'WITH RECURSIVE tree (id, depth) AS (SELECT id, 0 FROM deals UNION ALL SELECT d.id, t.depth + 1 FROM deals d JOIN tree t ON d.id = t.id)'
+		expect(refusal(`CREATE VIEW v AS ${tree} SELECT * FROM tree`)).toBeUndefined()
+		expect(refusal(`INSERT INTO t (a) WITH a (x) AS (SELECT 1), b (y) AS MATERIALIZED (SELECT x FROM a) SELECT y FROM b`)).toBeUndefined()
+		for (const sql of bodies(`BEGIN INSERT INTO t ${tree} SELECT id FROM tree; END`)) {
+			expect({ sql, reason: refusal(sql) }).toEqual({ sql, reason: undefined })
+		}
+		expect(refusal("CREATE VIEW v AS WITH t (a) AS (SELECT pg_read_file('x')) SELECT * FROM t")).toBe('a call of pg_read_file')
+		expect(refusal('INSERT INTO t WITH a (x) AS (SELECT 1), b (y) AS (SELECT mystery(x) FROM a) SELECT y FROM b')).toBe('a call of mystery')
+		expect(refusal('INSERT INTO t SELECT a, mystery(b) FROM deals')).toBe('a call of mystery')
+	})
+
 	test('a DDL relation position refuses an unqualified catalog name', () => {
 		expect(refusal('CREATE TABLE t (LIKE pg_authid)')).toBe('CREATE TABLE naming the schema pg_catalog')
 		expect(refusal('CREATE TABLE t (a oid REFERENCES pg_class (oid))')).toBe('CREATE TABLE naming the schema pg_catalog')
