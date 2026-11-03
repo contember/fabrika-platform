@@ -6,14 +6,16 @@
 // approver's to review, since the `sql:` declaration marks the site for a closer look (ADR-0012, ADR-0050).
 
 import {
-	dmlForeignSchema,
+	CTE_FORM,
 	frameworkReference,
 	lexSql,
 	lexSqlite,
 	nameReferences,
 	nestedStatement,
 	parenthesizedTarget,
-	refusedFunctionCall,
+	ReadSql,
+	referencedForeignSchema,
+	refusedCall,
 	type SqlToken,
 	statementKind,
 	statementsOf,
@@ -285,7 +287,14 @@ export function classifySql(parts: readonly string[], mode: SqlMode, database: S
 		}
 		return statementText(parts, markerOf(database))
 	}
-	const nested = nestedStatement(tokens) ?? parenthesizedTarget(tokens)
+	const read = ReadSql.query(tokens)
+	if (read.ctes.unread !== undefined) {
+		refuse(
+			'sql_statement',
+			`the WITH at line ${read.ctes.unread} begins a CTE list that cannot be read; write each CTE as ${CTE_FORM}, a CYCLE mark a constant and never an interpolated value`,
+		)
+	}
+	const nested = nestedStatement(read) ?? parenthesizedTarget(tokens)
 	if (nested !== undefined) {
 		refuse('sql_statement', `${nested.statement} at line ${nested.line} is refused inside another statement`)
 	}
@@ -296,16 +305,17 @@ export function classifySql(parts: readonly string[], mode: SqlMode, database: S
 	if (unicodeIdentifier(tokens) !== undefined) {
 		refuse('sql_name', 'a U&"…" name is refused: write the name plainly')
 	}
-	for (const reference of nameReferences(tokens)) {
+	const references = nameReferences(read)
+	for (const reference of references) {
 		if (reference.role !== 'call' && reference.name.startsWith('pg_')) {
 			refuse('sql_name', `'${reference.name}' at line ${reference.line} is a catalog name; ctx.sql reaches only the application's own tables`)
 		}
 	}
-	const foreign = dmlForeignSchema(tokens, database.schema)
+	const foreign = referencedForeignSchema(references, database.schema)
 	if (foreign !== undefined) {
 		refuse('sql_name', `the schema '${foreign}' is outside the application's; write its tables' names unqualified`)
 	}
-	const call = refusedFunctionCall(tokens, database.schema, NO_DECLARED_FUNCTIONS)
+	const call = refusedCall(references, database.schema, NO_DECLARED_FUNCTIONS)
 	if (call !== undefined) {
 		refuse(
 			'sql_function',

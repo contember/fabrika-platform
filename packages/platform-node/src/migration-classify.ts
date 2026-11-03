@@ -16,8 +16,8 @@ import { PG_CATALOG_FUNCTIONS, SQL_KEYWORDS } from './pg-catalog-names'
 import {
 	afterName,
 	closingParenthesis,
+	CTE_FORM,
 	ddlForeignSchema,
-	dmlForeignSchema,
 	frameworkReference,
 	functionUse,
 	isFrameworkName,
@@ -28,7 +28,10 @@ import {
 	nestedStatement,
 	objectNameAt,
 	parenthesizedTarget,
-	refusedFunctionCall,
+	ReadBody,
+	ReadSql,
+	referencedForeignSchema,
+	refusedCall,
 	skipWords,
 	splitAtCommas,
 	statementKind,
@@ -248,21 +251,27 @@ function refuseForeignDdl(tokens: readonly SqlToken[], context: Context, label: 
 	if (reached !== undefined) throw new Refused(`${label} naming the schema ${reached}`, tokens[0]?.line ?? 1)
 }
 
-/** A query, a condition or a backfill: no schema but the application's, only allowlisted calls and nested statements. */
-function checkQuery(tokens: readonly SqlToken[], context: Context, label: string): void {
-	const nested = nestedStatement(tokens)
+/**
+ * A query, a condition or a backfill, read as one (`ReadSql`): no schema but the application's, only allowlisted calls
+ * and nested statements, and no CTE list it cannot read.
+ */
+function checkQuery(read: ReadSql, context: Context, label: string): void {
+	const { tokens } = read
+	if (read.ctes.unread !== undefined) throw new Refused(`a WITH list that cannot be read as ${CTE_FORM}`, read.ctes.unread)
+	const nested = nestedStatement(read)
 	if (nested !== undefined) throw new Refused(`${nested.statement} nested in a statement`, nested.line)
 	const target = parenthesizedTarget(tokens)
 	if (target !== undefined) throw new Refused(`a parenthesized ${target.statement} target`, target.line)
-	const reached = dmlForeignSchema(tokens, context.schema)
+	const references = nameReferences(read)
+	const reached = referencedForeignSchema(references, context.schema)
 	if (reached !== undefined) throw new Refused(`${label} reaching the schema ${reached}`, tokens[0]?.line ?? 1)
-	const call = refusedFunctionCall(tokens, context.schema, context.functions)
+	const call = refusedCall(references, context.schema, context.functions)
 	if (call !== undefined) throw new Refused(`a call of ${call.name}`, call.line)
 }
 
 /** A stored expression's calls: a paved built-in is plain, a reviewed or declared function a deviation, anything else refused. */
 function checkExpression(tokens: readonly SqlToken[], where: string, context: Context, out: Collected): void {
-	for (const reference of nameReferences(tokens)) {
+	for (const reference of nameReferences(ReadSql.expression(tokens))) {
 		if (reference.role !== 'call') continue
 		const use = functionUse(reference, context.schema, context.functions)
 		if (use === undefined) throw new Refused(`a call of ${reference.name}`, reference.line)
@@ -286,48 +295,16 @@ function isAssignment(tokens: readonly SqlToken[], index: number): boolean {
 }
 
 /**
- * The first statement of a function or `DO` body that does not begin with an allowlisted word or an assignment. A
- * declaration section (`DECLARE` … `BEGIN`) holds declarations; `THEN` and `ELSE` begin a statement except inside a
- * `CASE` expression.
+ * The first statement of a function or `DO` body (`ReadBody`) that does not begin with an allowlisted word or an
+ * assignment; a declaration section holds declarations.
  */
-function refusedBodyStatement(tokens: readonly SqlToken[]): { readonly statement: string; readonly line: number } | undefined {
-	let start = true
-	let declaring = false
-	const cases: ('statement' | 'expression')[] = []
-	for (let index = 0; index < tokens.length; index++) {
+function refusedBodyStatement({ tokens, statements }: ReadBody): { readonly statement: string; readonly line: number } | undefined {
+	for (const { index, declaring } of statements) {
 		const token = tokens[index]
 		const word = upperWord(token)
-		if (start) {
-			if (isPunct(token, ';')) continue
-			start = false
-			if (isPunct(token, '<') && isPunct(tokens[index + 1], '<')) {
-				while (index < tokens.length && !(isPunct(tokens[index], '>') && isPunct(tokens[index + 1], '>'))) index++
-				index++
-				start = true
-				continue
-			}
-			const allowed = (declaring && word !== 'BEGIN') || (word !== undefined && BODY_STATEMENTS.has(word))
-				|| (isName(token) && isAssignment(tokens, index))
-			if (!allowed) return { statement: word ?? statementKind(tokens.slice(index)), line: token?.line ?? 1 }
-			if (word === 'CASE') {
-				cases.push('statement')
-				continue
-			}
-		} else if (word === 'CASE') {
-			cases.push('expression')
-			continue
-		}
-		const innermost = cases[cases.length - 1]
-		if (word === 'DECLARE') declaring = true
-		if (word === 'BEGIN') declaring = false
-		if (isPunct(token, ';') || word === 'BEGIN' || word === 'DECLARE') start = true
-		else if (word === 'LOOP') start = upperWord(tokens[index - 1]) !== 'END'
-		else if (word === 'THEN' || word === 'ELSE') start = innermost !== 'expression'
-		else if (word === 'END' && innermost === 'expression') cases.pop()
-		else if (word === 'END' && upperWord(tokens[index + 1]) === 'CASE') {
-			cases.pop()
-			index++
-		}
+		const allowed = (declaring && word !== 'BEGIN') || (word !== undefined && BODY_STATEMENTS.has(word))
+			|| (isName(token) && isAssignment(tokens, index))
+		if (!allowed) return { statement: word ?? statementKind(tokens.slice(index)), line: token?.line ?? 1 }
 	}
 	return undefined
 }
@@ -358,9 +335,10 @@ function checkBody(tokens: readonly SqlToken[], context: Context): void {
 	if (framework !== undefined) throw new Refused(`a reference to the framework's ${framework.name}`, framework.line)
 	const execute = tokens.find((token) => upperWord(token) === 'EXECUTE')
 	if (execute !== undefined) throw new Refused('a dynamic EXECUTE in a body', execute.line)
-	const statement = refusedBodyStatement(tokens)
+	const read = ReadBody.of(tokens)
+	const statement = refusedBodyStatement(read)
 	if (statement !== undefined) throw new Refused(`${statement.statement} in a body`, statement.line)
-	checkQuery(tokens, context, 'a body')
+	checkQuery(read, context, 'a body')
 	refuseForeignDdl(declarations(tokens), context, 'a declaration')
 }
 
@@ -435,7 +413,7 @@ function createFunction(tokens: readonly SqlToken[], at: number, kind: 'function
 	refuseForeignDdl(header, context, label)
 	// An argument default runs at every call that omits the argument, so it is a query like the body.
 	const args = tokens.slice(named + 1, close)
-	checkQuery(args, context, 'an argument default')
+	checkQuery(ReadSql.clause(args), context, 'an argument default')
 	checkBody(body, context)
 	deviate(out, kind, name, line)
 	out.changes.push({ change: 'create routine', object: { kind, name }, args: `${kind} (${argumentText(args)})`, line })
@@ -474,7 +452,7 @@ function createTrigger(tokens: readonly SqlToken[], at: number, context: Context
 	const whenClose = when === undefined || !isPunct(tokens[when + 1], '(') ? undefined : closingParenthesis(tokens, when + 1)
 	const header = when === undefined || whenClose === undefined ? tokens : [...tokens.slice(0, when), ...tokens.slice(whenClose + 1)]
 	refuseForeignDdl(header, context, 'CREATE TRIGGER')
-	if (when !== undefined && whenClose !== undefined) checkQuery(tokens.slice(when + 2, whenClose), context, 'a trigger condition')
+	if (when !== undefined && whenClose !== undefined) checkQuery(ReadSql.clause(tokens.slice(when + 2, whenClose)), context, 'a trigger condition')
 	const execute = wordAtDepthZero(tokens, 'EXECUTE', on)
 	const fn = execute === undefined ? undefined : objectNameAt(tokens, execute + 2)
 	if (execute === undefined || fn === undefined) throw new Refused('CREATE TRIGGER without EXECUTE FUNCTION', line)
@@ -516,7 +494,7 @@ function createView(tokens: readonly SqlToken[], at: number, kind: 'view' | 'mat
 	if (!(first === 'SELECT' || first === 'WITH' || first === 'VALUES' || isPunct(query[0], '('))) {
 		throw new Refused(`${label} … AS ${statementKind(query)}`, line)
 	}
-	checkQuery(query, context, 'a view')
+	checkQuery(ReadSql.query(query), context, 'a view')
 	declareObject(out, kind, name, line)
 }
 
@@ -535,7 +513,7 @@ function createRule(tokens: readonly SqlToken[], at: number, context: Context, o
 	if (isPunct(tokens[action], '(')) action++
 	const first = upperWord(tokens[action])
 	if (first === undefined || !RULE_ACTIONS.has(first)) throw new Refused(`${first ?? statementKind(tokens.slice(action))} in a rule action`, line)
-	checkQuery(tokens.slice(headerEnd), context, 'a rule')
+	checkQuery(ReadSql.clause(tokens.slice(headerEnd)), context, 'a rule')
 	declareObject(out, 'rule', `${table}.${name}`, line)
 }
 
@@ -550,7 +528,7 @@ function createPolicy(tokens: readonly SqlToken[], at: number, context: Context,
 	const starts = [using, withCheck].filter((index) => index !== undefined)
 	const expressions = starts.length === 0 ? tokens.length : Math.min(...starts)
 	refuseForeignDdl(tokens.slice(0, expressions), context, 'CREATE POLICY')
-	checkQuery(tokens.slice(expressions), context, 'a policy')
+	checkQuery(ReadSql.clause(tokens.slice(expressions)), context, 'a policy')
 	declareObject(out, 'policy', `${table}.${name}`, line)
 }
 
@@ -659,7 +637,7 @@ function alterClause(clause: readonly SqlToken[], table: string, context: Contex
 		const rest = clause.slice(actionAt + columnAction.length)
 		// A default persists in the schema; `TYPE … USING` runs once over the rows, as a backfill does.
 		if (columnAction[1] === 'DEFAULT' && columnAction[0] === 'SET') checkExpression(rest, `${table}.${column}`, context, out)
-		else if (columnAction[0] === 'TYPE' || columnAction[1] === 'DATA') checkQuery(rest, context, 'ALTER TABLE … USING')
+		else if (columnAction[0] === 'TYPE' || columnAction[1] === 'DATA') checkQuery(ReadSql.clause(rest), context, 'ALTER TABLE … USING')
 		return
 	}
 	throw new Refused(`ALTER TABLE … ${action ?? 'an action'}`, line)
@@ -968,7 +946,7 @@ function classifyStatement(tokens: readonly SqlToken[], context: Context, out: C
 	if (framework !== undefined) throw new Refused(`a reference to the framework's ${framework.name}`, framework.line)
 	const first = upperWord(tokens[0])
 	if (first === 'INSERT' || first === 'UPDATE' || first === 'DELETE') {
-		checkQuery(tokens, context, first)
+		checkQuery(ReadSql.query(tokens), context, first)
 		if (!context.framework) out.adoptions.push(...adoptionSteps(tokens, adopted))
 		return
 	}

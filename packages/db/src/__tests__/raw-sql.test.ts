@@ -177,6 +177,97 @@ describe('the static text', () => {
 		expect(refusal(parts`select lower(title), count(*), coalesce(body, ''), date_trunc('day', created_at) from notes group by 1, 4`)).toBeUndefined()
 	})
 
+	test("a CTE's column list is no call; a call in its body, or after a comma outside a CTE list, still is", () => {
+		for (
+			const text of [
+				parts`with recursive n(i) as (select 1 union all select i + 1 from n where i < ${5}) select i from n`,
+				parts`WITH RECURSIVE tree (id, parent_id, depth) AS (
+					select n.id, n.workspace_id, 0 from notes n where n.id = ${'x'}
+					union all
+					select n.id, n.workspace_id, t.depth + 1 from notes n join tree t on n.workspace_id = t.id
+				) select * from tree`,
+				parts`with a (x) as (select 1), b (y) as materialized (select 2), "C" (z) as not materialized (select 3) select * from a, b, "C"`,
+				parts`with a as (select 1 as x), b (y) as (select x from a) select y from b`,
+				parts`select * from (with t (a) as (select 1) select a from t) s`,
+				parts`with recursive t (a) as (select 1 union all select a + 1 from t where a < 3) search depth first by a set o, u (b) as (select 1)
+					select * from t, u`,
+				parts`with recursive t (a) as (select 1 union all select a + 1 from t where a < 3) search breadth first by a set o
+					cycle a set seen to true default false using path, u (b) as (select 1) select * from t, u`,
+				parts`with recursive t (a) as (select 1 union all select a + 1 from t where a < 3) cycle a set seen using path, u (b) as (select 1)
+					select * from t, u`,
+				parts`with recursive t (a) as (select 1) cycle a set c to U&'Y' default 'N' using p, u (b) as (select 1) select * from t, u`,
+				parts`with recursive t (a) as (select 1) cycle a set c to U&'Y' uescape '!' default null using p, u (b) as (select 1) select * from u`,
+				parts`with recursive t (a) as (select 1) cycle a set c to 1 default 0 using p, u (b) as (select 1) select * from u`,
+				parts`with recursive t (a) as (select 1) cycle a set c to 1.5 default 0.5 using p, u (b) as (select 1) select * from u`,
+				parts`with recursive t (a) as (select 1) cycle a set c to interval '1' day default interval '1:30' hour to minute using p, u (b) as (select 1)
+					select * from u`,
+				parts`with recursive t (a) as (select 1) cycle a set c to double precision '1' default character varying(3) 'N' using p, u (b) as (select 1)
+					select * from u`,
+				parts`with recursive t (a) as (select 1) cycle a set c to varchar(1) 'Y' default varchar(1) 'N' using p, u (b) as (select 1) select * from u`,
+				parts`with recursive t (a) as (select 1) cycle a set c to timestamp with time zone '2026-01-01' default 'epoch' using p, u (b) as (select 1)
+					select * from u`,
+				// A CTE may be named `recursive`, an unreserved word.
+				parts`with recursive as (select 1 as a) select a from recursive`,
+				parts`with recursive (a) as (select 1) select a from recursive`,
+				parts`with recursive recursive (a) as (select 1 union all select a + 1 from recursive where a < 2) select a from recursive`,
+				// A WITH that begins no query is another clause, and is not read as a CTE list.
+				parts`select * from unnest(array[1]) with ordinality as t`,
+				parts`select ${'x'}::timestamp with time zone as at`,
+			]
+		) {
+			expect({ text: text.join('${…}'), refused: refusal(text, 'read') }).toEqual({ text: text.join('${…}'), refused: undefined })
+		}
+		expect(refusal(parts`insert into notes (id) with t (a) as (select ${'x'}) select a from t`)).toBeUndefined()
+		const refused: readonly [readonly string[], string][] = [
+			[parts`with t (a) as (select pg_read_file('x')) select * from t`, 'pg_read_file(…) at line 1'],
+			[parts`with t (a) as (select 1), u (b) as (select my_fn(a) from t) select * from u`, 'my_fn(…) at line 1'],
+			[parts`with t as (select 1) select a, my_fn(b) from t`, 'my_fn(…) at line 1'],
+			[parts`with t (a) as (select 1) values (1, my_fn(2))`, 'my_fn(…) at line 1'],
+			[parts`with t (a) as (select 1) select * from t, my_fn(1)`, 'my_fn(…) at line 1'],
+			[parts`select x from notes window w as (order by id), my_fn (x) as (order by id)`, 'my_fn(…) at line 1'],
+			[parts`select * from unnest(${['a']}::text[]) with ordinality as my_fn(a, n), lateral my_fn(1)`, 'my_fn(…) at line 1'],
+			// `WITH ORDINALITY AS materialized (a, n)` aliases a table function; it begins no CTE list.
+			[parts`select * from unnest(array[1]) with ordinality as materialized (a, n), dblink('h','select 1') as (x int)`, 'dblink(…) at line 1'],
+			[parts`select * from rows from (unnest(array[1])) with ordinality as materialized (a, n), my_fn(1) as (x int)`, 'my_fn(…) at line 1'],
+			[parts`select 1 from notes fetch first 1 rows with ties as (select 1), my_fn (x) as (select 1)`, 'my_fn(…) at line 1'],
+			[parts`select ${'x'}::timestamp(3) with my_fn (x) as (select 1) select 1`, 'my_fn(…) at line 1'],
+			[
+				parts`with recursive t (a) as (select 1) cycle a set c to my_fn(1) 'Y' default 'N' using p, u (b) as (select 1) select * from u`,
+				'my_fn(…) at line 1',
+			],
+			// A CYCLE mark is one constant: no other word stands between TO, DEFAULT and USING.
+			[
+				parts`with recursive t (a) as (select 1) cycle a set c to 1 default 0 delete from notes using p select 1`,
+				'begins a CTE list that cannot be read',
+			],
+			[parts`with recursive t (a) as (select 1) cycle a set c to 'Y' 'Z' default 'N' using p select 1`, 'begins a CTE list that cannot be read'],
+			[parts`with recursive t (a) as (select 1) cycle a set c to select 'Y' default 'N' using p select 1`, 'begins a CTE list that cannot be read'],
+			[
+				parts`with recursive t as (select 1 as a) cycle a set c to varchar(1) 'Y' default varchar(1) 'N' using p merge into notes n using t on true when matched then delete`,
+				'MERGE at line 1 is refused inside another statement',
+			],
+			// A WITH where a query begins, whose list does not read, is refused as such: never skipped.
+			[parts`with verbose (a) as (select 1) select * from verbose`, 'the WITH at line 1 begins a CTE list that cannot be read'],
+			[
+				parts`with recursive t as (select 1 as a) cycle a set c default 'N' using p merge into notes n using t on true when matched then delete`,
+				'the WITH at line 1 begins a CTE list that cannot be read',
+			],
+			[parts`select * from notes where id in (with t as select 1)`, 'the WITH at line 1 begins a CTE list that cannot be read'],
+			[parts`insert into notes (id) with t (a) select 1`, 'the WITH at line 1 begins a CTE list that cannot be read'],
+			[
+				parts`with recursive t (a) as (select 1) cycle a set c to 'Y' using p select 1`,
+				'[CYCLE columns SET column [TO constant DEFAULT constant] USING column]',
+			],
+			[
+				parts`with t (a) as (select 1) cycle a set c to ${'Y'} default 'N' using p select * from t`,
+				'a CYCLE mark a constant and never an interpolated value',
+			],
+		]
+		for (const [text, expected] of refused) {
+			expect({ text: text.join('${…}'), refused: refusal(text) }).toEqual({ text: text.join('${…}'), refused: expect.stringContaining(expected) })
+		}
+	})
+
 	test('a value lands only where it is bound', () => {
 		const inside = 'is not bound; interpolate a whole value'
 		expect(refusal(parts`select * from notes where title = '${'x'}'`)).toContain(inside)
@@ -623,6 +714,29 @@ describe.skipIf(opened === null)('ctx.sql on Postgres, as the runtime role', () 
 		expect(row).toEqual({ text: hostile, flag: true, big: '9007199254740993', at: at.toISOString(), none: null, listed: true, count: 3 })
 		await work.transaction.rollback()
 		expect(await notesTitled(hostile)).toBe(0)
+	})
+
+	test('a recursive CTE that names its columns walks a tree, as the runtime role', async () => {
+		const work = invocation('read', true)
+		const Depth = z.object({ i: z.number(), depth: z.number() })
+		expect(
+			await work.sql(
+				Depth,
+			)`with recursive n (i, depth) as (select 1, 0 union all select i + 1, depth + 1 from n where i < ${3}) select i, depth from n order by i`,
+		).toEqual([
+			{ i: 1, depth: 0 },
+			{ i: 2, depth: 1 },
+			{ i: 3, depth: 2 },
+		])
+		const Ordered = z.object({ i: z.number(), j: z.number() })
+		expect(
+			await work.sql(Ordered)`with recursive n (i) as (select 1 union all select i + 1 from n where i < 2) search depth first by i set ord
+				cycle i set seen to true default false using path, m (j) as (select 7) select i, j from n, m order by ord`,
+		).toEqual([
+			{ i: 1, j: 7 },
+			{ i: 2, j: 7 },
+		])
+		await work.transaction.commit()
 	})
 
 	test("a 'read' site cannot write: refused in the text, and a query's transaction is READ ONLY under it", async () => {

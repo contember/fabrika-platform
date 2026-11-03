@@ -2,6 +2,7 @@ import { Database } from 'bun:sqlite'
 import { describe, expect, test } from 'bun:test'
 import { fileScanAlter } from '../file-table-ddl'
 import { classifyMigration, classifyMigrations, type MigrationDeviation } from '../migration-classify.js'
+import { CTE_FORM } from '../sql-names'
 
 const SCHEMA = 'app_notes'
 const FILE = '20261011120000_init.sql'
@@ -599,6 +600,91 @@ describe('review round 2: coarse, fail-closed rules', () => {
 			.toBe('MERGE nested in a statement')
 		expect(refusal('INSERT INTO t WITH x AS (SELECT 1), y AS NOT MATERIALIZED (SELECT 2) SELECT * FROM x, y')).toBeUndefined()
 		expect(refusal('CREATE VIEW v AS SELECT 1 WITH CHECK OPTION')).toBeUndefined()
+	})
+
+	test("a CTE's column list is no call, in a view, a backfill and both body quotings; a call in its body still is", () => {
+		const tree =
+			'WITH RECURSIVE tree (id, depth) AS (SELECT id, 0 FROM deals UNION ALL SELECT d.id, t.depth + 1 FROM deals d JOIN tree t ON d.id = t.id)'
+		expect(refusal(`CREATE VIEW v AS ${tree} SELECT * FROM tree`)).toBeUndefined()
+		expect(refusal(`INSERT INTO t (a) WITH a (x) AS (SELECT 1), b (y) AS MATERIALIZED (SELECT x FROM a) SELECT y FROM b`)).toBeUndefined()
+		for (const sql of bodies(`BEGIN INSERT INTO t ${tree} SELECT id FROM tree; END`)) {
+			expect({ sql, reason: refusal(sql) }).toEqual({ sql, reason: undefined })
+		}
+		expect(refusal("CREATE VIEW v AS WITH t (a) AS (SELECT pg_read_file('x')) SELECT * FROM t")).toBe('a call of pg_read_file')
+		expect(refusal('INSERT INTO t WITH a (x) AS (SELECT 1), b (y) AS (SELECT mystery(x) FROM a) SELECT y FROM b')).toBe('a call of mystery')
+		expect(refusal('INSERT INTO t SELECT a, mystery(b) FROM deals')).toBe('a call of mystery')
+		for (
+			const sql of bodies(
+				'BEGIN RETURN QUERY WITH a (x) AS (SELECT 1) SELECT x FROM a; FOR r IN WITH b (y) AS (SELECT 2) SELECT y FROM b LOOP NULL; END LOOP; END',
+			)
+		) {
+			expect({ sql, reason: refusal(sql) }).toEqual({ sql, reason: undefined })
+		}
+		const search = 'WITH RECURSIVE t (a) AS (SELECT 1 UNION ALL SELECT a + 1 FROM t WHERE a < 3) SEARCH DEPTH FIRST BY a SET o CYCLE a SET c USING p'
+		expect(refusal(`CREATE VIEW v AS ${search}, u (b) AS (SELECT 1) SELECT * FROM t, u`)).toBeUndefined()
+	})
+
+	test('a WITH where no query begins opens no CTE list: a table function aliased after WITH ORDINALITY is still a call', () => {
+		const ordinality = "SELECT * FROM unnest(array[1]) WITH ORDINALITY AS materialized (a, n), dblink('h', 'select 1') AS (x int)"
+		expect(refusal(`CREATE VIEW v AS ${ordinality}`)).toBe('a call of dblink')
+		expect(refusal(`INSERT INTO t ${ordinality}`)).toBe('a call of dblink')
+		for (const sql of bodies(`BEGIN PERFORM 1 FROM unnest(array[1]) WITH ORDINALITY AS materialized (a, n), mystery(1) AS (x int) WHERE true; END`)) {
+			expect({ sql, reason: refusal(sql) }).toEqual({ sql, reason: 'a call of mystery' })
+		}
+	})
+
+	test('a CTE list begins where a statement of the body begins, the same starts its statement allowlist reads', () => {
+		const starts = [
+			'DECLARE cur refcursor; BEGIN',
+			'IF true THEN WITH a (x) AS (SELECT 1) INSERT INTO t SELECT x FROM a;',
+			'ELSE WITH b (y) AS (SELECT 2) INSERT INTO t SELECT y FROM b; END IF;',
+			'LOOP WITH c (z) AS (SELECT 3) INSERT INTO t SELECT z FROM c; EXIT; END LOOP;',
+			'<<inner>> BEGIN WITH d (w) AS (SELECT 4) INSERT INTO t SELECT w FROM d; END;',
+			'OPEN cur FOR WITH e (v) AS (SELECT 5) SELECT v FROM e;',
+			'RETURN QUERY WITH f (u) AS (SELECT 6) SELECT u FROM f;',
+			'END',
+		].join(' ')
+		for (const sql of bodies(starts)) expect({ sql, reason: refusal(sql) }).toEqual({ sql, reason: undefined })
+		const cursors = [
+			'DECLARE c CURSOR FOR WITH t (a) AS (SELECT 1) SELECT a FROM t;',
+			'd NO SCROLL CURSOR (k int) IS WITH u (b) AS (SELECT k) SELECT b FROM u;',
+			'BEGIN OPEN c; OPEN d; END',
+		].join(' ')
+		for (const sql of bodies(cursors)) expect({ sql, reason: refusal(sql) }).toEqual({ sql, reason: undefined })
+		for (const sql of bodies('DECLARE c CURSOR FOR WITH t (a) AS (SELECT mystery(1)) SELECT a FROM t; BEGIN OPEN c; END')) {
+			expect({ sql, reason: refusal(sql) }).toEqual({ sql, reason: 'a call of mystery' })
+		}
+		// A policy's WITH CHECK and a CASE expression's THEN begin no query.
+		expect(refusal('CREATE POLICY p ON deals USING (true) WITH CHECK (mystery(1))')).toBe('a call of mystery')
+		expect(refusal('CREATE POLICY p ON deals WITH CHECK (true)')).toBeUndefined()
+		// A rule with several actions is split at its `;` as statements are, and its second action refused, before any
+		// CTE list is read; a CTE in a subquery of a single action is read.
+		expect(refusal('CREATE RULE r AS ON INSERT TO deals DO INSTEAD (SELECT 1; WITH u (a) AS (SELECT 1) SELECT * FROM u)')).toBe('WITH')
+		expect(refusal('CREATE RULE r AS ON INSERT TO deals DO INSTEAD (SELECT * FROM (WITH u (a) AS (SELECT 1) SELECT * FROM u) s)')).toBeUndefined()
+		for (const sql of bodies('BEGIN x := CASE WHEN true THEN 1 ELSE 2 END; END')) {
+			expect({ sql, reason: refusal(sql) }).toEqual({ sql, reason: undefined })
+		}
+	})
+
+	test('a CTE may be named recursive, an unreserved word', () => {
+		expect(refusal('CREATE VIEW v AS WITH recursive AS (SELECT 1 AS a) SELECT a FROM recursive')).toBeUndefined()
+		expect(refusal('INSERT INTO t WITH RECURSIVE recursive (a) AS (SELECT 1) SELECT a FROM recursive')).toBeUndefined()
+		expect(refusal('INSERT INTO t WITH recursive (a) AS (SELECT 1) SELECT a FROM recursive')).toBeUndefined()
+	})
+
+	test('a WITH where a query begins and whose list does not read is refused, never skipped', () => {
+		const unread = `a WITH list that cannot be read as ${CTE_FORM}`
+		expect(unread).toContain('[CYCLE columns SET column [TO constant DEFAULT constant] USING column]')
+		expect(refusal('CREATE VIEW v AS WITH verbose (a) AS (SELECT 1) SELECT * FROM verbose')).toBe(unread)
+		expect(refusal("INSERT INTO t WITH RECURSIVE r AS (SELECT 1 AS a) CYCLE a SET c DEFAULT 'N' USING p SELECT * FROM r")).toBe(unread)
+		for (const sql of bodies('BEGIN RETURN QUERY WITH a (x) AS SELECT 1; END')) {
+			expect({ sql, reason: refusal(sql) }).toEqual({ sql, reason: unread })
+		}
+		const cycle = "WITH RECURSIVE r AS (SELECT 1 AS a) CYCLE a SET c TO varchar(1) 'Y' DEFAULT varchar(1) 'N' USING p"
+		for (const sql of bodies(`BEGIN ${cycle} MERGE INTO a USING r ON true WHEN MATCHED THEN DELETE; END`)) {
+			expect({ sql, reason: refusal(sql) }).toEqual({ sql, reason: 'MERGE nested in a statement' })
+		}
+		expect(refusal(`INSERT INTO t ${cycle}, u (b) AS (SELECT 1) SELECT * FROM u`)).toBeUndefined()
 	})
 
 	test('a DDL relation position refuses an unqualified catalog name', () => {
