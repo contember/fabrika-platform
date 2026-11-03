@@ -128,8 +128,14 @@ export interface TestSeeding {
 	 * the markers it holds.
 	 */
 	seedUnder<DB, P>(tables: Tables<DB, P>, table: string, under: WorldRow): Promise<SeededRow>
-	/** Values for the policy's insert columns of `table` that its schema accepts: every required one, sampled; a file column a seeded file. */
-	sampleInsert<DB, P>(tables: Tables<DB, P>, table: string): Promise<Readonly<Record<string, SampleValue>>>
+	/**
+	 * Values for the policy's insert columns of `table` that its schema accepts: every required one, sampled; a file
+	 * column a seeded file. `beside` is a row `seedWorlds` seeded that the inserted row will lie beside, in the same
+	 * containers. A number column a unique index covers takes the next number above the largest the table holds now in the
+	 * row's group (the index's other columns as the row will have them, its containers' from `beside`), so insert the
+	 * values before taking the next sample, or the two share it.
+	 */
+	sampleInsert<DB, P>(tables: Tables<DB, P>, table: string, beside?: WorldRow): Promise<Readonly<Record<string, SampleValue>>>
 	/**
 	 * The object key of every file the fixture seeded into a file column, oldest first. Each stands for an empty object,
 	 * which a test's object store holds when a handler serves or opens the file.
@@ -159,6 +165,8 @@ export interface SeedColumn {
 	readonly text: boolean
 	/** A uuid type: a key or containment column of it holds a random uuid as its scope value. */
 	readonly uuid: boolean
+	/** A number type: where a unique index covers it, the fixture writes the next number of the row's group instead of its sample. */
+	readonly number: boolean
 	/** A sample of the column's type for a required column the test does not care about; a `SeedLimitError` for a type it cannot fill. */
 	readonly sample: () => Primitive
 }
@@ -170,6 +178,18 @@ export interface CheckConstraint {
 	readonly columns: readonly string[]
 	/** The values of a one-column `IN (…)` list the fixture writes in its place, first one first; empty for any other CHECK. */
 	readonly values: readonly string[]
+}
+
+/**
+ * A unique index of the schema (a primary key's or a UNIQUE constraint's included), by its key columns. Only an index of
+ * plain columns with no predicate is one: the fixture cannot tell a partial index's rows or an expression's values.
+ */
+export interface UniqueIndex {
+	readonly name: string
+	readonly table: string
+	readonly columns: readonly string[]
+	/** `NULLS NOT DISTINCT`: a null in a key column collides with another row's null there. */
+	readonly nullsNotDistinct: boolean
 }
 
 /** A live, empty file of `kind`, as the framework's put leaves one once a reference claims it. */
@@ -200,7 +220,18 @@ export interface SeedingBackend {
 	readonly columns: readonly SeedColumn[]
 	/** Every CHECK constraint of the schema's tables; read once, on the first column that needs them. */
 	checks(): Promise<readonly CheckConstraint[]>
-	/** Inserts one row and answers it as stored; a CHECK or foreign key it fails is a `SeedLimitError` (`checkLimit`, `foreignKeyLimit`). */
+	/** Every unique index of plain columns and no predicate of the schema's tables; read once, on the first column that needs them. */
+	uniqueIndexes(): Promise<readonly UniqueIndex[]>
+	/**
+	 * The smallest whole number above every value `column` holds in the rows of `table` that match one of `groups`
+	 * (`groupsWhere`), and at least 1, as the column's type holds it; `undefined` when the type holds no such number, or
+	 * the largest is no finite number.
+	 */
+	nextNumber(table: string, column: string, groups: readonly ReadonlyMap<string, SampleValue>[]): Promise<Primitive | undefined>
+	/**
+	 * Inserts one row and answers it as stored; a CHECK, foreign key or unique index it fails is a `SeedLimitError`
+	 * (`checkLimit`, `foreignKeyLimit`, `uniqueValueLimit`).
+	 */
 	insert(table: string, values: ReadonlyMap<string, SampleValue>): Promise<Readonly<Record<string, unknown>>>
 	/** One row of `table`, of `columns`, or `undefined` when it has none. */
 	firstRow(table: string, columns: readonly string[]): Promise<Readonly<Record<string, unknown>> | undefined>
@@ -225,9 +256,44 @@ export function foreignKeyLimit(constraint: string, table: string): SeedLimitErr
 	return new SeedLimitError(`the isolation fixture's row of ${table} breaks the foreign key ${constraint}`)
 }
 
+/** The seed limit of a number column a unique index covers whose type holds no number above the largest of the row's group. */
+export function uniqueLimit(index: string, table: string, column: string): SeedLimitError {
+	return new SeedLimitError(
+		`the isolation fixture cannot satisfy the unique index ${index} of ${table}: ${column} holds no number above its largest value; give the column a default or make it nullable`,
+	)
+}
+
+/** The seed limit of a row whose values another row of the table already holds under a unique index. */
+export function uniqueValueLimit(index: string, table: string): SeedLimitError {
+	return new SeedLimitError(
+		`the isolation fixture cannot satisfy the unique index ${index} of ${table}: it writes a sample of each column's type there, which another row holds; give a column of it a default, or make it nullable`,
+	)
+}
+
 /** The seed limit of a required column whose type the fixture has no sample of. */
 export function typeLimit(table: string, column: string, type: string): SeedLimitError {
 	return new SeedLimitError(`the isolation fixture cannot fill ${table}.${column} (${type}); give the column a default or make it nullable`)
+}
+
+/**
+ * A condition that matches a row holding every value of one of `groups` (column → value, `null` matched by `IS NULL`; an
+ * empty group matches every row, no group none), in the dialect's quoting and placeholders, with the values it binds.
+ */
+export function groupsWhere(
+	groups: readonly ReadonlyMap<string, SampleValue>[],
+	quote: (identifier: string) => string,
+	placeholder: (position: number) => string,
+): { where: string; values: SampleValue[] } {
+	const values: SampleValue[] = []
+	const each = groups.map((group) => {
+		const terms = [...group].map(([column, value]) => {
+			if (value === null) return `${quote(column)} IS NULL`
+			values.push(value)
+			return `${quote(column)} = ${placeholder(values.length)}`
+		})
+		return terms.length === 0 ? 'TRUE' : `(${terms.join(' AND ')})`
+	})
+	return { where: each.length === 0 ? 'FALSE' : each.join(' OR '), values }
 }
 
 export function randomHex(): string {
@@ -305,6 +371,7 @@ export const SEEDED_OBJECT_VERSION = '"seeded"'
 /** The isolation fixtures over the schema `backend` describes. */
 export function testSeeding(backend: SeedingBackend): TestSeeding {
 	let checks: Promise<readonly CheckConstraint[]> | undefined
+	let uniqueIndexes: Promise<readonly UniqueIndex[]> | undefined
 	const seededObjects: string[] = []
 
 	/** The CHECK constraints that name `column` of `table`. */
@@ -325,9 +392,65 @@ export function testSeeding(backend: SeedingBackend): TestSeeding {
 		return column.nullable ? null : undefined
 	}
 
-	/** A required column's sample: an `IN` list's first value where a CHECK names one, else a sample of its type. */
+	async function uniqueIndexesOf(table: string): Promise<readonly UniqueIndex[]> {
+		uniqueIndexes ??= backend.uniqueIndexes()
+		return (await uniqueIndexes).filter((index) => index.table === table)
+	}
+
+	/** Whether the fixture numbers `column` (`nextNumberOf`) instead of writing its type's sample: a number a unique index covers. */
+	async function numbered(table: string, column: SeedColumn): Promise<boolean> {
+		return column.number && (await uniqueIndexesOf(table)).some((index) => index.columns.includes(column.name))
+	}
+
+	/**
+	 * The number a column `numbered` names takes in `row` (column → value, as the row has them so far): the next above the
+	 * largest of its group under every unique index that covers it, so the row collides with no row of the table, whoever
+	 * wrote it. The group is the rows that hold the index's other columns as `row` does: under a fresh parent it is empty
+	 * and the number 1, which a bounded CHECK passes as before. A key column `row` holds no value for yet is left out of
+	 * the group, which only widens it; an index the row holds `null` in never conflicts, unless its nulls are not distinct.
+	 */
+	async function nextNumberOf(table: string, column: SeedColumn, row: ReadonlyMap<string, SampleValue>): Promise<SampleValue> {
+		const covering = (await uniqueIndexesOf(table)).filter((index) => index.columns.includes(column.name))
+		const groups: Map<string, SampleValue>[] = []
+		for (const index of covering) {
+			const group = new Map<string, SampleValue>()
+			for (const other of index.columns) {
+				if (other !== column.name && row.has(other)) group.set(other, row.get(other) ?? null)
+			}
+			if (index.nullsNotDistinct || ![...group.values()].includes(null)) groups.push(group)
+		}
+		if (groups.length === 0) return column.sample()
+		const next = await backend.nextNumber(table, column.name, groups)
+		if (next === undefined) throw uniqueLimit(covering.map((index) => index.name).join(', '), table, column.name)
+		return next
+	}
+
+	/** A required column's sample where the row is not at hand: an `IN` list's first value where a CHECK names one, else a sample of its type. */
 	async function requiredSample(table: string, column: SeedColumn): Promise<SampleValue> {
-		return (await checkedValue(table, column)) ?? column.sample()
+		const checked = await checkedValue(table, column)
+		if (checked !== undefined) return checked
+		return (await numbered(table, column)) ? nextNumberOf(table, column, new Map()) : column.sample()
+	}
+
+	/**
+	 * Writes into `row` a value for each of `columns`: `chosen`'s (a file, a CHECK's value, a marker, a null), else, for a
+	 * number a unique index covers, its next number once every other column places the row in its group, else a sample
+	 * of its type.
+	 */
+	async function fillRow(
+		table: string,
+		columns: readonly SeedColumn[],
+		row: Map<string, SampleValue>,
+		chosen: (column: SeedColumn) => Promise<SampleValue | undefined>,
+	): Promise<void> {
+		const later: SeedColumn[] = []
+		for (const column of columns) {
+			const value = await chosen(column)
+			if (value !== undefined) row.set(column.name, value)
+			else if (await numbered(table, column)) later.push(column)
+			else row.set(column.name, column.sample())
+		}
+		for (const column of later) row.set(column.name, await nextNumberOf(table, column, row))
 	}
 
 	function columnsOf(table: string): readonly SeedColumn[] {
@@ -447,29 +570,26 @@ export function testSeeding(backend: SeedingBackend): TestSeeding {
 			for (const [name, value] of await referencedKey(models, table, key, open, depth, inserted)) keyed.set(name, value)
 		}
 		const row = new Map<string, SampleValue>()
+		const open: SeedColumn[] = []
 		for (const column of columns) {
 			const name = column.name
 			// An assigned `null` is the fixture's value too, never a gap to fill.
 			const given = assigned.has(name) ? assigned : keyed.has(name) ? keyed : undefined
-			if (given !== undefined) {
-				row.set(name, given.get(name) ?? null)
-				continue
-			}
-			if (column.defaulted) continue
-			const kind = model !== undefined && Object.hasOwn(model.files, name) ? model.files[name] : undefined
-			const checked = kind === undefined ? await checkedValue(table, column) : undefined
-			if (kind !== undefined) {
-				row.set(name, await seedFile(kind, inserted))
-			} else if (checked !== undefined) {
-				row.set(name, checked)
-			} else if (await holdsMarker(model, table, column)) {
+			if (given !== undefined) row.set(name, given.get(name) ?? null)
+			else if (!column.defaulted) open.push(column)
+		}
+		await fillRow(table, open, row, async (column) => {
+			const kind = model !== undefined && Object.hasOwn(model.files, column.name) ? model.files[column.name] : undefined
+			if (kind !== undefined) return seedFile(kind, inserted)
+			const checked = await checkedValue(table, column)
+			if (checked !== undefined) return checked
+			if (await holdsMarker(model, table, column)) {
 				const marker = `m${randomHex()}${randomHex()}`
 				markers.push(marker)
-				row.set(name, marker)
-			} else {
-				row.set(name, column.nullable ? null : column.sample())
+				return marker
 			}
-		}
+			return column.nullable ? null : undefined
+		})
 		return { row, stored: await backend.insert(table, row) }
 	}
 
@@ -548,7 +668,7 @@ export function testSeeding(backend: SeedingBackend): TestSeeding {
 		seed: Readonly<Record<string, SampleValue>>,
 		pins: Readonly<Record<string, string>>,
 		inserted: InsertedRow[],
-	): Promise<WorldRow> {
+	): Promise<{ readonly world: Omit<WorldRow, 'updates'>; readonly row: ReadonlyMap<string, SampleValue> }> {
 		const markers: string[] = []
 		const values = new Map<string, string>()
 		const links: readonly Container[] = model.chain
@@ -599,10 +719,6 @@ export function testSeeding(backend: SeedingBackend): TestSeeding {
 		}
 		const { row } = await insert(models, model.name, assigned, markers)
 		inserted.push({ table: model.name, match: new Map([[scope.key, key]]) })
-		const updates: Record<string, SampleValue> = {}
-		for (const name of namesOf(model.update)) {
-			updates[name] = row.get(name) ?? await updateSample(model.name, name)
-		}
 		const dimension = grantDimension(models, model)
 		const chain = [
 			...(scope.mode === 'dimension' ? [{ type: scope.dimension, value: key }] : []),
@@ -611,14 +727,23 @@ export function testSeeding(backend: SeedingBackend): TestSeeding {
 				return value === undefined ? [] : [{ type: link.dimension, value }]
 			}),
 		]
-		return {
+		const seeded = {
 			key,
 			parent: scope.mode === 'child' ? (values.get(links[0]?.dimension ?? '') ?? null) : null,
 			scope: values.get(dimension) ?? key,
 			chain,
-			updates,
 			markers,
 		}
+		return { world: seeded, row }
+	}
+
+	/** A seeded row's values of the policy's update columns: as written, or a sample where the database filled the column. */
+	async function updatesOf(model: TableModel, row: ReadonlyMap<string, SampleValue>): Promise<Record<string, SampleValue>> {
+		const updates: Record<string, SampleValue> = {}
+		for (const name of namesOf(model.update)) {
+			updates[name] = row.get(name) ?? await updateSample(model.name, name)
+		}
+		return updates
 	}
 
 	return {
@@ -626,10 +751,13 @@ export function testSeeding(backend: SeedingBackend): TestSeeding {
 			const { models, model } = scopedModel(tables, table)
 			const dimension = grantDimension(models, model)
 			const inserted: InsertedRow[] = []
+			const own = await seedWorld(models, model, 'own', values, pins, inserted)
+			const other = await seedWorld(models, model, 'other', values, pins, inserted)
+			// Sampled once both rows are written: a number a unique index covers is the next above what the table holds.
 			return {
 				dimension,
-				own: await seedWorld(models, model, 'own', values, pins, inserted),
-				other: await seedWorld(models, model, 'other', values, pins, inserted),
+				own: { ...own.world, updates: await updatesOf(model, own.row) },
+				other: { ...other.world, updates: await updatesOf(model, other.row) },
 				remove: () => backend.remove(inserted),
 			}
 		},
@@ -638,11 +766,7 @@ export function testSeeding(backend: SeedingBackend): TestSeeding {
 			checkApplicationValues(models, { [table]: values })
 			const markers: string[] = []
 			const { key, row } = await seedApplicationRow(models, model, values, new Map(), markers)
-			const updates: Record<string, SampleValue> = {}
-			for (const name of namesOf(model.update)) {
-				updates[name] = row.get(name) ?? await updateSample(table, name)
-			}
-			return { key, updates, markers }
+			return { key, updates: await updatesOf(model, row), markers }
 		},
 		async seedApplicationRows(tables, rows) {
 			const models = tableModels(tables)
@@ -697,7 +821,7 @@ export function testSeeding(backend: SeedingBackend): TestSeeding {
 			await insert(models, table, placement(model, values, key), markers)
 			return { key, markers }
 		},
-		async sampleInsert(tables, table) {
+		async sampleInsert(tables, table, beside) {
 			const { models, model } = scopedModel(tables, table)
 			const values: Record<string, SampleValue> = {}
 			const columns = columnsOf(table)
@@ -707,11 +831,20 @@ export function testSeeding(backend: SeedingBackend): TestSeeding {
 				if (open.length === 0) continue
 				for (const [name, value] of await referencedKey(models, table, key, open, 0)) values[name] = value
 			}
-			for (const column of required) {
-				const name = column.name
-				const kind = Object.hasOwn(model.files, name) ? model.files[name] : undefined
-				if (!(name in values)) values[name] = kind === undefined ? await requiredSample(table, column) : await seedFile(kind)
+			// The row as the insert will write it: in `beside`'s containers, which the handler places it in.
+			const containers = new Map((beside?.chain ?? []).map((link) => [link.type, link.value]))
+			const row = new Map<string, SampleValue>()
+			for (const link of model.chain) {
+				const value = containers.get(link.dimension)
+				if (value !== undefined) row.set(link.column, value)
 			}
+			for (const [name, value] of Object.entries(values)) row.set(name, value)
+			const open = required.filter((column) => !(column.name in values))
+			await fillRow(table, open, row, async (column) => {
+				const kind = Object.hasOwn(model.files, column.name) ? model.files[column.name] : undefined
+				return kind === undefined ? checkedValue(table, column) : seedFile(kind)
+			})
+			for (const column of open) values[column.name] = row.get(column.name) ?? null
 			return values
 		},
 		seededObjects: () => [...seededObjects],

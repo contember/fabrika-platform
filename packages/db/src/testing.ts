@@ -27,6 +27,7 @@ import {
 	type CheckConstraint,
 	checkLimit,
 	foreignKeyLimit,
+	groupsWhere,
 	type InsertedRow,
 	MAX_REMOVED_ROWS,
 	probeTable,
@@ -38,6 +39,7 @@ import {
 	type TestDatabase,
 	testSeeding,
 	typeLimit,
+	uniqueValueLimit,
 } from './testing-shared'
 
 export { ChildTable, defineChildStore, defineStore, DimensionTable, type TableProbe } from './store'
@@ -80,6 +82,7 @@ export interface TestDatabaseOptions {
 let capacityExhausted: ConnectionCapacityError | undefined
 
 const TEXT_TYPES: ReadonlySet<string> = new Set(['text', 'varchar', 'bpchar'])
+const NUMBER_TYPES: ReadonlySet<string> = new Set(['int2', 'int4', 'int8', 'float4', 'float8', 'numeric'])
 
 function quoted(identifier: string): string {
 	return `"${identifier}"`
@@ -96,8 +99,8 @@ function sampleOf(table: string, column: CatalogColumn): Primitive {
 	const type = column.type_name
 	if (type === 'uuid') return crypto.randomUUID()
 	if (TEXT_TYPES.has(type)) return `s${randomHex()}`
-	if (type === 'int2' || type === 'int4' || type === 'float4' || type === 'float8') return 1
-	if (type === 'int8' || type === 'numeric') return '1'
+	// Bun.SQL reads an int8 and a numeric as text.
+	if (NUMBER_TYPES.has(type)) return type === 'int8' || type === 'numeric' ? '1' : 1
 	if (type === 'bool') return false
 	// ISO text, not a Date: the seed binds past the layer's compiler, where Bun.SQL would send Date#toString(). A day is
 	// `YYYY-MM-DD`, since the probe's insert sends it through the layer, which takes a `date` only so.
@@ -118,6 +121,7 @@ function seedColumn(column: CatalogColumn): SeedColumn {
 		defaulted: column.generated !== 'no',
 		text: column.type_type !== 'e' && TEXT_TYPES.has(column.type_name),
 		uuid: column.type_name === 'uuid',
+		number: column.type_type !== 'e' && NUMBER_TYPES.has(column.type_name),
 		sample: () => sampleOf(column.table_name, column),
 	}
 }
@@ -134,6 +138,44 @@ JOIN pg_namespace n ON n.oid = r.relnamespace
 WHERE n.nspname = $1 AND c.contype = 'c'
 ORDER BY r.relname, c.conname
 `
+
+const uniqueRows = z.array(z.object({ name: z.string(), table_name: z.string(), columns: z.array(z.string()), nulls_not_distinct: z.boolean() }))
+
+/**
+ * Every unique index of the schema's tables (a primary key's and a UNIQUE constraint's are one) whose key columns are all
+ * plain columns and that has no predicate, with its key columns: the first `indnkeyatts` of `indkey`, never an `INCLUDE`
+ * column. An index on an expression (`indexprs`) or a partial one (`indpred`) is left out.
+ */
+const UNIQUE_QUERY = `
+SELECT i.relname::text AS name, r.relname::text AS table_name, x.indnullsnotdistinct AS nulls_not_distinct,
+	ARRAY(
+		SELECT a.attname::text FROM pg_attribute a
+		WHERE a.attrelid = x.indrelid AND a.attnum = ANY ((x.indkey::int2[])[0:x.indnkeyatts - 1])
+		ORDER BY a.attnum
+	) AS columns
+FROM pg_index x
+JOIN pg_class i ON i.oid = x.indexrelid
+JOIN pg_class r ON r.oid = x.indrelid
+JOIN pg_namespace n ON n.oid = r.relnamespace
+WHERE n.nspname = $1 AND x.indisunique AND x.indexprs IS NULL AND x.indpred IS NULL
+ORDER BY r.relname, i.relname
+`
+
+const typeRows = z.array(z.object({ table_name: z.string(), column_name: z.string(), type: z.string() }))
+
+/** Every column of the schema's tables with its type as Postgres writes it (`smallint`, `numeric(3,0)`): a cast keeps its range and scale. */
+const TYPE_QUERY = `
+SELECT r.relname::text AS table_name, a.attname::text AS column_name, format_type(a.atttypid, a.atttypmod) AS type
+FROM pg_attribute a
+JOIN pg_class r ON r.oid = a.attrelid
+JOIN pg_namespace n ON n.oid = r.relnamespace
+WHERE n.nspname = $1 AND r.relkind IN ('r', 'p') AND a.attnum > 0 AND NOT a.attisdropped
+`
+
+const nextRows = z.array(z.object({ next: z.union([z.number(), z.string(), z.bigint()]).nullable() }))
+
+/** SQLSTATE `numeric_value_out_of_range`: the column's type holds no such number. */
+const OUT_OF_RANGE = '22003'
 
 const referrerRows = z.array(z.object({ table_name: z.string(), columns: z.array(z.string()), refs: z.array(z.string()) }))
 
@@ -173,6 +215,7 @@ function seedLimit(error: unknown, table: string): SeedLimitError | undefined {
 	const constraint = error.constraint ?? 'unnamed'
 	if (error.errno === '23514') return checkLimit(constraint, table)
 	if (error.errno === '23503') return foreignKeyLimit(constraint, table)
+	if (error.errno === '23505') return uniqueValueLimit(constraint, table)
 	return undefined
 }
 
@@ -338,6 +381,7 @@ export async function testDatabase(options: TestDatabaseOptions): Promise<TestDa
 		)
 		await tx.unsafe(`WITH ${deletes.join(', ')} SELECT 1`, tables.map(([, ctids]) => tidArray(ctids)))
 	}
+	let types: Promise<ReadonlyMap<string, string>> | undefined
 	const backend: SeedingBackend = {
 		columns: catalog.map(seedColumn),
 		checks: async () =>
@@ -347,6 +391,42 @@ export async function testDatabase(options: TestDatabaseOptions): Promise<TestDa
 				columns: row.columns,
 				values: listedValues(row.definition, row.columns),
 			})),
+		uniqueIndexes: async () =>
+			uniqueRows.parse(await lock.unsafe(UNIQUE_QUERY, [schema])).map((row) => ({
+				name: row.name,
+				table: row.table_name,
+				columns: row.columns,
+				nullsNotDistinct: row.nulls_not_distinct,
+			})),
+		async nextNumber(table, column, groups) {
+			// A read that failed is read again on the next call, never answered from the cache.
+			types ??= lock.unsafe(TYPE_QUERY, [schema]).then(
+				(rows: unknown) => new Map(typeRows.parse(rows).map((row) => [`${row.table_name}.${row.column_name}`, row.type])),
+				(error: unknown) => {
+					types = undefined
+					throw error
+				},
+			)
+			const type = (await types).get(`${table}.${column}`)
+			if (type === undefined) {
+				throw new Error(`${table}.${column} is not a column of the migrated schema`)
+			}
+			const { where, values: bindings } = groupsWhere(groups, quoted, (position) => `$${position}`)
+			const largest = `(SELECT max(${quoted(column)}) FROM ${quoted(schema)}.${quoted(table)} WHERE ${where})`
+			// A float's NaN or Infinity has no next number; the cast refuses one the type cannot hold (22003).
+			const statement = `SELECT CASE WHEN largest IS NULL THEN 1::${type} WHEN largest::text IN ('NaN', 'Infinity', '-Infinity') THEN NULL
+				ELSE GREATEST(floor(largest::numeric) + 1, 1)::${type} END AS next FROM ${largest} AS m (largest)`
+			let next: unknown
+			try {
+				next = await seeder.unsafe(statement, bindings)
+			} catch (error) {
+				if (error instanceof SQL.PostgresError && error.errno === OUT_OF_RANGE) return undefined
+				throw error
+			}
+			const [found] = nextRows.parse(next)
+			if (found === undefined || found.next === null) return undefined
+			return typeof found.next === 'bigint' ? String(found.next) : found.next
+		},
 		async insert(table, row) {
 			const names = [...row.keys()]
 			const placeholders = names.map((_, index) => `$${index + 1}`)
