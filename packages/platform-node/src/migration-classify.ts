@@ -16,8 +16,8 @@ import { PG_CATALOG_FUNCTIONS, SQL_KEYWORDS } from './pg-catalog-names'
 import {
 	afterName,
 	closingParenthesis,
+	CTE_FORM,
 	ddlForeignSchema,
-	dmlForeignSchema,
 	frameworkReference,
 	functionUse,
 	isFrameworkName,
@@ -28,8 +28,10 @@ import {
 	nestedStatement,
 	objectNameAt,
 	parenthesizedTarget,
+	ReadBody,
 	ReadSql,
-	refusedFunctionCall,
+	referencedForeignSchema,
+	refusedCall,
 	skipWords,
 	splitAtCommas,
 	statementKind,
@@ -255,15 +257,15 @@ function refuseForeignDdl(tokens: readonly SqlToken[], context: Context, label: 
  */
 function checkQuery(read: ReadSql, context: Context, label: string): void {
 	const { tokens } = read
-	if (read.ctes.unread !== undefined) throw new Refused('a WITH list that cannot be read', read.ctes.unread)
+	if (read.ctes.unread !== undefined) throw new Refused(`a WITH list that cannot be read as ${CTE_FORM}`, read.ctes.unread)
 	const nested = nestedStatement(read)
 	if (nested !== undefined) throw new Refused(`${nested.statement} nested in a statement`, nested.line)
 	const target = parenthesizedTarget(tokens)
 	if (target !== undefined) throw new Refused(`a parenthesized ${target.statement} target`, target.line)
 	const references = nameReferences(read)
-	const reached = dmlForeignSchema(references, context.schema)
+	const reached = referencedForeignSchema(references, context.schema)
 	if (reached !== undefined) throw new Refused(`${label} reaching the schema ${reached}`, tokens[0]?.line ?? 1)
-	const call = refusedFunctionCall(references, context.schema, context.functions)
+	const call = refusedCall(references, context.schema, context.functions)
 	if (call !== undefined) throw new Refused(`a call of ${call.name}`, call.line)
 }
 
@@ -293,10 +295,10 @@ function isAssignment(tokens: readonly SqlToken[], index: number): boolean {
 }
 
 /**
- * The first statement of a function or `DO` body (`ReadSql.body`) that does not begin with an allowlisted word or an
+ * The first statement of a function or `DO` body (`ReadBody`) that does not begin with an allowlisted word or an
  * assignment; a declaration section holds declarations.
  */
-function refusedBodyStatement({ tokens, statements }: ReadSql): { readonly statement: string; readonly line: number } | undefined {
+function refusedBodyStatement({ tokens, statements }: ReadBody): { readonly statement: string; readonly line: number } | undefined {
 	for (const { index, declaring } of statements) {
 		const token = tokens[index]
 		const word = upperWord(token)
@@ -333,7 +335,7 @@ function checkBody(tokens: readonly SqlToken[], context: Context): void {
 	if (framework !== undefined) throw new Refused(`a reference to the framework's ${framework.name}`, framework.line)
 	const execute = tokens.find((token) => upperWord(token) === 'EXECUTE')
 	if (execute !== undefined) throw new Refused('a dynamic EXECUTE in a body', execute.line)
-	const read = ReadSql.body(tokens)
+	const read = ReadBody.of(tokens)
 	const statement = refusedBodyStatement(read)
 	if (statement !== undefined) throw new Refused(`${statement.statement} in a body`, statement.line)
 	checkQuery(read, context, 'a body')

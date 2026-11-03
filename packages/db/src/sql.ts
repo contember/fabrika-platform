@@ -6,7 +6,7 @@
 // approver's to review, since the `sql:` declaration marks the site for a closer look (ADR-0012, ADR-0050).
 
 import {
-	dmlForeignSchema,
+	CTE_FORM,
 	frameworkReference,
 	lexSql,
 	lexSqlite,
@@ -14,7 +14,8 @@ import {
 	nestedStatement,
 	parenthesizedTarget,
 	ReadSql,
-	refusedFunctionCall,
+	referencedForeignSchema,
+	refusedCall,
 	type SqlToken,
 	statementKind,
 	statementsOf,
@@ -290,8 +291,7 @@ export function classifySql(parts: readonly string[], mode: SqlMode, database: S
 	if (read.ctes.unread !== undefined) {
 		refuse(
 			'sql_statement',
-			`the WITH at line ${read.ctes.unread} begins a CTE list that cannot be read; write each CTE as name [(columns)] AS [[NOT] MATERIALIZED] (query), `
-				+ 'a recursive one optionally followed by SEARCH {BREADTH | DEPTH} FIRST BY columns SET column and CYCLE columns SET column [TO value DEFAULT value] USING column',
+			`the WITH at line ${read.ctes.unread} begins a CTE list that cannot be read; write each CTE as ${CTE_FORM}, a CYCLE mark a constant and never an interpolated value`,
 		)
 	}
 	const nested = nestedStatement(read) ?? parenthesizedTarget(tokens)
@@ -311,11 +311,11 @@ export function classifySql(parts: readonly string[], mode: SqlMode, database: S
 			refuse('sql_name', `'${reference.name}' at line ${reference.line} is a catalog name; ctx.sql reaches only the application's own tables`)
 		}
 	}
-	const foreign = dmlForeignSchema(references, database.schema)
+	const foreign = referencedForeignSchema(references, database.schema)
 	if (foreign !== undefined) {
 		refuse('sql_name', `the schema '${foreign}' is outside the application's; write its tables' names unqualified`)
 	}
-	const call = refusedFunctionCall(references, database.schema, NO_DECLARED_FUNCTIONS)
+	const call = refusedCall(references, database.schema, NO_DECLARED_FUNCTIONS)
 	if (call !== undefined) {
 		refuse(
 			'sql_function',

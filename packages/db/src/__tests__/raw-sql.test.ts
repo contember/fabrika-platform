@@ -239,7 +239,11 @@ describe('the static text', () => {
 			[parts`insert into notes (id) with t (a) select 1`, 'the WITH at line 1 begins a CTE list that cannot be read'],
 			[
 				parts`with recursive t (a) as (select 1) cycle a set c to 'Y' using p select 1`,
-				'CYCLE columns SET column [TO value DEFAULT value] USING column',
+				'[CYCLE columns SET column [TO constant DEFAULT constant] USING column]',
+			],
+			[
+				parts`with t (a) as (select 1) cycle a set c to ${'Y'} default 'N' using p select * from t`,
+				'a CYCLE mark a constant and never an interpolated value',
 			],
 		]
 		for (const [text, expected] of refused) {

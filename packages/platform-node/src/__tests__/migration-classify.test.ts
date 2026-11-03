@@ -2,6 +2,7 @@ import { Database } from 'bun:sqlite'
 import { describe, expect, test } from 'bun:test'
 import { fileScanAlter } from '../file-table-ddl'
 import { classifyMigration, classifyMigrations, type MigrationDeviation } from '../migration-classify.js'
+import { CTE_FORM } from '../sql-names'
 
 const SCHEMA = 'app_notes'
 const FILE = '20261011120000_init.sql'
@@ -668,12 +669,12 @@ describe('review round 2: coarse, fail-closed rules', () => {
 	})
 
 	test('a WITH where a query begins and whose list does not read is refused, never skipped', () => {
-		expect(refusal('CREATE VIEW v AS WITH verbose (a) AS (SELECT 1) SELECT * FROM verbose')).toBe('a WITH list that cannot be read')
-		expect(refusal("INSERT INTO t WITH RECURSIVE r AS (SELECT 1 AS a) CYCLE a SET c DEFAULT 'N' USING p SELECT * FROM r")).toBe(
-			'a WITH list that cannot be read',
-		)
+		const unread = `a WITH list that cannot be read as ${CTE_FORM}`
+		expect(unread).toContain('[CYCLE columns SET column [TO constant DEFAULT constant] USING column]')
+		expect(refusal('CREATE VIEW v AS WITH verbose (a) AS (SELECT 1) SELECT * FROM verbose')).toBe(unread)
+		expect(refusal("INSERT INTO t WITH RECURSIVE r AS (SELECT 1 AS a) CYCLE a SET c DEFAULT 'N' USING p SELECT * FROM r")).toBe(unread)
 		for (const sql of bodies('BEGIN RETURN QUERY WITH a (x) AS SELECT 1; END')) {
-			expect({ sql, reason: refusal(sql) }).toEqual({ sql, reason: 'a WITH list that cannot be read' })
+			expect({ sql, reason: refusal(sql) }).toEqual({ sql, reason: unread })
 		}
 		const cycle = "WITH RECURSIVE r AS (SELECT 1 AS a) CYCLE a SET c TO varchar(1) 'Y' DEFAULT varchar(1) 'N' USING p"
 		for (const sql of bodies(`BEGIN ${cycle} MERGE INTO a USING r ON true WHEN MATCHED THEN DELETE; END`)) {

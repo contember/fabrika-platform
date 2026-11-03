@@ -388,7 +388,7 @@ export function nameReferences(read: ReadSql): NameReference[] {
  * than `schema`, `pg_catalog` included: a qualified relation, call or type, or a three-part name. An unqualified
  * relation whose name starts with `pg_` resolves to the catalog and counts as `pg_catalog`.
  */
-export function dmlForeignSchema(references: readonly NameReference[], schema: string): string | undefined {
+export function referencedForeignSchema(references: readonly NameReference[], schema: string): string | undefined {
 	for (const reference of references) {
 		if (reference.qualifier === undefined) {
 			if (reference.role === 'relation' && reference.name.startsWith('pg_')) return 'pg_catalog'
@@ -451,6 +451,13 @@ const STATEMENT_WORDS: ReadonlySet<string> = new Set([
 	'WITH',
 ])
 const NESTED_STATEMENTS: ReadonlySet<string> = new Set(['SELECT', 'VALUES', 'WITH', 'TABLE', 'INSERT', 'UPDATE', 'DELETE'])
+
+/**
+ * The form of a CTE that a list must take to be read, for a refusal to name: a `CYCLE` mark is a constant, as Postgres
+ * requires, never a bound value.
+ */
+export const CTE_FORM =
+	'name [(columns)] AS [[NOT] MATERIALIZED] (query) [SEARCH {BREADTH | DEPTH} FIRST BY columns SET column] [CYCLE columns SET column [TO constant DEFAULT constant] USING column]'
 
 /** A CTE list: the index of each CTE's name and the token after the list, the statement it ends in. */
 interface CteList {
@@ -704,10 +711,6 @@ export interface BodyStatement {
 	readonly declaring: boolean
 }
 
-const QUERY_AFTER_IN: ReadonlySet<string> = new Set(['IN'])
-const QUERY_AFTER_FOR: ReadonlySet<string> = new Set(['FOR'])
-const QUERY_AFTER_CURSOR: ReadonlySet<string> = new Set(['FOR', 'IS'])
-
 /**
  * Where each statement of a function or `DO` body begins, past `;` and a `<<label>>`: after `BEGIN`, `DECLARE` and
  * `LOOP` (not `END LOOP`), and after `THEN` and `ELSE` except inside a `CASE` expression. A declaration section
@@ -720,7 +723,8 @@ function bodyOf(tokens: readonly SqlToken[]): { readonly statements: readonly Bo
 	let start = true
 	let declaring = false
 	let depth = 0
-	let opens: ReadonlySet<string> | undefined
+	// The word after which the statement's query begins; a cursor may write `IS` for `FOR`.
+	let opens: 'IN' | 'FOR' | undefined
 	const cases: ('statement' | 'expression')[] = []
 	for (let index = 0; index < tokens.length; index++) {
 		const token = tokens[index]
@@ -737,7 +741,7 @@ function bodyOf(tokens: readonly SqlToken[]): { readonly statements: readonly Bo
 			statements.push({ index, declaring })
 			queries.push(index)
 			depth = 0
-			opens = word === 'FOR' ? QUERY_AFTER_IN : word === 'OPEN' ? QUERY_AFTER_FOR : undefined
+			opens = word === 'FOR' ? 'IN' : word === 'OPEN' ? 'FOR' : undefined
 			if (word === 'RETURN' && upperWord(tokens[index + 1]) === 'QUERY') queries.push(index + 2)
 			if (word === 'CASE') {
 				cases.push('statement')
@@ -749,10 +753,10 @@ function bodyOf(tokens: readonly SqlToken[]): { readonly statements: readonly Bo
 		}
 		if (isPunct(token, '(')) depth++
 		else if (isPunct(token, ')')) depth--
-		else if (depth === 0 && word !== undefined && opens?.has(word)) {
+		else if (depth === 0 && opens !== undefined && (word === opens || (opens === 'FOR' && word === 'IS'))) {
 			queries.push(index + 1)
 			opens = undefined
-		} else if (depth === 0 && declaring && word === 'CURSOR') opens = QUERY_AFTER_CURSOR
+		} else if (depth === 0 && declaring && word === 'CURSOR') opens = 'FOR'
 		const innermost = cases[cases.length - 1]
 		if (word === 'DECLARE') declaring = true
 		if (word === 'BEGIN') declaring = false
@@ -771,41 +775,48 @@ function bodyOf(tokens: readonly SqlToken[]): { readonly statements: readonly Bo
 const NO_CTE_LISTS: CteLists = { terminals: new Map(), names: new Set(), unread: undefined }
 
 /**
- * The tokens of a query, a statement, a clause, an expression or a body, read once with their CTE lists. The name
- * checks take the tokens and their lists as this one value, which only its factories build, so a list is never read
- * against tokens it was not read from.
+ * The tokens of a query, a statement, a clause or an expression, read once with their CTE lists. The name checks take
+ * the tokens and their lists as this one value, which only its factories build: its private member makes it nominal,
+ * so an object that merely has its fields is none, and a list is never read against tokens it was not read from.
  */
 export class ReadSql {
+	readonly #read = true
 	readonly tokens: readonly SqlToken[]
-	/** Where each statement of a body begins (`ReadSql.body`); none for anything else. */
-	readonly statements: readonly BodyStatement[]
 	readonly ctes: CteLists
 
-	private constructor(tokens: readonly SqlToken[], statements: readonly BodyStatement[], ctes: CteLists) {
+	protected constructor(tokens: readonly SqlToken[], ctes: CteLists) {
 		this.tokens = tokens
-		this.statements = statements
 		this.ctes = ctes
 	}
 
 	/** A query or a data-changing statement: a query begins at its first token. */
 	static query(tokens: readonly SqlToken[]): ReadSql {
-		return new ReadSql(tokens, [], cteLists(tokens, [0]))
+		return new ReadSql(tokens, cteLists(tokens, [0]))
 	}
 
 	/** A clause or a condition (a policy's expressions, a rule, a trigger's `WHEN`): a query begins only in parentheses. */
 	static clause(tokens: readonly SqlToken[]): ReadSql {
-		return new ReadSql(tokens, [], cteLists(tokens, []))
+		return new ReadSql(tokens, cteLists(tokens, []))
 	}
 
 	/** A stored expression, which Postgres lets hold no subquery: no CTE list is read, so every `name (` is a call. */
 	static expression(tokens: readonly SqlToken[]): ReadSql {
-		return new ReadSql(tokens, [], NO_CTE_LISTS)
+		return new ReadSql(tokens, NO_CTE_LISTS)
+	}
+}
+
+/** A function or `DO` body read once: its statements (`bodyOf`), and its CTE lists with a query wherever one begins. */
+export class ReadBody extends ReadSql {
+	readonly statements: readonly BodyStatement[]
+
+	private constructor(tokens: readonly SqlToken[], statements: readonly BodyStatement[], ctes: CteLists) {
+		super(tokens, ctes)
+		this.statements = statements
 	}
 
-	/** A function or `DO` body: its statements, and a query wherever `bodyOf` finds one beginning. */
-	static body(tokens: readonly SqlToken[]): ReadSql {
+	static of(tokens: readonly SqlToken[]): ReadBody {
 		const { statements, queries } = bodyOf(tokens)
-		return new ReadSql(tokens, statements, cteLists(tokens, queries))
+		return new ReadBody(tokens, statements, cteLists(tokens, queries))
 	}
 }
 
@@ -1080,7 +1091,7 @@ export function functionUse(call: NameReference, schema: string, functions: Read
  * built-in, or a function the migrations declare in `schema`. An allowlist, because a built-in such as
  * `query_to_xml`, `dblink` or `lo_import` runs SQL from a string or reaches past the schema, which no name rule sees.
  */
-export function refusedFunctionCall(references: readonly NameReference[], schema: string, functions: ReadonlySet<string>): NameReference | undefined {
+export function refusedCall(references: readonly NameReference[], schema: string, functions: ReadonlySet<string>): NameReference | undefined {
 	for (const reference of references) {
 		if (reference.role !== 'call') continue
 		const use = functionUse(reference, schema, functions)

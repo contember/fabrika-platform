@@ -43,4 +43,10 @@ describe('@fabrika/platform-node/sql', () => {
 		const result = sql.classifyMigration('CREATE VIEW v AS SELECT 1', 'app_notes', { file: 'a.sql' })
 		expect(result.deviations).toEqual([{ kind: 'view', object: 'v', file: 'a.sql', line: 1 }])
 	})
+
+	test('the checks over name references are exported under their own names: a caller that passes tokens to the old ones fails to import', async () => {
+		const sql = await import('@fabrika/platform-node/sql')
+		expect(Object.keys(sql).filter((name) => name === 'dmlForeignSchema' || name === 'refusedFunctionCall')).toEqual([])
+		expect([typeof sql.referencedForeignSchema, typeof sql.refusedCall]).toEqual(['function', 'function'])
+	})
 })
