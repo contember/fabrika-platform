@@ -240,7 +240,7 @@ async function runSeed(dev: DevKit<AnyContract>, outside: DevOutside, path: stri
 	return parseSeeded(dev, answer)
 }
 
-/** What a job's handler threw, printed whole on the developer's terminal. */
+/** What a request's 5xx or a job attempt threw, printed whole on the developer's terminal. */
 const printHandlerError = (where: string, error: unknown): void => {
 	console.error(`fabrika app dev: ${where} threw\n${Bun.inspect(error)}`)
 }

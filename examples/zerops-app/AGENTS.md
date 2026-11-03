@@ -847,7 +847,9 @@ export default seed
 - Check every call the seed makes: an endpoint that refuses answers a status, and the seed goes on without its data.
   Throw when one does: a seed that throws stops `app dev` and prints its error with the stack.
 - `dev.runJob('<job>')` runs a cron job from the seed (`app dev` runs none on its schedule). A job's `ctx.links` works:
-  the stand-in IAM takes the job's own key. What a job's handler throws is printed with its stack, here only.
+  the stand-in IAM takes the job's own key. What a request's 5xx or a job attempt threw is printed with its stack, here
+  only, after the log line that names its code and reason: your handler's own error, or a framework refusal with its
+  own message (a refused `ctx.sql` names its line).
 
 ## Outside the application
 
@@ -1806,13 +1808,16 @@ with its message; throw the three business errors for the application's own refu
 
 A 500 answers a fixed message; the server log has one line, `fabrika: <endpoint>: <code>: <reason>: <text>`, with a
 fixed failure code and, for a framework refusal, its reason and the reason's fixed text, never a value or your error's
-message. The codes you meet most:
+message. The refusal's own message names the place (`'sqlite_master' at line 2`, the column, the function): for every
+5xx, `fabrika app dev` prints what was thrown after that line, and a test sees it when it passes a sink to the kit
+(`references/tests.md`). The codes
+you meet most:
 
 | Code                 | Means                                                                                                                                                                                                          |
 | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `query_refused`      | the data layer refused a statement or an operation: `undeclared_reach`, `sql_read_only`, `unknown_column`, `read_only`, `sql_outside_transaction`, `sql_scope`, `sql_name` …; the reason's text names the rule |
 | `capability_refused` | a capability of another kind, dimension or action than the call takes (`wrong_capability`, `wrong_action`, `out_of_reach`), or one kept past its request (`ended`, `foreign_work`)                             |
-| `handler_failed`     | your handler threw something else; the log has no more: the Operations issue has the stack, or test the handler                                                                                                |
+| `handler_failed`     | your handler threw something else; the log has no more: the Operations issue has the stack, `app dev` prints it                                                                                                |
 
 With an Operations DSN the same 500 is a `RequestFailed` issue in Operations. Its event also carries what your handler
 threw: the error's type, its message, its stack and its `cause` chain. Read the stack there, not in the log. A crash
@@ -2401,9 +2406,9 @@ export const contract = app.contract((c) => ({
   builds an absolute link to one of the application's procedures, for an e-mail.
 - `ctx.signal` aborts when the attempt ends (its timeout, a lost lease). Call `ctx.signal.throwIfAborted()` before
   each external effect and pass the signal to `fetch`, so a stale attempt starts nothing after its replacement.
-- A failed attempt names its failure in `kit.runJob`'s answer and the log: `handler_failed`, a framework refusal
-  with its reason (`query_refused: undeclared_reach`, `capability_refused: undeclared_action`; `references/errors.md`),
-  or `mail_failed` with the transport's code (`mail_failed: provider_rejected`).
+- A failed attempt names its failure in `kit.runJob`'s answer and the log: `handler_failed`, a framework failure
+  with its reason (`query_refused: undeclared_reach`, `capability_refused: undeclared_action`,
+  `framework_fault: url_unbuildable`; `references/errors.md`), or `mail_failed` with the transport's code (`mail_failed: provider_rejected`).
 
 ## E-mail: `mailer` and `ctx.mail`
 
@@ -6078,6 +6083,10 @@ if (postgres !== null) {
 - `testKit(app, { membership })` replaces the stand-in with your own `IamMembershipRpc`; that kit accepts no
   invitation. `@fabrika/app/testing` exports the types of the options: `IamMembershipRpc` (`membership`),
   `ChallengeFetch` (`challengeFetch`) and `FileScanner` (`scanner`). Import them from there, beside `testKit`.
+- A 5xx or a failed `kit.runJob` names only its code and reason. To see what was thrown (your handler's error, or a
+  refusal's own message: a refused `ctx.sql` names its line, a refused column its name), pass a sink while you debug:
+  `testKit(app, { database: postgres.database, revealHandlerErrors: (where, error) => console.error(where, error) })`
+  (`HandlerErrorSink`). It is off unless passed.
 - `kit.testCaller(grants, { disabled: true })` is a person an operator disabled: the directory lists and finds them
   with `disabled: true`, so an assignment of them answers your handler's 400, and their own requests are refused (401 for
   a session, 403 for a key).

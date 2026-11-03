@@ -51,7 +51,7 @@ import { FILE_SWEEP_JOB, FILE_SWEEP_SCHEDULE, FILE_SWEEP_TIMEOUT_MS, storedFileK
 import { FILE_SCAN_JOB, FILE_SCAN_SCHEDULE, type FileScanner, SCAN_LIMITS } from '../files/scan'
 import { type MailStandIn, resolveMailTransports } from '../jobs/mail'
 import { logReporter, type OperationsReporter, operationsReporter, operationsSettings, type ReportSource } from '../jobs/report'
-import { bindJobs, type ContractJobs, type HandlerErrorSink } from '../jobs/runner'
+import { bindJobs, type ContractJobs } from '../jobs/runner'
 import { environmentScrubber } from '../jobs/scrub'
 import { browserConfigs } from './browser-config'
 import { createCapabilityIssuer, requestIsReadOnly } from './capability'
@@ -69,7 +69,7 @@ import {
 } from './dispatch'
 import { installEgressGuard, platformCall, platformFacility } from './egress'
 import type { CapturedEnvironment } from './environment'
-import { FailureReports } from './failures'
+import { FailureReports, type HandlerErrorSink } from './failures'
 import { applicationPolicy } from './headers'
 import type { ContractDatabase, ContractImplementation, ImplementationDatabase } from './implement'
 import { approvedDeclaration, approvedReach, isSiteHandler, type SiteDeclaration } from './invocation'
@@ -146,8 +146,10 @@ export interface BootOptions {
 	 */
 	readonly challengeWork?: ChallengeWork
 	/**
-	 * The developer's own machine only (`fabrika app dev`): what a job's handler threw, which every log of a deployed
-	 * application withholds because it may carry a credential.
+	 * The author's own run only (`fabrika app dev`, a test that passes it to the kit): what a request's 5xx or a job
+	 * attempt threw, whole, beside the code and reason its log line names: a handler's own error, or a framework failure
+	 * (a refusal of the data layer or of a capability, a `ServerFault`) with its message. Every log of a deployed
+	 * application withholds both, because either may carry request data or a credential (ADR-0059).
 	 */
 	readonly revealHandlerErrors?: HandlerErrorSink
 	/** The providers `FABRIKA_EMAIL_PROVIDER` may name for the jobs that declare `mailer: 'installation'`; the built-in ones by default. */
@@ -979,7 +981,7 @@ function bootOnce(app: ContractImplementation, options: BootOptions, binding: Bi
 		capabilities: issuer.authority,
 		data,
 		fileKinds,
-		failures: new FailureReports(reporterFor('fabrika.requests')),
+		failures: new FailureReports(reporterFor('fabrika.requests'), { reveal: options.revealHandlerErrors ?? null }),
 		kick: jobs.kick,
 		actions: Object.freeze(Object.keys(artifact.actions).sort()),
 		publicShare: new InFlightShare(publicShareOf(options.connections ?? DEFAULT_CONNECTIONS)),

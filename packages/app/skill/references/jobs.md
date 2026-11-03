@@ -146,9 +146,9 @@ export const contract = app.contract((c) => ({
   builds an absolute link to one of the application's procedures, for an e-mail.
 - `ctx.signal` aborts when the attempt ends (its timeout, a lost lease). Call `ctx.signal.throwIfAborted()` before
   each external effect and pass the signal to `fetch`, so a stale attempt starts nothing after its replacement.
-- A failed attempt names its failure in `kit.runJob`'s answer and the log: `handler_failed`, a framework refusal
-  with its reason (`query_refused: undeclared_reach`, `capability_refused: undeclared_action`; `references/errors.md`),
-  or `mail_failed` with the transport's code (`mail_failed: provider_rejected`).
+- A failed attempt names its failure in `kit.runJob`'s answer and the log: `handler_failed`, a framework failure
+  with its reason (`query_refused: undeclared_reach`, `capability_refused: undeclared_action`,
+  `framework_fault: url_unbuildable`; `references/errors.md`), or `mail_failed` with the transport's code (`mail_failed: provider_rejected`).
 
 ## E-mail: `mailer` and `ctx.mail`
 

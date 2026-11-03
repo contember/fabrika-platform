@@ -7,8 +7,8 @@ export type { IamMembershipRpc } from '@fabrika/auth-core'
 export { type MemoryEmail, MemoryEmailSender, type MemoryHandoff } from '@fabrika/email/memory'
 export type { FileScanner } from '../files/scan'
 export type { ChallengeFetch } from '../implement/challenge'
+export type { HandlerErrorSink } from '../implement/failures'
 export { mailKeyPrefix, type MailKeyScope, transportMailKey } from '../jobs/mail'
-export type { HandlerErrorSink } from '../jobs/runner'
 export type {
 	LabelledTestCaller,
 	LinkTestCaller,

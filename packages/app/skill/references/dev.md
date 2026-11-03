@@ -53,7 +53,9 @@ export default seed
 - Check every call the seed makes: an endpoint that refuses answers a status, and the seed goes on without its data.
   Throw when one does: a seed that throws stops `app dev` and prints its error with the stack.
 - `dev.runJob('<job>')` runs a cron job from the seed (`app dev` runs none on its schedule). A job's `ctx.links` works:
-  the stand-in IAM takes the job's own key. What a job's handler throws is printed with its stack, here only.
+  the stand-in IAM takes the job's own key. What a request's 5xx or a job attempt threw is printed with its stack, here
+  only, after the log line that names its code and reason: your handler's own error, or a framework refusal with its
+  own message (a refused `ctx.sql` names its line).
 
 ## Outside the application
 

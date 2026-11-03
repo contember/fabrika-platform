@@ -3,6 +3,8 @@
 // framework's own refusals can put request data there. The event adds what was thrown as its cause chain, scrubbed of
 // the environment's secrets and of credential patterns, a framework failure's message replaced by its catalog text
 // (ADR-0059). A writing invocation that held its Durable Object's transaction too long is an event on the same budget.
+// The author's own run (`fabrika app dev`, a test that passes `revealHandlerErrors`) also sees what was thrown, whole,
+// beside the log line; no deployed application sets that sink.
 
 import { CAPABILITY_ERRORS, CapabilityError, QUERY_REFUSALS, QueryRefusedError } from '@fabrika/db/framework'
 import { isStructuralError } from '../errors'
@@ -17,6 +19,27 @@ export type RequestFailureCode =
 	| 'query_refused'
 	| 'handler_status'
 	| 'handler_failed'
+
+/**
+ * Where the author's own run shows what a request's 5xx or a job attempt threw, whole, with where it happened:
+ * `fabrika app dev` sets one, and a test may pass one to the kit. No deployed application has one.
+ */
+export type HandlerErrorSink = (where: string, error: unknown) => void
+
+/**
+ * Hands `error` to the author's sink, if there is one. A sink that throws (a test's `expect` inside it) changes nothing
+ * of the failure it was shown: the failure is classified, logged and reported as without it.
+ */
+export function reveal(sink: HandlerErrorSink | null, where: string, error: unknown): void {
+	if (sink === null) {
+		return
+	}
+	try {
+		sink(where, error)
+	} catch {
+		console.error(`fabrika: revealHandlerErrors threw while it showed ${where}; the failure stands as it was`)
+	}
+}
 
 /** At most this many request failures per process and minute become Operations events; every one is logged. */
 export const MAX_FAILURE_REPORTS_PER_MINUTE = 30
@@ -65,6 +88,8 @@ export function failureReason(error: unknown): FailureReason | null {
 export interface RequestFailure {
 	/** The endpoint id the request selected, or `request` before one was selected. */
 	readonly endpoint: string
+	/** Whether the request selected an endpoint, so `endpoint` is its id and not the fallback. */
+	readonly selected: boolean
 	/** The proxy's `X-Request-Id`. */
 	readonly requestId: string | null
 	readonly status: number
@@ -94,14 +119,24 @@ export class MinuteBudget {
 	}
 }
 
+export interface FailureReportsOptions {
+	readonly now?: () => number
+	readonly reveal?: HandlerErrorSink | null
+}
+
 export class FailureReports {
 	readonly #reporter: OperationsReporter | null
 	readonly #budget: MinuteBudget
+	readonly #reveal: HandlerErrorSink | null
 
-	/** `reporter` is `null` without an Operations DSN: the log line is then the only record. */
-	constructor(reporter: OperationsReporter | null, now: () => number = Date.now) {
+	/**
+	 * `reporter` is `null` without an Operations DSN: the log line is then the only record. `reveal` is `boot`'s
+	 * `revealHandlerErrors`, set on the author's own run only; `now` is the budget's clock.
+	 */
+	constructor(reporter: OperationsReporter | null, options: FailureReportsOptions = {}) {
 		this.#reporter = reporter
-		this.#budget = new MinuteBudget(MAX_FAILURE_REPORTS_PER_MINUTE, now)
+		this.#budget = new MinuteBudget(MAX_FAILURE_REPORTS_PER_MINUTE, options.now ?? Date.now)
+		this.#reveal = options.reveal ?? null
 	}
 
 	/** Never rejects. The returned delivery may outlive the response; a runtime with `waitUntil` keeps it alive. */
@@ -109,6 +144,10 @@ export class FailureReports {
 		const code = failureCode(failure.error)
 		const why = failureReason(failure.error)
 		console.error(`fabrika: ${failure.endpoint}: ${code}${why === null ? '' : `: ${why.reason}: ${why.text}`}`)
+		if (this.#reveal !== null) {
+			// What the line withholds (a refusal's message names the place: a column, a line of ctx.sql) on the author's own run.
+			reveal(this.#reveal, failure.selected ? `endpoint '${failure.endpoint}'` : 'a request', failure.error)
+		}
 		if (this.#reporter === null || !this.#budget.admit()) {
 			return Promise.resolve()
 		}

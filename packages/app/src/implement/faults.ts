@@ -43,7 +43,10 @@ export const SERVER_FAULTS = {
 
 export type ServerFaultReason = keyof typeof SERVER_FAULTS
 
-/** A failure the framework itself describes. Its message is for the author's own run, never the response or a log. */
+/**
+ * A failure the framework itself describes. Its message is for the author's own run (`revealHandlerErrors`), never the
+ * response or a log.
+ */
 export class ServerFault extends Error {
 	override readonly name = 'ServerFault'
 	readonly reason: ServerFaultReason

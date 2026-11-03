@@ -426,6 +426,7 @@ export class ContractRuntime {
 
 	async #answer(request: Request, plan: EndpointPlan, exec: RequestExecutionContext | undefined): Promise<Response | FileDownload> {
 		let where = 'request'
+		let selected = false
 		try {
 			const served = plan.outcome === 'endpoint' ? this.#parts.endpoints.get(plan.endpoint.id) : undefined
 			// Before any other answer: a direct dial learns nothing, not even whether its path exists.
@@ -439,6 +440,7 @@ export class ContractRuntime {
 				throw new NotFoundError(`No endpoint serves ${request.method} ${rawRequestTarget(request.url).pathname}`)
 			}
 			where = served.row.id
+			selected = true
 			this.#checkEndpoint(served, request)
 			// Counted from here, while it authorizes and uploads too, until it settled.
 			const admission = admitInvocation(invocationKind(served))
@@ -457,7 +459,7 @@ export class ContractRuntime {
 			}
 			const response = errorResponse(error, where)
 			if (response.status >= 500) {
-				const failure = { endpoint: where, requestId: request.headers.get(REQUEST_ID_HEADER), status: response.status, error }
+				const failure = { endpoint: where, selected, requestId: request.headers.get(REQUEST_ID_HEADER), status: response.status, error }
 				const delivery = this.#parts.failures.record(failure)
 				exec?.waitUntil(delivery)
 			}

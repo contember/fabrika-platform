@@ -13,7 +13,7 @@ import { TRANSACTION_HELD_REPORT_MS } from '../../../db/src/database'
 import { bunSqliteStorage } from '../../../db/src/sqlite-bun'
 import type { RequestExecutionContext } from '../fetch'
 import { CAPABILITY_REFUSALS, CapabilityRefusedError } from '../implement/capability'
-import { FailureReports, MAX_FAILURE_REPORTS_PER_MINUTE } from '../implement/failures'
+import { FailureReports, type HandlerErrorSink, MAX_FAILURE_REPORTS_PER_MINUTE } from '../implement/failures'
 import { SERVER_FAULTS, ServerFault } from '../implement/faults'
 import { implement } from '../implement/implement'
 import type { OperationsReport } from '../jobs/report'
@@ -74,6 +74,7 @@ interface Run {
 async function run(
 	error: unknown,
 	variables: Readonly<Record<string, string>> = { FABRIKA_OPERATIONS_DSN: DSN, FABRIKA_RELEASE: 'r1' },
+	revealHandlerErrors?: HandlerErrorSink,
 ): Promise<Run> {
 	const app = throwing(error)
 	const envelopes: string[] = []
@@ -81,7 +82,11 @@ async function run(
 		envelopes.push(await request.text())
 		return new Response(null, { status: 202 })
 	}
-	const served = bootApp(app, { environment: environment({ ...frameworkEnvFor(app), ...variables }), operationsFetch })
+	const served = bootApp(app, {
+		environment: environment({ ...frameworkEnvFor(app), ...variables }),
+		operationsFetch,
+		...(revealHandlerErrors === undefined ? {} : { revealHandlerErrors }),
+	})
 	const logged: string[] = []
 	const original = console.error
 	console.error = (...args: unknown[]) => void logged.push(args.map(String).join(' '))
@@ -179,6 +184,65 @@ describe('a request that answers 5xx', () => {
 		expect(logged.logged).toEqual([`fabrika: api.me: ${code}: ${reason}: ${texts[reason]}`])
 	})
 
+	test.each([
+		['a data-layer refusal', () => new QueryRefusedError('unknown_column', `${SECRET} is not a column of notes`), 'query_refused', 'unknown_column'],
+		['a capability refusal', () => new CapabilityRefusedError('ended', `the Ref of ${SECRET} has ended`), 'capability_refused', 'ended'],
+		['a framework fault', () => new ServerFault('output_refused', `returned ${SECRET}`), 'framework_fault', 'output_refused'],
+	])("%s reaches revealHandlerErrors whole on the author's own run; the log line stays the same", async (_name, make, code, reason) => {
+		const texts: Record<string, string> = { ...QUERY_REFUSALS, ...CAPABILITY_REFUSALS, ...SERVER_FAULTS }
+		const thrown = make()
+		const revealed: { where: string; error: unknown }[] = []
+		const reported = await run(thrown, {}, (where, error) => void revealed.push({ where, error }))
+		expect(revealed).toEqual([{ where: "endpoint 'api.me'", error: thrown }])
+		expect(reported.logged).toEqual([`fabrika: api.me: ${code}: ${reason}: ${texts[reason]}`])
+	})
+
+	test("a handler's own error reaches revealHandlerErrors whole too; the log line stays the same", async () => {
+		const thrown = leaking()
+		const revealed: { where: string; error: unknown }[] = []
+		const reported = await run(thrown, {}, (where, error) => void revealed.push({ where, error }))
+		expect(revealed).toEqual([{ where: "endpoint 'api.me'", error: thrown }])
+		expect(reported.logged).toEqual(['fabrika: api.me: handler_failed'])
+	})
+
+	test('a sink that throws leaves the answer, the log line and the report as they were', async () => {
+		const reported = await run(new QueryRefusedError('unknown_column', 'title2 is not a column of notes'), undefined, () => {
+			throw new Error('the sink broke')
+		})
+		expect(reported.status).toBe(500)
+		expect(reported.envelopes).toHaveLength(1)
+		expect(reported.logged).toEqual([
+			`fabrika: api.me: query_refused: unknown_column: ${QUERY_REFUSALS.unknown_column}`,
+			"fabrika: revealHandlerErrors threw while it showed endpoint 'api.me'; the failure stands as it was",
+		])
+		const failures = new FailureReports(null, {
+			reveal: () => {
+				throw new Error('the sink broke')
+			},
+		})
+		const original = console.error
+		console.error = () => {}
+		try {
+			await expect(failures.record({ endpoint: 'api.me', selected: true, requestId: null, status: 500, error: new Error('x') })).resolves.toBeUndefined()
+		} finally {
+			console.error = original
+		}
+	})
+
+	test('the sink names an endpoint by the flag, not the id: one named request is an endpoint, none selected is a request', async () => {
+		const shown: string[] = []
+		const failures = new FailureReports(null, { reveal: (where) => void shown.push(where) })
+		const original = console.error
+		console.error = () => {}
+		try {
+			await failures.record({ endpoint: 'request', selected: true, requestId: null, status: 500, error: new Error('x') })
+			await failures.record({ endpoint: 'request', selected: false, requestId: null, status: 500, error: new Error('x') })
+		} finally {
+			console.error = original
+		}
+		expect(shown).toEqual(["endpoint 'request'", 'a request'])
+	})
+
 	test('a 4xx sends nothing', async () => {
 		const { status, envelopes, logged } = await run(new HttpError(400, 'bad_request', 'no'))
 		expect(status).toBe(400)
@@ -220,7 +284,7 @@ describe('the report budget', () => {
 		const reports: OperationsReport[] = []
 		return { reports, reporter: { report: (report: OperationsReport) => Promise.resolve(void reports.push(report)) } }
 	}
-	const failure = (requestId: string | null) => ({ endpoint: 'api.me', requestId, status: 500, error: new Error('x') })
+	const failure = (requestId: string | null) => ({ endpoint: 'api.me', selected: true, requestId, status: 500, error: new Error('x') })
 	const quietly = async (work: () => Promise<void>): Promise<void> => {
 		const original = console.error
 		console.error = () => {}
@@ -234,7 +298,7 @@ describe('the report budget', () => {
 	test('at most the budget per minute becomes an event; the next minute starts again', async () => {
 		let now = 1_000_000 * 60_000
 		const { reports, reporter } = recorder()
-		const failures = new FailureReports(reporter, () => now)
+		const failures = new FailureReports(reporter, { now: () => now })
 		await quietly(async () => {
 			for (let index = 0; index < MAX_FAILURE_REPORTS_PER_MINUTE + 5; index++) {
 				await failures.record(failure(null))
@@ -258,7 +322,7 @@ describe('the report budget', () => {
 
 	test('a held transaction takes from the same budget', async () => {
 		const { reports, reporter } = recorder()
-		const failures = new FailureReports(reporter, () => 0)
+		const failures = new FailureReports(reporter, { now: () => 0 })
 		await quietly(async () => {
 			for (let index = 0; index < MAX_FAILURE_REPORTS_PER_MINUTE; index++) {
 				await failures.record(failure(null))
