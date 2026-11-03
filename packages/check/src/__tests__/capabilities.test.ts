@@ -1,12 +1,12 @@
 // Several capabilities in the static reader: it reads `access: { capabilities }` of `@fabrika/app`'s members fixture
 // into the requirement `buildArtifact` compiles, refuses a capability of a form it does not take, and the scaffold
 // writes one denied case per capability, but none for an `over` one whose action another one needs in a related
-// dimension, and says so when an endpoint is left with none.
+// dimension, and says so for each.
 
 import { describe, expect, test } from 'bun:test'
 import { join } from 'node:path'
 import { ContractSourceError, readContractSource } from '../contract'
-import { ENDPOINT_ACCESS_TEST, endpointTestNotes, generatedTests, scaffoldInputs } from '../scaffold'
+import { ENDPOINT_ACCESS_TEST, generatedTests, scaffoldInputs } from '../scaffold'
 import { readTree } from './colocated-helpers'
 
 const ROOT = join(import.meta.dir, '..', '..', '..', 'app', 'src', '__tests__', 'members-fixture')
@@ -57,24 +57,30 @@ describe('several capabilities in the static reader', () => {
 		expect(endpoints?.text).toContain("await kit.capability('api.deals.owner', 'orgs', ")
 	})
 
-	test('the scaffold writes no case for an over capability whose action another one needs in a related dimension', async () => {
+	test('the scaffold writes no case for an over capability whose action another one needs in a related dimension, and says so', async () => {
 		const shared = "access: { capabilities: { deal: { action: 'crm.read', on: 'deal', from: 'id' }, orgs: { action: 'crm.read', over: 'org' } } }"
 		const inputs = scaffoldInputs(withOwnerAccess(shared))
 		const tests = await generatedTests(inputs.policies, inputs.artifact, inputs.fixtures)
 		const endpoints = tests.get(ENDPOINT_ACCESS_TEST)
+		const note =
+			'api.deals.owner: capability orgs has no denied case: deal needs crm.read in a related dimension, so every caller that passes it is answered the list'
 		expect(endpoints?.cases).toContain('api.deals.owner: the deal of another scope as capability deal is 404')
 		expect(endpoints?.cases).not.toContain('api.deals.owner: a caller without crm.read (capability orgs) is 403')
 		expect(endpoints?.text).not.toContain("await kit.capability('api.deals.owner', 'orgs', ")
+		expect(endpoints?.notes).toEqual([note])
+		expect(endpoints?.text).toContain(`// Not checked: ${note}.`)
 	})
 
-	test('an endpoint whose over capabilities all lose their case says so, in the test and in the notes', async () => {
+	test('every ruled-out capability gets its note, also where the endpoint is left with no case', async () => {
 		const overs = "access: { capabilities: { orgs: { action: 'crm.read', over: 'org' }, deals: { action: 'crm.read', over: 'deal' } } }"
 		const inputs = scaffoldInputs(withOwnerAccess(overs))
-		const tests = await generatedTests(inputs.policies, inputs.artifact, inputs.fixtures)
-		const note = 'api.deals.owner has no capability case: each capability is over a dimension whose action another one needs in a related dimension'
-		expect(tests.get(ENDPOINT_ACCESS_TEST)?.cases.filter((name) => name.includes('capability'))).toEqual([])
-		expect(tests.get(ENDPOINT_ACCESS_TEST)?.text).toContain(`// Not checked: ${note}.`)
-		expect(endpointTestNotes(inputs)).toEqual([note])
-		expect(endpointTestNotes(scaffoldInputs(withOwnerAccess(SEVERAL)))).toEqual([])
+		const endpoints = (await generatedTests(inputs.policies, inputs.artifact, inputs.fixtures)).get(ENDPOINT_ACCESS_TEST)
+		expect(endpoints?.cases.filter((name) => name.includes('capability'))).toEqual([])
+		expect(endpoints?.notes).toEqual([
+			'api.deals.owner: capability orgs has no denied case: deals needs crm.read in a related dimension, so every caller that passes it is answered the list',
+			'api.deals.owner: capability deals has no denied case: orgs needs crm.read in a related dimension, so every caller that passes it is answered the list',
+		])
+		const several = scaffoldInputs(withOwnerAccess(SEVERAL))
+		expect((await generatedTests(several.policies, several.artifact, several.fixtures)).get(ENDPOINT_ACCESS_TEST)?.notes).toEqual([])
 	})
 })

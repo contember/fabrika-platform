@@ -440,21 +440,14 @@ export function endpointAccessKit<DB, P>(
 		return parent?.mode === 'dimension' ? (parent.container?.dimension ?? parent.dimension) : undefined
 	}
 
-	const callerFor = (
-		row: ActionEndpoint,
-		grants: readonly Grant[],
-		global: readonly { readonly action: string }[] = [],
-	): { readonly caller: TestCaller; readonly fetch: RpcFetch } => {
-		const asGrants: TestGrant<AnyContract>[] = [
-			...grants.map((grant) => ('role' in grant ? { role: grant.role, scope: grant.scope } : { action: grant.action, scope: grant.scope })),
-			...global,
-		]
+	/** A new caller holding `grants`; an action without a scope is held globally. */
+	const callerFor = (row: ActionEndpoint, grants: readonly TestGrant<AnyContract>[]): { readonly caller: TestCaller; readonly fetch: RpcFetch } => {
 		if (row.callers.some((caller) => caller === 'human')) {
-			const caller = kit.testCaller(asGrants)
+			const caller = kit.testCaller(grants)
 			return { caller, fetch: kit.browser(caller) }
 		}
 		if (row.callers.some((caller) => caller === 'machine')) {
-			const caller = kit.testCaller(asGrants, { kind: 'machine' })
+			const caller = kit.testCaller(grants, { kind: 'machine' })
 			return {
 				caller,
 				fetch: (input, init) => {
@@ -957,7 +950,7 @@ export function endpointAccessKit<DB, P>(
 			},
 			async global(endpoint, input) {
 				const row = globalEndpointOf(endpoint)
-				const { status } = await askAs(row, callerFor(row, [], [{ action: row.action }]).fetch, input)
+				const { status } = await askAs(row, callerFor(row, [{ action: row.action }]).fetch, input)
 				// Neither form refuses with 404, so a 404 is the handler's own answer (a row the sampled input names is missing).
 				return status >= 500 || status === 401 || status === 403 ? { answered: false, status } : { answered: true }
 			},
@@ -969,20 +962,20 @@ export function endpointAccessKit<DB, P>(
 				}
 				const { access } = named
 				const ruledOutBy = deniedCaseRuledOutBy(requirement.capabilities, capability, kit.artifact.dimensions)
-				if (ruledOutBy !== undefined && access.form === 'over') {
+				if (ruledOutBy !== undefined) {
 					throw new Error(
-						`${endpoint}: capability '${capability}' has no denied case: '${ruledOutBy}' needs its action too, ${named.action}, in a dimension related to ${access.dimension}, so every caller that passes it is answered the list`,
+						`${endpoint}: capability '${capability}' has no denied case: '${ruledOutBy}' needs its action too, ${named.action}, in a related dimension, so every caller that passes it is answered the list`,
 					)
 				}
 				const grants: Grant[] = []
 				let asked = input
 				for (const [name, other] of capabilities) {
 					if (name === capability) continue
-					// Each other one in a scope of its own, seeded apart from the named one's: a global grant would also meet the
-					// named capability when both share an action.
+					// Each other one in a scope of its own, apart from the named one's: a global grant would also meet the named
+					// capability when both share an action. An `over` one lists from any value it is held in, so a fresh uuid does,
+					// a valid key whether the dimension's is text or uuid, and no row of it is seeded.
 					if (other.access.form === 'over') {
-						const { own } = await scopesOf(other.action, other.access.dimension, undefined, {}, {})
-						grants.push(...own.grants)
+						grants.push({ action: other.action, scope: { type: other.access.dimension, value: crypto.randomUUID() } })
 					} else if (other.access.form === 'on' || other.access.form === 'in') {
 						const { own } = await scopesOf(other.action, other.access.dimension, fieldOf(other.input, other.access.from), {}, input)
 						asked = addressing(asked, other.access.from, own)

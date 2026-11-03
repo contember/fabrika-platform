@@ -25,10 +25,13 @@ import { type Ref, serve, type Within } from '@fabrika/app/implement'
 import { testKit } from '@fabrika/app/testing'
 import { endpointAccessKit } from '@fabrika/app/testing/isolation'
 import type { CapabilityRequirement, SchemaShape } from '@fabrika/auth-core'
-import { scoped } from '@fabrika/db'
-import { tablePolicies } from '@fabrika/db/tables'
+import { scoped, type TypedColumnList } from '@fabrika/db'
+import { defineTables, tablePolicies } from '@fabrika/db/tables'
 import { testDatabase } from '@fabrika/db/testing'
 import { afterAll, describe, expect, test } from 'bun:test'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { z } from 'zod/v4'
 import { app } from './members-fixture/src/app-kit'
 import { tables } from './members-fixture/src/db/tables'
@@ -96,14 +99,23 @@ const copies = app.group({ callers: ['human'] }, (r) => ({
 
 const contract = app.contract((c) => ({ api: c.rpc('/api', { copies }) }))
 
-// Two dimensions in neither one's chain, without tables: a caller holding the shared action on its project only is
-// refused the list over teams, so the `over` capability keeps its denied case.
-const unrelated = defineApp(defineVocabulary({
+// Two dimensions in neither one's chain: a caller holding the shared action on its project only is refused the list over
+// teams, so the `over` capability keeps its denied case. A team's row has a column the seeder cannot fill, and the
+// project case still runs: another `over` capability is held in a fresh value, and no row of its dimension is seeded.
+const boardsVocabulary = defineVocabulary({
 	app: 'boards',
 	dimensions: { project: {}, team: {} },
 	actions: { 'boards.read': 'Read boards' },
 	roles: { reader: { grants: ['boards.read'] } },
-}))
+})
+interface BoardsDB {
+	teams: { id: string; settings: unknown }
+}
+const boardsColumns: TypedColumnList<BoardsDB> = { teams: { columns: ['id', 'settings'], foreignKeys: [] } }
+const boardsTables = defineTables(boardsVocabulary, boardsColumns)({
+	teams: { scope: { dimension: 'team' }, actions: { read: 'boards.read' } },
+})
+const unrelated = defineApp(boardsVocabulary)
 const boards = unrelated.group({ callers: ['human'] }, (r) => ({
 	read: r.query({
 		input: z.strictObject({ projectId: z.string() }),
@@ -241,13 +253,23 @@ describe.skipIf(postgres === null)('several capabilities through the proxy decis
 
 	test('an over capability whose action another one needs in a related dimension has no denied case: every caller that passes that one is answered the list', async () => {
 		await expect(access.capability('api.copies.related', 'rest', { rootId: crypto.randomUUID() })).rejects.toThrow(
-			"capability 'rest' has no denied case: 'root' needs its action too, crm.read, in a dimension related to org",
+			"capability 'rest' has no denied case: 'root' needs its action too, crm.read, in a related dimension",
 		)
 	})
 
-	test('two capabilities of one action on unrelated dimensions: each keeps its denied case, a project of another scope 404, a caller without a team 403', async () => {
-		const boardsAccess = endpointAccessKit(serve(unrelatedContract, { database: null }), tables, postgres)
-		expect(await boardsAccess.capability('api.boards.read', 'project', { projectId: 'unused' })).toEqual({ status: 404 })
-		expect(await boardsAccess.capability('api.boards.read', 'teams', { projectId: 'unused' })).toEqual({ status: 403 })
+	test('two capabilities of one action on unrelated dimensions: each keeps its denied case, a project of another scope 404, a caller without a team 403, whatever a team row needs', async () => {
+		const migrations = mkdtempSync(join(tmpdir(), 'capabilities-boards-'))
+		writeFileSync(join(migrations, '20261103120000_teams.sql'), 'create table teams (id text primary key, settings jsonb not null);\n')
+		const boardsDatabase = await testDatabase({ migrations, label: 'capabilities.test.ts boards' })
+		rmSync(migrations, { recursive: true, force: true })
+		if (boardsDatabase === null) throw new Error('the Postgres of this suite is gone')
+		try {
+			const boardsAccess = endpointAccessKit(serve(unrelatedContract, { database: null }), boardsTables, boardsDatabase)
+			await expect(boardsDatabase.seedWorlds(boardsTables, 'teams')).rejects.toThrow('cannot fill teams.settings')
+			expect(await boardsAccess.capability('api.boards.read', 'project', { projectId: 'unused' })).toEqual({ status: 404 })
+			expect(await boardsAccess.capability('api.boards.read', 'teams', { projectId: 'unused' })).toEqual({ status: 403 })
+		} finally {
+			await boardsDatabase.close()
+		}
 	})
 })

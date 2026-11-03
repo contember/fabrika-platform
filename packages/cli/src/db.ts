@@ -3,7 +3,6 @@ import {
 	type ApplicationDialect,
 	applicationDialect,
 	CONFIG_FILE,
-	endpointTestNotes,
 	type Finding,
 	formatFinding,
 	GENERATED_TEST_HEADER,
@@ -198,12 +197,7 @@ const codegen = async (argv: readonly string[], deps: DbCommandDependencies): Pr
 const expectedTests = async (
 	cwd: string,
 ): Promise<
-	{
-		readonly files: ReadonlyMap<string, string>
-		readonly tests: ReadonlyMap<string, GeneratedTest>
-		readonly missing: readonly Finding[]
-		readonly notes: readonly string[]
-	}
+	{ readonly files: ReadonlyMap<string, string>; readonly tests: ReadonlyMap<string, GeneratedTest>; readonly missing: readonly Finding[] }
 > => {
 	const { files } = await readApplicationTree(cwd)
 	const inputs = scaffoldInputs(files)
@@ -211,25 +205,24 @@ const expectedTests = async (
 		files,
 		tests: await generatedTests(inputs.policies, inputs.artifact, inputs.fixtures, inputs.dialect),
 		missing: missingEndpointFixtures(inputs),
-		notes: endpointTestNotes(inputs),
 	}
 }
 
 const testScaffold = async (argv: readonly string[], deps: DbCommandDependencies): Promise<void> => {
 	refuseArguments('test-scaffold', argv)
-	const { files, tests, missing, notes } = await expectedTests(deps.cwd)
+	const { files, tests, missing } = await expectedTests(deps.cwd)
 	for (const [path, text] of files) {
 		if (text.startsWith(GENERATED_TEST_HEADER) && !tests.has(path)) {
 			await rm(join(deps.cwd, path))
 			deps.write(`removed ${path}\n`)
 		}
 	}
-	for (const [path, { text }] of tests) {
+	for (const [path, { text, notes }] of tests) {
 		await mkdir(dirname(join(deps.cwd, path)), { recursive: true })
 		await writeFile(join(deps.cwd, path), text)
 		deps.write(`${path}\n`)
+		for (const note of notes) deps.write(`not checked: ${note}\n`)
 	}
-	for (const note of notes) deps.write(`not checked: ${note}\n`)
 	if (missing.length > 0) {
 		throw new Error(`db test-scaffold: the endpoint access tests are incomplete\n${missing.map(formatFinding).join('\n')}`)
 	}

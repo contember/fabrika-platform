@@ -9,7 +9,6 @@ export { GENERATED_TEST_HEADER, generatedTestHeader } from './rules/tests'
 export {
 	ENDPOINT_ACCESS_TEST,
 	ENDPOINT_FIXTURES_FILE,
-	endpointTestNotes,
 	type GeneratedTest,
 	generatedTests,
 	missingEndpointFixtures,

@@ -37,6 +37,8 @@ export const policyTestPath = (table: string): string => `${POLICY_TESTS_DIR}${t
 export interface GeneratedTest {
 	readonly text: string
 	readonly cases: readonly string[]
+	/** What the test cannot check, one line each, which `fabrika db test-scaffold` prints: a ruled-out capability case. */
+	readonly notes: readonly string[]
 }
 
 type Policies = Readonly<Record<string, TablePolicyArtifact>>
@@ -537,43 +539,47 @@ const endpointCases = (row: EndpointRow, artifact: ContractArtifact, policies: P
 /**
  * An endpoint of several capabilities: one denied case per capability, each refused while every other one passes. An
  * object of another scope is 404 (`on`), a value of another scope 403 (`in`), and a caller without the action 403
- * (`over`). An `over` capability whose action another one needs in a related dimension has none (`deniedCaseRuledOutBy`).
+ * (`over`). An `over` capability whose action another one needs in a related dimension has none (`deniedCaseRuledOutBy`);
+ * `notes` says so for each, in the generated test and in `fabrika db test-scaffold`'s output.
  */
-const capabilityCases = (row: EndpointRow, artifact: ContractArtifact, fixtures: EndpointFixtures): readonly Case[] => {
-	if (row.requirement?.kind !== 'capabilities' || !row.callers.some((caller) => caller === 'human' || caller === 'machine')) return []
+const capabilityCases = (
+	row: EndpointRow,
+	artifact: ContractArtifact,
+	fixtures: EndpointFixtures,
+): { readonly cases: readonly Case[]; readonly notes: readonly string[] } => {
+	if (row.requirement?.kind !== 'capabilities' || !row.callers.some((caller) => caller === 'human' || caller === 'machine')) {
+		return { cases: [], notes: [] }
+	}
 	const input = inputOf(row, fixtures)
-	if (input === undefined) return []
+	if (input === undefined) return { cases: [], notes: [] }
 	const seed = fixtures.seeds[row.id]
 	const { capabilities } = row.requirement
-	return Object.entries(capabilities).flatMap(([name, { action, access }]) => {
+	const cases: Case[] = []
+	const notes: string[] = []
+	for (const [name, { action, access }] of Object.entries(capabilities)) {
 		const args = `${quote(row.id)}, ${quote(name)}, ${renderSample(input)}${seed === undefined ? '' : `, ${renderSample(seed)}`}`
 		const call = `await kit.capability(${args})`
 		if (access.form === 'over') {
-			if (deniedCaseRuledOutBy(capabilities, name, artifact.dimensions) !== undefined) return []
-			return testCase(`${row.id}: a caller without ${action} (capability ${name}) is 403`, `expect(${call}).toEqual({ status: 403 })`)
+			const ruledOutBy = deniedCaseRuledOutBy(capabilities, name, artifact.dimensions)
+			if (ruledOutBy === undefined) {
+				cases.push(testCase(`${row.id}: a caller without ${action} (capability ${name}) is 403`, `expect(${call}).toEqual({ status: 403 })`))
+			} else {
+				notes.push(
+					`${row.id}: capability ${name} has no denied case: ${ruledOutBy} needs ${action} in a related dimension, so every caller that passes it is answered the list`,
+				)
+			}
+			continue
 		}
 		const status = access.form === 'on' ? 404 : 403
-		return testCase(
-			`${row.id}: the ${access.dimension} of another scope as capability ${name} is ${status}`,
-			`expect(${call}).toEqual({ status: ${status} })`,
+		cases.push(
+			testCase(
+				`${row.id}: the ${access.dimension} of another scope as capability ${name} is ${status}`,
+				`expect(${call}).toEqual({ status: ${status} })`,
+			),
 		)
-	})
+	}
+	return { cases, notes }
 }
-
-/**
- * An endpoint of several capabilities that the rule above leaves with no case at all: every one is `over`, and another
- * needs its action in a related dimension. The generated test says so in a comment, and `fabrika db test-scaffold`
- * prints it.
- */
-const uncheckedCapabilities = (row: EndpointRow, artifact: ContractArtifact, fixtures: EndpointFixtures): readonly string[] =>
-	row.requirement?.kind === 'capabilities' && row.callers.some((caller) => caller === 'human' || caller === 'machine')
-		&& inputOf(row, fixtures) !== undefined && capabilityCases(row, artifact, fixtures).length === 0
-		? [`${row.id} has no capability case: each capability is over a dimension whose action another one needs in a related dimension`]
-		: []
-
-/** What the endpoint access test cannot check, one line each: the endpoints of several capabilities it has no case for. */
-export const endpointTestNotes = ({ artifact, fixtures }: Pick<ScaffoldInputs, 'artifact' | 'fixtures'>): readonly string[] =>
-	artifact === null ? [] : sortedEndpoints(artifact).flatMap((row) => uncheckedCapabilities(row, artifact, fixtures))
 
 /**
  * A public procedure's case: anyone reaches it with no credential, or, behind a challenge, is refused without a solved
@@ -604,12 +610,14 @@ const endpointTestBody = (
 	policies: Policies,
 	fixtures: EndpointFixtures,
 	dialect: ApplicationDialect,
-): { readonly body: string; readonly cases: readonly string[] } | undefined => {
-	const cases = sortedEndpoints(artifact).flatMap((row) => [
-		...endpointCases(row, artifact, policies, fixtures),
-		...capabilityCases(row, artifact, fixtures),
-		...publicCases(row, artifact, fixtures),
-	])
+): { readonly body: string; readonly cases: readonly string[]; readonly notes: readonly string[] } | undefined => {
+	const cases: Case[] = []
+	const notes: string[] = []
+	for (const row of sortedEndpoints(artifact)) {
+		const capability = capabilityCases(row, artifact, fixtures)
+		cases.push(...endpointCases(row, artifact, policies, fixtures), ...capability.cases, ...publicCases(row, artifact, fixtures))
+		notes.push(...capability.notes)
+	}
 	if (cases.length === 0) return undefined
 	const database = testDatabaseLines(dialect, '../../db/migrations/')
 	const body = [
@@ -619,7 +627,7 @@ const endpointTestBody = (
 		'// issuer, asks for its own object. A handler bug that needs other data or another order is beyond them; the state a',
 		'// precondition needs is a seed in endpoint-access.fixtures.ts.',
 		'// Do not edit: @fabrika/check compares this file with what the scaffold writes; rerun it after a contract change.',
-		...endpointTestNotes({ artifact, fixtures }).map((note) => `// Not checked: ${note}.`),
+		...notes.map((note) => `// Not checked: ${note}.`),
 		'',
 		"import { afterAll, describe, endpointAccessKit, expect, test } from '@fabrika/app/testing/isolation'",
 		database.kit,
@@ -637,13 +645,12 @@ const endpointTestBody = (
 		'}',
 		'',
 	].join('\n')
-	return { body, cases: cases.map((item) => item.name) }
+	return { body, cases: cases.map((item) => item.name), notes }
 }
 
-const generated = async ({ body, cases }: { readonly body: string; readonly cases: readonly string[] }): Promise<GeneratedTest> => ({
-	text: `${await generatedTestHeader(body)}\n${body}`,
-	cases,
-})
+const generated = async (
+	{ body, cases, notes = [] }: { readonly body: string; readonly cases: readonly string[]; readonly notes?: readonly string[] },
+): Promise<GeneratedTest> => ({ text: `${await generatedTestHeader(body)}\n${body}`, cases, notes })
 
 /**
  * Every test the scaffold writes for these policies and, when the application has a contract, its artifact; by path.
