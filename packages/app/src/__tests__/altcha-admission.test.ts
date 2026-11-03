@@ -23,6 +23,7 @@ import { contract } from './fixtures/altcha/fabrika.contract'
 import { migration } from './fixtures/altcha/migration'
 import { tables } from './fixtures/altcha/src/db/tables'
 import { bootApp, environment, frameworkEnvFor, send, type Sent } from './fixtures/implement/harness'
+import { awayFromMinuteEdge } from './fixtures/minute-edge'
 
 const migrations = mkdtempSync(join(tmpdir(), 'fabrika-altcha-admission-'))
 writeFileSync(join(migrations, '20261021090000_intake.sql'), migration)
@@ -144,6 +145,7 @@ if (postgres !== null) {
 		})
 
 		test('the issuing endpoint has its own bucket per client, twice the procedure’s', async () => {
+			await awayFromMinuteEdge(process.env['FABRIKA_TEST_POSTGRES_URL'] ?? '')
 			const app = start()
 			const statuses: number[] = []
 			// Twice the procedure's 20 per client.

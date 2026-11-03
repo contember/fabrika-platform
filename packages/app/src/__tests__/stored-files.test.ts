@@ -24,6 +24,7 @@ import { FILE_SCAN_JOB, type FileScanner, type ScanBatchResult } from '../files/
 import { passingChallenge } from '../testing/challenge'
 import { endpointAccessKit } from '../testing/endpoint-access'
 import { appPolicyIsolationKit, policyIsolationKit } from '../testing/policy-isolation'
+import { awayFromMinuteEdge } from './fixtures/minute-edge'
 import { contract } from './stored-files-fixture/fabrika.contract'
 import { tables } from './stored-files-fixture/src/db/tables'
 import { FileInfo, PNG_BYTES } from './stored-files-fixture/src/deals/endpoints'
@@ -359,6 +360,8 @@ if (postgres !== null) {
 		})
 
 		test('charges bytesPerHour what an honest request sends, the body limit for a stream without a length, and refuses past the budget', async () => {
+			// The budget is per hour, and an hour ends where a minute does.
+			await awayFromMinuteEdge(url)
 			await resetBuckets()
 			const charged = async (): Promise<number> => {
 				const [row] = await admin((sql) => sql.unsafe(`select bytes::int as bytes from ${schema}.fabrika_form_bytes where form = 'api.intake.register'`))
@@ -377,7 +380,7 @@ if (postgres !== null) {
 			for (let call = 0; call < 3; call++) expect((await register(true)).status).toBe(200)
 			expect(await charged()).toBe(honest.length + 3 * 327680)
 			expect((await register(true)).status).toBe(429)
-		})
+		}, 20_000)
 	})
 
 	describe('a webhook', () => {
