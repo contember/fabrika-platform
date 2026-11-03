@@ -530,16 +530,19 @@ const endpointCases = (row: EndpointRow, artifact: ContractArtifact, policies: P
 /**
  * An endpoint of several capabilities: one denied case per capability, each refused while every other one passes. An
  * object of another scope is 404 (`on`), a value of another scope 403 (`in`), and a caller without the action 403 (`over`).
+ * An `over` capability whose action another one also needs has none: no caller lacks the action while that one passes.
  */
 const capabilityCases = (row: EndpointRow, fixtures: EndpointFixtures): readonly Case[] => {
 	if (row.requirement?.kind !== 'capabilities' || !row.callers.some((caller) => caller === 'human' || caller === 'machine')) return []
 	const input = inputOf(row, fixtures)
 	if (input === undefined) return []
 	const seed = fixtures.seeds[row.id]
-	return Object.entries(row.requirement.capabilities).map(([name, { action, access }]) => {
+	const capabilities = Object.entries(row.requirement.capabilities)
+	return capabilities.flatMap(([name, { action, access }]) => {
 		const args = `${quote(row.id)}, ${quote(name)}, ${renderSample(input)}${seed === undefined ? '' : `, ${renderSample(seed)}`}`
 		const call = `await kit.capability(${args})`
 		if (access.form === 'over') {
+			if (capabilities.some(([other, capability]) => other !== name && capability.action === action)) return []
 			return testCase(`${row.id}: a caller without ${action} (capability ${name}) is 403`, `expect(${call}).toEqual({ status: 403 })`)
 		}
 		const status = access.form === 'on' ? 404 : 403

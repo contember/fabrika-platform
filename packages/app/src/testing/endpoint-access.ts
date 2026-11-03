@@ -101,9 +101,10 @@ export interface EndpointAccessKit {
 	global(endpoint: string, input: Readonly<Record<string, unknown>>): Promise<ReachOutcome>
 	/**
 	 * One capability of an endpoint of several, refused while every other one passes: the caller holds each other one's
-	 * action in a scope of its own and addresses its object or value there (or, for `over`, holds the action globally).
-	 * For an `on` or `in` capability it also holds the named one's action in its own scope and addresses the other's
-	 * object (404) or value (403); for `over` it holds the named action nowhere (403). `seed` is the named one's.
+	 * action in a scope of its own and addresses its object or value there (for `over`, in a value of its dimension that
+	 * holds nothing). For an `on` or `in` capability it also holds the named one's action in its own scope and addresses
+	 * the other's object (404) or value (403); for `over` it holds the named action nowhere (403). An `over` capability
+	 * whose action another one also needs throws: a caller that passes the other holds it. `seed` is the named one's.
 	 */
 	capability(endpoint: string, capability: string, input: Readonly<Record<string, unknown>>, seed?: Seed): Promise<DeniedOutcome>
 	/**
@@ -961,26 +962,35 @@ export function endpointAccessKit<DB, P>(
 				if (named === undefined) {
 					throw new Error(`${endpoint} has no capability '${capability}' (capabilities: ${[...capabilities.keys()].join(', ')})`)
 				}
+				const { access } = named
+				const sharing = [...capabilities].find(([name, other]) => name !== capability && other.action === named.action)
+				if (access.form === 'over' && sharing !== undefined) {
+					throw new Error(
+						`${endpoint}: capability '${capability}' has no denied case: '${
+							sharing[0]
+						}' needs its action too, ${named.action}, so no caller lacks it while '${sharing[0]}' passes`,
+					)
+				}
 				const grants: Grant[] = []
-				const global: { readonly action: string }[] = []
 				let asked = input
 				for (const [name, other] of capabilities) {
 					if (name === capability) continue
 					if (other.access.form === 'over') {
-						global.push({ action: other.action })
+						// A fresh value, which lies in no seeded chain: a global grant would also meet the named capability when
+						// both share an action, and so would a grant on the other scope's object or one of its containers.
+						grants.push({ action: other.action, scope: { type: other.access.dimension, value: freshValue(other.access.dimension, 'own', undefined) } })
 					} else if (other.access.form === 'on' || other.access.form === 'in') {
 						const { own } = await scopesOf(other.action, other.access.dimension, fieldOf(other.input, other.access.from), {}, input)
 						asked = addressing(asked, other.access.from, own)
 						grants.push(...own.grants)
 					}
 				}
-				const { access } = named
 				if (access.form === 'on' || access.form === 'in') {
 					const scopes = await scopesOf(named.action, access.dimension, fieldOf(named.input, access.from), seed, input, pinningOf(endpoint))
 					asked = addressing(asked, access.from, scopes.other)
 					grants.push(...scopes.own.grants)
 				}
-				const { status } = await askAs(named, callerFor(named, grants, global).fetch, asked)
+				const { status } = await askAs(named, callerFor(named, grants).fetch, asked)
 				return { status }
 			},
 		}

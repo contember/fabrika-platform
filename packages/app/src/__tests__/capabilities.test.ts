@@ -74,6 +74,21 @@ const copies = app.group({ callers: ['human'] }, (r) => ({
 		const source = await ctx.db.on(ctx.capabilities.source).get()
 		return ctx.db.in(ctx.capabilities.into).deals.insert({ title: `Copy of ${source.title}` })
 	}),
+	// One action under two capabilities: the deal it starts from, and every deal of the orgs the caller reads.
+	related: r.query({
+		input: z.strictObject({ rootId: z.uuid() }),
+		output: z.strictObject({ root: z.string(), deals: z.int() }),
+		access: {
+			capabilities: {
+				root: { action: 'crm.read', on: 'deal', from: 'rootId' },
+				rest: { action: 'crm.read', over: 'org' },
+			},
+		},
+	}).handle(async ({ ctx }) => {
+		const root = await ctx.db.on(ctx.capabilities.root).get()
+		const deals = await ctx.db.over(ctx.capabilities.rest).deals.list()
+		return { root: root.title, deals: deals.items.length }
+	}),
 }))
 
 const contract = app.contract((c) => ({ api: c.rpc('/api', { copies }) }))
@@ -163,5 +178,15 @@ describe.skipIf(postgres === null)('several capabilities through the proxy decis
 		const input = { sourceId: crypto.randomUUID(), companyId: 'unused' }
 		expect(await access.capability('api.copies.copy', 'source', input)).toEqual({ status: 404 })
 		expect(await access.capability('api.copies.copy', 'into', input)).toEqual({ status: 403 })
+	})
+
+	test('two capabilities of one action: a deal of another org is 404, while the other capability holds the action in an org of its own', async () => {
+		expect(await access.capability('api.copies.related', 'root', { rootId: crypto.randomUUID() })).toEqual({ status: 404 })
+	})
+
+	test('an over capability whose action another one needs has no denied case: no caller lacks the action while that one passes', async () => {
+		await expect(access.capability('api.copies.related', 'rest', { rootId: crypto.randomUUID() })).rejects.toThrow(
+			"capability 'rest' has no denied case: 'root' needs its action too, crm.read",
+		)
 	})
 })
