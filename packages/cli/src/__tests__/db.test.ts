@@ -536,7 +536,7 @@ describe.skipIf(!hasPostgres)('fabrika db against real Postgres', () => {
 		} finally {
 			await db.close()
 		}
-		expect(await generateSchema(url, migrations.schema, migrations.objects())).toBe(
+		expect((await generateSchema(url, migrations.schema, migrations.objects())).source).toBe(
 			readFileSync(join(ISOLATION_APP, 'src', 'db', 'schema.generated.ts'), 'utf8'),
 		)
 	})
@@ -601,7 +601,7 @@ describe.skipIf(!hasPostgres)('fabrika db against real Postgres', () => {
 		)
 		expect(await run(root, 'codegen', [], { source })).toBe('src/db/schema.generated.ts\n')
 		const generated = readFileSync(join(root, 'src', 'db', 'schema.generated.ts'), 'utf8')
-		expect(generated).toBe(await generateSchema(url, schema, manifestOf(root, appId)))
+		expect(generated).toBe((await generateSchema(url, schema, manifestOf(root, appId))).source)
 		expect(generated).toContain('export interface NotesTable {\n\tid: string\n\ttitle: string\n}\n')
 		expect(await run(root, 'codegen', ['--verify'], { source })).toBe('src/db/schema.generated.ts is current\n')
 

@@ -4,7 +4,18 @@
 
 import { Database } from 'bun:sqlite'
 import { z } from 'zod/v4'
-import { CodegenError, type DescribedColumn, type ForeignKeyColumns, type NamedColumn, renderTables, type ScalarType } from './codegen'
+import {
+	CodegenError,
+	columnPath,
+	type DescribedColumn,
+	type ForeignKeyColumns,
+	type GeneratedModule,
+	type LeftOut,
+	leftOutRefusal,
+	type NamedColumn,
+	renderTables,
+	type ScalarType,
+} from './codegen'
 import { execStatements } from './sqlite-bun'
 import { migrateSqlite, type SqliteMigrationBundle, type SqliteMigrationTarget } from './sqlite-migrate'
 
@@ -35,7 +46,10 @@ const DECLARED_TYPES: ReadonlyMap<string, { readonly scalar: ScalarType; readonl
 interface SqliteColumn extends NamedColumn {
 	readonly declared: string
 	readonly nullable: boolean
+	/** `always` is a column `GENERATED ALWAYS AS (…)` computes (`hidden` 2 or 3): SQLite has no identity column. */
 	readonly generated: DescribedColumn['generated']
+	/** The column is in the primary key or in a unique index. */
+	readonly keyed: boolean
 }
 
 const tableSchema = z.object({ name: z.string(), type: z.string(), wr: z.number() })
@@ -63,14 +77,18 @@ function bunTarget(db: Database): SqliteMigrationTarget {
 	}
 }
 
-function describeSqlite(column: SqliteColumn): DescribedColumn {
+function describeSqlite(column: SqliteColumn): DescribedColumn | LeftOut {
 	const base = column.declared.trim().toUpperCase().replace(/\s*\(.*\)$/s, '')
 	const mapped = DECLARED_TYPES.get(base)
 	if (mapped === undefined) {
+		const computed = column.generated === 'always'
+		if (computed && column.keyed) throw leftOutRefusal(columnPath(column), 'it is in the primary key or a unique key')
+		// A generated column without a declared type is one its author may mean to read: it is refused, not left out.
+		if (computed && base !== '') return { leftOut: column.declared.trim() }
 		throw new CodegenError(
-			`${column.table_name}.${column.column_name} has declared type '${column.declared}', which the data layer does not read or bind on SQLite (supported: ${
+			`${columnPath(column)} has declared type '${column.declared}', which the data layer does not read or bind on SQLite (supported: ${
 				[...DECLARED_TYPES.keys()].join(', ')
-			})`,
+			})${computed && base === '' ? '; declare the type of the generated column' : ''}`,
 		)
 	}
 	return { scalar: mapped.scalar, nullable: column.nullable, generated: column.generated, list: mapped.list }
@@ -92,15 +110,22 @@ function introspect(db: Database): { columns: SqliteColumn[]; foreignKeys: Forei
 		if (table.type === 'virtual') throw new CodegenError(`table ${table.name} is a virtual table, which the data layer does not read`)
 		const declared = z.array(columnSchema).parse(db.query('SELECT * FROM pragma_table_xinfo(?) ORDER BY cid').all(table.name))
 		const keyColumns = declared.filter((column) => column.pk > 0)
+		const unique = new Set(
+			z.array(z.object({ name: z.string().nullable() })).parse(
+				db.query(`SELECT i.name FROM pragma_index_list(?1) l, pragma_index_info(l.name) i WHERE l."unique" = 1`).all(table.name),
+			).map((column) => column.name),
+		)
 		for (const column of declared) {
 			// An INTEGER PRIMARY KEY of a rowid table is the rowid: never null, assigned when an insert omits it.
 			const rowid = table.wr === 0 && keyColumns.length === 1 && column.pk === 1 && column.type.trim().toUpperCase() === 'INTEGER'
+			const computed = column.hidden === 2 || column.hidden === 3
 			columns.push({
 				table_name: table.name,
 				column_name: column.name,
 				declared: column.type,
 				nullable: !rowid && column.notnull === 0,
-				generated: column.hidden === 2 || column.hidden === 3 ? 'always' : rowid || column.dflt_value !== null ? 'default' : 'no',
+				generated: computed ? 'always' : rowid || column.dflt_value !== null ? 'default' : 'no',
+				keyed: column.pk > 0 || unique.has(column.name),
 			})
 		}
 		const references = z.array(foreignKeySchema).parse(db.query('SELECT * FROM pragma_foreign_key_list(?) ORDER BY id DESC, seq').all(table.name))
@@ -133,7 +158,7 @@ function introspect(db: Database): { columns: SqliteColumn[]; foreignKeys: Forei
  * Applies `bundles` (the framework's `fabrika`, then the application's `app`) to a fresh in-memory database and renders
  * the module for `SCHEMA_FILE` from its application tables. Deterministic for given migrations.
  */
-export function generateSqliteSchema(bundles: readonly SqliteMigrationBundle[]): Promise<string> {
+export function generateSqliteSchema(bundles: readonly SqliteMigrationBundle[]): Promise<GeneratedModule> {
 	return withMigratedSqlite(bundles, (db) => {
 		const { columns, foreignKeys } = introspect(db)
 		return renderTables(columns, foreignKeys, describeSqlite)

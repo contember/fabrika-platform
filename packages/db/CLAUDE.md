@@ -142,7 +142,9 @@ pass a recording one); `Database.fromEngine` takes another engine (`openSqlite`)
 - **Codegen on SQLite types a column by its declared type** (`codegen-sqlite.ts`, `DECLARED_TYPES`): TEXT, VARCHAR,
   CHAR, UUID are strings; INTEGER, INT, BIGINT, SMALLINT, REAL, DOUBLE, FLOAT numbers; BOOLEAN a boolean in `booleans`;
   TIMESTAMP, TIMESTAMPTZ, DATETIME a `Date` in `timestamps`; DATE a `YYYY-MM-DD` string in `dates`; BLOB a `Uint8Array`.
-  Any other declared type, and a virtual table, is refused. It reads every table but `sqlite_*` and `fabrika_*`.
+  Any other declared type, and a virtual table, is refused; a generated column (`hidden` 2 or 3) of another declared
+  type is left out, as on Postgres (and refused in a unique index), but one with no declared type is refused. It reads every table but `sqlite_*` and
+  `fabrika_*`.
 - **A writing transaction is the object's** (`openSqlite`'s runner is `storage.transaction(() => body(kysely))`): `sql.exec`
   refuses `BEGIN`, `COMMIT` and `SAVEPOINT`, and the Kysely driver refuses Kysely's own transactions. The idle timeout
   has no SQLite form.
@@ -487,7 +489,13 @@ pass a recording one); `Database.fromEngine` takes another engine (`openSqlite`)
   strict ISO 8601 text with `Z` or an offset (the column list's `timestamps`), and refuses `now`, `10/12/2026` or an
   impossible day before anything is sent, as a day's text must be a real `YYYY-MM-DD`. An enum is its label union; JSON,
   `bytea`, arrays and domains are refused rather than typed `unknown`, because the layer cannot bind
-  them. `codegen.test.ts` pins every mapping against a real decode. The fixture `schema.generated.ts`
+  them. A generated column of any such type (the catalog's `computed`, `pg_attribute.attgenerated`; never an identity
+  column), a domain, range or composite too, is left out instead (`renderTables`): the module carries a comment where
+  it stands (`leftOutText`), every `fabrika db codegen` run names it (`GeneratedModule.leftOut`, its type as
+  `format_type` writes it), no handle reads or writes it, and only `ctx.sql` reaches it (a stored `tsvector`). One in
+  the primary key or a unique index (the catalog's `keyed`) or named by a foreign key, and a table left with no
+  column, are refused.
+  `codegen.test.ts` pins every mapping against a real decode. The fixture `schema.generated.ts`
   is codegen output that the Postgres suite regenerates byte for byte: change the renderer and the
   fixture together. Interface names are `<Pascal>Table`, with a `T` prefix when the name would not
   start with a letter; a collision, and the table names `__proto__`, `constructor` and `prototype`, are
