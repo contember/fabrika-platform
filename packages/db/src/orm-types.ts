@@ -240,7 +240,7 @@ type InsertValuesOf<E extends IndexedTable> = { [C in keyof E['insert']]: E['ins
 
 /** `onConflict` of an insert: the columns of a unique index the migrations create, and what a conflict does. */
 export interface InsertConflict<E extends IndexedTable, M extends 'nothing' | 'update'> {
-	readonly onConflict: { readonly columns: readonly (keyof E['row'] & string)[]; readonly do: M }
+	readonly onConflict: { readonly columns: readonly ComparableColumn<E['row']>[]; readonly do: M }
 }
 
 /**

@@ -5606,7 +5606,9 @@ INSERT INTO priorities (code, label, rank) VALUES ('low', 'Low', 1), ('normal', 
   `int8` and `numeric` are strings; an enum is its literal union. `bytea`, arrays and domains are refused.
 - A column of JSON is `jsonb` (`json` is refused: it keeps whitespace and duplicate keys). It reads as `unknown`: parse it
   with a zod schema in the handler, never trust its shape. A write takes a JSON value (plain objects and arrays, strings,
-  finite numbers, booleans; a `Date`, a `Map` or a class instance is refused), and `null` is SQL NULL. A `where`,
+  finite numbers, booleans; a `Date`, a `Map` or a class instance is refused), and `null` is SQL NULL. Type a value you
+  write with a `type` alias or a zod-inferred type: an `interface` has no index signature, so it is not a
+  `JsonColumnValue`. Postgres reorders an object's keys; compare values, not their `JSON.stringify` text. A `where`,
   `orderBy` or aggregate never names a JSON column: read a path of it with `ctx.sql` (`details ->> 'kind'`), and write
   one there as `${JSON.stringify(value)}`.
 - A generated column (`GENERATED ALWAYS AS (…) STORED`) of any type codegen does not type (a `tsvector` for full-text
@@ -5636,8 +5638,8 @@ database enforces foreign keys.
   stored as JSON text and handled as Postgres's `jsonb` above (`JSON` is refused). Any other declared type is refused.
   A generated column of another declared type (`JSON`) is left out as on Postgres; one with no declared type is
   refused, so declare it. A `STRICT` table admits only `INTEGER`, `REAL`, `TEXT` and `BLOB`, so a table with a
-  `BOOLEAN`, `TIMESTAMP`, `DATE` or `JSONB` column is not `STRICT`. `ctx.sql` reads a `JSONB` column as its text,
-  which `JSON.parse` reads.
+  `BOOLEAN`, `TIMESTAMP`, `DATE` or `JSONB` column is not `STRICT`. `ctx.sql` reads a `JSONB` column as its text, or
+  as a number when the value is one; parse the text with `JSON.parse`.
 - SQLite has no `ENUM`: a column with a fixed set of values is `TEXT` with `CHECK (<column> IN ('a', 'b'))`. The
   generated tests write its first value.
 - No transaction control (`BEGIN`, `COMMIT`, `SAVEPOINT`) and no Postgres syntax (`timestamptz`, `::` casts,

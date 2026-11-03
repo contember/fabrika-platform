@@ -427,10 +427,12 @@ pass a recording one); `Database.fromEngine` takes another engine (`openSqlite`)
   `@fabrika/app/bun` also takes `openPostgres` before it imports the application. Never add a writable static. `hardening.test.ts` is the witness; `@fabrika/check`'s
   `framework-write` refuses the write in source.
 - **Bind scalars only.** `ctx.sql` encodes a list as a Postgres array literal, or JSON on SQLite (one text parameter), for the same
-  reason. `Bun.SQL` mis-binds a JS array (`in` lists are expanded into parameters) and
-  stores a bound JSON string as a JSON string, so values are strings, numbers, bigints, booleans, Dates
+  reason. `Bun.SQL` mis-binds a JS array (`in` lists are expanded into parameters) and refuses a bound object as
+  JSON, so values are strings, numbers, bigints, booleans, Dates
   or null; the guard refuses anything else in a `ValueNode`. A JSON column's value is bound as its JSON text
-  (`jsonInput`), which Postgres reads into `jsonb` from the untyped parameter; `codegen.test.ts` pins that. The pool runs with `prepare: false`:
+  (`jsonInput`), which Postgres reads into `jsonb` from the untyped parameter; `codegen.test.ts` pins that. The test kits
+  bind a seeded JSON column's value the same way (`seedBinding`), so the seeded row and a generated case's write agree;
+  a seed value has no object form, so a JSON column's sample is the JSON string `"sample"`. The pool runs with `prepare: false`:
   otherwise Bun keeps one prepared statement per distinct SQL text, and `in` lists of different
   lengths make that grow without bound.
 - **A `Date` is bound as its ISO 8601 UTC text, in one place per dialect: the layer's compiler** (`ParameterCompiler`
@@ -494,7 +496,8 @@ pass a recording one); `Database.fromEngine` takes another engine (`openSqlite`)
   strict ISO 8601 text with `Z` or an offset (the column list's `timestamps`), and refuses `now`, `10/12/2026` or an
   impossible day before anything is sent, as a day's text must be a real `YYYY-MM-DD`. An enum is its label union. A `jsonb`
   column reads as `unknown` and writes a `JsonColumnValue` (the column list's `json`); no condition, order or aggregate
-  names it (`comparableColumnOf`), no stamped column is one, and JS `null` is SQL NULL both ways. `json` is refused,
+  names it (`comparableColumnOf`, and `onConflict.columns`), no stamped column is one, a string holds no NUL and no lone
+  surrogate, and JS `null` is SQL NULL both ways. `json` is refused,
   naming `jsonb`. `bytea`, arrays and domains are refused rather than typed `unknown`, because the layer cannot bind
   them. A generated column of any such type (the catalog's `computed`, `pg_attribute.attgenerated`; never an identity
   column), a domain, range or composite too, is left out instead (`renderTables`): the module carries a comment where

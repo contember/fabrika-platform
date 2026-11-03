@@ -1274,6 +1274,10 @@ export function onConflictOf(
 		if (!inSet(model.columns, name)) {
 			throw new QueryRefusedError('on_conflict', `onConflict names ${String(name)}, which is not a column of ${model.name}`)
 		}
+		if (inSet(model.json, name)) {
+			// jsonb compares by value and SQLite's text by spelling: the two dialects would disagree about a conflict.
+			throw new QueryRefusedError('on_conflict', `onConflict names ${name}, a JSON column of ${model.name}, which the data layer never compares`)
+		}
 		return name
 	})
 	if (columns === undefined || columns.length === 0) {

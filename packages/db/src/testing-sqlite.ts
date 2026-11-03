@@ -29,6 +29,7 @@ import {
 	randomHex,
 	removalLimit,
 	type SampleValue,
+	seedBinding,
 	type SeedColumn,
 	type SeedingBackend,
 	SeedLimitError,
@@ -87,7 +88,8 @@ function sampleOf(table: string, column: string, declared: string): Primitive {
 	// A day is `YYYY-MM-DD` and a timestamp ISO text in UTC: the forms the layer writes and reads on SQLite.
 	if (type === 'DATE') return new Date().toISOString().slice(0, 10)
 	if (TIMESTAMP_TYPES.has(type)) return new Date().toISOString()
-	if (type === 'JSONB') return '{}'
+	// A JSON string: a seed value has no object form, and `seedBinding` writes it as the layer would.
+	if (type === 'JSONB') return 'sample'
 	throw typeLimit(table, column, declared)
 }
 
@@ -119,6 +121,7 @@ function readColumns(exec: Exec): SeedColumn[] {
 				text: TEXT_TYPES.has(type),
 				uuid: type === 'UUID',
 				number: NUMBER_TYPES.has(type),
+				json: type === 'JSONB',
 				sample: () => sampleOf(table.name, column.name, column.type),
 			})
 		}
@@ -479,7 +482,7 @@ export async function testDatabase(options: TestDatabaseOptions): Promise<TestDa
 				? `INSERT INTO ${target} DEFAULT VALUES RETURNING *`
 				: `INSERT INTO ${target} (${names.map(quoted).join(', ')}) VALUES (${names.map(() => '?').join(', ')}) RETURNING *`
 			try {
-				return exec(statement, ...names.map((name) => binding(row.get(name) ?? null)))[0] ?? {}
+				return exec(statement, ...names.map((name) => binding(seedBinding(columns, table, name, row.get(name) ?? null))))[0] ?? {}
 			} catch (error) {
 				throw seedLimit(error, table) ?? error
 			}

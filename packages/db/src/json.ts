@@ -25,8 +25,22 @@ function refusal(where: string, detail: string): QueryRefusedError {
 	return new QueryRefusedError('invalid_value', `${where} takes a JSON value (${detail})`)
 }
 
+/** Half of a surrogate pair, which Postgres refuses in `jsonb` text and SQLite would store. */
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
+const NUL = String.fromCharCode(0)
+
+function text(value: string, where: string): string {
+	if (value.includes(NUL) || LONE_SURROGATE.test(value)) {
+		throw refusal(where, 'a string or key holds no NUL character and no lone surrogate')
+	}
+	return stringify(value)
+}
+
 function written(value: unknown, where: string, depth: number): string {
-	if (value === null || typeof value === 'string' || typeof value === 'boolean') {
+	if (typeof value === 'string') {
+		return text(value, where)
+	}
+	if (value === null || typeof value === 'boolean') {
 		return stringify(value)
 	}
 	if (typeof value === 'number') {
@@ -51,11 +65,11 @@ function written(value: unknown, where: string, depth: number): string {
 		if (items === undefined) {
 			throw refusal(where, 'an array is a plain array without holes or accessors')
 		}
-		let text = '['
+		let serialized = '['
 		for (let index = 0; index < items.length; index++) {
-			text += `${index === 0 ? '' : ','}${items[index] ?? ''}`
+			serialized += `${index === 0 ? '' : ','}${items[index] ?? ''}`
 		}
-		return `${text}]`
+		return `${serialized}]`
 	}
 	const prototype: unknown = prototypeOf(value)
 	if (prototype !== OBJECT_PROTOTYPE && prototype !== null) {
@@ -65,7 +79,7 @@ function written(value: unknown, where: string, depth: number): string {
 		throw refusal(where, 'an object has string keys only')
 	}
 	const keys = ownNames(value)
-	let text = '{'
+	let serialized = '{'
 	let first = true
 	for (let index = 0; index < keys.length; index++) {
 		const key = keys[index] ?? ''
@@ -77,10 +91,10 @@ function written(value: unknown, where: string, depth: number): string {
 		if (member === undefined) {
 			continue
 		}
-		text += `${first ? '' : ','}${stringify(key)}:${written(member, where, depth + 1)}`
+		serialized += `${first ? '' : ','}${text(key, where)}:${written(member, where, depth + 1)}`
 		first = false
 	}
-	return `${text}}`
+	return `${serialized}}`
 }
 
 /**

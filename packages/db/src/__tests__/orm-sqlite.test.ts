@@ -143,6 +143,9 @@ describe('a JSON column (declared JSONB)', () => {
 			[accessor, 'x is an accessor'],
 			[cycle, 'never containing itself'],
 			[deep, 'nested at most 64 deep'],
+			['a\u0000b', 'no NUL character and no lone surrogate'],
+			[['\uD800'], 'no NUL character and no lone surrogate'],
+			[{ '\uDC00x': 1 }, 'no NUL character and no lone surrogate'],
 		]
 		for (const [settings, message] of refused) {
 			const error = await insertProject({ settings }).then(() => undefined, (rejected: unknown) => rejected)
@@ -162,6 +165,19 @@ describe('a JSON column (declared JSONB)', () => {
 		)
 		await expect(list({ where: [['settings', 'is', null]] })).rejects.toThrow('which the data layer never compares')
 		await expect(list({ orderBy: [['settings', 'asc']] })).rejects.toThrow('which the data layer never orders by')
+		const conflicting = invoke(
+			'mutation',
+			(db) =>
+				call(db.target(organization('projects.write'), 'in'), 'projects.insert', { name: 'p', settings: { a: 1 } }, {
+					onConflict: { columns: ['settings'], do: 'nothing' },
+				}),
+		)
+		await expect(conflicting).rejects.toThrow('onConflict names settings, a JSON column of projects, which the data layer never compares')
+	})
+
+	test('a well-formed surrogate pair is written and read back', async () => {
+		const id = await insertProject({ settings: { '😀': '😀' } })
+		expect(await getSettings(id)).toEqual({ '😀': '😀' })
 	})
 
 	test('a number reads back as written, though JSONB has NUMERIC affinity; text that is not JSON is refused on read', async () => {
