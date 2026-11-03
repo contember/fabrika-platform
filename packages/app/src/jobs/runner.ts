@@ -1352,6 +1352,8 @@ function jobContext(
 		checkAction(action)
 		return context.mint.app(frame, action, principal.id)
 	}
+	// What `checkAction` admits: a job mints each of these over the whole application.
+	const holds = job.artifact.actions.filter((action) => permits([...perms], action))
 	return Object.freeze({
 		principal,
 		runId: frame.id,
@@ -1370,6 +1372,7 @@ function jobContext(
 				ref,
 				app,
 				periodAt(job.schedule, new Date()) ?? undefined,
+				holds,
 			)),
 		...(job.links === null || context.membership === null ? {} : { links: jobLinksOf(job, job.links, context.membership, frame, context) }),
 		...(job.mailer === null ? {} : { mail: jobMailOf(job, job.mailer, frame, signal, context) }),
@@ -1447,11 +1450,12 @@ function kitJobContext(
 	ref: (action: string, dimension: string, id: string, using: Session) => Promise<Ref<string, string>>,
 	app: (action: string) => AppCapability<string>,
 	tickMs: number | undefined,
+	holds: readonly string[],
 ): Readonly<Record<string, unknown>> {
 	// One attempt's files: what it reads, puts and writes, inside its transactions and outside them, belongs to it.
 	const work = new FileWork(frame, frame.id)
 	const binding = kinds?.binding(work)
-	const reads = jobHandles(frame, data, site, principal, 'job', async () => data.direct(), () => false, tickMs, binding)
+	const reads = jobHandles(frame, data, site, principal, 'job', async () => data.direct(), () => false, tickMs, binding, holds)
 	const job = `job '${name}'`
 	const putAndOpen = (check: () => void) => storedFilesHandle(kinds, work, { where: job, check, writes: true })
 	return {

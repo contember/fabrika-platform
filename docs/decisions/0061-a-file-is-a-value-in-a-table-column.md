@@ -113,7 +113,8 @@ none. A reference from another top-level scope is then refused.
   `name`, `type`, `size`, `status`). The data layer loads the metadata of every row in one statement per read, so a
   list shows it without a call per file.
 - A reference read under an action other than the table's `read` (a `getForUpdate` under `update`) carries the
-  metadata only.
+  metadata only. A queue claim is the exception: it runs under the update action, and a job that also holds the
+  table's read action could reach the file by re-reading the row, so the claim answers a reference that job may open.
 - A handler passes a readable reference on: `ctx.files.open(ref)` gives the bytes, a file output returns it, and a
   mailer job's `ctx.mail.send({ attachments: [ref] })` attaches it. A file list is a query of the table that holds
   the column.

@@ -416,7 +416,8 @@ export function boundWebhookApp(webhook: string): (action: string) => never {
 
 /**
  * The handles of a job attempt, outside its fenced transaction (`'job'`, each read on its own) or inside it. `tickMs`,
- * the job's schedule period, is a queue claim's first backoff.
+ * the job's schedule period, is a queue claim's first backoff; `holds`, the actions the job holds, decide which file
+ * references of a claimed row it may open.
  */
 export function jobHandles(
 	frame: RequestFrame,
@@ -428,6 +429,7 @@ export function jobHandles(
 	ended: () => boolean,
 	tickMs?: number,
 	files?: FileBinding,
+	holds?: readonly string[],
 ): DataHandles {
 	return data.handles({
 		kind,
@@ -437,6 +439,7 @@ export function jobHandles(
 		session,
 		...(tickMs === undefined ? {} : { tickMs }),
 		...(files === undefined ? {} : { files }),
+		...(holds === undefined ? {} : { holds }),
 	})
 }
 

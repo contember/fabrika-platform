@@ -109,6 +109,11 @@ export interface DataSite {
 	 * only one it holds. Absent where the framework serves no file; the columns then read as ids and refuse every write.
 	 */
 	readonly files?: FileBinding
+	/**
+	 * The actions a job holds over the whole application: those it declares that its key's token carries. A queue claim
+	 * answers a file reference its holder may open when one of them reads the table, as a re-read of the row would.
+	 */
+	readonly holds?: readonly string[]
 	/** The texts the verified signed tokens of a public procedure's request carry: the row ids it may update or remove. */
 	readonly carried?: ReadonlySet<string>
 	/** Throws unless the work running now is the invocation these handles were made for. */
@@ -827,7 +832,17 @@ async function claimRows(
 			}
 			await rearmClaim(runtime, session, fence, rearm)
 		}
-		return { rows: await answerFiles(model, site.files, session, answerRows(dialect, table, rowColumnsOf(model), rows), grant.action), claimed }
+		return {
+			rows: await answerFiles(
+				model,
+				site.files,
+				session,
+				answerRows(dialect, table, rowColumnsOf(model), rows),
+				grant.action,
+				nameSet(site.holds ?? []),
+			),
+			claimed,
+		}
 	})
 	return leased.rows.map((row) => {
 		const id = String(row[key])
