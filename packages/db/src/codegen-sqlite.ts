@@ -63,10 +63,12 @@ function bunTarget(db: Database): SqliteMigrationTarget {
 	}
 }
 
-function describeSqlite(column: SqliteColumn): DescribedColumn {
+function describeSqlite(column: SqliteColumn): DescribedColumn | undefined {
 	const base = column.declared.trim().toUpperCase().replace(/\s*\(.*\)$/s, '')
 	const mapped = DECLARED_TYPES.get(base)
 	if (mapped === undefined) {
+		// SQLite has no identity column: `always` is a generated one, which `renderTables` leaves out.
+		if (column.generated === 'always') return undefined
 		throw new CodegenError(
 			`${column.table_name}.${column.column_name} has declared type '${column.declared}', which the data layer does not read or bind on SQLite (supported: ${
 				[...DECLARED_TYPES.keys()].join(', ')

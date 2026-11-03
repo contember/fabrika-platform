@@ -142,7 +142,8 @@ pass a recording one); `Database.fromEngine` takes another engine (`openSqlite`)
 - **Codegen on SQLite types a column by its declared type** (`codegen-sqlite.ts`, `DECLARED_TYPES`): TEXT, VARCHAR,
   CHAR, UUID are strings; INTEGER, INT, BIGINT, SMALLINT, REAL, DOUBLE, FLOAT numbers; BOOLEAN a boolean in `booleans`;
   TIMESTAMP, TIMESTAMPTZ, DATETIME a `Date` in `timestamps`; DATE a `YYYY-MM-DD` string in `dates`; BLOB a `Uint8Array`.
-  Any other declared type, and a virtual table, is refused. It reads every table but `sqlite_*` and `fabrika_*`.
+  Any other declared type, and a virtual table, is refused; a generated column of another declared type is left out,
+  as on Postgres. It reads every table but `sqlite_*` and `fabrika_*`.
 - **A writing transaction is the object's** (`openSqlite`'s runner is `storage.transaction(() => body(kysely))`): `sql.exec`
   refuses `BEGIN`, `COMMIT` and `SAVEPOINT`, and the Kysely driver refuses Kysely's own transactions. The idle timeout
   has no SQLite form.
@@ -487,7 +488,10 @@ pass a recording one); `Database.fromEngine` takes another engine (`openSqlite`)
   strict ISO 8601 text with `Z` or an offset (the column list's `timestamps`), and refuses `now`, `10/12/2026` or an
   impossible day before anything is sent, as a day's text must be a real `YYYY-MM-DD`. An enum is its label union; JSON,
   `bytea`, arrays and domains are refused rather than typed `unknown`, because the layer cannot bind
-  them. `codegen.test.ts` pins every mapping against a real decode. The fixture `schema.generated.ts`
+  them. A generated column (`attgenerated`) of such a type is left out instead (`renderTables`): no handle reads or
+  writes it, only `ctx.sql` reaches it (a stored `tsvector`), and a foreign key that names it is refused. An identity
+  column is never left out, since Postgres types one smallint, integer or bigint.
+  `codegen.test.ts` pins every mapping against a real decode. The fixture `schema.generated.ts`
   is codegen output that the Postgres suite regenerates byte for byte: change the renderer and the
   fixture together. Interface names are `<Pascal>Table`, with a `T` prefix when the name would not
   start with a letter; a collision, and the table names `__proto__`, `constructor` and `prototype`, are

@@ -135,6 +135,26 @@ describe('renderSchema', () => {
 		)
 	})
 
+	test('leaves out a generated column of a type it does not read; a plain or defaulted one is still refused', () => {
+		const search = column('documents', 'search', 'tsvector', { generated: 'always' })
+		const source = renderSchema([column('documents', 'id', 'text'), column('documents', 'body', 'text'), search])
+		expect(interfaceOf(source, 'DocumentsTable')).toBe('export interface DocumentsTable {\n\tid: string\n\tbody: string\n}\n')
+		expect(source).not.toContain('search')
+		for (const generated of ['no', 'default'] as const) {
+			expect(() => renderSchema([column('documents', 'search', 'tsvector', { generated })])).toThrow(
+				'documents.search has type tsvector, which the data layer does not read or bind',
+			)
+		}
+		const key = { constraint_name: 'k', columns: ['search'], referenced_table: 'documents', referenced_columns: ['search'] }
+		expect(() =>
+			renderSchema([column('documents', 'id', 'text'), search, column('links', 'search', 'tsvector', { generated: 'always' })], [
+				{ ...key, table_name: 'links' },
+			])
+		).toThrow(
+			'links.search is a generated column of a type the data layer does not read, so codegen leaves it out, but a foreign key of links names it',
+		)
+	})
+
 	test('refuses names the data layer cannot address and names that collide', () => {
 		expect(() => renderSchema([column('Notes', 'id', 'text')])).toThrow('Notes is not a plain identifier')
 		expect(() => renderSchema([column('notes', 'Title', 'text')])).toThrow('Title is not a plain identifier')
@@ -363,6 +383,25 @@ describe.skipIf(!hasPostgres)('codegen against real Postgres', () => {
 			twice: 'number',
 			note: 'null',
 		})
+	})
+
+	test('leaves out a stored generated tsvector under a GIN index; a plain one is refused', async () => {
+		const ddl = `CREATE TABLE documents (
+			id text PRIMARY KEY,
+			body text,
+			search tsvector GENERATED ALWAYS AS (to_tsvector('simple', coalesce(body, ''))) STORED
+		);
+		CREATE INDEX documents_search ON documents USING gin (search);`
+		const source = await generateSchema(url, await migrated(ddl), [])
+		expect(interfaceOf(source, 'DocumentsTable')).toBe('export interface DocumentsTable {\n\tid: string\n\tbody: string | null\n}\n')
+		expect(source).not.toContain('search')
+		await expect(generateSchema(url, await migrated('CREATE TABLE documents (id text PRIMARY KEY, search tsvector);'), [])).rejects.toThrow(
+			'documents.search has type tsvector, which the data layer does not read or bind',
+		)
+		// Why `always` with such a type is a generated column: Postgres types an identity column smallint, integer or bigint.
+		await expect(migrated('CREATE TABLE documents (id text GENERATED ALWAYS AS IDENTITY);')).rejects.toThrow(
+			'identity column type must be smallint, integer, or bigint',
+		)
 	})
 
 	test('refuses database code no migration declares, and admits what the manifest names', async () => {

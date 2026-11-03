@@ -133,4 +133,17 @@ describe('generateSqliteSchema', () => {
 		)
 		expect(untyped).toBeInstanceOf(CodegenError)
 	})
+
+	test('leaves out a generated column of a declared type it does not read', async () => {
+		const source = await generateSqliteSchema([
+			app(`CREATE TABLE things (
+				id TEXT PRIMARY KEY NOT NULL,
+				body TEXT NOT NULL,
+				meta JSON GENERATED ALWAYS AS (json_object('body', body)) VIRTUAL,
+				size GENERATED ALWAYS AS (length(body)) STORED
+			);`),
+		])
+		expect(interfaceOf(source, 'ThingsTable')).toBe('export interface ThingsTable {\n\tid: string\n\tbody: string\n}\n')
+		expect(entryOf(source, 'things')).toBe("\t'things': {\n\t\tcolumns: [\n\t\t\t'id',\n\t\t\t'body',\n\t\t],\n\t\tforeignKeys: [],\n\t},\n")
+	})
 })

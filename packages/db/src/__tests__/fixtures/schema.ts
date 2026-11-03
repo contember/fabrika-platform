@@ -3,7 +3,8 @@ export { columns, type DB } from './schema.generated'
 
 /**
  * The migration the Postgres suite applies. Every row carries its whole containment chain, and a composite foreign
- * key with ON UPDATE CASCADE keeps it in its container's chain when an ancestor moves.
+ * key with ON UPDATE CASCADE keeps it in its container's chain when an ancestor moves. `notes.search`, a generated
+ * column of a type the data layer does not read, is left out of the generated module; only `ctx.sql` reaches it.
  */
 export const migration = `
 create table organizations (id text primary key, name text not null);
@@ -25,6 +26,7 @@ create table notes (
 	created_by text not null,
 	version integer not null,
 	created_at timestamptz not null default now(),
+	search tsvector generated always as (to_tsvector('simple', coalesce(title, '') || ' ' || coalesce(body, ''))) stored,
 	unique (id, workspace_id, organization_id),
 	foreign key (workspace_id, organization_id) references workspaces (id, organization_id) on update cascade
 );

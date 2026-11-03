@@ -186,19 +186,13 @@ function quote(value: string): string {
 	return `'${JSON.stringify(value).slice(1, -1).replaceAll('\\"', '"').replaceAll("'", "\\'")}'`
 }
 
-function scalarType(column: CatalogColumn): ScalarType {
-	const where = `${column.table_name}.${column.column_name}`
+/** The column's types, or `undefined` for a type the data layer does not read or bind. */
+function scalarType(column: CatalogColumn): ScalarType | undefined {
 	if (column.type_type === 'e') {
-		if (column.enum_labels.length === 0) throw new CodegenError(`${where}: enum ${column.type_name} has no labels`)
+		if (column.enum_labels.length === 0) throw new CodegenError(`${column.table_name}.${column.column_name}: enum ${column.type_name} has no labels`)
 		return { select: column.enum_labels.map(quote).join(' | ') }
 	}
-	const scalar = column.type_category === 'A' || column.type_type !== 'b' ? undefined : SCALAR_TYPES.get(column.type_name)
-	if (scalar === undefined) {
-		throw new CodegenError(
-			`${where} has type ${column.type_name}, which the data layer does not read or bind (supported: ${[...SCALAR_TYPES.keys()].join(', ')}, enums)`,
-		)
-	}
-	return scalar
+	return column.type_category === 'A' || column.type_type !== 'b' ? undefined : SCALAR_TYPES.get(column.type_name)
 }
 
 interface Rendered {
@@ -229,8 +223,17 @@ export interface NamedColumn {
 	readonly column_name: string
 }
 
-function describePostgres(column: CatalogColumn): DescribedColumn {
+function describePostgres(column: CatalogColumn): DescribedColumn | undefined {
 	const scalar = scalarType(column)
+	if (scalar === undefined) {
+		// Postgres types an identity column smallint, integer or bigint, so `always` here is a generated column.
+		if (column.generated === 'always') return undefined
+		throw new CodegenError(
+			`${column.table_name}.${column.column_name} has type ${column.type_name}, which the data layer does not read or bind (supported: ${
+				[...SCALAR_TYPES.keys()].join(', ')
+			}, enums)`,
+		)
+	}
 	const list = column.type_type !== 'b'
 		? undefined
 		: column.type_name === 'date'
@@ -265,13 +268,15 @@ export function renderSchema(catalog: readonly CatalogColumn[], foreignKeys: rea
 }
 
 /**
- * `renderSchema` over columns of any database: `describe` gives each column's types and list field, and refuses a
- * type the data layer does not read. A foreign key's `constraint_name` is not rendered; keys keep the given order.
+ * `renderSchema` over columns of any database: `describe` gives each column's types and list field, refuses a type the
+ * data layer does not read, or answers `undefined` for a generated column of such a type. That column is left out of
+ * the module, so no handle reads or writes it and only `ctx.sql` reaches it; a foreign key that names it is refused. A
+ * foreign key's `constraint_name` is not rendered; keys keep the given order.
  */
 export function renderTables<C extends NamedColumn>(
 	catalog: readonly C[],
 	foreignKeys: readonly ForeignKeyColumns[],
-	describe: (column: C) => DescribedColumn,
+	describe: (column: C) => DescribedColumn | undefined,
 ): string {
 	const tables = new Map<string, C[]>()
 	for (const column of catalog) {
@@ -291,19 +296,40 @@ export function renderTables<C extends NamedColumn>(
 	const used = new Set<string>()
 	const interfaces: string[] = []
 	const described = new Map<C, DescribedColumn>()
+	const leftOut = new Set<string>()
 	for (const table of names) {
 		const name = interfaceName(table)
 		const owner = owners.get(name)
 		if (owner !== undefined) throw new CodegenError(`tables ${owner} and ${table} would both generate ${name}; rename one in a migration`)
 		owners.set(name, table)
-		const fields = (tables.get(table) ?? []).map((column) => {
+		const kept: C[] = []
+		const fields: string[] = []
+		for (const column of tables.get(table) ?? []) {
 			const description = describe(column)
+			if (description === undefined) {
+				leftOut.add(`${table}.${column.column_name}`)
+				continue
+			}
+			kept.push(column)
 			described.set(column, description)
 			const rendered = columnType(description)
 			if (rendered.uses !== undefined) used.add(rendered.uses)
-			return `\t${column.column_name}: ${rendered.type}\n`
-		})
+			fields.push(`\t${column.column_name}: ${rendered.type}\n`)
+		}
+		tables.set(table, kept)
 		interfaces.push(`export interface ${name} {\n${fields.join('')}}\n`)
+	}
+	for (const key of foreignKeys) {
+		if (!tables.has(key.table_name) || !tables.has(key.referenced_table)) continue
+		const named = [
+			...key.columns.map((column) => `${key.table_name}.${column}`),
+			...key.referenced_columns.map((column) => `${key.referenced_table}.${column}`),
+		].find((column) => leftOut.has(column))
+		if (named !== undefined) {
+			throw new CodegenError(
+				`${named} is a generated column of a type the data layer does not read, so codegen leaves it out, but a foreign key of ${key.table_name} names it`,
+			)
+		}
 	}
 	const kyselyNames = ['ColumnType', 'Generated', 'GeneratedAlways'].filter((name) => used.has(name))
 	const imports = [
