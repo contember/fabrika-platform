@@ -142,4 +142,5 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [260](260-an-operator-cannot-remove-an-authors-sandbox.md): An operator cannot delete a dev environment or app while an author keeps a sandbox; the 409 names an owner-only tool.
 - [261](261-a-dev-schema-reconcile-revokes-keys-other-sandboxes-hold.md): IAM's schema reconcile revokes keys that other sandboxes of a dev environment still get handed as fresh.
 - [262](262-report-a-replaced-archived-sandbox-and-the-box-operator-steps.md): `ensure` replaces an `ARCHIVED` sandbox without reporting the lost database, and the Box release's operator steps (one reload, a base rebuild) are undocumented.
+- [264](264-a-case-writes-into-a-stored-scope-row.md): A mutation's generated case writes into a scope row a migration wrote (a known enum value), and nothing restores it.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.
