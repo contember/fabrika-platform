@@ -35,9 +35,9 @@ export { lexSql, type SqlToken, sqlTokens, type Statement, statementsOf, topLeve
 export { PG_CATALOG_FUNCTIONS, SQL_KEYWORDS } from './pg-catalog-names'
 export {
 	afterName,
+	type BodyStatement,
 	closingParenthesis,
 	type CteLists,
-	cteLists,
 	ddlForeignSchema,
 	dmlForeignSchema,
 	dmlRelations,
@@ -53,6 +53,7 @@ export {
 	nestedStatement,
 	objectNameAt,
 	parenthesizedTarget,
+	ReadSql,
 	refusedFunctionCall,
 	skipWords,
 	splitAtCommas,

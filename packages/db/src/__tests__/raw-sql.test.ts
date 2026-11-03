@@ -199,6 +199,10 @@ describe('the static text', () => {
 				parts`with recursive t (a) as (select 1) cycle a set c to varchar(1) 'Y' default varchar(1) 'N' using p, u (b) as (select 1) select * from u`,
 				parts`with recursive t (a) as (select 1) cycle a set c to timestamp with time zone '2026-01-01' default 'epoch' using p, u (b) as (select 1)
 					select * from u`,
+				// A CTE may be named `recursive`, an unreserved word.
+				parts`with recursive as (select 1 as a) select a from recursive`,
+				parts`with recursive (a) as (select 1) select a from recursive`,
+				parts`with recursive recursive (a) as (select 1 union all select a + 1 from recursive where a < 2) select a from recursive`,
 				// A WITH that begins no query is another clause, and is not read as a CTE list.
 				parts`select * from unnest(array[1]) with ordinality as t`,
 				parts`select ${'x'}::timestamp with time zone as at`,
@@ -233,6 +237,10 @@ describe('the static text', () => {
 			],
 			[parts`select * from notes where id in (with t as select 1)`, 'the WITH at line 1 begins a CTE list that cannot be read'],
 			[parts`insert into notes (id) with t (a) select 1`, 'the WITH at line 1 begins a CTE list that cannot be read'],
+			[
+				parts`with recursive t (a) as (select 1) cycle a set c to 'Y' using p select 1`,
+				'CYCLE columns SET column [TO value DEFAULT value] USING column',
+			],
 		]
 		for (const [text, expected] of refused) {
 			expect({ text: text.join('${…}'), refused: refusal(text) }).toEqual({ text: text.join('${…}'), refused: expect.stringContaining(expected) })

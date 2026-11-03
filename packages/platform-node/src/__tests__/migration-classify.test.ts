@@ -644,12 +644,27 @@ describe('review round 2: coarse, fail-closed rules', () => {
 			'END',
 		].join(' ')
 		for (const sql of bodies(starts)) expect({ sql, reason: refusal(sql) }).toEqual({ sql, reason: undefined })
+		const cursors = [
+			'DECLARE c CURSOR FOR WITH t (a) AS (SELECT 1) SELECT a FROM t;',
+			'd NO SCROLL CURSOR (k int) IS WITH u (b) AS (SELECT k) SELECT b FROM u;',
+			'BEGIN OPEN c; OPEN d; END',
+		].join(' ')
+		for (const sql of bodies(cursors)) expect({ sql, reason: refusal(sql) }).toEqual({ sql, reason: undefined })
+		for (const sql of bodies('DECLARE c CURSOR FOR WITH t (a) AS (SELECT mystery(1)) SELECT a FROM t; BEGIN OPEN c; END')) {
+			expect({ sql, reason: refusal(sql) }).toEqual({ sql, reason: 'a call of mystery' })
+		}
 		// A policy's WITH CHECK and a CASE expression's THEN begin no query.
 		expect(refusal('CREATE POLICY p ON deals USING (true) WITH CHECK (mystery(1))')).toBe('a call of mystery')
 		expect(refusal('CREATE POLICY p ON deals WITH CHECK (true)')).toBeUndefined()
 		for (const sql of bodies('BEGIN x := CASE WHEN true THEN 1 ELSE 2 END; END')) {
 			expect({ sql, reason: refusal(sql) }).toEqual({ sql, reason: undefined })
 		}
+	})
+
+	test('a CTE may be named recursive, an unreserved word', () => {
+		expect(refusal('CREATE VIEW v AS WITH recursive AS (SELECT 1 AS a) SELECT a FROM recursive')).toBeUndefined()
+		expect(refusal('INSERT INTO t WITH RECURSIVE recursive (a) AS (SELECT 1) SELECT a FROM recursive')).toBeUndefined()
+		expect(refusal('INSERT INTO t WITH recursive (a) AS (SELECT 1) SELECT a FROM recursive')).toBeUndefined()
 	})
 
 	test('a WITH where a query begins and whose list does not read is refused, never skipped', () => {
