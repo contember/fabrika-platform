@@ -3,10 +3,13 @@
 // framework's own refusals can put request data there. The event adds what was thrown as its cause chain, scrubbed of
 // the environment's secrets and of credential patterns, a framework failure's message replaced by its catalog text
 // (ADR-0059). A writing invocation that held its Durable Object's transaction too long is an event on the same budget.
+// The author's own run (`fabrika app dev`, a test that passes `revealHandlerErrors`) also sees a framework failure's
+// message beside the log line; no deployed application sets that sink.
 
 import { CAPABILITY_ERRORS, CapabilityError, QUERY_REFUSALS, QueryRefusedError } from '@fabrika/db/framework'
 import { isStructuralError } from '../errors'
 import type { OperationsReporter } from '../jobs/report'
+import type { HandlerErrorSink } from '../jobs/runner'
 import { CAPABILITY_REFUSALS, CapabilityRefusedError } from './capability'
 import { SERVER_FAULTS, ServerFault } from './faults'
 
@@ -97,11 +100,16 @@ export class MinuteBudget {
 export class FailureReports {
 	readonly #reporter: OperationsReporter | null
 	readonly #budget: MinuteBudget
+	readonly #reveal: HandlerErrorSink | null
 
-	/** `reporter` is `null` without an Operations DSN: the log line is then the only record. */
-	constructor(reporter: OperationsReporter | null, now: () => number = Date.now) {
+	/**
+	 * `reporter` is `null` without an Operations DSN: the log line is then the only record. `reveal` is `boot`'s
+	 * `revealHandlerErrors`, set on the author's own run only.
+	 */
+	constructor(reporter: OperationsReporter | null, now: () => number = Date.now, reveal: HandlerErrorSink | null = null) {
 		this.#reporter = reporter
 		this.#budget = new MinuteBudget(MAX_FAILURE_REPORTS_PER_MINUTE, now)
+		this.#reveal = reveal
 	}
 
 	/** Never rejects. The returned delivery may outlive the response; a runtime with `waitUntil` keeps it alive. */
@@ -109,6 +117,10 @@ export class FailureReports {
 		const code = failureCode(failure.error)
 		const why = failureReason(failure.error)
 		console.error(`fabrika: ${failure.endpoint}: ${code}${why === null ? '' : `: ${why.reason}: ${why.text}`}`)
+		if (why !== null) {
+			// The message the line withholds names the place (a column, a line of ctx.sql): the author's own run shows it.
+			this.#reveal?.(failure.endpoint === 'request' ? 'a request' : `endpoint '${failure.endpoint}'`, failure.error)
+		}
 		if (this.#reporter === null || !this.#budget.admit()) {
 			return Promise.resolve()
 		}

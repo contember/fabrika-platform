@@ -146,8 +146,10 @@ export interface BootOptions {
 	 */
 	readonly challengeWork?: ChallengeWork
 	/**
-	 * The developer's own machine only (`fabrika app dev`): what a job's handler threw, which every log of a deployed
-	 * application withholds because it may carry a credential.
+	 * The author's own run only (`fabrika app dev`, a test that passes it to the kit): what a job's handler threw, and the
+	 * message of a framework failure (a refusal of the data layer or of a capability, a `ServerFault`) of a request or a
+	 * job, beside the reason its log line names. Every log of a deployed application withholds both, because either may
+	 * carry request data or a credential (ADR-0059).
 	 */
 	readonly revealHandlerErrors?: HandlerErrorSink
 	/** The providers `FABRIKA_EMAIL_PROVIDER` may name for the jobs that declare `mailer: 'installation'`; the built-in ones by default. */
@@ -979,7 +981,7 @@ function bootOnce(app: ContractImplementation, options: BootOptions, binding: Bi
 		capabilities: issuer.authority,
 		data,
 		fileKinds,
-		failures: new FailureReports(reporterFor('fabrika.requests')),
+		failures: new FailureReports(reporterFor('fabrika.requests'), Date.now, options.revealHandlerErrors ?? null),
 		kick: jobs.kick,
 		actions: Object.freeze(Object.keys(artifact.actions).sort()),
 		publicShare: new InFlightShare(publicShareOf(options.connections ?? DEFAULT_CONNECTIONS)),

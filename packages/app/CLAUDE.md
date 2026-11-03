@@ -631,6 +631,12 @@ vocabulary (`packages/db/CLAUDE.md`).
   `fabrika-request-failed`/endpoint/code, tags endpoint, code, reason, status and the proxy's request id when it is a bounded
   token, at most `MAX_FAILURE_REPORTS_PER_MINUTE` per process and minute. Never the input, a header or a row. The
   delivery is not awaited; the Worker adapter hands it to `waitUntil` (`ContractApp.fetch(request, exec)`).
+- **The author's own run sees a framework failure's message** through `BootOptions.revealHandlerErrors` (a
+  `HandlerErrorSink`), which only `fabrika app dev` and a test that passes it to the kit set: after the log line,
+  `FailureReports` hands it a request's framework failure (`failureReason` is not `null`) whole, and a job attempt hands
+  it what it threw, its handler's own error or a refusal. The log line is the same with or without it; a deployed
+  application never sets it. The kit leaves it off unless a test passes one: the platform build's test step echoes the
+  test run's output into its build log, and a refusal's message may quote a value.
 - **A report carries what was thrown, scrubbed; a log line never does** (ADR-0059). `OperationsReport.error` is sent
   before the framework's own exception, which stays last so the fingerprint and the title do not change
   (`jobs/exception.ts`): the type (an identifier `name`, else `Error`), the message, frames parsed from Bun's and V8's

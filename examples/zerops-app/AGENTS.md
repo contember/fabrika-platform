@@ -847,7 +847,9 @@ export default seed
 - Check every call the seed makes: an endpoint that refuses answers a status, and the seed goes on without its data.
   Throw when one does: a seed that throws stops `app dev` and prints its error with the stack.
 - `dev.runJob('<job>')` runs a cron job from the seed (`app dev` runs none on its schedule). A job's `ctx.links` works:
-  the stand-in IAM takes the job's own key. What a job's handler throws is printed with its stack, here only.
+  the stand-in IAM takes the job's own key. What a job's handler throws is printed with its stack, here only, and so
+  is the message of a framework refusal of a request or a job (a refused `ctx.sql` names its line), after the log line
+  that names its reason.
 
 ## Outside the application
 
@@ -1806,7 +1808,9 @@ with its message; throw the three business errors for the application's own refu
 
 A 500 answers a fixed message; the server log has one line, `fabrika: <endpoint>: <code>: <reason>: <text>`, with a
 fixed failure code and, for a framework refusal, its reason and the reason's fixed text, never a value or your error's
-message. The codes you meet most:
+message. The refusal's own message names the place (`'sqlite_master' at line 2`, the column, the function): `fabrika app
+dev` prints it after that line, and a test sees it when it passes a sink to the kit (`references/tests.md`). The codes
+you meet most:
 
 | Code                 | Means                                                                                                                                                                                                          |
 | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -6078,6 +6082,10 @@ if (postgres !== null) {
 - `testKit(app, { membership })` replaces the stand-in with your own `IamMembershipRpc`; that kit accepts no
   invitation. `@fabrika/app/testing` exports the types of the options: `IamMembershipRpc` (`membership`),
   `ChallengeFetch` (`challengeFetch`) and `FileScanner` (`scanner`). Import them from there, beside `testKit`.
+- A 500 or a failed `kit.runJob` names only its code and reason. To see the refusal's own message (a refused
+  `ctx.sql` names its line, a refused column its name) or what a job's handler threw, pass a sink while you debug:
+  `testKit(app, { database: postgres.database, revealHandlerErrors: (where, error) => console.error(where, error) })`
+  (`HandlerErrorSink`). It is off unless passed.
 - `kit.testCaller(grants, { disabled: true })` is a person an operator disabled: the directory lists and finds them
   with `disabled: true`, so an assignment of them answers your handler's 400, and their own requests are refused (401 for
   a session, 403 for a key).

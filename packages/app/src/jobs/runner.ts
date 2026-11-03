@@ -266,7 +266,10 @@ interface RunnerContext {
 	readonly url: AppUrl
 }
 
-/** Where `fabrika app dev` shows what a handler threw, on the developer's own machine; nothing else sets one. */
+/**
+ * Where the author's own run shows what a handler threw, or a framework failure's message, with where it happened:
+ * `fabrika app dev` sets one, and a test may pass one to the kit. No deployed application has one.
+ */
 export type HandlerErrorSink = (where: string, error: unknown) => void
 
 export interface JobBindingInput {
@@ -295,7 +298,7 @@ export interface JobBindingInput {
 	readonly capabilities: CapabilityAuthority
 	/** Each dimension's containers, nearest first: a link's chain. */
 	readonly containers: ReadonlyMap<string, readonly string[]>
-	/** What a job's handler threw, for `fabrika app dev`; without it the error is only its fixed code. */
+	/** What a job's handler or a refusal threw, for the author's own run; without it the error is only its fixed code. */
 	readonly revealHandlerErrors?: HandlerErrorSink
 	/** The transports of the jobs that declare `mailer`, which `boot` resolved. */
 	readonly mail: MailTransports
@@ -1250,7 +1253,8 @@ async function attemptOnce(
 			kicked.recorder = kicks
 		}).then(() => null, (error: unknown) => {
 			const failed = failureOf(error, job.mailer === null ? null : (context.mail[job.mailer]?.sender.capabilities ?? null))
-			if (failed.code === 'handler_failed') context.revealHandlerErrors?.(`job '${job.name}' attempt ${attempt}`, error)
+			// What the attempt threw: the handler's own error, or a refusal whose message the log line withholds.
+			if ('thrown' in failed) context.revealHandlerErrors?.(`job '${job.name}' attempt ${attempt}`, error)
 			return failed
 		})
 		// Its settlement, not only the end of its frame: a drain waits for a handler that outlived the attempt.

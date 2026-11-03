@@ -107,7 +107,9 @@ with its message; throw the three business errors for the application's own refu
 
 A 500 answers a fixed message; the server log has one line, `fabrika: <endpoint>: <code>: <reason>: <text>`, with a
 fixed failure code and, for a framework refusal, its reason and the reason's fixed text, never a value or your error's
-message. The codes you meet most:
+message. The refusal's own message names the place (`'sqlite_master' at line 2`, the column, the function): `fabrika app
+dev` prints it after that line, and a test sees it when it passes a sink to the kit (`references/tests.md`). The codes
+you meet most:
 
 | Code                 | Means                                                                                                                                                                                                          |
 | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

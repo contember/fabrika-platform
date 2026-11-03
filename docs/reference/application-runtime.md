@@ -1749,6 +1749,10 @@ const api = createClient(contract, 'api', { fetch: kit.browser(editor) })
   `kit.fetch`. `kit.drain()` waits for them without running a job, and each method of the generated endpoint access
   kit drains before it answers, so no test closes the database under a kicked run. `FILE_SCAN_JOB` runs the scan of
   `scan: true` file kinds with the kit's `scanner`, and `FILE_SWEEP_JOB` the sweep of stored files.
+- A failed request or job names its code and reason only, as in production. `options.revealHandlerErrors` (a
+  `HandlerErrorSink`, the one `fabrika app dev` passes) also receives the framework failure itself, its message whole,
+  and what a job's handler threw. The kit sets none by default: the platform build's test step echoes the test run's
+  output into its build log, and a refusal's message may quote a value.
 - `kit.mail` is the stand-in transport of every job that declares `mailer` (a `MemoryEmailSender` of
   `@fabrika/email/memory`, re-exported by `@fabrika/app/testing`; `TestKitOptions.mail` replaces it, for example with
   `capabilities: { idempotent: false, confirmation: 'queued' }`). `accepted` is what reached the inbox, once per key,
@@ -1769,7 +1773,8 @@ const api = createClient(contract, 'api', { fetch: kit.browser(editor) })
   `default-src 'none'` policy, so it runs no script and loads nothing. Every request the process sends to
   `https://outbox.invalid` (`DEV_OUTBOX_ORIGIN`, the dev outbox, for another outside service) is captured, answered
   200 and listed in a section of its own. A `ctx.kick` starts its job; cron schedules do not run.
-  What the seed or a job's handler throws is printed with its stack. A seed module (`--seed`, or `dev/seed.ts`)
+  What the seed or a job's handler throws is printed with its stack, and so is a framework failure of a request or a
+  job (`BootOptions.revealHandlerErrors`), after the log line that names its reason. A seed module (`--seed`, or `dev/seed.ts`)
   default-exports a `DevSeed`: it gets the kit and `DevOutside`, whose `outbox()` reads the dev outbox and `mails()`
   the jobs' mail (`DevMail`, oldest first), writes through the endpoints, and answers personas (a person the kit made), link pages (a URL `ctx.links` answered) and labelled scope
   values. `/__fabrika/dev` picks the caller: a persona, a role of the vocabulary held app-wide or in one scope value,

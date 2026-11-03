@@ -136,7 +136,11 @@ export interface TestKitOptions {
 	readonly connect?: Readonly<Record<string, TestConnection>>
 	/** What answers a public procedure's challenge verification in place of the provider: a stand-in for its siteverify. */
 	readonly challengeFetch?: ChallengeFetch
-	/** What a job's handler threw, shown on the developer's own machine: `fabrika app dev` sets it, a test need not. */
+	/**
+	 * Where the author's own run shows what a job's handler threw, and the message of a framework failure (a refused
+	 * `ctx.sql`, a capability refusal, a `ServerFault`) of a request or a job, which the log line names only by its reason.
+	 * `fabrika app dev` sets it; a test passes one to see why a call failed. Off unless passed.
+	 */
 	readonly revealHandlerErrors?: HandlerErrorSink
 	/**
 	 * The stand-in for every job's mail transport; a new `MemoryEmailSender` by default. Pass one with other capabilities

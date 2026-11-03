@@ -44,7 +44,7 @@ export type CapabilityRefusal = keyof typeof CAPABILITY_REFUSALS
 /** A capability that is forged, from a request that has ended, or from another request than the current one. */
 export class CapabilityRefusedError extends Error {
 	override readonly name = 'CapabilityRefusedError'
-	/** What a log may say; the message is for the author's own run. */
+	/** What a log may say; the message is for the author's own run (`revealHandlerErrors`). */
 	readonly reason: CapabilityRefusal
 
 	constructor(reason: CapabilityRefusal, message: string) {

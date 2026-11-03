@@ -17,6 +17,7 @@ import { FailureReports, MAX_FAILURE_REPORTS_PER_MINUTE } from '../implement/fai
 import { SERVER_FAULTS, ServerFault } from '../implement/faults'
 import { implement } from '../implement/implement'
 import type { OperationsReport } from '../jobs/report'
+import type { HandlerErrorSink } from '../jobs/runner'
 import { app as notesKit } from './cloudflare-fixture/src/app-kit'
 import { tables } from './cloudflare-fixture/src/db/tables'
 import { contract } from './fixtures/implement/fabrika.contract'
@@ -74,6 +75,7 @@ interface Run {
 async function run(
 	error: unknown,
 	variables: Readonly<Record<string, string>> = { FABRIKA_OPERATIONS_DSN: DSN, FABRIKA_RELEASE: 'r1' },
+	revealHandlerErrors?: HandlerErrorSink,
 ): Promise<Run> {
 	const app = throwing(error)
 	const envelopes: string[] = []
@@ -81,7 +83,11 @@ async function run(
 		envelopes.push(await request.text())
 		return new Response(null, { status: 202 })
 	}
-	const served = bootApp(app, { environment: environment({ ...frameworkEnvFor(app), ...variables }), operationsFetch })
+	const served = bootApp(app, {
+		environment: environment({ ...frameworkEnvFor(app), ...variables }),
+		operationsFetch,
+		...(revealHandlerErrors === undefined ? {} : { revealHandlerErrors }),
+	})
 	const logged: string[] = []
 	const original = console.error
 	console.error = (...args: unknown[]) => void logged.push(args.map(String).join(' '))
@@ -177,6 +183,19 @@ describe('a request that answers 5xx', () => {
 		const logged = await run(make(), {})
 		expect(logged.envelopes).toEqual([])
 		expect(logged.logged).toEqual([`fabrika: api.me: ${code}: ${reason}: ${texts[reason]}`])
+	})
+
+	test.each([
+		['a data-layer refusal', () => new QueryRefusedError('unknown_column', `${SECRET} is not a column of notes`), 'query_refused', 'unknown_column'],
+		['a capability refusal', () => new CapabilityRefusedError('ended', `the Ref of ${SECRET} has ended`), 'capability_refused', 'ended'],
+		['a framework fault', () => new ServerFault('output_refused', `returned ${SECRET}`), 'framework_fault', 'output_refused'],
+	])("%s reaches revealHandlerErrors whole on the author's own run; the log line stays the same", async (_name, make, code, reason) => {
+		const texts: Record<string, string> = { ...QUERY_REFUSALS, ...CAPABILITY_REFUSALS, ...SERVER_FAULTS }
+		const thrown = make()
+		const revealed: { where: string; error: unknown }[] = []
+		const reported = await run(thrown, {}, (where, error) => void revealed.push({ where, error }))
+		expect(revealed).toEqual([{ where: "endpoint 'api.me'", error: thrown }])
+		expect(reported.logged).toEqual([`fabrika: api.me: ${code}: ${reason}: ${texts[reason]}`])
 	})
 
 	test('a 4xx sends nothing', async () => {
