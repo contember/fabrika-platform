@@ -259,6 +259,62 @@ describe('a test database on SQLite', () => {
 	})
 })
 
+describe('worlds in known values of a dimension whose rows a migration wrote', () => {
+	const known = mkdtempSync(join(tmpdir(), 'fabrika-db-testing-sqlite-known-'))
+	writeFileSync(join(known, '20261009120000_init.sql'), `${migration}\ninsert into organizations (id, name) values ('acme', 'Acme');\n`)
+	const scopes = { organization: { own: 'acme', other: 'globex' } }
+	let sqlite: TestDatabase
+	const authority = new TestAuthority()
+	const layer = scoped(tables)
+
+	beforeAll(async () => {
+		sqlite = await testDatabase({ migrations: known, label: 'testing-sqlite.test.ts' })
+		bindScopedDatabase(layer, { database: sqlite.database, capabilities: authority })
+	})
+
+	afterAll(() => {
+		rmSync(known, { recursive: true, force: true })
+		return sqlite.close()
+	})
+
+	test('uses the stored row of a known value, inserts the other, and removes only what it inserted', async () => {
+		const first = await sqlite.seedWorlds(tables, 'notes', {}, {}, scopes)
+		expect(first.own.chain.at(-1)).toEqual({ type: 'organization', value: 'acme' })
+		expect(first.other.chain.at(-1)).toEqual({ type: 'organization', value: 'globex' })
+		// A second seed in the same values reuses both organizations, the one the first seed inserted too.
+		const second = await sqlite.seedWorlds(tables, 'notes', {}, {}, scopes)
+		expect(second.other.chain.at(-1)).toEqual({ type: 'organization', value: 'globex' })
+		await first.remove()
+		const organizations = tableProbe(layer, 'organizations')
+		const ids = async (value: string) => (await organizations.select(authority.within('organization', 'notes.read', [value]))).map((row) => row['id'])
+		expect(await ids('acme')).toEqual(['acme'])
+		expect(await ids('globex')).toEqual([])
+		expect(await tableProbe(layer, 'workspaces').select(authority.within('organization', 'notes.read', ['globex']))).toEqual([])
+		// Removed, so it is inserted again without a unique violation.
+		const again = await sqlite.seedWorlds(tables, 'organizations', {}, {}, scopes)
+		expect([again.own.key, again.other.key]).toEqual(['acme', 'globex'])
+		expect(again.own.markers).toEqual([])
+		await again.remove()
+		expect(await ids('acme')).toEqual(['acme'])
+	})
+
+	test('a stored row takes no seed or pin, and the two worlds never share a value', async () => {
+		await expect(sqlite.seedWorlds(tables, 'organizations', {}, { name: 'Pinned' }, scopes)).rejects.toThrow(
+			"organizations already holds the organization 'acme'",
+		)
+		await expect(sqlite.seedWorlds(tables, 'notes', {}, {}, { organization: { own: 'acme', other: 'acme' } })).rejects.toThrow(
+			"the two worlds share the organization 'acme'",
+		)
+	})
+
+	test('a seed that fails in the other world removes the row it inserted in the first', async () => {
+		await expect(sqlite.seedWorlds(tables, 'organizations', {}, { name: 'Pinned' }, { organization: { own: 'globex', other: 'acme' } })).rejects
+			.toThrow("organizations already holds the organization 'acme'")
+		const organizations = tableProbe(layer, 'organizations')
+		expect(await organizations.select(authority.within('organization', 'notes.read', ['globex']))).toEqual([])
+	})
+})
+
 describe('the seed over the types of an application on SQLite', () => {
 	const typed = `
 CREATE TABLE tasks (

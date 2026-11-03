@@ -48,6 +48,7 @@ export {
 	type ApplicationRow,
 	type IsolationWorlds,
 	type SampleValue,
+	type ScopeValues,
 	SEEDED_OBJECT_VERSION,
 	type SeededApplicationRows,
 	type SeededRow,
@@ -448,8 +449,13 @@ export async function testDatabase(options: TestDatabaseOptions): Promise<TestDa
 			const [returned] = z.array(z.record(z.string(), z.unknown())).parse(stored)
 			return returned ?? {}
 		},
-		async firstRow(table, columns) {
-			const selected: unknown = await seeder.unsafe(`SELECT ${columns.map(quoted).join(', ')} FROM ${quoted(schema)}.${quoted(table)} LIMIT 1`)
+		async firstRow(table, columns, where = new Map()) {
+			const names = [...where.keys()]
+			const condition = names.length === 0 ? '' : ` WHERE ${names.map((name, index) => `${quoted(name)} = $${index + 1}`).join(' AND ')}`
+			const selected: unknown = await seeder.unsafe(
+				`SELECT ${columns.map(quoted).join(', ')} FROM ${quoted(schema)}.${quoted(table)}${condition} LIMIT 1`,
+				names.map((name) => where.get(name) ?? null),
+			)
 			return z.array(z.record(z.string(), z.unknown())).parse(selected)[0]
 		},
 		async insertFile(file) {

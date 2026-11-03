@@ -45,6 +45,7 @@ export {
 	type ApplicationRow,
 	type IsolationWorlds,
 	type SampleValue,
+	type ScopeValues,
 	SEEDED_OBJECT_VERSION,
 	type SeededApplicationRows,
 	type SeededRow,
@@ -487,8 +488,13 @@ export async function testDatabase(options: TestDatabaseOptions): Promise<TestDa
 				throw seedLimit(error, table) ?? error
 			}
 		},
-		async firstRow(table, selected) {
-			return exec(`SELECT ${selected.map(quoted).join(', ')} FROM ${quoted(table)} LIMIT 1`)[0]
+		async firstRow(table, selected, where = new Map()) {
+			const names = [...where.keys()]
+			const condition = names.length === 0 ? '' : ` WHERE ${names.map((name) => `${quoted(name)} = ?`).join(' AND ')}`
+			return exec(
+				`SELECT ${selected.map(quoted).join(', ')} FROM ${quoted(table)}${condition} LIMIT 1`,
+				...names.map((name) => binding(where.get(name) ?? null)),
+			)[0]
 		},
 		async insertFile(file) {
 			exec(
