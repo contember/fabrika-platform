@@ -7,6 +7,7 @@
 import {
 	type AccessForm,
 	type Caller,
+	type CapabilitiesRequirement,
 	type ContractArtifact,
 	type EndpointDirectory,
 	endpointDirectory,
@@ -25,6 +26,7 @@ import { basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { z } from 'zod/v4'
 import type { RpcFetch } from '../client/transport'
+import { deniedCaseRuledOutBy } from '../contract/capability-cases'
 import { compileContract } from '../contract/compile'
 import {
 	FILE_INPUT_PART,
@@ -101,10 +103,10 @@ export interface EndpointAccessKit {
 	global(endpoint: string, input: Readonly<Record<string, unknown>>): Promise<ReachOutcome>
 	/**
 	 * One capability of an endpoint of several, refused while every other one passes: the caller holds each other one's
-	 * action in a scope of its own and addresses its object or value there (for `over`, in a value of its dimension that
-	 * holds nothing). For an `on` or `in` capability it also holds the named one's action in its own scope and addresses
-	 * the other's object (404) or value (403); for `over` it holds the named action nowhere (403). An `over` capability
-	 * whose action another one also needs throws: a caller that passes the other holds it. `seed` is the named one's.
+	 * action in a scope of its own and addresses its object or value there. For an `on` or `in` capability it also holds
+	 * the named one's action in its own scope and addresses the other's object (404) or value (403); for `over` it holds
+	 * the named action only where the others need it (403). An `over` capability without a denied case
+	 * (`deniedCaseRuledOutBy`) throws. `seed` is the named one's.
 	 */
 	capability(endpoint: string, capability: string, input: Readonly<Record<string, unknown>>, seed?: Seed): Promise<DeniedOutcome>
 	/**
@@ -394,14 +396,16 @@ export function endpointAccessKit<DB, P>(
 		)
 	}
 
-	/** An endpoint of several capabilities, as one `ActionEndpoint` per capability, by its name. */
-	const capabilitiesEndpointOf = (id: string): ReadonlyMap<string, ActionEndpoint> => {
+	/** An endpoint of several capabilities: its requirement, and one `ActionEndpoint` per capability, by its name. */
+	const capabilitiesEndpointOf = (
+		id: string,
+	): { readonly requirement: CapabilitiesRequirement; readonly capabilities: ReadonlyMap<string, ActionEndpoint> } => {
 		const row = kit.artifact.endpoints.find((candidate) => candidate.id === id)
 		const requirement = row?.requirement
 		if (row === undefined || requirement?.kind !== 'capabilities') {
 			throw new Error(`${id} is not an endpoint of the contract with several capabilities`)
 		}
-		return new Map(
+		const capabilities = new Map(
 			Object.entries(requirement.capabilities).map(([name, capability]) => [name, {
 				id: row.id,
 				link: null,
@@ -416,6 +420,7 @@ export function endpointAccessKit<DB, P>(
 				links: [],
 			}]),
 		)
+		return { requirement, capabilities }
 	}
 
 	const globalEndpointOf = (id: string): ActionEndpoint => {
@@ -957,28 +962,27 @@ export function endpointAccessKit<DB, P>(
 				return status >= 500 || status === 401 || status === 403 ? { answered: false, status } : { answered: true }
 			},
 			async capability(endpoint, capability, input, seed = {}) {
-				const capabilities = capabilitiesEndpointOf(endpoint)
+				const { requirement, capabilities } = capabilitiesEndpointOf(endpoint)
 				const named = capabilities.get(capability)
 				if (named === undefined) {
 					throw new Error(`${endpoint} has no capability '${capability}' (capabilities: ${[...capabilities.keys()].join(', ')})`)
 				}
 				const { access } = named
-				const sharing = [...capabilities].find(([name, other]) => name !== capability && other.action === named.action)
-				if (access.form === 'over' && sharing !== undefined) {
+				const ruledOutBy = deniedCaseRuledOutBy(requirement.capabilities, capability, kit.artifact.dimensions)
+				if (ruledOutBy !== undefined && access.form === 'over') {
 					throw new Error(
-						`${endpoint}: capability '${capability}' has no denied case: '${
-							sharing[0]
-						}' needs its action too, ${named.action}, so no caller lacks it while '${sharing[0]}' passes`,
+						`${endpoint}: capability '${capability}' has no denied case: '${ruledOutBy}' needs its action too, ${named.action}, in a dimension related to ${access.dimension}, so every caller that passes it is answered the list`,
 					)
 				}
 				const grants: Grant[] = []
 				let asked = input
 				for (const [name, other] of capabilities) {
 					if (name === capability) continue
+					// Each other one in a scope of its own, seeded apart from the named one's: a global grant would also meet the
+					// named capability when both share an action.
 					if (other.access.form === 'over') {
-						// A fresh value, which lies in no seeded chain: a global grant would also meet the named capability when
-						// both share an action, and so would a grant on the other scope's object or one of its containers.
-						grants.push({ action: other.action, scope: { type: other.access.dimension, value: freshValue(other.access.dimension, 'own', undefined) } })
+						const { own } = await scopesOf(other.action, other.access.dimension, undefined, {}, {})
+						grants.push(...own.grants)
 					} else if (other.access.form === 'on' || other.access.form === 'in') {
 						const { own } = await scopesOf(other.action, other.access.dimension, fieldOf(other.input, other.access.from), {}, input)
 						asked = addressing(asked, other.access.from, own)

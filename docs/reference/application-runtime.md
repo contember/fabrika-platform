@@ -1910,10 +1910,12 @@ not run`. Of them only the generated isolation tests run again, at container sta
     (a write-only role), a caller holding only that action, plus what IAM requires of a member manager or a link's
     issuer (above), asks for its own object and gets 200: the capability reads its own target. A link mount's procedure gets the same case for the holder of a link bound to its object.
   - **Several capabilities.** For every endpoint of several capabilities, one denied case per capability: the caller
-    holds every other one, and the named one is refused (`kit.capability`). It holds an other `over` capability's
-    action in a value of its dimension that no seeded row lies in, so a shared action never reaches the named one's
-    other scope. An `over` capability whose action another one also needs has no case: no caller lacks the action
-    while that one passes, and a grant on an object inside the dimension admits the list.
+    holds every other one, and the named one is refused (`kit.capability`). It holds each other one's action in a
+    scope seeded apart from the named one's, so a shared action never reaches the named one's other scope. An `over`
+    capability has no case when another one needs its action on its dimension, a container of it or a dimension inside
+    it (`deniedCaseRuledOutBy` of `@fabrika/app/contract`): every caller that passes that one holds the action where
+    the list is read from, so none is refused. On an unrelated dimension the case stays. An endpoint left with no
+    capability case says so in a `// Not checked:` line of the test, and `fabrika db test-scaffold` prints it.
   - **Public.** For every public procedure, anyone with no credential, from a page of its own origin, gets an answer
     of the application: anything but 401, 403, a 5xx or a 400 `challenge_failed` (`kit.anyone`). Behind a challenge
     the case is that 400 instead: the kit's challenge never passes. The case name carries the actions the procedure runs with.

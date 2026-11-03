@@ -3,7 +3,14 @@
 // one file per application, from the contract: they run the application's own `serve(…)` and handlers. The checker
 // regenerates both to find a missing, edited, stale or orphaned file. Browser-safe: no file API.
 
-import { GENERATED_FILE_PREFIX, GENERATED_INVITATION, GENERATED_LINK, GENERATED_MEMBER, GENERATED_ROW_PREFIX } from '@fabrika/app/contract'
+import {
+	deniedCaseRuledOutBy,
+	GENERATED_FILE_PREFIX,
+	GENERATED_INVITATION,
+	GENERATED_LINK,
+	GENERATED_MEMBER,
+	GENERATED_ROW_PREFIX,
+} from '@fabrika/app/contract'
 import {
 	type ContractArtifact,
 	endpointDirectory,
@@ -529,20 +536,20 @@ const endpointCases = (row: EndpointRow, artifact: ContractArtifact, policies: P
 
 /**
  * An endpoint of several capabilities: one denied case per capability, each refused while every other one passes. An
- * object of another scope is 404 (`on`), a value of another scope 403 (`in`), and a caller without the action 403 (`over`).
- * An `over` capability whose action another one also needs has none: no caller lacks the action while that one passes.
+ * object of another scope is 404 (`on`), a value of another scope 403 (`in`), and a caller without the action 403
+ * (`over`). An `over` capability whose action another one needs in a related dimension has none (`deniedCaseRuledOutBy`).
  */
-const capabilityCases = (row: EndpointRow, fixtures: EndpointFixtures): readonly Case[] => {
+const capabilityCases = (row: EndpointRow, artifact: ContractArtifact, fixtures: EndpointFixtures): readonly Case[] => {
 	if (row.requirement?.kind !== 'capabilities' || !row.callers.some((caller) => caller === 'human' || caller === 'machine')) return []
 	const input = inputOf(row, fixtures)
 	if (input === undefined) return []
 	const seed = fixtures.seeds[row.id]
-	const capabilities = Object.entries(row.requirement.capabilities)
-	return capabilities.flatMap(([name, { action, access }]) => {
+	const { capabilities } = row.requirement
+	return Object.entries(capabilities).flatMap(([name, { action, access }]) => {
 		const args = `${quote(row.id)}, ${quote(name)}, ${renderSample(input)}${seed === undefined ? '' : `, ${renderSample(seed)}`}`
 		const call = `await kit.capability(${args})`
 		if (access.form === 'over') {
-			if (capabilities.some(([other, capability]) => other !== name && capability.action === action)) return []
+			if (deniedCaseRuledOutBy(capabilities, name, artifact.dimensions) !== undefined) return []
 			return testCase(`${row.id}: a caller without ${action} (capability ${name}) is 403`, `expect(${call}).toEqual({ status: 403 })`)
 		}
 		const status = access.form === 'on' ? 404 : 403
@@ -552,6 +559,21 @@ const capabilityCases = (row: EndpointRow, fixtures: EndpointFixtures): readonly
 		)
 	})
 }
+
+/**
+ * An endpoint of several capabilities that the rule above leaves with no case at all: every one is `over`, and another
+ * needs its action in a related dimension. The generated test says so in a comment, and `fabrika db test-scaffold`
+ * prints it.
+ */
+const uncheckedCapabilities = (row: EndpointRow, artifact: ContractArtifact, fixtures: EndpointFixtures): readonly string[] =>
+	row.requirement?.kind === 'capabilities' && row.callers.some((caller) => caller === 'human' || caller === 'machine')
+		&& inputOf(row, fixtures) !== undefined && capabilityCases(row, artifact, fixtures).length === 0
+		? [`${row.id} has no capability case: each capability is over a dimension whose action another one needs in a related dimension`]
+		: []
+
+/** What the endpoint access test cannot check, one line each: the endpoints of several capabilities it has no case for. */
+export const endpointTestNotes = ({ artifact, fixtures }: Pick<ScaffoldInputs, 'artifact' | 'fixtures'>): readonly string[] =>
+	artifact === null ? [] : sortedEndpoints(artifact).flatMap((row) => uncheckedCapabilities(row, artifact, fixtures))
 
 /**
  * A public procedure's case: anyone reaches it with no credential, or, behind a challenge, is refused without a solved
@@ -572,6 +594,10 @@ const publicCases = (row: EndpointRow, artifact: ContractArtifact, fixtures: End
 	]
 }
 
+/** The endpoints of the artifact by id, the order of their cases. */
+const sortedEndpoints = (artifact: ContractArtifact): readonly EndpointRow[] =>
+	[...artifact.endpoints].sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0))
+
 /** The endpoint access test of the application, or `undefined` when no endpoint has an access form to test. */
 const endpointTestBody = (
 	artifact: ContractArtifact,
@@ -579,11 +605,9 @@ const endpointTestBody = (
 	fixtures: EndpointFixtures,
 	dialect: ApplicationDialect,
 ): { readonly body: string; readonly cases: readonly string[] } | undefined => {
-	const cases = [...artifact.endpoints].sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0)).flatMap((
-		row,
-	) => [
+	const cases = sortedEndpoints(artifact).flatMap((row) => [
 		...endpointCases(row, artifact, policies, fixtures),
-		...capabilityCases(row, fixtures),
+		...capabilityCases(row, artifact, fixtures),
 		...publicCases(row, artifact, fixtures),
 	])
 	if (cases.length === 0) return undefined
@@ -595,6 +619,7 @@ const endpointTestBody = (
 		'// issuer, asks for its own object. A handler bug that needs other data or another order is beyond them; the state a',
 		'// precondition needs is a seed in endpoint-access.fixtures.ts.',
 		'// Do not edit: @fabrika/check compares this file with what the scaffold writes; rerun it after a contract change.',
+		...endpointTestNotes({ artifact, fixtures }).map((note) => `// Not checked: ${note}.`),
 		'',
 		"import { afterAll, describe, endpointAccessKit, expect, test } from '@fabrika/app/testing/isolation'",
 		database.kit,

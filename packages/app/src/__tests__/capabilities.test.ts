@@ -12,6 +12,9 @@ import {
 	compileContract,
 	ContractError,
 	type Declared,
+	defineApp,
+	defineVocabulary,
+	deniedCaseRuledOutBy,
 	describeContract,
 	type EndpointContext,
 	type KitTypes,
@@ -21,7 +24,7 @@ import {
 import { type Ref, serve, type Within } from '@fabrika/app/implement'
 import { testKit } from '@fabrika/app/testing'
 import { endpointAccessKit } from '@fabrika/app/testing/isolation'
-import type { SchemaShape } from '@fabrika/auth-core'
+import type { CapabilityRequirement, SchemaShape } from '@fabrika/auth-core'
 import { scoped } from '@fabrika/db'
 import { tablePolicies } from '@fabrika/db/tables'
 import { testDatabase } from '@fabrika/db/testing'
@@ -93,6 +96,31 @@ const copies = app.group({ callers: ['human'] }, (r) => ({
 
 const contract = app.contract((c) => ({ api: c.rpc('/api', { copies }) }))
 
+// Two dimensions in neither one's chain, without tables: a caller holding the shared action on its project only is
+// refused the list over teams, so the `over` capability keeps its denied case.
+const unrelated = defineApp(defineVocabulary({
+	app: 'boards',
+	dimensions: { project: {}, team: {} },
+	actions: { 'boards.read': 'Read boards' },
+	roles: { reader: { grants: ['boards.read'] } },
+}))
+const boards = unrelated.group({ callers: ['human'] }, (r) => ({
+	read: r.query({
+		input: z.strictObject({ projectId: z.string() }),
+		output: z.strictObject({ project: z.string(), teams: z.int() }),
+		access: {
+			capabilities: {
+				project: { action: 'boards.read', on: 'project', from: 'projectId' },
+				teams: { action: 'boards.read', over: 'team' },
+			},
+		},
+	}).handle(({ ctx }) => ({
+		project: ctx.capabilities.project.value,
+		teams: ctx.capabilities.teams.values === 'all' ? 0 : ctx.capabilities.teams.values.length,
+	})),
+}))
+const unrelatedContract = unrelated.contract((c) => ({ api: c.rpc('/api', { boards }) }))
+
 describe('several capabilities in the artifact', () => {
 	test('the endpoint requires every capability, by name, each with its own access form', () => {
 		const row = compileContract(contract, tables).endpoints.find((candidate) => candidate.id === 'api.copies.copy')
@@ -141,6 +169,33 @@ describe('several capabilities in the artifact', () => {
 	})
 })
 
+describe('which capability has no denied case', () => {
+	const dimensions = {
+		org: { in: null, creator: null, members: null },
+		company: { in: 'org', creator: null, members: null },
+		deal: { in: 'company', creator: null, members: null },
+		team: { in: 'org', creator: null, members: null },
+		project: { in: null, creator: null, members: null },
+	}
+	const over = (dimension: string, action = 'crm.read'): CapabilityRequirement => ({ action, access: { form: 'over', dimension } })
+	const on = (dimension: string, action = 'crm.read'): CapabilityRequirement => ({ action, access: { form: 'on', dimension, from: 'id' } })
+
+	test.each<[string, CapabilityRequirement, string | undefined]>([
+		['the same dimension', on('company'), 'other'],
+		['a dimension inside it', on('deal'), 'other'],
+		['a container of it', over('org'), 'other'],
+		['a sibling under one container', on('team'), undefined],
+		['an unrelated dimension', on('project'), undefined],
+		['another action', on('deal', 'deals.write'), undefined],
+	])('an over capability, and another of its action on %s', (_name, other, expected) => {
+		expect(deniedCaseRuledOutBy({ listed: over('company'), other }, 'listed', dimensions)).toBe(expected)
+	})
+
+	test('an on or in capability always has one', () => {
+		expect(deniedCaseRuledOutBy({ read: on('deal'), listed: over('org') }, 'read', dimensions)).toBeUndefined()
+	})
+})
+
 const postgres = await testDatabase({ migrations: new URL('./members-fixture/db/migrations/', import.meta.url), label: 'capabilities.test.ts' })
 afterAll(() => postgres?.close())
 
@@ -184,9 +239,15 @@ describe.skipIf(postgres === null)('several capabilities through the proxy decis
 		expect(await access.capability('api.copies.related', 'root', { rootId: crypto.randomUUID() })).toEqual({ status: 404 })
 	})
 
-	test('an over capability whose action another one needs has no denied case: no caller lacks the action while that one passes', async () => {
+	test('an over capability whose action another one needs in a related dimension has no denied case: every caller that passes that one is answered the list', async () => {
 		await expect(access.capability('api.copies.related', 'rest', { rootId: crypto.randomUUID() })).rejects.toThrow(
-			"capability 'rest' has no denied case: 'root' needs its action too, crm.read",
+			"capability 'rest' has no denied case: 'root' needs its action too, crm.read, in a dimension related to org",
 		)
+	})
+
+	test('two capabilities of one action on unrelated dimensions: each keeps its denied case, a project of another scope 404, a caller without a team 403', async () => {
+		const boardsAccess = endpointAccessKit(serve(unrelatedContract, { database: null }), tables, postgres)
+		expect(await boardsAccess.capability('api.boards.read', 'project', { projectId: 'unused' })).toEqual({ status: 404 })
+		expect(await boardsAccess.capability('api.boards.read', 'teams', { projectId: 'unused' })).toEqual({ status: 403 })
 	})
 })
