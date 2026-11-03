@@ -227,7 +227,7 @@ for (const row of await ctx.db.app('mail.send').outbox.claim({ limit: 50 })) {
   action. `claim` runs only in a job and never inside `ctx.transaction`.
 - A claimed row's file column is a reference the job opens (`ctx.files.open`) only when the job also declares the
   table's `read` action. With only the update action it carries the metadata, and `open` refuses it. A column with
-  its own read action is not in the claim's answer at all.
+  its own read action is in the claim's answer only when that action is the claim's own, and is then readable.
 
   ```text
   // uploads: read 'uploads.read', update 'uploads.process', files: { file: 'documents' }

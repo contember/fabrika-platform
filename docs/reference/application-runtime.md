@@ -669,8 +669,8 @@ deal_attachments: {
 
 - **The column.** The application's migration writes `file uuid not null references fabrika_files (id)` (or a nullable
   one) and an index the column leads; the checker's `file-column-migration` refuses a declared file column without
-  both. Reading the column under the table's read action is what lets a request serve or open the file, and writing it
-  needs the action that writes that column.
+  both. Reading the column under the table's read action is what lets a request serve or open the file (so does a job's
+  claim of the row while the job holds that action), and writing it needs the action that writes that column.
 - **The storage.** One framework table, `fabrika_files` (`0008_files.sql` of `@fabrika/db`'s migrations): id, kind,
   status (`pending`, `quarantined`, `live`, `rejected`), size, SHA-256, the sniffed type, the name, the object key
   `<kind>/<id>`, the scanned object version and the scan state, the scope value of its first dimensional reference,
@@ -699,7 +699,7 @@ deal_attachments: {
   commit answer, a crash) it deletes nothing, and the sweep decides.
 - **Writing a column.** A file column takes exactly four values: an incoming file of this request's input, a file a
   `put` of this request created, a file reference this request read from another file column under that table's read
-  action, or `null`. A string id is refused. The file must be of the column's kind, and its row is locked `FOR SHARE`
+  action (or claimed with its queue row while the job holds that action), or `null`. A string id is refused. The file must be of the column's kind, and its row is locked `FOR SHARE`
   while the write checks its status, so a file being deleted gains no reference. The first write claims a staged file:
   still `pending`, of this request and kind, within the pending grace (one hour). It becomes `quarantined` for a
   scanning kind, else `live`. The first reference from a table scoped by a dimension stamps the file's top-level scope
@@ -805,7 +805,8 @@ is `null`.
   commits: it selects rows with `<due> <= now()` (the database's clock) and attempts below `maxAttempts` (10 by
   default), `for update skip locked`, adds one attempt and moves `<due>` by the backoff: the job's schedule period (60 s
   without one), doubled per earlier claim, at most 30 days. It answers each row with the columns of its action, its new
-  `version` and `ref`, a capability bound to that row.
+  `version` and `ref`, a capability bound to that row. A file column's reference is one the job may open when the
+  claim's action or another action the job holds is a read action of the table.
 - **The job finishes a row through `tx.db.on(row.ref)`** inside `ctx.transaction`: `.update(values, { expectVersion,
   done: true })` writes and clears `<due>` in one statement, `.remove({ expectVersion })` deletes the row with the
   table's delete action, and `.requeue({ at? })` sets `<due>` (now by default) and the attempts to zero.

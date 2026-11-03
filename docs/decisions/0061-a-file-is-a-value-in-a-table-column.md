@@ -85,7 +85,8 @@ A file column accepts four values. The data layer refuses anything else, a strin
 
 - an incoming file of this request's input;
 - a file that `ctx.files.put('<kind>', bytes, { type, name })` of this request staged;
-- a file reference this request read from another file column under that table's `read` action;
+- a file reference this request read from another file column under that table's `read` action, or claimed with its
+  queue row while the job holds that action (§4);
 - `null`, which clears a nullable column.
 
 Every file must be of the column's kind. Its row is locked `FOR SHARE` while the write checks its status, so a file

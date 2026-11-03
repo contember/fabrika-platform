@@ -896,7 +896,7 @@ vocabulary (`packages/db/CLAUDE.md`).
   recorded type is what a download sends. The size bound is the object store's (`FileObjectStore.write`), enforced
   while the body streams.
 - **`ctx.files` is `put` and `open` only** (`storedFilesHandle`): `open` reads a live file whose reference this request
-  holds and may read (an input file, a put, or a file column read under its table's read action), and refuses any
+  holds and may read (an input file, a put, or a file column read under its table's read action, or claimed with its queue row while the job holds that action), and refuses any
   other (`wrong_capability`). A query creates no file. Never read a file by its id alone.
 - **The sweep job is a framework job** (`FILE_SWEEP_JOB`, hourly, `StoredFileKinds.sweep(signal)`): it deletes the
   files no declared column references once past the grace, row and deletion record first, in bounded batches; the

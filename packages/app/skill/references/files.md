@@ -76,7 +76,8 @@ task_attachments: {
   cascade) or clearing a nullable column removes the reference; the framework's sweep deletes a file no column
   references.
 - A file column takes only a file reference: an input file (`file('<kind>')`), a `ctx.files.put` of this request, or a
-  reference this request read from a file column under that table's `read` action. A string id is refused.
+  reference this request read from a file column under that table's `read` action (or claimed with its queue row while
+  the job declares that action). A string id is refused.
 
 ```ts src/attachments/endpoints.ts
 import { file } from '@fabrika/app/contract'
