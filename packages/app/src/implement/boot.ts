@@ -40,6 +40,7 @@ import { TokenVerifier } from '@fabrika/jwks'
 import type { FileObjectStore } from '@fabrika/platform'
 import { compileContract } from '../contract/compile'
 import { exportDescription } from '../contract/connect'
+import { containersOf } from '../contract/containers'
 import { isProcedure, type ProcedureDeclaration, type ProcedureTreeDeclaration, SURFACE_SECTIONS } from '../contract/declaration'
 import { challengeRowId, exportBase, spaPrefixRowId } from '../contract/defaults'
 import type { AnyContract, Schema } from '../contract/define'
@@ -250,21 +251,6 @@ function checkContractDigest(framework: Readonly<Record<string, string>>, artifa
 			`the contract's digest is ${actual}, but ${FABRIKA_CONTRACT_DIGEST} is ${expected}: this build is not the contract the deploy was approved with`,
 		)
 	}
-}
-
-/** Every dimension's containers, nearest first (`note → [workspace, organization]`); `buildArtifact` refuses a cycle. */
-function containersOf(artifact: ContractArtifact): ReadonlyMap<string, readonly string[]> {
-	const containers = new Map<string, readonly string[]>()
-	for (const dimension of Object.keys(artifact.dimensions)) {
-		const chain: string[] = []
-		let next = artifact.dimensions[dimension]?.in ?? null
-		while (next !== null && !chain.includes(next)) {
-			chain.push(next)
-			next = artifact.dimensions[next]?.in ?? null
-		}
-		containers.set(dimension, chain)
-	}
-	return containers
 }
 
 /** The shortest secret accepted; Control generates 32 random bytes. */
@@ -732,7 +718,7 @@ function bootOnce(app: ContractImplementation, options: BootOptions, binding: Bi
 			? null
 			: operationsReporter({ ...operations, source, scrubber, ...(options.operationsFetch === undefined ? {} : { fetch: options.operationsFetch }) })
 	const owned = new Set(Object.values(artifact.tables).flatMap((table) => table.scope.mode === 'dimension' ? [table.scope.dimension] : []))
-	const containers = containersOf(artifact)
+	const containers = containersOf(artifact.dimensions)
 	unservable(artifact, options.assets, owned, containers, problems)
 	sqliteProblems(artifact, options.database, problems)
 	// This runtime's own: what another `boot` call mints, application code's included, its stores refuse.

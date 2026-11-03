@@ -217,10 +217,11 @@ const testScaffold = async (argv: readonly string[], deps: DbCommandDependencies
 			deps.write(`removed ${path}\n`)
 		}
 	}
-	for (const [path, { text }] of tests) {
+	for (const [path, { text, notes }] of tests) {
 		await mkdir(dirname(join(deps.cwd, path)), { recursive: true })
 		await writeFile(join(deps.cwd, path), text)
 		deps.write(`${path}\n`)
+		for (const note of notes) deps.write(`not checked: ${note}\n`)
 	}
 	if (missing.length > 0) {
 		throw new Error(`db test-scaffold: the endpoint access tests are incomplete\n${missing.map(formatFinding).join('\n')}`)

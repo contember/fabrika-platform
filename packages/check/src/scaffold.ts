@@ -3,7 +3,14 @@
 // one file per application, from the contract: they run the application's own `serve(…)` and handlers. The checker
 // regenerates both to find a missing, edited, stale or orphaned file. Browser-safe: no file API.
 
-import { GENERATED_FILE_PREFIX, GENERATED_INVITATION, GENERATED_LINK, GENERATED_MEMBER, GENERATED_ROW_PREFIX } from '@fabrika/app/contract'
+import {
+	deniedCaseRuledOutBy,
+	GENERATED_FILE_PREFIX,
+	GENERATED_INVITATION,
+	GENERATED_LINK,
+	GENERATED_MEMBER,
+	GENERATED_ROW_PREFIX,
+} from '@fabrika/app/contract'
 import {
 	type ContractArtifact,
 	endpointDirectory,
@@ -30,6 +37,8 @@ export const policyTestPath = (table: string): string => `${POLICY_TESTS_DIR}${t
 export interface GeneratedTest {
 	readonly text: string
 	readonly cases: readonly string[]
+	/** What the test cannot check, one line each, which `fabrika db test-scaffold` prints: a ruled-out capability case. */
+	readonly notes: readonly string[]
 }
 
 type Policies = Readonly<Record<string, TablePolicyArtifact>>
@@ -529,25 +538,47 @@ const endpointCases = (row: EndpointRow, artifact: ContractArtifact, policies: P
 
 /**
  * An endpoint of several capabilities: one denied case per capability, each refused while every other one passes. An
- * object of another scope is 404 (`on`), a value of another scope 403 (`in`), and a caller without the action 403 (`over`).
+ * object of another scope is 404 (`on`), a value of another scope 403 (`in`), and a caller without the action 403
+ * (`over`). An `over` capability whose action another one needs in a related dimension has none (`deniedCaseRuledOutBy`);
+ * `notes` says so for each, in the generated test and in `fabrika db test-scaffold`'s output.
  */
-const capabilityCases = (row: EndpointRow, fixtures: EndpointFixtures): readonly Case[] => {
-	if (row.requirement?.kind !== 'capabilities' || !row.callers.some((caller) => caller === 'human' || caller === 'machine')) return []
+const capabilityCases = (
+	row: EndpointRow,
+	artifact: ContractArtifact,
+	fixtures: EndpointFixtures,
+): { readonly cases: readonly Case[]; readonly notes: readonly string[] } => {
+	if (row.requirement?.kind !== 'capabilities' || !row.callers.some((caller) => caller === 'human' || caller === 'machine')) {
+		return { cases: [], notes: [] }
+	}
 	const input = inputOf(row, fixtures)
-	if (input === undefined) return []
+	if (input === undefined) return { cases: [], notes: [] }
 	const seed = fixtures.seeds[row.id]
-	return Object.entries(row.requirement.capabilities).map(([name, { action, access }]) => {
+	const { capabilities } = row.requirement
+	const cases: Case[] = []
+	const notes: string[] = []
+	for (const [name, { action, access }] of Object.entries(capabilities)) {
 		const args = `${quote(row.id)}, ${quote(name)}, ${renderSample(input)}${seed === undefined ? '' : `, ${renderSample(seed)}`}`
 		const call = `await kit.capability(${args})`
 		if (access.form === 'over') {
-			return testCase(`${row.id}: a caller without ${action} (capability ${name}) is 403`, `expect(${call}).toEqual({ status: 403 })`)
+			const ruledOutBy = deniedCaseRuledOutBy(capabilities, name, artifact.dimensions)
+			if (ruledOutBy === undefined) {
+				cases.push(testCase(`${row.id}: a caller without ${action} (capability ${name}) is 403`, `expect(${call}).toEqual({ status: 403 })`))
+			} else {
+				notes.push(
+					`${row.id}: capability ${name} has no denied case: ${ruledOutBy} needs ${action} in a related dimension, so every caller that passes it is answered the list`,
+				)
+			}
+			continue
 		}
 		const status = access.form === 'on' ? 404 : 403
-		return testCase(
-			`${row.id}: the ${access.dimension} of another scope as capability ${name} is ${status}`,
-			`expect(${call}).toEqual({ status: ${status} })`,
+		cases.push(
+			testCase(
+				`${row.id}: the ${access.dimension} of another scope as capability ${name} is ${status}`,
+				`expect(${call}).toEqual({ status: ${status} })`,
+			),
 		)
-	})
+	}
+	return { cases, notes }
 }
 
 /**
@@ -569,20 +600,24 @@ const publicCases = (row: EndpointRow, artifact: ContractArtifact, fixtures: End
 	]
 }
 
+/** The endpoints of the artifact by id, the order of their cases. */
+const sortedEndpoints = (artifact: ContractArtifact): readonly EndpointRow[] =>
+	[...artifact.endpoints].sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0))
+
 /** The endpoint access test of the application, or `undefined` when no endpoint has an access form to test. */
 const endpointTestBody = (
 	artifact: ContractArtifact,
 	policies: Policies,
 	fixtures: EndpointFixtures,
 	dialect: ApplicationDialect,
-): { readonly body: string; readonly cases: readonly string[] } | undefined => {
-	const cases = [...artifact.endpoints].sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0)).flatMap((
-		row,
-	) => [
-		...endpointCases(row, artifact, policies, fixtures),
-		...capabilityCases(row, fixtures),
-		...publicCases(row, artifact, fixtures),
-	])
+): { readonly body: string; readonly cases: readonly string[]; readonly notes: readonly string[] } | undefined => {
+	const cases: Case[] = []
+	const notes: string[] = []
+	for (const row of sortedEndpoints(artifact)) {
+		const capability = capabilityCases(row, artifact, fixtures)
+		cases.push(...endpointCases(row, artifact, policies, fixtures), ...capability.cases, ...publicCases(row, artifact, fixtures))
+		notes.push(...capability.notes)
+	}
 	if (cases.length === 0) return undefined
 	const database = testDatabaseLines(dialect, '../../db/migrations/')
 	const body = [
@@ -592,6 +627,7 @@ const endpointTestBody = (
 		'// issuer, asks for its own object. A handler bug that needs other data or another order is beyond them; the state a',
 		'// precondition needs is a seed in endpoint-access.fixtures.ts.',
 		'// Do not edit: @fabrika/check compares this file with what the scaffold writes; rerun it after a contract change.',
+		...notes.map((note) => `// Not checked: ${note}.`),
 		'',
 		"import { afterAll, describe, endpointAccessKit, expect, test } from '@fabrika/app/testing/isolation'",
 		database.kit,
@@ -609,13 +645,12 @@ const endpointTestBody = (
 		'}',
 		'',
 	].join('\n')
-	return { body, cases: cases.map((item) => item.name) }
+	return { body, cases: cases.map((item) => item.name), notes }
 }
 
-const generated = async ({ body, cases }: { readonly body: string; readonly cases: readonly string[] }): Promise<GeneratedTest> => ({
-	text: `${await generatedTestHeader(body)}\n${body}`,
-	cases,
-})
+const generated = async (
+	{ body, cases, notes = [] }: { readonly body: string; readonly cases: readonly string[]; readonly notes?: readonly string[] },
+): Promise<GeneratedTest> => ({ text: `${await generatedTestHeader(body)}\n${body}`, cases, notes })
 
 /**
  * Every test the scaffold writes for these policies and, when the application has a contract, its artifact; by path.

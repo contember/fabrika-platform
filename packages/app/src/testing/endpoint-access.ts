@@ -7,6 +7,7 @@
 import {
 	type AccessForm,
 	type Caller,
+	type CapabilitiesRequirement,
 	type ContractArtifact,
 	type EndpointDirectory,
 	endpointDirectory,
@@ -25,6 +26,7 @@ import { basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { z } from 'zod/v4'
 import type { RpcFetch } from '../client/transport'
+import { deniedCaseRuledOutBy } from '../contract/capability-cases'
 import { compileContract } from '../contract/compile'
 import {
 	FILE_INPUT_PART,
@@ -101,9 +103,10 @@ export interface EndpointAccessKit {
 	global(endpoint: string, input: Readonly<Record<string, unknown>>): Promise<ReachOutcome>
 	/**
 	 * One capability of an endpoint of several, refused while every other one passes: the caller holds each other one's
-	 * action in a scope of its own and addresses its object or value there (or, for `over`, holds the action globally).
-	 * For an `on` or `in` capability it also holds the named one's action in its own scope and addresses the other's
-	 * object (404) or value (403); for `over` it holds the named action nowhere (403). `seed` is the named one's.
+	 * action in a scope of its own and addresses its object or value there. For an `on` or `in` capability it also holds
+	 * the named one's action in its own scope and addresses the other's object (404) or value (403); for `over` it holds
+	 * the named action only where the others need it (403). An `over` capability without a denied case
+	 * (`deniedCaseRuledOutBy`) throws. `seed` is the named one's.
 	 */
 	capability(endpoint: string, capability: string, input: Readonly<Record<string, unknown>>, seed?: Seed): Promise<DeniedOutcome>
 	/**
@@ -393,14 +396,16 @@ export function endpointAccessKit<DB, P>(
 		)
 	}
 
-	/** An endpoint of several capabilities, as one `ActionEndpoint` per capability, by its name. */
-	const capabilitiesEndpointOf = (id: string): ReadonlyMap<string, ActionEndpoint> => {
+	/** An endpoint of several capabilities: its requirement, and one `ActionEndpoint` per capability, by its name. */
+	const capabilitiesEndpointOf = (
+		id: string,
+	): { readonly requirement: CapabilitiesRequirement; readonly capabilities: ReadonlyMap<string, ActionEndpoint> } => {
 		const row = kit.artifact.endpoints.find((candidate) => candidate.id === id)
 		const requirement = row?.requirement
 		if (row === undefined || requirement?.kind !== 'capabilities') {
 			throw new Error(`${id} is not an endpoint of the contract with several capabilities`)
 		}
-		return new Map(
+		const capabilities = new Map(
 			Object.entries(requirement.capabilities).map(([name, capability]) => [name, {
 				id: row.id,
 				link: null,
@@ -415,6 +420,7 @@ export function endpointAccessKit<DB, P>(
 				links: [],
 			}]),
 		)
+		return { requirement, capabilities }
 	}
 
 	const globalEndpointOf = (id: string): ActionEndpoint => {
@@ -434,21 +440,14 @@ export function endpointAccessKit<DB, P>(
 		return parent?.mode === 'dimension' ? (parent.container?.dimension ?? parent.dimension) : undefined
 	}
 
-	const callerFor = (
-		row: ActionEndpoint,
-		grants: readonly Grant[],
-		global: readonly { readonly action: string }[] = [],
-	): { readonly caller: TestCaller; readonly fetch: RpcFetch } => {
-		const asGrants: TestGrant<AnyContract>[] = [
-			...grants.map((grant) => ('role' in grant ? { role: grant.role, scope: grant.scope } : { action: grant.action, scope: grant.scope })),
-			...global,
-		]
+	/** A new caller holding `grants`; an action without a scope is held globally. */
+	const callerFor = (row: ActionEndpoint, grants: readonly TestGrant<AnyContract>[]): { readonly caller: TestCaller; readonly fetch: RpcFetch } => {
 		if (row.callers.some((caller) => caller === 'human')) {
-			const caller = kit.testCaller(asGrants)
+			const caller = kit.testCaller(grants)
 			return { caller, fetch: kit.browser(caller) }
 		}
 		if (row.callers.some((caller) => caller === 'machine')) {
-			const caller = kit.testCaller(asGrants, { kind: 'machine' })
+			const caller = kit.testCaller(grants, { kind: 'machine' })
 			return {
 				caller,
 				fetch: (input, init) => {
@@ -951,36 +950,44 @@ export function endpointAccessKit<DB, P>(
 			},
 			async global(endpoint, input) {
 				const row = globalEndpointOf(endpoint)
-				const { status } = await askAs(row, callerFor(row, [], [{ action: row.action }]).fetch, input)
+				const { status } = await askAs(row, callerFor(row, [{ action: row.action }]).fetch, input)
 				// Neither form refuses with 404, so a 404 is the handler's own answer (a row the sampled input names is missing).
 				return status >= 500 || status === 401 || status === 403 ? { answered: false, status } : { answered: true }
 			},
 			async capability(endpoint, capability, input, seed = {}) {
-				const capabilities = capabilitiesEndpointOf(endpoint)
+				const { requirement, capabilities } = capabilitiesEndpointOf(endpoint)
 				const named = capabilities.get(capability)
 				if (named === undefined) {
 					throw new Error(`${endpoint} has no capability '${capability}' (capabilities: ${[...capabilities.keys()].join(', ')})`)
 				}
+				const { access } = named
+				const ruledOutBy = deniedCaseRuledOutBy(requirement.capabilities, capability, kit.artifact.dimensions)
+				if (ruledOutBy !== undefined) {
+					throw new Error(
+						`${endpoint}: capability '${capability}' has no denied case: '${ruledOutBy}' needs its action too, ${named.action}, in a related dimension, so every caller that passes it is answered the list`,
+					)
+				}
 				const grants: Grant[] = []
-				const global: { readonly action: string }[] = []
 				let asked = input
 				for (const [name, other] of capabilities) {
 					if (name === capability) continue
+					// Each other one in a scope of its own, apart from the named one's: a global grant would also meet the named
+					// capability when both share an action. An `over` one lists from any value it is held in, so a fresh uuid does,
+					// a valid key whether the dimension's is text or uuid, and no row of it is seeded.
 					if (other.access.form === 'over') {
-						global.push({ action: other.action })
+						grants.push({ action: other.action, scope: { type: other.access.dimension, value: crypto.randomUUID() } })
 					} else if (other.access.form === 'on' || other.access.form === 'in') {
 						const { own } = await scopesOf(other.action, other.access.dimension, fieldOf(other.input, other.access.from), {}, input)
 						asked = addressing(asked, other.access.from, own)
 						grants.push(...own.grants)
 					}
 				}
-				const { access } = named
 				if (access.form === 'on' || access.form === 'in') {
 					const scopes = await scopesOf(named.action, access.dimension, fieldOf(named.input, access.from), seed, input, pinningOf(endpoint))
 					asked = addressing(asked, access.from, scopes.other)
 					grants.push(...scopes.own.grants)
 				}
-				const { status } = await askAs(named, callerFor(named, grants, global).fetch, asked)
+				const { status } = await askAs(named, callerFor(named, grants).fetch, asked)
 				return { status }
 			},
 		}

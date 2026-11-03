@@ -12,6 +12,7 @@ export {
 	attachmentOutput,
 } from './attachment'
 export { buildArtifact } from './build'
+export { deniedCaseRuledOutBy } from './capability-cases'
 export { compileContract, describeContract } from './compile'
 export {
 	type ConnectSnapshot,

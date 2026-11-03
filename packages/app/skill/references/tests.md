@@ -10,9 +10,11 @@ longer writes. Commit them; never edit, format or import them (`generated-test-h
   every `on` and `over` endpoint, and every `in` endpoint that declares `sql`, answers nothing of another scope; a
   caller with only an endpoint's write action, plus what IAM requires of it (below), reaches its own object (200). An
   `app` or `creates` endpoint refuses a holder of its action in one scope only (403) and answers a global holder. An
-  endpoint of several `capabilities` adds a denied case per capability. A public procedure answers anyone without a
-  credential, or, behind a challenge, refuses a caller without a solved one. A file input is sent as a generated file
-  of its kind, or as the file the fixtures name (`files`, below); a `GET` procedure's input goes in its URL.
+  endpoint of several `capabilities` adds a denied case per capability (none for an `over` one whose action another one
+  needs on its dimension, a container of it or a dimension inside it, which gets a `// Not checked:` line instead). A
+  public procedure answers anyone without a credential, or, behind a challenge, refuses a caller without a solved one.
+  A file input is sent as a generated file of its kind, or as the file the fixtures name (`files`, below); a `GET`
+  procedure's input goes in its URL.
 - Their kit stands in for IAM, as `testKit` does (below): it creates a scope, assigns or invites a member and issues a
   link under IAM's rules for the caller's grants. A repeated invitation answers the open one, `resend` restarts its
   7 days, and an organization's address is refused for an external role (`internal_mailbox`). So the caller of an endpoint with the dimension's `members.manage`

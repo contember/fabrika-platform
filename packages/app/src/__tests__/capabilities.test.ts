@@ -12,6 +12,9 @@ import {
 	compileContract,
 	ContractError,
 	type Declared,
+	defineApp,
+	defineVocabulary,
+	deniedCaseRuledOutBy,
 	describeContract,
 	type EndpointContext,
 	type KitTypes,
@@ -21,11 +24,14 @@ import {
 import { type Ref, serve, type Within } from '@fabrika/app/implement'
 import { testKit } from '@fabrika/app/testing'
 import { endpointAccessKit } from '@fabrika/app/testing/isolation'
-import type { SchemaShape } from '@fabrika/auth-core'
-import { scoped } from '@fabrika/db'
-import { tablePolicies } from '@fabrika/db/tables'
+import type { CapabilityRequirement, SchemaShape } from '@fabrika/auth-core'
+import { scoped, type TypedColumnList } from '@fabrika/db'
+import { defineTables, tablePolicies } from '@fabrika/db/tables'
 import { testDatabase } from '@fabrika/db/testing'
 import { afterAll, describe, expect, test } from 'bun:test'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { z } from 'zod/v4'
 import { app } from './members-fixture/src/app-kit'
 import { tables } from './members-fixture/src/db/tables'
@@ -74,9 +80,58 @@ const copies = app.group({ callers: ['human'] }, (r) => ({
 		const source = await ctx.db.on(ctx.capabilities.source).get()
 		return ctx.db.in(ctx.capabilities.into).deals.insert({ title: `Copy of ${source.title}` })
 	}),
+	// One action under two capabilities: the deal it starts from, and every deal of the orgs the caller reads.
+	related: r.query({
+		input: z.strictObject({ rootId: z.uuid() }),
+		output: z.strictObject({ root: z.string(), deals: z.int() }),
+		access: {
+			capabilities: {
+				root: { action: 'crm.read', on: 'deal', from: 'rootId' },
+				rest: { action: 'crm.read', over: 'org' },
+			},
+		},
+	}).handle(async ({ ctx }) => {
+		const root = await ctx.db.on(ctx.capabilities.root).get()
+		const deals = await ctx.db.over(ctx.capabilities.rest).deals.list()
+		return { root: root.title, deals: deals.items.length }
+	}),
 }))
 
 const contract = app.contract((c) => ({ api: c.rpc('/api', { copies }) }))
+
+// Two dimensions in neither one's chain: a caller holding the shared action on its project only is refused the list over
+// teams, so the `over` capability keeps its denied case. A team's row has a column the seeder cannot fill, and the
+// project case still runs: another `over` capability is held in a fresh value, and no row of its dimension is seeded.
+const boardsVocabulary = defineVocabulary({
+	app: 'boards',
+	dimensions: { project: {}, team: {} },
+	actions: { 'boards.read': 'Read boards' },
+	roles: { reader: { grants: ['boards.read'] } },
+})
+interface BoardsDB {
+	teams: { id: string; settings: unknown }
+}
+const boardsColumns: TypedColumnList<BoardsDB> = { teams: { columns: ['id', 'settings'], foreignKeys: [] } }
+const boardsTables = defineTables(boardsVocabulary, boardsColumns)({
+	teams: { scope: { dimension: 'team' }, actions: { read: 'boards.read' } },
+})
+const unrelated = defineApp(boardsVocabulary)
+const boards = unrelated.group({ callers: ['human'] }, (r) => ({
+	read: r.query({
+		input: z.strictObject({ projectId: z.string() }),
+		output: z.strictObject({ project: z.string(), teams: z.int() }),
+		access: {
+			capabilities: {
+				project: { action: 'boards.read', on: 'project', from: 'projectId' },
+				teams: { action: 'boards.read', over: 'team' },
+			},
+		},
+	}).handle(({ ctx }) => ({
+		project: ctx.capabilities.project.value,
+		teams: ctx.capabilities.teams.values === 'all' ? 0 : ctx.capabilities.teams.values.length,
+	})),
+}))
+const unrelatedContract = unrelated.contract((c) => ({ api: c.rpc('/api', { boards }) }))
 
 describe('several capabilities in the artifact', () => {
 	test('the endpoint requires every capability, by name, each with its own access form', () => {
@@ -126,6 +181,33 @@ describe('several capabilities in the artifact', () => {
 	})
 })
 
+describe('which capability has no denied case', () => {
+	const dimensions = {
+		org: { in: null, creator: null, members: null },
+		company: { in: 'org', creator: null, members: null },
+		deal: { in: 'company', creator: null, members: null },
+		team: { in: 'org', creator: null, members: null },
+		project: { in: null, creator: null, members: null },
+	}
+	const over = (dimension: string, action = 'crm.read'): CapabilityRequirement => ({ action, access: { form: 'over', dimension } })
+	const on = (dimension: string, action = 'crm.read'): CapabilityRequirement => ({ action, access: { form: 'on', dimension, from: 'id' } })
+
+	test.each<[string, CapabilityRequirement, string | undefined]>([
+		['the same dimension', on('company'), 'other'],
+		['a dimension inside it', on('deal'), 'other'],
+		['a container of it', over('org'), 'other'],
+		['a sibling under one container', on('team'), undefined],
+		['an unrelated dimension', on('project'), undefined],
+		['another action', on('deal', 'deals.write'), undefined],
+	])('an over capability, and another of its action on %s', (_name, other, expected) => {
+		expect(deniedCaseRuledOutBy({ listed: over('company'), other }, 'listed', dimensions)).toBe(expected)
+	})
+
+	test('an on or in capability always has one', () => {
+		expect(deniedCaseRuledOutBy({ read: on('deal'), listed: over('org') }, 'read', dimensions)).toBeUndefined()
+	})
+})
+
 const postgres = await testDatabase({ migrations: new URL('./members-fixture/db/migrations/', import.meta.url), label: 'capabilities.test.ts' })
 afterAll(() => postgres?.close())
 
@@ -163,5 +245,31 @@ describe.skipIf(postgres === null)('several capabilities through the proxy decis
 		const input = { sourceId: crypto.randomUUID(), companyId: 'unused' }
 		expect(await access.capability('api.copies.copy', 'source', input)).toEqual({ status: 404 })
 		expect(await access.capability('api.copies.copy', 'into', input)).toEqual({ status: 403 })
+	})
+
+	test('two capabilities of one action: a deal of another org is 404, while the other capability holds the action in an org of its own', async () => {
+		expect(await access.capability('api.copies.related', 'root', { rootId: crypto.randomUUID() })).toEqual({ status: 404 })
+	})
+
+	test('an over capability whose action another one needs in a related dimension has no denied case: every caller that passes that one is answered the list', async () => {
+		await expect(access.capability('api.copies.related', 'rest', { rootId: crypto.randomUUID() })).rejects.toThrow(
+			"capability 'rest' has no denied case: 'root' needs its action too, crm.read, in a related dimension",
+		)
+	})
+
+	test('two capabilities of one action on unrelated dimensions: each keeps its denied case, a project of another scope 404, a caller without a team 403, whatever a team row needs', async () => {
+		const migrations = mkdtempSync(join(tmpdir(), 'capabilities-boards-'))
+		writeFileSync(join(migrations, '20261103120000_teams.sql'), 'create table teams (id text primary key, settings jsonb not null);\n')
+		const boardsDatabase = await testDatabase({ migrations, label: 'capabilities.test.ts boards' })
+		rmSync(migrations, { recursive: true, force: true })
+		if (boardsDatabase === null) throw new Error('the Postgres of this suite is gone')
+		try {
+			const boardsAccess = endpointAccessKit(serve(unrelatedContract, { database: null }), boardsTables, boardsDatabase)
+			await expect(boardsDatabase.seedWorlds(boardsTables, 'teams')).rejects.toThrow('cannot fill teams.settings')
+			expect(await boardsAccess.capability('api.boards.read', 'project', { projectId: 'unused' })).toEqual({ status: 404 })
+			expect(await boardsAccess.capability('api.boards.read', 'teams', { projectId: 'unused' })).toEqual({ status: 403 })
+		} finally {
+			await boardsDatabase.close()
+		}
 	})
 })

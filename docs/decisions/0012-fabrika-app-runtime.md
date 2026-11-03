@@ -424,7 +424,8 @@ input and the HTTP shape (§11).
   in declared order, the first refusal answering (`on` 404, `in` and `over` 403); the handler reads
   `ctx.capabilities.<name>` and binds each with `ctx.db.on`, `.in` or `.over`. An endpoint of several capabilities has
   no `ctx.target`, `ctx.within`, `ctx.db.app`, members or links. The generated tests add a denied case per
-  capability. `creates`, `app` and an export take no `capabilities`.
+  capability, except an `over` one whose action another one needs on its dimension, a container of it or a dimension
+  inside it. `creates`, `app` and an export take no `capabilities`.
 
 `capabilities` removes one cause of off-road reach, not all. Reads across tables (joins, filters over related tables,
 aggregates) and locks over many rows still need `sql`.
