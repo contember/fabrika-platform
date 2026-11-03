@@ -15,6 +15,7 @@ import { compileContract } from '../contract'
 import type { RequestExecutionContext } from '../fetch'
 import { testKit } from '../testing'
 import { bootApp, environment, frameworkEnvFor, ORIGIN, workloadKey, workloadTokensFor } from './fixtures/implement/harness'
+import { awayFromMinuteEdge } from './fixtures/minute-edge'
 import { delayedDatabase, type StatementHooks } from './fixtures/public-kick/delayed-database'
 import { contract } from './fixtures/public-kick/fabrika.contract'
 import { migration } from './fixtures/public-kick/migration'
@@ -517,6 +518,7 @@ describe.skipIf(!hasPostgres)('a public procedure kicks its job', () => {
 	})
 
 	test('a refused input, a filled honeypot, a failed challenge and a rate-limited request kick nothing', async () => {
+		await awayFromMinuteEdge(url)
 		const running = start()
 		expect((await running.submit('signup', { email: 'not an address' })).status).toBe(400)
 		expect((await running.submit('signup', { email: 'bot@example.test', website: 'https://spam.example' })).body).toEqual(RECEIVED)
@@ -526,5 +528,5 @@ describe.skipIf(!hasPostgres)('a public procedure kicks its job', () => {
 		await running.settled()
 		expect(running.world.runs).toEqual([])
 		expect(await leaseOf()).toBeUndefined()
-	})
+	}, 20_000)
 })

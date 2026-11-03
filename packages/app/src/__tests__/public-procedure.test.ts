@@ -15,6 +15,7 @@ import { contractProxyTable } from '@fabrika/proxy-core/manifest'
 import { afterAll, describe, expect, test } from 'bun:test'
 import { join } from 'node:path'
 import { z } from 'zod/v4'
+import { awayFromMinuteEdge } from './fixtures/minute-edge'
 import { contract } from './public-fixture/fabrika.contract'
 import { app } from './public-fixture/src/app-kit'
 import { tables } from './public-fixture/src/db/tables'
@@ -138,6 +139,7 @@ describe('the artifact of a public procedure', () => {
 	})
 })
 
+const POSTGRES_URL = process.env['FABRIKA_TEST_POSTGRES_URL'] ?? ''
 const postgres = await testDatabase({ migrations: join(import.meta.dir, 'public-fixture', 'db', 'migrations'), label: 'public-procedure.test.ts' })
 
 afterAll(async () => {
@@ -189,11 +191,12 @@ if (postgres !== null) {
 		})
 
 		test('its bucket refuses past its declared rate, before the body is read', async () => {
+			await awayFromMinuteEdge(POSTGRES_URL)
 			expect((await post('intake.limited', { name: 'a', website: '' })).status).toBe(200)
 			expect((await post('intake.limited', { name: 'b', website: '' })).status).toBe(200)
 			const refused = await post('intake.limited', 'not even an object')
 			expect(refused.status).toBe(429)
-		})
+		}, 20_000)
 
 		test('the data layer refuses an update, and ctx.app an action it does not declare', async () => {
 			expect((await post('intake.overreach', {})).status).toBe(500)
@@ -204,10 +207,11 @@ if (postgres !== null) {
 			const add = (caller: typeof reader) =>
 				kit.browser(caller)('/api/staff.addProduct', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"name":"Chair"}' })
 			const writer = kit.testCaller([{ action: 'catalog.write' }])
+			await awayFromMinuteEdge(POSTGRES_URL)
 			const statuses = [await add(writer), await add(writer), await add(writer), await add(writer)].map((response) => response.status)
 			expect(statuses).toEqual([200, 200, 200, 429])
 			expect((await add(kit.testCaller([{ action: 'catalog.write' }]))).status).toBe(200)
-		})
+		}, 20_000)
 
 		test("the generated case's kit asks a public procedure as anyone", async () => {
 			const access = endpointAccessKit(serve(contract, { database: scoped(tables) }), tables, postgres)

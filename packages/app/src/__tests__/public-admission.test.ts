@@ -12,6 +12,7 @@ import { BootError } from '../implement/boot'
 import { bootApp, environment, frameworkEnvFor, send, type Sent } from './fixtures/implement/harness'
 import { migration } from './fixtures/intake/migration'
 import { intakeApp } from './fixtures/intake/src/app'
+import { awayFromMinuteEdge } from './fixtures/minute-edge'
 
 const URL_VAR = 'FABRIKA_TEST_POSTGRES_URL'
 const url = process.env[URL_VAR] ?? ''
@@ -42,15 +43,6 @@ async function admin<T>(work: (sql: SQL) => Promise<T>): Promise<T> {
 async function count(table: string, where = 'true'): Promise<number> {
 	const [row] = await admin((sql) => sql.unsafe(`select count(*)::int as n from ${schema}.${table} where ${where}`))
 	return Number(row?.n)
-}
-
-/** Every counter lives in one database minute; a test that started a second before it ends would see two. */
-async function awayFromMinuteEdge(): Promise<void> {
-	const [row] = await admin((sql) => sql.unsafe('select extract(second from now())::float8 as second'))
-	const second = Number(row?.second)
-	if (second > 55) {
-		await Bun.sleep((61 - second) * 1000)
-	}
 }
 
 interface Siteverify {
@@ -119,7 +111,7 @@ beforeEach(async () => {
 			`delete from ${schema}.fabrika_form_admissions; delete from ${schema}.fabrika_form_challenges; delete from ${schema}.applications; delete from ${schema}.messages`,
 		)
 	)
-	await awayFromMinuteEdge()
+	await awayFromMinuteEdge(url)
 }, 20_000)
 
 afterAll(async () => {

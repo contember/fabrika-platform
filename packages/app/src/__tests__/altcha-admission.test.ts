@@ -23,9 +23,11 @@ import { contract } from './fixtures/altcha/fabrika.contract'
 import { migration } from './fixtures/altcha/migration'
 import { tables } from './fixtures/altcha/src/db/tables'
 import { bootApp, environment, frameworkEnvFor, send, type Sent } from './fixtures/implement/harness'
+import { awayFromMinuteEdge } from './fixtures/minute-edge'
 
 const migrations = mkdtempSync(join(tmpdir(), 'fabrika-altcha-admission-'))
 writeFileSync(join(migrations, '20261021090000_intake.sql'), migration)
+const POSTGRES_URL = process.env['FABRIKA_TEST_POSTGRES_URL'] ?? ''
 const postgres = await testDatabase({ migrations, label: 'altcha-admission.test.ts' })
 
 // A test may first wait out the end of a database minute.
@@ -66,7 +68,7 @@ function register(app: ContractApp, challengeToken: string, address = '203.0.113
 
 async function admin<T>(work: (sql: SQL, schema: string) => Promise<T>): Promise<T> {
 	if (postgres === null) throw new Error('no database')
-	const sql = new SQL({ url: process.env['FABRIKA_TEST_POSTGRES_URL'] ?? '', adapter: 'postgres', max: 1 })
+	const sql = new SQL({ url: POSTGRES_URL, adapter: 'postgres', max: 1 })
 	try {
 		return await work(sql, postgres.schema)
 	} finally {
@@ -144,6 +146,7 @@ if (postgres !== null) {
 		})
 
 		test('the issuing endpoint has its own bucket per client, twice the procedure’s', async () => {
+			await awayFromMinuteEdge(POSTGRES_URL)
 			const app = start()
 			const statuses: number[] = []
 			// Twice the procedure's 20 per client.
