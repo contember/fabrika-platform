@@ -291,6 +291,16 @@ describeDb('claim', () => {
 		expect(rows.map((row) => row['recipient'])).toEqual(['b@example.com'])
 	})
 
+	test('a claim takes a null test on a nullable column its action reads', async () => {
+		await queueMail(['a@example.com', 'b@example.com'])
+		await admin((sql) => sql.unsafe(`update ${schema}.outbox set sent_note = 'bounced' where recipient = 'a@example.com'`))
+		const send = jobHandles().app(job.app('mail.send'))
+		const unsent = claimed(await call(send, 'outbox.claim', { limit: 10, where: [['sent_note', 'is', null]] }))
+		expect(unsent.map((row) => row['recipient'])).toEqual(['b@example.com'])
+		const noted = claimed(await call(send, 'outbox.claim', { limit: 10, where: [['sent_note', 'is not', null]] }))
+		expect(noted.map((row) => row['recipient'])).toEqual(['a@example.com'])
+	})
+
 	test('done rows are never claimed again, and an expectVersion mismatch writes nothing', async () => {
 		await queueMail(['a@example.com', 'b@example.com'])
 		const [first, second] = claimed(await call(jobHandles().app(job.app('mail.send')), 'outbox.claim', { limit: 10 }))

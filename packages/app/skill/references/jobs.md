@@ -220,6 +220,8 @@ for (const row of await ctx.db.app('mail.send').outbox.claim({ limit: 50 })) {
   has come and whose attempts are below `maxAttempts` (10 by default), `for update skip locked`. It adds one attempt
   and moves `<due>` by the backoff: the job's schedule period (60 s without one), doubled per attempt, at most 30
   days. Each row answers its columns, its new `version` and `ref`.
+- `where` takes the conditions of a `list` (`references/endpoint.md`), a null test included: `[['result', 'is', null]]`
+  claims only the rows without a result.
 - Claim through the capability you read the table with: `ctx.db.app('<action>').<table>` for an application table,
   `ctx.db.over(ctx.within('<action>', '<dimension>')).<table>` for a scoped one. The action is the table's `update`
   action. `claim` runs only in a job and never inside `ctx.transaction`.

@@ -1,8 +1,9 @@
 // A queue claim re-arms its job (ADR-0065 §5): after a claim that leased rows, one `claim` wake at the earliest due its
 // own conditions, scope and attempt limit will next find, never sooner than a second after it; a claim that took its full
-// limit makes it due at once; a claim that found nothing writes none. Rows the claim cannot take (another `where`, past
-// their attempts) never pull the wake forward, so the job does not loop on them. On a REAL Postgres (skips cleanly
-// without FABRIKA_TEST_POSTGRES_URL) and over bun:sqlite under the Cloudflare object's alarm.
+// limit makes it due at once; a claim that found nothing writes none. Rows the claim cannot take (another `where`, a
+// result its null test excludes, past their attempts) never pull the wake forward, so the job does not loop on them.
+// On a REAL Postgres (skips cleanly without FABRIKA_TEST_POSTGRES_URL) and over bun:sqlite under the Cloudflare
+// object's alarm.
 
 import { defineApp, defineVocabulary } from '@fabrika/app/contract'
 import { serve } from '@fabrika/app/implement'
@@ -83,7 +84,7 @@ const claims: { limit: number; then: string | null; claimed: string[][] } = { li
 // Daily, so a claimed row's backoff (the schedule's period) lies a day ahead of every row a test places.
 const render = app.cron('0 3 * * *', { actions: ['reports.render'] }).handle(async ({ ctx }) => {
 	const queue = ctx.db.over(ctx.within('reports.render', 'deal')).report_requests
-	const rows = await queue.claim({ limit: claims.limit, where: [['kind', '=', 'summary']] })
+	const rows = await queue.claim({ limit: claims.limit, where: [['kind', '=', 'summary'], ['result', 'is', null]] })
 	claims.claimed.push(rows.map((row) => row.id).sort())
 	if (claims.then !== null) {
 		const more = await queue.claim({ limit: 5, where: [['kind', '=', claims.then]] })
@@ -96,15 +97,16 @@ const contract = app.contract(() => ({ jobs: { render } }))
 const SECOND = 1_000
 const MINUTE = 60 * SECOND
 
-/** One queue row: its kind, its due time (`null` when done) and how many claims it has had. */
+/** One queue row: its kind, its due time (`null` when done), how many claims it has had and its result. */
 interface Row {
 	readonly id: string
 	readonly kind: 'summary' | 'detail'
 	readonly due: number | null
 	readonly attempts?: number
+	readonly result?: string
 }
 
-/** The rows of the main case at `now`: one the claim takes, one it takes later, and three it never takes. */
+/** The rows of the main case at `now`: one the claim takes, one it takes later, and five it never takes. */
 function rowsAt(now: number): readonly Row[] {
 	return [
 		{ id: 'r1', kind: 'summary', due: now - MINUTE },
@@ -115,6 +117,9 @@ function rowsAt(now: number): readonly Row[] {
 		// Past its attempts: never due again.
 		{ id: 'r5', kind: 'summary', due: now + MINUTE, attempts: MAX_ATTEMPTS },
 		{ id: 'r6', kind: 'summary', due: null },
+		// With a result, one due and one due before r3: the null test keeps both from the claim and from its re-arm.
+		{ id: 'r9', kind: 'summary', due: now - 30 * SECOND, result: 'rendered' },
+		{ id: 'r10', kind: 'summary', due: now + MINUTE, result: 'rendered' },
 	]
 }
 
@@ -168,8 +173,12 @@ async function admin<T>(statement: string): Promise<T[]> {
 const pgTime = (time: number | null): string => (time === null ? 'null' : `'${new Date(time).toISOString()}'::timestamptz`)
 
 async function placeRows(rows: readonly Row[]): Promise<void> {
-	const values = rows.map((row) => `('${row.id}', 'd1', 'o1', '${row.kind}', ${row.attempts ?? 0}, ${pgTime(row.due)}, 1)`)
-	await admin(`insert into ${schema}.report_requests (id, deal_id, org_id, kind, attempts, next_attempt_at, version) values ${values.join(', ')}`)
+	const values = rows.map((row) =>
+		`('${row.id}', 'd1', 'o1', '${row.kind}', ${row.result === undefined ? 'null' : `'${row.result}'`}, ${row.attempts ?? 0}, ${pgTime(row.due)}, 1)`
+	)
+	await admin(
+		`insert into ${schema}.report_requests (id, deal_id, org_id, kind, result, attempts, next_attempt_at, version) values ${values.join(', ')}`,
+	)
 }
 
 async function pgClaimWakes(): Promise<ClaimWake[]> {
@@ -378,10 +387,13 @@ async function sqlite(): Promise<Sqlite> {
 
 function sqliteRows(database: BunDatabase, rows: readonly Row[]): void {
 	for (const row of rows) {
-		database.query("insert into report_requests (id, deal_id, org_id, kind, attempts, next_attempt_at, version) values (?, 'd1', 'o1', ?, ?, ?, 1)")
+		database.query(
+			"insert into report_requests (id, deal_id, org_id, kind, result, attempts, next_attempt_at, version) values (?, 'd1', 'o1', ?, ?, ?, ?, 1)",
+		)
 			.run(
 				row.id,
 				row.kind,
+				row.result ?? null,
 				row.attempts ?? 0,
 				row.due === null ? null : new Date(row.due).toISOString(),
 			)

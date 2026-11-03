@@ -1,4 +1,5 @@
-// A queue table, an idempotent insert and a table two actions read, pinned as types: tsc fails when one drifts.
+// A queue table, an idempotent insert, a table two actions read and the conditions list, count and claim take, pinned as
+// types: tsc fails when one drifts.
 
 import type { ColumnType, Generated } from 'kysely'
 import type { RowRef } from '../capability'
@@ -105,6 +106,10 @@ type Inserted<O> = Outbox<'mail.queue', 'mutation'>['insert'] extends {
 	(values: infer _X): infer P
 } ? (O extends 'nothing' ? N : O extends 'update' ? U : P)
 	: never
+type ConditionOf<O> = O extends { readonly where?: readonly (infer C)[] } ? C : never
+type ListCondition = ConditionOf<NonNullable<Parameters<Reports<'crm.read', 'query'>['list']>[0]>>
+type CountCondition = ConditionOf<NonNullable<Parameters<Reports<'crm.read', 'query'>['count']>[0]>>
+type ClaimCondition = ConditionOf<Parameters<Reports<'reports.render', 'job'>['claim']>[0]>
 
 export type QueueTypes = [
 	// A job claims a queue table through a capability of its update action; each row carries its version and ref.
@@ -165,4 +170,13 @@ export type QueueTypes = [
 	Expect<Equal<keyof RowOf<typeof tables, 'products', 'crm.read'>, 'id' | 'name' | 'cost'>>,
 	Expect<Equal<keyof RowOf<typeof tables, 'products', 'catalog.read'>, 'id' | 'name'>>,
 	Expect<Equal<keyof RowOf<typeof tables, 'products'>, 'id' | 'name'>>,
+	// A nullable column takes a null test in list, count and claim; a column that is never null takes none, and = takes no null.
+	Expect<Equal<readonly ['result', 'is', null] extends ListCondition ? true : false, true>>,
+	Expect<Equal<readonly ['result', 'is not', null] extends ListCondition ? true : false, true>>,
+	Expect<Equal<readonly ['result', 'is', null] extends CountCondition ? true : false, true>>,
+	Expect<Equal<readonly ['result', 'is', null] extends ClaimCondition ? true : false, true>>,
+	Expect<Equal<readonly ['kind', 'is', null] extends ListCondition ? true : false, false>>,
+	Expect<Equal<readonly ['kind', 'is not', null] extends ClaimCondition ? true : false, false>>,
+	Expect<Equal<readonly ['result', 'is', 'x'] extends ListCondition ? true : false, false>>,
+	Expect<Equal<readonly ['result', '=', null] extends ListCondition ? true : false, false>>,
 ]

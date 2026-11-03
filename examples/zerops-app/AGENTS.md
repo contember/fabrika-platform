@@ -1093,9 +1093,10 @@ picker of the org a new project goes into; an `'all'` caller types the org inste
 - `list({ where, orderBy, limit, after })` answers `{ items, next }`: a keyset page of at most `limit` rows (50 by
   default, 500 at most). Pass `next` back as `after`; it is `null` on the last page.
 - `where` is AND of `[column, operator, value]`: `=`, `<>`, `<`, `<=`, `>`, `>=`, `in` and `not in` (a list),
-  `like`, `ilike`, `not like`, `not ilike`, `contains`. Optional filters are conditional spreads, each tuple
+  `like`, `ilike`, `not like`, `not ilike`, `contains`, and `is` and `is not` with `null` on a nullable column
+  (`['processed_at', 'is', null]`). Optional filters are conditional spreads, each tuple
   `as const` (`list` in `SKILL.md`): `...(input.status === undefined ? [] : [['status', '=', input.status] as const])`.
-  There is no `is null` and no OR: write that in `ctx.sql`.
+  There is no OR: write that in `ctx.sql`. `count` and a queue table's `claim` (`references/jobs.md`) take the same `where`.
 - `orderBy` is `[[column, 'asc' | 'desc']]`; the key is added last as the tiebreak.
 - `count({ where })` answers a number. `aggregate({ groupBy, count, sum, min, max })` takes lists of column names
   and answers one row per group: the `groupBy` columns, `count` as a string (Postgres `bigint`), and `sum_<column>`,
@@ -1325,7 +1326,7 @@ export const workloadRows = (
 
 ## Raw SQL: `sql: 'read'`
 
-Raw SQL is legitimate for a join, a report, an `OR` or `IS NULL` filter, or a bulk write. Declare it on the endpoint;
+Raw SQL is legitimate for a join, a report, an `OR` filter, or a bulk write. Declare it on the endpoint;
 `ctx.sql` exists only there. It runs on Postgres and, on Cloudflare, on SQLite (the rules of each are below).
 
 ```ts src/reports/endpoints.ts
@@ -2480,6 +2481,8 @@ for (const row of await ctx.db.app('mail.send').outbox.claim({ limit: 50 })) {
   has come and whose attempts are below `maxAttempts` (10 by default), `for update skip locked`. It adds one attempt
   and moves `<due>` by the backoff: the job's schedule period (60 s without one), doubled per attempt, at most 30
   days. Each row answers its columns, its new `version` and `ref`.
+- `where` takes the conditions of a `list` (`references/endpoint.md`), a null test included: `[['result', 'is', null]]`
+  claims only the rows without a result.
 - Claim through the capability you read the table with: `ctx.db.app('<action>').<table>` for an application table,
   `ctx.db.over(ctx.within('<action>', '<dimension>')).<table>` for a scoped one. The action is the table's `update`
   action. `claim` runs only in a job and never inside `ctx.transaction`.
