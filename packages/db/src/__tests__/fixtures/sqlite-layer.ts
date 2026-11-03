@@ -1,8 +1,8 @@
 // A small application on SQLite (ADR-0065): its migration, the column list `generateSqliteSchema` renders for it (the
-// SQLite suite renders it again and compares), and its policies. A dimension table with a timestamp, a boolean, a day
-// and a nullable integer, and a child table under it.
+// SQLite suite renders it again and compares), and its policies. A dimension table with a timestamp, a boolean, a day,
+// a nullable integer and a JSON column, and a child table under it.
 
-import type { TypedColumnList } from '@fabrika/db'
+import type { JsonColumnValue, TypedColumnList } from '@fabrika/db'
 import type { ColumnType, Generated } from 'kysely'
 import { defineTables } from '../../policy'
 
@@ -16,6 +16,7 @@ create table projects (
 	due_on date,
 	starts_at timestamp,
 	rank integer,
+	settings jsonb,
 	version integer not null,
 	created_at timestamp not null default (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
 	unique (id, organization_id)
@@ -53,6 +54,7 @@ export interface ProjectsTable {
 	due_on: string | null
 	starts_at: ColumnType<Date | null, Date | string | null, Date | string | null>
 	rank: number | null
+	settings: ColumnType<unknown | null, JsonColumnValue | null, JsonColumnValue | null>
 	version: number
 	created_at: ColumnType<Date, Date | string | undefined, Date | string>
 }
@@ -99,6 +101,7 @@ export const sqliteColumns: TypedColumnList<DB> = {
 			'due_on',
 			'starts_at',
 			'rank',
+			'settings',
 			'version',
 			'created_at',
 		],
@@ -112,6 +115,7 @@ export const sqliteColumns: TypedColumnList<DB> = {
 		dates: ['due_on'],
 		timestamps: ['starts_at', 'created_at'],
 		booleans: ['archived'],
+		json: ['settings'],
 	},
 }
 
@@ -135,8 +139,8 @@ export const sqliteTables = defineTables(sqliteVocabulary, sqliteColumns)({
 	projects: {
 		scope: { dimension: 'project' },
 		actions: { read: 'projects.read', insert: 'projects.write', update: 'projects.write', delete: 'projects.write' },
-		insert: ['name', 'archived', 'due_on', 'starts_at', 'rank'],
-		update: ['name', 'archived', 'due_on', 'starts_at', 'rank'],
+		insert: ['name', 'archived', 'due_on', 'starts_at', 'rank', 'settings'],
+		update: ['name', 'archived', 'due_on', 'starts_at', 'rank', 'settings'],
 		version: 'version',
 	},
 	events: {

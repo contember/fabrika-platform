@@ -4,7 +4,7 @@
 
 import type { Selectable, Updateable } from 'kysely'
 import type { RowRef } from './capability'
-import type { ConditionTuple } from './description'
+import type { ComparableColumn, ConditionTuple } from './description'
 import type { FileReference } from './file-references'
 import type {
 	ActionOf,
@@ -240,7 +240,7 @@ type InsertValuesOf<E extends IndexedTable> = { [C in keyof E['insert']]: E['ins
 
 /** `onConflict` of an insert: the columns of a unique index the migrations create, and what a conflict does. */
 export interface InsertConflict<E extends IndexedTable, M extends 'nothing' | 'update'> {
-	readonly onConflict: { readonly columns: readonly (keyof E['row'] & string)[]; readonly do: M }
+	readonly onConflict: { readonly columns: readonly ComparableColumn<E['row']>[]; readonly do: M }
 }
 
 /**
@@ -336,7 +336,7 @@ export interface ListPage<Row> {
 	readonly next: string | null
 }
 
-export type OrderTerm<Row> = { [C in keyof Row & string]: readonly [C, 'asc' | 'desc'] }[keyof Row & string]
+export type OrderTerm<Row> = { [C in ComparableColumn<Row>]: readonly [C, 'asc' | 'desc'] }[ComparableColumn<Row>]
 
 export interface ListOptions<Row> {
 	readonly where?: readonly ConditionTuple<Row>[]

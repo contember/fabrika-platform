@@ -344,6 +344,25 @@ describe('an application table', () => {
 	})
 })
 
+describe('a JSON column', () => {
+	const withJson = (json: readonly string[]) => {
+		const list = listOf({ ...columns, notes: [...columns.notes, 'details'] }, keys)
+		return readTables({ ...list, notes: { ...list['notes'], json } }, { notes, note_comments: comments, countries }, vocabulary)
+	}
+
+	test("is read from the column list's json, and must be one of the table's columns", () => {
+		expect(modelOf(tableModels(withJson(['details'])), 'notes')?.json).toEqual({ details: true })
+		expect(() => withJson(['missing'])).toThrow(PolicyError)
+	})
+
+	test('is never a column the layer stamps', () => {
+		expect(() => withJson(['version'])).toThrow('notes: version is a JSON column, which the layer cannot stamp as the version; give it a scalar type')
+		expect(() => withJson(['workspace_id'])).toThrow(
+			'notes: workspace_id is a JSON column, which the layer cannot stamp as the workspace containment column',
+		)
+	})
+})
+
 describe('actions that reach every row app-wide besides the read action', () => {
 	const vocabularyOf = { dimensions: vocabulary.dimensions, actions: { ...actions, 'notes.export': 'Export', 'notes.count': 'Count' } }
 	const defineWith = (policies: unknown) => readTables(listOf(columns, keys), policies, vocabularyOf)

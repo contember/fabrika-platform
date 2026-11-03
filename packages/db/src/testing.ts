@@ -33,6 +33,7 @@ import {
 	probeTable,
 	randomHex,
 	removalLimit,
+	seedBinding,
 	type SeedColumn,
 	type SeedingBackend,
 	type SeedLimitError,
@@ -108,6 +109,8 @@ function sampleOf(table: string, column: CatalogColumn): Primitive {
 	if (type === 'timestamp' || type === 'timestamptz') return new Date().toISOString()
 	if (type === 'time' || type === 'timetz') return '12:00:00'
 	if (type === 'interval') return '1 hour'
+	// A JSON string: a seed value has no object form, and `seedBinding` writes it as the layer would.
+	if (type === 'jsonb') return 'sample'
 	throw typeLimit(table, column.column_name, type)
 }
 
@@ -122,6 +125,7 @@ function seedColumn(column: CatalogColumn): SeedColumn {
 		text: column.type_type !== 'e' && TEXT_TYPES.has(column.type_name),
 		uuid: column.type_name === 'uuid',
 		number: column.type_type !== 'e' && NUMBER_TYPES.has(column.type_name),
+		json: column.type_type === 'b' && column.type_category !== 'A' && column.type_name === 'jsonb',
 		sample: () => sampleOf(column.table_name, column),
 	}
 }
@@ -382,8 +386,9 @@ export async function testDatabase(options: TestDatabaseOptions): Promise<TestDa
 		await tx.unsafe(`WITH ${deletes.join(', ')} SELECT 1`, tables.map(([, ctids]) => tidArray(ctids)))
 	}
 	let types: Promise<ReadonlyMap<string, string>> | undefined
+	const seedColumns = catalog.map(seedColumn)
 	const backend: SeedingBackend = {
-		columns: catalog.map(seedColumn),
+		columns: seedColumns,
 		checks: async () =>
 			checkRows.parse(await lock.unsafe(CHECK_QUERY, [schema])).map((row): CheckConstraint => ({
 				name: row.name,
@@ -436,7 +441,7 @@ export async function testDatabase(options: TestDatabaseOptions): Promise<TestDa
 				: `INSERT INTO ${target} (${names.map(quoted).join(', ')}) VALUES (${placeholders.join(', ')}) RETURNING *`
 			let stored: unknown
 			try {
-				stored = await seeder.unsafe(statement, names.map((name) => row.get(name) ?? null))
+				stored = await seeder.unsafe(statement, names.map((name) => seedBinding(seedColumns, table, name, row.get(name) ?? null)))
 			} catch (error) {
 				throw seedLimit(error, table) ?? error
 			}

@@ -160,7 +160,7 @@ describe.skipIf(!hasPostgres)('a column write action', () => {
 		await expect(mutate((handles) => call(handles.target(task('tasks.assign', id), 'on'), 'update', { title: 'x' }, { expectVersion: 1 })))
 			.rejects.toThrow('title is not an update column of tasks (update columns: assignee)')
 		await expect(mutate((handles) => call(handles.target(task('tasks.write', id), 'on'), 'update', { assignee: 'x' }, { expectVersion: 1 })))
-			.rejects.toThrow('assignee is not an update column of tasks (update columns: title, status, due_on, closed_at, overdue)')
+			.rejects.toThrow('assignee is not an update column of tasks (update columns: title, status, due_on, closed_at, overdue, details)')
 		await expect(mutate((handles) => call(handles.target(task('tasks.read', id), 'on'), 'update', { title: 'x' }, { expectVersion: 1 })))
 			.rejects.toThrow(new CapabilityError('wrong_action', 'update on tasks requires tasks.write or tasks.assign; the capability holds tasks.read'))
 		expect(await row('tasks', id)).toMatchObject({ assignee: null, title: 'task', version: 1 })
@@ -393,5 +393,74 @@ describe.skipIf(!hasPostgres)('a date column is a YYYY-MM-DD string end to end; 
 			'tasks.due_on holds a date outside 0001-01-01 to 9999-12-31',
 		)
 		await transaction.rollback()
+	})
+})
+
+describe.skipIf(!hasPostgres)('a jsonb column is written as a JSON value and read back parsed', () => {
+	const insert = (details: unknown) =>
+		mutate((handles) =>
+			call(handles.target(alice.ref('project', 'tasks.write', 'p1', { org: 'o1' }), 'in'), 'tasks.insert', { title: 'json', details })
+		)
+	const read = async (id: string): Promise<unknown> => {
+		const { transaction, handles } = invocation('query')
+		const found = await call(handles.target(task('tasks.read', id), 'on'), 'get')
+		await transaction.commit()
+		return typeof found === 'object' && found !== null ? Reflect.get(found, 'details') : undefined
+	}
+	const stored = async (id: string): Promise<unknown> =>
+		(await admin((sql) => sql.unsafe(`select details::text as text, jsonb_typeof(details) as kind from ${schema}.tasks where id = $1`, [id])))[0]
+
+	test('round-trips through insert, get, update and list, stored as jsonb', async () => {
+		const details = { kind: 'blocks', weight: 2.5, refs: ['a', 1, null], flags: { on: true, off: false }, quote: 'it\'s "x"' }
+		const id = String(Reflect.get(Object(await insert(details)), 'id'))
+		expect(await read(id)).toEqual(details)
+		expect(await stored(id)).toMatchObject({ kind: 'object' })
+
+		const values: readonly unknown[] = [['a', { b: 1 }], 'plain text', '{"looks":"like json"}', 0, false, []]
+		for (const [index, value] of values.entries()) {
+			await mutate((handles) => call(handles.target(task('tasks.write', id), 'on'), 'update', { details: value }, { expectVersion: index + 1 }))
+			expect(await read(id)).toEqual(value)
+		}
+		expect(await stored(id)).toEqual({ text: '[]', kind: 'array' })
+		await mutate((handles) => call(handles.target(task('tasks.write', id), 'on'), 'update', { details: null }, { expectVersion: values.length + 1 }))
+		expect(await stored(id)).toEqual({ text: null, kind: null })
+
+		const { transaction, handles } = invocation('query')
+		const page = await call(handles.within(alice.within('org', 'tasks.read', ['o1'])), 'tasks.list', { where: [['id', '=', id]] })
+		expect(itemsOf(page)).toMatchObject([{ id, details: null }])
+		await transaction.commit()
+	})
+
+	test('refuses a value JSON cannot hold before it is sent', async () => {
+		for (const details of [new Date(0), { at: new Map() }, Number.NaN, [undefined], 1n]) {
+			const error = await insert(details).then(() => undefined, (rejected: unknown) => rejected)
+			expect(error).toBeInstanceOf(QueryRefusedError)
+			expect(String(error)).toContain('tasks.details takes a JSON value (')
+		}
+	})
+
+	test('a list, a count and an aggregate never compare, order or group by it', async () => {
+		const { transaction, handles } = invocation('query')
+		const within = handles.within(alice.within('org', 'tasks.read', ['o1']))
+		const refusal = 'details of tasks is a JSON column, which the data layer never'
+		await expect(call(within, 'tasks.list', { where: [['details', '=', '{}']] })).rejects.toThrow(`${refusal} compares`)
+		await expect(call(within, 'tasks.count', { where: [['details', 'is not', null]] })).rejects.toThrow(`${refusal} compares`)
+		await expect(call(within, 'tasks.list', { orderBy: [['details', 'desc']] })).rejects.toThrow(`${refusal} orders by`)
+		await expect(call(within, 'tasks.aggregate', { groupBy: ['details'], count: true })).rejects.toThrow(`${refusal} aggregates`)
+		await expect(call(within, 'tasks.aggregate', { max: ['details'] })).rejects.toThrow(`${refusal} aggregates`)
+		await transaction.rollback()
+	})
+
+	test('ctx.sql binds its JSON text and reads a path or the parsed value', async () => {
+		const id = await seedTask()
+		const { transaction, site } = invocation('mutation')
+		const sql = data.sql({ mode: 'write', check: () => site.check(), session: () => transaction.session(), fail: () => transaction.fail() })
+		await sql(z.strictObject({}))`update tasks set details = ${JSON.stringify({ kind: 'blocks', n: 3 })} where id = ${id}`
+		expect(
+			await sql(z.strictObject({ details: z.object({ kind: z.string(), n: z.number() }), kind: z.string() }))`
+			select details, details ->> 'kind' as kind from tasks where id = ${id}
+		`,
+		).toEqual([{ details: { kind: 'blocks', n: 3 }, kind: 'blocks' }])
+		await transaction.commit()
 	})
 })

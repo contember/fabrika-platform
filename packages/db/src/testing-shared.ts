@@ -7,6 +7,7 @@ import { type ApplicationRowRefusal, applicationRowRefusalText, type Application
 import { inSet, namesOf } from './builtins'
 import type { Database } from './database'
 import type { Primitive } from './description'
+import { jsonInput } from './json'
 import { FILES_TABLE } from './migrations'
 import { type Container, type ForeignKey, modelOf, type TableModel, type TableModels, tableModels, type Tables } from './policy'
 import { refuseInProduction } from './production'
@@ -15,6 +16,15 @@ import type { TableProbe } from './store'
 
 /** A value a test row holds in a column; `null` for a nullable column the fixture left empty. */
 export type SampleValue = Primitive | null
+
+/**
+ * A seeded value as a backend binds it: a JSON column's value as the JSON text the layer would write for it, so a
+ * seeded row and the generated cases that write the same value through the layer hold the same JSON.
+ */
+export function seedBinding(columns: readonly SeedColumn[], table: string, name: string, value: SampleValue): SampleValue {
+	if (value === null || !columns.some((column) => column.table === table && column.name === name && column.json)) return value
+	return jsonInput(value, `${table}.${name}`)
+}
 
 /** One seeded row and where it lies. */
 export interface WorldRow {
@@ -167,6 +177,8 @@ export interface SeedColumn {
 	readonly uuid: boolean
 	/** A number type: where a unique index covers it, the fixture writes the next number of the row's group instead of its sample. */
 	readonly number: boolean
+	/** A JSON column (`jsonb`, `JSONB`): its value is a JSON value, bound as the layer binds it (`seedBinding`). */
+	readonly json: boolean
 	/** A sample of the column's type for a required column the test does not care about; a `SeedLimitError` for a type it cannot fill. */
 	readonly sample: () => Primitive
 }

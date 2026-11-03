@@ -45,6 +45,7 @@ export {
 	type QueryRefusal,
 	QueryRefusedError,
 } from './errors'
+export type { JsonColumnValue, JsonValue } from './json'
 export type {
 	AnyDbIndex,
 	ChildRows,

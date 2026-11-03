@@ -95,6 +95,100 @@ function stored(sql: string): Record<string, unknown>[] {
 	return storage.sql.exec(sql).toArray()
 }
 
+describe('a JSON column (declared JSONB)', () => {
+	const getSettings = async (id: string): Promise<unknown> =>
+		field(await invoke('query', (db) => call(db.target(project('projects.read', id), 'on'), 'get')), 'settings')
+	const update = (id: string, version: number, settings: unknown) =>
+		invoke('mutation', (db) => call(db.target(project('projects.write', id), 'on'), 'update', { settings }, { expectVersion: version }))
+
+	test('round-trips a JSON value through insert, get, update and list, stored as its text', async () => {
+		const settings = { theme: 'dark', limits: [1, 2.5, -3], nested: { on: true, off: false, none: null }, quote: 'it\'s "x"' }
+		const id = await insertProject({ settings })
+		expect(await getSettings(id)).toEqual(settings)
+		expect(stored(`select settings from projects where id = '${id}'`)).toEqual([{ settings: JSON.stringify(settings) }])
+
+		const values: readonly unknown[] = [['a', { b: 1 }], 'plain text', '{"looks":"like json"}', 0, 12.5, false, []]
+		for (const [index, value] of values.entries()) {
+			await update(id, index + 1, value)
+			expect(await getSettings(id)).toEqual(value)
+		}
+		await update(id, values.length + 1, null)
+		expect(await getSettings(id)).toBeNull()
+		expect(stored(`select settings from projects where id = '${id}'`)).toEqual([{ settings: null }])
+		const [listed] = itemsOf(await invoke('query', (db) => call(db.within(inOrganizations('projects.read')), 'projects.list')))
+		expect(listed).toMatchObject({ id, settings: null })
+	})
+
+	test("drops an object member that is undefined, as JSON.stringify does, and keeps the value's key order", async () => {
+		const id = await insertProject({ settings: { b: 1, gone: undefined, a: 2 } })
+		expect(stored(`select settings from projects where id = '${id}'`)).toEqual([{ settings: '{"b":1,"a":2}' }])
+	})
+
+	test('refuses a value JSON cannot hold, before anything is written', async () => {
+		const cycle: Record<string, unknown> = {}
+		cycle['self'] = cycle
+		const accessor = Object.defineProperty({}, 'x', { get: () => 1, enumerable: true })
+		let deep: unknown = 1
+		for (let index = 0; index < 70; index++) deep = [deep]
+		const refused: readonly [unknown, string][] = [
+			[new Date(0), 'not an instance of a class'],
+			[new Map(), 'not an instance of a class'],
+			[{ at: new Date(0) }, 'not an instance of a class'],
+			[Number.NaN, 'a number is finite'],
+			[{ n: Number.POSITIVE_INFINITY }, 'a number is finite'],
+			[[1, undefined], 'an array holds no undefined'],
+			[10n, 'bigint is not JSON'],
+			[{ f: () => 1 }, 'function is not JSON'],
+			[{ [Symbol('s')]: 1 }, 'string keys only'],
+			[accessor, 'x is an accessor'],
+			[cycle, 'never containing itself'],
+			[deep, 'nested at most 64 deep'],
+			['a\u0000b', 'no NUL character and no lone surrogate'],
+			[['\uD800'], 'no NUL character and no lone surrogate'],
+			[{ '\uDC00x': 1 }, 'no NUL character and no lone surrogate'],
+		]
+		for (const [settings, message] of refused) {
+			const error = await insertProject({ settings }).then(() => undefined, (rejected: unknown) => rejected)
+			expect(error).toBeInstanceOf(QueryRefusedError)
+			expect(field(error, 'reason')).toBe('invalid_value')
+			expect(String(error)).toContain(`projects.settings takes a JSON value (`)
+			expect(String(error)).toContain(message)
+		}
+		expect(stored('select count(*) as n from projects')).toEqual([{ n: 0 }])
+	})
+
+	test('a list neither compares nor orders by it', async () => {
+		await insertProject({ settings: { a: 1 } })
+		const list = (options: unknown) => invoke('query', (db) => call(db.within(inOrganizations('projects.read')), 'projects.list', options))
+		await expect(list({ where: [['settings', '=', '{"a":1}']] })).rejects.toThrow(
+			'settings of projects is a JSON column, which the data layer never compares; read a path of it with ctx.sql (->>)',
+		)
+		await expect(list({ where: [['settings', 'is', null]] })).rejects.toThrow('which the data layer never compares')
+		await expect(list({ orderBy: [['settings', 'asc']] })).rejects.toThrow('which the data layer never orders by')
+		const conflicting = invoke(
+			'mutation',
+			(db) =>
+				call(db.target(organization('projects.write'), 'in'), 'projects.insert', { name: 'p', settings: { a: 1 } }, {
+					onConflict: { columns: ['settings'], do: 'nothing' },
+				}),
+		)
+		await expect(conflicting).rejects.toThrow('onConflict names settings, a JSON column of projects, which the data layer never compares')
+	})
+
+	test('a well-formed surrogate pair is written and read back', async () => {
+		const id = await insertProject({ settings: { '😀': '😀' } })
+		expect(await getSettings(id)).toEqual({ '😀': '😀' })
+	})
+
+	test('a number reads back as written, though JSONB has NUMERIC affinity; text that is not JSON is refused on read', async () => {
+		const id = await insertProject({ settings: 7 })
+		expect(stored(`select typeof(settings) as type from projects where id = '${id}'`)).toEqual([{ type: 'integer' }])
+		expect(await getSettings(id)).toBe(7)
+		storage.sql.exec(`update projects set settings = 'not json' where id = '${id}'`)
+		await expect(getSettings(id)).rejects.toThrow('projects.settings came back as something other than JSON text')
+	})
+})
+
 describe('a row reads back with the types it has on Postgres', () => {
 	test('a timestamp, a boolean and a day round-trip through insert, get, update and list', async () => {
 		const id = await insertProject({ archived: true, due_on: '2026-10-12', starts_at: new Date('2026-10-12T08:30:00.123Z'), rank: 3 })

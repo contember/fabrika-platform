@@ -162,6 +162,8 @@ export interface TableColumns<Col extends string = string, Table extends string 
 	readonly timestamps?: readonly Col[]
 	/** On SQLite, the columns declared `BOOLEAN`, stored as 0 or 1 and read as a boolean; absent when none. */
 	readonly booleans?: readonly Col[]
+	/** The JSON columns (`jsonb`, or declared `JSONB` on SQLite), written as a JSON value and never compared; absent when none. */
+	readonly json?: readonly Col[]
 }
 
 /** The columns and foreign keys of every table, generated next to the schema types. */
@@ -225,6 +227,8 @@ export interface TableModel {
 	readonly timestamps: NameSet
 	/** On SQLite, the `BOOLEAN` columns, stored as 0 or 1. */
 	readonly booleans: NameSet
+	/** The JSON columns: a write binds a JSON value's text, and no condition, order or aggregate names one. */
+	readonly json: NameSet
 	/** The table's foreign keys, from the column list; a containment column must be one to its container's key. */
 	readonly foreignKeys: readonly ForeignKey[]
 	/**
@@ -346,7 +350,7 @@ function parseVocabulary(input: unknown): VocabularyModel {
 	return freeze({ dimensions: freeze(containment), actions: nameSet(actions) })
 }
 
-const COLUMN_LIST_FIELDS = nameSet(['columns', 'foreignKeys', 'dates', 'timestamps', 'booleans'])
+const COLUMN_LIST_FIELDS = nameSet(['columns', 'foreignKeys', 'dates', 'timestamps', 'booleans', 'json'])
 const FOREIGN_KEY_FIELDS = nameSet(['columns', 'table', 'references'])
 const POLICY_FIELDS = nameSet(['scope', 'actions', 'insert', 'update', 'version', 'createdBy', 'columns', 'queue', 'files'])
 const QUEUE_FIELDS = nameSet(['attempts', 'due', 'maxAttempts'])
@@ -529,6 +533,7 @@ function parseTable(table: string, columnList: unknown, policyInput: unknown, vo
 	const dates = parseColumnSet(table, ownEntry(entry, 'dates'), column, 'dates')
 	const timestamps = parseColumnSet(table, ownEntry(entry, 'timestamps'), column, 'timestamps')
 	const booleans = parseColumnSet(table, ownEntry(entry, 'booleans'), column, 'booleans')
+	const json = parseColumnSet(table, ownEntry(entry, 'json'), column, 'json')
 	const queue = queueInput === undefined
 		? undefined
 		: parseQueue(table, queueInput, column, { columns, timestamps, version, actions, update, columnWrites })
@@ -557,6 +562,7 @@ function parseTable(table: string, columnList: unknown, policyInput: unknown, vo
 		dates,
 		timestamps,
 		booleans,
+		json,
 		foreignKeys,
 	}
 }
@@ -679,7 +685,7 @@ function parseQueue(
 	return freeze({ attempts, due, maxAttempts: maxInput === undefined ? DEFAULT_MAX_ATTEMPTS : maxInput })
 }
 
-/** The column list's `date` (`dates`), timestamp (`timestamps`) or boolean (`booleans`) columns, each one of the table's. */
+/** The column list's `date` (`dates`), timestamp (`timestamps`), boolean (`booleans`) or JSON (`json`) columns, each one of the table's. */
 function parseColumnSet(table: string, input: unknown, column: (name: unknown, field: string) => string, field: string): NameSet {
 	if (input === undefined) {
 		return nameSet([])
@@ -992,6 +998,9 @@ function checkStamps(table: ParsedTable, chain: readonly Container[]): void {
 		}
 		if (hasOwn(table.columnWrites, stamp.column)) {
 			throw new PolicyError(`${table.name}: ${stamp.column} is stamped by the layer; it takes no write action of its own`)
+		}
+		if (inSet(table.json, stamp.column)) {
+			throw new PolicyError(`${table.name}: ${stamp.column} is a JSON column, which the layer cannot stamp as ${stamp.role}; give it a scalar type`)
 		}
 	}
 }

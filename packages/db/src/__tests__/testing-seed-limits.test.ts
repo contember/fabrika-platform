@@ -21,7 +21,12 @@ if (!hasPostgres) {
 const migration = `
 create table codes (code text primary key, label text not null);
 insert into codes (code, label) values ('cz', 'Czechia'), ('sk', 'Slovakia');
-create table colors (id uuid primary key default gen_random_uuid(), name text not null, active boolean not null default true);
+create table colors (
+	id uuid primary key default gen_random_uuid(),
+	name text not null,
+	active boolean not null default true,
+	tone jsonb not null check (jsonb_typeof(tone) = 'string')
+);
 create table shades (id uuid primary key, color_id uuid not null references colors (id), name text not null unique);
 create table swatches (id text primary key, shade_id uuid not null references shades (id));
 create table inks (id uuid primary key, name text not null);
@@ -54,7 +59,7 @@ create table links (id text primary key, team_id text not null references teams 
 
 interface DB {
 	codes: { code: string; label: string }
-	colors: { id: string; name: string; active: boolean }
+	colors: { id: string; name: string; active: boolean; tone: unknown }
 	shades: { id: string; color_id: string; name: string }
 	swatches: { id: string; shade_id: string }
 	inks: { id: string; name: string }
@@ -82,7 +87,7 @@ interface DB {
 
 const columns: TypedColumnList<DB> = {
 	codes: { columns: ['code', 'label'], foreignKeys: [] },
-	colors: { columns: ['id', 'name', 'active'], foreignKeys: [] },
+	colors: { columns: ['id', 'name', 'active', 'tone'], foreignKeys: [], json: ['tone'] },
 	shades: { columns: ['id', 'color_id', 'name'], foreignKeys: [{ columns: ['color_id'], table: 'colors', references: ['id'] }] },
 	swatches: { columns: ['id', 'shade_id'], foreignKeys: [{ columns: ['shade_id'], table: 'shades', references: ['id'] }] },
 	inks: { columns: ['id', 'name'], foreignKeys: [] },
@@ -222,6 +227,13 @@ describe.skipIf(!hasPostgres)('the isolation fixture over constrained columns', 
 		expect(named.markers).toEqual([])
 		await expect(postgres.seedRow(tables, 'colors', { id: crypto.randomUUID() })).rejects.toThrow("the row's key, version or creator")
 		await expect(postgres.seedRow(tables, 'colors', { shade: 'dark' })).rejects.toThrow('colors.shade is no column')
+	})
+
+	test('a jsonb column holds the JSON value the layer would write for the seed, its sample a JSON string', async () => {
+		const sampled = await postgres.seedRow(tables, 'colors')
+		expect(await row('colors', sampled.key)).toMatchObject({ tone: 'sample' })
+		const warm = await postgres.seedRow(tables, 'colors', { tone: 'warm' })
+		expect(await row('colors', warm.key)).toMatchObject({ tone: 'warm' })
 	})
 
 	test('application rows seeded together are linked by their foreign keys and removed with the rows that refer to them', async () => {

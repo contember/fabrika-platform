@@ -92,6 +92,26 @@ describe('generateSqliteSchema', () => {
 		expect(entryOf(source, 'authors')).toBe("\t'authors': {\n\t\tcolumns: [\n\t\t\t'id',\n\t\t\t'name',\n\t\t],\n\t\tforeignKeys: [],\n\t},\n")
 	})
 
+	test('types a column declared JSONB as Postgres types jsonb, and refuses JSON naming JSONB', async () => {
+		const { source } = await generateSqliteSchema([
+			app('CREATE TABLE links (id TEXT PRIMARY KEY NOT NULL, metadata JSONB NOT NULL, extra jsonb);'),
+		])
+		expect(source).toContain("import type { JsonColumnValue, TypedColumnList } from '@fabrika/db'\n")
+		expect(interfaceOf(source, 'LinksTable')).toBe(
+			[
+				'export interface LinksTable {',
+				'\tid: string',
+				'\tmetadata: ColumnType<unknown, JsonColumnValue, JsonColumnValue>',
+				'\textra: ColumnType<unknown | null, JsonColumnValue | null, JsonColumnValue | null>',
+				'}\n',
+			].join('\n'),
+		)
+		expect(entryOf(source, 'links')).toContain("\t\tforeignKeys: [],\n\t\tjson: ['metadata', 'extra'],\n")
+		await expect(generateSqliteSchema([app('CREATE TABLE links (id TEXT PRIMARY KEY, metadata JSON);')])).rejects.toThrow(
+			"links.metadata has declared type 'JSON'; declare it JSONB",
+		)
+	})
+
 	test("leaves out the framework tables, the ledger and SQLite's own", async () => {
 		const { source } = await generateSqliteSchema([framework, app('CREATE TABLE notes (id INTEGER PRIMARY KEY AUTOINCREMENT, body TEXT);')])
 		expect(source).not.toContain('fabrika_')

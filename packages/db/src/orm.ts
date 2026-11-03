@@ -9,7 +9,16 @@ import { BinaryOperationNode, OperatorNode, ValueNode } from 'kysely'
 import { freeze, hasOwn, inSet, isSafeInteger, nameSet, namesOf, ownDescriptor, ownKeys, ownNames, parseList, setOwn } from './builtins'
 import { type CapabilityGrant, describeGrant, type RefGrant } from './capability'
 import type { InvocationTransaction, Session } from './database'
-import { columnOf, type Compare, type Contains, parseCondition, type Primitive, type SelectState, type TableShape } from './description'
+import {
+	columnOf,
+	comparableColumnOf,
+	type Compare,
+	type Contains,
+	parseCondition,
+	type Primitive,
+	type SelectState,
+	type TableShape,
+} from './description'
 import { CapabilityError, NotFoundError, type QueryRefusal, QueryRefusedError } from './errors'
 import { answerFiles, type FileBinding } from './file-columns'
 import { databaseNow } from './job-leases'
@@ -1116,7 +1125,7 @@ function orderOf(shape: TableShape, orderBy: unknown, tiebreak: readonly string[
 		if (parts === undefined || parts.length !== 2 || (direction !== 'asc' && direction !== 'desc')) {
 			throw new QueryRefusedError('list_page', "orderBy takes [column, 'asc' | 'desc'] terms, each a plain array")
 		}
-		return { column: columnOf(shape, parts[0]), direction }
+		return { column: comparableColumnOf(shape, parts[0], 'orders by'), direction }
 	})
 	if (terms === undefined) {
 		throw new QueryRefusedError('list_page', "orderBy takes a plain array of [column, 'asc' | 'desc'] terms")

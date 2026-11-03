@@ -271,6 +271,7 @@ CREATE TABLE tasks (
 	weight REAL NOT NULL,
 	priority INTEGER NOT NULL DEFAULT 3,
 	attachment BLOB,
+	details JSONB NOT NULL CHECK (json_type(details) = 'text'),
 	version INTEGER NOT NULL
 );
 CREATE TABLE blobs (id TEXT PRIMARY KEY, payload BLOB NOT NULL);
@@ -287,6 +288,7 @@ CREATE TABLE blobs (id TEXT PRIMARY KEY, payload BLOB NOT NULL);
 			weight: number
 			priority: number
 			attachment: Uint8Array | null
+			details: unknown
 			version: number
 		}
 		blobs: { id: string; payload: Uint8Array }
@@ -294,11 +296,12 @@ CREATE TABLE blobs (id TEXT PRIMARY KEY, payload BLOB NOT NULL);
 
 	const columns: TypedColumnList<DB> = {
 		tasks: {
-			columns: ['id', 'project_id', 'title', 'due_on', 'remind_at', 'done', 'weight', 'priority', 'attachment', 'version'],
+			columns: ['id', 'project_id', 'title', 'due_on', 'remind_at', 'done', 'weight', 'priority', 'attachment', 'details', 'version'],
 			foreignKeys: [],
 			dates: ['due_on'],
 			timestamps: ['remind_at'],
 			booleans: ['done'],
+			json: ['details'],
 		},
 		blobs: { columns: ['id', 'payload'], foreignKeys: [] },
 	}
@@ -310,8 +313,8 @@ CREATE TABLE blobs (id TEXT PRIMARY KEY, payload BLOB NOT NULL);
 		tasks: {
 			scope: { dimension: 'task', key: 'id', in: { dimension: 'project', column: 'project_id' } },
 			actions: { read: 'tasks.read', insert: 'tasks.write', update: 'tasks.write', delete: 'tasks.write' },
-			insert: ['title', 'due_on', 'remind_at', 'done', 'weight', 'priority'],
-			update: ['title', 'due_on', 'remind_at', 'done', 'weight', 'priority'],
+			insert: ['title', 'due_on', 'remind_at', 'done', 'weight', 'priority', 'details'],
+			update: ['title', 'due_on', 'remind_at', 'done', 'weight', 'priority', 'details'],
 			version: 'version',
 		},
 		blobs: { scope: { dimension: 'blob' }, actions: { read: 'tasks.read' } },
@@ -345,6 +348,7 @@ CREATE TABLE blobs (id TEXT PRIMARY KEY, payload BLOB NOT NULL);
 			weight: 1,
 			priority: 3,
 			attachment: null,
+			details: 'sample',
 		})
 		expect([row?.['title']]).toEqual([...worlds.own.markers])
 	})
@@ -354,6 +358,17 @@ CREATE TABLE blobs (id TEXT PRIMARY KEY, payload BLOB NOT NULL);
 		expect(worlds.own.updates['priority']).toBe(1)
 		expect(worlds.own.updates['due_on']).toEqual(expect.any(String))
 		expect(worlds.own.updates['done']).toBe(false)
+	})
+
+	test('a JSON column is seeded as the layer writes the same value, so the update case writes the JSON the seed did', async () => {
+		const worlds = await sqlite.seedWorlds(typedTables, 'tasks', { details: 'blocked' })
+		const probe = tableProbe(layer, 'tasks')
+		const read = authority.within('project', 'tasks.read', [worlds.own.scope])
+		expect((await probe.select(read))[0]?.['details']).toBe('blocked')
+		expect(worlds.own.updates['details']).toBe('blocked')
+		const write = authority.ref('task', 'tasks.write', worlds.own.key, { project: worlds.own.scope })
+		await probe.update(write, undefined, { details: worlds.own.updates['details'] }, 1)
+		expect((await probe.select(read))[0]?.['details']).toBe('blocked')
 	})
 
 	test('a seed of a boolean is written as the layer binds it', async () => {

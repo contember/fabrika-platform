@@ -296,7 +296,14 @@ describe('a column write action and the date columns, as the one parse reads the
 	test('the update action does not write a column of its own write action, and that action writes nothing else', () => {
 		const tasks = modelOf(tableModels(tasksTables), 'tasks')
 		expect(tasks === undefined ? [] : namesOf(updatableBy(tasks, 'tasks.assign'))).toEqual(['assignee'])
-		expect(tasks === undefined ? [] : namesOf(updatableBy(tasks, 'tasks.write'))).toEqual(['title', 'status', 'due_on', 'closed_at', 'overdue'])
+		expect(tasks === undefined ? [] : namesOf(updatableBy(tasks, 'tasks.write'))).toEqual([
+			'title',
+			'status',
+			'due_on',
+			'closed_at',
+			'overdue',
+			'details',
+		])
 		expect(tasks === undefined ? [] : namesOf(updatableBy(tasks, 'tasks.read'))).toEqual([])
 		expect(tasks === undefined ? [] : namesOf(tasks.dates)).toEqual(['due_on'])
 	})
