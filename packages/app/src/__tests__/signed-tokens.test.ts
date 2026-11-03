@@ -35,6 +35,7 @@ export type SigningShape = [
 const Empty = z.strictObject({})
 
 const artifact = compileContract(contract, tables)
+const BASE64URL_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'
 
 /**
  * `token` with one character in the middle of its signature changed. All six of its bits are signature bits, so the
@@ -138,6 +139,11 @@ describe('the keys and the token format', () => {
 		const [id, payload, signature] = signed.split('.')
 		const forged = Buffer.from(JSON.stringify({ p: 'unsubscribe', x: 4_000_000_000, c: claims })).toString('base64url')
 		expect(() => tokens.verify('unsubscribe', `${id}.${forged}.${signature}`)).toThrow(/not valid/)
+		// The last character of a signature carries two padding bits: another spelling of the same bytes is refused too.
+		const given = signed.slice(signed.lastIndexOf('.') + 1)
+		const respelled = `${given.slice(0, -1)}${BASE64URL_ALPHABET.charAt(BASE64URL_ALPHABET.indexOf(given.slice(-1)) ^ 1)}`
+		expect(Buffer.from(respelled, 'base64url')).toEqual(Buffer.from(given, 'base64url'))
+		expect(() => tokens.verify('unsubscribe', `${id}.${payload}.${respelled}`)).toThrow(/not valid/)
 		expect(() => tokens.verify('other', signed)).toThrow(/not valid/)
 		expect(() => tokens.verify('unsubscribe', `${id}.${payload}`)).toThrow(/not valid/)
 		now += 2 * 86_400_000

@@ -1257,9 +1257,10 @@ export const app = defineApp(vocabulary, tables, {
 
 - **Verifying.** `signedToken('<purpose>')` is a top-level field of a procedure's input or its `http.query`. The
   framework verifies it as it parses the input: an HMAC-SHA256 over the key id, the purpose, the expiry and the claims,
-  then the claims parsed again by the purpose's schema. The handler receives the typed claims. An invalid token and an
-  expired one are 400, and the answer says nothing about the keys. A token in an export or a webhook input, anywhere
-  but at the top level, or of an undeclared purpose is refused at build.
+  then the claims parsed again by the purpose's schema. The signature is compared as its base64url text, so a token has
+  exactly one spelling. The handler receives the typed claims. An invalid token and an expired one are 400, and the
+  answer says nothing about the keys. A token in an export or a webhook input, anywhere but at the top level, or of an
+  undeclared purpose is refused at build.
 - **Signing.** A procedure of an RPC mount, a job or a webhook declares `signs: ['<purpose>']` and calls
   `ctx.tokens.sign('<purpose>', claims, { days })`, with `days` at most the purpose's `maxDays` (3650 at most). An
   export and a link procedure never sign.
