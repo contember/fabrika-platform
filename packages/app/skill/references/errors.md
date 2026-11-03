@@ -74,6 +74,7 @@ A kit error lands on the line of the mistake, in one or two lines that name the 
 | `'member.label' is possibly 'null'`                                             | a nullable column or output; only `directory: 'labels'` makes it text   |
 | `admin is a role IAM defines itself for every application (reserved: admin)`    | another role name                                                       |
 | `Property 'id' does not exist on type 'Ref<…>'`                                 | `ctx.target.value`                                                      |
+| `Property 'taskId' does not exist on type '{ … }'` on `input`                   | `ctx.target.value`, or `ctx.capabilities.<name>.value`                  |
 | `Property 'margin' does not exist on type 'Omit<DealsTable, "margin">'`         | the column has its own read action, which this capability lacks         |
 | `Type 'Date' is not assignable to type 'string'` on a `date` column             | a `YYYY-MM-DD` string                                                   |
 | `Cannot find module '@fabrika/…'` and implicit `any`s everywhere                | `bun install` (at the repository root in a monorepo)                    |

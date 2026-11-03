@@ -38,6 +38,12 @@ grants count toward `MAX_WITHIN_VALUES` (1000 scope values per `Within`) with th
 whose grants on inner dimensions push one action past 1000 values gets 403 (`CapabilityLimitError`) from a list that
 answered on 0.8; give such a caller a grant on a container instead of per-object grants.
 
+A handler under `access: { capabilities }` gets its input typed as the runtime hands it over, which 0.8 already did at
+run time: without the `from` field of each `on` and `in` capability, and read-only. Reading such a field
+(`input.companyId`) is now a type error (TS2339), where 0.8 compiled it and read `undefined`; read the id from its
+capability, `ctx.capabilities.<name>.value`. Assigning to a field of the input is a type error too, where 0.8 compiled it
+and threw on the frozen object.
+
 `ctx.sql.scope` takes an options object, and the fragment says what the statement does with its table:
 
 | 0.8                                         | 0.9                                                          |
