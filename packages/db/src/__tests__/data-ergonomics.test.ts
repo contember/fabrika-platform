@@ -265,6 +265,24 @@ describe.skipIf(!hasPostgres)('over lists every table whose containment chain ho
 	})
 })
 
+describe.skipIf(!hasPostgres)('list and count take a null test on a nullable column', () => {
+	test('is null and is not null filter a day and a timestamp, and a null test takes null only', async () => {
+		const marker = `null-${Bun.randomUUIDv7()}`
+		const unset = await seedTask({ title: marker })
+		const set = await seedTask({ title: marker, dueOn: '2026-10-20' })
+		await admin((sql) => sql.unsafe(`update ${schema}.tasks set closed_at = now() where id = $1`, [set]))
+		const { transaction, handles } = invocation('query')
+		const within = handles.within(alice.within('org', 'tasks.read', ['o1']))
+		const ids = async (where: unknown) => itemsOf(await call(within, 'tasks.list', { where })).map((item) => item['id'])
+		expect(await ids([['title', '=', marker], ['due_on', 'is', null]])).toEqual([unset])
+		expect(await ids([['title', '=', marker], ['due_on', 'is not', null]])).toEqual([set])
+		expect(await ids([['title', '=', marker], ['closed_at', 'is', null]])).toEqual([unset])
+		expect(await call(within, 'tasks.count', { where: [['title', '=', marker], ['closed_at', 'is not', null]] })).toBe(1)
+		await expect(call(within, 'tasks.list', { where: [['due_on', 'is', '2026-10-20']] })).rejects.toThrow('is takes null only')
+		await transaction.commit()
+	})
+})
+
 describe.skipIf(!hasPostgres)('a date column is a YYYY-MM-DD string end to end; a timestamp takes ISO text', () => {
 	test('reads, filters, aggregates and writes answer and take the day as text', async () => {
 		const marker = `day-${Bun.randomUUIDv7()}`

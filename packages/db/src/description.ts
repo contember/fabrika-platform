@@ -91,11 +91,17 @@ type Columns<Row> = keyof Row & string
 type StringColumn<Row> = { [K in Columns<Row>]: Comparable<Row[K]> extends string ? K : never }[Columns<Row>]
 type NullableColumn<Row> = { [K in Columns<Row>]: null extends Row[K] ? K : never }[Columns<Row>]
 
+/**
+ * A `[column, operator, value]` condition on `Row`'s columns. A null test (`is`, `is not`) takes a nullable column only;
+ * the runtime knows no column's nullability, so an untyped condition that tests a column never null runs and matches no
+ * row (`is`) or every row (`is not`).
+ */
 export type ConditionTuple<Row> =
 	| {
 		[K in Columns<Row>]: readonly [K, ComparisonOperator, Comparable<Row[K]>] | readonly [K, ListOperator, readonly Comparable<Row[K]>[]]
 	}[Columns<Row>]
 	| { [K in StringColumn<Row>]: readonly [K, PatternOperator | 'contains', string] }[StringColumn<Row>]
+	| { [K in NullableColumn<Row>]: readonly [K, NullOperator, null] }[NullableColumn<Row>]
 
 type Prefixed<C extends string, J> = { [K in keyof J & string as `${C}.${K}`]: J[K] }
 export type NoColumns = Record<never, never>

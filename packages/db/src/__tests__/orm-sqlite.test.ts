@@ -183,6 +183,22 @@ describe('a row reads back with the types it has on Postgres', () => {
 		expect(await ids([['due_on', '>=', '2026-10-12']])).toEqual([open])
 	})
 
+	test('a null test filters list and count as on Postgres, a timestamp column included', async () => {
+		const unset = await insertProject({ rank: null })
+		const set = await insertProject({ rank: 2, starts_at: '2026-10-12T08:30:00Z' })
+		const within = inOrganizations('projects.read')
+		const ids = async (where: unknown) =>
+			itemsOf(await invoke('query', (db) => call(db.within(within), 'projects.list', { where }))).map((row) => row['id'])
+		expect(await ids([['rank', 'is', null]])).toEqual([unset])
+		expect(await ids([['rank', 'is not', null]])).toEqual([set])
+		expect(await ids([['starts_at', 'is', null]])).toEqual([unset])
+		expect(await ids([['starts_at', 'is not', null], ['rank', '=', 2]])).toEqual([set])
+		expect(await invoke('query', (db) => call(db.within(within), 'projects.count', { where: [['starts_at', 'is', null]] }))).toBe(1)
+		await expect(invoke('query', (db) => call(db.within(within), 'projects.list', { where: [['rank', 'is', 2]] }))).rejects.toThrow(
+			'is takes null only',
+		)
+	})
+
 	test('count is a number, and an aggregate answers count and an integer sum as text, as Postgres does', async () => {
 		await insertProject({ archived: true, rank: 2, starts_at: '2026-10-12T08:00:00Z' })
 		await insertProject({ archived: true, rank: 5, starts_at: '2026-10-12T09:00:00Z' })
