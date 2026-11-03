@@ -2,6 +2,8 @@
 // declares `signs`, and the verification of each token field of a procedure's input and `http.query` as they are parsed.
 // A token is `<key id>.<payload>.<signature>`: the payload is the purpose, the expiry and the claims as base64url JSON,
 // and the signature an HMAC-SHA256 over the key id and the payload, so a token of one purpose never passes as another.
+// The signature is compared as its text: its last character carries two padding bits that decode to nothing, so
+// comparing decoded bytes would let four spellings of one token verify, and a token has exactly one.
 
 import { type ContractArtifact, FABRIKA_TOKEN_KEYS, type SchemaShape } from '@fabrika/auth-core'
 import { createHmac, timingSafeEqual } from 'node:crypto'
@@ -129,8 +131,8 @@ export class SignedTokens {
 		if (rest.length > 0 || key === undefined || declared === undefined || !BASE64URL.test(payload) || !BASE64URL.test(given)) {
 			throw invalid()
 		}
-		const expected = Buffer.from(signature(key, payload), 'base64url')
-		const presented = Buffer.from(given, 'base64url')
+		const expected = Buffer.from(signature(key, payload))
+		const presented = Buffer.from(given)
 		if (presented.byteLength !== expected.byteLength || !timingSafeEqual(presented, expected)) {
 			throw invalid()
 		}

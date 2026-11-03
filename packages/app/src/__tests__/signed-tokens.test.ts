@@ -35,6 +35,17 @@ export type SigningShape = [
 const Empty = z.strictObject({})
 
 const artifact = compileContract(contract, tables)
+const BASE64URL_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'
+
+/**
+ * `token` with one character in the middle of its signature changed. All six of its bits are signature bits, so the
+ * tamper changes the signature whatever the key; the last character also carries two padding bits.
+ */
+const tampered = (token: string): string => {
+	const start = token.lastIndexOf('.') + 1
+	const at = start + Math.floor((token.length - start) / 2)
+	return `${token.slice(0, at)}${token.charAt(at) === 'A' ? 'B' : 'A'}${token.slice(at + 1)}`
+}
 
 describe('the artifact of signed tokens', () => {
 	test('records each purpose with its claims and its longest lifetime', () => {
@@ -128,6 +139,11 @@ describe('the keys and the token format', () => {
 		const [id, payload, signature] = signed.split('.')
 		const forged = Buffer.from(JSON.stringify({ p: 'unsubscribe', x: 4_000_000_000, c: claims })).toString('base64url')
 		expect(() => tokens.verify('unsubscribe', `${id}.${forged}.${signature}`)).toThrow(/not valid/)
+		// The last character of a signature carries two padding bits: another spelling of the same bytes is refused too.
+		const given = signed.slice(signed.lastIndexOf('.') + 1)
+		const respelled = `${given.slice(0, -1)}${BASE64URL_ALPHABET.charAt(BASE64URL_ALPHABET.indexOf(given.slice(-1)) ^ 1)}`
+		expect(Buffer.from(respelled, 'base64url')).toEqual(Buffer.from(given, 'base64url'))
+		expect(() => tokens.verify('unsubscribe', `${id}.${payload}.${respelled}`)).toThrow(/not valid/)
 		expect(() => tokens.verify('other', signed)).toThrow(/not valid/)
 		expect(() => tokens.verify('unsubscribe', `${id}.${payload}`)).toThrow(/not valid/)
 		now += 2 * 86_400_000
@@ -205,7 +221,7 @@ if (postgres !== null) {
 
 		test('a tampered token, a token of another purpose and none are refused before the handler', async () => {
 			const signed = kit.signToken('unsubscribe', { email: 'bob@example.com', campaign: 'spring' }, { days: 1 })
-			expect((await unsubscribe(`t=${signed.slice(0, -2)}xx`)).status).toBe(400)
+			expect((await unsubscribe(`t=${tampered(signed)}`)).status).toBe(400)
 			const booking = kit.signToken('booking', { booking: crypto.randomUUID() }, { days: 1 })
 			expect((await unsubscribe(`t=${booking}`)).status).toBe(400)
 			expect((await unsubscribe('')).status).toBe(400)
@@ -219,7 +235,7 @@ if (postgres !== null) {
 			expect(followed.status).toBe(302)
 			expect(followed.headers.get('Location')).toBe('https://shop.example/offer?id=7')
 			expect(await clicks()).toBe(before + 1)
-			expect((await kit.fetch(`/api/mail.click?t=${signed.slice(0, -2)}xx`, { redirect: 'manual' })).status).toBe(400)
+			expect((await kit.fetch(`/api/mail.click?t=${tampered(signed)}`, { redirect: 'manual' })).status).toBe(400)
 			// A target the token does not carry is no redirect at all, and nothing the handler wrote is kept.
 			expect((await kit.fetch(`/api/mail.elsewhere?t=${signed}`, { redirect: 'manual' })).status).toBe(500)
 			expect(await clicks()).toBe(before + 1)
