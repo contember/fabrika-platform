@@ -95,6 +95,8 @@ const Catalog = z.strictObject({
 		nullable: z.boolean(),
 		generated: z.enum(['no', 'default', 'always']),
 		computed: z.boolean(),
+		formatted_type: z.string(),
+		keyed: z.boolean(),
 		enum_labels: z.array(z.string()),
 	})),
 	foreignKeys: z.array(z.strictObject({
@@ -157,7 +159,7 @@ const migrationsOf = (app: SkillApp): Block[] =>
 /** The generated files of an application: what codegen and `fabrika connect` would write. */
 function generatedFiles(app: SkillApp): Map<string, string> {
 	const generated = new Map(app.vendored)
-	if (app.catalog !== null) generated.set('src/db/schema.generated.ts', renderSchema(app.catalog.columns, app.catalog.foreignKeys))
+	if (app.catalog !== null) generated.set('src/db/schema.generated.ts', renderSchema(app.catalog.columns, app.catalog.foreignKeys).source)
 	return generated
 }
 

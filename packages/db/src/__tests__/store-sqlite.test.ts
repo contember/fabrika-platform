@@ -122,7 +122,7 @@ describe('the table probe on SQLite', () => {
 })
 
 test("the fixture's column list is what generateSqliteSchema renders for its migration", async () => {
-	const rendered = await generateSqliteSchema([{ bundle: 'app', migrations: [{ name: '0001_init.sql', sql: sqliteMigration }] }])
+	const { source: rendered } = await generateSqliteSchema([{ bundle: 'app', migrations: [{ name: '0001_init.sql', sql: sqliteMigration }] }])
 	const directory = await mkdtemp(join(tmpdir(), 'sqlite-layer-'))
 	try {
 		const file = join(directory, 'schema.generated.ts')

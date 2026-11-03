@@ -148,12 +148,13 @@ INSERT INTO priorities (code, label, rank) VALUES ('low', 'Low', 1), ('normal', 
   with markers, which a `CHECK` refuses.
 - Codegen types: `date` is a `YYYY-MM-DD` string; `timestamptz` reads a `Date` and takes a `Date` or a strict ISO 8601 string with `Z` or an offset;
   `int8` and `numeric` are strings; an enum is its literal union. JSON, `bytea`, arrays and domains are refused.
-- A generated column (`GENERATED ALWAYS AS (…) STORED`) of a type codegen does not type (a `tsvector` for full-text
-  search, a `jsonb`, an array) is left out of the generated types instead: codegen prints `left out <table>.<column>`
-  and writes a comment where the column would stand in `schema.generated.ts`. No `ctx.db` handle reads or writes it,
-  a policy cannot name it, and only `ctx.sql` reaches it. An identity column and a generated column of a type codegen
-  does type are never left out. A table whose every column would be left out, and a foreign key that names a left-out
-  column, are refused.
+- A generated column (`GENERATED ALWAYS AS (…) STORED`) of any type codegen does not type (a `tsvector` for full-text
+  search, a `jsonb`, an array, a range) is left out of the generated types instead: every `fabrika db codegen` run,
+  `--verify` too, prints `<table>.<column> (<type>, generated) is left out`, and `schema.generated.ts` has a comment
+  where the column would stand. No `ctx.db` handle reads or writes it, a policy cannot name it, and only `ctx.sql`
+  reaches it. An identity column and a generated column of a type codegen does type are never left out. A left-out
+  column in the primary key, a unique key or a foreign key is refused, and so is a table whose every column would be
+  left out.
 - Plain SQL of the application's own schema only. Refused: another schema (`public.`, `app_…`), any `fabrika_*`
   object (a file column references `fabrika_files (id)`, `references/files.md`), `GRANT`, roles, `CREATE EXTENSION`, `COPY`,
   `SET`, transaction control, `SECURITY DEFINER`, a domain, `serial` and sequences (use `GENERATED ALWAYS AS IDENTITY`),

@@ -106,9 +106,9 @@ and every other one, a missing config included, on Postgres. On SQLite no comman
   (ADR-0017). It applies the framework's tables (`@fabrika/db/migrations`, bundle `fabrika`)
   before `db/migrations/`. `codegen` reads the catalog with the provisioning credential. On SQLite `db migrate`
   refuses and says why: the object applies the migrations itself when it boots.
-- `db codegen [--verify]` writes `src/db/schema.generated.ts` from the migrated schema and prints a `left out
-  <table>.<column>` line for each generated column the module leaves out; `--verify` writes nothing and fails when the
-  file differs. On SQLite the schema is the bundles the object applies,
+- `db codegen [--verify]` writes `src/db/schema.generated.ts` from the migrated schema; `--verify` writes nothing and
+  fails when the file differs. Both first print a `<table>.<column> (<type>, generated) is left out` line for each
+  generated column the module leaves out. On SQLite the schema is the bundles the object applies,
   `SQLITE_FRAMEWORK_MIGRATIONS` then `db/migrations` (`applicationMigrations` of `@fabrika/app/build`, the files the
   build bundles), run in an in-memory database by `@fabrika/db/codegen-sqlite`.
 - `db test-scaffold` writes `@fabrika/check`'s `generatedTests` of what `scaffoldInputs` reads (the checker's own

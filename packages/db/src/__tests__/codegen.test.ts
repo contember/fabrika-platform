@@ -10,15 +10,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import ts from 'typescript'
-import {
-	type CatalogColumn,
-	CodegenError,
-	generateSchema,
-	generateSchemaModule,
-	introspectSchema,
-	renderSchema,
-	renderSchemaModule,
-} from '../codegen'
+import { type CatalogColumn, CodegenError, generateSchema, introspectSchema, renderSchema } from '../codegen'
 import { migration } from './fixtures/schema'
 import { migration as tasksMigration } from './fixtures/tasks'
 
@@ -31,6 +23,8 @@ const column = (table: string, name: string, type: string, extra: Partial<Catalo
 	nullable: false,
 	generated: 'no',
 	computed: false,
+	formatted_type: type,
+	keyed: false,
 	enum_labels: [],
 	...extra,
 })
@@ -42,7 +36,7 @@ const interfaceOf = (source: string, name: string): string => {
 
 describe('renderSchema', () => {
 	test('maps each column to what Bun.SQL decodes and what the layer may bind', () => {
-		const source = renderSchema([
+		const { source } = renderSchema([
 			column('things', 'id', 'uuid'),
 			column('things', 'small', 'int2'),
 			column('things', 'big', 'int8'),
@@ -74,7 +68,7 @@ describe('renderSchema', () => {
 	})
 
 	test('leaves out framework tables and imports only what it uses', () => {
-		const source = renderSchema([column('fabrika_migrations', 'name', 'text'), column('notes', 'id', 'text')])
+		const { source } = renderSchema([column('fabrika_migrations', 'name', 'text'), column('notes', 'id', 'text')])
 		expect(source).not.toContain('fabrika_migrations')
 		expect(source).not.toContain("from 'kysely'")
 		expect(source).toContain('export interface DB {\n\tnotes: NotesTable\n}\n')
@@ -91,7 +85,7 @@ describe('renderSchema', () => {
 			referenced_table: referenced,
 			referenced_columns: references,
 		})
-		const source = renderSchema(
+		const { source } = renderSchema(
 			[
 				column('workspaces', 'id', 'text'),
 				column('workspaces', 'org_id', 'text'),
@@ -123,7 +117,7 @@ describe('renderSchema', () => {
 	})
 
 	test('orders tables by name and keeps column order', () => {
-		const source = renderSchema([column('notes', 'title', 'text'), column('notes', 'id', 'text'), column('authors', 'id', 'text')])
+		const { source } = renderSchema([column('notes', 'title', 'text'), column('notes', 'id', 'text'), column('authors', 'id', 'text')])
 		expect(source.indexOf('AuthorsTable {')).toBeLessThan(source.indexOf('NotesTable {'))
 		expect(interfaceOf(source, 'NotesTable')).toBe('export interface NotesTable {\n\ttitle: string\n\tid: string\n}\n')
 	})
@@ -146,12 +140,25 @@ describe('renderSchema', () => {
 
 	test('leaves out a generated column of a type it does not read, naming it; any other column of one is refused', () => {
 		const search = column('documents', 'search', 'tsvector', { generated: 'always', computed: true })
-		const module = renderSchemaModule([column('documents', 'id', 'text'), search, column('documents', 'body', 'text')])
+		const module = renderSchema([column('documents', 'id', 'text'), search, column('documents', 'body', 'text')])
 		expect(module.leftOut).toEqual([{ table: 'documents', column: 'search', type: 'tsvector' }])
 		expect(interfaceOf(module.source, 'DocumentsTable')).toBe(
 			'export interface DocumentsTable {\n\tid: string\n\t// search (tsvector, generated) is left out: the data layer does not read it; ctx.sql does\n\tbody: string\n}\n',
 		)
 		expect(module.source).not.toContain("'search'")
+		// Every type the layer does not read is left out of a generated column: an array, a range, a composite, a domain.
+		const computed = { generated: 'always', computed: true } as const
+		const others = renderSchema([
+			column('documents', 'id', 'text'),
+			column('documents', 'tags', '_text', { ...computed, type_category: 'A', formatted_type: 'text[]' }),
+			column('documents', 'span', 'int4range', { ...computed, type_type: 'r' }),
+			column('documents', 'pair', 'point_pair', { ...computed, type_type: 'c' }),
+			column('documents', 'mail', 'email', { ...computed, type_type: 'd' }),
+			column('documents', 'odd', 'odd', { ...computed, type_type: 'c', formatted_type: 'odd\ntype' }),
+		])
+		expect(others.leftOut.map((left) => left.type)).toEqual(['text[]', 'int4range', 'point_pair', 'email', 'odd\ntype'])
+		// The comment quotes a type name that could end its line; the list keeps the name as written.
+		expect(others.source).toContain("\t// odd ('odd\\ntype', generated) is left out: the data layer does not read it; ctx.sql does\n")
 		// A plain column, a defaulted one, and one `always` without being computed (an identity column) are refused.
 		for (const extra of [{}, { generated: 'default' }, { generated: 'always' }] as const) {
 			expect(() => renderSchema([column('documents', 'search', 'tsvector', extra)])).toThrow(
@@ -160,8 +167,14 @@ describe('renderSchema', () => {
 		}
 	})
 
-	test('refuses a foreign key that names a left-out column, and a table it would leave with no column', () => {
+	test('refuses a left-out column in a key or a foreign key, and a table it would leave with no column', () => {
 		const leftOut = (table: string) => column(table, 'search', 'tsvector', { generated: 'always', computed: true })
+		expect(() =>
+			renderSchema([column('documents', 'id', 'text'), column('documents', 'search', 'tsvector', { generated: 'always', computed: true, keyed: true })])
+		)
+			.toThrow(
+				'documents.search is a generated column of a type the data layer does not read, so codegen leaves it out, but it is in the primary key or a unique key',
+			)
 		const key = { constraint_name: 'k', table_name: 'links', columns: ['search'], referenced_table: 'documents', referenced_columns: ['search'] }
 		expect(() => renderSchema([column('documents', 'id', 'text'), leftOut('documents'), column('links', 'id', 'text'), leftOut('links')], [key]))
 			.toThrow(
@@ -202,7 +215,7 @@ describe('generated names', () => {
 	const catalog = [column('_123', 'id', 'text'), column('_9_lives', 'id', 'text'), column('notes', 'id', 'text')]
 
 	test('a table name that does not start with a letter still gives a TypeScript identifier', () => {
-		const source = renderSchema(catalog)
+		const { source } = renderSchema(catalog)
 		expect(source).toContain('export interface T123Table {')
 		expect(source).toContain('export interface T9LivesTable {')
 		expect(typeErrors(source)).toEqual([])
@@ -225,7 +238,7 @@ describe('generated names', () => {
 		const directory = mkdtempSync(join(tmpdir(), 'fabrika-codegen-'))
 		try {
 			const module = join(directory, 'schema.generated.js')
-			writeFileSync(module, new Bun.Transpiler({ loader: 'ts' }).transformSync(renderSchema(catalog)))
+			writeFileSync(module, new Bun.Transpiler({ loader: 'ts' }).transformSync(renderSchema(catalog).source))
 			const loaded: unknown = await import(module)
 			const columns: unknown = typeof loaded === 'object' && loaded !== null ? Reflect.get(loaded, 'columns') : undefined
 			expect(typeof columns === 'object' && columns !== null ? Object.keys(columns) : []).toEqual(['_123', '_9_lives', 'notes'])
@@ -307,12 +320,12 @@ async function migrated(ddl: string): Promise<string> {
 describe.skipIf(!hasPostgres)('codegen against real Postgres', () => {
 	test('regenerates the committed fixture from the fixture migration', async () => {
 		const schema = await migrated(migration)
-		expect(await generateSchema(url, schema, [])).toBe(await Bun.file(join(import.meta.dir, 'fixtures', 'schema.generated.ts')).text())
+		expect((await generateSchema(url, schema, [])).source).toBe(await Bun.file(join(import.meta.dir, 'fixtures', 'schema.generated.ts')).text())
 	})
 
 	test('regenerates the task tracker fixture: a date column is listed as a day, a timestamp takes ISO text', async () => {
 		const schema = await migrated(tasksMigration)
-		expect(await generateSchema(url, schema, [])).toBe(await Bun.file(join(import.meta.dir, 'fixtures', 'tasks.generated.ts')).text())
+		expect((await generateSchema(url, schema, [])).source).toBe(await Bun.file(join(import.meta.dir, 'fixtures', 'tasks.generated.ts')).text())
 	})
 
 	test('types each supported column as Bun.SQL decodes it', async () => {
@@ -343,7 +356,7 @@ describe.skipIf(!hasPostgres)('codegen against real Postgres', () => {
 			INSERT INTO samples (label, code, small, medium, big, amount, ratio, share, done, due, seen, starts, starts_tz, length, state)
 			VALUES ('a', 'xy', 1, 2, 3, 4.5, 1.5, 2.5, true, '2026-10-08', '2026-10-08 12:00', '12:00', '12:00+02', '1 hour', 'busy');
 		`)
-		const source = await generateSchema(url, schema, [])
+		const { source } = await generateSchema(url, schema, [])
 		expect(interfaceOf(source, 'SamplesTable')).toBe(`export interface SamplesTable {
 	id: Generated<string>
 	label: string
@@ -407,25 +420,44 @@ describe.skipIf(!hasPostgres)('codegen against real Postgres', () => {
 			id text PRIMARY KEY,
 			n int8 GENERATED ALWAYS AS IDENTITY,
 			body text,
-			search tsvector GENERATED ALWAYS AS (to_tsvector('simple', coalesce(body, ''))) STORED
+			search tsvector GENERATED ALWAYS AS (to_tsvector('simple', coalesce(body, ''))) STORED,
+			words text[] GENERATED ALWAYS AS (ARRAY[body]) STORED
 		);
 		CREATE INDEX documents_search ON documents USING gin (search);`
 		const schema = await migrated(ddl)
-		const computed = (await introspectSchema(url, schema, [])).filter((column) => column.table_name === 'documents').map((column) => [
+		const read = (await introspectSchema(url, schema, [])).filter((column) => column.table_name === 'documents').map((column) => [
 			column.column_name,
 			column.generated,
 			column.computed,
+			column.keyed,
 		])
-		expect(computed).toEqual([['id', 'no', false], ['n', 'always', false], ['body', 'no', false], ['search', 'always', true]])
-		const module = await generateSchemaModule(url, schema, [])
-		expect(module.leftOut).toEqual([{ table: 'documents', column: 'search', type: 'tsvector' }])
+		expect(read).toEqual([
+			['id', 'no', false, true],
+			['n', 'always', false, false],
+			['body', 'no', false, false],
+			['search', 'always', true, false],
+			['words', 'always', true, false],
+		])
+		const module = await generateSchema(url, schema, [])
+		expect(module.leftOut).toEqual([
+			{ table: 'documents', column: 'search', type: 'tsvector' },
+			{ table: 'documents', column: 'words', type: 'text[]' },
+		])
 		expect(interfaceOf(module.source, 'DocumentsTable')).toBe(
 			'export interface DocumentsTable {\n\tid: string\n\tn: GeneratedAlways<string>\n\tbody: string | null\n'
-				+ '\t// search (tsvector, generated) is left out: the data layer does not read it; ctx.sql does\n}\n',
+				+ '\t// search (tsvector, generated) is left out: the data layer does not read it; ctx.sql does\n'
+				+ '\t// words (text[], generated) is left out: the data layer does not read it; ctx.sql does\n}\n',
 		)
 		expect(module.source).not.toContain("'search'")
 		await expect(generateSchema(url, await migrated('CREATE TABLE documents (id text PRIMARY KEY, search tsvector);'), [])).rejects.toThrow(
 			'documents.search has type tsvector, which the data layer does not read or bind',
+		)
+		const keyed = await migrated(
+			`CREATE TABLE documents (id text PRIMARY KEY, body text, words text[] GENERATED ALWAYS AS (ARRAY[body]) STORED);
+			CREATE UNIQUE INDEX documents_words ON documents (words);`,
+		)
+		await expect(generateSchema(url, keyed, [])).rejects.toThrow(
+			'documents.words is a generated column of a type the data layer does not read, so codegen leaves it out, but it is in the primary key or a unique key',
 		)
 	})
 
@@ -449,7 +481,7 @@ describe.skipIf(!hasPostgres)('codegen against real Postgres', () => {
 		await expect(generateSchema(url, schema, [])).rejects.toThrow(CodegenError)
 		const { files, objects } = classifyMigrations([{ name: '20261008120000_init.sql', sql: ddl }], schema)
 		expect(files[0]?.refused).toEqual([])
-		expect(await generateSchema(url, schema, objects)).toContain('export interface DealsTable {')
+		expect((await generateSchema(url, schema, objects)).source).toContain('export interface DealsTable {')
 	})
 
 	test('the start check holds when the role sets standard_conforming_strings off and puts the schema first', async () => {
@@ -479,7 +511,7 @@ describe.skipIf(!hasPostgres)('codegen against real Postgres', () => {
 		await expect(generateSchema(url, schema, [])).rejects.toThrow(
 			`schema ${schema} holds database code that escapes it or that no migration declares: trigger deals.noop (no migration declares it);`,
 		)
-		expect(await generateSchema(url, schema, [{ kind: 'trigger', name: 'deals.noop' }])).toContain('export interface DealsTable {')
+		expect((await generateSchema(url, schema, [{ kind: 'trigger', name: 'deals.noop' }])).source).toContain('export interface DealsTable {')
 	})
 
 	test('refuses a schema that was never migrated', async () => {

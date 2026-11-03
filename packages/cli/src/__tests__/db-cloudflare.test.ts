@@ -60,10 +60,10 @@ describe('fabrika db on Cloudflare', () => {
 		expect(await run(root, 'codegen')).toBe(`${SCHEMA}\n`)
 		const written = readFileSync(join(root, SCHEMA), 'utf8')
 		expect(written).toBe(
-			await generateSqliteSchema([
+			(await generateSqliteSchema([
 				{ bundle: 'fabrika', migrations: SQLITE_FRAMEWORK_MIGRATIONS },
 				{ bundle: 'app', migrations: [{ name: '20261022120000_notes.sql', sql: NOTES }] },
-			]),
+			])).source,
 		)
 		expect(written).toContain('export interface NotesTable {\n\tid: string\n\ttitle: string\n\tpinned: number\n}')
 		expect(written).not.toContain('fabrika_')
@@ -72,19 +72,19 @@ describe('fabrika db on Cloudflare', () => {
 		expect(await failure(run(root, 'codegen', ['--verify']))).toBe(`${SCHEMA} is stale; run fabrika db codegen and commit the result`)
 	})
 
-	test('codegen names each generated column it leaves out', async () => {
+	test('codegen names each generated column it leaves out, on --verify too', async () => {
 		const root = appRoot(CLOUDFLARE_CONFIG)
 		writeMigration(
 			root,
 			'20261022120000_notes.sql',
 			"create table notes (id text primary key, meta json generated always as (json_object('id', id)));\n",
 		)
-		expect(await run(root, 'codegen')).toBe(
-			`${SCHEMA}\nleft out notes.meta (json, generated): the data layer does not read it; ctx.sql does\n`,
-		)
+		const named = 'notes.meta (json, generated) is left out: the data layer does not read it; ctx.sql does\n'
+		expect(await run(root, 'codegen')).toBe(`${named}${SCHEMA}\n`)
 		expect(readFileSync(join(root, SCHEMA), 'utf8')).toContain(
 			'\t// meta (json, generated) is left out: the data layer does not read it; ctx.sql does\n',
 		)
+		expect(await run(root, 'codegen', ['--verify'])).toBe(`${named}${SCHEMA} is current\n`)
 	})
 
 	test('migrate refuses: the Durable Object migrates its own database when it boots', async () => {

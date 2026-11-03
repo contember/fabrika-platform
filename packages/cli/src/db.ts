@@ -12,8 +12,8 @@ import {
 	readApplicationTree,
 	scaffoldInputs,
 } from '@fabrika/check'
-import { CodegenError, type GeneratedModule, generateSchemaModule, SCHEMA_FILE } from '@fabrika/db/codegen'
-import { generateSqliteSchemaModule } from '@fabrika/db/codegen-sqlite'
+import { CodegenError, type GeneratedModule, generateSchema, leftOutText, SCHEMA_FILE } from '@fabrika/db/codegen'
+import { generateSqliteSchema } from '@fabrika/db/codegen-sqlite'
 import { FRAMEWORK_MIGRATION_BUNDLE, FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
 import { SQLITE_FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations-sqlite'
 import {
@@ -165,7 +165,7 @@ const postgresSchema = async (deps: DbCommandDependencies): Promise<GeneratedMod
 	const url = required(deps.source, 'FABRIKA_APP_DATABASE_URL')
 	try {
 		// The migrations' manifest: the start check refuses any database object no migration declares.
-		return await generateSchemaModule(url, migrations.schema, migrations.objects())
+		return await generateSchema(url, migrations.schema, migrations.objects())
 	} catch (error) {
 		throw reportable(error)
 	}
@@ -173,7 +173,7 @@ const postgresSchema = async (deps: DbCommandDependencies): Promise<GeneratedMod
 
 /** The schema module of the bundles the Durable Object applies, in its order, run in an in-memory database. */
 const sqliteSchema = async (cwd: string): Promise<GeneratedModule> =>
-	generateSqliteSchemaModule([
+	generateSqliteSchema([
 		{ bundle: FRAMEWORK_MIGRATION_BUNDLE, migrations: SQLITE_FRAMEWORK_MIGRATIONS },
 		{ bundle: APPLICATION_MIGRATION_BUNDLE, migrations: await sqliteApplicationMigrations(cwd) },
 	])
@@ -183,6 +183,8 @@ const codegen = async (argv: readonly string[], deps: DbCommandDependencies): Pr
 	refuseArguments('codegen', argv.filter((arg) => arg !== '--verify'))
 	const { source, leftOut } = (await dialectAt(deps.cwd)) === 'sqlite' ? await sqliteSchema(deps.cwd) : await postgresSchema(deps)
 	const path = join(deps.cwd, SCHEMA_FILE)
+	// Named on every run, --verify's too, so a column the module leaves out is never silent.
+	for (const column of leftOut) deps.write(`${leftOutText(`${column.table}.${column.column}`, column.type)}\n`)
 	if (verify) {
 		const committed = await readFile(path, 'utf8').catch(() => undefined)
 		if (committed !== source) throw new Error(`${SCHEMA_FILE} is stale; run fabrika db codegen and commit the result`)
@@ -192,9 +194,6 @@ const codegen = async (argv: readonly string[], deps: DbCommandDependencies): Pr
 	await mkdir(dirname(path), { recursive: true })
 	await writeFile(path, source)
 	deps.write(`${SCHEMA_FILE}\n`)
-	for (const column of leftOut) {
-		deps.write(`left out ${column.table}.${column.column} (${column.type}, generated): the data layer does not read it; ctx.sql does\n`)
-	}
 }
 
 const expectedTests = async (

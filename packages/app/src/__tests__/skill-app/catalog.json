@@ -9,6 +9,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": true,
 			"enum_labels": []
 		},
 		{
@@ -20,6 +22,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "timestamp with time zone",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -31,6 +35,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "uuid",
+			"keyed": true,
 			"enum_labels": []
 		},
 		{
@@ -42,6 +48,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -53,6 +61,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -64,6 +74,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": true,
 			"enum_labels": []
 		},
 		{
@@ -75,6 +87,8 @@
 			"nullable": true,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "bigint",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -86,6 +100,8 @@
 			"nullable": true,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -97,6 +113,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -108,6 +126,8 @@
 			"nullable": true,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -119,6 +139,8 @@
 			"nullable": true,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -130,6 +152,8 @@
 			"nullable": true,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -141,6 +165,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "timestamp with time zone",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -152,6 +178,8 @@
 			"nullable": true,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -163,6 +191,8 @@
 			"nullable": false,
 			"generated": "default",
 			"computed": false,
+			"formatted_type": "integer",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -174,6 +204,8 @@
 			"nullable": true,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "timestamp with time zone",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -185,6 +217,8 @@
 			"nullable": true,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -196,6 +230,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": true,
 			"enum_labels": []
 		},
 		{
@@ -207,6 +243,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": true,
 			"enum_labels": []
 		},
 		{
@@ -218,6 +256,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "timestamp with time zone",
+			"keyed": true,
 			"enum_labels": []
 		},
 		{
@@ -229,6 +269,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "integer",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -240,6 +282,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": true,
 			"enum_labels": []
 		},
 		{
@@ -251,6 +295,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "timestamp with time zone",
+			"keyed": true,
 			"enum_labels": []
 		},
 		{
@@ -262,6 +308,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "bigint",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -273,6 +321,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": true,
 			"enum_labels": []
 		},
 		{
@@ -284,6 +334,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": true,
 			"enum_labels": []
 		},
 		{
@@ -295,6 +347,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "timestamp with time zone",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -306,6 +360,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "uuid",
+			"keyed": true,
 			"enum_labels": []
 		},
 		{
@@ -317,6 +373,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -328,6 +386,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -339,6 +399,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -350,6 +412,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": true,
 			"enum_labels": []
 		},
 		{
@@ -361,6 +425,8 @@
 			"nullable": true,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "bigint",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -372,6 +438,8 @@
 			"nullable": true,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -383,6 +451,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -394,6 +464,8 @@
 			"nullable": true,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -405,6 +477,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "timestamp with time zone",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -416,6 +490,8 @@
 			"nullable": true,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "timestamp with time zone",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -427,6 +503,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": true,
 			"enum_labels": []
 		},
 		{
@@ -438,6 +516,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "boolean",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -449,6 +529,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": true,
 			"enum_labels": []
 		},
 		{
@@ -460,6 +542,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "integer",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -471,6 +555,8 @@
 			"nullable": true,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -482,6 +568,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "timestamp with time zone",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -493,6 +581,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "timestamp with time zone",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -504,6 +594,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "timestamp with time zone",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -515,6 +607,8 @@
 			"nullable": true,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "timestamp with time zone",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -526,6 +620,8 @@
 			"nullable": true,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "timestamp with time zone",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -537,6 +633,8 @@
 			"nullable": true,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -548,6 +646,8 @@
 			"nullable": true,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "timestamp with time zone",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -559,6 +659,8 @@
 			"nullable": true,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "integer",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -570,6 +672,8 @@
 			"nullable": true,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "timestamp with time zone",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -581,6 +685,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": true,
 			"enum_labels": []
 		},
 		{
@@ -592,6 +698,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": true,
 			"enum_labels": []
 		},
 		{
@@ -603,6 +711,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -614,6 +724,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "integer",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -625,6 +737,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "uuid",
+			"keyed": true,
 			"enum_labels": []
 		},
 		{
@@ -636,6 +750,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -647,6 +763,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "bigint",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -658,6 +776,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -669,6 +789,8 @@
 			"nullable": false,
 			"generated": "default",
 			"computed": false,
+			"formatted_type": "integer",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -680,6 +802,8 @@
 			"nullable": true,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": true,
 			"enum_labels": []
 		},
 		{
@@ -691,6 +815,8 @@
 			"nullable": false,
 			"generated": "default",
 			"computed": false,
+			"formatted_type": "boolean",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -702,6 +828,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": true,
 			"enum_labels": []
 		},
 		{
@@ -713,6 +841,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -724,6 +854,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -735,6 +867,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -746,6 +880,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -757,6 +893,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -768,6 +906,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -779,6 +919,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "bigint",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -790,6 +932,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": true,
 			"enum_labels": []
 		},
 		{
@@ -801,6 +945,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": true,
 			"enum_labels": []
 		},
 		{
@@ -812,6 +958,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "bigint",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -823,6 +971,8 @@
 			"nullable": true,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "bigint",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -834,6 +984,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": true,
 			"enum_labels": []
 		},
 		{
@@ -845,6 +997,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -856,6 +1010,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "integer",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -867,6 +1023,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "uuid",
+			"keyed": true,
 			"enum_labels": []
 		},
 		{
@@ -878,6 +1036,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "uuid",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -889,6 +1049,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -900,6 +1062,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "integer",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -911,6 +1075,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -922,6 +1088,8 @@
 			"nullable": false,
 			"generated": "default",
 			"computed": false,
+			"formatted_type": "timestamp with time zone",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -933,6 +1101,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "uuid",
+			"keyed": true,
 			"enum_labels": []
 		},
 		{
@@ -944,6 +1114,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": true,
 			"enum_labels": []
 		},
 		{
@@ -955,6 +1127,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -966,6 +1140,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -977,6 +1153,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "integer",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -988,6 +1166,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "uuid",
+			"keyed": true,
 			"enum_labels": []
 		},
 		{
@@ -999,6 +1179,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "uuid",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -1010,6 +1192,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "uuid",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -1021,6 +1205,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -1032,6 +1218,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "uuid",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -1043,6 +1231,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -1054,6 +1244,8 @@
 			"nullable": false,
 			"generated": "default",
 			"computed": false,
+			"formatted_type": "timestamp with time zone",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -1065,6 +1257,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "uuid",
+			"keyed": true,
 			"enum_labels": []
 		},
 		{
@@ -1076,6 +1270,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "uuid",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -1087,6 +1283,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "uuid",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -1098,6 +1296,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -1109,6 +1309,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -1120,6 +1322,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -1131,6 +1335,8 @@
 			"nullable": false,
 			"generated": "default",
 			"computed": false,
+			"formatted_type": "timestamp with time zone",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -1142,6 +1348,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "uuid",
+			"keyed": true,
 			"enum_labels": []
 		},
 		{
@@ -1153,6 +1361,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "uuid",
+			"keyed": true,
 			"enum_labels": []
 		},
 		{
@@ -1164,6 +1374,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": true,
 			"enum_labels": []
 		},
 		{
@@ -1175,6 +1387,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -1186,6 +1400,8 @@
 			"nullable": false,
 			"generated": "default",
 			"computed": false,
+			"formatted_type": "task_status",
+			"keyed": false,
 			"enum_labels": [
 				"open",
 				"doing",
@@ -1201,6 +1417,8 @@
 			"nullable": true,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -1212,6 +1430,8 @@
 			"nullable": true,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -1223,6 +1443,8 @@
 			"nullable": true,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "date",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -1234,6 +1456,8 @@
 			"nullable": false,
 			"generated": "default",
 			"computed": false,
+			"formatted_type": "boolean",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -1245,6 +1469,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "text",
+			"keyed": false,
 			"enum_labels": []
 		},
 		{
@@ -1256,6 +1482,8 @@
 			"nullable": false,
 			"generated": "no",
 			"computed": false,
+			"formatted_type": "integer",
+			"keyed": false,
 			"enum_labels": []
 		}
 	],

@@ -63,6 +63,10 @@ const catalogColumnSchema = z.object({
 	generated: z.enum(['no', 'default', 'always']),
 	/** A column `GENERATED ALWAYS AS (…)` computes (`pg_attribute.attgenerated`); an identity column is not one. */
 	computed: z.boolean(),
+	/** The column's type as its author wrote it (`format_type`, without the schema): `text[]` where `type_name` is `_text`. */
+	formatted_type: z.string(),
+	/** The column is in the primary key or in a unique index. */
+	keyed: z.boolean(),
 	enum_labels: z.array(z.string()),
 })
 
@@ -99,6 +103,8 @@ SELECT
 		ELSE 'no'
 	END AS generated,
 	a.attgenerated <> '' AS computed,
+	replace(format_type(a.atttypid, a.atttypmod), $1 || '.', '') AS formatted_type,
+	EXISTS (SELECT 1 FROM pg_index i WHERE i.indrelid = c.oid AND i.indisunique AND a.attnum = ANY (i.indkey)) AS keyed,
 	ARRAY(SELECT e.enumlabel::text FROM pg_enum e WHERE e.enumtypid = t.oid ORDER BY e.enumsortorder) AS enum_labels
 FROM pg_attribute a
 JOIN pg_class c ON c.oid = a.attrelid
@@ -219,7 +225,7 @@ export interface DescribedColumn {
 
 /** A column `describe` leaves out of the module: a generated column of a type the data layer does not read. */
 export interface LeftOut {
-	/** The column's type, as the database names it. */
+	/** The column's type, as its author wrote it. */
 	readonly leftOut: string
 }
 
@@ -227,8 +233,18 @@ export interface LeftOut {
 export interface LeftOutColumn {
 	readonly table: string
 	readonly column: string
-	/** Its type as the module's comment names it. */
+	/** Its type, as its author wrote it. */
 	readonly type: string
+}
+
+/** What codegen says of a left-out column: in the module, `name` is the column; in its output, `table.column`. */
+export function leftOutText(name: string, type: string): string {
+	return `${name} (${type}, generated) is left out: the data layer does not read it; ctx.sql does`
+}
+
+/** Why a left-out column refuses the schema: the table would lose a key, or a foreign key a column. */
+export function leftOutRefusal(path: string, what: string): CodegenError {
+	return new CodegenError(`${path} is a generated column of a type the data layer does not read, so codegen leaves it out, but ${what}`)
 }
 
 /** The text of `SCHEMA_FILE`, and the columns it leaves out, for the command to name. */
@@ -251,10 +267,15 @@ export interface NamedColumn {
 	readonly column_name: string
 }
 
+/**
+ * A column's types; for a type the data layer does not read, a generated column (any such type: an array, JSON, a
+ * range, a composite, a domain) is left out, unless a key needs it, and any other column is refused.
+ */
 function describePostgres(column: CatalogColumn): DescribedColumn | LeftOut {
 	const scalar = scalarType(column)
 	if (scalar === undefined) {
-		if (column.computed) return { leftOut: column.type_name }
+		if (column.computed && column.keyed) throw leftOutRefusal(columnPath(column), 'it is in the primary key or a unique key')
+		if (column.computed) return { leftOut: column.formatted_type }
 		throw new CodegenError(
 			`${columnPath(column)} has type ${column.type_name}, which the data layer does not read or bind (supported: ${
 				[...SCALAR_TYPES.keys()].join(', ')
@@ -287,15 +308,10 @@ function columnType(column: DescribedColumn): Rendered {
 
 /**
  * The generated module: one interface per application table, the `DB` map Kysely and `defineTables` take, and the
- * runtime column list with each table's foreign keys to application tables. Deterministic for a given catalog, so
- * `fabrika db codegen --verify` can compare text.
+ * runtime column list with each table's foreign keys to application tables; with the columns it leaves out.
+ * Deterministic for a given catalog, so `fabrika db codegen --verify` can compare text.
  */
-export function renderSchema(catalog: readonly CatalogColumn[], foreignKeys: readonly CatalogForeignKey[] = []): string {
-	return renderSchemaModule(catalog, foreignKeys).source
-}
-
-/** `renderSchema`, with the columns the module leaves out. */
-export function renderSchemaModule(catalog: readonly CatalogColumn[], foreignKeys: readonly CatalogForeignKey[] = []): GeneratedModule {
+export function renderSchema(catalog: readonly CatalogColumn[], foreignKeys: readonly CatalogForeignKey[] = []): GeneratedModule {
 	return renderTables(catalog, foreignKeys, describePostgres)
 }
 
@@ -330,7 +346,6 @@ export function renderTables<C extends NamedColumn>(
 	const interfaces: string[] = []
 	const described = new Map<C, DescribedColumn>()
 	const leftOut: LeftOutColumn[] = []
-	const leftOutPaths = new Set<string>()
 	for (const table of names) {
 		const name = interfaceName(table)
 		const owner = owners.get(name)
@@ -341,11 +356,10 @@ export function renderTables<C extends NamedColumn>(
 		for (const column of tables.get(table) ?? []) {
 			const description = describe(column)
 			if ('leftOut' in description) {
-				// A type name is the database's text: one that could end the comment line is quoted.
-				const type = /^[\w (),.]+$/.test(description.leftOut) ? description.leftOut : quote(description.leftOut)
+				const type = description.leftOut
 				leftOut.push({ table, column: column.column_name, type })
-				leftOutPaths.add(columnPath(column))
-				fields.push(`\t// ${column.column_name} (${type}, generated) is left out: the data layer does not read it; ctx.sql does\n`)
+				// A type name is the database's text: one that could end the comment line is quoted there.
+				fields.push(`\t// ${leftOutText(column.column_name, /^[\w (),.[\]]+$/.test(type) ? type : quote(type))}\n`)
 				continue
 			}
 			kept.push(column)
@@ -360,17 +374,14 @@ export function renderTables<C extends NamedColumn>(
 		tables.set(table, kept)
 		interfaces.push(`export interface ${name} {\n${fields.join('')}}\n`)
 	}
+	const leftOutPaths = new Set(leftOut.map((column) => columnPath({ table_name: column.table, column_name: column.column })))
 	for (const key of foreignKeys) {
 		if (!tables.has(key.table_name) || !tables.has(key.referenced_table)) continue
 		const named = [
 			...key.columns.map((column) => columnPath({ table_name: key.table_name, column_name: column })),
 			...key.referenced_columns.map((column) => columnPath({ table_name: key.referenced_table, column_name: column })),
 		].find((path) => leftOutPaths.has(path))
-		if (named !== undefined) {
-			throw new CodegenError(
-				`${named} is a generated column of a type the data layer does not read, so codegen leaves it out, but a foreign key of ${key.table_name} names it`,
-			)
-		}
+		if (named !== undefined) throw leftOutRefusal(named, `a foreign key of ${key.table_name} names it`)
 	}
 	const kyselyNames = ['ColumnType', 'Generated', 'GeneratedAlways'].filter((name) => used.has(name))
 	const imports = [
@@ -414,12 +425,7 @@ export function renderTables<C extends NamedColumn>(
 }
 
 /** Introspects the migrated schema, checked against the migrations' manifest, and renders the module for `SCHEMA_FILE`. */
-export async function generateSchemaModule(url: string, schema: string, objects: readonly DatabaseObject[]): Promise<GeneratedModule> {
+export async function generateSchema(url: string, schema: string, objects: readonly DatabaseObject[]): Promise<GeneratedModule> {
 	const catalog = await introspectCatalog(url, schema, objects)
-	return renderSchemaModule(catalog.columns, catalog.foreignKeys)
-}
-
-/** `generateSchemaModule`'s text alone. */
-export async function generateSchema(url: string, schema: string, objects: readonly DatabaseObject[]): Promise<string> {
-	return (await generateSchemaModule(url, schema, objects)).source
+	return renderSchema(catalog.columns, catalog.foreignKeys)
 }
