@@ -18,6 +18,7 @@ import type {
 import type {
 	ConnectResult,
 	DirectoryMember,
+	HandlerInput,
 	LinkIssuing,
 	Member,
 	MemberDirectory,
@@ -33,7 +34,7 @@ import type { app } from './src/app-kit'
 import type { DB } from './src/db/schema.generated'
 import type { tables } from './src/db/tables'
 import type { deals } from './src/deals/endpoints'
-import type { ById, Deal, OrgInput } from './src/schemas'
+import type { ById, CopyDeal, Deal, OrgInput } from './src/schemas'
 
 type Equal<A, B> = (<X>() => X extends A ? 1 : 2) extends <X>() => X extends B ? 1 : 2 ? true : false
 type Expect<T extends true> = T
@@ -85,6 +86,36 @@ type Several = Context<
 		}
 	}
 >
+type OnMutationAccess = { readonly action: 'deals.write'; readonly on: 'deal'; readonly from: 'id' }
+type OverQueryAccess = { readonly action: 'crm.read'; readonly over: 'org' }
+type CopyAccess = {
+	readonly capabilities: {
+		readonly deal: { readonly action: 'crm.read'; readonly on: 'deal'; readonly from: 'id' }
+		readonly into: { readonly action: 'deals.write'; readonly in: 'company'; readonly from: 'companyId' }
+		readonly orgs: { readonly action: 'deals.write'; readonly over: 'org' }
+	}
+}
+/** An access object that leaked its type: `JSON.parse` answers the compiler's untyped value. */
+type UntypedAccess = ReturnType<typeof JSON.parse>
+/** A capability typed as a union of its forms: its `from`, where it has one, is still removed. */
+type EitherAccess = {
+	readonly capabilities: {
+		readonly deal: { readonly action: 'crm.read'; readonly over: 'org' } | { readonly action: 'crm.read'; readonly on: 'deal'; readonly from: 'id' }
+		readonly into: { readonly action: 'deals.write'; readonly in: 'company'; readonly from: 'companyId' }
+	}
+}
+/** A capabilities access widened to its declared constraint: each capability may name any string field. */
+type WidenedAccess = {
+	readonly capabilities: {
+		readonly [name: string]: { readonly action: 'crm.read'; readonly on: 'deal'; readonly from: 'id' | 'companyId' | 'title' }
+	}
+}
+type ListedAccess = {
+	readonly capabilities: {
+		readonly orgs: { readonly action: 'crm.read'; readonly over: 'org' }
+		readonly companies: { readonly action: 'crm.read'; readonly over: 'company' }
+	}
+}
 
 /** The API matrix: what each access form puts on `ctx` and `ctx.db`, and what it refuses with a message. */
 export type Matrix = [
@@ -275,6 +306,24 @@ export type Sites = [
 	// Several capabilities are held by name and bound one at a time.
 	Expect<Equal<Several['capabilities'], { readonly deal: Ref<'deal', 'crm.read'>; readonly orgs: Within<'org', 'deals.write'> }>>,
 	Expect<Equal<Several['target'], Unavailable<'an endpoint of several capabilities holds each in ctx.capabilities.<name>'>>>,
+	// A single `on` or `in` form removes its `from` field, and so does each `on` and `in` capability of several; an `over`
+	// capability reads no field, and a widened `from` removes every field it may name. The runtime freezes the input of
+	// both, so it is read-only, each field with its type and optionality. A form that reads no field, or an untyped
+	// one, leaves the input as parsed.
+	Expect<
+		Equal<HandlerInput<typeof CopyDeal, OnMutationAccess>, { readonly companyId: string; readonly title: string; readonly note?: string | undefined }>
+	>,
+	Expect<Equal<HandlerInput<typeof CopyDeal, CopyAccess>, { readonly title: string; readonly note?: string | undefined }>>,
+	Expect<Equal<HandlerInput<typeof CopyDeal, EitherAccess>, { readonly title: string; readonly note?: string | undefined }>>,
+	Expect<Equal<HandlerInput<typeof CopyDeal, WidenedAccess>, { readonly note?: string | undefined }>>,
+	Expect<
+		Equal<
+			HandlerInput<typeof CopyDeal, ListedAccess>,
+			{ readonly id: string; readonly companyId: string; readonly title: string; readonly note?: string | undefined }
+		>
+	>,
+	Expect<Equal<HandlerInput<typeof CopyDeal, OverQueryAccess>, { id: string; companyId: string; title: string; note?: string | undefined }>>,
+	Expect<Equal<HandlerInput<typeof CopyDeal, UntypedAccess>, { id: string; companyId: string; title: string; note?: string | undefined }>>,
 ]
 
 type Get = typeof deals.endpoints.get

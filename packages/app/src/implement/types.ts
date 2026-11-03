@@ -93,10 +93,28 @@ type LinksContext<C, Acc> = TargetOf<Acc> extends readonly [infer D extends stri
 /** What a procedure's context carries for its access form in this contract. */
 export type ContractContext<C, Acc> = AccessContext<Acc> & MembersContext<C, Acc> & LinksContext<C, Acc>
 
-/** The input without the `from` field: the only copy of that id a handler has is the checked capability. */
-export type HandlerInput<I, Acc> = Acc extends { readonly from: infer F extends string }
-	? { readonly [K in keyof InputOf<I> as K extends F ? never : K]: InputOf<I>[K] }
-	: InputOf<I>
+/**
+ * The `from` fields an access form reads: its own, or under `capabilities` each `on` and `in` one's (`over` reads none).
+ * The runtime removes the same fields (`#access` and `#capabilities` in `dispatch.ts`). A widened `from` (`string`, or
+ * the union of the input's string fields an access widened to its declared constraint carries) removes every field it
+ * may name: the runtime removes one of them, and the declaration refuses such an access anyway.
+ */
+type FromFields<Acc> = Acc extends { readonly capabilities: infer C } ? { [N in keyof C]: FieldRead<C[N]> }[keyof C] : FieldRead<Acc>
+
+/** The field one access form reads, for each member of a form typed as a union; `never` for a form that reads none. */
+type FieldRead<F> = F extends { readonly from: infer K extends string } ? K : never
+
+/**
+ * The input as the runtime hands it to the handler: without the `from` fields and frozen under a form that reads one and
+ * under every `capabilities` access (`Object.freeze` in `takeField` and `#capabilities`); as parsed under any other.
+ */
+export type HandlerInput<I, Acc> = IsAny<Acc> extends true ? InputOf<I>
+	: Acc extends { readonly capabilities: unknown } ? Without<InputOf<I>, FromFields<Acc>>
+	: Acc extends unknown ? [FromFields<Acc>] extends [never] ? InputOf<I> : Without<InputOf<I>, FromFields<Acc>>
+	: never
+
+/** `In` without the fields `F`, read-only: the only copy of each removed id a handler has is the checked capability. */
+type Without<In, F> = { readonly [K in keyof In as K extends F ? never : K]: In[K] }
 
 export type Handler<In, Ctx, O extends Schema> = (args: { readonly input: In; readonly ctx: Ctx }) => z.input<O> | Promise<z.input<O>>
 

@@ -29,11 +29,13 @@ export class CapabilityError extends Error {
 
 /**
  * Why the layer refused, as a closed catalog: a server log names the reason and its fixed text, never the message,
- * which can quote a value the request sent.
+ * which can quote a value the request sent. Each text is one string literal, however long: a concatenation keeps the
+ * whole catalog in an SPA bundle that imports this module (`web/__tests__/bundle.test.ts`).
  */
 export const QUERY_REFUSALS = {
 	invalid_argument: 'a data-layer call took an argument of another shape than its type declares',
-	invalid_value: 'a value cannot be bound: an invalid or out-of-range date, or a non-finite number',
+	invalid_value:
+		'a value cannot be bound: undefined, a function, symbol or object of a kind the database does not bind, a list item other than a string or finite number, a date or timestamp that is neither a valid Date nor well-formed text or lies out of range, a non-finite number, or on SQLite a bigint outside the safe integer range',
 	invalid_name: 'a configured name (application, schema, table or file column) breaks its naming rule',
 	unknown_column: 'a column the table does not declare, or one this operation may not set',
 	unknown_table: 'a table src/db/tables.ts does not declare, or one no store, join or locator reaches',

@@ -961,6 +961,7 @@ export class ContractRuntime {
 	/**
 	 * Several capabilities, each minted as its single access form mints it, in their declared order, so the first one
 	 * refused answers. Each reads its value from the input as the caller sent it; the fields they read are removed after.
+	 * `HandlerInput` (`types.ts`) removes the same fields from the handler's input type.
 	 */
 	async #capabilities(
 		requirement: CapabilitiesRequirement,

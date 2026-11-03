@@ -2,6 +2,7 @@ import { attachment } from '@fabrika/app/contract'
 import { z } from 'zod/v4'
 
 export const Saved = z.strictObject({ id: z.uuid(), version: z.int() })
+export const CopyDeal = z.strictObject({ id: z.uuid(), companyId: z.string(), title: z.string(), note: z.optional(z.string()) })
 export const ById = z.strictObject({ id: z.uuid() })
 export const Stage = z.enum(['lead', 'proposal', 'won', 'lost'])
 export const Deal = z.strictObject({ id: z.uuid(), title: z.string(), stage: Stage })

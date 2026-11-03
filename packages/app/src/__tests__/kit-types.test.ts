@@ -58,16 +58,18 @@ const EXPECTED: Readonly<Record<string, string>> = {
 	'56-kicks-on-a-query.ts': 'a query kicks no job: declare kicks on a mutation',
 	'57-binds-on-a-query.ts': 'a query binds no webhook: declare binds on a mutation',
 	'58-webhooks-without-binds.ts': "declare binds: '<webhook>' on this mutation to create and remove its bindings",
+	'59-input-field-removed-by-capabilities.ts': "Property 'companyId' does not exist on type",
 }
 
 /**
  * The compiler elaborates these through the declaration's own types, so each is held to its line and text only: an
- * optional field an annotation allows, and an `unscoped` object typed apart from its call, whose whole type the
- * compiler prints.
+ * optional field an annotation allows, an `unscoped` object typed apart from its call, whose whole type the compiler
+ * prints, and an input field the access form removed, where the compiler prints the input that is left.
  */
 const ELABORATED = [
 	'11-declaration-only-in-a-type.ts',
 	'39-unscoped-union-mode-of-a-reference-table.ts',
+	'59-input-field-removed-by-capabilities.ts',
 ]
 
 describe('the staged kit', () => {

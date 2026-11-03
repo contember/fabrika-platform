@@ -144,6 +144,8 @@ copyToTask: r.mutation({
   (`on` 404, `in` and `over` 403).
 - The handler binds each with `ctx.db.on(…)`, `ctx.db.in(…)` or `ctx.db.over(…)`. It has no `ctx.target`,
   `ctx.within`, `ctx.db.app`, `ctx.members` or `ctx.links`.
+- The `from` fields are gone from `input`, as under a single `on` or `in`: `input.toTaskId` is a type error. Each id
+  is its capability's value, `ctx.capabilities.to.value`.
 - The generated tests add a denied case per capability. A join or a lock over many rows still needs `sql`.
 
 ### The methods of each handle
