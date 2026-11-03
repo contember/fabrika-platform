@@ -147,9 +147,14 @@ INSERT INTO priorities (code, label, rank) VALUES ('low', 'Low', 1), ('normal', 
 - A column with a fixed set of values is an `ENUM` type, not a `CHECK` on text: the generated tests fill text columns
   with markers, which a `CHECK` refuses.
 - Codegen types: `date` is a `YYYY-MM-DD` string; `timestamptz` reads a `Date` and takes a `Date` or a strict ISO 8601 string with `Z` or an offset;
-  `int8` and `numeric` are strings; an enum is its literal union. JSON, `bytea`, arrays and domains are refused.
+  `int8` and `numeric` are strings; an enum is its literal union. `bytea`, arrays and domains are refused.
+- A column of JSON is `jsonb` (`json` is refused: it keeps whitespace and duplicate keys). It reads as `unknown`: parse it
+  with a zod schema in the handler, never trust its shape. A write takes a JSON value (plain objects and arrays, strings,
+  finite numbers, booleans; a `Date`, a `Map` or a class instance is refused), and `null` is SQL NULL. A `where`,
+  `orderBy` or aggregate never names a JSON column: read a path of it with `ctx.sql` (`details ->> 'kind'`), and write
+  one there as `${JSON.stringify(value)}`.
 - A generated column (`GENERATED ALWAYS AS (…) STORED`) of any type codegen does not type (a `tsvector` for full-text
-  search, a `jsonb`, an array, a range) is left out of the generated types instead: every `fabrika db codegen` run,
+  search, a `json`, an array, a range) is left out of the generated types instead: every `fabrika db codegen` run,
   `--verify` too, prints `<table>.<column> (<type>, generated) is left out`, and `schema.generated.ts` has a comment
   where the column would stand. No `ctx.db` handle reads or writes it, a policy cannot name it, and only `ctx.sql`
   reaches it. An identity column and a generated column of a type codegen does type are never left out. A left-out
@@ -171,10 +176,12 @@ no URL. The rules above for keys, chains, composite foreign keys, `version` and 
 database enforces foreign keys.
 
 - The declared types codegen reads: `TEXT` (a UUID too), `INTEGER`, `REAL`, `BLOB`; `BOOLEAN`, stored as 0 or 1 and
-  read as a boolean; `TIMESTAMP`, stored as UTC ISO text and read as a `Date`; `DATE`, `YYYY-MM-DD` text. Any other
-  declared type is refused. A generated column of another declared type (`JSON`) is left out as on Postgres; one with
-  no declared type is refused, so declare it. A `STRICT` table admits only `INTEGER`, `REAL`, `TEXT` and `BLOB`, so a table with a
-  `BOOLEAN`, `TIMESTAMP` or `DATE` column is not `STRICT`.
+  read as a boolean; `TIMESTAMP`, stored as UTC ISO text and read as a `Date`; `DATE`, `YYYY-MM-DD` text; `JSONB`,
+  stored as JSON text and handled as Postgres's `jsonb` above (`JSON` is refused). Any other declared type is refused.
+  A generated column of another declared type (`JSON`) is left out as on Postgres; one with no declared type is
+  refused, so declare it. A `STRICT` table admits only `INTEGER`, `REAL`, `TEXT` and `BLOB`, so a table with a
+  `BOOLEAN`, `TIMESTAMP`, `DATE` or `JSONB` column is not `STRICT`. `ctx.sql` reads a `JSONB` column as its text,
+  which `JSON.parse` reads.
 - SQLite has no `ENUM`: a column with a fixed set of values is `TEXT` with `CHECK (<column> IN ('a', 'b'))`. The
   generated tests write its first value.
 - No transaction control (`BEGIN`, `COMMIT`, `SAVEPOINT`) and no Postgres syntax (`timestamptz`, `::` casts,
