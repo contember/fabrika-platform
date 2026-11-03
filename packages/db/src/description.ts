@@ -59,6 +59,8 @@ export interface TableShape {
 	readonly joinable: Readonly<Record<string, JoinShape>>
 	/** The `date` columns, which a read answers as `YYYY-MM-DD` text. */
 	readonly dates: NameSet
+	/** The JSON columns, which a query selects but never compares or orders by. */
+	readonly json: NameSet
 }
 
 export interface JoinShape {
@@ -88,8 +90,10 @@ export interface SelectState {
 
 type Comparable<V> = Exclude<V, null | undefined>
 type Columns<Row> = keyof Row & string
+/** The columns a condition or an order may name: every column but a JSON one, whose read type is `unknown`. */
+export type ComparableColumn<Row> = { [K in Columns<Row>]: unknown extends Row[K] ? never : K }[Columns<Row>]
 type StringColumn<Row> = { [K in Columns<Row>]: Comparable<Row[K]> extends string ? K : never }[Columns<Row>]
-type NullableColumn<Row> = { [K in Columns<Row>]: null extends Row[K] ? K : never }[Columns<Row>]
+type NullableColumn<Row> = { [K in ComparableColumn<Row>]: null extends Row[K] ? K : never }[ComparableColumn<Row>]
 
 /**
  * A `[column, operator, value]` condition on `Row`'s columns. A null test (`is`, `is not`) takes a nullable column only;
@@ -98,8 +102,8 @@ type NullableColumn<Row> = { [K in Columns<Row>]: null extends Row[K] ? K : neve
  */
 export type ConditionTuple<Row> =
 	| {
-		[K in Columns<Row>]: readonly [K, ComparisonOperator, Comparable<Row[K]>] | readonly [K, ListOperator, readonly Comparable<Row[K]>[]]
-	}[Columns<Row>]
+		[K in ComparableColumn<Row>]: readonly [K, ComparisonOperator, Comparable<Row[K]>] | readonly [K, ListOperator, readonly Comparable<Row[K]>[]]
+	}[ComparableColumn<Row>]
 	| { [K in StringColumn<Row>]: readonly [K, PatternOperator | 'contains', string] }[StringColumn<Row>]
 	| { [K in NullableColumn<Row>]: readonly [K, NullOperator, null] }[NullableColumn<Row>]
 
@@ -143,8 +147,12 @@ export class ScopedSelect<Row, Selected, Children> {
 		return this.#next({ columns: names })
 	}
 
-	where<C extends Columns<Row>>(column: C, operator: ComparisonOperator, value: Comparable<Row[C]>): ScopedSelect<Row, Selected, Children>
-	where<C extends Columns<Row>>(column: C, operator: ListOperator, values: readonly Comparable<Row[C]>[]): ScopedSelect<Row, Selected, Children>
+	where<C extends ComparableColumn<Row>>(column: C, operator: ComparisonOperator, value: Comparable<Row[C]>): ScopedSelect<Row, Selected, Children>
+	where<C extends ComparableColumn<Row>>(
+		column: C,
+		operator: ListOperator,
+		values: readonly Comparable<Row[C]>[],
+	): ScopedSelect<Row, Selected, Children>
 	where<C extends StringColumn<Row>>(column: C, operator: PatternOperator, pattern: string): ScopedSelect<Row, Selected, Children>
 	where<C extends NullableColumn<Row>>(column: C, operator: NullOperator, value: null): ScopedSelect<Row, Selected, Children>
 	where(column: string, operator: string, value: unknown): ScopedSelect<Row, Selected, Children> {
@@ -172,11 +180,11 @@ export class ScopedSelect<Row, Selected, Children> {
 		return this.#withCondition(this.#parseCondition(column, 'contains', text))
 	}
 
-	orderBy(column: Columns<Row>, direction: 'asc' | 'desc' = 'asc'): ScopedSelect<Row, Selected, Children> {
+	orderBy(column: ComparableColumn<Row>, direction: 'asc' | 'desc' = 'asc'): ScopedSelect<Row, Selected, Children> {
 		if (direction !== 'asc' && direction !== 'desc') {
 			throw new QueryRefusedError('list_page', `orderBy direction must be 'asc' or 'desc'`)
 		}
-		return this.#next({ orderBy: [...this.#state.orderBy, { column: this.#column(column), direction }] })
+		return this.#next({ orderBy: [...this.#state.orderBy, { column: comparableColumnOf(this.#shape, column, 'orders by'), direction }] })
 	}
 
 	limit(limit: number): ScopedSelect<Row, Selected, Children> {
@@ -239,9 +247,21 @@ export function columnOf(shape: TableShape, name: unknown): string {
 	return name
 }
 
+/** A column the shape lets a query compare, order or aggregate by: `columnOf`, and never a JSON column. */
+export function comparableColumnOf(shape: TableShape, name: unknown, use: string): string {
+	const column = columnOf(shape, name)
+	if (inSet(shape.json, column)) {
+		throw new QueryRefusedError(
+			'invalid_argument',
+			`${column} of ${shape.table} is a JSON column, which the data layer never ${use}; read a path of it with ctx.sql (->>)`,
+		)
+	}
+	return column
+}
+
 /** One `[column, operator, value]` condition over a caller's values, checked before anything reads it further. */
 export function parseCondition(shape: TableShape, column: unknown, operator: unknown, value: unknown): Compare | Contains {
-	const name = columnOf(shape, column)
+	const name = comparableColumnOf(shape, column, 'compares')
 	if (operator === 'contains') {
 		if (typeof value !== 'string') {
 			throw new QueryRefusedError('invalid_argument', 'contains takes a string')

@@ -28,6 +28,7 @@ bun test    # policy · derived-tables · tables · store · guard · hardening 
 | `tables.ts`            | `@fabrika/db/tables`, browser-safe: the policies as data (`tablePolicies`), `readTables`, `isTables`, `applicationRowsPlan` and `applicationRowRefusalText`.                                                                                                                                                                                                                                                                 |
 | `application-rows.ts`  | `planApplicationRows`: the rule of the `appRows` an endpoint access case seeds (tables, columns, values, links, order), which `@fabrika/check` reports and the test kits throw.                                                                                                                                                                                                                                              |
 | `temporal.ts`          | Days and timestamps at the boundary: a read's `YYYY-MM-DD` (`answerDays`), a write's strict day and ISO 8601 text (`dayInput`, `timestampInput`); on SQLite a timestamp's stored text (`storedTimestamp`) and a read's `Date` and boolean (`answerRows`).                                                                                                                                                                    |
+| `json.ts`              | JSON columns at the boundary: a write's JSON value checked and serialized to the text it binds (`jsonInput`), SQLite's stored text parsed on read (`sqliteJson`); `JsonValue`, `JsonColumnValue`.                                                                                                                                                                                                                            |
 | `description.ts`       | `ScopedSelect`: the frozen, non-executable query description a store callback receives.                                                                                                                                                                                                                                                                                                                                      |
 | `nodes.ts`             | Kysely operation nodes built from a description and a scope predicate.                                                                                                                                                                                                                                                                                                                                                       |
 | `guard.ts`             | The allowlist over the final operation tree, run immediately before compiling.                                                                                                                                                                                                                                                                                                                                               |
@@ -141,9 +142,10 @@ pass a recording one); `Database.fromEngine` takes another engine (`openSqlite`)
   handler sees the values Postgres's driver answers.
 - **Codegen on SQLite types a column by its declared type** (`codegen-sqlite.ts`, `DECLARED_TYPES`): TEXT, VARCHAR,
   CHAR, UUID are strings; INTEGER, INT, BIGINT, SMALLINT, REAL, DOUBLE, FLOAT numbers; BOOLEAN a boolean in `booleans`;
-  TIMESTAMP, TIMESTAMPTZ, DATETIME a `Date` in `timestamps`; DATE a `YYYY-MM-DD` string in `dates`; BLOB a `Uint8Array`.
-  Any other declared type, and a virtual table, is refused; a generated column (`hidden` 2 or 3) of another declared
-  type is left out, as on Postgres (and refused in a unique index), but one with no declared type is refused. It reads every table but `sqlite_*` and
+  TIMESTAMP, TIMESTAMPTZ, DATETIME a `Date` in `timestamps`; DATE a `YYYY-MM-DD` string in `dates`; BLOB a `Uint8Array`;
+  JSONB a JSON column in `json`, as Postgres's `jsonb` (JSON is refused, naming JSONB). Any other declared type, and a
+  virtual table, is refused; a generated column (`hidden` 2 or 3) of another declared type is left out, as on Postgres
+  (and refused in a unique index), but one with no declared type is refused. It reads every table but `sqlite_*` and
   `fabrika_*`.
 - **A writing transaction is the object's** (`openSqlite`'s runner is `storage.transaction(() => body(kysely))`): `sql.exec`
   refuses `BEGIN`, `COMMIT` and `SAVEPOINT`, and the Kysely driver refuses Kysely's own transactions. The idle timeout
@@ -427,7 +429,8 @@ pass a recording one); `Database.fromEngine` takes another engine (`openSqlite`)
 - **Bind scalars only.** `ctx.sql` encodes a list as a Postgres array literal, or JSON on SQLite (one text parameter), for the same
   reason. `Bun.SQL` mis-binds a JS array (`in` lists are expanded into parameters) and
   stores a bound JSON string as a JSON string, so values are strings, numbers, bigints, booleans, Dates
-  or null; the guard refuses anything else in a `ValueNode`. The pool runs with `prepare: false`:
+  or null; the guard refuses anything else in a `ValueNode`. A JSON column's value is bound as its JSON text
+  (`jsonInput`), which Postgres reads into `jsonb` from the untyped parameter; `codegen.test.ts` pins that. The pool runs with `prepare: false`:
   otherwise Bun keeps one prepared statement per distinct SQL text, and `in` lists of different
   lengths make that grow without bound.
 - **A `Date` is bound as its ISO 8601 UTC text, in one place per dialect: the layer's compiler** (`ParameterCompiler`
@@ -489,8 +492,10 @@ pass a recording one); `Database.fromEngine` takes another engine (`openSqlite`)
   database's own text (`cast(… as text)`, the column list's `dates`), never through the `Date` `Bun.SQL` decodes, which
   drifts by the process's offset outside 0001–9999; such a day is refused. A timestamp is a `Date`; a write also takes
   strict ISO 8601 text with `Z` or an offset (the column list's `timestamps`), and refuses `now`, `10/12/2026` or an
-  impossible day before anything is sent, as a day's text must be a real `YYYY-MM-DD`. An enum is its label union; JSON,
-  `bytea`, arrays and domains are refused rather than typed `unknown`, because the layer cannot bind
+  impossible day before anything is sent, as a day's text must be a real `YYYY-MM-DD`. An enum is its label union. A `jsonb`
+  column reads as `unknown` and writes a `JsonColumnValue` (the column list's `json`); no condition, order or aggregate
+  names it (`comparableColumnOf`), no stamped column is one, and JS `null` is SQL NULL both ways. `json` is refused,
+  naming `jsonb`. `bytea`, arrays and domains are refused rather than typed `unknown`, because the layer cannot bind
   them. A generated column of any such type (the catalog's `computed`, `pg_attribute.attgenerated`; never an identity
   column), a domain, range or composite too, is left out instead (`renderTables`): the module carries a comment where
   it stands (`leftOutText`), every `fabrika db codegen` run names it (`GeneratedModule.leftOut`, its type as

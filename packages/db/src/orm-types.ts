@@ -4,7 +4,7 @@
 
 import type { Selectable, Updateable } from 'kysely'
 import type { RowRef } from './capability'
-import type { ConditionTuple } from './description'
+import type { ComparableColumn, ConditionTuple } from './description'
 import type { FileReference } from './file-references'
 import type {
 	ActionOf,
@@ -336,7 +336,7 @@ export interface ListPage<Row> {
 	readonly next: string | null
 }
 
-export type OrderTerm<Row> = { [C in keyof Row & string]: readonly [C, 'asc' | 'desc'] }[keyof Row & string]
+export type OrderTerm<Row> = { [C in ComparableColumn<Row>]: readonly [C, 'asc' | 'desc'] }[ComparableColumn<Row>]
 
 export interface ListOptions<Row> {
 	readonly where?: readonly ConditionTuple<Row>[]

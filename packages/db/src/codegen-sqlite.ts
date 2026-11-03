@@ -10,6 +10,7 @@ import {
 	type DescribedColumn,
 	type ForeignKeyColumns,
 	type GeneratedModule,
+	JSON_COLUMN,
 	type LeftOut,
 	leftOutRefusal,
 	type NamedColumn,
@@ -41,6 +42,8 @@ const DECLARED_TYPES: ReadonlyMap<string, { readonly scalar: ScalarType; readonl
 	['DATETIME', { scalar: { select: 'Date', write: 'Date | string' }, list: 'timestamps' }],
 	['DATE', { scalar: STRING, list: 'dates' }],
 	['BLOB', { scalar: { select: 'Uint8Array' }, list: undefined }],
+	// JSON text; the name has NUMERIC affinity, so a JSON number is stored as a number (`sqliteJson`).
+	['JSONB', { scalar: JSON_COLUMN, list: 'json' }],
 ])
 
 interface SqliteColumn extends NamedColumn {
@@ -85,6 +88,13 @@ function describeSqlite(column: SqliteColumn): DescribedColumn | LeftOut {
 		if (computed && column.keyed) throw leftOutRefusal(columnPath(column), 'it is in the primary key or a unique key')
 		// A generated column without a declared type is one its author may mean to read: it is refused, not left out.
 		if (computed && base !== '') return { leftOut: column.declared.trim() }
+		if (base === 'JSON') {
+			throw new CodegenError(
+				`${
+					columnPath(column)
+				} has declared type '${column.declared}'; declare it JSONB, the name the data layer reads and binds as JSON, as Postgres's jsonb`,
+			)
+		}
 		throw new CodegenError(
 			`${columnPath(column)} has declared type '${column.declared}', which the data layer does not read or bind on SQLite (supported: ${
 				[...DECLARED_TYPES.keys()].join(', ')

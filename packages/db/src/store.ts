@@ -34,6 +34,8 @@ import {
 } from './capability'
 import { type Database, InvocationTransaction, type Session, sessionOf, type SqlDialect } from './database'
 import {
+	type ComparableColumn,
+	comparableColumnOf,
 	type Compare,
 	type Condition,
 	type Contains,
@@ -54,6 +56,7 @@ import { webhookTables } from './framework-tables'
 import type { ForeignKeyPair, GuardContext, RootKind } from './guard'
 import { fencedTransaction, jobLeases } from './job-leases'
 import { jobWakes, leaseProjection } from './job-wakes'
+import { jsonInput } from './json'
 import { linksPredicate, type LinkValue, linkValues } from './links'
 import {
 	acknowledgement,
@@ -145,7 +148,7 @@ export function dialectOf(context: TableContext): SqlDialect {
 
 /** The columns of `model`'s own rows that a read answers in a form of its own (`answerRows`). */
 export function rowColumnsOf(model: TableModel): RowColumns {
-	return { days: model.dates, timestamps: model.timestamps, booleans: model.booleans }
+	return { days: model.dates, timestamps: model.timestamps, booleans: model.booleans, json: model.json }
 }
 
 /** A timestamp's bound value on SQLite: its stored UTC text. Postgres takes a `Date` or ISO text as it is. */
@@ -1003,6 +1006,10 @@ export function readValues(values: unknown, allowed: NameSet, what: 'insert' | '
 			copied.set(key, fileValue(model, key, value))
 			continue
 		}
+		if (inSet(model.json, key)) {
+			copied.set(key, value === null ? null : jsonInput(value, `${table}.${key}`))
+			continue
+		}
 		if (value !== null && !isPrimitive(value)) {
 			throw new QueryRefusedError('invalid_argument', `${table}.${key} takes a plain value (string, number, bigint, boolean, Date or null)`)
 		}
@@ -1100,6 +1107,7 @@ function joinedColumns(context: TableContext, state: SelectState): RowColumns {
 		days: joined((columns) => columns.days),
 		timestamps: joined((columns) => columns.timestamps),
 		booleans: joined((columns) => columns.booleans),
+		json: joined((columns) => columns.json),
 	}
 }
 
@@ -1491,11 +1499,11 @@ type Columns<Row> = keyof Row & string
 type NumericColumn<Row> = { [K in Columns<Row>]: Exclude<Row[K], null> extends number | bigint | string ? K : never }[Columns<Row>]
 
 export interface AggregateSpec<Row> {
-	readonly groupBy?: readonly Columns<Row>[]
+	readonly groupBy?: readonly ComparableColumn<Row>[]
 	readonly count?: boolean
 	readonly sum?: readonly NumericColumn<Row>[]
-	readonly min?: readonly Columns<Row>[]
-	readonly max?: readonly Columns<Row>[]
+	readonly min?: readonly ComparableColumn<Row>[]
+	readonly max?: readonly ComparableColumn<Row>[]
 	readonly where?: (q: ScopedSelect<Row, Row, NoColumns>) => ScopedSelect<Row, unknown, NoColumns>
 }
 
@@ -1532,7 +1540,7 @@ function aggregateColumns(table: string, shape: TableShape, spec: AggregateInput
 			if (!inSet(shape.visible, name)) {
 				throw new QueryRefusedError('unknown_column', `${String(name)} is not a column of ${table} (columns: ${namesOf(shape.visible).join(', ')})`)
 			}
-			return name
+			return comparableColumnOf(shape, name, 'aggregates')
 		})
 		if (names === undefined) {
 			throw new QueryRefusedError('invalid_argument', `aggregate ${field} takes a plain array of column names`)
@@ -1586,6 +1594,7 @@ export async function aggregateRows<Row, O>(
 		days: aggregated(own.days, columns),
 		timestamps: aggregated(own.timestamps, columns),
 		booleans: aggregated(own.booleans, columns),
+		json: nameSet([]),
 	}, rows)
 	return dialect === 'postgres' ? answered : sqliteAggregates(context.model.name, columns, answered)
 }
@@ -1962,7 +1971,7 @@ function probeOf(context: TableContext): TableProbe {
 			)
 		},
 		group: async (capability: unknown, columns: readonly string[]) =>
-			aggregateRows<Readonly<Record<string, unknown>>, Readonly<Record<string, unknown>>>(
+			aggregateRows<Readonly<Record<string, Primitive | null>>, Readonly<Record<string, unknown>>>(
 				context,
 				run,
 				list(capability, 'rows'),
@@ -2034,7 +2043,7 @@ function appProbeOf(context: TableContext): TableProbe {
 		},
 		count,
 		group: async (capability: unknown, columns: readonly string[]) =>
-			aggregateRows<Readonly<Record<string, unknown>>, Readonly<Record<string, unknown>>>(context, run, every(capability), context.shape, {
+			aggregateRows<Readonly<Record<string, Primitive | null>>, Readonly<Record<string, unknown>>>(context, run, every(capability), context.shape, {
 				groupBy: columns,
 				count: true,
 			}),
@@ -2068,11 +2077,11 @@ function destinationOf(models: TableModels, model: TableModel, parent: TableMode
 
 /** What a select or an aggregate of a capability that reads `visible` may name: those columns, and no join. */
 export function actionShape(model: TableModel, visible: readonly string[]): TableShape {
-	return freeze({ table: model.name, visible: nameSet(visible), joinable: freeze({}), dates: model.dates })
+	return freeze({ table: model.name, visible: nameSet(visible), joinable: freeze({}), dates: model.dates, json: model.json })
 }
 
 function shapeOf(model: TableModel, joinable: Readonly<Record<string, JoinShape>>): TableShape {
-	return freeze({ table: model.name, visible: nameSet(model.visible), joinable, dates: model.dates })
+	return freeze({ table: model.name, visible: nameSet(model.visible), joinable, dates: model.dates, json: model.json })
 }
 
 function joinShapes(models: TableModels, parent: TableModel): Readonly<Record<string, JoinShape>> {

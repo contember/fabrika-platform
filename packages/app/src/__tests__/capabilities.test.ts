@@ -259,7 +259,7 @@ describe.skipIf(postgres === null)('several capabilities through the proxy decis
 
 	test('two capabilities of one action on unrelated dimensions: each keeps its denied case, a project of another scope 404, a caller without a team 403, whatever a team row needs', async () => {
 		const migrations = mkdtempSync(join(tmpdir(), 'capabilities-boards-'))
-		writeFileSync(join(migrations, '20261103120000_teams.sql'), 'create table teams (id text primary key, settings jsonb not null);\n')
+		writeFileSync(join(migrations, '20261103120000_teams.sql'), 'create table teams (id text primary key, settings bytea not null);\n')
 		const boardsDatabase = await testDatabase({ migrations, label: 'capabilities.test.ts boards' })
 		rmSync(migrations, { recursive: true, force: true })
 		if (boardsDatabase === null) throw new Error('the Postgres of this suite is gone')

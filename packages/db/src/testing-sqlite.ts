@@ -87,6 +87,7 @@ function sampleOf(table: string, column: string, declared: string): Primitive {
 	// A day is `YYYY-MM-DD` and a timestamp ISO text in UTC: the forms the layer writes and reads on SQLite.
 	if (type === 'DATE') return new Date().toISOString().slice(0, 10)
 	if (TIMESTAMP_TYPES.has(type)) return new Date().toISOString()
+	if (type === 'JSONB') return '{}'
 	throw typeLimit(table, column, declared)
 }
 

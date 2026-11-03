@@ -10,6 +10,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import ts from 'typescript'
+import { z } from 'zod/v4'
 import { type CatalogColumn, CodegenError, generateSchema, introspectSchema, renderSchema } from '../codegen'
 import { migration } from './fixtures/schema'
 import { migration as tasksMigration } from './fixtures/tasks'
@@ -122,10 +123,36 @@ describe('renderSchema', () => {
 		expect(interfaceOf(source, 'NotesTable')).toBe('export interface NotesTable {\n\ttitle: string\n\tid: string\n}\n')
 	})
 
+	test('types a jsonb column as unknown on read and a JSON value on write, and lists it as json', () => {
+		const { source } = renderSchema([
+			column('links', 'id', 'uuid'),
+			column('links', 'metadata', 'jsonb'),
+			column('links', 'extra', 'jsonb', { nullable: true }),
+			column('links', 'tags', 'jsonb', { generated: 'default' }),
+		])
+		expect(source).toContain("import type { JsonColumnValue, TypedColumnList } from '@fabrika/db'\n")
+		expect(interfaceOf(source, 'LinksTable')).toBe(`export interface LinksTable {
+	id: string
+	metadata: ColumnType<unknown, JsonColumnValue, JsonColumnValue>
+	extra: ColumnType<unknown | null, JsonColumnValue | null, JsonColumnValue | null>
+	tags: ColumnType<unknown, JsonColumnValue | undefined, JsonColumnValue>
+}
+`)
+		expect(source).toContain("\t\tforeignKeys: [],\n\t\tjson: ['metadata', 'extra', 'tags'],\n\t},\n")
+		expect(renderSchema([column('notes', 'id', 'text')]).source).toContain("import type { TypedColumnList } from '@fabrika/db'\n")
+	})
+
+	test('refuses a json column and names jsonb', () => {
+		expect(() => renderSchema([column('notes', 'meta', 'json')])).toThrow(
+			'notes.meta has type json; declare it jsonb, which the data layer reads and binds (json keeps whitespace and duplicate keys)',
+		)
+		expect(() => renderSchema([column('notes', 'metas', '_json', { type_category: 'A' })])).toThrow('notes.metas has type _json, which the data layer')
+	})
+
 	test('refuses a type it cannot type exactly, rather than guessing', () => {
 		for (
 			const unsupported of [
-				column('notes', 'meta', 'jsonb'),
+				column('notes', 'metas', '_jsonb', { type_category: 'A' }),
 				column('notes', 'blob', 'bytea'),
 				column('notes', 'tags', '_text', { type_category: 'A' }),
 				column('notes', 'email', 'email_address', { type_type: 'd' }),
@@ -133,8 +160,8 @@ describe('renderSchema', () => {
 		) {
 			expect(() => renderSchema([unsupported])).toThrow(CodegenError)
 		}
-		expect(() => renderSchema([column('notes', 'meta', 'jsonb')])).toThrow(
-			'notes.meta has type jsonb, which the data layer does not read or bind (supported: text,',
+		expect(() => renderSchema([column('notes', 'blob', 'bytea')])).toThrow(
+			'notes.blob has type bytea, which the data layer does not read or bind (supported: text,',
 		)
 	})
 
@@ -146,17 +173,18 @@ describe('renderSchema', () => {
 			'export interface DocumentsTable {\n\tid: string\n\t// search (tsvector, generated) is left out: the data layer does not read it; ctx.sql does\n\tbody: string\n}\n',
 		)
 		expect(module.source).not.toContain("'search'")
-		// Every type the layer does not read is left out of a generated column: an array, a range, a composite, a domain.
+		// Every type the layer does not read is left out of a generated column: an array, `json`, a range, a composite, a domain.
 		const computed = { generated: 'always', computed: true } as const
 		const others = renderSchema([
 			column('documents', 'id', 'text'),
+			column('documents', 'raw', 'json', computed),
 			column('documents', 'tags', '_text', { ...computed, type_category: 'A', formatted_type: 'text[]' }),
 			column('documents', 'span', 'int4range', { ...computed, type_type: 'r' }),
 			column('documents', 'pair', 'point_pair', { ...computed, type_type: 'c' }),
 			column('documents', 'mail', 'email', { ...computed, type_type: 'd' }),
 			column('documents', 'odd', 'odd', { ...computed, type_type: 'c', formatted_type: 'odd\ntype' }),
 		])
-		expect(others.leftOut.map((left) => left.type)).toEqual(['text[]', 'int4range', 'point_pair', 'email', 'odd\ntype'])
+		expect(others.leftOut.map((left) => left.type)).toEqual(['json', 'text[]', 'int4range', 'point_pair', 'email', 'odd\ntype'])
 		// The comment quotes a type name that could end its line; the list keeps the name as written.
 		expect(others.source).toContain("\t// odd ('odd\\ntype', generated) is left out: the data layer does not read it; ctx.sql does\n")
 		// A plain column, a defaulted one, and one `always` without being computed (an identity column) are refused.
@@ -351,10 +379,12 @@ describe.skipIf(!hasPostgres)('codegen against real Postgres', () => {
 				state mood NOT NULL,
 				counter int8 GENERATED ALWAYS AS IDENTITY,
 				twice int4 GENERATED ALWAYS AS (medium * 2) STORED,
-				note text
+				note text,
+				meta jsonb NOT NULL,
+				extra jsonb
 			);
-			INSERT INTO samples (label, code, small, medium, big, amount, ratio, share, done, due, seen, starts, starts_tz, length, state)
-			VALUES ('a', 'xy', 1, 2, 3, 4.5, 1.5, 2.5, true, '2026-10-08', '2026-10-08 12:00', '12:00', '12:00+02', '1 hour', 'busy');
+			INSERT INTO samples (label, code, small, medium, big, amount, ratio, share, done, due, seen, starts, starts_tz, length, state, meta)
+			VALUES ('a', 'xy', 1, 2, 3, 4.5, 1.5, 2.5, true, '2026-10-08', '2026-10-08 12:00', '12:00', '12:00+02', '1 hour', 'busy', '{"a": [1, "x", null]}');
 		`)
 		const { source } = await generateSchema(url, schema, [])
 		expect(interfaceOf(source, 'SamplesTable')).toBe(`export interface SamplesTable {
@@ -378,6 +408,8 @@ describe.skipIf(!hasPostgres)('codegen against real Postgres', () => {
 	counter: GeneratedAlways<string>
 	twice: GeneratedAlways<number | null>
 	note: string | null
+	meta: ColumnType<unknown, JsonColumnValue, JsonColumnValue>
+	extra: ColumnType<unknown | null, JsonColumnValue | null, JsonColumnValue | null>
 }
 `)
 
@@ -412,7 +444,41 @@ describe.skipIf(!hasPostgres)('codegen against real Postgres', () => {
 			counter: 'string',
 			twice: 'number',
 			note: 'null',
+			meta: 'object',
+			extra: 'null',
 		})
+		expect(typeof row === 'object' && row !== null ? Reflect.get(row, 'meta') : undefined).toEqual({ a: [1, 'x', null] })
+	})
+
+	test("pins Bun.SQL's jsonb binding, unprepared as the layer runs it: JSON text binds as its value, an object is refused", async () => {
+		const schema = await migrated('CREATE TABLE docs (id int4 PRIMARY KEY, body jsonb NOT NULL);')
+		const sql = new SQL({ url, adapter: 'postgres', max: 1, prepare: false })
+		try {
+			const texts = ['{"a": {"b": [1, 2.5, true, null]}}', '"text"', '7', '[]', 'null']
+			for (const [index, text] of texts.entries()) {
+				await sql.unsafe(`INSERT INTO ${schema}.docs (id, body) VALUES ($1, $2)`, [index, text])
+			}
+			await sql.unsafe(`UPDATE ${schema}.docs SET body = $1 WHERE id = 3`, ['["updated"]'])
+			const rows = z.array(z.object({ id: z.number(), body: z.unknown(), kind: z.string() })).parse(
+				await sql.unsafe(`SELECT id, body, jsonb_typeof(body) AS kind FROM ${schema}.docs ORDER BY id`),
+			)
+			expect(rows).toEqual([
+				{ id: 0, body: { a: { b: [1, 2.5, true, null] } }, kind: 'object' },
+				{ id: 1, body: 'text', kind: 'string' },
+				{ id: 2, body: 7, kind: 'number' },
+				{ id: 3, body: ['updated'], kind: 'array' },
+				// A top-level JSON null decodes as null, as SQL NULL does.
+				{ id: 4, body: null, kind: 'null' },
+			])
+			// Settled into a plain promise first: `expect(...).rejects` spins on Bun.SQL's lazy query.
+			const refused = await sql.unsafe(`INSERT INTO ${schema}.docs (id, body) VALUES (9, $1)`, [{ a: 1 }]).then(
+				() => undefined,
+				(error: unknown) => error,
+			)
+			expect(String(refused)).toContain('invalid input syntax for type json')
+		} finally {
+			await sql.close()
+		}
 	})
 
 	test('leaves out a stored generated tsvector under a GIN index, by attgenerated; a plain one is refused', async () => {

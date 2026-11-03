@@ -12,6 +12,7 @@
 import { defineValue, inSet, type NameSet, ownDescriptor, ownKeys } from './builtins'
 import type { SqlDialect } from './database'
 import { QueryRefusedError } from './errors'
+import { sqliteJson } from './json'
 
 /** The text Postgres prints for a day in 0001–9999 under its default `DateStyle` (ISO). */
 const DAY_TEXT = /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/
@@ -144,6 +145,8 @@ export interface RowColumns {
 	readonly timestamps: NameSet
 	/** Booleans: `true` or `false` (SQLite answers 1 or 0). */
 	readonly booleans: NameSet
+	/** JSON columns: the parsed value (SQLite answers its text). */
+	readonly json: NameSet
 }
 
 function unexpected(where: string, expected: string): QueryRefusedError {
@@ -167,12 +170,16 @@ function sqliteValue(columns: RowColumns, where: string, key: string, value: unk
 		}
 		return value === 1
 	}
+	if (inSet(columns.json, key)) {
+		return sqliteJson(value, where)
+	}
 	return typeof value === 'string' && inSet(columns.days, key) ? dayText(value, where) : value
 }
 
 /**
  * Every row of a read as the layer answers it, in place: each day as `YYYY-MM-DD` text, and on SQLite each timestamp as
- * a `Date` and each boolean as `true` or `false`, so a handler reads the same values on both dialects.
+ * a `Date`, each boolean as `true` or `false` and each JSON column as its parsed value, so a handler reads the same
+ * values on both dialects.
  */
 export function answerRows<R>(dialect: SqlDialect, table: string, columns: RowColumns, rows: R[]): R[] {
 	if (dialect === 'postgres') {

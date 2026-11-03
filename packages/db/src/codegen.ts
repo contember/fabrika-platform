@@ -25,6 +25,8 @@ const DECIMAL_STRING: ScalarType = { select: 'string', write: 'bigint | number |
 const DAY: ScalarType = { select: 'string' }
 /** A point in time: Bun decodes a `Date`; a write binds a `Date` or its ISO 8601 text. */
 const TIMESTAMP: ScalarType = { select: 'Date', write: 'Date | string' }
+/** A JSON column: a read answers the parsed value, which the handler parses with a schema; a write binds a JSON value. */
+export const JSON_COLUMN: ScalarType = { select: 'unknown', write: 'JsonColumnValue' }
 
 /** Exactly the types whose decoding by `Bun.SQL` the codegen test pins; anything else is refused, not guessed. */
 const SCALAR_TYPES: ReadonlyMap<string, ScalarType> = new Map([
@@ -45,6 +47,7 @@ const SCALAR_TYPES: ReadonlyMap<string, ScalarType> = new Map([
 	['date', DAY],
 	['timestamp', TIMESTAMP],
 	['timestamptz', TIMESTAMP],
+	['jsonb', JSON_COLUMN],
 ])
 
 export class CodegenError extends Error {
@@ -219,8 +222,8 @@ export interface DescribedColumn {
 	readonly scalar: ScalarType
 	readonly nullable: boolean
 	readonly generated: 'no' | 'default' | 'always'
-	/** The column list field that names the column: a day, a timestamp, or (on SQLite) a boolean. */
-	readonly list: 'dates' | 'timestamps' | 'booleans' | undefined
+	/** The column list field that names the column: a day, a timestamp, a JSON column, or (on SQLite) a boolean. */
+	readonly list: 'dates' | 'timestamps' | 'booleans' | 'json' | undefined
 }
 
 /** A column `describe` leaves out of the module: a generated column of a type the data layer does not read. */
@@ -268,7 +271,7 @@ export interface NamedColumn {
 }
 
 /**
- * A column's types; for a type the data layer does not read, a generated column (any such type: an array, JSON, a
+ * A column's types; for a type the data layer does not read, a generated column (any such type: an array, `json`, a
  * range, a composite, a domain) is left out, unless a key needs it, and any other column is refused.
  */
 function describePostgres(column: CatalogColumn): DescribedColumn | LeftOut {
@@ -276,6 +279,11 @@ function describePostgres(column: CatalogColumn): DescribedColumn | LeftOut {
 	if (scalar === undefined) {
 		if (column.computed && column.keyed) throw leftOutRefusal(columnPath(column), 'it is in the primary key or a unique key')
 		if (column.computed) return { leftOut: column.formatted_type }
+		if (column.type_type === 'b' && column.type_name === 'json') {
+			throw new CodegenError(
+				`${columnPath(column)} has type json; declare it jsonb, which the data layer reads and binds (json keeps whitespace and duplicate keys)`,
+			)
+		}
 		throw new CodegenError(
 			`${columnPath(column)} has type ${column.type_name}, which the data layer does not read or bind (supported: ${
 				[...SCALAR_TYPES.keys()].join(', ')
@@ -288,6 +296,8 @@ function describePostgres(column: CatalogColumn): DescribedColumn | LeftOut {
 		? 'dates'
 		: column.type_name === 'timestamp' || column.type_name === 'timestamptz'
 		? 'timestamps'
+		: column.type_name === 'jsonb'
+		? 'json'
 		: undefined
 	return { scalar, nullable: column.nullable, generated: column.generated, list }
 }
@@ -384,8 +394,9 @@ export function renderTables<C extends NamedColumn>(
 		if (named !== undefined) throw leftOutRefusal(named, `a foreign key of ${key.table_name} names it`)
 	}
 	const kyselyNames = ['ColumnType', 'Generated', 'GeneratedAlways'].filter((name) => used.has(name))
+	const json = [...described.values()].some((column) => column.list === 'json')
 	const imports = [
-		"import type { TypedColumnList } from '@fabrika/db'\n",
+		`import type { ${json ? 'JsonColumnValue, ' : ''}TypedColumnList } from '@fabrika/db'\n`,
 		...(kyselyNames.length === 0 ? [] : [`import type { ${kyselyNames.join(', ')} } from 'kysely'\n`]),
 	]
 	const db = names.map((table) => `\t${table}: ${interfaceName(table)}\n`).join('')
@@ -400,13 +411,15 @@ export function renderTables<C extends NamedColumn>(
 	}
 	/**
 	 * A table's columns listed in `field`: the days, which the layer answers as `YYYY-MM-DD`, the timestamps, whose
-	 * written text it checks, and SQLite's booleans, which it reads from 0 or 1. A table without one has no such field.
+	 * written text it checks, SQLite's booleans, which it reads from 0 or 1, and the JSON columns, whose written value
+	 * it serializes. A table without one has no such field.
 	 */
 	const listOf = (table: string, field: DescribedColumn['list']): string => {
 		const listed = (tables.get(table) ?? []).filter((column) => described.get(column)?.list === field)
 		return listed.length === 0 ? '' : `\t\t${field}: [${listed.map((column) => quote(column.column_name)).join(', ')}],\n`
 	}
-	const datesOf = (table: string): string => `${listOf(table, 'dates')}${listOf(table, 'timestamps')}${listOf(table, 'booleans')}`
+	const datesOf = (table: string): string =>
+		`${listOf(table, 'dates')}${listOf(table, 'timestamps')}${listOf(table, 'booleans')}${listOf(table, 'json')}`
 	const columns = names
 		.map((table) =>
 			`\t'${table}': {\n\t\tcolumns: [\n${(tables.get(table) ?? []).map((column) => `\t\t\t'${column.column_name}',\n`).join('')}\t\t],\n${

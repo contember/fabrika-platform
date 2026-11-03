@@ -1,6 +1,6 @@
 // A task tracker (org → project → task), the shape two fresh-agent probes built: a column only its own action writes
 // (`assignee`, by `tasks.assign`), a column only one action reads (`cost`, by `tasks.assign` too), a calendar day
-// (`due_on`) and a point in time (`closed_at`). The org is a scope only IAM knows, so no table owns it.
+// (`due_on`), a point in time (`closed_at`) and a JSON column (`details`). The org is a scope only IAM knows, so no table owns it.
 
 import { defineTables } from '../../policy'
 import { columns } from './tasks.generated'
@@ -27,8 +27,8 @@ export const tables = defineTables(vocabulary, columns)({
 	tasks: {
 		scope: { dimension: 'task' },
 		actions: { read: 'tasks.read', insert: 'tasks.write', update: 'tasks.write' },
-		insert: ['title', 'status', 'due_on'],
-		update: ['title', 'status', 'due_on', 'closed_at', 'overdue'],
+		insert: ['title', 'status', 'due_on', 'details'],
+		update: ['title', 'status', 'due_on', 'closed_at', 'overdue', 'details'],
 		version: 'version',
 		createdBy: 'created_by',
 		columns: { assignee: { write: 'tasks.assign' }, cost: { read: 'tasks.assign' } },
@@ -57,6 +57,7 @@ create table tasks (
 	closed_at timestamptz,
 	overdue boolean not null default false,
 	cost integer,
+	details jsonb,
 	created_by text not null,
 	version integer not null,
 	unique (id, project_id, org_id),

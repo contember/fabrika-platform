@@ -108,6 +108,8 @@ function sampleOf(table: string, column: CatalogColumn): Primitive {
 	if (type === 'timestamp' || type === 'timestamptz') return new Date().toISOString()
 	if (type === 'time' || type === 'timetz') return '12:00:00'
 	if (type === 'interval') return '1 hour'
+	// JSON text: the seed binds it untyped, which Postgres reads into `jsonb`.
+	if (type === 'jsonb') return '{}'
 	throw typeLimit(table, column.column_name, type)
 }
 
