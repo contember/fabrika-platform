@@ -612,6 +612,25 @@ describe('review round 2: coarse, fail-closed rules', () => {
 		expect(refusal("CREATE VIEW v AS WITH t (a) AS (SELECT pg_read_file('x')) SELECT * FROM t")).toBe('a call of pg_read_file')
 		expect(refusal('INSERT INTO t WITH a (x) AS (SELECT 1), b (y) AS (SELECT mystery(x) FROM a) SELECT y FROM b')).toBe('a call of mystery')
 		expect(refusal('INSERT INTO t SELECT a, mystery(b) FROM deals')).toBe('a call of mystery')
+		for (
+			const sql of bodies(
+				'BEGIN RETURN QUERY WITH a (x) AS (SELECT 1) SELECT x FROM a; FOR r IN WITH b (y) AS (SELECT 2) SELECT y FROM b LOOP NULL; END LOOP; END',
+			)
+		) {
+			expect({ sql, reason: refusal(sql) }).toEqual({ sql, reason: undefined })
+		}
+		const search = 'WITH RECURSIVE t (a) AS (SELECT 1 UNION ALL SELECT a + 1 FROM t WHERE a < 3) SEARCH DEPTH FIRST BY a SET o CYCLE a SET c USING p'
+		expect(refusal(`CREATE VIEW v AS ${search}, u (b) AS (SELECT 1) SELECT * FROM t, u`)).toBeUndefined()
+	})
+
+	test('a WITH where no query begins opens no CTE list: a table function aliased after WITH ORDINALITY is still a call', () => {
+		const ordinality = "SELECT * FROM unnest(array[1]) WITH ORDINALITY AS materialized (a, n), dblink('h', 'select 1') AS (x int)"
+		expect(refusal(`CREATE VIEW v AS ${ordinality}`)).toBe('a call of dblink')
+		expect(refusal(`INSERT INTO t ${ordinality}`)).toBe('a call of dblink')
+		for (const sql of bodies(`BEGIN PERFORM 1 FROM unnest(array[1]) WITH ORDINALITY AS materialized (a, n), mystery(1) AS (x int) WHERE true; END`)) {
+			expect({ sql, reason: refusal(sql) }).toEqual({ sql, reason: 'a call of mystery' })
+		}
+		expect(refusal('CREATE VIEW v AS WITH verbose (a) AS (SELECT 1) SELECT * FROM verbose')).toBe('a call of verbose')
 	})
 
 	test('a DDL relation position refuses an unqualified catalog name', () => {

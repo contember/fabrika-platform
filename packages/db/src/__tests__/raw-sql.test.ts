@@ -189,10 +189,17 @@ describe('the static text', () => {
 				parts`with a (x) as (select 1), b (y) as materialized (select 2), "C" (z) as not materialized (select 3) select * from a, b, "C"`,
 				parts`with a as (select 1 as x), b (y) as (select x from a) select y from b`,
 				parts`select * from (with t (a) as (select 1) select a from t) s`,
+				parts`with recursive t (a) as (select 1 union all select a + 1 from t where a < 3) search depth first by a set o, u (b) as (select 1)
+					select * from t, u`,
+				parts`with recursive t (a) as (select 1 union all select a + 1 from t where a < 3) search breadth first by a set o
+					cycle a set seen to true default false using path, u (b) as (select 1) select * from t, u`,
+				parts`with recursive t (a) as (select 1 union all select a + 1 from t where a < 3) cycle a set seen using path, u (b) as (select 1)
+					select * from t, u`,
 			]
 		) {
 			expect({ text: text.join('${…}'), refused: refusal(text, 'read') }).toEqual({ text: text.join('${…}'), refused: undefined })
 		}
+		expect(refusal(parts`insert into notes (id) with t (a) as (select ${'x'}) select a from t`)).toBeUndefined()
 		const refused: readonly [readonly string[], string][] = [
 			[parts`with t (a) as (select pg_read_file('x')) select * from t`, 'pg_read_file(…) at line 1'],
 			[parts`with t (a) as (select 1), u (b) as (select my_fn(a) from t) select * from u`, 'my_fn(…) at line 1'],
@@ -201,6 +208,16 @@ describe('the static text', () => {
 			[parts`with t (a) as (select 1) select * from t, my_fn(1)`, 'my_fn(…) at line 1'],
 			[parts`select x from notes window w as (order by id), my_fn (x) as (order by id)`, 'my_fn(…) at line 1'],
 			[parts`select * from unnest(${['a']}::text[]) with ordinality as my_fn(a, n), lateral my_fn(1)`, 'my_fn(…) at line 1'],
+			// `WITH ORDINALITY AS materialized (a, n)` aliases a table function; it begins no CTE list.
+			[parts`select * from unnest(array[1]) with ordinality as materialized (a, n), dblink('h','select 1') as (x int)`, 'dblink(…) at line 1'],
+			[parts`select * from rows from (unnest(array[1])) with ordinality as materialized (a, n), my_fn(1) as (x int)`, 'my_fn(…) at line 1'],
+			[parts`select 1 from notes fetch first 1 rows with ties as (select 1), my_fn (x) as (select 1)`, 'my_fn(…) at line 1'],
+			[parts`select ${'x'}::timestamp(3) with my_fn (x) as (select 1) select 1`, 'my_fn(…) at line 1'],
+			[parts`with verbose (a) as (select 1) select * from verbose`, 'verbose(…) at line 1'],
+			[
+				parts`with recursive t (a) as (select 1) cycle a set c to my_fn(1) default 0 using p, u (b) as (select 1) select * from u`,
+				'at line 1 is not a reviewed built-in function',
+			],
 		]
 		for (const [text, expected] of refused) {
 			expect({ text: text.join('${…}'), refused: refusal(text) }).toEqual({ text: text.join('${…}'), refused: expect.stringContaining(expected) })
@@ -666,6 +683,14 @@ describe.skipIf(opened === null)('ctx.sql on Postgres, as the runtime role', () 
 			{ i: 1, depth: 0 },
 			{ i: 2, depth: 1 },
 			{ i: 3, depth: 2 },
+		])
+		const Ordered = z.object({ i: z.number(), j: z.number() })
+		expect(
+			await work.sql(Ordered)`with recursive n (i) as (select 1 union all select i + 1 from n where i < 2) search depth first by i set ord
+				cycle i set seen to true default false using path, m (j) as (select 7) select i, j from n, m order by ord`,
+		).toEqual([
+			{ i: 1, j: 7 },
+			{ i: 2, j: 7 },
 		])
 		await work.transaction.commit()
 	})
