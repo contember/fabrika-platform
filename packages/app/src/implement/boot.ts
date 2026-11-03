@@ -981,7 +981,7 @@ function bootOnce(app: ContractImplementation, options: BootOptions, binding: Bi
 		capabilities: issuer.authority,
 		data,
 		fileKinds,
-		failures: new FailureReports(reporterFor('fabrika.requests'), Date.now, options.revealHandlerErrors ?? null),
+		failures: new FailureReports(reporterFor('fabrika.requests'), { reveal: options.revealHandlerErrors ?? null }),
 		kick: jobs.kick,
 		actions: Object.freeze(Object.keys(artifact.actions).sort()),
 		publicShare: new InFlightShare(publicShareOf(options.connections ?? DEFAULT_CONNECTIONS)),

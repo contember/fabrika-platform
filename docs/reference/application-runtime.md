@@ -1367,7 +1367,8 @@ process first — and runs one job:
 4. Failures are fixed codes: `timeout`, `lease_lost`, `handler_failed`,
    `query_refused`, `capability_refused`, `framework_fault` and `unavailable` (a framework
    failure, chosen by class as a request's 5xx is, with its catalog reason in the result,
-   the log line and the report's `reason` tag), `mail_failed` (a send error the handler did not catch, with the
+   the log line and the report's `reason` tag; IAM met inside the handler is named as at the
+   attempt's start, `iam_unavailable` or `unauthorized`), `mail_failed` (a send error the handler did not catch, with the
    `EmailDeliveryError` code as its reason), `driver_failed`, `crashed`, `unauthorized` (IAM
    refused the job's key), `iam_unavailable` (IAM could not be asked for its token),
    `stopped` (a kicked run the process aborted while it shut down; not reported), and

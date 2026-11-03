@@ -1172,7 +1172,9 @@ object directly over `bunSqliteStorage` (the IAM binding, the assets, the crash 
   `framework_fault`, `unavailable`,
   `driver_failed`, `crashed`, `unauthorized`, `iam_unavailable` in the run's result, its log lines and its report, and
   `boot_failed` in the CLI. The code is chosen by `instanceof` against the framework's own classes (`LeaseLostError`,
-  then `failureCode`, so a refusal or a `ServerFault` is named as a request names it), never by `name`. A framework
+  then `failureCode`, so a refusal or a `ServerFault` is named as a request names it), never by `name`. IAM met inside
+  the handler (`ServerFault` `iam_unavailable` or `workload_unauthorized`) is named as at the attempt's start,
+  `iam_unavailable` or `unauthorized`, so an alert on the code sees both. A framework
   failure also carries its catalog `reason`: in the result, in each log line with its fixed text, and as the report's `reason` tag. An application error's
   name and message are never logged or returned: either may carry a secret. The report carries them scrubbed.
 - **Reports go through the ingest every application has** (`FABRIKA_OPERATIONS_DSN`): a run that failed after its

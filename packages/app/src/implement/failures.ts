@@ -88,6 +88,8 @@ export function failureReason(error: unknown): FailureReason | null {
 export interface RequestFailure {
 	/** The endpoint id the request selected, or `request` before one was selected. */
 	readonly endpoint: string
+	/** Whether the request selected an endpoint, so `endpoint` is its id and not the fallback. */
+	readonly selected: boolean
 	/** The proxy's `X-Request-Id`. */
 	readonly requestId: string | null
 	readonly status: number
@@ -117,6 +119,11 @@ export class MinuteBudget {
 	}
 }
 
+export interface FailureReportsOptions {
+	readonly now?: () => number
+	readonly reveal?: HandlerErrorSink | null
+}
+
 export class FailureReports {
 	readonly #reporter: OperationsReporter | null
 	readonly #budget: MinuteBudget
@@ -124,12 +131,12 @@ export class FailureReports {
 
 	/**
 	 * `reporter` is `null` without an Operations DSN: the log line is then the only record. `reveal` is `boot`'s
-	 * `revealHandlerErrors`, set on the author's own run only.
+	 * `revealHandlerErrors`, set on the author's own run only; `now` is the budget's clock.
 	 */
-	constructor(reporter: OperationsReporter | null, now: () => number = Date.now, reveal: HandlerErrorSink | null = null) {
+	constructor(reporter: OperationsReporter | null, options: FailureReportsOptions = {}) {
 		this.#reporter = reporter
-		this.#budget = new MinuteBudget(MAX_FAILURE_REPORTS_PER_MINUTE, now)
-		this.#reveal = reveal
+		this.#budget = new MinuteBudget(MAX_FAILURE_REPORTS_PER_MINUTE, options.now ?? Date.now)
+		this.#reveal = options.reveal ?? null
 	}
 
 	/** Never rejects. The returned delivery may outlive the response; a runtime with `waitUntil` keeps it alive. */
@@ -137,8 +144,10 @@ export class FailureReports {
 		const code = failureCode(failure.error)
 		const why = failureReason(failure.error)
 		console.error(`fabrika: ${failure.endpoint}: ${code}${why === null ? '' : `: ${why.reason}: ${why.text}`}`)
-		// What the line withholds (a refusal's message names the place: a column, a line of ctx.sql) on the author's own run.
-		reveal(this.#reveal, failure.endpoint === 'request' ? 'a request' : `endpoint '${failure.endpoint}'`, failure.error)
+		if (this.#reveal !== null) {
+			// What the line withholds (a refusal's message names the place: a column, a line of ctx.sql) on the author's own run.
+			reveal(this.#reveal, failure.selected ? `endpoint '${failure.endpoint}'` : 'a request', failure.error)
+		}
 		if (this.#reporter === null || !this.#budget.admit()) {
 			return Promise.resolve()
 		}

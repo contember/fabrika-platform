@@ -1,6 +1,6 @@
 // `revealHandlerErrors`, the sink of the author's own run (`fabrika app dev`, a test that passes one): the message of a
 // framework failure, which every log line withholds (ADR-0059), reaches it beside the line's reason, for a request and a
-// job alike, and a job names a `ServerFault` by its reason as a request does. A sink that throws changes nothing of the
+// job alike, and a job names a `ServerFault` by its reason as a request does, IAM's as the attempt's start names it. A sink that throws changes nothing of the
 // failure. Without the sink the log line is the one it always was. On the object's SQLite, so it runs everywhere.
 
 import { createClient } from '@fabrika/app/client'
@@ -53,10 +53,14 @@ const unreachable = app.cron('0 5 * * *', { actions: ['notes.read'] }).handle(()
 	throw new ServerFault('iam_unavailable', 'IAM could not be asked to issue a link', 503)
 })
 
+const revoked = app.cron('0 6 * * *', { actions: ['notes.read'] }).handle(() => {
+	throw new ServerFault('workload_unauthorized', "IAM signs no token for the key of job 'revoked'", 503)
+})
+
 const contract = app.contract((c) => ({
 	api: c.rpc('/api', { notes }),
 	health: c.health('/healthz'),
-	jobs: { catalog, faulty, unreachable },
+	jobs: { catalog, faulty, unreachable, revoked },
 }))
 
 interface Revealed {
@@ -122,14 +126,23 @@ describe("a refusal on the author's own run", () => {
 		const revealed: Revealed[] = []
 		const kit = kitWith(into(revealed))
 		expect(await kit.runJob('faulty')).toMatchObject({ status: 'failed', code: 'framework_fault', reason: 'url_unbuildable' })
-		expect(await kit.runJob('unreachable')).toMatchObject({ status: 'failed', code: 'unavailable', reason: 'iam_unavailable' })
 		expect(revealed).toEqual([
 			{ where: "job 'faulty' attempt 1", message: "ctx.url names 'api.nowhere', which is no procedure of the contract", reason: 'url_unbuildable' },
-			{ where: "job 'unreachable' attempt 1", message: 'IAM could not be asked to issue a link', reason: 'iam_unavailable' },
 		])
 		const lines = logged.mock.calls.flat().join('\n')
 		expect(lines).toContain(`framework_fault: url_unbuildable: ${SERVER_FAULTS.url_unbuildable}`)
 		expect(lines).not.toContain('api.nowhere')
+	})
+
+	test("IAM met inside a job's handler is named as at the attempt's start: iam_unavailable, unauthorized", async () => {
+		const revealed: Revealed[] = []
+		const kit = kitWith(into(revealed))
+		expect(await kit.runJob('unreachable')).toEqual({ status: 'failed', attempts: 1, code: 'iam_unavailable' })
+		expect(await kit.runJob('revoked')).toEqual({ status: 'failed', attempts: 1, code: 'unauthorized' })
+		expect(revealed.map((shown) => shown.reason)).toEqual(['iam_unavailable', 'workload_unauthorized'])
+		const lines = logged.mock.calls.flat().join('\n')
+		expect(lines).toContain("fabrika: job 'unreachable' failed after 1 attempt: iam_unavailable")
+		expect(lines).toContain("fabrika: job 'revoked' failed after 1 attempt: unauthorized")
 	})
 
 	test('a sink that throws leaves the failure as it was, for a request and a job', async () => {

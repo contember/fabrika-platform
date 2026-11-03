@@ -90,7 +90,10 @@ export type JobFailureCode =
 	| 'capability_refused'
 	/** The framework failed the attempt (`ServerFault`): its reason names why, as a request's 500 names it. */
 	| 'framework_fault'
-	/** The framework could not reach a service it needs (a `ServerFault` with status 503), as a request's 503 names it. */
+	/**
+	 * The framework could not reach a service it needs (a `ServerFault` with status 503), as a request's 503 names it. IAM
+	 * is the exception: met inside the handler as at the attempt's start, it is `iam_unavailable` or `unauthorized`.
+	 */
 	| 'unavailable'
 	| 'driver_failed'
 	| 'crashed'
@@ -105,7 +108,10 @@ export type JobFailureCode =
 
 export type JobRunResult =
 	| { readonly status: 'succeeded'; readonly attempts: number }
-	/** `reason` is a framework refusal's catalog key (`query_refused`, `capability_refused`), present only for one. */
+	/**
+	 * `reason` is a framework failure's catalog key (`query_refused`, `capability_refused`, `framework_fault`,
+	 * `unavailable`) or the `EmailDeliveryError` code (`mail_failed`), present only for one of those.
+	 */
 	| { readonly status: 'failed'; readonly attempts: number; readonly code: JobFailureCode; readonly reason?: string }
 	/** Another run holds the lease: an overlapping run does not start. */
 	| { readonly status: 'skipped' }
@@ -269,8 +275,6 @@ interface RunnerContext {
 	readonly tokens: SignedTokens | null
 	readonly url: AppUrl
 }
-
-export type { HandlerErrorSink } from '../implement/failures'
 
 export interface JobBindingInput {
 	readonly artifact: ContractArtifact
@@ -1286,6 +1290,10 @@ function failureOf(error: unknown, transport: EmailSenderCapabilities | null): J
 		const text = error.outcome === 'unknown' ? 'the transport may have accepted the message' : 'the transport did not send the message'
 		// ADR-0019's one retry rule: a repeat over a non-idempotent transport may deliver the message twice.
 		return { code: 'mail_failed', why: { reason: error.code, text }, final: !mayRetryDelivery(error, transport ?? UNKNOWN_TRANSPORT) }
+	}
+	if (error instanceof ServerFault && (error.reason === 'iam_unavailable' || error.reason === 'workload_unauthorized')) {
+		// IAM met inside the handler is named as at the attempt's start, so an alert on the code sees both.
+		return { code: error.reason === 'iam_unavailable' ? 'iam_unavailable' : 'unauthorized', why: null, thrown: error, final: false }
 	}
 	const code = failureCode(error)
 	return code === 'handler_failed' || code === 'handler_status'
