@@ -36,6 +36,8 @@ export { PG_CATALOG_FUNCTIONS, SQL_KEYWORDS } from './pg-catalog-names'
 export {
 	afterName,
 	closingParenthesis,
+	type CteLists,
+	cteLists,
 	ddlForeignSchema,
 	dmlForeignSchema,
 	dmlRelations,

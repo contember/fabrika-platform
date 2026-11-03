@@ -280,9 +280,8 @@ type RelationSlot = 'columns' | 'function' | 'list' | undefined
  * (`WITH RECURSIVE tree (id, depth) AS`); a name after `::` or `AS` is a type. A two-part name anywhere else is a
  * column of a table or an alias (`d.note`, `NEW.stage`).
  */
-export function nameReferences(tokens: readonly SqlToken[]): NameReference[] {
+export function nameReferences(tokens: readonly SqlToken[], ctes: CteLists): NameReference[] {
 	const references: NameReference[] = []
-	const ctes = cteLists(tokens).names
 	const lists: { fromList: boolean; opener: string | undefined }[] = [{ fromList: false, opener: undefined }]
 	let slot: RelationSlot
 	for (let index = 0; index < tokens.length; index++) {
@@ -369,7 +368,7 @@ export function nameReferences(tokens: readonly SqlToken[]): NameReference[] {
 		let role: NameRole = 'other'
 		if (castTarget || typedLiteral) role = 'type'
 		else if (percentType) role = 'relation'
-		else if (followedByParenthesis && !syntax && inSlot !== 'columns' && !ctes.has(index)) role = 'call'
+		else if (followedByParenthesis && !syntax && inSlot !== 'columns' && !ctes.names.has(index)) role = 'call'
 		else if (inSlot !== undefined) role = 'relation'
 		references.push({
 			qualifier: parts.length > 1 ? parts[0] : undefined,
@@ -388,8 +387,8 @@ export function nameReferences(tokens: readonly SqlToken[]): NameReference[] {
  * qualified relation, call or type, or a three-part name. An unqualified relation whose name starts with `pg_`
  * resolves to the catalog and counts as `pg_catalog`.
  */
-export function dmlForeignSchema(tokens: readonly SqlToken[], schema: string): string | undefined {
-	for (const reference of nameReferences(tokens)) {
+export function dmlForeignSchema(tokens: readonly SqlToken[], schema: string, lists: CteLists): string | undefined {
+	for (const reference of nameReferences(tokens, lists)) {
 		if (reference.qualifier === undefined) {
 			if (reference.role === 'relation' && reference.name.startsWith('pg_')) return 'pg_catalog'
 			continue
@@ -577,13 +576,23 @@ function afterColumnsSet(tokens: readonly SqlToken[], at: number): number | unde
 	return next + 3
 }
 
-/** The index of the word `word` past a constant at `at` (`true`, `'Y'`, `0`, `interval '1 day'`), or `undefined`. */
-function constantUntil(tokens: readonly SqlToken[], at: number, word: string): number | undefined {
+/**
+ * The index of the word `word` past a `CYCLE` mark value at `at`, a constant as Postgres writes one (`true`, `'Y'`, `0`,
+ * `U&'Y'`, `varchar(1) 'Y'`, `timestamp with time zone '…'`), or `undefined`. The name checks read its names like any.
+ */
+function markUntil(tokens: readonly SqlToken[], at: number, word: string): number | undefined {
 	let next = at
-	for (; next < tokens.length && upperWord(tokens[next]) !== word; next++) {
+	while (next < tokens.length && upperWord(tokens[next]) !== word) {
 		const token = tokens[next]
-		const constant = token?.kind === 'word' || token?.kind === 'string' || (token?.kind === 'punct' && /^[0-9.]$/.test(token.char))
+		if (isPunct(token, '(')) {
+			next = (closingParenthesis(tokens, next) ?? tokens.length) + 1
+			continue
+		}
+		const kind = token?.kind
+		const constant = kind === 'word' || kind === 'quoted' || kind === 'string' || kind === 'dollar'
+			|| (token?.kind === 'punct' && /^[0-9.&+-]$/.test(token.char))
 		if (!constant) return undefined
+		next++
 	}
 	return next > at && next < tokens.length ? next : undefined
 }
@@ -602,8 +611,8 @@ function afterSearchAndCycle(tokens: readonly SqlToken[], at: number): number | 
 	if (next !== undefined && upperWord(tokens[next]) === 'CYCLE') {
 		next = afterColumnsSet(tokens, next + 1)
 		if (next !== undefined && upperWord(tokens[next]) === 'TO') {
-			const fallback = constantUntil(tokens, next + 1, 'DEFAULT')
-			next = fallback === undefined ? undefined : constantUntil(tokens, fallback + 1, 'USING')
+			const fallback = markUntil(tokens, next + 1, 'DEFAULT')
+			next = fallback === undefined ? undefined : markUntil(tokens, fallback + 1, 'USING')
 		}
 		if (next === undefined || upperWord(tokens[next]) !== 'USING' || !isName(tokens[next + 1])) return undefined
 		next += 2
@@ -634,12 +643,6 @@ function cteList(tokens: readonly SqlToken[], index: number): CteList | undefine
 	}
 }
 
-/**
- * Words a query may follow in a PL/pgSQL body: a statement begins after `BEGIN`, `THEN`, `ELSE` and `LOOP`, and a
- * query after `RETURN QUERY`, `FOR r IN` and a cursor's `FOR`.
- */
-const QUERY_FOLLOWS: ReadonlySet<string> = new Set(['BEGIN', 'THEN', 'ELSE', 'LOOP', 'QUERY', 'IN', 'FOR'])
-
 /** The index where the query of `INSERT INTO name [AS alias] [(…)] [OVERRIDING … VALUE]` begins, the name at `at`. */
 function insertQuery(tokens: readonly SqlToken[], at: number): number | undefined {
 	let next = afterName(tokens, at)
@@ -650,54 +653,134 @@ function insertQuery(tokens: readonly SqlToken[], at: number): number | undefine
 	return next
 }
 
-/** The CTE lists of a statement, a query or a body. */
-interface CteLists {
+/** The index past the first word `word` at the depth of `from` before the statement ends at a `;`, or `undefined`. */
+function pastWordOfStatement(tokens: readonly SqlToken[], from: number, word: string): number | undefined {
+	let depth = 0
+	for (let index = from; index < tokens.length; index++) {
+		if (isPunct(tokens[index], '(')) depth++
+		else if (isPunct(tokens[index], ')')) depth--
+		else if (depth === 0 && isPunct(tokens[index], ';')) return undefined
+		else if (depth === 0 && upperWord(tokens[index]) === word) return index + 1
+	}
+	return undefined
+}
+
+/** The CTE lists of a statement, a query or a body, which every name check of one entry reads. */
+export interface CteLists {
 	/** The statement each list ends in, by the index of its `WITH`, wherever that stands: a nested statement is refused there too. */
 	readonly terminals: ReadonlyMap<number, SqlToken | undefined>
 	/** The index of each CTE's name in a list whose `WITH` begins a query: a `(` after one opens its column list. */
 	readonly names: ReadonlySet<number>
+	/** The line of the first `WITH` that begins a query and whose list does not read as one; the entry refuses it. */
+	readonly unread: number | undefined
 }
 
-const cteListsOf = new WeakMap<readonly SqlToken[], CteLists>()
-
 /**
- * The CTE lists of `tokens`, nested ones too, read once for every check of the same tokens. A list's names count only
- * where a query begins: at the start, after `;` or `(`, after an `INSERT` target, and where a body's statement or
- * query begins. Elsewhere a `WITH` is another clause (`unnest(…) WITH ORDINALITY AS …`, `WITH TIES`), whose `name (`
- * stays a call.
+ * The CTE lists of `tokens`, nested ones too. `statements` are the indices where a statement begins: `[0]` for a query
+ * or a data-changing statement, none for an expression or a clause, and a body's own (`bodyStatements`). A query
+ * begins at each of them, after a statement's `RETURN QUERY`, `FOR … IN` and `OPEN … FOR`, after `(` and after an
+ * `INSERT` target. A list's names count only where a query begins, and there a `WITH` whose list does not read is
+ * `unread`. Elsewhere a `WITH` is another clause (`unnest(…) WITH ORDINALITY AS …`, `WITH TIES`, a policy's `WITH
+ * CHECK`), whose `name (` stays a call.
  */
-function cteLists(tokens: readonly SqlToken[]): CteLists {
-	const known = cteListsOf.get(tokens)
-	if (known !== undefined) return known
+export function cteLists(tokens: readonly SqlToken[], statements: readonly number[]): CteLists {
+	const queries = new Set<number>()
+	for (const start of statements) {
+		queries.add(start)
+		const word = upperWord(tokens[start])
+		if (word === 'RETURN' && upperWord(tokens[start + 1]) === 'QUERY') queries.add(start + 2)
+		const query = word === 'FOR'
+			? pastWordOfStatement(tokens, start + 1, 'IN')
+			: word === 'OPEN'
+			? pastWordOfStatement(tokens, start + 1, 'FOR')
+			: undefined
+		if (query !== undefined) queries.add(query)
+	}
 	const terminals = new Map<number, SqlToken | undefined>()
 	const names = new Set<number>()
-	const queries = new Set<number>([0])
+	let unread: number | undefined
 	for (let index = 0; index < tokens.length; index++) {
 		const token = tokens[index]
 		const word = upperWord(token)
-		if (isPunct(token, ';') || isPunct(token, '(') || (word !== undefined && QUERY_FOLLOWS.has(word))) queries.add(index + 1)
+		if (isPunct(token, '(')) queries.add(index + 1)
 		if (word === 'INTO' && upperWord(tokens[index - 1]) === 'INSERT') {
 			const query = insertQuery(tokens, index + 1)
 			if (query !== undefined) queries.add(query)
 		}
 		if (word !== 'WITH') continue
 		const list = cteList(tokens, index)
-		if (list === undefined) continue
+		const query = queries.has(index)
+		if (list === undefined) {
+			if (query) unread ??= token?.line ?? 1
+			continue
+		}
 		terminals.set(index, list.terminal)
-		if (!queries.has(index)) continue
+		if (!query) continue
 		for (const name of list.names) names.add(name)
 	}
-	const lists = { terminals, names }
-	cteListsOf.set(tokens, lists)
-	return lists
+	return { terminals, names, unread }
+}
+
+/** A statement of a PL/pgSQL body: the index of its first token, and whether it stands in a declaration section. */
+export interface BodyStatement {
+	readonly index: number
+	readonly declaring: boolean
+}
+
+/**
+ * Where each statement of a function or `DO` body begins, past `;` and a `<<label>>`: after `BEGIN`, `DECLARE` and
+ * `LOOP` (not `END LOOP`), and after `THEN` and `ELSE` except inside a `CASE` expression. A declaration section
+ * (`DECLARE` … `BEGIN`) holds declarations. The classifier's statement allowlist and the CTE lists read the same starts.
+ */
+export function bodyStatements(tokens: readonly SqlToken[]): BodyStatement[] {
+	const statements: BodyStatement[] = []
+	let start = true
+	let declaring = false
+	const cases: ('statement' | 'expression')[] = []
+	for (let index = 0; index < tokens.length; index++) {
+		const token = tokens[index]
+		const word = upperWord(token)
+		if (start) {
+			if (isPunct(token, ';')) continue
+			start = false
+			if (isPunct(token, '<') && isPunct(tokens[index + 1], '<')) {
+				while (index < tokens.length && !(isPunct(tokens[index], '>') && isPunct(tokens[index + 1], '>'))) index++
+				index++
+				start = true
+				continue
+			}
+			statements.push({ index, declaring })
+			if (word === 'CASE') {
+				cases.push('statement')
+				continue
+			}
+		} else if (word === 'CASE') {
+			cases.push('expression')
+			continue
+		}
+		const innermost = cases[cases.length - 1]
+		if (word === 'DECLARE') declaring = true
+		if (word === 'BEGIN') declaring = false
+		if (isPunct(token, ';') || word === 'BEGIN' || word === 'DECLARE') start = true
+		else if (word === 'LOOP') start = upperWord(tokens[index - 1]) !== 'END'
+		else if (word === 'THEN' || word === 'ELSE') start = innermost !== 'expression'
+		else if (word === 'END' && innermost === 'expression') cases.pop()
+		else if (word === 'END' && upperWord(tokens[index + 1]) === 'CASE') {
+			cases.pop()
+			index++
+		}
+	}
+	return statements
 }
 
 /**
  * The first nested statement a nested position may not hold: in parentheses (a CTE body, a subquery) and after a
  * CTE list, anything but a query or `INSERT`/`UPDATE`/`DELETE`, whose names the same checks read. `MERGE` among them.
  */
-export function nestedStatement(tokens: readonly SqlToken[]): { readonly statement: string; readonly line: number } | undefined {
-	const { terminals } = cteLists(tokens)
+export function nestedStatement(
+	tokens: readonly SqlToken[],
+	{ terminals }: CteLists,
+): { readonly statement: string; readonly line: number } | undefined {
 	for (let index = 0; index + 1 < tokens.length; index++) {
 		const next = isPunct(tokens[index], '(') ? tokens[index + 1] : upperWord(tokens[index]) === 'WITH' ? terminals.get(index) : undefined
 		const word = next?.kind === 'word' ? upperWord(next) : undefined
@@ -725,8 +808,8 @@ export function parenthesizedTarget(tokens: readonly SqlToken[]): { readonly sta
 }
 
 /** The relations a DML statement or a query names, in order: what its static text reads or writes. */
-export function dmlRelations(tokens: readonly SqlToken[]): NameReference[] {
-	return nameReferences(tokens).filter((reference) => reference.role === 'relation')
+export function dmlRelations(tokens: readonly SqlToken[], lists: CteLists): NameReference[] {
+	return nameReferences(tokens, lists).filter((reference) => reference.role === 'relation')
 }
 
 /**
@@ -963,8 +1046,13 @@ export function functionUse(call: NameReference, schema: string, functions: Read
  * built-in, or a function the migrations declare in `schema`. An allowlist, because a built-in such as
  * `query_to_xml`, `dblink` or `lo_import` runs SQL from a string or reaches past the schema, which no name rule sees.
  */
-export function refusedFunctionCall(tokens: readonly SqlToken[], schema: string, functions: ReadonlySet<string>): NameReference | undefined {
-	for (const reference of nameReferences(tokens)) {
+export function refusedFunctionCall(
+	tokens: readonly SqlToken[],
+	schema: string,
+	functions: ReadonlySet<string>,
+	lists: CteLists,
+): NameReference | undefined {
+	for (const reference of nameReferences(tokens, lists)) {
 		if (reference.role !== 'call') continue
 		const use = functionUse(reference, schema, functions)
 		if (use === undefined) return reference

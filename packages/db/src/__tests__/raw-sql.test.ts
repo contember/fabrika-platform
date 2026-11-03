@@ -195,6 +195,13 @@ describe('the static text', () => {
 					cycle a set seen to true default false using path, u (b) as (select 1) select * from t, u`,
 				parts`with recursive t (a) as (select 1 union all select a + 1 from t where a < 3) cycle a set seen using path, u (b) as (select 1)
 					select * from t, u`,
+				parts`with recursive t (a) as (select 1) cycle a set c to U&'Y' default 'N' using p, u (b) as (select 1) select * from t, u`,
+				parts`with recursive t (a) as (select 1) cycle a set c to varchar(1) 'Y' default varchar(1) 'N' using p, u (b) as (select 1) select * from u`,
+				parts`with recursive t (a) as (select 1) cycle a set c to timestamp with time zone '2026-01-01' default 'epoch' using p, u (b) as (select 1)
+					select * from u`,
+				// A WITH that begins no query is another clause, and is not read as a CTE list.
+				parts`select * from unnest(array[1]) with ordinality as t`,
+				parts`select ${'x'}::timestamp with time zone as at`,
 			]
 		) {
 			expect({ text: text.join('${…}'), refused: refusal(text, 'read') }).toEqual({ text: text.join('${…}'), refused: undefined })
@@ -213,11 +220,19 @@ describe('the static text', () => {
 			[parts`select * from rows from (unnest(array[1])) with ordinality as materialized (a, n), my_fn(1) as (x int)`, 'my_fn(…) at line 1'],
 			[parts`select 1 from notes fetch first 1 rows with ties as (select 1), my_fn (x) as (select 1)`, 'my_fn(…) at line 1'],
 			[parts`select ${'x'}::timestamp(3) with my_fn (x) as (select 1) select 1`, 'my_fn(…) at line 1'],
-			[parts`with verbose (a) as (select 1) select * from verbose`, 'verbose(…) at line 1'],
+			[parts`with recursive t (a) as (select 1) cycle a set c to my_fn(1) default 0 using p, u (b) as (select 1) select * from u`, 'my_fn(…) at line 1'],
 			[
-				parts`with recursive t (a) as (select 1) cycle a set c to my_fn(1) default 0 using p, u (b) as (select 1) select * from u`,
-				'at line 1 is not a reviewed built-in function',
+				parts`with recursive t as (select 1 as a) cycle a set c to varchar(1) 'Y' default varchar(1) 'N' using p merge into notes n using t on true when matched then delete`,
+				'MERGE at line 1 is refused inside another statement',
 			],
+			// A WITH where a query begins, whose list does not read, is refused as such: never skipped.
+			[parts`with verbose (a) as (select 1) select * from verbose`, 'the WITH at line 1 begins a CTE list that cannot be read'],
+			[
+				parts`with recursive t as (select 1 as a) cycle a set c default 'N' using p merge into notes n using t on true when matched then delete`,
+				'the WITH at line 1 begins a CTE list that cannot be read',
+			],
+			[parts`select * from notes where id in (with t as select 1)`, 'the WITH at line 1 begins a CTE list that cannot be read'],
+			[parts`insert into notes (id) with t (a) select 1`, 'the WITH at line 1 begins a CTE list that cannot be read'],
 		]
 		for (const [text, expected] of refused) {
 			expect({ text: text.join('${…}'), refused: refusal(text) }).toEqual({ text: text.join('${…}'), refused: expect.stringContaining(expected) })

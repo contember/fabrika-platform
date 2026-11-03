@@ -630,7 +630,41 @@ describe('review round 2: coarse, fail-closed rules', () => {
 		for (const sql of bodies(`BEGIN PERFORM 1 FROM unnest(array[1]) WITH ORDINALITY AS materialized (a, n), mystery(1) AS (x int) WHERE true; END`)) {
 			expect({ sql, reason: refusal(sql) }).toEqual({ sql, reason: 'a call of mystery' })
 		}
-		expect(refusal('CREATE VIEW v AS WITH verbose (a) AS (SELECT 1) SELECT * FROM verbose')).toBe('a call of verbose')
+	})
+
+	test('a CTE list begins where a statement of the body begins, the same starts its statement allowlist reads', () => {
+		const starts = [
+			'DECLARE cur refcursor; BEGIN',
+			'IF true THEN WITH a (x) AS (SELECT 1) INSERT INTO t SELECT x FROM a;',
+			'ELSE WITH b (y) AS (SELECT 2) INSERT INTO t SELECT y FROM b; END IF;',
+			'LOOP WITH c (z) AS (SELECT 3) INSERT INTO t SELECT z FROM c; EXIT; END LOOP;',
+			'<<inner>> BEGIN WITH d (w) AS (SELECT 4) INSERT INTO t SELECT w FROM d; END;',
+			'OPEN cur FOR WITH e (v) AS (SELECT 5) SELECT v FROM e;',
+			'RETURN QUERY WITH f (u) AS (SELECT 6) SELECT u FROM f;',
+			'END',
+		].join(' ')
+		for (const sql of bodies(starts)) expect({ sql, reason: refusal(sql) }).toEqual({ sql, reason: undefined })
+		// A policy's WITH CHECK and a CASE expression's THEN begin no query.
+		expect(refusal('CREATE POLICY p ON deals USING (true) WITH CHECK (mystery(1))')).toBe('a call of mystery')
+		expect(refusal('CREATE POLICY p ON deals WITH CHECK (true)')).toBeUndefined()
+		for (const sql of bodies('BEGIN x := CASE WHEN true THEN 1 ELSE 2 END; END')) {
+			expect({ sql, reason: refusal(sql) }).toEqual({ sql, reason: undefined })
+		}
+	})
+
+	test('a WITH where a query begins and whose list does not read is refused, never skipped', () => {
+		expect(refusal('CREATE VIEW v AS WITH verbose (a) AS (SELECT 1) SELECT * FROM verbose')).toBe('a WITH list that cannot be read')
+		expect(refusal("INSERT INTO t WITH RECURSIVE r AS (SELECT 1 AS a) CYCLE a SET c DEFAULT 'N' USING p SELECT * FROM r")).toBe(
+			'a WITH list that cannot be read',
+		)
+		for (const sql of bodies('BEGIN RETURN QUERY WITH a (x) AS SELECT 1; END')) {
+			expect({ sql, reason: refusal(sql) }).toEqual({ sql, reason: 'a WITH list that cannot be read' })
+		}
+		const cycle = "WITH RECURSIVE r AS (SELECT 1 AS a) CYCLE a SET c TO varchar(1) 'Y' DEFAULT varchar(1) 'N' USING p"
+		for (const sql of bodies(`BEGIN ${cycle} MERGE INTO a USING r ON true WHEN MATCHED THEN DELETE; END`)) {
+			expect({ sql, reason: refusal(sql) }).toEqual({ sql, reason: 'MERGE nested in a statement' })
+		}
+		expect(refusal(`INSERT INTO t ${cycle}, u (b) AS (SELECT 1) SELECT * FROM u`)).toBeUndefined()
 	})
 
 	test('a DDL relation position refuses an unqualified catalog name', () => {
