@@ -28,7 +28,10 @@ create table project_members (
 	project_id text not null references projects (id) on delete cascade,
 	principal_id text not null,
 	role text not null,
-	expires_at timestamp
+	expires_at timestamp,
+	version integer not null default 1,
+	due timestamp,
+	attempts integer not null default 0
 );
 create table bookmarks (
 	id text not null primary key,
@@ -46,6 +49,9 @@ interface DB {
 		principal_id: string
 		role: string
 		expires_at: ColumnType<Date | null, Date | string | null, Date | string | null>
+		version: ColumnType<number, number | undefined, number>
+		due: ColumnType<Date | null, Date | string | null, Date | string | null>
+		attempts: ColumnType<number, number | undefined, number>
 	}
 	bookmarks: { id: string; slug: string; archived: ColumnType<boolean, boolean | undefined, boolean>; version: number }
 }
@@ -57,9 +63,9 @@ const columns: TypedColumnList<DB> = {
 		booleans: ['archived'],
 	},
 	project_members: {
-		columns: ['id', 'project_id', 'principal_id', 'role', 'expires_at'],
+		columns: ['id', 'project_id', 'principal_id', 'role', 'expires_at', 'version', 'due', 'attempts'],
 		foreignKeys: [{ columns: ['project_id'], table: 'projects', references: ['id'] }],
-		timestamps: ['expires_at'],
+		timestamps: ['expires_at', 'due'],
 	},
 	bookmarks: { columns: ['id', 'slug', 'archived', 'version'], foreignKeys: [], booleans: ['archived'] },
 }
@@ -367,6 +373,20 @@ describe('the policy bounds what a source table may do', () => {
 			update: ['role'],
 			confers: { member: { principal: 'principal_id', when: { role: { eq: 'editor' } } } },
 		})).toThrow('replace the row instead')
+	})
+
+	test('a queue table, and a condition on the version column, are refused: the layer rewrites both', () => {
+		expect(policy({
+			actions: { read: 'projects.read', insert: 'members.assign', update: 'members.assign' },
+			insert: ['principal_id', 'expires_at'],
+			version: 'version',
+			queue: { attempts: 'attempts', due: 'due' },
+			confers: { member: { principal: 'principal_id', expires: 'expires_at', assign: { maxDays: 30 } } },
+		})).toThrow('a queue table confers no relation')
+		expect(policy({
+			version: 'version',
+			confers: { member: { principal: 'principal_id', when: { version: { eq: 1 } } } },
+		})).toThrow('the version column')
 	})
 
 	test('an insertable source states its assign bound', () => {
