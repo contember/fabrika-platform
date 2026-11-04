@@ -186,6 +186,7 @@ export async function putAppSchema(c: AdminContext, app: string): Promise<Respon
 				memberScope: def.member?.scope ?? null,
 				assignableBy: def.member?.assignableBy ?? null,
 				external: def.external === true,
+				via: def.via ?? null,
 			})),
 			contract: schema.contract === true,
 			links: Object.entries(schema.links ?? {}).map(([mount, link]) => ({ mount, ...link })),
