@@ -723,7 +723,7 @@ const MAX_BACKOFF_MS = 30 * 24 * 60 * 60_000
 const CLAIM_REARM_MIN_MS = 1_000
 
 /**
- * When a claim that left rows behind re-arms its job, by the claim's own clock `now`: at once after a full claim, else
+ * When a claim that leased rows re-arms its job, by the claim's own clock `now`: at once after a full claim, else
  * at the next due row it would take but no sooner than a second after it, or never when it would take none.
  */
 export function claimRearmAt(now: Date, full: boolean, next: Date | null): Date | null {

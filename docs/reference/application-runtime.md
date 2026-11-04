@@ -822,7 +822,8 @@ is `null`.
   `fabrika_wakes` with one at the next row it could claim (its `<due>`, at least 1 s ahead); a claim that filled its
   `limit` makes the job due again at once, and a claim that found nothing writes no wake. The claims of one attempt
   keep the earliest re-arm; its first replaces what an earlier run left. So a row whose backoff ends,
-  or a backlog larger than one claim, runs its job without waiting for the schedule (`claim-rearm.test.ts`).
+  or a backlog larger than one claim, runs its job without waiting for the schedule (`packages/app`'s
+  `claim-rearm.test.ts`; the one-second floor under a fixed clock in `packages/db`'s `claim-rearm.test.ts`).
 - `claim` is refused inside `ctx.transaction`, in a request and in a query. A row past `maxAttempts` stays in the
   table, not due, for the application to show or requeue (`packages/db`'s `queue.test.ts`).
 
