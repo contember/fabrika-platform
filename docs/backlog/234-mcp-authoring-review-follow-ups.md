@@ -23,22 +23,21 @@ blocked-by: []
    file breaks two more things (`readState` in `packages/app/src/dev/launcher.ts`):
    - A committed `"reset": 999` turns `reset_dev` into a no-op that Control reports as done, because
      `resetDevUseCase` accepts any `reset_applied` at or above the requested generation.
-   - Invalid JSON throws outside `safeParse`, so the boot fails before the booted marker is written, and the activation
-     fails.
-7. **A committed booted marker passes readiness early.** A `fabrika/dev-booted` (`DEV_LAUNCHER_BOOTED_FILE`) committed
-   to the workspace can pass the dev readiness check before `start` in `packages/app/src/dev/launcher.ts` deletes it.
-8. **The booted marker is written after a failed boot.** `start` writes the marker in a `finally`, also when `apply`
-   throws. `start` then rejects and `follow` never runs, yet readiness may still pass on the marker.
-9. **The boot work counts against the 180 s readiness window.** Before the 30 s health wait come two asks of up to 20 s
+   - Invalid JSON throws outside `safeParse`, so the boot fails before the booted marker is written, and the sandbox
+     deploy's boot wait times out.
+7. **The booted marker is written after a failed boot.** `start` writes the marker in a `finally`, also when `apply`
+   throws. `start` then rejects and `follow` never runs, yet the sandbox deploy's boot wait still passes on the marker.
+8. **The boot work counts against the sandbox deploy's 180 s boot wait** (`SANDBOX_BOOT_DEADLINE_MS`,
+   `packages/provider-zerops/src/sandbox/deploy.ts`). Before the 30 s health wait come two asks of up to 20 s
    each, a reset, `migrate` and `verify`. The reset's `DROP SCHEMA` has no lock timeout while the superseded container
    is still connected.
-10. **A stale schema-types failure after a reset loops.** When `verify` runs after a reset and fails because the
-    committed schema types are stale, its message still says "call reset_dev" (`packages/app/src/dev/launcher.ts`), and
-    a reset changes nothing.
-11. **Open decision: the SPA type check and ADR-0062.** The build's `tsc` covers `web/` for every framework release in
+9. **A stale schema-types failure after a reset loops.** When `verify` runs after a reset and fails because the
+   committed schema types are stale, its message still says "call reset_dev" (`packages/app/src/dev/launcher.ts`), and
+   a reset changes nothing.
+10. **Open decision: the SPA type check and ADR-0062.** The build's `tsc` covers `web/` for every framework release in
     the window, so an application of an older release whose SPA does not type-check starts failing its build after a
     platform upgrade. The user deferred the decision.
-12. **A private_key_jwt client's revocation passes without an assertion while its metadata is unreachable.** `authenticateRevokingClient` (`packages/iam/src/oauth-client-auth.ts`) refuses an assertion-less request only when the client's metadata document is known and declares `private_key_jwt`. This is deliberate: an unreachable document never keeps a token alive, and the token's own client binding still holds. It is recorded so the trade is revisited if a confidential client's revocation must always authenticate.
+11. **A private_key_jwt client's revocation passes without an assertion while its metadata is unreachable.** `authenticateRevokingClient` (`packages/iam/src/oauth-client-auth.ts`) refuses an assertion-less request only when the client's metadata document is known and declares `private_key_jwt`. This is deliberate: an unreachable document never keeps a token alive, and the token's own client binding still holds. It is recorded so the trade is revisited if a confidential client's revocation must always authenticate.
 
 ## Approach / acceptance
 
@@ -49,13 +48,12 @@ blocked-by: []
 5. Import `DEV_STATUSES` from the wire module. Share one repository-path predicate between `@fabrika/app/dev/wire` and Control, or document why the two must differ.
 6. Remove the state file in the build (`rm -f fabrika/dev-state.json` before the generated files are written), or protect it in `isProtectedPath`. Test: a commit that holds the file is refused, or a bootstrap of it boots as a new container.
 7. Decide whether a client registered as `private_key_jwt` must always present an assertion to revoke. If so, refuse an assertion-less request when the metadata is unreachable, and document that such a token outlives the outage. Test: either way, a test pins the chosen behaviour with an unreachable metadata document.
-8. Remove the marker in the build or in the sandbox deploy before it starts the launcher (`rm -f`), together with item 6's state file.
-9. Write the marker only after `apply` returns. Alternatively, catch the error, report `failed` and keep following.
+8. Write the marker only after `apply` returns. Alternatively, catch the error, report `failed` and keep following.
    Test: a boot whose apply throws leaves no marker, or reports `failed` and still answers the next sync.
-10. Bound the reset (a `lock_timeout` on the `DROP SCHEMA`), or document the boot's worst case against the window.
-11. Name `fabrika db codegen` when `verify` fails right after a reset. Test: a reset followed by stale committed types
+9. Bound the reset (a `lock_timeout` on the `DROP SCHEMA`), or document the boot's worst case against the window.
+10. Name `fabrika db codegen` when `verify` fails right after a reset. Test: a reset followed by stale committed types
     reports the codegen remedy, not `reset_dev`.
-12. Either run `tsc` over `web/` only for a release from 0.9 on, or record an ADR-0062 exception for it.
+11. Either run `tsc` over `web/` only for a release from 0.9 on, or record an ADR-0062 exception for it.
 
 ## Touch points
 

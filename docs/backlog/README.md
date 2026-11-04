@@ -94,7 +94,7 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [207](207-three-service-log-lines-skip-redaction.md): Three `console.error` calls print an error's text or object without redaction.
 - [208](208-application-framework-and-data-layer-review-follow-ups.md): Six small `@fabrika/app` and `@fabrika/db` findings: two clocks, `bound` insert, `.input()`, prototype methods, insert under `in`, `releaseBytes`.
 - [209](209-a-public-procedure-binds-a-token-id-to-its-purpose.md): Any text of any verified token unlocks a row; bind the id to its purpose and table.
-- [210](210-platform-review-fix-follow-ups.md): Eleven P3s the reviews of the platform review's fixes left: cost default, console buttons, device bucket, test gaps, run trigger.
+- [210](210-platform-review-fix-follow-ups.md): Thirteen P3s the reviews of the platform review's fixes left: cost default, device bucket, test gaps, run trigger.
 - [211](211-zerops-preset-review-follow-ups.md): Minor findings of the Zerops presets review: adoption refusal on republish/update, the backup live row, restore history, hourly on `standard`, the admin hop's request id.
 - [212](212-the-console-shows-no-database-backups.md): The console shows no database backups; a provider-owned read of each database's schedule, newest and oldest restore point.
 - [213](213-the-cloudflare-application-runtime-is-unverified-on-a-live-account.md): The secrets upload, the object's migration on an existing Worker and a large upload are unverified on a live account.
