@@ -379,7 +379,7 @@ export function scalar(value: ConditionLiteral | readonly ConditionLiteral[] | b
 /** A test of a column one or more foreign keys away from the row. */
 export type PathTest = Extract<ConditionModel, { readonly kind: 'test' }>
 
-/** The tests of `condition` that follow a path from its own row, each judged on the row its first foreign key names. */
+/** The tests of `condition` that follow a path from its own row: the rows an insert locks before it judges them. */
 export function pathTests(condition: ConditionModel): readonly PathTest[] {
 	const tests: PathTest[] = []
 	const visit = (node: ConditionModel): void => {
@@ -412,30 +412,19 @@ export function readsRowsNamingIt(condition: ConditionModel): boolean {
 
 /**
  * The value of `condition` on an insert's own row, under SQL's three-valued logic: a NULL compared is unknown, `not`
- * of unknown stays unknown, and only `true` passes. A path test takes its value from `paths`, which the insert read in
- * its transaction; one missing there is unknown.
+ * of unknown stays unknown, and only `true` passes. A condition with a path is judged in SQL on the written row instead.
  */
-export function rowSatisfies(
-	condition: ConditionModel,
-	row: ReadonlyMap<string, Primitive | null>,
-	now: Date,
-	paths: ReadonlyMap<PathTest, boolean | undefined> = new Map(),
-): boolean {
-	return truth(condition, row, now, paths) === true
+export function rowSatisfies(condition: ConditionModel, row: ReadonlyMap<string, Primitive | null>, now: Date): boolean {
+	return truth(condition, row, now) === true
 }
 
-function truth(
-	condition: ConditionModel,
-	row: ReadonlyMap<string, Primitive | null>,
-	now: Date,
-	paths: ReadonlyMap<PathTest, boolean | undefined>,
-): boolean | undefined {
+function truth(condition: ConditionModel, row: ReadonlyMap<string, Primitive | null>, now: Date): boolean | undefined {
 	switch (condition.kind) {
 		case 'all': {
 			let result: boolean | undefined = true
 			for (let index = 0; index < condition.terms.length; index++) {
 				const term = condition.terms[index]
-				const value = term === undefined ? undefined : truth(term, row, now, paths)
+				const value = term === undefined ? undefined : truth(term, row, now)
 				if (value === false) return false
 				if (value === undefined) result = undefined
 			}
@@ -445,20 +434,20 @@ function truth(
 			let result: boolean | undefined = false
 			for (let index = 0; index < condition.terms.length; index++) {
 				const term = condition.terms[index]
-				const value = term === undefined ? undefined : truth(term, row, now, paths)
+				const value = term === undefined ? undefined : truth(term, row, now)
 				if (value === true) return true
 				if (value === undefined) result = undefined
 			}
 			return result
 		}
 		case 'not': {
-			const value = truth(condition.term, row, now, paths)
+			const value = truth(condition.term, row, now)
 			return value === undefined ? undefined : !value
 		}
 		case 'some':
 			return undefined
 		case 'test': {
-			if (condition.hops.length > 0) return paths.get(condition)
+			if (condition.hops.length > 0) return undefined
 			const cell = row.has(condition.column) ? row.get(condition.column) : null
 			return testTruth(condition, cell ?? null, now)
 		}
