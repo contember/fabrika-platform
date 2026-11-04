@@ -77,6 +77,11 @@ export interface WithinGrant {
 	 * `Within` too where a row of one of them names the caller at the row's node, read by the statement itself.
 	 */
 	readonly relations: readonly string[]
+	/**
+	 * The caller's grants of the action at nodes whose rows reveal the `Within`'s dimension or a container of it to their
+	 * members (`memberReveals`): a row under a node such a row reveals is read too, the statement judging the revealing row.
+	 */
+	readonly revealing: readonly ContainerGrant[]
 }
 
 /** An `app` endpoint's grant: the action everywhere in the application, which the proxy checked was held globally. */

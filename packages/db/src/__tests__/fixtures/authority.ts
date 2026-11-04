@@ -105,8 +105,9 @@ export class TestAuthority implements CapabilityAuthority {
 		containers: readonly ContainerGrant[] = [],
 		contained: readonly ContainerGrant[] = [],
 		relations: readonly string[] = [],
+		revealing: readonly ContainerGrant[] = [],
 	): Within<D, A> {
-		return new TestWithin({ kind: 'within', dimension, action, principal: this.#principal, values, containers, contained, relations }, this)
+		return new TestWithin({ kind: 'within', dimension, action, principal: this.#principal, values, containers, contained, relations, revealing }, this)
 	}
 
 	/** The capability of an `app` endpoint: `action` held as a global grant. */

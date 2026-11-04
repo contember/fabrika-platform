@@ -7,6 +7,7 @@ import type {
 	ColumnPolicies,
 	ConfersPolicy,
 	FilePolicies,
+	MemberRevealsPolicy,
 	RecordActions,
 	ReferencePolicy,
 	RevealsPolicy,
@@ -108,6 +109,8 @@ interface WritableFields<Col extends string, A extends string, Ver extends Col, 
 	readonly reveals?: { readonly [relation: string]: RevealsPolicy<Col, A> }
 	/** Dimension outside the chain → the foreign key column a `Within`'s read reaches a row through; no update writes it. */
 	readonly readThrough?: { readonly [dimension: string]: Col }
+	/** The table's own dimension → the ancestor node a row reveals to a grant at its node, for a `Within`'s reads. */
+	readonly memberReveals?: { readonly [dimension: string]: MemberRevealsPolicy<Col, A> }
 }
 
 /**

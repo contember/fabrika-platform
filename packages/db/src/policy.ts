@@ -99,6 +99,19 @@ interface WritablePolicy<Col extends string, A extends string, V extends Col, Ac
 	 * relation at it, reads the row, and every write follows containment only. No update writes the column.
 	 */
 	readonly readThrough?: { readonly [dimension: string]: Col }
+	/**
+	 * This table's own dimension → the ancestor node a row reveals to its members: a grant of one of `actions` at the
+	 * row's own node holds that action at its node in `to` too, for a `Within`'s reads, while `when` admits the row.
+	 */
+	readonly memberReveals?: { readonly [dimension: string]: MemberRevealsPolicy<Col, A> }
+}
+
+/** What a row reveals to a caller with a grant at its node: its node in `to`, for `actions`, while `when` admits the row. */
+export interface MemberRevealsPolicy<Col extends string, A extends string> {
+	readonly to: string
+	readonly actions: readonly A[]
+	/** A condition on the revealing row, under the same path rule as an action's `when`. */
+	readonly when?: ConditionPolicy<Col>
 }
 
 /**
@@ -291,6 +304,8 @@ export interface TableModel {
 	readonly reveals: readonly RevealModel[]
 	/** The secondary read paths: a dimension outside the chain, by the column that holds the row's node in it. */
 	readonly readThrough: readonly SecondaryPath[]
+	/** The ancestor nodes this table's rows reveal to a grant at their own node. */
+	readonly memberReveals: readonly MemberRevealModel[]
 }
 
 /**
@@ -327,6 +342,22 @@ export interface RevealModel {
 	readonly when: ConditionModel | undefined
 }
 
+/**
+ * A row of `table`, a node of `source` (its own dimension, keyed by `key`), reveals its node in `dimension`, held in
+ * `column`: a grant of one of `actions` at the row's node holds the action there too, for a `Within`'s reads, while
+ * `when` admits the row. Only a grant at the node itself counts, never one at a container of it: an insert would
+ * otherwise reveal the ancestor to the container's members at once.
+ */
+export interface MemberRevealModel {
+	readonly source: string
+	readonly table: string
+	readonly key: string
+	readonly dimension: string
+	readonly column: string
+	readonly actions: readonly string[]
+	readonly when: ConditionModel | undefined
+}
+
 /** One relation's source table: what a relation term reads, and what a write of its rows is bounded by. */
 export interface RelationSource {
 	readonly relation: string
@@ -351,12 +382,13 @@ type ParsedScope =
 		readonly inherit: readonly string[] | undefined
 	}
 
-type ParsedTable = Omit<TableModel, 'chain' | 'scope' | 'confers' | 'when' | 'reveals' | 'readThrough'> & {
+type ParsedTable = Omit<TableModel, 'chain' | 'scope' | 'confers' | 'when' | 'reveals' | 'readThrough' | 'memberReveals'> & {
 	readonly scope: ParsedScope
 	readonly confersInput: unknown
 	readonly whenInput: unknown
 	readonly revealsInput: unknown
 	readonly readThroughInput: unknown
+	readonly memberRevealsInput: unknown
 }
 
 let readModels: <DB, P>(tables: Tables<DB, P>) => TableModels
@@ -496,8 +528,10 @@ const POLICY_FIELDS = nameSet([
 	'when',
 	'reveals',
 	'readThrough',
+	'memberReveals',
 ])
 const REVEALS_FIELDS = nameSet(['to', 'actions', 'when', 'assign'])
+const MEMBER_REVEALS_FIELDS = nameSet(['to', 'actions', 'when'])
 const REVEAL_ASSIGN_FIELDS = nameSet(['self'])
 const CONFERS_FIELDS = nameSet(['principal', 'node', 'expires', 'when', 'assign'])
 const ASSIGN_FIELDS = nameSet(['maxDays', 'self'])
@@ -730,6 +764,7 @@ function parseTable(table: string, columnList: unknown, policyInput: unknown, vo
 		whenInput: ownEntry(policy, 'when'),
 		revealsInput: ownEntry(policy, 'reveals'),
 		readThroughInput: ownEntry(policy, 'readThrough'),
+		memberRevealsInput: ownEntry(policy, 'memberReveals'),
 	}
 }
 
@@ -1276,7 +1311,7 @@ function linkTables(parsed: readonly ParsedTable[], vocabulary: VocabularyModel)
 		const table = parsed[index]
 		if (table !== undefined) {
 			const { scope, chain } = resolve(table, [])
-			const { confersInput, whenInput, revealsInput, readThroughInput, ...rest } = table
+			const { confersInput, whenInput, revealsInput, readThroughInput, memberRevealsInput, ...rest } = table
 			const linked = { ...rest, scope, chain }
 			const readThrough = parseReadThrough(linked, readThroughInput, vocabulary, (dimension) => {
 				const owner = ownEntry(owners, dimension)
@@ -1293,7 +1328,8 @@ function linkTables(parsed: readonly ParsedTable[], vocabulary: VocabularyModel)
 			}
 			const when = parseWhen(linked, whenInput, conditionTable, hopRule)
 			const reveals = parseReveals(linked, readThrough, revealsInput, vocabulary, conditionTable, hopRule)
-			setOwn(models, table.name, freeze({ ...linked, confers, when, reveals, readThrough }))
+			const memberReveals = parseMemberReveals(linked, memberRevealsInput, vocabulary, conditionTable, hopRule)
+			setOwn(models, table.name, freeze({ ...linked, confers, when, reveals, readThrough, memberReveals }))
 		}
 	}
 	const relations = ownKeys(vocabulary.relations)
@@ -1306,7 +1342,7 @@ function linkTables(parsed: readonly ParsedTable[], vocabulary: VocabularyModel)
 	return freeze(models)
 }
 
-type LinkedTable = Omit<TableModel, 'confers' | 'when' | 'reveals' | 'readThrough'>
+type LinkedTable = Omit<TableModel, 'confers' | 'when' | 'reveals' | 'readThrough' | 'memberReveals'>
 
 /** Every action a table names: its operations', `appRead`, `appCount` and its columns' own. */
 function tableActionNames(table: LinkedTable): NameSet {
@@ -1497,40 +1533,7 @@ function parseReveals(
 		}
 		const policy = plainRecord(ownEntry(declared, relation), what)
 		onlyFields(policy, REVEALS_FIELDS, what)
-		const to = ownEntry(policy, 'to')
-		let column: string | undefined
-		for (let position = 0; position < table.chain.length; position++) {
-			const link = table.chain[position]
-			if (link !== undefined && link.dimension === to) column = link.column
-		}
-		if (typeof to !== 'string' || column === undefined) {
-			const above: string[] = []
-			for (let position = 0; position < table.chain.length; position++) {
-				above[above.length] = table.chain[position]?.dimension ?? ''
-			}
-			throw new PolicyError(
-				`${what}.to names ${String(to)}, which is not a dimension of ${table.name}'s chain (${above.join(', ') || 'none'})`,
-			)
-		}
-		const actions = parseList(ownEntry(policy, 'actions'), (action) => {
-			if (typeof action !== 'string' || !inSet(vocabulary.actions, action)) {
-				throw new PolicyError(`${what}.actions names ${String(action)}, which is not an action of the vocabulary`)
-			}
-			return action
-		})
-		if (actions === undefined) {
-			throw new PolicyError(`${what}.actions takes a plain array of the vocabulary's actions`)
-		}
-		const listed: string[] = []
-		for (let position = 0; position < actions.length; position++) {
-			const action = actions[position] ?? ''
-			if (!includes(listed, action)) listed[listed.length] = action
-		}
-		if (listed.length === 0) {
-			throw new PolicyError(`${what}.actions names no action; a reveal holds the actions it lists, and no other`)
-		}
-		const whenInput = ownEntry(policy, 'when')
-		const when = whenInput === undefined ? undefined : parseCondition(whenInput, table, tables, `${what}.when`, hops)
+		const { to, column, actions: listed, when } = parseRevealed(table, policy, what, vocabulary, tables, hops)
 		const path = paths[0]
 		if (path !== undefined && table.chain[0]?.dimension !== to) {
 			throw new PolicyError(
@@ -1538,7 +1541,95 @@ function parseReveals(
 			)
 		}
 		const assign = parseRevealAssign(table, path, ownEntry(policy, 'assign'), what)
-		reveals[reveals.length] = freeze({ relation, table: table.name, key, path, assign, dimension: to, column, actions: freeze(listed), when })
+		reveals[reveals.length] = freeze({ relation, table: table.name, key, path, assign, dimension: to, column, actions: listed, when })
+	}
+	return freeze(reveals)
+}
+
+/** A reveal's `to`, a dimension of the table's chain with the column that holds it, its listed actions, and its `when`. */
+function parseRevealed(
+	table: LinkedTable,
+	policy: Readonly<Record<string, unknown>>,
+	what: string,
+	vocabulary: VocabularyModel,
+	tables: (name: string) => ConditionTable | undefined,
+	hops: HopRule,
+): { readonly to: string; readonly column: string; readonly actions: readonly string[]; readonly when: ConditionModel | undefined } {
+	const to = ownEntry(policy, 'to')
+	let column: string | undefined
+	for (let position = 0; position < table.chain.length; position++) {
+		const link = table.chain[position]
+		if (link !== undefined && link.dimension === to) column = link.column
+	}
+	if (typeof to !== 'string' || column === undefined) {
+		const above: string[] = []
+		for (let position = 0; position < table.chain.length; position++) {
+			above[above.length] = table.chain[position]?.dimension ?? ''
+		}
+		throw new PolicyError(
+			`${what}.to names ${String(to)}, which is not a dimension of ${table.name}'s chain (${above.join(', ') || 'none'})`,
+		)
+	}
+	const actions = parseList(ownEntry(policy, 'actions'), (action) => {
+		if (typeof action !== 'string' || !inSet(vocabulary.actions, action)) {
+			throw new PolicyError(`${what}.actions names ${String(action)}, which is not an action of the vocabulary`)
+		}
+		return action
+	})
+	if (actions === undefined) {
+		throw new PolicyError(`${what}.actions takes a plain array of the vocabulary's actions`)
+	}
+	const listed: string[] = []
+	for (let position = 0; position < actions.length; position++) {
+		const action = actions[position] ?? ''
+		if (!includes(listed, action)) listed[listed.length] = action
+	}
+	if (listed.length === 0) {
+		throw new PolicyError(`${what}.actions names no action; a reveal holds the actions it lists, and no other`)
+	}
+	const whenInput = ownEntry(policy, 'when')
+	const when = whenInput === undefined ? undefined : parseCondition(whenInput, table, tables, `${what}.when`, hops)
+	return { to, column, actions: freeze(listed), when }
+}
+
+/**
+ * `memberReveals`: the table's own dimension → the ancestor its rows reveal to a grant at their node. Only a dimension
+ * table reveals so: its key is the node an IAM grant names, and the layer generates it, so no writer picks a node
+ * someone already holds a grant at. A queue table's rows move on every claim.
+ */
+function parseMemberReveals(
+	table: LinkedTable,
+	input: unknown,
+	vocabulary: VocabularyModel,
+	tables: (name: string) => ConditionTable | undefined,
+	hops: HopRule,
+): readonly MemberRevealModel[] {
+	if (input === undefined) {
+		return freeze([])
+	}
+	if (table.scope.mode !== 'dimension') {
+		throw new PolicyError(
+			`${table.name}: a ${table.scope.mode} table reveals nothing to members; only a dimension table's rows are nodes a grant names`,
+		)
+	}
+	if (table.queue !== undefined) {
+		throw new PolicyError(`${table.name}: a queue table reveals nothing; the layer rewrites its rows on every claim`)
+	}
+	const own = table.scope.dimension
+	const key = table.scope.key
+	const declared = plainRecord(input, `${table.name}: memberReveals`)
+	const names = ownKeys(declared)
+	const reveals: MemberRevealModel[] = []
+	for (let index = 0; index < names.length; index++) {
+		const source = names[index] ?? ''
+		const what = `${table.name}: memberReveals.${source}`
+		if (source !== own) {
+			throw new PolicyError(`${what}: ${source} is not ${table.name}'s own dimension (${own}); a row reveals to a grant at its own node only`)
+		}
+		const policy = plainRecord(ownEntry(declared, source), what)
+		onlyFields(policy, MEMBER_REVEALS_FIELDS, what)
+		const { to, column, actions, when } = parseRevealed(table, policy, what, vocabulary, tables, hops)
+		reveals[reveals.length] = freeze({ source, table: table.name, key, dimension: to, column, actions, when })
 	}
 	return freeze(reveals)
 }
