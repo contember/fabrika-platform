@@ -1296,14 +1296,28 @@ function linkTables(parsed: readonly ParsedTable[], vocabulary: VocabularyModel)
 			return true
 		}
 		const source = ownEntry(byName, from)
+		const target = ownEntry(byName, to)
 		const scope = source === undefined ? undefined : resolve(source, []).scope
-		if (scope?.mode === 'dimension') {
-			// The column must lead to the table that owns the container dimension, not to any table its key references.
-			const target = ownEntry(byName, to)
-			return scope.container !== undefined && scope.container.column === column && target?.scope.mode === 'dimension'
-				&& target.scope.dimension === scope.container.dimension
+		// The container column must lead to the table that owns the container dimension, not to any table its key references.
+		if (
+			scope?.mode === 'dimension' && scope.container !== undefined && scope.container.column === column && target?.scope.mode === 'dimension'
+			&& target.scope.dimension === scope.container.dimension
+		) {
+			return true
 		}
-		return scope?.mode === 'child' && scope.column === column && scope.parent === to
+		if (scope?.mode === 'child' && scope.column === column && scope.parent === to) {
+			return true
+		}
+		// Any other foreign key reaches a row of the same tenant only when it also holds every ancestor the two share.
+		if (source === undefined || target === undefined) {
+			return false
+		}
+		const into = resolve(target, [])
+		if (into.scope.mode !== 'dimension' && into.scope.mode !== 'child') {
+			return false
+		}
+		const pairs = tenantPairs(resolve(source, []), column, into.scope.key, into.chain)
+		return pairs.length > 1 && holdsExactly(source.foreignKeys, to, pairs)
 	}
 	const sources: Record<string, string> = {}
 	const models: Record<string, TableModel> = {}
@@ -1452,19 +1466,8 @@ function parseReadThrough(
 		if (owner === undefined || owner.scope.mode !== 'dimension') {
 			throw new PolicyError(`${what}: no table owns ${dimension}, so no foreign key ties ${column} to a node of it`)
 		}
-		const pairs: [string, string][] = [[column, owner.scope.key]]
-		for (let position = 0; position < owner.chain.length; position++) {
-			const link = owner.chain[position]
-			const shared = link === undefined ? undefined : nodeColumnOf(table, link.dimension)
-			if (link !== undefined && shared !== undefined) pairs[pairs.length] = [shared, link.column]
-		}
-		let covered = false
-		for (let position = 0; position < table.foreignKeys.length; position++) {
-			const foreignKey = table.foreignKeys[position]
-			// Exactly these columns: a further nullable column would let the database skip the whole key.
-			covered = covered
-				|| (foreignKey !== undefined && foreignKey.table === owner.name && foreignKey.columns.length === pairs.length && coversPairs(foreignKey, pairs))
-		}
+		const pairs = tenantPairs(table, column, owner.scope.key, owner.chain)
+		const covered = holdsExactly(table.foreignKeys, owner.name, pairs)
 		if (!covered) {
 			const columns: string[] = []
 			const referenced: string[] = []
@@ -1684,7 +1687,7 @@ function containsLink(chain: readonly Container[], dimension: string): boolean {
 }
 
 /** The column of `table` that places a row at a node of `dimension`: its key for its own dimension, else a chain link. */
-export function nodeColumnOf(table: LinkedTable, dimension: string): string | undefined {
+export function nodeColumnOf(table: Pick<TableModel, 'scope' | 'chain'>, dimension: string): string | undefined {
 	if (table.scope.mode === 'dimension' && table.scope.dimension === dimension) {
 		return table.scope.key
 	}
@@ -1994,6 +1997,31 @@ function requireCoveringKey(table: ParsedTable, link: Container, owner: ParsedTa
 }
 
 /** Whether every `[column, referenced]` pair is a column of `foreignKey` with that referenced column. */
+/**
+ * The column pairs a foreign key from `column` of `table` to a row keyed by `key` with chain `chain` holds to keep that
+ * row in `table`'s own tenant: the column and the key, then each ancestor of `chain` that `table` also lies in.
+ */
+function tenantPairs(table: Resolved, column: string, key: string, chain: readonly Container[]): [string, string][] {
+	const pairs: [string, string][] = [[column, key]]
+	for (let index = 0; index < chain.length; index++) {
+		const link = chain[index]
+		const shared = link === undefined ? undefined : nodeColumnOf(table, link.dimension)
+		if (link !== undefined && shared !== undefined) pairs[pairs.length] = [shared, link.column]
+	}
+	return pairs
+}
+
+/** One foreign key to `table` of exactly `pairs`: a further nullable column would let the database skip the whole key. */
+function holdsExactly(foreignKeys: readonly ForeignKey[], table: string, pairs: readonly (readonly [string, string])[]): boolean {
+	for (let index = 0; index < foreignKeys.length; index++) {
+		const foreignKey = foreignKeys[index]
+		if (foreignKey !== undefined && foreignKey.table === table && foreignKey.columns.length === pairs.length && coversPairs(foreignKey, pairs)) {
+			return true
+		}
+	}
+	return false
+}
+
 function coversPairs(foreignKey: ForeignKey, pairs: readonly (readonly [string, string])[]): boolean {
 	for (let index = 0; index < pairs.length; index++) {
 		const [column, referenced] = pairs[index] ?? ['', '']
