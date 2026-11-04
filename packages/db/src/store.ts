@@ -1,7 +1,17 @@
 import { uuidv7 } from '@fabrika/platform'
 import { AndNode, BinaryOperationNode, type OperationNode, OperatorNode, ParensNode, type ReturningNode, ValueNode } from 'kysely'
 import { admissions } from './admissions'
-import { activeRow, conditioned, refScope, relationGate, relationSource, type RelationSources, relationTerm } from './authority'
+import {
+	activeRow,
+	conditioned,
+	type LayerRelation,
+	refScope,
+	relationGate,
+	relationSource,
+	type RelationSources,
+	relationTerms,
+	revealedNodes,
+} from './authority'
 import {
 	defineValue,
 	freeze,
@@ -99,6 +109,7 @@ import {
 	type Operation,
 	type ParentOf,
 	type PolicyRow,
+	type RevealModel,
 	type TableModel,
 	type TableModels,
 	tableModels,
@@ -437,9 +448,10 @@ function withinPredicate(context: TableContext, column: string, grant: WithinGra
 	}
 	// A relation whose dimension this table lies at no node of reaches none of its rows.
 	for (let index = 0; index < grant.relations.length; index++) {
-		const term = relationTerm(context.relations, model, grant.relations[index] ?? '', grant.principal, now)
-		if (term !== undefined) {
-			predicates[predicates.length] = term
+		const terms = relationTerms(context.relations, model, grant.relations[index] ?? '', grant.principal, grant.action, now)
+		for (let position = 0; position < terms.length; position++) {
+			const term = terms[position]
+			if (term !== undefined) predicates[predicates.length] = term
 		}
 	}
 	return predicates.length === 0 ? undefined : conditioned(model, grant.action, anyOf(predicates), now)
@@ -1234,6 +1246,8 @@ export function keyOf(model: TableModel): string {
 async function lockDestination(transaction: Session, context: TableContext, grant: RefGrant): Promise<void> {
 	const owner = context.destination
 	if (owner === undefined) {
+		// No table owns the destination, so a Ref held through relations is checked on the rows that hold it.
+		if (grant.relations.length > 0) await lockRelationRow(transaction, context, grant)
 		return
 	}
 	const chain = linksPredicate(owner.name, linkValues(owner.name, selfLinks(owner), grant))
@@ -2292,6 +2306,8 @@ export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
 			return freeze({
 				locate: async (dimension: string, id: string, using?: Session) => locateObject(models, bound, dimension, id, using),
 				relates: async (relation: string, node: string, principal: string) => relationHolds(relations, bound, relation, node, principal),
+				reveals: async (relation: string, dimension: string, node: string, principal: string) =>
+					revealHolds(relations, subqueries, bound, relation, dimension, node, principal),
 				release() {
 					if (connection.runtime === bound) {
 						connection.runtime = undefined
@@ -2329,7 +2345,7 @@ export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
  * node column, a condition path's target by its key), which the guard admits and nothing else.
  */
 function layerReach(models: TableModels): { readonly relations: RelationSources; readonly subqueries: Readonly<Record<string, readonly string[]>> } {
-	const relations: Record<string, RelationSources[string]> = {}
+	const relations: Record<string, LayerRelation> = {}
 	const selected: Record<string, string[]> = {}
 	const select = (table: string, column: string): void => {
 		const columns = ownEntry(selected, table) ?? []
@@ -2337,13 +2353,26 @@ function layerReach(models: TableModels): { readonly relations: RelationSources;
 		setOwn(selected, table, columns)
 	}
 	const names = ownKeys(models)
+	const reveals: Record<string, RevealModel[]> = {}
+	for (let index = 0; index < names.length; index++) {
+		const model = modelOf(models, names[index] ?? '')
+		for (let position = 0; model !== undefined && position < model.reveals.length; position++) {
+			const reveal = model.reveals[position]
+			if (reveal === undefined) continue
+			const listed = ownEntry(reveals, reveal.relation) ?? []
+			listed[listed.length] = reveal
+			setOwn(reveals, reveal.relation, listed)
+			select(reveal.table, reveal.column)
+			if (reveal.when !== undefined) addReach(reveal.when, select)
+		}
+	}
 	for (let index = 0; index < names.length; index++) {
 		const model = modelOf(models, names[index] ?? '')
 		if (model === undefined) continue
 		for (let position = 0; position < model.confers.length; position++) {
 			const source = model.confers[position]
 			if (source === undefined) continue
-			setOwn(relations, source.relation, source)
+			setOwn(relations, source.relation, freeze({ ...source, reveals: freeze(ownEntry(reveals, source.relation) ?? []) }))
 			select(source.table, source.node)
 			if (source.when !== undefined) addReach(source.when, select)
 		}
@@ -2441,6 +2470,89 @@ async function relationHolds(
 	const context: GuardContext = { root: 'SelectQueryNode', table: source.table, joins: {}, scope }
 	const rows = await sessionOf(runtime).run<Readonly<Record<string, unknown>>>(locateNode(source.table, [source.node], scope), context)
 	return rows.length > 0
+}
+
+/**
+ * Locks a row that still holds the Ref's action for its principal at the Ref's object or a container on its chain: a
+ * source row naming it there, or a row the relation reaches that reveals that node. None is 404, and nothing is written.
+ */
+async function lockRelationRow(transaction: Session, context: TableContext, grant: RefGrant): Promise<void> {
+	const now = new Date()
+	const nodeOf = (dimension: string) => (dimension === grant.dimension ? grant.id : grant.chain.get(dimension))
+	for (let index = 0; index < grant.relations.length; index++) {
+		const source = relationSource(context.relations, grant.relations[index] ?? '')
+		const candidates: { table: string; column: string; scope: OperationNode }[] = []
+		const node = nodeOf(source.dimension)
+		if (node !== undefined) {
+			const address = allOf([equals(source.table, source.principal, grant.principal), equals(source.table, source.node, node)])
+			const active = activeRow(source, now)
+			candidates[candidates.length] = {
+				table: source.table,
+				column: source.node,
+				scope: active.length === 0 ? address : AndNode.create(address, ParensNode.create(allOf(active))),
+			}
+		}
+		for (let position = 0; position < source.reveals.length; position++) {
+			const reveal = source.reveals[position]
+			const revealed = reveal === undefined || !includes(reveal.actions, grant.action) ? undefined : nodeOf(reveal.dimension)
+			if (reveal !== undefined && revealed !== undefined) {
+				candidates[candidates.length] = {
+					table: reveal.table,
+					column: reveal.column,
+					scope: revealAddress(source, reveal, revealed, grant.principal, now),
+				}
+			}
+		}
+		for (let position = 0; position < candidates.length; position++) {
+			const candidate = candidates[position]
+			if (candidate === undefined) continue
+			const rows = await transaction.run(lockNode(candidate.table, candidate.column, candidate.scope), {
+				root: 'SelectQueryNode',
+				table: candidate.table,
+				joins: {},
+				scope: candidate.scope,
+				lock: 'share',
+				subqueries: context.subqueries,
+			})
+			if (rows.length > 0) return
+		}
+	}
+	throw new NotFoundError(`no row holds ${grant.action} for the Ref's principal at ${grant.dimension} ${grant.id} any more; obtain a fresh Ref`)
+}
+
+/** `R.<ancestor> = $node and (R.<ancestor> in (<revealed nodes>))`: a row of the reveal's table revealing `node` now. */
+function revealAddress(source: LayerRelation, reveal: RevealModel, node: string, principal: string, now: Date): OperationNode {
+	const revealed = BinaryOperationNode.create(
+		column(reveal.table, reveal.column),
+		OperatorNode.create('in'),
+		revealedNodes(source, reveal, principal, now),
+	)
+	return AndNode.create(equals(reveal.table, reveal.column, node), ParensNode.create(revealed))
+}
+
+/** One guarded select of a row that `relation` reaches for `principal` and that reveals `node` of `dimension` now. */
+async function revealHolds(
+	relations: RelationSources,
+	subqueries: Readonly<Record<string, readonly string[]>>,
+	runtime: DataLayerRuntime,
+	relation: string,
+	dimension: string,
+	node: string,
+	principal: string,
+): Promise<boolean> {
+	if (typeof node !== 'string' || node.length === 0 || typeof principal !== 'string' || principal.length === 0) {
+		throw new QueryRefusedError('row_address', `a node ${relation} reveals is addressed by its node and its principal, non-empty strings`)
+	}
+	const source = relationSource(relations, relation)
+	for (let index = 0; index < source.reveals.length; index++) {
+		const reveal = source.reveals[index]
+		if (reveal === undefined || reveal.dimension !== dimension) continue
+		const address = revealAddress(source, reveal, node, principal, new Date())
+		const context: GuardContext = { root: 'SelectQueryNode', table: reveal.table, joins: {}, scope: address, subqueries }
+		const rows = await sessionOf(runtime).run<Readonly<Record<string, unknown>>>(locateNode(reveal.table, [reveal.column], address), context)
+		if (rows.length > 0) return true
+	}
+	return false
 }
 
 /** One guarded select by key of the containment columns the policy declares; the generated locator of the dimension. */

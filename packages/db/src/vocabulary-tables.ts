@@ -9,6 +9,7 @@ import type {
 	FilePolicies,
 	RecordActions,
 	ReferencePolicy,
+	RevealsPolicy,
 	TableActions,
 	Tables,
 	VersionColumn,
@@ -92,6 +93,8 @@ interface WritableFields<Col extends string, A extends string, Ver extends Col, 
 	readonly confers?: { readonly [relation: string]: ConfersPolicy<Col> }
 	/** Action → the condition a row must meet for it, whoever holds it. */
 	readonly when?: { readonly [action in A]?: ConditionPolicy<Col> }
+	/** Relation of the table's own dimension → the ancestor node a row it reaches reveals, and for which actions. */
+	readonly reveals?: { readonly [relation: string]: RevealsPolicy<Col, A> }
 }
 
 /**

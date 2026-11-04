@@ -851,6 +851,18 @@ export interface TablePolicyArtifact {
 	readonly confers?: Readonly<Record<string, ConfersArtifact>>
 	/** Action → the condition a row must meet for it, narrowing what any grant of it reaches. Absent unless declared. */
 	readonly when?: Readonly<Record<string, ConditionArtifact>>
+	/**
+	 * Relation of the table's own dimension → the ancestor its rows reveal. Absent unless declared, so the digest stays.
+	 * A reader that ignores it reaches less, never more.
+	 */
+	readonly reveals?: Readonly<Record<string, RevealsArtifact>>
+}
+
+/** A row the relation reaches reveals its node in `to` for `actions`, while `when` admits the row. */
+export interface RevealsArtifact {
+	readonly to: string
+	readonly actions: readonly string[]
+	readonly when?: ConditionArtifact
 }
 
 /** A row names `principal` at the node in `node`, until `expires`, while `when` admits it; `assign` bounds its writer. */

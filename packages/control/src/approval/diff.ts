@@ -348,6 +348,7 @@ function compareContracts(changes: Changes, before: ContractArtifact | null, aft
 				subjectOf('table', name),
 				...ruled('table.confers', confersChanges(name, undefined, table.confers)),
 				...ruled('table.when', whenChanges(name, undefined, table.when)),
+				...ruled('table.reveals', revealsChanges(name, undefined, table.reveals)),
 			)
 		}
 	}
@@ -1587,6 +1588,35 @@ function confersChanges(name: string, before: TablePolicyArtifact['confers'], af
 	})
 }
 
+/**
+ * What a table's rows reveal: a new reveal, a new action or a higher node widens what a relation reaches; a lost one,
+ * or an added condition, narrows; any other change of the condition widens.
+ */
+function revealsChanges(name: string, before: TablePolicyArtifact['reveals'], after: TablePolicyArtifact['reveals']): Line[] {
+	const from = before ?? {}
+	const to = after ?? {}
+	return union(Object.keys(from), Object.keys(to)).flatMap((relation): Line[] => {
+		const subject = `Table \`${name}\` reveals to relation \`${relation}\``
+		const was = from[relation]
+		const is = to[relation]
+		if (was === undefined) {
+			if (is === undefined) return []
+			return [widening(`${subject} its \`${is.to}\` for ${is.actions.map((action) => `\`${action}\``).join(', ')}`)]
+		}
+		if (is === undefined) return [narrowing(`${subject} nothing any more`)]
+		const added = is.actions.filter((action) => !was.actions.includes(action))
+		const removed = was.actions.filter((action) => !is.actions.includes(action))
+		return [
+			...valueChange(`${subject} node`, was.to, is.to),
+			...(added.length === 0 ? [] : [widening(`${subject} its \`${is.to}\` also for ${added.map((action) => `\`${action}\``).join(', ')}`)]),
+			...(removed.length === 0 ? [] : [narrowing(`${subject} its \`${is.to}\` no longer for ${removed.map((action) => `\`${action}\``).join(', ')}`)]),
+			...(was.when === undefined && is.when !== undefined
+				? [narrowing(`${subject} only a row its condition holds`)]
+				: valueChange(`${subject} condition`, was.when, is.when)),
+		]
+	})
+}
+
 /** An action's condition narrows every grant of it on the table: a new one narrows, a lost one widens, any change widens. */
 function whenChanges(name: string, before: TablePolicyArtifact['when'], after: TablePolicyArtifact['when']): Line[] {
 	const from = before ?? {}
@@ -1779,6 +1809,7 @@ function tableChanges(name: string, from: TablePolicyArtifact, to: TablePolicyAr
 		...ruled('table.file-column', fileColumnChanges(name, from.files ?? {}, to.files ?? {})),
 		...ruled('table.confers', confersChanges(name, from.confers, to.confers)),
 		...ruled('table.when', whenChanges(name, from.when, to.when)),
+		...ruled('table.reveals', revealsChanges(name, from.reveals, to.reveals)),
 	]
 }
 

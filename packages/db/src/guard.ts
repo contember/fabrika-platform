@@ -185,10 +185,10 @@ function isUnionOf(node: unknown, leaf: (node: unknown) => boolean): boolean {
 }
 
 /** `table.<node> in (select S.<node> from S where S.<principal> = $me and …)`: the rows a relation reaches. */
-function isRelationMembership(node: unknown, table: string, subqueries: GuardContext['subqueries'], admitted: Admitted[]): boolean {
+function isRelationMembership(node: unknown, table: string, subqueries: GuardContext['subqueries'], admitted: Admitted[], depth = 0): boolean {
 	return kindOf(node) === 'BinaryOperationNode' && hasOnly(node, BINARY_KEYS) && read(read(node, 'operator'), 'operator') === 'in'
 		&& isOwnColumn(read(node, 'leftOperand'), table)
-		&& isScopeSubquery(read(node, 'rightOperand'), subqueries, admitted, 1, true)
+		&& isScopeSubquery(read(node, 'rightOperand'), subqueries, admitted, depth + 1, true)
 }
 
 /**
@@ -287,13 +287,16 @@ function isScopeSubquery(node: unknown, subqueries: GuardContext['subqueries'], 
 	return true
 }
 
-/** `S.<column> = $n`, then any scope tree AND-ed after it. */
+/**
+ * `S.<column> = $n`, or a relation's membership over `S` (a reveal: `R.<key> in (<anchored subquery>)`), then any scope
+ * tree AND-ed after it. Either way the innermost subquery starts with the principal's equality.
+ */
 function isAnchored(node: unknown, table: string, subqueries: GuardContext['subqueries'], admitted: Admitted[], depth: number): boolean {
 	if (kindOf(node) === 'AndNode') {
 		return hasOnly(node, CONNECTIVE_KEYS) && isAnchored(read(node, 'left'), table, subqueries, admitted, depth)
 			&& isScopeTree(read(node, 'right'), table, subqueries, admitted, depth)
 	}
-	return isScopeEquality(node, table)
+	return isScopeEquality(node, table) || isRelationMembership(node, table, subqueries, admitted, depth)
 }
 
 /** True when every own property of `node` is one of `keys`: a scope node carries nothing the shape check did not read. */

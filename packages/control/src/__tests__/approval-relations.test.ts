@@ -13,6 +13,7 @@ interface RelationOptions {
 	readonly via?: string
 	readonly confers?: string
 	readonly when?: string
+	readonly reveals?: string
 }
 
 const ROLES = "roles: { owner: { grants: ['notes.read', 'notes.write'], member: { scope: 'workspace', assignableBy: ['owner'] } } },"
@@ -39,7 +40,9 @@ function files(options: RelationOptions = {}): Map<string, string> {
 		)
 	const tables = (base['src/db/tables.ts'] ?? '').replace(
 		NOTE_TABLE,
-		`${NOTE_TABLE.slice(0, -3)}${options.when === undefined ? '' : `\n\t\twhen: ${options.when},`}\n\t},
+		`${NOTE_TABLE.slice(0, -3)}${options.when === undefined ? '' : `\n\t\twhen: ${options.when},`}${
+			options.reveals === undefined ? '' : `\n\t\treveals: ${options.reveals},`
+		}\n\t},
 	note_members: {
 		scope: { child: 'notes' },
 		actions: { read: 'notes.read', insert: 'notes.share', delete: 'notes.share' },
@@ -109,6 +112,25 @@ describe('relation grants in the approval diff', () => {
 		expect(classifyAccess(open, locked).outcome).toBe('no-widening')
 		expect(classifyAccess(locked, open).outcome).toBe('widening')
 		expect(classifyAccess(locked, snapshot(files({ when: "{ 'notes.write': { title: { notEq: 'frozen' } } }" }))).outcome).toBe('widening')
+	})
+})
+
+describe("a table's reveals in the approval diff", () => {
+	const lines = (before: AccessSnapshot, after: AccessSnapshot) => classifyAccess(before, after).changes.map(({ effect, line }) => ({ effect, line }))
+	const reveal = (actions: string) => snapshot(files({ reveals: `{ member: { to: 'workspace', actions: [${actions}] } }` }))
+
+	test('are read from source, widen when added or given an action, and narrow when removed', () => {
+		expect(readContractSource(files({ reveals: "{ member: { to: 'workspace', actions: ['notes.read'] } }" })).tables['notes']?.reveals).toEqual({
+			member: { to: 'workspace', actions: ['notes.read'] },
+		})
+		const none = snapshot(files())
+		const read = reveal("'notes.read'")
+		expect(lines(none, read)).toContainEqual({ effect: 'widens', line: 'Table `notes` reveals to relation `member` its `workspace` for `notes.read`' })
+		expect(lines(read, reveal("'notes.read', 'notes.write'"))).toContainEqual({
+			effect: 'widens',
+			line: 'Table `notes` reveals to relation `member` its `workspace` also for `notes.write`',
+		})
+		expect(classifyAccess(read, none).outcome).toBe('no-widening')
 	})
 })
 
