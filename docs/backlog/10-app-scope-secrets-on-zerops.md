@@ -8,7 +8,7 @@ blocked-by: []
 
 **Summary.** Open question. fabrika's secret scopes are `app` (shared across
 environments) and `app-env` (per environment); Zerops' levels are project and
-service. They do not map 1:1.
+service. They do not map 1:1. Today Zerops refuses the `app` scope; a decision is still owed.
 
 ## Problem
 
@@ -23,9 +23,17 @@ project-per-environment as the default topology
 `app`-scoped secret spans multiple Zerops projects, so no single platform-side
 location represents it.
 
+## What the code does today
+
+On a provider that keeps secrets itself (Zerops), Control refuses an `app`-scoped secret value:
+`secretTarget` (`packages/control/src/api/vault.ts`) answers 400 `provider-managed secret values require an
+explicit env` (since `71abd1c4c`). So an `app`-scoped secret does not exist on Zerops; every value is per environment.
+No ADR records that as the decision.
+
 ## Approach / acceptance
 
-Current thinking — **not decided** — is that an `app`-scoped secret **replicates per
+Either record the refusal as the decision in ADR-0004 and delete this item, or replicate. The replicating option,
+**not decided**, is that an `app`-scoped secret **replicates per
 service regardless of topology**: fabrika writes the same value to each service that
 needs it, and "app scope" stays a fabrika-side concept with no platform counterpart.
 

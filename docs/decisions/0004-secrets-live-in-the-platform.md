@@ -75,7 +75,8 @@ Costs, stated plainly:
   An `app`-scoped secret (shared across environments) has no natural home when the
   invariant above forbids project level — see
   [`../backlog/10-app-scope-secrets-on-zerops.md`](../backlog/10-app-scope-secrets-on-zerops.md).
-  Current thinking: replicate it per service regardless of topology.
+  Control refuses one today (`secretTarget`, `packages/control/src/api/vault.ts`: a provider-managed value needs an
+  explicit env); replicating it per service regardless of topology is the alternative still open.
 - **No rotation history.** The platform stores a current value, not a timeline.
 - **On Cloudflare the vault's costs remain** — a KEK whose loss is unrecoverable,
   and a copy of every app secret in the control plane's database (encrypted).
