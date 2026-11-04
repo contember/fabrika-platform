@@ -106,6 +106,8 @@ interface WritableFields<Col extends string, A extends string, Ver extends Col, 
 	readonly when?: { readonly [action in A]?: ConditionPolicy<Col> }
 	/** Relation of the table's own dimension → the ancestor node a row it reaches reveals, and for which actions. */
 	readonly reveals?: { readonly [relation: string]: RevealsPolicy<Col, A> }
+	/** Dimension outside the chain → the foreign key column a `Within`'s read reaches a row through; no update writes it. */
+	readonly readThrough?: { readonly [dimension: string]: Col }
 }
 
 /**

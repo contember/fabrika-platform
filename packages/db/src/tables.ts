@@ -169,7 +169,17 @@ function artifactOf(model: TableModel): TablePolicyArtifact {
 		...(model.confers.length === 0 ? {} : { confers: confersArtifact(model.confers) }),
 		...(ownKeys(model.when).length === 0 ? {} : { when: whenArtifact(model.when) }),
 		...(model.reveals.length === 0 ? {} : { reveals: revealsArtifact(model.reveals) }),
+		...(model.readThrough.length === 0 ? {} : { readThrough: readThroughArtifact(model) }),
 	}
+}
+
+function readThroughArtifact(model: TableModel): Record<string, string> {
+	const artifact: Record<string, string> = {}
+	for (let index = 0; index < model.readThrough.length; index++) {
+		const path = model.readThrough[index]
+		if (path !== undefined) setOwn(artifact, path.dimension, path.column)
+	}
+	return artifact
 }
 
 function revealsArtifact(reveals: readonly RevealModel[]): Record<string, RevealsArtifact> {

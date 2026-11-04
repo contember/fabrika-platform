@@ -890,6 +890,11 @@ export interface TablePolicyArtifact {
 	 * A reader that ignores it reaches less, never more.
 	 */
 	readonly reveals?: Readonly<Record<string, RevealsArtifact>>
+	/**
+	 * Dimension outside the chain → the column a `Within`'s read reaches a row through. Absent unless declared, so the
+	 * digest stays. A reader that ignores it reaches less, never more.
+	 */
+	readonly readThrough?: Readonly<Record<string, string>>
 }
 
 /** A row the relation reaches reveals its node in `to` for `actions`, while `when` admits the row. */

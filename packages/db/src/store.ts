@@ -11,6 +11,7 @@ import {
 	type RelationSources,
 	relationTerms,
 	revealedNodes,
+	throughPath,
 } from './authority'
 import {
 	defineValue,
@@ -89,6 +90,7 @@ import {
 	scopedWhere,
 	selectNode,
 	updateNode,
+	valueList,
 } from './nodes'
 import { dataAccess } from './orm'
 import {
@@ -110,6 +112,7 @@ import {
 	type ParentOf,
 	type PolicyRow,
 	type RevealModel,
+	type SecondaryPath,
 	type TableModel,
 	type TableModels,
 	tableModels,
@@ -408,7 +411,7 @@ function withinCount(grant: WithinGrant): number {
  * the statement itself judges each row by the chain it carries now. Undefined for an empty `Within`: the caller
  * answers `[]` without a query.
  */
-function withinPredicate(context: TableContext, column: string, grant: WithinGrant): OperationNode | undefined {
+function withinPredicate(context: TableContext, column: string, grant: WithinGrant, operation: Operation): OperationNode | undefined {
 	const model = context.model
 	const now = new Date()
 	if (grant.values === 'all') {
@@ -446,14 +449,58 @@ function withinPredicate(context: TableContext, column: string, grant: WithinGra
 	if (count > MAX_WITHIN_VALUES) {
 		throw new CapabilityError('within_size', `a Within carries at most ${MAX_WITHIN_VALUES} scope values; this one carries ${count}`)
 	}
-	// A relation whose dimension this table lies at no node of reaches none of its rows.
+	addRelationTerms(context, grant, operation === 'read', predicates, now)
+	return predicates.length === 0 ? undefined : conditioned(model, grant.action, anyOf(predicates), now)
+}
+
+/** The relation terms of a `Within`'s relations; a relation whose dimension this table lies at no node of reaches none of its rows. */
+function addRelationTerms(context: TableContext, grant: WithinGrant, reads: boolean, predicates: OperationNode[], now: Date): void {
 	for (let index = 0; index < grant.relations.length; index++) {
-		const terms = relationTerms(context.relations, model, grant.relations[index] ?? '', grant.principal, grant.action, now)
+		const terms = relationTerms(context.relations, context.model, grant.relations[index] ?? '', grant.principal, grant.action, now, reads)
 		for (let position = 0; position < terms.length; position++) {
 			const term = terms[position]
 			if (term !== undefined) predicates[predicates.length] = term
 		}
 	}
+}
+
+/**
+ * The rows a `Within` of a dimension outside the chain reads through `paths`, the ones that reach it: per path
+ * `T.<column> in (values)` at the path's own dimension or `T.<column> in (select D.<key> from D where D.<link> in
+ * (values))` above it, the same for each container, then the relations' terms. A grant on a dimension inside the
+ * Within's lies at no node the column holds, so it reaches no row here.
+ */
+function secondaryPredicate(context: TableContext, paths: readonly SecondaryPath[], grant: WithinGrant): OperationNode | undefined {
+	const model = context.model
+	const now = new Date()
+	if (grant.values === 'all') {
+		return conditioned(model, grant.action, 'all', now)
+	}
+	if (withinCount(grant) > MAX_WITHIN_VALUES) {
+		throw new CapabilityError('within_size', `a Within carries at most ${MAX_WITHIN_VALUES} scope values; this one carries ${withinCount(grant)}`)
+	}
+	const predicates: OperationNode[] = []
+	for (let index = 0; index < paths.length; index++) {
+		const path = paths[index]
+		if (path === undefined) continue
+		if (grant.values.length > 0) {
+			const own = throughPath(model.name, path, grant.dimension, valueList(grant.values))
+			if (own !== undefined) predicates[predicates.length] = own
+		}
+		for (let position = 0; position < grant.containers.length; position++) {
+			const container = grant.containers[position]
+			if (container === undefined || container.values.length === 0) continue
+			const above = throughPath(model.name, path, container.dimension, valueList(container.values))
+			if (above === undefined) {
+				throw new CapabilityError(
+					'unenforceable',
+					`the Within of ${grant.dimension} reaches through ${container.dimension}, which ${path.table} carries no column for; the layer cannot enforce it`,
+				)
+			}
+			predicates[predicates.length] = above
+		}
+	}
+	addRelationTerms(context, grant, true, predicates, now)
 	return predicates.length === 0 ? undefined : conditioned(model, grant.action, anyOf(predicates), now)
 }
 
@@ -481,7 +528,7 @@ export function objectPredicate(context: TableContext, capability: unknown, oper
 export function dimensionListPredicate(context: TableContext, capability: unknown, operation: Operation): OperationNode | undefined {
 	const scope = dimensionScope(context.model)
 	const grant = withinGrant(context, capability, listDimension(scope), operation)
-	return withinPredicate(context, scope.container?.column ?? scope.key, grant)
+	return withinPredicate(context, scope.container?.column ?? scope.key, grant, operation)
 }
 
 /** Rows of a child table that belong to the parent object the Ref names, over the whole chain. */
@@ -500,7 +547,7 @@ export function childListPredicate(context: TableContext, capability: unknown, o
 		throw new CapabilityError('wrong_capability', `a list of ${context.model.name} by its parent needs a Ref or a Within, got ${describeGrant(grant)}`)
 	}
 	checkGrant(context, grant, listDimension(scope.parent), operation)
-	return withinPredicate(context, scope.parent.container?.column ?? scope.column, grant)
+	return withinPredicate(context, scope.parent.container?.column ?? scope.column, grant, operation)
 }
 
 /**
@@ -520,9 +567,22 @@ export function reachColumn(model: TableModel, dimension: string): string | unde
 	return undefined
 }
 
+/** The secondary read paths of `model` that reach `dimension`, a dimension outside its chain: at their node or above it. */
+export function secondaryPathsOf(model: TableModel, dimension: string): readonly SecondaryPath[] {
+	const paths: SecondaryPath[] = []
+	for (let index = 0; index < model.readThrough.length; index++) {
+		const path = model.readThrough[index]
+		if (path !== undefined && (path.dimension === dimension || linkOf(path.chain, dimension) !== undefined)) {
+			paths[paths.length] = path
+		}
+	}
+	return paths
+}
+
 /**
  * Rows of a table a `Within` of any dimension of its chain lists, by the table's read action: tasks under a `Within` of
- * `org` through their stamped `org_id`, as under one of `project` through `project_id`.
+ * `org` through their stamped `org_id`, as under one of `project` through `project_id`; a `Within` of a dimension the
+ * table reaches through a secondary path, through that path's column.
  */
 export function reachPredicate(context: TableContext, capability: unknown): OperationNode | undefined {
 	const grant = runtimeOf(context.connection).capabilities.resolve(capability)
@@ -532,13 +592,17 @@ export function reachPredicate(context: TableContext, capability: unknown): Oper
 	}
 	checkAction(context, 'read', grant.action)
 	const column = reachColumn(context.model, grant.dimension)
-	if (column === undefined) {
+	if (column !== undefined) {
+		return withinPredicate(context, column, grant, 'read')
+	}
+	const paths = secondaryPathsOf(context.model, grant.dimension)
+	if (paths.length === 0) {
 		throw new CapabilityError(
 			'out_of_reach',
-			`a Within of ${grant.dimension} does not reach ${table}: its containment chain does not hold ${grant.dimension}`,
+			`a Within of ${grant.dimension} does not reach ${table}: neither its containment chain nor a secondary path holds ${grant.dimension}`,
 		)
 	}
-	return withinPredicate(context, column, grant)
+	return secondaryPredicate(context, paths, grant)
 }
 
 /**
@@ -894,7 +958,7 @@ export function claimScope(
 			`a Within of ${grant.dimension} does not reach ${model.name}: its containment chain does not hold ${grant.dimension}`,
 		)
 	}
-	return { grant, scope: withinPredicate(context, column, grant) }
+	return { grant, scope: withinPredicate(context, column, grant, 'update') }
 }
 
 /**
@@ -2380,6 +2444,10 @@ function layerReach(models: TableModels): { readonly relations: RelationSources;
 			select(source.table, source.node)
 			if (source.when !== undefined) addReach(source.when, select)
 		}
+		for (let position = 0; position < model.readThrough.length; position++) {
+			const path = model.readThrough[position]
+			if (path !== undefined) select(path.table, path.key)
+		}
 		const actions = ownKeys(model.when)
 		for (let position = 0; position < actions.length; position++) {
 			const condition = ownEntry(model.when, actions[position] ?? '')
@@ -2498,7 +2566,8 @@ async function lockRelationRow(transaction: Session, context: TableContext, gran
 		}
 		for (let position = 0; position < source.reveals.length; position++) {
 			const reveal = source.reveals[position]
-			const revealed = reveal === undefined || !includes(reveal.actions, grant.action) ? undefined : nodeOf(reveal.dimension)
+			const held = reveal !== undefined && reveal.path === undefined && includes(reveal.actions, grant.action)
+			const revealed = reveal === undefined || !held ? undefined : nodeOf(reveal.dimension)
 			if (reveal !== undefined && revealed !== undefined) {
 				candidates[candidates.length] = {
 					table: reveal.table,
@@ -2550,7 +2619,8 @@ async function revealHolds(
 	const source = relationSource(relations, relation)
 	for (let index = 0; index < source.reveals.length; index++) {
 		const reveal = source.reveals[index]
-		if (reveal === undefined || reveal.dimension !== dimension) continue
+		// A reveal matched through a secondary path holds reads under a Within only; no Ref is minted through it.
+		if (reveal === undefined || reveal.path !== undefined || reveal.dimension !== dimension) continue
 		const address = revealAddress(source, reveal, node, principal, new Date())
 		const context: GuardContext = { root: 'SelectQueryNode', table: reveal.table, joins: {}, scope: address, subqueries }
 		const rows = await sessionOf(runtime).run<Readonly<Record<string, unknown>>>(locateNode(reveal.table, [reveal.column], address), context)

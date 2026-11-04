@@ -81,6 +81,7 @@ import {
 	runtimeOf,
 	scopedApplicationRead,
 	scopeTerms,
+	secondaryPathsOf,
 	selectOne,
 	selfLinks,
 	type TableContext,
@@ -475,7 +476,8 @@ function withinTables(parts: DataLayerParts, site: DataSite, run: Runner, capabi
 	for (let index = 0; index < tables.length; index++) {
 		const model = modelOf(parts.models, tables[index] ?? '')
 		const listable = model?.scope.mode === 'dimension' || model?.scope.mode === 'child'
-		if (model !== undefined && listable && reachColumn(model, grant.dimension) !== undefined) {
+		const reached = model !== undefined && (reachColumn(model, grant.dimension) !== undefined || secondaryPathsOf(model, grant.dimension).length > 0)
+		if (model !== undefined && listable && reached) {
 			const context = parts.contextOf(model.name)
 			setOwn(handle, model.name, listedRows(parts, context, site, run, capability, () => reachPredicate(context, capability)))
 		}

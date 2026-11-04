@@ -350,6 +350,7 @@ function compareContracts(changes: Changes, before: ContractArtifact | null, aft
 				...ruled('table.confers', confersChanges(name, undefined, table.confers)),
 				...ruled('table.when', whenChanges(name, undefined, table.when)),
 				...ruled('table.reveals', revealsChanges(name, undefined, table.reveals)),
+				...ruled('table.read-through', readThroughChanges(name, undefined, table.readThrough)),
 			)
 		}
 	}
@@ -1627,6 +1628,20 @@ function revealsChanges(name: string, before: TablePolicyArtifact['reveals'], af
 	})
 }
 
+/** A secondary read path: a new one, or another column, widens what a `Within` of its dimension reads; a lost one narrows. */
+function readThroughChanges(name: string, before: TablePolicyArtifact['readThrough'], after: TablePolicyArtifact['readThrough']): Line[] {
+	const from = before ?? {}
+	const to = after ?? {}
+	return union(Object.keys(from), Object.keys(to)).flatMap((dimension): Line[] => {
+		const was = from[dimension]
+		const is = to[dimension]
+		const subject = `A read of \`${dimension}\` reaches table \`${name}\``
+		if (was === undefined) return is === undefined ? [] : [widening(`${subject} through \`${is}\``)]
+		if (is === undefined) return [narrowing(`${subject} no longer: its path through \`${was}\` is removed`)]
+		return was === is ? [] : [widening(`${subject} through \`${is}\` instead of \`${was}\``)]
+	})
+}
+
 /** An action's condition narrows every grant of it on the table: a new one narrows, a lost one widens, any change widens. */
 function whenChanges(name: string, before: TablePolicyArtifact['when'], after: TablePolicyArtifact['when']): Line[] {
 	const from = before ?? {}
@@ -1837,6 +1852,7 @@ function tableChanges(name: string, from: TablePolicyArtifact, to: TablePolicyAr
 		...ruled('table.confers', confersChanges(name, from.confers, to.confers)),
 		...ruled('table.when', whenChanges(name, from.when, to.when)),
 		...ruled('table.reveals', revealsChanges(name, from.reveals, to.reveals)),
+		...ruled('table.read-through', readThroughChanges(name, from.readThrough, to.readThrough)),
 	]
 }
 

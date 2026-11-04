@@ -288,15 +288,16 @@ function isScopeSubquery(node: unknown, subqueries: GuardContext['subqueries'], 
 }
 
 /**
- * `S.<column> = $n`, or a relation's membership over `S` (a reveal: `R.<key> in (<anchored subquery>)`), then any scope
- * tree AND-ed after it. Either way the innermost subquery starts with the principal's equality.
+ * `S.<column> = $n`, `S.<column> in ($1, …)` (a secondary path's container: the nodes inside bound containers), or a
+ * relation's membership over `S` (a reveal: `R.<key> in (<anchored subquery>)`), then any scope tree AND-ed after it.
+ * Each way the innermost subquery starts with a test against bound values, so it never reads every row.
  */
 function isAnchored(node: unknown, table: string, subqueries: GuardContext['subqueries'], admitted: Admitted[], depth: number): boolean {
 	if (kindOf(node) === 'AndNode') {
 		return hasOnly(node, CONNECTIVE_KEYS) && isAnchored(read(node, 'left'), table, subqueries, admitted, depth)
 			&& isScopeTree(read(node, 'right'), table, subqueries, admitted, depth)
 	}
-	return isScopeEquality(node, table) || isRelationMembership(node, table, subqueries, admitted, depth)
+	return isScopeEquality(node, table) || isScopeMembership(node, table) || isRelationMembership(node, table, subqueries, admitted, depth)
 }
 
 /** True when every own property of `node` is one of `keys`: a scope node carries nothing the shape check did not read. */
