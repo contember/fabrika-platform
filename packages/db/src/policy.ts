@@ -1290,6 +1290,10 @@ function parseConfers(
 	if (table.scope.mode !== 'dimension' && table.scope.mode !== 'child') {
 		throw new PolicyError(`${table.name}: a ${table.scope.mode} table confers no relation; its rows lie at no node`)
 	}
+	if (table.queue !== undefined) {
+		// A claim, a requeue and `done: true` rewrite `due` and `version` past every update-column check.
+		throw new PolicyError(`${table.name}: a queue table confers no relation; the layer rewrites its rows on every claim`)
+	}
 	const declared = plainRecord(input, `${table.name}: confers`)
 	const names = ownKeys(declared)
 	const sources: RelationSource[] = []
@@ -1333,6 +1337,9 @@ function parseConfers(
 		}
 		for (let position = 0; position < fixed.length; position++) {
 			const name = fixed[position] ?? ''
+			if (name === table.version) {
+				throw new PolicyError(`${what}: ${name} is the version column, which every update rewrites; it decides nothing a row confers`)
+			}
 			if (inSet(table.update, name) || hasOwn(table.columnWrites, name)) {
 				throw new PolicyError(`${what}: ${name} decides what a row confers, so no update writes it; replace the row instead`)
 			}
