@@ -164,7 +164,7 @@ export interface TableColumns<Col extends string = string, Table extends string 
 	readonly booleans?: readonly Col[]
 	/** The JSON columns (`jsonb`, or declared `JSONB` on SQLite), written as a JSON value and never compared; absent when none. */
 	readonly json?: readonly Col[]
-	/** A view (on Postgres also a materialized view): read-only, with no foreign key; absent for a table. */
+	/** A view: read-only, with no foreign key; absent for a table. */
 	readonly view?: true
 }
 
@@ -533,6 +533,9 @@ function parseTable(table: string, columnList: unknown, policyInput: unknown, vo
 				restricted[restricted.length] = name
 			}
 		}
+		if (writeInput !== undefined && view) {
+			throw new PolicyError(viewWrite(table))
+		}
 		if (writeInput !== undefined) {
 			setOwn(columnWrites, name, columnWrite(table, name, action(writeInput, `columns.${name}.write`), actions, update))
 		}
@@ -549,17 +552,17 @@ function parseTable(table: string, columnList: unknown, policyInput: unknown, vo
 	const writable = !view && (scope.mode === 'dimension' || scope.mode === 'child' || scope.mode === 'app')
 	const queueInput = ownEntry(policy, 'queue')
 	const filesInput = ownEntry(policy, 'files')
+	// On a view, an empty insert or update list is refused too: it states a write the view never takes.
+	if (view && (hasOwn(policy, 'insert') || hasOwn(policy, 'update'))) {
+		throw new PolicyError(viewWrite(table))
+	}
 	if (
 		!writable
 		&& (namesOf(insert).length > 0 || namesOf(update).length > 0 || version !== undefined || createdBy !== undefined
 			|| ownKeys(columnWrites).length > 0 || queueInput !== undefined || filesInput !== undefined
 			|| actions.insert.length > 0 || actions.update.length > 0 || actions.delete.length > 0)
 	) {
-		throw new PolicyError(
-			view
-				? `${table}: a view is never written by a handler, so its policy takes only actions.read, appRead, appCount and column read actions`
-				: `${table}: a ${scope.mode} table is never written by a handler`,
-		)
+		throw new PolicyError(view ? viewWrite(table) : `${table}: a ${scope.mode} table is never written by a handler`)
 	}
 	const dates = parseColumnSet(table, ownEntry(entry, 'dates'), column, 'dates')
 	const timestamps = parseColumnSet(table, ownEntry(entry, 'timestamps'), column, 'timestamps')
@@ -890,6 +893,10 @@ function parseContainer(
 		throw new PolicyError(`${table}: the vocabulary puts ${dimension} in ${container}, not in ${String(statedDimension)}`)
 	}
 	return freeze({ dimension: container, column: columns.column(ownEntry(stated, 'column'), 'scope.in.column') })
+}
+
+function viewWrite(table: string): string {
+	return `${table}: a view is never written by a handler, so its policy takes only actions.read, appRead, appCount and column read actions`
 }
 
 function parseActions(

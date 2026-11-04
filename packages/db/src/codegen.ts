@@ -56,7 +56,7 @@ export class CodegenError extends Error {
 
 const catalogColumnSchema = z.object({
 	table_name: z.string(),
-	/** The relation is a view or a materialized view (`relkind` `v` or `m`): read-only, every column nullable. */
+	/** The relation is a view (`relkind` `v`): read-only, every column nullable. A materialized view is left out (ADR-0072). */
 	view: z.boolean(),
 	column_name: z.string(),
 	type_name: z.string(),
@@ -93,11 +93,11 @@ export interface Catalog {
 	readonly foreignKeys: readonly CatalogForeignKey[]
 }
 
-/** One row per column of every ordinary or partitioned table, view and materialized view of the schema, in table then column order. */
+/** One row per column of every ordinary or partitioned table and view of the schema, in table then column order. */
 const CATALOG_QUERY = `
 SELECT
 	c.relname::text AS table_name,
-	c.relkind IN ('v', 'm') AS view,
+	c.relkind = 'v' AS view,
 	a.attname::text AS column_name,
 	t.typname::text AS type_name,
 	t.typtype::text AS type_type,
@@ -116,7 +116,7 @@ FROM pg_attribute a
 JOIN pg_class c ON c.oid = a.attrelid
 JOIN pg_namespace n ON n.oid = c.relnamespace
 JOIN pg_type t ON t.oid = a.atttypid
-WHERE n.nspname = $1 AND c.relkind IN ('r', 'p', 'v', 'm') AND NOT c.relispartition AND a.attnum > 0 AND NOT a.attisdropped
+WHERE n.nspname = $1 AND c.relkind IN ('r', 'p', 'v') AND NOT c.relispartition AND a.attnum > 0 AND NOT a.attisdropped
 ORDER BY c.relname, a.attnum
 `
 
@@ -287,7 +287,7 @@ export interface NamedColumn {
 
 /** A column of a table or of a view, as `renderTables` reads it. */
 export interface RelationColumn extends NamedColumn {
-	/** The relation is a view (on Postgres also a materialized view): read-only, with no key or foreign key. */
+	/** The relation is a view: read-only, with no key or foreign key. */
 	readonly view: boolean
 }
 

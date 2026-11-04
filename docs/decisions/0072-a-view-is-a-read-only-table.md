@@ -9,7 +9,7 @@ date: 2026-11-04
 
 ## Context
 
-A migration may create a view (`CREATE VIEW`, on Postgres also `CREATE MATERIALIZED VIEW`); the classifier admits it as
+A migration may create a view (`CREATE VIEW`); the classifier admits it as
 a deviation the approver reviews ([ADR-0017](0017-service-owned-postgres-migrations.md)). Codegen read only tables
 (`relkind` `r` and `p`, SQLite's `table`), so a handler read a view through `ctx.sql` with a row schema written by hand,
 and scoped it with `ctx.sql.scope` placed by hand. Real applications have 8 and 40 views: per-parent summaries
@@ -22,8 +22,8 @@ chain one composite foreign key (`requireReference`, `requireCoveringKey`).
 
 ## Decision
 
-1. **Codegen reads views.** Postgres reads `relkind` `v` and `m` beside `r` and `p`; SQLite reads `pragma_table_list`
-   type `view`. A view's interface is `<Pascal>View`, every column is nullable (neither database records a view
+1. **Codegen reads views.** Postgres reads `relkind` `v` beside `r` and `p`, and leaves a materialized view (`m`) out;
+   SQLite reads `pragma_table_list` type `view`. A view's interface is `<Pascal>View`, every column is nullable (neither database records a view
    column's nullability), and its column list entry carries `view: true`. The module exports the views' names as
    `Views`, one per line, and the column list's type names them, `TypedColumnList<DB, Views>`, so the policy types know
    them. A view column of a type the data layer
@@ -51,7 +51,9 @@ chain one composite foreign key (`requireReference`, `requireCoveringKey`).
 6. **The view's query is the containment's only witness.** No foreign key ties a view's `deal_id` or chain columns to
    the parent row, so the policy checks only that the columns exist. The view's SQL is a migration deviation the
    approver reviews closer ([ADR-0050](0050-approved-access.md)); it must select the containment columns from the
-   parent row (or from a row whose foreign keys tie it there). A row whose parent column is null is in no scope.
+   parent row (or from a row whose foreign keys tie it there). A row is placed by the containment columns it carries,
+   as the view's SQL fills them: a row whose parent column is null is read by no `Ref` to a parent, and a `Within` over
+   a container reaches it through a chain column the row does carry.
 7. **The artifact marks a view.** A view's `TablePolicyArtifact` carries `view: true`, absent for a table, so every
    existing artifact keeps its digest. The approval diff says `New view policy …` and reports a table that becomes a
    view or stops being one; the database code lines show the view's SQL as before.
@@ -83,5 +85,8 @@ chain one composite foreign key (`requireReference`, `requireCoveringKey`).
   containment, read by codegen only, where the policy already states it for every table.
 - **Require a policy for every view:** a migration guide for every application with views, for no added safety: a view
   without a policy is unreachable through `ctx.db`.
+- **Read a materialized view too:** its rows are a snapshot, refreshed when the application says so, so its containment
+  columns keep a row's old parent after the parent row moves or is deleted. A capability over the new parent would read
+  rows its parent no longer holds, until the next refresh. A handler reads one through `ctx.sql`.
 - **Type view columns from the source columns' nullability** (Postgres `pg_rewrite`, SQLite's declared types): only for
   a column that selects a base column directly, and Postgres keeps no catalog of that lineage.

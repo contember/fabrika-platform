@@ -217,8 +217,9 @@ pass a recording one); `Database.fromEngine` takes another engine (`openSqlite`)
   `NamesItsParentColumn` in two lines; `derived-tables.test.ts` compiles `derived-mistakes/`. A map annotated with
   `VocabularyPolicyMap<DB, V>` states nothing narrower, so it is checked against every form.
 - **A view is a read-only table** ([ADR-0072](../../docs/decisions/0072-a-view-is-a-read-only-table.md)). Codegen reads
-  Postgres `relkind` `v` and `m` and SQLite views: every column nullable, a column of a type the layer does not read
-  left out (`of: 'view'`), a view left with no column left out whole, the entry marked `view: true`, and the names
+  Postgres `relkind` `v` (not a materialized view, whose snapshot keeps a moved row's old parent) and SQLite views:
+  every column nullable, a column of a type the layer does not read left out (`of: 'view'`), a view left with no
+  column left out whole, the entry marked `view: true`, and the names
   exported as `Views` (one per line, so the module stays dprint-stable) for `TypedColumnList<DB, Views>`. A view may
   have no policy (`parseTables` skips it; a table still needs one). With one it takes a child scope or `reference`,
   `actions.read`, `appRead`, `appCount` and column read actions only, needs no foreign key for its containment columns

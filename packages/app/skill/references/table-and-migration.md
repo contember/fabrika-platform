@@ -331,9 +331,9 @@ export const tables = defineTables(vocabulary, columns)({
 
 ## A view read as a table
 
-`fabrika db codegen` reads every view a migration creates (on Postgres a materialized view too): its interface is
-`<Pascal>View`, every column is `| null`, and its column list entry says `view: true`. A view needs no policy; without
-one only `ctx.sql` reads it. With one, `ctx.db` reads it like a child table, typed and scoped, and nothing writes it:
+`fabrika db codegen` reads every view a migration creates (not a materialized view: read one with `ctx.sql`): its
+interface is `<Pascal>View`, every column is `| null`, and its column list entry says `view: true`. A view needs no
+policy; without one only `ctx.sql` reads it. With one, `ctx.db` reads it like a child table, typed and scoped, and nothing writes it:
 
 - `scope: { child: '<parent>' }` puts it under its parent's `Ref`, with the child's conventions: the view selects the
   parent column (`<parent dimension>_id`) and every chain column of the parent. A view of one row per parent states
@@ -344,7 +344,8 @@ one only `ctx.sql` reads it. With one, `ctx.db` reads it like a child table, typ
   `version`, `createdBy`, `queue`, `files`, a column `write` and `unscoped: { <view>: 'write' }` are refused by tsc and
   the checker; its handles' writes are `Unavailable`, and the data layer refuses them.
 - No foreign key ties a view's rows to its parent: its SQL is what puts a row in a scope, and the approver reviews it.
-  Select the parent and chain columns from the parent row itself, or from a row whose foreign keys tie it there.
+  Select the parent and chain columns from the parent row itself, or from a row whose foreign keys tie it there. A row
+  whose parent column is null is read by no `Ref`, but a `Within` reaches it through the chain columns it carries.
 - A column of a type the data layer does not read (an array, `numeric` on SQLite) is left out, and every codegen run
   names it. On SQLite an expression has a type only through `CAST(… AS INTEGER | REAL | TEXT)`; on Postgres cast a
   count you want as a number (`count(*)::int4`).

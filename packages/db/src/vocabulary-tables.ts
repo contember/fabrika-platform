@@ -178,7 +178,10 @@ export type VocabularyViewPolicy<Table extends string, Col extends string, A ext
 	: S extends { readonly reference: unknown } ? ReferenceViewPolicy<Col, A>
 	: AuthoredChildViewPolicy<Table, Col, A, S, P> | ReferenceViewPolicy<Col, A>
 
-type ReferenceViewPolicy<Col extends string, A extends string> = ReferencePolicy<Col, A> & { readonly actions: NoWriteActions }
+type ReferenceViewPolicy<Col extends string, A extends string> = ReferencePolicy<Col, A> & {
+	readonly actions: NoWriteActions
+	readonly columns?: { readonly [C in Col]?: { readonly read: A; readonly write?: never } }
+}
 
 /** An application table's scope: why its rows belong to no dimension; `key` defaults to `id`. */
 type AuthoredApplicationPolicy<Col extends string, A extends string, Ver extends Col> = WritableFields<Col, A, Ver> & {

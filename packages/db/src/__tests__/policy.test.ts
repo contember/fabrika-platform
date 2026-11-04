@@ -566,6 +566,8 @@ describe('a view (ADR-0072)', () => {
 			{ actions: { read: 'projects.read', update: 'projects.write' } },
 			{ actions: { read: 'projects.read', delete: 'projects.write' } },
 			{ update: ['name'] },
+			{ insert: [] },
+			{ update: [] },
 			{ version: 'events' },
 			{ createdBy: 'name' },
 			{ columns: { name: { write: 'projects.write' } } },

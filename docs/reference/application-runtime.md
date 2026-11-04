@@ -542,7 +542,7 @@ names the same fix at runtime.
   decides who reads it, so a code list an administrator edits is validated by reading it, and a log nobody scoped
   reads keeps an action no scoped endpoint holds.
 - **A view is a read-only table** ([ADR-0072](../decisions/0072-a-view-is-a-read-only-table.md)). `fabrika db codegen`
-  reads every view (a materialized one on Postgres too), every column `| null`, and marks it `view: true`. One without
+  reads every view (not a materialized one), every column `| null`, and marks it `view: true`. One without
   a policy is reached only by `ctx.sql`. With `scope: { child: '<parent>' }` it is read under the parent's `Ref` and a
   `Within` exactly as a child table (a view of one row per parent states `key: '<parent column>'` and is read with
   `get(ctx.target.value)`); with `scope: { reference }` through `ctx.db.reference`. Its handles' writes are

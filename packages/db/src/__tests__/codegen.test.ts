@@ -528,7 +528,7 @@ describe.skipIf(!hasPostgres)('codegen against real Postgres', () => {
 		)
 	})
 
-	test('reads a view and a materialized view as nullable columns marked view, leaving out a column of a type it does not read', async () => {
+	test('reads a view as nullable columns marked view, leaving out a column of a type it does not read, and a materialized view whole', async () => {
 		const ddl = `
 			CREATE TABLE deals (id uuid PRIMARY KEY, org_id uuid NOT NULL, title text NOT NULL, opened_at timestamptz NOT NULL);
 			CREATE TABLE activities (id uuid PRIMARY KEY, deal_id uuid NOT NULL REFERENCES deals, at timestamptz NOT NULL);
@@ -536,7 +536,8 @@ describe.skipIf(!hasPostgres)('codegen against real Postgres', () => {
 				SELECT d.id AS deal_id, d.org_id, d.title, count(a.id) AS activities, count(a.id)::int4 AS n, max(a.at) AS last_at,
 					array_agg(a.id) AS ids
 				FROM deals d LEFT JOIN activities a ON a.deal_id = d.id GROUP BY d.id;
-			CREATE MATERIALIZED VIEW deal_days AS SELECT d.id AS deal_id, d.org_id, d.opened_at::date AS opened_on FROM deals d;
+			CREATE VIEW deal_days AS SELECT d.id AS deal_id, d.org_id, d.opened_at::date AS opened_on FROM deals d;
+			CREATE MATERIALIZED VIEW deal_titles AS SELECT d.id AS deal_id, d.org_id, d.title FROM deals d;
 			CREATE VIEW only_arrays AS SELECT array_agg(id) AS ids FROM deals;
 		`
 		const schema = await migrated(ddl)
@@ -562,6 +563,7 @@ describe.skipIf(!hasPostgres)('codegen against real Postgres', () => {
 			{ table: 'only_arrays', column: 'ids', type: 'uuid[]', of: 'view' },
 		])
 		expect(module.source).not.toContain('OnlyArraysView')
+		expect(module.source).not.toContain('deal_titles')
 		expect(module.source).toContain(
 			"export type Views =\n\t| 'deal_days'\n\t| 'deal_summaries'\n\nexport const columns: TypedColumnList<DB, Views> = {",
 		)
