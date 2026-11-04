@@ -893,11 +893,17 @@ export interface ConfersArtifact {
 	readonly assign: { readonly maxDays: number | null; readonly self: boolean } | null
 }
 
-/** A structured row condition: connectives, or `{ '<column or fk_column.column>': test }`, every test holding. */
+/**
+ * A structured row condition: connectives, `{ '<column or fk_column.column>': test }` with every test holding, or
+ * `some` / `none` of the rows of one table whose foreign key names the row. `some` and `none` are absent from a
+ * condition that does not use them, so its digest stays.
+ */
 export type ConditionArtifact =
 	| { readonly allOf: readonly ConditionArtifact[] }
 	| { readonly anyOf: readonly ConditionArtifact[] }
 	| { readonly not: ConditionArtifact }
+	| { readonly some: Readonly<Record<string, ConditionArtifact>> }
+	| { readonly none: Readonly<Record<string, ConditionArtifact>> }
 	| { readonly [path: string]: ColumnTestArtifact }
 
 export type ConditionLiteralArtifact = string | number | boolean

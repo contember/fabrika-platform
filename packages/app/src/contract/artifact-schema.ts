@@ -324,8 +324,12 @@ const condition: z.ZodType<ConditionArtifact> = z.lazy(() =>
 		z.strictObject({ allOf: z.array(condition).nonempty() }),
 		z.strictObject({ anyOf: z.array(condition).nonempty() }),
 		z.strictObject({ not: condition }),
+		z.strictObject({ some: z.record(name, condition).refine((rows) => Object.keys(rows).length === 1, 'some names exactly one table') }),
+		z.strictObject({ none: z.record(name, condition).refine((rows) => Object.keys(rows).length === 1, 'none names exactly one table') }),
 		z.record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*){0,3}$/), columnTest).refine(
-			(tests) => Object.keys(tests).length > 0 && !('allOf' in tests) && !('anyOf' in tests) && !('not' in tests),
+			(tests) =>
+				Object.keys(tests).length > 0 && !('allOf' in tests) && !('anyOf' in tests) && !('not' in tests) && !('some' in tests)
+				&& !('none' in tests),
 			'a condition tests at least one column',
 		),
 	])

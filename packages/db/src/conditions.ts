@@ -31,12 +31,15 @@ export interface ColumnTest {
 
 /**
  * A condition as a policy writes it: `{ column: test, … }` (all of them), `{ 'fk_column.column': test }` along a
- * foreign key, or `{ anyOf: […] }`, `{ allOf: […] }`, `{ not: … }`.
+ * foreign key, `{ anyOf: […] }`, `{ allOf: […] }`, `{ not: … }`, or `{ some: { table: … } }` and `{ none: { table: … } }`
+ * over the rows of `table` whose foreign key names the row.
  */
 export type ConditionPolicy<Col extends string = string> =
 	| { readonly anyOf: readonly ConditionPolicy<Col>[] }
 	| { readonly allOf: readonly ConditionPolicy<Col>[] }
 	| { readonly not: ConditionPolicy<Col> }
+	| { readonly some: { readonly [table: string]: ConditionPolicy } }
+	| { readonly none: { readonly [table: string]: ConditionPolicy } }
 	| { readonly [C in Col | `${Col}.${string}`]?: ColumnTest }
 
 export type ConditionOperator = 'eq' | 'notEq' | 'in' | 'notIn' | 'isNull' | 'lt' | 'lte' | 'gt' | 'gte'
@@ -52,6 +55,15 @@ export type ConditionModel =
 	| { readonly kind: 'all'; readonly terms: readonly ConditionModel[] }
 	| { readonly kind: 'any'; readonly terms: readonly ConditionModel[] }
 	| { readonly kind: 'not'; readonly term: ConditionModel }
+	| {
+		/** `key in (select table.column from table where <term>)`, or its negation for `none`. */
+		readonly kind: 'some'
+		readonly negated: boolean
+		readonly key: string
+		readonly table: string
+		readonly column: string
+		readonly term: ConditionModel
+	}
 	| {
 		readonly kind: 'test'
 		readonly hops: readonly ConditionHop[]
@@ -73,7 +85,7 @@ export interface ConditionTable {
 export const MAX_CONDITION_HOPS = 3
 const MAX_CONDITION_DEPTH = 8
 const OPERATORS: readonly ConditionOperator[] = freeze(['eq', 'notEq', 'in', 'notIn', 'isNull', 'lt', 'lte', 'gt', 'gte'])
-const CONNECTIVES = freeze(['anyOf', 'allOf', 'not'])
+const CONNECTIVES = freeze(['anyOf', 'allOf', 'not', 'some', 'none'])
 
 /**
  * Whether a path may follow `from.column` to the row of `to` whose `key` it holds. A hop reads its target unscoped, so
@@ -93,9 +105,10 @@ export function parseCondition(
 	what: string,
 	hops: HopRule | false,
 ): ConditionModel {
-	return parseNode(input, table, tables, what, hops, 0)
+	return parseNode(input, table, tables, what, hops, 0, 0)
 }
 
+/** `level` counts the `some` and `none` subqueries around the node: each takes one of a path's foreign keys. */
 function parseNode(
 	input: unknown,
 	table: ConditionTable,
@@ -103,6 +116,7 @@ function parseNode(
 	what: string,
 	hops: HopRule | false,
 	depth: number,
+	level: number,
 ): ConditionModel {
 	if (depth > MAX_CONDITION_DEPTH) {
 		throw new PolicyError(`${what} nests deeper than ${MAX_CONDITION_DEPTH} levels`)
@@ -114,14 +128,17 @@ function parseNode(
 	}
 	const first = keys[0] ?? ''
 	if (keys.length === 1 && (first === 'anyOf' || first === 'allOf')) {
-		const items = parseList(ownEntry(record, first), (item) => parseNode(item, table, tables, `${what}.${first}`, hops, depth + 1))
+		const items = parseList(ownEntry(record, first), (item) => parseNode(item, table, tables, `${what}.${first}`, hops, depth + 1, level))
 		if (items === undefined || items.length === 0) {
 			throw new PolicyError(`${what}.${first} takes a non-empty plain array of conditions`)
 		}
 		return freeze({ kind: first === 'anyOf' ? 'any' : 'all', terms: freeze(items) })
 	}
 	if (keys.length === 1 && first === 'not') {
-		return freeze({ kind: 'not', term: parseNode(ownEntry(record, 'not'), table, tables, `${what}.not`, hops, depth + 1) })
+		return freeze({ kind: 'not', term: parseNode(ownEntry(record, 'not'), table, tables, `${what}.not`, hops, depth + 1, level) })
+	}
+	if (keys.length === 1 && (first === 'some' || first === 'none')) {
+		return parseSome(first, ownEntry(record, first), table, tables, `${what}.${first}`, hops, depth, level)
 	}
 	const terms: ConditionModel[] = []
 	for (let index = 0; index < keys.length; index++) {
@@ -131,7 +148,7 @@ function parseNode(
 				throw new PolicyError(`${what}: ${key} stands alone in its object; wrap the column tests beside it in allOf`)
 			}
 		}
-		terms[terms.length] = parseTest(key, ownEntry(record, key), table, tables, `${what}.${key}`, hops)
+		terms[terms.length] = parseTest(key, ownEntry(record, key), table, tables, `${what}.${key}`, hops, level)
 	}
 	const only = terms[0]
 	return terms.length === 1 && only !== undefined ? only : freeze({ kind: 'all', terms: freeze(terms) })
@@ -144,10 +161,11 @@ function parseTest(
 	tables: (name: string) => ConditionTable | undefined,
 	what: string,
 	hops: HopRule | false,
+	level: number,
 ): ConditionModel {
 	const segments = splitPath(path)
-	if (segments.length - 1 > MAX_CONDITION_HOPS) {
-		throw new PolicyError(`${what}: a path follows at most ${MAX_CONDITION_HOPS} foreign keys`)
+	if (segments.length - 1 + level > MAX_CONDITION_HOPS) {
+		throw new PolicyError(`${what}: a path follows at most ${MAX_CONDITION_HOPS} foreign keys, a some or none counted as one`)
 	}
 	if (segments.length > 1 && hops === false) {
 		throw new PolicyError(`${what}: this condition is judged on the row itself and follows no foreign key`)
@@ -190,6 +208,62 @@ function parseTest(
 		operator,
 		value: operandOf(operator, raw, inSet(current.timestamps, columnName), what),
 	})
+}
+
+/**
+ * `{ some: { <table>: <condition> } }`: a row of `table` whose foreign key names this row meets the condition; `none`:
+ * no such row does. The foreign key is held to the path rule from `table`'s side, so the rows read lie in this row's
+ * own tenant: a child's parent column, a contained dimension's container column, or a key that holds the tenant.
+ */
+function parseSome(
+	kind: 'some' | 'none',
+	input: unknown,
+	table: ConditionTable,
+	tables: (name: string) => ConditionTable | undefined,
+	what: string,
+	hops: HopRule | false,
+	depth: number,
+	level: number,
+): ConditionModel {
+	if (hops === false) {
+		throw new PolicyError(`${what}: this condition is judged on the row itself and reads no other row`)
+	}
+	if (level + 1 > MAX_CONDITION_HOPS) {
+		throw new PolicyError(`${what}: a path follows at most ${MAX_CONDITION_HOPS} foreign keys, a some or none counted as one`)
+	}
+	const record = plainRecord(input, what)
+	const names = ownKeys(record)
+	const name = names[0] ?? ''
+	if (names.length !== 1) {
+		throw new PolicyError(`${what} names exactly one table`)
+	}
+	const child = tables(name)
+	if (child === undefined) {
+		throw new PolicyError(`${what}: ${name} is not a table with a policy`)
+	}
+	let found: ConditionHop | undefined
+	let count = 0
+	for (let index = 0; index < child.foreignKeys.length; index++) {
+		const key = child.foreignKeys[index]
+		if (key !== undefined && key.columns.length === 1 && key.table === table.name) {
+			found = freeze({ column: key.columns[0] ?? '', table: name, key: key.references[0] ?? '' })
+			count++
+		}
+	}
+	if (found === undefined || count !== 1) {
+		throw new PolicyError(
+			found === undefined
+				? `${what}: ${name} has no single-column foreign key to ${table.name}`
+				: `${what}: ${name} has ${count} single-column foreign keys to ${table.name}, so the rows it names are not one set`,
+		)
+	}
+	if (!hops(name, found.column, table.name, found.key)) {
+		throw new PolicyError(
+			`${what}: ${name}.${found.column} is outside ${table.name}'s containment; the rows read follow a child's parent column, a contained dimension's container column, or a foreign key that also holds every ancestor the two tables share`,
+		)
+	}
+	const term = parseNode(ownEntry(record, name), child, tables, `${what}.${name}`, hops, depth + 1, level + 1)
+	return freeze({ kind: 'some', negated: kind === 'none', key: found.key, table: name, column: found.column, term })
 }
 
 function splitPath(path: string): readonly string[] {
@@ -270,22 +344,27 @@ function operandOf(
 	return literalOf(value, `${what}.${operator}`)
 }
 
-/** The tables a condition's paths reach, each with the key a subquery selects: what the guard admits under it. */
-export function conditionReach(condition: ConditionModel, into: Record<string, string>): void {
+/** The tables a condition's subqueries read, each with the column it selects: what the guard admits under it. */
+export function conditionReach(condition: ConditionModel, select: (table: string, column: string) => void): void {
 	if (condition.kind === 'not') {
-		conditionReach(condition.term, into)
+		conditionReach(condition.term, select)
+		return
+	}
+	if (condition.kind === 'some') {
+		select(condition.table, condition.column)
+		conditionReach(condition.term, select)
 		return
 	}
 	if (condition.kind !== 'test') {
 		for (let index = 0; index < condition.terms.length; index++) {
 			const term = condition.terms[index]
-			if (term !== undefined) conditionReach(term, into)
+			if (term !== undefined) conditionReach(term, select)
 		}
 		return
 	}
 	for (let index = 0; index < condition.hops.length; index++) {
 		const hop = condition.hops[index]
-		if (hop !== undefined) into[hop.table] = hop.key
+		if (hop !== undefined) select(hop.table, hop.key)
 	}
 }
 
@@ -331,6 +410,8 @@ function truth(condition: ConditionModel, row: ReadonlyMap<string, Primitive | n
 			const value = truth(condition.term, row, now)
 			return value === undefined ? undefined : !value
 		}
+		case 'some':
+			return undefined
 		case 'test': {
 			if (condition.hops.length > 0) return undefined
 			const cell = row.has(condition.column) ? row.get(condition.column) : null
@@ -408,6 +489,11 @@ export function conditionArtifact(condition: ConditionModel): ConditionArtifact 
 			return { anyOf: artifactsOf(condition.terms) }
 		case 'not':
 			return { not: conditionArtifact(condition.term) }
+		case 'some': {
+			const rows: Record<string, ConditionArtifact> = {}
+			rows[condition.table] = conditionArtifact(condition.term)
+			return condition.negated ? { none: rows } : { some: rows }
+		}
 		case 'test': {
 			let path = ''
 			for (let index = 0; index < condition.hops.length; index++) {
