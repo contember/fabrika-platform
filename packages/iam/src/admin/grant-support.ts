@@ -1,4 +1,4 @@
-import { isActionAllowed, parseJsonStringArray, type RoleDef } from '@fabrika/auth-core'
+import { isActionAllowed, isReservedScopeType, parseJsonStringArray, type RoleDef } from '@fabrika/auth-core'
 import { type CreateGrantRequest, type GrantDto } from '@fabrika/iam-contract'
 import { type GrantRow, type RoleRow } from '../db'
 import { BUILTIN_ROLES, isKnownRole } from '../roles'
@@ -118,6 +118,10 @@ export function parseScope(
 	const scopeType = body.scopeType ?? null
 	const scopeValue = body.scopeValue ?? null
 	if ((scopeType === null) !== (scopeValue === null)) {
+		return { ok: false }
+	}
+	// A `~` scope type is IAM's derived pseudo-scope (`~rel`); a stored grant never names one.
+	if (scopeType !== null && isReservedScopeType(scopeType)) {
 		return { ok: false }
 	}
 	return { ok: true, scopeType, scopeValue }

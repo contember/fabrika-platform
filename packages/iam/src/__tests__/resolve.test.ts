@@ -279,3 +279,38 @@ describe('computePermissions — a contract application holds exact actions only
 		expect(computePermissions({ ...base, grants: [roleGrant('admin', null)] }, roles)).toHaveLength(1)
 	})
 })
+
+describe('computePermissions — relation entries (`~rel`)', () => {
+	const relationRoles = makeRoleSource({
+		assistant: { name: 'Assistant', permissions: ['project.list'], via: { assignee: ['project.read', 'project.edit'] } },
+		guest: { name: 'Guest', permissions: ['project.read'], member: { scope: 'team' }, external: true, via: { assignee: ['project.edit'] } },
+	})
+	const REL = (relation: string): Scope => ({ type: '~rel', value: relation })
+
+	test('a global grant of a role with via carries each action at the relation pseudo-scope', () => {
+		const entries = computePermissions({ ...base, grants: [roleGrant('assistant', null)] }, relationRoles)
+		expect(has(entries, 'project.list', null, 'grant')).toBe(true)
+		expect(has(entries, 'project.read', REL('assignee'), 'grant')).toBe(true)
+		expect(has(entries, 'project.edit', REL('assignee'), 'grant')).toBe(true)
+		expect(entries).toHaveLength(3)
+	})
+
+	test('a scoped grant of the same role carries no relation entry', () => {
+		const entries = computePermissions({ ...base, grants: [roleGrant('assistant', TEAM('acme'))] }, relationRoles)
+		expect(entries.some((entry) => entry.scope?.type === '~rel')).toBe(false)
+		expect(has(entries, 'project.list', TEAM('acme'), 'grant')).toBe(true)
+	})
+
+	test('a membership role and an external principal carry none, whatever the stored role says', () => {
+		const member = computePermissions({ ...base, grants: [roleGrant('guest', TEAM('acme'))] }, relationRoles)
+		expect(member.some((entry) => entry.scope?.type === '~rel')).toBe(false)
+		const external = computePermissions({ ...base, affiliation: 'external', grants: [roleGrant('assistant', null)] }, relationRoles)
+		expect(external).toEqual([])
+	})
+
+	test('a stored grant naming a reserved scope type grants nothing', () => {
+		const forged = { ...inlineGrant(['project.edit'], REL('assignee')), id: 'forged' }
+		const role = { ...roleGrant('viewer', REL('assignee')), id: 'forged-role' }
+		expect(computePermissions({ ...base, grants: [forged, role] }, roles)).toEqual([])
+	})
+})
