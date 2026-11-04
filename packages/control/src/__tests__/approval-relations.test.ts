@@ -186,6 +186,32 @@ describe("a table's read path in the approval diff", () => {
 	})
 })
 
+describe("a table's member reveals in the approval diff", () => {
+	const lines = (before: AccessSnapshot, after: AccessSnapshot) => classifyAccess(before, after).changes.map(({ effect, line }) => ({ effect, line }))
+	const none = snapshot(files())
+	const revealing = (memberReveals: Readonly<Record<string, { to: string; actions: string[]; when?: { title: { eq: string } } }>>): AccessSnapshot => {
+		const contract = none.contract
+		const notes = contract?.tables['notes']
+		if (contract === null || notes === undefined) throw new Error('the kit has a notes table')
+		return { ...none, contract: { ...contract, tables: { ...contract.tables, notes: { ...notes, memberReveals } } } }
+	}
+	const subject = 'Table `notes` reveals to a member of its `note`'
+
+	test('widens when added or given an action, and narrows when an action, the reveal or the condition goes', () => {
+		const read = revealing({ note: { to: 'workspace', actions: ['notes.read'] } })
+		const both = revealing({ note: { to: 'workspace', actions: ['notes.read', 'notes.write'] } })
+		expect(lines(none, read)).toContainEqual({ effect: 'widens', line: `${subject} its \`workspace\` for \`notes.read\`` })
+		expect(lines(read, both)).toContainEqual({ effect: 'widens', line: `${subject} its \`workspace\` also for \`notes.write\`` })
+		expect(lines(both, read)).toContainEqual({ effect: 'narrows', line: `${subject} its \`workspace\` no longer for \`notes.write\`` })
+		expect(lines(read, revealing({ note: { to: 'workspace', actions: ['notes.read'], when: { title: { eq: 'x' } } } }))).toContainEqual({
+			effect: 'narrows',
+			line: `${subject} only a row its condition holds`,
+		})
+		expect(lines(read, none)).toContainEqual({ effect: 'narrows', line: `${subject} nothing any more` })
+		expect(classifyAccess(read, none).outcome).toBe('no-widening')
+	})
+})
+
 describe('publication refuses relation grants an older release would not enforce', () => {
 	test('a release before the first that enforces them is refused, naming the fields', () => {
 		const contract = readContractSource(files())

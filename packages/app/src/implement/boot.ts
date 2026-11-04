@@ -686,6 +686,17 @@ function revealsOf(artifact: ContractArtifact): ReadonlyMap<string, readonly Rev
 	return reveals
 }
 
+/** Each dimension's member reveals, from its table's policy: the ancestor a row reveals to a grant at it, and for which actions. */
+function memberRevealsOf(artifact: ContractArtifact): ReadonlyMap<string, readonly RevealedNode[]> {
+	const reveals = new Map<string, RevealedNode[]>()
+	for (const table of Object.values(artifact.tables)) {
+		for (const [dimension, reveal] of Object.entries(table.memberReveals ?? {})) {
+			reveals.set(dimension, [...(reveals.get(dimension) ?? []), { dimension: reveal.to, actions: reveal.actions }])
+		}
+	}
+	return reveals
+}
+
 /** Each approved token purpose with the claims schema the application declared for it. */
 function runtimePurposes(contract: AnyContract, artifact: ContractArtifact): ReadonlyMap<string, RuntimePurpose> {
 	const declared = contract.surface.tokens ?? {}
@@ -992,6 +1003,7 @@ function bootOnce(app: ContractImplementation, options: BootOptions, binding: Bi
 		containers,
 		relations: new Map(Object.entries(artifact.relations ?? {}).map(([name, relation]) => [name, relation.dimension])),
 		reveals: revealsOf(artifact),
+		memberReveals: memberRevealsOf(artifact),
 		assets: options.assets ?? null,
 		membership,
 		terminals: artifact.terminal === undefined ? null : (terminalRpc ?? null),

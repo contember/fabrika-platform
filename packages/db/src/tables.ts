@@ -5,6 +5,7 @@ import type {
 	ColumnPolicyArtifact,
 	ConditionArtifact,
 	ConfersArtifact,
+	MemberRevealsArtifact,
 	RevealsArtifact,
 	TableActionArtifact,
 	TablePolicyArtifact,
@@ -14,7 +15,16 @@ import { type ApplicationRowsPlan, planApplicationRows } from './application-row
 import { freeze, namesOf, ownEntry, ownKeys, setOwn } from './builtins'
 import { conditionArtifact, type ConditionModel } from './conditions'
 import { PolicyError } from './errors'
-import { modelOf, type RelationSource, type RevealModel, type ScopeModel, type TableModel, tableModels, type Tables } from './policy'
+import {
+	type MemberRevealModel,
+	modelOf,
+	type RelationSource,
+	type RevealModel,
+	type ScopeModel,
+	type TableModel,
+	tableModels,
+	type Tables,
+} from './policy'
 
 export { applicationRowRefusalText } from './application-rows'
 export type { ApplicationRowRefusal, ApplicationRowsPlan } from './application-rows'
@@ -167,7 +177,22 @@ function artifactOf(model: TableModel): TablePolicyArtifact {
 		...(ownKeys(model.when).length === 0 ? {} : { when: whenArtifact(model.when) }),
 		...(model.reveals.length === 0 ? {} : { reveals: revealsArtifact(model.reveals) }),
 		...(model.readThrough.length === 0 ? {} : { readThrough: readThroughArtifact(model) }),
+		...(model.memberReveals.length === 0 ? {} : { memberReveals: memberRevealsArtifact(model.memberReveals) }),
 	}
+}
+
+function memberRevealsArtifact(reveals: readonly MemberRevealModel[]): Record<string, MemberRevealsArtifact> {
+	const artifact: Record<string, MemberRevealsArtifact> = {}
+	for (let index = 0; index < reveals.length; index++) {
+		const reveal = reveals[index]
+		if (reveal === undefined) continue
+		setOwn(artifact, reveal.source, {
+			to: reveal.dimension,
+			actions: [...reveal.actions],
+			...(reveal.when === undefined ? {} : { when: conditionArtifact(reveal.when) }),
+		})
+	}
+	return artifact
 }
 
 function readThroughArtifact(model: TableModel): Record<string, string> {

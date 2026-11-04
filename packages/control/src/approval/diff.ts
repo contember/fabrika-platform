@@ -351,6 +351,7 @@ function compareContracts(changes: Changes, before: ContractArtifact | null, aft
 				...ruled('table.when', whenChanges(name, undefined, table.when)),
 				...ruled('table.reveals', revealsChanges(name, undefined, table.reveals)),
 				...ruled('table.read-through', readThroughChanges(name, undefined, table.readThrough)),
+				...ruled('table.member-reveals', memberRevealsChanges(name, undefined, table.memberReveals)),
 			)
 		}
 	}
@@ -1623,6 +1624,34 @@ function revealsChanges(name: string, before: TablePolicyArtifact['reveals'], af
 	})
 }
 
+/**
+ * What a table's rows reveal to a grant at their node: a new reveal, a new action or another node widens what a member
+ * reads; a lost one, or an added condition, narrows; any other change of the condition widens.
+ */
+function memberRevealsChanges(name: string, before: TablePolicyArtifact['memberReveals'], after: TablePolicyArtifact['memberReveals']): Line[] {
+	const from = before ?? {}
+	const to = after ?? {}
+	return union(Object.keys(from), Object.keys(to)).flatMap((dimension): Line[] => {
+		const subject = `Table \`${name}\` reveals to a member of its \`${dimension}\``
+		const was = from[dimension]
+		const is = to[dimension]
+		if (was === undefined) {
+			return is === undefined ? [] : [widening(`${subject} its \`${is.to}\` for ${is.actions.map((action) => `\`${action}\``).join(', ')}`)]
+		}
+		if (is === undefined) return [narrowing(`${subject} nothing any more`)]
+		const added = is.actions.filter((action) => !was.actions.includes(action))
+		const removed = was.actions.filter((action) => !is.actions.includes(action))
+		return [
+			...valueChange(`${subject} node`, was.to, is.to),
+			...(added.length === 0 ? [] : [widening(`${subject} its \`${is.to}\` also for ${added.map((action) => `\`${action}\``).join(', ')}`)]),
+			...(removed.length === 0 ? [] : [narrowing(`${subject} its \`${is.to}\` no longer for ${removed.map((action) => `\`${action}\``).join(', ')}`)]),
+			...(was.when === undefined && is.when !== undefined
+				? [narrowing(`${subject} only a row its condition holds`)]
+				: valueChange(`${subject} condition`, was.when, is.when)),
+		]
+	})
+}
+
 /** A secondary read path: a new one, or another column, widens what a `Within` of its dimension reads; a lost one narrows. */
 function readThroughChanges(name: string, before: TablePolicyArtifact['readThrough'], after: TablePolicyArtifact['readThrough']): Line[] {
 	const from = before ?? {}
@@ -1840,6 +1869,7 @@ function tableChanges(name: string, from: TablePolicyArtifact, to: TablePolicyAr
 		...ruled('table.when', whenChanges(name, from.when, to.when)),
 		...ruled('table.reveals', revealsChanges(name, from.reveals, to.reveals)),
 		...ruled('table.read-through', readThroughChanges(name, from.readThrough, to.readThrough)),
+		...ruled('table.member-reveals', memberRevealsChanges(name, from.memberReveals, to.memberReveals)),
 	]
 }
 

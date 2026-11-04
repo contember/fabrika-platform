@@ -4,12 +4,21 @@
 
 import { AndNode, BinaryOperationNode, type OperationNode, OperatorNode, ParensNode, ValueNode } from 'kysely'
 import { ownEntry } from './builtins'
-import type { RefGrant } from './capability'
+import type { RefGrant, WithinGrant } from './capability'
 import { conditionNode, subquery } from './condition-nodes'
 import { CapabilityError } from './errors'
 import { linksPredicate, linkValues } from './links'
-import { allOf, anyOf, column, equals } from './nodes'
-import { type Container, includes, nodeColumnOf, type RelationSource, type RevealModel, type SecondaryPath, type TableModel } from './policy'
+import { allOf, anyOf, column, equals, valueList } from './nodes'
+import {
+	type Container,
+	includes,
+	type MemberRevealModel,
+	nodeColumnOf,
+	type RelationSource,
+	type RevealModel,
+	type SecondaryPath,
+	type TableModel,
+} from './policy'
 
 /** A relation of the layer: its source table, and the tables whose rows it reaches reveal an ancestor node. */
 export interface LayerRelation extends RelationSource {
@@ -18,6 +27,9 @@ export interface LayerRelation extends RelationSource {
 
 /** Every relation of the layer, by name, with its source table. */
 export type RelationSources = Readonly<Record<string, LayerRelation>>
+
+/** Every member reveal of the layer, by the dimension whose grants it reveals to. */
+export type MemberReveals = Readonly<Record<string, readonly MemberRevealModel[]>>
 
 export function relationSource(relations: RelationSources, relation: string): LayerRelation {
 	const source = ownEntry(relations, relation)
@@ -106,6 +118,39 @@ export function relationTerms(
 		const placed = reveal === undefined || !held ? undefined : nodeColumnOf(model, reveal.dimension)
 		if (reveal !== undefined && placed !== undefined) {
 			terms[terms.length] = isIn(model.name, placed, revealedNodes(source, reveal, principal, now))
+		}
+	}
+	return terms
+}
+
+/**
+ * The rows of `model` a `Within`'s read reaches through member reveals: per grant it carries at a revealing dimension,
+ * `T.<ancestor> in (select R.<ancestor> from R where R.<key> in (values) and <when>)` for each reveal of `action` to an
+ * ancestor `model` lies at. A grant at a dimension that reveals no node for `action` is refused: the framework passes
+ * none.
+ */
+export function memberTerms(members: MemberReveals, model: TableModel, grant: WithinGrant, now: Date): readonly OperationNode[] {
+	const terms: OperationNode[] = []
+	for (let index = 0; index < grant.revealing.length; index++) {
+		const revealing = grant.revealing[index]
+		if (revealing === undefined) continue
+		const reveals = ownEntry(members, revealing.dimension) ?? []
+		let named = false
+		for (let position = 0; position < reveals.length; position++) {
+			const reveal = reveals[position]
+			if (reveal === undefined || !includes(reveal.actions, grant.action)) continue
+			named = true
+			const placed = nodeColumnOf(model, reveal.dimension)
+			if (placed === undefined || revealing.values.length === 0) continue
+			const reached = isIn(reveal.table, reveal.key, valueList(revealing.values))
+			const where = reveal.when === undefined ? reached : AndNode.create(reached, ParensNode.create(conditionNode(reveal.table, reveal.when, now)))
+			terms[terms.length] = isIn(model.name, placed, subquery(reveal.table, reveal.column, where))
+		}
+		if (!named) {
+			throw new CapabilityError(
+				'unenforceable',
+				`the Within of ${grant.dimension} carries a grant on ${revealing.dimension}, whose rows reveal no node for ${grant.action}`,
+			)
 		}
 	}
 	return terms

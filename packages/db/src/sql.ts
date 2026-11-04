@@ -239,8 +239,8 @@ function sqliteNameRefusal(tokens: readonly SqlToken[]): { readonly name: string
 }
 
 /**
- * A relation source's name anywhere in a statement of a writing site, in any spelling: its rows confer access, and only
- * the data layer's insert bounds the delegation. No statement kind is trusted to be a read (SQLite's `WITH … REPLACE`).
+ * The name of a table whose rows hand out access anywhere in a statement of a writing site, in any spelling: only the
+ * data layer's insert bounds the delegation, or generates the key a grant names. No statement kind is trusted to be a read (SQLite's `WITH … REPLACE`).
  */
 function sourceReference(tokens: readonly SqlToken[], sources: readonly string[]): { readonly name: string; readonly line: number } | undefined {
 	for (const token of tokens) {
@@ -287,7 +287,7 @@ export function classifySql(parts: readonly string[], mode: SqlMode, database: S
 	if (source !== undefined) {
 		refuse(
 			'sql_name',
-			`'${source.name}' at line ${source.line} confers a relation, so a statement that writes never names it: write its rows through ctx.db`,
+			`'${source.name}' at line ${source.line} hands out access, so a statement that writes never names it: write its rows through ctx.db`,
 		)
 	}
 	const framework = frameworkReference(tokens)
