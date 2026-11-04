@@ -43,7 +43,7 @@ available and become a deliberate act, through `--postgres-type` and `--postgres
 (`packages/provider-zerops/src/cli-args.ts`, validated per type in
 `packages/provider-zerops/src/namespace-command.ts`).
 
-This does **not** cover the standard two-project platform tier. It keeps its two HA PostgreSQL
+This does **not** cover the `standard` platform tier. It keeps its two HA PostgreSQL
 services and their stated profiles, deliberately untouched: identity and control-plane latency is felt
 by every request, and that tier is not what an app namespace is.
 

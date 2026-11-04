@@ -16,17 +16,18 @@ never resolves to a different item than the one it meant.
 
 ## The phase ladder
 
-Items 01–05 formed the portability ladder. Phases 0–4 are complete. Phase 5 is the live-account
-bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account.md).
+Items 01–05 formed the portability ladder. Phases 0–4 are complete. Phase 5, the live-account bring-up, is done:
+Zerops runs production workloads. The checks no live run has recorded (the `standard` tier, custom domains, the
+balancer's client address, a recovery rehearsal) are item [05](05-bring-up-on-a-real-zerops-account.md).
 
 ## Items
 
 <!-- one line each: NN — short summary (link). Keep it short. -->
 
-- [05](05-bring-up-on-a-real-zerops-account.md) — The light tier is live; what remains is the production two-project shape, custom domains and a full release rehearsal.
+- [05](05-bring-up-on-a-real-zerops-account.md) — Zerops runs production; no live run records the `standard` tier, custom domains, the balancer's client address or a recovery rehearsal.
 - [22](22-unix-second-columns-overflow-in-2038.md) — int4 timestamps; `BIGINT` costs every reader a string. Decide before it is urgent.
-- [36](36-complete-zerops-release-artifact-correlation.md) — Prove Zerops build source maps on a real account (release-blocking) and link Delivery runs to Operations evidence.
-- [38](38-add-dns-safe-operations-egress.md) — Prevent private-address and DNS-rebinding egress through Operations webhooks and active health checks (release-blocking).
+- [36](36-complete-zerops-release-artifact-correlation.md) — Measure the Zerops build's sensitive source-map key lift on a real account, report artifacts after `reconcile`, and link Delivery runs to Operations evidence.
+- [38](38-add-dns-safe-operations-egress.md) — Prevent private-address and DNS-rebinding egress through Operations webhooks and active health checks; production runs without it.
 - [46](46-add-portable-email-alert-delivery.md) — Add email alert delivery without coupling the portable Operations outbox to Cloudflare Email Routing.
 - [54](54-give-operations-its-own-proxy-app-identity.md) — Half shipped; what is left is moving the operator surface onto the Operations host, which is a console architecture change, not a rename.
 - [63](63-a-one-click-install-from-the-public-repository.md) — The second install shape: a running platform without creating a repository or a CI system.

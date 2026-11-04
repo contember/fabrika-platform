@@ -34,7 +34,7 @@ publish.
 - In: a GitHub Environment that holds the Zerops token (`FABRIKA_ACCEPTANCE_ZEROPS_TOKEN`) and the GitHub App
   credentials the install needs; an acceptance script under `scripts/` that drives only the public CLI; teardown by a
   run-unique project name prefix, so the next run removes what a crashed run left.
-- Out: a Cloudflare acceptance; the production two-project shape
+- Out: a Cloudflare acceptance; the `standard` tier, custom domains and the recovery rehearsal
   ([05](05-bring-up-on-a-real-zerops-account.md)); the facts in
   [116](116-verify-the-paved-road-zerops-facts-on-a-real-account.md).
 
