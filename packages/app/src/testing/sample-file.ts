@@ -1,5 +1,7 @@
 // A small file the testing kits write: the leading bytes `files/sniff.ts` accepts for its type, then a text marker.
 
+import { INLINE_DOCUMENT_TYPES } from '@fabrika/proxy-core/headers'
+
 const randomHex = (): string => crypto.randomUUID().replaceAll('-', '').slice(0, 8)
 
 const ascii = (text: string): number[] => [...text].map((char) => char.charCodeAt(0))
@@ -17,10 +19,7 @@ const SAMPLE_HEADS: Readonly<Record<string, readonly number[]>> = {
 	'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ZIP_HEAD,
 	'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ZIP_HEAD,
 	'application/vnd.openxmlformats-officedocument.presentationml.presentation': ZIP_HEAD,
-	'application/xml': ascii('<?xml version="1.0"?>\n'),
-	'text/xml': ascii('<?xml version="1.0"?>\n'),
-	'application/rss+xml': ascii('<?xml version="1.0"?>\n'),
-	'application/atom+xml': ascii('<?xml version="1.0"?>\n'),
+	...Object.fromEntries(INLINE_DOCUMENT_TYPES.map((type) => [type, ascii('<?xml version="1.0"?>\n')])),
 }
 const TEXT_TYPES: ReadonlySet<string> = new Set(['text/plain', 'text/csv', 'text/markdown', 'application/json', 'image/svg+xml'])
 

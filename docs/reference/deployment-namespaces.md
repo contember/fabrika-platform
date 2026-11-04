@@ -136,6 +136,7 @@ covers the forms newer than 0.6:
 - 0.7: an endpoint of several capabilities (the requirement kind `capabilities`);
 - 0.7: a webhook that forwards its own `Authorization` (the row's `authorization: 'forward'`);
 - 0.8: an ALTCHA challenge's `blob:` workers (the CSP's `workerSrc`);
+- 0.9: a procedure that answers a file of an inline kind (the row's `response: 'inline-file'`);
 - 0.9: a contract that declares a terminal (`terminal`, ADR-0067), named as `terminal`: its sessions end at the proxy's
   `/__fabrika/auth/signout`, which no older release's proxy serves.
 

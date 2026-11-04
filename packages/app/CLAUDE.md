@@ -879,7 +879,7 @@ vocabulary (`packages/db/CLAUDE.md`).
 ## Stored files
 
 - **A file is a value in a table column** (`files/kinds.ts`, `@fabrika/db`'s `stored-files.ts`): `c.files({ types,
-  maxBytes, scan? })` declares a kind, a table's `files: { <column>: '<kind>' }` a column of it, and the table's actions
+  maxBytes, scan?, inline? })` declares a kind, a table's `files: { <column>: '<kind>' }` a column of it, and the table's actions
   are the file's authority. The framework generates no file endpoint; a procedure takes a file (`file('<kind>')` in its
   input) or answers one (`file('<kind>')` as its output), and the dispatcher checks it like every row first.
 - **The pending row is written before the object and is the cleanup intent**, on a connection of its own, never the

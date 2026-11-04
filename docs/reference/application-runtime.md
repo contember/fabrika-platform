@@ -229,7 +229,8 @@ manifest that still declares `gates`.
 
 - `contractProxyTable(artifact)` (`@fabrika/proxy-core/manifest`) emits every endpoint row's
   rules — kind, method, path, callers, requirement, admission and, only where declared, its cross-origin form
-  (`crossOrigin`), its file-response profile (`response: 'file'`) and its `cache` — with its delegation and
+  (`crossOrigin`), its file-response profile (`response: 'file'`, or `'inline-file'` for an inline kind) and its
+  `cache` — with its delegation and
   `requirementDigest`, the reserved prefixes, and the contract digest as `snapshot`. A field absent unless declared
   keeps the digest of every row without it, and an older proxy's strict parser refuses a row that carries one. The
   proxy selects one endpoint per request with `planEndpoint` and decides there
@@ -691,7 +692,9 @@ deal_attachments: {
   `pending` row is committed first, on a connection of its own, never the handler's transaction; it is the cleanup
   intent. Then the object is written: its first bytes must be the declared type (415), it is bounded by the kind's
   `maxBytes` (413), and its size and SHA-256 are recorded. A text type (`text/plain`, `text/csv`, `text/markdown`,
-  `application/json`, `image/svg+xml`) must be UTF-8 without NUL bytes or a binary signature. The name is cut at 255
+  `application/json`, `image/svg+xml`) must be UTF-8 without NUL bytes or a binary signature; an XML type
+  (`application/xml`, `text/xml`, `application/rss+xml`, `application/atom+xml`) also starts with `<` after a byte
+  order mark and white space, so a feed in another encoding is refused. The name is cut at 255
   code points and loses its control characters. A `scan: true` kind refuses an empty file (400 `empty`). `put` exists
   in a mutation, a job, a public mutation and a webhook, never in a query; it works inside a transaction too, and its
   connection counts against the pool. A job puts a large file before its transaction, so the upload holds no row lock.
@@ -718,12 +721,14 @@ deal_attachments: {
   scanned object version: a `pending` or `quarantined` file is 409 `file_not_ready`, a `rejected` one 409
   `file_rejected`, and one the sweep deleted since the read 404. Downloads always go through the application: there
   are no presigned URLs.
-- **The file treatment** is on every answer of a row with the file-response profile (`response: 'file'`), its denials
+- **The file treatment** is on every answer of a row with the file-response profile (`response: 'file'` or
+  `'inline-file'`), its denials
   and errors included: `X-Content-Type-Options: nosniff`, `Content-Security-Policy: sandbox; default-src 'none'`,
   `Cache-Control: private, no-store` (or the row's `cache`, [The HTTP shape](#the-http-shape)), and a
   `Content-Disposition` whose type follows the exact `Content-Type` (`attachment` unless an inert image). The proxy
   applies the same treatment to the answer of the row it selected. The file itself gets `Content-Type` from the
-  recorded type, `Content-Disposition: inline` only for PNG, JPEG, GIF and WebP, the file name as RFC 8187 `filename*`,
+  recorded type, `Content-Disposition: inline` only for PNG, JPEG, GIF and WebP, and on the row of a kind declared
+  `inline: true` (`response: 'inline-file'`) also for the four XML types, the file name as RFC 8187 `filename*`,
   and `Accept-Ranges: none`: a `Range` request gets the whole file.
 - **Removing.** Clearing the column or deleting the row removes the reference. The framework's sweep job
   (`fabrika-file-sweep`, `FILE_SWEEP_JOB`, a reserved name, hourly at minute 41) first finishes the deletions a crash

@@ -63,7 +63,9 @@ deal_attachments: {
   and no endpoint. A `scan: true` kind admits files of at most 100 MiB, the most the scanner reads. An `inline: true`
   kind is shown rather than downloaded (a feed or a sitemap a machine reads) and admits only the types ADR-0022 rule 2
   shows inline. The choice is the kind's, in the contract, so review sees it beside the types; a file written at run
-  time cannot ask for it, and a user upload stays an attachment unless its kind says otherwise.
+  time cannot ask for it, and a user upload stays an attachment unless its kind says otherwise. A file of an inline
+  kind can render as a static page (ADR-0022 rule 2), so it holds what the application writes, not an untrusted
+  upload.
 - A **file column** (`files: { <column>: '<kind>' }` in a table policy) holds the id of a row of `fabrika_files`. The
   application's migration writes `<column> uuid references fabrika_files (id)` and an index the column leads; the
   checker's `file-column-migration` rule verifies both for every declared file column.

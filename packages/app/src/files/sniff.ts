@@ -2,6 +2,8 @@
 // a file is stored only when its bytes are that type. A collection may admit only the types listed here, because
 // the framework cannot verify any other.
 
+import { INLINE_DOCUMENT_TYPES } from '@fabrika/proxy-core/headers'
+
 /** How many leading bytes an upload is judged by. */
 export const SNIFF_BYTES = 512
 
@@ -45,8 +47,8 @@ const BINARY_SIGNATURES: readonly Signature[] = [
 /** Types judged as text: UTF-8 without NUL bytes, and no binary signature. SVG is text, and always an attachment. */
 const TEXT_TYPES: readonly string[] = ['text/plain', 'text/csv', 'text/markdown', 'application/json', 'image/svg+xml']
 
-/** XML documents (a feed, a sitemap): text whose first character, after a byte order mark and white space, is `<`. */
-const XML_TYPES: readonly string[] = ['application/xml', 'text/xml', 'application/rss+xml', 'application/atom+xml']
+/** XML documents (a feed, a sitemap), the ones an inline kind shows: text whose first character, after a BOM and white space, is `<`. */
+const XML_TYPES: readonly string[] = INLINE_DOCUMENT_TYPES
 
 export const SNIFFABLE_TYPES: readonly string[] = [...BINARY_SIGNATURES.flatMap((signature) => signature.types), ...TEXT_TYPES, ...XML_TYPES]
 

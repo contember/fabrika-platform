@@ -221,12 +221,15 @@ refuses a row with the profile instead of serving it without the treatment.
   `image/gif` and `image/webp`, which are served `inline`. A file kind declared `inline: true` (a feed or a
   sitemap a machine reads) makes its rows `response: 'inline-file'`, on which the XML documents
   `application/xml`, `text/xml`, `application/rss+xml` and `application/atom+xml` are `inline` too; the
-  contract build refuses an inline kind that admits any other type. SVG, HTML and XHTML are always
-  attachments, on every row. The proxy sets the disposition type from the answer's exact `Content-Type` and the
-  row's profile, and keeps its parameters (the file name). `inline` needs exactly one `Content-Type` value from
-  that list: repeated fields are joined into one value first, which no listed type equals, so any duplicate is an
-  attachment. An inline XML document runs no script and loads nothing: the sandbox CSP below gives it an opaque
-  origin without scripts, and `default-src 'none'` refuses its stylesheets.
+  contract build refuses an inline kind that admits any other type. The types `image/svg+xml`, `text/html` and
+  `application/xhtml+xml` are always attachments, on every row. The proxy sets the disposition type from the answer's
+  exact `Content-Type` and the row's profile, and keeps its parameters (the file name). `inline` needs exactly one
+  `Content-Type` value from that list: repeated fields are joined into one value first, which no listed type equals,
+  so any duplicate is an attachment. An inline XML document runs no script, submits no form and loads nothing: the
+  sandbox CSP below gives it an opaque origin without scripts, and `default-src 'none'` refuses its stylesheets and
+  images. Its elements in the XHTML or SVG namespace still render, so whoever writes the file of an inline kind can
+  show a static page with live links on the application's origin: an inline kind holds files the application itself
+  writes, never an untrusted upload.
 - `Content-Type` from the recorded, sniffed type, never from the upload request.
 - `X-Content-Type-Options: nosniff`.
 - `Content-Security-Policy: sandbox; default-src 'none'`.
