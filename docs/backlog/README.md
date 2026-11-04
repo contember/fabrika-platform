@@ -152,4 +152,5 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [270](270-a-self-healing-loop.md): An `agent` alert channel hands an issue or a suspect release to an external agent with a task key; a person merges its pull request.
 - [271](271-fast-dev-sandboxes-on-cloudflare.md): A Cloudflare dev environment keys the application object by workspace, for the seconds-per-commit loop Zerops has.
 - [272](272-authoring-workspaces-on-kompjutr.md): A kompjutr working tree per workspace, so search and multi-file edits stop costing one GitHub request per file.
+- [273](273-automatic-rollback-of-a-suspect-release.md): An opted-in environment rolls a suspect release back when the observed verdict is `suspect` and the rollback verdict `safe`; its own ADR first.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.

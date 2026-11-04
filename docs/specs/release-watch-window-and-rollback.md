@@ -4,9 +4,10 @@
 holds: new issues, regressions, spikes and failed health checks. A bad score marks the run `suspect` and fires one alert
 that names a rollback target and whether rolling back is safe. Control decides safety from the object's applied
 migration ledger and the two runs' approved snapshots: no migration applied since the target and no access widening.
-An environment may opt in to an automatic rollback, which only health checks the platform runs itself can trigger.
+A person rolls back from the console. An automatic rollback is not part of this spec: it waits in
+[backlog 273](../backlog/273-automatic-rollback-of-a-suspect-release.md) for its own ADR.
 
-**Size.** M overall: six PRs, three M and three S (one of them docs).
+**Size.** M overall: five PRs, two M and three S (one of them docs).
 
 **Depends on.** Nothing hard. It reuses the approval diff that
 [the access diff check](./access-diff-as-a-github-check.md) also reuses.
@@ -90,7 +91,7 @@ window therefore keeps two verdicts:
 
 - **Observed verdict**, from platform-observed evidence only: `suspect` when a check failed and stayed failed,
   `clean` when at least one check succeeded in the window and none stayed failed, `unobserved` when the source has no
-  check. Only this verdict may start an automatic rollback.
+  check. Only this verdict could ever start an automatic rollback ([backlog 273](../backlog/273-automatic-rollback-of-a-suspect-release.md)).
 - **Reported verdict**, from all evidence: `suspect` when any counted evidence exists, else `clean`/`quiet`. It drives
   the alert and the console, labelled "from reported errors", and never starts anything by itself.
 
@@ -136,11 +137,12 @@ object's ledger for this reason (`packages/control/src/data-operations.ts:449`).
 | Both ledgers are known                                               | `migrations_unknown`      |
 | No ledger row (any bundle) now that `T`'s record lacks, none changed | `migrated` + bundle/names |
 | `classifyAccess(S, T)` is not `widening`                             | `widens` + its lines      |
-| The environment is `standard` or `prod`, not `dev`                   | `not_rollbackable`        |
+| The environment's kind is `standard`, not `dev`                      | `not_rollbackable`        |
 
 All pass: `safe`. With `migrations_unknown` the console still lists the snapshot difference as a hint, labelled as not
-proof. The verdict names `T`'s run id and commit. The verdict projected at `S`'s success is advice for the alert; the
-rollback and every automatic decision compute it again with a fresh ledger.
+proof. The verdict names `T`'s run id and commit. The kinds are `standard | dev`
+(`APP_ENV_KINDS`, `packages/control-contract/src/index.ts:213`); `prod` is an environment name, not a kind. The verdict
+projected at `S`'s success is advice for the alert; the rollback computes it again with a fresh ledger.
 
 ### The rollback (Control)
 
@@ -164,20 +166,11 @@ takes as long as a deploy.
 The branch still points at `S`. The next push deploys forward, which is the intended exit from a rollback. The
 environment page says so while a rollback run is the latest succeeded run.
 
-### Automatic rollback (opt-in)
+### Automatic rollback (not in this spec)
 
-An environment flag `auto_rollback`, off by default. Control's maintenance pass asks Operations for windows whose
-**observed** verdict closed `suspect` since its cursor (a private endpoint under the release sync key, beside
-`/private/releases/reconcile`). A reported-only suspect never qualifies. For each one on an environment with the flag,
-Control computes the rollback verdict again with a fresh ledger and starts `runs.rollback` only when it is `safe` and
-`S` is still the latest succeeded run. `migrations_unknown` never qualifies, so automatic rollback is in practice
-Cloudflare-only until Zerops exposes its ledger. The run's actor is Control's maintenance. Guards:
-
-- never roll back a run that itself has `rollback_of`;
-- at most one automatic rollback per environment until a person deploys again;
-- a rollback that would park is never started automatically: only a person approves (ADR-0050 invariant).
-
-A verdict other than `safe` leaves the alert as the only action.
+Decided at review: this spec ships the warning (the window, both verdicts and the `suspect_release` alert) and the
+manual rollback above. Control never deploys without a person here. An automatic rollback on the observed verdict, with
+its opt-in flag, its guards and its own ADR, is [backlog 273](../backlog/273-automatic-rollback-of-a-suspect-release.md).
 
 ## API and contract changes
 
@@ -190,12 +183,9 @@ A verdict other than `safe` leaves the alert as the only action.
 - **Control ↔ Operations**: the terminal release projection gains optional `finishedAt` and `rollback` fields. A
   projection without `finishedAt` (an older Control) opens no window. The request header
   schema strips unknown keys (`packages/operations-contract/src/release-schemas.ts:64`, `z.object`), so an older
-  Operations ignores it. A new private `POST /private/releases/suspects` answers closed suspect windows after a cursor;
-  Control treats its 404 as "none".
-- **Control migration**: `runs.rollback_of TEXT NULL`; `runs.applied_ledger_json TEXT NULL`; `app_envs.auto_rollback INTEGER NOT NULL DEFAULT 0` (or a row
-  table like `app_env_backup_schedules`; decided in PR 4).
-- **Control RPC**: `runs.rollback`, `RunDto.rollbackOf`, `RunDto.rollbackVerdict` for the latest succeeded run,
-  `apps.environments.setAutoRollback`.
+  Operations ignores it.
+- **Control migration**: `runs.rollback_of TEXT NULL`; `runs.applied_ledger_json TEXT NULL`.
+- **Control RPC**: `runs.rollback`, `RunDto.rollbackOf`, `RunDto.rollbackVerdict` for the latest succeeded run.
 - **Application ↔ platform protocol (ADR-0062)**: unchanged. The release name, the DSN, the ingest shape and the
   `FABRIKA_*` variables stay as they are; an application on any framework release in the window is scored the same.
 
@@ -205,22 +195,17 @@ A verdict other than `safe` leaves the alert as the only action.
   enforcement decision; the console's session reaches it through the proxy's existing admission. It grants nothing
   `triggerDeploy` does not: a person who may deploy may deploy an older commit.
 - A rollback that restores removed access parks for approval like any widening, and only a human approves
-  (`packages/control/src/approval/human.ts`). Automatic rollback never starts one that would park.
-- `auto_rollback` lets Control deploy without a person. Setting it takes the same human rule as
-  `apps.environments.protect`: a `user` principal with no OAuth or link claims and no bearer. A builder key or an MCP
-  token cannot switch it on.
+  (`packages/control/src/approval/human.ts`).
+- Nothing here deploys without a person: every rollback is a `runs.rollback` call by someone who holds
+  `deploy.trigger`.
 - **Forged evidence.** The ingest key is public: every member SPA holds the DSN and the current release. An attacker
-  can post events tagged with the current release and new fingerprints, and push the reported verdict to `suspect`. An
-  automatic rollback driven by that would let anyone undo a release, including a security fix that the access diff
-  does not see (a patched handler, an escaped output). Hence only the observed verdict, from health checks Operations
-  runs itself, may start an automatic rollback; reported evidence only alerts and is labelled as reported. A forged
-  alert costs attention, not a deploy. A server-only ingest key would make server reports count as observed; that is
-  out of scope here.
-- Audit: a person's rollback writes the usual `deploy.trigger` audit through their verified token, with `rollbackOf`
-  and the verdict in its metadata. An automatic rollback has no token: IAM files an audit event under the caller's
-  verified token (`packages/auth/src/client.ts:44-50`), and maintenance holds none. Its record is the run row: actor
-  `control:auto-rollback`, `rollback_of`, and the verdict line in the run log. IAM's audit delivery is best-effort
-  anyway (backlog [71](../backlog/71-deliver-domain-audit-events-durably.md)).
+  can post events tagged with the current release and new fingerprints, and push the reported verdict to `suspect`.
+  Reported evidence therefore only alerts and is labelled as reported, and the observed verdict, from health checks
+  Operations runs itself, is kept apart. A forged alert costs attention, not a deploy. A server-only ingest key would
+  make server reports count as observed; that is out of scope here.
+- Audit: a rollback writes the usual `deploy.trigger` audit through the person's verified token, with `rollbackOf`
+  and the verdict in its metadata. IAM's audit delivery is best-effort (backlog
+  [71](../backlog/71-deliver-domain-audit-events-durably.md)).
 - A rollback that narrows access depends on the IAM write after publish; while that write fails, the narrowing is not in
   force (backlog [226](../backlog/226-a-failed-iam-reconcile-leaves-a-narrowing-unapplied.md)). The rollback adds no new
   window; it inherits that one.
@@ -231,12 +216,12 @@ A verdict other than `safe` leaves the alert as the only action.
 1. **Generated files.** None change.
 2. **Environment variables.** None added. Defaults are code constants; settings are rows.
 3. **Provider state.** Unchanged. Existing runs have no `rollback_of` and no recorded ledger, so a target that
-   succeeded before the upgrade reads `migrations_unknown` and is never rolled back to automatically; a person still
-   can. A run whose snapshot predates the `framework` field reads as `outside_window` unless its reader can be inferred.
+   succeeded before the upgrade reads `migrations_unknown`; a person can still roll back to it, with the snapshot
+   difference shown as a hint. A run whose snapshot predates the `framework` field reads as `outside_window` unless its reader can be inferred.
 4. **Floating pins.** None.
 
 Both migrations are additive and run on `fabrika platform upgrade` with each service's own ledger. During a rolling
-upgrade an older Operations ignores the `rollback` field and answers 404 on `suspects`; an older Control sends neither.
+upgrade an older Operations ignores the `rollback` and `finishedAt` fields; an older Control sends neither.
 
 ## Test plan
 
@@ -259,8 +244,6 @@ upgrade an older Operations ignores the `rollback` field and answers 404 on `sus
 - **Use case**: the run's ref and commit are the target's commit; `rollback_of` recorded; stale `expectedCurrentRunId`
   → 409; denied → 404; a busy or restricted environment → 409. On the Zerops source path, a rollback run passes where a
   manual run of the branch pinned to the older commit fails `commit_mismatch` (a witness of today's behaviour).
-- **Automatic rollback** (Control maintenance with a fake Operations): opted in and safe → one run; a second pass → no
-  second run; `widens` or `migrated` → no run; a newer deploy meanwhile → no run; `suspects` answering 404 → no error.
 - **Older code on a newer schema**: a witness that a release whose files are a subset of the ledger boots on both
   providers (see open question 2).
 
@@ -274,33 +257,35 @@ upgrade an older Operations ignores the `rollback` field and answers 404 on `sus
 3. **Control: rollback verdict and `runs.rollback`** (M). `rollback_of` and `applied_ledger_json` migration, the ledger record on
    success, pure verdict, projection fields, use case, console button on the environment page with the verdict lines. Witness: verdict and use case tests, the Zerops
    source witness.
-4. **Control: automatic rollback** (M). Flag with the human setter, `suspects` endpoint in Operations, maintenance
-   client and guards. Witness: maintenance tests.
-5. **MCP and fleet read-outs** (S). Expose the verdict to the console fleet view and the operations MCP tools, after
+4. **MCP and fleet read-outs** (S). Expose the verdict to the console fleet view and the operations MCP tools, after
    those specs land.
-6. **Docs** (S). `reference/operations-errors.md` gains the watch window; the ADR below; `ideas/operations-plane.md`
-   drops "rollback evidence" and the question "Did the rollback remove the error and restore the health check?", which
-   the rollback run's own window now answers.
+5. **Docs** (S). `reference/operations-errors.md` gains the watch window; ADR-0050 §6 a line naming `runs.rollback`
+   as the rollback it describes; `ideas/operations-plane.md` drops "rollback evidence" and the question "Did the
+   rollback remove the error and restore the health check?", which the rollback run's own window now answers.
 
-PRs 1 and 3 are independent; 2 follows 1; 4 follows 2 and 3.
+PRs 1 and 3 are independent; 2 follows 1; 4 follows 1 and 3 and the specs it reads out to.
 
 ## Open questions
 
 1. **Which target is the default?** The previous succeeded run, or the newest earlier run whose window closed `clean`?
    Default: the previous succeeded run; the console lets a person pick any earlier one.
 2. **Does an older release boot on a schema that ran newer migrations?** Not confirmed in code on either provider.
-   Default: the verdict stays `migrated` for any ledger row added since the target, so automatic rollback never relies on
-   it.
-3. **Which environments get a window?** Default: every non-`dev` environment with an Operations source; automatic
-   rollback only where the flag is on, which suits `prod` most.
+   Default: the verdict stays `migrated` for any ledger row added since the target, so a `safe` verdict never relies
+   on it.
+3. **Which environments get a window?** Default: every non-`dev` environment with an Operations source.
 4. **Spikes without a release tag.** A spike is per fingerprint, not per release. Default: count it only when its
    window occurrences carry this release.
 5. **A faster rollback on Zerops** by re-activating the archived app version instead of building. Its descriptor
    carries `FABRIKA_RELEASE` ([ADR-0044](../decisions/0044-zerops-delivery-ownership-and-recovery.md)), but it skips
    Control's run, IAM schema and approval. Default: no; revisit only if build time hurts.
-6. **Zerops ledger.** Automatic rollback needs the applied ledger, which Control reads only through the Cloudflare ops
-   channel today. Default: Zerops gets manual rollback only, until its migration runner's ledger is readable by Control.
+6. **Zerops ledger.** A `safe` verdict needs the applied ledger, which Control reads only through the Cloudflare ops
+   channel today. Default: on Zerops the verdict is `migrations_unknown` and the console shows the snapshot hint, until
+   its migration runner's ledger is readable by Control.
 7. **Server-only ingest key.** Would let server reports count as observed evidence. Default: out of scope; health
    checks only.
-8. **ADR.** Automatic rollback makes Control deploy without a person. Default: a new ADR, "a suspect release rolls back
-   only on observed evidence, when nothing migrated or widened since the target", and a one-line pointer from ADR-0050 §6.
+
+## Decisions
+
+- **Automatic rollback goes to the backlog** (review of 2026-11-04). This spec ships the watch window's warning and the
+  manual rollback; the automatic rollback comes later with its own ADR,
+  [backlog 273](../backlog/273-automatic-rollback-of-a-suspect-release.md).
