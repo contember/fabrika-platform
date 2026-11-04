@@ -17,7 +17,7 @@ import {
 	ValueNode,
 } from 'kysely'
 import { isArray } from './builtins'
-import { type ConditionHop, type ConditionLiteral, type ConditionModel, scalar } from './conditions'
+import { type ConditionHop, type ConditionLiteral, type ConditionModel, NOW, type NowOperand, scalar } from './conditions'
 import { allOf, anyOf, column } from './nodes'
 
 function comparison(operator: 'eq' | 'notEq' | 'lt' | 'lte' | 'gt' | 'gte'): OperatorNode {
@@ -82,11 +82,11 @@ function testNode(
 		case 'notIn':
 			return BinaryOperationNode.create(left, OperatorNode.create(test.operator === 'in' ? 'in' : 'not in'), ValueListNode.create(literals(value)))
 		default:
-			return BinaryOperationNode.create(left, comparison(test.operator), ValueNode.create(value === 'now' ? now : scalar(value)))
+			return BinaryOperationNode.create(left, comparison(test.operator), ValueNode.create(value === NOW ? now : scalar(value)))
 	}
 }
 
-function literals(value: ConditionLiteral | readonly ConditionLiteral[] | boolean | 'now'): ValueNode[] {
+function literals(value: ConditionLiteral | readonly ConditionLiteral[] | boolean | NowOperand): ValueNode[] {
 	const nodes: ValueNode[] = []
 	if (isArray(value)) {
 		for (let index = 0; index < value.length; index++) {

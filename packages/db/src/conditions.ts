@@ -13,6 +13,8 @@ export type ConditionLiteral = string | number | boolean
 export interface NowOperand {
 	readonly now: true
 }
+/** The parsed clock operand, compared by identity: no literal, the text `now` included, is ever it. */
+export const NOW: NowOperand = freeze({ now: true })
 
 /** One test of a column: exactly one operator. */
 export interface ColumnTest {
@@ -55,7 +57,7 @@ export type ConditionModel =
 		readonly hops: readonly ConditionHop[]
 		readonly column: string
 		readonly operator: ConditionOperator
-		readonly value: ConditionLiteral | readonly ConditionLiteral[] | boolean | 'now'
+		readonly value: ConditionLiteral | readonly ConditionLiteral[] | boolean | NowOperand
 	}
 
 /** What the parse reads of each table: its columns, its foreign keys and its typed columns. */
@@ -225,7 +227,7 @@ function operandOf(
 	value: unknown,
 	timestamp: boolean,
 	what: string,
-): ConditionLiteral | readonly ConditionLiteral[] | boolean | 'now' {
+): ConditionLiteral | readonly ConditionLiteral[] | boolean | NowOperand {
 	if (operator === 'isNull') {
 		if (typeof value !== 'boolean') {
 			throw new PolicyError(`${what}.isNull takes true or false`)
@@ -251,7 +253,7 @@ function operandOf(
 		if (!timestamp) {
 			throw new PolicyError(`${what}: { now: true } is compared with a timestamp column only`)
 		}
-		return 'now'
+		return NOW
 	}
 	return literalOf(value, `${what}.${operator}`)
 }
@@ -276,7 +278,7 @@ export function conditionReach(condition: ConditionModel, into: Record<string, s
 }
 
 /** A test's single literal; a list is compared only with in or notIn. */
-export function scalar(value: ConditionLiteral | readonly ConditionLiteral[] | boolean | 'now'): ConditionLiteral {
+export function scalar(value: ConditionLiteral | readonly ConditionLiteral[] | boolean | NowOperand): ConditionLiteral {
 	if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
 		return value
 	}
@@ -342,7 +344,7 @@ function testTruth(test: Extract<ConditionModel, { kind: 'test' }>, cell: Primit
 		}
 		return test.operator === 'in' ? found : !found
 	}
-	const right: Primitive = value === 'now' ? now : scalar(value)
+	const right: Primitive = value === NOW ? now : scalar(value)
 	const order = compare(cell, right)
 	if (order === undefined) return undefined
 	switch (test.operator) {
@@ -433,12 +435,12 @@ function testArtifact(test: Extract<ConditionModel, { kind: 'test' }>): ColumnTe
 		case 'notEq':
 			return { notEq: scalar(value) }
 		case 'lt':
-			return { lt: value === 'now' ? { now: true } : scalar(value) }
+			return { lt: value === NOW ? { now: true } : scalar(value) }
 		case 'lte':
-			return { lte: value === 'now' ? { now: true } : scalar(value) }
+			return { lte: value === NOW ? { now: true } : scalar(value) }
 		case 'gt':
-			return { gt: value === 'now' ? { now: true } : scalar(value) }
+			return { gt: value === NOW ? { now: true } : scalar(value) }
 		case 'gte':
-			return { gte: value === 'now' ? { now: true } : scalar(value) }
+			return { gte: value === NOW ? { now: true } : scalar(value) }
 	}
 }
