@@ -198,15 +198,46 @@ const isBoolean = (setting: string): boolean => /^(true|false|yes|no|on|off)$/i.
 
 /**
  * A short integer, a decimal or a duration: what a setting that only describes a credential holds (`TOKEN_EXPIRES_IN`,
- * `KEY_ROTATION_DAYS`). It counts only when the credential word is not the name's last word: `DB_PASSWORD=1234` is a
- * PIN, and an integer of six digits or more counts anywhere.
+ * `KEY_ROTATION_DAYS`). It counts only when a word after the credential word names a quantity: `DB_PASSWORD=1234` and
+ * `DB_PASSWORD_PROD=1234` are a PIN, and an integer of six digits or more counts anywhere.
  */
 const isQuantity = (setting: string): boolean => /^(\d{1,5}|\d+\.\d+|\d+(ms|s|m|h|d))$/i.test(setting)
 
-/** Whether the name's last word is the credential word that matched (`DB_PASSWORD`, `API_TOKEN`, `SIGNING_KEYS`). */
-const endsInCredentialWord = (words: readonly string[], word: string): boolean => {
-	const last = words.at(-1)
-	return last === word || (word === 'BASIC_AUTH' && last === 'AUTH')
+/** Words that make a name after its credential word a quantity: `TOKEN_EXPIRES_IN`, `KEY_ROTATION_DAYS`, `PASS_RATE`. */
+const QUANTITY_WORDS: ReadonlySet<string> = new Set([
+	'EXPIRES',
+	'EXPIRY',
+	'IN',
+	'AGE',
+	'LIFE',
+	'LIFETIME',
+	'TTL',
+	'ROTATION',
+	'DAYS',
+	'HOURS',
+	'MINUTES',
+	'SECONDS',
+	'INTERVAL',
+	'PERIOD',
+	'WINDOW',
+	'RATE',
+	'THRESHOLD',
+	'RATIO',
+	'MIN',
+	'MAX',
+	'LENGTH',
+	'SIZE',
+	'COUNT',
+	'LIMIT',
+	'RETRIES',
+	'ATTEMPTS',
+	'TIMEOUT',
+])
+
+/** Whether a word after the credential word that matched names a quantity. */
+const describesAQuantity = (words: readonly string[], word: string): boolean => {
+	const at = words.indexOf(word === 'BASIC_AUTH' ? 'AUTH' : word)
+	return at !== -1 && words.slice(at + 1).some((after) => QUANTITY_WORDS.has(after))
 }
 
 /** What the VALUE alone says, or null. Never echoes it. */
@@ -229,7 +260,7 @@ const valueFinding = (literal: string, publicValue: boolean): string | null => {
  * The name matches on a credential word (`TOKEN`, `SECRET`, `PASSWORD`, `PASS`, `BASIC_AUTH`, a `KEY` or `KEYS` that is
  * not an id, a public key or a cache key), unless its last word makes it describe one (`TOKEN_URL`,
  * `PASSWORD_MIN_LENGTH`). A name match needs a literal that could be a credential: an empty value, one made only of
- * references or a boolean is not, nor a short number or duration unless the credential word ends the name. The value matches on its own: a private key, an
+ * references or a boolean is not, nor a short number or duration under a name that says it is a quantity. The value matches on its own: a private key, an
  * Authorization header, a URL with a password, an issuer's token prefix, or a long random string unless the name says
  * the value is public (a publishable or site key, an id).
  */
@@ -238,7 +269,7 @@ export function plainCredentialFinding(name: string, value: string): PlainCreden
 	const literal = literalOf(value)
 	const word = credentialWordIn(words)
 	const setting = settingOf(literal)
-	const describes = isBoolean(setting) || (word !== null && isQuantity(setting) && !endsInCredentialWord(words, word))
+	const describes = isBoolean(setting) || (word !== null && isQuantity(setting) && describesAQuantity(words, word))
 	if (word !== null && literal !== '' && !describes) {
 		return { basis: 'name', because: `its name contains \`${word}\`` }
 	}

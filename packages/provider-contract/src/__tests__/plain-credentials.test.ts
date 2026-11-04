@@ -25,6 +25,8 @@ describe('plainCredentialFinding', () => {
 		['DB_PASSWORD', '123456', 'PASSWORD'],
 		['DB_PASSWORD', '1234', 'PASSWORD'],
 		['API_TOKEN', '30d', 'TOKEN'],
+		['DB_PASSWORD_PROD', '1234', 'PASSWORD'],
+		['API_TOKEN_V2', '12345', 'TOKEN'],
 		['COSMOS_PRIMARY_KEY', 'abc', 'KEY'],
 		['MAIL_TOKEN', 'Bearer x-${token}', 'TOKEN'],
 	])('the name %s is a credential name', (name, value, word) => {
