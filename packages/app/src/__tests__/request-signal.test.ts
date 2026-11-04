@@ -264,9 +264,9 @@ describe('every deadline ends with the work it guards', () => {
 	})
 
 	test.each([
-		['is delivered', () => Promise.resolve(new Response(null, { status: 200 }))],
-		['cannot be delivered', () => Promise.reject(new Error('connect ECONNREFUSED'))],
-	])('a report that %s clears its deadline', async (_name, answer) => {
+		['is delivered', () => Promise.resolve(new Response(null, { status: 200 })), [OUTBOUND_DEADLINE_MS]],
+		['cannot be delivered', () => Promise.reject(new Error('connect ECONNREFUSED')), [OUTBOUND_DEADLINE_MS, OUTBOUND_DEADLINE_MS]],
+	])('a report that %s clears the deadline of each attempt', async (_name, answer, set) => {
 		const log = spyOn(console, 'error').mockImplementation(() => {})
 		try {
 			const reporter = operationsReporter({
@@ -280,7 +280,7 @@ describe('every deadline ends with the work it guards', () => {
 			const deadlines = await deadlinesOf(async () => {
 				await reporter.report({ fingerprint: ['signals'], type: 'Failed', message: 'failed', tags: {} })
 			})
-			expect(deadlines).toEqual({ set: [OUTBOUND_DEADLINE_MS], pending: [] })
+			expect(deadlines).toEqual({ set, pending: [] })
 		} finally {
 			log.mockRestore()
 		}
