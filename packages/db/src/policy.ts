@@ -1245,31 +1245,32 @@ function linkTables(parsed: readonly ParsedTable[], vocabulary: VocabularyModel)
 	}
 
 	const conditionTable = (name: string): ConditionTable | undefined => ownEntry(byName, name)
-	const hopRule: HopRule = (from, column, to) => {
-		if (ownEntry(byName, to)?.scope.mode === 'reference') {
-			return true
-		}
+	const hopRule: HopRule = (from, column, to, key) => {
 		const source = ownEntry(byName, from)
 		const target = ownEntry(byName, to)
-		const scope = source === undefined ? undefined : resolve(source, []).scope
-		// The container column must lead to the table that owns the container dimension, not to any table its key references.
-		if (
-			scope?.mode === 'dimension' && scope.container !== undefined && scope.container.column === column && target?.scope.mode === 'dimension'
-			&& target.scope.dimension === scope.container.dimension
-		) {
+		if (target?.scope.mode === 'reference') {
 			return true
 		}
-		if (scope?.mode === 'child' && scope.column === column && scope.parent === to) {
-			return true
-		}
-		// Any other foreign key reaches a row of the same tenant only when it also holds every ancestor the two share.
 		if (source === undefined || target === undefined) {
 			return false
 		}
 		const into = resolve(target, [])
-		if (into.scope.mode !== 'dimension' && into.scope.mode !== 'child') {
+		// The hop reads the row its foreign key references, so that must be the row the rules below place: the one with the key.
+		if ((into.scope.mode !== 'dimension' && into.scope.mode !== 'child') || into.scope.key !== key) {
 			return false
 		}
+		const scope = resolve(source, []).scope
+		// The container column must lead to the table that owns the container dimension, not to any table its key references.
+		if (
+			scope.mode === 'dimension' && scope.container !== undefined && scope.container.column === column && into.scope.mode === 'dimension'
+			&& into.scope.dimension === scope.container.dimension
+		) {
+			return true
+		}
+		if (scope.mode === 'child' && scope.column === column && scope.parent === to) {
+			return true
+		}
+		// Any other foreign key reaches a row of the same tenant only when it also holds every ancestor the two share.
 		const pairs = tenantPairs(resolve(source, []), column, into.scope.key, into.chain)
 		return pairs.length > 1 && holdsExactly(source.foreignKeys, to, pairs)
 	}
@@ -1947,7 +1948,6 @@ function requireCoveringKey(table: ParsedTable, link: Container, owner: ParsedTa
 	)
 }
 
-/** Whether every `[column, referenced]` pair is a column of `foreignKey` with that referenced column. */
 /**
  * The column pairs a foreign key from `column` of `table` to a row keyed by `key` with chain `chain` holds to keep that
  * row in `table`'s own tenant: the column and the key, then each ancestor of `chain` that `table` also lies in.
@@ -1972,7 +1972,7 @@ function holdsExactly(foreignKeys: readonly ForeignKey[], table: string, pairs: 
 	}
 	return false
 }
-
+/** Whether every `[column, referenced]` pair is a column of `foreignKey` with that referenced column. */
 function coversPairs(foreignKey: ForeignKey, pairs: readonly (readonly [string, string])[]): boolean {
 	for (let index = 0; index < pairs.length; index++) {
 		const [column, referenced] = pairs[index] ?? ['', '']

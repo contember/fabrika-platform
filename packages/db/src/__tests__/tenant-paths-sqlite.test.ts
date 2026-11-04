@@ -21,11 +21,13 @@ create table projects (
 	label_id text,
 	version integer not null,
 	unique (id, org_id),
+	foreign key (label_id) references labels (id),
 	foreign key (label_id, org_id) references labels (id, org_id)
 );
 create table labels (
 	id text not null primary key,
 	org_id text not null references orgs (id),
+	slug text not null unique,
 	public boolean not null,
 	version integer not null,
 	unique (id, org_id)
@@ -38,6 +40,7 @@ create table tasks (
 	label_id text not null,
 	vendor_id text,
 	foreign key (project_id, org_id) references projects (id, org_id),
+	foreign key (label_id) references labels (id),
 	foreign key (label_id, org_id) references labels (id, org_id),
 	foreign key (vendor_id) references vendors (id)
 );
@@ -46,7 +49,7 @@ create table tasks (
 interface DB {
 	orgs: { id: string; version: number }
 	projects: { id: string; org_id: string; label_id: string | null; version: number }
-	labels: { id: string; org_id: string; public: ColumnType<boolean, boolean, boolean>; version: number }
+	labels: { id: string; org_id: string; slug: string; public: ColumnType<boolean, boolean, boolean>; version: number }
 	vendors: { id: string; trusted: ColumnType<boolean, boolean, boolean>; version: number }
 	tasks: { id: string; project_id: string; org_id: string; label_id: string; vendor_id: string | null }
 }
@@ -68,7 +71,7 @@ function columnsWith(taskKeys: readonly TaskKey[]): TypedColumnList<DB> {
 			],
 		},
 		labels: {
-			columns: ['id', 'org_id', 'public', 'version'],
+			columns: ['id', 'org_id', 'slug', 'public', 'version'],
 			foreignKeys: [{ columns: ['org_id'], table: 'orgs', references: ['id'] }],
 			booleans: ['public'],
 		},
@@ -113,7 +116,7 @@ beforeEach(() => {
 	storage.sql.exec(migration)
 	storage.sql.exec(`
 		insert into orgs (id, version) values ('o1', 1);
-		insert into labels (id, org_id, public, version) values ('l1', 'o1', 1, 1), ('l2', 'o1', 0, 1);
+		insert into labels (id, org_id, slug, public, version) values ('l1', 'o1', 'one', 1, 1), ('l2', 'o1', 'two', 0, 1);
 		insert into projects (id, org_id, label_id, version) values ('p1', 'o1', 'l1', 1), ('p2', 'o1', 'l2', 1);
 		insert into tasks (id, project_id, org_id, label_id) values ('k1', 'p1', 'o1', 'l1'), ('k2', 'p1', 'o1', 'l2');
 	`)
@@ -168,6 +171,11 @@ describe('a path that could leave the tenant is refused', () => {
 	test('a tenant key with a further column, which a null in it would skip', () => {
 		const wider: TaskKey = { columns: ['label_id', 'org_id', 'vendor_id'], table: 'labels', references: ['id', 'org_id', 'version'] }
 		expect(() => tablesWith({ 'label_id.public': { eq: true } }, [labelKey, wider])).toThrow(refusal)
+	})
+
+	test("a single-column key to another unique column than the one the tenant key holds: it reads another tenant's row", () => {
+		const bySlug: TaskKey = { columns: ['label_id'], table: 'labels', references: ['slug'] }
+		expect(() => tablesWith({ 'label_id.public': { eq: true } }, [bySlug, tenantKey])).toThrow(refusal)
 	})
 
 	test('a table under another root, with which the row shares no ancestor', () => {
