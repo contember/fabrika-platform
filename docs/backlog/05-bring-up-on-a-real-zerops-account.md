@@ -7,7 +7,8 @@ blocked-by: []
 # 05 — The Zerops production checks no live run has recorded
 
 **Summary.** Zerops is brought up and runs production workloads. What no live run in this repository records is the
-HA `standard` tier, custom domains, the balancer's client address, one API ordering, and a recovery rehearsal.
+HA `standard` tier, custom domains, the balancer's client address, one API ordering, and a release and recovery
+rehearsal.
 
 ## Done
 
@@ -15,8 +16,9 @@ HA `standard` tier, custom domains, the balancer's client address, one API order
   behind the proxy enforcement boundary of ADR-0022
   ([sprint](../archive/sprint-2026-08-03-zerops-live-bringup.md)). Human authentication and cross-host browser SSO
   between two `.zerops.app` hostnames ran live on 2026-08-04.
-- **An installation deploys itself from its operator's CI.** A fresh installation was installed and rolled forward
-  entirely from its sidecar pipeline ([sprint](../archive/sprint-2026-08-07-zerops-from-scratch-install.md)).
+- **An installation deploys itself from its operator's CI.** After `fabrika platform install`, a fresh installation
+  was deployed and rolled forward from its sidecar pipeline
+  ([sprint](../archive/sprint-2026-08-07-zerops-from-scratch-install.md)); that sprint was password only, by decision.
 - **Applications deploy.** Public and private application source, browser handoff, run-log relay and
   release-correlated Operations ingest
   ([sprint](../archive/sprint-2026-08-11-fabrika-deploys-an-app-on-zerops.md)); an application namespace in its own
@@ -25,8 +27,8 @@ HA `standard` tier, custom domains, the balancer's client address, one API order
 - **Production workloads run on Zerops** (["Measured in production (2026-10-16)"](../reference/zerops-platform.md#measured-in-production-2026-10-16--an-applications-database-connections)).
 - **The two-project `platform` + `apps-prod` shape is gone.** Since `7c9de25d8`, `--tier=standard` installs one
   `SERIOUS` project (HA PostgreSQL for IAM and Control, a second HA PostgreSQL and bucket for Operations, two IAM and
-  proxy containers), and Control creates each application namespace's project
-  ([`installing-on-zerops.md`](../reference/installing-on-zerops.md)).
+  proxy containers), and Control creates each application namespace's project (the tier table of the operator guide,
+  [`guide.md`](../../packages/provider-zerops/src/installation/guide.md)).
 
 The platform facts these runs established are in [`../reference/zerops-platform.md`](../reference/zerops-platform.md);
 do not re-derive them.
@@ -55,7 +57,8 @@ do not re-derive them.
    `--trusted-proxies`. **Only (a) AND (b)-drops together make the range safe to configure.**
 4. **`GET /service-stack/{id}/app-version` list order.** The client picks the highest `sequence` rather than trusting
    the order (`packages/provider-zerops/src/api/client.ts`); confirm `sequence` is monotonic.
-5. **A recovery rehearsal.** Test acknowledged-write survival on the selected HA PostgreSQL profile, and restore into
+5. **A release and recovery rehearsal.** No live run records these at a current release: OIDC sign-in on Zerops, a
+   keyed webhook, scoped authorization, revocation, and Operations outage isolation. Test acknowledged-write survival on the selected HA PostgreSQL profile, and restore into
    an isolated project from a complete recovery set (IAM/Control/Operations SQL with migration ledgers and queues,
    object payloads, and the matching vault, signing and configuration secrets). Restored work must not duplicate
    occurrences or dispatch stale notifications. Recovery targets agreed with the owner: survive a single

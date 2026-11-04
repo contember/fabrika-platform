@@ -9,8 +9,8 @@ fabrika is the merger of two Cloudflare-only projects: **propustka** (IAM & audi
 (deploy control plane). The merge exists to break the Cloudflare assumption: a client picks **one**
 platform — Cloudflare or [zerops.io](https://zerops.io) — and the whole stack runs there.
 
-> **Status — pre-1.0.** Both paths run on real accounts. On Zerops an installation is installed and upgraded from its
-> operator's CI, applications deploy from public and private GitHub repositories behind the auth proxy, and production
+> **Status — pre-1.0.** Both paths run on real accounts. On Zerops an installation, once installed, is deployed and
+> upgraded from its operator's CI, applications deploy from public and private GitHub repositories behind the auth proxy, and production
 > workloads run there. What no live run has recorded yet is in
 > [backlog 05](docs/backlog/05-bring-up-on-a-real-zerops-account.md).
 

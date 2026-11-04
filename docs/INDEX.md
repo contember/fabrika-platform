@@ -66,7 +66,7 @@ shipped on 2026-10-08.
 - **Zerops runs production workloads.** Still open there: the Zerops build's source-map key lift is unmeasured
   ([36](backlog/36-complete-zerops-release-artifact-correlation.md)), Operations egress is not DNS-safe
   ([38](backlog/38-add-dns-safe-operations-egress.md)), and no live run records the `standard` tier, custom
-  domains or a recovery rehearsal ([05](backlog/05-bring-up-on-a-real-zerops-account.md)).
+  domains or a release and recovery rehearsal ([05](backlog/05-bring-up-on-a-real-zerops-account.md)).
 - **Releases are tokenless.** `release.yml` publishes every public `@fabrika` package through npm
   trusted publishing with provenance ([`reference/release-process.md`](reference/release-process.md)).
 - **IAM's own audit is transactional; domain audit delivery is best-effort.** Every IAM change writes its
