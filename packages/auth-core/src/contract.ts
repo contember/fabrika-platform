@@ -24,6 +24,11 @@ export interface ContractArtifact extends EndpointTable {
 	/** Action → description. Exact actions only; the artifact holds no wildcard. */
 	readonly actions: Readonly<Record<string, string>>
 	readonly roles: Readonly<Record<string, RoleArtifact>>
+	/**
+	 * The relations a table's rows confer (`relations: { owner: { dimension: 'project' } }`): a role's `via` holds its
+	 * actions where a row names the caller. Absent unless declared, so the digest stays.
+	 */
+	readonly relations?: Readonly<Record<string, RelationArtifact>>
 	readonly mounts: Readonly<Record<string, MountArtifact>>
 	readonly files: Readonly<Record<string, FileCollectionArtifact>>
 	/**
@@ -484,6 +489,16 @@ export interface RoleArtifact {
 	readonly member: { readonly scope: string; readonly assignableBy: readonly string[] } | null
 	/** An external principal may hold this membership role (ADR-0051). Absent unless declared, so digests stay. */
 	readonly external?: true
+	/**
+	 * Relation → actions the holder of a global grant of this role holds at each node a relation row names them at.
+	 * Absent unless declared, so digests stay.
+	 */
+	readonly via?: Readonly<Record<string, readonly string[]>>
+}
+
+/** A relation of the vocabulary: the dimension whose nodes its rows name. */
+export interface RelationArtifact {
+	readonly dimension: string
 }
 
 // ── Mounts and companions ───────────────────────────────────────────────────────────────────────
@@ -866,6 +881,41 @@ export interface TablePolicyArtifact {
 	 * Absent for a table, so the digest stays.
 	 */
 	readonly view?: true
+	/** Relation → how a row of this table confers it. Absent unless declared, so the digest stays. */
+	readonly confers?: Readonly<Record<string, ConfersArtifact>>
+	/** Action → the condition a row must meet for it, narrowing what any grant of it reaches. Absent unless declared. */
+	readonly when?: Readonly<Record<string, ConditionArtifact>>
+}
+
+/** A row names `principal` at the node in `node`, until `expires`, while `when` admits it; `assign` bounds its writer. */
+export interface ConfersArtifact {
+	readonly principal: string
+	readonly node: string
+	readonly expires: string | null
+	readonly when?: ConditionArtifact
+	readonly assign: { readonly maxDays: number | null; readonly self: boolean } | null
+}
+
+/** A structured row condition: connectives, or `{ '<column or fk_column.column>': test }`, every test holding. */
+export type ConditionArtifact =
+	| { readonly allOf: readonly ConditionArtifact[] }
+	| { readonly anyOf: readonly ConditionArtifact[] }
+	| { readonly not: ConditionArtifact }
+	| { readonly [path: string]: ColumnTestArtifact }
+
+export type ConditionLiteralArtifact = string | number | boolean
+
+/** One operator of a column test; `{ now: true }` compares a timestamp with the statement's clock. */
+export interface ColumnTestArtifact {
+	readonly eq?: ConditionLiteralArtifact
+	readonly notEq?: ConditionLiteralArtifact
+	readonly in?: readonly ConditionLiteralArtifact[]
+	readonly notIn?: readonly ConditionLiteralArtifact[]
+	readonly isNull?: boolean
+	readonly lt?: ConditionLiteralArtifact | { readonly now: true }
+	readonly lte?: ConditionLiteralArtifact | { readonly now: true }
+	readonly gt?: ConditionLiteralArtifact | { readonly now: true }
+	readonly gte?: ConditionLiteralArtifact | { readonly now: true }
 }
 
 /** A column's own read action, its own write action, or both; an absent one is left out. */

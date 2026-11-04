@@ -45,6 +45,18 @@ export interface Scope {
 	value: string
 }
 
+/**
+ * The pseudo-scope of a relation entry: `{ type: '~rel', value: <relation> }` means the action is held where a row of
+ * the application names the principal in that relation. No dimension may start with `~`, so no reader that compares
+ * scopes by `(type, value)` mistakes one for a dimension value, and none resolves it but the framework.
+ */
+export const RELATION_SCOPE_TYPE = '~rel'
+
+/** A scope type no dimension, grant or key may name: IAM derives a `~` entry itself and never stores one. */
+export function isReservedScopeType(type: string): boolean {
+	return type.startsWith('~')
+}
+
 export interface PermissionEntry {
 	action: string
 	/** null = global / all scopes */
@@ -80,6 +92,12 @@ export interface RoleDef {
 	member?: { scope: string; assignableBy?: string[] }
 	/** An external principal may hold this membership role (ADR-0051). Only a membership role may declare it. */
 	external?: true
+	/**
+	 * Relation → exact actions. A GLOBAL grant of this role also carries `{ action, scope: { type: '~rel', value:
+	 * relation } }`: the application holds the action where one of its rows names the principal in that relation.
+	 * Only an application-wide internal role declares it.
+	 */
+	via?: Record<string, string[]>
 }
 
 /**
