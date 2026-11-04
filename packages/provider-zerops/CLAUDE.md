@@ -264,6 +264,10 @@ bun test
   `FABRIKA_PROXY_MANIFEST_BRAND` (`zeropsProxyAcceptsBrand`, `src/proxy-manifest-carrier.ts`). An older source's strict
   parser refuses the key and would fail its build, so it keeps fabrika's mark until the namespace is re-pinned. The
   logo is inside the manifest digest: a new logo is a new attempt. Never drop the marker from the generated proxy setup.
+- **`fabrika app build` refuses a credential in plain configuration** (`src/plain-credentials.ts`): a `zerops.yaml`
+  `envVariables` or `routing.headers` value that `plainCredentialFinding` flags, unless `target.notSecret` names it. It
+  runs in `compileFabrikaManifest` after the parse and NEVER in `parseFabrikaManifest`: a decode-time refusal would stop
+  a stored manifest of an older release from deploying, which a platform upgrade must never do (ADR-0062).
 - **No authored variable may copy a framework-only one.** `assertAuthoredManagedDocument` refuses, in every
   `envVariables`/`envSecrets` mapping at any depth, a framework-only name as a key and a reference to one in
   a key or a value (`frameworkVariableReference`: `${NAME}`, `${RUNTIME_NAME}`, `${<host>_NAME}`, nested).
@@ -429,6 +433,12 @@ Invariants:
   rule 5). Caddy sends it on IAM's route and IAM reads its client-address and request-id headers only beside it. Never
   derive it from the proxy key (`FABRIKA_IAM_KEY`): every namespace proxy holds that. `install` pass 2 is
   `deployPlatform`, so a fresh installation gets it there; it is not one of `GENERATED_SECRET_KEYS`.
+- **`platform deploy` refuses a readable credential on a platform service, before its first write**
+  (`src/installation/plain-credentials.ts`). It reads every platform service's environment anyway; a readable variable
+  that a mail provider declares secret, or that `plainCredentialFinding` (`@fabrika/provider-contract`) flags, fails the
+  run with each `<service>/<KEY>` and its reason, never a value. The keys the deploy writes itself are exempt, and so is
+  each `<service>/<KEY>` the operator names in `FABRIKA_PLATFORM_PLAIN_VARIABLES` / `--plain-variables`. The guide's
+  manual procedures (the mail transport) are where such a variable comes from; never make the check a warning.
 - **`platform init` keeps deployment credentials off disk and writes nothing to Zerops.** It reads
   `control` and `proxy` only to print origins. GitHub App setup is the Control UI's; init never touches a
   GitHub App key, webhook secret or XDG recovery file. It confirms before every step that leaves the disk;

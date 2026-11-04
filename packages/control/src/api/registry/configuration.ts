@@ -1,5 +1,5 @@
 import type { AppSecretDto, AppVarDto, ListResponse, OkResponse, PutAppVarRequest } from '@fabrika/control-contract'
-import type { ControlProvider } from '@fabrika/provider-contract'
+import { type ControlProvider, plainCredentialFinding } from '@fabrika/provider-contract'
 import { type AppSecretRow, type AppVarRow } from '../../db'
 import { parseVaultRef } from '../../vault'
 import { fail } from '../domain'
@@ -23,6 +23,7 @@ export async function putAppVarUseCase(c: RegistryUseCaseContext, appId: string,
 	assertUnmanagedName('variable', input.name)
 	assertAppVarValue(input.value)
 	assertNoFrameworkReference('variable', input.value)
+	if (input.notSecret !== true) assertNotACredential(appId, input.name, input.value)
 	const env = input.env ?? null
 	await assertDeclaredVariable(c, appId, env, input.name)
 	const row = await c.repositories.registry.upsertAppVar({ appId, env, name: input.name, value: input.value })
@@ -33,6 +34,24 @@ export async function putAppVarUseCase(c: RegistryUseCaseContext, appId: string,
 		metadata: { name: input.name, env },
 	})
 	return toAppVarDto(row)
+}
+
+/**
+ * Refuse a variable that looks like a credential, unless the caller said it is not one.
+ *
+ * A variable is stored in clear and listed with its value to everyone who manages the application; a secret is
+ * write-only and goes to the provider's secret storage. The message names the reason and the remedy, never the value.
+ */
+function assertNotACredential(appId: string, name: string, value: string): void {
+	const finding = plainCredentialFinding(name, value)
+	if (finding === null) return
+	fail(
+		400,
+		`application variable "${name}" looks like a credential: ${finding.because}. A variable is shown in clear to everyone who `
+			+ `manages ${appId}; make it a secret instead: declare it in \`pipeline.secrets\` of the app's config, then `
+			+ `\`fabrika control apps secrets put --app=${appId} --name=${name}\` with the value on stdin. If it is not a credential, `
+			+ 'put it again marked not secret: `--not-secret` (a CLI of this release or newer), or "Not a secret" in the console.',
+	)
 }
 
 /**

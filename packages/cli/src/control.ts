@@ -60,7 +60,7 @@ Usage:
                            [--domain=<host>] [--public-origin=<url>] [--trigger-ref=<ref>] [--namespace=<id>]
                            [--cross-origin=<origin> ...] [--kind=standard|dev]
   fabrika control apps variables list --app=<id>
-  fabrika control apps variables put --app=<id> --name=<name> --value=<text> [--env=<name>]
+  fabrika control apps variables put --app=<id> --name=<name> --value=<text> [--env=<name>] [--not-secret]
   fabrika control apps variables delete --app=<id> --name=<name> [--env=<name>]
   fabrika control apps secrets list --app=<id>
   fabrika control apps secrets put --app=<id> --name=<name> [--env=<name>]    (the value on stdin)
@@ -91,7 +91,9 @@ refused before anything is created. \`namespaces get\` lists the hosts a \`zerop
 serves and which of them are still free; a custom-domain namespace serves the domain you bound to its
 proxy. A manifest with no proxy target needs no domain.
 
-A variable's value is stored and printed in clear. A secret's value is write-only: \`apps secrets put\`
+A variable's value is stored and printed in clear, so \`apps variables put\` refuses one that looks like a
+credential (by its name, such as \`*_TOKEN\` or \`*_PASSWORD\`, or by its value) and names \`apps secrets put\` instead.
+\`--not-secret\` stores it anyway, for a value you have checked is not one. A secret's value is write-only: \`apps secrets put\`
 reads it from STDIN, never from a flag, so it reaches neither shell history nor a process listing, and
 one trailing newline is dropped. No command prints it back; \`apps secrets list\` shows names, scope and
 storage only. Generate one in the pipe:
@@ -186,18 +188,23 @@ interface Flags {
 	/** Every value of every option, in order; `values` keeps the last. Only a repeatable option reads it. */
 	readonly repeated: ReadonlyMap<string, readonly string[]>
 	readonly json: boolean
+	/** `--not-secret`: `apps variables put` stores a value that looks like a credential. */
+	readonly notSecret: boolean
 	readonly positional: readonly string[]
 }
 
-/** Split `--key=value` options from positional words; `--json` is the one flag every verb shares. */
+/** Split `--key=value` options from positional words; `--json` is the one flag every verb shares, `--not-secret` the other bare one. */
 export const parseControlFlags = (argv: readonly string[]): Flags => {
 	const values = new Map<string, string>()
 	const repeated = new Map<string, string[]>()
 	const positional: string[] = []
 	let json = false
+	let notSecret = false
 	for (const arg of argv) {
 		if (arg === '--json') {
 			json = true
+		} else if (arg === '--not-secret') {
+			notSecret = true
 		} else if (arg.startsWith('--')) {
 			const eq = arg.indexOf('=')
 			if (eq === -1) {
@@ -211,7 +218,7 @@ export const parseControlFlags = (argv: readonly string[]): Flags => {
 			positional.push(arg)
 		}
 	}
-	return { values, repeated, json, positional }
+	return { values, repeated, json, notSecret, positional }
 }
 
 const required = (flags: Flags, name: string): string => {
@@ -706,6 +713,7 @@ const runVariables = async (verb: string | undefined, flags: Flags, env: Readonl
 			name: required(flags, 'name'),
 			value: required(flags, 'value'),
 			...(scope === undefined ? {} : { env: scope }),
+			...(flags.notSecret ? { notSecret: true } : {}),
 		}
 		const result = await client.apps.variables.put({ appId, variable })
 		emit(flags, result, () => `${result.env ?? '*'}\t${result.name}\t${result.value}`)

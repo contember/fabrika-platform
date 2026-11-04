@@ -394,7 +394,11 @@ none, and `install` cannot be re-run.
 
 1. Set the same `FABRIKA_EMAIL_*` variables on BOTH `iam` and `control`, in the Zerops GUI or with `zcli`:
    `FABRIKA_EMAIL_PROVIDER`, `FABRIKA_EMAIL_FROM`, optionally `FABRIKA_EMAIL_FROM_NAME`, and the provider's
-   variables. Mark the credentials sensitive. Delete the variables of a provider you leave.
+   variables. Store the credentials (every variable `fabrika platform install --provider=zerops --help` marks secret) as SENSITIVE variables: a readable
+   one is read by every member of the project, and `platform deploy` refuses to run while one is readable. A
+   variable already stored readable does not become sensitive through `zops env set --sensitive`, which leaves
+   an existing variable as it was: delete it and add it again as a secret one in the GUI. Delete the variables of a
+   provider you leave.
 2. Restart `iam` and `control`. Each reads the transport at boot. IAM refuses to start on an invalid one.
    Control starts, logs a line that names the invalid variables, and refuses every deploy that needs the transport
    until you fix them and restart it.

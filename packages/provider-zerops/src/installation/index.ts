@@ -228,6 +228,7 @@ Options (a flag beats the environment variable beside it):
   --scheme=<http|https>             FABRIKA_PLATFORM_SCHEME         default https
   --source-dir=<checkout>           required                       clean full checkout running this CLI
   --mcp-clients=<json>              FABRIKA_PLATFORM_MCP_CLIENTS_JSON  MCP authoring clients; unset = off
+  --plain-variables=<svc/KEY,...>   FABRIKA_PLATFORM_PLAIN_VARIABLES   readable variables that are not credentials
   --dry-run                                                         read everything, change nothing
 
 Naming NO host derives all three from the proxy service's Zerops subdomains and makes this a
@@ -249,6 +250,12 @@ process listing:
   FABRIKA_IAM_PROVISIONING_KEY      required   the IAM-issued px_ admin key step 4 authenticates with
                                                (a --dry-run does not need it)
   FABRIKA_ZEROPS_API_URL            optional   region API base, when not the default
+
+Before it writes anything, the deploy reads the environment of every platform service and refuses a
+READABLE variable that looks like a credential (a mail provider's secret, a name with TOKEN, SECRET,
+PASSWORD or a KEY, a value that reads like a token): every member of the Zerops project can read it.
+Store such a variable sensitive. One checked and found not to be a credential is named in
+--plain-variables as <service>/<KEY>.
 
 This command writes one credential, derived from FABRIKA_IAM_PROVISIONING_KEY: the secret the proxy
 proves its requests to IAM with. Every other secret an installation holds is placed at bring-up.

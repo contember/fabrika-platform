@@ -22,6 +22,7 @@ import {
 	type ZeropsRuntimePackage,
 } from './execution'
 import { assertAuthoredManagedDocument, assertAuthoredManagedInputs } from './managed-env'
+import { assertNoAuthoredPlainCredential } from './plain-credentials'
 import { allowedReferenceHosts, foreignReferenceHost, platformOnlyServiceReference } from './service-references'
 import type { ZeropsAppConfig, ZeropsNamespaceResourceRequirement, ZeropsProxySpec, ZeropsSharedPostgresBinding } from './types'
 
@@ -663,7 +664,15 @@ export function compileFabrikaManifest(config: ZeropsAppConfig, env: string, sou
 			},
 		}
 		// The JSON copy is the artifact's own form: authored objects lose inherited fields and undefined keys once, here.
-		return parseFabrikaManifest(jsonValue(candidate), { appId: config.id, env })
+		const manifest = parseFabrikaManifest(jsonValue(candidate), { appId: config.id, env })
+		// After the parse, whose refusals are more precise (a Fabrika-managed name), and at build only: a stored manifest is
+		// never refused for it when decoded, so an application built by an older release keeps deploying.
+		assertNoAuthoredPlainCredential(
+			jsonValue(manifest.target.importDocument),
+			parseZeropsDescriptor(manifest.target.sourceDescriptor.contents).document,
+			config.target.notSecret ?? [],
+		)
+		return manifest
 	} finally {
 		for (const name of declaredVars) {
 			const value = prior[name]

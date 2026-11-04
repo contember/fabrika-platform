@@ -13,7 +13,9 @@
 // error naming both the flag and the variable that would supply it.
 
 import { describeArgument, type McpClient, parseMcpClientsJson, readEnv, requiredSetting, setting } from '@fabrika/installation-init'
+import { PLATFORM_DEPLOY_ORDER } from './deploy'
 import { parsePlatformHosts, parsePlatformScheme } from './placement-options'
+import { parsePlainVariables } from './plain-credentials'
 import { readInstallationSourceDir } from './source-options'
 
 /** How the project this installation lives in is named. */
@@ -39,6 +41,11 @@ export interface PlatformDeployInput {
 	readonly mcpClients?: readonly McpClient[]
 	/** IAM-issued `px_` admin key, used only to reconcile the console's schema. Environment only. */
 	readonly iamAdminKey: string
+	/**
+	 * Readable service variables, as `<service>/<KEY>`, the operator has checked are not credentials. The deploy refuses
+	 * every other readable variable that looks like one (`plain-credentials.ts`).
+	 */
+	readonly plainVariables?: ReadonlySet<string>
 	/** Read everything, write nothing, trigger nothing. */
 	readonly dryRun: boolean
 }
@@ -54,6 +61,7 @@ const FLAGS = [
 	'--scheme',
 	'--source-dir',
 	'--mcp-clients',
+	'--plain-variables',
 ] as const
 
 const assertKnownArguments = (argv: readonly string[]): void => {
@@ -128,6 +136,7 @@ export const parsePlatformDeployArgs = (
 			? readEnv(env, 'FABRIKA_IAM_PROVISIONING_KEY') ?? ''
 			: requiredSetting(readEnv(env, 'FABRIKA_IAM_PROVISIONING_KEY'), '(no flag)', 'FABRIKA_IAM_PROVISIONING_KEY'),
 		scheme,
+		plainVariables: parsePlainVariables(setting(argv, env, '--plain-variables', 'FABRIKA_PLATFORM_PLAIN_VARIABLES'), PLATFORM_DEPLOY_ORDER),
 		dryRun,
 		...(hosts === undefined ? {} : { hosts }),
 		sourceDir,

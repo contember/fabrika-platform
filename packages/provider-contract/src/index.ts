@@ -1,5 +1,6 @@
 export * from './authoring'
 export * from './control'
 export * from './json'
+export * from './plain-credentials'
 export * from './schema'
 export * from './steps'
