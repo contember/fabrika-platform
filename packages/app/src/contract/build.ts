@@ -225,6 +225,15 @@ class ArtifactBuilder {
 			if (row.kind === 'webhook' && row.input !== null && containsFile(row.input)) {
 				this.#problem(`mount '${row.id}'`, "takes a file in its input, which only a procedure's top-level field does (file('<kind>'))")
 			}
+			// Only the application writes a file of an inline kind: an uploaded document could render as a page.
+			for (const kind of new Set(row.input === null ? [] : fileKindsIn(row.input))) {
+				if (Object.hasOwn(this.#fileKinds, kind) && this.#fileKinds[kind]?.inline === true) {
+					this.#problem(
+						`procedure '${row.id}'`,
+						`takes a file of the inline kind '${kind}' in its input, which only the application writes: an uploaded document could render as a page (allowed: a kind without inline for an upload; ctx.files.put of a document the application renders)`,
+					)
+				}
+			}
 		}
 		const jobs = this.#jobs()
 		const exports = this.#exports()
@@ -1014,12 +1023,6 @@ class ArtifactBuilder {
 		let scanning = true
 		for (const field of fields) {
 			const kind = this.#fileKind(`${where} input field '${field.name}'`, field.kind)
-			if (kind?.inline === true) {
-				this.#problem(
-					where,
-					`input field '${field.name}' takes a file of the inline kind '${field.kind}', which only the application writes: an uploaded XML document could render as a page (allowed: a kind without inline, or ctx.files.put of a file the application renders)`,
-				)
-			}
 			if (kind !== null) {
 				bytes += field.count * kind.maxBytes
 				largest = Math.max(largest, kind.maxBytes)

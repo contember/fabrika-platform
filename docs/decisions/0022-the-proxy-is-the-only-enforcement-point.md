@@ -229,7 +229,8 @@ refuses a row with the profile instead of serving it without the treatment.
   sandbox CSP below gives it an opaque origin without scripts, and `default-src 'none'` refuses its stylesheets and
   images. Its elements in the XHTML or SVG namespace still render, so whoever writes the file of an inline kind can
   show a static page with live links on the application's origin. So only the application writes an inline kind: the
-  contract build and the artifact parser refuse a procedure whose input takes a file of one.
+  contract build and the artifact parser refuse a procedure whose input takes a file of one, and a `ctx.files.put` into
+  one stores a document the application rendered from checked data, never bytes a caller sent or a file it opened.
 - `Content-Type` from the recorded, sniffed type, never from the upload request.
 - `X-Content-Type-Options: nosniff`.
 - `Content-Security-Policy: sandbox; default-src 'none'`.

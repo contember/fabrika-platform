@@ -678,7 +678,7 @@ deal_attachments: {
   the request that created it, and a `legacy` marker. The bytes live in the object store under the object key; no two
   rows share an object.
 - **A file field** is `file('<kind>')`, `z.optional(file('<kind>'))` or `z.array(file('<kind>')).max(n)` at the top
-  level of a mutation's input. Such a procedure reads `multipart/form-data`: the first part is named `input`, carries no
+  level of a mutation's input, of a kind not declared `inline: true`. Such a procedure reads `multipart/form-data`: the first part is named `input`, carries no
   file name and holds the other fields as JSON; each further part is named after its file field, with a file name and a
   `Content-Type` the kind admits. While every file field is optional, the row also admits JSON. A request carries at most
   20 files. The body limit defaults to 64 KiB plus each field's files at its kind's `maxBytes`, at most 48 MiB, and

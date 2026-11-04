@@ -65,7 +65,7 @@ deal_attachments: {
   shows inline. The choice is the kind's, in the contract, so review sees it beside the types; a file written at run
   time cannot ask for it, and a user upload stays an attachment unless its kind says otherwise. A file of an inline
   kind can render as a static page (ADR-0022 rule 2), so only `ctx.files.put` fills one: no procedure input takes a
-  file of an inline kind.
+  file of an inline kind, and the put stores what the application rendered, never bytes a caller sent.
 - A **file column** (`files: { <column>: '<kind>' }` in a table policy) holds the id of a row of `fabrika_files`. The
   application's migration writes `<column> uuid references fabrika_files (id)` and an index the column leads; the
   checker's `file-column-migration` rule verifies both for every declared file column.
