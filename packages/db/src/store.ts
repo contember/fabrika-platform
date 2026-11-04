@@ -2563,13 +2563,7 @@ function layerReach(
 }
 
 function addReach(condition: Parameters<typeof conditionReach>[0], select: (table: string, column: string) => void): void {
-	const reached: Record<string, string> = {}
-	conditionReach(condition, reached)
-	const tables = ownKeys(reached)
-	for (let index = 0; index < tables.length; index++) {
-		const table = tables[index] ?? ''
-		select(table, ownEntry(reached, table) ?? '')
-	}
+	conditionReach(condition, select)
 }
 
 /** The context of `table` in the layer `scoped` created, for the framework's own store builders below. */
