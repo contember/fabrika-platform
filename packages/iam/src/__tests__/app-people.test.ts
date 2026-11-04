@@ -241,6 +241,26 @@ describe("the application's administrator grants and revokes its global roles in
 		expect((await f.repositories.grants.listGrants(target.id)).length).toBe(0)
 	})
 
+	test('it gives no role whose relation actions (via) it does not hold globally', async () => {
+		const f = await people({
+			...PEOPLE_SCHEMA,
+			actions: [...PEOPLE_SCHEMA.actions, { action: 'notes.secret' }],
+			roles: {
+				...PEOPLE_SCHEMA.roles,
+				assistant: { name: 'Assistant', permissions: [], via: { author: ['notes.secret'] } },
+				helper: { name: 'Helper', permissions: [], via: { author: ['notes.read'] } },
+			},
+		})
+		const administrator = await holding(f, 'administrator', 'administrator')
+		const target = await f.person('target')
+		const grant = (role: string) => consoleRpc(f, administrator.id, 'appPeople.grant', { app: APP, role, email: 'target@example.test' })
+
+		const refused = await grant('assistant')
+		expect([refused.status, errorType(refused.body)]).toEqual([403, 'forbidden'])
+		expect((await f.repositories.grants.listGrants(target.id)).length).toBe(0)
+		expect((await grant('helper')).status).toBe(200)
+	})
+
 	test('a person without the application members.manage administers nothing, and gets the answer of an unknown application', async () => {
 		const f = await people()
 		const staff = await holding(f, 'staff', 'staff')
