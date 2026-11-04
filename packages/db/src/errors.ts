@@ -64,6 +64,7 @@ export const QUERY_REFUSALS = {
 	file_value:
 		"a file column takes a file reference this request holds and may read (an incoming file, a put, or a read under the table's read action) of the column's kind, or null",
 	file_scope: 'a file is referenced from another top-level scope than the one its first reference set',
+	relation_bound: 'a row that confers a relation names its own writer without assign.self, or expires later than its assign.maxDays allows',
 } as const
 
 export type QueryRefusal = keyof typeof QUERY_REFUSALS

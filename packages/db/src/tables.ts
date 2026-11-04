@@ -1,11 +1,19 @@
 // @fabrika/db/tables — the table policies of `src/db/tables.ts` as data. Browser- and Worker-safe: no Bun API and no
 // driver, so `@fabrika/app/contract` and the static contract reader in `@fabrika/check` import it.
 
-import type { ColumnPolicyArtifact, TableActionArtifact, TablePolicyArtifact, TableScope } from '@fabrika/auth-core'
+import type {
+	ColumnPolicyArtifact,
+	ConditionArtifact,
+	ConfersArtifact,
+	TableActionArtifact,
+	TablePolicyArtifact,
+	TableScope,
+} from '@fabrika/auth-core'
 import { type ApplicationRowsPlan, planApplicationRows } from './application-rows'
 import { freeze, namesOf, ownEntry, ownKeys, setOwn } from './builtins'
+import { conditionArtifact, type ConditionModel } from './conditions'
 import { PolicyError } from './errors'
-import { modelOf, type ScopeModel, type TableModel, tableModels, type Tables } from './policy'
+import { modelOf, type RelationSource, type ScopeModel, type TableModel, tableModels, type Tables } from './policy'
 
 export { applicationRowRefusalText } from './application-rows'
 export type { ApplicationRowRefusal, ApplicationRowsPlan } from './application-rows'
@@ -154,7 +162,36 @@ function artifactOf(model: TableModel): TablePolicyArtifact {
 		createdBy: model.createdBy ?? null,
 		columns,
 		...(ownKeys(model.files).length === 0 ? {} : { files: { ...model.files } }),
+		...(model.confers.length === 0 ? {} : { confers: confersArtifact(model.confers) }),
+		...(ownKeys(model.when).length === 0 ? {} : { when: whenArtifact(model.when) }),
 	}
+}
+
+function confersArtifact(sources: readonly RelationSource[]): Record<string, ConfersArtifact> {
+	const confers: Record<string, ConfersArtifact> = {}
+	for (let index = 0; index < sources.length; index++) {
+		const source = sources[index]
+		if (source === undefined) continue
+		setOwn(confers, source.relation, {
+			principal: source.principal,
+			node: source.node,
+			expires: source.expires ?? null,
+			...(source.when === undefined ? {} : { when: conditionArtifact(source.when) }),
+			assign: source.assign === undefined ? null : { maxDays: source.assign.maxDays ?? null, self: source.assign.self },
+		})
+	}
+	return confers
+}
+
+function whenArtifact(when: Readonly<Record<string, ConditionModel>>): Record<string, ConditionArtifact> {
+	const artifact: Record<string, ConditionArtifact> = {}
+	const actions = ownKeys(when)
+	for (let index = 0; index < actions.length; index++) {
+		const action = actions[index] ?? ''
+		const condition = ownEntry(when, action)
+		if (condition !== undefined) setOwn(artifact, action, conditionArtifact(condition))
+	}
+	return artifact
 }
 
 /** One action as its text, so a single-action policy keeps the artifact and digest it had; several as a list; none as `null`. */

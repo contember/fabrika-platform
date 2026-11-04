@@ -17,6 +17,9 @@ import type { StoredFiles } from './stored-files'
  */
 export type Locator = (dimension: string, id: string, using?: Session) => Promise<ReadonlyMap<string, string> | null>
 
+/** Whether an active row of `relation`'s source names `principal` at `node`: what a Ref held through it is minted on. */
+export type RelationCheck = (relation: string, node: string, principal: string) => Promise<boolean>
+
 /** What the framework writes itself: its own `fabrika_*` tables. Usable once bound. */
 export interface FrameworkTables {
 	readonly webhooks: WebhookTables
@@ -32,6 +35,7 @@ export interface FrameworkTables {
 /** A connection of the layer and its locator. Only its holder can `release` it, which lets the layer be bound again. */
 export interface ProvisionalBinding {
 	readonly locate: Locator
+	readonly relates: RelationCheck
 	release(): void
 }
 

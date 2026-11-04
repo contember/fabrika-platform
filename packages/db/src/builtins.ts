@@ -1,3 +1,5 @@
+import { PolicyError } from './errors'
+
 // Captured when the module loads, before application code: a later patch to Object, Array, Map or their prototypes
 // does not change what these references do. Every policy and allowlist check goes through them and index loops,
 // never through an iterator, a spread or a method the checked value (or a mutable prototype) supplies.
@@ -91,4 +93,23 @@ export function defineValue(target: object, key: string, value: unknown): void {
 /** An own property of a record, or undefined: an inherited one is never read. */
 export function ownEntry<V>(record: Readonly<Record<string, V>>, key: string): V | undefined {
 	return hasOwn(record, key) ? record[key] : undefined
+}
+
+/** A copy of a plain object's own data properties; anything else (an instance, a symbol key, an accessor) is refused. */
+export function plainRecord(value: unknown, what: string): Readonly<Record<string, unknown>> {
+	const prototype: unknown = typeof value === 'object' && value !== null && !isArray(value) ? prototypeOf(value) : undefined
+	if ((prototype !== OBJECT_PROTOTYPE && prototype !== null) || typeof value !== 'object' || value === null || ownSymbols(value).length > 0) {
+		throw new PolicyError(`${what} must be a plain object`)
+	}
+	const copy: Record<string, unknown> = {}
+	const keys = ownNames(value)
+	for (let index = 0; index < keys.length; index++) {
+		const key = keys[index] ?? ''
+		const descriptor = ownDescriptor(value, key)
+		if (descriptor === undefined || !hasOwn(descriptor, 'value')) {
+			throw new PolicyError(`${what}: ${key} is an accessor; a policy holds plain values`)
+		}
+		setOwn(copy, key, descriptor.value)
+	}
+	return freeze(copy)
 }
