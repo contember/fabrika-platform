@@ -26,9 +26,10 @@ and the Zerops platform build as its last command, which the provider confirms f
 
 ## Approach / acceptance
 
-Original-source frames on a real Zerops release are required before a production Zerops release (WU5 of the archived
-[readiness sprint](../archive/sprint-2026-09-23-zerops-production-readiness.md)). The Delivery/Operations correlation UI
-below is not; it can ship separately.
+The archived [readiness sprint](../archive/sprint-2026-09-23-zerops-production-readiness.md) (WU5) required
+original-source frames on a real Zerops release. Zerops runs production workloads, and the repository records no
+measurement of the lift, so whether production builds report their maps `complete` is not known here. The
+Delivery/Operations correlation UI below is separate and can ship on its own.
 
 - Measure the sensitive `${RUNTIME_…}` lift on a real account and record it as a platform fact (a `platform-facts`
   row), or move the bearer to a mechanism that is verified.

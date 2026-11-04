@@ -29,10 +29,11 @@ Local composition deliberately uses
 `http://notes.fabrika.localhost:18081`; production hardening must not remove that local
 workflow.
 
-Webhook notifications are required before a production Zerops release. A first attempt (WU4 of the
-archived [readiness sprint](../archive/sprint-2026-09-23-zerops-production-readiness.md)) found
-that Bun 1.3.14's native transports did not enforce a response-header bound; its draft is lost. Adding
-an npm transport such as Undici needs an owner decision first.
+Production Zerops installations run without this policy: webhook delivery (`maintenance.ts`) and active health
+checks (`health.ts`) call plain `fetch` after the syntax checks. The archived
+[readiness sprint](../archive/sprint-2026-09-23-zerops-production-readiness.md) required webhook notifications for a
+production Zerops release; its first attempt (WU4) found that Bun 1.3.14's native transports did not enforce a
+response-header bound, and its draft is lost. Adding an npm transport such as Undici needs an owner decision first.
 
 ## Approach / acceptance
 
