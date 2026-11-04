@@ -80,7 +80,7 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [192](192-a-signed-in-person-cannot-manage-their-own-account.md): No self-service password change or sign-in list; an IAM account page, after rewriting ADR-0020.
 - [193](193-loose-ends-of-the-declared-surface.md): The legacy file marker, admission buckets, the platform rollback and other P2s of the surface revision.
 - [194](194-mail-relay-follow-ups.md): Mail relay follow-ups: maintenance and console edges, the sender's error mapping, expired keys' vault values, no final-failure answer to IAM or an application, and the sprint's end-to-end run.
-- [196](196-mcp-authoring-has-no-live-acceptance.md): MCP authoring was never run with a real client, GitHub App and Zerops build; the sprint's known limits.
+- [196](196-mcp-authoring-has-no-live-acceptance.md): MCP authoring ran live with real connectors on a test installation; the full PR-to-production sequence is unrecorded, and four known limits remain.
 - [197](197-local-compat-has-no-0.7-release.md): `local:compat` deploys no Notes at v0.7.0: its proof needs a release without a file collection.
 - [198](198-an-in-container-env-write-may-reach-another-services-credentials.md): Measure whether `zsc` can write a `${host_KEY}` reference that Zerops resolves; if so, a `cheap` namespace's superuser is reachable by its applications.
 - [199](199-operations-keeps-every-event-forever.md): Operations prunes nothing; a retention window for occurrences, dead events, observations and raw bodies.
@@ -106,7 +106,7 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [230](230-a-zerops-platform-deploy-rebuilds-every-service.md): A Zerops platform deploy rebuilds all four services every time, and a bring-up compiles Caddy for 5 min.
 - [231](231-operator-traps-of-an-mcp-authoring-bring-up.md): MCP authoring bring-up traps: `put` loses bucket provenance, no `authoring` flag, a bare `forbidden`, `admin` offered for a contract app.
 - [232](232-the-platform-build-runs-no-postgres-backed-test.md): The Zerops build skips every Postgres-backed application test; a throwaway Postgres in the build container would run them.
-- [233](233-platform-services-share-postgres-server-sessions.md): On Zerops one Postgres server session serves IAM, Operations and Control in turn; find the pooler, check what leaks between services, and decide whether to connect directly.
+- [233](233-platform-services-share-postgres-server-sessions.md): On Zerops one Postgres server session serves IAM, Operations and Control in turn; the services connect through pgBouncer on `portTls`; measure its mode, check what leaks between services, and decide whether to connect directly.
 - [224](224-terminal-follow-ups.md): Smaller gaps of terminals: sign-out without `Sec-Fetch-Site`, re-enrolment, sign-out of a personal login.
 - [225](225-password-minimum-follow-ups.md): Smaller gaps of the installation's minimum password length: audit, an upper cap, the console page.
 - [226](226-a-failed-iam-reconcile-leaves-a-narrowing-unapplied.md): A narrowing is not in force while the IAM write after a deploy fails; decided: narrowings before the manifest is published, widenings after.
@@ -152,4 +152,4 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [271](271-fast-dev-sandboxes-on-cloudflare.md): A Cloudflare dev environment keys the application object by workspace, for the seconds-per-commit loop Zerops has.
 - [272](272-authoring-workspaces-on-kompjutr.md): A kompjutr working tree per workspace, so search and multi-file edits stop costing one GitHub request per file.
 - [273](273-automatic-rollback-of-a-suspect-release.md): An opted-in environment rolls a suspect release back when the observed verdict is `suspect` and the rollback verdict `safe`; its own ADR first.
-- [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.
+- [10](10-app-scope-secrets-on-zerops.md) — Control refuses an `app`-scoped secret on Zerops today; record that as the decision, or replicate per service.
