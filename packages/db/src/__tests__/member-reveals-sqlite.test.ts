@@ -5,14 +5,14 @@ import type { TypedColumnList } from '@fabrika/db'
 import { beforeEach, describe, expect, test } from 'bun:test'
 import type { ColumnType } from 'kysely'
 import { z } from 'zod/v4'
-import type { ContainerGrant } from '../capability'
+import type { ContainerGrant, Ref } from '../capability'
 import { CapabilityError, PolicyError, QueryRefusedError } from '../errors'
 import { bindScopedDatabaseProvisionally, type DataAccess, dataAccessOf, type DataHandles, type DataSite } from '../framework'
 import type { DataKind } from '../orm-types'
 import { defineTables } from '../policy'
 import { openSqlite } from '../sqlite'
 import { type BunSqliteStorage, bunSqliteStorage } from '../sqlite-bun'
-import { scoped } from '../store'
+import { defineStore, scoped } from '../store'
 import { tablePolicies } from '../tables'
 import { TestAuthority } from './fixtures/authority'
 
@@ -50,6 +50,7 @@ const vocabulary = {
 		'projects.read': 'Read projects',
 		'docs.read': 'Read documents',
 		'tasks.read': 'Read tasks',
+		'tasks.write': 'Write tasks',
 	},
 	roles: {},
 } as const
@@ -58,7 +59,8 @@ const policies = {
 	projects: { scope: { dimension: 'project' }, actions: { read: 'projects.read' }, version: 'version' },
 	tasks: {
 		scope: { dimension: 'task' },
-		actions: { read: 'tasks.read' },
+		actions: { read: 'tasks.read', insert: 'tasks.write', delete: 'tasks.write' },
+		insert: ['open'],
 		version: 'version',
 		memberReveals: { task: { to: 'project', actions: ['projects.read'], when: { open: { eq: true } } } },
 	},
@@ -67,9 +69,17 @@ const policies = {
 
 const tables = defineTables(vocabulary, columns)(policies)
 
+/** A move is a method of a store, as `src/db/stores/*.ts` defines one, not of a site's handles. */
+const newLayer = () => scoped(tables)
+
+function taskStore(layer: ReturnType<typeof newLayer>) {
+	return defineStore(layer, 'tasks', (t) => ({ move: (task: Ref<'task', 'tasks.write'>, to: Ref<'project', 'tasks.write'>) => t.move(task, to) }))
+}
+
 const alice = new TestAuthority('user:alice')
 let storage: BunSqliteStorage
 let data: DataAccess
+let tasks: ReturnType<typeof taskStore>
 
 beforeEach(() => {
 	storage = bunSqliteStorage()
@@ -79,9 +89,10 @@ beforeEach(() => {
 		insert into tasks (id, project_id, open, version) values ('t1', 'p1', 1, 1), ('t2', 'p2', 0, 1), ('t3', 'p3', 1, 1);
 		insert into docs (id, project_id, title) values ('d1', 'p1', 'one'), ('d2', 'p2', 'two'), ('d3', 'p3', 'three');
 	`)
-	const layer = scoped(tables)
+	const layer = newLayer()
 	bindScopedDatabaseProvisionally(layer, { database: openSqlite(storage), capabilities: alice })
 	data = dataAccessOf(layer)
+	tasks = taskStore(layer)
 })
 
 async function invoke<T>(kind: DataKind, work: (handles: DataHandles) => Promise<T>): Promise<T> {
@@ -158,7 +169,7 @@ describe('a Within that carries a grant at a row which reveals its ancestor', ()
 	})
 })
 
-describe('a raw statement never writes a revealing row', () => {
+describe('a revealing row is written through a capability only, and never moves', () => {
 	test("refuses an insert that picks the row's key, which could revive a node a stale grant still names", async () => {
 		const transaction = data.invocation(false)
 		const sql = data.sql({ mode: 'write', check() {}, session: () => transaction.session(), fail: () => transaction.fail() })
@@ -166,6 +177,21 @@ describe('a raw statement never writes a revealing row', () => {
 		await expect(revive()).rejects.toThrow("'tasks' at line 1 hands out access")
 		await transaction.rollback()
 		expect(storage.sql.exec("select id from tasks where id = 't-old'").toArray()).toEqual([])
+	})
+
+	test('refuses an unscoped write, which places the row without the bound of an insert under a Ref', async () => {
+		const transaction = data.invocation(false)
+		const site: DataSite = { kind: 'mutation', unscoped: { tasks: 'write' }, principal: 'user:alice', check() {}, session: () => transaction.session() }
+		const insert = () => call(data.handles(site).unscoped, 'tasks.insert', { project_id: 'p2', open: true })
+		await expect(insert()).rejects.toThrow('tasks hands out access, so it is written through a capability only, never unscoped')
+		await transaction.rollback()
+		expect(storage.sql.exec("select count(*) as n from tasks where project_id = 'p2'").toArray()).toEqual([{ n: 1 }])
+	})
+
+	test("refuses a move, which would reveal the new project to the task's members", async () => {
+		const move = () => tasks.move(alice.ref('task', 'tasks.write', 't1'), alice.ref('project', 'tasks.write', 'p3'))
+		await expect(move()).rejects.toThrow('tasks hands out access, so a row is never moved')
+		expect(storage.sql.exec("select project_id from tasks where id = 't1'").toArray()).toEqual([{ project_id: 'p1' }])
 	})
 })
 
