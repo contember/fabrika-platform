@@ -132,6 +132,58 @@ describe("a table's reveals in the approval diff", () => {
 		})
 		expect(classifyAccess(read, none).outcome).toBe('no-widening')
 	})
+
+	test('an insert bound widens when added or given self, and narrows when removed', () => {
+		const read = reveal("'notes.read'")
+		const bound = (assign: { self: boolean } | undefined): AccessSnapshot => {
+			const contract = read.contract
+			const notes = contract?.tables['notes']
+			const member = notes?.reveals?.['member']
+			if (contract === null || notes === undefined || member === undefined) throw new Error('the kit reveals notes')
+			const revealed = assign === undefined ? { to: member.to, actions: member.actions } : { ...member, assign }
+			return { ...read, contract: { ...contract, tables: { ...contract.tables, notes: { ...notes, reveals: { member: revealed } } } } }
+		}
+		const subject = 'Table `notes` reveals to relation `member`'
+		expect(lines(bound(undefined), bound({ self: false }))).toContainEqual({
+			effect: 'widens',
+			line: `${subject} at a node an insert into \`notes\` picks, never its writer's own`,
+		})
+		expect(lines(bound({ self: false }), bound({ self: true }))).toContainEqual({
+			effect: 'widens',
+			line: `${subject} at a node an insert into \`notes\` picks, its writer's own included`,
+		})
+		expect(lines(bound({ self: true }), bound(undefined))).toContainEqual({
+			effect: 'narrows',
+			line: `${subject} no longer at a node an insert into \`notes\` picks`,
+		})
+	})
+})
+
+describe("a table's read path in the approval diff", () => {
+	const lines = (before: AccessSnapshot, after: AccessSnapshot) => classifyAccess(before, after).changes.map(({ effect, line }) => ({ effect, line }))
+	const none = snapshot(files())
+	const through = (readThrough: Readonly<Record<string, string>>): AccessSnapshot => {
+		const contract = none.contract
+		const notes = contract?.tables['notes']
+		if (contract === null || notes === undefined) throw new Error('the kit has a notes table')
+		return { ...none, contract: { ...contract, tables: { ...contract.tables, notes: { ...notes, readThrough } } } }
+	}
+
+	test('widens when added or moved to another column, and narrows when removed', () => {
+		expect(lines(none, through({ label: 'label_id' }))).toContainEqual({
+			effect: 'widens',
+			line: 'A read of `label` reaches table `notes` through `label_id`',
+		})
+		expect(lines(through({ label: 'label_id' }), through({ label: 'other_id' }))).toContainEqual({
+			effect: 'widens',
+			line: 'A read of `label` reaches table `notes` through `other_id` instead of `label_id`',
+		})
+		expect(lines(through({ label: 'label_id' }), none)).toContainEqual({
+			effect: 'narrows',
+			line: 'A read of `label` reaches table `notes` no longer: its path through `label_id` is removed',
+		})
+		expect(classifyAccess(through({ label: 'label_id' }), none).outcome).toBe('no-widening')
+	})
 })
 
 describe('publication refuses relation grants an older release would not enforce', () => {

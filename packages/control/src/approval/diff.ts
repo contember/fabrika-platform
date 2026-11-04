@@ -43,6 +43,7 @@ import {
 	type ProcedureArtifact,
 	type ProcedureChallenge,
 	type RedirectShape,
+	type RevealsArtifact,
 	type RoleArtifact,
 	type SchemaShape,
 	type StringShape,
@@ -349,6 +350,7 @@ function compareContracts(changes: Changes, before: ContractArtifact | null, aft
 				...ruled('table.confers', confersChanges(name, undefined, table.confers)),
 				...ruled('table.when', whenChanges(name, undefined, table.when)),
 				...ruled('table.reveals', revealsChanges(name, undefined, table.reveals)),
+				...ruled('table.read-through', readThroughChanges(name, undefined, table.readThrough)),
 			)
 		}
 	}
@@ -1601,7 +1603,10 @@ function revealsChanges(name: string, before: TablePolicyArtifact['reveals'], af
 		const is = to[relation]
 		if (was === undefined) {
 			if (is === undefined) return []
-			return [widening(`${subject} its \`${is.to}\` for ${is.actions.map((action) => `\`${action}\``).join(', ')}`)]
+			return [
+				widening(`${subject} its \`${is.to}\` for ${is.actions.map((action) => `\`${action}\``).join(', ')}`),
+				...revealAssignChanges(subject, name, undefined, is.assign),
+			]
 		}
 		if (is === undefined) return [narrowing(`${subject} nothing any more`)]
 		const added = is.actions.filter((action) => !was.actions.includes(action))
@@ -1613,8 +1618,32 @@ function revealsChanges(name: string, before: TablePolicyArtifact['reveals'], af
 			...(was.when === undefined && is.when !== undefined
 				? [narrowing(`${subject} only a row its condition holds`)]
 				: valueChange(`${subject} condition`, was.when, is.when)),
+			...revealAssignChanges(subject, name, was.assign, is.assign),
 		]
 	})
+}
+
+/** A secondary read path: a new one, or another column, widens what a `Within` of its dimension reads; a lost one narrows. */
+function readThroughChanges(name: string, before: TablePolicyArtifact['readThrough'], after: TablePolicyArtifact['readThrough']): Line[] {
+	const from = before ?? {}
+	const to = after ?? {}
+	return union(Object.keys(from), Object.keys(to)).flatMap((dimension): Line[] => {
+		const was = from[dimension]
+		const is = to[dimension]
+		const subject = `A read of \`${dimension}\` reaches table \`${name}\``
+		if (was === undefined) return is === undefined ? [] : [widening(`${subject} through \`${is}\``)]
+		if (is === undefined) return [narrowing(`${subject} no longer: its path through \`${was}\` is removed`)]
+		return was === is ? [] : [widening(`${subject} through \`${is}\` instead of \`${was}\``)]
+	})
+}
+
+/** An insert that picks the node a reveal holds at delegates: a new bound widens, `self` widens, losing either narrows. */
+function revealAssignChanges(subject: string, name: string, was: RevealsArtifact['assign'], is: RevealsArtifact['assign']): Line[] {
+	if (was?.self === is?.self) return []
+	if (is === undefined) return [narrowing(`${subject} no longer at a node an insert into \`${name}\` picks`)]
+	if (is.self) return [widening(`${subject} at a node an insert into \`${name}\` picks, its writer's own included`)]
+	if (was === undefined) return [widening(`${subject} at a node an insert into \`${name}\` picks, never its writer's own`)]
+	return [narrowing(`${subject} at a node an insert into \`${name}\` picks no longer its writer's own`)]
 }
 
 /** An action's condition narrows every grant of it on the table: a new one narrows, a lost one widens, any change widens. */
@@ -1810,6 +1839,7 @@ function tableChanges(name: string, from: TablePolicyArtifact, to: TablePolicyAr
 		...ruled('table.confers', confersChanges(name, from.confers, to.confers)),
 		...ruled('table.when', whenChanges(name, from.when, to.when)),
 		...ruled('table.reveals', revealsChanges(name, from.reveals, to.reveals)),
+		...ruled('table.read-through', readThroughChanges(name, from.readThrough, to.readThrough)),
 	]
 }
 

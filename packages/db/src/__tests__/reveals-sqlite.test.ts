@@ -232,7 +232,7 @@ describe('the policy bounds what a table may reveal', () => {
 	})
 
 	test('a node outside the chain, no action, an action outside the vocabulary or an unknown field is refused', () => {
-		expect(policy(reveal({ to: 'task' }))).toThrow("not a dimension above task in tasks's chain")
+		expect(policy(reveal({ to: 'task' }))).toThrow("not a dimension of tasks's chain")
 		expect(policy(reveal({ actions: [] }))).toThrow('names no action')
 		expect(policy(reveal({ actions: ['projects.delete'] }))).toThrow('not an action of the vocabulary')
 		expect(policy(reveal({ scope: 'all' }))).toThrow(PolicyError)
@@ -240,7 +240,8 @@ describe('the policy bounds what a table may reveal', () => {
 
 	test('a relation outside the vocabulary, or of another dimension than the table, is refused', () => {
 		expect(policy({ reveals: { owner: { to: 'project', actions: ['projects.read'] } } })).toThrow('not a relation of the vocabulary')
-		expect(policy({}, reveal({}))).toThrow('reveals nothing')
+		expect(policy({}, reveal({}))).toThrow('nor one it reads through')
+		expect(policy(reveal({ assign: {} }))).toThrow("matches the row's own key")
 	})
 })
 

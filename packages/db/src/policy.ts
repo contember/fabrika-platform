@@ -92,8 +92,13 @@ interface WritablePolicy<Col extends string, A extends string, V extends Col, Ac
 	readonly confers?: { readonly [relation: string]: ConfersPolicy<Col> }
 	/** Conditions that narrow an action of this table: a row the condition does not admit is out of that action's reach. */
 	readonly when?: { readonly [action in A]?: ConditionPolicy<Col> }
-	/** Relation of this table's own dimension → the ancestor node a row the relation reaches reveals, and for what. */
+	/** Relation of this table's own dimension, or of one it reads through → the ancestor node a row the relation reaches reveals. */
 	readonly reveals?: { readonly [relation: string]: RevealsPolicy<Col, A> }
+	/**
+	 * Dimension outside the chain → the foreign key column a read reaches a row through: a `Within` of the dimension, or a
+	 * relation at it, reads the row, and every write follows containment only. No update writes the column.
+	 */
+	readonly readThrough?: { readonly [dimension: string]: Col }
 }
 
 /**
@@ -105,6 +110,11 @@ export interface RevealsPolicy<Col extends string, A extends string> {
 	readonly actions: readonly A[]
 	/** A condition on the revealing row, under the same path rule as an action's `when`. */
 	readonly when?: ConditionPolicy<Col>
+	/**
+	 * Required on a reveal matched through `readThrough` of a table with an insert action: the row's writer picks the node,
+	 * so an insert delegates. Without `self`, an insert that names a node where its writer holds the relation is refused.
+	 */
+	readonly assign?: { readonly self?: true }
 }
 
 /**
@@ -273,8 +283,22 @@ export interface TableModel {
 	readonly confers: readonly RelationSource[]
 	/** The condition each action of the table holds a row under; an action without one is not narrowed. */
 	readonly when: Readonly<Record<string, ConditionModel>>
-	/** The ancestor nodes this table's rows reveal to a relation of its own dimension. */
+	/** The ancestor nodes this table's rows reveal to a relation of its own dimension or of one it reads through. */
 	readonly reveals: readonly RevealModel[]
+	/** The secondary read paths: a dimension outside the chain, by the column that holds the row's node in it. */
+	readonly readThrough: readonly SecondaryPath[]
+}
+
+/**
+ * A read path to a dimension outside the chain: `column` holds a key of `table`, which owns `dimension` and lies in
+ * `chain`. The column's foreign key covers every ancestor the two chains share, so the node lies in the row's own tenant.
+ */
+export interface SecondaryPath {
+	readonly dimension: string
+	readonly column: string
+	readonly table: string
+	readonly key: string
+	readonly chain: readonly Container[]
 }
 
 /**
@@ -284,8 +308,15 @@ export interface TableModel {
 export interface RevealModel {
 	readonly relation: string
 	readonly table: string
-	/** The table's key, which the relation's term matches. */
+	/** The table's key, which the relation's nodes match unless the reveal is matched through `path`. */
 	readonly key: string
+	/**
+	 * The secondary path whose node, or an ancestor of it, the relation's nodes match. A reveal matched through one holds
+	 * its actions for a `Within`'s reads only, as the path itself does.
+	 */
+	readonly path: SecondaryPath | undefined
+	/** The bound on an insert's delegation through `path`: `undefined` when no handler inserts a row of the table. */
+	readonly assign: { readonly self: boolean } | undefined
 	readonly dimension: string
 	readonly column: string
 	readonly actions: readonly string[]
@@ -316,11 +347,12 @@ type ParsedScope =
 		readonly inherit: readonly string[] | undefined
 	}
 
-type ParsedTable = Omit<TableModel, 'chain' | 'scope' | 'confers' | 'when' | 'reveals'> & {
+type ParsedTable = Omit<TableModel, 'chain' | 'scope' | 'confers' | 'when' | 'reveals' | 'readThrough'> & {
 	readonly scope: ParsedScope
 	readonly confersInput: unknown
 	readonly whenInput: unknown
 	readonly revealsInput: unknown
+	readonly readThroughInput: unknown
 }
 
 let readModels: <DB, P>(tables: Tables<DB, P>) => TableModels
@@ -459,8 +491,10 @@ const POLICY_FIELDS = nameSet([
 	'confers',
 	'when',
 	'reveals',
+	'readThrough',
 ])
-const REVEALS_FIELDS = nameSet(['to', 'actions', 'when'])
+const REVEALS_FIELDS = nameSet(['to', 'actions', 'when', 'assign'])
+const REVEAL_ASSIGN_FIELDS = nameSet(['self'])
 const CONFERS_FIELDS = nameSet(['principal', 'node', 'expires', 'when', 'assign'])
 const ASSIGN_FIELDS = nameSet(['maxDays', 'self'])
 /** A delegated row lasts at most ten years ahead: a bound, not a convenience. */
@@ -660,6 +694,7 @@ function parseTable(table: string, columnList: unknown, policyInput: unknown, vo
 		confersInput: ownEntry(policy, 'confers'),
 		whenInput: ownEntry(policy, 'when'),
 		revealsInput: ownEntry(policy, 'reveals'),
+		readThroughInput: ownEntry(policy, 'readThrough'),
 	}
 }
 
@@ -1195,8 +1230,12 @@ function linkTables(parsed: readonly ParsedTable[], vocabulary: VocabularyModel)
 		const table = parsed[index]
 		if (table !== undefined) {
 			const { scope, chain } = resolve(table, [])
-			const { confersInput, whenInput, revealsInput, ...rest } = table
+			const { confersInput, whenInput, revealsInput, readThroughInput, ...rest } = table
 			const linked = { ...rest, scope, chain }
+			const readThrough = parseReadThrough(linked, readThroughInput, vocabulary, (dimension) => {
+				const owner = ownEntry(owners, dimension)
+				return owner === undefined ? undefined : { name: owner.name, ...resolve(owner, []) }
+			})
 			const confers = parseConfers(linked, confersInput, vocabulary.relations, conditionTable)
 			for (let position = 0; position < confers.length; position++) {
 				const relation = confers[position]?.relation ?? ''
@@ -1207,8 +1246,8 @@ function linkTables(parsed: readonly ParsedTable[], vocabulary: VocabularyModel)
 				setOwn(sources, relation, table.name)
 			}
 			const when = parseWhen(linked, whenInput, conditionTable, hopRule)
-			const reveals = parseReveals(linked, revealsInput, vocabulary, conditionTable, hopRule)
-			setOwn(models, table.name, freeze({ ...linked, confers, when, reveals }))
+			const reveals = parseReveals(linked, readThrough, revealsInput, vocabulary, conditionTable, hopRule)
+			setOwn(models, table.name, freeze({ ...linked, confers, when, reveals, readThrough }))
 		}
 	}
 	const relations = ownKeys(vocabulary.relations)
@@ -1221,7 +1260,7 @@ function linkTables(parsed: readonly ParsedTable[], vocabulary: VocabularyModel)
 	return freeze(models)
 }
 
-type LinkedTable = Omit<TableModel, 'confers' | 'when' | 'reveals'>
+type LinkedTable = Omit<TableModel, 'confers' | 'when' | 'reveals' | 'readThrough'>
 
 /** Every action a table names: its operations', `appRead`, `appCount` and its columns' own. */
 function tableActionNames(table: LinkedTable): NameSet {
@@ -1275,13 +1314,101 @@ function parseWhen(
 	return freeze(when)
 }
 
+/** A dimension's owning table, resolved: what a secondary path's column references. */
+interface ResolvedOwner extends Resolved {
+	readonly name: string
+}
+
+/**
+ * `readThrough`: dimension → the column a `Within`'s read reaches a row through. The dimension lies outside the row's chain and a table
+ * owns it; the column is a foreign key to that table's key that no update writes, and it covers every ancestor the two
+ * chains share, so the database keeps the node in the row's own tenant.
+ */
+function parseReadThrough(
+	table: LinkedTable,
+	input: unknown,
+	vocabulary: VocabularyModel,
+	ownerOf: (dimension: string) => ResolvedOwner | undefined,
+): readonly SecondaryPath[] {
+	if (input === undefined) {
+		return freeze([])
+	}
+	if (table.scope.mode !== 'dimension' && table.scope.mode !== 'child') {
+		throw new PolicyError(`${table.name}: a ${table.scope.mode} table has no containment, so no secondary read path`)
+	}
+	if (table.queue !== undefined) {
+		throw new PolicyError(`${table.name}: a queue table has no secondary read path; a claim follows containment only`)
+	}
+	const declared = plainRecord(input, `${table.name}: readThrough`)
+	const dimensions = ownKeys(declared)
+	const paths: SecondaryPath[] = []
+	for (let index = 0; index < dimensions.length; index++) {
+		const dimension = dimensions[index] ?? ''
+		const what = `${table.name}: readThrough.${dimension}`
+		if (!hasOwn(vocabulary.dimensions, dimension)) {
+			throw new PolicyError(`${what}: ${dimension} is not a dimension of the vocabulary`)
+		}
+		if (nodeColumnOf(table, dimension) !== undefined) {
+			throw new PolicyError(`${what}: ${table.name} already lies in ${dimension}; a secondary path reaches a dimension outside its chain`)
+		}
+		const column = ownEntry(declared, dimension)
+		if (typeof column !== 'string' || !inSet(table.columns, column)) {
+			throw new PolicyError(`${what} names ${String(column)}, which is not a column of ${table.name}`)
+		}
+		if (inSet(table.update, column) || hasOwn(table.columnWrites, column) || hasOwn(table.files, column)) {
+			throw new PolicyError(`${what}: ${column} places the row on a read path, so no update writes it`)
+		}
+		if (column === table.version || column === table.createdBy || column === table.scope.key) {
+			throw new PolicyError(`${what}: ${column} is a column the layer writes itself, not a node of ${dimension}`)
+		}
+		for (let position = 0; position < table.chain.length; position++) {
+			if (table.chain[position]?.column === column) {
+				throw new PolicyError(`${what}: ${column} is a containment column of ${table.name}`)
+			}
+		}
+		const owner = ownerOf(dimension)
+		if (owner === undefined || owner.scope.mode !== 'dimension') {
+			throw new PolicyError(`${what}: no table owns ${dimension}, so no foreign key ties ${column} to a node of it`)
+		}
+		const pairs: [string, string][] = [[column, owner.scope.key]]
+		for (let position = 0; position < owner.chain.length; position++) {
+			const link = owner.chain[position]
+			const shared = link === undefined ? undefined : nodeColumnOf(table, link.dimension)
+			if (link !== undefined && shared !== undefined) pairs[pairs.length] = [shared, link.column]
+		}
+		let covered = false
+		for (let position = 0; position < table.foreignKeys.length; position++) {
+			const foreignKey = table.foreignKeys[position]
+			// Exactly these columns: a further nullable column would let the database skip the whole key.
+			covered = covered
+				|| (foreignKey !== undefined && foreignKey.table === owner.name && foreignKey.columns.length === pairs.length && coversPairs(foreignKey, pairs))
+		}
+		if (!covered) {
+			const columns: string[] = []
+			const referenced: string[] = []
+			for (let position = 0; position < pairs.length; position++) {
+				columns[position] = pairs[position]?.[0] ?? ''
+				referenced[position] = pairs[position]?.[1] ?? ''
+			}
+			throw new PolicyError(
+				`${what}: ${column} and every ancestor ${table.name} shares with ${owner.name} must be one foreign key of exactly these columns, so the node lies in the row's own tenant; declare foreign key (${
+					columns.join(', ')
+				}) references ${owner.name} (${referenced.join(', ')})`,
+			)
+		}
+		paths[paths.length] = freeze({ dimension, column, table: owner.name, key: owner.scope.key, chain: owner.chain })
+	}
+	return freeze(paths)
+}
+
 /**
  * `reveals`: relation → the ancestor its rows reveal. The relation is of the table's own dimension, so its term
- * matches the row's key; the ancestor is a link of the chain, whose column the layer stamps and a move rewrites, so the
+ * matches the row's key, or of a dimension the table reaches, so it matches that path's column; the ancestor is a link of the chain, whose column the layer stamps and a move rewrites, so the
  * revealed node follows the row's containment now. A queue table reveals nothing: a claim rewrites its rows.
  */
 function parseReveals(
 	table: LinkedTable,
+	readThrough: readonly SecondaryPath[],
 	input: unknown,
 	vocabulary: VocabularyModel,
 	tables: (name: string) => ConditionTable | undefined,
@@ -1290,13 +1417,14 @@ function parseReveals(
 	if (input === undefined) {
 		return freeze([])
 	}
-	if (table.scope.mode !== 'dimension') {
-		throw new PolicyError(`${table.name}: a ${table.scope.mode} table reveals nothing; only a dimension table's row is a node a relation reaches`)
+	if (table.scope.mode !== 'dimension' && table.scope.mode !== 'child') {
+		throw new PolicyError(`${table.name}: a ${table.scope.mode} table reveals nothing; its rows lie at no node a relation reaches`)
 	}
 	if (table.queue !== undefined) {
 		throw new PolicyError(`${table.name}: a queue table reveals nothing; the layer rewrites its rows on every claim`)
 	}
-	const own = table.scope.dimension
+	const own = table.scope.mode === 'dimension' ? table.scope.dimension : undefined
+	const key = table.scope.key
 	const declared = plainRecord(input, `${table.name}: reveals`)
 	const names = ownKeys(declared)
 	const reveals: RevealModel[] = []
@@ -1309,8 +1437,17 @@ function parseReveals(
 				`${what}: ${relation} is not a relation of the vocabulary (relations: ${ownKeys(vocabulary.relations).join(', ') || 'none'})`,
 			)
 		}
-		if (dimension !== own) {
-			throw new PolicyError(`${what}: ${relation} is of ${dimension}, not of ${own}; a table reveals for a relation of its own dimension`)
+		const paths: SecondaryPath[] = []
+		for (let position = 0; dimension !== own && position < readThrough.length; position++) {
+			const path = readThrough[position]
+			if (path !== undefined && (path.dimension === dimension || containsLink(path.chain, dimension))) paths[paths.length] = path
+		}
+		if (dimension !== own && paths.length !== 1) {
+			throw new PolicyError(
+				paths.length === 0
+					? `${what}: ${relation} is of ${dimension}, which is neither ${table.name}'s own dimension nor one it reads through, or above one; a table reveals for a relation that reaches its rows`
+					: `${what}: ${table.name} reads through more than one path to ${dimension}, so the reveal matches no one column`,
+			)
 		}
 		const policy = plainRecord(ownEntry(declared, relation), what)
 		onlyFields(policy, REVEALS_FIELDS, what)
@@ -1326,7 +1463,7 @@ function parseReveals(
 				above[above.length] = table.chain[position]?.dimension ?? ''
 			}
 			throw new PolicyError(
-				`${what}.to names ${String(to)}, which is not a dimension above ${own} in ${table.name}'s chain (${above.join(', ') || 'none'})`,
+				`${what}.to names ${String(to)}, which is not a dimension of ${table.name}'s chain (${above.join(', ') || 'none'})`,
 			)
 		}
 		const actions = parseList(ownEntry(policy, 'actions'), (action) => {
@@ -1348,9 +1485,62 @@ function parseReveals(
 		}
 		const whenInput = ownEntry(policy, 'when')
 		const when = whenInput === undefined ? undefined : parseCondition(whenInput, table, tables, `${what}.when`, hops)
-		reveals[reveals.length] = freeze({ relation, table: table.name, key: table.scope.key, dimension: to, column, actions: freeze(listed), when })
+		const path = paths[0]
+		if (path !== undefined && table.chain[0]?.dimension !== to) {
+			throw new PolicyError(
+				`${what}.to: ${to} lies above ${table.name}'s nearest container; a move of an ancestor rewrites ${column}, so a reveal through a secondary path reveals the nearest container only`,
+			)
+		}
+		const assign = parseRevealAssign(table, path, ownEntry(policy, 'assign'), what)
+		reveals[reveals.length] = freeze({ relation, table: table.name, key, path, assign, dimension: to, column, actions: freeze(listed), when })
 	}
 	return freeze(reveals)
+}
+
+/**
+ * A reveal matched through a secondary path delegates on insert, since the row's writer picks the node: a table with an
+ * insert action states the bound, as a relation source does. A reveal by the row's own key delegates nothing.
+ */
+function parseRevealAssign(table: LinkedTable, path: SecondaryPath | undefined, input: unknown, what: string): RevealModel['assign'] {
+	if (path === undefined || table.actions.insert.length === 0) {
+		if (input !== undefined) {
+			throw new PolicyError(
+				path === undefined
+					? `${what}.assign: the reveal matches the row's own key, so no writer picks its node`
+					: `${what}.assign: ${table.name} has no insert action, so no handler writes a row to delegate with`,
+			)
+		}
+		return undefined
+	}
+	if (input === undefined) {
+		throw new PolicyError(
+			`${what}: inserting a row of ${table.name} (${
+				table.actions.insert.join(', ')
+			}) picks the ${path.dimension} node the reveal holds at; state assign: { self? }`,
+		)
+	}
+	const assign = plainRecord(input, `${what}.assign`)
+	onlyFields(assign, REVEAL_ASSIGN_FIELDS, `${what}.assign`)
+	const self = ownEntry(assign, 'self')
+	if (self !== undefined && self !== true) {
+		throw new PolicyError(`${what}.assign.self takes true`)
+	}
+	return freeze({ self: self === true })
+}
+
+/** A row of the table hands access to someone its writer picks: it confers a relation, or reveals through a path. */
+export function delegates(model: TableModel): boolean {
+	for (let index = 0; index < model.reveals.length; index++) {
+		if (model.reveals[index]?.path !== undefined) return true
+	}
+	return model.confers.length > 0
+}
+
+function containsLink(chain: readonly Container[], dimension: string): boolean {
+	for (let index = 0; index < chain.length; index++) {
+		if (chain[index]?.dimension === dimension) return true
+	}
+	return false
 }
 
 /** The column of `table` that places a row at a node of `dimension`: its key for its own dimension, else a chain link. */

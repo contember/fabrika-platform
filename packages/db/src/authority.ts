@@ -9,7 +9,7 @@ import { conditionNode, subquery } from './condition-nodes'
 import { CapabilityError } from './errors'
 import { linksPredicate, linkValues } from './links'
 import { allOf, anyOf, column, equals } from './nodes'
-import { type Container, includes, nodeColumnOf, type RelationSource, type RevealModel, type TableModel } from './policy'
+import { type Container, includes, nodeColumnOf, type RelationSource, type RevealModel, type SecondaryPath, type TableModel } from './policy'
 
 /** A relation of the layer: its source table, and the tables whose rows it reaches reveal an ancestor node. */
 export interface LayerRelation extends RelationSource {
@@ -50,9 +50,28 @@ function isIn(table: string, name: string, nodes: OperationNode): OperationNode 
 	return BinaryOperationNode.create(column(table, name), OperatorNode.create('in'), nodes)
 }
 
+/**
+ * The rows of `table` whose `path` column names one of `nodes` of `dimension`: `T.<column> in (nodes)` at the path's own
+ * dimension, `T.<column> in (select D.<key> from D where D.<link> in (nodes))` at one above it; `undefined` elsewhere.
+ */
+export function throughPath(table: string, path: SecondaryPath, dimension: string, nodes: OperationNode): OperationNode | undefined {
+	if (path.dimension === dimension) {
+		return isIn(table, path.column, nodes)
+	}
+	for (let index = 0; index < path.chain.length; index++) {
+		const link = path.chain[index]
+		if (link !== undefined && link.dimension === dimension) {
+			return isIn(table, path.column, subquery(path.table, path.key, isIn(path.table, link.column, nodes)))
+		}
+	}
+	return undefined
+}
+
 /** `select R.<ancestor> from R where R.<key> in (<the relation's nodes>) and <when>`: the nodes a reveal holds `principal` at. */
 export function revealedNodes(source: RelationSource, reveal: RevealModel, principal: string, now: Date): OperationNode {
-	const reached = isIn(reveal.table, reveal.key, relationNodes(source, principal, now))
+	const nodes = relationNodes(source, principal, now)
+	const through = reveal.path === undefined ? undefined : throughPath(reveal.table, reveal.path, source.dimension, nodes)
+	const reached = through ?? isIn(reveal.table, reveal.key, nodes)
 	const where = reveal.when === undefined ? reached : AndNode.create(reached, ParensNode.create(conditionNode(reveal.table, reveal.when, now)))
 	return subquery(reveal.table, reveal.column, where)
 }
@@ -61,6 +80,8 @@ export function revealedNodes(source: RelationSource, reveal: RevealModel, princ
  * The rows of `model` a relation reaches for `principal` under `action`: `T.<node> in (select S.<node> from S where
  * S.<principal> = $me and <active>)` where `model` lies at a node of the relation's dimension, and one
  * `T.<ancestor> in (<revealed nodes>)` per reveal of `action` to an ancestor `model` lies at. Empty where neither holds.
+ * A `Within`'s read (`reads`) also follows the secondary paths: the column `model` reaches the relation's dimension
+ * through, and the reveals matched through one. Every other statement follows containment only.
  */
 export function relationTerms(
 	relations: RelationSources,
@@ -69,13 +90,20 @@ export function relationTerms(
 	principal: string,
 	action: string,
 	now: Date,
+	reads: boolean,
 ): readonly OperationNode[] {
 	const source = relationSource(relations, relation)
 	const at = nodeColumnOf(model, source.dimension)
 	const terms: OperationNode[] = at === undefined ? [] : [isIn(model.name, at, relationNodes(source, principal, now))]
+	for (let index = 0; reads && index < model.readThrough.length; index++) {
+		const path = model.readThrough[index]
+		const through = path === undefined ? undefined : throughPath(model.name, path, source.dimension, relationNodes(source, principal, now))
+		if (through !== undefined) terms[terms.length] = through
+	}
 	for (let index = 0; index < source.reveals.length; index++) {
 		const reveal = source.reveals[index]
-		const placed = reveal === undefined || !includes(reveal.actions, action) ? undefined : nodeColumnOf(model, reveal.dimension)
+		const held = reveal !== undefined && includes(reveal.actions, action) && (reads || reveal.path === undefined)
+		const placed = reveal === undefined || !held ? undefined : nodeColumnOf(model, reveal.dimension)
 		if (reveal !== undefined && placed !== undefined) {
 			terms[terms.length] = isIn(model.name, placed, revealedNodes(source, reveal, principal, now))
 		}
@@ -118,7 +146,7 @@ export function relationGate(relations: RelationSources, model: TableModel, gran
 	const terms: OperationNode[] = []
 	for (let index = 0; index < grant.relations.length; index++) {
 		const relation = grant.relations[index] ?? ''
-		const reached = relationTerms(relations, model, relation, grant.principal, grant.action, now)
+		const reached = relationTerms(relations, model, relation, grant.principal, grant.action, now, false)
 		if (reached.length === 0) {
 			throw new CapabilityError(
 				'unenforceable',

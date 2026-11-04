@@ -856,6 +856,11 @@ export interface TablePolicyArtifact {
 	 * A reader that ignores it reaches less, never more.
 	 */
 	readonly reveals?: Readonly<Record<string, RevealsArtifact>>
+	/**
+	 * Dimension outside the chain → the column a `Within`'s read reaches a row through. Absent unless declared, so the
+	 * digest stays. A reader that ignores it reaches less, never more.
+	 */
+	readonly readThrough?: Readonly<Record<string, string>>
 }
 
 /** A row the relation reaches reveals its node in `to` for `actions`, while `when` admits the row. */
@@ -863,6 +868,8 @@ export interface RevealsArtifact {
 	readonly to: string
 	readonly actions: readonly string[]
 	readonly when?: ConditionArtifact
+	/** On a reveal matched through `readThrough`: an insert delegates, and `self` lets it name a node its writer holds. */
+	readonly assign?: { readonly self: boolean }
 }
 
 /** A row names `principal` at the node in `node`, until `expires`, while `when` admits it; `assign` bounds its writer. */
