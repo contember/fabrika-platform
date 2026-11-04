@@ -27,6 +27,8 @@ export interface ContractDatabase {
 	 * own has none, so no Ref is ever held through a relation there.
 	 */
 	relates?(relation: string, node: string, principal: string): Promise<boolean>
+	/** Whether a row `relation` reaches for `principal` reveals `node` of `dimension` now; none in a layer of the application's own. */
+	reveals?(relation: string, dimension: string, node: string, principal: string): Promise<boolean>
 }
 
 /** `scoped(tables)` of `@fabrika/db`, which `boot` binds, or a `ContractDatabase` of the application's own. */

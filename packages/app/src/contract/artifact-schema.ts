@@ -366,6 +366,11 @@ const tablePolicy: z.ZodType<TablePolicyArtifact> = z.strictObject({
 		assign: z.strictObject({ maxDays: z.int().positive().nullable(), self: z.boolean() }).nullable(),
 	})).optional(),
 	when: z.record(action, condition).optional(),
+	reveals: record(z.strictObject({
+		to: name,
+		actions: z.array(action).nonempty(),
+		when: condition.optional(),
+	})).optional(),
 })
 
 export const contractArtifactSchema: z.ZodType<ContractArtifact> = z.strictObject({

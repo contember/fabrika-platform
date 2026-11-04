@@ -309,6 +309,12 @@ export interface ProcedureQuery {
 	readonly shape: SchemaShape
 }
 
+/** A relation's reveal: a row it reaches reveals its node in `dimension` for `actions`. */
+export interface RevealedNode {
+	readonly dimension: string
+	readonly actions: readonly string[]
+}
+
 export interface RuntimeParts {
 	readonly table: CompiledEndpointTable
 	readonly endpoints: ReadonlyMap<string, ServedEndpoint>
@@ -327,6 +333,8 @@ export interface RuntimeParts {
 	readonly containers: ReadonlyMap<string, readonly string[]>
 	/** Each relation of the contract with its dimension: a `~rel` entry holds its action at that dimension's nodes. */
 	readonly relations: ReadonlyMap<string, string>
+	/** Each relation's reveals: a `~rel` entry of one of their actions also holds it at the ancestor nodes they reveal. */
+	readonly reveals: ReadonlyMap<string, readonly RevealedNode[]>
 	readonly assets: SpaAssets | null
 	/** IAM's membership operations; `boot` refuses a contract that needs them when the adapter supplies none. */
 	readonly membership: IamMembership | null
@@ -954,7 +962,7 @@ export class ContractRuntime {
 			}
 			return this.#parts.mint.ref(frame, dimension, action, caller.subject, value, chain)
 		}
-		const related = chain === null ? [] : await this.#relatedOn(caller.subject, candidates, dimension, value, chain)
+		const related = chain === null ? [] : await this.#relatedOn(caller.subject, candidates, action, dimension, value, chain)
 		if (chain === null || related.length === 0) {
 			throw new ForbiddenError(`The caller does not hold '${action}' in this ${dimension}`)
 		}
@@ -971,7 +979,7 @@ export class ContractRuntime {
 			return this.#parts.mint.ref(frame, dimension, action, caller.subject, value, chain)
 		}
 		const candidates = this.#heldRelations(caller.perms, action, [dimension, ...chain.keys()])
-		const related = await this.#relatedOn(caller.subject, candidates, dimension, value, chain)
+		const related = await this.#relatedOn(caller.subject, candidates, action, dimension, value, chain)
 		if (related.length === 0) {
 			throw new NotFoundError('Not found')
 		}
@@ -980,7 +988,8 @@ export class ContractRuntime {
 
 	/**
 	 * The relations through which the caller holds `action` at a node of one of `dimensions` (a `~rel` entry, which IAM
-	 * gives a global grant of a role with `via`). An entry of a relation the contract does not declare counts for none.
+	 * gives a global grant of a role with `via`), at the relation's own dimension or at an ancestor a reveal of `action`
+	 * names. An entry of a relation the contract does not declare counts for none.
 	 */
 	#heldRelations(perms: PermissionEntry[], action: string, dimensions: readonly string[]): string[] {
 		const held: string[] = []
@@ -989,28 +998,50 @@ export class ContractRuntime {
 			if (scope === null || scope.type !== RELATION_SCOPE_TYPE || !matchAction(entry.action, action)) continue
 			const relation = scope.value
 			const at = this.#parts.relations.get(relation)
-			if (at !== undefined && dimensions.includes(at) && !held.includes(relation)) held.push(relation)
+			const revealed = this.#revealed(relation, action).some((dimension) => dimensions.includes(dimension))
+			if (at !== undefined && (dimensions.includes(at) || revealed) && !held.includes(relation)) held.push(relation)
 		}
 		return held
 	}
 
-	/** Of `candidates`, the relations a row of which names the caller at the object or at a container on its chain, now. */
+	/** The ancestor dimensions a reveal of `relation` holds `action` at. */
+	#revealed(relation: string, action: string): string[] {
+		return (this.#parts.reveals.get(relation) ?? []).filter((reveal) => reveal.actions.includes(action)).map((reveal) => reveal.dimension)
+	}
+
+	/**
+	 * Of `candidates`, the relations a row of which names the caller at the object or at a container on its chain, or
+	 * reaches a row that reveals one of them for `action`, now.
+	 */
 	async #relatedOn(
 		principal: string,
 		candidates: readonly string[],
+		action: string,
 		dimension: string,
 		value: string,
 		chain: ReadonlyMap<string, string>,
 	): Promise<string[]> {
 		const relates = this.#parts.database?.relates
+		const reveals = this.#parts.database?.reveals
 		if (relates === undefined) {
 			return []
 		}
+		const nodeOf = (at: string | undefined) => (at === dimension ? value : at === undefined ? undefined : chain.get(at))
 		const related: string[] = []
 		for (const relation of candidates) {
-			const at = this.#parts.relations.get(relation)
-			const node = at === dimension ? value : at === undefined ? undefined : chain.get(at)
-			if (node !== undefined && (await relates(relation, node, principal))) related.push(relation)
+			const node = nodeOf(this.#parts.relations.get(relation))
+			if (node !== undefined && (await relates(relation, node, principal))) {
+				related.push(relation)
+				continue
+			}
+			if (reveals === undefined) continue
+			for (const revealed of this.#revealed(relation, action)) {
+				const at = nodeOf(revealed)
+				if (at !== undefined && (await reveals(relation, revealed, at, principal))) {
+					related.push(relation)
+					break
+				}
+			}
 		}
 		return related
 	}

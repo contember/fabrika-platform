@@ -92,6 +92,19 @@ interface WritablePolicy<Col extends string, A extends string, V extends Col, Ac
 	readonly confers?: { readonly [relation: string]: ConfersPolicy<Col> }
 	/** Conditions that narrow an action of this table: a row the condition does not admit is out of that action's reach. */
 	readonly when?: { readonly [action in A]?: ConditionPolicy<Col> }
+	/** Relation of this table's own dimension → the ancestor node a row the relation reaches reveals, and for what. */
+	readonly reveals?: { readonly [relation: string]: RevealsPolicy<Col, A> }
+}
+
+/**
+ * A row of the table that a relation reaches reveals its node in `to`, an ancestor dimension of its chain: the relation
+ * then holds `actions` (those of them its roles list in `via`) there, while `when` admits the row.
+ */
+export interface RevealsPolicy<Col extends string, A extends string> {
+	readonly to: string
+	readonly actions: readonly A[]
+	/** A condition on the revealing row, under the same path rule as an action's `when`. */
+	readonly when?: ConditionPolicy<Col>
 }
 
 /**
@@ -260,6 +273,23 @@ export interface TableModel {
 	readonly confers: readonly RelationSource[]
 	/** The condition each action of the table holds a row under; an action without one is not narrowed. */
 	readonly when: Readonly<Record<string, ConditionModel>>
+	/** The ancestor nodes this table's rows reveal to a relation of its own dimension. */
+	readonly reveals: readonly RevealModel[]
+}
+
+/**
+ * A row of `table` that `relation` reaches reveals its node in `dimension`, held in `column`: the relation holds
+ * `actions` at that node while `when` admits the row.
+ */
+export interface RevealModel {
+	readonly relation: string
+	readonly table: string
+	/** The table's key, which the relation's term matches. */
+	readonly key: string
+	readonly dimension: string
+	readonly column: string
+	readonly actions: readonly string[]
+	readonly when: ConditionModel | undefined
 }
 
 /** One relation's source table: what a relation term reads, and what a write of its rows is bounded by. */
@@ -286,10 +316,11 @@ type ParsedScope =
 		readonly inherit: readonly string[] | undefined
 	}
 
-type ParsedTable = Omit<TableModel, 'chain' | 'scope' | 'confers' | 'when'> & {
+type ParsedTable = Omit<TableModel, 'chain' | 'scope' | 'confers' | 'when' | 'reveals'> & {
 	readonly scope: ParsedScope
 	readonly confersInput: unknown
 	readonly whenInput: unknown
+	readonly revealsInput: unknown
 }
 
 let readModels: <DB, P>(tables: Tables<DB, P>) => TableModels
@@ -415,7 +446,21 @@ function parseVocabulary(input: unknown): VocabularyModel {
 
 const COLUMN_LIST_FIELDS = nameSet(['columns', 'foreignKeys', 'dates', 'timestamps', 'booleans', 'json'])
 const FOREIGN_KEY_FIELDS = nameSet(['columns', 'table', 'references'])
-const POLICY_FIELDS = nameSet(['scope', 'actions', 'insert', 'update', 'version', 'createdBy', 'columns', 'queue', 'files', 'confers', 'when'])
+const POLICY_FIELDS = nameSet([
+	'scope',
+	'actions',
+	'insert',
+	'update',
+	'version',
+	'createdBy',
+	'columns',
+	'queue',
+	'files',
+	'confers',
+	'when',
+	'reveals',
+])
+const REVEALS_FIELDS = nameSet(['to', 'actions', 'when'])
 const CONFERS_FIELDS = nameSet(['principal', 'node', 'expires', 'when', 'assign'])
 const ASSIGN_FIELDS = nameSet(['maxDays', 'self'])
 /** A delegated row lasts at most ten years ahead: a bound, not a convenience. */
@@ -614,6 +659,7 @@ function parseTable(table: string, columnList: unknown, policyInput: unknown, vo
 		foreignKeys,
 		confersInput: ownEntry(policy, 'confers'),
 		whenInput: ownEntry(policy, 'when'),
+		revealsInput: ownEntry(policy, 'reveals'),
 	}
 }
 
@@ -1149,7 +1195,7 @@ function linkTables(parsed: readonly ParsedTable[], vocabulary: VocabularyModel)
 		const table = parsed[index]
 		if (table !== undefined) {
 			const { scope, chain } = resolve(table, [])
-			const { confersInput, whenInput, ...rest } = table
+			const { confersInput, whenInput, revealsInput, ...rest } = table
 			const linked = { ...rest, scope, chain }
 			const confers = parseConfers(linked, confersInput, vocabulary.relations, conditionTable)
 			for (let position = 0; position < confers.length; position++) {
@@ -1160,7 +1206,9 @@ function linkTables(parsed: readonly ParsedTable[], vocabulary: VocabularyModel)
 				}
 				setOwn(sources, relation, table.name)
 			}
-			setOwn(models, table.name, freeze({ ...linked, confers, when: parseWhen(linked, whenInput, conditionTable, hopRule) }))
+			const when = parseWhen(linked, whenInput, conditionTable, hopRule)
+			const reveals = parseReveals(linked, revealsInput, vocabulary, conditionTable, hopRule)
+			setOwn(models, table.name, freeze({ ...linked, confers, when, reveals }))
 		}
 	}
 	const relations = ownKeys(vocabulary.relations)
@@ -1173,7 +1221,7 @@ function linkTables(parsed: readonly ParsedTable[], vocabulary: VocabularyModel)
 	return freeze(models)
 }
 
-type LinkedTable = Omit<TableModel, 'confers' | 'when'>
+type LinkedTable = Omit<TableModel, 'confers' | 'when' | 'reveals'>
 
 /** Every action a table names: its operations', `appRead`, `appCount` and its columns' own. */
 function tableActionNames(table: LinkedTable): NameSet {
@@ -1225,6 +1273,84 @@ function parseWhen(
 		setOwn(when, action, parseCondition(ownEntry(declared, action), table, tables, `${table.name}: when.${action}`, inserts ? false : hops))
 	}
 	return freeze(when)
+}
+
+/**
+ * `reveals`: relation → the ancestor its rows reveal. The relation is of the table's own dimension, so its term
+ * matches the row's key; the ancestor is a link of the chain, whose column the layer stamps and a move rewrites, so the
+ * revealed node follows the row's containment now. A queue table reveals nothing: a claim rewrites its rows.
+ */
+function parseReveals(
+	table: LinkedTable,
+	input: unknown,
+	vocabulary: VocabularyModel,
+	tables: (name: string) => ConditionTable | undefined,
+	hops: HopRule,
+): readonly RevealModel[] {
+	if (input === undefined) {
+		return freeze([])
+	}
+	if (table.scope.mode !== 'dimension') {
+		throw new PolicyError(`${table.name}: a ${table.scope.mode} table reveals nothing; only a dimension table's row is a node a relation reaches`)
+	}
+	if (table.queue !== undefined) {
+		throw new PolicyError(`${table.name}: a queue table reveals nothing; the layer rewrites its rows on every claim`)
+	}
+	const own = table.scope.dimension
+	const declared = plainRecord(input, `${table.name}: reveals`)
+	const names = ownKeys(declared)
+	const reveals: RevealModel[] = []
+	for (let index = 0; index < names.length; index++) {
+		const relation = names[index] ?? ''
+		const what = `${table.name}: reveals.${relation}`
+		const dimension = ownEntry(vocabulary.relations, relation)
+		if (dimension === undefined) {
+			throw new PolicyError(
+				`${what}: ${relation} is not a relation of the vocabulary (relations: ${ownKeys(vocabulary.relations).join(', ') || 'none'})`,
+			)
+		}
+		if (dimension !== own) {
+			throw new PolicyError(`${what}: ${relation} is of ${dimension}, not of ${own}; a table reveals for a relation of its own dimension`)
+		}
+		const policy = plainRecord(ownEntry(declared, relation), what)
+		onlyFields(policy, REVEALS_FIELDS, what)
+		const to = ownEntry(policy, 'to')
+		let column: string | undefined
+		for (let position = 0; position < table.chain.length; position++) {
+			const link = table.chain[position]
+			if (link !== undefined && link.dimension === to) column = link.column
+		}
+		if (typeof to !== 'string' || column === undefined) {
+			const above: string[] = []
+			for (let position = 0; position < table.chain.length; position++) {
+				above[above.length] = table.chain[position]?.dimension ?? ''
+			}
+			throw new PolicyError(
+				`${what}.to names ${String(to)}, which is not a dimension above ${own} in ${table.name}'s chain (${above.join(', ') || 'none'})`,
+			)
+		}
+		const actions = parseList(ownEntry(policy, 'actions'), (action) => {
+			if (typeof action !== 'string' || !inSet(vocabulary.actions, action)) {
+				throw new PolicyError(`${what}.actions names ${String(action)}, which is not an action of the vocabulary`)
+			}
+			return action
+		})
+		if (actions === undefined) {
+			throw new PolicyError(`${what}.actions takes a plain array of the vocabulary's actions`)
+		}
+		const listed: string[] = []
+		for (let position = 0; position < actions.length; position++) {
+			const action = actions[position] ?? ''
+			if (!includes(listed, action)) listed[listed.length] = action
+		}
+		if (listed.length === 0) {
+			throw new PolicyError(`${what}.actions names no action; a reveal holds the actions it lists, and no other`)
+		}
+		const whenInput = ownEntry(policy, 'when')
+		const when = whenInput === undefined ? undefined : parseCondition(whenInput, table, tables, `${what}.when`, hops)
+		reveals[reveals.length] = freeze({ relation, table: table.name, key: table.scope.key, dimension: to, column, actions: freeze(listed), when })
+	}
+	return freeze(reveals)
 }
 
 /** The column of `table` that places a row at a node of `dimension`: its key for its own dimension, else a chain link. */
