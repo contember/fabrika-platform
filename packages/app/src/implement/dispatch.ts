@@ -335,6 +335,8 @@ export interface RuntimeParts {
 	readonly relations: ReadonlyMap<string, string>
 	/** Each relation's reveals: a `~rel` entry of one of their actions also holds it at the ancestor nodes they reveal. */
 	readonly reveals: ReadonlyMap<string, readonly RevealedNode[]>
+	/** Each dimension's member reveals: a grant of one of their actions at its node also reads under the ancestor they reveal. */
+	readonly memberReveals: ReadonlyMap<string, readonly RevealedNode[]>
 	readonly assets: SpaAssets | null
 	/** IAM's membership operations; `boot` refuses a contract that needs them when the adapter supplies none. */
 	readonly membership: IamMembership | null
@@ -942,10 +944,11 @@ export class ContractRuntime {
 		const held = this.#heldContainers(caller.perms, action, dimension)
 		const inside = this.#heldContained(caller.perms, action, dimension)
 		const related = this.#heldRelations(caller.perms, action, [dimension, ...(this.#parts.containers.get(dimension) ?? [])])
-		if (direct.length === 0 && held.length === 0 && inside.length === 0 && related.length === 0) {
+		const revealing = this.#heldRevealing(caller.perms, action, [dimension, ...(this.#parts.containers.get(dimension) ?? [])])
+		if (direct.length === 0 && held.length === 0 && inside.length === 0 && related.length === 0 && revealing.length === 0) {
 			throw new ForbiddenError(`The caller holds '${action}' in no ${dimension}`)
 		}
-		return this.#parts.mint.within(frame, dimension, action, caller.subject, direct, held, inside, related)
+		return this.#parts.mint.within(frame, dimension, action, caller.subject, direct, held, inside, related, revealing)
 	}
 
 	/** A scope value the caller acts in: without a grant on it or on a container of it, 403 whether it exists or not. */
@@ -1547,6 +1550,18 @@ export class ContractRuntime {
 		return (this.#parts.containers.get(dimension) ?? []).flatMap((container) => {
 			const values = scopedValues(perms, action, container) ?? []
 			return values.length === 0 ? [] : [{ dimension: container, values }]
+		})
+	}
+
+	/**
+	 * The caller's grants of `action` at nodes of a dimension whose rows reveal one of `dimensions` for it to their
+	 * members; a grant at a container of such a node is not one at the node.
+	 */
+	#heldRevealing(perms: PermissionEntry[], action: string, dimensions: readonly string[]): ContainerGrant[] {
+		return [...this.#parts.memberReveals].flatMap(([source, revealed]) => {
+			const reveals = revealed.some((reveal) => reveal.actions.includes(action) && dimensions.includes(reveal.dimension))
+			const values = reveals ? scopedValues(perms, action, source) ?? [] : []
+			return values.length === 0 ? [] : [{ dimension: source, values }]
 		})
 	}
 

@@ -861,6 +861,18 @@ export interface TablePolicyArtifact {
 	 * digest stays. A reader that ignores it reaches less, never more.
 	 */
 	readonly readThrough?: Readonly<Record<string, string>>
+	/**
+	 * The table's own dimension → the ancestor its rows reveal to a grant at their node, for a `Within`'s reads. Absent
+	 * unless declared, so the digest stays. A reader that ignores it reaches less, never more.
+	 */
+	readonly memberReveals?: Readonly<Record<string, MemberRevealsArtifact>>
+}
+
+/** A row reveals its node in `to` for `actions` to a grant of them at the row's own node, while `when` admits the row. */
+export interface MemberRevealsArtifact {
+	readonly to: string
+	readonly actions: readonly string[]
+	readonly when?: ConditionArtifact
 }
 
 /** A row the relation reaches reveals its node in `to` for `actions`, while `when` admits the row. */

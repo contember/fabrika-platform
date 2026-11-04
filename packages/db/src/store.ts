@@ -5,6 +5,8 @@ import {
 	activeRow,
 	conditioned,
 	type LayerRelation,
+	type MemberReveals,
+	memberTerms,
 	refScope,
 	relationGate,
 	relationSource,
@@ -107,6 +109,7 @@ import {
 	type InsertValues,
 	type JoinableChildren,
 	type ListDimensionOf,
+	type MemberRevealModel,
 	modelOf,
 	type MoveAcknowledgement,
 	namesAction,
@@ -159,6 +162,8 @@ export interface TableContext {
 	readonly connection: Connection
 	/** Every relation of the layer with its source table: what a relation term of any table reads. */
 	readonly relations: RelationSources
+	/** Every member reveal of the layer, by the dimension whose grants it reveals to: what a `Within`'s read adds. */
+	readonly members: MemberReveals
 	/** The tables a scope predicate's subqueries read, each with the column they select: what the guard admits. */
 	readonly subqueries: Readonly<Record<string, readonly string[]>>
 }
@@ -405,6 +410,9 @@ function withinCount(grant: WithinGrant): number {
 	for (let index = 0; index < grant.contained.length; index++) {
 		count += grant.contained[index]?.values.length ?? 0
 	}
+	for (let index = 0; index < grant.revealing.length; index++) {
+		count += grant.revealing[index]?.values.length ?? 0
+	}
 	return count
 }
 
@@ -452,7 +460,17 @@ function withinPredicate(context: TableContext, column: string, grant: WithinGra
 		throw new CapabilityError('within_size', `a Within carries at most ${MAX_WITHIN_VALUES} scope values; this one carries ${count}`)
 	}
 	addRelationTerms(context, grant, operation === 'read', predicates, now)
+	if (operation === 'read') addMemberTerms(context, grant, predicates, now)
 	return predicates.length === 0 ? undefined : conditioned(model, grant.action, anyOf(predicates), now)
+}
+
+/** A `Within`'s read also reaches the rows under a node its member reveals hold the action at; no write does. */
+function addMemberTerms(context: TableContext, grant: WithinGrant, predicates: OperationNode[], now: Date): void {
+	const terms = memberTerms(context.members, context.model, grant, now)
+	for (let index = 0; index < terms.length; index++) {
+		const term = terms[index]
+		if (term !== undefined) predicates[predicates.length] = term
+	}
 }
 
 /** The relation terms of a `Within`'s relations; a relation whose dimension this table lies at no node of reaches none of its rows. */
@@ -503,6 +521,7 @@ function secondaryPredicate(context: TableContext, paths: readonly SecondaryPath
 		}
 	}
 	addRelationTerms(context, grant, true, predicates, now)
+	addMemberTerms(context, grant, predicates, now)
 	return predicates.length === 0 ? undefined : conditioned(model, grant.action, anyOf(predicates), now)
 }
 
@@ -2359,7 +2378,7 @@ export interface ScopedDatabase<DB, P> extends DataLayer {
 export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
 	const models = tableModels(tables)
 	const connection: Connection = { runtime: undefined }
-	const { relations, subqueries } = layerReach(models)
+	const { relations, members, subqueries } = layerReach(models)
 
 	function contextFor(table: string, mode: 'dimension' | 'child' | 'app'): TableContext {
 		const model = typeof table === 'string' ? modelOf(models, table) : undefined
@@ -2398,6 +2417,7 @@ export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
 			children: freeze(childModels),
 			connection,
 			relations,
+			members,
 			subqueries,
 		})
 	}
@@ -2467,8 +2487,11 @@ export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
  * Every relation of the layer by name, and the tables a scope predicate's subqueries read (a relation's source by its
  * node column, a condition path's target by its key), which the guard admits and nothing else.
  */
-function layerReach(models: TableModels): { readonly relations: RelationSources; readonly subqueries: Readonly<Record<string, readonly string[]>> } {
+function layerReach(
+	models: TableModels,
+): { readonly relations: RelationSources; readonly members: MemberReveals; readonly subqueries: Readonly<Record<string, readonly string[]>> } {
 	const relations: Record<string, LayerRelation> = {}
+	const members: Record<string, MemberRevealModel[]> = {}
 	const selected: Record<string, string[]> = {}
 	const select = (table: string, column: string): void => {
 		const columns = ownEntry(selected, table) ?? []
@@ -2485,6 +2508,15 @@ function layerReach(models: TableModels): { readonly relations: RelationSources;
 			const listed = ownEntry(reveals, reveal.relation) ?? []
 			listed[listed.length] = reveal
 			setOwn(reveals, reveal.relation, listed)
+			select(reveal.table, reveal.column)
+			if (reveal.when !== undefined) addReach(reveal.when, select)
+		}
+		for (let position = 0; model !== undefined && position < model.memberReveals.length; position++) {
+			const reveal = model.memberReveals[position]
+			if (reveal === undefined) continue
+			const listed = ownEntry(members, reveal.source) ?? []
+			listed[listed.length] = reveal
+			setOwn(members, reveal.source, listed)
 			select(reveal.table, reveal.column)
 			if (reveal.when !== undefined) addReach(reveal.when, select)
 		}
@@ -2517,7 +2549,13 @@ function layerReach(models: TableModels): { readonly relations: RelationSources;
 		const table = tablesRead[index] ?? ''
 		setOwn(subqueries, table, freeze(ownEntry(selected, table) ?? []))
 	}
-	return { relations: freeze(relations), subqueries: freeze(subqueries) }
+	const revealing: Record<string, readonly MemberRevealModel[]> = {}
+	const sources = ownKeys(members)
+	for (let index = 0; index < sources.length; index++) {
+		const source = sources[index] ?? ''
+		setOwn(revealing, source, freeze(ownEntry(members, source) ?? []))
+	}
+	return { relations: freeze(relations), members: freeze(revealing), subqueries: freeze(subqueries) }
 }
 
 function addReach(condition: Parameters<typeof conditionReach>[0], select: (table: string, column: string) => void): void {
