@@ -46,8 +46,8 @@ import {
 	type Within,
 	type WithinGrant,
 } from './capability'
-import { subquery } from './condition-nodes'
-import { conditionReach, rowSatisfies } from './conditions'
+import { conditionNode, subquery } from './condition-nodes'
+import { type ConditionModel, conditionReach, type PathTest, pathTests, rowSatisfies } from './conditions'
 import { type Database, InvocationTransaction, type Session, sessionOf, type SqlDialect } from './database'
 import {
 	type ComparableColumn,
@@ -1353,20 +1353,21 @@ async function lockDestination(transaction: Session, context: TableContext, gran
 	}
 }
 
+/** An insert, in a transaction that first locks its destination and judges its writer's bounds and its condition. */
 export async function insertRow<O>(
 	context: TableContext,
 	run: Runner,
 	given: ReadonlyMap<string, Primitive | null>,
-	destination: RefGrant | undefined,
-	writer?: string,
+	prepared: Pick<PreparedInsert, 'destination' | 'writer' | 'judged'> | undefined,
 ): Promise<O> {
 	const values = boundValues(context, given)
 	return run.write(async (transaction) => {
-		if (destination !== undefined) {
-			await lockDestination(transaction, context, destination)
+		if (prepared?.destination !== undefined) {
+			await lockDestination(transaction, context, prepared.destination)
 		}
-		if (writer !== undefined) {
-			await checkRevealAssign(transaction, context, writer, given)
+		if (prepared !== undefined) {
+			await checkRevealAssign(transaction, context, prepared.writer, given)
+			await judgeInsert(transaction, context, prepared.judged, given)
 		}
 		const [row] = await transaction.run<O>(insertNode(context.model.name, values, answer(context)), guard(context, 'InsertQueryNode', undefined))
 		if (row === undefined) {
@@ -1801,6 +1802,13 @@ export interface PreparedInsert {
 	readonly writer: string
 	readonly destination: RefGrant | undefined
 	readonly conflict: OnConflict | undefined
+	/** The insert action's condition when it follows a path: judged in the insert's transaction, on the rows it names. */
+	readonly judged: JudgedInsert | undefined
+}
+
+export interface JudgedInsert {
+	readonly action: string
+	readonly condition: ConditionModel
 }
 
 /**
@@ -1816,13 +1824,13 @@ export function prepareDimensionInsert(context: TableContext, target: unknown, v
 		// The object does not exist yet; this only refuses a chain the table has no column for.
 		linkValues(context.model.name, [{ dimension: scope.dimension, column: scope.key }], grant)
 		stampInsert(context, grant, row, scope.key, grant.id)
-		checkInserted(context, grant, row)
-		return { row, writer: grant.principal, destination: undefined, conflict }
+		const judged = checkInserted(context, grant, row)
+		return { row, writer: grant.principal, destination: undefined, conflict, judged }
 	}
 	stampInsert(context, grant, row, scope.key, uuidv7())
 	stampChain(row, linkValues(context.model.name, context.model.chain, grant))
-	checkInserted(context, grant, row)
-	return { row, writer: grant.principal, destination: grant, conflict }
+	const judged = checkInserted(context, grant, row)
+	return { row, writer: grant.principal, destination: grant, conflict, judged }
 }
 
 /** An application table's insert, for an `app` capability of its insert action: a new key, no containment. */
@@ -1831,8 +1839,8 @@ export function prepareApplicationInsert(context: TableContext, capability: unkn
 	const row = readValues(values, context.model.insert, 'insert', context.model)
 	const conflict = onConflictOf(context, options, grant.action, row)
 	stampInsert(context, grant, row, keyOf(context.model), uuidv7())
-	checkInserted(context, grant, row)
-	return { row, writer: grant.principal, destination: undefined, conflict }
+	const judged = checkInserted(context, grant, row)
+	return { row, writer: grant.principal, destination: undefined, conflict, judged }
 }
 
 /** A child table's insert under the parent its `Ref` names, whose chain is checked against the database. */
@@ -1843,8 +1851,8 @@ export function prepareChildInsert(context: TableContext, parent: unknown, value
 	const conflict = onConflictOf(context, options, grant.action, row)
 	stampInsert(context, grant, row, scope.key, uuidv7())
 	stampChain(row, linkValues(context.model.name, context.model.chain, grant))
-	checkInserted(context, grant, row)
-	return { row, writer: grant.principal, destination: grant, conflict }
+	const judged = checkInserted(context, grant, row)
+	return { row, writer: grant.principal, destination: grant, conflict, judged }
 }
 
 const DAY_MS = 86_400_000
@@ -1852,17 +1860,19 @@ const DAY_MS = 86_400_000
 /**
  * An inserted row as its insert action's condition judges it, on its final values, and, for a relation source, within
  * its delegation bound: a row naming the inserting principal only with `assign.self`, an expiry at most `maxDays`
- * ahead. Its node is the inserting Ref's, stamped above, so a row confers only where its writer acts.
+ * ahead. Its node is the inserting Ref's, stamped above, so a row confers only where its writer acts. A condition
+ * that follows a path is answered for the transaction to judge.
  */
 function checkInserted(
 	context: TableContext,
 	grant: { readonly action: string; readonly principal: string },
 	row: ReadonlyMap<string, Primitive | null>,
-): void {
+): JudgedInsert | undefined {
 	const model = context.model
 	const now = new Date()
 	const condition = ownEntry(model.when, grant.action)
-	if (condition !== undefined && !rowSatisfies(condition, row, now)) {
+	const judged = condition === undefined || pathTests(condition).length === 0 ? undefined : { action: grant.action, condition }
+	if (condition !== undefined && judged === undefined && !rowSatisfies(condition, row, now)) {
 		throw new ConflictError(`the row is outside what ${grant.action} inserts into ${model.name}`)
 	}
 	for (let index = 0; index < model.confers.length; index++) {
@@ -1888,6 +1898,46 @@ function checkInserted(
 			}
 		}
 	}
+	return judged
+}
+
+/**
+ * An insert's condition that follows a path, judged in its transaction: each path test on the row its first foreign
+ * key names, read `FOR SHARE` so no concurrent write changes it before the commit. A test is true when that row meets
+ * the rest of the path, unknown when the key is null, and false otherwise, as a read of the row would judge it.
+ */
+async function judgeInsert(
+	transaction: Session,
+	context: TableContext,
+	judged: JudgedInsert | undefined,
+	row: ReadonlyMap<string, Primitive | null>,
+): Promise<void> {
+	if (judged === undefined) {
+		return
+	}
+	const now = new Date()
+	const paths = new Map<PathTest, boolean | undefined>()
+	const tests = pathTests(judged.condition)
+	for (let index = 0; index < tests.length; index++) {
+		const test = tests[index]
+		const hop = test?.hops[0]
+		const value = hop === undefined ? undefined : row.get(hop.column)
+		if (test === undefined || hop === undefined || value === undefined || value === null) continue
+		const rest = conditionNode(hop.table, freeze({ ...test, hops: test.hops.slice(1) }), now)
+		const scope = AndNode.create(equals(hop.table, hop.key, value), ParensNode.create(rest))
+		const found = await transaction.run(lockNode(hop.table, hop.key, scope), {
+			root: 'SelectQueryNode',
+			table: hop.table,
+			joins: {},
+			scope,
+			lock: 'share',
+			subqueries: context.subqueries,
+		})
+		paths.set(test, found.length > 0)
+	}
+	if (!rowSatisfies(judged.condition, row, now, paths)) {
+		throw new ConflictError(`the row is outside what ${judged.action} inserts into ${context.model.name}`)
+	}
 }
 
 /** Writes each chain column the destination `Ref` settles into an insert's row. */
@@ -1904,13 +1954,14 @@ function stampChain(row: Map<string, Primitive | null>, values: readonly LinkVal
 export function insertPrepared(context: TableContext, run: Runner, prepared: PreparedInsert): Promise<Readonly<Record<string, unknown>>> {
 	const conflict = prepared.conflict
 	if (conflict === undefined) {
-		return insertRow(context, run, prepared.row, prepared.destination, prepared.writer)
+		return insertRow(context, run, prepared.row, prepared)
 	}
 	return run.write(async (transaction) => {
 		if (prepared.destination !== undefined) {
 			await lockDestination(transaction, context, prepared.destination)
 		}
 		await checkRevealAssign(transaction, context, prepared.writer, prepared.row)
+		await judgeInsert(transaction, context, prepared.judged, prepared.row)
 		return insertOnConflict(context, run, transaction, prepared.row, conflict)
 	})
 }
@@ -1965,19 +2016,19 @@ async function checkRevealAssign(
 /** `DimensionTable.insert` over a capability nobody type-checked; the table probe of `@fabrika/db/testing` calls it too. */
 export function insertIntoDimension<O>(context: TableContext, run: Runner, target: unknown, values: unknown): Promise<O> {
 	const prepared = prepareDimensionInsert(context, target, values)
-	return insertRow(context, run, prepared.row, prepared.destination, prepared.writer)
+	return insertRow(context, run, prepared.row, prepared)
 }
 
 /** An application table's insert, for an `app` capability of its insert action. */
 export function insertIntoApplication<O>(context: TableContext, run: Runner, capability: unknown, values: unknown): Promise<O> {
 	const prepared = prepareApplicationInsert(context, capability, values)
-	return insertRow(context, run, prepared.row, prepared.destination, prepared.writer)
+	return insertRow(context, run, prepared.row, prepared)
 }
 
 /** `ChildTable.insert` over a capability nobody type-checked. */
 export function insertIntoChild<O>(context: TableContext, run: Runner, parent: unknown, values: unknown): Promise<O> {
 	const prepared = prepareChildInsert(context, parent, values)
-	return insertRow(context, run, prepared.row, prepared.destination, prepared.writer)
+	return insertRow(context, run, prepared.row, prepared)
 }
 
 type ReadAction<P, T> = ActionOf<P, T, 'read'>
