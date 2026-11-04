@@ -76,10 +76,11 @@ const OPERATORS: readonly ConditionOperator[] = freeze(['eq', 'notEq', 'in', 'no
 const CONNECTIVES = freeze(['anyOf', 'allOf', 'not'])
 
 /**
- * Whether a path may follow `from.column` to `to`. A hop reads its target unscoped, so the rule admits only one that
- * stays where the row is (its own container or parent) or reaches what every site reads (a reference table).
+ * Whether a path may follow `from.column` to the row of `to` whose `key` it holds. A hop reads its target unscoped, so
+ * the rule admits only one that stays where the row is (its own container or parent), stays in its tenant (a foreign
+ * key that also holds every ancestor the two tables share), or reaches what every site reads (a reference table).
  */
-export type HopRule = (from: string, column: string, to: string) => boolean
+export type HopRule = (from: string, column: string, to: string, key: string) => boolean
 
 /**
  * Parses `input` as a condition over `table`. `hops` is the rule a path's foreign keys are held to, or `false` when a
@@ -160,9 +161,9 @@ function parseTest(
 		if (target === undefined) {
 			throw new PolicyError(`${what}: ${current.name}.${name} references ${hop.table}, which has no policy`)
 		}
-		if (hops === false || !hops(current.name, name, hop.table)) {
+		if (hops === false || !hops(current.name, name, hop.table, hop.key)) {
 			throw new PolicyError(
-				`${what}: ${current.name}.${name} leads to ${hop.table}, outside the row's own containment; a path follows a row's container or parent column, or reaches a reference table`,
+				`${what}: ${current.name}.${name} leads to ${hop.table}, outside the row's own containment; a path follows a row's container or parent column, a foreign key that also holds every ancestor the two tables share, or reaches a reference table`,
 			)
 		}
 		followed[followed.length] = hop
