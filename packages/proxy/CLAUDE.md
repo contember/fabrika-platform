@@ -184,7 +184,7 @@ application's database.
 | client → edge              | may send it; means nothing                    | may send it; means nothing     | may send it; means nothing |
 | Cloudflare edge            | passed through untouched                      | client value + the real client | **written by the edge**    |
 | Cloudflare proxy Worker    | **deleted, then set** from `CF-Connecting-IP` | deleted                        | deleted                    |
-| Zerops balancer            | passed through untouched                      | unconfirmed — see below        | passed through untouched   |
+| Zerops balancer            | passed through untouched                      | client value + a gateway hop   | passed through untouched   |
 | Caddy (`appRoute`, step 1) | **deleted, then set** from `{client_ip}`      | deleted                        | deleted                    |
 | app / IAM upstream         | trust it beside the proxy secret              | the previous hop's socket peer | absent                     |
 
@@ -193,9 +193,9 @@ application's database.
   no range configured every client behind the balancer shares one bucket — which is exactly what
   happened before this existed, and the only safe fallback. `CaddyBuildOptions.trustedProxies` /
   `--trusted-proxies` / `FABRIKA_PROXY_TRUSTED_PROXIES` set it; it is **empty by default and staying
-  that way until a live Zerops account settles whether the project balancer appends an address a
-  downstream may trust.** Configuring the wrong range makes the limiter caller-chosen, which is worse
-  than none.
+  that way on a shared IPv4**: measured in production, the balancer appends one gateway address for
+  every IPv4 client and keeps a caller-supplied prefix (`docs/reference/zerops-platform.md`, "Public
+  access"). Configuring the wrong range makes the limiter caller-chosen, which is worse than none.
 - **Setting `trusted_proxies` also makes `X-Forwarded-Host`/`-Proto` client-supplied**, because Caddy
   retains a prior value when the immediate peer is trusted (`addForwardedHeaders`, v2.10.2). The proxy
   already defends both — `selectApp` cross-checks a pinned `?app=` against the app's declared hosts,

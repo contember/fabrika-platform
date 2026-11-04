@@ -67,19 +67,31 @@ project's **L7 HTTP balancer handles domain routing and SSL termination**.
 [import reference](https://docs.zerops.io/references/import) for
 `enableSubdomainAccess`, default `false`)
 
-Whether **multiple custom domains** may point at a single service is not stated on
-the access page. Fabrika does not automate custom-domain binding: the operator
-binds each application domain to its namespace's `proxy` service in Zerops.
+Fabrika does not automate custom-domain binding: the operator binds each application domain to its namespace's
+`proxy` service in Zerops. Observed on a production installation (2026-11-04, read-only): an application domain bound
+to its namespace proxy serves with an `A` record to the shared IPv4 and an `AAAA` record to the project's IPv6, and its
+certificate issued over HTTP-01 (the challenge answered on both addresses). The same proxy keeps its `*.zerops.app`
+subdomain routes, one per port. The access page does not state whether **several custom domains** may point at one
+service; in the same account a non-fabrika service holds two (an apex and its `www`) under one certificate, and routing
+is per service, but no fabrika proxy carries a second one yet. No platform host (IAM, Control, Operations) of that
+installation has a custom domain.
 
-Because the balancer terminates TLS and routes domains, a service behind it sees
-the **balancer** as its socket peer, not the client. Whether the balancer
-forwards a client address, whether it drops a caller-supplied `X-Forwarded-For`
-prefix, and what source range it dials from are **all unconfirmed** — the public
-docs say nothing, and no live run has measured it. Fabrika therefore configures
-no Caddy `trusted_proxies` range, so `{http.vars.client_ip}` is the balancer
-and every client shares one abuse bucket. Settling it is a live-account question
-([backlog 05](../backlog/05-bring-up-on-a-real-zerops-account.md)); until then do
-not promote a forwarded address to a limiter key.
+Because the balancer terminates TLS and routes domains, a service behind it sees the **balancer** as its socket peer,
+not the client. Measured passively on a production installation (2026-10-30 to 2026-11-04, the proxies' Caddy access
+logs, about 3 300 requests; no echo service was run):
+
+| Question                                         | Answer                                                                                                                                                                                                      |
+| ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| (a) Does the balancer append the client address? | **Only for an IPv6 client.** Behind the shared IPv4, the appended `X-Forwarded-For` value and `X-Real-Ip` are one IPv6 address of Zerops' shared-IPv4 gateway for every IPv4 client, never the client's own |
+| (b) Does it drop a caller-supplied prefix?       | **No, it keeps it**: a request sent with `X-Forwarded-For: 127.0.0.1` arrives as `127.0.0.1, <gateway>`                                                                                                     |
+| (c) What is the socket peer?                     | One private address per project, the same for every request                                                                                                                                                 |
+| The route's `accessPolicy`                       | `realIpHeader: X-Forwarded-For`, `setRealIpFrom: null`, disabled (the default)                                                                                                                              |
+
+So no `trusted_proxies` range is safe on a shared IPv4: even the rightmost hop is one gateway address for every IPv4
+visitor, and anything left of it is the caller's. Fabrika configures none, `{http.vars.client_ip}` is the balancer, and
+every client shares one abuse bucket. Do not promote a forwarded address to a limiter key. Whether a dedicated IPv4
+forwards the client's address is not measured
+([backlog 05](../backlog/05-bring-up-on-a-real-zerops-account.md)).
 
 ## corePackage
 
@@ -177,6 +189,12 @@ Paged lists (`/client/{id}/project`, `/project/{id}/service-stack`, `/service-st
 2026-08-21 they answered `{ list, totalCount }`; on 2026-10-12 every one of them answered `total`
 and no `totalCount`, which stopped `platform install` at its first service listing. The client
 pages by `total`.
+
+`GET /service-stack/{id}/app-version` lists the newest version first, ordered by `sequence` descending. Read on the 7
+runtime services of a production installation (2026-11-04, 77 retained versions), `sequence` strictly increased with
+`created` in every service, with gaps (deleted or failed versions). That is an observation, not a documented
+guarantee; the client picks the highest `sequence` rather than trust the order, and nothing depends on it being
+dense.
 
 `app-version.status` is a closed enum: `UPLOADING`, `WAITING_TO_BUILD`, `BUILDING`,
 `BUILD_FAILED`, `BUILD_VALIDATION_FAILED`, `WAITING_TO_DEPLOY`, `DEPLOYING`,
@@ -1424,7 +1442,7 @@ A contract that declares a file kind (or, from a 0.4, 0.5 or 0.6 application, a 
 `fabrika job run fabrika-file-sweep` at minute 41 of every hour, on one container (`allContainers: false`): the
 framework's sweep deletes the files no declared column references. The job's lease keeps two runs from overlapping.
 
-#### UNVERIFIED: ClamAV in a scanning application's runtime container
+#### PARTLY VERIFIED: ClamAV in a scanning application's runtime container
 
 A contract with a `scan: true` file kind (or file collection) gets `sudo apk add --no-cache clamav` and a first `sudo freshclam` in
 `run.prepareCommands`, the same `freshclam` in `run.initCommands` (a failure there only logs: a container starts from
@@ -1435,8 +1453,10 @@ with stale ones. Measured locally with `clamav/clamav:1.4` (2026-10-12): one `cl
 and peaked at 0.99 GB resident, almost all of it the signatures. A scanning application's deploy service must
 therefore declare `verticalAutoscaling: { minRam: 2 }` (`ZEROPS_SCAN_MIN_RAM_GB`); the build and the deploy refuse it
 otherwise. Zerops ignores a changed `verticalAutoscaling` of an existing service on a re-import, so the deploy raises
-an existing service (below). Not yet measured on a real account: that Alpine's `clamav` installs through
-`prepareCommands`, that `freshclam` reaches its mirror from the build and the runtime, and the peak memory there.
+an existing service (below). Observed on a production installation (2026-10-15 to 2026-10-27): `clamav` installs
+through `prepareCommands`, and on 25 container starts the init command's `freshclam` refreshed the signatures without
+printing its fallback line, so it reaches its mirror from the runtime; the service runs at the 2 GB minimum. Not yet
+measured: `freshclam` from the build, a scan job's run on a clean and an EICAR upload, and the peak memory there.
 
 #### Verified live (2026-10-15, account `prg1`, a disposable project) — a deploy raises the deploy service's minimum RAM
 
@@ -1581,16 +1601,17 @@ application on an `ha` service fails its first `fabrika db migrate` when the mig
 A `SECURITY DEFINER` function the platform installed in the database and left callable by `PUBLIC` would stop every
 deploy (ADR-0017); none is known, but none was looked for.
 
-#### UNVERIFIED: a build lifts a SENSITIVE service variable through `${RUNTIME_…}`
+#### Verified in production (2026-10-19 to 2026-10-27): a build lifts a SENSITIVE service variable through `${RUNTIME_…}`
 
 A contract build uploads its SPA source maps to Operations as its last command
 (`fabrika-source-maps` of the same pinned `@fabrika/check`). Its bearer is the run-scoped credential Control mints; the
 deploy writes it as the sensitive service variable `FABRIKA_SOURCE_MAP_UPLOAD_KEY` before the build request, and the
 generated `build.envVariables` lift it as `${RUNTIME_FABRIKA_SOURCE_MAP_UPLOAD_KEY}`, beside the literal
 `FABRIKA_SOURCE_MAP_UPLOAD` (destination and asset roots, no secret). The lift is verified for a plain env-API
-variable (2026-08-03 above); for a sensitive one it is not yet measured. If Zerops hands the build an empty or
-`REDACTED` value, the upload refuses, the build log reports `state=incomplete`, and the deploy still succeeds with its
-release artifacts incomplete. The variable stays readable to the runtime until the next deploy replaces or removes it.
+variable (2026-08-03 above), and for this sensitive one in production: all 11 retained builds of a production
+application (`@fabrika/check` 0.5.5 to 0.9.0-dev.5) logged `fabrika-source-maps: <n> uploaded, state=complete`. An
+empty or `REDACTED` value would have made the upload refuse and the build log report `state=incomplete`; the deploy
+would still have succeeded with its release artifacts incomplete. No `platform-facts` row pins it yet. The variable stays readable to the runtime until the next deploy replaces or removes it.
 
 #### UNVERIFIED: a managed service's backup schedule, set through the API
 

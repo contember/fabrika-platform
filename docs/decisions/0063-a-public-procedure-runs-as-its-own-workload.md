@@ -139,8 +139,9 @@ The application then takes a public request in this order, each refusal with its
 ### 5. The request context and helpers
 
 - `ctx.client` is `{ ip, userAgent }` on every request context. `ip` is the address the proxy sets, where the runtime
-  vouches for it (Cloudflare, the test kit), and `null` on Bun and Zerops until the balancer's range is trusted
-  ([backlog 05](../backlog/05-bring-up-on-a-real-zerops-account.md)). `userAgent` is cut to a bounded length. Both are
+  vouches for it (Cloudflare, the test kit), and `null` on Bun and Zerops: behind the shared IPv4 the balancer
+  forwards no client address ([platform facts](../reference/zerops-platform.md#public-access)); a dedicated IPv4 is
+  [backlog 05](../backlog/05-bring-up-on-a-real-zerops-account.md). `userAgent` is cut to a bounded length. Both are
   information, never a check.
 - `honeypot(value)` from `@fabrika/app` is a handler helper: `if (honeypot(input.website)) return {}` answers what a
   real submission answers and does nothing.

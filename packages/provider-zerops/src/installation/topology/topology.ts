@@ -364,7 +364,7 @@ const lightPlatformTopology = (options: TopologyOptions, publicAccess: PublicAcc
 			priority: 30,
 			public: publicAccess === 'zerops-subdomain',
 			// Still the only publicly routed service (ADR-0022). One container is a real availability
-			// trade and the reason this tier is not for production; it is not a relaxation of the rule
+			// trade (the operator guide prices it against `standard`); it is not a relaxation of the rule
 			// about WHICH service faces the internet.
 			minContainers: 1,
 			maxContainers: 2,
