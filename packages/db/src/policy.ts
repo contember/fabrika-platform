@@ -14,7 +14,7 @@ import {
 	plainRecord,
 	setOwn,
 } from './builtins'
-import { type ConditionModel, type ConditionPolicy, type ConditionTable, parseCondition } from './conditions'
+import { type ConditionModel, type ConditionPolicy, type ConditionTable, type HopRule, parseCondition } from './conditions'
 import { PolicyError } from './errors'
 import { isPlainIdentifier } from './identifier'
 import type { Unavailable } from './orm-types'
@@ -1175,6 +1175,17 @@ function linkTables(parsed: readonly ParsedTable[], vocabulary: VocabularyModel)
 	}
 
 	const conditionTable = (name: string): ConditionTable | undefined => ownEntry(byName, name)
+	const hopRule: HopRule = (from, column, to) => {
+		if (ownEntry(byName, to)?.scope.mode === 'reference') {
+			return true
+		}
+		const source = ownEntry(byName, from)
+		const scope = source === undefined ? undefined : resolve(source, []).scope
+		if (scope?.mode === 'dimension') {
+			return scope.container?.column === column
+		}
+		return scope?.mode === 'child' && scope.column === column && scope.parent === to
+	}
 	const sources: Record<string, string> = {}
 	const models: Record<string, TableModel> = {}
 	for (let index = 0; index < parsed.length; index++) {
@@ -1192,7 +1203,7 @@ function linkTables(parsed: readonly ParsedTable[], vocabulary: VocabularyModel)
 				}
 				setOwn(sources, relation, table.name)
 			}
-			setOwn(models, table.name, freeze({ ...linked, confers, when: parseWhen(linked, whenInput, conditionTable) }))
+			setOwn(models, table.name, freeze({ ...linked, confers, when: parseWhen(linked, whenInput, conditionTable, hopRule) }))
 		}
 	}
 	const relations = ownKeys(vocabulary.relations)
@@ -1236,6 +1247,7 @@ function parseWhen(
 	table: LinkedTable,
 	input: unknown,
 	tables: (name: string) => ConditionTable | undefined,
+	hops: HopRule,
 ): Readonly<Record<string, ConditionModel>> {
 	if (input === undefined) {
 		return freeze({})
@@ -1253,7 +1265,7 @@ function parseWhen(
 			throw new PolicyError(`${table.name}: when.${action} names an action the table does not name (${namesOf(named).join(', ')})`)
 		}
 		const inserts = includes(table.actions.insert, action)
-		setOwn(when, action, parseCondition(ownEntry(declared, action), table, tables, `${table.name}: when.${action}`, !inserts))
+		setOwn(when, action, parseCondition(ownEntry(declared, action), table, tables, `${table.name}: when.${action}`, inserts ? false : hops))
 	}
 	return freeze(when)
 }

@@ -35,6 +35,7 @@ create table project_members (
 );
 create table bookmarks (
 	id text not null primary key,
+	project_id text references projects (id),
 	slug text not null unique,
 	archived boolean not null default 0,
 	version integer not null
@@ -53,7 +54,7 @@ interface DB {
 		due: ColumnType<Date | null, Date | string | null, Date | string | null>
 		attempts: ColumnType<number, number | undefined, number>
 	}
-	bookmarks: { id: string; slug: string; archived: ColumnType<boolean, boolean | undefined, boolean>; version: number }
+	bookmarks: { id: string; project_id: string | null; slug: string; archived: ColumnType<boolean, boolean | undefined, boolean>; version: number }
 }
 
 const columns: TypedColumnList<DB> = {
@@ -67,7 +68,11 @@ const columns: TypedColumnList<DB> = {
 		foreignKeys: [{ columns: ['project_id'], table: 'projects', references: ['id'] }],
 		timestamps: ['expires_at', 'due'],
 	},
-	bookmarks: { columns: ['id', 'slug', 'archived', 'version'], foreignKeys: [], booleans: ['archived'] },
+	bookmarks: {
+		columns: ['id', 'project_id', 'slug', 'archived', 'version'],
+		foreignKeys: [{ columns: ['project_id'], table: 'projects', references: ['id'] }],
+		booleans: ['archived'],
+	},
 }
 
 const vocabulary = {
@@ -325,6 +330,31 @@ describe("an application table's rows are narrowed by the action's when on every
 	})
 })
 
+describe("a condition's path through the parent column", () => {
+	test("narrows a child's rows by its parent's column, through the guard", async () => {
+		const hopping = defineTables(vocabulary, columns)({
+			projects: { scope: { dimension: 'project' }, actions: { read: 'projects.read' }, version: 'version' },
+			project_members: {
+				scope: { child: 'projects' },
+				actions: { read: 'projects.read' },
+				when: { 'projects.read': { 'project_id.archived': { eq: false } } },
+				confers: { member: { principal: 'principal_id' } },
+			},
+			bookmarks: { scope: { app: 'saved links' }, actions: { read: 'projects.read' } },
+		})
+		const layer = scoped(hopping)
+		bindScopedDatabaseProvisionally(layer, { database: openSqlite(storage), capabilities: alice })
+		const access = dataAccessOf(layer)
+		member('m1', 'p1', 'user:bob', 'editor', null)
+		member('m4', 'p4', 'user:bob', 'editor', null)
+		const transaction = access.invocation(true)
+		const site: DataSite = { kind: 'query', unscoped: {}, principal: 'user:alice', check() {}, session: () => transaction.session() }
+		const page = await call(access.handles(site).within(alice.within('project', 'projects.read', 'all')), 'project_members.list')
+		await transaction.commit()
+		expect(ids(page)).toEqual(['m1'])
+	})
+})
+
 describe('inserting a source row is delegation', () => {
 	const assigning = (id = 'p1') => alice.ref('project', 'members.assign', id)
 	const assign = (values: Record<string, unknown>) =>
@@ -355,12 +385,19 @@ describe('inserting a source row is delegation', () => {
 })
 
 describe('the policy bounds what a source table may do', () => {
-	const policy = (members: Record<string, unknown>) => () =>
+	const policy = (members: Record<string, unknown>, bookmarks: Record<string, unknown> = {}) => () =>
 		defineTables(vocabulary, columns)({
 			projects: { scope: { dimension: 'project' }, actions: { read: 'projects.read' }, version: 'version' },
 			project_members: { scope: { child: 'projects' }, actions: { read: 'projects.read', insert: 'members.assign' }, ...members },
-			bookmarks: { scope: { app: 'saved links' }, actions: { read: 'projects.read' } },
+			bookmarks: { scope: { app: 'saved links' }, actions: { read: 'projects.read' }, ...bookmarks },
 		})
+
+	test("a condition's path follows a row's parent column, and no foreign key out of its containment", () => {
+		const source = { confers: { member: { principal: 'principal_id', assign: {} } } }
+		expect(policy({ ...source, when: { 'projects.read': { 'project_id.archived': { eq: false } } } })).not.toThrow()
+		// A hop reads its target unscoped: an application row pointing into a project would read that project's columns.
+		expect(policy(source, { when: { 'projects.read': { 'project_id.archived': { eq: false } } } })).toThrow("outside the row's own containment")
+	})
 
 	test('an update of a column that decides what a row confers is refused', () => {
 		expect(policy({
