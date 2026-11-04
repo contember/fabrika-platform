@@ -3,7 +3,8 @@
 A person who tests an application on a stage or dev host comments on the page itself. Each comment is tied to their
 identity, the page and the commit the environment served. The authoring agent reads and answers the comments over MCP.
 
-**Size:** M (Cloudflare and Control), plus S–M for the Caddy half on Zerops.
+**Size:** M (Control and the widget), plus S–M per provider's injection. Zerops is built first if its check passes
+("Decisions").
 **Depends on:** nothing hard. [Agent task keys](./agent-task-keys.md) makes an agent's reply carry "agent for person".
 **Enables:** a fix loop driven by stakeholders' comments rather than chat screenshots;
 [operations tools in the authoring MCP](./operations-tools-in-the-authoring-mcp.md) gives the same agent the runtime
@@ -90,14 +91,17 @@ known (Control), and the proxy fronts every stage and dev host. Nothing connects
 ### Assumed, not confirmed
 
 - That `caddyserver/replace-response` (a separate module, not in the stock build) streams a `text/html` body and can
-  be limited to one host's navigations. Its behaviour against a compressed upstream answer is unchecked; the Caddy
-  slice measures it in a running Caddy first.
-- That a popup opened from an application host keeps `window.opener` across the console's IAM bounce. It does not
-  when the application answer carries `Cross-Origin-Opener-Policy: same-origin`, which the proxy sets
-  (`headers.ts:136`): a cross-origin popup loses its opener. The fallback is a redirect from the console back to a
-  fixed fragment URL on the application host (`#fabrika-review-ticket=…`); the widget in that window reads the ticket
-  and passes it to its same-origin opener. A fragment never reaches a server. Check both paths in a browser before
-  choosing one.
+  be limited to one host's navigations. Its behaviour against a compressed upstream answer is unchecked. This is the
+  first thing checked, in a running Caddy built as the Zerops proxy is, before any slice; it decides the order of the
+  injection slices ("Decisions").
+- **The ticket hand-over cannot use `window.opener`.** The proxy sets `Cross-Origin-Opener-Policy: same-origin` on
+  every application answer (`packages/proxy-core/src/headers.ts:136`). A popup that navigates to the console origin
+  is moved to another browsing context group, and its opener stays null even after it returns to the application
+  origin. So the console redirects the popup to a fixed fragment URL on the application host
+  (`#fabrika-review-ticket=…`); the widget in that window reads the ticket from the fragment and posts it on a
+  `BroadcastChannel` named by a nonce the opening widget chose, then closes. `BroadcastChannel` reaches same-origin
+  pages of one storage partition without the opener, and keeps the ticket out of storage. A fragment never reaches a
+  server. The browser check confirms the hand-over in Chromium and Firefox under the proxy's COOP before slice 2.
 
 ## API and contract changes
 
@@ -163,7 +167,8 @@ task carries `act`.
 - `get_feedback { threadId }` — one thread, the screenshot as an image content block.
 - `reply_feedback { threadId, body, resolve? }` — an agent comment; `resolve` stores the workspace head as the
   resolving commit.
-- `get_workspace` names the count of open threads on the workspace's commits.
+- `get_workspace` names the count of open threads on the workspace's commits. The field is left out when the token
+  lacks the `review` scope.
 
 **App↔platform protocol (ADR-0062).** Untouched. The application sees no new header, variable or row; the tag is added
 by the proxy to an answer the application already wrote. An application of any framework release gets the widget.
@@ -196,7 +201,8 @@ by the proxy to an answer the application already wrote. An application of any f
   not a `px_` key, so the proxy never accepts it elsewhere. It sits in the widget's memory, never in storage.
 - **Data in threads.** Screenshots and anchors can hold personal data from stage. They stay in the installation, are
   readable only with `review.read`, and are deleted with the environment. The MCP client ships them to its model,
-  as `read_files` already ships code; the operator decides by granting `review.read` to the `authoring` scope.
+  as `read_files` already ships code. Only a client that asks for the separate `review` scope receives them; an
+  `authoring` grant never does.
 
 ## Rollout on an existing installation
 
@@ -227,6 +233,8 @@ by the proxy to an answer the application already wrote. An application of any f
   entry without `review`; the body is otherwise byte-identical.
 - Caddy (`caddy.live.test.ts`, with `FABRIKA_TEST_CADDY_BIN` built with the module): the same matrix in a running Caddy,
   plus a gzip upstream.
+- Ticket hand-over: under the proxy's COOP, the popup's ticket reaches the opening widget through `BroadcastChannel`,
+  in Chromium and Firefox; a page of another origin receives nothing.
 - Control: the ticket refuses another environment, an expired ticket, a person without `review.write`, a protected
   environment and `prod`; a ticket cannot resolve or delete; `review` is refused on `prod` and on a protected
   environment, and cleared when `protected` is set.
@@ -241,33 +249,44 @@ by the proxy to an answer the application already wrote. An application of any f
 
 ## Slicing into PRs
 
+0. **Verify first (no PR).** `replace-response` in a running Caddy 2.10.2 built as the Zerops proxy is: streaming, a
+   gzip upstream, limited to one host's navigations. Its result picks the order of slices 2 and 3.
 1. **Threads in Control, no widget (M).** Registry field, migration, actions, `review` MCP scope, review API with
    tickets, MCP tools, the console's new rows. Witness: Control tests and the MCP witness create and answer a thread
    through the API; the console lists it.
-2. **The widget on Cloudflare (M).** `ControlReviewClient` and the sign-in popup in agent-canvas's widget, served by
-   Control at `/review/widget.js`; `review` in the manifest and the header policy; the Cloudflare producer;
-   `HTMLRewriter` in the proxy Worker. This is the first slice a reviewer can use: the CSP admits no widget before it.
-   Witness: the proxy Worker matrix, and a browser test of a real proxied application on the local stack (the proxy
-   Worker in front of an example application) that loads the widget and posts a thread.
-3. **Zerops injection (M).** Caddy with the response-rewrite module, the new marker, the Zerops producer. Witness:
-   the Caddy live matrix; the namespace refuses nothing on an old pin and sends no `review`.
+2. **The widget on Zerops (M).** `ControlReviewClient`, the sign-in popup and the `BroadcastChannel` hand-over in
+   agent-canvas's widget, served by Control at `/review/widget.js`; `review` in the manifest and the header policy;
+   Caddy with the response-rewrite module, the new marker, the Zerops producer for namespace and dev sandbox entries.
+   This is the first slice a reviewer can use: the CSP admits no widget before it, and dev sandboxes are Zerops only.
+   Witness: the Caddy live matrix; the namespace refuses nothing on an old pin and sends no `review`; a browser test on
+   the local stack's apps proxy (Caddy) in front of an example application that loads the widget and posts a thread.
+3. **Cloudflare injection (S–M).** The Cloudflare producer and `HTMLRewriter` in the proxy Worker. Witness: the proxy
+   Worker matrix.
 4. **End-to-end suite (S).** The opice suite on the local stack.
+
+If the check in step 0 fails, slices 2 and 3 swap: the widget, the manifest field and the header policy land with
+the Cloudflare injection, and Zerops gets no widget until another rewrite path is found (open question 3).
 
 Slice 1 has no reviewer-facing value on its own: it is the store and the agent's side. No bookmarklet path exists
 before slice 2, because the application's CSP refuses a script from the console.
 
 ## Open questions
 
-1. **Where does the ticket hand-over land when COOP severs the opener?** Default: the fragment redirect described
-   above; decide after the browser check in slice 2.
-2. **Inject for every session, or only for people with `review.write`?** The proxy cannot know Control's grants.
+1. **Inject for every session, or only for people with `review.write`?** The proxy cannot know Control's grants.
    Default: every session on a `review` host; the widget stays hidden for others. Stage hosts are test hosts.
-3. **Caddy module or a different Zerops path?** Default: `replace-response`, pinned. If it fails the compression or
+2. **Caddy module or a different Zerops path?** Default: `replace-response`, pinned. If it fails the compression or
    streaming check, Zerops gets no widget until another rewrite path is found; there is no CSP-compatible fallback.
-4. **External reviewers?** Default: internal only (above). Revisit with a console role declared external.
-5. **Ticket lag versus a per-request grant check?** Default: 10-minute tickets. Shorten, or add an `IamRpc` grant read,
+3. **External reviewers?** Default: internal only (above). Revisit with a console role declared external.
+4. **Ticket lag versus a per-request grant check?** Default: 10-minute tickets. Shorten, or add an `IamRpc` grant read,
    if an operator needs revocation to bite at once.
-6. **One store with the share worker?** Default: no. The threads model and anchor schema are shared through
+5. **One store with the share worker?** Default: no. The threads model and anchor schema are shared through
    `agent-canvas/review/model`; storage and identity differ.
-7. **Does this need an ADR?** Yes: a short one recording that review threads live in Control, that the proxy may
+6. **Does this need an ADR?** Yes: a short one recording that review threads live in Control, that the proxy may
    rewrite an HTML answer as presentation only, and the ticket's place beside ADR-0022's credential rules.
+
+## Decisions
+
+- **Zerops first, if Caddy can do it** (review of 2026-11-04). The `replace-response` check runs before any slice. If
+  it passes, the Zerops injection (slice 2) is built before the Cloudflare one (slice 3); if it fails, the order
+  swaps and Zerops waits for another rewrite path.
+- **The ticket reaches the widget through `BroadcastChannel`**, not `window.opener`, which the proxy's COOP severs.
