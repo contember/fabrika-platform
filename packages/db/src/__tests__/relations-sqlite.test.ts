@@ -439,3 +439,68 @@ describe('the policy bounds what a source table may do', () => {
 		expect(policy({})).toThrow('has no source')
 	})
 })
+
+describe('a relation stays where its row was written', () => {
+	interface Nested {
+		orgs: { id: string; name: string }
+		projects: { id: string; org_id: string; version: number }
+		project_members: { id: string; project_id: string; org_id: string; principal_id: string; expires_at: Date | null }
+		vaults: { id: string; flag: boolean }
+	}
+	const nested: TypedColumnList<Nested> = {
+		orgs: { columns: ['id', 'name'], foreignKeys: [] },
+		projects: { columns: ['id', 'org_id', 'version'], foreignKeys: [{ columns: ['org_id'], table: 'orgs', references: ['id'] }] },
+		project_members: {
+			columns: ['id', 'project_id', 'org_id', 'principal_id', 'expires_at'],
+			foreignKeys: [{ columns: ['project_id', 'org_id'], table: 'projects', references: ['id', 'org_id'] }],
+			timestamps: ['expires_at'],
+		},
+		vaults: { columns: ['id', 'flag'], foreignKeys: [], booleans: ['flag'] },
+	}
+	const words = {
+		app: 'nested',
+		dimensions: { org: {}, project: { in: 'org' }, vault: {} },
+		actions: { 'projects.read': 'Read projects', 'members.assign': 'Assign' },
+		relations: { colleague: { dimension: 'org' } },
+		roles: {},
+	} as const
+	const base = {
+		orgs: { scope: { dimension: 'org' }, actions: { read: 'projects.read' } },
+		projects: { scope: { dimension: 'project' }, actions: { read: 'projects.read' }, version: 'version' },
+		vaults: { scope: { dimension: 'vault' }, actions: { read: 'projects.read' } },
+	} as const
+
+	test("a node above the row's own container is refused: a move of the container would rewrite it", () => {
+		expect(() =>
+			defineTables(words, nested)({
+				...base,
+				project_members: {
+					scope: { child: 'projects' },
+					actions: { read: 'projects.read' },
+					confers: { colleague: { principal: 'principal_id' } },
+				},
+			})
+		).toThrow('a move of an ancestor rewrites org_id')
+	})
+
+	test("a path along a container column must reach the container's own table", () => {
+		const columns: TypedColumnList<Omit<Nested, 'orgs'>> = {
+			projects: { columns: ['id', 'org_id', 'version'], foreignKeys: [{ columns: ['org_id'], table: 'vaults', references: ['id'] }] },
+			project_members: { columns: ['id', 'project_id', 'org_id', 'principal_id', 'expires_at'], foreignKeys: [], timestamps: ['expires_at'] },
+			vaults: { columns: ['id', 'flag'], foreignKeys: [], booleans: ['flag'] },
+		}
+		const unowned = { ...words, relations: {} }
+		expect(() =>
+			defineTables(unowned, columns)({
+				projects: {
+					scope: { dimension: 'project' },
+					actions: { read: 'projects.read' },
+					version: 'version',
+					when: { 'projects.read': { 'org_id.flag': { eq: true } } },
+				},
+				vaults: base.vaults,
+				project_members: { scope: { child: 'projects' }, actions: { read: 'projects.read' } },
+			})
+		).toThrow("outside the row's own containment")
+	})
+})
