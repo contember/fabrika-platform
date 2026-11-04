@@ -47,7 +47,7 @@ import {
 	type WithinGrant,
 } from './capability'
 import { conditionNode, subquery } from './condition-nodes'
-import { type ConditionModel, conditionReach, type PathTest, pathTests, rowSatisfies } from './conditions'
+import { type ConditionModel, conditionReach, pathTests, rowSatisfies } from './conditions'
 import { type Database, InvocationTransaction, type Session, sessionOf, type SqlDialect } from './database'
 import {
 	type ComparableColumn,
@@ -1371,7 +1371,6 @@ export async function insertRow<O>(
 		}
 		if (prepared !== undefined) {
 			await checkRevealAssign(transaction, context, prepared.writer, given)
-			await judgeInsert(transaction, context, prepared.judged, given)
 		}
 		const [row] = await transaction.run<O>(insertNode(context.model.name, values, answer(context)), guard(context, 'InsertQueryNode', undefined))
 		if (row === undefined) {
@@ -1379,6 +1378,7 @@ export async function insertRow<O>(
 		}
 		checkVersion(context, row)
 		await referenceInserted(context, run, transaction, values)
+		await judgeInserted(transaction, context, prepared?.judged, values.get(keyOf(context.model)))
 		return row
 	})
 }
@@ -1906,42 +1906,75 @@ function checkInserted(
 }
 
 /**
- * An insert's condition that follows a path, judged in its transaction: each path test on the row its first foreign
- * key names, read `FOR SHARE` so no concurrent write changes it before the commit. A test is true when that row meets
- * the rest of the path, unknown when the key is null, and false otherwise, as a read of the row would judge it.
+ * An insert's condition that follows a path, judged on the row just written, in its transaction. The database has then
+ * held the row's foreign keys, so a path reads only the rows they name in the row's tenant. Every row on each path is
+ * locked `FOR SHARE` first, so none changes before the commit; then the condition is judged as a read of the row judges
+ * it. A refused row fails the transaction, so it commits nothing even when the handler catches the refusal.
  */
-async function judgeInsert(
+async function judgeInserted(
 	transaction: Session,
 	context: TableContext,
 	judged: JudgedInsert | undefined,
-	row: ReadonlyMap<string, Primitive | null>,
+	key: Primitive | null | undefined,
 ): Promise<void> {
 	if (judged === undefined) {
 		return
 	}
-	const now = new Date()
-	const paths = new Map<PathTest, boolean | undefined>()
+	const model = context.model
+	if (key === undefined || key === null) {
+		throw new QueryRefusedError('unexpected_row', `an insert into ${model.name} judged by ${judged.action} has no key`)
+	}
 	const tests = pathTests(judged.condition)
 	for (let index = 0; index < tests.length; index++) {
-		const test = tests[index]
-		const hop = test?.hops[0]
-		const value = hop === undefined ? undefined : row.get(hop.column)
-		if (test === undefined || hop === undefined || value === undefined || value === null) continue
-		const rest = conditionNode(hop.table, freeze({ ...test, hops: test.hops.slice(1) }), now)
-		const scope = AndNode.create(equals(hop.table, hop.key, value), ParensNode.create(rest))
-		const found = await transaction.run(lockNode(hop.table, hop.key, scope), {
-			root: 'SelectQueryNode',
-			table: hop.table,
-			joins: {},
-			scope,
-			lock: 'share',
-			subqueries: context.subqueries,
-		})
-		paths.set(test, found.length > 0)
+		const hops = tests[index]?.hops ?? []
+		// The rows a path names, hop by hop from the inserted row; each statement admits the columns it walks.
+		let reached = subquery(model.name, hops[0]?.column ?? '', equals(model.name, keyOf(model), key))
+		const walked: Record<string, string[]> = { [model.name]: [hops[0]?.column ?? ''] }
+		for (let position = 0; position < hops.length; position++) {
+			const hop = hops[position]
+			if (hop === undefined) continue
+			const scope = BinaryOperationNode.create(column(hop.table, hop.key), OperatorNode.create('in'), reached)
+			await transaction.run(lockNode(hop.table, hop.key, scope), {
+				root: 'SelectQueryNode',
+				table: hop.table,
+				joins: {},
+				scope,
+				lock: 'share',
+				subqueries: withColumns(context.subqueries, walked),
+			})
+			const next = hops[position + 1]
+			if (next !== undefined) {
+				reached = subquery(hop.table, next.column, scope)
+				walked[hop.table] = [...(walked[hop.table] ?? []), next.column]
+			}
+		}
 	}
-	if (!rowSatisfies(judged.condition, row, now, paths)) {
-		throw new ConflictError(`the row is outside what ${judged.action} inserts into ${context.model.name}`)
+	const scope = AndNode.create(equals(model.name, keyOf(model), key), ParensNode.create(conditionNode(model.name, judged.condition, new Date())))
+	const rows = await transaction.run(locateNode(model.name, [keyOf(model)], scope), {
+		root: 'SelectQueryNode',
+		table: model.name,
+		joins: {},
+		scope,
+		subqueries: context.subqueries,
+	})
+	if (rows.length === 0) {
+		transaction.fail()
+		throw new ConflictError(`the row is outside what ${judged.action} inserts into ${model.name}`)
 	}
+}
+
+/** `admitted` with `more` added: the columns one statement the layer builds may select in its subqueries. */
+function withColumns(
+	admitted: Readonly<Record<string, readonly string[]>>,
+	more: Readonly<Record<string, readonly string[]>>,
+): Readonly<Record<string, readonly string[]>> {
+	const merged: Record<string, readonly string[]> = { ...admitted }
+	const tables = ownKeys(more)
+	for (let index = 0; index < tables.length; index++) {
+		const table = tables[index] ?? ''
+		setOwn(merged, table, [...(ownEntry(admitted, table) ?? []), ...(ownEntry(more, table) ?? [])])
+	}
+	return merged
 }
 
 /** Writes each chain column the destination `Ref` settles into an insert's row. */
@@ -1965,8 +1998,12 @@ export function insertPrepared(context: TableContext, run: Runner, prepared: Pre
 			await lockDestination(transaction, context, prepared.destination)
 		}
 		await checkRevealAssign(transaction, context, prepared.writer, prepared.row)
-		await judgeInsert(transaction, context, prepared.judged, prepared.row)
-		return insertOnConflict(context, run, transaction, prepared.row, conflict)
+		const written = await insertOnConflict(context, run, transaction, prepared.row, conflict)
+		// A conflict writes no new row: `nothing` reads none, and `update` is judged on the stored row.
+		if (written['inserted'] === true) {
+			await judgeInserted(transaction, context, prepared.judged, prepared.row.get(keyOf(context.model)))
+		}
+		return written
 	})
 }
 

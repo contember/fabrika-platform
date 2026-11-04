@@ -25,7 +25,7 @@ create table labels (
 create table tasks (
 	id text not null primary key,
 	project_id text not null references projects (id),
-	kind_id text references kinds (id),
+	kind_id text default 'k-open' references kinds (id),
 	label_id text references labels (id),
 	title text not null unique,
 	foreign key (label_id, project_id) references labels (id, project_id)
@@ -113,7 +113,8 @@ async function call(handle: unknown, path: string, ...args: unknown[]): Promise<
 	return Reflect.apply(method, target, args)
 }
 
-async function insert(data: DataAccess, values: Record<string, unknown>, options?: unknown): Promise<void> {
+/** The handler's insert; with `caught`, the handler catches its refusal and goes on to commit. */
+async function insert(data: DataAccess, values: Record<string, unknown>, options?: unknown, caught = false): Promise<void> {
 	const transaction = data.invocation(false)
 	const site: DataSite = {
 		kind: 'mutation',
@@ -126,7 +127,8 @@ async function insert(data: DataAccess, values: Record<string, unknown>, options
 	}
 	try {
 		const target = data.handles(site).target(alice.ref('project', 'tasks.write', 'p1'), 'on')
-		await (options === undefined ? call(target, 'tasks.insert', values) : call(target, 'tasks.insert', values, options))
+		const written = options === undefined ? call(target, 'tasks.insert', values) : call(target, 'tasks.insert', values, options)
+		await (caught ? written.catch(() => undefined) : written)
 		await transaction.commit()
 	} catch (error) {
 		await transaction.rollback()
@@ -153,12 +155,26 @@ describe("an insert's condition along a foreign key", () => {
 		expect(titles()).toEqual([{ title: 'public' }])
 	})
 
-	test('judges a null key as unknown, which not keeps unknown, as a read would', async () => {
+	test('judges a null key as a read does: unknown while a row qualifies, false when none does', async () => {
 		const data = layerWith({ not: { 'kind_id.open': { eq: false } } })
 		await expect(insert(data, { kind_id: null, title: 'none' })).rejects.toThrow(refusal)
 		await expect(insert(data, { kind_id: 'k-closed', title: 'closed' })).rejects.toThrow(refusal)
 		await insert(data, { kind_id: 'k-open', title: 'open' })
-		expect(titles()).toEqual([{ title: 'open' }])
+		storage.sql.exec("update kinds set open = 1 where id = 'k-closed'")
+		await insert(data, { kind_id: null, title: 'none' })
+		expect(titles()).toEqual([{ title: 'none' }, { title: 'open' }])
+	})
+
+	test("judges the row as written, the database's defaults included", async () => {
+		const data = layerWith({ 'kind_id.open': { eq: true } })
+		await insert(data, { title: 'defaulted' })
+		expect(storage.sql.exec('select kind_id from tasks').toArray()).toEqual([{ kind_id: 'k-open' }])
+	})
+
+	test('fails the transaction it refuses in, so a handler that catches the refusal commits nothing', async () => {
+		const data = layerWith({ 'kind_id.open': { eq: true } })
+		await expect(insert(data, { kind_id: 'k-closed', title: 'closed' }, undefined, true)).rejects.toThrow('nothing it wrote commits')
+		expect(titles()).toEqual([])
 	})
 
 	test("combines with tests of the row's own columns", async () => {
@@ -168,12 +184,40 @@ describe("an insert's condition along a foreign key", () => {
 		expect(titles()).toEqual([{ title: 'pinned' }])
 	})
 
-	test('is judged on an insert that does nothing on a conflict, too', async () => {
+	test('is judged on an insert that names onConflict, when it writes a row', async () => {
 		const data = layerWith({ 'kind_id.open': { eq: true } })
 		await expect(insert(data, { kind_id: 'k-closed', title: 'closed' }, { onConflict: { columns: ['title'], do: 'nothing' } })).rejects.toThrow(
 			refusal,
 		)
 		expect(titles()).toEqual([])
+	})
+})
+
+describe("an insert's condition tells the writer nothing about another tenant's row", () => {
+	const otherIs = (open: boolean) => storage.sql.exec(`update labels set public = ${open ? 1 : 0} where id = 'l-other'`)
+	const outcome = (work: Promise<void>) => work.then(() => 'written', (error: unknown) => (error instanceof Error ? error.message : 'refused'))
+
+	test('a key into another project fails on its foreign key, whatever the row it names holds', async () => {
+		const data = layerWith({ 'label_id.public': { eq: true } })
+		otherIs(true)
+		const open = await outcome(insert(data, { label_id: 'l-other', title: 'probe' }))
+		otherIs(false)
+		const closed = await outcome(insert(data, { label_id: 'l-other', title: 'probe' }))
+		expect(open).toBe(closed)
+		expect(open).not.toContain(refusal)
+		expect(titles()).toEqual([])
+	})
+
+	test('a conflict writes no row, so nothing is judged, whatever the row it names holds', async () => {
+		const data = layerWith({ 'label_id.public': { eq: true } })
+		storage.sql.exec("insert into tasks (id, project_id, title) values ('t-taken', 'p1', 'taken')")
+		const conflict = { onConflict: { columns: ['title'], do: 'nothing' } }
+		otherIs(true)
+		const open = await outcome(insert(data, { label_id: 'l-other', title: 'taken' }, conflict))
+		otherIs(false)
+		const closed = await outcome(insert(data, { label_id: 'l-other', title: 'taken' }, conflict))
+		expect([open, closed]).toEqual(['written', 'written'])
+		expect(titles()).toEqual([{ title: 'taken' }])
 	})
 })
 
