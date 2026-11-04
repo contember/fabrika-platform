@@ -27,7 +27,8 @@ IAM is not told either:
 
 The use cases (`packages/control/src/api/registry/apps.ts:48-66`, `environments.ts:148-166`) audit, notify the
 catalog and republish namespace proxies, and call nothing in IAM. This hits Cloudflare and the local stack on every
-delete; on Zerops the claims check refuses most deletes first (backlog 87).
+delete; on Zerops a delete is refused with 409 while the environment holds namespace resource claims
+(`assertNoHeldResourceClaims`), until `fabrika control namespaces release-claims` releases them.
 
 ## Approach / acceptance
 
