@@ -1,9 +1,11 @@
 // The table policies of the vocabulary form, `defineTables(vocabulary, columns)`: how an application writes them, with
 // containment taken from the vocabulary, and the normalized policies the kit and the handles read. Types only.
 
+import type { ConditionPolicy } from './conditions'
 import type {
 	ColumnList,
 	ColumnPolicies,
+	ConfersPolicy,
 	FilePolicies,
 	RecordActions,
 	ReferencePolicy,
@@ -42,6 +44,7 @@ export type ColumnViews<C> = typeof viewNames extends keyof C
 export interface TableVocabulary {
 	readonly actions: { readonly [action: string]: string }
 	readonly dimensions: { readonly [dimension: string]: { readonly in?: string } }
+	readonly relations?: { readonly [relation: string]: { readonly dimension: string } }
 }
 
 export type VocabularyAction<V> = V extends { readonly actions: infer A } ? keyof A & string : never
@@ -96,6 +99,10 @@ interface WritableFields<Col extends string, A extends string, Ver extends Col, 
 	readonly columns?: ColumnPolicies<Col, A>
 	/** The file columns, each with the file kind it holds (`c.files`): a `uuid` foreign key to `fabrika_files`. */
 	readonly files?: FilePolicies<Col>
+	/** Relation → how a row of this table confers it: whom it names, at which node, until when. */
+	readonly confers?: { readonly [relation: string]: ConfersPolicy<Col> }
+	/** Action → the condition a row must meet for it, whoever holds it. */
+	readonly when?: { readonly [action in A]?: ConditionPolicy<Col> }
 }
 
 /**

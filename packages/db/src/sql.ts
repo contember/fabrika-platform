@@ -239,6 +239,18 @@ function sqliteNameRefusal(tokens: readonly SqlToken[]): { readonly name: string
 }
 
 /**
+ * A relation source's name anywhere in a statement that writes, in any spelling: its rows confer access, and only the
+ * data layer's insert bounds the delegation, so the tag refuses even a write that only reads one.
+ */
+function sourceReference(tokens: readonly SqlToken[], sources: readonly string[]): { readonly name: string; readonly line: number } | undefined {
+	for (const token of tokens) {
+		const text = token.kind === 'word' || token.kind === 'quoted' || token.kind === 'string' ? token.text : undefined
+		if (text !== undefined && sources.includes(text.toLowerCase())) return { name: text, line: token.line }
+	}
+	return undefined
+}
+
+/**
  * The SQL `parts` make, with a bound placeholder for each value, or a `QueryRefusedError` that names what is refused.
  * On both dialects: more than one statement, any statement but a query (and `INSERT`/`UPDATE`/`DELETE` for
  * `'write'`), a `'read'` statement that writes or locks, a value placed where it would not be bound, and a `fabrika_*`
@@ -246,7 +258,7 @@ function sqliteNameRefusal(tokens: readonly SqlToken[]): { readonly name: string
  * name outside `schema` and a function outside the reviewed built-ins; on SQLite also a `sqlite_*` name, and a
  * parameter the text writes itself. workerd's authorizer bounds SQLite's functions, PRAGMAs and DDL.
  */
-export function classifySql(parts: readonly string[], mode: SqlMode, database: SqlDatabase): string {
+export function classifySql(parts: readonly string[], mode: SqlMode, database: SqlDatabase, sources: readonly string[] = []): string {
 	const all = placedTokens(parts, database)
 	const statements = statementsOf(all)
 	const [statement] = statements
@@ -270,6 +282,13 @@ export function classifySql(parts: readonly string[], mode: SqlMode, database: S
 	const writes = mode === 'read' ? (WRITE_STATEMENTS.has(first) ? `${first} at line ${statement.line}` : readRefusal(tokens)) : undefined
 	if (writes !== undefined) {
 		refuse('sql_read_only', `sql: 'read' runs queries only, and the statement holds ${writes}; declare sql: 'write' on a mutation, a job or a webhook`)
+	}
+	const source = WRITE_STATEMENTS.has(first) || readRefusal(tokens) !== undefined ? sourceReference(tokens, sources) : undefined
+	if (source !== undefined) {
+		refuse(
+			'sql_name',
+			`'${source.name}' at line ${source.line} confers a relation, so a statement that writes never names it: write its rows through ctx.db`,
+		)
 	}
 	const framework = frameworkReference(tokens)
 	if (framework !== undefined) {
@@ -566,7 +585,7 @@ function scopeOptions(options: unknown): { readonly alias: string | undefined; r
  * `ctx.sql` of one site. Every call first checks that the work running now is the site's invocation, then classifies
  * the text, then binds the values; only then does it reach the session, so a refused statement sends nothing.
  */
-export function sqlTag(site: SqlSite, database: SqlDatabase, termsOf: ScopeOf): SqlTag {
+export function sqlTag(site: SqlSite, database: SqlDatabase, termsOf: ScopeOf, sources: readonly string[]): SqlTag {
 	const tag = <S extends z.core.$ZodType>(row: S) => {
 		site.check()
 		if (!(row instanceof z.core.$ZodType)) {
@@ -577,7 +596,7 @@ export function sqlTag(site: SqlSite, database: SqlDatabase, termsOf: ScopeOf): 
 			site.check()
 			return failing(site, async () => {
 				const expanded = expandScopes(site, templateParts(text), values, database)
-				const statement = classifySql(expanded.parts, site.mode, database)
+				const statement = classifySql(expanded.parts, site.mode, database, sources)
 				const parameters = expanded.values.map((value, index) => parameterOf(value, index + 1, database))
 				const session = await site.session()
 				if (session.readOnly && site.mode === 'write') {

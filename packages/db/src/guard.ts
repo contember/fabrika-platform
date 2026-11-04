@@ -26,7 +26,21 @@ export interface GuardContext {
 	readonly lock?: 'share' | 'update' | 'claim'
 	/** An insert that does nothing on a conflict of its listed columns: `on conflict (columns) do nothing`, and no other. */
 	readonly onConflict?: 'nothing'
+	/**
+	 * The tables a scope predicate's subqueries may read, each with the columns one may select: a relation's source by
+	 * its node column, a condition path's target by its key. Without it, a scope holds no subquery.
+	 */
+	readonly subqueries?: Readonly<Record<string, readonly string[]>>
 }
+
+/** A subquery of the scope predicate the shape check admitted, and the one table it reads. */
+interface Admitted {
+	readonly node: unknown
+	readonly table: string
+}
+
+/** How deep subqueries of a scope nest: a relation's (1) under a condition path of at most three hops. */
+const MAX_SCOPE_NESTING = 5
 
 function lookup(...names: string[]): NameSet {
 	return nameSet(names)
@@ -81,6 +95,8 @@ const NODE_KINDS = lookup(
 	// Only as a selected own column's text, the exact position a keyset page continues from; checked below.
 	'CastNode',
 	'DataTypeNode',
+	// Only as `not` of a scope predicate's branch, which the shape check admitted.
+	'UnaryOperationNode',
 )
 
 const COMPARISON_OPERATORS = lookup('=', '<>', '<', '<=', '>', '>=', 'like', 'ilike', 'not like', 'not ilike', 'in', 'not in', 'is', 'is not')
@@ -108,11 +124,12 @@ export function assertAllowedTree(root: OperationNode, context: GuardContext): v
 			throw new QueryRefusedError('statement_shape', `${context.root}.${key} is not allowed`)
 		}
 	}
-	checkRoot(root, context)
-	walk(root, undefined, context)
+	const admitted: Admitted[] = []
+	checkRoot(root, context, admitted)
+	walk(root, undefined, context, admitted, undefined)
 }
 
-function checkRoot(root: OperationNode, context: GuardContext): void {
+function checkRoot(root: OperationNode, context: GuardContext, admitted: Admitted[]): void {
 	const target = context.root === 'InsertQueryNode'
 		? read(root, 'into')
 		: context.root === 'UpdateQueryNode'
@@ -134,19 +151,175 @@ function checkRoot(root: OperationNode, context: GuardContext): void {
 	if (!scoped) {
 		throw new QueryRefusedError('scope_predicate', 'the scope predicate must be the top-level conjunct of WHERE')
 	}
+	const reach = (node: unknown) => isReach(node, context.table, context.subqueries, admitted)
 	const scope = context.scope
-	const membership = (leaf: unknown) => isScopeMembership(leaf, context.table)
-	const shaped = isEverything(scope)
-		|| isTreeOf(scope, 'AndNode', (leaf) => isScopeEquality(leaf, context.table))
-		|| membership(scope)
-		|| (kindOf(scope) === 'ParensNode' && kindOf(read(scope, 'node')) === 'OrNode' && isTreeOf(read(scope, 'node'), 'OrNode', membership))
+	const shaped = reach(scope)
+		|| (kindOf(scope) === 'AndNode' && hasOnly(scope, CONNECTIVE_KEYS) && reach(read(scope, 'left'))
+			&& kindOf(read(scope, 'right')) === 'ParensNode'
+			&& isScopeTree(read(scope, 'right'), context.table, context.subqueries, admitted, 0))
 	if (!shaped) {
 		throw new QueryRefusedError(
 			'scope_predicate',
-			'the scope predicate must be true, an AND of column = value, or a parenthesized OR of column in (values), over the statement table',
+			'the scope predicate must be true, an AND of column = value, a parenthesized OR of column in (values) or relation rows, or one of these AND a parenthesized condition, over the statement table',
 		)
 	}
 }
+
+/**
+ * What a capability reaches before its action's condition narrows it: everything (a global grant), a Ref's chain of
+ * equalities, and its relation rows after them, or a Within's memberships of values and relation rows.
+ */
+function isReach(node: unknown, table: string, subqueries: GuardContext['subqueries'], admitted: Admitted[]): boolean {
+	const equality = (leaf: unknown) => isScopeEquality(leaf, table)
+	const related = (leaf: unknown) => isRelationMembership(leaf, table, subqueries, admitted)
+	const member = (leaf: unknown) => isScopeMembership(leaf, table) || related(leaf)
+	return isEverything(node)
+		|| isTreeOf(node, 'AndNode', equality)
+		|| isUnionOf(node, member)
+		|| (kindOf(node) === 'AndNode' && isTreeOf(read(node, 'left'), 'AndNode', equality) && isUnionOf(read(node, 'right'), related))
+}
+
+/** One leaf, or a parenthesized OR tree of them. */
+function isUnionOf(node: unknown, leaf: (node: unknown) => boolean): boolean {
+	return leaf(node) || (kindOf(node) === 'ParensNode' && kindOf(read(node, 'node')) === 'OrNode' && isTreeOf(read(node, 'node'), 'OrNode', leaf))
+}
+
+/** `table.<node> in (select S.<node> from S where S.<principal> = $me and …)`: the rows a relation reaches. */
+function isRelationMembership(node: unknown, table: string, subqueries: GuardContext['subqueries'], admitted: Admitted[]): boolean {
+	return kindOf(node) === 'BinaryOperationNode' && hasOnly(node, BINARY_KEYS) && read(read(node, 'operator'), 'operator') === 'in'
+		&& isOwnColumn(read(node, 'leftOperand'), table)
+		&& isScopeSubquery(read(node, 'rightOperand'), subqueries, admitted, 1, true)
+}
+
+/**
+ * A scope with relations or conditions: AND, OR, parentheses and `not` over tests of the table's own columns against a
+ * bound value, a bound list, null, or a subquery that reads one admitted table, selects one admitted column of it and
+ * is scoped the same way over that table. Never `true` inside: that would make a branch vacuous.
+ */
+function isScopeTree(node: unknown, table: string, subqueries: GuardContext['subqueries'], admitted: Admitted[], depth: number): boolean {
+	switch (kindOf(node)) {
+		case 'AndNode':
+		case 'OrNode':
+			return hasOnly(node, CONNECTIVE_KEYS) && isScopeTree(read(node, 'left'), table, subqueries, admitted, depth)
+				&& isScopeTree(read(node, 'right'), table, subqueries, admitted, depth)
+		case 'ParensNode':
+			return hasOnly(node, PARENS_KEYS) && isScopeTree(read(node, 'node'), table, subqueries, admitted, depth)
+		case 'UnaryOperationNode':
+			return hasOnly(node, UNARY_KEYS) && read(read(node, 'operator'), 'operator') === 'not'
+				&& isScopeTree(read(node, 'operand'), table, subqueries, admitted, depth)
+		case 'BinaryOperationNode':
+			return isScopeTest(node, table, subqueries, admitted, depth)
+		default:
+			return false
+	}
+}
+
+function isScopeTest(node: unknown, table: string, subqueries: GuardContext['subqueries'], admitted: Admitted[], depth: number): boolean {
+	const operator = read(read(node, 'operator'), 'operator')
+	if (!hasOnly(node, BINARY_KEYS) || !isOwnColumn(read(node, 'leftOperand'), table) || !inSet(SCOPE_OPERATORS, operator)) {
+		return false
+	}
+	const right = read(node, 'rightOperand')
+	if (operator === 'is' || operator === 'is not') {
+		return kindOf(right) === 'ValueNode' && read(right, 'immediate') === true && read(right, 'value') === null
+	}
+	if (operator === 'in' || operator === 'not in') {
+		if (kindOf(right) === 'ValueListNode') {
+			return isBoundList(right)
+		}
+		return operator === 'in' && isScopeSubquery(right, subqueries, admitted, depth + 1, false)
+	}
+	return isBoundValue(right)
+}
+
+function isBoundList(list: unknown): boolean {
+	const values = read(list, 'values')
+	if (!isArray(values) || values.length === 0) {
+		return false
+	}
+	for (let index = 0; index < values.length; index++) {
+		if (!isBoundValue(values[index])) {
+			return false
+		}
+	}
+	return true
+}
+
+/**
+ * `(select S.<column> from S where <scope tree over S>)`, S and its column admitted, nothing else on the node. A relation's
+ * subquery is `anchored`: its WHERE starts with an equality to a bound value, the principal, so it never reads every row.
+ */
+function isScopeSubquery(node: unknown, subqueries: GuardContext['subqueries'], admitted: Admitted[], depth: number, anchored: boolean): boolean {
+	if (subqueries === undefined || depth > MAX_SCOPE_NESTING || kindOf(node) !== 'SelectQueryNode' || !hasOnly(node, SUBQUERY_KEYS)) {
+		return false
+	}
+	const from = read(node, 'from')
+	const froms = read(from, 'froms')
+	if (!hasOnly(from, FROM_KEYS) || !isArray(froms) || froms.length !== 1) {
+		return false
+	}
+	const table = tableName(froms[0])
+	if (table === undefined || !hasOwn(subqueries, table)) {
+		return false
+	}
+	const columns = subqueries[table] ?? []
+	const selections = read(node, 'selections')
+	if (!isArray(selections) || selections.length !== 1 || !hasOnly(selections[0], SELECTION_KEYS)) {
+		return false
+	}
+	const selected = read(selections[0], 'selection')
+	const name = read(read(read(selected, 'column'), 'column'), 'name')
+	let known = false
+	for (let index = 0; index < columns.length; index++) {
+		if (columns[index] === name) {
+			known = true
+		}
+	}
+	const where = read(node, 'where')
+	if (!known || !isOwnColumn(selected, table) || !hasOnly(where, WHERE_KEYS)) {
+		return false
+	}
+	const condition = read(where, 'where')
+	if (anchored ? !isAnchored(condition, table, subqueries, admitted, depth) : !isScopeTree(condition, table, subqueries, admitted, depth)) {
+		return false
+	}
+	admitted[admitted.length] = { node, table }
+	return true
+}
+
+/** `S.<column> = $n`, then any scope tree AND-ed after it. */
+function isAnchored(node: unknown, table: string, subqueries: GuardContext['subqueries'], admitted: Admitted[], depth: number): boolean {
+	if (kindOf(node) === 'AndNode') {
+		return hasOnly(node, CONNECTIVE_KEYS) && isAnchored(read(node, 'left'), table, subqueries, admitted, depth)
+			&& isScopeTree(read(node, 'right'), table, subqueries, admitted, depth)
+	}
+	return isScopeEquality(node, table)
+}
+
+/** True when every own property of `node` is one of `keys`: a scope node carries nothing the shape check did not read. */
+function hasOnly(node: unknown, keys: NameSet): boolean {
+	if (typeof node !== 'object' || node === null) {
+		return false
+	}
+	const own = ownKeys(node)
+	for (let index = 0; index < own.length; index++) {
+		const key = own[index] ?? ''
+		if (!inSet(keys, key) && read(node, key) !== undefined) {
+			return false
+		}
+	}
+	return true
+}
+
+const CONNECTIVE_KEYS = lookup('kind', 'left', 'right')
+const PARENS_KEYS = lookup('kind', 'node')
+const UNARY_KEYS = lookup('kind', 'operator', 'operand')
+const BINARY_KEYS = lookup('kind', 'leftOperand', 'operator', 'rightOperand')
+const SUBQUERY_KEYS = lookup('kind', 'from', 'selections', 'where')
+const FROM_KEYS = lookup('kind', 'froms')
+const SELECTION_KEYS = lookup('kind', 'selection')
+const WHERE_KEYS = lookup('kind', 'where')
+const SCOPE_OPERATORS = lookup('=', '<>', '<', '<=', '>', '>=', 'in', 'not in', 'is', 'is not')
 
 /** A Within that is not limited to scope values. */
 function isEverything(node: unknown): boolean {
@@ -205,8 +378,18 @@ function soleFrom(from: unknown): unknown {
 	return froms[0]
 }
 
-function walk(node: OperationNode, parent: Visit | undefined, context: GuardContext): void {
-	checkNode(node, parent, context)
+function walk(
+	node: OperationNode,
+	parent: Visit | undefined,
+	context: GuardContext,
+	admitted: readonly Admitted[],
+	inside: string | undefined,
+): void {
+	const subquery = parent === undefined ? undefined : admittedTable(node, admitted)
+	const reading = subquery ?? inside
+	if (subquery === undefined) {
+		checkNode(node, parent, context, reading)
+	}
 	if (node.kind === 'ValueNode') {
 		return
 	}
@@ -218,7 +401,7 @@ function walk(node: OperationNode, parent: Visit | undefined, context: GuardCont
 		for (let position = 0; position < children.length; position++) {
 			const child = children[position]
 			if (isOperationNode(child)) {
-				walk(child, { node, key, up: parent }, context)
+				walk(child, { node, key, up: parent }, context, admitted, reading)
 			} else if (typeof child === 'object' && child !== null) {
 				throw new QueryRefusedError('statement_shape', `unexpected structure under ${node.kind}.${key}`)
 			}
@@ -226,7 +409,18 @@ function walk(node: OperationNode, parent: Visit | undefined, context: GuardCont
 	}
 }
 
-function checkNode(node: OperationNode, parent: Visit | undefined, context: GuardContext): void {
+/** The table an admitted subquery reads, when `node` is one, by identity. */
+function admittedTable(node: unknown, admitted: readonly Admitted[]): string | undefined {
+	for (let index = 0; index < admitted.length; index++) {
+		const entry = admitted[index]
+		if (entry !== undefined && entry.node === node) {
+			return entry.table
+		}
+	}
+	return undefined
+}
+
+function checkNode(node: OperationNode, parent: Visit | undefined, context: GuardContext, inside: string | undefined): void {
 	if (inSet(ROOT_KINDS, node.kind)) {
 		if (parent !== undefined) {
 			throw new QueryRefusedError('statement_shape', 'subqueries are not allowed')
@@ -261,7 +455,7 @@ function checkNode(node: OperationNode, parent: Visit | undefined, context: Guar
 			}
 			return
 		case 'TableNode':
-			return checkTable(node, parent, context)
+			return checkTable(node, parent, context, inside)
 		case 'OrderByItemNode': {
 			// Kysely prints `nulls` as raw text; the layer only ever states the order Postgres has by default.
 			const nulls = read(node, 'nulls')
@@ -311,6 +505,9 @@ function checkNode(node: OperationNode, parent: Visit | undefined, context: Guar
 function checkOperator(node: OperationNode, parent: Visit | undefined): void {
 	const operator = read(node, 'operator')
 	if (inSet(COMPARISON_OPERATORS, operator)) {
+		return
+	}
+	if (operator === 'not' && parent?.node.kind === 'UnaryOperationNode') {
 		return
 	}
 	// The version bump `version = version + 1` is the one arithmetic the layer writes, as a SET value.
@@ -393,8 +590,15 @@ function checkRaw(node: OperationNode, parent: Visit | undefined): void {
 	}
 }
 
-function checkTable(node: OperationNode, parent: Visit | undefined, context: GuardContext): void {
+function checkTable(node: OperationNode, parent: Visit | undefined, context: GuardContext, inside: string | undefined): void {
 	const name = tableName(node)
+	// Inside an admitted subquery its own table is the one it reads, and the outer statement's is not reachable.
+	if (inside !== undefined) {
+		if (name === inside) {
+			return
+		}
+		throw new QueryRefusedError('statement_shape', `a scope subquery of ${inside} reads ${String(name)}`)
+	}
 	if (name === context.table) {
 		return
 	}
