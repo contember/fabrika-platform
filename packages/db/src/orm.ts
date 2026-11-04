@@ -50,6 +50,7 @@ import {
 	type AggregateSpec,
 	answer,
 	appKeyPredicate,
+	appKeyScope,
 	appListPredicate,
 	appRecordPredicate,
 	appRowPredicate,
@@ -581,10 +582,11 @@ function scopedApplicationRows(context: TableContext, site: DataSite, run: Runne
 		list: bound(site, async (options?: unknown) => listRows(context, run, scope(), visible, options, key, heldAction(context, capability))),
 		count: bound(site, async (options?: unknown) => countRows(context, run, scope(), visible, options)),
 		aggregate: bound(site, async <Row>(spec: AggregateSpec<Row>) => aggregateRows(context, run, scope(), context.shape, spec)),
-		get: bound(site, async (id: unknown) => {
-			scope()
-			return selectOne(context, run, appKeyPredicate(model, id), visible, heldAction(context, capability))
-		}),
+		get: bound(
+			site,
+			async (id: unknown) =>
+				selectOne(context, run, scopedApplicationRead(context, capability, appKeyPredicate(model, id)), visible, heldAction(context, capability)),
+		),
 	})
 }
 
@@ -624,8 +626,8 @@ function applicationRows(
 		: site.kind === 'query'
 		? refused(site, 'read_only', 'getForUpdate locks the row, so it runs only in a mutation: declare the endpoint with r.mutation')
 		: bound(site, async (id: unknown) => {
-			const scope = appKeyPredicate(model, id)
 			const action = namedApp(context, capability)
+			const scope = appKeyScope(model, action, id)
 			const node = lockedSelectNode(table, visibleFor(model, action), scope, model.dates)
 			const session = await run.read()
 			const rows = await session.run(node, { root: 'SelectQueryNode', table, joins: {}, scope, lock: 'update', subqueries: context.subqueries })
@@ -649,7 +651,7 @@ function applicationRows(
 		),
 		get: bound(site, async (id: unknown) => {
 			const action = namedApp(context, capability)
-			return selectOne(context, run, appKeyPredicate(model, id), visibleFor(model, action), action)
+			return selectOne(context, run, appKeyScope(model, action, id), visibleFor(model, action), action)
 		}),
 		getForUpdate,
 		claim: claiming(parts, context, site, capability),
@@ -661,7 +663,7 @@ function applicationRows(
 		update: writing(site, 'update', async (id: unknown, values: unknown, ...options: unknown[]) => {
 			const grant = updatingApp(context, capability)
 			const changes = readValues(values, updatableBy(model, grant.action), 'update', model)
-			return updateRow(context, run, { scope: appKeyPredicate(model, id) }, changes, versionArgument(context, options))
+			return updateRow(context, run, { scope: appKeyScope(model, grant.action, id) }, changes, versionArgument(context, options))
 		}),
 		remove: writing(site, 'remove', async (id: unknown, ...options: unknown[]) => {
 			await removeRow(context, run, { scope: appRowPredicate(context, capability, id, 'delete') }, versionArgument(context, options))
@@ -703,7 +705,7 @@ function publicApplicationRows(
 		get: bound(site, async (id: unknown) => {
 			appListPredicate(context, capability)
 			const action = heldAction(context, capability)
-			return selectOne(context, run, appKeyPredicate(model, id), visibleFor(model, action), action)
+			return selectOne(context, run, appKeyScope(model, action, id), visibleFor(model, action), action)
 		}),
 		getForUpdate: refusal('lock'),
 		claim: refusal('claim'),
@@ -714,7 +716,7 @@ function publicApplicationRows(
 			const saved = await updateRow<Readonly<Record<string, unknown>>>(
 				context,
 				run,
-				{ scope: appKeyPredicate(model, id) },
+				{ scope: appKeyScope(model, grant.action, id) },
 				changes,
 				versionArgument(context, options),
 			)
