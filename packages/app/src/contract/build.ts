@@ -29,6 +29,7 @@ import {
 	type EndpointSource,
 	type ExportArtifact,
 	type FileKindArtifact,
+	fileKindsIn,
 	type FileShape,
 	FORM_URLENCODED_TYPE,
 	type ImportArtifact,
@@ -1013,6 +1014,12 @@ class ArtifactBuilder {
 		let scanning = true
 		for (const field of fields) {
 			const kind = this.#fileKind(`${where} input field '${field.name}'`, field.kind)
+			if (kind?.inline === true) {
+				this.#problem(
+					where,
+					`input field '${field.name}' takes a file of the inline kind '${field.kind}', which only the application writes: an uploaded XML document could render as a page (allowed: a kind without inline, or ctx.files.put of a file the application renders)`,
+				)
+			}
 			if (kind !== null) {
 				bytes += field.count * kind.maxBytes
 				largest = Math.max(largest, kind.maxBytes)
@@ -2665,25 +2672,7 @@ function fileField(shape: SchemaShape): { readonly kind: string; readonly count:
 
 /** Whether a schema holds a file anywhere. */
 export function containsFile(shape: SchemaShape): boolean {
-	switch (shape.type) {
-		case 'file':
-			return true
-		case 'array':
-			return containsFile(shape.items)
-		case 'tuple':
-			return shape.items.some(containsFile) || (shape.rest !== null && containsFile(shape.rest))
-		case 'record':
-			return containsFile(shape.value)
-		case 'object':
-			return Object.values(shape.fields).some(containsFile)
-		case 'optional':
-		case 'nullable':
-			return containsFile(shape.inner)
-		case 'union':
-			return shape.options.some(containsFile)
-		default:
-			return false
-	}
+	return fileKindsIn(shape).length > 0
 }
 
 /** The file fields of an input, by name: the parts a multipart body carries beside its JSON. */

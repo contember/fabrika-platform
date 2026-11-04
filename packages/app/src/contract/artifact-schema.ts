@@ -12,6 +12,7 @@ import {
 	displayNameProblem,
 	type EndpointRow,
 	FILE_RESPONSE_KINDS,
+	fileKindsIn,
 	isOwnWorkloadName,
 	JOB_MAILERS,
 	LOCALES,
@@ -458,6 +459,10 @@ export const contractArtifactSchema: z.ZodType<ContractArtifact> = z.strictObjec
 		// A row answering a file of an inline kind shows it, every other row that answers a file downloads it.
 		if (row.output?.type === 'file' && (row.response === 'inline-file') !== (artifact.fileKinds?.[row.output.kind]?.inline === true)) {
 			context.addIssue({ code: 'custom', path: ['endpoints'], message: `'${row.id}' is inline-file exactly when its file kind is inline` })
+		}
+		// Only the application writes a file of an inline kind: an uploaded XML document could render as a page.
+		if (row.input !== null && fileKindsIn(row.input).some((kind) => artifact.fileKinds?.[kind]?.inline === true)) {
+			context.addIssue({ code: 'custom', path: ['endpoints'], message: `'${row.id}' takes a file of an inline kind, which only the application writes` })
 		}
 		if (row.kind === 'public' && row.source.kind !== 'challenge' && artifact.declared?.[row.id]?.actions === undefined) {
 			context.addIssue({ code: 'custom', path: ['declared', row.id], message: 'a public procedure declares its workload actions' })

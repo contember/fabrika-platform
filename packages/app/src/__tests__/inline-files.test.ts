@@ -172,6 +172,62 @@ describe('the artifact of an inline file kind', () => {
 	})
 })
 
+describe('an inline file kind takes no upload', () => {
+	// The same upload mutation, once into the inline kind and once into the kind of downloads.
+	const uploading = (kind: 'feed' | 'dump') =>
+		app.contract((c) => ({
+			api: c.rpc('/api', {
+				uploads: app.group({ callers: ['human'] }, (r) => ({
+					upload: r.mutation({
+						input: z.strictObject({ document: file(kind) }),
+						output: z.strictObject({}),
+						access: { action: 'feeds.write', app: true },
+					}).handle(() => ({})),
+				})),
+			}),
+			files: {
+				feed: c.files({ types: ['application/rss+xml'], maxBytes: 65536, inline: true }),
+				dump: c.files({ types: ['application/xml'], maxBytes: 65536 }),
+			},
+		}))
+
+	test('the build refuses a procedure that uploads into an inline kind, and admits one into a kind of downloads', () => {
+		expect(() => compileContract(uploading('feed'), tables)).toThrow(
+			"input field 'document' takes a file of the inline kind 'feed', which only the application writes",
+		)
+		expect(compileContract(uploading('dump'), tables).endpoints.find((row) => row.id === 'api.uploads.upload')?.input).toEqual({
+			type: 'object',
+			fields: { document: { type: 'file', kind: 'dump' } },
+		})
+	})
+
+	test('the artifact parser refuses a row that takes a file of an inline kind, at any depth of its input', () => {
+		const artifact = compileContract(uploading('dump'), tables)
+		expect(() => parseContractArtifact(artifact)).not.toThrow()
+		const message = "'api.uploads.upload' takes a file of an inline kind, which only the application writes"
+		const shownDumps = {
+			...artifact,
+			fileKinds: { ...artifact.fileKinds, dump: { types: ['application/xml'], maxBytes: 65536, inline: true as const } },
+		}
+		expect(() => parseContractArtifact(shownDumps)).toThrow(message)
+		const nested = {
+			...artifact,
+			endpoints: artifact.endpoints.map((row) =>
+				row.id === 'api.uploads.upload'
+					? {
+						...row,
+						input: {
+							type: 'object' as const,
+							fields: { wrapped: { type: 'array' as const, items: { type: 'file' as const, kind: 'feed' }, minItems: null, maxItems: 2 } },
+						},
+					}
+					: row
+			),
+		}
+		expect(() => parseContractArtifact(nested)).toThrow(message)
+	})
+})
+
 describe('serving the files of an inline kind', () => {
 	test('a feed reader gets the feed inline at its public URL, under the sandbox CSP and nosniff', async () => {
 		const response = await publish(RSS)

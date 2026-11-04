@@ -228,8 +228,8 @@ refuses a row with the profile instead of serving it without the treatment.
   so any duplicate is an attachment. An inline XML document runs no script, submits no form and loads nothing: the
   sandbox CSP below gives it an opaque origin without scripts, and `default-src 'none'` refuses its stylesheets and
   images. Its elements in the XHTML or SVG namespace still render, so whoever writes the file of an inline kind can
-  show a static page with live links on the application's origin: an inline kind holds files the application itself
-  writes, never an untrusted upload.
+  show a static page with live links on the application's origin. So only the application writes an inline kind: the
+  contract build and the artifact parser refuse a procedure whose input takes a file of one.
 - `Content-Type` from the recorded, sniffed type, never from the upload request.
 - `X-Content-Type-Options: nosniff`.
 - `Content-Security-Policy: sandbox; default-src 'none'`.

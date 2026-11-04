@@ -895,7 +895,8 @@ vocabulary (`packages/db/CLAUDE.md`).
   chooses it by the planned endpoint's row, and a file is a `FileDownload`, never a `Response`, so no handler or store
   can set its headers. Keep the treatment equal to ADR-0022's. Only a kind declared `inline: true` shows a non-image
   (an XML document); its row is `response: 'inline-file'`, and `buildArtifact` and `contractArtifactSchema` refuse an
-  inline kind with any type outside `inlineFileTypes('inline-file')`. Never let a file choose its own disposition.
+  inline kind with any type outside `inlineFileTypes('inline-file')`, and a procedure input that takes a file of an
+  inline kind. Never let a file choose its own disposition.
 - **The type is the sniffed one.** A file is stored only when its first `SNIFF_BYTES` are the declared type, and the
   recorded type is what a download sends. The size bound is the object store's (`FileObjectStore.write`), enforced
   while the body streams.

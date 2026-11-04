@@ -344,6 +344,29 @@ export function isFileShape(shape: OutputShape): shape is FileShape {
 	return shape.type === 'file'
 }
 
+/** The kinds of the files a schema holds, anywhere in it, each once per place it appears. */
+export function fileKindsIn(shape: SchemaShape): readonly string[] {
+	switch (shape.type) {
+		case 'file':
+			return [shape.kind]
+		case 'array':
+			return fileKindsIn(shape.items)
+		case 'tuple':
+			return [...shape.items.flatMap(fileKindsIn), ...(shape.rest === null ? [] : fileKindsIn(shape.rest))]
+		case 'record':
+			return fileKindsIn(shape.value)
+		case 'object':
+			return Object.values(shape.fields).flatMap(fileKindsIn)
+		case 'optional':
+		case 'nullable':
+			return fileKindsIn(shape.inner)
+		case 'union':
+			return shape.options.flatMap(fileKindsIn)
+		default:
+			return []
+	}
+}
+
 /**
  * What a procedure answers: a JSON value of a schema, a file of rows (`attachment()` of `@fabrika/app/contract`), or a
  * redirect (`redirect()`).

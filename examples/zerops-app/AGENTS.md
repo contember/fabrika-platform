@@ -2016,8 +2016,9 @@ export const attachments = app.group({ callers: ['human'] }, (r) => ({
   is of a kind declared `inline: true`, e.g. `c.files({ types: ['application/rss+xml'], maxBytes: 1048576, inline: true })`,
   served by a public `GET` query (`http: { path: '/feed.xml' }`). An inline kind admits only those images and
   `application/xml`, `text/xml`, `application/rss+xml`, `application/atom+xml`; the build refuses SVG, HTML and every
-  other type there. An inline kind holds only files the application writes (`ctx.files.put` of a feed it renders):
-  XML in the XHTML or SVG namespace still renders as a page, so a user upload goes into a kind without `inline`. An XML
+  other type there. Only `ctx.files.put` fills an inline kind (a feed the application renders): XML in the XHTML or SVG
+  namespace still renders as a page, so the build refuses a procedure input of `file('<inline kind>')`; a user upload
+  goes into a kind without `inline`. An XML
   file is UTF-8 whose bytes start with `<` (after a byte order mark and white space), or the upload is 415.
 
 The SPA calls them through the typed client, never a hand-written `fetch`. `api.attachments.download.url(input)` is
