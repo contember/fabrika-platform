@@ -50,6 +50,11 @@ describe('plainCredentialVariables', () => {
 		expect(plainCredentialVariables('iam', live({ FABRIKA_EMAIL_SMARTEMAILING_USERNAME: '' }), new Set(), new Set())).toEqual([])
 	})
 
+	test('a record the platform owns cannot be made sensitive by the operator, so it is not a finding', () => {
+		const system = new Map([['DB_PASSWORD', { id: 'p', key: 'DB_PASSWORD', type: 'SYSTEM', sensitive: false as const, content: 'x' }]])
+		expect(plainCredentialVariables('iam', system, new Set(), new Set())).toEqual([])
+	})
+
 	test('a sensitive record is never a finding, and an exception covers only its own service', () => {
 		expect(plainCredentialVariables('iam', live({ DB_PASSWORD: 'x' }, ['DB_PASSWORD']), new Set(), new Set())).toEqual([])
 		expect(plainCredentialVariables('iam', live({ DB_PASSWORD: 'x' }), new Set(), new Set(['iam/DB_PASSWORD']))).toEqual([])

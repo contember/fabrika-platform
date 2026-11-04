@@ -65,8 +65,8 @@ describe('fabrika app build refuses a credential in plain configuration', () => 
 		expect(message).not.toContain('hunter2')
 	})
 
-	test('a reference to a secret, a pipeline variable and a plain setting all build', async () => {
-		const variables = { POSTMARK_TOKEN: '${POSTMARK_TOKEN}', LOG_LEVEL: 'info', DATABASE_PASSWORD: '${notes_password}' }
+	test('a reference, a setting that describes a credential and a plain setting all build', async () => {
+		const variables = { LOG_LEVEL: 'info', DATABASE_PASSWORD: '${notes_password}', SESSION_TOKEN_TTL: '3600' }
 		const manifest = await build(app(), withRunVariables(variables))
 		expect(parseFabrikaManifest(manifest).target.sourceDescriptor.contents).toBe(withRunVariables(variables))
 	})
@@ -76,5 +76,21 @@ describe('fabrika app build refuses a credential in plain configuration', () => 
 		await refusal(app(), descriptor)
 		const manifest = await build(app({ notSecret: ['CSRF_TOKEN_COOKIE'] }), descriptor)
 		expect(JSON.stringify(manifest)).not.toContain('notSecret')
+	})
+
+	test('target.notSecret names a header in any case, as HTTP does', async () => {
+		const descriptor = [
+			'zerops:',
+			'  - setup: notes',
+			'    run:',
+			'      routing:',
+			'        headers:',
+			'          - for: "/*"',
+			'            values:',
+			'              X-Api-Key: "public-demo"',
+			'',
+		].join('\n')
+		await refusal(app(), descriptor)
+		await build(app({ notSecret: ['x-api-key'] }), descriptor)
 	})
 })

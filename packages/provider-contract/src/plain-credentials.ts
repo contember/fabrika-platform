@@ -19,6 +19,7 @@ const CREDENTIAL_WORDS: ReadonlySet<string> = new Set([
 	'SECRET',
 	'PASSWORD',
 	'PASSWD',
+	'PASS',
 	'PASSPHRASE',
 	'PWD',
 	'CREDENTIAL',
@@ -29,7 +30,7 @@ const CREDENTIAL_WORDS: ReadonlySet<string> = new Set([
 	'HTPASSWD',
 ])
 
-/** Words that make `KEY` something other than a credential: `KEY_ID`, `PUBLIC_KEY`, `SITE_KEY`, `CACHE_KEY`. */
+/** Words that make `KEY` (or `KEYS`) something other than a credential: `KEY_ID`, `PUBLIC_KEY`, `SITE_KEY`, `CACHE_KEY`. */
 const NON_CREDENTIAL_KEY_WORDS: ReadonlySet<string> = new Set([
 	'ID',
 	'IDS',
@@ -92,24 +93,33 @@ const nameWords = (name: string): readonly string[] =>
 		.split(/[^A-Z0-9]+/)
 		.filter((word) => word !== '')
 
+/** Whether the `KEY` at `index` is an id, a public key or a cache key: a word beside it says so. */
+const nonCredentialKey = (words: readonly string[], index: number): boolean => {
+	const before = words[index - 1]
+	const after = words[index + 1]
+	return (before !== undefined && NON_CREDENTIAL_KEY_WORDS.has(before)) || (after !== undefined && NON_CREDENTIAL_KEY_WORDS.has(after))
+}
+
 /** The word of a credential name that matched, or null. */
-const credentialWordIn = (name: string): string | null => {
-	const words = nameWords(name)
+const credentialWordIn = (words: readonly string[]): string | null => {
 	const last = words.at(-1)
 	if (last === undefined || DESCRIPTOR_WORDS.has(last)) return null
 	for (const [index, word] of words.entries()) {
 		if (CREDENTIAL_WORDS.has(word)) return word
 		if (word === 'BASIC' && words[index + 1] === 'AUTH') return 'BASIC_AUTH'
-		if (word === 'KEY') {
-			const before = words[index - 1]
-			const after = words[index + 1]
-			if (before !== undefined && NON_CREDENTIAL_KEY_WORDS.has(before)) continue
-			if (after !== undefined && NON_CREDENTIAL_KEY_WORDS.has(after)) continue
-			return word
-		}
+		if ((word === 'KEY' || word === 'KEYS') && !nonCredentialKey(words, index)) return word
 	}
 	return null
 }
+
+/**
+ * Whether the name says its value is public: a publishable, site or public key, or an id. Such a value is often long
+ * and random (`pk_live_…`, a reCAPTCHA site key, a VAPID public key), so the random-string rule does not apply to it.
+ */
+const namesAPublicValue = (words: readonly string[]): boolean =>
+	words.some((word, index) => (word === 'KEY' || word === 'KEYS') && nonCredentialKey(words, index))
+	|| words.at(-1) === 'ID'
+	|| words.at(-1) === 'IDS'
 
 /**
  * A Zerops or shell reference (`${db_password}`) names a value held elsewhere, so it is not one here. Removing them
@@ -159,9 +169,20 @@ const looksRandom = (text: string): boolean =>
 	&& share(text, /[a-z]/g) >= 0.2
 	&& entropy(text) >= 4
 
+/**
+ * The literal part of a value: references removed, and an Authorization scheme left standing alone by that removal
+ * (`Bearer ${token}`) dropped with them.
+ */
+const literalOf = (value: string): string => withoutReferences(value).trim().replace(/^(Basic|Bearer|Token)$/i, '')
+
+/**
+ * A boolean, a short integer or a duration: what a setting that only describes a credential holds (`TOKEN_EXPIRES_IN`,
+ * `Access-Control-Allow-Credentials`). An integer of six digits or more may be a PIN or a numeric password, so it counts.
+ */
+const isSettingValue = (literal: string): boolean => /^(true|false|yes|no|on|off|\d{1,5}|\d+(ms|s|m|h|d))$/i.test(literal)
+
 /** What the VALUE alone says, or null. Never echoes it. */
-const valueFinding = (value: string): string | null => {
-	const literal = withoutReferences(value).trim()
+const valueFinding = (literal: string, publicValue: boolean): string | null => {
 	if (literal === '') return null
 	if (/-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(literal)) return 'it holds a private key'
 	if (/^(Basic|Bearer|Token)\s+\S{8,}$/i.test(literal)) return 'it is an Authorization header value'
@@ -170,23 +191,27 @@ const valueFinding = (value: string): string | null => {
 	for (const [pattern, kind] of TOKEN_PREFIXES) {
 		if (pattern.test(literal)) return `it reads like ${kind}`
 	}
-	if (looksRandom(literal)) return 'it is a long random string'
+	if (!publicValue && looksRandom(literal)) return 'it is a long random string'
 	return null
 }
 
 /**
  * Whether a plain `name = value` looks like a credential, and why; null when it does not.
  *
- * The name matches on a credential word (`TOKEN`, `SECRET`, `PASSWORD`, `BASIC_AUTH`, a `KEY` that is not an id, a
- * public key or a cache key), unless its last word makes it describe one (`TOKEN_URL`, `PASSWORD_MIN_LENGTH`). A name match needs a
- * literal value: an empty value or one made only of references holds no credential. The value matches on its own: a
- * private key, an Authorization header, a URL with a password, an issuer's token prefix, or a long random string.
+ * The name matches on a credential word (`TOKEN`, `SECRET`, `PASSWORD`, `PASS`, `BASIC_AUTH`, a `KEY` or `KEYS` that is
+ * not an id, a public key or a cache key), unless its last word makes it describe one (`TOKEN_URL`,
+ * `PASSWORD_MIN_LENGTH`). A name match needs a literal that could be a credential: an empty value, one made only of
+ * references, a boolean, an integer or a duration is not. The value matches on its own: a private key, an
+ * Authorization header, a URL with a password, an issuer's token prefix, or a long random string unless the name says
+ * the value is public (a publishable or site key, an id).
  */
 export function plainCredentialFinding(name: string, value: string): PlainCredentialFinding | null {
-	const word = credentialWordIn(name)
-	if (word !== null && withoutReferences(value).trim() !== '') {
+	const words = nameWords(name)
+	const literal = literalOf(value)
+	const word = credentialWordIn(words)
+	if (word !== null && literal !== '' && !isSettingValue(literal)) {
 		return { basis: 'name', because: `its name contains \`${word}\`` }
 	}
-	const because = valueFinding(value)
+	const because = valueFinding(literal, namesAPublicValue(words))
 	return because === null ? null : { basis: 'value', because }
 }

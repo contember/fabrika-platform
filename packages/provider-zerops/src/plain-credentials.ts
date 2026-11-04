@@ -26,7 +26,9 @@ const isMapping = (value: JsonValue | undefined): value is { readonly [key: stri
 const authoredPlainCredentials = (document: JsonValue, root: string, notSecret: ReadonlySet<string>): AuthoredPlainCredential[] => {
 	const found: AuthoredPlainCredential[] = []
 	const check = (path: string, name: string, value: JsonValue, header: boolean): void => {
-		if (typeof value !== 'string' || notSecret.has(name)) return
+		// A header name is case-insensitive, as HTTP has it; a variable name is exact.
+		const listed = header ? [...notSecret].some((entry) => entry.toLowerCase() === name.toLowerCase()) : notSecret.has(name)
+		if (typeof value !== 'string' || listed) return
 		const finding = plainCredentialFinding(name, value)
 		if (finding !== null) found.push({ path, name, because: finding.because, header })
 	}

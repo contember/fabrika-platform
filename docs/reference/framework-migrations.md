@@ -111,8 +111,9 @@ On Zerops, `fabrika app build` refuses a `zerops.yaml` `envVariables` or `routin
 credential: its name says `TOKEN`, `SECRET`, `PASSWORD`, `BASIC_AUTH` or a key, or its value reads like a token, a URL
 with a password or an Authorization header. Such a variable is readable by every member of the Zerops project and sits
 in the repository in clear. Move a real credential to `pipeline.secrets`, set it with `fabrika control apps secrets put`,
-and reference it (`${NAME}`); a reference is never refused. List a name that is not a credential in
-`target.notSecret` of `fabrika.config.ts`. The check runs only at build, so a manifest an older release built still
+and delete its `envVariables` entry: the secret reaches the process as a service variable under its own name, and an
+entry of the same name would collide with it. A value made of references (`${db_password}`) is never refused. List a
+name that is not a credential in `target.notSecret` of `fabrika.config.ts`. The check runs only at build, so a manifest an older release built still
 deploys.
 
 ## 0.7 → 0.8

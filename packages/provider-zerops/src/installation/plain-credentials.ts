@@ -45,7 +45,8 @@ export const plainCredentialVariables = (
 ): PlainCredentialVariable[] => {
 	const found: PlainCredentialVariable[] = []
 	for (const [key, record] of live) {
-		if (record.sensitive || written.has(key) || allowed.has(plainVariableId(service, key))) continue
+		// A record the platform owns (`type: SYSTEM`) is not the operator's to make sensitive, so it is not refused.
+		if (record.sensitive || record.type === 'SYSTEM' || written.has(key) || allowed.has(plainVariableId(service, key))) continue
 		if (DECLARED_SECRET_EMAIL_VARIABLES.has(key) && record.content.trim() !== '') {
 			found.push({ service, key, because: 'its mail provider declares it secret' })
 			continue
@@ -62,9 +63,9 @@ export const plainCredentialRefusal = (found: readonly PlainCredentialVariable[]
 		[
 			`${found.length} readable service variable(s) look like credentials, and every member of the Zerops project can read them:`,
 			...found.map((entry) => `  ${plainVariableId(entry.service, entry.key)}: ${entry.because}`),
-			'Store each one as a SENSITIVE variable of the same service, then restart that service. In the Zerops GUI, delete',
-			'the variable and add it again as a secret one; through the API, `PUT /user-data/{id}` with `sensitive: true`.',
-			'`zops env set --sensitive` does not change an existing variable. Nothing has been written or deployed.',
+			'Store each one as a SENSITIVE variable of the same service, then restart that service: in the Zerops GUI, delete',
+			'the variable and add it again as a secret one. `zops env set --sensitive` does not change an existing variable.',
+			'Nothing has been written or deployed.',
 			'A variable that is not a credential: name it in FABRIKA_PLATFORM_PLAIN_VARIABLES (or --plain-variables) as',
 			'`<service>/<KEY>`, comma-separated, and deploy again.',
 		].join('\n'),

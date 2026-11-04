@@ -48,8 +48,9 @@ function assertNotACredential(appId: string, name: string, value: string): void 
 	fail(
 		400,
 		`application variable "${name}" looks like a credential: ${finding.because}. A variable is shown in clear to everyone who `
-			+ `manages ${appId}; store it as a secret instead (\`fabrika control apps secrets put --app=${appId} --name=${name}\`, `
-			+ 'the value on stdin). If it is not a credential, put it again marked not secret (`--not-secret`).',
+			+ `manages ${appId}; make it a secret instead: declare it in \`pipeline.secrets\` of the app's config, then `
+			+ `\`fabrika control apps secrets put --app=${appId} --name=${name}\` with the value on stdin. If it is not a credential, `
+			+ 'put it again marked not secret: `--not-secret` (a CLI of this release or newer), or "Not a secret" in the console.',
 	)
 }
 

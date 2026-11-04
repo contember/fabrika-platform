@@ -774,7 +774,8 @@ with `sensitive: field is required` (the CLI's update body omits it); the raw `P
 
 Reported by an operator on 2026-11-04, not measured here: on an EXISTING READABLE variable the same command answers
 success and leaves the variable readable, so it cannot turn a readable credential sensitive. Delete and re-create
-the variable as a secret one, or send `PUT /user-data/{id}` with `sensitive: true`. `platform deploy` refuses an
+the variable as a secret one. UNVERIFIED: whether `PUT /user-data/{id}` with `sensitive: true` turns a READABLE record
+sensitive; only the other directions above were measured. `platform deploy` refuses an
 installation whose platform services hold a readable variable that looks like a credential
 (`packages/provider-zerops/src/installation/plain-credentials.ts`).
 

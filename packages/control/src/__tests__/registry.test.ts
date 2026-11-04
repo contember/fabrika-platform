@@ -745,14 +745,21 @@ describe('onboarding + registry CRUD', () => {
 		const { deps } = makeDeps()
 		await rpcResult(rpcRequest('apps.create', { id: 'app', repoUrl: 'https://github.com/acme/app' }), deps)
 
-		for (const variable of [{ name: 'POSTMARK_SERVER_TOKEN', value: 'abc' }, { name: 'UPSTREAM', value: 'https://app:hunter2@example.com' }]) {
+		for (
+			const [variable, secret] of [
+				[{ name: 'POSTMARK_SERVER_TOKEN', value: 'pm-4f2a9c' }, 'pm-4f2a9c'],
+				[{ name: 'UPSTREAM', value: 'https://app:hunter2@example.com' }, 'hunter2'],
+			] as const
+		) {
 			const refused = await rpcResult(rpcRequest('apps.variables.put', { appId: 'app', variable }), deps)
 			expect(refused.status).toBe(400)
 			const { error } = (await refused.json()) as { error: string }
 			expect(error).toContain(`application variable "${variable.name}" looks like a credential`)
 			expect(error).toContain(`fabrika control apps secrets put --app=app --name=${variable.name}`)
+			expect(error).toContain('pipeline.secrets')
 			expect(error).toContain('--not-secret')
-			expect(error).not.toContain(variable.value)
+			expect(error).toContain('"Not a secret" in the console')
+			expect(error).not.toContain(secret)
 		}
 		expect(await deps.repositories.registry.listAppVars('app')).toEqual([])
 

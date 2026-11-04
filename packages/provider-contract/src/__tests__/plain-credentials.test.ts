@@ -20,6 +20,10 @@ describe('plainCredentialFinding', () => {
 		['basicAuth', 'admin:hunter2', 'BASIC_AUTH'],
 		['GOOGLE_APPLICATION_CREDENTIALS', '{"type":"service_account"}', 'CREDENTIALS'],
 		['GITHUB_WEBHOOK_SECRET', 'abc', 'SECRET'],
+		['SMTP_PASS', 'hunter2', 'PASS'],
+		['FABRIKA_IAM_SIGNING_KEYS', '[{"kty":"OKP"}]', 'KEYS'],
+		['DB_PASSWORD', '123456', 'PASSWORD'],
+		['MAIL_TOKEN', 'Bearer x-${token}', 'TOKEN'],
 	])('the name %s is a credential name', (name, value, word) => {
 		expect(plainCredentialFinding(name, value)).toEqual({ basis: 'name', because: `its name contains \`${word}\`` })
 	})
@@ -37,6 +41,13 @@ describe('plainCredentialFinding', () => {
 		['KEYCLOAK_REALM', 'main'],
 		['BASIC_AUTH_ENABLED', 'true'],
 		['TOKEN_TTL', '3600'],
+		['Access-Control-Allow-Credentials', 'true'],
+		['CORS_ALLOW_CREDENTIALS', 'TRUE'],
+		['TOKEN_EXPIRES_IN', '3600'],
+		['KEY_ROTATION_DAYS', '30'],
+		['SESSION_TOKEN_LIFE', '15m'],
+		['FEATURE_PASSWORD_LOGIN', 'off'],
+		['MAIL_TOKEN', 'Bearer ${token}'],
 	])('the name %s describes a credential and does not hold one', (name, value) => {
 		expect(plainCredentialFinding(name, value)).toBeNull()
 	})
@@ -79,6 +90,20 @@ describe('plainCredentialFinding', () => {
 		['an upper-case hex digest', 'A3F1C9E07B2D4F6A8C1E3B5D7F9A0C2E'],
 	])('the value %s is not one', (_kind, value) => {
 		expect(plainCredentialFinding('SOMETHING', value)).toBeNull()
+	})
+
+	test.each([
+		['STRIPE_PUBLISHABLE_KEY', join('pk', '_live_', RANDOM)],
+		['RECAPTCHA_SITE_KEY', RANDOM],
+		['VAPID_PUBLIC_KEY', RANDOM_BASE64],
+		['BUILD_ID', RANDOM],
+	])('the name %s says the value is public, so a random value is not refused', (name, value) => {
+		expect(plainCredentialFinding(name, value)).toBeNull()
+	})
+
+	test('a public name still does not let a private key or a URL password through', () => {
+		expect(plainCredentialFinding('SIGNING_KEY_ID', '-----BEGIN PRIVATE KEY-----\nMIIE')?.because).toBe('it holds a private key')
+		expect(plainCredentialFinding('UPSTREAM_ID', 'https://a:hunter2@b.example')?.because).toBe('its URL carries a password')
 	})
 
 	test('a finding never carries the value', () => {
