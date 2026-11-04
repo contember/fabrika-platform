@@ -32,7 +32,8 @@ The console overview has an applications panel, but it reads each application's 
 stops at 8 applications (`OVERVIEW_APP_LIMIT`, `packages/dashboard/src/lib/overview.ts:34`; backlog 190).
 
 And there is no way to take an unused environment out of service short of deleting it. A delete is immediate, keeps
-no backup, and on Zerops is refused while the environment holds namespace claims (backlog 87).
+no backup, and on Zerops is refused with 409 while the environment holds namespace claims
+(`assertNoHeldResourceClaims`, `packages/control/src/api/registry/apps.ts`).
 
 ## Design
 
@@ -120,7 +121,7 @@ each of its environments.
 6. **Delete.** After the retention the page offers the ordinary delete (`deleteAppEnvUseCase`,
    `packages/control/src/api/registry/environments.ts:156`; `deleteAppUseCase`, `apps.ts:52`). Maintenance never deletes
    on its own. The delete keeps its current rules: the human check for a protected environment, the dev-sandbox check
-   and, on Zerops, the claims refusal of backlog 87. Fabrika deletes no provider resource
+   and, on Zerops, the claims refusal (`assertNoHeldResourceClaims`). Fabrika deletes no provider resource
    ([ADR-0034](../decisions/0034-the-control-plane-creates-the-projects-it-owns.md)), so the Worker, its object and
    its R2 dumps on Cloudflare, and the services on Zerops, stay at the provider; the page lists them as left behind.
 
