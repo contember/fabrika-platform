@@ -47,7 +47,7 @@ const hostTmpdir = process.env['TMPDIR']
 let privateTmpdir: string
 
 // Concurrent test runs on the host also create `fabrika-platform-source-*` in the shared tmpdir; the snapshots and the
-// abort watcher must see only this file's.
+// abort check must see only this file's.
 beforeAll(async () => {
 	privateTmpdir = await mkdtemp(join(tmpdir(), 'platform-source-tests-'))
 	process.env['TMPDIR'] = privateTmpdir
@@ -218,12 +218,13 @@ describe('preparePlatformSource', () => {
 	test('cleans temporary resources when aborted after snapshot allocation', async () => {
 		const before = await snapshots()
 		const controller = new AbortController()
-		// Abort at the first cancellation check after the temporary directory exists: the next step's, deterministically.
+		// Abort at the first cancellation check after THIS preparation's temporary directory exists (one already in `before`
+		// would abort before allocation and prove nothing): the next step's, deterministically.
 		// A filesystem watcher would race the preparation, and a late event under load let it finish unaborted (#136).
 		const check = controller.signal.throwIfAborted.bind(controller.signal)
 		let allocated = false
 		const spy = spyOn(controller.signal, 'throwIfAborted').mockImplementation(() => {
-			if (!allocated && readdirSync(tmpdir()).some((name) => name.startsWith('fabrika-platform-source-'))) {
+			if (!allocated && readdirSync(tmpdir()).some((name) => name.startsWith('fabrika-platform-source-') && !before.includes(name))) {
 				allocated = true
 				controller.abort()
 			}
