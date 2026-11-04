@@ -4,6 +4,7 @@
 import type { TypedColumnList } from '@fabrika/db'
 import { beforeEach, describe, expect, test } from 'bun:test'
 import type { ColumnType } from 'kysely'
+import { z } from 'zod/v4'
 import type { ContainerGrant } from '../capability'
 import { CapabilityError, PolicyError, QueryRefusedError } from '../errors'
 import { bindScopedDatabaseProvisionally, type DataAccess, dataAccessOf, type DataHandles, type DataSite } from '../framework'
@@ -154,6 +155,17 @@ describe('a Within that carries a grant at a row which reveals its ancestor', ()
 	test("the grant's values count towards the Within's limit", async () => {
 		const many = Array.from({ length: 1001 }, (_, index) => `t${index}`)
 		await expect(listed('projects', atTasks(...many))).rejects.toThrow('at most 1000')
+	})
+})
+
+describe('a raw statement never writes a revealing row', () => {
+	test("refuses an insert that picks the row's key, which could revive a node a stale grant still names", async () => {
+		const transaction = data.invocation(false)
+		const sql = data.sql({ mode: 'write', check() {}, session: () => transaction.session(), fail: () => transaction.fail() })
+		const revive = () => sql(z.strictObject({}))`insert into tasks (id, project_id, open, version) values (${'t-old'}, ${'p2'}, ${true}, ${1})`
+		await expect(revive()).rejects.toThrow("'tasks' at line 1 hands out access")
+		await transaction.rollback()
+		expect(storage.sql.exec("select id from tasks where id = 't-old'").toArray()).toEqual([])
 	})
 })
 
