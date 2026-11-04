@@ -17,16 +17,17 @@ never resolves to a different item than the one it meant.
 ## The phase ladder
 
 Items 01–05 formed the portability ladder. Phases 0–4 are complete. Phase 5, the live-account bring-up, is done:
-Zerops runs production workloads. The checks no live run has recorded (the `standard` tier, custom domains, the
-balancer's client address, a release and recovery rehearsal) are item [05](05-bring-up-on-a-real-zerops-account.md).
+Zerops runs production workloads on the `light` tier. The checks no live run has recorded (the `standard` tier, the
+rest of custom domains, a client address on a dedicated IPv4, a release and recovery rehearsal) are item
+[05](05-bring-up-on-a-real-zerops-account.md).
 
 ## Items
 
 <!-- one line each: NN — short summary (link). Keep it short. -->
 
-- [05](05-bring-up-on-a-real-zerops-account.md) — Zerops runs production; no live run records the `standard` tier, custom domains, the balancer's client address or a release and recovery rehearsal.
+- [05](05-bring-up-on-a-real-zerops-account.md) — Zerops runs production on `light`; no live run records the `standard` tier, the rest of custom domains, a client address on a dedicated IPv4 or a release and recovery rehearsal.
 - [22](22-unix-second-columns-overflow-in-2038.md) — int4 timestamps; `BIGINT` costs every reader a string. Decide before it is urgent.
-- [36](36-complete-zerops-release-artifact-correlation.md) — Measure the Zerops build's sensitive source-map key lift on a real account, report artifacts after `reconcile`, and link Delivery runs to Operations evidence.
+- [36](36-complete-zerops-release-artifact-correlation.md) — Production Zerops builds upload their maps; prove original-source frames, report artifacts after `reconcile`, and link Delivery runs to Operations evidence.
 - [38](38-add-dns-safe-operations-egress.md) — Prevent private-address and DNS-rebinding egress through Operations webhooks and active health checks; production runs without it.
 - [46](46-add-portable-email-alert-delivery.md) — Add email alert delivery without coupling the portable Operations outbox to Cloudflare Email Routing.
 - [54](54-give-operations-its-own-proxy-app-identity.md) — Half shipped; what is left is moving the operator surface onto the Operations host, which is a console architecture change, not a rename.
@@ -47,7 +48,7 @@ balancer's client address, a release and recovery rehearsal) are item [05](05-br
 - [99](99-no-check-builds-the-runner-image.md) — No CI job builds or smoke-tests the runner image, and its `bun install` runs without a lockfile.
 - [100](100-a-principal-in-many-scopes-gets-no-token.md) — One permission entry per action and scope meets the 24 KiB application token bound at about 150 entries; a compact claim shape and the 1000-value `Within` cap remain.
 - [103](103-runs-keeps-an-unused-pending-access-column.md) — Nothing reads or writes `runs.pending_access_json` since contractless applications are refused; a later migration drops it.
-- [116](116-verify-the-paved-road-zerops-facts-on-a-real-account.md) — New roles on an HA service's direct port, ClamAV on a real service, and the pre-WU12 Notes schema need one live sitting.
+- [116](116-verify-the-paved-road-zerops-facts-on-a-real-account.md) — New roles on an HA service's direct port and the unmeasured half of ClamAV (build `freshclam`, a scan run, peak memory) need one live sitting.
 - [117](117-an-application-test-cannot-inject-a-database-fault.md) — The checker refuses Bun's SQL and `process.env` in tests too; only the job clock can fail an attempt.
 - [122](122-a-generated-case-cannot-seed-a-child-rows-state.md) — `rows` seeds no child row state; the own case expects exactly 200.
 - [135](135-deleting-a-zerops-secret-named-like-a-descriptor-variable-is-forbidden.md) — A Zerops secret named like a `run.envVariables` entry can fail to delete with `userDataDeleteForbidden`.
