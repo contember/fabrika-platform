@@ -541,6 +541,13 @@ names the same fix at runtime.
   `CapabilityError` at run time (`scopedApplicationRead` in `packages/db/src/store.ts`). The table's read action
   decides who reads it, so a code list an administrator edits is validated by reading it, and a log nobody scoped
   reads keeps an action no scoped endpoint holds.
+- **A view is a read-only table** ([ADR-0072](../decisions/0072-a-view-is-a-read-only-table.md)). `fabrika db codegen`
+  reads every view (a materialized one on Postgres too), every column `| null`, and marks it `view: true`. One without
+  a policy is reached only by `ctx.sql`. With `scope: { child: '<parent>' }` it is read under the parent's `Ref` and a
+  `Within` exactly as a child table (a view of one row per parent states `key: '<parent column>'` and is read with
+  `get(ctx.target.value)`); with `scope: { reference }` through `ctx.db.reference`. Its handles' writes are
+  `Unavailable`, `unscoped: { <view>: 'write' }` is refused, and the data layer refuses a write of one before compiling.
+  No foreign key ties its rows to the parent: its SQL is a migration deviation the approver reviews.
 - **Writes answer `{ id, version }`** (`{ id }` for a table without a version), never row data. A versioned table's
   `update` and `remove` take `{ expectVersion }`: a row that changed since is 409, a missing one 404. `update` takes any
   subset of the columns its action updates; one that sets none writes nothing, not even the version, and answers the
