@@ -32,12 +32,16 @@ describe.skipIf(!hasPostgres)('a database at its connection limit', () => {
 		await admin.close()
 	})
 
-	/** A clock that moves only when the waiting sleeps, and the delays it slept. */
+	/** A clock that moves when the waiting sleeps or an attempt advances it, and the delays it slept. */
 	const clock = () => {
 		let now = 0
 		const slept: number[] = []
 		return {
 			slept,
+			/** Time an attempt itself takes, as a connect that is refused late does. */
+			advance: (ms: number) => {
+				now += ms
+			},
 			options: {
 				now: () => now,
 				random: () => 1,
@@ -74,6 +78,34 @@ describe.skipIf(!hasPostgres)('a database at its connection limit', () => {
 			'the database had no free connection slot for 2 s (SQLSTATE 53300): its connection limit is exhausted',
 		)
 		expect(slept).toEqual([250, 500, 1000, 250])
+	})
+
+	test('reports the wait it measured, which the last attempt can take past the one allowed', async () => {
+		const { slept, advance, options } = clock()
+		const slowRefusal = () => {
+			advance(600)
+			return Promise.reject(refused)
+		}
+		const failure = await withConnectionCapacity(slowRefusal, { ...options, waitMs: 2000 }).catch((error: unknown) => error)
+		// 600 + 250 + 600 + 500 + 600 = 2550 ms against the 2000 allowed: the message says 3 s, not the configured 2 s.
+		expect(slept).toEqual([250, 500])
+		expect(failure instanceof Error ? failure.message : '').toBe(
+			'the database had no free connection slot for 3 s (SQLSTATE 53300): its connection limit is exhausted',
+		)
+	})
+
+	test('rounds the measured wait to the nearest second, not up', async () => {
+		const { slept, advance, options } = clock()
+		const slowRefusal = () => {
+			advance(1400)
+			return Promise.reject(refused)
+		}
+		const failure = await withConnectionCapacity(slowRefusal, { ...options, waitMs: 2000 }).catch((error: unknown) => error)
+		// 1400 + 250 + 1400 = 3050 ms: 3 s rounded, where rounding up would say 4 s.
+		expect(slept).toEqual([250])
+		expect(failure instanceof Error ? failure.message : '').toBe(
+			'the database had no free connection slot for 3 s (SQLSTATE 53300): its connection limit is exhausted',
+		)
 	})
 
 	test('does not wait out any other failure', async () => {

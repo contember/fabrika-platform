@@ -130,9 +130,16 @@ describe.skipIf(!hasPostgres)("a test database's connections", () => {
 		], limited.url)
 		expect(stderr).toBe('')
 		const [first, second] = stdout.trim().split('\n').map((line) => z.object({ message: z.string(), ms: z.number() }).parse(JSON.parse(line)))
-		expect(first?.message).toStartWith(`first.test.ts: ${CONNECTION_CAPACITY_MESSAGE} for 1 s (SQLSTATE 53300)`)
+		expect(first?.message).toStartWith(`first.test.ts: ${CONNECTION_CAPACITY_MESSAGE} for `)
 		expect(first?.message).toEndWith('its cases did not run')
 		expect(first?.ms).toBeGreaterThanOrEqual(1000)
+		// The message reports the wait it measured, rounded to seconds: at least the 1 s allowed, and on a loaded host the
+		// last attempt can take it past 1.5 s (#141). The wait is measured inside the child's own measurement, but with
+		// `Date.now`, whose whole milliseconds can overstate it by up to 1 ms, so the bound rounds the child's up. The exact
+		// number is pinned by the fake-clock test of `withConnectionCapacity`.
+		const waited = Number(/ for (\d+) s \(SQLSTATE 53300\)/.exec(first?.message ?? '')?.[1])
+		expect(waited).toBeGreaterThanOrEqual(1)
+		expect(waited).toBeLessThanOrEqual(Math.ceil((first?.ms ?? 0) / 1000))
 		expect(second?.message).toStartWith(`second.test.ts: ${CONNECTION_CAPACITY_MESSAGE}`)
 		expect(second?.ms).toBeLessThan(500)
 	})
