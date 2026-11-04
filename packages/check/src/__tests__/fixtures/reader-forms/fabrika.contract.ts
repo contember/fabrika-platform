@@ -60,6 +60,7 @@ export const contract = defineContract({
 	app: c.spa('/', { dir: 'dist/app', access: { member: true } }),
 	files: {
 		attachments: c.files({ types: ['image/png', 'application/pdf'], maxBytes: 10485760, scan: true }),
+		feed: c.files({ types: ['application/rss+xml', 'application/atom+xml'], maxBytes: 65536, inline: true }),
 	},
 	jobs: {
 		cleanup: c.cron(nightly, { actions: ['tasks.delete'], limits: { timeoutMs: 900000 }, retries: 1 }),

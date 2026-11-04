@@ -235,7 +235,8 @@ describe('the static reader and the evaluated contract agree', () => {
 		expect(new Set(artifact.endpoints.map((row) => row.kind))).toEqual(
 			new Set(['query', 'mutation', 'spa', 'health', 'webhook', 'link-spa']),
 		)
-		expect(Object.keys(artifact.fileKinds ?? {})).toEqual(['attachments'])
+		expect(Object.keys(artifact.fileKinds ?? {})).toEqual(['attachments', 'feed'])
+		expect(artifact.fileKinds?.['feed']?.inline).toBe(true)
 		expect(Object.keys(artifact.jobs).sort()).toEqual(['cleanup', 'digest'])
 		expect(Object.keys(artifact.exports)).toEqual(['tasks'])
 		expect(Object.keys(artifact.imports)).toEqual(['billing'])

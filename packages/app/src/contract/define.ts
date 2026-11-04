@@ -295,7 +295,7 @@ export interface WebhookMount<B extends string, Acts extends string, I extends S
 	readonly input: I
 }
 
-/** A file kind `c.files({ types, maxBytes, scan? })` declares: what a file column of that kind holds. */
+/** A file kind `c.files({ types, maxBytes, scan?, inline? })` declares: what a file column of that kind holds. */
 export interface FileKind extends FileKindDeclaration {}
 
 export interface CronJob<Acts extends string> extends CronDeclaration {
@@ -427,6 +427,11 @@ export interface Kit<A extends string, D extends string, CD extends string> {
 				readonly maxBytes: number
 				/** Each file is scanned for malware and served only after a clean verdict; until then it answers 409. */
 				readonly scan?: boolean
+				/**
+				 * Each file is shown, not downloaded (`Content-Disposition: inline`): a feed or a sitemap a machine reads. Every
+				 * type is an inert image or `application/xml`, `text/xml`, `application/rss+xml`, `application/atom+xml`.
+				 */
+				readonly inline?: boolean
 			}
 			& Owned<'kind'>,
 	): FileKind
@@ -528,6 +533,7 @@ export function surfaceKit<A extends string, D extends string, CD extends string
 			types: kind.types,
 			maxBytes: kind.maxBytes,
 			scan: kind.scan,
+			inline: kind.inline,
 			unknownOptions: unknownOptions(kind, 'fileKind'),
 		}),
 		cron: (schedule, options) => ({

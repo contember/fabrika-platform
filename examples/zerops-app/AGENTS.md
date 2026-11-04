@@ -1922,7 +1922,7 @@ task_attachments: {
 - A file column is `UUID REFERENCES fabrika_files (id)` with an index on it; the checker's `file-column-migration`
   verifies both for every column the policy names in `files`. `fabrika_files` is the framework's table: never write
   it.
-- A file kind (`c.files({ types, maxBytes, scan? })`) has no owner, no actions and no endpoint. The table's actions
+- A file kind (`c.files({ types, maxBytes, scan?, inline? })`) has no owner, no actions and no endpoint. The table's actions
   are the file's authority, and the approver reads "`tasks.write` writes `task_attachments.file` (attachments)".
 - A file reaches what its row reaches, now: a moved task moves its files. Deleting the row (here with its task, by the
   cascade) or clearing a nullable column removes the reference; the framework's sweep deletes a file no column
@@ -2011,6 +2011,13 @@ export const attachments = app.group({ callers: ['human'] }, (r) => ({
 - A public image (a catalog picture in a page or an e-mail) is a public `GET` query with `http: { cache: 'immutable' }`
   whose input names the file as well as its row (`{ product, file }`), so a new image changes the URL. The handler
   refuses a file id that is not the row's.
+- A download is an attachment (`Content-Disposition: attachment`); only `image/png`, `image/jpeg`, `image/gif` and
+  `image/webp` are shown inline. A file a machine reads at its URL (an RSS or Atom feed, a sitemap, an e-shop import)
+  is of a kind declared `inline: true`, e.g. `c.files({ types: ['application/rss+xml'], maxBytes: 1048576, inline: true })`,
+  served by a public `GET` query (`http: { path: '/feed.xml' }`). An inline kind admits only those images and
+  `application/xml`, `text/xml`, `application/rss+xml`, `application/atom+xml`; the build refuses SVG, HTML and every
+  other type there. Keep user uploads in a kind without `inline`. An XML file's bytes must start with `<` (after a byte
+  order mark and white space), or the upload is 415.
 
 The SPA calls them through the typed client, never a hand-written `fetch`. `api.attachments.download.url(input)` is
 the URL of a `GET` file procedure for a same-origin page (`<img src>`, `<a download>`), and

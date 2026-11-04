@@ -893,7 +893,9 @@ vocabulary (`packages/db/CLAUDE.md`).
   object has no durable intent until its commit, and an eviction before it leaks the bytes.
 - **Every answer of a file output carries the file treatment**, denials and errors included: `ContractRuntime.fetch`
   chooses it by the planned endpoint's row, and a file is a `FileDownload`, never a `Response`, so no handler or store
-  can set its headers. Keep the treatment equal to ADR-0022's.
+  can set its headers. Keep the treatment equal to ADR-0022's. Only a kind declared `inline: true` shows a non-image
+  (an XML document); its row is `response: 'inline-file'`, and `buildArtifact` and `contractArtifactSchema` refuse an
+  inline kind with any type outside `inlineFileTypes('inline-file')`. Never let a file choose its own disposition.
 - **The type is the sniffed one.** A file is stored only when its first `SNIFF_BYTES` are the declared type, and the
   recorded type is what a download sends. The size bound is the object store's (`FileObjectStore.write`), enforced
   while the body streams.

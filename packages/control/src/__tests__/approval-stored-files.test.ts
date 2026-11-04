@@ -59,6 +59,18 @@ describe('files as values in the approval', () => {
 		])
 	})
 
+	test('a kind that starts to show its files inline widens; one that serves them as downloads again narrows', () => {
+		const shown: ContractArtifact = {
+			...artifact,
+			fileKinds: { ...artifact.fileKinds, catalog: { types: ['image/png'], maxBytes: 262144, inline: true } },
+		}
+		expect(linesOf(artifact, shown)).toEqual(['widens: File kind `catalog` shows its files inline instead of as downloads'])
+		expect(linesOf(shown, artifact)).toEqual(['narrows: File kind `catalog` serves its files as downloads'])
+		expect(linesOf({ ...artifact, fileKinds: {} }, shown)).toContain(
+			'neutral: New file kind `catalog`: `image/png`, at most 262144 bytes, shown inline',
+		)
+	})
+
 	test('the surface notes a file output and the kinds a procedure takes', () => {
 		const surface = snapshotSurface(snapshot(artifact))
 		expect(surface.find((endpoint) => endpoint.id === 'api.shop.image')?.notes).toContain('answers a stored file of kind `catalog`')

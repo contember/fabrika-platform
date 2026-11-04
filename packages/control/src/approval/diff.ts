@@ -1520,9 +1520,11 @@ function externalChange(name: string, before: true | undefined, after: true | un
 	])
 }
 
-/** `image/png, at most 262144 bytes, served only after a clean scan`. */
+/** `image/png, at most 262144 bytes, served only after a clean scan`, and `, shown inline` for an inline kind. */
 function fileKindPhrase(kind: FileKindArtifact): string {
-	return `${listOf(kind.types, 'no types')}, at most ${bytes(kind.maxBytes)}${kind.scan === true ? ', served only after a clean scan' : ''}`
+	return `${listOf(kind.types, 'no types')}, at most ${bytes(kind.maxBytes)}${kind.scan === true ? ', served only after a clean scan' : ''}${
+		kind.inline === true ? ', shown inline' : ''
+	}`
 }
 
 function fileKindChanges(name: string, from: FileKindArtifact, to: FileKindArtifact): RuledLine[] {
@@ -1537,6 +1539,15 @@ function fileKindChanges(name: string, from: FileKindArtifact, to: FileKindArtif
 				to.scan === true,
 				narrowing(`${kind} serves a file only after a clean scan`),
 				widening(`${kind} no longer waits for a scan`),
+			),
+		),
+		...ruled(
+			'file-kind.inline',
+			flagChange(
+				from.inline === true,
+				to.inline === true,
+				widening(`${kind} shows its files inline instead of as downloads`),
+				narrowing(`${kind} serves its files as downloads`),
 			),
 		),
 	]

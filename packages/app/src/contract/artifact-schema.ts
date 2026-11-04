@@ -28,7 +28,7 @@ import {
 	terminalIdentifyProblem,
 	type TupleShape,
 } from '@fabrika/auth-core'
-import { WORKER_BLOB_SOURCE } from '@fabrika/proxy-core/headers'
+import { inlineFileTypes, WORKER_BLOB_SOURCE } from '@fabrika/proxy-core/headers'
 import { z } from 'zod/v4'
 import {
 	ALTCHA_LIMITS,
@@ -173,7 +173,7 @@ const rowBase = {
 	admission: z.strictObject({ contentTypes: z.tuple([name], name), maxBytes: z.int().positive().nullable() }).nullable(),
 	input: schemaShapeSchema.nullable(),
 	output: outputShapeSchema.nullable(),
-	response: z.literal('file').optional(),
+	response: z.enum(['file', 'inline-file']).optional(),
 }
 
 const endpointRow: z.ZodType<EndpointRow> = z.union([
@@ -229,7 +229,7 @@ const endpointRow: z.ZodType<EndpointRow> = z.union([
 	}),
 ]).refine(
 	// Only a procedure answers a stored file, and exactly when its output is one.
-	(row) => (row.response === 'file') === (row.output?.type === 'file') && (row.response === undefined || FILE_RESPONSE_KINDS.includes(row.kind)),
+	(row) => (row.response !== undefined) === (row.output?.type === 'file') && (row.response === undefined || FILE_RESPONSE_KINDS.includes(row.kind)),
 	'only a procedure whose output is a file answers a stored file',
 ).refine(
 	// Only an RPC procedure, a public procedure and a form open to another origin, and only the anonymous two to any (ADR-0022).
@@ -364,7 +364,13 @@ export const contractArtifactSchema: z.ZodType<ContractArtifact> = z.strictObjec
 		link: z.union([z.boolean(), z.array(name).nonempty()]),
 		scan: z.literal(true).optional(),
 	})),
-	fileKinds: z.record(fileKindName, z.strictObject({ types: names, maxBytes: z.int().positive(), scan: z.literal(true).optional() })).optional(),
+	fileKinds: z.record(
+		fileKindName,
+		z.strictObject({ types: names, maxBytes: z.int().positive(), scan: z.literal(true).optional(), inline: z.literal(true).optional() }).refine(
+			(kind) => kind.inline === undefined || kind.types.every((type) => inlineFileTypes('inline-file').includes(type)),
+			'an inline kind admits only inert images and XML documents',
+		),
+	).optional(),
 	jobs: record(z.strictObject({
 		schedule: name,
 		actions,
@@ -449,6 +455,10 @@ export const contractArtifactSchema: z.ZodType<ContractArtifact> = z.strictObjec
 	tokens: record(z.strictObject({ claims: schemaShapeSchema, maxDays: z.int().positive().max(TOKEN_MAX_DAYS) })).optional(),
 }).superRefine((artifact, context) => {
 	for (const row of artifact.endpoints) {
+		// A row answering a file of an inline kind shows it, every other row that answers a file downloads it.
+		if (row.output?.type === 'file' && (row.response === 'inline-file') !== (artifact.fileKinds?.[row.output.kind]?.inline === true)) {
+			context.addIssue({ code: 'custom', path: ['endpoints'], message: `'${row.id}' is inline-file exactly when its file kind is inline` })
+		}
 		if (row.kind === 'public' && row.source.kind !== 'challenge' && artifact.declared?.[row.id]?.actions === undefined) {
 			context.addIssue({ code: 'custom', path: ['declared', row.id], message: 'a public procedure declares its workload actions' })
 		}
