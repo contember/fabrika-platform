@@ -9,6 +9,8 @@ export interface ContractDeclaration<S> {
 	readonly dimensions: Readonly<Record<string, DimensionDeclaration>>
 	readonly actions: Readonly<Record<string, string>>
 	readonly roles: Readonly<Record<string, RoleDeclaration>>
+	/** The vocabulary's relations, by name; absent without any. */
+	readonly relations?: Readonly<Record<string, { readonly dimension: string }>>
 	readonly mounts: Readonly<Record<string, MountDeclaration<S>>>
 	readonly files: Readonly<Record<string, FileKindDeclaration>>
 	readonly jobs: Readonly<Record<string, CronDeclaration>>
@@ -134,6 +136,8 @@ export interface RoleDeclaration {
 	readonly member?: { readonly scope: string; readonly assignableBy: readonly string[] }
 	/** `true` only; `buildArtifact` refuses another value, and refuses it on a role without `member`. */
 	readonly external?: boolean
+	/** Relation → the actions a global holder of the role holds where a row of the relation names them. */
+	readonly via?: Readonly<Record<string, readonly string[]>>
 }
 
 export type AccessDeclaration =

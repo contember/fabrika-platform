@@ -404,13 +404,13 @@ function contractDatabase(
 		return null
 	}
 	try {
-		const { locate, release } = bindScopedDatabaseProvisionally(database, {
+		const { locate, relates, release } = bindScopedDatabaseProvisionally(database, {
 			database: connection,
 			capabilities,
 			readOnly: requestIsReadOnly,
 			...(projectWakes === undefined ? {} : { projectWakes }),
 		})
-		return { database: { tables: database.tables, locate }, framework: frameworkTablesOf(database), data: dataAccessOf(database), release }
+		return { database: { tables: database.tables, locate, relates }, framework: frameworkTablesOf(database), data: dataAccessOf(database), release }
 	} catch {
 		problems.push('the data layer was bound before boot; only the framework binds it, so remove @fabrika/db/framework from the application')
 		return null
@@ -973,6 +973,7 @@ function bootOnce(app: ContractImplementation, options: BootOptions, binding: Bi
 		database,
 		ownedDimensions: owned,
 		containers,
+		relations: new Map(Object.entries(artifact.relations ?? {}).map(([name, relation]) => [name, relation.dimension])),
 		assets: options.assets ?? null,
 		membership,
 		terminals: artifact.terminal === undefined ? null : (terminalRpc ?? null),

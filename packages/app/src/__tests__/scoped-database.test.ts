@@ -257,7 +257,16 @@ describe('boot binds the data layer once', () => {
 		bindScopedDatabase(early, {
 			database: connection,
 			capabilities: {
-				resolve: () => ({ kind: 'within', dimension: 'workspace', action: 'notes.read', principal: 'x', values: 'all', containers: [], contained: [] }),
+				resolve: () => ({
+					kind: 'within',
+					dimension: 'workspace',
+					action: 'notes.read',
+					principal: 'x',
+					values: 'all',
+					containers: [],
+					contained: [],
+					relations: [],
+				}),
 				row: () => {
 					throw new Error('the test claims no row')
 				},

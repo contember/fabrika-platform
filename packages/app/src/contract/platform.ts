@@ -96,6 +96,7 @@ function roleDef(key: string, role: RoleArtifact): RoleDef {
 		permissions: [...role.grants],
 		...(role.member === null ? {} : { member: { scope: role.member.scope, assignableBy: [...role.member.assignableBy] } }),
 		...(role.external === true ? { external: true } : {}),
+		...(role.via === undefined ? {} : { via: Object.fromEntries(Object.entries(role.via).map(([relation, actions]) => [relation, [...actions]])) }),
 	}
 }
 
