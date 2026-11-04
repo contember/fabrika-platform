@@ -241,6 +241,7 @@ describe('the policy bounds what a table may reveal', () => {
 	test('a relation outside the vocabulary, or of another dimension than the table, is refused', () => {
 		expect(policy({ reveals: { owner: { to: 'project', actions: ['projects.read'] } } })).toThrow('not a relation of the vocabulary')
 		expect(policy({}, reveal({}))).toThrow('nor one it reads through')
+		expect(policy(reveal({ assign: {} }))).toThrow("matches the row's own key")
 	})
 })
 

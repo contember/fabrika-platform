@@ -110,6 +110,11 @@ export interface RevealsPolicy<Col extends string, A extends string> {
 	readonly actions: readonly A[]
 	/** A condition on the revealing row, under the same path rule as an action's `when`. */
 	readonly when?: ConditionPolicy<Col>
+	/**
+	 * Required on a reveal matched through `readThrough` of a table with an insert action: the row's writer picks the node,
+	 * so an insert delegates. Without `self`, an insert that names a node where its writer holds the relation is refused.
+	 */
+	readonly assign?: { readonly self?: true }
 }
 
 /**
@@ -314,6 +319,8 @@ export interface RevealModel {
 	 * its actions for a `Within`'s reads only, as the path itself does.
 	 */
 	readonly path: SecondaryPath | undefined
+	/** The bound on an insert's delegation through `path`: `undefined` when no handler inserts a row of the table. */
+	readonly assign: { readonly self: boolean } | undefined
 	readonly dimension: string
 	readonly column: string
 	readonly actions: readonly string[]
@@ -490,7 +497,8 @@ const POLICY_FIELDS = nameSet([
 	'reveals',
 	'readThrough',
 ])
-const REVEALS_FIELDS = nameSet(['to', 'actions', 'when'])
+const REVEALS_FIELDS = nameSet(['to', 'actions', 'when', 'assign'])
+const REVEAL_ASSIGN_FIELDS = nameSet(['self'])
 const CONFERS_FIELDS = nameSet(['principal', 'node', 'expires', 'when', 'assign'])
 const ASSIGN_FIELDS = nameSet(['maxDays', 'self'])
 /** A delegated row lasts at most ten years ahead: a bound, not a convenience. */
@@ -1417,7 +1425,9 @@ function parseReadThrough(
 		let covered = false
 		for (let position = 0; position < table.foreignKeys.length; position++) {
 			const foreignKey = table.foreignKeys[position]
-			covered = covered || (foreignKey !== undefined && foreignKey.table === owner.name && coversPairs(foreignKey, pairs))
+			// Exactly these columns: a further nullable column would let the database skip the whole key.
+			covered = covered
+				|| (foreignKey !== undefined && foreignKey.table === owner.name && foreignKey.columns.length === pairs.length && coversPairs(foreignKey, pairs))
 		}
 		if (!covered) {
 			const columns: string[] = []
@@ -1427,7 +1437,7 @@ function parseReadThrough(
 				referenced[position] = pairs[position]?.[1] ?? ''
 			}
 			throw new PolicyError(
-				`${what}: ${column} and every ancestor ${table.name} shares with ${owner.name} must be one foreign key, so the node lies in the row's own tenant; declare foreign key (${
+				`${what}: ${column} and every ancestor ${table.name} shares with ${owner.name} must be one foreign key of exactly these columns, so the node lies in the row's own tenant; declare foreign key (${
 					columns.join(', ')
 				}) references ${owner.name} (${referenced.join(', ')})`,
 			)
@@ -1521,9 +1531,55 @@ function parseReveals(
 		}
 		const whenInput = ownEntry(policy, 'when')
 		const when = whenInput === undefined ? undefined : parseCondition(whenInput, table, tables, `${what}.when`, hops)
-		reveals[reveals.length] = freeze({ relation, table: table.name, key, path: paths[0], dimension: to, column, actions: freeze(listed), when })
+		const path = paths[0]
+		if (path !== undefined && table.chain[0]?.dimension !== to) {
+			throw new PolicyError(
+				`${what}.to: ${to} lies above ${table.name}'s nearest container; a move of an ancestor rewrites ${column}, so a reveal through a secondary path reveals the nearest container only`,
+			)
+		}
+		const assign = parseRevealAssign(table, path, ownEntry(policy, 'assign'), what)
+		reveals[reveals.length] = freeze({ relation, table: table.name, key, path, assign, dimension: to, column, actions: freeze(listed), when })
 	}
 	return freeze(reveals)
+}
+
+/**
+ * A reveal matched through a secondary path delegates on insert, since the row's writer picks the node: a table with an
+ * insert action states the bound, as a relation source does. A reveal by the row's own key delegates nothing.
+ */
+function parseRevealAssign(table: LinkedTable, path: SecondaryPath | undefined, input: unknown, what: string): RevealModel['assign'] {
+	if (path === undefined || table.actions.insert.length === 0) {
+		if (input !== undefined) {
+			throw new PolicyError(
+				path === undefined
+					? `${what}.assign: the reveal matches the row's own key, so no writer picks its node`
+					: `${what}.assign: ${table.name} has no insert action, so no handler writes a row to delegate with`,
+			)
+		}
+		return undefined
+	}
+	if (input === undefined) {
+		throw new PolicyError(
+			`${what}: inserting a row of ${table.name} (${
+				table.actions.insert.join(', ')
+			}) picks the ${path.dimension} node the reveal holds at; state assign: { self? }`,
+		)
+	}
+	const assign = plainRecord(input, `${what}.assign`)
+	onlyFields(assign, REVEAL_ASSIGN_FIELDS, `${what}.assign`)
+	const self = ownEntry(assign, 'self')
+	if (self !== undefined && self !== true) {
+		throw new PolicyError(`${what}.assign.self takes true`)
+	}
+	return freeze({ self: self === true })
+}
+
+/** A row of the table hands access to someone its writer picks: it confers a relation, or reveals through a path. */
+export function delegates(model: TableModel): boolean {
+	for (let index = 0; index < model.reveals.length; index++) {
+		if (model.reveals[index]?.path !== undefined) return true
+	}
+	return model.confers.length > 0
 }
 
 function containsLink(chain: readonly Container[], dimension: string): boolean {

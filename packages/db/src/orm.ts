@@ -42,7 +42,7 @@ import {
 	withCursorColumns,
 } from './nodes'
 import type { DataKind, TargetForm, UnscopedMode } from './orm-types'
-import { modelOf, namesAction, type TableModels, updatableBy, visibleFor } from './policy'
+import { delegates, modelOf, namesAction, type TableModels, updatableBy, visibleFor } from './policy'
 import { type SqlSite, type SqlTag, sqlTag } from './sql'
 import {
 	actionShape,
@@ -198,13 +198,13 @@ export function dataAccess(parts: DataLayerParts): DataAccess {
 	})
 }
 
-/** The tables whose rows confer a relation, lowercased as the tag compares names. */
+/** The tables whose rows hand access on (`delegates`), lowercased as the tag compares names. */
 function relationSourceTables(models: TableModels): readonly string[] {
 	const tables: string[] = []
 	const names = ownKeys(models)
 	for (let index = 0; index < names.length; index++) {
 		const model = modelOf(models, names[index] ?? '')
-		if (model !== undefined && model.confers.length > 0) {
+		if (model !== undefined && delegates(model)) {
 			tables[tables.length] = model.name.toLowerCase()
 		}
 	}
@@ -1048,9 +1048,14 @@ function unscopedRows(context: TableContext, site: DataSite, run: Runner, mode: 
 		if (model.view) {
 			return refused(site, 'read_only', `${table} is a view, which no handler writes`)
 		}
-		// A row of a relation source confers access; an unscoped write would delegate without the writer's bound.
-		if (model.confers.length > 0) {
-			return refused(site, 'undeclared_reach', `${table} confers a relation, so it is written through a capability only, never unscoped`)
+		// A row of a relation source, or one a reveal matches through a path, hands access on; an unscoped write would
+		// delegate without the writer's bound.
+		if (delegates(model)) {
+			return refused(
+				site,
+				'undeclared_reach',
+				`${table} confers a relation or reveals through a secondary path, so it is written through a capability only, never unscoped`,
+			)
 		}
 		if (mode === 'read') {
 			const verb = operation === 'remove' ? 'remove' : operation

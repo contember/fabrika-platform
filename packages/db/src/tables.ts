@@ -191,6 +191,7 @@ function revealsArtifact(reveals: readonly RevealModel[]): Record<string, Reveal
 			to: reveal.dimension,
 			actions: [...reveal.actions],
 			...(reveal.when === undefined ? {} : { when: conditionArtifact(reveal.when) }),
+			...(reveal.assign === undefined ? {} : { assign: { self: reveal.assign.self } }),
 		})
 	}
 	return artifact
