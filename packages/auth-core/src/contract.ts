@@ -868,6 +868,8 @@ export interface RevealsArtifact {
 	readonly to: string
 	readonly actions: readonly string[]
 	readonly when?: ConditionArtifact
+	/** On a reveal matched through `readThrough`: an insert delegates, and `self` lets it name a node its writer holds. */
+	readonly assign?: { readonly self: boolean }
 }
 
 /** A row names `principal` at the node in `node`, until `expires`, while `when` admits it; `assign` bounds its writer. */

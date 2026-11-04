@@ -370,6 +370,7 @@ const tablePolicy: z.ZodType<TablePolicyArtifact> = z.strictObject({
 		to: name,
 		actions: z.array(action).nonempty(),
 		when: condition.optional(),
+		assign: z.strictObject({ self: z.boolean() }).optional(),
 	})).optional(),
 	readThrough: z.record(name, name).optional(),
 })

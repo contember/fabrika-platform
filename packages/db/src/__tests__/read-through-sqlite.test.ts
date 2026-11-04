@@ -112,8 +112,8 @@ const taskPolicy = {
 	version: 'version',
 	readThrough: { team: 'team_id' },
 	reveals: {
-		member: { to: 'project', actions: ['projects.read', 'tasks.read'], when: { title: { notEq: 'one' } } },
-		lead: { to: 'project', actions: ['tasks.read'], when: { title: { notEq: 'two' } } },
+		member: { to: 'project', actions: ['projects.read', 'tasks.read'], when: { title: { notEq: 'one' } }, assign: {} },
+		lead: { to: 'project', actions: ['tasks.read'], when: { title: { notEq: 'two' } }, assign: {} },
 	},
 } as const
 
@@ -261,10 +261,43 @@ describe('a reveal matched through the read path', () => {
 	})
 })
 
+describe("an insert picks the node a reveal holds at, under the reveal's assign", () => {
+	const insert = (team: string) =>
+		invoke(
+			'mutation',
+			(db) => call(db.target(alice.ref('project', 'tasks.write', 'p1', { org: 'o1' }), 'on'), 'tasks.insert', { team_id: team, title: 'new' }),
+		)
+	const count = () => storage.sql.exec("select count(*) as n from tasks where title = 'new'").toArray()
+
+	test('inserts a row naming a node where its writer holds no relation', async () => {
+		join('m2', 'tm2', 'user:bob')
+		await insert('tm2')
+		expect(count()).toEqual([{ n: 1 }])
+	})
+
+	test('refuses a row naming a node where its writer holds the relation, or holds it above that node', async () => {
+		join('m1', 'tm1', 'user:alice')
+		await expect(insert('tm1')).rejects.toThrow('assign.self')
+		lead('l2', 's2', 'user:alice')
+		await expect(insert('tm2')).rejects.toThrow('assign.self')
+		expect(count()).toEqual([{ n: 0 }])
+	})
+
+	test('refuses an unscoped write, which would delegate past the bound', async () => {
+		const transaction = data.invocation(false)
+		const site: DataSite = { kind: 'mutation', unscoped: { tasks: 'write' }, principal: 'user:alice', check() {}, session: () => transaction.session() }
+		const insert = () => call(data.handles(site).unscoped, 'tasks.insert', { project_id: 'p1', org_id: 'o1', team_id: 'tm1', title: 'new' })
+		await expect(insert()).rejects.toThrow('never unscoped')
+		await transaction.rollback()
+		expect(count()).toEqual([{ n: 0 }])
+	})
+})
+
 describe('the artifact', () => {
 	test('carries the read path, and no field for a table without one', () => {
 		const artifact = tablePolicies(tables)
 		expect(artifact['tasks']?.readThrough).toEqual({ team: 'team_id' })
+		expect(artifact['tasks']?.reveals?.['member']?.assign).toEqual({ self: false })
 		expect(artifact['projects']).not.toHaveProperty('readThrough')
 	})
 })
@@ -283,6 +316,22 @@ describe('the policy bounds a read path', () => {
 		expect(policy({ readThrough: { team: 'crew_id' } })).toThrow('not a column of tasks')
 		expect(policy({ update: ['title', 'team_id'] })).toThrow('no update writes it')
 		expect(policy({ readThrough: { team: 'org_id' } })).toThrow(PolicyError)
+	})
+
+	test('a reveal through the path states its insert bound, and reveals the nearest container only', () => {
+		expect(policy({ reveals: { member: { to: 'project', actions: ['tasks.read'] } } })).toThrow('state assign')
+		expect(policy({ reveals: { member: { to: 'project', actions: ['tasks.read'], assign: { self: true } } } })).not.toThrow()
+		expect(policy({ reveals: { member: { to: 'project', actions: ['tasks.read'], assign: { self: false } } } })).toThrow('assign.self takes true')
+		expect(policy({ reveals: { member: { to: 'org', actions: ['tasks.read'], assign: {} } } })).toThrow('nearest container')
+	})
+
+	test('a foreign key with a column beyond the shared ancestors is refused: a null in it skips the whole key', () => {
+		const wide = columnsWith([{ columns: ['project_id', 'org_id'], table: 'projects', references: ['id', 'org_id'] }, {
+			columns: ['team_id', 'org_id', 'title'],
+			table: 'teams',
+			references: ['id', 'org_id', 'name'],
+		}])
+		expect(policy({}, wide)).toThrow('exactly these columns')
 	})
 
 	test('a foreign key that leaves out an ancestor the two chains share is refused', () => {
