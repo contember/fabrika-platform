@@ -392,24 +392,29 @@ existing installation, change the provider, or rotate a key:
 No `fabrika` command does this: `platform upgrade` and `platform deploy` write no `FABRIKA_EMAIL_*` and remove
 none, and `install` cannot be re-run.
 
-1. Set the same `FABRIKA_EMAIL_*` variables on BOTH `iam` and `control`, in the Zerops GUI or with `zcli`:
-   `FABRIKA_EMAIL_PROVIDER`, `FABRIKA_EMAIL_FROM`, optionally `FABRIKA_EMAIL_FROM_NAME`, and the provider's
-   variables. Store the credentials (every variable `fabrika platform install --provider=zerops --help` marks secret) as SENSITIVE variables: a readable
-   one is read by every member of the project, and `platform deploy` refuses to run while one is readable. A
-   variable already stored readable does not become sensitive through `zops env set --sensitive`, which leaves
-   an existing variable as it was: delete it and add it again as a secret one in the GUI. Delete the variables of a
-   provider you leave.
-2. Restart `iam` and `control`. Each reads the transport at boot. IAM refuses to start on an invalid one.
-   Control starts, logs a line that names the invalid variables, and refuses every deploy that needs the transport
-   until you fix them and restart it.
-3. Redeploy every environment whose contract uses `installation` mail and whose application pins a framework release
+1. Pick a provider the RUNNING release accepts. The installation runs the tag in its sidecar's `fabrika.ref`; from a
+   checkout of that tag, `fabrika platform install --provider=zerops --help` lists the accepted providers on its
+   `--email-provider` line, and each provider's variables below it. A provider that only a newer release accepts needs
+   `platform upgrade --to=<that tag>` first: IAM refuses to start on a provider its release does not know.
+2. Set the `FABRIKA_EMAIL_*` variables on `control` first, in the Zerops GUI or with `zcli`: `FABRIKA_EMAIL_PROVIDER`,
+   `FABRIKA_EMAIL_FROM`, optionally `FABRIKA_EMAIL_FROM_NAME`, and the provider's variables. Store the credentials
+   (every variable that help marks secret) as SENSITIVE variables: a readable one is read by every member of the
+   project, and `platform deploy` refuses to run while one is readable. A variable already stored readable does not
+   become sensitive through `zops env set --sensitive`, which leaves an existing variable as it was: delete it and add
+   it again as a secret one in the GUI. Delete the variables of a provider you leave.
+3. Restart `control` and read its log. Control starts either way; an invalid transport prints
+   `control: the installation's mail transport is invalid, …` naming the invalid variables, and every deploy that needs
+   the transport is refused. Fix the values and restart until no such line appears.
+4. Only then set the same variables on `iam` and restart it. IAM reads the transport at boot and refuses to start on an
+   invalid one, so an `iam` restart with values Control has not accepted takes sign-in down.
+5. Redeploy every environment whose contract uses `installation` mail and whose application pins a framework release
    older than 0.7. Such an application holds its own copy of the transport and gets the new one only at its next
    deploy. Until then it sends with the old one, and a revoked key fails its mail with `provider_unauthorized`. An
-   application on 0.7 or newer sends through Control's relay, which uses the new transport once step 2 restarted
+   application on 0.7 or newer sends through Control's relay, which uses the new transport once step 3 restarted
    Control: it needs no redeploy.
 
 Without a transport, a contract whose job declares `mailer: 'installation'` still deploys. On a release older than 0.7
-its jobs see that mail is not available and leave their messages queued, and after step 3 the next run sends them. On
+its jobs see that mail is not available and leave their messages queued, and after step 5 the next run sends them. On
 0.7 or newer the relay accepts and holds the messages, and Control sends them once it has a transport.
 
 ## When something fails
