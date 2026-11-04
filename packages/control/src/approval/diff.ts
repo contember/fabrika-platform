@@ -1629,6 +1629,11 @@ function actionsText(actions: TableActionArtifact): string {
 }
 
 function newTableLine(name: string, table: TablePolicyArtifact): string {
+	// A view's rows lie where its SQL puts them: the approver reads the view's query beside its policy (ADR-0072).
+	if (table.view === true) {
+		const scope = table.scope.mode === 'child' ? `under \`${table.scope.parent}\` by \`${table.scope.column}\`` : 'by every site'
+		return `New view policy \`${name}\`, read ${scope} with ${actionsText(table.actions.read)}${appReachClauses(table)}`
+	}
 	if (table.scope.mode !== 'app') return `New table policy \`${name}\` read with ${actionsText(table.actions.read)}${appReachClauses(table)}`
 	const { read, insert, update, delete: remove } = table.actions
 	const writes = [
@@ -1678,6 +1683,7 @@ function tableChanges(name: string, from: TablePolicyArtifact, to: TablePolicyAr
 		}
 	}
 	return [
+		...ruled('table.view', from.view === to.view ? [] : [neutral(to.view === true ? `${table} becomes a view` : `${table} is no longer a view`)]),
 		...ruled('table.scope', valueChange(`${table} scope`, from.scope, to.scope)),
 		...ruled('table.read', operationChanges(table, 'read', from.actions.read, to.actions.read)),
 		...ruled('table.insert', operationChanges(table, 'insert', from.actions.insert, to.actions.insert)),

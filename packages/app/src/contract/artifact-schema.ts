@@ -330,6 +330,7 @@ const tablePolicy: z.ZodType<TablePolicyArtifact> = z.strictObject({
 	createdBy: nullableName,
 	columns: record(z.strictObject({ read: action.optional(), write: action.optional() })),
 	files: z.record(name, name).optional(),
+	view: z.literal(true).optional(),
 })
 
 export const contractArtifactSchema: z.ZodType<ContractArtifact> = z.strictObject({

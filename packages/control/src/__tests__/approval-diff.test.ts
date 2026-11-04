@@ -184,6 +184,30 @@ describe('classifyAccess', () => {
 		expect(classifyAccess(snapshot(), snapshot()).outcome).toBe('none')
 	})
 
+	test('a view policy says it is a view, by its parent and column; a table that becomes a view is shown', () => {
+		const summaries: TablePolicyArtifact = {
+			scope: { mode: 'child', parent: 'notes', key: 'note_id', column: 'note_id', inherit: ['workspace_id'] },
+			actions: { read: 'notes.read', insert: null, update: null, delete: null },
+			insert: [],
+			update: [],
+			version: null,
+			createdBy: null,
+			columns: {},
+			view: true,
+		}
+		const names: TablePolicyArtifact = { ...summaries, scope: { mode: 'reference', reason: 'lookup' } }
+		const withViews = snapshot(BASE, { notes: NOTES_TABLE, note_summaries: summaries, workspace_names: names })
+		expect(classifyAccess(snapshot(), withViews).changes).toEqual([
+			{ effect: 'widens', line: 'New view policy `note_summaries`, read under `notes` by `note_id` with `notes.read`' },
+			{ effect: 'widens', line: 'New view policy `workspace_names`, read by every site with `notes.read`' },
+		])
+		const { view: _view, ...table } = summaries
+		expect(lines(snapshot(BASE, { notes: NOTES_TABLE, note_summaries: table }), withViews)).toContain('Table `note_summaries` becomes a view')
+		expect(lines(withViews, snapshot(BASE, { notes: NOTES_TABLE, note_summaries: table, workspace_names: names }))).toEqual([
+			'Table `note_summaries` is no longer a view',
+		])
+	})
+
 	test('dropping the contract widens: the proxy would stop applying an endpoint table', () => {
 		expect(classifyAccess(snapshot(), EMPTY_SNAPSHOT)).toEqual({
 			outcome: 'widening',

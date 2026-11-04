@@ -2199,8 +2199,10 @@ class ArtifactBuilder {
 			if (readOnly && mode === 'write') {
 				this.#problem(where, `declares unscoped '${table}': 'write', and it runs read-only (allowed: 'read')`)
 			}
-			const scope = Object.hasOwn(this.#tables, table) ? this.#tables[table]?.scope.mode : undefined
-			if (mode === 'write' && scope === 'reference') {
+			const policy = Object.hasOwn(this.#tables, table) ? this.#tables[table] : undefined
+			if (mode === 'write' && policy?.view === true) {
+				this.#problem(where, `declares unscoped '${table}': 'write', and no site writes a view: its rows come from the tables it reads (allowed: 'read')`)
+			} else if (mode === 'write' && policy?.scope.mode === 'reference') {
 				this.#problem(
 					where,
 					`declares unscoped '${table}': 'write', and no site writes a reference table: its rows come from a migration (allowed: 'read')`,

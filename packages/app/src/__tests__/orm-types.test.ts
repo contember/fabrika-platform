@@ -1,5 +1,5 @@
 // The type half of the mini-ORM: each file in `orm-mistakes/` is one data mistake a handler makes, refused on the line
-// after its `// mistake:` marker. 08–11 run on the probe task tracker (`probe-tasks/`), 12–22 on application-wide data
+// after its `// mistake:` marker. 08–11, 23 and 24 run on the probe task tracker (`probe-tasks/`), 12–22 on application-wide data
 // (`app-wide-fixture/`). The API matrix itself is pinned by `kit-fixture/matrix.ts` (`kit-types.test.ts`).
 
 import { describe } from 'bun:test'
@@ -39,6 +39,10 @@ const EXPECTED: Readonly<Record<string, string>> = {
 		`Argument of type '"positions"' is not assignable to parameter of type '"candidates"'.`,
 	'22-app-aggregate-with-a-counting-action.ts':
 		`Type 'Unavailable<"an aggregate of candidates needs its read action 'candidates.read' or an action of its appRead, and this endpoint holds 'candidates.count': an appCount action only counts">' has no call signatures.`,
+	'23-insert-into-a-view.ts':
+		`Type 'Unavailable<"project_task_counts is a view, which no site writes: write the tables it reads">' has no call signatures.`,
+	'24-unscoped-write-of-a-view.ts':
+		`Unavailable<"project_task_counts is a view, which no site writes: its rows come from the tables it reads, so declare unscoped: { project_task_counts: 'read' }">`,
 	'21-sql-scope-of-a-record-table-under-a-counting-action.ts':
 		`Argument of type '"candidates"' is not assignable to parameter of type '"no table takes a scope fragment of candidates.count: reach its tables through ctx.db"'.`,
 }

@@ -624,6 +624,42 @@ describe('buildArtifact refuses a declaration the types would refuse', () => {
 		])
 	})
 
+	test('an unscoped write of a view, which no site writes', () => {
+		const view: TablePolicyArtifact = {
+			scope: { mode: 'child', parent: 'notes', key: 'note_id', column: 'note_id', inherit: ['workspace_id'] },
+			actions: { read: 'notes.read', insert: null, update: null, delete: null },
+			insert: [],
+			update: [],
+			version: null,
+			createdBy: null,
+			columns: {},
+			view: true,
+		}
+		const fill = (mode: 'read' | 'write') =>
+			withMounts({
+				...base.mounts,
+				api: {
+					...api,
+					procedures: {
+						...api.procedures,
+						fill: {
+							'~kind': 'procedure',
+							type: 'mutation',
+							input: null,
+							output,
+							access: { member: true },
+							declared: { unscoped: { note_summaries: mode } },
+						},
+					},
+				},
+			})
+		const tables = { ...noteTables, note_summaries: view }
+		expect(problemsOf(() => buildArtifact(fill('write'), tables))).toEqual([
+			"procedure 'api.fill': declares unscoped 'note_summaries': 'write', and no site writes a view: its rows come from the tables it reads (allowed: 'read')",
+		])
+		expect(buildArtifact(fill('read'), tables).tables['note_summaries']?.view).toBe(true)
+	})
+
 	test('a mutation in an export', () => {
 		const products = base.exports['products']
 		if (products === undefined) {

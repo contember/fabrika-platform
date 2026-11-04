@@ -1,6 +1,6 @@
 // Every key, container and child chain is derived: `projects` on the `<container>_id` convention, `tasks` off it
 // (`in: { column }`), and `task_comments` takes its column and chain from its parent. Only `tasks.assign` writes a
-// task's `assignee`.
+// task's `assignee`. `project_task_counts` is a view read as a child of `projects`, keyed by its parent.
 
 import { defineTables } from '@fabrika/db/tables'
 import { vocabulary } from '../vocabulary'
@@ -27,4 +27,5 @@ export const tables = defineTables(vocabulary, columns)({
 		actions: { read: 'tasks.read', insert: 'tasks.write' },
 		insert: ['body'],
 	},
+	project_task_counts: { scope: { child: 'projects', key: 'project_id' }, actions: { read: 'tasks.read' } },
 })

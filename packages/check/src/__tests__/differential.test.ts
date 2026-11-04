@@ -487,6 +487,18 @@ describe('the staged kit: read from source and evaluated agree', () => {
 			})
 		})
 
+		test('a view reads the same: a read-only child keyed by its parent, marked a view', () => {
+			expect(read['project_task_counts']).toEqual(evaluated['project_task_counts'])
+			expect(read['project_task_counts']?.view).toBe(true)
+			expect(read['project_task_counts']?.scope).toEqual({
+				mode: 'child',
+				parent: 'projects',
+				key: 'project_id',
+				column: 'project_id',
+				inherit: ['org_id'],
+			})
+		})
+
 		test('a column write action reads the same, in the artifact the approval diff compares', () => {
 			expect(read['tasks']?.columns).toEqual({ assignee: { write: 'tasks.assign' } })
 			expect(read['tasks']?.update).toEqual(['title', 'due_on'])

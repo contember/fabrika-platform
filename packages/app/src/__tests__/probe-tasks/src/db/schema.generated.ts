@@ -3,6 +3,12 @@
 import type { TypedColumnList } from '@fabrika/db'
 import type { ColumnType, Generated } from 'kysely'
 
+export interface ProjectTaskCountsView {
+	project_id: string | null
+	org_id: string | null
+	tasks: number | null
+}
+
 export interface ProjectsTable {
 	id: string
 	org_id: string
@@ -24,11 +30,23 @@ export interface TasksTable {
 }
 
 export interface DB {
+	project_task_counts: ProjectTaskCountsView
 	projects: ProjectsTable
 	tasks: TasksTable
 }
 
-export const columns: TypedColumnList<DB> = {
+export type Views = 'project_task_counts'
+
+export const columns: TypedColumnList<DB, Views> = {
+	'project_task_counts': {
+		columns: [
+			'project_id',
+			'org_id',
+			'tasks',
+		],
+		foreignKeys: [],
+		view: true,
+	},
 	'projects': {
 		columns: [
 			'id',

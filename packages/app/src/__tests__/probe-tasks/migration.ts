@@ -17,4 +17,8 @@ create table tasks (
 	unique (id, project_id, org_id),
 	foreign key (project_id, org_id) references projects (id, org_id) on update cascade
 );
+create view project_task_counts as
+	select p.id as project_id, p.org_id, cast(count(t.id) as integer) as tasks
+	from projects p left join tasks t on t.project_id = p.id
+	group by p.id, p.org_id;
 `

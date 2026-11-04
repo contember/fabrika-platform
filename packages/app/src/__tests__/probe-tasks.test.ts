@@ -118,6 +118,16 @@ describe.skipIf(!hasPostgres)('the probe app on the paved road', () => {
 		expect((await send(app, '/api/tasks.close', { token: await writer(), body: { id: open, expectVersion: 1 } })).status).toBe(409)
 	})
 
+	test("count: a project's Ref reads its row of a view, and another org's project is 404", async () => {
+		const app = start()
+		await seedTask('p2', 'o1')
+		await seedTask('p2', 'o1')
+		const counted = resultOf(await send(app, '/api/tasks.count', { token: await writer(), body: { projectId: 'p2' } }))
+		const [stored] = await admin((sql) => sql.unsafe(`select count(*)::int as n from ${schema}.tasks where project_id = 'p2'`))
+		expect(counted).toEqual({ tasks: stored?.n })
+		expect((await send(app, '/api/tasks.count', { token: await writer(), body: { projectId: 'p3' } })).status).toBe(404)
+	})
+
 	test('a due day goes in and comes out as YYYY-MM-DD', async () => {
 		const app = start()
 		const created = resultOf(
