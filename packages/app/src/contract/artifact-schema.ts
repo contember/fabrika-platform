@@ -371,6 +371,7 @@ const tablePolicy: z.ZodType<TablePolicyArtifact> = z.strictObject({
 		actions: z.array(action).nonempty(),
 		when: condition.optional(),
 	})).optional(),
+	readThrough: z.record(name, name).optional(),
 })
 
 export const contractArtifactSchema: z.ZodType<ContractArtifact> = z.strictObject({

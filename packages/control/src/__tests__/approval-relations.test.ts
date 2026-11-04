@@ -134,6 +134,33 @@ describe("a table's reveals in the approval diff", () => {
 	})
 })
 
+describe("a table's read path in the approval diff", () => {
+	const lines = (before: AccessSnapshot, after: AccessSnapshot) => classifyAccess(before, after).changes.map(({ effect, line }) => ({ effect, line }))
+	const none = snapshot(files())
+	const through = (readThrough: Readonly<Record<string, string>>): AccessSnapshot => {
+		const contract = none.contract
+		const notes = contract?.tables['notes']
+		if (contract === null || notes === undefined) throw new Error('the kit has a notes table')
+		return { ...none, contract: { ...contract, tables: { ...contract.tables, notes: { ...notes, readThrough } } } }
+	}
+
+	test('widens when added or moved to another column, and narrows when removed', () => {
+		expect(lines(none, through({ label: 'label_id' }))).toContainEqual({
+			effect: 'widens',
+			line: 'A read of `label` reaches table `notes` through `label_id`',
+		})
+		expect(lines(through({ label: 'label_id' }), through({ label: 'other_id' }))).toContainEqual({
+			effect: 'widens',
+			line: 'A read of `label` reaches table `notes` through `other_id` instead of `label_id`',
+		})
+		expect(lines(through({ label: 'label_id' }), none)).toContainEqual({
+			effect: 'narrows',
+			line: 'A read of `label` reaches table `notes` no longer: its path through `label_id` is removed',
+		})
+		expect(classifyAccess(through({ label: 'label_id' }), none).outcome).toBe('no-widening')
+	})
+})
+
 describe('publication refuses relation grants an older release would not enforce', () => {
 	test('a release before the first that enforces them is refused, naming the fields', () => {
 		const contract = readContractSource(files())
