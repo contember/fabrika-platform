@@ -461,6 +461,11 @@ export interface PutAppVarRequest {
 	name: string
 	value: string
 	env?: string | null
+	/**
+	 * The caller checked the value is not a credential. Without it Control refuses a variable whose name or value looks
+	 * like one, because a variable is shown in clear to everyone who manages the application; a credential is a secret.
+	 */
+	notSecret?: boolean
 }
 
 export interface RegisterAppRequest extends AppOptionalFields {

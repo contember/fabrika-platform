@@ -368,6 +368,24 @@ describe('control register public origin', () => {
 })
 
 describe('control apps variables', () => {
+	test('--not-secret is a bare flag that puts notSecret in the request, and only when given', async () => {
+		expect(parseControlFlags(['put', '--not-secret']).notSecret).toBe(true)
+		expect(parseControlFlags(['put']).notSecret).toBe(false)
+		const put = captureFetch({ result: { appId: 'notes', env: null, name: 'CSRF_TOKEN_HEADER_VALUE', value: 'x-csrf' } })
+		await captureStdout(() =>
+			runControlCli(
+				'apps',
+				['variables', 'put', '--app=notes', '--name=CSRF_TOKEN_HEADER_VALUE', '--value=x-csrf', '--not-secret'],
+				undefined,
+				CONTROL_ENV,
+			)
+		)
+		expect(put.calls[0]?.body).toEqual({
+			method: 'apps.variables.put',
+			input: { appId: 'notes', variable: { name: 'CSRF_TOKEN_HEADER_VALUE', value: 'x-csrf', notSecret: true } },
+		})
+	})
+
 	test('put and delete carry the optional environment scope, list omits it', async () => {
 		const put = captureFetch({ result: { appId: 'notes', env: 'prod', name: 'FABRIKA_IAM_ISSUER', value: 'https://iam.test' } })
 		await captureStdout(() =>

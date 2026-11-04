@@ -15,7 +15,8 @@ export function VariablesSection(
 			</div>
 			<p className="section-note">
 				Non-secret config <strong>vars</strong> deployed with this app. The <code>*</code>{' '}
-				layer applies to every env; an env-specific entry overrides it. Vars are plaintext, so their values are shown.
+				layer applies to every env; an env-specific entry overrides it. Vars are plaintext, so their values are shown, and one that looks like a
+				credential is refused: store a token or password as a secret.
 			</p>
 			<Table
 				colSpan={4}
@@ -80,6 +81,8 @@ function AddVarForm({ appId, envs, onDone }: { appId: string; envs: AppEnvDto[];
 	const [value, setValue] = useState('')
 	/** '' = the all-env (*) layer; otherwise an env name. */
 	const [env, setEnv] = useState('')
+	/** Stores a value Control would refuse as looking like a credential. */
+	const [notSecret, setNotSecret] = useState(false)
 	const [busy, setBusy] = useState(false)
 	const [error, setError] = useState<string | null>(null)
 
@@ -92,11 +95,13 @@ function AddVarForm({ appId, envs, onDone }: { appId: string; envs: AppEnvDto[];
 				name: name.trim(),
 				value,
 				env: env === '' ? null : env,
+				...(notSecret ? { notSecret: true } : {}),
 			}
 			await api.apps.variables.put({ appId, variable: body })
 			setName('')
 			setValue('')
 			setEnv('')
+			setNotSecret(false)
 			setOpen(false)
 			onDone()
 		} catch (cause) {
@@ -133,6 +138,10 @@ function AddVarForm({ appId, envs, onDone }: { appId: string; envs: AppEnvDto[];
 			<label>
 				Value
 				<input required value={value} onChange={(e) => setValue(e.target.value)} placeholder="info" autoComplete="off" />
+			</label>
+			<label className="checkbox">
+				<input type="checkbox" checked={notSecret} onChange={(e) => setNotSecret(e.target.checked)} />
+				Not a secret (store it even if it looks like a credential)
 			</label>
 			<div className="form-actions">
 				<button type="submit" className="primary" disabled={busy}>{busy ? 'Saving…' : 'Add var'}</button>

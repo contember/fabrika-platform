@@ -190,6 +190,7 @@ const variableBody = z.object({
 	name: nonEmpty,
 	value: nonEmpty.refine(refuses(assertAppVarValue), `value must be a single line of at most ${APP_VAR_VALUE_MAX_LENGTH} characters`),
 	env: nullableString,
+	notSecret: z.boolean().optional(),
 })
 const putVariableInput = z.object({ appId: nonEmpty, variable: variableBody })
 const secretValueInput = z.object({ appId: nonEmpty, name: nonEmpty, env: nullableString, value: z.string() })

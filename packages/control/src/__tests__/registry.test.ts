@@ -741,6 +741,29 @@ describe('onboarding + registry CRUD', () => {
 		expect(await deps.repositories.registry.listAppVars('app')).toHaveLength(0)
 	})
 
+	test('refuses a variable that looks like a credential, names `apps secrets put`, and stores it only with notSecret', async () => {
+		const { deps } = makeDeps()
+		await rpcResult(rpcRequest('apps.create', { id: 'app', repoUrl: 'https://github.com/acme/app' }), deps)
+
+		for (const variable of [{ name: 'POSTMARK_SERVER_TOKEN', value: 'abc' }, { name: 'UPSTREAM', value: 'https://app:hunter2@example.com' }]) {
+			const refused = await rpcResult(rpcRequest('apps.variables.put', { appId: 'app', variable }), deps)
+			expect(refused.status).toBe(400)
+			const { error } = (await refused.json()) as { error: string }
+			expect(error).toContain(`application variable "${variable.name}" looks like a credential`)
+			expect(error).toContain(`fabrika control apps secrets put --app=app --name=${variable.name}`)
+			expect(error).toContain('--not-secret')
+			expect(error).not.toContain(variable.value)
+		}
+		expect(await deps.repositories.registry.listAppVars('app')).toEqual([])
+
+		const kept = await rpcResult(
+			rpcRequest('apps.variables.put', { appId: 'app', variable: { name: 'CSRF_TOKEN_HEADER_VALUE', value: 'x-csrf', notSecret: true } }),
+			deps,
+		)
+		expect(kept.status).toBe(200)
+		expect((await deps.repositories.registry.listAppVars('app')).map((row) => row.name)).toEqual(['CSRF_TOKEN_HEADER_VALUE'])
+	})
+
 	test('refuses a variable the artifact does not declare, and says where to declare it', async () => {
 		// ADR-0035: a variable is an input to the app's own config, so a name the config never reads is
 		// stored and then ignored. A provider that can read its artifact's declarations refuses it here.
