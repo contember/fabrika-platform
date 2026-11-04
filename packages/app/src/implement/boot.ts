@@ -63,6 +63,7 @@ import {
 	NO_FACILITIES,
 	type ProcedureQuery,
 	proxySecretDigest,
+	type RevealedNode,
 	type ServedEndpoint,
 	type ServedSite,
 	type SpaAssets,
@@ -404,13 +405,18 @@ function contractDatabase(
 		return null
 	}
 	try {
-		const { locate, relates, release } = bindScopedDatabaseProvisionally(database, {
+		const { locate, relates, reveals, release } = bindScopedDatabaseProvisionally(database, {
 			database: connection,
 			capabilities,
 			readOnly: requestIsReadOnly,
 			...(projectWakes === undefined ? {} : { projectWakes }),
 		})
-		return { database: { tables: database.tables, locate, relates }, framework: frameworkTablesOf(database), data: dataAccessOf(database), release }
+		return {
+			database: { tables: database.tables, locate, relates, reveals },
+			framework: frameworkTablesOf(database),
+			data: dataAccessOf(database),
+			release,
+		}
 	} catch {
 		problems.push('the data layer was bound before boot; only the framework binds it, so remove @fabrika/db/framework from the application')
 		return null
@@ -667,6 +673,17 @@ function bindsOf(
 		return {}
 	}
 	return { binds: { name, path: mount.path, scheme: mount.scheme, boundTo: mount.boundTo } }
+}
+
+/** Each relation's reveals, from its tables' policies: the ancestor a row it reaches reveals, and for which actions. */
+function revealsOf(artifact: ContractArtifact): ReadonlyMap<string, readonly RevealedNode[]> {
+	const reveals = new Map<string, RevealedNode[]>()
+	for (const table of Object.values(artifact.tables)) {
+		for (const [relation, reveal] of Object.entries(table.reveals ?? {})) {
+			reveals.set(relation, [...(reveals.get(relation) ?? []), { dimension: reveal.to, actions: reveal.actions }])
+		}
+	}
+	return reveals
 }
 
 /** Each approved token purpose with the claims schema the application declared for it. */
@@ -974,6 +991,7 @@ function bootOnce(app: ContractImplementation, options: BootOptions, binding: Bi
 		ownedDimensions: owned,
 		containers,
 		relations: new Map(Object.entries(artifact.relations ?? {}).map(([name, relation]) => [name, relation.dimension])),
+		reveals: revealsOf(artifact),
 		assets: options.assets ?? null,
 		membership,
 		terminals: artifact.terminal === undefined ? null : (terminalRpc ?? null),

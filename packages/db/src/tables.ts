@@ -5,6 +5,7 @@ import type {
 	ColumnPolicyArtifact,
 	ConditionArtifact,
 	ConfersArtifact,
+	RevealsArtifact,
 	TableActionArtifact,
 	TablePolicyArtifact,
 	TableScope,
@@ -13,7 +14,7 @@ import { type ApplicationRowsPlan, planApplicationRows } from './application-row
 import { freeze, namesOf, ownEntry, ownKeys, setOwn } from './builtins'
 import { conditionArtifact, type ConditionModel } from './conditions'
 import { PolicyError } from './errors'
-import { modelOf, type RelationSource, type ScopeModel, type TableModel, tableModels, type Tables } from './policy'
+import { modelOf, type RelationSource, type RevealModel, type ScopeModel, type TableModel, tableModels, type Tables } from './policy'
 
 export { applicationRowRefusalText } from './application-rows'
 export type { ApplicationRowRefusal, ApplicationRowsPlan } from './application-rows'
@@ -167,7 +168,22 @@ function artifactOf(model: TableModel): TablePolicyArtifact {
 		...(model.view ? { view: true } : {}),
 		...(model.confers.length === 0 ? {} : { confers: confersArtifact(model.confers) }),
 		...(ownKeys(model.when).length === 0 ? {} : { when: whenArtifact(model.when) }),
+		...(model.reveals.length === 0 ? {} : { reveals: revealsArtifact(model.reveals) }),
 	}
+}
+
+function revealsArtifact(reveals: readonly RevealModel[]): Record<string, RevealsArtifact> {
+	const artifact: Record<string, RevealsArtifact> = {}
+	for (let index = 0; index < reveals.length; index++) {
+		const reveal = reveals[index]
+		if (reveal === undefined) continue
+		setOwn(artifact, reveal.relation, {
+			to: reveal.dimension,
+			actions: [...reveal.actions],
+			...(reveal.when === undefined ? {} : { when: conditionArtifact(reveal.when) }),
+		})
+	}
+	return artifact
 }
 
 function confersArtifact(sources: readonly RelationSource[]): Record<string, ConfersArtifact> {

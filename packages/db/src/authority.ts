@@ -9,12 +9,17 @@ import { conditionNode, subquery } from './condition-nodes'
 import { CapabilityError } from './errors'
 import { linksPredicate, linkValues } from './links'
 import { allOf, anyOf, column, equals } from './nodes'
-import { type Container, nodeColumnOf, type RelationSource, type TableModel } from './policy'
+import { type Container, includes, nodeColumnOf, type RelationSource, type RevealModel, type TableModel } from './policy'
+
+/** A relation of the layer: its source table, and the tables whose rows it reaches reveal an ancestor node. */
+export interface LayerRelation extends RelationSource {
+	readonly reveals: readonly RevealModel[]
+}
 
 /** Every relation of the layer, by name, with its source table. */
-export type RelationSources = Readonly<Record<string, RelationSource>>
+export type RelationSources = Readonly<Record<string, LayerRelation>>
 
-export function relationSource(relations: RelationSources, relation: string): RelationSource {
+export function relationSource(relations: RelationSources, relation: string): LayerRelation {
 	const source = ownEntry(relations, relation)
 	if (source === undefined) {
 		throw new CapabilityError('unenforceable', `the capability is held through the relation ${relation}, which no table of the layer confers`)
@@ -36,24 +41,46 @@ export function activeRow(source: RelationSource, now: Date): readonly Operation
 	return terms
 }
 
+/** `select S.<node> from S where S.<principal> = $me and <active>`: the nodes a relation holds `principal` at now. */
+function relationNodes(source: RelationSource, principal: string, now: Date): OperationNode {
+	return subquery(source.table, source.node, allOf([equals(source.table, source.principal, principal), ...activeRow(source, now)]))
+}
+
+function isIn(table: string, name: string, nodes: OperationNode): OperationNode {
+	return BinaryOperationNode.create(column(table, name), OperatorNode.create('in'), nodes)
+}
+
+/** `select R.<ancestor> from R where R.<key> in (<the relation's nodes>) and <when>`: the nodes a reveal holds `principal` at. */
+export function revealedNodes(source: RelationSource, reveal: RevealModel, principal: string, now: Date): OperationNode {
+	const reached = isIn(reveal.table, reveal.key, relationNodes(source, principal, now))
+	const where = reveal.when === undefined ? reached : AndNode.create(reached, ParensNode.create(conditionNode(reveal.table, reveal.when, now)))
+	return subquery(reveal.table, reveal.column, where)
+}
+
 /**
- * `T.<node> in (select S.<node> from S where S.<principal> = $me and <active>)`: the rows of `model` a relation
- * reaches for `principal`; `undefined` where `model` lies at no node of the relation's dimension.
+ * The rows of `model` a relation reaches for `principal` under `action`: `T.<node> in (select S.<node> from S where
+ * S.<principal> = $me and <active>)` where `model` lies at a node of the relation's dimension, and one
+ * `T.<ancestor> in (<revealed nodes>)` per reveal of `action` to an ancestor `model` lies at. Empty where neither holds.
  */
-export function relationTerm(
+export function relationTerms(
 	relations: RelationSources,
 	model: TableModel,
 	relation: string,
 	principal: string,
+	action: string,
 	now: Date,
-): OperationNode | undefined {
+): readonly OperationNode[] {
 	const source = relationSource(relations, relation)
 	const at = nodeColumnOf(model, source.dimension)
-	if (at === undefined) {
-		return undefined
+	const terms: OperationNode[] = at === undefined ? [] : [isIn(model.name, at, relationNodes(source, principal, now))]
+	for (let index = 0; index < source.reveals.length; index++) {
+		const reveal = source.reveals[index]
+		const placed = reveal === undefined || !includes(reveal.actions, action) ? undefined : nodeColumnOf(model, reveal.dimension)
+		if (reveal !== undefined && placed !== undefined) {
+			terms[terms.length] = isIn(model.name, placed, revealedNodes(source, reveal, principal, now))
+		}
 	}
-	const where = allOf([equals(source.table, source.principal, principal), ...activeRow(source, now)])
-	return BinaryOperationNode.create(column(model.name, at), OperatorNode.create('in'), subquery(source.table, source.node, where))
+	return terms
 }
 
 /** The condition `action` holds a row of `model` under, or `undefined` when the action is not narrowed there. */
@@ -91,14 +118,17 @@ export function relationGate(relations: RelationSources, model: TableModel, gran
 	const terms: OperationNode[] = []
 	for (let index = 0; index < grant.relations.length; index++) {
 		const relation = grant.relations[index] ?? ''
-		const term = relationTerm(relations, model, relation, grant.principal, now)
-		if (term === undefined) {
+		const reached = relationTerms(relations, model, relation, grant.principal, grant.action, now)
+		if (reached.length === 0) {
 			throw new CapabilityError(
 				'unenforceable',
-				`the Ref of ${grant.dimension} is held through ${relation}, whose dimension ${model.name} carries no column for`,
+				`the Ref of ${grant.dimension} is held through ${relation}, whose dimension ${model.name} carries no column for, and which reveals none of its nodes for ${grant.action}`,
 			)
 		}
-		terms[terms.length] = term
+		for (let position = 0; position < reached.length; position++) {
+			const term = reached[position]
+			if (term !== undefined) terms[terms.length] = term
+		}
 	}
 	return anyOf(terms)
 }

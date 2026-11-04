@@ -1,7 +1,17 @@
 import { uuidv7 } from '@fabrika/platform'
 import { AndNode, BinaryOperationNode, type OperationNode, OperatorNode, ParensNode, type ReturningNode, ValueNode } from 'kysely'
 import { admissions } from './admissions'
-import { activeRow, conditioned, refScope, relationGate, relationSource, type RelationSources, relationTerm } from './authority'
+import {
+	activeRow,
+	conditioned,
+	type LayerRelation,
+	refScope,
+	relationGate,
+	relationSource,
+	type RelationSources,
+	relationTerms,
+	revealedNodes,
+} from './authority'
 import {
 	defineValue,
 	freeze,
@@ -99,6 +109,7 @@ import {
 	type Operation,
 	type ParentOf,
 	type PolicyRow,
+	type RevealModel,
 	type TableModel,
 	type TableModels,
 	tableModels,
@@ -437,9 +448,10 @@ function withinPredicate(context: TableContext, column: string, grant: WithinGra
 	}
 	// A relation whose dimension this table lies at no node of reaches none of its rows.
 	for (let index = 0; index < grant.relations.length; index++) {
-		const term = relationTerm(context.relations, model, grant.relations[index] ?? '', grant.principal, now)
-		if (term !== undefined) {
-			predicates[predicates.length] = term
+		const terms = relationTerms(context.relations, model, grant.relations[index] ?? '', grant.principal, grant.action, now)
+		for (let position = 0; position < terms.length; position++) {
+			const term = terms[position]
+			if (term !== undefined) predicates[predicates.length] = term
 		}
 	}
 	return predicates.length === 0 ? undefined : conditioned(model, grant.action, anyOf(predicates), now)
@@ -2296,6 +2308,8 @@ export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
 			return freeze({
 				locate: async (dimension: string, id: string, using?: Session) => locateObject(models, bound, dimension, id, using),
 				relates: async (relation: string, node: string, principal: string) => relationHolds(relations, bound, relation, node, principal),
+				reveals: async (relation: string, dimension: string, node: string, principal: string) =>
+					revealHolds(relations, subqueries, bound, relation, dimension, node, principal),
 				release() {
 					if (connection.runtime === bound) {
 						connection.runtime = undefined
@@ -2333,7 +2347,7 @@ export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
  * node column, a condition path's target by its key), which the guard admits and nothing else.
  */
 function layerReach(models: TableModels): { readonly relations: RelationSources; readonly subqueries: Readonly<Record<string, readonly string[]>> } {
-	const relations: Record<string, RelationSources[string]> = {}
+	const relations: Record<string, LayerRelation> = {}
 	const selected: Record<string, string[]> = {}
 	const select = (table: string, column: string): void => {
 		const columns = ownEntry(selected, table) ?? []
@@ -2341,13 +2355,26 @@ function layerReach(models: TableModels): { readonly relations: RelationSources;
 		setOwn(selected, table, columns)
 	}
 	const names = ownKeys(models)
+	const reveals: Record<string, RevealModel[]> = {}
+	for (let index = 0; index < names.length; index++) {
+		const model = modelOf(models, names[index] ?? '')
+		for (let position = 0; model !== undefined && position < model.reveals.length; position++) {
+			const reveal = model.reveals[position]
+			if (reveal === undefined) continue
+			const listed = ownEntry(reveals, reveal.relation) ?? []
+			listed[listed.length] = reveal
+			setOwn(reveals, reveal.relation, listed)
+			select(reveal.table, reveal.column)
+			if (reveal.when !== undefined) addReach(reveal.when, select)
+		}
+	}
 	for (let index = 0; index < names.length; index++) {
 		const model = modelOf(models, names[index] ?? '')
 		if (model === undefined) continue
 		for (let position = 0; position < model.confers.length; position++) {
 			const source = model.confers[position]
 			if (source === undefined) continue
-			setOwn(relations, source.relation, source)
+			setOwn(relations, source.relation, freeze({ ...source, reveals: freeze(ownEntry(reveals, source.relation) ?? []) }))
 			select(source.table, source.node)
 			if (source.when !== undefined) addReach(source.when, select)
 		}
@@ -2445,6 +2472,36 @@ async function relationHolds(
 	const context: GuardContext = { root: 'SelectQueryNode', table: source.table, joins: {}, scope }
 	const rows = await sessionOf(runtime).run<Readonly<Record<string, unknown>>>(locateNode(source.table, [source.node], scope), context)
 	return rows.length > 0
+}
+
+/** One guarded select of a row that `relation` reaches for `principal` and that reveals `node` of `dimension` now. */
+async function revealHolds(
+	relations: RelationSources,
+	subqueries: Readonly<Record<string, readonly string[]>>,
+	runtime: DataLayerRuntime,
+	relation: string,
+	dimension: string,
+	node: string,
+	principal: string,
+): Promise<boolean> {
+	if (typeof node !== 'string' || node.length === 0 || typeof principal !== 'string' || principal.length === 0) {
+		throw new QueryRefusedError('row_address', `a node ${relation} reveals is addressed by its node and its principal, non-empty strings`)
+	}
+	const source = relationSource(relations, relation)
+	for (let index = 0; index < source.reveals.length; index++) {
+		const reveal = source.reveals[index]
+		if (reveal === undefined || reveal.dimension !== dimension) continue
+		const scope = BinaryOperationNode.create(
+			column(reveal.table, reveal.column),
+			OperatorNode.create('in'),
+			revealedNodes(source, reveal, principal, new Date()),
+		)
+		const address = AndNode.create(equals(reveal.table, reveal.column, node), ParensNode.create(scope))
+		const context: GuardContext = { root: 'SelectQueryNode', table: reveal.table, joins: {}, scope: address, subqueries }
+		const rows = await sessionOf(runtime).run<Readonly<Record<string, unknown>>>(locateNode(reveal.table, [reveal.column], address), context)
+		if (rows.length > 0) return true
+	}
+	return false
 }
 
 /** One guarded select by key of the containment columns the policy declares; the generated locator of the dimension. */
