@@ -96,7 +96,7 @@ export type HopRule = (from: string, column: string, to: string, key: string) =>
 
 /**
  * Parses `input` as a condition over `table`. `hops` is the rule a path's foreign keys are held to, or `false` when a
- * path follows none (a relation source's condition and an insert's are judged on the row itself).
+ * path follows none (a relation source's condition is judged on the row itself).
  */
 export function parseCondition(
 	input: unknown,
@@ -376,9 +376,43 @@ export function scalar(value: ConditionLiteral | readonly ConditionLiteral[] | b
 	throw new PolicyError('a list is compared with in or notIn')
 }
 
+/** A test of a column one or more foreign keys away from the row. */
+export type PathTest = Extract<ConditionModel, { readonly kind: 'test' }>
+
+/** The tests of `condition` that follow a path from its own row: the rows an insert locks before it judges them. */
+export function pathTests(condition: ConditionModel): readonly PathTest[] {
+	const tests: PathTest[] = []
+	const visit = (node: ConditionModel): void => {
+		if (node.kind === 'not') {
+			visit(node.term)
+		} else if (node.kind === 'test') {
+			if (node.hops.length > 0) tests[tests.length] = node
+		} else if (node.kind !== 'some') {
+			for (let index = 0; index < node.terms.length; index++) {
+				const term = node.terms[index]
+				if (term !== undefined) visit(term)
+			}
+		}
+	}
+	visit(condition)
+	return tests
+}
+
+/** Whether `condition` holds a `some` or `none` anywhere. */
+export function readsRowsNamingIt(condition: ConditionModel): boolean {
+	if (condition.kind === 'some') return true
+	if (condition.kind === 'not') return readsRowsNamingIt(condition.term)
+	if (condition.kind === 'test') return false
+	for (let index = 0; index < condition.terms.length; index++) {
+		const term = condition.terms[index]
+		if (term !== undefined && readsRowsNamingIt(term)) return true
+	}
+	return false
+}
+
 /**
  * The value of `condition` on an insert's own row, under SQL's three-valued logic: a NULL compared is unknown, `not`
- * of unknown stays unknown, and only `true` passes. A path is never judged here: the parse refuses one for an insert.
+ * of unknown stays unknown, and only `true` passes. A condition with a path is judged in SQL on the written row instead.
  */
 export function rowSatisfies(condition: ConditionModel, row: ReadonlyMap<string, Primitive | null>, now: Date): boolean {
 	return truth(condition, row, now) === true
