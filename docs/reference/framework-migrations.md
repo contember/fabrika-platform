@@ -107,6 +107,14 @@ secret, and refuses its jobs, webhooks, public procedures, installation mail and
 0.9 also adds the dev launcher (`@fabrika/app/dev`), which a `dev` environment starts
 ([MCP authoring](mcp-authoring.md#the-dev-environment)); an application needs 0.9 only for a `dev` environment.
 
+On Zerops, `fabrika app build` refuses a `zerops.yaml` `envVariables` or `routing.headers` value that looks like a
+credential: its name says `TOKEN`, `SECRET`, `PASSWORD`, `BASIC_AUTH` or a key, or its value reads like a token, a URL
+with a password or an Authorization header. Such a variable is readable by every member of the Zerops project and sits
+in the repository in clear. Move a real credential to `pipeline.secrets`, set it with `fabrika control apps secrets put`,
+and reference it (`${NAME}`); a reference is never refused. List a name that is not a credential in
+`target.notSecret` of `fabrika.config.ts`. The check runs only at build, so a manifest an older release built still
+deploys.
+
 ## 0.7 → 0.8
 
 0.8 changed no 0.7 form: it added the ALTCHA challenge provider. Raise the pin; nothing else changes. To move a public

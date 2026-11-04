@@ -119,6 +119,12 @@ export interface ZeropsSourceTarget {
 	runtimePackages?: ZeropsRuntimePackage[]
 	services: (ctx: ZeropsResourceContext) => ZeropsServiceSpec[]
 	project?: ZeropsProjectSpec
+	/**
+	 * Variable and header names whose plain value is not a credential. `fabrika app build` refuses an `envVariables` or
+	 * `routing.headers` value that looks like one (its name says `TOKEN`, `PASSWORD`, `SECRET`, a key, or its value reads
+	 * like a token); a name listed here is stored as written. A real credential goes in `pipeline.secrets`.
+	 */
+	notSecret?: readonly string[]
 }
 
 export interface ZeropsAppConfig extends AppConfigBase {

@@ -264,6 +264,10 @@ bun test
   `FABRIKA_PROXY_MANIFEST_BRAND` (`zeropsProxyAcceptsBrand`, `src/proxy-manifest-carrier.ts`). An older source's strict
   parser refuses the key and would fail its build, so it keeps fabrika's mark until the namespace is re-pinned. The
   logo is inside the manifest digest: a new logo is a new attempt. Never drop the marker from the generated proxy setup.
+- **`fabrika app build` refuses a credential in plain configuration** (`src/plain-credentials.ts`): a `zerops.yaml`
+  `envVariables` or `routing.headers` value that `plainCredentialFinding` flags, unless `target.notSecret` names it. It
+  runs in `compileFabrikaManifest` after the parse and NEVER in `parseFabrikaManifest`: a decode-time refusal would stop
+  a stored manifest of an older release from deploying, which a platform upgrade must never do (ADR-0062).
 - **No authored variable may copy a framework-only one.** `assertAuthoredManagedDocument` refuses, in every
   `envVariables`/`envSecrets` mapping at any depth, a framework-only name as a key and a reference to one in
   a key or a value (`frameworkVariableReference`: `${NAME}`, `${RUNTIME_NAME}`, `${<host>_NAME}`, nested).
