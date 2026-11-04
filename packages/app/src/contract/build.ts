@@ -49,6 +49,7 @@ import {
 	type MessageKind,
 	type MountArtifact,
 	type OutputShape,
+	parseEgressEntry,
 	planEndpoint,
 	type ProcedureArtifact,
 	type ProcedureChallenge,
@@ -147,7 +148,7 @@ const FRAMEWORK_TABLE_PREFIX = 'fabrika_'
 /** The most origins one site calls: a site that reaches more is an integration hub, which a connector import serves. */
 const MAX_EGRESS_ORIGINS = 16
 const DECLARED_ALLOWED =
-	"sql: 'read' | 'write', unscoped: { <table>: 'read' | 'write' }, connect: ['<import>'], issues: '<link mount>', mailer: 'installation' | 'own', kicks: ['<cron job>'], binds: '<webhook>', signs: ['<token purpose>'], egress: ['https://<host>']"
+	"sql: 'read' | 'write', unscoped: { <table>: 'read' | 'write' }, connect: ['<import>'], issues: '<link mount>', mailer: 'installation' | 'own', kicks: ['<cron job>'], binds: '<webhook>', signs: ['<token purpose>'], egress: ['https://<host>' | 'https://*.<domain>']"
 const CSP_FIELDS = ['connectSrc', 'imgSrc', 'frameAncestors', 'scriptSrc', 'frameSrc', 'styleSrc', 'fontSrc']
 /** An environment variable an application reads; a challenge names its secret by one. */
 const APPLICATION_VARIABLE = /^[A-Z][A-Z0-9_]*$/
@@ -2309,8 +2310,8 @@ class ArtifactBuilder {
 
 	/**
 	 * The HTTPS origins a site's code calls: a credentialed procedure of an RPC mount, a webhook or a job, never a public,
-	 * export or link procedure. Each is an exact origin with no path or wildcard, once; `[]` when it declares none or after
-	 * a problem.
+	 * export or link procedure. Each is an exact origin or a one-label pattern (`parseEgressEntry`), once; `[]` when it
+	 * declares none or after a problem.
 	 */
 	#egress(where: string, value: unknown, place: DeclaringSite): string[] {
 		if (value === undefined) {
@@ -2336,8 +2337,9 @@ class ArtifactBuilder {
 			this.#problem(where, `${origins.length} egress origins exceed the limit of ${MAX_EGRESS_ORIGINS}`)
 		}
 		for (const origin of origins) {
-			if (!isPolicyOrigin(origin)) {
-				this.#problem(where, `egress '${origin}' is not an https origin (allowed: 'https://api.example.com', no path or wildcard)`)
+			const parsed = parseEgressEntry(origin)
+			if (!parsed.ok) {
+				this.#problem(where, `egress '${origin}' ${parsed.problem} (allowed: 'https://api.example.com' or 'https://*.example.com')`)
 			}
 		}
 		this.#unique(where, 'egress', origins)

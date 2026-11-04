@@ -754,8 +754,8 @@ export interface DeclaredReach {
 	 */
 	readonly signs?: readonly string[]
 	/**
-	 * The HTTPS origins this site's code calls (`fetch`), sorted: a credentialed procedure, a webhook or a job. Absent
-	 * unless declared, so the digest stays.
+	 * The HTTPS origins this site's code calls (`fetch`), sorted, each an exact origin or a one-label pattern
+	 * (`parseEgressEntry`): a credentialed procedure, a webhook or a job. Absent unless declared, so the digest stays.
 	 */
 	readonly egress?: readonly string[]
 	/**

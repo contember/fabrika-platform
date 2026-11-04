@@ -1286,15 +1286,25 @@ that names no procedure.
 
 ## Outbound calls
 
-`egress: ['https://api.example.com']` on a credentialed procedure, a webhook or a job declares the exact HTTPS origins
-its code calls: no path or wildcard, at most 16, each once. `boot` wraps the global `fetch` once; while a staged-kit
+`egress: ['https://api.example.com']` on a credentialed procedure, a webhook or a job declares the HTTPS origins its
+code calls: no path, at most 16, each once. An entry is an exact origin or a pattern `https://*.<domain>[:port]`,
+which admits exactly one DNS label in front of the domain on a label boundary, on its port (the default one unless it
+names another): `https://*.tenants.example.com` reaches `https://acme.tenants.example.com`, not
+`https://a.b.tenants.example.com`, `https://tenants.example.com` or `https://evil-tenants.example.com`. The build
+refuses another scheme (`http` included), a second or inner wildcard, a wildcard on an IP address or a public suffix
+(`*.com`, `*.co.uk`, by the fixed rule of `parseEgressEntry` in `@fabrika/auth-core`), and an entry not written as
+`new URL` normalizes it (lower case, punycode, no default port, no trailing dot), naming the canonical spelling. The
+guard compares the request's host as `new URL` normalizes it, a trailing dot aside ([ADR-0012](../decisions/0012-fabrika-app-runtime.md)
+§15). `boot` wraps the global `fetch` once; while a staged-kit
 site's handler runs, a call to an origin the site does not declare is refused (`capability_refused`,
 `undeclared_egress`). A site that declares none, a public, link or export procedure included, reaches no origin. The
 framework's own requests (mail, connectors, IAM, workload tokens, the object store, the JWKS) run outside the site's
 scope. The guard stops mistakes and makes a bypass conspicuous; it is no sandbox: code that kept the `fetch` it found
 before boot, or opens its own sockets, escapes it ([ADR-0012](../decisions/0012-fabrika-app-runtime.md) §8). The
-checker's `cross-app-fetch` accepts an absolute URL whose static prefix is an origin some site declares, and the
-approval lists every origin (`egress.test.ts`).
+checker's `cross-app-fetch` accepts an absolute URL whose static prefix names an origin some site's entry admits, or a
+template whose first label alone is interpolated under a declared pattern (`` `https://${tenant}.tenants.example.com/` ``).
+The approval lists every origin, and spells a pattern out as every host one label under its domain, wider than one
+origin (`egress.test.ts`).
 
 ## A mount's compatibility promise
 

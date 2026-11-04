@@ -749,7 +749,9 @@ vocabulary (`packages/db/CLAUDE.md`).
   The texts a verified token carries are the only absolute redirect targets a request may name besides the listed
   origins. A token is no credential: it opens no mount.
 - **While a staged-kit site's handler runs, the global `fetch` reaches only its `egress`** (`implement/egress.ts`):
-  `boot` wraps `fetch` once, and `runAsSite` scopes each handler. A framework facility a handler calls (mail, a
+  `boot` wraps `fetch` once, and `runAsSite` scopes each handler. An entry is an exact origin or a one-label pattern;
+  `parseEgressEntry` and `egressAdmits` of `@fabrika/auth-core` are the one rule the build, the artifact parser, this
+  guard, the checker and the approval diff apply. A framework facility a handler calls (mail, a
   connector, IAM, the object store, the JWKS) runs through `platformCall`/`platformFacility`, outside the site's scope;
   a new facility that makes its own requests must too, or every site that uses it needs an egress it never declared.
   It is no sandbox: code that kept the `fetch` it found before boot, or opens sockets, escapes it.

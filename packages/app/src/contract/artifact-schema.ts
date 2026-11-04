@@ -20,6 +20,7 @@ import {
 	type MessageKind,
 	type NumberShape,
 	type OutputShape,
+	parseEgressEntry,
 	type RecordShape,
 	type SchemaShape,
 	type StringShape,
@@ -27,7 +28,7 @@ import {
 	terminalIdentifyProblem,
 	type TupleShape,
 } from '@fabrika/auth-core'
-import { isPolicyOrigin, WORKER_BLOB_SOURCE } from '@fabrika/proxy-core/headers'
+import { WORKER_BLOB_SOURCE } from '@fabrika/proxy-core/headers'
 import { z } from 'zod/v4'
 import {
 	ALTCHA_LIMITS,
@@ -417,7 +418,7 @@ export const contractArtifactSchema: z.ZodType<ContractArtifact> = z.strictObjec
 		kicks: z.array(name).nonempty().optional(),
 		binds: name.optional(),
 		signs: z.array(name).nonempty().optional(),
-		egress: z.array(z.string().refine((origin) => isPolicyOrigin(origin))).nonempty().optional(),
+		egress: z.array(z.string().refine((origin) => parseEgressEntry(origin).ok)).nonempty().optional(),
 	})).superRefine((declared, context) => {
 		for (const [site, reach] of Object.entries(declared)) {
 			if (reach.actions !== undefined && !isOwnWorkloadName('public', site)) {
