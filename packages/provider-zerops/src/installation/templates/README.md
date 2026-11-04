@@ -98,8 +98,8 @@ this a custom-domain installation — the domains are bound to the project balan
 deploy publishes no subdomain, because that would add a second public address nobody asked for.
 
 `FABRIKA_PLATFORM_MCP_CLIENTS_JSON` turns on MCP authoring (ADR-0049). A workflow generated before
-that variable existed does not forward it, and `platform upgrade` never rewrites the workflow — add
-this line to the `env:` of the _Deploy the platform_ step in `.github/workflows/platform.yml`:
+that variable existed does not forward it. `platform upgrade` rewrites such a workflow at its next roll; to forward it
+sooner, add this line to the `env:` of the _Deploy the platform_ step in `.github/workflows/platform.yml`:
 
 ```yaml
 FABRIKA_PLATFORM_MCP_CLIENTS_JSON: ${{ vars.FABRIKA_PLATFORM_MCP_CLIENTS_JSON }}
