@@ -8,7 +8,7 @@ blocked-by: []
 
 **Summary.** Open question. fabrika's secret scopes are `app` (shared across
 environments) and `app-env` (per environment); Zerops' levels are project and
-service. They do not map 1:1. Today Zerops refuses the `app` scope; a decision is still owed.
+service. They do not map 1:1. Today Control refuses the `app` scope on Zerops; a decision is still owed.
 
 ## Problem
 

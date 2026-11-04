@@ -6,17 +6,17 @@ blocked-by: []
 
 # 196: MCP authoring has no live acceptance
 
-**Summary.** The MCP authoring flow ([ADR-0049](../decisions/0049-author-applications-through-mcp-in-control.md)) is
-was run against a light-tier Zerops test installation with real Claude and ChatGPT connectors and live stage deploys of
-Notes (PR #51, "Verified live on a Zerops test installation"). The full sequence through a pull request and a production
+**Summary.** The MCP authoring flow ([ADR-0049](../decisions/0049-author-applications-through-mcp-in-control.md)) met
+a light-tier Zerops test installation: real Claude and ChatGPT connectors were exercised against it and their failures
+fixed, and stage deploys of Notes were measured live (PR #51, "Verified live on a Zerops test installation"). The full sequence through a pull request and a production
 deploy after the merge is not recorded, and four of the sprint's known limits are still open.
 
 ## Problem
 
 From the run log of [the MCP authoring sprint](../archive/sprint-2026-10-07-mcp-authoring.md):
 
-1. **No recorded end-to-end acceptance.** PR #51 records real connectors and live stage deploys on a test
-   installation. Nothing records the whole WU7 sequence: a workspace commit's stage build, a pull request, and a
+1. **No recorded end-to-end acceptance.** PR #51 records real connectors exercised, and stage deploys measured, on a
+   test installation. Nothing records the whole WU7 sequence: a workspace commit's stage build, a pull request, and a
    production deploy after the merge, with a GitHub App that holds write permissions.
 2. **An access token outlives its revocation** by up to 300 s.
 3. **A workspace branch reset to an ancestor** concurrently can still be fast-forwarded: GitHub's REST API has no
