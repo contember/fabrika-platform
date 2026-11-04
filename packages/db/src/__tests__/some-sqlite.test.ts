@@ -20,7 +20,7 @@ create table tasks (id text not null primary key, project_id text references pro
 create table steps (
 	id text not null primary key,
 	project_id text not null references projects (id),
-	task_id text not null,
+	task_id text not null references tasks (id),
 	done boolean not null,
 	foreign key (task_id, project_id) references tasks (id, project_id)
 );
