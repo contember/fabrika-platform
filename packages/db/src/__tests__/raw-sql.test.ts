@@ -1016,7 +1016,7 @@ describe.skipIf(opened === null)("ctx.sql.scope on Postgres: a fragment marked u
 	})
 })
 
-describe('a table that confers a relation is written only through its handles', () => {
+describe('a table whose rows hand out access is written only through its handles', () => {
 	const sources = ['note_members']
 	const refused = (text: readonly string[], mode: SqlMode = 'write', dialect: SqlDatabase = PG): string | undefined => {
 		try {
@@ -1030,13 +1030,13 @@ describe('a table that confers a relation is written only through its handles', 
 
 	test('a write naming it in any spelling is refused, on both dialects', () => {
 		for (const dialect of [PG, LITE]) {
-			expect(refused(parts`insert into note_members (id) values (${'m'})`, 'write', dialect)).toContain('confers a relation')
-			expect(refused(parts`update "NOTE_MEMBERS" set principal_id = ${'x'}`, 'write', dialect)).toContain('confers a relation')
-			expect(refused(parts`delete from notes where id in (select note_id from Note_Members)`, 'write', dialect)).toContain('confers a relation')
+			expect(refused(parts`insert into note_members (id) values (${'m'})`, 'write', dialect)).toContain('hands out access')
+			expect(refused(parts`update "NOTE_MEMBERS" set principal_id = ${'x'}`, 'write', dialect)).toContain('hands out access')
+			expect(refused(parts`delete from notes where id in (select note_id from Note_Members)`, 'write', dialect)).toContain('hands out access')
 			// A writing site's statement is never trusted to be a read: SQLite runs `WITH … REPLACE` as a write.
-			expect(refused(parts`select note_id from note_members where principal_id = ${'x'}`, 'write', dialect)).toContain('confers a relation')
+			expect(refused(parts`select note_id from note_members where principal_id = ${'x'}`, 'write', dialect)).toContain('hands out access')
 		}
-		expect(refused(parts`with x as (select 1) replace into note_members (id) values (${'m'})`, 'write', LITE)).toContain('confers a relation')
+		expect(refused(parts`with x as (select 1) replace into note_members (id) values (${'m'})`, 'write', LITE)).toContain('hands out access')
 	})
 
 	test('a read of it on a reading site, and a write of another table, pass', () => {

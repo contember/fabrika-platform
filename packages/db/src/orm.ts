@@ -192,19 +192,24 @@ export function dataAccess(parts: DataLayerParts): DataAccess {
 					}
 					return scopeTerms(parts.contextOf(table), capability, use)
 				},
-				relationSourceTables(parts.models),
+				accessTables(parts.models),
 			)
 		},
 	})
 }
 
 /** The tables whose rows hand access on (`delegates`), lowercased as the tag compares names. */
-function relationSourceTables(models: TableModels): readonly string[] {
+/**
+ * The tables whose rows hand out access, which no raw statement writes: a relation source or a path reveal, whose
+ * writer the layer bounds, and a member-revealing table, whose key the layer generates so no write revives a node a
+ * stale grant still names.
+ */
+function accessTables(models: TableModels): readonly string[] {
 	const tables: string[] = []
 	const names = ownKeys(models)
 	for (let index = 0; index < names.length; index++) {
 		const model = modelOf(models, names[index] ?? '')
-		if (model !== undefined && delegates(model)) {
+		if (model !== undefined && (delegates(model) || model.memberReveals.length > 0)) {
 			tables[tables.length] = model.name.toLowerCase()
 		}
 	}
