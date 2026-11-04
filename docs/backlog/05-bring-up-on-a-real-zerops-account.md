@@ -29,7 +29,7 @@ on a dedicated IPv4, and a release and recovery rehearsal.
   pipeline, and an application domain is bound to its namespace proxy
   ([platform facts](../reference/zerops-platform.md#public-access),
   ["Measured in production (2026-10-16)"](../reference/zerops-platform.md#measured-in-production-2026-10-16--an-applications-database-connections)).
-- **The balancer's client address and the app-version order are measured** on that installation and recorded in the
+- **The balancer's client address and the app-version order are measured passively** on that installation and recorded in the
   [platform facts](../reference/zerops-platform.md#public-access): the shared IPv4 forwards no IPv4 client's address,
   and `sequence` was monotonic with gaps.
 - **The two-project `platform` + `apps-prod` shape is gone.** Since `7c9de25d8`, `--tier=standard` installs one

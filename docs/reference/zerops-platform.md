@@ -68,7 +68,9 @@ project's **L7 HTTP balancer handles domain routing and SSL termination**.
 `enableSubdomainAccess`, default `false`)
 
 Fabrika does not automate custom-domain binding: the operator binds each application domain to its namespace's
-`proxy` service in Zerops. Observed on a production installation (2026-11-04, read-only): an application domain bound
+`proxy` service in Zerops, and to no other service (the proxy is the only public one). A domain on the shared IPv4
+needs **both** an `A` and an `AAAA` record, or routing fails silently. A plain domain validates over HTTP-01, so it must
+route to the service before its certificate issues; a wildcard needs DNS-01. Observed on a production installation (2026-11-04, read-only): an application domain bound
 to its namespace proxy serves with an `A` record to the shared IPv4 and an `AAAA` record to the project's IPv6, and its
 certificate issued over HTTP-01 (the challenge answered on both addresses). The same proxy keeps its `*.zerops.app`
 subdomain routes, one per port. The access page does not state whether **several custom domains** may point at one
@@ -192,7 +194,7 @@ pages by `total`.
 
 `GET /service-stack/{id}/app-version` lists the newest version first, ordered by `sequence` descending. Read on the 7
 runtime services of a production installation (2026-11-04, 77 retained versions), `sequence` strictly increased with
-`created` in every service, with gaps (deleted or failed versions). That is an observation, not a documented
+`created` in every service, with gaps (probably deleted or failed versions). That is an observation, not a documented
 guarantee; the client picks the highest `sequence` rather than trust the order, and nothing depends on it being
 dense.
 
@@ -1453,9 +1455,9 @@ with stale ones. Measured locally with `clamav/clamav:1.4` (2026-10-12): one `cl
 and peaked at 0.99 GB resident, almost all of it the signatures. A scanning application's deploy service must
 therefore declare `verticalAutoscaling: { minRam: 2 }` (`ZEROPS_SCAN_MIN_RAM_GB`); the build and the deploy refuse it
 otherwise. Zerops ignores a changed `verticalAutoscaling` of an existing service on a re-import, so the deploy raises
-an existing service (below). Observed on a production installation (2026-10-15 to 2026-10-27): `clamav` installs
-through `prepareCommands`, and on 25 container starts the init command's `freshclam` refreshed the signatures without
-printing its fallback line, so it reaches its mirror from the runtime; the service runs at the 2 GB minimum. Not yet
+an existing service (below). Observed on a production installation (2026-10-15 to 2026-10-27):
+on 25 container starts the init command's `freshclam` ran and exited without printing its fallback line, so
+`clamav` is installed (through `prepareCommands`) and `freshclam` reaches its mirror from the runtime; the service runs at the 2 GB minimum. Not yet
 measured: `freshclam` from the build, a scan job's run on a clean and an EICAR upload, and the peak memory there.
 
 #### Verified live (2026-10-15, account `prg1`, a disposable project) — a deploy raises the deploy service's minimum RAM
