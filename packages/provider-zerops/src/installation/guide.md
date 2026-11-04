@@ -405,8 +405,9 @@ none, and `install` cannot be re-run.
 3. Restart `control` and read its log. Control starts either way; an invalid transport prints
    `control: the installation's mail transport is invalid, …` naming the invalid variables, and every deploy that needs
    the transport is refused. Fix the values and restart until no such line appears.
-4. Only then set the same variables on `iam` and restart it. IAM reads the transport at boot and refuses to start on an
-   invalid one, so an `iam` restart with values Control has not accepted takes sign-in down.
+4. Only then set the same variables on `iam` as in step 2 (credentials SENSITIVE, the old provider's variables deleted)
+   and restart it. IAM reads the transport at boot and refuses to start on an invalid one, so an `iam` restart with
+   values Control has not accepted takes sign-in down.
 5. Redeploy every environment whose contract uses `installation` mail and whose application pins a framework release
    older than 0.7. Such an application holds its own copy of the transport and gets the new one only at its next
    deploy. Until then it sends with the old one, and a revoked key fails its mail with `provider_unauthorized`. An
