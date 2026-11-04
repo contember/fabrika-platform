@@ -137,8 +137,14 @@ export function crashEnvelope(kind: CrashKind, error: unknown, options: Envelope
 	return eventEnvelope({ tags: { crash: kind }, values: exceptionChain(error, options.scrubber) }, options, now)
 }
 
-/** The outcome of one delivery attempt; `retry` is a network failure, a timeout or a 5xx, which the ingest may not repeat. */
-type Attempt = { readonly kind: 'delivered' } | { readonly kind: 'refused' | 'retry'; readonly status: number | null }
+/**
+ * One delivery attempt. `retry` is a network failure, a timeout or a 5xx: the retry resends the same body, so the same
+ * `event_id`, which the ingest ignores when it already stored it.
+ */
+type Attempt = { readonly kind: 'delivered' } | { readonly kind: 'refused'; readonly status: number } | {
+	readonly kind: 'retry'
+	readonly status: number | null
+}
 
 async function attempt(options: OperationsReporterOptions, body: string): Promise<Attempt> {
 	const send = options.fetch ?? ((request: Request) => fetch(request))
@@ -158,7 +164,7 @@ async function attempt(options: OperationsReporterOptions, body: string): Promis
 		if (response.ok) {
 			return { kind: 'delivered' }
 		}
-		return { kind: response.status >= 500 ? 'retry' : 'refused', status: response.status }
+		return response.status >= 500 ? { kind: 'retry', status: response.status } : { kind: 'refused', status: response.status }
 	} catch {
 		// The error may quote the ingest URL with its key, so it is not kept.
 		return { kind: 'retry', status: null }

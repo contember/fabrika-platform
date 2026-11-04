@@ -24,6 +24,8 @@ A contract application reports to the ingest of its own `FABRIKA_OPERATIONS_DSN`
 
 The values before a request's or job's last value are what was thrown and its causes, the deepest first: the error's type, its message and its stack frames (file, function, line, column, in-app). A framework failure sends its reason and catalog text instead of its message. The application scrubs every text first: the values of its secret framework variables and of application variables named as secrets, JWTs, authorization schemes, credential headers, URL userinfo and credential query parameters. It caps a message at 2,048 characters, the frames at the 50 nearest the throw, the chain at five errors and the encoded chain at 64 KiB. Request bodies, headers, input and rows are never sent. Ingest redaction then applies as to any event.
 
+A report that meets a network error, a timeout (5 s) or a 5xx is sent once more after a pause of 200–500 ms, with the same `event_id`, which the ingest stores once. A 4xx is not retried. A report still undelivered is one line in the application's log and is lost.
+
 A request's and a job's fingerprint and title do not depend on the thrown value, so grouping is the same with or without it. A crash groups by the thrown value's type and in-app frames.
 
 ## Issue lifecycle and read model
