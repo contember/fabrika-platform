@@ -30,6 +30,12 @@ create table project_members (
 	role text not null,
 	expires_at timestamp
 );
+create table bookmarks (
+	id text not null primary key,
+	slug text not null unique,
+	archived boolean not null default 0,
+	version integer not null
+);
 `
 
 interface DB {
@@ -41,6 +47,7 @@ interface DB {
 		role: string
 		expires_at: ColumnType<Date | null, Date | string | null, Date | string | null>
 	}
+	bookmarks: { id: string; slug: string; archived: ColumnType<boolean, boolean | undefined, boolean>; version: number }
 }
 
 const columns: TypedColumnList<DB> = {
@@ -54,6 +61,7 @@ const columns: TypedColumnList<DB> = {
 		foreignKeys: [{ columns: ['project_id'], table: 'projects', references: ['id'] }],
 		timestamps: ['expires_at'],
 	},
+	bookmarks: { columns: ['id', 'slug', 'archived', 'version'], foreignKeys: [], booleans: ['archived'] },
 }
 
 const vocabulary = {
@@ -87,6 +95,14 @@ const tables = defineTables(vocabulary, columns)({
 			member: { principal: 'principal_id', expires: 'expires_at', when: { role: { in: ['editor', 'viewer'] } }, assign: { maxDays: 30 } },
 		},
 	},
+	bookmarks: {
+		scope: { app: 'saved links' },
+		actions: { read: ['projects.read', 'projects.audit'], insert: 'projects.write', update: 'projects.write' },
+		insert: ['slug', 'archived'],
+		update: ['archived'],
+		version: 'version',
+		when: { 'projects.write': { archived: { eq: false } }, 'projects.audit': { archived: { eq: false } } },
+	},
 })
 
 const alice = new TestAuthority('user:alice')
@@ -101,6 +117,7 @@ beforeEach(() => {
 	storage.sql.exec(`
 		insert into projects (id, tenant, name, archived, version) values
 			('p1', 't1', 'shared', 0, 1), ('p2', 't1', 'private', 0, 1), ('p3', 't2', 'other tenant', 0, 1), ('p4', 't1', 'archived', 1, 1);
+		insert into bookmarks (id, slug, archived, version) values ('b1', 'live', 0, 1), ('b2', 'old', 1, 1);
 	`)
 	const layer = scoped(tables)
 	relates = bindScopedDatabaseProvisionally(layer, { database: openSqlite(storage), capabilities: alice }).relates
@@ -269,6 +286,39 @@ describe("an action's when narrows every grant", () => {
 	})
 })
 
+describe("an application table's rows are narrowed by the action's when on every path", () => {
+	const archived = () => storage.sql.exec('select archived, version from bookmarks where id = ?', 'b2').toArray()
+
+	test('a read by key, and a locked read, of an excluded row is not found; another read action reads it', async () => {
+		await expect(invoke('query', (db) => call(db.app(alice.app('projects.audit')), 'bookmarks.get', 'b2'))).rejects.toThrow('not found')
+		await expect(invoke('mutation', (db) => call(db.app(alice.app('projects.write')), 'bookmarks.getForUpdate', 'b2'))).rejects.toThrow(
+			'not found',
+		)
+		expect(await invoke('query', (db) => call(db.app(alice.app('projects.read')), 'bookmarks.get', 'b2'))).toMatchObject({ id: 'b2' })
+	})
+
+	test('an update of an excluded row writes nothing', async () => {
+		await expect(
+			invoke('mutation', (db) => call(db.app(alice.app('projects.write')), 'bookmarks.update', 'b2', { archived: false }, { expectVersion: 1 })),
+		).rejects
+			.toThrow('not found')
+		expect(archived()).toEqual([{ archived: 1, version: 1 }])
+	})
+
+	test("an upsert does not update a conflicting row outside the action's condition", async () => {
+		const upsert = () =>
+			invoke(
+				'mutation',
+				(db) =>
+					call(db.app(alice.app('projects.write')), 'bookmarks.insert', { slug: 'old', archived: false }, {
+						onConflict: { columns: ['slug'], do: 'update' },
+					}),
+			)
+		await expect(upsert()).rejects.toThrow('does not reach')
+		expect(archived()).toEqual([{ archived: 1, version: 1 }])
+	})
+})
+
 describe('inserting a source row is delegation', () => {
 	const assigning = (id = 'p1') => alice.ref('project', 'members.assign', id)
 	const assign = (values: Record<string, unknown>) =>
@@ -303,6 +353,7 @@ describe('the policy bounds what a source table may do', () => {
 		defineTables(vocabulary, columns)({
 			projects: { scope: { dimension: 'project' }, actions: { read: 'projects.read' }, version: 'version' },
 			project_members: { scope: { child: 'projects' }, actions: { read: 'projects.read', insert: 'members.assign' }, ...members },
+			bookmarks: { scope: { app: 'saved links' }, actions: { read: 'projects.read' } },
 		})
 
 	test('an update of a column that decides what a row confers is refused', () => {

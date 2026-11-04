@@ -825,7 +825,7 @@ export function appListPredicate(context: TableContext, capability: unknown): Op
  * Every row of an application table, for a `Ref` or a `Within` of its read action: what `ctx.db.app` of an `on`, `in`
  * or `over` endpoint reads, read-only, as a reference table is read. The table's read action decides who reads it.
  */
-export function scopedApplicationRead(context: TableContext, capability: unknown): OperationNode {
+export function scopedApplicationRead(context: TableContext, capability: unknown, branch: OperationNode | 'all' = 'all'): OperationNode {
 	const grant = runtimeOf(context.connection).capabilities.resolve(capability)
 	const model = context.model
 	if (model.scope.mode !== 'app') {
@@ -841,7 +841,7 @@ export function scopedApplicationRead(context: TableContext, capability: unknown
 			`a scoped site reads ${model.name} with its read action ${read.join(' or ')} only; the capability holds ${grant.action}`,
 		)
 	}
-	return conditioned(model, grant.action, 'all', new Date())
+	return conditioned(model, grant.action, branch, new Date())
 }
 
 /** One row of an application table by its key, for an `app` capability of `operation`'s action. */
@@ -906,6 +906,11 @@ export function claimedRowPredicate(context: TableContext, capability: unknown, 
 		terms[terms.length] = equals(model.name, link.column, value)
 	}
 	return conditioned(model, grant.action, allOf(terms), new Date())
+}
+
+/** The row of an application table `key` names, as `action` reaches it: within the action's condition. */
+export function appKeyScope(model: TableModel, action: string, key: unknown): OperationNode {
+	return conditioned(model, action, appKeyPredicate(model, key), new Date())
 }
 
 /** The row of an application table `key` names. */
@@ -1279,6 +1284,8 @@ export interface OnConflict {
 	readonly mode: 'nothing' | 'update'
 	/** The values given for the table's update columns: what `update` sets on the conflicting row. */
 	readonly updates: ReadonlyMap<string, Primitive | null>
+	/** The capability's action, whose condition the conflicting row must satisfy to be updated. */
+	readonly action: string
 }
 
 const CONFLICT_FIELDS = nameSet(['columns', 'do'])
@@ -1339,7 +1346,7 @@ export function onConflictOf(
 			}
 		}
 	}
-	return freeze({ columns: freeze(columns), mode, updates })
+	return freeze({ columns: freeze(columns), mode, updates, action })
 }
 
 /** A plain object's own data properties, each one of `allowed`; the options of an insert or its `onConflict`. */
@@ -1394,8 +1401,8 @@ function insertedScope(context: TableContext, values: ReadonlyMap<string, Primit
 
 /**
  * `insert … on conflict (columns) do nothing`, and for `update` the conflicting row's update in the same transaction,
- * within the insert's own containment. A row deleted between the two is inserted on the second try; a conflicting row
- * the capability does not reach is a 409. Answers `{ id, version?, inserted: true }`, `{ id, version?, inserted:
+ * within the insert's own containment and the action's condition on the stored row. A row deleted between the two is
+ * inserted on the second try; a conflicting row the capability does not reach is a 409. Answers `{ id, version?, inserted: true }`, `{ id, version?, inserted:
  * false }` after an update, and `{ inserted: false }` when `nothing` wrote nothing.
  */
 async function insertOnConflict(
@@ -1417,7 +1424,7 @@ async function insertOnConflict(
 		}
 		matches[matches.length] = equals(model.name, name, value)
 	}
-	const scope = conflict.mode === 'update' ? insertedScope(context, values) : undefined
+	const scope = conflict.mode === 'update' ? conditioned(model, conflict.action, insertedScope(context, values), new Date()) : undefined
 	for (let attempt = 0; attempt < 2; attempt++) {
 		const node = insertNode(model.name, values, answer(context), conflict.columns)
 		const [row] = await transaction.run<Readonly<Record<string, unknown>>>(node, {
@@ -2114,8 +2121,7 @@ function appProbeOf(context: TableContext): TableProbe {
 		mode: 'app',
 		get: async (capability: unknown, key?: string) => {
 			if (scoped(capability)) {
-				scopedApplicationRead(context, capability)
-				return selectOne<Readonly<Record<string, unknown>>>(context, run, appKeyPredicate(context.model, key))
+				return selectOne<Readonly<Record<string, unknown>>>(context, run, scopedApplicationRead(context, capability, appKeyPredicate(context.model, key)))
 			}
 			return selectOne<Readonly<Record<string, unknown>>>(context, run, appRowPredicate(context, capability, key, 'read'))
 		},
