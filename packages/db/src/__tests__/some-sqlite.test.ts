@@ -164,7 +164,7 @@ describe('the policy bounds the rows a condition reads', () => {
 		).toThrow("outside projects's containment")
 	})
 
-	test("an insert's condition, judged on the row itself, reads no other row", () => {
+	test("an insert's condition takes no some: no row names one that does not exist yet", () => {
 		expect(() =>
 			defineTables(vocabulary, columns)({
 				projects: {
@@ -178,7 +178,7 @@ describe('the policy bounds the rows a condition reads', () => {
 				steps: { scope: { child: 'projects' }, actions: { read: 'projects.read' } },
 				links: { scope: { child: 'projects' }, actions: { read: 'projects.read' } },
 			})
-		).toThrow('judged on the row itself')
+		).toThrow("an insert's condition reads the row and the rows its foreign keys name, so it takes no some or none")
 	})
 
 	test('a some counts as one of the three foreign keys a path follows', () => {

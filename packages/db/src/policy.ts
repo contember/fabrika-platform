@@ -14,7 +14,7 @@ import {
 	plainRecord,
 	setOwn,
 } from './builtins'
-import { type ConditionModel, type ConditionPolicy, type ConditionTable, type HopRule, parseCondition } from './conditions'
+import { type ConditionModel, type ConditionPolicy, type ConditionTable, type HopRule, parseCondition, readsRowsNamingIt } from './conditions'
 import { PolicyError } from './errors'
 import { isPlainIdentifier } from './identifier'
 import type { Unavailable } from './orm-types'
@@ -1405,8 +1405,13 @@ function parseWhen(
 		if (!inSet(named, action)) {
 			throw new PolicyError(`${table.name}: when.${action} names an action the table does not name (${namesOf(named).join(', ')})`)
 		}
-		const inserts = includes(table.actions.insert, action)
-		setOwn(when, action, parseCondition(ownEntry(declared, action), table, tables, `${table.name}: when.${action}`, inserts ? false : hops))
+		const what = `${table.name}: when.${action}`
+		const condition = parseCondition(ownEntry(declared, action), table, tables, what, hops)
+		// An insert reads the rows its foreign keys name in its transaction; no row names one that does not exist yet.
+		if (includes(table.actions.insert, action) && readsRowsNamingIt(condition)) {
+			throw new PolicyError(`${what}: an insert's condition reads the row and the rows its foreign keys name, so it takes no some or none`)
+		}
+		setOwn(when, action, condition)
 	}
 	return freeze(when)
 }
