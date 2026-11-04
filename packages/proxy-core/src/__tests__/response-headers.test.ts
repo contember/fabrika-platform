@@ -15,6 +15,9 @@ import {
 	FILE_TREATMENT,
 	type HeaderPolicy,
 	headerPolicy,
+	INLINE_DOCUMENT_TYPES,
+	INLINE_FILE_TYPES,
+	inlineFileTypes,
 } from '../headers'
 import type { ProxyApp } from '../manifest'
 import { createVerifyService } from '../service'
@@ -256,5 +259,29 @@ describe('the OAuth metadata path', () => {
 		const response = await verifyWith(new FakeIam())(verifyRequest({ endpoint: '/oauth-metadata', path: '/.well-known/oauth-protected-resource' }))
 		expect(response.status).toBe(404)
 		expectHeaders(response, POLICY)
+	})
+})
+
+describe('the disposition of a file row', () => {
+	const treated = (contentType: string, inline: readonly string[]) => {
+		const headers = new Headers({ 'Content-Type': contentType, 'Content-Disposition': "inline; filename*=UTF-8''f" })
+		applyFileTreatment(headers, FILE_TREATMENT, inline)
+		return headers.get('Content-Disposition')
+	}
+
+	test('a file row shows the inert images only; an inline-file row also the XML documents', () => {
+		expect(inlineFileTypes(undefined)).toBe(INLINE_FILE_TYPES)
+		expect(inlineFileTypes('file')).toBe(INLINE_FILE_TYPES)
+		expect(inlineFileTypes('inline-file')).toEqual([...INLINE_FILE_TYPES, ...INLINE_DOCUMENT_TYPES])
+		for (const type of INLINE_DOCUMENT_TYPES) {
+			expect(treated(type, inlineFileTypes('file'))).toBe("attachment; filename*=UTF-8''f")
+			expect(treated(type, inlineFileTypes('inline-file'))).toBe("inline; filename*=UTF-8''f")
+		}
+	})
+
+	test('nothing a browser runs or renders as a page is shown on any row, nor a repeated type', () => {
+		for (const type of ['text/html', 'image/svg+xml', 'application/xhtml+xml', 'text/javascript', 'application/xml, text/html']) {
+			expect(treated(type, inlineFileTypes('inline-file'))).toBe("attachment; filename*=UTF-8''f")
+		}
 	})
 })

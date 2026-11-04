@@ -301,7 +301,7 @@ export const proxyEndpointRowSchema = z.union([
 		requirement: requirementSchema,
 		delegation: z.enum(['members', 'creates']).nullable(),
 		crossOrigin: z.literal('environment').optional(),
-		response: z.literal('file').optional(),
+		response: z.enum(['file', 'inline-file']).optional(),
 	}).strict(),
 	z.object({
 		...endpointRuleFields,
@@ -310,7 +310,7 @@ export const proxyEndpointRowSchema = z.union([
 		requirement: z.null(),
 		delegation: z.null(),
 		crossOrigin: z.enum(['environment', 'any']).optional(),
-		response: z.literal('file').optional(),
+		response: z.enum(['file', 'inline-file']).optional(),
 		cache: z.union([z.literal('immutable'), z.object({ maxAgeSeconds: z.number().int().min(1).max(MAX_CACHE_AGE_SECONDS) }).strict()]).optional(),
 		authorization: z.literal('forward').optional(),
 	}).strict(),

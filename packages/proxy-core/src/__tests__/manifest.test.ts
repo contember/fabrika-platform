@@ -426,6 +426,22 @@ describe('contract apps — the endpoint table', () => {
 		expect(parseProxyManifest({ apps: [{ ...app, endpoints: [...app.endpoints, file] }] })?.apps[0]).toMatchObject({
 			endpoints: expect.arrayContaining([file]),
 		})
+		const shown = endpointRow({
+			id: 'api.reports.feed',
+			kind: 'query',
+			method: 'GET',
+			path: '/api/reports.feed',
+			callers: ['human'],
+			requirement: { kind: 'member' },
+			admission: null,
+			response: 'inline-file',
+		})
+		expect(parseProxyManifest({ apps: [{ ...app, endpoints: [...app.endpoints, shown] }] })?.apps[0]).toMatchObject({
+			endpoints: expect.arrayContaining([shown]),
+		})
+		// An unknown profile is refused whole, never read as a download or as inline.
+		const unknown = { ...file, response: 'inline' }
+		expect(parseProxyManifest({ apps: [{ ...app, endpoints: [...app.endpoints, unknown] }] })).toBeNull()
 		const spa = endpointRow({
 			id: 'web.file',
 			kind: 'spa',
@@ -736,6 +752,7 @@ describe('the ops row — composed by the platform, never declared (ADR-0022 rul
 		['a cross-origin form', { crossOrigin: 'environment' }],
 		["the forwarding of a webhook's Authorization", { authorization: 'forward' }],
 		['a file answer', { response: 'file' }],
+		['a file answer shown inline', { response: 'inline-file' }],
 		['an oauth field', { oauth: null }],
 	])('is refused with %s', (_name, fields) => {
 		expect(parses([...declared, { ...ops, ...fields }])).toBe(false)

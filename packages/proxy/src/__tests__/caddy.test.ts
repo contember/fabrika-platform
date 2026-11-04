@@ -25,7 +25,7 @@ import type { BrandImage } from '@fabrika/proxy-core/brand'
 import { appFileTreatment, appHeaderPolicy, BASE_HEADER_POLICY, FILE_TREATMENT, type HeaderPolicy, NO_CSP_ORIGINS } from '@fabrika/proxy-core/headers'
 import type { ContractProxyApp, InstallationProxyApp, ProxyApp, ProxyManifest } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
-import { endpointRow, installationAppWith, installationRow, protocolRow, serviceRow } from '../../../proxy-core/src/__tests__/helpers'
+import { anonymousRow, endpointRow, installationAppWith, installationRow, protocolRow, serviceRow } from '../../../proxy-core/src/__tests__/helpers'
 import {
 	buildCaddyConfig,
 	type CaddyBuildOptions,
@@ -886,6 +886,39 @@ describe('a contract app — the response headers', () => {
 		})
 		// The file route is the same upstream hop: the secret and the cookie strip are not lost on it.
 		expect(upstream.headers?.request).toEqual(upstreamOf(defaultRoute).headers?.request)
+	})
+
+	test('an inline-file row gets a file route of its own, which shows the XML documents too; a file row stays with the images', () => {
+		const published = { kind: 'public', method: 'GET', admission: null } as const
+		const feed = anonymousRow({ ...published, id: 'api.published.feed', path: '/feed.xml', response: 'inline-file' })
+		const dump = anonymousRow({ ...published, id: 'api.published.dump', path: '/dump.xml', response: 'file' })
+		const routes = buildCaddyConfig({ apps: [{ ...contract, endpoints: [download, feed, dump] }] }, OPTIONS).apps.http.servers['proxy']?.routes ?? []
+		const files = rawSubrouteOf(defined(routes[0])).routes.filter((route) => route.terminal === true && route.match?.[0]?.header !== undefined)
+		const shown = (route: (typeof files)[number] | undefined) => {
+			const handler = route?.handle[1]
+			return handler?.handler === 'headers' ? handler.response?.require?.headers?.['Content-Type'] : undefined
+		}
+		expect(files.map((route) => route.match)).toEqual([
+			[{ header: { [ENDPOINT_HEADER]: ['files.avatar.download@*', 'api.published.dump@*'] } }],
+			[{ header: { [ENDPOINT_HEADER]: ['api.published.feed@*'] } }],
+		])
+		expect(shown(files[0])).toEqual(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
+		expect(shown(files[1])).toEqual([
+			'image/png',
+			'image/jpeg',
+			'image/gif',
+			'image/webp',
+			'application/xml',
+			'text/xml',
+			'application/rss+xml',
+			'application/atom+xml',
+		])
+		// Apart from the types it shows, the inline route is the file treatment of every download.
+		expect({ ...files[1], match: undefined, handle: files[1]?.handle.filter((_, index) => index !== 1) }).toEqual({
+			...files[0],
+			match: undefined,
+			handle: files[0]?.handle.filter((_, index) => index !== 1),
+		})
 	})
 
 	test('an app without a download endpoint has no file route', () => {

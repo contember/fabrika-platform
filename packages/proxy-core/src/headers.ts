@@ -2,7 +2,7 @@
 // "Response headers"). The proxy sets them on every answer, its own denials included; the framework sets the same
 // definition in-process. Exported as `@fabrika/proxy-core/headers`, which imports nothing at runtime.
 
-import type { CspExtensions, EndpointCache } from '@fabrika/auth-core'
+import type { CspExtensions, EndpointCache, EndpointResponse } from '@fabrika/auth-core'
 
 /** Every powerful feature off. ADR-0022 lists the same names; change both together. */
 export const PERMISSIONS_POLICY_FEATURES: readonly string[] = [
@@ -169,6 +169,23 @@ export const BASE_HEADER_POLICY: HeaderPolicy = headerPolicy(NO_CSP_ORIGINS, nul
 /** Raster formats a browser only ever renders as an image; every other download, SVG and HTML included, is an attachment. */
 export const INLINE_FILE_TYPES: readonly string[] = ['image/png', 'image/jpeg', 'image/gif', 'image/webp']
 
+/**
+ * XML a machine reads (a feed, a sitemap, an import file), shown inline only on a row of an `inline: true` kind
+ * (`response: 'inline-file'`). `FILE_TREATMENT`'s sandbox runs none of its script and loads nothing; XHTML and SVG
+ * are not among them.
+ */
+export const INLINE_DOCUMENT_TYPES: readonly string[] = ['application/xml', 'text/xml', 'application/rss+xml', 'application/atom+xml']
+
+const INLINE_FILE_AND_DOCUMENT_TYPES: readonly string[] = Object.freeze([...INLINE_FILE_TYPES, ...INLINE_DOCUMENT_TYPES])
+
+/**
+ * The types a row's answer is shown inline as: the inert images, and the XML documents only on an `inline-file` row.
+ * One constant per profile, so a composition can group its rows by it.
+ */
+export function inlineFileTypes(response: EndpointResponse | undefined): readonly string[] {
+	return response === 'inline-file' ? INLINE_FILE_AND_DOCUMENT_TYPES : INLINE_FILE_TYPES
+}
+
 /** What every answer of a download endpoint carries in place of the policy, its errors included. */
 export const FILE_TREATMENT: HeaderPolicy = Object.freeze([
 	['X-Content-Type-Options', 'nosniff'],
@@ -244,8 +261,8 @@ export function applyCrossOriginHeaders(headers: Headers, policy: HeaderPolicy):
 }
 
 /** `null` and anything but one allowlisted value is an attachment; `Headers` joins repeated fields with `, `, so two never match. */
-export function fileDisposition(contentType: string | null): 'inline' | 'attachment' {
-	return contentType !== null && INLINE_FILE_TYPES.includes(contentType) ? 'inline' : 'attachment'
+export function fileDisposition(contentType: string | null, inline: readonly string[] = INLINE_FILE_TYPES): 'inline' | 'attachment' {
+	return contentType !== null && inline.includes(contentType) ? 'inline' : 'attachment'
 }
 
 /** Whatever the handler or an asset server set for these names is replaced; the removed and transport headers are dropped first. */
@@ -260,12 +277,13 @@ export function applyHeaderPolicy(headers: Headers, policy: HeaderPolicy): void 
 
 /**
  * The file treatment over headers a download already carries: the disposition type follows the `Content-Type`
- * exactly, and the parameters after it (the file name) are kept. The proxy passes `appFileTreatment` of its entry.
+ * exactly, and the parameters after it (the file name) are kept. The proxy passes `appFileTreatment` of its entry, and
+ * `inlineFileTypes` of the row.
  */
-export function applyFileTreatment(headers: Headers, treatment: HeaderPolicy = FILE_TREATMENT): void {
+export function applyFileTreatment(headers: Headers, treatment: HeaderPolicy = FILE_TREATMENT, inline: readonly string[] = INLINE_FILE_TYPES): void {
 	applyHeaderPolicy(headers, treatment)
 	const parameters = headers.get('Content-Disposition')?.replace(/^[^;]*/, '') ?? ''
-	headers.set('Content-Disposition', `${fileDisposition(headers.get('Content-Type'))}${parameters}`)
+	headers.set('Content-Disposition', `${fileDisposition(headers.get('Content-Type'), inline)}${parameters}`)
 }
 
 /**

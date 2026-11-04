@@ -32,6 +32,7 @@ import {
 	applyHeaderPolicy,
 	crossOriginHeaders,
 	type HeaderPolicy,
+	inlineFileTypes,
 	withResponseHeaders,
 } from '@fabrika/proxy-core/headers'
 import { type ContractProxyApp, isApplicationEntry, parseProxyManifestJson, type ProxyApp, type ProxyManifest } from '@fabrika/proxy-core/manifest'
@@ -229,7 +230,8 @@ type AnswerHeaders = (endpoint: string | null, status: number) => (headers: Head
 function contractAnswerHeaders(app: ContractProxyApp): AnswerHeaders {
 	const policy: HeaderPolicy = appHeaderPolicy(app)
 	const fileTreatment: HeaderPolicy = appFileTreatment(app)
-	const downloads = new Set(app.endpoints.filter(answersFile).map((row) => row.id))
+	// A download's inline types, by row: an `inline-file` row also shows the XML documents.
+	const downloads = new Map(app.endpoints.filter(answersFile).map((row) => [row.id, inlineFileTypes('response' in row ? row.response : undefined)]))
 	const cached = new Map<string, EndpointCache>()
 	for (const row of app.endpoints) {
 		if ('cache' in row && row.cache !== undefined) cached.set(row.id, row.cache)
@@ -237,7 +239,8 @@ function contractAnswerHeaders(app: ContractProxyApp): AnswerHeaders {
 	return (endpoint, status) => {
 		const id = endpoint === null ? null : (parseEndpointHeader(endpoint)?.id ?? null)
 		return (headers) => {
-			if (id !== null && downloads.has(id)) applyFileTreatment(headers, fileTreatment)
+			const inline = id === null ? undefined : downloads.get(id)
+			if (inline !== undefined) applyFileTreatment(headers, fileTreatment, inline)
 			else applyHeaderPolicy(headers, policy)
 			const cache = id === null ? undefined : cached.get(id)
 			if (cache !== undefined) applyAnswerCache(headers, { cache }, status)

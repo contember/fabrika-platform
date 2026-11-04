@@ -60,12 +60,17 @@ describe('requirementDigest', () => {
 		["the endpoint opened to the environment's origins", { ...row, crossOrigin: 'environment' }],
 		['the endpoint opened to any origin', { ...row, crossOrigin: 'any' }],
 		['the answer made a stored file', { ...row, response: 'file' }],
+		['the answer made a stored file shown inline', { ...row, response: 'inline-file' }],
 	])('changes when %s changes', (_name, changed) => {
 		expect(requirementDigest(changed)).not.toBe(requirementDigest(row))
 	})
 
 	test('keeps the digest of a row that answers no file, so every older row keeps its own', () => {
 		expect(requirementDigest({ ...row, response: undefined })).toBe(requirementDigest(row))
+	})
+
+	test('tells a file shown inline from a downloaded one', () => {
+		expect(requirementDigest({ ...row, response: 'inline-file' })).not.toBe(requirementDigest({ ...row, response: 'file' }))
 	})
 
 	test('tells the two cross-origin forms apart, and an absent one from neither', () => {
