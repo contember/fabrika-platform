@@ -23,7 +23,7 @@ For raising an application's framework pin to the next minor, see [framework mig
 
 ## Active sprints
 
-[Platform feedback loops](sprints/sprint-2026-11-02-platform-feedback-loops.md) is planned and waits for review of its [specs](specs/README.md): agent task keys, Operations tools in the authoring MCP, the access diff as a GitHub check, a release watch window with rollback, an access simulator, a review widget on stage and dev, and a fleet overview.
+[Platform feedback loops](sprints/sprint-2026-11-02-platform-feedback-loops.md) is planned: agent task keys, Operations tools in the authoring MCP, the access diff as a GitHub check, a release watch window with rollback, an access simulator, a review widget on stage and dev, and a fleet overview. Its [specs](specs/README.md) were reviewed on 2026-11-04; it starts with their verify-first checks.
 
 [Provider-neutral core](sprints/sprint-2026-10-23-provider-neutral-core.md) is active: what is the same on every cloud moves out of the provider packages into Control or a neutral library, so a provider package holds only its cloud ([ADR-0011](decisions/0011-static-provider-bundles.md)).
 
