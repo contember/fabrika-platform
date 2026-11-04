@@ -141,3 +141,24 @@ describe('appSchemaSchema — membership metadata', () => {
 		expect(appSchemaSchema.safeParse({ ...schema, contract: false, roles: plain }).success).toBe(true)
 	})
 })
+
+describe('a role that holds actions through a relation', () => {
+	const starter = (via: Record<string, string[]>, extra: Partial<AppSchema['roles'][string]> = {}) =>
+		notes({ roles: { ...notes().roles, starter: { name: 'Starter', permissions: ['workspaces.create'], via, ...extra } } })
+
+	test('is accepted on an application-wide internal role with catalog actions', () => {
+		expect(appSchemaSchema.safeParse(starter({ assignee: ['notes.read', 'notes.write'] })).success).toBe(true)
+	})
+
+	test('is refused with an action outside the catalog, on a membership role, and on an external one', () => {
+		expect(messages(starter({ assignee: ['notes.delete'] })).join('\n')).toContain('notes.delete')
+		expect(appSchemaSchema.safeParse(starter({ assignee: ['notes.read'] }, { member: { scope: 'workspace' } })).success).toBe(false)
+		expect(appSchemaSchema.safeParse(starter({ assignee: ['notes.read'] }, { member: { scope: 'workspace' }, external: true })).success).toBe(false)
+	})
+})
+
+describe('a reserved scope type', () => {
+	test('no dimension starts with ~', () => {
+		expect(appSchemaSchema.safeParse(notes({ scopes: [...notes().scopes, { type: '~rel' }] })).success).toBe(false)
+	})
+})
