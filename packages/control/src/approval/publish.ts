@@ -13,6 +13,7 @@ import { SourceFailure, SourceRateLimited } from '../github/source/failure'
 import type { LeaseFence } from '../lease'
 import { mailCustodyRefusal } from '../mail-transport'
 import { type AccessEffect, type AccessOutcome, classifyAccess, isJobStartLine } from './diff'
+import { relationGrantsRefusal } from './enforcement'
 import { ContractMissing, readAccessSnapshot, snapshotReads, SnapshotRefused } from './read'
 import { FrameworkReleaseRefused } from './readers'
 import {
@@ -174,6 +175,7 @@ export async function publishRunSnapshot(
 		assertMountCompatibility(candidate, active, input.log)
 		assertDevLauncher(candidate, appEnv, input.log)
 		await assertMailCustody(deps.repositories.runs, run, candidate, published, input.log)
+		assertRelationGrants(candidate, input.log)
 		await input.validateAccess?.(access, appEnv)
 		const classification = classify(active, candidate, appEnv)
 		logClassification(input.log, classification, appEnv.env)
@@ -294,6 +296,14 @@ async function assertMailCustody(
 	const running = readableSnapshot((await runs.getLatestSucceededRunWithSnapshot({ appId: run.app_id, env: run.env }))?.snapshot_json ?? null)
 	const held = running === null ? [published.snapshot] : [published.snapshot, running]
 	const refusal = mailCustodyRefusal(held, candidate)
+	if (refusal === null) return
+	log(`access: ${refusal}`)
+	throw new FrameworkReleaseRefused(refusal)
+}
+
+/** A contract whose relation grants the pinned release would not enforce: refused before anything publishes. */
+function assertRelationGrants(candidate: AccessSnapshot, log: (line: string) => void): void {
+	const refusal = relationGrantsRefusal(candidate.contract, candidate.framework)
 	if (refusal === null) return
 	log(`access: ${refusal}`)
 	throw new FrameworkReleaseRefused(refusal)

@@ -263,8 +263,11 @@ function compareContracts(changes: Changes, before: ContractArtifact | null, aft
 		changed: roleChanges,
 	})
 	for (const [name, role] of Object.entries(candidate.roles)) {
-		if (!Object.hasOwn(baseline.roles, name)) changes.add(subjectOf('role', name), ...externalChange(name, undefined, role.external))
+		if (!Object.hasOwn(baseline.roles, name)) {
+			changes.add(subjectOf('role', name), ...externalChange(name, undefined, role.external), ...viaChanges(name, undefined, role.via))
+		}
 	}
+	changes.add(application, ...relationChanges(baseline.relations, candidate.relations))
 	compareKeyed(changes, 'mount', record(baseline.mounts), record(candidate.mounts), {
 		added: (name, mount) => `New ${mount.kind} mount \`${name}\`${servedVariables(mount)}${takenFiles(mount)}${webhookPhrase(mount)}`,
 		removed: (name) => (mountsShown.has(name) ? [] : `Mount \`${name}\` is removed`),
@@ -341,6 +344,13 @@ function compareContracts(changes: Changes, before: ContractArtifact | null, aft
 		const before = Object.hasOwn(baseline.tables, name) ? baseline.tables[name] : undefined
 		const shown = new Set(before === undefined ? [] : fileColumnLines(name, before).map((change) => change.line))
 		changes.add(subjectOf('table', name), ...ruled('table.file-writers', fileColumnLines(name, table).filter((change) => !shown.has(change.line))))
+		if (before === undefined) {
+			changes.add(
+				subjectOf('table', name),
+				...ruled('table.confers', confersChanges(name, undefined, table.confers)),
+				...ruled('table.when', whenChanges(name, undefined, table.when)),
+			)
+		}
 	}
 	compareKeyed(changes, 'token', record(baseline.tokens ?? {}), record(candidate.tokens ?? {}), {
 		added: (name, purpose) => `New token purpose \`${name}\`, a token of it valid up to ${purpose.maxDays} days`,
@@ -1495,7 +1505,7 @@ function endpointMap(rows: readonly EndpointRow[]): Map<string, EndpointRow> {
 
 function roleChanges(name: string, from: RoleArtifact, to: RoleArtifact): RuledLine[] {
 	const role = `Role \`${name}\``
-	const external = externalChange(name, from.external, to.external)
+	const external = [...externalChange(name, from.external, to.external), ...viaChanges(name, from.via, to.via)]
 	const grants = ruled('role.grants', setChanges(role, from.grants, to.grants, 'gains', 'loses'))
 	if (from.member === null || to.member === null || from.member.scope !== to.member.scope) {
 		return [...grants, ...ruled('role.membership', valueChange(`${role} membership`, from.member, to.member)), ...external]
@@ -1508,6 +1518,96 @@ function roleChanges(name: string, from: RoleArtifact, to: RoleArtifact): RuledL
 		),
 		...external,
 	]
+}
+
+/** A relation a role holds actions through: each action held where a row names the holder widens, as a grant does. */
+function viaChanges(
+	name: string,
+	before: Readonly<Record<string, readonly string[]>> | undefined,
+	after: Readonly<Record<string, readonly string[]>> | undefined,
+): RuledLine[] {
+	const from = before ?? {}
+	const to = after ?? {}
+	return ruled(
+		'role.via',
+		union(Object.keys(from), Object.keys(to)).flatMap((relation) =>
+			setChanges(`Role \`${name}\` through relation \`${relation}\``, from[relation] ?? [], to[relation] ?? [], 'gains', 'loses')
+		),
+	)
+}
+
+/**
+ * The relations of the vocabulary: one grants nothing until a role holds actions through it (`role.via`), so a new one is
+ * neutral; another dimension moves every row's reach.
+ */
+function relationChanges(before: ContractArtifact['relations'], after: ContractArtifact['relations']): RuledLine[] {
+	const from = before ?? {}
+	const to = after ?? {}
+	return ruled(
+		'application.relation',
+		union(Object.keys(from), Object.keys(to)).flatMap((relation): Line[] => {
+			const was = from[relation]
+			const is = to[relation]
+			if (was === undefined) return is === undefined ? [] : [neutral(`New relation \`${relation}\` at a ${is.dimension}`)]
+			if (is === undefined) return [narrowing(`Relation \`${relation}\` is removed`)]
+			return valueChange(`Relation \`${relation}\` dimension`, was.dimension, is.dimension)
+		}),
+	)
+}
+
+/**
+ * What a table's rows confer: a new source makes every row it holds a grant, and every insert a delegation, so it widens;
+ * a longer or open-ended delegation, or one a writer may make to itself, widens too.
+ */
+function confersChanges(name: string, before: TablePolicyArtifact['confers'], after: TablePolicyArtifact['confers']): Line[] {
+	const from = before ?? {}
+	const to = after ?? {}
+	return union(Object.keys(from), Object.keys(to)).flatMap((relation): Line[] => {
+		const subject = `Table \`${name}\` relation \`${relation}\``
+		const was = from[relation]
+		const is = to[relation]
+		if (was === undefined) {
+			if (is === undefined) return []
+			const assign = is.assign === null
+				? 'no handler inserts a row'
+				: `an insert delegates it${is.assign.maxDays === null ? '' : ` for at most ${is.assign.maxDays} days`}${
+					is.assign.self ? ', to its writer too' : ''
+				}`
+			return [widening(`Table \`${name}\` confers relation \`${relation}\` on \`${is.principal}\` at \`${is.node}\`; ${assign}`)]
+		}
+		if (is === undefined) return [narrowing(`Table \`${name}\` no longer confers relation \`${relation}\``)]
+		const lines: Line[] = [
+			...valueChange(`${subject} principal`, was.principal, is.principal),
+			...valueChange(`${subject} node`, was.node, is.node),
+			...(was.expires !== null && is.expires === null
+				? [widening(`${subject} no longer expires`)]
+				: valueChange(`${subject} expiry`, was.expires, is.expires)),
+			...(was.when === undefined && is.when !== undefined
+				? [narrowing(`${subject} is conferred only by a row its condition holds`)]
+				: valueChange(`${subject} condition`, was.when, is.when)),
+		]
+		if (was.assign === null || is.assign === null) return [...lines, ...valueChange(`${subject} assignment`, was.assign, is.assign)]
+		return [
+			...lines,
+			...limitChange(`${subject} delegation days`, was.assign.maxDays, is.assign.maxDays),
+			...(was.assign.self === is.assign.self
+				? []
+				: [(is.assign.self ? widening : narrowing)(`${subject} ${is.assign.self ? 'may' : 'may no longer'} be delegated by a writer to itself`)]),
+		]
+	})
+}
+
+/** An action's condition narrows every grant of it on the table: a new one narrows, a lost one widens, any change widens. */
+function whenChanges(name: string, before: TablePolicyArtifact['when'], after: TablePolicyArtifact['when']): Line[] {
+	const from = before ?? {}
+	const to = after ?? {}
+	return union(Object.keys(from), Object.keys(to)).flatMap((action): Line[] => {
+		const was = from[action]
+		const is = to[action]
+		if (was === undefined) return is === undefined ? [] : [narrowing(`\`${action}\` holds a row of \`${name}\` only under its condition`)]
+		if (is === undefined) return [widening(`\`${action}\` holds every row of \`${name}\` its grant reaches: its condition is removed`)]
+		return valueChange(`\`${action}\` condition on \`${name}\``, was, is)
+	})
 }
 
 /** An external role may be held by a person from outside the organization (ADR-0051). */
@@ -1704,6 +1804,8 @@ function tableChanges(name: string, from: TablePolicyArtifact, to: TablePolicyAr
 		...ruled('table.creator', valueChange(`${table} creator column`, from.createdBy, to.createdBy)),
 		...columns,
 		...ruled('table.file-column', fileColumnChanges(name, from.files ?? {}, to.files ?? {})),
+		...ruled('table.confers', confersChanges(name, from.confers, to.confers)),
+		...ruled('table.when', whenChanges(name, from.when, to.when)),
 	]
 }
 
