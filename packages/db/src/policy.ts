@@ -1182,7 +1182,10 @@ function linkTables(parsed: readonly ParsedTable[], vocabulary: VocabularyModel)
 		const source = ownEntry(byName, from)
 		const scope = source === undefined ? undefined : resolve(source, []).scope
 		if (scope?.mode === 'dimension') {
-			return scope.container?.column === column
+			// The column must lead to the table that owns the container dimension, not to any table its key references.
+			const target = ownEntry(byName, to)
+			return scope.container !== undefined && scope.container.column === column && target?.scope.mode === 'dimension'
+				&& target.scope.dimension === scope.container.dimension
 		}
 		return scope?.mode === 'child' && scope.column === column && scope.parent === to
 	}
@@ -1328,6 +1331,13 @@ function parseConfers(
 		const placed = nodeColumnOf(table, dimension)
 		if (placed === undefined) {
 			throw new PolicyError(`${what}: ${table.name} does not lie in ${dimension}, the relation's dimension, so its rows name no node of it`)
+		}
+		const own = table.scope.mode === 'dimension' && table.scope.dimension === dimension
+		if (!own && table.chain[0]?.column !== placed) {
+			// An inherited column follows a move of an ancestor (ON UPDATE CASCADE), which no delegation bound sees.
+			throw new PolicyError(
+				`${what}: ${dimension} is above ${table.name}'s own container, and a move of an ancestor rewrites ${placed}; a relation's node is the row's key or its own container or parent column`,
+			)
 		}
 		const nodeInput = ownEntry(policy, 'node')
 		const node = nodeInput === undefined ? placed : column(nodeInput, 'node')
