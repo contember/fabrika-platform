@@ -18,7 +18,7 @@ app-facing SDK still does. Effort S.
   `audit()` forwards it to `IamRpc.audit`; `readCredentials` forwards it to `listPrincipals`.
 - On Cloudflare the edge writes `cf-ray`, so the value is outside the caller's reach. On Zerops the
   Caddy route deletes `X-Fabrika-Token`, `X-Request-Id`, `X-Fabrika-Client-Ip` and
-  `UNTRUSTED_FORWARD_HEADERS` (`packages/proxy/src/caddy.ts:343`, `packages/auth-core/src/wire.ts:30`:
+  `UNTRUSTED_FORWARD_HEADERS` (`packages/proxy/src/caddy.ts`, `packages/auth-core/src/wire.ts`:
   `X-Forwarded-For`, `CF-Connecting-IP`). A caller's `cf-ray` reaches the app. The proxy's own
   `X-Request-Id`, which it does inject, is ignored by the SDK.
 - Control and Operations take their audit correlation id from this SDK too (`createIam` in
