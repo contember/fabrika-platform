@@ -145,4 +145,12 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [263](263-rows-fixture-review-findings.md): An `in` report's leak case cannot seed a named row whose table allows one per target; the checker misses a field named under two capability keys.
 - [264](264-a-case-writes-into-a-stored-scope-row.md): A mutation's generated case writes into a scope row a migration wrote (a known enum value), and nothing restores it.
 - [265](265-known-scope-values-collide-in-a-container-or-a-shared-from-field.md): Known enum values stored in one container, or a `from` field two capabilities share, give both callers one grant.
+- [266](266-fleet-wide-framework-upgrades.md): For each application below the platform's framework release, an upgrade workspace, `run_checks` in a dev sandbox and a pull request.
+- [267](267-every-application-as-an-mcp-server.md): The proxy serves `/mcp` on an application host with tools from the contract's opted-in procedures; an ADR on application data reaching external models comes first.
+- [268](268-opice-journeys-as-a-stage-gate-and-production-checks.md): opice browser journeys gate a stage run and run against production as a health check; the browser runtime per provider is undecided.
+- [269](269-masked-production-data-for-dev-and-stage.md): Columns declare a personal-data class through the approval, and Control seeds dev or stage from a masked copy of a production backup.
+- [270](270-a-self-healing-loop.md): An `agent` alert channel hands an issue or a suspect release to an external agent with a task key; a person merges its pull request.
+- [271](271-fast-dev-sandboxes-on-cloudflare.md): A Cloudflare dev environment keys the application object by workspace, for the seconds-per-commit loop Zerops has.
+- [272](272-authoring-workspaces-on-kompjutr.md): A kompjutr working tree per workspace, so search and multi-file edits stop costing one GitHub request per file.
+- [273](273-automatic-rollback-of-a-suspect-release.md): An opted-in environment rolls a suspect release back when the observed verdict is `suspect` and the rollback verdict `safe`; its own ADR first.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.

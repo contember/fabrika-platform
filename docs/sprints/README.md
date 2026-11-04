@@ -19,5 +19,6 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 
 ## Active
 
+- [Platform feedback loops](sprint-2026-11-02-platform-feedback-loops.md) — seven features from [specs](../specs/README.md) that show people and agents what their change did; specs reviewed, starts with the verify-first wave.
 - [Provider-neutral core](sprint-2026-10-23-provider-neutral-core.md) — what is the same on every cloud moves out of the provider packages into Control or a neutral library (ADR-0011).
 - [Terminals](sprint-2026-10-21-terminals.md) — an enrolled shared computer signs a person in on an application's word, bounded by a ceiling, through the unchanged handoff (ADR-0067).
