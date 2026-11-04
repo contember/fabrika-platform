@@ -8,7 +8,6 @@ from the proxy's own decision code, run offline over the approved table.
 
 **Depends on.** Nothing. Each PR stands on code that exists today.
 **Enables.** [Agent task keys](./agent-task-keys.md) (explain what a task key reaches before it is issued),
-[access diff as a GitHub check](./access-diff-as-a-github-check.md) (the people counts of PR 5 on the check),
 [operations tools in the authoring MCP](./operations-tools-in-the-authoring-mcp.md) (one more read tool beside them).
 
 ## Problem
@@ -192,8 +191,12 @@ requirement (`authorize.ts:338`), so a row that moves from `human` to `machine` 
 from every person while `satisfies` still says yes. For each changed endpoint and each person, Control runs the
 simulator under the same-origin page scenario twice: the active claims against the active entry, the candidate claims
 against the candidate entry (`proxyEntry` over the candidate access). Allow → deny is a loss, deny → allow a gain.
-Counts only: the approver holds `access.approve`, not IAM administration, so the page shows no names. The count is
-capped (500) and says "500 or more" past it.
+Counts only, and only to an approver who is also an installation IAM administrator (`iam.admin`). Control asks IAM
+with the approver's own console bearer, as it does for `access.preview`, and holds no IAM credential of its own for
+this: IAM answers the permission sets only to an `iam.admin` caller and audits the read. An approver without
+`iam.admin` sees the audience groups without counts, and Control makes no IAM call for them. The page shows no names.
+The count is capped (500) and says "500 or more" past it. A GitHub check has no person's token, so the counts never
+appear on [the access diff check](./access-diff-as-a-github-check.md).
 
 ## API and contract changes
 
@@ -202,7 +205,7 @@ capped (500) and says "500 or more" past it.
   inventory in `scripts/release.ts`.
 - **IAM `/admin/rpc`**: `access.preview` (input: app id, a person id or a credential id) and, for PR 5,
   `access.previewAudience` (input: app id, optional candidate schema; output: per-principal permission sets, ids only,
-  capped). Both engines.
+  capped; `iam.admin` only). Both engines.
 - **Provider contract**: an optional `proxyEntry(environment, { workspaceId? })` on the control provider, returning the
   entry it would publish. Both providers implement it from their publish code.
 - **IAM repository**: `getActiveCredentialById`, with `getActiveCredentialByHash`'s validity predicate.
@@ -210,7 +213,10 @@ capped (500) and says "500 or more" past it.
   `access.audience` for the approval page. DTOs in `@fabrika/control-contract`.
 - **Console**: an "Access" tab on the environment page; a principal picker; "Explain a refused request".
 - **MCP** (Control's `/mcp`): `explain_access` takes a target, a role (and optional scope value), and optionally a
-  method and path. Read-only, `readOnlyHint: true`. Roles only: the MCP token is an OAuth resource token, and IAM's
+  method and path. Read-only, `readOnlyHint: true`. Scope `authoring`, the scope every `/mcp` call carries: it reads
+  the approved contract of an authoring target (or a workspace's publication on `dev`), which the agent already reads
+  from the repository, and is authorized with `deploy.read` at those coordinates, as `get_deployment` is. It adds no
+  action to the `authoring` ceiling. Roles only: the MCP token is an OAuth resource token, and IAM's
   admin surface refuses a resource token (`verifyAccessToken`), so the agent cannot preview a real person.
 - **Proxy answers**: `X-Request-Id` on refusals; the reference on the error page; `subject` on the `deny` log line.
 
@@ -230,8 +236,8 @@ token claim, no `FABRIKA_*` variable. `X-Request-Id` on a refusal goes to the cl
   nothing about IAM authority.
 - **Hypothetical roles** read only the approved contract, which the environment DTO already carries as `surface`
   (`packages/control/src/api/registry/registration.ts:249`). Same gate as that read; no audit row.
-- **People counts** reveal no identity. Control fetches them with its own IAM credential, not the approver's, and
-  receives principal ids it never shows. Open question below on whether that credential should exist.
+- **People counts** reveal no identity and are answered only to an `iam.admin` approver, through that approver's own
+  bearer; Control receives principal ids it never shows and has no IAM credential for them.
 - **No real credential.** Nothing is minted with IAM's keys. The simulator's key is generated per call, never stored,
   and its issuer is not one any verifier accepts. A simulated token cannot leave the function: the `Decision` it
   returns is reduced to the verdict, and the token field is dropped before Control answers.
@@ -272,7 +278,8 @@ token claim, no `FABRIKA_*` variable. `X-Request-Id` on a refusal goes to the cl
   `insufficient_permission` and none on `no_credential`; `logging.test.ts` still finds no secret.
 - **People counts**: a candidate role that adds an action raises "gain" by the holders of that role; a row whose
   callers change from `human` to `machine` with the same requirement counts every holder as a loss; the cap reads
-  "500 or more".
+  "500 or more"; an approver without `iam.admin` gets the groups without counts and Control makes no IAM call;
+  `access.previewAudience` refuses a user administrator and Control's own keys.
 
 ## Slicing into PRs
 
@@ -287,8 +294,9 @@ token claim, no `FABRIKA_*` variable. `X-Request-Id` on a refusal goes to the cl
 4. **Refused-request reference (S).** `X-Request-Id` and the page reference on refusals, `subject` on the deny line,
    "Explain a refused request" in the console. Witness: proxy-core page and logging tests; the Cloudflare Worker
    composition test.
-5. **People counts on the approval page (M).** IAM `access.previewAudience` with a candidate `RoleSource`, Control
-   `access.audience`, the counts beside each audience group. Witness: the count test above; ADR-0050 §7's grouping
+5. **People counts on the approval page (M).** IAM `access.previewAudience` with a candidate `RoleSource`, `iam.admin`
+   only; Control `access.audience` over the approver's bearer; the counts beside each audience group for an
+   `iam.admin` approver. Witness: the count test above; ADR-0050 §7's grouping
    test still holds (counts decide nothing).
 
 Order: 1 → 2 → 3, then 4 and 5 in either order. PR 4's proxy half (the reference and the `subject` on the log line)
@@ -302,11 +310,14 @@ simulator (1), `proxyEntry` (2) and IAM's permission sets beside the preview (3)
 2. **An application administrator.** Should the holder of an application's `members.manage`-style action (ADR-0022
    rule 6, `app_members`) preview its own people? Default: no; they keep `appPeople`, and the simulator stays with
    IAM administrators.
-3. **Control's credential for people counts.** PR 5 needs IAM to answer permission sets to Control without an
-   administrator's bearer. Default: a new `IamRpc` method on the management transport, answering ids and permission
-   sets for one app only, never labels. If that is judged too wide, PR 5 shows counts only to an approver who is also
-   an IAM administrator.
-4. **Persisting refusals.** Default: no. Revisit if operators ask "who was refused" rather than "why was this one".
-5. **Terminal sessions.** Default: out of scope; the answer says it assumes no terminal.
-6. **ADR.** Default: no new ADR. Add a paragraph to ADR-0022 §3 that the simulator is a caller of the decision, never
+3. **Persisting refusals.** Default: no. Revisit if operators ask "who was refused" rather than "why was this one".
+4. **Terminal sessions.** Default: out of scope; the answer says it assumes no terminal.
+5. **ADR.** Default: no new ADR. Add a paragraph to ADR-0022 §3 that the simulator is a caller of the decision, never
    a second one, and to ADR-0050 §7 for the people counts.
+
+## Decisions
+
+- **People counts only for an approver who is also an IAM administrator** (review of 2026-11-04), through their own
+  token. Control gets no new IAM credential.
+- **Order.** PRs 1–3 are scheduled with the second wave, PRs 4 and 5 with the third: PR 4's console replay needs
+  PRs 2 and 3, and its proxy half may land earlier when a slot is free.
