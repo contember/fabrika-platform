@@ -31,6 +31,7 @@ const CREDENTIAL_WORDS: ReadonlySet<string> = new Set([
 ])
 
 /** Words that make `KEY` (or `KEYS`) something other than a credential: `KEY_ID`, `PUBLIC_KEY`, `SITE_KEY`, `CACHE_KEY`. */
+// Not `PRIMARY`: some providers call a secret a primary key (an account's primary access key).
 const NON_CREDENTIAL_KEY_WORDS: ReadonlySet<string> = new Set([
 	'ID',
 	'IDS',
@@ -40,9 +41,11 @@ const NON_CREDENTIAL_KEY_WORDS: ReadonlySet<string> = new Set([
 	'CACHE',
 	'PARTITION',
 	'SORT',
-	'PRIMARY',
 	'FOREIGN',
 ])
+
+/** The words beside `KEY` that make its value public, not merely not a credential. */
+const PUBLIC_KEY_WORDS: ReadonlySet<string> = new Set(['PUBLIC', 'PUBLISHABLE', 'SITE'])
 
 /**
  * A last word that makes the name describe a credential rather than hold one: `TOKEN_URL`, `PASSWORD_MIN_LENGTH`,
@@ -113,13 +116,18 @@ const credentialWordIn = (words: readonly string[]): string | null => {
 }
 
 /**
- * Whether the name says its value is public: a publishable, site or public key, or an id. Such a value is often long
- * and random (`pk_live_…`, a reCAPTCHA site key, a VAPID public key), so the random-string rule does not apply to it.
+ * Whether the name says its value is public: a publishable, site or public key, or an id, in a name with no credential
+ * word. Such a value is often long and random (`pk_live_…`, a reCAPTCHA site key, a VAPID public key), so the
+ * random-string rule does not apply to it. A name that also says `SECRET` (`SECRET_KEY_ID`) is not public.
  */
-const namesAPublicValue = (words: readonly string[]): boolean =>
-	words.some((word, index) => (word === 'KEY' || word === 'KEYS') && nonCredentialKey(words, index))
-	|| words.at(-1) === 'ID'
-	|| words.at(-1) === 'IDS'
+const namesAPublicValue = (words: readonly string[]): boolean => {
+	if (words.some((word, index) => CREDENTIAL_WORDS.has(word) || (word === 'BASIC' && words[index + 1] === 'AUTH'))) return false
+	const publicKey = words.some((word, index) =>
+		(word === 'KEY' || word === 'KEYS')
+		&& [words[index - 1], words[index + 1]].some((beside) => beside !== undefined && PUBLIC_KEY_WORDS.has(beside))
+	)
+	return publicKey || words.at(-1) === 'ID' || words.at(-1) === 'IDS'
+}
 
 /**
  * A Zerops or shell reference (`${db_password}`) names a value held elsewhere, so it is not one here. Removing them
@@ -176,10 +184,30 @@ const looksRandom = (text: string): boolean =>
 const literalOf = (value: string): string => withoutReferences(value).trim().replace(/^(Basic|Bearer|Token)$/i, '')
 
 /**
- * A boolean, a short integer or a duration: what a setting that only describes a credential holds (`TOKEN_EXPIRES_IN`,
- * `Access-Control-Allow-Credentials`). An integer of six digits or more may be a PIN or a numeric password, so it counts.
+ * A setting's value, unwrapped from how a response header is written in `zerops.yaml` (`"'true' always"`): surrounding
+ * quotes and nginx's trailing `always` removed.
  */
-const isSettingValue = (literal: string): boolean => /^(true|false|yes|no|on|off|\d{1,5}|\d+(ms|s|m|h|d))$/i.test(literal)
+const settingOf = (literal: string): string => {
+	let text = literal.replace(/\s+always$/i, '').trim()
+	for (let round = 0; round < 2; round++) text = text.replace(/^(['"])(.*)\1$/, '$2').trim()
+	return text
+}
+
+/** A boolean is never a credential, whatever the name says (`Access-Control-Allow-Credentials: true`). */
+const isBoolean = (setting: string): boolean => /^(true|false|yes|no|on|off)$/i.test(setting)
+
+/**
+ * A short integer, a decimal or a duration: what a setting that only describes a credential holds (`TOKEN_EXPIRES_IN`,
+ * `KEY_ROTATION_DAYS`). It counts only when the credential word is not the name's last word: `DB_PASSWORD=1234` is a
+ * PIN, and an integer of six digits or more counts anywhere.
+ */
+const isQuantity = (setting: string): boolean => /^(\d{1,5}|\d+\.\d+|\d+(ms|s|m|h|d))$/i.test(setting)
+
+/** Whether the name's last word is the credential word that matched (`DB_PASSWORD`, `API_TOKEN`, `SIGNING_KEYS`). */
+const endsInCredentialWord = (words: readonly string[], word: string): boolean => {
+	const last = words.at(-1)
+	return last === word || (word === 'BASIC_AUTH' && last === 'AUTH')
+}
 
 /** What the VALUE alone says, or null. Never echoes it. */
 const valueFinding = (literal: string, publicValue: boolean): string | null => {
@@ -201,7 +229,7 @@ const valueFinding = (literal: string, publicValue: boolean): string | null => {
  * The name matches on a credential word (`TOKEN`, `SECRET`, `PASSWORD`, `PASS`, `BASIC_AUTH`, a `KEY` or `KEYS` that is
  * not an id, a public key or a cache key), unless its last word makes it describe one (`TOKEN_URL`,
  * `PASSWORD_MIN_LENGTH`). A name match needs a literal that could be a credential: an empty value, one made only of
- * references, a boolean, an integer or a duration is not. The value matches on its own: a private key, an
+ * references or a boolean is not, nor a short number or duration unless the credential word ends the name. The value matches on its own: a private key, an
  * Authorization header, a URL with a password, an issuer's token prefix, or a long random string unless the name says
  * the value is public (a publishable or site key, an id).
  */
@@ -209,7 +237,9 @@ export function plainCredentialFinding(name: string, value: string): PlainCreden
 	const words = nameWords(name)
 	const literal = literalOf(value)
 	const word = credentialWordIn(words)
-	if (word !== null && literal !== '' && !isSettingValue(literal)) {
+	const setting = settingOf(literal)
+	const describes = isBoolean(setting) || (word !== null && isQuantity(setting) && !endsInCredentialWord(words, word))
+	if (word !== null && literal !== '' && !describes) {
 		return { basis: 'name', because: `its name contains \`${word}\`` }
 	}
 	const because = valueFinding(literal, namesAPublicValue(words))

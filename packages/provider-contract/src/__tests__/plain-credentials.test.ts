@@ -23,6 +23,9 @@ describe('plainCredentialFinding', () => {
 		['SMTP_PASS', 'hunter2', 'PASS'],
 		['FABRIKA_IAM_SIGNING_KEYS', '[{"kty":"OKP"}]', 'KEYS'],
 		['DB_PASSWORD', '123456', 'PASSWORD'],
+		['DB_PASSWORD', '1234', 'PASSWORD'],
+		['API_TOKEN', '30d', 'TOKEN'],
+		['COSMOS_PRIMARY_KEY', 'abc', 'KEY'],
 		['MAIL_TOKEN', 'Bearer x-${token}', 'TOKEN'],
 	])('the name %s is a credential name', (name, value, word) => {
 		expect(plainCredentialFinding(name, value)).toEqual({ basis: 'name', because: `its name contains \`${word}\`` })
@@ -48,6 +51,9 @@ describe('plainCredentialFinding', () => {
 		['SESSION_TOKEN_LIFE', '15m'],
 		['FEATURE_PASSWORD_LOGIN', 'off'],
 		['MAIL_TOKEN', 'Bearer ${token}'],
+		['Access-Control-Allow-Credentials', "'true' always"],
+		['Access-Control-Allow-Credentials', '"true"'],
+		['PASS_RATE', '0.8'],
 	])('the name %s describes a credential and does not hold one', (name, value) => {
 		expect(plainCredentialFinding(name, value)).toBeNull()
 	})
@@ -99,6 +105,14 @@ describe('plainCredentialFinding', () => {
 		['BUILD_ID', RANDOM],
 	])('the name %s says the value is public, so a random value is not refused', (name, value) => {
 		expect(plainCredentialFinding(name, value)).toBeNull()
+	})
+
+	test.each([
+		['SECRET_KEY_ID', RANDOM],
+		['STRIPE_SECRET_ID', RANDOM],
+		['OAUTH_CLIENT_SECRET_ID', RANDOM],
+	])('a name that also says SECRET is not public, so %s with a random value is refused by its value', (name, value) => {
+		expect(plainCredentialFinding(name, value)?.because).toBe('it is a long random string')
 	})
 
 	test('a public name still does not let a private key or a URL password through', () => {
