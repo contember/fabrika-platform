@@ -132,7 +132,10 @@ digest pair that a later run consumes when its digests match. That rewrites ADR-
 - **Control identity checks.** `verifiedIdentity` (`port.ts:127`), `validateIdentity` and `matchesConnectionIdentity`
   (`configuration.ts:83`, `:92`) accept an App whose events are `push` alone or `push` with any of `pull_request` and
   `check_run`; any other event is still refused. The connection records whether checks are available: `on`, `off` (the
-  App lacks the permission or the events), or `awaiting_acceptance` (the installation has not accepted).
+  App lacks the permission or the events), or `awaiting_acceptance` (the installation has not accepted). The
+  connection's App DTO stops hard-coding `permissions: { contents: 'read' }` and `events: ['push']`
+  (`packages/control/src/github/connections/status.ts:139-140`) and reports the verified permissions and events, so
+  the console shows what the App actually holds.
 - **Webhook.** `VerifiedDelivery` gains `pull_request` and `check_run` kinds, and an `installation` delivery with action
   `new_permissions_accepted` refreshes the connection's check state.
 - **Queue.** `ControlJobMessage` gains `PullRequestAccessJobMessage`. The consumer refuses an unknown kind by throwing
@@ -208,8 +211,9 @@ digest pair that a later run consumes when its digests match. That rewrites ADR-
 
 ## Slicing into PRs
 
-1. **Accept the wider App (S).** Relax the three identity checks, decode `checks`, record the connection's check
-   state with a per-connection opt-out, change the manifest for new Apps, document the operator step and rewrite ADR-0029's "the `push` event only".
+1. **Accept the wider App (S).** Relax the three identity checks, decode `checks`, report the verified permissions
+   and events in the connection DTO (`status.ts:139-140`), record the connection's check state with a per-connection
+   opt-out, change the manifest for new Apps, document the operator step and rewrite ADR-0029's "the `push` event only".
    Witness: the identity tests above.
 2. **The check (M).** Webhook decode, the job, the dedupe table and migration, the Checks client, the summary renderer
    and the conclusion table. Witness: the job tests and the no-leak test.
@@ -237,3 +241,9 @@ digest pair that a later run consumes when its digests match. That rewrites ADR-
    Default: accept it, since that access came from the same repository; an installation that disagrees turns the
    check off per connection (the opt-out of slice 1).
 5. **Draft pull requests.** Default: check them too; the dedupe bounds the cost.
+
+## Decisions
+
+- **Slice 1 ships first, ahead of the rest** (review of 2026-11-04). Every installation's operator must re-approve the
+  wider GitHub App before a check can run, so Control accepts the wider App in the first wave and the operator step is
+  documented then; slices 2–5 follow in the next wave, by which time the approvals have had time to land.
