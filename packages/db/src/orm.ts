@@ -209,7 +209,7 @@ function accessTables(models: TableModels): readonly string[] {
 	const names = ownKeys(models)
 	for (let index = 0; index < names.length; index++) {
 		const model = modelOf(models, names[index] ?? '')
-		if (model !== undefined && (delegates(model) || model.memberReveals.length > 0)) {
+		if (model !== undefined && delegates(model)) {
 			tables[tables.length] = model.name.toLowerCase()
 		}
 	}
@@ -1039,13 +1039,12 @@ function unscopedRows(context: TableContext, site: DataSite, run: Runner, mode: 
 		return equals(table, keyOf(model), id)
 	}
 	const write = <A extends unknown[], R>(operation: 'insert' | 'update' | 'remove', method: (...args: A) => Promise<R>) => {
-		// A row of a relation source, or one a reveal matches through a path, hands access on; an unscoped write would
-		// delegate without the writer's bound.
+		// A row that hands out access is placed by its writer; an unscoped write would delegate without the writer's bound.
 		if (delegates(model)) {
 			return refused(
 				site,
 				'undeclared_reach',
-				`${table} confers a relation or reveals through a secondary path, so it is written through a capability only, never unscoped`,
+				`${table} hands out access, so it is written through a capability only, never unscoped`,
 			)
 		}
 		if (mode === 'read') {

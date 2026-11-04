@@ -1619,12 +1619,15 @@ function parseRevealAssign(table: LinkedTable, path: SecondaryPath | undefined, 
 	return freeze({ self: self === true })
 }
 
-/** A row of the table hands access to someone its writer picks: it confers a relation, or reveals through a path. */
+/**
+ * A row of the table hands out access that its writer places: it confers a relation, reveals through a path, or reveals
+ * its ancestor to the grants at its node. Such a row is written only through the handles, and never moves.
+ */
 export function delegates(model: TableModel): boolean {
 	for (let index = 0; index < model.reveals.length; index++) {
 		if (model.reveals[index]?.path !== undefined) return true
 	}
-	return model.confers.length > 0
+	return model.confers.length > 0 || model.memberReveals.length > 0
 }
 
 function containsLink(chain: readonly Container[], dimension: string): boolean {

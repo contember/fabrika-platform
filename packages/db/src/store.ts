@@ -2051,7 +2051,7 @@ export class DimensionTable<DB, P, T extends string> {
 		if (delegates(context.model)) {
 			throw new CapabilityError(
 				'table_kind',
-				`${context.model.name} confers a relation or reveals through a secondary path, so a row is never moved: insert a new one`,
+				`${context.model.name} hands out access, so a row is never moved: insert a new one`,
 			)
 		}
 		const scope = objectPredicate(context, ref, 'delete')
