@@ -2,13 +2,14 @@
 
 **Summary.** One console page that lists every application environment with its owner, last human sign-in, open
 issues, last release, framework lag and idle dev sandboxes, and a **retire** action that takes an unused environment out
-of service before it is deleted. Size: M (the view) + M (retire).
+of service before it is deleted. Size: M (the view) + M (retire). The view (PRs 1–4) is scheduled now; retire waits
+("Decisions").
 
 - **Depends on:** [backlog 203](../backlog/203-deleting-an-app-or-env-leaves-its-secrets-and-iam-keys.md) for the final
   delete of a retired environment (PR 6 only). Nothing else.
 - **Enables:** [backlog 266](../backlog/266-fleet-wide-framework-upgrades.md) (fleet framework upgrades read the
   framework-lag column). [Release watch window](./release-watch-window-and-rollback.md) adds its release verdict as a
-  later column of this view (its own slice 5); this spec does not build it. [Agent task keys](./agent-task-keys.md) are
+  later column of this view (its own slice 4); this spec does not build it. [Agent task keys](./agent-task-keys.md) are
   refused by retire (a human action).
 
 ## Problem
@@ -88,7 +89,7 @@ each of its environments.
 
 1. **Backup.** On Cloudflare, a `backup` data operation of the environment, the one the daily schedule starts
    (`packages/control/src/backups.ts`, [ADR-0070](../decisions/0070-data-protection-of-an-application-environment-on-cloudflare.md)
-   §7). Today `data.start` with kind `backup` answers 501 (`packages/control/src/control-rpc.ts:798`); retire lifts that
+   §7). Today `data.start` with kind `backup` answers 501 (`packages/control/src/control-rpc.ts:797`); retire lifts that
    for itself by calling the backup path directly. The retire waits for `succeeded`; a failed backup stops the retire
    with the environment still serving. Zerops drives no data operation, so there is no platform backup: the retire asks
    the person to confirm that, and Zerops keeps the database service anyway (below).
@@ -109,8 +110,13 @@ each of its environments.
 5. **Retention.** The environment stays retired for 30 days (`RETIREMENT_DAYS`, the same span after which a backup reads
    as expired). During it, **restore** reverses steps 2 and 3: it clears `retired_at`, opens the object at a new
    generation (Cloudflare) or returns the environment to its namespace members (Zerops), and then redeploys the newest
-   succeeded run under the same lease, as a side restore's deploys do (`operationDeploys`). That deploy issues fresh keys,
-   so the running version never keeps a revoked one.
+   succeeded run under the same lease through `operationDeploys`, with that run's commit as both `ref` and `commitSha`.
+   A side restore's own redeploy passes the run's recorded `ref` (`redeployable`,
+   `packages/control/src/data-operations.ts:433`), a branch for a pushed run; on Zerops a branch that moved on since
+   then fails `commit_mismatch` (`packages/control/src/github/source/repository.ts:89-91`), and after 30 days it
+   usually has. Passing the exact commit, as `runs.rollback` does in
+   [the release watch window](./release-watch-window-and-rollback.md), passes on both providers. That deploy issues
+   fresh keys, so the running version never keeps a revoked one.
 6. **Delete.** After the retention the page offers the ordinary delete (`deleteAppEnvUseCase`,
    `packages/control/src/api/registry/environments.ts:156`; `deleteAppUseCase`, `apps.ts:52`). Maintenance never deletes
    on its own. The delete keeps its current rules: the human check for a protected environment, the dev-sandbox check
@@ -120,6 +126,12 @@ each of its environments.
 
 Retire runs as a job under the environment's `<app>:<env>` deploy lease, like a data operation, so it cannot race a
 deploy. Each step is recorded on a `app_env_retirements` row fenced on the lease, so a successor resumes it.
+
+**A retired Zerops environment keeps running.** Retire removes its routes, not its services (open question 4). Its
+jobs keep firing on their schedule, each token mint with a revoked key fails, and the framework reports each failure
+to Operations through the DSN the service still holds. So for the 30 days of retention the environment's source
+collects issues and fires their alerts. The fleet page shows a retired environment's issues apart from a serving one's,
+and the retire confirmation on Zerops says so; an operator who wants silence stops the services in Zerops by hand.
 
 ### Relation to backlog items
 
@@ -149,7 +161,7 @@ an estimate from reserved resources, which the page could add later without a co
 - `AppEnvDto.framework: string | null` (the published snapshot's pin) and `AppEnvDto.retired: { at, by, until } | null`.
 - `apps.environments.retire({ appId, env, acknowledgeNoBackup? })`, `apps.environments.restore({ appId, env })`. Both
   start a job and return the retirement record; `apps.environments.retirement({ appId, env })` reads its progress.
-- Migration `0031_fleet.sql` in `migrations/` and `migrations-postgres/`: `apps.owner_id`, `app_envs.retired_at`,
+- A new migration, numbered when the PR lands, in `migrations/` and `migrations-postgres/`: `apps.owner_id`, `app_envs.retired_at`,
   `app_envs.retired_by`, and `app_env_retirements` (id, app, env, step, backup id, outcome, actor, timestamps). Each
   column is nullable; no backfill.
 
@@ -206,7 +218,7 @@ the existing ops channel at releases that serve it, and changes nothing an appli
 
 Existing applications start with `owner_id` null and show **No owner** until someone sets it; Control does not guess
 one from run actors. Existing environments show framework **Unknown** until their next deploy publishes a snapshot with
-the field. Migration `0031` is additive on both dialects.
+the field. The migration is additive on both dialects.
 
 ## Test plan
 
@@ -244,7 +256,10 @@ the field. Migration `0031` is additive on both dialects.
 6. **Delete after retention (S).** The console's delete of a retired environment once its retention ended. Blocked by
    203 items 1–2, so a delete stops leaving vault rows. Witness: a retired-then-deleted environment leaves no vault row.
 
-PRs 1–4 ship the view alone; 5–6 are independent of the view's columns.
+PRs 1–4 ship the view alone; 5–6 are independent of the view's columns. PRs 1–4 are built now; 5 and 6 wait.
+
+When PR 5 is built, PR 1's migration carries only `apps.owner_id`, so PR 5 adds `retired_at`, `retired_by` and
+`app_env_retirements` in its own migration.
 
 ## Open questions
 
@@ -263,3 +278,9 @@ PRs 1–4 ship the view alone; 5–6 are independent of the view's columns.
 7. **An ADR.** Retirement is a new lifecycle state of an environment and constrains every deploy path. Default: write
    one with PR 5 ("An application environment is retired before it is deleted"), naming ADR-0034's no-provider-delete
    rule as unchanged.
+
+## Decisions
+
+- **The overview now, retire later** (review of 2026-11-04). PRs 1–4 (owner, `fleet.list` with the framework column,
+  the IAM and Operations aggregates, the page) are scheduled. Retire, restore and the delete after retention (PRs 5–6)
+  wait; the `State` column shows `serving` until they exist.

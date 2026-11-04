@@ -20,8 +20,8 @@ something a future reader needs; the durable _why_ goes to `../decisions/` and t
   from the proxy's own decision code.
 - [Review widget on stage and dev](review-widget-on-stage-and-dev.md) — the proxy injects a review widget on stage and
   dev hosts; comments carry the reviewer's identity and the commit, and the agent reads them over MCP.
-- [Fleet overview](fleet-overview.md) — owner, last use, framework lag and idle sandboxes per application, with a sunset
-  action.
+- [Fleet overview](fleet-overview.md) — owner, last use, framework lag and idle sandboxes per application; a retire
+  action comes later.
 - [Agent task keys](agent-task-keys.md) — short-lived, budgeted delegation marked as an agent acting for a person.
 
 The order they are built in: [sprint — platform feedback loops](../sprints/sprint-2026-11-02-platform-feedback-loops.md).
