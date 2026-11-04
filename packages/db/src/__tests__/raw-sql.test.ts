@@ -1033,10 +1033,13 @@ describe('a table that confers a relation is written only through its handles', 
 			expect(refused(parts`insert into note_members (id) values (${'m'})`, 'write', dialect)).toContain('confers a relation')
 			expect(refused(parts`update "NOTE_MEMBERS" set principal_id = ${'x'}`, 'write', dialect)).toContain('confers a relation')
 			expect(refused(parts`delete from notes where id in (select note_id from Note_Members)`, 'write', dialect)).toContain('confers a relation')
+			// A writing site's statement is never trusted to be a read: SQLite runs `WITH … REPLACE` as a write.
+			expect(refused(parts`select note_id from note_members where principal_id = ${'x'}`, 'write', dialect)).toContain('confers a relation')
 		}
+		expect(refused(parts`with x as (select 1) replace into note_members (id) values (${'m'})`, 'write', LITE)).toContain('confers a relation')
 	})
 
-	test('a read of it, and a write of another table, pass', () => {
+	test('a read of it on a reading site, and a write of another table, pass', () => {
 		expect(refused(parts`select note_id from note_members where principal_id = ${'x'}`, 'read')).toBeUndefined()
 		expect(refused(parts`update notes set title = ${'t'} where id = ${'n'}`)).toBeUndefined()
 	})

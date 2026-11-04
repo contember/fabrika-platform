@@ -239,8 +239,8 @@ function sqliteNameRefusal(tokens: readonly SqlToken[]): { readonly name: string
 }
 
 /**
- * A relation source's name anywhere in a statement that writes, in any spelling: its rows confer access, and only the
- * data layer's insert bounds the delegation, so the tag refuses even a write that only reads one.
+ * A relation source's name anywhere in a statement of a writing site, in any spelling: its rows confer access, and only
+ * the data layer's insert bounds the delegation. No statement kind is trusted to be a read (SQLite's `WITH … REPLACE`).
  */
 function sourceReference(tokens: readonly SqlToken[], sources: readonly string[]): { readonly name: string; readonly line: number } | undefined {
 	for (const token of tokens) {
@@ -283,7 +283,7 @@ export function classifySql(parts: readonly string[], mode: SqlMode, database: S
 	if (writes !== undefined) {
 		refuse('sql_read_only', `sql: 'read' runs queries only, and the statement holds ${writes}; declare sql: 'write' on a mutation, a job or a webhook`)
 	}
-	const source = WRITE_STATEMENTS.has(first) || readRefusal(tokens) !== undefined ? sourceReference(tokens, sources) : undefined
+	const source = mode === 'write' ? sourceReference(tokens, sources) : undefined
 	if (source !== undefined) {
 		refuse(
 			'sql_name',
