@@ -1785,6 +1785,9 @@ function conditionColumns(condition: ConditionModel): readonly string[] {
 	if (condition.kind === 'not') {
 		return conditionColumns(condition.term)
 	}
+	if (condition.kind === 'some') {
+		return [condition.key]
+	}
 	const columns: string[] = []
 	for (let index = 0; index < condition.terms.length; index++) {
 		const term = condition.terms[index]

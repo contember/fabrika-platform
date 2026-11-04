@@ -46,6 +46,13 @@ export function conditionNode(table: string, condition: ConditionModel, now: Dat
 			return anyOf(nodesOf(table, condition.terms, now))
 		case 'not':
 			return UnaryOperationNode.create(OperatorNode.create('not'), ParensNode.create(conditionNode(table, condition.term, now)))
+		case 'some': {
+			// The rows of the other table whose key names this row: a null key names none, so `not in` never turns unknown.
+			const named = BinaryOperationNode.create(column(condition.table, condition.column), OperatorNode.create('is not'), ValueNode.createImmediate(null))
+			const rows = subquery(condition.table, condition.column, allOf([named, ParensNode.create(conditionNode(condition.table, condition.term, now))]))
+			const some = BinaryOperationNode.create(column(table, condition.key), OperatorNode.create('in'), rows)
+			return condition.negated ? UnaryOperationNode.create(OperatorNode.create('not'), ParensNode.create(some)) : some
+		}
 		case 'test':
 			return testNode(table, condition.hops, 0, condition, now)
 	}
