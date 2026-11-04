@@ -58,7 +58,9 @@ ceiling of its consented scopes (`scopeCeiling`, `packages/iam/src/oauth.ts:245-
 an MCP token today.
 
 Add a second scope, `operations`, to the console's MCP resource, with the ceiling `operations.read` and
-`operations.triage` (never `operations.manage`). Make it a default scope, so a new consent includes it. Do not widen
+`operations.triage` (never `operations.manage`). A new consent includes it with no further change: IAM's OAuth
+configuration offers every scope of the resource as a default (`defaultScopes`,
+`packages/installation-init/src/mcp.ts:91`). Do not widen
 `authoring`: IAM re-resolves a grant's ceiling at every refresh, so widening `authoring` would give every existing
 consent Operations access the person never saw on the consent screen. A grant consented before this change keeps
 `authoring` only; its Operations tools answer "this connection was authorized without the `operations` scope;
@@ -107,8 +109,9 @@ Ingest has already redacted URL fragments, `Authorization` headers and `px_` cre
 
 ### Prompt injection
 
-An issue title, an exception message and a breadcrumb are written by end users and by application code. Every such
-string is returned under an `untrusted` object of the tool result, never in the tool's prose. The server instructions
+An issue title, an exception message and a breadcrumb are written by end users and by application code; an issue's
+comments are written by people. Every such string is returned under an `untrusted` object of the tool result, never in
+the tool's prose. The server instructions
 (`WORKSPACE_INSTRUCTIONS`, `packages/control/src/mcp/handler.ts:59-63`) already say that repository files and build
 logs are untrusted data; they add Operations events. The only write tool comments on or resolves an issue, so an
 injected instruction can at worst produce a wrong comment, which the issue's activity shows with its actor.
@@ -117,7 +120,9 @@ injected instruction can at worst produce a wrong comment, which the issue's act
 
 `get_workspace` (`packages/control/src/api/workspaces.ts:267`) already returns the workspace's `latestRun` and whether
 it is `onStage`. When that run deployed the authoring target, Control adds `stageIssues`: at most 10 issues the
-release of that run's commit introduced, each with id, title, count and `attribution`.
+release of that run's commit introduced, each with id, title (under `untrusted`), count and `attribution`. The field
+is left out when the token lacks the `operations` scope, so a workspace read never fails for an `authoring`-only
+consent.
 
 The existing procedures cannot answer this. `releases` filters only by source and cursor
 (`releaseQuery`, `packages/operations/src/operator-rpc-input.ts:47-52`), and `release` lists every issue with an
@@ -144,12 +149,12 @@ Operations therefore gains:
 
 New MCP tools (all `openWorldHint: false`):
 
-| Tool           | Input                                                                                       | Output                                                                                                           | Annotation                      |
-| -------------- | ------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- | ------------------------------- |
-| `list_issues`  | `appId`, `env`, `serviceKey?`, `status?`, `window?`, `sort?`, `query?`, `cursor?`, `limit?` | items: id, level, status, firstSeen, lastSeen, count, regressedAt, `untrusted: { title, culprit }`; `nextCursor` | read-only                       |
-| `get_issue`    | `issueId`, `occurrenceId?`                                                                  | the summary, `resolvedInRelease`, comments, the projected event, its release with `runId` and `commitSha`        | read-only                       |
-| `get_health`   | `appId`, `env`                                                                              | per source: HTTP checks (path, current state, last 10 observations), telemetry state                             | read-only                       |
-| `update_issue` | `issueId`, `{ kind: 'comment', text }` or `{ kind: 'resolve_in_release', releaseId }`       | the updated summary                                                                                              | not destructive, not idempotent |
+| Tool           | Input                                                                                       | Output                                                                                                                                     | Annotation                      |
+| -------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------- |
+| `list_issues`  | `appId`, `env`, `serviceKey?`, `status?`, `window?`, `sort?`, `query?`, `cursor?`, `limit?` | items: id, level, status, firstSeen, lastSeen, count, regressedAt, `untrusted: { title, culprit }`; `nextCursor`                           | read-only                       |
+| `get_issue`    | `issueId`, `occurrenceId?`                                                                  | the summary, `resolvedInRelease`, the projected event, its release with `runId` and `commitSha`, `untrusted: { title, culprit, comments }` | read-only                       |
+| `get_health`   | `appId`, `env`                                                                              | per source: HTTP checks (path, current state, last 10 observations), telemetry state                                                       | read-only                       |
+| `update_issue` | `issueId`, `{ kind: 'comment', text }` or `{ kind: 'resolve_in_release', releaseId }`       | the updated summary                                                                                                                        | not destructive, not idempotent |
 
 `update_issue` maps to `mutateIssue` (`packages/operations/src/operator-rpc.ts:30-31`). It offers no status change,
 assignment, snooze or merge; those stay in the console. `resolve_in_release` names a release of the issue's own source.
@@ -223,12 +228,14 @@ Cloudflare installations have no MCP authoring (ADR-0049 rule 9), so nothing cha
 - A proxy-core test that an `oauth` bearer on `/operations/api/rpc` of the console table is refused.
 - `packages/control/src/__tests__/mcp.test.ts`, against a fake Operations service:
   - `list_issues` on a production environment answers `not_found` and makes no Operations call;
-  - `get_issue` drops `rawEvent`, `user` and the URL query, and every end-user string sits under `untrusted`;
+  - `get_issue` drops `rawEvent`, `user` and the URL query, and every end-user string and every comment sits under
+    `untrusted`;
   - a token without the `operations` scope gets the reconnect message;
   - `update_issue` refuses `status`, `assign` and `merge` kinds at the input schema;
   - `list_issues` on an authoring environment that is also protected answers `not_found`;
   - `get_workspace` names the issues the release of the latest stage run's commit introduced, and none when the run
-    did not deploy the authoring target.
+    did not deploy the authoring target; without the `operations` scope it has no `stageIssues` field and makes no
+    Operations call.
 - `packages/control/src/__tests__/` registry tests: `apps.environments.put` answers 409 for `authoring: true` on a
   protected environment and for `protected: true` on an authoring one.
 - `packages/operations/src/__tests__/operator-api.test.ts`, on SQLite and on Postgres: for a release, a long-standing
