@@ -19,8 +19,8 @@ effort.
 - IAM signs no application token above `MAX_APPLICATION_TOKEN_BYTES` (24576, `packages/auth-core/src/token.ts`;
   `boundedToken`, `packages/iam/src/tokens.ts`), and the proxy turns `token_too_large` into a 403. The bound was
   raised from 8 KiB: the token travels twice on a bearer request, and Bun, the application runtime on Zerops, is
-  started with a 64 KiB header limit (`packages/provider-zerops/src/execution.ts`). A raise past that needs a larger
-  limit there, and the client-sent kinds stay at 8 KiB for the proxy's auth service and installation services, which
+  started with a 64 KiB header limit (`APPLICATION_SERVER_MAX_HEADER_BYTES`, `packages/auth-core/src/token.ts`, passed
+  as `--max-http-header-size` by `packages/app/src/build-recipe.ts`). A raise past that needs a larger limit there, and the client-sent kinds stay at 8 KiB for the proxy's auth service and installation services, which
   keep Bun's 16 KiB. A token with a UUIDv7 scope value per entry passes 24 KiB at about 150 entries (8 KiB at about 50).
 - Behind it, a `Within` carries at most `MAX_WITHIN_VALUES` (1000) scope values, its own, its containers' and its
   contained grants' together (`packages/db/src/capability.ts`). The framework refuses to mint a larger one

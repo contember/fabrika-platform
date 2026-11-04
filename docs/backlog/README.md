@@ -16,17 +16,19 @@ never resolves to a different item than the one it meant.
 
 ## The phase ladder
 
-Items 01–05 formed the portability ladder. Phases 0–4 are complete. Phase 5 is the live-account
-bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account.md).
+Items 01–05 formed the portability ladder. Phases 0–4 are complete. Phase 5, the live-account bring-up, is done:
+Zerops runs production workloads on the `light` tier. The checks no live run has recorded (the `standard` tier, the
+rest of custom domains, a client address on a dedicated IPv4, a release and recovery rehearsal) are item
+[05](05-bring-up-on-a-real-zerops-account.md).
 
 ## Items
 
 <!-- one line each: NN — short summary (link). Keep it short. -->
 
-- [05](05-bring-up-on-a-real-zerops-account.md) — The light tier is live; what remains is the production two-project shape, custom domains and a full release rehearsal.
+- [05](05-bring-up-on-a-real-zerops-account.md) — Zerops runs production on `light`; no live run records the `standard` tier, the rest of custom domains, a client address on a dedicated IPv4 or a release and recovery rehearsal.
 - [22](22-unix-second-columns-overflow-in-2038.md) — int4 timestamps; `BIGINT` costs every reader a string. Decide before it is urgent.
-- [36](36-complete-zerops-release-artifact-correlation.md) — Prove Zerops build source maps on a real account (release-blocking) and link Delivery runs to Operations evidence.
-- [38](38-add-dns-safe-operations-egress.md) — Prevent private-address and DNS-rebinding egress through Operations webhooks and active health checks (release-blocking).
+- [36](36-complete-zerops-release-artifact-correlation.md) — Production Zerops builds upload their maps; prove original-source frames, report artifacts after `reconcile`, and link Delivery runs to Operations evidence.
+- [38](38-add-dns-safe-operations-egress.md) — Prevent private-address and DNS-rebinding egress through Operations webhooks and active health checks; production runs without it.
 - [46](46-add-portable-email-alert-delivery.md) — Add email alert delivery without coupling the portable Operations outbox to Cloudflare Email Routing.
 - [54](54-give-operations-its-own-proxy-app-identity.md) — Half shipped; what is left is moving the operator surface onto the Operations host, which is a console architecture change, not a rename.
 - [63](63-a-one-click-install-from-the-public-repository.md) — The second install shape: a running platform without creating a repository or a CI system.
@@ -35,7 +37,6 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [84](84-a-catalog-projection-can-wait-out-a-dead-flush-holders-lease.md) — Catalog projection windows that remain after the shared lease: four small findings (handoff window, relay run-log line, `markApplied` row count, an unrecorded remote apply).
 - [85](85-the-maintenance-replays-outcome-never-reaches-the-service-log.md) — Control's cron replay prints its outcome to a process whose output the platform does not collect; the sync that repairs a stale lease is invisible.
 - [86](86-a-cloudflare-deploy-holds-the-account-token-beside-the-repositorys-code.md) — The Cloudflare deploy imports the checkout's config beside the account-wide token and no app owns its resource names there; the review mitigated it, the boundary and the ADR reconciling it with ADR-0005 are still owed.
-- [87](87-deleting-a-zerops-app-env-that-holds-claims-answers-500.md) — A Zerops app env's claims restrict its delete, so `deleteApp`/`deleteAppEnv` answer 500 and the proxy republish never runs; releasing the claims needs a decision first.
 - [89](89-another-worker-can-still-start-its-own-runner-containers.md) — A real run's container is keyed and its run-naming methods check the instance; another Worker on the account can still start and drive runner containers of its own.
 - [91](91-add-an-organizational-directory-to-iam.md) — Add a source-aware organizational-unit tree, access groups, and group role assignments without turning app scopes into a hierarchy.
 - [92](92-an-app-audit-event-takes-its-correlation-id-from-a-caller-cf-ray-on-zerops.md) — `@fabrika/auth` reads `cf-ray` on every composition; on Zerops no edge writes it and the proxy does not strip it, so a caller picks an app audit event's `request_id`.
@@ -47,7 +48,7 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [99](99-no-check-builds-the-runner-image.md) — No CI job builds or smoke-tests the runner image, and its `bun install` runs without a lockfile.
 - [100](100-a-principal-in-many-scopes-gets-no-token.md) — One permission entry per action and scope meets the 24 KiB application token bound at about 150 entries; a compact claim shape and the 1000-value `Within` cap remain.
 - [103](103-runs-keeps-an-unused-pending-access-column.md) — Nothing reads or writes `runs.pending_access_json` since contractless applications are refused; a later migration drops it.
-- [116](116-verify-the-paved-road-zerops-facts-on-a-real-account.md) — New roles on an HA service's direct port, ClamAV on a real service, and the pre-WU12 Notes schema need one live sitting.
+- [116](116-verify-the-paved-road-zerops-facts-on-a-real-account.md) — New roles on an HA service's direct port and the unmeasured half of ClamAV (build `freshclam`, a scan run, peak memory) need one live sitting.
 - [117](117-an-application-test-cannot-inject-a-database-fault.md) — The checker refuses Bun's SQL and `process.env` in tests too; only the job clock can fail an attempt.
 - [122](122-a-generated-case-cannot-seed-a-child-rows-state.md) — `rows` seeds no child row state; the own case expects exactly 200.
 - [135](135-deleting-a-zerops-secret-named-like-a-descriptor-variable-is-forbidden.md) — A Zerops secret named like a `run.envVariables` entry can fail to delete with `userDataDeleteForbidden`.
@@ -81,7 +82,7 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [192](192-a-signed-in-person-cannot-manage-their-own-account.md): No self-service password change or sign-in list; an IAM account page, after rewriting ADR-0020.
 - [193](193-loose-ends-of-the-declared-surface.md): The legacy file marker, admission buckets, the platform rollback and other P2s of the surface revision.
 - [194](194-mail-relay-follow-ups.md): Mail relay follow-ups: maintenance and console edges, the sender's error mapping, expired keys' vault values, no final-failure answer to IAM or an application, and the sprint's end-to-end run.
-- [196](196-mcp-authoring-has-no-live-acceptance.md): MCP authoring was never run with a real client, GitHub App and Zerops build; the sprint's known limits.
+- [196](196-mcp-authoring-has-no-live-acceptance.md): MCP authoring's real connectors were exercised on a test installation; the full PR-to-production sequence is unrecorded, and four known limits remain.
 - [197](197-local-compat-has-no-0.7-release.md): `local:compat` deploys no Notes at v0.7.0: its proof needs a release without a file collection.
 - [198](198-an-in-container-env-write-may-reach-another-services-credentials.md): Measure whether `zsc` can write a `${host_KEY}` reference that Zerops resolves; if so, a `cheap` namespace's superuser is reachable by its applications.
 - [199](199-operations-keeps-every-event-forever.md): Operations prunes nothing; a retention window for occurrences, dead events, observations and raw bodies.
@@ -95,7 +96,7 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [207](207-three-service-log-lines-skip-redaction.md): Three `console.error` calls print an error's text or object without redaction.
 - [208](208-application-framework-and-data-layer-review-follow-ups.md): Six small `@fabrika/app` and `@fabrika/db` findings: two clocks, `bound` insert, `.input()`, prototype methods, insert under `in`, `releaseBytes`.
 - [209](209-a-public-procedure-binds-a-token-id-to-its-purpose.md): Any text of any verified token unlocks a row; bind the id to its purpose and table.
-- [210](210-platform-review-fix-follow-ups.md): Eleven P3s the reviews of the platform review's fixes left: cost default, console buttons, device bucket, test gaps, run trigger.
+- [210](210-platform-review-fix-follow-ups.md): Thirteen P3s the reviews of the platform review's fixes left: cost default, device bucket, test gaps, run trigger.
 - [211](211-zerops-preset-review-follow-ups.md): Minor findings of the Zerops presets review: adoption refusal on republish/update, the backup live row, restore history, hourly on `standard`, the admin hop's request id.
 - [212](212-the-console-shows-no-database-backups.md): The console shows no database backups; a provider-owned read of each database's schedule, newest and oldest restore point.
 - [213](213-the-cloudflare-application-runtime-is-unverified-on-a-live-account.md): The secrets upload, the object's migration on an existing Worker and a large upload are unverified on a live account.
@@ -107,7 +108,7 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [230](230-a-zerops-platform-deploy-rebuilds-every-service.md): A Zerops platform deploy rebuilds all four services every time, and a bring-up compiles Caddy for 5 min.
 - [231](231-operator-traps-of-an-mcp-authoring-bring-up.md): MCP authoring bring-up traps: `put` loses bucket provenance, no `authoring` flag, a bare `forbidden`, `admin` offered for a contract app.
 - [232](232-the-platform-build-runs-no-postgres-backed-test.md): The Zerops build skips every Postgres-backed application test; a throwaway Postgres in the build container would run them.
-- [233](233-platform-services-share-postgres-server-sessions.md): On Zerops one Postgres server session serves IAM, Operations and Control in turn; find the pooler, check what leaks between services, and decide whether to connect directly.
+- [233](233-platform-services-share-postgres-server-sessions.md): On Zerops one Postgres server session serves IAM, Operations and Control in turn; the services connect through pgBouncer on `portTls`; measure its mode, check what leaks between services, and decide whether to connect directly.
 - [224](224-terminal-follow-ups.md): Smaller gaps of terminals: sign-out without `Sec-Fetch-Site`, re-enrolment, sign-out of a personal login.
 - [225](225-password-minimum-follow-ups.md): Smaller gaps of the installation's minimum password length: audit, an upper cap, the console page.
 - [226](226-a-failed-iam-reconcile-leaves-a-narrowing-unapplied.md): A narrowing is not in force while the IAM write after a deploy fails; decided: narrowings before the manifest is published, widenings after.
@@ -153,4 +154,4 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [271](271-fast-dev-sandboxes-on-cloudflare.md): A Cloudflare dev environment keys the application object by workspace, for the seconds-per-commit loop Zerops has.
 - [272](272-authoring-workspaces-on-kompjutr.md): A kompjutr working tree per workspace, so search and multi-file edits stop costing one GitHub request per file.
 - [273](273-automatic-rollback-of-a-suspect-release.md): An opted-in environment rolls a suspect release back when the observed verdict is `suspect` and the rollback verdict `safe`; its own ADR first.
-- [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.
+- [10](10-app-scope-secrets-on-zerops.md) — Control refuses an `app`-scoped secret on Zerops today; record that as the decision, or replicate per service.

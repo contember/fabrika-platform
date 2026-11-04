@@ -63,10 +63,11 @@ shipped on 2026-10-08.
   ([ADR-0045](decisions/0045-upload-immutable-platform-and-namespace-proxy-sources.md)). How it works:
   [`reference/installing-on-zerops.md`](reference/installing-on-zerops.md) and
   [`reference/provider-bundles.md`](reference/provider-bundles.md).
-- **A production Zerops release still needs three items:** build source maps proven on a real account
-  ([36](backlog/36-complete-zerops-release-artifact-correlation.md)), DNS-safe Operations egress for
-  webhooks ([38](backlog/38-add-dns-safe-operations-egress.md)), and the production topology plus a
-  full release rehearsal ([05](backlog/05-bring-up-on-a-real-zerops-account.md)).
+- **Zerops runs production workloads on the `light` tier.** Still open there: original-source frames from the
+  uploaded source maps are unproven ([36](backlog/36-complete-zerops-release-artifact-correlation.md)), Operations
+  egress is not DNS-safe ([38](backlog/38-add-dns-safe-operations-egress.md)), and no live run records the
+  `standard` tier, the rest of custom domains or a release and recovery rehearsal
+  ([05](backlog/05-bring-up-on-a-real-zerops-account.md)).
 - **Releases are tokenless.** `release.yml` publishes every public `@fabrika` package through npm
   trusted publishing with provenance ([`reference/release-process.md`](reference/release-process.md)).
 - **IAM's own audit is transactional; domain audit delivery is best-effort.** Every IAM change writes its

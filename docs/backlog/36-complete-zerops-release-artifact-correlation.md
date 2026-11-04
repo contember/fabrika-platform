@@ -6,8 +6,8 @@ blocked-by: []
 
 # 36 — Complete Zerops release artifact correlation
 
-**Summary.** Prove the Zerops source-map publication on a real account, close its recovery gap, and expose the
-release correlation from Delivery.
+**Summary.** Production Zerops builds upload their source maps; prove that Operations resolves original-source frames
+from them, close the recovery gap, and expose the release correlation from Delivery.
 
 ## Problem
 
@@ -17,8 +17,10 @@ Both providers now upload source maps with a run-scoped credential
 and the Zerops platform build as its last command, which the provider confirms from the build log. What remains:
 
 - The Zerops build reads the bearer through `${RUNTIME_FABRIKA_SOURCE_MAP_UPLOAD_KEY}` of a SENSITIVE service variable.
-  That lift is not measured on a real account
-  ([Zerops platform facts](../reference/zerops-platform.md#unverified-a-build-lifts-a-sensitive-service-variable-through-runtime_)).
+  That lift works in production: every retained build of a production application reported `state=complete`
+  ([Zerops platform facts](../reference/zerops-platform.md#verified-in-production-2026-10-19-to-2026-10-27-a-build-lifts-a-sensitive-service-variable-through-runtime_)).
+  No `platform-facts` row pins it, and nobody has checked that Operations shows original-source frames for such a
+  release.
 - A Zerops run that Control settles through `reconcile` (after a Control restart) reports no artifact state, so its
   release artifacts are `incomplete` even when the build uploaded every map. `reconcile` could read the build log of
   the version once, as `await-version` does.
@@ -26,12 +28,11 @@ and the Zerops platform build as its last command, which the provider confirms f
 
 ## Approach / acceptance
 
-Original-source frames on a real Zerops release are required before a production Zerops release (WU5 of the archived
-[readiness sprint](../archive/sprint-2026-09-23-zerops-production-readiness.md)). The Delivery/Operations correlation UI
-below is not; it can ship separately.
+The archived [readiness sprint](../archive/sprint-2026-09-23-zerops-production-readiness.md) (WU5) required
+original-source frames on a real Zerops release. The upload is verified in production; the frames are not. The
+Delivery/Operations correlation UI below is separate and can ship on its own.
 
-- Measure the sensitive `${RUNTIME_…}` lift on a real account and record it as a platform fact (a `platform-facts`
-  row), or move the bearer to a mechanism that is verified.
+- Pin the sensitive `${RUNTIME_…}` lift with a `platform-facts` row.
 - Report the artifact state of a run settled by `reconcile` from its build log.
 - Show the Operations release from Delivery run detail and show the introducing deploy, new issues, and regressions
   from Operations.

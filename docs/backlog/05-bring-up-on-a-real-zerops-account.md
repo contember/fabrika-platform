@@ -1,97 +1,79 @@
 ---
 id: 05
-title: Finish the Zerops bring-up — the production two-project shape
+title: The Zerops production checks no live run has recorded
 blocked-by: []
 ---
 
-# 05 — Finish the Zerops bring-up
+# 05 — The Zerops production checks no live run has recorded
 
-**"None of it has ever touched a real account" is no longer true.** Sprint
-[`zerops-live-bringup`](../archive/sprint-2026-08-03-zerops-live-bringup.md) brought
-the platform up on `prg1` in project `fabrika-test` on 2026-08-03: IAM, Operations,
-control and the proxy all build, boot and serve; the proxy enforcement boundary
-behaves exactly as ADR-0022 and ADR-0022 describe; and an example app runs behind it
-with its gates enforced. Six defects that only a live account could surface were found
-and five fixed.
+**Summary.** Zerops is brought up and runs production workloads on the `light` tier. What no live run records is the
+HA `standard` tier, a second custom domain on one proxy and custom domains on the platform hosts, the client address
+on a dedicated IPv4, and a release and recovery rehearsal.
 
-What that run did **not** cover is below. The platform facts it established are in
-[`../reference/zerops-platform.md`](../reference/zerops-platform.md); do not re-derive
-them.
+## Done
+
+- **Bring-up on a real account.** IAM, Operations, Control and the proxy built, booted and served on the `light` tier,
+  behind the proxy enforcement boundary of ADR-0022
+  ([sprint](../archive/sprint-2026-08-03-zerops-live-bringup.md)). Human authentication and cross-host browser SSO
+  between two `.zerops.app` hostnames ran live on 2026-08-04.
+- **An installation deploys itself from its operator's CI.** After `fabrika platform install`, a fresh installation
+  was deployed and rolled forward from its sidecar pipeline
+  ([sprint](../archive/sprint-2026-08-07-zerops-from-scratch-install.md)); that sprint was password only, by decision.
+- **Applications deploy.** Public and private application source, browser handoff, run-log relay and
+  release-correlated Operations ingest
+  ([sprint](../archive/sprint-2026-08-11-fabrika-deploys-an-app-on-zerops.md)); an application namespace in its own
+  project reaching IAM across projects (`fabrika-notes-prod`,
+  [platform facts](../reference/zerops-platform.md#verified-live-2026-08-18-account-prg1-projects-fabrika-install-test--fabrika-notes-prod--provisioning-an-app-namespace)).
+- **Production workloads run on the `light` tier.** A production installation (its platform project and its
+  application namespace, both on a `LIGHT` core with single-node PostgreSQL) is rolled forward from its sidecar
+  pipeline, and an application domain is bound to its namespace proxy
+  ([platform facts](../reference/zerops-platform.md#public-access),
+  ["Measured in production (2026-10-16)"](../reference/zerops-platform.md#measured-in-production-2026-10-16--an-applications-database-connections)).
+- **The balancer's client address and the app-version order are measured passively** on that installation and recorded in the
+  [platform facts](../reference/zerops-platform.md#public-access): the shared IPv4 forwards no IPv4 client's address,
+  and `sequence` was monotonic with gaps.
+- **The two-project `platform` + `apps-prod` shape is gone.** Since `7c9de25d8`, `--tier=standard` installs one
+  `SERIOUS` project (HA PostgreSQL for IAM and Control, a second HA PostgreSQL and bucket for Operations, two IAM and
+  proxy containers), and Control creates each application namespace's project (the tier table of the operator guide,
+  [`guide.md`](../../packages/provider-zerops/src/installation/guide.md)).
+
+The platform facts these runs established are in [`../reference/zerops-platform.md`](../reference/zerops-platform.md);
+do not re-derive them.
 
 ## What remains
 
-1. **The production shape.** The live run used the single-project `light` tier. The
-   committed `platform` + `apps-prod` topology — two projects, HA Postgres, separate
-   Operations data services, `corePackage: SERIOUS` — has still never been applied.
-   With it comes the cross-project hop ADR-0006 accepts: an apps-project proxy
-   reaching IAM over its public origin.
-2. **Custom domains.** Bind them to each project's L7 balancer, proxy service only;
-   the import format has no field for it, so it is manual by construction. A shared
-   IPv4 needs **both** A and AAAA records or routing fails silently. Upstream's custom-domain flow
-   takes several domains per service, which the one-proxy-fronts-many-apps topology needs; confirm it
-   on this account and record the result in the platform reference. A plain domain validates over
-   HTTP-01, so it must route to the service before its certificate issues; a wildcard needs DNS-01
-   (`CNAME _acme-challenge.<domain>` → `<domain>.zerops.zone`).
-   Browser SSO no longer waits on this. It used to: the session cookie was shared
-   across hosts through a parent-domain `Domain` attribute, and `*.zerops.app` is on
-   the Public Suffix List, so a browser refuses a cookie scoped to `prg1.zerops.app`
-   outright. [ADR-0022](../decisions/0022-the-proxy-is-the-only-enforcement-point.md) replaced
-   that with a one-time code redeemed by the proxy, verified live across two
-   `.zerops.app` hostnames on 2026-08-04, and
-   [ADR-0023](../decisions/0023-one-session-per-host.md) has since deleted the shared
-   cookie outright. Custom domains are now about operating a real installation, not
-   about making sign-in work.
-3. **The installation deploys itself from a pipeline, not a laptop.** The command
-   exists and a DIFFERENT, fresh installation has been deployed and rolled forward
-   entirely from an operator's CI
-   ([archive](../archive/sprint-2026-08-07-zerops-from-scratch-install.md)).
-   `fabrika-test` itself has not — it is still on the hand-chosen `zops push` order of
-   2026-08-05 → backlog 59 (closed: the installation now declares its environment name).
-4. **Human authentication is done on this tier.** Password enrollment, sign-in,
-   throttling, admin disable and the audit trail were exercised live on 2026-08-04,
-   and so was cross-host browser SSO between two `.zerops.app` hostnames
-   ([ADR-0022](../decisions/0022-the-proxy-is-the-only-enforcement-point.md)). Nothing
-   authentication-shaped is left for this list.
-
-## Still-open semantics
-
-- **Does the project L7 balancer forward a client address a downstream may trust, and
-  from what source range?** Settles whether the per-client abuse limit can key on the
-  real client on Zerops (WU-C of
-  [`auth-track-closeout`](../archive/sprint-2026-08-05-auth-track-closeout.md));
-  today it cannot, so `trusted_proxies` is unset and every client shares the
-  balancer's bucket. One sitting: put a service behind the balancer that echoes
-  `X-Forwarded-For`, `X-Real-Ip` and the socket peer; call it from a known public
-  address, then again with `X-Forwarded-For: 203.0.113.99` prepended. Three answers
-  are needed — (a) does the balancer append the real address, (b) does it drop or
-  keep a caller-supplied prefix, (c) what address does the socket peer show, i.e.
-  what CIDR to hand to `--trusted-proxies`. **Only (a) AND (b)-drops together make the
-  range safe to configure**; (a) alone with a preserved prefix means a caller can
-  still choose its own bucket, which is the case the limit must not be built on.
-  A form's `rate.perClient` bucket keys on the same value: `clientBucket`
-  (`packages/app/src/implement/form-admission.ts:87`) reads only the proxy's
-  `X-Fabrika-Client-Ip`, which is `{http.vars.client_ip}`. On Zerops every visitor
-  therefore shares one per-client bucket today, and the form's `rate.perForm`
-  ceiling is what bounds an intake. The answer settles both limiters.
-- `GET /service-stack/{id}/app-version` list order. The client picks max `sequence`
-  rather than trusting order; confirm `sequence` really is monotonic.
-
-5. **A full release rehearsal.** Before the first production release: clean install, repeated
-   upgrade, public and private app deploys at the current release, a keyed webhook, browser password
-   and OIDC sign-in, scoped authorization, revocation, SDK ingest and triage, and Operations outage
-   isolation. Test acknowledged-write survival on the selected HA PostgreSQL profile and restore into
-   an isolated project from a complete recovery set (IAM/Control/Operations SQL with migration ledgers
-   and queues, object payloads, and the matching vault, signing and configuration secrets). Restored
-   work must not duplicate occurrences or dispatch stale notifications. Recovery targets agreed with
-   the owner: survive a single database-node failure without losing acknowledged writes; after
-   project loss, restore within four hours from a verified backup no older than 24 hours.
+1. **The `standard` tier on a live account.** No installation runs it; production runs on `light`. Its HA PostgreSQL connection form is
+   measured ([platform facts, 2026-08-19](../reference/zerops-platform.md#verified-live-2026-08-19-account-prg1-project-fabrika-notes-prod--postgresql-tls-is-per-service-type)),
+   the tier as a whole is not.
+2. **The rest of custom domains.** One application domain on a namespace proxy works in production: `A` to the
+   shared IPv4 and `AAAA` to the project's IPv6, certificate over HTTP-01
+   ([platform facts](../reference/zerops-platform.md#public-access)). Binding stays manual: the import format has no
+   field for it. Left: a second custom domain on one fabrika proxy (one proxy fronts many applications; Zerops holds
+   two on a non-fabrika service), custom domains for the platform hosts (IAM, Control, Operations), and a wildcard,
+   which needs DNS-01 (`CNAME _acme-challenge.<domain>` → `<domain>.zerops.zone`). Sign-in does not depend on any of
+   it ([ADR-0023](../decisions/0023-one-session-per-host.md)).
+3. **A client address on a dedicated IPv4.** Measured passively on a production installation
+   ([platform facts](../reference/zerops-platform.md#public-access)): behind the shared IPv4 the balancer appends one
+   gateway address for every IPv4 client and keeps a caller-supplied `X-Forwarded-For` prefix, so no `trusted_proxies`
+   range is safe and every IPv4 visitor shares one per-client bucket (the abuse limit of WU-C of
+   [`auth-track-closeout`](../archive/sprint-2026-08-05-auth-track-closeout.md), and a form's `rate.perClient`, which
+   `clientBucket` in `packages/app/src/implement/form-admission.ts` keys on `X-Fabrika-Client-Ip`, i.e.
+   `{http.vars.client_ip}`; a form's `rate.perForm` ceiling bounds the submissions). Left: whether a project with a
+   dedicated IPv4 gets the client's address appended, and whether it drops a caller-supplied prefix. **Only both
+   together make a range safe to configure.**
+4. **A release and recovery rehearsal.** None has run. No live run records these at a current release: OIDC sign-in
+   on Zerops, a keyed webhook, scoped authorization, revocation, and Operations outage isolation. A production
+   installation signs in with passwords only and runs single-node PostgreSQL with daily automatic dumps (no
+   object-storage backup), so its traffic exercises neither OIDC nor a failover, and no restore is recorded. Test acknowledged-write survival on the selected HA PostgreSQL profile, and restore into
+   an isolated project from a complete recovery set (IAM/Control/Operations SQL with migration ledgers and queues,
+   object payloads, and the matching vault, signing and configuration secrets). Restored work must not duplicate
+   occurrences or dispatch stale notifications. Recovery targets agreed with the owner: survive a single
+   database-node failure without losing acknowledged writes; after project loss, restore within four hours from a
+   verified backup no older than 24 hours. The per-release install acceptance is
+   [185](185-no-release-is-accepted-on-a-live-zerops-account.md).
 
 ## Acceptance
 
-The production two-project topology boots; the proxy is reachable on custom IAM, control and
-Operations domains; and the installation deploys itself from its operator-owned pipeline. Private
-application source, browser handoff, run-log relay and release-correlated Operations ingest were
-already proven by the archived
-[application deploy sprint](../archive/sprint-2026-08-11-fabrika-deploys-an-app-on-zerops.md). Fold the
-remaining production-shape findings into
-[`../reference/zerops-platform.md`](../reference/zerops-platform.md) and delete this file.
+Each point above is either measured on a live account and recorded in
+[`../reference/zerops-platform.md`](../reference/zerops-platform.md) (or the operator guide), or dropped by the owner
+as not needed. Then delete this file.

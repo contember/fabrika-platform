@@ -168,9 +168,11 @@ one header its own ingress overwrites — `CF-Connecting-IP` on Cloudflare, wher
 IAM sits behind the edge, and `X-Fabrika-Client-Ip` on the Bun target, where the
 proxy writes it after deleting the caller's. An installation whose ingress
 cannot see the client names no header and keeps only the account and
-deployment-wide buckets. On Zerops that is the current state: whether the
-project balancer forwards a trustworthy client address is unconfirmed, so
-`trusted_proxies` is unset and every client shares the balancer's bucket.
+deployment-wide buckets. On Zerops that is the current state: behind the
+shared IPv4 the project balancer forwards no IPv4 client's address and keeps a
+caller-supplied `X-Forwarded-For` prefix
+([platform facts](zerops-platform.md#public-access)), so `trusted_proxies` is
+unset and every client shares the balancer's bucket.
 
 Unlike the other two, the client bucket counts every attempt rather than every
 failure, decides admission from the returned row of the statement that records

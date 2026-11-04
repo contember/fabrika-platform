@@ -22,13 +22,17 @@ It caused a production-shaped failure: a `SELECT *` the previous Control process
 `cached plan must not change result type` (0A000). `PostgresDatabase.connect` (`packages/platform-node/src/sql-postgres.ts`)
 now sets `prepare: false`, which removes that symptom and nothing else.
 
-`packages/provider-zerops/src/namespace/constants.ts` says the platform connects on the direct port, not on
-pgBouncer's port 6432. The session evidence contradicts that, or the direct port is pooled too.
+The installation's services connect on `portTls` (6432): their `POSTGRES_URL` is
+`${db_connectionTlsString}/${db_dbName}?sslmode=require`
+(`packages/provider-zerops/src/installation/install-environment.ts`). That port is pgBouncer
+([platform facts, 2026-10-15](../reference/zerops-platform.md#verified-live-2026-10-15-account-prg1--an-applications-database-roles-and-the-two-ports));
+the direct port in `packages/provider-zerops/src/namespace/constants.ts` is an application's, not the platform's. The
+reference's "`portTls` is not a transaction pool" (2026-08-19) saw one connection keep its backend; the 2026-10-22 log
+shows the next client getting that backend once the previous one is gone. So the pooler exists; its mode is unmeasured.
 
 ## Questions
 
-1. **Is there a pooler, on which port, in which mode?** Read the generated connection strings of the four services,
-   ask Zerops, and measure: open two clients from two processes, print `pg_backend_pid()` and a session-level `SET`
+1. **In which mode does pgBouncer on `portTls` pool?** Measure: open two clients from two processes, print `pg_backend_pid()` and a session-level `SET`
    from each, and check whether the second sees the first's. Record the answer in
    `docs/reference/zerops-platform.md`.
 2. **Can session state leak between services?** The ADR-0017 migration runners take session-level advisory locks

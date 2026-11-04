@@ -64,7 +64,7 @@ fails never fails the deploy: the run's release artifacts are `incomplete`, othe
   approved contract's SPA and share-link directories, each named by the URL path of the file it maps
   (`<prefix>/<path under dir>` without `.map`), and prints one report line. The provider reads that line back from the
   relayed build log; a log it cannot read leaves the artifacts `incomplete`. The bearer reaches the build as a sensitive
-  service variable ([Zerops platform facts](zerops-platform.md#unverified-a-build-lifts-a-sensitive-service-variable-through-runtime_)).
+  service variable ([Zerops platform facts](zerops-platform.md#verified-in-production-2026-10-19-to-2026-10-27-a-build-lifts-a-sensitive-service-variable-through-runtime_)).
 
 An event selects a map by its own source, its `release` and the logical path of each frame's file, so a map never
 resolves another application's, environment's or release's frames.

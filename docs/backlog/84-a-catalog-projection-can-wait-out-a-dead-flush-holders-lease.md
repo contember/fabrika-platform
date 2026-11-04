@@ -42,7 +42,7 @@ findings of the same reproduction, none changed yet. Effort S.
 
 ## Touch points
 
-`packages/control/src/operations-catalog.ts`, `packages/control/src/db.ts`,
+`packages/control/src/operations-catalog.ts`, `packages/control/src/db/operations-catalog.ts`,
 `packages/control/src/__tests__/operations-catalog-window.test.ts`.
 
 <!-- Origin: cheap-rebuild sprint WU8 run log, 2026-08-21; rewritten by WU2 of the

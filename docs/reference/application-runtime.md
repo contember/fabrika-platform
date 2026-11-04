@@ -1013,7 +1013,9 @@ const stats = app.group({}, (r) => ({
   `unscoped`, `connect`, `issues`, `binds` and `egress` are refused at build.
 - **`ctx.client`** is `{ ip, userAgent }` on every procedure. `ip` is the proxy's `X-Fabrika-Client-Ip` where the
   runtime adapter vouches that the proxy saw the visitor (Cloudflare and the test kit); on Bun, and so on Zerops, it is
-  `null` until [backlog 05](../backlog/05-bring-up-on-a-real-zerops-account.md) settles the balancer's trusted range.
+  `null`: behind the shared IPv4 the balancer forwards no client address
+  ([platform facts](zerops-platform.md#public-access)); a dedicated IPv4 is
+  [backlog 05](../backlog/05-bring-up-on-a-real-zerops-account.md).
   `userAgent` is cut at 256 characters. It is information, never a check.
 - **The honeypot** is a helper: `if (honeypot(input.website)) return {}` (`@fabrika/app`) answers what a real
   submission answers and does nothing.

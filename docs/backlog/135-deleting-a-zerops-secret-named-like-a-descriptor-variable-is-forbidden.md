@@ -12,7 +12,7 @@ can be the deployed version's variable. Effort: S; verify on a live account firs
 
 ## Problem
 
-- `secrets.delete` (`packages/provider-zerops/src/control.ts:470`–`:478`) lists `/service-stack/{id}/env` and deletes
+- `secrets.delete` (`packages/provider-zerops/src/control.ts`) lists `/service-stack/{id}/env` and deletes
   the first record whose key is the secret's name.
 - Since 2026-10-13 `/env` also lists a deployed version's `run.envVariables` as `USER` records of the same shape, and
   `DELETE /user-data/{id}` on one answers 400 `userDataDeleteForbidden`
@@ -20,7 +20,7 @@ can be the deployed version's variable. Effort: S; verify on a live account firs
 - So a secret whose name the application's `zerops.yaml` also sets can resolve to the descriptor's record. The delete
   fails, and `deleteAppSecretValueUseCase` (`packages/control/src/api/vault.ts:135`–`:156`) answers an error and
   records no audit row.
-- The create-or-update fallback (`packages/provider-zerops/src/api/client.ts:439`–`:446`) assumes a descriptor
+- The create-or-update fallback (`packages/provider-zerops/src/api/client.ts`) assumes a descriptor
   variable never appears in `/env`. That no longer holds, so a put of such a name may `PUT` the descriptor's record.
   Not verified.
 

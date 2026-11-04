@@ -32,8 +32,8 @@ never closed is 59 all over again — prefer a mechanism that closes itself."_
 
 **The Zerops path already avoids it, by not having one.** `platform deploy --provider=zerops` writes no
 credential and no admission list, so `init` has nothing to seed and the operator has nothing to reset;
-a test asserts no Environment key contains `BOOTSTRAP`. What that path does NOT do is explain how the
-first administrator gets in on a fresh account — today the answer is the hand bring-up.
+a test asserts no Environment key contains `BOOTSTRAP`. A fresh Zerops installation gets its first administrator
+from `fabrika platform admin --email=<address>`, which writes that person's cross-app grant (`ensureFirstAdministrator`, `packages/installation-init/src/admin.ts`).
 
 ## Approach / acceptance
 
@@ -44,8 +44,8 @@ Pick a mechanism that cannot be left open. Candidates, none decided:
   Closest to "closes itself"; needs a durable spent-marker per installation.
 - **Bind it to a deploy.** The list applies only to the installation version that introduced it, so the
   next `platform deploy` closes it whether or not anyone remembers.
-- **Remove it entirely,** as Zerops did, and seed one real grant at install time instead. Requires
-  answering how a fresh installation gets its first administrator without one.
+- **Remove it entirely,** as Zerops did, and seed one real grant at install time instead. The Zerops
+  path's `platform admin` (`ensureFirstAdministrator`) is the candidate for that grant.
 
 Whichever is chosen, the acceptance is the same and has two halves:
 

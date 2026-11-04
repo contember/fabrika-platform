@@ -12,8 +12,8 @@ with a skip turned into a failure. Effort M; it needs live Zerops facts first.
 
 ## Problem
 
-`generatedBuildCommands` (`packages/provider-zerops/src/execution.ts`) runs the application's tests with
-`bun test --isolate --pass-with-no-tests` and sets no `FABRIKA_TEST_POSTGRES_URL`. Each file that opens
+`generatedBuildCommands` (`packages/provider-zerops/src/execution.ts`) runs the recipe's tests command
+(`packages/app/src/build-recipe.ts`), `bun test --isolate --pass-with-no-tests`, and sets no `FABRIKA_TEST_POSTGRES_URL`. Each file that opens
 `testDatabase` (`packages/db/src/testing.ts`) prints `<label> skipped: set FABRIKA_TEST_POSTGRES_URL to run the
 Postgres-backed tests` and registers no test, so the step passes. An end-to-end stage deploy of the Notes example
 skipped four such files.
@@ -32,7 +32,7 @@ log relays. The count includes the generated files, which run again at container
 | Option                                                                        | Runs authored code against                                | Gates the deploy        | Cost                                                                         | Verdict                  |
 | ----------------------------------------------------------------------------- | --------------------------------------------------------- | ----------------------- | ---------------------------------------------------------------------------- | ------------------------ |
 | A. Throwaway Postgres in the build container                                  | a local, empty cluster that dies with the build container | yes, before any version | Postgres install and `initdb` per build (cache unverified); one more process | **recommended**          |
-| B. Authored DB tests in the deploy's init commands, on a scratch schema/role  | the environment's real database server                    | yes, at activation      | the 180 s readiness window already holds the CRM's ~3 min of generated cases | rejected                 |
+| B. Authored DB tests in the deploy's init commands, on a scratch schema/role  | the environment's real database server                    | yes, at activation      | every container start already pays the CRM's ~3 min of generated cases       | rejected                 |
 | C. Only in the dev environment's `run_checks`                                 | the dev environment's database                            | no                      | none in the build; needs a test credential in the dev container              | complement, not the gate |
 | D. Honest reporting only                                                      | nothing                                                   | no                      | none                                                                         | done (the report above)  |
 | E. Require a green check run of the application's own CI on the pinned commit | the application's CI database                             | yes, through GitHub     | every application needs a CI with Postgres; Control trusts a foreign result  | rejected                 |
@@ -47,7 +47,7 @@ log relays. The count includes the generated files, which run again at container
 - **B.** `test-isolation` is safe because the platform wrote the cases it runs. An authored test is arbitrary code,
   and the init command runs where the provisioning credential of the real database is reachable. A scratch schema
   and a separate role do not change that: the code chooses what it connects to. It would also run on every
-  container start, inside the readiness budget.
+  container start, before the readiness window opens.
 - **C.** Useful for the fast loop, but it gates nothing, and it is safe only where the dev environment's database is
   its own service. On a shared namespace Postgres the credential that creates roles reaches other environments.
 - **E.** Moves the gate outside the platform, and Control would accept a result it cannot reproduce.
