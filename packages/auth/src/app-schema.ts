@@ -4,6 +4,7 @@ import {
 	displayNameProblem,
 	isActionAllowed,
 	isOwnWorkloadName,
+	isReservedScopeType,
 	LOCALES,
 	mailTemplateProblems,
 	type MessageKind,
@@ -19,7 +20,7 @@ const quote = (value: string): string => `\`${value.slice(0, 80)}\``
 const keySchema = z.string().min(1).refine((key) => key !== '__proto__')
 
 const scopeSchema = z.object({
-	type: z.string().min(1),
+	type: z.string().min(1).refine((type) => !isReservedScopeType(type), 'a scope type never starts with ~ (IAM reserves it)'),
 	label: z.string().min(1).optional(),
 	in: z.string().min(1).optional(),
 	creator: z.string().min(1).optional(),
@@ -34,6 +35,7 @@ const roleSchema = z.object({
 	permissions: z.array(z.string().min(1)),
 	member: z.object({ scope: z.string().min(1), assignableBy: z.array(z.string().min(1)).optional() }).optional(),
 	external: z.literal(true).optional(),
+	via: z.record(z.string().min(1), z.array(z.string().min(1)).min(1)).optional(),
 })
 /** A link lives at most a year; the mount's `maxDays` is the bound a contract states below that. */
 const MAX_LINK_DAYS = 365
@@ -274,6 +276,24 @@ export const appSchemaSchema = appSchemaShape.superRefine((schema, ctx) => {
 					path: ['roles', key, 'permissions', index],
 					message: `role ${quote(key)} of a contract application lists the wildcard ${quote(pattern)}; list exact actions`,
 				})
+			}
+		}
+		for (const [relation, actions] of Object.entries(role.via ?? {})) {
+			if (role.member !== undefined || role.external === true) {
+				ctx.addIssue({
+					code: 'custom',
+					path: ['roles', key, 'via'],
+					message: `role ${quote(key)} holds actions via a relation and is a membership or external role`,
+				})
+			}
+			for (const [index, action] of actions.entries()) {
+				if (!catalog.includes(action)) {
+					ctx.addIssue({
+						code: 'custom',
+						path: ['roles', key, 'via', relation, index],
+						message: `role ${quote(key)} holds an unknown action via ${quote(relation)}: ${quote(action)}`,
+					})
+				}
 			}
 		}
 		if (role.member !== undefined && !scopes.includes(role.member.scope)) {
