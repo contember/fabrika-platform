@@ -540,6 +540,80 @@ describe('an installation an older release wrote, every variable sensitive', () 
 	})
 })
 
+describe('a credential in a readable variable', () => {
+	// The shape found on a real installation: the mail provider's token set by hand on `iam` and `control`, readable.
+	const POSTMARK = 'FABRIKA_EMAIL_POSTMARK_SERVER_TOKEN'
+	const TOKEN = '0f8c2a4e-1b3d-4c5e-8f7a-9b0c1d2e3f4a'
+	const handSetMail = (sensitive: readonly string[] = []) =>
+		fakeZerops({
+			...PROJECT,
+			services: platformServices({
+				proxy: { zeropsSubdomain: SUBDOMAINS },
+				iam: { FABRIKA_EMAIL_PROVIDER: 'postmark', FABRIKA_EMAIL_FROM: 'no-reply@example.com', [POSTMARK]: TOKEN },
+				control: { FABRIKA_EMAIL_PROVIDER: 'postmark', FABRIKA_EMAIL_FROM: 'no-reply@example.com', [POSTMARK]: TOKEN, BASIC_AUTH_PASSWORD: 'hunter2' },
+			}).map((service) => ({ ...service, sensitive: Object.keys(service.env ?? {}).filter((key) => sensitive.includes(key)) })),
+		})
+	const deploy = (zerops: FakeZerops, overrides: Partial<PlatformDeployInput> = {}) =>
+		deployPlatform(input(overrides), {
+			...fakeSourceCollaborators,
+			uploadFetch: zerops.uploadFetch,
+			api: zerops.api,
+			reconcileSchema: async () => {},
+			sleep: async () => {},
+			log: recordingDeployLog(),
+			signal: new AbortController().signal,
+		})
+
+	test('is refused before anything is written, naming each variable and where it belongs, never its value', async () => {
+		const zerops = handSetMail()
+
+		const refusal = await deploy(zerops).then(() => null, (error: unknown) => error)
+
+		expect(refusal).toBeInstanceOf(Error)
+		const message = refusal instanceof Error ? refusal.message : ''
+		expect(message).toContain(`iam/${POSTMARK}: its mail provider declares it secret`)
+		expect(message).toContain(`control/${POSTMARK}: its mail provider declares it secret`)
+		expect(message).toContain('control/BASIC_AUTH_PASSWORD: its name contains `BASIC_AUTH`')
+		expect(message).toContain('SENSITIVE variable')
+		expect(message).toContain('FABRIKA_PLATFORM_PLAIN_VARIABLES')
+		expect(message).not.toContain('iam/FABRIKA_EMAIL_FROM')
+		expect(message).not.toContain(TOKEN)
+		expect(message).not.toContain('hunter2')
+		expect(zerops.calls).toEqual([])
+	})
+
+	test('a dry run refuses it too', async () => {
+		const zerops = handSetMail()
+		await expect(deploy(zerops, { dryRun: true, iamAdminKey: '' })).rejects.toThrow('look like credentials')
+	})
+
+	test('stored sensitive, it deploys', async () => {
+		const zerops = handSetMail([POSTMARK, 'BASIC_AUTH_PASSWORD'])
+		await deploy(zerops)
+		expect(zerops.calls).toContain('deploy:control')
+	})
+
+	test('a variable the operator names as not a credential deploys, and only that one', async () => {
+		const zerops = handSetMail([POSTMARK])
+		await deploy(zerops, { plainVariables: new Set(['control/BASIC_AUTH_PASSWORD']) })
+		expect(zerops.calls).toContain('deploy:control')
+
+		const other = handSetMail([POSTMARK])
+		await expect(deploy(other, { plainVariables: new Set(['iam/BASIC_AUTH_PASSWORD']) })).rejects.toThrow('control/BASIC_AUTH_PASSWORD')
+	})
+
+	test('the exceptions are read from FABRIKA_PLATFORM_PLAIN_VARIABLES or --plain-variables, and a malformed one is refused unechoed', () => {
+		const env = { FABRIKA_ZEROPS_ACCESS_TOKEN: 't', FABRIKA_IAM_PROVISIONING_KEY: 'k', FABRIKA_PLATFORM_ENVIRONMENT: 'stage' }
+		const argv = ['--project-id=p', '--source-dir=.']
+		expect(parsePlatformDeployArgs(argv, { ...env, FABRIKA_PLATFORM_PLAIN_VARIABLES: 'control/A, iam/B' }).plainVariables).toEqual(
+			new Set(['control/A', 'iam/B']),
+		)
+		expect(parsePlatformDeployArgs([...argv, '--plain-variables=proxy/C'], env).plainVariables).toEqual(new Set(['proxy/C']))
+		expect(() => parsePlatformDeployArgs([...argv, '--plain-variables=db/C'], env)).toThrow('entry 1 is not `<service>/<KEY>`')
+		expect(() => parsePlatformDeployArgs([...argv, '--plain-variables=s3cr3t-value'], env)).toThrow(/^(?!.*s3cr3t).*$/s)
+	})
+})
+
 describe('the write→deploy race', () => {
 	test('a trigger that lands on a running userData synchronisation is retried, not lost', async () => {
 		// Live-recorded: a deploy racing an env write dies on `userDataSyncRunning` and leaves the app

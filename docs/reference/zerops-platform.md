@@ -81,6 +81,14 @@ and every client shares one abuse bucket. Settling it is a live-account question
 ([backlog 05](../backlog/05-bring-up-on-a-real-zerops-account.md)); until then do
 not promote a forwarded address to a limiter key.
 
+A route of the project balancer can carry HTTP basic auth (`locations[].config.basicAuth`, API schema
+`BasePublicHttpRoutingLocationBasicAuth`: `enabled`, `realm`, `users[]` of `{ username, password, comment }`).
+Reported by an operator on 2026-11-04, not measured here: the password is stored in clear, a route read hands it
+back to anyone who may read the project, and the field has no sensitive variant. Treat a route password as public
+inside the project. Fabrika writes no route, so no Fabrika check sees one; a site that needs a real password gate
+belongs behind something that keeps it (an application behind the namespace proxy, or a hashed password file in
+the site's own build).
+
 ## corePackage
 
 `corePackage` is a **per-project** tier: `LIGHT` (default, limited redundancy) or
@@ -763,6 +771,12 @@ with `sensitive: field is required` (the CLI's update body omits it); the raw `P
 (`UpdateUserDataById`) with `{ key, content, sensitive: true }` is accepted and returns a
 `stack.updateUserData` process. A token swapped that way is read by the service only after
 `service restart`.
+
+Reported by an operator on 2026-11-04, not measured here: on an EXISTING READABLE variable the same command answers
+success and leaves the variable readable, so it cannot turn a readable credential sensitive. Delete and re-create
+the variable as a secret one, or send `PUT /user-data/{id}` with `sensitive: true`. `platform deploy` refuses an
+installation whose platform services hold a readable variable that looks like a credential
+(`packages/provider-zerops/src/installation/plain-credentials.ts`).
 
 ### Verified live (2026-10-15, account `prg1`, a disposable project) — a sensitive value is `REDACTED` outside sudo mode
 

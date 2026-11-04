@@ -84,6 +84,7 @@ import {
 	validateInstallationSetups,
 } from './installation-source'
 import type { DeployLog } from './log'
+import { plainCredentialRefusal, plainCredentialVariables } from './plain-credentials'
 import { archiveWithDataFile } from './platform-archive'
 import type { PreparedPlatformSource } from './platform-source'
 import { type PlatformUploadFetch, uploadPlatformArchive } from './platform-upload'
@@ -804,9 +805,23 @@ export const deployPreparedPlatform = async (
 		controlTableDigest,
 		input.iamAdminKey,
 	)
+	// Every service's environment is read, and checked, before the first write: a refusal leaves nothing half-written.
+	const liveEnv = new Map<PlatformDeployService, LiveServiceEnv>()
+	for (const hostname of PLATFORM_DEPLOY_ORDER) {
+		liveEnv.set(hostname, hostname === PLATFORM_PROXY_SERVICE ? proxyEnv : await readServiceEnv(serviceOf(services, hostname).id, collaborators))
+	}
+	const plain = PLATFORM_DEPLOY_ORDER.flatMap((hostname) =>
+		plainCredentialVariables(
+			hostname,
+			liveEnv.get(hostname) ?? new Map(),
+			new Set(desired.get(hostname)?.keys() ?? []),
+			input.plainVariables ?? new Set(),
+		)
+	)
+	if (plain.length > 0) throw plainCredentialRefusal(plain)
 	for (const hostname of PLATFORM_DEPLOY_ORDER) {
 		const service = serviceOf(services, hostname)
-		const live = hostname === PLATFORM_PROXY_SERVICE ? proxyEnv : await readServiceEnv(service.id, collaborators)
+		const live = liveEnv.get(hostname) ?? new Map<string, ZeropsServiceEnv>()
 		const keys = desired.get(hostname) ?? new Map<string, string>()
 		const liveOAuthConfig = live.get(IAM_OAUTH_CONFIG_VARIABLE)
 		const oauthStillSet = liveOAuthConfig !== undefined && (liveOAuthConfig.sensitive || liveOAuthConfig.content.trim() !== '')
