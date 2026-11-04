@@ -39,6 +39,7 @@ import {
 	type MountCompatibility,
 	type NumberShape,
 	type OutputShape,
+	parseEgressEntry,
 	planEndpoint,
 	type ProcedureArtifact,
 	type ProcedureChallenge,
@@ -577,18 +578,27 @@ function compareDeclared(
 
 /**
  * The origins a site's code calls (`egress`): a new one is a place the site's data may go, so it widens with closer
- * review; a dropped one narrows.
+ * review; a dropped one narrows. A pattern is spelled out as every host one label under its domain, a wider grant than
+ * one origin, so the approver judges who controls those names.
  */
 function egressChanges(site: string, from: readonly string[], to: readonly string[]): RuledLine[] {
 	const name = siteName(site)
 	return ruled(
 		'reach.egress',
 		union(from, to).flatMap((origin) => {
-			if (!from.includes(origin)) return [closer('off-road', `${name} calls ${origin}`)]
-			if (!to.includes(origin)) return [narrowing(`${name} no longer calls ${origin}`)]
+			if (!from.includes(origin)) return [closer('off-road', `${name} calls ${egressReach(origin)}`)]
+			if (!to.includes(origin)) return [narrowing(`${name} no longer calls ${egressReach(origin)}`)]
 			return []
 		}),
 	)
+}
+
+/** An `egress` entry as the approver reads it: an exact origin as itself, a pattern by what it admits. */
+function egressReach(value: string): string {
+	const parsed = parseEgressEntry(value)
+	if (!parsed.ok || parsed.entry.kind === 'origin') return value
+	const { domain, port } = parsed.entry
+	return `every host one label under ${domain}${port === '' ? '' : ` on port ${port}`} (pattern ${value}, wider than one origin)`
 }
 
 /**

@@ -231,7 +231,7 @@ the access check. `references/spa.md` shows the stack.
 | a share link                   | `issues: '<link mount>'`                                | `ctx.links.issue`                                  |
 | e-mail (a cron job only)       | `mailer: 'installation'`                                | `ctx.mail.send`                                    |
 | a file from a public procedure | `file('<kind>')` input, `admission` with `bytesPerHour` | a reference the handler writes into a file column  |
-| an outside HTTPS API           | `egress: ['https://api.example.com']`                   | `fetch` to exactly those origins                   |
+| an outside HTTPS API           | `egress: ['https://api.example.com']`                   | `fetch` to those (`https://*.<domain>`: one label) |
 | a signed link (unsubscribe)    | `signs: ['<purpose>']`                                  | `ctx.tokens.sign`                                  |
 | a webhook binding              | `binds: '<webhook>'`                                    | `ctx.webhooks('<webhook>').bind` and `.unbind`     |
 | a job run after the commit     | `kicks: ['<job>']`                                      | `ctx.kick('<job>')`, `ctx.kick('<job>', { at })`   |

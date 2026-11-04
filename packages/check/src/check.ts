@@ -1,5 +1,5 @@
 import { type AnyContract, compileContract, ContractError } from '@fabrika/app/contract'
-import type { ContractArtifact } from '@fabrika/auth-core'
+import { type ContractArtifact, egressAdmits, type EgressEntry, parseEgressEntry } from '@fabrika/auth-core'
 import { type TablePolicies, tablePolicies, type Tables } from '@fabrika/db/tables'
 import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -95,8 +95,8 @@ export const readApplicationTree = async (root: string): Promise<ApplicationTree
 
 /** The findings a module rule leaves until the contract is read: they depend on what it declares. */
 interface ContractDependent {
-	/** Each `fetch` of an absolute URL, with its static prefix. */
-	readonly fetches: { readonly target: string; readonly finding: Finding }[]
+	/** Each `fetch` of an absolute URL, with its static prefix and its labelled authority (`absoluteFetch`). */
+	readonly fetches: { readonly target: string; readonly labelled: string | undefined; readonly finding: Finding }[]
 	/** Each `ctx.url` with a literal endpoint id. */
 	readonly urls: { readonly endpoint: string; readonly finding: Finding }[]
 	/** Each insert with literal `onConflict.columns`, checked against the migrations' unique indexes. */
@@ -146,9 +146,9 @@ const checkSourceModule = async (
 		isGeneratedEntry,
 		rawSql: rawSqlBindings(module.program),
 		isServerModule: isServerModule(module.file),
-		absoluteFetch: (node: AstNode, target: string) => {
+		absoluteFetch: (node: AstNode, target: string, labelled: string | undefined) => {
 			const { message, allowed } = crossAppFetchMessage(target)
-			for (const finding of deferred(node, 'cross-app-fetch', message, allowed)) dependent.fetches.push({ target, finding })
+			for (const finding of deferred(node, 'cross-app-fetch', message, allowed)) dependent.fetches.push({ target, labelled, finding })
 		},
 		appUrl: (node: AstNode, endpoint: string) => {
 			const message = `ctx.url names '${endpoint}', which is no procedure of the contract`
@@ -189,7 +189,7 @@ const URL_ENDPOINT_ALLOWED = "the id of a procedure of the contract: ctx.url('<m
 /** What the module rules that wait for the contract compare against: its procedure ids and every declared origin. */
 interface CompiledReach {
 	readonly procedures: ReadonlySet<string>
-	readonly origins: readonly string[]
+	readonly egress: readonly EgressEntry[]
 }
 
 /** The contract's artifact, or `null` when it does not compile, which its own rule reports. */
@@ -209,24 +209,43 @@ const compiledReach = (artifact: ContractArtifact): CompiledReach => {
 	)
 	return {
 		procedures: new Set(procedures.map((row) => row.id)),
-		origins: Object.values(artifact.declared ?? {}).flatMap((reach) => reach.egress ?? []),
+		egress: Object.values(artifact.declared ?? {}).flatMap((reach) =>
+			(reach.egress ?? []).flatMap((value) => {
+				const parsed = parseEgressEntry(value)
+				return parsed.ok ? [parsed.entry] : []
+			})
+		),
 	}
 }
 
 /**
  * A `fetch` of an absolute URL stands when no site declares its origin (a static prefix that ends inside the host is
- * not accepted), and every one stands when the contract does not compile. A `ctx.url` stands when the contract
- * compiles and names no such procedure. The runtime guard on `fetch` still checks the site that runs.
+ * not accepted, nor an interpolated label a pattern does not cover), and every one stands when the contract does not
+ * compile. A `ctx.url` stands when the contract compiles and names no such procedure. The runtime guard on `fetch`
+ * still checks the site that runs.
  */
 const contractDependentFindings = (dependent: ContractDependent, reach: CompiledReach | null): Finding[] => [
-	...dependent.fetches.filter(({ target }) => reach === null || !reach.origins.some((origin) => isWithinOrigin(target, origin))).map(({ finding }) =>
-		finding
-	),
+	...dependent.fetches.filter((fetch) => reach === null || !isDeclaredFetch(fetch, reach.egress)).map(({ finding }) => finding),
 	...(reach === null ? [] : dependent.urls.filter(({ endpoint }) => !reach.procedures.has(endpoint)).map(({ finding }) => finding)),
 ]
 
-const isWithinOrigin = (target: string, origin: string): boolean =>
-	target.startsWith(`${origin}/`) || target.startsWith(`${origin}?`) || target.startsWith(`${origin}#`)
+/** The static prefix names its whole authority, which an entry admits, or the labelled authority is a pattern's own. */
+const isDeclaredFetch = (fetch: { readonly target: string; readonly labelled: string | undefined }, egress: readonly EgressEntry[]): boolean => {
+	const authority = /^https:\/\/[^/?#]+[/?#]/.exec(fetch.target)?.[0]
+	const url = authority === undefined ? null : urlOf(authority)
+	if (url !== null && egressAdmits(egress, url)) return true
+	const labelled = fetch.labelled?.toLowerCase()
+	return labelled !== undefined
+		&& egress.some((entry) => entry.kind === 'pattern' && labelled === `*.${entry.domain}${entry.port === '' ? '' : `:${entry.port}`}`)
+}
+
+const urlOf = (value: string): URL | null => {
+	try {
+		return new URL(value)
+	} catch {
+		return null
+	}
+}
 
 /** Runs every rule over one application and returns the findings in file, line and column order. */
 export const checkApplication = async (input: CheckInput): Promise<Finding[]> => {

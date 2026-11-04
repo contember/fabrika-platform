@@ -302,7 +302,7 @@ minted, the site's kind (query, mutation, job, webhook, export) and its declarat
   | `kicks: ['<job>']`                         | mutation, job, webhook                   | `ctx.kick` (§12)                                             |
   | `binds: '<webhook>'`                       | credentialed mutation                    | `ctx.webhooks('<webhook>').bind` and `unbind` (§13)          |
   | `signs: ['<purpose>']`                     | procedure of an RPC mount, job, webhook  | `ctx.tokens.sign` (§14)                                      |
-  | `egress: ['https://<host>']`               | credentialed RPC procedure, job, webhook | `fetch` to those origins (§15)                               |
+  | `egress: ['https://<host>']`               | credentialed RPC procedure, job, webhook | `fetch` to those origins or `*.<domain>` (§15)               |
 
   The runtime builds each handle only for the declaring site and enforces its mode. It takes the declaration from
   the approved artifact (`ContractArtifact.declared`), not from the handler module, and refuses to boot a site whose
@@ -549,13 +549,29 @@ idempotently without `sql`.
 
 ### 15. Egress and mail
 
-- **`egress: ['https://<host>']`** on a credentialed RPC procedure, a webhook or a job declares the exact HTTPS origins
-  its code calls: no path, no wildcard, at most 16. `boot` wraps the global `fetch` once; while a site's handler runs,
-  a call to an origin the site does not declare is refused (`undeclared_egress`). A site that declares none reaches no
-  origin. The framework's own requests (mail, connectors, IAM, the object store) run outside the site's scope. This
+- **`egress: ['https://<host>']`** on a credentialed RPC procedure, a webhook or a job declares the HTTPS origins its
+  code calls: each an exact origin or a pattern `https://*.<domain>[:port]`, no path, at most 16. `boot` wraps the
+  global `fetch` once; while a site's handler runs, a call to an origin the site does not declare is refused
+  (`undeclared_egress`). A site that declares none reaches no origin. The framework's own requests (mail, connectors, IAM, the object store) run outside the site's scope. This
   stops mistakes and makes a bypass conspicuous; it is no sandbox (§8): code that kept the `fetch` it found before
   boot, or opens its own sockets, escapes it. The checker's `cross-app-fetch` rule accepts an absolute URL under an
   origin some site declares.
+- **A pattern is one wildcard label over a domain of the application's own.** An application that calls one provider
+  host per customer (`<customer>.provider.example`) cannot list them: every new customer would be a contract change
+  and an approval, and 16 origins would cap the customers. `https://*.<domain>` admits exactly one DNS label in front
+  of `<domain>`, on a label boundary (`evil-example.com` is not under `example.com`, nor is `a.b.example.com`), on the
+  pattern's port (the default one unless it names another), over `https` only. The request host is compared as
+  `new URL` normalizes it (lower case, punycode), a trailing dot aside; the pattern must be written that way itself,
+  and the build names the canonical spelling of one that is not. It is acceptable for review because the approver
+  still reads one name that decides where the data may go: whoever controls `<domain>` controls every host the pattern
+  admits, as they already control the exact origins under it. So the diff spells a pattern out as every host one label
+  under its domain, wider than one origin, with closer review. What a pattern must not do is name a domain nobody owns
+  alone: `*.com`, `*.co.uk`. The platform ships no copy of the public suffix list, so the build refuses by a fixed
+  rule (`parseEgressEntry` of `@fabrika/auth-core`): a single label, a numeric top label (an IP address), and two
+  labels under a two-letter country code whose first label has at most three characters (`co.uk`, `com.au`, `ne.jp`).
+  The rule cannot tell a public suffix with a longer label, nor a shared hosting domain where anyone may own a name
+  (`*.<platform>.dev`): those are the approver's to refuse. `http` stays refused: no deployed site may call out in
+  clear text, and `fabrika app dev` runs the same guard.
 - **Mail.** `ctx.mail.send` in a mailer job takes `attachments: [fileRef]` (only a `live` file the attempt holds, within
   the transport's `maxAttachmentBytes`) and `unsubscribe: { url }`, from which the transport writes `List-Unsubscribe`
   and `List-Unsubscribe-Post: List-Unsubscribe=One-Click` (RFC 8058). There are no free headers. A transport without

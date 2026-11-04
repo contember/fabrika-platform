@@ -1,6 +1,6 @@
 // What the surface revision declares, in the conservative access diff (ADR-0050): a new token purpose, a site that
-// starts signing one and a longer lifetime widen; a GET mutation and a new egress origin widen with closer review; a
-// mount's promise of backward compatibility and a public query's `http.cache` are shown and widen nothing.
+// starts signing one and a longer lifetime widen; a GET mutation and a new egress origin or pattern widen with closer
+// review; a mount's promise of backward compatibility and a public query's `http.cache` are shown and widen nothing.
 
 import type {
 	ContractArtifact,
@@ -62,6 +62,31 @@ describe('egress in the approval diff', () => {
 			.toEqual([{ effect: 'widens', line: 'Job `sync` calls https://hooks.example.com', review: 'closer' }])
 		expect(classifyAccess(calling(['https://api.example.com', 'https://hooks.example.com']), calling(['https://api.example.com'])).changes)
 			.toEqual([{ effect: 'narrows', line: 'Job `sync` no longer calls https://hooks.example.com' }])
+	})
+
+	test('a pattern is spelled out as every host one label under its domain, wider than one origin', () => {
+		expect(classifyAccess(calling(['https://api.example.com']), calling(['https://*.tenants.example.com', 'https://api.example.com'])).changes)
+			.toEqual([{
+				effect: 'widens',
+				line: 'Job `sync` calls every host one label under tenants.example.com (pattern https://*.tenants.example.com, wider than one origin)',
+				review: 'closer',
+			}])
+		expect(classifyAccess(calling(['https://acme.tenants.example.com']), calling(['https://*.tenants.example.com:8443'])).changes).toEqual([
+			{
+				effect: 'widens',
+				line:
+					'Job `sync` calls every host one label under tenants.example.com on port 8443 (pattern https://*.tenants.example.com:8443, wider than one origin)',
+				review: 'closer',
+			},
+			{ effect: 'narrows', line: 'Job `sync` no longer calls https://acme.tenants.example.com' },
+		])
+		expect(classifyAccess(calling(['https://*.tenants.example.com']), calling(['https://api.example.com'])).changes).toEqual([
+			{
+				effect: 'narrows',
+				line: 'Job `sync` no longer calls every host one label under tenants.example.com (pattern https://*.tenants.example.com, wider than one origin)',
+			},
+			{ effect: 'widens', line: 'Job `sync` calls https://api.example.com', review: 'closer' },
+		])
 	})
 })
 

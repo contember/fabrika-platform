@@ -654,10 +654,18 @@ export const app = defineApp(vocabulary, tables, {
 ## Outside calls: `egress`
 
 A credentialed procedure, a webhook or a job that calls an outside HTTPS API declares its origins:
-`egress: ['https://api.example.com']`, exact origins, no path or wildcard, at most 16. `fetch` to any other origin is
-refused while the site runs (`capability_refused: undeclared_egress`). A public, link or export procedure declares
-none. The checker's `cross-app-fetch` accepts an absolute URL only under an origin some site declares. The approver
-sees every origin. The guard stops mistakes; it is no sandbox.
+`egress: ['https://api.example.com']`, exact origins, no path, at most 16. `fetch` to any other origin is refused
+while the site runs (`capability_refused: undeclared_egress`). A public, link or export procedure declares none. The
+checker's `cross-app-fetch` accepts an absolute URL only under an origin some site declares. The approver sees every
+origin. The guard stops mistakes; it is no sandbox.
+
+A provider with one host per customer is one pattern: `egress: ['https://*.tenants.example.com']` reaches
+`https://acme.tenants.example.com`, exactly one label in front of the domain, over `https` on the default port
+(`https://*.tenants.example.com:8443` for another). It does not reach `a.b.tenants.example.com`,
+`tenants.example.com` or `evil-tenants.example.com`. Write it in lower case and punycode, without a trailing dot; the
+build names the spelling it wants. It refuses `http`, a second wildcard, and a wildcard on a public suffix (`*.com`,
+`*.co.uk`). The checker accepts ``fetch(`https://${tenant}.tenants.example.com/v1`)`` under it. The approver reads a
+pattern as every host under that domain, so prefer exact origins when there are a few.
 
 On Cloudflare a procedure waits for its outside call inside the object's transaction, so the whole environment waits
 with it (`SKILL.md`). A mutation records a row and kicks a job, which declares the `egress` and calls outside

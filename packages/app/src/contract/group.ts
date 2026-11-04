@@ -111,8 +111,8 @@ export type SignsField<Sg, Purposes extends string> =
 	& ([Sg] extends [never] ? unknown : { readonly signs: Sg & NoInfer<KnownPurposes<Sg, Purposes>> })
 
 /**
- * The HTTPS origins a site's code calls (`fetch`): each an exact origin, no path or wildcard. A guard on the global
- * `fetch` refuses any other while the site runs; a public procedure declares none.
+ * The HTTPS origins a site's code calls (`fetch`): each an exact origin or `https://*.<domain>`, one label, no path. A
+ * guard on the global `fetch` refuses any other while the site runs; a public procedure declares none.
  */
 export interface EgressField {
 	readonly egress?: readonly `https://${string}`[]

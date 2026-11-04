@@ -1,23 +1,41 @@
-// `egress`: while a site's handler runs, the global `fetch` reaches only the HTTPS origins the site declares. It stops a
-// mistake and makes a bypass conspicuous; it is not a sandbox (ADR-0012 §8): code that kept the `fetch` it found before
-// boot, or opens its own sockets, escapes it. The framework's own facilities (mail, connectors, IAM, the object store)
-// run outside the site's scope, under their own declarations.
+// `egress`: while a site's handler runs, the global `fetch` reaches only the HTTPS origins the site declares, exactly or
+// by a one-label pattern (`egressAdmits` of `@fabrika/auth-core`). It stops a mistake and makes a bypass conspicuous; it
+// is not a sandbox (ADR-0012 §8): code that kept the `fetch` it found before boot, or opens its own sockets, escapes it.
+// The framework's own facilities (mail, connectors, IAM, the object store) run outside the site's scope, under their own
+// declarations.
 
+import { egressAdmits, type EgressEntry, parseEgressEntry } from '@fabrika/auth-core'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { CapabilityRefusedError } from './capability'
 
 interface EgressScope {
 	/** The site, as a refusal names it. */
 	readonly site: string
-	readonly origins: ReadonlySet<string>
+	readonly entries: readonly EgressEntry[]
 }
 
 const scope = new AsyncLocalStorage<EgressScope>()
 const guards = new WeakSet<object>()
+const parsed = new WeakMap<readonly string[], readonly EgressEntry[]>()
 
 /** Runs a site's handler: every `fetch` it starts reaches only `egress`. */
 export function runAsSite<T>(site: string, egress: readonly string[], work: () => Promise<T>): Promise<T> {
-	return scope.run({ site, origins: new Set(egress) }, work)
+	return scope.run({ site, entries: entriesOf(egress) }, work)
+}
+
+/**
+ * The approved declaration's entries, parsed once per list. The build and the artifact parser refused every other
+ * value, so one that does not parse here admits nothing.
+ */
+function entriesOf(egress: readonly string[]): readonly EgressEntry[] {
+	const known = parsed.get(egress)
+	if (known !== undefined) return known
+	const entries = egress.flatMap((value) => {
+		const entry = parseEgressEntry(value)
+		return entry.ok ? [entry.entry] : []
+	})
+	parsed.set(egress, entries)
+	return entries
 }
 
 /**
@@ -56,16 +74,16 @@ export function installEgressGuard(): void {
 			if (running === undefined) {
 				return current(input, init)
 			}
-			const origin = originOf(input)
-			if (origin !== null && running.origins.has(origin)) {
+			const url = urlOf(input)
+			if (url !== null && egressAdmits(running.entries, url)) {
 				return current(input, init)
 			}
 			return Promise.reject(
 				new CapabilityRefusedError(
 					'undeclared_egress',
-					origin === null
+					url === null
 						? `${running.site} called fetch with a URL that is not absolute`
-						: `${running.site} calls ${origin}, which it does not declare (egress: ['${origin}'])`,
+						: `${running.site} calls ${url.origin}, which it does not declare (egress: ['${url.origin}'])`,
 				),
 			)
 		},
@@ -75,9 +93,9 @@ export function installEgressGuard(): void {
 	globalThis.fetch = guarded
 }
 
-function originOf(input: string | URL | Request): string | null {
+function urlOf(input: string | URL | Request): URL | null {
 	try {
-		return new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url).origin
+		return new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url)
 	} catch {
 		return null
 	}

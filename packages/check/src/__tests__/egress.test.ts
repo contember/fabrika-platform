@@ -1,6 +1,6 @@
 // The module rules that wait for the contract: `cross-app-fetch` accepts an absolute URL whose origin a site declares in
-// `egress`, and `url-endpoint` refuses a literal `ctx.url` id that names no procedure. Over the signed-token fixture, a
-// kit whose job builds an unsubscribe link with `ctx.url`.
+// `egress`, exactly or by a one-label pattern, and `url-endpoint` refuses a literal `ctx.url` id that names no procedure.
+// Over the signed-token fixture, a kit whose job builds an unsubscribe link with `ctx.url`.
 
 import { describe, expect, test } from 'bun:test'
 import { join } from 'node:path'
@@ -42,6 +42,46 @@ describe('cross-app-fetch', () => {
 		expect(found).toHaveLength(2)
 		expect(found[0]).toContain("'https://other.example.com/x'")
 		expect(found[1]).toContain("'https://api.example.com.evil.net/'")
+	})
+
+	test('accepts a URL one label under a declared pattern, and refuses deeper, bare and look-alike hosts', async () => {
+		const found = await findingsOf(
+			'cross-app-fetch',
+			calling(
+				"'https://*.tenants.example.com'",
+				'https://acme.tenants.example.com/v1',
+				'https://ACME.tenants.example.com/v1',
+				'https://a.b.tenants.example.com/',
+				'https://tenants.example.com/',
+				'https://evil-tenants.example.com/',
+				'https://acme.tenants.example.com:8443/',
+			),
+		)
+		expect(found).toHaveLength(4)
+		expect(found[0]).toContain("'https://a.b.tenants.example.com/'")
+		expect(found[1]).toContain("'https://tenants.example.com/'")
+		expect(found[2]).toContain("'https://evil-tenants.example.com/'")
+		expect(found[3]).toContain("'https://acme.tenants.example.com:8443/'")
+	})
+
+	test('accepts a template whose first label alone is interpolated under a declared pattern', async () => {
+		const templated = (egress: string, ...templates: string[]) => (text: string): string =>
+			text.replace(NEWSLETTER, `egress: [${egress}],`).replace(
+				'const t = ctx.tokens.sign(',
+				`const tenant = 'acme'\n\t\t${templates.map((url) => `await fetch(\`${url}\`)\n\t\t`).join('')}const t = ctx.tokens.sign(`,
+			)
+		const found = await findingsOf(
+			'cross-app-fetch',
+			templated(
+				"'https://*.tenants.example.com'",
+				'https://${tenant}.tenants.example.com/v1',
+				'https://${tenant}.tenants.example.com?x=1',
+				'https://${tenant}.other.example.com/v1',
+				'https://${tenant}.tenants.example.com${tenant}/',
+				'https://${tenant}.tenants.example.com:8443/',
+			),
+		)
+		expect(found).toHaveLength(3)
 	})
 
 	test('refuses every absolute URL where no site declares egress', async () => {

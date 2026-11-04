@@ -28,8 +28,11 @@ export interface SourceContext {
 	readonly rawSql: ReadonlySet<string>
 	/** A module under `src/` that is not a test: it reaches no global object and no `Bun` at all. */
 	readonly isServerModule: boolean
-	/** A `fetch` of an absolute URL: refused once the contract shows that no site declares its origin in `egress`. */
-	readonly absoluteFetch: (node: AstNode, target: string) => void
+	/**
+	 * A `fetch` of an absolute URL, by its static prefix and, for a template whose first label alone is interpolated, its
+	 * authority with that label as `*`: refused once the contract shows that no site declares its origin in `egress`.
+	 */
+	readonly absoluteFetch: (node: AstNode, target: string, labelled: string | undefined) => void
 	/** A `ctx.url('<endpoint id>', …)` with a literal id: refused once the contract shows that it names no procedure. */
 	readonly appUrl: (node: AstNode, endpoint: string) => void
 	/** A `<table>.insert(values, { onConflict: { columns } })`: refused once the migrations show no unique index of them. */
@@ -130,10 +133,28 @@ const staticPrefix = (node: AstNode | undefined): string | undefined => {
 const ABSOLUTE_URL = /^(?:[a-z][a-z0-9+.-]*:|\/\/)/i
 const LOCAL_SCHEMES = /^(?:data|blob):/i
 
+/**
+ * The authority of `https://${label}.<domain>…` with the interpolated label as `*` (`*.<domain>[:port]`), when the
+ * template's static text after it reaches the path, query or fragment; the runtime guard checks the label itself.
+ */
+const labelledAuthority = (node: AstNode | undefined): string | undefined => {
+	if (node === undefined) return undefined
+	if (node.type === 'NewExpression' && ['URL', 'Request'].includes(identifierName(child(node, 'callee')) ?? '')) {
+		return labelledAuthority(argumentAt(node, 0))
+	}
+	if (node.type !== 'TemplateLiteral') return undefined
+	const [head, next] = children(node, 'quasis')
+	if (!head || !next || templateText(head).cooked !== 'https://') return undefined
+	const rest = templateText(next).cooked ?? ''
+	const end = rest.search(/[/?#]/)
+	return rest.startsWith('.') && end > 1 ? `*${rest.slice(0, end)}` : undefined
+}
+
 const checkFetch = (node: AstNode, path: readonly string[], context: SourceContext): void => {
-	const target = staticPrefix(invokedArgument(node, path, 'fetch'))
+	const argument = invokedArgument(node, path, 'fetch')
+	const target = staticPrefix(argument)
 	if (target === undefined || !ABSOLUTE_URL.test(target) || LOCAL_SCHEMES.test(target)) return
-	context.absoluteFetch(node, target)
+	context.absoluteFetch(node, target, labelledAuthority(argument))
 }
 
 /** `ctx.url('<endpoint id>', …)`, also on a `ctx` reached through a member (`args.ctx.url`). */
@@ -177,7 +198,8 @@ const propertyValue = (object: AstNode, name: string): AstNode | undefined => {
 /** The finding of a `fetch` of an absolute URL whose origin no site of the contract declares. */
 export const crossAppFetchMessage = (target: string): { readonly message: string; readonly allowed: string } => ({
 	message: `fetch to the absolute origin '${target}' is a hand-written integration`,
-	allowed: "a same-origin path to a declared endpoint, another application through a connector import, or egress: ['<origin>'] on the site",
+	allowed:
+		"a same-origin path to a declared endpoint, another application through a connector import, or egress: ['<origin>' | 'https://*.<domain>'] on the site",
 })
 
 const checkDynamicCode = (node: AstNode, path: readonly string[], context: SourceContext): void => {
