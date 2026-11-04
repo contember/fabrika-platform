@@ -4,7 +4,7 @@ A person hands an agent a short-lived, budgeted key for one application. Every t
 both the person and the agent, so audit, commits and the console tell "the person did it" from "the person's agent did
 it".
 
-- **Size:** M (five PRs, none larger than M).
+- **Size:** M (five PRs, none larger than M). Only PR 1 is scheduled now ("Decisions").
 - **Depends on:** nothing. It reuses IAM's OAuth resource tokens ([ADR-0049](../decisions/0049-author-applications-through-mcp-in-control.md)).
 - **Enables:** [Operations tools in the authoring MCP](./operations-tools-in-the-authoring-mcp.md) for unattended
   agents, [the release watch window](./release-watch-window-and-rollback.md) handing a fix to an agent, and the
@@ -60,7 +60,10 @@ A person issues a task in the console. The form is the consent screen of the tas
   `docs/reference/mcp-authoring.md`), `operations` (`operations.read`, `operations.triage`;
   [the Operations tools](./operations-tools-in-the-authoring-mcp.md)) and `review` (`review.read`, `review.write`;
   [the review widget](./review-widget-on-stage-and-dev.md)), each offered once its scope exists in
-  `FABRIKA_IAM_OAUTH_CONFIG`;
+  `FABRIKA_IAM_OAUTH_CONFIG`. `authoring` is always included and cannot be unticked: the console's `/mcp` row lists it
+  (`packages/control/fabrika.service.ts:60`) and the proxy admits a resource token only when it carries every scope
+  the row lists (`packages/proxy-core/src/authorize.ts:446`), so a task of `operations` or `review` alone could never
+  reach `/mcp`. A task that should not write narrows the actions below instead;
 - optionally, fewer actions than the chosen scopes grant;
 - the lifetime in hours (default 4, at most 24);
 - budgets: commits, deploys, workspaces (each optional, each at most 1000);
@@ -99,7 +102,7 @@ resource=https://<console>/mcp
 ```
 
 IAM looks the secret up by hash, then resolves authority like `grantAuthority` does for a code or refresh
-(`packages/iam/src/oauth.ts:223`): the task live and unexpired, the resource and each of the task's scopes still
+(`packages/iam/src/oauth.ts:223`), without its client check (below): the task live and unexpired, the resource and each of the task's scopes still
 configured, the principal an active user, its live permissions at the app narrowed by the scopes' grants and then by
 the task's ceiling (`narrowPermissions`, `packages/iam/src/narrow-permissions.ts:8`). It mints the resource token as
 `mintForGrant` does (`packages/iam/src/oauth.ts:187`), with `oauth.scopes` the task's scopes, and with three
@@ -111,7 +114,11 @@ expired or foreign secret. The endpoint is public, so it takes the per-client bu
 
 The OAuth claims need a `client_id`. A task has no client of its own, so IAM serves one fixed Client ID Metadata
 Document for task exchanges at `<iam>/oauth/clients/task` (public client, no redirect URI, the token-exchange grant
-only). That URL passes `isCimdClientId` (`packages/auth-core/src/oauth.ts:16`) unchanged.
+only). That URL passes `isCimdClientId` (`packages/auth-core/src/oauth.ts:16`) unchanged. The task client is built
+into IAM and is not on the operator's client allowlist: `grantAuthority` refuses a client missing from
+`FABRIKA_IAM_OAUTH_CONFIG.clients` (`packages/iam/src/oauth.ts:231`, at most 16, `packages/iam/src/oauth-config.ts:15`),
+so the exchange skips that check and accepts only this one client id, and a configured client never reaches the
+token-exchange grant.
 
 IAM serves `tasks.issue` and the exchange only while Control has reported that it enforces `act` (below, "No task
 token before its consumer").
@@ -155,7 +162,7 @@ keeps no copy of the task.
 ### No task token before its consumer
 
 A Control older than this feature would take a task token for the person's own grant: its `parseAccessClaims` builds
-its result from the fields it knows and drops `act` (`packages/auth-core/src/token.ts:376`), so target, globs and
+its result from the fields it knows and drops `act` (`packages/auth-core/src/token.ts:337`), so target, globs and
 budgets would not apply. On Zerops, `platform deploy` builds IAM (with Operations) first, then the proxy, then Control
 (`packages/provider-zerops/src/installation/deploy.ts:121`, `:836`), so every upgrade has that window, and a failed
 Control build keeps it open.
@@ -278,6 +285,15 @@ MCP is served only by the Bun host, so task keys work wherever `/mcp` does (Zero
    column. Witness: the audit test above.
 5. **Console and docs (M).** The Tasks panel, `docs/reference/mcp-authoring.md` (how a runner uses a task key), the
    ADR. Witness: a browser test in `tests/browser` that issues, lists and revokes a task.
+
+PR 1 is built now and stays inactive: nothing mints `act` until PR 3. PRs 2–5 wait until a follow-up that needs a
+task key (the self-healing loop, an unattended Operations or review agent) is planned.
+
+## Decisions
+
+- **Only slice 1 now** (review of 2026-11-04). The `act` claim, its parser and the `pt_` redaction land as an inactive
+  foundation; Control enforcement, IAM issuance and exchange, audit attribution and the console panel wait for the
+  follow-ups that need them.
 
 ## Open questions
 
