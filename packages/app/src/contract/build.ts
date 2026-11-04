@@ -86,6 +86,7 @@ import {
 	type MountDeclaration,
 	type ProcedureDeclaration,
 	type ProcedureTreeDeclaration,
+	type RoleDeclaration,
 	type SpaAccessDeclaration,
 } from './declaration'
 import {
@@ -207,6 +208,7 @@ class ArtifactBuilder {
 		}
 		const actions = this.#actions()
 		const dimensions = this.#dimensions()
+		const relations = this.#relations()
 		const roles = this.#roles()
 		const tokens = this.#tokens()
 		this.#fileKinds = this.#readFileKinds()
@@ -256,6 +258,7 @@ class ArtifactBuilder {
 			dimensions,
 			actions,
 			roles,
+			...(Object.keys(relations).length === 0 ? {} : { relations }),
 			mounts,
 			files: {},
 			...(Object.keys(this.#fileKinds).length === 0 ? {} : { fileKinds: this.#fileKinds }),
@@ -456,8 +459,8 @@ class ArtifactBuilder {
 			if (BUILTIN_ROLE_KEYS.includes(name)) {
 				this.#problem(where, `is a role IAM defines itself for every application (reserved: ${BUILTIN_ROLE_KEYS.join(', ')}); choose another name`)
 			}
-			if (role.grants.length === 0) {
-				this.#problem(where, 'grants nothing (allowed: grants: [<exact actions>])')
+			if (role.grants.length === 0 && Object.keys(role.via ?? {}).length === 0) {
+				this.#problem(where, 'grants nothing (allowed: grants: [<exact actions>], or via: { <relation>: [<exact actions>] })')
 			}
 			this.#unique(where, 'grants', role.grants)
 			for (const action of role.grants) {
@@ -484,13 +487,79 @@ class ArtifactBuilder {
 			if (role.external === true && role.member === undefined) {
 				this.#problem(where, 'is declared external and is not a membership role: only a role with member: { scope, … } may admit externals')
 			}
+			const via = this.#via(where, role)
 			roles[name] = {
 				grants: [...role.grants],
 				member: role.member === undefined ? null : { scope: role.member.scope, assignableBy: [...role.member.assignableBy] },
 				...(role.external === true ? { external: true } : {}),
+				...(via === undefined ? {} : { via }),
 			}
 		}
 		return roles
+	}
+
+	/** Each relation names a dimension of the contract, and exactly one table's rows confer it. */
+	#relations(): Record<string, { readonly dimension: string }> {
+		const relations: Record<string, { readonly dimension: string }> = {}
+		for (const [name, relation] of Object.entries(this.#contract.relations ?? {})) {
+			const where = `relation '${name}'`
+			this.#name(where, name)
+			if (!Object.hasOwn(this.#contract.dimensions, relation.dimension)) {
+				this.#problem(where, `names the dimension '${relation.dimension}', which is not a dimension of the contract`)
+			}
+			const sources = Object.entries(this.#tables).filter(([, table]) => table.confers !== undefined && Object.hasOwn(table.confers, name))
+			if (sources.length !== 1) {
+				this.#problem(where, `is conferred by ${sources.length} tables; exactly one table declares confers.${name}`)
+			}
+			relations[name] = { dimension: relation.dimension }
+		}
+		for (const [table, policy] of Object.entries(this.#tables)) {
+			for (const relation of Object.keys(policy.confers ?? {})) {
+				if (!Object.hasOwn(relations, relation)) {
+					this.#problem(`table '${table}'`, `confers '${relation}', which is not a relation of the vocabulary`)
+				}
+			}
+		}
+		return relations
+	}
+
+	/**
+	 * A role's `via`: known relations and actions, on an application-wide internal role only (ADR-0051 keeps an
+	 * external principal to its membership roles), and never an action that inserts a relation's rows, so a relation
+	 * never delegates itself onward.
+	 */
+	#via(where: string, role: RoleDeclaration): Record<string, readonly string[]> | undefined {
+		if (role.via === undefined) {
+			return undefined
+		}
+		if (role.member !== undefined || role.external === true) {
+			this.#problem(where, 'holds actions via a relation and is a membership or external role: only an application-wide role declares via')
+		}
+		const relations = this.#contract.relations ?? {}
+		const assigning = new Set<string>()
+		for (const policy of Object.values(this.#tables)) {
+			if (policy.confers === undefined) continue
+			const insert = policy.actions.insert
+			for (const action of insert === null ? [] : typeof insert === 'string' ? [insert] : insert) assigning.add(action)
+		}
+		const via: Record<string, readonly string[]> = {}
+		for (const [relation, actions] of Object.entries(role.via)) {
+			if (!Object.hasOwn(relations, relation)) {
+				this.#problem(where, `holds actions via '${relation}', which is not a relation of the vocabulary`)
+			}
+			if (actions.length === 0) {
+				this.#problem(where, `holds nothing via '${relation}' (allowed: via: { ${relation}: [<exact actions>] })`)
+			}
+			this.#unique(where, `via.${relation}`, actions)
+			for (const action of actions) {
+				this.#knownAction(where, action)
+				if (assigning.has(action)) {
+					this.#problem(where, `holds '${action}' via '${relation}', which inserts a relation's rows: a relation never delegates itself onward`)
+				}
+			}
+			via[relation] = [...actions]
+		}
+		return via
 	}
 
 	// ── Mounts ──────────────────────────────────────────────────────────────────────────────────
@@ -2200,6 +2269,9 @@ class ArtifactBuilder {
 				this.#problem(where, `declares unscoped '${table}': 'write', and it runs read-only (allowed: 'read')`)
 			}
 			const policy = Object.hasOwn(this.#tables, table) ? this.#tables[table] : undefined
+			if (mode === 'write' && policy?.confers !== undefined) {
+				this.#problem(where, `declares unscoped '${table}': 'write', and its rows confer a relation: write them through a capability`)
+			}
 			if (mode === 'write' && policy?.view === true) {
 				this.#problem(where, `declares unscoped '${table}': 'write', and no site writes a view: its rows come from the tables it reads (allowed: 'read')`)
 			} else if (mode === 'write' && policy?.scope.mode === 'reference') {

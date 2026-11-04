@@ -69,6 +69,7 @@ export function describeContract(contract: AnyContract): ContractDeclaration<Sch
 		dimensions: vocabulary.dimensions,
 		actions: vocabulary.actions,
 		roles: vocabulary.roles,
+		...(vocabulary.relations === undefined ? {} : { relations: vocabulary.relations }),
 		mounts,
 		files: surface.files ?? {},
 		jobs: surface.jobs ?? {},

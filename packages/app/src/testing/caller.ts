@@ -1,7 +1,7 @@
 // Test callers: a principal of the test IAM with the permissions its grants resolve to, as IAM resolves them, and
 // the credential it presents.
 
-import type { PermissionEntry, PrincipalAffiliation } from '@fabrika/auth-core'
+import { type PermissionEntry, type PrincipalAffiliation, RELATION_SCOPE_TYPE } from '@fabrika/auth-core'
 import type { ActionOf, AnyContract, DimensionOf, RoleOf } from '../contract/define'
 
 /** `app` is the connector of another application: its key reaches only the exports that application consumes. */
@@ -118,6 +118,13 @@ export function resolveGrants<C extends AnyContract>(contract: C, grants: readon
 		if (role.member !== undefined && grant.scope?.type !== role.member.scope) {
 			throw new Error(`'${grant.role}' is a membership role: grant it in one ${role.member.scope} (scope: { type: '${role.member.scope}', value })`)
 		}
-		return role.grants.map((action) => ({ action, scope: scopeOf(grant.scope), source: 'grant' }))
+		const entries: PermissionEntry[] = role.grants.map((action) => ({ action, scope: scopeOf(grant.scope), source: 'grant' }))
+		// As IAM resolves it: a global grant of a role with `via` also holds each action through its relation.
+		if (grant.scope === undefined && role.member === undefined) {
+			for (const [relation, held] of Object.entries(role.via ?? {})) {
+				for (const action of held) entries.push({ action, scope: { type: RELATION_SCOPE_TYPE, value: relation }, source: 'grant' })
+			}
+		}
+		return entries
 	})
 }

@@ -7,6 +7,7 @@ import {
 	type DimensionDef,
 	type Presentation,
 	presentationOf,
+	type RelationDef,
 	type RoleDefs,
 	type TerminalDeclaration,
 	type Vocabulary,
@@ -49,6 +50,7 @@ export function defineVocabulary<
 		readonly dimensions: Dims & { readonly [K in D]: DimensionDef<NoInfer<A>, NoInfer<D>, NoInfer<R>> }
 		readonly actions: { readonly [K in A]: K extends `${string}*${string}` ? WildcardMessage : string }
 		readonly roles: RoleDefs<NoInfer<A>, NoInfer<D>, R>
+		readonly relations?: { readonly [name: string]: RelationDef<NoInfer<D>> }
 		readonly members?: M
 		readonly directory?: 'labels'
 		readonly terminal?: T
@@ -60,6 +62,7 @@ export function defineVocabulary<
 		dimensions: vocabulary.dimensions,
 		actions: vocabulary.actions,
 		roles: vocabulary.roles,
+		...(vocabulary.relations === undefined ? {} : { relations: vocabulary.relations }),
 		...presentationOf(vocabulary),
 		...(people === undefined ? {} : { members: people }),
 		...(vocabulary.directory === undefined ? {} : { directory: vocabulary.directory }),
