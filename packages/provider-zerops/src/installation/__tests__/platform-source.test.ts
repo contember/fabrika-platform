@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, spyOn, test } from 'bun:test'
-import { watch } from 'node:fs'
+import { readdirSync } from 'node:fs'
 import { lstat, mkdir, mkdtemp, readdir, readFile, readlink, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -218,15 +218,23 @@ describe('preparePlatformSource', () => {
 	test('cleans temporary resources when aborted after snapshot allocation', async () => {
 		const before = await snapshots()
 		const controller = new AbortController()
-		const watcher = watch(tmpdir(), (_event, name) => {
-			if (name?.startsWith('fabrika-platform-source-')) controller.abort()
+		// Abort at the first cancellation check after the temporary directory exists: the next step's, deterministically.
+		// A filesystem watcher would race the preparation, and a late event under load let it finish unaborted (#136).
+		const check = controller.signal.throwIfAborted.bind(controller.signal)
+		let allocated = false
+		const spy = spyOn(controller.signal, 'throwIfAborted').mockImplementation(() => {
+			if (!allocated && readdirSync(tmpdir()).some((name) => name.startsWith('fabrika-platform-source-'))) {
+				allocated = true
+				controller.abort()
+			}
+			check()
 		})
 		try {
 			await expect(preparePlatformSource(root, controller.signal)).rejects.toThrow()
 		} finally {
-			watcher.close()
+			spy.mockRestore()
 		}
-		expect(controller.signal.aborted).toBe(true)
+		expect(allocated).toBe(true)
 		expect(await snapshots()).toEqual(before)
 	})
 
