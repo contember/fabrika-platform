@@ -15,18 +15,18 @@ nightly dump, Zerops reloads the PostgreSQL configuration, and Operations' inges
 On one production installation, Operations' log showed a burst of errors right after Zerops logged the `db` backup
 and a configuration reload, on several nights. Most bursts were about 15 lines; one lasted 18 minutes. Events wait
 in the durable ingest queue, so they are probably delayed, not lost, but nothing proves that. An ingest request
-during the reload may answer 5xx, which an application retries only once (`packages/app/src/jobs/report.ts`). An
-installation on `operationsdb` does not share the reload. `docs/reference/zerops-platform.md` ("a managed service's
-backup schedule") records why such an installation keeps `db` on the daily schedule.
+during the reload may answer 5xx, which an application retries only once (`packages/app/src/jobs/report.ts`).
+`docs/reference/zerops-platform.md` ("a managed service's backup schedule") records why such an installation keeps
+`db` on the daily schedule. `operationsdb` keeps the default daily backup too, so it may see the same reload.
 
 ## Approach / acceptance
 
 1. Find what fails: the queue's poll (`PostgresOperationsConsumer` over `@fabrika/platform-node`'s job queue), the
-   ingest endpoint, or both, and whether any event is lost.
+   ingest endpoint, or both, and whether any event is lost. Check whether `operationsdb`'s backup reloads it too.
 2. A connection error during a reload is treated as transient: the poll backs off and logs one line per outage, not
    one per pass, and the ingest answers 503 with `Retry-After`.
-3. Document how such an installation moves Operations to `operationsdb`, or state that it stays on `db` until it is
-   reinstalled.
+3. Only if `operationsdb` does not reload after its backup: document how such an installation moves Operations
+   there, or state that it stays on `db` until it is reinstalled.
 
 Witness: an Operations test drops the database connection for a few seconds mid-poll. The queue drains afterwards,
 every event is stored, and the log has one line.
