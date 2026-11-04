@@ -243,3 +243,69 @@ describe('the policy bounds what a table may reveal', () => {
 		expect(policy({}, reveal({}))).toThrow('reveals nothing')
 	})
 })
+
+describe('an insert into a node no table owns, through a reveal', () => {
+	interface Unowned {
+		tasks: { id: string; project_id: string; version: number }
+		task_assignees: { id: string; task_id: string; project_id: string; principal_id: string }
+		notes: { id: string; project_id: string; body: string; version: number }
+	}
+	const unownedColumns: TypedColumnList<Unowned> = {
+		tasks: { columns: ['id', 'project_id', 'version'], foreignKeys: [] },
+		task_assignees: {
+			columns: ['id', 'task_id', 'project_id', 'principal_id'],
+			foreignKeys: [{ columns: ['task_id', 'project_id'], table: 'tasks', references: ['id', 'project_id'] }],
+		},
+		notes: { columns: ['id', 'project_id', 'body', 'version'], foreignKeys: [] },
+	}
+	const unownedVocabulary = {
+		app: 'unowned',
+		dimensions: { project: {}, task: { in: 'project' }, note: { in: 'project' } },
+		actions: { 'tasks.read': 'Read tasks', 'tasks.assign': 'Assign a task', 'notes.read': 'Read notes', 'notes.write': 'Write notes' },
+		relations: { assignee: { dimension: 'task' } },
+		roles: {},
+	} as const
+	const unowned = defineTables(unownedVocabulary, unownedColumns)({
+		tasks: {
+			scope: { dimension: 'task' },
+			actions: { read: 'tasks.read' },
+			version: 'version',
+			reveals: { assignee: { to: 'project', actions: ['notes.write'] } },
+		},
+		task_assignees: { scope: { child: 'tasks' }, actions: { read: 'tasks.read' }, confers: { assignee: { principal: 'principal_id' } } },
+		notes: { scope: { dimension: 'note' }, actions: { read: 'notes.read', insert: 'notes.write' }, insert: ['body'], version: 'version' },
+	})
+
+	test('inserts while a revealing row stands, and writes nothing once the assignment is gone', async () => {
+		const store = bunSqliteStorage()
+		store.sql.exec(`
+			create table tasks (id text not null primary key, project_id text not null, version integer not null, unique (id, project_id));
+			create table task_assignees (
+				id text not null primary key, task_id text not null, project_id text not null, principal_id text not null,
+				foreign key (task_id, project_id) references tasks (id, project_id)
+			);
+			create table notes (id text not null primary key, project_id text not null, body text not null, version integer not null);
+			insert into tasks (id, project_id, version) values ('t1', 'p1', 1);
+			insert into task_assignees (id, task_id, project_id, principal_id) values ('a1', 't1', 'p1', 'user:alice');
+		`)
+		const layer = scoped(unowned)
+		bindScopedDatabaseProvisionally(layer, { database: openSqlite(store), capabilities: alice })
+		const access = dataAccessOf(layer)
+		const write = async (body: string) => {
+			const transaction = access.invocation(false)
+			const site: DataSite = { kind: 'mutation', unscoped: {}, principal: 'user:alice', check() {}, session: () => transaction.session() }
+			try {
+				const ref = alice.ref('project', 'notes.write', 'p1', {}, ['assignee'])
+				await call(access.handles(site).target(ref, 'in'), 'notes.insert', { body })
+				await transaction.commit()
+			} catch (error) {
+				await transaction.rollback()
+				throw error
+			}
+		}
+		await write('held')
+		store.sql.exec("delete from task_assignees where id = 'a1'")
+		await expect(write('revoked')).rejects.toThrow('no row holds notes.write')
+		expect(store.sql.exec('select body, project_id from notes').toArray()).toEqual([{ body: 'held', project_id: 'p1' }])
+	})
+})
