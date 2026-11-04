@@ -76,15 +76,21 @@ const OPERATORS: readonly ConditionOperator[] = freeze(['eq', 'notEq', 'in', 'no
 const CONNECTIVES = freeze(['anyOf', 'allOf', 'not'])
 
 /**
- * Parses `input` as a condition over `table`. `hops` says whether a path may follow foreign keys (a relation source's
- * condition and an insert's may not: they are judged on the row itself).
+ * Whether a path may follow `from.column` to `to`. A hop reads its target unscoped, so the rule admits only one that
+ * stays where the row is (its own container or parent) or reaches what every site reads (a reference table).
+ */
+export type HopRule = (from: string, column: string, to: string) => boolean
+
+/**
+ * Parses `input` as a condition over `table`. `hops` is the rule a path's foreign keys are held to, or `false` when a
+ * path follows none (a relation source's condition and an insert's are judged on the row itself).
  */
 export function parseCondition(
 	input: unknown,
 	table: ConditionTable,
 	tables: (name: string) => ConditionTable | undefined,
 	what: string,
-	hops: boolean,
+	hops: HopRule | false,
 ): ConditionModel {
 	return parseNode(input, table, tables, what, hops, 0)
 }
@@ -94,7 +100,7 @@ function parseNode(
 	table: ConditionTable,
 	tables: (name: string) => ConditionTable | undefined,
 	what: string,
-	hops: boolean,
+	hops: HopRule | false,
 	depth: number,
 ): ConditionModel {
 	if (depth > MAX_CONDITION_DEPTH) {
@@ -136,13 +142,13 @@ function parseTest(
 	table: ConditionTable,
 	tables: (name: string) => ConditionTable | undefined,
 	what: string,
-	hops: boolean,
+	hops: HopRule | false,
 ): ConditionModel {
 	const segments = splitPath(path)
 	if (segments.length - 1 > MAX_CONDITION_HOPS) {
 		throw new PolicyError(`${what}: a path follows at most ${MAX_CONDITION_HOPS} foreign keys`)
 	}
-	if (segments.length > 1 && !hops) {
+	if (segments.length > 1 && hops === false) {
 		throw new PolicyError(`${what}: this condition is judged on the row itself and follows no foreign key`)
 	}
 	const followed: ConditionHop[] = []
@@ -153,6 +159,11 @@ function parseTest(
 		const target = tables(hop.table)
 		if (target === undefined) {
 			throw new PolicyError(`${what}: ${current.name}.${name} references ${hop.table}, which has no policy`)
+		}
+		if (hops === false || !hops(current.name, name, hop.table)) {
+			throw new PolicyError(
+				`${what}: ${current.name}.${name} leads to ${hop.table}, outside the row's own containment; a path follows a row's container or parent column, or reaches a reference table`,
+			)
 		}
 		followed[followed.length] = hop
 		current = target
