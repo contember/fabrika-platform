@@ -12,6 +12,7 @@ import type { CommitSource } from '../github/source/commit-files'
 import { SourceFailure, SourceRateLimited } from '../github/source/failure'
 import type { LeaseFence } from '../lease'
 import { type AccessEffect, type AccessOutcome, classifyAccess, isJobStartLine } from './diff'
+import { relationGrantsRefusal } from './enforcement'
 import { ContractMissing, readAccessSnapshot, snapshotReads, SnapshotRefused } from './read'
 import { FrameworkReleaseRefused } from './readers'
 import {
@@ -172,6 +173,7 @@ export async function publishRunSnapshot(
 		await assertConnectorEdges(deps.repositories.registry, run, candidate, active, input.log)
 		assertMountCompatibility(candidate, active, input.log)
 		assertDevLauncher(candidate, appEnv, input.log)
+		assertRelationGrants(candidate, input.log)
 		await input.validateAccess?.(access, appEnv)
 		const classification = classify(active, candidate, appEnv)
 		logClassification(input.log, classification, appEnv.env)
@@ -272,6 +274,14 @@ async function assertConnectorEdges(
 function assertDevLauncher(candidate: AccessSnapshot, appEnv: AppEnvRow, log: (line: string) => void): void {
 	if (appEnv.kind !== 'dev') return
 	const refusal = devLauncherRefusal(candidate.framework)
+	if (refusal === null) return
+	log(`access: ${refusal}`)
+	throw new FrameworkReleaseRefused(refusal)
+}
+
+/** A contract whose relation grants the pinned release would not enforce: refused before anything publishes. */
+function assertRelationGrants(candidate: AccessSnapshot, log: (line: string) => void): void {
+	const refusal = relationGrantsRefusal(candidate.contract, candidate.framework)
 	if (refusal === null) return
 	log(`access: ${refusal}`)
 	throw new FrameworkReleaseRefused(refusal)
