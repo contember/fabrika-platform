@@ -1007,6 +1007,9 @@ function unscopedRows(context: TableContext, site: DataSite, run: Runner, mode: 
 		return equals(table, keyOf(model), id)
 	}
 	const write = <A extends unknown[], R>(operation: 'insert' | 'update' | 'remove', method: (...args: A) => Promise<R>) => {
+		if (model.view) {
+			return refused(site, 'read_only', `${table} is a view, which no handler writes`)
+		}
 		if (mode === 'read') {
 			const verb = operation === 'remove' ? 'remove' : operation
 			return refused(site, 'undeclared_reach', `${table} is declared unscoped: 'read', so ${verb} needs unscoped: { ${table}: 'write' }`)

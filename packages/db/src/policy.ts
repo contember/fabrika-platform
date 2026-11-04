@@ -22,7 +22,7 @@ import { PolicyError } from './errors'
 import { isPlainIdentifier } from './identifier'
 import type { Unavailable } from './orm-types'
 export type { RowOf } from './orm-types'
-import type { ColumnTypes, DefineVocabularyPolicies, TableVocabulary } from './vocabulary-tables'
+import type { ColumnTypes, ColumnViews, DefineVocabularyPolicies, TableVocabulary } from './vocabulary-tables'
 
 export interface DimensionScope<Col extends string> {
 	readonly dimension: string
@@ -164,6 +164,8 @@ export interface TableColumns<Col extends string = string, Table extends string 
 	readonly booleans?: readonly Col[]
 	/** The JSON columns (`jsonb`, or declared `JSONB` on SQLite), written as a JSON value and never compared; absent when none. */
 	readonly json?: readonly Col[]
+	/** A view (on Postgres also a materialized view): read-only, with no foreign key; absent for a table. */
+	readonly view?: true
 }
 
 /** The columns and foreign keys of every table, generated next to the schema types. */
@@ -231,6 +233,8 @@ export interface TableModel {
 	readonly json: NameSet
 	/** The table's foreign keys, from the column list; a containment column must be one to its container's key. */
 	readonly foreignKeys: readonly ForeignKey[]
+	/** A view: a child or reference table no operation but a read reaches, whose containment only its SQL states. */
+	readonly view: boolean
 	/**
 	 * The containment links this table carries a column for, nearest first: a dimension table's container and
 	 * the container's own chain; a child's parent and the parent's chain. Every predicate of a Ref covers all.
@@ -305,7 +309,7 @@ export function defineTables<DB, P>(vocabularyInput: unknown, columns: unknown):
 /** `defineTables(vocabulary, columns)` answers the policies' builder, or names the fix for an untyped column list. */
 export type VocabularyTables<V, C> = [ColumnTypes<C>] extends [never]
 	? Unavailable<'the column list carries no row types: import columns from the generated src/db/schema.generated.ts (fabrika db codegen)'>
-	: DefineVocabularyPolicies<ColumnTypes<C>, V>
+	: DefineVocabularyPolicies<ColumnTypes<C>, V, ColumnViews<C>>
 
 /**
  * The same policies read from values nobody type-checked: `src/db/tables.ts` and its vocabulary as the static reader
@@ -350,7 +354,7 @@ function parseVocabulary(input: unknown): VocabularyModel {
 	return freeze({ dimensions: freeze(containment), actions: nameSet(actions) })
 }
 
-const COLUMN_LIST_FIELDS = nameSet(['columns', 'foreignKeys', 'dates', 'timestamps', 'booleans', 'json'])
+const COLUMN_LIST_FIELDS = nameSet(['columns', 'foreignKeys', 'dates', 'timestamps', 'booleans', 'json', 'view'])
 const FOREIGN_KEY_FIELDS = nameSet(['columns', 'table', 'references'])
 const POLICY_FIELDS = nameSet(['scope', 'actions', 'insert', 'update', 'version', 'createdBy', 'columns', 'queue', 'files'])
 const QUEUE_FIELDS = nameSet(['attempts', 'due', 'maxAttempts'])
@@ -407,12 +411,26 @@ function parseTables(columnsInput: unknown, policiesInput: unknown, vocabulary: 
 	for (let index = 0; index < tables.length; index++) {
 		const table = tables[index] ?? ''
 		const policy = ownEntry(policies, table)
+		const entry = ownEntry(columns, table)
+		// A view without a policy stays what it was before codegen read views: only ctx.sql reads it.
+		if (policy === undefined && isViewEntry(table, entry)) {
+			continue
+		}
 		if (policy === undefined) {
 			throw new PolicyError(`${table}: every table needs a policy in tables.ts`)
 		}
-		parsed[index] = parseTable(table, ownEntry(columns, table), policy, vocabulary)
+		parsed[parsed.length] = parseTable(table, entry, policy, vocabulary)
 	}
 	return linkTables(parsed, vocabulary.dimensions)
+}
+
+/** Whether a column list entry marks a view: its `view` is `true`, or absent for a table. */
+function isViewEntry(table: string, entry: unknown): boolean {
+	const view = ownEntry(plainRecord(entry, `${table}: the column list entry`), 'view')
+	if (view !== undefined && view !== true) {
+		throw new PolicyError(`${table}: the column list entry's view is true or absent`)
+	}
+	return view === true
 }
 
 /** How a policy names its columns: one it states must exist, and so must one a convention derives for it. */
@@ -468,6 +486,14 @@ function parseTable(table: string, columnList: unknown, policyInput: unknown, vo
 	const scopeInput = plainRecord(ownEntry(policy, 'scope'), `${table}: scope`)
 	const foreignKeys = parseForeignKeys(table, ownEntry(entry, 'foreignKeys'), column)
 	const scope = parseScope(table, scopeInput, { column, columnsOf, derived }, vocabulary.dimensions)
+	const view = isViewEntry(table, entry)
+	if (view && scope.mode !== 'child' && scope.mode !== 'reference') {
+		throw new PolicyError(
+			`${table}: a view is read-only, so it takes a child scope, { child, key?, column?, inherit? }, or { reference }; ${
+				scope.mode === 'app' ? 'an application' : 'a dimension'
+			} table's rows are written`,
+		)
+	}
 	const action = (value: unknown, field: string): string => {
 		const name = nonEmpty(table, value, field)
 		if (!inSet(vocabulary.actions, name)) {
@@ -520,15 +546,20 @@ function parseTable(table: string, columnList: unknown, policyInput: unknown, vo
 	if (version !== undefined && hasOwn(columnPolicies, version)) {
 		throw new PolicyError(`${table}: the version ${version} takes no action of its own`)
 	}
-	const writable = scope.mode === 'dimension' || scope.mode === 'child' || scope.mode === 'app'
+	const writable = !view && (scope.mode === 'dimension' || scope.mode === 'child' || scope.mode === 'app')
 	const queueInput = ownEntry(policy, 'queue')
 	const filesInput = ownEntry(policy, 'files')
 	if (
 		!writable
 		&& (namesOf(insert).length > 0 || namesOf(update).length > 0 || version !== undefined || createdBy !== undefined
-			|| ownKeys(columnWrites).length > 0 || queueInput !== undefined || filesInput !== undefined)
+			|| ownKeys(columnWrites).length > 0 || queueInput !== undefined || filesInput !== undefined
+			|| actions.insert.length > 0 || actions.update.length > 0 || actions.delete.length > 0)
 	) {
-		throw new PolicyError(`${table}: a ${scope.mode} table is never written by a handler`)
+		throw new PolicyError(
+			view
+				? `${table}: a view is never written by a handler, so its policy takes only actions.read, appRead, appCount and column read actions`
+				: `${table}: a ${scope.mode} table is never written by a handler`,
+		)
 	}
 	const dates = parseColumnSet(table, ownEntry(entry, 'dates'), column, 'dates')
 	const timestamps = parseColumnSet(table, ownEntry(entry, 'timestamps'), column, 'timestamps')
@@ -564,6 +595,7 @@ function parseTable(table: string, columnList: unknown, policyInput: unknown, vo
 		booleans,
 		json,
 		foreignKeys,
+		view,
 	}
 }
 
@@ -985,6 +1017,13 @@ function checkStamps(table: ParsedTable, chain: readonly Container[]): void {
 		if (stamp === undefined) {
 			continue
 		}
+		// Nothing writes a view, so its key may be its parent column; a predicate still compares each.
+		if (table.view) {
+			if (inSet(table.json, stamp.column)) {
+				throw new PolicyError(`${table.name}: ${stamp.column} is a JSON column, which no predicate compares as ${stamp.role}; give it a scalar type`)
+			}
+			continue
+		}
 		for (let other = 0; other < index; other++) {
 			const earlier = stamps[other]
 			if (earlier !== undefined && earlier.column === stamp.column) {
@@ -1153,8 +1192,11 @@ function resolveChain(
 	}
 	const dimension = parent.scope.dimension
 	const link = { dimension, column: scope.column ?? parentColumn(table, `${dimension}_id`, scope.parent) }
-	requireReference(table, link, parent, (column) => `scope.column: '${column}'`)
-	requireCoveringKey(table, link, parent, parentChain)
+	// A view has no foreign key: its SQL alone states its containment, and the approver reviews it (ADR-0072).
+	if (!table.view) {
+		requireReference(table, link, parent, (column) => `scope.column: '${column}'`)
+		requireCoveringKey(table, link, parent, parentChain)
+	}
 	return {
 		scope: freeze({ mode: 'child', parent: scope.parent, key: scope.key, column: link.column, inherit }),
 		chain: prepend(link, parentChain),

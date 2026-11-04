@@ -378,6 +378,9 @@ function scopedModel<DB, P>(tables: Tables<DB, P>, table: string): { readonly mo
 	if (model === undefined) {
 		throw new Error(`${table} is not a table of the policies`)
 	}
+	if (model.view) {
+		throw new Error(`${table} is a view, whose rows come from the tables it reads: seed those instead`)
+	}
 	return { models, model }
 }
 

@@ -162,7 +162,7 @@ describe('generateSqliteSchema', () => {
 				meta JSON GENERATED ALWAYS AS (json_object('body', body)) VIRTUAL
 			);`),
 		])
-		expect(module.leftOut).toEqual([{ table: 'things', column: 'meta', type: 'JSON' }])
+		expect(module.leftOut).toEqual([{ table: 'things', column: 'meta', type: 'JSON', of: 'generated' }])
 		expect(interfaceOf(module.source, 'ThingsTable')).toBe(
 			'export interface ThingsTable {\n\tid: string\n\tbody: string\n\t// meta (JSON, generated) is left out: the data layer does not read it; ctx.sql does\n}\n',
 		)
@@ -180,5 +180,56 @@ describe('generateSqliteSchema', () => {
 		expect(String(unique)).toContain(
 			'things.meta is a generated column of a type the data layer does not read, so codegen leaves it out, but it is in the primary key or a unique key',
 		)
+	})
+})
+
+describe('generateSqliteSchema of a view', () => {
+	const VIEWS = `CREATE TABLE deals (id TEXT PRIMARY KEY NOT NULL, org_id TEXT NOT NULL, title TEXT NOT NULL, opened_at TIMESTAMPTZ NOT NULL);
+CREATE TABLE activities (id TEXT PRIMARY KEY NOT NULL, deal_id TEXT NOT NULL REFERENCES deals, at TIMESTAMPTZ NOT NULL);
+CREATE VIEW deal_summaries AS
+	SELECT d.id AS deal_id, d.org_id, d.title, d.opened_at, CAST(count(a.id) AS INTEGER) AS activities, max(a.at) AS last_at,
+		CAST(sum(1.5) AS REAL) AS score, CAST(d.title AS TEXT) AS label
+	FROM deals d LEFT JOIN activities a ON a.deal_id = d.id GROUP BY d.id;
+CREATE VIEW untyped AS SELECT 1 + 1 AS two;`
+
+	test('types each column by the table column it selects or its cast, nullable, and marks the entry a view', async () => {
+		const module = await generateSqliteSchema([framework, app(VIEWS)])
+		expect(interfaceOf(module.source, 'DealSummariesView')).toBe(
+			[
+				'export interface DealSummariesView {',
+				'\tdeal_id: string | null',
+				'\torg_id: string | null',
+				'\ttitle: string | null',
+				'\topened_at: ColumnType<Date | null, Date | string | null, Date | string | null>',
+				'\tactivities: number | null',
+				'\t// last_at (no declared type, of a view) is left out: the data layer does not read it; cast it to a type it reads, or read it with ctx.sql',
+				'\tscore: number | null',
+				'\tlabel: string | null',
+				'}',
+				'',
+			].join('\n'),
+		)
+		const entry = entryOf(module.source, 'deal_summaries')
+		expect(entry).toContain('\t\tforeignKeys: [],\n')
+		expect(entry).toContain("\t\ttimestamps: ['opened_at'],\n")
+		expect(entry).toContain('\t\tview: true,\n')
+		expect(entryOf(module.source, 'deals')).not.toContain('view')
+		expect(module.source).toContain("\n\tdeals: DealsTable\n}\n\nexport type Views = 'deal_summaries'\n\nexport const columns")
+		expect(module.source).toContain('export const columns: TypedColumnList<DB, Views> = {')
+	})
+
+	test('names every left-out view column, and leaves out a view with no column it reads', async () => {
+		const module = await generateSqliteSchema([framework, app(VIEWS)])
+		expect(module.leftOut).toEqual([
+			{ table: 'deal_summaries', column: 'last_at', type: '', of: 'view' },
+			{ table: 'untyped', column: 'two', type: '', of: 'view' },
+		])
+		expect(module.source).not.toContain('UntypedView')
+		expect(module.source).not.toContain("'untyped'")
+	})
+
+	test('a schema without a view keeps the plain column list type', async () => {
+		const { source } = await generateSqliteSchema([framework, app(SCHEMA)])
+		expect(source).toContain('export const columns: TypedColumnList<DB> = {')
 	})
 })

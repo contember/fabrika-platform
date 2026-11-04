@@ -85,6 +85,7 @@ export {
 } from './policy'
 export type {
 	ColumnTypes,
+	ColumnViews,
 	DefineVocabularyPolicies,
 	NormalizedPolicies,
 	TableVocabulary,
@@ -97,6 +98,7 @@ export type {
 	VocabularyDimensionScope,
 	VocabularyPolicyMap,
 	VocabularyTablePolicy,
+	VocabularyViewPolicy,
 } from './vocabulary-tables'
 
 /**
@@ -154,6 +156,7 @@ function artifactOf(model: TableModel): TablePolicyArtifact {
 		createdBy: model.createdBy ?? null,
 		columns,
 		...(ownKeys(model.files).length === 0 ? {} : { files: { ...model.files } }),
+		...(model.view ? { view: true } : {}),
 	}
 }
 

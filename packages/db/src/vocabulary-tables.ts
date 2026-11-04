@@ -1,18 +1,38 @@
 // The table policies of the vocabulary form, `defineTables(vocabulary, columns)`: how an application writes them, with
 // containment taken from the vocabulary, and the normalized policies the kit and the handles read. Types only.
 
-import type { ColumnList, ColumnPolicies, FilePolicies, RecordActions, ReferencePolicy, TableActions, Tables, VersionColumn } from './policy'
+import type {
+	ColumnList,
+	ColumnPolicies,
+	FilePolicies,
+	RecordActions,
+	ReferencePolicy,
+	TableAction,
+	TableActions,
+	Tables,
+	VersionColumn,
+} from './policy'
 
 declare const databaseType: unique symbol
+declare const viewNames: unique symbol
 
 /**
- * The generated column list (`src/db/schema.generated.ts`), which also carries the schema's row types, so that
- * `defineTables(vocabulary, columns)` takes no type argument. The brand is type-only: no value has the property.
+ * The generated column list (`src/db/schema.generated.ts`), which also carries the schema's row types and the names of
+ * its views, so that `defineTables(vocabulary, columns)` takes no type argument. The brands are type-only: no value
+ * has either property.
  */
-export type TypedColumnList<DB> = ColumnList<DB> & { readonly [databaseType]?: DB }
+export type TypedColumnList<DB, Views extends keyof DB & string = never> = ColumnList<DB> & {
+	readonly [databaseType]?: DB
+	readonly [viewNames]?: { readonly views: Views }
+}
 
 /** The row types a typed column list carries; `never` for a list without them. */
 export type ColumnTypes<C> = typeof databaseType extends keyof C ? C extends { readonly [databaseType]?: infer DB } ? Exclude<DB, undefined> : never
+	: never
+
+/** The views a typed column list names; `never` for a list without views. */
+export type ColumnViews<C> = typeof viewNames extends keyof C
+	? C extends { readonly [viewNames]?: { readonly views: infer Views extends string } } ? Views : never
 	: never
 
 /**
@@ -126,6 +146,40 @@ type AuthoredChildPolicy<Table extends string, Col extends string, A extends str
 	& {
 		readonly scope: ChildScopes<Table, Col, S, P>
 	}
+/** What a view's policy holds besides its scope: read actions only, no write list and no stamped column. */
+type ViewIsReadOnly = 'a view is never written: its actions are read, appRead and appCount'
+
+/** The write actions a view's policy may not name, each typed as the message: a literal is not checked for excess keys. */
+interface NoWriteActions {
+	readonly insert?: ViewIsReadOnly
+	readonly update?: ViewIsReadOnly
+	readonly delete?: ViewIsReadOnly
+}
+
+interface ReadOnlyFields<Col extends string, A extends string> {
+	readonly actions: { readonly read: TableAction<A>; readonly appRead?: readonly A[]; readonly appCount?: readonly A[] } & NoWriteActions
+	readonly insert?: never
+	readonly update?: never
+	readonly version?: never
+	readonly createdBy?: never
+	readonly queue?: never
+	readonly files?: never
+	readonly columns?: { readonly [C in Col]?: { readonly read: A; readonly write?: never } }
+}
+
+/** A view read as a child table: its parent's `Ref` and `Within` read it; nothing writes it (ADR-0072). */
+type AuthoredChildViewPolicy<Table extends string, Col extends string, A extends string, S, P> = ReadOnlyFields<Col, A> & {
+	readonly scope: ChildScopes<Table, Col, S, P>
+}
+
+/** A view's policy as written: a read-only child, or a reference table every site reads. */
+export type VocabularyViewPolicy<Table extends string, Col extends string, A extends string, S = unknown, P = unknown> = S extends
+	{ readonly child: unknown } ? AuthoredChildViewPolicy<Table, Col, A, S, P>
+	: S extends { readonly reference: unknown } ? ReferenceViewPolicy<Col, A>
+	: AuthoredChildViewPolicy<Table, Col, A, S, P> | ReferenceViewPolicy<Col, A>
+
+type ReferenceViewPolicy<Col extends string, A extends string> = ReferencePolicy<Col, A> & { readonly actions: NoWriteActions }
+
 /** An application table's scope: why its rows belong to no dimension; `key` defaults to `id`. */
 type AuthoredApplicationPolicy<Col extends string, A extends string, Ver extends Col> = WritableFields<Col, A, Ver> & {
 	readonly scope: { readonly app: string } & KeyField<Col>
@@ -157,15 +211,24 @@ type AnyTablePolicy<DB, V, T extends keyof DB & string> = VocabularyTablePolicy<
 	VersionColumn<DB[T]>
 >
 
+/** The policy of view `T` with nothing stated: both forms, any parent. */
+type AnyViewPolicy<DB, V, T extends keyof DB & string> = VocabularyViewPolicy<keyof DB & string, keyof DB[T] & string, VocabularyAction<V>>
+
 /**
- * Every table of the schema, and no other, maps to a policy; a misspelt action or dimension fails at its own line.
- * `P` is the policies as written, which picks each table's form by the scope it states; a policy written under this
- * map's own annotation states nothing narrower, so it is checked against every form.
+ * Every table of the schema, and no other, maps to a policy; a view `Views` names may (ADR-0072). A misspelt action or
+ * dimension fails at its own line. `P` is the policies as written, which picks each table's form by the scope it
+ * states; a policy written under this map's own annotation states nothing narrower, so it is checked against every
+ * form.
  */
-export type VocabularyPolicyMap<DB, V, P = unknown> = {
-	readonly [T in keyof DB & string]: AnyTablePolicy<DB, V, T> extends (T extends keyof P ? P[T] : unknown) ? AnyTablePolicy<DB, V, T>
-		: VocabularyTablePolicy<keyof DB & string, keyof DB[T] & string, VocabularyAction<V>, V, VersionColumn<DB[T]>, StatedScope<P, T>, P>
-}
+export type VocabularyPolicyMap<DB, V, P = unknown, Views extends string = never> =
+	& {
+		readonly [T in Exclude<keyof DB & string, Views>]: AnyTablePolicy<DB, V, T> extends (T extends keyof P ? P[T] : unknown) ? AnyTablePolicy<DB, V, T>
+			: VocabularyTablePolicy<keyof DB & string, keyof DB[T] & string, VocabularyAction<V>, V, VersionColumn<DB[T]>, StatedScope<P, T>, P>
+	}
+	& {
+		readonly [T in Views & keyof DB & string]?: AnyViewPolicy<DB, V, T> extends (T extends keyof P ? P[T] : unknown) ? AnyViewPolicy<DB, V, T>
+			: VocabularyViewPolicy<keyof DB & string, keyof DB[T] & string, VocabularyAction<V>, StatedScope<P, T>, P>
+	}
 
 type Flat<T> = { [K in keyof T]: T[K] }
 
@@ -192,15 +255,20 @@ type NormalScope<S, V, P> = S extends { readonly dimension: infer D extends stri
 	: S extends { readonly app: infer R extends string } ? { readonly app: R; readonly key: KeyOf<S> }
 	: S
 
+/** A view's normalized policy says so, which the handle types read: no site writes it. */
+type ViewMark<T, Views> = T extends Views ? { readonly view: true } : unknown
+
 /**
  * The policies as the layer models them: every dimension table's key and container, and every child's key and
- * column, stated as the vocabulary and the conventions derive them.
+ * column, stated as the vocabulary and the conventions derive them; each view marked.
  */
-export type NormalizedPolicies<P, V> = {
-	readonly [T in keyof P]: P[T] extends { readonly scope: infer S } ? Flat<Omit<P[T], 'scope'> & { readonly scope: NormalScope<S, V, P> }> : P[T]
+export type NormalizedPolicies<P, V, Views = never> = {
+	readonly [T in keyof P]: P[T] extends { readonly scope: infer S }
+		? Flat<Omit<P[T], 'scope' | 'view'> & { readonly scope: NormalScope<S, V, P> } & ViewMark<T, Views>>
+		: P[T]
 }
 
-/** Takes the policies of exactly the tables of the schema, written in the vocabulary form. */
-export type DefineVocabularyPolicies<DB, V> = <const P extends VocabularyPolicyMap<DB, V, P>>(
+/** Takes the policies of exactly the tables of the schema, and of any of its views, written in the vocabulary form. */
+export type DefineVocabularyPolicies<DB, V, Views extends string = never> = <const P extends VocabularyPolicyMap<DB, V, P, Views>>(
 	policies: P & { readonly [K in Exclude<keyof P, keyof DB>]: never },
-) => Tables<DB, NormalizedPolicies<P, V>>
+) => Tables<DB, NormalizedPolicies<P, V, Views>>

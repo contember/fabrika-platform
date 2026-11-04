@@ -112,6 +112,7 @@ export {
 export { type TablePolicies, tablePolicies } from './tables'
 export type {
 	ColumnTypes,
+	ColumnViews,
 	DefineVocabularyPolicies,
 	NormalizedPolicies,
 	TableVocabulary,
@@ -124,4 +125,5 @@ export type {
 	VocabularyDimensionScope,
 	VocabularyPolicyMap,
 	VocabularyTablePolicy,
+	VocabularyViewPolicy,
 } from './vocabulary-tables'

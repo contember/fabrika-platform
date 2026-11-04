@@ -17,6 +17,7 @@ import { migration as tasksMigration } from './fixtures/tasks'
 
 const column = (table: string, name: string, type: string, extra: Partial<CatalogColumn> = {}): CatalogColumn => ({
 	table_name: table,
+	view: false,
 	column_name: name,
 	type_name: type,
 	type_type: 'b',
@@ -168,7 +169,7 @@ describe('renderSchema', () => {
 	test('leaves out a generated column of a type it does not read, naming it; any other column of one is refused', () => {
 		const search = column('documents', 'search', 'tsvector', { generated: 'always', computed: true })
 		const module = renderSchema([column('documents', 'id', 'text'), search, column('documents', 'body', 'text')])
-		expect(module.leftOut).toEqual([{ table: 'documents', column: 'search', type: 'tsvector' }])
+		expect(module.leftOut).toEqual([{ table: 'documents', column: 'search', type: 'tsvector', of: 'generated' }])
 		expect(interfaceOf(module.source, 'DocumentsTable')).toBe(
 			'export interface DocumentsTable {\n\tid: string\n\t// search (tsvector, generated) is left out: the data layer does not read it; ctx.sql does\n\tbody: string\n}\n',
 		)
@@ -506,8 +507,8 @@ describe.skipIf(!hasPostgres)('codegen against real Postgres', () => {
 		])
 		const module = await generateSchema(url, schema, [])
 		expect(module.leftOut).toEqual([
-			{ table: 'documents', column: 'search', type: 'tsvector' },
-			{ table: 'documents', column: 'words', type: 'text[]' },
+			{ table: 'documents', column: 'search', type: 'tsvector', of: 'generated' },
+			{ table: 'documents', column: 'words', type: 'text[]', of: 'generated' },
 		])
 		expect(interfaceOf(module.source, 'DocumentsTable')).toBe(
 			'export interface DocumentsTable {\n\tid: string\n\tn: GeneratedAlways<string>\n\tbody: string | null\n'
@@ -525,6 +526,47 @@ describe.skipIf(!hasPostgres)('codegen against real Postgres', () => {
 		await expect(generateSchema(url, keyed, [])).rejects.toThrow(
 			'documents.words is a generated column of a type the data layer does not read, so codegen leaves it out, but it is in the primary key or a unique key',
 		)
+	})
+
+	test('reads a view and a materialized view as nullable columns marked view, leaving out a column of a type it does not read', async () => {
+		const ddl = `
+			CREATE TABLE deals (id uuid PRIMARY KEY, org_id uuid NOT NULL, title text NOT NULL, opened_at timestamptz NOT NULL);
+			CREATE TABLE activities (id uuid PRIMARY KEY, deal_id uuid NOT NULL REFERENCES deals, at timestamptz NOT NULL);
+			CREATE VIEW deal_summaries AS
+				SELECT d.id AS deal_id, d.org_id, d.title, count(a.id) AS activities, count(a.id)::int4 AS n, max(a.at) AS last_at,
+					array_agg(a.id) AS ids
+				FROM deals d LEFT JOIN activities a ON a.deal_id = d.id GROUP BY d.id;
+			CREATE MATERIALIZED VIEW deal_days AS SELECT d.id AS deal_id, d.org_id, d.opened_at::date AS opened_on FROM deals d;
+			CREATE VIEW only_arrays AS SELECT array_agg(id) AS ids FROM deals;
+		`
+		const schema = await migrated(ddl)
+		const { objects } = classifyMigrations([{ name: '20261008120000_init.sql', sql: ddl }], schema)
+		const module = await generateSchema(url, schema, objects)
+		expect(interfaceOf(module.source, 'DealSummariesView')).toBe(
+			[
+				'export interface DealSummariesView {',
+				'\tdeal_id: string | null',
+				'\torg_id: string | null',
+				'\ttitle: string | null',
+				'\tactivities: ColumnType<string | null, bigint | number | string | null, bigint | number | string | null>',
+				'\tn: number | null',
+				'\tlast_at: ColumnType<Date | null, Date | string | null, Date | string | null>',
+				'\t// ids (uuid[], of a view) is left out: the data layer does not read it; cast it to a type it reads, or read it with ctx.sql',
+				'}',
+				'',
+			].join('\n'),
+		)
+		expect(interfaceOf(module.source, 'DealDaysView')).toContain('\topened_on: string | null\n')
+		expect(module.leftOut).toEqual([
+			{ table: 'deal_summaries', column: 'ids', type: 'uuid[]', of: 'view' },
+			{ table: 'only_arrays', column: 'ids', type: 'uuid[]', of: 'view' },
+		])
+		expect(module.source).not.toContain('OnlyArraysView')
+		expect(module.source).toContain(
+			"export type Views =\n\t| 'deal_days'\n\t| 'deal_summaries'\n\nexport const columns: TypedColumnList<DB, Views> = {",
+		)
+		expect(module.source).toContain("\t'deal_summaries': {\n\t\tcolumns: [\n\t\t\t'deal_id',")
+		expect(module.source).toContain("\t\tforeignKeys: [],\n\t\tdates: ['opened_on'],\n\t\tview: true,\n\t},\n\t'deal_summaries': {")
 	})
 
 	test('refuses database code no migration declares, and admits what the manifest names', async () => {

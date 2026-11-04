@@ -13,7 +13,7 @@ import {
 	JSON_COLUMN,
 	type LeftOut,
 	leftOutRefusal,
-	type NamedColumn,
+	type RelationColumn,
 	renderTables,
 	type ScalarType,
 } from './codegen'
@@ -46,7 +46,7 @@ const DECLARED_TYPES: ReadonlyMap<string, { readonly scalar: ScalarType; readonl
 	['JSONB', { scalar: JSON_COLUMN, list: 'json' }],
 ])
 
-interface SqliteColumn extends NamedColumn {
+interface SqliteColumn extends RelationColumn {
 	readonly declared: string
 	readonly nullable: boolean
 	/** `always` is a column `GENERATED ALWAYS AS (…)` computes (`hidden` 2 or 3): SQLite has no identity column. */
@@ -83,11 +83,13 @@ function bunTarget(db: Database): SqliteMigrationTarget {
 function describeSqlite(column: SqliteColumn): DescribedColumn | LeftOut {
 	const base = column.declared.trim().toUpperCase().replace(/\s*\(.*\)$/s, '')
 	const mapped = DECLARED_TYPES.get(base)
+	// A view's column has the declared type of the table column it selects; an expression none, or its cast's affinity.
+	if (mapped === undefined && column.view) return { leftOut: column.declared.trim(), of: 'view' }
 	if (mapped === undefined) {
 		const computed = column.generated === 'always'
 		if (computed && column.keyed) throw leftOutRefusal(columnPath(column), 'it is in the primary key or a unique key')
 		// A generated column without a declared type is one its author may mean to read: it is refused, not left out.
-		if (computed && base !== '') return { leftOut: column.declared.trim() }
+		if (computed && base !== '') return { leftOut: column.declared.trim(), of: 'generated' }
 		if (base === 'JSON') {
 			throw new CodegenError(
 				`${
@@ -109,10 +111,10 @@ function primaryKeyOf(db: Database, table: string): string[] {
 	return columns.map((column) => column.name)
 }
 
-/** Every column of the application's ordinary tables, and their foreign keys in declaration order. */
+/** Every column of the application's ordinary tables and views, and the tables' foreign keys in declaration order. */
 function introspect(db: Database): { columns: SqliteColumn[]; foreignKeys: ForeignKeyColumns[] } {
 	const tables = z.array(tableSchema).parse(
-		db.query(`SELECT name, type, wr FROM pragma_table_list WHERE schema = 'main' AND type IN ('table', 'virtual') ORDER BY name`).all(),
+		db.query(`SELECT name, type, wr FROM pragma_table_list WHERE schema = 'main' AND type IN ('table', 'view', 'virtual') ORDER BY name`).all(),
 	).filter((table) => !table.name.startsWith('sqlite_') && !table.name.startsWith('fabrika_'))
 	const columns: SqliteColumn[] = []
 	const foreignKeys: ForeignKeyColumns[] = []
@@ -132,6 +134,7 @@ function introspect(db: Database): { columns: SqliteColumn[]; foreignKeys: Forei
 			columns.push({
 				table_name: table.name,
 				column_name: column.name,
+				view: table.type === 'view',
 				declared: column.type,
 				nullable: !rowid && column.notnull === 0,
 				generated: computed ? 'always' : rowid || column.dflt_value !== null ? 'default' : 'no',

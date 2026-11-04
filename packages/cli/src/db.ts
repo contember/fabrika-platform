@@ -184,7 +184,7 @@ const codegen = async (argv: readonly string[], deps: DbCommandDependencies): Pr
 	const { source, leftOut } = (await dialectAt(deps.cwd)) === 'sqlite' ? await sqliteSchema(deps.cwd) : await postgresSchema(deps)
 	const path = join(deps.cwd, SCHEMA_FILE)
 	// Named on every run, --verify's too, so a column the module leaves out is never silent.
-	for (const column of leftOut) deps.write(`${leftOutText(`${column.table}.${column.column}`, column.type)}\n`)
+	for (const column of leftOut) deps.write(`${leftOutText(`${column.table}.${column.column}`, column.type, column.of)}\n`)
 	if (verify) {
 		const committed = await readFile(path, 'utf8').catch(() => undefined)
 		if (committed !== source) throw new Error(`${SCHEMA_FILE} is stale; run fabrika db codegen and commit the result`)

@@ -1,7 +1,9 @@
 import { describe, expect, test } from 'bun:test'
 import { PolicyError } from '../errors'
 import { modelOf, readTables, tableModels } from '../policy'
+import { tablePolicies } from '../tables'
 import { tables } from './fixtures/tables'
+import { viewColumns, viewVocabulary } from './fixtures/view-layer'
 
 // The refusals run on values nobody type-checked, through `readTables`: the parse `defineTables` runs.
 
@@ -501,5 +503,99 @@ describe('a queue table', () => {
 		expect(() => define(columns, { notes, note_comments: comments, countries: { ...countries, queue: { attempts: 'code', due: 'name' } } })).toThrow(
 			'countries: a reference table is never written by a handler',
 		)
+	})
+})
+
+describe('a view (ADR-0072)', () => {
+	const plain = (value: unknown): unknown => JSON.parse(JSON.stringify(value))
+	const base = {
+		organizations: { scope: { dimension: 'organization' }, actions: { read: 'projects.read' } },
+		projects: { scope: { dimension: 'project' }, actions: { read: 'projects.read' } },
+		events: { scope: { child: 'projects' }, actions: { read: 'projects.read' } },
+	}
+	const summary = { scope: { child: 'projects', key: 'project_id' }, actions: { read: 'projects.read' } }
+	const read = (policies: unknown, columns: unknown = viewColumns) => readTables(plain(columns), plain(policies), plain(viewVocabulary))
+	const refusal = (policies: unknown, columns?: unknown): string => {
+		try {
+			read(policies, columns)
+		} catch (error) {
+			if (error instanceof PolicyError) return error.message
+			throw error
+		}
+		return 'accepted'
+	}
+
+	test('reads as a child keyed by its parent column, with no foreign key, and its artifact says it is a view', () => {
+		const policies = tablePolicies(read({ ...base, project_summaries: summary }))
+		expect(policies['project_summaries']).toEqual({
+			scope: { mode: 'child', parent: 'projects', key: 'project_id', column: 'project_id', inherit: ['organization_id'] },
+			actions: { read: 'projects.read', insert: null, update: null, delete: null },
+			insert: [],
+			update: [],
+			version: null,
+			createdBy: null,
+			columns: {},
+			view: true,
+		})
+		expect(policies['events']).not.toHaveProperty('view')
+		expect(modelOf(tableModels(read({ ...base, project_summaries: summary })), 'project_summaries')?.chain).toEqual([
+			{ dimension: 'project', column: 'project_id' },
+			{ dimension: 'organization', column: 'organization_id' },
+		])
+	})
+
+	test('takes a reference scope', () => {
+		const policies = tablePolicies(read({ ...base, organization_names: { scope: { reference: 'names' }, actions: { read: 'projects.read' } } }))
+		expect(policies['organization_names']?.scope).toEqual({ mode: 'reference', reason: 'names' })
+		expect(policies['organization_names']?.view).toBe(true)
+	})
+
+	test('refuses a dimension or an application scope, whose rows are written', () => {
+		expect(refusal({ ...base, project_summaries: { ...summary, scope: { dimension: 'project', key: 'project_id' } } })).toBe(
+			"project_summaries: a view is read-only, so it takes a child scope, { child, key?, column?, inherit? }, or { reference }; a dimension table's rows are written",
+		)
+		expect(refusal({ ...base, project_summaries: { ...summary, scope: { app: 'why', key: 'project_id' } } })).toContain(
+			"or { reference }; an application table's rows are written",
+		)
+	})
+
+	test('refuses every field that writes', () => {
+		const writes: readonly Record<string, unknown>[] = [
+			{ actions: { read: 'projects.read', insert: 'projects.write' }, insert: ['name'] },
+			{ actions: { read: 'projects.read', insert: 'projects.write' } },
+			{ actions: { read: 'projects.read', update: 'projects.write' } },
+			{ actions: { read: 'projects.read', delete: 'projects.write' } },
+			{ update: ['name'] },
+			{ version: 'events' },
+			{ createdBy: 'name' },
+			{ columns: { name: { write: 'projects.write' } } },
+			{ files: { name: 'document' } },
+			{ queue: { due: 'events' } },
+		]
+		for (const write of writes) {
+			expect(refusal({ ...base, project_summaries: { ...summary, ...write } })).toBe(
+				'project_summaries: a view is never written by a handler, so its policy takes only actions.read, appRead, appCount and column read actions',
+			)
+		}
+	})
+
+	test('carries its whole chain, though no foreign key ties it; only a view shares its key with its parent column', () => {
+		const withoutChain = { ...viewColumns, project_summaries: { ...viewColumns.project_summaries, columns: ['project_id', 'name', 'events'] } }
+		expect(refusal({ ...base, project_summaries: summary }, withoutChain)).toBe(
+			'project_summaries: must carry organization_id, because it lies in organization; a row carries its whole containment chain',
+		)
+		expect(refusal({ ...base, events: { ...base.events, scope: { child: 'projects', key: 'project_id' } } })).toBe(
+			'events: project_id is both the key and the project containment column; the layer stamps each, so they need distinct columns',
+		)
+		expect(refusal({ ...base, project_summaries: summary }, { ...viewColumns, events: { ...viewColumns.events, foreignKeys: [] } })).toContain(
+			'events: project_id is not a foreign key to projects.id',
+		)
+	})
+
+	test('needs no policy, while a table still does; the entry says view only as true', () => {
+		expect(Object.keys(tablePolicies(read(base))).sort()).toEqual(['events', 'organizations', 'projects'])
+		expect(refusal({ organizations: base.organizations, projects: base.projects })).toBe('events: every table needs a policy in tables.ts')
+		const notTrue = { ...viewColumns, project_summaries: { ...viewColumns.project_summaries, view: false } }
+		expect(refusal({ ...base, project_summaries: summary }, notTrue)).toBe("project_summaries: the column list entry's view is true or absent")
 	})
 })
