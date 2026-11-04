@@ -3,7 +3,8 @@
 // limit makes it due at once; a claim that found nothing writes none. Rows the claim cannot take (another `where`, a
 // result its null test excludes, past their attempts) never pull the wake forward, so the job does not loop on them.
 // On a REAL Postgres (skips cleanly without FABRIKA_TEST_POSTGRES_URL) and over bun:sqlite under the Cloudflare
-// object's alarm.
+// object's alarm. The one-second floor is measured by the database's clock, which no test holds still, so its cases
+// are `claimRearmAt`'s, under a fixed clock (`packages/db/src/__tests__/claim-rearm.test.ts`).
 
 import { defineApp, defineVocabulary } from '@fabrika/app/contract'
 import { serve } from '@fabrika/app/implement'
@@ -269,17 +270,6 @@ describe.skipIf(!hasPostgres)('a claim re-arms its job on Postgres', () => {
 		const [wake, ...more] = await pgClaimWakes()
 		expect(more).toEqual([])
 		expect(wake?.due_at).toBeLessThanOrEqual(await pgNow())
-	})
-
-	test('a claim re-arms no sooner than a second after it, though a row comes due sooner', async () => {
-		const now = Date.now()
-		await placeRows([{ id: 'r1', kind: 'summary', due: now - MINUTE }, { id: 'r8', kind: 'summary', due: now + 100 }])
-		const kit = pgKit()
-		const before = await pgNow()
-		expect(await kit.runJob('render')).toEqual({ status: 'succeeded', attempts: 1 })
-		const [wake] = await pgClaimWakes()
-		expect(wake?.due_at).toBeGreaterThanOrEqual(before + SECOND)
-		expect(wake?.due_at).toBeLessThanOrEqual((await pgNow()) + SECOND)
 	})
 })
 
