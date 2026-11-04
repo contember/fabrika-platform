@@ -76,12 +76,17 @@ describe('cross-app-fetch', () => {
 				"'https://*.tenants.example.com'",
 				'https://${tenant}.tenants.example.com/v1',
 				'https://${tenant}.tenants.example.com?x=1',
+				'https://${tenant}.Tenants.Example.com:443/v1',
+				'https://${tenant}.tenants.example.com./v1',
 				'https://${tenant}.other.example.com/v1',
 				'https://${tenant}.tenants.example.com${tenant}/',
 				'https://${tenant}.tenants.example.com:8443/',
 			),
 		)
 		expect(found).toHaveLength(3)
+		expect(await findingsOf('cross-app-fetch', templated("'https://*.xn--bcher-kva.de'", 'https://${tenant}.bücher.de/v1'))).toEqual([])
+		expect(await findingsOf('cross-app-fetch', templated("'https://acme.tenants.example.com'", 'https://${tenant}.tenants.example.com/v1')))
+			.toHaveLength(1)
 	})
 
 	test('refuses every absolute URL where no site declares egress', async () => {

@@ -234,9 +234,10 @@ const isDeclaredFetch = (fetch: { readonly target: string; readonly labelled: st
 	const authority = /^https:\/\/[^/?#]+[/?#]/.exec(fetch.target)?.[0]
 	const url = authority === undefined ? null : urlOf(authority)
 	if (url !== null && egressAdmits(egress, url)) return true
-	const labelled = fetch.labelled?.toLowerCase()
-	return labelled !== undefined
-		&& egress.some((entry) => entry.kind === 'pattern' && labelled === `*.${entry.domain}${entry.port === '' ? '' : `:${entry.port}`}`)
+	// The interpolated label as a placeholder one, so the authority normalizes as the runtime's URL will; exact
+	// origins stay out, as no literal label is known.
+	const labelled = fetch.labelled === undefined ? null : urlOf(`https://${fetch.labelled.replace('*', 'label')}/`)
+	return labelled !== null && egressAdmits(egress.filter((entry) => entry.kind === 'pattern'), labelled)
 }
 
 const urlOf = (value: string): URL | null => {
