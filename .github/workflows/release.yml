@@ -19,6 +19,8 @@ jobs:
   publish:
     needs: verify
     runs-on: ubuntu-latest
+    # why: the job took 6–15 minutes over the last 20 releases, most of it in release:registry-smoke, whose wait for npm
+    # to serve the new tarballs may run to 30 minutes (REGISTRY_DEADLINE_MS).
     timeout-minutes: 45
     env:
       RELEASE_TAG: ${{ github.ref_name }}
@@ -52,6 +54,7 @@ jobs:
     # A prerelease publishes under its channel's dist-tag or `next` (`releaseDistTag` in scripts/release.ts); the mirror's main follows `latest`.
     if: ${{ !contains(github.ref_name, '-') }}
     runs-on: ubuntu-latest
+    # why: the install below retries for up to 5 minutes while npm replicates the new tarballs; runs took up to 4 minutes.
     timeout-minutes: 15
     env:
       RELEASE_TAG: ${{ github.ref_name }}

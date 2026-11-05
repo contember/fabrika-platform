@@ -48,7 +48,7 @@ jobs:
   test:
     name: Test with PostgreSQL ${{ matrix.postgres }} and S3
     runs-on: ubuntu-latest
-    # why: the suite takes 12–15 minutes on a hosted runner, so 10 would fail every run.
+    # why: the suite takes 11–17 minutes on a hosted runner, so 10 would fail every run.
     timeout-minutes: 20
     strategy:
       fail-fast: false
