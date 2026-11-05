@@ -19,6 +19,7 @@ jobs:
   quality:
     name: Quality
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
 
@@ -38,12 +39,17 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
+      - name: Typecheck the examples with their own TypeScript
+        run: bun run --filter 'fabrika-example-*' typecheck
+
       - name: Check generated Zerops artifacts
         run: bun run --filter @fabrika/platform-artifacts gen:check
 
   test:
     name: Test with PostgreSQL ${{ matrix.postgres }} and S3
     runs-on: ubuntu-latest
+    # why: the suite takes 11–17 minutes on a hosted runner, so 10 would fail every run.
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -102,6 +108,7 @@ jobs:
   build:
     name: Build deployable artifacts
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
 
@@ -121,6 +128,7 @@ jobs:
   release-artifacts:
     name: Verify release artifacts
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
 

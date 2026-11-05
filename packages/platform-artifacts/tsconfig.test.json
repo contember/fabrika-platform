@@ -1,0 +1,37 @@
+{
+	"extends": [
+		"./tsconfig.json",
+		"../../tsconfig.solution.json"
+	],
+	"compilerOptions": {
+		"outDir": "${configDir}/.tsbuild/test",
+		"composite": false,
+		"noEmit": true,
+		"emitDeclarationOnly": false
+	},
+	"include": [
+		"src/**/__tests__/**/*",
+		"src/**/*.test.ts",
+		"src/**/*.test.tsx",
+		"schemas/**/__tests__/**/*",
+		"schemas/**/*.test.ts",
+		"schemas/**/*.test.tsx"
+	],
+	"exclude": [],
+	"references": [
+		{ "path": "../../examples/tsconfig.zerops-app.json" },
+		{ "path": "../auth-core/tsconfig.lib.json" },
+		{ "path": "../control-contract/tsconfig.lib.json" },
+		{ "path": "../control/tsconfig.lib.json" },
+		{ "path": "../iam/tsconfig.lib.json" },
+		{ "path": "../iam/tsconfig.test.json" },
+		{ "path": "../installation-init/tsconfig.lib.json" },
+		{ "path": "../operations-contract/tsconfig.lib.json" },
+		{ "path": "../operations/tsconfig.lib.json" },
+		{ "path": "./tsconfig.lib.json" },
+		{ "path": "../provider-zerops/tsconfig.lib.json" },
+		{ "path": "../proxy-core/tsconfig.lib.json" },
+		{ "path": "../proxy-core/tsconfig.test.json" },
+		{ "path": "../proxy/tsconfig.lib.json" }
+	]
+}

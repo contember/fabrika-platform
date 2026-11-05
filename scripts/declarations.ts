@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { dirname, join, relative, resolve, sep } from 'node:path'
-import ts from 'typescript'
+import ts from 'typescript-platform'
 import { z } from 'zod'
 
 /** The directory of a packed package that holds its emitted declarations, mirroring the package's own tree. */
@@ -75,6 +75,20 @@ const insideDirectory = (directory: string, path: string): boolean => {
 	return fromDirectory !== '' && !fromDirectory.startsWith('..') && !fromDirectory.startsWith(sep)
 }
 
+/** The compiler options of a package's own `tsconfig.json`, its `extends` chain resolved, with `overrides` on top. */
+const packageCompilerOptions = (packageDirectory: string, overrides: ts.CompilerOptions): ts.CompilerOptions => {
+	const configErrors: ts.Diagnostic[] = []
+	const parsed = ts.getParsedCommandLineOfConfigFile(
+		join(packageDirectory, 'tsconfig.json'),
+		overrides,
+		{ ...ts.sys, onUnRecoverableConfigFileDiagnostic: (diagnostic) => configErrors.push(diagnostic) },
+	)
+	if (parsed === undefined || configErrors.length > 0) {
+		throw new Error(`${packageDirectory}: its tsconfig.json does not parse\n${formatDiagnostics(configErrors, packageDirectory)}`)
+	}
+	return parsed.options
+}
+
 /**
  * Emits the declarations of `sources` (absolute paths of the TypeScript modules a package ships) under
  * `<outDirectory>/types`, with the compiler options of the package's own `tsconfig.json`, and returns the written
@@ -83,25 +97,17 @@ const insideDirectory = (directory: string, path: string): boolean => {
  */
 export const emitDeclarations = (packageDirectory: string, sources: readonly string[], outDirectory: string): readonly string[] => {
 	const declarationRoot = join(outDirectory, DECLARATION_DIRECTORY)
-	const configErrors: ts.Diagnostic[] = []
-	const parsed = ts.getParsedCommandLineOfConfigFile(
-		join(packageDirectory, 'tsconfig.json'),
-		{
-			noEmit: false,
-			declaration: true,
-			emitDeclarationOnly: true,
-			declarationMap: false,
-			sourceMap: false,
-			rootDir: packageDirectory,
-			outDir: declarationRoot,
-		},
-		{ ...ts.sys, onUnRecoverableConfigFileDiagnostic: (diagnostic) => configErrors.push(diagnostic) },
-	)
-	if (parsed === undefined || configErrors.length > 0) {
-		throw new Error(`${packageDirectory}: its tsconfig.json does not parse\n${formatDiagnostics(configErrors, packageDirectory)}`)
-	}
+	const options = packageCompilerOptions(packageDirectory, {
+		noEmit: false,
+		declaration: true,
+		emitDeclarationOnly: true,
+		declarationMap: false,
+		sourceMap: false,
+		rootDir: packageDirectory,
+		outDir: declarationRoot,
+	})
 	const rootNames = sources.filter(isSourceModule)
-	const program = ts.createProgram({ rootNames, options: parsed.options })
+	const program = ts.createProgram({ rootNames, options })
 	const written: string[] = []
 	const emitted = program.emit(
 		undefined,
@@ -137,15 +143,11 @@ export interface DeclaredPackage {
 	readonly types: readonly string[] | null
 }
 
-const tsconfigTypesSchema = z.object({ compilerOptions: z.object({ types: z.array(z.string()).optional() }).optional() })
-
-/** The `compilerOptions.types` of a package's `tsconfig.json`, or `null` when it names none. */
-export const tsconfigTypes = async (packageDirectory: string): Promise<readonly string[] | null> => {
-	const path = join(packageDirectory, 'tsconfig.json')
-	const { config, error } = ts.parseConfigFileTextToJson(path, await readFile(path, 'utf8'))
-	if (error !== undefined) throw new Error(`${path}: ${ts.flattenDiagnosticMessageText(error.messageText, '\n')}`)
-	return tsconfigTypesSchema.parse(config, { path: [path] }).compilerOptions?.types ?? null
-}
+/**
+ * The `types` the declaration emit compiles a package with: its `tsconfig.json`'s, `extends` included, or `null` when
+ * that chain names none.
+ */
+export const tsconfigTypes = (packageDirectory: string): readonly string[] | null => packageCompilerOptions(packageDirectory, {}).types ?? null
 
 const installedExportsSchema = z.object({ exports: z.record(z.string(), z.unknown()).optional() })
 

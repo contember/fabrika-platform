@@ -1,0 +1,19 @@
+{
+	"extends": "./tsconfig.json",
+	"compilerOptions": {
+		"incremental": true,
+		"tsBuildInfoFile": "./.tsbuild/build.tsbuildinfo"
+	},
+	"include": [
+		"src/**/*",
+		"vite.config.ts",
+		"package.json"
+	],
+	"references": [
+		{ "path": "../app/tsconfig.lib.json" },
+		{ "path": "../control-contract/tsconfig.lib.json" },
+		{ "path": "../iam-contract/tsconfig.lib.json" },
+		{ "path": "../operations-contract/tsconfig.lib.json" },
+		{ "path": "../proxy-core/tsconfig.lib.json" }
+	]
+}

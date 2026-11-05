@@ -1,0 +1,39 @@
+{
+	"extends": [
+		"./tsconfig.json",
+		"../../tsconfig.solution.json"
+	],
+	"compilerOptions": {
+		"outDir": "${configDir}/.tsbuild/test"
+	},
+	"include": [
+		"src/**/__tests__/**/*",
+		"src/**/*.test.ts",
+		"src/**/*.test.tsx",
+		"package.json"
+	],
+	"exclude": [
+		"src/__tests__/contract-mistakes",
+		"src/__tests__/implement-mistakes",
+		"src/__tests__/client-mistakes",
+		"src/__tests__/job-mistakes",
+		"src/__tests__/kit-mistakes",
+		"src/__tests__/orm-mistakes",
+		"src/__tests__/colocated-mistakes"
+	],
+	"references": [
+		{ "path": "./tsconfig.lib.json" },
+		{ "path": "../auth-core/tsconfig.lib.json" },
+		{ "path": "../auth-core/tsconfig.test.json" },
+		{ "path": "../auth/tsconfig.lib.json" },
+		{ "path": "../check/tsconfig.lib.json" },
+		{ "path": "../db/tsconfig.lib.json" },
+		{ "path": "../db/tsconfig.test.json" },
+		{ "path": "../email/tsconfig.lib.json" },
+		{ "path": "../jwks/tsconfig.lib.json" },
+		{ "path": "../platform-node/tsconfig.lib.json" },
+		{ "path": "../platform/tsconfig.lib.json" },
+		{ "path": "../proxy-core/tsconfig.lib.json" },
+		{ "path": "../proxy-core/tsconfig.test.json" }
+	]
+}

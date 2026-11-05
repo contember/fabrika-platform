@@ -38,7 +38,7 @@
 		}
 	},
 	"scripts": {
-		"typecheck": "tsc --noEmit",
+		"typecheck": "tsrs --build tsconfig.test.json",
 		"test": "bun test",
 		"gen:schema": "bun scripts/generate-zerops-types.ts"
 	},

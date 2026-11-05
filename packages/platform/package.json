@@ -27,7 +27,7 @@
 		}
 	},
 	"scripts": {
-		"typecheck": "tsc --noEmit",
+		"typecheck": "tsrs --build tsconfig.test.json",
 		"test": "bun test"
 	},
 	"devDependencies": {

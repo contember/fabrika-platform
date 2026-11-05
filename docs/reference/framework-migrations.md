@@ -104,6 +104,10 @@ gets no daily backup, migration phase or side restore: its object answers only `
 names the release it read the application with, and the deployer gives that Worker no object, bucket, tick or proxy
 secret, and refuses its jobs, webhooks, public procedures, installation mail and token purposes as before.
 
+`EndpointBuilder` (`@fabrika/app/contract`), an endpoint before `.handle`, is invariant in each of its type parameters.
+On 0.8 a builder was assignable to some builders of other type arguments, for example one with a wider procedure type
+or declaration; a variable or parameter typed that way is now a type error. Let such a variable's type be inferred.
+
 0.9 also adds the dev launcher (`@fabrika/app/dev`), which a `dev` environment starts
 ([MCP authoring](mcp-authoring.md#the-dev-environment)); an application needs 0.9 only for a `dev` environment.
 

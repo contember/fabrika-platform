@@ -16,7 +16,7 @@
 		}
 	},
 	"scripts": {
-		"typecheck": "tsc --noEmit",
+		"typecheck": "tsrs --build tsconfig.test.json",
 		"test": "bun test",
 		"dev": "bun run src/main.ts",
 		"build": "bun run src/generate-config.ts && bun build --compile --target=bun-linux-x64-musl ./src/main.ts --outfile ./dist/fabrika-proxy",

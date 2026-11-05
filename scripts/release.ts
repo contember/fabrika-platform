@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { cp, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, relative, resolve } from 'node:path'
-import ts from 'typescript'
+import ts from 'typescript-platform'
 import { z } from 'zod'
 import { checkConsumerDeclarations, declarationManifest, emitDeclarations, shipsDeclarations, tsconfigTypes } from './declarations'
 
@@ -718,7 +718,7 @@ const runConsumerSmoke = async (
 		for (const name of COMMAND_ONLY_PACKAGES) await run([join(consumer, 'node_modules', '.bin', name), '--help'], { cwd: consumer })
 		await checkConsumerDeclarations(
 			consumer,
-			await Promise.all(packages.map(async (item) => ({ name: item.name, types: await tsconfigTypes(item.directory) }))),
+			packages.map((item) => ({ name: item.name, types: tsconfigTypes(item.directory) })),
 		)
 		console.info(`${label}: the declarations of every typed entry resolve in an isolated consumer`)
 		console.info(`${label} passed for ${Object.keys(dependencies).length} packages in an isolated consumer`)

@@ -4,7 +4,7 @@
 
 import { describe, expect, test } from 'bun:test'
 import { join } from 'node:path'
-import ts from 'typescript'
+import ts from 'typescript-platform'
 
 const packageDir = join(import.meta.dir, '..', '..')
 const attacksFile = join(import.meta.dir, 'type-attacks', 'attacks.ts')

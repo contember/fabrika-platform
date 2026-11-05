@@ -1,0 +1,35 @@
+{
+	"extends": [
+		"./tsconfig.json",
+		"../../tsconfig.solution.json"
+	],
+	"compilerOptions": {
+		"outDir": "${configDir}/.tsbuild/test",
+		"composite": false,
+		"noEmit": true,
+		"emitDeclarationOnly": false
+	},
+	"include": [
+		"shared/**/*.test.ts",
+		"shared/**/*.test.tsx",
+		"cli/src/**/*.test.ts",
+		"cli/src/**/*.test.tsx",
+		"cli/test",
+		"daemon/src/**/*.test.ts",
+		"daemon/src/**/*.test.tsx",
+		"daemon/test",
+		"ui/src/**/*.test.ts",
+		"ui/src/**/*.test.tsx",
+		"ui/test"
+	],
+	"exclude": [],
+	"references": [
+		{ "path": "../annotations/tsconfig.lib.json" },
+		{ "path": "../app/tsconfig.lib.json" },
+		{ "path": "../auth-core/tsconfig.lib.json" },
+		{ "path": "./tsconfig.lib.json" },
+		{ "path": "../canvas-kernel/tsconfig.lib.json" },
+		{ "path": "../control-contract/tsconfig.lib.json" },
+		{ "path": "../daemon-kit/tsconfig.lib.json" }
+	]
+}

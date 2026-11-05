@@ -1,0 +1,25 @@
+{
+	"extends": [
+		"./tsconfig.json",
+		"../../tsconfig.solution.json"
+	],
+	"include": [
+		"src/**/*",
+		"package.json"
+	],
+	"exclude": [
+		"**/__tests__",
+		"**/*.test.ts",
+		"**/*.test.tsx"
+	],
+	"references": [
+		{ "path": "../auth-core/tsconfig.lib.json" },
+		{ "path": "../auth/tsconfig.lib.json" },
+		{ "path": "../db/tsconfig.lib.json" },
+		{ "path": "../email/tsconfig.lib.json" },
+		{ "path": "../jwks/tsconfig.lib.json" },
+		{ "path": "../platform-node/tsconfig.lib.json" },
+		{ "path": "../platform/tsconfig.lib.json" },
+		{ "path": "../proxy-core/tsconfig.lib.json" }
+	]
+}

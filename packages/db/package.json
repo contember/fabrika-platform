@@ -87,7 +87,7 @@
 		}
 	},
 	"scripts": {
-		"typecheck": "tsc --noEmit",
+		"typecheck": "tsrs --build tsconfig.test.json",
 		"test": "bun test"
 	},
 	"dependencies": {
@@ -100,7 +100,8 @@
 	},
 	"devDependencies": {
 		"@types/bun": "^1.4.3",
-		"typescript": "^5.9.3",
+		"typescript": "^7.0.2",
+		"typescript-platform": "npm:typescript@5.9.3",
 		"@fabrika/check": "workspace:*"
 	}
 }

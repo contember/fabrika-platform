@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'fs'
 import { join, relative, resolve } from 'path'
-import ts from 'typescript'
+import ts from 'typescript-platform'
 
 const root = resolve(import.meta.dir, '..')
 

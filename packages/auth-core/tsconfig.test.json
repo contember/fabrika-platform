@@ -1,0 +1,18 @@
+{
+	"extends": [
+		"./tsconfig.json",
+		"../../tsconfig.solution.json"
+	],
+	"compilerOptions": {
+		"outDir": "${configDir}/.tsbuild/test"
+	},
+	"include": [
+		"src/**/__tests__/**/*",
+		"src/**/*.test.ts",
+		"src/**/*.test.tsx"
+	],
+	"exclude": [],
+	"references": [
+		{ "path": "./tsconfig.lib.json" }
+	]
+}

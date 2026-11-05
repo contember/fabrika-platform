@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'fs'
 import { join, resolve } from 'path'
-import ts from 'typescript'
+import ts from 'typescript-platform'
 
 // workerd refuses the global `fetch` called with any other `this` ("Illegal invocation"); Bun does not, so no test of
 // the code that stores it notices. Stored as a property, a parameter property or an object field, it is called as a

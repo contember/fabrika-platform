@@ -21,7 +21,7 @@
 		}
 	},
 	"scripts": {
-		"typecheck": "tsc --noEmit"
+		"typecheck": "tsrs --build tsconfig.lib.json"
 	},
 	"dependencies": {
 		"@fabrika/app": "workspace:*",

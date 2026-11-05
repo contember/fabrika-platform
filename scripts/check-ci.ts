@@ -27,6 +27,7 @@ export const QUALITY_STEPS: readonly CiStep[] = [
 	{ job: 'quality', name: 'Check formatting', run: 'bun run format:check' },
 	{ job: 'quality', name: 'Lint', run: 'bun run lint' },
 	{ job: 'quality', name: 'Typecheck', run: 'bun run typecheck' },
+	{ job: 'quality', name: 'Typecheck the examples with their own TypeScript', run: "bun run --filter 'fabrika-example-*' typecheck" },
 	{ job: 'quality', name: 'Check generated Zerops artifacts', run: 'bun run --filter @fabrika/platform-artifacts gen:check' },
 ]
 

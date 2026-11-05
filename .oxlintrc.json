@@ -8,6 +8,7 @@
 		"**/node_modules/**",
 		"**/dist/**",
 		"**/.tsc-out/**",
+		"**/.tsbuild/**",
 		"**/.mine/**",
 		".claude/**",
 		"**/*.js",

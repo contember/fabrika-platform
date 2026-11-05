@@ -1,0 +1,31 @@
+{
+	"extends": [
+		"./tsconfig.json",
+		"../../tsconfig.solution.json"
+	],
+	"compilerOptions": {
+		"outDir": "${configDir}/.tsbuild/test",
+		"composite": false,
+		"noEmit": true,
+		"emitDeclarationOnly": false
+	},
+	"include": [
+		"src/**/__tests__/**/*",
+		"src/**/*.test.ts",
+		"src/**/*.test.tsx"
+	],
+	"exclude": [],
+	"references": [
+		{ "path": "../../examples/tsconfig.app.json" },
+		{ "path": "../app/tsconfig.lib.json" },
+		{ "path": "../app/tsconfig.test.json" },
+		{ "path": "../auth-core/tsconfig.lib.json" },
+		{ "path": "../auth-core/tsconfig.test.json" },
+		{ "path": "../email/tsconfig.lib.json" },
+		{ "path": "../installation-init/tsconfig.lib.json" },
+		{ "path": "./tsconfig.lib.json" },
+		{ "path": "../provider-contract/tsconfig.lib.json" },
+		{ "path": "../proxy-core/tsconfig.lib.json" },
+		{ "path": "../proxy-core/tsconfig.test.json" }
+	]
+}

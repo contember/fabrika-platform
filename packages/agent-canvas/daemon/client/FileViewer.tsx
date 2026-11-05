@@ -2,7 +2,7 @@ import { SessionContext } from '#canvas/runtime'
 import type { AnnotationContext } from '#canvas/runtime'
 import { wrapRangeWithMark } from '@fabrika/annotations'
 import { useTextAnnotation } from '@fabrika/annotations'
-import { filePreviewResponseSchema, useAnnotations } from '@fabrika/canvas-kernel/client'
+import { filePreviewResponseSchema, pageHighlighter, useAnnotations } from '@fabrika/canvas-kernel/client'
 import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { LANG_MAP } from '../langMap'
 import { FS_AVAILABLE } from './clientApi'
@@ -196,7 +196,7 @@ function LocalFileViewer({ path }: FileViewerProps) {
 	// Highlight content
 	const highlightedLines = useMemo(() => {
 		if (!content) return null
-		const hljs = window.hljs
+		const hljs = pageHighlighter()
 		if (!hljs) return null
 		const ext = path.split('.').pop() || ''
 		const lang = LANG_MAP[ext]

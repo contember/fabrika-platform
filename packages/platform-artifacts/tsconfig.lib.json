@@ -1,0 +1,25 @@
+{
+	"extends": [
+		"./tsconfig.json",
+		"../../tsconfig.solution.json"
+	],
+	"include": [
+		"src/**/*",
+		"schemas/**/*"
+	],
+	"exclude": [
+		"**/__tests__",
+		"**/*.test.ts",
+		"**/*.test.tsx"
+	],
+	"references": [
+		{ "path": "../auth-core/tsconfig.lib.json" },
+		{ "path": "../control-contract/tsconfig.lib.json" },
+		{ "path": "../control/tsconfig.lib.json" },
+		{ "path": "../iam/tsconfig.lib.json" },
+		{ "path": "../installation-init/tsconfig.lib.json" },
+		{ "path": "../operations-contract/tsconfig.lib.json" },
+		{ "path": "../operations/tsconfig.lib.json" },
+		{ "path": "../provider-zerops/tsconfig.lib.json" }
+	]
+}

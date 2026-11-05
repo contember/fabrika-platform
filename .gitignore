@@ -4,6 +4,7 @@ dist/
 .smellhunt/
 .lopata/
 *.tsbuildinfo
+.tsbuild/
 **/buzola.gen.ts
 **/worker-configuration.d.ts
 .wrangler/

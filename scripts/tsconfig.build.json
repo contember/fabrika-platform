@@ -1,0 +1,17 @@
+{
+	"extends": "./tsconfig.json",
+	"compilerOptions": {
+		"incremental": true,
+		"tsBuildInfoFile": "./.tsbuild/build.tsbuildinfo"
+	},
+	"references": [
+		{ "path": "../packages/annotations/tsconfig.lib.json" },
+		{ "path": "../packages/app/tsconfig.lib.json" },
+		{ "path": "../packages/builder/tsconfig.lib.json" },
+		{ "path": "../packages/canvas-kernel/tsconfig.lib.json" },
+		{ "path": "../packages/control/tsconfig.lib.json" },
+		{ "path": "../packages/daemon-kit/tsconfig.lib.json" },
+		{ "path": "../packages/provider-cloudflare/tsconfig.lib.json" },
+		{ "path": "../packages/provider-zerops/tsconfig.lib.json" }
+	]
+}

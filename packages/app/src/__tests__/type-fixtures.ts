@@ -7,7 +7,7 @@
 import { expect, test } from 'bun:test'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
-import ts from 'typescript'
+import ts from 'typescript-platform'
 
 const packageDir = join(import.meta.dir, '..', '..')
 

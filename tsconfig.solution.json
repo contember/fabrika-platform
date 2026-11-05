@@ -1,0 +1,11 @@
+{
+	// What every lib and test project of the solution build (root tsconfig.json) adds to its package's tsconfig.json.
+	"compilerOptions": {
+		"composite": true,
+		"incremental": true,
+		"noEmit": false,
+		"declaration": true,
+		"emitDeclarationOnly": true,
+		"outDir": "${configDir}/.tsbuild/lib"
+	}
+}
