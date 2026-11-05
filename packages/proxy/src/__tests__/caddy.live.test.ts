@@ -39,6 +39,16 @@ const DOWNLOAD = endpointRow({
 	admission: null,
 })
 const DOWNLOAD_ENDPOINT = `${DOWNLOAD.id}@${DOWNLOAD.digest}`
+/** A public feed of an `inline: true` file kind: its XML documents are shown too. */
+const FEED = anonymousRow({
+	id: 'api.published.feed',
+	kind: 'public',
+	method: 'GET',
+	path: '/feeds/:name',
+	admission: null,
+	response: 'inline-file',
+})
+const FEED_ENDPOINT = `${FEED.id}@${FEED.digest}`
 /** A public GET query whose successful answers a browser may reuse for a minute (`http.cache`). */
 const CACHED = anonymousRow({
 	id: 'api.catalog.products',
@@ -83,6 +93,14 @@ const APP_ANSWERS: Record<string, { readonly fields: [string, string][]; readonl
 	'/api/files.avatar/blob': { fields: [['Content-Type', 'application/octet-stream'], ['Cache-Control', 'public, max-age=3600']] },
 	'/api/files.avatar/mixed': { fields: [['Content-Type', 'image/png'], ['Content-Type', 'text/html'], ['Content-Disposition', 'inline']] },
 	'/api/files.avatar/early': { fields: [['Content-Type', 'image/png']], informational: EARLY_HINTS },
+	'/api/files.avatar/xml': { fields: [['Content-Type', 'application/rss+xml'], ['Content-Disposition', 'inline']] },
+	'/feeds/rss': { fields: [['Content-Type', 'application/rss+xml'], ['Content-Disposition', "attachment; filename*=UTF-8''feed.xml"]] },
+	'/feeds/sitemap': { fields: [['Content-Type', 'text/xml']] },
+	'/feeds/photo': { fields: [['Content-Type', 'image/png']] },
+	'/feeds/page': { fields: [['Content-Type', 'text/html'], ['Content-Disposition', 'inline']] },
+	'/feeds/drawing': { fields: [['Content-Type', 'image/svg+xml'], ['Content-Disposition', 'inline']] },
+	'/feeds/xhtml': { fields: [['Content-Type', 'application/xhtml+xml'], ['Content-Disposition', 'inline']] },
+	'/feeds/mixed': { fields: [['Content-Type', 'application/xml'], ['Content-Type', 'text/html'], ['Content-Disposition', 'inline']] },
 	'/api/pinned': { fields: [['Strict-Transport-Security', 'max-age=999; includeSubDomains']] },
 	'/api/files.avatar/pinned': { fields: [['Content-Type', 'image/png'], ['Strict-Transport-Security', 'max-age=999; includeSubDomains']] },
 }
@@ -161,7 +179,13 @@ describe.skipIf(CADDY === '')('the generated chain in a running Caddy', () => {
 		fetch(request) {
 			seenByAuth.push(request.headers)
 			const uri = request.headers.get('X-Forwarded-Uri') ?? ''
-			const endpoint = uri.startsWith('/api/files.avatar/') ? DOWNLOAD_ENDPOINT : uri.startsWith('/api/catalog.') ? CACHED_ENDPOINT : ENDPOINT
+			const endpoint = uri.startsWith('/api/files.avatar/')
+				? DOWNLOAD_ENDPOINT
+				: uri.startsWith('/api/catalog.')
+				? CACHED_ENDPOINT
+				: uri.startsWith('/feeds/')
+				? FEED_ENDPOINT
+				: ENDPOINT
 			return new Response(null, {
 				status: 200,
 				headers: { 'X-Fabrika-Token': 'proxy-token', 'X-Request-Id': 'proxy-request', 'X-Fabrika-Endpoint': endpoint },
@@ -191,7 +215,7 @@ describe.skipIf(CADDY === '')('the generated chain in a running Caddy', () => {
 		hosts: ['127.0.0.1'],
 		upstream: `127.0.0.1:${app.port}`,
 		scheme: 'https',
-		endpoints: [DOWNLOAD, CACHED],
+		endpoints: [DOWNLOAD, CACHED, FEED],
 		reservedPrefixes: [],
 		snapshot: `sha256:${'0'.repeat(64)}`,
 		csp: { ...NO_CSP_ORIGINS, connectSrc: ['https://api.maps.example'] },
@@ -349,6 +373,27 @@ describe.skipIf(CADDY === '')('the generated chain in a running Caddy', () => {
 			expect(answer.headers.get('Permissions-Policy')).toBeNull()
 		}
 		expect(seenByApp.splice(0).map((headers) => headers.get('X-Fabrika-Proxy-Secret'))).toEqual([SECRET, SECRET, SECRET, SECRET])
+	})
+
+	test('an inline-file row shows an XML document; HTML, SVG, XHTML and a repeated type stay attachments, and XML on a download', async () => {
+		const cases: [path: string, disposition: string][] = [
+			['/feeds/rss', "inline; filename*=UTF-8''feed.xml"],
+			['/feeds/sitemap', 'inline'],
+			['/feeds/photo', 'inline'],
+			['/feeds/page', 'attachment'],
+			['/feeds/drawing', 'attachment'],
+			['/feeds/xhtml', 'attachment'],
+			['/feeds/mixed', 'attachment'],
+			['/api/files.avatar/xml', 'attachment'],
+		]
+		for (const [path, disposition] of cases) {
+			const answer = await rawRequest(port, { Connection: 'close' }, path)
+			expect(answer.status).toBe(200)
+			expect(answer.headers.get('Content-Disposition')).toBe(disposition)
+			for (const [name, value] of FILE_TREATMENT) {
+				expect(answer.headers.get(name)).toBe(value)
+			}
+		}
 	})
 
 	test('the reporting headers an application sends never reach the client, on an answer or a download', async () => {

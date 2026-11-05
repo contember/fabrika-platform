@@ -2,6 +2,8 @@
 // a file is stored only when its bytes are that type. A collection may admit only the types listed here, because
 // the framework cannot verify any other.
 
+import { INLINE_DOCUMENT_TYPES } from '@fabrika/proxy-core/headers'
+
 /** How many leading bytes an upload is judged by. */
 export const SNIFF_BYTES = 512
 
@@ -45,7 +47,10 @@ const BINARY_SIGNATURES: readonly Signature[] = [
 /** Types judged as text: UTF-8 without NUL bytes, and no binary signature. SVG is text, and always an attachment. */
 const TEXT_TYPES: readonly string[] = ['text/plain', 'text/csv', 'text/markdown', 'application/json', 'image/svg+xml']
 
-export const SNIFFABLE_TYPES: readonly string[] = [...BINARY_SIGNATURES.flatMap((signature) => signature.types), ...TEXT_TYPES]
+/** XML documents (a feed, a sitemap), the ones an inline kind shows: text whose first character, after a BOM and white space, is `<`. */
+const XML_TYPES: readonly string[] = INLINE_DOCUMENT_TYPES
+
+export const SNIFFABLE_TYPES: readonly string[] = [...BINARY_SIGNATURES.flatMap((signature) => signature.types), ...TEXT_TYPES, ...XML_TYPES]
 
 function isText(head: Uint8Array): boolean {
 	if (head.includes(0) || BINARY_SIGNATURES.some((signature) => signature.matches(head))) {
@@ -66,5 +71,17 @@ export function bytesAreOfType(type: string, head: Uint8Array): boolean {
 	if (signature !== undefined) {
 		return signature.matches(head)
 	}
+	if (XML_TYPES.includes(type)) {
+		return isText(head) && startsWithMarkup(head)
+	}
 	return TEXT_TYPES.includes(type) && isText(head)
+}
+
+const UTF8_BOM = [0xef, 0xbb, 0xbf]
+const XML_WHITE_SPACE: readonly number[] = [0x20, 0x09, 0x0a, 0x0d]
+
+function startsWithMarkup(head: Uint8Array): boolean {
+	let offset = bytesAt(head, 0, UTF8_BOM) ? UTF8_BOM.length : 0
+	while (offset < head.byteLength && XML_WHITE_SPACE.includes(head[offset] ?? -1)) offset++
+	return head[offset] === 0x3c
 }

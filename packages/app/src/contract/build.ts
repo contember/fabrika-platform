@@ -29,6 +29,7 @@ import {
 	type EndpointSource,
 	type ExportArtifact,
 	type FileKindArtifact,
+	fileKindsIn,
 	type FileShape,
 	FORM_URLENCODED_TYPE,
 	type ImportArtifact,
@@ -63,7 +64,7 @@ import {
 	type TokenPurposeArtifact,
 	type WebhookScheme,
 } from '@fabrika/auth-core'
-import { isPolicyOrigin, MAX_CSP_ORIGINS, WORKER_BLOB_SOURCE } from '@fabrika/proxy-core/headers'
+import { inlineFileTypes, isPolicyOrigin, MAX_CSP_ORIGINS, WORKER_BLOB_SOURCE } from '@fabrika/proxy-core/headers'
 import { z } from 'zod/v4'
 import { CONTRACT_APP_ID_PATTERN as APP_ID } from './app-id'
 import { contractArtifactSchema, RESERVED_FILE_KIND_PREFIX } from './artifact-schema'
@@ -223,6 +224,15 @@ class ArtifactBuilder {
 		for (const row of this.#endpoints) {
 			if (row.kind === 'webhook' && row.input !== null && containsFile(row.input)) {
 				this.#problem(`mount '${row.id}'`, "takes a file in its input, which only a procedure's top-level field does (file('<kind>'))")
+			}
+			// Only the application writes a file of an inline kind: an uploaded document could render as a page.
+			for (const kind of new Set(row.input === null ? [] : fileKindsIn(row.input))) {
+				if (Object.hasOwn(this.#fileKinds, kind) && this.#fileKinds[kind]?.inline === true) {
+					this.#problem(
+						`procedure '${row.id}'`,
+						`takes a file of the inline kind '${kind}' in its input, which only the application writes: an uploaded document could render as a page (allowed: a kind without inline for an upload; ctx.files.put of a document the application renders)`,
+					)
+				}
 			}
 		}
 		const jobs = this.#jobs()
@@ -1457,7 +1467,15 @@ class ArtifactBuilder {
 		if (row.output !== null && isSchemaOutput(row.output)) {
 			this.#tokenFields(`${where} output`, row.output, false)
 		}
-		this.#endpoints.push(row.output?.type === 'file' ? { ...row, response: 'file' } : row)
+		// A file of an inline kind is shown (`inline-file`), any other downloaded; the proxy reads which from the row.
+		this.#endpoints.push(
+			row.output?.type === 'file'
+				? {
+					...row,
+					response: Object.hasOwn(this.#fileKinds, row.output.kind) && this.#fileKinds[row.output.kind]?.inline === true ? 'inline-file' : 'file',
+				}
+				: row,
+		)
 	}
 
 	/**
@@ -1680,8 +1698,8 @@ class ArtifactBuilder {
 
 	// ── Sections ────────────────────────────────────────────────────────────────────────────────
 
-	/** The media types and the scan of a file kind: exact types, and a scan that can vouch for each file. */
-	#fileTypes(where: string, declared: Pick<FileKindDeclaration, 'types' | 'maxBytes' | 'scan'>): void {
+	/** The media types, the scan and the inline serving of a file kind: exact types, a scan that can vouch for each file. */
+	#fileTypes(where: string, declared: Pick<FileKindDeclaration, 'types' | 'maxBytes' | 'scan' | 'inline'>): void {
 		this.#unique(where, 'types', declared.types)
 		for (const type of declared.types) {
 			if (!MIME_TYPE.test(type)) {
@@ -1693,6 +1711,18 @@ class ArtifactBuilder {
 		}
 		if (declared.scan !== undefined && typeof declared.scan !== 'boolean') {
 			this.#problem(where, 'scan is true or false')
+		}
+		if (declared.inline !== undefined && typeof declared.inline !== 'boolean') {
+			this.#problem(where, 'inline is true or false')
+		}
+		const shown = inlineFileTypes('inline-file')
+		for (const type of declared.inline === true ? declared.types.filter((candidate) => !shown.includes(candidate)) : []) {
+			this.#problem(
+				where,
+				`is served inline and admits '${type}', which a browser could run or render as a page (allowed: ${
+					shown.join(', ')
+				}; or leave out inline, so each file is an attachment)`,
+			)
 		}
 		for (const type of declared.scan === true ? declared.types.filter((candidate) => FILE_LIMITS.unscannedTypes.includes(candidate)) : []) {
 			this.#problem(
@@ -1708,7 +1738,7 @@ class ArtifactBuilder {
 		}
 	}
 
-	/** The file kinds (`c.files({ types, maxBytes, scan? })`), before the mounts that name them. */
+	/** The file kinds (`c.files({ types, maxBytes, scan?, inline? })`), before the mounts that name them. */
 	#readFileKinds(): Record<string, FileKindArtifact> {
 		const kinds: Record<string, FileKindArtifact> = {}
 		for (const [name, declared] of Object.entries(this.#contract.files)) {
@@ -1736,7 +1766,12 @@ class ArtifactBuilder {
 				)
 			}
 			this.#fileTypes(where, declared)
-			kinds[name] = { types: [...declared.types], maxBytes: declared.maxBytes, ...(declared.scan === true ? { scan: true } : {}) }
+			kinds[name] = {
+				types: [...declared.types],
+				maxBytes: declared.maxBytes,
+				...(declared.scan === true ? { scan: true } : {}),
+				...(declared.inline === true ? { inline: true } : {}),
+			}
 		}
 		return kinds
 	}
@@ -2640,25 +2675,7 @@ function fileField(shape: SchemaShape): { readonly kind: string; readonly count:
 
 /** Whether a schema holds a file anywhere. */
 export function containsFile(shape: SchemaShape): boolean {
-	switch (shape.type) {
-		case 'file':
-			return true
-		case 'array':
-			return containsFile(shape.items)
-		case 'tuple':
-			return shape.items.some(containsFile) || (shape.rest !== null && containsFile(shape.rest))
-		case 'record':
-			return containsFile(shape.value)
-		case 'object':
-			return Object.values(shape.fields).some(containsFile)
-		case 'optional':
-		case 'nullable':
-			return containsFile(shape.inner)
-		case 'union':
-			return shape.options.some(containsFile)
-		default:
-			return false
-	}
+	return fileKindsIn(shape).length > 0
 }
 
 /** The file fields of an input, by name: the parts a multipart body carries beside its JSON. */

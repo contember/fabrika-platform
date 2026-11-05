@@ -27,7 +27,7 @@ export interface ContractArtifact extends EndpointTable {
 	readonly mounts: Readonly<Record<string, MountArtifact>>
 	readonly files: Readonly<Record<string, FileCollectionArtifact>>
 	/**
-	 * The file kinds (`c.files({ types, maxBytes, scan? })`): classes of stored files a table's file column holds. A kind
+	 * The file kinds (`c.files({ types, maxBytes, scan?, inline? })`): classes of stored files a table's file column holds. A kind
 	 * has no owner and no endpoint; the table that holds a file is its authority. Absent unless declared, so the digest stays.
 	 */
 	readonly fileKinds?: Readonly<Record<string, FileKindArtifact>>
@@ -189,7 +189,8 @@ interface EndpointRowBase {
 	readonly crossOrigin?: CrossOriginForm
 	/**
 	 * `file`: the procedure answers a stored file (an output `file('<kind>')`), so the proxy and the application give every
-	 * answer of it, a denial included, ADR-0022's file treatment. Absent otherwise, so every other row keeps its digest.
+	 * answer of it, a denial included, ADR-0022's file treatment. `inline-file`: the same, for a kind declared `inline:
+	 * true`, whose XML documents are shown too. Absent otherwise, so every other row keeps its digest.
 	 */
 	readonly response?: EndpointResponse
 	/**
@@ -209,8 +210,8 @@ interface EndpointRowBase {
 /** What the proxy does with an anonymous request's `Authorization` on a row that names it: forward it to the application. */
 export type EndpointAuthorization = 'forward'
 
-/** The answer profile of a row that answers a stored file. */
-export type EndpointResponse = 'file'
+/** The answer profile of a row that answers a stored file: `inline-file` also shows the XML documents a machine reads. */
+export type EndpointResponse = 'file' | 'inline-file'
 
 /** A cacheable row's lifetime: `maxAgeSeconds`, or `immutable`, a year, for an input that names an immutable value. */
 export type EndpointCache = { readonly maxAgeSeconds: number } | 'immutable'
@@ -223,7 +224,7 @@ export const FILE_RESPONSE_KINDS: readonly EndpointKind[] = ['query', 'mutation'
 
 /** Whether every answer of a row gets the file treatment: a collection's download, or a procedure that answers a file. */
 export function answersFile(row: { readonly kind: string; readonly response?: EndpointResponse }): boolean {
-	return row.kind === 'download' || row.response === 'file'
+	return row.kind === 'download' || row.response !== undefined
 }
 
 /** How an endpoint admits another origin: from the environment's list, or (a form or a public procedure) from any origin. */
@@ -341,6 +342,29 @@ export interface FileShape {
 
 export function isFileShape(shape: OutputShape): shape is FileShape {
 	return shape.type === 'file'
+}
+
+/** The kinds of the files a schema holds, anywhere in it, each once per place it appears. */
+export function fileKindsIn(shape: SchemaShape): readonly string[] {
+	switch (shape.type) {
+		case 'file':
+			return [shape.kind]
+		case 'array':
+			return fileKindsIn(shape.items)
+		case 'tuple':
+			return [...shape.items.flatMap(fileKindsIn), ...(shape.rest === null ? [] : fileKindsIn(shape.rest))]
+		case 'record':
+			return fileKindsIn(shape.value)
+		case 'object':
+			return Object.values(shape.fields).flatMap(fileKindsIn)
+		case 'optional':
+		case 'nullable':
+			return fileKindsIn(shape.inner)
+		case 'union':
+			return shape.options.flatMap(fileKindsIn)
+		default:
+			return []
+	}
 }
 
 /**
@@ -674,6 +698,11 @@ export interface FileKindArtifact {
 	readonly maxBytes: number
 	/** Present when every file of the kind waits `quarantined` for a clean malware verdict before it is served. */
 	readonly scan?: true
+	/**
+	 * Present when its files are shown rather than downloaded: every type is an inert image or an XML document a machine
+	 * reads, and a row answering it is `response: 'inline-file'`. Absent otherwise, so every other kind keeps its digest.
+	 */
+	readonly inline?: true
 }
 
 export interface JobArtifact {

@@ -589,6 +589,19 @@ describe('Cloudflare proxy Worker — a contract app', () => {
 		delegation: null,
 		cache: { maxAgeSeconds: 60 },
 	} satisfies EndpointRules & { id: string }
+	/** A public feed of an `inline: true` file kind, and an XML export of a kind that is not. */
+	const feed = {
+		id: 'api.published.feed',
+		kind: 'public',
+		method: 'GET',
+		path: '/feeds/:name',
+		callers: [],
+		requirement: null,
+		admission: null,
+		delegation: null,
+		response: 'inline-file',
+	} satisfies EndpointRules & { id: string }
+	const dump = { ...feed, id: 'api.published.dump', path: '/dumps/:name', response: 'file' } satisfies EndpointRules & { id: string }
 	/** A webhook whose verifier reads the sender's own `Authorization` (`{ bearer }`): the decision forwards it. */
 	const billing = {
 		id: 'billing',
@@ -608,6 +621,12 @@ describe('Cloudflare proxy Worker — a contract app', () => {
 		'/api/files.avatar/drawing': { 'Content-Type': 'image/svg+xml', 'Content-Disposition': "inline; filename*=UTF-8''a.svg" },
 		'/api/files.avatar/photo': { 'Content-Type': 'image/png', 'Content-Disposition': 'attachment' },
 		'/api/catalog.products': { 'Cache-Control': 'private, max-age=5' },
+		'/feeds/rss': { 'Content-Type': 'application/rss+xml', 'Content-Disposition': "attachment; filename*=UTF-8''feed.xml" },
+		'/feeds/sitemap': { 'Content-Type': 'text/xml' },
+		'/feeds/page': { 'Content-Type': 'text/html', 'Content-Disposition': 'inline' },
+		'/feeds/drawing': { 'Content-Type': 'image/svg+xml', 'Content-Disposition': 'inline' },
+		'/feeds/xhtml': { 'Content-Type': 'application/xhtml+xml', 'Content-Disposition': 'inline' },
+		'/dumps/xml': { 'Content-Type': 'application/xml', 'Content-Disposition': 'inline' },
 	}
 	const contractEnvironment = (iam: FakeIam, seen: Request[], scheme: 'http' | 'https' = 'https'): CloudflareProxyEnv => ({
 		IAM: iam,
@@ -624,6 +643,8 @@ describe('Cloudflare proxy Worker — a contract app', () => {
 					{ ...invite, digest: requirementDigest(invite) },
 					{ ...download, digest: requirementDigest(download) },
 					{ ...products, digest: requirementDigest(products) },
+					{ ...feed, digest: requirementDigest(feed) },
+					{ ...dump, digest: requirementDigest(dump) },
 					{ ...billing, digest: requirementDigest(billing) },
 				],
 				reservedPrefixes: ['/api'],
@@ -687,6 +708,26 @@ describe('Cloudflare proxy Worker — a contract app', () => {
 				expect(response.headers.get(name)).toBe(value)
 			}
 			expect(response.headers.get('Permissions-Policy')).toBeNull()
+		}
+	})
+
+	test('an inline-file row shows an XML document; HTML, SVG and XHTML stay attachments there, and XML on a file row', async () => {
+		const handler = createCloudflareProxyHandler(contractEnvironment(await keyIam(), []))
+		const cases: [path: string, disposition: string][] = [
+			['/feeds/rss', "inline; filename*=UTF-8''feed.xml"],
+			['/feeds/sitemap', 'inline'],
+			['/feeds/page', 'attachment'],
+			['/feeds/drawing', 'attachment'],
+			['/feeds/xhtml', 'attachment'],
+			['/dumps/xml', 'attachment'],
+		]
+		for (const [path, disposition] of cases) {
+			const response = await handler(new Request(`https://${HOST}${path}`))
+			expect(response.status).toBe(200)
+			expect(response.headers.get('Content-Disposition')).toBe(disposition)
+			for (const [name, value] of FILE_TREATMENT) {
+				expect(response.headers.get(name)).toBe(value)
+			}
 		}
 	})
 

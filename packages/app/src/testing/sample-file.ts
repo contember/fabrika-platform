@@ -1,11 +1,13 @@
 // A small file the testing kits write: the leading bytes `files/sniff.ts` accepts for its type, then a text marker.
 
+import { INLINE_DOCUMENT_TYPES } from '@fabrika/proxy-core/headers'
+
 const randomHex = (): string => crypto.randomUUID().replaceAll('-', '').slice(0, 8)
 
 const ascii = (text: string): number[] => [...text].map((char) => char.charCodeAt(0))
 const ZIP_HEAD = [0x50, 0x4b, 0x03, 0x04]
 
-/** The leading bytes `files/sniff.ts` accepts for each binary type it verifies; a text type needs none. */
+/** The leading bytes `files/sniff.ts` accepts for each binary or XML type it verifies; another text type needs none. */
 const SAMPLE_HEADS: Readonly<Record<string, readonly number[]>> = {
 	'image/png': [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a],
 	'image/jpeg': [0xff, 0xd8, 0xff, 0xe0],
@@ -17,6 +19,7 @@ const SAMPLE_HEADS: Readonly<Record<string, readonly number[]>> = {
 	'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ZIP_HEAD,
 	'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ZIP_HEAD,
 	'application/vnd.openxmlformats-officedocument.presentationml.presentation': ZIP_HEAD,
+	...Object.fromEntries(INLINE_DOCUMENT_TYPES.map((type) => [type, ascii('<?xml version="1.0"?>\n')])),
 }
 const TEXT_TYPES: ReadonlySet<string> = new Set(['text/plain', 'text/csv', 'text/markdown', 'application/json', 'image/svg+xml'])
 

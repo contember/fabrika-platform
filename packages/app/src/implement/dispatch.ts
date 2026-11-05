@@ -41,7 +41,7 @@ import { type CapabilityAuthority, type ContainerGrant, MAX_WITHIN_VALUES } from
 import type { DataAccess, FileBinding, FrameworkTables } from '@fabrika/db/framework'
 import type { DataKind } from '@fabrika/db/tables'
 import type { TokenVerifier } from '@fabrika/jwks'
-import { applyAnswerCache, withResponseHeaders } from '@fabrika/proxy-core/headers'
+import { applyAnswerCache, INLINE_FILE_TYPES, inlineFileTypes, withResponseHeaders } from '@fabrika/proxy-core/headers'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { createHash, timingSafeEqual } from 'node:crypto'
 import { z } from 'zod/v4'
@@ -412,10 +412,11 @@ export class ContractRuntime {
 	async fetch(request: Request, exec?: RequestExecutionContext): Promise<Response> {
 		const plan = planEndpoint(this.#parts.table, request.method, rawRequestTarget(request.url).pathname)
 		const answer = await this.#answer(request, plan, exec)
+		const inline = plan.outcome === 'endpoint' ? inlineFileTypes(plan.endpoint.response) : INLINE_FILE_TYPES
 		const answered = answer instanceof FileDownload
-			? fileResponse(answer)
+			? fileResponse(answer, inline)
 			: plan.outcome === 'endpoint' && answersFile(plan.endpoint)
-			? withFileTreatment(answer)
+			? withFileTreatment(answer, inline)
 			: withHeaderPolicy(answer, this.#parts.policy)
 		if (plan.outcome !== 'endpoint' || plan.endpoint.cache === undefined) {
 			return answered

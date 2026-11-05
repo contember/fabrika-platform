@@ -110,7 +110,8 @@ FABRIKA_TEST_CADDY_BIN=./caddy bun test src/__tests__/caddy.live.test.ts   # the
   copied, so the app's own value is replaced, never doubled. A download endpoint is selected by the
   `X-Fabrika-Endpoint` the decision asserted (`header` matcher on `<id>@*`) and gets the file treatment:
   the disposition type is forced to `attachment` keeping its parameters, two deferred `headers` handlers
-  around the upstream add an absent one and turn it back to `inline` for an exact inert image type. Before
+  around the upstream add an absent one and turn it back to `inline` for an exact inert image type (on an
+  `inline-file` row, which gets a route of its own, also an XML document: `inlineFileTypes`). Before
   that check a third joins repeated `Content-Type` fields through `{http.response.header.Content-Type}`:
   Caddy's header matcher accepts a field when ANY value matches, so `image/png` + `text/html` would be
   inline. Both routes delete `REMOVED_RESPONSE_HEADERS` (report-only CSP and the reporting headers), and

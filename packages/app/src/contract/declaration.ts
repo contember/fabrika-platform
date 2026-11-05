@@ -56,7 +56,7 @@ export const BUILDER_FIELDS: Readonly<Record<Builder, BuilderFields>> = {
 	link: { options: ['spa', 'dimension', 'grants', 'issuedBy', 'maxDays', 'procedures'], owned: ['kind', 'prefix'] },
 	spa: { options: ['dir', 'access', 'browserConfig'], owned: ['kind', 'prefix'] },
 	webhook: { options: ['scheme', 'boundTo', 'actions', 'input', 'limits'], owned: ['kind', 'path'] },
-	fileKind: { options: ['types', 'maxBytes', 'scan'], owned: ['kind'] },
+	fileKind: { options: ['types', 'maxBytes', 'scan', 'inline'], owned: ['kind'] },
 	cron: { options: ['actions', 'limits', 'retries'], owned: ['kind', 'schedule'] },
 	export: { options: ['version', 'consumers', 'audience', 'procedures'], owned: ['kind'] },
 	attachment: { options: ['format', 'filename', 'row', 'maxBytes', 'maxRows'], owned: [] },
@@ -283,7 +283,7 @@ export interface WebhookMountDeclaration<S> extends OptionsRecord {
 }
 
 /**
- * A file kind (`c.files({ types, maxBytes, scan? })`, no `owner`): a class of stored files a table's file column holds.
+ * A file kind (`c.files({ types, maxBytes, scan?, inline? })`, no `owner`): a class of stored files a table's file column holds.
  * It has no owner, no actions and no endpoint.
  */
 export interface FileKindDeclaration extends OptionsRecord {
@@ -292,6 +292,8 @@ export interface FileKindDeclaration extends OptionsRecord {
 	readonly maxBytes: number
 	/** Every file waits `quarantined` until the scan gives it a clean verdict; a byte consumer answers 409 until then. */
 	readonly scan?: boolean
+	/** Its files are shown, not downloaded: only inert images and the XML documents a machine reads. */
+	readonly inline?: boolean
 }
 
 export interface CronDeclaration extends OptionsRecord {

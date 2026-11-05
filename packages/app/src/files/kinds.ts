@@ -1,4 +1,4 @@
-// The runtime of file kinds (`c.files({ types, maxBytes, scan? })`): a stored file is a value in a table column, and
+// The runtime of file kinds (`c.files({ types, maxBytes, scan?, inline? })`): a stored file is a value in a table column, and
 // the table's policy is its authority. This module stages a file (an incoming part or a `ctx.files.put`): its pending
 // row first, on a connection of its own, then its object, sniffed and bounded by the kind. It serves and opens a file
 // only through a reference the work holds and may read, and only a live one, by its scanned version. The sweep

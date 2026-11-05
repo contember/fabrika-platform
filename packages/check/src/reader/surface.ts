@@ -597,7 +597,7 @@ class SurfaceReader {
 	// ── Sections ────────────────────────────────────────────────────────────────────────────────
 
 	/**
-	 * `c.files({ … })`: a kind of stored file. Every option but `types`, `maxBytes` and `scan` is unknown, as the kit
+	 * `c.files({ … })`: a kind of stored file. Every option but `types`, `maxBytes`, `scan` and `inline` is unknown, as the kit
 	 * records it, so `buildArtifact` refuses a file collection's `owner` in its own words.
 	 */
 	#files(value: LiteralValue, form: Form): FileKind {
@@ -606,11 +606,13 @@ class SurfaceReader {
 		const [kind] = args(at, 'c.files', 1, 1)
 		const options = builderOptions(kind, at, 'c.files')
 		const scan = options.get('scan')
+		const inline = options.get('inline')
 		return {
 			kind: 'file-kind',
 			types: texts(options.get('types'), at, 'types'),
 			maxBytes: numeric(options.get('maxBytes'), at, 'maxBytes'),
 			scan: scan === undefined ? undefined : boolean(scan, 'scan'),
+			inline: inline === undefined ? undefined : boolean(inline, 'inline'),
 			unknownOptions: optionKeys(options, 'fileKind'),
 		}
 	}

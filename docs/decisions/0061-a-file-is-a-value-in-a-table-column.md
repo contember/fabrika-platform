@@ -59,8 +59,13 @@ deal_attachments: {
 },
 ```
 
-- A **file kind** (`c.files({ types, maxBytes, scan? })` under `files: { <kind>: … }`) has no owner, no actions and no
-  endpoint. A `scan: true` kind admits files of at most 100 MiB, the most the scanner reads.
+- A **file kind** (`c.files({ types, maxBytes, scan?, inline? })` under `files: { <kind>: … }`) has no owner, no actions
+  and no endpoint. A `scan: true` kind admits files of at most 100 MiB, the most the scanner reads. An `inline: true`
+  kind is shown rather than downloaded (a feed or a sitemap a machine reads) and admits only the types ADR-0022 rule 2
+  shows inline. The choice is the kind's, in the contract, so review sees it beside the types; a file written at run
+  time cannot ask for it, and a user upload stays an attachment unless its kind says otherwise. A file of an inline
+  kind can render as a static page (ADR-0022 rule 2), so only `ctx.files.put` fills one: no procedure input takes a
+  file of an inline kind, and the put stores what the application rendered, never bytes a caller sent.
 - A **file column** (`files: { <column>: '<kind>' }` in a table policy) holds the id of a row of `fabrika_files`. The
   application's migration writes `<column> uuid references fabrika_files (id)` and an index the column leads; the
   checker's `file-column-migration` rule verifies both for every declared file column.
@@ -122,10 +127,11 @@ none. A reference from another top-level scope is then refused.
 - Every byte consumer reads only a `live` file, by its scanned object version. A `pending` or `quarantined` file
   answers 409 `file_not_ready`, a `rejected` one 409 `file_rejected`, and a reference whose file the sweep has deleted
   since the read answers 404. The framework applies these from the reference's status; the handler writes no check.
-- A file output compiles to a **file-response profile** (`response: 'file'`) in its manifest row and in the row's
-  endpoint digest. The proxy and the application apply the file treatment of ADR-0022 rule 2 from the row, denials
-  included. A public `GET` query may cache a file answer (`http.cache`, ADR-0012 §11); inline display stays limited to
-  inert images.
+- A file output compiles to a **file-response profile** in its manifest row and in the row's endpoint digest:
+  `response: 'file'`, or `response: 'inline-file'` when its kind is `inline: true`. The proxy and the application apply
+  the file treatment of ADR-0022 rule 2 from the row, denials included. A public `GET` query may cache a file answer
+  (`http.cache`, ADR-0012 §11); inline display is limited to inert images, and on an `inline-file` row to XML
+  documents.
 - The typed client gives `api.<group>.<procedure>.url(input)` for a `GET` file procedure and a same-origin session,
   and `download(api.<group>.<procedure>, input)` for any file output, with the caller's credential. A link holder's
   key never goes into a URL, so a link page uses `download`.
@@ -221,3 +227,7 @@ does next.
   unchallenged upload endpoint. One multipart request carries both.
 - **The file base64 in a JSON body.** A third more bytes over a phone's connection, and the whole body decoded in
   memory.
+- **Inline display chosen per file at write time** (`ctx.files.put(…, { inline: true })`). The choice would be run-time
+  data review never sees, and an upload path could set it. The kind declares it in the contract instead.
+- **Every XML type always inline.** Simplest, but a user upload of an XML type would turn from a download into a page
+  without any declaration. An inline kind opts in.

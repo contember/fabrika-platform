@@ -52,7 +52,7 @@ import {
 	BASE_HEADER_POLICY,
 	cacheControlOf,
 	type HeaderPolicy,
-	INLINE_FILE_TYPES,
+	inlineFileTypes,
 	REMOVED_RESPONSE_HEADERS,
 	TRANSPORT_HEADERS,
 } from '@fabrika/proxy-core/headers'
@@ -530,7 +530,7 @@ const INFORMATIONAL_WITHOUT_HEADERS: CaddyHeadersHandler = { handler: 'headers',
  * Step 3 of a contract app. A download endpoint is recognised by the `X-Fabrika-Endpoint` the decision asserted
  * (step 1 deleted the client's), so no path is matched here. Its answer gets the file treatment: the upstream's
  * disposition type becomes `attachment` with its parameters kept, an absent one is added, and only an inert image
- * `Content-Type` turns it back to `inline`. Repeated `Content-Type` fields are first joined into one value, which no
+ * `Content-Type` (on an `inline-file` row also an XML document, `inlineFileTypes`) turns it back to `inline`. Repeated `Content-Type` fields are first joined into one value, which no
  * allowlisted type equals, because Caddy's matcher accepts a field when ANY of its values matches. The deferred
  * handlers wrap the upstream, so the later one in the list runs first.
  */
@@ -539,8 +539,13 @@ function contractUpstream(
 	policy: HeaderPolicy,
 	upstream: (response: CaddyHeaderOps) => CaddyReverseProxyHandler,
 ): CaddyRoute[] {
-	const downloads = app.endpoints.filter(answersFile).map((row) => `${row.id}@*`)
-	const download: CaddyRoute = {
+	// An `inline-file` row shows the XML documents too, so it gets a route of its own type list.
+	const byInline = new Map<readonly string[], string[]>()
+	for (const row of app.endpoints.filter(answersFile)) {
+		const inline = inlineFileTypes('response' in row ? row.response : undefined)
+		byInline.set(inline, [...(byInline.get(inline) ?? []), `${row.id}@*`])
+	}
+	const download = ([inline, downloads]: readonly [readonly string[], string[]]): CaddyRoute => ({
 		match: [{ header: { [ENDPOINT_HEADER]: downloads } }],
 		terminal: true,
 		handle: [
@@ -548,7 +553,7 @@ function contractUpstream(
 			{
 				handler: 'headers',
 				response: {
-					require: { headers: { 'Content-Type': [...INLINE_FILE_TYPES] } },
+					require: { headers: { 'Content-Type': [...inline] } },
 					replace: { 'Content-Disposition': [{ search_regexp: DISPOSITION_TYPE, replace: 'inline' }] },
 				},
 			},
@@ -563,7 +568,7 @@ function contractUpstream(
 				replace: { 'Content-Disposition': [{ search_regexp: DISPOSITION_TYPE, replace: 'attachment' }] },
 			}),
 		],
-	}
+	})
 	// A download is never cross-origin, so only the answer route is decorated.
 	const answer: CaddyRoute = {
 		handle: [
@@ -572,7 +577,7 @@ function contractUpstream(
 			upstream({ set: headerValues(policy), delete: removedHeaders(app) }),
 		],
 	}
-	return [...cacheRoutes(app), ...(downloads.length === 0 ? [] : [download]), answer]
+	return [...cacheRoutes(app), ...[...byInline].map(download), answer]
 }
 
 /**

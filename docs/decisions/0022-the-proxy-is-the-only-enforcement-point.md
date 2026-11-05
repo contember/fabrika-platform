@@ -212,16 +212,25 @@ The policy:
 
 An endpoint that answers a stored file gets the **file treatment** instead. The proxy recognises it by the row the
 decision selected, never by a path of its own: a procedure whose output is a file carries the **file-response
-profile** (`response: 'file'`) in its row and in the row's digest
+profile** (`response: 'file'`, or `'inline-file'` for an inline kind) in its row and in the row's digest
 ([ADR-0061](0061-a-file-is-a-value-in-a-table-column.md)), and a 0.4/0.5/0.6 collection's `download` row is one by its
 kind. The application applies the same treatment from the row, denials included. An older proxy's strict parser
 refuses a row with the profile instead of serving it without the treatment.
 
 - `Content-Disposition: attachment` for every type except the inert images `image/png`, `image/jpeg`,
-  `image/gif` and `image/webp`, which are served `inline`. SVG and HTML are always attachments. The
-  proxy sets the disposition type from the answer's exact `Content-Type` and keeps its parameters
-  (the file name). `inline` needs exactly one `Content-Type` value from that list: repeated fields are
-  joined into one value first, which no listed type equals, so any duplicate is an attachment.
+  `image/gif` and `image/webp`, which are served `inline`. A file kind declared `inline: true` (a feed or a
+  sitemap a machine reads) makes its rows `response: 'inline-file'`, on which the XML documents
+  `application/xml`, `text/xml`, `application/rss+xml` and `application/atom+xml` are `inline` too; the
+  contract build refuses an inline kind that admits any other type. The types `image/svg+xml`, `text/html` and
+  `application/xhtml+xml` are always attachments, on every row. The proxy sets the disposition type from the answer's
+  exact `Content-Type` and the row's profile, and keeps its parameters (the file name). `inline` needs exactly one
+  `Content-Type` value from that list: repeated fields are joined into one value first, which no listed type equals,
+  so any duplicate is an attachment. An inline XML document runs no script, submits no form and loads nothing: the
+  sandbox CSP below gives it an opaque origin without scripts, and `default-src 'none'` refuses its stylesheets and
+  images. Its elements in the XHTML or SVG namespace still render, so whoever writes the file of an inline kind can
+  show a static page with live links on the application's origin. So only the application writes an inline kind: the
+  contract build and the artifact parser refuse a procedure whose input takes a file of one, and a `ctx.files.put` into
+  one stores a document the application rendered from checked data, never bytes a caller sent or a file it opened.
 - `Content-Type` from the recorded, sniffed type, never from the upload request.
 - `X-Content-Type-Options: nosniff`.
 - `Content-Security-Policy: sandbox; default-src 'none'`.

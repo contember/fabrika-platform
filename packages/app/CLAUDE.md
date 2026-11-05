@@ -879,7 +879,7 @@ vocabulary (`packages/db/CLAUDE.md`).
 ## Stored files
 
 - **A file is a value in a table column** (`files/kinds.ts`, `@fabrika/db`'s `stored-files.ts`): `c.files({ types,
-  maxBytes, scan? })` declares a kind, a table's `files: { <column>: '<kind>' }` a column of it, and the table's actions
+  maxBytes, scan?, inline? })` declares a kind, a table's `files: { <column>: '<kind>' }` a column of it, and the table's actions
   are the file's authority. The framework generates no file endpoint; a procedure takes a file (`file('<kind>')` in its
   input) or answers one (`file('<kind>')` as its output), and the dispatcher checks it like every row first.
 - **The pending row is written before the object and is the cleanup intent**, on a connection of its own, never the
@@ -893,7 +893,10 @@ vocabulary (`packages/db/CLAUDE.md`).
   object has no durable intent until its commit, and an eviction before it leaks the bytes.
 - **Every answer of a file output carries the file treatment**, denials and errors included: `ContractRuntime.fetch`
   chooses it by the planned endpoint's row, and a file is a `FileDownload`, never a `Response`, so no handler or store
-  can set its headers. Keep the treatment equal to ADR-0022's.
+  can set its headers. Keep the treatment equal to ADR-0022's. Only a kind declared `inline: true` shows a non-image
+  (an XML document); its row is `response: 'inline-file'`, and `buildArtifact` and `contractArtifactSchema` refuse an
+  inline kind with any type outside `inlineFileTypes('inline-file')`, and a procedure input that takes a file of an
+  inline kind. Never let a file choose its own disposition.
 - **The type is the sniffed one.** A file is stored only when its first `SNIFF_BYTES` are the declared type, and the
   recorded type is what a download sends. The size bound is the object store's (`FileObjectStore.write`), enforced
   while the body streams.
