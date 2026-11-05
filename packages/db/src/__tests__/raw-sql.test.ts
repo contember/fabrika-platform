@@ -61,6 +61,7 @@ function unsentTag(mode: SqlMode): { sql: SqlTag; sent: () => number } {
 			() => {
 				throw new QueryRefusedError('unknown_table', 'no table reaches this tag')
 			},
+			['grants'],
 		),
 		sent: () => sent,
 	}
@@ -385,7 +386,7 @@ function scopedTag(terms: ScopeTerms): { sql: SqlTag; sent: () => number } {
 			return Promise.reject(new Error('the statement reached the session'))
 		},
 	}
-	return { sql: sqlTag(site, PG, () => terms), sent: () => sent }
+	return { sql: sqlTag(site, PG, () => terms, []), sent: () => sent }
 }
 
 const REACHED = 'the statement reached the session'
@@ -1012,5 +1013,34 @@ describe.skipIf(opened === null)("ctx.sql.scope on Postgres: a fragment marked u
 				and ${work.sql.scope(inW1('notes.write'), 'notes', { use: 'update' })} returning notes.id`
 		expect(await titles(work, 'self')).toEqual(['self-a:from-subquery', 'self-b:from-join'])
 		await work.transaction.rollback()
+	})
+})
+
+describe('a table that confers a relation is written only through its handles', () => {
+	const sources = ['note_members']
+	const refused = (text: readonly string[], mode: SqlMode = 'write', dialect: SqlDatabase = PG): string | undefined => {
+		try {
+			classifySql(text, mode, dialect, sources)
+			return undefined
+		} catch (error) {
+			if (error instanceof QueryRefusedError) return error.message
+			throw error
+		}
+	}
+
+	test('a write naming it in any spelling is refused, on both dialects', () => {
+		for (const dialect of [PG, LITE]) {
+			expect(refused(parts`insert into note_members (id) values (${'m'})`, 'write', dialect)).toContain('confers a relation')
+			expect(refused(parts`update "NOTE_MEMBERS" set principal_id = ${'x'}`, 'write', dialect)).toContain('confers a relation')
+			expect(refused(parts`delete from notes where id in (select note_id from Note_Members)`, 'write', dialect)).toContain('confers a relation')
+			// A writing site's statement is never trusted to be a read: SQLite runs `WITH … REPLACE` as a write.
+			expect(refused(parts`select note_id from note_members where principal_id = ${'x'}`, 'write', dialect)).toContain('confers a relation')
+		}
+		expect(refused(parts`with x as (select 1) replace into note_members (id) values (${'m'})`, 'write', LITE)).toContain('confers a relation')
+	})
+
+	test('a read of it on a reading site, and a write of another table, pass', () => {
+		expect(refused(parts`select note_id from note_members where principal_id = ${'x'}`, 'read')).toBeUndefined()
+		expect(refused(parts`update notes set title = ${'t'} where id = ${'n'}`)).toBeUndefined()
 	})
 })

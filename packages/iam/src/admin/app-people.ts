@@ -30,7 +30,7 @@ import { unixNow } from '../repositories/sql'
 import { authorityDeadline, type HeldEntry, resolveAuthorityAt } from '../resolve'
 import { BUILTIN_ROLES } from '../roles'
 import type { Services } from '../services'
-import { parseStoredPermissions } from '../stored-permissions'
+import { parseStoredPermissions, parseStoredVia } from '../stored-permissions'
 import { fail } from './context'
 import { IAM_APP } from './router'
 
@@ -100,8 +100,15 @@ async function grantableRoles(admin: PeopleAdministrator, administered: Administ
 	const roles = await admin.services.repositories.appSchema.listRolesByOrigin(administered.app, 'app')
 	return roles.filter((role) =>
 		role.member_scope === null && !Object.hasOwn(BUILTIN_ROLES, role.role_key)
-		&& parseStoredPermissions(role.permissions).every((action) => permits(administered.permissions, action))
+		&& delegatedActions(role).every((action) => permits(administered.permissions, action))
 	)
+}
+
+/** Every action a grant of `role` carries: its own, and each one it holds through a relation (`via`). */
+function delegatedActions(role: RoleRow): string[] {
+	const actions = parseStoredPermissions(role.permissions)
+	for (const held of Object.values(parseStoredVia(role.via))) actions.push(...held)
+	return actions
 }
 
 async function grantableRole(admin: PeopleAdministrator, administered: AdministeredApp, roleKey: string): Promise<RoleRow> {
@@ -163,8 +170,8 @@ export async function grantAppRole(ctx: IamAppContext, input: GrantAppRoleReques
 	const contract = await contractGrantProblem(appSchema, administered.app, { roleKey: role.role_key, permissions: null, scopeType: null })
 	if (contract !== null) return fail(400, contract)
 	try {
-		// S8: the grant ends no later than the administrator's own grants of `manage` and of every action of the role.
-		const carried = [administered.people.manage, ...parseStoredPermissions(role.permissions)].map(
+		// S8: the grant ends no later than the administrator's own grants of `manage` and of every action the role carries.
+		const carried = [administered.people.manage, ...delegatedActions(role)].map(
 			(action): PermissionEntry => ({ action, scope: null, source: 'grant' }),
 		)
 		const expiresAt = authorityDeadline(administered, carried, unixNow())

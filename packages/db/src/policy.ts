@@ -8,16 +8,13 @@ import {
 	type NameSet,
 	nameSet,
 	namesOf,
-	OBJECT_PROTOTYPE,
-	ownDescriptor,
 	ownEntry,
 	ownKeys,
-	ownNames,
-	ownSymbols,
 	parseList,
-	prototypeOf,
+	plainRecord,
 	setOwn,
 } from './builtins'
+import { type ConditionModel, type ConditionPolicy, type ConditionTable, type HopRule, parseCondition } from './conditions'
 import { PolicyError } from './errors'
 import { isPlainIdentifier } from './identifier'
 import type { Unavailable } from './orm-types'
@@ -91,6 +88,29 @@ interface WritablePolicy<Col extends string, A extends string, V extends Col, Ac
 	 * file reference. The table's actions are the file's authority.
 	 */
 	readonly files?: FilePolicies<Col>
+	/** The relations this table's rows confer (`relations` of the vocabulary): each row holds one principal at one node. */
+	readonly confers?: { readonly [relation: string]: ConfersPolicy<Col> }
+	/** Conditions that narrow an action of this table: a row the condition does not admit is out of that action's reach. */
+	readonly when?: { readonly [action in A]?: ConditionPolicy<Col> }
+}
+
+/**
+ * A relation source: each row says that the principal in `principal` stands in the relation to the node `node` holds,
+ * until `expires` (none: no deadline) and while `when` admits the row. Writing a row is delegation.
+ */
+export interface ConfersPolicy<Col extends string> {
+	readonly principal: Col
+	/** The column that names the node; by default the table's column for the relation's dimension (its key or its chain). */
+	readonly node?: Col
+	/** A timestamp column: the row confers nothing once it passed. */
+	readonly expires?: Col
+	/** A condition on the row's own columns (no foreign-key path): `{ revoked_at: { isNull: true } }`. */
+	readonly when?: ConditionPolicy<Col>
+	/**
+	 * Inserting a row delegates the relation's actions to its principal, bounded by the inserting Ref's node: at most
+	 * `maxDays` ahead (which needs `expires`), and to the inserting principal itself only with `self`.
+	 */
+	readonly assign?: { readonly maxDays?: number; readonly self?: true }
 }
 
 /** A table's file columns: column → the name of a file kind of the contract (`c.files`). */
@@ -236,6 +256,23 @@ export interface TableModel {
 	 * the container's own chain; a child's parent and the parent's chain. Every predicate of a Ref covers all.
 	 */
 	readonly chain: readonly Container[]
+	/** The relations this table's rows confer, each with its columns, its condition and its delegation bound. */
+	readonly confers: readonly RelationSource[]
+	/** The condition each action of the table holds a row under; an action without one is not narrowed. */
+	readonly when: Readonly<Record<string, ConditionModel>>
+}
+
+/** One relation's source table: what a relation term reads, and what a write of its rows is bounded by. */
+export interface RelationSource {
+	readonly relation: string
+	readonly dimension: string
+	readonly table: string
+	readonly principal: string
+	readonly node: string
+	readonly expires: string | undefined
+	readonly when: ConditionModel | undefined
+	/** `undefined` when the table has no insert action, so no handler writes a row of it. */
+	readonly assign: { readonly maxDays: number | undefined; readonly self: boolean } | undefined
 }
 
 /** A child's `column` and `inherit`, when omitted, are derived from its parent while the tables are linked. */
@@ -249,7 +286,11 @@ type ParsedScope =
 		readonly inherit: readonly string[] | undefined
 	}
 
-type ParsedTable = Omit<TableModel, 'chain' | 'scope'> & { readonly scope: ParsedScope }
+type ParsedTable = Omit<TableModel, 'chain' | 'scope' | 'confers' | 'when'> & {
+	readonly scope: ParsedScope
+	readonly confersInput: unknown
+	readonly whenInput: unknown
+}
 
 let readModels: <DB, P>(tables: Tables<DB, P>) => TableModels
 let hasModels: (value: object) => boolean = () => false
@@ -322,7 +363,12 @@ type Containment = Readonly<Record<string, { readonly container: string | undefi
 interface VocabularyModel {
 	readonly dimensions: Containment
 	readonly actions: NameSet
+	/** Each relation of the vocabulary, by name, with the dimension its nodes are of. */
+	readonly relations: Readonly<Record<string, string>>
 }
+
+/** A relation's name: it travels in a token's pseudo-scope `~rel:<name>`, so it is a plain word. */
+const RELATION_NAME = /^[a-z][A-Za-z0-9]*$/
 
 function parseVocabulary(input: unknown): VocabularyModel {
 	const vocabulary = plainRecord(input, 'the vocabulary')
@@ -347,12 +393,33 @@ function parseVocabulary(input: unknown): VocabularyModel {
 		}
 	}
 	const actions = ownKeys(plainRecord(ownEntry(vocabulary, 'actions'), 'the vocabulary actions'))
-	return freeze({ dimensions: freeze(containment), actions: nameSet(actions) })
+	const relationsInput = ownEntry(vocabulary, 'relations')
+	const relations: Record<string, string> = {}
+	if (relationsInput !== undefined) {
+		const declared = plainRecord(relationsInput, 'the vocabulary relations')
+		const relationNames = ownKeys(declared)
+		for (let index = 0; index < relationNames.length; index++) {
+			const relation = relationNames[index] ?? ''
+			if (!RELATION_NAME.test(relation)) {
+				throw new PolicyError(`the vocabulary relation ${relation}: a relation name must match ${RELATION_NAME.source}`)
+			}
+			const dimension = ownEntry(plainRecord(ownEntry(declared, relation), `the vocabulary relation ${relation}`), 'dimension')
+			if (typeof dimension !== 'string' || !hasOwn(dimensions, dimension)) {
+				throw new PolicyError(`the vocabulary relation ${relation} is of ${String(dimension)}, which is not one of its dimensions`)
+			}
+			setOwn(relations, relation, dimension)
+		}
+	}
+	return freeze({ dimensions: freeze(containment), actions: nameSet(actions), relations: freeze(relations) })
 }
 
 const COLUMN_LIST_FIELDS = nameSet(['columns', 'foreignKeys', 'dates', 'timestamps', 'booleans', 'json'])
 const FOREIGN_KEY_FIELDS = nameSet(['columns', 'table', 'references'])
-const POLICY_FIELDS = nameSet(['scope', 'actions', 'insert', 'update', 'version', 'createdBy', 'columns', 'queue', 'files'])
+const POLICY_FIELDS = nameSet(['scope', 'actions', 'insert', 'update', 'version', 'createdBy', 'columns', 'queue', 'files', 'confers', 'when'])
+const CONFERS_FIELDS = nameSet(['principal', 'node', 'expires', 'when', 'assign'])
+const ASSIGN_FIELDS = nameSet(['maxDays', 'self'])
+/** A delegated row lasts at most ten years ahead: a bound, not a convenience. */
+const MAX_ASSIGN_DAYS = 3650
 const QUEUE_FIELDS = nameSet(['attempts', 'due', 'maxAttempts'])
 const ACTION_FIELDS = nameSet(['read', 'insert', 'update', 'delete', 'appRead', 'appCount'])
 const DIMENSION_FIELDS = nameSet(['dimension', 'key', 'in'])
@@ -361,25 +428,6 @@ const CHILD_FIELDS = nameSet(['child', 'key', 'column', 'inherit'])
 const REFERENCE_FIELDS = nameSet(['reference'])
 const APPLICATION_FIELDS = nameSet(['app', 'key'])
 const COLUMN_FIELDS = nameSet(['read', 'write'])
-
-/** A copy of a plain object's own data properties; anything else (an instance, a symbol key, an accessor) is refused. */
-function plainRecord(value: unknown, what: string): Readonly<Record<string, unknown>> {
-	const prototype: unknown = typeof value === 'object' && value !== null && !isArray(value) ? prototypeOf(value) : undefined
-	if ((prototype !== OBJECT_PROTOTYPE && prototype !== null) || typeof value !== 'object' || value === null || ownSymbols(value).length > 0) {
-		throw new PolicyError(`${what} must be a plain object`)
-	}
-	const copy: Record<string, unknown> = {}
-	const keys = ownNames(value)
-	for (let index = 0; index < keys.length; index++) {
-		const key = keys[index] ?? ''
-		const descriptor = ownDescriptor(value, key)
-		if (descriptor === undefined || !hasOwn(descriptor, 'value')) {
-			throw new PolicyError(`${what}: ${key} is an accessor; a policy holds plain values`)
-		}
-		setOwn(copy, key, descriptor.value)
-	}
-	return freeze(copy)
-}
 
 /** Unknown keys are refused, not dropped: a misspelt `insrt` would otherwise leave the table without its column list. */
 function onlyFields(record: Readonly<Record<string, unknown>>, allowed: NameSet, what: string): void {
@@ -412,7 +460,7 @@ function parseTables(columnsInput: unknown, policiesInput: unknown, vocabulary: 
 		}
 		parsed[index] = parseTable(table, ownEntry(columns, table), policy, vocabulary)
 	}
-	return linkTables(parsed, vocabulary.dimensions)
+	return linkTables(parsed, vocabulary)
 }
 
 /** How a policy names its columns: one it states must exist, and so must one a convention derives for it. */
@@ -564,6 +612,8 @@ function parseTable(table: string, columnList: unknown, policyInput: unknown, vo
 		booleans,
 		json,
 		foreignKeys,
+		confersInput: ownEntry(policy, 'confers'),
+		whenInput: ownEntry(policy, 'when'),
 	}
 }
 
@@ -1027,7 +1077,8 @@ export function includes(names: readonly string[], name: unknown): boolean {
 }
 
 /** Resolves every table's containment chain and refuses a shape the layer cannot enforce. */
-function linkTables(parsed: readonly ParsedTable[], containment: Containment): TableModels {
+function linkTables(parsed: readonly ParsedTable[], vocabulary: VocabularyModel): TableModels {
+	const containment = vocabulary.dimensions
 	const byName: Record<string, ParsedTable> = {}
 	const owners: Record<string, ParsedTable> = {}
 	for (let index = 0; index < parsed.length; index++) {
@@ -1077,15 +1128,258 @@ function linkTables(parsed: readonly ParsedTable[], containment: Containment): T
 		return result
 	}
 
+	const conditionTable = (name: string): ConditionTable | undefined => ownEntry(byName, name)
+	const hopRule: HopRule = (from, column, to) => {
+		if (ownEntry(byName, to)?.scope.mode === 'reference') {
+			return true
+		}
+		const source = ownEntry(byName, from)
+		const scope = source === undefined ? undefined : resolve(source, []).scope
+		if (scope?.mode === 'dimension') {
+			// The column must lead to the table that owns the container dimension, not to any table its key references.
+			const target = ownEntry(byName, to)
+			return scope.container !== undefined && scope.container.column === column && target?.scope.mode === 'dimension'
+				&& target.scope.dimension === scope.container.dimension
+		}
+		return scope?.mode === 'child' && scope.column === column && scope.parent === to
+	}
+	const sources: Record<string, string> = {}
 	const models: Record<string, TableModel> = {}
 	for (let index = 0; index < parsed.length; index++) {
 		const table = parsed[index]
 		if (table !== undefined) {
 			const { scope, chain } = resolve(table, [])
-			setOwn(models, table.name, freeze({ ...table, scope, chain }))
+			const { confersInput, whenInput, ...rest } = table
+			const linked = { ...rest, scope, chain }
+			const confers = parseConfers(linked, confersInput, vocabulary.relations, conditionTable)
+			for (let position = 0; position < confers.length; position++) {
+				const relation = confers[position]?.relation ?? ''
+				const earlier = ownEntry(sources, relation)
+				if (earlier !== undefined) {
+					throw new PolicyError(`${table.name}: the relation ${relation} is already conferred by ${earlier}; a relation has one source table`)
+				}
+				setOwn(sources, relation, table.name)
+			}
+			setOwn(models, table.name, freeze({ ...linked, confers, when: parseWhen(linked, whenInput, conditionTable, hopRule) }))
+		}
+	}
+	const relations = ownKeys(vocabulary.relations)
+	for (let index = 0; index < relations.length; index++) {
+		const relation = relations[index] ?? ''
+		if (!hasOwn(sources, relation)) {
+			throw new PolicyError(`the vocabulary relation ${relation} has no source: declare confers.${relation} on the table whose rows hold it`)
 		}
 	}
 	return freeze(models)
+}
+
+type LinkedTable = Omit<TableModel, 'confers' | 'when'>
+
+/** Every action a table names: its operations', `appRead`, `appCount` and its columns' own. */
+function tableActionNames(table: LinkedTable): NameSet {
+	const names: string[] = []
+	const lists = [table.actions.read, table.actions.insert, table.actions.update, table.actions.delete, table.actions.appRead, table.actions.appCount]
+	for (let list = 0; list < lists.length; list++) {
+		const actions = lists[list] ?? []
+		for (let index = 0; index < actions.length; index++) {
+			names[names.length] = actions[index] ?? ''
+		}
+	}
+	const reads = ownKeys(table.columnReads)
+	for (let index = 0; index < reads.length; index++) {
+		names[names.length] = ownEntry(table.columnReads, reads[index] ?? '') ?? ''
+	}
+	const writes = ownKeys(table.columnWrites)
+	for (let index = 0; index < writes.length; index++) {
+		names[names.length] = ownEntry(table.columnWrites, writes[index] ?? '') ?? ''
+	}
+	return nameSet(names)
+}
+
+/**
+ * `when`: action → the condition a row must meet for it. An insert action's condition is judged on the inserted row
+ * itself, so it follows no foreign key; a reference table is read by every site and takes none.
+ */
+function parseWhen(
+	table: LinkedTable,
+	input: unknown,
+	tables: (name: string) => ConditionTable | undefined,
+	hops: HopRule,
+): Readonly<Record<string, ConditionModel>> {
+	if (input === undefined) {
+		return freeze({})
+	}
+	if (table.scope.mode === 'reference') {
+		throw new PolicyError(`${table.name}: a reference table takes no when; every site reads it`)
+	}
+	const declared = plainRecord(input, `${table.name}: when`)
+	const named = tableActionNames(table)
+	const actions = ownKeys(declared)
+	const when: Record<string, ConditionModel> = {}
+	for (let index = 0; index < actions.length; index++) {
+		const action = actions[index] ?? ''
+		if (!inSet(named, action)) {
+			throw new PolicyError(`${table.name}: when.${action} names an action the table does not name (${namesOf(named).join(', ')})`)
+		}
+		const inserts = includes(table.actions.insert, action)
+		setOwn(when, action, parseCondition(ownEntry(declared, action), table, tables, `${table.name}: when.${action}`, inserts ? false : hops))
+	}
+	return freeze(when)
+}
+
+/** The column of `table` that places a row at a node of `dimension`: its key for its own dimension, else a chain link. */
+export function nodeColumnOf(table: LinkedTable, dimension: string): string | undefined {
+	if (table.scope.mode === 'dimension' && table.scope.dimension === dimension) {
+		return table.scope.key
+	}
+	for (let index = 0; index < table.chain.length; index++) {
+		const link = table.chain[index]
+		if (link?.dimension === dimension) {
+			return link.column
+		}
+	}
+	return undefined
+}
+
+/**
+ * `confers`: relation → its columns on this table. The node is the table's own column for the relation's dimension,
+ * which the layer stamps from the inserting Ref, so a row names only a node its writer acts on. The principal, the
+ * node, the expiry and the condition's columns are never updated: a row that confers more is a new row, which its
+ * insert action bounds (`assign`).
+ */
+function parseConfers(
+	table: LinkedTable,
+	input: unknown,
+	relations: Readonly<Record<string, string>>,
+	tables: (name: string) => ConditionTable | undefined,
+): readonly RelationSource[] {
+	if (input === undefined) {
+		return freeze([])
+	}
+	if (table.scope.mode !== 'dimension' && table.scope.mode !== 'child') {
+		throw new PolicyError(`${table.name}: a ${table.scope.mode} table confers no relation; its rows lie at no node`)
+	}
+	if (table.queue !== undefined) {
+		// A claim, a requeue and `done: true` rewrite `due` and `version` past every update-column check.
+		throw new PolicyError(`${table.name}: a queue table confers no relation; the layer rewrites its rows on every claim`)
+	}
+	const declared = plainRecord(input, `${table.name}: confers`)
+	const names = ownKeys(declared)
+	const sources: RelationSource[] = []
+	for (let index = 0; index < names.length; index++) {
+		const relation = names[index] ?? ''
+		const what = `${table.name}: confers.${relation}`
+		const dimension = ownEntry(relations, relation)
+		if (dimension === undefined) {
+			throw new PolicyError(`${what}: ${relation} is not a relation of the vocabulary (relations: ${ownKeys(relations).join(', ') || 'none'})`)
+		}
+		const policy = plainRecord(ownEntry(declared, relation), what)
+		onlyFields(policy, CONFERS_FIELDS, what)
+		const column = (value: unknown, field: string): string => {
+			if (!inSet(table.columns, value)) {
+				throw new PolicyError(`${what}.${field} names ${String(value)}, which is not a column of ${table.name}`)
+			}
+			return value
+		}
+		const principal = column(ownEntry(policy, 'principal'), 'principal')
+		const placed = nodeColumnOf(table, dimension)
+		if (placed === undefined) {
+			throw new PolicyError(`${what}: ${table.name} does not lie in ${dimension}, the relation's dimension, so its rows name no node of it`)
+		}
+		const own = table.scope.mode === 'dimension' && table.scope.dimension === dimension
+		if (!own && table.chain[0]?.column !== placed) {
+			// An inherited column follows a move of an ancestor (ON UPDATE CASCADE), which no delegation bound sees.
+			throw new PolicyError(
+				`${what}: ${dimension} is above ${table.name}'s own container, and a move of an ancestor rewrites ${placed}; a relation's node is the row's key or its own container or parent column`,
+			)
+		}
+		const nodeInput = ownEntry(policy, 'node')
+		const node = nodeInput === undefined ? placed : column(nodeInput, 'node')
+		if (node !== placed) {
+			throw new PolicyError(`${what}.node is ${node}, but a row's ${dimension} is ${placed}: the node is the column the inserting Ref stamps`)
+		}
+		const expiresInput = ownEntry(policy, 'expires')
+		const expires = expiresInput === undefined ? undefined : column(expiresInput, 'expires')
+		if (expires !== undefined && !inSet(table.timestamps, expires)) {
+			throw new PolicyError(`${what}.expires names ${expires}, which is not a timestamp column`)
+		}
+		const whenInput = ownEntry(policy, 'when')
+		const when = whenInput === undefined ? undefined : parseCondition(whenInput, table, tables, `${what}.when`, false)
+		const fixed: string[] = [principal]
+		if (expires !== undefined) fixed[fixed.length] = expires
+		const read = when === undefined ? [] : conditionColumns(when)
+		for (let position = 0; position < read.length; position++) {
+			fixed[fixed.length] = read[position] ?? ''
+		}
+		for (let position = 0; position < fixed.length; position++) {
+			const name = fixed[position] ?? ''
+			if (name === table.version) {
+				throw new PolicyError(`${what}: ${name} is the version column, which every update rewrites; it decides nothing a row confers`)
+			}
+			if (inSet(table.update, name) || hasOwn(table.columnWrites, name)) {
+				throw new PolicyError(`${what}: ${name} decides what a row confers, so no update writes it; replace the row instead`)
+			}
+		}
+		if (principal === node || principal === table.version || principal === table.createdBy || hasOwn(table.files, principal)) {
+			throw new PolicyError(`${what}.principal ${principal} is a column the layer stamps; it holds the principal the row names`)
+		}
+		const assign = parseAssign(table, policy, expires, what)
+		sources[sources.length] = freeze({ relation, dimension, table: table.name, principal, node, expires, when, assign })
+	}
+	return freeze(sources)
+}
+
+function parseAssign(
+	table: LinkedTable,
+	policy: Readonly<Record<string, unknown>>,
+	expires: string | undefined,
+	what: string,
+): RelationSource['assign'] {
+	const input = ownEntry(policy, 'assign')
+	if (table.actions.insert.length === 0) {
+		if (input !== undefined) {
+			throw new PolicyError(`${what}.assign: ${table.name} has no insert action, so no handler writes a row to delegate with`)
+		}
+		return undefined
+	}
+	if (input === undefined) {
+		throw new PolicyError(
+			`${what}: inserting a row of ${table.name} (${table.actions.insert.join(', ')}) delegates the relation; state assign: { maxDays?, self? }`,
+		)
+	}
+	const assign = plainRecord(input, `${what}.assign`)
+	onlyFields(assign, ASSIGN_FIELDS, `${what}.assign`)
+	const maxDays = ownEntry(assign, 'maxDays')
+	if (maxDays !== undefined && (typeof maxDays !== 'number' || !isSafeInteger(maxDays) || maxDays < 1 || maxDays > MAX_ASSIGN_DAYS)) {
+		throw new PolicyError(`${what}.assign.maxDays takes a whole number of days from 1 to ${MAX_ASSIGN_DAYS}`)
+	}
+	if (maxDays !== undefined && expires === undefined) {
+		throw new PolicyError(`${what}.assign.maxDays bounds a row's expires, which the relation does not declare`)
+	}
+	const self = ownEntry(assign, 'self')
+	if (self !== undefined && self !== true) {
+		throw new PolicyError(`${what}.assign.self takes true`)
+	}
+	return freeze({ maxDays: typeof maxDays === 'number' ? maxDays : undefined, self: self === true })
+}
+
+/** The own columns a condition reads. */
+function conditionColumns(condition: ConditionModel): readonly string[] {
+	if (condition.kind === 'test') {
+		return condition.hops.length === 0 ? [condition.column] : [condition.hops[0]?.column ?? '']
+	}
+	if (condition.kind === 'not') {
+		return conditionColumns(condition.term)
+	}
+	const columns: string[] = []
+	for (let index = 0; index < condition.terms.length; index++) {
+		const term = condition.terms[index]
+		const inner = term === undefined ? [] : conditionColumns(term)
+		for (let position = 0; position < inner.length; position++) {
+			columns[columns.length] = inner[position] ?? ''
+		}
+	}
+	return columns
 }
 
 /** A table's scope with nothing left to derive, and its containment chain. */

@@ -6,6 +6,7 @@
 import { uuidv7 } from '@fabrika/platform'
 import type { OperationNode } from 'kysely'
 import { BinaryOperationNode, OperatorNode, ValueNode } from 'kysely'
+import { refScope } from './authority'
 import { freeze, hasOwn, inSet, isSafeInteger, nameSet, namesOf, ownDescriptor, ownKeys, ownNames, parseList, setOwn } from './builtins'
 import { type CapabilityGrant, describeGrant, type RefGrant } from './capability'
 import type { InvocationTransaction, Session } from './database'
@@ -23,7 +24,6 @@ import { CapabilityError, NotFoundError, type QueryRefusal, QueryRefusedError } 
 import { answerFiles, type FileBinding } from './file-columns'
 import { databaseNow } from './job-leases'
 import { rearmClaim } from './job-wakes'
-import { linksPredicate, linkValues } from './links'
 import {
 	aggregateNode,
 	allOf,
@@ -50,6 +50,7 @@ import {
 	type AggregateSpec,
 	answer,
 	appKeyPredicate,
+	appKeyScope,
 	appListPredicate,
 	appRecordPredicate,
 	appRowPredicate,
@@ -190,9 +191,23 @@ export function dataAccess(parts: DataLayerParts): DataAccess {
 					}
 					return scopeTerms(parts.contextOf(table), capability, use)
 				},
+				relationSourceTables(parts.models),
 			)
 		},
 	})
+}
+
+/** The tables whose rows confer a relation, lowercased as the tag compares names. */
+function relationSourceTables(models: TableModels): readonly string[] {
+	const tables: string[] = []
+	const names = ownKeys(models)
+	for (let index = 0; index < names.length; index++) {
+		const model = modelOf(models, names[index] ?? '')
+		if (model !== undefined && model.confers.length > 0) {
+			tables[tables.length] = model.name.toLowerCase()
+		}
+	}
+	return tables
 }
 
 function runnerOf(site: DataSite): Runner {
@@ -327,7 +342,7 @@ function unownedTarget(site: DataSite, dimension: string): Record<string, unknow
 
 /** The predicate of the target object, over the whole chain its `Ref` carries. */
 function targetPredicate(context: TableContext, grant: RefGrant): OperationNode {
-	return linksPredicate(context.model.name, linkValues(context.model.name, selfLinks(context.model), grant))
+	return refScope(context.relations, context.model, selfLinks(context.model), grant, new Date())
 }
 
 function targetRow(
@@ -348,7 +363,14 @@ function targetRow(
 		const scope = targetPredicate(context, grant)
 		const node = lockedSelectNode(context.model.name, visibleFor(context.model, grant.action), scope, context.model.dates)
 		const session = await run.read()
-		const rows = await session.run(node, { root: 'SelectQueryNode', table: context.model.name, joins: {}, scope, lock: 'update' })
+		const rows = await session.run(node, {
+			root: 'SelectQueryNode',
+			table: context.model.name,
+			joins: {},
+			scope,
+			lock: 'update',
+			subqueries: context.subqueries,
+		})
 		const [row] = answerRows(dialectOf(context), context.model.name, rowColumnsOf(context.model), rows)
 		if (row === undefined) {
 			throw new NotFoundError(`${context.model.name} not found`)
@@ -421,7 +443,7 @@ function containedRows(context: TableContext, site: DataSite, run: Runner, capab
 	return freeze({
 		list: bound(site, async (options?: unknown) => {
 			const grant = namedRef(context, capability, dimension)
-			const scope = linksPredicate(context.model.name, linkValues(context.model.name, context.model.chain, grant))
+			const scope = refScope(context.relations, context.model, context.model.chain, grant, new Date())
 			return listRows(context, run, scope, visibleFor(context.model, grant.action), options, [keyOf(context.model)], grant.action)
 		}),
 		insert: writing(
@@ -560,10 +582,11 @@ function scopedApplicationRows(context: TableContext, site: DataSite, run: Runne
 		list: bound(site, async (options?: unknown) => listRows(context, run, scope(), visible, options, key, heldAction(context, capability))),
 		count: bound(site, async (options?: unknown) => countRows(context, run, scope(), visible, options)),
 		aggregate: bound(site, async <Row>(spec: AggregateSpec<Row>) => aggregateRows(context, run, scope(), context.shape, spec)),
-		get: bound(site, async (id: unknown) => {
-			scope()
-			return selectOne(context, run, appKeyPredicate(model, id), visible, heldAction(context, capability))
-		}),
+		get: bound(
+			site,
+			async (id: unknown) =>
+				selectOne(context, run, scopedApplicationRead(context, capability, appKeyPredicate(model, id)), visible, heldAction(context, capability)),
+		),
 	})
 }
 
@@ -603,11 +626,11 @@ function applicationRows(
 		: site.kind === 'query'
 		? refused(site, 'read_only', 'getForUpdate locks the row, so it runs only in a mutation: declare the endpoint with r.mutation')
 		: bound(site, async (id: unknown) => {
-			const scope = appKeyPredicate(model, id)
 			const action = namedApp(context, capability)
+			const scope = appKeyScope(model, action, id)
 			const node = lockedSelectNode(table, visibleFor(model, action), scope, model.dates)
 			const session = await run.read()
-			const rows = await session.run(node, { root: 'SelectQueryNode', table, joins: {}, scope, lock: 'update' })
+			const rows = await session.run(node, { root: 'SelectQueryNode', table, joins: {}, scope, lock: 'update', subqueries: context.subqueries })
 			const [row] = answerRows(dialectOf(context), table, rowColumnsOf(model), rows)
 			if (row === undefined) {
 				throw new NotFoundError(`${table} not found`)
@@ -628,7 +651,7 @@ function applicationRows(
 		),
 		get: bound(site, async (id: unknown) => {
 			const action = namedApp(context, capability)
-			return selectOne(context, run, appKeyPredicate(model, id), visibleFor(model, action), action)
+			return selectOne(context, run, appKeyScope(model, action, id), visibleFor(model, action), action)
 		}),
 		getForUpdate,
 		claim: claiming(parts, context, site, capability),
@@ -640,7 +663,7 @@ function applicationRows(
 		update: writing(site, 'update', async (id: unknown, values: unknown, ...options: unknown[]) => {
 			const grant = updatingApp(context, capability)
 			const changes = readValues(values, updatableBy(model, grant.action), 'update', model)
-			return updateRow(context, run, { scope: appKeyPredicate(model, id) }, changes, versionArgument(context, options))
+			return updateRow(context, run, { scope: appKeyScope(model, grant.action, id) }, changes, versionArgument(context, options))
 		}),
 		remove: writing(site, 'remove', async (id: unknown, ...options: unknown[]) => {
 			await removeRow(context, run, { scope: appRowPredicate(context, capability, id, 'delete') }, versionArgument(context, options))
@@ -682,7 +705,7 @@ function publicApplicationRows(
 		get: bound(site, async (id: unknown) => {
 			appListPredicate(context, capability)
 			const action = heldAction(context, capability)
-			return selectOne(context, run, appKeyPredicate(model, id), visibleFor(model, action), action)
+			return selectOne(context, run, appKeyScope(model, action, id), visibleFor(model, action), action)
 		}),
 		getForUpdate: refusal('lock'),
 		claim: refusal('claim'),
@@ -693,7 +716,7 @@ function publicApplicationRows(
 			const saved = await updateRow<Readonly<Record<string, unknown>>>(
 				context,
 				run,
-				{ scope: appKeyPredicate(model, id) },
+				{ scope: appKeyScope(model, grant.action, id) },
 				changes,
 				versionArgument(context, options),
 			)
@@ -797,7 +820,14 @@ async function claimRows(
 		const now = await databaseNow(session)
 		const waiting = { due: queue.due, attempts: queue.attempts, now, maxAttempts: queue.maxAttempts }
 		const node = claimNode(rowState(table, conditions, order, limit), selected, waiting, scope, model.dates, dialect)
-		const rows = await session.run<Readonly<Record<string, unknown>>>(node, { root: 'SelectQueryNode', table, joins: {}, scope, lock: 'claim' })
+		const rows = await session.run<Readonly<Record<string, unknown>>>(node, {
+			root: 'SelectQueryNode',
+			table,
+			joins: {},
+			scope,
+			lock: 'claim',
+			subqueries: context.subqueries,
+		})
 		const byAttempts = new Map<number, string[]>()
 		for (const row of rows) {
 			const attempts = row[queue.attempts]
@@ -813,7 +843,7 @@ async function claimRows(
 			const changes = new Map<string, Primitive>([[queue.attempts, attempts + 1], [queue.due, due]])
 			const updated = await session.run<Readonly<Record<string, unknown>>>(
 				updateNode(table, boundValues(context, changes), version, scopedWhere(inList(table, key, ids), scope), answer(context)),
-				{ root: 'UpdateQueryNode', table, joins: {}, scope },
+				{ root: 'UpdateQueryNode', table, joins: {}, scope, subqueries: context.subqueries },
 			)
 			for (const row of updated) {
 				const id = row['id']
@@ -835,7 +865,13 @@ async function claimRows(
 					dialect,
 					table,
 					rowColumnsOf(model),
-					await session.run<Readonly<Record<string, unknown>>>(later, { root: 'SelectQueryNode', table, joins: {}, scope }),
+					await session.run<Readonly<Record<string, unknown>>>(later, {
+						root: 'SelectQueryNode',
+						table,
+						joins: {},
+						scope,
+						subqueries: context.subqueries,
+					}),
 				)
 				rearm = row === undefined ? null : new Date(Math.max(dueOf(row, table, queue.due).getTime(), now.getTime() + CLAIM_REARM_MIN_MS))
 			}
@@ -996,6 +1032,10 @@ function unscopedRows(context: TableContext, site: DataSite, run: Runner, mode: 
 		return equals(table, keyOf(model), id)
 	}
 	const write = <A extends unknown[], R>(operation: 'insert' | 'update' | 'remove', method: (...args: A) => Promise<R>) => {
+		// A row of a relation source confers access; an unscoped write would delegate without the writer's bound.
+		if (model.confers.length > 0) {
+			return refused(site, 'undeclared_reach', `${table} confers a relation, so it is written through a capability only, never unscoped`)
+		}
 		if (mode === 'read') {
 			const verb = operation === 'remove' ? 'remove' : operation
 			return refused(site, 'undeclared_reach', `${table} is declared unscoped: 'read', so ${verb} needs unscoped: { ${table}: 'write' }`)
@@ -1014,7 +1054,7 @@ function unscopedRows(context: TableContext, site: DataSite, run: Runner, mode: 
 			const dialect = dialectOf(context)
 			const node = selectNode(rowState(table, [], [], 1), visible, scope, byKey(id), model.dates, dialect)
 			const session = await run.read()
-			const rows = await session.run(node, { root: 'SelectQueryNode', table, joins: {}, scope })
+			const rows = await session.run(node, { root: 'SelectQueryNode', table, joins: {}, scope, subqueries: context.subqueries })
 			const [row] = answerRows(dialect, table, rowColumnsOf(model), rows)
 			if (row === undefined) {
 				throw new NotFoundError(`${table} not found`)
@@ -1277,6 +1317,7 @@ async function listRows(
 		table,
 		joins: {},
 		scope,
+		subqueries: context.subqueries,
 	})
 	const page = answerRows(dialect, table, rowColumnsOf(context.model), rows.slice(0, limit))
 	const last = page[page.length - 1]
@@ -1301,7 +1342,13 @@ async function countRows(
 		return 0
 	}
 	const node = aggregateNode(table, { groupBy: [], count: true, sum: [], min: [], max: [] }, conditions, scope)
-	const [row] = await (await run.read()).run<Readonly<Record<string, unknown>>>(node, { root: 'SelectQueryNode', table, joins: {}, scope })
+	const [row] = await (await run.read()).run<Readonly<Record<string, unknown>>>(node, {
+		root: 'SelectQueryNode',
+		table,
+		joins: {},
+		scope,
+		subqueries: context.subqueries,
+	})
 	const count = row === undefined ? '0' : row['count']
 	return typeof count === 'string' || typeof count === 'number' ? Number(count) : 0
 }

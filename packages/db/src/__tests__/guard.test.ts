@@ -33,6 +33,7 @@ import {
 	WhereNode,
 } from 'kysely'
 import { nameSet } from '../builtins'
+import { subquery } from '../condition-nodes'
 import { finishSelect, startSelect, type TableShape } from '../description'
 import { QueryRefusedError } from '../errors'
 import { assertAllowedTree, type GuardContext } from '../guard'
@@ -190,6 +191,63 @@ describe('the scope predicate has one of the shapes the layer builds', () => {
 			const [node, context] = scopedBy(shape)
 			refuses(node, context, 'the scope predicate must be true')
 		}
+	})
+})
+
+describe('a scope held through relations or narrowed by a condition', () => {
+	const subqueries = { note_members: ['note_id', 'principal_id', 'expires_at'], secrets: ['id'] }
+	const scopedBy = (predicate: OperationNode): [SelectQueryNode, GuardContext] => [
+		select({ where: scopedWhere(equals('notes', 'title', 'x'), predicate) }),
+		{ ...selectContext, scope: predicate, subqueries },
+	]
+	const workspaces = inList('notes', 'workspace_id', ['w1'])
+	const members = (where: OperationNode, table = 'note_members', selected = 'note_id') =>
+		BinaryOperationNode.create(column('notes', 'id'), OperatorNode.create('in'), subquery(table, selected, where))
+	const mine = equals('note_members', 'principal_id', 'user:alice')
+	const unexpired = anyOf([
+		BinaryOperationNode.create(column('note_members', 'expires_at'), OperatorNode.create('is'), ValueNode.createImmediate(null)),
+		BinaryOperationNode.create(column('note_members', 'expires_at'), OperatorNode.create('>'), ValueNode.create(new Date(0))),
+	])
+	const open = BinaryOperationNode.create(column('notes', 'word_count'), OperatorNode.create('<'), ValueNode.create(100))
+
+	test("a relation's rows, beside values or after a Ref's chain, and a reach AND a parenthesized condition pass", () => {
+		const related = members(allOf([mine, unexpired]))
+		const shapes = [
+			related,
+			anyOf([workspaces, related]),
+			allOf([equals('notes', 'id', 'n1'), related]),
+			AndNode.create(workspaces, ParensNode.create(open)),
+			AndNode.create(everything(), ParensNode.create(open)),
+			AndNode.create(anyOf([workspaces, related]), ParensNode.create(open)),
+		]
+		for (const shape of shapes) {
+			const [node, context] = scopedBy(shape)
+			expect(() => assertAllowedTree(node, context)).not.toThrow()
+		}
+	})
+
+	test('a condition never stands in for the reach, and a relation subquery is anchored on its principal', () => {
+		const shapes = [
+			open,
+			ParensNode.create(open),
+			AndNode.create(ParensNode.create(open), workspaces),
+			AndNode.create(workspaces, open),
+			members(unexpired),
+			members(allOf([unexpired, mine])),
+			members(mine, 'secrets', 'id'),
+			members(mine, 'note_members', 'body'),
+			members(mine, 'notes', 'id'),
+			AndNode.create(equals('notes', 'id', 'n1'), workspaces),
+		]
+		for (const shape of shapes) {
+			const [node, context] = scopedBy(shape)
+			refuses(node, context, 'the scope predicate must be true')
+		}
+	})
+
+	test('a subquery reads only a table the layer admits', () => {
+		const [node, context] = scopedBy(members(mine))
+		refuses(node, { ...context, subqueries: {} }, 'the scope predicate must be true')
 	})
 })
 

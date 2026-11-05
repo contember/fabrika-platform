@@ -216,7 +216,9 @@ class SurfaceReader {
 			'members',
 			'directory',
 			'terminal',
+			'relations',
 		])
+		const relations = fields.get('relations')
 		const locale = fields.get('locale')
 		const displayName = fields.get('displayName')
 		const mail = fields.get('mail')
@@ -237,6 +239,13 @@ class SurfaceReader {
 			dimensions: this.#each(entries(fields.get('dimensions'), value, 'dimensions'), (name, dimension) => this.#dimension(name, dimension)),
 			actions: this.#each(entries(fields.get('actions'), value, 'actions'), (_, description) => text(description, description, 'an action description')),
 			roles: this.#each(entries(fields.get('roles'), value, 'roles'), (name, role) => this.#role(name, role)),
+			...(relations === undefined
+				? {}
+				: {
+					relations: this.#each(entries(relations, value, 'relations'), (name, relation) => ({
+						dimension: text(strictFields(relation, `relation '${name}'`, ['dimension'], []).get('dimension'), relation, 'dimension'),
+					})),
+				}),
 		}
 	}
 
@@ -283,16 +292,18 @@ class SurfaceReader {
 	}
 
 	#role(name: string, value: LiteralValue): RoleDef<string, string, string> {
-		const fields = strictFields(value, `role '${name}'`, ['grants'], ['member', 'external'])
+		const fields = strictFields(value, `role '${name}'`, ['grants'], ['member', 'external', 'via'])
 		const member = fields.get('member')
 		const memberFields = member === undefined ? undefined : strictFields(member, `role '${name}' member`, ['scope', 'assignableBy'], [])
 		const external = fields.get('external')
+		const via = fields.get('via')
 		return {
 			grants: texts(fields.get('grants'), value, 'grants'),
 			member: memberFields === undefined
 				? undefined
 				: { scope: text(memberFields.get('scope'), value, 'scope'), assignableBy: texts(memberFields.get('assignableBy'), value, 'assignableBy') },
 			...(external === undefined ? {} : { external: externalOf(external) }),
+			...(via === undefined ? {} : { via: this.#each(entries(via, value, 'via'), (_, actions) => texts(actions, value, 'via')) }),
 		}
 	}
 

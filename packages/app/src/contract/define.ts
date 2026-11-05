@@ -95,6 +95,16 @@ export interface RoleDef<A extends string, D extends string, R extends string> {
 	 * only internal people hold it. Only a role with `member` may declare it; an internal person may hold it too.
 	 */
 	readonly external?: true
+	/**
+	 * Relation → actions: a holder of this role, granted globally, holds them at each node a row of the relation's
+	 * source names them at (`via: { owner: ['projects.edit'] }`). A scoped grant of the role carries none of them.
+	 */
+	readonly via?: { readonly [relation: string]: readonly A[] }
+}
+
+/** A relation of the vocabulary: a table's rows name a principal at a node of `dimension` (`confers` on that table). */
+export interface RelationDef<D extends string> {
+	readonly dimension: D
 }
 
 export interface Vocabulary<A extends string, D extends string, R extends string> extends Presentation, AppPeople<A>, AppTerminal {
@@ -102,6 +112,7 @@ export interface Vocabulary<A extends string, D extends string, R extends string
 	readonly dimensions: { readonly [K in D]: DimensionDef<A, D, R> }
 	readonly actions: { readonly [K in A]: string }
 	readonly roles: { readonly [K in R]: RoleDef<A, D, R> }
+	readonly relations?: { readonly [name: string]: RelationDef<D> }
 }
 
 /** The actions that manage and list the application's own people. */

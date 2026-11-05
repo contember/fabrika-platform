@@ -27,6 +27,7 @@ export function canonicalizeArtifact(artifact: ContractArtifact): ContractArtifa
 		dimensions: artifact.dimensions,
 		actions: artifact.actions,
 		roles: mapValues(artifact.roles, canonicalRole),
+		...(artifact.relations === undefined ? {} : { relations: artifact.relations }),
 		mounts: mapValues(artifact.mounts, canonicalMount),
 		files: mapValues(artifact.files, (collection) => ({
 			...collection,
@@ -101,6 +102,7 @@ function canonicalRole(role: RoleArtifact): RoleArtifact {
 		grants: sorted(role.grants),
 		member: role.member === null ? null : { scope: role.member.scope, assignableBy: sorted(role.member.assignableBy) },
 		...(role.external === true ? { external: true } : {}),
+		...(role.via === undefined ? {} : { via: mapValues(role.via, sorted) }),
 	}
 }
 

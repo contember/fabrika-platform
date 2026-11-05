@@ -88,8 +88,14 @@ export class TestAuthority implements CapabilityAuthority {
 		return this.lease
 	}
 
-	ref<const D extends string, const A extends string>(dimension: D, action: A, id: string, chain: Readonly<Record<string, string>> = {}): Ref<D, A> {
-		return new TestRef({ kind: 'ref', dimension, action, principal: this.#principal, id, chain: new Map(Object.entries(chain)) }, this)
+	ref<const D extends string, const A extends string>(
+		dimension: D,
+		action: A,
+		id: string,
+		chain: Readonly<Record<string, string>> = {},
+		relations: readonly string[] = [],
+	): Ref<D, A> {
+		return new TestRef({ kind: 'ref', dimension, action, principal: this.#principal, id, chain: new Map(Object.entries(chain)), relations }, this)
 	}
 
 	within<const D extends string, const A extends string>(
@@ -98,8 +104,9 @@ export class TestAuthority implements CapabilityAuthority {
 		values: readonly string[] | 'all',
 		containers: readonly ContainerGrant[] = [],
 		contained: readonly ContainerGrant[] = [],
+		relations: readonly string[] = [],
 	): Within<D, A> {
-		return new TestWithin({ kind: 'within', dimension, action, principal: this.#principal, values, containers, contained }, this)
+		return new TestWithin({ kind: 'within', dimension, action, principal: this.#principal, values, containers, contained, relations }, this)
 	}
 
 	/** The capability of an `app` endpoint: `action` held as a global grant. */

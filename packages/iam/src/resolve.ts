@@ -1,8 +1,10 @@
 import {
+	isReservedScopeType,
 	matchAction,
 	type PermissionEntry,
 	type PermissionSource,
 	type PrincipalAffiliation,
+	RELATION_SCOPE_TYPE,
 	type RoleDef,
 	type RoleSource,
 	type Scope,
@@ -12,7 +14,7 @@ import { normalizeEmailIdentity } from './email-identity'
 import { logWarn } from './log'
 import { makeRoleSource } from './roles'
 import type { Config } from './services'
-import { parseStoredPermissions } from './stored-permissions'
+import { parseStoredPermissions, parseStoredVia } from './stored-permissions'
 
 // ── Pure resolution (no I/O) — testable with in-memory rows ───────────────────
 
@@ -125,12 +127,24 @@ export function computeAuthority(inputs: ResolutionInputs, roles: RoleSource): R
 		for (const permission of role.permissions) {
 			add(permission, scope, source, until)
 		}
+		// A relation holds actions through a GLOBAL grant only: a scoped grant would hold them at nodes outside its scope.
+		if (scope === null && !external && role.member === undefined) {
+			for (const [relation, actions] of Object.entries(role.via ?? {})) {
+				for (const action of actions) {
+					add(action, { type: RELATION_SCOPE_TYPE, value: relation }, source, until)
+				}
+			}
+		}
 	}
 
 	// 1. Explicit grants — EITHER a named role OR an inline action-pattern set.
 	for (const grant of inputs.grants) {
 		const scope = rowScope(grant.scope_type, grant.scope_value)
 		if (external && (grant.app === null || grant.role_key === null)) {
+			continue
+		}
+		if (scope !== null && isReservedScopeType(scope.type)) {
+			// A row stored before `~` was reserved: IAM alone derives a `~` entry, so the row grants nothing.
 			continue
 		}
 		if (grant.role_key !== null) {
@@ -332,6 +346,7 @@ function toRoleDef(row: RoleRow): RoleDef {
 		permissions: parseStoredPermissions(row.permissions),
 		...(row.member_scope !== null ? { member: { scope: row.member_scope } } : {}),
 		...(row.external === 1 ? { external: true } : {}),
+		...(row.via === null ? {} : { via: parseStoredVia(row.via) }),
 	}
 }
 

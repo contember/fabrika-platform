@@ -10,6 +10,7 @@
 
 import {
 	API_KEY_PREFIX,
+	isReservedScopeType,
 	type IssueKeyInput,
 	type IssueKeyResult,
 	type KeyGrant,
@@ -58,7 +59,11 @@ function refused(problem: string): IssueOutcome {
  */
 export function findUncoveredGrant(issuerPermissions: PermissionEntry[], grants: KeyGrant[]): KeyGrant | null {
 	for (const grant of grants) {
-		if (!permits(issuerPermissions, grant.action, grant.scope ?? undefined)) {
+		// A relation entry is derived from a role's via at every mint, never frozen into a key.
+		if (
+			(grant.scope !== null && grant.scope !== undefined && isReservedScopeType(grant.scope.type))
+			|| !permits(issuerPermissions, grant.action, grant.scope ?? undefined)
+		) {
 			return grant
 		}
 	}
