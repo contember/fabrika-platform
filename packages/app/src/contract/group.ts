@@ -291,16 +291,18 @@ export interface Endpoint<T extends ProcedureType, I extends InputSchema | null,
 /**
  * An endpoint before `.handle`: a group refuses it. `Tk` are the kit's token purposes: a signed token field of the input
  * reaches the handler as the claims of its purpose.
+ * The parameters are declared invariant, stricter than their structure: measuring that variance through `ExactReturn`
+ * exceeds TypeScript 7's instantiation limit (TS2589), and the compiler does not check an `in out` annotation.
  */
 export interface EndpointBuilder<
-	T extends ProcedureType,
-	I extends InputSchema | null,
-	O extends Schema,
-	Acc,
-	D,
-	Ctx,
-	X = unknown,
-	Tk = Record<never, never>,
+	in out T extends ProcedureType,
+	in out I extends InputSchema | null,
+	in out O extends Schema,
+	in out Acc,
+	in out D,
+	in out Ctx,
+	in out X = unknown,
+	in out Tk = Record<never, never>,
 > extends PendingEndpoint {
 	/** The endpoint's handler, typed by its access form and declaration; it may return only the output's fields. */
 	handle<const F extends KitHandler<WithClaims<HandlerInput<I, Acc>, Tk>, Ctx, HandlerReturn<F, O>, X>>(
