@@ -19,6 +19,7 @@ jobs:
   quality:
     name: Quality
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
 
@@ -47,6 +48,8 @@ jobs:
   test:
     name: Test with PostgreSQL ${{ matrix.postgres }} and S3
     runs-on: ubuntu-latest
+    # why: the suite takes 12–15 minutes on a hosted runner, so 10 would fail every run.
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -105,6 +108,7 @@ jobs:
   build:
     name: Build deployable artifacts
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
 
@@ -124,6 +128,7 @@ jobs:
   release-artifacts:
     name: Verify release artifacts
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
 
