@@ -41,6 +41,7 @@ export {
 } from './generateMarkdown'
 export { CanvasHostContext, localCanvasHost, useCanvasHost } from './hostContext'
 export type { CanvasHost } from './hostContext'
+export { pageHighlighter } from './pageGlobals'
 export { PlanRenderer } from './PlanRenderer'
 export { RenderErrorContext } from './RenderErrorContext'
 export type { CanvasRenderError } from './RenderErrorContext'
