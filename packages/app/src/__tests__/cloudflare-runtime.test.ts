@@ -318,6 +318,8 @@ describe('the repair tick and the alarm', () => {
 			const due = Number(earliest?.['due'])
 			expect(due).toBeGreaterThan(ticked)
 			expect(await object.getAlarm()).toBe(due)
+			// Every other job's cron (:15, :30, the file sweep's :41) moves an hour out, so only the nightly is due while it runs.
+			object.sql.exec("update fabrika_wakes set due_at = ? where job <> 'nightly'", Date.now() + 3_600_000)
 			makeDue(target, 'nightly')
 			const triggered = Date.now()
 			await object.triggerAlarm()
