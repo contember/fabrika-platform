@@ -32,6 +32,8 @@ export interface OperationsTarget {
 const PUBLIC_KEY = /^[0-9a-f]{32}$/
 const PROJECT_ID = /^[1-9][0-9]{0,18}$/
 const DELIVERY_TIMEOUT_MS = 5_000
+const RETRY_DELAY_MIN_MS = 200
+const RETRY_DELAY_JITTER_MS = 300
 
 /** The envelope endpoint and key of a DSN `https://<key>@<host>/<project>`, or `null` when it is not one. */
 export function operationsTarget(dsn: string): OperationsTarget | null {
@@ -135,7 +137,16 @@ export function crashEnvelope(kind: CrashKind, error: unknown, options: Envelope
 	return eventEnvelope({ tags: { crash: kind }, values: exceptionChain(error, options.scrubber) }, options, now)
 }
 
-async function deliver(options: OperationsReporterOptions, body: string): Promise<void> {
+/**
+ * One delivery attempt. `retry` is a network failure, a timeout or a 5xx: the retry resends the same body, so the same
+ * `event_id`, which the ingest ignores when it already stored it.
+ */
+type Attempt = { readonly kind: 'delivered' } | { readonly kind: 'refused'; readonly status: number } | {
+	readonly kind: 'retry'
+	readonly status: number | null
+}
+
+async function attempt(options: OperationsReporterOptions, body: string): Promise<Attempt> {
 	const send = options.fetch ?? ((request: Request) => fetch(request))
 	const timer = deadline(DELIVERY_TIMEOUT_MS)
 	const request = new Request(options.target.envelopeUrl, {
@@ -150,15 +161,31 @@ async function deliver(options: OperationsReporterOptions, body: string): Promis
 	try {
 		const response = await send(request)
 		await response.body?.cancel()
-		if (!response.ok) {
-			console.error(`fabrika: a report to Operations answered ${response.status}`)
+		if (response.ok) {
+			return { kind: 'delivered' }
 		}
+		return response.status >= 500 ? { kind: 'retry', status: response.status } : { kind: 'refused', status: response.status }
 	} catch {
-		// The error may quote the ingest URL with its key.
-		console.error('fabrika: a report to Operations could not be delivered')
+		// The error may quote the ingest URL with its key, so it is not kept.
+		return { kind: 'retry', status: null }
 	} finally {
 		timer.clear()
 	}
+}
+
+/** One retry after a short jittered pause, so a transient ingress fault (a reset, a timeout, a 5xx) loses no report. */
+async function deliver(options: OperationsReporterOptions, body: string): Promise<void> {
+	let outcome = await attempt(options, body)
+	if (outcome.kind === 'retry') {
+		await new Promise<void>((resolve) => setTimeout(resolve, RETRY_DELAY_MIN_MS + Math.random() * RETRY_DELAY_JITTER_MS))
+		outcome = await attempt(options, body)
+	}
+	if (outcome.kind === 'delivered') {
+		return
+	}
+	console.error(
+		outcome.status === null ? 'fabrika: a report to Operations could not be delivered' : `fabrika: a report to Operations answered ${outcome.status}`,
+	)
 }
 
 export function operationsReporter(options: OperationsReporterOptions): OperationsReporter {

@@ -154,4 +154,9 @@ rest of custom domains, a client address on a dedicated IPv4, a release and reco
 - [271](271-fast-dev-sandboxes-on-cloudflare.md): A Cloudflare dev environment keys the application object by workspace, for the seconds-per-commit loop Zerops has.
 - [272](272-authoring-workspaces-on-kompjutr.md): A kompjutr working tree per workspace, so search and multi-file edits stop costing one GitHub request per file.
 - [273](273-automatic-rollback-of-a-suspect-release.md): An opted-in environment rolls a suspect release back when the observed verdict is `suspect` and the rollback verdict `safe`; its own ADR first.
+- [276](276-iam-serves-sign-in-on-an-invalid-mail-transport.md): An invalid mail transport makes IAM refuse only mail-dependent actions and keep serving sign-in, as Control does.
+- [277](277-platform-deploy-writes-each-services-env-before-its-build.md): `platform deploy` on Zerops writes every service's environment before any build, so a partial run leaves new variables on old code.
+- [278](278-control-alerts-when-iam-or-operations-is-down.md): Operations health-checks IAM, and Control probes Operations; the channel for an Operations outage is open.
+- [279](279-an-application-reports-the-reports-it-lost.md): A report lost after its retry is counted, and the count rides on the next delivered report.
+- [280](280-operations-on-a-shared-db-errors-after-the-nightly-backup.md): Operations kept in `db` on an older light installation errors for a while after each nightly backup reload.
 - [10](10-app-scope-secrets-on-zerops.md) — Control refuses an `app`-scoped secret on Zerops today; record that as the decision, or replicate per service.

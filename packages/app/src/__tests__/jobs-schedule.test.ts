@@ -140,4 +140,62 @@ describe('job reports to Operations', () => {
 			log.mockRestore()
 		}
 	})
+
+	test.each([
+		['a network failure', () => Promise.reject(new Error(`refused ${dsn}`))],
+		['a 503', () => Promise.resolve(new Response('busy', { status: 503 }))],
+	])('a report that meets %s once is delivered by its one retry, with no log line', async (_name, failure) => {
+		const target = operationsTarget(dsn)
+		if (target === null) throw new Error('no target')
+		const bodies: string[] = []
+		const log = spyOn(console, 'error').mockImplementation(() => {})
+		try {
+			await operationsReporter({
+				target,
+				release: null,
+				environment: null,
+				source: 'fabrika.jobs',
+				scrubber,
+				fetch: async (request) => {
+					bodies.push(await request.text())
+					return bodies.length === 1 ? failure() : new Response(null, { status: 202 })
+				},
+			}).report({ fingerprint: ['x'], type: 'JobMissed', message: 'm', tags: {} })
+			expect(bodies).toHaveLength(2)
+			expect(bodies[1]).toBe(bodies[0] ?? '')
+			expect(log).not.toHaveBeenCalled()
+		} finally {
+			log.mockRestore()
+		}
+	})
+
+	test.each([
+		['a 500 twice', 500, 2, 'fabrika: a report to Operations answered 500'],
+		['a timeout twice', null, 2, 'fabrika: a report to Operations could not be delivered'],
+		['a 400', 400, 1, 'fabrika: a report to Operations answered 400'],
+	])('a report that meets %s is one log line after its attempts', async (_name, status, attempts, line) => {
+		const target = operationsTarget(dsn)
+		if (target === null) throw new Error('no target')
+		let sent = 0
+		const log = spyOn(console, 'error').mockImplementation(() => {})
+		try {
+			await operationsReporter({
+				target,
+				release: null,
+				environment: null,
+				source: 'fabrika.jobs',
+				scrubber,
+				fetch: () => {
+					sent += 1
+					return status === null
+						? Promise.reject(new DOMException('The operation timed out.', 'TimeoutError'))
+						: Promise.resolve(new Response(null, { status }))
+				},
+			}).report({ fingerprint: ['x'], type: 'JobMissed', message: 'm', tags: {} })
+			expect(sent).toBe(attempts)
+			expect(log.mock.calls.map((call) => String(call[0]))).toEqual([line])
+		} finally {
+			log.mockRestore()
+		}
+	})
 })

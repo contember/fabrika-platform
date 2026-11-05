@@ -19,7 +19,10 @@ one step:
 - **Zerops.** The operator sets the same variables on both services by hand, in the GUI or with `zcli`, marks the
   credentials sensitive, restarts both, and redeploys each environment whose contract declares
   `mailer: 'installation'` (`packages/provider-zerops/src/installation/guide.md`, "Set or rotate the mail transport").
-  A value written to one service and not the other leaves IAM and the applications on different transports.
+  A value written to one service and not the other leaves IAM and the applications on different transports. Nothing
+  checks the value against the release the installation runs. On a production installation an operator set a
+  provider that only the next release accepted and restarted IAM, and sign-in was down until that release was rolled
+  out: IAM refuses to start on an invalid set (backlog [276](276-iam-serves-sign-in-on-an-invalid-mail-transport.md)).
 - **Applications.** Control hands the set at each deploy (`packages/control/src/mail-transport.ts`). An environment
   that is not redeployed keeps the old set, so a provider key that was revoked fails its mail with
   `provider_unauthorized` until someone deploys it.
@@ -33,6 +36,9 @@ one step:
 1. `fabrika platform mail --provider=<cloud> --email-provider=<name> --email-from=<address> [--email-from-name=…]`
    reads the provider's variables from the environment only, through `readInstallationEmail`
    (`packages/installation-init/src/email.ts`), as the installers do. `--email-provider=none` removes the transport.
+   It checks the set against the provider list of the release the installation runs (the sidecar's `fabrika.ref`
+   on Zerops), not of the CLI's own release, and refuses a provider that release does not accept. The refusal names
+   the first release that accepts it.
 2. **Zerops:** it writes the set on `iam` and `control` (credentials sensitive), deletes the `FABRIKA_EMAIL_*` names
    the new set does not hold, restarts both, and enqueues a deploy for every environment whose approved contract
    `installationMailJobs` names. It prints the environments it redeployed, never a value.
@@ -45,7 +51,8 @@ one step:
    keeps running on an invalid transport but refuses every deploy that needs it; on Cloudflare an invalid set fails
    Control's own deploy in the workflow.
 
-Witness: an install test with the emulated Zerops API sees the set on both services, a stale provider variable
+Witness: a run against an installation on an older release refuses a provider only a newer release accepts, and
+writes nothing. An install test with the emulated Zerops API sees the set on both services, a stale provider variable
 deleted, and one deploy enqueued per environment that declares `mailer: 'installation'`; a run with `none` while such
 an environment exists asks for confirmation and then redeploys it with `FABRIKA_EMAIL_PROVIDER=none`.
 

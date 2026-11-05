@@ -433,9 +433,10 @@ whose jobs declare `mailer: 'installation'`.
   naming the variables, and refuses only the deploys that hand the transport.
 - **Adding or rotating a transport later.** No command writes it after `install`:
   `platform upgrade` and `platform deploy` write no `FABRIKA_EMAIL_*` and remove
-  none, and `install` cannot be re-run. The operator sets the same variables on
-  `iam` and `control`, restarts both and redeploys the environments that use it
-  (`platform guide --provider=zerops`, "Set or rotate the mail transport"). One
+  none, and `install` cannot be re-run. The operator picks a provider the running
+  release accepts, sets the variables on `control` and restarts it until it logs no
+  invalid transport, then does the same on `iam`, and redeploys the environments that
+  use it (`platform guide --provider=zerops`, "Set or rotate the mail transport"). One
   command for it is [backlog 187](../backlog/187-set-or-rotate-the-installation-mail-transport.md).
 - **Cloudflare.** `fabrika platform init` requires `--email-provider` (`none` or a
   built-in provider). It writes the provider's secret variables as GitHub Environment
