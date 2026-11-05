@@ -722,6 +722,17 @@ const MAX_BACKOFF_MS = 30 * 24 * 60 * 60_000
 /** A claim re-arms its job no sooner than this after it ran, unless it took its full limit. */
 const CLAIM_REARM_MIN_MS = 1_000
 
+/**
+ * When a claim that leased rows re-arms its job, by the claim's own clock `now`: at once after a full claim, else
+ * at the next due row it would take but no sooner than a second after it, or never when it would take none.
+ */
+export function claimRearmAt(now: Date, full: boolean, next: Date | null): Date | null {
+	if (full) {
+		return new Date(now.getTime() + 1)
+	}
+	return next === null ? null : new Date(Math.max(next.getTime(), now.getTime() + CLAIM_REARM_MIN_MS))
+}
+
 /** The backoff after a row's `attempts`-th claim: one tick, doubling with each further claim. */
 function backoffMs(tickMs: number, attempts: number): number {
 	let backoff = tickMs
@@ -827,9 +838,9 @@ async function claimRows(
 		// The job runs again when this claim would next find a row; a claim that found nothing leaves the re-arm as it is.
 		const fence = runtime.capabilities.fence()
 		if (fence !== null && rows.length > 0) {
-			// A full claim left rows behind: due at once.
-			let rearm: Date | null = new Date(now.getTime() + 1)
-			if (rows.length < limit) {
+			const full = rows.length >= limit
+			let next: Date | null = null
+			if (!full) {
 				const later = nextClaimNode(rowState(table, conditions, [byDue], 1), waiting, scope, model.dates, dialect)
 				const [row] = answerRows(
 					dialect,
@@ -837,9 +848,9 @@ async function claimRows(
 					rowColumnsOf(model),
 					await session.run<Readonly<Record<string, unknown>>>(later, { root: 'SelectQueryNode', table, joins: {}, scope }),
 				)
-				rearm = row === undefined ? null : new Date(Math.max(dueOf(row, table, queue.due).getTime(), now.getTime() + CLAIM_REARM_MIN_MS))
+				next = row === undefined ? null : dueOf(row, table, queue.due)
 			}
-			await rearmClaim(runtime, session, fence, rearm)
+			await rearmClaim(runtime, session, fence, claimRearmAt(now, full, next))
 		}
 		return {
 			rows: await answerFiles(
