@@ -251,7 +251,8 @@ const policyTestBody = (
 	dialect: ApplicationDialect,
 ): { readonly body: string; readonly cases: readonly string[] } | undefined => {
 	const policy = policies[table]
-	if (policy === undefined) return undefined
+	// A view's rows come from the tables it reads, so no probe seeds one; its parent's cases still run.
+	if (policy === undefined || policy.view === true) return undefined
 	const app = policy.scope.mode === 'app'
 	const dimension = grantDimension(policies, policy)
 	if (dimension === undefined && !app) return undefined
@@ -889,6 +890,13 @@ export const missingEndpointFixtures = ({ tables, policies, artifact, fixtures }
 		for (const [field, table] of Object.entries(fields).sort(byKey)) {
 			if (row.input?.type !== 'object' || !admitsString(row.input.fields[field])) {
 				findings.push(at(`${id}: ${field} is no string field of its input, so it cannot name a row`, 'a top-level string field of the input'))
+			} else if (policies[table]?.view === true) {
+				findings.push(
+					at(
+						`${id}: ${field} names the view ${table}, whose rows the kit cannot seed: they come from the tables it reads`,
+						'a row field that names a table the view reads',
+					),
+				)
 			} else if (!rowPlace(policies, scope, table)) {
 				findings.push(at(...unplacedRow(policies, id, table, scope)))
 			}

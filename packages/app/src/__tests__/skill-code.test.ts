@@ -88,6 +88,7 @@ const checked = blocks.filter((block) => CHECKED_LANGUAGES.includes(block.langua
 const Catalog = z.strictObject({
 	columns: z.array(z.strictObject({
 		table_name: z.string(),
+		view: z.boolean(),
 		column_name: z.string(),
 		type_name: z.string(),
 		type_type: z.string(),

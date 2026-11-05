@@ -93,3 +93,4 @@ a commit message suffices.
 | [0069](0069-control-reaches-an-application-environments-object.md)                      | Control reaches an application environment's object over a composed ops row, and freezes it by generation |
 | [0070](0070-data-protection-of-an-application-environment-on-cloudflare.md)             | Back up an environment's object daily, verify each backup by importing it, and restore into a clone       |
 | [0071](0071-an-application-keeps-its-developer-tools-in-tools.md)                       | Keep developer tools in tools/, outside the application rules, and load them from nothing outside it      |
+| [0072](0072-a-view-is-a-read-only-table.md)                                             | A view is a read-only table of the data layer                                                             |

@@ -5803,6 +5803,28 @@ export const tables = defineTables(vocabulary, columns)({
   `iam.grant.create` and `iam.grant.revoke`): do not rebuild either in the application. An operator's access to the
   database or to the provider's console is outside Fabrika.
 
+## A view read as a table
+
+`fabrika db codegen` reads every view a migration creates (not a materialized view: read one with `ctx.sql`): its
+interface is `<Pascal>View`, every column is `| null`, and its column list entry says `view: true`. A view needs no
+policy; without one only `ctx.sql` reads it. With one, `ctx.db` reads it like a child table, typed and scoped, and nothing writes it:
+
+- `scope: { child: '<parent>' }` puts it under its parent's `Ref`, with the child's conventions: the view selects the
+  parent column (`<parent dimension>_id`) and every chain column of the parent. A view of one row per parent states
+  `key: '<parent column>'` (`{ child: 'deals', key: 'deal_id' }`), and a handler `on` the parent reads that row with
+  `ctx.db.target.<view>.get(ctx.target.value)`.
+- `scope: { reference: '<why>' }` is a view every endpoint reads, through `ctx.db.reference.<view>`.
+- It takes `actions: { read, appRead?, appCount? }` and column `read` actions only. `insert`, `update`, `delete`,
+  `version`, `createdBy`, `queue`, `files`, a column `write` and `unscoped: { <view>: 'write' }` are refused by tsc and
+  the checker; its handles' writes are `Unavailable`, and the data layer refuses them.
+- No foreign key ties a view's rows to its parent: its SQL is what puts a row in a scope, and the approver reviews it.
+  Select the parent and chain columns from the parent row itself, or from a row whose foreign keys tie it there. A row
+  whose parent column is null is read by no `Ref`, but a `Within` reaches it through the chain columns it carries.
+- A column of a type the data layer does not read (an array, `numeric` on SQLite) is left out, and every codegen run
+  names it. On SQLite an expression has a type only through `CAST(… AS INTEGER | REAL | TEXT)`; on Postgres cast a
+  count you want as a number (`count(*)::int4`).
+- `fabrika db test-scaffold` writes no policy isolation test for a view: its parent's cases cover the rows it reads.
+
 ---
 
 # references/tests.md — generated tests, seeds and your own tests

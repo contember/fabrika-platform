@@ -415,7 +415,8 @@ export function endpointAccessKit<DB, P>(
 		challengeFetch: () => Promise.resolve(Response.json({ success: false, 'error-codes': ['invalid-input-response'] })),
 	})
 	const policies = tablePolicies(tables)
-	const tableNames = Object.keys(policies).sort()
+	// A view's rows come from the tables it reads, which the kit seeds instead.
+	const tableNames = Object.keys(policies).filter((name) => policies[name]?.view !== true).sort()
 
 	const ownerOf = (dimension: string): string | undefined =>
 		tableNames.find((name) => {

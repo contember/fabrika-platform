@@ -17,4 +17,8 @@ export const tables = defineTables(vocabulary, columns)({
 		createdBy: 'created_by',
 		columns: { assignee: { write: 'tasks.assign' } },
 	},
+	project_task_counts: {
+		scope: { child: 'projects', key: 'project_id' },
+		actions: { read: 'tasks.read' },
+	},
 })

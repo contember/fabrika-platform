@@ -103,6 +103,8 @@ export interface IndexedTable {
 	readonly versioned: boolean
 	/** A queue table: its rows are claimed and finished through `row.ref`. */
 	readonly queued: boolean
+	/** A view: read like its scope's tables, written by no site (ADR-0072). */
+	readonly view: boolean
 }
 
 type IndexedTableOf<DB, P, T extends keyof P & keyof DB & string, V = unknown> = {
@@ -128,6 +130,7 @@ type IndexedTableOf<DB, P, T extends keyof P & keyof DB & string, V = unknown> =
 	readonly reach: ReachOf<P, T, V>
 	readonly versioned: PolicyOf<P, T> extends { readonly version: string } ? true : false
 	readonly queued: PolicyOf<P, T> extends { readonly queue: object } ? true : false
+	readonly view: PolicyOf<P, T> extends { readonly view: true } ? true : false
 }
 
 type OwnerTable<P, D> = { [K in keyof P]: P[K] extends { readonly scope: { readonly dimension: D } } ? K : never }[keyof P]
@@ -386,19 +389,21 @@ export interface UnownedTarget<D extends string> {
 	readonly remove: Unavailable<`no table owns the dimension ${D}, so ctx.db.target has no row of its own`>
 }
 
-/** A child table of the target: its rows are addressed by their own key under the target. */
+/** A child table of the target: its rows are addressed by their own key under the target; a view's are only read. */
 export interface ChildRows<T extends string, E extends IndexedTable, A extends string, K extends DataKind> {
 	readonly list: Read<T, E, A, (options?: ListOptions<RowFor<E, A>>) => Promise<ListPage<RowFor<E, A>>>>
 	readonly get: Read<T, E, A, (key: string) => Promise<RowFor<E, A>>>
-	readonly insert: Write<T, E, 'insert', A, K, InsertMethod<E>>
-	readonly update: Update<
+	readonly insert: E['view'] extends true ? Unavailable<`${T} is a view, which no site writes: write the tables it reads`>
+		: Write<T, E, 'insert', A, K, InsertMethod<E>>
+	readonly update: E['view'] extends true ? Unavailable<`${T} is a view, which no site writes: write the tables it reads`> : Update<
 		T,
 		E,
 		A,
 		K,
 		(key: string, values: { [C in keyof UpdateValuesOf<E, A>]: UpdateValuesOf<E, A>[C] }, ...version: VersionArguments<E>) => Promise<Saved<E>>
 	>
-	readonly remove: Write<T, E, 'delete', A, K, (key: string, ...version: VersionArguments<E>) => Promise<void>>
+	readonly remove: E['view'] extends true ? Unavailable<`${T} is a view, which no site writes: write the tables it reads`>
+		: Write<T, E, 'delete', A, K, (key: string, ...version: VersionArguments<E>) => Promise<void>>
 }
 
 /** A dimension table the target contains: listed in it, and inserted into it by a mutation of its insert action. */
@@ -603,19 +608,22 @@ export type UnscopedMode = 'read' | 'write'
 export type UnscopedDeclaration<Table extends string, Mode extends UnscopedMode> = { readonly [T in Table]?: Mode }
 
 /**
- * The tables of `U` whose mode may be `'write'` that no site writes: a reference table. A union or optional mode that
- * admits `'write'` counts, because the declaration it types may hold it.
+ * The tables of `U` whose mode may be `'write'` that no site writes: a reference table or a view. A union or optional
+ * mode that admits `'write'` counts, because the declaration it types may hold it.
  */
 type ReadOnlyWritten<Ix extends AnyDbIndex, U> = {
-	[T in keyof U & TableName<Ix>]: 'write' extends U[T] ? Ix['tables'][T]['mode'] extends 'reference' ? T : never : never
+	[T in keyof U & TableName<Ix>]: 'write' extends U[T]
+		? Ix['tables'][T]['mode'] extends 'reference' ? T : Ix['tables'][T]['view'] extends true ? T : never
+		: never
 }[keyof U & TableName<Ix>]
 
-type ReadOnlyMessage<T extends string> =
-	`${T} is a reference table, which no site writes: its rows come from a migration, so declare unscoped: { ${T}: 'read' }`
+type ReadOnlyMessage<T extends string, E extends IndexedTable> = E['view'] extends true
+	? `${T} is a view, which no site writes: its rows come from the tables it reads, so declare unscoped: { ${T}: 'read' }`
+	: `${T} is a reference table, which no site writes: its rows come from a migration, so declare unscoped: { ${T}: 'read' }`
 
 /** An `unscoped` declaration's `'write'` of a reference table, refused at its own line. */
 export type ReadOnlyUnscoped<Ix extends AnyDbIndex, U> = [ReadOnlyWritten<Ix, U>] extends [never] ? unknown
-	: { readonly [T in ReadOnlyWritten<Ix, U>]: Unavailable<ReadOnlyMessage<T>> }
+	: { readonly [T in ReadOnlyWritten<Ix, U>]: Unavailable<ReadOnlyMessage<T, Ix['tables'][T]>> }
 
 type KeylessMessage<T extends string> = `${T} is a reference table, which has no key: read it with list`
 

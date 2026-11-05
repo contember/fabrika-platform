@@ -221,6 +221,26 @@ describe('the rows of the fixtures: input fields that name a row in the scope of
 		])
 	})
 
+	test('a view gets no policy isolation test, and a row field may not name one: its rows come from the tables it reads', async () => {
+		const inputs = scaffoldInputs(withFixtures("export const rows = { 'api.notes.editComment': { commentId: 'comment_views' } }\n"))
+		const comments = inputs.policies['note_comments']
+		if (comments === undefined) throw new Error('the isolation fixture declares no note_comments')
+		const view = {
+			...comments,
+			actions: { read: comments.actions.read, insert: null, update: null, delete: null },
+			insert: [],
+			update: [],
+			view: true,
+		} as const
+		const withView = { ...inputs, policies: { ...inputs.policies, comment_views: view } }
+		const tests = await generatedTests(withView.policies, withView.artifact, withView.fixtures)
+		expect([...tests.keys()].filter((path) => path.includes('comment_views'))).toEqual([])
+		expect([...tests.keys()].sort()).toEqual([...(await generatedTests(inputs.policies, inputs.artifact, inputs.fixtures)).keys()].sort())
+		expect(missingEndpointFixtures(withView).map((finding) => finding.message)).toEqual([
+			'api.notes.editComment: commentId names the view comment_views, whose rows the kit cannot seed: they come from the tables it reads',
+		])
+	})
+
 	test('an in endpoint takes a row that lies directly in its target, an over endpoint one in a scope it lists', () => {
 		expect(findings("export const rows = { 'api.notes.create': { title: 'notes' } }\n")).toEqual([])
 		expect(findings("export const rows = { 'api.notes.create': { title: 'note_comments' } }\n")).toEqual([

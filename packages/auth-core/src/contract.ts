@@ -861,6 +861,11 @@ export interface TablePolicyArtifact {
 	 * actions are the file's authority. Absent unless declared, so the digest stays.
 	 */
 	readonly files?: Readonly<Record<string, string>>
+	/**
+	 * A view (ADR-0072): read like its scope's tables, written by nothing, its containment stated by its SQL alone.
+	 * Absent for a table, so the digest stays.
+	 */
+	readonly view?: true
 }
 
 /** A column's own read action, its own write action, or both; an absent one is left out. */

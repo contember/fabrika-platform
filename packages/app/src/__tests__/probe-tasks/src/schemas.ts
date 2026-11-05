@@ -27,3 +27,5 @@ export const UpdateTask = z.strictObject({
 export const AssignTask = z.strictObject({ id: z.uuid(), expectVersion: z.int().positive(), assignee: z.nullable(z.string().min(1).max(100)) })
 export const CloseTask = z.strictObject({ id: z.uuid(), expectVersion: z.int().positive() })
 export const MyTasks = z.strictObject({ orgId: z.string(), limit: z.optional(PageLimit), after: z.optional(Cursor) })
+export const ProjectById = z.strictObject({ projectId: z.string() })
+export const TaskCount = z.strictObject({ tasks: z.int() })

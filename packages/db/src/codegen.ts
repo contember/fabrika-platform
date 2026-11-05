@@ -56,6 +56,8 @@ export class CodegenError extends Error {
 
 const catalogColumnSchema = z.object({
 	table_name: z.string(),
+	/** The relation is a view (`relkind` `v`): read-only, every column nullable. A materialized view is left out (ADR-0072). */
+	view: z.boolean(),
 	column_name: z.string(),
 	type_name: z.string(),
 	/** `pg_type.typtype`: `b` base, `e` enum, `d` domain, … */
@@ -91,10 +93,11 @@ export interface Catalog {
 	readonly foreignKeys: readonly CatalogForeignKey[]
 }
 
-/** One row per column of every ordinary or partitioned table in the schema, in table then column order. */
+/** One row per column of every ordinary or partitioned table and view of the schema, in table then column order. */
 const CATALOG_QUERY = `
 SELECT
 	c.relname::text AS table_name,
+	c.relkind = 'v' AS view,
 	a.attname::text AS column_name,
 	t.typname::text AS type_name,
 	t.typtype::text AS type_type,
@@ -113,7 +116,7 @@ FROM pg_attribute a
 JOIN pg_class c ON c.oid = a.attrelid
 JOIN pg_namespace n ON n.oid = c.relnamespace
 JOIN pg_type t ON t.oid = a.atttypid
-WHERE n.nspname = $1 AND c.relkind IN ('r', 'p') AND NOT c.relispartition AND a.attnum > 0 AND NOT a.attisdropped
+WHERE n.nspname = $1 AND c.relkind IN ('r', 'p', 'v') AND NOT c.relispartition AND a.attnum > 0 AND NOT a.attisdropped
 ORDER BY c.relname, a.attnum
 `
 
@@ -182,13 +185,14 @@ export async function introspectCatalog(url: string, schema: string, objects: re
 }
 
 /**
- * `note_comments` → `NoteCommentsTable`; the suffix keeps every name clear of `DB` and the imported type names. A
- * name that would not start with a letter (`_123`) gets a `T` prefix, so it stays a TypeScript identifier.
+ * `note_comments` → `NoteCommentsTable`, a view `deal_summaries` → `DealSummariesView`; the suffix keeps every name
+ * clear of `DB` and the imported type names. A name that would not start with a letter (`_123`) gets a `T` prefix, so
+ * it stays a TypeScript identifier.
  */
-function interfaceName(table: string): string {
+function interfaceName(table: string, view: boolean): string {
 	const words = table.split('_').filter((word) => word !== '')
 	const pascal = words.map((word) => `${word.charAt(0).toUpperCase()}${word.slice(1)}`).join('')
-	return `${/^[A-Z]/.test(pascal) ? pascal : `T${pascal}`}Table`
+	return `${/^[A-Z]/.test(pascal) ? pascal : `T${pascal}`}${view ? 'View' : 'Table'}`
 }
 
 /** As keys of the generated object literal these would set or shadow the prototype instead of naming a table. */
@@ -226,11 +230,18 @@ export interface DescribedColumn {
 	readonly list: 'dates' | 'timestamps' | 'booleans' | 'json' | undefined
 }
 
-/** A column `describe` leaves out of the module: a generated column of a type the data layer does not read. */
+/**
+ * A column `describe` leaves out of the module: a generated column, or a view's column, of a type the data layer does
+ * not read.
+ */
 export interface LeftOut {
-	/** The column's type, as its author wrote it. */
+	/** The column's type, as its author wrote it (empty: a SQLite view's expression, which has none). */
 	readonly leftOut: string
+	readonly of: LeftOutKind
 }
+
+/** Why a column is left out rather than refused: it is computed, by a generated column or by a view. */
+export type LeftOutKind = 'generated' | 'view'
 
 /** A column the module leaves out; only `ctx.sql` reaches it. */
 export interface LeftOutColumn {
@@ -238,11 +249,15 @@ export interface LeftOutColumn {
 	readonly column: string
 	/** Its type, as its author wrote it. */
 	readonly type: string
+	readonly of: LeftOutKind
 }
 
 /** What codegen says of a left-out column: in the module, `name` is the column; in its output, `table.column`. */
-export function leftOutText(name: string, type: string): string {
-	return `${name} (${type}, generated) is left out: the data layer does not read it; ctx.sql does`
+export function leftOutText(name: string, type: string, of: LeftOutKind): string {
+	if (of === 'generated') return `${name} (${type}, generated) is left out: the data layer does not read it; ctx.sql does`
+	return `${name} (${
+		type === '' ? 'no declared type' : type
+	}, of a view) is left out: the data layer does not read it; cast it to a type it reads, or read it with ctx.sql`
 }
 
 /** Why a left-out column refuses the schema: the table would lose a key, or a foreign key a column. */
@@ -270,15 +285,22 @@ export interface NamedColumn {
 	readonly column_name: string
 }
 
+/** A column of a table or of a view, as `renderTables` reads it. */
+export interface RelationColumn extends NamedColumn {
+	/** The relation is a view: read-only, with no key or foreign key. */
+	readonly view: boolean
+}
+
 /**
  * A column's types; for a type the data layer does not read, a generated column (any such type: an array, `json`, a
- * range, a composite, a domain) is left out, unless a key needs it, and any other column is refused.
+ * range, a composite, a domain) is left out, unless a key needs it, and so is a view's column; any other is refused.
  */
 function describePostgres(column: CatalogColumn): DescribedColumn | LeftOut {
 	const scalar = scalarType(column)
 	if (scalar === undefined) {
+		if (column.view) return { leftOut: column.formatted_type, of: 'view' }
 		if (column.computed && column.keyed) throw leftOutRefusal(columnPath(column), 'it is in the primary key or a unique key')
-		if (column.computed) return { leftOut: column.formatted_type }
+		if (column.computed) return { leftOut: column.formatted_type, of: 'generated' }
 		if (column.type_type === 'b' && column.type_name === 'json') {
 			throw new CodegenError(
 				`${columnPath(column)} has type json; declare it jsonb, which the data layer reads and binds (json keeps whitespace and duplicate keys)`,
@@ -317,9 +339,9 @@ function columnType(column: DescribedColumn): Rendered {
 }
 
 /**
- * The generated module: one interface per application table, the `DB` map Kysely and `defineTables` take, and the
- * runtime column list with each table's foreign keys to application tables; with the columns it leaves out.
- * Deterministic for a given catalog, so `fabrika db codegen --verify` can compare text.
+ * The generated module: one interface per application table and view, the `DB` map Kysely and `defineTables` take,
+ * and the runtime column list with each table's foreign keys to application tables and each view marked; with the
+ * columns it leaves out. Deterministic for a given catalog, so `fabrika db codegen --verify` can compare text.
  */
 export function renderSchema(catalog: readonly CatalogColumn[], foreignKeys: readonly CatalogForeignKey[] = []): GeneratedModule {
 	return renderTables(catalog, foreignKeys, describePostgres)
@@ -327,12 +349,12 @@ export function renderSchema(catalog: readonly CatalogColumn[], foreignKeys: rea
 
 /**
  * `renderSchema` over columns of any database: `describe` gives each column's types and list field, refuses a type the
- * data layer does not read, or answers `LeftOut` for a generated column of such a type. That column is left out of the
- * module but for a comment where it stands, so no handle reads or writes it and only `ctx.sql` reaches it; a foreign
- * key that names it, and a table it would leave without a column, are refused. A foreign key's `constraint_name` is
- * not rendered; keys keep the given order.
+ * data layer does not read, or answers `LeftOut` for a generated column or a view's column of such a type. That column
+ * is left out of the module but for a comment where it stands, so no handle reads or writes it and only `ctx.sql`
+ * reaches it; a foreign key that names it, and a table it would leave without a column, are refused, and a view left
+ * without a column is left out whole. A foreign key's `constraint_name` is not rendered; keys keep the given order.
  */
-export function renderTables<C extends NamedColumn>(
+export function renderTables<C extends RelationColumn>(
 	catalog: readonly C[],
 	foreignKeys: readonly ForeignKeyColumns[],
 	describe: (column: C) => DescribedColumn | LeftOut,
@@ -350,14 +372,16 @@ export function renderTables<C extends NamedColumn>(
 		columns.push(column)
 		tables.set(column.table_name, columns)
 	}
+	const views = new Set(catalog.filter((column) => column.view).map((column) => column.table_name))
 	const names = [...tables.keys()].sort()
 	const owners = new Map<string, string>()
 	const used = new Set<string>()
 	const interfaces: string[] = []
 	const described = new Map<C, DescribedColumn>()
 	const leftOut: LeftOutColumn[] = []
+	const emptyViews = new Set<string>()
 	for (const table of names) {
-		const name = interfaceName(table)
+		const name = interfaceName(table, views.has(table))
 		const owner = owners.get(name)
 		if (owner !== undefined) throw new CodegenError(`tables ${owner} and ${table} would both generate ${name}; rename one in a migration`)
 		owners.set(name, table)
@@ -367,9 +391,9 @@ export function renderTables<C extends NamedColumn>(
 			const description = describe(column)
 			if ('leftOut' in description) {
 				const type = description.leftOut
-				leftOut.push({ table, column: column.column_name, type })
+				leftOut.push({ table, column: column.column_name, type, of: description.of })
 				// A type name is the database's text: one that could end the comment line is quoted there.
-				fields.push(`\t// ${leftOutText(column.column_name, /^[\w (),.[\]]+$/.test(type) ? type : quote(type))}\n`)
+				fields.push(`\t// ${leftOutText(column.column_name, type === '' || /^[\w (),.[\]]+$/.test(type) ? type : quote(type), description.of)}\n`)
 				continue
 			}
 			kept.push(column)
@@ -378,12 +402,19 @@ export function renderTables<C extends NamedColumn>(
 			if (rendered.uses !== undefined) used.add(rendered.uses)
 			fields.push(`\t${column.column_name}: ${rendered.type}\n`)
 		}
+		if (kept.length === 0 && views.has(table)) {
+			emptyViews.add(table)
+			continue
+		}
 		if (kept.length === 0) {
 			throw new CodegenError(`table ${table} has only generated columns of types the data layer does not read, which codegen leaves out`)
 		}
 		tables.set(table, kept)
 		interfaces.push(`export interface ${name} {\n${fields.join('')}}\n`)
 	}
+	for (const view of emptyViews) tables.delete(view)
+	const rendered = names.filter((table) => !emptyViews.has(table))
+	const renderedViews = rendered.filter((table) => views.has(table))
 	const leftOutPaths = new Set(leftOut.map((column) => columnPath({ table_name: column.table, column_name: column.column })))
 	for (const key of foreignKeys) {
 		if (!tables.has(key.table_name) || !tables.has(key.referenced_table)) continue
@@ -399,7 +430,7 @@ export function renderTables<C extends NamedColumn>(
 		`import type { ${json ? 'JsonColumnValue, ' : ''}TypedColumnList } from '@fabrika/db'\n`,
 		...(kyselyNames.length === 0 ? [] : [`import type { ${kyselyNames.join(', ')} } from 'kysely'\n`]),
 	]
-	const db = names.map((table) => `\t${table}: ${interfaceName(table)}\n`).join('')
+	const db = rendered.map((table) => `\t${table}: ${interfaceName(table, views.has(table))}\n`).join('')
 	const keysOf = (table: string): string => {
 		const keys = foreignKeys.filter((key) => key.table_name === table && tables.has(key.referenced_table))
 		if (keys.length === 0) return '\t\tforeignKeys: [],\n'
@@ -420,19 +451,25 @@ export function renderTables<C extends NamedColumn>(
 	}
 	const datesOf = (table: string): string =>
 		`${listOf(table, 'dates')}${listOf(table, 'timestamps')}${listOf(table, 'booleans')}${listOf(table, 'json')}`
-	const columns = names
+	const columns = rendered
 		.map((table) =>
 			`\t'${table}': {\n\t\tcolumns: [\n${(tables.get(table) ?? []).map((column) => `\t\t\t'${column.column_name}',\n`).join('')}\t\t],\n${
 				keysOf(table)
-			}${datesOf(table)}\t},\n`
+			}${datesOf(table)}${views.has(table) ? '\t\tview: true,\n' : ''}\t},\n`
 		)
 		.join('')
+	// The views ride in the list's type, so the policy types know which tables only a read reaches. One per line, as
+	// dprint keeps a union of two or more, so the module stays formatter-stable however many views there are.
+	const viewsAlias = renderedViews.length === 1
+		? `export type Views = ${quote(renderedViews[0] ?? '')}\n`
+		: `export type Views =\n${renderedViews.map((view) => `\t| ${quote(view)}\n`).join('')}`
 	const source = [
 		`${HEADER}\n`,
 		imports.join(''),
 		...interfaces,
 		`export interface DB {\n${db}}\n`,
-		`export const columns: TypedColumnList<DB> = {\n${columns}}\n`,
+		...(renderedViews.length === 0 ? [] : [viewsAlias]),
+		`export const columns: ${renderedViews.length === 0 ? 'TypedColumnList<DB>' : 'TypedColumnList<DB, Views>'} = {\n${columns}}\n`,
 	].join('\n')
 	return { source, leftOut }
 }

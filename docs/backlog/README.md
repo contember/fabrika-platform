@@ -154,6 +154,8 @@ rest of custom domains, a client address on a dedicated IPv4, a release and reco
 - [271](271-fast-dev-sandboxes-on-cloudflare.md): A Cloudflare dev environment keys the application object by workspace, for the seconds-per-commit loop Zerops has.
 - [272](272-authoring-workspaces-on-kompjutr.md): A kompjutr working tree per workspace, so search and multi-file edits stop costing one GitHub request per file.
 - [273](273-automatic-rollback-of-a-suspect-release.md): An opted-in environment rolls a suspect release back when the observed verdict is `suspect` and the rollback verdict `safe`; its own ADR first.
+- [274](274-scope-a-view-through-its-parent.md): Read a view under a `Ref` through a subquery on its parent, so its containment rests on the parent's foreign keys; after the relational predicates.
+- [275](275-view-review-follow-ups.md): Codegen leaves out a view it cannot name instead of refusing it, and a test witnesses how a view row with a null parent column is scoped.
 - [276](276-iam-serves-sign-in-on-an-invalid-mail-transport.md): An invalid mail transport makes IAM refuse only mail-dependent actions and keep serving sign-in, as Control does.
 - [277](277-platform-deploy-writes-each-services-env-before-its-build.md): `platform deploy` on Zerops writes every service's environment before any build, so a partial run leaves new variables on old code.
 - [278](278-control-alerts-when-iam-or-operations-is-down.md): Operations health-checks IAM, and Control probes Operations; the channel for an Operations outage is open.

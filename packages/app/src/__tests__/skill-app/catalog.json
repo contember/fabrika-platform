@@ -2,6 +2,7 @@
 	"columns": [
 		{
 			"table_name": "fabrika_file_deletions",
+			"view": false,
 			"column_name": "object_key",
 			"type_name": "text",
 			"type_type": "b",
@@ -15,6 +16,7 @@
 		},
 		{
 			"table_name": "fabrika_file_deletions",
+			"view": false,
 			"column_name": "recorded_at",
 			"type_name": "timestamptz",
 			"type_type": "b",
@@ -28,6 +30,7 @@
 		},
 		{
 			"table_name": "fabrika_files",
+			"view": false,
 			"column_name": "id",
 			"type_name": "uuid",
 			"type_type": "b",
@@ -41,6 +44,7 @@
 		},
 		{
 			"table_name": "fabrika_files",
+			"view": false,
 			"column_name": "kind",
 			"type_name": "text",
 			"type_type": "b",
@@ -54,6 +58,7 @@
 		},
 		{
 			"table_name": "fabrika_files",
+			"view": false,
 			"column_name": "status",
 			"type_name": "text",
 			"type_type": "b",
@@ -67,6 +72,7 @@
 		},
 		{
 			"table_name": "fabrika_files",
+			"view": false,
 			"column_name": "object_key",
 			"type_name": "text",
 			"type_type": "b",
@@ -80,6 +86,7 @@
 		},
 		{
 			"table_name": "fabrika_files",
+			"view": false,
 			"column_name": "size",
 			"type_name": "int8",
 			"type_type": "b",
@@ -93,6 +100,7 @@
 		},
 		{
 			"table_name": "fabrika_files",
+			"view": false,
 			"column_name": "sha256",
 			"type_name": "text",
 			"type_type": "b",
@@ -106,6 +114,7 @@
 		},
 		{
 			"table_name": "fabrika_files",
+			"view": false,
 			"column_name": "content_type",
 			"type_name": "text",
 			"type_type": "b",
@@ -119,6 +128,7 @@
 		},
 		{
 			"table_name": "fabrika_files",
+			"view": false,
 			"column_name": "name",
 			"type_name": "text",
 			"type_type": "b",
@@ -132,6 +142,7 @@
 		},
 		{
 			"table_name": "fabrika_files",
+			"view": false,
 			"column_name": "scope",
 			"type_name": "text",
 			"type_type": "b",
@@ -145,6 +156,7 @@
 		},
 		{
 			"table_name": "fabrika_files",
+			"view": false,
 			"column_name": "request",
 			"type_name": "text",
 			"type_type": "b",
@@ -158,6 +170,7 @@
 		},
 		{
 			"table_name": "fabrika_files",
+			"view": false,
 			"column_name": "created_at",
 			"type_name": "timestamptz",
 			"type_type": "b",
@@ -171,6 +184,7 @@
 		},
 		{
 			"table_name": "fabrika_files",
+			"view": false,
 			"column_name": "object_version",
 			"type_name": "text",
 			"type_type": "b",
@@ -184,6 +198,7 @@
 		},
 		{
 			"table_name": "fabrika_files",
+			"view": false,
 			"column_name": "scan_attempts",
 			"type_name": "int4",
 			"type_type": "b",
@@ -197,6 +212,7 @@
 		},
 		{
 			"table_name": "fabrika_files",
+			"view": false,
 			"column_name": "scan_after",
 			"type_name": "timestamptz",
 			"type_type": "b",
@@ -210,6 +226,7 @@
 		},
 		{
 			"table_name": "fabrika_files",
+			"view": false,
 			"column_name": "legacy",
 			"type_name": "text",
 			"type_type": "b",
@@ -223,6 +240,7 @@
 		},
 		{
 			"table_name": "fabrika_form_admissions",
+			"view": false,
 			"column_name": "form",
 			"type_name": "text",
 			"type_type": "b",
@@ -236,6 +254,7 @@
 		},
 		{
 			"table_name": "fabrika_form_admissions",
+			"view": false,
 			"column_name": "bucket",
 			"type_name": "text",
 			"type_type": "b",
@@ -249,6 +268,7 @@
 		},
 		{
 			"table_name": "fabrika_form_admissions",
+			"view": false,
 			"column_name": "window_start",
 			"type_name": "timestamptz",
 			"type_type": "b",
@@ -262,6 +282,7 @@
 		},
 		{
 			"table_name": "fabrika_form_admissions",
+			"view": false,
 			"column_name": "count",
 			"type_name": "int4",
 			"type_type": "b",
@@ -275,6 +296,7 @@
 		},
 		{
 			"table_name": "fabrika_form_bytes",
+			"view": false,
 			"column_name": "form",
 			"type_name": "text",
 			"type_type": "b",
@@ -288,6 +310,7 @@
 		},
 		{
 			"table_name": "fabrika_form_bytes",
+			"view": false,
 			"column_name": "window_start",
 			"type_name": "timestamptz",
 			"type_type": "b",
@@ -301,6 +324,7 @@
 		},
 		{
 			"table_name": "fabrika_form_bytes",
+			"view": false,
 			"column_name": "bytes",
 			"type_name": "int8",
 			"type_type": "b",
@@ -314,6 +338,7 @@
 		},
 		{
 			"table_name": "fabrika_form_challenges",
+			"view": false,
 			"column_name": "form",
 			"type_name": "text",
 			"type_type": "b",
@@ -327,6 +352,7 @@
 		},
 		{
 			"table_name": "fabrika_form_challenges",
+			"view": false,
 			"column_name": "token_digest",
 			"type_name": "text",
 			"type_type": "b",
@@ -340,6 +366,7 @@
 		},
 		{
 			"table_name": "fabrika_form_challenges",
+			"view": false,
 			"column_name": "expires_at",
 			"type_name": "timestamptz",
 			"type_type": "b",
@@ -353,6 +380,7 @@
 		},
 		{
 			"table_name": "fabrika_form_files",
+			"view": false,
 			"column_name": "id",
 			"type_name": "uuid",
 			"type_type": "b",
@@ -366,6 +394,7 @@
 		},
 		{
 			"table_name": "fabrika_form_files",
+			"view": false,
 			"column_name": "form",
 			"type_name": "text",
 			"type_type": "b",
@@ -379,6 +408,7 @@
 		},
 		{
 			"table_name": "fabrika_form_files",
+			"view": false,
 			"column_name": "collection",
 			"type_name": "text",
 			"type_type": "b",
@@ -392,6 +422,7 @@
 		},
 		{
 			"table_name": "fabrika_form_files",
+			"view": false,
 			"column_name": "status",
 			"type_name": "text",
 			"type_type": "b",
@@ -405,6 +436,7 @@
 		},
 		{
 			"table_name": "fabrika_form_files",
+			"view": false,
 			"column_name": "object_key",
 			"type_name": "text",
 			"type_type": "b",
@@ -418,6 +450,7 @@
 		},
 		{
 			"table_name": "fabrika_form_files",
+			"view": false,
 			"column_name": "size",
 			"type_name": "int8",
 			"type_type": "b",
@@ -431,6 +464,7 @@
 		},
 		{
 			"table_name": "fabrika_form_files",
+			"view": false,
 			"column_name": "sha256",
 			"type_name": "text",
 			"type_type": "b",
@@ -444,6 +478,7 @@
 		},
 		{
 			"table_name": "fabrika_form_files",
+			"view": false,
 			"column_name": "content_type",
 			"type_name": "text",
 			"type_type": "b",
@@ -457,6 +492,7 @@
 		},
 		{
 			"table_name": "fabrika_form_files",
+			"view": false,
 			"column_name": "original_name",
 			"type_name": "text",
 			"type_type": "b",
@@ -470,6 +506,7 @@
 		},
 		{
 			"table_name": "fabrika_form_files",
+			"view": false,
 			"column_name": "created_at",
 			"type_name": "timestamptz",
 			"type_type": "b",
@@ -483,6 +520,7 @@
 		},
 		{
 			"table_name": "fabrika_form_files",
+			"view": false,
 			"column_name": "held_until",
 			"type_name": "timestamptz",
 			"type_type": "b",
@@ -496,6 +534,7 @@
 		},
 		{
 			"table_name": "fabrika_job_kicks",
+			"view": false,
 			"column_name": "job",
 			"type_name": "text",
 			"type_type": "b",
@@ -509,6 +548,7 @@
 		},
 		{
 			"table_name": "fabrika_job_kicks",
+			"view": false,
 			"column_name": "pending",
 			"type_name": "bool",
 			"type_type": "b",
@@ -522,6 +562,7 @@
 		},
 		{
 			"table_name": "fabrika_job_leases",
+			"view": false,
 			"column_name": "job",
 			"type_name": "text",
 			"type_type": "b",
@@ -535,6 +576,7 @@
 		},
 		{
 			"table_name": "fabrika_job_leases",
+			"view": false,
 			"column_name": "generation",
 			"type_name": "int4",
 			"type_type": "b",
@@ -548,6 +590,7 @@
 		},
 		{
 			"table_name": "fabrika_job_leases",
+			"view": false,
 			"column_name": "holder",
 			"type_name": "text",
 			"type_type": "b",
@@ -561,6 +604,7 @@
 		},
 		{
 			"table_name": "fabrika_job_leases",
+			"view": false,
 			"column_name": "expires_at",
 			"type_name": "timestamptz",
 			"type_type": "b",
@@ -574,6 +618,7 @@
 		},
 		{
 			"table_name": "fabrika_job_leases",
+			"view": false,
 			"column_name": "attempt_deadline",
 			"type_name": "timestamptz",
 			"type_type": "b",
@@ -587,6 +632,7 @@
 		},
 		{
 			"table_name": "fabrika_job_leases",
+			"view": false,
 			"column_name": "first_seen_at",
 			"type_name": "timestamptz",
 			"type_type": "b",
@@ -600,6 +646,7 @@
 		},
 		{
 			"table_name": "fabrika_job_leases",
+			"view": false,
 			"column_name": "last_started_at",
 			"type_name": "timestamptz",
 			"type_type": "b",
@@ -613,6 +660,7 @@
 		},
 		{
 			"table_name": "fabrika_job_leases",
+			"view": false,
 			"column_name": "last_finished_at",
 			"type_name": "timestamptz",
 			"type_type": "b",
@@ -626,6 +674,7 @@
 		},
 		{
 			"table_name": "fabrika_job_leases",
+			"view": false,
 			"column_name": "last_status",
 			"type_name": "text",
 			"type_type": "b",
@@ -639,6 +688,7 @@
 		},
 		{
 			"table_name": "fabrika_job_leases",
+			"view": false,
 			"column_name": "last_succeeded_at",
 			"type_name": "timestamptz",
 			"type_type": "b",
@@ -652,6 +702,7 @@
 		},
 		{
 			"table_name": "fabrika_job_leases",
+			"view": false,
 			"column_name": "last_duration_ms",
 			"type_name": "int4",
 			"type_type": "b",
@@ -665,6 +716,7 @@
 		},
 		{
 			"table_name": "fabrika_job_leases",
+			"view": false,
 			"column_name": "last_missed_reported_at",
 			"type_name": "timestamptz",
 			"type_type": "b",
@@ -678,6 +730,7 @@
 		},
 		{
 			"table_name": "fabrika_migrations",
+			"view": false,
 			"column_name": "bundle",
 			"type_name": "text",
 			"type_type": "b",
@@ -691,6 +744,7 @@
 		},
 		{
 			"table_name": "fabrika_migrations",
+			"view": false,
 			"column_name": "name",
 			"type_name": "text",
 			"type_type": "b",
@@ -704,6 +758,7 @@
 		},
 		{
 			"table_name": "fabrika_migrations",
+			"view": false,
 			"column_name": "checksum",
 			"type_name": "text",
 			"type_type": "b",
@@ -717,6 +772,7 @@
 		},
 		{
 			"table_name": "fabrika_migrations",
+			"view": false,
 			"column_name": "applied_at",
 			"type_name": "int4",
 			"type_type": "b",
@@ -730,6 +786,7 @@
 		},
 		{
 			"table_name": "fabrika_wakes",
+			"view": false,
 			"column_name": "id",
 			"type_name": "uuid",
 			"type_type": "b",
@@ -743,6 +800,7 @@
 		},
 		{
 			"table_name": "fabrika_wakes",
+			"view": false,
 			"column_name": "job",
 			"type_name": "text",
 			"type_type": "b",
@@ -756,6 +814,7 @@
 		},
 		{
 			"table_name": "fabrika_wakes",
+			"view": false,
 			"column_name": "due_at",
 			"type_name": "int8",
 			"type_type": "b",
@@ -769,6 +828,7 @@
 		},
 		{
 			"table_name": "fabrika_wakes",
+			"view": false,
 			"column_name": "reason",
 			"type_name": "text",
 			"type_type": "b",
@@ -782,6 +842,7 @@
 		},
 		{
 			"table_name": "fabrika_wakes",
+			"view": false,
 			"column_name": "attempt",
 			"type_name": "int4",
 			"type_type": "b",
@@ -795,6 +856,7 @@
 		},
 		{
 			"table_name": "fabrika_wakes",
+			"view": false,
 			"column_name": "dedupe",
 			"type_name": "text",
 			"type_type": "b",
@@ -808,6 +870,7 @@
 		},
 		{
 			"table_name": "fabrika_wakes",
+			"view": false,
 			"column_name": "owned",
 			"type_name": "bool",
 			"type_type": "b",
@@ -821,6 +884,7 @@
 		},
 		{
 			"table_name": "fabrika_webhook_bindings",
+			"view": false,
 			"column_name": "id",
 			"type_name": "text",
 			"type_type": "b",
@@ -834,6 +898,7 @@
 		},
 		{
 			"table_name": "fabrika_webhook_bindings",
+			"view": false,
 			"column_name": "webhook",
 			"type_name": "text",
 			"type_type": "b",
@@ -847,6 +912,7 @@
 		},
 		{
 			"table_name": "fabrika_webhook_bindings",
+			"view": false,
 			"column_name": "scope_type",
 			"type_name": "text",
 			"type_type": "b",
@@ -860,6 +926,7 @@
 		},
 		{
 			"table_name": "fabrika_webhook_bindings",
+			"view": false,
 			"column_name": "scope_value",
 			"type_name": "text",
 			"type_type": "b",
@@ -873,6 +940,7 @@
 		},
 		{
 			"table_name": "fabrika_webhook_bindings",
+			"view": false,
 			"column_name": "account",
 			"type_name": "text",
 			"type_type": "b",
@@ -886,6 +954,7 @@
 		},
 		{
 			"table_name": "fabrika_webhook_bindings",
+			"view": false,
 			"column_name": "secret",
 			"type_name": "text",
 			"type_type": "b",
@@ -899,6 +968,7 @@
 		},
 		{
 			"table_name": "fabrika_webhook_bindings",
+			"view": false,
 			"column_name": "created_by",
 			"type_name": "text",
 			"type_type": "b",
@@ -912,6 +982,7 @@
 		},
 		{
 			"table_name": "fabrika_webhook_bindings",
+			"view": false,
 			"column_name": "created_at",
 			"type_name": "int8",
 			"type_type": "b",
@@ -925,6 +996,7 @@
 		},
 		{
 			"table_name": "fabrika_webhook_deliveries",
+			"view": false,
 			"column_name": "binding_id",
 			"type_name": "text",
 			"type_type": "b",
@@ -938,6 +1010,7 @@
 		},
 		{
 			"table_name": "fabrika_webhook_deliveries",
+			"view": false,
 			"column_name": "delivery_id",
 			"type_name": "text",
 			"type_type": "b",
@@ -951,6 +1024,7 @@
 		},
 		{
 			"table_name": "fabrika_webhook_deliveries",
+			"view": false,
 			"column_name": "received_at",
 			"type_name": "int8",
 			"type_type": "b",
@@ -964,6 +1038,7 @@
 		},
 		{
 			"table_name": "fabrika_webhook_deliveries",
+			"view": false,
 			"column_name": "lease_until",
 			"type_name": "int8",
 			"type_type": "b",
@@ -977,6 +1052,7 @@
 		},
 		{
 			"table_name": "priorities",
+			"view": false,
 			"column_name": "code",
 			"type_name": "text",
 			"type_type": "b",
@@ -990,6 +1066,7 @@
 		},
 		{
 			"table_name": "priorities",
+			"view": false,
 			"column_name": "label",
 			"type_name": "text",
 			"type_type": "b",
@@ -1003,6 +1080,7 @@
 		},
 		{
 			"table_name": "priorities",
+			"view": false,
 			"column_name": "rank",
 			"type_name": "int4",
 			"type_type": "b",
@@ -1016,6 +1094,7 @@
 		},
 		{
 			"table_name": "project_exports",
+			"view": false,
 			"column_name": "id",
 			"type_name": "uuid",
 			"type_type": "b",
@@ -1029,6 +1108,7 @@
 		},
 		{
 			"table_name": "project_exports",
+			"view": false,
 			"column_name": "project_id",
 			"type_name": "uuid",
 			"type_type": "b",
@@ -1042,6 +1122,7 @@
 		},
 		{
 			"table_name": "project_exports",
+			"view": false,
 			"column_name": "org_id",
 			"type_name": "text",
 			"type_type": "b",
@@ -1055,6 +1136,7 @@
 		},
 		{
 			"table_name": "project_exports",
+			"view": false,
 			"column_name": "row_count",
 			"type_name": "int4",
 			"type_type": "b",
@@ -1068,6 +1150,7 @@
 		},
 		{
 			"table_name": "project_exports",
+			"view": false,
 			"column_name": "created_by",
 			"type_name": "text",
 			"type_type": "b",
@@ -1081,6 +1164,7 @@
 		},
 		{
 			"table_name": "project_exports",
+			"view": false,
 			"column_name": "created_at",
 			"type_name": "timestamptz",
 			"type_type": "b",
@@ -1094,6 +1178,7 @@
 		},
 		{
 			"table_name": "projects",
+			"view": false,
 			"column_name": "id",
 			"type_name": "uuid",
 			"type_type": "b",
@@ -1107,6 +1192,7 @@
 		},
 		{
 			"table_name": "projects",
+			"view": false,
 			"column_name": "org_id",
 			"type_name": "text",
 			"type_type": "b",
@@ -1120,6 +1206,7 @@
 		},
 		{
 			"table_name": "projects",
+			"view": false,
 			"column_name": "name",
 			"type_name": "text",
 			"type_type": "b",
@@ -1133,6 +1220,7 @@
 		},
 		{
 			"table_name": "projects",
+			"view": false,
 			"column_name": "created_by",
 			"type_name": "text",
 			"type_type": "b",
@@ -1146,6 +1234,7 @@
 		},
 		{
 			"table_name": "projects",
+			"view": false,
 			"column_name": "version",
 			"type_name": "int4",
 			"type_type": "b",
@@ -1159,6 +1248,7 @@
 		},
 		{
 			"table_name": "task_attachments",
+			"view": false,
 			"column_name": "id",
 			"type_name": "uuid",
 			"type_type": "b",
@@ -1172,6 +1262,7 @@
 		},
 		{
 			"table_name": "task_attachments",
+			"view": false,
 			"column_name": "task_id",
 			"type_name": "uuid",
 			"type_type": "b",
@@ -1185,6 +1276,7 @@
 		},
 		{
 			"table_name": "task_attachments",
+			"view": false,
 			"column_name": "project_id",
 			"type_name": "uuid",
 			"type_type": "b",
@@ -1198,6 +1290,7 @@
 		},
 		{
 			"table_name": "task_attachments",
+			"view": false,
 			"column_name": "org_id",
 			"type_name": "text",
 			"type_type": "b",
@@ -1211,6 +1304,7 @@
 		},
 		{
 			"table_name": "task_attachments",
+			"view": false,
 			"column_name": "file",
 			"type_name": "uuid",
 			"type_type": "b",
@@ -1224,6 +1318,7 @@
 		},
 		{
 			"table_name": "task_attachments",
+			"view": false,
 			"column_name": "created_by",
 			"type_name": "text",
 			"type_type": "b",
@@ -1237,6 +1332,7 @@
 		},
 		{
 			"table_name": "task_attachments",
+			"view": false,
 			"column_name": "created_at",
 			"type_name": "timestamptz",
 			"type_type": "b",
@@ -1250,6 +1346,7 @@
 		},
 		{
 			"table_name": "task_comments",
+			"view": false,
 			"column_name": "id",
 			"type_name": "uuid",
 			"type_type": "b",
@@ -1263,6 +1360,7 @@
 		},
 		{
 			"table_name": "task_comments",
+			"view": false,
 			"column_name": "task_id",
 			"type_name": "uuid",
 			"type_type": "b",
@@ -1276,6 +1374,7 @@
 		},
 		{
 			"table_name": "task_comments",
+			"view": false,
 			"column_name": "project_id",
 			"type_name": "uuid",
 			"type_type": "b",
@@ -1289,6 +1388,7 @@
 		},
 		{
 			"table_name": "task_comments",
+			"view": false,
 			"column_name": "org_id",
 			"type_name": "text",
 			"type_type": "b",
@@ -1302,6 +1402,7 @@
 		},
 		{
 			"table_name": "task_comments",
+			"view": false,
 			"column_name": "body",
 			"type_name": "text",
 			"type_type": "b",
@@ -1315,6 +1416,7 @@
 		},
 		{
 			"table_name": "task_comments",
+			"view": false,
 			"column_name": "created_by",
 			"type_name": "text",
 			"type_type": "b",
@@ -1328,6 +1430,7 @@
 		},
 		{
 			"table_name": "task_comments",
+			"view": false,
 			"column_name": "created_at",
 			"type_name": "timestamptz",
 			"type_type": "b",
@@ -1341,6 +1444,7 @@
 		},
 		{
 			"table_name": "tasks",
+			"view": false,
 			"column_name": "id",
 			"type_name": "uuid",
 			"type_type": "b",
@@ -1354,6 +1458,7 @@
 		},
 		{
 			"table_name": "tasks",
+			"view": false,
 			"column_name": "project_id",
 			"type_name": "uuid",
 			"type_type": "b",
@@ -1367,6 +1472,7 @@
 		},
 		{
 			"table_name": "tasks",
+			"view": false,
 			"column_name": "org_id",
 			"type_name": "text",
 			"type_type": "b",
@@ -1380,6 +1486,7 @@
 		},
 		{
 			"table_name": "tasks",
+			"view": false,
 			"column_name": "title",
 			"type_name": "text",
 			"type_type": "b",
@@ -1393,6 +1500,7 @@
 		},
 		{
 			"table_name": "tasks",
+			"view": false,
 			"column_name": "status",
 			"type_name": "task_status",
 			"type_type": "e",
@@ -1410,6 +1518,7 @@
 		},
 		{
 			"table_name": "tasks",
+			"view": false,
 			"column_name": "assignee",
 			"type_name": "text",
 			"type_type": "b",
@@ -1423,6 +1532,7 @@
 		},
 		{
 			"table_name": "tasks",
+			"view": false,
 			"column_name": "assignee_label",
 			"type_name": "text",
 			"type_type": "b",
@@ -1436,6 +1546,7 @@
 		},
 		{
 			"table_name": "tasks",
+			"view": false,
 			"column_name": "due_on",
 			"type_name": "date",
 			"type_type": "b",
@@ -1449,6 +1560,7 @@
 		},
 		{
 			"table_name": "tasks",
+			"view": false,
 			"column_name": "overdue",
 			"type_name": "bool",
 			"type_type": "b",
@@ -1462,6 +1574,7 @@
 		},
 		{
 			"table_name": "tasks",
+			"view": false,
 			"column_name": "created_by",
 			"type_name": "text",
 			"type_type": "b",
@@ -1475,6 +1588,7 @@
 		},
 		{
 			"table_name": "tasks",
+			"view": false,
 			"column_name": "version",
 			"type_name": "int4",
 			"type_type": "b",

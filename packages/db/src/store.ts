@@ -926,6 +926,10 @@ export function childObjectPredicate(context: TableContext, parent: unknown, key
 }
 
 export function guard(context: TableContext, root: RootKind, scope: OperationNode | undefined): GuardContext {
+	// Every store write reaches its statement through here: a view's rows are its tables', never written (ADR-0072).
+	if (context.model.view && root !== 'SelectQueryNode') {
+		throw new QueryRefusedError('read_only', `${context.model.name} is a view, which no handler writes`)
+	}
 	return { root, table: context.model.name, joins: root === 'SelectQueryNode' ? context.joins : {}, scope }
 }
 

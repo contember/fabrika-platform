@@ -220,6 +220,12 @@ const MISTAKES: Readonly<Record<string, string>> = {
 	'09-child-off-convention-without-column.ts':
 		`Property 'column' is missing in type '{ child: "notes"; }' but required in type 'NamesItsParentColumn<`,
 	'10-annotated-map-without-in.ts': "Property 'in' is missing",
+	'11-view-with-insert.ts':
+		`Type '"projects.write"' is not assignable to type '"a view is never written: its actions are read, appRead and appCount"'`,
+	'12-view-with-a-dimension-scope.ts':
+		"Object literal may only specify known properties, and 'dimension' does not exist in type 'VocabularyChildScope<",
+	'13-table-without-a-policy.ts': "Property 'events' is missing in type",
+	'14-reference-view-with-a-column-write.ts': "Type 'string' is not assignable to type 'undefined'.",
 }
 
 /** An annotated map is checked against every dimension's scope, which the compiler elaborates past two lines. */

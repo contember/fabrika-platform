@@ -145,8 +145,9 @@ pass a recording one); `Database.fromEngine` takes another engine (`openSqlite`)
   TIMESTAMP, TIMESTAMPTZ, DATETIME a `Date` in `timestamps`; DATE a `YYYY-MM-DD` string in `dates`; BLOB a `Uint8Array`;
   JSONB a JSON column in `json`, as Postgres's `jsonb` (JSON is refused, naming JSONB). Any other declared type, and a
   virtual table, is refused; a generated column (`hidden` 2 or 3) of another declared type is left out, as on Postgres
-  (and refused in a unique index), but one with no declared type is refused. It reads every table but `sqlite_*` and
-  `fabrika_*`.
+  (and refused in a unique index), but one with no declared type is refused. It reads every table and view but
+  `sqlite_*` and `fabrika_*`. A view column has the declared type of the table column it selects, or `INT`, `REAL` or
+  `TEXT` through a `CAST`; one with no type it reads is left out.
 - **A writing transaction is the object's** (`openSqlite`'s runner is `storage.transaction(() => body(kysely))`): `sql.exec`
   refuses `BEGIN`, `COMMIT` and `SAVEPOINT`, and the Kysely driver refuses Kysely's own transactions. The idle timeout
   has no SQLite form.
@@ -215,6 +216,16 @@ pass a recording one); `Database.fromEngine` takes another engine (`openSqlite`)
   scope, and a missing `key`, `in` or child `column` names `NamesItsKey` / `NamesItsContainerColumn` /
   `NamesItsParentColumn` in two lines; `derived-tables.test.ts` compiles `derived-mistakes/`. A map annotated with
   `VocabularyPolicyMap<DB, V>` states nothing narrower, so it is checked against every form.
+- **A view is a read-only table** ([ADR-0072](../../docs/decisions/0072-a-view-is-a-read-only-table.md)). Codegen reads
+  Postgres `relkind` `v` (not a materialized view, whose snapshot keeps a moved row's old parent) and SQLite views:
+  every column nullable, a column of a type the layer does not read left out (`of: 'view'`), a view left with no
+  column left out whole, the entry marked `view: true`, and the names
+  exported as `Views` (one per line, so the module stays dprint-stable) for `TypedColumnList<DB, Views>`. A view may
+  have no policy (`parseTables` skips it; a table still needs one). With one it takes a child scope or `reference`,
+  `actions.read`, `appRead`, `appCount` and column read actions only, needs no foreign key for its containment columns
+  (its SQL is the witness the approver reviews), and may share its key with its parent column. Every write is refused
+  three times: the types (`Unavailable` handles, `ReadOnlyUnscoped`), the handle (`unscopedRows`), and the store's
+  guard for any non-select root (`read_only`). The test kits never seed one.
 - **The generated column list carries the row types.** `TypedColumnList<DB>` brands `ColumnList<DB>` with a type-only
   unique symbol, so `defineTables(vocabulary, columns)` needs no type argument; a list without the brand makes the
   policies' builder an `Unavailable` that names `fabrika db codegen`.
@@ -507,7 +518,7 @@ pass a recording one); `Database.fromEngine` takes another engine (`openSqlite`)
   column, are refused.
   `codegen.test.ts` pins every mapping against a real decode. The fixture `schema.generated.ts`
   is codegen output that the Postgres suite regenerates byte for byte: change the renderer and the
-  fixture together. Interface names are `<Pascal>Table`, with a `T` prefix when the name would not
+  fixture together. Interface names are `<Pascal>Table` (`<Pascal>View` for a view), with a `T` prefix when the name would not
   start with a letter; a collision, and the table names `__proto__`, `constructor` and `prototype`, are
   refused. `fabrika db codegen --verify` compares text, so an application's formatter must
   skip the generated file (the output is already dprint-stable here).

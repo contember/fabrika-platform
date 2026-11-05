@@ -7,6 +7,12 @@ export interface OrgsTable {
 	name: string
 }
 
+export interface ProjectTaskCountsView {
+	project_id: string | null
+	org_id: string | null
+	tasks: number | null
+}
+
 export interface ProjectsTable {
 	id: string
 	org_id: string
@@ -33,18 +39,30 @@ export interface TasksTable {
 
 export interface DB {
 	orgs: OrgsTable
+	project_task_counts: ProjectTaskCountsView
 	projects: ProjectsTable
 	task_comments: TaskCommentsTable
 	tasks: TasksTable
 }
 
-export const columns: TypedColumnList<DB> = {
+export type Views = 'project_task_counts'
+
+export const columns: TypedColumnList<DB, Views> = {
 	'orgs': {
 		columns: [
 			'id',
 			'name',
 		],
 		foreignKeys: [],
+	},
+	'project_task_counts': {
+		columns: [
+			'project_id',
+			'org_id',
+			'tasks',
+		],
+		foreignKeys: [],
+		view: true,
 	},
 	'projects': {
 		columns: [

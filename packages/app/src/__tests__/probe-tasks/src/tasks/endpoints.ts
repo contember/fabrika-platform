@@ -1,11 +1,12 @@
 // The probe's task endpoints on the paved road: `assign` updates the one column its action writes, `close` and
-// `update` write a subset of the columns, and `mine` lists the caller's tasks across every project of an org.
+// `update` write a subset of the columns, `mine` lists the caller's tasks across every project of an org, and `count`
+// reads a project's row of a view.
 
 import { ConflictError, fromRow } from '@fabrika/app'
 import type { RowOf } from '@fabrika/db/tables'
 import { app } from '../app-kit'
 import type { tables } from '../db/tables'
-import { AssignTask, CloseTask, MyTasks, NewTask, Saved, Task, TaskById, TaskPage, UpdateTask } from '../schemas'
+import { AssignTask, CloseTask, MyTasks, NewTask, ProjectById, Saved, Task, TaskById, TaskCount, TaskPage, UpdateTask } from '../schemas'
 import { canClose, isOverdue } from './logic'
 
 const toTask = (row: RowOf<typeof tables, 'tasks'>) => fromRow(Task, row)
@@ -23,6 +24,8 @@ export const tasks = app.group({ callers: ['human'] }, (r) => ({
 			})
 			return { items: page.items.map(toTask), next: page.next }
 		}),
+	count: r.query({ input: ProjectById, output: TaskCount, access: { action: 'tasks.read', on: 'project', from: 'projectId' } })
+		.handle(async ({ ctx }) => ({ tasks: (await ctx.db.target.project_task_counts.get(ctx.target.value)).tasks ?? 0 })),
 	create: r.mutation({ input: NewTask, output: Saved, access: { action: 'tasks.write', in: 'project', from: 'projectId' } })
 		.handle(({ input, ctx }) => ctx.db.target.tasks.insert({ title: input.title, status: 'open', due_on: input.dueOn ?? null })),
 	update: r.mutation({ input: UpdateTask, output: Saved, access: { action: 'tasks.write', on: 'task', from: 'id' } })
