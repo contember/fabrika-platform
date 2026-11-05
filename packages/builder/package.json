@@ -42,7 +42,7 @@
 	"scripts": {
 		"build": "bun ui/build.ts",
 		"release:prepare": "bun run build",
-		"typecheck": "tsc --build tsconfig.test.json",
+		"typecheck": "tsrs --build tsconfig.test.json",
 		"test": "bun test --isolate --preload ./daemon/test/preload.ts cli/test daemon/test ui/test shared"
 	},
 	"dependencies": {

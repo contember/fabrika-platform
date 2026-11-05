@@ -7,7 +7,7 @@
 		"examples/*"
 	],
 	"scripts": {
-		"typecheck": "bun run --filter @fabrika/dashboard gen && tsc --build",
+		"typecheck": "bun run --filter @fabrika/dashboard gen && tsrs --build",
 		"test": "bun test --path-ignore-patterns='tests/browser/**' --path-ignore-patterns='packages/annotations/**' --path-ignore-patterns='packages/builder/**' --path-ignore-patterns='packages/canvas-kernel/**' --path-ignore-patterns='packages/daemon-kit/**' --path-ignore-patterns='packages/ui/**' --path-ignore-patterns='packages/app/src/react/**' --path-ignore-patterns='examples/zerops-app/**' --path-ignore-patterns='examples/crm/**' --path-ignore-patterns='examples/app/**' --path-ignore-patterns='packages/app/src/__tests__/cloudflare-runtime.test.ts' --path-ignore-patterns='packages/app/src/__tests__/connect-binding.test.ts' --path-ignore-patterns='packages/app/src/__tests__/cloudflare-export.test.ts' --path-ignore-patterns='packages/app/src/__tests__/cloudflare-import.test.ts' --path-ignore-patterns='packages/control/src/__tests__/backups-exporter.test.ts' --path-ignore-patterns='packages/canvas-share/src/review.test.ts' && bun run test:agent-interfaces && bun run test:lopata && bun run test:dom && bun run test:examples && bun run test:builder",
 		"test:agent-interfaces": "bun test --isolate packages/annotations packages/canvas-kernel packages/daemon-kit",
 		"test:lopata": "bun test --isolate packages/app/src/__tests__/cloudflare-runtime.test.ts packages/app/src/__tests__/connect-binding.test.ts packages/app/src/__tests__/cloudflare-export.test.ts packages/app/src/__tests__/cloudflare-import.test.ts packages/control/src/__tests__/backups-exporter.test.ts packages/canvas-share/src/review.test.ts",
@@ -49,6 +49,7 @@
 		"dprint": "^0.51.1",
 		"oxlint": "1.89.0",
 		"playwright": "^1.60.0",
+		"tsrs": "0.22.0-ts7.1.0-beta",
 		"typescript": "^7.0.2",
 		"typescript-platform": "npm:typescript@5.9.3",
 		"zod": "^3.25.76"

@@ -76,7 +76,7 @@
 		}
 	},
 	"scripts": {
-		"typecheck": "tsc --build tsconfig.test.json",
+		"typecheck": "tsrs --build tsconfig.test.json",
 		"dev": "bunx lopata dev --env local --port 18291 --listen 0.0.0.0",
 		"oblaka": "bunx oblaka oblaka.ts",
 		"oblaka:deploy": "bunx oblaka oblaka.ts --remote",

@@ -7,7 +7,7 @@
 		"dev": "vite",
 		"gen": "bun scripts/gen.ts",
 		"build": "bun run gen && tsc --noEmit && vite build",
-		"typecheck": "bun run gen && tsc --build tsconfig.build.json",
+		"typecheck": "bun run gen && tsrs --build tsconfig.build.json",
 		"test": "bun test src/__tests__",
 		"preview": "vite preview"
 	},

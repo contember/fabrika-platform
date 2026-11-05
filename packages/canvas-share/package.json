@@ -10,7 +10,7 @@
 		"dev": "bun run oblaka && wrangler dev --local",
 		"deploy:stage": "bun run oblaka:stage && wrangler deploy --env stage",
 		"deploy:prod": "bun run oblaka:prod && wrangler deploy --env prod",
-		"typecheck": "tsc --build tsconfig.build.json",
+		"typecheck": "tsrs --build tsconfig.build.json",
 		"test": "bun test"
 	},
 	"dependencies": {

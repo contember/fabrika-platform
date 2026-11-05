@@ -6,7 +6,7 @@
 		"./proxy-manifest": "./src/proxy-manifest.ts"
 	},
 	"scripts": {
-		"typecheck": "tsc --build tsconfig.test.json",
+		"typecheck": "tsrs --build tsconfig.test.json",
 		"test": "bun test",
 		"gen": "bun src/render.ts",
 		"gen:check": "bun src/render.ts --check",

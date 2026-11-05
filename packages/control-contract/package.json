@@ -21,7 +21,7 @@
 		}
 	},
 	"scripts": {
-		"typecheck": "tsc --build tsconfig.test.json"
+		"typecheck": "tsrs --build tsconfig.test.json"
 	},
 	"dependencies": {
 		"zod": "^3.25.76",

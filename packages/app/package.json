@@ -104,7 +104,7 @@
 		}
 	},
 	"scripts": {
-		"typecheck": "tsc --build tsconfig.test.json",
+		"typecheck": "tsrs --build tsconfig.test.json",
 		"test": "bun test --path-ignore-patterns='src/react/**' && bun test --isolate src/react"
 	},
 	"dependencies": {

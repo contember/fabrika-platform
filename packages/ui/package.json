@@ -31,7 +31,7 @@
 		"./theme.css": "./src/theme.css"
 	},
 	"scripts": {
-		"typecheck": "tsc --build tsconfig.test.json",
+		"typecheck": "tsrs --build tsconfig.test.json",
 		"test": "bun test --isolate"
 	},
 	"peerDependencies": {

@@ -11,7 +11,7 @@ Layout: `src/routes/` holds every page (`access/` and `operations/` included); p
 ```bash
 bun run gen          # regenerate src/buzola.gen.ts from src/routes/ (Buzola codegen via Bun)
 bun run dev          # vite on :18292, proxies /api → :18291 (run the worker's `bun run dev` alongside)
-bun run typecheck    # gen + tsc --build
+bun run typecheck    # gen + tsrs --build
 bun run build        # gen + tsc + vite build → dist/ (what the worker serves)
 bun run test         # bun test src/__tests__ (excluded from tsc; no DOM)
 ```

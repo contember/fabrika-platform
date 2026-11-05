@@ -43,13 +43,16 @@ Bun keeps running the sources.
    not resolve, when a declaration has an error, or when the program reads a `@fabrika/*` source instead of a
    declaration. With `skipLibCheck` on, a name that a declaration cannot resolve would be `any` in the application,
    and nothing would report it.
-5. **Two compilers, one role each.** TypeScript 7 (`typescript`) only checks the repository: `bun run typecheck` is one
-   `tsc --build` over project references. The platform compiler, `PLATFORM_TYPESCRIPT_VERSION`, installed in the
-   workspace as `typescript-platform`, writes the shipped declarations and runs the consumer smoke and the type-mistake
-   fixtures; the platform build reads the declarations with the same release. A test keeps the emitting compiler equal
-   to `PLATFORM_TYPESCRIPT_VERSION`, because a newer compiler can write syntax that an older one cannot parse.
-   TypeScript 7 writes type-equivalent declarations whose text differs (quotes, union and member order), so what ships
-   never comes from it.
+5. **One compiler per role.** tsrs (`tsrs`, pinned exactly), a Rust port of TypeScript 7.1, checks the repository:
+   `bun run typecheck` is one `tsrs --build` over project references, and each package's `typecheck` builds its own
+   projects the same way. Its version names the TypeScript release it ports, and a bump must report the same
+   diagnostics as that release, on the solution and on the type-mistake fixtures. TypeScript 7 (`typescript`) is the
+   editors' compiler and the dashboard build's `tsc --noEmit`. The platform compiler, `PLATFORM_TYPESCRIPT_VERSION`,
+   installed in the workspace as `typescript-platform`, writes the shipped declarations and runs the consumer smoke and
+   the type-mistake fixtures; the platform build reads the declarations with the same release. A test keeps the
+   emitting compiler equal to `PLATFORM_TYPESCRIPT_VERSION`, because a newer compiler can write syntax that an older
+   one cannot parse. TypeScript 7 and tsrs write type-equivalent declarations whose text differs (quotes, union and
+   member order), so what ships never comes from either.
 
 ## Consequences
 
