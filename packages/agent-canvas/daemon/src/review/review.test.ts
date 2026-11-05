@@ -254,9 +254,11 @@ describe('ReviewProxies', () => {
 
 	beforeEach(() => {
 		reloads = []
+		// One address, not a name: `localhost` may resolve to both families, and once the app stops, a connection to its
+		// port on the other family can reach another test's server.
 		app = Bun.serve<undefined>({
 			port: 0,
-			hostname: 'localhost',
+			hostname: '127.0.0.1',
 			fetch(req, server) {
 				const url = new URL(req.url)
 				if (url.pathname === '/hmr') {
@@ -283,9 +285,9 @@ describe('ReviewProxies', () => {
 		proxies = new ReviewProxies(store, WIDGET, (project, path) => reloads.push([project, path]))
 	})
 
-	afterEach(() => {
+	afterEach(async () => {
 		proxies.stop()
-		app.stop(true)
+		await app.stop(true)
 	})
 
 	test('serves the application with the widget on its HTML pages and nothing else changed', async () => {
@@ -296,7 +298,7 @@ describe('ReviewProxies', () => {
 	})
 
 	test('keeps redirects on the proxy', async () => {
-		const origin = new URL(proxies.open('demo', `http://localhost:${app.port}/`)).origin
+		const origin = new URL(proxies.open('demo', `http://127.0.0.1:${app.port}/`)).origin
 		const response = await fetch(`${origin}/old`, { redirect: 'manual' })
 		expect(response.headers.get('Location')).toBe(`${origin}/new`)
 	})
@@ -313,13 +315,13 @@ describe('ReviewProxies', () => {
 	}
 
 	test('relays WebSockets with the subprotocol the application chose', async () => {
-		const origin = new URL(proxies.open('demo', `http://localhost:${app.port}/`)).origin.replace('http:', 'ws:')
+		const origin = new URL(proxies.open('demo', `http://127.0.0.1:${app.port}/`)).origin.replace('http:', 'ws:')
 		expect(await echoThrough(`${origin}/hmr`, ['vite-hmr'])).toEqual({ protocol: 'vite-hmr', reply: 'echo ping' })
 		expect(await echoThrough(`${origin}/socket`, [])).toEqual({ protocol: '', reply: 'echo ping' })
 	})
 
 	test('holds a Vite full reload back from the page and hands it to the widget', async () => {
-		const origin = new URL(proxies.open('demo', `http://localhost:${app.port}/`)).origin.replace('http:', 'ws:')
+		const origin = new URL(proxies.open('demo', `http://127.0.0.1:${app.port}/`)).origin.replace('http:', 'ws:')
 		const socket = new WebSocket(`${origin}/hmr`, ['vite-hmr'])
 		const first = await new Promise<string>((resolve, reject) => {
 			socket.onopen = () => socket.send('edit')
@@ -332,7 +334,7 @@ describe('ReviewProxies', () => {
 	})
 
 	test('a restarted daemon serves the proxy on the same port', () => {
-		const target = `http://localhost:${app.port}/`
+		const target = `http://127.0.0.1:${app.port}/`
 		const url = proxies.open('demo', target)
 		proxies.stop()
 		proxies = new ReviewProxies(store, WIDGET, () => {})
@@ -341,8 +343,8 @@ describe('ReviewProxies', () => {
 	})
 
 	test('an application that is not running answers 502', async () => {
-		const url = proxies.open('demo', `http://localhost:${app.port}/`)
-		app.stop(true)
+		const url = proxies.open('demo', `http://127.0.0.1:${app.port}/`)
+		await app.stop(true)
 		const response = await fetch(url)
 		expect(response.status).toBe(502)
 		expect(await response.text()).toContain('Is the application running?')

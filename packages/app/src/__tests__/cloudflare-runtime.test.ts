@@ -311,18 +311,26 @@ describe('the repair tick and the alarm', () => {
 	test('the tick arms the first alarm of an environment nobody called, and the alarm runs the due job and no other', async () => {
 		await keepingProcessEnvironment(async () => {
 			const target = await deploy()
-			await target.testEnv.scheduled({ scheduledTime: Date.now() })
+			const ticked = Date.now()
+			await target.testEnv.scheduled({ scheduledTime: ticked })
 			const object = objectOf(target)
 			const [earliest] = object.sql.exec('select min(due_at) as due from fabrika_wakes').toArray()
 			const due = Number(earliest?.['due'])
-			expect(due).toBeGreaterThan(Date.now())
+			expect(due).toBeGreaterThan(ticked)
 			expect(await object.getAlarm()).toBe(due)
+			// Every other job's cron (:15, :30, the file sweep's :41) moves an hour out, so only the nightly is due while it runs.
+			object.sql.exec("update fabrika_wakes set due_at = ? where job <> 'nightly'", Date.now() + 3_600_000)
 			makeDue(target, 'nightly')
+			const triggered = Date.now()
 			await object.triggerAlarm()
 			expect(await runsAfter(target.world, 1)).toEqual([{ job: 'nightly', notes: 0 }])
 			expect(await runsAfter(target.world, 2)).toHaveLength(1)
-			// The run completed: its next fire is scheduled, and the alarm is armed again from the wakes.
-			expect(await object.getAlarm()).toBeGreaterThan(Date.now())
+			// The run completed: its next fire is scheduled, and the alarm is armed again from the wakes. Neither is held
+			// to the clock: the wait above can carry the test past another job's due minute.
+			const [next] = object.sql.exec("select due_at as due from fabrika_wakes where job = 'nightly'").toArray()
+			expect(Number(next?.['due'])).toBeGreaterThan(triggered)
+			const [rearmed] = object.sql.exec('select min(due_at) as due from fabrika_wakes').toArray()
+			expect(await object.getAlarm()).toBe(Number(rearmed?.['due']))
 		})
 	})
 
