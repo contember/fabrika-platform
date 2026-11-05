@@ -14,6 +14,8 @@ export {
 export { buildArtifact } from './build'
 export { deniedCaseRuledOutBy } from './capability-cases'
 export { compileContract, describeContract } from './compile'
+// The type compileContract answers, so an application's declaration can name it (TS2883 otherwise).
+export type { ContractArtifact } from '@fabrika/auth-core'
 export {
 	type ConnectSnapshot,
 	describeSnapshot,
