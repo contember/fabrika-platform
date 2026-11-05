@@ -7,7 +7,7 @@
 		"dev": "vite",
 		"gen": "bun scripts/gen.ts",
 		"build": "bun run gen && tsc --noEmit && vite build",
-		"typecheck": "bun run gen && tsc --noEmit",
+		"typecheck": "bun run gen && tsc --build tsconfig.build.json",
 		"test": "bun test src/__tests__",
 		"preview": "vite preview"
 	},
@@ -30,7 +30,7 @@
 		"@types/react": "^19.0.0",
 		"@types/react-dom": "^19.0.0",
 		"@vitejs/plugin-react": "^5.0.0",
-		"typescript": "^5.9.3",
+		"typescript": "^7.0.2",
 		"vite": "^7.0.0"
 	}
 }

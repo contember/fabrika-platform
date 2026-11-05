@@ -26,7 +26,7 @@
 		}
 	},
 	"scripts": {
-		"typecheck": "tsc --noEmit",
+		"typecheck": "tsc --build tsconfig.test.json",
 		"test": "bun test",
 		"dev": "bunx lopata dev --env local --port 18191 --listen 0.0.0.0",
 		"oblaka": "bunx oblaka oblaka.ts",

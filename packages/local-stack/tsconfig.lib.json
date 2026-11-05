@@ -1,0 +1,33 @@
+{
+	"extends": [
+		"./tsconfig.json",
+		"../../tsconfig.solution.json"
+	],
+	"include": [
+		"src/**/*"
+	],
+	"exclude": [
+		"**/__tests__",
+		"**/*.test.ts",
+		"**/*.test.tsx"
+	],
+	"references": [
+		{ "path": "../../examples/tsconfig.zerops-app.json" },
+		{ "path": "../app/tsconfig.lib.json" },
+		{ "path": "../auth-core/tsconfig.lib.json" },
+		{ "path": "../auth/tsconfig.lib.json" },
+		{ "path": "../control-contract/tsconfig.lib.json" },
+		{ "path": "../control/tsconfig.lib.json" },
+		{ "path": "../email/tsconfig.lib.json" },
+		{ "path": "../github-app/tsconfig.lib.json" },
+		{ "path": "../iam-contract/tsconfig.lib.json" },
+		{ "path": "../iam/tsconfig.lib.json" },
+		{ "path": "../installation-init/tsconfig.lib.json" },
+		{ "path": "../operations-contract/tsconfig.lib.json" },
+		{ "path": "../platform-artifacts/tsconfig.lib.json" },
+		{ "path": "../platform-node/tsconfig.lib.json" },
+		{ "path": "../provider-zerops/tsconfig.lib.json" },
+		{ "path": "../proxy-core/tsconfig.lib.json" },
+		{ "path": "../proxy/tsconfig.lib.json" }
+	]
+}

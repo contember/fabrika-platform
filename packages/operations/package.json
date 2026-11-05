@@ -91,7 +91,7 @@
 		}
 	},
 	"scripts": {
-		"typecheck": "tsc --noEmit",
+		"typecheck": "tsc --build tsconfig.test.json",
 		"test": "bun test src/__tests__",
 		"migrate:postgres": "bun src/node/migrate.ts"
 	},

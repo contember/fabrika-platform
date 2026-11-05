@@ -1,0 +1,29 @@
+{
+	"extends": [
+		"./tsconfig.json",
+		"../../tsconfig.solution.json"
+	],
+	"include": [
+		"index.ts",
+		"shared",
+		"cli/src",
+		"daemon/src",
+		"ui/src",
+		"ui/build.ts",
+		"ui/preview.ts"
+	],
+	"exclude": [
+		"**/__tests__",
+		"**/*.test.ts",
+		"**/*.test.tsx"
+	],
+	"references": [
+		{ "path": "../annotations/tsconfig.lib.json" },
+		{ "path": "../app/tsconfig.lib.json" },
+		{ "path": "../auth-core/tsconfig.lib.json" },
+		{ "path": "../canvas-kernel/tsconfig.lib.json" },
+		{ "path": "../control-contract/tsconfig.lib.json" },
+		{ "path": "../daemon-kit/tsconfig.lib.json" },
+		{ "path": "../provider-zerops/tsconfig.lib.json" }
+	]
+}

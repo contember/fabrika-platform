@@ -7,7 +7,7 @@
 import { describe, expect, test } from 'bun:test'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import ts from 'typescript'
+import ts from 'typescript-platform'
 import { PolicyError } from '../errors'
 import { modelOf, readTables, tableModels } from '../policy'
 import { defineTables, tablePolicies } from '../tables'

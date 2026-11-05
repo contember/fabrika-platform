@@ -10,7 +10,7 @@
 		"dev": "bun run oblaka && wrangler dev --local",
 		"deploy:stage": "bun run oblaka:stage && wrangler deploy --env stage",
 		"deploy:prod": "bun run oblaka:prod && wrangler deploy --env prod",
-		"typecheck": "tsc --noEmit",
+		"typecheck": "tsc --build tsconfig.build.json",
 		"test": "bun test"
 	},
 	"dependencies": {
@@ -21,7 +21,7 @@
 		"@cloudflare/workers-types": "^4.20260702.1",
 		"lopata": "^0.21.0",
 		"oblaka-iac": "^0.0.18",
-		"typescript": "^5.9.3",
+		"typescript": "^7.0.2",
 		"wrangler": "^4.24.0"
 	}
 }

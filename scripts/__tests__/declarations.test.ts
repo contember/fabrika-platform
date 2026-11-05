@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, relative } from 'node:path'
-import ts from 'typescript'
+import ts from 'typescript-platform'
 import { PLATFORM_TYPESCRIPT_VERSION } from '../../packages/provider-zerops/src/execution'
 import { checkConsumerDeclarations, declarationManifest, declarationTarget, emitDeclarations, shipsDeclarations } from '../declarations'
 

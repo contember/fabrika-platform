@@ -1,0 +1,22 @@
+{
+	"extends": [
+		"./tsconfig.json",
+		"../../tsconfig.solution.json"
+	],
+	"include": [
+		"src/**/*",
+		"package.json"
+	],
+	"exclude": [
+		"**/__tests__",
+		"**/*.test.ts",
+		"**/*.test.tsx"
+	],
+	"references": [
+		{ "path": "../app/tsconfig.lib.json" },
+		{ "path": "../auth-core/tsconfig.lib.json" },
+		{ "path": "../db/tsconfig.lib.json" },
+		{ "path": "../operations-contract/tsconfig.lib.json" },
+		{ "path": "../platform-node/tsconfig.lib.json" }
+	]
+}

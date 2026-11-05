@@ -1,0 +1,24 @@
+{
+	"extends": [
+		"./tsconfig.json",
+		"../../tsconfig.solution.json"
+	],
+	"compilerOptions": {
+		"outDir": "${configDir}/.tsbuild/test"
+	},
+	"include": [
+		"src/**/__tests__/**/*",
+		"src/**/*.test.ts",
+		"src/**/*.test.tsx"
+	],
+	"exclude": [
+		"src/__tests__/type-attacks",
+		"src/__tests__/derived-mistakes"
+	],
+	"references": [
+		{ "path": "../app/tsconfig.lib.json" },
+		{ "path": "../check/tsconfig.lib.json" },
+		{ "path": "./tsconfig.lib.json" },
+		{ "path": "../platform-node/tsconfig.lib.json" }
+	]
+}

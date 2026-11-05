@@ -162,4 +162,5 @@ rest of custom domains, a client address on a dedicated IPv4, a release and reco
 - [279](279-an-application-reports-the-reports-it-lost.md): A report lost after its retry is counted, and the count rides on the next delivered report.
 - [280](280-operations-on-a-shared-db-errors-after-the-nightly-backup.md): Operations kept in `db` on an older light installation errors for a while after each nightly backup reload.
 - [281](281-the-review-proxy-binds-a-name.md): The `agent-canvas` review proxy binds and prints one loopback address instead of `localhost`, so no other server on the other family answers in its place.
+- [282](282-the-solution-build-refuses-a-missing-reference.md): A check fails when a project's program holds another project's sources, so a missing `references` entry is no longer silent.
 - [10](10-app-scope-secrets-on-zerops.md) — Control refuses an `app`-scoped secret on Zerops today; record that as the decision, or replicate per service.

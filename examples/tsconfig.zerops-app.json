@@ -1,0 +1,27 @@
+{
+	"extends": "./zerops-app/tsconfig.json",
+	"compilerOptions": {
+		"composite": true,
+		"noEmit": false,
+		"declaration": true,
+		"emitDeclarationOnly": true,
+		"declarationMap": false,
+		"sourceMap": false,
+		"rootDir": "./zerops-app",
+		"outDir": "./.tsbuild/zerops-app",
+		"tsBuildInfoFile": "./.tsbuild/zerops-app/tsconfig.tsbuildinfo",
+		"typeRoots": [
+			"./zerops-app/node_modules/@types",
+			"./zerops-app/node_modules"
+		]
+	},
+	"references": [
+		{ "path": "../packages/app/tsconfig.lib.json" },
+		{ "path": "../packages/check/tsconfig.lib.json" },
+		{ "path": "../packages/db/tsconfig.lib.json" },
+		{ "path": "../packages/platform/tsconfig.lib.json" },
+		{ "path": "../packages/provider-zerops/tsconfig.lib.json" },
+		{ "path": "../packages/proxy-core/tsconfig.lib.json" },
+		{ "path": "../packages/ui/tsconfig.lib.json" }
+	]
+}

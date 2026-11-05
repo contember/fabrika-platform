@@ -2,7 +2,7 @@
 // rendered with the Postgres codegen's renderer.
 
 import { describe, expect, test } from 'bun:test'
-import ts from 'typescript'
+import ts from 'typescript-platform'
 import { CodegenError } from '../codegen'
 import { generateSqliteSchema } from '../codegen-sqlite'
 import { SQLITE_FRAMEWORK_MIGRATIONS } from '../migrations-sqlite'

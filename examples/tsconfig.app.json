@@ -1,0 +1,24 @@
+{
+	"extends": "./app/tsconfig.json",
+	"compilerOptions": {
+		"composite": true,
+		"noEmit": false,
+		"declaration": true,
+		"emitDeclarationOnly": true,
+		"declarationMap": false,
+		"sourceMap": false,
+		"rootDir": "./app",
+		"outDir": "./.tsbuild/app",
+		"tsBuildInfoFile": "./.tsbuild/app/tsconfig.tsbuildinfo",
+		"typeRoots": [
+			"./app/node_modules/@types",
+			"./app/node_modules"
+		]
+	},
+	"references": [
+		{ "path": "../packages/app/tsconfig.lib.json" },
+		{ "path": "../packages/check/tsconfig.lib.json" },
+		{ "path": "../packages/db/tsconfig.lib.json" },
+		{ "path": "../packages/platform/tsconfig.lib.json" }
+	]
+}

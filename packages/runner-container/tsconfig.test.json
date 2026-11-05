@@ -1,0 +1,25 @@
+{
+	"extends": [
+		"./tsconfig.json",
+		"../../tsconfig.solution.json"
+	],
+	"compilerOptions": {
+		"outDir": "${configDir}/.tsbuild/test",
+		"composite": false,
+		"noEmit": true,
+		"emitDeclarationOnly": false
+	},
+	"include": [
+		"src/**/__tests__/**/*",
+		"src/**/*.test.ts",
+		"src/**/*.test.tsx"
+	],
+	"exclude": [],
+	"references": [
+		{ "path": "../auth-core/tsconfig.lib.json" },
+		{ "path": "../auth-core/tsconfig.test.json" },
+		{ "path": "../control-contract/tsconfig.lib.json" },
+		{ "path": "../provider-cloudflare/tsconfig.lib.json" },
+		{ "path": "./tsconfig.lib.json" }
+	]
+}

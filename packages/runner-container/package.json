@@ -11,7 +11,7 @@
 		}
 	},
 	"scripts": {
-		"typecheck": "tsc --noEmit",
+		"typecheck": "tsc --build tsconfig.test.json",
 		"test": "bun test",
 		"serve": "bun src/serve.ts",
 		"docker:build": "docker build -f Dockerfile -t fabrika-runner ../..",

@@ -15,7 +15,14 @@ facts settled against a real account, several of which contradict Zerops' publis
 - **Bun** — runtime + workspaces, at the exact release in `.bun-version` (bumping it: `docs/reference/release-process.md`).
   Libraries run TypeScript directly (`exports.bun` → `src`); no build step in the workspace. `release:pack` emits
   `.d.ts` declarations for the published `types` condition only (ADR-0068).
-- **TypeScript** strict, ESM (`"type": "module"`) everywhere.
+- **TypeScript** strict, ESM (`"type": "module"`) everywhere. TypeScript 7 (`typescript`) checks the repository as one
+  `tsc --build` over project references. The root `tsconfig.json` lists every project. A package's `tsconfig.lib.json`
+  and `tsconfig.test.json` extend its own `tsconfig.json`, which Bun, editors and the release emit keep reading
+  unchanged, and `tsconfig.solution.json` (composite, declarations into the ignored `.tsbuild/`). A single program that
+  nothing references (the dashboard, canvas-share, the agent-canvas programs, `scripts/`) has one `tsconfig.build.json`
+  that extends only its own `tsconfig.json`. What ships is emitted by the platform compiler, `typescript-platform`
+  (ADR-0068). A new import of another package, or of another package's test fixture, needs a `references` entry;
+  without one the importer silently checks those sources again.
 - **Cloudflare Workers** — Worker + Durable Objects + Containers + D1 + Queues + R2. **Zerops** is the
   second target: it uses its platform API directly and has no runner (ADR-0003). Each installation
   statically composes ONE provider bundle; each provider runs its own deploy steps, and the shared
@@ -26,7 +33,7 @@ facts settled against a real account, several of which contradict Zerops' publis
 
 ```bash
 bun install
-bun run typecheck          # every package + scripts/
+bun run typecheck          # one incremental tsc --build: every package, example and scripts/
 bun run test               # all tests; isolates DOM-heavy agent-interface suites and the Lopata ones (they replace globals)
 bun test packages/provider-contract/src/__tests__/steps.test.ts   # a single file
 bun run lint               # oxlint

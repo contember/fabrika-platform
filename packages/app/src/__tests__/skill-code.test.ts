@@ -15,7 +15,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import ts from 'typescript'
+import ts from 'typescript-platform'
 import { z } from 'zod/v4'
 import { readAppAgentSkill } from '../agent-skill'
 

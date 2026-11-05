@@ -1,0 +1,18 @@
+{
+	"extends": "./tsconfig.json",
+	"compilerOptions": {
+		"incremental": true,
+		"tsBuildInfoFile": "../.tsbuild/daemon.tsbuildinfo"
+	},
+	"include": [
+		"src/**/*",
+		"client/**/*",
+		"review-widget/**/*.test.ts",
+		"langMap.ts"
+	],
+	"references": [
+		{ "path": "../../annotations/tsconfig.lib.json" },
+		{ "path": "../../canvas-kernel/tsconfig.lib.json" },
+		{ "path": "../../daemon-kit/tsconfig.lib.json" }
+	]
+}

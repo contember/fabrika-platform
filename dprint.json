@@ -19,6 +19,7 @@
 	},
 	"excludes": [
 		"**/node_modules",
+		"**/.tsbuild",
 		"**/*-lock.json",
 		".claude",
 		// What `fabrika app build` writes from the SQLite migrations, verbatim, so their checksums stay the files'.

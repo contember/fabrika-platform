@@ -2,7 +2,7 @@
 // The contract and implement scale tests share it; the instantiation count is their deterministic witness.
 
 import { join } from 'node:path'
-import ts from 'typescript'
+import ts from 'typescript-platform'
 
 const packageDir = join(import.meta.dir, '..', '..')
 const virtualFile = join(import.meta.dir, 'scale.generated.ts')

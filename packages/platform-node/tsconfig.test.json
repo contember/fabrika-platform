@@ -1,0 +1,23 @@
+{
+	"extends": [
+		"./tsconfig.json",
+		"../../tsconfig.solution.json"
+	],
+	"compilerOptions": {
+		"outDir": "${configDir}/.tsbuild/test",
+		"composite": false,
+		"noEmit": true,
+		"emitDeclarationOnly": false
+	},
+	"include": [
+		"src/**/__tests__/**/*",
+		"src/**/*.test.ts",
+		"src/**/*.test.tsx",
+		"package.json"
+	],
+	"exclude": [],
+	"references": [
+		{ "path": "./tsconfig.lib.json" },
+		{ "path": "../platform/tsconfig.lib.json" }
+	]
+}

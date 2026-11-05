@@ -30,7 +30,7 @@
 	"scripts": {
 		"build": "bun daemon/build.ts",
 		"release:prepare": "bun run build",
-		"typecheck": "tsc --noEmit && tsc --noEmit -p daemon/tsconfig.json && tsc --noEmit -p daemon/review-widget/tsconfig.json",
+		"typecheck": "tsc --build tsconfig.build.json daemon/tsconfig.build.json daemon/review-widget/tsconfig.build.json",
 		"test": "bun test"
 	},
 	"dependencies": {
@@ -50,7 +50,7 @@
 		"@types/react": "^19.0.0",
 		"@types/react-dom": "^19.0.0",
 		"tailwindcss": "4",
-		"typescript": "^5.9.3"
+		"typescript": "^7.0.2"
 	},
 	"keywords": [
 		"claude-code",

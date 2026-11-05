@@ -29,7 +29,8 @@ Bun keeps running the sources.
    `emitDeclarations` in `scripts/declarations.ts`, with the compiler options of the package's own `tsconfig.json`. They
    go under `types/`, which mirrors the package's tree. A declaration must not sit beside its source: TypeScript prefers
    `x.ts` over `x.d.ts` for the same import. Nothing is committed. In the workspace every `types` condition still names
-   the source, so development, the type check and the tests need no build.
+   the source, so development and the tests need no build. The repository's type check writes declarations of its own
+   under each package's `.tsbuild/`, for the projects that reference it; nothing ships them.
 2. **The shipped manifest repoints only `types`.** In a condition object, `types` names `./types/….d.ts`; `bun` and
    `default` keep the source. A bare TypeScript target, such as a package `imports` entry, becomes
    `{ types, default }`. `files` gains `types`.
@@ -42,9 +43,13 @@ Bun keeps running the sources.
    not resolve, when a declaration has an error, or when the program reads a `@fabrika/*` source instead of a
    declaration. With `skipLibCheck` on, a name that a declaration cannot resolve would be `any` in the application,
    and nothing would report it.
-5. **One compiler.** The repository's TypeScript writes the declarations, and the platform build reads them with
-   `PLATFORM_TYPESCRIPT_VERSION`. A test keeps the two equal, because a newer compiler can write syntax that an older
-   one cannot parse.
+5. **Two compilers, one role each.** TypeScript 7 (`typescript`) only checks the repository: `bun run typecheck` is one
+   `tsc --build` over project references. The platform compiler, `PLATFORM_TYPESCRIPT_VERSION`, installed in the
+   workspace as `typescript-platform`, writes the shipped declarations and runs the consumer smoke and the type-mistake
+   fixtures; the platform build reads the declarations with the same release. A test keeps the emitting compiler equal
+   to `PLATFORM_TYPESCRIPT_VERSION`, because a newer compiler can write syntax that an older one cannot parse.
+   TypeScript 7 writes type-equivalent declarations whose text differs (quotes, union and member order), so what ships
+   never comes from it.
 
 ## Consequences
 
