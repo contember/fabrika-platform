@@ -272,7 +272,7 @@ const scheduleLines = (schedule: DataBackupScheduleDto): string =>
 	[`daily\t${schedule.daily ? 'on' : 'off'}`, `updatedAt\t${schedule.updatedAt === null ? '-' : isoSeconds(schedule.updatedAt)}`].join('\n')
 
 /** Every control character but tab and line feed: an answer must not drive the operator's terminal. */
-const printable = (text: string): string => text.replace(/[^\P{Cc}\t\n]/gu, '')
+export const printable = (text: string): string => text.replace(/[^\P{Cc}\t\n]/gu, '')
 
 const viewLines = (view: OpsView | OpsContentView): string[] => [
 	`release\t${view.release}`,

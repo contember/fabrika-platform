@@ -1,7 +1,7 @@
 # @fabrika/cli
 
 The single public `fabrika` executable. It parses the top-level `platform`,
-`app`, `namespace`, `control`, `env`, `builder`, `db`, `job`, and `connect` command areas, resolves one provider where a
+`app`, `namespace`, `control`, `env`, `operations`, `builder`, `db`, `job`, and `connect` command areas, resolves one provider where a
 command has one, then delegates to an installation or provider package. It
 contains no provider implementation and never branches on a provider id. `src/namespace.ts` is the Control RPC
 half of `fabrika namespace`: the provider's `NamespaceCli` plans and builds the namespace, this package holds
@@ -82,6 +82,30 @@ and `restore --at=<time>`, each one `data.*` procedure. It resolves no provider.
   failure text is the application's own. `--json` prints the parsed value.
 - A 501 means the control plane's release does not offer the procedure: the command exits 1 and says retrying will not
   help. A failed or running operation is an answer: exit 0, and stderr names the follow-up command.
+
+## The `operations` area
+
+`src/operations.ts` reads Operations through the console's `/operations/api/rpc`, the typed `OperationsRpcContract`
+the console's Operations pages call: `issues`, `issue <id>`, `releases` and `health`. It resolves no provider and
+holds no write: a triage, alert or health-check procedure is never reachable from it.
+
+- The transport is the `control` area's (`controlTransport`): Control's origin, FABRIKA_CONTROL_KEY from the
+  environment only, no redirect, a key-carrying answer dropped, the key cut out of every diagnostic. Operations
+  verifies the console app's token, so the key is a `px_` key of the console app.
+- Operations answers a key without `operations.read` with empty lists, as it answers one scoped elsewhere. Each
+  command therefore first asks Control's `consoleAccess` (what the console's navigation asks) and exits 3 when the key
+  holds `operations.read` in no scope.
+- `--app`, `--env` and `--service` select sources. `issues` and `releases` take one `sourceId`, so a selection must
+  match exactly one source of the `sources` answer; several is a usage error that lists them. `health` filters its
+  whole answer.
+- Answers are parsed by projections of the contract's DTOs (`z.ZodType<Dto>`), so a field a newer Operations adds is
+  dropped. Issue and event text is the application's users' and code's: human output strips control characters and
+  turns a tab or line break inside a cell into a space; `--json` prints the parsed value with DEL, C1 controls and line
+  separators escaped too (`JSON.stringify` escapes C0 only).
+- Stable exit codes (`OPERATIONS_EXIT`): 0 answered, 1 call failed, 2 usage, 3 the key (missing, refused, no
+  `operations.read`), 4 not found. `runOperationsCli` returns the code and takes its environment, fetch and output as
+  `OperationsIo`; `packages/operations/src/__tests__/cli-read.test.ts` runs it against the real operator RPC on the
+  Cloudflare Worker adapter.
 
 ## The `db` area
 
