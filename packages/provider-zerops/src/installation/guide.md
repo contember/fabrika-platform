@@ -383,6 +383,15 @@ forwarding a caller's `px_` key to the application (`docs/reference/deployment-n
 service variable, which Zerops caps at about 32 KB: when a deploy fails with `serviceEnvValueTooLarge`, this is
 the fix, and it also accepts a namespace in `failed`.
 
+The platform services install only the workspace packages (`bun install --frozen-lockfile --filter './packages/*'`
+in the generated `zerops.yaml`), not the repository's own tooling. An installation from before that change keeps the
+tooling in each service's cached `node_modules`, because neither the filtered install nor a changed build command
+clears the Zerops build cache. Nothing fails without clearing it. To shrink the artifacts of `iam`, `control` and
+`operations` by about 160 MB each, invalidate their build cache once (service → Pipelines & CI/CD Settings →
+Invalidate build cache); the next deploy of each builds clean. The platform `proxy` and each namespace's `proxy`
+deploy no `node_modules`, so only their build cache would shrink; invalidating it is optional and costs one full
+build of Caddy.
+
 ## Set or rotate the mail transport
 
 The installation's mail transport lives on the `iam` and `control` services. Zerops is its record (ADR-0004),
