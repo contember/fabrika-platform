@@ -161,6 +161,12 @@ const READINESS_IMMEDIATE: Omit<ZeropsReadinessCheckSpec, 'httpGet' | 'exec'> = 
 const WORKSPACE_DEPLOY_FILES = ['package.json', 'bun.lock', 'node_modules', 'packages']
 
 /**
+ * The install of every platform service: the workspace packages, without the root package's own tooling (checkers,
+ * linters, browsers), which no service builds or runs with. The quotes keep the build shell from expanding the glob.
+ */
+const WORKSPACE_INSTALL = "bun install --frozen-lockfile --filter './packages/*'"
+
+/**
  * The IAM service — identity, tokens, audit, and the private admin API.
  *
  * Per-installation variables (env API): `FABRIKA_IAM_DATABASE_URL`
@@ -192,7 +198,7 @@ const iam: ZeropsYamlSetupSpec = {
 	build: {
 		// Bun on Alpine. `build.os` is deprecated in the published schema — the OS is part of the base id.
 		base: ['alpine/bun@1.3'],
-		buildCommands: ['bun install --frozen-lockfile'],
+		buildCommands: [WORKSPACE_INSTALL],
 		deployFiles: WORKSPACE_DEPLOY_FILES,
 		cache: ['node_modules'],
 	},
@@ -265,7 +271,7 @@ const control: ZeropsYamlSetupSpec = {
 	setup: 'control',
 	build: {
 		base: ['alpine/bun@1.3'],
-		buildCommands: ['bun install --frozen-lockfile', 'bun run --filter @fabrika/dashboard build'],
+		buildCommands: [WORKSPACE_INSTALL, 'bun run --filter @fabrika/dashboard build'],
 		deployFiles: WORKSPACE_DEPLOY_FILES,
 		cache: ['node_modules'],
 	},
@@ -307,7 +313,7 @@ const operations: ZeropsYamlSetupSpec = {
 	setup: 'operations',
 	build: {
 		base: ['alpine/bun@1.3'],
-		buildCommands: ['bun install --frozen-lockfile'],
+		buildCommands: [WORKSPACE_INSTALL],
 		deployFiles: WORKSPACE_DEPLOY_FILES,
 		cache: ['node_modules'],
 	},
@@ -412,7 +418,7 @@ const proxy: ZeropsYamlSetupSpec = {
 		// CGO off makes the binary static, which is what lets it run on Alpine/musl.
 		prepareCommands: ['CGO_ENABLED=0 GOBIN=/tmp/gobin go install github.com/caddyserver/caddy/v2/cmd/caddy@v2.10.2'],
 		buildCommands: [
-			'bun install --frozen-lockfile',
+			WORKSPACE_INSTALL,
 			// The archive's data file (see the header). Missing/malformed JSON fails the build; an empty app list
 			// emits only deny/404 routes.
 			`bun run packages/proxy/src/generate-config.ts ./proxy.manifest.json ./caddy.json --auth-upstream 127.0.0.1:9000 --listen ${
