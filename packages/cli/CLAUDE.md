@@ -100,7 +100,8 @@ holds no write: a triage, alert or health-check procedure is never reachable fro
   whole answer.
 - Answers are parsed by projections of the contract's DTOs (`z.ZodType<Dto>`), so a field a newer Operations adds is
   dropped. Issue and event text is the application's users' and code's: human output strips control characters and
-  turns a tab or line break inside a cell into a space; `--json` prints the parsed value.
+  turns a tab or line break inside a cell into a space; `--json` prints the parsed value with DEL, C1 controls and line
+  separators escaped too (`JSON.stringify` escapes C0 only).
 - Stable exit codes (`OPERATIONS_EXIT`): 0 answered, 1 call failed, 2 usage, 3 the key (missing, refused, no
   `operations.read`), 4 not found. `runOperationsCli` returns the code and takes its environment, fetch and output as
   `OperationsIo`; `packages/operations/src/__tests__/cli-read.test.ts` runs it against the real operator RPC on the

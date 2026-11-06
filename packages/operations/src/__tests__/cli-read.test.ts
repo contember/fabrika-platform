@@ -172,7 +172,7 @@ describe('fabrika operations against Operations on the Cloudflare adapter', () =
 		const listed = await runAgainst(env, READER_KEY, ['issues', '--app=shop', '--env=prod', '--status=open'])
 		expect(listed.code).toBe(OPERATIONS_EXIT.ok)
 		expect(listed.out).toBe(`${issueId}\topen\terror\t1\t2026-11-05T12:00:00.000Z\tshop\tprod\tdefault\tTypeError: cannot read total`)
-		expect(listed.err).toContain('1 matching issues: 1 open')
+		expect(listed.err).toContain('1 issues in this selection, any status: 1 open')
 
 		const ambiguous = await runAgainst(env, READER_KEY, ['issues', '--app=shop'])
 		expect(ambiguous.code).toBe(OPERATIONS_EXIT.usage)

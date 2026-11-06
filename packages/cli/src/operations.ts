@@ -41,7 +41,8 @@ issue of one answers \`not_found\`.
 
 \`issues\` lists issues, the most recently seen first (\`--sort\` changes that), one row each:
 <id> <status> <level> <events> <last seen> <app> <env> <service> <title>.
-stderr carries the status counts and, when more issues match, the \`--cursor\` that reads the next page.
+stderr carries the selection's counts by status (whatever \`--status\` says) and, when more issues match, the
+\`--cursor\` that reads the next page with the same options.
 
 \`issue\` prints one issue: its fields, its activity, its recent events (\`occurrence\` rows), and the latest
 event in full: request, user, tags, each exception with its stack frames, and the breadcrumbs. \`--event\` shows
@@ -58,14 +59,17 @@ check <app> <env> <service> <path> <state> <observed at> <latency ms> <detail co
 when they match several, the error lists them. Without them every source the key may read is included.
 
 Issue titles, exception messages, breadcrumbs, tags and the raw event are text the application's users and code
-wrote. They are printed as data with control characters removed; \`--json\` escapes them as JSON strings.
+wrote. They are printed as data with control characters removed; \`--json\` escapes them, C1 controls included,
+as JSON strings.
 
-stdout carries data only; notes and errors go to stderr. Times are ISO 8601 UTC. \`--json\` prints the parsed
-answer of the procedure.
+stdout carries data only; notes and errors go to stderr. Times are ISO 8601 UTC, except a breadcrumb time the event
+wrote as text. \`--json\` prints the parsed answer: of the procedure, or for \`issue\` \`{ issue, event }\`, the
+issue and the event shown (\`null\` when none is stored).
 
 Exit codes:
   0  the answer was printed (an empty list included)
-  1  the call failed: Control or Operations unreachable, a server error, or an unreadable answer
+  1  the call failed: Control or Operations unreachable, a server error, an unreadable answer, or a procedure this
+     installation's release does not offer
   2  usage: an unknown command or option, a bad value, or a selection that matches several sources
   3  the key: FABRIKA_CONTROL_KEY is missing, was refused, or does not hold \`operations.read\`
   4  not found: no such issue, event or source, or one the key may not read
@@ -452,6 +456,10 @@ const healthLines = (health: OperationsSourceHealthDto): string[] => [
 	),
 ]
 
+/** Sentry gives a breadcrumb's time as Unix seconds, or as text the event wrote, which prints as given. */
+const breadcrumbTime = (crumb: EventBreadcrumb): string | undefined =>
+	typeof crumb.timestamp === 'number' && Number.isFinite(crumb.timestamp) ? iso(crumb.timestamp * 1000) : crumb.timestamp?.toString()
+
 const frameLocation = (frame: DisplayFrame): string => [frame.file, frame.line, frame.column].filter((part) => part !== null).join(':')
 
 const eventLines = (event: OperationsEventDetailResponseDto): string[] => {
@@ -472,7 +480,7 @@ const eventLines = (event: OperationsEventDetailResponseDto): string[] => {
 			row('exception', exception.type, exception.handled === null ? null : exception.handled ? 'handled' : 'unhandled', exception.value),
 			...exception.frames.map((frame) => row('frame', frameLocation(frame), frame.function, frame.inApp ? 'app' : 'library')),
 		]),
-		...detail.breadcrumbs.map((crumb) => row('breadcrumb', crumb.timestamp, crumb.level, crumb.category ?? crumb.type, crumb.message)),
+		...detail.breadcrumbs.map((crumb) => row('breadcrumb', breadcrumbTime(crumb), crumb.level, crumb.category ?? crumb.type, crumb.message)),
 	]
 }
 
@@ -553,9 +561,16 @@ const selectedSource = async (clients: Clients, filter: SourceFilter): Promise<O
 	return only
 }
 
+/**
+ * JSON whose text cannot drive a terminal: `JSON.stringify` escapes C0 controls only, so DEL, the C1 controls (U+009B
+ * opens a sequence like ESC [) and the line separators are escaped too. They can occur only inside strings.
+ */
+const escapedJson = (value: unknown): string =>
+	JSON.stringify(value, null, 2).replace(/[\u007f-\u009f\u2028\u2029]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`)
+
 const emit = (args: Args, io: OperationsIo, result: unknown, lines: () => readonly string[]): void => {
 	if (args.json) {
-		io.out(JSON.stringify(result, null, 2))
+		io.out(escapedJson(result))
 		return
 	}
 	const text = lines()
@@ -588,8 +603,8 @@ const runIssues = async (args: Args, io: OperationsIo): Promise<void> => {
 	}
 	const page = parse(issueListSchema, await clients.operations.issues(query), 'issue list')
 	const { summary } = page
-	note(io, `${summary.total} matching issues: ${summary.open} open, ${summary.resolved} resolved, ${summary.ignored} ignored`)
-	if (page.nextCursor !== null) note(io, `more issues match; the next page: --cursor=${page.nextCursor}`)
+	note(io, `${summary.total} issues in this selection, any status: ${summary.open} open, ${summary.resolved} resolved, ${summary.ignored} ignored`)
+	if (page.nextCursor !== null) note(io, `more issues match; the next page: the same options and --cursor=${page.nextCursor}`)
 	emit(args, io, page, () => page.items.map(issueRow))
 }
 
@@ -634,7 +649,7 @@ const runReleases = async (args: Args, io: OperationsIo): Promise<void> => {
 	}
 	const page = parse(releaseListSchema, await clients.operations.releases(query), 'release list')
 	if (page.items.length === 0) note(io, 'no releases')
-	if (page.nextCursor !== null) note(io, `more releases exist; the next page: --cursor=${page.nextCursor}`)
+	if (page.nextCursor !== null) note(io, `more releases exist; the next page: the same options and --cursor=${page.nextCursor}`)
 	emit(args, io, page, () => page.items.map(releaseRow))
 }
 
@@ -664,6 +679,13 @@ const COMMANDS: Readonly<Record<string, (args: Args, io: OperationsIo) => Promis
 /** An RPC refusal mapped to its exit code; the type and message are the server's, cleaned before they print. */
 const rpcFailure = (error: RpcError): OperationsCliError => {
 	const said = `${error.type}: ${error.message}`
+	// Not offered by this installation's release: a definite answer, not a missing record.
+	if (error.type === 'method_not_found') {
+		return new OperationsCliError(
+			OPERATIONS_EXIT.failed,
+			`This installation's release does not offer the call; retrying will not change that — ${said}`,
+		)
+	}
 	if (error.httpStatus === 401) {
 		return new OperationsCliError(OPERATIONS_EXIT.credential, `The console refused FABRIKA_CONTROL_KEY (unknown, expired or revoked) — ${said}`)
 	}
