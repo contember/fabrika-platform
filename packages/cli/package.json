@@ -33,6 +33,7 @@
 		"@fabrika/app": "workspace:*",
 		"@fabrika/auth-core": "workspace:*",
 		"@fabrika/control-contract": "workspace:*",
+		"@fabrika/operations-contract": "workspace:*",
 		"@fabrika/provider-contract": "workspace:*",
 		"@fabrika/db": "workspace:*",
 		"@fabrika/platform": "workspace:*",

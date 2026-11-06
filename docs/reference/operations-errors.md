@@ -36,6 +36,50 @@ Historical occurrences keep their original fingerprint after a merge. Canonical 
 
 The console polls the active query every five seconds when no mutation or selection is in progress. It provides load-more pagination, 24-hour sparklines, bulk status and same-source merge actions, searchable merge targets, occurrence navigation, all exception causes, source-mapped frames, tags, breadcrumbs, raw event context, and the complete triage controls.
 
+## Reading Operations from the command line
+
+`fabrika operations` reads what the console's Operations pages show, through the same API (`/operations/api/rpc` on
+the console's origin), and nothing else: `issues` (filtered by source, status, level, time window and text),
+`issue <id>` (its activity, its recent events and the latest event in full), `releases` and `health`. It holds no
+write. Rows are tab-separated, `--json` prints the parsed answer, and the exit code tells an answer (0) from a failed
+call (1), a usage error (2), a key problem (3) and a missing or invisible issue or source (4). `fabrika operations
+--help` lists every option and column.
+
+It reads `FABRIKA_CONTROL_URL` (the console's `https://` origin, or `--url`) and `FABRIKA_CONTROL_KEY`, a `px_` key of
+the console app, from the environment only. The key's rights are the reader's: a source outside the key's scope is not
+listed, and its issues answer `not_found`. A key that holds `operations.read` in no scope exits 3 before Operations is
+asked.
+
+Issue titles, exception messages, breadcrumbs, tags and the raw event are written by an application's users and code.
+The command prints them as data: control characters removed and each cell kept on its line, or as JSON strings with
+`--json`. An agent that reads the output reads untrusted text.
+
+### Setting it up for a support person's coding agent
+
+1. Someone who administers access opens the console at **Access → Credentials → Provision API key**.
+2. **Label**: who and what it is for, such as `support-ana-claude`. It names the key in the list and the audit trail.
+3. **Application**: Console. Under **Advanced options**, tick **Choose individual permissions instead of a role** and
+   choose `operations.read` alone: the key then reads issues, events, releases and health, and cannot triage, change
+   alerts or health checks, or deploy.
+4. **Scope**: an **App** with the application's id reads that application only; an **Environment** reads that
+   environment of every application; no scope reads everything.
+5. **Expires**: a few days out. The form does not require a date, so set one: without it the key never expires. The
+   key and its access end together, and Credentials revokes it sooner.
+6. Copy the key from the dialog; it is shown once. Hand it over through a secret channel, never chat or a ticket.
+
+On the support person's machine, with the `fabrika` CLI installed (`bun add -d @fabrika/cli`, or run it with `bunx`):
+
+```bash
+export FABRIKA_CONTROL_URL=https://console.example.com   # the console's origin
+export FABRIKA_CONTROL_KEY=px_…                           # environment only; there is no flag
+fabrika operations health
+fabrika operations issues --app=<app> --env=prod --status=open --since=24h --json
+fabrika operations issue <issueId> --json
+```
+
+Start the agent (Claude Code) from a shell that holds both variables and tell it to use `fabrika operations … --json`.
+Exit 3 means the key is missing, expired, revoked, or lacks `operations.read`; mint a new one as above.
+
 ## Alert production and delivery
 
 `new_issue` and `regression` producers run after durable ingest persistence. Spike detection runs every minute and counts exact applied occurrences in the preceding 60 seconds. A spike fires when its count reaches the configured threshold. A source-and-fingerprint claim suppresses repeat spike production for 15 minutes.

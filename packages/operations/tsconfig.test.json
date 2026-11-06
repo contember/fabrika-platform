@@ -21,6 +21,7 @@
 		{ "path": "../app/tsconfig.test.json" },
 		{ "path": "../auth-core/tsconfig.lib.json" },
 		{ "path": "../auth/tsconfig.lib.json" },
+		{ "path": "../cli/tsconfig.lib.json" },
 		{ "path": "../operations-contract/tsconfig.lib.json" },
 		{ "path": "./tsconfig.lib.json" },
 		{ "path": "../platform-node/tsconfig.lib.json" },

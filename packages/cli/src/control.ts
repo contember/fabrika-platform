@@ -9,7 +9,7 @@
 // Output contract, matching `zops`: stdout carries DATA ONLY, progress and errors go to stderr, and
 // `--json` prints the procedure's result verbatim so a caller never parses a table.
 
-import { createRpcClient, type InferRpcClient, RpcError } from '@fabrika/app'
+import { createRpcClient, type InferRpcClient, RpcError, type RpcFetch } from '@fabrika/app'
 import { type IssueKeyInput, type IssueKeyResult, MAX_KEY_LIFETIME_SECONDS } from '@fabrika/auth-core'
 import { APP_ENV_KINDS } from '@fabrika/control-contract'
 import type {
@@ -344,22 +344,38 @@ const withoutEchoedKey = async (response: Response, key: string): Promise<Respon
 	return new Response(text, { status: response.status, statusText: response.statusText, headers: response.headers })
 }
 
+/** Control's origin and the fetch that carries FABRIKA_CONTROL_KEY to it. */
+export interface ControlTransport {
+	readonly origin: string
+	readonly fetch: RpcFetch
+}
+
 /**
- * The one client of Control that `fabrika control` and `fabrika env` share: the origin from `url` or
- * FABRIKA_CONTROL_URL, the key from FABRIKA_CONTROL_KEY in the environment only, no redirect followed.
+ * The origin from `url` or FABRIKA_CONTROL_URL, the key from FABRIKA_CONTROL_KEY in the environment only, no redirect
+ * followed. Every client of the console's origin is built on it.
  */
-export const connectControl = (url: string | undefined, env: Readonly<Record<string, string | undefined>>): ControlClient => {
-	const base = controlOrigin(url ?? env['FABRIKA_CONTROL_URL'])
+export const controlTransport = (
+	url: string | undefined,
+	env: Readonly<Record<string, string | undefined>>,
+	send: RpcFetch = fetch,
+): ControlTransport => {
+	const origin = controlOrigin(url ?? env['FABRIKA_CONTROL_URL'])
 	const key = secret('FABRIKA_CONTROL_KEY', env)
-	return createRpcClient<ControlRpcContract>({
-		baseUrl: `${base}/api/rpc`,
+	return {
+		origin,
 		fetch: async (input, init) => {
 			const headers = new Headers(init?.headers)
 			headers.set('authorization', `Bearer ${key}`)
 			// A redirect would carry the bearer to wherever it points.
-			return await withoutEchoedKey(await fetch(input, { ...init, headers, redirect: 'manual' }), key)
+			return await withoutEchoedKey(await send(input, { ...init, headers, redirect: 'manual' }), key)
 		},
-	})
+	}
+}
+
+/** The one client of Control that `fabrika control`, `fabrika env` and `fabrika operations` share. */
+export const connectControl = (url: string | undefined, env: Readonly<Record<string, string | undefined>>): ControlClient => {
+	const transport = controlTransport(url, env)
+	return createRpcClient<ControlRpcContract>({ baseUrl: `${transport.origin}/api/rpc`, fetch: transport.fetch })
 }
 
 const controlClient = (flags: Flags, env: Readonly<Record<string, string | undefined>>): ControlClient => connectControl(flags.values.get('url'), env)
