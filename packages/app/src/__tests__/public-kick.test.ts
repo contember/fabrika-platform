@@ -9,7 +9,7 @@ import { applicationSchema, Database } from '@fabrika/db'
 import { FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
 import { openPostgres } from '@fabrika/db/postgres'
 import { SQL } from 'bun'
-import { afterAll, beforeAll, beforeEach, describe, expect, spyOn, test } from 'bun:test'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import { join } from 'node:path'
 import { compileContract } from '../contract'
 import type { RequestExecutionContext } from '../fetch'
@@ -33,6 +33,8 @@ if (!hasPostgres) {
 
 const schema = applicationSchema(`kick-${Bun.randomUUIDv7().replaceAll('-', '').slice(-12)}`)
 const opened: Database[] = []
+/** The instances the running test started, whose kicks `afterEach` waits for. */
+const instances: Running[] = []
 
 async function admin<T>(work: (sql: SQL) => Promise<T>): Promise<T> {
 	const sql = new SQL({ url, adapter: 'postgres', max: 1 })
@@ -58,6 +60,13 @@ beforeEach(async () => {
 	)
 })
 
+// A test that fails while it holds a run would leave that run's transaction open, and the next truncate waiting on it.
+afterEach(async () => {
+	for (const held of gates.splice(0)) held.open()
+	const kicks = Promise.all(instances.splice(0).map((instance) => instance.settled()))
+	await Promise.race([kicks, Bun.sleep(HANG_MS)])
+})
+
 afterAll(async () => {
 	if (!hasPostgres) return
 	for (const connection of opened) await connection.close()
@@ -71,10 +80,12 @@ interface Gate {
 	wait(): Promise<void>
 }
 
+const gates: Gate[] = []
+
 function gate(): Gate {
 	const reached = Promise.withResolvers<void>()
 	const opened = Promise.withResolvers<void>()
-	return {
+	const held: Gate = {
 		reached: reached.promise,
 		open: () => opened.resolve(),
 		wait: async () => {
@@ -82,6 +93,8 @@ function gate(): Gate {
 			await opened.promise
 		},
 	}
+	gates.push(held)
+	return held
 }
 
 /** Every run of the job, what it welcomed, and the one run a test holds before it reads or before it commits. */
@@ -168,7 +181,7 @@ function start(options: { readonly max?: number; readonly hooks?: StatementHooks
 		},
 	}
 	const reports: OperationsReport[] = []
-	return {
+	const instance: Running = {
 		app,
 		world,
 		exchanged,
@@ -192,6 +205,8 @@ function start(options: { readonly max?: number; readonly hooks?: StatementHooks
 			}
 		},
 	}
+	instances.push(instance)
+	return instance
 }
 
 const RECEIVED = { result: { received: true } }
@@ -201,7 +216,10 @@ function quietly<T>(work: () => Promise<T>): Promise<T> {
 	return work().finally(() => log.mockRestore())
 }
 
-/** `work` within `ms`, or the test fails: a kick that waited on a lock would hold it past that. */
+/** Far above a slow runner's latency and below the test's timeout: what `inTime` tells a hang by. */
+const HANG_MS = 3_000
+
+/** `work` within `ms`, or the test fails: a kick that waited on a lock would wait until the test opens its gate. */
 function inTime<T>(ms: number, work: Promise<T>): Promise<T> {
 	return Promise.race([
 		work,
@@ -343,14 +361,19 @@ describe.skipIf(!hasPostgres)('a public procedure kicks its job', () => {
 		const scheduled = quietly(() => running.app.jobs.run('welcome'))
 		await held.reached
 		const emails = ['e1@example.test', 'e2@example.test', 'e3@example.test', 'e4@example.test', 'e5@example.test']
-		for (const email of emails) {
-			expect((await running.submit('signup', { email })).body).toEqual(RECEIVED)
-		}
-		const begun = performance.now()
-		expect((await running.submit('notify', { email: 'other@example.test' })).body).toEqual(RECEIVED)
-		expect(performance.now() - begun).toBeLessThan(250)
-		// Every kick ended while the run still holds its transaction open: each one left the shared flag.
-		await inTime(1_000, running.settled())
+		// The run's gate is still closed: answers and ended kicks prove that nothing waited on its transaction.
+		await inTime(
+			HANG_MS,
+			(async () => {
+				for (const email of emails) {
+					expect((await running.submit('signup', { email })).body).toEqual(RECEIVED)
+				}
+				// A kick that waited would keep a second connection: the unrelated procedure would find none.
+				expect((await running.submit('notify', { email: 'other@example.test' })).body).toEqual(RECEIVED)
+				// Every kick ended while the run still holds its transaction open: each one left the shared flag.
+				await running.settled()
+			})(),
+		)
 		expect(await leaseOf()).toMatchObject({ holder: expect.any(String), pending: true })
 		held.open()
 		expect(await scheduled).toEqual({ status: 'succeeded', attempts: 1 })
