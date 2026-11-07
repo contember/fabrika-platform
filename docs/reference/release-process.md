@@ -205,7 +205,17 @@ After publication, `release:registry-smoke` waits for the channel's dist-tag on 
 
 The wait is for npm's replication, not for the publish. A package has been observed reaching its dist-tag about five minutes after `npm publish` answered, so the smoke polls with backoff — 5 s, 10 s, 20 s, then 30 s steps — for up to ten minutes, printing the packages still missing between rounds and asking only about those. Past the deadline it fails with one line per package, naming what the registry answered. A release should no longer need a manual re-run of this step.
 
-The workflow refuses to start publication while any package name is absent from npm. npm trusted publishing cannot create a package name, so a new public package needs one interactive first publish and an `npm trust` binding to `release.yml` by an npm owner before CI can publish it.
+The workflow refuses to start publication while any package name is absent from npm. npm trusted publishing cannot create a package name, so a new public package needs one interactive first publish and an `npm trust` binding to `release.yml` and the `release` environment by an npm owner before CI can publish it.
+
+### Release authority
+
+Three repository settings, not the workflow files, decide who can publish:
+
+- **A tag ruleset on `refs/tags/v*`** refuses updating and deleting a release tag, so a tag names one commit for good. An installation runs the checkout of its pinned tag ([The source version](#the-source-version)); an immutable tag keeps every upgrade and redeploy on the commit that was released. The ruleset may also restrict who creates `v*` tags.
+- **The `release` environment** admits only `v*` tags (its deployment branch and tag policy). The publish job declares it, and each npm trusted-publisher binding (every public `@fabrika/*` package and `agent-canvas`) names `release.yml` and the `release` environment. A copy of the workflow run from a branch, or the same workflow without the environment, cannot publish.
+- **The `prod` environment** of the canvas-share worker admits only `v*` tags, so `workflow_dispatch` from another ref cannot reach its secrets.
+
+A new public package's `npm trust` binding names the environment too.
 
 ## Pinning the standalone example
 
