@@ -1,4 +1,4 @@
-import { Marked, marked } from 'marked'
+import { Marked } from 'marked'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAnnotations } from './AnnotationProvider'
 import { generateMarkdown, getMissingRequiredLabels } from './generateMarkdown'
@@ -220,9 +220,17 @@ const escapingMarked = new Marked({
 	},
 })
 
-/** Renders markdown; `rawHtml: false` shows HTML in it as text, for text the canvas did not author. */
-export function MarkdownPreview({ text, rawHtml = true }: { text: string; rawHtml?: boolean }) {
-	const html = useMemo(() => (rawHtml ? marked : escapingMarked).parse(rewriteUploadPaths(text), { async: false }), [text, rawHtml])
-	// oxlint-disable-next-line react/no-danger -- Canvas modules already execute as code in this document.
+/**
+ * Markdown to HTML for text the canvas did not author: feedback, which quotes annotation fields verbatim (a share
+ * reviewer's included), and agent responses, which can quote it. Raw HTML shows as text; a link or image whose URL is
+ * not http(s), mailto or relative shows as its text. Canvas modules render their own markdown with the shared `marked`.
+ */
+export function renderUntrustedMarkdown(markdown: string): string {
+	return escapingMarked.parse(markdown, { async: false })
+}
+
+export function MarkdownPreview({ text }: { text: string }) {
+	const html = useMemo(() => renderUntrustedMarkdown(rewriteUploadPaths(text)), [text])
+	// oxlint-disable-next-line react/no-danger -- renderUntrustedMarkdown escapes raw HTML and drops script URLs.
 	return <div className="prose-canvas font-body text-body text-text-primary leading-relaxed" dangerouslySetInnerHTML={{ __html: html }} />
 }

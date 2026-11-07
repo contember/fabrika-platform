@@ -110,7 +110,7 @@ function ThreadCard({ thread, store, draft, onDraft }: ThreadCardProps) {
 						<div className="text-[10px] uppercase tracking-widest text-text-tertiary">{comment.author === 'agent' ? 'Agent' : 'You'}</div>
 						{/* The agent's markdown is formatted, with any HTML in it shown as text; the user's own is shown as typed. */}
 						{comment.author === 'agent'
-							? <MarkdownPreview text={comment.body} rawHtml={false} />
+							? <MarkdownPreview text={comment.body} />
 							: <p className="whitespace-pre-wrap text-text-primary">{comment.body}</p>}
 					</li>
 				))}
