@@ -1,5 +1,6 @@
 import type { SessionManager } from '@fabrika/canvas-kernel/server'
 import { jsonResponse, type Route } from '@fabrika/daemon-kit'
+import { realpathSync } from 'fs'
 import { readdir } from 'fs/promises'
 import { isAbsolute, relative, resolve, sep } from 'path'
 import { LANG_MAP } from '../../langMap'
@@ -16,30 +17,62 @@ const IMAGE_MIME: Record<string, string> = {
 	avif: 'image/avif',
 }
 
-function resolveSessionPath(
-	sessionManager: SessionManager,
-	sessionId: string,
-	relPath: string,
-): { fullPath: string; session: ReturnType<SessionManager['get']> & {} } | Response {
-	const session = sessionManager.get(sessionId)
-	if (!session) return jsonResponse({ error: 'Session not found' }, 404)
-
-	const fullPath = resolve(session.projectRoot, relPath)
-	const relativePath = relative(resolve(session.projectRoot), fullPath)
-	if (!isAbsolute(relPath) && (relativePath === '..' || relativePath.startsWith(`..${sep}`))) {
-		return jsonResponse({ error: 'Path traversal rejected' }, 403)
-	}
-
-	return { fullPath, session }
+export interface FileHandlerOptions {
+	/** Directories whose contents the file routes never return: the daemon's own state. */
+	deniedRoots: readonly string[]
 }
 
-export function createFileHandlers(sessionManager: SessionManager): Route[] {
+/** The path with symlinks resolved, or the path itself when it does not exist (reading it then fails as missing). */
+function realOrSelf(path: string): string {
+	try {
+		return realpathSync.native(path)
+	} catch {
+		return path
+	}
+}
+
+function isInside(path: string, root: string): boolean {
+	const relativePath = relative(root, path)
+	return relativePath === '' || (relativePath !== '..' && !relativePath.startsWith(`..${sep}`) && !isAbsolute(relativePath))
+}
+
+type SessionPathResolver = (sessionId: string, relPath: string) => { fullPath: string } | Response
+
+/**
+ * Resolves a requested path against the session's project root. A relative path stays inside the root; an absolute
+ * path may name any file the daemon owner can read, except one inside a denied root, symlinks resolved.
+ */
+function createSessionPathResolver(sessionManager: SessionManager, options: FileHandlerOptions): SessionPathResolver {
+	const deniedRoots = [...new Set(options.deniedRoots.flatMap((root) => [resolve(root), realOrSelf(resolve(root))]))]
+
+	return (sessionId, relPath) => {
+		const session = sessionManager.get(sessionId)
+		if (!session) return jsonResponse({ error: 'Session not found' }, 404)
+
+		const fullPath = resolve(session.projectRoot, relPath)
+		const relativePath = relative(resolve(session.projectRoot), fullPath)
+		if (!isAbsolute(relPath) && (relativePath === '..' || relativePath.startsWith(`..${sep}`))) {
+			return jsonResponse({ error: 'Path traversal rejected' }, 403)
+		}
+
+		const realPath = realOrSelf(fullPath)
+		if (deniedRoots.some((root) => isInside(fullPath, root) || isInside(realPath, root))) {
+			return jsonResponse({ error: 'Path is not served' }, 403)
+		}
+
+		return { fullPath: realPath }
+	}
+}
+
+export function createFileHandlers(sessionManager: SessionManager, options: FileHandlerOptions): Route[] {
+	const resolveSessionPath = createSessionPathResolver(sessionManager, options)
+
 	async function handleFileServe(_req: Request, url: URL): Promise<Response> {
 		const sessionId = url.searchParams.get('session')
 		const relPath = url.searchParams.get('path')
 		if (!sessionId || !relPath) return jsonResponse({ error: 'Missing session or path' }, 400)
 
-		const resolved = resolveSessionPath(sessionManager, sessionId, relPath)
+		const resolved = resolveSessionPath(sessionId, relPath)
 		if (resolved instanceof Response) return resolved
 
 		try {
@@ -61,7 +94,7 @@ export function createFileHandlers(sessionManager: SessionManager): Route[] {
 		const relPath = url.searchParams.get('path')
 		if (!sessionId || !relPath) return jsonResponse({ error: 'Missing session or path' }, 400)
 
-		const resolved = resolveSessionPath(sessionManager, sessionId, relPath)
+		const resolved = resolveSessionPath(sessionId, relPath)
 		if (resolved instanceof Response) return resolved
 
 		try {
@@ -89,7 +122,7 @@ export function createFileHandlers(sessionManager: SessionManager): Route[] {
 		const relPath = url.searchParams.get('path') || ''
 		if (!sessionId) return jsonResponse({ error: 'Missing session' }, 400)
 
-		const resolved = resolveSessionPath(sessionManager, sessionId, relPath)
+		const resolved = resolveSessionPath(sessionId, relPath)
 		if (resolved instanceof Response) return resolved
 
 		const ignoreDirs = new Set(['.git', 'node_modules', '.next', '__pycache__', 'dist', '.cache'])

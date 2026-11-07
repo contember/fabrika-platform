@@ -2,6 +2,7 @@ import { compileJsx, type SessionManager, watchSession } from '@fabrika/canvas-k
 import { jsonResponse, type Route } from '@fabrika/daemon-kit'
 import { existsSync, readdirSync, readFileSync } from 'fs'
 import { errorMessage } from '../../client/errorMessage'
+import { hasCliToken } from '../admission'
 import { HOST_COMPONENTS } from '../components'
 import { COMPILE_TEMP_DIR } from '../paths'
 import { loadShareConfig, revokeShare, shareRevision } from '../share'
@@ -158,10 +159,12 @@ export function createApiHandlers(ctx: ApiContext): Route[] {
 		})
 	}
 
-	function handleHealth(): Response {
-		const sessions = sessionManager.list().map((s) => s.id)
+	function handleHealth(req: Request): Response {
 		// The pid is what the CLI signals to stop us — a pid file it cannot corroborate is not.
-		return jsonResponse({ ok: true, sessions, version: ctx.version, pid: process.pid })
+		const health = { ok: true, version: ctx.version, pid: process.pid }
+		// Session ids are listed only to the CLI; liveness and version are what the lifecycle check needs.
+		if (!hasCliToken(req, ctx.cliAuthToken)) return jsonResponse(health)
+		return jsonResponse({ ...health, sessions: sessionManager.list().map((s) => s.id) })
 	}
 
 	function handleMeta(_req: Request, _url: URL, match: URLPatternResult): Response {
@@ -300,7 +303,7 @@ export function createApiHandlers(ctx: ApiContext): Route[] {
 	}
 
 	async function handleSecretResolve(req: Request, _url: URL, match: URLPatternResult): Promise<Response> {
-		if (req.headers.get('X-Agent-Canvas-CLI-Token') !== ctx.cliAuthToken) {
+		if (!hasCliToken(req, ctx.cliAuthToken)) {
 			return secretJsonResponse({ error: 'Secret resolution is available only to the local CLI' }, 403)
 		}
 		const sessionId = match.pathname.groups.id!

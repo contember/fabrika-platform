@@ -3,11 +3,12 @@ import { corsHeaders, dispatch, jsonResponse } from '@fabrika/daemon-kit'
 import { randomBytes } from 'crypto'
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { dirname, join } from 'path'
+import { admitRequest } from './admission'
 import { createApiHandlers } from './handlers/api'
 import { createFileHandlers } from './handlers/files'
 import { createStaticHandlers } from './handlers/static'
 import { createUploadHandlers } from './handlers/uploads'
-import { CLI_AUTH_FILE, PID_FILE, REVIEWS_DIR, SESSIONS_DIR, TEMP_DIR } from './paths'
+import { CLI_AUTH_FILE, DATA_DIR, PID_FILE, REVIEWS_DIR, SESSIONS_DIR, TEMP_DIR } from './paths'
 import { startRemoteFeedbackPoller } from './remote-feedback'
 import { ReviewProxies } from './review/proxy'
 import { createReviewServer, type ReviewSocketData } from './review/server'
@@ -50,7 +51,8 @@ const routes = [
 		version: VERSION,
 		cliAuthToken,
 	}),
-	...createFileHandlers(sessionManager),
+	// The file routes never return the daemon's own state, the CLI capability included.
+	...createFileHandlers(sessionManager, { deniedRoots: [TEMP_DIR, DATA_DIR] }),
 	...createUploadHandlers(sessionManager),
 	...createStaticHandlers(),
 ]
@@ -60,6 +62,9 @@ const server = Bun.serve<SocketData>({
 	hostname: 'localhost',
 	fetch(req, server) {
 		const url = new URL(req.url)
+
+		const refusal = admitRequest(req, url, { port: PORT, cliAuthToken })
+		if (refusal !== null) return refusal
 
 		// Review mode answers its own preflights: the application under review runs on another port.
 		const reviewResponse = review.fetch(req, url, server)

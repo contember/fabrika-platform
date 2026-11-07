@@ -5,6 +5,7 @@ import { parseArgs } from 'util'
 import { z } from 'zod'
 import { PROJECT_RE, type ReviewThread, reviewThreadSchema } from '../../../daemon/src/review/model.ts'
 import { KEEPALIVE_PONG } from '../../../daemon/src/review/remote.ts'
+import { cliAuthHeaders, cliSocketUrl } from '../cli-auth.ts'
 import { BASE_URL, TIMEOUT_MS, WS_URL } from '../config.ts'
 import { ensureDaemon } from '../daemon-lifecycle.ts'
 import { openBrowser } from '../helpers.ts'
@@ -47,7 +48,8 @@ function defaultProject(): string {
 async function call(project: string, method: string, path: string, body?: unknown): Promise<unknown> {
 	const response = await fetch(`${BASE_URL}/api/review/${encodeURIComponent(project)}${path}`, {
 		method,
-		...(body === undefined ? {} : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
+		headers: body === undefined ? cliAuthHeaders() : { 'Content-Type': 'application/json', ...cliAuthHeaders() },
+		...(body === undefined ? {} : { body: JSON.stringify(body) }),
 	})
 	const result: unknown = await response.json()
 	if (!response.ok) {
@@ -74,7 +76,7 @@ class DaemonReviewBackend implements ReviewBackend {
 	}
 
 	createSocket(url: string): WebSocket {
-		return new WebSocket(url)
+		return new WebSocket(cliSocketUrl(url))
 	}
 
 	async claim(): Promise<string | undefined> {
