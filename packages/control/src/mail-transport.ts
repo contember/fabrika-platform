@@ -136,9 +136,37 @@ const PLATFORM_MAIL_SINCE: Release = { text: '0.7.0', major: 0, minor: 7, patch:
  * without a release was read before Control recorded one, so it is an older application.
  */
 export function relaysInstallationMail(artifact: ContractArtifact | null, framework: string | undefined): boolean {
-	if (installationMailJobs(artifact).length === 0 || framework === undefined) return false
-	const release = parseRelease(framework)
-	return release !== null && compareReleases(release, PLATFORM_MAIL_SINCE) >= 0
+	return installationMailJobs(artifact).length > 0 && !predatesRelay(framework)
+}
+
+function predatesRelay(framework: string | undefined): boolean {
+	const release = framework === undefined ? null : parseRelease(framework)
+	return release === null || compareReleases(release, PLATFORM_MAIL_SINCE) < 0
+}
+
+/** The parts of an access snapshot that decide which mail transport its deploy hands. */
+export interface MailCustodyVersion {
+	readonly contract: ContractArtifact | null
+	readonly framework?: string | undefined
+}
+
+/** A version whose release predates the relay, with a job that declares mailer 'installation', holds the provider credential. */
+function holdsMailCredential(version: MailCustodyVersion): boolean {
+	return installationMailJobs(version.contract).length > 0 && predatesRelay(version.framework)
+}
+
+/**
+ * Why `candidate` may not be published over `published`, or null. Only an environment whose published version already
+ * held the installation's provider credential keeps that custody (ADR-0064 §5), so pinning a release before the relay
+ * gains it for no new environment, job or downgrade. The line names only a release the release pattern admitted.
+ */
+export function mailCustodyRefusal(published: MailCustodyVersion, candidate: MailCustodyVersion): string | null {
+	if (!holdsMailCredential(candidate) || holdsMailCredential(published)) return null
+	const jobs = installationMailJobs(candidate.contract).length
+	const pinned = candidate.framework === undefined ? 'an older framework release' : `framework ${candidate.framework}, which this version pins`
+	return `the contract has ${
+		jobs === 1 ? 'a job that sends' : `${jobs} jobs that send`
+	} mail through the installation (mailer: 'installation'), and ${pinned}, predates the platform's mail relay: it would hold the installation's provider credential, which this environment's published version does not. Raise the application's @fabrika/* pin to ${PLATFORM_MAIL_SINCE.text} or newer`
 }
 
 /**

@@ -11,6 +11,7 @@ import { devLauncherRefusal } from '../dev/deploy'
 import type { CommitSource } from '../github/source/commit-files'
 import { SourceFailure, SourceRateLimited } from '../github/source/failure'
 import type { LeaseFence } from '../lease'
+import { mailCustodyRefusal } from '../mail-transport'
 import { type AccessEffect, type AccessOutcome, classifyAccess, isJobStartLine } from './diff'
 import { ContractMissing, readAccessSnapshot, snapshotReads, SnapshotRefused } from './read'
 import { FrameworkReleaseRefused } from './readers'
@@ -172,6 +173,7 @@ export async function publishRunSnapshot(
 		await assertConnectorEdges(deps.repositories.registry, run, candidate, active, input.log)
 		assertMountCompatibility(candidate, active, input.log)
 		assertDevLauncher(candidate, appEnv, input.log)
+		assertMailCustody(candidate, published, input.log)
 		await input.validateAccess?.(access, appEnv)
 		const classification = classify(active, candidate, appEnv)
 		logClassification(input.log, classification, appEnv.env)
@@ -272,6 +274,17 @@ async function assertConnectorEdges(
 function assertDevLauncher(candidate: AccessSnapshot, appEnv: AppEnvRow, log: (line: string) => void): void {
 	if (appEnv.kind !== 'dev') return
 	const refusal = devLauncherRefusal(candidate.framework)
+	if (refusal === null) return
+	log(`access: ${refusal}`)
+	throw new FrameworkReleaseRefused(refusal)
+}
+
+/**
+ * Refused before anything publishes: a published candidate would itself count as the custody the next deploy reads. Read
+ * against the environment's own publication, which the deploy's mail variables are written over.
+ */
+function assertMailCustody(candidate: AccessSnapshot, published: ActiveSnapshot, log: (line: string) => void): void {
+	const refusal = mailCustodyRefusal(published.snapshot, candidate)
 	if (refusal === null) return
 	log(`access: ${refusal}`)
 	throw new FrameworkReleaseRefused(refusal)

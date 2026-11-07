@@ -116,6 +116,13 @@ no idempotency key.
   prerelease compares as its release.
 - An older release, and a snapshot that records no framework release, keeps what it had: for mail, the installation's
   `FABRIKA_EMAIL_*` with the provider credential. The platform transport is additive under ADR-0062.
+- That credential stays with the environments that already hold it. A version on an older release with a job that
+  declares `mailer: 'installation'` is published only where the environment's published version also was one; anywhere
+  else Control refuses it before it publishes or parks, naming the pin to raise to 0.7.0 or newer. That covers a new
+  environment, the first mailer job of an environment on an older release, and a version that moves back from the
+  relay. Otherwise an application's author would take an installation-wide credential by choosing an older pin, which
+  neither the access diff (it does not compare releases) nor an unprotected environment would stop
+  (`mailCustodyRefusal`, `packages/control/src/mail-transport.ts`).
 - Zerops writes the URL as a plain service variable and the key as a sensitive one. In a dev sandbox both go to the
   launcher's root-only environment file ([ADR-0049](0049-author-applications-through-mcp-in-control.md) rule 10).
 - The `source` receiver goes only to a `dev` environment whose snapshot records framework release 0.9.0 or newer,
@@ -171,7 +178,8 @@ nothing else. The wire is the one the launcher of 0.9 speaks, unchanged.
   environment's vault values, so other environments' expired values stay in the vault
   ([backlog 194](../backlog/194-mail-relay-follow-ups.md)).
 - During the ADR-0062 window, an installation has two kinds of mailer applications: those on the relay and older ones
-  that still hold the provider credential. The gate covers only the first kind.
+  that still hold the provider credential. The gate covers only the first kind. The second kind does not grow: an
+  environment that has left it, or never was in it, cannot join it by pinning an older release (§5).
 
 **Rollout of an existing installation:**
 
@@ -192,8 +200,9 @@ nothing else. The wire is the one the launcher of 0.9 speaks, unchanged.
    variables, which it no longer hands. The key is sensitive and cannot be read back, so every deploy writes it.
    On Cloudflare the pair is a Worker secret and a var of the new version, the version drops the old plain
    `FABRIKA_EMAIL_*` vars, and the deploy deletes each `FABRIKA_EMAIL_*` secret it no longer writes (the provider's
-   credential among them). An older release keeps its `FABRIKA_EMAIL_*`. Control itself gains no variable: its relay
-   sends with the `FABRIKA_EMAIL_*` it already holds.
+   credential among them). An older release keeps its `FABRIKA_EMAIL_*` where its environment's published version held
+   them; Control reads that from the publication it already stores, so no operator step applies. Control itself gains
+   no variable: its relay sends with the `FABRIKA_EMAIL_*` it already holds.
 3. **Provider state.** Migration `0013_mail_relay.sql` only adds tables, and `0024_mail_content_objects.sql` a nullable
    column and a table; existing rows keep their content in the row and read as before. On Zerops the dispatch queue
    `vozka-mail` lives in the existing jobs table, and content stays in the row. On Cloudflare the next Control deploy

@@ -164,7 +164,9 @@ as `dropped`: an operator's decision, never a silent loss.
     `FABRIKA_EMAIL_PROVIDER=platform`, the platform transport's URL and key, and nothing of the provider (ADR-0064).
     Control hands it whether or not its own transport is valid, because the relay holds what it cannot send;
   - **the set**, for an older release or a snapshot that records no release: every `FABRIKA_EMAIL_*` Control holds,
-    service-level and always sensitive ([ADR-0062](0062-a-platform-release-serves-older-framework-releases.md));
+    service-level and always sensitive ([ADR-0062](0062-a-platform-release-serves-older-framework-releases.md)). Only
+    an environment whose published version already held it keeps it; Control refuses such a version anywhere else
+    ([ADR-0064](0064-applications-reach-the-platform-over-a-receiver-verified-transport-key.md) §5);
   - **the set** on Cloudflare when Control's Worker runs no relay (it lacks the `fabrika-mail` queue or the `fabrika-mail-content` bucket), whatever the release.
     The deploy writes every name as a Worker secret, and the provider refuses it to a release before 0.9, whose
     stateless Worker runs no job.

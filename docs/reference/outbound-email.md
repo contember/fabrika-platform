@@ -505,6 +505,13 @@ never sends. `mailer: 'own'` takes the application's own `EmailSender` from
   release the approved snapshot records (`builtinEmailProviderSince`, `@fabrika/email/providers`),
   naming the provider, the pinned release and the one it needs. The running version
   keeps running.
+- A version on a release before 0.7.0, or one whose snapshot records no release, takes
+  the set only where the environment's published version did too: an application
+  keeps the credential it already held, and gains it nowhere else. Control refuses any
+  other such version before it publishes or parks (`mailCustodyRefusal`): a new
+  environment, the first mailer job of an environment on an older release, a version
+  that moves back from the relay. The line names the pinned release and asks to raise the `@fabrika/*` pin to
+  0.7.0 or newer; the published version keeps running.
 - A Cloudflare deploy hands the set: the Worker runs no relay. An application on
   framework 0.9 or newer runs its jobs in its Durable Object (ADR-0065) and reads the
   set from its Worker's vars and secrets; the provider refuses the set to an older
