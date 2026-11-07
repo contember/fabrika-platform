@@ -117,10 +117,12 @@ no idempotency key.
 - An older release, and a snapshot that records no framework release, keeps what it had: for mail, the installation's
   `FABRIKA_EMAIL_*` with the provider credential. The platform transport is additive under ADR-0062.
 - That credential stays with the environments that already hold it. A version on an older release with a job that
-  declares `mailer: 'installation'` is published only where the environment's published version also was one; anywhere
-  else Control refuses it before it publishes or parks, naming the pin to raise to 0.7.0 or newer. That covers a new
-  environment, the first mailer job of an environment on an older release, and a version that moves back from the
-  relay. Otherwise an application's author would take an installation-wide credential by choosing an older pin, which
+  declares `mailer: 'installation'` is published only where the environment's published version, or the version it
+  runs (its latest succeeded run), also was one; anywhere else Control refuses it before it publishes or parks, naming
+  the pin to raise to 0.7.0 or newer. That covers a new environment, the first mailer job of an environment on an older
+  release, and a version that moves back from the relay, so a mailer application cannot roll a framework upgrade back
+  across 0.7 and fixes forward instead. An installation without a transport refuses the same versions. The exception
+  to ADR-0062 is its rule 10. Otherwise an application's author would take an installation-wide credential by choosing an older pin, which
   neither the access diff (it does not compare releases) nor an unprotected environment would stop
   (`mailCustodyRefusal`, `packages/control/src/mail-transport.ts`).
 - Zerops writes the URL as a plain service variable and the key as a sensitive one. In a dev sandbox both go to the

@@ -986,15 +986,15 @@ export const contract = app.contract((c) => ({
 	}
 
 	const CUSTODY_REFUSAL =
-		"predates the platform's mail relay: it would hold the installation's provider credential, which this environment's published version does not. Raise the application's @fabrika/* pin to 0.7.0 or newer"
+		"predates the platform's mail relay: it would hold the installation's provider credential, which neither this environment's published version nor the one it runs holds. Raise the application's @fabrika/* pin to 0.7.0 or newer"
 
 	/**
 	 * An environment whose published version already held the installation's credential: an application on a release
 	 * before the relay, published before custody was decided against the environment's publication. The run Control
 	 * refuses for it today stores the same snapshot such a publication holds.
 	 */
-	async function heldTheCredential(w: World): Promise<void> {
-		const runId = await createdRun(w, 'stage')
+	async function heldTheCredential(w: World, env = 'stage'): Promise<void> {
+		const runId = await createdRun(w, env)
 		const quiet = spyOn(console, 'error').mockImplementation(() => {})
 		try {
 			expect((await executeDeploy(deps(w), { runId })).status).toBe('failed')
@@ -1004,9 +1004,9 @@ export const contract = app.contract((c) => ({
 		const snapshot = (await run(w, runId)).snapshot_json
 		if (snapshot === null) throw new Error('the refused run stored no snapshot')
 		w.sqlite.query(
-			"UPDATE app_envs SET published_run_id = ?, published_snapshot_json = ?, generation = generation + 1 WHERE app_id = 'notes' AND env = 'stage'",
+			"UPDATE app_envs SET published_run_id = ?, published_snapshot_json = ?, generation = generation + 1 WHERE app_id = 'notes' AND env = ?",
 		)
-			.run(runId, snapshot)
+			.run(runId, snapshot, env)
 	}
 
 	const mailVariables = (input: ProviderDeployInput | undefined): string[] =>
@@ -1496,6 +1496,83 @@ export const contract = app.contract((c) => ({
 		expect(mailVariables(w.deploys[0])).toEqual(['FABRIKA_EMAIL_PROVIDER', 'FABRIKA_PLATFORM_MAIL_KEY', 'FABRIKA_PLATFORM_MAIL_URL'])
 		expect((await published(w, 'stage')).runId).toBe(relayRun)
 		expect(approvedSnapshotOf(await w.db.registry.getAppEnv('notes', 'stage'))?.framework).toBe('0.7.0')
+	})
+
+	test('a relay version whose deploy failed leaves the older version running, and redeploying it keeps the credential', async () => {
+		const w = mailingWorld('0.6.0')
+		await seed(w)
+		await heldTheCredential(w)
+		const { workloadCredentials } = await credentialed(w)
+		const relayDeps = { ...deps(w), workloadCredentials, mailTransport, ...(await relayed(w)) }
+		expect((await executeDeploy(relayDeps, { runId: await createdRun(w, 'stage') })).status).toBe('succeeded')
+		const olderFiles = w.files
+
+		// The 0.7 version is published, and its provider deploy fails: the 0.6 version keeps running.
+		w.files = { ...olderFiles, 'src/jobs.ts': MAILING, 'bun.lock': frameworkLockfile('0.7.0') }
+		const relayRun = await createdRun(w, 'stage')
+		const quiet = spyOn(console, 'error').mockImplementation(() => {})
+		try {
+			const failing = { ...relayDeps, provider: { ...relayDeps.provider, deploy: () => Promise.reject(new Error('the build failed')) } }
+			expect((await executeDeploy(failing, { runId: relayRun })).status).toBe('failed')
+		} finally {
+			quiet.mockRestore()
+		}
+		expect((await published(w, 'stage')).runId).toBe(relayRun)
+
+		w.files = olderFiles
+		expect((await executeDeploy(relayDeps, { runId: await createdRun(w, 'stage') })).status).toBe('succeeded')
+		expect(mailVariables(w.deploys.at(-1))).toEqual(['FABRIKA_EMAIL_FROM', 'FABRIKA_EMAIL_PROVIDER', 'FABRIKA_EMAIL_RESEND_API_KEY'])
+		expect(approvedSnapshotOf(await w.db.registry.getAppEnv('notes', 'stage'))?.framework).toBe('0.6.0')
+	})
+
+	test('on a protected environment the refused version never waits for approval', async () => {
+		const w = mailingWorld('0.6.0')
+		await seed(w)
+		const quiet = spyOn(console, 'error').mockImplementation(() => {})
+		let refused: { runId: string; status: string }
+		try {
+			refused = await deploy(w, 'prod')
+		} finally {
+			quiet.mockRestore()
+		}
+		expect(refused.status).toBe('failed')
+		expect(await run(w, refused.runId)).toMatchObject({ status: 'failed', classification_json: null })
+		expect([...w.logs.values()].join('\n')).toContain(CUSTODY_REFUSAL)
+		expect((await published(w, 'prod')).runId).toBeNull()
+	})
+
+	test('an approved parked version is checked again against what was published while it waited', async () => {
+		const w = mailingWorld('0.6.0')
+		await seed(w)
+		await heldTheCredential(w, 'prod')
+		const { workloadCredentials } = await credentialed(w)
+		const relayDeps = { ...deps(w), workloadCredentials, mailTransport, ...(await relayed(w)) }
+		const heldFiles = w.files
+		// Older than the parked run, so its success does not supersede it.
+		const relayRun = uuidv7()
+
+		// A second mailer job widens access on the protected environment: the run waits, holding the credential's custody.
+		w.files = { ...heldFiles, 'src/jobs.ts': `${MAILING_05}${MAILING_05.split('\n').slice(2).join('\n').replace('digest', 'weekly')}` }
+		w.contract = CONTRACT.replace('import { digest }', 'import { digest, weekly }').replace('jobs: { digest }', 'jobs: { digest, weekly }')
+		const parked = await deploy(w, 'prod')
+		expect(parked.status).toBe('awaiting_approval')
+
+		// Meanwhile the environment moves to the relay.
+		w.files = { ...heldFiles, 'src/jobs.ts': MAILING, 'bun.lock': frameworkLockfile('0.7.0') }
+		w.contract = CONTRACT
+		await w.db.runs.createRun({ id: relayRun, appId: 'notes', env: 'prod', ref: 'refs/heads/main', trigger: 'manual', actor: 'user:test' })
+		expect((await executeDeploy(relayDeps, { runId: relayRun })).status).toBe('succeeded')
+
+		await approve(w, parked.runId)
+		const quiet = spyOn(console, 'error').mockImplementation(() => {})
+		try {
+			expect((await executeDeploy(relayDeps, { runId: parked.runId })).status).toBe('failed')
+		} finally {
+			quiet.mockRestore()
+		}
+		expect([...w.logs.values()].join('\n')).toContain(`2 jobs that send mail through the installation (mailer: 'installation'), and framework 0.6.0`)
+		expect((await published(w, 'prod')).runId).toBe(relayRun)
+		expect(w.deploys.map(mailVariables)).toEqual([['FABRIKA_EMAIL_PROVIDER', 'FABRIKA_PLATFORM_MAIL_KEY', 'FABRIKA_PLATFORM_MAIL_URL']])
 	})
 
 	test('a stored application variable in the family is refused with the command that deletes it', async () => {

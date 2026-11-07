@@ -156,17 +156,20 @@ function holdsMailCredential(version: MailCustodyVersion): boolean {
 }
 
 /**
- * Why `candidate` may not be published over `published`, or null. Only an environment whose published version already
- * held the installation's provider credential keeps that custody (ADR-0064 §5), so pinning a release before the relay
- * gains it for no new environment, job or downgrade. The line names only a release the release pattern admitted.
+ * Why `candidate` may not be published to an environment that holds `held` (its published version and the version that
+ * runs), or null. Only an environment where one of them already held the installation's provider credential keeps that
+ * custody (ADR-0064 §5), so pinning a release before the relay gains it for no new environment, job or downgrade. The
+ * line names only a release the release pattern admitted.
  */
-export function mailCustodyRefusal(published: MailCustodyVersion, candidate: MailCustodyVersion): string | null {
-	if (!holdsMailCredential(candidate) || holdsMailCredential(published)) return null
+export function mailCustodyRefusal(held: readonly MailCustodyVersion[], candidate: MailCustodyVersion): string | null {
+	if (!holdsMailCredential(candidate) || held.some(holdsMailCredential)) return null
 	const jobs = installationMailJobs(candidate.contract).length
-	const pinned = candidate.framework === undefined ? 'an older framework release' : `framework ${candidate.framework}, which this version pins`
+	const release = candidate.framework === undefined
+		? 'the framework release this version was read with predates'
+		: `framework ${candidate.framework}, which this version pins, predates`
 	return `the contract has ${
 		jobs === 1 ? 'a job that sends' : `${jobs} jobs that send`
-	} mail through the installation (mailer: 'installation'), and ${pinned}, predates the platform's mail relay: it would hold the installation's provider credential, which this environment's published version does not. Raise the application's @fabrika/* pin to ${PLATFORM_MAIL_SINCE.text} or newer`
+	} mail through the installation (mailer: 'installation'), and ${release} the platform's mail relay: it would hold the installation's provider credential, which neither this environment's published version nor the one it runs holds. Raise the application's @fabrika/* pin to ${PLATFORM_MAIL_SINCE.text} or newer`
 }
 
 /**

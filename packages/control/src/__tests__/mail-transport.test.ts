@@ -239,20 +239,28 @@ describe("custody of the installation's provider credential", () => {
 	const without = artifact({ 'job:own': { ...REACH, mailer: 'own' } })
 
 	test('a release before the relay takes it only where the published version held it, one that records no release included', () => {
-		expect(mailCustodyRefusal({ contract: needs, framework: '0.6.0' }, { contract: needs, framework: '0.5.2' })).toBeNull()
-		expect(mailCustodyRefusal({ contract: needs }, { contract: needs, framework: '0.6.0' })).toBeNull()
+		expect(mailCustodyRefusal([{ contract: needs, framework: '0.6.0' }], { contract: needs, framework: '0.5.2' })).toBeNull()
+		expect(mailCustodyRefusal([{ contract: needs }], { contract: needs, framework: '0.6.0' })).toBeNull()
+		// Published on the relay, while the version that runs still holds it: a redeploy of that version keeps it.
+		expect(
+			mailCustodyRefusal([{ contract: needs, framework: '0.7.0' }, { contract: needs, framework: '0.6.0' }], { contract: needs, framework: '0.6.0' }),
+		)
+			.toBeNull()
 	})
 
 	test('a new environment, a job added to one that held none, and a move back from the relay are refused with the pin to raise', () => {
 		for (const published of [{ contract: null }, { contract: without, framework: '0.6.0' }, { contract: needs, framework: '0.7.0' }]) {
-			expect(mailCustodyRefusal(published, { contract: needs, framework: '0.6.0' })).toContain(
-				"framework 0.6.0, which this version pins, predates the platform's mail relay: it would hold the installation's provider credential, which this environment's published version does not. Raise the application's @fabrika/* pin to 0.7.0 or newer",
+			expect(mailCustodyRefusal([published], { contract: needs, framework: '0.6.0' })).toContain(
+				"framework 0.6.0, which this version pins, predates the platform's mail relay: it would hold the installation's provider credential, which neither this environment's published version nor the one it runs holds. Raise the application's @fabrika/* pin to 0.7.0 or newer",
 			)
 		}
+		expect(mailCustodyRefusal([{ contract: null }], { contract: needs })).toContain(
+			"and the framework release this version was read with predates the platform's mail relay",
+		)
 	})
 
 	test('a version on the relay, or one that sends no installation mail, needs no custody', () => {
-		expect(mailCustodyRefusal({ contract: null }, { contract: needs, framework: '0.7.0' })).toBeNull()
-		expect(mailCustodyRefusal({ contract: null }, { contract: without, framework: '0.5.2' })).toBeNull()
+		expect(mailCustodyRefusal([{ contract: null }], { contract: needs, framework: '0.7.0' })).toBeNull()
+		expect(mailCustodyRefusal([{ contract: null }], { contract: without, framework: '0.5.2' })).toBeNull()
 	})
 })
