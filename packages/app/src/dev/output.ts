@@ -1,6 +1,7 @@
 // The launcher's view of output: every line of the application and of the commands it runs is forwarded to its own
 // stream, as Zerops' runtime log reads it, and the newest lines are kept to report. Secret values never reach either.
 
+import type { Scrubber } from '../jobs/scrub.js'
 import { DEV_REPORT_MAX_LINE_CHARACTERS, type DevLogLine } from './wire.js'
 
 export type OutputStream = DevLogLine['stream']
@@ -17,22 +18,24 @@ export const processOutput: OutputSink = {
 }
 
 /**
- * The newest `capacity` lines, numbered from 0 since the launcher started, with every known secret value replaced. A
- * mark starts the lines a report carries: those of the newest sync or reset, and the output after it.
+ * The newest `capacity` lines, numbered from 0 since the launcher started, each scrubbed of secrets once, as it arrives.
+ * A mark starts the lines a report carries: those of the newest sync or reset, and the output after it.
  */
 export class OutputRing {
 	private readonly lines: DevLogLine[] = []
 	private next = 0
 	private marked = 0
 
-	constructor(private readonly capacity: number, private readonly secrets: readonly string[], private readonly sink: OutputSink) {}
+	constructor(private readonly capacity: number, private readonly scrubber: Scrubber, private readonly sink: OutputSink) {}
 
-	push(stream: OutputStream, text: string): void {
-		const line = this.redact(text)
+	/** Log and keep `text` scrubbed, and return the scrubbed line: a caller keeps that copy and never the raw one. */
+	push(stream: OutputStream, text: string): string {
+		const line = this.scrubber.scrub(text)
 		this.sink.write(stream, line)
 		this.lines.push({ n: this.next, stream, text: line.slice(0, DEV_REPORT_MAX_LINE_CHARACTERS) })
 		this.next += 1
 		if (this.lines.length > this.capacity) this.lines.shift()
+		return line
 	}
 
 	/** Report from the next line on: the lines before it belong to an older head. */
@@ -44,12 +47,6 @@ export class OutputRing {
 	tail(count: number): DevLogLine[] {
 		const since = this.lines.filter((line) => line.n >= this.marked)
 		return since.slice(Math.max(0, since.length - count))
-	}
-
-	private redact(text: string): string {
-		let line = text
-		for (const secret of this.secrets) line = line.replaceAll(secret, '[redacted]')
-		return line
 	}
 }
 

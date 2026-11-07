@@ -1,3 +1,4 @@
+import { readBoundedText } from '../bounded-body'
 import { type Config } from '../services'
 
 /**
@@ -58,31 +59,10 @@ function originOf(value: string | null): string | null {
 }
 
 export async function readForm(request: Request): Promise<URLSearchParams | null> {
-	const contentLength = Number(request.headers.get('Content-Length') ?? '0')
-	if (Number.isFinite(contentLength) && contentLength > 16_384) return null
 	const contentType = request.headers.get('Content-Type') ?? ''
 	if (!contentType.toLowerCase().startsWith('application/x-www-form-urlencoded')) return null
-	if (request.body === null) return new URLSearchParams()
-	const reader = request.body.getReader()
-	const decoder = new TextDecoder()
-	let body = ''
-	let bytes = 0
-	try {
-		while (true) {
-			const chunk = await reader.read()
-			if (chunk.done) break
-			bytes += chunk.value.byteLength
-			if (bytes > 16_384) {
-				await reader.cancel()
-				return null
-			}
-			body += decoder.decode(chunk.value, { stream: true })
-		}
-		body += decoder.decode()
-		return new URLSearchParams(body)
-	} catch {
-		return null
-	}
+	const body = await readBoundedText(request, 16_384)
+	return body.ok ? new URLSearchParams(body.text) : null
 }
 
 export function stringValue(value: string | null): string | null {

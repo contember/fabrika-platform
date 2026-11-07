@@ -67,13 +67,20 @@ describe('the sign-out path', () => {
 	test('refuses a return that is not a path on this origin', async () => {
 		const verify = createVerifyService({ manifest: manifestWith(HUMAN), iam: new FakeIam(), issuer: ISSUER })
 		for (
-			const redirect of [null, '', 'kiosk', 'https://evil.test/', `https://${HOST}/`, '//evil.test/', '/\\evil.test', '/\\/evil.test', '/a b', '/a\nb']
+			const redirect of [null, '', 'kiosk', 'https://evil.test/', `https://${HOST}/`, '//evil.test/', '/\\evil.test', '/\\/evil.test', '/a\nb']
 		) {
 			const response = await verify(signOut(redirect))
 			expect(response.status).toBe(400)
 			expect(response.headers.get('location')).toBeNull()
 			expect(sessionCookie(response)).toBeNull()
 		}
+	})
+
+	test('returns to a path with a space, percent-encoded', async () => {
+		const verify = createVerifyService({ manifest: manifestWith(HUMAN), iam: new FakeIam(), issuer: ISSUER })
+		const response = await verify(signOut('/a b'))
+		expect(response.status).toBe(302)
+		expect(new URL(response.headers.get('location') ?? '').searchParams.get('redirect')).toBe(`https://${HOST}/a%20b`)
 	})
 
 	test('serves only GET, and never reaches the application', async () => {

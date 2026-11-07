@@ -373,6 +373,12 @@ describe.skipIf(url === '')('fabrika app dev on the template application, seeded
 		expect(page.headers.get('Content-Type')).toContain('text/html')
 	})
 
+	test('a choice goes on to a path of this origin only, and to the first SPA otherwise', async () => {
+		for (const next of ['//elsewhere.example/', '/\t/elsewhere.example/', '/\n/elsewhere.example/', 'https://elsewhere.example/']) {
+			await chosen(`${origin}__fabrika/dev/as?persona=Petra&next=${encodeURIComponent(next)}`, '/')
+		}
+	})
+
 	test('an unknown persona is refused, and a membership role needs its scope value while an app-wide one takes none', async () => {
 		expect((await fetch(`${origin}__fabrika/dev/as?persona=Mallory`, { redirect: 'manual' })).status).toBe(400)
 		expect((await fetch(`${origin}__fabrika/dev/as?role=guest&scope=`, { redirect: 'manual' })).status).toBe(400)

@@ -423,8 +423,8 @@ every other key of the workload but the new one, so the running version keeps it
 replacement. A workload principal resolves no grant and can be given none, and the schema reconcile refuses a public
 workload whose action an application role grants.
 The application exchanges its own job, webhook or public procedure key at `POST /auth/workload/token` on IAM's public
-origin, which signs only for a workload key of the named application: it checks the key's format and the per-client
-bucket before any lookup, answers every other key the same `invalid_key`, and answers a storage failure 503.
+origin, which signs only for a workload key of the named application: it checks the key's format, reads a body of at
+most 4 KiB and checks the per-client bucket before any lookup, answers every other key the same `invalid_key`, and answers a storage failure 503.
 
 A connector key is an `app` workload of the **owner**: the owner's schema declares each consumer of its exports,
 named by the consumer's id, with the actions of the export rows it may call. An export row admits its consumers'

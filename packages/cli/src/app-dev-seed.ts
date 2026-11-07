@@ -3,6 +3,7 @@
 
 import type { AnyContract } from '@fabrika/app/contract'
 import type { DevKit, PersonTestCaller } from '@fabrika/app/testing'
+import { sameOriginTarget } from '@fabrika/auth-core'
 import { existsSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -53,11 +54,6 @@ const SeedResult = z.strictObject({
 	scopes: z.record(z.string(), z.array(z.strictObject({ value: Text(MAX_SCOPE_VALUE), label: Text(MAX_NAME) })).max(MAX_ENTRIES)).optional(),
 }).optional()
 
-/** A path of this origin; a link the application issued is one (`/s/#px_…`). */
-export function isLocalPath(path: string): boolean {
-	return path.startsWith('/') && !path.startsWith('//') && !path.startsWith('/\\')
-}
-
 /** The seed module's path: `--seed`, relative to the root, or `dev/seed.ts` when it exists; `null` for none. */
 export function seedPath(root: string, given: string | null): string | null {
 	if (given !== null) {
@@ -102,7 +98,7 @@ export function parseSeeded<C extends AnyContract>(dev: DevKit<C>, answer: unkno
 		return { name: persona.name, description: persona.description ?? null, caller }
 	})
 	const links = (result.links ?? []).map((link, index): SeedLink => {
-		if (!isLocalPath(link.url)) {
+		if (sameOriginTarget(dev.kit.origin, link.url) === null) {
 			throw new SeedProblem(`app dev: link ${index + 1} of the seed is not a path of the application, as ctx.links answers it`)
 		}
 		return { title: link.title, description: link.description ?? null, url: link.url }

@@ -10,6 +10,7 @@ import { implementationAt } from '@fabrika/app/bun'
 import type { AnyContract } from '@fabrika/app/contract'
 import { BootError, type ContractImplementation } from '@fabrika/app/implement'
 import { DEV_OUTBOX_ORIGIN, type DevKit, devKit, type DevOutside, type LabelledTestCaller, type TestCaller } from '@fabrika/app/testing'
+import { sameOriginTarget } from '@fabrika/auth-core'
 import { type ApplicationDialect, applicationDialect, CONFIG_FILE } from '@fabrika/check'
 import { SqliteMigrationError } from '@fabrika/db/sqlite-migrate'
 import { TEST_POSTGRES_URL, type TestDatabase, testDatabase } from '@fabrika/db/testing'
@@ -19,7 +20,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { z } from 'zod/v4'
 import { DEV_ENV_FILE, DevEnvProblem, type DevOutbox, devOutbox, mailHeadOf, readDevEnv, shownBody } from './app-dev-outside'
-import { DEFAULT_SEED, importSeed, isLocalPath, NOTHING_SEEDED, parseSeeded, type Seeded, seedPath, SeedProblem } from './app-dev-seed'
+import { DEFAULT_SEED, importSeed, NOTHING_SEEDED, parseSeeded, type Seeded, seedPath, SeedProblem } from './app-dev-seed'
 import {
 	type Badge,
 	type CurrentView,
@@ -294,7 +295,7 @@ async function serveDevKit(
 	const toolbar = toolbarScript(STATE_PATH)
 
 	/** A path of this origin to go on to; anything else is the first SPA. */
-	const nextOf = (next: string | null): string => (next !== null && isLocalPath(next) ? next : firstSpa)
+	const nextOf = (next: string | null): string => (next !== null && sameOriginTarget(kit.origin, next) !== null ? next : firstSpa)
 
 	/** The caller a role choice names, made once and kept, so its membership changes last; `null` when it is no grant. */
 	const roleCaller = (role: string, value: string | null): LabelledTestCaller | null => {
