@@ -231,7 +231,7 @@ export function isMintPath(pathname: string): boolean {
  * limiter on a header a caller can set is worse than no limiter, because it looks like protection.
  * The proxy does not limit either: it caches successful mints only, so every request with a present but
  * unknown credential is one call here, and it holds no counter by design (ADR-0022). What bounds such a
- * call is its cost: one or two indexed reads and one `auth_log` deny row, less than a password attempt.
+ * call is its cost: one or two indexed lookups and one `auth_log` deny row, less than a password attempt.
  * Bounding raw request volume is the edge's job. The deny rows carry the app and the reason, so a
  * burst is visible in the admin auth log.
  */

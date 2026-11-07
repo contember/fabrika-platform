@@ -6,7 +6,10 @@ export type BoundedBody = { ok: true; text: string } | { ok: false; reason: 'too
  */
 export async function readBoundedText(request: Request, maxBytes: number): Promise<BoundedBody> {
 	const declared = Number(request.headers.get('Content-Length') ?? '0')
-	if (Number.isFinite(declared) && declared > maxBytes) return { ok: false, reason: 'too_large' }
+	if (Number.isFinite(declared) && declared > maxBytes) {
+		await request.body?.cancel().catch(() => {})
+		return { ok: false, reason: 'too_large' }
+	}
 	if (request.body === null) return { ok: true, text: '' }
 	const reader = request.body.getReader()
 	const decoder = new TextDecoder()
@@ -18,7 +21,7 @@ export async function readBoundedText(request: Request, maxBytes: number): Promi
 			if (chunk.done) break
 			bytes += chunk.value.byteLength
 			if (bytes > maxBytes) {
-				await reader.cancel()
+				await reader.cancel().catch(() => {})
 				return { ok: false, reason: 'too_large' }
 			}
 			text += decoder.decode(chunk.value, { stream: true })
