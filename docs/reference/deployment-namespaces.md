@@ -378,9 +378,9 @@ is created. Previously such a registration succeeded and its first deploy failed
 at proxy composition.
 
 The proxy routes each host to one member, so Control refuses a member that would be routed on a host another member of
-the namespace is routed on, compared without case, naming the sibling: registration and `apps.environments.put` answer
-**409** before the provider prepares anything, and a deploy fails before it publishes the contract that would route its
-member, which is what makes a member routed. The provider decides which hosts a member is routed on (`memberHosts`; on
+the namespace is routed on, compared without case, naming the sibling. Publishing a contract is what makes a member
+routed, so the refusal reaches a put of a published member (**409**, before the provider prepares anything) and a deploy
+about to publish (it fails before the contract is published); a new registration is judged at its first deploy. The provider decides which hosts a member is routed on (`memberHosts`; on
 Zerops the function the manifest compiler routes by): a member with an approved contract and a proxy target on its
 domain, a `dev` member only on its workspaces' `<workspace>.<domain>` hosts, and any other member on none. Dev
 environments of several applications may therefore share one wildcard base, and a member not yet published may name a

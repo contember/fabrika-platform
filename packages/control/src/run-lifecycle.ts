@@ -1240,7 +1240,6 @@ async function devSourceKey(
 	return deps.platformTransport.issue(appEnv.app_id, appEnv.env, 'source', { workspaceId })
 }
 
-/** The workspace sandbox a dev bootstrap deploys into, and the snapshot its workspace last published. */
 /** The environment as its namespace routes it once this run publishes `access`; a dev bootstrap adds its workspace's sandbox. */
 async function publishedRouting(
 	repositories: ControlRepositories,
@@ -1248,13 +1247,15 @@ async function publishedRouting(
 	access: ProviderApprovedAccess,
 	sandbox: DevBootstrapSandbox | null,
 ): Promise<ProviderNamespaceMemberRouting> {
-	const routing = await namespaceMemberRouting(repositories, row)
+	const artifact = parseProviderEnvelope(row.provider_artifact_json, `artifact for ${row.app_id}/${row.env}`)
+	const routing = await namespaceMemberRouting(repositories, row, artifact)
 	if (row.kind !== 'dev') return { ...routing, access }
 	if (sandbox === null || row.domain === null) return routing
 	const others = (routing.devSandboxes ?? []).filter((routed) => routed.workspaceId !== sandbox.workspaceId)
 	return { ...routing, devSandboxes: [...others, { workspaceId: sandbox.workspaceId, host: devSandboxHost(row.domain, sandbox.workspaceId) }] }
 }
 
+/** The workspace sandbox a dev bootstrap deploys into, and the snapshot its workspace last published. */
 interface DevBootstrapSandbox {
 	readonly row: DevSandboxRow
 	readonly workspaceId: string

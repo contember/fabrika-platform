@@ -7,7 +7,6 @@ import { snapshotSurface } from '../../approval/surface'
 import { appEnvCrossOrigins, type AppEnvRow, type AppRow, NamespaceResourceClaimConflictError } from '../../db'
 import { normalizeRepoUrl } from '../../github/triggers/push-event'
 import { fail } from '../domain'
-import { assertNamespaceHostsFree } from '../namespaces'
 import { parseStoredEnvelope } from '../provider-envelope'
 import { sourceBindingFields, toAppDto } from './apps'
 import { notifyCatalogChanged, type RegistryUseCaseContext } from './context'
@@ -52,12 +51,6 @@ export async function registerAppUseCase(c: RegistryUseCaseContext, input: Regis
 	}
 	if (preparation === undefined) registration = normalizeRegistration(c.provider, providerApp, registration.environment)
 	const resourceClaims = registrationResourceClaims(c.provider, registration)
-	await assertNamespaceHostsFree(c, namespace?.id ?? null, {
-		appId: id,
-		env,
-		...(registration.environment.domain === undefined ? {} : { domain: registration.environment.domain }),
-		artifact: registration.environment.artifact,
-	})
 	const source = registration.app.source
 	const appInput = {
 		id: registration.app.id,

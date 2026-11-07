@@ -25,6 +25,7 @@ import {
 	type ProviderApprovedAccess,
 	type ProviderClaimedResource,
 	type ProviderDeploymentNamespace,
+	type ProviderEnvelope,
 	type ProviderNamespaceCapabilities,
 	type ProviderNamespaceDevSandbox,
 	ProviderNamespaceError,
@@ -518,9 +519,16 @@ export async function assertNamespaceHostsFree(
 	if (hosts.size === 0) return
 	for (const row of await c.repositories.registry.listAppEnvsByNamespace(namespaceId)) {
 		if (row.app_id === candidate.appId && row.env === candidate.env) continue
+		let artifact: ProviderEnvelope
+		try {
+			artifact = parseStoredEnvelope(row.provider_artifact_json, `artifact for ${row.app_id}/${row.env}`)
+		} catch {
+			continue
+		}
+		const routing = await namespaceMemberRouting(c.repositories, row, artifact)
 		let taken: string | undefined
 		try {
-			taken = memberHosts(await namespaceMemberRouting(c.repositories, row)).find((host) => hosts.has(host))
+			taken = memberHosts(routing).find((host) => hosts.has(host))
 		} catch {
 			continue
 		}
@@ -528,17 +536,13 @@ export async function assertNamespaceHostsFree(
 	}
 }
 
-/** What a republish routes one environment of the namespace on, read from the registry alone: no secret is opened. */
+/** What a republish routes one environment of the namespace on, with `artifact`, read from the registry alone: no secret is opened. */
 export async function namespaceMemberRouting(
 	repositories: Pick<ControlRepositories, 'runs' | 'devSandboxes'>,
 	row: AppEnvRow,
+	artifact: ProviderEnvelope,
 ): Promise<ProviderNamespaceMemberRouting> {
-	const base = {
-		appId: row.app_id,
-		env: row.env,
-		...(row.domain === null ? {} : { domain: row.domain }),
-		artifact: parseStoredEnvelope(row.provider_artifact_json, `artifact for ${row.app_id}/${row.env}`),
-	}
+	const base = { appId: row.app_id, env: row.env, ...(row.domain === null ? {} : { domain: row.domain }), artifact }
 	if (row.kind !== 'dev') return { ...base, ...approvedProviderAccess(row) }
 	const sandboxes = await routedSandboxes(repositories, row, await repositories.devSandboxes.listByEnvironment(row.app_id, row.env))
 	return { ...base, devSandboxes: sandboxes.map(({ sandbox, host }) => ({ workspaceId: sandbox.workspace_id, host })) }
