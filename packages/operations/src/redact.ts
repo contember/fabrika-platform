@@ -5,12 +5,31 @@
 const REDACTED = '[redacted]'
 /** A fabrika opaque credential: `px_` and its random part (`@fabrika/auth-core`'s `API_KEY_PREFIX`). */
 const CREDENTIAL = /px_[A-Za-z0-9_-]+/g
-/** A URL's fragment: from `#` to the end of the URL. */
-const URL_FRAGMENT = /((?:[a-z][a-z0-9+.-]*:\/\/|\/)[^\s#"'<>]*)#[^\s"'<>]*/gi
+/** What ends a URL: whitespace, a quote or an angle bracket. Captured, so splitting on it keeps the delimiters. */
+const URL_DELIMITER = /([\s"'<>])/
 const AUTHORIZATION = /^(?:proxy-)?authorization$/i
 
+/** A URL's fragment: from the first `#` after a token's first `/` to the end of the token. */
+function redactUrlFragments(value: string): string {
+	// One split and one indexOf pair per token keep this linear; a regex over the same rule backtracks quadratically.
+	if (!value.includes('#')) {
+		return value
+	}
+	return value.split(URL_DELIMITER).map(redactTokenFragment).join('')
+}
+
+function redactTokenFragment(token: string): string {
+	// A scheme's `://` holds a `/`, so the first `/` covers absolute URLs and paths alike.
+	const slash = token.indexOf('/')
+	if (slash < 0) {
+		return token
+	}
+	const hash = token.indexOf('#', slash)
+	return hash < 0 ? token : `${token.slice(0, hash)}#${REDACTED}`
+}
+
 function redactString(value: string): string {
-	return value.replace(URL_FRAGMENT, `$1#${REDACTED}`).replace(CREDENTIAL, `px_${REDACTED}`)
+	return redactUrlFragments(value).replace(CREDENTIAL, `px_${REDACTED}`)
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
