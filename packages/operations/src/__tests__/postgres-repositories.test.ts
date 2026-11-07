@@ -280,4 +280,15 @@ describe.skipIf(!hasPostgres)('Operations repositories on real Postgres', () => 
 		const claimed = await clocked.alerts.claimNotifications({ limit: 1, leaseMs: 60_000 })
 		expect(claimed.map((notification) => notification.dedupKey)).toEqual(['order:failed_check'])
 	})
+
+	test('reads live alert claims and queued notifications by key', async () => {
+		let now = 20_000
+		const clocked = createPostgresOperationsRepositories(db, { now: () => now })
+		expect(await clocked.alerts.tryClaim('slot:a', 1_000)).toBe(true)
+		expect(await clocked.alerts.tryClaim('slot:b', 5_000)).toBe(true)
+		now += 1_000
+		expect(await clocked.alerts.liveClaims(['slot:a', 'slot:b', 'slot:c'])).toEqual(new Set(['slot:b']))
+		expect(await clocked.alerts.hasNotification('order:failed_check')).toBe(true)
+		expect(await clocked.alerts.hasNotification('order:missing')).toBe(false)
+	})
 })

@@ -1,5 +1,5 @@
 import type { IngestMessage } from '@fabrika/operations-contract'
-import { OperationsAlertProducer } from './alerts.js'
+import { cappedAlertsMessage, OperationsAlertProducer } from './alerts.js'
 import type { OperationsDataEnv } from './pipeline.js'
 import { archiveDeadEvent, effectiveIngestMessage, persistIngestGroup } from './pipeline.js'
 
@@ -10,7 +10,11 @@ export interface IngestDelivery {
 	retry(): void
 }
 
-export async function consumeDeliveries(env: OperationsDataEnv, deliveries: IngestDelivery[]): Promise<void> {
+export interface ConsumeDeliveriesOptions {
+	log?: (message: string) => void
+}
+
+export async function consumeDeliveries(env: OperationsDataEnv, deliveries: IngestDelivery[], options: ConsumeDeliveriesOptions = {}): Promise<void> {
 	const rawGroups = new Map<string, IngestDelivery[]>()
 	for (const delivery of deliveries) {
 		const key = JSON.stringify([delivery.body.projectId, delivery.body.fingerprint])
@@ -43,7 +47,8 @@ export async function consumeDeliveries(env: OperationsDataEnv, deliveries: Inge
 			try {
 				const messages = chunk.map((item) => item.message)
 				const results = await persistIngestGroup(env, messages)
-				await new OperationsAlertProducer(env.repositories.alerts, env.repositories.ingest).produceIngest(messages, results)
+				const alerts = await new OperationsAlertProducer(env.repositories.alerts, env.repositories.ingest).produceIngest(messages, results)
+				if (alerts.capped > 0) options.log?.(cappedAlertsMessage(alerts.capped))
 				for (const item of chunk) item.delivery.ack()
 			} catch {
 				for (const item of chunk) item.delivery.retry()

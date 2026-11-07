@@ -37,6 +37,11 @@ export interface SpikeProductionResult extends AlertProductionResult {
 
 type IssueAlertKind = 'new_issue' | 'regression'
 
+// A count only: the log never names a channel target or a payload.
+export function cappedAlertsMessage(capped: number): string {
+	return `operations new-issue alerts over the per-channel limit dropped count=${capped}`
+}
+
 export class OperationsAlertProducer {
 	constructor(
 		private readonly alerts: AlertsRepository,
@@ -59,23 +64,34 @@ export class OperationsAlertProducer {
 		let enqueued = 0
 		let deduplicated = 0
 		let capped = 0
-		const fullChannels = new Set<string>()
 		for (const candidate of candidates.values()) {
-			const rules = await this.alerts.listRules(candidate.message.projectId)
+			const sourceId = candidate.message.projectId
+			const rules = await this.alerts.listRules(sourceId)
 			if (!rules.some((rule) => rule.type === candidate.kind && rule.enabled === 1)) continue
-			const channels = await this.alerts.listChannels(candidate.message.projectId)
+			const channels = await this.alerts.listChannels(sourceId)
 			for (const channel of channels) {
 				if (channel.scope !== candidate.kind || channel.enabled !== 1) continue
-				if (candidate.kind === 'new_issue' && !(await this.claimNewIssueSlot(candidate.message.projectId, channel.id, fullChannels))) {
-					capped++
-					continue
+				const dedupKey = `${candidate.kind}:${sourceId}:${candidate.issue.fingerprint}:${candidate.transitionAt}:${channel.id}`
+				let limitReached = false
+				if (candidate.kind === 'new_issue') {
+					// A redelivered message finds its alert already queued and must not take another slot.
+					if (await this.alerts.hasNotification(dedupKey)) {
+						deduplicated++
+						continue
+					}
+					const slot = await this.claimNewIssueSlot(sourceId, channel.id)
+					if (slot === 'none') {
+						capped++
+						continue
+					}
+					limitReached = slot === 'last'
 				}
 				const inserted = await this.alerts.enqueueNotification({
-					dedupKey: `${candidate.kind}:${candidate.message.projectId}:${candidate.issue.fingerprint}:${candidate.transitionAt}:${channel.id}`,
-					sourceId: candidate.message.projectId,
+					dedupKey,
+					sourceId,
 					channelId: channel.id,
 					kind: candidate.kind,
-					payload: issuePayload(candidate.kind, candidate.message.projectId, candidate.issue),
+					payload: issuePayload(candidate.kind, sourceId, candidate.issue, limitReached),
 				})
 				if (inserted) enqueued++
 				else deduplicated++
@@ -85,14 +101,14 @@ export class OperationsAlertProducer {
 	}
 
 	// One claim per slot: at most NEW_ISSUE_ALERT_LIMIT new-issue alerts per source and channel in any window.
-	private async claimNewIssueSlot(sourceId: string, channelId: string, fullChannels: Set<string>): Promise<boolean> {
-		const channelKey = JSON.stringify([sourceId, channelId])
-		if (fullChannels.has(channelKey)) return false
-		for (let slot = 0; slot < NEW_ISSUE_ALERT_LIMIT; slot++) {
-			if (await this.alerts.tryClaim(`new_issue:${sourceId}:${channelId}:${slot}`, NEW_ISSUE_ALERT_WINDOW_MS)) return true
+	private async claimNewIssueSlot(sourceId: string, channelId: string): Promise<'none' | 'claimed' | 'last'> {
+		const keys = Array.from({ length: NEW_ISSUE_ALERT_LIMIT }, (_, slot) => `new_issue:${sourceId}:${channelId}:${slot}`)
+		const live = await this.alerts.liveClaims(keys)
+		const free = keys.filter((key) => !live.has(key))
+		for (const [index, key] of free.entries()) {
+			if (await this.alerts.tryClaim(key, NEW_ISSUE_ALERT_WINDOW_MS)) return index === free.length - 1 ? 'last' : 'claimed'
 		}
-		fullChannels.add(channelKey)
-		return false
+		return 'none'
 	}
 
 	async detectSpikes(): Promise<SpikeProductionResult> {
@@ -139,14 +155,20 @@ function issueTransition(message: IngestMessage, issue: IssueRow): { kind: Issue
 	return null
 }
 
-function issuePayload(kind: IssueAlertKind, sourceId: string, issue: IssueRow): Record<string, unknown> {
+function issuePayload(kind: IssueAlertKind, sourceId: string, issue: IssueRow, limitReached: boolean): Record<string, unknown> {
 	const label = kind === 'new_issue' ? 'New issue' : 'Regression'
+	const text = `Fabrika Operations: ${label} — ${issue.title} (${issue.fingerprint.slice(0, 12)}) in ${sourceId}`
 	return {
-		text: `Fabrika Operations: ${label} — ${issue.title} (${issue.fingerprint.slice(0, 12)}) in ${sourceId}`,
+		text: limitReached
+			? `${text}. Alert limit reached: further new issues in ${sourceId} are shown only in the console for up to ${
+				NEW_ISSUE_ALERT_WINDOW_MS / 60_000
+			} minutes.`
+			: text,
 		type: kind,
 		sourceId,
 		fingerprint: issue.fingerprint,
 		title: issue.title,
+		...(limitReached ? { limitReached: true } : {}),
 	}
 }
 

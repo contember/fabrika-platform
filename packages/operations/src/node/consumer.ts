@@ -2,7 +2,7 @@ import type { IngestMessage } from '@fabrika/operations-contract'
 import type { SqlDatabase } from '@fabrika/platform'
 import { decodeJob, type Job, PostgresJobQueue } from '@fabrika/platform-node'
 import { z } from 'zod'
-import { OperationsAlertProducer } from '../alerts.js'
+import { cappedAlertsMessage, OperationsAlertProducer } from '../alerts.js'
 import type { OperationsDataEnv } from '../pipeline.js'
 import { archiveDeadEvent, persistIngest } from '../pipeline.js'
 
@@ -160,7 +160,8 @@ export class PostgresOperationsConsumer {
 	private async handle(job: Job<IngestMessage>): Promise<void> {
 		try {
 			const result = await persistIngest(this.env, job.payload)
-			await new OperationsAlertProducer(this.env.repositories.alerts, this.env.repositories.ingest).produceIngest([job.payload], [result])
+			const alerts = await new OperationsAlertProducer(this.env.repositories.alerts, this.env.repositories.ingest).produceIngest([job.payload], [result])
+			if (alerts.capped > 0) this.log(cappedAlertsMessage(alerts.capped))
 		} catch {
 			if (job.attempts >= job.maxAttempts) {
 				try {

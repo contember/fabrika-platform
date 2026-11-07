@@ -69,6 +69,8 @@ External senders receive the stable outbox dedup key as their idempotency key.
 New-issue and regression producers run after durable ingest persistence. The
 scheduled maintenance pass evaluates the preceding one-minute occurrence window
 for spikes and claims each source/fingerprint for fifteen minutes before enqueue.
+New-issue alerts take one of ten source/channel claims (`alert_claims`, ten minutes each); none free means no alert.
+The outbox claim takes health kinds (`HEALTH_ALERT_KINDS`) before other rows, then oldest first, on both runtimes.
 Logs may contain the notification id and attempt number, never the target,
 payload, or caught error detail. Cloudflare owns scheduled invocation; the Bun
 consumer owns its abortable loop and can restart after `stop()`.

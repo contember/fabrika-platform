@@ -148,10 +148,29 @@ describe('alert semantics', () => {
 		await sourceWithChannel(harness, 'source-b', 'new_issue')
 		const env = { repositories: harness.repositories, payloads: new MemoryBlobs(), ingestQueue: new EmptyQueue() }
 
-		await consumeDeliveries(env, Array.from({ length: 30 }, (_, index) => newIssue('source-a', `flood-${index}`, now - 30 + index)))
+		const logged: string[] = []
+		await consumeDeliveries(
+			env,
+			Array.from({ length: 30 }, (_, index) => newIssue('source-a', `flood-${index}`, now - 30 + index)),
+			{ log: (message) => logged.push(message) },
+		)
 		await consumeDeliveries(env, [newIssue('source-b', 'unrelated', now)])
 		expect(outboxCount(harness, 'source-a')).toBe(NEW_ISSUE_ALERT_LIMIT)
 		expect(outboxCount(harness, 'source-b')).toBe(1)
+		expect(logged).toHaveLength(30 - NEW_ISSUE_ALERT_LIMIT)
+		expect(logged[0]).toBe('operations new-issue alerts over the per-channel limit dropped count=1')
+
+		const payloads = harness.sqlite
+			.query<{ payload: string }, [string]>('SELECT payload FROM notification_outbox WHERE source_id = ? ORDER BY id')
+			.all('source-a')
+			.map((row): Record<string, unknown> => JSON.parse(row.payload))
+		expect(payloads.map((payload) => payload['limitReached'] === true)).toEqual(
+			Array.from({ length: NEW_ISSUE_ALERT_LIMIT }, (_, index) => index === NEW_ISSUE_ALERT_LIMIT - 1),
+		)
+		expect(payloads.at(-1)?.['text']).toEndWith(
+			'Alert limit reached: further new issues in source-a are shown only in the console for up to 10 minutes.',
+		)
+		expect(payloads[0]).not.toHaveProperty('limitReached')
 
 		const delivered: string[] = []
 		const maintenance = new OperationsMaintenance(harness.repositories.alerts, {
@@ -170,6 +189,27 @@ describe('alert semantics', () => {
 		now += NEW_ISSUE_ALERT_WINDOW_MS
 		const reopened = newIssue('source-a', 'next-window', now).body
 		expect(await producer.produceIngest([reopened], [await persistIngest(env, reopened)])).toEqual({ enqueued: 1, deduplicated: 0, capped: 0 })
+	})
+
+	test('a redelivered new issue takes no further slot, even once the limit is reached', async () => {
+		const harness = createHarness(() => 1_000_000)
+		await sourceWithChannel(harness, 'source-a', 'new_issue')
+		const env = { repositories: harness.repositories, payloads: new MemoryBlobs(), ingestQueue: new EmptyQueue() }
+		const slots = () =>
+			harness.sqlite.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM alert_claims WHERE claim_key LIKE 'new_issue:%'").get()?.count
+
+		const first = newIssue('source-a', 'first', 999_000)
+		for (let attempt = 0; attempt < 3; attempt++) await consumeDeliveries(env, [first])
+		expect(slots()).toBe(1)
+		expect(outboxCount(harness, 'source-a')).toBe(1)
+
+		await consumeDeliveries(
+			env,
+			Array.from({ length: NEW_ISSUE_ALERT_LIMIT - 1 }, (_, index) => newIssue('source-a', `more-${index}`, 999_100 + index)),
+		)
+		expect(slots()).toBe(NEW_ISSUE_ALERT_LIMIT)
+		const producer = new OperationsAlertProducer(harness.repositories.alerts, harness.repositories.ingest)
+		expect(await producer.produceIngest([first.body], [await persistIngest(env, first.body)])).toEqual({ enqueued: 0, deduplicated: 1, capped: 0 })
 	})
 
 	test('claims health alerts before older issue alerts', async () => {

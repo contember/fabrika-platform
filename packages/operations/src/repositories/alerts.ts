@@ -132,6 +132,20 @@ export abstract class AlertsRepository {
 		return row !== null
 	}
 
+	async liveClaims(keys: string[]): Promise<Set<string>> {
+		if (keys.length === 0) return new Set()
+		const { results } = await this.db
+			.prepare(`SELECT claim_key FROM alert_claims WHERE claim_key IN (${keys.map(() => '?').join(', ')}) AND expires_at > ?`)
+			.bind(...keys, this.now())
+			.all<{ claim_key: string }>()
+		return new Set(results.map((row) => row.claim_key))
+	}
+
+	async hasNotification(dedupKey: string): Promise<boolean> {
+		const row = await this.db.prepare('SELECT 1 AS found FROM notification_outbox WHERE dedup_key = ?').bind(dedupKey).first<{ found: number }>()
+		return row !== null
+	}
+
 	async enqueueNotification(input: {
 		dedupKey: string
 		sourceId: string
