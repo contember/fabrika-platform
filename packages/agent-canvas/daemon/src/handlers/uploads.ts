@@ -3,17 +3,7 @@ import { jsonResponse, type Route } from '@fabrika/daemon-kit'
 import { writeFileSync } from 'fs'
 import { join } from 'path'
 import { UPLOADS_DIR } from '../paths'
-
-const IMAGE_MIME: Record<string, string> = {
-	png: 'image/png',
-	jpg: 'image/jpeg',
-	jpeg: 'image/jpeg',
-	gif: 'image/gif',
-	svg: 'image/svg+xml',
-	webp: 'image/webp',
-	bmp: 'image/bmp',
-	avif: 'image/avif',
-}
+import { parseUploadImage, UPLOAD_IMAGE_REFUSED, uploadImageTypeOfExtension, uploadServeHeaders } from '../upload-image'
 
 export function createUploadHandlers(sessionManager: SessionManager): Route[] {
 	async function handleUpload(req: Request, _url: URL, match: URLPatternResult): Promise<Response> {
@@ -23,17 +13,17 @@ export function createUploadHandlers(sessionManager: SessionManager): Route[] {
 		}
 
 		const formData = await req.formData()
-		const file = formData.get('image') as File | null
-		if (!file) return jsonResponse({ error: 'No image provided' }, 400)
-		if (!file.type.startsWith('image/')) return jsonResponse({ error: 'Not an image' }, 400)
+		const file = formData.get('image')
+		if (!(file instanceof File)) return jsonResponse({ error: 'No image provided' }, 400)
 		if (file.size > 10 * 1024 * 1024) return jsonResponse({ error: 'Image too large (max 10MB)' }, 413)
 
-		const ext = file.name.split('.').pop()?.toLowerCase() || 'png'
-		const filename = `${crypto.randomUUID()}.${ext}`
-		const filepath = join(UPLOADS_DIR, filename)
+		const bytes = new Uint8Array(await file.arrayBuffer())
+		const image = parseUploadImage(file.type, bytes)
+		if (!image) return jsonResponse({ error: UPLOAD_IMAGE_REFUSED }, 400)
 
-		const buffer = await file.arrayBuffer()
-		writeFileSync(filepath, Buffer.from(buffer))
+		const filename = `${crypto.randomUUID()}.${image.extension}`
+		const filepath = join(UPLOADS_DIR, filename)
+		writeFileSync(filepath, bytes)
 
 		return jsonResponse({ path: filepath, filename })
 	}
@@ -48,12 +38,11 @@ export function createUploadHandlers(sessionManager: SessionManager): Route[] {
 		const file = Bun.file(filepath)
 		if (!(await file.exists())) return jsonResponse({ error: 'Not found' }, 404)
 
-		const ext = filename.split('.').pop()?.toLowerCase() || ''
-		const mime = IMAGE_MIME[ext] || 'application/octet-stream'
+		const ext = filename.split('.').pop() ?? ''
 
 		return new Response(file, {
 			headers: {
-				'Content-Type': mime,
+				...uploadServeHeaders(uploadImageTypeOfExtension(ext)),
 				'Cache-Control': 'public, max-age=3600',
 			},
 		})

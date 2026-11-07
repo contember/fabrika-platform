@@ -25,6 +25,7 @@
  * For deployment instructions see packages/canvas-share/README.md.
  */
 
+import { parseUploadImage, UPLOAD_IMAGE_REFUSED, uploadServeHeaders } from 'agent-canvas/upload-image'
 import { handleCreateReviewProject, matchReviewPath, reviewProjectStub } from './review'
 import type { Env, FeedbackEntry, ShareRecord } from './types'
 import { LIMITS } from './types'
@@ -334,27 +335,27 @@ async function handleUpload(shareId: string, req: Request, env: Env, origin: str
 	if (!(file instanceof File)) {
 		return json({ error: 'No image provided' }, { status: 400 })
 	}
-	if (!file.type.startsWith('image/')) return json({ error: 'Not an image' }, { status: 400 })
 	if (file.size > LIMITS.UPLOAD_BYTES) {
 		return json({ error: 'Image too large' }, { status: 413 })
 	}
 
 	// Content-addressed storage so duplicate uploads dedupe.
 	const bytes = new Uint8Array(await file.arrayBuffer())
+	const image = parseUploadImage(file.type, bytes)
+	if (!image) return json({ error: UPLOAD_IMAGE_REFUSED }, { status: 400 })
 	const hashBuf = await crypto.subtle.digest('SHA-256', bytes)
 	const hashHex = Array.from(new Uint8Array(hashBuf), (b) => b.toString(16).padStart(2, '0'))
 		.join('')
 		.slice(0, 32)
-	const ext = (file.name.split('.').pop() || 'png').toLowerCase().replace(/[^a-z0-9]/g, '')
-	const key = `shares/${shareId}/uploads/${hashHex}.${ext}`
+	const filename = `${hashHex}.${image.extension}`
 
-	await env.BLOBS.put(key, bytes, {
-		httpMetadata: { contentType: file.type },
+	await env.BLOBS.put(`shares/${shareId}/uploads/${filename}`, bytes, {
+		httpMetadata: { contentType: image.type },
 	})
 
 	return json({
-		url: `${origin}/s/${shareId}/uploads/${hashHex}.${ext}`,
-		mime: file.type,
+		url: `${origin}/s/${shareId}/uploads/${filename}`,
+		mime: image.type,
 	})
 }
 
@@ -369,7 +370,7 @@ async function handleUploadServe(shareId: string, filename: string, env: Env): P
 	if (!obj) return json({ error: 'Not found' }, { status: 404 })
 	return new Response(obj.body, {
 		headers: {
-			'Content-Type': obj.httpMetadata?.contentType || 'application/octet-stream',
+			...uploadServeHeaders(obj.httpMetadata?.contentType),
 			'Cache-Control': 'public, max-age=86400',
 			...CORS_HEADERS,
 		},
