@@ -93,6 +93,7 @@ export async function fixtureNamespaceWrite(
 			state,
 			lastError: options.lastError ?? null,
 			claim: true,
+			resourceKeys: [],
 		})
 		if (!written) throw new Error(`fixture namespace ${id} write was refused`)
 	} finally {

@@ -339,7 +339,11 @@ export class ControlRegistryRepository {
 			.bind(namespaceLeaseKey(id), fence.holder, fence.nowMs)
 	}
 
-	/** One namespace write by the holder of its `namespace:<id>` lease; `created_at` pins the row's identity. */
+	/**
+	 * One namespace write by the holder of its `namespace:<id>` lease; `created_at` pins the row's identity. The
+	 * `resourceKeys` the target names are acquired for the namespace in the same transaction, under the same fence: a
+	 * key another owner holds aborts the whole write with `NamespaceResourceClaimConflictError`.
+	 */
 	async writeDeploymentNamespace(input: {
 		id: string
 		createdAt: number
@@ -349,9 +353,11 @@ export class ControlRegistryRepository {
 		lastError: string | null
 		/** Only the job that claims a `pending` row may move it; any other write leaves a requeue in place. */
 		claim: boolean
+		resourceKeys: readonly string[]
 	}): Promise<boolean> {
 		const key = namespaceLeaseKey(input.id)
-		const results = await this.d1.batch<{ id: string }>([
+		const owner: NamespaceResourceClaimOwner = { namespaceId: input.id, ownerAppId: null, ownerEnv: null, resourceKeys: input.resourceKeys }
+		const statements = [
 			this.namespaceLeaseLockStatement(input.id, input.fence),
 			this.d1.prepare(`UPDATE deployment_namespaces
 				SET provider_target_json = ?, state = CASE WHEN state = 'pending' AND ? = 0 THEN 'pending' ELSE ? END, last_error = ?
@@ -369,7 +375,9 @@ export class ControlRegistryRepository {
 					input.fence.holder,
 					input.fence.nowMs,
 				),
-		])
+			...this.namespaceResourceClaimStatements(owner, { createdAt: input.createdAt, fence: input.fence }),
+		]
+		const results = await this.withNamespaceResourceClaimConflict(owner, () => this.d1.batch<{ id: string } | NamespaceResourceClaimRow>(statements))
 		return (results[1]?.results.length ?? 0) > 0
 	}
 
@@ -824,21 +832,33 @@ export class ControlRegistryRepository {
 		return { statements: [check, update], envAt: 1 }
 	}
 
-	private namespaceResourceClaimStatements(input: NamespaceResourceClaimOwner): SqlStatement[] {
+	/** With `fenced`, each claim lands only while the row of that identity exists and its lease holder still holds it. */
+	private namespaceResourceClaimStatements(
+		input: NamespaceResourceClaimOwner,
+		fenced?: { createdAt: number; fence: LeaseFence },
+	): SqlStatement[] {
 		if ((input.ownerAppId === null) !== (input.ownerEnv === null)) {
 			throw new Error('namespace resource claim owner app and environment must both be set or both be null')
 		}
+		const source = fenced === undefined
+			? 'VALUES (?, ?, ?, ?)'
+			: `SELECT ?, ?, ?, ?
+				WHERE EXISTS (SELECT 1 FROM deployment_namespaces WHERE id = ? AND created_at = ?)
+					AND EXISTS (SELECT 1 FROM deploy_locks WHERE lock_key = ? AND holder = ? AND expires_at > ?)`
+		const guard = fenced === undefined
+			? []
+			: [input.namespaceId, fenced.createdAt, namespaceLeaseKey(input.namespaceId), fenced.fence.holder, fenced.fence.nowMs]
 		return [...new Set(input.resourceKeys)].sort().map((resourceKey) =>
 			this.d1
 				.prepare(`INSERT INTO namespace_resource_claims (
 					namespace_id, resource_key, owner_app_id, owner_env
 				)
-				VALUES (?, ?, ?, ?)
+				${source}
 				ON CONFLICT (namespace_id, resource_key) DO UPDATE SET
 					owner_app_id = excluded.owner_app_id,
 					owner_env = excluded.owner_env
 				RETURNING *`)
-				.bind(input.namespaceId, resourceKey, input.ownerAppId, input.ownerEnv)
+				.bind(input.namespaceId, resourceKey, input.ownerAppId, input.ownerEnv, ...guard)
 		)
 	}
 

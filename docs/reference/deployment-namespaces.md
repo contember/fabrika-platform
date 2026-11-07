@@ -187,6 +187,16 @@ provider resource inside one namespace. Its key is
 - Registration acquires the app-environment row and its claims atomically.
 - Namespace creation acquires its reserved claims before provider provisioning.
 - Reconcile acquires missing reserved namespace claims before provider mutation.
+- A namespace job or proxy republish that records a provider target (a checkpoint
+  or its result) acquires the claims that target names in the same fenced write:
+  a Zerops sandbox host adds `service:zbox` this way. A key an application
+  environment already holds fails the job with `resourceClaimConflict` and keeps
+  the stored target as it was.
+- A namespace that recorded a target before its claims were acquired with it
+  refuses every member deploy (`deployment namespace resource claim "<key>" is
+  missing or has another owner`). The next namespace job or proxy republish that
+  completes acquires the missing claims; until one runs,
+  `fabrika control namespaces reconcile --namespace=<id>` does.
 - Omitted claims are retained. A pre-deploy namespace move therefore leaves a
   historical reservation in the old namespace.
 - A claim outlives its owner's deletion. Deleting an application or an

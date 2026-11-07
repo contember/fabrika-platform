@@ -449,3 +449,90 @@ describe('namespace provisioning outlives the request that asked for it', () => 
 		})
 	})
 })
+
+describe('a namespace job claims the resources of the targets it records', () => {
+	const sandboxTarget = target('sandbox')
+	/** A provider whose namespace adds `service:sandbox` once it records the sandbox target, at a checkpoint or as its result. */
+	function sandboxProvider(via: 'checkpoint' | 'result'): ControlProvider {
+		const run = async (
+			input: { namespace: ProviderDeploymentNamespace; events: { checkpoint(n: ProviderDeploymentNamespace): Promise<void> } },
+		): Promise<ProviderDeploymentNamespace> => {
+			const next = withTarget(input.namespace, sandboxTarget)
+			if (via === 'checkpoint') await input.events.checkpoint(next)
+			return next
+		}
+		return {
+			id: 'harbor',
+			normalizeRegistration: (input) => input,
+			deploy: () => Promise.resolve({ state: 'succeeded' }),
+			namespaces: {
+				normalize: (namespace) => namespace,
+				namespaceResourceClaims: (namespace) =>
+					JSON.stringify(namespace.target) === JSON.stringify(sandboxTarget) ? ['service:proxy', 'service:sandbox'] : ['service:proxy'],
+				registrationResourceClaims: (registration) => [`service:${registration.app.id}`],
+				provision: run,
+				reconcile: run,
+			},
+		}
+	}
+
+	async function seed(harness: Harness): Promise<void> {
+		await harness.repositories.registry.createDeploymentNamespaceWithResourceClaims({
+			id: 'apps-prod',
+			env: 'prod',
+			provider: 'harbor',
+			exclusiveAppId: null,
+			providerTargetJson: JSON.stringify(target('requested')),
+		}, ['service:proxy'])
+	}
+
+	const claims = async (harness: Harness) =>
+		(await harness.repositories.registry.listNamespaceResourceClaims('apps-prod')).map((claim) => ({
+			key: claim.resource_key,
+			owner: claim.owner_app_id,
+		}))
+
+	for (const via of ['checkpoint', 'result'] as const) {
+		test(`the ${via} that names a new namespace resource acquires its claim`, async () => {
+			const harness = createHarness()
+			await seed(harness)
+
+			expect(await runNamespaceJob(jobDeps(harness, sandboxProvider(via)), provisionJob('apps-prod'))).toEqual({
+				namespaceId: 'apps-prod',
+				status: 'ready',
+			})
+
+			expect(await claims(harness)).toEqual([{ key: 'service:proxy', owner: null }, { key: 'service:sandbox', owner: null }])
+			expect(JSON.parse((await harness.repositories.registry.getDeploymentNamespace('apps-prod'))?.provider_target_json ?? '{}')).toEqual(
+				sandboxTarget,
+			)
+		})
+
+		test(`a ${via} whose resource an application already claims fails the job and is not recorded`, async () => {
+			const harness = createHarness()
+			await seed(harness)
+			await harness.repositories.registry.createApp({ id: 'sandbox', repoUrl: 'github.com/acme/sandbox' })
+			await harness.repositories.registry.upsertAppEnvWithNamespaceResourceClaims({
+				appId: 'sandbox',
+				env: 'prod',
+				namespaceId: 'apps-prod',
+				provider: 'harbor',
+				providerTargetJson: JSON.stringify(target('app')),
+				providerArtifactJson: JSON.stringify(target('artifact')),
+			}, ['service:sandbox'])
+
+			expect(await runNamespaceJob(jobDeps(harness, sandboxProvider(via)), provisionJob('apps-prod'))).toEqual({
+				namespaceId: 'apps-prod',
+				status: 'failed',
+			})
+
+			const row = await harness.repositories.registry.getDeploymentNamespace('apps-prod')
+			expect(row?.state).toBe('failed')
+			expect(row?.last_error).toBe(
+				'resourceClaimConflict: resource service:sandbox of namespace apps-prod is claimed by an application environment, so the namespace cannot take it; the target that names it is not recorded',
+			)
+			expect(JSON.parse(row?.provider_target_json ?? '{}')).toEqual(target('requested'))
+			expect(await claims(harness)).toEqual([{ key: 'service:proxy', owner: null }, { key: 'service:sandbox', owner: 'sandbox' }])
+		})
+	}
+})

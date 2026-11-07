@@ -234,6 +234,15 @@ function namespaceFailure(cause: unknown, mutation: NamespaceJobMutation | 'upda
  */
 const namespaceCheckpointInvariant = (message: string): ProviderNamespaceError => new ProviderNamespaceError(message, 'checkpointInvariant', false)
 
+/** A target that names a resource an application environment of the namespace already claims is never recorded. */
+const namespaceResourceClaimConflict = (cause: NamespaceResourceClaimConflictError): ProviderNamespaceError =>
+	new ProviderNamespaceError(
+		`resource ${cause.resourceKey} of namespace ${cause.namespaceId} is claimed by an application environment, so the namespace cannot take it;`
+			+ ' the target that names it is not recorded',
+		'resourceClaimConflict',
+		false,
+	)
+
 function namespacePresentation(c: NamespaceUseCaseContext, row: DeploymentNamespaceRow): ProviderNamespacePresentation | null {
 	const operator = c.provider.namespaces?.operator
 	if (operator === undefined) return null
@@ -382,6 +391,10 @@ async function installationBrand(deps: Pick<NamespaceJobDeps, 'brand'>, namespac
 /**
  * Persist one namespace row as the holder of its lease; a write the fence refused ends the lease. Only a
  * job's `claim` moves a `pending` row: any other write keeps an operator's requeue for the queued job.
+ *
+ * A write that records a target the provider produced passes the capabilities in `acquire`: the resources that target
+ * names are claimed for the namespace with it, because a member deploy refuses a namespace whose claims are missing.
+ * A key another owner holds fails the write and leaves the stored target as it was.
  */
 async function writeNamespace(
 	repositories: ControlRepositories,
@@ -389,10 +402,12 @@ async function writeNamespace(
 	row: DeploymentNamespaceRow,
 	namespace: ProviderDeploymentNamespace,
 	state: DeploymentNamespaceState,
-	options: { lastError?: string; claim?: true } = {},
+	options: { lastError?: string; claim?: true; acquire?: ProviderNamespaceCapabilities } = {},
 ): Promise<void> {
-	lease.assertWritten(
-		await repositories.registry.writeDeploymentNamespace({
+	const resourceKeys = options.acquire?.namespaceResourceClaims(namespace) ?? []
+	let written: boolean
+	try {
+		written = await repositories.registry.writeDeploymentNamespace({
 			id: row.id,
 			createdAt: row.created_at,
 			fence: lease.fence(),
@@ -400,8 +415,13 @@ async function writeNamespace(
 			state,
 			lastError: options.lastError ?? null,
 			claim: options.claim === true,
-		}),
-	)
+			resourceKeys,
+		})
+	} catch (cause) {
+		if (cause instanceof NamespaceResourceClaimConflictError) throw namespaceResourceClaimConflict(cause)
+		throw cause
+	}
+	lease.assertWritten(written)
 }
 
 /**
@@ -607,8 +627,9 @@ async function mutateNamespace(
 				if (!sameCoordinates(namespace, current, deps.provider.id)) {
 					throw namespaceCheckpointInvariant('provider checkpoint changed namespace coordinates')
 				}
+				// `current` is always the stored target: the failure write below records it again.
+				await writeNamespace(deps.repositories, lease, row, namespace, 'provisioning', { acquire: capabilities })
 				current = namespace
-				await writeNamespace(deps.repositories, lease, row, current, 'provisioning')
 			},
 			boundary: async () => lease.assertHeld(),
 		},
@@ -617,8 +638,8 @@ async function mutateNamespace(
 		const input = { ...providerInput, brand: await installationBrand(deps, row.id) }
 		const result = mutation === 'provision' ? await capabilities.provision(input) : await capabilities.reconcile(input)
 		if (!sameCoordinates(result, current, deps.provider.id)) throw new Error('provider result changed namespace coordinates')
+		await writeNamespace(deps.repositories, lease, row, result, 'ready', { acquire: capabilities })
 		current = result
-		await writeNamespace(deps.repositories, lease, row, current, 'ready')
 		return 'ready'
 	} catch (cause) {
 		lease.assertHeld()
@@ -718,8 +739,8 @@ export async function republishUnderLease(
 					if (!sameCoordinates(namespace, current, deps.provider.id)) {
 						throw namespaceCheckpointInvariant('provider checkpoint changed namespace coordinates')
 					}
+					await writeNamespace(deps.repositories, lease, row, namespace, 'provisioning', { acquire: capabilities })
 					current = namespace
-					await writeNamespace(deps.repositories, lease, row, current, 'provisioning')
 				},
 				boundary: async () => {
 					lease.assertHeld()
@@ -737,7 +758,7 @@ export async function republishUnderLease(
 		clearInterval(progress)
 	}
 	options.log?.(`the namespace proxy ${settled ? 'republished' : 'is still republishing; a reconcile job finishes it'} after ${seconds()} s`)
-	await writeNamespace(deps.repositories, lease, row, current, settled ? 'ready' : 'provisioning')
+	await writeNamespace(deps.repositories, lease, row, current, settled ? 'ready' : 'provisioning', { acquire: capabilities })
 	if (!settled) await reconcileLater()
 }
 
