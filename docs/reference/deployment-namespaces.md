@@ -187,6 +187,28 @@ provider resource inside one namespace. Its key is
 - Registration acquires the app-environment row and its claims atomically.
 - Namespace creation acquires its reserved claims before provider provisioning.
 - Reconcile acquires missing reserved namespace claims before provider mutation.
+- Every write that records a provider target acquires the claims that target
+  names in the same fenced write: a namespace job's checkpoint or result, a proxy
+  republish's checkpoint or result, and the stored write of `namespaces.update`.
+  A Zerops sandbox host adds `service:zbox` this way. A key an application
+  environment already holds keeps the stored target as it was: a job lands
+  `failed` with `resourceClaimConflict`, a republish throws it and queues a
+  reconcile, and an update answers **409** and keeps its unconfirmed mark.
+- The way out of a `resourceClaimConflict` is to free the key, then run
+  `fabrika control namespaces reconcile --namespace=<id>` (an update instead
+  retries `namespaces.update`). A reconcile before that fails again for as long
+  as the provider keeps naming the key. Either remove what makes the namespace
+  name it: for a Zerops sandbox host, the dev sandboxes the namespace hosts
+  (only a `creating` or `ready` one asks for a sandbox host; `delete_workspace`
+  removes a workspace's sandbox, see [mcp-authoring.md](./mcp-authoring.md)). Or
+  move the application's service off the name, as
+  [Renaming a reserved service](#renaming-a-reserved-service) describes; Zerops
+  refuses `zbox` to every newly registered service for this reason.
+- A namespace that recorded a target before its claims were acquired with it
+  refuses every member deploy (`deployment namespace resource claim "<key>" is
+  missing or has another owner`). The next namespace job or proxy republish that
+  completes acquires the missing claims; until one runs,
+  `fabrika control namespaces reconcile --namespace=<id>` does.
 - Omitted claims are retained. A pre-deploy namespace move therefore leaves a
   historical reservation in the old namespace.
 - A claim outlives its owner's deletion. Deleting an application or an
