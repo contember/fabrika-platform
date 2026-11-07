@@ -11,7 +11,7 @@ import {
 	NamespaceResourceClaimConflictError,
 } from '../../db'
 import { fail } from '../domain'
-import { syncChangedNamespaceProxies } from '../namespaces'
+import { assertNamespaceHostsFree, namespaceMemberRouting, syncChangedNamespaceProxies } from '../namespaces'
 import { assertNoDevSandboxes, assertNoHeldResourceClaims, requireApp } from './apps'
 import { notifyCatalogChanged, type RegistryUseCaseContext } from './context'
 import {
@@ -73,6 +73,11 @@ export async function putAppEnvUseCase(c: RegistryUseCaseContext, appId: string,
 	// `register` uses. A registration the provider refuses on its face — a proxy target with no domain —
 	// must not reach `prepareRegistration`, which creates provider services.
 	const resourceClaims = registrationResourceClaims(c.provider, requested)
+	// A new environment has no approved contract, so only a put of a published one can take a routed host.
+	if (existing !== null) {
+		const changed = { ...existing, domain: input.domain ?? null }
+		await assertNamespaceHostsFree(c, namespace?.id ?? null, await namespaceMemberRouting(c.repositories, changed, input.artifact))
+	}
 	const preparation = c.provider.namespaces?.prepareRegistration
 	let registration: ProviderRegistration
 	if (preparation === undefined) {

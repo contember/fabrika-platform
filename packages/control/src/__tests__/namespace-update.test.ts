@@ -489,7 +489,8 @@ describe('namespaces.update core guards', () => {
 			deploy: () => Promise.resolve({ state: 'succeeded' }),
 			namespaces: {
 				normalize: (namespace) => namespace,
-				namespaceResourceClaims: () => [],
+				// The large target names one more namespace resource, so the stored write has a claim to acquire.
+				namespaceResourceClaims: (namespace) => JSON.stringify(namespace.target) === JSON.stringify(harborTarget('large')) ? ['service:large'] : [],
 				registrationResourceClaims: () => [],
 				provision: (input) => Promise.resolve(input.namespace),
 				reconcile: (input) => Promise.resolve(input.namespace),
@@ -569,6 +570,7 @@ describe('namespaces.update core guards', () => {
 					fence: { holder: 'nobody', nowMs: Date.now() },
 					from: { state: marked.state, lastError: marked.last_error },
 					to: { state: 'ready', providerTargetJson: JSON.stringify(harborTarget('stale')), lastError: null, updateTargetJson: null },
+					resourceKeys: [],
 				}),
 			).toBeNull()
 			expect(await registry.deleteDeploymentNamespaceWithResourceClaims('apps-prod')).toBeNull()
@@ -585,6 +587,44 @@ describe('namespaces.update core guards', () => {
 		expect(row.last_error).toStartWith('namespaceUpdateUnconfirmed: ')
 		expect(JSON.parse(row.update_target_json ?? 'null')).toEqual(harborTarget('large'))
 		expect(JSON.parse(row.provider_target_json)).toEqual(harborTarget('small'))
+	})
+
+	const claims = async (harness: Harness) =>
+		(await harness.deps.repositories.registry.listNamespaceResourceClaims('apps-prod')).map((claim) => [claim.resource_key, claim.owner_app_id])
+
+	test('the stored target acquires the resources it names', async () => {
+		const harness = makeHarness(harbor(async (input) => input.next))
+		await seedReady(harness)
+
+		expect((await rpcResult(request(), harness.deps)).status).toBe(200)
+
+		expect(await claims(harness)).toEqual([['service:large', null]])
+		expect(JSON.parse((await storedRow(harness)).provider_target_json)).toEqual(harborTarget('large'))
+	})
+
+	test('a target naming a resource an application claims is refused after the change and keeps the mark for a retry', async () => {
+		const harness = makeHarness(harbor(async (input) => input.next))
+		await seedReady(harness)
+		const registry = harness.deps.repositories.registry
+		await registry.createApp({ id: 'large', repoUrl: 'github.com/acme/large' })
+		await registry.upsertAppEnvWithNamespaceResourceClaims({
+			appId: 'large',
+			env: 'prod',
+			namespaceId: 'apps-prod',
+			provider: 'harbor',
+			providerTargetJson: JSON.stringify(harborTarget('app')),
+			providerArtifactJson: JSON.stringify(harborTarget('artifact')),
+		}, ['service:large'])
+
+		const refused = await rpcResult(request(), harness.deps)
+
+		expect(refused.status).toBe(409)
+		expect(await errorOf(refused)).toStartWith('resource service:large of namespace apps-prod is claimed by an application environment')
+		const row = await storedRow(harness)
+		expect(row.last_error).toStartWith('namespaceUpdateUnconfirmed: ')
+		expect(JSON.parse(row.update_target_json ?? 'null')).toEqual(harborTarget('large'))
+		expect(JSON.parse(row.provider_target_json)).toEqual(harborTarget('small'))
+		expect(await claims(harness)).toEqual([['service:large', 'large']])
 	})
 
 	test('a definite provider failure is a redacted 502 and restores the row', async () => {
@@ -725,6 +765,7 @@ describe('a namespace whose update is unconfirmed', () => {
 				lastError: 'namespaceUpdateUnconfirmed: an update started and is not confirmed',
 				updateTargetJson: JSON.stringify(planned),
 			},
+			resourceKeys: [],
 		})
 		expect(claimed).not.toBeNull()
 		livePostgres(zerops).autoscalingProfileId = 'oltp-production'

@@ -40,6 +40,7 @@ describe.skipIf(!hasPostgres)('namespace update writes on Postgres', () => {
 				fence: { holder, nowMs: Date.now() },
 				from: { state: 'ready', lastError: null },
 				to: { state: 'failed', providerTargetJson: created.provider_target_json, lastError: MARK, updateTargetJson: PLANNED },
+				resourceKeys: [],
 			})
 		const row = await mark()
 		if (row === null) throw new Error('the mark did not land')
@@ -55,6 +56,7 @@ describe.skipIf(!hasPostgres)('namespace update writes on Postgres', () => {
 			fence: { holder: as === 'holder' ? holder : 'someone-else', nowMs: Date.now() },
 			from: { state: 'failed', lastError: MARK },
 			to: { state: 'ready', providerTargetJson: PLANNED, lastError: null, updateTargetJson: null },
+			resourceKeys: [],
 		})
 
 	test('the mark carries the planned target, and removal and a write without the lease leave it alone', async () => {

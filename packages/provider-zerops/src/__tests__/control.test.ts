@@ -999,6 +999,77 @@ describe('Zerops ControlProvider registration', () => {
 		).toThrow('does not provide')
 		expect(claimsFor(target('api'), exclusive)).toEqual(['service:api'])
 	})
+
+	test('reserves the namespace-owned hostnames before the namespace target records them', () => {
+		const control = createTestControlProvider({
+			accessToken: 'zt-secret',
+			api: makeApi(recorded),
+			namespaces: {
+				clientId: 'client-1',
+				proxySource: PROXY_SOURCE,
+				iamUrl: 'https://iam.example.test',
+				iamKey: 'proxy-key',
+				olderProxies: OLDER_PROXIES,
+			},
+		})
+		const capabilities = control.namespaces
+		if (capabilities === undefined) throw new Error('expected namespace capabilities')
+		// No shared PostgreSQL and no sandbox host yet: the namespace itself claims only its proxy.
+		const namespace = capabilities.normalize({
+			id: 'apps-prod',
+			env: 'prod',
+			target: {
+				provider: 'zerops',
+				version: zeropsNamespaceTargetCodec.version,
+				payload: zeropsNamespaceTargetCodec.encode(zeropsNamespacePreset({
+					proxySource: PROXY_SOURCE,
+					preset: 'mid',
+					env: 'prod',
+					projectName: 'apps-prod',
+				})),
+			},
+		})
+		expect(capabilities.namespaceResourceClaims(namespace)).toEqual(['service:proxy'])
+		const claimsFor = (appId: string, hostname: string, selectedNamespace = namespace): readonly string[] => {
+			const registration = control.normalizeRegistration({
+				app: { ...app, id: appId },
+				environment: environment({
+					appId,
+					namespace: selectedNamespace,
+					artifact: {
+						provider: 'zerops',
+						version: zeropsArtifactCodec.version,
+						payload: zeropsArtifactCodec.encode(compileFabrikaManifest(
+							{ id: appId, target: { platform: 'zerops', services: () => [{ hostname, type: 'alpine/bun@1.3' }] } },
+							'prod',
+							SOURCE_DESCRIPTOR,
+						)),
+					},
+				}),
+			})
+			return capabilities.registrationResourceClaims(registration)
+		}
+
+		for (
+			const { appId, hostname } of [
+				{ appId: 'zb', hostname: 'zbox' },
+				{ appId: 'z', hostname: 'zbox' },
+				{ appId: 'po', hostname: 'postgres' },
+				{ appId: 'postgre', hostname: 'postgres' },
+				{ appId: 'pr', hostname: 'proxy' },
+			]
+		) {
+			expect(() => claimsFor(appId, hostname)).toThrow(`Zerops service hostname \`${hostname}\` is reserved by the namespace`)
+		}
+		expect(() => claimsFor('zb', 'zbox')).toThrow('rename the service')
+		// The prefix rule still admits a longer name.
+		expect(claimsFor('zb', 'zboxapi')).toEqual(['service:zboxapi'])
+		// An exclusive namespace may still add a sandbox host, but gets no namespace PostgreSQL: its app may name a database `postgres`.
+		const exclusive = { ...namespace, exclusiveAppId: 'zb' }
+		expect(() => claimsFor('zb', 'zbox', exclusive)).toThrow('Zerops service hostname `zbox` is reserved by the namespace')
+		expect(claimsFor('zb', 'postgres', exclusive)).toEqual(['service:postgres'])
+		expect(recorded.calls).toEqual([])
+	})
 })
 
 describe('Zerops ControlProvider lifecycle', () => {

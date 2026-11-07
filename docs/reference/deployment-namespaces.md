@@ -187,6 +187,28 @@ provider resource inside one namespace. Its key is
 - Registration acquires the app-environment row and its claims atomically.
 - Namespace creation acquires its reserved claims before provider provisioning.
 - Reconcile acquires missing reserved namespace claims before provider mutation.
+- Every write that records a provider target acquires the claims that target
+  names in the same fenced write: a namespace job's checkpoint or result, a proxy
+  republish's checkpoint or result, and the stored write of `namespaces.update`.
+  A Zerops sandbox host adds `service:zbox` this way. A key an application
+  environment already holds keeps the stored target as it was: a job lands
+  `failed` with `resourceClaimConflict`, a republish throws it and queues a
+  reconcile, and an update answers **409** and keeps its unconfirmed mark.
+- The way out of a `resourceClaimConflict` is to free the key, then run
+  `fabrika control namespaces reconcile --namespace=<id>` (an update instead
+  retries `namespaces.update`). A reconcile before that fails again for as long
+  as the provider keeps naming the key. Either remove what makes the namespace
+  name it: for a Zerops sandbox host, the dev sandboxes the namespace hosts
+  (only a `creating` or `ready` one asks for a sandbox host; `delete_workspace`
+  removes a workspace's sandbox, see [mcp-authoring.md](./mcp-authoring.md)). Or
+  move the application's service off the name, as
+  [Renaming a reserved service](#renaming-a-reserved-service) describes; Zerops
+  refuses `zbox` to every newly registered service for this reason.
+- A namespace that recorded a target before its claims were acquired with it
+  refuses every member deploy (`deployment namespace resource claim "<key>" is
+  missing or has another owner`). The next namespace job or proxy republish that
+  completes acquires the missing claims; until one runs,
+  `fabrika control namespaces reconcile --namespace=<id>` does.
 - Omitted claims are retained. A pre-deploy namespace move therefore leaves a
   historical reservation in the old namespace.
 - A claim outlives its owner's deletion. Deleting an application or an
@@ -264,8 +286,11 @@ secret fields, and ownership of the proxy upstream.
 | `full`  | Exclusive to one app              | Namespace-owned | App-owned services                     |
 
 Every Zerops namespace reserves `service:proxy`. A cheap namespace also reserves
-`service:postgres`. Application claims are the service hostnames in the canonical
-manifest. Cheap defaults to `postgresql:single@18` at `oltp-hobby` on every
+`service:postgres`, and a namespace with a sandbox host `service:zbox`. Application claims are the service hostnames
+in the canonical manifest. No application service may take `proxy` or `zbox`, even before the namespace records the
+service, because any namespace may add a sandbox host later. In a shared namespace `postgres` is refused too, because
+adopting the namespace's project refuses an undeclared `postgres` service; a `full` namespace never gets a namespace
+PostgreSQL, so its one application may name a database `postgres`. Cheap defaults to `postgresql:single@18` at `oltp-hobby` on every
 environment ([ADR-0038](../decisions/0038-size-namespaces-cheaply-by-default.md));
 its plan options (`--postgres-type` with `--postgres-profile`, always together) may
 select a supported type and profile explicitly. `postgresql:ha@18` is the one that keeps its data
@@ -290,6 +315,22 @@ queries run as that family, which owns or reaches only its `app_<id>` schema
 ([ADR-0017](../decisions/0017-service-owned-postgres-migrations.md)), so one
 application's SQL cannot reach another's tables. No application may reference
 the superuser's password.
+
+### Renaming a reserved service
+
+An environment registered before the reservation may already declare a reserved hostname (`zbox`, or `postgres` in a
+shared namespace); its next environment put
+or deploy is refused, naming the hostname. Zerops cannot rename a service, so a new name is a new service, and the old
+one keeps both its place in the project and the environment's claim on it: a put keeps every claim it omits, and
+`release-claims` releases an environment's claims only when every one of its services is gone. The steps that converge:
+
+1. Dump the data the environment's services hold, then delete all of them in Zerops. Fabrika deletes none.
+2. `fabrika control namespaces release-claims --namespace=<id> --app=<id> --env=<name>` (see
+   [Releasing a claim](#releasing-a-claim)).
+3. `apps.environments.delete`. Its keys, proxy secret, backup records and workspaces go with it; a protected
+   environment needs a human, and its protection is kept for the next one of the same name.
+4. `fabrika control apps environments put` with a manifest that names the services anew, then deploy and restore the
+   data.
 
 ## Zerops lifecycle and routing
 
@@ -357,6 +398,16 @@ carries a `target.proxy` must have a domain. Registration and
 the provider's synchronous claims hook — before any provider mutation, so nothing
 is created. Previously such a registration succeeded and its first deploy failed
 at proxy composition.
+
+The proxy routes each host to one member, so Control refuses a member that would be routed on a host another member of
+the namespace is routed on, compared without case, naming the sibling. Publishing a contract is what makes a member
+routed, so the refusal reaches a put of a published member (**409**, before the provider prepares anything) and a deploy
+about to publish (it fails before the contract is published); a new registration is judged at its first deploy. The provider decides which hosts a member is routed on (`memberHosts`; on
+Zerops the function the manifest compiler routes by): a member with an approved contract and a proxy target on its
+domain, a `dev` member only on its workspaces' `<workspace>.<domain>` hosts, and any other member on none. Dev
+environments of several applications may therefore share one wildcard base, and a member not yet published may name a
+routed sibling's host until its deploy. There is no database constraint behind the check, so two concurrent writes can
+both pass it; the namespace republish then refuses the duplicate host, naming it, until a put moves one of the two.
 
 The proxy source pin is persisted in the namespace target when the namespace is
 planned and every proxy build uploads exactly that source (ADR-0045). A target

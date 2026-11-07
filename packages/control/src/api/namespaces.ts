@@ -22,13 +22,16 @@ import {
 	isLeaseLoss,
 	PROVIDER_NAMESPACE_IMMUTABLE,
 	PROVIDER_NAMESPACE_UPDATE_UNCONFIRMED,
+	type ProviderApprovedAccess,
 	type ProviderClaimedResource,
 	type ProviderDeploymentNamespace,
+	type ProviderEnvelope,
 	type ProviderNamespaceCapabilities,
 	type ProviderNamespaceDevSandbox,
 	ProviderNamespaceError,
 	type ProviderNamespaceHost,
 	type ProviderNamespaceMember,
+	type ProviderNamespaceMemberRouting,
 	type ProviderNamespaceMutationInput,
 	type ProviderNamespacePresentation,
 	type ProviderNamespaceRepublishInput,
@@ -38,6 +41,7 @@ import {
 import type { InstallationBrand } from '@fabrika/proxy-core/brand'
 import { approvedProviderAccess } from '../approval/snapshot'
 import {
+	type AppEnvRow,
 	type ControlRepositories,
 	crossOriginsField,
 	type DeploymentNamespaceRow,
@@ -230,6 +234,15 @@ function namespaceFailure(cause: unknown, mutation: NamespaceJobMutation | 'upda
  */
 const namespaceCheckpointInvariant = (message: string): ProviderNamespaceError => new ProviderNamespaceError(message, 'checkpointInvariant', false)
 
+/** A target that names a resource an application environment of the namespace already claims is never recorded. */
+const namespaceResourceClaimConflict = (cause: NamespaceResourceClaimConflictError): ProviderNamespaceError =>
+	new ProviderNamespaceError(
+		`resource ${cause.resourceKey} of namespace ${cause.namespaceId} is claimed by an application environment, so the namespace cannot take it;`
+			+ ' the target that names it is not recorded',
+		'resourceClaimConflict',
+		false,
+	)
+
 function namespacePresentation(c: NamespaceUseCaseContext, row: DeploymentNamespaceRow): ProviderNamespacePresentation | null {
 	const operator = c.provider.namespaces?.operator
 	if (operator === undefined) return null
@@ -378,6 +391,10 @@ async function installationBrand(deps: Pick<NamespaceJobDeps, 'brand'>, namespac
 /**
  * Persist one namespace row as the holder of its lease; a write the fence refused ends the lease. Only a
  * job's `claim` moves a `pending` row: any other write keeps an operator's requeue for the queued job.
+ *
+ * A write that records a target the provider produced passes the capabilities in `acquire`: the resources that target
+ * names are claimed for the namespace with it, because a member deploy refuses a namespace whose claims are missing.
+ * A key another owner holds fails the write and leaves the stored target as it was.
  */
 async function writeNamespace(
 	repositories: ControlRepositories,
@@ -385,10 +402,12 @@ async function writeNamespace(
 	row: DeploymentNamespaceRow,
 	namespace: ProviderDeploymentNamespace,
 	state: DeploymentNamespaceState,
-	options: { lastError?: string; claim?: true } = {},
+	options: { lastError?: string; claim?: true; acquire?: ProviderNamespaceCapabilities } = {},
 ): Promise<void> {
-	lease.assertWritten(
-		await repositories.registry.writeDeploymentNamespace({
+	const resourceKeys = options.acquire?.namespaceResourceClaims(namespace) ?? []
+	let written: boolean
+	try {
+		written = await repositories.registry.writeDeploymentNamespace({
 			id: row.id,
 			createdAt: row.created_at,
 			fence: lease.fence(),
@@ -396,8 +415,13 @@ async function writeNamespace(
 			state,
 			lastError: options.lastError ?? null,
 			claim: options.claim === true,
-		}),
-	)
+			resourceKeys,
+		})
+	} catch (cause) {
+		if (cause instanceof NamespaceResourceClaimConflictError) throw namespaceResourceClaimConflict(cause)
+		throw cause
+	}
+	lease.assertWritten(written)
 }
 
 /**
@@ -445,31 +469,103 @@ async function namespaceMembers(
  */
 async function memberSandboxes(
 	deps: Pick<NamespaceJobDeps, 'repositories' | 'vault'>,
-	row: { readonly app_id: string; readonly env: string; readonly domain: string | null },
+	row: SandboxedEnvironment,
 	rows: readonly DevSandboxRow[],
 ): Promise<ProviderNamespaceDevSandbox[]> {
 	const vault = await requireVault(deps)
+	const sandboxes: ProviderNamespaceDevSandbox[] = []
+	for (const routed of await routedSandboxes(deps.repositories, row, rows)) {
+		try {
+			sandboxes.push({
+				workspaceId: routed.sandbox.workspace_id,
+				host: routed.host,
+				upstreamHost: routed.upstreamHost,
+				proxySecret: await openDevSandboxProxySecret(vault, routed.sandbox),
+				access: routed.access,
+			})
+		} catch {
+			unroutedSandbox(routed.sandbox)
+		}
+	}
+	return sandboxes
+}
+
+type SandboxedEnvironment = { readonly app_id: string; readonly env: string; readonly domain: string | null }
+
+/** The sandboxes `memberSandboxes` routes, before any secret is opened. */
+async function routedSandboxes(
+	repositories: Pick<ControlRepositories, 'runs'>,
+	row: SandboxedEnvironment,
+	rows: readonly DevSandboxRow[],
+): Promise<{ readonly sandbox: DevSandboxRow; readonly host: string; readonly upstreamHost: string; readonly access: ProviderApprovedAccess }[]> {
 	const domain = row.domain
 	if (domain === null || domain === '') return []
-	const sandboxes: ProviderNamespaceDevSandbox[] = []
+	const routed: { sandbox: DevSandboxRow; host: string; upstreamHost: string; access: ProviderApprovedAccess }[] = []
 	for (const sandbox of rows) {
 		const upstreamHost = sandbox.upstream_host
 		if (sandbox.state !== 'ready' || upstreamHost === null) continue
 		try {
-			const publication = await workspacePublication(deps.repositories, sandbox)
+			const publication = await workspacePublication(repositories, sandbox)
 			if (publication === null) continue
-			sandboxes.push({
-				workspaceId: sandbox.workspace_id,
-				host: devSandboxHost(domain, sandbox.workspace_id),
-				upstreamHost,
-				proxySecret: await openDevSandboxProxySecret(vault, sandbox),
-				access: publication.access,
-			})
+			routed.push({ sandbox, host: devSandboxHost(domain, sandbox.workspace_id), upstreamHost, access: publication.access })
 		} catch {
-			console.error(`dev sandbox of workspace ${sandbox.workspace_id}: its proxy secret or published snapshot cannot be read, so it is not routed`)
+			unroutedSandbox(sandbox)
 		}
 	}
-	return sandboxes
+	return routed
+}
+
+const unroutedSandbox = (sandbox: DevSandboxRow): void =>
+	console.error(`dev sandbox of workspace ${sandbox.workspace_id}: its proxy secret or published snapshot cannot be read, so it is not routed`)
+
+/**
+ * A namespace's entry point routes each host to one member, so the member a write or a publication changes may not be
+ * routed on a host a sibling is routed on. The provider's rule decides which hosts those are; a sibling the entry point
+ * cannot route already stops the namespace's republish, and is not this member's to refuse.
+ */
+export async function assertNamespaceHostsFree(
+	c: { readonly provider: ControlProvider; readonly repositories: ControlRepositories },
+	namespaceId: string | null,
+	candidate: ProviderNamespaceMemberRouting,
+): Promise<void> {
+	const memberHosts = c.provider.namespaces?.memberHosts
+	if (namespaceId === null || memberHosts === undefined) return
+	let hosts: ReadonlySet<string>
+	try {
+		hosts = new Set(memberHosts(candidate))
+	} catch (cause) {
+		fail(400, cause instanceof Error ? cause.message : 'invalid namespace member')
+	}
+	if (hosts.size === 0) return
+	for (const row of await c.repositories.registry.listAppEnvsByNamespace(namespaceId)) {
+		if (row.app_id === candidate.appId && row.env === candidate.env) continue
+		let artifact: ProviderEnvelope
+		try {
+			artifact = parseStoredEnvelope(row.provider_artifact_json, `artifact for ${row.app_id}/${row.env}`)
+		} catch {
+			continue
+		}
+		const routing = await namespaceMemberRouting(c.repositories, row, artifact)
+		let taken: string | undefined
+		try {
+			taken = memberHosts(routing).find((host) => hosts.has(host))
+		} catch {
+			continue
+		}
+		if (taken !== undefined) fail(409, `host ${taken} is already routed to ${row.app_id}/${row.env} in deployment namespace ${namespaceId}`)
+	}
+}
+
+/** What a republish routes one environment of the namespace on, with `artifact`, read from the registry alone: no secret is opened. */
+export async function namespaceMemberRouting(
+	repositories: Pick<ControlRepositories, 'runs' | 'devSandboxes'>,
+	row: AppEnvRow,
+	artifact: ProviderEnvelope,
+): Promise<ProviderNamespaceMemberRouting> {
+	const base = { appId: row.app_id, env: row.env, ...(row.domain === null ? {} : { domain: row.domain }), artifact }
+	if (row.kind !== 'dev') return { ...base, ...approvedProviderAccess(row) }
+	const sandboxes = await routedSandboxes(repositories, row, await repositories.devSandboxes.listByEnvironment(row.app_id, row.env))
+	return { ...base, devSandboxes: sandboxes.map(({ sandbox, host }) => ({ workspaceId: sandbox.workspace_id, host })) }
 }
 
 /**
@@ -531,8 +627,9 @@ async function mutateNamespace(
 				if (!sameCoordinates(namespace, current, deps.provider.id)) {
 					throw namespaceCheckpointInvariant('provider checkpoint changed namespace coordinates')
 				}
+				// `current` is always the stored target: the failure write below records it again.
+				await writeNamespace(deps.repositories, lease, row, namespace, 'provisioning', { acquire: capabilities })
 				current = namespace
-				await writeNamespace(deps.repositories, lease, row, current, 'provisioning')
 			},
 			boundary: async () => lease.assertHeld(),
 		},
@@ -541,8 +638,8 @@ async function mutateNamespace(
 		const input = { ...providerInput, brand: await installationBrand(deps, row.id) }
 		const result = mutation === 'provision' ? await capabilities.provision(input) : await capabilities.reconcile(input)
 		if (!sameCoordinates(result, current, deps.provider.id)) throw new Error('provider result changed namespace coordinates')
+		await writeNamespace(deps.repositories, lease, row, result, 'ready', { acquire: capabilities })
 		current = result
-		await writeNamespace(deps.repositories, lease, row, current, 'ready')
 		return 'ready'
 	} catch (cause) {
 		lease.assertHeld()
@@ -642,8 +739,8 @@ export async function republishUnderLease(
 					if (!sameCoordinates(namespace, current, deps.provider.id)) {
 						throw namespaceCheckpointInvariant('provider checkpoint changed namespace coordinates')
 					}
+					await writeNamespace(deps.repositories, lease, row, namespace, 'provisioning', { acquire: capabilities })
 					current = namespace
-					await writeNamespace(deps.repositories, lease, row, current, 'provisioning')
 				},
 				boundary: async () => {
 					lease.assertHeld()
@@ -652,16 +749,17 @@ export async function republishUnderLease(
 			},
 		})
 		if (!sameCoordinates(result.namespace, current, deps.provider.id)) throw new Error('provider result changed namespace coordinates')
-		current = result.namespace
 		settled = result.settled
+		clearInterval(progress)
+		options.log?.(`the namespace proxy ${settled ? 'republished' : 'is still republishing; a reconcile job finishes it'} after ${seconds()} s`)
+		// Inside the try: a final write refused (a claimed resource, a lost lease) is handed to a reconcile like any failure.
+		await writeNamespace(deps.repositories, lease, row, result.namespace, settled ? 'ready' : 'provisioning', { acquire: capabilities })
 	} catch (cause) {
 		await reconcileLater().catch(() => console.error(`namespace ${namespaceId}: the reconcile job could not be queued`))
 		throw cause
 	} finally {
 		clearInterval(progress)
 	}
-	options.log?.(`the namespace proxy ${settled ? 'republished' : 'is still republishing; a reconcile job finishes it'} after ${seconds()} s`)
-	await writeNamespace(deps.repositories, lease, row, current, settled ? 'ready' : 'provisioning')
 	if (!settled) await reconcileLater()
 }
 
@@ -993,7 +1091,7 @@ export async function updateNamespaceUseCase(
 	const lease = await acquireLease(c.repositories.registry.namespaceLocks(), namespaceLeaseKey(row.id))
 	if (lease === null) fail(409, `deployment namespace ${row.id} is being changed by another operation; retry when it finishes`)
 	try {
-		return await updateUnderLease(c, updates, lease, row, plan)
+		return await updateUnderLease(c, capabilities, updates, lease, row, plan)
 	} catch (cause) {
 		if (isLeaseLoss(cause)) fail(409, `deployment namespace ${row.id} lost its lease during the update — read it, then ${RETRY_UPDATE_ADVICE}`)
 		throw cause
@@ -1004,6 +1102,7 @@ export async function updateNamespaceUseCase(
 
 async function updateUnderLease(
 	c: NamespaceUseCaseContext,
+	capabilities: ProviderNamespaceCapabilities,
 	updates: ProviderNamespaceUpdates,
 	lease: Lease,
 	read: DeploymentNamespaceRow,
@@ -1019,6 +1118,7 @@ async function updateUnderLease(
 	const transition = (
 		from: DeploymentNamespaceRow,
 		to: { state: DeploymentNamespaceState; providerTargetJson: string; lastError: string | null; updateTargetJson: string | null },
+		resourceKeys: readonly string[] = [],
 	): Promise<DeploymentNamespaceRow | null> =>
 		registry.transitionDeploymentNamespace({
 			id: before.id,
@@ -1026,6 +1126,7 @@ async function updateUnderLease(
 			fence: lease.fence(),
 			from: { state: from.state, lastError: from.last_error },
 			to,
+			resourceKeys,
 		})
 	const plannedTargetJson = JSON.stringify(plan.namespace.target)
 	// The planned target goes down WITH the mark, so a client that never saw this request can still finish it.
@@ -1078,12 +1179,19 @@ async function updateUnderLease(
 	// The live change is made; a result for other coordinates leaves the mark in place.
 	if (!sameCoordinates(updated, current, c.provider.id)) fail(502, `provider returned a namespace for different coordinates — ${RETRY_UPDATE_ADVICE}`)
 	// A re-pin is stored, not built: `pending` queues the reconcile that rebuilds the proxy from the new pin.
-	const stored = await transition(claimed, {
-		state: isRepin(plan) ? 'pending' : 'ready',
-		providerTargetJson: JSON.stringify(updated.target),
-		lastError: null,
-		updateTargetJson: null,
-	})
+	let stored: DeploymentNamespaceRow | null
+	try {
+		stored = await transition(claimed, {
+			state: isRepin(plan) ? 'pending' : 'ready',
+			providerTargetJson: JSON.stringify(updated.target),
+			lastError: null,
+			updateTargetJson: null,
+		}, namespaceResourceClaims(capabilities, updated))
+	} catch (cause) {
+		if (!(cause instanceof NamespaceResourceClaimConflictError)) throw cause
+		// The mark stays: the live change is made, and only a retry after the key is freed records it.
+		fail(409, `${namespaceResourceClaimConflict(cause).message} — ${RETRY_UPDATE_ADVICE} once the resource is free`)
+	}
 	if (stored === null) rowMovedUnderUpdate(before.id)
 	await replayRequestedRepair(c, stored)
 	await auditMutation(c, 'namespace.update', stored, plan.change === null ? {} : { ...plan.change })

@@ -7,7 +7,7 @@ import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-a
 import { defineApp } from '../authoring'
 import { FABRIKA_CHECK_VERSION } from '../execution'
 import { compileFabrikaManifest, zeropsArtifactCodec, type ZeropsArtifactSourceDescriptor } from '../manifest'
-import { compileNamespaceProxyManifest } from '../namespace/manifest'
+import { compileNamespaceProxyManifest, namespaceMemberHosts } from '../namespace/manifest'
 import { SANDBOX_UPSTREAM, sandboxUpstreamHost } from '../sandbox-host'
 
 const SOURCE_DESCRIPTOR: ZeropsArtifactSourceDescriptor = {
@@ -275,5 +275,43 @@ describe('namespace proxy manifest: dev sandboxes', () => {
 				devMember([sandbox(WORKSPACE_A, 'sbxa', approved(notesArtifact)), sandbox(WORKSPACE_A, 'sbxb', approved(notesArtifact))]),
 			])
 		).toThrow('duplicate proxy app id')
+	})
+})
+
+describe('the hosts a member is routed on', () => {
+	const WORKSPACE = '0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b'
+	const devMember = (sandboxHosts: readonly string[]): ProviderNamespaceMember => ({
+		...member('notes', 'dev.example.com'),
+		env: 'dev',
+		devSandboxes: sandboxHosts.map((host, index) => ({
+			workspaceId: `${WORKSPACE.slice(0, -1)}${index}`,
+			host,
+			upstreamHost: sandboxUpstreamHost(`sbx${index}`),
+			access: approved(notesArtifact),
+		})),
+	})
+
+	test('are exactly the hosts the compiled manifest routes it on', () => {
+		const alpha = member('alpha', 'Alpha.Example.com')
+		const sandboxed = { ...devMember([`${WORKSPACE}.Dev.Example.com`]), appId: 'shop' }
+		const members = [
+			alpha,
+			member('worker', 'worker.example.com', { proxy: false }),
+			member('pending', 'pending.example.com', { access: null }),
+			legacyMember('legacy', 'legacy.example.com'),
+			devMember([]),
+			sandboxed,
+		]
+		for (const routed of members) {
+			const compiled = compileNamespaceProxyManifest('apps-prod', [routed]).apps.flatMap((app) => app.hosts)
+			expect(namespaceMemberHosts(routed)).toEqual(compiled)
+		}
+		expect(namespaceMemberHosts(alpha)).toEqual(['alpha.example.com'])
+		expect(namespaceMemberHosts(sandboxed)).toEqual([`${WORKSPACE}.dev.example.com`])
+	})
+
+	test('a dev member is never routed on its base domain, so two share one wildcard base', () => {
+		expect(namespaceMemberHosts(devMember([]))).toEqual([])
+		expect(() => namespaceMemberHosts(member('alpha', undefined))).toThrow('requires a public domain')
 	})
 })
