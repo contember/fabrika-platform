@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { createTarRewrite, SOURCE_MAX_EXPANDED_BYTES, type SourceBytes } from '../archive'
+import { createTarRewrite, SOURCE_MAX_EXPANDED_BYTES, type SourceBytes, type TarRewriteInput } from '../archive'
 import { SOURCE_MAX_TREE_ENTRIES } from '../tree'
 import {
 	bytes,
@@ -82,6 +82,7 @@ describe('the archive rewrite', () => {
 		{ name: 'symlink replaces directory parent', parts: [entry({ name: `${handPrefix}dir/sub/`, type: '5' }), link('dir', '.')] },
 		{ name: 'file-directory collision', parts: [file(`${handPrefix}dir`, 'x'), file(`${handPrefix}dir/file`, 'x')] },
 		{ name: 'directory-file collision', parts: [file(`${handPrefix}dir/file`, 'x'), file(`${handPrefix}dir`, 'x')] },
+		{ name: 'file-directory collision below the parent', parts: [file(`${handPrefix}top/dir`, 'x'), file(`${handPrefix}top/dir/sub/file`, 'x')] },
 		{ name: 'descriptor symlink', parts: [link('zerops.yaml', 'actual'), file(`${handPrefix}actual`, descriptor)] },
 		{ name: 'directory traversal', parts: [entry({ name: `${handPrefix}../escape/`, type: '5' })] },
 		{ name: 'nonzero link size', parts: [entry({ name: `${handPrefix}link`, type: '2', linkname: 'zerops.yaml', content: bytes('x') })] },
@@ -182,6 +183,55 @@ describe('the archive rewrite', () => {
 			['zerops.yaml', '0'],
 		])
 	})
+
+	test('platform mode writes each parent directory once, outermost first, across files, directory entries and links', async () => {
+		const archived = await platformArchive([
+			file(`${handPrefix}zerops.yaml`, descriptor),
+			file(`${handPrefix}src/app/deep/a.ts`, 'a'),
+			file(`${handPrefix}src/app/b.ts`, 'b'),
+			entry({ name: `${handPrefix}src/app/deep/empty/`, type: '5' }),
+			file(`${handPrefix}src/app/deep/empty/c.ts`, 'c'),
+			link('src/lib/current', '../app/b.ts'),
+			file(`${handPrefix}src/lib/d.ts`, 'd'),
+			file(`${handPrefix}docs/e.md`, 'e'),
+		])
+
+		expect(archived.failure).toBeUndefined()
+		expect(entries(archived).map((entry) => [entry.path, entry.type])).toEqual([
+			['zerops.yaml', '0'],
+			['src/', '5'],
+			['src/app/', '5'],
+			['src/app/deep/', '5'],
+			['src/app/deep/a.ts', '0'],
+			['src/app/b.ts', '0'],
+			['src/app/deep/empty/', '5'],
+			['src/app/deep/empty/c.ts', '0'],
+			['src/lib/', '5'],
+			['src/lib/current', '2'],
+			['src/lib/d.ts', '0'],
+			['docs/', '5'],
+			['docs/e.md', '0'],
+		])
+	})
+
+	// Equal path lengths isolate depth: a file must not pay once per ancestor level of a directory already written.
+	test.each(
+		[
+			{ name: 'an application', input: {} },
+			{ name: 'a platform', input: { archiveKind: 'platform' } },
+		] satisfies { name: string; input: Pick<TarRewriteInput, 'archiveKind'> }[],
+	)(
+		'a file 4000 directories deep in $name archive costs about what one 100 deep costs',
+		async ({ input }) => {
+			const deep = Array.from({ length: 4000 }, () => 'a').join('/')
+			const shallow = Array.from({ length: 100 }, () => 'b'.repeat(79)).join('/')
+			expect(shallow.length).toBe(deep.length)
+			const deepMs = await fastestFilesInDirectory(deep, input)
+			const shallowMs = await fastestFilesInDirectory(shallow, input)
+			expect(deepMs).toBeLessThan(10 * Math.max(shallowMs, 1))
+		},
+		60_000,
+	)
 
 	test('rejects a repository whose tarball carries a symlink', async () => {
 		const fixture = await gitFixture({ symlink: true })
@@ -345,3 +395,31 @@ describe('the archive rewrite', () => {
 		expect(total).toBeGreaterThan(content.byteLength)
 	})
 })
+
+const FILES_PER_RUN = 50
+
+/** The fastest of three runs: the time to rewrite files in `directory` once the directory itself has been written. */
+async function fastestFilesInDirectory(directory: string, input: Pick<TarRewriteInput, 'archiveKind'>): Promise<number> {
+	let fastest = Number.POSITIVE_INFINITY
+	for (let run = 0; run < 3; run++) {
+		fastest = Math.min(fastest, await filesInDirectoryMs(directory, input))
+	}
+	return fastest
+}
+
+async function filesInDirectoryMs(directory: string, input: Pick<TarRewriteInput, 'archiveKind'>): Promise<number> {
+	const inDirectory = (name: string) => paxed(`path=${handPrefix}${directory}/${name}\n`, file(`${handPrefix}placeholder`, ''))
+	const rewrite = createTarRewrite({ ...input, commitSha: handCommitSha, descriptor: DESCRIPTOR })
+	const drained = rewrite.transform.readable.pipeTo(new WritableStream())
+	const writer = rewrite.transform.writable.getWriter()
+	await writer.write(concat(globalHeader(handCommitSha), file(`${handPrefix}zerops.yaml`, descriptor), inDirectory('first')))
+	const files = concat(...Array.from({ length: FILES_PER_RUN }, (_, index) => inDirectory(`file-${index}`)))
+	const begun = performance.now()
+	await writer.write(files)
+	const elapsed = performance.now() - begun
+	await writer.write(new Uint8Array(1024))
+	await writer.close()
+	await drained
+	expect((await rewrite.completed).entryCount).toBe(FILES_PER_RUN + 2)
+	return elapsed
+}

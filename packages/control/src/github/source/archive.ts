@@ -417,10 +417,13 @@ class TarRewriter {
 
 	private registerPath(path: string, entry: NamespaceEntry): void {
 		if (!safeRepositoryPath(path) || path === SOURCE_SUBMODULE_MARKER) throw archiveRejected()
-		const segments = path.split('/')
-		for (let depth = 1; depth < segments.length; depth++) {
-			this.registerNode(segments.slice(0, depth).join('/'), { kind: 'directory' })
-		}
+		const missing = missingAncestors(path, (directory) => {
+			const known = this.namespace.get(directory)
+			if (known === undefined) return false
+			if (known.kind !== 'directory') throw archiveRejected()
+			return true
+		})
+		for (const directory of missing) this.registerNode(directory, { kind: 'directory' })
 		this.registerNode(path, entry)
 	}
 
@@ -490,10 +493,7 @@ class TarRewriter {
 		path: string,
 		controller: TransformStreamDefaultController<SourceBytes>,
 	): void {
-		const segments = path.split('/')
-		for (let depth = 1; depth < segments.length; depth++) {
-			const directory = segments.slice(0, depth).join('/')
-			if (this.directories.has(directory)) continue
+		for (const directory of missingAncestors(path, (known) => this.directories.has(known))) {
 			this.directories.add(directory)
 			this.writeHeader(`${directory}/`, 0o755, 0, '5', controller)
 		}
@@ -570,6 +570,21 @@ class TarRewriter {
 		if (!Number.isSafeInteger(parsed)) throw archiveRejected()
 		this.pendingSize = parsed
 	}
+}
+
+/**
+ * The ancestor directories of `path` that `isKnown` does not report, outermost first. Ancestors are always recorded
+ * outermost first, so the walk goes up from the parent and stops at the first known one: a path in a known directory
+ * costs one lookup, not one per level.
+ */
+function missingAncestors(path: string, isKnown: (directory: string) => boolean): string[] {
+	const missing: string[] = []
+	for (let boundary = path.lastIndexOf('/'); boundary > 0; boundary = path.lastIndexOf('/', boundary - 1)) {
+		const directory = path.slice(0, boundary)
+		if (isKnown(directory)) break
+		missing.push(directory)
+	}
+	return missing.reverse()
 }
 
 function parsePaxRecords(payload: SourceBytes): Map<string, string> {
