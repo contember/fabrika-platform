@@ -256,26 +256,6 @@ const positiveInteger = (raw: string, name: string): number => {
 	return parsed
 }
 
-/**
- * An origin from the flag, else the environment. Trailing slashes are dropped so paths concatenate.
- *
- * `label` names WHICH origin is missing: `key issue` reaches IAM, not the control plane, and a message
- * that says "Control origin" while asking for `--iam-url` sends the operator to the wrong variable.
- */
-const origin = (
-	flags: Flags,
-	flag: string,
-	variable: string,
-	env: Readonly<Record<string, string | undefined>>,
-	label: string,
-): string => {
-	const value = flags.values.get(flag) ?? env[variable]
-	if (value === undefined || value.trim() === '') {
-		throw new Error(`${label} origin is required. Pass --${flag}=<origin> or set ${variable}.`)
-	}
-	return value.trim().replace(/\/+$/, '')
-}
-
 const secret = (variable: string, env: Readonly<Record<string, string | undefined>>): string => {
 	const value = env[variable]
 	if (value === undefined || value.trim() === '') {
@@ -290,25 +270,45 @@ export type ControlClient = InferRpcClient<ControlRpcContract>
 /** Plain http may carry the key to loopback only: 127.0.0.0/8, [::1], and the names RFC 6761 reserves for it, `localhost` and `*.localhost`. */
 const LOOPBACK_HOST = /^(?:localhost|.+\.localhost|127\.\d{1,3}\.\d{1,3}\.\d{1,3}|\[::1\])$/
 
+/** Which origin a check reads, so its refusals name the right flag and variable. `hint` follows a refusal of the value. */
+interface OriginSource {
+	readonly label: string
+	readonly flag: string
+	readonly variable: string
+	readonly hint?: string
+}
+
+const CONTROL_ORIGIN: OriginSource = { label: 'Control', flag: 'url', variable: 'FABRIKA_CONTROL_URL' }
+
+const IAM_ORIGIN: OriginSource = {
+	label: 'IAM',
+	flag: 'iam-url',
+	variable: 'FABRIKA_IAM_RPC_URL',
+	hint: "It is IAM's PUBLIC https origin (control's FABRIKA_IAM_ISSUER): a private hostname such as `http://iam:3000` answers only "
+		+ "inside the provider's project, never from this machine.",
+}
+
 /**
- * Control's origin, checked before the key is sent anywhere: https, or http to a loopback host for local development,
- * and nothing but scheme, host and port. A refusal never repeats the value, which may hold userinfo.
+ * An origin a credential is sent to, checked before the credential goes anywhere: https, or http to a loopback host for
+ * local development, and nothing but scheme, host and port. A refusal never repeats the value, which may hold userinfo.
  */
-export const controlOrigin = (raw: string | undefined): string => {
+export const credentialOrigin = (raw: string | undefined, source: OriginSource): string => {
+	const { label, flag, variable } = source
 	if (raw === undefined || raw.trim() === '') {
-		throw new Error('Control origin is required. Pass --url=<origin> or set FABRIKA_CONTROL_URL.')
+		throw new Error(`${label} origin is required. Pass --${flag}=<origin> or set ${variable}.`)
 	}
+	const refuse = (reason: string): Error => new Error(source.hint === undefined ? reason : `${reason}. ${source.hint}`)
 	let url: URL
 	try {
 		url = new URL(raw.trim())
 	} catch {
-		throw new Error('--url or FABRIKA_CONTROL_URL is not a URL')
+		throw refuse(`--${flag} or ${variable} is not a URL`)
 	}
 	if (url.protocol !== 'https:' && !(url.protocol === 'http:' && LOOPBACK_HOST.test(url.hostname))) {
-		throw new Error('--url or FABRIKA_CONTROL_URL must be https; plain http only to localhost, *.localhost, 127.0.0.0/8 or [::1]')
+		throw refuse(`--${flag} or ${variable} must be https; plain http only to localhost, *.localhost, 127.0.0.0/8 or [::1]`)
 	}
 	if (url.username !== '' || url.password !== '' || url.pathname !== '/' || url.search !== '' || url.hash !== '' || /[?#]/.test(raw)) {
-		throw new Error('--url or FABRIKA_CONTROL_URL must be an origin only: no credentials, path, query or fragment')
+		throw refuse(`--${flag} or ${variable} must be an origin only: no credentials, path, query or fragment`)
 	}
 	return url.origin
 }
@@ -359,7 +359,7 @@ export const controlTransport = (
 	env: Readonly<Record<string, string | undefined>>,
 	send: RpcFetch = fetch,
 ): ControlTransport => {
-	const origin = controlOrigin(url ?? env['FABRIKA_CONTROL_URL'])
+	const origin = credentialOrigin(url ?? env['FABRIKA_CONTROL_URL'], CONTROL_ORIGIN)
 	const key = secret('FABRIKA_CONTROL_KEY', env)
 	return {
 		origin,
@@ -426,32 +426,16 @@ const appLine = (app: AppDto): string => `${app.id}\t${app.repoUrl}\t${app.defau
 
 const runLine = (run: RunDto): string => `${run.id}\t${run.appId}\t${run.env}\t${run.status}\t${run.ref}`
 
-/** How the IAM origin was supplied, for a message that must not echo the value itself. */
-const IAM_ORIGIN_SOURCE = '--iam-url / FABRIKA_IAM_RPC_URL'
-
 /**
  * The one `key issue` failure whose cause is almost always the address itself.
  *
- * `fetch` rejects only when the request never completed, so this reports what could not be reached and
- * the mistake that produces it. Only the PARSED origin is named: an operator may put userinfo in the
- * value, and `new URL().origin` drops it. A value that does not parse is not echoed at all — the
- * variable is named instead. The cause object may quote anything, so only its short error code is.
+ * `fetch` rejects only when the request never completed, so this reports what could not be reached and the mistake that
+ * produces it. The cause object may quote anything, so only its short error code is.
  */
-const unreachableIam = (base: string, cause: unknown): string => {
+const unreachableIam = (origin: string, cause: unknown): string => {
 	const code = typeof cause === 'object' && cause !== null ? Reflect.get(cause, 'code') : undefined
 	const reason = typeof code === 'string' && code !== '' && code.length <= 40 ? code : 'the connection failed'
-	let parsed: string | undefined
-	try {
-		parsed = new URL(base).origin
-	} catch {
-		parsed = undefined
-	}
-	if (parsed === undefined || parsed === 'null' || code === 'ERR_INVALID_URL') {
-		return `${IAM_ORIGIN_SOURCE} is not a URL — it needs the \`https://\` scheme and IAM's PUBLIC host, `
-			+ 'shaped `https://<iam-host>`.'
-	}
-	return `IAM could not be reached at ${parsed} (${reason}). ${IAM_ORIGIN_SOURCE} must be IAM's PUBLIC origin: `
-		+ "a private hostname such as `http://iam:3000` answers only inside the provider's project, never from this machine."
+	return `IAM could not be reached at ${origin} (${reason}). ${IAM_ORIGIN.hint}`
 }
 
 const runKeyIssue = async (flags: Flags, env: Readonly<Record<string, string | undefined>>): Promise<void> => {
@@ -471,14 +455,19 @@ const runKeyIssue = async (flags: Flags, env: Readonly<Record<string, string | u
 		label: required(flags, 'label'),
 		expiresAt: Math.floor(Date.now() / 1000) + expiresIn,
 	}
-	const base = origin(flags, 'iam-url', 'FABRIKA_IAM_RPC_URL', env, 'IAM')
+	const base = credentialOrigin(flags.values.get('iam-url') ?? env['FABRIKA_IAM_RPC_URL'], IAM_ORIGIN)
 	const response = await fetch(`${base}/rpc/issueKey`, {
 		method: 'POST',
 		headers: { authorization: `Bearer ${secret('FABRIKA_IAM_RPC_KEY', env)}`, 'content-type': 'application/json' },
 		body: JSON.stringify(body),
+		// A followed 307/308 would re-send the provisioning key to wherever it points.
+		redirect: 'manual',
 	}).catch((cause: unknown) => {
 		throw new Error(unreachableIam(base, cause))
 	})
+	if (response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400)) {
+		throw new Error(`IAM answered with a redirect (HTTP ${response.status}), which is not followed. ${IAM_ORIGIN.hint}`)
+	}
 	if (!response.ok) {
 		// The body can quote what came off the wire, so report the status and nothing else.
 		throw new Error(`IAM refused the issue request: HTTP ${response.status}`)

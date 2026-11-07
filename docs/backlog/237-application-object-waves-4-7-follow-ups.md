@@ -32,7 +32,7 @@ item 1 needs an oblaka release first.
    Control makes an older CLI refuse the whole answer (`packages/cli/src/env.ts`). Fix idea: a lenient projection of
    the known fields for the CLI, keeping the app-side wire strict.
 5. `packages/cli/src/connect.ts` keeps its own looser origin rule (`.+\.localhost`, only `127.0.0.1`); share
-   `controlOrigin` from `control.ts`.
+   `credentialOrigin` from `control.ts`.
 6. A caller with only data permissions reaches the console's data view by direct link only; no page they can load
    lists environments.
 
