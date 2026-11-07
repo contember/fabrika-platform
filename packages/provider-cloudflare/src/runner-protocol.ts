@@ -88,6 +88,13 @@ export const runnerApprovedAccessSchema = z.object({
 /** Where the runner leaves the job's `RunnerApprovedAccess` as JSON for the executor — beside the checkout, never inside it. */
 export const APPROVED_ACCESS_FILE_ENV = 'FABRIKA_APPROVED_ACCESS_FILE'
 
+/**
+ * Where the runner leaves the job's secrets, vars and managed environment as one JSON object of names to values, beside
+ * the checkout and never inside it. Those names are the application's own, so they never enter the executor's process
+ * environment: there a name could steer the runtime that holds the account credential, or replace the credential.
+ */
+export const DEPLOY_VALUES_FILE_ENV = 'FABRIKA_DEPLOY_VALUES_FILE'
+
 /** The terminal and in-progress status polled from the container, and persisted by the runner Worker once terminal. */
 export const runnerStatusSchema = z.object({
 	runId: z.string(),
