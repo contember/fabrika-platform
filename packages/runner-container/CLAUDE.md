@@ -17,7 +17,10 @@ bun run docker:smoke
 
 ## Invariants
 
-- Pass credentials, secrets, vars, and state namespace through child environment variables only.
+- Pass credentials and the state namespace through the executor's environment. Pass secrets, vars and managed values
+  in `$FABRIKA_DEPLOY_VALUES_FILE` (`<workspace>/<runId>.values.json`, mode 0600, removed after the deploy step), never
+  in any child's environment: their names are the application's, and a name such as a runtime's options variable or
+  `CLOUDFLARE_API_TOKEN` would steer or re-credential the process that holds the account token.
 - Never put secret values on argv or in logs.
 - Redact a log line only after it is assembled across chunk boundaries — a pipe read cuts credentials in half.
 - Put `--` before the positionals of every `git` invocation; job strings are attacker-controlled.

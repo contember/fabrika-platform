@@ -64,6 +64,23 @@ const CANCELLED = 'deploy cancelled'
 /** Every credential the platform hands the executor. The checkout's own build step must inherit none of them. */
 const PLATFORM_CREDENTIAL_NAMES: readonly string[] = ['CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_ACCOUNT_ID', 'FABRIKA_IAM_PROVISIONING_KEY']
 
+/**
+ * What the checkout's build step gets of the run's values, over what it inherits: the secrets and vars the checkout's
+ * config declares and the managed environment, as the runner once handed them through the executor's environment. An
+ * undeclared name a secret's author chose never reaches it, and no value replaces a platform credential name.
+ */
+const buildEnvironment = (run: CloudflareDeployRun): Record<string, string> => {
+	const env: Record<string, string> = {}
+	for (const [name, value] of Object.entries(run.secrets)) env[name] = value
+	for (const [name, value] of Object.entries(run.vars)) env[name] = value
+	for (const name of Object.keys(run.managedEnvironment)) {
+		const value = managedValue(run.managedEnvironment, name)
+		if (value !== null) env[name] = value
+	}
+	for (const name of PLATFORM_CREDENTIAL_NAMES) delete env[name]
+	return env
+}
+
 const workerDir = (config: CloudflareAppConfig, cwd: string): string => resolve(cwd, config.pipeline?.workerDir ?? '.')
 
 /** The KV namespace oblaka keeps deploy state in. One definition, so the check and the call cannot drift. */
@@ -226,8 +243,9 @@ const isWithin = (root: string, dir: string): boolean => {
 }
 
 /**
- * The executor's environment carries the application's and the managed secrets, and the CLI is checkout code whose
- * failed output reaches the log: it inherits nothing and gets only `ENTRY_BUILD_VARIABLES`.
+ * The executor's environment carries the platform credentials and the run the application's and the managed secrets,
+ * and the CLI is checkout code whose failed output reaches the log: it inherits nothing and gets only
+ * `ENTRY_BUILD_VARIABLES`.
  */
 const entryBuildEnvironment = (): { readonly env: Record<string, string>; readonly omitEnv: readonly string[] } => {
 	const env: Record<string, string> = {}
@@ -552,7 +570,14 @@ const runStep = async (spec: CloudflareStep, env: StepEnv): Promise<void> => {
 				run.log(`  [dry-run] would run build: \`${build}\` in ${dir}`)
 			} else if (build !== undefined) {
 				assertRunning(signal)
-				const result = await cf.runCommand({ command: 'sh', args: ['-c', build], cwd: dir, omitEnv: PLATFORM_CREDENTIAL_NAMES, signal })
+				const result = await cf.runCommand({
+					command: 'sh',
+					args: ['-c', build],
+					cwd: dir,
+					env: buildEnvironment(run),
+					omitEnv: PLATFORM_CREDENTIAL_NAMES,
+					signal,
+				})
 				if (result.exitCode !== 0) throw commandError(`build (\`${build}\`)`, result)
 			}
 			if (env.entryBuild !== null) await buildEntry(env.entryBuild, run, cf)

@@ -9,6 +9,7 @@ import {
 	applicationObjectsSchema,
 	APPROVED_ACCESS_FILE_ENV,
 	CROSS_ORIGINS_ENV,
+	DEPLOY_VALUES_FILE_ENV,
 	INSTALLATION_APPS_ENV,
 	OPERATIONS_ORIGIN_ENV,
 	type RunnerApprovedAccess,
@@ -23,10 +24,13 @@ const requiredEnvironmentValue = (name: string): string => {
 	return value
 }
 
-const declaredValues = (names: readonly string[] | undefined): Record<string, string> => {
+/** Where the executor looks up an application-authored name: the runner's values file, or the environment outside a runner. */
+export type DeployValueLookup = (name: string) => string | undefined
+
+const declaredValues = (names: readonly string[] | undefined, lookup: DeployValueLookup): Record<string, string> => {
 	const values: Record<string, string> = {}
 	for (const name of names ?? []) {
-		const value = environmentValue(name)
+		const value = lookup(name)
 		if (value !== undefined && value !== '') {
 			values[name] = value
 		}
@@ -36,10 +40,12 @@ const declaredValues = (names: readonly string[] | undefined): Record<string, st
 
 const environmentValue = (name: string): string | undefined => process.env[name]
 
-const requiredValues = (names: readonly string[] | undefined): Record<string, string> => {
+const requiredValues = (names: readonly string[] | undefined, lookup: DeployValueLookup): Record<string, string> => {
 	const values: Record<string, string> = {}
 	for (const name of names ?? []) {
-		values[name] = requiredEnvironmentValue(name)
+		const value = lookup(name)
+		if (value === undefined || value === '') throw new Error(`Missing ${name} value`)
+		values[name] = value
 	}
 	return values
 }
@@ -131,6 +137,32 @@ export const readApprovedAccess = async (path: string | undefined): Promise<Runn
 	return access.data
 }
 
+/**
+ * The lookup for application-authored names. A runner names its values file in `FABRIKA_DEPLOY_VALUES_FILE`, and then
+ * every secret, var and managed value comes from that file alone, never from the process environment; a deploy outside a
+ * runner reads them from the environment. A file that is unreadable or malformed fails the deploy. Values never reach
+ * an error message.
+ */
+export const readDeployValues = async (path: string | undefined): Promise<DeployValueLookup> => {
+	if (path === undefined || path === '') return environmentValue
+	let decoded: unknown
+	try {
+		decoded = JSON.parse(await readFile(path, 'utf8'))
+	} catch {
+		throw new Error(`${DEPLOY_VALUES_FILE_ENV} does not name a readable JSON file`)
+	}
+	if (typeof decoded !== 'object' || decoded === null || Array.isArray(decoded)) {
+		throw new Error(`${DEPLOY_VALUES_FILE_ENV} does not hold an object of names to values`)
+	}
+	// A Map, so a name such as `__proto__` stays a name.
+	const values = new Map<string, string>()
+	for (const [name, value] of Object.entries(decoded)) {
+		if (typeof value !== 'string') throw new Error(`${DEPLOY_VALUES_FILE_ENV} does not hold an object of names to values`)
+		values.set(name, value)
+	}
+	return (name) => values.get(name)
+}
+
 /** The approved access as the deployer takes it: the contract Control read at the commit, and its application's digest. */
 const approvedRun = (access: RunnerApprovedAccess | undefined): { readonly approved?: RunnerApprovedAccess } =>
 	access === undefined ? {} : { approved: access }
@@ -159,11 +191,12 @@ export interface CloudflareCommandDeployOptions {
 	readonly log?: (line: string) => void
 }
 
-/** Deploy one config with the account credentials, declared secrets and vars read from the environment. */
+/** Deploy one config with the account credentials from the environment, and declared secrets and vars from `readDeployValues`. */
 export const deployCloudflareConfig = async (options: CloudflareCommandDeployOptions): Promise<CloudflareDeployResult> => {
 	const cwd = options.cwd ?? process.cwd()
 	// Before the config runs: loading it executes the checkout's code.
 	const approved = approvedRun(await readApprovedAccess(environmentValue(APPROVED_ACCESS_FILE_ENV)))
+	const authored = await readDeployValues(environmentValue(DEPLOY_VALUES_FILE_ENV))
 	const loaded = await loadCloudflareCommandConfig(options.configPath ?? './fabrika.config.ts', cwd)
 	const deploy = createCloudflareDeployer({
 		accountId: requiredEnvironmentValue('CLOUDFLARE_ACCOUNT_ID'),
@@ -190,10 +223,10 @@ export const deployCloudflareConfig = async (options: CloudflareCommandDeployOpt
 		cwd: loaded.cwd,
 		configPath: loaded.absolutePath,
 		...(options.stateNamespace === undefined ? {} : { stateNamespace: options.stateNamespace }),
-		secrets: declaredValues(loaded.config.pipeline?.secrets),
-		vars: declaredValues(loaded.config.pipeline?.vars),
+		secrets: declaredValues(loaded.config.pipeline?.secrets, authored),
+		vars: declaredValues(loaded.config.pipeline?.vars, authored),
 		// The runner hands what Control handed its job; parsed here, where it enters the executor.
-		managedEnvironment: parseManagedEnvironment(requiredValues(options.managedVarNames)),
+		managedEnvironment: parseManagedEnvironment(requiredValues(options.managedVarNames, authored)),
 		dryRun: options.dryRun ?? false,
 		signal: options.signal ?? new AbortController().signal,
 		log: options.log ?? ((line) => console.log(line)),

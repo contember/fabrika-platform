@@ -1,12 +1,19 @@
 import type { RunLogLine } from '@fabrika/control-contract'
 import type { CloudflareRunnerJob, RunnerStatus } from '@fabrika/provider-cloudflare/runner'
-import { describe, expect, test } from 'bun:test'
+import { afterAll, describe, expect, test } from 'bun:test'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { RunnerEnv, SpawnHandlers, SpawnResult, SpawnSpec } from '../runner'
 import { createServer } from '../server'
 import { createSpawner } from '../spawn'
 
 // Drive the job protocol through the server's request handler — no real socket. Proves POST /run,
 // GET /logs (NDJSON), GET /status, and the 409-on-double-run guard.
+
+// A real directory: the runner writes the executor's values file into it, beside the checkout.
+const WORKSPACE = mkdtempSync(join(tmpdir(), 'fabrika-runner-server-'))
+afterAll(() => rmSync(WORKSPACE, { recursive: true, force: true }))
 
 const job: CloudflareRunnerJob = {
 	runId: '0198c4a2-7b31-7e44-9a55-0b1c2d3e4f50',
@@ -21,7 +28,7 @@ const job: CloudflareRunnerJob = {
 
 /** Env whose spawner emits one stdout line per step, all succeeding. */
 const makeEnv = (): RunnerEnv => ({
-	workspace: '/workspace',
+	workspace: WORKSPACE,
 	spawn: async (spec: SpawnSpec, handlers: SpawnHandlers): Promise<SpawnResult> => {
 		handlers.onStdout(`output from ${spec.command} with tok-abcdef\n`)
 		return { exitCode: 0 }
@@ -46,7 +53,7 @@ const waitTerminal = async (server: ReturnType<typeof createServer>): Promise<vo
 describe('runner server protocol', () => {
 	test('the active run owns the parsed job rather than the mutable request object', async () => {
 		const gate = Promise.withResolvers<SpawnResult>()
-		const server = createServer({ workspace: '/workspace', spawn: () => gate.promise })
+		const server = createServer({ workspace: WORKSPACE, spawn: () => gate.promise })
 		const input = { ...job }
 		const request = Object.assign(post(job), { json: async () => input })
 		expect((await server.handle(request)).status).toBe(202)
@@ -73,7 +80,7 @@ describe('runner server protocol', () => {
 	test('a legacy mutable non-dry job is refused before creating a runner or spawning Git', async () => {
 		const commands: string[] = []
 		const server = createServer({
-			workspace: '/workspace',
+			workspace: WORKSPACE,
 			spawn: async (spec) => {
 				commands.push(spec.command)
 				return { exitCode: 0 }
@@ -86,7 +93,7 @@ describe('runner server protocol', () => {
 
 	test('a second concurrent /run → 409', async () => {
 		const server = createServer({
-			workspace: '/workspace',
+			workspace: WORKSPACE,
 			// A spawner that never resolves the first step keeps the run in-flight.
 			spawn: () => new Promise<SpawnResult>(() => {}),
 		})
@@ -96,7 +103,7 @@ describe('runner server protocol', () => {
 
 	test('a rejected spawn closes live /logs even when the error observer throws', async () => {
 		const failure = Promise.withResolvers<SpawnResult>()
-		const server = createServer({ workspace: '/workspace', spawn: () => failure.promise })
+		const server = createServer({ workspace: WORKSPACE, spawn: () => failure.promise })
 		await server.handle(post(job))
 		let observedTerminal = false
 		server.current()?.subscribe((line) => {
@@ -153,7 +160,7 @@ describe('runner server protocol', () => {
 				},
 			}
 		})
-		const server = createServer({ workspace: '/workspace', spawn })
+		const server = createServer({ workspace: WORKSPACE, spawn })
 		await server.handle(post(job))
 		const text = (await server.handle(new Request('http://container/logs'))).text()
 		if (failPipe === undefined) throw new Error('child pipe not initialized')
