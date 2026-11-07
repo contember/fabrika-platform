@@ -1,7 +1,7 @@
 import { type AnnotationHost, useAnnotationHost } from '@fabrika/annotations/runtime'
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { localUploadResponseSchema, sharedUploadResponseSchema } from './schemas'
-import { autoResizeTextarea, hostAcceptsUploads } from './utils'
+import { localUploadResponseSchema, sharedUploadResponseSchema, uploadErrorResponseSchema } from './schemas'
+import { ATTACHABLE_IMAGE_REFUSED, ATTACHABLE_IMAGE_TYPES, autoResizeTextarea, hostAcceptsUploads } from './utils'
 
 interface AnnotationEditorProps {
 	note: string
@@ -38,20 +38,25 @@ export function imageToUrl(path: string): string {
 	return `/api/uploads/${filename}`
 }
 
-async function uploadImage(host: AnnotationHost, file: File): Promise<string | null> {
+type UploadResult = { path: string } | { error: string }
+
+async function uploadImage(host: AnnotationHost, file: File): Promise<UploadResult> {
 	const endpoint = host.uploadUrl
-	if (!endpoint) return null
+	if (!endpoint) return { error: 'Uploads are not available here' }
 	const formData = new FormData()
 	formData.append('image', file)
 	try {
 		const resp = await fetch(endpoint(), { method: 'POST', body: formData })
 		const data: unknown = await resp.json()
+		if (!resp.ok) {
+			const refused = uploadErrorResponseSchema.safeParse(data)
+			return { error: refused.success ? refused.data.error : `Upload failed (HTTP ${resp.status})` }
+		}
 		// Local daemon returns { path }; worker returns { url }. Normalise to
 		// a single string that `imageToUrl` can resolve.
-		if (host.isShared) return sharedUploadResponseSchema.parse(data).url || null
-		return localUploadResponseSchema.parse(data).path || null
+		return { path: host.isShared ? sharedUploadResponseSchema.parse(data).url : localUploadResponseSchema.parse(data).path }
 	} catch {
-		return null
+		return { error: 'Upload failed' }
 	}
 }
 
@@ -81,6 +86,7 @@ export function AnnotationEditor({
 	const canAttach = !readOnly && hostAcceptsUploads(host)
 	const [isDragging, setIsDragging] = useState(false)
 	const [isUploading, setIsUploading] = useState(false)
+	const [uploadError, setUploadError] = useState<string | null>(null)
 	const [isFocused, setIsFocused] = useState(false)
 	const dragCounter = useRef(0)
 	const internalRef = useRef<HTMLTextAreaElement | null>(null)
@@ -106,11 +112,16 @@ export function AnnotationEditor({
 	}, [autoFocus])
 
 	const doUpload = useCallback(async (file: File) => {
-		if (!file.type.startsWith('image/')) return
+		if (!ATTACHABLE_IMAGE_TYPES.includes(file.type)) {
+			setUploadError(ATTACHABLE_IMAGE_REFUSED)
+			return
+		}
+		setUploadError(null)
 		setIsUploading(true)
 		try {
-			const path = await uploadImage(host, file)
-			if (path) onAddImage(path)
+			const result = await uploadImage(host, file)
+			if ('path' in result) onAddImage(result.path)
+			else setUploadError(result.error)
 		} finally {
 			setIsUploading(false)
 		}
@@ -211,7 +222,7 @@ export function AnnotationEditor({
 				<input
 					ref={fileInputRef}
 					type="file"
-					accept="image/*"
+					accept={ATTACHABLE_IMAGE_TYPES.join(',')}
 					multiple
 					style={{ display: 'none' }}
 					onChange={(e) => {
@@ -288,6 +299,20 @@ export function AnnotationEditor({
 					}}
 				>
 					Uploading...
+				</div>
+			)}
+
+			{uploadError && (
+				<div
+					role="alert"
+					style={{
+						fontSize: '11px',
+						color: 'var(--color-accent-red)',
+						fontFamily: "'Inter', sans-serif",
+						marginTop: '4px',
+					}}
+				>
+					{uploadError}
 				</div>
 			)}
 

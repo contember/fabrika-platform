@@ -37,3 +37,4 @@ export const annotationStateSchema = z.object({
 
 export const localUploadResponseSchema = z.object({ path: z.string() })
 export const sharedUploadResponseSchema = z.object({ url: z.string() })
+export const uploadErrorResponseSchema = z.object({ error: z.string() })

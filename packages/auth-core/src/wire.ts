@@ -65,7 +65,8 @@ export function proxySecretVariable(id: string): string {
 
 /**
  * The variable holding the secret the platform proxy sends IAM's installation entry in `PROXY_SECRET_HEADER`. The proxy
- * and IAM hold it under this one name. It proves only who wrote IAM's client-address and request-id headers.
+ * and IAM hold it under this one name. It proves only who wrote IAM's request-id header; IAM keys every request without
+ * it on one shared client bucket.
  */
 export const IAM_PROXY_SECRET_VARIABLE = 'FABRIKA_INSTALLATION_PROXY_SECRET_IAM'
 

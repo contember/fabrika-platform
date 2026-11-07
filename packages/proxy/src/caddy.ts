@@ -385,7 +385,7 @@ function proxySecretVariableOf(app: ProxyApp, ownsIamSession: boolean): string |
  *      request time through `{env.…}`, so the secret is in no generated file (ADR-0022 rule 5). An unset
  *      variable sends an empty secret, which the application refuses. An entry with `upstreamHost` sends it as `Host`
  *      in place of the client's (a dev sandbox, which the Box router routes by `Host`). IAM's own route sets the secret from
- *      `IAM_PROXY_SECRET_VARIABLE`, which proves only who wrote the client address and request id; IAM refuses
+ *      `IAM_PROXY_SECRET_VARIABLE`, which proves only who wrote the request id; IAM refuses
  *      nothing without it (`packages/iam/src/proxy-proof.ts`). A contract app's answer then gets
  *      the header policy, replacing whatever the app set; a download endpoint's gets the file treatment
  *      instead (`contractUpstream`).

@@ -25,6 +25,7 @@
  * For deployment instructions see packages/canvas-share/README.md.
  */
 
+import { parseUploadImage, UPLOAD_IMAGE_REFUSED, uploadServeHeaders } from 'agent-canvas/upload-image'
 import { handleCreateReviewProject, matchReviewPath, reviewProjectStub } from './review'
 import type { Env, FeedbackEntry, ShareRecord } from './types'
 import { LIMITS } from './types'
@@ -239,6 +240,9 @@ async function handleSubmitFeedback(shareId: string, req: Request, env: Env): Pr
 }
 
 async function handleListFeedback(shareId: string, req: Request, env: Env): Promise<Response> {
+	const record = await loadRecord(shareId, env)
+	if (!record) return json({ error: 'Share not found or expired' }, { status: 404 })
+
 	const url = new URL(req.url)
 	const since = url.searchParams.get('since') || ''
 
@@ -302,11 +306,9 @@ async function handleRevokeShare(shareId: string, req: Request, env: Env): Promi
 		return json({ error: 'Unauthorized' }, { status: 401 })
 	}
 
-	// Delete payload + record + canvas files. Uploads and feedback are left
-	// to expire via TTL — fully purging them on revoke would require listing
-	// all R2 keys, which is expensive. Marking the record as deleted is
-	// sufficient because every load goes through `loadRecord` which would
-	// 404 once the record is gone.
+	// Deleting the record revokes the share: every route of a share, feedback list and uploads included, answers
+	// 404 without it. Feedback entries stay in KV until their TTL; uploads past the first list page stay in R2.
+	await env.BLOBS.delete(`shares/${shareId}/record.json`)
 	const prefix = `shares/${shareId}/`
 	const list = await env.BLOBS.list({ prefix })
 	await Promise.all(list.objects.map((o) => env.BLOBS.delete(o.key)))
@@ -334,27 +336,27 @@ async function handleUpload(shareId: string, req: Request, env: Env, origin: str
 	if (!(file instanceof File)) {
 		return json({ error: 'No image provided' }, { status: 400 })
 	}
-	if (!file.type.startsWith('image/')) return json({ error: 'Not an image' }, { status: 400 })
 	if (file.size > LIMITS.UPLOAD_BYTES) {
 		return json({ error: 'Image too large' }, { status: 413 })
 	}
 
 	// Content-addressed storage so duplicate uploads dedupe.
 	const bytes = new Uint8Array(await file.arrayBuffer())
+	const image = parseUploadImage(bytes)
+	if (!image) return json({ error: UPLOAD_IMAGE_REFUSED }, { status: 400 })
 	const hashBuf = await crypto.subtle.digest('SHA-256', bytes)
 	const hashHex = Array.from(new Uint8Array(hashBuf), (b) => b.toString(16).padStart(2, '0'))
 		.join('')
 		.slice(0, 32)
-	const ext = (file.name.split('.').pop() || 'png').toLowerCase().replace(/[^a-z0-9]/g, '')
-	const key = `shares/${shareId}/uploads/${hashHex}.${ext}`
+	const filename = `${hashHex}.${image.extension}`
 
-	await env.BLOBS.put(key, bytes, {
-		httpMetadata: { contentType: file.type },
+	await env.BLOBS.put(`shares/${shareId}/uploads/${filename}`, bytes, {
+		httpMetadata: { contentType: image.type },
 	})
 
 	return json({
-		url: `${origin}/s/${shareId}/uploads/${hashHex}.${ext}`,
-		mime: file.type,
+		url: `${origin}/s/${shareId}/uploads/${filename}`,
+		mime: image.type,
 	})
 }
 
@@ -362,12 +364,16 @@ async function handleUploadServe(shareId: string, filename: string, env: Env): P
 	if (filename.includes('/') || filename.includes('..')) {
 		return json({ error: 'Invalid filename' }, { status: 400 })
 	}
+	const record = await loadRecord(shareId, env)
+	if (!record) return json({ error: 'Not found or expired' }, { status: 404 })
+
 	const obj = await env.BLOBS.get(`shares/${shareId}/uploads/${filename}`)
 	if (!obj) return json({ error: 'Not found' }, { status: 404 })
 	return new Response(obj.body, {
 		headers: {
-			'Content-Type': obj.httpMetadata?.contentType || 'application/octet-stream',
-			'Cache-Control': 'public, max-age=86400',
+			...uploadServeHeaders(obj.httpMetadata?.contentType),
+			// Private and short, so no shared cache keeps serving an upload after its share is revoked.
+			'Cache-Control': 'private, max-age=300',
 			...CORS_HEADERS,
 		},
 	})

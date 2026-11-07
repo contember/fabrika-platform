@@ -152,27 +152,35 @@ password-derivation work until a bucket blocks; blocked requests skip the
 expensive derivation.
 
 A successful password login also sets a signed known-device cookie,
-`__Host-fabrika_device` (`HttpOnly`, `SameSite=Lax`, 90 days), naming the principal
-and a random device id. A later login that presents a valid one for the SAME
-principal it targets skips the account and deployment-wide buckets and spends a
-bucket of its own instead: 10 failures in 15 minutes, after which the cookie
-stops exempting until the block passes. Its failures do not count against the
-account. A missing, forged, expired or other principal's cookie changes nothing.
-So a client that fills the account or deployment-wide bucket cannot lock out a
-user signing in again from a browser that signed in before.
+`__Host-fabrika_device` (`HttpOnly`, `SameSite=Lax`, 90 days), naming the
+principal and a random device id. A later login that presents a valid one for
+the SAME principal it targets skips the client, account and deployment-wide
+buckets and spends a bucket of its own instead: 10 attempts in 15 minutes, after
+which the cookie stops exempting until the block passes. Like the client bucket,
+that bucket records the attempt before the password is checked and decides from
+the row it wrote, so a parallel burst with one cookie gets no more than 10
+checks; a successful login clears it. Its attempts count against none of the
+three. A missing, forged, expired or other principal's cookie changes nothing.
+So a client that fills any of those buckets cannot lock out a user signing in
+again from a browser that signed in before.
 
 Login and recovery each have a third bucket, keyed on a hash of the client
 address, so one client cannot exhaust the deployment-wide bucket and deny the
 installation. IAM does not derive that address: the composition root names the
-one header its own ingress overwrites — `CF-Connecting-IP` on Cloudflare, where
-IAM sits behind the edge, and `X-Fabrika-Client-Ip` on the Bun target, where the
-proxy writes it after deleting the caller's. An installation whose ingress
-cannot see the client names no header and keeps only the account and
-deployment-wide buckets. On Zerops that is the current state: behind the
-shared IPv4 the project balancer forwards no IPv4 client's address and keeps a
-caller-supplied `X-Forwarded-For` prefix
+one header its own ingress overwrites with the client's address —
+`CF-Connecting-IP` on Cloudflare, where IAM sits behind the edge. An IPv6 client
+counts by its /64, since one subscriber may hold every address of it; the
+application runtime's client buckets use the same rule (`clientAddressKey` in
+`@fabrika/auth-core`). An installation whose ingress cannot see the client names
+no header and keeps only the account and deployment-wide buckets. The Bun target
+on Zerops is one: behind the shared IPv4 the project balancer forwards no IPv4
+client's address and keeps a caller-supplied `X-Forwarded-For` prefix
 ([platform facts](zerops-platform.md#public-access)), so `trusted_proxies` is
-unset and every client shares the balancer's bucket.
+unset and the proxy's `X-Fabrika-Client-Ip` is the balancer for every client.
+Keyed on it, the client bucket would be one installation-wide bucket that also
+caps workload-token minting, so the Bun root names no header. A request on IAM's
+port without the installation's proxy secret still shares one client bucket
+(ADR-0022).
 
 Unlike the other two, the client bucket counts every attempt rather than every
 failure, decides admission from the returned row of the statement that records

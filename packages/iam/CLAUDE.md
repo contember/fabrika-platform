@@ -61,25 +61,27 @@ fails if that stops being true — it is the guard, not documentation of one.
 - **IAM NEVER PICKS THE HEADER ITS CLIENT COORDINATE COMES FROM** (`src/client-address.ts`). Behind a
   balancer its socket peer is the balancer, and a forwarding header a caller can write is worse than
   no limiter because it looks like protection (backlog 21, 49). So each composition root names the one
-  header its own ingress overwrites — `CF-Connecting-IP` in `src/index.ts` (the Worker holds its own
-  Custom Domain, so the hop in front of it is Cloudflare's edge), `X-Fabrika-Client-Ip` in
-  `src/node/server.ts` (the Caddy proxy writes it after deleting the caller's) — and shared code reads
-  that one and nothing else. **Naming none is supported and means no per-client bucket at all**, never a
-  guess. Never name a header the ingress does not overwrite.
+  header its own ingress overwrites with the client's address — `CF-Connecting-IP` in `src/index.ts` (the
+  Worker holds its own Custom Domain, so the hop in front of it is Cloudflare's edge) — and shared code reads
+  that one and nothing else, through `clientAddressKey` (`@fabrika/auth-core`: an IPv6 client by its /64, the
+  application runtime's rule). **Naming none is supported and means no per-client bucket at all**, never a
+  guess. `src/node/server.ts` names none: behind the Zerops balancer the proxy's `X-Fabrika-Client-Ip` is the
+  balancer for every client, and a bucket keyed on it is one installation-wide bucket. Never name a header the
+  ingress does not overwrite with the client's own address.
 - **THE AUDIT CORRELATION ID FOLLOWS THE SAME RULE** (`src/request-id.ts`). The root names the header:
   `cf-ray` in `src/index.ts` (no proxy strips a caller's `X-Request-Id` in front of the Worker),
   `X-Request-Id` in `src/node/server.ts` (the proxy deletes and re-injects it). Naming none means a
   generated id. Any value — header or `IamRpc` `requestId` (`src/rpc.ts`) — must pass
   `acceptRequestId` (≤ 64 chars, `[A-Za-z0-9._:-]`) or it is REPLACED by a generated id, never
   truncated and never refused. No unvalidated caller string reaches `auth_log` or `audit_events`.
-- **ON THE BUN ROOT BOTH HEADERS COUNT ONLY BESIDE THE PROXY'S SECRET** (`src/proxy-proof.ts`). IAM is not
+- **ON THE BUN ROOT THE REQUEST ID COUNTS ONLY BESIDE THE PROXY'S SECRET** (`src/proxy-proof.ts`). IAM is not
   publicly routed, but anything on the platform project's private network can reach its port. So the platform
   proxy sends `X-Fabrika-Proxy-Secret` on IAM's route (the session owner's, from
   `FABRIKA_INSTALLATION_PROXY_SECRET_IAM`), and IAM holds the same variable. A request without a matching secret
   (digests compared in constant time) keys its client bucket on the one shared `UNPROVEN_CLIENT_ADDRESS` and gets
   a generated request id. **It is attribution, not an enforcement decision: a missing secret is never a refusal by
-  itself**, though the shared bucket refuses once exhausted, as the balancer's one bucket does today. An unset variable turns the check off, so the Worker root, the local stack before a reset and an
-  installation before the deploy that writes the secret behave as before. The console's admin hop through
+  itself**, though the shared bucket refuses once exhausted. An unset variable turns the check off, so the Worker
+  root, the local stack before a reset and an installation before the deploy that writes the secret behave as before. The console's admin hop through
   Control carries no secret, so its audit rows get a generated id. A short value fails the boot like the
   transport keys. The Zerops deploy derives the value from `FABRIKA_IAM_PROVISIONING_KEY` (ADR-0022 rule 5).
 - **The per-client bucket decides admission from the RETURNING of the statement that increments it.**
@@ -88,12 +90,14 @@ fails if that stops being true — it is the guard, not documentation of one.
   whose job is to bound a burst. It counts every attempt (a decision taken before the work cannot know
   the outcome) and a successful login does not clear it — `clearLoginFailures` is the account key
   only, or one valid credential would zero the bucket between bursts.
-- **A known-device cookie exempts a password login from the account and deployment-wide buckets, and from nothing
-  else** (`auth/known-device.ts`, `Signer.signInternal`, audience `fabrika:iam:known-device`). It is
+- **A known-device cookie exempts a password login from the client, account and deployment-wide buckets**
+  (`auth/known-device.ts`, `Signer.signInternal`, audience `fabrika:iam:known-device`). It is
   `__Host-fabrika_device` (outside the `__Host-px_` prefix the Caddy proxy strips upstream), set only on a recorded password login, and exempts only a login for the principal it names. That
-  login spends the device's own bucket instead (`password-login:device:<id>`, 10 / 15 min); once it blocks, the attempt
-  is throttled as if no cookie were sent. The per-client bucket still applies. Those two buckets are keyed on a value
-  anyone can pick, so without the exemption one client locks out a known account, or every password user on Zerops.
+  login spends the device's own bucket instead (`password-login:device:<id>`, 10 / 15 min), taken atomically before the
+  check like the client bucket and cleared by a successful login; once it blocks, the attempt is throttled as if no
+  cookie were sent. A known device's attempt is not recorded in the other three. They are keyed
+  on a value anyone can pick or share, so without the exemption one client locks out a known account, or every password
+  user behind one address.
 - **ONE MAILBOX RULE. `principals.email` is the NORMALIZED mailbox and nothing else; the spelling a
   human or an IdP used lives in `label`.** `PrincipalRepository` is the only place that applies
   `normalizeEmailIdentity`, so every caller may hand it any spelling, and every comparison is plain
@@ -376,7 +380,7 @@ fails if that stops being true — it is the guard, not documentation of one.
   and with no "holds what it grants" rule, because nothing granted there reaches the
   installation; an action on a principal (`principals.update`, `sessions.revoke`/`sessions.revokeAll`, `passwords.*`) only when every active
   grant of that principal is one it could have written, and never on a service or a bootstrap mailbox
-  (`requireActableTarget`). Without an email sender it receives no manual password URL: an enrollment or a reset
+  (`requireActableTarget`); and never an invitation of a bootstrap mailbox, internal or external (`requireInvitableMailbox`). Without an email sender it receives no manual password URL: an enrollment or a reset
   answers 403, and only `iam.admin` receives one (`passwordDelivery`). Reads (`principals.list/get`, `sessions.list`, apps, roles, policies) are installation-wide
   (backlog 175). `apps.list` marks each platform audience `installation: true`. `user-admin.test.ts` is the witness, on
   both engines.
