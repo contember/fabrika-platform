@@ -13,7 +13,7 @@
 
 import { type JobQueue, uuidv7 } from '@fabrika/platform'
 import { type ControlRepositories } from '../../db'
-import { refMatches } from '../../ref-match'
+import { isWorkspaceRef, refMatches } from '../../ref-match'
 import type { DeployJobMessage } from '../../run-lifecycle'
 import { normalizeRepoUrl } from './push-event'
 
@@ -164,6 +164,11 @@ export async function pollPublicRepos(deps: PollDeps): Promise<PollSummary> {
 		const triggerRef = appEnv.trigger_ref
 		if (triggerRef === null) {
 			continue // defensive: the query already filters these out
+		}
+		if (isWorkspaceRef(triggerRef)) {
+			console.warn(`repo poll: skipped ${app.id}/${appEnv.env}: trigger ref "${triggerRef}" names a workspace branch, which only deploy_stage deploys`)
+			summary.skipped++
+			continue
 		}
 		const feedUrl = feedUrlFor(app.repo_url, triggerRef)
 		if (feedUrl === null) {

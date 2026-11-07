@@ -1489,6 +1489,26 @@ describe('trigger refs are stored in their full form', () => {
 		expect(await deps.repositories.registry.getApp('acme')).toBeNull()
 	})
 
+	test('a trigger ref under the workspace branches is a 400; one stored earlier still lists', async () => {
+		const { deps } = await withApp()
+		for (const workspace of ['fabrika/0190a1b2', 'refs/heads/fabrika/0190a1b2', 'refs/heads/fabrika/*', 'fabrika/*']) {
+			const response = await put(deps, 'stage', workspace)
+			expect(response.status).toBe(400)
+			expect(await response.json()).toMatchObject({ error: expect.stringContaining('deploy only through deploy_stage') })
+		}
+		expect(await deps.repositories.registry.getAppEnv('app', 'stage')).toBeNull()
+		// A glob that only reaches into the namespace is accepted: `refMatches` never lets it match a workspace branch.
+		expect((await put(deps, 'preview', 'refs/heads/*')).status).toBe(200)
+
+		// The webhook and the poller skip such a row (webhook.test.ts, poll.test.ts); reading it is unchanged.
+		await deps.repositories.registry.upsertAppEnv(storedEnvironment('app', 'stage', { triggerRef: 'refs/heads/fabrika/*' }))
+		const listed = await rpcResult(rpcRequest('apps.environments.list', { appId: 'app' }), deps)
+		expect(listed.status).toBe(200)
+		expect(await listed.json()).toMatchObject({
+			items: expect.arrayContaining([expect.objectContaining({ env: 'stage', triggerRef: 'refs/heads/fabrika/*' })]),
+		})
+	})
+
 	test('a bare name and its full ref are the same trigger ref, so a second environment cannot take either', async () => {
 		const { deps } = await withApp()
 		expect((await put(deps, 'prod', 'deploy/prod')).status).toBe(200)

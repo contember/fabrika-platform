@@ -87,7 +87,8 @@ An environment deploys on a push to its trigger ref: through the App's push webh
 without the App through a once-a-minute poll. Control stores the trigger ref as a full git ref, because a push names
 its ref in full and the match is exact. A bare name is a branch (`deploy/prod` is stored as `refs/heads/deploy/prod`);
 a tag needs `refs/tags/<tag>`, or a glob such as `refs/tags/v*`. An environment without a trigger ref deploys only
-when someone asks.
+when someone asks. The MCP workspace branches (`refs/heads/fabrika/…`) are not trigger refs: a trigger ref may not
+name them, and no glob matches them.
 
 ## The packages
 

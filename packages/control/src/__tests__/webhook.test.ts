@@ -245,6 +245,34 @@ describe('handleWebhook (HMAC + ref→env)', () => {
 		expect(queue.sent).toHaveLength(0)
 	})
 
+	test('a push to a workspace branch triggers no environment, whatever its glob; another branch still does', async () => {
+		const { db, sqlite } = createHarness()
+		const cloneUrl = 'https://github.com/acme/app.git'
+		insertConnection(sqlite, CONNECTION_ID, 'acme', 42)
+		await db.registry.createApp({ id: 'app', repoUrl: normalizeRepoUrl(cloneUrl), githubConnectionId: CONNECTION_ID, githubInstallationId: 42 })
+		await db.registry.upsertAppEnv(providerEnvironment('app', 'preview', { triggerRef: 'refs/heads/*' }))
+		// Stored directly: `canonicalTriggerRef` refuses this ref on every write path now.
+		await db.registry.upsertAppEnv(providerEnvironment('app', 'legacy', { triggerRef: 'refs/heads/fabrika/*' }))
+		const queue = makeQueue()
+		const push = async (ref: string) =>
+			handleWebhook(await pushWebhookRequest({ ref, cloneUrl, after: 'sha-ws', installationId: 42, secret: SECRET }), {
+				repositories: db,
+				verifier,
+				queue,
+				connectionId: CONNECTION_ID,
+			})
+
+		expect((await push('refs/heads/fabrika/0190a1b2-7c3d-7e4f-8a9b-0c1d2e3f4a5b')).status).toBe(204)
+		expect(queue.sent).toHaveLength(0)
+		expect(await db.runs.listRuns({ appId: 'app', limit: 10 })).toEqual([])
+
+		expect((await push('refs/heads/main')).status).toBe(200)
+		expect(await db.runs.listRuns({ appId: 'app', limit: 10 })).toEqual([
+			expect.objectContaining({ env: 'preview', ref: 'refs/heads/main', trigger: 'webhook' }),
+		])
+		expect(queue.sent).toHaveLength(1)
+	})
+
 	test('repo URL matching is normalized (registered https vs pushed .git/scp form both match)', async () => {
 		const { db, sqlite } = createHarness()
 		insertConnection(sqlite, CONNECTION_ID, 'acme', 42)

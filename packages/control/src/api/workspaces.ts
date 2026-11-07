@@ -13,6 +13,7 @@ import { parseClassification } from '../approval/publish'
 import { type AppEnvRow, type AppRow, type ControlRepositories, SourceBindingError, type WorkspaceRow } from '../db'
 import { logFailure } from '../error-label'
 import { parseGitHubRepo } from '../github/triggers/push-event'
+import { WORKSPACE_BRANCH_PREFIX } from '../ref-match'
 import {
 	type WorkspaceChangedFile,
 	WorkspaceSourceError,
@@ -25,7 +26,6 @@ import {
 import { ControlApiError, fail } from './domain'
 import { canAtCoordinates, createManualRun, type DeployQueue, getRunLogUseCase, getRunUseCase, type LogReader, toRunDto } from './runs'
 
-export const WORKSPACE_BRANCH_PREFIX = 'fabrika/'
 export const DEPLOYMENT_LOG_DEFAULT_LINES = 30
 export const DEPLOYMENT_LOG_MAX_LINES = 500
 const AUTHOR_NAME_MAX_LENGTH = 200

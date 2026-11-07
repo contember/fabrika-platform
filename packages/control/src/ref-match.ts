@@ -7,21 +7,32 @@
 /** The prefix of every stored trigger_ref: a push event and the poller name a ref in full. */
 const REF_PREFIX = 'refs/'
 
-/** A trigger ref that is no git ref; its message names the forms `canonicalTriggerRef` accepts. */
+/** The branch namespace of MCP workspaces (`fabrika/<workspace id>`, ADR-0049). */
+export const WORKSPACE_BRANCH_PREFIX = 'fabrika/'
+const WORKSPACE_REF_PREFIX = `refs/heads/${WORKSPACE_BRANCH_PREFIX}`
+
+/** A trigger ref `canonicalTriggerRef` refuses; its message says why. */
 export class TriggerRefValidationError extends Error {
-	constructor(readonly triggerRef: string) {
-		super(
-			`trigger ref "${triggerRef}" must be a branch name (deploy/prod, stored as refs/heads/deploy/prod) or a full ref `
-				+ '(refs/heads/<branch>, refs/tags/<tag>, or a * glob such as refs/tags/v*)',
-		)
+	constructor(readonly triggerRef: string, message = invalidTriggerRefMessage(triggerRef)) {
+		super(message)
 		this.name = 'TriggerRefValidationError'
 	}
+}
+
+function invalidTriggerRefMessage(triggerRef: string): string {
+	return `trigger ref "${triggerRef}" must be a branch name (deploy/prod, stored as refs/heads/deploy/prod) or a full ref `
+		+ '(refs/heads/<branch>, refs/tags/<tag>, or a * glob such as refs/tags/v*)'
+}
+
+/** A ref under the workspace branch namespace. Workspaces deploy only through `deploy_stage`, never on a push. */
+export function isWorkspaceRef(ref: string): boolean {
+	return ref.startsWith(WORKSPACE_REF_PREFIX)
 }
 
 /**
  * The stored form of a trigger ref. A full ref (`refs/…`) is kept; a bare name is a branch, `refs/heads/<name>`, because
  * `refMatches` compares against the full ref a push names. A tag needs its full form. Throws `TriggerRefValidationError`
- * for whitespace, a control character, or an empty path segment.
+ * for whitespace, a control character, an empty path segment, or a ref under the workspace branch namespace.
  */
 export function canonicalTriggerRef(value: string): string {
 	const canonical = value.startsWith(REF_PREFIX) ? value : `refs/heads/${value}`
@@ -29,6 +40,12 @@ export function canonicalTriggerRef(value: string): string {
 	// `refs`, a namespace (`heads`, `tags`, …), and at least one segment of the name.
 	if (segments.length < 3 || segments.includes('') || /[\s\p{Cc}]/u.test(canonical)) {
 		throw new TriggerRefValidationError(value)
+	}
+	if (isWorkspaceRef(canonical)) {
+		throw new TriggerRefValidationError(
+			value,
+			`trigger ref "${value}" names the workspace branches (${WORKSPACE_REF_PREFIX}…), which deploy only through deploy_stage`,
+		)
 	}
 	return canonical
 }
@@ -41,9 +58,13 @@ export function isRefPattern(triggerRef: string): boolean {
 /**
  * Does a concrete git ref match an env's `trigger_ref`? Exact string equality unless the trigger_ref is
  * a glob, where `*` matches any run of characters. The literal `refs/heads/` or `refs/tags/` prefix is
- * preserved, so a tag pattern (`refs/tags/v*`) never matches a branch ref and vice versa.
+ * preserved, so a tag pattern (`refs/tags/v*`) never matches a branch ref and vice versa. A workspace
+ * branch matches no trigger_ref, also one stored before `canonicalTriggerRef` refused that namespace.
  */
 export function refMatches(triggerRef: string, ref: string): boolean {
+	if (isWorkspaceRef(ref)) {
+		return false
+	}
 	if (!isRefPattern(triggerRef)) {
 		return triggerRef === ref
 	}

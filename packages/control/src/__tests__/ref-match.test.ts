@@ -20,6 +20,15 @@ describe('canonicalTriggerRef', () => {
 			expect(() => canonicalTriggerRef(invalid)).toThrow(TriggerRefValidationError)
 		}
 	})
+
+	test('a ref under the workspace branches is refused, bare or full, exact or a glob', () => {
+		for (const workspace of ['fabrika/0190a1b2', 'fabrika/*', 'refs/heads/fabrika/0190a1b2', 'refs/heads/fabrika/*']) {
+			expect(() => canonicalTriggerRef(workspace)).toThrow(TriggerRefValidationError)
+		}
+		// Only the branch namespace: a neighbouring branch and a tag of that name are ordinary refs.
+		expect(canonicalTriggerRef('fabrika-preview')).toBe('refs/heads/fabrika-preview')
+		expect(canonicalTriggerRef('refs/tags/fabrika/v1')).toBe('refs/tags/fabrika/v1')
+	})
 })
 
 describe('isRefPattern', () => {
@@ -51,6 +60,16 @@ describe('refMatches', () => {
 		expect(refMatches('refs/tags/*', 'refs/tags/v1.2.3')).toBe(true)
 		expect(refMatches('refs/tags/*', 'refs/tags/anything/nested')).toBe(true)
 		expect(refMatches('refs/tags/*', 'refs/heads/main')).toBe(false)
+	})
+
+	test('a workspace branch matches no trigger ref, also one stored before the namespace was refused', () => {
+		const workspace = 'refs/heads/fabrika/0190a1b2-7c3d-7e4f-8a9b-0c1d2e3f4a5b'
+		for (const triggerRef of ['refs/heads/*', 'refs/heads/f*', 'refs/heads/fabrika/*', workspace]) {
+			expect(refMatches(triggerRef, workspace)).toBe(false)
+		}
+		expect(refMatches('refs/heads/*', 'refs/heads/main')).toBe(true)
+		expect(refMatches('refs/heads/f*', 'refs/heads/feature/x')).toBe(true)
+		expect(refMatches('refs/tags/*', 'refs/tags/fabrika/v1')).toBe(true)
 	})
 
 	test('regex metacharacters in the pattern are matched literally (only * is special)', () => {
