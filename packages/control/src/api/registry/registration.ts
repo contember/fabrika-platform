@@ -1,12 +1,20 @@
 import { isStructuralError } from '@fabrika/app'
 import type { AppEnvDto, RegisterAppRequest, RegisterAppResponse } from '@fabrika/control-contract'
-import type { ControlProvider, ProviderApp, ProviderDeploymentNamespace, ProviderEnvironment, ProviderRegistration } from '@fabrika/provider-contract'
+import type {
+	ControlProvider,
+	ProviderApp,
+	ProviderDeploymentNamespace,
+	ProviderEnvironment,
+	ProviderNamespaceMemberRouting,
+	ProviderRegistration,
+} from '@fabrika/provider-contract'
 import { snapshotDeviations } from '../../approval/diff'
 import { approvedSnapshot } from '../../approval/snapshot'
 import { snapshotSurface } from '../../approval/surface'
 import { appEnvCrossOrigins, type AppEnvRow, type AppRow, NamespaceResourceClaimConflictError } from '../../db'
 import { normalizeRepoUrl } from '../../github/triggers/push-event'
 import { fail } from '../domain'
+import { namespaceMemberRouting } from '../namespaces'
 import { parseStoredEnvelope } from '../provider-envelope'
 import { sourceBindingFields, toAppDto } from './apps'
 import { notifyCatalogChanged, type RegistryUseCaseContext } from './context'
@@ -51,6 +59,12 @@ export async function registerAppUseCase(c: RegistryUseCaseContext, input: Regis
 	}
 	if (preparation === undefined) registration = normalizeRegistration(c.provider, providerApp, registration.environment)
 	const resourceClaims = registrationResourceClaims(c.provider, registration)
+	await assertNamespaceHostsFree(c, namespace, {
+		appId: id,
+		env,
+		...(registration.environment.domain === undefined ? {} : { domain: registration.environment.domain }),
+		artifact: registration.environment.artifact,
+	})
 	const source = registration.app.source
 	const appInput = {
 		id: registration.app.id,
@@ -194,6 +208,37 @@ export function registrationResourceClaims(provider: ControlProvider, registrati
 		return capabilities.registrationResourceClaims(registration)
 	} catch (cause) {
 		fail(400, cause instanceof Error ? cause.message : 'invalid namespace resource claims')
+	}
+}
+
+/**
+ * A namespace's entry point routes each host to one member, so the member this write creates or changes may not be
+ * routed on a host a sibling is routed on. The provider's rule decides which hosts those are; a sibling the entry point
+ * cannot route already stops the namespace's republish, and is not this write's to refuse.
+ */
+export async function assertNamespaceHostsFree(
+	c: RegistryUseCaseContext,
+	namespace: ProviderDeploymentNamespace | undefined,
+	candidate: ProviderNamespaceMemberRouting,
+): Promise<void> {
+	const memberHosts = c.provider.namespaces?.memberHosts
+	if (namespace === undefined || memberHosts === undefined) return
+	let hosts: ReadonlySet<string>
+	try {
+		hosts = new Set(memberHosts(candidate))
+	} catch (cause) {
+		fail(400, cause instanceof Error ? cause.message : 'invalid namespace member')
+	}
+	if (hosts.size === 0) return
+	for (const row of await c.repositories.registry.listAppEnvsByNamespace(namespace.id)) {
+		if (row.app_id === candidate.appId && row.env === candidate.env) continue
+		let taken: string | undefined
+		try {
+			taken = memberHosts(await namespaceMemberRouting(c.repositories, row)).find((host) => hosts.has(host))
+		} catch {
+			continue
+		}
+		if (taken !== undefined) fail(409, `host ${taken} is already routed to ${row.app_id}/${row.env} in deployment namespace ${namespace.id}`)
 	}
 }
 

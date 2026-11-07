@@ -13,7 +13,7 @@ import { claimedResources, namespaceResourceClaims, projectExists, registrationR
 import { checkpoint, decodeEnvelope, normalizedNamespace, normalizeTarget } from './codec'
 import { ZEROPS_NAMESPACE_POSTGRES_HOSTNAME, ZEROPS_NAMESPACE_PROXY_HOSTNAME } from './constants'
 import { asNamespaceError, namespaceError } from './errors'
-import { compileNamespaceProxyManifest } from './manifest'
+import { compileNamespaceProxyManifest, namespaceMemberHosts } from './manifest'
 import { createZeropsNamespaceOperator } from './operator'
 import { republishProxy } from './proxy-attempt'
 import { assertNamespaceProxyAcceptsSandboxes } from './proxy-reads'
@@ -445,6 +445,7 @@ export const createZeropsNamespaceCapabilities = (options: ZeropsNamespaceOption
 		provision: (input) => mutateNamespace(input, options, 'provision'),
 		reconcile: (input) => mutateNamespace(input, options, 'reconcile'),
 		republish: (input) => republishNamespace(input, options),
+		memberHosts: namespaceMemberHosts,
 		claimedResources: (input) => claimedResources(options.api, input),
 		updates: createZeropsNamespaceUpdates(options),
 		operator: createZeropsNamespaceOperator({ proxySource: options.proxySource }),
