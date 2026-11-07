@@ -27,7 +27,7 @@ const ACCOUNT_MAX_ATTEMPTS = 5
 
 const GLOBAL_MAX_ATTEMPTS = 1_000
 
-/** Failures a known-device cookie may spend before it stops exempting its login from the client, account and global buckets. */
+/** Attempts a known-device cookie may spend between successes before it stops exempting its login from the other buckets. */
 const DEVICE_MAX_ATTEMPTS = 10
 
 const RECOVERY_ACCOUNT_MAX_ATTEMPTS = 3
@@ -73,8 +73,16 @@ async function clientBlocked(
 ): Promise<boolean> {
 	if (clientAddress === null) return false
 	// Hashed like every other key here: the throttle table must never hold a client address in the clear.
+	return attemptBlocked(services, await hashToken(`${purpose}:client:${clientAddress}`), maxAttempts)
+}
+
+/**
+ * Record one attempt and decide admission from the row that statement returns, so a concurrent burst cannot pass the
+ * limit (see `clientBlocked`). The attempt that reaches `maxAttempts` is the first one refused.
+ */
+async function attemptBlocked(services: Services, loginKeyHash: string, maxAttempts: number): Promise<boolean> {
 	const row = await services.repositories.passwords.recordLoginFailure({
-		loginKeyHash: await hashToken(`${purpose}:client:${clientAddress}`),
+		loginKeyHash,
 		windowSeconds: LOGIN_WINDOW_SECONDS,
 		maxAttempts,
 		blockSeconds: LOGIN_BLOCK_SECONDS,
@@ -149,8 +157,8 @@ export async function handlePasswordLogin(
 	const deviceKey = device !== null && lookup.status === 'found' && device.principalId === lookup.principal.id
 		? await hashToken(`password-login:device:${device.deviceId}`)
 		: null
-	const deviceThrottle = deviceKey === null ? null : await services.repositories.passwords.getLoginThrottle(deviceKey)
-	const knownDevice = deviceKey !== null && (deviceThrottle?.blocked_until ?? 0) <= now
+	// Taken atomically, like the client bucket: a burst with one cookie gets exactly `DEVICE_MAX_ATTEMPTS` admitted.
+	const knownDevice = deviceKey !== null && !await attemptBlocked(services, deviceKey, DEVICE_MAX_ATTEMPTS + 1)
 	// A known device spends its own bucket instead of all three, so a client that fills them cannot lock it out.
 	const blocked = !knownDevice && (
 		await clientBlocked(services, 'password-login', clientAddress, LOGIN_CLIENT_MAX_ATTEMPTS)
@@ -182,7 +190,11 @@ export async function handlePasswordLogin(
 				selfEvent(requestId, lookup.principal.id, 'iam.password.rehash'),
 			)
 		}
-		await services.repositories.passwords.clearLoginFailures(accountKey)
+		// The password is proven, so the device's attempts start over; the client bucket is never cleared.
+		await Promise.all([
+			services.repositories.passwords.clearLoginFailures(accountKey),
+			deviceKey === null ? Promise.resolve() : services.repositories.passwords.clearLoginFailures(deviceKey),
+		])
 		const session = await issueSession(request, services, ctx, {
 			principalId: lookup.principal.id,
 			email: lookup.principal.email,
@@ -197,9 +209,8 @@ export async function handlePasswordLogin(
 		return session
 	}
 
-	if (!blocked && knownDevice) {
-		await recordLoginFailure(services, deviceKey, DEVICE_MAX_ATTEMPTS)
-	} else if (!blocked) {
+	// A known device's attempt is already counted in its own bucket.
+	if (!blocked && !knownDevice) {
 		await Promise.all([
 			recordLoginFailure(services, accountKey, ACCOUNT_MAX_ATTEMPTS),
 			recordLoginFailure(services, globalKey, GLOBAL_MAX_ATTEMPTS),

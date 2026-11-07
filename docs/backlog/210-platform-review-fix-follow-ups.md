@@ -18,13 +18,12 @@ fixed hole. P3, size S each.
 2. **Control's IAM admin rows still admit `machine`.** `packages/control/fabrika.service.ts:53-54` lists
    `callers: ['human', 'machine']` for `iam-admin-rpc` and `iam-admin-root`. IAM's JWT branch now requires a session
    token, so a machine caller always reaches a 403 after the proxy admits it.
-3. **The known-device bucket is check-then-act.** `packages/iam/src/auth/password.ts:143-147` reads the device bucket
-   and records the failure later, as the account bucket does. A parallel burst with one stolen cookie can exceed ten
-   attempts; on Zerops no per-client bucket bounds the burst.
+3. **The account bucket is check-then-act.** `packages/iam/src/auth/password.ts` reads the account and
+   deployment-wide buckets and records the failure later. A parallel burst against one account can exceed five
+   attempts; on Zerops no per-client bucket bounds the burst. (The known-device bucket is atomic.)
 4. **A password reset does not invalidate known-device cookies.** A stolen cookie keeps its own bucket (ten guesses
    per fifteen minutes) on the victim's account for up to ninety days after a reset or logout.
-5. **Missing known-device tests.** No test pins that a valid device cookie still meets a blocked per-client bucket, or
-   that failures from a known device do not fill the global bucket.
+5. **Missing known-device test.** No test pins that failures from a known device do not fill the global bucket.
 6. **`FABRIKA_COOKIE_PREFIX` says the prefix holds every IAM browser credential.** `packages/auth-core/src/token.ts:34`.
    `__Host-fabrika_oidc` and `__Host-fabrika_device` are IAM cookies outside it, because the proxy strips the prefix.
 7. **The live Caddy suite cannot see a duplicated `Authorization` line.** `packages/proxy/src/__tests__/caddy.live.test.ts`
@@ -54,10 +53,10 @@ fixed hole. P3, size S each.
 
 1. Make the cost a required constructor argument, or required in the Worker `iamEnv` type. Witness: typecheck.
 2. Drop `machine` from both rows, after checking that no machine caller of `/iam/admin` exists.
-3. Record the device attempt first and decide from the returned row, as `clientBlocked` does; fix the account bucket
-   the same way. Witness: a parallel-burst test.
+3. Record the account attempt first and decide from the returned row, as `clientBlocked` does. Witness: a
+   parallel-burst test.
 4. Sign the credential's `updated_at` into the cookie and compare it at read.
-5. Add both tests to `known-device.test.ts`.
+5. Add the test to `known-device.test.ts`.
 6. Reword the comment to name the two exceptions.
 7. Port the probe's raw-socket upstream cases into the live suite.
 8. Add the note to the framework migration guide of the next minor.

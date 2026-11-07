@@ -12,13 +12,21 @@ const ISSUER = 'http://localhost:18191'
 const AUTH_ENV = { FABRIKA_IAM_SIGNING_KEYS: '', ENVIRONMENT: 'local' }
 const PASSWORD = 'a valid long password'
 const KNOWN_DEVICE_AUDIENCE = 'fabrika:iam:known-device'
+/** Mirrors `DEVICE_MAX_ATTEMPTS` in auth/password.ts — the attempts a known device is admitted between successes. */
+const DEVICE_MAX_ATTEMPTS = 10
 
 class FastPasswordHasher implements PasswordHasher {
+	verifyCalls = 0
+	/** How long a check takes. A real derivation is slow, which is what lets a burst's requests overlap. */
+	verifyDelayMs = 0
+
 	async hash(password: string): Promise<StoredPasswordHash> {
 		return { algorithm: 'test', parameters: '{}', salt: 'salt', passwordHash: `hash:${password}` }
 	}
 
 	async verify(password: string, stored: StoredPasswordHash) {
+		this.verifyCalls += 1
+		await Bun.sleep(this.verifyDelayMs)
 		return { valid: stored.passwordHash === `hash:${password}`, needsRehash: false }
 	}
 }
@@ -29,6 +37,7 @@ class TestContext implements RequestContext {
 
 interface Fixture {
 	h: Harness
+	hasher: FastPasswordHasher
 	login: (email: string, password: string, deviceCookie?: string | null, clientAddress?: string | null) => Promise<Response>
 	seedPasswordUser: (email: string) => Promise<string>
 	fillBucket: (key: string) => Promise<void>
@@ -40,6 +49,7 @@ function fixture(): Fixture {
 	const services = h.makeServices({ issuer: ISSUER, authentication: { oidc: false, password: true }, passwordHasher: hasher, email: null })
 	return {
 		h,
+		hasher,
 		login: (email, password, deviceCookie = null, clientAddress = null) => {
 			const headers = new Headers({
 				Origin: ISSUER,
@@ -163,12 +173,48 @@ describe('known-device cookie', () => {
 		const cookie = deviceCookieValue(await f.login('person@example.test', PASSWORD))
 		await fillAccountAndGlobal(f, 'person@example.test')
 
-		for (let attempt = 0; attempt < 10; attempt++) {
+		for (let attempt = 0; attempt < DEVICE_MAX_ATTEMPTS; attempt++) {
 			expect((await f.login('person@example.test', 'a wrong long password', cookie)).status).toBe(401)
 		}
 		const response = await f.login('person@example.test', PASSWORD, cookie)
 		expect(response.status).toBe(401)
 		expect(await response.text()).toContain('Invalid email or password.')
+	})
+
+	test('a parallel burst with one valid cookie gets exactly the device allowance of password checks', async () => {
+		const f = fixture()
+		const client = '203.0.113.5'
+		await f.seedPasswordUser('person@example.test')
+		const cookie = deviceCookieValue(await f.login('person@example.test', PASSWORD, null, client))
+		await f.fillBucket(`password-login:client:${client}`)
+		await fillAccountAndGlobal(f, 'person@example.test')
+		f.hasher.verifyCalls = 0
+		f.hasher.verifyDelayMs = 20
+
+		const burst = await Promise.all(
+			Array.from({ length: 30 }, () => f.login('person@example.test', 'a wrong long password', cookie, client)),
+		)
+
+		// The device bucket is taken before the check, from the row its own statement returns, so no request of the
+		// burst is admitted on a count another has not yet written.
+		expect(burst.every((response) => response.status === 401)).toBe(true)
+		expect(f.hasher.verifyCalls).toBe(DEVICE_MAX_ATTEMPTS)
+	})
+
+	test('a successful login from a known device starts its allowance over', async () => {
+		const f = fixture()
+		await f.seedPasswordUser('person@example.test')
+		const cookie = deviceCookieValue(await f.login('person@example.test', PASSWORD))
+		await fillAccountAndGlobal(f, 'person@example.test')
+
+		for (let attempt = 0; attempt < DEVICE_MAX_ATTEMPTS - 1; attempt++) {
+			expect((await f.login('person@example.test', 'a wrong long password', cookie)).status).toBe(401)
+		}
+		expect((await f.login('person@example.test', PASSWORD, cookie)).status).toBe(302)
+		for (let attempt = 0; attempt < DEVICE_MAX_ATTEMPTS - 1; attempt++) {
+			expect((await f.login('person@example.test', 'a wrong long password', cookie)).status).toBe(401)
+		}
+		expect((await f.login('person@example.test', PASSWORD, cookie)).status).toBe(302)
 	})
 
 	test('failures from a known device do not fill the account bucket', async () => {

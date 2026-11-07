@@ -155,9 +155,11 @@ A successful password login also sets a signed known-device cookie,
 `__Host-fabrika_device` (`HttpOnly`, `SameSite=Lax`, 90 days), naming the principal
 and a random device id. A later login that presents a valid one for the SAME
 principal it targets skips the client, account and deployment-wide buckets and
-spends a bucket of its own instead: 10 failures in 15 minutes, after which the
-cookie stops exempting until the block passes. Its attempts count against none
-of the three. A missing, forged, expired or other principal's cookie changes
+spends a bucket of its own instead: 10 attempts in 15 minutes, after which the
+cookie stops exempting until the block passes. Like the client bucket, that
+bucket records the attempt before the password is checked and decides from the
+row it wrote, so a parallel burst with one cookie gets no more than 10 checks; a
+successful login clears it. Its attempts count against none of the three. A missing, forged, expired or other principal's cookie changes
 nothing. So a client that fills any of those buckets cannot lock out a user
 signing in again from a browser that signed in before.
 

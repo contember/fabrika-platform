@@ -93,8 +93,9 @@ fails if that stops being true — it is the guard, not documentation of one.
 - **A known-device cookie exempts a password login from the client, account and deployment-wide buckets**
   (`auth/known-device.ts`, `Signer.signInternal`, audience `fabrika:iam:known-device`). It is
   `__Host-fabrika_device` (outside the `__Host-px_` prefix the Caddy proxy strips upstream), set only on a recorded password login, and exempts only a login for the principal it names. That
-  login spends the device's own bucket instead (`password-login:device:<id>`, 10 / 15 min); once it blocks, the attempt
-  is throttled as if no cookie were sent. A known device's attempt is not recorded in the other three. They are keyed
+  login spends the device's own bucket instead (`password-login:device:<id>`, 10 / 15 min), taken atomically before the
+  check like the client bucket and cleared by a successful login; once it blocks, the attempt is throttled as if no
+  cookie were sent. A known device's attempt is not recorded in the other three. They are keyed
   on a value anyone can pick or share, so without the exemption one client locks out a known account, or every password
   user behind one address.
 - **ONE MAILBOX RULE. `principals.email` is the NORMALIZED mailbox and nothing else; the spelling a
