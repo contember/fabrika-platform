@@ -84,7 +84,7 @@ export class ReviewProxies {
 		for (const project of this.store.proxiedProjects()) {
 			try {
 				const proxy = this.store.proxyOf(project)
-				if (proxy !== undefined) this.listen(project, proxy.target, proxy.port)
+				if (proxy !== undefined) this.listen(project, new URL(proxy.target).origin, proxy.port)
 			} catch (error) {
 				console.error(`Review proxy for ${project} not restored: ${error instanceof Error ? error.message : String(error)}`)
 			}
@@ -96,6 +96,7 @@ export class ReviewProxies {
 		this.running.clear()
 	}
 
+	/** `target` is an origin: the proxy sets each request's path on it. */
 	private listen(project: string, target: string, port: number | undefined): void {
 		let server: ProxyServer
 		try {
@@ -116,7 +117,10 @@ export class ReviewProxies {
 			hostname: 'localhost',
 			fetch: async (req, server) => {
 				const url = new URL(req.url)
-				const upstreamUrl = new URL(`${url.pathname}${url.search}`, target)
+				// The path is set, not resolved against `target`: a path like `//host/x` stays a path on the application.
+				const upstreamUrl = new URL(target)
+				upstreamUrl.pathname = url.pathname
+				upstreamUrl.search = url.search
 				if (req.headers.get('Upgrade')?.toLowerCase() === 'websocket') {
 					upstreamUrl.protocol = upstreamUrl.protocol === 'https:' ? 'wss:' : 'ws:'
 					return await this.upgrade(project, req, server, upstreamUrl)
@@ -196,7 +200,8 @@ async function forward(req: Request, upstreamUrl: URL, proxyOrigin: string, widg
 	responseHeaders.delete('Content-Encoding')
 	responseHeaders.delete('Content-Length')
 	const location = responseHeaders.get('Location')
-	if (location?.startsWith(upstreamUrl.origin)) responseHeaders.set('Location', `${proxyOrigin}${location.slice(upstreamUrl.origin.length)}`)
+	const redirect = location === null ? null : URL.parse(location, upstreamUrl)
+	if (redirect?.origin === upstreamUrl.origin) responseHeaders.set('Location', `${proxyOrigin}${redirect.pathname}${redirect.search}${redirect.hash}`)
 
 	const init = { status: upstream.status, statusText: upstream.statusText, headers: responseHeaders }
 	if (req.method === 'HEAD' || !(responseHeaders.get('Content-Type') ?? '').startsWith('text/html')) return new Response(upstream.body, init)
