@@ -53,19 +53,19 @@ export function rawRequestTarget(url: string): RequestTarget {
 /**
  * The absolute URL of `path` on `origin`, or `null` when `path` is not a path of that origin: the one rule for a
  * redirect or return target that must stay on its own origin. A leading `//` or any `\` would make a browser read a
- * host from it, and a browser strips a tab or newline before parsing, so no control character or space is admitted.
+ * host from it, and a browser strips a tab or newline before parsing, so no control character is admitted.
  */
 export function sameOriginTarget(origin: string, path: string): string | null {
-	if (!path.startsWith('/') || path.startsWith('//') || path.includes('\\') || [...path].some(isControlOrSpace)) {
+	if (!path.startsWith('/') || path.startsWith('//') || path.includes('\\') || [...path].some(isControl)) {
 		return null
 	}
 	const target = new URL(path, origin)
 	return target.origin === origin ? target.toString() : null
 }
 
-function isControlOrSpace(character: string): boolean {
+function isControl(character: string): boolean {
 	const code = character.charCodeAt(0)
-	return code <= 0x20 || code === 0x7f
+	return code < 0x20 || code === 0x7f
 }
 
 /** A segment one reader decodes and another refuses would route differently, so a malformed escape is refused. */

@@ -36,7 +36,7 @@ describe('a redirect target', () => {
 			redirect: 'manual',
 		})
 
-	test.each(['/thanks', '/search?q=a%20b#top', 'https://partner.example/welcome'])('%s is answered as a redirect', async (to) => {
+	test.each(['/thanks', '/search?q=a%20b#top', '/search?q=a b', 'https://partner.example/welcome'])('%s is answered as a redirect', async (to) => {
 		const response = await redirectTo(to)
 		expect(response.status).toBe(303)
 		expect(response.headers.get('Location')).toBe(to)

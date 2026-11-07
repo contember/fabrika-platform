@@ -82,6 +82,7 @@ describe('sameOriginTarget', () => {
 		['/', 'https://app.example/'],
 		['/thanks?x=1#top', 'https://app.example/thanks?x=1#top'],
 		['/a/../b', 'https://app.example/b'],
+		['/ /elsewhere.example/', 'https://app.example/%20/elsewhere.example/'],
 	])('%s is a path of the origin', (path, target) => {
 		expect(sameOriginTarget(ORIGIN, path)).toBe(target)
 	})
@@ -98,7 +99,6 @@ describe('sameOriginTarget', () => {
 		'/\r\n/elsewhere.example/',
 		'/\u0000/elsewhere.example/',
 		'/\u007f/elsewhere.example/',
-		'/ /elsewhere.example/',
 	])('%j is not', (path) => {
 		expect(sameOriginTarget(ORIGIN, path)).toBeNull()
 	})
