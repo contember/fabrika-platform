@@ -166,7 +166,10 @@ address, so one client cannot exhaust the deployment-wide bucket and deny the
 installation. IAM does not derive that address: the composition root names the
 one header its own ingress overwrites — `CF-Connecting-IP` on Cloudflare, where
 IAM sits behind the edge, and `X-Fabrika-Client-Ip` on the Bun target, where the
-proxy writes it after deleting the caller's. An installation whose ingress
+proxy writes it after deleting the caller's. An IPv6 client counts by its /64,
+since one subscriber may hold every address of it; the application runtime's
+client buckets use the same rule (`clientAddressKey` in `@fabrika/auth-core`).
+An installation whose ingress
 cannot see the client names no header and keeps only the account and
 deployment-wide buckets. On Zerops that is the current state: behind the
 shared IPv4 the project balancer forwards no IPv4 client's address and keeps a

@@ -64,7 +64,8 @@ fails if that stops being true — it is the guard, not documentation of one.
   header its own ingress overwrites — `CF-Connecting-IP` in `src/index.ts` (the Worker holds its own
   Custom Domain, so the hop in front of it is Cloudflare's edge), `X-Fabrika-Client-Ip` in
   `src/node/server.ts` (the Caddy proxy writes it after deleting the caller's) — and shared code reads
-  that one and nothing else. **Naming none is supported and means no per-client bucket at all**, never a
+  that one and nothing else, through `clientAddressKey` (`@fabrika/auth-core`: an IPv6 client by its /64, the
+  application runtime's rule). **Naming none is supported and means no per-client bucket at all**, never a
   guess. Never name a header the ingress does not overwrite.
 - **THE AUDIT CORRELATION ID FOLLOWS THE SAME RULE** (`src/request-id.ts`). The root names the header:
   `cf-ray` in `src/index.ts` (no proxy strips a caller's `X-Request-Id` in front of the Worker),

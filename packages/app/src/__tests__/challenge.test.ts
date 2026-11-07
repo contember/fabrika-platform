@@ -1,33 +1,10 @@
-// The parts of a public procedure's admission that need no database: which client a request counts as, and how strictly
-// a Turnstile answer is read. The Postgres half runs through boot in the public procedures' suites.
+// The part of a public procedure's admission that needs no database: how strictly a Turnstile answer is read. The
+// Postgres half runs through boot in the public procedures' suites. The client a request counts as is
+// `clientAddressKey`, tested in `@fabrika/auth-core`.
 
 import { describe, expect, test } from 'bun:test'
 import { CHALLENGE_LIMITS, type ChallengeFetch, TURNSTILE_VERIFY_URL, turnstileVerifier } from '../implement/challenge'
-import { clientKey } from '../implement/client-address'
 import { passingChallenge } from '../testing/challenge'
-
-describe('the client a request counts as', () => {
-	test.each<[string | null, string]>([
-		['203.0.113.7', '203.0.113.7'],
-		[' 203.0.113.7 ', '203.0.113.7'],
-		['203.0.113.7, 198.51.100.1', '203.0.113.7'],
-		['2001:DB8:1:2::1', '2001:db8:1:2::/64'],
-		['2001:db8:1:2:ffff:ffff:ffff:ffff', '2001:db8:1:2::/64'],
-		['[2001:db8::1]', '2001:db8:0:0::/64'],
-		['fe80::1%eth0', 'fe80:0:0:0::/64'],
-		['::ffff:192.0.2.1', '192.0.2.1'],
-		[null, 'unknown'],
-		['', 'unknown'],
-		['not-an-address', 'unknown'],
-		['256.1.1.1', 'unknown'],
-		['01.2.3.4', 'unknown'],
-		['1::2::3', 'unknown'],
-		['1:2:3:4:5:6:7:8:9', 'unknown'],
-		['a'.repeat(65), 'unknown'],
-	])('%p counts as %p', (header, key) => {
-		expect(clientKey(header)).toBe(key)
-	})
-})
 
 const NOW = Date.parse('2026-10-12T10:00:00.000Z')
 const CHECK = { token: 'XXXX.DUMMY.TOKEN', hostname: 'apply.example.com', action: 'apply' }

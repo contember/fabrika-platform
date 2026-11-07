@@ -11,6 +11,7 @@
  *     changes no key, and an installation that names no header gets no per-client bucket at all rather
  *     than a forgeable one. Where the composition holds the proxy's secret, a request without it shares one
  *     bucket, whatever address it claims.
+ *  4. **Identity.** An IPv6 client counts by its /64, so rotating addresses inside one prefix buys no fresh bucket.
  */
 
 import { CLIENT_ADDRESS_HEADER, PROXY_SECRET_HEADER } from '@fabrika/auth-core'
@@ -109,6 +110,13 @@ describe('the client coordinate comes from the composition, not the caller', () 
 		expect(readClientAddress(new Request(ISSUER, { headers: { [CLIENT_ADDRESS_HEADER]: '  ' } }), CLIENT_ADDRESS_HEADER)).toBeNull()
 		expect(readClientAddress(new Request(ISSUER, { headers: { [CLIENT_ADDRESS_HEADER]: 'x'.repeat(65) } }), CLIENT_ADDRESS_HEADER))
 			.toBeNull()
+		expect(readClientAddress(new Request(ISSUER, { headers: { [CLIENT_ADDRESS_HEADER]: 'not-an-address' } }), CLIENT_ADDRESS_HEADER))
+			.toBeNull()
+	})
+
+	test('an IPv6 client is read as its /64', () => {
+		const request = new Request(ISSUER, { headers: { [CLOUDFLARE_HEADER]: '2001:DB8:1:2:abcd::1' } })
+		expect(readClientAddress(request, CLOUDFLARE_HEADER)).toBe('2001:db8:1:2::/64')
 	})
 })
 
@@ -274,6 +282,19 @@ describe('a caller cannot choose its own bucket on either composition', () => {
 
 		expect(await h.repositories.passwords.getLoginThrottle(await clientKey('203.0.113.77'))).not.toBeNull()
 		expect(await h.repositories.passwords.getLoginThrottle(await clientKey('203.0.113.66'))).toBeNull()
+	})
+
+	test('Cloudflare: every address of one IPv6 /64 is one client', async () => {
+		const h = createHarness()
+		const app = createIamApp({ clientAddressHeader: CLOUDFLARE_HEADER })
+		for (const address of ['2001:db8:1:2::1', '2001:db8:1:2::2', '2001:db8:1:2:ffff::9']) {
+			await app.fetch(login({ email: 'person@example.test', password: PASSWORD }, { [CLOUDFLARE_HEADER]: address }), appEnv(h), {
+				waitUntil() {},
+			})
+		}
+
+		expect(await attemptCount(h, '2001:db8:1:2::/64')).toBe(3)
+		expect(await attemptCount(h, '2001:db8:1:2::1')).toBeNull()
 	})
 
 	test('Caddy/Bun: the proxy header keys the bucket and a forged edge header does not', async () => {

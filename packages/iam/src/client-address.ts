@@ -24,23 +24,15 @@
  * A composition must never name a header its ingress does not overwrite. That is the whole invariant.
  */
 
-/** Longest coordinate we will key on. An IPv6 address with a zone id fits with room to spare. */
-const MAX_LENGTH = 64
+import { clientAddressKey } from '@fabrika/auth-core'
 
 /**
- * Read the coordinate, or `null` when this composition cannot see one.
- *
- * `Headers.get` joins repeats with `", "`, so only the first value is taken: a caller that appends a
- * second copy must not be able to change the key, and a well-formed ingress never sends two.
+ * Read the coordinate, or `null` when this composition cannot see one or the value is no IP address. An IPv6 client
+ * counts by its /64, and only the first value counts (`clientAddressKey`).
  */
 export function readClientAddress(request: Request, header: string | undefined): string | null {
 	if (header === undefined || header === '') {
 		return null
 	}
-	const raw = request.headers.get(header)
-	if (raw === null) {
-		return null
-	}
-	const first = (raw.split(',')[0] ?? '').trim().toLowerCase()
-	return first === '' || first.length > MAX_LENGTH ? null : first
+	return clientAddressKey(request.headers.get(header))
 }

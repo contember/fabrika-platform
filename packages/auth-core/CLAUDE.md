@@ -9,13 +9,14 @@ Published (`publishConfig.access: public`), so it ships to npm with `@fabrika/au
 
 ```bash
 bun run typecheck
-bun test               # app-environment · canonical-path · contract-canonical · device · egress · endpoint-digest · endpoints · environment · framework-variables · json · locale · managed-environment · ops · ops-dump · permissions · requirement · resource-token · sha256 · token · wire · workloads
+bun test               # app-environment · canonical-path · client-address · contract-canonical · device · egress · endpoint-digest · endpoints · environment · framework-variables · json · locale · managed-environment · ops · ops-dump · permissions · requirement · resource-token · sha256 · token · wire · workloads
 ```
 
 | Module                     | What it owns                                                                                                                                                                                                              |
 | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `app-environment.ts`       | `appEnvironmentId` / `parseAppEnvironmentId` — the IAM id `<app>@<env>` — and `FABRIKA_IAM_APP_ID`, the name it travels under.                                                                                            |
 | `canonical-path.ts`        | `isCanonicalPath` — the one rule every hop refuses a path by — and the raw request target readers.                                                                                                                        |
+| `client-address.ts`        | `clientAddressKey` — the client a per-client abuse bucket counts: an IPv4 address or an IPv6 /64, from the first header value.                                                                                            |
 | `contract.ts`              | `ContractArtifact` — the compiled contract, types only — and its `EndpointTable` / `EndpointRow`.                                                                                                                         |
 | `contract-canonical.ts`    | `canonicalizeArtifact` and `canonicalArtifactJson` — the one canonical form and its digest bytes.                                                                                                                         |
 | `egress.ts`                | `parseEgressEntry` and `egressAdmits` — a site's `egress` entry (an exact origin or `https://*.<domain>`) and the URLs it admits.                                                                                         |
