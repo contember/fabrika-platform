@@ -1000,7 +1000,7 @@ describe('Zerops ControlProvider registration', () => {
 		expect(claimsFor(target('api'), exclusive)).toEqual(['service:api'])
 	})
 
-	test('reserves the namespace-owned hostnames in a shared namespace before its target records them', () => {
+	test('reserves the namespace-owned hostnames before the namespace target records them', () => {
 		const control = createTestControlProvider({
 			accessToken: 'zt-secret',
 			api: makeApi(recorded),
@@ -1061,9 +1061,13 @@ describe('Zerops ControlProvider registration', () => {
 		) {
 			expect(() => claimsFor(appId, hostname)).toThrow(`Zerops service hostname \`${hostname}\` is reserved by the namespace`)
 		}
-		// The prefix rule still admits a longer name, and an exclusive namespace keeps its own naming.
+		expect(() => claimsFor('zb', 'zbox')).toThrow('rename the service')
+		// The prefix rule still admits a longer name.
 		expect(claimsFor('zb', 'zboxapi')).toEqual(['service:zboxapi'])
-		expect(claimsFor('zb', 'zbox', { ...namespace, exclusiveAppId: 'zb' })).toEqual(['service:zbox'])
+		// An exclusive namespace may still add a sandbox host, but gets no namespace PostgreSQL: its app may name a database `postgres`.
+		const exclusive = { ...namespace, exclusiveAppId: 'zb' }
+		expect(() => claimsFor('zb', 'zbox', exclusive)).toThrow('Zerops service hostname `zbox` is reserved by the namespace')
+		expect(claimsFor('zb', 'postgres', exclusive)).toEqual(['service:postgres'])
 		expect(recorded.calls).toEqual([])
 	})
 })
