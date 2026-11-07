@@ -82,9 +82,9 @@ Exit 3 means the key is missing, expired, revoked, or lacks `operations.read`; m
 
 ## Alert production and delivery
 
-`new_issue` and `regression` producers run after durable ingest persistence. Spike detection runs every minute and counts exact applied occurrences in the preceding 60 seconds. A spike fires when its count reaches the configured threshold. A source-and-fingerprint claim suppresses repeat spike production for 15 minutes.
+`new_issue` and `regression` producers run after durable ingest persistence. A source sends at most 10 `new_issue` alerts per channel in any 10 minutes: each alert takes one of ten source-and-channel claims that expire after 10 minutes, and a new issue that finds all ten taken produces no alert for that channel. The issue itself is recorded as usual and appears in the console; the dropped alert is not sent later. `regression` alerts are not capped. Spike detection runs every minute and counts exact applied occurrences in the preceding 60 seconds. A spike fires when its count reaches the configured threshold. A source-and-fingerprint claim suppresses repeat spike production for 15 minutes.
 
-Every producer writes the durable notification outbox. It never sends inline. The outbox dedup key prevents duplicate rows when ingest or maintenance retries. Delivery claims use leases, make at most six attempts, and pass the stable dedup key as the webhook `Idempotency-Key`. Webhooks are HTTPS-only, time-bounded, and reject redirects.
+Every producer writes the durable notification outbox. It never sends inline. The outbox dedup key prevents duplicate rows when ingest or maintenance retries. Each maintenance pass claims up to 50 rows: health alerts (`failed_check`, `recovery`, `unhealthy_telemetry`) first, then the rest oldest first, so a backlog of issue alerts never delays a health alert. Delivery claims use leases, make at most six attempts, and pass the stable dedup key as the webhook `Idempotency-Key`. Webhooks are HTTPS-only, time-bounded, and reject redirects.
 
 Alert settings expose only redacted channel destinations. Operators can inspect source-scoped delivery state and individual attempt timestamps/error codes; payloads and full targets never enter the response.
 

@@ -3,6 +3,8 @@ import type { AlertsRepository, ErrorIngestRepository, IssueRow, RecordOccurrenc
 
 export const SPIKE_WINDOW_MS = 60_000
 export const SPIKE_DEDUP_WINDOW_SECONDS = 15 * 60
+export const NEW_ISSUE_ALERT_LIMIT = 10
+export const NEW_ISSUE_ALERT_WINDOW_MS = 10 * 60_000
 
 export interface SpikeInput {
 	count: number
@@ -25,6 +27,10 @@ export interface AlertProductionResult {
 	deduplicated: number
 }
 
+export interface IssueAlertProductionResult extends AlertProductionResult {
+	capped: number
+}
+
 export interface SpikeProductionResult extends AlertProductionResult {
 	evaluated: number
 }
@@ -38,7 +44,7 @@ export class OperationsAlertProducer {
 		private readonly now: () => number = Date.now,
 	) {}
 
-	async produceIngest(messages: IngestMessage[], results: RecordOccurrenceResult[]): Promise<AlertProductionResult> {
+	async produceIngest(messages: IngestMessage[], results: RecordOccurrenceResult[]): Promise<IssueAlertProductionResult> {
 		if (messages.length !== results.length) throw new Error('ingest alert inputs must align with persistence results')
 		const candidates = new Map<string, { kind: IssueAlertKind; message: IngestMessage; issue: IssueRow; transitionAt: number }>()
 		for (const [index, message] of messages.entries()) {
@@ -52,12 +58,18 @@ export class OperationsAlertProducer {
 
 		let enqueued = 0
 		let deduplicated = 0
+		let capped = 0
+		const fullChannels = new Set<string>()
 		for (const candidate of candidates.values()) {
 			const rules = await this.alerts.listRules(candidate.message.projectId)
 			if (!rules.some((rule) => rule.type === candidate.kind && rule.enabled === 1)) continue
 			const channels = await this.alerts.listChannels(candidate.message.projectId)
 			for (const channel of channels) {
 				if (channel.scope !== candidate.kind || channel.enabled !== 1) continue
+				if (candidate.kind === 'new_issue' && !(await this.claimNewIssueSlot(candidate.message.projectId, channel.id, fullChannels))) {
+					capped++
+					continue
+				}
 				const inserted = await this.alerts.enqueueNotification({
 					dedupKey: `${candidate.kind}:${candidate.message.projectId}:${candidate.issue.fingerprint}:${candidate.transitionAt}:${channel.id}`,
 					sourceId: candidate.message.projectId,
@@ -69,7 +81,18 @@ export class OperationsAlertProducer {
 				else deduplicated++
 			}
 		}
-		return { enqueued, deduplicated }
+		return { enqueued, deduplicated, capped }
+	}
+
+	// One claim per slot: at most NEW_ISSUE_ALERT_LIMIT new-issue alerts per source and channel in any window.
+	private async claimNewIssueSlot(sourceId: string, channelId: string, fullChannels: Set<string>): Promise<boolean> {
+		const channelKey = JSON.stringify([sourceId, channelId])
+		if (fullChannels.has(channelKey)) return false
+		for (let slot = 0; slot < NEW_ISSUE_ALERT_LIMIT; slot++) {
+			if (await this.alerts.tryClaim(`new_issue:${sourceId}:${channelId}:${slot}`, NEW_ISSUE_ALERT_WINDOW_MS)) return true
+		}
+		fullChannels.add(channelKey)
+		return false
 	}
 
 	async detectSpikes(): Promise<SpikeProductionResult> {

@@ -244,4 +244,40 @@ describe.skipIf(!hasPostgres)('Operations repositories on real Postgres', () => 
 			{ run_id: 'retry', projection_revision: 1 },
 		])
 	})
+
+	test('claims health alerts before older issue alerts', async () => {
+		let now = 10_000
+		const clocked = createPostgresOperationsRepositories(db, { now: () => now })
+		await clocked.sources.upsert({ id: 'order-source', appId: 'order-app', environment: 'production', displayName: 'Order', enabled: true })
+		for (const scope of ['new_issue', 'failed_check']) {
+			await clocked.alerts.upsertChannel({
+				id: `order-${scope}`,
+				sourceId: 'order-source',
+				scope,
+				type: 'webhook',
+				target: `https://example.test/${scope}`,
+				enabled: true,
+			})
+		}
+		for (let index = 0; index < 3; index++) {
+			await clocked.alerts.enqueueNotification({
+				dedupKey: `order:new_issue:${index}`,
+				sourceId: 'order-source',
+				channelId: 'order-new_issue',
+				kind: 'new_issue',
+				payload: {},
+			})
+		}
+		now += 60_000
+		await clocked.alerts.enqueueNotification({
+			dedupKey: 'order:failed_check',
+			sourceId: 'order-source',
+			channelId: 'order-failed_check',
+			kind: 'failed_check',
+			payload: {},
+		})
+
+		const claimed = await clocked.alerts.claimNotifications({ limit: 1, leaseMs: 60_000 })
+		expect(claimed.map((notification) => notification.dedupKey)).toEqual(['order:failed_check'])
+	})
 })
