@@ -116,7 +116,11 @@ export class ReviewProxies {
 			hostname: 'localhost',
 			fetch: async (req, server) => {
 				const url = new URL(req.url)
-				const upstreamUrl = new URL(`${url.pathname}${url.search}`, target)
+				// The path is set, not resolved against `target`: a path like `//host/x` stays a path on the application.
+				const upstreamUrl = new URL(target)
+				upstreamUrl.pathname = url.pathname
+				upstreamUrl.search = url.search
+				if (upstreamUrl.origin !== target) return new Response('agent-canvas review: the request leaves the application', { status: 400 })
 				if (req.headers.get('Upgrade')?.toLowerCase() === 'websocket') {
 					upstreamUrl.protocol = upstreamUrl.protocol === 'https:' ? 'wss:' : 'ws:'
 					return await this.upgrade(project, req, server, upstreamUrl)

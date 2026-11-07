@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'fs'
+import { connect } from 'net'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { renderReviewRequests } from './markdown'
@@ -269,6 +270,7 @@ describe('ReviewProxies', () => {
 				if (url.pathname === '/socket') return server.upgrade(req, { data: undefined }) ? undefined : new Response(null, { status: 400 })
 				if (url.pathname === '/old') return Response.redirect(`${url.origin}/new`, 302)
 				if (url.pathname === '/data.json') return Response.json({ search: url.search })
+				if (url.pathname.includes('127.0.0.1:')) return new Response(`app ${url.pathname}${url.search}`)
 				return new Response('<html><body><h1>App</h1></body></html>', { headers: { 'Content-Type': 'text/html; charset=utf-8' } })
 			},
 			websocket: {
@@ -331,6 +333,56 @@ describe('ReviewProxies', () => {
 		socket.close()
 		expect(JSON.parse(first)).toEqual({ type: 'update', updates: [] })
 		expect(reloads).toEqual([['demo', '*']])
+	})
+
+	/** Sends `path` as the literal request target, which `fetch` would normalise, and returns the response body. */
+	function rawGet(origin: string, path: string): Promise<string> {
+		const { hostname, port } = new URL(origin)
+		return new Promise((resolve, reject) => {
+			let response = ''
+			const socket = connect(Number(port), hostname, () => {
+				socket.write(`GET ${path} HTTP/1.1\r\nHost: ${hostname}:${port}\r\n\r\n`)
+			})
+			socket.on('data', (chunk) => {
+				response += String(chunk)
+				const headEnd = response.indexOf('\r\n\r\n')
+				const length = /\r\ncontent-length: (\d+)/i.exec(response)?.[1]
+				if (headEnd === -1 || length === undefined || response.length - headEnd - 4 < Number(length)) return
+				socket.end()
+				resolve(response.slice(headEnd + 4))
+			})
+			socket.on('error', reject)
+		})
+	}
+
+	test('a path that names another host stays a path on the application', async () => {
+		let otherHits = 0
+		const other = Bun.serve<undefined>({
+			port: 0,
+			hostname: '127.0.0.1',
+			fetch(req, server) {
+				otherHits++
+				return server.upgrade(req, { data: undefined }) ? undefined : new Response('other server')
+			},
+			websocket: { message() {} },
+		})
+		try {
+			const origin = new URL(proxies.open('demo', `http://127.0.0.1:${app.port}/`)).origin
+			// The proxy's own fetch sends a leading `//` as `/`, so the application may see one slash less.
+			const onApp = new RegExp(`app /+127\\.0\\.0\\.1:${other.port}/x$`)
+			expect(await rawGet(origin, `//127.0.0.1:${other.port}/x`)).toMatch(onApp)
+			expect(await rawGet(origin, `/\\127.0.0.1:${other.port}/x`)).toMatch(onApp)
+			const socket = new WebSocket(`${origin.replace('http:', 'ws:')}//127.0.0.1:${other.port}/x`)
+			expect(
+				await new Promise((resolve) => {
+					socket.onopen = () => resolve('open')
+					socket.onerror = () => resolve('refused')
+				}),
+			).toBe('refused')
+			expect(otherHits).toBe(0)
+		} finally {
+			await other.stop(true)
+		}
 	})
 
 	test('a restarted daemon serves the proxy on the same port', () => {
