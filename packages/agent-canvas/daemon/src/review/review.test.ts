@@ -269,6 +269,9 @@ describe('ReviewProxies', () => {
 				}
 				if (url.pathname === '/socket') return server.upgrade(req, { data: undefined }) ? undefined : new Response(null, { status: 400 })
 				if (url.pathname === '/old') return Response.redirect(`${url.origin}/new`, 302)
+				// Raw headers: `Response.redirect` would refuse a port past 65535.
+				if (url.pathname === '/away') return new Response(null, { status: 302, headers: { Location: `${url.origin}0/x` } })
+				if (url.pathname === '/userinfo') return new Response(null, { status: 302, headers: { Location: `${url.origin}@example.com/x` } })
 				if (url.pathname === '/data.json') return Response.json({ search: url.search })
 				if (url.pathname.includes('127.0.0.1:')) return new Response(`app ${url.pathname}${url.search}`)
 				return new Response('<html><body><h1>App</h1></body></html>', { headers: { 'Content-Type': 'text/html; charset=utf-8' } })
@@ -303,6 +306,14 @@ describe('ReviewProxies', () => {
 		const origin = new URL(proxies.open('demo', `http://127.0.0.1:${app.port}/`)).origin
 		const response = await fetch(`${origin}/old`, { redirect: 'manual' })
 		expect(response.headers.get('Location')).toBe(`${origin}/new`)
+	})
+
+	test('leaves a redirect to another origin as it is, however its prefix reads', async () => {
+		const origin = new URL(proxies.open('demo', `http://127.0.0.1:${app.port}/`)).origin
+		const away = await fetch(`${origin}/away`, { redirect: 'manual' })
+		expect(away.headers.get('Location')).toBe(`http://127.0.0.1:${app.port}0/x`)
+		const userinfo = await fetch(`${origin}/userinfo`, { redirect: 'manual' })
+		expect(userinfo.headers.get('Location')).toBe(`http://127.0.0.1:${app.port}@example.com/x`)
 	})
 
 	async function echoThrough(url: string, protocols: string[]): Promise<{ protocol: string; reply: string }> {
@@ -392,6 +403,16 @@ describe('ReviewProxies', () => {
 		proxies = new ReviewProxies(store, WIDGET, () => {})
 		proxies.restore()
 		expect(proxies.open('demo', target)).toBe(url)
+	})
+
+	test('a restored target with a path serves the application at its origin', async () => {
+		const url = proxies.open('demo', `http://127.0.0.1:${app.port}/`)
+		proxies.stop()
+		store.saveProxy('demo', { target: `http://127.0.0.1:${app.port}/admin`, port: Number(new URL(url).port) })
+		proxies = new ReviewProxies(store, WIDGET, () => {})
+		proxies.restore()
+		expect(store.proxyOf('demo')?.target).toBe(`http://127.0.0.1:${app.port}`)
+		expect(await (await fetch(new URL('/data.json?x=1', url))).json()).toEqual({ search: '?x=1' })
 	})
 
 	test('an application that is not running answers 502', async () => {
