@@ -25,7 +25,8 @@
 		"./review/model": "./daemon/src/review/model.ts",
 		"./review/remote": "./daemon/src/review/remote.ts",
 		"./review/sealing": "./daemon/src/review/sealing.ts",
-		"./review/threads": "./daemon/src/review/threads.ts"
+		"./review/threads": "./daemon/src/review/threads.ts",
+		"./upload-image": "./daemon/src/upload-image.ts"
 	},
 	"scripts": {
 		"build": "bun daemon/build.ts",

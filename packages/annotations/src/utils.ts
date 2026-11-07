@@ -21,6 +21,11 @@ export function hostAcceptsUploads(host: { uploadUrl: (() => string) | null }): 
 	return host.uploadUrl !== null
 }
 
+/** The image types the upload endpoints accept; they refuse every other file. */
+export const ATTACHABLE_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp']
+
+export const ATTACHABLE_IMAGE_REFUSED = 'Only PNG, JPEG, GIF and WebP images can be attached'
+
 /** Generate a unique annotation ID */
 export function generateAnnotationId(): string {
 	return `ann-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
