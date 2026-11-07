@@ -12,6 +12,7 @@ const uploadedSchema = z.object({ path: z.string(), filename: z.string() })
 
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d])
 const SVG = new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>')
+const BMP = new Uint8Array([0x42, 0x4d, 0x3a, 0, 0, 0, 0, 0, 0, 0, 0x36, 0, 0, 0])
 const INERT = { 'x-content-type-options': 'nosniff', 'content-security-policy': "default-src 'none'; sandbox" }
 
 const cleanup: string[] = []
@@ -54,11 +55,11 @@ test('accepts a PNG, names it by the type its content carries and serves it iner
 	expect(served.headers.get('content-disposition')).toBeNull()
 })
 
-test('refuses an SVG and content that is not the image it declares', async () => {
+test('refuses content that is not a PNG, JPEG, GIF or WebP, whatever its name says', async () => {
 	const { upload } = setup()
 	expect((await upload(SVG, 'drawing.svg')).status).toBe(400)
 	expect((await upload(SVG, 'shot.png')).status).toBe(400)
-	expect((await upload(PNG, 'shot.bmp')).status).toBe(400)
+	expect((await upload(BMP, 'shot.bmp')).status).toBe(400)
 })
 
 test('serves an upload stored before the allowlist as an inert download', async () => {

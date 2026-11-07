@@ -39,11 +39,10 @@ function sniffImageType(bytes: Uint8Array): UploadImageType | null {
 }
 
 /**
- * The image an upload carries, or null when its declared type or its content is not an accepted raster format.
- * The type is the one the content's signature names, so what is stored and served matches the bytes.
+ * The image an upload carries, or null when its content is not an accepted raster format. The content's signature
+ * alone decides: a declared type means different things per runtime (Bun derives it from the file name).
  */
-export function parseUploadImage(declaredType: string, bytes: Uint8Array): UploadImage | null {
-	if (!isUploadImageType(declaredType)) return null
+export function parseUploadImage(bytes: Uint8Array): UploadImage | null {
 	const type = sniffImageType(bytes)
 	if (type === null) return null
 	return { type, extension: UPLOAD_IMAGE_TYPES[type] }

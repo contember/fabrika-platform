@@ -181,5 +181,5 @@ Per-IP, per-minute, sliding window (KV-backed). Tweak in [`src/types.ts`](src/ty
 - **No reviewer auth** — reviewers self-report a name (stored locally in their browser), there is no signup. Suitable for "send to a colleague" flows, **not** public publishing.
 - **Per-share TTL** — defaults to 30 days. An expired share answers 404 on every route, its feedback list and uploads included; its feedback is eventually purged by KV's TTL.
 - **Size limits** — share payload max 2 MB, feedback body max 256 KB, image upload max 5 MB.
-- **Uploads** — PNG, JPEG, GIF and WebP only, checked by the declared type and by the content's signature. Every upload is served with `X-Content-Type-Options: nosniff` and `Content-Security-Policy: default-src 'none'; sandbox`; a stored file of any other type is served as a download.
+- **Uploads** — PNG, JPEG, GIF and WebP only, decided by the content's signature. Every upload is served with `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'; sandbox` and `Cache-Control: private, max-age=300`; a stored file of any other type is served as a download.
 - **Validation** — all incoming bodies are validated by Zod schemas before any storage write.

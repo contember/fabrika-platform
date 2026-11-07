@@ -308,6 +308,7 @@ async function handleRevokeShare(shareId: string, req: Request, env: Env): Promi
 
 	// Deleting the record revokes the share: every route of a share, feedback list and uploads included, answers
 	// 404 without it. Feedback entries stay in KV until their TTL; uploads past the first list page stay in R2.
+	await env.BLOBS.delete(`shares/${shareId}/record.json`)
 	const prefix = `shares/${shareId}/`
 	const list = await env.BLOBS.list({ prefix })
 	await Promise.all(list.objects.map((o) => env.BLOBS.delete(o.key)))
@@ -341,7 +342,7 @@ async function handleUpload(shareId: string, req: Request, env: Env, origin: str
 
 	// Content-addressed storage so duplicate uploads dedupe.
 	const bytes = new Uint8Array(await file.arrayBuffer())
-	const image = parseUploadImage(file.type, bytes)
+	const image = parseUploadImage(bytes)
 	if (!image) return json({ error: UPLOAD_IMAGE_REFUSED }, { status: 400 })
 	const hashBuf = await crypto.subtle.digest('SHA-256', bytes)
 	const hashHex = Array.from(new Uint8Array(hashBuf), (b) => b.toString(16).padStart(2, '0'))
@@ -371,7 +372,8 @@ async function handleUploadServe(shareId: string, filename: string, env: Env): P
 	return new Response(obj.body, {
 		headers: {
 			...uploadServeHeaders(obj.httpMetadata?.contentType),
-			'Cache-Control': 'public, max-age=86400',
+			// Private and short, so no shared cache keeps serving an upload after its share is revoked.
+			'Cache-Control': 'private, max-age=300',
 			...CORS_HEADERS,
 		},
 	})

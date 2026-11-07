@@ -18,7 +18,7 @@ export function createUploadHandlers(sessionManager: SessionManager): Route[] {
 		if (file.size > 10 * 1024 * 1024) return jsonResponse({ error: 'Image too large (max 10MB)' }, 413)
 
 		const bytes = new Uint8Array(await file.arrayBuffer())
-		const image = parseUploadImage(file.type, bytes)
+		const image = parseUploadImage(bytes)
 		if (!image) return jsonResponse({ error: UPLOAD_IMAGE_REFUSED }, 400)
 
 		const filename = `${crypto.randomUUID()}.${image.extension}`

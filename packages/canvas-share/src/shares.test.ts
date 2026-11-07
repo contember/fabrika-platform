@@ -13,6 +13,7 @@ const feedbackListSchema = z.object({ entries: z.array(z.object({ generalNote: z
 
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d])
 const SVG = new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>')
+const BMP = new Uint8Array([0x42, 0x4d, 0x3a, 0, 0, 0, 0, 0, 0, 0, 0x36, 0, 0, 0])
 const INERT = { 'x-content-type-options': 'nosniff', 'content-security-policy': "default-src 'none'; sandbox" }
 
 const deployed: TestEnv<Env>[] = []
@@ -96,7 +97,7 @@ describe('uploads', () => {
 
 		const served = await testEnv.fetch(url)
 		expect(served.status).toBe(200)
-		expect(Object.fromEntries(served.headers)).toMatchObject({ ...INERT, 'content-type': 'image/png' })
+		expect(Object.fromEntries(served.headers)).toMatchObject({ ...INERT, 'content-type': 'image/png', 'cache-control': 'private, max-age=300' })
 		expect(served.headers.get('content-disposition')).toBeNull()
 	})
 
@@ -105,10 +106,10 @@ describe('uploads', () => {
 		expect((await upload(SVG, 'drawing.svg', 'image/svg+xml')).status).toBe(400)
 	})
 
-	test('refuses content that is not the image it declares', async () => {
+	test('refuses content that is not a PNG, JPEG, GIF or WebP, whatever its name and type say', async () => {
 		const { upload } = await setUp()
 		expect((await upload(SVG, 'shot.png', 'image/png')).status).toBe(400)
-		expect((await upload(PNG, 'shot.bmp', 'image/bmp')).status).toBe(400)
+		expect((await upload(BMP, 'shot.bmp', 'image/bmp')).status).toBe(400)
 	})
 
 	test('serves an upload stored before the allowlist as an inert download', async () => {
