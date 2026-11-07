@@ -1,7 +1,7 @@
-import { marked } from 'marked'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAnnotations } from './AnnotationProvider'
 import { generateMarkdown, getMissingRequiredLabels } from './generateMarkdown'
+import { renderUntrustedMarkdown } from './untrustedMarkdown'
 
 interface ResponsePreviewProps {
 	open: boolean
@@ -199,7 +199,7 @@ function rewriteUploadPaths(md: string): string {
 }
 
 export function MarkdownPreview({ text }: { text: string }) {
-	const html = useMemo(() => marked.parse(rewriteUploadPaths(text), { async: false }) as string, [text])
-	// oxlint-disable-next-line react/no-danger -- Canvas modules already execute as code in this document.
+	const html = useMemo(() => renderUntrustedMarkdown(rewriteUploadPaths(text)), [text])
+	// oxlint-disable-next-line react/no-danger -- The feedback quotes share reviewers' fields verbatim; renderUntrustedMarkdown escapes raw HTML and drops script URLs.
 	return <div className="prose-canvas font-body text-body text-text-primary leading-relaxed" dangerouslySetInnerHTML={{ __html: html }} />
 }
