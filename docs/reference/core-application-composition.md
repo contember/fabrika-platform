@@ -69,7 +69,8 @@ were never mounted; neither surface exists at all in the Cloudflare composition,
 where both are service-binding method calls. `@fabrika/proxy` narrows the binding to
 four methods (`mintToken`, `mintFromKey`, `exchangeAuthCode`, `getJwks`), plus
 `requestDelegation` for contract applications' membership endpoints, structurally,
-so it never imports IAM. How far that separation actually goes per provider is in
+so it never imports IAM. IAM refuses `requestDelegation` over the application Worker's
+own binding, which the deployer marks (ADR-0022 rule 6). How far that separation actually goes per provider is in
 [`cross-host-sso.md`](cross-host-sso.md).
 
 A contract application on Zerops reaches neither surface for its membership operations either. It calls

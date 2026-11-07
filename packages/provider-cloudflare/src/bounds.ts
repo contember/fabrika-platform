@@ -6,7 +6,14 @@ import type { GeneratedConfig, Worker } from 'oblaka-iac'
 import { CloudflareClient } from 'oblaka-iac/src/client'
 import { ResourceProcessor } from 'oblaka-iac/src/commands/resource-processor'
 import { PLATFORM_RESOURCE_NAMES } from './plan'
-import { CLOUDFLARE_PROXY_WORKER_DIR, IAM_APPLICATION_ENTRYPOINT, IAM_SERVICE, PROXY_MANIFEST_DEFINE } from './proxy'
+import {
+	CLOUDFLARE_PROXY_WORKER_DIR,
+	IAM_APPLICATION_ENTRYPOINT,
+	IAM_SERVICE,
+	type IamBindingHolder,
+	iamBindingProps,
+	PROXY_MANIFEST_DEFINE,
+} from './proxy'
 
 type WranglerConfig = GeneratedConfig['config']
 
@@ -238,7 +245,13 @@ const field = (entry: unknown, name: string): unknown => typeof entry === 'objec
  * The one platform service an application may bind is IAM, and only at `IAM_APPLICATION_ENTRYPOINT`: the default
  * export issues keys and approves devices. Another application's Worker is never bound.
  */
-const assertServices = (worker: string, config: WranglerConfig, names: ApplicationNames, connectors: Readonly<Record<string, string>>): void => {
+const assertServices = (
+	worker: string,
+	config: WranglerConfig,
+	names: ApplicationNames,
+	holder: IamBindingHolder,
+	connectors: Readonly<Record<string, string>>,
+): void => {
 	const env = names.self.env
 	const iam = env === 'local' ? IAM_SERVICE : `${env}-${IAM_SERVICE}`
 	for (const entry of entries(config.services, worker, 'services')) {
@@ -256,7 +269,7 @@ const assertServices = (worker: string, config: WranglerConfig, names: Applicati
 					`cloudflare: Worker \`${worker}\` binds \`${service}\` to ${bound}; an application binds \`${IAM_APPLICATION_ENTRYPOINT}\` (use \`iamServiceReference()\`)`,
 				)
 			}
-			assertIamIdentity(worker, binding, field(entry, 'props'), names)
+			assertIamIdentity(worker, binding, field(entry, 'props'), names, holder)
 			continue
 		}
 		assertOwnRemote(`Worker \`${worker}\` binds service`, service, names)
@@ -264,17 +277,19 @@ const assertServices = (worker: string, config: WranglerConfig, names: Applicati
 }
 
 /**
- * IAM reads a binding's `props.app` as the calling application (ADR-0067 §3), so an IAM binding names exactly this
- * deployment's IAM application id and carries nothing else. The deployer writes the `IAM` binding that way.
+ * IAM reads a binding's `props` as the calling application (ADR-0067 §3) and, on the application Worker's, as the mark
+ * that refuses it a delegation grant (ADR-0022 rule 6). So an IAM binding carries exactly what the deployer writes for
+ * the Worker that holds it (`iamBindingProps`), and nothing else.
  */
-const assertIamIdentity = (worker: string, binding: unknown, props: unknown, names: ApplicationNames): void => {
+const assertIamIdentity = (worker: string, binding: unknown, props: unknown, names: ApplicationNames, holder: IamBindingHolder): void => {
 	const app = appEnvironmentId(names.self.app, names.self.env)
+	const expected = Object.entries(iamBindingProps(app, holder))
 	const keys = typeof props === 'object' && props !== null ? Object.keys(props) : []
-	if (keys.length !== 1 || field(props, 'app') !== app) {
+	if (keys.length !== expected.length || expected.some(([name, value]) => field(props, name) !== value)) {
 		throw new Error(
 			`cloudflare: Worker \`${worker}\` binds IAM as \`${
 				String(binding)
-			}\` without naming its own application \`${app}\`; only the deployer's \`IAM\` binding reaches IAM`,
+			}\` without naming its own application \`${app}\` as the deployer does; only the deployer's \`IAM\` binding reaches IAM`,
 		)
 	}
 }
@@ -509,7 +524,8 @@ export const assertGeneratedConfigs = (configs: readonly GeneratedConfig[], boun
 			}
 		}
 		assertOwnRemote('the Worker is named', config.name, names)
-		assertServices(worker, config, names, isPlatformProxy(generated, bounds) ? {} : bounds.connectors)
+		if (isPlatformProxy(generated, bounds)) assertServices(worker, config, names, 'proxy', {})
+		else assertServices(worker, config, names, 'application', bounds.connectors)
 		assertResourceBindings(worker, config, names)
 		assertBoundedAssets(worker, config.assets)
 		if (isPlatformProxy(generated, bounds)) {

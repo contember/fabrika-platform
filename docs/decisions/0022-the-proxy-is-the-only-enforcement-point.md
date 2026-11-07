@@ -771,7 +771,12 @@ Work units B5 and A12 built rule 6 at IAM, and B2 built the proxy side of delega
 marked `members` or `creates` gets a fresh grant from IAM's `requestDelegation` for every request,
 forwarded in `X-Fabrika-Delegation`. On Cloudflare the proxy calls it on the `IAM` binding; on Zerops on
 IAM's proxy surface, `/auth/mint/delegation`, because the grant's authority is the caller's token in the
-request and the proxy key adds none. The platform audiences are IAM
+request and the proxy key adds none. On Cloudflare the application Worker and its proxy bind the same entrypoint,
+so the deployer marks the application Worker's binding (`props.worker: 'application'` beside `props.app`) and IAM
+answers `not_allowed` to `requestDelegation` over it. The method stays, because every framework release's `boot`
+recognises a membership transport by it. The proxy's binding carries no mark, so a proxy deployed by an older release
+keeps obtaining grants; an application Worker deployed before the mark keeps reaching `requestDelegation` until its
+next deploy. The platform audiences are IAM
 (`propustka`), the console (`vozka`), Operations and every admin audience. A contract application is
 one whose IAM schema carries `contract: true`; `schemaFromContract` sets it. `listPrincipals` is
 refused for an application token; an application lists the members of a value with IAM's
@@ -885,7 +890,8 @@ nothing. The surface serves no `requestDelegation`: only the proxy obtains a gra
   `FABRIKA_IAM_RPC_KEY`, `/auth/mint/*` takes `FABRIKA_IAM_PROXY_KEY`, an unset key makes its surface
   404, and an application's own membership transport key reaches only `/membership/*`. On Cloudflare an application's proxy and application Workers bind one IAM `WorkerEntrypoint`,
   `PropustkaApplication`, which serves both the proxy's mint and redemption calls and the SDK's, so any
-  application Worker can call `exchangeAuthCode`. We accept this: exploiting it needs a first-party Worker
+  application Worker can call `exchangeAuthCode` (`requestDelegation` it cannot: IAM refuses it to the application
+  Worker's marked binding, rule 6). We accept this: exploiting it needs a first-party Worker
   with the binding, a live code and that browser's handoff verifier. Key issuing and device approval are
   not on that entrypoint; only platform components bind IAM's default one.
 

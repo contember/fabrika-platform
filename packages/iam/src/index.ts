@@ -36,6 +36,7 @@ import type {
 	ListOwnDeviceAuthorizationsResult,
 	ListPrincipalsInput,
 	ListPrincipalsResult,
+	MembershipFailure,
 	MintFromKeyInput,
 	MintFromKeyResult,
 	MintTokenInput,
@@ -55,7 +56,7 @@ import { installationMailSender, PLATFORM_MAIL_CAPABILITIES } from '@fabrika/ema
 import { builtinEmailProviders } from '@fabrika/email/providers'
 import { WorkerEntrypoint } from 'cloudflare:workers'
 import { createIamApp } from './app'
-import { bindingApp } from './binding-identity'
+import { bindingApp, isApplicationWorkerBinding } from './binding-identity'
 import { runIamMaintenance } from './cron'
 import { createIamRepositories } from './db'
 import type { Env } from './env'
@@ -147,6 +148,7 @@ export function iamEnv(bindings: WorkerBindings): Env {
 }
 
 const NOT_ALLOWED: TerminalFailure = { ok: false, reason: 'not_allowed' }
+const DELEGATION_NOT_ALLOWED: MembershipFailure = { ok: false, reason: 'not_allowed' }
 
 /** Every call builds its surface from the Worker's own bindings; see `PropustkaApplication` for why it is no getter. */
 function iamRpc(bindings: WorkerBindings, ctx: ExecutionContext): IamRpc & IamHandoffRpc & IamMembershipRpc & IamTerminalRpc {
@@ -195,8 +197,9 @@ export class PropustkaApplication extends WorkerEntrypoint<WorkerBindings> imple
 		return iamRpc(this.env, this.ctx).listPrincipals(input)
 	}
 
+	// The method stays for every framework release's binding check; only the proxy obtains a grant (ADR-0022 rule 6).
 	requestDelegation(input: RequestDelegationInput): Promise<RequestDelegationResult> {
-		return iamRpc(this.env, this.ctx).requestDelegation(input)
+		return isApplicationWorkerBinding(this.ctx) ? Promise.resolve(DELEGATION_NOT_ALLOWED) : iamRpc(this.env, this.ctx).requestDelegation(input)
 	}
 
 	createScope(input: CreateScopeInput): Promise<CreateScopeResult> {

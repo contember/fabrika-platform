@@ -49,7 +49,8 @@ fails if that stops being true — it is the guard, not documentation of one.
   SDK's `getJwks`/`listPrincipals`/`audit`, and the `IamMembershipRpc` operations — and nothing else. The default `Propustka` extends it with
   `issueKey`, `revokeKey`, device approval, `fetch` and the cron, for platform components only;
   `@fabrika/provider-cloudflare` refuses an application binding to it. Adding a method to the narrow
-  class gives it to every application on the installation.
+  class gives it to every application on the installation. `requestDelegation` answers `not_allowed` over a binding
+  the deployer marked `props.worker: 'application'` (`binding-identity.ts`): only the proxy obtains a grant.
 - **AN ENTRYPOINT CLASS HOLDS NO GETTER AND NO FIELD.** workerd serves every member of the prototype
   chain over RPC, getters included, and pipelines into what they return: a `get rpc()` made
   `env.IAM.rpc.issueKey(…)` callable through any entrypoint, and a `get iam()` returned the signing
