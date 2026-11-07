@@ -1,7 +1,7 @@
 // The application that calls IAM over a Workers service binding: the `props` the deployer wrote on that application's
 // `IAM` binding (`IamApplicationReference` in `@fabrika/provider-cloudflare`), which workerd hands IAM as `ctx.props`.
 // An application cannot choose them, so they are the binding's transport identity, as the membership transport key is
-// over HTTP (ADR-0067 §3).
+// over HTTP (ADR-0067 §3). Repository code holding the account token can, until backlog 86 lands (ADR-0048).
 
 import { z } from 'zod'
 

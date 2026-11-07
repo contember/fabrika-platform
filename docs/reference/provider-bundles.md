@@ -451,7 +451,14 @@ proxy included, binds IAM at its `PropustkaApplication` entrypoint
 keys and approves devices, is refused. The binding's `props` are exactly what the
 deployer writes (`iamBindingProps`): `{ app }` on the proxy, and
 `{ app, worker: 'application' }` on the application Worker, to which IAM refuses a
-delegation grant (ADR-0022 rule 6). The provider preserves the generated Wrangler config for every
+delegation grant (ADR-0022 rule 6). The refusal holds from an environment's first
+deploy on a release that writes the mark, and only against code without the account
+credential: until backlog 86 lands, repository code holds `CLOUDFLARE_API_TOKEN` and
+can deploy its Worker with unmarked props past these checks (ADR-0048). An unmarked
+binding is served, so a proxy deployed by an older release keeps working. **Operator
+step after an upgrade to that release:** once IAM and the runner run it, redeploy every
+Cloudflare application environment. Until its next deploy, an environment's application
+Worker keeps its unmarked binding and can still obtain a delegation grant. The provider preserves the generated Wrangler config for every
 Worker in that graph, deploys each config, and targets application migrations,
 managed variables, and secrets at the child Worker. The proxy embeds only its
 manifest and service bindings; application secrets stay on the child.

@@ -831,18 +831,18 @@ describe('Cloudflare provider', () => {
 			expect(result.status).toBe('failed')
 			expect(stepError(result, 'deploy-worker')).toContain('binds IAM as `IAM` without naming its own application `demo@stage`')
 		}
-		const second: Bindable = {
-			configureBinding: ({ config }) => ({
-				...config,
-				services: [...(config.services ?? []), {
-					binding: 'IAM2',
-					service: 'stage-propustka-worker',
-					entrypoint: 'PropustkaApplication',
-					props: { app: 'other@stage' },
-				}],
-			}),
+		// A second binding naming the application's own id, without the mark, would obtain a grant the proxy alone obtains.
+		for (const props of [{ app: 'other@stage' }, { app: 'demo@stage' }]) {
+			const second: Bindable = {
+				configureBinding: ({ config }) => ({
+					...config,
+					services: [...(config.services ?? []), { binding: 'IAM2', service: 'stage-propustka-worker', entrypoint: 'PropustkaApplication', props }],
+				}),
+			}
+			await expect(deploy(rec, config({ resources: () => bindingIam(second) }))).rejects.toThrow(
+				'binds IAM as `IAM2` without naming its own application',
+			)
 		}
-		await expect(deploy(rec, config({ resources: () => bindingIam(second) }))).rejects.toThrow('binds IAM as `IAM2` without naming its own application')
 	})
 
 	// `packages/iam/src/__tests__/index.test.ts` pins the same name and refuses a grant to the binding marked `application`.

@@ -776,7 +776,9 @@ so the deployer marks the application Worker's binding (`props.worker: 'applicat
 answers `not_allowed` to `requestDelegation` over it. The method stays, because every framework release's `boot`
 recognises a membership transport by it. The proxy's binding carries no mark, so a proxy deployed by an older release
 keeps obtaining grants; an application Worker deployed before the mark keeps reaching `requestDelegation` until its
-next deploy. The platform audiences are IAM
+next deploy, so an upgraded installation redeploys every Cloudflare application environment
+([`provider-bundles.md`](../reference/provider-bundles.md)). As with rule 1, the mark holds only against code without
+the account credential (backlog 86). The platform audiences are IAM
 (`propustka`), the console (`vozka`), Operations and every admin audience. A contract application is
 one whose IAM schema carries `contract: true`; `schemaFromContract` sets it. `listPrincipals` is
 refused for an application token; an application lists the members of a value with IAM's
@@ -890,8 +892,9 @@ nothing. The surface serves no `requestDelegation`: only the proxy obtains a gra
   `FABRIKA_IAM_RPC_KEY`, `/auth/mint/*` takes `FABRIKA_IAM_PROXY_KEY`, an unset key makes its surface
   404, and an application's own membership transport key reaches only `/membership/*`. On Cloudflare an application's proxy and application Workers bind one IAM `WorkerEntrypoint`,
   `PropustkaApplication`, which serves both the proxy's mint and redemption calls and the SDK's, so any
-  application Worker can call `exchangeAuthCode` (`requestDelegation` it cannot: IAM refuses it to the application
-  Worker's marked binding, rule 6). We accept this: exploiting it needs a first-party Worker
+  application Worker can call `exchangeAuthCode`. `requestDelegation` IAM refuses to the application Worker's marked
+  binding (rule 6), from the environment's first deploy on the release that writes the mark, and, as rule 1 says,
+  only against code without the account credential (backlog 86). We accept this: exploiting it needs a first-party Worker
   with the binding, a live code and that browser's handoff verifier. Key issuing and device approval are
   not on that entrypoint; only platform components bind IAM's default one.
 

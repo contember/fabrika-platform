@@ -53,11 +53,14 @@ the service that owns identity.
 - **`audit` forwards the verified token, not an app id.** `AuthContext.audit` sends the token it was
   built from as `credential`; IAM files the event under that token's app.
 - **The SDK REQUESTS; IAM decides and writes.** `IamMembership` (`src/membership.ts`,
-  `createIamMembership`) asks IAM for a delegation grant, to create a scope, to assign, revoke or list
+  `createIamMembership`) asks IAM to create a scope, to assign, revoke or list
   members, and to issue or revoke a share link, on the caller's behalf with the caller's verified token
   as proof. IAM evaluates each request against the caller's live permissions, generates the scope value
   and issues the key. The SDK mints nothing, signs nothing, supplies no actor and writes no grant; its
   binding is `IamMembershipRpc`, separate from `IamBinding`, so a platform `IamRpc` need not serve it.
+  Its `requestDelegation` is refused on every application transport (Zerops' `/membership/*` does not serve it, and
+  IAM answers `not_allowed` over a Cloudflare application Worker's binding): only the proxy obtains a grant, which the
+  application spends from `X-Fabrika-Delegation` (ADR-0022 rule 6).
   The framework (A13) decides which endpoint may call which operation. `DecodedIamMembership` decodes
   every membership answer, whatever carries it: `HttpIamRpc` delegates to it, and `@fabrika/app`'s Worker
   adapter wraps the `IAM` binding in it, so a body that breaks the contract is `IamTransportError` on both.

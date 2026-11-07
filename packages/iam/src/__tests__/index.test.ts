@@ -775,8 +775,10 @@ describe('the entrypoint an application binds', () => {
 			expect(await worker.assertIdentity({ ...asB, principalId: person })).toEqual({ ok: false, reason: 'not_allowed' })
 			expect(await worker.cancelIdentification(asB)).toEqual({ ok: false, reason: 'not_allowed' })
 		}
-		// B's own binding reaches IAM, which answers for the identification itself.
-		expect(await bound({ app: 'b@stage' }).inspectIdentification(asB)).toEqual({ ok: false, reason: 'not_found' })
+		// B's own binding, as the deployer writes it on the application Worker, reaches IAM, which answers for the identification.
+		for (const props of [{ app: 'b@stage', worker: 'application' }, { app: 'b@stage' }]) {
+			expect(await bound(props).inspectIdentification(asB)).toEqual({ ok: false, reason: 'not_found' })
+		}
 	})
 
 	// ADR-0022 rule 6: only the proxy obtains a grant. The deployer marks the application Worker's binding, never its proxy's.

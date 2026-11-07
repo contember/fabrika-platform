@@ -89,7 +89,8 @@ export const iamBindingProps = (app: string, holder: IamBindingHolder): Readonly
  * The deployer's `IAM` binding: what the Worker declared, with the IAM service entry's `props` naming the deployment's
  * IAM application id (`iamBindingProps`). IAM reads it as `ctx.props`, the transport identity of a call over the
  * binding, as the membership transport key is over HTTP (ADR-0067 §3). An application cannot choose it: the deployer
- * writes it, and the bounds refuse an IAM binding whose `props` are anything else.
+ * writes it, and the bounds refuse an IAM binding whose `props` are anything else. Repository code holding the account
+ * token can still deploy past the bounds (ADR-0048, backlog 86).
  */
 export class IamApplicationReference implements Binding {
 	constructor(
