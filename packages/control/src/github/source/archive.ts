@@ -443,39 +443,40 @@ class TarRewriter {
 
 	private validateLink(path: string): void {
 		if (this.resolvedLinks.has(path)) return
-		const pending: (string | { end: string })[] = path.split('/').reverse()
-		let resolved: string[] = []
+		// `registerPath` made every ancestor of a namespace entry a real directory, so resolution starts at the parent.
+		const boundary = path.lastIndexOf('/')
+		let resolved = boundary < 0 ? '' : path.slice(0, boundary)
+		const pending: (string | { end: string })[] = [path.slice(boundary + 1)]
 		const active = new Set<string>()
 		let expansions = 0
 		while (pending.length > 0) {
 			const part = pending.pop()
 			if (part === undefined) break
 			if (typeof part !== 'string') {
-				const target = resolved.join('/')
-				this.metadataBytes += new TextEncoder().encode(target).byteLength
+				this.metadataBytes += new TextEncoder().encode(resolved).byteLength
 				if (this.metadataBytes > SOURCE_MAX_EXPANDED_BYTES) throw new SourceFailure('archive_rejected', 'archive')
-				this.resolvedLinks.set(part.end, target)
+				this.resolvedLinks.set(part.end, resolved)
 				active.delete(part.end)
 				continue
 			}
-			const parent = this.namespace.get(resolved.join('/'))
-			if (resolved.length > 0 && parent?.kind !== 'directory') throw archiveRejected()
+			if (resolved !== '' && this.namespace.get(resolved)?.kind !== 'directory') throw archiveRejected()
 			if (part === '.' || part === '') continue
 			if (part === '..') {
-				if (resolved.pop() === undefined) throw archiveRejected()
+				if (resolved === '') throw archiveRejected()
+				resolved = resolved.slice(0, Math.max(resolved.lastIndexOf('/'), 0))
 				continue
 			}
-			const candidate = [...resolved, part].join('/')
+			const candidate = resolved === '' ? part : `${resolved}/${part}`
 			const entry = this.namespace.get(candidate)
 			if (entry === undefined) throw archiveRejected()
 			if (entry.kind !== 'symlink') {
-				resolved.push(part)
+				resolved = candidate
 				continue
 			}
 			if (active.has(candidate) || ++expansions > SOURCE_MAX_TREE_ENTRIES) throw archiveRejected()
 			const cached = this.resolvedLinks.get(candidate)
 			if (cached !== undefined) {
-				resolved = cached === '' ? [] : cached.split('/')
+				resolved = cached
 				continue
 			}
 			active.add(candidate)

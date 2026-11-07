@@ -83,6 +83,7 @@ describe('the archive rewrite', () => {
 		{ name: 'file-directory collision', parts: [file(`${handPrefix}dir`, 'x'), file(`${handPrefix}dir/file`, 'x')] },
 		{ name: 'directory-file collision', parts: [file(`${handPrefix}dir/file`, 'x'), file(`${handPrefix}dir`, 'x')] },
 		{ name: 'file-directory collision below the parent', parts: [file(`${handPrefix}top/dir`, 'x'), file(`${handPrefix}top/dir/sub/file`, 'x')] },
+		{ name: 'file below a symlink above the parent', parts: [link('top/dir', '.'), file(`${handPrefix}top/dir/sub/file`, 'x')] },
 		{ name: 'descriptor symlink', parts: [link('zerops.yaml', 'actual'), file(`${handPrefix}actual`, descriptor)] },
 		{ name: 'directory traversal', parts: [entry({ name: `${handPrefix}../escape/`, type: '5' })] },
 		{ name: 'nonzero link size', parts: [entry({ name: `${handPrefix}link`, type: '2', linkname: 'zerops.yaml', content: bytes('x') })] },
@@ -214,20 +215,21 @@ describe('the archive rewrite', () => {
 		])
 	})
 
-	// Equal path lengths isolate depth: a file must not pay once per ancestor level of a directory already written.
+	// Equal path lengths isolate depth: an entry must not pay once per ancestor level of a directory already written.
 	test.each(
 		[
-			{ name: 'an application', input: {} },
-			{ name: 'a platform', input: { archiveKind: 'platform' } },
-		] satisfies { name: string; input: Pick<TarRewriteInput, 'archiveKind'> }[],
+			{ name: 'an application', kind: 'file', input: {} },
+			{ name: 'a platform', kind: 'file', input: { archiveKind: 'platform' } },
+			{ name: 'a platform', kind: 'link', input: { archiveKind: 'platform' } },
+		] satisfies { name: string; kind: TimedEntry; input: Pick<TarRewriteInput, 'archiveKind'> }[],
 	)(
-		'a file 4000 directories deep in $name archive costs about what one 100 deep costs',
-		async ({ input }) => {
-			const deep = Array.from({ length: 4000 }, () => 'a').join('/')
-			const shallow = Array.from({ length: 100 }, () => 'b'.repeat(79)).join('/')
+		'a $kind 2000 directories deep in $name archive costs about what one 100 deep costs',
+		async ({ kind, input }) => {
+			const deep = Array.from({ length: 2000 }, () => 'a').join('/')
+			const shallow = Array.from({ length: 100 }, () => 'b'.repeat(39)).join('/')
 			expect(shallow.length).toBe(deep.length)
-			const deepMs = await fastestFilesInDirectory(deep, input)
-			const shallowMs = await fastestFilesInDirectory(shallow, input)
+			const deepMs = await fastestEntriesInDirectory(deep, kind, input)
+			const shallowMs = await fastestEntriesInDirectory(shallow, kind, input)
 			expect(deepMs).toBeLessThan(10 * Math.max(shallowMs, 1))
 		},
 		60_000,
@@ -396,30 +398,41 @@ describe('the archive rewrite', () => {
 	})
 })
 
-const FILES_PER_RUN = 50
+const ENTRIES_PER_RUN = 50
 
-/** The fastest of three runs: the time to rewrite files in `directory` once the directory itself has been written. */
-async function fastestFilesInDirectory(directory: string, input: Pick<TarRewriteInput, 'archiveKind'>): Promise<number> {
+type TimedEntry = 'file' | 'link'
+
+/** The fastest of three runs: the time to rewrite entries in `directory` once the directory itself has been written. */
+async function fastestEntriesInDirectory(directory: string, kind: TimedEntry, input: Pick<TarRewriteInput, 'archiveKind'>): Promise<number> {
 	let fastest = Number.POSITIVE_INFINITY
 	for (let run = 0; run < 3; run++) {
-		fastest = Math.min(fastest, await filesInDirectoryMs(directory, input))
+		fastest = Math.min(fastest, await entriesInDirectoryMs(directory, kind, input))
 	}
 	return fastest
 }
 
-async function filesInDirectoryMs(directory: string, input: Pick<TarRewriteInput, 'archiveKind'>): Promise<number> {
-	const inDirectory = (name: string) => paxed(`path=${handPrefix}${directory}/${name}\n`, file(`${handPrefix}placeholder`, ''))
+/** Links are validated when the archive ends, so the timed window runs to completion. */
+async function entriesInDirectoryMs(directory: string, kind: TimedEntry, input: Pick<TarRewriteInput, 'archiveKind'>): Promise<number> {
+	const inDirectory = (name: string, part: SourceBytes) => paxed(`path=${handPrefix}${directory}/${name}\n`, part)
 	const rewrite = createTarRewrite({ ...input, commitSha: handCommitSha, descriptor: DESCRIPTOR })
 	const drained = rewrite.transform.readable.pipeTo(new WritableStream())
 	const writer = rewrite.transform.writable.getWriter()
-	await writer.write(concat(globalHeader(handCommitSha), file(`${handPrefix}zerops.yaml`, descriptor), inDirectory('first')))
-	const files = concat(...Array.from({ length: FILES_PER_RUN }, (_, index) => inDirectory(`file-${index}`)))
+	await writer.write(
+		concat(globalHeader(handCommitSha), file(`${handPrefix}zerops.yaml`, descriptor), inDirectory('first', file(`${handPrefix}placeholder`, ''))),
+	)
+	const timed = concat(
+		...Array.from(
+			{ length: ENTRIES_PER_RUN },
+			(_, index) => inDirectory(`${kind}-${index}`, kind === 'file' ? file(`${handPrefix}placeholder`, '') : link('placeholder', 'first')),
+		),
+		new Uint8Array(1024),
+	)
 	const begun = performance.now()
-	await writer.write(files)
-	const elapsed = performance.now() - begun
-	await writer.write(new Uint8Array(1024))
+	await writer.write(timed)
 	await writer.close()
 	await drained
-	expect((await rewrite.completed).entryCount).toBe(FILES_PER_RUN + 2)
+	const summary = await rewrite.completed
+	const elapsed = performance.now() - begun
+	expect(summary.entryCount).toBe(ENTRIES_PER_RUN + 2)
 	return elapsed
 }
