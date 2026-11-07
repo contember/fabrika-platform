@@ -264,8 +264,9 @@ secret fields, and ownership of the proxy upstream.
 | `full`  | Exclusive to one app              | Namespace-owned | App-owned services                     |
 
 Every Zerops namespace reserves `service:proxy`. A cheap namespace also reserves
-`service:postgres`. Application claims are the service hostnames in the canonical
-manifest. Cheap defaults to `postgresql:single@18` at `oltp-hobby` on every
+`service:postgres`, and a namespace with a sandbox host `service:zbox`. Application claims are the service hostnames
+in the canonical manifest. In a shared namespace no application service may take `proxy`, `postgres` or `zbox`, even
+before the namespace records the service, because the namespace may create it later. Cheap defaults to `postgresql:single@18` at `oltp-hobby` on every
 environment ([ADR-0038](../decisions/0038-size-namespaces-cheaply-by-default.md));
 its plan options (`--postgres-type` with `--postgres-profile`, always together) may
 select a supported type and profile explicitly. `postgresql:ha@18` is the one that keeps its data
