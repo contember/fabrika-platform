@@ -15,13 +15,14 @@
  *
  *   - `src/index.ts` (Cloudflare) — `CF-Connecting-IP`. IAM's Worker holds its own Custom Domain, so
  *     it is reached through Cloudflare's edge, which writes that header and replaces a caller's.
- *   - `src/node/server.ts` (Bun/Zerops) — `CLIENT_ADDRESS_HEADER`, written by the Caddy proxy in front
- *     of it after deleting the caller's. IAM is not publicly routed on that composition (ADR-0022
- *     rule 1), but the private network reaches the port too, so once the installation's proxy secret is
- *     configured the header counts only beside it (`src/proxy-proof.ts`) — the same trust the request-id
- *     header runs on.
+ *   - `src/node/server.ts` (Bun/Zerops) — none. The Caddy proxy in front of it writes `CLIENT_ADDRESS_HEADER`, but
+ *     behind the Zerops balancer that value is the balancer for every client
+ *     ([platform facts](../../../docs/reference/zerops-platform.md#public-access)), so one bucket would hold the
+ *     whole installation. Without the proxy's secret a request still keys on `UNPROVEN_CLIENT_ADDRESS`
+ *     (`src/proxy-proof.ts`).
  *
- * A composition must never name a header its ingress does not overwrite. That is the whole invariant.
+ * A composition names a header only when its ingress overwrites it with the client's own address. That is the whole
+ * invariant.
  */
 
 import { clientAddressKey } from '@fabrika/auth-core'

@@ -27,7 +27,7 @@ const ACCOUNT_MAX_ATTEMPTS = 5
 
 const GLOBAL_MAX_ATTEMPTS = 1_000
 
-/** Failures a known-device cookie may spend before it stops exempting its login from the account and global buckets. */
+/** Failures a known-device cookie may spend before it stops exempting its login from the client, account and global buckets. */
 const DEVICE_MAX_ATTEMPTS = 10
 
 const RECOVERY_ACCOUNT_MAX_ATTEMPTS = 3
@@ -138,11 +138,10 @@ export async function handlePasswordLogin(
 
 	const accountKey = await hashToken(`password-login:account:${email}`)
 	const globalKey = await hashToken('password-login:global')
-	const [accountThrottle, globalThrottle, lookup, clientOverLimit, device] = await Promise.all([
+	const [accountThrottle, globalThrottle, lookup, device] = await Promise.all([
 		services.repositories.passwords.getLoginThrottle(accountKey),
 		services.repositories.passwords.getLoginThrottle(globalKey),
 		services.repositories.passwords.lookupLogin(email),
-		clientBlocked(services, 'password-login', clientAddress, LOGIN_CLIENT_MAX_ATTEMPTS),
 		readKnownDevice(env, request),
 	])
 	const now = Math.floor(Date.now() / 1000)
@@ -152,8 +151,12 @@ export async function handlePasswordLogin(
 		: null
 	const deviceThrottle = deviceKey === null ? null : await services.repositories.passwords.getLoginThrottle(deviceKey)
 	const knownDevice = deviceKey !== null && (deviceThrottle?.blocked_until ?? 0) <= now
-	const blocked = clientOverLimit
-		|| (!knownDevice && ((accountThrottle?.blocked_until ?? 0) > now || (globalThrottle?.blocked_until ?? 0) > now))
+	// A known device spends its own bucket instead of all three, so a client that fills them cannot lock it out.
+	const blocked = !knownDevice && (
+		await clientBlocked(services, 'password-login', clientAddress, LOGIN_CLIENT_MAX_ATTEMPTS)
+		|| (accountThrottle?.blocked_until ?? 0) > now
+		|| (globalThrottle?.blocked_until ?? 0) > now
+	)
 	let valid = false
 	let needsRehash = false
 	if (!blocked && passwordWithinLimit && lookup.status === 'found') {

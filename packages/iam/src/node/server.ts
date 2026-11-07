@@ -16,7 +16,6 @@
 // Run it: `bun src/node/server.ts` (see `zerops.yaml` → `run.start`).
 
 import { createBunHandler } from '@fabrika/app/bun'
-import { CLIENT_ADDRESS_HEADER } from '@fabrika/auth-core'
 import { createIamApp } from '../app'
 import { createRuntime, type Runtime } from './runtime'
 
@@ -28,13 +27,11 @@ export function createFetchHandler(runtime: Runtime): (request: Request) => Prom
 		// An application on Zerops has no IAM binding; its membership operations arrive here, each with its own key.
 		membershipTransport: true,
 		health: true,
-		// The Caddy proxy deletes a caller's copy before writing its own. It fails safe — an installation
-		// whose balancer hides the client makes every client share one bucket, not a forgeable one.
-		clientAddressHeader: CLIENT_ADDRESS_HEADER,
-		// `REQUEST_ID_HEADER` in `@fabrika/proxy-core`: the proxy deletes a caller's copy at ingress and
-		// injects its own, on the same trust as the client address above.
+		// No `clientAddressHeader`: behind the Zerops balancer the proxy's client address is the balancer for every
+		// client, so a per-client bucket would be one installation-wide bucket (`src/client-address.ts`).
+		// `REQUEST_ID_HEADER` in `@fabrika/proxy-core`: the proxy deletes a caller's copy at ingress and injects its own.
 		requestIdHeader: 'X-Request-Id',
-		// The private network reaches this port too, so the two headers above count only beside the proxy's secret.
+		// The private network reaches this port too, so the header above counts only beside the proxy's secret.
 		proxySecret: runtime.config.proxySecret,
 	})
 	return createBunHandler(app, runtime.env, { executionContext: runtime.ctx }).fetch

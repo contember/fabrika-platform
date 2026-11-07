@@ -29,7 +29,7 @@ class TestContext implements RequestContext {
 
 interface Fixture {
 	h: Harness
-	login: (email: string, password: string, deviceCookie?: string | null) => Promise<Response>
+	login: (email: string, password: string, deviceCookie?: string | null, clientAddress?: string | null) => Promise<Response>
 	seedPasswordUser: (email: string) => Promise<string>
 	fillBucket: (key: string) => Promise<void>
 }
@@ -40,7 +40,7 @@ function fixture(): Fixture {
 	const services = h.makeServices({ issuer: ISSUER, authentication: { oidc: false, password: true }, passwordHasher: hasher, email: null })
 	return {
 		h,
-		login: (email, password, deviceCookie = null) => {
+		login: (email, password, deviceCookie = null, clientAddress = null) => {
 			const headers = new Headers({
 				Origin: ISSUER,
 				'Sec-Fetch-Site': 'same-origin',
@@ -48,7 +48,7 @@ function fixture(): Fixture {
 			})
 			if (deviceCookie !== null) headers.set('Cookie', `${KNOWN_DEVICE_COOKIE}=${deviceCookie}`)
 			const request = new Request(`${ISSUER}/auth/login`, { method: 'POST', headers, body: new URLSearchParams({ email, password }) })
-			return handleAuth(request, services, AUTH_ENV, new TestContext())
+			return handleAuth(request, services, AUTH_ENV, new TestContext(), clientAddress)
 		},
 		seedPasswordUser: async (email) => {
 			const principalId = seedUser(h.sqlite, { sub: email, email })
@@ -112,6 +112,22 @@ describe('known-device cookie', () => {
 
 		const withCookie = await f.login('person@example.test', PASSWORD, cookie)
 		expect(withCookie.status).toBe(302)
+	})
+
+	test('a valid device cookie for the principal passes a full client bucket and spends nothing of it', async () => {
+		const f = fixture()
+		const client = '203.0.113.5'
+		await f.seedPasswordUser('person@example.test')
+		const cookie = deviceCookieValue(await f.login('person@example.test', PASSWORD, null, client))
+		await f.fillBucket(`password-login:client:${client}`)
+		const clientRow = async () => (await f.h.repositories.passwords.getLoginThrottle(await hashToken(`password-login:client:${client}`)))?.attempt_count
+
+		expect((await f.login('person@example.test', PASSWORD, null, client)).status).toBe(401)
+		const counted = await clientRow()
+
+		expect((await f.login('person@example.test', 'a wrong long password', cookie, client)).status).toBe(401)
+		expect((await f.login('person@example.test', PASSWORD, cookie, client)).status).toBe(302)
+		expect(await clientRow()).toBe(counted)
 	})
 
 	test("another principal's device cookie does not exempt", async () => {

@@ -605,15 +605,15 @@ on its credentialed rows only. A `protocol` or `health` row may arrive without i
 authenticates such a request itself, and such requests also arrive unfronted — at IAM's own Worker on
 Cloudflare, and over the private hops between the services.
 
-An installation service gets no proxy secret, with one exception for attribution. On Zerops IAM keys its per-client
-login throttle on `X-Fabrika-Client-Ip` and writes `X-Request-Id` to `auth_log` and `audit_events`, and anything on
-the platform project's private network can reach IAM's port and write both. So Caddy sets `X-Fabrika-Proxy-Secret`
-on the route of IAM's session owner, from `FABRIKA_INSTALLATION_PROXY_SECRET_IAM`, and IAM holds the same variable.
-IAM reads the two headers only from a request whose secret matches (digests compared in constant time). Any other
-request shares one client bucket and gets a generated request id. A missing secret is never a refusal by itself;
-the shared bucket refuses once it is exhausted, like the balancer's one bucket every Zerops client shares today. This
-is attribution, not a second enforcement decision. `platform deploy` derives the secret as HMAC-SHA256 of the label
-`fabrika-installation-proxy-secret:iam` keyed by `FABRIKA_IAM_PROVISIONING_KEY`, which every deploy already holds,
+An installation service gets no proxy secret, with one exception for attribution. On Zerops IAM writes `X-Request-Id`
+to `auth_log` and `audit_events`, and anything on the platform project's private network can reach IAM's port and
+write it. So Caddy sets `X-Fabrika-Proxy-Secret` on the route of IAM's session owner, from
+`FABRIKA_INSTALLATION_PROXY_SECRET_IAM`, and IAM holds the same variable. IAM reads that header only from a request
+whose secret matches (digests compared in constant time). Any other request shares one client bucket and gets a
+generated request id. IAM keys no client bucket on `X-Fabrika-Client-Ip` there: behind the Zerops balancer it is the
+balancer for every client. A missing secret is never a refusal by itself; the shared bucket refuses once it is
+exhausted. This is attribution, not a second enforcement decision. `platform deploy` derives the secret as
+HMAC-SHA256 of the label `fabrika-installation-proxy-secret:iam` keyed by `FABRIKA_IAM_PROVISIONING_KEY`, which every deploy already holds,
 and writes it sensitive to `proxy` and `iam` on every deploy without reading it back. It is not derived from the
 proxy key, because every namespace proxy holds that one. An unset variable turns IAM's check off: Cloudflare, where
 IAM's Worker sits behind Cloudflare's edge and reads `CF-Connecting-IP` and `cf-ray`, sets none.
