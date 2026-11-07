@@ -21,10 +21,12 @@ import type {
 	ProviderRegistrationInput,
 	ProviderSourceBinding,
 } from '@fabrika/provider-contract'
+import { createZeropsArtifactSourceDescriptor, zeropsNamespaceTargetCodec } from '@fabrika/provider-zerops'
 import { describe, expect, spyOn, test } from 'bun:test'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import { type CloudflareRunnerJob, createCloudflareControlProvider } from '../../../provider-cloudflare/src/control'
-import { republishNamespace } from '../api/namespaces'
+import { controlServiceDigest } from '../../fabrika.service'
+import { republishNamespace, runNamespaceJob } from '../api/namespaces'
 import { readProviderEnvelope } from '../api/provider-envelope'
 import { getRunLogUseCase } from '../api/runs'
 import type { ControlRepositories, RunRow } from '../db'
@@ -36,6 +38,7 @@ import { reconcileProviderRuns } from '../provider-reconcile'
 import { cancelDeploy, type DeployJobMessage, executeDeploy, parseProviderEnvelope, type RunDeps, type RunOutcome } from '../run-lifecycle'
 import { appSecretPurpose, type SecretResolver, VaultSecretResolver } from '../secret-resolver'
 import { buildControlRpcDeps, buildRunDeps } from '../services'
+import { zeropsControlProvider, zeropsGitHubSources } from '../zerops/provider'
 import { contractCommits } from './helpers/commits'
 import { createHarness, queryRows } from './helpers/harness'
 import { allowAllAuth } from './helpers/iam'
@@ -1787,5 +1790,97 @@ describe('parseProviderEnvelope', () => {
 		expect(() => parseProviderEnvelope('{"provider":"","version":1,"payload":null}', 'target')).toThrow('target is not a provider envelope')
 		expect(readProviderEnvelope({ provider: 'test', version: 0, payload: null })).toBeNull()
 		expect(readProviderEnvelope({ provider: 'test', version: 1 })).toBeNull()
+	})
+})
+
+describe('namespace resource claims across a namespace job', () => {
+	/** The real Zerops claims, so the key under test is the one a sandbox host really adds. */
+	async function zeropsNamespace(env: Env) {
+		const proxySource = {
+			repository: { owner: 'example', name: 'platform' },
+			commitSha: 'a'.repeat(40),
+			descriptor: { ...await createZeropsArtifactSourceDescriptor('zerops:\n  - setup: proxy\n') },
+		}
+		const zerops = zeropsControlProvider({
+			FABRIKA_ZEROPS_CLIENT_ID: 'client-1',
+			FABRIKA_ZEROPS_PROXY_SOURCE_JSON: JSON.stringify(proxySource),
+			FABRIKA_ZEROPS_PROXY_IAM_URL: 'https://iam.example.test',
+			FABRIKA_ZEROPS_PROXY_IAM_KEY: 'px_proxy_placeholder',
+			FABRIKA_SERVICE_TABLE_DIGEST: controlServiceDigest({ mcp: false }),
+			FABRIKA_ZEROPS_ACCESS_TOKEN: 'zt-placeholder',
+		}, zeropsGitHubSources(env).port)
+		const claims = zerops.namespaces?.namespaceResourceClaims
+		if (claims === undefined) throw new Error('the Zerops provider claims no namespace resources')
+		const target = (extra: Record<string, unknown> = {}): ProviderEnvelope => ({
+			provider: 'zerops',
+			version: zeropsNamespaceTargetCodec.version,
+			payload: zeropsNamespaceTargetCodec.encode({ proxySource, projectId: 'project-1', proxyServiceId: 'proxy-1', ready: true, ...extra }),
+		})
+		return { claims, target }
+	}
+
+	test('a member deploy still passes the claim check after a namespace job records a sandbox host', async () => {
+		const { db, d1 } = createHarness()
+		const env: Env = {
+			DB: d1,
+			REPOSITORIES: db,
+			ASSETS: { fetch: () => Promise.resolve(new Response()) },
+			RUN_LOGS: { put: () => Promise.resolve(), get: () => Promise.resolve(null), delete: () => Promise.resolve() },
+			DEPLOY_QUEUE: { send: () => Promise.resolve() },
+			WAIT_UNTIL: () => {},
+			ENVIRONMENT: 'prod',
+		}
+		const { claims, target } = await zeropsNamespace(env)
+		const before = target()
+		await db.registry.createApp({ id: 'app', repoUrl: 'github.com/acme/app' })
+		await db.registry.createDeploymentNamespaceWithResourceClaims({
+			id: 'apps-prod',
+			env: 'prod',
+			provider: 'zerops',
+			exclusiveAppId: null,
+			providerTargetJson: JSON.stringify(before),
+			state: 'ready',
+		}, claims({ id: 'apps-prod', env: 'prod', target: before }))
+		await db.registry.upsertAppEnvWithNamespaceResourceClaims({
+			appId: 'app',
+			env: 'prod',
+			namespaceId: 'apps-prod',
+			provider: 'zerops',
+			providerTargetJson: JSON.stringify(envelope('zerops', 'target')),
+			providerArtifactJson: JSON.stringify(envelope('zerops', 'artifact')),
+		}, ['service:appapi'])
+		await fixtureProtect(db.registry, makeFakeLock(db), { appId: 'app', env: 'prod' }, false)
+		const provider: ControlProvider = {
+			...makeProvider([], { state: 'succeeded' }, { id: 'zerops' }),
+			namespaces: {
+				normalize: (namespace) => namespace,
+				namespaceResourceClaims: claims,
+				registrationResourceClaims: () => ['service:appapi'],
+				provision: async (input) => input.namespace,
+				// What the sandbox-host step does: checkpoint the target once the Box host exists.
+				reconcile: async (input) => {
+					const next = { ...input.namespace, target: target({ sandboxHost: { serviceId: 'zbox-1', apiOrigin: 'https://zbox-1-8080.prg1.zerops.app' } }) }
+					await input.events.checkpoint(next)
+					return next
+				},
+			},
+		}
+		const deploy = async (): Promise<string> => {
+			const runId = uuidv7()
+			await db.runs.createRun({ id: runId, appId: 'app', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:test' })
+			return (await executeDeploy(makeDeps(db, provider), { runId })).status
+		}
+		expect(await deploy()).toBe('succeeded')
+
+		await db.registry.requeueDeploymentNamespace('apps-prod')
+		const job = await runNamespaceJob({ repositories: db, provider, lock: makeFakeLock(db) }, {
+			kind: 'namespace',
+			namespaceId: 'apps-prod',
+			mutation: 'reconcile',
+		})
+		expect(job.status).toBe('ready')
+		const zbox = (await db.registry.listNamespaceResourceClaims('apps-prod')).find((claim) => claim.resource_key === 'service:zbox')
+		expect(zbox).toMatchObject({ owner_app_id: null, owner_env: null })
+		expect(await deploy()).toBe('succeeded')
 	})
 })
