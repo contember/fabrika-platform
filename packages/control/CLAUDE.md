@@ -103,7 +103,8 @@ match is exact: every write path (`put`, `register`, a builder receipt) passes i
 keeps a `refs/…` value, turns a bare name into `refs/heads/<name>`, and refuses a value with whitespace or an empty
 segment, or one under the workspace branches (`refs/heads/fabrika/`, `WORKSPACE_BRANCH_PREFIX`), with a 400.
 `refMatches` matches no workspace branch, so a row stored before that refusal stays readable and is never triggered by
-a push, and the poller skips it: a workspace deploys only through `deploy_stage`. `0009_canonical_trigger_refs.sql`
+a push, and the poller skips it: a workspace deploys only through `deploy_stage`. Maintenance warns of each such row
+every pass (`warnWorkspaceTriggerRefs`). `0009_canonical_trigger_refs.sql`
 rewrote older bare rows; one whose full form another env of the app held stays bare, and maintenance warns of it every pass (`warnBareTriggerRefs`). The DEPLOYED ref is always concrete — the pushed ref
 (webhook) or the resolved newest matching tag (poll) — never the pattern. NULL trigger_ref = manual-only;
 a glob trigger_ref falls back to the default branch for a no-ref manual deploy. An app's environments hold

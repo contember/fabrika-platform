@@ -500,7 +500,7 @@ describe('onboarding + registry CRUD', () => {
 		})
 	})
 
-	test("only global app.manage changes an app's repository or source binding, and the audit records the repository", async () => {
+	test("only global app.manage changes an app's repository or source binding, and the audit records both", async () => {
 		const { deps, sqlite } = makeDeps()
 		insertSourceConnection(sqlite, 'connection-acme', 'Acme', 555)
 		await rpcResult(rpcRequest('apps.create', { id: 'bound', repoUrl: 'https://github.com/acme/bound', resolveInstallationId: true }), deps)
@@ -532,21 +532,36 @@ describe('onboarding + registry CRUD', () => {
 		expect(await stored('unbound')).toEqual({ repo: 'github.com/acme/unbound', connection: null, branch: 'main' })
 		expect(audited).toEqual([])
 
-		// The rest of the app stays app-scoped, and naming the repository it already has is no change.
-		expect((await update('bound', { repoUrl: 'https://github.com/acme/bound.git', defaultBranch: 'next' }, scoped('bound'))).status).toBe(200)
+		// The rest of the app stays app-scoped, and naming the repository or the installation it already has is no change.
+		expect(
+			(await update('bound', { repoUrl: 'https://github.com/acme/bound.git', githubInstallationId: 555, defaultBranch: 'next' }, scoped('bound')))
+				.status,
+		).toBe(200)
 		expect(await stored('bound')).toEqual({ repo: 'github.com/acme/bound', connection: 'connection-acme', branch: 'next' })
-		expect(audited).toEqual([expect.objectContaining({ action: 'app.update', resourceId: 'bound' })])
-		expect(audited[0]?.metadata).toBeUndefined()
+		expect((await update('unbound', { githubInstallationId: null, defaultBranch: 'next' }, scoped('unbound'))).status).toBe(200)
+		expect(await stored('unbound')).toEqual({ repo: 'github.com/acme/unbound', connection: null, branch: 'next' })
+		expect(audited).toEqual([
+			expect.objectContaining({ action: 'app.update', resourceId: 'bound' }),
+			expect.objectContaining({ action: 'app.update', resourceId: 'unbound' }),
+		])
+		expect(audited.map((event) => event.metadata)).toEqual([undefined, undefined])
 
 		audited.length = 0
 		const installationWide = recording(authWithActions([CONTROL_ACTIONS.APP_MANAGE]))
 		expect((await update('unbound', { repoUrl: 'https://github.com/acme/other', resolveInstallationId: true }, installationWide)).status).toBe(200)
-		expect(await stored('unbound')).toEqual({ repo: 'github.com/acme/other', connection: 'connection-acme', branch: 'main' })
+		expect(await stored('unbound')).toEqual({ repo: 'github.com/acme/other', connection: 'connection-acme', branch: 'next' })
 		expect(audited).toEqual([
 			expect.objectContaining({
 				action: 'app.update',
 				resourceId: 'unbound',
-				metadata: { repoUrl: 'github.com/acme/other', previousRepoUrl: 'github.com/acme/unbound' },
+				metadata: {
+					repoUrl: 'github.com/acme/other',
+					previousRepoUrl: 'github.com/acme/unbound',
+					githubConnectionId: 'connection-acme',
+					previousGithubConnectionId: null,
+					githubInstallationId: 555,
+					previousGithubInstallationId: null,
+				},
 			}),
 		])
 	})

@@ -120,7 +120,8 @@ GitHub hides: a private repository needs the GitHub App connected in the console
 on \`deploy\`. A bare name is a branch: \`--trigger-ref=deploy/prod\` is stored as \`refs/heads/deploy/prod\`.
 A full ref is kept as given: \`refs/heads/<branch>\`, \`refs/tags/<tag>\`, or a \`*\` glob such as
 \`refs/tags/v*\`, which deploys every matching tag. A tag always needs the \`refs/tags/\` form. Each
-environment of an app needs its own trigger ref.
+environment of an app needs its own trigger ref. Branches named \`fabrika/…\` are reserved for MCP
+workspaces and are never a trigger ref.
 
 Namespace placement options, each defaulting to what the preset would choose:
 

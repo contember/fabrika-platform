@@ -9,7 +9,7 @@ const REF_PREFIX = 'refs/'
 
 /** The branch namespace of MCP workspaces (`fabrika/<workspace id>`, ADR-0049). */
 export const WORKSPACE_BRANCH_PREFIX = 'fabrika/'
-const WORKSPACE_REF_PREFIX = `refs/heads/${WORKSPACE_BRANCH_PREFIX}`
+export const WORKSPACE_REF_PREFIX = `refs/heads/${WORKSPACE_BRANCH_PREFIX}`
 
 /** A trigger ref `canonicalTriggerRef` refuses; its message says why. */
 export class TriggerRefValidationError extends Error {

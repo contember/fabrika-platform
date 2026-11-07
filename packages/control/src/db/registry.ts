@@ -1,6 +1,7 @@
 import { type DeployLocks, type SqlDatabase, SqlDeployLocks, type SqlStatement } from '@fabrika/platform'
 import type { ProviderSourceBinding } from '@fabrika/provider-contract'
 import { type LeaseFence, namespaceLeaseKey, runLeaseKey } from '../lease'
+import { WORKSPACE_REF_PREFIX } from '../ref-match'
 import { appCoordinateLockStatements, appRowLockStatement, coordinateLockStatements, defaultProtected } from './coordinate-lock'
 import {
 	AppEnvChangedError,
@@ -665,6 +666,15 @@ export class ControlRegistryRepository {
 	async listBareTriggerEnvs(): Promise<AppEnvRow[]> {
 		const { results } = await this.d1
 			.prepare("SELECT * FROM app_envs WHERE trigger_ref IS NOT NULL AND substr(trigger_ref, 1, 5) <> 'refs/' ORDER BY app_id, env")
+			.all<AppEnvRow>()
+		return results
+	}
+
+	/** Every env whose trigger_ref is under the workspace branches: rows stored before `canonicalTriggerRef` refused them. */
+	async listWorkspaceTriggerEnvs(): Promise<AppEnvRow[]> {
+		const { results } = await this.d1
+			.prepare('SELECT * FROM app_envs WHERE trigger_ref IS NOT NULL AND substr(trigger_ref, 1, ?) = ? ORDER BY app_id, env')
+			.bind(WORKSPACE_REF_PREFIX.length, WORKSPACE_REF_PREFIX)
 			.all<AppEnvRow>()
 		return results
 	}

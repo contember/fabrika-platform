@@ -39,9 +39,11 @@ export async function updateAppUseCase(c: RegistryUseCaseContext, id: string, in
 	if (existing === null) fail(404, 'app not found')
 	const repoUrl = input.repoUrl === undefined ? existing.repo_url : normalizeRepoUrl(input.repoUrl)
 	const repoUrlChanged = repoUrl !== existing.repo_url
-	const bindsSource = input.githubInstallationId !== undefined || input.resolveInstallationId === true
+	// Naming the stored installation id is no change; asking Control to resolve the binding always is one.
+	const bindingRequested = (input.githubInstallationId !== undefined && input.githubInstallationId !== existing.github_installation_id)
+		|| input.resolveInstallationId === true
 	// The repository is chosen at registration, which needs global app.manage; app-scoped authority may not move it.
-	if ((repoUrlChanged || bindsSource) && !c.auth.can(CONTROL_ACTIONS.APP_MANAGE)) {
+	if ((repoUrlChanged || bindingRequested) && !c.auth.can(CONTROL_ACTIONS.APP_MANAGE)) {
 		fail(403, 'not authorized: changing an application repository or its GitHub source binding needs global app.manage')
 	}
 	const sourceBinding = await sourceBindingFields(c, input, repoUrl, existing)
@@ -50,11 +52,25 @@ export async function updateAppUseCase(c: RegistryUseCaseContext, id: string, in
 		...appFields(input),
 		...sourceBinding,
 	})
+	const githubConnectionId = sourceBinding.githubConnectionId === undefined ? existing.github_connection_id : sourceBinding.githubConnectionId
+	const githubInstallationId = sourceBinding.githubInstallationId === undefined ? existing.github_installation_id : sourceBinding.githubInstallationId
+	const bindingChanged = githubConnectionId !== existing.github_connection_id || githubInstallationId !== existing.github_installation_id
+	const metadata = {
+		...(repoUrlChanged ? { repoUrl, previousRepoUrl: existing.repo_url } : {}),
+		...(bindingChanged
+			? {
+				githubConnectionId,
+				previousGithubConnectionId: existing.github_connection_id,
+				githubInstallationId,
+				previousGithubInstallationId: existing.github_installation_id,
+			}
+			: {}),
+	}
 	await c.auth.audit({
 		action: 'app.update',
 		resourceType: 'app',
 		resourceId: id,
-		...(repoUrlChanged ? { metadata: { repoUrl, previousRepoUrl: existing.repo_url } } : {}),
+		...(repoUrlChanged || bindingChanged ? { metadata } : {}),
 	})
 	notifyCatalogChanged(c)
 	if (row === null) fail(404, 'app not found')
