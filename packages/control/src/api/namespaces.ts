@@ -22,13 +22,16 @@ import {
 	isLeaseLoss,
 	PROVIDER_NAMESPACE_IMMUTABLE,
 	PROVIDER_NAMESPACE_UPDATE_UNCONFIRMED,
+	type ProviderApprovedAccess,
 	type ProviderClaimedResource,
 	type ProviderDeploymentNamespace,
+	type ProviderEnvelope,
 	type ProviderNamespaceCapabilities,
 	type ProviderNamespaceDevSandbox,
 	ProviderNamespaceError,
 	type ProviderNamespaceHost,
 	type ProviderNamespaceMember,
+	type ProviderNamespaceMemberRouting,
 	type ProviderNamespaceMutationInput,
 	type ProviderNamespacePresentation,
 	type ProviderNamespaceRepublishInput,
@@ -38,6 +41,7 @@ import {
 import type { InstallationBrand } from '@fabrika/proxy-core/brand'
 import { approvedProviderAccess } from '../approval/snapshot'
 import {
+	type AppEnvRow,
 	type ControlRepositories,
 	crossOriginsField,
 	type DeploymentNamespaceRow,
@@ -445,31 +449,103 @@ async function namespaceMembers(
  */
 async function memberSandboxes(
 	deps: Pick<NamespaceJobDeps, 'repositories' | 'vault'>,
-	row: { readonly app_id: string; readonly env: string; readonly domain: string | null },
+	row: SandboxedEnvironment,
 	rows: readonly DevSandboxRow[],
 ): Promise<ProviderNamespaceDevSandbox[]> {
 	const vault = await requireVault(deps)
+	const sandboxes: ProviderNamespaceDevSandbox[] = []
+	for (const routed of await routedSandboxes(deps.repositories, row, rows)) {
+		try {
+			sandboxes.push({
+				workspaceId: routed.sandbox.workspace_id,
+				host: routed.host,
+				upstreamHost: routed.upstreamHost,
+				proxySecret: await openDevSandboxProxySecret(vault, routed.sandbox),
+				access: routed.access,
+			})
+		} catch {
+			unroutedSandbox(routed.sandbox)
+		}
+	}
+	return sandboxes
+}
+
+type SandboxedEnvironment = { readonly app_id: string; readonly env: string; readonly domain: string | null }
+
+/** The sandboxes `memberSandboxes` routes, before any secret is opened. */
+async function routedSandboxes(
+	repositories: Pick<ControlRepositories, 'runs'>,
+	row: SandboxedEnvironment,
+	rows: readonly DevSandboxRow[],
+): Promise<{ readonly sandbox: DevSandboxRow; readonly host: string; readonly upstreamHost: string; readonly access: ProviderApprovedAccess }[]> {
 	const domain = row.domain
 	if (domain === null || domain === '') return []
-	const sandboxes: ProviderNamespaceDevSandbox[] = []
+	const routed: { sandbox: DevSandboxRow; host: string; upstreamHost: string; access: ProviderApprovedAccess }[] = []
 	for (const sandbox of rows) {
 		const upstreamHost = sandbox.upstream_host
 		if (sandbox.state !== 'ready' || upstreamHost === null) continue
 		try {
-			const publication = await workspacePublication(deps.repositories, sandbox)
+			const publication = await workspacePublication(repositories, sandbox)
 			if (publication === null) continue
-			sandboxes.push({
-				workspaceId: sandbox.workspace_id,
-				host: devSandboxHost(domain, sandbox.workspace_id),
-				upstreamHost,
-				proxySecret: await openDevSandboxProxySecret(vault, sandbox),
-				access: publication.access,
-			})
+			routed.push({ sandbox, host: devSandboxHost(domain, sandbox.workspace_id), upstreamHost, access: publication.access })
 		} catch {
-			console.error(`dev sandbox of workspace ${sandbox.workspace_id}: its proxy secret or published snapshot cannot be read, so it is not routed`)
+			unroutedSandbox(sandbox)
 		}
 	}
-	return sandboxes
+	return routed
+}
+
+const unroutedSandbox = (sandbox: DevSandboxRow): void =>
+	console.error(`dev sandbox of workspace ${sandbox.workspace_id}: its proxy secret or published snapshot cannot be read, so it is not routed`)
+
+/**
+ * A namespace's entry point routes each host to one member, so the member a write or a publication changes may not be
+ * routed on a host a sibling is routed on. The provider's rule decides which hosts those are; a sibling the entry point
+ * cannot route already stops the namespace's republish, and is not this member's to refuse.
+ */
+export async function assertNamespaceHostsFree(
+	c: { readonly provider: ControlProvider; readonly repositories: ControlRepositories },
+	namespaceId: string | null,
+	candidate: ProviderNamespaceMemberRouting,
+): Promise<void> {
+	const memberHosts = c.provider.namespaces?.memberHosts
+	if (namespaceId === null || memberHosts === undefined) return
+	let hosts: ReadonlySet<string>
+	try {
+		hosts = new Set(memberHosts(candidate))
+	} catch (cause) {
+		fail(400, cause instanceof Error ? cause.message : 'invalid namespace member')
+	}
+	if (hosts.size === 0) return
+	for (const row of await c.repositories.registry.listAppEnvsByNamespace(namespaceId)) {
+		if (row.app_id === candidate.appId && row.env === candidate.env) continue
+		let artifact: ProviderEnvelope
+		try {
+			artifact = parseStoredEnvelope(row.provider_artifact_json, `artifact for ${row.app_id}/${row.env}`)
+		} catch {
+			continue
+		}
+		const routing = await namespaceMemberRouting(c.repositories, row, artifact)
+		let taken: string | undefined
+		try {
+			taken = memberHosts(routing).find((host) => hosts.has(host))
+		} catch {
+			continue
+		}
+		if (taken !== undefined) fail(409, `host ${taken} is already routed to ${row.app_id}/${row.env} in deployment namespace ${namespaceId}`)
+	}
+}
+
+/** What a republish routes one environment of the namespace on, with `artifact`, read from the registry alone: no secret is opened. */
+export async function namespaceMemberRouting(
+	repositories: Pick<ControlRepositories, 'runs' | 'devSandboxes'>,
+	row: AppEnvRow,
+	artifact: ProviderEnvelope,
+): Promise<ProviderNamespaceMemberRouting> {
+	const base = { appId: row.app_id, env: row.env, ...(row.domain === null ? {} : { domain: row.domain }), artifact }
+	if (row.kind !== 'dev') return { ...base, ...approvedProviderAccess(row) }
+	const sandboxes = await routedSandboxes(repositories, row, await repositories.devSandboxes.listByEnvironment(row.app_id, row.env))
+	return { ...base, devSandboxes: sandboxes.map(({ sandbox, host }) => ({ workspaceId: sandbox.workspace_id, host })) }
 }
 
 /**

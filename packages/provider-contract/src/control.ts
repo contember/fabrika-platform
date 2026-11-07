@@ -375,6 +375,16 @@ export interface ProviderNamespaceDevSandbox {
 	readonly access: ProviderApprovedAccess
 }
 
+/** What decides the hosts a namespace entry point routes one member on: `ProviderNamespaceMember` without its secrets. */
+export interface ProviderNamespaceMemberRouting {
+	readonly appId: string
+	readonly env: string
+	readonly domain?: string
+	readonly artifact: ProviderEnvelope
+	readonly access?: ProviderApprovedAccess
+	readonly devSandboxes?: readonly Pick<ProviderNamespaceDevSandbox, 'workspaceId' | 'host'>[]
+}
+
 /** One idempotent namespace lifecycle invocation. */
 export interface ProviderNamespaceMutationInput {
 	readonly namespace: ProviderDeploymentNamespace
@@ -563,6 +573,11 @@ export interface ProviderNamespaceCapabilities {
 	reconcile(input: ProviderNamespaceMutationInput): Promise<ProviderDeploymentNamespace>
 	/** Absent means the namespace has no entry point that follows its members. */
 	republish?(input: ProviderNamespaceRepublishInput): Promise<ProviderNamespaceRepublishResult>
+	/**
+	 * The hosts the namespace's entry point routes this member on, lower-cased, by the rule its compiler applies; none for
+	 * a member it does not route. Throws for a member it cannot route. Absent means no member is routed by host.
+	 */
+	memberHosts?(member: ProviderNamespaceMemberRouting): readonly string[]
 	/**
 	 * Read-only: whether each claimed resource still exists, one answer per key. Throws when it cannot tell, so Control
 	 * releases a claim only over a resource the provider confirmed gone. Absent means no claim can be released.

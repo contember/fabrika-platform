@@ -22,7 +22,9 @@ import type {
 	ProviderSourceBinding,
 } from '@fabrika/provider-contract'
 import { describe, expect, spyOn, test } from 'bun:test'
+import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import { type CloudflareRunnerJob, createCloudflareControlProvider } from '../../../provider-cloudflare/src/control'
+import { republishNamespace } from '../api/namespaces'
 import { readProviderEnvelope } from '../api/provider-envelope'
 import { getRunLogUseCase } from '../api/runs'
 import type { ControlRepositories, RunRow } from '../db'
@@ -1474,6 +1476,76 @@ describe('provider-neutral run lifecycle', () => {
 		sqlite.query(`DELETE FROM namespace_resource_claims WHERE namespace_id = ? AND resource_key = ?`).run('apps-prod', 'service:app')
 		expect(await deploy()).toBe('failed')
 		expect(inputs).toHaveLength(1)
+	})
+
+	test('refuses to publish a member onto a host a routed sibling holds, and the namespace still republishes', async () => {
+		const { db, d1 } = createHarness()
+		await db.registry.createApp({ id: 'app', repoUrl: 'github.com/acme/app' })
+		await db.registry.createApp({ id: 'other', repoUrl: 'github.com/acme/other' })
+		await db.registry.createDeploymentNamespaceWithResourceClaims({
+			id: 'apps-prod',
+			env: 'prod',
+			provider: 'memory',
+			exclusiveAppId: null,
+			providerTargetJson: JSON.stringify(envelope('memory', 'namespace')),
+			state: 'ready',
+		}, ['service:proxy'])
+		for (const { appId, domain } of [{ appId: 'other', domain: 'shop.example.com' }, { appId: 'app', domain: 'SHOP.example.com' }]) {
+			await db.registry.upsertAppEnvWithNamespaceResourceClaims({
+				appId,
+				env: 'prod',
+				domain,
+				namespaceId: 'apps-prod',
+				provider: 'memory',
+				providerTargetJson: JSON.stringify(envelope('memory', 'target')),
+				providerArtifactJson: JSON.stringify(envelope('memory', 'artifact')),
+			}, [`service:${appId}`])
+			await fixtureProtect(db.registry, makeFakeLock(db), { appId, env: 'prod' }, false)
+		}
+		// Only `other` is published, so only it is routed: `app` registered its host without a refusal.
+		await d1.prepare('UPDATE app_envs SET published_run_id = ?, published_snapshot_json = ? WHERE app_id = ? AND env = ?').bind(
+			uuidv7(),
+			JSON.stringify({ version: 1, contract: notesArtifact, migrations: [], checker: '0.9.0' }),
+			'other',
+			'prod',
+		).run()
+		const routed: string[][] = []
+		// A member with approved access is routed on its domain; the republish refuses a host twice, as the compiler does.
+		const hostsOf = (member: { domain?: string; access?: ProviderApprovedAccess }): string[] =>
+			member.access === undefined || member.domain === undefined ? [] : [member.domain.toLowerCase()]
+		const inputs: ProviderDeployInput[] = []
+		const provider: ControlProvider = {
+			...makeProvider(inputs, { state: 'succeeded' }),
+			namespaces: {
+				normalize: (namespace) => namespace,
+				namespaceResourceClaims: () => ['service:proxy'],
+				registrationResourceClaims: (registration) => [`service:${registration.app.id}`],
+				memberHosts: hostsOf,
+				provision: async (input) => input.namespace,
+				reconcile: async (input) => input.namespace,
+				republish: async (input) => {
+					const hosts = input.members.flatMap(hostsOf)
+					if (new Set(hosts).size !== hosts.length) throw new Error('duplicate proxy host')
+					routed.push(hosts)
+					return { namespace: input.namespace, settled: true }
+				},
+			},
+		}
+		const stored = memoryLogs()
+		const queue = { send: () => Promise.resolve() }
+		const deps = { ...makeDeps(db, provider), logs: stored.logs, queue }
+		const runId = uuidv7()
+		await db.runs.createRun({ id: runId, appId: 'app', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:test' })
+
+		expect((await executeDeploy(deps, { runId })).status).toBe('failed')
+		expect(stored.objects.get(`runs/${runId}/logs.ndjson`)).toContain(
+			'host shop.example.com is already routed to other/prod in deployment namespace apps-prod',
+		)
+		expect(inputs).toEqual([])
+		expect(routed).toEqual([])
+		expect((await db.registry.getAppEnv('app', 'prod'))?.published_run_id).toBeNull()
+		await republishNamespace({ repositories: db, provider, lock: makeFakeLock(db), queue }, 'apps-prod', { wait: 'active' })
+		expect(routed).toEqual([['shop.example.com']])
 	})
 
 	test('rejects namespace coordinate drift before calling the provider', async () => {

@@ -13,6 +13,12 @@ import { decodeEnvelope } from './codec'
 import { ZEROPS_NAMESPACE_POSTGRES_HOSTNAME, ZEROPS_NAMESPACE_PROXY_HOSTNAME } from './constants'
 import { asNamespaceError } from './errors'
 
+/** Refused for an app service whatever the target records now: any namespace may add a sandbox host later. */
+const RESERVED_HOSTNAMES: ReadonlySet<string> = new Set([ZEROPS_NAMESPACE_PROXY_HOSTNAME, SANDBOX_HOST_HOSTNAME])
+
+/** A shared namespace also keeps `postgres`, because adopting its project refuses an undeclared `postgres` service. */
+const SHARED_RESERVED_HOSTNAMES: ReadonlySet<string> = new Set([...RESERVED_HOSTNAMES, ZEROPS_NAMESPACE_POSTGRES_HOSTNAME])
+
 export const namespaceResourceClaims = (namespace: ProviderDeploymentNamespace): string[] => {
 	const target = decodeEnvelope(namespace.target)
 	return [
@@ -70,13 +76,17 @@ export const registrationResourceClaims = (registration: ProviderRegistration): 
 		}
 	}
 	const hostnames = manifestServiceHostnames(manifest)
+	const shared = namespace.exclusiveAppId === undefined
+	const reserved = shared ? SHARED_RESERVED_HOSTNAMES : RESERVED_HOSTNAMES
 	for (const hostname of hostnames) {
-		const key = `service:${hostname}`
-		if (namespaceClaims.has(key)) {
-			throw new Error(`Zerops service hostname \`${hostname}\` is reserved by the namespace`)
+		if (namespaceClaims.has(`service:${hostname}`) || reserved.has(hostname)) {
+			throw new Error(
+				`Zerops service hostname \`${hostname}\` is reserved by the namespace: rename the service `
+					+ '(docs/reference/deployment-namespaces.md, "Renaming a reserved service")',
+			)
 		}
 	}
-	if (namespace.exclusiveAppId === undefined) {
+	if (shared) {
 		const prefix = zeropsSharedServicePrefix(registration.app.id)
 		for (const hostname of hostnames) {
 			if (!hostname.startsWith(prefix) || hostname.length === prefix.length) {
