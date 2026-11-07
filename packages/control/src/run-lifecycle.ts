@@ -28,11 +28,19 @@ import {
 	type ProviderEnvelope,
 	type ProviderEnvironment,
 	ProviderInvocationAbort,
+	type ProviderNamespaceMemberRouting,
 	type ProviderReconcileOutcome,
 	type ProviderSourceBinding,
 	type ProviderTerminalOutcome,
 } from '@fabrika/provider-contract'
-import { namespaceNotReady, redactNamespaceErrorText, republishUnderLease, unconfirmedUpdateRefusal } from './api/namespaces'
+import {
+	assertNamespaceHostsFree,
+	namespaceMemberRouting,
+	namespaceNotReady,
+	redactNamespaceErrorText,
+	republishUnderLease,
+	unconfirmedUpdateRefusal,
+} from './api/namespaces'
 import { lifecycleEnvelopeSchema } from './api/provider-envelope'
 import { publishRunSnapshot } from './approval/publish'
 import { type AccessSnapshot, approvedProviderAccess, approvedSnapshot, type ProviderAccessFields } from './approval/snapshot'
@@ -65,6 +73,7 @@ import {
 import { devLauncherRefusal, platformSourceEnvironment, platformSourceOrigin } from './dev/deploy'
 import {
 	DEV_RUN_NEEDS_WORKSPACE,
+	devSandboxHost,
 	devSandboxOrigin,
 	openDevSandboxProxySecret,
 	requireVault,
@@ -732,6 +741,8 @@ async function deployUnder(
 				...(sourceBinding === undefined ? {} : { sourceBinding }),
 				...(sandbox === null ? {} : { workspaceBaseline: sandbox.baseline }),
 				validateAccess: async (access, row) => {
+					// Publishing is what routes a member, so it is refused like a registry write that would take a sibling's host.
+					await assertNamespaceHostsFree(deps, row.namespace_id, await publishedRouting(deps.repositories, row, access, sandbox))
 					if (deps.provider.validateAccess === undefined) return
 					const environment = await providerEnvironment(deps.repositories, row, { requireReadyNamespace: true })
 					deps.provider.validateAccess({ environment, access })
@@ -1230,6 +1241,20 @@ async function devSourceKey(
 }
 
 /** The workspace sandbox a dev bootstrap deploys into, and the snapshot its workspace last published. */
+/** The environment as its namespace routes it once this run publishes `access`; a dev bootstrap adds its workspace's sandbox. */
+async function publishedRouting(
+	repositories: ControlRepositories,
+	row: AppEnvRow,
+	access: ProviderApprovedAccess,
+	sandbox: DevBootstrapSandbox | null,
+): Promise<ProviderNamespaceMemberRouting> {
+	const routing = await namespaceMemberRouting(repositories, row)
+	if (row.kind !== 'dev') return { ...routing, access }
+	if (sandbox === null || row.domain === null) return routing
+	const others = (routing.devSandboxes ?? []).filter((routed) => routed.workspaceId !== sandbox.workspaceId)
+	return { ...routing, devSandboxes: [...others, { workspaceId: sandbox.workspaceId, host: devSandboxHost(row.domain, sandbox.workspaceId) }] }
+}
+
 interface DevBootstrapSandbox {
 	readonly row: DevSandboxRow
 	readonly workspaceId: string

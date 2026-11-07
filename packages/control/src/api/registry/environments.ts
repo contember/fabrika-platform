@@ -11,11 +11,10 @@ import {
 	NamespaceResourceClaimConflictError,
 } from '../../db'
 import { fail } from '../domain'
-import { namespaceMemberRouting, syncChangedNamespaceProxies } from '../namespaces'
+import { assertNamespaceHostsFree, namespaceMemberRouting, syncChangedNamespaceProxies } from '../namespaces'
 import { assertNoDevSandboxes, assertNoHeldResourceClaims, requireApp } from './apps'
 import { notifyCatalogChanged, type RegistryUseCaseContext } from './context'
 import {
-	assertNamespaceHostsFree,
 	normalizeRegistration,
 	preparationFailure,
 	prepareRegistration,
@@ -77,7 +76,7 @@ export async function putAppEnvUseCase(c: RegistryUseCaseContext, appId: string,
 	// The environment as the namespace routes it once this put lands: its approved access stays, the rest is the request's.
 	await assertNamespaceHostsFree(
 		c,
-		namespace,
+		namespace?.id ?? null,
 		existing === null
 			? {
 				appId,

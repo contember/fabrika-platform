@@ -377,15 +377,15 @@ the provider's synchronous claims hook — before any provider mutation, so noth
 is created. Previously such a registration succeeded and its first deploy failed
 at proxy composition.
 
-The proxy routes each host to one member, so registration and `apps.environments.put` also refuse with **409**,
-naming the sibling, an environment that would be routed on a host another member of the namespace is routed on,
-compared without case, before the provider prepares anything. The provider decides which hosts a member is routed on
-(`memberHosts`; on Zerops the function the manifest compiler routes by): a member with an approved contract and a
-proxy target on its domain, a `dev` member only on its workspaces' `<workspace>.<domain>` hosts, and any other member on
-none. Dev environments of several applications may therefore share one wildcard base. A member that is not routed yet
-may name a routed sibling's host: its first deploy publishes its contract, and the namespace republish then fails,
-naming the host, for every member until a put moves one of the two. There is no database constraint behind the check,
-so two concurrent puts can both pass it; the republish refuses the second the same way.
+The proxy routes each host to one member, so Control refuses a member that would be routed on a host another member of
+the namespace is routed on, compared without case, naming the sibling: registration and `apps.environments.put` answer
+**409** before the provider prepares anything, and a deploy fails before it publishes the contract that would route its
+member, which is what makes a member routed. The provider decides which hosts a member is routed on (`memberHosts`; on
+Zerops the function the manifest compiler routes by): a member with an approved contract and a proxy target on its
+domain, a `dev` member only on its workspaces' `<workspace>.<domain>` hosts, and any other member on none. Dev
+environments of several applications may therefore share one wildcard base, and a member not yet published may name a
+routed sibling's host until its deploy. There is no database constraint behind the check, so two concurrent writes can
+both pass it; the namespace republish then refuses the duplicate host, naming it, until a put moves one of the two.
 
 The proxy source pin is persisted in the namespace target when the namespace is
 planned and every proxy build uploads exactly that source (ADR-0045). A target

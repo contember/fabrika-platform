@@ -497,6 +497,37 @@ async function routedSandboxes(
 const unroutedSandbox = (sandbox: DevSandboxRow): void =>
 	console.error(`dev sandbox of workspace ${sandbox.workspace_id}: its proxy secret or published snapshot cannot be read, so it is not routed`)
 
+/**
+ * A namespace's entry point routes each host to one member, so the member a write or a publication changes may not be
+ * routed on a host a sibling is routed on. The provider's rule decides which hosts those are; a sibling the entry point
+ * cannot route already stops the namespace's republish, and is not this member's to refuse.
+ */
+export async function assertNamespaceHostsFree(
+	c: { readonly provider: ControlProvider; readonly repositories: ControlRepositories },
+	namespaceId: string | null,
+	candidate: ProviderNamespaceMemberRouting,
+): Promise<void> {
+	const memberHosts = c.provider.namespaces?.memberHosts
+	if (namespaceId === null || memberHosts === undefined) return
+	let hosts: ReadonlySet<string>
+	try {
+		hosts = new Set(memberHosts(candidate))
+	} catch (cause) {
+		fail(400, cause instanceof Error ? cause.message : 'invalid namespace member')
+	}
+	if (hosts.size === 0) return
+	for (const row of await c.repositories.registry.listAppEnvsByNamespace(namespaceId)) {
+		if (row.app_id === candidate.appId && row.env === candidate.env) continue
+		let taken: string | undefined
+		try {
+			taken = memberHosts(await namespaceMemberRouting(c.repositories, row)).find((host) => hosts.has(host))
+		} catch {
+			continue
+		}
+		if (taken !== undefined) fail(409, `host ${taken} is already routed to ${row.app_id}/${row.env} in deployment namespace ${namespaceId}`)
+	}
+}
+
 /** What a republish routes one environment of the namespace on, read from the registry alone: no secret is opened. */
 export async function namespaceMemberRouting(
 	repositories: Pick<ControlRepositories, 'runs' | 'devSandboxes'>,
