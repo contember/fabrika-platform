@@ -1,5 +1,7 @@
 import { ConflictError } from '@fabrika/app'
+import type { AuthContext, DomainEvent } from '@fabrika/auth'
 import { FABRIKA_IAM_APP_ID, FABRIKA_IAM_ISSUER, FRAMEWORK_VARIABLE_NAMES, isFrameworkVariableName } from '@fabrika/auth-core'
+import { CONTROL_ACTIONS, type UpdateAppRequest } from '@fabrika/control-contract'
 import { OPERATIONS_MANAGED_ENVIRONMENT_KEYS } from '@fabrika/operations-contract/ingest'
 import { FABRIKA_RELEASE } from '@fabrika/operations-contract/releases'
 import { uuidv7 } from '@fabrika/platform'
@@ -19,7 +21,7 @@ import type { ControlRpcDeps } from '../services'
 import { parseVaultRef, Vault } from '../vault'
 import { memoryCommits } from './helpers/commits'
 import { createHarness, type Harness, pushWebhookRequest } from './helpers/harness'
-import { allowAllAuth } from './helpers/iam'
+import { allowAllAuth, authWithActions, authWithPermissions } from './helpers/iam'
 import { fixtureRuns, makeFakeLock } from './helpers/lock'
 import { rpcRequest, rpcResult } from './helpers/rpc'
 import { testVaultKey } from './helpers/vault'
@@ -496,6 +498,57 @@ describe('onboarding + registry CRUD', () => {
 			github_connection_id: 'connection-acme',
 			github_installation_id: 555,
 		})
+	})
+
+	test("only global app.manage changes an app's repository or source binding, and the audit records the repository", async () => {
+		const { deps, sqlite } = makeDeps()
+		insertSourceConnection(sqlite, 'connection-acme', 'Acme', 555)
+		await rpcResult(rpcRequest('apps.create', { id: 'bound', repoUrl: 'https://github.com/acme/bound', resolveInstallationId: true }), deps)
+		await rpcResult(rpcRequest('apps.create', { id: 'unbound', repoUrl: 'https://github.com/acme/unbound' }), deps)
+		const audited: DomainEvent[] = []
+		const recording = (auth: AuthContext): ControlRpcDeps => ({
+			...deps,
+			auth: {
+				...auth,
+				audit: (event) => {
+					audited.push(event)
+					return Promise.resolve()
+				},
+			},
+		})
+		const scoped = (appId: string) => recording(authWithPermissions([{ action: CONTROL_ACTIONS.APP_MANAGE, scope: { type: 'app', value: appId } }]))
+		const update = (appId: string, app: UpdateAppRequest, as: ControlRpcDeps) => rpcResult(rpcRequest('apps.update', { appId, app }), as)
+		const stored = async (appId: string) => {
+			const row = await deps.repositories.registry.getApp(appId)
+			return { repo: row?.repo_url, connection: row?.github_connection_id, branch: row?.default_branch }
+		}
+
+		expect((await update('bound', { repoUrl: 'https://github.com/acme/other' }, scoped('bound'))).status).toBe(403)
+		expect(await stored('bound')).toEqual({ repo: 'github.com/acme/bound', connection: 'connection-acme', branch: 'main' })
+		expect((await update('unbound', { resolveInstallationId: true }, scoped('unbound'))).status).toBe(403)
+		expect((await update('unbound', { githubInstallationId: 555 }, scoped('unbound'))).status).toBe(403)
+		expect((await update('unbound', { repoUrl: 'https://github.com/acme/other', resolveInstallationId: true }, scoped('unbound'))).status)
+			.toBe(403)
+		expect(await stored('unbound')).toEqual({ repo: 'github.com/acme/unbound', connection: null, branch: 'main' })
+		expect(audited).toEqual([])
+
+		// The rest of the app stays app-scoped, and naming the repository it already has is no change.
+		expect((await update('bound', { repoUrl: 'https://github.com/acme/bound.git', defaultBranch: 'next' }, scoped('bound'))).status).toBe(200)
+		expect(await stored('bound')).toEqual({ repo: 'github.com/acme/bound', connection: 'connection-acme', branch: 'next' })
+		expect(audited).toEqual([expect.objectContaining({ action: 'app.update', resourceId: 'bound' })])
+		expect(audited[0]?.metadata).toBeUndefined()
+
+		audited.length = 0
+		const installationWide = recording(authWithActions([CONTROL_ACTIONS.APP_MANAGE]))
+		expect((await update('unbound', { repoUrl: 'https://github.com/acme/other', resolveInstallationId: true }, installationWide)).status).toBe(200)
+		expect(await stored('unbound')).toEqual({ repo: 'github.com/acme/other', connection: 'connection-acme', branch: 'main' })
+		expect(audited).toEqual([
+			expect.objectContaining({
+				action: 'app.update',
+				resourceId: 'unbound',
+				metadata: { repoUrl: 'github.com/acme/other', previousRepoUrl: 'github.com/acme/unbound' },
+			}),
+		])
 	})
 
 	test('a provider without private sources refuses a binding', async () => {

@@ -6,7 +6,7 @@ The builder keeps application design, coding agents, source code and preview pro
 
 An administrator prepares the installation, a ready application namespace, GitHub source access and the application's domain. The source repository must already exist. The builder does not create namespaces, configure a GitHub App, create repositories, or bind custom domains.
 
-The approving person needs IAM-resolved Control permissions for the application: `app.manage`, `deploy.trigger` and `deploy.read`. Creating an application requires global `app.manage`. Selecting a new placement through namespace discovery requires `namespace.manage`; the local builder never receives it. A Control-only bootstrap override does not supply delegable IAM permissions.
+The approving person needs IAM-resolved Control permissions for the application: `app.manage`, `deploy.trigger` and `deploy.read`. Creating an application, and later changing its repository or its GitHub source binding, requires global `app.manage`; the builder key, scoped to the application, can do neither. Selecting a new placement through namespace discovery requires `namespace.manage`; the local builder never receives it. A Control-only bootstrap override does not supply delegable IAM permissions.
 
 ## Connect a project
 
