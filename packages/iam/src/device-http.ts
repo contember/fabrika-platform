@@ -1,4 +1,6 @@
+import { readBoundedText } from './bounded-body'
 import { cancelDeviceAuthorization, exchangeDeviceAuthorization, pollDeviceAuthorization, startDeviceAuthorization } from './device'
+import { parseJsonOrNull } from './json'
 import type { Services } from './services'
 
 export async function handleDeviceAuthorization(
@@ -32,25 +34,6 @@ export async function handleDeviceAuthorization(
 
 async function readDeviceJson(request: Request): Promise<unknown> {
 	if (request.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase() !== 'application/json' || !request.body) return null
-	const reader = request.body.getReader()
-	const decoder = new TextDecoder()
-	let text = ''
-	let bytes = 0
-	try {
-		while (true) {
-			const chunk = await reader.read()
-			if (chunk.done) break
-			bytes += chunk.value.byteLength
-			if (bytes > 16384) {
-				await reader.cancel()
-				return null
-			}
-			text += decoder.decode(chunk.value, { stream: true })
-		}
-		return JSON.parse(text + decoder.decode())
-	} catch {
-		return null
-	} finally {
-		reader.releaseLock()
-	}
+	const body = await readBoundedText(request, 16_384)
+	return body.ok ? parseJsonOrNull(body.text) : null
 }
