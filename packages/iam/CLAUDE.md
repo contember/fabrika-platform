@@ -270,9 +270,10 @@ fails if that stops being true — it is the guard, not documentation of one.
   Control has recorded). A key issued by an attempt whose record failed is therefore an orphan the next issuance
   revokes, and the running version's key stays valid until Control records its replacement.
 - **`POST /auth/workload/token` IS PUBLIC, SO ITS COST IS BOUNDED BEFORE ANY LOOKUP** (`src/workload-token.ts`). In
-  order: the body `{ app }`, the key's exact format (`px_` + 27 base64url characters), the per-client bucket of the
-  password and device routes (`recordLoginFailure`, only where the composition names a client address; none
-  otherwise, never a guess; 429), one lookup by the key's hash. `mintFromWorkloadKey` checks the kind and the app
+  order: the key's exact format (`px_` + 27 base64url characters; no body is read without it), the body `{ app }`
+  read to at most 4 KiB (`readBoundedText`, 413 past it), the per-client bucket of the password and device routes
+  (`recordLoginFailure`, only where the composition names a client address; none otherwise, never a guess; 429), one
+  lookup by the key's hash. `mintFromWorkloadKey` checks the kind and the app
   before it reads anything about the principal, so an absent, revoked, expired, disabled or non-workload key all
   answer the same `invalid_key`. A refusal writes no auth-log row; refusals are one aggregated warning per minute. A
   storage failure is a 503, never a refusal.

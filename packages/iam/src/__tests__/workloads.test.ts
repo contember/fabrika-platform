@@ -480,7 +480,57 @@ describe(`POST ${WORKLOAD_TOKEN_PATH}`, () => {
 
 	test('refuses a body that names no application, and every method but POST', async () => {
 		const h = createHarness()
-		expect((await call(h, WORKLOAD_TOKEN_PATH, { method: 'POST', bearer: PROVISIONING_KEY, body: { app: APP, extra: 1 } })).status).toBe(400)
+		const wellFormed = `px_${'A'.repeat(27)}`
+		expect((await call(h, WORKLOAD_TOKEN_PATH, { method: 'POST', bearer: wellFormed, body: { app: APP, extra: 1 } })).status).toBe(400)
 		expect((await call(h, WORKLOAD_TOKEN_PATH, { method: 'GET' })).status).toBe(405)
+	})
+
+	/** A 64 KiB body in 1 KiB chunks that counts the bytes the route pulls out of it. */
+	function largeBody(): { stream: ReadableStream<Uint8Array>; pulled: () => number } {
+		let pulled = 0
+		const chunk = new TextEncoder().encode('a'.repeat(1_024))
+		const stream = new ReadableStream<Uint8Array>({
+			pull(controller) {
+				if (pulled >= 64 * 1_024) return controller.close()
+				pulled += chunk.byteLength
+				controller.enqueue(chunk)
+			},
+		}, { highWaterMark: 0 })
+		return { stream, pulled: () => pulled }
+	}
+
+	function streamed(h: Harness, body: ReadableStream<Uint8Array>, bearer?: string): Promise<Response> {
+		const headers = new Headers({ 'content-type': 'application/json' })
+		if (bearer !== undefined) headers.set('authorization', `Bearer ${bearer}`)
+		return createIamApp().fetch(new Request(`${ISSUER}${WORKLOAD_TOKEN_PATH}`, { method: 'POST', headers, body }), env(h), exec)
+	}
+
+	test('refuses a request without a well-formed key before it reads the body', async () => {
+		const h = createHarness()
+		for (const bearer of [undefined, PROVISIONING_KEY, 'px_short']) {
+			const body = largeBody()
+			const response = await streamed(h, body.stream, bearer)
+			expect(await response.json()).toEqual({ ok: false, reason: 'invalid_key' })
+			expect(body.pulled()).toBe(0)
+		}
+	})
+
+	test('refuses a body over 4 KiB with 413, reading no further than the cap', async () => {
+		const h = createHarness()
+		const job = await issued(h, { kind: 'job', name: 'nightly' })
+		const body = largeBody()
+		const response = await streamed(h, body.stream, job.key)
+		expect(response.status).toBe(413)
+		expect(body.pulled()).toBeLessThanOrEqual(4_096 + 1_024)
+		const declared = await createIamApp().fetch(
+			new Request(`${ISSUER}${WORKLOAD_TOKEN_PATH}`, {
+				method: 'POST',
+				headers: { authorization: `Bearer ${job.key}`, 'content-type': 'application/json', 'content-length': '4097' },
+				body: JSON.stringify({ app: APP }),
+			}),
+			env(h),
+			exec,
+		)
+		expect(declared.status).toBe(413)
 	})
 })

@@ -2,20 +2,24 @@
 // token (ADR-0022 "Principal kinds"). The key is the whole authority: the route answers only for a workload key of the
 // named app, so it is no oracle for any other credential, and the token it signs is accepted by no mount.
 //
-// The route is public, so a request's cost is bounded before any lookup: the key's format first, then the per-client
-// bucket the password and device routes use (only where the composition names a trusted client address; without one
-// there is no bucket, never a guess), then one lookup by the key's hash. A refusal writes no auth-log row; refusals are
-// counted and logged once per interval.
+// The route is public, so a request's cost is bounded before any lookup: the key's format first, then a body of at most
+// 4 KiB, then the per-client bucket the password and device routes use (only where the composition names a trusted
+// client address; without one there is no bucket, never a guess), then one lookup by the key's hash. A refusal writes
+// no auth-log row; refusals are counted and logged once per interval.
 
 import type { MintFromKeyResult } from '@fabrika/auth-core'
 import { z } from 'zod'
+import { readBoundedText } from './bounded-body'
 import type { Env, RequestContext } from './env'
+import { parseJsonOrNull } from './json'
 import { logError } from './log'
 import { hashToken, ISSUED_KEY_FORMAT } from './secret'
 import type { Services } from './services'
 import { mintFromWorkloadKey } from './tokens'
 
 const bodySchema = z.object({ app: z.string().min(1).max(160) }).strict()
+/** `{ app }` is at most a few hundred bytes. */
+const BODY_MAX_BYTES = 4_096
 
 /** Generous on purpose: a project's jobs and webhooks may share one egress address, and each mints once per token lifetime. */
 const CLIENT_WINDOW_SECONDS = 600
@@ -44,14 +48,8 @@ function bearerOf(request: Request): string | null {
 	return key !== null && ISSUED_KEY_FORMAT.test(key) ? key : null
 }
 
-async function appOf(request: Request): Promise<string | null> {
-	let body: unknown
-	try {
-		body = await request.json()
-	} catch {
-		return null
-	}
-	const parsed = bodySchema.safeParse(body)
+function appOf(text: string): string | null {
+	const parsed = bodySchema.safeParse(parseJsonOrNull(text))
 	return parsed.success ? parsed.data.app : null
 }
 
@@ -90,14 +88,18 @@ export async function handleWorkloadToken(
 	if (request.method !== 'POST') {
 		return new Response('method not allowed', { status: 405, headers: { allow: 'POST' } })
 	}
-	const app = await appOf(request)
-	if (app === null) {
-		return Response.json({ error: 'the body is { app }' }, { status: 400 })
-	}
 	const key = bearerOf(request)
 	if (key === null) {
 		countRefusal()
 		return decided(INVALID_KEY)
+	}
+	const body = await readBoundedText(request, BODY_MAX_BYTES)
+	if (!body.ok && body.reason === 'too_large') {
+		return Response.json({ error: 'the body is too large' }, { status: 413 })
+	}
+	const app = body.ok ? appOf(body.text) : null
+	if (app === null) {
+		return Response.json({ error: 'the body is { app }' }, { status: 400 })
 	}
 	try {
 		if (await clientBlocked(services, clientAddress)) {

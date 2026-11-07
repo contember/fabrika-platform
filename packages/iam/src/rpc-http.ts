@@ -229,9 +229,11 @@ export function isMintPath(pathname: string): boolean {
  * service cannot identify a client. Behind the project's L7 balancer the peer address is the
  * balancer's, and the forwarded-header behaviour is not something this repo has verified; keying a
  * limiter on a header a caller can set is worse than no limiter, because it looks like protection.
- * The proxy sits in front of the actual client and already caches per session, so that is where a
- * per-client limit belongs. Detection is covered meanwhile: every failed mint writes an `auth_log`
- * deny row with the app and the reason, so a burst is visible in the admin auth log.
+ * The proxy does not limit either: it caches successful mints only, so every request with a present but
+ * unknown credential is one call here, and it holds no counter by design (ADR-0022). What bounds such a
+ * call is its cost: one or two indexed lookups and one `auth_log` deny row, less than a password attempt.
+ * Bounding raw request volume is the edge's job. The deny rows carry the app and the reason, so a
+ * burst is visible in the admin auth log.
  */
 export async function handleMintHttp(
 	request: Request,
