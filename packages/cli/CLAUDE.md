@@ -35,7 +35,9 @@ label the envelope a registration carries.
   bound IAM enforces; the CLI checks it first only to say so before the call.
   `FABRIKA_IAM_RPC_URL` is IAM's PUBLIC origin; the private hostname services use
   between themselves resolves only inside the provider's project, so the help text
-  and the unreachable-IAM message both say so.
+  and the unreachable-IAM message both say so. The origin passes the same check as
+  Control's (`credentialOrigin`: https or loopback http, origin only) before either key
+  is read into a request, and a redirect is refused, never followed.
 - `namespaces create` commits the plan it just read, never a second derivation —
   the console's two-step form has the same rule for the same reason.
 - `apps variables` writes an app's operator-set values, and a name the app's

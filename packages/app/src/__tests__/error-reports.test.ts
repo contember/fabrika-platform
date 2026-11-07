@@ -64,6 +64,22 @@ describe('the scrubber', () => {
 		expect(secretValues(environment({ FABRIKA_SERVICE_KEY: 'short', API_TOKEN: 'tiny' }))).toEqual([])
 	})
 
+	test('a database URL or URI and a password variable are secrets by name; the working directory and a public URL are not', () => {
+		const values = secretValues(environment({
+			DATABASE_URL: 'postgres://app:db-pass-0123@db:5432/app',
+			reportsDbUri: 'mysql://reports-host:3306/reports',
+			SMTP_PASS: 'smtp-pass-4567',
+			PWD: '/var/www/application',
+			PUBLIC_URL: 'https://notes.example',
+		}))
+		expect(values).toContain('postgres://app:db-pass-0123@db:5432/app')
+		expect(values).toContain('db-pass-0123')
+		expect(values).toContain('mysql://reports-host:3306/reports')
+		expect(values).toContain('smtp-pass-4567')
+		expect(values).not.toContain('/var/www/application')
+		expect(values).not.toContain('https://notes.example')
+	})
+
 	test("the platform transport's provider and URL stay, and its key is removed", () => {
 		const platform = environmentScrubber(environment({
 			FABRIKA_EMAIL_PROVIDER: 'platform',

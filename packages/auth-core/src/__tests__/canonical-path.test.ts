@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { isCanonicalPath, rawRequestTarget, splitRequestTarget } from '../canonical-path'
+import { isCanonicalPath, rawRequestTarget, sameOriginTarget, splitRequestTarget } from '../canonical-path'
 
 describe('isCanonicalPath', () => {
 	test.each([
@@ -72,5 +72,34 @@ describe('rawRequestTarget', () => {
 		const target = rawRequestTarget('https://example.com\\..\\admin')
 		expect(target.pathname).toBe('\\..\\admin')
 		expect(isCanonicalPath(target.pathname)).toBe(false)
+	})
+})
+
+describe('sameOriginTarget', () => {
+	const ORIGIN = 'https://app.example'
+
+	test.each([
+		['/', 'https://app.example/'],
+		['/thanks?x=1#top', 'https://app.example/thanks?x=1#top'],
+		['/a/../b', 'https://app.example/b'],
+		['/ /elsewhere.example/', 'https://app.example/%20/elsewhere.example/'],
+	])('%s is a path of the origin', (path, target) => {
+		expect(sameOriginTarget(ORIGIN, path)).toBe(target)
+	})
+
+	test.each([
+		'',
+		'thanks',
+		'https://elsewhere.example/',
+		'//elsewhere.example/',
+		'/\\elsewhere.example/',
+		'/a\\b',
+		'/\t/elsewhere.example/',
+		'/\n/elsewhere.example/',
+		'/\r\n/elsewhere.example/',
+		'/\u0000/elsewhere.example/',
+		'/\u007f/elsewhere.example/',
+	])('%j is not', (path) => {
+		expect(sameOriginTarget(ORIGIN, path)).toBeNull()
 	})
 })

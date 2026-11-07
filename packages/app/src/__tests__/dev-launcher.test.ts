@@ -261,6 +261,7 @@ function start(
 	deployedDigest?: string,
 	spaBuild: string[] = [],
 	checks: DevLauncherConfig['checks'] = [{ name: 'tests', command: 'echo checked && exit 3' }],
+	extra: Record<string, string> = {},
 ): DevLauncher {
 	const config: DevLauncherConfig = {
 		format: 1,
@@ -280,6 +281,7 @@ function start(
 		PORT: String(value.port),
 		FABRIKA_PLATFORM_SOURCE_URL: value.control.url,
 		FABRIKA_PLATFORM_SOURCE_KEY: KEY,
+		...extra,
 		...(deployedDigest === undefined ? {} : { FABRIKA_CONTRACT_DIGEST: deployedDigest }),
 		...(database === undefined
 			? {}
@@ -437,6 +439,33 @@ describe('the dev launcher', () => {
 		expect(secondLog.some((line) => line.text.includes(`synced 1 files to ${sha(3)}`))).toBe(true)
 		expect(secondLog.some((line) => line.text.includes(sha(2)))).toBe(false)
 		expect(secondLog.every((line) => line.n > (firstLog.at(-1)?.n ?? -1))).toBe(true)
+	})
+
+	test('no secret value reaches a report: not its log, a check output or a failure message', async () => {
+		const tokenKeys = 'tk-signing-key-0f1e2d3c4b5a'
+		const password = 'smtp-password-9a8b7c6d'
+		const value = await fixture()
+		await writeTree(value.root, { 'web/title.txt': 'one' })
+		await start(
+			value,
+			undefined,
+			undefined,
+			['echo "build saw $smtp_password" >&2 && exit 1'],
+			[{ name: 'tests', command: `echo "check saw $smtp_password" && echo "keys ${tokenKeys}" && exit 1` }],
+			{ FABRIKA_TOKEN_KEYS: tokenKeys, smtp_password: password },
+		).ready
+		const failed = value.control.nextReport((report) => report.status === 'failed' && report.head === sha(2))
+		value.control.commit(sha(2), { 'web/title.txt': 'two' })
+		const failure = await failed
+		expect(failure.message).toContain('failed: build saw [redacted]')
+		const checked = value.control.nextReport((report) => report.checks !== null)
+		value.control.advance('checks')
+		const report = await checked
+		expect(report.checks?.results[0]?.output).toEqual(['check saw [redacted]', 'keys [redacted]'])
+		for (const sent of [...value.control.reports, ...value.lines.map((line) => ({ line }))]) {
+			expect(JSON.stringify(sent)).not.toContain(password)
+			expect(JSON.stringify(sent)).not.toContain(tokenKeys)
+		}
 	})
 
 	test("bun's echo of the SPA script it runs is reported on stdout, not as an error", async () => {

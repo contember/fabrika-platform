@@ -29,6 +29,7 @@ import {
 	PROXY_TOKEN_HEADER,
 	rawRequestTarget,
 	type RedirectShape,
+	sameOriginTarget,
 	satisfies,
 	type SchemaShape,
 	type ScopeBinding,
@@ -1895,7 +1896,7 @@ function readQuery(
  */
 function redirectResponse(row: EndpointRow, shape: RedirectShape, output: unknown, request: Request, carried: ReadonlySet<string>): Response {
 	const to = isRecord(output) && typeof output['to'] === 'string' ? output['to'] : ''
-	const own = to.startsWith('/') && !to.startsWith('//') && !to.includes('\\')
+	const own = sameOriginTarget(new URL(request.url).origin, to) !== null
 	let listed = false
 	if (!own) {
 		try {

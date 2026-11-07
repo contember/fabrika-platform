@@ -41,7 +41,7 @@ const PUBLIC_FRAMEWORK_VARIABLES: ReadonlySet<string> = new Set([
  * An application variable whose name says it holds a secret. The runtime does not know which names the application
  * declared as secrets, so the name decides (backlog 176).
  */
-const SECRET_NAME = /secret|token|passw|private|credential|key|auth|dsn|salt|connection|cookie|session|signature|cert/i
+const SECRET_NAME = /secret|token|pass|private|credential|key|auth|dsn|salt|connection|cookie|session|signature|cert|database_?ur[il]|db_?ur[il]/i
 
 const JWT = /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/g
 const AUTHORIZATION_SCHEME = /\b(Bearer|Basic|Token)\s+[A-Za-z0-9._~+/=-]{8,}/gi

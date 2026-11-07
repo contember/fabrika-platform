@@ -19,6 +19,7 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { z } from 'zod/v4'
+import { environmentScrubber, type Scrubber } from '../jobs/scrub.js'
 import { makeProcessUndumpable } from '../undumpable.js'
 import { bootstrapReason, migrationsChanged, webSourceChanged } from './changes.js'
 import { OutputRing, type OutputSink, type OutputStream, processOutput, readLines } from './output.js'
@@ -152,20 +153,19 @@ const SUPERSEDED = 'a newer bootstrap run replaced this container; it stops foll
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
-/** Every value of the environment a log line must never show: the database credentials and every key, secret or token. */
-function secretValues(environment: Readonly<Record<string, string>>, runtimeUrl: string | null): string[] {
-	const values = new Set<string>()
-	const add = (value: string | undefined): void => {
-		if (value !== undefined && value.length >= 8) values.add(value)
-	}
-	for (const url of [environment[PROVISIONING_DATABASE_URL], runtimeUrl ?? undefined]) {
-		add(url)
-		if (url !== undefined && URL.canParse(url)) add(decodeURIComponent(new URL(url).password))
-	}
+/**
+ * The scrubber of every line the launcher logs or reports: Operations' rule over the launcher's environment, with the
+ * runtime credential it derives, so the provisioning and `source` credentials count as the framework's secrets.
+ */
+function outputScrubber(environment: Readonly<Record<string, string>>, runtimeUrl: string | null): Scrubber {
+	const framework: Record<string, string> = {}
+	const application: Record<string, string> = {}
 	for (const [name, value] of Object.entries(environment)) {
-		if (/(KEY|SECRET|PASSWORD|TOKEN|DATABASE_URL)$/.test(name)) add(value)
+		if (name.startsWith('FABRIKA_')) framework[name] = value
+		else application[name] = value
 	}
-	return [...values].sort((left, right) => right.length - left.length)
+	if (runtimeUrl !== null) framework[RUNTIME_DATABASE_URL] = runtimeUrl
+	return environmentScrubber({ framework, application })
 }
 
 const withoutFramework = (environment: Readonly<Record<string, string>>): Record<string, string> =>
@@ -215,7 +215,7 @@ class Launcher {
 		if (runtimeUrl !== null) application[RUNTIME_DATABASE_URL] = runtimeUrl
 		this.applicationEnvironment = application
 		this.commandEnvironment = withoutFramework(options.environment)
-		this.ring = new OutputRing(RING_LINES, secretValues(options.environment, runtimeUrl), options.output ?? processOutput)
+		this.ring = new OutputRing(RING_LINES, outputScrubber(options.environment, runtimeUrl), options.output ?? processOutput)
 	}
 
 	async start(): Promise<void> {
@@ -584,8 +584,7 @@ class Launcher {
 		const child = Bun.spawn([...argv], { cwd: this.root, env, stdin: 'ignore', stdout: 'pipe', stderr: 'pipe' })
 		const lines: string[] = []
 		const collect = (stream: OutputStream) => (line: string) => {
-			lines.push(line)
-			this.ring.push(classify(stream, line), line)
+			lines.push(this.ring.push(classify(stream, line), line))
 		}
 		const timer = setTimeout(() => child.kill('SIGKILL'), timeoutMs)
 		await Promise.all([readLines(child.stdout, collect('stdout')), readLines(child.stderr, collect('stderr')), child.exited])

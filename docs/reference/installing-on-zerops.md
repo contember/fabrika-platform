@@ -39,8 +39,8 @@ generates a credential for an installation. `platform admin` and `platform init`
 block for the first machine key: `export FABRIKA_IAM_RPC_URL=<IAM's PUBLIC origin>` (the value
 `control` holds as `FABRIKA_IAM_ISSUER`), the NAMES of `FABRIKA_IAM_RPC_KEY` and
 `FABRIKA_IAM_PROVISIONING_KEY` with the place each can be read from, and the `fabrika control key
-issue` line — never a value. `http://iam:3000` answers only inside the project; `key issue` says so
-when it cannot connect.
+issue` line — never a value. `http://iam:3000` answers only inside the project; `key issue` refuses
+any plain-http origin off loopback before it sends a key, and follows no redirect.
 
 Its shape is decided by three [platform facts](zerops-platform.md):
 

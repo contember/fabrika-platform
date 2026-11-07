@@ -30,6 +30,7 @@ import {
 	FORM_URLENCODED_TYPE,
 	formatEndpointHeader,
 	planEndpoint,
+	sameOriginTarget,
 	satisfies,
 	SESSION_COOKIE,
 	TOKEN_REFRESH_SKEW_SECONDS,
@@ -625,7 +626,8 @@ export class Authorizer {
 			return { outcome: 'deny', status: 403, reason: 'cross_site' }
 		}
 		const app = resolved.app
-		const target = sameOriginTarget(new URL(`${app.scheme}://${request.url.host}`).origin, request.url.searchParams.get(LOGIN_REDIRECT_PARAM))
+		const returnTo = request.url.searchParams.get(LOGIN_REDIRECT_PARAM)
+		const target = returnTo === null ? null : sameOriginTarget(new URL(`${app.scheme}://${request.url.host}`).origin, returnTo)
 		if (target === null) {
 			return { outcome: 'deny', status: 400, reason: 'bad_redirect' }
 		}
@@ -688,27 +690,10 @@ function admittedOrigin(app: ProxyApp, row: ManifestEndpointRow, origin: string)
 	return form === 'environment' && isApplicationEntry(app) && (app.crossOrigins ?? []).includes(origin) ? origin : null
 }
 
-/**
- * The absolute URL of `path` on `origin`, or `null` when `path` is not a path on that origin. A leading `//` or any
- * `\` would make the browser read a host from it, and a control character or a space is never part of a return path.
- */
-function sameOriginTarget(origin: string, path: string | null): string | null {
-	if (path === null || !path.startsWith('/') || path.startsWith('//') || path.includes('\\') || [...path].some(isControlOrSpace)) {
-		return null
-	}
-	const target = new URL(path, origin)
-	return target.origin === origin ? target.toString() : null
-}
-
 /** Whether a redeemed code's return URL is on the host the callback arrived at, and that host is one of the entry's. */
 function returnsToHost(app: ProxyApp, callback: URL, returnUrl: string): boolean {
 	const target = URL.canParse(returnUrl) ? new URL(returnUrl) : null
 	return target !== null && target.hostname === callback.hostname && app.hosts.includes(target.hostname)
-}
-
-function isControlOrSpace(character: string): boolean {
-	const code = character.charCodeAt(0)
-	return code <= 0x20 || code === 0x7f
 }
 
 function invalidKey(): Denial {
