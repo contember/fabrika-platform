@@ -375,7 +375,7 @@ export class ControlRegistryRepository {
 					input.fence.holder,
 					input.fence.nowMs,
 				),
-			...this.namespaceResourceClaimStatements(owner, { createdAt: input.createdAt, fence: input.fence }),
+			...this.namespaceResourceClaimStatements(owner, { createdAt: input.createdAt, providerTargetJson: input.providerTargetJson, fence: input.fence }),
 		]
 		const results = await this.withNamespaceResourceClaimConflict(owner, () => this.d1.batch<{ id: string } | NamespaceResourceClaimRow>(statements))
 		return (results[1]?.results.length ?? 0) > 0
@@ -386,6 +386,7 @@ export class ControlRegistryRepository {
 	 * write. NULL = the row moved meanwhile, or the lease is gone; the caller must not assume it landed.
 	 * `COALESCE` compares a NULL `last_error` the same way on SQLite and Postgres. A move to `ready` clears
 	 * the mark, and lands `pending` instead when a repair was requested meanwhile: the caller queues it.
+	 * `resourceKeys` are acquired with the move, as `writeDeploymentNamespace` acquires them.
 	 */
 	async transitionDeploymentNamespace(input: {
 		id: string
@@ -393,9 +394,11 @@ export class ControlRegistryRepository {
 		fence: LeaseFence
 		from: { state: DeploymentNamespaceState; lastError: string | null }
 		to: { state: DeploymentNamespaceState; providerTargetJson: string; lastError: string | null; updateTargetJson: string | null }
+		resourceKeys: readonly string[]
 	}): Promise<DeploymentNamespaceRow | null> {
 		const clearing = input.to.state === 'ready' ? 1 : 0
-		const results = await this.d1.batch<DeploymentNamespaceRow>([
+		const owner: NamespaceResourceClaimOwner = { namespaceId: input.id, ownerAppId: null, ownerEnv: null, resourceKeys: input.resourceKeys }
+		const statements = [
 			this.namespaceLeaseLockStatement(input.id, input.fence),
 			this.d1.prepare(`UPDATE deployment_namespaces
 				SET state = CASE WHEN ? = 1 AND repair_requested = 1 THEN 'pending' ELSE ? END,
@@ -419,8 +422,20 @@ export class ControlRegistryRepository {
 					input.fence.holder,
 					input.fence.nowMs,
 				),
-		])
-		return results[1]?.results[0] ?? null
+			...this.namespaceResourceClaimStatements(owner, {
+				createdAt: input.createdAt,
+				providerTargetJson: input.to.providerTargetJson,
+				fence: input.fence,
+			}),
+		]
+		const results = await this.withNamespaceResourceClaimConflict(
+			owner,
+			() => this.d1.batch<DeploymentNamespaceRow | NamespaceResourceClaimRow>(statements),
+		)
+		const moved = results[1]?.results[0]
+		if (moved === undefined) return null
+		if (!('state' in moved)) throw new Error('expected a deployment namespace row from a namespace transition')
+		return moved
 	}
 
 	/**
@@ -832,10 +847,13 @@ export class ControlRegistryRepository {
 		return { statements: [check, update], envAt: 1 }
 	}
 
-	/** With `fenced`, each claim lands only while the row of that identity exists and its lease holder still holds it. */
+	/**
+	 * With `fenced`, each claim lands only while the row of that identity stores the target the claims belong to and its
+	 * lease holder still holds it: placed after the row's write, a write the fence or its guard refused acquires nothing.
+	 */
 	private namespaceResourceClaimStatements(
 		input: NamespaceResourceClaimOwner,
-		fenced?: { createdAt: number; fence: LeaseFence },
+		fenced?: { createdAt: number; providerTargetJson: string; fence: LeaseFence },
 	): SqlStatement[] {
 		if ((input.ownerAppId === null) !== (input.ownerEnv === null)) {
 			throw new Error('namespace resource claim owner app and environment must both be set or both be null')
@@ -843,11 +861,11 @@ export class ControlRegistryRepository {
 		const source = fenced === undefined
 			? 'VALUES (?, ?, ?, ?)'
 			: `SELECT ?, ?, ?, ?
-				WHERE EXISTS (SELECT 1 FROM deployment_namespaces WHERE id = ? AND created_at = ?)
+				WHERE EXISTS (SELECT 1 FROM deployment_namespaces WHERE id = ? AND created_at = ? AND provider_target_json = ?)
 					AND EXISTS (SELECT 1 FROM deploy_locks WHERE lock_key = ? AND holder = ? AND expires_at > ?)`
 		const guard = fenced === undefined
 			? []
-			: [input.namespaceId, fenced.createdAt, namespaceLeaseKey(input.namespaceId), fenced.fence.holder, fenced.fence.nowMs]
+			: [input.namespaceId, fenced.createdAt, fenced.providerTargetJson, namespaceLeaseKey(input.namespaceId), fenced.fence.holder, fenced.fence.nowMs]
 		return [...new Set(input.resourceKeys)].sort().map((resourceKey) =>
 			this.d1
 				.prepare(`INSERT INTO namespace_resource_claims (

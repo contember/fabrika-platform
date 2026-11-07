@@ -480,9 +480,10 @@ other environment, before the provider prepares anything, and the write maps a r
   `reconcile` on a namespace that is still settling moves its STATE back to `pending` and enqueues; it
   must never rewrite `provider_target_json`, or a checkpoint the running job just wrote is rolled back
   under it. Only a job's claim moves a `pending` row, so the running job leaves it `pending` and the
-  queued job runs after it. A write that records a provider target (a checkpoint, a result, a republish)
-  acquires that target's `namespaceResourceClaims` in the same fenced batch, because a member deploy
-  refuses a namespace with a missing claim; a key an app environment holds fails it as `resourceClaimConflict`.
+  queued job runs after it. Every write that records a provider target (a job's or a republish's checkpoint
+  and result, the update's stored write) acquires that target's `namespaceResourceClaims` in the same fenced
+  batch, because a member deploy refuses a namespace with a missing claim; a key an app environment holds
+  fails it as `resourceClaimConflict`. A write that re-records the stored target acquires nothing.
 - **A failure keeps its CLASS, redacted rather than discarded** (backlog 72). A provider raises
   `ProviderNamespaceError` (stable `code`, safe summary, the upstream's words in `detail`); core stores
   `<code>: <message>` in the one `last_error` column — redacted and bounded — and projects the two halves

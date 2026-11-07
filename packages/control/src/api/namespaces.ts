@@ -749,16 +749,17 @@ export async function republishUnderLease(
 			},
 		})
 		if (!sameCoordinates(result.namespace, current, deps.provider.id)) throw new Error('provider result changed namespace coordinates')
-		current = result.namespace
 		settled = result.settled
+		clearInterval(progress)
+		options.log?.(`the namespace proxy ${settled ? 'republished' : 'is still republishing; a reconcile job finishes it'} after ${seconds()} s`)
+		// Inside the try: a final write refused (a claimed resource, a lost lease) is handed to a reconcile like any failure.
+		await writeNamespace(deps.repositories, lease, row, result.namespace, settled ? 'ready' : 'provisioning', { acquire: capabilities })
 	} catch (cause) {
 		await reconcileLater().catch(() => console.error(`namespace ${namespaceId}: the reconcile job could not be queued`))
 		throw cause
 	} finally {
 		clearInterval(progress)
 	}
-	options.log?.(`the namespace proxy ${settled ? 'republished' : 'is still republishing; a reconcile job finishes it'} after ${seconds()} s`)
-	await writeNamespace(deps.repositories, lease, row, current, settled ? 'ready' : 'provisioning', { acquire: capabilities })
 	if (!settled) await reconcileLater()
 }
 
@@ -1090,7 +1091,7 @@ export async function updateNamespaceUseCase(
 	const lease = await acquireLease(c.repositories.registry.namespaceLocks(), namespaceLeaseKey(row.id))
 	if (lease === null) fail(409, `deployment namespace ${row.id} is being changed by another operation; retry when it finishes`)
 	try {
-		return await updateUnderLease(c, updates, lease, row, plan)
+		return await updateUnderLease(c, capabilities, updates, lease, row, plan)
 	} catch (cause) {
 		if (isLeaseLoss(cause)) fail(409, `deployment namespace ${row.id} lost its lease during the update — read it, then ${RETRY_UPDATE_ADVICE}`)
 		throw cause
@@ -1101,6 +1102,7 @@ export async function updateNamespaceUseCase(
 
 async function updateUnderLease(
 	c: NamespaceUseCaseContext,
+	capabilities: ProviderNamespaceCapabilities,
 	updates: ProviderNamespaceUpdates,
 	lease: Lease,
 	read: DeploymentNamespaceRow,
@@ -1116,6 +1118,7 @@ async function updateUnderLease(
 	const transition = (
 		from: DeploymentNamespaceRow,
 		to: { state: DeploymentNamespaceState; providerTargetJson: string; lastError: string | null; updateTargetJson: string | null },
+		resourceKeys: readonly string[] = [],
 	): Promise<DeploymentNamespaceRow | null> =>
 		registry.transitionDeploymentNamespace({
 			id: before.id,
@@ -1123,6 +1126,7 @@ async function updateUnderLease(
 			fence: lease.fence(),
 			from: { state: from.state, lastError: from.last_error },
 			to,
+			resourceKeys,
 		})
 	const plannedTargetJson = JSON.stringify(plan.namespace.target)
 	// The planned target goes down WITH the mark, so a client that never saw this request can still finish it.
@@ -1175,12 +1179,19 @@ async function updateUnderLease(
 	// The live change is made; a result for other coordinates leaves the mark in place.
 	if (!sameCoordinates(updated, current, c.provider.id)) fail(502, `provider returned a namespace for different coordinates — ${RETRY_UPDATE_ADVICE}`)
 	// A re-pin is stored, not built: `pending` queues the reconcile that rebuilds the proxy from the new pin.
-	const stored = await transition(claimed, {
-		state: isRepin(plan) ? 'pending' : 'ready',
-		providerTargetJson: JSON.stringify(updated.target),
-		lastError: null,
-		updateTargetJson: null,
-	})
+	let stored: DeploymentNamespaceRow | null
+	try {
+		stored = await transition(claimed, {
+			state: isRepin(plan) ? 'pending' : 'ready',
+			providerTargetJson: JSON.stringify(updated.target),
+			lastError: null,
+			updateTargetJson: null,
+		}, namespaceResourceClaims(capabilities, updated))
+	} catch (cause) {
+		if (!(cause instanceof NamespaceResourceClaimConflictError)) throw cause
+		// The mark stays: the live change is made, and only a retry after the key is freed records it.
+		fail(409, `${namespaceResourceClaimConflict(cause).message} — ${RETRY_UPDATE_ADVICE} once the resource is free`)
+	}
 	if (stored === null) rowMovedUnderUpdate(before.id)
 	await replayRequestedRepair(c, stored)
 	await auditMutation(c, 'namespace.update', stored, plan.change === null ? {} : { ...plan.change })
