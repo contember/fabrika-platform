@@ -694,8 +694,8 @@ vocabulary (`packages/db/CLAUDE.md`).
 - **A procedure's buckets are charged before its body is read and stay charged whatever follows** (`#admit`,
   `bucketsOf` in `public.ts`): each take is one statement of `@fabrika/db`'s `Admissions`, keyed by the endpoint id
   (`PUBLIC_MUTATION_RATE` holds a public mutation's defaults), never a counter in the process; `bytesPerHour` reserves
-  the body's declared length. The client is `clientBucket`: `X-Fabrika-Client-Ip` only, an IPv6 address by its /64,
-  kept as a digest; never read another forwarding header. Admission is not authorization.
+  the body's declared length. The client is `clientBucket`: `X-Fabrika-Client-Ip` only, an IPv6 address by its /64
+  (`clientAddressKey` in `@fabrika/auth-core`, shared with IAM), kept as a digest; never read another forwarding header. Admission is not authorization.
 - **`ctx.kick` sends its jobs only after the commit, and the answer never depends on it** (`#kickAll`): each declared
   job once, to the request's `waitUntil` or detached, never rejecting, and nothing for a refused, rolled-back or
   cancelled request. The kicked run is the job's own (its key, its lease, its retries), never the request's. Never

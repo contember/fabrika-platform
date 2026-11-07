@@ -2,7 +2,7 @@
 // public procedure's challenge, and its time limit. The buckets live in the application's database
 // (`@fabrika/db`'s `Admissions`, keyed by the endpoint id), so every instance shares them. Admission is not authorization: it bounds how much one client, one caller and everyone together send.
 
-import { type AdmissionRate, CLIENT_ADDRESS_HEADER, type ContractArtifact, type ProcedureArtifact } from '@fabrika/auth-core'
+import { type AdmissionRate, CLIENT_ADDRESS_HEADER, clientAddressKey, type ContractArtifact, type ProcedureArtifact } from '@fabrika/auth-core'
 import { createHash } from 'node:crypto'
 import { ALTCHA_LIMITS } from '../contract/defaults'
 import { REQUEST_BUDGET_MS } from './bounded'
@@ -14,7 +14,7 @@ import {
 	type ChallengeWork,
 	turnstileVerifier,
 } from './challenge'
-import { clientBucket, clientKey } from './client-address'
+import { clientBucket } from './client-address'
 import type { RequestClient } from './types'
 
 /** The bucket every call of an endpoint takes from; a client's is `client:<digest>`, a caller's `caller:<digest>`. */
@@ -128,7 +128,7 @@ export function requestClient(request: Request, vouched: boolean): RequestClient
 	const address = vouched ? request.headers.get(CLIENT_ADDRESS_HEADER)?.trim() ?? '' : ''
 	const agent = request.headers.get('User-Agent')
 	return Object.freeze({
-		ip: address === '' || clientKey(address) === 'unknown' ? null : address,
+		ip: address === '' || clientAddressKey(address) === null ? null : address,
 		userAgent: agent === null || agent === '' ? null : agent.slice(0, MAX_USER_AGENT_LENGTH),
 	})
 }

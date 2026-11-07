@@ -143,7 +143,7 @@ export const INSTALLATION_SECRET_VARIABLES: Readonly<Record<PlatformService, rea
 }
 
 /**
- * The secret the platform proxy sends IAM's route, so IAM honours the client address and request id only from the proxy
+ * The secret the platform proxy sends IAM's route, so IAM honours the request id only from the proxy
  * (ADR-0022 rule 5). Derived from the provisioning key, which every deploy holds, so each deploy writes the same value
  * and nothing stores or reads one back. Never from the proxy key: namespace proxies hold that one.
  */

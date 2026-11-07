@@ -95,7 +95,7 @@ FABRIKA_TEST_CADDY_BIN=./caddy bun test src/__tests__/caddy.live.test.ts   # the
   file. An unset variable sends an empty secret, which the application refuses; the auth service only
   warns at boot (`appsWithoutProxySecret`), because one proxy fronts a whole namespace. The one installation
   route with a secret is IAM's session owner (`iamSessionOwner`), from `{env.FABRIKA_INSTALLATION_PROXY_SECRET_IAM}`:
-  it proves only who wrote the client address and request id; without it IAM keys every request on one shared bucket. Every other
+  it proves only who wrote the request id; without it IAM keys every request on one shared bucket. Every other
   installation service gets none, and the Cloudflare Worker sets none: its service binding is the authenticated hop.
 - **The token cache is best-effort and per-process.** Every entry is re-verified against the JWKS
   before it is trusted, and `null` (no cache) is a supported configuration that changes only how many
@@ -176,9 +176,9 @@ FABRIKA_TEST_CADDY_BIN=./caddy bun test src/__tests__/caddy.live.test.ts   # the
 The proxy is the only hop that can see the real client, so it is the only one that may say who it was.
 It observes and injects; it holds no counter (ADR-0022 forbids proxy state a decision depends on, and
 a per-isolate counter on Cloudflare would be defeated by the next colo anyway). The upstream that owns
-the state keys its per-client abuse bucket on what arrives: IAM (backlog 21 + 49), and a contract
-application's public procedures (and a 0.4/0.5/0.6 application's forms), whose buckets `@fabrika/app` keeps in the
-application's database.
+the state keys its per-client abuse bucket on what arrives: a contract application's public procedures
+(and a 0.4/0.5/0.6 application's forms), whose buckets `@fabrika/app` keeps in the application's database. IAM
+keys on the header its own ingress writes, `CF-Connecting-IP` on Cloudflare, and on none behind the Zerops balancer.
 
 | Hop                        | `X-Fabrika-Client-Ip`                         | `X-Forwarded-For`              | `CF-Connecting-IP`         |
 | -------------------------- | --------------------------------------------- | ------------------------------ | -------------------------- |
@@ -187,7 +187,7 @@ application's database.
 | Cloudflare proxy Worker    | **deleted, then set** from `CF-Connecting-IP` | deleted                        | deleted                    |
 | Zerops balancer            | passed through untouched                      | client value + a gateway hop   | passed through untouched   |
 | Caddy (`appRoute`, step 1) | **deleted, then set** from `{client_ip}`      | deleted                        | deleted                    |
-| app / IAM upstream         | trust it beside the proxy secret              | the previous hop's socket peer | absent                     |
+| app upstream               | trust it beside the proxy secret              | the previous hop's socket peer | absent                     |
 
 - **`{http.vars.client_ip}` is the socket peer unless `trusted_proxies` names the balancer.** Caddy
   resolves it once in `PrepareRequest`, before any handler, so the strip above cannot affect it. With

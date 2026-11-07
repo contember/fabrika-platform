@@ -1,9 +1,9 @@
 /**
  * The known-device cookie (OWASP "device cookies"): a browser that completed a password login for a
  * principal carries a signed proof of it, and a later login FOR THAT PRINCIPAL from that browser is
- * throttled by its own per-device bucket instead of the account and deployment-wide ones. Those two
- * buckets are keyed on values an attacker can pick (an address, nothing at all), so without this one
- * client could lock out a known account, or every password user, including the owners.
+ * throttled by its own per-device bucket instead of the client, account and deployment-wide ones. Those
+ * buckets are keyed on values an attacker can pick or share (an address, a mailbox, nothing at all), so
+ * without this one client could lock out a known account, or every password user, including the owners.
  */
 import { z } from 'zod'
 import { randomToken } from '../oidc'

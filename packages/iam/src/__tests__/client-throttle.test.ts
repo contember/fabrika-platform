@@ -8,9 +8,10 @@
  *     by counting the derivations a 120-deep burst actually bought, not asserted.
  *  3. **Provenance.** The coordinate comes from the ONE header the composition root names, and from
  *     nothing else. A caller that sets the other names — the spoofing test, once per composition —
- *     changes no key, and an installation that names no header gets no per-client bucket at all rather
- *     than a forgeable one. Where the composition holds the proxy's secret, a request without it shares one
- *     bucket, whatever address it claims.
+ *     changes no key, and an installation that names no header (the Bun root) gets no per-client bucket at
+ *     all rather than a forgeable or an installation-wide one. Where the composition holds the proxy's
+ *     secret, a request without it shares one bucket, whatever address it claims.
+ *  4. **Identity.** An IPv6 client counts by its /64, so rotating addresses inside one prefix buys no fresh bucket.
  */
 
 import { CLIENT_ADDRESS_HEADER, PROXY_SECRET_HEADER } from '@fabrika/auth-core'
@@ -20,6 +21,7 @@ import { createIamApp } from '../app'
 import { handleAuth } from '../auth/routes'
 import { readClientAddress } from '../client-address'
 import type { Env, RequestContext } from '../env'
+import { createFetchHandler } from '../node/server'
 import type { PasswordHasher, StoredPasswordHash } from '../password-crypto'
 import { UNPROVEN_CLIENT_ADDRESS } from '../proxy-proof'
 import { hashToken } from '../secret'
@@ -109,6 +111,13 @@ describe('the client coordinate comes from the composition, not the caller', () 
 		expect(readClientAddress(new Request(ISSUER, { headers: { [CLIENT_ADDRESS_HEADER]: '  ' } }), CLIENT_ADDRESS_HEADER)).toBeNull()
 		expect(readClientAddress(new Request(ISSUER, { headers: { [CLIENT_ADDRESS_HEADER]: 'x'.repeat(65) } }), CLIENT_ADDRESS_HEADER))
 			.toBeNull()
+		expect(readClientAddress(new Request(ISSUER, { headers: { [CLIENT_ADDRESS_HEADER]: 'not-an-address' } }), CLIENT_ADDRESS_HEADER))
+			.toBeNull()
+	})
+
+	test('an IPv6 client is read as its /64', () => {
+		const request = new Request(ISSUER, { headers: { [CLOUDFLARE_HEADER]: '2001:DB8:1:2:abcd::1' } })
+		expect(readClientAddress(request, CLOUDFLARE_HEADER)).toBe('2001:db8:1:2::/64')
 	})
 })
 
@@ -262,6 +271,16 @@ function appEnv(h: Harness): Env {
 	}
 }
 
+/** The Bun root's own handler (`src/node/server.ts`), with `proxySecret` as its configured installation proxy secret. */
+function bunRoot(h: Harness, proxySecret: string): (request: Request) => Promise<Response> {
+	return createFetchHandler({
+		env: appEnv(h),
+		ctx: { waitUntil() {} },
+		config: { port: 0, rpcKey: '', proxyKey: '', proxySecret },
+		shutdown: () => Promise.resolve(),
+	})
+}
+
 describe('a caller cannot choose its own bucket on either composition', () => {
 	const forged = { [CLIENT_ADDRESS_HEADER]: '203.0.113.66', [CLOUDFLARE_HEADER]: '203.0.113.77' }
 
@@ -276,34 +295,50 @@ describe('a caller cannot choose its own bucket on either composition', () => {
 		expect(await h.repositories.passwords.getLoginThrottle(await clientKey('203.0.113.66'))).toBeNull()
 	})
 
-	test('Caddy/Bun: the proxy header keys the bucket and a forged edge header does not', async () => {
+	test('Cloudflare: every address of one IPv6 /64 is one client', async () => {
 		const h = createHarness()
-		// The Bun root's own wiring (`src/node/server.ts`) before a proxy secret is configured: Caddy writes
-		// `X-Fabrika-Client-Ip` after deleting the caller's.
-		const app = createIamApp({ clientAddressHeader: CLIENT_ADDRESS_HEADER })
-		await app.fetch(login({ email: 'person@example.test', password: PASSWORD }, forged), appEnv(h), { waitUntil() {} })
+		const app = createIamApp({ clientAddressHeader: CLOUDFLARE_HEADER })
+		for (const address of ['2001:db8:1:2::1', '2001:db8:1:2::2', '2001:db8:1:2:ffff::9']) {
+			await app.fetch(login({ email: 'person@example.test', password: PASSWORD }, { [CLOUDFLARE_HEADER]: address }), appEnv(h), {
+				waitUntil() {},
+			})
+		}
 
-		expect(await h.repositories.passwords.getLoginThrottle(await clientKey('203.0.113.66'))).not.toBeNull()
-		expect(await h.repositories.passwords.getLoginThrottle(await clientKey('203.0.113.77'))).toBeNull()
+		expect(await attemptCount(h, '2001:db8:1:2::/64')).toBe(3)
+		expect(await attemptCount(h, '2001:db8:1:2::1')).toBeNull()
 	})
 
-	test('an installation that names no header keys nothing, whatever the caller sends', async () => {
+	test('Bun: the root names no header, because behind the Zerops balancer every client has one address', async () => {
 		const h = createHarness()
-		await createIamApp().fetch(login({ email: 'person@example.test', password: PASSWORD }, forged), appEnv(h), { waitUntil() {} })
+		const handler = bunRoot(h, '')
+		await handler(login({ email: 'person@example.test', password: PASSWORD }, forged))
 
 		const rows = h.sqlite.query<{ login_key_hash: string }, []>('SELECT login_key_hash FROM password_login_throttles').all()
 		expect(rows).toHaveLength(2)
 	})
+
+	test('Bun: with the proxy secret configured, a proven request keys nothing and an unproven one shares one bucket', async () => {
+		const h = createHarness()
+		const secret = 'installation-proxy-secret-0123456789abcdef'
+		const handler = bunRoot(h, secret)
+		await handler(login({ email: 'person@example.test', password: PASSWORD }, { ...forged, [PROXY_SECRET_HEADER]: secret }))
+		expect(await attemptCount(h, UNPROVEN_CLIENT_ADDRESS)).toBeNull()
+		await handler(login({ email: 'person@example.test', password: PASSWORD }, forged))
+
+		expect(await attemptCount(h, UNPROVEN_CLIENT_ADDRESS)).toBe(1)
+		expect(await attemptCount(h, '203.0.113.66')).toBeNull()
+		expect(await attemptCount(h, '203.0.113.77')).toBeNull()
+	})
 })
 
-describe('a caller on the private network cannot choose its bucket once the proxy secret is configured', () => {
+describe('a composition that names a header beside a proxy secret: an unproven caller cannot choose its bucket', () => {
 	const SECRET = 'installation-proxy-secret-0123456789abcdef'
 	const claimed = { [CLIENT_ADDRESS_HEADER]: '203.0.113.66' }
-	const bunApp = () => createIamApp({ clientAddressHeader: CLIENT_ADDRESS_HEADER, proxySecret: SECRET })
+	const proxiedApp = () => createIamApp({ clientAddressHeader: CLIENT_ADDRESS_HEADER, proxySecret: SECRET })
 
 	test('a request carrying the secret keys on the address the proxy wrote', async () => {
 		const h = createHarness()
-		await bunApp().fetch(login({ email: 'person@example.test', password: PASSWORD }, { ...claimed, [PROXY_SECRET_HEADER]: SECRET }), appEnv(h), {
+		await proxiedApp().fetch(login({ email: 'person@example.test', password: PASSWORD }, { ...claimed, [PROXY_SECRET_HEADER]: SECRET }), appEnv(h), {
 			waitUntil() {},
 		})
 
@@ -313,7 +348,7 @@ describe('a caller on the private network cannot choose its bucket once the prox
 
 	test('requests without it, or with a wrong one, share one bucket and are still answered', async () => {
 		const h = createHarness()
-		const app = bunApp()
+		const app = proxiedApp()
 		const rotated: Record<string, string>[] = [
 			{ [CLIENT_ADDRESS_HEADER]: '203.0.113.1' },
 			{ [CLIENT_ADDRESS_HEADER]: '203.0.113.2', [PROXY_SECRET_HEADER]: 'forged' },

@@ -1,9 +1,9 @@
 /**
- * Whether a request proves it came through the platform proxy, which decides if IAM may read the client-address and
- * request-id headers the composition names (`src/client-address.ts`, `src/request-id.ts`).
+ * Whether a request proves it came through the platform proxy, which decides if IAM may read the request-id header the
+ * composition names (`src/request-id.ts`), and a client-address header where one is named (`src/client-address.ts`).
  *
  * On Zerops IAM is not publicly routed, but anything on the platform project's private network can reach its port and
- * write both headers. So the proxy sends a per-installation secret in `PROXY_SECRET_HEADER` on IAM's route, and a
+ * write the request id. So the proxy sends a per-installation secret in `PROXY_SECRET_HEADER` on IAM's route, and a
  * request without it is attributed to nobody. This is attribution, not an enforcement decision (ADR-0022): a missing
  * proof is never a refusal by itself, though the one bucket all such requests share refuses once exhausted.
  */

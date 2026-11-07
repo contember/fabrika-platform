@@ -15,32 +15,25 @@
  *
  *   - `src/index.ts` (Cloudflare) — `CF-Connecting-IP`. IAM's Worker holds its own Custom Domain, so
  *     it is reached through Cloudflare's edge, which writes that header and replaces a caller's.
- *   - `src/node/server.ts` (Bun/Zerops) — `CLIENT_ADDRESS_HEADER`, written by the Caddy proxy in front
- *     of it after deleting the caller's. IAM is not publicly routed on that composition (ADR-0022
- *     rule 1), but the private network reaches the port too, so once the installation's proxy secret is
- *     configured the header counts only beside it (`src/proxy-proof.ts`) — the same trust the request-id
- *     header runs on.
+ *   - `src/node/server.ts` (Bun/Zerops) — none. The Caddy proxy in front of it writes `CLIENT_ADDRESS_HEADER`, but
+ *     behind the Zerops balancer that value is the balancer for every client
+ *     ([platform facts](../../../docs/reference/zerops-platform.md#public-access)), so one bucket would hold the
+ *     whole installation. Without the proxy's secret a request still keys on `UNPROVEN_CLIENT_ADDRESS`
+ *     (`src/proxy-proof.ts`).
  *
- * A composition must never name a header its ingress does not overwrite. That is the whole invariant.
+ * A composition names a header only when its ingress overwrites it with the client's own address. That is the whole
+ * invariant.
  */
 
-/** Longest coordinate we will key on. An IPv6 address with a zone id fits with room to spare. */
-const MAX_LENGTH = 64
+import { clientAddressKey } from '@fabrika/auth-core'
 
 /**
- * Read the coordinate, or `null` when this composition cannot see one.
- *
- * `Headers.get` joins repeats with `", "`, so only the first value is taken: a caller that appends a
- * second copy must not be able to change the key, and a well-formed ingress never sends two.
+ * Read the coordinate, or `null` when this composition cannot see one or the value is no IP address. An IPv6 client
+ * counts by its /64, and only the first value counts (`clientAddressKey`).
  */
 export function readClientAddress(request: Request, header: string | undefined): string | null {
 	if (header === undefined || header === '') {
 		return null
 	}
-	const raw = request.headers.get(header)
-	if (raw === null) {
-		return null
-	}
-	const first = (raw.split(',')[0] ?? '').trim().toLowerCase()
-	return first === '' || first.length > MAX_LENGTH ? null : first
+	return clientAddressKey(request.headers.get(header))
 }
