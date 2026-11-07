@@ -291,12 +291,25 @@ async function assertMailCustody(
 	published: ActiveSnapshot,
 	log: (line: string) => void,
 ): Promise<void> {
-	const running = await runs.getLatestSucceededRun({ appId: run.app_id, env: run.env })
-	const held = running === null || running.snapshot_json === null ? [published.snapshot] : [published.snapshot, parseSnapshot(running.snapshot_json)]
+	const running = readableSnapshot((await runs.getLatestSucceededRunWithSnapshot({ appId: run.app_id, env: run.env }))?.snapshot_json ?? null)
+	const held = running === null ? [published.snapshot] : [published.snapshot, running]
 	const refusal = mailCustodyRefusal(held, candidate)
 	if (refusal === null) return
 	log(`access: ${refusal}`)
 	throw new FrameworkReleaseRefused(refusal)
+}
+
+/**
+ * Another run's stored snapshot, or null when this release cannot read it (a newer Control wrote it). Reading it as
+ * holding no custody can only refuse a candidate, never hand the credential.
+ */
+function readableSnapshot(raw: string | null): AccessSnapshot | null {
+	if (raw === null) return null
+	try {
+		return parseSnapshot(raw)
+	} catch {
+		return null
+	}
 }
 
 /** A deploy that breaks a mount's promise of backward compatibility fails, whoever approves it: its callers would break. */

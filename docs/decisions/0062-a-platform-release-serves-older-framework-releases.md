@@ -108,8 +108,9 @@ upgraded first.
     `mailer: 'installation'` mail with the installation's `FABRIKA_EMAIL_*`, provider credential included; 0.7 sends
     through Control's relay ([ADR-0064](0064-applications-reach-the-platform-over-a-receiver-verified-transport-key.md)
     §5). Control hands that credential only to an environment whose published version, or the version it runs, already
-    held it. It refuses unchanged code inside the window in these cases: a new environment of such an application,
-    including one registered again and every environment after the installation is reinstalled; the first
+    held it; a snapshot that records no release counts as one before 0.7. It refuses, for a release inside the window,
+    a version with such a job in these cases: a new environment of such an application, including one registered
+    again and every environment after the installation is reinstalled; the first
     `mailer: 'installation'` job of an environment before 0.7; and a move back below 0.7, including rolling back a
     framework upgrade across 0.7, which a mailer application cannot do: its author fixes forward. It refuses them on an
     installation without a mail transport too, since that publication would count once the operator adds one. The

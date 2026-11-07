@@ -146,6 +146,12 @@ export class RunRepository {
 			ORDER BY finished_at DESC, id DESC LIMIT 1`).bind(input.appId, input.env).first<RunRow>()
 	}
 
+	/** The newest succeeded run that stored a snapshot: the version the environment runs, past any dry run after it. */
+	async getLatestSucceededRunWithSnapshot(input: { appId: string; env: string }): Promise<RunRow | null> {
+		return this.d1.prepare(`SELECT * FROM runs WHERE app_id = ? AND env = ? AND status = 'succeeded' AND snapshot_json IS NOT NULL
+			ORDER BY finished_at DESC, id DESC LIMIT 1`).bind(input.appId, input.env).first<RunRow>()
+	}
+
 	async getRun(id: string): Promise<RunRow | null> {
 		return this.d1.prepare('SELECT * FROM runs WHERE id = ?').bind(id).first<RunRow>()
 	}

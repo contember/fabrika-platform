@@ -1518,11 +1518,52 @@ export const contract = app.contract((c) => ({
 			quiet.mockRestore()
 		}
 		expect((await published(w, 'stage')).runId).toBe(relayRun)
+		// A dry run of the publication succeeds and deploys nothing: the 0.6 version still runs.
+		expect((await executeDeploy(relayDeps, { runId: await createdRun(w, 'stage'), dryRun: true })).status).toBe('succeeded')
 
 		w.files = olderFiles
 		expect((await executeDeploy(relayDeps, { runId: await createdRun(w, 'stage') })).status).toBe('succeeded')
 		expect(mailVariables(w.deploys.at(-1))).toEqual(['FABRIKA_EMAIL_FROM', 'FABRIKA_EMAIL_PROVIDER', 'FABRIKA_EMAIL_RESEND_API_KEY'])
 		expect(approvedSnapshotOf(await w.db.registry.getAppEnv('notes', 'stage'))?.framework).toBe('0.6.0')
+	})
+
+	test('a running version whose stored snapshot this release cannot read holds no custody, and fails no deploy', async () => {
+		const w = mailingWorld('0.6.0')
+		await seed(w)
+		await heldTheCredential(w)
+		const { workloadCredentials } = await credentialed(w)
+		const relayDeps = { ...deps(w), workloadCredentials, mailTransport, ...(await relayed(w)) }
+		const olderFiles = w.files
+		// A field a newer Control would write, which this release's strict reader refuses.
+		const unreadable = async (runId: string) => {
+			const stored = (await run(w, runId)).snapshot_json ?? ''
+			w.sqlite.query('UPDATE runs SET snapshot_json = ? WHERE id = ?').run(JSON.stringify({ ...JSON.parse(stored), later: true }), runId)
+		}
+		const quiet = spyOn(console, 'error').mockImplementation(() => {})
+		try {
+			const first = await createdRun(w, 'stage')
+			expect((await executeDeploy(relayDeps, { runId: first })).status).toBe('succeeded')
+			await unreadable(first)
+			// The publication holds the credential, so the unreadable run changes nothing.
+			const second = await createdRun(w, 'stage')
+			expect((await executeDeploy(relayDeps, { runId: second })).status).toBe('succeeded')
+			await unreadable(second)
+
+			w.files = { ...olderFiles, 'src/jobs.ts': MAILING, 'bun.lock': frameworkLockfile('0.7.0') }
+			const failing = { ...relayDeps, provider: { ...relayDeps.provider, deploy: () => Promise.reject(new Error('the build failed')) } }
+			expect((await executeDeploy(failing, { runId: await createdRun(w, 'stage') })).status).toBe('failed')
+
+			// Neither the 0.7 publication nor the unreadable running version holds it: refused with the custody line.
+			w.files = olderFiles
+			expect((await executeDeploy(relayDeps, { runId: await createdRun(w, 'stage') })).status).toBe('failed')
+		} finally {
+			quiet.mockRestore()
+		}
+		expect([...w.logs.values()].join('\n')).toContain(CUSTODY_REFUSAL)
+		expect(w.deploys.map(mailVariables)).toEqual([
+			['FABRIKA_EMAIL_FROM', 'FABRIKA_EMAIL_PROVIDER', 'FABRIKA_EMAIL_RESEND_API_KEY'],
+			['FABRIKA_EMAIL_FROM', 'FABRIKA_EMAIL_PROVIDER', 'FABRIKA_EMAIL_RESEND_API_KEY'],
+		])
 	})
 
 	test('on a protected environment the refused version never waits for approval', async () => {
