@@ -54,6 +54,15 @@ export async function requireActableTarget(c: AdminContext, principal: Principal
 	}
 }
 
+/**
+ * Refuse a user administrator an invitation for a mailbox in `IAM_BOOTSTRAP_ADMINS`. The row it would create decides how
+ * that installation administrator signs in, and `requireActableTarget` keeps the row out of the caller's reach afterwards.
+ */
+export function requireInvitableMailbox(c: AdminContext, mailbox: string): void {
+	if (c.administration.kind === 'installation' || !c.services.config.bootstrapAdmins.has(mailbox)) return
+	return fail(403, "this mailbox is one of the installation's bootstrap administrators; only an installation administrator invites it")
+}
+
 /** The same rule serves UI capabilities and the write guard. */
 export function canManagePrincipal(c: AdminContext, principal: PrincipalRow): Promise<boolean> {
 	return c.administration.kind === 'installation' ? Promise.resolve(true) : isActable(c.services, c.administration, principal)

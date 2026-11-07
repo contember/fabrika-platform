@@ -188,9 +188,9 @@ Its vocabulary (`IAM_APP_SCHEMA` in `@fabrika/iam-contract`) is registered besid
 the console's by every installation path. `iam.admin` administers the
 installation; it comes from the built-in `admin` or a bootstrap mailbox. The
 `user-admin` role (`iam.users.manage`, globally or at one `app` value
-`<app>@<env>`) manages the people of applications: it invites, signs out,
-resets and disables people whose every grant it could have made, and grants
-any role or action at the applications in its scope. It never grants at the
+`<app>@<env>`) manages the people of applications: it invites (never a
+bootstrap mailbox), signs out, resets and disables people whose every grant it
+could have made, and grants any role or action at the applications in its scope. It never grants at the
 installation's own apps (`propustka`, `vozka`, `operations`) or across
 applications, and never acts on a person who holds a grant there
 ([ADR-0058](../decisions/0058-user-administration-is-grantable-on-its-own.md)).

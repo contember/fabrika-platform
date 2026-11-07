@@ -16,7 +16,7 @@ import { listRolesUseCase } from './app-schema'
 import { type AdminContext, adminEvent, fail } from './context'
 import { toGrantDtos } from './grant-support'
 import { cursorOf, normalizeLimit } from './pagination'
-import { canManagePrincipal, managesApp, requireActableTarget } from './user-admin'
+import { canManagePrincipal, managesApp, requireActableTarget, requireInvitableMailbox } from './user-admin'
 
 function toPrincipalListItem(row: PrincipalRow): PrincipalListItem {
 	return {
@@ -142,6 +142,7 @@ export async function invitePrincipalUseCase(c: AdminContext, input: InviteReque
 	const email = input.email.trim()
 	if (email === '') return fail(400, 'email required')
 	const normalizedEmail = normalizeEmailIdentity(email)
+	requireInvitableMailbox(c, normalizedEmail)
 	const existing = await c.services.repositories.passwords.lookupActionUser(normalizedEmail)
 	if (existing.status !== 'missing') {
 		return fail(409, 'a user with this email already exists')
