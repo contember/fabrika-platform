@@ -34,7 +34,9 @@ const CONSOLE_SCHEMA: AppSchema = {
 }
 
 const BOOTSTRAP_MAILBOX = 'founder@example.test'
-const PASSWORDS = { authentication: { oidc: true, password: true }, bootstrapAdmins: new Set([BOOTSTRAP_MAILBOX]) }
+/** A bootstrap mailbox no principal holds yet; only the invitation test uses it, so Postgres runs share no row. */
+const UNCLAIMED_BOOTSTRAP_MAILBOX = 'cofounder@example.test'
+const PASSWORDS = { authentication: { oidc: true, password: true }, bootstrapAdmins: new Set([BOOTSTRAP_MAILBOX, UNCLAIMED_BOOTSTRAP_MAILBOX]) }
 
 let seq = 0
 const unique = (base: string): string => `${base}-${++seq}-${crypto.randomUUID().slice(0, 8)}`
@@ -275,6 +277,28 @@ function userAdministrationSuite(label: string, repositories: () => IamRepositor
 			const c = await i.direct(admin)
 			expect(await refusal(() => adminUseCases.updatePrincipal(c, { principalId: founder.id, disabled: true }))).toMatchObject({ status: 403 })
 			expect(await refusal(() => adminUseCases.issuePasswordEnrollment(c, { principalId: founder.id }))).toMatchObject({ status: 403 })
+		})
+
+		test('a bootstrap mailbox no principal holds yet cannot be invited, internal or external', async () => {
+			const i = await installation(repositories())
+			for (const admin of [await i.userAdmin(), await i.userAdmin([CRM])]) {
+				const c = await i.direct(admin)
+				for (const affiliation of ['internal', 'external'] as const) {
+					// Spelled differently from the list: the rule compares the normalized mailbox.
+					const invite = adminUseCases.invitePrincipal(c, { email: ' CoFounder@Example.TEST ', affiliation })
+					expect(await refusal(() => invite)).toMatchObject({ status: 403 })
+				}
+				const events = await i.f.repositories.audit.listAuditEvents({ principalId: admin.id, limit: 20 })
+				expect(events.map((event) => event.action)).not.toContain('iam.principal.invite')
+			}
+			expect(await i.f.repositories.passwords.lookupActionUser(UNCLAIMED_BOOTSTRAP_MAILBOX)).toMatchObject({ status: 'missing' })
+
+			const installationAdmin = await i.person('installation-admin')
+			await i.grant(installationAdmin, null, 'admin')
+			expect(await adminUseCases.invitePrincipal(await i.direct(installationAdmin), { email: UNCLAIMED_BOOTSTRAP_MAILBOX })).toMatchObject({
+				email: UNCLAIMED_BOOTSTRAP_MAILBOX,
+				affiliation: 'internal',
+			})
 		})
 
 		test("resetting a console admin's password is refused, with an email sender too", async () => {

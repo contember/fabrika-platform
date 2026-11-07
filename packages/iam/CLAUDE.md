@@ -380,7 +380,7 @@ fails if that stops being true — it is the guard, not documentation of one.
   and with no "holds what it grants" rule, because nothing granted there reaches the
   installation; an action on a principal (`principals.update`, `sessions.revoke`/`sessions.revokeAll`, `passwords.*`) only when every active
   grant of that principal is one it could have written, and never on a service or a bootstrap mailbox
-  (`requireActableTarget`). Without an email sender it receives no manual password URL: an enrollment or a reset
+  (`requireActableTarget`); and never an invitation of a bootstrap mailbox, internal or external (`requireInvitableMailbox`). Without an email sender it receives no manual password URL: an enrollment or a reset
   answers 403, and only `iam.admin` receives one (`passwordDelivery`). Reads (`principals.list/get`, `sessions.list`, apps, roles, policies) are installation-wide
   (backlog 175). `apps.list` marks each platform audience `installation: true`. `user-admin.test.ts` is the witness, on
   both engines.

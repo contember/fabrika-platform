@@ -157,6 +157,10 @@ can grant itself any role there. The operator grants exactly that.
 The caller may invite a person, internal or external. An invitation admits that person past the OIDC allowlist's
 known-principal bypass. That is the job, and the invited person holds nothing until a grant follows.
 
+The one mailbox it may not invite is one in `IAM_BOOTSTRAP_ADMINS` (`requireInvitableMailbox`). The row an invitation
+creates decides how that installation administrator signs in: an external one is refused by OIDC and holds no bootstrap
+`admin`. The caller could not act on the row afterwards either, so it could not undo it.
+
 The caller acts on an existing principal (`principals.update`, `sessions.revoke`, `sessions.revokeAll`, `passwords.*`)
 only when every active grant of that principal is one the caller could create under section 4. That excludes:
 
@@ -231,8 +235,8 @@ administrator's scope.
 - An operator grants `user-admin`, globally or for one application. That person onboards, offboards and assigns roles
   there, and holds no authority over the installation.
 - A user administrator cannot touch the installation's own people. It cannot disable or reset a console admin, a
-  deployer or an IAM administrator, so it cannot lock out the people above it. Making someone a user administrator,
-  or giving someone a console role, stays an installation admin's job.
+  deployer or an IAM administrator, and it cannot invite a bootstrap mailbox, so it cannot lock out the people above
+  it. Making someone a user administrator, or giving someone a console role, stays an installation admin's job.
 - **A person in two applications.** That person can be managed only by an unscoped user administrator, or by one
   whose scope covers both applications.
 - Reads stay installation-wide. A scoped user administrator lists every principal, including their grants elsewhere, so

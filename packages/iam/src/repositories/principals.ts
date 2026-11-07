@@ -147,7 +147,7 @@ export class PrincipalRepository {
 
 	/**
 	 * Invite a user by mailbox (external_id NULL = unclaimed), reserving it and writing `audit` in the same transaction.
-	 * Only an installation administrator creates an `external` one; OIDC never claims it (ADR-0051).
+	 * An installation or a user administrator (ADR-0058) creates an `external` one; OIDC never claims it (ADR-0051).
 	 */
 	async inviteUser(
 		email: string,
