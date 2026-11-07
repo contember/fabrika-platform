@@ -239,6 +239,9 @@ async function handleSubmitFeedback(shareId: string, req: Request, env: Env): Pr
 }
 
 async function handleListFeedback(shareId: string, req: Request, env: Env): Promise<Response> {
+	const record = await loadRecord(shareId, env)
+	if (!record) return json({ error: 'Share not found or expired' }, { status: 404 })
+
 	const url = new URL(req.url)
 	const since = url.searchParams.get('since') || ''
 
@@ -302,11 +305,8 @@ async function handleRevokeShare(shareId: string, req: Request, env: Env): Promi
 		return json({ error: 'Unauthorized' }, { status: 401 })
 	}
 
-	// Delete payload + record + canvas files. Uploads and feedback are left
-	// to expire via TTL — fully purging them on revoke would require listing
-	// all R2 keys, which is expensive. Marking the record as deleted is
-	// sufficient because every load goes through `loadRecord` which would
-	// 404 once the record is gone.
+	// Deleting the record revokes the share: every route of a share, feedback list and uploads included, answers
+	// 404 without it. Feedback entries stay in KV until their TTL; uploads past the first list page stay in R2.
 	const prefix = `shares/${shareId}/`
 	const list = await env.BLOBS.list({ prefix })
 	await Promise.all(list.objects.map((o) => env.BLOBS.delete(o.key)))
@@ -362,6 +362,9 @@ async function handleUploadServe(shareId: string, filename: string, env: Env): P
 	if (filename.includes('/') || filename.includes('..')) {
 		return json({ error: 'Invalid filename' }, { status: 400 })
 	}
+	const record = await loadRecord(shareId, env)
+	if (!record) return json({ error: 'Not found or expired' }, { status: 404 })
+
 	const obj = await env.BLOBS.get(`shares/${shareId}/uploads/${filename}`)
 	if (!obj) return json({ error: 'Not found' }, { status: 404 })
 	return new Response(obj.body, {

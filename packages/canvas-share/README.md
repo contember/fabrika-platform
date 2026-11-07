@@ -176,9 +176,9 @@ Per-IP, per-minute, sliding window (KV-backed). Tweak in [`src/types.ts`](src/ty
 ## Security model
 
 - **Capability URLs** — anyone with `/s/:shareId` (24-char hex, ~96 bits entropy) has full view+comment access. Brute-forcing is impractical.
-- **Owner token** — returned to the daemon at create time, required to revoke. Stored in the daemon's session metadata so the canvas author can revoke from the Share dialog.
+- **Owner token** — returned to the daemon at create time, required to revoke. Stored in the daemon's session metadata so the canvas author can revoke from the Share dialog. A revoked share answers 404 on every route, its feedback list and uploads included.
 - **Optional shared bearer token** (`SHARE_AUTH_TOKEN`) — gates share creation so only authorized daemons can push to the worker.
 - **No reviewer auth** — reviewers self-report a name (stored locally in their browser), there is no signup. Suitable for "send to a colleague" flows, **not** public publishing.
-- **Per-share TTL** — defaults to 30 days. Expired shares 404 and are eventually purged by KV's TTL.
+- **Per-share TTL** — defaults to 30 days. An expired share answers 404 on every route, its feedback list and uploads included; its feedback is eventually purged by KV's TTL.
 - **Size limits** — share payload max 2 MB, feedback body max 256 KB, image upload max 5 MB.
 - **Validation** — all incoming bodies are validated by Zod schemas before any storage write.
