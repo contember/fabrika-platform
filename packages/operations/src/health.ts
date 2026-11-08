@@ -5,7 +5,8 @@ export const DEFAULT_RECOVERY_THRESHOLD = 2
 export const DEFAULT_HEALTH_HISTORY_LIMIT = 100
 
 export type HealthState = 'healthy' | 'degraded' | 'failed' | 'stale' | 'unavailable'
-export type HealthAlertKind = 'failed_check' | 'recovery' | 'unhealthy_telemetry'
+export const HEALTH_ALERT_KINDS = ['failed_check', 'recovery', 'unhealthy_telemetry'] as const
+export type HealthAlertKind = (typeof HEALTH_ALERT_KINDS)[number]
 
 export interface HttpHealthCheck {
 	publicOrigin: string

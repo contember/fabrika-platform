@@ -1,5 +1,9 @@
 import { type SqlDatabase, uuidv7 } from '@fabrika/platform'
+import { HEALTH_ALERT_KINDS } from '../health.js'
 import { parseObject } from './values.js'
+
+// Health alerts carry the outage signal, so a backlog of issue alerts never delays them.
+const CLAIM_ORDER = `CASE WHEN kind IN (${HEALTH_ALERT_KINDS.map((kind) => `'${kind}'`).join(', ')}) THEN 0 ELSE 1 END, visible_at, id`
 
 export interface NotificationChannelRow {
 	id: string
@@ -128,6 +132,20 @@ export abstract class AlertsRepository {
 		return row !== null
 	}
 
+	async liveClaims(keys: string[]): Promise<Set<string>> {
+		if (keys.length === 0) return new Set()
+		const { results } = await this.db
+			.prepare(`SELECT claim_key FROM alert_claims WHERE claim_key IN (${keys.map(() => '?').join(', ')}) AND expires_at > ?`)
+			.bind(...keys, this.now())
+			.all<{ claim_key: string }>()
+		return new Set(results.map((row) => row.claim_key))
+	}
+
+	async hasNotification(dedupKey: string): Promise<boolean> {
+		const row = await this.db.prepare('SELECT 1 AS found FROM notification_outbox WHERE dedup_key = ?').bind(dedupKey).first<{ found: number }>()
+		return row !== null
+	}
+
 	async enqueueNotification(input: {
 		dedupKey: string
 		sourceId: string
@@ -248,7 +266,7 @@ export class SqliteAlertsRepository extends AlertsRepository {
 						SELECT 1 FROM notification_channels
 						WHERE notification_channels.id = notification_outbox.channel_id AND enabled = 1
 					)
-				ORDER BY visible_at, id LIMIT ?
+				ORDER BY ${CLAIM_ORDER} LIMIT ?
 			)
 			RETURNING id, dedup_key, channel_id, payload, attempts, max_attempts, claim_token`
 	}
@@ -266,7 +284,7 @@ export class PostgresAlertsRepository extends AlertsRepository {
 						SELECT 1 FROM notification_channels
 						WHERE notification_channels.id = notification_outbox.channel_id AND enabled = 1
 					)
-				ORDER BY visible_at, id LIMIT ?
+				ORDER BY ${CLAIM_ORDER} LIMIT ?
 				FOR UPDATE SKIP LOCKED
 			)
 			RETURNING id, dedup_key, channel_id, payload, attempts, max_attempts, claim_token`

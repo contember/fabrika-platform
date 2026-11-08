@@ -54,7 +54,7 @@ export class OperationsWorker extends WorkerEntrypoint<OperationsWorkerBindings>
 			await consumeDeadDeliveries(this.operations, deliveries)
 			return
 		}
-		await consumeDeliveries(this.operations, deliveries)
+		await consumeDeliveries(this.operations, deliveries, { log: (message) => console.warn(message) })
 	}
 
 	override async scheduled(): Promise<void> {
