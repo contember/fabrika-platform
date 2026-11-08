@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { applyMigrations, postgresMigrations } from '../bun/migrate'
-import { warnBareTriggerRefs } from '../cron'
+import { warnBareTriggerRefs, warnWorkspaceTriggerRefs } from '../cron'
 import { createHarness } from './helpers/harness'
 import { hasPostgres, postgresUrl, skipReason } from './helpers/postgres'
 
@@ -90,6 +90,35 @@ describe('maintenance names an environment the migration left bare', () => {
 		expect(warn.mock.calls[0]?.[0]).toBe(
 			'trigger ref "main" of shop/prod is not a full git ref, so no push deploys it; '
 				+ 'put shop/prod again with a refs/heads/<branch> or refs/tags/<tag> trigger ref no other environment holds',
+		)
+	})
+})
+
+describe('maintenance names an environment whose trigger ref is reserved for workspaces', () => {
+	let warn: ReturnType<typeof spyOn<Console, 'warn'>>
+	beforeEach(() => {
+		warn = spyOn(console, 'warn').mockImplementation(() => {})
+	})
+	afterEach(() => {
+		warn.mockRestore()
+	})
+
+	test('one warning per trigger ref under refs/heads/fabrika/, and none for a neighbouring branch or a glob above it', async () => {
+		const { sqlite, db } = createHarness()
+		sqlite.query(SEED_APP).run('shop', 'github.com/acme/shop')
+		sqlite.query(SEED_ENV).run('shop', 'prod', 'refs/heads/fabrika/release')
+		sqlite.query(SEED_ENV).run('shop', 'stage', 'refs/heads/fabrika/*')
+		sqlite.query(SEED_ENV).run('shop', 'preview', 'refs/heads/*')
+		sqlite.query(SEED_ENV).run('shop', 'next', 'refs/heads/fabrika-next')
+		// Git refs are case-sensitive, and so is the reserved namespace.
+		sqlite.query(SEED_ENV).run('shop', 'loud', 'refs/heads/FABRIKA/x')
+
+		expect(await warnWorkspaceTriggerRefs(db.registry)).toEqual(['shop/prod', 'shop/stage'])
+
+		expect(warn).toHaveBeenCalledTimes(2)
+		expect(warn.mock.calls[0]?.[0]).toBe(
+			'trigger ref "refs/heads/fabrika/release" of shop/prod is under refs/heads/fabrika/, the branches reserved for MCP workspaces, '
+				+ 'so no push deploys it; put shop/prod again with a trigger ref outside refs/heads/fabrika/',
 		)
 	})
 })

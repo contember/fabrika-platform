@@ -24,7 +24,9 @@ Decision: [ADR-0049](../decisions/0049-author-applications-through-mcp-in-contro
    the GitHub client and never reaches the MCP client.
 
 A workspace is a branch `fabrika/<workspace id>` created from the default branch. Every edit is a
-commit that names the expected head; a stale head fails and the client re-reads.
+commit that names the expected head; a stale head fails and the client re-reads. A push to a workspace
+branch triggers no environment, whatever its trigger ref (`refs/heads/*` included): only `deploy_stage`
+deploys a workspace.
 
 ## Tools
 

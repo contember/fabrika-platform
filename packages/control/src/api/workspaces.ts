@@ -13,6 +13,7 @@ import { parseClassification } from '../approval/publish'
 import { type AppEnvRow, type AppRow, type ControlRepositories, SourceBindingError, type WorkspaceRow } from '../db'
 import { logFailure } from '../error-label'
 import { parseGitHubRepo } from '../github/triggers/push-event'
+import { isWorkspaceRef, WORKSPACE_BRANCH_PREFIX } from '../ref-match'
 import {
 	type WorkspaceChangedFile,
 	WorkspaceSourceError,
@@ -25,7 +26,6 @@ import {
 import { ControlApiError, fail } from './domain'
 import { canAtCoordinates, createManualRun, type DeployQueue, getRunLogUseCase, getRunUseCase, type LogReader, toRunDto } from './runs'
 
-export const WORKSPACE_BRANCH_PREFIX = 'fabrika/'
 export const DEPLOYMENT_LOG_DEFAULT_LINES = 30
 export const DEPLOYMENT_LOG_MAX_LINES = 500
 const AUTHOR_NAME_MAX_LENGTH = 200
@@ -595,7 +595,7 @@ export async function getDeploymentUseCase(
 ): Promise<DeploymentDto> {
 	const ownerId = requireOwner(c.auth)
 	const row = await c.repositories.runs.getRun(input.runId)
-	const branch = row?.ref.startsWith(`refs/heads/${WORKSPACE_BRANCH_PREFIX}`) ? row.ref.slice('refs/heads/'.length) : null
+	const branch = row !== null && isWorkspaceRef(row.ref) ? row.ref.slice('refs/heads/'.length) : null
 	const workspace = branch === null ? null : await c.repositories.workspaces.getWorkspaceByBranch(branch)
 	if (
 		row === null || workspace === null || workspace.owner_id !== ownerId || workspace.app_id !== row.app_id
@@ -823,7 +823,7 @@ async function describeWorkspace(c: WorkspaceUseCaseContext, owned: OwnedWorkspa
 async function stageDeployment(c: WorkspaceUseCaseContext, appId: string, env: string): Promise<StageDeploymentDto | null> {
 	const run = await c.repositories.runs.getLatestSucceededRun({ appId, env })
 	if (run === null) return null
-	const branch = run.ref.startsWith(`refs/heads/${WORKSPACE_BRANCH_PREFIX}`) ? run.ref.slice('refs/heads/'.length) : null
+	const branch = isWorkspaceRef(run.ref) ? run.ref.slice('refs/heads/'.length) : null
 	const workspace = branch === null ? null : await c.repositories.workspaces.getWorkspaceByBranch(branch)
 	const sameTarget = workspace !== null && workspace.app_id === appId && workspace.env === env
 	return {

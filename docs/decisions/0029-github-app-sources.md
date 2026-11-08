@@ -92,6 +92,8 @@ operation changes the connection id, the App, the installation or the applicatio
 **Binding.** A private application binds the pair `(connectionId, installationId)` at registration,
 chosen from the repository owner's connection. Every private operation names both. An installation
 id alone never selects a credential, and a mismatch fails without trying another connection.
+Changing a registered application's repository or its binding takes global `app.manage`, as
+registration does; `app.manage` scoped to the application changes neither.
 
 **Webhooks.** Each connection's App delivers to `/webhooks/github/:connectionId`. Control selects that
 connection's secret before reading the body, verifies the HMAC, requires the payload's installation id
@@ -103,8 +105,9 @@ feed instead of a webhook. A read that names no binding still carries a token wh
 the connection of the organization that owns the repository and mints a token scoped to that repository.
 GitHub refuses that token for a repository the installation does not cover, so minting it is the access
 check, and the read falls back to anonymous. Anonymous reads share the per-IP limit with every tenant of a
-cloud's egress address; an installation token has its own. The fallback grants nothing new: any registrant
-could bind the same connection. Webhooks, the poller and the registration probe are unchanged: the probe
+cloud's egress address; an installation token has its own. The fallback grants nothing new: whoever names an
+application's repository could bind the same connection, and that is global `app.manage` (registration, or a
+repository change). Webhooks, the poller and the registration probe are unchanged: the probe
 asks whether the repository is readable WITHOUT a token, so it stays anonymous.
 
 **Cloudflare delivery.** For each deploy, Control resolves the requested ref to one exact commit with a

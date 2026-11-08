@@ -341,6 +341,21 @@ describe('pollPublicRepos', () => {
 		expect(calls).toHaveLength(0)
 	})
 
+	test('an env whose trigger ref names a workspace branch is skipped without a fetch', async () => {
+		const { db } = createHarness()
+		await db.registry.createApp({ id: 'app', repoUrl: REPO })
+		// Stored directly: `canonicalTriggerRef` refuses this ref on every write path now.
+		await db.registry.upsertAppEnv(providerEnvironment('app', 'stage', { triggerRef: 'refs/heads/fabrika/0190a1b2' }))
+		const queue = makeQueue()
+		const { fetch, calls } = fakeFetch({})
+
+		const summary = await pollPublicRepos({ repositories: db, fetch, queue, now: () => NOW })
+
+		expect(summary).toEqual({ polled: 0, triggered: 0, unchanged: 0, errored: 0, skipped: 1 })
+		expect(calls).toHaveLength(0)
+		expect(queue.sent).toHaveLength(0)
+	})
+
 	test('a v* tag-pattern env polls the tags feed and deploys the newest matching tag (concrete ref)', async () => {
 		const { db } = createHarness()
 		await db.registry.createApp({ id: 'app', repoUrl: REPO })

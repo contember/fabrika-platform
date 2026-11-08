@@ -355,6 +355,10 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 		expect((await db.registry.getAppEnvByTriggerRef('acme', 'refs/tags/v*'))?.env).toBe('prod')
 		// Manual-only envs (NULL trigger_ref) are excluded — the partial index's whole point.
 		expect((await db.registry.listTriggerEnvs('acme')).map((e) => e.env)).toEqual(['prod'])
+		// The prefix and its length are bound parameters, which Postgres type-checks.
+		expect(await db.registry.listWorkspaceTriggerEnvs()).toEqual([])
+		await db.registry.upsertAppEnv(providerEnvironment('acme', 'stage', { triggerRef: 'refs/heads/fabrika/*' }))
+		expect((await db.registry.listWorkspaceTriggerEnvs()).map((e) => e.env)).toEqual(['stage'])
 
 		expect(await db.registry.deleteAppEnv('acme', 'stage')).toBe(true)
 		expect(await db.registry.deleteAppEnv('acme', 'stage')).toBe(false)

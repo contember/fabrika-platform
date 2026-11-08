@@ -1,5 +1,8 @@
+import { CONTROL_ACTIONS } from '@fabrika/control-contract'
 import { useState } from 'react'
 import { api, ApiError, type AppDto } from '../../lib/api'
+import { holdsGlobally } from '../../lib/console-access'
+import { useConsoleAccess } from '../../lib/console-caller'
 import { Icon } from '../Icon'
 
 export function BuildConfigSection({ app, onDone }: { app: AppDto; onDone: () => void }) {
@@ -30,8 +33,11 @@ function Field({ label, value, mono }: { label: string; value: string | null; mo
 /**
  * The app's GitHub source binding: "Detect" binds the source connection of the repository's organization
  * (server-side); "Edit" names the installation, which must be that connection's. Without one the app is public.
+ * Changing it needs global `app.manage`, as registration does; an app-scoped holder sees it read-only.
  */
 function InstallationIdField({ app, onDone }: { app: AppDto; onDone: () => void }) {
+	const access = useConsoleAccess()
+	const mayBind = access === null || holdsGlobally(access, CONTROL_ACTIONS.APP_MANAGE)
 	const [editing, setEditing] = useState(false)
 	const [value, setValue] = useState(app.githubInstallationId === null ? '' : String(app.githubInstallationId))
 	const [busy, setBusy] = useState(false)
@@ -78,10 +84,14 @@ function InstallationIdField({ app, onDone }: { app: AppDto; onDone: () => void 
 				: (
 					<div className="row-actions">
 						{app.githubInstallationId === null ? <span className="muted">none</span> : <code>{String(app.githubInstallationId)}</code>}
-						<button type="button" className="small" disabled={busy} onClick={() => patch({ resolveInstallationId: true })}>
-							{busy ? 'Detecting…' : 'Detect'}
-						</button>
-						<button type="button" className="small" disabled={busy} onClick={() => setEditing(true)}>Edit</button>
+						{mayBind && (
+							<>
+								<button type="button" className="small" disabled={busy} onClick={() => patch({ resolveInstallationId: true })}>
+									{busy ? 'Detecting…' : 'Detect'}
+								</button>
+								<button type="button" className="small" disabled={busy} onClick={() => setEditing(true)}>Edit</button>
+							</>
+						)}
 					</div>
 				)}
 			{error && <div className="error-text small">{error}</div>}

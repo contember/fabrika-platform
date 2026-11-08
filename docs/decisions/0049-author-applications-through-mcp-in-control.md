@@ -61,7 +61,10 @@ workspace its own running application, where one pinned service could show only 
    are ordinary commits that name the expected head; a stale head fails. Control stores workspace
    metadata only, never file contents. Control performs every GitHub read and write itself, through
    the GitHub App of the app's connection, with the key read from its vault per operation (ADR-0029).
-   The installation token stays inside the GitHub client and never reaches the MCP client.
+   The installation token stays inside the GitHub client and never reaches the MCP client. A push to a
+   workspace branch deploys nothing: no trigger ref matches `refs/heads/fabrika/…`, a glob included, and
+   none may name that namespace, so a workspace reaches an environment only through `deploy_stage`, which
+   needs `deploy.trigger`.
 5. **An operator marks an app environment as an authoring target.** A user may author it when they
    also hold `source.workspace.*` grants at its coordinates. One stage environment per app; deploying a
    workspace creates an ordinary run for the exact head SHA in that environment.

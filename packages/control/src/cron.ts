@@ -18,6 +18,7 @@ import type { OperationsCatalogSyncSummary } from './operations-catalog'
 import type { OperationsReleaseProjectionSummary } from './operations-releases'
 import { replayOperationsReleases } from './operations-releases'
 import { type ProviderReconcileSummary, sweepStaleRuns } from './provider-reconcile'
+import { WORKSPACE_REF_PREFIX } from './ref-match'
 import { locks, operationsReleaseDeps, replayOperationsCatalogProjection, repositories, STALE_RUN_MAX_AGE_S } from './services'
 
 /** What one maintenance pass did. Returned for the tests + the log line; counts only, never a URL. */
@@ -72,6 +73,7 @@ export async function runMaintenance(env: Env, options: MaintenanceOptions = {})
 	const now = options.now ?? (() => Math.floor(Date.now() / 1000))
 	await enqueueUnsettledNamespaces(persistence.registry, env.DEPLOY_QUEUE)
 	await warnBareTriggerRefs(persistence.registry)
+	await warnWorkspaceTriggerRefs(persistence.registry)
 	const poll = await pollPublicRepos({
 		repositories: persistence,
 		// Wrapped: the poller calls it as `deps.fetch`, and a Worker refuses the global `fetch` with that `this`.
@@ -138,4 +140,19 @@ export async function warnBareTriggerRefs(registry: ControlRegistryRepository): 
 		)
 	}
 	return bare.map((row) => `${row.app_id}/${row.env}`)
+}
+
+/**
+ * Name every environment whose trigger ref is under the branches reserved for MCP workspaces, which no push or poll
+ * deploys: a row stored before `canonicalTriggerRef` refused them. Returns the `<app>/<env>` coordinates warned of.
+ */
+export async function warnWorkspaceTriggerRefs(registry: ControlRegistryRepository): Promise<string[]> {
+	const reserved = await registry.listWorkspaceTriggerEnvs()
+	for (const row of reserved) {
+		console.warn(
+			`trigger ref "${row.trigger_ref}" of ${row.app_id}/${row.env} is under ${WORKSPACE_REF_PREFIX}, the branches reserved for `
+				+ `MCP workspaces, so no push deploys it; put ${row.app_id}/${row.env} again with a trigger ref outside ${WORKSPACE_REF_PREFIX}`,
+		)
+	}
+	return reserved.map((row) => `${row.app_id}/${row.env}`)
 }
