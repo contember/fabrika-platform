@@ -11,6 +11,7 @@ import { devLauncherRefusal } from '../dev/deploy'
 import type { CommitSource } from '../github/source/commit-files'
 import { SourceFailure, SourceRateLimited } from '../github/source/failure'
 import type { LeaseFence } from '../lease'
+import { mailCustodyRefusal } from '../mail-transport'
 import { type AccessEffect, type AccessOutcome, classifyAccess, isJobStartLine } from './diff'
 import { ContractMissing, readAccessSnapshot, snapshotReads, SnapshotRefused } from './read'
 import { FrameworkReleaseRefused } from './readers'
@@ -172,6 +173,7 @@ export async function publishRunSnapshot(
 		await assertConnectorEdges(deps.repositories.registry, run, candidate, active, input.log)
 		assertMountCompatibility(candidate, active, input.log)
 		assertDevLauncher(candidate, appEnv, input.log)
+		await assertMailCustody(deps.repositories.runs, run, candidate, published, input.log)
 		await input.validateAccess?.(access, appEnv)
 		const classification = classify(active, candidate, appEnv)
 		logClassification(input.log, classification, appEnv.env)
@@ -275,6 +277,39 @@ function assertDevLauncher(candidate: AccessSnapshot, appEnv: AppEnvRow, log: (l
 	if (refusal === null) return
 	log(`access: ${refusal}`)
 	throw new FrameworkReleaseRefused(refusal)
+}
+
+/**
+ * Refused before anything publishes: a published candidate would itself count as the custody the next deploy reads. The
+ * environment holds what it published and what it runs: a publication whose deploy failed leaves the older version
+ * running, and redeploying that version keeps its custody.
+ */
+async function assertMailCustody(
+	runs: ControlRepositories['runs'],
+	run: RunRow,
+	candidate: AccessSnapshot,
+	published: ActiveSnapshot,
+	log: (line: string) => void,
+): Promise<void> {
+	const running = readableSnapshot((await runs.getLatestSucceededRunWithSnapshot({ appId: run.app_id, env: run.env }))?.snapshot_json ?? null)
+	const held = running === null ? [published.snapshot] : [published.snapshot, running]
+	const refusal = mailCustodyRefusal(held, candidate)
+	if (refusal === null) return
+	log(`access: ${refusal}`)
+	throw new FrameworkReleaseRefused(refusal)
+}
+
+/**
+ * Another run's stored snapshot, or null when this release cannot read it (a newer Control wrote it). Reading it as
+ * holding no custody can only refuse a candidate, never hand the credential.
+ */
+function readableSnapshot(raw: string | null): AccessSnapshot | null {
+	if (raw === null) return null
+	try {
+		return parseSnapshot(raw)
+	} catch {
+		return null
+	}
 }
 
 /** A deploy that breaks a mount's promise of backward compatibility fails, whoever approves it: its callers would break. */

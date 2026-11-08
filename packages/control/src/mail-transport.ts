@@ -136,9 +136,40 @@ const PLATFORM_MAIL_SINCE: Release = { text: '0.7.0', major: 0, minor: 7, patch:
  * without a release was read before Control recorded one, so it is an older application.
  */
 export function relaysInstallationMail(artifact: ContractArtifact | null, framework: string | undefined): boolean {
-	if (installationMailJobs(artifact).length === 0 || framework === undefined) return false
-	const release = parseRelease(framework)
-	return release !== null && compareReleases(release, PLATFORM_MAIL_SINCE) >= 0
+	return installationMailJobs(artifact).length > 0 && !predatesRelay(framework)
+}
+
+function predatesRelay(framework: string | undefined): boolean {
+	const release = framework === undefined ? null : parseRelease(framework)
+	return release === null || compareReleases(release, PLATFORM_MAIL_SINCE) < 0
+}
+
+/** The parts of an access snapshot that decide which mail transport its deploy hands. */
+export interface MailCustodyVersion {
+	readonly contract: ContractArtifact | null
+	readonly framework?: string | undefined
+}
+
+/** A version whose release predates the relay, with a job that declares mailer 'installation', holds the provider credential. */
+function holdsMailCredential(version: MailCustodyVersion): boolean {
+	return installationMailJobs(version.contract).length > 0 && predatesRelay(version.framework)
+}
+
+/**
+ * Why `candidate` may not be published to an environment that holds `held` (its published version and the version that
+ * runs), or null. Only an environment where one of them already held the installation's provider credential keeps that
+ * custody (ADR-0064 §5), so pinning a release before the relay gains it for no new environment, job or downgrade. The
+ * line names only a release the release pattern admitted.
+ */
+export function mailCustodyRefusal(held: readonly MailCustodyVersion[], candidate: MailCustodyVersion): string | null {
+	if (!holdsMailCredential(candidate) || held.some(holdsMailCredential)) return null
+	const jobs = installationMailJobs(candidate.contract).length
+	const release = candidate.framework === undefined
+		? 'the framework release this version was read with predates'
+		: `framework ${candidate.framework}, which this version pins, predates`
+	return `the contract has ${
+		jobs === 1 ? 'a job that sends' : `${jobs} jobs that send`
+	} mail through the installation (mailer: 'installation'), and ${release} the platform's mail relay: it would hold the installation's provider credential, which neither this environment's published version nor the one it runs holds. Raise the application's @fabrika/* pin to ${PLATFORM_MAIL_SINCE.text} or newer`
 }
 
 /**
