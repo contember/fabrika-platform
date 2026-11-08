@@ -797,7 +797,12 @@ describe('Cloudflare provider', () => {
 		expect(rec.commands.some((command) => command.command === 'wrangler' && command.args[0] === 'deploy')).toBe(false)
 
 		const narrow = await deploy(rec, config({ resources: () => bindingIam(iamServiceReference()) }), {
-			generatedServices: [{ binding: 'IAM', service: 'stage-propustka-worker', entrypoint: 'PropustkaApplication', props: { app: 'demo@stage' } }],
+			generatedServices: [{
+				binding: 'IAM',
+				service: 'stage-propustka-worker',
+				entrypoint: 'PropustkaApplication',
+				props: { app: 'demo@stage', worker: 'application' },
+			}],
 		})
 		expect(narrow.status).toBe('succeeded')
 	})
@@ -805,7 +810,15 @@ describe('Cloudflare provider', () => {
 	// IAM reads `props.app` as the calling application (ADR-0067 §3): an application must not name another, or none.
 	test('refuses an IAM binding that does not name this deployment as its application', async () => {
 		for (
-			const props of [undefined, { app: 'other@stage' }, { app: 'demo@prod' }, { app: 'demo@stage', admin: true }]
+			const props of [
+				undefined,
+				{ app: 'other@stage', worker: 'application' },
+				{ app: 'demo@prod', worker: 'application' },
+				{ app: 'demo@stage', worker: 'application', admin: true },
+				// Without the mark IAM would issue it a delegation grant, which only the proxy obtains (ADR-0022 rule 6).
+				{ app: 'demo@stage' },
+				{ app: 'demo@stage', worker: 'proxy' },
+			]
 		) {
 			const result = await deploy(rec, config({ resources: () => bindingIam(iamServiceReference()) }), {
 				generatedServices: [{
@@ -818,34 +831,36 @@ describe('Cloudflare provider', () => {
 			expect(result.status).toBe('failed')
 			expect(stepError(result, 'deploy-worker')).toContain('binds IAM as `IAM` without naming its own application `demo@stage`')
 		}
-		const second: Bindable = {
-			configureBinding: ({ config }) => ({
-				...config,
-				services: [...(config.services ?? []), {
-					binding: 'IAM2',
-					service: 'stage-propustka-worker',
-					entrypoint: 'PropustkaApplication',
-					props: { app: 'other@stage' },
-				}],
-			}),
+		// A second binding naming the application's own id, without the mark, would obtain a grant the proxy alone obtains.
+		for (const props of [{ app: 'other@stage' }, { app: 'demo@stage' }]) {
+			const second: Bindable = {
+				configureBinding: ({ config }) => ({
+					...config,
+					services: [...(config.services ?? []), { binding: 'IAM2', service: 'stage-propustka-worker', entrypoint: 'PropustkaApplication', props }],
+				}),
+			}
+			await expect(deploy(rec, config({ resources: () => bindingIam(second) }))).rejects.toThrow(
+				'binds IAM as `IAM2` without naming its own application',
+			)
 		}
-		await expect(deploy(rec, config({ resources: () => bindingIam(second) }))).rejects.toThrow('binds IAM as `IAM2` without naming its own application')
 	})
 
-	// `packages/iam/src/__tests__/index.test.ts` pins the same name as the narrow class IAM exports.
-	test('an application and its platform-built proxy bind IAM at PropustkaApplication', async () => {
+	// `packages/iam/src/__tests__/index.test.ts` pins the same name and refuses a grant to the binding marked `application`.
+	test("an application and its platform-built proxy bind IAM at PropustkaApplication, and only the application's is marked", async () => {
 		expect(IAM_APPLICATION_ENTRYPOINT).toBe('PropustkaApplication')
 		await expect(deploy(rec, config({ resources: () => bindingIam(iamServiceReference()) }))).resolves.toMatchObject({
 			status: 'succeeded',
 		})
 		const { root, app } = provisioned()
-		for (const worker of [app, root]) {
+		const services = (worker: Worker) => {
 			const iam = worker.options.bindings?.['IAM']
-			const services = iam !== undefined && 'configureBinding' in iam && !('getId' in iam)
+			return iam !== undefined && 'configureBinding' in iam && !('getId' in iam)
 				? iam.configureBinding({ config: {}, binding: 'IAM', env: 'stage' }).services
 				: undefined
-			expect(services).toEqual([{ binding: 'IAM', service: 'stage-propustka-worker', entrypoint: 'PropustkaApplication', props: { app: 'demo@stage' } }])
 		}
+		const binding = { binding: 'IAM', service: 'stage-propustka-worker', entrypoint: 'PropustkaApplication' }
+		expect(services(app)).toEqual([{ ...binding, props: { app: 'demo@stage', worker: 'application' } }])
+		expect(services(root)).toEqual([{ ...binding, props: { app: 'demo@stage' } }])
 	})
 
 	test('a platform component keeps binding the default entrypoint under the platform policy', async () => {
@@ -2112,7 +2127,12 @@ describe('the application Worker `defineApp` builds for a config without `resour
 				workers_dev: false,
 				preview_urls: false,
 				services: expect.arrayContaining([
-					{ binding: 'IAM', service: 'stage-propustka-worker', entrypoint: IAM_APPLICATION_ENTRYPOINT, props: { app: 'demo@stage' } },
+					{
+						binding: 'IAM',
+						service: 'stage-propustka-worker',
+						entrypoint: IAM_APPLICATION_ENTRYPOINT,
+						props: { app: 'demo@stage', worker: 'application' },
+					},
 				]),
 			})
 		}

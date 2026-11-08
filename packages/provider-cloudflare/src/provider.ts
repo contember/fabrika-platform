@@ -315,7 +315,7 @@ const withIamIdentity = (authored: Worker, iamAppId: string): Worker => {
 	if (declared === undefined || 'getId' in declared) return authored
 	const configured = new Worker({
 		...application.options,
-		bindings: { ...application.options.bindings, IAM: new IamApplicationReference(iamAppId, declared) },
+		bindings: { ...application.options.bindings, IAM: new IamApplicationReference(iamAppId, 'application', declared) },
 	})
 	return replaceApplicationWorker(authored, configured)
 }

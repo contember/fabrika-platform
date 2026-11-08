@@ -302,7 +302,9 @@ or a share-link mount, and the provider writes both variables (IAM's public orig
 the key); an application may not set either. The key pins the application id and adds
 no authority: each operation still acts as the caller's token, and scope creation and
 membership changes spend the proxy's delegation grant (a share link needs none, as on
-Cloudflare). The surface serves no `requestDelegation`.
+Cloudflare). The surface serves no `requestDelegation`. On Cloudflare IAM answers
+`not_allowed` to it over the application Worker's binding (ADR-0022 rule 6), so on
+neither transport does an application obtain a delegation grant: only the proxy does.
 
 Where the hop is not a service binding, `boot` also takes the proxy secret
 `FABRIKA_PROXY_SECRET` (ADR-0022 rule 5). The Bun adapter, which serves Zerops, and the

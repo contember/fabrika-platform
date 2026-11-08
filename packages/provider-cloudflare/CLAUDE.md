@@ -165,9 +165,11 @@ this one import.
   (`platformResources: 'allow'`) may bind. The entrypoint name is pinned against IAM's exports by
   `packages/iam/src/__tests__/index.test.ts`.
 - **Every IAM binding names its own application in `props`** (ADR-0067 §3). The deployer wraps the application Worker's
-  `IAM` binding in `IamApplicationReference`, which stamps `props: { app: '<app>@<env>' }` on the generated entry, and
-  the proxy Worker's binding carries the same. IAM reads it as `ctx.props.app`, the caller's transport identity, so the
-  bounds refuse an IAM binding under any name whose `props` are not exactly that.
+  `IAM` binding in `IamApplicationReference`, which stamps `props: { app: '<app>@<env>', worker: 'application' }` on the
+  generated entry; the proxy Worker's binding carries `{ app }` only (`iamBindingProps`). IAM reads `ctx.props.app` as
+  the caller's transport identity and refuses `requestDelegation` over a binding marked `application` (ADR-0022 rule 6),
+  so the bounds refuse an IAM binding under any name whose `props` are not exactly its Worker's. The proxy's stays
+  unmarked so that a proxy deployed by an older release keeps obtaining grants.
 - **A checkout's Worker graph is rebuilt from this package's `Worker` class** (`runnerWorkerGraph`,
   `src/checkout.ts`). The checkout installs its own `oblaka-iac`, so `instanceof Worker` fails on its objects,
   and oblaka's processor itself recurses only into Workers of its own class. A Worker is recognised by

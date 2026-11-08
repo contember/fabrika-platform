@@ -74,21 +74,35 @@ export const IAM_APPLICATION_ENTRYPOINT = 'PropustkaApplication'
 /** The `IAM` binding of an application Worker; a generated config that binds IAM any other way is refused. */
 export const iamServiceReference = (): ServiceReference => new ServiceReference(IAM_SERVICE, IAM_APPLICATION_ENTRYPOINT)
 
+/** Which Worker of a deployment holds an `IAM` binding: the application Worker, or the proxy Worker the platform builds. */
+export type IamBindingHolder = 'application' | 'proxy'
+
+/**
+ * The `props` the deployer writes on an `IAM` binding. `app` is the deployment's IAM application id. The application
+ * Worker's binding also carries `worker: 'application'`, which IAM refuses a delegation grant to (ADR-0022 rule 6). The
+ * proxy's carries no mark, so a proxy deployed before the mark existed keeps obtaining grants.
+ */
+export const iamBindingProps = (app: string, holder: IamBindingHolder): Readonly<Record<string, string>> =>
+	holder === 'application' ? { app, worker: 'application' } : { app }
+
 /**
  * The deployer's `IAM` binding: what the Worker declared, with the IAM service entry's `props` naming the deployment's
- * IAM application id. IAM reads it as `ctx.props.app`, the transport identity of a call over the binding, as the
- * membership transport key is over HTTP (ADR-0067 §3). An application cannot choose it: the deployer writes it, and the
- * bounds refuse an IAM binding that names any other application.
+ * IAM application id (`iamBindingProps`). IAM reads it as `ctx.props`, the transport identity of a call over the
+ * binding, as the membership transport key is over HTTP (ADR-0067 §3). An application cannot choose it: the deployer
+ * writes it, and the bounds refuse an IAM binding whose `props` are anything else. Repository code holding the account
+ * token can still deploy past the bounds (ADR-0048, backlog 86).
  */
 export class IamApplicationReference implements Binding {
 	constructor(
 		private readonly app: string,
+		private readonly holder: IamBindingHolder,
 		private readonly declared: Binding = iamServiceReference(),
 	) {}
 
 	configureBinding(args: Parameters<Binding['configureBinding']>[0]): ReturnType<Binding['configureBinding']> {
 		const config = this.declared.configureBinding(args)
-		const services = (config.services ?? []).map((entry) => entry.binding === args.binding ? { ...entry, props: { app: this.app } } : entry)
+		const props = iamBindingProps(this.app, this.holder)
+		const services = (config.services ?? []).map((entry) => entry.binding === args.binding ? { ...entry, props } : entry)
 		return { ...config, services }
 	}
 }
@@ -134,7 +148,7 @@ export function createCloudflareProxyWorker(options: CloudflareProxyWorkerOption
 		define: { [PROXY_MANIFEST_DEFINE]: JSON.stringify(encodeProxyManifestJson(manifest)) },
 		vars: { FABRIKA_IAM_ISSUER: options.iamUrl ?? '' },
 		bindings: {
-			IAM: options.installation === undefined ? new IamApplicationReference(options.appId, iam) : iam,
+			IAM: options.installation === undefined ? new IamApplicationReference(options.appId, 'proxy', iam) : iam,
 			APP: options.app,
 		},
 	})

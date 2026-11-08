@@ -43,7 +43,10 @@ export class IamMembership {
 		private readonly appId: string,
 	) {}
 
-	/** A single-use grant for one request to `endpoint`, which the app's schema lists as a membership endpoint. */
+	/**
+	 * A single-use grant for one request to `endpoint`. IAM refuses it on every application transport (ADR-0022 rule 6):
+	 * only the proxy obtains one, and the application spends the grant the proxy forwards.
+	 */
 	requestDelegation(caller: MembershipRequestCaller, endpoint: string): Promise<RequestDelegationResult> {
 		return this.binding.requestDelegation({ ...this.caller(caller), endpoint })
 	}

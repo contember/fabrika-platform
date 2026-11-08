@@ -12,7 +12,8 @@ import { createIamRpc } from '../rpc'
 import { handleRpcHttp } from '../rpc-http'
 import { buildServices } from '../services'
 import { signAccessToken } from '../tokens'
-import { seedUser } from './helpers/harness'
+import { seedUser, TEST_SIGNING_ENV } from './helpers/harness'
+import { APP, CREATE_ENDPOINT, membershipFixture, ORIGIN } from './helpers/membership'
 import { allMigrations } from './helpers/migrations'
 
 // TEST-4: the RPC entrypoint (`Propustka` in src/index.ts) wires several spec-mandated
@@ -774,8 +775,31 @@ describe('the entrypoint an application binds', () => {
 			expect(await worker.assertIdentity({ ...asB, principalId: person })).toEqual({ ok: false, reason: 'not_allowed' })
 			expect(await worker.cancelIdentification(asB)).toEqual({ ok: false, reason: 'not_allowed' })
 		}
-		// B's own binding reaches IAM, which answers for the identification itself.
-		expect(await bound({ app: 'b@stage' }).inspectIdentification(asB)).toEqual({ ok: false, reason: 'not_found' })
+		// B's own binding, as the deployer writes it on the application Worker, reaches IAM, which answers for the identification.
+		for (const props of [{ app: 'b@stage', worker: 'application' }, { app: 'b@stage' }]) {
+			expect(await bound(props).inspectIdentification(asB)).toEqual({ ok: false, reason: 'not_found' })
+		}
+	})
+
+	// ADR-0022 rule 6: only the proxy obtains a grant. The deployer marks the application Worker's binding, never its proxy's.
+	test("a delegation grant is refused to the application Worker's binding and issued to its proxy's", async () => {
+		const db = freshDb()
+		const f = await membershipFixture(createIamRepositories(new SqliteD1(db)))
+		const env: Env = { ...makeEnv(db), ...TEST_SIGNING_ENV, ISSUER: ORIGIN }
+		const owner = await f.person('delegating-owner')
+		await f.repositories.grants.createRoleGrantUnlessHeld({ principalId: owner.id, app: APP, roleKey: 'starter' })
+		const bound = (props: unknown): InstanceType<typeof PropustkaApplication> => {
+			const worker: unknown = Reflect.construct(PropustkaApplication, [{ ...makeCtx(), props }, env])
+			if (!(worker instanceof PropustkaApplication)) throw new Error('failed to construct the mocked Worker entrypoint')
+			return worker
+		}
+		const request = { app: APP, credential: await owner.token(), requestId: 'req-delegation', endpoint: CREATE_ENDPOINT }
+
+		expect(await bound({ app: APP, worker: 'application' }).requestDelegation(request)).toEqual({ ok: false, reason: 'not_allowed' })
+		expect(db.query('SELECT 1 FROM delegation_grants').all()).toHaveLength(0)
+		// The proxy's binding names only the application, as a binding deployed before the mark does.
+		expect(await bound({ app: APP }).requestDelegation(request)).toMatchObject({ ok: true, grant: expect.any(String) })
+		expect(db.query('SELECT 1 FROM delegation_grants').all()).toHaveLength(1)
 	})
 
 	test('the narrow class serves a call from its own bindings', async () => {
