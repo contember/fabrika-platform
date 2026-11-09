@@ -133,7 +133,8 @@ bun test               # app-environment · canonical-path · client-address · 
   whose order carries no meaning — `endpoints` by id, `reservedPrefixes`, role `grants` and `assignableBy`, RPC
   and endpoint `callers`, link `grants`, webhook and job `actions`, export `consumers`, import `procedures` and
   `usedBy`, a declared site's `connect`, file `types`, admission `contentTypes`, CSP sources by origin, table `insert`, `update` and
-  `inherit`, enum `values` — by code unit. Three arrays are ordered: tuple `items` and union `options`, because the
+  `inherit`, a reveal's and a member reveal's `actions`, enum `values` — by code unit; a condition's `allOf` and `anyOf`
+  operands and its `in` and `notIn` lists by their canonical JSON (`canonicalCondition`). Three arrays are ordered: tuple `items` and union `options`, because the
   order changes what a schema admits, and an attachment's `columns`, because it is the file's column order. `canonicalArtifactJson` also sorts object keys; it is the only
   serialization a digest of an artifact may be taken over. A new array field is unordered unless it is added to
   that list.

@@ -52,9 +52,9 @@ function problems(compile: () => unknown): readonly string[] {
 }
 
 describe('some and none in the artifact', () => {
-	test('the compiled artifact records them in the policy form', () => {
+	test('the compiled artifact records them in the policy form, its operands in canonical order', () => {
 		expect(compileContract(contract, tables).tables['projects']?.when).toEqual({
-			'projects.read': { anyOf: [{ some: { tasks: { open: { eq: true } } } }, { none: { tasks: { open: { eq: false } } } }] },
+			'projects.read': { anyOf: [{ none: { tasks: { open: { eq: false } } } }, { some: { tasks: { open: { eq: true } } } }] },
 		})
 	})
 
