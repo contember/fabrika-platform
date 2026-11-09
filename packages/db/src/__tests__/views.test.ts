@@ -83,6 +83,8 @@ function viewCases(open: () => Database): void {
 
 	// The same tables and orphan_events, whose rows e3 and e9 name no parent row.
 	let orphaned: DataAccess
+	// The same tables, with an update of an event's note that holds only a row with a note.
+	let editable: DataAccess
 
 	beforeAll(() => {
 		const database = open()
@@ -102,6 +104,15 @@ function viewCases(open: () => Database): void {
 		)
 		bindScopedDatabase(orphans, { database, capabilities: alice })
 		orphaned = dataAccessOf(orphans)
+		const events = {
+			...viewPolicies.events,
+			actions: { ...viewPolicies.events.actions, update: 'projects.write' },
+			update: ['note'],
+			when: { 'projects.write': { note: { isNull: false } } },
+		}
+		const edits = scoped(readTables(viewColumns, { ...viewPolicies, events }, viewVocabulary))
+		bindScopedDatabase(edits, { database, capabilities: alice })
+		editable = dataAccessOf(edits)
 	})
 
 	/** One invocation of `kind`, committed when `work` resolves and rolled back when it throws. */
@@ -207,6 +218,22 @@ function viewCases(open: () => Database): void {
 			expect(idsOf(await read((db) => call(db.within(within(dimension, 'all')), 'orphan_events.list')))).toEqual(['e1', 'e2'])
 			expect(await read((db) => call(db.within(within(dimension, 'all')), 'orphan_events.count'))).toBe(2)
 		}
+	})
+
+	test("an update of a child row by its key holds the row to its action's condition", async () => {
+		const writer = project('projects.write', 'p1', 'o1')
+		const update = (id: string, note: string) => invoke('mutation', (db) => call(db.target(writer, 'on'), 'events.update', id, { note }), {}, editable)
+		const notes = async () => {
+			const rows = itemsOf(await invoke('query', (db) => call(db.target(project('projects.read', 'p1', 'o1'), 'on'), 'events.list')))
+			return rows.map((row) => (typeof row === 'object' && row !== null ? [Reflect.get(row, 'id'), Reflect.get(row, 'note')] : []))
+		}
+		// e2 has no note, so the condition of projects.write holds it from the update.
+		await expect(update('e2', 'written')).rejects.toThrow('not found')
+		await expect(update('e3', 'written')).rejects.toThrow('not found')
+		expect(await notes()).toEqual([['e1', 'own note'], ['e2', null]])
+		await update('e1', 'edited')
+		expect(await notes()).toEqual([['e1', 'edited'], ['e2', null]])
+		await update('e1', 'own note')
 	})
 
 	test('ctx.sql.scope renders no read of a child view, which only its parent row places', async () => {
