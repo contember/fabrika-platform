@@ -605,6 +605,14 @@ describe('a view (ADR-0072)', () => {
 		)
 	})
 
+	test('confers no relation', () => {
+		const vocabulary = { ...viewVocabulary, relations: { watcher: { dimension: 'project' } } }
+		const confers = { ...base, project_summaries: { ...summary, confers: { watcher: { principal: 'name' } } } }
+		expect(() => readTables(plain(viewColumns), plain(confers), plain(vocabulary))).toThrow(
+			'project_summaries: a view confers no relation; its rows change with every write to the tables it reads, which no delegation bound sees',
+		)
+	})
+
 	test('needs no policy, while a table still does; the entry says view only as true', () => {
 		expect(Object.keys(tablePolicies(read(base))).sort()).toEqual(['events', 'organizations', 'projects'])
 		expect(refusal({ organizations: base.organizations, projects: base.projects })).toBe('events: every table needs a policy in tables.ts')

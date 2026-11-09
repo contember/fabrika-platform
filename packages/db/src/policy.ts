@@ -1770,6 +1770,11 @@ function parseConfers(
 	if (table.scope.mode !== 'dimension' && table.scope.mode !== 'child') {
 		throw new PolicyError(`${table.name}: a ${table.scope.mode} table confers no relation; its rows lie at no node`)
 	}
+	if (table.view) {
+		throw new PolicyError(
+			`${table.name}: a view confers no relation; its rows change with every write to the tables it reads, which no delegation bound sees`,
+		)
+	}
 	if (table.queue !== undefined) {
 		// A claim, a requeue and `done: true` rewrite `due` and `version` past every update-column check.
 		throw new PolicyError(`${table.name}: a queue table confers no relation; the layer rewrites its rows on every claim`)
