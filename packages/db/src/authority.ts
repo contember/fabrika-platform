@@ -185,12 +185,21 @@ export function conditioned(model: TableModel, action: string, branch: Operation
 }
 
 /**
- * A Ref's predicate over `links` of `model`: one equality per link of its chain, then, when the Ref is held through
- * relations, a row of one of them at the node, and its action's condition. A relation that does not reach `model`
- * leaves the Ref unenforceable there, never unconditioned.
+ * A Ref's predicate over `links` of `model`: one equality per link of its chain (after `row`, the equality that
+ * addresses one row by its key), then, when the Ref is held through relations, a row of one of them at the node, and
+ * its action's condition. A relation that does not reach `model` leaves the Ref unenforceable there, never
+ * unconditioned.
  */
-export function refScope(relations: RelationSources, model: TableModel, links: readonly Container[], grant: RefGrant, now: Date): OperationNode {
-	const chain = linksPredicate(model.name, linkValues(model.name, links, grant))
+export function refScope(
+	relations: RelationSources,
+	model: TableModel,
+	links: readonly Container[],
+	grant: RefGrant,
+	now: Date,
+	row?: OperationNode,
+): OperationNode {
+	const linked = linksPredicate(model.name, linkValues(model.name, links, grant))
+	const chain = row === undefined ? linked : allOf([row, linked])
 	const gate = relationGate(relations, model, grant, now)
 	return conditioned(model, grant.action, gate === undefined ? chain : allOf([chain, gate]), now)
 }

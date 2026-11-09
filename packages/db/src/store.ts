@@ -553,9 +553,13 @@ export function dimensionListPredicate(context: TableContext, capability: unknow
 	return withinPredicate(context, scope.container?.column ?? scope.key, grant, operation)
 }
 
-/** Rows of a child table that belong to the parent object the Ref names, over the whole chain. */
-export function parentPredicate(context: TableContext, grant: RefGrant): OperationNode {
-	return refScope(context.relations, context.model, context.model.chain, grant, new Date())
+/**
+ * Rows of a child table that belong to the parent object the Ref names, over the whole chain; with `key`, the one row
+ * of them it keys. The key's equality joins the chain's, so the action's condition narrows both.
+ */
+export function parentPredicate(context: TableContext, grant: RefGrant, key?: string): OperationNode {
+	const row = key === undefined ? undefined : equals(context.model.name, childScope(context).key, key)
+	return refScope(context.relations, context.model, context.model.chain, grant, new Date(), row)
 }
 
 export function childListPredicate(context: TableContext, capability: unknown, operation: Operation): OperationNode | undefined {
@@ -1048,7 +1052,7 @@ export function childObjectPredicate(context: TableContext, parent: unknown, key
 		throw new QueryRefusedError('row_address', `a ${context.model.name} row is addressed by its parent Ref and its ${scope.key}`)
 	}
 	const grant = refGrant(context, parent, scope.parent.dimension, operation)
-	return allOf([equals(context.model.name, scope.key, key), parentPredicate(context, grant)])
+	return parentPredicate(context, grant, key)
 }
 
 export function guard(context: TableContext, root: RootKind, scope: OperationNode | undefined): GuardContext {

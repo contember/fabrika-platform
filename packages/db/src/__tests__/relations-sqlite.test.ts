@@ -295,6 +295,16 @@ describe("an action's when narrows every grant", () => {
 		await expect(insert()).rejects.toThrow('outside what members.assign inserts')
 		expect(storage.sql.exec('select count(*) as n from project_members').toArray()).toEqual([{ n: 0 }])
 	})
+
+	test('a child row addressed by its key is narrowed too: a remove outside the condition finds nothing, one inside removes it', async () => {
+		member('m1', 'p1', 'user:bob', 'owner', null)
+		member('m2', 'p1', 'user:carol', 'editor', null)
+		const remove = (id: string) =>
+			invoke('mutation', (db) => call(db.target(alice.ref('project', 'members.assign', 'p1'), 'on'), 'project_members.remove', id))
+		await expect(remove('m1')).rejects.toThrow('not found')
+		await remove('m2')
+		expect(storage.sql.exec('select id from project_members').toArray()).toEqual([{ id: 'm1' }])
+	})
 })
 
 describe("an application table's rows are narrowed by the action's when on every path", () => {

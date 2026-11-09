@@ -425,8 +425,7 @@ function childRows(context: TableContext, site: DataSite, run: Runner, capabilit
 			if (typeof id !== 'string' || id.length === 0) {
 				throw new QueryRefusedError('row_address', `a ${context.model.name} row is addressed by its ${key}, a non-empty string`)
 			}
-			const scope = allOf([equals(context.model.name, key, id), parentPredicate(context, grant)])
-			return selectOne(context, run, scope, visibleFor(context.model, grant.action), grant.action)
+			return selectOne(context, run, parentPredicate(context, grant, id), visibleFor(context.model, grant.action), grant.action)
 		}),
 		insert: writing(
 			site,
@@ -439,8 +438,7 @@ function childRows(context: TableContext, site: DataSite, run: Runner, capabilit
 			}
 			const grant = updatingRef(context, capability, parent)
 			const changes = readValues(values, updatableBy(context.model, grant.action), 'update', context.model)
-			const scope = allOf([equals(context.model.name, key, id), parentPredicate(context, grant)])
-			return updateRow(context, run, { scope }, changes, versionArgument(context, options))
+			return updateRow(context, run, { scope: parentPredicate(context, grant, id) }, changes, versionArgument(context, options))
 		}),
 		remove: writing(site, 'remove', async (id: unknown, ...options: unknown[]) => {
 			await removeRow(context, run, { scope: childObjectPredicate(context, capability, id, 'delete') }, versionArgument(context, options))
