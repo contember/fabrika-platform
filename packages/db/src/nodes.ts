@@ -81,11 +81,12 @@ export function anyOf(nodes: readonly OperationNode[]): OperationNode {
 }
 
 export function inList(table: string, name: string, values: readonly string[]): OperationNode {
-	return BinaryOperationNode.create(
-		column(table, name),
-		OperatorNode.create('in'),
-		ValueListNode.create(valueNodes(values)),
-	)
+	return BinaryOperationNode.create(column(table, name), OperatorNode.create('in'), valueList(values))
+}
+
+/** `($1, $2, …)`: bound values, as the right operand of an `in`. */
+export function valueList(values: readonly string[]): OperationNode {
+	return ValueListNode.create(valueNodes(values))
 }
 
 function valueNodes(values: readonly string[]): ValueNode[] {

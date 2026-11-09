@@ -59,6 +59,7 @@ export const columns: TypedColumnList<DB> = {
 		foreignKeys: [
 			{ columns: ['candidate_id'], table: 'candidates', references: ['id'] },
 		],
+		notNull: ['id', 'candidate_id', 'file'],
 	},
 	'candidates': {
 		columns: [
@@ -79,6 +80,7 @@ export const columns: TypedColumnList<DB> = {
 		],
 		foreignKeys: [],
 		timestamps: ['verified_at', 'window_started_at'],
+		notNull: ['id', 'email', 'name', 'link_state', 'sends', 'window_started_at', 'attempts', 'created_by', 'version'],
 	},
 	'registrations': {
 		columns: [
@@ -92,6 +94,7 @@ export const columns: TypedColumnList<DB> = {
 		],
 		foreignKeys: [],
 		timestamps: ['due_at'],
+		notNull: ['id', 'email', 'name', 'attempts', 'version'],
 	},
 	'resend_requests': {
 		columns: [
@@ -101,5 +104,6 @@ export const columns: TypedColumnList<DB> = {
 		],
 		foreignKeys: [],
 		timestamps: ['received_at'],
+		notNull: ['id', 'email', 'received_at'],
 	},
 }

@@ -555,6 +555,7 @@ function runtimeApp(vocabulary: AnyAppVocabulary, options: KitOptions | undefine
 					dimensions: vocabulary.dimensions,
 					actions: vocabulary.actions,
 					roles: vocabulary.roles,
+					...(vocabulary.relations === undefined ? {} : { relations: vocabulary.relations }),
 					...presentationOf(vocabulary),
 					...peopleOf(vocabulary),
 					...terminalOf(vocabulary),

@@ -20,6 +20,8 @@ export interface RoleRow {
 	assignable_by: string | null
 	/** 1 when an external principal may hold this membership role (ADR-0051); 0 for every other role. */
 	external: 0 | 1
+	/** JSON object relation → exact actions a global grant of the role carries as `~rel` entries; NULL = none. */
+	via: string | null
 	created_at: number
 }
 
@@ -337,6 +339,7 @@ export class AppSchemaRepository {
 			memberScope?: string | null
 			assignableBy?: string[] | null
 			external?: boolean
+			via?: Record<string, string[]> | null
 		}[]
 		/** The contract flag is part of the vocabulary: written in the same batch, so it never outlives the roles it constrains. */
 		contract?: boolean
@@ -448,8 +451,8 @@ export class AppSchemaRepository {
 		for (const role of input.roles) {
 			statements.push(
 				this.db
-					.prepare(`INSERT INTO roles (app, role_key, name, description, permissions, origin, member_scope, assignable_by, external, created_at)
-						VALUES (?, ?, ?, ?, ?, 'app', ?, ?, ?, ?)
+					.prepare(`INSERT INTO roles (app, role_key, name, description, permissions, origin, member_scope, assignable_by, external, via, created_at)
+						VALUES (?, ?, ?, ?, ?, 'app', ?, ?, ?, ?, ?)
 						ON CONFLICT (app, role_key) DO UPDATE SET
 							name = excluded.name,
 							description = excluded.description,
@@ -457,6 +460,7 @@ export class AppSchemaRepository {
 							member_scope = excluded.member_scope,
 							assignable_by = excluded.assignable_by,
 							external = excluded.external,
+							via = excluded.via,
 							origin = 'app'
 						WHERE roles.origin = 'app'`)
 					.bind(
@@ -468,6 +472,7 @@ export class AppSchemaRepository {
 						role.memberScope ?? null,
 						role.assignableBy == null ? null : JSON.stringify(role.assignableBy),
 						role.external === true ? 1 : 0,
+						role.via == null ? null : JSON.stringify(role.via),
 						unixNow(),
 					),
 			)

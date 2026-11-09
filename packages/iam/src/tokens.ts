@@ -16,6 +16,7 @@ import {
 	type AccessTokenClaims,
 	buildAccessClaims,
 	DEFAULT_TOKEN_TTL_SECONDS,
+	isReservedScopeType,
 	type KeyGrant,
 	type LinkTokenClaims,
 	MAX_ACCESS_TOKEN_BYTES,
@@ -355,7 +356,8 @@ export async function resolveCredential(services: Services, cred: CredentialRow,
 		return { ok: false, reason: 'wrong_app' }
 	}
 
-	const inline = (await services.repositories.credentials.getCredentialGrants(cred.id)).map(credentialGrantToEntry)
+	const rows = await services.repositories.credentials.getCredentialGrants(cred.id)
+	const inline = rows.flatMap(credentialGrantToEntry)
 
 	if (cred.principal_id === null) {
 		// Anonymous: the frozen inline grants ARE the permission set, delegated by the issuer, who must still hold them.
@@ -420,7 +422,7 @@ export async function resolveCredential(services: Services, cred: CredentialRow,
 
 	// Inline grants on a bound credential are a DOWNSCOPE restriction: keep only what the principal
 	// actually holds (effective = resolve(principal) ∩ inline). No inline → the principal's full set.
-	const held = inline.length === 0 ? resolved : inline.filter((e) => permits(resolved, e.action, e.scope ?? undefined))
+	const held = rows.length === 0 ? resolved : inline.filter((e) => permits(resolved, e.action, e.scope ?? undefined))
 	const heldUntil = authorityDeadline(authority, held, Math.floor(Date.now() / 1000))
 	if (cred.issued_by === null || cred.issued_by === principal.id) {
 		return {
@@ -456,10 +458,14 @@ function mailboxClaim(principal: PrincipalRow): { email?: string } {
 	return principal.type === 'user' && principal.email !== null ? { email: principal.email } : {}
 }
 
-/** A `credential_grants` row → a `PermissionEntry` (source 'grant'; both scope cols null = global). */
-function credentialGrantToEntry(row: CredentialGrantRow): PermissionEntry {
+/**
+ * A `credential_grants` row → its `PermissionEntry` (source 'grant'; both scope cols null = global). A row stored before
+ * `~` was reserved gives none: IAM alone derives a `~` entry. It still counts as a row, so it keeps a key downscoped.
+ */
+function credentialGrantToEntry(row: CredentialGrantRow): PermissionEntry[] {
+	if (row.scope_type !== null && isReservedScopeType(row.scope_type)) return []
 	const scope: Scope | null = row.scope_type === null || row.scope_value === null ? null : { type: row.scope_type, value: row.scope_value }
-	return { action: row.action, scope, source: 'grant' }
+	return [{ action: row.action, scope, source: 'grant' }]
 }
 
 /**

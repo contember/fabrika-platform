@@ -133,7 +133,8 @@ bun test               # app-environment · canonical-path · client-address · 
   whose order carries no meaning — `endpoints` by id, `reservedPrefixes`, role `grants` and `assignableBy`, RPC
   and endpoint `callers`, link `grants`, webhook and job `actions`, export `consumers`, import `procedures` and
   `usedBy`, a declared site's `connect`, file `types`, admission `contentTypes`, CSP sources by origin, table `insert`, `update` and
-  `inherit`, enum `values` — by code unit. Three arrays are ordered: tuple `items` and union `options`, because the
+  `inherit`, a reveal's and a member reveal's `actions`, enum `values` — by code unit; a condition's `allOf` and `anyOf`
+  operands and its `in` and `notIn` lists by their canonical JSON (`canonicalCondition`). Three arrays are ordered: tuple `items` and union `options`, because the
   order changes what a schema admits, and an attachment's `columns`, because it is the file's column order. `canonicalArtifactJson` also sorts object keys; it is the only
   serialization a digest of an artifact may be taken over. A new array field is unordered unless it is added to
   that list.
@@ -183,6 +184,12 @@ bun test               # app-environment · canonical-path · client-address · 
 - **The claim parser must reject rather than coerce.** `parseAccessClaims` returns `null` on any
   malformed field. It runs on a payload whose signature has been checked but whose custom claims
   have not, so a lenient read is a trust bug, not a convenience.
+- **A scope type starting with `~` is reserved for IAM's derived pseudo-scopes** (`isReservedScopeType`). The only one
+  is `~rel` (`RELATION_SCOPE_TYPE`): an entry `{ action, scope: { type: '~rel', value: <relation> } }` says the
+  principal holds the action through that relation, which the data layer resolves per statement (ADR-0073). `permits`
+  reads it neither as a global grant nor as a scope value, so a consumer that knows no relations keeps it and grants
+  nothing by it. The artifact's relation fields (`relations`, a role's `via`, a table's `confers`, `when`, `reveals`,
+  `readThrough`, `memberReveals`) are absent unless declared, so an artifact without them keeps its digest.
 
 ## Notes
 

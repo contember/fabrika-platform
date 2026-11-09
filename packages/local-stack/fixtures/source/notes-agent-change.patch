@@ -153,7 +153,7 @@ index 0000000..57ab5d2
 +	})
 +}
 diff --git a/src/db/schema.generated.ts b/src/db/schema.generated.ts
-index 373442d..5421706 100644
+index c364642..077e96a 100644
 --- a/src/db/schema.generated.ts
 +++ b/src/db/schema.generated.ts
 @@ -11,6 +11,13 @@ export interface NoteAttachmentsTable {
@@ -178,9 +178,9 @@ index 373442d..5421706 100644
  	notes: NotesTable
  }
  
-@@ -43,6 +51,21 @@ export const columns: TypedColumnList<DB> = {
- 		],
+@@ -44,6 +52,22 @@ export const columns: TypedColumnList<DB> = {
  		timestamps: ['created_at'],
+ 		notNull: ['id', 'note_id', 'workspace_id', 'file', 'created_at'],
  	},
 +	'note_labels': {
 +		columns: [
@@ -196,6 +196,7 @@ index 373442d..5421706 100644
 +				references: ['id', 'workspace_id'],
 +			},
 +		],
++		notNull: ['id', 'note_id', 'workspace_id', 'name'],
 +	},
  	'notes': {
  		columns: [

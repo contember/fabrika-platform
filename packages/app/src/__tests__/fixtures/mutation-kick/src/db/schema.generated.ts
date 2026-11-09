@@ -18,5 +18,6 @@ export const columns: TypedColumnList<DB> = {
 			'body',
 		],
 		foreignKeys: [],
+		notNull: ['id', 'body'],
 	},
 }

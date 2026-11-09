@@ -21,6 +21,7 @@ import {
 	isFileShape,
 	isRedirectShape,
 	type LinkTokenClaims,
+	matchAction,
 	parseEndpointHeader,
 	type PermissionEntry,
 	permits,
@@ -29,6 +30,7 @@ import {
 	PROXY_TOKEN_HEADER,
 	rawRequestTarget,
 	type RedirectShape,
+	RELATION_SCOPE_TYPE,
 	sameOriginTarget,
 	satisfies,
 	type SchemaShape,
@@ -308,6 +310,12 @@ export interface ProcedureQuery {
 	readonly shape: SchemaShape
 }
 
+/** A relation's reveal: a row it reaches reveals its node in `dimension` for `actions`. */
+export interface RevealedNode {
+	readonly dimension: string
+	readonly actions: readonly string[]
+}
+
 export interface RuntimeParts {
 	readonly table: CompiledEndpointTable
 	readonly endpoints: ReadonlyMap<string, ServedEndpoint>
@@ -324,6 +332,12 @@ export interface RuntimeParts {
 	readonly ownedDimensions: ReadonlySet<string>
 	/** Each dimension's containers, nearest first; a grant on one reaches every value inside it. */
 	readonly containers: ReadonlyMap<string, readonly string[]>
+	/** Each relation of the contract with its dimension: a `~rel` entry holds its action at that dimension's nodes. */
+	readonly relations: ReadonlyMap<string, string>
+	/** Each relation's reveals: a `~rel` entry of one of their actions also holds it at the ancestor nodes they reveal. */
+	readonly reveals: ReadonlyMap<string, readonly RevealedNode[]>
+	/** Each dimension's member reveals: a grant of one of their actions at its node also reads under the ancestor they reveal. */
+	readonly memberReveals: ReadonlyMap<string, readonly RevealedNode[]>
 	readonly assets: SpaAssets | null
 	/** IAM's membership operations; `boot` refuses a contract that needs them when the adapter supplies none. */
 	readonly membership: IamMembership | null
@@ -931,35 +945,110 @@ export class ContractRuntime {
 		}
 		const held = this.#heldContainers(caller.perms, action, dimension)
 		const inside = this.#heldContained(caller.perms, action, dimension)
-		if (direct.length === 0 && held.length === 0 && inside.length === 0) {
+		const related = this.#heldRelations(caller.perms, action, [dimension, ...(this.#parts.containers.get(dimension) ?? [])])
+		const revealing = this.#heldRevealing(caller.perms, action, [dimension, ...(this.#parts.containers.get(dimension) ?? [])])
+		if (direct.length === 0 && held.length === 0 && inside.length === 0 && related.length === 0 && revealing.length === 0) {
 			throw new ForbiddenError(`The caller holds '${action}' in no ${dimension}`)
 		}
-		return this.#parts.mint.within(frame, dimension, action, caller.subject, direct, held, inside)
+		return this.#parts.mint.within(frame, dimension, action, caller.subject, direct, held, inside, related, revealing)
 	}
 
 	/** A scope value the caller acts in: without a grant on it or on a container of it, 403 whether it exists or not. */
 	async #inRef(caller: Caller, action: string, dimension: string, value: string, frame: RequestFrame): Promise<Ref<string, string>> {
 		const direct = permits(caller.perms, action, { type: dimension, value })
-		if (!direct && this.#heldContainers(caller.perms, action, dimension).length === 0) {
+		const candidates = this.#heldRelations(caller.perms, action, [dimension, ...(this.#parts.containers.get(dimension) ?? [])])
+		if (!direct && this.#heldContainers(caller.perms, action, dimension).length === 0 && candidates.length === 0) {
 			throw new ForbiddenError(`The caller does not hold '${action}' in this ${dimension}`)
 		}
 		const chain = await this.#chain(dimension, value)
-		if (!holdsOnChain(caller.perms, action, dimension, value, chain ?? new Map())) {
+		if (holdsOnChain(caller.perms, action, dimension, value, chain ?? new Map())) {
+			if (chain === null) {
+				throw new NotFoundError('Not found')
+			}
+			return this.#parts.mint.ref(frame, dimension, action, caller.subject, value, chain)
+		}
+		const related = chain === null ? [] : await this.#relatedOn(caller.subject, candidates, action, dimension, value, chain)
+		if (chain === null || related.length === 0) {
 			throw new ForbiddenError(`The caller does not hold '${action}' in this ${dimension}`)
 		}
-		if (chain === null) {
-			throw new NotFoundError('Not found')
-		}
-		return this.#parts.mint.ref(frame, dimension, action, caller.subject, value, chain)
+		return this.#parts.mint.ref(frame, dimension, action, caller.subject, value, chain, related)
 	}
 
 	/** An object the caller acts on; one it may not act on is indistinguishable from a missing one. */
 	async #onRef(caller: Caller, action: string, dimension: string, value: string, frame: RequestFrame): Promise<Ref<string, string>> {
 		const chain = await this.#chain(dimension, value)
-		if (chain === null || !holdsOnChain(caller.perms, action, dimension, value, chain)) {
+		if (chain === null) {
 			throw new NotFoundError('Not found')
 		}
-		return this.#parts.mint.ref(frame, dimension, action, caller.subject, value, chain)
+		if (holdsOnChain(caller.perms, action, dimension, value, chain)) {
+			return this.#parts.mint.ref(frame, dimension, action, caller.subject, value, chain)
+		}
+		const candidates = this.#heldRelations(caller.perms, action, [dimension, ...chain.keys()])
+		const related = await this.#relatedOn(caller.subject, candidates, action, dimension, value, chain)
+		if (related.length === 0) {
+			throw new NotFoundError('Not found')
+		}
+		return this.#parts.mint.ref(frame, dimension, action, caller.subject, value, chain, related)
+	}
+
+	/**
+	 * The relations through which the caller holds `action` at a node of one of `dimensions` (a `~rel` entry, which IAM
+	 * gives a global grant of a role with `via`), at the relation's own dimension or at an ancestor a reveal of `action`
+	 * names. An entry of a relation the contract does not declare counts for none.
+	 */
+	#heldRelations(perms: PermissionEntry[], action: string, dimensions: readonly string[]): string[] {
+		const held: string[] = []
+		for (const entry of perms) {
+			const scope = entry.scope
+			if (scope === null || scope.type !== RELATION_SCOPE_TYPE || !matchAction(entry.action, action)) continue
+			const relation = scope.value
+			const at = this.#parts.relations.get(relation)
+			const revealed = this.#revealed(relation, action).some((dimension) => dimensions.includes(dimension))
+			if (at !== undefined && (dimensions.includes(at) || revealed) && !held.includes(relation)) held.push(relation)
+		}
+		return held
+	}
+
+	/** The ancestor dimensions a reveal of `relation` holds `action` at. */
+	#revealed(relation: string, action: string): string[] {
+		return (this.#parts.reveals.get(relation) ?? []).filter((reveal) => reveal.actions.includes(action)).map((reveal) => reveal.dimension)
+	}
+
+	/**
+	 * Of `candidates`, the relations a row of which names the caller at the object or at a container on its chain, or
+	 * reaches a row that reveals one of them for `action`, now.
+	 */
+	async #relatedOn(
+		principal: string,
+		candidates: readonly string[],
+		action: string,
+		dimension: string,
+		value: string,
+		chain: ReadonlyMap<string, string>,
+	): Promise<string[]> {
+		const relates = this.#parts.database?.relates
+		const reveals = this.#parts.database?.reveals
+		if (relates === undefined) {
+			return []
+		}
+		const nodeOf = (at: string | undefined) => (at === dimension ? value : at === undefined ? undefined : chain.get(at))
+		const related: string[] = []
+		for (const relation of candidates) {
+			const node = nodeOf(this.#parts.relations.get(relation))
+			if (node !== undefined && (await relates(relation, node, principal))) {
+				related.push(relation)
+				continue
+			}
+			if (reveals === undefined) continue
+			for (const revealed of this.#revealed(relation, action)) {
+				const at = nodeOf(revealed)
+				if (at !== undefined && (await reveals(relation, revealed, at, principal))) {
+					related.push(relation)
+					break
+				}
+			}
+		}
+		return related
 	}
 
 	/**
@@ -1463,6 +1552,18 @@ export class ContractRuntime {
 		return (this.#parts.containers.get(dimension) ?? []).flatMap((container) => {
 			const values = scopedValues(perms, action, container) ?? []
 			return values.length === 0 ? [] : [{ dimension: container, values }]
+		})
+	}
+
+	/**
+	 * The caller's grants of `action` at nodes of a dimension whose rows reveal one of `dimensions` for it to their
+	 * members; a grant at a container of such a node is not one at the node.
+	 */
+	#heldRevealing(perms: PermissionEntry[], action: string, dimensions: readonly string[]): ContainerGrant[] {
+		return [...this.#parts.memberReveals].flatMap(([source, revealed]) => {
+			const reveals = revealed.some((reveal) => reveal.actions.includes(action) && dimensions.includes(reveal.dimension))
+			const values = reveals ? scopedValues(perms, action, source) ?? [] : []
+			return values.length === 0 ? [] : [{ dimension: source, values }]
 		})
 	}
 

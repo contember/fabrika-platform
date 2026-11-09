@@ -42,6 +42,7 @@ export const columns: TypedColumnList<DB> = {
 			},
 		],
 		timestamps: ['created_at'],
+		notNull: ['id', 'note_id', 'workspace_id', 'file', 'created_at'],
 	},
 	'notes': {
 		columns: [
@@ -53,5 +54,6 @@ export const columns: TypedColumnList<DB> = {
 			'version',
 		],
 		foreignKeys: [],
+		notNull: ['id', 'workspace_id', 'title', 'trashed', 'created_by', 'version'],
 	},
 }

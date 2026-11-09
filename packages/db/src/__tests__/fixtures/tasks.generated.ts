@@ -48,6 +48,7 @@ export const columns: TypedColumnList<DB> = {
 			'title',
 		],
 		foreignKeys: [],
+		notNull: ['id', 'org_id', 'title'],
 	},
 	'task_comments': {
 		columns: [
@@ -65,6 +66,7 @@ export const columns: TypedColumnList<DB> = {
 				references: ['id', 'project_id', 'org_id'],
 			},
 		],
+		notNull: ['id', 'task_id', 'project_id', 'org_id', 'body', 'pinned'],
 	},
 	'tasks': {
 		columns: [
@@ -92,5 +94,6 @@ export const columns: TypedColumnList<DB> = {
 		dates: ['due_on'],
 		timestamps: ['closed_at'],
 		json: ['details'],
+		notNull: ['id', 'project_id', 'org_id', 'title', 'status', 'overdue', 'created_by', 'version'],
 	},
 }

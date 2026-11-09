@@ -4,11 +4,17 @@
 import type {
 	BodyAdmission,
 	Caller,
+	ColumnTestArtifact,
+	ConditionArtifact,
+	ConditionLiteralArtifact,
+	ConfersArtifact,
 	ContractArtifact,
 	CspSource,
 	EndpointRow,
+	MemberRevealsArtifact,
 	MountArtifact,
 	OutputShape,
+	RevealsArtifact,
 	RoleArtifact,
 	SchemaShape,
 	TableActionArtifact,
@@ -27,6 +33,7 @@ export function canonicalizeArtifact(artifact: ContractArtifact): ContractArtifa
 		dimensions: artifact.dimensions,
 		actions: artifact.actions,
 		roles: mapValues(artifact.roles, canonicalRole),
+		...(artifact.relations === undefined ? {} : { relations: artifact.relations }),
 		mounts: mapValues(artifact.mounts, canonicalMount),
 		files: mapValues(artifact.files, (collection) => ({
 			...collection,
@@ -101,6 +108,7 @@ function canonicalRole(role: RoleArtifact): RoleArtifact {
 		grants: sorted(role.grants),
 		member: role.member === null ? null : { scope: role.member.scope, assignableBy: sorted(role.member.assignableBy) },
 		...(role.external === true ? { external: true } : {}),
+		...(role.via === undefined ? {} : { via: mapValues(role.via, sorted) }),
 	}
 }
 
@@ -151,7 +159,94 @@ function canonicalTable(table: TablePolicyArtifact): TablePolicyArtifact {
 		scope: table.scope.mode === 'child' ? { ...table.scope, inherit: sorted(table.scope.inherit) } : table.scope,
 		insert: sorted(table.insert),
 		update: sorted(table.update),
+		...(table.when === undefined ? {} : { when: mapValues(table.when, canonicalCondition) }),
+		...(table.confers === undefined ? {} : { confers: mapValues(table.confers, canonicalConfers) }),
+		...(table.reveals === undefined ? {} : { reveals: mapValues(table.reveals, canonicalReveals) }),
+		...(table.memberReveals === undefined ? {} : { memberReveals: mapValues(table.memberReveals, canonicalMemberReveals) }),
 	}
+}
+
+function canonicalConfers(confers: ConfersArtifact): ConfersArtifact {
+	return confers.when === undefined ? confers : { ...confers, when: canonicalCondition(confers.when) }
+}
+
+function canonicalReveals(reveals: RevealsArtifact): RevealsArtifact {
+	return {
+		...reveals,
+		actions: sorted(reveals.actions),
+		...(reveals.when === undefined ? {} : { when: canonicalCondition(reveals.when) }),
+	}
+}
+
+function canonicalMemberReveals(reveals: MemberRevealsArtifact): MemberRevealsArtifact {
+	return {
+		...reveals,
+		actions: sorted(reveals.actions),
+		...(reveals.when === undefined ? {} : { when: canonicalCondition(reveals.when) }),
+	}
+}
+
+/**
+ * A condition with its connectives' operands and its `in` / `notIn` lists sorted by their canonical JSON: AND and OR
+ * commute and a list is a set, so neither order changes which rows it admits.
+ */
+export function canonicalCondition(condition: ConditionArtifact): ConditionArtifact {
+	if ('allOf' in condition && isConditionList(condition.allOf)) {
+		return { allOf: sortedConditions(condition.allOf) }
+	}
+	if ('anyOf' in condition && isConditionList(condition.anyOf)) {
+		return { anyOf: sortedConditions(condition.anyOf) }
+	}
+	if ('not' in condition && isCondition(condition.not)) {
+		return { not: canonicalCondition(condition.not) }
+	}
+	if ('some' in condition && isConditionRecord(condition.some)) {
+		return { some: mapValues(condition.some, canonicalCondition) }
+	}
+	if ('none' in condition && isConditionRecord(condition.none)) {
+		return { none: mapValues(condition.none, canonicalCondition) }
+	}
+	const tests: Record<string, ColumnTestArtifact> = {}
+	for (const [path, test] of Object.entries(condition)) {
+		// A parsed artifact holds nothing else here; dropping an unknown test would widen what the condition admits.
+		if (!isColumnTest(test)) throw new Error(`the condition test of ${path} is not a column test`)
+		tests[path] = canonicalTest(test)
+	}
+	return tests
+}
+
+function canonicalTest(test: ColumnTestArtifact): ColumnTestArtifact {
+	return {
+		...test,
+		...(test.in === undefined ? {} : { in: sortedLiterals(test.in) }),
+		...(test.notIn === undefined ? {} : { notIn: sortedLiterals(test.notIn) }),
+	}
+}
+
+function sortedConditions(conditions: readonly ConditionArtifact[]): ConditionArtifact[] {
+	return conditions.map(canonicalCondition).sort((a, b) => compare(canonicalJson(a), canonicalJson(b)))
+}
+
+function sortedLiterals(values: readonly ConditionLiteralArtifact[]): ConditionLiteralArtifact[] {
+	return [...values].sort((a, b) => compare(JSON.stringify(a), JSON.stringify(b)))
+}
+
+function isCondition(value: unknown): value is ConditionArtifact {
+	return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function isConditionRecord(value: unknown): value is Readonly<Record<string, ConditionArtifact>> {
+	return isCondition(value) && Object.values(value).every(isCondition)
+}
+
+function isConditionList(value: unknown): value is readonly ConditionArtifact[] {
+	return Array.isArray(value) && value.every(isCondition)
+}
+
+const COLUMN_TEST_OPERATORS: ReadonlySet<string> = new Set(['eq', 'notEq', 'in', 'notIn', 'isNull', 'lt', 'lte', 'gt', 'gte'])
+
+function isColumnTest(value: unknown): value is ColumnTestArtifact {
+	return isCondition(value) && Object.keys(value).every((operator) => COLUMN_TEST_OPERATORS.has(operator))
 }
 
 function canonicalizeEndpoint(row: EndpointRow): EndpointRow {

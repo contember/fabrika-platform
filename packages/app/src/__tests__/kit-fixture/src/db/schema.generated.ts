@@ -60,6 +60,7 @@ export const columns: TypedColumnList<DB> = {
 			'version',
 		],
 		foreignKeys: [],
+		notNull: ['id', 'name', 'created_by', 'version'],
 	},
 	'companies': {
 		columns: [
@@ -76,6 +77,7 @@ export const columns: TypedColumnList<DB> = {
 				references: ['id'],
 			},
 		],
+		notNull: ['id', 'org_id', 'name', 'created_by', 'version'],
 	},
 	'deals': {
 		columns: [
@@ -95,6 +97,7 @@ export const columns: TypedColumnList<DB> = {
 				references: ['id', 'org_id'],
 			},
 		],
+		notNull: ['id', 'company_id', 'org_id', 'title', 'stage', 'created_by', 'version'],
 	},
 	'deal_activities': {
 		columns: [
@@ -112,6 +115,7 @@ export const columns: TypedColumnList<DB> = {
 				references: ['id', 'company_id', 'org_id'],
 			},
 		],
+		notNull: ['id', 'deal_id', 'company_id', 'org_id', 'body', 'created_by'],
 	},
 	'countries': {
 		columns: [
@@ -120,5 +124,6 @@ export const columns: TypedColumnList<DB> = {
 			'note',
 		],
 		foreignKeys: [],
+		notNull: ['code', 'name'],
 	},
 }

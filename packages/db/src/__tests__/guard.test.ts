@@ -33,6 +33,7 @@ import {
 	WhereNode,
 } from 'kysely'
 import { nameSet } from '../builtins'
+import { subquery } from '../condition-nodes'
 import { finishSelect, startSelect, type TableShape } from '../description'
 import { QueryRefusedError } from '../errors'
 import { assertAllowedTree, type GuardContext } from '../guard'
@@ -185,6 +186,112 @@ describe('the scope predicate has one of the shapes the layer builds', () => {
 			AndNode.create(equals('notes', 'id', 'n1'), ValueNode.createImmediate(true)),
 			BinaryOperationNode.create(column('notes', 'id'), OperatorNode.create('<>'), ValueNode.create('n1')),
 			ValueNode.createImmediate(false),
+		]
+		for (const shape of shapes) {
+			const [node, context] = scopedBy(shape)
+			refuses(node, context, 'the scope predicate must be true')
+		}
+	})
+})
+
+describe('a scope held through relations or narrowed by a condition', () => {
+	const subqueries = { note_members: ['note_id', 'principal_id', 'expires_at'], secrets: ['id'] }
+	const scopedBy = (predicate: OperationNode): [SelectQueryNode, GuardContext] => [
+		select({ where: scopedWhere(equals('notes', 'title', 'x'), predicate) }),
+		{ ...selectContext, scope: predicate, subqueries },
+	]
+	const workspaces = inList('notes', 'workspace_id', ['w1'])
+	const members = (where: OperationNode, table = 'note_members', selected = 'note_id') =>
+		BinaryOperationNode.create(column('notes', 'id'), OperatorNode.create('in'), subquery(table, selected, where))
+	const mine = equals('note_members', 'principal_id', 'user:alice')
+	const unexpired = anyOf([
+		BinaryOperationNode.create(column('note_members', 'expires_at'), OperatorNode.create('is'), ValueNode.createImmediate(null)),
+		BinaryOperationNode.create(column('note_members', 'expires_at'), OperatorNode.create('>'), ValueNode.create(new Date(0))),
+	])
+	const open = BinaryOperationNode.create(column('notes', 'word_count'), OperatorNode.create('<'), ValueNode.create(100))
+
+	test("a relation's rows, beside values or after a Ref's chain, and a reach AND a parenthesized condition pass", () => {
+		const related = members(allOf([mine, unexpired]))
+		const shapes = [
+			related,
+			anyOf([workspaces, related]),
+			allOf([equals('notes', 'id', 'n1'), related]),
+			AndNode.create(workspaces, ParensNode.create(open)),
+			AndNode.create(everything(), ParensNode.create(open)),
+			AndNode.create(anyOf([workspaces, related]), ParensNode.create(open)),
+		]
+		for (const shape of shapes) {
+			const [node, context] = scopedBy(shape)
+			expect(() => assertAllowedTree(node, context)).not.toThrow()
+		}
+	})
+
+	test('a condition never stands in for the reach, and a relation subquery is anchored on its principal', () => {
+		const shapes = [
+			open,
+			ParensNode.create(open),
+			AndNode.create(ParensNode.create(open), workspaces),
+			AndNode.create(workspaces, open),
+			members(unexpired),
+			members(allOf([unexpired, mine])),
+			members(mine, 'secrets', 'id'),
+			members(mine, 'note_members', 'body'),
+			members(mine, 'notes', 'id'),
+			AndNode.create(equals('notes', 'id', 'n1'), workspaces),
+		]
+		for (const shape of shapes) {
+			const [node, context] = scopedBy(shape)
+			refuses(node, context, 'the scope predicate must be true')
+		}
+	})
+
+	test('a subquery reads only a table the layer admits', () => {
+		const [node, context] = scopedBy(members(mine))
+		refuses(node, { ...context, subqueries: {} }, 'the scope predicate must be true')
+	})
+})
+
+describe('a relation whose principal is reached through a to-one path', () => {
+	const subqueries = { note_members: ['note_id'], people: ['id'], teams: ['id'], orgs: ['id'], accounts: ['id'] }
+	const scopedBy = (predicate: OperationNode): [SelectQueryNode, GuardContext] => [
+		select({ where: scopedWhere(equals('notes', 'title', 'x'), predicate) }),
+		{ ...selectContext, scope: predicate, subqueries },
+	]
+	const into = (table: string, name: string, target: string, where: OperationNode, selected = 'id') =>
+		BinaryOperationNode.create(column(table, name), OperatorNode.create('in'), subquery(target, selected, where))
+	/** `notes.id in (select note_id from note_members where person_id in (select id from <tables[0]> where …))`, anchored innermost. */
+	const through = (tables: readonly string[], innermost?: OperationNode): OperationNode => {
+		const last = tables[tables.length - 1] ?? ''
+		let where = innermost ?? equals(last, 'principal_id', 'user:alice')
+		for (let index = tables.length - 1; index > 0; index--) {
+			where = into(tables[index - 1] ?? '', 'next_id', tables[index] ?? '', where)
+		}
+		return into('notes', 'id', 'note_members', into('note_members', 'person_id', tables[0] ?? '', where), 'note_id')
+	}
+
+	test("the path's subquery passes as the source's anchor, beside values and after a Ref's chain", () => {
+		const unexpired = BinaryOperationNode.create(column('note_members', 'expires_at'), OperatorNode.create('is'), ValueNode.createImmediate(null))
+		const anchored = into('note_members', 'person_id', 'people', equals('people', 'principal_id', 'user:alice'))
+		const related = into('notes', 'id', 'note_members', allOf([anchored, unexpired]), 'note_id')
+		for (const shape of [related, anyOf([inList('notes', 'workspace_id', ['w1']), related]), allOf([equals('notes', 'id', 'n1'), related])]) {
+			const [node, context] = scopedBy(shape)
+			expect(() => assertAllowedTree(node, context)).not.toThrow()
+		}
+	})
+
+	test('the nesting stops at four subqueries: three tables past the source pass, a fourth is refused', () => {
+		const [deepest, context] = scopedBy(through(['people', 'teams', 'orgs']))
+		expect(() => assertAllowedTree(deepest, context)).not.toThrow()
+		const [deeper, same] = scopedBy(through(['people', 'teams', 'orgs', 'accounts']))
+		refuses(deeper, same, 'the scope predicate must be true')
+	})
+
+	test("a path's subquery not anchored on the principal, selecting another column or reading an unadmitted table is refused", () => {
+		const unanchored = BinaryOperationNode.create(column('people', 'principal_id'), OperatorNode.create('<>'), ValueNode.create('user:alice'))
+		const shapes = [
+			through(['people'], unanchored),
+			into('notes', 'id', 'note_members', into('note_members', 'person_id', 'people', equals('people', 'principal_id', 'x'), 'principal_id'), 'note_id'),
+			through(['secrets']),
 		]
 		for (const shape of shapes) {
 			const [node, context] = scopedBy(shape)

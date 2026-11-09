@@ -108,6 +108,7 @@ export const columns: TypedColumnList<DB> = {
 			'version',
 		],
 		foreignKeys: [],
+		notNull: ['id', 'org_id', 'name', 'created_by', 'version'],
 	},
 	'contact_activities': {
 		columns: [
@@ -129,6 +130,7 @@ export const columns: TypedColumnList<DB> = {
 			},
 		],
 		timestamps: ['created_at'],
+		notNull: ['id', 'contact_id', 'company_id', 'org_id', 'kind', 'body', 'author_label', 'created_by', 'created_at'],
 	},
 	'contacts': {
 		columns: [
@@ -148,6 +150,7 @@ export const columns: TypedColumnList<DB> = {
 				references: ['id', 'org_id'],
 			},
 		],
+		notNull: ['id', 'company_id', 'org_id', 'name', 'created_by', 'version'],
 	},
 	'deal_activities': {
 		columns: [
@@ -169,6 +172,7 @@ export const columns: TypedColumnList<DB> = {
 			},
 		],
 		timestamps: ['created_at'],
+		notNull: ['id', 'deal_id', 'company_id', 'org_id', 'kind', 'body', 'author_label', 'created_by', 'created_at'],
 	},
 	'deal_attachments': {
 		columns: [
@@ -189,6 +193,7 @@ export const columns: TypedColumnList<DB> = {
 			},
 		],
 		timestamps: ['created_at'],
+		notNull: ['id', 'deal_id', 'company_id', 'org_id', 'file', 'name', 'created_by', 'created_at'],
 	},
 	'deals': {
 		columns: [
@@ -211,6 +216,7 @@ export const columns: TypedColumnList<DB> = {
 				references: ['id', 'org_id'],
 			},
 		],
+		notNull: ['id', 'company_id', 'org_id', 'title', 'value', 'stage', 'owner', 'owner_label', 'created_by', 'version'],
 	},
 	'tasks': {
 		columns: [
@@ -235,5 +241,6 @@ export const columns: TypedColumnList<DB> = {
 			},
 		],
 		dates: ['due_on'],
+		notNull: ['id', 'deal_id', 'company_id', 'org_id', 'title', 'due_on', 'assignee', 'assignee_label', 'done', 'overdue', 'created_by', 'version'],
 	},
 }

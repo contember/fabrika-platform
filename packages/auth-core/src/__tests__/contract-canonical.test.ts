@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import type { ContractArtifact, SchemaShape } from '../contract'
+import type { ConditionArtifact, ConditionLiteralArtifact, ContractArtifact, SchemaShape } from '../contract'
 import { canonicalArtifactJson, canonicalizeArtifact, tableActions } from '../contract-canonical'
 import { contractDigest } from '../endpoint-digest'
 import { notesArtifact } from './fixtures/notes-artifact'
@@ -85,5 +85,36 @@ describe('table actions', () => {
 		expect(tableActions('notes.read')).toEqual(['notes.read'])
 		expect(tableActions(['notes.read', 'notes.admin'])).toEqual(['notes.read', 'notes.admin'])
 		expect(tableActions(null)).toEqual([])
+	})
+})
+
+describe('relation fields and conditions', () => {
+	const notes = notesArtifact.tables['notes']
+	if (notes === undefined) throw new Error('the fixture has a notes table')
+	const withConditions = (order: 'declared' | 'reversed'): ContractArtifact => {
+		const flip = <T>(values: readonly T[]): T[] => (order === 'declared' ? [...values] : [...values].reverse())
+		return {
+			...notesArtifact,
+			tables: {
+				...notesArtifact.tables,
+				notes: {
+					...notes,
+					when: {
+						'notes.read': {
+							anyOf: flip<ConditionArtifact>([{ status: { in: flip<ConditionLiteralArtifact>(['open', 'draft', 3]) } }, {
+								allOf: flip<ConditionArtifact>([{ archived: { eq: false } }, { 'owner_id.active': { eq: true } }]),
+							}]),
+						},
+					},
+					reveals: { member: { to: 'workspace', actions: flip(['notes.write', 'notes.read']), when: { status: { notIn: flip(['b', 'a']) } } } },
+					memberReveals: { note: { to: 'workspace', actions: flip(['notes.write', 'notes.read']) } },
+				},
+			},
+		}
+	}
+
+	test("the order of a connective, an in list and a reveal's actions never changes the digest", () => {
+		expect(contractDigest(withConditions('reversed'))).toBe(contractDigest(withConditions('declared')))
+		expect(canonicalArtifactJson(canonicalizeArtifact(withConditions('reversed')))).toBe(canonicalArtifactJson(withConditions('declared')))
 	})
 })

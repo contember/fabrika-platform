@@ -39,6 +39,7 @@ export const columns: TypedColumnList<DB> = {
 			'created_by',
 		],
 		foreignKeys: [],
+		notNull: ['id', 'name', 'slot', 'version', 'created_by'],
 	},
 	'clicks': {
 		columns: [
@@ -47,6 +48,7 @@ export const columns: TypedColumnList<DB> = {
 			'created_by',
 		],
 		foreignKeys: [],
+		notNull: ['id', 'campaign', 'created_by'],
 	},
 	'unsubscribes': {
 		columns: [
@@ -56,5 +58,6 @@ export const columns: TypedColumnList<DB> = {
 			'created_by',
 		],
 		foreignKeys: [],
+		notNull: ['id', 'email', 'campaign', 'created_by'],
 	},
 }

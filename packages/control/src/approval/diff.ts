@@ -44,6 +44,7 @@ import {
 	type ProcedureArtifact,
 	type ProcedureChallenge,
 	type RedirectShape,
+	type RevealsArtifact,
 	type RoleArtifact,
 	type SchemaShape,
 	type StringShape,
@@ -263,8 +264,11 @@ function compareContracts(changes: Changes, before: ContractArtifact | null, aft
 		changed: roleChanges,
 	})
 	for (const [name, role] of Object.entries(candidate.roles)) {
-		if (!Object.hasOwn(baseline.roles, name)) changes.add(subjectOf('role', name), ...externalChange(name, undefined, role.external))
+		if (!Object.hasOwn(baseline.roles, name)) {
+			changes.add(subjectOf('role', name), ...externalChange(name, undefined, role.external), ...viaChanges(name, undefined, role.via))
+		}
 	}
+	changes.add(application, ...relationChanges(baseline.relations, candidate.relations))
 	compareKeyed(changes, 'mount', record(baseline.mounts), record(candidate.mounts), {
 		added: (name, mount) => `New ${mount.kind} mount \`${name}\`${servedVariables(mount)}${takenFiles(mount)}${webhookPhrase(mount)}`,
 		removed: (name) => (mountsShown.has(name) ? [] : `Mount \`${name}\` is removed`),
@@ -341,6 +345,16 @@ function compareContracts(changes: Changes, before: ContractArtifact | null, aft
 		const before = Object.hasOwn(baseline.tables, name) ? baseline.tables[name] : undefined
 		const shown = new Set(before === undefined ? [] : fileColumnLines(name, before).map((change) => change.line))
 		changes.add(subjectOf('table', name), ...ruled('table.file-writers', fileColumnLines(name, table).filter((change) => !shown.has(change.line))))
+		if (before === undefined) {
+			changes.add(
+				subjectOf('table', name),
+				...ruled('table.confers', confersChanges(name, undefined, table.confers)),
+				...ruled('table.when', whenChanges(name, undefined, table.when)),
+				...ruled('table.reveals', revealsChanges(name, undefined, table.reveals)),
+				...ruled('table.read-through', readThroughChanges(name, undefined, table.readThrough)),
+				...ruled('table.member-reveals', memberRevealsChanges(name, undefined, table.memberReveals)),
+			)
+		}
 	}
 	compareKeyed(changes, 'token', record(baseline.tokens ?? {}), record(candidate.tokens ?? {}), {
 		added: (name, purpose) => `New token purpose \`${name}\`, a token of it valid up to ${purpose.maxDays} days`,
@@ -1495,7 +1509,7 @@ function endpointMap(rows: readonly EndpointRow[]): Map<string, EndpointRow> {
 
 function roleChanges(name: string, from: RoleArtifact, to: RoleArtifact): RuledLine[] {
 	const role = `Role \`${name}\``
-	const external = externalChange(name, from.external, to.external)
+	const external = [...externalChange(name, from.external, to.external), ...viaChanges(name, from.via, to.via)]
 	const grants = ruled('role.grants', setChanges(role, from.grants, to.grants, 'gains', 'loses'))
 	if (from.member === null || to.member === null || from.member.scope !== to.member.scope) {
 		return [...grants, ...ruled('role.membership', valueChange(`${role} membership`, from.member, to.member)), ...external]
@@ -1508,6 +1522,180 @@ function roleChanges(name: string, from: RoleArtifact, to: RoleArtifact): RuledL
 		),
 		...external,
 	]
+}
+
+/** A relation a role holds actions through: each action held where a row names the holder widens, as a grant does. */
+function viaChanges(
+	name: string,
+	before: Readonly<Record<string, readonly string[]>> | undefined,
+	after: Readonly<Record<string, readonly string[]>> | undefined,
+): RuledLine[] {
+	const from = before ?? {}
+	const to = after ?? {}
+	return ruled(
+		'role.via',
+		union(Object.keys(from), Object.keys(to)).flatMap((relation) =>
+			setChanges(`Role \`${name}\` through relation \`${relation}\``, from[relation] ?? [], to[relation] ?? [], 'gains', 'loses')
+		),
+	)
+}
+
+/**
+ * The relations of the vocabulary: one grants nothing until a role holds actions through it (`role.via`), so a new one is
+ * neutral; another dimension moves every row's reach.
+ */
+function relationChanges(before: ContractArtifact['relations'], after: ContractArtifact['relations']): RuledLine[] {
+	const from = before ?? {}
+	const to = after ?? {}
+	return ruled(
+		'application.relation',
+		union(Object.keys(from), Object.keys(to)).flatMap((relation): Line[] => {
+			const was = from[relation]
+			const is = to[relation]
+			if (was === undefined) return is === undefined ? [] : [neutral(`New relation \`${relation}\` at a ${is.dimension}`)]
+			if (is === undefined) return [narrowing(`Relation \`${relation}\` is removed`)]
+			return valueChange(`Relation \`${relation}\` dimension`, was.dimension, is.dimension)
+		}),
+	)
+}
+
+/**
+ * What a table's rows confer: a new source makes every row it holds a grant, and every insert a delegation, so it widens;
+ * a longer or open-ended delegation, or one a writer may make to itself, widens too.
+ */
+function confersChanges(name: string, before: TablePolicyArtifact['confers'], after: TablePolicyArtifact['confers']): Line[] {
+	const from = before ?? {}
+	const to = after ?? {}
+	return union(Object.keys(from), Object.keys(to)).flatMap((relation): Line[] => {
+		const subject = `Table \`${name}\` relation \`${relation}\``
+		const was = from[relation]
+		const is = to[relation]
+		if (was === undefined) {
+			if (is === undefined) return []
+			const assign = is.assign === null
+				? 'no handler inserts a row'
+				: `an insert delegates it${is.assign.maxDays === null ? '' : ` for at most ${is.assign.maxDays} days`}${
+					is.assign.self ? ', to its writer too' : ''
+				}`
+			return [widening(`Table \`${name}\` confers relation \`${relation}\` on \`${is.principal}\` at \`${is.node}\`; ${assign}`)]
+		}
+		if (is === undefined) return [narrowing(`Table \`${name}\` no longer confers relation \`${relation}\``)]
+		const lines: Line[] = [
+			...valueChange(`${subject} principal`, was.principal, is.principal),
+			...valueChange(`${subject} node`, was.node, is.node),
+			...(was.expires !== null && is.expires === null
+				? [widening(`${subject} no longer expires`)]
+				: valueChange(`${subject} expiry`, was.expires, is.expires)),
+			...(was.when === undefined && is.when !== undefined
+				? [narrowing(`${subject} is conferred only by a row its condition holds`)]
+				: valueChange(`${subject} condition`, was.when, is.when)),
+		]
+		if (was.assign === null || is.assign === null) return [...lines, ...valueChange(`${subject} assignment`, was.assign, is.assign)]
+		return [
+			...lines,
+			...limitChange(`${subject} delegation days`, was.assign.maxDays, is.assign.maxDays),
+			...(was.assign.self === is.assign.self
+				? []
+				: [(is.assign.self ? widening : narrowing)(`${subject} ${is.assign.self ? 'may' : 'may no longer'} be delegated by a writer to itself`)]),
+		]
+	})
+}
+
+/**
+ * What a table's rows reveal: a new reveal, a new action or a higher node widens what a relation reaches; a lost one,
+ * or an added condition, narrows; any other change of the condition widens.
+ */
+function revealsChanges(name: string, before: TablePolicyArtifact['reveals'], after: TablePolicyArtifact['reveals']): Line[] {
+	const from = before ?? {}
+	const to = after ?? {}
+	return union(Object.keys(from), Object.keys(to)).flatMap((relation): Line[] => {
+		const subject = `Table \`${name}\` reveals to relation \`${relation}\``
+		const was = from[relation]
+		const is = to[relation]
+		if (was === undefined) {
+			if (is === undefined) return []
+			return [
+				widening(`${subject} its \`${is.to}\` for ${is.actions.map((action) => `\`${action}\``).join(', ')}`),
+				...revealAssignChanges(subject, name, undefined, is.assign),
+			]
+		}
+		if (is === undefined) return [narrowing(`${subject} nothing any more`)]
+		const added = is.actions.filter((action) => !was.actions.includes(action))
+		const removed = was.actions.filter((action) => !is.actions.includes(action))
+		return [
+			...valueChange(`${subject} node`, was.to, is.to),
+			...(added.length === 0 ? [] : [widening(`${subject} its \`${is.to}\` also for ${added.map((action) => `\`${action}\``).join(', ')}`)]),
+			...(removed.length === 0 ? [] : [narrowing(`${subject} its \`${is.to}\` no longer for ${removed.map((action) => `\`${action}\``).join(', ')}`)]),
+			...(was.when === undefined && is.when !== undefined
+				? [narrowing(`${subject} only a row its condition holds`)]
+				: valueChange(`${subject} condition`, was.when, is.when)),
+			...revealAssignChanges(subject, name, was.assign, is.assign),
+		]
+	})
+}
+
+/**
+ * What a table's rows reveal to a grant at their node: a new reveal, a new action or another node widens what a member
+ * reads; a lost one, or an added condition, narrows; any other change of the condition widens.
+ */
+function memberRevealsChanges(name: string, before: TablePolicyArtifact['memberReveals'], after: TablePolicyArtifact['memberReveals']): Line[] {
+	const from = before ?? {}
+	const to = after ?? {}
+	return union(Object.keys(from), Object.keys(to)).flatMap((dimension): Line[] => {
+		const subject = `Table \`${name}\` reveals to a member of its \`${dimension}\``
+		const was = from[dimension]
+		const is = to[dimension]
+		if (was === undefined) {
+			return is === undefined ? [] : [widening(`${subject} its \`${is.to}\` for ${is.actions.map((action) => `\`${action}\``).join(', ')}`)]
+		}
+		if (is === undefined) return [narrowing(`${subject} nothing any more`)]
+		const added = is.actions.filter((action) => !was.actions.includes(action))
+		const removed = was.actions.filter((action) => !is.actions.includes(action))
+		return [
+			...valueChange(`${subject} node`, was.to, is.to),
+			...(added.length === 0 ? [] : [widening(`${subject} its \`${is.to}\` also for ${added.map((action) => `\`${action}\``).join(', ')}`)]),
+			...(removed.length === 0 ? [] : [narrowing(`${subject} its \`${is.to}\` no longer for ${removed.map((action) => `\`${action}\``).join(', ')}`)]),
+			...(was.when === undefined && is.when !== undefined
+				? [narrowing(`${subject} only a row its condition holds`)]
+				: valueChange(`${subject} condition`, was.when, is.when)),
+		]
+	})
+}
+
+/** A secondary read path: a new one, or another column, widens what a `Within` of its dimension reads; a lost one narrows. */
+function readThroughChanges(name: string, before: TablePolicyArtifact['readThrough'], after: TablePolicyArtifact['readThrough']): Line[] {
+	const from = before ?? {}
+	const to = after ?? {}
+	return union(Object.keys(from), Object.keys(to)).flatMap((dimension): Line[] => {
+		const was = from[dimension]
+		const is = to[dimension]
+		const subject = `A read of \`${dimension}\` reaches table \`${name}\``
+		if (was === undefined) return is === undefined ? [] : [widening(`${subject} through \`${is}\``)]
+		if (is === undefined) return [narrowing(`${subject} no longer: its path through \`${was}\` is removed`)]
+		return was === is ? [] : [widening(`${subject} through \`${is}\` instead of \`${was}\``)]
+	})
+}
+
+/** An insert that picks the node a reveal holds at delegates: a new bound widens, `self` widens, losing either narrows. */
+function revealAssignChanges(subject: string, name: string, was: RevealsArtifact['assign'], is: RevealsArtifact['assign']): Line[] {
+	if (was?.self === is?.self) return []
+	if (is === undefined) return [narrowing(`${subject} no longer at a node an insert into \`${name}\` picks`)]
+	if (is.self) return [widening(`${subject} at a node an insert into \`${name}\` picks, its writer's own included`)]
+	if (was === undefined) return [widening(`${subject} at a node an insert into \`${name}\` picks, never its writer's own`)]
+	return [narrowing(`${subject} at a node an insert into \`${name}\` picks no longer its writer's own`)]
+}
+
+/** An action's condition narrows every grant of it on the table: a new one narrows, a lost one widens, any change widens. */
+function whenChanges(name: string, before: TablePolicyArtifact['when'], after: TablePolicyArtifact['when']): Line[] {
+	const from = before ?? {}
+	const to = after ?? {}
+	return union(Object.keys(from), Object.keys(to)).flatMap((action): Line[] => {
+		const was = from[action]
+		const is = to[action]
+		if (was === undefined) return is === undefined ? [] : [narrowing(`\`${action}\` holds a row of \`${name}\` only under its condition`)]
+		if (is === undefined) return [widening(`\`${action}\` holds every row of \`${name}\` its grant reaches: its condition is removed`)]
+		return valueChange(`\`${action}\` condition on \`${name}\``, was, is)
+	})
 }
 
 /** An external role may be held by a person from outside the organization (ADR-0051). */
@@ -1704,6 +1892,11 @@ function tableChanges(name: string, from: TablePolicyArtifact, to: TablePolicyAr
 		...ruled('table.creator', valueChange(`${table} creator column`, from.createdBy, to.createdBy)),
 		...columns,
 		...ruled('table.file-column', fileColumnChanges(name, from.files ?? {}, to.files ?? {})),
+		...ruled('table.confers', confersChanges(name, from.confers, to.confers)),
+		...ruled('table.when', whenChanges(name, from.when, to.when)),
+		...ruled('table.reveals', revealsChanges(name, from.reveals, to.reveals)),
+		...ruled('table.read-through', readThroughChanges(name, from.readThrough, to.readThrough)),
+		...ruled('table.member-reveals', memberRevealsChanges(name, from.memberReveals, to.memberReveals)),
 	]
 }
 

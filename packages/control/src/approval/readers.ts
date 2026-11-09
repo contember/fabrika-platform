@@ -140,6 +140,38 @@ const minorOf = (release: Release): string => `${release.major}.${release.minor}
 
 export const compareReleases = (a: Release, b: Release): number => a.major - b.major || a.minor - b.minor || a.patch - b.patch
 
+/**
+ * Semver precedence including the prerelease, which `compareReleases` ignores: `0.9.0-dev.11` < `0.9.0-dev.12` <
+ * `0.9.0`. A floor that only some prereleases of its version meet must be compared with this.
+ */
+export function comparePrecedence(a: Release, b: Release): number {
+	const core = compareReleases(a, b)
+	if (core !== 0) return core
+	const left = prereleaseOf(a.text)
+	const right = prereleaseOf(b.text)
+	if (left.length === 0 || right.length === 0) return right.length - left.length
+	for (let index = 0; index < Math.min(left.length, right.length); index++) {
+		const order = compareIdentifier(left[index] ?? '', right[index] ?? '')
+		if (order !== 0) return order
+	}
+	return left.length - right.length
+}
+
+function prereleaseOf(text: string): readonly string[] {
+	const dash = text.indexOf('-')
+	return dash === -1 ? [] : text.slice(dash + 1).split('.')
+}
+
+/** Numeric identifiers compare as numbers and sort before alphanumeric ones, which compare in ASCII order. */
+function compareIdentifier(a: string, b: string): number {
+	const numeric = /^\d+$/
+	const aNumeric = numeric.test(a)
+	const bNumeric = numeric.test(b)
+	if (aNumeric && bNumeric) return Number(a) - Number(b)
+	if (aNumeric !== bNumeric) return aNumeric ? -1 : 1
+	return a < b ? -1 : a > b ? 1 : 0
+}
+
 /** A framework window: the platform's own release and the reader of each minor it deploys. */
 export interface ReaderWindow {
 	readonly platform: string

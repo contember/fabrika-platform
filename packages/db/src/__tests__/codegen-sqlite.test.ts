@@ -89,7 +89,9 @@ describe('generateSqliteSchema', () => {
 			"\t\tforeignKeys: [\n\t\t\t{\n\t\t\t\tcolumns: ['isbn', 'edition'],\n\t\t\t\ttable: 'books',\n\t\t\t\treferences: ['isbn', 'edition'],\n\t\t\t},\n\t\t],\n",
 		)
 		expect(copies).toContain("\t\tdates: ['printed_on'],\n\t\ttimestamps: ['acquired_at', 'checked_at', 'scanned_at'],\n\t\tbooleans: ['lent'],\n")
-		expect(entryOf(source, 'authors')).toBe("\t'authors': {\n\t\tcolumns: [\n\t\t\t'id',\n\t\t\t'name',\n\t\t],\n\t\tforeignKeys: [],\n\t},\n")
+		expect(entryOf(source, 'authors')).toBe(
+			"\t'authors': {\n\t\tcolumns: [\n\t\t\t'id',\n\t\t\t'name',\n\t\t],\n\t\tforeignKeys: [],\n\t\tnotNull: ['id', 'name'],\n\t},\n",
+		)
 	})
 
 	test('types a column declared JSONB as Postgres types jsonb, and refuses JSON naming JSONB', async () => {
@@ -166,7 +168,9 @@ describe('generateSqliteSchema', () => {
 		expect(interfaceOf(module.source, 'ThingsTable')).toBe(
 			'export interface ThingsTable {\n\tid: string\n\tbody: string\n\t// meta (JSON, generated) is left out: the data layer does not read it; ctx.sql does\n}\n',
 		)
-		expect(entryOf(module.source, 'things')).toBe("\t'things': {\n\t\tcolumns: [\n\t\t\t'id',\n\t\t\t'body',\n\t\t],\n\t\tforeignKeys: [],\n\t},\n")
+		expect(entryOf(module.source, 'things')).toBe(
+			"\t'things': {\n\t\tcolumns: [\n\t\t\t'id',\n\t\t\t'body',\n\t\t],\n\t\tforeignKeys: [],\n\t\tnotNull: ['id', 'body'],\n\t},\n",
+		)
 		const untyped = await generateSqliteSchema([
 			app('CREATE TABLE things (id TEXT PRIMARY KEY NOT NULL, body TEXT NOT NULL, size GENERATED ALWAYS AS (length(body)) STORED);'),
 		]).then(() => undefined, (rejected: unknown) => rejected)

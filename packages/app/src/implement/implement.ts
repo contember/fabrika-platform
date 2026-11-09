@@ -22,6 +22,13 @@ export interface ContractDatabase {
 	 * `using` is a job's transaction, which also sees the object it wrote; a layer of the application's own ignores it.
 	 */
 	locate(dimension: string, id: string, using?: Session): Promise<ReadonlyMap<string, string> | null>
+	/**
+	 * Whether a row of `relation`'s source names `principal` at `node` and confers it now. A layer of the application's
+	 * own has none, so no Ref is ever held through a relation there.
+	 */
+	relates?(relation: string, node: string, principal: string): Promise<boolean>
+	/** Whether a row `relation` reaches for `principal` reveals `node` of `dimension` now; none in a layer of the application's own. */
+	reveals?(relation: string, dimension: string, node: string, principal: string): Promise<boolean>
 }
 
 /** `scoped(tables)` of `@fabrika/db`, which `boot` binds, or a `ContractDatabase` of the application's own. */

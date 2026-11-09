@@ -84,6 +84,7 @@ export const sqliteColumns: TypedColumnList<DB> = {
 		],
 		timestamps: ['at'],
 		booleans: ['urgent'],
+		notNull: ['id', 'project_id', 'organization_id', 'at', 'urgent'],
 	},
 	'organizations': {
 		columns: [
@@ -91,6 +92,7 @@ export const sqliteColumns: TypedColumnList<DB> = {
 			'name',
 		],
 		foreignKeys: [],
+		notNull: ['id', 'name'],
 	},
 	'projects': {
 		columns: [
@@ -116,6 +118,7 @@ export const sqliteColumns: TypedColumnList<DB> = {
 		timestamps: ['starts_at', 'created_at'],
 		booleans: ['archived'],
 		json: ['settings'],
+		notNull: ['id', 'organization_id', 'name', 'archived', 'version', 'created_at'],
 	},
 }
 

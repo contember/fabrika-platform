@@ -32,6 +32,9 @@ bun test    # policy · derived-tables · tables · store · guard · hardening 
 | `description.ts`       | `ScopedSelect`: the frozen, non-executable query description a store callback receives.                                                                                                                                                                                                                                                                                                                                      |
 | `nodes.ts`             | Kysely operation nodes built from a description and a scope predicate.                                                                                                                                                                                                                                                                                                                                                       |
 | `guard.ts`             | The allowlist over the final operation tree, run immediately before compiling.                                                                                                                                                                                                                                                                                                                                               |
+| `authority.ts`         | What a capability admits beyond its containment: the relations it is held through and its action's condition; `refScope`, `withinBranch`, `conditioned`.                                                                                                                                                                                                                                                                     |
+| `conditions.ts`        | The structured row conditions of `when`, `confers`, `reveals` and `memberReveals`: the one parse, and a condition's value on an insert's own row; browser-safe.                                                                                                                                                                                                                                                              |
+| `condition-nodes.ts`   | The predicate of a condition and the one subquery shape a scope predicate holds (Kysely nodes).                                                                                                                                                                                                                                                                                                                              |
 | `database.ts`          | `Database` over a `DatabaseEngine` of its dialect (`fromEngine`, `fromDialect`; no public query method), `Session` (the only path to it), `InvocationTransaction` (`enclose`), `runFixedStatement`, `applicationSchema`, `openFirstConnection`; no Bun.                                                                                                                                                                      |
 | `postgres.ts`          | `@fabrika/db/postgres`: `openPostgres`, the Postgres engine over Bun.SQL (`prepare: false`, the schema as `search_path`); the only runtime module that imports `bun`.                                                                                                                                                                                                                                                        |
 | `sqlite.ts`            | `@fabrika/db/sqlite`: `openSqlite(storage)`, the engine over a Durable Object's `ctx.storage`; its frozen `SqliteCompiler`, the constraint errors as SQLSTATEs; Worker-safe.                                                                                                                                                                                                                                                 |
@@ -207,6 +210,11 @@ pass a recording one); `Database.fromEngine` takes another engine (`openSqlite`)
   `(project_id, org_id) references projects (id, org_id)`, or the parse refuses it and names that key. A `Within` of an
   ancestor reads a row by its inherited column alone, so a column the database does not tie to the owner would put the
   row in a scope its owner is not in.
+- **A foreign key that holds a row's tenant needs its ancestor columns NOT NULL** (`requireNotNullAncestors`). A
+  condition's path into another scoped table and a `readThrough` follow one foreign key of exactly the column and every
+  ancestor the two tables share; under MATCH SIMPLE a null ancestor skips the whole key, so a row written raw with one
+  would reach another tenant's row. The column list's `notNull` (codegen's, from the catalog; an older list without it
+  names none) must hold each ancestor column, or the parse refuses and names it.
 - **Every action is the vocabulary's.** Table actions and a column's own read and write actions are refused unless the
   vocabulary declares them, in the one parse: the reader refuses them from source too.
 - **The inbox scope is gone.** A policy that still states `scope: { inbox: … }` is refused with a message that says to
@@ -533,3 +541,66 @@ pass a recording one); `Database.fromEngine` takes another engine (`openSqlite`)
   approver already saw. This is what finds an object created at runtime, at every start (`codegen
   --verify`) and in the test kit. It runs in a read-only transaction that pins `search_path` and
   `standard_conforming_strings`, so a role-level setting cannot blind it.
+
+## Relations, conditions and reveals (ADR-0073)
+
+A relation grant is application data the layer reads on every statement; IAM only marks the actions a role holds
+through a relation (`~rel`, `@fabrika/auth-core`). `authority.ts` builds every predicate a capability scopes
+(`refScope`, `withinBranch`, `conditioned`), `conditions.ts` parses a condition (browser-safe, no Kysely) and
+`condition-nodes.ts` builds its predicate. The guard admits exactly these subquery shapes and nothing else.
+
+- **A relation reaches a row's node while a source row names the caller there, unexpired and admitted by the source's
+  `when`**: an uncorrelated `T.node in (select S.node from S where S.principal = $me …)`, ORed into a `Within`'s values
+  and carried by a `Ref` minted through it. Nothing caches it, so a deleted source row stops access at the next
+  statement. A source's `when` reads the source row only, never its `version`; a queue table confers nothing.
+- **A principal may be read through one foreign key** (`principal: '<column>.<principal column>'`, `parsePrincipal`):
+  `<column>` is a single-column foreign key to the key of a contained dimension, child or application table P (no view,
+  no queue table, no top-level dimension, whose key an insert takes from its Ref), never the source's key, chain,
+  version or file column, which the layer stamps or a move rewrites. Every principal comparison is `namesPrincipal` (`authority.ts`), `S.<column> in (select P.<key> from P
+  where P.<column> = $me)`: the relation term, its reveals, `relates` and the relation row lookups. `S.<column>` is
+  fixed like the principal; `P.<column>` is in no update list and no column write action, and is not P's version, key,
+  chain, file or JSON column, so P's rows change it only by delete and insert. A column that holds a principal, `S.<principal>`
+  or `P.<column>`, is a column of no foreign key (`refuseReferencing`): the column list carries no key's actions, and
+  one that cascades on update would change whom the rows name. For the same reason no other foreign key holds
+  `S.<column>` than the hop's, or a tenant-holding one that maps it to P's key too, and P's key is in no foreign key of
+  P. `ctx.sql` of a writing site never
+  names P (`accessTables`: the tag refuses a statement whose text names P as a name token, as for a source table; it
+  does not read which relation the name stands for). The hop follows P's key only, not a tenant-holding key: a source
+  writer may name a P row of another tenant, which gives no more than naming that principal directly would. A deleted P
+  or source row stops access at the next statement. The guard admits P by its
+  key only and nests scope subqueries at most `MAX_SCOPE_NESTING` (4) deep: a reveal matched through a secondary path
+  above the relation's dimension reads the reveal's row, the path's table, the source and P. The artifact keeps the
+  dotted text as `principal`, so an artifact without one keeps its digest.
+- **Writing a source row is delegation, bounded instead of held** (the named exception to S8). Its node is stamped
+  from the writer's `Ref`; `assign.maxDays` caps the expiry and refuses an open-ended one; a row naming its writer needs
+  `assign.self` (a `ConflictError`, 409, as is a row outside the bound); a table that confers without `assign` has no
+  insert. A principal in the table's `createdBy` names the writer in every row, at the row's node: the row itself
+  for a dimension table at the relation's dimension, its container for a dimension table at its container's dimension,
+  its parent's node for a child. So an insertable such source states
+  `assign: { self: true }` or the parse refuses it, and a principal path does not start at it. Through a path, the
+  self check reads P's row in the insert's transaction, locked `FOR SHARE` first (the foreign key's own `FOR KEY SHARE`
+  lets an update of P's other columns through), so P's principal cannot change before the insert commits. No update writes the principal, the node, the expiry or a column the source's `when` reads, and a source row
+  never moves. `ctx.sql` of a writing site never names a source table, and `unscoped` never writes one.
+- **A table's `when` only narrows.** It is ANDed onto every grant of its action, global, IAM-scoped and relation
+  alike, including an application table's key paths and an upsert's conflict row (judged on the stored row). A
+  condition is structured data, never SQL; `{ now: true }` is the statement clock, parsed to an identity, never the
+  text `now`. A path follows at most three foreign keys, a `some`/`none` counting as one: a row's own container or
+  parent column, a key into a reference table, or a key that holds the row's tenant (below); `some` follows such a key
+  backwards. Every hop also needs a single-column foreign key on its column (`singleForeignKey`), the composite
+  key of a tenant hop included, so a table with only `(project_id, org_id) references projects (id, org_id)` takes no
+  path. An insert's condition is judged on the written row; one with a path in the insert's transaction, every
+  row on its paths locked `FOR SHARE` first, and it takes no `some`.
+- **A tenant-holding key** is one foreign key of exactly the column and every ancestor column the two tables share,
+  referencing the target's key (`holdsExactly`), with each ancestor column in the column list's `notNull`
+  (`requireNotNullAncestors`, the invariant above). A hop's subquery reads its target unscoped, so any looser key would
+  read another tenant's row.
+- **`readThrough: { <dimension>: <column> }`** lets a `Within` of a dimension outside the table's chain, or a relation
+  at it, read the row through that tenant-holding key. Every write still follows containment only, and no update writes
+  the column. `DbIndex` lists the table under that dimension's `Within` (`ReadThroughOf`).
+- **`reveals`** makes a row a relation reaches reveal its ancestor node in `to` for the listed actions (those its
+  roles name in `via`), while the reveal's `when` admits the row. A reveal matched through `readThrough` on a table with
+  an insert needs `assign` (`self` to let the writer name a node where it holds the relation), because the writer picks
+  the node. An insert into a node no table owns rechecks the relation rows that hold its `Ref`.
+- **`memberReveals`** makes a grant at a row's own node hold the listed actions at its ancestor in `to`, for a
+  `Within`'s reads. A member-revealing row is never written unscoped or by `ctx.sql`, never moves, and its key is the
+  layer's, so no write revives a node a former member still holds.

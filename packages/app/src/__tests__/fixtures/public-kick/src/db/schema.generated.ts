@@ -30,6 +30,7 @@ export const columns: TypedColumnList<DB> = {
 			'email',
 		],
 		foreignKeys: [],
+		notNull: ['id', 'email'],
 	},
 	'notices': {
 		columns: [
@@ -37,6 +38,7 @@ export const columns: TypedColumnList<DB> = {
 			'email',
 		],
 		foreignKeys: [],
+		notNull: ['id', 'email'],
 	},
 	'signups': {
 		columns: [
@@ -44,5 +46,6 @@ export const columns: TypedColumnList<DB> = {
 			'email',
 		],
 		foreignKeys: [],
+		notNull: ['id', 'email'],
 	},
 }

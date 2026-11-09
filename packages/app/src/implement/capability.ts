@@ -168,6 +168,8 @@ interface RefFacts {
 	readonly principal: string
 	readonly id: string
 	readonly chain: Chain
+	/** The relations through which the caller holds the action on the object; empty for an IAM grant. */
+	readonly relations: readonly string[]
 }
 
 interface Bound {
@@ -200,13 +202,14 @@ export class Ref<D extends string, A extends string> implements RefCapability<D,
 		principal: string,
 		id: string,
 		chain: ReadonlyMap<string, string>,
+		relations: readonly string[],
 	) {
 		if (token !== MINT) {
 			throw new CapabilityRefusedError('not_minted', 'a Ref is minted by the framework only; declare the access form in fabrika.contract.ts')
 		}
 		this.#dimension = dimension
 		this.#action = action
-		this.#facts = freeze({ dimension, action, principal, id, chain: chainOf(chain) })
+		this.#facts = freeze({ dimension, action, principal, id, chain: chainOf(chain), relations: copyOf(relations) })
 		this.#frame = frame
 		this.#issuer = issuer
 	}
@@ -242,6 +245,7 @@ export class Ref<D extends string, A extends string> implements RefCapability<D,
 				principal: facts.principal,
 				id: facts.id,
 				chain: mapOf(facts.chain),
+				relations: facts.relations,
 			})
 			return { grant, frame: value.#frame, issuer: value.#issuer }
 		}
@@ -270,14 +274,17 @@ export class Within<D extends string, A extends string> implements WithinCapabil
 		values: readonly string[] | 'all',
 		containers: readonly ContainerGrant[],
 		contained: readonly ContainerGrant[],
+		relations: readonly string[],
+		revealing: readonly ContainerGrant[],
 	) {
 		if (token !== MINT) {
 			throw new CapabilityRefusedError('not_minted', 'a Within is minted by the framework only; declare the access form in fabrika.contract.ts')
 		}
 		const held = values === 'all' ? freeze([]) : containerGrantsOf(containers)
 		const inside = values === 'all' ? freeze([]) : containerGrantsOf(contained)
+		const revealed = values === 'all' ? freeze([]) : containerGrantsOf(revealing)
 		let count = values === 'all' ? 0 : values.length
-		for (const group of [held, inside]) {
+		for (const group of [held, inside, revealed]) {
 			for (let index = 0; index < group.length; index++) {
 				count += group[index]?.values.length ?? 0
 			}
@@ -297,6 +304,8 @@ export class Within<D extends string, A extends string> implements WithinCapabil
 			values: values === 'all' ? 'all' : copyOf(values),
 			containers: held,
 			contained: inside,
+			relations: values === 'all' ? freeze([]) : copyOf(relations),
+			revealing: revealed,
 		})
 		this.#frame = frame
 		this.#issuer = issuer
@@ -436,6 +445,7 @@ export interface CapabilityMint {
 		principal: string,
 		id: string,
 		chain: ReadonlyMap<string, string>,
+		relations?: readonly string[],
 	): Ref<D, A>
 	within<D extends string, A extends string>(
 		frame: RequestFrame,
@@ -445,6 +455,8 @@ export interface CapabilityMint {
 		values: readonly string[] | 'all',
 		containers?: readonly ContainerGrant[],
 		contained?: readonly ContainerGrant[],
+		relations?: readonly string[],
+		revealing?: readonly ContainerGrant[],
 	): Within<D, A>
 	app<A extends string>(frame: RequestFrame, action: A, principal: string): AppCapability<A>
 }
@@ -470,8 +482,9 @@ export function createCapabilityIssuer(): CapabilityIssuer {
 			principal: string,
 			id: string,
 			chain: ReadonlyMap<string, string>,
+			relations: readonly string[] = [],
 		): Ref<D, A> {
-			return new Ref(MINT, issuer, frame, dimension, action, principal, id, chain)
+			return new Ref(MINT, issuer, frame, dimension, action, principal, id, chain, relations)
 		},
 		within<D extends string, A extends string>(
 			frame: RequestFrame,
@@ -481,8 +494,10 @@ export function createCapabilityIssuer(): CapabilityIssuer {
 			values: readonly string[] | 'all',
 			containers: readonly ContainerGrant[] = [],
 			contained: readonly ContainerGrant[] = [],
+			relations: readonly string[] = [],
+			revealing: readonly ContainerGrant[] = [],
 		): Within<D, A> {
-			return new Within(MINT, issuer, frame, dimension, action, principal, values, containers, contained)
+			return new Within(MINT, issuer, frame, dimension, action, principal, values, containers, contained, relations, revealing)
 		},
 		app<A extends string>(frame: RequestFrame, action: A, principal: string): AppCapability<A> {
 			return new AppCapability(MINT, issuer, frame, action, principal)

@@ -6,6 +6,8 @@ import {
 	type ArrayShape,
 	type AttachmentShape,
 	BUILTIN_ROLE_KEYS,
+	type ColumnTestArtifact,
+	type ConditionArtifact,
 	CONTRACT_FORMAT,
 	type ContractArtifact,
 	CROSS_ORIGIN_KINDS,
@@ -303,6 +305,38 @@ const tableAction = z.union([
 	z.array(action).min(2).refine((list) => new Set(list).size === list.length, 'a table operation names each action once'),
 ])
 
+const literal = z.union([z.string(), z.number().finite(), z.boolean()])
+const ordered = z.union([literal, z.strictObject({ now: z.literal(true) })])
+
+/** Exactly one operator per column test, as the policy parse reads it. */
+const columnTest: z.ZodType<ColumnTestArtifact> = z.strictObject({
+	eq: literal.optional(),
+	notEq: literal.optional(),
+	in: z.array(literal).nonempty().optional(),
+	notIn: z.array(literal).nonempty().optional(),
+	isNull: z.boolean().optional(),
+	lt: ordered.optional(),
+	lte: ordered.optional(),
+	gt: ordered.optional(),
+	gte: ordered.optional(),
+}).refine((test) => Object.values(test).filter((value) => value !== undefined).length === 1, 'a column test states exactly one operator')
+
+const condition: z.ZodType<ConditionArtifact> = z.lazy(() =>
+	z.union([
+		z.strictObject({ allOf: z.array(condition).nonempty() }),
+		z.strictObject({ anyOf: z.array(condition).nonempty() }),
+		z.strictObject({ not: condition }),
+		z.strictObject({ some: z.record(name, condition).refine((rows) => Object.keys(rows).length === 1, 'some names exactly one table') }),
+		z.strictObject({ none: z.record(name, condition).refine((rows) => Object.keys(rows).length === 1, 'none names exactly one table') }),
+		z.record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*){0,3}$/), columnTest).refine(
+			(tests) =>
+				Object.keys(tests).length > 0 && !('allOf' in tests) && !('anyOf' in tests) && !('not' in tests) && !('some' in tests)
+				&& !('none' in tests),
+			'a condition tests at least one column',
+		),
+	])
+)
+
 const tablePolicy: z.ZodType<TablePolicyArtifact> = z.strictObject({
 	scope: z.discriminatedUnion('mode', [
 		z.strictObject({
@@ -331,6 +365,26 @@ const tablePolicy: z.ZodType<TablePolicyArtifact> = z.strictObject({
 	columns: record(z.strictObject({ read: action.optional(), write: action.optional() })),
 	files: z.record(name, name).optional(),
 	view: z.literal(true).optional(),
+	confers: record(z.strictObject({
+		principal: name,
+		node: name,
+		expires: nullableName,
+		when: condition.optional(),
+		assign: z.strictObject({ maxDays: z.int().positive().nullable(), self: z.boolean() }).nullable(),
+	})).optional(),
+	when: z.record(action, condition).optional(),
+	reveals: record(z.strictObject({
+		to: name,
+		actions: z.array(action).nonempty(),
+		when: condition.optional(),
+		assign: z.strictObject({ self: z.boolean() }).optional(),
+	})).optional(),
+	readThrough: z.record(name, name).optional(),
+	memberReveals: record(z.strictObject({
+		to: name,
+		actions: z.array(action).nonempty(),
+		when: condition.optional(),
+	})).optional(),
 })
 
 export const contractArtifactSchema: z.ZodType<ContractArtifact> = z.strictObject({
@@ -349,11 +403,16 @@ export const contractArtifactSchema: z.ZodType<ContractArtifact> = z.strictObjec
 			grants: actions,
 			member: z.strictObject({ scope: name, assignableBy: z.array(roleKey) }).nullable(),
 			external: z.literal(true).optional(),
+			via: record(actions.nonempty()).optional(),
 		}).refine((role) => role.external !== true || role.member !== null, {
 			path: ['external'],
 			message: 'only a membership role admits external principals',
+		}).refine((role) => role.via === undefined || (role.member === null && role.external !== true), {
+			path: ['via'],
+			message: 'a relation holds actions through an application-wide role only, never a membership or external one',
 		}),
 	),
+	relations: record(z.strictObject({ dimension: name })).optional(),
 	mounts: record(mount),
 	files: record(z.strictObject({
 		owner: name,
