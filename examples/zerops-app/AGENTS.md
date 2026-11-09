@@ -4709,7 +4709,8 @@ export const tables = defineTables(vocabulary, columns)({
   - the node is stamped from the writer's `Ref`, so a coordinator delegates only in a project it reaches;
   - `assign.maxDays` caps the expiry; a later or a missing expiry is a 409, and `maxDays` needs `expires`;
   - a row naming its writer is a 409 unless `assign.self: true` allows it. `principal` may name the table's
-    `createdBy`: then every row names its writer (an owner of what they created), so a table with an insert states
+    `createdBy`: then every row names its writer at the row's node (a project's creator owns that project; on a child
+    table the writer holds the relation at the parent's node, not at the row), so a table with an insert states
     `assign: { self: true }`, and the policy is refused without it;
   - a table that confers without `assign` takes no insert.
 - `principal` may be read through one foreign key, `'<column>.<principal column>'`: `principal: 'person_id.principal_id'`
@@ -4718,7 +4719,9 @@ export const tables = defineTables(vocabulary, columns)({
   queue table, no top-level dimension), and is not the source's own key, version, file or containment column (an
   `org_id` a move rewrites). No update of that table may write the principal column, so a person row is replaced, never edited:
   deleting it, or the source row, ends the access at the next request. A row whose person names its writer is a 409
-  without `assign.self`, as above. Index the referenced table on `(principal column, id)` too.
+  without `assign.self`, as above. The foreign key needs only the referenced table's key, not a key that holds the
+  tenant: a writer may name a person of another organization, which gives no more than naming that principal id
+  directly. Index the referenced table on `(principal column, id)` too.
 - A column that holds a principal, on the source or on the table a path reads, has no `REFERENCES`: a key that
   cascades on update would change whom every row names.
 - A source row never moves, and no update writes its principal, node, expiry or a column its `when` reads. Change an

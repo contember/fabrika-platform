@@ -562,14 +562,18 @@ through a relation (`~rel`, `@fabrika/auth-core`). `authority.ts` builds every p
   chain, file or JSON column, so P's rows change it only by delete and insert. A column that holds a principal, `S.<principal>`
   or `P.<column>`, is a column of no foreign key (`refuseReferencing`): the column list carries no key's actions, and
   one that cascades on update would change whom the rows name. `ctx.sql` of a writing site never
-  names P (`accessTables`). A deleted P or source row stops access at the next statement. The guard admits P by its
+  names P (`accessTables`: the tag refuses a statement whose text names P as a name token, as for a source table; it
+  does not read which relation the name stands for). The hop follows P's key only, not a tenant-holding key: a source
+  writer may name a P row of another tenant, which gives no more than naming that principal directly would. A deleted P
+  or source row stops access at the next statement. The guard admits P by its
   key only and nests scope subqueries at most `MAX_SCOPE_NESTING` (4) deep: a reveal matched through a secondary path
   above the relation's dimension reads the reveal's row, the path's table, the source and P. The artifact keeps the
   dotted text as `principal`, so an artifact without one keeps its digest.
 - **Writing a source row is delegation, bounded instead of held** (the named exception to S8). Its node is stamped
   from the writer's `Ref`; `assign.maxDays` caps the expiry and refuses an open-ended one; a row naming its writer needs
   `assign.self` (a `ConflictError`, 409, as is a row outside the bound); a table that confers without `assign` has no
-  insert. A principal in the table's `createdBy` names the writer in every row, so an insertable such source states
+  insert. A principal in the table's `createdBy` names the writer in every row, at the row's node (the row itself for a
+  table at the relation's dimension, its parent's node for a child), so an insertable such source states
   `assign: { self: true }` or the parse refuses it, and a principal path does not start at it. Through a path, the
   self check reads P's row in the insert's transaction, locked `FOR SHARE` first (the foreign key's own `FOR KEY SHARE`
   lets an update of P's other columns through), so P's principal cannot change before the insert commits. No update writes the principal, the node, the expiry or a column the source's `when` reads, and a source row
