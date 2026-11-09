@@ -4709,15 +4709,17 @@ export const tables = defineTables(vocabulary, columns)({
   - the node is stamped from the writer's `Ref`, so a coordinator delegates only in a project it reaches;
   - `assign.maxDays` caps the expiry; a later or a missing expiry is a 409, and `maxDays` needs `expires`;
   - a row naming its writer is a 409 unless `assign.self: true` allows it. `principal` may name the table's
-    `createdBy`: then every row names its writer at the row's node (a project's creator owns that project; on a child
-    table the writer holds the relation at the parent's node, not at the row), so a table with an insert states
+    `createdBy`: then every row names its writer at the row's node. On `projects`, a relation at `project` makes a
+    creator hold it at that project, and one at `org` at the project's org; on a child table such as
+    `project_assistants` the writer holds it at the parent project, not at the row. So a table with an insert states
     `assign: { self: true }`, and the policy is refused without it;
   - a table that confers without `assign` takes no insert.
 - `principal` may be read through one foreign key, `'<column>.<principal column>'`: `principal: 'person_id.principal_id'`
   on a staff row that names a person of a directory table, whose own row holds the principal id. `<column>` needs a
   single-column `REFERENCES <table> (id)` to the key of a contained dimension, child or application table (no view, no
   queue table, no top-level dimension), and is not the source's own key, version, file or containment column (an
-  `org_id` a move rewrites). No update of that table may write the principal column, so a person row is replaced, never edited:
+  `org_id` a move rewrites). No other foreign key holds that column, but a composite one to the same row, such as
+  `(person_id, org_id) REFERENCES people (id, org_id)`, and the referenced table's key references nothing. No update of that table may write the principal column, so a person row is replaced, never edited:
   deleting it, or the source row, ends the access at the next request. A row whose person names its writer is a 409
   without `assign.self`, as above. The foreign key needs only the referenced table's key, not a key that holds the
   tenant: a writer may name a person of another organization, which gives no more than naming that principal id

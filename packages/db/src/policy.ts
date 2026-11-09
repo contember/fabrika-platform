@@ -1834,7 +1834,7 @@ function parseConfers(
 		if (principal === node || principal === table.version || hasOwn(table.files, principal)) {
 			throw new PolicyError(`${what}.principal ${principal} is a column the layer stamps; it holds the principal the row names`)
 		}
-		if (principalPath === undefined) refuseReferencing(table, principal, `${what}.principal`)
+		if (principalPath === undefined) refuseReferencing(table, principal, `${what}.principal`, 'holds the principal', undefined)
 		const assign = parseAssign(table, policy, expires, what)
 		if (principal === table.createdBy && principalPath !== undefined) {
 			throw new PolicyError(`${what}.principal ${principal} is the createdBy column, which holds a principal; a principal path starts at a foreign key`)
@@ -1908,6 +1908,9 @@ function parsePrincipal(
 	if (scope.key !== hop.key) {
 		throw new PolicyError(`${field}: ${table.name}.${column} references ${hop.table}.${hop.key}, not its key ${scope.key}`)
 	}
+	// Only the hop's own key, or a tenant-holding one that maps the column to the same key, may hold the start column.
+	refuseReferencing(table, column, field, 'starts the principal path', hop)
+	refuseReferencing(target, scope.key, field, 'is the key the principal path follows', undefined)
 	if (!inSet(target.columns, held)) {
 		throw new PolicyError(`${field}: ${held} is not a column of ${hop.table}`)
 	}
@@ -1920,7 +1923,7 @@ function parsePrincipal(
 	if (held === scope.key || hasOwn(target.files, held) || inSet(target.json, held) || chainColumn(target, held)) {
 		throw new PolicyError(`${field}: ${hop.table}.${held} is a key, a containment, a file or a JSON column; it holds no principal`)
 	}
-	refuseReferencing(target, held, field)
+	refuseReferencing(target, held, field, 'holds the principal', undefined)
 	return { column, path: freeze({ table: hop.table, key: hop.key, column: held }) }
 }
 
@@ -1932,15 +1935,25 @@ function chainColumn(table: Pick<TableModel, 'chain'>, column: string): boolean 
 }
 
 /**
- * A column that holds a principal references nothing: the column list carries no foreign key's actions, and one that
- * cascades on update would let a write to the referenced table change whom every row names.
+ * A column that decides whom a row names references nothing but `hop` (a key into `hop.table` that maps it to
+ * `hop.key`): the column list carries no foreign key's actions, and one that cascades on update would let a write to
+ * the referenced table change whom every row names.
  */
-function refuseReferencing(table: Pick<TableModel, 'name' | 'foreignKeys'>, column: string, field: string): void {
+function refuseReferencing(
+	table: Pick<TableModel, 'name' | 'foreignKeys'>,
+	column: string,
+	field: string,
+	role: string,
+	hop: { readonly table: string; readonly key: string } | undefined,
+): void {
 	for (let index = 0; index < table.foreignKeys.length; index++) {
 		const key = table.foreignKeys[index]
-		if (key !== undefined && includes(key.columns, column)) {
+		if (key === undefined) continue
+		for (let position = 0; position < key.columns.length; position++) {
+			if (key.columns[position] !== column) continue
+			if (hop !== undefined && key.table === hop.table && key.references[position] === hop.key) continue
 			throw new PolicyError(
-				`${field}: ${table.name}.${column} holds the principal and is a column of a foreign key to ${key.table}, which an update there may rewrite; a principal column references nothing`,
+				`${field}: ${table.name}.${column} ${role} and is a column of a foreign key to ${key.table}, which an update there may rewrite; it references nothing else`,
 			)
 		}
 	}

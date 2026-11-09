@@ -590,10 +590,38 @@ const pathColumns = {
 	crews: { columns: ['id', 'org_id', 'principal_id'], foreignKeys: [], view: true },
 	jobs: { columns: ['id', 'principal_id', 'attempts', 'due_at', 'version'], foreignKeys: [], timestamps: ['due_at'] },
 	countries: { columns: ['code', 'principal_id'], foreignKeys: [] },
+	members: {
+		columns: ['id', 'org_id', 'principal_id'],
+		foreignKeys: [{ columns: ['org_id'], table: 'orgs', references: ['id'] }, { columns: ['id'], table: 'countries', references: ['code'] }],
+		notNull: ['id', 'org_id'],
+	},
 	project_staff: {
-		columns: ['id', 'project_id', 'org_id', 'person_id', 'alias_id', 'crew_id', 'job_id', 'country_code', 'added_by', 'org_ref', 'lead_project_id'],
+		columns: [
+			'id',
+			'project_id',
+			'org_id',
+			'person_id',
+			'alias_id',
+			'crew_id',
+			'job_id',
+			'country_code',
+			'added_by',
+			'org_ref',
+			'lead_project_id',
+			'mentor_id',
+			'buddy_id',
+			'peer_id',
+			'member_id',
+		],
 		foreignKeys: [
 			{ columns: ['project_id', 'org_id'], table: 'projects', references: ['id', 'org_id'] },
+			{ columns: ['mentor_id'], table: 'people', references: ['id'] },
+			{ columns: ['mentor_id'], table: 'countries', references: ['code'] },
+			{ columns: ['buddy_id'], table: 'people', references: ['id'] },
+			{ columns: ['buddy_id', 'org_id'], table: 'crews', references: ['id', 'org_id'] },
+			{ columns: ['peer_id'], table: 'people', references: ['id'] },
+			{ columns: ['peer_id', 'org_id'], table: 'people', references: ['id', 'org_id'] },
+			{ columns: ['member_id'], table: 'members', references: ['id'] },
 			{ columns: ['org_id'], table: 'orgs', references: ['id'] },
 			{ columns: ['org_ref'], table: 'orgs', references: ['id'] },
 			{ columns: ['lead_project_id'], table: 'projects', references: ['id'] },
@@ -633,6 +661,7 @@ const pathPolicies = {
 		version: 'version',
 	},
 	countries: { scope: { reference: 'lookup data' }, actions: { read: 'projects.read' } },
+	members: { scope: { child: 'orgs' }, actions: { read: 'projects.read' } },
 	project_staff: {
 		scope: { child: 'projects' },
 		actions: { read: 'projects.read', insert: 'staff.assign', delete: 'staff.assign' },
@@ -664,6 +693,45 @@ describe('the policy of a principal reached through a to-one path', () => {
 		expect(() => readPath('org_id.owner_principal_id')).toThrow(`project_staff.org_id is a key, a containment, a version or a file column, ${refused}`)
 		expect(() => readPath('project_id.created_by')).toThrow(refused)
 		expect(() => readPath('id.principal_id')).toThrow(refused)
+	})
+
+	test("starts at no container column, even one that also references its container's key alone", () => {
+		// A board confers at its own node, and its container column project_id references the project's key twice: alone,
+		// and with org_id. Only the chain check refuses the path: a move of the board rewrites project_id.
+		const boardVocabulary = {
+			...vocabulary,
+			dimensions: { ...vocabulary.dimensions, board: { in: 'project' } },
+			relations: { ...vocabulary.relations, crew: { dimension: 'board' } },
+		}
+		const boards = {
+			columns: ['id', 'project_id', 'org_id', 'version'],
+			foreignKeys: [
+				{ columns: ['project_id', 'org_id'], table: 'projects', references: ['id', 'org_id'] },
+				{ columns: ['project_id'], table: 'projects', references: ['id'] },
+			],
+			notNull: ['id', 'project_id', 'org_id', 'version'],
+		}
+		const crew = (principal: string) =>
+			readTables({ ...pathColumns, boards }, {
+				...pathPolicies,
+				boards: { scope: { dimension: 'board' }, actions: { read: 'projects.read' }, version: 'version', confers: { crew: { principal } } },
+			}, boardVocabulary)
+		expect(() => crew('project_id.created_by')).toThrow(
+			'boards.project_id is a key, a containment, a version or a file column, which the layer stamps or a move rewrites',
+		)
+	})
+
+	test('starts at a column no other foreign key holds, but a tenant-holding key to the same row', () => {
+		const refused = 'starts the principal path and is a column of a foreign key to'
+		expect(() => readPath('mentor_id.principal_id')).toThrow(`project_staff.mentor_id ${refused} countries, which an update there may rewrite`)
+		expect(() => readPath('buddy_id.principal_id')).toThrow(`project_staff.buddy_id ${refused} crews, which an update there may rewrite`)
+		expect(() => readPath('peer_id.principal_id')).not.toThrow()
+	})
+
+	test("follows a key that no foreign key of the principal's table holds", () => {
+		expect(() => readPath('member_id.principal_id')).toThrow(
+			'members.id is the key the principal path follows and is a column of a foreign key to countries, which an update there may rewrite',
+		)
 	})
 
 	test('reads no principal from a top-level dimension table, whose key an insert takes from its Ref', () => {
