@@ -71,9 +71,26 @@ create table tickets (
 	version integer not null,
 	foreign key (project_id, org_id) references projects (id, org_id)
 );
+create table boards (
+	id text not null primary key,
+	project_id text not null,
+	org_id text not null,
+	version integer not null,
+	unique (id, org_id),
+	foreign key (project_id, org_id) references projects (id, org_id)
+);
+create table cards (
+	id text not null primary key,
+	org_id text not null references orgs (id),
+	board_id text,
+	version integer not null,
+	foreign key (board_id, org_id) references boards (id, org_id)
+);
 `
 
 const seed = `
+delete from cards;
+delete from boards;
 delete from tickets;
 delete from project_staff;
 delete from people;
@@ -95,6 +112,8 @@ interface DB {
 	people: { id: string; org_id: string; principal_id: string | null; created_by: string; version: number }
 	project_staff: { id: string; project_id: string; org_id: string; person_id: string | null }
 	tickets: { id: string; org_id: string; project_id: string | null; title: string; version: number }
+	boards: { id: string; project_id: string; org_id: string; version: number }
+	cards: { id: string; org_id: string; board_id: string | null; version: number }
 }
 
 const columns: TypedColumnList<DB> = {
@@ -125,11 +144,24 @@ const columns: TypedColumnList<DB> = {
 		],
 		notNull: ['id', 'org_id', 'title', 'version'],
 	},
+	boards: {
+		columns: ['id', 'project_id', 'org_id', 'version'],
+		foreignKeys: [{ columns: ['project_id', 'org_id'], table: 'projects', references: ['id', 'org_id'] }],
+		notNull: ['id', 'project_id', 'org_id', 'version'],
+	},
+	cards: {
+		columns: ['id', 'org_id', 'board_id', 'version'],
+		foreignKeys: [
+			{ columns: ['org_id'], table: 'orgs', references: ['id'] },
+			{ columns: ['board_id', 'org_id'], table: 'boards', references: ['id', 'org_id'] },
+		],
+		notNull: ['id', 'org_id', 'version'],
+	},
 }
 
 const vocabulary = {
 	app: 'principals',
-	dimensions: { org: {}, project: { in: 'org' } },
+	dimensions: { org: {}, project: { in: 'org' }, board: { in: 'project' } },
 	actions: {
 		'projects.read': 'Read projects',
 		'projects.create': 'Create projects',
@@ -143,7 +175,8 @@ const vocabulary = {
 
 /**
  * The layer's tables; `self` lets a writer staff itself, `reveal` makes a staffed project reveal its org. A ticket lies in
- * an org and names a project it is read through, where staff see it and its org's other tickets.
+ * an org and names a project it is read through, where staff see it and its org's other tickets. A card names a board of
+ * a project, so its reveal reads the card, the board, the staff row and the person: the deepest scope the layer builds.
  */
 function tablesWith(options: { readonly self?: true; readonly reveal?: true } = {}) {
 	return defineTables(vocabulary, columns)({
@@ -177,6 +210,14 @@ function tablesWith(options: { readonly self?: true; readonly reveal?: true } = 
 			version: 'version',
 			readThrough: { project: 'project_id' },
 			reveals: { staff: { to: 'org', actions: ['projects.read'], assign: {} } },
+		},
+		boards: { scope: { dimension: 'board' }, actions: { read: 'projects.read' }, version: 'version' },
+		cards: {
+			scope: { child: 'orgs' },
+			actions: { read: 'projects.read' },
+			version: 'version',
+			readThrough: { board: 'board_id' },
+			reveals: { staff: { to: 'org', actions: ['projects.read'] } },
 		},
 	})
 }
@@ -383,6 +424,22 @@ function suite(dialect: 'sqlite' | 'postgres', open: () => Promise<Backend>, clo
 			expect(await listed('tickets', 'staff')).toEqual([])
 		})
 
+		test("a reveal matched through a path below the relation's dimension nests four deep, and follows the principal path", async () => {
+			await staff([['s1', 'p1', 'pe-alice']])
+			await backend.exec(`
+				insert into boards (id, project_id, org_id, version) values ('b1', 'p1', 'o1', 1), ('b2', 'p2', 'o1', 1);
+				insert into cards (id, org_id, board_id, version) values ('c2', 'o1', 'b2', 1), ('c3', 'o1', null, 1)
+			`)
+			expect(await listed('orgs', 'staff')).toEqual([])
+			expect(await listed('cards', 'staff')).toEqual([])
+			await backend.exec(`insert into cards (id, org_id, board_id, version) values ('c1', 'o1', 'b1', 1)`)
+			expect(await listed('orgs', 'staff')).toEqual(['o1'])
+			expect(await listed('cards', 'staff')).toEqual(['c1', 'c2', 'c3'])
+			await backend.exec(`delete from people where id = 'pe-alice'`)
+			expect(await listed('orgs', 'staff')).toEqual([])
+			expect(await listed('cards', 'staff')).toEqual([])
+		})
+
 		test('a writing ctx.sql statement never names the table a principal path reads', async () => {
 			const transaction = data.invocation(false)
 			const sql = data.sql({ mode: 'write', check() {}, session: () => transaction.session(), fail: () => transaction.fail() })
@@ -452,6 +509,69 @@ suite('postgres', async () => {
 }, async () => {
 	await postgres?.close()
 	await postgresAdmin((sql) => sql.unsafe(`drop schema if exists ${schema} cascade`))
+})
+
+describe('an insert into a node no table owns, through a path relation', () => {
+	interface Unowned {
+		people: { id: string; principal_id: string }
+		seats: { id: string; space_id: string; person_id: string }
+		notes: { id: string; space_id: string; body: string; version: number }
+	}
+	const unownedColumns: TypedColumnList<Unowned> = {
+		people: { columns: ['id', 'principal_id'], foreignKeys: [] },
+		seats: { columns: ['id', 'space_id', 'person_id'], foreignKeys: [{ columns: ['person_id'], table: 'people', references: ['id'] }] },
+		notes: { columns: ['id', 'space_id', 'body', 'version'], foreignKeys: [] },
+	}
+	const unownedVocabulary = {
+		app: 'unowned',
+		dimensions: { space: {}, seat: { in: 'space' }, note: { in: 'space' } },
+		actions: { 'spaces.read': 'Read spaces', 'notes.write': 'Write notes' },
+		relations: { guest: { dimension: 'space' } },
+		roles: {},
+	} as const
+	const unowned = defineTables(unownedVocabulary, unownedColumns)({
+		people: { scope: { app: 'the directory a seat names its person from' }, actions: { read: 'spaces.read' } },
+		seats: { scope: { dimension: 'seat' }, actions: { read: 'spaces.read' }, confers: { guest: { principal: 'person_id.principal_id' } } },
+		notes: { scope: { dimension: 'note' }, actions: { read: 'spaces.read', insert: 'notes.write' }, insert: ['body'], version: 'version' },
+	})
+
+	test("inserts while a seat's person names the writer, and writes nothing once the person row is gone", async () => {
+		const store = bunSqliteStorage()
+		store.sql.exec(`
+			create table people (id text not null primary key, principal_id text not null);
+			create table seats (
+				id text not null primary key, space_id text not null,
+				person_id text not null references people (id) on delete cascade
+			);
+			create table notes (id text not null primary key, space_id text not null, body text not null, version integer not null);
+			insert into people (id, principal_id) values ('pe-alice', 'user:alice'), ('pe-bob', 'user:bob');
+			insert into seats (id, space_id, person_id) values ('st1', 'sp1', 'pe-alice'), ('st2', 'sp2', 'pe-bob');
+		`)
+		const layer = scoped(unowned)
+		const binding = bindScopedDatabaseProvisionally(layer, { database: openSqlite(store), capabilities: alice })
+		const access = dataAccessOf(layer)
+		const write = async (space: string, body: string) => {
+			const transaction = access.invocation(false)
+			const site: DataSite = { kind: 'mutation', unscoped: {}, principal: 'user:alice', check() {}, session: () => transaction.session() }
+			try {
+				const ref = alice.ref('space', 'notes.write', space, {}, ['guest'])
+				await call(access.handles(site).target(ref, 'in'), 'notes.insert', { body })
+				await transaction.commit()
+			} catch (error) {
+				await transaction.rollback()
+				throw error
+			}
+		}
+		try {
+			await write('sp1', 'held')
+			await expect(write('sp2', 'not hers')).rejects.toThrow('no row holds notes.write')
+			store.sql.exec("delete from people where id = 'pe-alice'")
+			await expect(write('sp1', 'revoked')).rejects.toThrow('no row holds notes.write')
+			expect(store.sql.exec('select body, space_id from notes').toArray()).toEqual([{ body: 'held', space_id: 'sp1' }])
+		} finally {
+			binding.release()
+		}
+	})
 })
 
 /** The tables a principal path could start at, beside the fixture's: a view, a queue table, a reference table. */
