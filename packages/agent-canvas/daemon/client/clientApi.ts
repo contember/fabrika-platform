@@ -260,7 +260,6 @@ export interface SharedFeedbackPayload {
 
 type EncryptedFeedbackBody = Omit<SharedFeedbackPayload, 'responses'> & { responses?: string; encryption: EncryptionMeta }
 
-/** Encrypt the secret fields of a feedback payload in-place semantics. */
 /** The feedback body for an encrypted share: every text field, and the responses as one blob, as ciphertext. */
 export async function encryptFeedback(
 	payload: SharedFeedbackPayload,

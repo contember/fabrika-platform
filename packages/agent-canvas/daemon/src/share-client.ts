@@ -208,7 +208,9 @@ export async function pushShareToWorker(payload: SharePayload, config: ShareEndp
 	const data: unknown = await res.json()
 	const parsed = shareResponseSchema.safeParse(data)
 	if (!parsed.success) {
-		throw new Error(`Share endpoint returned invalid response: ${JSON.stringify(data)}`)
+		// Only where it failed: the body carries the owner token, which must not reach a log or an error page.
+		const where = parsed.error.issues.map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.message}`).join('; ')
+		throw new Error(`Share endpoint returned invalid response (${where})`)
 	}
 	return parsed.data
 }

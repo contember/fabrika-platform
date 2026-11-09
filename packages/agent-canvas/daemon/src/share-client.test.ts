@@ -75,7 +75,15 @@ describe('createShare', () => {
 		recordFetch(() => new Response('too many', { status: 429 }))
 		await expect(createShare(payload, { endpoint: 'https://share.test' })).rejects.toThrow('429')
 		recordFetch(() => Response.json({ url: 'https://share.test/s/x' }))
-		await expect(createShare(payload, { endpoint: 'https://share.test' })).rejects.toThrow('invalid response')
+		await expect(createShare(payload, { endpoint: 'https://share.test' })).rejects.toThrow('invalid response (shareId: Required)')
+	})
+
+	test('an invalid response does not echo the owner token', async () => {
+		recordFetch(() => Response.json({ shareId: 'abc123', url: 'https://share.test/s/abc123', ownerToken: 'owner-secret', expiresAt: 1 }))
+		const error = await createShare(payload, { endpoint: 'https://share.test' }).catch((reason: unknown) => reason)
+		expect(error).toBeInstanceOf(Error)
+		expect(String(error)).toContain('expiresAt')
+		expect(String(error)).not.toContain('owner-secret')
 	})
 })
 
