@@ -122,10 +122,10 @@ describe('a relation grant through boot', () => {
 		await expect(scopedAssistant.list({})).rejects.toMatchObject({ httpStatus: 403 })
 	})
 
-	test('a delegation longer than the bound, or to the delegator itself, is refused and writes nothing', async () => {
+	test('a delegation longer than the bound, or to the delegator itself, is a 409 and writes nothing', async () => {
 		const { assistant, lead } = world()
-		await expect(lead.assign({ id: 'p1', principal: 'user:assistant', days: 31 })).rejects.toMatchObject({ httpStatus: 500 })
-		await expect(lead.assign({ id: 'p1', principal: 'user:lead', days: 1 })).rejects.toMatchObject({ httpStatus: 500 })
+		await expect(lead.assign({ id: 'p1', principal: 'user:assistant', days: 31 })).rejects.toMatchObject({ httpStatus: 409 })
+		await expect(lead.assign({ id: 'p1', principal: 'user:lead', days: 1 })).rejects.toMatchObject({ httpStatus: 409 })
 		await expect(assistant.get({ id: 'p1' })).rejects.toMatchObject({ httpStatus: 404 })
 	})
 })

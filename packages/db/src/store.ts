@@ -1889,14 +1889,13 @@ function checkInserted(
 			throw new CapabilityError('undeclared_operation', `${model.name} confers ${source.relation} and states no assign, so no handler inserts a row`)
 		}
 		if (!assign.self && row.get(source.principal) === grant.principal) {
-			throw new QueryRefusedError('relation_bound', `a row of ${model.name} names its writer in ${source.relation}, which assign.self does not allow`)
+			throw new ConflictError(`a row of ${model.name} names its writer in ${source.relation}, which assign.self does not allow`)
 		}
 		if (assign.maxDays !== undefined && source.expires !== undefined) {
 			const value = row.get(source.expires)
 			const until = value instanceof Date ? value.getTime() : typeof value === 'string' ? Date.parse(value) : Number.NaN
 			if (Number.isNaN(until) || until > now.getTime() + assign.maxDays * DAY_MS) {
-				throw new QueryRefusedError(
-					'relation_bound',
+				throw new ConflictError(
 					`a row of ${model.name} confers ${source.relation} until ${source.expires}, at most ${assign.maxDays} days ahead`,
 				)
 			}
@@ -2046,8 +2045,7 @@ async function checkRevealAssign(
 			subqueries: context.subqueries,
 		})
 		if (rows.length > 0) {
-			throw new QueryRefusedError(
-				'relation_bound',
+			throw new ConflictError(
 				`a row of ${model.name} names in ${path.column} a node where its writer holds ${reveal.relation}, which the reveal's assign.self does not allow`,
 			)
 		}

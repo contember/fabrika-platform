@@ -5,7 +5,7 @@
 import type { TypedColumnList } from '@fabrika/db'
 import { beforeEach, describe, expect, test } from 'bun:test'
 import type { ColumnType } from 'kysely'
-import { CapabilityError, PolicyError, QueryRefusedError } from '../errors'
+import { CapabilityError, ConflictError, PolicyError, QueryRefusedError } from '../errors'
 import { bindScopedDatabaseProvisionally, type DataAccess, dataAccessOf, type DataHandles, type DataSite } from '../framework'
 import type { DataKind } from '../orm-types'
 import { defineTables } from '../policy'
@@ -366,7 +366,7 @@ describe('inserting a source row is delegation', () => {
 	})
 
 	test('refuses an expiry past maxDays, and an open one', async () => {
-		await expect(assign({ principal_id: 'user:bob', expires_at: new Date(Date.now() + 31 * DAY) })).rejects.toThrow(QueryRefusedError)
+		await expect(assign({ principal_id: 'user:bob', expires_at: new Date(Date.now() + 31 * DAY) })).rejects.toThrow(ConflictError)
 		await expect(assign({ principal_id: 'user:bob', expires_at: null })).rejects.toThrow('at most 30 days ahead')
 		expect(storage.sql.exec('select count(*) as n from project_members').toArray()).toEqual([{ n: 0 }])
 	})
