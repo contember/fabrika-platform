@@ -35,6 +35,7 @@ import {
 import { marked } from 'marked'
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
+import { answeredResponses, type SharedResponse } from '../src/share-client'
 import { type RemoteFeedbackEntry, remoteFeedbackResponseSchema, type ShareEntry } from './apiSchemas'
 import {
 	canvasHost,
@@ -453,10 +454,12 @@ function App() {
 		try {
 			const raw = localStorage.getItem(`canvas:${sessionId}:rev:${selectedRevision}`)
 			let structuredAnnotations: SharedFeedbackPayload['annotations'] = []
+			let responses: SharedResponse[] = []
 			if (raw) {
 				try {
 					const parsed = parsePersistedState(JSON.parse(raw))
 					structuredAnnotations = (parsed?.annotations ?? []).filter((a) => a.source !== 'remote')
+					responses = answeredResponses((parsed?.responses ?? []).map(([, response]) => response))
 				} catch {}
 			}
 			await submitSharedFeedback({
@@ -464,6 +467,7 @@ function App() {
 				revision: selectedRevision,
 				annotations: structuredAnnotations,
 				generalNote: feedback,
+				...(responses.length > 0 ? { responses } : {}),
 			})
 			clearPersistedDraft(localStorage, sessionId, selectedRevision)
 			setSharedFeedbackSubmitted(true)

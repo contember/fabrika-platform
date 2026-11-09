@@ -220,6 +220,7 @@ async function handleSubmitFeedback(shareId: string, req: Request, env: Env): Pr
 		},
 		annotations: body.annotations || [],
 		...(body.generalNote ? { generalNote: body.generalNote } : {}),
+		...(body.responses !== undefined ? { responses: body.responses } : {}),
 		...(body.encryption ? { encryption: body.encryption } : {}),
 	}
 

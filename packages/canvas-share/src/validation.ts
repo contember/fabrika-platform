@@ -8,6 +8,7 @@
  * try/catch around every parse.
  */
 
+import { sharedResponsesSchema } from 'agent-canvas/share/responses'
 import { z } from 'zod'
 import { LIMITS } from './types'
 
@@ -99,9 +100,20 @@ const feedbackBodySchema = z
 			.string()
 			.max(LIMITS.GENERAL_NOTE_CIPHERTEXT_LENGTH, `generalNote too long`)
 			.optional(),
+		responses: z
+			.union([z.string().max(LIMITS.RESPONSES_CIPHERTEXT_LENGTH, 'responses too long'), sharedResponsesSchema])
+			.optional(),
 		encryption: encryptionSchema.optional(),
 	})
 	.superRefine((body, ctx) => {
+		// Encrypted responses are one ciphertext blob, plaintext ones a list.
+		if (body.responses !== undefined && (typeof body.responses === 'string') !== Boolean(body.encryption)) {
+			ctx.addIssue({
+				code: z.ZodIssueCode.custom,
+				path: ['responses'],
+				message: body.encryption ? 'responses must be ciphertext in an encrypted body' : 'responses must be a list in a plaintext body',
+			})
+		}
 		if (body.encryption) return
 		if (body.author.name.trim().length === 0) {
 			ctx.addIssue({
