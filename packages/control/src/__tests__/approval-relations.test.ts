@@ -220,4 +220,13 @@ describe('publication refuses relation grants an older release would not enforce
 		expect(relationGrantsRefusal(contract, '0.9.0')).toBeNull()
 		expect(relationGrantsRefusal(plain.contract, '0.8.4')).toBeNull()
 	})
+
+	test('a prerelease of the enforcing version counts by its precedence, never as that version', () => {
+		const contract = readContractSource(files())
+		expect(relationGrantsRefusal(contract, '0.9.0-dev.11')).toContain('enforces from 0.9.0-dev.12')
+		expect(relationGrantsRefusal(contract, '0.9.0-cloudflare.3')).toContain('enforces from 0.9.0-dev.12')
+		expect(relationGrantsRefusal(contract, '0.9.0-dev.12')).toBeNull()
+		expect(relationGrantsRefusal(contract, '0.9.0-dev.100')).toBeNull()
+		expect(relationGrantsRefusal(contract, '0.9.1-dev.0')).toBeNull()
+	})
 })

@@ -3,10 +3,13 @@
 // deploy of a release before the first one that enforces them is refused before anything publishes.
 
 import type { ContractArtifact } from '@fabrika/auth-core'
-import { compareReleases, FRAMEWORK_PACKAGE, parseRelease, type Release } from './readers'
+import { comparePrecedence, FRAMEWORK_PACKAGE, parseRelease, type Release } from './readers'
 
-/** The first framework release whose data layer and dispatch enforce relations, `via`, `confers` and `when`. */
-export const RELATION_GRANTS_SINCE: Release = { text: '0.9.0', major: 0, minor: 9, patch: 0 }
+/**
+ * The first framework release whose data layer and dispatch enforce relations, `via`, `confers` and `when`. Compared
+ * with its prerelease: every earlier `0.9.0-*` release reads none of them and would widen access.
+ */
+export const RELATION_GRANTS_SINCE: Release = { text: '0.9.0-dev.12', major: 0, minor: 9, patch: 0 }
 
 /** The fields of `contract` that only a release from `RELATION_GRANTS_SINCE` enforces, as `field` or `field of name`. */
 export function relationFields(contract: ContractArtifact): string[] {
@@ -30,7 +33,7 @@ export function relationGrantsRefusal(contract: ContractArtifact | null, framewo
 	const fields = contract === null ? [] : relationFields(contract)
 	if (fields.length === 0) return null
 	const release = framework === undefined ? null : parseRelease(framework)
-	if (release !== null && compareReleases(release, RELATION_GRANTS_SINCE) >= 0) return null
+	if (release !== null && comparePrecedence(release, RELATION_GRANTS_SINCE) >= 0) return null
 	return `the contract declares ${fields.length} relation grant field${fields.length === 1 ? '' : 's'} (${fields.slice(0, 3).join(', ')}${
 		fields.length > 3 ? ', …' : ''
 	}), which ${FRAMEWORK_PACKAGE} enforces from ${RELATION_GRANTS_SINCE.text}, and the application pins ${
