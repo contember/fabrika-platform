@@ -59,8 +59,6 @@ export function startRemoteFeedbackPoller(
 			errorCounts.delete(share.shareId)
 			for (const id of data.malformed) console.warn(`[remote-feedback] ${share.shareId}: skipping malformed entry ${id}`)
 
-			if (data.entries.length === 0) return
-
 			// Decrypt any entries that came in encrypted. Plaintext entries
 			// (legacy submissions from non-encrypted shares) pass through.
 			const decrypted: RemoteFeedbackEntry[] = []
@@ -71,13 +69,15 @@ export function startRemoteFeedbackPoller(
 				}
 				try {
 					const key = e.encryption && share.encryptionKey ? await getKey(share.shareId, share.encryptionKey) : null
-					decrypted.push(await decryptFeedbackEntry(e, key))
+					const entry = await decryptFeedbackEntry(e, key)
+					if (entry.droppedResponses) {
+						console.warn(`[remote-feedback] ${share.shareId}: entry ${e.id}: left out ${entry.droppedResponses} response(s) of an unknown shape`)
+					}
+					decrypted.push(entry)
 				} catch (err) {
 					console.warn(`[remote-feedback] ${share.shareId}: failed to decrypt entry ${e.id}: ${errorMessage(err)}`)
 				}
 			}
-
-			if (decrypted.length === 0) return
 
 			const byRev = new Map<number, RemoteFeedbackEntry[]>()
 			for (const e of decrypted) {
@@ -90,9 +90,10 @@ export function startRemoteFeedbackPoller(
 				broadcastRemoteFeedback(sessionId, rev, entries)
 			}
 
+			// The cursor also moves past entries that were skipped: with a fixed key, a refetch fails the same way.
 			const latest = data.latestAt
 				?? data.entries.reduce((acc, e) => (e.submittedAt > acc ? e.submittedAt : acc), share.lastFeedbackAt ?? '')
-			if (latest) {
+			if (latest && latest !== share.lastFeedbackAt) {
 				sessionManager.updateShareLastFeedback(sessionId, share.shareId, latest)
 			}
 		} catch (e) {

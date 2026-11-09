@@ -164,11 +164,19 @@ if (!share.encryptionKey || !share.ownerToken) {
 }
 
 const key = await importShareKey(share.encryptionKey)
-const page = await fetchShareFeedback(endpoint, share.shareId, '')
-const entries = await Promise.all(
-	page.entries.map((entry) => decryptFeedbackEntry(entry, key)),
-)
-// entries[n].responses: structured answers to Choice, MultiChoice, UserInput and RangeInput.
+let since = '' // keep it between polls
+const page = await fetchShareFeedback(endpoint, share.shareId, since)
+for (const wire of page.entries) {
+	try {
+		const entry = await decryptFeedbackEntry(wire, key)
+		// entry.responses: structured answers to Choice, MultiChoice, UserInput and RangeInput;
+		// entry.droppedResponses: how many did not fit the wire shape and were left out.
+	} catch {
+		// One entry that does not decrypt; the others still count.
+	}
+}
+// page.malformed: ids of entries that did not match the wire format.
+since = page.latestAt ?? since
 
 await revokeShareOnWorker(endpoint, share.shareId, share.ownerToken)
 ```

@@ -35,7 +35,7 @@ import {
 import { marked } from 'marked'
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { answeredResponses, type SharedResponse } from '../src/share-client'
+import { answeredResponses, type SharedResponse } from '../src/share-responses'
 import { type RemoteFeedbackEntry, remoteFeedbackResponseSchema, type ShareEntry } from './apiSchemas'
 import {
 	canvasHost,

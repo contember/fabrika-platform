@@ -24,8 +24,9 @@ export const sharedResponsesSchema = z.array(sharedResponseSchema).max(MAX_SHARE
 
 /**
  * The answered inputs of a draft, as the shared page sends them. A response
- * that does not fit the wire shape, or has neither a value nor a note, is
- * left out.
+ * that does not fit the wire shape (an unknown type, a label over 1000
+ * characters, no `value` key even with a note), or has neither a value nor a
+ * note, is left out.
  */
 export function answeredResponses(responses: readonly unknown[]): SharedResponse[] {
 	return responses.flatMap((candidate) => {

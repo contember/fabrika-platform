@@ -169,15 +169,31 @@ describe('decryptFeedbackEntry', () => {
 		expect((await decryptFeedbackEntry(garbled, null)).annotations).toEqual([{ id: 'a1', snippet: 's', note: 'n', createdAt: '2026-01-02T00:00:00Z' }])
 	})
 
-	test('refuses a missing or wrong key, mismatched responses and responses of the wrong shape', async () => {
+	test('refuses a missing or wrong key', async () => {
 		const key = await generateShareKey()
 		const entry = await encryptedEntry(key)
 		await expect(decryptFeedbackEntry(entry, null)).rejects.toThrow('no key')
 		await expect(decryptFeedbackEntry(entry, await generateShareKey())).rejects.toThrow()
-		await expect(decryptFeedbackEntry({ ...entry, responses }, key)).rejects.toThrow('plaintext responses')
-		await expect(decryptFeedbackEntry(wireEntry({ responses: 'Y2lwaGVy' }), null)).rejects.toThrow('encrypted responses')
-		const wrongShape = { ...entry, responses: await encryptString(key, JSON.stringify([{ id: 'x', type: 'slider', label: 'x', value: 1 }])) }
-		await expect(decryptFeedbackEntry(wrongShape, key)).rejects.toThrow()
+	})
+
+	test('leaves out responses that do not fit and keeps the rest of the entry', async () => {
+		const key = await generateShareKey()
+		const entry = await encryptedEntry(key)
+		const kept = {
+			annotations: [{ id: 'a1', snippet: 'quoted', note: 'comment', createdAt: '2026-01-02T00:00:00Z', context }],
+			generalNote: '## General notes',
+		}
+		// A response type this version does not know, next to one it does.
+		const newer = { ...entry, responses: await encryptString(key, JSON.stringify([{ id: 'x', type: 'slider', label: 'x', value: 1 }, responses[0]])) }
+		expect(await decryptFeedbackEntry(newer, key)).toMatchObject({ ...kept, responses: [responses[0]], droppedResponses: 1 })
+		// Plaintext responses in an encrypted entry, and ciphertext that does not open.
+		for (const broken of [{ ...entry, responses }, { ...entry, responses: 'Y2lwaGVy' }]) {
+			const opened = await decryptFeedbackEntry(broken, key)
+			expect(opened).toMatchObject({ ...kept, droppedResponses: 1 })
+			expect(opened.responses).toBeUndefined()
+		}
+		// Ciphertext in a plaintext entry.
+		expect(await decryptFeedbackEntry(wireEntry({ responses: 'Y2lwaGVy' }), null)).toMatchObject({ droppedResponses: 1 })
 	})
 })
 

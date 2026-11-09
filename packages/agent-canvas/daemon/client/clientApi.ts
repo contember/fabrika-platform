@@ -22,7 +22,7 @@
  */
 
 import type { CanvasHost } from '@fabrika/canvas-kernel/client'
-import type { SharedResponse } from '../src/share-client'
+import type { SharedResponse } from '../src/share-responses'
 import { type SessionMeta, sessionMetaSchema } from './apiSchemas'
 import { decryptString, ENCRYPTION_META, type EncryptionMeta, encryptString, importShareKey } from './shareCrypto'
 
@@ -261,7 +261,8 @@ export interface SharedFeedbackPayload {
 type EncryptedFeedbackBody = Omit<SharedFeedbackPayload, 'responses'> & { responses?: string; encryption: EncryptionMeta }
 
 /** Encrypt the secret fields of a feedback payload in-place semantics. */
-async function encryptFeedback(
+/** The feedback body for an encrypted share: every text field, and the responses as one blob, as ciphertext. */
+export async function encryptFeedback(
 	payload: SharedFeedbackPayload,
 	key: CryptoKey,
 ): Promise<EncryptedFeedbackBody> {
