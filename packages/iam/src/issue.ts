@@ -223,10 +223,11 @@ export async function issueKey(services: Services, input: IssueKeyInput, issuer:
 
 // ── revokeKey ───────────────────────────────────────────────────────────────────
 
-/** A `credential_grants` row → a delegation-check `KeyGrant` (both scope cols null = global). */
-function credentialGrantToKeyGrant(row: CredentialGrantRow): KeyGrant {
+/** A `credential_grants` row → a delegation-check `KeyGrant` (both scope cols null = global); a reserved `~` row grants nothing. */
+function credentialGrantToKeyGrant(row: CredentialGrantRow): KeyGrant[] {
+	if (row.scope_type !== null && isReservedScopeType(row.scope_type)) return []
 	const scope = row.scope_type === null || row.scope_value === null ? null : { type: row.scope_type, value: row.scope_value }
-	return { action: row.action, scope }
+	return [{ action: row.action, scope }]
 }
 
 /**
@@ -254,7 +255,7 @@ export async function revokeKey(
 		if (cred.principal_id !== null) {
 			return { ok: false, reason: 'not_allowed' }
 		}
-		const grants = (await services.repositories.credentials.getCredentialGrants(cred.id)).map(credentialGrantToKeyGrant)
+		const grants = (await services.repositories.credentials.getCredentialGrants(cred.id)).flatMap(credentialGrantToKeyGrant)
 		if (findUncoveredGrant(revoker.permissions, grants) !== null) {
 			return { ok: false, reason: 'not_allowed' }
 		}
