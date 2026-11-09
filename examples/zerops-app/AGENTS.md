@@ -6363,10 +6363,11 @@ policy; without one only `ctx.sql` reads it. With one, `ctx.db` reads it like a 
   the checker; its handles' writes are `Unavailable`, and the data layer refuses them.
 - Every read reaches a view's rows through the parent row their parent column names: a `Ref` of the parent, a
   `Within` that reaches the parent (its relations and reveals included) and `ctx.db.within.<view>` wherever the
-  parent is listed. A row whose parent column is null, or names a parent that does not exist or that the capability
-  does not reach, is never read through a `Ref` or a `Within`, one of every value included (only `ctx.db.app` lists
-  every row of a view); a chain column the view carries does not place a row. The view's SQL decides which parent
-  each row names, and the approver reviews it. `ctx.sql.scope` refuses a `Ref` or a `Within` of a view: read it through `ctx.db`.
+  parent is listed, under the parent's own dimension too (a view of `deals` under a `Within` of `deal`). A row whose
+  parent column is null, or names a parent that does not exist or that the capability does not reach, is never read
+  through a `Ref` or a `Within`, one of every value included (only `ctx.db.app` lists every row of a view); a chain
+  column the view carries does not place a row. The view's SQL decides which parent each row names, and the approver
+  reviews it. `ctx.sql.scope` refuses a `Ref` or a `Within` of a view: read it through `ctx.db`.
 - A column of a type the data layer does not read (an array, `numeric` on SQLite) is left out, and every codegen run
   names it. On SQLite an expression has a type only through `CAST(… AS INTEGER | REAL | TEXT)`; on Postgres cast a
   count you want as a number (`count(*)::int4`).

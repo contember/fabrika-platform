@@ -97,8 +97,14 @@ a scope over them is as sound as that SQL.
   view's SQL can attach a row to the wrong parent, which the approver reads, but cannot place it outside its parent.
 - A read of a child view runs one subquery on its parent, the parent's predicate inside it.
 - A view declared in the first form of this decision, with every chain column, keeps its artifact and its digest:
-  `inherit` still names the columns it carries. Its reads become the rows whose parent row the capability reaches; a
-  row whose parent column was null or named a parent out of scope is no longer read.
+  `inherit` still names the columns it carries. Raising the pin changes which of its rows a capability reads, both
+  ways. Reads narrow: a row whose parent column is null, names no parent row or names a parent out of scope is no
+  longer read. Reads also widen wherever the capability reaches the parent but did not reach the view's own columns:
+  a `Within` of a dimension the parent reads through `readThrough`, a relation or a reveal at such a dimension, and
+  member reveals now list the view's rows, and a row whose chain columns disagree with its parent's is read where the
+  parent lies. The approval diff shows no change for either: the view's policy and digest stay, and the parent's reach
+  is the parent's, approved with it. The approver of such an upgrade reads the view's SQL, which decides the parent
+  each row names.
 - No installation state changes. The artifact field is additive and the platform reads an application with its own
   release's reader ([ADR-0062](0062-a-platform-release-serves-older-framework-releases.md)); an older release never
   emits it.
