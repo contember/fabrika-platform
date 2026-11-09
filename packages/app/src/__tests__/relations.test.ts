@@ -1,6 +1,7 @@
 // Relation grants through boot, behind the production proxy decision, on SQLite: a global grant of a role with `via`
 // carries `~rel` entries, and `on` and `over` endpoints reach a project exactly while a member row names the caller
 // there. Assigning a member is a delegation the table's `assign` bounds; removing the row revokes at the next request.
+// A staff row confers through the person it references, whose directory row holds the principal.
 
 import { createClient } from '@fabrika/app/client'
 import { defineApp } from '@fabrika/app/contract'
@@ -48,6 +49,12 @@ const projects = app.group({ callers: ['human'] }, (r) => ({
 			})
 			return { id: saved.id }
 		}),
+	staff: r.mutation({
+		input: z.strictObject({ id: z.string().min(1), person: z.string().min(1) }),
+		output: ById,
+		access: { action: 'staff.assign', on: 'project', from: 'id' },
+	})
+		.handle(async ({ input, ctx }) => ({ id: (await ctx.db.target.project_staff.insert({ person_id: input.person })).id })),
 	unassign: r.mutation({
 		input: z.strictObject({ id: z.string().min(1), member: z.string().min(1) }),
 		output: Done,
@@ -80,6 +87,7 @@ describe('a relation grant through boot', () => {
 		})
 		return {
 			kit,
+			staffer: createClient(contract, 'api', { fetch: kit.browser(kit.testCaller([{ role: 'staffer' }], { id: 'user:staffer' })) }).projects,
 			assistant: createClient(contract, 'api', { fetch: kit.browser(assistant) }).projects,
 			lead: createClient(contract, 'api', { fetch: kit.browser(lead) }).projects,
 			scopedAssistant: createClient(contract, 'api', {
@@ -127,5 +135,15 @@ describe('a relation grant through boot', () => {
 		await expect(lead.assign({ id: 'p1', principal: 'user:assistant', days: 31 })).rejects.toMatchObject({ httpStatus: 409 })
 		await expect(lead.assign({ id: 'p1', principal: 'user:lead', days: 1 })).rejects.toMatchObject({ httpStatus: 409 })
 		await expect(assistant.get({ id: 'p1' })).rejects.toMatchObject({ httpStatus: 404 })
+	})
+
+	test('a relation whose principal the row a staff row references holds reaches the project, and names no delegator', async () => {
+		const { staffer, lead } = world()
+		await expect(staffer.get({ id: 'p1' })).rejects.toMatchObject({ httpStatus: 404 })
+		await lead.staff({ id: 'p1', person: 'pe-staffer' })
+		expect(await staffer.get({ id: 'p1' })).toEqual({ name: 'one' })
+		await expect(staffer.get({ id: 'p2' })).rejects.toMatchObject({ httpStatus: 404 })
+		expect(await staffer.list({})).toEqual({ ids: ['p1'] })
+		await expect(lead.staff({ id: 'p1', person: 'pe-lead' })).rejects.toMatchObject({ httpStatus: 409 })
 	})
 })

@@ -39,8 +39,12 @@ interface Admitted {
 	readonly table: string
 }
 
-/** How deep subqueries of a scope nest: a relation's (1) under a condition path of at most three hops. */
-const MAX_SCOPE_NESTING = 5
+/**
+ * How deep subqueries of a scope nest, the deepest the layer builds: a reveal's row (1) under a condition path of three
+ * hops, and a reveal matched through a secondary path above the relation's dimension (the reveal's row, the path's
+ * table, the source, and the table a principal path reads).
+ */
+const MAX_SCOPE_NESTING = 4
 
 function lookup(...names: string[]): NameSet {
 	return nameSet(names)

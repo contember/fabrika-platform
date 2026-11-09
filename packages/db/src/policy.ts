@@ -14,7 +14,16 @@ import {
 	plainRecord,
 	setOwn,
 } from './builtins'
-import { type ConditionModel, type ConditionPolicy, type ConditionTable, type HopRule, parseCondition, readsRowsNamingIt } from './conditions'
+import {
+	type ConditionModel,
+	type ConditionPolicy,
+	type ConditionTable,
+	type HopRule,
+	parseCondition,
+	readsRowsNamingIt,
+	singleForeignKey,
+	splitPath,
+} from './conditions'
 import { PolicyError } from './errors'
 import { isPlainIdentifier } from './identifier'
 import type { Unavailable } from './orm-types'
@@ -135,8 +144,11 @@ export interface RevealsPolicy<Col extends string, A extends string> {
  * until `expires` (none: no deadline) and while `when` admits the row. Writing a row is delegation.
  */
 export interface ConfersPolicy<Col extends string> {
-	/** The column that holds the principal; the table's `createdBy` names the row's writer (it needs `assign.self`). */
-	readonly principal: Col
+	/**
+	 * The column that holds the principal, or `<column>.<principal column>`: one foreign key of the table into the key of
+	 * the table whose column holds it. The table's `createdBy` names the row's writer (it needs `assign.self`).
+	 */
+	readonly principal: Col | `${Col}.${string}`
 	/** The column that names the node; by default the table's column for the relation's dimension (its key or its chain). */
 	readonly node?: Col
 	/** A timestamp column: the row confers nothing once it passed. */
@@ -371,12 +383,21 @@ export interface RelationSource {
 	readonly relation: string
 	readonly dimension: string
 	readonly table: string
+	/** The source's column that decides the principal: it holds it, or it references the row of `principalPath` that does. */
 	readonly principal: string
+	readonly principalPath: PrincipalPath | undefined
 	readonly node: string
 	readonly expires: string | undefined
 	readonly when: ConditionModel | undefined
 	/** `undefined` when the table has no insert action, so no handler writes a row of it. */
 	readonly assign: { readonly maxDays: number | undefined; readonly self: boolean } | undefined
+}
+
+/** `S.<principal>` references `key` of `table`, whose `column` holds the principal the source row names. */
+export interface PrincipalPath {
+	readonly table: string
+	readonly key: string
+	readonly column: string
 }
 
 /** A child's `column` and `inherit`, when omitted, are derived from its parent while the tables are linked. */
@@ -1304,6 +1325,12 @@ function linkTables(parsed: readonly ParsedTable[], vocabulary: VocabularyModel)
 	}
 
 	const conditionTable = (name: string): ConditionTable | undefined => ownEntry(byName, name)
+	const linkedTable = (name: string): LinkedTable | undefined => {
+		const target = ownEntry(byName, name)
+		if (target === undefined) return undefined
+		const { confersInput, whenInput, revealsInput, readThroughInput, memberRevealsInput, ...rest } = target
+		return { ...rest, ...resolve(target, []) }
+	}
 	const hopRule: HopRule = (from, column, to, key) => {
 		const source = ownEntry(byName, from)
 		const target = ownEntry(byName, to)
@@ -1349,7 +1376,7 @@ function linkTables(parsed: readonly ParsedTable[], vocabulary: VocabularyModel)
 				const owner = ownEntry(owners, dimension)
 				return owner === undefined ? undefined : { name: owner.name, ...resolve(owner, []) }
 			})
-			const confers = parseConfers(linked, confersInput, vocabulary.relations, conditionTable)
+			const confers = parseConfers(linked, confersInput, vocabulary.relations, conditionTable, linkedTable)
 			for (let position = 0; position < confers.length; position++) {
 				const relation = confers[position]?.relation ?? ''
 				const earlier = ownEntry(sources, relation)
@@ -1735,6 +1762,7 @@ function parseConfers(
 	input: unknown,
 	relations: Readonly<Record<string, string>>,
 	tables: (name: string) => ConditionTable | undefined,
+	linked: (name: string) => LinkedTable | undefined,
 ): readonly RelationSource[] {
 	if (input === undefined) {
 		return freeze([])
@@ -1764,7 +1792,7 @@ function parseConfers(
 			}
 			return value
 		}
-		const principal = column(ownEntry(policy, 'principal'), 'principal')
+		const { column: principal, path: principalPath } = parsePrincipal(table, ownEntry(policy, 'principal'), linked, what)
 		const placed = nodeColumnOf(table, dimension)
 		if (placed === undefined) {
 			throw new PolicyError(`${what}: ${table.name} does not lie in ${dimension}, the relation's dimension, so its rows name no node of it`)
@@ -1807,15 +1835,82 @@ function parseConfers(
 			throw new PolicyError(`${what}.principal ${principal} is a column the layer stamps; it holds the principal the row names`)
 		}
 		const assign = parseAssign(table, policy, expires, what)
+		if (principal === table.createdBy && principalPath !== undefined) {
+			throw new PolicyError(`${what}.principal ${principal} is the createdBy column, which holds a principal; a principal path starts at a foreign key`)
+		}
 		// The layer stamps createdBy with the writer, so every row such a source confers names its writer.
 		if (principal === table.createdBy && assign !== undefined && !assign.self) {
 			throw new PolicyError(
 				`${what}.principal ${principal} is the createdBy column, so every inserted row names its writer: state assign: { self: true }`,
 			)
 		}
-		sources[sources.length] = freeze({ relation, dimension, table: table.name, principal, node, expires, when, assign })
+		sources[sources.length] = freeze({ relation, dimension, table: table.name, principal, principalPath, node, expires, when, assign })
 	}
 	return freeze(sources)
+}
+
+/**
+ * `confers.<relation>.principal`: a column of the source, or `<column>.<principal column>`, one single-column foreign key
+ * of the source into the key of a table P whose column holds the principal. Every column that decides the principal is
+ * one no update writes, on P as on the source, so a row names someone else only as a new row its insert bounds.
+ */
+function parsePrincipal(
+	table: LinkedTable,
+	input: unknown,
+	linked: (name: string) => LinkedTable | undefined,
+	what: string,
+): { readonly column: string; readonly path: PrincipalPath | undefined } {
+	const field = `${what}.principal`
+	if (typeof input !== 'string') {
+		throw new PolicyError(`${field} names ${String(input)}, which is not a column of ${table.name}`)
+	}
+	const segments = splitPath(input)
+	if (segments.length === 1) {
+		if (!inSet(table.columns, input)) {
+			throw new PolicyError(`${field} names ${input}, which is not a column of ${table.name}`)
+		}
+		return { column: input, path: undefined }
+	}
+	if (segments.length !== 2) {
+		throw new PolicyError(`${field} ${input} follows more than one foreign key; a principal path is <column>.<principal column>`)
+	}
+	const column = segments[0] ?? ''
+	const held = segments[1] ?? ''
+	const hop = singleForeignKey(table, column, field)
+	const target = linked(hop.table)
+	if (target === undefined) {
+		throw new PolicyError(`${field}: ${table.name}.${column} references ${hop.table}, which has no policy`)
+	}
+	if (target.view) {
+		throw new PolicyError(`${field}: ${hop.table} is a view, whose rows change with every write to the tables it reads; a table holds the principal`)
+	}
+	if (target.queue !== undefined) {
+		throw new PolicyError(`${field}: ${hop.table} is a queue table, whose rows the layer rewrites on every claim`)
+	}
+	const scope = target.scope
+	if (scope.mode !== 'dimension' && scope.mode !== 'child' && scope.mode !== 'app') {
+		throw new PolicyError(`${field}: ${hop.table} is a ${scope.mode} table; the principal is held by a table whose key ${column} references`)
+	}
+	if (scope.key !== hop.key) {
+		throw new PolicyError(`${field}: ${table.name}.${column} references ${hop.table}.${hop.key}, not its key ${scope.key}`)
+	}
+	if (!inSet(target.columns, held)) {
+		throw new PolicyError(`${field}: ${held} is not a column of ${hop.table}`)
+	}
+	if (held === target.version) {
+		throw new PolicyError(`${field}: ${hop.table}.${held} is the version column, which every update rewrites; it decides nothing a row confers`)
+	}
+	if (inSet(target.update, held) || hasOwn(target.columnWrites, held)) {
+		throw new PolicyError(`${field}: ${hop.table}.${held} decides whom a row names, so no update of ${hop.table} writes it; replace the row instead`)
+	}
+	let placing = held === scope.key || hasOwn(target.files, held) || inSet(target.json, held)
+	for (let index = 0; index < target.chain.length; index++) {
+		if (target.chain[index]?.column === held) placing = true
+	}
+	if (placing) {
+		throw new PolicyError(`${field}: ${hop.table}.${held} is a key, a containment, a file or a JSON column; it holds no principal`)
+	}
+	return { column, path: freeze({ table: hop.table, key: hop.key, column: held }) }
 }
 
 function parseAssign(

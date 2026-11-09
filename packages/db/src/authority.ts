@@ -53,9 +53,21 @@ export function activeRow(source: RelationSource, now: Date): readonly Operation
 	return terms
 }
 
-/** `select S.<node> from S where S.<principal> = $me and <active>`: the nodes a relation holds `principal` at now. */
+/**
+ * A source row naming `principal`: `S.<principal> = $me`, or through its path `S.<column> in (select P.<key> from P where
+ * P.<column> = $me)`. Every check of a source row's principal is built here.
+ */
+export function namesPrincipal(source: RelationSource, principal: string): OperationNode {
+	const path = source.principalPath
+	if (path === undefined) {
+		return equals(source.table, source.principal, principal)
+	}
+	return isIn(source.table, source.principal, subquery(path.table, path.key, equals(path.table, path.column, principal)))
+}
+
+/** `select S.<node> from S where <names principal> and <active>`: the nodes a relation holds `principal` at now. */
 function relationNodes(source: RelationSource, principal: string, now: Date): OperationNode {
-	return subquery(source.table, source.node, allOf([equals(source.table, source.principal, principal), ...activeRow(source, now)]))
+	return subquery(source.table, source.node, allOf([namesPrincipal(source, principal), ...activeRow(source, now)]))
 }
 
 function isIn(table: string, name: string, nodes: OperationNode): OperationNode {

@@ -11,6 +11,8 @@ export interface DB {
 		principal_id: string
 		expires_at: ColumnType<Date | null, Date | string | null, Date | string | null>
 	}
+	people: { id: string; principal_id: string }
+	project_staff: { id: string; project_id: string; person_id: string }
 }
 
 const columns: TypedColumnList<DB> = {
@@ -19,6 +21,11 @@ const columns: TypedColumnList<DB> = {
 		columns: ['id', 'project_id', 'principal_id', 'expires_at'],
 		foreignKeys: [{ columns: ['project_id'], table: 'projects', references: ['id'] }],
 		timestamps: ['expires_at'],
+	},
+	people: { columns: ['id', 'principal_id'], foreignKeys: [] },
+	project_staff: {
+		columns: ['id', 'project_id', 'person_id'],
+		foreignKeys: [{ columns: ['project_id'], table: 'projects', references: ['id'] }, { columns: ['person_id'], table: 'people', references: ['id'] }],
 	},
 }
 
@@ -35,5 +42,12 @@ export const tables = defineTables(vocabulary, columns)({
 		actions: { read: 'projects.read', insert: 'members.assign', delete: 'members.assign' },
 		insert: ['principal_id', 'expires_at'],
 		confers: { member: { principal: 'principal_id', expires: 'expires_at', assign: { maxDays: 30 } } },
+	},
+	people: { scope: { app: 'the directory a staff row names its person from' }, actions: { read: 'projects.read' } },
+	project_staff: {
+		scope: { child: 'projects' },
+		actions: { read: 'projects.read', insert: 'staff.assign' },
+		insert: ['person_id'],
+		confers: { staff: { principal: 'person_id.principal_id', assign: {} } },
 	},
 })

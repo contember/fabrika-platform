@@ -251,6 +251,55 @@ describe('a scope held through relations or narrowed by a condition', () => {
 	})
 })
 
+describe('a relation whose principal is reached through a to-one path', () => {
+	const subqueries = { note_members: ['note_id'], people: ['id'], teams: ['id'], orgs: ['id'], accounts: ['id'] }
+	const scopedBy = (predicate: OperationNode): [SelectQueryNode, GuardContext] => [
+		select({ where: scopedWhere(equals('notes', 'title', 'x'), predicate) }),
+		{ ...selectContext, scope: predicate, subqueries },
+	]
+	const into = (table: string, name: string, target: string, where: OperationNode, selected = 'id') =>
+		BinaryOperationNode.create(column(table, name), OperatorNode.create('in'), subquery(target, selected, where))
+	/** `notes.id in (select note_id from note_members where person_id in (select id from <tables[0]> where …))`, anchored innermost. */
+	const through = (tables: readonly string[], innermost?: OperationNode): OperationNode => {
+		const last = tables[tables.length - 1] ?? ''
+		let where = innermost ?? equals(last, 'principal_id', 'user:alice')
+		for (let index = tables.length - 1; index > 0; index--) {
+			where = into(tables[index - 1] ?? '', 'next_id', tables[index] ?? '', where)
+		}
+		return into('notes', 'id', 'note_members', into('note_members', 'person_id', tables[0] ?? '', where), 'note_id')
+	}
+
+	test("the path's subquery passes as the source's anchor, beside values and after a Ref's chain", () => {
+		const unexpired = BinaryOperationNode.create(column('note_members', 'expires_at'), OperatorNode.create('is'), ValueNode.createImmediate(null))
+		const anchored = into('note_members', 'person_id', 'people', equals('people', 'principal_id', 'user:alice'))
+		const related = into('notes', 'id', 'note_members', allOf([anchored, unexpired]), 'note_id')
+		for (const shape of [related, anyOf([inList('notes', 'workspace_id', ['w1']), related]), allOf([equals('notes', 'id', 'n1'), related])]) {
+			const [node, context] = scopedBy(shape)
+			expect(() => assertAllowedTree(node, context)).not.toThrow()
+		}
+	})
+
+	test('the nesting stops at four subqueries: three tables past the source pass, a fourth is refused', () => {
+		const [deepest, context] = scopedBy(through(['people', 'teams', 'orgs']))
+		expect(() => assertAllowedTree(deepest, context)).not.toThrow()
+		const [deeper, same] = scopedBy(through(['people', 'teams', 'orgs', 'accounts']))
+		refuses(deeper, same, 'the scope predicate must be true')
+	})
+
+	test("a path's subquery not anchored on the principal, selecting another column or reading an unadmitted table is refused", () => {
+		const unanchored = BinaryOperationNode.create(column('people', 'principal_id'), OperatorNode.create('<>'), ValueNode.create('user:alice'))
+		const shapes = [
+			through(['people'], unanchored),
+			into('notes', 'id', 'note_members', into('note_members', 'person_id', 'people', equals('people', 'principal_id', 'x'), 'principal_id'), 'note_id'),
+			through(['secrets']),
+		]
+		for (const shape of shapes) {
+			const [node, context] = scopedBy(shape)
+			refuses(node, context, 'the scope predicate must be true')
+		}
+	})
+})
+
 describe('the scope predicate is the top-level conjunct', () => {
 	test('a statement without a WHERE', () => {
 		refuses(select({ where: undefined }), selectContext, 'scope predicate')

@@ -7,6 +7,7 @@ import {
 	type LayerRelation,
 	type MemberReveals,
 	memberTerms,
+	namesPrincipal,
 	refScope,
 	relationGate,
 	relationSource,
@@ -1370,6 +1371,7 @@ export async function insertRow<O>(
 			await lockDestination(transaction, context, prepared.destination)
 		}
 		if (prepared !== undefined) {
+			await checkPrincipalAssign(transaction, context, prepared.writer, given)
 			await checkRevealAssign(transaction, context, prepared.writer, given)
 		}
 		const [row] = await transaction.run<O>(insertNode(context.model.name, values, answer(context)), guard(context, 'InsertQueryNode', undefined))
@@ -1888,7 +1890,8 @@ function checkInserted(
 		if (assign === undefined) {
 			throw new CapabilityError('undeclared_operation', `${model.name} confers ${source.relation} and states no assign, so no handler inserts a row`)
 		}
-		if (!assign.self && row.get(source.principal) === grant.principal) {
+		// A principal through a path is resolved in the insert's transaction (`checkPrincipalAssign`).
+		if (!assign.self && source.principalPath === undefined && row.get(source.principal) === grant.principal) {
 			throw new ConflictError(`a row of ${model.name} names its writer in ${source.relation}, which assign.self does not allow`)
 		}
 		if (assign.maxDays !== undefined && source.expires !== undefined) {
@@ -1996,6 +1999,7 @@ export function insertPrepared(context: TableContext, run: Runner, prepared: Pre
 		if (prepared.destination !== undefined) {
 			await lockDestination(transaction, context, prepared.destination)
 		}
+		await checkPrincipalAssign(transaction, context, prepared.writer, prepared.row)
 		await checkRevealAssign(transaction, context, prepared.writer, prepared.row)
 		const written = await insertOnConflict(context, run, transaction, prepared.row, conflict)
 		// A conflict writes no new row: `nothing` reads none, and `update` is judged on the stored row.
@@ -2004,6 +2008,42 @@ export function insertPrepared(context: TableContext, run: Runner, prepared: Pre
 		}
 		return written
 	})
+}
+
+/**
+ * A source row whose principal its path's table holds, under `assign.self`: without it, the insert is refused while the
+ * row its column names there names the writer. That row is locked `FOR SHARE` first, so it keeps its principal and
+ * stays until the commit. One lock and one guarded select per such source, in the insert's transaction.
+ */
+async function checkPrincipalAssign(
+	transaction: Session,
+	context: TableContext,
+	writer: string,
+	row: ReadonlyMap<string, Primitive | null>,
+): Promise<void> {
+	const model = context.model
+	for (let index = 0; index < model.confers.length; index++) {
+		const source = model.confers[index]
+		const path = source?.principalPath
+		const value = source === undefined ? undefined : row.get(source.principal)
+		if (source === undefined || path === undefined || source.assign === undefined || source.assign.self || value === undefined || value === null) {
+			continue
+		}
+		const keyed = equals(path.table, path.key, value)
+		await transaction.run(lockNode(path.table, path.key, keyed), { root: 'SelectQueryNode', table: path.table, joins: {}, scope: keyed, lock: 'share' })
+		const named = allOf([keyed, equals(path.table, path.column, writer)])
+		const rows = await transaction.run(locateNode(path.table, [path.key], named), {
+			root: 'SelectQueryNode',
+			table: path.table,
+			joins: {},
+			scope: named,
+		})
+		if (rows.length > 0) {
+			throw new ConflictError(
+				`a row of ${model.name} names its writer in ${source.relation} through ${source.principal}, which assign.self does not allow`,
+			)
+		}
+	}
 }
 
 /**
@@ -2025,7 +2065,7 @@ async function checkRevealAssign(
 		const value = path === undefined ? undefined : row.get(path.column)
 		if (reveal === undefined || path === undefined || reveal.assign === undefined || reveal.assign.self || typeof value !== 'string') continue
 		const source = relationSource(context.relations, reveal.relation)
-		const tests: OperationNode[] = [equals(source.table, source.principal, writer)]
+		const tests: OperationNode[] = []
 		const rest: OperationNode[] = [...activeRow(source, now)]
 		if (source.dimension === path.dimension) {
 			tests[tests.length] = equals(source.table, source.node, value)
@@ -2035,6 +2075,8 @@ async function checkRevealAssign(
 			const above = subquery(path.table, link.column, equals(path.table, path.key, value))
 			rest.unshift(BinaryOperationNode.create(column(source.table, source.node), OperatorNode.create('in'), above))
 		}
+		// The principal test comes last: an equality, or a path's membership after the node's equality.
+		tests[tests.length] = namesPrincipal(source, writer)
 		const address = allOf(tests)
 		const scope = rest.length === 0 ? address : AndNode.create(address, ParensNode.create(allOf(rest)))
 		const rows = await transaction.run(locateNode(source.table, [source.node], scope), {
@@ -2538,7 +2580,7 @@ export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
 			connection.runtime = bound
 			return freeze({
 				locate: async (dimension: string, id: string, using?: Session) => locateObject(models, bound, dimension, id, using),
-				relates: async (relation: string, node: string, principal: string) => relationHolds(relations, bound, relation, node, principal),
+				relates: async (relation: string, node: string, principal: string) => relationHolds(relations, subqueries, bound, relation, node, principal),
 				reveals: async (relation: string, dimension: string, node: string, principal: string) =>
 					revealHolds(relations, subqueries, bound, relation, dimension, node, principal),
 				release() {
@@ -2619,6 +2661,7 @@ function layerReach(
 			if (source === undefined) continue
 			setOwn(relations, source.relation, freeze({ ...source, reveals: freeze(ownEntry(reveals, source.relation) ?? []) }))
 			select(source.table, source.node)
+			if (source.principalPath !== undefined) select(source.principalPath.table, source.principalPath.key)
 			if (source.when !== undefined) addReach(source.when, select)
 		}
 		for (let position = 0; position < model.readThrough.length; position++) {
@@ -2706,6 +2749,7 @@ function locatedOwner(models: TableModels, dimension: unknown): TableModel {
 /** One guarded select of a source row naming `principal` at `node` that confers `relation` now. */
 async function relationHolds(
 	relations: RelationSources,
+	subqueries: Readonly<Record<string, readonly string[]>>,
 	runtime: DataLayerRuntime,
 	relation: string,
 	node: string,
@@ -2715,10 +2759,10 @@ async function relationHolds(
 		throw new QueryRefusedError('row_address', `a ${relation} row is addressed by its node and its principal, non-empty strings`)
 	}
 	const source = relationSource(relations, relation)
-	const address = allOf([equals(source.table, source.principal, principal), equals(source.table, source.node, node)])
+	const address = allOf([equals(source.table, source.node, node), namesPrincipal(source, principal)])
 	const active = activeRow(source, new Date())
 	const scope = active.length === 0 ? address : AndNode.create(address, ParensNode.create(allOf(active)))
-	const context: GuardContext = { root: 'SelectQueryNode', table: source.table, joins: {}, scope }
+	const context: GuardContext = { root: 'SelectQueryNode', table: source.table, joins: {}, scope, subqueries }
 	const rows = await sessionOf(runtime).run<Readonly<Record<string, unknown>>>(locateNode(source.table, [source.node], scope), context)
 	return rows.length > 0
 }
@@ -2735,7 +2779,7 @@ async function lockRelationRow(transaction: Session, context: TableContext, gran
 		const candidates: { table: string; column: string; scope: OperationNode }[] = []
 		const node = nodeOf(source.dimension)
 		if (node !== undefined) {
-			const address = allOf([equals(source.table, source.principal, grant.principal), equals(source.table, source.node, node)])
+			const address = allOf([equals(source.table, source.node, node), namesPrincipal(source, grant.principal)])
 			const active = activeRow(source, now)
 			candidates[candidates.length] = {
 				table: source.table,

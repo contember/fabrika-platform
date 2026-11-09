@@ -920,6 +920,7 @@ export interface RevealsArtifact {
 
 /** A row names `principal` at the node in `node`, until `expires`, while `when` admits it; `assign` bounds its writer. */
 export interface ConfersArtifact {
+	/** The column that holds the principal, or `<column>.<principal column>` through one foreign key of the table. */
 	readonly principal: string
 	readonly node: string
 	readonly expires: string | null

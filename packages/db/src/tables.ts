@@ -228,7 +228,7 @@ function confersArtifact(sources: readonly RelationSource[]): Record<string, Con
 		const source = sources[index]
 		if (source === undefined) continue
 		setOwn(confers, source.relation, {
-			principal: source.principal,
+			principal: source.principalPath === undefined ? source.principal : `${source.principal}.${source.principalPath.column}`,
 			node: source.node,
 			expires: source.expires ?? null,
 			...(source.when === undefined ? {} : { when: conditionArtifact(source.when) }),

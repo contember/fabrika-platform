@@ -172,6 +172,12 @@ export const tables = defineTables(vocabulary, columns)({
     `createdBy`: then every row names its writer (an owner of what they created), so a table with an insert states
     `assign: { self: true }`, and the policy is refused without it;
   - a table that confers without `assign` takes no insert.
+- `principal` may be read through one foreign key, `'<column>.<principal column>'`: `principal: 'person_id.principal_id'`
+  on a staff row that names a person of a directory table, whose own row holds the principal id. `<column>` needs a
+  single-column `REFERENCES <table> (id)` to the key of a dimension, child or application table (no view, no queue
+  table), and no update of that table may write the principal column, so a person row is replaced, never edited:
+  deleting it, or the source row, ends the access at the next request. A row whose person names its writer is a 409
+  without `assign.self`, as above. Index the referenced table on `(principal column, id)` too.
 - A source row never moves, and no update writes its principal, node, expiry or a column its `when` reads. Change an
   assignment by deleting the row and inserting a new one. `ctx.sql` of a writing endpoint never names a source table,
   `unscoped` never writes one, and a queue table confers nothing.

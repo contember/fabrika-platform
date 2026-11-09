@@ -198,11 +198,11 @@ export function dataAccess(parts: DataLayerParts): DataAccess {
 	})
 }
 
-/** The tables whose rows hand access on (`delegates`), lowercased as the tag compares names. */
 /**
- * The tables whose rows hand out access, which no raw statement writes: a relation source or a path reveal, whose
- * writer the layer bounds, and a member-revealing table, whose key the layer generates so no write revives a node a
- * stale grant still names.
+ * The tables whose rows hand out access, which no raw statement writes, lowercased as the tag compares names: a relation
+ * source or a path reveal, whose writer the layer bounds; a member-revealing table, whose key the layer generates so no
+ * write revives a node a stale grant still names; and the table a principal path reads, whose column decides whom a
+ * source row names.
  */
 function accessTables(models: TableModels): readonly string[] {
 	const tables: string[] = []
@@ -211,6 +211,10 @@ function accessTables(models: TableModels): readonly string[] {
 		const model = modelOf(models, names[index] ?? '')
 		if (model !== undefined && delegates(model)) {
 			tables[tables.length] = model.name.toLowerCase()
+		}
+		for (let position = 0; model !== undefined && position < model.confers.length; position++) {
+			const path = model.confers[position]?.principalPath
+			if (path !== undefined) tables[tables.length] = path.table.toLowerCase()
 		}
 	}
 	return tables

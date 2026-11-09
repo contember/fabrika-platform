@@ -32,11 +32,11 @@ function files(options: RelationOptions = {}): Map<string, string> {
 	const schema = (base['src/db/schema.generated.ts'] ?? '')
 		.replace(
 			'export interface DB {\n\taudit: AuditTable',
-			'export interface NoteMembersTable {\n\tid: string\n\tnote_id: string\n\tworkspace_id: string\n\tprincipal_id: string\n\texpires_at: Date | null\n}\n\nexport interface DB {\n\taudit: AuditTable\n\tnote_members: NoteMembersTable',
+			'export interface NoteMembersTable {\n\tid: string\n\tnote_id: string\n\tworkspace_id: string\n\tprincipal_id: string\n\tperson_id: string | null\n\texpires_at: Date | null\n}\n\nexport interface PeopleTable {\n\tid: string\n\tprincipal_id: string\n}\n\nexport interface DB {\n\taudit: AuditTable\n\tnote_members: NoteMembersTable\n\tpeople: PeopleTable',
 		)
 		.replace(
 			"\tnotes: { columns: ['id', 'workspace_id', 'title'], foreignKeys: [] },",
-			"\tnote_members: {\n\t\tcolumns: ['id', 'note_id', 'workspace_id', 'principal_id', 'expires_at'],\n\t\tforeignKeys: [{ columns: ['note_id', 'workspace_id'], table: 'notes', references: ['id', 'workspace_id'] }],\n\t\ttimestamps: ['expires_at'],\n\t},\n\tnotes: { columns: ['id', 'workspace_id', 'title'], foreignKeys: [] },",
+			"\tnote_members: {\n\t\tcolumns: ['id', 'note_id', 'workspace_id', 'principal_id', 'person_id', 'expires_at'],\n\t\tforeignKeys: [{ columns: ['note_id', 'workspace_id'], table: 'notes', references: ['id', 'workspace_id'] }, { columns: ['person_id'], table: 'people', references: ['id'] }],\n\t\ttimestamps: ['expires_at'],\n\t},\n\tnotes: { columns: ['id', 'workspace_id', 'title'], foreignKeys: [] },\n\tpeople: { columns: ['id', 'principal_id'], foreignKeys: [] },",
 		)
 	const tables = (base['src/db/tables.ts'] ?? '').replace(
 		NOTE_TABLE,
@@ -48,7 +48,8 @@ function files(options: RelationOptions = {}): Map<string, string> {
 		actions: { read: 'notes.read', insert: 'notes.share', delete: 'notes.share' },
 		insert: ['principal_id', 'expires_at'],
 		confers: { member: ${options.confers ?? "{ principal: 'principal_id', expires: 'expires_at', assign: { maxDays: 30 } }"} },
-	},`,
+	},
+	people: { scope: { app: 'the directory a member row may name its person from' }, actions: { read: 'notes.read' } },`,
 	)
 	return new Map(Object.entries({ ...base, 'src/vocabulary.ts': vocabulary, 'src/db/schema.generated.ts': schema, 'src/db/tables.ts': tables }))
 }
@@ -71,6 +72,14 @@ describe('the static reader', () => {
 			member: { principal: 'principal_id', node: 'note_id', expires: 'expires_at', assign: { maxDays: 30, self: false } },
 		})
 		expect(contract.tables['notes']?.when).toEqual({ 'notes.write': { title: { notEq: 'locked' } } })
+	})
+
+	test('reads a principal reached through a foreign key as its dotted text', () => {
+		const contract = readContractSource(files({ confers: "{ principal: 'person_id.principal_id', expires: 'expires_at', assign: { maxDays: 30 } }" }))
+		expect(contract.tables['note_members']?.confers?.['member']?.principal).toBe('person_id.principal_id')
+		expect(() => readContractSource(files({ confers: "{ principal: 'person_id.principal_id.id', assign: { maxDays: 30 } }" }))).toThrow(
+			'follows more than one foreign key',
+		)
 	})
 
 	test('refuses a role that would delegate the relation onward', () => {
@@ -103,6 +112,18 @@ describe('relation grants in the approval diff', () => {
 			{ effect: 'widens', line: 'Table `note_members` relation `member` may be delegated by a writer to itself' },
 		]))
 		expect(classifyAccess(longer, before).outcome).toBe('no-widening')
+	})
+
+	test('a principal reached through a foreign key is shown on introduction, and a changed principal widens either way', () => {
+		const direct = snapshot(files())
+		const through = snapshot(files({ confers: "{ principal: 'person_id.principal_id', expires: 'expires_at', assign: { maxDays: 30 } }" }))
+		expect(lines(plain, through)).toContainEqual({
+			effect: 'widens',
+			line: 'Table `note_members` confers relation `member` on `person_id.principal_id` at `note_id`; an insert delegates it for at most 30 days',
+		})
+		expect(classifyAccess(direct, through).outcome).toBe('widening')
+		expect(classifyAccess(through, direct).outcome).toBe('widening')
+		expect(lines(direct, through).some(({ effect, line }) => effect === 'widens' && line.includes('`member` principal'))).toBe(true)
 	})
 
 	test("an action's condition narrows when added and widens when removed or changed", () => {

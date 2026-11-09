@@ -1,5 +1,6 @@
-// Who a relation's source row names: its own principal column, or the table's createdBy, which names the row's writer.
-// Every case runs on SQLite and, with FABRIKA_TEST_POSTGRES_URL, on a real Postgres:
+// Who a relation's source row names: its own principal column, the table's createdBy, which names the row's writer, or
+// the column of the row one foreign key of the source references (`person_id.principal_id`). Every runtime case runs on
+// SQLite and, with FABRIKA_TEST_POSTGRES_URL, on a real Postgres:
 //
 //   docker run --rm -d -p 55433:5432 -e POSTGRES_PASSWORD=postgres postgres:17
 //   FABRIKA_TEST_POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:55433/postgres bun test packages/db
@@ -10,14 +11,24 @@ import type { TypedColumnList } from '@fabrika/db'
 import { openPostgres } from '@fabrika/db/postgres'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
+import { z } from 'zod/v4'
 import type { Database } from '../database'
-import { QueryRefusedError } from '../errors'
-import { bindScopedDatabaseProvisionally, type DataAccess, dataAccessOf, type DataHandles, type DataSite, type RelationCheck } from '../framework'
+import { ConflictError, QueryRefusedError } from '../errors'
+import {
+	bindScopedDatabaseProvisionally,
+	type DataAccess,
+	dataAccessOf,
+	type DataHandles,
+	type DataSite,
+	type RelationCheck,
+	type RevealCheck,
+} from '../framework'
 import type { DataKind } from '../orm-types'
-import { defineTables } from '../policy'
+import { defineTables, readTables } from '../policy'
 import { openSqlite } from '../sqlite'
 import { bunSqliteStorage } from '../sqlite-bun'
 import { scoped } from '../store'
+import { tablePolicies } from '../tables'
 import { TestAuthority } from './fixtures/authority'
 
 const URL_VAR = 'FABRIKA_TEST_POSTGRES_URL'
@@ -35,20 +46,55 @@ create table projects (
 	org_id text not null references orgs (id),
 	name text not null,
 	created_by text not null,
+	version integer not null,
+	unique (id, org_id)
+);
+create table people (
+	id text not null primary key,
+	org_id text not null references orgs (id),
+	principal_id text,
+	created_by text not null,
 	version integer not null
+);
+create table project_staff (
+	id text not null primary key,
+	project_id text not null,
+	org_id text not null,
+	person_id text references people (id) on delete set null,
+	foreign key (project_id, org_id) references projects (id, org_id) on delete cascade
+);
+create table tickets (
+	id text not null primary key,
+	org_id text not null references orgs (id),
+	project_id text,
+	title text not null,
+	version integer not null,
+	foreign key (project_id, org_id) references projects (id, org_id)
 );
 `
 
 const seed = `
+delete from tickets;
+delete from project_staff;
+delete from people;
 delete from projects;
 delete from orgs;
 insert into orgs (id, version) values ('o1', 1);
-insert into projects (id, org_id, name, created_by, version) values ('p-bob', 'o1', 'bob''s', 'user:bob', 1);
+insert into projects (id, org_id, name, created_by, version) values
+	('p-bob', 'o1', 'bob''s', 'user:bob', 1), ('p1', 'o1', 'one', 'user:carol', 1), ('p2', 'o1', 'two', 'user:carol', 1);
+insert into people (id, org_id, principal_id, created_by, version) values
+	('pe-alice', 'o1', 'user:alice', 'user:carol', 1),
+	('pe-alice-2', 'o1', 'user:alice', 'user:carol', 1),
+	('pe-bob', 'o1', 'user:bob', 'user:carol', 1),
+	('pe-carol', 'o1', 'user:carol', 'user:carol', 1);
 `
 
 interface DB {
 	orgs: { id: string; version: number }
 	projects: { id: string; org_id: string; name: string; created_by: string; version: number }
+	people: { id: string; org_id: string; principal_id: string | null; created_by: string; version: number }
+	project_staff: { id: string; project_id: string; org_id: string; person_id: string | null }
+	tickets: { id: string; org_id: string; project_id: string | null; title: string; version: number }
 }
 
 const columns: TypedColumnList<DB> = {
@@ -58,27 +104,84 @@ const columns: TypedColumnList<DB> = {
 		foreignKeys: [{ columns: ['org_id'], table: 'orgs', references: ['id'] }],
 		notNull: ['id', 'org_id', 'name', 'created_by', 'version'],
 	},
+	people: {
+		columns: ['id', 'org_id', 'principal_id', 'created_by', 'version'],
+		foreignKeys: [{ columns: ['org_id'], table: 'orgs', references: ['id'] }],
+		notNull: ['id', 'org_id', 'created_by', 'version'],
+	},
+	project_staff: {
+		columns: ['id', 'project_id', 'org_id', 'person_id'],
+		foreignKeys: [
+			{ columns: ['project_id', 'org_id'], table: 'projects', references: ['id', 'org_id'] },
+			{ columns: ['person_id'], table: 'people', references: ['id'] },
+		],
+		notNull: ['id', 'project_id', 'org_id'],
+	},
+	tickets: {
+		columns: ['id', 'org_id', 'project_id', 'title', 'version'],
+		foreignKeys: [
+			{ columns: ['org_id'], table: 'orgs', references: ['id'] },
+			{ columns: ['project_id', 'org_id'], table: 'projects', references: ['id', 'org_id'] },
+		],
+		notNull: ['id', 'org_id', 'title', 'version'],
+	},
 }
 
 const vocabulary = {
 	app: 'principals',
 	dimensions: { org: {}, project: { in: 'org' } },
-	actions: { 'projects.read': 'Read projects', 'projects.create': 'Create projects' },
-	relations: { owner: { dimension: 'project' } },
+	actions: {
+		'projects.read': 'Read projects',
+		'projects.create': 'Create projects',
+		'people.add': 'Add people',
+		'staff.assign': 'Staff a project',
+		'tickets.write': 'File tickets',
+	},
+	relations: { owner: { dimension: 'project' }, staff: { dimension: 'project' } },
 	roles: {},
 } as const
 
-const tables = defineTables(vocabulary, columns)({
-	orgs: { scope: { dimension: 'org' }, actions: { read: 'projects.read' }, version: 'version' },
-	projects: {
-		scope: { dimension: 'project' },
-		actions: { read: 'projects.read', insert: 'projects.create' },
-		insert: ['name'],
-		version: 'version',
-		createdBy: 'created_by',
-		confers: { owner: { principal: 'created_by', assign: { self: true } } },
-	},
-})
+/**
+ * The layer's tables; `self` lets a writer staff itself, `reveal` makes a staffed project reveal its org. A ticket lies in
+ * an org and names a project it is read through, where staff see it and its org's other tickets.
+ */
+function tablesWith(options: { readonly self?: true; readonly reveal?: true } = {}) {
+	return defineTables(vocabulary, columns)({
+		orgs: { scope: { dimension: 'org' }, actions: { read: 'projects.read' }, version: 'version' },
+		projects: {
+			scope: { dimension: 'project' },
+			actions: { read: 'projects.read', insert: 'projects.create' },
+			insert: ['name'],
+			version: 'version',
+			createdBy: 'created_by',
+			confers: { owner: { principal: 'created_by', assign: { self: true } } },
+			...(options.reveal === true ? { reveals: { staff: { to: 'org', actions: ['projects.read'] } } } : {}),
+		},
+		people: {
+			scope: { child: 'orgs' },
+			actions: { read: 'projects.read', insert: 'people.add' },
+			insert: ['principal_id'],
+			version: 'version',
+			createdBy: 'created_by',
+		},
+		project_staff: {
+			scope: { child: 'projects' },
+			actions: { read: 'projects.read', insert: 'staff.assign', delete: 'staff.assign' },
+			insert: ['person_id'],
+			confers: { staff: { principal: 'person_id.principal_id', assign: options.self === true ? { self: true } : {} } },
+		},
+		tickets: {
+			scope: { child: 'orgs' },
+			actions: { read: 'projects.read', insert: 'tickets.write' },
+			insert: ['project_id', 'title'],
+			version: 'version',
+			readThrough: { project: 'project_id' },
+			reveals: { staff: { to: 'org', actions: ['projects.read'], assign: {} } },
+		},
+	})
+}
+
+const tables = tablesWith()
 
 const alice = new TestAuthority('user:alice')
 
@@ -111,18 +214,32 @@ function suite(dialect: 'sqlite' | 'postgres', open: () => Promise<Backend>, clo
 		let backend: Backend
 		let data: DataAccess
 		let relates: RelationCheck
+		let reveals: RevealCheck
+		let release: () => void = () => {}
 
 		beforeAll(async () => {
 			backend = await open()
 		})
 
-		afterAll(close)
+		afterAll(async () => {
+			release()
+			await close()
+		})
+
+		/** Binds a fresh layer of the given tables, releasing the one bound before. */
+		function use(layerTables: typeof tables): void {
+			release()
+			const layer = scoped(layerTables)
+			const binding = bindScopedDatabaseProvisionally(layer, { database: backend.database, capabilities: alice })
+			relates = binding.relates
+			reveals = binding.reveals
+			release = () => binding.release()
+			data = dataAccessOf(layer)
+		}
 
 		beforeEach(async () => {
 			await backend.exec(seed)
-			const layer = scoped(tables)
-			relates = bindScopedDatabaseProvisionally(layer, { database: backend.database, capabilities: alice }).relates
-			data = dataAccessOf(layer)
+			use(tables)
 		})
 
 		async function invoke<T>(kind: DataKind, work: (handles: DataHandles) => Promise<T>): Promise<T> {
@@ -146,28 +263,163 @@ function suite(dialect: 'sqlite' | 'postgres', open: () => Promise<Backend>, clo
 			}
 		}
 
-		const owned = () =>
-			invoke('query', async (db) => {
-				const page = await call(db.within(alice.within('org', 'projects.read', [], [], [], ['owner'])), 'projects.list')
-				const items: unknown = typeof page === 'object' && page !== null ? Reflect.get(page, 'items') : undefined
-				return Array.isArray(items) ? items.map((row: unknown) => String(typeof row === 'object' && row !== null ? Reflect.get(row, 'id') : '')) : []
+		const ids = (page: unknown): string[] => {
+			const items: unknown = typeof page === 'object' && page !== null ? Reflect.get(page, 'items') : undefined
+			const listed = Array.isArray(items)
+				? items.map((row: unknown) => String(typeof row === 'object' && row !== null ? Reflect.get(row, 'id') : ''))
+				: []
+			return listed.sort()
+		}
+		const listed = (table: string, relation: string) =>
+			invoke('query', async (db) => ids(await call(db.within(alice.within('org', 'projects.read', [], [], [], [relation])), `${table}.list`)))
+		const readThrough = (relation: string, id: string) =>
+			invoke('query', (db) => call(db.target(alice.ref('project', 'projects.read', id, { org: 'o1' }, [relation]), 'on'), 'get'))
+		const staff = (rows: readonly (readonly [id: string, project: string, person: string])[]) =>
+			backend.exec(
+				`insert into project_staff (id, project_id, org_id, person_id) values ${
+					rows.map(([id, project, person]) => `('${id}', '${project}', 'o1', '${person}')`).join(', ')
+				}`,
+			)
+		const assign = (person: string) =>
+			invoke(
+				'mutation',
+				(db) => call(db.target(alice.ref('project', 'staff.assign', 'p1', { org: 'o1' }), 'on'), 'project_staff.insert', { person_id: person }),
+			)
+		const staffCount = async (): Promise<number> => {
+			const rows = await invoke('query', async (db) => {
+				const page = await call(db.within(alice.within('org', 'projects.read', ['o1'])), 'project_staff.list')
+				return ids(page)
 			})
+			return rows.length
+		}
 
 		test('a createdBy owner relation reaches the row its writer created, and nothing another principal created', async () => {
-			expect(await owned()).toEqual([])
+			expect(await listed('projects', 'owner')).toEqual([])
 			const created = await invoke(
 				'mutation',
 				(db) => call(db.target(alice.ref('org', 'projects.create', 'o1'), 'on'), 'projects.insert', { name: 'mine' }),
 			)
 			const id = String(typeof created === 'object' && created !== null ? Reflect.get(created, 'id') : '')
-			expect(await owned()).toEqual([id])
+			expect(await listed('projects', 'owner')).toEqual([id])
 			expect(await relates('owner', id, 'user:alice')).toBe(true)
 			expect(await relates('owner', 'p-bob', 'user:alice')).toBe(false)
-			const read = () => invoke('query', (db) => call(db.target(alice.ref('project', 'projects.read', id, { org: 'o1' }, ['owner']), 'on'), 'get'))
-			expect(await read()).toMatchObject({ id, name: 'mine', created_by: 'user:alice' })
+			expect(await readThrough('owner', id)).toMatchObject({ id, name: 'mine', created_by: 'user:alice' })
 			await backend.exec(`delete from projects where id = '${id}'`)
-			expect(await owned()).toEqual([])
-			await expect(read()).rejects.toThrow('not found')
+			expect(await listed('projects', 'owner')).toEqual([])
+			await expect(readThrough('owner', id)).rejects.toThrow('not found')
+		})
+
+		test('a relation reaches the node of a source row whose referenced row names the caller', async () => {
+			await staff([['s1', 'p1', 'pe-alice'], ['s2', 'p2', 'pe-alice-2'], ['s3', 'p-bob', 'pe-bob']])
+			expect(await listed('projects', 'staff')).toEqual(['p1', 'p2'])
+			expect(await relates('staff', 'p1', 'user:alice')).toBe(true)
+			expect(await relates('staff', 'p-bob', 'user:alice')).toBe(false)
+			expect(await relates('staff', 'p-bob', 'user:bob')).toBe(true)
+			expect(await readThrough('staff', 'p1')).toMatchObject({ id: 'p1', name: 'one' })
+			await expect(readThrough('staff', 'p-bob')).rejects.toThrow('not found')
+		})
+
+		test('deleting the source row, or the row its principal is read from, ends access at the next statement', async () => {
+			await staff([['s1', 'p1', 'pe-alice'], ['s2', 'p2', 'pe-alice-2']])
+			expect(await readThrough('staff', 'p1')).toMatchObject({ id: 'p1' })
+			await backend.exec(`delete from project_staff where id = 's1'`)
+			expect(await listed('projects', 'staff')).toEqual(['p2'])
+			await expect(readThrough('staff', 'p1')).rejects.toThrow('not found')
+			await backend.exec(`delete from people where id = 'pe-alice-2'`)
+			expect(await listed('projects', 'staff')).toEqual([])
+			expect(await relates('staff', 'p2', 'user:alice')).toBe(false)
+			await expect(readThrough('staff', 'p2')).rejects.toThrow('not found')
+			expect(await staffCount()).toBe(1)
+		})
+
+		test('the principal is read at every statement, so a changed person row moves the access with it', async () => {
+			await staff([['s1', 'p1', 'pe-bob']])
+			expect(await listed('projects', 'staff')).toEqual([])
+			await backend.exec(`update people set principal_id = 'user:alice' where id = 'pe-bob'`)
+			expect(await listed('projects', 'staff')).toEqual(['p1'])
+		})
+
+		test('assign.self refuses a row whose referenced row names the writer, and writes nothing', async () => {
+			await expect(assign('pe-alice')).rejects.toThrow(ConflictError)
+			await expect(assign('pe-alice')).rejects.toThrow('names its writer in staff through person_id, which assign.self does not allow')
+			expect(await staffCount()).toBe(0)
+			await assign('pe-bob')
+			expect(await staffCount()).toBe(1)
+			expect(await relates('staff', 'p1', 'user:bob')).toBe(true)
+			expect(await relates('staff', 'p1', 'user:alice')).toBe(false)
+		})
+
+		test('with assign.self a writer names itself through the path', async () => {
+			use(tablesWith({ self: true }))
+			await assign('pe-alice')
+			expect(await relates('staff', 'p1', 'user:alice')).toBe(true)
+		})
+
+		test('a reveal nested on a path relation follows the path', async () => {
+			use(tablesWith({ reveal: true }))
+			expect(await listed('orgs', 'staff')).toEqual([])
+			await staff([['s1', 'p1', 'pe-alice']])
+			expect(await listed('orgs', 'staff')).toEqual(['o1'])
+			expect(await reveals('staff', 'org', 'o1', 'user:alice')).toBe(true)
+			expect(await reveals('staff', 'org', 'o1', 'user:bob')).toBe(false)
+			await backend.exec(`delete from people where id = 'pe-alice'`)
+			expect(await listed('orgs', 'staff')).toEqual([])
+			expect(await reveals('staff', 'org', 'o1', 'user:alice')).toBe(false)
+		})
+
+		test('a reveal matched through readThrough follows the path, and its assign refuses a node where the writer holds the relation', async () => {
+			const file = (id: string, project: string | null) =>
+				invoke('mutation', (db) => call(db.target(alice.ref('org', 'tickets.write', 'o1'), 'on'), 'tickets.insert', { project_id: project, title: id }))
+			await staff([['s1', 'p1', 'pe-alice'], ['s3', 'p2', 'pe-bob']])
+			await expect(file('one', 'p1')).rejects.toThrow(
+				"names in project_id a node where its writer holds staff, which the reveal's assign.self does not allow",
+			)
+			await file('two', 'p2')
+			await file('loose', null)
+			expect(await listed('tickets', 'staff')).toEqual([])
+			await backend.exec(`insert into tickets (id, org_id, project_id, title, version) values ('t1', 'o1', 'p1', 'one', 1)`)
+			expect(await listed('tickets', 'staff')).toHaveLength(3)
+			await backend.exec(`delete from people where id = 'pe-alice'`)
+			expect(await listed('tickets', 'staff')).toEqual([])
+		})
+
+		test('a writing ctx.sql statement never names the table a principal path reads', async () => {
+			const transaction = data.invocation(false)
+			const sql = data.sql({ mode: 'write', check() {}, session: () => transaction.session(), fail: () => transaction.fail() })
+			const rename = () => sql(z.strictObject({}))`update people set principal_id = ${'user:alice'} where id = ${'pe-bob'}`
+			try {
+				await expect(rename()).rejects.toThrow("'people' at line 1 hands out access")
+			} finally {
+				await transaction.rollback()
+			}
+			await staff([['s1', 'p1', 'pe-bob']])
+			expect(await listed('projects', 'staff')).toEqual([])
+		})
+
+		test.skipIf(dialect !== 'postgres')('assign.self locks the referenced row until the insert commits', async () => {
+			let resume: () => void = () => {}
+			const held = new Promise<void>((resolve) => {
+				resume = resolve
+			})
+			let inserted: () => void = () => {}
+			const written = new Promise<void>((resolve) => {
+				inserted = resolve
+			})
+			const insert = invoke('mutation', async (db) => {
+				await call(db.target(alice.ref('project', 'staff.assign', 'p1', { org: 'o1' }), 'on'), 'project_staff.insert', { person_id: 'pe-bob' })
+				inserted()
+				await held
+			})
+			await written
+			const rename = (id: string) => backend.exec(`set lock_timeout = '300ms'; update people set principal_id = 'user:alice' where id = '${id}'`)
+			try {
+				await expect(rename('pe-bob')).rejects.toThrow()
+				await rename('pe-carol')
+			} finally {
+				resume()
+			}
+			await insert
+			expect(await relates('staff', 'p1', 'user:bob')).toBe(true)
 		})
 	})
 }
@@ -202,16 +454,132 @@ suite('postgres', async () => {
 	await postgresAdmin((sql) => sql.unsafe(`drop schema if exists ${schema} cascade`))
 })
 
+/** The tables a principal path could start at, beside the fixture's: a view, a queue table, a reference table. */
+const pathColumns = {
+	orgs: columns.orgs,
+	projects: columns.projects,
+	people: {
+		columns: ['id', 'org_id', 'principal_id', 'alias', 'profile', 'created_by', 'version'],
+		foreignKeys: [{ columns: ['org_id'], table: 'orgs', references: ['id'] }],
+		notNull: ['id', 'org_id', 'created_by', 'version'],
+		json: ['profile'],
+	},
+	crews: { columns: ['id', 'org_id', 'principal_id'], foreignKeys: [], view: true },
+	jobs: { columns: ['id', 'principal_id', 'attempts', 'due_at', 'version'], foreignKeys: [], timestamps: ['due_at'] },
+	countries: { columns: ['code', 'principal_id'], foreignKeys: [] },
+	project_staff: {
+		columns: ['id', 'project_id', 'org_id', 'person_id', 'alias_id', 'crew_id', 'job_id', 'country_code', 'added_by'],
+		foreignKeys: [
+			{ columns: ['project_id', 'org_id'], table: 'projects', references: ['id', 'org_id'] },
+			{ columns: ['person_id'], table: 'people', references: ['id'] },
+			{ columns: ['alias_id'], table: 'people', references: ['alias'] },
+			{ columns: ['crew_id'], table: 'crews', references: ['id'] },
+			{ columns: ['job_id'], table: 'jobs', references: ['id'] },
+			{ columns: ['country_code'], table: 'countries', references: ['code'] },
+			{ columns: ['added_by'], table: 'people', references: ['id'] },
+		],
+		notNull: ['id', 'project_id', 'org_id'],
+	},
+}
+
+const pathPolicies = {
+	orgs: { scope: { dimension: 'org' }, actions: { read: 'projects.read' }, version: 'version' },
+	projects: {
+		scope: { dimension: 'project' },
+		actions: { read: 'projects.read' },
+		version: 'version',
+		createdBy: 'created_by',
+		confers: { owner: { principal: 'created_by' } },
+	},
+	people: {
+		scope: { child: 'orgs' },
+		actions: { read: 'projects.read', insert: 'people.add' },
+		insert: ['principal_id', 'alias'],
+		version: 'version',
+		createdBy: 'created_by',
+	},
+	crews: { scope: { child: 'orgs' }, actions: { read: 'projects.read' } },
+	jobs: {
+		scope: { app: 'work goes out through one job' },
+		actions: { read: 'projects.read', insert: 'people.add', update: 'people.add' },
+		insert: ['principal_id', 'due_at'],
+		queue: { attempts: 'attempts', due: 'due_at' },
+		version: 'version',
+	},
+	countries: { scope: { reference: 'lookup data' }, actions: { read: 'projects.read' } },
+	project_staff: {
+		scope: { child: 'projects' },
+		actions: { read: 'projects.read', insert: 'staff.assign', delete: 'staff.assign' },
+		insert: ['person_id'],
+		confers: { staff: { principal: 'person_id.principal_id', assign: {} } },
+	},
+}
+
+/** The policies with `staff` conferring through `principal`, and any table's fields replaced. */
+function readPath(principal: string, changes: Readonly<Record<string, Readonly<Record<string, unknown>>>> = {}): ReturnType<typeof readTables> {
+	const policies: Record<string, Record<string, unknown>> = {}
+	for (const [name, policy] of Object.entries(pathPolicies)) {
+		policies[name] = { ...policy, ...changes[name] }
+	}
+	policies['project_staff'] = { ...policies['project_staff'], confers: { staff: { principal, assign: {} } } }
+	return readTables(pathColumns, policies, vocabulary)
+}
+
+describe('the policy of a principal reached through a to-one path', () => {
+	test('names a single-column foreign key to the key of a table, and a column of that table', () => {
+		expect(() => readPath('person_id.principal_id')).not.toThrow()
+		expect(() => readPath('person_id.created_by')).not.toThrow()
+	})
+
+	test('follows exactly one foreign key', () => {
+		expect(() => readPath('person_id.principal_id.id')).toThrow('follows more than one foreign key')
+		expect(() => readPath('nobody.principal_id')).toThrow()
+		expect(() => readPath('project_id.created_by')).toThrow()
+		expect(() => readPath('alias_id.principal_id')).toThrow('references people.alias, not its key id')
+		expect(() => readPath('person_id.nothing')).toThrow('nothing is not a column of people')
+	})
+
+	test('refuses a view, a queue table and a reference table as the table the principal is read from', () => {
+		expect(() => readPath('crew_id.principal_id')).toThrow('crews is a view')
+		expect(() => readPath('job_id.principal_id')).toThrow('jobs is a queue table')
+		expect(() => readPath('country_code.principal_id')).toThrow('countries is a reference table')
+	})
+
+	test('refuses a column of that table that an update writes, or that holds no principal', () => {
+		const updating = { actions: { read: 'projects.read', insert: 'people.add', update: 'people.add' } }
+		expect(() => readPath('person_id.principal_id', { people: { ...updating, update: ['principal_id'] } })).toThrow(
+			'people.principal_id decides whom a row names, so no update of people writes it; replace the row instead',
+		)
+		expect(() => readPath('person_id.principal_id', { people: { ...updating, columns: { principal_id: { write: 'staff.assign' } } } })).toThrow(
+			'no update of people writes it',
+		)
+		expect(() => readPath('person_id.version')).toThrow('people.version is the version column')
+		expect(() => readPath('person_id.id')).toThrow('it holds no principal')
+		expect(() => readPath('person_id.org_id')).toThrow('it holds no principal')
+		expect(() => readPath('person_id.profile')).toThrow('it holds no principal')
+	})
+
+	test('no update of the source writes the column the path starts at', () => {
+		const updating = { actions: { read: 'projects.read', insert: 'staff.assign', update: 'staff.assign' }, update: ['person_id'] }
+		expect(() => readPath('person_id.principal_id', { project_staff: updating })).toThrow(
+			'person_id decides what a row confers, so no update writes it',
+		)
+	})
+
+	test('the artifact keeps the principal as its dotted text', () => {
+		const staff = { principal: 'person_id.principal_id', node: 'project_id', expires: null, assign: { maxDays: null, self: false } }
+		expect(tablePolicies(tables)['project_staff']?.confers).toEqual({ staff })
+		expect(tablePolicies(readPath('person_id.principal_id'))['project_staff']?.confers).toEqual({ staff })
+	})
+})
+
 describe('the policy of a createdBy principal', () => {
-	const policy = (projects: Record<string, unknown>) => () =>
-		defineTables(vocabulary, columns)({
-			orgs: { scope: { dimension: 'org' }, actions: { read: 'projects.read' }, version: 'version' },
-			projects: { scope: { dimension: 'project' }, actions: { read: 'projects.read' }, version: 'version', createdBy: 'created_by', ...projects },
-		})
+	const readOwner = (projects: Readonly<Record<string, unknown>>) => () =>
+		readTables(pathColumns, { ...pathPolicies, projects: { ...pathPolicies.projects, ...projects } }, vocabulary)
 
 	test('is accepted on a table without an insert, and with assign.self on one with an insert', () => {
-		expect(policy({ confers: { owner: { principal: 'created_by' } } })).not.toThrow()
-		expect(policy({
+		expect(readOwner({ confers: { owner: { principal: 'created_by' } } })).not.toThrow()
+		expect(readOwner({
 			actions: { read: 'projects.read', insert: 'projects.create' },
 			confers: { owner: { principal: 'created_by', assign: { self: true } } },
 		})).not.toThrow()
@@ -219,23 +587,29 @@ describe('the policy of a createdBy principal', () => {
 
 	test('every inserted row names its writer, so an insert without assign.self is refused at parse', () => {
 		const refused = 'is the createdBy column, so every inserted row names its writer: state assign: { self: true }'
-		expect(policy({ actions: { read: 'projects.read', insert: 'projects.create' }, confers: { owner: { principal: 'created_by', assign: {} } } }))
+		expect(readOwner({ actions: { read: 'projects.read', insert: 'projects.create' }, confers: { owner: { principal: 'created_by', assign: {} } } }))
 			.toThrow(refused)
-		expect(policy({ actions: { read: 'projects.read', insert: 'projects.create' }, confers: { owner: { principal: 'created_by' } } })).toThrow(
+		expect(readOwner({ actions: { read: 'projects.read', insert: 'projects.create' }, confers: { owner: { principal: 'created_by' } } })).toThrow(
 			'state assign',
 		)
 	})
 
 	test('no update writes the createdBy column, so an owner is changed only by a new row', () => {
-		expect(policy({
+		expect(readOwner({
 			actions: { read: 'projects.read', update: 'projects.create' },
 			update: ['created_by'],
 			confers: { owner: { principal: 'created_by' } },
 		})).toThrow('stamped by the layer')
-		expect(policy({
+		expect(readOwner({
 			actions: { read: 'projects.read', update: 'projects.create' },
 			columns: { created_by: { write: 'projects.create' } },
 			confers: { owner: { principal: 'created_by' } },
 		})).toThrow()
+	})
+
+	test('a principal path does not start at the createdBy column', () => {
+		expect(() => readPath('added_by.principal_id', { project_staff: { createdBy: 'added_by' } })).toThrow(
+			'added_by is the createdBy column, which holds a principal; a principal path starts at a foreign key',
+		)
 	})
 })

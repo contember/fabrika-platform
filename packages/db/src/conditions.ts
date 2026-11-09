@@ -266,7 +266,7 @@ function parseSome(
 	return freeze({ kind: 'some', negated: kind === 'none', key: found.key, table: name, column: found.column, term })
 }
 
-function splitPath(path: string): readonly string[] {
+export function splitPath(path: string): readonly string[] {
 	const segments: string[] = []
 	let start = 0
 	for (let index = 0; index <= path.length; index++) {
@@ -278,7 +278,7 @@ function splitPath(path: string): readonly string[] {
 	return segments
 }
 
-function singleForeignKey(table: ConditionTable, name: string, what: string): ConditionHop {
+export function singleForeignKey(table: ConditionTable, name: string, what: string): ConditionHop {
 	if (!inSet(table.columns, name)) {
 		throw new PolicyError(`${what}: ${name} is not a column of ${table.name}`)
 	}

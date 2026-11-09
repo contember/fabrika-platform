@@ -553,11 +553,23 @@ through a relation (`~rel`, `@fabrika/auth-core`). `authority.ts` builds every p
   `when`**: an uncorrelated `T.node in (select S.node from S where S.principal = $me …)`, ORed into a `Within`'s values
   and carried by a `Ref` minted through it. Nothing caches it, so a deleted source row stops access at the next
   statement. A source's `when` reads the source row only, never its `version`; a queue table confers nothing.
+- **A principal may be read through one foreign key** (`principal: '<column>.<principal column>'`, `parsePrincipal`):
+  `<column>` is a single-column foreign key to the key of a dimension, child or application table P (no view, no queue
+  table), and every principal comparison is `namesPrincipal` (`authority.ts`), `S.<column> in (select P.<key> from P
+  where P.<column> = $me)`: the relation term, its reveals, `relates` and the relation row lookups. `S.<column>` is
+  fixed like the principal; `P.<column>` is in no update list and no column write action, and is not P's version, key,
+  chain, file or JSON column, so P's rows change it only by delete and insert. `ctx.sql` of a writing site never
+  names P (`accessTables`). A deleted P or source row stops access at the next statement. The guard admits P by its
+  key only and nests scope subqueries at most `MAX_SCOPE_NESTING` (4) deep: a reveal matched through a secondary path
+  above the relation's dimension reads the reveal's row, the path's table, the source and P. The artifact keeps the
+  dotted text as `principal`, so an artifact without one keeps its digest.
 - **Writing a source row is delegation, bounded instead of held** (the named exception to S8). Its node is stamped
   from the writer's `Ref`; `assign.maxDays` caps the expiry and refuses an open-ended one; a row naming its writer needs
   `assign.self` (a `ConflictError`, 409, as is a row outside the bound); a table that confers without `assign` has no
   insert. A principal in the table's `createdBy` names the writer in every row, so an insertable such source states
-  `assign: { self: true }` or the parse refuses it. No update writes the principal, the node, the expiry or a column the source's `when` reads, and a source row
+  `assign: { self: true }` or the parse refuses it, and a principal path does not start at it. Through a path, the
+  self check reads P's row in the insert's transaction, locked `FOR SHARE` first (the foreign key's own `FOR KEY SHARE`
+  lets an update of P's other columns through), so P's principal cannot change before the insert commits. No update writes the principal, the node, the expiry or a column the source's `when` reads, and a source row
   never moves. `ctx.sql` of a writing site never names a source table, and `unscoped` never writes one.
 - **A table's `when` only narrows.** It is ANDed onto every grant of its action, global, IAM-scoped and relation
   alike, including an application table's key paths and an upsert's conflict row (judged on the stored row). A
