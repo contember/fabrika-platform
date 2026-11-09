@@ -1,12 +1,13 @@
 // What a capability admits of a table's rows beyond its containment: the relations it is held through and the
 // condition its action holds a row under. Every predicate a capability scopes is built through `refScope`,
-// `withinBranch` or `conditioned`, so neither is left out of a statement by a builder that forgot it.
+// `viewScope` or `conditioned`, so neither is left out of a statement by a builder that forgot it.
 
 import { AndNode, BinaryOperationNode, type OperationNode, OperatorNode, ParensNode, ValueNode } from 'kysely'
 import { ownEntry } from './builtins'
 import type { RefGrant, WithinGrant } from './capability'
 import { conditionNode, subquery } from './condition-nodes'
 import { CapabilityError } from './errors'
+import type { ViewParentLink } from './guard'
 import { linksPredicate, linkValues } from './links'
 import { allOf, anyOf, column, equals, valueList } from './nodes'
 import {
@@ -202,6 +203,23 @@ export function refScope(
 	const chain = row === undefined ? linked : allOf([row, linked])
 	const gate = relationGate(relations, model, grant, now)
 	return conditioned(model, grant.action, gate === undefined ? chain : allOf([chain, gate]), now)
+}
+
+/**
+ * The rows of a child view whose parent row `reached` admits: `V.<column> in (select P.<key> from P where <reached>)`,
+ * after `row` when it addresses one row, then the view's own condition of `action`. No column of the view places a row:
+ * its containment rests on the parent's foreign keys (ADR-0072).
+ */
+export function viewScope(
+	model: TableModel,
+	parent: ViewParentLink,
+	action: string,
+	reached: OperationNode,
+	now: Date,
+	row?: OperationNode,
+): OperationNode {
+	const member = isIn(model.name, parent.column, subquery(parent.table, parent.key, reached))
+	return conditioned(model, action, row === undefined ? member : allOf([row, member]), now)
 }
 
 /** The relation rows a Ref held through relations needs at `model`, or `undefined` for a Ref an IAM grant holds. */

@@ -1,6 +1,6 @@
 // A view read as a read-only table (ADR-0072), on SQLite over bun:sqlite and on Postgres: a Ref of its parent reads
-// its rows, a Within lists them, a column's own read action hides a column, a reference view lists for every site, and
-// every write is refused before a statement. The Postgres half skips cleanly when FABRIKA_TEST_POSTGRES_URL is unset:
+// its rows, a Within lists them, both through the parent row its parent column names, a column's own read action hides
+// a column, a reference view lists for every site, and every write is refused before a statement. The Postgres half skips cleanly when FABRIKA_TEST_POSTGRES_URL is unset:
 //
 //   docker run --rm -d -p 55433:5432 -e POSTGRES_PASSWORD=postgres postgres:17
 //   FABRIKA_TEST_POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:55433/postgres bun test packages/db
@@ -50,6 +50,10 @@ async function call(handle: unknown, path: string, ...args: unknown[]): Promise<
 function itemsOf(page: unknown): unknown[] {
 	const items: unknown = typeof page === 'object' && page !== null ? Reflect.get(page, 'items') : undefined
 	return Array.isArray(items) ? items : []
+}
+
+function idsOf(page: unknown): string[] {
+	return itemsOf(page).map((row) => String(typeof row === 'object' && row !== null ? Reflect.get(row, 'id') : '')).sort()
 }
 
 const project = (action: string, id: string, org: string) => alice.ref('project', action, id, { organization: org })
@@ -115,6 +119,53 @@ function viewCases(open: () => Database): void {
 		])
 	})
 
+	test('a view that carries no chain column reads under a Ref and a Within of every dimension its parent lies in', async () => {
+		const own = project('projects.read', 'p1', 'o1')
+		expect(idsOf(await invoke('query', (db) => call(db.target(own, 'on'), 'event_titles.list')))).toEqual(['e1', 'e2'])
+		expect(await invoke('query', (db) => call(db.target(own, 'on'), 'event_titles.get', 'e1'))).toEqual({
+			id: 'e1',
+			project_id: 'p1',
+			note: 'own note',
+		})
+		await expect(invoke('query', (db) => call(db.target(own, 'on'), 'event_titles.get', 'e3'))).rejects.toThrow('not found')
+		const organization = alice.within('organization', 'projects.read', ['o1'])
+		expect(idsOf(await invoke('query', (db) => call(db.within(organization), 'event_titles.list')))).toEqual(['e1', 'e2'])
+		expect(await invoke('query', (db) => call(db.within(organization), 'event_titles.count'))).toBe(2)
+		const projects = alice.within('project', 'projects.read', ['p2'])
+		expect(idsOf(await invoke('query', (db) => call(db.within(projects), 'event_titles.list')))).toEqual(['e3'])
+		const contained = alice.within('project', 'projects.read', [], [{ dimension: 'organization', values: ['o1'] }])
+		expect(idsOf(await invoke('query', (db) => call(db.within(contained), 'event_titles.list')))).toEqual(['e1', 'e2'])
+		const everywhere = alice.within('organization', 'projects.read', 'all')
+		expect(idsOf(await invoke('query', (db) => call(db.within(everywhere), 'event_titles.list')))).toEqual(['e1', 'e2', 'e3'])
+		expect(idsOf(await invoke('query', (db) => call(db.within(alice.within('organization', 'projects.read', [])), 'event_titles.list')))).toEqual([])
+	})
+
+	test("a row lies where its parent row lies, whatever the view's own organization column says", async () => {
+		// stray_events names o1 for every event; e3's parent p2 lies in o2.
+		const organization = (id: string) => alice.within('organization', 'projects.read', [id])
+		expect(idsOf(await invoke('query', (db) => call(db.within(organization('o1')), 'stray_events.list')))).toEqual(['e1', 'e2'])
+		expect(idsOf(await invoke('query', (db) => call(db.within(organization('o2')), 'stray_events.list')))).toEqual(['e3'])
+		const forged = project('projects.read', 'p2', 'o1')
+		expect(idsOf(await invoke('query', (db) => call(db.target(forged, 'on'), 'stray_events.list')))).toEqual([])
+		await expect(invoke('query', (db) => call(db.target(forged, 'on'), 'stray_events.get', 'e3'))).rejects.toThrow('not found')
+		const own = project('projects.read', 'p2', 'o2')
+		expect(idsOf(await invoke('query', (db) => call(db.target(own, 'on'), 'stray_events.list')))).toEqual(['e3'])
+	})
+
+	test('ctx.sql.scope renders no read of a child view, which only its parent row places', async () => {
+		const own = project('projects.read', 'p1', 'o1')
+		const transaction = data.invocation(true)
+		try {
+			const sql = data.sql({ mode: 'read', check() {}, session: () => transaction.session(), fail: () => transaction.fail() })
+			expect(() => sql.scope(own, 'event_titles')).toThrow('ctx.sql.scope cannot render the read of the view event_titles through its parent')
+			expect(() => sql.scope(alice.within('organization', 'projects.read', ['o1']), 'event_notes')).toThrow(
+				'ctx.sql.scope cannot render the read of the view event_notes through its parent',
+			)
+		} finally {
+			await transaction.rollback()
+		}
+	})
+
 	test("a column with its own read action is read only by that action's Ref", async () => {
 		const reader = project('notes.read', 'p1', 'o1')
 		const row = await invoke('query', (db) => call(db.target(reader, 'on'), 'event_notes.get', 'e1'))
@@ -128,11 +179,13 @@ function viewCases(open: () => Database): void {
 		expect(names).toEqual([{ id: 'o1', name: 'One' }, { id: 'o2', name: 'Two' }])
 		expect(Object.keys(tablePolicies(viewTables)).sort()).toEqual([
 			'event_notes',
+			'event_titles',
 			'events',
 			'organization_names',
 			'organizations',
 			'project_summaries',
 			'projects',
+			'stray_events',
 		])
 		await expect(invoke('query', (db) => call(db.unscoped, 'project_names.list'), { project_names: 'read' })).rejects.toThrow(
 			'unscoped declares project_names, which is not a table of src/db/tables.ts',
@@ -178,7 +231,7 @@ describe('a view on SQLite', () => {
 		const { source, leftOut } = await generateSqliteSchema([{ bundle: 'app', migrations: [{ name: '20261104000000_views.sql', sql: viewMigration }] }])
 		expect(leftOut).toEqual([])
 		expect(source).toContain(
-			"export type Views =\n\t| 'event_notes'\n\t| 'organization_names'\n\t| 'project_names'\n\t| 'project_summaries'\n\nexport const columns: TypedColumnList<DB, Views> = {",
+			"export type Views =\n\t| 'event_notes'\n\t| 'event_titles'\n\t| 'organization_names'\n\t| 'project_names'\n\t| 'project_summaries'\n\t| 'stray_events'\n\nexport const columns: TypedColumnList<DB, Views> = {",
 		)
 		const directory = await mkdtemp(join(tmpdir(), 'view-layer-'))
 		try {

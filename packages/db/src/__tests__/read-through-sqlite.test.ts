@@ -1,6 +1,6 @@
 // A secondary read path on SQLite: a table that names a node of a dimension outside its chain through a foreign key
-// is read by a Within of that dimension, by its containers and by a relation at it, and every write still follows
-// the table's containment only.
+// is read by a Within of that dimension, by its containers and by a relation at it, and so is a view of such a table,
+// through its parent row. Every write still follows the table's containment only.
 
 import type { TypedColumnList } from '@fabrika/db'
 import { beforeEach, describe, expect, test } from 'bun:test'
@@ -53,6 +53,14 @@ create table tasks (
 	foreign key (project_id, org_id) references projects (id, org_id),
 	foreign key (team_id, org_id) references teams (id, org_id)
 );
+create table boards (
+	id text not null primary key,
+	org_id text not null references orgs (id),
+	team_id text not null,
+	name text not null,
+	foreign key (team_id, org_id) references teams (id, org_id)
+);
+create view board_names as select b.id as board_id, b.name from boards b;
 `
 
 interface DB {
@@ -63,6 +71,8 @@ interface DB {
 	teams: { id: string; squad_id: string; org_id: string; name: string }
 	team_members: { id: string; team_id: string; squad_id: string; org_id: string; principal_id: string }
 	tasks: { id: string; project_id: string; org_id: string; team_id: string | null; title: string; version: number }
+	boards: { id: string; org_id: string; team_id: string; name: string }
+	board_names: { board_id: string | null; name: string | null }
 }
 
 const teamKey = { columns: ['team_id', 'org_id'], table: 'teams', references: ['id', 'org_id'] } as const
@@ -72,7 +82,7 @@ type TaskColumn = keyof DB['tasks'] & string
 function columnsWith(
 	taskKeys: TypedColumnList<DB>['tasks']['foreignKeys'],
 	taskNotNull: readonly TaskColumn[] = ['id', 'project_id', 'org_id', 'title', 'version'],
-): TypedColumnList<DB> {
+): TypedColumnList<DB, 'board_names'> {
 	return {
 		orgs: { columns: ['id', 'name'], foreignKeys: [], notNull: ['id', 'name'] },
 		projects: {
@@ -101,6 +111,12 @@ function columnsWith(
 			notNull: ['id', 'team_id', 'squad_id', 'org_id', 'principal_id'],
 		},
 		tasks: { columns: ['id', 'project_id', 'org_id', 'team_id', 'title', 'version'], foreignKeys: taskKeys, notNull: taskNotNull },
+		boards: {
+			columns: ['id', 'org_id', 'team_id', 'name'],
+			foreignKeys: [{ columns: ['org_id'], table: 'orgs', references: ['id'] }, teamKey],
+			notNull: ['id', 'org_id', 'team_id', 'name'],
+		},
+		board_names: { columns: ['board_id', 'name'], foreignKeys: [], view: true },
 	}
 }
 
@@ -108,7 +124,7 @@ const columns = columnsWith([{ columns: ['project_id', 'org_id'], table: 'projec
 
 const vocabulary = {
 	app: 'read-through',
-	dimensions: { org: {}, project: { in: 'org' }, squad: { in: 'org' }, team: { in: 'squad' }, guild: { in: 'org' } },
+	dimensions: { org: {}, project: { in: 'org' }, squad: { in: 'org' }, team: { in: 'squad' }, guild: { in: 'org' }, board: { in: 'org' } },
 	actions: {
 		'orgs.read': 'Read organizations',
 		'projects.read': 'Read projects',
@@ -140,6 +156,8 @@ const others = {
 	squad_leads: { scope: { child: 'squads' }, actions: { read: 'teams.read' }, confers: { lead: { principal: 'principal_id' } } },
 	teams: { scope: { dimension: 'team' }, actions: { read: 'teams.read' } },
 	team_members: { scope: { child: 'teams' }, actions: { read: 'teams.read' }, confers: { member: { principal: 'principal_id' } } },
+	boards: { scope: { dimension: 'board' }, actions: { read: 'tasks.read' }, readThrough: { team: 'team_id' } },
+	board_names: { scope: { child: 'boards', key: 'board_id' }, actions: { read: 'tasks.read' } },
 } as const
 
 const tables = defineTables(vocabulary, columns)({ ...others, tasks: taskPolicy })
@@ -163,6 +181,7 @@ beforeEach(() => {
 			('k3', 'p3', 'o2', 'tm3', 'three', 1),
 			('k4', 'p2', 'o1', null, 'four', 1),
 			('k5', 'p1', 'o1', null, 'five', 1);
+		insert into boards (id, org_id, team_id, name) values ('b1', 'o1', 'tm1', 'one'), ('b2', 'o1', 'tm2', 'two');
 	`)
 	const layer = scoped(tables)
 	reveals = bindScopedDatabaseProvisionally(layer, { database: openSqlite(storage), capabilities: alice }).reveals
@@ -217,9 +236,9 @@ async function call(handle: unknown, path: string, ...args: unknown[]): Promise<
 	return Reflect.apply(method, target, args)
 }
 
-function ids(page: unknown): string[] {
+function ids(page: unknown, key = 'id'): string[] {
 	const items: unknown = typeof page === 'object' && page !== null ? Reflect.get(page, 'items') : undefined
-	return Array.isArray(items) ? items.map((row: unknown) => String(typeof row === 'object' && row !== null ? Reflect.get(row, 'id') : '')).sort() : []
+	return Array.isArray(items) ? items.map((row: unknown) => String(typeof row === 'object' && row !== null ? Reflect.get(row, key) : '')).sort() : []
 }
 
 const listed = (within: unknown, table: string) => invoke('query', (db) => call(db.within(within), `${table}.list`)).then(ids)
@@ -250,6 +269,14 @@ describe('a Within of a dimension a table reads through', () => {
 		lead('l2', 's2', 'user:alice')
 		lead('l3', 's3', 'user:bob')
 		expect(await listed(alice.within('team', 'tasks.read', [], [], [], ['lead']), 'tasks')).toEqual(['k2'])
+	})
+
+	test('lists the rows of a view whose parent row it reads through, by values and by a relation', async () => {
+		const boards = (within: unknown) => invoke('query', (db) => call(db.within(within), 'board_names.list')).then((page) => ids(page, 'board_id'))
+		expect(await boards(alice.within('team', 'tasks.read', ['tm2']))).toEqual(['b2'])
+		expect(await boards(alice.within('squad', 'tasks.read', ['s1']))).toEqual(['b1'])
+		join('m1', 'tm1', 'user:alice')
+		expect(await boards(alice.within('team', 'tasks.read', [], [], [], ['member']))).toEqual(['b1'])
 	})
 
 	test('reaches no table that neither lies in the dimension nor reads through it', async () => {
@@ -320,7 +347,7 @@ describe('the artifact', () => {
 })
 
 describe('the policy bounds a read path', () => {
-	const policy = (tasks: Record<string, unknown>, taskColumns: TypedColumnList<DB> = columns) => () =>
+	const policy = (tasks: Record<string, unknown>, taskColumns: TypedColumnList<DB, 'board_names'> = columns) => () =>
 		defineTables(vocabulary, taskColumns)({ ...others, tasks: { ...taskPolicy, ...tasks } })
 
 	test('a dimension of the chain, outside the vocabulary or owned by no table is refused', () => {

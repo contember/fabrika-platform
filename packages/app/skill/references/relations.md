@@ -233,6 +233,8 @@ one is refused and names the column: add a migration that sets it `NOT NULL`, th
 - `memberReveals: { <own dimension>: { to, actions, when? } }`: a grant at the row's own node holds `actions` at its
   ancestor in `to` too, for an `over` list's reads. Such a row is never written unscoped or by `ctx.sql`, and never
   moves.
+- A view under a parent takes none of them: it is read through its parent row, so a relation, a reveal, a member
+  reveal or a secondary path that reaches the parent reaches the view's rows of that parent.
 
 ## The endpoints
 

@@ -300,6 +300,62 @@ describe('a relation whose principal is reached through a to-one path', () => {
 	})
 })
 
+describe("a child view's rows read through its parent row", () => {
+	const through = { column: 'workspace_id', table: 'workspaces', key: 'id' }
+	const subqueries = { workspace_members: ['workspace_id'] }
+	const scopedBy = (predicate: OperationNode): [SelectQueryNode, GuardContext] => [
+		select({ where: scopedWhere(equals('notes', 'title', 'x'), predicate) }),
+		{ ...selectContext, scope: predicate, subqueries, through },
+	]
+	const parentRows = (where: OperationNode, table = 'workspaces', selected = 'id', viewColumn = 'workspace_id') =>
+		BinaryOperationNode.create(column('notes', viewColumn), OperatorNode.create('in'), subquery(table, selected, where))
+	const ref = allOf([equals('workspaces', 'id', 'w1'), equals('workspaces', 'organization_id', 'o1')])
+	const related = BinaryOperationNode.create(
+		column('workspaces', 'id'),
+		OperatorNode.create('in'),
+		subquery('workspace_members', 'workspace_id', equals('workspace_members', 'principal_id', 'user:alice')),
+	)
+	const open = BinaryOperationNode.create(column('notes', 'word_count'), OperatorNode.create('<'), ValueNode.create(100))
+
+	test("the parent's Ref, Within or relation reach passes, after the key's equality and before the view's condition", () => {
+		const shapes = [
+			parentRows(ref),
+			parentRows(inList('workspaces', 'organization_id', ['o1'])),
+			parentRows(anyOf([inList('workspaces', 'organization_id', ['o1']), related])),
+			parentRows(allOf([ref, related])),
+			allOf([equals('notes', 'id', 'n1'), parentRows(ref)]),
+			AndNode.create(parentRows(ref), ParensNode.create(open)),
+		]
+		for (const shape of shapes) {
+			const [node, context] = scopedBy(shape)
+			expect(() => assertAllowedTree(node, context)).not.toThrow()
+		}
+		expect(compiler.compileQuery(scopedBy(parentRows(ref))[0], { queryId: 'q' }).sql).toContain(
+			'and "notes"."workspace_id" in (select "workspaces"."id" from "workspaces" where "workspaces"."id" = $2 and "workspaces"."organization_id" = $3)',
+		)
+	})
+
+	test("nothing wider: no parent but the view's, no other column, no reach the parent's statement would not pass, and never nested", () => {
+		const shapes = [
+			parentRows(everything()),
+			parentRows(open),
+			parentRows(ref, 'secrets'),
+			parentRows(ref, 'workspaces', 'organization_id'),
+			parentRows(ref, 'workspaces', 'id', 'id'),
+			parentRows(parentRows(ref)),
+			anyOf([parentRows(ref), inList('notes', 'workspace_id', ['w1'])]),
+			allOf([parentRows(ref), equals('notes', 'id', 'n1')]),
+			AndNode.create(ParensNode.create(open), parentRows(ref)),
+		]
+		for (const shape of shapes) {
+			const [node, context] = scopedBy(shape)
+			refuses(node, context, 'the scope predicate must be true')
+		}
+		const [node, context] = scopedBy(parentRows(ref))
+		refuses(node, { ...context, through: undefined }, 'the scope predicate must be true')
+	})
+})
+
 describe('the scope predicate is the top-level conjunct', () => {
 	test('a statement without a WHERE', () => {
 		refuses(select({ where: undefined }), selectContext, 'scope predicate')

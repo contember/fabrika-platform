@@ -230,8 +230,12 @@ pass a recording one); `Database.fromEngine` takes another engine (`openSqlite`)
   column left out whole, the entry marked `view: true`, and the names
   exported as `Views` (one per line, so the module stays dprint-stable) for `TypedColumnList<DB, Views>`. A view may
   have no policy (`parseTables` skips it; a table still needs one). With one it takes a child scope or `reference`,
-  `actions.read`, `appRead`, `appCount` and column read actions only, needs no foreign key for its containment columns
-  (its SQL is the witness the approver reviews), and may share its key with its parent column. Every write is refused
+  `actions.read`, `appRead`, `appCount` and column read actions only, needs its parent column and no foreign key, and
+  may share its key with its parent column. Its chain is the parent link alone; `inherit` defaults to the parent's chain
+  columns it carries, which only a join from the parent compares. Every capability reads a child view through its
+  parent row (`TableContext.through`, `viewScope`): `V.<column> in (select P.<key> from P where <P's predicate>)`, P's
+  predicate built over P's context without P's `when`, so a column the view's SQL fills never places a row; the guard
+  admits that subquery only with `GuardContext.through`, and `ctx.sql.scope` refuses a `Ref` or `Within` of one. Every write is refused
   three times: the types (`Unavailable` handles, `ReadOnlyUnscoped`), the handle (`unscopedRows`), and the store's
   guard for any non-select root (`read_only`). The test kits never seed one.
 - **The generated column list carries the row types.** `TypedColumnList<DB>` brands `ColumnList<DB>` with a type-only
@@ -351,8 +355,9 @@ pass a recording one); `Database.fromEngine` takes another engine (`openSqlite`)
   WHERE, by identity.** The caller's conditions sit in a `ParensNode` on the left. The guard checks this
   shape (`checkRoot`); without the parenthesis, `true or 1=1` followed by the scope would match every
   row. An insert carries no WHERE and gets its scope columns stamped from the capability instead.
-- **A handle's `Within` lists every table whose containment chain holds its dimension** (`reachColumn`,
-  `reachPredicate`), and a top-level table its own: tasks under a `Within` of `org` through their stamped `org_id`.
+- **A handle's `Within` lists every table whose containment chain holds its dimension** (`reachedBy`,
+  `reachPredicate`), and a top-level table its own: tasks under a `Within` of `org` through their stamped `org_id`. A
+  child view is listed wherever its parent is reached, its parent's own dimension included.
   The predicate, the keyset page, the projection and the hidden columns are the nearest container's. The stores'
   `select`/`aggregate` keep the nearest container only. `DbIndex<DB, P, V>` takes the vocabulary, so its types follow
   the chain past a dimension no table owns, as the parse does.
@@ -361,7 +366,8 @@ pass a recording one); `Database.fromEngine` takes another engine (`openSqlite`)
   the statement judges each row by the chain it carries now; a scope moved out of a container is out. A container
   must be a chain link above the Within's own dimension in that table, or the operation is refused. The guard
   admits a scope predicate only as `true`, an AND tree of `column = $n`, a single membership, or a parenthesized
-  OR tree of memberships, over the statement's table.
+  OR tree of memberships, over the statement's table; on a child view's statement also its parent subquery over a
+  predicate the guard would admit on the parent (never `true`), alone or after an AND tree of `column = $n`.
 - **A Within carries at most `MAX_WITHIN_VALUES` (1000) scope values, its own, its containers' and its contained grants' together.** Each
   is one bound parameter of every statement it scopes (Postgres binds at most 65535); the framework refuses to
   mint a larger one and the layer refuses to use one.
@@ -569,7 +575,8 @@ through a relation (`~rel`, `@fabrika/auth-core`). `authority.ts` builds every p
   writer may name a P row of another tenant, which gives no more than naming that principal directly would. A deleted P
   or source row stops access at the next statement. The guard admits P by its
   key only and nests scope subqueries at most `MAX_SCOPE_NESTING` (4) deep: a reveal matched through a secondary path
-  above the relation's dimension reads the reveal's row, the path's table, the source and P. The artifact keeps the
+  above the relation's dimension reads the reveal's row, the path's table, the source and P. A child view's parent
+  subquery counts apart, once above them, so a view's scope nests at most five deep. The artifact keeps the
   dotted text as `principal`, so an artifact without one keeps its digest.
 - **Writing a source row is delegation, bounded instead of held** (the named exception to S8). Its node is stamped
   from the writer's `Ref`; `assign.maxDays` caps the expiry and refuses an open-ended one; a row naming its writer needs

@@ -72,7 +72,7 @@ import {
 	prepareApplicationInsert,
 	prepareChildInsert,
 	prepareDimensionInsert,
-	reachColumn,
+	reachedBy,
 	reachPredicate,
 	readValues,
 	removeRow,
@@ -81,7 +81,6 @@ import {
 	runtimeOf,
 	scopedApplicationRead,
 	scopeTerms,
-	secondaryPathsOf,
 	selectOne,
 	selfLinks,
 	type TableContext,
@@ -483,10 +482,9 @@ function withinTables(parts: DataLayerParts, site: DataSite, run: Runner, capabi
 	for (let index = 0; index < tables.length; index++) {
 		const model = modelOf(parts.models, tables[index] ?? '')
 		const listable = model?.scope.mode === 'dimension' || model?.scope.mode === 'child'
-		const reached = model !== undefined && (reachColumn(model, grant.dimension) !== undefined || secondaryPathsOf(model, grant.dimension).length > 0)
-		if (model !== undefined && listable && reached) {
-			const context = parts.contextOf(model.name)
-			setOwn(handle, model.name, listedRows(parts, context, site, run, capability, () => reachPredicate(context, capability)))
+		const context = model !== undefined && listable ? parts.contextOf(model.name) : undefined
+		if (context !== undefined && reachedBy(context, grant.dimension)) {
+			setOwn(handle, context.model.name, listedRows(parts, context, site, run, capability, () => reachPredicate(context, capability)))
 		}
 	}
 	return freeze(handle)
@@ -1345,6 +1343,7 @@ async function listRows(
 		joins: {},
 		scope,
 		subqueries: context.subqueries,
+		through: context.through,
 	})
 	const page = answerRows(dialect, table, rowColumnsOf(context.model), rows.slice(0, limit))
 	const last = page[page.length - 1]
@@ -1375,6 +1374,7 @@ async function countRows(
 		joins: {},
 		scope,
 		subqueries: context.subqueries,
+		through: context.through,
 	})
 	const count = row === undefined ? '0' : row['count']
 	return typeof count === 'string' || typeof count === 'number' ? Number(count) : 0

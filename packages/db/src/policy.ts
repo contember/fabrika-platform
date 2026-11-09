@@ -2065,6 +2065,20 @@ function resolveChain(
 	for (let index = 0; index < parentChain.length; index++) {
 		expected[index] = parentChain[index]?.column ?? ''
 	}
+	const dimension = parent.scope.dimension
+	const link = { dimension, column: scope.column ?? parentColumn(table, `${dimension}_id`, scope.parent) }
+	// A view has no foreign key: its rows are read through the parent row its parent column names (ADR-0072).
+	if (table.view) {
+		const inherit = scope.inherit ?? freeze(carried(table, expected))
+		for (let index = 0; index < inherit.length; index++) {
+			if (!includes(expected, inherit[index])) {
+				throw new PolicyError(
+					`${table.name}: inherits ${inherit[index]}, which is not a containment column of ${scope.parent} (${expected.join(', ') || 'none'})`,
+				)
+			}
+		}
+		return { scope: freeze({ mode: 'child', parent: scope.parent, key: scope.key, column: link.column, inherit }), chain: freeze([link]) }
+	}
 	const inherit = scope.inherit ?? freeze(expected)
 	const inherited = nameSet(inherit)
 	let matches = inherit.length === expected.length && namesOf(inherited).length === expected.length
@@ -2078,17 +2092,22 @@ function resolveChain(
 			}), so a composite foreign key keeps it in scope`,
 		)
 	}
-	const dimension = parent.scope.dimension
-	const link = { dimension, column: scope.column ?? parentColumn(table, `${dimension}_id`, scope.parent) }
-	// A view has no foreign key: its SQL alone states its containment, and the approver reviews it (ADR-0072).
-	if (!table.view) {
-		requireReference(table, link, parent, (column) => `scope.column: '${column}'`)
-		requireCoveringKey(table, link, parent, parentChain)
-	}
+	requireReference(table, link, parent, (column) => `scope.column: '${column}'`)
+	requireCoveringKey(table, link, parent, parentChain)
 	return {
 		scope: freeze({ mode: 'child', parent: scope.parent, key: scope.key, column: link.column, inherit }),
 		chain: prepend(link, parentChain),
 	}
+}
+
+/** The columns of `names` that `table` has: the parent's containment columns a view carries, which a join of it compares. */
+function carried(table: ParsedTable, names: readonly string[]): readonly string[] {
+	const found: string[] = []
+	for (let index = 0; index < names.length; index++) {
+		const name = names[index] ?? ''
+		if (inSet(table.columns, name)) found[found.length] = name
+	}
+	return found
 }
 
 /** Whether a foreign key of `table` takes `column` to `key` of `target`, alone or as part of a composite key. */

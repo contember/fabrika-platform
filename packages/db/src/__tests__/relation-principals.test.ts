@@ -86,6 +86,8 @@ create table cards (
 	version integer not null,
 	foreign key (board_id, org_id) references boards (id, org_id)
 );
+create view org_cards as select o.id, o.id as org_id, cast(count(c.id) as integer) as cards from orgs o left join cards c on c.org_id = o.id group by o.id;
+create view project_titles as select p.id as project_id, p.name from projects p;
 `
 
 const seed = `
@@ -114,9 +116,11 @@ interface DB {
 	tickets: { id: string; org_id: string; project_id: string | null; title: string; version: number }
 	boards: { id: string; project_id: string; org_id: string; version: number }
 	cards: { id: string; org_id: string; board_id: string | null; version: number }
+	org_cards: { id: string | null; org_id: string | null; cards: number | null }
+	project_titles: { project_id: string | null; name: string | null }
 }
 
-const columns: TypedColumnList<DB> = {
+const columns: TypedColumnList<DB, 'org_cards' | 'project_titles'> = {
 	orgs: { columns: ['id', 'version'], foreignKeys: [], notNull: ['id', 'version'] },
 	projects: {
 		columns: ['id', 'org_id', 'name', 'created_by', 'version'],
@@ -157,6 +161,8 @@ const columns: TypedColumnList<DB> = {
 		],
 		notNull: ['id', 'org_id', 'version'],
 	},
+	org_cards: { columns: ['id', 'org_id', 'cards'], foreignKeys: [], view: true },
+	project_titles: { columns: ['project_id', 'name'], foreignKeys: [], view: true },
 }
 
 const vocabulary = {
@@ -176,7 +182,8 @@ const vocabulary = {
 /**
  * The layer's tables; `self` lets a writer staff itself, `reveal` makes a staffed project reveal its org. A ticket lies in
  * an org and names a project it is read through, where staff see it and its org's other tickets. A card names a board of
- * a project, so its reveal reads the card, the board, the staff row and the person: the deepest scope the layer builds.
+ * a project, so its reveal reads the card, the board, the staff row and the person: the deepest scope the layer builds,
+ * one deeper under a view of the org, which reads its rows through the org row.
  */
 function tablesWith(options: { readonly self?: true; readonly reveal?: true } = {}) {
 	return defineTables(vocabulary, columns)({
@@ -219,6 +226,8 @@ function tablesWith(options: { readonly self?: true; readonly reveal?: true } = 
 			readThrough: { board: 'board_id' },
 			reveals: { staff: { to: 'org', actions: ['projects.read'] } },
 		},
+		org_cards: { scope: { child: 'orgs' }, actions: { read: 'projects.read' } },
+		project_titles: { scope: { child: 'projects', key: 'project_id' }, actions: { read: 'projects.read' } },
 	})
 }
 
@@ -424,7 +433,7 @@ function suite(dialect: 'sqlite' | 'postgres', open: () => Promise<Backend>, clo
 			expect(await listed('tickets', 'staff')).toEqual([])
 		})
 
-		test("a reveal matched through a path below the relation's dimension nests four deep, and follows the principal path", async () => {
+		test("a reveal matched through a path below the relation's dimension nests four deep, five under a view, and follows the principal path", async () => {
 			await staff([['s1', 'p1', 'pe-alice']])
 			await backend.exec(`
 				insert into boards (id, project_id, org_id, version) values ('b1', 'p1', 'o1', 1), ('b2', 'p2', 'o1', 1);
@@ -432,12 +441,26 @@ function suite(dialect: 'sqlite' | 'postgres', open: () => Promise<Backend>, clo
 			`)
 			expect(await listed('orgs', 'staff')).toEqual([])
 			expect(await listed('cards', 'staff')).toEqual([])
+			expect(await listed('org_cards', 'staff')).toEqual([])
 			await backend.exec(`insert into cards (id, org_id, board_id, version) values ('c1', 'o1', 'b1', 1)`)
 			expect(await listed('orgs', 'staff')).toEqual(['o1'])
 			expect(await listed('cards', 'staff')).toEqual(['c1', 'c2', 'c3'])
+			expect(await listed('org_cards', 'staff')).toEqual(['o1'])
 			await backend.exec(`delete from people where id = 'pe-alice'`)
 			expect(await listed('orgs', 'staff')).toEqual([])
 			expect(await listed('cards', 'staff')).toEqual([])
+			expect(await listed('org_cards', 'staff')).toEqual([])
+		})
+
+		test('a Ref held through a relation reads a view of its parent only where the relation reaches the parent row', async () => {
+			await staff([['s1', 'p1', 'pe-alice']])
+			const title = (project: string) =>
+				invoke(
+					'query',
+					(db) => call(db.target(alice.ref('project', 'projects.read', project, { org: 'o1' }, ['staff']), 'on'), 'project_titles.get', project),
+				)
+			expect(await title('p1')).toEqual({ project_id: 'p1', name: 'one' })
+			await expect(title('p2')).rejects.toThrow('not found')
 		})
 
 		test('a writing ctx.sql statement never names the table a principal path reads', async () => {
