@@ -100,14 +100,19 @@ diff.
 A table's `when: { <action>: <condition> }` is ANDed onto every grant of that action: global, IAM-scoped and relation
 alike. A condition is structured data, never SQL: `eq`, `notEq`, `in`, `notIn`, `isNull`, `lt`, `lte`, `gt`, `gte`
 over a column, with `allOf`, `anyOf` and `not`, `{ some: { <table>: … } }` and `none` over the rows whose foreign key
-names the row, and `{ now: true }` as the statement clock. A condition's path follows at most three foreign keys, a
-`some` counted as one. A hop's subquery reads its target unscoped, so a hop follows only a row's own container or parent
-column, a foreign key that also holds every ancestor the two tables share and references the target's key, or a key
-into a reference table; a `some` follows such a key backwards. A child view's parent column is such a hop, though no
-foreign key declares it ([ADR-0072](0072-a-view-is-a-read-only-table.md)). An insert's condition is judged on the inserted row; one with
-a path, on the written row in the insert's transaction, every row on its paths locked `FOR SHARE` first, and a refusal
-fails the transaction. It takes no `some`. An upsert's conflict
-update is judged on the stored row. A relation source's condition reads the source row only.
+names the row, and `{ now: true }` as the statement clock. A path may end in `some` or `none`
+(`{ '<fk column>': { some: … } }`): the rows naming the row the path reaches. A foreign key that is null reaches no row,
+so neither form holds there. A `some` nests in a `some`, and a `some` through a link table is a `some` of the link
+rows followed by a path from them. A condition's path follows at most three foreign keys, the path before a `some`,
+the `some` and every hop inside it counted together. A hop's subquery reads its target unscoped, so a hop follows only
+a row's own container or parent column, a foreign key that also holds every ancestor the two tables share and
+references the target's key, or a key into a reference table; a `some` follows such a key backwards. Each form is the
+one subquery shape `T.<column> in (select X.<column> from X where …)`, so the guard admits it by its table and column,
+nested at most four deep under a reveal. A child view's parent column is such a hop, though no foreign key declares it
+([ADR-0072](0072-a-view-is-a-read-only-table.md)). An insert's condition is judged on the inserted row; one with a path,
+on the written row in the insert's transaction, every row on its paths locked `FOR SHARE` first, and a refusal fails
+the transaction. It takes no `some`. An upsert's conflict update is judged on the stored row. A relation source's
+condition reads the source row only.
 
 Widening is a separate mechanism (`admits`, a step of the [coverage roadmap](../ideas/acl-coverage-roadmap.md)), and
 it is not part of `when`.

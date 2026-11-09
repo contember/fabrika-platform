@@ -3,7 +3,7 @@
 // captured built-ins only, as in the policy parse. No Kysely runtime: `@fabrika/db/tables` reads the parse in a
 // browser; `condition-nodes.ts` builds the predicate.
 
-import type { ColumnTestArtifact, ConditionArtifact } from '@fabrika/auth-core'
+import type { ColumnTestArtifact, ConditionArtifact, RowsTestArtifact } from '@fabrika/auth-core'
 import { freeze, hasOwn, inSet, isArray, type NameSet, ownEntry, ownKeys, parseList, plainRecord } from './builtins'
 import type { Primitive } from './description'
 import { PolicyError } from './errors'
@@ -29,10 +29,16 @@ export interface ColumnTest {
 	readonly gte?: ConditionLiteral | NowOperand
 }
 
+/** `{ some: { table: … } }` or `{ none: { table: … } }` at the end of a path: over the rows naming the row it reaches. */
+export type RowsTest =
+	| { readonly some: { readonly [table: string]: ConditionPolicy } }
+	| { readonly none: { readonly [table: string]: ConditionPolicy } }
+
 /**
  * A condition as a policy writes it: `{ column: test, … }` (all of them), `{ 'fk_column.column': test }` along a
  * foreign key, `{ anyOf: […] }`, `{ allOf: […] }`, `{ not: … }`, or `{ some: { table: … } }` and `{ none: { table: … } }`
- * over the rows of `table` whose foreign key names the row.
+ * over the rows of `table` whose foreign key names the row; `{ 'fk_column': { some: { table: … } } }` over the rows
+ * naming the row a path reaches.
  */
 export type ConditionPolicy<Col extends string = string> =
 	| { readonly anyOf: readonly ConditionPolicy<Col>[] }
@@ -40,7 +46,7 @@ export type ConditionPolicy<Col extends string = string> =
 	| { readonly not: ConditionPolicy<Col> }
 	| { readonly some: { readonly [table: string]: ConditionPolicy } }
 	| { readonly none: { readonly [table: string]: ConditionPolicy } }
-	| { readonly [C in Col | `${Col}.${string}`]?: ColumnTest }
+	| { readonly [C in Col | `${Col}.${string}`]?: ColumnTest | RowsTest }
 
 export type ConditionOperator = 'eq' | 'notEq' | 'in' | 'notIn' | 'isNull' | 'lt' | 'lte' | 'gt' | 'gte'
 
@@ -56,8 +62,12 @@ export type ConditionModel =
 	| { readonly kind: 'any'; readonly terms: readonly ConditionModel[] }
 	| { readonly kind: 'not'; readonly term: ConditionModel }
 	| {
-		/** `key in (select table.column from table where <term>)`, or its negation for `none`. */
+		/**
+		 * `key in (select table.column from table where <term>)`, or its negation for `none`, over the row `hops` reach
+		 * from the condition's own row (none: the row itself).
+		 */
 		readonly kind: 'some'
+		readonly hops: readonly ConditionHop[]
 		readonly negated: boolean
 		readonly key: string
 		readonly table: string
@@ -108,6 +118,8 @@ export function parseCondition(
 	return parseNode(input, table, tables, what, hops, 0, 0)
 }
 
+const HOP_LIMIT = `a path follows at most ${MAX_CONDITION_HOPS} foreign keys, a some or none counted as one`
+
 /** `level` counts the `some` and `none` subqueries around the node: each takes one of a path's foreign keys. */
 function parseNode(
 	input: unknown,
@@ -138,7 +150,7 @@ function parseNode(
 		return freeze({ kind: 'not', term: parseNode(ownEntry(record, 'not'), table, tables, `${what}.not`, hops, depth + 1, level) })
 	}
 	if (keys.length === 1 && (first === 'some' || first === 'none')) {
-		return parseSome(first, ownEntry(record, first), table, tables, `${what}.${first}`, hops, depth, level)
+		return parseSome(first, ownEntry(record, first), [], table, tables, `${what}.${first}`, hops, depth, level)
 	}
 	const terms: ConditionModel[] = []
 	for (let index = 0; index < keys.length; index++) {
@@ -148,7 +160,7 @@ function parseNode(
 				throw new PolicyError(`${what}: ${key} stands alone in its object; wrap the column tests beside it in allOf`)
 			}
 		}
-		terms[terms.length] = parseTest(key, ownEntry(record, key), table, tables, `${what}.${key}`, hops, level)
+		terms[terms.length] = parseTest(key, ownEntry(record, key), table, tables, `${what}.${key}`, hops, depth, level)
 	}
 	const only = terms[0]
 	return terms.length === 1 && only !== undefined ? only : freeze({ kind: 'all', terms: freeze(terms) })
@@ -161,18 +173,25 @@ function parseTest(
 	tables: (name: string) => ConditionTable | undefined,
 	what: string,
 	hops: HopRule | false,
+	depth: number,
 	level: number,
 ): ConditionModel {
 	const segments = splitPath(path)
-	if (segments.length - 1 + level > MAX_CONDITION_HOPS) {
-		throw new PolicyError(`${what}: a path follows at most ${MAX_CONDITION_HOPS} foreign keys, a some or none counted as one`)
+	const test = plainRecord(input, what)
+	const operators = ownKeys(test)
+	const only = operators[0]
+	// `{ 'fk_column': { some: … } }`: every segment is a foreign key, and the rows test is one more hop past them.
+	const rows = operators.length === 1 && (only === 'some' || only === 'none') ? only : undefined
+	const followedCount = rows === undefined ? segments.length - 1 : segments.length
+	if (followedCount + (rows === undefined ? 0 : 1) + level > MAX_CONDITION_HOPS) {
+		throw new PolicyError(`${what}: ${HOP_LIMIT}`)
 	}
-	if (segments.length > 1 && hops === false) {
+	if (followedCount > 0 && hops === false) {
 		throw new PolicyError(`${what}: this condition is judged on the row itself and follows no foreign key`)
 	}
 	const followed: ConditionHop[] = []
 	let current = table
-	for (let index = 0; index < segments.length - 1; index++) {
+	for (let index = 0; index < followedCount; index++) {
 		const name = segments[index] ?? ''
 		const hop = singleForeignKey(current, name, what)
 		const target = tables(hop.table)
@@ -187,6 +206,9 @@ function parseTest(
 		followed[followed.length] = hop
 		current = target
 	}
+	if (rows !== undefined) {
+		return parseSome(rows, ownEntry(test, rows), freeze(followed), current, tables, `${what}.${rows}`, hops, depth, level + followedCount)
+	}
 	const columnName = segments[segments.length - 1] ?? ''
 	if (!inSet(current.columns, columnName)) {
 		throw new PolicyError(`${what}: ${columnName} is not a column of ${current.name}`)
@@ -194,12 +216,10 @@ function parseTest(
 	if (inSet(current.json, columnName)) {
 		throw new PolicyError(`${what}: ${current.name}.${columnName} is a JSON column, which no condition compares`)
 	}
-	const test = plainRecord(input, what)
-	const operators = ownKeys(test)
 	if (operators.length !== 1) {
 		throw new PolicyError(`${what} takes exactly one operator (${OPERATORS.join(', ')})`)
 	}
-	const operator = operatorOf(operators[0], what)
+	const operator = operatorOf(only, what)
 	const raw = ownEntry(test, operator)
 	return freeze({
 		kind: 'test',
@@ -214,10 +234,12 @@ function parseTest(
  * `{ some: { <table>: <condition> } }`: a row of `table` whose foreign key names this row meets the condition; `none`:
  * no such row does. The foreign key is held to the path rule from `table`'s side, so the rows read lie in this row's
  * own tenant: a child's parent column, a contained dimension's container column, or a key that holds the tenant.
+ * After a path (`path`), `table` is the row it reaches and `level` counts its hops.
  */
 function parseSome(
 	kind: 'some' | 'none',
 	input: unknown,
+	path: readonly ConditionHop[],
 	table: ConditionTable,
 	tables: (name: string) => ConditionTable | undefined,
 	what: string,
@@ -229,7 +251,7 @@ function parseSome(
 		throw new PolicyError(`${what}: this condition is judged on the row itself and reads no other row`)
 	}
 	if (level + 1 > MAX_CONDITION_HOPS) {
-		throw new PolicyError(`${what}: a path follows at most ${MAX_CONDITION_HOPS} foreign keys, a some or none counted as one`)
+		throw new PolicyError(`${what}: ${HOP_LIMIT}`)
 	}
 	const record = plainRecord(input, what)
 	const names = ownKeys(record)
@@ -263,7 +285,7 @@ function parseSome(
 		)
 	}
 	const term = parseNode(ownEntry(record, name), child, tables, `${what}.${name}`, hops, depth + 1, level + 1)
-	return freeze({ kind: 'some', negated: kind === 'none', key: found.key, table: name, column: found.column, term })
+	return freeze({ kind: 'some', hops: path, negated: kind === 'none', key: found.key, table: name, column: found.column, term })
 }
 
 export function splitPath(path: string): readonly string[] {
@@ -351,6 +373,10 @@ export function conditionReach(condition: ConditionModel, select: (table: string
 		return
 	}
 	if (condition.kind === 'some') {
+		for (let index = 0; index < condition.hops.length; index++) {
+			const hop = condition.hops[index]
+			if (hop !== undefined) select(hop.table, hop.key)
+		}
 		select(condition.table, condition.column)
 		conditionReach(condition.term, select)
 		return
@@ -526,18 +552,27 @@ export function conditionArtifact(condition: ConditionModel): ConditionArtifact 
 		case 'some': {
 			const rows: Record<string, ConditionArtifact> = {}
 			rows[condition.table] = conditionArtifact(condition.term)
-			return condition.negated ? { none: rows } : { some: rows }
+			const named: RowsTestArtifact = condition.negated ? { none: rows } : { some: rows }
+			if (condition.hops.length === 0) return named
+			const test: Record<string, RowsTestArtifact> = {}
+			test[pathText(condition.hops).slice(0, -1)] = named
+			return test
 		}
 		case 'test': {
-			let path = ''
-			for (let index = 0; index < condition.hops.length; index++) {
-				path += `${condition.hops[index]?.column ?? ''}.`
-			}
 			const test: Record<string, ColumnTestArtifact> = {}
-			test[path + condition.column] = testArtifact(condition)
+			test[pathText(condition.hops) + condition.column] = testArtifact(condition)
 			return test
 		}
 	}
+}
+
+/** Each hop's column followed by a dot: the prefix of a path's text. */
+function pathText(hops: readonly ConditionHop[]): string {
+	let path = ''
+	for (let index = 0; index < hops.length; index++) {
+		path += `${hops[index]?.column ?? ''}.`
+	}
+	return path
 }
 
 function artifactsOf(terms: readonly ConditionModel[]): ConditionArtifact[] {

@@ -598,7 +598,9 @@ through a relation (`~rel`, `@fabrika/auth-core`). `authority.ts` builds every p
   condition is structured data, never SQL; `{ now: true }` is the statement clock, parsed to an identity, never the
   text `now`. A path follows at most three foreign keys, a `some`/`none` counting as one: a row's own container or
   parent column, a key into a reference table, or a key that holds the row's tenant (below); `some` follows such a key
-  backwards. Every hop also needs a single-column foreign key on its column (`singleForeignKey`), the composite
+  backwards. A path may end in one (`{ '<fk>': { some: … } }`, the model's `some` with `hops`): the rows naming the row
+  it reaches, `none` negated there, so a null key holds neither. A `some` nests, and a link table is a `some` and a path
+  from it; all of it counts towards the three. Every hop also needs a single-column foreign key on its column (`singleForeignKey`), the composite
   key of a tenant hop included, so a table with only `(project_id, org_id) references projects (id, org_id)` takes no
   path. An insert's condition is judged on the written row; one with a path in the insert's transaction, every
   row on its paths locked `FOR SHARE` first, and it takes no `some`.

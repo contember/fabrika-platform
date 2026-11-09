@@ -930,16 +930,20 @@ export interface ConfersArtifact {
 
 /**
  * A structured row condition: connectives, `{ '<column or fk_column.column>': test }` with every test holding, or
- * `some` / `none` of the rows of one table whose foreign key names the row. `some` and `none` are absent from a
- * condition that does not use them, so its digest stays.
+ * `some` / `none` of the rows of one table whose foreign key names the row, also at the end of a path
+ * (`{ '<fk_column>': { some: … } }`). Each form is absent from a condition that does not use it, so its digest stays.
  */
 export type ConditionArtifact =
 	| { readonly allOf: readonly ConditionArtifact[] }
 	| { readonly anyOf: readonly ConditionArtifact[] }
 	| { readonly not: ConditionArtifact }
+	| RowsTestArtifact
+	| { readonly [path: string]: ColumnTestArtifact | RowsTestArtifact }
+
+/** `some` or `none` of the rows of one table whose foreign key names the row. */
+export type RowsTestArtifact =
 	| { readonly some: Readonly<Record<string, ConditionArtifact>> }
 	| { readonly none: Readonly<Record<string, ConditionArtifact>> }
-	| { readonly [path: string]: ColumnTestArtifact }
 
 export type ConditionLiteralArtifact = string | number | boolean
 

@@ -25,6 +25,7 @@ import {
 	type OutputShape,
 	parseEgressEntry,
 	type RecordShape,
+	type RowsTestArtifact,
 	type SchemaShape,
 	type StringShape,
 	type TablePolicyArtifact,
@@ -321,14 +322,21 @@ const columnTest: z.ZodType<ColumnTestArtifact> = z.strictObject({
 	gte: ordered.optional(),
 }).refine((test) => Object.values(test).filter((value) => value !== undefined).length === 1, 'a column test states exactly one operator')
 
+/** `some` or `none` of one table's rows: a condition of its own, or the test at the end of a path. */
+const rowsTest: z.ZodType<RowsTestArtifact> = z.lazy(() =>
+	z.union([
+		z.strictObject({ some: z.record(name, condition).refine((rows) => Object.keys(rows).length === 1, 'some names exactly one table') }),
+		z.strictObject({ none: z.record(name, condition).refine((rows) => Object.keys(rows).length === 1, 'none names exactly one table') }),
+	])
+)
+
 const condition: z.ZodType<ConditionArtifact> = z.lazy(() =>
 	z.union([
 		z.strictObject({ allOf: z.array(condition).nonempty() }),
 		z.strictObject({ anyOf: z.array(condition).nonempty() }),
 		z.strictObject({ not: condition }),
-		z.strictObject({ some: z.record(name, condition).refine((rows) => Object.keys(rows).length === 1, 'some names exactly one table') }),
-		z.strictObject({ none: z.record(name, condition).refine((rows) => Object.keys(rows).length === 1, 'none names exactly one table') }),
-		z.record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*){0,3}$/), columnTest).refine(
+		rowsTest,
+		z.record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*){0,3}$/), z.union([columnTest, rowsTest])).refine(
 			(tests) =>
 				Object.keys(tests).length > 0 && !('allOf' in tests) && !('anyOf' in tests) && !('not' in tests) && !('some' in tests)
 				&& !('none' in tests),

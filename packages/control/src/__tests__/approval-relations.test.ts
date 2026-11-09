@@ -4,7 +4,7 @@
 
 import { readContractSource } from '@fabrika/check/contract'
 import { describe, expect, test } from 'bun:test'
-import { relationGrantsRefusal } from '../approval/enforcement'
+import { relationFields, relationGrantsRefusal } from '../approval/enforcement'
 import type { AccessSnapshot } from '../approval/snapshot'
 import { classifyAccess } from './helpers/access'
 import { kitFiles } from './helpers/kit-contract'
@@ -230,6 +230,26 @@ describe("a table's member reveals in the approval diff", () => {
 		})
 		expect(lines(read, none)).toContainEqual({ effect: 'narrows', line: `${subject} nothing any more` })
 		expect(classifyAccess(read, none).outcome).toBe('no-widening')
+	})
+})
+
+describe('a condition that reads the rows naming a row a path reaches', () => {
+	const lines = (before: AccessSnapshot, after: AccessSnapshot) => classifyAccess(before, after).changes.map(({ effect, line }) => ({ effect, line }))
+	const none = snapshot(files())
+	const conditioned = (when: NonNullable<NonNullable<AccessSnapshot['contract']>['tables'][string]['when']>): AccessSnapshot => {
+		const contract = none.contract
+		const notes = contract?.tables['notes']
+		if (contract === null || notes === undefined) throw new Error('the kit has a notes table')
+		return { ...none, contract: { ...contract, tables: { ...contract.tables, notes: { ...notes, when } } } }
+	}
+	const later = conditioned({ 'notes.write': { workspace_id: { none: { notes: { title: { eq: 'locked' } } } } } })
+
+	test('narrows when added, widens when changed, and counts as a when at publication', () => {
+		expect(lines(none, later)).toEqual([{ effect: 'narrows', line: '`notes.write` holds a row of `notes` only under its condition' }])
+		const changed = conditioned({ 'notes.write': { workspace_id: { some: { notes: { title: { eq: 'locked' } } } } } })
+		expect(classifyAccess(later, changed).outcome).toBe('widening')
+		expect(later.contract === null ? [] : relationFields(later.contract)).toContain('when of table notes')
+		expect(relationGrantsRefusal(later.contract, '0.9.0-dev.12')).toContain('4 relation grant fields')
 	})
 })
 

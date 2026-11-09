@@ -46,15 +46,20 @@ export function conditionNode(table: string, condition: ConditionModel, now: Dat
 			return anyOf(nodesOf(table, condition.terms, now))
 		case 'not':
 			return UnaryOperationNode.create(OperatorNode.create('not'), ParensNode.create(conditionNode(table, condition.term, now)))
-		case 'some': {
-			// The rows of the other table whose key names this row: a null key names none, so `not in` never turns unknown.
-			const named = BinaryOperationNode.create(column(condition.table, condition.column), OperatorNode.create('is not'), ValueNode.createImmediate(null))
-			const rows = subquery(condition.table, condition.column, allOf([named, ParensNode.create(conditionNode(condition.table, condition.term, now))]))
-			const some = BinaryOperationNode.create(column(table, condition.key), OperatorNode.create('in'), rows)
-			return condition.negated ? UnaryOperationNode.create(OperatorNode.create('not'), ParensNode.create(some)) : some
-		}
+		case 'some':
+			return alongPath(table, condition.hops, 0, (target) => {
+				// The rows of the other table whose key names this row: a null key names none, so `not in` never turns unknown.
+				const named = BinaryOperationNode.create(
+					column(condition.table, condition.column),
+					OperatorNode.create('is not'),
+					ValueNode.createImmediate(null),
+				)
+				const rows = subquery(condition.table, condition.column, allOf([named, ParensNode.create(conditionNode(condition.table, condition.term, now))]))
+				const some = BinaryOperationNode.create(column(target, condition.key), OperatorNode.create('in'), rows)
+				return condition.negated ? UnaryOperationNode.create(OperatorNode.create('not'), ParensNode.create(some)) : some
+			})
 		case 'test':
-			return testNode(table, condition.hops, 0, condition, now)
+			return alongPath(table, condition.hops, 0, (target) => testNode(target, condition, now))
 	}
 }
 
@@ -67,19 +72,18 @@ function nodesOf(table: string, terms: readonly ConditionModel[], now: Date): Op
 	return nodes
 }
 
-/** `table.fk in (select target.key from target where …)` per hop, then the column's own test. */
-function testNode(
-	table: string,
-	hops: readonly ConditionHop[],
-	position: number,
-	test: Extract<ConditionModel, { kind: 'test' }>,
-	now: Date,
-): OperationNode {
+/** `table.fk in (select target.key from target where …)` per hop, then `leaf` over the row the path reaches. */
+function alongPath(table: string, hops: readonly ConditionHop[], position: number, leaf: (table: string) => OperationNode): OperationNode {
 	const hop = hops[position]
-	if (hop !== undefined) {
-		const inner = testNode(hop.table, hops, position + 1, test, now)
-		return BinaryOperationNode.create(column(table, hop.column), OperatorNode.create('in'), subquery(hop.table, hop.key, inner))
+	if (hop === undefined) {
+		return leaf(table)
 	}
+	const inner = alongPath(hop.table, hops, position + 1, leaf)
+	return BinaryOperationNode.create(column(table, hop.column), OperatorNode.create('in'), subquery(hop.table, hop.key, inner))
+}
+
+/** A column's own test. */
+function testNode(table: string, test: Extract<ConditionModel, { kind: 'test' }>, now: Date): OperationNode {
 	const left = column(table, test.column)
 	const value = test.value
 	switch (test.operator) {

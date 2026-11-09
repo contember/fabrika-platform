@@ -2026,7 +2026,7 @@ function conditionColumns(condition: ConditionModel): readonly string[] {
 		return conditionColumns(condition.term)
 	}
 	if (condition.kind === 'some') {
-		return [condition.key]
+		return [condition.hops[0]?.column ?? condition.key]
 	}
 	const columns: string[] = []
 	for (let index = 0; index < condition.terms.length; index++) {

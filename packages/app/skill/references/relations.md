@@ -207,8 +207,11 @@ export const tables = defineTables(vocabulary, columns)({
 - `{ some: { <table>: <condition> } }` holds when a row of `<table>` whose single-column foreign key names this row
   meets the condition, `none` when no such row does: on `projects`, `{ some: { tasks: { done: { eq: false } } } }` is
   a project with an open task.
-- A path follows at most three foreign keys, each `some` or `none` counting as one. Each hop is one more subquery in
-  every statement of the action; shorten a longer path with a stored column.
+- A path may end in `some` or `none`: on `tasks`, `{ project_id: { some: { project_tags: { 'tag_id.name': { eq:
+  'urgent' } } } } }` is a task of a project tagged urgent, through the link table `project_tags`. A `null` foreign key
+  reaches no row, so neither `some` nor `none` holds there. A `some` nests in a `some`.
+- A path follows at most three foreign keys, the path before a `some`, the `some` and every hop inside it counted
+  together. Each hop is one more subquery in every statement of the action; shorten a longer path with a stored column.
 - An insert's condition is judged on the written row. One with a path runs in the insert's transaction, every row on
   its paths locked `FOR SHARE` first, so nobody changes the project while the task goes in. An insert action's
   condition takes no `some` or `none`. An upsert's conflict update is judged on the stored row.
