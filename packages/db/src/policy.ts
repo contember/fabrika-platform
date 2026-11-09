@@ -135,6 +135,7 @@ export interface RevealsPolicy<Col extends string, A extends string> {
  * until `expires` (none: no deadline) and while `when` admits the row. Writing a row is delegation.
  */
 export interface ConfersPolicy<Col extends string> {
+	/** The column that holds the principal; the table's `createdBy` names the row's writer (it needs `assign.self`). */
 	readonly principal: Col
 	/** The column that names the node; by default the table's column for the relation's dimension (its key or its chain). */
 	readonly node?: Col
@@ -1802,10 +1803,16 @@ function parseConfers(
 				throw new PolicyError(`${what}: ${name} decides what a row confers, so no update writes it; replace the row instead`)
 			}
 		}
-		if (principal === node || principal === table.version || principal === table.createdBy || hasOwn(table.files, principal)) {
+		if (principal === node || principal === table.version || hasOwn(table.files, principal)) {
 			throw new PolicyError(`${what}.principal ${principal} is a column the layer stamps; it holds the principal the row names`)
 		}
 		const assign = parseAssign(table, policy, expires, what)
+		// The layer stamps createdBy with the writer, so every row such a source confers names its writer.
+		if (principal === table.createdBy && assign !== undefined && !assign.self) {
+			throw new PolicyError(
+				`${what}.principal ${principal} is the createdBy column, so every inserted row names its writer: state assign: { self: true }`,
+			)
+		}
 		sources[sources.length] = freeze({ relation, dimension, table: table.name, principal, node, expires, when, assign })
 	}
 	return freeze(sources)

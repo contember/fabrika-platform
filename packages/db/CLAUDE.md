@@ -556,7 +556,8 @@ through a relation (`~rel`, `@fabrika/auth-core`). `authority.ts` builds every p
 - **Writing a source row is delegation, bounded instead of held** (the named exception to S8). Its node is stamped
   from the writer's `Ref`; `assign.maxDays` caps the expiry and refuses an open-ended one; a row naming its writer needs
   `assign.self` (a `ConflictError`, 409, as is a row outside the bound); a table that confers without `assign` has no
-  insert. No update writes the principal, the node, the expiry or a column the source's `when` reads, and a source row
+  insert. A principal in the table's `createdBy` names the writer in every row, so an insertable such source states
+  `assign: { self: true }` or the parse refuses it. No update writes the principal, the node, the expiry or a column the source's `when` reads, and a source row
   never moves. `ctx.sql` of a writing site never names a source table, and `unscoped` never writes one.
 - **A table's `when` only narrows.** It is ANDed onto every grant of its action, global, IAM-scoped and relation
   alike, including an application table's key paths and an upsert's conflict row (judged on the stored row). A

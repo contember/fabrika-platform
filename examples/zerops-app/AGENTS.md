@@ -4708,7 +4708,9 @@ export const tables = defineTables(vocabulary, columns)({
   what it gives instead:
   - the node is stamped from the writer's `Ref`, so a coordinator delegates only in a project it reaches;
   - `assign.maxDays` caps the expiry; a later or a missing expiry is a 409, and `maxDays` needs `expires`;
-  - a row naming its writer is a 409 unless `assign.self: true` allows it;
+  - a row naming its writer is a 409 unless `assign.self: true` allows it. `principal` may name the table's
+    `createdBy`: then every row names its writer (an owner of what they created), so a table with an insert states
+    `assign: { self: true }`, and the policy is refused without it;
   - a table that confers without `assign` takes no insert.
 - A source row never moves, and no update writes its principal, node, expiry or a column its `when` reads. Change an
   assignment by deleting the row and inserting a new one. `ctx.sql` of a writing endpoint never names a source table,
