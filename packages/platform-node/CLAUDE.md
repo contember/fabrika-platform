@@ -107,8 +107,8 @@ Read this before moving a service onto this driver.
   from a string or reaches past the schema (`query_to_xml`, `dblink`, `lo_*`, `pg_read_file`,
   `pg_advisory_*`, `set_config`): these are name rules, and the role family bounds what they miss.
 - **An application's SQL runs only as its own roles** (ADR-0017, `application-postgres-roles.ts`). The migration
-  role `app_<id>` owns the schema and everything in it; the runtime role `run_<id>` has USAGE and DML on every table
-  but the ledger (`grantRuntimeRole`, reset after every run under the lock), never DDL. `migrate(provisioningUrl)` uses
+  role `app_<id>` owns the schema and everything in it; the runtime role `run_<id>` has USAGE, SELECT on every relation, and DML on
+  every table but the ledger, never on a view (`grantRuntimeRole`, reset after every run under the lock), never DDL. `migrate(provisioningUrl)` uses
   the provisioning credential only to create, re-password and check the family (`provisionPostgresRoles`: attributes,
   memberships, `CREATE`, any grant or ownership outside the schema, callable `SECURITY DEFINER` routines), then applies
   the plan as the migration role; `application-postgres-grants.ts` clears PUBLIC from the migration role's default

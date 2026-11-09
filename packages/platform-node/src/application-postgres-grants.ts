@@ -46,9 +46,10 @@ export async function normalizeDefaultPrivileges(db: SqlDatabase, schema: string
 
 /**
  * Resets the schema's privileges to what the runtime role needs: PUBLIC and the runtime role lose everything on the
- * schema and its objects, then the runtime role gets USAGE, DML on every table but the ledger, EXECUTE on the schema's
- * routines and USAGE on its types. One transaction, so a live runtime never sees a gap. Then the effective privileges
- * are verified, PUBLIC included, and anything beyond that stops the deploy.
+ * schema and its objects, then the runtime role gets USAGE, SELECT on every relation, DML on every table but the
+ * ledger (never on a view), EXECUTE on the schema's routines and USAGE on its types. One transaction, so a live
+ * runtime never sees a gap. Then the effective privileges are verified, PUBLIC included, and anything beyond that
+ * stops the deploy.
  */
 export async function grantRuntimeRole(db: SqlDatabase, schema: string, ledgerTable: string, role: string): Promise<void> {
 	try {
@@ -69,7 +70,17 @@ export async function grantRuntimeRole(db: SqlDatabase, schema: string, ledgerTa
 					END LOOP;
 				END $types$`),
 			db.prepare(`GRANT USAGE ON SCHEMA ${schema} TO ${role}`),
-			db.prepare(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA ${schema} TO ${role}`),
+			db.prepare(`GRANT SELECT ON ALL TABLES IN SCHEMA ${schema} TO ${role}`),
+			// DML only on plain and partitioned tables: a view, a materialized view and a foreign table stay read-only.
+			db.prepare(`DO $tables$
+				DECLARE t pg_catalog.regclass;
+				BEGIN
+					FOR t IN SELECT c.oid::pg_catalog.regclass FROM pg_catalog.pg_class c
+						WHERE c.relnamespace = '${schema}'::pg_catalog.regnamespace AND c.relkind IN ('r', 'p')
+					LOOP
+						EXECUTE pg_catalog.format('GRANT INSERT, UPDATE, DELETE ON TABLE %s TO ${role}', t);
+					END LOOP;
+				END $tables$`),
 			db.prepare(`REVOKE ALL ON TABLE ${ledgerTable} FROM ${role}`),
 			db.prepare(`GRANT EXECUTE ON ALL ROUTINES IN SCHEMA ${schema} TO ${role}`),
 		])
@@ -98,6 +109,12 @@ async function verifyRuntimeRole(db: SqlDatabase, schema: string, ledgerTable: s
 			WHERE c.relnamespace OPERATOR(pg_catalog.=) ?::pg_catalog.regnamespace AND c.relkind OPERATOR(pg_catalog.=) ANY (ARRAY['r', 'p', 'v', 'm', 'f']::"char"[])
 				AND pg_catalog.has_table_privilege(runtime.oid, c.oid, p.privilege)
 		UNION ALL
+		SELECT pg_catalog.format('%s may %s %s, which is not a table', runtime.rolname, p.privilege, c.oid::pg_catalog.regclass)
+			FROM runtime, pg_catalog.unnest(ARRAY['INSERT', 'UPDATE', 'DELETE']) AS p(privilege), pg_catalog.pg_class c
+			WHERE c.relnamespace OPERATOR(pg_catalog.=) ?::pg_catalog.regnamespace AND c.relkind OPERATOR(pg_catalog.=) ANY (ARRAY['v', 'm', 'f']::"char"[])
+				AND (pg_catalog.has_table_privilege(runtime.oid, c.oid, p.privilege)
+					OR (p.privilege OPERATOR(pg_catalog.<>) 'DELETE' AND pg_catalog.has_any_column_privilege(runtime.oid, c.oid, p.privilege)))
+		UNION ALL
 		SELECT pg_catalog.format('%s may %s the migration ledger', runtime.rolname, p.privilege) FROM runtime, ledger, pg_catalog.unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE']) AS p(privilege)
 			WHERE pg_catalog.has_table_privilege(runtime.oid, ledger.oid, p.privilege)
 				OR (p.privilege OPERATOR(pg_catalog.<>) 'DELETE' AND pg_catalog.has_any_column_privilege(runtime.oid, ledger.oid, p.privilege))
@@ -106,12 +123,12 @@ async function verifyRuntimeRole(db: SqlDatabase, schema: string, ledgerTable: s
 				a.privilege_type, d.defaclobjtype, CASE WHEN a.grantee OPERATOR(pg_catalog.=) 0 THEN 'PUBLIC' ELSE pg_catalog.pg_get_userbyid(a.grantee) END)
 			FROM pg_catalog.pg_default_acl d, pg_catalog.aclexplode(d.defaclacl) a
 			WHERE d.defaclrole OPERATOR(pg_catalog.=) (SELECT oid FROM pg_catalog.pg_roles WHERE rolname OPERATOR(pg_catalog.=) current_user)
-				AND a.grantee OPERATOR(pg_catalog.<>) d.defaclrole`).bind(role, ledgerTable, schema, schema, schema).all<Problem>()
+				AND a.grantee OPERATOR(pg_catalog.<>) d.defaclrole`).bind(role, ledgerTable, schema, schema, schema, schema).all<Problem>()
 	if (results.length > 0) {
 		throw new PostgresMigrationError(
 			`${
 				results.map((row) => row.problem).join('; ')
-			}; the deploy stops, because the runtime role ${role} has DML on its tables and nothing else (ADR-0017)`,
+			}; the deploy stops, because the runtime role ${role} reads its relations, has DML on its tables and nothing else (ADR-0017)`,
 		)
 	}
 }

@@ -268,8 +268,8 @@ block (`/proc/self/environ` on Linux) still holds them. The adapter then calls
 `serveContract` loads the data layer before the application and opens its connection as the runtime role
 `run_<FABRIKA_APP_ID>`, derived from the provisioning credential `FABRIKA_APP_DATABASE_URL`, in the schema
 `app_<FABRIKA_APP_ID>` its migrations created as the migration role `app_<FABRIKA_APP_ID>`
-([ADR-0017](../decisions/0017-service-owned-postgres-migrations.md)). The runtime role has DML on the schema's tables
-and no DDL, so no query of the application can create a trigger or write the migration ledger. The derivation happens
+([ADR-0017](../decisions/0017-service-owned-postgres-migrations.md)). The runtime role has DML on the schema's tables,
+only `SELECT` on its views, and no DDL, so no query of the application can create a trigger or write the migration ledger. The derivation happens
 in a launcher: handed `FABRIKA_APP_DATABASE_URL`, `serveContract` and `runContractJob` load no application module and
 run the same command again with `FABRIKA_APP_RUNTIME_DATABASE_URL` in its place, so the application's process never
 holds the provisioning credential. Each process opens at most `FABRIKA_APP_DATABASE_CONNECTIONS` connections (10
@@ -637,7 +637,7 @@ work first and the external call after. `ctx.sql` (`sql: 'read' | 'write'`) runs
   json_each(${ids}))`), a boolean on SQLite as 0 or 1. Each row is parsed like `fromRow` (snake_case → camelCase,
   `Date` → ISO) and then by `Row`; Postgres sends `bigint` and `numeric` as text, so `count(*)` needs `::int` (or
   `z.coerce.number()`), and the error says so. Those text rules are the hard refusals (ADR-0012). On Postgres the
-  runtime role (`run_<id>`, DML only) also bounds what an admitted statement does, a foreign schema and DDL included
+  runtime role (`run_<id>`, DML on tables, no write on a view) also bounds what an admitted statement does, a foreign schema and DDL included
   ([ADR-0017](../decisions/0017-service-owned-postgres-migrations.md)), but it may write the framework's `fabrika_*`
   tables, so for them the name rule is the boundary; on SQLite, with no role, it is the boundary for everything
   workerd's authorizer does not refuse
