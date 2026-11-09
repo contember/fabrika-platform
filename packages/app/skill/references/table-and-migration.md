@@ -335,17 +335,24 @@ export const tables = defineTables(vocabulary, columns)({
 interface is `<Pascal>View`, every column is `| null`, and its column list entry says `view: true`. A view needs no
 policy; without one only `ctx.sql` reads it. With one, `ctx.db` reads it like a child table, typed and scoped, and nothing writes it:
 
-- `scope: { child: '<parent>' }` puts it under its parent's `Ref`, with the child's conventions: the view selects the
-  parent column (`<parent dimension>_id`) and every chain column of the parent. A view of one row per parent states
+- `scope: { child: '<parent>' }` puts it under its parent: the view selects the parent column (`<parent dimension>_id`,
+  or `column: '<name>'`), and needs none of the parent's chain columns. A view of one row per parent states
   `key: '<parent column>'` (`{ child: 'deals', key: 'deal_id' }`), and a handler `on` the parent reads that row with
   `ctx.db.target.<view>.get(ctx.target.value)`.
 - `scope: { reference: '<why>' }` is a view every endpoint reads, through `ctx.db.reference.<view>`.
-- It takes `actions: { read, appRead?, appCount? }` and column `read` actions only. `insert`, `update`, `delete`,
+- A child view takes a `when` on its read actions, as a table does (`references/relations.md`): a path may start at
+  its parent column (`'deal_id.stage'`), though no foreign key declares it, and follows the parent's foreign keys from
+  there. The parent's own `when` does not narrow the view; state the view's.
+- It takes `actions: { read, appRead?, appCount? }`, column `read` actions and a child view's `when` only. `insert`, `update`, `delete`,
   `version`, `createdBy`, `queue`, `files`, a column `write` and `unscoped: { <view>: 'write' }` are refused by tsc and
   the checker; its handles' writes are `Unavailable`, and the data layer refuses them.
-- No foreign key ties a view's rows to its parent: its SQL is what puts a row in a scope, and the approver reviews it.
-  Select the parent and chain columns from the parent row itself, or from a row whose foreign keys tie it there. A row
-  whose parent column is null is read by no `Ref`, but a `Within` reaches it through the chain columns it carries.
+- Every read reaches a view's rows through the parent row their parent column names: a `Ref` of the parent, a
+  `Within` that reaches the parent (its relations and reveals included) and `ctx.db.within.<view>` wherever the
+  parent is listed, under the parent's own dimension too (a view of `deals` under a `Within` of `deal`). A row whose
+  parent column is null, or names a parent that does not exist or that the capability does not reach, is never read
+  through a `Ref` or a `Within`, one of every value included (only `ctx.db.app` lists every row of a view); a chain
+  column the view carries does not place a row. The view's SQL decides which parent each row names, and the approver
+  reviews it. `ctx.sql.scope` refuses a `Ref` or a `Within` of a view: read it through `ctx.db`.
 - A column of a type the data layer does not read (an array, `numeric` on SQLite) is left out, and every codegen run
   names it. On SQLite an expression has a type only through `CAST(… AS INTEGER | REAL | TEXT)`; on Postgres cast a
   count you want as a number (`count(*)::int4`).

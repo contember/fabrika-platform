@@ -1385,7 +1385,7 @@ function linkTables(parsed: readonly ParsedTable[], vocabulary: VocabularyModel)
 				}
 				setOwn(sources, relation, table.name)
 			}
-			const when = parseWhen(linked, whenInput, conditionTable, hopRule)
+			const when = parseWhen(linked, conditionRoot(linked, byName), whenInput, conditionTable, hopRule)
 			const reveals = parseReveals(linked, readThrough, revealsInput, vocabulary, conditionTable, hopRule)
 			const memberReveals = parseMemberReveals(linked, memberRevealsInput, vocabulary, conditionTable, hopRule)
 			setOwn(models, table.name, freeze({ ...linked, confers, when, reveals, readThrough, memberReveals }))
@@ -1430,6 +1430,7 @@ function tableActionNames(table: LinkedTable): NameSet {
  */
 function parseWhen(
 	table: LinkedTable,
+	root: ConditionTable,
 	input: unknown,
 	tables: (name: string) => ConditionTable | undefined,
 	hops: HopRule,
@@ -1450,7 +1451,7 @@ function parseWhen(
 			throw new PolicyError(`${table.name}: when.${action} names an action the table does not name (${namesOf(named).join(', ')})`)
 		}
 		const what = `${table.name}: when.${action}`
-		const condition = parseCondition(ownEntry(declared, action), table, tables, what, hops)
+		const condition = parseCondition(ownEntry(declared, action), root, tables, what, hops)
 		// An insert reads the rows its foreign keys name in its transaction; no row names one that does not exist yet.
 		if (includes(table.actions.insert, action) && readsRowsNamingIt(condition)) {
 			throw new PolicyError(`${what}: an insert's condition reads the row and the rows its foreign keys name, so it takes no some or none`)
@@ -1458,6 +1459,24 @@ function parseWhen(
 		setOwn(when, action, condition)
 	}
 	return freeze(when)
+}
+
+/**
+ * The table a `when` of `table` starts at. A child view's parent column is a foreign key to its parent's key that no
+ * column list declares, so a path follows it to the parent row, and the parent's own foreign keys from there.
+ */
+function conditionRoot(table: LinkedTable, byName: Readonly<Record<string, ParsedTable>>): ConditionTable {
+	const parent = table.view && table.scope.mode === 'child' ? ownEntry(byName, table.scope.parent) : undefined
+	if (table.scope.mode !== 'child' || parent === undefined || parent.scope.mode !== 'dimension') {
+		return table
+	}
+	const foreignKeys: ForeignKey[] = []
+	for (let index = 0; index < table.foreignKeys.length; index++) {
+		const key = table.foreignKeys[index]
+		if (key !== undefined) foreignKeys[foreignKeys.length] = key
+	}
+	foreignKeys[foreignKeys.length] = freeze({ columns: freeze([table.scope.column]), table: parent.name, references: freeze([parent.scope.key]) })
+	return freeze({ ...table, foreignKeys: freeze(foreignKeys) })
 }
 
 /** A dimension's owning table, resolved: what a secondary path's column references. */
@@ -1770,6 +1789,11 @@ function parseConfers(
 	if (table.scope.mode !== 'dimension' && table.scope.mode !== 'child') {
 		throw new PolicyError(`${table.name}: a ${table.scope.mode} table confers no relation; its rows lie at no node`)
 	}
+	if (table.view) {
+		throw new PolicyError(
+			`${table.name}: a view confers no relation; its rows change with every write to the tables it reads, which no delegation bound sees`,
+		)
+	}
 	if (table.queue !== undefined) {
 		// A claim, a requeue and `done: true` rewrite `due` and `version` past every update-column check.
 		throw new PolicyError(`${table.name}: a queue table confers no relation; the layer rewrites its rows on every claim`)
@@ -2065,6 +2089,20 @@ function resolveChain(
 	for (let index = 0; index < parentChain.length; index++) {
 		expected[index] = parentChain[index]?.column ?? ''
 	}
+	const dimension = parent.scope.dimension
+	const link = { dimension, column: scope.column ?? parentColumn(table, `${dimension}_id`, scope.parent) }
+	// A view has no foreign key: its rows are read through the parent row its parent column names (ADR-0072).
+	if (table.view) {
+		const inherit = scope.inherit ?? freeze(carried(table, expected))
+		for (let index = 0; index < inherit.length; index++) {
+			if (!includes(expected, inherit[index])) {
+				throw new PolicyError(
+					`${table.name}: inherits ${inherit[index]}, which is not a containment column of ${scope.parent} (${expected.join(', ') || 'none'})`,
+				)
+			}
+		}
+		return { scope: freeze({ mode: 'child', parent: scope.parent, key: scope.key, column: link.column, inherit }), chain: freeze([link]) }
+	}
 	const inherit = scope.inherit ?? freeze(expected)
 	const inherited = nameSet(inherit)
 	let matches = inherit.length === expected.length && namesOf(inherited).length === expected.length
@@ -2078,17 +2116,22 @@ function resolveChain(
 			}), so a composite foreign key keeps it in scope`,
 		)
 	}
-	const dimension = parent.scope.dimension
-	const link = { dimension, column: scope.column ?? parentColumn(table, `${dimension}_id`, scope.parent) }
-	// A view has no foreign key: its SQL alone states its containment, and the approver reviews it (ADR-0072).
-	if (!table.view) {
-		requireReference(table, link, parent, (column) => `scope.column: '${column}'`)
-		requireCoveringKey(table, link, parent, parentChain)
-	}
+	requireReference(table, link, parent, (column) => `scope.column: '${column}'`)
+	requireCoveringKey(table, link, parent, parentChain)
 	return {
 		scope: freeze({ mode: 'child', parent: scope.parent, key: scope.key, column: link.column, inherit }),
 		chain: prepend(link, parentChain),
 	}
+}
+
+/** The columns of `names` that `table` has: the parent's containment columns a view carries, which a join of it compares. */
+function carried(table: ParsedTable, names: readonly string[]): readonly string[] {
+	const found: string[] = []
+	for (let index = 0; index < names.length; index++) {
+		const name = names[index] ?? ''
+		if (inSet(table.columns, name)) found[found.length] = name
+	}
+	return found
 }
 
 /** Whether a foreign key of `table` takes `column` to `key` of `target`, alone or as part of a composite key. */

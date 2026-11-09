@@ -162,8 +162,13 @@ type ChainDimensions<P, T, V> = PolicyOf<P, T> extends { readonly scope: infer S
 /** The dimensions whose `Within` lists table `T`: every dimension of its chain, and a top-level table's own. */
 type ReachOf<P, T, V> = [ContainerOf<P, T>] extends [never] ? DimensionOf<P, T> | ChainDimensions<P, T, V> : ChainDimensions<P, T, V>
 
-/** The dimensions outside its chain whose `Within` reads table `T` through a foreign key (`readThrough`). */
-type ReadThroughOf<P, T> = PolicyOf<P, T> extends { readonly readThrough: infer R } ? keyof R & string : never
+/**
+ * The dimensions outside its chain whose `Within` reads table `T` through a foreign key (`readThrough`); a child view's
+ * are its parent's, as it is read through its parent row.
+ */
+type ReadThroughOf<P, T> = PolicyOf<P, T> extends { readonly readThrough: infer R } ? keyof R & string
+	: PolicyOf<P, T> extends { readonly view: true; readonly scope: { readonly child: infer Parent extends string } } ? ReadThroughOf<P, Parent>
+	: never
 
 /**
  * A row as reads return it: the generated interface itself where no column has a separate write type, so a

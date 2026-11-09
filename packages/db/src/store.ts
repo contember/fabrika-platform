@@ -15,6 +15,7 @@ import {
 	relationTerms,
 	revealedNodes,
 	throughPath,
+	viewScope,
 } from './authority'
 import {
 	defineValue,
@@ -59,6 +60,7 @@ import {
 	finishSelect,
 	isPrimitive,
 	type JoinShape,
+	type JoinState,
 	type NoColumns,
 	type Primitive,
 	type ScopedSelect,
@@ -70,7 +72,7 @@ import { CapabilityError, ConflictError, NotFoundError, PolicyError, QueryRefuse
 import { answerFiles, type FileBinding, fileValue, referenceFiles, rowScope, storedRowScope } from './file-columns'
 import { fileReference } from './file-references'
 import { webhookTables } from './framework-tables'
-import type { ForeignKeyPair, GuardContext, RootKind } from './guard'
+import type { ForeignKeyPair, GuardContext, RootKind, ViewParentLink } from './guard'
 import { fencedTransaction, jobLeases } from './job-leases'
 import { jobWakes, leaseProjection } from './job-wakes'
 import { jsonInput } from './json'
@@ -167,6 +169,13 @@ export interface TableContext {
 	readonly members: MemberReveals
 	/** The tables a scope predicate's subqueries read, each with the column they select: what the guard admits. */
 	readonly subqueries: Readonly<Record<string, readonly string[]>>
+	/** A child view's parent, which every capability reads the view's rows through; `undefined` for any other table. */
+	readonly through: ViewParent | undefined
+}
+
+/** A child view's parent link, with the parent's context: its model without conditions, as only the view's own narrow a read. */
+export interface ViewParent extends ViewParentLink {
+	readonly context: TableContext
 }
 
 /** The dialect of the database the layer is bound to: what a read answers and a write binds depends on it. */
@@ -327,13 +336,17 @@ function withinGrant(context: TableContext, capability: unknown, dimension: stri
 	return grant
 }
 
-/** The chain links that lie above the `Within`'s own dimension: the only columns a container grant may filter on. */
+/**
+ * The links that lie above the `Within`'s own dimension: the only columns a container grant may filter on. A dimension
+ * table's own dimension counts, so its containers lie above a `Within` of it.
+ */
 function linksAbove(model: TableModel, dimension: string): readonly Container[] {
-	for (let index = 0; index < model.chain.length; index++) {
-		if (model.chain[index]?.dimension === dimension) {
+	const links = model.scope.mode === 'dimension' ? selfLinks(model) : model.chain
+	for (let index = 0; index < links.length; index++) {
+		if (links[index]?.dimension === dimension) {
 			const above: Container[] = []
-			for (let position = index + 1; position < model.chain.length; position++) {
-				const link = model.chain[position]
+			for (let position = index + 1; position < links.length; position++) {
+				const link = links[position]
 				if (link !== undefined) {
 					above[above.length] = link
 				}
@@ -553,9 +566,37 @@ export function dimensionListPredicate(context: TableContext, capability: unknow
 	return withinPredicate(context, scope.container?.column ?? scope.key, grant, operation)
 }
 
-/** Rows of a child table that belong to the parent object the Ref names, over the whole chain. */
-export function parentPredicate(context: TableContext, grant: RefGrant): OperationNode {
-	return refScope(context.relations, context.model, context.model.chain, grant, new Date())
+/**
+ * Rows of a child table that belong to the parent object the Ref names, over the whole chain; with `key`, the one row
+ * of them it keys. The key's equality joins the chain's, so the action's condition narrows both.
+ */
+export function parentPredicate(context: TableContext, grant: RefGrant, key?: string): OperationNode {
+	const row = key === undefined ? undefined : equals(context.model.name, childScope(context).key, key)
+	const through = context.through
+	if (through !== undefined) {
+		const parent = through.context
+		const now = new Date()
+		return viewScope(context.model, through, grant.action, refScope(parent.relations, parent.model, selfLinks(parent.model), grant, now), now, row)
+	}
+	return refScope(context.relations, context.model, context.model.chain, grant, new Date(), row)
+}
+
+/**
+ * A child view's rows a `Within` reaches: those whose parent row `reach` admits over the parent's context; for `all`,
+ * those whose parent row exists. Undefined where `reach` is: the empty `Within`.
+ */
+function throughParent(
+	context: TableContext,
+	through: ViewParent,
+	grant: WithinGrant,
+	reach: (parent: TableContext) => OperationNode | undefined,
+): OperationNode | undefined {
+	const now = new Date()
+	if (grant.values === 'all') {
+		return viewScope(context.model, through, grant.action, 'all', now)
+	}
+	const reached = reach(through.context)
+	return reached === undefined ? undefined : viewScope(context.model, through, grant.action, reached, now)
 }
 
 export function childListPredicate(context: TableContext, capability: unknown, operation: Operation): OperationNode | undefined {
@@ -569,6 +610,10 @@ export function childListPredicate(context: TableContext, capability: unknown, o
 		throw new CapabilityError('wrong_capability', `a list of ${context.model.name} by its parent needs a Ref or a Within, got ${describeGrant(grant)}`)
 	}
 	checkGrant(context, grant, listDimension(scope.parent), operation)
+	if (context.through !== undefined) {
+		const column = scope.parent.container?.column ?? scope.parent.key
+		return throughParent(context, context.through, grant, (parent) => withinPredicate(parent, column, grant, operation))
+	}
 	return withinPredicate(context, scope.parent.container?.column ?? scope.column, grant, operation)
 }
 
@@ -587,6 +632,23 @@ export function reachColumn(model: TableModel, dimension: string): string | unde
 		}
 	}
 	return undefined
+}
+
+/**
+ * Whether a `Within` of `dimension` lists the table: through its containment chain or a secondary path, and a child
+ * view through its parent's, its parent's own dimension included.
+ */
+export function reachedBy(context: TableContext, dimension: string): boolean {
+	const model = context.through?.context.model ?? context.model
+	return parentColumn(model, context.through !== undefined, dimension) !== undefined || secondaryPathsOf(model, dimension).length > 0
+}
+
+/** The column that places a row of `model` in `dimension`, a view's parent's own key among them (`own`). */
+function parentColumn(model: TableModel, own: boolean, dimension: string): string | undefined {
+	if (own && model.scope.mode === 'dimension' && model.scope.dimension === dimension) {
+		return model.scope.key
+	}
+	return reachColumn(model, dimension)
 }
 
 /** The secondary read paths of `model` that reach `dimension`, a dimension outside its chain: at their node or above it. */
@@ -613,18 +675,25 @@ export function reachPredicate(context: TableContext, capability: unknown): Oper
 		throw new CapabilityError('wrong_capability', `a list of ${table} needs a Within, got ${describeGrant(grant)}`)
 	}
 	checkAction(context, 'read', grant.action)
-	const column = reachColumn(context.model, grant.dimension)
-	if (column !== undefined) {
-		return withinPredicate(context, column, grant, 'read')
-	}
-	const paths = secondaryPathsOf(context.model, grant.dimension)
-	if (paths.length === 0) {
+	if (!reachedBy(context, grant.dimension)) {
 		throw new CapabilityError(
 			'out_of_reach',
 			`a Within of ${grant.dimension} does not reach ${table}: neither its containment chain nor a secondary path holds ${grant.dimension}`,
 		)
 	}
-	return secondaryPredicate(context, paths, grant)
+	if (context.through !== undefined) {
+		return throughParent(context, context.through, grant, (parent) => withinReach(parent, grant, true))
+	}
+	return withinReach(context, grant, false)
+}
+
+/** A `Within`'s read of a table it reaches: through the column that places a row in its dimension, or its secondary paths. */
+function withinReach(context: TableContext, grant: WithinGrant, own: boolean): OperationNode | undefined {
+	const column = parentColumn(context.model, own, grant.dimension)
+	if (column !== undefined) {
+		return withinPredicate(context, column, grant, 'read')
+	}
+	return secondaryPredicate(context, secondaryPathsOf(context.model, grant.dimension), grant)
 }
 
 /**
@@ -686,6 +755,13 @@ export function scopeTerms(context: TableContext, capability: unknown, use: Scop
 		throw new CapabilityError(
 			'unenforceable',
 			`ctx.sql.scope cannot render a relation or a condition of ${grant.action} on ${model.name}: read it through ctx.db`,
+		)
+	}
+	// Nor the subquery through the parent row, which alone places a child view's rows.
+	if (grant.kind !== 'app' && context.through !== undefined) {
+		throw new CapabilityError(
+			'unenforceable',
+			`ctx.sql.scope cannot render the read of the view ${model.name} through its parent: read it through ctx.db`,
 		)
 	}
 	if (grant.kind === 'app') {
@@ -1048,7 +1124,7 @@ export function childObjectPredicate(context: TableContext, parent: unknown, key
 		throw new QueryRefusedError('row_address', `a ${context.model.name} row is addressed by its parent Ref and its ${scope.key}`)
 	}
 	const grant = refGrant(context, parent, scope.parent.dimension, operation)
-	return allOf([equals(context.model.name, scope.key, key), parentPredicate(context, grant)])
+	return parentPredicate(context, grant, key)
 }
 
 export function guard(context: TableContext, root: RootKind, scope: OperationNode | undefined): GuardContext {
@@ -1056,7 +1132,14 @@ export function guard(context: TableContext, root: RootKind, scope: OperationNod
 	if (context.model.view && root !== 'SelectQueryNode') {
 		throw new QueryRefusedError('read_only', `${context.model.name} is a view, which no handler writes`)
 	}
-	return { root, table: context.model.name, joins: root === 'SelectQueryNode' ? context.joins : {}, scope, subqueries: context.subqueries }
+	return {
+		root,
+		table: context.model.name,
+		joins: root === 'SelectQueryNode' ? context.joins : {},
+		scope,
+		subqueries: context.subqueries,
+		through: context.through,
+	}
 }
 
 /**
@@ -1193,22 +1276,52 @@ async function selectRows<S>(
 	visible: readonly string[] = context.model.visible,
 ): Promise<S[]> {
 	const run = storeRunner(context)
+	const now = new Date()
+	const joins: JoinState[] = []
 	for (let index = 0; index < state.joins.length; index++) {
 		const join = state.joins[index]
-		if (join !== undefined && !includes(join.join.readActions, action)) {
+		if (join === undefined) continue
+		if (!includes(join.join.readActions, action)) {
 			throw new CapabilityError(
 				'wrong_action',
 				`joining ${join.join.shape.table} requires ${join.join.readActions.join(' or ')}; the capability holds ${action}`,
 			)
 		}
+		joins[joins.length] = heldJoin(context, join, action, now)
 	}
 	if (scope === undefined) {
 		return []
 	}
 	const dialect = dialectOf(context)
-	const node = selectNode(boundState(context, state), visible, scope, undefined, context.model.dates, dialect)
+	const node = selectNode(boundState(context, { ...state, joins }), visible, scope, undefined, context.model.dates, dialect)
 	const rows = await (await run.read()).run<S>(node, guard(context, 'SelectQueryNode', scope))
 	return answerRows(dialect, context.model.name, joinedColumns(context, state), rows)
+}
+
+/**
+ * `join` narrowed by the child's condition of `action`, as a read of the child narrows its rows. The guard admits no
+ * subquery in an ON, so a condition that reads other rows (a path, `some`, `none`) refuses the join.
+ */
+function heldJoin(context: TableContext, join: JoinState, action: string, now: Date): JoinState {
+	const child = ownEntry(context.children, join.join.shape.table)
+	if (child === undefined) {
+		throw new QueryRefusedError('unknown_table', `${join.join.shape.table} is not a joinable child of ${context.model.name}`)
+	}
+	const condition = ownEntry(child.when, action)
+	if (condition === undefined) {
+		return join
+	}
+	let reads = false
+	conditionReach(condition, () => {
+		reads = true
+	})
+	if (reads) {
+		throw new CapabilityError(
+			'unenforceable',
+			`joining ${child.name} cannot hold its condition of ${action}, which reads other rows; read ${child.name} through its own handle`,
+		)
+	}
+	return { ...join, condition: conditionNode(child.name, condition, now) }
 }
 
 /** The column sets of a select's rows: the table's own, and each joined child's under its `<child>.<column>` alias. */
@@ -2522,6 +2635,9 @@ export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
 
 	function contextOf(model: TableModel): TableContext {
 		const parent = model.scope.mode === 'child' ? modelOf(models, model.scope.parent) : undefined
+		const through = model.view && model.scope.mode === 'child' && parent?.scope.mode === 'dimension'
+			? freeze({ column: model.scope.column, table: parent.name, key: parent.scope.key, context: contextOf(freeze({ ...parent, when: freeze({}) })) })
+			: undefined
 		const joinable = joinShapes(models, model)
 		const joins: Record<string, readonly ForeignKeyPair[]> = {}
 		const children = ownKeys(joinable)
@@ -2551,6 +2667,7 @@ export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
 			relations,
 			members,
 			subqueries,
+			through,
 		})
 	}
 

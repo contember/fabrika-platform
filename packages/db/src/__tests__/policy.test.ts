@@ -538,9 +538,9 @@ describe('a view (ADR-0072)', () => {
 			view: true,
 		})
 		expect(policies['events']).not.toHaveProperty('view')
+		// The parent row places a view's rows, so its chain is the parent link alone.
 		expect(modelOf(tableModels(read({ ...base, project_summaries: summary })), 'project_summaries')?.chain).toEqual([
 			{ dimension: 'project', column: 'project_id' },
-			{ dimension: 'organization', column: 'organization_id' },
 		])
 	})
 
@@ -581,16 +581,53 @@ describe('a view (ADR-0072)', () => {
 		}
 	})
 
-	test('carries its whole chain, though no foreign key ties it; only a view shares its key with its parent column', () => {
+	test("needs only its parent column, inherits the parent's chain columns it carries, and only a view shares its key with it", () => {
 		const withoutChain = { ...viewColumns, project_summaries: { ...viewColumns.project_summaries, columns: ['project_id', 'name', 'events'] } }
-		expect(refusal({ ...base, project_summaries: summary }, withoutChain)).toBe(
-			'project_summaries: must carry organization_id, because it lies in organization; a row carries its whole containment chain',
+		expect(tablePolicies(read({ ...base, project_summaries: summary }, withoutChain))['project_summaries']?.scope).toEqual({
+			mode: 'child',
+			parent: 'projects',
+			key: 'project_id',
+			column: 'project_id',
+			inherit: [],
+		})
+		const withoutParent = { ...viewColumns, project_summaries: { ...viewColumns.project_summaries, columns: ['organization_id', 'name', 'events'] } }
+		expect(refusal({ ...base, project_summaries: { ...summary, scope: { child: 'projects', key: 'name' } } }, withoutParent)).toContain(
+			'project_summaries: scope.column defaults to project_id (the key of its parent projects), which is not a column',
+		)
+		expect(refusal({ ...base, project_summaries: { ...summary, scope: { child: 'projects', key: 'project_id', inherit: ['name'] } } })).toBe(
+			'project_summaries: inherits name, which is not a containment column of projects (organization_id)',
 		)
 		expect(refusal({ ...base, events: { ...base.events, scope: { child: 'projects', key: 'project_id' } } })).toBe(
 			'events: project_id is both the key and the project containment column; the layer stamps each, so they need distinct columns',
 		)
 		expect(refusal({ ...base, project_summaries: summary }, { ...viewColumns, events: { ...viewColumns.events, foreignKeys: [] } })).toContain(
 			'events: project_id is not a foreign key to projects.id',
+		)
+	})
+
+	test("takes a when, whose path starts at its parent column and follows the parent's foreign keys from there", () => {
+		const when = (condition: unknown) => ({ ...base, project_summaries: { ...summary, when: { 'projects.read': condition } } })
+		expect(tablePolicies(read(when({ 'project_id.organization_id.name': { eq: 'One' } })))['project_summaries']?.when).toEqual({
+			'projects.read': { 'project_id.organization_id.name': { eq: 'One' } },
+		})
+		expect(refusal(when({ 'organization_id.name': { eq: 'One' } }))).toBe(
+			'project_summaries: when.projects.read.organization_id.name: project_summaries.organization_id is not a single-column foreign key, so a path cannot follow it',
+		)
+		expect(refusal(when({ some: { events: { note: { isNull: false } } } }))).toBe(
+			'project_summaries: when.projects.read.some: events has no single-column foreign key to project_summaries',
+		)
+		const reference = {
+			...base,
+			organization_names: { scope: { reference: 'names' }, actions: { read: 'projects.read' }, when: { 'projects.read': { name: { eq: 'One' } } } },
+		}
+		expect(refusal(reference)).toBe('organization_names: a reference table takes no when; every site reads it')
+	})
+
+	test('confers no relation', () => {
+		const vocabulary = { ...viewVocabulary, relations: { watcher: { dimension: 'project' } } }
+		const confers = { ...base, project_summaries: { ...summary, confers: { watcher: { principal: 'name' } } } }
+		expect(() => readTables(plain(viewColumns), plain(confers), plain(vocabulary))).toThrow(
+			'project_summaries: a view confers no relation; its rows change with every write to the tables it reads, which no delegation bound sees',
 		)
 	})
 

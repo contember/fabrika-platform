@@ -25,15 +25,17 @@ create table tasks (
 	version integer not null
 );
 create table docs (id text not null primary key, project_id text not null references projects (id), title text not null);
+create view doc_titles as select id, project_id, title from docs;
 `
 
 interface DB {
 	projects: { id: string; name: string; version: number }
 	tasks: { id: string; project_id: string; open: ColumnType<boolean, boolean | undefined, boolean>; version: number }
 	docs: { id: string; project_id: string; title: string }
+	doc_titles: { id: string | null; project_id: string | null; title: string | null }
 }
 
-const columns: TypedColumnList<DB> = {
+const columns: TypedColumnList<DB, 'doc_titles'> = {
 	projects: { columns: ['id', 'name', 'version'], foreignKeys: [] },
 	tasks: {
 		columns: ['id', 'project_id', 'open', 'version'],
@@ -41,6 +43,7 @@ const columns: TypedColumnList<DB> = {
 		booleans: ['open'],
 	},
 	docs: { columns: ['id', 'project_id', 'title'], foreignKeys: [{ columns: ['project_id'], table: 'projects', references: ['id'] }] },
+	doc_titles: { columns: ['id', 'project_id', 'title'], foreignKeys: [], view: true },
 }
 
 const vocabulary = {
@@ -65,6 +68,7 @@ const policies = {
 		memberReveals: { task: { to: 'project', actions: ['projects.read'], when: { open: { eq: true } } } },
 	},
 	docs: { scope: { child: 'projects' }, actions: { read: 'projects.read' } },
+	doc_titles: { scope: { child: 'projects' }, actions: { read: 'projects.read' } },
 } as const
 
 const tables = defineTables(vocabulary, columns)(policies)
@@ -139,6 +143,13 @@ describe('a Within that carries a grant at a row which reveals its ancestor', ()
 	test("lists the row's ancestor node and the rows under it, and no other node", async () => {
 		expect(await listed('projects', atTasks('t1'))).toEqual(['p1'])
 		expect(await listed('docs', atTasks('t1'))).toEqual(['d1'])
+	})
+
+	test("lists a child view's rows through the revealed parent row, and follows the row", async () => {
+		expect(await listed('doc_titles', atTasks('t1'))).toEqual(['d1'])
+		expect(await listed('doc_titles', atTasks('t2'))).toEqual([])
+		storage.sql.exec("update tasks set project_id = 'p3' where id = 't1'")
+		expect(await listed('doc_titles', atTasks('t1'))).toEqual(['d3'])
 	})
 
 	test("reveals nothing for a row the reveal's condition excludes, or for a node with no row", async () => {

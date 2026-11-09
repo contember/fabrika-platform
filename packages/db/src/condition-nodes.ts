@@ -103,10 +103,13 @@ function literals(value: ConditionLiteral | readonly ConditionLiteral[] | boolea
 	return nodes
 }
 
-/** `select table.key from table where <where>`: the one subquery shape the guard admits in a scope predicate. */
-export function subquery(table: string, key: string, where: OperationNode): OperationNode {
+/**
+ * `select table.key from table where <where>`: the one subquery shape the guard admits in a scope predicate. Without
+ * `where`, every row's key: only a child view's parent subquery takes that form.
+ */
+export function subquery(table: string, key: string, where?: OperationNode): OperationNode {
 	const select = SelectQueryNode.cloneWithSelections(SelectQueryNode.createFrom([TableNode.create(table)]), [
 		SelectionNode.create(ReferenceNode.create(ColumnNode.create(key), TableNode.create(table))),
 	])
-	return QueryNode.cloneWithWhere(select, where)
+	return where === undefined ? select : QueryNode.cloneWithWhere(select, where)
 }

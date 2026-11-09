@@ -182,7 +182,9 @@ function joinNode(parent: string, join: JoinState): JoinNode {
 			BinaryOperationNode.create(column(child, pair.childColumn), OperatorNode.create('='), column(parent, pair.parentColumn))
 		),
 	)
-	const conditions = conditionsNode(child, join.select.conditions)
+	const requested = conditionsNode(child, join.select.conditions)
+	const held = join.condition
+	const conditions = held === undefined ? requested : requested === undefined ? held : AndNode.create(requested, ParensNode.create(held))
 	const on = conditions === undefined ? foreignKey : AndNode.create(foreignKey, ParensNode.create(conditions))
 	return JoinNode.createWithOn('InnerJoin', TableNode.create(child), on)
 }

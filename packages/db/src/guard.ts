@@ -31,6 +31,18 @@ export interface GuardContext {
 	 * its node column, a condition path's target by its key. Without it, a scope holds no subquery.
 	 */
 	readonly subqueries?: Readonly<Record<string, readonly string[]>>
+	/**
+	 * A child view's parent: its scope may read the view's rows through `<column> in (select P.<key> from P where <P's
+	 * reach>)`. Without it, a scope holds no such subquery.
+	 */
+	readonly through?: ViewParentLink | undefined
+}
+
+/** The parent a child view's scope reads its rows through: the view's parent column, the parent table and its key. */
+export interface ViewParentLink {
+	readonly column: string
+	readonly table: string
+	readonly key: string
 }
 
 /** A subquery of the scope predicate the shape check admitted, and the one table it reads. */
@@ -42,7 +54,8 @@ interface Admitted {
 /**
  * How deep subqueries of a scope nest, the deepest the layer builds: a reveal's row (1) under a condition path of three
  * hops, and a reveal matched through a secondary path above the relation's dimension (the reveal's row, the path's
- * table, the source, and the table a principal path reads).
+ * table, the source, and the table a principal path reads). A child view's parent subquery stands once above them, at
+ * the top of its scope, and counts apart, so a view's scope nests at most one deeper.
  */
 const MAX_SCOPE_NESTING = 4
 
@@ -155,7 +168,12 @@ function checkRoot(root: OperationNode, context: GuardContext, admitted: Admitte
 	if (!scoped) {
 		throw new QueryRefusedError('scope_predicate', 'the scope predicate must be the top-level conjunct of WHERE')
 	}
-	const reach = (node: unknown) => isReach(node, context.table, context.subqueries, admitted)
+	const through = context.through
+	// A child view's rows are placed by its parent row only: no column of the view stands in for that reach.
+	const reach = (node: unknown) =>
+		through === undefined
+			? isReach(node, context.table, context.subqueries, admitted)
+			: isEverything(node) || isThroughParent(node, context.table, through, context.subqueries, admitted)
 	const scope = context.scope
 	const shaped = reach(scope)
 		|| (kindOf(scope) === 'AndNode' && hasOnly(scope, CONNECTIVE_KEYS) && reach(read(scope, 'left'))
@@ -173,14 +191,71 @@ function checkRoot(root: OperationNode, context: GuardContext, admitted: Admitte
  * What a capability reaches before its action's condition narrows it: everything (a global grant), a Ref's chain of
  * equalities, and its relation rows after them, or a Within's memberships of values and relation rows.
  */
-function isReach(node: unknown, table: string, subqueries: GuardContext['subqueries'], admitted: Admitted[]): boolean {
+function isReach(node: unknown, table: string, subqueries: GuardContext['subqueries'], admitted: Admitted[], depth = 0): boolean {
 	const equality = (leaf: unknown) => isScopeEquality(leaf, table)
-	const related = (leaf: unknown) => isRelationMembership(leaf, table, subqueries, admitted)
+	const related = (leaf: unknown) => isRelationMembership(leaf, table, subqueries, admitted, depth)
 	const member = (leaf: unknown) => isScopeMembership(leaf, table) || related(leaf)
 	return isEverything(node)
 		|| isTreeOf(node, 'AndNode', equality)
 		|| isUnionOf(node, member)
 		|| (kindOf(node) === 'AndNode' && isTreeOf(read(node, 'left'), 'AndNode', equality) && isUnionOf(read(node, 'right'), related))
+}
+
+/**
+ * A child view's rows read through its parent: `V.<column> in (select P.<key> from P where <P's reach>)`, after an AND
+ * of equalities when one row is addressed. P's reach is one the guard admits for a statement on P, never `true`; a
+ * subquery without WHERE reads every parent row.
+ */
+function isThroughParent(
+	node: unknown,
+	table: string,
+	parent: ViewParentLink,
+	subqueries: GuardContext['subqueries'],
+	admitted: Admitted[],
+): boolean {
+	const member = (leaf: unknown) => isParentMembership(leaf, table, parent, subqueries, admitted)
+	return member(node)
+		|| (kindOf(node) === 'AndNode' && hasOnly(node, CONNECTIVE_KEYS) && isTreeOf(read(node, 'left'), 'AndNode', (leaf) => isScopeEquality(leaf, table))
+			&& member(read(node, 'right')))
+}
+
+function isParentMembership(
+	node: unknown,
+	table: string,
+	parent: ViewParentLink,
+	subqueries: GuardContext['subqueries'],
+	admitted: Admitted[],
+): boolean {
+	if (
+		kindOf(node) !== 'BinaryOperationNode' || !hasOnly(node, BINARY_KEYS) || read(read(node, 'operator'), 'operator') !== 'in'
+		|| !isReference(read(node, 'leftOperand'), table, parent.column)
+	) {
+		return false
+	}
+	const select = read(node, 'rightOperand')
+	const from = read(select, 'from')
+	const froms = read(from, 'froms')
+	const selections = read(select, 'selections')
+	const where = read(select, 'where')
+	if (
+		kindOf(select) !== 'SelectQueryNode' || !hasOnly(select, SUBQUERY_KEYS) || !hasOnly(from, FROM_KEYS) || !isArray(froms) || froms.length !== 1
+		|| tableName(froms[0]) !== parent.table || !isArray(selections) || selections.length !== 1 || !hasOnly(selections[0], SELECTION_KEYS)
+		|| !isReference(read(selections[0], 'selection'), parent.table, parent.key) || (where !== undefined && !hasOnly(where, WHERE_KEYS))
+	) {
+		return false
+	}
+	// No WHERE: every parent row, a `Within` of `all`; strictly narrower than the `true` a view's statement admits.
+	if (where === undefined) {
+		admitted[admitted.length] = { node: select, table: parent.table }
+		return true
+	}
+	const reach = read(where, 'where')
+	// The parent's reach nests as deep as on a statement of the parent's own: the parent's subquery counts apart.
+	if (isEverything(reach) || !isReach(reach, parent.table, subqueries, admitted, 0)) {
+		return false
+	}
+	admitted[admitted.length] = { node: select, table: parent.table }
+	return true
 }
 
 /** One leaf, or a parenthesized OR tree of them. */

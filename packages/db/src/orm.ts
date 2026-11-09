@@ -72,7 +72,7 @@ import {
 	prepareApplicationInsert,
 	prepareChildInsert,
 	prepareDimensionInsert,
-	reachColumn,
+	reachedBy,
 	reachPredicate,
 	readValues,
 	removeRow,
@@ -81,7 +81,6 @@ import {
 	runtimeOf,
 	scopedApplicationRead,
 	scopeTerms,
-	secondaryPathsOf,
 	selectOne,
 	selfLinks,
 	type TableContext,
@@ -425,8 +424,7 @@ function childRows(context: TableContext, site: DataSite, run: Runner, capabilit
 			if (typeof id !== 'string' || id.length === 0) {
 				throw new QueryRefusedError('row_address', `a ${context.model.name} row is addressed by its ${key}, a non-empty string`)
 			}
-			const scope = allOf([equals(context.model.name, key, id), parentPredicate(context, grant)])
-			return selectOne(context, run, scope, visibleFor(context.model, grant.action), grant.action)
+			return selectOne(context, run, parentPredicate(context, grant, id), visibleFor(context.model, grant.action), grant.action)
 		}),
 		insert: writing(
 			site,
@@ -439,8 +437,7 @@ function childRows(context: TableContext, site: DataSite, run: Runner, capabilit
 			}
 			const grant = updatingRef(context, capability, parent)
 			const changes = readValues(values, updatableBy(context.model, grant.action), 'update', context.model)
-			const scope = allOf([equals(context.model.name, key, id), parentPredicate(context, grant)])
-			return updateRow(context, run, { scope }, changes, versionArgument(context, options))
+			return updateRow(context, run, { scope: parentPredicate(context, grant, id) }, changes, versionArgument(context, options))
 		}),
 		remove: writing(site, 'remove', async (id: unknown, ...options: unknown[]) => {
 			await removeRow(context, run, { scope: childObjectPredicate(context, capability, id, 'delete') }, versionArgument(context, options))
@@ -485,10 +482,9 @@ function withinTables(parts: DataLayerParts, site: DataSite, run: Runner, capabi
 	for (let index = 0; index < tables.length; index++) {
 		const model = modelOf(parts.models, tables[index] ?? '')
 		const listable = model?.scope.mode === 'dimension' || model?.scope.mode === 'child'
-		const reached = model !== undefined && (reachColumn(model, grant.dimension) !== undefined || secondaryPathsOf(model, grant.dimension).length > 0)
-		if (model !== undefined && listable && reached) {
-			const context = parts.contextOf(model.name)
-			setOwn(handle, model.name, listedRows(parts, context, site, run, capability, () => reachPredicate(context, capability)))
+		const context = model !== undefined && listable ? parts.contextOf(model.name) : undefined
+		if (context !== undefined && reachedBy(context, grant.dimension)) {
+			setOwn(handle, context.model.name, listedRows(parts, context, site, run, capability, () => reachPredicate(context, capability)))
 		}
 	}
 	return freeze(handle)
@@ -1347,6 +1343,7 @@ async function listRows(
 		joins: {},
 		scope,
 		subqueries: context.subqueries,
+		through: context.through,
 	})
 	const page = answerRows(dialect, table, rowColumnsOf(context.model), rows.slice(0, limit))
 	const last = page[page.length - 1]
@@ -1377,6 +1374,7 @@ async function countRows(
 		joins: {},
 		scope,
 		subqueries: context.subqueries,
+		through: context.through,
 	})
 	const count = row === undefined ? '0' : row['count']
 	return typeof count === 'string' || typeof count === 'number' ? Number(count) : 0

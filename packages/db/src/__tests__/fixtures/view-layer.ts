@@ -1,6 +1,8 @@
 // Views read as read-only tables (ADR-0072): one migration both dialects run, the column list codegen renders for it
 // (the SQLite suite renders it again and compares), and the policies. A per-parent summary keyed by its parent, a child
-// view keyed by its own id with a column of its own read action, a reference view, and a view without a policy.
+// view keyed by its own id with a column of its own read action, one that carries no chain column, one whose own
+// organization column names another row's, one whose read a condition narrows through its parent row, a reference
+// view, and a view without a policy.
 
 import type { TypedColumnList } from '@fabrika/db'
 import type { ColumnType } from 'kysely'
@@ -27,6 +29,9 @@ create view project_summaries as
 	from projects p left join events e on e.project_id = p.id
 	group by p.id, p.organization_id, p.name;
 create view event_notes as select e.id, e.project_id, e.organization_id, e.at, e.note from events e;
+create view event_titles as select e.id, e.project_id, e.note from events e;
+create view named_events as select e.id, e.project_id, e.note from events e;
+create view stray_events as select e.id, e.project_id, cast('o1' as text) as organization_id from events e;
 create view organization_names as select id, name from organizations;
 create view project_names as select id, name from projects;
 `
@@ -39,11 +44,23 @@ export interface EventNotesView {
 	note: string | null
 }
 
+export interface EventTitlesView {
+	id: string | null
+	project_id: string | null
+	note: string | null
+}
+
 export interface EventsTable {
 	id: string
 	project_id: string
 	organization_id: string
 	at: ColumnType<Date, Date | string, Date | string>
+	note: string | null
+}
+
+export interface NamedEventsView {
+	id: string | null
+	project_id: string | null
 	note: string | null
 }
 
@@ -75,21 +92,33 @@ export interface ProjectsTable {
 	name: string
 }
 
+export interface StrayEventsView {
+	id: string | null
+	project_id: string | null
+	organization_id: string | null
+}
+
 export interface DB {
 	event_notes: EventNotesView
+	event_titles: EventTitlesView
 	events: EventsTable
+	named_events: NamedEventsView
 	organization_names: OrganizationNamesView
 	organizations: OrganizationsTable
 	project_names: ProjectNamesView
 	project_summaries: ProjectSummariesView
 	projects: ProjectsTable
+	stray_events: StrayEventsView
 }
 
 export type Views =
 	| 'event_notes'
+	| 'event_titles'
+	| 'named_events'
 	| 'organization_names'
 	| 'project_names'
 	| 'project_summaries'
+	| 'stray_events'
 
 export const viewColumns: TypedColumnList<DB, Views> = {
 	'event_notes': {
@@ -102,6 +131,15 @@ export const viewColumns: TypedColumnList<DB, Views> = {
 		],
 		foreignKeys: [],
 		timestamps: ['at'],
+		view: true,
+	},
+	'event_titles': {
+		columns: [
+			'id',
+			'project_id',
+			'note',
+		],
+		foreignKeys: [],
 		view: true,
 	},
 	'events': {
@@ -121,6 +159,15 @@ export const viewColumns: TypedColumnList<DB, Views> = {
 		],
 		timestamps: ['at'],
 		notNull: ['id', 'project_id', 'organization_id', 'at'],
+	},
+	'named_events': {
+		columns: [
+			'id',
+			'project_id',
+			'note',
+		],
+		foreignKeys: [],
+		view: true,
 	},
 	'organization_names': {
 		columns: [
@@ -171,6 +218,15 @@ export const viewColumns: TypedColumnList<DB, Views> = {
 		],
 		notNull: ['id', 'organization_id', 'name'],
 	},
+	'stray_events': {
+		columns: [
+			'id',
+			'project_id',
+			'organization_id',
+		],
+		foreignKeys: [],
+		view: true,
+	},
 }
 
 export const viewVocabulary = {
@@ -184,7 +240,7 @@ export const viewVocabulary = {
 	roles: {},
 } as const
 
-export const viewTables = defineTables(viewVocabulary, viewColumns)({
+export const viewPolicies = {
 	organizations: {
 		scope: { dimension: 'organization' },
 		actions: { read: 'projects.read' },
@@ -208,8 +264,24 @@ export const viewTables = defineTables(viewVocabulary, viewColumns)({
 		actions: { read: ['projects.read', 'notes.read'] },
 		columns: { note: { read: 'notes.read' } },
 	},
+	event_titles: {
+		scope: { child: 'projects' },
+		actions: { read: 'projects.read' },
+	},
+	stray_events: {
+		scope: { child: 'projects' },
+		actions: { read: 'projects.read' },
+	},
+	named_events: {
+		scope: { child: 'projects' },
+		actions: { read: 'projects.read' },
+		// The first hop follows the parent column, which no foreign key declares; the next one the parent's own.
+		when: { 'projects.read': { allOf: [{ note: { isNull: false } }, { 'project_id.organization_id.name': { eq: 'One' } }] } },
+	},
 	organization_names: {
 		scope: { reference: 'every site shows the names of the organizations' },
 		actions: { read: 'projects.read' },
 	},
-})
+} as const
+
+export const viewTables = defineTables(viewVocabulary, viewColumns)(viewPolicies)

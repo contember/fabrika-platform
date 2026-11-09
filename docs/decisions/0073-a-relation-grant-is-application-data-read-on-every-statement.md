@@ -103,7 +103,8 @@ over a column, with `allOf`, `anyOf` and `not`, `{ some: { <table>: … } }` and
 names the row, and `{ now: true }` as the statement clock. A condition's path follows at most three foreign keys, a
 `some` counted as one. A hop's subquery reads its target unscoped, so a hop follows only a row's own container or parent
 column, a foreign key that also holds every ancestor the two tables share and references the target's key, or a key
-into a reference table; a `some` follows such a key backwards. An insert's condition is judged on the inserted row; one with
+into a reference table; a `some` follows such a key backwards. A child view's parent column is such a hop, though no
+foreign key declares it ([ADR-0072](0072-a-view-is-a-read-only-table.md)). An insert's condition is judged on the inserted row; one with
 a path, on the written row in the insert's transaction, every row on its paths locked `FOR SHARE` first, and a refusal
 fails the transaction. It takes no `some`. An upsert's conflict
 update is judged on the stored row. A relation source's condition reads the source row only.
