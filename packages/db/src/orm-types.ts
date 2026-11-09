@@ -162,6 +162,9 @@ type ChainDimensions<P, T, V> = PolicyOf<P, T> extends { readonly scope: infer S
 /** The dimensions whose `Within` lists table `T`: every dimension of its chain, and a top-level table's own. */
 type ReachOf<P, T, V> = [ContainerOf<P, T>] extends [never] ? DimensionOf<P, T> | ChainDimensions<P, T, V> : ChainDimensions<P, T, V>
 
+/** The dimensions outside its chain whose `Within` reads table `T` through a foreign key (`readThrough`). */
+type ReadThroughOf<P, T> = PolicyOf<P, T> extends { readonly readThrough: infer R } ? keyof R & string : never
+
 /**
  * A row as reads return it: the generated interface itself where no column has a separate write type, so a
  * diagnostic names it (`DealsTable`), and Kysely's `Selectable` of it otherwise.
@@ -190,8 +193,11 @@ export type DbIndex<DB, P, V = unknown> = {
 	readonly children: { readonly [T in ChildTableName<P> as ParentOf<P, T>]: T }
 	/** Dimension → the dimension tables listed in it: those it contains, and a top-level table its own. */
 	readonly listed: { readonly [T in DimensionTableName<P> as ListDimensionOf<P, T>]: T }
-	/** Dimension → the tables an `over` of it lists: each whose containment chain holds it, and a top-level table its own. */
-	readonly within: { readonly [T in DimensionTableName<P> | ChildTableName<P> as ReachOf<P, T, V>]: T }
+	/**
+	 * Dimension → the tables an `over` of it lists: each whose containment chain holds it, a top-level table its own, and
+	 * each that reads through it (`readThrough`).
+	 */
+	readonly within: { readonly [T in DimensionTableName<P> | ChildTableName<P> as ReachOf<P, T, V> | ReadThroughOf<P, T>]: T }
 	readonly references: ReferenceTableName<P>
 	/** The application tables: an `app` endpoint reads and writes them. */
 	readonly applications: ApplicationTableName<P>
