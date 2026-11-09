@@ -1,3 +1,4 @@
+import type { OperationNode } from 'kysely'
 import { inSet, isSafeInteger, type NameSet, nameSet, namesOf, ownEntry, ownKeys, parseList } from './builtins'
 import { QueryRefusedError } from './errors'
 import { isPlainIdentifier } from './identifier'
@@ -74,6 +75,8 @@ export interface JoinShape {
 export interface JoinState {
 	readonly join: JoinShape
 	readonly select: SelectState
+	/** The child's condition for the action the select holds, which the layer adds to the ON; never the builder's. */
+	readonly condition?: OperationNode
 }
 
 export interface SelectState {

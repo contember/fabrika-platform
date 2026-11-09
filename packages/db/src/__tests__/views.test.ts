@@ -18,10 +18,10 @@ import type { Database } from '../database'
 import { QueryRefusedError } from '../errors'
 import { bindScopedDatabase, type DataAccess, dataAccessOf, type DataHandles, type DataSite } from '../framework'
 import type { DataKind, UnscopedMode } from '../orm-types'
-import { readTables } from '../policy'
+import { defineTables, readTables } from '../policy'
 import { openSqlite } from '../sqlite'
 import { bunSqliteStorage } from '../sqlite-bun'
-import { scoped } from '../store'
+import { defineStore, scoped } from '../store'
 import { tablePolicies } from '../tables'
 import { TestAuthority } from './fixtures/authority'
 import { viewColumns, viewMigration, viewPolicies, viewTables, viewVocabulary } from './fixtures/view-layer'
@@ -62,18 +62,28 @@ const project = (action: string, id: string, org: string) => alice.ref('project'
 /** The cases both dialects run, over a layer `open` binds to a database migrated with `viewMigration` and `SEED`. */
 function viewCases(open: () => Database): void {
 	let data: DataAccess
+	const viewTablesLayer = scoped(viewTables)
 	// The same tables, but the parent's own read narrowed by a condition: a view's read is not narrowed by it.
 	let narrowedParent: DataAccess
+	// The same tables, with a condition on the read of a child table and of a child view: a join from the parent holds it.
+	const noted = { when: { 'projects.read': { note: { isNull: false } } } } as const
+	const conditioned = scoped(
+		defineTables(viewVocabulary, viewColumns)({
+			...viewPolicies,
+			events: { ...viewPolicies.events, ...noted },
+			event_titles: { ...viewPolicies.event_titles, ...noted },
+		}),
+	)
 
 	beforeAll(() => {
 		const database = open()
-		const layer = scoped(viewTables)
-		bindScopedDatabase(layer, { database, capabilities: alice })
-		data = dataAccessOf(layer)
+		bindScopedDatabase(viewTablesLayer, { database, capabilities: alice })
+		data = dataAccessOf(viewTablesLayer)
 		const projects = { ...viewPolicies.projects, when: { 'projects.read': { name: { notEq: 'Gemini' } } } }
 		const narrowed = scoped(readTables(viewColumns, { ...viewPolicies, projects }, viewVocabulary))
 		bindScopedDatabase(narrowed, { database, capabilities: alice })
 		narrowedParent = dataAccessOf(narrowed)
+		bindScopedDatabase(conditioned, { database, capabilities: alice })
 	})
 
 	/** One invocation of `kind`, committed when `work` resolves and rolled back when it throws. */
@@ -196,6 +206,21 @@ function viewCases(open: () => Database): void {
 		const narrowed = (table: string) => invoke('query', (db) => call(db.within(other), `${table}.list`), {}, narrowedParent).then(idsOf)
 		expect(await narrowed('projects')).toEqual([])
 		expect(await narrowed('event_titles')).toEqual(['e3'])
+	})
+
+	test("a store's join from the parent holds the child's condition of the held action, on a table and on a view", async () => {
+		// e2 has no note, so the condition hides it from a read of events and of event_titles alike.
+		const projects = defineStore(conditioned, 'projects', (t) => t)
+		const within = alice.within('organization', 'projects.read', ['o1'])
+		const events = await projects.select(within, (q) => q.join('events', (c) => c.columns(['id'])))
+		expect(events.map((row) => row['events.id'])).toEqual(['e1'])
+		const titles = await projects.select(within, (q) => q.join('event_titles', (c) => c.columns(['id'])))
+		expect(titles.map((row) => row['event_titles.id'])).toEqual(['e1'])
+		await expect(projects.select(within, (q) => q.join('named_events', (c) => c.columns(['id'])))).rejects.toThrow(
+			'joining named_events cannot hold its condition of projects.read, which reads other rows; read named_events through its own handle',
+		)
+		const unconditioned = await defineStore(viewTablesLayer, 'projects', (t) => t).select(within, (q) => q.join('events', (c) => c.columns(['id'])))
+		expect(unconditioned.map((row) => row['events.id']).sort()).toEqual(['e1', 'e2'])
 	})
 
 	test("a column with its own read action is read only by that action's Ref", async () => {

@@ -60,6 +60,7 @@ import {
 	finishSelect,
 	isPrimitive,
 	type JoinShape,
+	type JoinState,
 	type NoColumns,
 	type Primitive,
 	type ScopedSelect,
@@ -1275,22 +1276,52 @@ async function selectRows<S>(
 	visible: readonly string[] = context.model.visible,
 ): Promise<S[]> {
 	const run = storeRunner(context)
+	const now = new Date()
+	const joins: JoinState[] = []
 	for (let index = 0; index < state.joins.length; index++) {
 		const join = state.joins[index]
-		if (join !== undefined && !includes(join.join.readActions, action)) {
+		if (join === undefined) continue
+		if (!includes(join.join.readActions, action)) {
 			throw new CapabilityError(
 				'wrong_action',
 				`joining ${join.join.shape.table} requires ${join.join.readActions.join(' or ')}; the capability holds ${action}`,
 			)
 		}
+		joins[joins.length] = heldJoin(context, join, action, now)
 	}
 	if (scope === undefined) {
 		return []
 	}
 	const dialect = dialectOf(context)
-	const node = selectNode(boundState(context, state), visible, scope, undefined, context.model.dates, dialect)
+	const node = selectNode(boundState(context, { ...state, joins }), visible, scope, undefined, context.model.dates, dialect)
 	const rows = await (await run.read()).run<S>(node, guard(context, 'SelectQueryNode', scope))
 	return answerRows(dialect, context.model.name, joinedColumns(context, state), rows)
+}
+
+/**
+ * `join` narrowed by the child's condition of `action`, as a read of the child narrows its rows. The guard admits no
+ * subquery in an ON, so a condition that reads other rows (a path, `some`, `none`) refuses the join.
+ */
+function heldJoin(context: TableContext, join: JoinState, action: string, now: Date): JoinState {
+	const child = ownEntry(context.children, join.join.shape.table)
+	if (child === undefined) {
+		throw new QueryRefusedError('unknown_table', `${join.join.shape.table} is not a joinable child of ${context.model.name}`)
+	}
+	const condition = ownEntry(child.when, action)
+	if (condition === undefined) {
+		return join
+	}
+	let reads = false
+	conditionReach(condition, () => {
+		reads = true
+	})
+	if (reads) {
+		throw new CapabilityError(
+			'unenforceable',
+			`joining ${child.name} cannot hold its condition of ${action}, which reads other rows; read ${child.name} through its own handle`,
+		)
+	}
+	return { ...join, condition: conditionNode(child.name, condition, now) }
 }
 
 /** The column sets of a select's rows: the table's own, and each joined child's under its `<child>.<column>` alias. */
