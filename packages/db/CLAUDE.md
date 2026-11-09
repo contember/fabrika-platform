@@ -603,7 +603,9 @@ through a relation (`~rel`, `@fabrika/auth-core`). `authority.ts` builds every p
   from it; all of it counts towards the three. Every hop also needs a single-column foreign key on its column (`singleForeignKey`), the composite
   key of a tenant hop included, so a table with only `(project_id, org_id) references projects (id, org_id)` takes no
   path. An insert's condition is judged on the written row; one with a path in the insert's transaction, every
-  row on its paths locked `FOR SHARE` first, and it takes no `some`.
+  row on its paths locked `FOR SHARE` first (`readPaths`; a `some` after a path locks every row naming the row it
+  reached). `insertProblem` refuses a `none`, a `some` under `not` (a row inserted meanwhile falsifies them, and no
+  lock holds that) and a `some` of the rows naming the inserted row.
 - **A tenant-holding key** is one foreign key of exactly the column and every ancestor column the two tables share,
   referencing the target's key (`holdsExactly`), with each ancestor column in the column list's `notNull`
   (`requireNotNullAncestors`, the invariant above). A hop's subquery reads its target unscoped, so any looser key would

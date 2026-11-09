@@ -50,9 +50,18 @@ create table tasks (
 	title text not null,
 	foreign key (label_id, project_id) references labels (id, project_id)
 );
+create table stamps (
+	id text not null primary key,
+	label_id text not null references labels (id),
+	project_id text not null references projects (id),
+	ok boolean not null,
+	foreign key (label_id, project_id) references labels (id, project_id)
+);
 insert into projects (id, version) values ('p1', 1);
 insert into kinds (id, open) values ('k-open', true), ('k-spare', true);
 insert into labels (id, project_id, kind_id, public) values ('l-public', 'p1', 'k-open', true), ('l-spare', 'p1', 'k-spare', true);
+insert into stamps (id, label_id, project_id, ok) values
+	('st-on', 'l-public', 'p1', true), ('st-off', 'l-public', 'p1', false), ('st-spare', 'l-spare', 'p1', true);
 `
 
 interface DB {
@@ -60,6 +69,7 @@ interface DB {
 	kinds: { id: string; open: ColumnType<boolean, boolean, boolean> }
 	labels: { id: string; project_id: string; kind_id: string; public: ColumnType<boolean, boolean, boolean> }
 	tasks: { id: string; project_id: string; label_id: string | null; title: string }
+	stamps: { id: string; label_id: string; project_id: string; ok: ColumnType<boolean, boolean, boolean> }
 }
 
 const columns: TypedColumnList<DB> = {
@@ -83,6 +93,16 @@ const columns: TypedColumnList<DB> = {
 		],
 		notNull: ['id', 'project_id', 'title'],
 	},
+	stamps: {
+		columns: ['id', 'label_id', 'project_id', 'ok'],
+		foreignKeys: [
+			{ columns: ['project_id'], table: 'projects', references: ['id'] },
+			{ columns: ['label_id'], table: 'labels', references: ['id'] },
+			{ columns: ['label_id', 'project_id'], table: 'labels', references: ['id', 'project_id'] },
+		],
+		booleans: ['ok'],
+		notNull: ['id', 'label_id', 'project_id', 'ok'],
+	},
 }
 
 const vocabulary = {
@@ -103,6 +123,7 @@ function tablesWith(when: ConditionPolicy<keyof DB['tasks'] & string>) {
 			insert: ['label_id', 'title'],
 			when: { 'tasks.write': when },
 		},
+		stamps: { scope: { child: 'projects' }, actions: { read: 'tasks.read' } },
 	})
 }
 
@@ -185,5 +206,35 @@ describe.skipIf(!hasPostgres)("an insert's condition holds the rows it read unti
 			other: await concurrently("update kinds set open = false where id = 'k-spare'"),
 		}))
 		expect(outcome).toEqual({ named: 'blocked', other: 'written' })
+	})
+
+	test('the row a path reached and every row of a some naming it', async () => {
+		const outcome = await whileInserting(
+			{ label_id: { some: { stamps: { ok: { eq: true } } } } },
+			{ label_id: 'l-public', title: 'three' },
+			async () => ({
+				reached: await concurrently("update labels set public = false where id = 'l-public'"),
+				found: await concurrently("update stamps set ok = false where id = 'st-on'"),
+				removed: await concurrently("delete from stamps where id = 'st-on'"),
+				moved: await concurrently("update stamps set label_id = 'l-spare' where id = 'st-on'"),
+				other: await concurrently("update stamps set ok = false where id = 'st-spare'"),
+				// A new row can only make a some truer: why an insert's condition takes no none.
+				added: await concurrently("insert into stamps (id, label_id, project_id, ok) values ('st-new', 'l-public', 'p1', false)"),
+			}),
+		)
+		expect(outcome).toEqual({
+			reached: 'blocked',
+			found: 'blocked',
+			removed: 'blocked',
+			moved: 'blocked',
+			other: 'written',
+			added: 'written',
+		})
+	})
+
+	test('a row the some finds no row for is refused', async () => {
+		await expect(
+			whileInserting({ label_id: { some: { stamps: { id: { eq: 'st-missing' } } } } }, { label_id: 'l-spare', title: 'four' }, async () => undefined),
+		).rejects.toThrow('outside what tasks.write inserts into tasks')
 	})
 })

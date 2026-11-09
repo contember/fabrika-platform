@@ -4754,7 +4754,9 @@ export const tables = defineTables(vocabulary, columns)({
   together. Each hop is one more subquery in every statement of the action; shorten a longer path with a stored column.
 - An insert's condition is judged on the written row. One with a path runs in the insert's transaction, every row on
   its paths locked `FOR SHARE` first, so nobody changes the project while the task goes in. An insert action's
-  condition takes no `some` or `none`. An upsert's conflict update is judged on the stored row.
+  condition may end a path in `some` (`{ project_id: { some: … } }`), whose rows are locked too. It takes no `none`,
+  no `some` under `not`, and no `some` straight on the inserted row: a row inserted meanwhile could make the first two
+  false, and nothing names the new row yet. An upsert's conflict update is judged on the stored row.
 
 ### A key that holds the tenant needs its ancestors NOT NULL
 

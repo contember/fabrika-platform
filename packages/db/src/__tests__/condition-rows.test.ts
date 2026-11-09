@@ -411,8 +411,25 @@ describe('the policy bounds the rows a condition reads past a path', () => {
 		)
 	})
 
-	test("a source's condition reads the source row only, and an insert's takes no some", () => {
+	test("a source's condition reads the source row only", () => {
 		expect(() => tablesWith({ source: { task_id: { some: { notes: { flagged: { eq: true } } } } } })).toThrow('follows no foreign key')
-		expect(() => tablesWith({ insert: { some: { notes: { flagged: { eq: true } } } } })).toThrow('takes no some or none')
+	})
+
+	test("an insert's condition takes a some only of rows that existed before it, and never one a new row could falsify", () => {
+		expect(() => tablesWith({ insert: URGENT_PROJECT })).not.toThrow()
+		expect(() => tablesWith({ insert: { project_id: { some: { tasks: { some: { steps: { done: { eq: true } } } } } } } })).not.toThrow()
+		expect(() => tablesWith({ insert: { some: { notes: { flagged: { eq: true } } } } })).toThrow(
+			"tasks: when.tasks.write: an insert's condition takes no some or none of the rows naming the inserted row",
+		)
+		expect(() => tablesWith({ insert: { anyOf: [{ open: { eq: true } }, { none: { notes: { flagged: { eq: true } } } }] } })).toThrow(
+			'of the rows naming the inserted row',
+		)
+		expect(() => tablesWith({ insert: { project_id: { none: { project_tags: { tag_id: { eq: 'g-calm' } } } } } })).toThrow(
+			"an insert's condition takes no none, and no some under not",
+		)
+		expect(() => tablesWith({ insert: { not: URGENT_PROJECT } })).toThrow('no some under not')
+		expect(() => tablesWith({ insert: { project_id: { some: { tasks: { not: { some: { steps: { done: { eq: true } } } } } } } } })).toThrow(
+			'no some under not',
+		)
 	})
 })

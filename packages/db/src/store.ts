@@ -49,7 +49,7 @@ import {
 	type WithinGrant,
 } from './capability'
 import { conditionNode, subquery } from './condition-nodes'
-import { type ConditionModel, conditionReach, pathTests, rowSatisfies } from './conditions'
+import { type ConditionModel, conditionReach, readPaths, rowSatisfies } from './conditions'
 import { type Database, InvocationTransaction, type Session, sessionOf, type SqlDialect } from './database'
 import {
 	type ComparableColumn,
@@ -1990,7 +1990,7 @@ function checkInserted(
 	const model = context.model
 	const now = new Date()
 	const condition = ownEntry(model.when, grant.action)
-	const judged = condition === undefined || pathTests(condition).length === 0 ? undefined : { action: grant.action, condition }
+	const judged = condition === undefined || readPaths(condition).length === 0 ? undefined : { action: grant.action, condition }
 	if (condition !== undefined && judged === undefined && !rowSatisfies(condition, row, now)) {
 		throw new ConflictError(`the row is outside what ${grant.action} inserts into ${model.name}`)
 	}
@@ -2022,9 +2022,10 @@ function checkInserted(
 
 /**
  * An insert's condition that follows a path, judged on the row just written, in its transaction. The database has then
- * held the row's foreign keys, so a path reads only the rows they name in the row's tenant. Every row on each path is
- * locked `FOR SHARE` first, so none changes before the commit; then the condition is judged as a read of the row judges
- * it. A refused row fails the transaction, so it commits nothing even when the handler catches the refusal.
+ * held the row's foreign keys, so a path reads only the rows they name in the row's tenant. Every row each read path
+ * reaches is locked `FOR SHARE` first (a `some`'s rows: every row naming the row it reached), so none changes or goes
+ * before the commit; then the condition is judged as a read of the row judges it. A refused row fails the transaction,
+ * so it commits nothing even when the handler catches the refusal.
  */
 async function judgeInserted(
 	transaction: Session,
@@ -2039,28 +2040,28 @@ async function judgeInserted(
 	if (key === undefined || key === null) {
 		throw new QueryRefusedError('unexpected_row', `an insert into ${model.name} judged by ${judged.action} has no key`)
 	}
-	const tests = pathTests(judged.condition)
-	for (let index = 0; index < tests.length; index++) {
-		const hops = tests[index]?.hops ?? []
-		// The rows a path names, hop by hop from the inserted row; each statement admits the columns it walks.
-		let reached = subquery(model.name, hops[0]?.column ?? '', equals(model.name, keyOf(model), key))
-		const walked: Record<string, string[]> = { [model.name]: [hops[0]?.column ?? ''] }
-		for (let position = 0; position < hops.length; position++) {
-			const hop = hops[position]
-			if (hop === undefined) continue
-			const scope = BinaryOperationNode.create(column(hop.table, hop.key), OperatorNode.create('in'), reached)
-			await transaction.run(lockNode(hop.table, hop.key, scope), {
+	const paths = readPaths(judged.condition)
+	for (let index = 0; index < paths.length; index++) {
+		const steps = paths[index] ?? []
+		// The rows a path reaches, step by step from the inserted row; each statement admits the columns it walks.
+		let reached = subquery(model.name, steps[0]?.from ?? '', equals(model.name, keyOf(model), key))
+		const walked: Record<string, string[]> = { [model.name]: [steps[0]?.from ?? ''] }
+		for (let position = 0; position < steps.length; position++) {
+			const step = steps[position]
+			if (step === undefined) continue
+			const scope = BinaryOperationNode.create(column(step.table, step.to), OperatorNode.create('in'), reached)
+			await transaction.run(lockNode(step.table, step.to, scope), {
 				root: 'SelectQueryNode',
-				table: hop.table,
+				table: step.table,
 				joins: {},
 				scope,
 				lock: 'share',
 				subqueries: withColumns(context.subqueries, walked),
 			})
-			const next = hops[position + 1]
+			const next = steps[position + 1]
 			if (next !== undefined) {
-				reached = subquery(hop.table, next.column, scope)
-				walked[hop.table] = [...(walked[hop.table] ?? []), next.column]
+				reached = subquery(step.table, next.from, scope)
+				walked[step.table] = [...(walked[step.table] ?? []), next.from]
 			}
 		}
 	}

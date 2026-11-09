@@ -30,6 +30,13 @@ create table tasks (
 	title text not null unique,
 	foreign key (label_id, project_id) references labels (id, project_id)
 );
+create table stamps (
+	id text not null primary key,
+	label_id text not null references labels (id),
+	project_id text not null references projects (id),
+	ok boolean not null,
+	foreign key (label_id, project_id) references labels (id, project_id)
+);
 `
 
 interface DB {
@@ -37,6 +44,7 @@ interface DB {
 	kinds: { id: string; open: ColumnType<boolean, boolean, boolean> }
 	labels: { id: string; project_id: string; public: ColumnType<boolean, boolean, boolean> }
 	tasks: { id: string; project_id: string; kind_id: string | null; label_id: string | null; title: string }
+	stamps: { id: string; label_id: string; project_id: string; ok: ColumnType<boolean, boolean, boolean> }
 }
 
 type TaskKey = ForeignKey<keyof DB['tasks'] & string, keyof DB & string>
@@ -63,6 +71,16 @@ function columnsWith(labelKeys: readonly TaskKey[]): TypedColumnList<DB> {
 			],
 			notNull: ['id', 'project_id', 'title'],
 		},
+		stamps: {
+			columns: ['id', 'label_id', 'project_id', 'ok'],
+			foreignKeys: [
+				{ columns: ['project_id'], table: 'projects', references: ['id'] },
+				{ columns: ['label_id'], table: 'labels', references: ['id'] },
+				{ columns: ['label_id', 'project_id'], table: 'labels', references: ['id', 'project_id'] },
+			],
+			booleans: ['ok'],
+			notNull: ['id', 'label_id', 'project_id', 'ok'],
+		},
 	}
 }
 
@@ -84,6 +102,7 @@ function tablesWith(when: ConditionPolicy<keyof DB['tasks'] & string>, labelKeys
 			insert: ['kind_id', 'label_id', 'title'],
 			when: { 'tasks.write': when },
 		},
+		stamps: { scope: { child: 'projects' }, actions: { read: 'tasks.read' } },
 	})
 }
 
@@ -97,6 +116,7 @@ beforeEach(() => {
 		insert into projects (id, version) values ('p1', 1), ('p2', 1);
 		insert into kinds (id, open) values ('k-open', 1), ('k-closed', 0);
 		insert into labels (id, project_id, public) values ('l-public', 'p1', 1), ('l-private', 'p1', 0), ('l-other', 'p2', 1);
+		insert into stamps (id, label_id, project_id, ok) values ('st-public', 'l-public', 'p1', 1), ('st-private', 'l-private', 'p1', 0);
 	`)
 })
 
@@ -177,6 +197,16 @@ describe("an insert's condition along a foreign key", () => {
 		const data = layerWith({ 'kind_id.open': { eq: true } })
 		await expect(insert(data, { kind_id: 'k-closed', title: 'closed' }, undefined, true)).rejects.toThrow('nothing it wrote commits')
 		expect(titles()).toEqual([])
+	})
+
+	test('reads the rows naming the row a path reaches', async () => {
+		const data = layerWith({ label_id: { some: { stamps: { ok: { eq: true } } } } })
+		await insert(data, { label_id: 'l-public', title: 'stamped' })
+		await expect(insert(data, { label_id: 'l-private', title: 'unstamped' })).rejects.toThrow(refusal)
+		await expect(insert(data, { label_id: null, title: 'none' })).rejects.toThrow(refusal)
+		storage.sql.exec("update stamps set ok = 1 where id = 'st-private'")
+		await insert(data, { label_id: 'l-private', title: 'unstamped' })
+		expect(titles()).toEqual([{ title: 'stamped' }, { title: 'unstamped' }])
 	})
 
 	test("combines with tests of the row's own columns", async () => {

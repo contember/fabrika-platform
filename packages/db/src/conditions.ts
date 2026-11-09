@@ -402,38 +402,97 @@ export function scalar(value: ConditionLiteral | readonly ConditionLiteral[] | b
 	throw new PolicyError('a list is compared with in or notIn')
 }
 
-/** A test of a column one or more foreign keys away from the row. */
-export type PathTest = Extract<ConditionModel, { readonly kind: 'test' }>
+/**
+ * One step of the rows an insert's condition reads: from the rows reached so far, the rows of `table` whose `to` column
+ * holds their `from` column. A path's hop goes to the row a foreign key names (`from` the key column, `to` the target's
+ * key); a `some` goes back to the rows naming it (`from` the referenced key, `to` the naming column).
+ */
+export interface ReadStep {
+	readonly from: string
+	readonly table: string
+	readonly to: string
+}
 
-/** The tests of `condition` that follow a path from its own row: the rows an insert locks before it judges them. */
-export function pathTests(condition: ConditionModel): readonly PathTest[] {
-	const tests: PathTest[] = []
-	const visit = (node: ConditionModel): void => {
+/**
+ * Every sequence of steps from an insert's own row to the rows its condition reads, each one no other extends: the rows
+ * the insert locks, step by step, before it judges them. Empty when the condition reads the row alone.
+ */
+export function readPaths(condition: ConditionModel): readonly (readonly ReadStep[])[] {
+	const paths: (readonly ReadStep[])[] = []
+	const hopSteps = (prefix: readonly ReadStep[], hops: readonly ConditionHop[]): ReadStep[] => {
+		const steps: ReadStep[] = [...prefix]
+		for (let index = 0; index < hops.length; index++) {
+			const hop = hops[index]
+			if (hop !== undefined) steps[steps.length] = freeze({ from: hop.column, table: hop.table, to: hop.key })
+		}
+		return steps
+	}
+	const visit = (node: ConditionModel, prefix: readonly ReadStep[]): void => {
 		if (node.kind === 'not') {
-			visit(node.term)
+			visit(node.term, prefix)
 		} else if (node.kind === 'test') {
-			if (node.hops.length > 0) tests[tests.length] = node
-		} else if (node.kind !== 'some') {
+			if (node.hops.length > 0) paths[paths.length] = freeze(hopSteps(prefix, node.hops))
+		} else if (node.kind === 'some') {
+			const steps = hopSteps(prefix, node.hops)
+			steps[steps.length] = freeze({ from: node.key, table: node.table, to: node.column })
+			paths[paths.length] = freeze(steps)
+			visit(node.term, steps)
+		} else {
 			for (let index = 0; index < node.terms.length; index++) {
 				const term = node.terms[index]
-				if (term !== undefined) visit(term)
+				if (term !== undefined) visit(term, prefix)
 			}
 		}
 	}
-	visit(condition)
-	return tests
+	visit(condition, [])
+	const kept: (readonly ReadStep[])[] = []
+	for (let index = 0; index < paths.length; index++) {
+		const path = paths[index] ?? []
+		let extended = false
+		for (let other = 0; other < paths.length && !extended; other++) {
+			const longer = paths[other] ?? []
+			extended = other !== index && longer.length > path.length && startsWith(longer, path)
+		}
+		if (!extended) kept[kept.length] = path
+	}
+	return freeze(kept)
 }
 
-/** Whether `condition` holds a `some` or `none` anywhere. */
-export function readsRowsNamingIt(condition: ConditionModel): boolean {
-	if (condition.kind === 'some') return true
-	if (condition.kind === 'not') return readsRowsNamingIt(condition.term)
-	if (condition.kind === 'test') return false
-	for (let index = 0; index < condition.terms.length; index++) {
-		const term = condition.terms[index]
-		if (term !== undefined && readsRowsNamingIt(term)) return true
+function startsWith(path: readonly ReadStep[], prefix: readonly ReadStep[]): boolean {
+	for (let index = 0; index < prefix.length; index++) {
+		const step = prefix[index]
+		const same = path[index]
+		if (step === undefined || same === undefined || step.from !== same.from || step.table !== same.table || step.to !== same.to) return false
 	}
-	return false
+	return true
+}
+
+/**
+ * Why `condition` cannot be judged on an inserted row, or `undefined` when it can. The insert locks every row its
+ * condition reads, which holds a column test and a row a `some` found until the commit, but not a row inserted meanwhile:
+ * that turns `none`, and a `some` under `not`, false. And no row names the inserted row before it exists.
+ */
+export function insertProblem(condition: ConditionModel): string | undefined {
+	const visit = (node: ConditionModel, negated: boolean, past: boolean): string | undefined => {
+		if (node.kind === 'not') return visit(node.term, true, past)
+		if (node.kind === 'test') return undefined
+		if (node.kind === 'some') {
+			if (!past && node.hops.length === 0) {
+				return "an insert's condition takes no some or none of the rows naming the inserted row: no row names a row that does not exist yet; follow a path first, such as { project_id: { some: … } }"
+			}
+			if (node.negated || negated) {
+				return "an insert's condition takes no none, and no some under not: a row inserted before the commit could make it false, which no lock on the rows it read holds"
+			}
+			return visit(node.term, negated, true)
+		}
+		for (let index = 0; index < node.terms.length; index++) {
+			const term = node.terms[index]
+			const problem = term === undefined ? undefined : visit(term, negated, past)
+			if (problem !== undefined) return problem
+		}
+		return undefined
+	}
+	return visit(condition, false, false)
 }
 
 /**

@@ -19,8 +19,8 @@ import {
 	type ConditionPolicy,
 	type ConditionTable,
 	type HopRule,
+	insertProblem,
 	parseCondition,
-	readsRowsNamingIt,
 	singleForeignKey,
 	splitPath,
 } from './conditions'
@@ -1425,8 +1425,8 @@ function tableActionNames(table: LinkedTable): NameSet {
 }
 
 /**
- * `when`: action → the condition a row must meet for it. An insert action's condition is judged on the inserted row
- * itself, so it follows no foreign key; a reference table is read by every site and takes none.
+ * `when`: action → the condition a row must meet for it. An insert action's condition is judged on the inserted row and
+ * the existing rows its paths reach (`insertProblem`); a reference table is read by every site and takes none.
  */
 function parseWhen(
 	table: LinkedTable,
@@ -1452,9 +1452,10 @@ function parseWhen(
 		}
 		const what = `${table.name}: when.${action}`
 		const condition = parseCondition(ownEntry(declared, action), root, tables, what, hops)
-		// An insert reads the rows its foreign keys name in its transaction; no row names one that does not exist yet.
-		if (includes(table.actions.insert, action) && readsRowsNamingIt(condition)) {
-			throw new PolicyError(`${what}: an insert's condition reads the row and the rows its foreign keys name, so it takes no some or none`)
+		// An insert reads the rows its foreign keys reach in its transaction, locked until the commit (`judgeInserted`).
+		const problem = includes(table.actions.insert, action) ? insertProblem(condition) : undefined
+		if (problem !== undefined) {
+			throw new PolicyError(`${what}: ${problem}`)
 		}
 		setOwn(when, action, condition)
 	}
