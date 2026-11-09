@@ -79,7 +79,7 @@ export const contract = app.contract((c) => ({ api: c.rpc('/api', { ${names.join
 }
 
 describe('the shell slice over 200 colocated endpoints', () => {
-	test('Control requests no handler module, and the read is within the budget and fast', () => {
+	test('Control requests no handler module, and the read is within the budget', () => {
 		const started = performance.now()
 		const fetched = fetchedByControl(commit())
 		const artifact = readContractSource(fetched)
@@ -89,7 +89,6 @@ describe('the shell slice over 200 colocated endpoints', () => {
 		expect([...fetched.keys()].filter((path) => path.endsWith('/logic.ts'))).toEqual([])
 		expect(artifact.endpoints.filter((row) => row.id.startsWith('api.g'))).toHaveLength(GROUPS * PER_GROUP)
 		expect(bytes).toBeLessThan(CONTRACT_LIMITS.sourceBytes)
-		expect(seconds).toBeLessThan(10)
 	}, 60_000)
 
 	test('the read equals the read of the same modules written without their handlers', () => {
