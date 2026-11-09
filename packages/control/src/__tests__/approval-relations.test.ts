@@ -253,6 +253,32 @@ describe('a condition that reads the rows naming a row a path reaches', () => {
 	})
 })
 
+describe("a relation's condition on the row its source names", () => {
+	const lines = (before: AccessSnapshot, after: AccessSnapshot) => classifyAccess(before, after).changes.map(({ effect, line }) => ({ effect, line }))
+	const plain = snapshot(files())
+	type SourceWhen = NonNullable<NonNullable<NonNullable<AccessSnapshot['contract']>['tables'][string]['confers']>[string]['when']>
+	const sourced = (when: SourceWhen): AccessSnapshot => {
+		const contract = plain.contract
+		const members = contract?.tables['note_members']
+		const member = members?.confers?.['member']
+		if (contract === null || members === undefined || member === undefined) throw new Error('the fixture confers member')
+		return {
+			...plain,
+			contract: { ...contract, tables: { ...contract.tables, note_members: { ...members, confers: { member: { ...member, when } } } } },
+		}
+	}
+	const titled = sourced({ 'note_id.title': { eq: 'shared' } })
+
+	test('narrows when added, widens when changed, and counts as a confers at publication', () => {
+		expect(lines(plain, titled)).toEqual([{
+			effect: 'narrows',
+			line: 'Table `note_members` relation `member` is conferred only by a row its condition holds',
+		}])
+		expect(classifyAccess(titled, sourced({ 'note_id.title': { eq: 'open' } })).outcome).toBe('widening')
+		expect(titled.contract === null ? [] : relationFields(titled.contract)).toContain('confers of table note_members')
+	})
+})
+
 describe('publication refuses relation grants an older release would not enforce', () => {
 	test('a release before the first that enforces them is refused, naming the fields', () => {
 		const contract = readContractSource(files())

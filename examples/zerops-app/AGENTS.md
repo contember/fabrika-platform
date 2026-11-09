@@ -4702,7 +4702,10 @@ export const tables = defineTables(vocabulary, columns)({
 
 - `confers: { <relation>: { principal, node?, expires?, when?, assign? } }`. `node` defaults to the table's column of
   the relation's dimension. A row confers nothing once `expires` passed, nor while its own `when` does not admit it.
-  A source's `when` reads the source row only (no path, no `some`), never its `version`.
+  A source's `when` never reads its `version`. It may follow one foreign key to the row the source names, such as
+  `{ 'person_id.active': { eq: true } }`, the far side of a many-to-many table: no update of that table may write the
+  column it tests, and the table is no view, queue or top-level dimension table. It takes no second foreign key and no
+  `some`.
 - Inserting a row is delegation: the coordinator gives the assistant `tasks.read` and `tasks.write` without holding
   `tasks.write` itself. The insert's own action (`assistants.assign`) decides who may write it, and the layer bounds
   what it gives instead:

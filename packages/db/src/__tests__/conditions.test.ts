@@ -13,7 +13,7 @@ const tasks: ConditionTable = {
 	timestamps: nameSet(['due_at']),
 	json: nameSet([]),
 }
-const parse = (input: unknown) => parseCondition(input, tasks, () => undefined, 'when', false)
+const parse = (input: unknown) => parseCondition(input, tasks, () => undefined, 'when', () => false)
 const NOW = new Date('2026-01-01T00:00:00.000Z')
 
 describe('the clock operand', () => {

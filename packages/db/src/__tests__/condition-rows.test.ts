@@ -12,6 +12,7 @@ import { openPostgres } from '@fabrika/db/postgres'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
 import type { ColumnType } from 'kysely'
+import { z } from 'zod/v4'
 import type { ConditionPolicy } from '../conditions'
 import type { Database } from '../database'
 import { QueryRefusedError } from '../errors'
@@ -75,7 +76,7 @@ create table notes (
 );
 create table assignments (
 	id text not null primary key,
-	task_id text not null,
+	task_id text not null references tasks (id),
 	project_id text not null,
 	principal_id text not null,
 	foreign key (task_id, project_id) references tasks (id, project_id)
@@ -164,7 +165,10 @@ const columns: TypedColumnList<DB> = {
 	},
 	assignments: {
 		columns: ['id', 'task_id', 'project_id', 'principal_id'],
-		foreignKeys: [{ columns: ['task_id', 'project_id'], table: 'tasks', references: ['id', 'project_id'] }],
+		foreignKeys: [
+			{ columns: ['task_id'], table: 'tasks', references: ['id'] },
+			{ columns: ['task_id', 'project_id'], table: 'tasks', references: ['id', 'project_id'] },
+		],
 		notNull: ['id', 'task_id', 'project_id', 'principal_id'],
 	},
 }
@@ -345,6 +349,32 @@ function suite(dialect: 'sqlite' | 'postgres', open: () => Promise<Backend>, clo
 			expect(await listed({ projects: { some: { tasks: { none: { steps: { done: { eq: true } } } } } } }, 'projects')).toEqual(['p1', 'p3'])
 		})
 
+		test("a relation's condition reads the row its source names at every statement", async () => {
+			const open = { source: { 'task_id.open': { eq: true } } }
+			expect(await assigned(open, 'tasks')).toEqual(['t1'])
+			expect(await assigned({ ...open, reveal: URGENT_PROJECT }, 'projects')).toEqual(['p1'])
+			await backend.exec(
+				`update tasks set open = true where id = 't3'; insert into project_tags (id, project_id, tag_id) values ('pt3', 'p3', 'g-urgent')`,
+			)
+			expect(await assigned(open, 'tasks')).toEqual(['t1', 't3'])
+			expect(await assigned({ ...open, reveal: URGENT_PROJECT }, 'projects')).toEqual(['p1', 'p3'])
+		})
+
+		test("a writing ctx.sql statement names no table a relation's condition reads", async () => {
+			const reopen = async (conditions: Conditions) => {
+				use(conditions)
+				const transaction = data.invocation(false)
+				const sql = data.sql({ mode: 'write', check() {}, session: () => transaction.session(), fail: () => transaction.fail() })
+				try {
+					await sql(z.strictObject({}))`update tasks set open = ${true} where id = ${'t3'}`
+				} finally {
+					await transaction.rollback()
+				}
+			}
+			await reopen({})
+			await expect(reopen({ source: { 'task_id.open': { eq: true } } })).rejects.toThrow("'tasks' at line 1 hands out access")
+		})
+
 		test("a reveal's condition with a path, a some and a path from it nests four deep, and the reveal follows its rows", async () => {
 			expect(await assigned({}, 'tasks')).toEqual(['t1', 't3'])
 			expect(await assigned({ reveal: URGENT_PROJECT }, 'projects')).toEqual(['p1'])
@@ -411,8 +441,14 @@ describe('the policy bounds the rows a condition reads past a path', () => {
 		)
 	})
 
-	test("a source's condition reads the source row only", () => {
-		expect(() => tablesWith({ source: { task_id: { some: { notes: { flagged: { eq: true } } } } } })).toThrow('follows no foreign key')
+	test("a source's condition follows one foreign key and reads no rows naming a row", () => {
+		expect(() => tablesWith({ source: { 'task_id.open': { eq: true } } })).not.toThrow()
+		expect(() => tablesWith({ source: { 'task_id.project_id.name': { eq: 'one' } } })).toThrow(
+			"assignments: confers.assignee.when: a relation's condition follows at most one foreign key",
+		)
+		expect(() => tablesWith({ source: { task_id: { some: { notes: { flagged: { eq: true } } } } } })).toThrow(
+			"a relation's condition takes no some or none: the rows naming a source row are written outside its delegation bound",
+		)
 	})
 
 	test("an insert's condition takes a some only of rows that existed before it, and never one a new row could falsify", () => {

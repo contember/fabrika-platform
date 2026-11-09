@@ -15,6 +15,7 @@ import {
 	setOwn,
 } from './builtins'
 import {
+	type ConditionHop,
 	type ConditionModel,
 	type ConditionPolicy,
 	type ConditionTable,
@@ -1376,7 +1377,7 @@ function linkTables(parsed: readonly ParsedTable[], vocabulary: VocabularyModel)
 				const owner = ownEntry(owners, dimension)
 				return owner === undefined ? undefined : { name: owner.name, ...resolve(owner, []) }
 			})
-			const confers = parseConfers(linked, confersInput, vocabulary.relations, conditionTable, linkedTable)
+			const confers = parseConfers(linked, confersInput, vocabulary.relations, conditionTable, linkedTable, hopRule)
 			for (let position = 0; position < confers.length; position++) {
 				const relation = confers[position]?.relation ?? ''
 				const earlier = ownEntry(sources, relation)
@@ -1783,6 +1784,7 @@ function parseConfers(
 	relations: Readonly<Record<string, string>>,
 	tables: (name: string) => ConditionTable | undefined,
 	linked: (name: string) => LinkedTable | undefined,
+	hops: HopRule,
 ): readonly RelationSource[] {
 	if (input === undefined) {
 		return freeze([])
@@ -1840,7 +1842,7 @@ function parseConfers(
 			throw new PolicyError(`${what}.expires names ${expires}, which is not a timestamp column`)
 		}
 		const whenInput = ownEntry(policy, 'when')
-		const when = whenInput === undefined ? undefined : parseCondition(whenInput, table, tables, `${what}.when`, false)
+		const when = whenInput === undefined ? undefined : parseSourceWhen(table, whenInput, tables, linked, hops, `${what}.when`)
 		const fixed: string[] = [principal]
 		if (expires !== undefined) fixed[fixed.length] = expires
 		const read = when === undefined ? [] : conditionColumns(when)
@@ -1873,6 +1875,87 @@ function parseConfers(
 		sources[sources.length] = freeze({ relation, dimension, table: table.name, principal, principalPath, node, expires, when, assign })
 	}
 	return freeze(sources)
+}
+
+/**
+ * `confers.<relation>.when`: a condition on the source row, which may follow one foreign key to the row it names (the far
+ * side of a many-to-many source). What it reads decides whom the relation reaches, so it is held as the principal is:
+ * no update writes it, on the source or on the far row, and nothing a write elsewhere cascades rewrites it.
+ */
+function parseSourceWhen(
+	table: LinkedTable,
+	input: unknown,
+	tables: (name: string) => ConditionTable | undefined,
+	linked: (name: string) => LinkedTable | undefined,
+	hops: HopRule,
+	what: string,
+): ConditionModel {
+	const condition = parseCondition(input, table, tables, what, hops)
+	const visit = (node: ConditionModel): void => {
+		if (node.kind === 'not') {
+			visit(node.term)
+		} else if (node.kind === 'some') {
+			// Every writer of the naming table adds and removes such rows; no rule holds a set of rows still.
+			throw new PolicyError(
+				`${what}: a relation's condition takes no some or none: the rows naming a source row are written outside its delegation bound`,
+			)
+		} else if (node.kind === 'test') {
+			const hop = node.hops[0]
+			if (node.hops.length > 1) {
+				// The far row is read inside every relation term, beside a principal path, four subqueries deep under a reveal.
+				throw new PolicyError(`${what}: a relation's condition follows at most one foreign key, to the row the source row names`)
+			}
+			if (hop !== undefined) farColumn(table, hop, node.column, linked, what)
+		} else {
+			for (let index = 0; index < node.terms.length; index++) {
+				const term = node.terms[index]
+				if (term !== undefined) visit(term)
+			}
+		}
+	}
+	visit(condition)
+	return condition
+}
+
+/** The column a relation's condition tests on the row one foreign key of the source names: fixed like a principal. */
+function farColumn(
+	table: LinkedTable,
+	hop: ConditionHop,
+	held: string,
+	linked: (name: string) => LinkedTable | undefined,
+	what: string,
+): void {
+	refuseReferencing(table, hop.column, what, "starts the condition's path", hop)
+	const target = linked(hop.table)
+	if (target === undefined) {
+		throw new PolicyError(`${what}: ${table.name}.${hop.column} references ${hop.table}, which has no policy`)
+	}
+	if (target.view) {
+		throw new PolicyError(`${what}: ${hop.table} is a view, whose rows change with every write to the tables it reads`)
+	}
+	if (target.queue !== undefined) {
+		throw new PolicyError(`${what}: ${hop.table} is a queue table, whose rows the layer rewrites on every claim`)
+	}
+	const scope = target.scope
+	if (scope.mode === 'dimension' && scope.container === undefined) {
+		// Its key is the inserting Ref's, so a deferred foreign key lets a delete and an insert re-point the source rows.
+		throw new PolicyError(
+			`${what}: ${hop.table} is a top-level dimension table, whose key an insert takes from its Ref; a relation's condition reads a row whose key the layer generates`,
+		)
+	}
+	if (scope.mode !== 'reference') {
+		refuseReferencing(target, scope.key, what, "is the key the condition's path follows", undefined)
+	}
+	if (held === target.version) {
+		throw new PolicyError(`${what}: ${hop.table}.${held} is the version column, which every update rewrites; it decides nothing a row confers`)
+	}
+	if (inSet(target.update, held) || hasOwn(target.columnWrites, held)) {
+		throw new PolicyError(`${what}: ${hop.table}.${held} decides what a row confers, so no update of ${hop.table} writes it; replace the row instead`)
+	}
+	if (chainColumn(target, held)) {
+		throw new PolicyError(`${what}: ${hop.table}.${held} is a containment column, which a move rewrites; it decides nothing a row confers`)
+	}
+	refuseReferencing(target, held, what, 'decides what a row confers', undefined)
 }
 
 /**

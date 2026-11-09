@@ -104,16 +104,13 @@ const CONNECTIVES = freeze(['anyOf', 'allOf', 'not', 'some', 'none'])
  */
 export type HopRule = (from: string, column: string, to: string, key: string) => boolean
 
-/**
- * Parses `input` as a condition over `table`. `hops` is the rule a path's foreign keys are held to, or `false` when a
- * path follows none (a relation source's condition is judged on the row itself).
- */
+/** Parses `input` as a condition over `table`. `hops` is the rule a path's foreign keys are held to. */
 export function parseCondition(
 	input: unknown,
 	table: ConditionTable,
 	tables: (name: string) => ConditionTable | undefined,
 	what: string,
-	hops: HopRule | false,
+	hops: HopRule,
 ): ConditionModel {
 	return parseNode(input, table, tables, what, hops, 0, 0)
 }
@@ -126,7 +123,7 @@ function parseNode(
 	table: ConditionTable,
 	tables: (name: string) => ConditionTable | undefined,
 	what: string,
-	hops: HopRule | false,
+	hops: HopRule,
 	depth: number,
 	level: number,
 ): ConditionModel {
@@ -172,7 +169,7 @@ function parseTest(
 	table: ConditionTable,
 	tables: (name: string) => ConditionTable | undefined,
 	what: string,
-	hops: HopRule | false,
+	hops: HopRule,
 	depth: number,
 	level: number,
 ): ConditionModel {
@@ -186,9 +183,6 @@ function parseTest(
 	if (followedCount + (rows === undefined ? 0 : 1) + level > MAX_CONDITION_HOPS) {
 		throw new PolicyError(`${what}: ${HOP_LIMIT}`)
 	}
-	if (followedCount > 0 && hops === false) {
-		throw new PolicyError(`${what}: this condition is judged on the row itself and follows no foreign key`)
-	}
 	const followed: ConditionHop[] = []
 	let current = table
 	for (let index = 0; index < followedCount; index++) {
@@ -198,7 +192,7 @@ function parseTest(
 		if (target === undefined) {
 			throw new PolicyError(`${what}: ${current.name}.${name} references ${hop.table}, which has no policy`)
 		}
-		if (hops === false || !hops(current.name, name, hop.table, hop.key)) {
+		if (!hops(current.name, name, hop.table, hop.key)) {
 			throw new PolicyError(
 				`${what}: ${current.name}.${name} leads to ${hop.table}, outside the row's own containment; a path follows a row's container or parent column, a foreign key that also holds every ancestor the two tables share, or reaches a reference table`,
 			)
@@ -243,13 +237,10 @@ function parseSome(
 	table: ConditionTable,
 	tables: (name: string) => ConditionTable | undefined,
 	what: string,
-	hops: HopRule | false,
+	hops: HopRule,
 	depth: number,
 	level: number,
 ): ConditionModel {
-	if (hops === false) {
-		throw new PolicyError(`${what}: this condition is judged on the row itself and reads no other row`)
-	}
 	if (level + 1 > MAX_CONDITION_HOPS) {
 		throw new PolicyError(`${what}: ${HOP_LIMIT}`)
 	}

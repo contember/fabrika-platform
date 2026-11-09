@@ -563,7 +563,11 @@ through a relation (`~rel`, `@fabrika/auth-core`). `authority.ts` builds every p
 - **A relation reaches a row's node while a source row names the caller there, unexpired and admitted by the source's
   `when`**: an uncorrelated `T.node in (select S.node from S where S.principal = $me …)`, ORed into a `Within`'s values
   and carried by a `Ref` minted through it. Nothing caches it, so a deleted source row stops access at the next
-  statement. A source's `when` reads the source row only, never its `version`; a queue table confers nothing.
+  statement. A source's `when` never reads its `version`, and a queue table confers nothing. It may follow one foreign
+  key under the hop rule to the far row (`parseSourceWhen`), never two and no `some`, so a reveal through a path stays
+  four deep beside a principal path; `farColumn` holds the far row as `parsePrincipal` holds P (no view, queue or
+  top-level dimension, the tested column no version, containment or updated column, no cascade into it, its key or the
+  source's column), and `accessTables` keeps `ctx.sql` writes off it.
 - **A principal may be read through one foreign key** (`principal: '<column>.<principal column>'`, `parsePrincipal`):
   `<column>` is a single-column foreign key to the key of a contained dimension, child or application table P (no view,
   no queue table, no top-level dimension, whose key an insert takes from its Ref), never the source's key, chain,

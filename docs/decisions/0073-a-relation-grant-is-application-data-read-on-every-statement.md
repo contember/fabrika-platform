@@ -88,8 +88,13 @@ bounded delegation:
 - `assign.self` must be stated for a row that names its writer.
 - No update writes the principal, the node, the expiry or a column the relation's `when` reads; a source row never
   moves; a queue table confers nothing.
-- `ctx.sql` on a writing site never names a source table, `unscoped` never writes one, and no seed helper reaches
-  production.
+- The relation's `when` may follow one foreign key of the source, under section 3's hop rule, to the row it names (the
+  far side of a many-to-many source). That row is held like the source row: it is no view, no queue table and no
+  top-level dimension row, whose key an insert takes from its Ref; no update writes the column tested, which is no
+  version or containment column; and no foreign key carries a cascade into that column, the row's key or the source's
+  key column.
+- `ctx.sql` on a writing site never names a source table or a table its principal path or its `when` reads, `unscoped`
+  never writes a source table, and no seed helper reaches production.
 
 The writer need not hold the actions the relation grants. That is the exception to S8, and this record names it: the
 bound replaces "holds what it gives". An approver sees each `confers` and its `assign` as a widening in the approval
@@ -114,8 +119,10 @@ on the written row in the insert's transaction, every row on its paths locked `F
 the transaction. A `some` there reads rows that existed before the insert: it follows a path first, and every row
 naming the row the path reached is locked too, so a row inserted meanwhile can only make it truer. It takes no `none`,
 no `some` under `not` and no `some` of the rows naming the inserted row: a row inserted before the commit could turn
-the first two false, which no lock holds, and no row names the third yet. An upsert's conflict update is judged on the stored row. A relation source's
-condition reads the source row only.
+the first two false, which no lock holds, and no row names the third yet. An upsert's conflict update is judged on the
+stored row. A relation source's condition reads the source row and at most the one row its foreign key names
+(section 2), so under a reveal matched through a path it stays within four subqueries. It takes no `some`: rows naming
+a source row are written by their own table's writers, outside the delegation bound.
 
 Widening is a separate mechanism (`admits`, a step of the [coverage roadmap](../ideas/acl-coverage-roadmap.md)), and
 it is not part of `when`.
