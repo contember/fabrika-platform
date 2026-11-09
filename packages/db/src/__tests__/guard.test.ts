@@ -307,7 +307,7 @@ describe("a child view's rows read through its parent row", () => {
 		select({ where: scopedWhere(equals('notes', 'title', 'x'), predicate) }),
 		{ ...selectContext, scope: predicate, subqueries, through },
 	]
-	const parentRows = (where: OperationNode, table = 'workspaces', selected = 'id', viewColumn = 'workspace_id') =>
+	const parentRows = (where: OperationNode | undefined, table = 'workspaces', selected = 'id', viewColumn = 'workspace_id') =>
 		BinaryOperationNode.create(column('notes', viewColumn), OperatorNode.create('in'), subquery(table, selected, where))
 	const ref = allOf([equals('workspaces', 'id', 'w1'), equals('workspaces', 'organization_id', 'o1')])
 	const related = BinaryOperationNode.create(
@@ -317,7 +317,7 @@ describe("a child view's rows read through its parent row", () => {
 	)
 	const open = BinaryOperationNode.create(column('notes', 'word_count'), OperatorNode.create('<'), ValueNode.create(100))
 
-	test("the parent's Ref, Within or relation reach passes, after the key's equality and before the view's condition", () => {
+	test("the parent's Ref, Within or relation reach, or every parent row, passes after the key's equality and before the view's condition", () => {
 		const shapes = [
 			parentRows(ref),
 			parentRows(inList('workspaces', 'organization_id', ['o1'])),
@@ -325,6 +325,8 @@ describe("a child view's rows read through its parent row", () => {
 			parentRows(allOf([ref, related])),
 			allOf([equals('notes', 'id', 'n1'), parentRows(ref)]),
 			AndNode.create(parentRows(ref), ParensNode.create(open)),
+			parentRows(undefined),
+			AndNode.create(parentRows(undefined), ParensNode.create(open)),
 		]
 		for (const shape of shapes) {
 			const [node, context] = scopedBy(shape)
@@ -340,6 +342,9 @@ describe("a child view's rows read through its parent row", () => {
 			parentRows(everything()),
 			parentRows(open),
 			parentRows(ref, 'secrets'),
+			parentRows(undefined, 'secrets'),
+			parentRows(undefined, 'workspaces', 'organization_id'),
+			parentRows(undefined, 'workspaces', 'id', 'id'),
 			parentRows(ref, 'workspaces', 'organization_id'),
 			parentRows(ref, 'workspaces', 'id', 'id'),
 			parentRows(parentRows(ref)),
@@ -351,8 +356,10 @@ describe("a child view's rows read through its parent row", () => {
 			const [node, context] = scopedBy(shape)
 			refuses(node, context, 'the scope predicate must be true')
 		}
-		const [node, context] = scopedBy(parentRows(ref))
-		refuses(node, { ...context, through: undefined }, 'the scope predicate must be true')
+		for (const where of [ref, undefined]) {
+			const [node, context] = scopedBy(parentRows(where))
+			refuses(node, { ...context, through: undefined }, 'the scope predicate must be true')
+		}
 	})
 
 	test("no reach of the view's own columns: a chain's equalities, a Within's values or relation rows are refused on a view", () => {

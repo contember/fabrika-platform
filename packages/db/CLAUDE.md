@@ -234,7 +234,8 @@ pass a recording one); `Database.fromEngine` takes another engine (`openSqlite`)
   may share its key with its parent column. Its chain is the parent link alone; `inherit` defaults to the parent's chain
   columns it carries, which only a join from the parent compares. Every capability reads a child view through its
   parent row (`TableContext.through`, `viewScope`): `V.<column> in (select P.<key> from P where <P's predicate>)`, P's
-  predicate built over P's context without P's `when`, so a column the view's SQL fills never places a row; the guard
+  predicate built over P's context without P's `when` (none for a `Within` of `all`, so a row whose parent column
+  names no parent row is still read by no capability), so a column the view's SQL fills never places a row; the guard
   admits that subquery only with `GuardContext.through`, and `ctx.sql.scope` refuses a `Ref` or `Within` of one. A
   child view's `when` narrows after the subquery; its paths start at the parent column as a foreign key no column list
   declares (`conditionRoot`). A view confers no relation and takes no `reveals`, `readThrough` or `memberReveals`. Every write is refused
@@ -369,7 +370,8 @@ pass a recording one); `Database.fromEngine` takes another engine (`openSqlite`)
   must be a chain link above the Within's own dimension in that table, or the operation is refused. The guard
   admits a scope predicate only as `true`, an AND tree of `column = $n`, a single membership, or a parenthesized
   OR tree of memberships, over the statement's table. On a child view's statement it admits only `true` and the
-  view's parent subquery over a predicate the guard would admit on the parent (never `true`), alone or after an AND
+  view's parent subquery over a predicate the guard would admit on the parent (never `true`) or with no WHERE (a
+  `Within` of `all`: every parent row), alone or after an AND
   tree of `column = $n`: no column of the view stands in for the parent row.
 - **A Within carries at most `MAX_WITHIN_VALUES` (1000) scope values, its own, its containers' and its contained grants' together.** Each
   is one bound parameter of every statement it scopes (Postgres binds at most 65535); the framework refuses to

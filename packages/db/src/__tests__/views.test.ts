@@ -35,6 +35,12 @@ insert into events (id, project_id, organization_id, at, note) values
 	('e2', 'p1', 'o1', '2026-10-12T09:30:00.000Z', null),
 	('e3', 'p2', 'o2', '2026-10-12T10:30:00.000Z', 'other note');
 `
+// A view whose SQL names no parent for e3 and a missing parent p9 for e9: no capability reads either row.
+const ORPHANS = `
+create view orphan_events as
+	select e.id, case when e.id = 'e3' then null else e.project_id end as project_id, e.note from events e
+	union all select 'e9', 'p9', 'ghost';
+`
 
 /** Calls `path` (`project_summaries.list`, `get`) on an untyped handle, as the framework's typed `ctx.db` does. */
 async function call(handle: unknown, path: string, ...args: unknown[]): Promise<unknown> {
@@ -75,6 +81,9 @@ function viewCases(open: () => Database): void {
 		}),
 	)
 
+	// The same tables and orphan_events, whose rows e3 and e9 name no parent row.
+	let orphaned: DataAccess
+
 	beforeAll(() => {
 		const database = open()
 		bindScopedDatabase(viewTablesLayer, { database, capabilities: alice })
@@ -84,6 +93,15 @@ function viewCases(open: () => Database): void {
 		bindScopedDatabase(narrowed, { database, capabilities: alice })
 		narrowedParent = dataAccessOf(narrowed)
 		bindScopedDatabase(conditioned, { database, capabilities: alice })
+		const orphans = scoped(
+			readTables(
+				{ ...viewColumns, orphan_events: { columns: ['id', 'project_id', 'note'], foreignKeys: [], view: true } },
+				{ ...viewPolicies, orphan_events: { scope: { child: 'projects' }, actions: { read: 'projects.read' } } },
+				viewVocabulary,
+			),
+		)
+		bindScopedDatabase(orphans, { database, capabilities: alice })
+		orphaned = dataAccessOf(orphans)
 	})
 
 	/** One invocation of `kind`, committed when `work` resolves and rolled back when it throws. */
@@ -173,6 +191,22 @@ function viewCases(open: () => Database): void {
 		await expect(invoke('query', (db) => call(db.target(forged, 'on'), 'stray_events.get', 'e3'))).rejects.toThrow('not found')
 		const own = project('projects.read', 'p2', 'o2')
 		expect(idsOf(await invoke('query', (db) => call(db.target(own, 'on'), 'stray_events.list')))).toEqual(['e3'])
+	})
+
+	test('a row whose parent column is null or names no parent row is read by no Ref and no Within, not even of all', async () => {
+		const read = (work: (db: DataHandles) => Promise<unknown>) => invoke('query', work, {}, orphaned)
+		const own = project('projects.read', 'p1', 'o1')
+		expect(idsOf(await read((db) => call(db.target(own, 'on'), 'orphan_events.list')))).toEqual(['e1', 'e2'])
+		await expect(read((db) => call(db.target(project('projects.read', 'p9', 'o1'), 'on'), 'orphan_events.get', 'e9'))).rejects.toThrow(
+			'not found',
+		)
+		const within = (dimension: string, values: readonly string[] | 'all') => alice.within(dimension, 'projects.read', values)
+		expect(idsOf(await read((db) => call(db.within(within('organization', ['o2'])), 'orphan_events.list')))).toEqual([])
+		expect(idsOf(await read((db) => call(db.within(within('project', ['p2', 'p9'])), 'orphan_events.list')))).toEqual([])
+		for (const dimension of ['organization', 'project']) {
+			expect(idsOf(await read((db) => call(db.within(within(dimension, 'all')), 'orphan_events.list')))).toEqual(['e1', 'e2'])
+			expect(await read((db) => call(db.within(within(dimension, 'all')), 'orphan_events.count'))).toBe(2)
+		}
 	})
 
 	test('ctx.sql.scope renders no read of a child view, which only its parent row places', async () => {
@@ -306,6 +340,7 @@ describe('a view on SQLite', () => {
 		const storage = bunSqliteStorage()
 		storage.sql.exec(viewMigration)
 		storage.sql.exec(SEED)
+		storage.sql.exec(ORPHANS)
 		return openSqlite(storage)
 	})
 })
@@ -334,7 +369,7 @@ describe.skipIf(!hasPostgres)('a view on Postgres', () => {
 	beforeAll(async () => {
 		await admin(async (sql) => {
 			await sql.unsafe(`create schema ${schema}`)
-			await sql.unsafe(`set search_path to ${schema}; ${viewMigration.replaceAll('timestamp not null', 'timestamptz not null')} ${SEED}`)
+			await sql.unsafe(`set search_path to ${schema}; ${viewMigration.replaceAll('timestamp not null', 'timestamptz not null')} ${SEED} ${ORPHANS}`)
 		})
 	})
 

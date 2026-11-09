@@ -207,18 +207,19 @@ export function refScope(
 
 /**
  * The rows of a child view whose parent row `reached` admits: `V.<column> in (select P.<key> from P where <reached>)`,
- * after `row` when it addresses one row, then the view's own condition of `action`. No column of the view places a row:
- * its containment rests on the parent's foreign keys (ADR-0072).
+ * after `row` when it addresses one row, then the view's own condition of `action`. For `all`, every parent row, so a
+ * row whose parent column names none is still read by no capability. No column of the view places a row: its
+ * containment rests on the parent's foreign keys (ADR-0072).
  */
 export function viewScope(
 	model: TableModel,
 	parent: ViewParentLink,
 	action: string,
-	reached: OperationNode,
+	reached: OperationNode | 'all',
 	now: Date,
 	row?: OperationNode,
 ): OperationNode {
-	const member = isIn(model.name, parent.column, subquery(parent.table, parent.key, reached))
+	const member = isIn(model.name, parent.column, subquery(parent.table, parent.key, reached === 'all' ? undefined : reached))
 	return conditioned(model, action, row === undefined ? member : allOf([row, member]), now)
 }
 

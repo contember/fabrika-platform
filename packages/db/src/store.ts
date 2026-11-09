@@ -582,8 +582,8 @@ export function parentPredicate(context: TableContext, grant: RefGrant, key?: st
 }
 
 /**
- * A child view's rows a `Within` reaches: those whose parent row `reach` admits over the parent's context; every row for
- * `all`. Undefined where `reach` is: the empty `Within`.
+ * A child view's rows a `Within` reaches: those whose parent row `reach` admits over the parent's context; for `all`,
+ * those whose parent row exists. Undefined where `reach` is: the empty `Within`.
  */
 function throughParent(
 	context: TableContext,
@@ -593,7 +593,7 @@ function throughParent(
 ): OperationNode | undefined {
 	const now = new Date()
 	if (grant.values === 'all') {
-		return conditioned(context.model, grant.action, 'all', now)
+		return viewScope(context.model, through, grant.action, 'all', now)
 	}
 	const reached = reach(through.context)
 	return reached === undefined ? undefined : viewScope(context.model, through, grant.action, reached, now)

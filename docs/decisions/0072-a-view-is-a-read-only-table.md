@@ -47,13 +47,15 @@ a scope over them is as sound as that SQL.
    `Within`'s member reveals and secondary paths. It leaves out the parent's own `when`, which holds the parent's rows;
    the view's own `when` narrows the view's (item 9). A get by key puts `V.<key> = $id` before the subquery. A `Within`
    lists the view wherever it reaches the parent, the parent's own dimension included, and a `Within` of `all` reads
-   every row. `ctx.db.app` lists it with `appRead` and `appCount`; column read actions hide columns; a join from the
-   parent compares the parent column and the inherited columns. A view keyed by its parent is read by the parent's own
-   id, `ctx.db.target.<view>.get(ctx.target.value)`. The guard admits the parent subquery only on a child view's
+   the rows whose parent row exists, `V.<column> in (select P.<key> from P)`. `ctx.db.app` lists every row of it with
+   `appRead` and `appCount`, as it lists a child table's; column read actions hide columns; a join from the parent
+   compares the parent column and the inherited columns. A view keyed by its parent is read by the parent's own id,
+   `ctx.db.target.<view>.get(ctx.target.value)`. The guard admits the parent subquery only on a child view's
    statement, for its declared parent column, parent table and key, over a predicate it would admit on a statement of
-   the parent, never `true`, alone or after an AND of `V.<column> = $n` equalities. On a child view's statement it
-   admits no other reach but `true`: no equality, value list or relation row over the view's own columns. The subquery counts apart from the nesting bound of
-   the parent's predicate, so a view's scope nests at most one deeper than its parent's. `ctx.sql.scope` renders no
+   the parent, never `true`, or with no WHERE for every parent row, alone or after an AND of `V.<column> = $n`
+   equalities. On a child view's statement it admits no other reach but `true`: no equality, value list or relation
+   row over the view's own columns. The subquery counts apart from the nesting bound of the parent's predicate, so a
+   view's scope nests at most one deeper than its parent's. `ctx.sql.scope` renders no
    `Ref` or `Within` of a child view: its fragment holds column tests only, and no column of the view places a row.
 5. **Writes are refused at the type level and at run time.** The policy types allow only `actions.read`, `appRead`,
    `appCount`, column `read` actions and, on a child view, `when`; `insert`, `update`, `version`, `createdBy`, `queue`, `files` and
@@ -64,9 +66,9 @@ a scope over them is as sound as that SQL.
 6. **The parent row places a view's rows.** The parent's own foreign keys place the parent row, so a view's
    containment rests on them and on its parent column alone. A chain column the view carries is read and joined, never
    compared for scope: a row whose chain columns disagree with its parent's lies where the parent lies. A row whose
-   parent column is null, or names a row the capability does not reach, is read by no `Ref` or `Within`. What the
-   view's SQL still decides is which parent row each row names; it is a migration deviation the approver reviews closer
-   ([ADR-0050](0050-approved-access.md)).
+   parent column is null, names no parent row, or names a row the capability does not reach, is read by no `Ref` or
+   `Within`, a `Within` of `all` included. What the view's SQL still decides is which parent row each row names; it
+   is a migration deviation the approver reviews closer ([ADR-0050](0050-approved-access.md)).
 7. **The artifact marks a view.** A view's `TablePolicyArtifact` carries `view: true`, absent for a table, so every
    existing artifact keeps its digest. The approval diff says `New view policy …` and reports a table that becomes a
    view or stops being one; the database code lines show the view's SQL as before.

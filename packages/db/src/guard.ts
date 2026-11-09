@@ -203,7 +203,8 @@ function isReach(node: unknown, table: string, subqueries: GuardContext['subquer
 
 /**
  * A child view's rows read through its parent: `V.<column> in (select P.<key> from P where <P's reach>)`, after an AND
- * of equalities when one row is addressed. P's reach is one the guard admits for a statement on P, never `true`.
+ * of equalities when one row is addressed. P's reach is one the guard admits for a statement on P, never `true`; a
+ * subquery without WHERE reads every parent row.
  */
 function isThroughParent(
 	node: unknown,
@@ -239,9 +240,14 @@ function isParentMembership(
 	if (
 		kindOf(select) !== 'SelectQueryNode' || !hasOnly(select, SUBQUERY_KEYS) || !hasOnly(from, FROM_KEYS) || !isArray(froms) || froms.length !== 1
 		|| tableName(froms[0]) !== parent.table || !isArray(selections) || selections.length !== 1 || !hasOnly(selections[0], SELECTION_KEYS)
-		|| !isReference(read(selections[0], 'selection'), parent.table, parent.key) || !hasOnly(where, WHERE_KEYS)
+		|| !isReference(read(selections[0], 'selection'), parent.table, parent.key) || (where !== undefined && !hasOnly(where, WHERE_KEYS))
 	) {
 		return false
+	}
+	// No WHERE: every parent row, a `Within` of `all`; strictly narrower than the `true` a view's statement admits.
+	if (where === undefined) {
+		admitted[admitted.length] = { node: select, table: parent.table }
+		return true
 	}
 	const reach = read(where, 'where')
 	// The parent's reach nests as deep as on a statement of the parent's own: the parent's subquery counts apart.
