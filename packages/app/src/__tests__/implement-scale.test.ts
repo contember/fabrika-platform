@@ -1,4 +1,5 @@
-// `implement` over a contract of 200 procedures, one handler each, type-checks fast enough to author.
+// `implement` over a contract of 200 procedures, one handler each, type-checks fast enough to author, witnessed by the
+// instantiation count.
 
 import { describe, expect, test } from 'bun:test'
 import { compileScale, scaleSource } from './scale-fixture'
