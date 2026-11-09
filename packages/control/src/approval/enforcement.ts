@@ -9,7 +9,7 @@ import { comparePrecedence, FRAMEWORK_PACKAGE, parseRelease, type Release } from
  * The first framework release whose data layer and dispatch enforce relations, `via`, `confers` and `when`. Compared
  * with its prerelease: every earlier `0.9.0-*` release reads none of them and would widen access.
  */
-export const RELATION_GRANTS_SINCE: Release = { text: '0.9.0-dev.12', major: 0, minor: 9, patch: 0 }
+export const RELATION_GRANTS_SINCE: Release = { text: '0.9.0-dev.13', major: 0, minor: 9, patch: 0 }
 
 /** The fields of `contract` that only a release from `RELATION_GRANTS_SINCE` enforces, as `field` or `field of name`. */
 export function relationFields(contract: ContractArtifact): string[] {
