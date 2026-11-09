@@ -605,6 +605,24 @@ describe('a view (ADR-0072)', () => {
 		)
 	})
 
+	test("takes a when, whose path starts at its parent column and follows the parent's foreign keys from there", () => {
+		const when = (condition: unknown) => ({ ...base, project_summaries: { ...summary, when: { 'projects.read': condition } } })
+		expect(tablePolicies(read(when({ 'project_id.organization_id.name': { eq: 'One' } })))['project_summaries']?.when).toEqual({
+			'projects.read': { 'project_id.organization_id.name': { eq: 'One' } },
+		})
+		expect(refusal(when({ 'organization_id.name': { eq: 'One' } }))).toBe(
+			'project_summaries: when.projects.read.organization_id.name: project_summaries.organization_id is not a single-column foreign key, so a path cannot follow it',
+		)
+		expect(refusal(when({ some: { events: { note: { isNull: false } } } }))).toBe(
+			'project_summaries: when.projects.read.some: events has no single-column foreign key to project_summaries',
+		)
+		const reference = {
+			...base,
+			organization_names: { scope: { reference: 'names' }, actions: { read: 'projects.read' }, when: { 'projects.read': { name: { eq: 'One' } } } },
+		}
+		expect(refusal(reference)).toBe('organization_names: a reference table takes no when; every site reads it')
+	})
+
 	test('confers no relation', () => {
 		const vocabulary = { ...viewVocabulary, relations: { watcher: { dimension: 'project' } } }
 		const confers = { ...base, project_summaries: { ...summary, confers: { watcher: { principal: 'name' } } } }

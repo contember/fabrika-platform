@@ -45,7 +45,7 @@ a scope over them is as sound as that SQL.
    the one a statement on the parent builds for the same capability: a `Ref`'s key and chain equalities, a `Within`'s
    values, container and contained grants, the relation rows and reveals the capability is held through, and a
    `Within`'s member reveals and secondary paths. It leaves out the parent's own `when`, which holds the parent's rows;
-   the view's own conditions narrow the view's. A get by key puts `V.<key> = $id` before the subquery. A `Within`
+   the view's own `when` narrows the view's (item 9). A get by key puts `V.<key> = $id` before the subquery. A `Within`
    lists the view wherever it reaches the parent, the parent's own dimension included, and a `Within` of `all` reads
    every row. `ctx.db.app` lists it with `appRead` and `appCount`; column read actions hide columns; a join from the
    parent compares the parent column and the inherited columns. A view keyed by its parent is read by the parent's own
@@ -55,7 +55,7 @@ a scope over them is as sound as that SQL.
    the parent's predicate, so a view's scope nests at most one deeper than its parent's. `ctx.sql.scope` renders no
    `Ref` or `Within` of a child view: its fragment holds column tests only, and no column of the view places a row.
 5. **Writes are refused at the type level and at run time.** The policy types allow only `actions.read`, `appRead`,
-   `appCount` and column `read` actions on a view; `insert`, `update`, `version`, `createdBy`, `queue`, `files` and
+   `appCount`, column `read` actions and, on a child view, `when`; `insert`, `update`, `version`, `createdBy`, `queue`, `files` and
    column `write` are refused by the one parse, so the static reader refuses them from source. Its handles' `insert`,
    `update` and `remove` are `Unavailable` (`<view> is a view, which no site writes`), an `unscoped: { <view>: 'write' }`
    declaration is refused, its unscoped handle refuses every write, and the store refuses an insert, update or delete
@@ -72,6 +72,15 @@ a scope over them is as sound as that SQL.
 8. **The generated tests do not seed a view.** `fabrika db test-scaffold` writes no policy isolation case for a view,
    the endpoint access kit seeds none, and an endpoint fixture's row field may not name one: its rows come from other
    tables. The parent's cases still run.
+9. **A child view's `when` narrows its reads, and a view holds no other access field.** `when: { <action>: <condition> }`
+   narrows a read action of a child view as it narrows a table's ([ADR-0073](0073-a-relation-grant-is-application-data-read-on-every-statement.md)),
+   after the parent subquery. A path may start at the view's parent column, which the parse takes for a foreign key to
+   the parent's key that no column list declares, and follows the parent's own foreign keys from there under the path
+   rule; that hop counts toward the three. No other column of a view is a foreign key, so no other path starts there,
+   and no `some` or `none` reads rows that name a view's. A reference view takes no `when`: every site reads it. A view
+   confers no relation, and takes no `reveals`, `readThrough` or `memberReveals`: each of them places or reads rows of
+   its own table at a node, and a view's rows lie at no node of their own. A relation, a reveal or a secondary path that
+   reaches the parent reaches the view's rows through the parent row (item 4).
 
 ## Consequences
 

@@ -202,7 +202,8 @@ export const tables = defineTables(vocabulary, columns)({
   JSON column is never compared: extract the value into a typed column.
 - A path follows foreign keys: `'project_id.ends_at'` reads the task's project. The column needs a single-column
   `REFERENCES <table> (id)`, and the hop must stay in the row's tenant: the row's own container or parent column, a
-  key into a reference table, or a key that holds every ancestor the two tables share (below).
+  key into a reference table, or a key that holds every ancestor the two tables share (below). A view's path starts at
+  its parent column, which needs no foreign key.
 - `{ some: { <table>: <condition> } }` holds when a row of `<table>` whose single-column foreign key names this row
   meets the condition, `none` when no such row does: on `projects`, `{ some: { tasks: { done: { eq: false } } } }` is
   a project with an open task.

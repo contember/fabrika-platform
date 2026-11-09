@@ -1385,7 +1385,7 @@ function linkTables(parsed: readonly ParsedTable[], vocabulary: VocabularyModel)
 				}
 				setOwn(sources, relation, table.name)
 			}
-			const when = parseWhen(linked, whenInput, conditionTable, hopRule)
+			const when = parseWhen(linked, conditionRoot(linked, byName), whenInput, conditionTable, hopRule)
 			const reveals = parseReveals(linked, readThrough, revealsInput, vocabulary, conditionTable, hopRule)
 			const memberReveals = parseMemberReveals(linked, memberRevealsInput, vocabulary, conditionTable, hopRule)
 			setOwn(models, table.name, freeze({ ...linked, confers, when, reveals, readThrough, memberReveals }))
@@ -1430,6 +1430,7 @@ function tableActionNames(table: LinkedTable): NameSet {
  */
 function parseWhen(
 	table: LinkedTable,
+	root: ConditionTable,
 	input: unknown,
 	tables: (name: string) => ConditionTable | undefined,
 	hops: HopRule,
@@ -1450,7 +1451,7 @@ function parseWhen(
 			throw new PolicyError(`${table.name}: when.${action} names an action the table does not name (${namesOf(named).join(', ')})`)
 		}
 		const what = `${table.name}: when.${action}`
-		const condition = parseCondition(ownEntry(declared, action), table, tables, what, hops)
+		const condition = parseCondition(ownEntry(declared, action), root, tables, what, hops)
 		// An insert reads the rows its foreign keys name in its transaction; no row names one that does not exist yet.
 		if (includes(table.actions.insert, action) && readsRowsNamingIt(condition)) {
 			throw new PolicyError(`${what}: an insert's condition reads the row and the rows its foreign keys name, so it takes no some or none`)
@@ -1458,6 +1459,24 @@ function parseWhen(
 		setOwn(when, action, condition)
 	}
 	return freeze(when)
+}
+
+/**
+ * The table a `when` of `table` starts at. A child view's parent column is a foreign key to its parent's key that no
+ * column list declares, so a path follows it to the parent row, and the parent's own foreign keys from there.
+ */
+function conditionRoot(table: LinkedTable, byName: Readonly<Record<string, ParsedTable>>): ConditionTable {
+	const parent = table.view && table.scope.mode === 'child' ? ownEntry(byName, table.scope.parent) : undefined
+	if (table.scope.mode !== 'child' || parent === undefined || parent.scope.mode !== 'dimension') {
+		return table
+	}
+	const foreignKeys: ForeignKey[] = []
+	for (let index = 0; index < table.foreignKeys.length; index++) {
+		const key = table.foreignKeys[index]
+		if (key !== undefined) foreignKeys[foreignKeys.length] = key
+	}
+	foreignKeys[foreignKeys.length] = freeze({ columns: freeze([table.scope.column]), table: parent.name, references: freeze([parent.scope.key]) })
+	return freeze({ ...table, foreignKeys: freeze(foreignKeys) })
 }
 
 /** A dimension's owning table, resolved: what a secondary path's column references. */

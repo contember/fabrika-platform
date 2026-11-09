@@ -4742,7 +4742,8 @@ export const tables = defineTables(vocabulary, columns)({
   JSON column is never compared: extract the value into a typed column.
 - A path follows foreign keys: `'project_id.ends_at'` reads the task's project. The column needs a single-column
   `REFERENCES <table> (id)`, and the hop must stay in the row's tenant: the row's own container or parent column, a
-  key into a reference table, or a key that holds every ancestor the two tables share (below).
+  key into a reference table, or a key that holds every ancestor the two tables share (below). A view's path starts at
+  its parent column, which needs no foreign key.
 - `{ some: { <table>: <condition> } }` holds when a row of `<table>` whose single-column foreign key names this row
   meets the condition, `none` when no such row does: on `projects`, `{ some: { tasks: { done: { eq: false } } } }` is
   a project with an open task.
@@ -6354,7 +6355,10 @@ policy; without one only `ctx.sql` reads it. With one, `ctx.db` reads it like a 
   `key: '<parent column>'` (`{ child: 'deals', key: 'deal_id' }`), and a handler `on` the parent reads that row with
   `ctx.db.target.<view>.get(ctx.target.value)`.
 - `scope: { reference: '<why>' }` is a view every endpoint reads, through `ctx.db.reference.<view>`.
-- It takes `actions: { read, appRead?, appCount? }` and column `read` actions only. `insert`, `update`, `delete`,
+- A child view takes a `when` on its read actions, as a table does (`references/relations.md`): a path may start at
+  its parent column (`'deal_id.stage'`), though no foreign key declares it, and follows the parent's foreign keys from
+  there. The parent's own `when` does not narrow the view; state the view's.
+- It takes `actions: { read, appRead?, appCount? }`, column `read` actions and a child view's `when` only. `insert`, `update`, `delete`,
   `version`, `createdBy`, `queue`, `files`, a column `write` and `unscoped: { <view>: 'write' }` are refused by tsc and
   the checker; its handles' writes are `Unavailable`, and the data layer refuses them.
 - Every read reaches a view's rows through the parent row their parent column names: a `Ref` of the parent, a

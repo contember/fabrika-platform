@@ -235,7 +235,9 @@ pass a recording one); `Database.fromEngine` takes another engine (`openSqlite`)
   columns it carries, which only a join from the parent compares. Every capability reads a child view through its
   parent row (`TableContext.through`, `viewScope`): `V.<column> in (select P.<key> from P where <P's predicate>)`, P's
   predicate built over P's context without P's `when`, so a column the view's SQL fills never places a row; the guard
-  admits that subquery only with `GuardContext.through`, and `ctx.sql.scope` refuses a `Ref` or `Within` of one. Every write is refused
+  admits that subquery only with `GuardContext.through`, and `ctx.sql.scope` refuses a `Ref` or `Within` of one. A
+  child view's `when` narrows after the subquery; its paths start at the parent column as a foreign key no column list
+  declares (`conditionRoot`). A view confers no relation and takes no `reveals`, `readThrough` or `memberReveals`. Every write is refused
   three times: the types (`Unavailable` handles, `ReadOnlyUnscoped`), the handle (`unscopedRows`), and the store's
   guard for any non-select root (`read_only`). The test kits never seed one.
 - **The generated column list carries the row types.** `TypedColumnList<DB>` brands `ColumnList<DB>` with a type-only

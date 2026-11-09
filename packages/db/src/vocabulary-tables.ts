@@ -182,9 +182,13 @@ interface ReadOnlyFields<Col extends string, A extends string> {
 	readonly columns?: { readonly [C in Col]?: { readonly read: A; readonly write?: never } }
 }
 
-/** A view read as a child table: its parent's `Ref` and `Within` read it; nothing writes it (ADR-0072). */
+/**
+ * A view read as a child table: its parent's `Ref` and `Within` read it; nothing writes it (ADR-0072). Its `when` narrows
+ * its read actions; a path may start at its parent column, to the parent row.
+ */
 type AuthoredChildViewPolicy<Table extends string, Col extends string, A extends string, S, P> = ReadOnlyFields<Col, A> & {
 	readonly scope: ChildScopes<Table, Col, S, P>
+	readonly when?: { readonly [action in A]?: ConditionPolicy<Col> }
 }
 
 /** A view's policy as written: a read-only child, or a reference table every site reads. */

@@ -18,12 +18,13 @@ import type { Database } from '../database'
 import { QueryRefusedError } from '../errors'
 import { bindScopedDatabase, type DataAccess, dataAccessOf, type DataHandles, type DataSite } from '../framework'
 import type { DataKind, UnscopedMode } from '../orm-types'
+import { readTables } from '../policy'
 import { openSqlite } from '../sqlite'
 import { bunSqliteStorage } from '../sqlite-bun'
 import { scoped } from '../store'
 import { tablePolicies } from '../tables'
 import { TestAuthority } from './fixtures/authority'
-import { viewColumns, viewMigration, viewTables } from './fixtures/view-layer'
+import { viewColumns, viewMigration, viewPolicies, viewTables, viewVocabulary } from './fixtures/view-layer'
 
 const alice = new TestAuthority('user:alice')
 const SEED = `
@@ -61,16 +62,28 @@ const project = (action: string, id: string, org: string) => alice.ref('project'
 /** The cases both dialects run, over a layer `open` binds to a database migrated with `viewMigration` and `SEED`. */
 function viewCases(open: () => Database): void {
 	let data: DataAccess
+	// The same tables, but the parent's own read narrowed by a condition: a view's read is not narrowed by it.
+	let narrowedParent: DataAccess
 
 	beforeAll(() => {
+		const database = open()
 		const layer = scoped(viewTables)
-		bindScopedDatabase(layer, { database: open(), capabilities: alice })
+		bindScopedDatabase(layer, { database, capabilities: alice })
 		data = dataAccessOf(layer)
+		const projects = { ...viewPolicies.projects, when: { 'projects.read': { name: { notEq: 'Gemini' } } } }
+		const narrowed = scoped(readTables(viewColumns, { ...viewPolicies, projects }, viewVocabulary))
+		bindScopedDatabase(narrowed, { database, capabilities: alice })
+		narrowedParent = dataAccessOf(narrowed)
 	})
 
 	/** One invocation of `kind`, committed when `work` resolves and rolled back when it throws. */
-	async function invoke<T>(kind: DataKind, work: (handles: DataHandles) => Promise<T>, unscoped: Record<string, UnscopedMode> = {}): Promise<T> {
-		const transaction = data.invocation(kind === 'query')
+	async function invoke<T>(
+		kind: DataKind,
+		work: (handles: DataHandles) => Promise<T>,
+		unscoped: Record<string, UnscopedMode> = {},
+		layer: DataAccess = data,
+	): Promise<T> {
+		const transaction = layer.invocation(kind === 'query')
 		const site: DataSite = {
 			kind,
 			unscoped,
@@ -83,7 +96,7 @@ function viewCases(open: () => Database): void {
 			session: () => transaction.session(),
 		}
 		try {
-			const result = await work(data.handles(site))
+			const result = await work(layer.handles(site))
 			await transaction.commit()
 			return result
 		} catch (error) {
@@ -166,6 +179,25 @@ function viewCases(open: () => Database): void {
 		}
 	})
 
+	test("a view's condition narrows its read through its parent row; the parent's own condition does not", async () => {
+		// named_events reads a row with a note whose project lies in the organization named One: e1 only.
+		const own = project('projects.read', 'p1', 'o1')
+		expect(idsOf(await invoke('query', (db) => call(db.target(own, 'on'), 'named_events.list')))).toEqual(['e1'])
+		expect(await invoke('query', (db) => call(db.target(own, 'on'), 'named_events.get', 'e1'))).toEqual({
+			id: 'e1',
+			project_id: 'p1',
+			note: 'own note',
+		})
+		await expect(invoke('query', (db) => call(db.target(own, 'on'), 'named_events.get', 'e2'))).rejects.toThrow('not found')
+		const everywhere = alice.within('organization', 'projects.read', 'all')
+		expect(idsOf(await invoke('query', (db) => call(db.within(everywhere), 'named_events.list')))).toEqual(['e1'])
+		expect(await invoke('query', (db) => call(db.within(alice.within('organization', 'projects.read', ['o2'])), 'named_events.count'))).toBe(0)
+		const other = alice.within('organization', 'projects.read', ['o2'])
+		const narrowed = (table: string) => invoke('query', (db) => call(db.within(other), `${table}.list`), {}, narrowedParent).then(idsOf)
+		expect(await narrowed('projects')).toEqual([])
+		expect(await narrowed('event_titles')).toEqual(['e3'])
+	})
+
 	test("a column with its own read action is read only by that action's Ref", async () => {
 		const reader = project('notes.read', 'p1', 'o1')
 		const row = await invoke('query', (db) => call(db.target(reader, 'on'), 'event_notes.get', 'e1'))
@@ -181,6 +213,7 @@ function viewCases(open: () => Database): void {
 			'event_notes',
 			'event_titles',
 			'events',
+			'named_events',
 			'organization_names',
 			'organizations',
 			'project_summaries',
@@ -231,7 +264,7 @@ describe('a view on SQLite', () => {
 		const { source, leftOut } = await generateSqliteSchema([{ bundle: 'app', migrations: [{ name: '20261104000000_views.sql', sql: viewMigration }] }])
 		expect(leftOut).toEqual([])
 		expect(source).toContain(
-			"export type Views =\n\t| 'event_notes'\n\t| 'event_titles'\n\t| 'organization_names'\n\t| 'project_names'\n\t| 'project_summaries'\n\t| 'stray_events'\n\nexport const columns: TypedColumnList<DB, Views> = {",
+			"export type Views =\n\t| 'event_notes'\n\t| 'event_titles'\n\t| 'named_events'\n\t| 'organization_names'\n\t| 'project_names'\n\t| 'project_summaries'\n\t| 'stray_events'\n\nexport const columns: TypedColumnList<DB, Views> = {",
 		)
 		const directory = await mkdtemp(join(tmpdir(), 'view-layer-'))
 		try {

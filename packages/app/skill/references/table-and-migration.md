@@ -340,7 +340,10 @@ policy; without one only `ctx.sql` reads it. With one, `ctx.db` reads it like a 
   `key: '<parent column>'` (`{ child: 'deals', key: 'deal_id' }`), and a handler `on` the parent reads that row with
   `ctx.db.target.<view>.get(ctx.target.value)`.
 - `scope: { reference: '<why>' }` is a view every endpoint reads, through `ctx.db.reference.<view>`.
-- It takes `actions: { read, appRead?, appCount? }` and column `read` actions only. `insert`, `update`, `delete`,
+- A child view takes a `when` on its read actions, as a table does (`references/relations.md`): a path may start at
+  its parent column (`'deal_id.stage'`), though no foreign key declares it, and follows the parent's foreign keys from
+  there. The parent's own `when` does not narrow the view; state the view's.
+- It takes `actions: { read, appRead?, appCount? }`, column `read` actions and a child view's `when` only. `insert`, `update`, `delete`,
   `version`, `createdBy`, `queue`, `files`, a column `write` and `unscoped: { <view>: 'write' }` are refused by tsc and
   the checker; its handles' writes are `Unavailable`, and the data layer refuses them.
 - Every read reaches a view's rows through the parent row their parent column names: a `Ref` of the parent, a
