@@ -135,6 +135,79 @@ describe('startRemoteFeedbackPoller', () => {
 		sm.remove(sessionId)
 	})
 
+	test('moves past entries it cannot use, and keeps an entry whose responses do not fit', async () => {
+		const sm = newSessionManager()
+		const { sessionId, shareId } = setupSession(sm)
+
+		const since: string[] = []
+		stubFetch((url) => {
+			since.push(new URL(url).searchParams.get('since') ?? '')
+			return Response.json({
+				entries: [
+					{ id: 'junk', revision: 'one' },
+					{
+						id: 'fb-newer',
+						shareId,
+						revision: 1,
+						submittedAt: '2026-04-09T11:00:00.000Z',
+						author: { id: 'u1', name: 'Carol' },
+						annotations: [],
+						generalNote: 'see answers',
+						responses: [{ id: 'when', type: 'date', label: 'When?', value: '2026-05-01' }],
+					},
+				],
+				latestAt: '2026-04-09T11:00:00.000Z',
+			})
+		})
+
+		const poller = startRemoteFeedbackPoller(sm, () => {}, '0.0.0')
+		await new Promise((r) => setTimeout(r, 100))
+		poller.stop()
+
+		expect(since[0]).toBe('')
+		expect(sm.getShares(sessionId).find((s) => s.shareId === shareId)?.lastFeedbackAt).toBe('2026-04-09T11:00:00.000Z')
+		const [persisted] = sm.getRemoteFeedback(sessionId, 1)
+		expect(persisted?.generalNote).toBe('see answers')
+
+		sm.remove(sessionId)
+	})
+
+	test('moves past an entry that does not decrypt, but not past entries it failed to store', async () => {
+		const sm = newSessionManager()
+		const { sessionId, shareId } = setupSession(sm)
+		const encrypted = {
+			id: 'fb-locked',
+			shareId,
+			revision: 1,
+			submittedAt: '2026-04-09T12:00:00.000Z',
+			author: { id: 'u1', name: 'Y2lwaGVy' },
+			annotations: [],
+			encryption: { alg: 'AES-GCM', v: 1 },
+		}
+		const plain = { id: 'fb-plain', shareId, revision: 1, submittedAt: '2026-04-09T12:00:00.000Z', author: { id: 'u1', name: 'Dan' }, annotations: [] }
+		let entries: unknown[] = [encrypted]
+		stubFetch(() => Response.json({ entries, latestAt: '2026-04-09T12:00:00.000Z' }))
+
+		// The share has no local key, so the entry never decrypts: the cursor still moves.
+		let poller = startRemoteFeedbackPoller(sm, () => {}, '0.0.0')
+		await new Promise((r) => setTimeout(r, 100))
+		poller.stop()
+		expect(sm.getShares(sessionId).find((s) => s.shareId === shareId)?.lastFeedbackAt).toBe('2026-04-09T12:00:00.000Z')
+
+		// Storing fails: the cursor stays, so the entry is fetched again.
+		sm.updateShareLastFeedback(sessionId, shareId, '2026-04-09T11:59:00.000Z')
+		entries = [plain]
+		sm.appendRemoteFeedback = () => {
+			throw new Error('disk full')
+		}
+		poller = startRemoteFeedbackPoller(sm, () => {}, '0.0.0')
+		await new Promise((r) => setTimeout(r, 100))
+		poller.stop()
+		expect(sm.getShares(sessionId).find((s) => s.shareId === shareId)?.lastFeedbackAt).toBe('2026-04-09T11:59:00.000Z')
+
+		sm.remove(sessionId)
+	})
+
 	test('404 stops further polls (revoked share)', async () => {
 		const sm = newSessionManager()
 		const { sessionId, shareId } = setupSession(sm)

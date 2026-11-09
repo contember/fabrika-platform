@@ -6,6 +6,7 @@
  * Run with `bun test` from packages/canvas-share/.
  */
 
+import { MAX_SHARED_RESPONSE_TEXT, MAX_SHARED_RESPONSES } from 'agent-canvas/share/responses'
 import { describe, expect, test } from 'bun:test'
 import { LIMITS } from './types'
 import { monotonicUuidv7, randomHexId, sha256Hex, timingSafeEqual } from './util'
@@ -147,6 +148,38 @@ describe('validateFeedbackBody', () => {
 			encryption: { alg: 'AES-GCM', v: 1 },
 		})
 		expect(typeof result).toBe('object')
+	})
+
+	test('accepts plaintext responses and keeps them', () => {
+		const responses = [
+			{ id: 'db', type: 'radio', label: 'Which database?', value: 'pg' },
+			{ id: 'envs', type: 'checkbox', label: 'Envs', value: ['stage'], note: 'prod later' },
+			{ id: 'score', type: 'range', label: 'Score', value: 3 },
+			{ id: 'why', type: 'text', label: 'Why?', value: null, note: 'skip' },
+		]
+		const result = validateFeedbackBody({ ...valid, responses })
+		expect(typeof result === 'object' && result.responses).toEqual(responses)
+	})
+
+	test('rejects a malformed response', () => {
+		expect(typeof validateFeedbackBody({ ...valid, responses: [{ id: 'x', type: 'slider', label: 'x', value: 1 }] })).toBe('string')
+		expect(typeof validateFeedbackBody({ ...valid, responses: [{ id: 'x', type: 'text', label: 'x', value: { a: 1 } }] })).toBe('string')
+		expect(
+			typeof validateFeedbackBody({ ...valid, responses: [{ id: 'x', type: 'text', label: 'x', value: 'y'.repeat(MAX_SHARED_RESPONSE_TEXT + 1) }] }),
+		).toBe('string')
+	})
+
+	test('rejects too many responses', () => {
+		const responses = Array.from({ length: MAX_SHARED_RESPONSES + 1 }, (_, i) => ({ id: `r${i}`, type: 'text', label: 'x', value: 'y' }))
+		expect(typeof validateFeedbackBody({ ...valid, responses })).toBe('string')
+	})
+
+	test('responses are ciphertext exactly when the body is encrypted', () => {
+		const encryption = { alg: 'AES-GCM', v: 1 }
+		expect(typeof validateFeedbackBody({ ...valid, encryption, responses: 'Y2lwaGVy' })).toBe('object')
+		expect(typeof validateFeedbackBody({ ...valid, encryption, responses: [{ id: 'x', type: 'text', label: 'x', value: 'y' }] })).toBe('string')
+		expect(typeof validateFeedbackBody({ ...valid, responses: 'Y2lwaGVy' })).toBe('string')
+		expect(typeof validateFeedbackBody({ ...valid, encryption, responses: 'x'.repeat(LIMITS.RESPONSES_CIPHERTEXT_LENGTH + 1) })).toBe('string')
 	})
 
 	test('still rejects unknown encryption algorithm', () => {

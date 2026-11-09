@@ -5,6 +5,8 @@
  * whenever the schema changes incompatibly.
  */
 
+import type { SharedResponse } from 'agent-canvas/share/responses'
+
 export interface Env {
 	BLOBS: R2Bucket
 	FEEDBACK: KVNamespace
@@ -67,6 +69,8 @@ export interface FeedbackPostBody {
 		attachments?: Array<{ url: string; mime?: string }>
 	}>
 	generalNote?: string
+	/** Structured answers (agent-canvas/share `SharedResponse`); one ciphertext blob of the list when encrypted. */
+	responses?: SharedResponse[] | string
 	revision: number
 	/** Present when name/snippet/note/etc. fields are ciphertext. The worker
 	 *  stores the marker verbatim; the daemon uses it to decide whether to
@@ -82,6 +86,7 @@ export interface FeedbackEntry {
 	author: { id: string; name: string }
 	annotations: FeedbackPostBody['annotations']
 	generalNote?: string
+	responses?: FeedbackPostBody['responses']
 	encryption?: EncryptionMeta
 }
 
@@ -107,6 +112,9 @@ export const LIMITS = {
 	GENERAL_NOTE_LENGTH: 10_000,
 	/** Loose upper bound for `generalNote` accepted by validation. */
 	GENERAL_NOTE_CIPHERTEXT_LENGTH: 32_000,
+	/** Loose upper bound for the encrypted `responses` blob; FEEDBACK_BODY_BYTES bounds the body anyway. The
+	 *  plaintext list is bounded by agent-canvas/share `sharedResponsesSchema`. */
+	RESPONSES_CIPHERTEXT_LENGTH: 200_000,
 	/** Default share TTL when SHARE_TTL_SECONDS env var is not set. */
 	DEFAULT_SHARE_TTL_SECONDS: 30 * 24 * 60 * 60,
 } as const

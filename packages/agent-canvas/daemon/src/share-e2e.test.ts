@@ -21,6 +21,8 @@ import type { Env } from '../../../canvas-share/src/types'
 import { validateSharePayload } from '../../../canvas-share/src/validation'
 import { decryptString, ENCRYPTION_META, encryptString, exportShareKey, generateShareKey, importShareKey } from '../client/shareCrypto'
 import { buildSharePayload, encryptSharePayload } from './share'
+import { createShare, decryptFeedbackEntry, fetchShareFeedback, revokeShareOnWorker, type SharedResponse, ShareGoneError } from './share-client'
+import { stubFetch } from './stubFetch'
 
 // ---- Minimal in-memory R2 / KV stubs ---------------------------------------
 
@@ -299,6 +301,60 @@ describe('encrypted share e2e (daemon → worker → browser → reviewer → da
 			try {
 				rmSync(testDir, { recursive: true, force: true })
 			} catch {}
+		}
+	})
+})
+
+describe('share client e2e (createShare → reviewer responses → fetch + decrypt → revoke)', () => {
+	test('structured responses round-trip encrypted through the real worker handler', async () => {
+		const env = makeEnv()
+		const originalFetch = globalThis.fetch
+		stubFetch((url, init) => workerHandler.fetch(new Request(url, init), env))
+		try {
+			const share = await createShare(
+				{
+					version: 1,
+					origin: { sessionId: 'host-doc', revision: 1, createdAt: '2026-05-18T12:00:00Z' },
+					canvasFiles: [{ filename: 'plan.jsx', compiledJs: 'export default function Plan() {}' }],
+					runtime: { componentsVersion: '1.0.0' },
+				},
+				{ endpoint: 'https://example.com' },
+			)
+			const key = await importShareKey(share.encryptionKey ?? '')
+
+			// The reviewer's browser seals the responses as one blob (clientApi.ts encryptFeedback).
+			const responses: SharedResponse[] = [
+				{ id: 'verdict:R-1', type: 'radio', label: 'Verdict', value: 'approve', note: 'Looks right' },
+				{ id: 'envs', type: 'checkbox', label: 'Envs', value: ['stage'] },
+			]
+			const submit = await fetch(`https://example.com/s/${share.shareId}/feedback`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					author: { id: 'reviewer-1', name: await encryptString(key, 'Reviewer') },
+					revision: 1,
+					annotations: [],
+					generalNote: await encryptString(key, '## Responses'),
+					responses: await encryptString(key, JSON.stringify(responses)),
+					encryption: ENCRYPTION_META,
+				}),
+			})
+			expect(submit.status).toBe(200)
+
+			const page = await fetchShareFeedback('https://example.com', share.shareId, '')
+			expect(page.entries.length).toBe(1)
+			expect(page.malformed).toEqual([])
+			expect(JSON.stringify(page.entries)).not.toContain('Looks right')
+			const [wire] = page.entries
+			if (!wire) throw new Error('no entry')
+			const entry = await decryptFeedbackEntry(wire, key)
+			expect(entry.author.name).toBe('Reviewer')
+			expect(entry.responses).toEqual(responses)
+
+			await revokeShareOnWorker('https://example.com', share.shareId, share.ownerToken ?? '')
+			await expect(fetchShareFeedback('https://example.com', share.shareId, '')).rejects.toBeInstanceOf(ShareGoneError)
+		} finally {
+			globalThis.fetch = originalFetch
 		}
 	})
 })

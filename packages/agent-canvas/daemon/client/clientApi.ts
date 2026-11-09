@@ -22,6 +22,7 @@
  */
 
 import type { CanvasHost } from '@fabrika/canvas-kernel/client'
+import type { SharedResponse } from '../src/share-responses'
 import { type SessionMeta, sessionMetaSchema } from './apiSchemas'
 import { decryptString, ENCRYPTION_META, type EncryptionMeta, encryptString, importShareKey } from './shareCrypto'
 
@@ -253,13 +254,17 @@ export interface SharedFeedbackPayload {
 	revision: number
 	annotations: Array<Record<string, unknown>>
 	generalNote?: string
+	/** Structured answers to the canvas inputs; `generalNote` carries the same answers as markdown. */
+	responses?: SharedResponse[]
 }
 
-/** Encrypt the secret fields of a feedback payload in-place semantics. */
-async function encryptFeedback(
+type EncryptedFeedbackBody = Omit<SharedFeedbackPayload, 'responses'> & { responses?: string; encryption: EncryptionMeta }
+
+/** The feedback body for an encrypted share: every text field, and the responses as one blob, as ciphertext. */
+export async function encryptFeedback(
 	payload: SharedFeedbackPayload,
 	key: CryptoKey,
-): Promise<SharedFeedbackPayload & { encryption: EncryptionMeta }> {
+): Promise<EncryptedFeedbackBody> {
 	const annotations = await Promise.all(
 		payload.annotations.map(async (a) => {
 			const out: Record<string, unknown> = {
@@ -288,6 +293,7 @@ async function encryptFeedback(
 		revision: payload.revision,
 		annotations,
 		...(payload.generalNote ? { generalNote: await encryptString(key, payload.generalNote) } : {}),
+		...(payload.responses && payload.responses.length > 0 ? { responses: await encryptString(key, JSON.stringify(payload.responses)) } : {}),
 		encryption: ENCRYPTION_META,
 	}
 }
