@@ -51,7 +51,8 @@ a scope over them is as sound as that SQL.
    parent compares the parent column and the inherited columns. A view keyed by its parent is read by the parent's own
    id, `ctx.db.target.<view>.get(ctx.target.value)`. The guard admits the parent subquery only on a child view's
    statement, for its declared parent column, parent table and key, over a predicate it would admit on a statement of
-   the parent, never `true`, alone or after the key's equality. The subquery counts apart from the nesting bound of
+   the parent, never `true`, alone or after an AND of `V.<column> = $n` equalities. On a child view's statement it
+   admits no other reach but `true`: no equality, value list or relation row over the view's own columns. The subquery counts apart from the nesting bound of
    the parent's predicate, so a view's scope nests at most one deeper than its parent's. `ctx.sql.scope` renders no
    `Ref` or `Within` of a child view: its fragment holds column tests only, and no column of the view places a row.
 5. **Writes are refused at the type level and at run time.** The policy types allow only `actions.read`, `appRead`,

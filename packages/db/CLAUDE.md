@@ -368,8 +368,9 @@ pass a recording one); `Database.fromEngine` takes another engine (`openSqlite`)
   the statement judges each row by the chain it carries now; a scope moved out of a container is out. A container
   must be a chain link above the Within's own dimension in that table, or the operation is refused. The guard
   admits a scope predicate only as `true`, an AND tree of `column = $n`, a single membership, or a parenthesized
-  OR tree of memberships, over the statement's table; on a child view's statement also its parent subquery over a
-  predicate the guard would admit on the parent (never `true`), alone or after an AND tree of `column = $n`.
+  OR tree of memberships, over the statement's table. On a child view's statement it admits only `true` and the
+  view's parent subquery over a predicate the guard would admit on the parent (never `true`), alone or after an AND
+  tree of `column = $n`: no column of the view stands in for the parent row.
 - **A Within carries at most `MAX_WITHIN_VALUES` (1000) scope values, its own, its containers' and its contained grants' together.** Each
   is one bound parameter of every statement it scopes (Postgres binds at most 65535); the framework refuses to
   mint a larger one and the layer refuses to use one.

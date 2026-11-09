@@ -168,9 +168,12 @@ function checkRoot(root: OperationNode, context: GuardContext, admitted: Admitte
 	if (!scoped) {
 		throw new QueryRefusedError('scope_predicate', 'the scope predicate must be the top-level conjunct of WHERE')
 	}
+	const through = context.through
+	// A child view's rows are placed by its parent row only: no column of the view stands in for that reach.
 	const reach = (node: unknown) =>
-		isReach(node, context.table, context.subqueries, admitted)
-		|| (context.through !== undefined && isThroughParent(node, context.table, context.through, context.subqueries, admitted))
+		through === undefined
+			? isReach(node, context.table, context.subqueries, admitted)
+			: isEverything(node) || isThroughParent(node, context.table, through, context.subqueries, admitted)
 	const scope = context.scope
 	const shaped = reach(scope)
 		|| (kindOf(scope) === 'AndNode' && hasOnly(scope, CONNECTIVE_KEYS) && reach(read(scope, 'left'))

@@ -354,6 +354,30 @@ describe("a child view's rows read through its parent row", () => {
 		const [node, context] = scopedBy(parentRows(ref))
 		refuses(node, { ...context, through: undefined }, 'the scope predicate must be true')
 	})
+
+	test("no reach of the view's own columns: a chain's equalities, a Within's values or relation rows are refused on a view", () => {
+		const viewRelated = BinaryOperationNode.create(
+			column('notes', 'workspace_id'),
+			OperatorNode.create('in'),
+			subquery('workspace_members', 'workspace_id', equals('workspace_members', 'principal_id', 'user:alice')),
+		)
+		const shapes = [
+			equals('notes', 'workspace_id', 'w1'),
+			allOf([equals('notes', 'id', 'n1'), equals('notes', 'workspace_id', 'w1')]),
+			inList('notes', 'workspace_id', ['w1']),
+			viewRelated,
+			anyOf([inList('notes', 'workspace_id', ['w1']), viewRelated]),
+			AndNode.create(equals('notes', 'workspace_id', 'w1'), viewRelated),
+			AndNode.create(inList('notes', 'workspace_id', ['w1']), ParensNode.create(open)),
+		]
+		for (const shape of shapes) {
+			const [node, context] = scopedBy(shape)
+			expect(() => assertAllowedTree(node, { ...context, through: undefined })).not.toThrow()
+			refuses(node, context, 'the scope predicate must be true')
+		}
+		const [node, context] = scopedBy(AndNode.create(everything(), ParensNode.create(open)))
+		expect(() => assertAllowedTree(node, context)).not.toThrow()
+	})
 })
 
 describe('the scope predicate is the top-level conjunct', () => {
