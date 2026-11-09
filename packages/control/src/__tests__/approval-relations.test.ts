@@ -205,6 +205,18 @@ describe("a table's read path in the approval diff", () => {
 		})
 		expect(classifyAccess(through({ label: 'label_id' }), none).outcome).toBe('no-widening')
 	})
+
+	test("widens when added through the row's container, or moved between its own column and its container's", () => {
+		expect(lines(none, through({ label: 'project_id.label_id' }))).toContainEqual({
+			effect: 'widens',
+			line: 'A read of `label` reaches table `notes` through `project_id.label_id`',
+		})
+		expect(lines(through({ label: 'label_id' }), through({ label: 'project_id.label_id' }))).toContainEqual({
+			effect: 'widens',
+			line: 'A read of `label` reaches table `notes` through `project_id.label_id` instead of `label_id`',
+		})
+		expect(classifyAccess(through({ label: 'project_id.label_id' }), through({ label: 'label_id' })).outcome).toBe('widening')
+	})
 })
 
 describe("a table's member reveals in the approval diff", () => {

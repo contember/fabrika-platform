@@ -141,6 +141,24 @@ pinned framework release predates their enforcement. A reader that ignores a nar
 a refusal and not a warning. Every new field is absent from the artifact unless declared, so existing artifacts keep
 their digests.
 
+### 6. A read path may start at the row's container
+
+`readThrough: { <dimension>: <column> }` reads a row through a foreign key of its own to the table that owns a
+dimension outside the row's chain. When that key lives on the row's nearest container instead, the row names the
+container's path: `readThrough: { team: 'task_id.team_id' }` on a task's comments, read by the team the task names. The
+term reads the container at every statement: `T.<link> in (select C.<key> from C where C.<column> in (<nodes>))`.
+
+- `<link>` is the row's nearest containment column, which places it now, so a move takes the read along.
+- The container declares the same path through a column of its own, which no update writes. One container deep: a
+  path through the container's own container is refused.
+- The guard admits the one extra subquery by the container's table and key, the way it admits a chain link.
+- A reveal is not matched through such a path. A relation above the dimension, under its source's condition, would
+  read the revealing row, the container, the path's table, the source and the far row: five subqueries, past the
+  guard's bound of four. The reveal is declared on the container instead.
+
+Nothing is stamped on the row, so no write keeps a copy in step (see Alternatives). An older framework refuses the
+dotted path at parse, so the form fails closed; the approval diff shows a new or changed path as a widening.
+
 ## Consequences
 
 - An application expresses row-dependent access as data the approver reviews, instead of handler code. What the
@@ -172,6 +190,11 @@ their digests.
 - **`admits` together with `when`, or raw SQL in it.** Widening without a tenant partition lets a grant in one company
   reach published rows of another. Raw SQL is the opposite of what a reviewable widening needs. `admits` is a step of
   the coverage roadmap and takes its own ADR.
+- **A stamped copy of the container's path column on the row**, for a read path that starts at the row's container.
+  It reads one subquery shallower and would let a reveal match through it. But every insert, every move of the row and
+  every write of the container's column would have to rewrite the copy on every row below, in the same transaction, or
+  a row would stay readable by a team its container left. The container term reads the column where it lives, at every
+  statement, and needs nothing kept in step (section 6).
 - **A view as a relation source.** A view's rows change with every write to its base tables, and the delegation bound
   sees none of those writes: nobody could bound who gains access, and an approver could not review it. An application
   that needs one writes its source rows through a real table with `assign`.

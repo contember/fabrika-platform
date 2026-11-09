@@ -234,7 +234,11 @@ one is refused and names the column: add a migration that sets it `NOT NULL`, th
 
 - `readThrough: { <dimension>: <column> }` lets a `Within` of a dimension outside the table's chain, or a relation at
   it, read the row through that column's tenant-holding key: a task in a project, read by the members of the team its
-  `team_id` names. Every write still follows the task's containment, and no update writes the column.
+  `team_id` names. Every write still follows the task's containment, and no update writes the column. When the key
+  lives on the row's container, name the container's path from the row's own containment column:
+  `readThrough: { team: 'task_id.team_id' }` on a task's comments. The container declares `readThrough.team` through
+  a column of its own; the row follows it wherever the container's column points now. Such a table takes no reveal
+  matched through that path: declare the reveal on the container.
 - `reveals: { <relation>: { to, actions, when? } }` on a table the relation reaches: such a row also gives the
   relation `actions` (those its roles name in `via`) at its ancestor node in `to` while `when` admits the row: an
   assignee of an open task reads its project. A reveal matched through `readThrough` on a table with an insert needs

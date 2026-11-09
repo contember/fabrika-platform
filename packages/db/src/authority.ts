@@ -77,9 +77,16 @@ function isIn(table: string, name: string, nodes: OperationNode): OperationNode 
 
 /**
  * The rows of `table` whose `path` column names one of `nodes` of `dimension`: `T.<column> in (nodes)` at the path's own
- * dimension, `T.<column> in (select D.<key> from D where D.<link> in (nodes))` at one above it; `undefined` elsewhere.
+ * dimension, `T.<column> in (select D.<key> from D where D.<link> in (nodes))` at one above it; `undefined` elsewhere. A
+ * path through the nearest container reads the container's: `T.<link> in (select C.<key> from C where <C's term>)`.
  */
 export function throughPath(table: string, path: SecondaryPath, dimension: string, nodes: OperationNode): OperationNode | undefined {
+	const via = path.via
+	const term = pathTerm(via === undefined ? table : via.table, path, dimension, nodes)
+	return via === undefined || term === undefined ? term : isIn(table, via.column, subquery(via.table, via.key, term))
+}
+
+function pathTerm(table: string, path: SecondaryPath, dimension: string, nodes: OperationNode): OperationNode | undefined {
 	if (path.dimension === dimension) {
 		return isIn(table, path.column, nodes)
 	}

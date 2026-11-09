@@ -2786,6 +2786,7 @@ function layerReach(
 			const path = model.readThrough[position]
 			if (path === undefined) continue
 			select(path.table, path.key)
+			if (path.via !== undefined) select(path.via.table, path.via.key)
 			for (let link = 0; link < path.chain.length; link++) select(path.table, path.chain[link]?.column ?? path.key)
 		}
 		const actions = ownKeys(model.when)

@@ -106,9 +106,10 @@ interface WritablePolicy<Col extends string, A extends string, V extends Col, Ac
 	readonly reveals?: { readonly [relation: string]: RevealsPolicy<Col, A> }
 	/**
 	 * Dimension outside the chain → the foreign key column a read reaches a row through: a `Within` of the dimension, or a
-	 * relation at it, reads the row, and every write follows containment only. No update writes the column.
+	 * relation at it, reads the row, and every write follows containment only. No update writes the column. Or
+	 * `<nearest container column>.<its column>`: the row is read through its nearest container's own read path.
 	 */
-	readonly readThrough?: { readonly [dimension: string]: Col }
+	readonly readThrough?: { readonly [dimension: string]: Col | `${Col}.${string}` }
 	/**
 	 * This table's own dimension → the ancestor node a row reveals to its members: a grant of one of `actions` at the
 	 * row's own node holds that action at its node in `to` too, for a `Within`'s reads, while `when` admits the row.
@@ -339,6 +340,18 @@ export interface SecondaryPath {
 	readonly table: string
 	readonly key: string
 	readonly chain: readonly Container[]
+	/**
+	 * The nearest container whose own path this is: the row's `column` of it, its `table` and `key`. `column` above is
+	 * then the container's column, and the path is read as `T.<via column> in (select C.<key> from C where …)`.
+	 */
+	readonly via: ContainerHop | undefined
+}
+
+/** The row's nearest containment column, and the table and key it names. */
+export interface ContainerHop {
+	readonly column: string
+	readonly table: string
+	readonly key: string
 }
 
 /**
@@ -1373,10 +1386,19 @@ function linkTables(parsed: readonly ParsedTable[], vocabulary: VocabularyModel)
 			const { scope, chain } = resolve(table, [])
 			const { confersInput, whenInput, revealsInput, readThroughInput, memberRevealsInput, ...rest } = table
 			const linked = { ...rest, scope, chain }
-			const readThrough = parseReadThrough(linked, readThroughInput, vocabulary, (dimension) => {
+			const ownerOf = (dimension: string): ResolvedOwner | undefined => {
 				const owner = ownEntry(owners, dimension)
 				return owner === undefined ? undefined : { name: owner.name, ...resolve(owner, []) }
-			})
+			}
+			// A container's own path, parsed from its own declaration; one through its container in turn is none.
+			const containerPath = (container: string, dimension: string): SecondaryPath | undefined => {
+				const declared = ownEntry(byName, container)?.readThroughInput
+				const column = declared === undefined ? undefined : ownEntry(plainRecord(declared, `${container}: readThrough`), dimension)
+				const target = linkedTable(container)
+				if (target === undefined || typeof column !== 'string' || splitPath(column).length !== 1) return undefined
+				return parseReadThrough(target, { [dimension]: column }, vocabulary, ownerOf, () => undefined)[0]
+			}
+			const readThrough = parseReadThrough(linked, readThroughInput, vocabulary, ownerOf, containerPath)
 			const confers = parseConfers(linked, confersInput, vocabulary.relations, conditionTable, linkedTable, hopRule)
 			for (let position = 0; position < confers.length; position++) {
 				const relation = confers[position]?.relation ?? ''
@@ -1489,13 +1511,15 @@ interface ResolvedOwner extends Resolved {
 /**
  * `readThrough`: dimension → the column a `Within`'s read reaches a row through. The dimension lies outside the row's chain and a table
  * owns it; the column is a foreign key to that table's key that no update writes, and it covers every ancestor the two
- * chains share, so the database keeps the node in the row's own tenant.
+ * chains share, so the database keeps the node in the row's own tenant. `<column>.<column>` reads the row through its
+ * nearest container's own path instead (`containerPath`).
  */
 function parseReadThrough(
 	table: LinkedTable,
 	input: unknown,
 	vocabulary: VocabularyModel,
 	ownerOf: (dimension: string) => ResolvedOwner | undefined,
+	containerPath: (container: string, dimension: string) => SecondaryPath | undefined,
 ): readonly SecondaryPath[] {
 	if (input === undefined) {
 		return freeze([])
@@ -1519,6 +1543,11 @@ function parseReadThrough(
 			throw new PolicyError(`${what}: ${table.name} already lies in ${dimension}; a secondary path reaches a dimension outside its chain`)
 		}
 		const column = ownEntry(declared, dimension)
+		const segments = typeof column === 'string' ? splitPath(column) : []
+		if (segments.length === 2) {
+			paths[paths.length] = throughContainer(table, segments[0] ?? '', segments[1] ?? '', dimension, ownerOf, containerPath, what)
+			continue
+		}
 		if (typeof column !== 'string' || !inSet(table.columns, column)) {
 			throw new PolicyError(`${what} names ${String(column)}, which is not a column of ${table.name}`)
 		}
@@ -1553,9 +1582,48 @@ function parseReadThrough(
 			)
 		}
 		requireNotNullAncestors(what, table, pairs)
-		paths[paths.length] = freeze({ dimension, column, table: owner.name, key: owner.scope.key, chain: owner.chain })
+		paths[paths.length] = freeze({ dimension, column, table: owner.name, key: owner.scope.key, chain: owner.chain, via: undefined })
 	}
 	return freeze(paths)
+}
+
+/**
+ * `readThrough.<dimension>: '<link>.<column>'`: the row is read through the path its nearest container declares for the
+ * dimension. `<link>` is the row's nearest containment column, which places it in the container now, and `<column>` the
+ * container's own path column, which no update of the container writes; so the read follows containment and the
+ * container's path, and nothing the row's writer picks.
+ */
+function throughContainer(
+	table: LinkedTable,
+	link: string,
+	column: string,
+	dimension: string,
+	ownerOf: (dimension: string) => ResolvedOwner | undefined,
+	containerPath: (container: string, dimension: string) => SecondaryPath | undefined,
+	what: string,
+): SecondaryPath {
+	const nearest = table.chain[0]
+	if (nearest === undefined || nearest.column !== link) {
+		throw new PolicyError(
+			`${what}: ${link} is not ${table.name}'s nearest containment column${
+				nearest === undefined ? '' : ` (${nearest.column})`
+			}; a path through a container starts at the row's own container`,
+		)
+	}
+	const container = ownerOf(nearest.dimension)
+	if (container === undefined || container.scope.mode !== 'dimension') {
+		throw new PolicyError(`${what}: no table owns ${nearest.dimension}, so no container row holds a path to ${dimension}`)
+	}
+	const path = containerPath(container.name, dimension)
+	if (path === undefined) {
+		throw new PolicyError(
+			`${what}: ${container.name} declares no readThrough.${dimension} through a column of its own, so ${table.name} has no container path to follow`,
+		)
+	}
+	if (path.column !== column) {
+		throw new PolicyError(`${what}: ${container.name} reads ${dimension} through ${path.column}, not ${column}`)
+	}
+	return freeze({ ...path, via: freeze({ column: link, table: container.name, key: container.scope.key }) })
 }
 
 /**
@@ -1610,6 +1678,12 @@ function parseReveals(
 		onlyFields(policy, REVEALS_FIELDS, what)
 		const { to, column, actions: listed, when } = parseRevealed(table, policy, what, vocabulary, tables, hops)
 		const path = paths[0]
+		if (path?.via !== undefined) {
+			// The relation's nodes would sit one subquery below the container's, past the guard's bound under a reveal.
+			throw new PolicyError(
+				`${what}: ${table.name} reads ${dimension} through its container ${path.via.table}, so a reveal matched through it reads too deep; reveal from ${path.via.table} instead`,
+			)
+		}
 		if (path !== undefined && table.chain[0]?.dimension !== to) {
 			throw new PolicyError(
 				`${what}.to: ${to} lies above ${table.name}'s nearest container; a move of an ancestor rewrites ${column}, so a reveal through a secondary path reveals the nearest container only`,

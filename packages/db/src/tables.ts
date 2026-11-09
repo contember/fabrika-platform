@@ -202,7 +202,7 @@ function readThroughArtifact(model: TableModel): Record<string, string> {
 	const artifact: Record<string, string> = {}
 	for (let index = 0; index < model.readThrough.length; index++) {
 		const path = model.readThrough[index]
-		if (path !== undefined) setOwn(artifact, path.dimension, path.column)
+		if (path !== undefined) setOwn(artifact, path.dimension, path.via === undefined ? path.column : `${path.via.column}.${path.column}`)
 	}
 	return artifact
 }

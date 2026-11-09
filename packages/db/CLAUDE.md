@@ -616,7 +616,12 @@ through a relation (`~rel`, `@fabrika/auth-core`). `authority.ts` builds every p
   read another tenant's row.
 - **`readThrough: { <dimension>: <column> }`** lets a `Within` of a dimension outside the table's chain, or a relation
   at it, read the row through that tenant-holding key. Every write still follows containment only, and no update writes
-  the column. `DbIndex` lists the table under that dimension's `Within` (`ReadThroughOf`).
+  the column. `DbIndex` lists the table under that dimension's `Within` (`ReadThroughOf`). `'<link>.<column>'` reads
+  the row through its nearest container's own path instead (`throughContainer`, `SecondaryPath.via`):
+  `T.<link> in (select C.<key> from C where <C's term>)`, `<link>` the row's nearest containment column and `<column>`
+  the container's own single-column path for the dimension. Nothing is stamped, so a move or the container's column is
+  read as it stands; the guard admits `(C, key)` beside the path's table. A reveal is not matched through such a path:
+  a relation above it under a source's condition would nest five deep.
 - **`reveals`** makes a row a relation reaches reveal its ancestor node in `to` for the listed actions (those its
   roles name in `via`), while the reveal's `when` admits the row. A reveal matched through `readThrough` on a table with
   an insert needs `assign` (`self` to let the writer name a node where it holds the relation), because the writer picks
