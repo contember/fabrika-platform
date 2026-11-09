@@ -120,6 +120,13 @@ entry of the same name would collide with it. A value made of references (`${db_
 name that is not a credential in `target.notSecret` of `fabrika.config.ts`. The check runs only at build, so a manifest an older release built still
 deploys.
 
+From `0.9.0-dev.12`, `schema.generated.ts` lists each table's `notNull` columns, and a condition path or a `readThrough`
+over a foreign key that holds the row's tenant requires its ancestor columns there. Run `fabrika db codegen` after
+raising the pin: `codegen --verify` refuses the stale file at build, and a list without `notNull` names none, so the
+parse refuses such a path until the file is regenerated. Relation grants (`relations`, a role's `via`, a table's
+`confers` and `when`; [ADR-0073](../decisions/0073-a-relation-grant-is-application-data-read-on-every-statement.md))
+need `0.9.0-dev.12` or later: Control refuses to publish them for an application pinned to an earlier release.
+
 ## 0.7 → 0.8
 
 0.8 changed no 0.7 form: it added the ALTCHA challenge provider. Raise the pin; nothing else changes. To move a public

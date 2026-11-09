@@ -4547,7 +4547,8 @@ statement. This file is an application of its own (`tasks` with assistants); its
 `src/app-kit.ts`, `src/app.ts` and `src/schemas.ts` are those of `app-setup.md` and `endpoint.md`.
 
 Ask the human before you add a relation, a role's `via`, a table's `confers` or its `assign`: each lets someone reach
-more, and the approver sees each as a widening. A `when` only narrows; removing or changing one widens.
+more, and the approver sees each as a widening. A `when` only narrows; removing or changing one widens. They need
+`@fabrika/app` `0.9.0-dev.12` or later: Control refuses to publish them for an application pinned to an earlier release.
 
 ## The vocabulary: a relation and a role's `via`
 
