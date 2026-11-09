@@ -554,11 +554,14 @@ through a relation (`~rel`, `@fabrika/auth-core`). `authority.ts` builds every p
   and carried by a `Ref` minted through it. Nothing caches it, so a deleted source row stops access at the next
   statement. A source's `when` reads the source row only, never its `version`; a queue table confers nothing.
 - **A principal may be read through one foreign key** (`principal: '<column>.<principal column>'`, `parsePrincipal`):
-  `<column>` is a single-column foreign key to the key of a dimension, child or application table P (no view, no queue
-  table), and every principal comparison is `namesPrincipal` (`authority.ts`), `S.<column> in (select P.<key> from P
+  `<column>` is a single-column foreign key to the key of a contained dimension, child or application table P (no view,
+  no queue table, no top-level dimension, whose key an insert takes from its Ref), never the source's key, chain,
+  version or file column, which the layer stamps or a move rewrites. Every principal comparison is `namesPrincipal` (`authority.ts`), `S.<column> in (select P.<key> from P
   where P.<column> = $me)`: the relation term, its reveals, `relates` and the relation row lookups. `S.<column>` is
   fixed like the principal; `P.<column>` is in no update list and no column write action, and is not P's version, key,
-  chain, file or JSON column, so P's rows change it only by delete and insert. `ctx.sql` of a writing site never
+  chain, file or JSON column, so P's rows change it only by delete and insert. A column that holds a principal, `S.<principal>`
+  or `P.<column>`, is a column of no foreign key (`refuseReferencing`): the column list carries no key's actions, and
+  one that cascades on update would change whom the rows name. `ctx.sql` of a writing site never
   names P (`accessTables`). A deleted P or source row stops access at the next statement. The guard admits P by its
   key only and nests scope subqueries at most `MAX_SCOPE_NESTING` (4) deep: a reveal matched through a secondary path
   above the relation's dimension reads the reveal's row, the path's table, the source and P. The artifact keeps the

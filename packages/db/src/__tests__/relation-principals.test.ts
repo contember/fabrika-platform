@@ -456,11 +456,14 @@ suite('postgres', async () => {
 
 /** The tables a principal path could start at, beside the fixture's: a view, a queue table, a reference table. */
 const pathColumns = {
-	orgs: columns.orgs,
+	orgs: { columns: ['id', 'owner_principal_id', 'version'], foreignKeys: [], notNull: ['id', 'version'] },
 	projects: columns.projects,
 	people: {
-		columns: ['id', 'org_id', 'principal_id', 'alias', 'profile', 'created_by', 'version'],
-		foreignKeys: [{ columns: ['org_id'], table: 'orgs', references: ['id'] }],
+		columns: ['id', 'org_id', 'principal_id', 'alias', 'manager_principal_id', 'profile', 'created_by', 'version'],
+		foreignKeys: [
+			{ columns: ['org_id'], table: 'orgs', references: ['id'] },
+			{ columns: ['manager_principal_id'], table: 'people', references: ['alias'] },
+		],
 		notNull: ['id', 'org_id', 'created_by', 'version'],
 		json: ['profile'],
 	},
@@ -468,9 +471,12 @@ const pathColumns = {
 	jobs: { columns: ['id', 'principal_id', 'attempts', 'due_at', 'version'], foreignKeys: [], timestamps: ['due_at'] },
 	countries: { columns: ['code', 'principal_id'], foreignKeys: [] },
 	project_staff: {
-		columns: ['id', 'project_id', 'org_id', 'person_id', 'alias_id', 'crew_id', 'job_id', 'country_code', 'added_by'],
+		columns: ['id', 'project_id', 'org_id', 'person_id', 'alias_id', 'crew_id', 'job_id', 'country_code', 'added_by', 'org_ref', 'lead_project_id'],
 		foreignKeys: [
 			{ columns: ['project_id', 'org_id'], table: 'projects', references: ['id', 'org_id'] },
+			{ columns: ['org_id'], table: 'orgs', references: ['id'] },
+			{ columns: ['org_ref'], table: 'orgs', references: ['id'] },
+			{ columns: ['lead_project_id'], table: 'projects', references: ['id'] },
 			{ columns: ['person_id'], table: 'people', references: ['id'] },
 			{ columns: ['alias_id'], table: 'people', references: ['alias'] },
 			{ columns: ['crew_id'], table: 'crews', references: ['id'] },
@@ -529,6 +535,29 @@ describe('the policy of a principal reached through a to-one path', () => {
 	test('names a single-column foreign key to the key of a table, and a column of that table', () => {
 		expect(() => readPath('person_id.principal_id')).not.toThrow()
 		expect(() => readPath('person_id.created_by')).not.toThrow()
+		expect(() => readPath('lead_project_id.created_by')).not.toThrow()
+	})
+
+	test('starts at no column the layer stamps or a move rewrites', () => {
+		const refused = 'which the layer stamps or a move rewrites; a principal path starts at a foreign key no update writes'
+		// org_id is the source's inherited chain column: a move of the project to another org rewrites it by cascade.
+		expect(() => readPath('org_id.owner_principal_id')).toThrow(`project_staff.org_id is a key, a containment, a version or a file column, ${refused}`)
+		expect(() => readPath('project_id.created_by')).toThrow(refused)
+		expect(() => readPath('id.principal_id')).toThrow(refused)
+	})
+
+	test('reads no principal from a top-level dimension table, whose key an insert takes from its Ref', () => {
+		expect(() => readPath('org_ref.owner_principal_id')).toThrow('orgs is a top-level dimension table, whose key an insert takes from its Ref')
+	})
+
+	test('a column that holds the principal is a column of no foreign key, on the source or on the table the path reads', () => {
+		expect(() => readPath('person_id.manager_principal_id')).toThrow(
+			'people.manager_principal_id holds the principal and is a column of a foreign key to people, which an update there may rewrite',
+		)
+		expect(() => readPath('person_id')).toThrow(
+			'project_staff.person_id holds the principal and is a column of a foreign key to people, which an update there may rewrite',
+		)
+		expect(() => readPath('person_id.principal_id')).not.toThrow()
 	})
 
 	test('follows exactly one foreign key', () => {

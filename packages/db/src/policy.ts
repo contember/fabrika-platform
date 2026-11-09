@@ -1834,6 +1834,7 @@ function parseConfers(
 		if (principal === node || principal === table.version || hasOwn(table.files, principal)) {
 			throw new PolicyError(`${what}.principal ${principal} is a column the layer stamps; it holds the principal the row names`)
 		}
+		if (principalPath === undefined) refuseReferencing(table, principal, `${what}.principal`)
 		const assign = parseAssign(table, policy, expires, what)
 		if (principal === table.createdBy && principalPath !== undefined) {
 			throw new PolicyError(`${what}.principal ${principal} is the createdBy column, which holds a principal; a principal path starts at a foreign key`)
@@ -1876,6 +1877,13 @@ function parsePrincipal(
 	}
 	const column = segments[0] ?? ''
 	const held = segments[1] ?? ''
+	// A move rewrites a chain column (ON UPDATE CASCADE), and the layer stamps the key and the version: none is fixed.
+	const own = table.scope.mode === 'reference' ? undefined : table.scope.key
+	if (column === own || column === table.version || hasOwn(table.files, column) || chainColumn(table, column)) {
+		throw new PolicyError(
+			`${field}: ${table.name}.${column} is a key, a containment, a version or a file column, which the layer stamps or a move rewrites; a principal path starts at a foreign key no update writes`,
+		)
+	}
 	const hop = singleForeignKey(table, column, field)
 	const target = linked(hop.table)
 	if (target === undefined) {
@@ -1891,6 +1899,12 @@ function parsePrincipal(
 	if (scope.mode !== 'dimension' && scope.mode !== 'child' && scope.mode !== 'app') {
 		throw new PolicyError(`${field}: ${hop.table} is a ${scope.mode} table; the principal is held by a table whose key ${column} references`)
 	}
+	if (scope.mode === 'dimension' && scope.container === undefined) {
+		// Its key is the inserting Ref's, so a deferred foreign key lets a delete and an insert re-point the source rows.
+		throw new PolicyError(
+			`${field}: ${hop.table} is a top-level dimension table, whose key an insert takes from its Ref; the principal is held by a table whose key the layer generates`,
+		)
+	}
 	if (scope.key !== hop.key) {
 		throw new PolicyError(`${field}: ${table.name}.${column} references ${hop.table}.${hop.key}, not its key ${scope.key}`)
 	}
@@ -1903,14 +1917,33 @@ function parsePrincipal(
 	if (inSet(target.update, held) || hasOwn(target.columnWrites, held)) {
 		throw new PolicyError(`${field}: ${hop.table}.${held} decides whom a row names, so no update of ${hop.table} writes it; replace the row instead`)
 	}
-	let placing = held === scope.key || hasOwn(target.files, held) || inSet(target.json, held)
-	for (let index = 0; index < target.chain.length; index++) {
-		if (target.chain[index]?.column === held) placing = true
-	}
-	if (placing) {
+	if (held === scope.key || hasOwn(target.files, held) || inSet(target.json, held) || chainColumn(target, held)) {
 		throw new PolicyError(`${field}: ${hop.table}.${held} is a key, a containment, a file or a JSON column; it holds no principal`)
 	}
+	refuseReferencing(target, held, field)
 	return { column, path: freeze({ table: hop.table, key: hop.key, column: held }) }
+}
+
+function chainColumn(table: Pick<TableModel, 'chain'>, column: string): boolean {
+	for (let index = 0; index < table.chain.length; index++) {
+		if (table.chain[index]?.column === column) return true
+	}
+	return false
+}
+
+/**
+ * A column that holds a principal references nothing: the column list carries no foreign key's actions, and one that
+ * cascades on update would let a write to the referenced table change whom every row names.
+ */
+function refuseReferencing(table: Pick<TableModel, 'name' | 'foreignKeys'>, column: string, field: string): void {
+	for (let index = 0; index < table.foreignKeys.length; index++) {
+		const key = table.foreignKeys[index]
+		if (key !== undefined && includes(key.columns, column)) {
+			throw new PolicyError(
+				`${field}: ${table.name}.${column} holds the principal and is a column of a foreign key to ${key.table}, which an update there may rewrite; a principal column references nothing`,
+			)
+		}
+	}
 }
 
 function parseAssign(
