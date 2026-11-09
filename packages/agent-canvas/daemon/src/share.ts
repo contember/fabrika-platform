@@ -1,5 +1,7 @@
 import type { SessionManager, ShareEntry } from '@fabrika/canvas-kernel/server'
-import { ENCRYPTION_META, type EncryptionMeta, encryptString, exportShareKey, generateShareKey } from '../client/shareCrypto'
+import { createShare, pushShareToWorker as pushToWorker, revokeShareOnWorker, type SharePayload, type ShareResponse } from './share-client'
+
+export { encryptSharePayload, type SharePayload, type ShareResponse } from './share-client'
 
 /**
  * Canvas sharing: packages a specific revision into a self-contained
@@ -25,33 +27,6 @@ import { ENCRYPTION_META, type EncryptionMeta, encryptString, exportShareKey, ge
  * formats, and the browser detects which one to use based on the URL
  * fragment.
  */
-
-export interface SharePayload {
-	version: 1
-	/** Present iff payload fields below are ciphertext rather than plaintext. */
-	encryption?: EncryptionMeta
-	origin: {
-		sessionId: string
-		revision: number
-		label?: string
-		createdAt: string
-	}
-	canvasFiles: Array<{
-		filename: string
-		compiledJs: string
-		sourceJsx?: string
-	}>
-	runtime: {
-		componentsVersion: string
-	}
-}
-
-export interface ShareResponse {
-	shareId: string
-	url: string
-	ownerToken?: string
-	expiresAt?: string
-}
 
 export interface ShareConfig {
 	/** Base URL of the share worker, e.g. `https://canvas-share.example.workers.dev` */
@@ -125,74 +100,9 @@ export function buildSharePayload(
 	}
 }
 
-/**
- * Encrypt a plaintext SharePayload in-place semantics, returning a new
- * payload whose secret fields are ciphertext + the `encryption` marker.
- * Fields kept plaintext (and why):
- *  - `version`, `runtime.componentsVersion`: routing
- *  - `origin.revision`, `origin.createdAt`: indexing/display
- *  - `canvasFiles[].filename`: used as the route key by the worker
- * Everything else (sessionId, label, compiledJs, sourceJsx) is encrypted.
- */
-export async function encryptSharePayload(
-	payload: SharePayload,
-	key: CryptoKey,
-): Promise<SharePayload> {
-	const canvasFiles = await Promise.all(
-		payload.canvasFiles.map(async (cf) => ({
-			filename: cf.filename,
-			compiledJs: await encryptString(key, cf.compiledJs),
-			...(cf.sourceJsx ? { sourceJsx: await encryptString(key, cf.sourceJsx) } : {}),
-		})),
-	)
-	return {
-		version: payload.version,
-		encryption: ENCRYPTION_META,
-		origin: {
-			sessionId: await encryptString(key, payload.origin.sessionId),
-			revision: payload.origin.revision,
-			...(payload.origin.label
-				? { label: await encryptString(key, payload.origin.label) }
-				: {}),
-			createdAt: payload.origin.createdAt,
-		},
-		canvasFiles,
-		runtime: payload.runtime,
-	}
-}
-
-/**
- * POST the payload to the CF Worker. Returns the `shareId` + public URL
- * assigned by the worker. Throws on any HTTP error — the caller is expected
- * to surface the failure to the client (dialog) so the user can retry or
- * fix their config.
- */
-export async function pushShareToWorker(
-	payload: SharePayload,
-	config: ShareConfig,
-): Promise<ShareResponse> {
-	const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-	if (config.authToken) headers['Authorization'] = `Bearer ${config.authToken}`
-
-	const res = await fetch(`${config.endpoint}/shares`, {
-		method: 'POST',
-		headers,
-		body: JSON.stringify(payload),
-	})
-	if (!res.ok) {
-		const text = await res.text().catch(() => '')
-		throw new Error(`Share endpoint returned ${res.status}: ${text || res.statusText}`)
-	}
-	const data = (await res.json()) as { shareId?: string; url?: string; ownerToken?: string; expiresAt?: string }
-	if (!data.shareId || !data.url) {
-		throw new Error(`Share endpoint returned invalid response: ${JSON.stringify(data)}`)
-	}
-	return {
-		shareId: data.shareId,
-		url: data.url,
-		...(data.ownerToken ? { ownerToken: data.ownerToken } : {}),
-		...(data.expiresAt ? { expiresAt: data.expiresAt } : {}),
-	}
+/** POST the payload to the configured worker (see share-client.ts). */
+export function pushShareToWorker(payload: SharePayload, config: ShareConfig): Promise<ShareResponse> {
+	return pushToWorker(payload, config)
 }
 
 /**
@@ -208,27 +118,16 @@ export async function shareRevision(
 	config: ShareConfig,
 ): Promise<ShareEntry> {
 	const plaintext = buildSharePayload(sessionManager, sessionId, revision, config.componentsVersion)
-
-	const useEncryption = config.encryption !== false
-	let payload = plaintext
-	let encodedKey: string | undefined
-	if (useEncryption) {
-		const key = await generateShareKey()
-		encodedKey = await exportShareKey(key)
-		payload = await encryptSharePayload(plaintext, key)
-	}
-
-	const response = await pushShareToWorker(payload, config)
-	const url = encodedKey ? `${response.url}#k=${encodedKey}` : response.url
+	const share = await createShare(plaintext, config)
 
 	const entry: ShareEntry = {
-		shareId: response.shareId,
-		url,
+		shareId: share.shareId,
+		url: share.url,
 		revision,
 		createdAt: new Date().toISOString(),
-		...(response.ownerToken ? { ownerToken: response.ownerToken } : {}),
-		...(response.expiresAt ? { expiresAt: response.expiresAt } : {}),
-		...(encodedKey ? { encryptionKey: encodedKey } : {}),
+		...(share.ownerToken ? { ownerToken: share.ownerToken } : {}),
+		...(share.expiresAt ? { expiresAt: share.expiresAt } : {}),
+		...(share.encryptionKey ? { encryptionKey: share.encryptionKey } : {}),
 	}
 	sessionManager.addShare(sessionId, entry)
 	return entry
@@ -249,13 +148,6 @@ export async function revokeShare(
 	if (!entry) throw new Error(`Share ${shareId} not found`)
 	if (!entry.ownerToken) throw new Error('No owner token recorded for this share')
 
-	const res = await fetch(`${config.endpoint}/shares/${shareId}/revoke`, {
-		method: 'POST',
-		headers: { 'Authorization': `Bearer ${entry.ownerToken}` },
-	})
-	if (!res.ok) {
-		const text = await res.text().catch(() => '')
-		throw new Error(`Revoke failed: ${res.status} ${text}`)
-	}
+	await revokeShareOnWorker(config.endpoint, shareId, entry.ownerToken)
 	sessionManager.removeShare(sessionId, shareId)
 }

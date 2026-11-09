@@ -26,6 +26,8 @@
 		"./review/remote": "./daemon/src/review/remote.ts",
 		"./review/sealing": "./daemon/src/review/sealing.ts",
 		"./review/threads": "./daemon/src/review/threads.ts",
+		"./share": "./daemon/src/share-client.ts",
+		"./share/responses": "./daemon/src/share-responses.ts",
 		"./upload-image": "./daemon/src/upload-image.ts"
 	},
 	"scripts": {

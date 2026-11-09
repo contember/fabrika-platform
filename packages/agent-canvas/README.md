@@ -129,6 +129,52 @@ The kernel depends on the other two; neither depends on the kernel. All ship as
 TypeScript sources and are released together with `agent-canvas` from the
 [`fabrika-platform`](https://github.com/contember/fabrika-platform) repository.
 
+### Share client
+
+`agent-canvas/share` shares a compiled canvas from another host through the same share worker and wire format the
+daemon uses, with end-to-end encryption on by default. `agent-canvas/share/responses` holds only the schema of the
+structured answers, for code that must not load the encryption helpers.
+
+```ts
+import { compileJsx } from '@fabrika/canvas-kernel/server'
+import {
+	createShare,
+	decryptFeedbackEntry,
+	fetchShareFeedback,
+	importShareKey,
+	revokeShareOnWorker,
+} from 'agent-canvas/share'
+
+const endpoint = 'https://canvas.example.com'
+const compiled = await compileJsx(jsx)
+if (!compiled.ok) throw new Error(compiled.error)
+const share = await createShare({
+	version: 1,
+	origin: {
+		sessionId: 'doc-1',
+		revision: 1,
+		createdAt: new Date().toISOString(),
+	},
+	canvasFiles: [{ filename: 'plan.jsx', compiledJs: compiled.js }],
+	runtime: { componentsVersion: '<agent-canvas version>' },
+}, { endpoint })
+// share.url carries the key in its #k= fragment; keep it and share.ownerToken secret.
+if (!share.encryptionKey || !share.ownerToken) {
+	throw new Error('expected an encrypted share with an owner token')
+}
+
+const key = await importShareKey(share.encryptionKey)
+const page = await fetchShareFeedback(endpoint, share.shareId, '')
+const entries = await Promise.all(
+	page.entries.map((entry) => decryptFeedbackEntry(entry, key)),
+)
+// entries[n].responses: structured answers to Choice, MultiChoice, UserInput and RangeInput.
+
+await revokeShareOnWorker(endpoint, share.shareId, share.ownerToken)
+```
+
+Compile with the `@fabrika/canvas-kernel` of the same release: the worker serves the runtime it was deployed with.
+
 ### Local commands
 
 ```bash

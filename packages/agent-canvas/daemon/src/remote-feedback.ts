@@ -1,7 +1,7 @@
-import type { RemoteAnnotation, RemoteFeedbackEntry, SessionManager } from '@fabrika/canvas-kernel/server'
+import type { RemoteFeedbackEntry, SessionManager } from '@fabrika/canvas-kernel/server'
 import { errorMessage } from '../client/errorMessage'
-import { decryptString, importShareKey } from '../client/shareCrypto'
 import { loadShareConfig } from './share'
+import { decryptFeedbackEntry, fetchShareFeedback, importShareKey, ShareGoneError } from './share-client'
 
 /**
  * Background polling loop for remote feedback.
@@ -20,72 +20,6 @@ import { loadShareConfig } from './share'
 
 const POLL_INTERVAL_MS = 5_000
 const MAX_BACKOFF_MS = 60_000
-
-/** Wire-format feedback entry as returned by the worker. When the
- *  reviewer submitted from an encrypted share their browser ciphertexted
- *  the secret fields and stamped this with `encryption`; the daemon
- *  decrypts using the key stashed on the local ShareEntry. */
-interface WireFeedbackEntry {
-	id: string
-	shareId: string
-	revision: number
-	submittedAt: string
-	author: { id: string; name: string }
-	annotations: Array<{
-		id: string
-		snippet: string
-		note: string
-		createdAt: string
-		filePath?: string
-		canvasFile?: string
-		context?: unknown
-		attachments?: Array<{ url: string; mime?: string }>
-	}>
-	generalNote?: string
-	encryption?: { alg: string; v: number }
-}
-
-interface WorkerFeedbackResponse {
-	entries: WireFeedbackEntry[]
-	/** Server-reported high water mark — echo back in the next `since` param */
-	latestAt?: string
-}
-
-/** Decrypt an encrypted-wire feedback entry into the plaintext shape used
- *  throughout the rest of the daemon. Throws if any field fails to
- *  decrypt — caller treats that as a transient error so we re-try later. */
-async function decryptFeedbackEntry(entry: WireFeedbackEntry, key: CryptoKey): Promise<RemoteFeedbackEntry> {
-	const annotations: RemoteAnnotation[] = await Promise.all(
-		entry.annotations.map(async (a) => {
-			const out: RemoteAnnotation = {
-				id: a.id,
-				snippet: await decryptString(key, a.snippet),
-				note: await decryptString(key, a.note),
-				createdAt: a.createdAt,
-			}
-			if (a.filePath) out.filePath = await decryptString(key, a.filePath)
-			if (a.canvasFile) out.canvasFile = await decryptString(key, a.canvasFile)
-			if (typeof a.context === 'string' && a.context.length > 0) {
-				out.context = JSON.parse(await decryptString(key, a.context))
-			}
-			if (a.attachments) out.attachments = a.attachments
-			return out
-		}),
-	)
-
-	return {
-		id: entry.id,
-		shareId: entry.shareId,
-		revision: entry.revision,
-		submittedAt: entry.submittedAt,
-		author: {
-			id: entry.author.id,
-			name: await decryptString(key, entry.author.name),
-		},
-		annotations,
-		...(entry.generalNote ? { generalNote: await decryptString(key, entry.generalNote) } : {}),
-	}
-}
 
 export function startRemoteFeedbackPoller(
 	sessionManager: SessionManager,
@@ -121,40 +55,25 @@ export function startRemoteFeedbackPoller(
 		endpoint: string,
 	) {
 		try {
-			const since = share.lastFeedbackAt ?? ''
-			const url = `${endpoint}/shares/${share.shareId}/feedback${since ? `?since=${encodeURIComponent(since)}` : ''}`
-			const res = await fetch(url)
-			if (!res.ok) {
-				if (res.status === 404) {
-					// Share no longer exists on the worker — likely revoked or expired.
-					// Stop trying so we don't hammer it forever.
-					errorCounts.set(share.shareId, 99)
-					return
-				}
-				throw new Error(`HTTP ${res.status}`)
-			}
-			const data = (await res.json()) as WorkerFeedbackResponse
+			const data = await fetchShareFeedback(endpoint, share.shareId, share.lastFeedbackAt ?? '')
 			errorCounts.delete(share.shareId)
+			for (const id of data.malformed) console.warn(`[remote-feedback] ${share.shareId}: skipping malformed entry ${id}`)
 
-			if (!data.entries || data.entries.length === 0) return
+			if (data.entries.length === 0) return
 
 			// Decrypt any entries that came in encrypted. Plaintext entries
 			// (legacy submissions from non-encrypted shares) pass through.
 			const decrypted: RemoteFeedbackEntry[] = []
 			for (const e of data.entries) {
-				if (e.encryption) {
-					if (!share.encryptionKey) {
-						console.warn(`[remote-feedback] ${share.shareId}: received encrypted feedback but no local key — skipping entry ${e.id}`)
-						continue
-					}
-					try {
-						const key = await getKey(share.shareId, share.encryptionKey)
-						decrypted.push(await decryptFeedbackEntry(e, key))
-					} catch (err) {
-						console.warn(`[remote-feedback] ${share.shareId}: failed to decrypt entry ${e.id}: ${errorMessage(err)}`)
-					}
-				} else {
-					decrypted.push(e as RemoteFeedbackEntry)
+				if (e.encryption && !share.encryptionKey) {
+					console.warn(`[remote-feedback] ${share.shareId}: received encrypted feedback but no local key — skipping entry ${e.id}`)
+					continue
+				}
+				try {
+					const key = e.encryption && share.encryptionKey ? await getKey(share.shareId, share.encryptionKey) : null
+					decrypted.push(await decryptFeedbackEntry(e, key))
+				} catch (err) {
+					console.warn(`[remote-feedback] ${share.shareId}: failed to decrypt entry ${e.id}: ${errorMessage(err)}`)
 				}
 			}
 
@@ -177,6 +96,12 @@ export function startRemoteFeedbackPoller(
 				sessionManager.updateShareLastFeedback(sessionId, share.shareId, latest)
 			}
 		} catch (e) {
+			if (e instanceof ShareGoneError) {
+				// Share no longer exists on the worker — likely revoked or expired.
+				// Stop trying so we don't hammer it forever.
+				errorCounts.set(share.shareId, 99)
+				return
+			}
 			errorCounts.set(share.shareId, (errorCounts.get(share.shareId) || 0) + 1)
 			console.warn(`[remote-feedback] ${share.shareId}: ${errorMessage(e)} (will retry with backoff)`)
 		}
