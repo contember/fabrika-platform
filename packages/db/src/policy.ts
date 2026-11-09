@@ -220,6 +220,11 @@ export interface TableColumns<Col extends string = string, Table extends string 
 	readonly booleans?: readonly Col[]
 	/** The JSON columns (`jsonb`, or declared `JSONB` on SQLite), written as a JSON value and never compared; absent when none. */
 	readonly json?: readonly Col[]
+	/**
+	 * The columns declared NOT NULL; absent when none. A foreign key that holds a row's tenant needs its ancestor columns
+	 * among them: under MATCH SIMPLE a null in one skips the whole key.
+	 */
+	readonly notNull?: readonly Col[]
 	/** A view: read-only, with no foreign key; absent for a table. */
 	readonly view?: true
 }
@@ -287,6 +292,8 @@ export interface TableModel {
 	readonly booleans: NameSet
 	/** The JSON columns: a write binds a JSON value's text, and no condition, order or aggregate names one. */
 	readonly json: NameSet
+	/** The columns the column list declares NOT NULL. */
+	readonly notNull: NameSet
 	/** The table's foreign keys, from the column list; a containment column must be one to its container's key. */
 	readonly foreignKeys: readonly ForeignKey[]
 	/** A view: a child or reference table no operation but a read reaches, whose containment only its SQL states. */
@@ -512,7 +519,7 @@ function parseVocabulary(input: unknown): VocabularyModel {
 	return freeze({ dimensions: freeze(containment), actions: nameSet(actions), relations: freeze(relations) })
 }
 
-const COLUMN_LIST_FIELDS = nameSet(['columns', 'foreignKeys', 'dates', 'timestamps', 'booleans', 'json', 'view'])
+const COLUMN_LIST_FIELDS = nameSet(['columns', 'foreignKeys', 'dates', 'timestamps', 'booleans', 'json', 'notNull', 'view'])
 const FOREIGN_KEY_FIELDS = nameSet(['columns', 'table', 'references'])
 const POLICY_FIELDS = nameSet([
 	'scope',
@@ -729,6 +736,7 @@ function parseTable(table: string, columnList: unknown, policyInput: unknown, vo
 	const timestamps = parseColumnSet(table, ownEntry(entry, 'timestamps'), column, 'timestamps')
 	const booleans = parseColumnSet(table, ownEntry(entry, 'booleans'), column, 'booleans')
 	const json = parseColumnSet(table, ownEntry(entry, 'json'), column, 'json')
+	const notNull = parseColumnSet(table, ownEntry(entry, 'notNull'), column, 'notNull')
 	const queue = queueInput === undefined
 		? undefined
 		: parseQueue(table, queueInput, column, { columns, timestamps, version, actions, update, columnWrites })
@@ -758,6 +766,7 @@ function parseTable(table: string, columnList: unknown, policyInput: unknown, vo
 		timestamps,
 		booleans,
 		json,
+		notNull,
 		foreignKeys,
 		view,
 		confersInput: ownEntry(policy, 'confers'),
@@ -886,7 +895,10 @@ function parseQueue(
 	return freeze({ attempts, due, maxAttempts: maxInput === undefined ? DEFAULT_MAX_ATTEMPTS : maxInput })
 }
 
-/** The column list's `date` (`dates`), timestamp (`timestamps`), boolean (`booleans`) or JSON (`json`) columns, each one of the table's. */
+/**
+ * The column list's `date` (`dates`), timestamp (`timestamps`), boolean (`booleans`), JSON (`json`) or NOT NULL
+ * (`notNull`) columns, each one of the table's.
+ */
 function parseColumnSet(table: string, input: unknown, column: (name: unknown, field: string) => string, field: string): NameSet {
 	if (input === undefined) {
 		return nameSet([])
@@ -1318,7 +1330,11 @@ function linkTables(parsed: readonly ParsedTable[], vocabulary: VocabularyModel)
 		}
 		// Any other foreign key reaches a row of the same tenant only when it also holds every ancestor the two share.
 		const pairs = tenantPairs(resolve(source, []), column, into.scope.key, into.chain)
-		return pairs.length > 1 && holdsExactly(source.foreignKeys, to, pairs)
+		if (pairs.length < 2 || !holdsExactly(source.foreignKeys, to, pairs)) {
+			return false
+		}
+		requireNotNullAncestors(`${from}.${column}`, source, pairs)
+		return true
 	}
 	const sources: Record<string, string> = {}
 	const models: Record<string, TableModel> = {}
@@ -1487,6 +1503,7 @@ function parseReadThrough(
 				}) references ${owner.name} (${referenced.join(', ')})`,
 			)
 		}
+		requireNotNullAncestors(what, table, pairs)
 		paths[paths.length] = freeze({ dimension, column, table: owner.name, key: owner.scope.key, chain: owner.chain })
 	}
 	return freeze(paths)
@@ -2017,6 +2034,29 @@ function tenantPairs(table: Resolved, column: string, key: string, chain: readon
 		if (link !== undefined && shared !== undefined) pairs[pairs.length] = [shared, link.column]
 	}
 	return pairs
+}
+
+/**
+ * The ancestor columns of a tenant key (every pair but the first) must be NOT NULL: under MATCH SIMPLE a null one skips
+ * the key, and a row written raw with it null would reach another tenant's row.
+ */
+function requireNotNullAncestors(
+	what: string,
+	table: { readonly name: string; readonly notNull: NameSet },
+	pairs: readonly (readonly [string, string])[],
+): void {
+	const nullable: string[] = []
+	for (let index = 1; index < pairs.length; index++) {
+		const column = pairs[index]?.[0] ?? ''
+		if (!inSet(table.notNull, column)) nullable[nullable.length] = column
+	}
+	if (nullable.length > 0) {
+		throw new PolicyError(
+			`${what}: ${nullable.join(', ')} of ${table.name} may be null, and a null skips the foreign key that holds the row's tenant; declare ${
+				nullable.join(', ')
+			} not null and run fabrika db codegen`,
+		)
+	}
 }
 
 /** One foreign key to `table` of exactly `pairs`: a further nullable column would let the database skip the whole key. */

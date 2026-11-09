@@ -37,6 +37,7 @@ export const columns: TypedColumnList<DB> = {
 			'name',
 		],
 		foreignKeys: [],
+		notNull: ['id', 'name'],
 	},
 	'companies': {
 		columns: [
@@ -51,6 +52,7 @@ export const columns: TypedColumnList<DB> = {
 				references: ['id'],
 			},
 		],
+		notNull: ['id', 'org_id', 'name'],
 	},
 	'deals': {
 		columns: [
@@ -70,5 +72,6 @@ export const columns: TypedColumnList<DB> = {
 				references: ['id', 'org_id'],
 			},
 		],
+		notNull: ['id', 'company_id', 'org_id', 'title', 'created_by', 'version'],
 	},
 }

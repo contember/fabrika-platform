@@ -78,6 +78,7 @@ export const columns: TypedColumnList<DB> = {
 			'name',
 		],
 		foreignKeys: [],
+		notNull: ['code', 'name'],
 	},
 	'note_comments': {
 		columns: [
@@ -94,6 +95,7 @@ export const columns: TypedColumnList<DB> = {
 				references: ['id', 'workspace_id', 'organization_id'],
 			},
 		],
+		notNull: ['id', 'note_id', 'workspace_id', 'organization_id', 'body'],
 	},
 	'note_flags': {
 		columns: [
@@ -110,6 +112,7 @@ export const columns: TypedColumnList<DB> = {
 				references: ['id', 'workspace_id', 'organization_id'],
 			},
 		],
+		notNull: ['id', 'note_id', 'workspace_id', 'organization_id', 'reason'],
 	},
 	'notes': {
 		columns: [
@@ -132,6 +135,7 @@ export const columns: TypedColumnList<DB> = {
 			},
 		],
 		timestamps: ['created_at'],
+		notNull: ['id', 'workspace_id', 'organization_id', 'title', 'word_count', 'created_by', 'version', 'created_at'],
 	},
 	'organizations': {
 		columns: [
@@ -139,6 +143,7 @@ export const columns: TypedColumnList<DB> = {
 			'name',
 		],
 		foreignKeys: [],
+		notNull: ['id', 'name'],
 	},
 	'secrets': {
 		columns: [
@@ -146,6 +151,7 @@ export const columns: TypedColumnList<DB> = {
 			'value',
 		],
 		foreignKeys: [],
+		notNull: ['id', 'value'],
 	},
 	'settings': {
 		columns: [
@@ -153,6 +159,7 @@ export const columns: TypedColumnList<DB> = {
 			'value',
 		],
 		foreignKeys: [],
+		notNull: ['id', 'value'],
 	},
 	'workspaces': {
 		columns: [
@@ -168,5 +175,6 @@ export const columns: TypedColumnList<DB> = {
 				references: ['id'],
 			},
 		],
+		notNull: ['id', 'organization_id', 'name', 'created_by'],
 	},
 }

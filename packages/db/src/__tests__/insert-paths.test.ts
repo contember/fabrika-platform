@@ -63,8 +63,8 @@ interface DB {
 }
 
 const columns: TypedColumnList<DB> = {
-	projects: { columns: ['id', 'version'], foreignKeys: [] },
-	kinds: { columns: ['id', 'open'], foreignKeys: [], booleans: ['open'] },
+	projects: { columns: ['id', 'version'], foreignKeys: [], notNull: ['id', 'version'] },
+	kinds: { columns: ['id', 'open'], foreignKeys: [], booleans: ['open'], notNull: ['id', 'open'] },
 	labels: {
 		columns: ['id', 'project_id', 'kind_id', 'public'],
 		foreignKeys: [
@@ -72,6 +72,7 @@ const columns: TypedColumnList<DB> = {
 			{ columns: ['kind_id'], table: 'kinds', references: ['id'] },
 		],
 		booleans: ['public'],
+		notNull: ['id', 'project_id', 'kind_id', 'public'],
 	},
 	tasks: {
 		columns: ['id', 'project_id', 'label_id', 'title'],
@@ -80,6 +81,7 @@ const columns: TypedColumnList<DB> = {
 			{ columns: ['label_id'], table: 'labels', references: ['id'] },
 			{ columns: ['label_id', 'project_id'], table: 'labels', references: ['id', 'project_id'] },
 		],
+		notNull: ['id', 'project_id', 'title'],
 	},
 }
 

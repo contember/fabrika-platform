@@ -59,9 +59,14 @@ type TaskKey = ForeignKey<keyof DB['tasks'] & string, keyof DB & string>
 const labelKey: TaskKey = { columns: ['label_id'], table: 'labels', references: ['id'] }
 const tenantKey: TaskKey = { columns: ['label_id', 'org_id'], table: 'labels', references: ['id', 'org_id'] }
 
-function columnsWith(taskKeys: readonly TaskKey[]): TypedColumnList<DB> {
+type TaskColumn = keyof DB['tasks'] & string
+
+function columnsWith(
+	taskKeys: readonly TaskKey[],
+	taskNotNull: readonly TaskColumn[] = ['id', 'project_id', 'org_id', 'label_id'],
+): TypedColumnList<DB> {
 	return {
-		orgs: { columns: ['id', 'version'], foreignKeys: [] },
+		orgs: { columns: ['id', 'version'], foreignKeys: [], notNull: ['id', 'version'] },
 		projects: {
 			columns: ['id', 'org_id', 'label_id', 'version'],
 			foreignKeys: [
@@ -69,13 +74,15 @@ function columnsWith(taskKeys: readonly TaskKey[]): TypedColumnList<DB> {
 				{ columns: ['label_id'], table: 'labels', references: ['id'] },
 				{ columns: ['label_id', 'org_id'], table: 'labels', references: ['id', 'org_id'] },
 			],
+			notNull: ['id', 'org_id', 'version'],
 		},
 		labels: {
 			columns: ['id', 'org_id', 'slug', 'public', 'version'],
 			foreignKeys: [{ columns: ['org_id'], table: 'orgs', references: ['id'] }],
 			booleans: ['public'],
+			notNull: ['id', 'org_id', 'slug', 'public', 'version'],
 		},
-		vendors: { columns: ['id', 'trusted', 'version'], foreignKeys: [], booleans: ['trusted'] },
+		vendors: { columns: ['id', 'trusted', 'version'], foreignKeys: [], booleans: ['trusted'], notNull: ['id', 'trusted', 'version'] },
 		tasks: {
 			columns: ['id', 'project_id', 'org_id', 'label_id', 'vendor_id'],
 			foreignKeys: [
@@ -83,6 +90,7 @@ function columnsWith(taskKeys: readonly TaskKey[]): TypedColumnList<DB> {
 				{ columns: ['vendor_id'], table: 'vendors', references: ['id'] },
 				...taskKeys,
 			],
+			notNull: taskNotNull,
 		},
 	}
 }
@@ -98,8 +106,9 @@ function tablesWith(
 	when: ConditionPolicy<keyof DB['tasks'] & string>,
 	taskKeys: readonly TaskKey[] = [labelKey, tenantKey],
 	projectWhen: ConditionPolicy<keyof DB['projects'] & string> = { label_id: { isNull: false } },
+	taskNotNull?: readonly TaskColumn[],
 ) {
-	return defineTables(vocabulary, columnsWith(taskKeys))({
+	return defineTables(vocabulary, columnsWith(taskKeys, taskNotNull))({
 		orgs: { scope: { dimension: 'org' }, actions: { read: 'labels.read' }, version: 'version' },
 		projects: { scope: { dimension: 'project' }, actions: { read: 'tasks.read' }, version: 'version', when: { 'tasks.read': projectWhen } },
 		labels: { scope: { dimension: 'label' }, actions: { read: 'labels.read' }, version: 'version' },
@@ -180,5 +189,13 @@ describe('a path that could leave the tenant is refused', () => {
 
 	test('a table under another root, with which the row shares no ancestor', () => {
 		expect(() => tablesWith({ 'vendor_id.trusted': { eq: true } })).toThrow(refusal)
+	})
+
+	test('a tenant key whose ancestor column may be null, which would skip the key', () => {
+		const when = { 'label_id.public': { eq: true } }
+		expect(() => tablesWith(when, [labelKey, tenantKey], undefined, ['id', 'project_id', 'label_id'])).toThrow(
+			'org_id of tasks may be null',
+		)
+		expect(() => tablesWith(when, [labelKey, tenantKey], undefined, ['id', 'project_id', 'org_id'])).not.toThrow()
 	})
 })

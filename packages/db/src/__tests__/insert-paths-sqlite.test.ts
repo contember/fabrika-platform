@@ -45,12 +45,13 @@ const tenantKey: TaskKey = { columns: ['label_id', 'project_id'], table: 'labels
 
 function columnsWith(labelKeys: readonly TaskKey[]): TypedColumnList<DB> {
 	return {
-		projects: { columns: ['id', 'version'], foreignKeys: [] },
-		kinds: { columns: ['id', 'open'], foreignKeys: [], booleans: ['open'] },
+		projects: { columns: ['id', 'version'], foreignKeys: [], notNull: ['id', 'version'] },
+		kinds: { columns: ['id', 'open'], foreignKeys: [], booleans: ['open'], notNull: ['id', 'open'] },
 		labels: {
 			columns: ['id', 'project_id', 'public'],
 			foreignKeys: [{ columns: ['project_id'], table: 'projects', references: ['id'] }],
 			booleans: ['public'],
+			notNull: ['id', 'project_id', 'public'],
 		},
 		tasks: {
 			columns: ['id', 'project_id', 'kind_id', 'label_id', 'title'],
@@ -60,6 +61,7 @@ function columnsWith(labelKeys: readonly TaskKey[]): TypedColumnList<DB> {
 				{ columns: ['label_id'], table: 'labels', references: ['id'] },
 				...labelKeys,
 			],
+			notNull: ['id', 'project_id', 'title'],
 		},
 	}
 }

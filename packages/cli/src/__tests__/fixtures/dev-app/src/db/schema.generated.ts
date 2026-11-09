@@ -22,5 +22,6 @@ export const columns: TypedColumnList<DB> = {
 			'created_by',
 		],
 		foreignKeys: [],
+		notNull: ['id', 'board_id', 'title', 'created_by'],
 	},
 }

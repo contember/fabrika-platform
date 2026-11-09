@@ -67,24 +67,40 @@ interface DB {
 
 const teamKey = { columns: ['team_id', 'org_id'], table: 'teams', references: ['id', 'org_id'] } as const
 
-function columnsWith(taskKeys: TypedColumnList<DB>['tasks']['foreignKeys']): TypedColumnList<DB> {
+type TaskColumn = keyof DB['tasks'] & string
+
+function columnsWith(
+	taskKeys: TypedColumnList<DB>['tasks']['foreignKeys'],
+	taskNotNull: readonly TaskColumn[] = ['id', 'project_id', 'org_id', 'title', 'version'],
+): TypedColumnList<DB> {
 	return {
-		orgs: { columns: ['id', 'name'], foreignKeys: [] },
-		projects: { columns: ['id', 'org_id', 'name'], foreignKeys: [{ columns: ['org_id'], table: 'orgs', references: ['id'] }] },
-		squads: { columns: ['id', 'org_id', 'name'], foreignKeys: [{ columns: ['org_id'], table: 'orgs', references: ['id'] }] },
+		orgs: { columns: ['id', 'name'], foreignKeys: [], notNull: ['id', 'name'] },
+		projects: {
+			columns: ['id', 'org_id', 'name'],
+			foreignKeys: [{ columns: ['org_id'], table: 'orgs', references: ['id'] }],
+			notNull: ['id', 'org_id', 'name'],
+		},
+		squads: {
+			columns: ['id', 'org_id', 'name'],
+			foreignKeys: [{ columns: ['org_id'], table: 'orgs', references: ['id'] }],
+			notNull: ['id', 'org_id', 'name'],
+		},
 		squad_leads: {
 			columns: ['id', 'squad_id', 'org_id', 'principal_id'],
 			foreignKeys: [{ columns: ['squad_id', 'org_id'], table: 'squads', references: ['id', 'org_id'] }],
+			notNull: ['id', 'squad_id', 'org_id', 'principal_id'],
 		},
 		teams: {
 			columns: ['id', 'squad_id', 'org_id', 'name'],
 			foreignKeys: [{ columns: ['squad_id', 'org_id'], table: 'squads', references: ['id', 'org_id'] }],
+			notNull: ['id', 'squad_id', 'org_id', 'name'],
 		},
 		team_members: {
 			columns: ['id', 'team_id', 'squad_id', 'org_id', 'principal_id'],
 			foreignKeys: [{ columns: ['team_id', 'squad_id', 'org_id'], table: 'teams', references: ['id', 'squad_id', 'org_id'] }],
+			notNull: ['id', 'team_id', 'squad_id', 'org_id', 'principal_id'],
 		},
-		tasks: { columns: ['id', 'project_id', 'org_id', 'team_id', 'title', 'version'], foreignKeys: taskKeys },
+		tasks: { columns: ['id', 'project_id', 'org_id', 'team_id', 'title', 'version'], foreignKeys: taskKeys, notNull: taskNotNull },
 	}
 }
 
@@ -341,5 +357,10 @@ describe('the policy bounds a read path', () => {
 			references: ['id'],
 		}])
 		expect(policy({}, loose)).toThrow('must be one foreign key')
+	})
+
+	test('an ancestor column of the foreign key that may be null is refused: a null skips the whole key', () => {
+		const keys = [{ columns: ['project_id', 'org_id'], table: 'projects', references: ['id', 'org_id'] } as const, teamKey]
+		expect(policy({}, columnsWith(keys, ['id', 'project_id', 'title', 'version']))).toThrow('org_id of tasks may be null')
 	})
 })

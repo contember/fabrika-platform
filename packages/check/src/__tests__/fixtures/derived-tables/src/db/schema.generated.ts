@@ -54,6 +54,7 @@ export const columns: TypedColumnList<DB, Views> = {
 			'name',
 		],
 		foreignKeys: [],
+		notNull: ['id', 'name'],
 	},
 	'project_task_counts': {
 		columns: [
@@ -78,6 +79,7 @@ export const columns: TypedColumnList<DB, Views> = {
 				references: ['id'],
 			},
 		],
+		notNull: ['id', 'org_id', 'name', 'version'],
 	},
 	'task_comments': {
 		columns: [
@@ -94,6 +96,7 @@ export const columns: TypedColumnList<DB, Views> = {
 				references: ['id', 'parent_project', 'org_id'],
 			},
 		],
+		notNull: ['id', 'task_id', 'parent_project', 'org_id', 'body'],
 	},
 	'tasks': {
 		columns: [
@@ -112,5 +115,6 @@ export const columns: TypedColumnList<DB, Views> = {
 			},
 		],
 		dates: ['due_on'],
+		notNull: ['id', 'parent_project', 'org_id', 'title'],
 	},
 }

@@ -57,6 +57,7 @@ export const columns: TypedColumnList<DB> = {
 			'notes',
 		],
 		foreignKeys: [],
+		notNull: ['id', 'name', 'status', 'created_by', 'version'],
 	},
 	'exports': {
 		columns: [
@@ -67,6 +68,7 @@ export const columns: TypedColumnList<DB> = {
 		],
 		foreignKeys: [],
 		timestamps: ['created_at'],
+		notNull: ['id', 'rows', 'created_by', 'created_at'],
 	},
 	'positions': {
 		columns: [
@@ -77,6 +79,7 @@ export const columns: TypedColumnList<DB> = {
 			'version',
 		],
 		foreignKeys: [],
+		notNull: ['id', 'title', 'active', 'created_by', 'version'],
 	},
 	'reasons': {
 		columns: [
@@ -87,5 +90,6 @@ export const columns: TypedColumnList<DB> = {
 			'version',
 		],
 		foreignKeys: [],
+		notNull: ['id', 'label', 'active', 'created_by', 'version'],
 	},
 }

@@ -29,6 +29,7 @@ export const columns: TypedColumnList<DB> = {
 			'created_by',
 		],
 		foreignKeys: [],
+		notNull: ['id', 'name', 'created_by'],
 	},
 	'submissions': {
 		columns: [
@@ -39,5 +40,6 @@ export const columns: TypedColumnList<DB> = {
 			'created_by',
 		],
 		foreignKeys: [],
+		notNull: ['id', 'name', 'created_by'],
 	},
 }

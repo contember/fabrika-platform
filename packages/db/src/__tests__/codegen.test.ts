@@ -66,7 +66,9 @@ describe('renderSchema', () => {
 }
 `)
 		expect(source).toContain("import type { ColumnType, GeneratedAlways } from 'kysely'\n")
-		expect(source).toContain("\t\tforeignKeys: [],\n\t\tdates: ['due'],\n\t\ttimestamps: ['created_at'],\n\t},\n")
+		expect(source).toContain(
+			"\t\tforeignKeys: [],\n\t\tdates: ['due'],\n\t\ttimestamps: ['created_at'],\n\t\tnotNull: ['id', 'small', 'big', 'ratio', 'done', 'created_at', 'serial', 'total', 'state'],\n\t},\n",
+		)
 	})
 
 	test('leaves out framework tables and imports only what it uses', () => {
@@ -75,7 +77,7 @@ describe('renderSchema', () => {
 		expect(source).not.toContain("from 'kysely'")
 		expect(source).toContain('export interface DB {\n\tnotes: NotesTable\n}\n')
 		expect(source).toContain(
-			"export const columns: TypedColumnList<DB> = {\n\t'notes': {\n\t\tcolumns: [\n\t\t\t'id',\n\t\t],\n\t\tforeignKeys: [],\n\t},\n}\n",
+			"export const columns: TypedColumnList<DB> = {\n\t'notes': {\n\t\tcolumns: [\n\t\t\t'id',\n\t\t],\n\t\tforeignKeys: [],\n\t\tnotNull: ['id'],\n\t},\n}\n",
 		)
 	})
 
@@ -113,9 +115,19 @@ describe('renderSchema', () => {
 				references: ['id', 'org_id'],
 			},
 		],
+		notNull: ['id', 'workspace_id', 'org_id'],
 	},
 `)
 		expect(source).not.toContain('fabrika_migrations')
+	})
+
+	test('lists the NOT NULL columns, one per line once the list passes the line width, so the module stays formatter-stable', () => {
+		const short = renderSchema([column('notes', 'id', 'text'), column('notes', 'body', 'text', { nullable: true })]).source
+		expect(short).toContain("\t\tforeignKeys: [],\n\t\tnotNull: ['id'],\n\t},\n")
+		const names = Array.from({ length: 12 }, (_, index) => `a_rather_long_column_name_${index}`)
+		const { source } = renderSchema(names.map((name) => column('wide', name, 'text')))
+		expect(source).toContain(`\t\tnotNull: [\n${names.map((name) => `\t\t\t'${name}',\n`).join('')}\t\t],\n`)
+		expect(source.split('\n').every((line) => line.length <= 150)).toBe(true)
 	})
 
 	test('orders tables by name and keeps column order', () => {
@@ -139,7 +151,7 @@ describe('renderSchema', () => {
 	tags: ColumnType<unknown, JsonColumnValue | undefined, JsonColumnValue>
 }
 `)
-		expect(source).toContain("\t\tforeignKeys: [],\n\t\tjson: ['metadata', 'extra', 'tags'],\n\t},\n")
+		expect(source).toContain("\t\tforeignKeys: [],\n\t\tjson: ['metadata', 'extra', 'tags'],\n\t\tnotNull: ['id', 'metadata', 'tags'],\n\t},\n")
 		expect(renderSchema([column('notes', 'id', 'text')]).source).toContain("import type { TypedColumnList } from '@fabrika/db'\n")
 	})
 

@@ -35,11 +35,12 @@ interface DB {
 }
 
 const columns: TypedColumnList<DB> = {
-	projects: { columns: ['id', 'name', 'version'], foreignKeys: [] },
+	projects: { columns: ['id', 'name', 'version'], foreignKeys: [], notNull: ['id', 'name', 'version'] },
 	tasks: {
 		columns: ['id', 'project_id', 'open'],
 		foreignKeys: [{ columns: ['project_id'], table: 'projects', references: ['id'] }],
 		booleans: ['open'],
+		notNull: ['id', 'open'],
 	},
 	steps: {
 		columns: ['id', 'project_id', 'task_id', 'done'],
@@ -49,6 +50,7 @@ const columns: TypedColumnList<DB> = {
 			{ columns: ['task_id', 'project_id'], table: 'tasks', references: ['id', 'project_id'] },
 		],
 		booleans: ['done'],
+		notNull: ['id', 'project_id', 'task_id', 'done'],
 	},
 	links: {
 		columns: ['id', 'project_id', 'other_id'],
@@ -56,6 +58,7 @@ const columns: TypedColumnList<DB> = {
 			{ columns: ['project_id'], table: 'projects', references: ['id'] },
 			{ columns: ['other_id'], table: 'projects', references: ['id'] },
 		],
+		notNull: ['id', 'project_id'],
 	},
 }
 

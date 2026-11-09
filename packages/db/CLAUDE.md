@@ -207,6 +207,11 @@ pass a recording one); `Database.fromEngine` takes another engine (`openSqlite`)
   `(project_id, org_id) references projects (id, org_id)`, or the parse refuses it and names that key. A `Within` of an
   ancestor reads a row by its inherited column alone, so a column the database does not tie to the owner would put the
   row in a scope its owner is not in.
+- **A foreign key that holds a row's tenant needs its ancestor columns NOT NULL** (`requireNotNullAncestors`). A
+  condition's path into another scoped table and a `readThrough` follow one foreign key of exactly the column and every
+  ancestor the two tables share; under MATCH SIMPLE a null ancestor skips the whole key, so a row written raw with one
+  would reach another tenant's row. The column list's `notNull` (codegen's, from the catalog; an older list without it
+  names none) must hold each ancestor column, or the parse refuses and names it.
 - **Every action is the vocabulary's.** Table actions and a column's own read and write actions are refused unless the
   vocabulary declares them, in the one parse: the reader refuses them from source too.
 - **The inbox scope is gone.** A policy that still states `scope: { inbox: … }` is refused with a message that says to

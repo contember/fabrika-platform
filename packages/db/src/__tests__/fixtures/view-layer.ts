@@ -120,6 +120,7 @@ export const viewColumns: TypedColumnList<DB, Views> = {
 			},
 		],
 		timestamps: ['at'],
+		notNull: ['id', 'project_id', 'organization_id', 'at'],
 	},
 	'organization_names': {
 		columns: [
@@ -135,6 +136,7 @@ export const viewColumns: TypedColumnList<DB, Views> = {
 			'name',
 		],
 		foreignKeys: [],
+		notNull: ['id', 'name'],
 	},
 	'project_names': {
 		columns: [
@@ -167,6 +169,7 @@ export const viewColumns: TypedColumnList<DB, Views> = {
 				references: ['id'],
 			},
 		],
+		notNull: ['id', 'organization_id', 'name'],
 	},
 }
 

@@ -54,6 +54,7 @@ export const columns: TypedColumnList<DB, Views> = {
 			'title',
 		],
 		foreignKeys: [],
+		notNull: ['id', 'org_id', 'title'],
 	},
 	'tasks': {
 		columns: [
@@ -78,5 +79,6 @@ export const columns: TypedColumnList<DB, Views> = {
 		],
 		dates: ['due_on'],
 		timestamps: ['closed_at'],
+		notNull: ['id', 'project_id', 'org_id', 'title', 'status', 'overdue', 'created_by', 'version'],
 	},
 }
