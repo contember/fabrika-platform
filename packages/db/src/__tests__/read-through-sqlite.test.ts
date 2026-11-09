@@ -4,7 +4,7 @@
 
 import type { TypedColumnList } from '@fabrika/db'
 import { beforeEach, describe, expect, test } from 'bun:test'
-import { CapabilityError, PolicyError, QueryRefusedError } from '../errors'
+import { CapabilityError, ConflictError, PolicyError, QueryRefusedError } from '../errors'
 import { bindScopedDatabaseProvisionally, type DataAccess, dataAccessOf, type DataHandles, type DataSite } from '../framework'
 import type { DataKind } from '../orm-types'
 import { defineTables } from '../policy'
@@ -293,9 +293,10 @@ describe("an insert picks the node a reveal holds at, under the reveal's assign"
 
 	test('refuses a row naming a node where its writer holds the relation, or holds it above that node', async () => {
 		join('m1', 'tm1', 'user:alice')
+		await expect(insert('tm1')).rejects.toThrow(ConflictError)
 		await expect(insert('tm1')).rejects.toThrow('assign.self')
 		lead('l2', 's2', 'user:alice')
-		await expect(insert('tm2')).rejects.toThrow('assign.self')
+		await expect(insert('tm2')).rejects.toThrow(ConflictError)
 		expect(count()).toEqual([{ n: 0 }])
 	})
 
