@@ -48,6 +48,11 @@ interface Standalone {
 /** A reference file, or the Cloudflare section, that is an application of its own. */
 const STANDALONE: Readonly<Record<string, Standalone>> = {
 	'references/public-intake.md': { catalog: 'public-intake', shared: ['package.json', 'tsconfig.json', 'src/app-kit.ts'], run: true },
+	'references/relations.md': {
+		catalog: 'relations',
+		shared: ['package.json', 'tsconfig.json', 'src/app-kit.ts', 'src/app.ts', 'src/schemas.ts'],
+		run: true,
+	},
 	'references/start.md': { catalog: null, shared: ['package.json', 'tsconfig.json'] },
 	[CLOUDFLARE.source]: { catalog: null, shared: [], template: 'app', oblaka: true },
 }

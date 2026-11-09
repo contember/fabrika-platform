@@ -349,10 +349,12 @@ their errors, the caller, the components, routing, theming, screen tests), `tabl
 `ctx.url`, a mount's `compatibility`, another origin, members and labels), `tests.md` (generated tests, seeds, `testKit`, a reused scope, a caller's label, confirming a file ran),
 `errors.md` (checker findings, type errors, runtime answers), `dev.md` (the seed and the preview), `jobs.md` (which dimension `ctx.within` names, the UTC
 day, queue tables and `claim`, e-mail through `ctx.mail` with attachments and unsubscribe, the outbox and `kicks`),
-`files.md` and `webhooks-links-connectors.md`, all under `references/`. Two are applications of their own:
+`files.md` and `webhooks-links-connectors.md`, all under `references/`. Three are applications of their own:
 `start.md`, a new application before its first table (its first test, adding the first table, installing and updating
-this skill), and `public-intake.md`, a public page, public procedures, a job that claims their rows, issues links and
-e-mails them, a link holder's files, HR's review with its history.
+this skill), `public-intake.md`, a public page, public procedures, a job that claims their rows, issues links and
+e-mails them, a link holder's files, HR's review with its history, and `relations.md`, access that rows of the
+application grant and narrow (a relation, a role's `via`, a source table's `confers` and `assign`, a table's `when`
+conditions, `readThrough`, `reveals` and `memberReveals`).
 
 ## Not built yet
 
