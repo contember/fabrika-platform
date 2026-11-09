@@ -197,6 +197,52 @@ describe.skipIf(!hasPostgres)('the application role family', () => {
 				expect(await refusal(runtime, `TRUNCATE ${schema}.notes`)).toContain('permission denied for table notes')
 			})
 
+			test('the runtime role reads a view and writes through none, and a write grant on one does not survive the next migrate', async () => {
+				const app = application()
+				const withView = [...NOTES, { name: '20261011130000_titles.sql', sql: 'CREATE VIEW note_titles AS SELECT id, title FROM notes' }]
+				await app.migrations.migrate(provisioner.url(), withView)
+				const { schema, runtime: runtimeRole } = applicationDatabaseRoles(app.appId)
+				const runtime = applicationRuntimeUrl(provisioner.url(), app.appId)
+				await as(runtime, (sql) => sql.unsafe(`INSERT INTO ${schema}.notes (id, title) VALUES ('n1', 'First')`))
+				expect([...await as(runtime, (sql) => sql.unsafe(`SELECT id, title FROM ${schema}.note_titles`))]).toEqual([{ id: 'n1', title: 'First' }])
+				const writes = [
+					`INSERT INTO ${schema}.note_titles (id, title) VALUES ('n2', 'Second')`,
+					`UPDATE ${schema}.note_titles SET title = 'Renamed'`,
+					`DELETE FROM ${schema}.note_titles`,
+				]
+				for (const write of writes) expect(await refusal(runtime, write)).toContain('permission denied for view note_titles')
+				await as(superuserUrl, async (sql) => {
+					await sql.unsafe(`GRANT INSERT, UPDATE, DELETE ON ${schema}.note_titles TO ${runtimeRole}, PUBLIC`)
+					await sql.unsafe(`GRANT UPDATE (title) ON ${schema}.note_titles TO ${runtimeRole}`)
+				})
+				await app.migrations.migrate(provisioner.url(), withView)
+				for (const write of writes) expect(await refusal(runtime, write)).toContain('permission denied for view note_titles')
+				expect([...await as(runtime, (sql) => sql.unsafe(`SELECT id, title FROM ${schema}.notes`))]).toEqual([{ id: 'n1', title: 'First' }])
+				// Another grantor's grant to PUBLIC survives the reset, so the check after it stops the migrate.
+				const grantor = `fabrika_grantor_${hex()}`
+				await as(superuserUrl, async (sql) => {
+					await sql.unsafe(`CREATE ROLE ${grantor}`)
+					await sql.unsafe(`GRANT USAGE ON SCHEMA ${schema} TO ${grantor}`)
+					await sql.unsafe(`GRANT INSERT, UPDATE (title) ON ${schema}.note_titles TO ${grantor} WITH GRANT OPTION`)
+					await sql.unsafe(`SET ROLE ${grantor}`)
+					await sql.unsafe(`GRANT INSERT, UPDATE (title) ON ${schema}.note_titles TO PUBLIC`)
+					await sql.unsafe('RESET ROLE')
+					await sql.unsafe(`REVOKE USAGE ON SCHEMA ${schema} FROM ${grantor}`)
+				})
+				try {
+					const stopped = app.migrations.migrate(provisioner.url(), withView)
+					await expect(stopped).rejects.toThrow(new RegExp(`${runtimeRole} may INSERT \\S*note_titles, which is not a table`))
+					await expect(app.migrations.migrate(provisioner.url(), withView)).rejects.toThrow(
+						new RegExp(`${runtimeRole} may UPDATE \\S*note_titles, which is not a table`),
+					)
+				} finally {
+					await as(superuserUrl, async (sql) => {
+						await sql.unsafe(`REVOKE INSERT, UPDATE ON ${schema}.note_titles FROM ${grantor} CASCADE`)
+						await sql.unsafe(`DROP ROLE ${grantor}`)
+					})
+				}
+			})
+
 			test('neither role can write the catalog, unlink a large object it does not own, create outside its schema or run a program', async () => {
 				const object = await as(superuserUrl, async (sql) => {
 					const [row] = await sql.unsafe('SELECT lo_create(0) AS oid')

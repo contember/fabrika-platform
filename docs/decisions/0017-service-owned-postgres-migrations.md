@@ -290,9 +290,9 @@ application query runs as anything else:
 - **The migration role `app_<id>`**, named like the schema, owns the schema
   and every object in it, and is the only role that runs DDL there. The
   runner applies every migration as this role.
-- **The runtime role `run_<id>`** has `USAGE` on the schema and `SELECT`,
-  `INSERT`, `UPDATE` and `DELETE` on every table of it except the ledger,
-  and nothing else: no DDL, no `TRIGGER`, `TRUNCATE` or `REFERENCES`, no
+- **The runtime role `run_<id>`** has `USAGE` on the schema, `SELECT` on
+  every relation of it and `INSERT`, `UPDATE` and `DELETE` on every
+  table except the ledger, never on a view, and nothing else: no DDL, no `TRIGGER`, `TRUNCATE` or `REFERENCES`, no
   grant on the ledger. The server and every job connect as it. The
   framework's `fabrika_*` tables are tables of that schema, and the framework
   writes them as this role, so the role reaches them too: what keeps an
@@ -303,12 +303,14 @@ application query runs as anything else:
   born readable or writable through `PUBLIC`. After every run it revokes
   everything `PUBLIC` and the runtime role hold on the schema and on every
   table, sequence, routine and type in it, then grants the runtime role
-  `USAGE` on the schema, DML on every table but the ledger, `EXECUTE` on the
+  `USAGE` on the schema, `SELECT` on every relation, DML on every table but
+  the ledger (a view, materialized view or foreign table gets none), `EXECUTE` on the
   schema's routines and `USAGE` on its types, in one transaction under the
   migration lock, so a wider grant does not survive a deploy and a live
   runtime never sees a gap. Then it verifies the runtime role's effective
   privileges, `PUBLIC`'s included: `CREATE` on the schema, `TRUNCATE`,
-  `REFERENCES`, `TRIGGER` or `MAINTAIN` on any relation, any access to the
+  `REFERENCES`, `TRIGGER` or `MAINTAIN` on any relation, `INSERT`, `UPDATE`
+  or `DELETE` on a view, materialized view or foreign table, any access to the
   ledger, or a default privilege that grants anyone else anything stops the
   deploy. An identity column needs no grant on its sequence.
 - Neither is a superuser or holds `CREATEROLE`, `CREATEDB`, `REPLICATION` or

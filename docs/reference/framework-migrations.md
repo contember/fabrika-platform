@@ -32,6 +32,11 @@ runs in one Durable Object over its own SQLite
 and table policies, jobs and kicks, webhooks, public procedures, file kinds (stored in R2), signed tokens and
 installation mail all run there. On 0.8 its Worker was stateless, and the deploy refused each of them.
 
+On Postgres the runtime role reads a view but no longer writes or locks one. A `ctx.sql` `'write'` site that inserts,
+updates or deletes through a view, or locks one with `FOR UPDATE`/`FOR SHARE` (also a bare lock over a join that reads a
+view), fails with `permission denied for view …` once the pin is raised; the migrate still passes. Write the view's base
+tables instead, and lock with `FOR UPDATE OF <table>`. `ctx.db` never wrote a view, so code on it does not change.
+
 An `over` list now also returns the rows a grant on a dimension inside the listed one reaches (S4 of the
 authorization model): a holder of `crm.read` on one deal sees that deal in the `over: 'company'` list of deals. Those
 grants count toward `MAX_WITHIN_VALUES` (1000 scope values per `Within`) with the direct and container values. A caller
