@@ -1500,11 +1500,7 @@ function conditionRoot(table: LinkedTable, byName: Readonly<Record<string, Parse
 		if (key !== undefined) foreignKeys[foreignKeys.length] = key
 	}
 	foreignKeys[foreignKeys.length] = freeze({ columns: freeze([table.scope.column]), table: parent.name, references: freeze([parent.scope.key]) })
-	// No capability reads a view row whose parent column is null (its scope is the parent subquery), so a not over it decides nothing.
-	const declared = namesOf(table.notNull)
-	const notNull: string[] = [table.scope.column]
-	for (let index = 0; index < declared.length; index++) notNull[notNull.length] = declared[index] ?? ''
-	return freeze({ ...table, foreignKeys: freeze(foreignKeys), notNull: nameSet(notNull) })
+	return freeze({ ...table, foreignKeys: freeze(foreignKeys) })
 }
 
 /** A dimension's owning table, resolved: what a secondary path's column references. */
