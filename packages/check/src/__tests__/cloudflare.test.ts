@@ -102,7 +102,7 @@ describe('cloudflare-view-trigger', () => {
 		expect(found[0]).toContain('read-only (ADR-0072)')
 	})
 
-	test('no refusal for a view, a table trigger (one named instead too), nor on Postgres', async () => {
+	test('not refused by this rule: a view, a table trigger (one named instead too), a trigger on Postgres', async () => {
 		const cloudflare = application(true)
 		cloudflare.set(
 			MIGRATION,

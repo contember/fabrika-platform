@@ -128,7 +128,7 @@ export const checkSqliteViewTriggers = (files: ReadonlyMap<string, string>): Fin
 					severity: 'refusal',
 					rule: 'cloudflare-view-trigger',
 					message: 'an INSTEAD OF trigger makes a view writable, and a view is read-only (ADR-0072)',
-					allowed: "a view without triggers, written through its source tables; BEFORE and AFTER triggers on the application's own tables",
+					allowed: 'a view without triggers, written through its source tables',
 				})
 				break
 			}
