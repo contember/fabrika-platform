@@ -1,7 +1,8 @@
 // A condition on one relation (`relationWhen`): a member of a project reads and writes only its open tasks, while an IAM
 // grant, and another relation, reach every task. The condition narrows that relation's terms only, on every statement
 // of a Ref minted through it; an insert held through it is judged on the written row; a child view takes its own and
-// not its parent's. Every case runs on SQLite and, with FABRIKA_TEST_POSTGRES_URL, on Postgres:
+// not its parent's. A move is judged as an insert into its target. Every case runs on SQLite and, with
+// FABRIKA_TEST_POSTGRES_URL, on Postgres:
 //
 //   docker run --rm -d -p 55433:5432 -e POSTGRES_PASSWORD=postgres postgres:17
 //   FABRIKA_TEST_POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:55433/postgres bun test packages/db
@@ -20,7 +21,7 @@ import type { DataKind } from '../orm-types'
 import { defineTables } from '../policy'
 import { openSqlite } from '../sqlite'
 import { bunSqliteStorage } from '../sqlite-bun'
-import { scoped } from '../store'
+import { defineStore, scoped } from '../store'
 import { tablePolicies } from '../tables'
 import { TestAuthority } from './fixtures/authority'
 
@@ -346,6 +347,30 @@ function suite(dialect: 'sqlite' | 'postgres', open: () => Promise<Backend>, clo
 			expect(await backend.rows('select id from project_leads')).toEqual([])
 			await backend.exec("insert into project_leads (id, project_id, principal_id) values ('l2', 'p2', 'user:alice')")
 			expect(await lead()).toMatchObject({ id: expect.any(String) })
+		})
+
+		/** A store over `tasks` whose delete action moves a row, under `tasks`' policy with `policy` over it. */
+		const mover = (policy: Record<string, unknown>) => {
+			const moving = scoped(
+				defineTables(vocabulary, columns)({
+					...others,
+					tasks: { ...taskPolicy, actions: { ...taskPolicy.actions, delete: 'tasks.write' }, ...policy },
+				}),
+			)
+			release()
+			const binding = bindScopedDatabaseProvisionally(moving, { database: backend.database, capabilities: alice })
+			release = () => binding.release()
+			return defineStore(moving, 'tasks', (t) => t)
+		}
+		const placed = async (): Promise<string[]> =>
+			(await backend.rows('select id, project_id from tasks order by id')).map((row) => `${String(row['id'])}:${String(row['project_id'])}`)
+
+		test("a move is judged by the target's insert condition on the moved row", async () => {
+			const store = mover({ when: { 'tasks.insert': { 'category_id.public': { eq: 'yes' } } } })
+			const into = (id: string) => store.move(alice.ref('task', 'tasks.write', id, { project: 'p1' }, []), alice.ref('project', 'tasks.insert', 'p2'))
+			await expect(into('k3')).rejects.toThrow(ConflictError)
+			expect(await into('k1')).toMatchObject({ chain: { project: 'p2' } })
+			expect(await placed()).toEqual(['k1:p2', 'k2:p1', 'k3:p1', 'k4:p2'])
 		})
 
 		test("a child view takes its own relationWhen, never its parent's", async () => {

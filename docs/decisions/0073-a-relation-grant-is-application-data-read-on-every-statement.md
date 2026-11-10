@@ -134,8 +134,9 @@ the transaction. A `some` there reads rows that existed before the insert: it fo
 the inserted table's rows at any depth (judged after the write, one would count the inserted row itself), and every row naming
 the row the path reached is locked too, so a row inserted meanwhile can only make it truer. It takes no `none`, no
 `some` under `not` and no `some` of the rows naming the inserted row: a row inserted before the commit could turn the
-first two false, which no lock holds, and no row names the third yet. An upsert's conflict update is judged on the
-stored row. A relation source's condition reads the source row and at most the one row its foreign key names
+first two false, which no lock holds, and no row names the third yet. A move puts a row into its target as an insert
+does, so the target's insert condition judges the moved row the same way, after the update in its transaction. An
+upsert's conflict update is judged on the stored row. A relation source's condition reads the source row and at most the one row its foreign key names
 (section 2), so under a reveal matched through a path it stays within four subqueries. It takes no `some`: rows naming
 a source row are written by their own table's writers, outside the delegation bound.
 

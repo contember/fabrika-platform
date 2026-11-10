@@ -1838,8 +1838,7 @@ export async function updateRow<O>(
 	target: Addressed,
 	given: ReadonlyMap<string, Primitive | null>,
 	expectedVersion: OperationNode | undefined,
-	destination?: RefGrant,
-	destinationPaths?: PathRule,
+	moved?: MovedRow,
 ): Promise<O> {
 	const { name: table, version } = context.model
 	const changes = boundValues(context, given)
@@ -1849,17 +1848,36 @@ export async function updateRow<O>(
 		? acknowledgementNode(table, keyOf(context.model), version, where)
 		: updateNode(table, changes, version, where, answer(context))
 	return run.write(async (transaction) => {
-		if (destination !== undefined) {
-			await lockDestination(transaction, context, destination, destinationPaths)
+		if (moved !== undefined) {
+			// A move follows containment, so a path never holds its destination.
+			await lockDestination(transaction, context, moved.destination, noPath)
 		}
 		const [row] = await transaction.run<O>(node, guard(context, unchanged ? 'SelectQueryNode' : 'UpdateQueryNode', target.scope))
 		if (row !== undefined) {
 			checkVersion(context, row)
 			await referenceUpdated(context, run, transaction, changes, row)
+			if (moved !== undefined) {
+				await judgeInserted(transaction, context, moved.judged, rowKey(context, row))
+			}
 			return row
 		}
 		return missingOrChanged(context, transaction, target, expectedVersion)
 	})
+}
+
+/**
+ * A move's destination, locked before the write, and the destination's insert condition, which judges the moved row
+ * after it as an insert into the destination judges its row (`judgeInserted`).
+ */
+export interface MovedRow {
+	readonly destination: RefGrant
+	readonly judged: JudgedInsert | undefined
+}
+
+/** The key `row`, a write's acknowledgement, answers; `undefined` when it answers none as text. */
+function rowKey(context: TableContext, row: unknown): string | undefined {
+	const value: unknown = typeof row === 'object' && row !== null ? ownDescriptor(row, keyOf(context.model))?.value : undefined
+	return typeof value === 'string' ? value : undefined
 }
 
 /** Like `updateRow`: under `expectVersion`, a row that changed is 409 and a missing one 404. */
@@ -2678,7 +2696,8 @@ export class DimensionTable<DB, P, T extends string> {
 	/**
 	 * Moves the object to another container: the delete action at the source, the insert action at the target,
 	 * whose chain is checked against the database. Every chain column changes; children that copy them follow
-	 * through `ON UPDATE CASCADE` on their composite foreign key. Answers the acknowledgement and the new chain.
+	 * through `ON UPDATE CASCADE` on their composite foreign key. The moved row is judged by the insert action's
+	 * condition, as an insert into the target is. Answers the acknowledgement and the new chain.
 	 */
 	async move(
 		ref: Ref<DimensionOf<P, T>, ActionOf<P, T, 'delete'>>,
@@ -2714,7 +2733,9 @@ export class DimensionTable<DB, P, T extends string> {
 				setOwn(chain, entry.link.dimension, entry.value)
 			}
 		}
-		const acknowledged = await updateRow<Acknowledgement<P, T>>(context, storeRunner(context), addressed(scope), changes, undefined, target, noPath)
+		const condition = ownEntry(context.model.when, target.action)
+		const moved: MovedRow = { destination: target, judged: condition === undefined ? undefined : { action: target.action, condition } }
+		const acknowledged = await updateRow<Acknowledgement<P, T>>(context, storeRunner(context), addressed(scope), changes, undefined, moved)
 		return { ...acknowledged, chain }
 	}
 

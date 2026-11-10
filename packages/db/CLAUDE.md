@@ -625,7 +625,9 @@ node the object's column stores (the statement compared it, so a `uuid` spelled 
   row on its paths locked `FOR SHARE` first (`readPaths`; a `some` after a path locks every row naming the row it
   reached). `insertProblem` refuses a `none`, a `some` under `not` (a row inserted meanwhile falsifies them, and no
   lock holds that), a `some` of the rows naming the inserted row, and a `some` of the inserted table's own rows at any
-  depth: judged after the write, it would count the inserted row itself.
+  depth: judged after the write, it would count the inserted row itself. A move is an insert into its target: the
+  target `Ref`'s action's condition judges the moved row after the update, in its transaction, the same way
+  (`MovedRow`, `updateRow`), and a refusal fails the transaction (409).
 - **`relationWhen: { <relation>: { <action>: <condition> } }`** narrows that relation's terms of the action only:
   `relationTerms` wraps each (the direct term, a reveal matched for it, its term through a path) as
   `(<term> and (<condition>))` (`narrowedTerm`; the guard's `isNarrowed`, as a member of `isReach` and of a view's
