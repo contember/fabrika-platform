@@ -35,6 +35,7 @@ if (!hasPostgres) {
 const migration = `
 create table projects (id text not null primary key, name text not null);
 create table project_members (id text not null primary key, project_id text not null references projects (id), principal_id text not null);
+create table project_leads (id text not null primary key, project_id text not null references projects (id), principal_id text not null);
 create table categories (id text not null primary key, public text not null);
 create table tasks (
 	id text not null primary key,
@@ -59,6 +60,7 @@ delete from task_assignees;
 delete from tasks;
 delete from categories;
 delete from project_members;
+delete from project_leads;
 delete from projects;
 insert into projects (id, name) values ('p1', 'one'), ('p2', 'two');
 insert into project_members (id, project_id, principal_id) values ('m1', 'p1', 'user:alice');
@@ -73,6 +75,7 @@ insert into tasks (id, project_id, status, title, category_id) values
 interface DB {
 	projects: { id: string; name: string }
 	project_members: { id: string; project_id: string; principal_id: string }
+	project_leads: { id: string; project_id: string; principal_id: string }
 	categories: { id: string; public: string }
 	tasks: { id: string; project_id: string; status: string; title: string; category_id: string | null }
 	task_assignees: { id: string; task_id: string; project_id: string; principal_id: string }
@@ -82,6 +85,11 @@ interface DB {
 const columns: TypedColumnList<DB> = {
 	projects: { columns: ['id', 'name'], foreignKeys: [], notNull: ['id', 'name'] },
 	project_members: {
+		columns: ['id', 'project_id', 'principal_id'],
+		foreignKeys: [{ columns: ['project_id'], table: 'projects', references: ['id'] }],
+		notNull: ['id', 'project_id', 'principal_id'],
+	},
+	project_leads: {
 		columns: ['id', 'project_id', 'principal_id'],
 		foreignKeys: [{ columns: ['project_id'], table: 'projects', references: ['id'] }],
 		notNull: ['id', 'project_id', 'principal_id'],
@@ -112,8 +120,9 @@ const vocabulary = {
 		'tasks.read': 'Read tasks',
 		'tasks.insert': 'Create tasks',
 		'tasks.write': 'Write tasks',
+		'leads.insert': 'Name project leads',
 	},
-	relations: { member: { dimension: 'project' }, assignee: { dimension: 'task' } },
+	relations: { member: { dimension: 'project' }, lead: { dimension: 'project' }, assignee: { dimension: 'task' } },
 	roles: {},
 } as const
 
@@ -122,6 +131,13 @@ const isOpen = { status: { eq: 'open' } } as const
 const others = {
 	projects: { scope: { dimension: 'project' }, actions: { read: 'projects.read' } },
 	project_members: { scope: { child: 'projects' }, actions: { read: 'projects.read' }, confers: { member: { principal: 'principal_id' } } },
+	project_leads: {
+		scope: { child: 'projects' },
+		actions: { read: 'projects.read', insert: 'leads.insert' },
+		insert: ['principal_id'],
+		confers: { lead: { principal: 'principal_id', assign: { self: true } } },
+		relationWhen: { member: { 'leads.insert': { 'project_id.name': { eq: 'one' } } } },
+	},
 	categories: { scope: { reference: 'shared task categories' }, actions: { read: 'tasks.read' } },
 	task_assignees: { scope: { child: 'tasks' }, actions: { read: 'tasks.read' }, confers: { assignee: { principal: 'principal_id' } } },
 	task_digests: {
@@ -281,6 +297,55 @@ function suite(dialect: 'sqlite' | 'postgres', open: () => Promise<Backend>, clo
 			await expect(into(['member'], 'closed', 'closed')).rejects.toThrow(ConflictError)
 			expect(await into([], 'closed', 'closed by grant')).toMatchObject({ id: expect.any(String) })
 			expect(await titles()).toEqual(['closed by grant', 'four', 'hidden', 'one', 'opened', 'two'])
+		})
+
+		test('an insert whose row fails a narrowed relation stands only on what held its destination before the write', async () => {
+			await backend.exec("insert into project_members (id, project_id, principal_id) values ('m2', 'p2', 'user:alice')")
+			const lead = (project: string, relations: readonly string[]) =>
+				invoke('mutation', (db) =>
+					call(db.target(alice.ref('project', 'leads.insert', project, {}, relations), 'on'), 'project_leads.insert', {
+						principal_id: 'user:alice',
+					}))
+			const leads = async (): Promise<string[]> =>
+				(await backend.rows('select project_id from project_leads order by project_id')).map((row) => String(row['project_id']))
+			// p2 fails the member's condition, and no lead row held p2 before the write: the written row holds nothing for itself.
+			await expect(lead('p2', ['member'])).rejects.toThrow(ConflictError)
+			await expect(lead('p2', ['member', 'lead'])).rejects.toThrow(ConflictError)
+			expect(await leads()).toEqual([])
+			expect(await lead('p1', ['member', 'lead'])).toMatchObject({ id: expect.any(String) })
+			await backend.exec("insert into project_leads (id, project_id, principal_id) values ('l2', 'p2', 'user:alice')")
+			expect(await lead('p2', ['member', 'lead'])).toMatchObject({ id: expect.any(String) })
+			expect(await leads()).toEqual(['p1', 'p2', 'p2'])
+		})
+
+		test('with several narrowed relations, one the row meets holds the insert only if it held the destination before the write', async () => {
+			const narrowed = scoped(
+				defineTables(vocabulary, columns)({
+					...others,
+					tasks: taskPolicy,
+					project_leads: {
+						...others.project_leads,
+						relationWhen: {
+							member: { 'leads.insert': { 'project_id.name': { eq: 'one' } } },
+							lead: { 'leads.insert': { 'project_id.name': { eq: 'two' } } },
+						},
+					},
+				}),
+			)
+			release()
+			const binding = bindScopedDatabaseProvisionally(narrowed, { database: backend.database, capabilities: alice })
+			release = () => binding.release()
+			data = dataAccessOf(narrowed)
+			await backend.exec("insert into project_members (id, project_id, principal_id) values ('m2', 'p2', 'user:alice')")
+			const lead = () =>
+				invoke('mutation', (db) =>
+					call(db.target(alice.ref('project', 'leads.insert', 'p2', {}, ['member', 'lead']), 'on'), 'project_leads.insert', {
+						principal_id: 'user:alice',
+					}))
+			await expect(lead()).rejects.toThrow(ConflictError)
+			expect(await backend.rows('select id from project_leads')).toEqual([])
+			await backend.exec("insert into project_leads (id, project_id, principal_id) values ('l2', 'p2', 'user:alice')")
+			expect(await lead()).toMatchObject({ id: expect.any(String) })
 		})
 
 		test("a child view takes its own relationWhen, never its parent's", async () => {

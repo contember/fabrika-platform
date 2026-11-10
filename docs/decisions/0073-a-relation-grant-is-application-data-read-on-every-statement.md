@@ -327,7 +327,9 @@ still narrows every grant.
   relation's part is its narrowed term, so a row the condition does not admit is out on every statement.
 - **An insert is judged on the written row**, as `when`'s. A relation whose condition has no path and fails on the row
   is dropped before the write; one with a path is judged after it, in the insert's transaction, with the rows on its
-  paths locked first. A `Ref` left with no relation that admits the row is a 409 and the transaction fails.
+  paths locked first. What holds the destination without the path-narrowed relations (and, with several, each of them
+  alone) is decided before the write, so the written row never holds its own insert: a row that fails one stands only
+  on what held the destination before it. Otherwise the insert is a 409 and the transaction fails.
 - **A path writer's bound does not count a narrowed relation.** A writer that holds an action at the node only through
   a relation narrowed for that action is not counted as holding it (section 8): the bound reads no row condition.
 - **A child view's parent subquery leaves the parent's `relationWhen` out**, as it leaves the parent's `when` out. The

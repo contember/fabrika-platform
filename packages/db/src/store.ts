@@ -1588,6 +1588,7 @@ export async function insertRow<O>(
 		if (prepared?.destination !== undefined) {
 			await lockDestination(transaction, context, prepared.destination)
 		}
+		const before = await narrowedHolds(transaction, context, prepared)
 		if (prepared !== undefined) {
 			await checkPrincipalAssign(transaction, context, prepared.writer, given)
 			await checkRevealAssign(transaction, context, prepared.writer, given)
@@ -1601,7 +1602,7 @@ export async function insertRow<O>(
 		checkVersion(context, row)
 		await referenceInserted(context, run, transaction, values)
 		await judgeInserted(transaction, context, prepared?.judged, values.get(keyOf(context.model)))
-		await judgeNarrowed(transaction, context, prepared, values.get(keyOf(context.model)))
+		await judgeNarrowed(transaction, context, prepared, before, values.get(keyOf(context.model)))
 		return row
 	})
 }
@@ -2187,34 +2188,81 @@ function judgesRelation(narrowed: readonly NarrowedInsert[], relation: string): 
 }
 
 /**
+ * What held an insert's destination before the write, apart from the relations narrowed by a path: the rest of the
+ * `Ref`, and, with several such relations, each of them alone. Decided before the row exists, so it never counts it.
+ */
+interface NarrowedHolds {
+	readonly rest: boolean
+	readonly alone: readonly string[]
+}
+
+/** `NarrowedHolds` of a prepared insert, locked `for share` in its transaction before the write; `undefined` with nothing narrowed. */
+async function narrowedHolds(
+	transaction: Session,
+	context: TableContext,
+	prepared: Pick<PreparedInsert, 'destination' | 'narrowed'> | undefined,
+): Promise<NarrowedHolds | undefined> {
+	const destination = prepared?.destination
+	if (prepared === undefined || destination === undefined || prepared.narrowed.length === 0) {
+		return undefined
+	}
+	const relations: string[] = []
+	for (let index = 0; index < prepared.narrowed.length; index++) {
+		const entry = prepared.narrowed[index]
+		if (entry !== undefined) relations[relations.length] = entry.relation
+	}
+	const rest = await heldBy(transaction, context, { ...destination, relations: holdsBesides(destination.relations, relations) })
+	const alone: string[] = []
+	// One narrowed relation that passes leaves the destination as `lockDestination` found it; only with several may it be another's.
+	for (let index = 0; relations.length > 1 && index < relations.length; index++) {
+		const relation = relations[index] ?? ''
+		const holds: RelationHold[] = []
+		for (let position = 0; position < destination.relations.length; position++) {
+			const hold = destination.relations[position]
+			if (hold !== undefined && hold.relation === relation) holds[holds.length] = hold
+		}
+		if (await heldBy(transaction, context, { ...destination, relations: holds, revealing: [], paths: [] })) alone[alone.length] = relation
+	}
+	return { rest, alone }
+}
+
+/** Whether `grant` holds the destination: with no part left, never. */
+async function heldBy(transaction: Session, context: TableContext, grant: RefGrant): Promise<boolean> {
+	if (grant.relations.length === 0 && grant.revealing.length === 0 && grant.paths.length === 0) {
+		return false
+	}
+	return await destinationHeld(transaction, context, grant)
+}
+
+/**
  * The destination's relations whose condition for the insert follows a path, judged on the row just written as
- * `judgeInserted` judges `when`; a relation the row fails no longer holds the insert, and the destination is checked
- * again with what is left. None left fails the transaction with a 409.
+ * `judgeInserted` judges `when`. When the row fails one, the insert stands only on what held the destination before the
+ * write without it (`before`): the rest of the `Ref`, or a narrowed relation the row meets that held it alone. Otherwise
+ * the transaction fails with a 409.
  */
 async function judgeNarrowed(
 	transaction: Session,
 	context: TableContext,
 	prepared: Pick<PreparedInsert, 'destination' | 'narrowed'> | undefined,
+	before: NarrowedHolds | undefined,
 	key: Primitive | null | undefined,
 ): Promise<void> {
 	const destination = prepared?.destination
-	if (prepared === undefined || destination === undefined || prepared.narrowed.length === 0) {
+	if (prepared === undefined || destination === undefined || before === undefined) {
 		return
 	}
-	const failed: string[] = []
+	let failed = false
+	let held = before.rest
 	for (let index = 0; index < prepared.narrowed.length; index++) {
 		const entry = prepared.narrowed[index]
-		if (entry !== undefined && !(await rowMeets(transaction, context, destination.action, entry.condition, key))) {
-			failed[failed.length] = entry.relation
+		if (entry === undefined) continue
+		if (!(await rowMeets(transaction, context, destination.action, entry.condition, key))) {
+			failed = true
+		} else if (includes(before.alone, entry.relation)) {
+			held = true
 		}
 	}
-	if (failed.length === 0) {
-		return
-	}
-	const kept = holdsBesides(destination.relations, failed)
-	const rest: RefGrant = { ...destination, relations: kept }
-	const held = kept.length > 0 || rest.revealing.length > 0 || rest.paths.length > 0
-	if (!held || !(await destinationHeld(transaction, context, rest))) {
+	if (failed && !held) {
 		transaction.fail()
 		throw new ConflictError(`the row is outside what ${destination.action} inserts into ${context.model.name} through its relations`)
 	}
@@ -2327,6 +2375,7 @@ export function insertPrepared(context: TableContext, run: Runner, prepared: Pre
 		if (prepared.destination !== undefined) {
 			await lockDestination(transaction, context, prepared.destination)
 		}
+		const before = await narrowedHolds(transaction, context, prepared)
 		await checkPrincipalAssign(transaction, context, prepared.writer, prepared.row)
 		await checkRevealAssign(transaction, context, prepared.writer, prepared.row)
 		await checkMemberRevealAssign(transaction, context, prepared.writer, prepared.row)
@@ -2335,7 +2384,7 @@ export function insertPrepared(context: TableContext, run: Runner, prepared: Pre
 		// A conflict writes no new row: `nothing` reads none, and `update` is judged on the stored row.
 		if (written['inserted'] === true) {
 			await judgeInserted(transaction, context, prepared.judged, prepared.row.get(keyOf(context.model)))
-			await judgeNarrowed(transaction, context, prepared, prepared.row.get(keyOf(context.model)))
+			await judgeNarrowed(transaction, context, prepared, before, prepared.row.get(keyOf(context.model)))
 		}
 		return written
 	})
