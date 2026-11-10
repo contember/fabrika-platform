@@ -199,7 +199,8 @@ key, so no writer picks a node someone already holds a grant at.
 The declaration is unchanged, so the artifact and its digest are too. A framework release that reads the declaration
 only for a `Within` mints no such `Ref`, which fails closed. Raising the pin to one that mints them widens an existing
 declaration to `Ref`s and to the write actions it lists, with no artifact diff: the approver reviewed the declaration
-with the actions it lists, and no released framework read it more narrowly.
+with the actions it lists. `0.9.0-dev.13` read it for a `Within` only, so an application approved on it gains the
+write actions it lists when it raises its pin; the framework migration guide says so.
 
 ### 8. A write path holds a Ref, and bounds its column's writer
 

@@ -132,6 +132,11 @@ parse refuses such a path, and a condition's `not` over any path, until the file
 `confers` and `when`; [ADR-0073](../decisions/0073-a-relation-grant-is-application-data-read-on-every-statement.md))
 need `0.9.0-dev.13` or later: Control refuses to publish them for an application pinned to an earlier release.
 
+From the release after `0.9.0-dev.13`, a `memberReveals` entry holds its actions for an `on` or `in` endpoint too, writes included;
+`0.9.0-dev.13` held them for an `over` list's reads only. The declaration and the approval diff do not change, so
+review the actions each `memberReveals` entry lists before raising the pin from `dev.13`, and keep only those its
+members should hold on the ancestor.
+
 A webhook's `bind`, `unbind` and `setSecret` now refuse a `Ref` held through a relation, a member reveal or a secondary
 path (`conditional_binding`): bind with a `Ref` an IAM grant holds.
 
