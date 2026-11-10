@@ -81,6 +81,40 @@ describe('cloudflare-current-timestamp', () => {
 	})
 })
 
+describe('cloudflare-view-trigger', () => {
+	const NOTES = 'CREATE TABLE notes (id TEXT PRIMARY KEY, body TEXT NOT NULL);\nCREATE VIEW open_notes AS SELECT id, body FROM notes;\n'
+
+	test('refuses an INSTEAD OF trigger in any case, temporary, conditional or quoted, at the line of its timing', async () => {
+		const files = application(true)
+		files.set(
+			MIGRATION,
+			[
+				NOTES,
+				"create temp trigger if not exists 'open_notes_delete'",
+				'\tinstead of delete on main.open_notes begin delete from notes where id = old.id; end;',
+				'CREATE TEMPORARY TRIGGER "instead"',
+				'\tINSTEAD OF UPDATE OF body ON [open_notes] BEGIN UPDATE notes SET body = NEW.body WHERE id = OLD.id; END;',
+				'',
+			].join('\n'),
+		)
+		const found = await findingsOf('cloudflare-view-trigger', files)
+		expect(found).toEqual([expect.stringContaining(`${MIGRATION}:5 refusal`), expect.stringContaining(`${MIGRATION}:7 refusal`)])
+		expect(found[0]).toContain('read-only (ADR-0072)')
+	})
+
+	test('no refusal for a view, a table trigger (one named instead too), nor on Postgres', async () => {
+		const cloudflare = application(true)
+		cloudflare.set(
+			MIGRATION,
+			`${NOTES}CREATE TRIGGER instead BEFORE DELETE ON notes WHEN old.body = 'instead of' BEGIN SELECT RAISE(ABORT, 'kept'); END;\n`,
+		)
+		expect(await findingsOf('cloudflare-view-trigger', cloudflare)).toEqual([])
+		const postgres = application(false)
+		postgres.set(MIGRATION, 'create trigger open_notes_insert instead of insert on open_notes for each row execute function notes_insert();\n')
+		expect(await findingsOf('cloudflare-view-trigger', postgres)).toEqual([])
+	})
+})
+
 describe('cloudflare-job-segment', () => {
 	test('refuses a job longer than one 14-minute segment, naming the job, its timeout, the cap and the chunking form', () => {
 		const artifact = scaffoldInputs(application(true)).artifact

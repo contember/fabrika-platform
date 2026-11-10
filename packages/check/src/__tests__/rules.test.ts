@@ -786,6 +786,27 @@ const cases: readonly RuleCase[] = [
 		},
 	},
 	{
+		rule: 'cloudflare-view-trigger',
+		bad: {
+			...(await cloudflareApplication("c.files({ types: ['image/png'], maxBytes: 1024 })")),
+			'db/migrations/20261024120000_notes.sql': [
+				'CREATE TABLE notes (id TEXT PRIMARY KEY, body TEXT NOT NULL);',
+				'CREATE VIEW open_notes AS SELECT id, body FROM notes;',
+				'CREATE TRIGGER open_notes_insert INSTEAD OF INSERT ON open_notes BEGIN INSERT INTO notes (id, body) VALUES (NEW.id, NEW.body); END;',
+				'',
+			].join('\n'),
+		},
+		expected: ['db/migrations/20261024120000_notes.sql:3:1'],
+		good: {
+			...(await cloudflareApplication("c.files({ types: ['image/png'], maxBytes: 1024 })")),
+			'db/migrations/20261024120000_notes.sql': [
+				'CREATE TABLE notes (id TEXT PRIMARY KEY, body TEXT NOT NULL);',
+				'CREATE VIEW open_notes AS SELECT id, body FROM notes;',
+				'',
+			].join('\n'),
+		},
+	},
+	{
 		rule: 'crontab',
 		bad: {
 			...CLEAN_APPLICATION,
