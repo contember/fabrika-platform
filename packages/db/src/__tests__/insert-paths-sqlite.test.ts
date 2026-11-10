@@ -177,14 +177,11 @@ describe("an insert's condition along a foreign key", () => {
 		expect(titles()).toEqual([{ title: 'public' }])
 	})
 
-	test('judges a null key as a read does: unknown while a row qualifies, false when none does', async () => {
-		const data = layerWith({ not: { 'kind_id.open': { eq: false } } })
-		await expect(insert(data, { kind_id: null, title: 'none' })).rejects.toThrow(refusal)
-		await expect(insert(data, { kind_id: 'k-closed', title: 'closed' })).rejects.toThrow(refusal)
-		await insert(data, { kind_id: 'k-open', title: 'open' })
-		storage.sql.exec("update kinds set open = 1 where id = 'k-closed'")
-		await insert(data, { kind_id: null, title: 'none' })
-		expect(titles()).toEqual([{ title: 'none' }, { title: 'open' }])
+	test('takes no not over a path through a nullable key, into a reference table too', () => {
+		// Under not, a null key would be admitted exactly while no kind matches, whichever row is written.
+		expect(() => layerWith({ not: { 'kind_id.open': { eq: false } } })).toThrow(
+			'tasks: when.tasks.write.not.kind_id.open: tasks.kind_id may be null, and under not a path through a null key holds exactly when no row of kinds in any tenant matches; declare tasks.kind_id NOT NULL and run fabrika db codegen, or drop the not',
+		)
 	})
 
 	test("judges the row as written, the database's defaults included", async () => {

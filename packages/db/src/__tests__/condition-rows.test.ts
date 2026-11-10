@@ -335,11 +335,32 @@ function suite(dialect: 'sqlite' | 'postgres', open: () => Promise<Backend>, clo
 
 		test('a none after a path holds where the reached row has no such row, and never where the path reaches no row', async () => {
 			expect(await listed({ tasks: { project_id: { none: { project_tags: { 'tag_id.name': { eq: 'calm' } } } } } }, 'tasks')).toEqual(['t1', 't3'])
-			// c2 names no blocker, so neither its none nor the negation of its some holds.
+			// c2 names no blocker, so its none does not hold; a not over its nullable key is refused at parse.
 			expect(await listed({ checks: { blocker_id: { none: { notes: { flagged: { eq: true } } } } } }, 'checks')).toEqual(['c3'])
-			expect(await listed({ checks: { not: { blocker_id: { some: { notes: { flagged: { eq: true } } } } } } }, 'checks')).toEqual(['c3'])
+			expect(() => tablesWith({ checks: { not: { blocker_id: { some: { notes: { flagged: { eq: true } } } } } } })).toThrow(
+				'checks.blocker_id may be null',
+			)
 			await backend.exec(`update notes set flagged = false where id = 'n1'`)
 			expect(await listed({ checks: { blocker_id: { none: { notes: { flagged: { eq: true } } } } } }, 'checks')).toEqual(['c1', 'c3'])
+		})
+
+		test("a not over a path through a NOT NULL key reads one tenant's rows, whatever another tenant's rows hold", async () => {
+			const inP2 = (conditions: Conditions, table: string) => {
+				use(conditions)
+				return invoke('query', async (db) => ids(await call(db.within(alice.within('project', 'projects.read', ['p2'])), `${table}.list`)))
+			}
+			const closedTask = { not: { 'task_id.open': { eq: true } } }
+			const stepNotDone = { not: { 'step_id.done': { eq: true } } }
+			expect(await inP2({ steps: closedTask }, 'steps')).toEqual(['s2'])
+			expect(await inP2({ checks: stepNotDone }, 'checks')).toEqual([])
+			await backend.exec(`update tasks set open = false where id = 't1'; update steps set done = true where id in ('s1', 's3')`)
+			expect(await inP2({ steps: closedTask }, 'steps')).toEqual(['s2'])
+			expect(await inP2({ checks: stepNotDone }, 'checks')).toEqual([])
+			await backend.exec(`update tasks set open = true where id in ('t1', 't3'); update steps set done = false where id in ('s1', 's3')`)
+			expect(await inP2({ steps: closedTask }, 'steps')).toEqual(['s2'])
+			expect(await inP2({ checks: stepNotDone }, 'checks')).toEqual([])
+			await backend.exec(`update steps set done = false where id = 's2'`)
+			expect(await inP2({ checks: stepNotDone }, 'checks')).toEqual(['c2'])
 		})
 
 		test('a some nests three deep, and a none nests inside a some', async () => {
@@ -450,6 +471,25 @@ describe('the policy bounds the rows a condition reads past a path', () => {
 		expect(() => tablesWith({ projectTags: { tag_id: { none: { project_tags: { project_id: { eq: 'p2' } } } } } })).toThrow(
 			'never a key into a reference table',
 		)
+	})
+
+	test('a not follows a path only through NOT NULL keys, at any depth and in every condition', () => {
+		const refusal =
+			'checks.blocker_id may be null, and under not a path through a null key holds exactly when no row of tasks in any tenant matches; declare checks.blocker_id NOT NULL and run fabrika db codegen, or drop the not'
+		expect(() => tablesWith({ checks: { not: { 'blocker_id.open': { eq: true } } } })).toThrow(
+			`checks: when.projects.read.not.blocker_id.open: ${refusal}`,
+		)
+		expect(() => tablesWith({ checks: { not: { anyOf: [{ ok: { eq: true } }, { 'blocker_id.open': { eq: true } }] } } })).toThrow(refusal)
+		expect(() => tablesWith({ checks: { not: { not: { 'blocker_id.open': { eq: true } } } } })).toThrow(refusal)
+		// Inside a some, under a not of its own or one around the some.
+		expect(() => tablesWith({ steps: { some: { checks: { not: { 'blocker_id.open': { eq: true } } } } } })).toThrow(refusal)
+		expect(() => tablesWith({ steps: { not: { some: { checks: { 'blocker_id.open': { eq: true } } } } } })).toThrow(refusal)
+		expect(() => tablesWith({ reveal: { not: { some: { checks: { 'blocker_id.open': { eq: true } } } } } })).toThrow(refusal)
+		// The same key outside any not, and a not over NOT NULL keys, stay.
+		expect(() => tablesWith({ checks: { 'blocker_id.open': { eq: false } } })).not.toThrow()
+		expect(() => tablesWith({ checks: { blocker_id: { none: { notes: { flagged: { eq: true } } } } } })).not.toThrow()
+		expect(() => tablesWith({ checks: { not: { 'step_id.task_id.open': { eq: true } } } })).not.toThrow()
+		expect(() => tablesWith({ tasks: { not: { project_id: { some: { project_tags: { 'tag_id.name': { eq: 'calm' } } } } } } })).not.toThrow()
 	})
 
 	test("a source's condition follows one foreign key and reads no rows naming a row", () => {

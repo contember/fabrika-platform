@@ -228,6 +228,12 @@ describe('the policy bounds what a table may reveal to members', () => {
 		expect(policy(reveal({ when: { 'project_id.name': { eq: 'one' } } }))).not.toThrow()
 	})
 
+	test('a not in its condition follows no key the column list does not declare NOT NULL', () => {
+		expect(policy(reveal({ when: { not: { 'project_id.name': { eq: 'one' } } } }))).toThrow(
+			'tasks: memberReveals.task.when.not.project_id.name: tasks.project_id may be null',
+		)
+	})
+
 	test('a node outside the chain, no action, an action outside the vocabulary or an unknown field is refused', () => {
 		expect(policy(reveal({ to: 'task' }))).toThrow("not a dimension of tasks's chain")
 		expect(policy(reveal({ actions: [] }))).toThrow('names no action')

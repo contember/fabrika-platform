@@ -4756,6 +4756,10 @@ export const tables = defineTables(vocabulary, columns)({
 - A path may end in `some` or `none`: on `tasks`, `{ project_id: { some: { project_tags: { 'tag_id.name': { eq:
   'urgent' } } } } }` is a task of a project tagged urgent, through the link table `project_tags`. A `null` foreign key
   reaches no row, so neither `some` nor `none` holds there. A `some` nests in a `some`.
+- A `not` follows a path only through columns declared `NOT NULL`, at any depth: on a null key the path's lookup
+  would turn on rows of every tenant. `{ not: { 'client_id.active': { eq: true } } }` with a nullable `client_id` is
+  refused and names the column: declare it `NOT NULL` in a migration and run `fabrika db codegen`, or say what a row
+  without a client gets, `{ anyOf: [{ client_id: { isNull: true } }, { 'client_id.active': { eq: false } }] }`.
 - A path follows at most three foreign keys, the path before a `some`, the `some` and every hop inside it counted
   together. Each hop is one more subquery in every statement of the action; shorten a longer path with a stored column.
 - An insert's condition is judged on the written row. One with a path runs in the insert's transaction, every row on

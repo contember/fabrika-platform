@@ -610,6 +610,8 @@ describe('a view (ADR-0072)', () => {
 		expect(tablePolicies(read(when({ 'project_id.organization_id.name': { eq: 'One' } })))['project_summaries']?.when).toEqual({
 			'projects.read': { 'project_id.organization_id.name': { eq: 'One' } },
 		})
+		// A view row whose parent column is null is read by no capability, so a not may follow that column.
+		expect(() => read(when({ not: { 'project_id.organization_id.name': { eq: 'One' } } }))).not.toThrow()
 		expect(refusal(when({ 'organization_id.name': { eq: 'One' } }))).toBe(
 			'project_summaries: when.projects.read.organization_id.name: project_summaries.organization_id is not a single-column foreign key, so a path cannot follow it',
 		)

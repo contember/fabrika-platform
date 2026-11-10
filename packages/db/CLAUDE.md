@@ -606,7 +606,11 @@ through a relation (`~rel`, `@fabrika/auth-core`). `authority.ts` builds every p
   parent column, a key into a reference table, or a key that holds the row's tenant (below); `some` follows such a key
   backwards, but never a key into a reference table (`HopRule`'s `backward`): every tenant's rows name a reference
   row, and a `some` reads only rows of the named row's tenant. A path may end in one (`{ '<fk>': { some: … } }`, the model's `some` with `hops`): the rows naming the row
-  it reaches, `none` negated there, so a null key holds neither. A `some` nests, and a link table is a `some` and a path
+  it reaches, `none` negated there, so a null key holds neither. A `not`, at any depth and in every condition, follows
+  a path only through columns in the column list's `notNull` (`negated` in `parseNode`): on a null key a hop's
+  unscoped subquery is false while no row anywhere matches and unknown otherwise, so under `not` the row would turn on
+  other tenants' rows. A reference table's key is no exception; a child view's parent column counts as NOT NULL
+  (`conditionRoot`), since no capability reads a row whose parent column is null. A `some` nests, and a link table is a `some` and a path
   from it; all of it counts towards the three. Every hop also needs a single-column foreign key on its column (`singleForeignKey`), the composite
   key of a tenant hop included, so a table with only `(project_id, org_id) references projects (id, org_id)` takes no
   path. An insert's condition is judged on the written row; one with a path in the insert's transaction, every

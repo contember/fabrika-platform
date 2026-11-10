@@ -89,6 +89,8 @@ export interface ConditionTable {
 	readonly foreignKeys: readonly { readonly columns: readonly string[]; readonly table: string; readonly references: readonly string[] }[]
 	readonly timestamps: NameSet
 	readonly json: NameSet
+	/** The columns the column list declares NOT NULL: a path under `not` follows only these. */
+	readonly notNull: NameSet
 }
 
 /** A path follows at most this many foreign keys: each hop is one more subquery in every statement the condition scopes. */
@@ -114,12 +116,15 @@ export function parseCondition(
 	what: string,
 	hops: HopRule,
 ): ConditionModel {
-	return parseNode(input, table, tables, what, hops, 0, 0)
+	return parseNode(input, table, tables, what, hops, 0, 0, false)
 }
 
 const HOP_LIMIT = `a path follows at most ${MAX_CONDITION_HOPS} foreign keys, a some or none counted as one`
 
-/** `level` counts the `some` and `none` subqueries around the node: each takes one of a path's foreign keys. */
+/**
+ * `level` counts the `some` and `none` subqueries around the node: each takes one of a path's foreign keys. `negated`
+ * holds under any `not` around it.
+ */
 function parseNode(
 	input: unknown,
 	table: ConditionTable,
@@ -128,6 +133,7 @@ function parseNode(
 	hops: HopRule,
 	depth: number,
 	level: number,
+	negated: boolean,
 ): ConditionModel {
 	if (depth > MAX_CONDITION_DEPTH) {
 		throw new PolicyError(`${what} nests deeper than ${MAX_CONDITION_DEPTH} levels`)
@@ -139,17 +145,17 @@ function parseNode(
 	}
 	const first = keys[0] ?? ''
 	if (keys.length === 1 && (first === 'anyOf' || first === 'allOf')) {
-		const items = parseList(ownEntry(record, first), (item) => parseNode(item, table, tables, `${what}.${first}`, hops, depth + 1, level))
+		const items = parseList(ownEntry(record, first), (item) => parseNode(item, table, tables, `${what}.${first}`, hops, depth + 1, level, negated))
 		if (items === undefined || items.length === 0) {
 			throw new PolicyError(`${what}.${first} takes a non-empty plain array of conditions`)
 		}
 		return freeze({ kind: first === 'anyOf' ? 'any' : 'all', terms: freeze(items) })
 	}
 	if (keys.length === 1 && first === 'not') {
-		return freeze({ kind: 'not', term: parseNode(ownEntry(record, 'not'), table, tables, `${what}.not`, hops, depth + 1, level) })
+		return freeze({ kind: 'not', term: parseNode(ownEntry(record, 'not'), table, tables, `${what}.not`, hops, depth + 1, level, true) })
 	}
 	if (keys.length === 1 && (first === 'some' || first === 'none')) {
-		return parseSome(first, ownEntry(record, first), [], table, tables, `${what}.${first}`, hops, depth, level)
+		return parseSome(first, ownEntry(record, first), [], table, tables, `${what}.${first}`, hops, depth, level, negated)
 	}
 	const terms: ConditionModel[] = []
 	for (let index = 0; index < keys.length; index++) {
@@ -159,7 +165,7 @@ function parseNode(
 				throw new PolicyError(`${what}: ${key} stands alone in its object; wrap the column tests beside it in allOf`)
 			}
 		}
-		terms[terms.length] = parseTest(key, ownEntry(record, key), table, tables, `${what}.${key}`, hops, depth, level)
+		terms[terms.length] = parseTest(key, ownEntry(record, key), table, tables, `${what}.${key}`, hops, depth, level, negated)
 	}
 	const only = terms[0]
 	return terms.length === 1 && only !== undefined ? only : freeze({ kind: 'all', terms: freeze(terms) })
@@ -174,6 +180,7 @@ function parseTest(
 	hops: HopRule,
 	depth: number,
 	level: number,
+	negated: boolean,
 ): ConditionModel {
 	const segments = splitPath(path)
 	const test = plainRecord(input, what)
@@ -194,6 +201,13 @@ function parseTest(
 		if (target === undefined) {
 			throw new PolicyError(`${what}: ${current.name}.${name} references ${hop.table}, which has no policy`)
 		}
+		// A hop's subquery reads its target unscoped: on a null key it is false while no row anywhere matches and unknown
+		// otherwise, so under `not` the row would turn on rows of every tenant.
+		if (negated && !inSet(current.notNull, name)) {
+			throw new PolicyError(
+				`${what}: ${current.name}.${name} may be null, and under not a path through a null key holds exactly when no row of ${hop.table} in any tenant matches; declare ${current.name}.${name} NOT NULL and run fabrika db codegen, or drop the not`,
+			)
+		}
 		if (!hops(current.name, name, hop.table, hop.key, false)) {
 			throw new PolicyError(
 				`${what}: ${current.name}.${name} leads to ${hop.table}, outside the row's own containment; a path follows a row's container or parent column, a foreign key that also holds every ancestor the two tables share, or reaches a reference table`,
@@ -203,7 +217,7 @@ function parseTest(
 		current = target
 	}
 	if (rows !== undefined) {
-		return parseSome(rows, ownEntry(test, rows), freeze(followed), current, tables, `${what}.${rows}`, hops, depth, level + followedCount)
+		return parseSome(rows, ownEntry(test, rows), freeze(followed), current, tables, `${what}.${rows}`, hops, depth, level + followedCount, negated)
 	}
 	const columnName = segments[segments.length - 1] ?? ''
 	if (!inSet(current.columns, columnName)) {
@@ -242,6 +256,7 @@ function parseSome(
 	hops: HopRule,
 	depth: number,
 	level: number,
+	negated: boolean,
 ): ConditionModel {
 	if (level + 1 > MAX_CONDITION_HOPS) {
 		throw new PolicyError(`${what}: ${HOP_LIMIT}`)
@@ -277,7 +292,7 @@ function parseSome(
 			`${what}: ${name}.${found.column} is outside ${table.name}'s containment; the rows read follow a child's parent column, a contained dimension's container column, or a foreign key that also holds every ancestor the two tables share, never a key into a reference table, whose rows every tenant's rows name`,
 		)
 	}
-	const term = parseNode(ownEntry(record, name), child, tables, `${what}.${name}`, hops, depth + 1, level + 1)
+	const term = parseNode(ownEntry(record, name), child, tables, `${what}.${name}`, hops, depth + 1, level + 1, negated)
 	return freeze({ kind: 'some', hops: path, negated: kind === 'none', key: found.key, table: name, column: found.column, term })
 }
 

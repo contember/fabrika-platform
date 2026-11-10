@@ -107,7 +107,11 @@ alike. A condition is structured data, never SQL: `eq`, `notEq`, `in`, `notIn`, 
 over a column, with `allOf`, `anyOf` and `not`, `{ some: { <table>: … } }` and `none` over the rows whose foreign key
 names the row, and `{ now: true }` as the statement clock. A path may end in `some` or `none`
 (`{ '<fk column>': { some: … } }`): the rows naming the row the path reaches. A foreign key that is null reaches no row,
-so neither form holds there. A `some` nests in a `some`, and a `some` through a link table is a `some` of the link
+so neither form holds there. A `not`, in any condition and at any depth, follows a path only through columns the column
+list declares NOT NULL: a hop's subquery reads its target unscoped, so on a null key it is false while no row anywhere
+matches and unknown otherwise, and under `not` the row would turn on other tenants' rows. A reference table's key is no
+exception, and a child view's parent column counts as NOT NULL, since no capability reads a row whose parent column is
+null. A `some` nests in a `some`, and a `some` through a link table is a `some` of the link
 rows followed by a path from them. A condition's path follows at most three foreign keys, the path before a `some`,
 the `some` and every hop inside it counted together. A hop's subquery reads its target unscoped, so a hop follows only
 a row's own container or parent column, a foreign key that also holds every ancestor the two tables share and

@@ -46,7 +46,7 @@ create table labels (
 create table tasks (
 	id text not null primary key,
 	project_id text not null references projects (id),
-	label_id text references labels (id),
+	label_id text not null references labels (id),
 	title text not null,
 	foreign key (label_id, project_id) references labels (id, project_id)
 );
@@ -68,7 +68,7 @@ interface DB {
 	projects: { id: string; version: number }
 	kinds: { id: string; open: ColumnType<boolean, boolean, boolean> }
 	labels: { id: string; project_id: string; kind_id: string; public: ColumnType<boolean, boolean, boolean> }
-	tasks: { id: string; project_id: string; label_id: string | null; title: string }
+	tasks: { id: string; project_id: string; label_id: string; title: string }
 	stamps: { id: string; label_id: string; project_id: string; ok: ColumnType<boolean, boolean, boolean> }
 }
 
@@ -91,7 +91,7 @@ const columns: TypedColumnList<DB> = {
 			{ columns: ['label_id'], table: 'labels', references: ['id'] },
 			{ columns: ['label_id', 'project_id'], table: 'labels', references: ['id', 'project_id'] },
 		],
-		notNull: ['id', 'project_id', 'title'],
+		notNull: ['id', 'project_id', 'label_id', 'title'],
 	},
 	stamps: {
 		columns: ['id', 'label_id', 'project_id', 'ok'],

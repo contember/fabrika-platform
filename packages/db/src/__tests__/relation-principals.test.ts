@@ -864,7 +864,10 @@ function readWhen(when: unknown, changes: Readonly<Record<string, Readonly<Recor
 describe("the policy of a relation's condition on the row the source names", () => {
 	test('follows one foreign key the hop rule admits, to a row whose tested column nothing rewrites', () => {
 		expect(() => readWhen({ 'peer_id.alias': { eq: 'lead' } })).not.toThrow()
-		expect(() => readWhen({ allOf: [{ 'country_code.principal_id': { isNull: false } }, { not: { 'peer_id.alias': { eq: 'x' } } }] })).not.toThrow()
+		expect(() => readWhen({ allOf: [{ 'country_code.principal_id': { isNull: false } }, { 'peer_id.alias': { notEq: 'x' } }] })).not.toThrow()
+		expect(() => readWhen({ allOf: [{ 'country_code.principal_id': { isNull: false } }, { not: { 'peer_id.alias': { eq: 'x' } } }] })).toThrow(
+			'project_staff.peer_id may be null, and under not a path through a null key holds exactly when no row of people in any tenant matches',
+		)
 		expect(tablePolicies(readWhen({ 'peer_id.alias': { eq: 'lead' } }))['project_staff']?.confers?.['staff']?.when).toEqual({
 			'peer_id.alias': { eq: 'lead' },
 		})

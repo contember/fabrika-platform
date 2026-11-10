@@ -65,6 +65,13 @@ reads none of that. A fragment it refused for its place (under an `OR`, in paren
 the approver's to review: keep each fragment a top-level conjunct of its WHERE or JOIN … ON. A write of a reference
 table is no longer refused by the tag; write none. `ctx.sql` now runs on Cloudflare too (step 3 below).
 
+A table, relation or reveal condition (from `0.9.0-dev.13`) whose `not` follows a path through a column the column
+list does not declare NOT NULL is refused at parse once the pin is raised, and the message names the column. Declare
+the column `NOT NULL` in a migration and run `fabrika db codegen`, which writes the list's `notNull` (a list written
+before it has none, so every such `not` needs the codegen run), or rewrite the condition without the `not`: say what a
+row whose key is null gets, `{ anyOf: [{ client_id: { isNull: true } }, { 'client_id.active': { eq: false } }] }`.
+Under `not`, such a row was admitted exactly while no row of the target table, in any tenant, matched.
+
 A job without `limits.timeoutMs` now gets 14 minutes per attempt, not 15, on both providers, so the contract and its
 digest change at the pin raise. A job that needs more on Zerops declares it.
 
