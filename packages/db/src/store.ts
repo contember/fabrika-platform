@@ -1848,16 +1848,18 @@ export async function updateRow<O>(
 		? acknowledgementNode(table, keyOf(context.model), version, where)
 		: updateNode(table, changes, version, where, answer(context))
 	return run.write(async (transaction) => {
+		// A move follows containment, so a path never holds its destination.
 		if (moved !== undefined) {
-			// A move follows containment, so a path never holds its destination.
 			await lockDestination(transaction, context, moved.destination, noPath)
 		}
+		const before = moved === undefined ? undefined : await narrowedHolds(transaction, context, moved, noPath)
 		const [row] = await transaction.run<O>(node, guard(context, unchanged ? 'SelectQueryNode' : 'UpdateQueryNode', target.scope))
 		if (row !== undefined) {
 			checkVersion(context, row)
 			await referenceUpdated(context, run, transaction, changes, row)
 			if (moved !== undefined) {
 				await judgeInserted(transaction, context, moved.judged, rowKey(context, row))
+				await judgeNarrowed(transaction, context, moved, before, rowKey(context, row))
 			}
 			return row
 		}
@@ -1866,12 +1868,14 @@ export async function updateRow<O>(
 }
 
 /**
- * A move's destination, locked before the write, and the destination's insert condition, which judges the moved row
- * after it as an insert into the destination judges its row (`judgeInserted`).
+ * A move's destination, locked before the write, and the destination's insert conditions, which judge the moved row
+ * after it as an insert into the destination judges its row: the insert action's (`judgeInserted`), and each one
+ * `relationWhen` puts on a relation the destination `Ref` holds through (`judgeNarrowed`).
  */
 export interface MovedRow {
 	readonly destination: RefGrant
 	readonly judged: JudgedInsert | undefined
+	readonly narrowed: readonly NarrowedInsert[]
 }
 
 /** The key `row`, a write's acknowledgement, answers; `undefined` when it answers none as text. */
@@ -2220,6 +2224,7 @@ async function narrowedHolds(
 	transaction: Session,
 	context: TableContext,
 	prepared: Pick<PreparedInsert, 'destination' | 'narrowed'> | undefined,
+	paths?: PathRule,
 ): Promise<NarrowedHolds | undefined> {
 	const destination = prepared?.destination
 	if (prepared === undefined || destination === undefined || prepared.narrowed.length === 0) {
@@ -2230,7 +2235,7 @@ async function narrowedHolds(
 		const entry = prepared.narrowed[index]
 		if (entry !== undefined) relations[relations.length] = entry.relation
 	}
-	const rest = await heldBy(transaction, context, { ...destination, relations: holdsBesides(destination.relations, relations) })
+	const rest = await heldBy(transaction, context, { ...destination, relations: holdsBesides(destination.relations, relations) }, paths)
 	const alone: string[] = []
 	// One narrowed relation that passes leaves the destination as `lockDestination` found it; only with several may it be another's.
 	for (let index = 0; relations.length > 1 && index < relations.length; index++) {
@@ -2240,17 +2245,17 @@ async function narrowedHolds(
 			const hold = destination.relations[position]
 			if (hold !== undefined && hold.relation === relation) holds[holds.length] = hold
 		}
-		if (await heldBy(transaction, context, { ...destination, relations: holds, revealing: [], paths: [] })) alone[alone.length] = relation
+		if (await heldBy(transaction, context, { ...destination, relations: holds, revealing: [], paths: [] }, paths)) alone[alone.length] = relation
 	}
 	return { rest, alone }
 }
 
 /** Whether `grant` holds the destination: with no part left, never. */
-async function heldBy(transaction: Session, context: TableContext, grant: RefGrant): Promise<boolean> {
+async function heldBy(transaction: Session, context: TableContext, grant: RefGrant, paths?: PathRule): Promise<boolean> {
 	if (grant.relations.length === 0 && grant.revealing.length === 0 && grant.paths.length === 0) {
 		return false
 	}
-	return await destinationHeld(transaction, context, grant)
+	return await destinationHeld(transaction, context, grant, paths)
 }
 
 /**
@@ -2697,7 +2702,8 @@ export class DimensionTable<DB, P, T extends string> {
 	 * Moves the object to another container: the delete action at the source, the insert action at the target,
 	 * whose chain is checked against the database. Every chain column changes; children that copy them follow
 	 * through `ON UPDATE CASCADE` on their composite foreign key. The moved row is judged by the insert action's
-	 * condition, as an insert into the target is. Answers the acknowledgement and the new chain.
+	 * condition and by the `relationWhen` of each relation the target holds through, as an insert into the target is.
+	 * Answers the acknowledgement and the new chain.
 	 */
 	async move(
 		ref: Ref<DimensionOf<P, T>, ActionOf<P, T, 'delete'>>,
@@ -2734,7 +2740,14 @@ export class DimensionTable<DB, P, T extends string> {
 			}
 		}
 		const condition = ownEntry(context.model.when, target.action)
-		const moved: MovedRow = { destination: target, judged: condition === undefined ? undefined : { action: target.action, condition } }
+		const narrowed: NarrowedInsert[] = []
+		for (let index = 0; index < target.relations.length; index++) {
+			const relation = target.relations[index]?.relation ?? ''
+			const narrowing = relationCondition(context.model, relation, target.action)
+			if (narrowing !== undefined && !judgesRelation(narrowed, relation)) narrowed[narrowed.length] = { relation, condition: narrowing }
+		}
+		const judged = condition === undefined ? undefined : { action: target.action, condition }
+		const moved: MovedRow = { destination: target, judged, narrowed }
 		const acknowledged = await updateRow<Acknowledgement<P, T>>(context, storeRunner(context), addressed(scope), changes, undefined, moved)
 		return { ...acknowledged, chain }
 	}

@@ -135,7 +135,8 @@ the inserted table's rows at any depth (judged after the write, one would count 
 the row the path reached is locked too, so a row inserted meanwhile can only make it truer. It takes no `none`, no
 `some` under `not` and no `some` of the rows naming the inserted row: a row inserted before the commit could turn the
 first two false, which no lock holds, and no row names the third yet. A move puts a row into its target as an insert
-does, so the target's insert condition judges the moved row the same way, after the update in its transaction. An
+does, so the target's insert condition judges the moved row the same way, after the update in its transaction (and
+so does each relation's condition for that insert, section 10). An
 upsert's conflict update is judged on the stored row. A relation source's condition reads the source row and at most the one row its foreign key names
 (section 2), so under a reveal matched through a path it stays within four subqueries. It takes no `some`: rows naming
 a source row are written by their own table's writers, outside the delegation bound.
@@ -331,7 +332,9 @@ still narrows every grant.
   is dropped before the write; one with a path is judged after it, in the insert's transaction, with the rows on its
   paths locked first. What holds the destination without the path-narrowed relations (and, with several, each of them
   alone) is decided before the write, so the written row never holds its own insert: a row that fails one stands only
-  on what held the destination before it. Otherwise the insert is a 409 and the transaction fails.
+  on what held the destination before it. Otherwise the insert is a 409 and the transaction fails. A move into a
+  target held through a relation is judged the same way on the moved row after the update, whether the condition has
+  a path or not, and the moved row never holds its own move.
 - **A path writer's bound does not count a narrowed relation.** A writer that holds an action at the node only through
   a relation narrowed for that action is not counted as holding it (section 8): the bound reads no row condition.
 - **A child view's parent subquery leaves the parent's `relationWhen` out**, as it leaves the parent's `when` out. The

@@ -638,7 +638,9 @@ node the object's column stores (the statement compared it, so a `uuid` spelled 
   the row before the write (`narrowedDestination`), and judges one with a path after it (`judgeNarrowed`, rows on the
   path locked). What holds the destination without those relations, and each of several alone, is locked and decided
   before the write (`narrowedHolds`); a row that fails one stands only on that earlier answer or on a narrowed relation
-  it meets that held alone, else it is a 409 and fails the transaction. The written row never holds its own insert. A relation narrowed for an action does
+  it meets that held alone, else it is a 409 and fails the transaction. The written row never holds its own insert. A
+  move judges the target `Ref`'s narrowed relations the same way after the update, with or without a path, since it
+  has no row values before it (`MovedRow.narrowed`); the moved row never holds its own move. A relation narrowed for an action does
   not count towards a path writer's bound (`unnarrowed`). A view's parent subquery leaves the parent's `relationWhen`
   out, as its `when`; the view's own splits the subquery into the rest and one part per narrowed relation (`SplitReach`).
 - **A tenant-holding key** is one foreign key of exactly the column and every ancestor column the two tables share,

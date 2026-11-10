@@ -51,7 +51,7 @@ create table task_assignees (
 	task_id text not null,
 	project_id text not null,
 	principal_id text not null,
-	foreign key (task_id, project_id) references tasks (id, project_id)
+	foreign key (task_id, project_id) references tasks (id, project_id) on update cascade
 );
 create view task_digests as select id, id as task_id, title from tasks;
 `
@@ -371,6 +371,30 @@ function suite(dialect: 'sqlite' | 'postgres', open: () => Promise<Backend>, clo
 			await expect(into('k3')).rejects.toThrow(ConflictError)
 			expect(await into('k1')).toMatchObject({ chain: { project: 'p2' } })
 			expect(await placed()).toEqual(['k1:p2', 'k2:p1', 'k3:p1', 'k4:p2'])
+		})
+
+		test("a move through a relation is judged by that relation's condition for the target's insert on the moved row", async () => {
+			await backend.exec("insert into project_members (id, project_id, principal_id) values ('m2', 'p2', 'user:alice')")
+			const store = mover({})
+			const into = (id: string, relations: readonly string[]) =>
+				store.move(alice.ref('task', 'tasks.write', id, { project: 'p1' }, []), alice.ref('project', 'tasks.insert', 'p2', {}, relations))
+			// k3 has no public category, which the member's condition for tasks.insert asks of a row in p2.
+			await expect(into('k3', ['member'])).rejects.toThrow(ConflictError)
+			expect(await into('k1', ['member'])).toMatchObject({ chain: { project: 'p2' } })
+			// An IAM grant at the project is not narrowed by the member's condition.
+			expect(await into('k3', [])).toMatchObject({ chain: { project: 'p2' } })
+			expect(await placed()).toEqual(['k1:p2', 'k2:p1', 'k3:p2', 'k4:p2'])
+		})
+
+		test('a move that fails a narrowed relation stands only on what held its target before the write, never on the moved row', async () => {
+			await backend.exec("insert into project_members (id, project_id, principal_id) values ('m2', 'p2', 'user:alice')")
+			await backend.exec("insert into task_assignees (id, task_id, project_id, principal_id) values ('a3', 'k3', 'p1', 'user:alice')")
+			const store = mover({ reveals: { assignee: { to: 'project', actions: ['tasks.insert'] } } })
+			const into = (id: string, relations: readonly string[]) =>
+				store.move(alice.ref('task', 'tasks.write', id, { project: 'p1' }, []), alice.ref('project', 'tasks.insert', 'p2', {}, relations))
+			// The assignee row follows k3 into p2 and would reveal it, but no assignee row revealed p2 before the move.
+			await expect(into('k3', ['member', 'assignee'])).rejects.toThrow(ConflictError)
+			expect(await placed()).toEqual(['k1:p1', 'k2:p1', 'k3:p1', 'k4:p2'])
 		})
 
 		test("a child view takes its own relationWhen, never its parent's", async () => {
