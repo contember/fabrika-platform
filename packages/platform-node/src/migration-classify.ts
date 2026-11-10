@@ -37,6 +37,7 @@ import {
 	statementKind,
 	unicodeIdentifier,
 	wordAtDepthZero,
+	writeTargets,
 } from './sql-names'
 
 /** A database object a migration declares, named as the catalog check names it (`trigger deals.audit`). */
@@ -113,6 +114,14 @@ export interface ClassifyMigrationOptions {
 	readonly functions?: ReadonlySet<string>
 	/** The framework's own bundle, which alone may name the framework's `fabrika_*` tables. */
 	readonly framework?: boolean
+	/** The application's access tables, lowercased (`accessTables` of `@fabrika/db/tables`): no stored code writes one. */
+	readonly accessTables?: ReadonlySet<string>
+}
+
+/** What the whole migration set is classified against besides its schema. */
+export interface ClassifyMigrationsOptions {
+	/** The application's access tables, lowercased (`accessTables` of `@fabrika/db/tables`): no stored code writes one. */
+	readonly accessTables?: ReadonlySet<string>
 }
 
 export interface MigrationFile {
@@ -211,6 +220,7 @@ interface Context {
 	readonly schema: string
 	readonly functions: ReadonlySet<string>
 	readonly framework: boolean
+	readonly accessTables: ReadonlySet<string>
 	doBlocks: number
 }
 
@@ -249,6 +259,17 @@ function ownName(tokens: readonly SqlToken[], index: number, context: Context, l
 function refuseForeignDdl(tokens: readonly SqlToken[], context: Context, label: string): void {
 	const reached = ddlForeignSchema(tokens, context.schema)
 	if (reached !== undefined) throw new Refused(`${label} naming the schema ${reached}`, tokens[0]?.line ?? 1)
+}
+
+/**
+ * Access tables are written only by the platform: the data layer bounds who writes a row that hands out access. A
+ * function body or a rule action runs again after the migration, so neither may write one; a `DO` block runs once.
+ */
+function refuseAccessWrite(tokens: readonly SqlToken[], context: Context, label: string): void {
+	for (const target of writeTargets(tokens)) {
+		const name = target.name.toLowerCase()
+		if (context.accessTables.has(name)) throw new Refused(`a write of the access table ${name} in ${label}`, target.line)
+	}
 }
 
 /**
@@ -415,6 +436,7 @@ function createFunction(tokens: readonly SqlToken[], at: number, kind: 'function
 	const args = tokens.slice(named + 1, close)
 	checkQuery(ReadSql.clause(args), context, 'an argument default')
 	checkBody(body, context)
+	refuseAccessWrite(body, context, `a ${kind} body`)
 	deviate(out, kind, name, line)
 	out.changes.push({ change: 'create routine', object: { kind, name }, args: `${kind} (${argumentText(args)})`, line })
 }
@@ -510,10 +532,15 @@ function createRule(tokens: readonly SqlToken[], at: number, context: Context, o
 	const headerEnd = where !== undefined && where < doIndex ? where : doIndex
 	refuseForeignDdl(tokens.slice(0, headerEnd), context, 'CREATE RULE')
 	let action = skipWords(tokens, skipWords(tokens, doIndex + 1, 'ALSO'), 'INSTEAD')
-	if (isPunct(tokens[action], '(')) action++
+	if (isPunct(tokens[action], '(')) {
+		// The statement splitter cuts `(a; b)` at its `;`, so the actions after the first would be read as statements of their own.
+		if (closingParenthesis(tokens, action) === undefined) throw new Refused('a rule with several actions; write one rule per action', line)
+		action++
+	}
 	const first = upperWord(tokens[action])
 	if (first === undefined || !RULE_ACTIONS.has(first)) throw new Refused(`${first ?? statementKind(tokens.slice(action))} in a rule action`, line)
 	checkQuery(ReadSql.clause(tokens.slice(headerEnd)), context, 'a rule')
+	refuseAccessWrite(tokens.slice(action), context, 'a rule action')
 	declareObject(out, 'rule', `${table}.${name}`, line)
 }
 
@@ -978,7 +1005,13 @@ function classifyStatement(tokens: readonly SqlToken[], context: Context, out: C
  * `SET`/`RESET` are refused for every plan before this runs (`refusedStatement`).
  */
 export function classifyMigration(sql: string, schema: string, options: ClassifyMigrationOptions): MigrationClassification {
-	const context: Context = { schema, functions: options.functions ?? new Set(), framework: options.framework === true, doBlocks: 0 }
+	const context: Context = {
+		schema,
+		functions: options.functions ?? new Set(),
+		framework: options.framework === true,
+		accessTables: options.accessTables ?? new Set(),
+		doBlocks: 0,
+	}
 	const refused: MigrationRefusal[] = []
 	const deviations: MigrationDeviation[] = []
 	const adoptions: FileAdoption[] = []
@@ -1069,9 +1102,20 @@ export function migrationManifest(classifications: readonly MigrationClassificat
  * Classifies a whole migration set in order. A body or an expression may call a function any file of the set
  * declares; the manifest is what the catalog check admits.
  */
-export function classifyMigrations(files: readonly MigrationFile[], schema: string): MigrationSetClassification {
+export function classifyMigrations(
+	files: readonly MigrationFile[],
+	schema: string,
+	options: ClassifyMigrationsOptions = {},
+): MigrationSetClassification {
 	const functions = new Set(files.flatMap((file) => declaredFunctions(file.sql, schema)))
-	const classified = files.map((file) => classifyMigration(file.sql, schema, { file: file.name, functions, framework: file.framework === true }))
+	const classified = files.map((file) =>
+		classifyMigration(file.sql, schema, {
+			file: file.name,
+			functions,
+			framework: file.framework === true,
+			...(options.accessTables === undefined ? {} : { accessTables: options.accessTables }),
+		})
+	)
 	const withOverloads = refuseOverloads(classified)
 	return { files: withOverloads, objects: migrationManifest(withOverloads) }
 }

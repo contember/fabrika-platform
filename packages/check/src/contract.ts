@@ -19,6 +19,7 @@ import { parseShellModule } from './slice'
 import { checkTrustedResolution } from './trust'
 
 export { ContractError } from '@fabrika/app/contract'
+export { accessTables } from '@fabrika/db/tables'
 export { type Finding, formatFinding } from './finding'
 export { contractReaderInputs } from './inputs'
 export { CONTRACT_FILE, MIGRATIONS_DIR, TABLES_FILE } from './layout'

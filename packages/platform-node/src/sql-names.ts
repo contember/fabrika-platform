@@ -890,6 +890,25 @@ export function parenthesizedTarget(tokens: readonly SqlToken[]): { readonly sta
 	return undefined
 }
 
+/**
+ * The relations the data-changing statements among `tokens` write, in order: the name after `INSERT INTO`,
+ * `MERGE INTO`, `UPDATE [ONLY]` and `DELETE FROM [ONLY]`. A parenthesized target is `parenthesizedTarget`'s to refuse.
+ */
+export function writeTargets(tokens: readonly SqlToken[]): { readonly name: string; readonly line: number }[] {
+	const targets: { readonly name: string; readonly line: number }[] = []
+	for (let index = 0; index < tokens.length; index++) {
+		const word = upperWord(tokens[index])
+		let at: number
+		if (word === 'INTO' && (upperWord(tokens[index - 1]) === 'INSERT' || upperWord(tokens[index - 1]) === 'MERGE')) at = index + 1
+		else if (word === 'UPDATE') at = skipWords(tokens, index + 1, 'ONLY')
+		else if (word === 'DELETE' && upperWord(tokens[index + 1]) === 'FROM') at = skipWords(tokens, index + 2, 'ONLY')
+		else continue
+		const target = objectNameAt(tokens, at)
+		if (target !== undefined) targets.push({ name: target.name, line: tokens[at]?.line ?? 1 })
+	}
+	return targets
+}
+
 /** The relations a DML statement or a query names, in order: what its static text reads or writes. */
 export function dmlRelations(read: ReadSql): NameReference[] {
 	return nameReferences(read).filter((reference) => reference.role === 'relation')

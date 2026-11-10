@@ -18,6 +18,7 @@ export {
 	classifyMigration,
 	type ClassifyMigrationOptions,
 	classifyMigrations,
+	type ClassifyMigrationsOptions,
 	type DatabaseObject,
 	type DatabaseObjectKind,
 	declaredFunctions,
