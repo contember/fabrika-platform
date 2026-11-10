@@ -7,7 +7,15 @@ import * as reader05 from '@fabrika/check-0.5/contract'
 import * as reader06 from '@fabrika/check-0.6/contract'
 import * as reader07 from '@fabrika/check-0.7/contract'
 import * as reader08 from '@fabrika/check-0.8/contract'
-import { CHECKER_VERSION, ContractError, contractReaderInputs, ContractSourceError, readContractSource } from '@fabrika/check/contract'
+import {
+	accessTables,
+	CHECKER_VERSION,
+	ContractError,
+	contractReaderInputs,
+	ContractSourceError,
+	readContractSource,
+	readTablesDefinition,
+} from '@fabrika/check/contract'
 import { from04, from06, from07, from08, fromOlder, type SnapshotContract } from './formats'
 
 /** The package whose locked version is the application's framework release: every contract imports it. */
@@ -20,7 +28,12 @@ export const MIGRATION_GUIDE = 'https://github.com/contember/fabrika-platform/bl
 const RELEASE = /^(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?$/
 
 export type ReaderOutcome =
-	| { readonly ok: true; readonly contract: SnapshotContract }
+	| {
+		readonly ok: true
+		readonly contract: SnapshotContract
+		/** The application's access tables, lowercased, which the migration classifier keeps stored code from writing. */
+		readonly accessTables: readonly string[]
+	}
 	/** The reader refused the contract; only the number of problems leaves it, never the checkout's text. */
 	| { readonly ok: false; readonly problems: number }
 
@@ -33,12 +46,20 @@ export interface ContractReader {
 	read(files: ReadonlyMap<string, string>): ReaderOutcome
 }
 
+/** A release before relation grants (ADR-0073) declares no table that hands out access. */
+const OLDER_ACCESS_TABLES: readonly string[] = []
+
 const currentReader: ContractReader = {
 	checker: CHECKER_VERSION,
 	inputs: contractReaderInputs,
 	read(files) {
 		try {
-			return { ok: true, contract: { contract: readContractSource(files) } }
+			const tables = readTablesDefinition(files)
+			return {
+				ok: true,
+				contract: { contract: readContractSource(files, tables ?? {}) },
+				accessTables: tables === null ? [] : accessTables(tables),
+			}
 		} catch (error) {
 			if (error instanceof ContractSourceError) return { ok: false, problems: error.findings.length }
 			if (error instanceof ContractError) return { ok: false, problems: error.problems.length }
@@ -52,7 +73,7 @@ const reader08Release: ContractReader = {
 	inputs: reader08.contractReaderInputs,
 	read(files) {
 		try {
-			return { ok: true, contract: from08(reader08.readContractSource(files)) }
+			return { ok: true, contract: from08(reader08.readContractSource(files)), accessTables: OLDER_ACCESS_TABLES }
 		} catch (error) {
 			if (error instanceof reader08.ContractSourceError) return { ok: false, problems: error.findings.length }
 			if (error instanceof reader08.ContractError) return { ok: false, problems: error.problems.length }
@@ -66,7 +87,7 @@ const reader07Release: ContractReader = {
 	inputs: reader07.contractReaderInputs,
 	read(files) {
 		try {
-			return { ok: true, contract: from07(reader07.readContractSource(files)) }
+			return { ok: true, contract: from07(reader07.readContractSource(files)), accessTables: OLDER_ACCESS_TABLES }
 		} catch (error) {
 			if (error instanceof reader07.ContractSourceError) return { ok: false, problems: error.findings.length }
 			if (error instanceof reader07.ContractError) return { ok: false, problems: error.problems.length }
@@ -80,7 +101,7 @@ const reader06Release: ContractReader = {
 	inputs: reader06.contractReaderInputs,
 	read(files) {
 		try {
-			return { ok: true, contract: from06(reader06.readContractSource(files)) }
+			return { ok: true, contract: from06(reader06.readContractSource(files)), accessTables: OLDER_ACCESS_TABLES }
 		} catch (error) {
 			if (error instanceof reader06.ContractSourceError) return { ok: false, problems: error.findings.length }
 			if (error instanceof reader06.ContractError) return { ok: false, problems: error.problems.length }
@@ -94,7 +115,7 @@ const reader05Release: ContractReader = {
 	inputs: reader05.contractReaderInputs,
 	read(files) {
 		try {
-			return { ok: true, contract: fromOlder(reader05.readContractSource(files)) }
+			return { ok: true, contract: fromOlder(reader05.readContractSource(files)), accessTables: OLDER_ACCESS_TABLES }
 		} catch (error) {
 			if (error instanceof reader05.ContractSourceError) return { ok: false, problems: error.findings.length }
 			if (error instanceof reader05.ContractError) return { ok: false, problems: error.problems.length }
@@ -108,7 +129,7 @@ const reader04Release: ContractReader = {
 	inputs: reader04.contractReaderInputs,
 	read(files) {
 		try {
-			return { ok: true, contract: from04(reader04.readContractSource(files)) }
+			return { ok: true, contract: from04(reader04.readContractSource(files)), accessTables: OLDER_ACCESS_TABLES }
 		} catch (error) {
 			if (error instanceof reader04.ContractSourceError) return { ok: false, problems: error.findings.length }
 			if (error instanceof reader04.ContractError) return { ok: false, problems: error.problems.length }

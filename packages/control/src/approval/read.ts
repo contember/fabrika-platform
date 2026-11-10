@@ -131,11 +131,11 @@ export async function readAccessSnapshot(
 		}
 		for (const path of missing) files.set(path, await commit.read(inRepository(path), SNAPSHOT_LIMITS.readerFileBytes))
 	}
-	const read = readContract(reader, files)
+	const { contract: read, accessTables } = readContract(reader, files)
 	if (read.contract.app !== appId) {
 		throw new SnapshotRefused('contract-app-mismatch')
 	}
-	const { databaseCode, fileAdoptions } = readDatabaseCode(migrations, appId, settled)
+	const { databaseCode, fileAdoptions } = readDatabaseCode(migrations, appId, settled, accessTables)
 	return {
 		version: 1,
 		...read,
@@ -147,7 +147,10 @@ export async function readAccessSnapshot(
 	}
 }
 
-function readContract(reader: ContractReader, files: ReadonlyMap<string, string>): SnapshotContract {
+function readContract(
+	reader: ContractReader,
+	files: ReadonlyMap<string, string>,
+): { readonly contract: SnapshotContract; readonly accessTables: readonly string[] } {
 	let outcome: ReaderOutcome
 	try {
 		outcome = reader.read(files)
@@ -156,7 +159,7 @@ function readContract(reader: ContractReader, files: ReadonlyMap<string, string>
 		throw new SnapshotRefused('contract-unreadable')
 	}
 	if (!outcome.ok) throw new SnapshotRefused('contract-invalid', outcome.problems)
-	return outcome.contract
+	return { contract: outcome.contract, accessTables: outcome.accessTables }
 }
 
 /**
@@ -168,11 +171,12 @@ function readDatabaseCode(
 	migrations: readonly ReadMigration[],
 	appId: string,
 	settled: readonly MigrationEntry[],
+	accessTables: readonly string[],
 ): { databaseCode: MigrationDeviation[]; fileAdoptions: FileAdoption[] } {
 	if (migrations.length === 0) return { databaseCode: [], fileAdoptions: [] }
 	let classified: MigrationSetClassification
 	try {
-		classified = classifyMigrations(migrations, applicationDatabaseSchema(appId))
+		classified = classifyMigrations(migrations, applicationDatabaseSchema(appId), { accessTables: new Set(accessTables) })
 	} catch {
 		// An unexpected classifier error may quote the checkout; only the code leaves this function.
 		throw new SnapshotRefused('migrations-unreadable')

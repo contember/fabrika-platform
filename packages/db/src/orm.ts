@@ -9,7 +9,6 @@ import { BinaryOperationNode, OperatorNode, ValueNode } from 'kysely'
 import { refScope } from './authority'
 import { freeze, hasOwn, inSet, isSafeInteger, nameSet, namesOf, ownDescriptor, ownKeys, ownNames, parseList, setOwn } from './builtins'
 import { type CapabilityGrant, describeGrant, type RefGrant } from './capability'
-import { conditionReach } from './conditions'
 import type { InvocationTransaction, Session } from './database'
 import {
 	columnOf,
@@ -43,7 +42,7 @@ import {
 	withCursorColumns,
 } from './nodes'
 import type { DataKind, TargetForm, UnscopedMode } from './orm-types'
-import { delegates, modelOf, namesAction, type TableModels, updatableBy, visibleFor } from './policy'
+import { accessTablesOf, delegates, modelOf, namesAction, type TableModels, updatableBy, visibleFor } from './policy'
 import { type SqlSite, type SqlTag, sqlTag } from './sql'
 import {
 	actionShape,
@@ -192,38 +191,10 @@ export function dataAccess(parts: DataLayerParts): DataAccess {
 					}
 					return scopeTerms(parts.contextOf(table), capability, use)
 				},
-				accessTables(parts.models),
+				accessTablesOf(parts.models),
 			)
 		},
 	})
-}
-
-/**
- * The tables whose rows hand out access, which no raw statement writes, lowercased as the tag compares names: a relation
- * source or a path reveal, whose writer the layer bounds; a member-revealing table, whose key the layer generates so no
- * write revives a node a stale grant still names; and the tables a principal path or a relation's condition reads, whose
- * columns decide whom a source row names and what it confers.
- */
-function accessTables(models: TableModels): readonly string[] {
-	const tables: string[] = []
-	const names = ownKeys(models)
-	for (let index = 0; index < names.length; index++) {
-		const model = modelOf(models, names[index] ?? '')
-		if (model !== undefined && delegates(model)) {
-			tables[tables.length] = model.name.toLowerCase()
-		}
-		for (let position = 0; model !== undefined && position < model.confers.length; position++) {
-			const source = model.confers[position]
-			const path = source?.principalPath
-			if (path !== undefined) tables[tables.length] = path.table.toLowerCase()
-			if (source?.when !== undefined) {
-				conditionReach(source.when, (table) => {
-					tables[tables.length] = table.toLowerCase()
-				})
-			}
-		}
-	}
-	return tables
 }
 
 function runnerOf(site: DataSite): Runner {

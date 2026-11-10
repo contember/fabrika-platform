@@ -657,9 +657,10 @@ describe('review round 2: coarse, fail-closed rules', () => {
 		// A policy's WITH CHECK and a CASE expression's THEN begin no query.
 		expect(refusal('CREATE POLICY p ON deals USING (true) WITH CHECK (mystery(1))')).toBe('a call of mystery')
 		expect(refusal('CREATE POLICY p ON deals WITH CHECK (true)')).toBeUndefined()
-		// A rule with several actions is split at its `;` as statements are, and its second action refused, before any
-		// CTE list is read; a CTE in a subquery of a single action is read.
-		expect(refusal('CREATE RULE r AS ON INSERT TO deals DO INSTEAD (SELECT 1; WITH u (a) AS (SELECT 1) SELECT * FROM u)')).toBe('WITH')
+		// A rule with several actions is split at its `;` as statements are: the rule is refused, and its second action too,
+		// before any CTE list is read; a CTE in a subquery of a single action is read.
+		expect(classify('CREATE RULE r AS ON INSERT TO deals DO INSTEAD (SELECT 1; WITH u (a) AS (SELECT 1) SELECT * FROM u)').refused.map((r) => r.reason))
+			.toEqual(['a rule with several actions; write one rule per action', 'WITH'])
 		expect(refusal('CREATE RULE r AS ON INSERT TO deals DO INSTEAD (SELECT * FROM (WITH u (a) AS (SELECT 1) SELECT * FROM u) s)')).toBeUndefined()
 		for (const sql of bodies('BEGIN x := CASE WHEN true THEN 1 ELSE 2 END; END')) {
 			expect({ sql, reason: refusal(sql) }).toEqual({ sql, reason: undefined })
@@ -691,5 +692,145 @@ describe('review round 2: coarse, fail-closed rules', () => {
 		expect(refusal('CREATE TABLE t (LIKE pg_authid)')).toBe('CREATE TABLE naming the schema pg_catalog')
 		expect(refusal('CREATE TABLE t (a oid REFERENCES pg_class (oid))')).toBe('CREATE TABLE naming the schema pg_catalog')
 		expect(refusal('TRUNCATE pg_largeobject')).toBe('TRUNCATE naming the schema pg_catalog')
+	})
+})
+
+describe('access tables: only the platform writes them', () => {
+	const ACCESS = new Set(['grants', 'members'])
+	const classifyAccess = (sql: string) => classifyMigrations([{ name: FILE, sql }], SCHEMA, { accessTables: ACCESS }).files[0]?.refused ?? []
+	const body = (statement: string) =>
+		`CREATE FUNCTION touch() RETURNS trigger LANGUAGE plpgsql AS $$\nBEGIN\n\t${statement}\n\tRETURN NEW;\nEND\n$$;\n`
+
+	test('refuses a function body that inserts, updates or deletes an access table, in any spelling, at the line', () => {
+		for (
+			const statement of [
+				'INSERT INTO grants (id) VALUES (NEW.id);',
+				'insert into app_notes.GRANTS (id) values (new.id);',
+				'UPDATE ONLY "members" SET role = \'owner\' WHERE id = NEW.id;',
+				'DELETE FROM ONLY grants WHERE id = OLD.id;',
+				'WITH moved AS (DELETE FROM notes WHERE id = OLD.id RETURNING id) INSERT INTO grants (id) SELECT id FROM moved;',
+			]
+		) {
+			expect(classifyAccess(body(statement))).toEqual([
+				expect.objectContaining({ reason: expect.stringMatching(/^a write of the access table (grants|members) in a function body$/), line: 3 }),
+			])
+		}
+	})
+
+	test('refuses a procedure body and a rule action that write one', () => {
+		expect(classifyAccess('CREATE PROCEDURE grant_all() LANGUAGE sql AS $$ INSERT INTO grants (id) SELECT id FROM notes $$;\n')[0]?.reason).toBe(
+			'a write of the access table grants in a procedure body',
+		)
+		expect(classifyAccess('CREATE RULE copy_grant AS ON INSERT TO notes DO ALSO INSERT INTO grants (id) VALUES (NEW.id);\n')[0]?.reason).toBe(
+			'a write of the access table grants in a rule action',
+		)
+		expect(
+			classifyAccess(
+				'CREATE RULE keep AS ON DELETE TO notes DO INSTEAD (UPDATE notes SET gone = true WHERE id = OLD.id; DELETE FROM members WHERE id = OLD.id);\n',
+			)[0]?.reason,
+		)
+			.toBe('a rule with several actions; write one rule per action')
+		expect(classifyAccess('CREATE RULE keep AS ON DELETE TO notes DO INSTEAD (DELETE FROM members WHERE id = OLD.id);\n')[0]?.reason)
+			.toBe('a write of the access table members in a rule action')
+	})
+
+	test('a trigger is refused through the function it executes', () => {
+		const sql = `${
+			body('INSERT INTO grants (id) VALUES (NEW.id);')
+		}CREATE TRIGGER notes_touch AFTER INSERT ON notes FOR EACH ROW EXECUTE FUNCTION touch();\n`
+		expect(classifyAccess(sql).map((refusal) => refusal.reason)).toEqual(['a write of the access table grants in a function body'])
+	})
+
+	test('ordinary database code still passes: a body that reads an access table or writes another, a trigger, a view, a rule and a backfill', () => {
+		const sql = [
+			body(
+				'IF EXISTS (SELECT 1 FROM grants WHERE id = NEW.id) THEN UPDATE notes SET seen = true WHERE id = NEW.id; END IF;\n\tINSERT INTO note_log (id) VALUES (NEW.id);',
+			),
+			'CREATE TRIGGER notes_touch AFTER INSERT ON grants FOR EACH ROW EXECUTE FUNCTION touch();',
+			'CREATE VIEW granted AS SELECT id FROM grants;',
+			'CREATE RULE log_note AS ON INSERT TO notes DO ALSO INSERT INTO note_log (id) VALUES (NEW.id);',
+			'INSERT INTO grants (id) SELECT id FROM notes;',
+			"DO $$ BEGIN UPDATE members SET role = 'owner' WHERE role IS NULL; END $$;",
+			'',
+		].join('\n')
+		expect(classifyAccess(sql)).toEqual([])
+	})
+
+	test('without the set nothing is refused for it', () => {
+		expect(classifyMigrations([{ name: FILE, sql: body('INSERT INTO grants (id) VALUES (NEW.id);') }], SCHEMA).files[0]?.refused).toEqual([])
+	})
+
+	test('a write of a view over an access table is refused like one, through views and renames, in any file', () => {
+		const views = (writer: string) =>
+			classifyMigrations(
+				[
+					{
+						name: '20261011120000_views.sql',
+						sql: 'CREATE VIEW granted AS SELECT id, role FROM grants;\nCREATE OR REPLACE VIEW app_notes.granted_ids AS SELECT id FROM granted;\n',
+					},
+					{ name: '20261011130000_rename.sql', sql: 'ALTER VIEW granted_ids RENAME TO grant_ids;\n' },
+					{ name: '20261011140000_writer.sql', sql: writer },
+				],
+				SCHEMA,
+				{ accessTables: ACCESS },
+			).files.flatMap((file) => file.refused.map((refusal) => refusal.reason))
+		expect(views('CREATE RULE copy AS ON INSERT TO notes DO ALSO INSERT INTO granted (id) VALUES (NEW.id);\n')).toEqual([
+			'a write of the view granted over an access table in a rule action',
+		])
+		expect(views(body('UPDATE grant_ids SET id = NEW.id;'))).toEqual(['a write of the view grant_ids over an access table in a function body'])
+		expect(
+			views(
+				'CREATE VIEW titles AS SELECT id, title FROM notes;\nCREATE RULE copy AS ON INSERT TO notes DO ALSO INSERT INTO titles (id) VALUES (NEW.id);\n',
+			),
+		)
+			.toEqual([])
+	})
+
+	test('a BEFORE or INSTEAD OF trigger and any rule on an access table, or a view over one, are refused; an AFTER trigger is not', () => {
+		const sql = (statement: string) => `${body('RETURN NULL;')}${statement}\n`
+		expect(classifyAccess(sql('CREATE TRIGGER keep BEFORE DELETE ON grants FOR EACH ROW EXECUTE FUNCTION touch();'))[0]?.reason).toBe(
+			'a BEFORE trigger on the access table grants',
+		)
+		expect(classifyAccess(sql('CREATE TRIGGER keep BEFORE INSERT OR UPDATE ON app_notes."members" FOR EACH ROW EXECUTE FUNCTION touch();'))[0]?.reason)
+			.toBe('a BEFORE trigger on the access table members')
+		expect(
+			classifyAccess(
+				`CREATE VIEW granted AS SELECT id FROM grants;\n${sql('CREATE TRIGGER put INSTEAD OF INSERT ON granted FOR EACH ROW EXECUTE FUNCTION touch();')}`,
+			)[0]?.reason,
+		).toBe('an INSTEAD OF trigger on the view granted over an access table')
+		expect(classifyAccess('CREATE RULE keep AS ON DELETE TO grants DO INSTEAD NOTHING;\n')[0]?.reason).toBe('a rule on the access table grants')
+		expect(classifyAccess(sql('CREATE TRIGGER seen AFTER INSERT OR UPDATE ON grants FOR EACH ROW EXECUTE FUNCTION touch();'))).toEqual([])
+	})
+
+	test('a rename to an access table or to a view over one is refused; a rename of either is not', () => {
+		const staged = `CREATE TABLE staging (id uuid PRIMARY KEY);\n${body('RETURN NULL;')}`
+		expect(
+			classifyAccess(
+				`${staged}CREATE TRIGGER keep BEFORE DELETE ON staging FOR EACH ROW EXECUTE FUNCTION touch();\nALTER TABLE staging RENAME TO grants;\n`,
+			),
+		)
+			.toEqual([{ file: FILE, line: 9, reason: 'a rename of staging to the access table grants' }])
+		expect(classifyAccess('CREATE TABLE staging (id uuid PRIMARY KEY);\nALTER TABLE IF EXISTS app_notes.staging RENAME TO "Members";\n')[0]?.reason)
+			.toBe('a rename of staging to the access table members')
+		expect(classifyAccess('CREATE VIEW titles AS SELECT id FROM notes;\nALTER VIEW titles RENAME TO grants;\n')[0]?.reason).toBe(
+			'a rename of titles to the access table grants',
+		)
+		expect(
+			classifyAccess(
+				'CREATE VIEW granted AS SELECT id FROM grants;\nCREATE VIEW titles AS SELECT id FROM notes;\nALTER VIEW titles RENAME TO granted;\n',
+			)[0]
+				?.reason,
+		).toBe('a rename of titles to the view granted over an access table')
+		expect(
+			classifyAccess(
+				'CREATE VIEW granted AS SELECT id FROM grants;\nALTER VIEW granted RENAME TO grant_ids;\nALTER TABLE grants RENAME TO grants_v2;\n',
+			),
+		)
+			.toEqual([])
+	})
+
+	test('a SQLite trigger that writes an access table is refused: the statement splitter cuts its body, as every SQLite trigger body', () => {
+		const sql = 'CREATE TRIGGER notes_grant AFTER INSERT ON notes BEGIN INSERT INTO grants (id) VALUES (1); END;\n'
+		expect(classifyAccess(sql).map((refusal) => refusal.reason)).toEqual(['CREATE TRIGGER without EXECUTE FUNCTION', 'END'])
 	})
 })

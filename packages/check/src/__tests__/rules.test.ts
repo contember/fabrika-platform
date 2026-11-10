@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { join } from 'node:path'
 import type { RuleId } from '../finding'
 import { RULE_IDS } from '../finding'
+import { checkMigrationClassification } from '../rules/platform-migrations'
 import { STRUCTURE_RULE_IDS } from '../rules/structure'
 import { generatedTestHeader } from '../rules/tests'
 import { generatedTests, scaffoldInputs } from '../scaffold'
@@ -1255,6 +1256,28 @@ describe('bunfig.toml is read as Bun reads it', () => {
 	test('a quoted registry key is another registry', async () => {
 		expect(await bunfig('[install]\n"registry" = "https://registry.example.test"\n')).toEqual([
 			'2 another registry can serve a package the platform trusts by name',
+		])
+	})
+})
+
+describe('migration-refused: the access tables', () => {
+	const MIGRATION = 'db/migrations/20261024120000_touch.sql'
+	const at = (sql: string, access: readonly string[]) =>
+		checkMigrationClassification(new Map([[MIGRATION, sql]]), 'notes', access).map((finding) => `${finding.file}:${finding.line} ${finding.message}`)
+
+	test('a function body that writes one is refused at its line, naming the table; another table passes', () => {
+		const sql =
+			'CREATE FUNCTION touch() RETURNS trigger LANGUAGE plpgsql AS $$\nBEGIN\n\tINSERT INTO grants (id) VALUES (NEW.id);\n\tRETURN NEW;\nEND\n$$;\n'
+		expect(at(sql, ['grants'])).toEqual([
+			`${MIGRATION}:3 a write of the access table grants in a function body is not allowed: Control refuses the deploy that brings this migration`,
+		])
+		expect(at(sql, ['members'])).toEqual([])
+	})
+
+	test('a SQLite trigger that writes one is refused too: the statement splitter cuts its body, as every SQLite trigger body', () => {
+		expect(at('CREATE TRIGGER notes_grant AFTER INSERT ON notes BEGIN INSERT INTO grants (id) VALUES (1); END;\n', ['grants'])).toEqual([
+			`${MIGRATION}:1 CREATE TRIGGER without EXECUTE FUNCTION is not allowed: Control refuses the deploy that brings this migration`,
+			`${MIGRATION}:1 END is not allowed: Control refuses the deploy that brings this migration`,
 		])
 	})
 })

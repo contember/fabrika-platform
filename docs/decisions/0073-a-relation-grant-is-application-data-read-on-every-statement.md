@@ -95,6 +95,11 @@ bounded delegation:
   key column.
 - `ctx.sql` on a writing site never names a source table or a table its principal path or its `when` reads, `unscoped`
   never writes a source table, and no seed helper reaches production.
+- Access tables are written only by the platform: the migration classifier refuses a function or procedure body or a
+  rule action that writes one of those tables or a member-revealing table (`accessTables` of `@fabrika/db/tables`), or
+  a view over one, a `BEFORE` or `INSTEAD OF` trigger or a rule on either, and a rename of another relation to
+  either's name, in Control's snapshot read and in `fabrika-check`. A backfill in a migration still writes them; it
+  runs once, inside the migration.
 
 The writer need not hold the actions the relation grants. That is the exception to S8, and this record names it: the
 bound replaces "holds what it gives". An approver sees each `confers` and its `assign` as a widening in the approval

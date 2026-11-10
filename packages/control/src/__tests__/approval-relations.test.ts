@@ -2,11 +2,14 @@
 // confers it and an action's condition are read from source, shown with their effect, and refused for a framework
 // release that would not enforce them.
 
+import { sha256Hex } from '@fabrika/auth-core'
 import { readContractSource } from '@fabrika/check/contract'
 import { describe, expect, test } from 'bun:test'
 import { relationFields, relationGrantsRefusal } from '../approval/enforcement'
+import { readAccessSnapshot, SnapshotRefused } from '../approval/read'
 import type { AccessSnapshot } from '../approval/snapshot'
 import { classifyAccess } from './helpers/access'
+import { memoryCommits } from './helpers/commits'
 import { kitFiles } from './helpers/kit-contract'
 
 interface RelationOptions {
@@ -308,5 +311,38 @@ describe('publication refuses relation grants an older release would not enforce
 		expect(relationGrantsRefusal(contract, '0.9.0-dev.13')).toBeNull()
 		expect(relationGrantsRefusal(contract, '0.9.0-dev.100')).toBeNull()
 		expect(relationGrantsRefusal(contract, '0.9.1-dev.0')).toBeNull()
+	})
+})
+
+describe('access tables in the migrations', () => {
+	const writer = (table: string) =>
+		`CREATE FUNCTION touch() RETURNS trigger LANGUAGE plpgsql AS $$\nBEGIN\n\tINSERT INTO ${table} (id) VALUES (NEW.id);\n\tRETURN NEW;\nEND\n$$;\n`
+	const read = async (source: Map<string, string>, sql: string, applied?: string) => {
+		const migrations: Record<string, string> = { 'db/migrations/20261012110000_touch.sql': sql }
+		if (applied !== undefined) migrations['db/migrations/20261012100000_applied.sql'] = applied
+		const commit = await memoryCommits({ ...Object.fromEntries(source), ...migrations }).open({
+			repoUrl: 'github.com/acme/notes',
+			commitSha: 'c'.repeat(40),
+			signal: new AbortController().signal,
+		})
+		const settled = applied === undefined ? [] : [{ name: '20261012100000_applied.sql', checksum: sha256Hex(applied) }]
+		return readAccessSnapshot(commit, '', 'notes', settled)
+	}
+
+	test('a function that writes a table that confers a relation, or one its principal path reads, refuses the read', async () => {
+		await expect(read(files(), writer('note_members'))).rejects.toEqual(new SnapshotRefused('migrations-refused', 1))
+		const path = files({ confers: "{ principal: 'person_id.principal_id', expires: 'expires_at', assign: { maxDays: 30 } }" })
+		await expect(read(path, writer('people'))).rejects.toEqual(new SnapshotRefused('migrations-refused', 1))
+	})
+
+	test('a new rename to an access table refuses the read, though the code it would bind is already applied', async () => {
+		const applied = 'CREATE TABLE staging (id uuid PRIMARY KEY);\nCREATE RULE keep AS ON DELETE TO staging DO INSTEAD NOTHING;\n'
+		await expect(read(files(), 'ALTER TABLE staging RENAME TO note_members;\n', applied)).rejects.toEqual(new SnapshotRefused('migrations-refused', 1))
+		expect((await read(files(), 'ALTER TABLE staging RENAME TO staged;\n', applied)).databaseCode?.map((deviation) => deviation.kind)).toEqual(['rule'])
+	})
+
+	test('a function that writes another table, and a backfill of an access table, are read', async () => {
+		expect((await read(files(), writer('people'))).databaseCode?.map((deviation) => deviation.object)).toEqual(['touch'])
+		expect((await read(files(), 'INSERT INTO note_members (id) SELECT id FROM notes;\n')).databaseCode).toBeUndefined()
 	})
 })

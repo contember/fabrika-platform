@@ -82,6 +82,17 @@ Read this before moving a service onto this driver.
   escape or on any database object the manifest folded through that file does not name. The classifier
   feeds the approval (Control cannot reach the database); the catalog check is its runtime witness, and
   `@fabrika/db`'s codegen runs the same `databaseCodeQuery` against the whole manifest at every start.
+- **No stored code writes an access table.** Access tables are written only by the platform: given
+  `ClassifyMigrationsOptions.accessTables` (`accessTables` of `@fabrika/db/tables`, lowercased), the classifier
+  refuses a function or procedure body or a rule action whose `INSERT INTO`, `MERGE INTO`, `UPDATE` or
+  `DELETE FROM` target is one, or a view the set declares over one (`accessViews`, through views and renames: a rule
+  action writes with its owner's privileges), a `BEFORE` or `INSTEAD OF` trigger or any rule on either, which
+  decide what such a table stores without a write, and a rename of another relation to either's name, which would
+  bind that relation's code to it. An `AFTER` trigger can only refuse a statement and stays a deviation; so does a
+  default or generated expression on an access table that calls a declared function. A `DO` block and a backfill
+  run once inside the migration and stay paved. Only migrations an environment has not applied are classified, so
+  stored code an applied migration declared keeps running when its table becomes an access table later. Control's snapshot read and `fabrika-check` pass the set; the boot runner has no policies and passes none.
+  A rule with several actions is refused: the statement splitter would cut its action list.
 - **No framework name in an application migration.** The framework's tables (`fabrika_*`) share the
   schema and hold webhook secrets, deliveries and job leases; `isFrameworkName` refuses every reference,
   case-insensitive, quoted or not, in bodies too. Only the bundle the plan marks `frameworkBundle` (the

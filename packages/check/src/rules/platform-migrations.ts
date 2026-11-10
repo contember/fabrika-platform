@@ -24,15 +24,16 @@ const migrationTexts = (files: ReadonlyMap<string, string>): MigrationText[] =>
 	}).sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0))
 
 /**
- * Every statement Control's classifier refuses, at its file and line. Control refuses a deploy whose new migration holds
+ * Every statement Control's classifier refuses, at its file and line, against the application's access tables. Control refuses a deploy whose new migration holds
  * one (`migrations-refused`), and its run log names neither, so this is where the author finds it. Every file is
  * checked, applied or not: the checker does not know which an environment holds.
  */
-export const checkMigrationClassification = (files: ReadonlyMap<string, string>, appId: string): Finding[] => {
+export const checkMigrationClassification = (files: ReadonlyMap<string, string>, appId: string, accessTables: readonly string[]): Finding[] => {
 	const texts = migrationTexts(files)
 	if (texts.length === 0) return []
 	const paths = new Map(texts.map((text) => [text.name, text.path]))
-	return classifyMigrations(texts.map(({ name, sql }) => ({ name, sql })), applicationDatabaseSchema(appId)).files.flatMap((file) =>
+	const options = { accessTables: new Set(accessTables) }
+	return classifyMigrations(texts.map(({ name, sql }) => ({ name, sql })), applicationDatabaseSchema(appId), options).files.flatMap((file) =>
 		file.refused.map((refusal): Finding => ({
 			file: paths.get(refusal.file) ?? `${MIGRATIONS_DIR}${refusal.file}`,
 			line: refusal.line,

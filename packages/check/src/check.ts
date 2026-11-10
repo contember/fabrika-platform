@@ -1,6 +1,6 @@
 import { type AnyContract, compileContract, ContractError } from '@fabrika/app/contract'
 import { type ContractArtifact, egressAdmits, type EgressEntry, parseEgressEntry } from '@fabrika/auth-core'
-import { type TablePolicies, tablePolicies, type Tables } from '@fabrika/db/tables'
+import { accessTables, type TablePolicies, tablePolicies, type Tables } from '@fabrika/db/tables'
 import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { type AstNode, type ParsedModule, parseModule, walk } from './ast'
@@ -318,7 +318,9 @@ export const checkApplication = async (input: CheckInput): Promise<Finding[]> =>
 	const declaredTables = tables !== undefined && literal.length === 0 ? readTablesValue(graph, tables, new ReaderProblems()) : null
 	const artifact = read?.ok === true ? compiledArtifact(read.contract, declaredTables) : null
 	findings.push(...contractDependentFindings(dependent, artifact === null ? null : compiledReach(artifact)))
-	if (artifact !== null) findings.push(...checkMigrationClassification(tree.files, artifact.app))
+	if (artifact !== null) {
+		findings.push(...checkMigrationClassification(tree.files, artifact.app, declaredTables === null ? [] : accessTables(declaredTables)))
+	}
 	if (applicationDialect(tree.files) === 'sqlite') {
 		if (artifact !== null) findings.push(...checkCloudflareContract(artifact))
 		findings.push(...checkCurrentTimestampDefaults(tree.files))

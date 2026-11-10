@@ -16,6 +16,7 @@ import { freeze, namesOf, ownEntry, ownKeys, setOwn } from './builtins'
 import { conditionArtifact, type ConditionModel } from './conditions'
 import { PolicyError } from './errors'
 import {
+	accessTablesOf,
 	type MemberRevealModel,
 	modelOf,
 	type RelationSource,
@@ -131,6 +132,15 @@ export function applicationRowsPlan<DB, P>(
 	rows: Readonly<Record<string, Readonly<Record<string, unknown>>>>,
 ): ApplicationRowsPlan {
 	return planApplicationRows(tableModels(tables), rows)
+}
+
+/**
+ * The tables whose rows hand out access, lowercased: a relation source or a path reveal, a member-revealing table, and
+ * the tables a principal path or a relation's condition reads. Only the data layer writes them; the migration classifier
+ * refuses database code that does.
+ */
+export function accessTables<DB, P>(tables: Tables<DB, P>): readonly string[] {
+	return accessTablesOf(tableModels(tables))
 }
 
 /** Every table's policy in the form the contract artifact carries, by table name. */

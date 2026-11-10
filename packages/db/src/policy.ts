@@ -18,6 +18,7 @@ import {
 	type ConditionHop,
 	type ConditionModel,
 	type ConditionPolicy,
+	conditionReach,
 	type ConditionTable,
 	type HopRule,
 	insertProblem,
@@ -1823,6 +1824,34 @@ export function delegates(model: TableModel): boolean {
 		if (model.reveals[index]?.path !== undefined) return true
 	}
 	return model.confers.length > 0 || model.memberReveals.length > 0
+}
+
+/**
+ * The tables whose rows hand out access, which no raw statement writes, lowercased as the tag compares names: a relation
+ * source or a path reveal, whose writer the layer bounds; a member-revealing table, whose key the layer generates so no
+ * write revives a node a stale grant still names; and the tables a principal path or a relation's condition reads, whose
+ * columns decide whom a source row names and what it confers.
+ */
+export function accessTablesOf(models: TableModels): readonly string[] {
+	const tables: string[] = []
+	const names = ownKeys(models)
+	for (let index = 0; index < names.length; index++) {
+		const model = modelOf(models, names[index] ?? '')
+		if (model !== undefined && delegates(model)) {
+			tables[tables.length] = model.name.toLowerCase()
+		}
+		for (let position = 0; model !== undefined && position < model.confers.length; position++) {
+			const source = model.confers[position]
+			const path = source?.principalPath
+			if (path !== undefined) tables[tables.length] = path.table.toLowerCase()
+			if (source?.when !== undefined) {
+				conditionReach(source.when, (table) => {
+					tables[tables.length] = table.toLowerCase()
+				})
+			}
+		}
+	}
+	return tables
 }
 
 function containsLink(chain: readonly Container[], dimension: string): boolean {
