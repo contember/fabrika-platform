@@ -154,6 +154,9 @@ term reads the container at every statement: `T.<link> in (select C.<key> from C
 - The container declares the same path through a column of its own, which no update writes. One container deep: a
   path through the container's own container is refused.
 - The guard admits the one extra subquery by the container's table and key, the way it admits a chain link.
+- The container's own `when` is not applied: the subquery tests the container's path column only, as a child view's
+  parent subquery leaves the parent's `when` out ([ADR-0072](0072-a-view-is-a-read-only-table.md)). The row's own
+  `when` narrows it; a row that must follow its container's condition states that condition on a path of its own.
 - A reveal is not matched through such a path. A relation above the dimension, under its source's condition, would
   read the revealing row, the container, the path's table, the source and the far row: five subqueries, past the
   guard's bound of four. The reveal is declared on the container instead.

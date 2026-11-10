@@ -622,7 +622,8 @@ through a relation (`~rel`, `@fabrika/auth-core`). `authority.ts` builds every p
   the row through its nearest container's own path instead (`throughContainer`, `SecondaryPath.via`):
   `T.<link> in (select C.<key> from C where <C's term>)`, `<link>` the row's nearest containment column and `<column>`
   the container's own single-column path for the dimension. Nothing is stamped, so a move or the container's column is
-  read as it stands; the guard admits `(C, key)` beside the path's table. A reveal is not matched through such a path:
+  read as it stands; the guard admits `(C, key)` beside the path's table. C's `when` is not applied, as a view's
+  parent subquery leaves its parent's out: the row's own `when` narrows the row. A reveal is not matched through such a path:
   a relation above it under a source's condition would nest five deep.
 - **`reveals`** makes a row a relation reaches reveal its ancestor node in `to` for the listed actions (those its
   roles name in `via`), while the reveal's `when` admits the row. A reveal matched through `readThrough` on a table with
