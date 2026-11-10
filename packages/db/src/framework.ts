@@ -24,7 +24,7 @@ export type { DeliveryClaim, NewWebhookBinding, WebhookBinding, WebhookTables } 
 export type { JobLeases, JobLeaseState, JobOutcome, LeaseChange, LeaseProjection, OverdueClaim } from './job-leases'
 export type { FinishWakes, JobWakes, NewWake, Wake, WakeReason } from './job-wakes'
 export type { DataAccess, DataHandles, DataSite } from './orm'
-export type { FrameworkTables, Locator, ProvisionalBinding, RelationCheck, RevealCheck } from './registry'
+export type { FrameworkTables, Locator, MemberRevealCheck, PathCheck, ProvisionalBinding, RelationCheck, RevealCheck } from './registry'
 export type { SqlMode, SqlSite, SqlTag, SqlValue } from './sql'
 export type { FileColumnRef, QuarantinedStoredFile, ServedFile, StagedFile, StoredFileMeta, StoredFiles, StoredFileStatus } from './stored-files'
 

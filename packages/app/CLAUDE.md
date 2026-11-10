@@ -590,8 +590,14 @@ vocabulary (`packages/db/CLAUDE.md`).
   it names the caller at the object or a container on its chain, or reaches a row that reveals one of them for the
   action, now (`Ref`'s relations; empty for an IAM grant); `over` puts the relations into its `Within` beside the IAM
   values. An entry of a relation the contract does not declare counts for none. `memberReveals` adds the caller's
-  grants at nodes whose rows reveal the `over` dimension to their members. Every statement then re-reads the relation
-  rows (`@fabrika/db`'s CLAUDE.md), so the framework caches nothing about them.
+  grants at nodes whose rows reveal the `over` dimension to their members; `on` and `in` mint a `Ref` through such a
+  row (`#revealedOn`, the db's `revealsToMembers`) and carry the grants it matched (`Ref`'s revealing). A table's
+  `writeThrough` lets them mint a `Ref` through its path (`#throughCandidates`, the db's `holdsThrough`), carrying the
+  grants and relations at the path's dimension that matched (`Ref`'s paths). Every statement then re-reads the
+  relation, revealing and path rows (`@fabrika/db`'s CLAUDE.md), so the framework caches nothing about them. The request
+  frame's `standing` hands the db what the caller holds of an action in a dimension (empty when it holds none), which
+  bounds the writer of a path column and of a member reveal's path under `assign`; a frame with no caller has none, so a
+  job or webhook that names a node there is refused.
 - **An `attachment()` output answers a file, encoded by the framework only** (`implement/attachment.ts`). Its value
   is the zod schema of the rows' array, marked (`attachmentOf`), so the handler's types, projection and validation are
   a list's; `describeContract` describes it as that array beside `attachment`, and `buildArtifact` writes the row's
@@ -768,7 +774,8 @@ vocabulary (`packages/db/CLAUDE.md`).
 - **A binding is written by a procedure that declares `binds: '<webhook>'`** (`webhookBindings`): `ctx.webhooks('<name>')`
   names only that webhook, `.bind(capability, account)` and `.unbind(capability, id)` take a capability of this
   request on the bound value (a `Ref` of the webhook's dimension, an `AppCapability` for `'app'`) and run in the
-  procedure's transaction. A webhook bound to `'app'` has one row per binding with the scope `APP_BINDING_SCOPE`; its
+  procedure's transaction. A `Ref` held through a relation, a member reveal or a secondary path is refused
+  (`conditional_binding`): a binding outlives the rows every statement of such a `Ref` re-reads. A webhook bound to `'app'` has one row per binding with the scope `APP_BINDING_SCOPE`; its
   handler mints `ctx.app('<action>')` for a declared action, as a job does, and holds no `ctx.refs`.
 - **A webhook delivery is checked in a fixed order**: binding (404), signature over the
   raw body with that binding's secret (401), account (403), input after dropping every

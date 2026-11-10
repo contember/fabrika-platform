@@ -4,10 +4,15 @@ import { admissions } from './admissions'
 import {
 	activeRow,
 	conditioned,
+	everyPath,
+	heldThrough,
 	type LayerRelation,
 	type MemberReveals,
 	memberTerms,
 	namesPrincipal,
+	noPath,
+	type PathRule,
+	pathTerms,
 	refScope,
 	relationGate,
 	relationSource,
@@ -41,6 +46,7 @@ import {
 	type AppGrant,
 	type CapabilityAuthority,
 	type CapabilityGrant,
+	type ContainerGrant,
 	describeGrant,
 	MAX_WITHIN_VALUES,
 	type Ref,
@@ -97,6 +103,7 @@ import {
 	selectNode,
 	updateNode,
 	valueList,
+	valuesNode,
 } from './nodes'
 import { dataAccess } from './orm'
 import {
@@ -118,6 +125,8 @@ import {
 	namesAction,
 	type Operation,
 	type ParentOf,
+	type PathWriter,
+	pathWriters,
 	type PolicyRow,
 	type RevealModel,
 	type SecondaryPath,
@@ -171,6 +180,13 @@ export interface TableContext {
 	readonly subqueries: Readonly<Record<string, readonly string[]>>
 	/** A child view's parent, which every capability reads the view's rows through; `undefined` for any other table. */
 	readonly through: ViewParent | undefined
+	/** The path columns whose insert hands out actions, each with the table owning the node it names (`pathWriters`). */
+	readonly writers: readonly PathBound[]
+}
+
+/** A path column an insert writes under its bound, and the table that owns the dimension it names. */
+export interface PathBound extends PathWriter {
+	readonly owner: TableModel
 }
 
 /** A child view's parent link, with the parent's context: its model without conditions, as only the view's own narrow a read. */
@@ -490,7 +506,15 @@ function addMemberTerms(context: TableContext, grant: WithinGrant, predicates: O
 /** The relation terms of a `Within`'s relations; a relation whose dimension this table lies at no node of reaches none of its rows. */
 function addRelationTerms(context: TableContext, grant: WithinGrant, reads: boolean, predicates: OperationNode[], now: Date): void {
 	for (let index = 0; index < grant.relations.length; index++) {
-		const terms = relationTerms(context.relations, context.model, grant.relations[index] ?? '', grant.principal, grant.action, now, reads)
+		const terms = relationTerms(
+			context.relations,
+			context.model,
+			grant.relations[index] ?? '',
+			grant.principal,
+			grant.action,
+			now,
+			reads ? everyPath : noPath,
+		)
 		for (let position = 0; position < terms.length; position++) {
 			const term = terms[position]
 			if (term !== undefined) predicates[predicates.length] = term
@@ -552,11 +576,11 @@ export function selfLinks(model: TableModel): readonly Container[] {
 	return links
 }
 
-/** This object, over the whole chain the Ref carries. */
-export function objectPredicate(context: TableContext, capability: unknown, operation: Operation): OperationNode {
+/** This object, over the whole chain the Ref carries; through the secondary paths `paths` admits, by default its action's. */
+export function objectPredicate(context: TableContext, capability: unknown, operation: Operation, paths?: PathRule): OperationNode {
 	const scope = dimensionScope(context.model)
 	const grant = refGrant(context, capability, scope.dimension, operation)
-	return refScope(context.relations, context.model, selfLinks(context.model), grant, new Date())
+	return refScope(context, context.model, selfLinks(context.model), grant, new Date(), undefined, paths ?? heldThrough(grant.action))
 }
 
 /** Rows of a dimension table within the scope values of its list dimension. */
@@ -576,9 +600,9 @@ export function parentPredicate(context: TableContext, grant: RefGrant, key?: st
 	if (through !== undefined) {
 		const parent = through.context
 		const now = new Date()
-		return viewScope(context.model, through, grant.action, refScope(parent.relations, parent.model, selfLinks(parent.model), grant, now), now, row)
+		return viewScope(context.model, through, grant.action, refScope(parent, parent.model, selfLinks(parent.model), grant, now), now, row)
 	}
-	return refScope(context.relations, context.model, context.model.chain, grant, new Date(), row)
+	return refScope(context, context.model, context.model.chain, grant, new Date(), row)
 }
 
 /**
@@ -750,11 +774,13 @@ export function scopeTerms(context: TableContext, capability: unknown, use: Scop
 	if (use !== 'read') {
 		checkWriteTarget(context, grant, use)
 	}
-	// The fragment renders column tests only; a relation's subquery or an action's condition would be left out.
-	if ((grant.kind !== 'app' && grant.relations.length > 0) || hasOwn(model.when, grant.action)) {
+	// The fragment renders column tests only; a relation's, a member reveal's or a path's subquery, or an action's condition, would be left out.
+	const held = grant.kind !== 'app'
+		&& (grant.relations.length > 0 || (grant.kind === 'ref' && (grant.revealing.length > 0 || grant.paths.length > 0)))
+	if (held || hasOwn(model.when, grant.action)) {
 		throw new CapabilityError(
 			'unenforceable',
-			`ctx.sql.scope cannot render a relation or a condition of ${grant.action} on ${model.name}: read it through ctx.db`,
+			`ctx.sql.scope cannot render a relation, a member reveal, a secondary path or a condition of ${grant.action} on ${model.name}: read it through ctx.db`,
 		)
 	}
 	// Nor the subquery through the parent row, which alone places a child view's rows.
@@ -1446,16 +1472,16 @@ export function keyOf(model: TableModel): string {
  * Locks the destination row `for share` and checks that it still lies where the Ref's chain says. Without it, a
  * Ref minted before its object moved would insert into, or move rows into, the object's new container.
  */
-async function lockDestination(transaction: Session, context: TableContext, grant: RefGrant): Promise<void> {
+async function lockDestination(transaction: Session, context: TableContext, grant: RefGrant, paths?: PathRule): Promise<void> {
 	const owner = context.destination
 	if (owner === undefined) {
-		// No table owns the destination, so a Ref held through relations is checked on the rows that hold it.
-		if (grant.relations.length > 0) await lockRelationRow(transaction, context, grant)
+		// No table owns the destination, so a Ref held through relations or member reveals is checked on the rows that hold it.
+		if (grant.relations.length > 0 || grant.revealing.length > 0) await lockHoldingRow(transaction, context, grant)
 		return
 	}
 	const chain = linksPredicate(owner.name, linkValues(owner.name, selfLinks(owner), grant))
-	// A Ref held through a relation inserts only while a row of it still names the caller at the destination.
-	const gate = relationGate(context.relations, owner, grant, new Date())
+	// A Ref held through a relation or a member reveal inserts only while a row of it still holds the destination.
+	const gate = relationGate(context, owner, grant, new Date(), paths ?? heldThrough(grant.action))
 	const scope = gate === undefined ? chain : allOf([chain, gate])
 	const node = lockNode(owner.name, keyOf(owner), scope)
 	const rows = await transaction.run(node, {
@@ -1486,6 +1512,8 @@ export async function insertRow<O>(
 		if (prepared !== undefined) {
 			await checkPrincipalAssign(transaction, context, prepared.writer, given)
 			await checkRevealAssign(transaction, context, prepared.writer, given)
+			await checkMemberRevealAssign(transaction, context, prepared.writer, given)
+			await checkPathWriters(transaction, context, prepared.writer, given)
 		}
 		const [row] = await transaction.run<O>(insertNode(context.model.name, values, answer(context)), guard(context, 'InsertQueryNode', undefined))
 		if (row === undefined) {
@@ -1729,6 +1757,7 @@ export async function updateRow<O>(
 	given: ReadonlyMap<string, Primitive | null>,
 	expectedVersion: OperationNode | undefined,
 	destination?: RefGrant,
+	destinationPaths?: PathRule,
 ): Promise<O> {
 	const { name: table, version } = context.model
 	const changes = boundValues(context, given)
@@ -1739,7 +1768,7 @@ export async function updateRow<O>(
 		: updateNode(table, changes, version, where, answer(context))
 	return run.write(async (transaction) => {
 		if (destination !== undefined) {
-			await lockDestination(transaction, context, destination)
+			await lockDestination(transaction, context, destination, destinationPaths)
 		}
 		const [row] = await transaction.run<O>(node, guard(context, unchanged ? 'SelectQueryNode' : 'UpdateQueryNode', target.scope))
 		if (row !== undefined) {
@@ -2115,6 +2144,8 @@ export function insertPrepared(context: TableContext, run: Runner, prepared: Pre
 		}
 		await checkPrincipalAssign(transaction, context, prepared.writer, prepared.row)
 		await checkRevealAssign(transaction, context, prepared.writer, prepared.row)
+		await checkMemberRevealAssign(transaction, context, prepared.writer, prepared.row)
+		await checkPathWriters(transaction, context, prepared.writer, prepared.row)
 		const written = await insertOnConflict(context, run, transaction, prepared.row, conflict)
 		// A conflict writes no new row: `nothing` reads none, and `update` is judged on the stored row.
 		if (written['inserted'] === true) {
@@ -2206,6 +2237,120 @@ async function checkRevealAssign(
 			)
 		}
 	}
+}
+
+/**
+ * An inserted row whose path column a member reveal matches through, under the reveal's `assign`: without `self`, the
+ * insert is refused while its writer holds a grant the reveal counts (one of its actions, at the node itself) at the
+ * node the column names. The grants are the request's own; the database compares them with the node's key, so every
+ * spelling of a key it reads as one (a `uuid`) is that node. Work with no request caller has none to judge, and is
+ * refused.
+ */
+async function checkMemberRevealAssign(
+	transaction: Session,
+	context: TableContext,
+	writer: string,
+	row: ReadonlyMap<string, Primitive | null>,
+): Promise<void> {
+	const model = context.model
+	const authority = runtimeOf(context.connection).capabilities
+	for (let index = 0; index < model.memberReveals.length; index++) {
+		const reveal = model.memberReveals[index]
+		const path = reveal?.path
+		const value = path === undefined ? undefined : row.get(path.column)
+		if (reveal === undefined || path === undefined || reveal.assign === undefined || reveal.assign.self || value === undefined || value === null) {
+			continue
+		}
+		for (let position = 0; position < reveal.actions.length; position++) {
+			const action = reveal.actions[position] ?? ''
+			const standing = authority.standing?.(path.dimension, action)
+			if (standing === undefined || standing.principal !== writer) {
+				throw new ConflictError(
+					`a row of ${model.name} names in ${path.column} a ${path.dimension} its member reveal reveals to, and its writer's grants cannot be judged under assign without self: work with no request caller`,
+				)
+			}
+			if (standing.values === 'all' || standing.values.length === 0) continue
+			const scope = AndNode.create(equals(path.table, path.key, value), inList(path.table, path.key, standing.values))
+			const rows = await transaction.run(locateNode(path.table, [path.key], scope), {
+				root: 'SelectQueryNode',
+				table: path.table,
+				joins: {},
+				scope,
+			})
+			if (rows.length > 0) {
+				throw new ConflictError(
+					`a row of ${model.name} names in ${path.column} a ${path.dimension} where its writer holds a grant the member reveal counts, which the reveal's assign.self does not allow`,
+				)
+			}
+		}
+	}
+}
+
+/**
+ * An inserted row's path column that hands out actions (`writeThrough`): its writer must hold every one of them at the
+ * node the column names, as a grant there or above it, a relation row naming it there, or a revealing row. The node's
+ * row is locked `FOR SHARE` first, so it stays where it lies until the commit, and so is each row the writer holds it
+ * through; IAM grants are the request's own. Judged before the insert, so the inserted row never counts. A writer
+ * outside the bound, or work with no caller, is a 409 and nothing is written.
+ */
+async function checkPathWriters(
+	transaction: Session,
+	context: TableContext,
+	writer: string,
+	row: ReadonlyMap<string, Primitive | null>,
+): Promise<void> {
+	const model = context.model
+	const authority = runtimeOf(context.connection).capabilities
+	for (let index = 0; index < context.writers.length; index++) {
+		const bound = context.writers[index]
+		const value = bound === undefined ? undefined : row.get(bound.path.column)
+		if (bound === undefined || value === undefined || value === null) continue
+		const { path, owner } = bound
+		const refused = (action: string) =>
+			new ConflictError(
+				`a row of ${model.name} names in ${path.column} a ${path.dimension} where its writer does not hold ${action}, which the path hands out (writeThrough)`,
+			)
+		const keyed = equals(owner.name, keyOf(owner), value)
+		const locked = await transaction.run(lockNode(owner.name, keyOf(owner), keyed), {
+			root: 'SelectQueryNode',
+			table: owner.name,
+			joins: {},
+			scope: keyed,
+			lock: 'share',
+		})
+		const chain = locked.length === 0 ? null : await chainOf(owner, transaction, String(value))
+		for (let position = 0; position < bound.actions.length; position++) {
+			const action = bound.actions[position] ?? ''
+			const standing = authority.standing?.(path.dimension, action)
+			if (chain === null || standing === undefined || standing.principal !== writer) throw refused(action)
+			if (holdsByGrant(standing, String(value), chain)) continue
+			const holding: RefGrant = {
+				kind: 'ref',
+				dimension: path.dimension,
+				action,
+				principal: writer,
+				id: String(value),
+				chain,
+				relations: standing.relations,
+				revealing: standing.revealing,
+				paths: [],
+			}
+			if (!(await holdingRowLocked(transaction, context, holding))) throw refused(action)
+		}
+	}
+}
+
+/** Whether `standing`'s grants hold its action at `node`: everywhere, there, or at a container `chain` places it in. */
+function holdsByGrant(standing: WithinGrant, node: string, chain: ReadonlyMap<string, string>): boolean {
+	if (standing.values === 'all' || includes(standing.values, node)) {
+		return true
+	}
+	for (let index = 0; index < standing.containers.length; index++) {
+		const container = standing.containers[index]
+		const at = container === undefined ? undefined : chain.get(container.dimension)
+		if (container !== undefined && at !== undefined && includes(container.values, at)) return true
+	}
+	return false
 }
 
 /** `DimensionTable.insert` over a capability nobody type-checked; the table probe of `@fabrika/db/testing` calls it too. */
@@ -2300,8 +2445,15 @@ export class DimensionTable<DB, P, T extends string> {
 				`${context.model.name} hands out access, so a row is never moved: insert a new one`,
 			)
 		}
-		const scope = objectPredicate(context, ref, 'delete')
+		// A move rewrites containment, which a grant at a node a path names gives no standing in: both Refs follow containment.
 		const target = refGrant(context, to, container.dimension, 'insert')
+		if (refGrant(context, ref, dimensionScope(context.model).dimension, 'delete').paths.length > 0 || target.paths.length > 0) {
+			throw new CapabilityError(
+				'unenforceable',
+				`a Ref held through a secondary path never moves a row of ${context.model.name}: a move follows containment`,
+			)
+		}
+		const scope = objectPredicate(context, ref, 'delete', noPath)
 		const values = linkValues(context.model.name, context.model.chain, target)
 		const changes = new Map<string, Primitive | null>()
 		stampChain(changes, values)
@@ -2312,7 +2464,7 @@ export class DimensionTable<DB, P, T extends string> {
 				setOwn(chain, entry.link.dimension, entry.value)
 			}
 		}
-		const acknowledged = await updateRow<Acknowledgement<P, T>>(context, storeRunner(context), addressed(scope), changes, undefined, target)
+		const acknowledged = await updateRow<Acknowledgement<P, T>>(context, storeRunner(context), addressed(scope), changes, undefined, target, noPath)
 		return { ...acknowledged, chain }
 	}
 
@@ -2624,7 +2776,8 @@ export interface ScopedDatabase<DB, P> extends DataLayer {
 export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
 	const models = tableModels(tables)
 	const connection: Connection = { runtime: undefined }
-	const { relations, members, subqueries } = layerReach(models)
+	const layer = layerReach(models)
+	const { relations, members, subqueries } = layer
 
 	function contextFor(table: string, mode: 'dimension' | 'child' | 'app'): TableContext {
 		const model = typeof table === 'string' ? modelOf(models, table) : undefined
@@ -2657,6 +2810,13 @@ export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
 			}
 		}
 		const shape = shapeOf(model, joinable)
+		const writers: PathBound[] = []
+		const declared = pathWriters(models, model)
+		for (let index = 0; index < declared.length; index++) {
+			const writer = declared[index]
+			const owner = writer === undefined ? undefined : modelOf(models, writer.path.table)
+			if (writer !== undefined && owner !== undefined) writers[writers.length] = freeze({ ...writer, owner })
+		}
 		return freeze({
 			model,
 			parent,
@@ -2669,6 +2829,7 @@ export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
 			members,
 			subqueries,
 			through,
+			writers: freeze(writers),
 		})
 	}
 
@@ -2699,8 +2860,18 @@ export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
 			return freeze({
 				locate: async (dimension: string, id: string, using?: Session) => locateObject(models, bound, dimension, id, using),
 				relates: async (relation: string, node: string, principal: string) => relationHolds(relations, subqueries, bound, relation, node, principal),
-				reveals: async (relation: string, dimension: string, node: string, principal: string) =>
-					revealHolds(relations, subqueries, bound, relation, dimension, node, principal),
+				reveals: async (relation: string, dimension: string, node: string, principal: string, action: string) =>
+					revealHolds(relations, subqueries, bound, relation, dimension, node, principal, action),
+				holdsThrough: async (
+					dimension: string,
+					id: string,
+					action: string,
+					principal: string,
+					relations: readonly string[],
+					paths: readonly ContainerGrant[],
+				) => heldThroughPaths(models, layer, bound, dimension, id, action, principal, relations, paths),
+				revealsToMembers: async (revealing: string, values: readonly string[], dimension: string, node: string, action: string) =>
+					membersRevealed(members, subqueries, bound, revealing, values, dimension, node, action),
 				release() {
 					if (connection.runtime === bound) {
 						connection.runtime = undefined
@@ -2888,14 +3059,34 @@ async function relationHolds(
 
 /**
  * Locks a row that still holds the Ref's action for its principal at the Ref's object or a container on its chain: a
- * source row naming it there, or a row the relation reaches that reveals that node. None is 404, and nothing is written.
+ * source row naming it there, a row the relation reaches that reveals that node, or a row at a node the Ref's revealing
+ * grants name that reveals it to its members. None is 404, and nothing is written.
  */
-async function lockRelationRow(transaction: Session, context: TableContext, grant: RefGrant): Promise<void> {
+async function lockHoldingRow(transaction: Session, context: TableContext, grant: RefGrant): Promise<void> {
+	if (!(await holdingRowLocked(transaction, context, grant))) {
+		throw new NotFoundError(`no row holds ${grant.action} for the Ref's principal at ${grant.dimension} ${grant.id} any more; obtain a fresh Ref`)
+	}
+}
+
+/** Locks the first row that holds `grant`'s action for its principal at its object or a container on its chain, if any. */
+async function holdingRowLocked(transaction: Session, context: TableContext, grant: RefGrant): Promise<boolean> {
 	const now = new Date()
 	const nodeOf = (dimension: string) => (dimension === grant.dimension ? grant.id : grant.chain.get(dimension))
+	const candidates: { table: string; column: string; scope: OperationNode }[] = []
+	for (let index = 0; index < grant.revealing.length; index++) {
+		const revealing = grant.revealing[index]
+		const reveals = revealing === undefined ? [] : ownEntry(context.members, revealing.dimension) ?? []
+		for (let position = 0; revealing !== undefined && position < reveals.length; position++) {
+			const reveal = reveals[position]
+			const held = reveal !== undefined && includes(reveal.actions, grant.action)
+				&& (reveal.path === undefined || includes(reveal.path.writes, grant.action))
+			const revealed = reveal === undefined || !held ? undefined : nodeOf(reveal.dimension)
+			if (reveal === undefined || revealed === undefined || revealing.values.length === 0) continue
+			candidates[candidates.length] = { table: reveal.table, column: reveal.key, scope: memberAddress(reveal, revealing.values, revealed, now) }
+		}
+	}
 	for (let index = 0; index < grant.relations.length; index++) {
 		const source = relationSource(context.relations, grant.relations[index] ?? '')
-		const candidates: { table: string; column: string; scope: OperationNode }[] = []
 		const node = nodeOf(source.dimension)
 		if (node !== undefined) {
 			const address = allOf([equals(source.table, source.node, node), namesPrincipal(source, grant.principal)])
@@ -2908,7 +3099,8 @@ async function lockRelationRow(transaction: Session, context: TableContext, gran
 		}
 		for (let position = 0; position < source.reveals.length; position++) {
 			const reveal = source.reveals[position]
-			const held = reveal !== undefined && reveal.path === undefined && includes(reveal.actions, grant.action)
+			const held = reveal !== undefined && includes(reveal.actions, grant.action)
+				&& (reveal.path === undefined || includes(reveal.path.writes, grant.action))
 			const revealed = reveal === undefined || !held ? undefined : nodeOf(reveal.dimension)
 			if (reveal !== undefined && revealed !== undefined) {
 				candidates[candidates.length] = {
@@ -2918,21 +3110,28 @@ async function lockRelationRow(transaction: Session, context: TableContext, gran
 				}
 			}
 		}
-		for (let position = 0; position < candidates.length; position++) {
-			const candidate = candidates[position]
-			if (candidate === undefined) continue
-			const rows = await transaction.run(lockNode(candidate.table, candidate.column, candidate.scope), {
-				root: 'SelectQueryNode',
-				table: candidate.table,
-				joins: {},
-				scope: candidate.scope,
-				lock: 'share',
-				subqueries: context.subqueries,
-			})
-			if (rows.length > 0) return
-		}
 	}
-	throw new NotFoundError(`no row holds ${grant.action} for the Ref's principal at ${grant.dimension} ${grant.id} any more; obtain a fresh Ref`)
+	for (let position = 0; position < candidates.length; position++) {
+		const candidate = candidates[position]
+		if (candidate === undefined) continue
+		const rows = await transaction.run(lockNode(candidate.table, candidate.column, candidate.scope), {
+			root: 'SelectQueryNode',
+			table: candidate.table,
+			joins: {},
+			scope: candidate.scope,
+			lock: 'share',
+			subqueries: context.subqueries,
+		})
+		if (rows.length > 0) return true
+	}
+	return false
+}
+
+/** `R.<ancestor> = $node and (R.<key> in (values) and <when>)`: a row at a node `values` name that reveals `node` now. */
+function memberAddress(reveal: MemberRevealModel, values: readonly string[], node: string, now: Date): OperationNode {
+	const named = inList(reveal.table, reveal.key, values)
+	const held = reveal.when === undefined ? named : allOf([named, conditionNode(reveal.table, reveal.when, now)])
+	return AndNode.create(equals(reveal.table, reveal.column, node), ParensNode.create(held))
 }
 
 /** `R.<ancestor> = $node and (R.<ancestor> in (<revealed nodes>))`: a row of the reveal's table revealing `node` now. */
@@ -2954,6 +3153,7 @@ async function revealHolds(
 	dimension: string,
 	node: string,
 	principal: string,
+	action: string,
 ): Promise<boolean> {
 	if (typeof node !== 'string' || node.length === 0 || typeof principal !== 'string' || principal.length === 0) {
 		throw new QueryRefusedError('row_address', `a node ${relation} reveals is addressed by its node and its principal, non-empty strings`)
@@ -2961,14 +3161,122 @@ async function revealHolds(
 	const source = relationSource(relations, relation)
 	for (let index = 0; index < source.reveals.length; index++) {
 		const reveal = source.reveals[index]
-		// A reveal matched through a secondary path holds reads under a Within only; no Ref is minted through it.
-		if (reveal === undefined || reveal.path !== undefined || reveal.dimension !== dimension) continue
+		// A reveal matched through a secondary path holds a Ref's action only where the path holds it (`writeThrough`).
+		if (reveal === undefined || reveal.dimension !== dimension || !includes(reveal.actions, action)) continue
+		if (reveal.path !== undefined && !includes(reveal.path.writes, action)) continue
 		const address = revealAddress(source, reveal, node, principal, new Date())
 		const context: GuardContext = { root: 'SelectQueryNode', table: reveal.table, joins: {}, scope: address, subqueries }
 		const rows = await sessionOf(runtime).run<Readonly<Record<string, unknown>>>(locateNode(reveal.table, [reveal.column], address), context)
 		if (rows.length > 0) return true
 	}
 	return false
+}
+
+/**
+ * Of `values`, nodes of `revealing` at which the caller holds `action`, the ones whose row reveals `node` of `dimension`
+ * for it now: one guarded select per member reveal of `revealing` to `dimension` that lists `action`.
+ */
+async function membersRevealed(
+	members: MemberReveals,
+	subqueries: Readonly<Record<string, readonly string[]>>,
+	runtime: DataLayerRuntime,
+	revealing: string,
+	values: readonly string[],
+	dimension: string,
+	node: string,
+	action: string,
+): Promise<readonly string[]> {
+	if (typeof node !== 'string' || node.length === 0 || !isArray(values) || values.length > MAX_WITHIN_VALUES) {
+		throw new QueryRefusedError('row_address', `a node ${revealing} reveals is addressed by its node and at most ${MAX_WITHIN_VALUES} grants`)
+	}
+	for (let index = 0; index < values.length; index++) {
+		if (typeof values[index] !== 'string' || values[index] === '') {
+			throw new QueryRefusedError('row_address', `a grant at ${revealing} names its node, a non-empty string`)
+		}
+	}
+	const reveals = ownEntry(members, revealing) ?? []
+	const found: string[] = []
+	for (let index = 0; values.length > 0 && index < reveals.length; index++) {
+		const reveal = reveals[index]
+		if (reveal === undefined || reveal.dimension !== dimension || !includes(reveal.actions, action)) continue
+		if (reveal.path !== undefined && !includes(reveal.path.writes, action)) continue
+		const scope = memberAddress(reveal, values, node, new Date())
+		const context: GuardContext = { root: 'SelectQueryNode', table: reveal.table, joins: {}, scope, subqueries }
+		// Grouped, not limited: through a path many rows name one grant's node, and every grant matched is carried.
+		const rows = await sessionOf(runtime).run<Readonly<Record<string, unknown>>>(valuesNode(reveal.table, reveal.key, scope), context)
+		for (let position = 0; position < rows.length; position++) {
+			const key = ownEntry(rows[position] ?? {}, reveal.key)
+			if (typeof key === 'string' && !includes(found, key)) found[found.length] = key
+		}
+	}
+	return freeze(found)
+}
+
+/**
+ * Of `relations` and `paths`, the caller's relations and grants of `action` that reach the object `id` of `dimension`
+ * through a relation row, a reveal or a secondary path that holds the action for a `Ref` (`writeThrough`): one guarded
+ * select per candidate. What `on` and `in` mint a `Ref` held through a path with.
+ */
+async function heldThroughPaths(
+	models: TableModels,
+	layer: ReturnType<typeof layerReach>,
+	runtime: DataLayerRuntime,
+	dimension: string,
+	id: string,
+	action: string,
+	principal: string,
+	relations: readonly string[],
+	paths: readonly ContainerGrant[],
+): Promise<{ readonly relations: readonly string[]; readonly paths: readonly ContainerGrant[] }> {
+	const owner = locatedOwner(models, dimension)
+	if (typeof id !== 'string' || id.length === 0 || typeof principal !== 'string' || principal.length === 0 || typeof action !== 'string') {
+		throw new QueryRefusedError('row_address', `a ${dimension} held through a path is addressed by its key, the principal and the action`)
+	}
+	const named = parseList(relations, (relation) => {
+		if (typeof relation !== 'string') throw new QueryRefusedError('row_address', 'a relation is named by its name')
+		return relation
+	})
+	let count = 0
+	const grants = parseList(paths, (grant): ContainerGrant => {
+		const at: unknown = typeof grant === 'object' && grant !== null ? ownDescriptor(grant, 'dimension')?.value : undefined
+		const values = typeof grant === 'object' && grant !== null
+			? parseList(ownDescriptor(grant, 'values')?.value, (value) => {
+				if (typeof value !== 'string' || value === '') throw new QueryRefusedError('row_address', 'a grant names its node, a non-empty string')
+				return value
+			})
+			: undefined
+		if (typeof at !== 'string' || values === undefined) {
+			throw new QueryRefusedError('row_address', 'a grant of a path names its dimension and its nodes')
+		}
+		count += values.length
+		return freeze({ dimension: at, values: freeze(values) })
+	})
+	if (named === undefined || grants === undefined) {
+		throw new QueryRefusedError('row_address', 'the candidates of a path are plain arrays')
+	}
+	if (count > MAX_WITHIN_VALUES) {
+		throw new QueryRefusedError('row_address', `the grants of a path carry at most ${MAX_WITHIN_VALUES} nodes`)
+	}
+	const now = new Date()
+	const session = sessionOf(runtime)
+	const reaches = async (terms: readonly OperationNode[]): Promise<boolean> => {
+		if (terms.length === 0) return false
+		const scope = AndNode.create(equals(owner.name, keyOf(owner), id), anyOf(terms))
+		const context: GuardContext = { root: 'SelectQueryNode', table: owner.name, joins: {}, scope, subqueries: layer.subqueries }
+		const rows = await session.run<Readonly<Record<string, unknown>>>(locateNode(owner.name, [keyOf(owner)], scope), context)
+		return rows.length > 0
+	}
+	const held: string[] = []
+	for (let index = 0; index < named.length; index++) {
+		const relation = named[index] ?? ''
+		if (await reaches(relationTerms(layer.relations, owner, relation, principal, action, now, heldThrough(action)))) held[held.length] = relation
+	}
+	const through: ContainerGrant[] = []
+	for (let index = 0; index < grants.length; index++) {
+		const grant = grants[index]
+		if (grant !== undefined && (await reaches(pathTerms(owner, [grant], heldThrough(action))))) through[through.length] = grant
+	}
+	return freeze({ relations: freeze(held), paths: freeze(through) })
 }
 
 /** One guarded select by key of the containment columns the policy declares; the generated locator of the dimension. */
@@ -2983,6 +3291,11 @@ async function locateObject(
 	if (typeof id !== 'string' || id.length === 0) {
 		throw new QueryRefusedError('row_address', `a ${dimension} is located by its ${keyOf(owner)}, a non-empty string`)
 	}
+	return chainOf(owner, using ?? sessionOf(runtime), id)
+}
+
+/** The containers of `owner`'s row keyed `id`, by dimension, read in `session`; `null` for no such row. */
+async function chainOf(owner: TableModel, session: Session, id: string): Promise<ReadonlyMap<string, string> | null> {
 	const key = keyOf(owner)
 	const scope = equals(owner.name, key, id)
 	const columns: string[] = [key]
@@ -2990,7 +3303,7 @@ async function locateObject(
 		columns[columns.length] = owner.chain[index]?.column ?? ''
 	}
 	const context: GuardContext = { root: 'SelectQueryNode', table: owner.name, joins: {}, scope }
-	const [row] = await (using ?? sessionOf(runtime)).run<Readonly<Record<string, unknown>>>(locateNode(owner.name, columns, scope), context)
+	const [row] = await session.run<Readonly<Record<string, unknown>>>(locateNode(owner.name, columns, scope), context)
 	if (row === undefined) {
 		return null
 	}

@@ -35,6 +35,8 @@ export const CAPABILITY_REFUSALS = {
 	undeclared_signs: 'the site signed a token of a purpose it does not declare in signs, or for longer than the purpose allows',
 	undeclared_egress: 'the site called an origin it does not declare in egress',
 	wrong_binding: 'a webhook binding was handed a capability of another kind or dimension than the webhook is bound to',
+	conditional_binding:
+		'a webhook binding was handed a Ref held through a relation, a member reveal or a secondary path, which a binding would outlive',
 	missing_id: 'the job named an object without an id',
 	wrong_capability: 'an operation was handed a capability of another dimension or action than it needs',
 } as const
@@ -58,6 +60,9 @@ export class CapabilityLimitError extends Error {
 	override readonly name = 'CapabilityLimitError'
 }
 
+/** The caller's grants of `action` in `dimension`, as a `Within` of it would carry them; no values when it holds none. */
+export type Standing = (dimension: string, action: string) => WithinGrant
+
 /**
  * One request's lifetime, or one job attempt's. A capability minted in it is usable only while it runs, and only
  * inside it; a job attempt's writes also need its lease (`fence`).
@@ -69,16 +74,24 @@ export class RequestFrame {
 	readonly readOnly: boolean
 	/** The endpoint the request is served by; `ctx.connect` checks it against each import's `usedBy`. */
 	readonly endpoint: string | null
+	/** What the request's caller holds of an action in a dimension; none for work without a caller (a job, a webhook). */
+	readonly standing: Standing | null
 	#ended = false
 
 	constructor(
 		id: string,
-		options: { readonly fence?: LeaseFence | null; readonly readOnly?: boolean; readonly endpoint?: string | null } = {},
+		options: {
+			readonly fence?: LeaseFence | null
+			readonly readOnly?: boolean
+			readonly endpoint?: string | null
+			readonly standing?: Standing | null
+		} = {},
 	) {
 		this.id = id
 		this.fence = options.fence ?? null
 		this.readOnly = options.readOnly ?? false
 		this.endpoint = options.endpoint ?? null
+		this.standing = options.standing ?? null
 	}
 
 	get ended(): boolean {
@@ -170,6 +183,10 @@ interface RefFacts {
 	readonly chain: Chain
 	/** The relations through which the caller holds the action on the object; empty for an IAM grant. */
 	readonly relations: readonly string[]
+	/** The caller's grants at nodes whose rows reveal the object to their members; empty for an IAM grant. */
+	readonly revealing: readonly ContainerGrant[]
+	/** The caller's grants at nodes a path of the object's table names, which hold the action through it; empty for an IAM grant. */
+	readonly paths: readonly ContainerGrant[]
 }
 
 interface Bound {
@@ -203,13 +220,26 @@ export class Ref<D extends string, A extends string> implements RefCapability<D,
 		id: string,
 		chain: ReadonlyMap<string, string>,
 		relations: readonly string[],
+		revealing: readonly ContainerGrant[],
+		paths: readonly ContainerGrant[],
 	) {
 		if (token !== MINT) {
 			throw new CapabilityRefusedError('not_minted', 'a Ref is minted by the framework only; declare the access form in fabrika.contract.ts')
 		}
+		const revealed = containerGrantsOf(revealing)
+		const through = containerGrantsOf(paths)
+		let count = 0
+		for (const grant of [...revealed, ...through]) {
+			count += grant.values.length
+		}
+		if (count > MAX_WITHIN_VALUES) {
+			throw new CapabilityLimitError(
+				`the caller holds '${action}' on this ${dimension} through ${count} revealing or path grants; a Ref carries at most ${MAX_WITHIN_VALUES}`,
+			)
+		}
 		this.#dimension = dimension
 		this.#action = action
-		this.#facts = freeze({ dimension, action, principal, id, chain: chainOf(chain), relations: copyOf(relations) })
+		this.#facts = freeze({ dimension, action, principal, id, chain: chainOf(chain), relations: copyOf(relations), revealing: revealed, paths: through })
 		this.#frame = frame
 		this.#issuer = issuer
 	}
@@ -246,6 +276,8 @@ export class Ref<D extends string, A extends string> implements RefCapability<D,
 				id: facts.id,
 				chain: mapOf(facts.chain),
 				relations: facts.relations,
+				revealing: facts.revealing,
+				paths: facts.paths,
 			})
 			return { grant, frame: value.#frame, issuer: value.#issuer }
 		}
@@ -446,6 +478,8 @@ export interface CapabilityMint {
 		id: string,
 		chain: ReadonlyMap<string, string>,
 		relations?: readonly string[],
+		revealing?: readonly ContainerGrant[],
+		paths?: readonly ContainerGrant[],
 	): Ref<D, A>
 	within<D extends string, A extends string>(
 		frame: RequestFrame,
@@ -483,8 +517,10 @@ export function createCapabilityIssuer(): CapabilityIssuer {
 			id: string,
 			chain: ReadonlyMap<string, string>,
 			relations: readonly string[] = [],
+			revealing: readonly ContainerGrant[] = [],
+			paths: readonly ContainerGrant[] = [],
 		): Ref<D, A> {
-			return new Ref(MINT, issuer, frame, dimension, action, principal, id, chain, relations)
+			return new Ref(MINT, issuer, frame, dimension, action, principal, id, chain, relations, revealing, paths)
 		},
 		within<D extends string, A extends string>(
 			frame: RequestFrame,
@@ -536,6 +572,11 @@ export function createCapabilityIssuer(): CapabilityIssuer {
 
 		fence(): LeaseFence | null {
 			return currentRequest.getStore()?.fence ?? null
+		},
+
+		standing(dimension: string, action: string): WithinGrant | undefined {
+			const frame = currentRequest.getStore()
+			return frame === undefined || frame.ended ? undefined : frame.standing?.(dimension, action)
 		},
 	})
 	return freeze({ mint, authority })

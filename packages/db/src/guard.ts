@@ -189,7 +189,8 @@ function checkRoot(root: OperationNode, context: GuardContext, admitted: Admitte
 
 /**
  * What a capability reaches before its action's condition narrows it: everything (a global grant), a Ref's chain of
- * equalities, and its relation rows after them, or a Within's memberships of values and relation rows.
+ * equalities, and after them a union of its relation rows and its secondary paths' memberships of bound values, or a
+ * Within's memberships of values and relation rows.
  */
 function isReach(node: unknown, table: string, subqueries: GuardContext['subqueries'], admitted: Admitted[], depth = 0): boolean {
 	const equality = (leaf: unknown) => isScopeEquality(leaf, table)
@@ -198,7 +199,7 @@ function isReach(node: unknown, table: string, subqueries: GuardContext['subquer
 	return isEverything(node)
 		|| isTreeOf(node, 'AndNode', equality)
 		|| isUnionOf(node, member)
-		|| (kindOf(node) === 'AndNode' && isTreeOf(read(node, 'left'), 'AndNode', equality) && isUnionOf(read(node, 'right'), related))
+		|| (kindOf(node) === 'AndNode' && isTreeOf(read(node, 'left'), 'AndNode', equality) && isUnionOf(read(node, 'right'), member))
 }
 
 /**

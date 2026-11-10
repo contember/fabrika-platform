@@ -190,6 +190,7 @@ function artifactOf(model: TableModel): TablePolicyArtifact {
 		...(ownKeys(model.when).length === 0 ? {} : { when: whenArtifact(model.when) }),
 		...(model.reveals.length === 0 ? {} : { reveals: revealsArtifact(model.reveals) }),
 		...(model.readThrough.length === 0 ? {} : { readThrough: readThroughArtifact(model) }),
+		...writeThroughArtifact(model),
 		...(model.memberReveals.length === 0 ? {} : { memberReveals: memberRevealsArtifact(model.memberReveals) }),
 	}
 }
@@ -203,6 +204,7 @@ function memberRevealsArtifact(reveals: readonly MemberRevealModel[]): Record<st
 			to: reveal.dimension,
 			actions: [...reveal.actions],
 			...(reveal.when === undefined ? {} : { when: conditionArtifact(reveal.when) }),
+			...(reveal.assign === undefined ? {} : { assign: { self: reveal.assign.self } }),
 		})
 	}
 	return artifact
@@ -215,6 +217,18 @@ function readThroughArtifact(model: TableModel): Record<string, string> {
 		if (path !== undefined) setOwn(artifact, path.dimension, path.via === undefined ? path.column : `${path.via.column}.${path.column}`)
 	}
 	return artifact
+}
+
+function writeThroughArtifact(model: TableModel): { readonly writeThrough: Record<string, string[]> } | undefined {
+	const artifact: Record<string, string[]> = {}
+	let declared = false
+	for (let index = 0; index < model.readThrough.length; index++) {
+		const path = model.readThrough[index]
+		if (path === undefined || path.writes.length === 0) continue
+		setOwn(artifact, path.dimension, [...path.writes])
+		declared = true
+	}
+	return declared ? { writeThrough: artifact } : undefined
 }
 
 function revealsArtifact(reveals: readonly RevealModel[]): Record<string, RevealsArtifact> {

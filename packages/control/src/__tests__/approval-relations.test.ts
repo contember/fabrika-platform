@@ -222,6 +222,45 @@ describe("a table's read path in the approval diff", () => {
 	})
 })
 
+describe("a table's write path in the approval diff", () => {
+	const lines = (before: AccessSnapshot, after: AccessSnapshot) => classifyAccess(before, after).changes.map(({ effect, line }) => ({ effect, line }))
+	const none = snapshot(files())
+	const writing = (writeThrough: Readonly<Record<string, readonly string[]>> | undefined): AccessSnapshot => {
+		const contract = none.contract
+		const notes = contract?.tables['notes']
+		if (contract === null || notes === undefined) throw new Error('the kit has a notes table')
+		const table = { ...notes, readThrough: { label: 'label_id' }, ...(writeThrough === undefined ? {} : { writeThrough }) }
+		return { ...none, contract: { ...contract, tables: { ...contract.tables, notes: table } } }
+	}
+	const subject = "A grant at a `label` that table `notes`'s path `label_id` names"
+
+	test('widens when an action is held through the path, naming the bound on its writer, and narrows when one goes', () => {
+		const read = writing(undefined)
+		const write = writing({ label: ['notes.write'] })
+		expect(lines(read, write)).toEqual([{
+			effect: 'widens',
+			line:
+				`${subject} also holds \`notes.write\` on its rows, writes included; whoever inserts the path's column must hold each there, and rows written before keep the node they name`,
+		}])
+		expect(lines(write, writing({ label: ['notes.write', 'notes.read'] }))).toContainEqual({
+			effect: 'widens',
+			line:
+				`${subject} also holds \`notes.read\` on its rows, writes included; whoever inserts the path's column must hold each there, and rows written before keep the node they name`,
+		})
+		expect(lines(write, read)).toEqual([{ effect: 'narrows', line: `${subject} no longer holds \`notes.write\` on its rows` }])
+		expect(classifyAccess(write, read).outcome).toBe('no-widening')
+		expect(classifyAccess(read, write).outcome).toBe('widening')
+	})
+
+	test('a path declared with its write actions states the write as a widening', () => {
+		expect(lines(none, writing({ label: ['notes.write'] }))).toContainEqual({
+			effect: 'widens',
+			line:
+				`${subject} also holds \`notes.write\` on its rows, writes included; whoever inserts the path's column must hold each there, and rows written before keep the node they name`,
+		})
+	})
+})
+
 describe("a table's member reveals in the approval diff", () => {
 	const lines = (before: AccessSnapshot, after: AccessSnapshot) => classifyAccess(before, after).changes.map(({ effect, line }) => ({ effect, line }))
 	const none = snapshot(files())
@@ -245,6 +284,28 @@ describe("a table's member reveals in the approval diff", () => {
 		})
 		expect(lines(read, none)).toContainEqual({ effect: 'narrows', line: `${subject} nothing any more` })
 		expect(classifyAccess(read, none).outcome).toBe('no-widening')
+	})
+
+	test("through a path, names the path and the insert's pick, and widens when the writer may pick its own", () => {
+		const through = (assign: { readonly self: boolean }): AccessSnapshot => {
+			const contract = none.contract
+			const notes = contract?.tables['notes']
+			if (contract === null || notes === undefined) throw new Error('the kit has a notes table')
+			const table = { ...notes, readThrough: { label: 'label_id' }, memberReveals: { label: { to: 'workspace', actions: ['notes.read'], assign } } }
+			return { ...none, contract: { ...contract, tables: { ...contract.tables, notes: table } } }
+		}
+		const pathSubject = 'Table `notes` reveals to a member of the `label` its path `label_id` names'
+		const others = through({ self: false })
+		expect(lines(none, others)).toContainEqual({ effect: 'widens', line: `${pathSubject} its \`workspace\` for \`notes.read\`` })
+		expect(lines(none, others)).toContainEqual({
+			effect: 'widens',
+			line: `${pathSubject} at a node an insert into \`notes\` picks, never its writer's own`,
+		})
+		expect(lines(others, through({ self: true }))).toEqual([{
+			effect: 'widens',
+			line: `${pathSubject} at a node an insert into \`notes\` picks, its writer's own included`,
+		}])
+		expect(classifyAccess(through({ self: true }), others).outcome).toBe('no-widening')
 	})
 })
 

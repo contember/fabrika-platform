@@ -297,7 +297,7 @@ describe('a reveal matched through the read path', () => {
 
 	test('mints no Ref: the reveal check answers false, and a Ref held through it is unenforceable', async () => {
 		join('m1', 'tm2', 'user:alice')
-		expect(await reveals('member', 'project', 'p2', 'user:alice')).toBe(false)
+		expect(await reveals('member', 'project', 'p2', 'user:alice', 'projects.read')).toBe(false)
 		const read = () => invoke('query', (db) => call(db.target(alice.ref('project', 'projects.read', 'p2', { org: 'o1' }, ['member']), 'on'), 'get'))
 		await expect(read()).rejects.toThrow(CapabilityError)
 		await expect(read()).rejects.toThrow('reveals none of its nodes')

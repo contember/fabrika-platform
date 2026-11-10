@@ -1242,7 +1242,9 @@ export const stripe = app.webhook('/hooks/stripe', {
   `ctx.app('<action>')` and reaches `ctx.db.app('<action>')` as a job does.
 - **Binding.** A credentialed RPC mutation that declares `binds: '<webhook>'` gets `ctx.webhooks('<webhook>')`:
   `bind(capability, account)`, `setSecret(capability, id, secret)` and `unbind(capability, id)` take this request's
-  `Ref` of the bound dimension or its `AppCapability` for `'app'`, and write in the mutation's transaction. `bind`
+  `Ref` of the bound dimension or its `AppCapability` for `'app'`, and write in the mutation's transaction. A `Ref`
+  held through a relation, a member reveal or a secondary path is refused (`conditional_binding`): a binding outlives
+  the rows that hold it. `bind`
   answers the URL and a generated secret once (`WebhookSecret`). A provider that issues its own secret (Stripe, Slack,
   Twilio) shows it after the URL is registered; `setSecret` replaces the generated one with it and answers `false` when
   the value has no binding of that id. A secret is 1 to 512 printable characters without spaces, a `standard-webhooks`

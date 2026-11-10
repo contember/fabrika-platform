@@ -40,7 +40,7 @@ import {
 	type WebhookScheme,
 } from '@fabrika/auth-core'
 import { DatabaseError } from '@fabrika/db'
-import { type CapabilityAuthority, type ContainerGrant, MAX_WITHIN_VALUES } from '@fabrika/db/capability'
+import { type CapabilityAuthority, type ContainerGrant, MAX_WITHIN_VALUES, type WithinGrant } from '@fabrika/db/capability'
 import type { DataAccess, FileBinding, FrameworkTables } from '@fabrika/db/framework'
 import type { DataKind } from '@fabrika/db/tables'
 import type { TokenVerifier } from '@fabrika/jwks'
@@ -316,6 +316,20 @@ export interface RevealedNode {
 	readonly actions: readonly string[]
 }
 
+/** The relations and grants a Ref is held through by a secondary path. */
+interface HeldThrough {
+	readonly relations: readonly string[]
+	readonly paths: readonly ContainerGrant[]
+}
+
+const NONE_THROUGH: HeldThrough = Object.freeze({ relations: Object.freeze([]), paths: Object.freeze([]) })
+
+/** A secondary path of a dimension's table: the dimension it reaches, and the actions a Ref holds through it. */
+export interface HeldPath {
+	readonly dimension: string
+	readonly actions: readonly string[]
+}
+
 export interface RuntimeParts {
 	readonly table: CompiledEndpointTable
 	readonly endpoints: ReadonlyMap<string, ServedEndpoint>
@@ -338,6 +352,8 @@ export interface RuntimeParts {
 	readonly reveals: ReadonlyMap<string, readonly RevealedNode[]>
 	/** Each dimension's member reveals: a grant of one of their actions at its node also reads under the ancestor they reveal. */
 	readonly memberReveals: ReadonlyMap<string, readonly RevealedNode[]>
+	/** Each dimension's secondary paths that hold actions for a Ref: a grant of one at the node a path names reaches the object. */
+	readonly paths: ReadonlyMap<string, readonly HeldPath[]>
 	readonly assets: SpaAssets | null
 	/** IAM's membership operations; `boot` refuses a contract that needs them when the adapter supplies none. */
 	readonly membership: IamMembership | null
@@ -665,7 +681,11 @@ export class ContractRuntime {
 		const carried = new Set<string>()
 		const fields = this.#parts.tokens.verifyFields(served.row.input, body.multipart === null ? body.input : body.multipart.json, carried)
 		const query = this.#verifiedQuery(served.row, served.query, request, carried)
-		const frame = new RequestFrame(crypto.randomUUID(), { readOnly: served.readOnly === true, endpoint: served.row.id })
+		const frame = new RequestFrame(crypto.randomUUID(), {
+			readOnly: served.readOnly === true,
+			endpoint: served.row.id,
+			standing: (dimension, action) => this.#standing(caller, action, dimension),
+		})
 		const work = new FileWork(frame, frame.id)
 		const site = served.site
 		const invocation = site === undefined ? null : new Invocation(frame, this.#data(), site.kind === 'query' || served.readOnly === true)
@@ -956,8 +976,12 @@ export class ContractRuntime {
 	/** A scope value the caller acts in: without a grant on it or on a container of it, 403 whether it exists or not. */
 	async #inRef(caller: Caller, action: string, dimension: string, value: string, frame: RequestFrame): Promise<Ref<string, string>> {
 		const direct = permits(caller.perms, action, { type: dimension, value })
-		const candidates = this.#heldRelations(caller.perms, action, [dimension, ...(this.#parts.containers.get(dimension) ?? [])])
-		if (!direct && this.#heldContainers(caller.perms, action, dimension).length === 0 && candidates.length === 0) {
+		const dimensions = [dimension, ...(this.#parts.containers.get(dimension) ?? [])]
+		const candidates = this.#heldRelations(caller.perms, action, dimensions)
+		const revealing = this.#heldRevealing(caller.perms, action, dimensions)
+		const through = this.#throughCandidates(caller.perms, action, dimension)
+		const none = candidates.length === 0 && revealing.length === 0 && through.relations.length === 0 && through.paths.length === 0
+		if (!direct && this.#heldContainers(caller.perms, action, dimension).length === 0 && none) {
 			throw new ForbiddenError(`The caller does not hold '${action}' in this ${dimension}`)
 		}
 		const chain = await this.#chain(dimension, value)
@@ -968,10 +992,13 @@ export class ContractRuntime {
 			return this.#parts.mint.ref(frame, dimension, action, caller.subject, value, chain)
 		}
 		const related = chain === null ? [] : await this.#relatedOn(caller.subject, candidates, action, dimension, value, chain)
-		if (chain === null || related.length === 0) {
+		const revealed = chain === null ? [] : await this.#revealedOn(revealing, action, dimension, value, chain)
+		const paths = chain === null ? NONE_THROUGH : await this.#heldThrough(caller.subject, through, action, dimension, value)
+		if (chain === null || (related.length === 0 && revealed.length === 0 && paths.relations.length === 0 && paths.paths.length === 0)) {
 			throw new ForbiddenError(`The caller does not hold '${action}' in this ${dimension}`)
 		}
-		return this.#parts.mint.ref(frame, dimension, action, caller.subject, value, chain, related)
+		const relations = [...new Set([...related, ...paths.relations])]
+		return this.#parts.mint.ref(frame, dimension, action, caller.subject, value, chain, relations, revealed, paths.paths)
 	}
 
 	/** An object the caller acts on; one it may not act on is indistinguishable from a missing one. */
@@ -983,12 +1010,93 @@ export class ContractRuntime {
 		if (holdsOnChain(caller.perms, action, dimension, value, chain)) {
 			return this.#parts.mint.ref(frame, dimension, action, caller.subject, value, chain)
 		}
-		const candidates = this.#heldRelations(caller.perms, action, [dimension, ...chain.keys()])
+		const dimensions = [dimension, ...chain.keys()]
+		const candidates = this.#heldRelations(caller.perms, action, dimensions)
 		const related = await this.#relatedOn(caller.subject, candidates, action, dimension, value, chain)
-		if (related.length === 0) {
+		const revealed = await this.#revealedOn(this.#heldRevealing(caller.perms, action, dimensions), action, dimension, value, chain)
+		const paths = await this.#heldThrough(caller.subject, this.#throughCandidates(caller.perms, action, dimension), action, dimension, value)
+		if (related.length === 0 && revealed.length === 0 && paths.relations.length === 0 && paths.paths.length === 0) {
 			throw new NotFoundError('Not found')
 		}
-		return this.#parts.mint.ref(frame, dimension, action, caller.subject, value, chain, related)
+		const relations = [...new Set([...related, ...paths.relations])]
+		return this.#parts.mint.ref(frame, dimension, action, caller.subject, value, chain, relations, revealed, paths.paths)
+	}
+
+	/**
+	 * The caller's relations and grants of `action` at the nodes the secondary paths of `dimension`'s table reach, where a
+	 * path holds the action for a Ref (`writeThrough`), at the path's dimension or a container of it: what a Ref held
+	 * through a path may carry, before the database says which reach the object.
+	 */
+	#throughCandidates(perms: PermissionEntry[], action: string, dimension: string): HeldThrough {
+		const dimensions: string[] = []
+		for (const path of this.#parts.paths.get(dimension) ?? []) {
+			if (!path.actions.includes(action)) continue
+			for (const at of [path.dimension, ...(this.#parts.containers.get(path.dimension) ?? [])]) {
+				if (!dimensions.includes(at)) dimensions.push(at)
+			}
+		}
+		if (dimensions.length === 0) {
+			return NONE_THROUGH
+		}
+		const paths = dimensions.flatMap((at) => {
+			const values = scopedValues(perms, action, at) ?? []
+			return values.length === 0 ? [] : [{ dimension: at, values }]
+		})
+		return { relations: this.#heldRelations(perms, action, dimensions), paths }
+	}
+
+	/** Of `candidates`, those that reach the object `value` of `dimension` through a path holding `action`, now. */
+	async #heldThrough(principal: string, candidates: HeldThrough, action: string, dimension: string, value: string): Promise<HeldThrough> {
+		const check = this.#parts.database?.holdsThrough
+		if (check === undefined || (candidates.relations.length === 0 && candidates.paths.length === 0)) {
+			return NONE_THROUGH
+		}
+		return await check(dimension, value, action, principal, candidates.relations, candidates.paths)
+	}
+
+	/**
+	 * What the caller holds of `action` in `dimension`, as a `Within` of it would carry it, without the grants inside it:
+	 * the standing an insert that hands out access through a path judges its writer by; empty when it holds none.
+	 */
+	#standing(caller: Caller, action: string, dimension: string): WithinGrant {
+		const dimensions = [dimension, ...(this.#parts.containers.get(dimension) ?? [])]
+		const containers = this.#heldContainers(caller.perms, action, dimension)
+		const relations = this.#heldRelations(caller.perms, action, dimensions)
+		const revealing = this.#heldRevealing(caller.perms, action, dimensions)
+		const values = scopedValues(caller.perms, action, dimension) ?? 'all'
+		return { kind: 'within', dimension, action, principal: caller.subject, values, containers, contained: [], relations, revealing }
+	}
+
+	/**
+	 * Of `revealing`, the caller's grants of `action` at nodes of revealing dimensions, those whose row reveals the object
+	 * or a container on its chain to its members for `action`, now: what a Ref held through member reveals carries.
+	 */
+	async #revealedOn(
+		revealing: readonly ContainerGrant[],
+		action: string,
+		dimension: string,
+		value: string,
+		chain: ReadonlyMap<string, string>,
+	): Promise<ContainerGrant[]> {
+		const check = this.#parts.database?.revealsToMembers
+		if (check === undefined || revealing.length === 0) {
+			return []
+		}
+		const nodeOf = (at: string) => (at === dimension ? value : chain.get(at))
+		const held: ContainerGrant[] = []
+		for (const grant of revealing) {
+			const found = new Set<string>()
+			for (const reveal of this.#parts.memberReveals.get(grant.dimension) ?? []) {
+				const node = reveal.actions.includes(action) ? nodeOf(reveal.dimension) : undefined
+				for (let start = 0; node !== undefined && start < grant.values.length; start += MAX_WITHIN_VALUES) {
+					for (const at of await check(grant.dimension, grant.values.slice(start, start + MAX_WITHIN_VALUES), reveal.dimension, node, action)) {
+						found.add(at)
+					}
+				}
+			}
+			if (found.size > 0) held.push({ dimension: grant.dimension, values: [...found] })
+		}
+		return held
 	}
 
 	/**
@@ -1042,7 +1150,7 @@ export class ContractRuntime {
 			if (reveals === undefined) continue
 			for (const revealed of this.#revealed(relation, action)) {
 				const at = nodeOf(revealed)
-				if (at !== undefined && (await reveals(relation, revealed, at, principal))) {
+				if (at !== undefined && (await reveals(relation, revealed, at, principal, action))) {
 					related.push(relation)
 					break
 				}

@@ -241,8 +241,13 @@ describe('the policy bounds what a table may reveal to members', () => {
 		expect(policy(reveal({ assign: {} }))).toThrow(PolicyError)
 	})
 
-	test("a dimension other than the table's own, or a child table, is refused", () => {
-		expect(policy({ memberReveals: { project: { to: 'project', actions: ['projects.read'] } } })).toThrow("not tasks's own dimension")
-		expect(policy({}, { memberReveals: { project: { to: 'project', actions: ['projects.read'] } } })).toThrow('reveals nothing to members')
+	test("a dimension neither the table's own nor one it reads through is refused, on a child table too", () => {
+		expect(policy({ memberReveals: { project: { to: 'project', actions: ['projects.read'] } } })).toThrow(
+			'project is neither the own dimension of tasks (task) nor one it reads through',
+		)
+		expect(policy({}, { memberReveals: { project: { to: 'project', actions: ['projects.read'] } } })).toThrow(
+			'is neither the own dimension of',
+		)
+		expect(policy({}, { memberReveals: { project: { to: 'project', actions: ['projects.read'] } } })).toThrow('(none) nor one it reads through')
 	})
 })

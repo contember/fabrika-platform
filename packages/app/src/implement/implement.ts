@@ -3,7 +3,7 @@
 
 import type { TablePolicyArtifact } from '@fabrika/auth-core'
 import type { DataLayer } from '@fabrika/db'
-import type { CapabilityAuthority } from '@fabrika/db/capability'
+import type { CapabilityAuthority, ContainerGrant } from '@fabrika/db/capability'
 import type { Session } from '@fabrika/db/framework'
 import type { EmailSender } from '@fabrika/email'
 import type { ConnectSnapshot } from '../contract/connect'
@@ -27,8 +27,28 @@ export interface ContractDatabase {
 	 * own has none, so no Ref is ever held through a relation there.
 	 */
 	relates?(relation: string, node: string, principal: string): Promise<boolean>
-	/** Whether a row `relation` reaches for `principal` reveals `node` of `dimension` now; none in a layer of the application's own. */
-	reveals?(relation: string, dimension: string, node: string, principal: string): Promise<boolean>
+	/**
+	 * Whether a row `relation` reaches for `principal` reveals `node` of `dimension` for `action` now; none in a layer of
+	 * the application's own.
+	 */
+	reveals?(relation: string, dimension: string, node: string, principal: string, action: string): Promise<boolean>
+	/**
+	 * Of `relations` and `paths`, the caller's relations and grants of `action` that reach the object through a secondary
+	 * path that holds the action for a Ref (`writeThrough`); none in a layer of the application's own.
+	 */
+	holdsThrough?(
+		dimension: string,
+		id: string,
+		action: string,
+		principal: string,
+		relations: readonly string[],
+		paths: readonly ContainerGrant[],
+	): Promise<{ readonly relations: readonly string[]; readonly paths: readonly ContainerGrant[] }>
+	/**
+	 * Of `values`, the caller's grants of `action` at nodes of `revealing`, those whose row reveals `node` of `dimension`
+	 * to its members now; none in a layer of the application's own.
+	 */
+	revealsToMembers?(revealing: string, values: readonly string[], dimension: string, node: string, action: string): Promise<readonly string[]>
 }
 
 /** `scoped(tables)` of `@fabrika/db`, which `boot` binds, or a `ContractDatabase` of the application's own. */

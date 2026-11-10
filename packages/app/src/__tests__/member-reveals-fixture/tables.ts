@@ -20,12 +20,17 @@ const columns: TypedColumnList<DB> = {
 }
 
 export const tables = defineTables(vocabulary, columns)({
-	projects: { scope: { dimension: 'project' }, actions: { read: 'projects.read' }, version: 'version' },
+	projects: {
+		scope: { dimension: 'project' },
+		actions: { read: 'projects.read', update: 'projects.rename' },
+		update: ['name'],
+		version: 'version',
+	},
 	tasks: { scope: { dimension: 'task' }, actions: { read: 'steps.read' }, version: 'version' },
 	steps: {
 		scope: { dimension: 'step' },
 		actions: { read: 'steps.read' },
 		version: 'version',
-		memberReveals: { step: { to: 'project', actions: ['projects.read'], when: { open: { eq: true } } } },
+		memberReveals: { step: { to: 'project', actions: ['projects.read', 'projects.rename'], when: { open: { eq: true } } } },
 	},
 })

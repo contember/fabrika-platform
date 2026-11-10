@@ -4,7 +4,7 @@
 
 import { AndNode, BinaryOperationNode, type OperationNode, OperatorNode, ParensNode, ValueNode } from 'kysely'
 import { ownEntry } from './builtins'
-import type { RefGrant, WithinGrant } from './capability'
+import type { ContainerGrant, RefGrant, WithinGrant } from './capability'
 import { conditionNode, subquery } from './condition-nodes'
 import { CapabilityError } from './errors'
 import type { ViewParentLink } from './guard'
@@ -31,6 +31,12 @@ export type RelationSources = Readonly<Record<string, LayerRelation>>
 
 /** Every member reveal of the layer, by the dimension whose grants it reveals to. */
 export type MemberReveals = Readonly<Record<string, readonly MemberRevealModel[]>>
+
+/** What a capability is held through beyond its grants: the layer's relations and its member reveals. */
+export interface LayerReach {
+	readonly relations: RelationSources
+	readonly members: MemberReveals
+}
 
 export function relationSource(relations: RelationSources, relation: string): LayerRelation {
 	const source = ownEntry(relations, relation)
@@ -108,12 +114,23 @@ export function revealedNodes(source: RelationSource, reveal: RevealModel, princ
 	return subquery(reveal.table, reveal.column, where)
 }
 
+/** Which secondary paths a statement follows: every one for a `Within`'s read, `heldThrough` for a `Ref`, none for a move. */
+export type PathRule = (path: SecondaryPath) => boolean
+
+export const everyPath: PathRule = () => true
+export const noPath: PathRule = () => false
+
+/** The paths that hold `action` for a `Ref` (`writeThrough`). */
+export function heldThrough(action: string): PathRule {
+	return (path) => includes(path.writes, action)
+}
+
 /**
  * The rows of `model` a relation reaches for `principal` under `action`: `T.<node> in (select S.<node> from S where
  * S.<principal> = $me and <active>)` where `model` lies at a node of the relation's dimension, and one
  * `T.<ancestor> in (<revealed nodes>)` per reveal of `action` to an ancestor `model` lies at. Empty where neither holds.
- * A `Within`'s read (`reads`) also follows the secondary paths: the column `model` reaches the relation's dimension
- * through, and the reveals matched through one. Every other statement follows containment only.
+ * It also follows the secondary paths `paths` admits: the column `model` reaches the relation's dimension through, and
+ * the reveals matched through one.
  */
 export function relationTerms(
 	relations: RelationSources,
@@ -122,19 +139,21 @@ export function relationTerms(
 	principal: string,
 	action: string,
 	now: Date,
-	reads: boolean,
+	paths: PathRule,
 ): readonly OperationNode[] {
 	const source = relationSource(relations, relation)
 	const at = nodeColumnOf(model, source.dimension)
 	const terms: OperationNode[] = at === undefined ? [] : [isIn(model.name, at, relationNodes(source, principal, now))]
-	for (let index = 0; reads && index < model.readThrough.length; index++) {
+	for (let index = 0; index < model.readThrough.length; index++) {
 		const path = model.readThrough[index]
-		const through = path === undefined ? undefined : throughPath(model.name, path, source.dimension, relationNodes(source, principal, now))
+		const through = path === undefined || !paths(path)
+			? undefined
+			: throughPath(model.name, path, source.dimension, relationNodes(source, principal, now))
 		if (through !== undefined) terms[terms.length] = through
 	}
 	for (let index = 0; index < source.reveals.length; index++) {
 		const reveal = source.reveals[index]
-		const held = reveal !== undefined && includes(reveal.actions, action) && (reads || reveal.path === undefined)
+		const held = reveal !== undefined && includes(reveal.actions, action) && (reveal.path === undefined || paths(reveal.path))
 		const placed = reveal === undefined || !held ? undefined : nodeColumnOf(model, reveal.dimension)
 		if (reveal !== undefined && placed !== undefined) {
 			terms[terms.length] = isIn(model.name, placed, revealedNodes(source, reveal, principal, now))
@@ -144,36 +163,58 @@ export function relationTerms(
 }
 
 /**
- * The rows of `model` a `Within`'s read reaches through member reveals: per grant it carries at a revealing dimension,
- * `T.<ancestor> in (select R.<ancestor> from R where R.<key> in (values) and <when>)` for each reveal of `action` to an
- * ancestor `model` lies at. A grant at a dimension that reveals no node for `action` is refused: the framework passes
- * none.
+ * The rows of `model` a `Within`'s read reaches through member reveals: `revealingTerms` of its grants at revealing
+ * dimensions.
  */
 export function memberTerms(members: MemberReveals, model: TableModel, grant: WithinGrant, now: Date): readonly OperationNode[] {
+	return revealingTerms(members, model, `the Within of ${grant.dimension}`, grant.action, grant.revealing, now, everyPath)
+}
+
+/**
+ * The rows of `model` that `revealing`, grants of `action` at nodes of revealing dimensions, reach through member
+ * reveals: per grant, `T.<ancestor> in (select R.<ancestor> from R where R.<key> in (values) and <when>)` for each reveal
+ * of `action` to an ancestor `model` lies at, `R.<key>` the row's key or its path's column. A reveal through a path
+ * counts where `paths` admits it. A grant at a dimension that reveals no node for `action` is refused: the framework
+ * passes none.
+ */
+export function revealingTerms(
+	members: MemberReveals,
+	model: TableModel,
+	holder: string,
+	action: string,
+	revealing: readonly ContainerGrant[],
+	now: Date,
+	paths: PathRule,
+): readonly OperationNode[] {
 	const terms: OperationNode[] = []
-	for (let index = 0; index < grant.revealing.length; index++) {
-		const revealing = grant.revealing[index]
-		if (revealing === undefined) continue
-		const reveals = ownEntry(members, revealing.dimension) ?? []
+	for (let index = 0; index < revealing.length; index++) {
+		const grant = revealing[index]
+		if (grant === undefined) continue
+		const reveals = ownEntry(members, grant.dimension) ?? []
 		let named = false
 		for (let position = 0; position < reveals.length; position++) {
 			const reveal = reveals[position]
-			if (reveal === undefined || !includes(reveal.actions, grant.action)) continue
+			if (reveal === undefined || !includes(reveal.actions, action) || (reveal.path !== undefined && !paths(reveal.path))) continue
 			named = true
 			const placed = nodeColumnOf(model, reveal.dimension)
-			if (placed === undefined || revealing.values.length === 0) continue
-			const reached = isIn(reveal.table, reveal.key, valueList(revealing.values))
-			const where = reveal.when === undefined ? reached : AndNode.create(reached, ParensNode.create(conditionNode(reveal.table, reveal.when, now)))
-			terms[terms.length] = isIn(model.name, placed, subquery(reveal.table, reveal.column, where))
+			if (placed === undefined || grant.values.length === 0) continue
+			terms[terms.length] = isIn(model.name, placed, memberRevealed(reveal, grant.values, now))
 		}
 		if (!named) {
 			throw new CapabilityError(
 				'unenforceable',
-				`the Within of ${grant.dimension} carries a grant on ${revealing.dimension}, whose rows reveal no node for ${grant.action}`,
+				`${holder} carries a grant on ${grant.dimension}, whose rows reveal no node for ${action}`,
 			)
 		}
 	}
 	return terms
+}
+
+/** `select R.<ancestor> from R where R.<key> in (values) and <when>`: the nodes a member reveal holds at for `values`. */
+export function memberRevealed(reveal: MemberRevealModel, values: readonly string[], now: Date): OperationNode {
+	const reached = isIn(reveal.table, reveal.key, valueList(values))
+	const where = reveal.when === undefined ? reached : AndNode.create(reached, ParensNode.create(conditionNode(reveal.table, reveal.when, now)))
+	return subquery(reveal.table, reveal.column, where)
 }
 
 /** The condition `action` holds a row of `model` under, or `undefined` when the action is not narrowed there. */
@@ -194,21 +235,22 @@ export function conditioned(model: TableModel, action: string, branch: Operation
 
 /**
  * A Ref's predicate over `links` of `model`: one equality per link of its chain (after `row`, the equality that
- * addresses one row by its key), then, when the Ref is held through relations, a row of one of them at the node, and
- * its action's condition. A relation that does not reach `model` leaves the Ref unenforceable there, never
- * unconditioned.
+ * addresses one row by its key), then, when the Ref is held through relations or member reveals, a row of one of them
+ * at the node, and its action's condition. A relation or a revealing grant that does not reach `model` leaves the Ref
+ * unenforceable there, never unconditioned.
  */
 export function refScope(
-	relations: RelationSources,
+	reach: LayerReach,
 	model: TableModel,
 	links: readonly Container[],
 	grant: RefGrant,
 	now: Date,
 	row?: OperationNode,
+	paths: PathRule = heldThrough(grant.action),
 ): OperationNode {
 	const linked = linksPredicate(model.name, linkValues(model.name, links, grant))
 	const chain = row === undefined ? linked : allOf([row, linked])
-	const gate = relationGate(relations, model, grant, now)
+	const gate = relationGate(reach, model, grant, now, paths)
 	return conditioned(model, grant.action, gate === undefined ? chain : allOf([chain, gate]), now)
 }
 
@@ -230,15 +272,25 @@ export function viewScope(
 	return conditioned(model, action, row === undefined ? member : allOf([row, member]), now)
 }
 
-/** The relation rows a Ref held through relations needs at `model`, or `undefined` for a Ref an IAM grant holds. */
-export function relationGate(relations: RelationSources, model: TableModel, grant: RefGrant, now: Date): OperationNode | undefined {
-	if (grant.relations.length === 0) {
+/**
+ * The rows a Ref held through relations, member reveals or secondary paths needs at `model`: a relation row at the node,
+ * a revealing row the Ref's grants reveal it through, or a path `paths` admits naming a node its grants hold;
+ * `undefined` for a Ref an IAM grant holds on its chain.
+ */
+export function relationGate(
+	reach: LayerReach,
+	model: TableModel,
+	grant: RefGrant,
+	now: Date,
+	paths: PathRule = heldThrough(grant.action),
+): OperationNode | undefined {
+	if (grant.relations.length === 0 && grant.revealing.length === 0 && grant.paths.length === 0) {
 		return undefined
 	}
 	const terms: OperationNode[] = []
 	for (let index = 0; index < grant.relations.length; index++) {
 		const relation = grant.relations[index] ?? ''
-		const reached = relationTerms(relations, model, relation, grant.principal, grant.action, now, false)
+		const reached = relationTerms(reach.relations, model, relation, grant.principal, grant.action, now, paths)
 		if (reached.length === 0) {
 			throw new CapabilityError(
 				'unenforceable',
@@ -250,5 +302,50 @@ export function relationGate(relations: RelationSources, model: TableModel, gran
 			if (term !== undefined) terms[terms.length] = term
 		}
 	}
+	if (grant.revealing.length > 0) {
+		const revealed = revealingTerms(reach.members, model, `the Ref of ${grant.dimension}`, grant.action, grant.revealing, now, paths)
+		if (revealed.length === 0) {
+			throw new CapabilityError(
+				'unenforceable',
+				`the Ref of ${grant.dimension} is held through member reveals, none of which reveals a node ${model.name} lies at for ${grant.action}`,
+			)
+		}
+		for (let position = 0; position < revealed.length; position++) {
+			const term = revealed[position]
+			if (term !== undefined) terms[terms.length] = term
+		}
+	}
+	if (grant.paths.length > 0) {
+		const through = pathTerms(model, grant.paths, paths)
+		if (through.length === 0) {
+			throw new CapabilityError(
+				'unenforceable',
+				`the Ref of ${grant.dimension} is held through a secondary path, and ${model.name} reads none that holds ${grant.action} here`,
+			)
+		}
+		for (let position = 0; position < through.length; position++) {
+			const term = through[position]
+			if (term !== undefined) terms[terms.length] = term
+		}
+	}
 	return anyOf(terms)
+}
+
+/**
+ * The rows of `model` whose path `paths` admits names a node `grants` hold: `T.<column> in (values)` at the path's own
+ * dimension, `T.<column> in (select D.<key> from D where D.<link> in (values))` above it, through the container's column
+ * for a path through the container.
+ */
+export function pathTerms(model: TableModel, grants: readonly ContainerGrant[], paths: PathRule): readonly OperationNode[] {
+	const terms: OperationNode[] = []
+	for (let index = 0; index < model.readThrough.length; index++) {
+		const path = model.readThrough[index]
+		if (path === undefined || !paths(path)) continue
+		for (let position = 0; position < grants.length; position++) {
+			const grant = grants[position]
+			const term = grant === undefined || grant.values.length === 0 ? undefined : throughPath(model.name, path, grant.dimension, valueList(grant.values))
+			if (term !== undefined) terms[terms.length] = term
+		}
+	}
+	return terms
 }
