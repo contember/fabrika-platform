@@ -648,11 +648,15 @@ other environment, before the provider prepares anything, and the write maps a r
   the window reading as its own platform read it.
 - **Relation fields publish only to a framework that enforces them** (ADR-0073 §5, `src/approval/enforcement.ts`).
   `relationGrantsRefusal` refuses a snapshot that declares a relation, a role's `via`, a table's `confers` or `when`
-  for an application pinned before `RELATION_GRANTS_SINCE`, compared by prerelease precedence (`comparePrecedence`),
-  before anything publishes: a reader that ignores a narrowing field widens access. The approval diff classifies each
-  relation field (`table.confers`, `table.when`, `table.reveals`, `table.read-through`, `table.write-through`,
-  `table.member-reveals`, a role's `via`): a new `via` action, source table, reveal, read-through or write-through
-  action widens, a longer or self delegation widens, an added `when` narrows, a removed or changed one widens. A member
+  for an application pinned before `RELATION_GRANTS_SINCE`, and a table's `relationWhen` before `RELATION_WHEN_SINCE`
+  (`relationFloors`, one list of floors; the refusal names the highest one missed), compared by prerelease precedence
+  (`comparePrecedence`), before anything publishes: a reader that ignores a narrowing field widens access. A floor is
+  the first release whose source enforces its fields, so a field that lands between releases takes the next prerelease
+  after the source version; `enforcement-floors.test.ts` holds every floor at or below the source version or at that
+  next prerelease. The approval diff classifies each relation field (`table.confers`, `table.when`,
+  `table.relation-when`, `table.reveals`, `table.read-through`, `table.write-through`, `table.member-reveals`, a role's
+  `via`): a new `via` action, source table, reveal, read-through or write-through action widens, a longer or self
+  delegation widens, an added `when` or `relationWhen` narrows, a removed or changed one widens. A member
   reveal keyed by a read-through dimension names its path and shows its `assign` as a reveal's. `writeThrough` and such
   a member reveal reach less when ignored, so `relationFields` does not count them.
 - **A Zerops namespace pinned to an older proxy source is judged by that release's own manifest parser

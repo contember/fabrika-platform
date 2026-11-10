@@ -188,6 +188,7 @@ function artifactOf(model: TableModel): TablePolicyArtifact {
 		...(model.view ? { view: true } : {}),
 		...(model.confers.length === 0 ? {} : { confers: confersArtifact(model.confers) }),
 		...(ownKeys(model.when).length === 0 ? {} : { when: whenArtifact(model.when) }),
+		...(ownKeys(model.relationWhen).length === 0 ? {} : { relationWhen: relationWhenArtifact(model.relationWhen) }),
 		...(model.reveals.length === 0 ? {} : { reveals: revealsArtifact(model.reveals) }),
 		...(model.readThrough.length === 0 ? {} : { readThrough: readThroughArtifact(model) }),
 		...writeThroughArtifact(model),
@@ -269,6 +270,19 @@ function whenArtifact(when: Readonly<Record<string, ConditionModel>>): Record<st
 		const action = actions[index] ?? ''
 		const condition = ownEntry(when, action)
 		if (condition !== undefined) setOwn(artifact, action, conditionArtifact(condition))
+	}
+	return artifact
+}
+
+function relationWhenArtifact(
+	relationWhen: Readonly<Record<string, Readonly<Record<string, ConditionModel>>>>,
+): Record<string, Record<string, ConditionArtifact>> {
+	const artifact: Record<string, Record<string, ConditionArtifact>> = {}
+	const relations = ownKeys(relationWhen)
+	for (let index = 0; index < relations.length; index++) {
+		const relation = relations[index] ?? ''
+		const conditions = ownEntry(relationWhen, relation)
+		if (conditions !== undefined) setOwn(artifact, relation, whenArtifact(conditions))
 	}
 	return artifact
 }

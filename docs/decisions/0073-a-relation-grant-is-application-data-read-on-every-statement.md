@@ -151,9 +151,15 @@ of the [coverage roadmap](../ideas/acl-coverage-roadmap.md).
 ### 5. A platform release publishes relation fields only to a framework that enforces them
 
 Control refuses to publish an artifact that declares `relations`, `via`, `confers` or `when` to an application whose
-pinned framework release predates their enforcement. A reader that ignores a narrowing field widens access, so this is
-a refusal and not a warning. Every new field is absent from the artifact unless declared, so existing artifacts keep
-their digests.
+pinned framework release predates their enforcement, and one that declares `relationWhen` (section 10) to an application
+pinned before the release that enforces it. A reader that ignores a narrowing field widens access, so this is a refusal
+and not a warning. Every new field is absent from the artifact unless declared, so existing artifacts keep their
+digests.
+
+Each floor is a release compared by prerelease precedence, and names the first release whose source enforces its
+fields. The source version names the last release cut, so a field that lands between releases takes the next
+prerelease after it as its floor (`relationWhen`: `0.9.0-dev.14`). A test holds every floor at or below the source
+version, or at that next prerelease, so a bump that cuts the enforcing release under another name fails it.
 
 ### 6. A read path may start at the row's container
 
@@ -277,6 +283,37 @@ member reveals by the row's own key only refuses another key at parse, so it fai
 reveals ignores them and reaches less. Neither widens, so section 5's publish refusal does not count them. The approval
 diff names the path and shows `assign` as it shows a reveal's.
 
+### 10. A condition on one relation
+
+`relationWhen: { <relation>: { <action>: <condition> } }` on a table narrows what that relation reaches of the table for
+that action, and nothing else: a caller reads every task of a project an IAM grant holds, and through the `member`
+relation only the open ones. It is table-side because the condition reads the table's columns, which the vocabulary
+does not know. The condition is section 3's, with every rule of it, and it is ANDed onto each term of that relation for
+that action: the direct term, a reveal matched for the relation, and the relation's term through a secondary path, as
+`(<term> and (<condition>))`. IAM values, member reveals and global grants are not narrowed; the table's own `when`
+still narrows every grant.
+
+- **The parse refuses what reaches nothing.** The relation is one the vocabulary declares, the action one the table
+  names, and the relation reaches the table for the action: its dimension is in the table's chain, a secondary path
+  reads it, or a reveal of the relation for that action names a node the row lies at. A view is judged against its
+  parent. An application or reference table takes none.
+- **The nesting bound holds.** The condition stands beside the term, not inside its subquery, so its paths count as a
+  `when`'s do: at most three foreign keys, and the deepest term stays the four of section 3.
+- **A `Ref` minted through the relation carries it.** Every statement's gate ORs the `Ref`'s parts (section 8), and the
+  relation's part is its narrowed term, so a row the condition does not admit is out on every statement.
+- **An insert is judged on the written row**, as `when`'s. A relation whose condition has no path and fails on the row
+  is dropped before the write; one with a path is judged after it, in the insert's transaction, with the rows on its
+  paths locked first. A `Ref` left with no relation that admits the row is a 409 and the transaction fails.
+- **A path writer's bound does not count a narrowed relation.** A writer that holds an action at the node only through
+  a relation narrowed for that action is not counted as holding it (section 8): the bound reads no row condition.
+- **A child view's parent subquery leaves the parent's `relationWhen` out**, as it leaves the parent's `when` out. The
+  view may declare its own: the parent subquery is then split into the rest and one part per narrowed relation, each
+  ANDed with the view's condition, and the guard admits that union.
+
+It narrows, so a release that ignores it widens: section 5 refuses to publish it to an application pinned below
+`0.9.0-dev.14`. The approval diff shows one line per relation and action, as it shows `when`: an added condition
+narrows, a removed or changed one widens.
+
 ## Consequences
 
 - An application expresses row-dependent access as data the approver reviews, instead of handler code. What the
@@ -286,8 +323,8 @@ diff names the path and shows `assign` as it shows a reveal's.
   stamped nodes, immutable deciding columns and no source writes past the handles. Each of these is enforced in the
   data layer, not by convention.
 - Control's approval diff grows a vocabulary: a new relation is neutral, a new `via` action or source table widens, a
-  longer delegation or `self: true` widens, an action a write path holds widens, an added `when` narrows, a removed or
-  changed `when` widens.
+  longer delegation or `self: true` widens, an action a write path holds widens, an added `when` or `relationWhen`
+  narrows, a removed or changed one widens.
 - **Rollout of an existing installation.** IAM migration `0029_role_via` adds a nullable `roles.via`. Every existing
   role reads as having none, and the next schema reconcile writes it for a role that declares it. An older IAM never
   reads the column and signs no `~rel`, so a relation grant fails closed until IAM is upgraded. No generated

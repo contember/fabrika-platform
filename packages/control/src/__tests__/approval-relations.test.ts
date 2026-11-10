@@ -16,6 +16,7 @@ interface RelationOptions {
 	readonly via?: string
 	readonly confers?: string
 	readonly when?: string
+	readonly relationWhen?: string
 	readonly reveals?: string
 }
 
@@ -44,8 +45,8 @@ function files(options: RelationOptions = {}): Map<string, string> {
 	const tables = (base['src/db/tables.ts'] ?? '').replace(
 		NOTE_TABLE,
 		`${NOTE_TABLE.slice(0, -3)}${options.when === undefined ? '' : `\n\t\twhen: ${options.when},`}${
-			options.reveals === undefined ? '' : `\n\t\treveals: ${options.reveals},`
-		}\n\t},
+			options.relationWhen === undefined ? '' : `\n\t\trelationWhen: ${options.relationWhen},`
+		}${options.reveals === undefined ? '' : `\n\t\treveals: ${options.reveals},`}\n\t},
 	note_members: {
 		scope: { child: 'notes' },
 		actions: { read: 'notes.read', insert: 'notes.share', delete: 'notes.share' },
@@ -352,6 +353,48 @@ describe("a relation's condition on the row its source names", () => {
 		}])
 		expect(classifyAccess(titled, sourced({ 'note_id.title': { eq: 'open' } })).outcome).toBe('widening')
 		expect(titled.contract === null ? [] : relationFields(titled.contract)).toContain('confers of table note_members')
+	})
+})
+
+describe("a relation's condition on the table it reads", () => {
+	const lines = (before: AccessSnapshot, after: AccessSnapshot) => classifyAccess(before, after).changes.map(({ effect, line }) => ({ effect, line }))
+	const open = snapshot(files())
+	const titled = snapshot(files({ relationWhen: "{ member: { 'notes.read': { title: { notEq: 'locked' } } } }" }))
+
+	test('is read from source, narrows when added, and widens when removed or changed', () => {
+		expect(titled.contract?.tables['notes']?.relationWhen).toEqual({ member: { 'notes.read': { title: { notEq: 'locked' } } } })
+		expect(lines(open, titled)).toEqual([{
+			effect: 'narrows',
+			line: '`notes.read` through relation `member` holds a row of `notes` only under its condition',
+		}])
+		expect(classifyAccess(open, titled).outcome).toBe('no-widening')
+		expect(lines(titled, open)).toEqual([{
+			effect: 'widens',
+			line: '`notes.read` through relation `member` holds every row of `notes` the relation reaches: its condition is removed',
+		}])
+		const frozen = snapshot(files({ relationWhen: "{ member: { 'notes.read': { title: { notEq: 'frozen' } } } }" }))
+		expect(classifyAccess(titled, frozen).outcome).toBe('widening')
+	})
+
+	test('is shown on a new table', () => {
+		const contract = open.contract
+		if (contract === null) throw new Error('the fixture has a contract')
+		const { notes: _, ...tables } = contract.tables
+		const without: AccessSnapshot = { ...open, contract: { ...contract, tables } }
+		expect(lines(without, titled)).toContainEqual({
+			effect: 'narrows',
+			line: '`notes.read` through relation `member` holds a row of `notes` only under its condition',
+		})
+	})
+
+	test('publishes only to a release from its own floor, which the refusal names', () => {
+		const contract = titled.contract
+		expect(relationGrantsRefusal(contract, '0.9.0-dev.13')).toContain('relationWhen of table notes')
+		expect(relationGrantsRefusal(contract, '0.9.0-dev.13')).toContain('enforces from 0.9.0-dev.14')
+		expect(relationGrantsRefusal(contract, '0.9.0-dev.12')).toContain('enforces from 0.9.0-dev.14')
+		expect(relationGrantsRefusal(contract, '0.9.0-dev.12')).toContain('relation member')
+		expect(relationGrantsRefusal(contract, '0.9.0-dev.14')).toBeNull()
+		expect(relationGrantsRefusal(open.contract, '0.9.0-dev.13')).toBeNull()
 	})
 })
 

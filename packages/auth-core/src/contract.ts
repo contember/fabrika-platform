@@ -886,6 +886,12 @@ export interface TablePolicyArtifact {
 	/** Action → the condition a row must meet for it, narrowing what any grant of it reaches. Absent unless declared. */
 	readonly when?: Readonly<Record<string, ConditionArtifact>>
 	/**
+	 * Relation → action → the condition a row the relation reaches must meet for it; it narrows that relation's reach only.
+	 * Absent unless declared, so the digest stays. A reader that ignores it reaches more: Control refuses to publish it to
+	 * an application pinned below the release that enforces it.
+	 */
+	readonly relationWhen?: Readonly<Record<string, Readonly<Record<string, ConditionArtifact>>>>
+	/**
 	 * Relation of the table's own dimension → the ancestor its rows reveal. Absent unless declared, so the digest stays.
 	 * A reader that ignores it reaches less, never more.
 	 */

@@ -6,6 +6,7 @@ import { AndNode, BinaryOperationNode, type OperationNode, OperatorNode, ParensN
 import { ownEntry } from './builtins'
 import type { ContainerGrant, RefGrant, WithinGrant } from './capability'
 import { conditionNode, subquery } from './condition-nodes'
+import type { ConditionModel } from './conditions'
 import { CapabilityError } from './errors'
 import type { ViewParentLink } from './guard'
 import { linksPredicate, linkValues } from './links'
@@ -24,6 +25,8 @@ import {
 /** A relation of the layer: its source table, and the tables whose rows it reaches reveal an ancestor node. */
 export interface LayerRelation extends RelationSource {
 	readonly reveals: readonly RevealModel[]
+	/** The actions some table's `relationWhen` narrows the relation for: it holds them only on the rows that condition admits. */
+	readonly narrowed: readonly string[]
 }
 
 /** Every relation of the layer, by name, with its source table. */
@@ -130,7 +133,8 @@ export function heldThrough(action: string): PathRule {
  * S.<principal> = $me and <active>)` where `model` lies at a node of the relation's dimension, and one
  * `T.<ancestor> in (<revealed nodes>)` per reveal of `action` to an ancestor `model` lies at. Empty where neither holds.
  * It also follows the secondary paths `paths` admits: the column `model` reaches the relation's dimension through, and
- * the reveals matched through one.
+ * the reveals matched through one. Where `model`'s `relationWhen` narrows the relation for `action`, each term is
+ * `(<term> and (<condition>))`, so no builder of a relation's reach leaves the condition out.
  */
 export function relationTerms(
 	relations: RelationSources,
@@ -159,7 +163,27 @@ export function relationTerms(
 			terms[terms.length] = isIn(model.name, placed, revealedNodes(source, reveal, principal, now))
 		}
 	}
-	return terms
+	const condition = relationCondition(model, relation, action)
+	if (condition === undefined) {
+		return terms
+	}
+	const narrowed: OperationNode[] = []
+	for (let index = 0; index < terms.length; index++) {
+		const term = terms[index]
+		if (term !== undefined) narrowed[narrowed.length] = narrowedTerm(term, conditionNode(model.name, condition, now))
+	}
+	return narrowed
+}
+
+/** The condition `model`'s `relationWhen` puts on the rows `relation` reaches for `action`, if any. */
+export function relationCondition(model: TableModel, relation: string, action: string): ConditionModel | undefined {
+	const conditions = ownEntry(model.relationWhen, relation)
+	return conditions === undefined ? undefined : ownEntry(conditions, action)
+}
+
+/** `(<term> and (<narrowing>))`: one branch of a reach, narrowed; the one shape the guard admits a branch's condition in. */
+export function narrowedTerm(term: OperationNode, narrowing: OperationNode): OperationNode {
+	return ParensNode.create(AndNode.create(term, ParensNode.create(narrowing)))
 }
 
 /**
@@ -254,21 +278,41 @@ export function refScope(
 	return conditioned(model, grant.action, gate === undefined ? chain : allOf([chain, gate]), now)
 }
 
+/** A child view's parent reach, split by the relations the view narrows: the rest's reach, and each such relation's own. */
+export interface SplitReach {
+	readonly rest: OperationNode | undefined
+	readonly relations: readonly { readonly reached: OperationNode; readonly condition: ConditionModel }[]
+}
+
 /**
  * The rows of a child view whose parent row `reached` admits: `V.<column> in (select P.<key> from P where <reached>)`,
  * after `row` when it addresses one row, then the view's own condition of `action`. For `all`, every parent row, so a
- * row whose parent column names none is still read by no capability. No column of the view places a row: its
- * containment rests on the parent's foreign keys (ADR-0072).
+ * row whose parent column names none is still read by no capability. Split by the relations the view narrows
+ * (`relationWhen`), one such membership per part, each narrowed relation's ANDed with the view's condition for it. No
+ * column of the view places a row: its containment rests on the parent's foreign keys (ADR-0072).
  */
 export function viewScope(
 	model: TableModel,
 	parent: ViewParentLink,
 	action: string,
-	reached: OperationNode | 'all',
+	reached: OperationNode | 'all' | SplitReach,
 	now: Date,
 	row?: OperationNode,
 ): OperationNode {
-	const member = isIn(model.name, parent.column, subquery(parent.table, parent.key, reached === 'all' ? undefined : reached))
+	const membership = (where: OperationNode | undefined) => isIn(model.name, parent.column, subquery(parent.table, parent.key, where))
+	let member: OperationNode
+	if (reached === 'all') {
+		member = membership(undefined)
+	} else if ('rest' in reached) {
+		const parts: OperationNode[] = reached.rest === undefined ? [] : [membership(reached.rest)]
+		for (let index = 0; index < reached.relations.length; index++) {
+			const part = reached.relations[index]
+			if (part !== undefined) parts[parts.length] = narrowedTerm(membership(part.reached), conditionNode(model.name, part.condition, now))
+		}
+		member = anyOf(parts)
+	} else {
+		member = membership(reached)
+	}
 	return conditioned(model, action, row === undefined ? member : allOf([row, member]), now)
 }
 
@@ -288,6 +332,18 @@ export function relationGate(
 	if (grant.relations.length === 0 && grant.revealing.length === 0 && grant.paths.length === 0) {
 		return undefined
 	}
+	const terms = gateTerms(reach, model, grant, now, paths)
+	if (terms.length === 0) {
+		throw new CapabilityError(
+			'unenforceable',
+			`the Ref of ${grant.dimension} is held through relations, member reveals or secondary paths, none of which reaches a row of ${model.name} for ${grant.action}`,
+		)
+	}
+	return anyOf(terms)
+}
+
+/** Every term of `grant`'s relations, member reveals and paths at `model`; empty where none reaches it. */
+export function gateTerms(reach: LayerReach, model: TableModel, grant: RefGrant, now: Date, paths: PathRule): readonly OperationNode[] {
 	const terms: OperationNode[] = []
 	const add = (more: readonly OperationNode[]): void => {
 		for (let index = 0; index < more.length; index++) {
@@ -304,13 +360,7 @@ export function relationGate(
 	if (grant.paths.length > 0) {
 		add(pathTerms(model, grant.paths, paths))
 	}
-	if (terms.length === 0) {
-		throw new CapabilityError(
-			'unenforceable',
-			`the Ref of ${grant.dimension} is held through relations, member reveals or secondary paths, none of which reaches a row of ${model.name} for ${grant.action}`,
-		)
-	}
-	return anyOf(terms)
+	return terms
 }
 
 /**

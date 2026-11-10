@@ -161,6 +161,9 @@ function canonicalTable(table: TablePolicyArtifact): TablePolicyArtifact {
 		insert: sorted(table.insert),
 		update: sorted(table.update),
 		...(table.when === undefined ? {} : { when: mapValues(table.when, canonicalCondition) }),
+		...(table.relationWhen === undefined
+			? {}
+			: { relationWhen: mapValues(table.relationWhen, (conditions) => mapValues(conditions, canonicalCondition)) }),
 		...(table.confers === undefined ? {} : { confers: mapValues(table.confers, canonicalConfers) }),
 		...(table.reveals === undefined ? {} : { reveals: mapValues(table.reveals, canonicalReveals) }),
 		...(table.memberReveals === undefined ? {} : { memberReveals: mapValues(table.memberReveals, canonicalMemberReveals) }),

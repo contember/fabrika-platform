@@ -8,7 +8,8 @@ statement. This file is an application of its own (`tasks` with assistants); its
 
 Ask the human before you add a relation, a role's `via`, a table's `confers` or its `assign`: each lets someone reach
 more, and the approver sees each as a widening. A `when` only narrows; removing or changing one widens. They need
-`@fabrika/app` `0.9.0-dev.13` or later: Control refuses to publish them for an application pinned to an earlier release.
+`@fabrika/app` `0.9.0-dev.13` or later, and a `relationWhen` `0.9.0-dev.14` or later: Control refuses to publish them for
+an application pinned to an earlier release.
 
 ## The vocabulary: a relation and a role's `via`
 
@@ -230,6 +231,20 @@ export const tables = defineTables(vocabulary, columns)({
   (`{ project_id: { some: { tasks: … } } }` on `tasks`): a row inserted meanwhile could make the first two false,
   nothing names the new row yet, and the last would count the new task itself, since the condition is judged after
   the write. An upsert's conflict update is judged on the stored row.
+
+### `relationWhen`: a condition on what one relation reaches
+
+- `relationWhen: { <relation>: { <action>: <condition> } }` narrows only what that relation reaches of the table for
+  the action: through `assisting`, only open tasks, while the owner's IAM grant still reaches every task. The table's
+  own `when` still applies to every grant; a member reveal and an IAM grant are not narrowed by it.
+- The condition is a `when` in every rule above: the same operators, paths, `not` rule and insert rules. The relation
+  must be one the vocabulary declares and the action one the table names, and the relation must reach the table for
+  it (its dimension in the table's chain, a `readThrough`, or a reveal of it for that action); otherwise the policy is
+  refused. A view checks the relation against its parent, and its own `relationWhen` narrows its rows; the parent's
+  does not apply to it.
+- An `on` endpoint whose `Ref` the relation holds sees a row the condition does not admit as absent (404). An insert
+  through the relation that the condition refuses, with no other relation to hold it, is a 409 with nothing written.
+- A relation narrowed for an action does not count as holding it when a `writeThrough` column's writer is checked.
 
 ### A key that holds the tenant needs its ancestors NOT NULL
 

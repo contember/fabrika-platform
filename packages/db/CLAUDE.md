@@ -621,6 +621,17 @@ through a relation (`~rel`, `@fabrika/auth-core`). `authority.ts` builds every p
   reached). `insertProblem` refuses a `none`, a `some` under `not` (a row inserted meanwhile falsifies them, and no
   lock holds that), a `some` of the rows naming the inserted row, and a `some` of the inserted table's own rows at any
   depth: judged after the write, it would count the inserted row itself.
+- **`relationWhen: { <relation>: { <action>: <condition> } }`** narrows that relation's terms of the action only:
+  `relationTerms` wraps each (the direct term, a reveal matched for it, its term through a path) as
+  `(<term> and (<condition>))` (`narrowedTerm`; the guard's `isNarrowed`, as a member of `isReach` and of a view's
+  parent union). IAM values, member reveals and global grants are not narrowed. It parses as `when` (`parseRelationWhen`:
+  the vocabulary's relation, an action the table names, `insertProblem` for an insert action), on a dimension or child
+  table only, and `checkRelationWhenReach` refuses a relation that reaches no row of the table (a view: of its parent)
+  for the action. A `Ref`'s gate carries it (`gateTerms`). An insert drops a relation whose pathless condition fails on
+  the row before the write (`narrowedDestination`), and judges one with a path after it (`judgeNarrowed`, rows on the
+  path locked); a `Ref` left with no relation is a 409 and fails the transaction. A relation narrowed for an action does
+  not count towards a path writer's bound (`unnarrowed`). A view's parent subquery leaves the parent's `relationWhen`
+  out, as its `when`; the view's own splits the subquery into the rest and one part per narrowed relation (`SplitReach`).
 - **A tenant-holding key** is one foreign key of exactly the column and every ancestor column the two tables share,
   referencing the target's key (`holdsExactly`), with each ancestor column in the column list's `notNull`
   (`requireNotNullAncestors`, the invariant above). A hop's subquery reads its target unscoped, so any looser key would
@@ -656,7 +667,7 @@ through a relation (`~rel`, `@fabrika/auth-core`). `authority.ts` builds every p
   `Within`'s reads (`WithinGrant.revealing`), and for a `Ref` the framework mints through it (`RefGrant.revealing`, the
   caller's grants at the revealing dimension), whose every statement requires the member term (`relationGate`,
   `revealingTerms`), ORed with its relation terms. An insert under such a `Ref` locks its owned destination under the
-  term, or, into a node no table owns, a revealing row `FOR SHARE` (`lockHoldingRow`, `memberAddress`); none left is a
+  term, or, into a node no table owns, a revealing row `FOR SHARE` (`holdingRowLocked`, `memberAddress`); none left is a
   404. `revealsToMembers` is the binding `on` and `in` mint through; it reads the matched grants grouped (`valuesNode`),
   never only the first row. A member-revealing row is never written unscoped or by `ctx.sql`, never moves, and its key
   is the layer's, so no write revives a node a former member still holds.

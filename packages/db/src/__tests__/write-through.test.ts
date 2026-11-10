@@ -377,6 +377,21 @@ function suite(dialect: 'sqlite' | 'postgres', open: () => Promise<Backend>, clo
 				expect(await titles()).toEqual(['by member', 'four', 'no team', 'one', 'three', 'two'])
 			})
 
+			test('does not take a relation whose relationWhen narrows an action the column hands out', async () => {
+				release()
+				const narrowed = { ...taskPolicy, relationWhen: { teamMember: { 'tasks.write': { title: { notEq: 'locked' } } } } }
+				layer = scoped(defineTables(vocabulary, columns)({ ...others, tasks: narrowed }))
+				const binding = bindScopedDatabaseProvisionally(layer, { database: backend.database, capabilities: alice })
+				release = () => binding.release()
+				data = dataAccessOf(layer)
+				standAt({ ...byTeams(), relations: ['teamMember'] })
+				await expect(insert('t1', 'by member')).rejects.toThrow(ConflictError)
+				// A grant at the team still bounds the writer.
+				standAt(byTeams('t1'))
+				await insert('t1', 'by grant')
+				expect(await titles()).toEqual(['by grant', 'four', 'one', 'three', 'two'])
+			})
+
 			test.skipIf(dialect !== 'postgres')('locks the relation row it holds the team through until the insert commits', async () => {
 				standAt({ ...byTeams(), relations: ['teamMember'] })
 				let resume: () => void = () => {}
