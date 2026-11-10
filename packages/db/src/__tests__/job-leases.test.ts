@@ -55,6 +55,24 @@ function inTime<T>(ms: number, work: Promise<T>): Promise<T> {
 	])
 }
 
+async function backendPid(sql: SQL): Promise<number> {
+	const [row] = await sql.unsafe('select pg_backend_pid() as pid')
+	return Number(Reflect.get(Object(row), 'pid'))
+}
+
+/** Resolves once a statement on another connection waits on a lock the backend `pid` holds. */
+async function blockedBy(pid: number, ms = 2000): Promise<void> {
+	const deadline = Date.now() + ms
+	await admin(async (sql) => {
+		while (Date.now() < deadline) {
+			const waiting: unknown[] = await sql.unsafe('select pid from pg_stat_activity where $1 = any(pg_blocking_pids(pid))', [pid])
+			if (waiting.length > 0) return
+			await Bun.sleep(10)
+		}
+		throw new Error(`no statement waited on backend ${pid} within ${ms} ms`)
+	})
+}
+
 async function lease(job: string, attemptMs = HOUR): Promise<LeaseFence> {
 	const fence = await leases.acquire(job, `holder-${job}`, attemptMs, HOUR)
 	if (fence === null) throw new Error('no lease')
@@ -251,10 +269,11 @@ describe.skipIf(!hasPostgres)('every mutation checks the fence of the attempt ru
 		await admin(async (sql) => {
 			await sql.unsafe('begin')
 			await sql.unsafe(`select id from ${schema}.notes where id = 'n1' for update`)
-			const removal = stores().notes.remove(n1())
-			await Bun.sleep(150)
+			// The cancellation rejects the removal before cancelInFlight returns, so its outcome is taken first.
+			const removal = stores().notes.remove(n1()).then(() => 'committed', (error: unknown) => error)
+			await blockedBy(await backendPid(sql))
 			await leases.cancelInFlight(fence)
-			await expect(removal).rejects.toBeInstanceOf(LeaseLostError)
+			expect(await inTime(3000, removal)).toBeInstanceOf(LeaseLostError)
 			await sql.unsafe('rollback')
 		})
 		await expect(stores().notes.remove(n1())).rejects.toThrow('has ended; it writes nothing more')
@@ -268,14 +287,16 @@ describe.skipIf(!hasPostgres)('every mutation checks the fence of the attempt ru
 		const fence = await lease('idle-writer', 5_000)
 		authority.lease = fence
 		const hold = Promise.withResolvers<void>()
+		const idling = Promise.withResolvers<void>()
 		let timeout: unknown
 		const running = data.transaction(async (session) => {
 			await runFixedStatement(session, `update notes set title = 'held' where id = 'n1'`, [])
 			;[timeout] = await runFixedStatement(session, 'show idle_in_transaction_session_timeout', [])
+			idling.resolve()
 			await hold.promise
 		})
 		const outcome = running.then(() => 'committed', (error: unknown) => error)
-		await Bun.sleep(300)
+		await inTime(3000, idling.promise)
 		await leases.cancelInFlight(fence)
 		expect(await inTime(3000, outcome)).toBeInstanceOf(LeaseLostError)
 		await inTime(3000, admin((sql) => sql.unsafe(`update ${schema}.notes set version = version where id = 'n1'`)))
@@ -297,7 +318,7 @@ describe.skipIf(!hasPostgres)('every mutation checks the fence of the attempt ru
 				order.push('renewed')
 				return next
 			})
-			await Bun.sleep(100)
+			await blockedBy(await backendPid(sql))
 			order.push('committed')
 			await sql.unsafe('commit')
 			expect(await renewal).not.toBeNull()
