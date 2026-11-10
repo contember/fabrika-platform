@@ -255,6 +255,11 @@ function suite(dialect: 'sqlite' | 'postgres', open: () => Promise<Backend>, clo
 				relations: [inside('org', 'o1')],
 				paths: [],
 			})
+			// A hold of several nodes comes back held inside the node the object's column stores.
+			expect(await holdsThrough('task', 'k1', 'tasks.write', 'user:alice', [inside('org', 'o2', 'o1', 'o3')], [])).toEqual({
+				relations: [inside('org', 'o1')],
+				paths: [],
+			})
 			expect(await holdsThrough('task', 'k1', 'tasks.write', 'user:alice', [inside('project', 'p2')], [])).toEqual({ relations: [], paths: [] })
 			expect(await holdsThrough('task', 'k1', 'tasks.write', 'user:bob', [inside('org', 'o1')], [])).toEqual({ relations: [], paths: [] })
 			const many = [inside('org', ...Array.from({ length: 1001 }, (_, index) => `o${index}`))]

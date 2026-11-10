@@ -158,7 +158,8 @@ for each relation action, and never `~rel`.
   column for that dimension gets no term from the entry, and neither does a reveal to a dimension above the node: its
   rows lie at the node's ancestor, not inside the node. The framework counts an entry only where the relation's
   dimension, and a reveal's, is the grant's dimension or lies inside it; `on` and `in` ask the database for the object
-  row with that comparison, and a `Ref` carries the node its object lies in.
+  row with that comparison, never comparing a node themselves, and a `Ref` carries the node as the object's column
+  stores it, so every spelling the database equates (a `uuid` in either case) is one node for `on`, `in` and `over`.
 - **A membership role's relation lies inside its value.** Each relation of its `via` has the role's own dimension or one
   inside it; the build refuses any other.
 - **Assigning the role is held to a plain grant.** IAM gives a membership role with `via` only to an assigner that holds

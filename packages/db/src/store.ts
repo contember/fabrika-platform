@@ -129,6 +129,7 @@ import {
 	modelOf,
 	type MoveAcknowledgement,
 	namesAction,
+	nodeColumnOf,
 	type Operation,
 	type ParentOf,
 	type PathWriter,
@@ -3522,7 +3523,8 @@ async function membersRevealed(
  * Of `relations` and `paths`, the caller's relations and grants of `action` that reach the object `id` of `dimension`
  * through a relation row, a reveal or a secondary path that holds the action for a `Ref` (`writeThrough`): one guarded
  * select per candidate. What `on` and `in` mint a `Ref` held through a path with, and through a relation held inside a
- * node: the statement compares the object's column for the node's dimension with the held values.
+ * node: the statement compares the object's column for the node's dimension with the held values, and the relation
+ * comes back held inside the node that column stores, so every spelling the database equates is one node.
  */
 async function heldThroughPaths(
 	models: TableModels,
@@ -3569,24 +3571,39 @@ async function heldThroughPaths(
 	}
 	const now = new Date()
 	const session = sessionOf(runtime)
-	const reaches = async (terms: readonly OperationNode[]): Promise<boolean> => {
-		if (terms.length === 0) return false
+	const reached = async (terms: readonly OperationNode[], column: string): Promise<Readonly<Record<string, unknown>> | undefined> => {
+		if (terms.length === 0) return undefined
 		const scope = AndNode.create(equals(owner.name, keyOf(owner), id), anyOf(terms))
 		const context: GuardContext = { root: 'SelectQueryNode', table: owner.name, joins: {}, scope, subqueries: layer.subqueries }
-		const rows = await session.run<Readonly<Record<string, unknown>>>(locateNode(owner.name, [keyOf(owner)], scope), context)
-		return rows.length > 0
+		const columns = column === keyOf(owner) ? [column] : [keyOf(owner), column]
+		const [row] = await session.run<Readonly<Record<string, unknown>>>(locateNode(owner.name, columns, scope), context)
+		return row
 	}
 	const held: RelationHold[] = []
 	for (let index = 0; index < named.length; index++) {
 		const hold = named[index]
-		if (hold !== undefined && (await reaches(relationTerms(layer.relations, owner, hold, principal, action, now, heldThrough(action))))) {
+		if (hold === undefined) continue
+		const column = hold.inside === null ? keyOf(owner) : nodeColumnOf(owner, hold.inside.dimension)
+		const row = column === undefined
+			? undefined
+			: await reached(relationTerms(layer.relations, owner, hold, principal, action, now, heldThrough(action)), column)
+		if (row === undefined || column === undefined) continue
+		if (hold.inside === null) {
 			held[held.length] = hold
+			continue
 		}
+		const node = ownEntry(row, column)
+		if (typeof node !== 'string') {
+			throw new PolicyError(`${owner.name}.${column} came back as ${typeof node}; a containment column holds its scope value as text`)
+		}
+		held[held.length] = freeze({ relation: hold.relation, inside: freeze({ dimension: hold.inside.dimension, values: freeze([node]) }) })
 	}
 	const through: ContainerGrant[] = []
 	for (let index = 0; index < grants.length; index++) {
 		const grant = grants[index]
-		if (grant !== undefined && (await reaches(pathTerms(owner, [grant], heldThrough(action))))) through[through.length] = grant
+		if (grant !== undefined && (await reached(pathTerms(owner, [grant], heldThrough(action)), keyOf(owner))) !== undefined) {
+			through[through.length] = grant
+		}
 	}
 	return freeze({ relations: freeze(held), paths: freeze(through) })
 }

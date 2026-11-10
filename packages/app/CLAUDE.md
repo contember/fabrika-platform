@@ -588,8 +588,10 @@ vocabulary (`packages/db/CLAUDE.md`).
 - **A `~rel` entry is an action held through a relation, and the data layer decides where** (ADR-0073). The proxy's
   requirement counts it like any grant of the action. A `~relin` entry holds it only inside its node (`#heldRelations`
   reads it as a `RelationHold` with `inside`): it counts only where the relation's dimension, and a reveal's, is the
-  node's dimension or lies inside it; `on` and `in` narrow it to the node the object lies in (`#atObject`) and ask the
-  db's `holdsThrough`, which compares the object's column with it in the statement; `over` carries the hold into its
+  node's dimension or lies inside it; `on` and `in` keep it where its dimension is the object's or on its chain
+  (`#atObject`, which compares no node) and ask the db's `holdsThrough`, in batches of at most `MAX_WITHIN_VALUES`
+  nodes, which compares the object's column with it in the statement and answers it narrowed to the node that column
+  stores, so `on`, `in` and `over` equate the same spellings of a key; `over` carries the hold into its
   `Within`, where the db narrows each table's term by its own column. `on` and `in` mint a `Ref` through a relation only when a row of
   it names the caller at the object or a container on its chain, or reaches a row that reveals one of them for the
   action, now (`Ref`'s relations; empty for an IAM grant); `over` puts the relations into its `Within` beside the IAM

@@ -562,7 +562,8 @@ through a relation (`~rel` anywhere, `~relin` inside a node, `@fabrika/auth-core
 `RelationHold`; one held inside a node narrows every term of the relation at a table to its own column for the node's
 dimension (`(<term> and (T.<column> in (<nodes>)))`), and a table with no such column gets no term from it
 (`relationTerms`), so a reveal above the node reaches nothing. `holdingRowLocked` holds the source and reveal rows to
-the same column, and `holdsThrough` parses each hold before it compares. `authority.ts` builds every predicate a capability scopes
+the same column, and `holdsThrough` parses each hold before it compares, then answers a matched one narrowed to the
+node the object's column stores (the statement compared it, so a `uuid` spelled in another case is that node). `authority.ts` builds every predicate a capability scopes
 (`refScope`, `viewScope`, `relationTerms`, `memberTerms`, `conditioned`), `conditions.ts` parses a condition (browser-safe, no Kysely) and
 `condition-nodes.ts` builds its predicate. The guard admits exactly these subquery shapes and nothing else.
 

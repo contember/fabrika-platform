@@ -1,16 +1,20 @@
 // A relation held inside a node, through boot behind the production proxy decision, on SQLite: a membership role held
 // in an organization with `via` carries `~relin` entries, and `on` and `over` endpoints reach a project of that
 // organization exactly while a member row names the caller there; a member row in another organization reaches nothing.
+// On Postgres (FABRIKA_TEST_POSTGRES_URL), with organizations keyed by uuid, `on` holds the node exactly where `over` does.
 
 import { createClient } from '@fabrika/app/client'
 import { compileContract, ContractError, defineApp, defineVocabulary } from '@fabrika/app/contract'
 import { serve } from '@fabrika/app/implement'
 import { testKit } from '@fabrika/app/testing'
-import { scoped } from '@fabrika/db'
+import { relationInsideScope } from '@fabrika/auth-core'
+import { MAX_WITHIN_VALUES, scoped } from '@fabrika/db'
 import { defineTables, tablePolicies } from '@fabrika/db/tables'
+import { testDatabase as postgresDatabase } from '@fabrika/db/testing'
 import { testDatabase } from '@fabrika/db/testing-sqlite'
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { afterAll, afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { z } from 'zod/v4'
+import { bootApp, environment, frameworkEnvFor, grant, resultOf, send, token } from './fixtures/implement/harness'
 import { columns, policies, tables } from './relations-inside-fixture/tables'
 import { vocabulary } from './relations-inside-fixture/vocabulary'
 
@@ -87,6 +91,50 @@ describe('a relation held inside an organization, through boot', () => {
 		await expect(lead.get({ id: 'p3' })).rejects.toMatchObject({ httpStatus: 404 })
 		await expect(lead.rename({ id: 'p3', name: 'x' })).rejects.toMatchObject({ httpStatus: 404 })
 		expect(await lead.all({})).toEqual({ ids: [] })
+	})
+})
+
+const postgres = await postgresDatabase({
+	migrations: new URL('./relations-inside-fixture/db/migrations-postgres/', import.meta.url),
+	label: 'relations-inside.test.ts',
+})
+afterAll(() => postgres?.close())
+
+describe.skipIf(postgres === null)('a relation held inside an organization keyed by uuid, on Postgres', () => {
+	if (postgres === null) return
+	const o1 = '0193a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a01'
+
+	test('a grant that spells the node in another case reaches what the database equates with it, on and over alike', async () => {
+		const kit = testKit(serve(contract, { database: scoped(tables) }), { database: postgres.database })
+		const lead = kit.testCaller([{ role: 'lead', scope: kit.scope('org', o1.toUpperCase()) }], { id: 'user:lead' })
+		const owner = kit.testCaller([{ role: 'owner', scope: kit.scope('org', o1) }, {
+			role: 'owner',
+			scope: kit.scope('org', '0193a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a02'),
+		}], { id: 'user:owner' })
+		const leads = createClient(contract, 'api', { fetch: kit.browser(lead) }).projects
+		const owners = createClient(contract, 'api', { fetch: kit.browser(owner) }).projects
+		await owners.assign({ id: 'p1', principal: 'user:lead' })
+		await owners.assign({ id: 'p3', principal: 'user:lead' })
+		expect(await leads.all({})).toEqual({ ids: ['p1'] })
+		expect(await leads.get({ id: 'p1' })).toEqual({ name: 'one' })
+		expect(await leads.rename({ id: 'p1', name: 'renamed' })).toEqual({ done: true })
+		await expect(leads.get({ id: 'p2' })).rejects.toMatchObject({ httpStatus: 404 })
+		await expect(leads.get({ id: 'p3' })).rejects.toMatchObject({ httpStatus: 404 })
+	})
+
+	test(`a node among more than ${MAX_WITHIN_VALUES} held inside still gets its Ref: the nodes are asked in batches`, async () => {
+		// Past the kit's token size bound, so the token goes to boot directly, as the proxy forwards it.
+		const served = serve(contract, { database: scoped(tables) })
+		const audience = 'orgs@prod'
+		const app = bootApp(served, { database: postgres.database, environment: environment({ ...frameworkEnvFor(served), FABRIKA_IAM_APP_ID: audience }) })
+		const kit = testKit(serve(contract, { database: scoped(tables) }), { database: postgres.database })
+		const owner = kit.testCaller([{ role: 'owner', scope: kit.scope('org', o1) }], { id: 'user:owner' })
+		await createClient(contract, 'api', { fetch: kit.browser(owner) }).projects.assign({ id: 'p2', principal: 'user-1' })
+		const nodes = [...Array.from({ length: MAX_WITHIN_VALUES }, (_, index) => `0193a1b2-c3d4-7e5f-8a9b-${String(index).padStart(12, '0')}`), o1]
+		const inside = nodes.map((node) => grant('projects.read', relationInsideScope({ relation: 'member', dimension: 'org', node })))
+		const lead = await token('user', inside, audience)
+		expect(resultOf(await send(app, '/api/projects.get', { token: lead, body: { id: 'p2' } }))).toEqual({ name: 'two' })
+		expect((await send(app, '/api/projects.get', { token: lead, body: { id: 'p3' } })).status).toBe(404)
 	})
 })
 
