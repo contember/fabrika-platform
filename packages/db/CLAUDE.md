@@ -567,7 +567,9 @@ through a relation (`~rel`, `@fabrika/auth-core`). `authority.ts` builds every p
   key under the hop rule to the far row (`parseSourceWhen`), never two and no `some`, so a reveal through a path stays
   four deep beside a principal path; `farColumn` holds the far row as `parsePrincipal` holds P (no view, queue or
   top-level dimension, the tested column no version, containment or updated column, no cascade into it, its key or the
-  source's column), and `accessTables` keeps `ctx.sql` writes off it.
+  source's column), and `accessTables` keeps `ctx.sql` writes off it. The tag checks a statement when it runs, so a
+  writing statement that already names the far table, or a principal path's table, fails at run time from the release
+  whose policy adds that condition or path; no parse sees the application's statements.
 - **A principal may be read through one foreign key** (`principal: '<column>.<principal column>'`, `parsePrincipal`):
   `<column>` is a single-column foreign key to the key of a contained dimension, child or application table P (no view,
   no queue table, no top-level dimension, whose key an insert takes from its Ref), never the source's key, chain,

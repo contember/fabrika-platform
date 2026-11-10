@@ -165,7 +165,8 @@ export const tables = defineTables(vocabulary, columns)({
   A source's `when` never reads its `version`. It may follow one foreign key to the row the source names, such as
   `{ 'person_id.active': { eq: true } }`, the far side of a many-to-many table: no update of that table may write the
   column it tests, and the table is no view, queue or top-level dimension table. It takes no second foreign key and no
-  `some`.
+  `some`. That table joins the source table among those `ctx.sql` of a writing endpoint never names, so a writing
+  statement that already names it fails at run time once the condition is added: move that write to `ctx.db` first.
 - Inserting a row is delegation: the coordinator gives the assistant `tasks.read` and `tasks.write` without holding
   `tasks.write` itself. The insert's own action (`assistants.assign`) decides who may write it, and the layer bounds
   what it gives instead:
