@@ -346,7 +346,8 @@ day, queue tables and `claim`, e-mail through `ctx.mail` with attachments and un
 this skill), `public-intake.md`, a public page, public procedures, a job that claims their rows, issues links and
 e-mails them, a link holder's files, HR's review with its history, and `relations.md`, access that rows of the
 application grant and narrow (a relation, a role's `via`, a source table's `confers` and `assign`, a table's `when`
-conditions, `readThrough`, `reveals` and `memberReveals`).
+conditions, `readThrough`, `reveals`, `memberReveals`, and `admits`, a condition that widens a list inside a tenant
+partition).
 
 ## Not built yet
 
