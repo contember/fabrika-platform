@@ -760,8 +760,50 @@ describe('access tables: only the platform writes them', () => {
 		expect(classifyMigrations([{ name: FILE, sql: body('INSERT INTO grants (id) VALUES (NEW.id);') }], SCHEMA).files[0]?.refused).toEqual([])
 	})
 
-	test('a SQLite trigger that writes an access table is refused, as every SQLite trigger body is', () => {
-		const sql = 'CREATE TRIGGER notes_grant AFTER INSERT ON notes BEGIN INSERT INTO grants (id) VALUES (NEW.id); END;\n'
-		expect(classifyAccess(sql).length).toBeGreaterThan(0)
+	test('a write of a view over an access table is refused like one, through views and renames, in any file', () => {
+		const views = (writer: string) =>
+			classifyMigrations(
+				[
+					{
+						name: '20261011120000_views.sql',
+						sql: 'CREATE VIEW granted AS SELECT id, role FROM grants;\nCREATE OR REPLACE VIEW app_notes.granted_ids AS SELECT id FROM granted;\n',
+					},
+					{ name: '20261011130000_rename.sql', sql: 'ALTER VIEW granted_ids RENAME TO grant_ids;\n' },
+					{ name: '20261011140000_writer.sql', sql: writer },
+				],
+				SCHEMA,
+				{ accessTables: ACCESS },
+			).files.flatMap((file) => file.refused.map((refusal) => refusal.reason))
+		expect(views('CREATE RULE copy AS ON INSERT TO notes DO ALSO INSERT INTO granted (id) VALUES (NEW.id);\n')).toEqual([
+			'a write of the view granted over an access table in a rule action',
+		])
+		expect(views(body('UPDATE grant_ids SET id = NEW.id;'))).toEqual(['a write of the view grant_ids over an access table in a function body'])
+		expect(
+			views(
+				'CREATE VIEW titles AS SELECT id, title FROM notes;\nCREATE RULE copy AS ON INSERT TO notes DO ALSO INSERT INTO titles (id) VALUES (NEW.id);\n',
+			),
+		)
+			.toEqual([])
+	})
+
+	test('a BEFORE or INSTEAD OF trigger and any rule on an access table, or a view over one, are refused; an AFTER trigger is not', () => {
+		const sql = (statement: string) => `${body('RETURN NULL;')}${statement}\n`
+		expect(classifyAccess(sql('CREATE TRIGGER keep BEFORE DELETE ON grants FOR EACH ROW EXECUTE FUNCTION touch();'))[0]?.reason).toBe(
+			'a BEFORE trigger on the access table grants',
+		)
+		expect(classifyAccess(sql('CREATE TRIGGER keep BEFORE INSERT OR UPDATE ON app_notes."members" FOR EACH ROW EXECUTE FUNCTION touch();'))[0]?.reason)
+			.toBe('a BEFORE trigger on the access table members')
+		expect(
+			classifyAccess(
+				`CREATE VIEW granted AS SELECT id FROM grants;\n${sql('CREATE TRIGGER put INSTEAD OF INSERT ON granted FOR EACH ROW EXECUTE FUNCTION touch();')}`,
+			)[0]?.reason,
+		).toBe('an INSTEAD OF trigger on the view granted over an access table')
+		expect(classifyAccess('CREATE RULE keep AS ON DELETE TO grants DO INSTEAD NOTHING;\n')[0]?.reason).toBe('a rule on the access table grants')
+		expect(classifyAccess(sql('CREATE TRIGGER seen AFTER INSERT OR UPDATE ON grants FOR EACH ROW EXECUTE FUNCTION touch();'))).toEqual([])
+	})
+
+	test('a SQLite trigger that writes an access table is refused: the statement splitter cuts its body, as every SQLite trigger body', () => {
+		const sql = 'CREATE TRIGGER notes_grant AFTER INSERT ON notes BEGIN INSERT INTO grants (id) VALUES (1); END;\n'
+		expect(classifyAccess(sql).map((refusal) => refusal.reason)).toEqual(['CREATE TRIGGER without EXECUTE FUNCTION', 'END'])
 	})
 })

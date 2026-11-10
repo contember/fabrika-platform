@@ -204,8 +204,9 @@ checked, because a service is trusted platform code.
     the built-in), a call through field selection (`(expression).f(…)`),
     a parenthesized target of `UPDATE`, `DELETE` or `INSERT INTO`, a rule
     with several actions, a function or procedure body or a rule action
-    that writes one of the application's access tables (ADR-0073; Control
-    and the checker pass them, the boot runner does not), a
+    that writes one of the application's access tables or a view over one,
+    a `BEFORE` or `INSTEAD OF` trigger or a rule on either (ADR-0073;
+    Control and the checker pass them, the boot runner does not), a
     Unicode-escaped name (`U&"…"`), a literal that never
     closes, and every form the classifier does not recognise, `SELECT`,
     `WITH` and `MERGE` included. An allowlist at every level: a form a later

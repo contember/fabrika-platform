@@ -1274,7 +1274,10 @@ describe('migration-refused: the access tables', () => {
 		expect(at(sql, ['members'])).toEqual([])
 	})
 
-	test('a SQLite trigger that writes one is refused too', () => {
-		expect(at('CREATE TRIGGER notes_grant AFTER INSERT ON notes BEGIN INSERT INTO grants (id) VALUES (NEW.id); END;\n', ['grants'])).not.toEqual([])
+	test('a SQLite trigger that writes one is refused too: the statement splitter cuts its body, as every SQLite trigger body', () => {
+		expect(at('CREATE TRIGGER notes_grant AFTER INSERT ON notes BEGIN INSERT INTO grants (id) VALUES (1); END;\n', ['grants'])).toEqual([
+			`${MIGRATION}:1 CREATE TRIGGER without EXECUTE FUNCTION is not allowed: Control refuses the deploy that brings this migration`,
+			`${MIGRATION}:1 END is not allowed: Control refuses the deploy that brings this migration`,
+		])
 	})
 })

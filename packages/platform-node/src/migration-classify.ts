@@ -18,6 +18,7 @@ import {
 	closingParenthesis,
 	CTE_FORM,
 	ddlForeignSchema,
+	dmlRelations,
 	frameworkReference,
 	functionUse,
 	isFrameworkName,
@@ -116,6 +117,8 @@ export interface ClassifyMigrationOptions {
 	readonly framework?: boolean
 	/** The application's access tables, lowercased (`accessTables` of `@fabrika/db/tables`): no stored code writes one. */
 	readonly accessTables?: ReadonlySet<string>
+	/** The views the migration set declares over an access table, lowercased (`accessViews`): written like one. */
+	readonly accessViews?: ReadonlySet<string>
 }
 
 /** What the whole migration set is classified against besides its schema. */
@@ -221,6 +224,7 @@ interface Context {
 	readonly functions: ReadonlySet<string>
 	readonly framework: boolean
 	readonly accessTables: ReadonlySet<string>
+	readonly accessViews: ReadonlySet<string>
 	doBlocks: number
 }
 
@@ -269,7 +273,16 @@ function refuseAccessWrite(tokens: readonly SqlToken[], context: Context, label:
 	for (const target of writeTargets(tokens)) {
 		const name = target.name.toLowerCase()
 		if (context.accessTables.has(name)) throw new Refused(`a write of the access table ${name} in ${label}`, target.line)
+		if (context.accessViews.has(name)) throw new Refused(`a write of the view ${name} over an access table in ${label}`, target.line)
 	}
+}
+
+/** `access table <name>` or `view <name> over an access table` when `name` is one, else `undefined`. */
+function accessRelation(name: string, context: Context): string | undefined {
+	const lower = name.toLowerCase()
+	if (context.accessTables.has(lower)) return `the access table ${lower}`
+	if (context.accessViews.has(lower)) return `the view ${lower} over an access table`
+	return undefined
 }
 
 /**
@@ -470,6 +483,12 @@ function createTrigger(tokens: readonly SqlToken[], at: number, context: Context
 	const on = wordAtDepthZero(tokens, 'ON', at + 1)
 	if (name === undefined || on === undefined) throw new Refused('CREATE TRIGGER', line)
 	const table = ownName(tokens, on + 1, context, 'CREATE TRIGGER')
+	// A BEFORE or INSTEAD OF trigger decides the row an access table stores, or whether it is stored, without any write.
+	const timing = tokens.slice(at + 1, on).map((token) => upperWord(token)).find((word) => word === 'BEFORE' || word === 'INSTEAD')
+	const access = accessRelation(table, context)
+	if (timing !== undefined && access !== undefined) {
+		throw new Refused(`${timing === 'BEFORE' ? 'a BEFORE' : 'an INSTEAD OF'} trigger on ${access}`, line)
+	}
 	const when = wordAtDepthZero(tokens, 'WHEN', on)
 	const whenClose = when === undefined || !isPunct(tokens[when + 1], '(') ? undefined : closingParenthesis(tokens, when + 1)
 	const header = when === undefined || whenClose === undefined ? tokens : [...tokens.slice(0, when), ...tokens.slice(whenClose + 1)]
@@ -528,6 +547,8 @@ function createRule(tokens: readonly SqlToken[], at: number, context: Context, o
 	const doIndex = to === undefined ? undefined : wordAtDepthZero(tokens, 'DO', to)
 	if (name === undefined || to === undefined || doIndex === undefined) throw new Refused('CREATE RULE', line)
 	const table = ownName(tokens, to + 1, context, 'CREATE RULE')
+	const access = accessRelation(table, context)
+	if (access !== undefined) throw new Refused(`a rule on ${access}`, line)
 	const where = wordAtDepthZero(tokens, 'WHERE', to)
 	const headerEnd = where !== undefined && where < doIndex ? where : doIndex
 	refuseForeignDdl(tokens.slice(0, headerEnd), context, 'CREATE RULE')
@@ -1010,6 +1031,7 @@ export function classifyMigration(sql: string, schema: string, options: Classify
 		functions: options.functions ?? new Set(),
 		framework: options.framework === true,
 		accessTables: options.accessTables ?? new Set(),
+		accessViews: options.accessViews ?? new Set(),
 		doBlocks: 0,
 	}
 	const refused: MigrationRefusal[] = []
@@ -1041,6 +1063,54 @@ export function classifyMigration(sql: string, schema: string, options: Classify
 	}
 	const objects = changes.flatMap((change) => (change.change === 'create' || change.change === 'create routine' ? [change.object] : []))
 	return { file: options.file, refused, deviations, adoptions, objects, changes }
+}
+
+/**
+ * Every view the migration set declares over an access table, lowercased: one whose query names an access table or such
+ * a view, and the names those views are renamed to. A rule action writes through a view with its owner's privileges.
+ * Read across the whole set and in no order, so a view counts whichever file creates or renames it.
+ */
+function accessViews(files: readonly MigrationFile[], schema: string, accessTables: ReadonlySet<string>): ReadonlySet<string> {
+	const views: { readonly name: string; readonly reads: readonly string[] }[] = []
+	const renames: { readonly from: string; readonly to: string }[] = []
+	for (const file of files) {
+		for (const { tokens } of topLevelStatements(file.sql)) {
+			const first = upperWord(tokens[0])
+			if (first === 'CREATE') {
+				const at = skipWords(tokens, skipWords(tokens, skipWords(tokens, skipWords(tokens, 1, 'OR', 'REPLACE'), 'TEMP'), 'TEMPORARY'), 'RECURSIVE')
+				if (upperWord(tokens[at]) !== 'VIEW') continue
+				const named = skipWords(tokens, at + 1, 'IF', 'NOT', 'EXISTS')
+				const object = objectNameAt(tokens, named)
+				const as = wordAtDepthZero(tokens, 'AS', named)
+				if (object === undefined || (object.qualifier !== undefined && object.qualifier !== schema) || as === undefined) continue
+				const reads = dmlRelations(ReadSql.query(viewQuery(tokens.slice(as + 1)))).map((reference) => reference.name.toLowerCase())
+				views.push({ name: object.name.toLowerCase(), reads })
+			} else if (first === 'ALTER' && (upperWord(tokens[1]) === 'VIEW' || upperWord(tokens[1]) === 'TABLE')) {
+				const from = objectNameAt(tokens, skipWords(tokens, 2, 'IF', 'EXISTS'))
+				const rename = tokens.findIndex((token, index) => upperWord(token) === 'RENAME' && upperWord(tokens[index + 1]) === 'TO')
+				const to = rename === -1 ? undefined : nameText(tokens[rename + 2])
+				if (from !== undefined && to !== undefined) renames.push({ from: from.name.toLowerCase(), to: to.toLowerCase() })
+			}
+		}
+	}
+	const reached = new Set(accessTables)
+	const found = new Set<string>()
+	for (let grown = true; grown;) {
+		grown = false
+		for (const view of views) {
+			if (reached.has(view.name) || !view.reads.some((read) => reached.has(read))) continue
+			reached.add(view.name)
+			found.add(view.name)
+			grown = true
+		}
+		for (const rename of renames) {
+			if (!found.has(rename.from) || reached.has(rename.to)) continue
+			reached.add(rename.to)
+			found.add(rename.to)
+			grown = true
+		}
+	}
+	return found
 }
 
 /** The names of the functions and procedures a migration creates or renames to in `schema`, read without classifying them. */
@@ -1108,13 +1178,11 @@ export function classifyMigrations(
 	options: ClassifyMigrationsOptions = {},
 ): MigrationSetClassification {
 	const functions = new Set(files.flatMap((file) => declaredFunctions(file.sql, schema)))
+	const access = options.accessTables === undefined
+		? {}
+		: { accessTables: options.accessTables, accessViews: accessViews(files, schema, options.accessTables) }
 	const classified = files.map((file) =>
-		classifyMigration(file.sql, schema, {
-			file: file.name,
-			functions,
-			framework: file.framework === true,
-			...(options.accessTables === undefined ? {} : { accessTables: options.accessTables }),
-		})
+		classifyMigration(file.sql, schema, { file: file.name, functions, framework: file.framework === true, ...access })
 	)
 	const withOverloads = refuseOverloads(classified)
 	return { files: withOverloads, objects: migrationManifest(withOverloads) }

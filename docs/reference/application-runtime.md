@@ -1879,7 +1879,8 @@ not run`. Of them only the generated isolation tests run again, at container sta
   `GRANT`, a domain, a `serial` column or sequence, a routine overload, `SECURITY DEFINER`, a foreign language, dynamic `EXECUTE`, a call outside the
   function allowlist, a rule with several actions) is refused. Access tables are written only by the platform: a function or procedure body or a
   rule action that writes one (a table that confers a relation or reveals a node, and a table a principal path or a relation's condition reads)
-  is refused too, by Control's snapshot read and `fabrika-check`, which read the access tables from `src/db/tables.ts`. A check before each commit rolls back a file that leaves an
+  or a view over one, and a `BEFORE` or `INSTEAD OF` trigger or a rule on either, are refused too, by Control's snapshot read and
+  `fabrika-check`, which read the access tables from `src/db/tables.ts`. A check before each commit rolls back a file that leaves an
   escape or an object no migration declares in the schema.
 - **Seeding.** Every seeded row lies in one of two containment chains that share no value,
   with each container row a table owns. A column with a database default keeps it unless a

@@ -892,7 +892,8 @@ export function parenthesizedTarget(tokens: readonly SqlToken[]): { readonly sta
 
 /**
  * The relations the data-changing statements among `tokens` write, in order: the name after `INSERT INTO`,
- * `MERGE INTO`, `UPDATE [ONLY]` and `DELETE FROM [ONLY]`. A parenthesized target is `parenthesizedTarget`'s to refuse.
+ * `MERGE INTO`, `UPDATE [ONLY]` and `DELETE FROM [ONLY]`. A parenthesized target is `parenthesizedTarget`'s to refuse;
+ * `MERGE` is refused before a body or a rule action is read, and is listed so no write form depends on that.
  */
 export function writeTargets(tokens: readonly SqlToken[]): { readonly name: string; readonly line: number }[] {
 	const targets: { readonly name: string; readonly line: number }[] = []
