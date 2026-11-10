@@ -12,14 +12,18 @@ import type { TypedColumnList } from '@fabrika/db'
 import { openPostgres } from '@fabrika/db/postgres'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
-import { type ContainerGrant, MAX_WITHIN_VALUES, type RelationHold } from '../capability'
+import { admitsTerms } from '../authority'
+import { type ContainerGrant, MAX_WITHIN_VALUES, type RelationHold, type WithinGrant } from '../capability'
 import type { Database } from '../database'
 import { CapabilityError, PolicyError, QueryRefusedError } from '../errors'
 import { bindScopedDatabaseProvisionally, type DataAccess, dataAccessOf, type DataHandles, type DataSite } from '../framework'
+import { assertAllowedTree } from '../guard'
 import { FRAMEWORK_MIGRATIONS } from '../migrations'
+import { existsNode } from '../nodes'
 import type { DataKind } from '../orm-types'
 import { defineTables, readTables, type Tables } from '../policy'
-import { scoped } from '../store'
+import { frameworkSideOf } from '../registry'
+import { guard, type Runner, scoped, selectOne, updateRow } from '../store'
 import { tablePolicies } from '../tables'
 import { TestAuthority } from './fixtures/authority'
 import { sqliteFramework } from './fixtures/sqlite-framework'
@@ -227,10 +231,11 @@ function suite(dialect: 'sqlite' | 'postgres', open: () => Promise<Backend>, clo
 		let backend: Backend
 		let data: DataAccess
 		let release: () => void = () => {}
+		let layer: object = {}
 
 		const bind = <P>(layerTables: Tables<DB, P>) => {
 			release()
-			const layer = scoped(layerTables)
+			layer = scoped(layerTables)
 			const binding = bindScopedDatabaseProvisionally(layer, { database: backend.database, capabilities: alice })
 			release = () => binding.release()
 			data = dataAccessOf(layer)
@@ -361,6 +366,34 @@ function suite(dialect: 'sqlite' | 'postgres', open: () => Promise<Backend>, clo
 				session: async () => data.direct(),
 			}
 			expect(idsOf(await call(data.handles(site).within(capability), 'reviews.claim', { limit: 10 }))).toEqual(['r1'])
+		})
+
+		test("the guard admits the widened term only on a Within's list: a Ref's read, a write's row and an unchanged update refuse it", async () => {
+			const side = frameworkSideOf(layer)
+			if (side === undefined) throw new TypeError('the test layer has no framework side')
+			const context = side.tableContext('tasks', 'dimension')
+			const grant: WithinGrant = {
+				kind: 'within',
+				dimension: 'project',
+				action: 'tasks.read',
+				principal: 'user:alice',
+				values: [],
+				containers: [],
+				contained: [],
+				relations: [],
+				revealing: [],
+				admitting: atOrgs(O1),
+			}
+			const [widened] = admitsTerms(context.model, grant, new Date())
+			if (widened === undefined) throw new TypeError('tasks admits no row for tasks.read')
+			const session = data.direct()
+			const run: Runner = { read: async () => session, write: (work) => data.transaction(work) }
+			// The term no builder puts there, handed to each statement that is no Within's list.
+			await expect(selectOne(context, run, widened)).rejects.toThrow(QueryRefusedError)
+			await expect(updateRow(context, run, { scope: widened }, new Map(), undefined)).rejects.toThrow(QueryRefusedError)
+			const existing = existsNode('tasks', 'id', widened)
+			expect(() => assertAllowedTree(existing, guard(context, 'SelectQueryNode', widened))).toThrow('the scope predicate must be true')
+			expect(() => assertAllowedTree(existing, guard(context, 'SelectQueryNode', widened, true))).not.toThrow()
 		})
 
 		test('ctx.sql.scope refuses a Within that admits rows of the table, and renders one that admits none', async () => {

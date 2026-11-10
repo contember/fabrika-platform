@@ -700,4 +700,6 @@ node the object's column stores (the statement compared it, so a `uuid` spelled 
   or view table, a root that is no partition, an action that is no read action, and every condition `when` refuses. A
   queue claim (the update action), a write, a `Ref` and its gate never carry it; a view's parent subquery leaves it out;
   `ctx.sql.scope` refuses a `Within` it would widen. The guard admits the narrowed value membership only on a select with
-  no lock, on the column `GuardContext.admitting` names (the table's partition column).
+  no lock, on the column `GuardContext.admitting` names (the table's partition column), which only a `Within`'s list,
+  count and aggregate set (`guard(…, listed)`, `listRows`, `countRows`): a `Ref`'s read, a write's read of its row and
+  an update that changes nothing refuse it.

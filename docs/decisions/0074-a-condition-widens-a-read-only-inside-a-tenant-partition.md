@@ -131,7 +131,8 @@ filtered by key). A read-only `Ref` through `admits` would close the gap. It wou
 
 The guard admits a narrowed value membership, `(T.<column> in ($…) and (<condition>))`, only when the statement's
 context names the column as the table's partition column (`GuardContext.admitting`), only on a select, and only without
-a lock. Every write, every lock, another column, and a table without `admits` are refused. As for `relationWhen`, the
+a lock. Only a `Within`'s list, count and aggregate set that context. Every write, every lock, a `Ref`'s read, a
+write's read of its row, an update that changes nothing, another column, and a table without `admits` are refused. As for `relationWhen`, the
 guard checks the condition's shape, not that it equals the declared one.
 
 ### 6. The protocol and the approval diff

@@ -1245,7 +1245,11 @@ export function childObjectPredicate(context: TableContext, parent: unknown, key
 	return parentPredicate(context, grant, key)
 }
 
-export function guard(context: TableContext, root: RootKind, scope: OperationNode | undefined): GuardContext {
+/**
+ * The guard's context for a statement of `context`'s table. `listed` marks a `Within`'s list or aggregate, the only
+ * statements whose scope may carry the term `admits` widens a read with (ADR-0074); every other select is refused it.
+ */
+export function guard(context: TableContext, root: RootKind, scope: OperationNode | undefined, listed = false): GuardContext {
 	// Every store write reaches its statement through here: a view's rows are its tables', never written (ADR-0072).
 	if (context.model.view && root !== 'SelectQueryNode') {
 		throw new QueryRefusedError('read_only', `${context.model.name} is a view, which no handler writes`)
@@ -1257,7 +1261,7 @@ export function guard(context: TableContext, root: RootKind, scope: OperationNod
 		scope,
 		subqueries: context.subqueries,
 		through: context.through,
-		admitting: root === 'SelectQueryNode' ? context.model.partition?.column : undefined,
+		admitting: listed && root === 'SelectQueryNode' ? context.model.partition?.column : undefined,
 	}
 }
 
@@ -1413,7 +1417,7 @@ async function selectRows<S>(
 	}
 	const dialect = dialectOf(context)
 	const node = selectNode(boundState(context, { ...state, joins }), visible, scope, undefined, context.model.dates, dialect)
-	const rows = await (await run.read()).run<S>(node, guard(context, 'SelectQueryNode', scope))
+	const rows = await (await run.read()).run<S>(node, guard(context, 'SelectQueryNode', scope, true))
 	return answerRows(dialect, context.model.name, joinedColumns(context, state), rows)
 }
 
@@ -2007,7 +2011,7 @@ export async function aggregateRows<Row, O>(
 	const dialect = dialectOf(context)
 	const conditions = boundConditions(context, context.model, filter?.conditions ?? [])
 	const node = aggregateNode(context.model.name, columns, conditions, scope, context.model.dates)
-	const rows = await (await run.read()).run<O>(node, guard(context, 'SelectQueryNode', scope))
+	const rows = await (await run.read()).run<O>(node, guard(context, 'SelectQueryNode', scope, true))
 	const own = rowColumnsOf(context.model)
 	const answered = answerRows(dialect, context.model.name, {
 		days: aggregated(own.days, columns),
