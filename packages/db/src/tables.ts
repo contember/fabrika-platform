@@ -204,6 +204,7 @@ function memberRevealsArtifact(reveals: readonly MemberRevealModel[]): Record<st
 			to: reveal.dimension,
 			actions: [...reveal.actions],
 			...(reveal.when === undefined ? {} : { when: conditionArtifact(reveal.when) }),
+			...(reveal.assign === undefined ? {} : { assign: { self: reveal.assign.self } }),
 		})
 	}
 	return artifact

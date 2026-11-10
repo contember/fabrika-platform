@@ -264,6 +264,13 @@ one is refused and names the column: add a migration that sets it `NOT NULL`, th
   listed action gets a `Ref` of the ancestor, writes included. A member of an open task renames its project; once the
   task closes, the next statement answers 404. Such a row is never written unscoped or by `ctx.sql`, and never moves.
   `ctx.sql.scope` refuses a `Ref` held this way: read it through `ctx.db`.
+- `memberReveals` may also be keyed by a dimension the table reads through: `memberReveals: { team: { to: 'project',
+  actions: ['projects.read'], assign: {} } }` on tasks that name a team in `readThrough.team`: a grant at that team
+  reads the project of each open task naming it. A link row (a child of the task naming a team) reveals its task the
+  same way. Through a path `to` is the row's nearest container, and a table with an insert states `assign`: without
+  `self`, inserting a row that names a team where the writer holds one of the listed actions answers 409, and a job or
+  a webhook names no team there. An `on` or `in` endpoint gets a `Ref` through it only for an action the path's
+  `writeThrough` also lists.
 - A view under a parent takes none of them: it is read through its parent row, so a relation, a reveal, a member
   reveal or a secondary path that reaches the parent reaches the view's rows of that parent.
 

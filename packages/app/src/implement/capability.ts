@@ -58,8 +58,8 @@ export class CapabilityLimitError extends Error {
 	override readonly name = 'CapabilityLimitError'
 }
 
-/** The caller's grants of `action` in `dimension`, as a `Within` of it would carry them; `undefined` for none. */
-export type Standing = (dimension: string, action: string) => WithinGrant | undefined
+/** The caller's grants of `action` in `dimension`, as a `Within` of it would carry them; no values when it holds none. */
+export type Standing = (dimension: string, action: string) => WithinGrant
 
 /**
  * One request's lifetime, or one job attempt's. A capability minted in it is usable only while it runs, and only

@@ -242,6 +242,36 @@ ignores it holds the path for reads only, which reaches less, so section 5's pub
 older data layer refuses the unknown field at parse, so an older framework fails closed. The approval diff shows each
 added action as a widening and each removed one as a narrowing.
 
+### 9. A member reveal may follow a secondary path
+
+`memberReveals` may be keyed by a dimension the table reads through a direct path (section 6): a grant of a listed
+action at the node the row's column names holds that action at the row's nearest container, while the reveal's `when`
+admits the row. The members of the team a task names read its project. A link row, a child of the to-many row that
+names the team, reveals its parent the same way: the members of every team linked to a task read the task.
+
+- **The writer picks the node, bounded by `assign`**, as for a reveal through a path (section 2). An insertable table
+  states `assign: { self? }`, and one without an insert action takes none. Without `self`, an insert is refused with a
+  409 while its writer holds a grant the reveal counts at the node the column names: one of the listed actions, at that
+  node itself. The grants are the request's own standing (section 8), read in the insert's transaction before the
+  insert, so the inserted row never counts. Work with no request caller has no grants to judge and is refused. A grant
+  above the node, or everywhere, is no membership (section 7), so it gains nothing through the reveal and is not counted.
+- **It reveals the row's nearest container only.** A move of an ancestor rewrites the column above it, and no bound
+  sees that move. The row itself never moves, since it delegates (section 7).
+- **It takes no container's path.** A row read through its container's column declares the reveal on the container.
+- **A `Ref` holds an action through it only where the path does** (`writeThrough`, section 8); otherwise it serves a
+  `Within`'s reads only. An action both list must also be held at the node (section 8): a writer that holds it by a
+  grant at the node is a member and needs `self`, and one that holds it at a container or through a relation does not.
+- **Every grant matched is carried.** Through a path many rows name one grant's node, so the minting binding reads
+  the matched grants grouped, never only the first row.
+- **The guard admits nothing new.** The term is section 7's: `T.<to column> in (select R.<to column> from R where
+  R.<path column> in (<values>) and <R.when>)`. The subquery reads R unscoped, over a tenant-holding key, so a null
+  column names no node and no negation reads other tenants' rows.
+
+The new key and its `assign` are absent unless declared, so existing artifacts keep their digests. A release that reads
+member reveals by the row's own key only refuses another key at parse, so it fails closed. A release before member
+reveals ignores them and reaches less. Neither widens, so section 5's publish refusal does not count them. The approval
+diff names the path and shows `assign` as it shows a reveal's.
+
 ## Consequences
 
 - An application expresses row-dependent access as data the approver reviews, instead of handler code. What the

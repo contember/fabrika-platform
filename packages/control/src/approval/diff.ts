@@ -353,7 +353,7 @@ function compareContracts(changes: Changes, before: ContractArtifact | null, aft
 				...ruled('table.reveals', revealsChanges(name, undefined, table.reveals)),
 				...ruled('table.read-through', readThroughChanges(name, undefined, table.readThrough)),
 				...ruled('table.write-through', writeThroughChanges(name, table.readThrough, undefined, table.writeThrough)),
-				...ruled('table.member-reveals', memberRevealsChanges(name, undefined, table.memberReveals)),
+				...ruled('table.member-reveals', memberRevealsChanges(name, table.readThrough, undefined, table.memberReveals)),
 			)
 		}
 	}
@@ -1636,18 +1636,31 @@ function revealsChanges(name: string, before: TablePolicyArtifact['reveals'], af
 }
 
 /**
- * What a table's rows reveal to a grant at their node: a new reveal, a new action or another node widens what a member
- * reads; a lost one, or an added condition, narrows; any other change of the condition widens.
+ * What a table's rows reveal to a grant at their node, or at the node their path names: a new reveal, a new action or
+ * another node widens what a member reads; a lost one, or an added condition, narrows; any other change of the condition
+ * widens. Through a path the insert picks the node, so its `assign` is shown as a reveal's.
  */
-function memberRevealsChanges(name: string, before: TablePolicyArtifact['memberReveals'], after: TablePolicyArtifact['memberReveals']): Line[] {
+function memberRevealsChanges(
+	name: string,
+	paths: TablePolicyArtifact['readThrough'],
+	before: TablePolicyArtifact['memberReveals'],
+	after: TablePolicyArtifact['memberReveals'],
+): Line[] {
 	const from = before ?? {}
 	const to = after ?? {}
 	return union(Object.keys(from), Object.keys(to)).flatMap((dimension): Line[] => {
-		const subject = `Table \`${name}\` reveals to a member of its \`${dimension}\``
+		const column = paths?.[dimension]
+		const subject = column === undefined
+			? `Table \`${name}\` reveals to a member of its \`${dimension}\``
+			: `Table \`${name}\` reveals to a member of the \`${dimension}\` its path \`${column}\` names`
 		const was = from[dimension]
 		const is = to[dimension]
 		if (was === undefined) {
-			return is === undefined ? [] : [widening(`${subject} its \`${is.to}\` for ${is.actions.map((action) => `\`${action}\``).join(', ')}`)]
+			if (is === undefined) return []
+			return [
+				widening(`${subject} its \`${is.to}\` for ${is.actions.map((action) => `\`${action}\``).join(', ')}`),
+				...revealAssignChanges(subject, name, undefined, is.assign),
+			]
 		}
 		if (is === undefined) return [narrowing(`${subject} nothing any more`)]
 		const added = is.actions.filter((action) => !was.actions.includes(action))
@@ -1659,6 +1672,7 @@ function memberRevealsChanges(name: string, before: TablePolicyArtifact['memberR
 			...(was.when === undefined && is.when !== undefined
 				? [narrowing(`${subject} only a row its condition holds`)]
 				: valueChange(`${subject} condition`, was.when, is.when)),
+			...revealAssignChanges(subject, name, was.assign, is.assign),
 		]
 	})
 }
@@ -1931,7 +1945,7 @@ function tableChanges(name: string, from: TablePolicyArtifact, to: TablePolicyAr
 		...ruled('table.reveals', revealsChanges(name, from.reveals, to.reveals)),
 		...ruled('table.read-through', readThroughChanges(name, from.readThrough, to.readThrough)),
 		...ruled('table.write-through', writeThroughChanges(name, to.readThrough, from.writeThrough, to.writeThrough)),
-		...ruled('table.member-reveals', memberRevealsChanges(name, from.memberReveals, to.memberReveals)),
+		...ruled('table.member-reveals', memberRevealsChanges(name, to.readThrough, from.memberReveals, to.memberReveals)),
 	]
 }
 

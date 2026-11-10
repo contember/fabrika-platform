@@ -118,8 +118,9 @@ interface WritablePolicy<Col extends string, A extends string, V extends Col, Ac
 	 */
 	readonly writeThrough?: { readonly [dimension: string]: readonly A[] }
 	/**
-	 * This table's own dimension → the ancestor node a row reveals to its members: a grant of one of `actions` at the
-	 * row's own node holds that action at its node in `to` too, for a `Within`'s reads, while `when` admits the row.
+	 * This table's own dimension, or one it reads through (`readThrough`) → the ancestor node a row reveals to its
+	 * members: a grant of one of `actions` at the row's own node, or at the node its path names, holds that action at its
+	 * node in `to` too, while `when` admits the row.
 	 */
 	readonly memberReveals?: { readonly [dimension: string]: MemberRevealsPolicy<Col, A> }
 }
@@ -130,6 +131,8 @@ export interface MemberRevealsPolicy<Col extends string, A extends string> {
 	readonly actions: readonly A[]
 	/** A condition on the revealing row, under the same path rule as an action's `when`. */
 	readonly when?: ConditionPolicy<Col>
+	/** Through a path, on a table with an insert action: the writer picks the node, and `self` lets it pick its own. */
+	readonly assign?: { readonly self?: true }
 }
 
 /**
@@ -374,7 +377,7 @@ export interface RevealModel {
 	readonly key: string
 	/**
 	 * The secondary path whose node, or an ancestor of it, the relation's nodes match. A reveal matched through one holds
-	 * its actions for a `Within`'s reads only, as the path itself does.
+	 * a `Ref` of an action only where the path does (`writeThrough`).
 	 */
 	readonly path: SecondaryPath | undefined
 	/** The bound on an insert's delegation through `path`: `undefined` when no handler inserts a row of the table. */
@@ -394,7 +397,12 @@ export interface RevealModel {
 export interface MemberRevealModel {
 	readonly source: string
 	readonly table: string
+	/** The column a grant's nodes match: the table's key, or `path`'s column. */
 	readonly key: string
+	/** The secondary path whose node a grant names; a `Ref` holds an action through it only where the path does. */
+	readonly path: SecondaryPath | undefined
+	/** The bound on an insert's pick of the node through `path`: `undefined` when no handler inserts a row of the table. */
+	readonly assign: { readonly self: boolean } | undefined
 	readonly dimension: string
 	readonly column: string
 	readonly actions: readonly string[]
@@ -585,7 +593,7 @@ const POLICY_FIELDS = nameSet([
 	'memberReveals',
 ])
 const REVEALS_FIELDS = nameSet(['to', 'actions', 'when', 'assign'])
-const MEMBER_REVEALS_FIELDS = nameSet(['to', 'actions', 'when'])
+const MEMBER_REVEALS_FIELDS = nameSet(['to', 'actions', 'when', 'assign'])
 const REVEAL_ASSIGN_FIELDS = nameSet(['self'])
 const CONFERS_FIELDS = nameSet(['principal', 'node', 'expires', 'when', 'assign'])
 const ASSIGN_FIELDS = nameSet(['maxDays', 'self'])
@@ -1427,7 +1435,7 @@ function linkTables(parsed: readonly ParsedTable[], vocabulary: VocabularyModel)
 			}
 			const when = parseWhen(linked, conditionRoot(linked, byName), whenInput, conditionTable, hopRule)
 			const reveals = parseReveals(linked, readThrough, revealsInput, vocabulary, conditionTable, hopRule)
-			const memberReveals = parseMemberReveals(linked, memberRevealsInput, vocabulary, conditionTable, hopRule)
+			const memberReveals = parseMemberReveals(linked, readThrough, memberRevealsInput, vocabulary, conditionTable, hopRule)
 			setOwn(models, table.name, freeze({ ...linked, confers, when, reveals, readThrough, memberReveals }))
 		}
 	}
@@ -1816,12 +1824,15 @@ function parseRevealed(
 }
 
 /**
- * `memberReveals`: the table's own dimension → the ancestor its rows reveal to a grant at their node. Only a dimension
- * table reveals so: its key is the node an IAM grant names, and the layer generates it, so no writer picks a node
- * someone already holds a grant at. A queue table's rows move on every claim.
+ * `memberReveals`: the table's own dimension, or one it reads through, → the ancestor its rows reveal to a grant at the
+ * node. By its own key only a dimension table reveals so: the layer generates the key, so no writer picks a node someone
+ * already holds a grant at. Through a direct path the writer picks it, so an insertable table states `assign`, and the
+ * row reveals its nearest container only, whose column no move of an ancestor rewrites. A queue table's rows move on
+ * every claim.
  */
 function parseMemberReveals(
 	table: LinkedTable,
+	readThrough: readonly SecondaryPath[],
 	input: unknown,
 	vocabulary: VocabularyModel,
 	tables: (name: string) => ConditionTable | undefined,
@@ -1830,29 +1841,48 @@ function parseMemberReveals(
 	if (input === undefined) {
 		return freeze([])
 	}
-	if (table.scope.mode !== 'dimension') {
+	if (table.scope.mode !== 'dimension' && table.scope.mode !== 'child') {
 		throw new PolicyError(
-			`${table.name}: a ${table.scope.mode} table reveals nothing to members; only a dimension table's rows are nodes a grant names`,
+			`${table.name}: a ${table.scope.mode} table reveals nothing to members; only a dimension or child table's rows name a node a grant is at`,
 		)
 	}
 	if (table.queue !== undefined) {
 		throw new PolicyError(`${table.name}: a queue table reveals nothing; the layer rewrites its rows on every claim`)
 	}
-	const own = table.scope.dimension
-	const key = table.scope.key
+	const own = table.scope.mode === 'dimension' ? table.scope.dimension : undefined
 	const declared = plainRecord(input, `${table.name}: memberReveals`)
 	const names = ownKeys(declared)
 	const reveals: MemberRevealModel[] = []
 	for (let index = 0; index < names.length; index++) {
 		const source = names[index] ?? ''
 		const what = `${table.name}: memberReveals.${source}`
-		if (source !== own) {
-			throw new PolicyError(`${what}: ${source} is not ${table.name}'s own dimension (${own}); a row reveals to a grant at its own node only`)
+		let path: SecondaryPath | undefined
+		for (let position = 0; source !== own && position < readThrough.length; position++) {
+			if (readThrough[position]?.dimension === source) path = readThrough[position]
+		}
+		if (source !== own && path === undefined) {
+			throw new PolicyError(
+				`${what}: ${source} is neither the own dimension of ${table.name} (${
+					own ?? 'none'
+				}) nor one it reads through; a row reveals to a grant at its own node or at the node its path names`,
+			)
 		}
 		const policy = plainRecord(ownEntry(declared, source), what)
 		onlyFields(policy, MEMBER_REVEALS_FIELDS, what)
 		const { to, column, actions, when } = parseRevealed(table, policy, what, vocabulary, tables, hops)
-		reveals[reveals.length] = freeze({ source, table: table.name, key, dimension: to, column, actions, when })
+		if (path?.via !== undefined) {
+			throw new PolicyError(
+				`${what}: ${table.name} reads ${source} through its container ${path.via.table}; declare the member reveal on ${path.via.table}`,
+			)
+		}
+		if (path !== undefined && table.chain[0]?.dimension !== to) {
+			throw new PolicyError(
+				`${what}.to: ${to} lies above ${table.name}'s nearest container; a move of an ancestor rewrites ${column}, so a member reveal through a path reveals the nearest container only`,
+			)
+		}
+		const assign = parseRevealAssign(table, path, ownEntry(policy, 'assign'), what)
+		const key = path === undefined ? table.scope.key : path.column
+		reveals[reveals.length] = freeze({ source, table: table.name, key, path, assign, dimension: to, column, actions, when })
 	}
 	return freeze(reveals)
 }

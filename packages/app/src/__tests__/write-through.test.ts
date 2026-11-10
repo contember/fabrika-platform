@@ -1,7 +1,8 @@
 // Writes through a secondary path, through boot, behind the production proxy decision, on SQLite: a grant at the team
 // a task's `team_id` names, or a relation there, gets a Ref of the task from `on`, and through the reveal matched
 // through the path a Ref of its project. An insert that names a team needs its writer to hold, at that team, every
-// action the column hands out.
+// action the column hands out. A grant at the team also reads the task's project through a member reveal, whose
+// `assign` keeps a writer from naming a team where it holds such a grant.
 
 import { createClient } from '@fabrika/app/client'
 import { defineApp } from '@fabrika/app/contract'
@@ -42,6 +43,12 @@ const api = app.group({ callers: ['human'] }, (r) => ({
 			await ctx.db.target.update({ name: input.name }, { expectVersion: 1 })
 			return { done: true }
 		}),
+	projects: r.query({
+		input: z.strictObject({}),
+		output: z.strictObject({ ids: z.array(z.string()) }),
+		access: { action: 'projects.read', over: 'project' },
+	})
+		.handle(async ({ ctx }) => ({ ids: (await ctx.db.within.projects.list()).items.map((row) => row.id).sort() })),
 	add: r.mutation({
 		input: z.strictObject({ project: z.string().min(1), team: z.string().min(1), title: z.string().min(1) }),
 		output: z.strictObject({ id: z.string() }),
@@ -52,7 +59,7 @@ const api = app.group({ callers: ['human'] }, (r) => ({
 
 const contract = app.contract((c) => ({ api: c.rpc('/api', { api }), health: c.health('/healthz') }))
 
-type Action = 'tasks.read' | 'tasks.write' | 'tasks.insert' | 'projects.rename'
+type Action = 'tasks.read' | 'tasks.write' | 'tasks.insert' | 'projects.rename' | 'projects.read'
 type Grant =
 	| { readonly role: 'member' }
 	| { readonly action: Action; readonly scope: { readonly type: 'team' | 'project' | 'task'; readonly value: string } }
@@ -109,5 +116,18 @@ describe('a write path through boot', () => {
 		const member = callerOf([insert, { role: 'member' }])
 		expect(await member.add({ project: 'p1', team: 't1', title: 'by member' })).toMatchObject({ id: expect.any(String) })
 		await expect(member.add({ project: 'p1', team: 't2', title: 'not a member' })).rejects.toMatchObject({ httpStatus: 409 })
+	})
+
+	test('a grant at a team reads the projects of its tasks, and keeps its holder from naming that team in a new task', async () => {
+		expect(await callerOf([atTeam('projects.read', 't1')]).projects({})).toEqual({ ids: ['p1'] })
+		expect(await callerOf([atTeam('projects.read', 't2')]).projects({})).toEqual({ ids: ['p1', 'p2'] })
+		const handedOut = [atTeam('tasks.read', 't1'), atTeam('tasks.write', 't1'), atTeam('projects.rename', 't1')]
+		const insert: Grant = { action: 'tasks.insert', scope: { type: 'project', value: 'p2' } }
+		const reader = callerOf([insert, ...handedOut, atTeam('projects.read', 't1')])
+		await expect(reader.add({ project: 'p2', team: 't1', title: 'reveals to its writer' })).rejects.toMatchObject({ httpStatus: 409 })
+		expect(await callerOf([insert, ...handedOut]).add({ project: 'p2', team: 't1', title: 'reveals to others' })).toMatchObject({
+			id: expect.any(String),
+		})
+		expect(await callerOf([atTeam('projects.read', 't1')]).projects({})).toEqual({ ids: ['p1', 'p2'] })
 	})
 })

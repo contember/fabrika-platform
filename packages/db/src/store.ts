@@ -103,6 +103,7 @@ import {
 	selectNode,
 	updateNode,
 	valueList,
+	valuesNode,
 } from './nodes'
 import { dataAccess } from './orm'
 import {
@@ -1511,6 +1512,7 @@ export async function insertRow<O>(
 		if (prepared !== undefined) {
 			await checkPrincipalAssign(transaction, context, prepared.writer, given)
 			await checkRevealAssign(transaction, context, prepared.writer, given)
+			checkMemberRevealAssign(context, prepared.writer, given)
 			await checkPathWriters(transaction, context, prepared.writer, given)
 		}
 		const [row] = await transaction.run<O>(insertNode(context.model.name, values, answer(context)), guard(context, 'InsertQueryNode', undefined))
@@ -2142,6 +2144,7 @@ export function insertPrepared(context: TableContext, run: Runner, prepared: Pre
 		}
 		await checkPrincipalAssign(transaction, context, prepared.writer, prepared.row)
 		await checkRevealAssign(transaction, context, prepared.writer, prepared.row)
+		checkMemberRevealAssign(context, prepared.writer, prepared.row)
 		await checkPathWriters(transaction, context, prepared.writer, prepared.row)
 		const written = await insertOnConflict(context, run, transaction, prepared.row, conflict)
 		// A conflict writes no new row: `nothing` reads none, and `update` is judged on the stored row.
@@ -2232,6 +2235,39 @@ async function checkRevealAssign(
 			throw new ConflictError(
 				`a row of ${model.name} names in ${path.column} a node where its writer holds ${reveal.relation}, which the reveal's assign.self does not allow`,
 			)
+		}
+	}
+}
+
+/**
+ * An inserted row whose path column a member reveal matches through, under the reveal's `assign`: without `self`, the
+ * insert is refused while its writer holds a grant the reveal counts (one of its actions, at the node itself) at the
+ * node the column names. The grants are the request's own, so nothing is locked; work with no request caller has none
+ * to judge, and is refused.
+ */
+function checkMemberRevealAssign(context: TableContext, writer: string, row: ReadonlyMap<string, Primitive | null>): void {
+	const model = context.model
+	const authority = runtimeOf(context.connection).capabilities
+	for (let index = 0; index < model.memberReveals.length; index++) {
+		const reveal = model.memberReveals[index]
+		const path = reveal?.path
+		const value = path === undefined ? undefined : row.get(path.column)
+		if (reveal === undefined || path === undefined || reveal.assign === undefined || reveal.assign.self || value === undefined || value === null) {
+			continue
+		}
+		for (let position = 0; position < reveal.actions.length; position++) {
+			const action = reveal.actions[position] ?? ''
+			const standing = authority.standing?.(path.dimension, action)
+			if (standing === undefined || standing.principal !== writer) {
+				throw new ConflictError(
+					`a row of ${model.name} names in ${path.column} a ${path.dimension} its member reveal reveals to, and its writer's grants cannot be judged under assign without self: work with no request caller`,
+				)
+			}
+			if (standing.values !== 'all' && includes(standing.values, String(value))) {
+				throw new ConflictError(
+					`a row of ${model.name} names in ${path.column} a ${path.dimension} where its writer holds a grant the member reveal counts, which the reveal's assign.self does not allow`,
+				)
+			}
 		}
 	}
 }
@@ -3028,7 +3064,9 @@ async function holdingRowLocked(transaction: Session, context: TableContext, gra
 		const reveals = revealing === undefined ? [] : ownEntry(context.members, revealing.dimension) ?? []
 		for (let position = 0; revealing !== undefined && position < reveals.length; position++) {
 			const reveal = reveals[position]
-			const revealed = reveal === undefined || !includes(reveal.actions, grant.action) ? undefined : nodeOf(reveal.dimension)
+			const held = reveal !== undefined && includes(reveal.actions, grant.action)
+				&& (reveal.path === undefined || includes(reveal.path.writes, grant.action))
+			const revealed = reveal === undefined || !held ? undefined : nodeOf(reveal.dimension)
 			if (reveal === undefined || revealed === undefined || revealing.values.length === 0) continue
 			candidates[candidates.length] = { table: reveal.table, column: reveal.key, scope: memberAddress(reveal, revealing.values, revealed, now) }
 		}
@@ -3147,9 +3185,11 @@ async function membersRevealed(
 	for (let index = 0; values.length > 0 && index < reveals.length; index++) {
 		const reveal = reveals[index]
 		if (reveal === undefined || reveal.dimension !== dimension || !includes(reveal.actions, action)) continue
+		if (reveal.path !== undefined && !includes(reveal.path.writes, action)) continue
 		const scope = memberAddress(reveal, values, node, new Date())
 		const context: GuardContext = { root: 'SelectQueryNode', table: reveal.table, joins: {}, scope, subqueries }
-		const rows = await sessionOf(runtime).run<Readonly<Record<string, unknown>>>(locateNode(reveal.table, [reveal.key], scope), context)
+		// Grouped, not limited: through a path many rows name one grant's node, and every grant matched is carried.
+		const rows = await sessionOf(runtime).run<Readonly<Record<string, unknown>>>(valuesNode(reveal.table, reveal.key, scope), context)
 		for (let position = 0; position < rows.length; position++) {
 			const key = ownEntry(rows[position] ?? {}, reveal.key)
 			if (typeof key === 'string' && !includes(found, key)) found[found.length] = key

@@ -37,5 +37,6 @@ export const tables = defineTables(vocabulary, columns)({
 		readThrough: { team: 'team_id' },
 		writeThrough: { team: ['tasks.read', 'tasks.write', 'projects.rename'] },
 		reveals: { teamMember: { to: 'project', actions: ['projects.rename'], assign: { self: true } } },
+		memberReveals: { team: { to: 'project', actions: ['projects.read'], assign: {} } },
 	},
 })

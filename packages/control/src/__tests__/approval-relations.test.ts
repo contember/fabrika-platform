@@ -285,6 +285,28 @@ describe("a table's member reveals in the approval diff", () => {
 		expect(lines(read, none)).toContainEqual({ effect: 'narrows', line: `${subject} nothing any more` })
 		expect(classifyAccess(read, none).outcome).toBe('no-widening')
 	})
+
+	test("through a path, names the path and the insert's pick, and widens when the writer may pick its own", () => {
+		const through = (assign: { readonly self: boolean }): AccessSnapshot => {
+			const contract = none.contract
+			const notes = contract?.tables['notes']
+			if (contract === null || notes === undefined) throw new Error('the kit has a notes table')
+			const table = { ...notes, readThrough: { label: 'label_id' }, memberReveals: { label: { to: 'workspace', actions: ['notes.read'], assign } } }
+			return { ...none, contract: { ...contract, tables: { ...contract.tables, notes: table } } }
+		}
+		const pathSubject = 'Table `notes` reveals to a member of the `label` its path `label_id` names'
+		const others = through({ self: false })
+		expect(lines(none, others)).toContainEqual({ effect: 'widens', line: `${pathSubject} its \`workspace\` for \`notes.read\`` })
+		expect(lines(none, others)).toContainEqual({
+			effect: 'widens',
+			line: `${pathSubject} at a node an insert into \`notes\` picks, never its writer's own`,
+		})
+		expect(lines(others, through({ self: true }))).toEqual([{
+			effect: 'widens',
+			line: `${pathSubject} at a node an insert into \`notes\` picks, its writer's own included`,
+		}])
+		expect(classifyAccess(through({ self: true }), others).outcome).toBe('no-widening')
+	})
 })
 
 describe('a condition that reads the rows naming a row a path reaches', () => {

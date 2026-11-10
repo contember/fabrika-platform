@@ -655,5 +655,13 @@ through a relation (`~rel`, `@fabrika/auth-core`). `authority.ts` builds every p
   caller's grants at the revealing dimension), whose every statement requires the member term (`relationGate`,
   `revealingTerms`), ORed with its relation terms. An insert under such a `Ref` locks its owned destination under the
   term, or, into a node no table owns, a revealing row `FOR SHARE` (`lockHoldingRow`, `memberAddress`); none left is a
-  404. `revealsToMembers` is the binding `on` and `in` mint through. A member-revealing row is never written unscoped or
-  by `ctx.sql`, never moves, and its key is the layer's, so no write revives a node a former member still holds.
+  404. `revealsToMembers` is the binding `on` and `in` mint through; it reads the matched grants grouped (`valuesNode`),
+  never only the first row. A member-revealing row is never written unscoped or by `ctx.sql`, never moves, and its key
+  is the layer's, so no write revives a node a former member still holds.
+- **A member reveal keyed by a dimension the table reads through** (`MemberRevealModel.path`, its `key` the path's
+  column) holds at the node that column names, on a dimension or child table (a link row), revealing the nearest
+  container only; a container's path is refused. Its writer picks the node, so an insertable table states `assign`, and
+  without `self` an insert whose writer holds a listed action by a grant at that node itself is a 409
+  (`checkMemberRevealAssign`, judged on the request's standing before the insert; no standing is refused). A `Ref` holds
+  an action through it only where the path does (`writeThrough`): `revealingTerms` takes the `PathRule`, and
+  `revealsToMembers` and `holdingRowLocked` skip it otherwise.

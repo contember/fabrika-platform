@@ -651,9 +651,10 @@ other environment, before the provider prepares anything, and the write maps a r
   for an application pinned before `RELATION_GRANTS_SINCE`, compared by prerelease precedence (`comparePrecedence`),
   before anything publishes: a reader that ignores a narrowing field widens access. The approval diff classifies each
   relation field (`table.confers`, `table.when`, `table.reveals`, `table.read-through`, `table.write-through`,
-  `table.member-reveals`, a role's `via`): a new `via` action, source table, reveal, read-through or write-through action
-  widens, a longer or self delegation widens, an added `when` narrows, a removed or changed one widens. `writeThrough`
-  reaches less when ignored, so `relationFields` does not count it.
+  `table.member-reveals`, a role's `via`): a new `via` action, source table, reveal, read-through or write-through
+  action widens, a longer or self delegation widens, an added `when` narrows, a removed or changed one widens. A member
+  reveal keyed by a read-through dimension names its path and shows its `assign` as a reveal's. `writeThrough` and such
+  a member reveal reach less when ignored, so `relationFields` does not count them.
 - **A Zerops namespace pinned to an older proxy source is judged by that release's own manifest parser
   (`src/zerops/older-proxies.ts`).** It holds the parsers of `@fabrika/proxy-core` 0.4.8, 0.5.5 and 0.6.0, and the
   Zerops provider refuses a deploy of a row none of them parses, or of a CSP none of them parses (the CSP field of each

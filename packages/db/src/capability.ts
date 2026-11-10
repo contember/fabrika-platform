@@ -150,9 +150,9 @@ export interface CapabilityAuthority {
 	 */
 	fence(): LeaseFence | null
 	/**
-	 * What the caller of the work running now holds of `action` in `dimension`, as a `Within` of it would carry it:
-	 * `undefined` when it holds none, or when the work has no caller (a job attempt, a webhook delivery). An insert that
-	 * hands out access through a path judges its writer by it; an authority without the method holds nothing.
+	 * What the caller of the work running now holds of `action` in `dimension`, as a `Within` of it would carry it, with
+	 * no values when it holds none; `undefined` when the work has no caller (a job attempt, a webhook delivery). An
+	 * insert that hands out access through a path judges its writer by it; an authority without the method has no caller.
 	 */
 	standing?(dimension: string, action: string): WithinGrant | undefined
 }

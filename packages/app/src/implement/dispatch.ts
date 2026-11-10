@@ -1056,18 +1056,14 @@ export class ContractRuntime {
 
 	/**
 	 * What the caller holds of `action` in `dimension`, as a `Within` of it would carry it, without the grants inside it:
-	 * the standing an insert that hands out access through a path judges its writer by. `undefined` when it holds none.
+	 * the standing an insert that hands out access through a path judges its writer by; empty when it holds none.
 	 */
-	#standing(caller: Caller, action: string, dimension: string): WithinGrant | undefined {
-		const direct = scopedValues(caller.perms, action, dimension)
+	#standing(caller: Caller, action: string, dimension: string): WithinGrant {
 		const dimensions = [dimension, ...(this.#parts.containers.get(dimension) ?? [])]
 		const containers = this.#heldContainers(caller.perms, action, dimension)
 		const relations = this.#heldRelations(caller.perms, action, dimensions)
 		const revealing = this.#heldRevealing(caller.perms, action, dimensions)
-		const values = direct ?? 'all'
-		if (values !== 'all' && values.length === 0 && containers.length === 0 && relations.length === 0 && revealing.length === 0) {
-			return undefined
-		}
+		const values = scopedValues(caller.perms, action, dimension) ?? 'all'
 		return { kind: 'within', dimension, action, principal: caller.subject, values, containers, contained: [], relations, revealing }
 	}
 

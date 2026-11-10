@@ -81,6 +81,8 @@ export class TestAuthority implements CapabilityAuthority {
 	lease: LeaseFence | null = null
 	/** What the caller holds by dimension and action (`<dimension> <action>`), for a writer's bound; a test sets it. */
 	readonly standings = new Map<string, Omit<WithinGrant, 'kind' | 'dimension' | 'action' | 'principal'>>()
+	/** Whether the work has a request caller whose grants `standing` answers; a test clears it to stand in for a job. */
+	caller = true
 
 	constructor(principal = 'user:alice') {
 		this.#principal = principal
@@ -91,8 +93,9 @@ export class TestAuthority implements CapabilityAuthority {
 	}
 
 	standing(dimension: string, action: string): WithinGrant | undefined {
-		const held = this.standings.get(`${dimension} ${action}`)
-		return held === undefined ? undefined : { kind: 'within', dimension, action, principal: this.#principal, ...held }
+		if (!this.caller) return undefined
+		const held = this.standings.get(`${dimension} ${action}`) ?? { values: [], containers: [], contained: [], relations: [], revealing: [] }
+		return { kind: 'within', dimension, action, principal: this.#principal, ...held }
 	}
 
 	ref<const D extends string, const A extends string>(

@@ -595,8 +595,9 @@ vocabulary (`packages/db/CLAUDE.md`).
   `writeThrough` lets them mint a `Ref` through its path (`#throughCandidates`, the db's `holdsThrough`), carrying the
   grants and relations at the path's dimension that matched (`Ref`'s paths). Every statement then re-reads the
   relation, revealing and path rows (`@fabrika/db`'s CLAUDE.md), so the framework caches nothing about them. The request
-  frame's `standing` hands the db what the caller holds of an action in a dimension, which bounds the writer of a path
-  column; a frame with no caller has none, so a job or webhook that names a node there is refused.
+  frame's `standing` hands the db what the caller holds of an action in a dimension (empty when it holds none), which
+  bounds the writer of a path column and of a member reveal's path under `assign`; a frame with no caller has none, so a
+  job or webhook that names a node there is refused.
 - **An `attachment()` output answers a file, encoded by the framework only** (`implement/attachment.ts`). Its value
   is the zod schema of the rows' array, marked (`attachmentOf`), so the handler's types, projection and validation are
   a list's; `describeContract` describes it as that array beside `attachment`, and `buildArtifact` writes the row's

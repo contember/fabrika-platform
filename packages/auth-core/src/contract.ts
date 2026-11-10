@@ -908,11 +908,19 @@ export interface TablePolicyArtifact {
 	readonly memberReveals?: Readonly<Record<string, MemberRevealsArtifact>>
 }
 
-/** A row reveals its node in `to` for `actions` to a grant of them at the row's own node, while `when` admits the row. */
+/**
+ * A row reveals its node in `to` for `actions` to a grant of them at the row's own node, or at the node its path to the
+ * key's dimension names, while `when` admits the row.
+ */
 export interface MemberRevealsArtifact {
 	readonly to: string
 	readonly actions: readonly string[]
 	readonly when?: ConditionArtifact
+	/**
+	 * Through a path, on a table with an insert: the writer picks the node, and `self` lets it pick one where it holds a
+	 * grant the reveal counts. Absent otherwise; only a reader that refuses a path's key reads it.
+	 */
+	readonly assign?: { readonly self: boolean }
 }
 
 /** A row the relation reaches reveals its node in `to` for `actions`, while `when` admits the row. */

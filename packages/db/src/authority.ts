@@ -167,14 +167,15 @@ export function relationTerms(
  * dimensions.
  */
 export function memberTerms(members: MemberReveals, model: TableModel, grant: WithinGrant, now: Date): readonly OperationNode[] {
-	return revealingTerms(members, model, `the Within of ${grant.dimension}`, grant.action, grant.revealing, now)
+	return revealingTerms(members, model, `the Within of ${grant.dimension}`, grant.action, grant.revealing, now, everyPath)
 }
 
 /**
  * The rows of `model` that `revealing`, grants of `action` at nodes of revealing dimensions, reach through member
  * reveals: per grant, `T.<ancestor> in (select R.<ancestor> from R where R.<key> in (values) and <when>)` for each reveal
- * of `action` to an ancestor `model` lies at. A grant at a dimension that reveals no node for `action` is refused: the
- * framework passes none.
+ * of `action` to an ancestor `model` lies at, `R.<key>` the row's key or its path's column. A reveal through a path
+ * counts where `paths` admits it. A grant at a dimension that reveals no node for `action` is refused: the framework
+ * passes none.
  */
 export function revealingTerms(
 	members: MemberReveals,
@@ -183,6 +184,7 @@ export function revealingTerms(
 	action: string,
 	revealing: readonly ContainerGrant[],
 	now: Date,
+	paths: PathRule,
 ): readonly OperationNode[] {
 	const terms: OperationNode[] = []
 	for (let index = 0; index < revealing.length; index++) {
@@ -192,7 +194,7 @@ export function revealingTerms(
 		let named = false
 		for (let position = 0; position < reveals.length; position++) {
 			const reveal = reveals[position]
-			if (reveal === undefined || !includes(reveal.actions, action)) continue
+			if (reveal === undefined || !includes(reveal.actions, action) || (reveal.path !== undefined && !paths(reveal.path))) continue
 			named = true
 			const placed = nodeColumnOf(model, reveal.dimension)
 			if (placed === undefined || grant.values.length === 0) continue
@@ -301,7 +303,7 @@ export function relationGate(
 		}
 	}
 	if (grant.revealing.length > 0) {
-		const revealed = revealingTerms(reach.members, model, `the Ref of ${grant.dimension}`, grant.action, grant.revealing, now)
+		const revealed = revealingTerms(reach.members, model, `the Ref of ${grant.dimension}`, grant.action, grant.revealing, now, paths)
 		if (revealed.length === 0) {
 			throw new CapabilityError(
 				'unenforceable',

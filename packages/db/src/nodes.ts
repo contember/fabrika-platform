@@ -354,6 +354,18 @@ export function locateNode(table: string, columns: readonly string[], scope: Ope
 	return Object.freeze(node)
 }
 
+/** `select T.<name> from T where <scope> group by T.<name>`: each value of `name` the scoped rows hold, once. */
+export function valuesNode(table: string, name: string, scope: OperationNode): SelectQueryNode {
+	const node: SelectQueryNode = {
+		kind: 'SelectQueryNode',
+		from: FromNode.create([TableNode.create(table)]),
+		selections: [selection(table, name)],
+		where: scopedWhere(undefined, scope),
+		groupBy: GroupByNode.create([GroupByItemNode.create(column(table, name))]),
+	}
+	return Object.freeze(node)
+}
+
 /**
  * The same check, locked: `for share` keeps the row from moving until the transaction that checked it ends, `for
  * update` also keeps every other writer and locker of it waiting.
