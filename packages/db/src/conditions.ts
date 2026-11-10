@@ -465,13 +465,16 @@ function startsWith(path: readonly ReadStep[], prefix: readonly ReadStep[]): boo
  * condition reads, which holds a column test and a row a `some` found until the commit, but not a row inserted meanwhile:
  * that turns `none`, and a `some` under `not`, false. And no row names the inserted row before it exists.
  */
-export function insertProblem(condition: ConditionModel): string | undefined {
+export function insertProblem(condition: ConditionModel, table: string): string | undefined {
 	const visit = (node: ConditionModel, negated: boolean, past: boolean): string | undefined => {
 		if (node.kind === 'not') return visit(node.term, true, past)
 		if (node.kind === 'test') return undefined
 		if (node.kind === 'some') {
 			if (!past && node.hops.length === 0) {
 				return "an insert's condition takes no some or none of the rows naming the inserted row: no row names a row that does not exist yet; follow a path first, such as { project_id: { some: … } }"
+			}
+			if (node.table === table) {
+				return `an insert's condition takes no some of ${table}'s own rows: it is judged after the write, so the inserted row would count itself`
 			}
 			if (node.negated || negated) {
 				return "an insert's condition takes no none, and no some under not: a row inserted before the commit could make it false, which no lock on the rows it read holds"

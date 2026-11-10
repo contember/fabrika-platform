@@ -1476,7 +1476,7 @@ function parseWhen(
 		const what = `${table.name}: when.${action}`
 		const condition = parseCondition(ownEntry(declared, action), root, tables, what, hops)
 		// An insert reads the rows its foreign keys reach in its transaction, locked until the commit (`judgeInserted`).
-		const problem = includes(table.actions.insert, action) ? insertProblem(condition) : undefined
+		const problem = includes(table.actions.insert, action) ? insertProblem(condition, table.name) : undefined
 		if (problem !== undefined) {
 			throw new PolicyError(`${what}: ${problem}`)
 		}

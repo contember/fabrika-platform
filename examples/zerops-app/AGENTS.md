@@ -4760,8 +4760,10 @@ export const tables = defineTables(vocabulary, columns)({
 - An insert's condition is judged on the written row. One with a path runs in the insert's transaction, every row on
   its paths locked `FOR SHARE` first, so nobody changes the project while the task goes in. An insert action's
   condition may end a path in `some` (`{ project_id: { some: … } }`), whose rows are locked too. It takes no `none`,
-  no `some` under `not`, and no `some` straight on the inserted row: a row inserted meanwhile could make the first two
-  false, and nothing names the new row yet. An upsert's conflict update is judged on the stored row.
+  no `some` under `not`, no `some` straight on the inserted row, and no `some` of the inserted table's own rows
+  (`{ project_id: { some: { tasks: … } } }` on `tasks`): a row inserted meanwhile could make the first two false,
+  nothing names the new row yet, and the last would count the new task itself, since the condition is judged after
+  the write. An upsert's conflict update is judged on the stored row.
 
 ### A key that holds the tenant needs its ancestors NOT NULL
 
