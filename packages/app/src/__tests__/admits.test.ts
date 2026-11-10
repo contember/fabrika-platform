@@ -1,13 +1,14 @@
 // A widening condition (`admits`, ADR-0074), through boot behind the production proxy decision, on SQLite: a membership
 // role held in an organization with `via` (`~relin` at the tenant partition) lists every public task of that
-// organization beside its member rows' tasks. A role held everywhere (`~rel`), one held in a project, and an external
-// principal admit nothing; `on` reaches no task that only `admits` lists. On Postgres (FABRIKA_TEST_POSTGRES_URL), with
+// organization beside its member rows' tasks. A role held everywhere (`~rel`), one held in a project, an external
+// principal and an entry of a relation the contract does not declare admit nothing; `on` reaches no task that only `admits` lists. On Postgres (FABRIKA_TEST_POSTGRES_URL), with
 // organizations keyed by uuid, a grant that spells the node in another case admits what the database equates with it.
 
 import { createClient } from '@fabrika/app/client'
 import { compileContract, defineApp } from '@fabrika/app/contract'
 import { serve } from '@fabrika/app/implement'
 import { type TestGrant, testKit } from '@fabrika/app/testing'
+import { relationInsideScope } from '@fabrika/auth-core'
 import { scoped } from '@fabrika/db'
 import { tablePolicies } from '@fabrika/db/tables'
 import { testDatabase as postgresDatabase } from '@fabrika/db/testing'
@@ -16,6 +17,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, test } from 'bun:tes
 import { z } from 'zod/v4'
 import { tables } from './admits-fixture/tables'
 import { vocabulary } from './admits-fixture/vocabulary'
+import { bootApp, environment, frameworkEnvFor, grant, resultOf, send, token } from './fixtures/implement/harness'
 
 const app = defineApp(vocabulary, tables)
 const ById = z.strictObject({ id: z.string().min(1) })
@@ -93,6 +95,18 @@ describe('admits, through boot', () => {
 		expect(() => kit.testCaller([{ role: 'colleague', scope: kit.scope('org', 'o1') }], { id: 'user:other', affiliation: 'external' })).toThrow(
 			'an external caller holds only roles the contract declares external',
 		)
+	})
+
+	test('an entry at the partition for a relation the contract does not declare admits nothing', async () => {
+		// A token signed before a revision dropped the relation: boot reads it as the proxy forwards it.
+		const served = serve(contract, { database: scoped(tables) })
+		const audience = 'boards@prod'
+		const booted = bootApp(served, { database: fresh.database, environment: environment({ ...frameworkEnvFor(served), FABRIKA_IAM_APP_ID: audience }) })
+		const atO1 = (relation: string) => grant('tasks.read', relationInsideScope({ relation, dimension: 'org', node: 'o1' }))
+		const declared = await token('user', [atO1('member')], audience)
+		expect(resultOf(await send(booted, '/api/tasks.all', { token: declared, body: {} }))).toEqual({ ids: ['k2'] })
+		const dropped = await token('user', [atO1('mentor')], audience)
+		expect((await send(booted, '/api/tasks.all', { token: dropped, body: {} })).status).toBe(403)
 	})
 })
 
