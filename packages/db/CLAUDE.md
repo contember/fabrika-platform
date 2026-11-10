@@ -379,7 +379,9 @@ pass a recording one); `Database.fromEngine` takes another engine (`openSqlite`)
 - **A Ref's predicate covers every link of its chain, one equality per chain column.** A table carries
   a column for each ancestor (`TableModel.chain`, resolved by `defineTables` through the tables that own
   each dimension); a `Ref` whose chain names a dimension the table has no column for is refused, never
-  ignored. Otherwise a `Ref` minted before an ancestor moved would still reach its rows.
+  ignored. Otherwise a `Ref` minted before an ancestor moved would still reach its rows. A `Ref` held through
+  relations, member reveals or a write path adds, after the equalities, one parenthesized OR of relation memberships and
+  memberships of bound values (`isReach`): nothing wider.
 - **An insert into a container, a child insert and a move lock the destination row first** (`FOR SHARE`,
   matched on the destination `Ref`'s whole chain, in the mutation's transaction; `lockDestination`), when a
   table owns the destination dimension. A
@@ -624,14 +626,26 @@ through a relation (`~rel`, `@fabrika/auth-core`). `authority.ts` builds every p
   (`requireNotNullAncestors`, the invariant above). A hop's subquery reads its target unscoped, so any looser key would
   read another tenant's row.
 - **`readThrough: { <dimension>: <column> }`** lets a `Within` of a dimension outside the table's chain, or a relation
-  at it, read the row through that tenant-holding key. Every write still follows containment only, and no update writes
-  the column. `DbIndex` lists the table under that dimension's `Within` (`ReadThroughOf`). `'<link>.<column>'` reads
+  at it, read the row through that tenant-holding key. No update writes the column. `DbIndex` lists the table under that
+  dimension's `Within` (`ReadThroughOf`). `'<link>.<column>'` reads
   the row through its nearest container's own path instead (`throughContainer`, `SecondaryPath.via`):
   `T.<link> in (select C.<key> from C where <C's term>)`, `<link>` the row's nearest containment column and `<column>`
   the container's own single-column path for the dimension. Nothing is stamped, so a move or the container's column is
   read as it stands; the guard admits `(C, key)` beside the path's table. C's `when` is not applied, as a view's
   parent subquery leaves its parent's out: the row's own `when` narrows the row. A reveal is not matched through such a path:
   a relation above it under a source's condition would nest five deep.
+- **`writeThrough: { <dimension>: [<actions>] }`** makes a path hold the listed actions for a `Ref` too
+  (`SecondaryPath.writes`); a path holds reads only otherwise. `RefGrant.paths` carries the grants at the path's
+  dimension and its containers that matched, and every statement of the `Ref` requires the path term again
+  (`relationGate`, `pathTerms`, `heldThrough(action)`); a reveal matched through a path holds a `Ref` only for an action
+  the path lists. The column's writer must hold each action it hands out at the node it names (`pathWriters`: the
+  table's own list and those of every container path through the column), judged before the insert in its
+  transaction (`checkPathWriters`): the node's row is locked `FOR SHARE`, then the request's standing
+  (`CapabilityAuthority.standing`) holds it at the node or a container on the chain, or a relation or revealing row
+  locked `FOR SHARE` does (`holdingRowLocked`); otherwise 409. No standing (a job, a webhook) is refused. A `Ref` held
+  through a path never moves a row, from or to; a containment `Ref` may move one, since a move leaves the path column
+  alone. A table with a path writer is never written unscoped or by `ctx.sql` (`TableContext.writers`), and
+  `ctx.sql.scope` refuses a path `Ref`. `holdsThrough` is the binding `on` and `in` mint through.
 - **`reveals`** makes a row a relation reaches reveal its ancestor node in `to` for the listed actions (those its
   roles name in `via`), while the reveal's `when` admits the row. A reveal matched through `readThrough` on a table with
   an insert needs `assign` (`self` to let the writer name a node where it holds the relation), because the writer picks

@@ -79,6 +79,8 @@ export class TestAuthority implements CapabilityAuthority {
 	readonly #principal: string
 	/** The lease every mutation checks; a test sets it to stand in for a job attempt. */
 	lease: LeaseFence | null = null
+	/** What the caller holds by dimension and action (`<dimension> <action>`), for a writer's bound; a test sets it. */
+	readonly standings = new Map<string, Omit<WithinGrant, 'kind' | 'dimension' | 'action' | 'principal'>>()
 
 	constructor(principal = 'user:alice') {
 		this.#principal = principal
@@ -88,6 +90,11 @@ export class TestAuthority implements CapabilityAuthority {
 		return this.lease
 	}
 
+	standing(dimension: string, action: string): WithinGrant | undefined {
+		const held = this.standings.get(`${dimension} ${action}`)
+		return held === undefined ? undefined : { kind: 'within', dimension, action, principal: this.#principal, ...held }
+	}
+
 	ref<const D extends string, const A extends string>(
 		dimension: D,
 		action: A,
@@ -95,9 +102,10 @@ export class TestAuthority implements CapabilityAuthority {
 		chain: Readonly<Record<string, string>> = {},
 		relations: readonly string[] = [],
 		revealing: readonly ContainerGrant[] = [],
+		paths: readonly ContainerGrant[] = [],
 	): Ref<D, A> {
 		return new TestRef(
-			{ kind: 'ref', dimension, action, principal: this.#principal, id, chain: new Map(Object.entries(chain)), relations, revealing },
+			{ kind: 'ref', dimension, action, principal: this.#principal, id, chain: new Map(Object.entries(chain)), relations, revealing, paths },
 			this,
 		)
 	}

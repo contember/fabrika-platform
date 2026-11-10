@@ -198,6 +198,50 @@ only for a `Within` mints no such `Ref`, which fails closed. Raising the pin to 
 declaration to `Ref`s and to the write actions it lists, with no artifact diff: the approver reviewed the declaration
 with the actions it lists, and no released framework read it more narrowly.
 
+### 8. A write path holds a Ref, and bounds its column's writer
+
+`writeThrough: { <dimension>: [<actions>] }` beside a table's `readThrough` makes that path hold the listed actions, writes
+included: a grant of a listed action at the node the column names or at a container of it, or a relation there, gets a
+`Ref` of the row from `on` and `in`. A reveal matched through the path holds a `Ref` of its ancestor for the actions both
+the reveal and `writeThrough` list. A path, or an action, it does not list holds reads only, as before.
+
+- **Every statement of such a `Ref` requires the path term again**: the `Ref` carries the grants that matched at the
+  path's dimension and its containers (`RefGrant.paths`) and the relations held there, not the rows. The column never
+  changes (section 6), but a container's column, a node's place and a relation row do, and the next statement reads them
+  as they stand.
+- **The column's writer must hold what the path hands out.** An insert that names a node in the column needs its writer
+  to hold there every action the path lists, and every action listed by a table whose container path (section 6) reads
+  through this column. It is judged in the insert's transaction, before the insert: the node's row is locked
+  `FOR SHARE`, so it stays where it lies until the commit; each action is held by the request's grant at the node or at
+  a container on the chain that row gives, or else by a relation or revealing row, which is locked `FOR SHARE` too. A
+  writer outside the bound, and work with no request caller (a job, a webhook), get a `ConflictError` (409), and nothing
+  is written. A null column names no node and is not checked. Judged before the insert, the bound never counts the
+  inserted row.
+- **This keeps S8.** Unlike a relation's source (section 2), the writer hands out only what it holds, so the bound needs
+  no exception. A reveal on the same path keeps its own `assign`: a writer that holds the reveal's relation at the node,
+  and so passes this bound through it, names that node only under `assign.self`.
+- **Rows written before `writeThrough` was declared keep the node they name.** No update writes the column, so the
+  bound covers each row written after the declaration for its whole life. The approval diff says so.
+- **A move follows containment only.** A `Ref` held through a path never moves a row, from or to. A move rewrites the
+  containment column, and a path `Ref` holds nothing there: bounding it would need the mover to hold the destination's
+  actions in its containment, which is a containment `Ref` of the destination. A containment `Ref` may move a row of a
+  table with a write path, because the move leaves the path column alone. A row read through its container's path
+  follows its new container's column, and that container's insert bounded the column's writer for this row's actions.
+- **A writing `Within` does not arise.** A `Within` writes only through a queue claim and `ctx.sql`; a queue table takes
+  no secondary path, and `ctx.sql` never writes a table with a write path. A `Within` reads through every path, as before.
+- **The bound has no way around it.** A table whose path hands out an action, or whose column a container path reads,
+  is never written unscoped or by `ctx.sql`, and `ctx.sql.scope` refuses a `Ref` held through a path: the fragment
+  renders column tests and would leave the path term out.
+- **The guard admits one more member.** A `Ref`'s statement is its chain's equalities and a parenthesized `OR` that may
+  now hold a scope membership (`T.<column> in (<values>)`, or the container form) beside relation memberships. The
+  nesting bound stays four: the deepest is a reveal matched through a path below the relation's dimension, under the
+  source's condition on the row it names.
+
+`writeThrough` is absent from the artifact unless declared, so an artifact without it keeps its digest. A reader that
+ignores it holds the path for reads only, which reaches less, so section 5's publish refusal does not count it. An
+older data layer refuses the unknown field at parse, so an older framework fails closed. The approval diff shows each
+added action as a widening and each removed one as a narrowing.
+
 ## Consequences
 
 - An application expresses row-dependent access as data the approver reviews, instead of handler code. What the
@@ -207,7 +251,8 @@ with the actions it lists, and no released framework read it more narrowly.
   stamped nodes, immutable deciding columns and no source writes past the handles. Each of these is enforced in the
   data layer, not by convention.
 - Control's approval diff grows a vocabulary: a new relation is neutral, a new `via` action or source table widens, a
-  longer delegation or `self: true` widens, an added `when` narrows, a removed or changed `when` widens.
+  longer delegation or `self: true` widens, an action a write path holds widens, an added `when` narrows, a removed or
+  changed `when` widens.
 - **Rollout of an existing installation.** IAM migration `0029_role_via` adds a nullable `roles.via`. Every existing
   role reads as having none, and the next schema reconcile writes it for a role that declares it. An older IAM never
   reads the column and signs no `~rel`, so a relation grant fails closed until IAM is upgraded. No generated
@@ -234,6 +279,11 @@ with the actions it lists, and no released framework read it more narrowly.
   every write of the container's column would have to rewrite the copy on every row below, in the same transaction, or
   a row would stay readable by a team its container left. The container term reads the column where it lives, at every
   statement, and needs nothing kept in step (section 6).
+- **A path column written as a `Ref`** (the writer passes a `Ref` of the node it names). A `Ref` holds one action, and the
+  path hands out several, including those a container path reads through the column; the writer's standing checks
+  them all in one place.
+- **A move through a path, bounded by the path.** The moved row's path column satisfies the path term wherever the row
+  lands, so the destination check bounds nothing; holding the destination's containment actions is a containment `Ref`.
 - **A view as a relation source.** A view's rows change with every write to its base tables, and the delegation bound
   sees none of those writes: nobody could bound who gains access, and an approver could not review it. An application
   that needs one writes its source rows through a real table with `assign`.

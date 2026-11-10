@@ -3,6 +3,7 @@
 // files may import.
 
 import type { Admissions } from './admissions'
+import type { ContainerGrant } from './capability'
 import type { Session } from './database'
 import type { WebhookTables } from './framework-tables'
 import type { JobLeases } from './job-leases'
@@ -24,7 +25,21 @@ export type RelationCheck = (relation: string, node: string, principal: string) 
  * Whether a row `relation` reaches for `principal` reveals `node` of `dimension` now: what a Ref held through a reveal
  * is minted on.
  */
-export type RevealCheck = (relation: string, dimension: string, node: string, principal: string) => Promise<boolean>
+export type RevealCheck = (relation: string, dimension: string, node: string, principal: string, action: string) => Promise<boolean>
+
+/**
+ * Of `relations` and `paths`, the caller's relations and grants of `action` that reach the object `id` of `dimension`
+ * through a secondary path that holds the action for a Ref (`writeThrough`), or through a relation row or reveal: what a
+ * Ref held through a path is minted on, and carries.
+ */
+export type PathCheck = (
+	dimension: string,
+	id: string,
+	action: string,
+	principal: string,
+	relations: readonly string[],
+	paths: readonly ContainerGrant[],
+) => Promise<{ readonly relations: readonly string[]; readonly paths: readonly ContainerGrant[] }>
 
 /**
  * Of `values`, the caller's grants of `action` at nodes of `revealing`, those whose row reveals `node` of `dimension` to
@@ -55,6 +70,7 @@ export interface ProvisionalBinding {
 	readonly locate: Locator
 	readonly relates: RelationCheck
 	readonly reveals: RevealCheck
+	readonly holdsThrough: PathCheck
 	readonly revealsToMembers: MemberRevealCheck
 	release(): void
 }

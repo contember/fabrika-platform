@@ -13,7 +13,7 @@ import { SQL } from 'bun'
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
 import { z } from 'zod/v4'
 import type { Database } from '../database'
-import { ConflictError, QueryRefusedError } from '../errors'
+import { ConflictError, NotFoundError, QueryRefusedError } from '../errors'
 import {
 	bindScopedDatabaseProvisionally,
 	type DataAccess,
@@ -185,9 +185,9 @@ const vocabulary = {
  * an org and names a project it is read through, where staff see it and its org's other tickets. A card names a board of
  * a project, so its reveal reads the card, the board, the staff row and the person: the deepest scope the layer builds,
  * one deeper under a view of the org, which reads its rows through the org row. `named` gives staff a condition on the
- * project its row names, read beside the person at the same depth.
+ * project its row names, read beside the person at the same depth. `writes` lets the card's reveal hold a Ref of the org.
  */
-function tablesWith(options: { readonly self?: true; readonly reveal?: true; readonly named?: string } = {}) {
+function tablesWith(options: { readonly self?: true; readonly reveal?: true; readonly named?: string; readonly writes?: true } = {}) {
 	return defineTables(vocabulary, columns)({
 		orgs: { scope: { dimension: 'org' }, actions: { read: 'projects.read' }, version: 'version' },
 		projects: {
@@ -232,6 +232,7 @@ function tablesWith(options: { readonly self?: true; readonly reveal?: true; rea
 			actions: { read: 'projects.read' },
 			version: 'version',
 			readThrough: { board: 'board_id' },
+			...(options.writes === true ? { writeThrough: { board: ['projects.read'] } } : {}),
 			reveals: { staff: { to: 'org', actions: ['projects.read'] } },
 		},
 		org_cards: { scope: { child: 'orgs' }, actions: { read: 'projects.read' } },
@@ -418,11 +419,11 @@ function suite(dialect: 'sqlite' | 'postgres', open: () => Promise<Backend>, clo
 			expect(await listed('orgs', 'staff')).toEqual([])
 			await staff([['s1', 'p1', 'pe-alice']])
 			expect(await listed('orgs', 'staff')).toEqual(['o1'])
-			expect(await reveals('staff', 'org', 'o1', 'user:alice')).toBe(true)
-			expect(await reveals('staff', 'org', 'o1', 'user:bob')).toBe(false)
+			expect(await reveals('staff', 'org', 'o1', 'user:alice', 'projects.read')).toBe(true)
+			expect(await reveals('staff', 'org', 'o1', 'user:bob', 'projects.read')).toBe(false)
 			await backend.exec(`delete from people where id = 'pe-alice'`)
 			expect(await listed('orgs', 'staff')).toEqual([])
-			expect(await reveals('staff', 'org', 'o1', 'user:alice')).toBe(false)
+			expect(await reveals('staff', 'org', 'o1', 'user:alice', 'projects.read')).toBe(false)
 		})
 
 		test('a reveal matched through readThrough follows the path, and its assign refuses a node where the writer holds the relation', async () => {
@@ -479,6 +480,22 @@ function suite(dialect: 'sqlite' | 'postgres', open: () => Promise<Backend>, clo
 			await rename('one')
 			expect(await listed('cards', 'staff')).toEqual(['c2'])
 			expect(await listed('org_cards', 'staff')).toEqual(['o1'])
+		})
+
+		test("a Ref held through a reveal matched through a write path nests four deep, beside the source's condition on the row it names", async () => {
+			const org = () => invoke('query', (db) => call(db.target(alice.ref('org', 'projects.read', 'o1', {}, ['staff']), 'on'), 'get'))
+			await staff([['s2', 'p2', 'pe-alice-2']])
+			await backend.exec(`
+				insert into boards (id, project_id, org_id, version) values ('b2', 'p2', 'o1', 1);
+				insert into cards (id, org_id, board_id, version) values ('c2', 'o1', 'b2', 1)
+			`)
+			await expect(org()).rejects.toThrow('which reveals none of its nodes for projects.read')
+			use(tablesWith({ named: 'one', writes: true }))
+			await expect(org()).rejects.toThrow(NotFoundError)
+			await backend.exec(`update projects set name = 'one' where id = 'p2'`)
+			expect(await org()).toMatchObject({ id: 'o1' })
+			await backend.exec(`delete from cards where id = 'c2'`)
+			await expect(org()).rejects.toThrow(NotFoundError)
 		})
 
 		test('a Ref held through a relation reads a view of its parent only where the relation reaches the parent row', async () => {

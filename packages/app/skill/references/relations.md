@@ -244,11 +244,17 @@ one is refused and names the column: add a migration that sets it `NOT NULL`, th
 
 - `readThrough: { <dimension>: <column> }` lets a `Within` of a dimension outside the table's chain, or a relation at
   it, read the row through that column's tenant-holding key: a task in a project, read by the members of the team its
-  `team_id` names. Every write still follows the task's containment, and no update writes the column. When the key
+  `team_id` names. No update writes the column. When the key
   lives on the row's container, name the container's path from the row's own containment column:
   `readThrough: { team: 'task_id.team_id' }` on a task's comments. The container declares `readThrough.team` through
   a column of its own; the row follows it wherever the container's column points now. Such a table takes no reveal
   matched through that path: declare the reveal on the container.
+- `writeThrough: { <dimension>: [<actions>] }` beside `readThrough` lets the path hold those actions for an `on` or `in`
+  endpoint too, writes included: a member of the team a task names updates the task. A path holds reads only without
+  it. Whoever inserts a row naming a team must hold every listed action at that team (a grant there or above it, or a
+  relation row there), or the insert answers 409; so must the container's writer for the actions its rows' paths list.
+  A job or a webhook holds nothing there. A `Ref` held through the path never moves a row, the table is never written
+  `unscoped` or by `ctx.sql`, and `ctx.sql.scope` refuses such a `Ref`.
 - `reveals: { <relation>: { to, actions, when? } }` on a table the relation reaches: such a row also gives the
   relation `actions` (those its roles name in `via`) at its ancestor node in `to` while `when` admits the row: an
   assignee of an open task reads its project. A reveal matched through `readThrough` on a table with an insert needs

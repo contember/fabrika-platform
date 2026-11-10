@@ -112,6 +112,12 @@ interface WritablePolicy<Col extends string, A extends string, V extends Col, Ac
 	 */
 	readonly readThrough?: { readonly [dimension: string]: Col | `${Col}.${string}` }
 	/**
+	 * Dimension of `readThrough` → the actions a `Ref` held through that path holds on the table's rows, writes included:
+	 * a grant of one of them at the node the path names, or above it, reaches the row for that action. Whoever inserts
+	 * the path's column must hold every listed action at the node it names.
+	 */
+	readonly writeThrough?: { readonly [dimension: string]: readonly A[] }
+	/**
 	 * This table's own dimension → the ancestor node a row reveals to its members: a grant of one of `actions` at the
 	 * row's own node holds that action at its node in `to` too, for a `Within`'s reads, while `when` admits the row.
 	 */
@@ -346,6 +352,8 @@ export interface SecondaryPath {
 	 * then the container's column, and the path is read as `T.<via column> in (select C.<key> from C where …)`.
 	 */
 	readonly via: ContainerHop | undefined
+	/** The actions a `Ref` held through the path holds on the table's rows (`writeThrough`); a `Within` reads through every path. */
+	readonly writes: readonly string[]
 }
 
 /** The row's nearest containment column, and the table and key it names. */
@@ -432,6 +440,7 @@ type ParsedTable = Omit<TableModel, 'chain' | 'scope' | 'confers' | 'when' | 're
 	readonly whenInput: unknown
 	readonly revealsInput: unknown
 	readonly readThroughInput: unknown
+	readonly writeThroughInput: unknown
 	readonly memberRevealsInput: unknown
 }
 
@@ -572,6 +581,7 @@ const POLICY_FIELDS = nameSet([
 	'when',
 	'reveals',
 	'readThrough',
+	'writeThrough',
 	'memberReveals',
 ])
 const REVEALS_FIELDS = nameSet(['to', 'actions', 'when', 'assign'])
@@ -810,6 +820,7 @@ function parseTable(table: string, columnList: unknown, policyInput: unknown, vo
 		whenInput: ownEntry(policy, 'when'),
 		revealsInput: ownEntry(policy, 'reveals'),
 		readThroughInput: ownEntry(policy, 'readThrough'),
+		writeThroughInput: ownEntry(policy, 'writeThrough'),
 		memberRevealsInput: ownEntry(policy, 'memberReveals'),
 	}
 }
@@ -1343,7 +1354,7 @@ function linkTables(parsed: readonly ParsedTable[], vocabulary: VocabularyModel)
 	const linkedTable = (name: string): LinkedTable | undefined => {
 		const target = ownEntry(byName, name)
 		if (target === undefined) return undefined
-		const { confersInput, whenInput, revealsInput, readThroughInput, memberRevealsInput, ...rest } = target
+		const { confersInput, whenInput, revealsInput, readThroughInput, writeThroughInput, memberRevealsInput, ...rest } = target
 		return { ...rest, ...resolve(target, []) }
 	}
 	const hopRule: HopRule = (from, column, to, key, backward) => {
@@ -1385,7 +1396,7 @@ function linkTables(parsed: readonly ParsedTable[], vocabulary: VocabularyModel)
 		const table = parsed[index]
 		if (table !== undefined) {
 			const { scope, chain } = resolve(table, [])
-			const { confersInput, whenInput, revealsInput, readThroughInput, memberRevealsInput, ...rest } = table
+			const { confersInput, whenInput, revealsInput, readThroughInput, writeThroughInput, memberRevealsInput, ...rest } = table
 			const linked = { ...rest, scope, chain }
 			const ownerOf = (dimension: string): ResolvedOwner | undefined => {
 				const owner = ownEntry(owners, dimension)
@@ -1399,7 +1410,12 @@ function linkTables(parsed: readonly ParsedTable[], vocabulary: VocabularyModel)
 				if (target === undefined || typeof column !== 'string' || splitPath(column).length !== 1) return undefined
 				return parseReadThrough(target, { [dimension]: column }, vocabulary, ownerOf, () => undefined)[0]
 			}
-			const readThrough = parseReadThrough(linked, readThroughInput, vocabulary, ownerOf, containerPath)
+			const readThrough = parseWriteThrough(
+				linked,
+				parseReadThrough(linked, readThroughInput, vocabulary, ownerOf, containerPath),
+				writeThroughInput,
+				vocabulary,
+			)
 			const confers = parseConfers(linked, confersInput, vocabulary.relations, conditionTable, linkedTable, hopRule)
 			for (let position = 0; position < confers.length; position++) {
 				const relation = confers[position]?.relation ?? ''
@@ -1583,7 +1599,7 @@ function parseReadThrough(
 			)
 		}
 		requireNotNullAncestors(what, table, pairs)
-		paths[paths.length] = freeze({ dimension, column, table: owner.name, key: owner.scope.key, chain: owner.chain, via: undefined })
+		paths[paths.length] = freeze({ dimension, column, table: owner.name, key: owner.scope.key, chain: owner.chain, via: undefined, writes: freeze([]) })
 	}
 	return freeze(paths)
 }
@@ -1624,7 +1640,64 @@ function throughContainer(
 	if (path.column !== column) {
 		throw new PolicyError(`${what}: ${container.name} reads ${dimension} through ${path.column}, not ${column}`)
 	}
-	return freeze({ ...path, via: freeze({ column: link, table: container.name, key: container.scope.key }) })
+	return freeze({ ...path, via: freeze({ column: link, table: container.name, key: container.scope.key }), writes: freeze([]) })
+}
+
+/**
+ * `writeThrough`: a dimension the table reads through → the actions a `Ref` held through that path holds. Each is an
+ * action of the vocabulary: the table's own, or one a reveal matched through the path or a table below reaches the row
+ * for. The path's column is the delegation: whoever inserts it must hold every listed action at the node it names, and
+ * for a path through the container, whoever inserts the container's column (`pathWriters`).
+ */
+function parseWriteThrough(
+	table: LinkedTable,
+	readThrough: readonly SecondaryPath[],
+	input: unknown,
+	vocabulary: VocabularyModel,
+): readonly SecondaryPath[] {
+	if (input === undefined) {
+		return readThrough
+	}
+	const declared = plainRecord(input, `${table.name}: writeThrough`)
+	const dimensions = ownKeys(declared)
+	const writes: Record<string, readonly string[]> = {}
+	for (let index = 0; index < dimensions.length; index++) {
+		const dimension = dimensions[index] ?? ''
+		const what = `${table.name}: writeThrough.${dimension}`
+		let declaredPath = false
+		for (let position = 0; position < readThrough.length; position++) {
+			if (readThrough[position]?.dimension === dimension) declaredPath = true
+		}
+		if (!declaredPath) {
+			throw new PolicyError(`${what}: ${table.name} reads no path to ${dimension}; declare readThrough.${dimension} first`)
+		}
+		const actions = parseList(ownEntry(declared, dimension), (action) => {
+			if (typeof action !== 'string' || !inSet(vocabulary.actions, action)) {
+				throw new PolicyError(`${what} names ${String(action)}, which is not an action of the vocabulary`)
+			}
+			return action
+		})
+		if (actions === undefined) {
+			throw new PolicyError(`${what} takes a plain array of the vocabulary's actions`)
+		}
+		const listed: string[] = []
+		for (let position = 0; position < actions.length; position++) {
+			const action = actions[position] ?? ''
+			if (!includes(listed, action)) listed[listed.length] = action
+		}
+		if (listed.length === 0) {
+			throw new PolicyError(`${what} names no action; leave the dimension out to hold nothing through the path`)
+		}
+		setOwn(writes, dimension, freeze(listed))
+	}
+	const paths: SecondaryPath[] = []
+	for (let index = 0; index < readThrough.length; index++) {
+		const path = readThrough[index]
+		if (path === undefined) continue
+		const listed = ownEntry(writes, path.dimension)
+		paths[paths.length] = listed === undefined ? path : freeze({ ...path, writes: listed })
+	}
+	return freeze(paths)
 }
 
 /**
@@ -1828,16 +1901,17 @@ export function delegates(model: TableModel): boolean {
 
 /**
  * The tables whose rows hand out access, which no raw statement writes, lowercased as the tag compares names: a relation
- * source or a path reveal, whose writer the layer bounds; a member-revealing table, whose key the layer generates so no
- * write revives a node a stale grant still names; and the tables a principal path or a relation's condition reads, whose
- * columns decide whom a source row names and what it confers.
+ * source, a path reveal or a path column that holds actions (`writeThrough`), whose writer the layer bounds; a
+ * member-revealing table, whose key the layer generates so no write revives a node a stale grant still names; and the
+ * tables a principal path or a relation's condition reads, whose columns decide whom a source row names and what it
+ * confers.
  */
 export function accessTablesOf(models: TableModels): readonly string[] {
 	const tables: string[] = []
 	const names = ownKeys(models)
 	for (let index = 0; index < names.length; index++) {
 		const model = modelOf(models, names[index] ?? '')
-		if (model !== undefined && delegates(model)) {
+		if (model !== undefined && (delegates(model) || pathWriters(models, model).length > 0)) {
 			tables[tables.length] = model.name.toLowerCase()
 		}
 		for (let position = 0; model !== undefined && position < model.confers.length; position++) {
@@ -1852,6 +1926,45 @@ export function accessTablesOf(models: TableModels): readonly string[] {
 		}
 	}
 	return tables
+}
+
+/** A path column whose insert hands out the listed actions at the node it names: the bound its writer is held to. */
+export interface PathWriter {
+	readonly path: SecondaryPath
+	/** The path's own `writes` and those of every table that reads the same dimension through this table's column. */
+	readonly actions: readonly string[]
+}
+
+/**
+ * The columns of `model` whose insert hands out actions through a secondary path: its own paths that hold actions, and
+ * its paths that a table below follows through it (`'<link>.<column>'`) with actions of its own. Such a table is written
+ * only through the handles, so no write sets the column past the bound.
+ */
+export function pathWriters(models: Readonly<Record<string, TableModel>>, model: TableModel): readonly PathWriter[] {
+	const writers: PathWriter[] = []
+	const names = ownKeys(models)
+	for (let index = 0; index < model.readThrough.length; index++) {
+		const path = model.readThrough[index]
+		if (path === undefined || path.via !== undefined) continue
+		const actions: string[] = []
+		for (let position = 0; position < path.writes.length; position++) {
+			const action = path.writes[position] ?? ''
+			if (!includes(actions, action)) actions[actions.length] = action
+		}
+		for (let position = 0; position < names.length; position++) {
+			const below = ownEntry(models, names[position] ?? '')
+			for (let at = 0; below !== undefined && at < below.readThrough.length; at++) {
+				const through = below.readThrough[at]
+				if (through?.via?.table !== model.name || through.dimension !== path.dimension) continue
+				for (let written = 0; written < through.writes.length; written++) {
+					const action = through.writes[written] ?? ''
+					if (!includes(actions, action)) actions[actions.length] = action
+				}
+			}
+		}
+		if (actions.length > 0) writers[writers.length] = freeze({ path, actions: freeze(actions) })
+	}
+	return freeze(writers)
 }
 
 function containsLink(chain: readonly Container[], dimension: string): boolean {

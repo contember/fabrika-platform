@@ -201,10 +201,10 @@ describe('a Ref held through a reveal', () => {
 	test('the reveal check answers a revealing row of the principal only', async () => {
 		assign('a1', 't1', 'user:alice')
 		assign('a2', 't2', 'user:alice')
-		expect(await reveals('assignee', 'project', 'p1', 'user:alice')).toBe(true)
-		expect(await reveals('assignee', 'project', 'p1', 'user:bob')).toBe(false)
-		expect(await reveals('assignee', 'project', 'p2', 'user:alice')).toBe(false)
-		expect(await reveals('assignee', 'project', 'p3', 'user:alice')).toBe(false)
+		expect(await reveals('assignee', 'project', 'p1', 'user:alice', 'projects.read')).toBe(true)
+		expect(await reveals('assignee', 'project', 'p1', 'user:bob', 'projects.read')).toBe(false)
+		expect(await reveals('assignee', 'project', 'p2', 'user:alice', 'projects.read')).toBe(false)
+		expect(await reveals('assignee', 'project', 'p3', 'user:alice', 'projects.read')).toBe(false)
 	})
 })
 

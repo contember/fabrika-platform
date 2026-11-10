@@ -47,6 +47,12 @@ export interface RefGrant {
 	 * for `relations`. Empty for a Ref an IAM grant holds.
 	 */
 	readonly revealing: readonly ContainerGrant[]
+	/**
+	 * The caller's grants of the action at nodes of a dimension the object's table reads through a path that holds the
+	 * action (`writeThrough`), or at containers of such a node, when no grant holds it on the chain: every statement then
+	 * also requires the row to reach one of them through such a path. Empty for a Ref an IAM grant holds.
+	 */
+	readonly paths: readonly ContainerGrant[]
 }
 
 /** The values of one container dimension in which the caller holds the action: `organization → [o1]`. */
@@ -143,4 +149,10 @@ export interface CapabilityAuthority {
 	 * request. Every mutation checks it inside its own transaction.
 	 */
 	fence(): LeaseFence | null
+	/**
+	 * What the caller of the work running now holds of `action` in `dimension`, as a `Within` of it would carry it:
+	 * `undefined` when it holds none, or when the work has no caller (a job attempt, a webhook delivery). An insert that
+	 * hands out access through a path judges its writer by it; an authority without the method holds nothing.
+	 */
+	standing?(dimension: string, action: string): WithinGrant | undefined
 }

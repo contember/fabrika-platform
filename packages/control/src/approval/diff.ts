@@ -352,6 +352,7 @@ function compareContracts(changes: Changes, before: ContractArtifact | null, aft
 				...ruled('table.when', whenChanges(name, undefined, table.when)),
 				...ruled('table.reveals', revealsChanges(name, undefined, table.reveals)),
 				...ruled('table.read-through', readThroughChanges(name, undefined, table.readThrough)),
+				...ruled('table.write-through', writeThroughChanges(name, table.readThrough, undefined, table.writeThrough)),
 				...ruled('table.member-reveals', memberRevealsChanges(name, undefined, table.memberReveals)),
 			)
 		}
@@ -1676,6 +1677,39 @@ function readThroughChanges(name: string, before: TablePolicyArtifact['readThrou
 	})
 }
 
+/**
+ * The actions a Ref holds through a secondary path: a new one widens who acts on the table's rows, and hands the action
+ * to whoever inserts the path's column, bounded by the writer's own; a lost one narrows.
+ */
+function writeThroughChanges(
+	name: string,
+	paths: TablePolicyArtifact['readThrough'],
+	before: TablePolicyArtifact['writeThrough'],
+	after: TablePolicyArtifact['writeThrough'],
+): Line[] {
+	const from = before ?? {}
+	const to = after ?? {}
+	const list = (actions: readonly string[]) => actions.map((action) => `\`${action}\``).join(', ')
+	return union(Object.keys(from), Object.keys(to)).flatMap((dimension): Line[] => {
+		const was = from[dimension] ?? []
+		const is = to[dimension] ?? []
+		const added = is.filter((action) => !was.includes(action))
+		const removed = was.filter((action) => !is.includes(action))
+		const column = paths?.[dimension]
+		const subject = `A grant at a \`${dimension}\` that table \`${name}\`'s path${column === undefined ? '' : ` \`${column}\``} names`
+		return [
+			...(added.length === 0 ? [] : [
+				widening(
+					`${subject} also holds ${
+						list(added)
+					} on its rows, writes included; whoever inserts the path's column must hold each there, and rows written before keep the node they name`,
+				),
+			]),
+			...(removed.length === 0 ? [] : [narrowing(`${subject} no longer holds ${list(removed)} on its rows`)]),
+		]
+	})
+}
+
 /** An insert that picks the node a reveal holds at delegates: a new bound widens, `self` widens, losing either narrows. */
 function revealAssignChanges(subject: string, name: string, was: RevealsArtifact['assign'], is: RevealsArtifact['assign']): Line[] {
 	if (was?.self === is?.self) return []
@@ -1896,6 +1930,7 @@ function tableChanges(name: string, from: TablePolicyArtifact, to: TablePolicyAr
 		...ruled('table.when', whenChanges(name, from.when, to.when)),
 		...ruled('table.reveals', revealsChanges(name, from.reveals, to.reveals)),
 		...ruled('table.read-through', readThroughChanges(name, from.readThrough, to.readThrough)),
+		...ruled('table.write-through', writeThroughChanges(name, to.readThrough, from.writeThrough, to.writeThrough)),
 		...ruled('table.member-reveals', memberRevealsChanges(name, from.memberReveals, to.memberReveals)),
 	]
 }

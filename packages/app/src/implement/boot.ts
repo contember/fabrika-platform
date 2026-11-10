@@ -60,6 +60,7 @@ import { type ConnectFetch, wireImports } from './connect'
 import {
 	ContractRuntime,
 	type Facilities,
+	type HeldPath,
 	NO_FACILITIES,
 	type ProcedureQuery,
 	proxySecretDigest,
@@ -405,14 +406,14 @@ function contractDatabase(
 		return null
 	}
 	try {
-		const { locate, relates, reveals, revealsToMembers, release } = bindScopedDatabaseProvisionally(database, {
+		const { locate, relates, reveals, holdsThrough, revealsToMembers, release } = bindScopedDatabaseProvisionally(database, {
 			database: connection,
 			capabilities,
 			readOnly: requestIsReadOnly,
 			...(projectWakes === undefined ? {} : { projectWakes }),
 		})
 		return {
-			database: { tables: database.tables, locate, relates, reveals, revealsToMembers },
+			database: { tables: database.tables, locate, relates, reveals, holdsThrough, revealsToMembers },
 			framework: frameworkTablesOf(database),
 			data: dataAccessOf(database),
 			release,
@@ -695,6 +696,21 @@ function memberRevealsOf(artifact: ContractArtifact): ReadonlyMap<string, readon
 		}
 	}
 	return reveals
+}
+
+/**
+ * Each dimension's secondary paths that hold actions for a Ref, from the policy of the table that owns it: the dimension
+ * the path reaches and the actions it holds there (`writeThrough`).
+ */
+function pathsOf(artifact: ContractArtifact): ReadonlyMap<string, readonly HeldPath[]> {
+	const paths = new Map<string, HeldPath[]>()
+	for (const table of Object.values(artifact.tables)) {
+		if (table.scope.mode !== 'dimension') continue
+		for (const [dimension, actions] of Object.entries(table.writeThrough ?? {})) {
+			paths.set(table.scope.dimension, [...(paths.get(table.scope.dimension) ?? []), { dimension, actions }])
+		}
+	}
+	return paths
 }
 
 /** Each approved token purpose with the claims schema the application declared for it. */
@@ -1004,6 +1020,7 @@ function bootOnce(app: ContractImplementation, options: BootOptions, binding: Bi
 		relations: new Map(Object.entries(artifact.relations ?? {}).map(([name, relation]) => [name, relation.dimension])),
 		reveals: revealsOf(artifact),
 		memberReveals: memberRevealsOf(artifact),
+		paths: pathsOf(artifact),
 		assets: options.assets ?? null,
 		membership,
 		terminals: artifact.terminal === undefined ? null : (terminalRpc ?? null),

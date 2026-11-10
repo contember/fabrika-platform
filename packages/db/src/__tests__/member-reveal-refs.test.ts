@@ -301,7 +301,7 @@ function suite(dialect: 'sqlite' | 'postgres', open: () => Promise<Backend>, clo
 			const sql = data.sql({ mode: 'read', check() {}, session: () => transaction.session(), fail: () => transaction.fail() })
 			try {
 				const scope = () => sql.scope(project('projects.read', 'p1', atTasks('t1')), 'docs')
-				expect(scope).toThrow('cannot render a relation, a member reveal or a condition')
+				expect(scope).toThrow('cannot render a relation, a member reveal, a secondary path or a condition')
 			} finally {
 				await transaction.rollback()
 			}

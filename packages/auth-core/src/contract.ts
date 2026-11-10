@@ -896,6 +896,12 @@ export interface TablePolicyArtifact {
 	 */
 	readonly readThrough?: Readonly<Record<string, string>>
 	/**
+	 * Dimension of `readThrough` → the actions a `Ref` held through that path holds, writes included; whoever inserts the
+	 * path's column must hold each at the node it names. Absent unless declared, so the digest stays. A reader that
+	 * ignores it reaches less, never more.
+	 */
+	readonly writeThrough?: Readonly<Record<string, readonly string[]>>
+	/**
 	 * The table's own dimension → the ancestor its rows reveal to a grant at their node, for a `Within`'s reads. Absent
 	 * unless declared, so the digest stays. A reader that ignores it reaches less, never more.
 	 */

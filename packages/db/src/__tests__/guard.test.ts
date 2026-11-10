@@ -182,12 +182,34 @@ describe('the scope predicate has one of the shapes the layer builds', () => {
 			BinaryOperationNode.create(column('notes', 'workspace_id'), OperatorNode.create('in'), ValueListNode.create([])),
 			BinaryOperationNode.create(column('notes', 'workspace_id'), OperatorNode.create('in'), ValueListNode.create([ValueNode.createImmediate(true)])),
 			BinaryOperationNode.create(column('notes', 'workspace_id'), OperatorNode.create('not in'), ValueListNode.create([ValueNode.create('w1')])),
-			AndNode.create(equals('notes', 'id', 'n1'), workspaces),
 			AndNode.create(equals('notes', 'id', 'n1'), ValueNode.createImmediate(true)),
 			BinaryOperationNode.create(column('notes', 'id'), OperatorNode.create('<>'), ValueNode.create('n1')),
 			ValueNode.createImmediate(false),
 		]
 		for (const shape of shapes) {
+			const [node, context] = scopedBy(shape)
+			refuses(node, context, 'the scope predicate must be true')
+		}
+	})
+
+	test("a Ref held through a secondary path: its chain's equalities AND a membership, or an OR of them, and nothing looser", () => {
+		const id = equals('notes', 'id', 'n1')
+		for (const shape of [AndNode.create(id, workspaces), AndNode.create(id, anyOf([workspaces, organizations]))]) {
+			const [node, context] = scopedBy(shape)
+			expect(() => assertAllowedTree(node, context)).not.toThrow()
+		}
+		const looser = [
+			AndNode.create(workspaces, id),
+			AndNode.create(id, ParensNode.create(OrNode.create(workspaces, ValueNode.createImmediate(true)))),
+			AndNode.create(id, OrNode.create(workspaces, organizations)),
+			AndNode.create(id, inList('note_comments', 'organization_id', ['o1'])),
+			AndNode.create(
+				id,
+				BinaryOperationNode.create(column('notes', 'workspace_id'), OperatorNode.create('not in'), ValueListNode.create([ValueNode.create('w1')])),
+			),
+			AndNode.create(id, BinaryOperationNode.create(column('notes', 'workspace_id'), OperatorNode.create('in'), ValueListNode.create([]))),
+		]
+		for (const shape of looser) {
 			const [node, context] = scopedBy(shape)
 			refuses(node, context, 'the scope predicate must be true')
 		}
@@ -237,7 +259,6 @@ describe('a scope held through relations or narrowed by a condition', () => {
 			members(mine, 'secrets', 'id'),
 			members(mine, 'note_members', 'body'),
 			members(mine, 'notes', 'id'),
-			AndNode.create(equals('notes', 'id', 'n1'), workspaces),
 		]
 		for (const shape of shapes) {
 			const [node, context] = scopedBy(shape)

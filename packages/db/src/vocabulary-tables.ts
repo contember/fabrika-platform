@@ -112,6 +112,11 @@ interface WritableFields<Col extends string, A extends string, Ver extends Col, 
 	 * `<nearest container column>.<its column>`, the nearest container's own path.
 	 */
 	readonly readThrough?: { readonly [dimension: string]: Col | `${Col}.${string}` }
+	/**
+	 * Dimension of `readThrough` → the actions a `Ref` held through that path holds, writes included; whoever inserts the
+	 * path's column must hold each at the node it names.
+	 */
+	readonly writeThrough?: { readonly [dimension: string]: readonly A[] }
 	/** The table's own dimension → the ancestor node a row reveals to a grant at its node, for a `Within`'s reads. */
 	readonly memberReveals?: { readonly [dimension: string]: MemberRevealsPolicy<Col, A> }
 }

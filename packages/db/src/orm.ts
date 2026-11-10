@@ -1032,7 +1032,7 @@ function unscopedRows(context: TableContext, site: DataSite, run: Runner, mode: 
 			return refused(site, 'read_only', `${table} is a view, which no handler writes`)
 		}
 		// A row that hands out access is placed by its writer; an unscoped write would delegate without the writer's bound.
-		if (delegates(model)) {
+		if (delegates(model) || context.writers.length > 0) {
 			return refused(
 				site,
 				'undeclared_reach',

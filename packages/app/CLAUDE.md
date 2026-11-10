@@ -591,8 +591,12 @@ vocabulary (`packages/db/CLAUDE.md`).
   action, now (`Ref`'s relations; empty for an IAM grant); `over` puts the relations into its `Within` beside the IAM
   values. An entry of a relation the contract does not declare counts for none. `memberReveals` adds the caller's
   grants at nodes whose rows reveal the `over` dimension to their members; `on` and `in` mint a `Ref` through such a
-  row (`#revealedOn`, the db's `revealsToMembers`) and carry the grants it matched (`Ref`'s revealing). Every statement
-  then re-reads the relation and revealing rows (`@fabrika/db`'s CLAUDE.md), so the framework caches nothing about them.
+  row (`#revealedOn`, the db's `revealsToMembers`) and carry the grants it matched (`Ref`'s revealing). A table's
+  `writeThrough` lets them mint a `Ref` through its path (`#throughCandidates`, the db's `holdsThrough`), carrying the
+  grants and relations at the path's dimension that matched (`Ref`'s paths). Every statement then re-reads the
+  relation, revealing and path rows (`@fabrika/db`'s CLAUDE.md), so the framework caches nothing about them. The request
+  frame's `standing` hands the db what the caller holds of an action in a dimension, which bounds the writer of a path
+  column; a frame with no caller has none, so a job or webhook that names a node there is refused.
 - **An `attachment()` output answers a file, encoded by the framework only** (`implement/attachment.ts`). Its value
   is the zod schema of the rows' array, marked (`attachmentOf`), so the handler's types, projection and validation are
   a list's; `describeContract` describes it as that array beside `attachment`, and `buildArtifact` writes the row's
