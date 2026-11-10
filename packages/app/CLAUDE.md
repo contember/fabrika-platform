@@ -586,14 +586,21 @@ vocabulary (`packages/db/CLAUDE.md`).
   An `on`, `in` or `over` endpoint's `ctx.db.app` is built from its `Ref` or `Within` (`endpointData`): every
   application table, read-only, read where the endpoint's action is the table's read action.
 - **A `~rel` entry is an action held through a relation, and the data layer decides where** (ADR-0073). The proxy's
-  requirement counts it like any grant of the action. `on` and `in` mint a `Ref` through a relation only when a row of
+  requirement counts it like any grant of the action. A `~relin` entry holds it only inside its node (`#heldRelations`
+  reads it as a `RelationHold` with `inside`): it counts only where the relation's dimension, and a reveal's, is the
+  node's dimension or lies inside it; `on` and `in` keep it where its dimension is the object's or on its chain
+  (`#atObject`, which compares no node) and ask the db's `holdsThrough`, in batches of at most `MAX_WITHIN_VALUES`
+  nodes, which compares the object's column with it in the statement and answers it narrowed to the node that column
+  stores, so `on`, `in` and `over` equate the same spellings of a key; `over` carries the hold into its
+  `Within`, where the db narrows each table's term by its own column. `on` and `in` mint a `Ref` through a relation only when a row of
   it names the caller at the object or a container on its chain, or reaches a row that reveals one of them for the
   action, now (`Ref`'s relations; empty for an IAM grant); `over` puts the relations into its `Within` beside the IAM
   values. An entry of a relation the contract does not declare counts for none. `memberReveals` adds the caller's
   grants at nodes whose rows reveal the `over` dimension to their members; `on` and `in` mint a `Ref` through such a
   row (`#revealedOn`, the db's `revealsToMembers`) and carry the grants it matched (`Ref`'s revealing). A table's
-  `writeThrough` lets them mint a `Ref` through its path (`#throughCandidates`, the db's `holdsThrough`), carrying the
-  grants and relations at the path's dimension that matched (`Ref`'s paths). Every statement then re-reads the
+  `writeThrough` lets them mint a `Ref` through its path (`#throughCandidates`, the db's `holdsThrough`, asked in batches
+  of at most `MAX_WITHIN_VALUES` values as `#revealedOn` asks), carrying the grants and relations at the path's dimension
+  that matched (`Ref`'s paths). Every statement then re-reads the
   relation, revealing and path rows (`@fabrika/db`'s CLAUDE.md), so the framework caches nothing about them. The request
   frame's `standing` hands the db what the caller holds of an action in a dimension (empty when it holds none), which
   bounds the writer of a path column and of a member reveal's path under `assign`; a frame with no caller has none, so a

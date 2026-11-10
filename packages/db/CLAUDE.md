@@ -558,7 +558,12 @@ pass a recording one); `Database.fromEngine` takes another engine (`openSqlite`)
 ## Relations, conditions and reveals (ADR-0073)
 
 A relation grant is application data the layer reads on every statement; IAM only marks the actions a role holds
-through a relation (`~rel`, `@fabrika/auth-core`). `authority.ts` builds every predicate a capability scopes
+through a relation (`~rel` anywhere, `~relin` inside a node, `@fabrika/auth-core`). A capability carries each as a
+`RelationHold`; one held inside a node narrows every term of the relation at a table to its own column for the node's
+dimension (`(<term> and (T.<column> in (<nodes>)))`), and a table with no such column gets no term from it
+(`relationTerms`), so a reveal above the node reaches nothing. `holdingRowLocked` holds the source and reveal rows to
+the same column, and `holdsThrough` parses each hold before it compares, then answers a matched one narrowed to the
+node the object's column stores (the statement compared it, so a `uuid` spelled in another case is that node). `authority.ts` builds every predicate a capability scopes
 (`refScope`, `viewScope`, `relationTerms`, `memberTerms`, `conditioned`), `conditions.ts` parses a condition (browser-safe, no Kysely) and
 `condition-nodes.ts` builds its predicate. The guard admits exactly these subquery shapes and nothing else.
 
@@ -620,7 +625,24 @@ through a relation (`~rel`, `@fabrika/auth-core`). `authority.ts` builds every p
   row on its paths locked `FOR SHARE` first (`readPaths`; a `some` after a path locks every row naming the row it
   reached). `insertProblem` refuses a `none`, a `some` under `not` (a row inserted meanwhile falsifies them, and no
   lock holds that), a `some` of the rows naming the inserted row, and a `some` of the inserted table's own rows at any
-  depth: judged after the write, it would count the inserted row itself.
+  depth: judged after the write, it would count the inserted row itself. A move is an insert into its target: the
+  target `Ref`'s action's condition judges the moved row after the update, in its transaction, the same way
+  (`MovedRow`, `updateRow`), and a refusal fails the transaction (409).
+- **`relationWhen: { <relation>: { <action>: <condition> } }`** narrows that relation's terms of the action only:
+  `relationTerms` wraps each (the direct term, a reveal matched for it, its term through a path) as
+  `(<term> and (<condition>))` (`narrowedTerm`; the guard's `isNarrowed`, as a member of `isReach` and of a view's
+  parent union). IAM values, member reveals and global grants are not narrowed. It parses as `when` (`parseRelationWhen`:
+  the vocabulary's relation, an action the table names, `insertProblem` for an insert action), on a dimension or child
+  table only, and `checkRelationWhenReach` refuses a relation that reaches no row of the table (a view: of its parent)
+  for the action. A `Ref`'s gate carries it (`gateTerms`). An insert drops a relation whose pathless condition fails on
+  the row before the write (`narrowedDestination`), and judges one with a path after it (`judgeNarrowed`, rows on the
+  path locked). What holds the destination without those relations, and each of several alone, is locked and decided
+  before the write (`narrowedHolds`); a row that fails one stands only on that earlier answer or on a narrowed relation
+  it meets that held alone, else it is a 409 and fails the transaction. The written row never holds its own insert. A
+  move judges the target `Ref`'s narrowed relations the same way after the update, with or without a path, since it
+  has no row values before it (`MovedRow.narrowed`); the moved row never holds its own move. A relation narrowed for an action does
+  not count towards a path writer's bound (`unnarrowed`). A view's parent subquery leaves the parent's `relationWhen`
+  out, as its `when`; the view's own splits the subquery into the rest and one part per narrowed relation (`SplitReach`).
 - **A tenant-holding key** is one foreign key of exactly the column and every ancestor column the two tables share,
   referencing the target's key (`holdsExactly`), with each ancestor column in the column list's `notNull`
   (`requireNotNullAncestors`, the invariant above). A hop's subquery reads its target unscoped, so any looser key would
@@ -637,7 +659,9 @@ through a relation (`~rel`, `@fabrika/auth-core`). `authority.ts` builds every p
 - **`writeThrough: { <dimension>: [<actions>] }`** makes a path hold the listed actions for a `Ref` too
   (`SecondaryPath.writes`); a path holds reads only otherwise. `RefGrant.paths` carries the grants at the path's
   dimension and its containers that matched, and every statement of the `Ref` requires the path term again
-  (`relationGate`, `pathTerms`, `heldThrough(action)`); a reveal matched through a path holds a `Ref` only for an action
+  (`relationGate`, `pathTerms`, `heldThrough(action)`). The gate ORs every part's terms (relations, member reveals,
+  paths): a part that reaches no row of a table adds nothing there, and a `Ref` none of whose parts does is
+  `unenforceable` on it; a reveal matched through a path holds a `Ref` only for an action
   the path lists. The column's writer must hold each action it hands out at the node it names (`pathWriters`: the
   table's own list and those of every container path through the column), judged before the insert in its
   transaction (`checkPathWriters`): the node's row is locked `FOR SHARE`, then the request's standing
@@ -654,7 +678,7 @@ through a relation (`~rel`, `@fabrika/auth-core`). `authority.ts` builds every p
   `Within`'s reads (`WithinGrant.revealing`), and for a `Ref` the framework mints through it (`RefGrant.revealing`, the
   caller's grants at the revealing dimension), whose every statement requires the member term (`relationGate`,
   `revealingTerms`), ORed with its relation terms. An insert under such a `Ref` locks its owned destination under the
-  term, or, into a node no table owns, a revealing row `FOR SHARE` (`lockHoldingRow`, `memberAddress`); none left is a
+  term, or, into a node no table owns, a revealing row `FOR SHARE` (`holdingRowLocked`, `memberAddress`); none left is a
   404. `revealsToMembers` is the binding `on` and `in` mint through; it reads the matched grants grouped (`valuesNode`),
   never only the first row. A member-revealing row is never written unscoped or by `ctx.sql`, never moves, and its key
   is the layer's, so no write revives a node a former member still holds.

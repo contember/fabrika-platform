@@ -489,7 +489,7 @@ function suite(dialect: 'sqlite' | 'postgres', open: () => Promise<Backend>, clo
 				insert into boards (id, project_id, org_id, version) values ('b2', 'p2', 'o1', 1);
 				insert into cards (id, org_id, board_id, version) values ('c2', 'o1', 'b2', 1)
 			`)
-			await expect(org()).rejects.toThrow('which reveals none of its nodes for projects.read')
+			await expect(org()).rejects.toThrow('none of which reaches a row of orgs for projects.read')
 			use(tablesWith({ named: 'one', writes: true }))
 			await expect(org()).rejects.toThrow(NotFoundError)
 			await backend.exec(`update projects set name = 'one' where id = 'p2'`)

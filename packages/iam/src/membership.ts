@@ -76,7 +76,7 @@ import { BUILTIN_ROLES } from './roles'
 import { generateToken, hashToken } from './secret'
 import type { Services } from './services'
 import { parseStoredChain } from './stored-chain'
-import { parseStoredPermissions } from './stored-permissions'
+import { delegatedActions, parseStoredPermissions } from './stored-permissions'
 import { authorityOnTerminal } from './tokens'
 
 /** How long an invitation may wait for its addressee. */
@@ -243,7 +243,7 @@ async function manageAuthority(
 /**
  * Could `actor` give `role` in `scope`? The role is a membership role of the scope's dimension, the actor
  * holds a role that `assignableBy` names — there, or an application-wide role globally — and the role grants
- * nothing the actor lacks there. The same question decides an assignment, a revocation and, again at
+ * nothing the actor lacks there, its `via` actions included. The same question decides an assignment, a revocation and, again at
  * acceptance, an invitation.
  */
 async function roleAuthorityProblem(
@@ -260,7 +260,8 @@ async function roleAuthorityProblem(
 	if (!assigners.some((assigner) => held.includes(assigner))) {
 		return NOT_ALLOWED
 	}
-	if (!parseStoredPermissions(role.permissions).every((action) => permits(actor.permissions, action, scope))) {
+	// Its via actions too: a grant of the role there carries them inside the value, so whoever gives it holds them there.
+	if (!delegatedActions(role).every((action) => permits(actor.permissions, action, scope))) {
 		return NOT_ALLOWED
 	}
 	const contract = await contractGrantProblem(services.repositories.appSchema, actor.app, {
@@ -274,7 +275,7 @@ async function roleAuthorityProblem(
 /**
  * The latest expiry a grant of `role` in `scope` given by `actor` may carry (S8): no later than the earliest expiry
  * among the grants that authorize it — the assigning role held there or globally, the dimension's `manage` action and
- * every action of the role there. `null` is no expiry. Asked only after `roleAuthorityProblem` admitted the actor.
+ * every action of the role there, its `via` actions included. `null` is no expiry. Asked only after `roleAuthorityProblem` admitted the actor.
  */
 async function delegationDeadline(
 	services: Services,
@@ -290,7 +291,7 @@ async function delegationDeadline(
 	const assignerUntil = assigning.some((grant) => grant.expires_at === null)
 		? null
 		: Math.max(now, ...assigning.map((grant) => grant.expires_at ?? now))
-	const carried = [manage, ...parseStoredPermissions(role.permissions)].map((action): PermissionEntry => ({ action, scope, source: 'grant' }))
+	const carried = [manage, ...delegatedActions(role)].map((action): PermissionEntry => ({ action, scope, source: 'grant' }))
 	return earliest(assignerUntil, authorityDeadline(actor, carried, now))
 }
 

@@ -52,6 +52,45 @@ export interface Scope {
  */
 export const RELATION_SCOPE_TYPE = '~rel'
 
+/**
+ * The pseudo-scope of a relation entry held inside one node: `{ type: '~relin', value: '<relation>:<dimension>:<node>' }`
+ * means the action is held where a row names the principal in that relation, on rows that lie inside `node` of
+ * `dimension`. IAM gives it a grant at that node of a role with `via`. Its own type, never `~rel`: a release that reads
+ * `~rel` as "the relation anywhere" ignores this one and reaches less.
+ */
+export const RELATION_INSIDE_SCOPE_TYPE = '~relin'
+
+/** A relation held inside one node of a dimension, as a `~relin` entry names it. */
+export interface RelationInside {
+	readonly relation: string
+	readonly dimension: string
+	readonly node: string
+}
+
+/**
+ * The `~relin` scope of `relation` inside `node` of `dimension`. A relation or dimension name never holds `:` (the
+ * contract's names do not), so the node, last, is read back verbatim, colons included; a name that holds one is refused.
+ */
+export function relationInsideScope(inside: RelationInside): Scope {
+	if (inside.relation === '' || inside.dimension === '' || inside.relation.includes(':') || inside.dimension.includes(':')) {
+		throw new Error('a relation held inside a node names a relation and a dimension without ":"')
+	}
+	return { type: RELATION_INSIDE_SCOPE_TYPE, value: `${inside.relation}:${inside.dimension}:${inside.node}` }
+}
+
+/** The relation, dimension and node of a `~relin` scope, or null for any other scope or a malformed value. */
+export function parseRelationInside(scope: Scope): RelationInside | null {
+	if (scope.type !== RELATION_INSIDE_SCOPE_TYPE) {
+		return null
+	}
+	const first = scope.value.indexOf(':')
+	const second = first === -1 ? -1 : scope.value.indexOf(':', first + 1)
+	if (first <= 0 || second <= first + 1 || second === scope.value.length - 1) {
+		return null
+	}
+	return { relation: scope.value.slice(0, first), dimension: scope.value.slice(first + 1, second), node: scope.value.slice(second + 1) }
+}
+
 /** A scope type no dimension, grant or key may name: IAM derives a `~` entry itself and never stores one. */
 export function isReservedScopeType(type: string): boolean {
 	return type.startsWith('~')
@@ -94,8 +133,9 @@ export interface RoleDef {
 	external?: true
 	/**
 	 * Relation → exact actions. A GLOBAL grant of this role also carries `{ action, scope: { type: '~rel', value:
-	 * relation } }`: the application holds the action where one of its rows names the principal in that relation.
-	 * Only an application-wide internal role declares it.
+	 * relation } }`: the application holds the action where one of its rows names the principal in that relation. A
+	 * grant at a node carries `~relin` instead (`relationInsideScope`): the relation holds only inside that node. Only an
+	 * internal role declares it.
 	 */
 	via?: Record<string, string[]>
 }

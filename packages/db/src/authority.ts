@@ -4,8 +4,9 @@
 
 import { AndNode, BinaryOperationNode, type OperationNode, OperatorNode, ParensNode, ValueNode } from 'kysely'
 import { ownEntry } from './builtins'
-import type { ContainerGrant, RefGrant, WithinGrant } from './capability'
+import type { ContainerGrant, RefGrant, RelationHold, WithinGrant } from './capability'
 import { conditionNode, subquery } from './condition-nodes'
+import type { ConditionModel } from './conditions'
 import { CapabilityError } from './errors'
 import type { ViewParentLink } from './guard'
 import { linksPredicate, linkValues } from './links'
@@ -24,6 +25,13 @@ import {
 /** A relation of the layer: its source table, and the tables whose rows it reaches reveal an ancestor node. */
 export interface LayerRelation extends RelationSource {
 	readonly reveals: readonly RevealModel[]
+	/** The actions some table's `relationWhen` narrows the relation for: it holds them only on the rows that condition admits. */
+	readonly narrowed: readonly string[]
+	/**
+	 * The source's and each reveal table's column for every dimension a row of it lies at, by table: where a hold inside
+	 * a node finds whether a row that holds a destination lies inside that node.
+	 */
+	readonly placed: Readonly<Record<string, Readonly<Record<string, string>>>>
 }
 
 /** Every relation of the layer, by name, with its source table. */
@@ -77,7 +85,7 @@ function relationNodes(source: RelationSource, principal: string, now: Date): Op
 	return subquery(source.table, source.node, allOf([namesPrincipal(source, principal), ...activeRow(source, now)]))
 }
 
-function isIn(table: string, name: string, nodes: OperationNode): OperationNode {
+export function isIn(table: string, name: string, nodes: OperationNode): OperationNode {
 	return BinaryOperationNode.create(column(table, name), OperatorNode.create('in'), nodes)
 }
 
@@ -130,17 +138,29 @@ export function heldThrough(action: string): PathRule {
  * S.<principal> = $me and <active>)` where `model` lies at a node of the relation's dimension, and one
  * `T.<ancestor> in (<revealed nodes>)` per reveal of `action` to an ancestor `model` lies at. Empty where neither holds.
  * It also follows the secondary paths `paths` admits: the column `model` reaches the relation's dimension through, and
- * the reveals matched through one.
+ * the reveals matched through one. A hold inside a node narrows each term to the rows inside it, by `model`'s own
+ * column for the hold's dimension, and reaches none where `model` has no such column. Where `model`'s `relationWhen`
+ * narrows the relation for `action`, each term carries that condition too: `(<term> and (<narrowing>))`, so no builder
+ * of a relation's reach leaves either out.
  */
 export function relationTerms(
 	relations: RelationSources,
 	model: TableModel,
-	relation: string,
+	hold: RelationHold,
 	principal: string,
 	action: string,
 	now: Date,
 	paths: PathRule,
 ): readonly OperationNode[] {
+	const relation = hold.relation
+	const narrowing: OperationNode[] = []
+	if (hold.inside !== null) {
+		const column = nodeColumnOf(model, hold.inside.dimension)
+		if (column === undefined || hold.inside.values.length === 0) {
+			return []
+		}
+		narrowing[narrowing.length] = isIn(model.name, column, valueList(hold.inside.values))
+	}
 	const source = relationSource(relations, relation)
 	const at = nodeColumnOf(model, source.dimension)
 	const terms: OperationNode[] = at === undefined ? [] : [isIn(model.name, at, relationNodes(source, principal, now))]
@@ -159,7 +179,42 @@ export function relationTerms(
 			terms[terms.length] = isIn(model.name, placed, revealedNodes(source, reveal, principal, now))
 		}
 	}
-	return terms
+	const condition = relationCondition(model, relation, action)
+	if (condition !== undefined) {
+		narrowing[narrowing.length] = narrowing.length === 0
+			? conditionNode(model.name, condition, now)
+			: ParensNode.create(conditionNode(model.name, condition, now))
+	}
+	if (narrowing.length === 0) {
+		return terms
+	}
+	const narrowed: OperationNode[] = []
+	for (let index = 0; index < terms.length; index++) {
+		const term = terms[index]
+		if (term !== undefined) narrowed[narrowed.length] = narrowedTerm(term, allOf(narrowing))
+	}
+	return narrowed
+}
+
+/** `holds` without those of a relation `narrowed` names: the holds no `relationWhen` narrows. */
+export function holdsBesides(holds: readonly RelationHold[], narrowed: readonly string[]): readonly RelationHold[] {
+	const kept: RelationHold[] = []
+	for (let index = 0; index < holds.length; index++) {
+		const hold = holds[index]
+		if (hold !== undefined && !includes(narrowed, hold.relation)) kept[kept.length] = hold
+	}
+	return kept
+}
+
+/** The condition `model`'s `relationWhen` puts on the rows `relation` reaches for `action`, if any. */
+export function relationCondition(model: TableModel, relation: string, action: string): ConditionModel | undefined {
+	const conditions = ownEntry(model.relationWhen, relation)
+	return conditions === undefined ? undefined : ownEntry(conditions, action)
+}
+
+/** `(<term> and (<narrowing>))`: one branch of a reach, narrowed; the one shape the guard admits a branch's condition in. */
+export function narrowedTerm(term: OperationNode, narrowing: OperationNode): OperationNode {
+	return ParensNode.create(AndNode.create(term, ParensNode.create(narrowing)))
 }
 
 /**
@@ -236,8 +291,8 @@ export function conditioned(model: TableModel, action: string, branch: Operation
 /**
  * A Ref's predicate over `links` of `model`: one equality per link of its chain (after `row`, the equality that
  * addresses one row by its key), then, when the Ref is held through relations or member reveals, a row of one of them
- * at the node, and its action's condition. A relation or a revealing grant that does not reach `model` leaves the Ref
- * unenforceable there, never unconditioned.
+ * at the node, and its action's condition. A Ref whose relations, revealing grants and paths together reach no row of
+ * `model` is unenforceable there, never unconditioned.
  */
 export function refScope(
 	reach: LayerReach,
@@ -254,28 +309,49 @@ export function refScope(
 	return conditioned(model, grant.action, gate === undefined ? chain : allOf([chain, gate]), now)
 }
 
+/** A child view's parent reach, split by the relations the view narrows: the rest's reach, and each such relation's own. */
+export interface SplitReach {
+	readonly rest: OperationNode | undefined
+	readonly relations: readonly { readonly reached: OperationNode; readonly condition: ConditionModel }[]
+}
+
 /**
  * The rows of a child view whose parent row `reached` admits: `V.<column> in (select P.<key> from P where <reached>)`,
  * after `row` when it addresses one row, then the view's own condition of `action`. For `all`, every parent row, so a
- * row whose parent column names none is still read by no capability. No column of the view places a row: its
- * containment rests on the parent's foreign keys (ADR-0072).
+ * row whose parent column names none is still read by no capability. Split by the relations the view narrows
+ * (`relationWhen`), one such membership per part, each narrowed relation's ANDed with the view's condition for it. No
+ * column of the view places a row: its containment rests on the parent's foreign keys (ADR-0072).
  */
 export function viewScope(
 	model: TableModel,
 	parent: ViewParentLink,
 	action: string,
-	reached: OperationNode | 'all',
+	reached: OperationNode | 'all' | SplitReach,
 	now: Date,
 	row?: OperationNode,
 ): OperationNode {
-	const member = isIn(model.name, parent.column, subquery(parent.table, parent.key, reached === 'all' ? undefined : reached))
+	const membership = (where: OperationNode | undefined) => isIn(model.name, parent.column, subquery(parent.table, parent.key, where))
+	let member: OperationNode
+	if (reached === 'all') {
+		member = membership(undefined)
+	} else if ('rest' in reached) {
+		const parts: OperationNode[] = reached.rest === undefined ? [] : [membership(reached.rest)]
+		for (let index = 0; index < reached.relations.length; index++) {
+			const part = reached.relations[index]
+			if (part !== undefined) parts[parts.length] = narrowedTerm(membership(part.reached), conditionNode(model.name, part.condition, now))
+		}
+		member = anyOf(parts)
+	} else {
+		member = membership(reached)
+	}
 	return conditioned(model, action, row === undefined ? member : allOf([row, member]), now)
 }
 
 /**
  * The rows a Ref held through relations, member reveals or secondary paths needs at `model`: a relation row at the node,
  * a revealing row the Ref's grants reveal it through, or a path `paths` admits naming a node its grants hold;
- * `undefined` for a Ref an IAM grant holds on its chain.
+ * `undefined` for a Ref an IAM grant holds on its chain. A part that reaches no row of `model` adds nothing; when none
+ * does, the Ref is unenforceable there, never unconditioned.
  */
 export function relationGate(
 	reach: LayerReach,
@@ -287,48 +363,36 @@ export function relationGate(
 	if (grant.relations.length === 0 && grant.revealing.length === 0 && grant.paths.length === 0) {
 		return undefined
 	}
-	const terms: OperationNode[] = []
-	for (let index = 0; index < grant.relations.length; index++) {
-		const relation = grant.relations[index] ?? ''
-		const reached = relationTerms(reach.relations, model, relation, grant.principal, grant.action, now, paths)
-		if (reached.length === 0) {
-			throw new CapabilityError(
-				'unenforceable',
-				`the Ref of ${grant.dimension} is held through ${relation}, whose dimension ${model.name} carries no column for, and which reveals none of its nodes for ${grant.action}`,
-			)
-		}
-		for (let position = 0; position < reached.length; position++) {
-			const term = reached[position]
-			if (term !== undefined) terms[terms.length] = term
-		}
-	}
-	if (grant.revealing.length > 0) {
-		const revealed = revealingTerms(reach.members, model, `the Ref of ${grant.dimension}`, grant.action, grant.revealing, now, paths)
-		if (revealed.length === 0) {
-			throw new CapabilityError(
-				'unenforceable',
-				`the Ref of ${grant.dimension} is held through member reveals, none of which reveals a node ${model.name} lies at for ${grant.action}`,
-			)
-		}
-		for (let position = 0; position < revealed.length; position++) {
-			const term = revealed[position]
-			if (term !== undefined) terms[terms.length] = term
-		}
-	}
-	if (grant.paths.length > 0) {
-		const through = pathTerms(model, grant.paths, paths)
-		if (through.length === 0) {
-			throw new CapabilityError(
-				'unenforceable',
-				`the Ref of ${grant.dimension} is held through a secondary path, and ${model.name} reads none that holds ${grant.action} here`,
-			)
-		}
-		for (let position = 0; position < through.length; position++) {
-			const term = through[position]
-			if (term !== undefined) terms[terms.length] = term
-		}
+	const terms = gateTerms(reach, model, grant, now, paths)
+	if (terms.length === 0) {
+		throw new CapabilityError(
+			'unenforceable',
+			`the Ref of ${grant.dimension} is held through relations, member reveals or secondary paths, none of which reaches a row of ${model.name} for ${grant.action}`,
+		)
 	}
 	return anyOf(terms)
+}
+
+/** Every term of `grant`'s relations, member reveals and paths at `model`; empty where none reaches it. */
+export function gateTerms(reach: LayerReach, model: TableModel, grant: RefGrant, now: Date, paths: PathRule): readonly OperationNode[] {
+	const terms: OperationNode[] = []
+	const add = (more: readonly OperationNode[]): void => {
+		for (let index = 0; index < more.length; index++) {
+			const term = more[index]
+			if (term !== undefined) terms[terms.length] = term
+		}
+	}
+	for (let index = 0; index < grant.relations.length; index++) {
+		const hold = grant.relations[index]
+		if (hold !== undefined) add(relationTerms(reach.relations, model, hold, grant.principal, grant.action, now, paths))
+	}
+	if (grant.revealing.length > 0) {
+		add(revealingTerms(reach.members, model, `the Ref of ${grant.dimension}`, grant.action, grant.revealing, now, paths))
+	}
+	if (grant.paths.length > 0) {
+		add(pathTerms(model, grant.paths, paths))
+	}
+	return terms
 }
 
 /**

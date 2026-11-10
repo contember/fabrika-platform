@@ -137,6 +137,13 @@ From the release after `0.9.0-dev.13`, a `memberReveals` entry holds its actions
 review the actions each `memberReveals` entry lists before raising the pin from `dev.13`, and keep only those its
 members should hold on the ancestor.
 
+After the IAM upgrade that brings `0030_membership_role_via`, a scoped grant of a role with `via`, an existing one
+included, holds the role's relation actions inside its node (`~relin`), where it held none before; an application
+pinned before `0.9.0-dev.14` ignores the entry. Review the scoped grants of each role with `via` before raising the pin.
+
+A table's `relationWhen` (a condition on what one relation reaches) needs `0.9.0-dev.14` or later: Control refuses to
+publish it for an application pinned to an earlier release, which would ignore it and reach more.
+
 A webhook's `bind`, `unbind` and `setSecret` now refuse a `Ref` held through a relation, a member reveal or a secondary
 path (`conditional_binding`): bind with a `Ref` an IAM grant holds.
 

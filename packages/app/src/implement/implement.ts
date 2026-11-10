@@ -3,7 +3,7 @@
 
 import type { TablePolicyArtifact } from '@fabrika/auth-core'
 import type { DataLayer } from '@fabrika/db'
-import type { CapabilityAuthority, ContainerGrant } from '@fabrika/db/capability'
+import type { CapabilityAuthority, ContainerGrant, RelationHold } from '@fabrika/db/capability'
 import type { Session } from '@fabrika/db/framework'
 import type { EmailSender } from '@fabrika/email'
 import type { ConnectSnapshot } from '../contract/connect'
@@ -41,9 +41,9 @@ export interface ContractDatabase {
 		id: string,
 		action: string,
 		principal: string,
-		relations: readonly string[],
+		relations: readonly RelationHold[],
 		paths: readonly ContainerGrant[],
-	): Promise<{ readonly relations: readonly string[]; readonly paths: readonly ContainerGrant[] }>
+	): Promise<{ readonly relations: readonly RelationHold[]; readonly paths: readonly ContainerGrant[] }>
 	/**
 	 * Of `values`, the caller's grants of `action` at nodes of `revealing`, those whose row reveals `node` of `dimension`
 	 * to its members now; none in a layer of the application's own.

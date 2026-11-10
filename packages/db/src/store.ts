@@ -5,7 +5,10 @@ import {
 	activeRow,
 	conditioned,
 	everyPath,
+	gateTerms,
 	heldThrough,
+	holdsBesides,
+	isIn,
 	type LayerRelation,
 	type MemberReveals,
 	memberTerms,
@@ -14,11 +17,13 @@ import {
 	type PathRule,
 	pathTerms,
 	refScope,
+	relationCondition,
 	relationGate,
 	relationSource,
 	type RelationSources,
 	relationTerms,
 	revealedNodes,
+	type SplitReach,
 	throughPath,
 	viewScope,
 } from './authority'
@@ -51,6 +56,7 @@ import {
 	MAX_WITHIN_VALUES,
 	type Ref,
 	type RefGrant,
+	type RelationHold,
 	type Within,
 	type WithinGrant,
 } from './capability'
@@ -123,6 +129,7 @@ import {
 	modelOf,
 	type MoveAcknowledgement,
 	namesAction,
+	nodeColumnOf,
 	type Operation,
 	type ParentOf,
 	type PathWriter,
@@ -506,10 +513,12 @@ function addMemberTerms(context: TableContext, grant: WithinGrant, predicates: O
 /** The relation terms of a `Within`'s relations; a relation whose dimension this table lies at no node of reaches none of its rows. */
 function addRelationTerms(context: TableContext, grant: WithinGrant, reads: boolean, predicates: OperationNode[], now: Date): void {
 	for (let index = 0; index < grant.relations.length; index++) {
+		const hold = grant.relations[index]
+		if (hold === undefined) continue
 		const terms = relationTerms(
 			context.relations,
 			context.model,
-			grant.relations[index] ?? '',
+			hold,
 			grant.principal,
 			grant.action,
 			now,
@@ -600,27 +609,92 @@ export function parentPredicate(context: TableContext, grant: RefGrant, key?: st
 	if (through !== undefined) {
 		const parent = through.context
 		const now = new Date()
-		return viewScope(context.model, through, grant.action, refScope(parent, parent.model, selfLinks(parent.model), grant, now), now, row)
+		const narrowed = viewNarrowed(context.model, grant.relations, grant.action)
+		const reached = narrowed.length === 0
+			? refScope(parent, parent.model, selfLinks(parent.model), grant, now)
+			: splitRefReach(context.model, parent, grant, narrowed, now)
+		return viewScope(context.model, through, grant.action, reached, now, row)
 	}
 	return refScope(context, context.model, context.model.chain, grant, new Date(), row)
 }
 
+/** Of `holds`, the relations a child view's `relationWhen` narrows for `action`: each reads the parent through a part of its own. */
+function viewNarrowed(view: TableModel, holds: readonly RelationHold[], action: string): readonly string[] {
+	const narrowed: string[] = []
+	for (let index = 0; index < holds.length; index++) {
+		const relation = holds[index]?.relation ?? ''
+		if (relationCondition(view, relation, action) !== undefined && !includes(narrowed, relation)) narrowed[narrowed.length] = relation
+	}
+	return narrowed
+}
+
+/**
+ * A Ref's reach of a view's parent, split by the relations the view narrows: the chain with the terms of its other
+ * relations, member reveals and paths, and the chain with each narrowed relation's own terms. A part that reaches no
+ * parent row adds nothing; none left is unenforceable, never unconditioned.
+ */
+function splitRefReach(view: TableModel, parent: TableContext, grant: RefGrant, narrowed: readonly string[], now: Date): SplitReach {
+	const model = parent.model
+	const chain = linksPredicate(model.name, linkValues(model.name, selfLinks(model), grant))
+	const paths = heldThrough(grant.action)
+	const others = holdsBesides(grant.relations, narrowed)
+	const rest: RefGrant = { ...grant, relations: others }
+	const restTerms = others.length === 0 && rest.revealing.length === 0 && rest.paths.length === 0 ? [] : gateTerms(parent, model, rest, now, paths)
+	const relations: { reached: OperationNode; condition: ConditionModel }[] = []
+	for (let index = 0; index < grant.relations.length; index++) {
+		const hold = grant.relations[index]
+		const condition = hold === undefined || !includes(narrowed, hold.relation) ? undefined : relationCondition(view, hold.relation, grant.action)
+		const terms = hold === undefined || condition === undefined
+			? []
+			: relationTerms(parent.relations, model, hold, grant.principal, grant.action, now, paths)
+		if (condition !== undefined && terms.length > 0) relations[relations.length] = { reached: allOf([chain, anyOf(terms)]), condition }
+	}
+	if (restTerms.length === 0 && relations.length === 0) {
+		throw new CapabilityError(
+			'unenforceable',
+			`the Ref of ${grant.dimension} is held through relations, member reveals or secondary paths, none of which reaches a row of ${model.name} for ${grant.action}`,
+		)
+	}
+	return { rest: restTerms.length === 0 ? undefined : allOf([chain, anyOf(restTerms)]), relations }
+}
+
 /**
  * A child view's rows a `Within` reaches: those whose parent row `reach` admits over the parent's context; for `all`,
- * those whose parent row exists. Undefined where `reach` is: the empty `Within`.
+ * those whose parent row exists. A relation the view narrows (`relationWhen`) reaches the parent through a part of its
+ * own, ANDed with the view's condition. Undefined where nothing is reached: the empty `Within`.
  */
 function throughParent(
 	context: TableContext,
 	through: ViewParent,
 	grant: WithinGrant,
-	reach: (parent: TableContext) => OperationNode | undefined,
+	reach: (parent: TableContext, grant: WithinGrant) => OperationNode | undefined,
 ): OperationNode | undefined {
 	const now = new Date()
 	if (grant.values === 'all') {
 		return viewScope(context.model, through, grant.action, 'all', now)
 	}
-	const reached = reach(through.context)
-	return reached === undefined ? undefined : viewScope(context.model, through, grant.action, reached, now)
+	const narrowed = viewNarrowed(context.model, grant.relations, grant.action)
+	if (narrowed.length === 0) {
+		const reached = reach(through.context, grant)
+		return reached === undefined ? undefined : viewScope(context.model, through, grant.action, reached, now)
+	}
+	const rest = reach(through.context, { ...grant, relations: holdsBesides(grant.relations, narrowed) })
+	const relations: { reached: OperationNode; condition: ConditionModel }[] = []
+	for (let index = 0; index < grant.relations.length; index++) {
+		const hold = grant.relations[index]
+		const condition = hold === undefined || !includes(narrowed, hold.relation)
+			? undefined
+			: relationCondition(context.model, hold.relation, grant.action)
+		const alone: WithinGrant | undefined = hold === undefined
+			? undefined
+			: { ...grant, values: [], containers: [], contained: [], revealing: [], relations: [hold] }
+		const reached = condition === undefined || alone === undefined ? undefined : reach(through.context, alone)
+		if (condition !== undefined && reached !== undefined) relations[relations.length] = { reached, condition }
+	}
+	if (rest === undefined && relations.length === 0) {
+		return undefined
+	}
+	return viewScope(context.model, through, grant.action, { rest, relations }, now)
 }
 
 export function childListPredicate(context: TableContext, capability: unknown, operation: Operation): OperationNode | undefined {
@@ -636,7 +710,7 @@ export function childListPredicate(context: TableContext, capability: unknown, o
 	checkGrant(context, grant, listDimension(scope.parent), operation)
 	if (context.through !== undefined) {
 		const column = scope.parent.container?.column ?? scope.parent.key
-		return throughParent(context, context.through, grant, (parent) => withinPredicate(parent, column, grant, operation))
+		return throughParent(context, context.through, grant, (parent, part) => withinPredicate(parent, column, part, operation))
 	}
 	return withinPredicate(context, scope.parent.container?.column ?? scope.column, grant, operation)
 }
@@ -706,7 +780,7 @@ export function reachPredicate(context: TableContext, capability: unknown): Oper
 		)
 	}
 	if (context.through !== undefined) {
-		return throughParent(context, context.through, grant, (parent) => withinReach(parent, grant, true))
+		return throughParent(context, context.through, grant, (parent, part) => withinReach(parent, part, true))
 	}
 	return withinReach(context, grant, false)
 }
@@ -1473,11 +1547,19 @@ export function keyOf(model: TableModel): string {
  * Ref minted before its object moved would insert into, or move rows into, the object's new container.
  */
 async function lockDestination(transaction: Session, context: TableContext, grant: RefGrant, paths?: PathRule): Promise<void> {
+	if (!(await destinationHeld(transaction, context, grant, paths))) {
+		throw context.destination === undefined
+			? new NotFoundError(`no row holds ${grant.action} for the Ref's principal at ${grant.dimension} ${grant.id} any more; obtain a fresh Ref`)
+			: new NotFoundError(`${context.destination.name} ${grant.id} is not where its Ref says; obtain a fresh Ref`)
+	}
+}
+
+/** Whether the destination still lies where `grant`'s chain says and still holds it, locked `for share` (`lockDestination`). */
+async function destinationHeld(transaction: Session, context: TableContext, grant: RefGrant, paths?: PathRule): Promise<boolean> {
 	const owner = context.destination
 	if (owner === undefined) {
 		// No table owns the destination, so a Ref held through relations or member reveals is checked on the rows that hold it.
-		if (grant.relations.length > 0 || grant.revealing.length > 0) await lockHoldingRow(transaction, context, grant)
-		return
+		return grant.relations.length === 0 && grant.revealing.length === 0 ? true : await holdingRowLocked(transaction, context, grant)
 	}
 	const chain = linksPredicate(owner.name, linkValues(owner.name, selfLinks(owner), grant))
 	// A Ref held through a relation or a member reveal inserts only while a row of it still holds the destination.
@@ -1492,9 +1574,7 @@ async function lockDestination(transaction: Session, context: TableContext, gran
 		lock: 'share',
 		subqueries: context.subqueries,
 	})
-	if (rows.length === 0) {
-		throw new NotFoundError(`${owner.name} ${grant.id} is not where its Ref says; obtain a fresh Ref`)
-	}
+	return rows.length > 0
 }
 
 /** An insert, in a transaction that first locks its destination and judges its writer's bounds and its condition. */
@@ -1502,13 +1582,14 @@ export async function insertRow<O>(
 	context: TableContext,
 	run: Runner,
 	given: ReadonlyMap<string, Primitive | null>,
-	prepared: Pick<PreparedInsert, 'destination' | 'writer' | 'judged'> | undefined,
+	prepared: Pick<PreparedInsert, 'destination' | 'writer' | 'judged' | 'narrowed'> | undefined,
 ): Promise<O> {
 	const values = boundValues(context, given)
 	return run.write(async (transaction) => {
 		if (prepared?.destination !== undefined) {
 			await lockDestination(transaction, context, prepared.destination)
 		}
+		const before = await narrowedHolds(transaction, context, prepared)
 		if (prepared !== undefined) {
 			await checkPrincipalAssign(transaction, context, prepared.writer, given)
 			await checkRevealAssign(transaction, context, prepared.writer, given)
@@ -1522,6 +1603,7 @@ export async function insertRow<O>(
 		checkVersion(context, row)
 		await referenceInserted(context, run, transaction, values)
 		await judgeInserted(transaction, context, prepared?.judged, values.get(keyOf(context.model)))
+		await judgeNarrowed(transaction, context, prepared, before, values.get(keyOf(context.model)))
 		return row
 	})
 }
@@ -1756,8 +1838,7 @@ export async function updateRow<O>(
 	target: Addressed,
 	given: ReadonlyMap<string, Primitive | null>,
 	expectedVersion: OperationNode | undefined,
-	destination?: RefGrant,
-	destinationPaths?: PathRule,
+	moved?: MovedRow,
 ): Promise<O> {
 	const { name: table, version } = context.model
 	const changes = boundValues(context, given)
@@ -1767,17 +1848,40 @@ export async function updateRow<O>(
 		? acknowledgementNode(table, keyOf(context.model), version, where)
 		: updateNode(table, changes, version, where, answer(context))
 	return run.write(async (transaction) => {
-		if (destination !== undefined) {
-			await lockDestination(transaction, context, destination, destinationPaths)
+		// A move follows containment, so a path never holds its destination.
+		if (moved !== undefined) {
+			await lockDestination(transaction, context, moved.destination, noPath)
 		}
+		const before = moved === undefined ? undefined : await narrowedHolds(transaction, context, moved, noPath)
 		const [row] = await transaction.run<O>(node, guard(context, unchanged ? 'SelectQueryNode' : 'UpdateQueryNode', target.scope))
 		if (row !== undefined) {
 			checkVersion(context, row)
 			await referenceUpdated(context, run, transaction, changes, row)
+			if (moved !== undefined) {
+				await judgeInserted(transaction, context, moved.judged, rowKey(context, row))
+				await judgeNarrowed(transaction, context, moved, before, rowKey(context, row))
+			}
 			return row
 		}
 		return missingOrChanged(context, transaction, target, expectedVersion)
 	})
+}
+
+/**
+ * A move's destination, locked before the write, and the destination's insert conditions, which judge the moved row
+ * after it as an insert into the destination judges its row: the insert action's (`judgeInserted`), and each one
+ * `relationWhen` puts on a relation the destination `Ref` holds through (`judgeNarrowed`).
+ */
+export interface MovedRow {
+	readonly destination: RefGrant
+	readonly judged: JudgedInsert | undefined
+	readonly narrowed: readonly NarrowedInsert[]
+}
+
+/** The key `row`, a write's acknowledgement, answers; `undefined` when it answers none as text. */
+function rowKey(context: TableContext, row: unknown): string | undefined {
+	const value: unknown = typeof row === 'object' && row !== null ? ownDescriptor(row, keyOf(context.model))?.value : undefined
+	return typeof value === 'string' ? value : undefined
 }
 
 /** Like `updateRow`: under `expectVersion`, a row that changed is 409 and a missing one 404. */
@@ -1952,10 +2056,18 @@ export interface PreparedInsert {
 	readonly conflict: OnConflict | undefined
 	/** The insert action's condition when it follows a path: judged in the insert's transaction, on the rows it names. */
 	readonly judged: JudgedInsert | undefined
+	/** The destination's relations whose `relationWhen` for the insert follows a path: judged on the written row. */
+	readonly narrowed: readonly NarrowedInsert[]
 }
 
 export interface JudgedInsert {
 	readonly action: string
+	readonly condition: ConditionModel
+}
+
+/** A relation the destination `Ref` holds through, which the inserted table narrows for the insert by a condition with a path. */
+export interface NarrowedInsert {
+	readonly relation: string
 	readonly condition: ConditionModel
 }
 
@@ -1973,12 +2085,15 @@ export function prepareDimensionInsert(context: TableContext, target: unknown, v
 		linkValues(context.model.name, [{ dimension: scope.dimension, column: scope.key }], grant)
 		stampInsert(context, grant, row, scope.key, grant.id)
 		const judged = checkInserted(context, grant, row)
-		return { row, writer: grant.principal, destination: undefined, conflict, judged }
+		// No destination to check again after the write, so a condition with a path holds nothing here.
+		narrowedDestination(context, grant, row, false)
+		return { row, writer: grant.principal, destination: undefined, conflict, judged, narrowed: [] }
 	}
 	stampInsert(context, grant, row, scope.key, uuidv7())
 	stampChain(row, linkValues(context.model.name, context.model.chain, grant))
 	const judged = checkInserted(context, grant, row)
-	return { row, writer: grant.principal, destination: grant, conflict, judged }
+	const held = narrowedDestination(context, grant, row, true)
+	return { row, writer: grant.principal, destination: held.destination, conflict, judged, narrowed: held.narrowed }
 }
 
 /** An application table's insert, for an `app` capability of its insert action: a new key, no containment. */
@@ -1988,7 +2103,7 @@ export function prepareApplicationInsert(context: TableContext, capability: unkn
 	const conflict = onConflictOf(context, options, grant.action, row)
 	stampInsert(context, grant, row, keyOf(context.model), uuidv7())
 	const judged = checkInserted(context, grant, row)
-	return { row, writer: grant.principal, destination: undefined, conflict, judged }
+	return { row, writer: grant.principal, destination: undefined, conflict, judged, narrowed: [] }
 }
 
 /** A child table's insert under the parent its `Ref` names, whose chain is checked against the database. */
@@ -2000,7 +2115,8 @@ export function prepareChildInsert(context: TableContext, parent: unknown, value
 	stampInsert(context, grant, row, scope.key, uuidv7())
 	stampChain(row, linkValues(context.model.name, context.model.chain, grant))
 	const judged = checkInserted(context, grant, row)
-	return { row, writer: grant.principal, destination: grant, conflict, judged }
+	const held = narrowedDestination(context, grant, row, true)
+	return { row, writer: grant.principal, destination: held.destination, conflict, judged, narrowed: held.narrowed }
 }
 
 const DAY_MS = 86_400_000
@@ -2050,6 +2166,133 @@ function checkInserted(
 }
 
 /**
+ * The destination `Ref` an insert locks, without the relations the inserted table's `relationWhen` narrows for the insert
+ * and the written row fails: a pathless condition judged here, on the row's final values; one with a path answered for
+ * the transaction to judge (`judgeNarrowed`), or, without a destination to check again (`defer` false), held to fail. A Ref held by nothing else then is refused (409): the relation's membership
+ * is never judged on the written row, so the row never counts towards its own insert.
+ */
+function narrowedDestination(
+	context: TableContext,
+	grant: RefGrant,
+	row: ReadonlyMap<string, Primitive | null>,
+	defer: boolean,
+): { readonly destination: RefGrant; readonly narrowed: readonly NarrowedInsert[] } {
+	const now = new Date()
+	const kept: RelationHold[] = []
+	const narrowed: NarrowedInsert[] = []
+	for (let index = 0; index < grant.relations.length; index++) {
+		const hold = grant.relations[index]
+		if (hold === undefined) continue
+		const relation = hold.relation
+		const condition = relationCondition(context.model, relation, grant.action)
+		const pathed = condition !== undefined && readPaths(condition).length > 0
+		if (condition !== undefined && pathed && defer && !judgesRelation(narrowed, relation)) {
+			narrowed[narrowed.length] = { relation, condition }
+		}
+		if (condition === undefined || (pathed ? defer : rowSatisfies(condition, row, now))) {
+			kept[kept.length] = hold
+		}
+	}
+	if (kept.length === grant.relations.length) {
+		return { destination: grant, narrowed }
+	}
+	if (kept.length === 0 && grant.revealing.length === 0 && grant.paths.length === 0) {
+		throw new ConflictError(`the row is outside what ${grant.action} inserts into ${context.model.name} through its relations`)
+	}
+	return { destination: { ...grant, relations: kept }, narrowed }
+}
+
+/** Whether `narrowed` already judges `relation`: two holds of one relation are judged once. */
+function judgesRelation(narrowed: readonly NarrowedInsert[], relation: string): boolean {
+	for (let index = 0; index < narrowed.length; index++) {
+		if (narrowed[index]?.relation === relation) return true
+	}
+	return false
+}
+
+/**
+ * What held an insert's destination before the write, apart from the relations narrowed by a path: the rest of the
+ * `Ref`, and, with several such relations, each of them alone. Decided before the row exists, so it never counts it.
+ */
+interface NarrowedHolds {
+	readonly rest: boolean
+	readonly alone: readonly string[]
+}
+
+/** `NarrowedHolds` of a prepared insert, locked `for share` in its transaction before the write; `undefined` with nothing narrowed. */
+async function narrowedHolds(
+	transaction: Session,
+	context: TableContext,
+	prepared: Pick<PreparedInsert, 'destination' | 'narrowed'> | undefined,
+	paths?: PathRule,
+): Promise<NarrowedHolds | undefined> {
+	const destination = prepared?.destination
+	if (prepared === undefined || destination === undefined || prepared.narrowed.length === 0) {
+		return undefined
+	}
+	const relations: string[] = []
+	for (let index = 0; index < prepared.narrowed.length; index++) {
+		const entry = prepared.narrowed[index]
+		if (entry !== undefined) relations[relations.length] = entry.relation
+	}
+	const rest = await heldBy(transaction, context, { ...destination, relations: holdsBesides(destination.relations, relations) }, paths)
+	const alone: string[] = []
+	// One narrowed relation that passes leaves the destination as `lockDestination` found it; only with several may it be another's.
+	for (let index = 0; relations.length > 1 && index < relations.length; index++) {
+		const relation = relations[index] ?? ''
+		const holds: RelationHold[] = []
+		for (let position = 0; position < destination.relations.length; position++) {
+			const hold = destination.relations[position]
+			if (hold !== undefined && hold.relation === relation) holds[holds.length] = hold
+		}
+		if (await heldBy(transaction, context, { ...destination, relations: holds, revealing: [], paths: [] }, paths)) alone[alone.length] = relation
+	}
+	return { rest, alone }
+}
+
+/** Whether `grant` holds the destination: with no part left, never. */
+async function heldBy(transaction: Session, context: TableContext, grant: RefGrant, paths?: PathRule): Promise<boolean> {
+	if (grant.relations.length === 0 && grant.revealing.length === 0 && grant.paths.length === 0) {
+		return false
+	}
+	return await destinationHeld(transaction, context, grant, paths)
+}
+
+/**
+ * The destination's relations whose condition for the insert follows a path, judged on the row just written as
+ * `judgeInserted` judges `when`. When the row fails one, the insert stands only on what held the destination before the
+ * write without it (`before`): the rest of the `Ref`, or a narrowed relation the row meets that held it alone. Otherwise
+ * the transaction fails with a 409.
+ */
+async function judgeNarrowed(
+	transaction: Session,
+	context: TableContext,
+	prepared: Pick<PreparedInsert, 'destination' | 'narrowed'> | undefined,
+	before: NarrowedHolds | undefined,
+	key: Primitive | null | undefined,
+): Promise<void> {
+	const destination = prepared?.destination
+	if (prepared === undefined || destination === undefined || before === undefined) {
+		return
+	}
+	let failed = false
+	let held = before.rest
+	for (let index = 0; index < prepared.narrowed.length; index++) {
+		const entry = prepared.narrowed[index]
+		if (entry === undefined) continue
+		if (!(await rowMeets(transaction, context, destination.action, entry.condition, key))) {
+			failed = true
+		} else if (includes(before.alone, entry.relation)) {
+			held = true
+		}
+	}
+	if (failed && !held) {
+		transaction.fail()
+		throw new ConflictError(`the row is outside what ${destination.action} inserts into ${context.model.name} through its relations`)
+	}
+}
+
+/**
  * An insert's condition that follows a path, judged on the row just written, in its transaction. The database has then
  * held the row's foreign keys, so a path reads only the rows they name in the row's tenant. Every row each read path
  * reaches is locked `FOR SHARE` first (a `some`'s rows: every row naming the row it reached), so none changes or goes
@@ -2065,11 +2308,28 @@ async function judgeInserted(
 	if (judged === undefined) {
 		return
 	}
+	if (!(await rowMeets(transaction, context, judged.action, judged.condition, key))) {
+		transaction.fail()
+		throw new ConflictError(`the row is outside what ${judged.action} inserts into ${context.model.name}`)
+	}
+}
+
+/**
+ * Whether the row just written meets `condition`, in the insert's transaction: every row each of its paths reaches is
+ * locked `FOR SHARE` first, then the condition is judged as a read of the row judges it.
+ */
+async function rowMeets(
+	transaction: Session,
+	context: TableContext,
+	action: string,
+	condition: ConditionModel,
+	key: Primitive | null | undefined,
+): Promise<boolean> {
 	const model = context.model
 	if (key === undefined || key === null) {
-		throw new QueryRefusedError('unexpected_row', `an insert into ${model.name} judged by ${judged.action} has no key`)
+		throw new QueryRefusedError('unexpected_row', `an insert into ${model.name} judged by ${action} has no key`)
 	}
-	const paths = readPaths(judged.condition)
+	const paths = readPaths(condition)
 	for (let index = 0; index < paths.length; index++) {
 		const steps = paths[index] ?? []
 		// The rows a path reaches, step by step from the inserted row; each statement admits the columns it walks.
@@ -2094,7 +2354,7 @@ async function judgeInserted(
 			}
 		}
 	}
-	const scope = AndNode.create(equals(model.name, keyOf(model), key), ParensNode.create(conditionNode(model.name, judged.condition, new Date())))
+	const scope = AndNode.create(equals(model.name, keyOf(model), key), ParensNode.create(conditionNode(model.name, condition, new Date())))
 	const rows = await transaction.run(locateNode(model.name, [keyOf(model)], scope), {
 		root: 'SelectQueryNode',
 		table: model.name,
@@ -2102,10 +2362,7 @@ async function judgeInserted(
 		scope,
 		subqueries: context.subqueries,
 	})
-	if (rows.length === 0) {
-		transaction.fail()
-		throw new ConflictError(`the row is outside what ${judged.action} inserts into ${model.name}`)
-	}
+	return rows.length > 0
 }
 
 /** `admitted` with `more` added: the columns one statement the layer builds may select in its subqueries. */
@@ -2142,6 +2399,7 @@ export function insertPrepared(context: TableContext, run: Runner, prepared: Pre
 		if (prepared.destination !== undefined) {
 			await lockDestination(transaction, context, prepared.destination)
 		}
+		const before = await narrowedHolds(transaction, context, prepared)
 		await checkPrincipalAssign(transaction, context, prepared.writer, prepared.row)
 		await checkRevealAssign(transaction, context, prepared.writer, prepared.row)
 		await checkMemberRevealAssign(transaction, context, prepared.writer, prepared.row)
@@ -2150,6 +2408,7 @@ export function insertPrepared(context: TableContext, run: Runner, prepared: Pre
 		// A conflict writes no new row: `nothing` reads none, and `update` is judged on the stored row.
 		if (written['inserted'] === true) {
 			await judgeInserted(transaction, context, prepared.judged, prepared.row.get(keyOf(context.model)))
+			await judgeNarrowed(transaction, context, prepared, before, prepared.row.get(keyOf(context.model)))
 		}
 		return written
 	})
@@ -2288,7 +2547,8 @@ async function checkMemberRevealAssign(
 
 /**
  * An inserted row's path column that hands out actions (`writeThrough`): its writer must hold every one of them at the
- * node the column names, as a grant there or above it, a relation row naming it there, or a revealing row. The node's
+ * node the column names, as a grant there or above it, a relation row naming it there (of a relation no `relationWhen`
+ * narrows for the action), or a revealing row. The node's
  * row is locked `FOR SHARE` first, so it stays where it lies until the commit, and so is each row the writer holds it
  * through; IAM grants are the request's own. Judged before the insert, so the inserted row never counts. A writer
  * outside the bound, or work with no caller, is a 409 and nothing is written.
@@ -2331,13 +2591,26 @@ async function checkPathWriters(
 				principal: writer,
 				id: String(value),
 				chain,
-				relations: standing.relations,
+				relations: unnarrowed(context.relations, standing.relations, action),
 				revealing: standing.revealing,
 				paths: [],
 			}
 			if (!(await holdingRowLocked(transaction, context, holding))) throw refused(action)
 		}
 	}
+}
+
+/**
+ * Of `relations`, those no table's `relationWhen` narrows for `action`: a relation that holds the action on some rows only
+ * does not bound a writer who hands it out at a node.
+ */
+function unnarrowed(relations: RelationSources, held: readonly RelationHold[], action: string): readonly RelationHold[] {
+	const kept: RelationHold[] = []
+	for (let index = 0; index < held.length; index++) {
+		const hold = held[index]
+		if (hold !== undefined && !includes(relationSource(relations, hold.relation).narrowed, action)) kept[kept.length] = hold
+	}
+	return kept
 }
 
 /** Whether `standing`'s grants hold its action at `node`: everywhere, there, or at a container `chain` places it in. */
@@ -2428,7 +2701,9 @@ export class DimensionTable<DB, P, T extends string> {
 	/**
 	 * Moves the object to another container: the delete action at the source, the insert action at the target,
 	 * whose chain is checked against the database. Every chain column changes; children that copy them follow
-	 * through `ON UPDATE CASCADE` on their composite foreign key. Answers the acknowledgement and the new chain.
+	 * through `ON UPDATE CASCADE` on their composite foreign key. The moved row is judged by the insert action's
+	 * condition and by the `relationWhen` of each relation the target holds through, as an insert into the target is.
+	 * Answers the acknowledgement and the new chain.
 	 */
 	async move(
 		ref: Ref<DimensionOf<P, T>, ActionOf<P, T, 'delete'>>,
@@ -2464,7 +2739,16 @@ export class DimensionTable<DB, P, T extends string> {
 				setOwn(chain, entry.link.dimension, entry.value)
 			}
 		}
-		const acknowledged = await updateRow<Acknowledgement<P, T>>(context, storeRunner(context), addressed(scope), changes, undefined, target, noPath)
+		const condition = ownEntry(context.model.when, target.action)
+		const narrowed: NarrowedInsert[] = []
+		for (let index = 0; index < target.relations.length; index++) {
+			const relation = target.relations[index]?.relation ?? ''
+			const narrowing = relationCondition(context.model, relation, target.action)
+			if (narrowing !== undefined && !judgesRelation(narrowed, relation)) narrowed[narrowed.length] = { relation, condition: narrowing }
+		}
+		const judged = condition === undefined ? undefined : { action: target.action, condition }
+		const moved: MovedRow = { destination: target, judged, narrowed }
+		const acknowledged = await updateRow<Acknowledgement<P, T>>(context, storeRunner(context), addressed(scope), changes, undefined, moved)
 		return { ...acknowledged, chain }
 	}
 
@@ -2790,7 +3074,12 @@ export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
 	function contextOf(model: TableModel): TableContext {
 		const parent = model.scope.mode === 'child' ? modelOf(models, model.scope.parent) : undefined
 		const through = model.view && model.scope.mode === 'child' && parent?.scope.mode === 'dimension'
-			? freeze({ column: model.scope.column, table: parent.name, key: parent.scope.key, context: contextOf(freeze({ ...parent, when: freeze({}) })) })
+			? freeze({
+				column: model.scope.column,
+				table: parent.name,
+				key: parent.scope.key,
+				context: contextOf(freeze({ ...parent, when: freeze({}), relationWhen: freeze({}) })),
+			})
 			: undefined
 		const joinable = joinShapes(models, model)
 		const joins: Record<string, readonly ForeignKeyPair[]> = {}
@@ -2867,7 +3156,7 @@ export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
 					id: string,
 					action: string,
 					principal: string,
-					relations: readonly string[],
+					relations: readonly RelationHold[],
 					paths: readonly ContainerGrant[],
 				) => heldThroughPaths(models, layer, bound, dimension, id, action, principal, relations, paths),
 				revealsToMembers: async (revealing: string, values: readonly string[], dimension: string, node: string, action: string) =>
@@ -2921,8 +3210,23 @@ function layerReach(
 	}
 	const names = ownKeys(models)
 	const reveals: Record<string, RevealModel[]> = {}
+	const narrowed: Record<string, string[]> = {}
 	for (let index = 0; index < names.length; index++) {
 		const model = modelOf(models, names[index] ?? '')
+		const conditioned = model === undefined ? [] : ownKeys(model.relationWhen)
+		for (let position = 0; model !== undefined && position < conditioned.length; position++) {
+			const relation = conditioned[position] ?? ''
+			const conditions = ownEntry(model.relationWhen, relation) ?? {}
+			const actions = ownKeys(conditions)
+			const listed = ownEntry(narrowed, relation) ?? []
+			for (let next = 0; next < actions.length; next++) {
+				const action = actions[next] ?? ''
+				if (!includes(listed, action)) listed[listed.length] = action
+				const condition = ownEntry(conditions, action)
+				if (condition !== undefined) addReach(condition, select)
+			}
+			setOwn(narrowed, relation, listed)
+		}
 		for (let position = 0; model !== undefined && position < model.reveals.length; position++) {
 			const reveal = model.reveals[position]
 			if (reveal === undefined) continue
@@ -2948,7 +3252,19 @@ function layerReach(
 		for (let position = 0; position < model.confers.length; position++) {
 			const source = model.confers[position]
 			if (source === undefined) continue
-			setOwn(relations, source.relation, freeze({ ...source, reveals: freeze(ownEntry(reveals, source.relation) ?? []) }))
+			const revealed = ownEntry(reveals, source.relation) ?? []
+			const placed: Record<string, Readonly<Record<string, string>>> = {}
+			setOwn(placed, model.name, placementOf(model))
+			for (let next = 0; next < revealed.length; next++) {
+				const table = revealed[next]?.table ?? ''
+				const at = modelOf(models, table)
+				if (at !== undefined) setOwn(placed, table, placementOf(at))
+			}
+			setOwn(
+				relations,
+				source.relation,
+				freeze({ ...source, reveals: freeze(revealed), narrowed: freeze(ownEntry(narrowed, source.relation) ?? []), placed: freeze(placed) }),
+			)
 			select(source.table, source.node)
 			if (source.principalPath !== undefined) select(source.principalPath.table, source.principalPath.key)
 			if (source.when !== undefined) addReach(source.when, select)
@@ -2979,6 +3295,17 @@ function layerReach(
 		setOwn(revealing, source, freeze(ownEntry(members, source) ?? []))
 	}
 	return { relations: freeze(relations), members: freeze(revealing), subqueries: freeze(subqueries) }
+}
+
+/** `model`'s column for each dimension a row of it lies at: its key at its own dimension, then each link of its chain. */
+function placementOf(model: TableModel): Readonly<Record<string, string>> {
+	const placed: Record<string, string> = {}
+	if (model.scope.mode === 'dimension') setOwn(placed, model.scope.dimension, model.scope.key)
+	for (let index = 0; index < model.chain.length; index++) {
+		const link = model.chain[index]
+		if (link !== undefined && ownEntry(placed, link.dimension) === undefined) setOwn(placed, link.dimension, link.column)
+	}
+	return freeze(placed)
 }
 
 function addReach(condition: Parameters<typeof conditionReach>[0], select: (table: string, column: string) => void): void {
@@ -3058,17 +3385,10 @@ async function relationHolds(
 }
 
 /**
- * Locks a row that still holds the Ref's action for its principal at the Ref's object or a container on its chain: a
- * source row naming it there, a row the relation reaches that reveals that node, or a row at a node the Ref's revealing
- * grants name that reveals it to its members. None is 404, and nothing is written.
+ * Locks the first row that holds `grant`'s action for its principal at its object or a container on its chain, if any:
+ * a source row naming it there, a row the relation reaches that reveals that node, or a row at a node the Ref's
+ * revealing grants name that reveals it to its members.
  */
-async function lockHoldingRow(transaction: Session, context: TableContext, grant: RefGrant): Promise<void> {
-	if (!(await holdingRowLocked(transaction, context, grant))) {
-		throw new NotFoundError(`no row holds ${grant.action} for the Ref's principal at ${grant.dimension} ${grant.id} any more; obtain a fresh Ref`)
-	}
-}
-
-/** Locks the first row that holds `grant`'s action for its principal at its object or a container on its chain, if any. */
 async function holdingRowLocked(transaction: Session, context: TableContext, grant: RefGrant): Promise<boolean> {
 	const now = new Date()
 	const nodeOf = (dimension: string) => (dimension === grant.dimension ? grant.id : grant.chain.get(dimension))
@@ -3086,10 +3406,15 @@ async function holdingRowLocked(transaction: Session, context: TableContext, gra
 		}
 	}
 	for (let index = 0; index < grant.relations.length; index++) {
-		const source = relationSource(context.relations, grant.relations[index] ?? '')
+		const hold = grant.relations[index]
+		if (hold === undefined) continue
+		const source = relationSource(context.relations, hold.relation)
 		const node = nodeOf(source.dimension)
-		if (node !== undefined) {
-			const address = allOf([equals(source.table, source.node, node), namesPrincipal(source, grant.principal)])
+		const sourceInside = insideRow(source, source.table, hold)
+		if (node !== undefined && sourceInside !== null) {
+			const parts = [equals(source.table, source.node, node), namesPrincipal(source, grant.principal)]
+			if (sourceInside !== undefined) parts[parts.length] = sourceInside
+			const address = allOf(parts)
 			const active = activeRow(source, now)
 			candidates[candidates.length] = {
 				table: source.table,
@@ -3102,11 +3427,13 @@ async function holdingRowLocked(transaction: Session, context: TableContext, gra
 			const held = reveal !== undefined && includes(reveal.actions, grant.action)
 				&& (reveal.path === undefined || includes(reveal.path.writes, grant.action))
 			const revealed = reveal === undefined || !held ? undefined : nodeOf(reveal.dimension)
-			if (reveal !== undefined && revealed !== undefined) {
+			const revealInside = reveal === undefined ? null : insideRow(source, reveal.table, hold)
+			if (reveal !== undefined && revealed !== undefined && revealInside !== null) {
+				const address = revealAddress(source, reveal, revealed, grant.principal, now)
 				candidates[candidates.length] = {
 					table: reveal.table,
 					column: reveal.column,
-					scope: revealAddress(source, reveal, revealed, grant.principal, now),
+					scope: revealInside === undefined ? address : allOf([address, revealInside]),
 				}
 			}
 		}
@@ -3125,6 +3452,20 @@ async function holdingRowLocked(transaction: Session, context: TableContext, gra
 		if (rows.length > 0) return true
 	}
 	return false
+}
+
+/**
+ * What a row of `table` (the relation's source or a reveal's table) must meet to hold under `hold`: nothing
+ * (`undefined`) for a hold anywhere, its column for the hold's dimension among the hold's values for one inside a node,
+ * and null when it has no such column, so it is not inside and holds nothing.
+ */
+function insideRow(source: LayerRelation, table: string, hold: RelationHold): OperationNode | undefined | null {
+	if (hold.inside === null) {
+		return undefined
+	}
+	const placed = ownEntry(source.placed, table)
+	const column = placed === undefined ? undefined : ownEntry(placed, hold.inside.dimension)
+	return column === undefined || hold.inside.values.length === 0 ? null : isIn(table, column, valueList(hold.inside.values))
 }
 
 /** `R.<ancestor> = $node and (R.<key> in (values) and <when>)`: a row at a node `values` name that reveals `node` now. */
@@ -3215,7 +3556,9 @@ async function membersRevealed(
 /**
  * Of `relations` and `paths`, the caller's relations and grants of `action` that reach the object `id` of `dimension`
  * through a relation row, a reveal or a secondary path that holds the action for a `Ref` (`writeThrough`): one guarded
- * select per candidate. What `on` and `in` mint a `Ref` held through a path with.
+ * select per candidate. What `on` and `in` mint a `Ref` held through a path with, and through a relation held inside a
+ * node: the statement compares the object's column for the node's dimension with the held values, and the relation
+ * comes back held inside the node that column stores, so every spelling the database equates is one node.
  */
 async function heldThroughPaths(
 	models: TableModels,
@@ -3225,19 +3568,15 @@ async function heldThroughPaths(
 	id: string,
 	action: string,
 	principal: string,
-	relations: readonly string[],
+	relations: readonly RelationHold[],
 	paths: readonly ContainerGrant[],
-): Promise<{ readonly relations: readonly string[]; readonly paths: readonly ContainerGrant[] }> {
+): Promise<{ readonly relations: readonly RelationHold[]; readonly paths: readonly ContainerGrant[] }> {
 	const owner = locatedOwner(models, dimension)
 	if (typeof id !== 'string' || id.length === 0 || typeof principal !== 'string' || principal.length === 0 || typeof action !== 'string') {
 		throw new QueryRefusedError('row_address', `a ${dimension} held through a path is addressed by its key, the principal and the action`)
 	}
-	const named = parseList(relations, (relation) => {
-		if (typeof relation !== 'string') throw new QueryRefusedError('row_address', 'a relation is named by its name')
-		return relation
-	})
 	let count = 0
-	const grants = parseList(paths, (grant): ContainerGrant => {
+	const grantOf = (grant: unknown, what: string): ContainerGrant => {
 		const at: unknown = typeof grant === 'object' && grant !== null ? ownDescriptor(grant, 'dimension')?.value : undefined
 		const values = typeof grant === 'object' && grant !== null
 			? parseList(ownDescriptor(grant, 'values')?.value, (value) => {
@@ -3246,11 +3585,18 @@ async function heldThroughPaths(
 			})
 			: undefined
 		if (typeof at !== 'string' || values === undefined) {
-			throw new QueryRefusedError('row_address', 'a grant of a path names its dimension and its nodes')
+			throw new QueryRefusedError('row_address', `${what} names its dimension and its nodes`)
 		}
 		count += values.length
 		return freeze({ dimension: at, values: freeze(values) })
+	}
+	const named = parseList(relations, (hold): RelationHold => {
+		const relation: unknown = typeof hold === 'object' && hold !== null ? ownDescriptor(hold, 'relation')?.value : undefined
+		const inside: unknown = typeof hold === 'object' && hold !== null ? ownDescriptor(hold, 'inside')?.value : undefined
+		if (typeof relation !== 'string') throw new QueryRefusedError('row_address', 'a relation is named by its name')
+		return freeze({ relation, inside: inside === null ? null : grantOf(inside, 'a relation held inside a node') })
 	})
+	const grants = parseList(paths, (grant): ContainerGrant => grantOf(grant, 'a grant of a path'))
 	if (named === undefined || grants === undefined) {
 		throw new QueryRefusedError('row_address', 'the candidates of a path are plain arrays')
 	}
@@ -3259,22 +3605,39 @@ async function heldThroughPaths(
 	}
 	const now = new Date()
 	const session = sessionOf(runtime)
-	const reaches = async (terms: readonly OperationNode[]): Promise<boolean> => {
-		if (terms.length === 0) return false
+	const reached = async (terms: readonly OperationNode[], column: string): Promise<Readonly<Record<string, unknown>> | undefined> => {
+		if (terms.length === 0) return undefined
 		const scope = AndNode.create(equals(owner.name, keyOf(owner), id), anyOf(terms))
 		const context: GuardContext = { root: 'SelectQueryNode', table: owner.name, joins: {}, scope, subqueries: layer.subqueries }
-		const rows = await session.run<Readonly<Record<string, unknown>>>(locateNode(owner.name, [keyOf(owner)], scope), context)
-		return rows.length > 0
+		const columns = column === keyOf(owner) ? [column] : [keyOf(owner), column]
+		const [row] = await session.run<Readonly<Record<string, unknown>>>(locateNode(owner.name, columns, scope), context)
+		return row
 	}
-	const held: string[] = []
+	const held: RelationHold[] = []
 	for (let index = 0; index < named.length; index++) {
-		const relation = named[index] ?? ''
-		if (await reaches(relationTerms(layer.relations, owner, relation, principal, action, now, heldThrough(action)))) held[held.length] = relation
+		const hold = named[index]
+		if (hold === undefined) continue
+		const column = hold.inside === null ? keyOf(owner) : nodeColumnOf(owner, hold.inside.dimension)
+		const row = column === undefined
+			? undefined
+			: await reached(relationTerms(layer.relations, owner, hold, principal, action, now, heldThrough(action)), column)
+		if (row === undefined || column === undefined) continue
+		if (hold.inside === null) {
+			held[held.length] = hold
+			continue
+		}
+		const node = ownEntry(row, column)
+		if (typeof node !== 'string') {
+			throw new PolicyError(`${owner.name}.${column} came back as ${typeof node}; a containment column holds its scope value as text`)
+		}
+		held[held.length] = freeze({ relation: hold.relation, inside: freeze({ dimension: hold.inside.dimension, values: freeze([node]) }) })
 	}
 	const through: ContainerGrant[] = []
 	for (let index = 0; index < grants.length; index++) {
 		const grant = grants[index]
-		if (grant !== undefined && (await reaches(pathTerms(owner, [grant], heldThrough(action))))) through[through.length] = grant
+		if (grant !== undefined && (await reached(pathTerms(owner, [grant], heldThrough(action)), keyOf(owner))) !== undefined) {
+			through[through.length] = grant
+		}
 	}
 	return freeze({ relations: freeze(held), paths: freeze(through) })
 }

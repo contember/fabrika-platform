@@ -300,7 +300,7 @@ describe('a reveal matched through the read path', () => {
 		expect(await reveals('member', 'project', 'p2', 'user:alice', 'projects.read')).toBe(false)
 		const read = () => invoke('query', (db) => call(db.target(alice.ref('project', 'projects.read', 'p2', { org: 'o1' }, ['member']), 'on'), 'get'))
 		await expect(read()).rejects.toThrow(CapabilityError)
-		await expect(read()).rejects.toThrow('reveals none of its nodes')
+		await expect(read()).rejects.toThrow('none of which reaches a row of projects')
 	})
 })
 

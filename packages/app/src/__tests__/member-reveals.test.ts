@@ -1,14 +1,15 @@
 // A member reveal through boot, behind the production proxy decision, on SQLite: a grant at an open step lists the
 // step's project `over` project, and only a grant at the step itself counts. `on` mints a Ref of the revealed project
-// that carries the grant, while the step reveals it, and the Ref writes what the reveal lists.
+// that carries the grant, while the step reveals it, and the Ref writes what the reveal lists; a webhook binding, which
+// outlives the request, refuses such a Ref.
 
 import { createClient } from '@fabrika/app/client'
-import { defineApp } from '@fabrika/app/contract'
+import { defineApp, WebhookSecret } from '@fabrika/app/contract'
 import { serve } from '@fabrika/app/implement'
 import { testKit } from '@fabrika/app/testing'
 import { scoped } from '@fabrika/db'
 import { testDatabase } from '@fabrika/db/testing-sqlite'
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import { z } from 'zod/v4'
 import { tables } from './member-reveals-fixture/tables'
 import { vocabulary } from './member-reveals-fixture/vocabulary'
@@ -45,7 +46,34 @@ const api = app.group({ callers: ['human'] }, (r) => ({
 		.handle(async ({ ctx }) => ({ ids: (await ctx.db.within.tasks.list()).items.map((row) => row.id).sort() })),
 }))
 
-const contract = app.contract((c) => ({ api: c.rpc('/api', { api }), health: c.health('/healthz') }))
+const signedBody = { header: 'X-Hook-Signature', algorithm: 'sha256', encoding: 'hex', signed: 'body' } as const
+const projectHook = app.webhook('/hooks/projects', {
+	scheme: { hmac: signedBody },
+	boundTo: 'project',
+	actions: ['projects.rename'],
+	input: z.strictObject({ id: z.string() }),
+})
+	.handle(() => {})
+
+/** A binding outlives its request, so `on` or `in` handing it a Ref held through a member reveal is refused. */
+const hooks = app.group({ callers: ['human'] }, (r) => ({
+	project: r.mutation({
+		input: z.strictObject({ id: z.string().min(1) }),
+		output: WebhookSecret,
+		access: { action: 'projects.rename', on: 'project', from: 'id' },
+		binds: 'projectHook',
+	})
+		.handle(({ ctx }) => ctx.webhooks('projectHook').bind(ctx.target, 'account')),
+	projectIn: r.mutation({
+		input: z.strictObject({ id: z.string().min(1) }),
+		output: WebhookSecret,
+		access: { action: 'projects.rename', in: 'project', from: 'id' },
+		binds: 'projectHook',
+	})
+		.handle(({ ctx }) => ctx.webhooks('projectHook').bind(ctx.target, 'account')),
+}))
+
+const contract = app.contract((c) => ({ api: c.rpc('/api', { api, hooks }), health: c.health('/healthz'), projectHook }))
 
 describe('a member reveal through boot', () => {
 	let fresh: Awaited<ReturnType<typeof testDatabase>>
@@ -69,6 +97,28 @@ describe('a member reveal through boot', () => {
 		const kit = testKit(serve(contract, { database: scoped(tables) }), { database: fresh.database })
 		return createClient(contract, 'api', { fetch: kit.browser(kit.testCaller(grants, { id: 'user:member' })) }).api
 	}
+
+	function binderOf(grants: readonly Grant[]) {
+		const kit = testKit(serve(contract, { database: scoped(tables) }), { database: fresh.database })
+		return createClient(contract, 'api', { fetch: kit.browser(kit.testCaller(grants, { id: 'user:member' })) }).hooks
+	}
+
+	test.each(['project', 'projectIn'] as const)('%s refuses to bind a webhook with a Ref it minted through a member reveal', async (procedure) => {
+		const log = spyOn(console, 'error').mockImplementation(() => {})
+		try {
+			await expect(binderOf([{ action: 'projects.rename', scope: { type: 'step', value: 's1' } }])[procedure]({ id: 'p1' })).rejects.toMatchObject({
+				httpStatus: 500,
+			})
+			const refusals = log.mock.calls.map((call) => String(call[0])).filter((line) => line.includes('conditional_binding'))
+			expect(refusals).toEqual([expect.stringContaining(`api.hooks.${procedure}`)])
+		} finally {
+			log.mockRestore()
+		}
+		// The same project binds with a Ref an IAM grant holds.
+		expect(await binderOf([{ action: 'projects.rename', scope: { type: 'project', value: 'p1' } }])[procedure]({ id: 'p1' })).toMatchObject({
+			url: expect.any(String),
+		})
+	})
 
 	test("a grant at an open step lists the step's project and no other", async () => {
 		expect(await caller('projects.read', 'step', 's1').list({})).toEqual({ ids: ['p1'] })

@@ -190,11 +190,14 @@ function checkRoot(root: OperationNode, context: GuardContext, admitted: Admitte
 /**
  * What a capability reaches before its action's condition narrows it: everything (a global grant), a Ref's chain of
  * equalities, and after them a union of its relation rows and its secondary paths' memberships of bound values, or a
- * Within's memberships of values and relation rows.
+ * Within's memberships of values and relation rows. A relation's rows may be narrowed: `(<relation rows> and (<scope
+ * tree>))`, the condition's subqueries beside the relation's, never nested in it.
  */
 function isReach(node: unknown, table: string, subqueries: GuardContext['subqueries'], admitted: Admitted[], depth = 0): boolean {
 	const equality = (leaf: unknown) => isScopeEquality(leaf, table)
-	const related = (leaf: unknown) => isRelationMembership(leaf, table, subqueries, admitted, depth)
+	const related = (leaf: unknown) =>
+		isRelationMembership(leaf, table, subqueries, admitted, depth)
+		|| isNarrowed(leaf, table, subqueries, admitted, depth, (left) => isRelationMembership(left, table, subqueries, admitted, depth))
 	const member = (leaf: unknown) => isScopeMembership(leaf, table) || related(leaf)
 	return isEverything(node)
 		|| isTreeOf(node, 'AndNode', equality)
@@ -205,7 +208,8 @@ function isReach(node: unknown, table: string, subqueries: GuardContext['subquer
 /**
  * A child view's rows read through its parent: `V.<column> in (select P.<key> from P where <P's reach>)`, after an AND
  * of equalities when one row is addressed. P's reach is one the guard admits for a statement on P, never `true`; a
- * subquery without WHERE reads every parent row.
+ * subquery without WHERE reads every parent row. Where the view narrows a relation (`relationWhen`), that relation's
+ * reach is a membership of its own, narrowed by the view's condition, in a parenthesized OR of such memberships.
  */
 function isThroughParent(
 	node: unknown,
@@ -214,7 +218,8 @@ function isThroughParent(
 	subqueries: GuardContext['subqueries'],
 	admitted: Admitted[],
 ): boolean {
-	const member = (leaf: unknown) => isParentMembership(leaf, table, parent, subqueries, admitted)
+	const membership = (leaf: unknown) => isParentMembership(leaf, table, parent, subqueries, admitted)
+	const member = (leaf: unknown) => isUnionOf(leaf, (branch) => membership(branch) || isNarrowed(branch, table, subqueries, admitted, 0, membership))
 	return member(node)
 		|| (kindOf(node) === 'AndNode' && hasOnly(node, CONNECTIVE_KEYS) && isTreeOf(read(node, 'left'), 'AndNode', (leaf) => isScopeEquality(leaf, table))
 			&& member(read(node, 'right')))
@@ -257,6 +262,21 @@ function isParentMembership(
 	}
 	admitted[admitted.length] = { node: select, table: parent.table }
 	return true
+}
+
+/** `(<left> and (<scope tree over table>))`: one branch of a reach, `left`, narrowed by a condition on the table's rows. */
+function isNarrowed(
+	node: unknown,
+	table: string,
+	subqueries: GuardContext['subqueries'],
+	admitted: Admitted[],
+	depth: number,
+	left: (node: unknown) => boolean,
+): boolean {
+	const inner = read(node, 'node')
+	const right = read(inner, 'right')
+	return kindOf(node) === 'ParensNode' && hasOnly(node, PARENS_KEYS) && kindOf(inner) === 'AndNode' && hasOnly(inner, CONNECTIVE_KEYS)
+		&& left(read(inner, 'left')) && kindOf(right) === 'ParensNode' && isScopeTree(right, table, subqueries, admitted, depth)
 }
 
 /** One leaf, or a parenthesized OR tree of them. */

@@ -3,7 +3,7 @@
 // files may import.
 
 import type { Admissions } from './admissions'
-import type { ContainerGrant } from './capability'
+import type { ContainerGrant, RelationHold } from './capability'
 import type { Session } from './database'
 import type { WebhookTables } from './framework-tables'
 import type { JobLeases } from './job-leases'
@@ -37,9 +37,9 @@ export type PathCheck = (
 	id: string,
 	action: string,
 	principal: string,
-	relations: readonly string[],
+	relations: readonly RelationHold[],
 	paths: readonly ContainerGrant[],
-) => Promise<{ readonly relations: readonly string[]; readonly paths: readonly ContainerGrant[] }>
+) => Promise<{ readonly relations: readonly RelationHold[]; readonly paths: readonly ContainerGrant[] }>
 
 /**
  * Of `values`, the caller's grants of `action` at nodes of `revealing`, those whose row reveals `node` of `dimension` to

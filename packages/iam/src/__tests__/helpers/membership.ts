@@ -86,6 +86,29 @@ export const ONBOARDING_SCHEMA: AppSchema = {
 	},
 }
 
+/**
+ * `NOTES_SCHEMA` with two membership roles holding `notes.write` through the `author` relation: `lead` assigns
+ * `assistant` and holds `notes.write` only through the relation there, so it may not give it.
+ */
+export const RELATION_SCHEMA: AppSchema = {
+	...NOTES_SCHEMA,
+	roles: {
+		...NOTES_SCHEMA.roles,
+		lead: {
+			name: 'Lead',
+			permissions: ['notes.read', 'notes.admin'],
+			member: { scope: 'workspace', assignableBy: ['owner'] },
+			via: { author: ['notes.write'] },
+		},
+		assistant: {
+			name: 'Assistant',
+			permissions: ['notes.read'],
+			member: { scope: 'workspace', assignableBy: ['owner', 'lead'] },
+			via: { author: ['notes.write'] },
+		},
+	},
+}
+
 export class CapturingEmail implements EmailSender {
 	readonly capabilities = { idempotent: true, confirmation: 'sync', maxBatch: 1 } satisfies EmailSender['capabilities']
 	readonly messages: EmailMessage[] = []

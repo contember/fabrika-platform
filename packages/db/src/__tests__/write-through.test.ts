@@ -318,14 +318,26 @@ function suite(dialect: 'sqlite' | 'postgres', open: () => Promise<Backend>, clo
 			await expect(invoke('query', (db) => call(db.target(project('projects.read', 'p1'), 'on'), 'get'))).rejects.toThrow(CapabilityError)
 		})
 
+		test('a Ref held through a relation and a path is enforced by the part that reaches the table, and refused when none does', async () => {
+			// projects reads no path, so only the relation's reveal through the tasks' path reaches p1; the path part adds nothing.
+			const mixed = (id: string) => alice.ref('project', 'projects.rename', id, {}, ['teamMember'], [], atTeam('t1'))
+			await invoke('mutation', (db) => call(db.target(mixed('p1'), 'on'), 'update', { name: 'by mixed' }))
+			expect((await backend.rows("select name from projects where id = 'p1'"))[0]?.['name']).toBe('by mixed')
+			await expect(invoke('mutation', (db) => call(db.target(mixed('p2'), 'on'), 'update', { name: 'x' }))).rejects.toThrow(NotFoundError)
+			// Neither part reaches projects for projects.read through a Ref: the path holds no read here.
+			const reading = alice.ref('project', 'projects.read', 'p1', {}, ['teamMember'], [], atTeam('t1'))
+			await expect(invoke('query', (db) => call(db.target(reading, 'on'), 'get'))).rejects.toThrow(CapabilityError)
+		})
+
 		test('the binding answers the candidates that reach the object through a path holding the action', async () => {
+			const member = { relation: 'teamMember', inside: null }
 			const candidates = [{ dimension: 'team', values: ['t2'] }, { dimension: 'team', values: ['t1'] }, { dimension: 'org', values: ['o2'] }]
-			expect(await holdsThrough('task', 'k1', 'tasks.write', 'user:alice', ['teamMember'], candidates)).toEqual({
-				relations: ['teamMember'],
+			expect(await holdsThrough('task', 'k1', 'tasks.write', 'user:alice', [member], candidates)).toEqual({
+				relations: [member],
 				paths: [{ dimension: 'team', values: ['t1'] }],
 			})
-			expect(await holdsThrough('task', 'k1', 'tasks.delete', 'user:alice', ['teamMember'], candidates)).toEqual({ relations: [], paths: [] })
-			expect(await holdsThrough('task', 'k1', 'tasks.write', 'user:bob', ['teamMember'], [])).toEqual({ relations: [], paths: [] })
+			expect(await holdsThrough('task', 'k1', 'tasks.delete', 'user:alice', [member], candidates)).toEqual({ relations: [], paths: [] })
+			expect(await holdsThrough('task', 'k1', 'tasks.write', 'user:bob', [member], [])).toEqual({ relations: [], paths: [] })
 			const many = [{ dimension: 'team', values: Array.from({ length: 1001 }, (_, index) => `t${index}`) }]
 			await expect(holdsThrough('task', 'k1', 'tasks.write', 'user:alice', [], many)).rejects.toThrow(QueryRefusedError)
 		})
@@ -356,7 +368,7 @@ function suite(dialect: 'sqlite' | 'postgres', open: () => Promise<Backend>, clo
 			})
 
 			test('takes a relation row at the team, judged before the write, and a null column hands out nothing', async () => {
-				standAt({ ...byTeams(), relations: ['teamMember'] })
+				standAt({ ...byTeams(), relations: [{ relation: 'teamMember', inside: null }] })
 				await insert('t1', 'by member')
 				await backend.exec("delete from team_members where id = 'm1'")
 				await expect(insert('t1', 'former member')).rejects.toThrow(ConflictError)
@@ -366,8 +378,36 @@ function suite(dialect: 'sqlite' | 'postgres', open: () => Promise<Backend>, clo
 				expect(await titles()).toEqual(['by member', 'four', 'no team', 'one', 'three', 'two'])
 			})
 
+			test('takes a relation held inside a node only for a team inside that node', async () => {
+				const inside = (dimension: string, value: string) => [{ relation: 'teamMember', inside: { dimension, values: [value] } }]
+				standAt({ ...byTeams(), relations: inside('org', 'o2') })
+				await expect(insert('t1', 'other org')).rejects.toThrow(ConflictError)
+				standAt({ ...byTeams(), relations: inside('team', 't2') })
+				await expect(insert('t1', 'other team')).rejects.toThrow(ConflictError)
+				standAt({ ...byTeams(), relations: inside('org', 'o1') })
+				await insert('t1', 'inside org')
+				standAt({ ...byTeams(), relations: inside('team', 't2') })
+				await insert('t2', 'inside team')
+				expect(await titles()).toEqual(['four', 'inside org', 'inside team', 'one', 'three', 'two'])
+			})
+
+			test('does not take a relation whose relationWhen narrows an action the column hands out', async () => {
+				release()
+				const narrowed = { ...taskPolicy, relationWhen: { teamMember: { 'tasks.write': { title: { notEq: 'locked' } } } } }
+				layer = scoped(defineTables(vocabulary, columns)({ ...others, tasks: narrowed }))
+				const binding = bindScopedDatabaseProvisionally(layer, { database: backend.database, capabilities: alice })
+				release = () => binding.release()
+				data = dataAccessOf(layer)
+				standAt({ ...byTeams(), relations: [{ relation: 'teamMember', inside: null }] })
+				await expect(insert('t1', 'by member')).rejects.toThrow(ConflictError)
+				// A grant at the team still bounds the writer.
+				standAt(byTeams('t1'))
+				await insert('t1', 'by grant')
+				expect(await titles()).toEqual(['by grant', 'four', 'one', 'three', 'two'])
+			})
+
 			test.skipIf(dialect !== 'postgres')('locks the relation row it holds the team through until the insert commits', async () => {
-				standAt({ ...byTeams(), relations: ['teamMember'] })
+				standAt({ ...byTeams(), relations: [{ relation: 'teamMember', inside: null }] })
 				let resume: () => void = () => {}
 				const held = new Promise<void>((resolve) => {
 					resume = resolve

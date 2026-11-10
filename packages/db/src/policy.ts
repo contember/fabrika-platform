@@ -103,6 +103,11 @@ interface WritablePolicy<Col extends string, A extends string, V extends Col, Ac
 	readonly confers?: { readonly [relation: string]: ConfersPolicy<Col> }
 	/** Conditions that narrow an action of this table: a row the condition does not admit is out of that action's reach. */
 	readonly when?: { readonly [action in A]?: ConditionPolicy<Col> }
+	/**
+	 * Relation → action → a condition on the rows that relation reaches for that action: it narrows the relation's terms
+	 * only, never an IAM grant, a member reveal or a path grant of the action.
+	 */
+	readonly relationWhen?: { readonly [relation: string]: { readonly [action in A]?: ConditionPolicy<Col> } }
 	/** Relation of this table's own dimension, or of one it reads through → the ancestor node a row the relation reaches reveals. */
 	readonly reveals?: { readonly [relation: string]: RevealsPolicy<Col, A> }
 	/**
@@ -332,6 +337,8 @@ export interface TableModel {
 	readonly confers: readonly RelationSource[]
 	/** The condition each action of the table holds a row under; an action without one is not narrowed. */
 	readonly when: Readonly<Record<string, ConditionModel>>
+	/** Relation → action → the condition the rows that relation reaches hold for that action under; ANDed onto its terms only. */
+	readonly relationWhen: Readonly<Record<string, Readonly<Record<string, ConditionModel>>>>
 	/** The ancestor nodes this table's rows reveal to a relation of its own dimension or of one it reads through. */
 	readonly reveals: readonly RevealModel[]
 	/** The secondary read paths: a dimension outside the chain, by the column that holds the row's node in it. */
@@ -442,10 +449,11 @@ type ParsedScope =
 		readonly inherit: readonly string[] | undefined
 	}
 
-type ParsedTable = Omit<TableModel, 'chain' | 'scope' | 'confers' | 'when' | 'reveals' | 'readThrough' | 'memberReveals'> & {
+type ParsedTable = Omit<TableModel, 'chain' | 'scope' | 'confers' | 'when' | 'relationWhen' | 'reveals' | 'readThrough' | 'memberReveals'> & {
 	readonly scope: ParsedScope
 	readonly confersInput: unknown
 	readonly whenInput: unknown
+	readonly relationWhenInput: unknown
 	readonly revealsInput: unknown
 	readonly readThroughInput: unknown
 	readonly writeThroughInput: unknown
@@ -587,6 +595,7 @@ const POLICY_FIELDS = nameSet([
 	'files',
 	'confers',
 	'when',
+	'relationWhen',
 	'reveals',
 	'readThrough',
 	'writeThrough',
@@ -826,6 +835,7 @@ function parseTable(table: string, columnList: unknown, policyInput: unknown, vo
 		view,
 		confersInput: ownEntry(policy, 'confers'),
 		whenInput: ownEntry(policy, 'when'),
+		relationWhenInput: ownEntry(policy, 'relationWhen'),
 		revealsInput: ownEntry(policy, 'reveals'),
 		readThroughInput: ownEntry(policy, 'readThrough'),
 		writeThroughInput: ownEntry(policy, 'writeThrough'),
@@ -1362,7 +1372,7 @@ function linkTables(parsed: readonly ParsedTable[], vocabulary: VocabularyModel)
 	const linkedTable = (name: string): LinkedTable | undefined => {
 		const target = ownEntry(byName, name)
 		if (target === undefined) return undefined
-		const { confersInput, whenInput, revealsInput, readThroughInput, writeThroughInput, memberRevealsInput, ...rest } = target
+		const { confersInput, whenInput, relationWhenInput, revealsInput, readThroughInput, writeThroughInput, memberRevealsInput, ...rest } = target
 		return { ...rest, ...resolve(target, []) }
 	}
 	const hopRule: HopRule = (from, column, to, key, backward) => {
@@ -1404,7 +1414,7 @@ function linkTables(parsed: readonly ParsedTable[], vocabulary: VocabularyModel)
 		const table = parsed[index]
 		if (table !== undefined) {
 			const { scope, chain } = resolve(table, [])
-			const { confersInput, whenInput, revealsInput, readThroughInput, writeThroughInput, memberRevealsInput, ...rest } = table
+			const { confersInput, whenInput, relationWhenInput, revealsInput, readThroughInput, writeThroughInput, memberRevealsInput, ...rest } = table
 			const linked = { ...rest, scope, chain }
 			const ownerOf = (dimension: string): ResolvedOwner | undefined => {
 				const owner = ownEntry(owners, dimension)
@@ -1433,12 +1443,15 @@ function linkTables(parsed: readonly ParsedTable[], vocabulary: VocabularyModel)
 				}
 				setOwn(sources, relation, table.name)
 			}
-			const when = parseWhen(linked, conditionRoot(linked, byName), whenInput, conditionTable, hopRule)
+			const root = conditionRoot(linked, byName)
+			const when = parseWhen(linked, root, whenInput, conditionTable, hopRule)
+			const relationWhen = parseRelationWhen(linked, root, relationWhenInput, vocabulary, conditionTable, hopRule)
 			const reveals = parseReveals(linked, readThrough, revealsInput, vocabulary, conditionTable, hopRule)
 			const memberReveals = parseMemberReveals(linked, readThrough, memberRevealsInput, vocabulary, conditionTable, hopRule)
-			setOwn(models, table.name, freeze({ ...linked, confers, when, reveals, readThrough, memberReveals }))
+			setOwn(models, table.name, freeze({ ...linked, confers, when, relationWhen, reveals, readThrough, memberReveals }))
 		}
 	}
+	checkRelationWhenReach(models, vocabulary)
 	const relations = ownKeys(vocabulary.relations)
 	for (let index = 0; index < relations.length; index++) {
 		const relation = relations[index] ?? ''
@@ -1449,7 +1462,7 @@ function linkTables(parsed: readonly ParsedTable[], vocabulary: VocabularyModel)
 	return freeze(models)
 }
 
-type LinkedTable = Omit<TableModel, 'confers' | 'when' | 'reveals' | 'readThrough' | 'memberReveals'>
+type LinkedTable = Omit<TableModel, 'confers' | 'when' | 'relationWhen' | 'reveals' | 'readThrough' | 'memberReveals'>
 
 /** Every action a table names: its operations', `appRead`, `appCount` and its columns' own. */
 function tableActionNames(table: LinkedTable): NameSet {
@@ -1508,6 +1521,120 @@ function parseWhen(
 		setOwn(when, action, condition)
 	}
 	return freeze(when)
+}
+
+/**
+ * `relationWhen`: relation → action → a condition on the rows the relation reaches for the action, parsed as `when` is
+ * (the same root, hop rule and insert rule). The relation must be the vocabulary's and the action the table's; whether
+ * the relation reaches the table at all is checked once every table is parsed (`checkRelationWhenReach`).
+ */
+function parseRelationWhen(
+	table: LinkedTable,
+	root: ConditionTable,
+	input: unknown,
+	vocabulary: VocabularyModel,
+	tables: (name: string) => ConditionTable | undefined,
+	hops: HopRule,
+): Readonly<Record<string, Readonly<Record<string, ConditionModel>>>> {
+	if (input === undefined) {
+		return freeze({})
+	}
+	if (table.scope.mode !== 'dimension' && table.scope.mode !== 'child') {
+		throw new PolicyError(`${table.name}: a ${table.scope.mode} table takes no relationWhen; no relation reaches its rows`)
+	}
+	const declared = plainRecord(input, `${table.name}: relationWhen`)
+	const relations = ownKeys(declared)
+	const named = tableActionNames(table)
+	const parsed: Record<string, Readonly<Record<string, ConditionModel>>> = {}
+	for (let index = 0; index < relations.length; index++) {
+		const relation = relations[index] ?? ''
+		if (!hasOwn(vocabulary.relations, relation)) {
+			throw new PolicyError(
+				`${table.name}: relationWhen.${relation} names a relation the vocabulary does not declare (${ownKeys(vocabulary.relations).join(', ')})`,
+			)
+		}
+		const perAction = plainRecord(ownEntry(declared, relation), `${table.name}: relationWhen.${relation}`)
+		const actions = ownKeys(perAction)
+		if (actions.length === 0) {
+			throw new PolicyError(`${table.name}: relationWhen.${relation} names no action`)
+		}
+		const conditions: Record<string, ConditionModel> = {}
+		for (let position = 0; position < actions.length; position++) {
+			const action = actions[position] ?? ''
+			const what = `${table.name}: relationWhen.${relation}.${action}`
+			if (!inSet(named, action)) {
+				throw new PolicyError(`${what} names an action the table does not name (${namesOf(named).join(', ')})`)
+			}
+			const condition = parseCondition(ownEntry(perAction, action), root, tables, what, hops)
+			const problem = includes(table.actions.insert, action) ? insertProblem(condition, table.name) : undefined
+			if (problem !== undefined) {
+				throw new PolicyError(`${what}: ${problem}`)
+			}
+			setOwn(conditions, action, condition)
+		}
+		setOwn(parsed, relation, freeze(conditions))
+	}
+	return freeze(parsed)
+}
+
+/**
+ * Every `relationWhen` names a relation that reaches the table for its action: the relation's dimension is the table's
+ * or on its chain, a secondary path reaches it, or a reveal of the relation for the action reveals a node the table
+ * lies at. A child view is reached through its parent row, so its parent is what the relation must reach.
+ */
+function checkRelationWhenReach(models: Readonly<Record<string, TableModel>>, vocabulary: VocabularyModel): void {
+	const names = ownKeys(models)
+	const reveals: RevealModel[] = []
+	for (let index = 0; index < names.length; index++) {
+		const model = ownEntry(models, names[index] ?? '')
+		for (let position = 0; model !== undefined && position < model.reveals.length; position++) {
+			const reveal = model.reveals[position]
+			if (reveal !== undefined) reveals[reveals.length] = reveal
+		}
+	}
+	for (let index = 0; index < names.length; index++) {
+		const model = ownEntry(models, names[index] ?? '')
+		if (model === undefined) continue
+		const reached = model.view && model.scope.mode === 'child' ? ownEntry(models, model.scope.parent) ?? model : model
+		const relations = ownKeys(model.relationWhen)
+		for (let position = 0; position < relations.length; position++) {
+			const relation = relations[position] ?? ''
+			const dimension = ownEntry(vocabulary.relations, relation) ?? ''
+			const actions = ownKeys(ownEntry(model.relationWhen, relation) ?? {})
+			for (let next = 0; next < actions.length; next++) {
+				const action = actions[next] ?? ''
+				if (!relationReaches(reached, relation, dimension, action, reveals)) {
+					throw new PolicyError(
+						`${model.name}: relationWhen.${relation}.${action} names a relation that reaches no row of ${reached.name} for ${action}: neither its chain nor a secondary path holds ${dimension}, and no reveal of ${relation} for ${action} names a node it lies at`,
+					)
+				}
+			}
+		}
+	}
+}
+
+/** Whether `relation` of `dimension` reaches a row of `model` for `action`, as the relation terms of the store find one. */
+function relationReaches(model: TableModel, relation: string, dimension: string, action: string, reveals: readonly RevealModel[]): boolean {
+	if (nodeColumnOf(model, dimension) !== undefined) {
+		return true
+	}
+	for (let index = 0; index < model.readThrough.length; index++) {
+		const path = model.readThrough[index]
+		if (path === undefined) continue
+		if (path.dimension === dimension) return true
+		for (let link = 0; link < path.chain.length; link++) {
+			if (path.chain[link]?.dimension === dimension) return true
+		}
+	}
+	for (let index = 0; index < reveals.length; index++) {
+		const reveal = reveals[index]
+		if (
+			reveal !== undefined && reveal.relation === relation && includes(reveal.actions, action) && nodeColumnOf(model, reveal.dimension) !== undefined
+		) {
+			return true
+		}
+	}
+	return false
 }
 
 /**

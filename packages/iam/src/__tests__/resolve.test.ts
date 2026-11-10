@@ -280,12 +280,15 @@ describe('computePermissions — a contract application holds exact actions only
 	})
 })
 
-describe('computePermissions — relation entries (`~rel`)', () => {
+describe('computePermissions — relation entries (`~rel`, `~relin`)', () => {
 	const relationRoles = makeRoleSource({
 		assistant: { name: 'Assistant', permissions: ['project.list'], via: { assignee: ['project.read', 'project.edit'] } },
+		lead: { name: 'Lead', permissions: ['project.list'], member: { scope: 'team' }, via: { assignee: ['project.edit'] } },
 		guest: { name: 'Guest', permissions: ['project.read'], member: { scope: 'team' }, external: true, via: { assignee: ['project.edit'] } },
+		odd: { name: 'Odd', permissions: [], via: { 'a:b': ['project.edit'] } },
 	})
 	const REL = (relation: string): Scope => ({ type: '~rel', value: relation })
+	const IN = (relation: string, scope: Scope): Scope => ({ type: '~relin', value: `${relation}:${scope.type}:${scope.value}` })
 
 	test('a global grant of a role with via carries each action at the relation pseudo-scope', () => {
 		const entries = computePermissions({ ...base, grants: [roleGrant('assistant', null)] }, relationRoles)
@@ -295,17 +298,29 @@ describe('computePermissions — relation entries (`~rel`)', () => {
 		expect(entries).toHaveLength(3)
 	})
 
-	test('a scoped grant of the same role carries no relation entry', () => {
+	test('a scoped grant of the same role carries each action inside its value, never anywhere', () => {
 		const entries = computePermissions({ ...base, grants: [roleGrant('assistant', TEAM('acme'))] }, relationRoles)
 		expect(entries.some((entry) => entry.scope?.type === '~rel')).toBe(false)
 		expect(has(entries, 'project.list', TEAM('acme'), 'grant')).toBe(true)
+		expect(has(entries, 'project.read', IN('assignee', TEAM('acme')), 'grant')).toBe(true)
+		expect(has(entries, 'project.edit', IN('assignee', TEAM('acme')), 'grant')).toBe(true)
+		expect(entries).toHaveLength(3)
 	})
 
-	test('a membership role and an external principal carry none, whatever the stored role says', () => {
-		const member = computePermissions({ ...base, grants: [roleGrant('guest', TEAM('acme'))] }, relationRoles)
-		expect(member.some((entry) => entry.scope?.type === '~rel')).toBe(false)
+	test('a membership role carries its via inside the value it is held in, a node with colons verbatim', () => {
+		const entries = computePermissions({ ...base, grants: [roleGrant('lead', TEAM('urn:team:1'))] }, relationRoles)
+		expect(has(entries, 'project.edit', { type: '~relin', value: 'assignee:team:urn:team:1' }, 'grant')).toBe(true)
+		expect(entries.some((entry) => entry.scope?.type === '~rel')).toBe(false)
+	})
+
+	test('an external principal and an external role carry none, and neither does a relation name with a colon', () => {
 		const external = computePermissions({ ...base, affiliation: 'external', grants: [roleGrant('assistant', null)] }, relationRoles)
 		expect(external).toEqual([])
+		const outside = computePermissions({ ...base, affiliation: 'external', grants: [roleGrant('guest', TEAM('acme'))] }, relationRoles)
+		expect(outside.some((entry) => entry.scope?.type.startsWith('~') === true)).toBe(false)
+		const guest = computePermissions({ ...base, grants: [roleGrant('guest', TEAM('acme'))] }, relationRoles)
+		expect(guest.some((entry) => entry.scope?.type.startsWith('~') === true)).toBe(false)
+		expect(computePermissions({ ...base, grants: [roleGrant('odd', TEAM('acme'))] }, relationRoles)).toEqual([])
 	})
 
 	test('a stored grant naming a reserved scope type grants nothing', () => {

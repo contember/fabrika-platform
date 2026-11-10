@@ -1,7 +1,7 @@
 // Test callers: a principal of the test IAM with the permissions its grants resolve to, as IAM resolves them, and
 // the credential it presents.
 
-import { type PermissionEntry, type PrincipalAffiliation, RELATION_SCOPE_TYPE } from '@fabrika/auth-core'
+import { type PermissionEntry, type PrincipalAffiliation, RELATION_SCOPE_TYPE, relationInsideScope, type Scope } from '@fabrika/auth-core'
 import type { ActionOf, AnyContract, DimensionOf, RoleOf } from '../contract/define'
 
 /** `app` is the connector of another application: its key reaches only the exports that application consumes. */
@@ -118,13 +118,24 @@ export function resolveGrants<C extends AnyContract>(contract: C, grants: readon
 		if (role.member !== undefined && grant.scope?.type !== role.member.scope) {
 			throw new Error(`'${grant.role}' is a membership role: grant it in one ${role.member.scope} (scope: { type: '${role.member.scope}', value })`)
 		}
-		const entries: PermissionEntry[] = role.grants.map((action) => ({ action, scope: scopeOf(grant.scope), source: 'grant' }))
-		// As IAM resolves it: a global grant of a role with `via` also holds each action through its relation.
-		if (grant.scope === undefined && role.member === undefined) {
-			for (const [relation, held] of Object.entries(role.via ?? {})) {
-				for (const action of held) entries.push({ action, scope: { type: RELATION_SCOPE_TYPE, value: relation }, source: 'grant' })
-			}
-		}
-		return entries
+		const scope = scopeOf(grant.scope)
+		const entries: PermissionEntry[] = role.grants.map((action) => ({ action, scope, source: 'grant' }))
+		return role.external === true ? entries : [...entries, ...relationEntries(role.via, scope)]
 	})
+}
+
+/**
+ * The entries a grant of a role with `via` adds at `scope`, as IAM resolves them: each action through its relation,
+ * anywhere (`~rel`) for a global grant and only inside the node (`~relin`) for a scoped one. A name holding `:` adds none.
+ */
+export function relationEntries(via: Readonly<Record<string, readonly string[]>> | undefined, scope: Scope | null): PermissionEntry[] {
+	const entries: PermissionEntry[] = []
+	for (const [relation, actions] of Object.entries(via ?? {})) {
+		if (scope !== null && (relation.includes(':') || scope.type.includes(':'))) continue
+		const held = scope === null
+			? { type: RELATION_SCOPE_TYPE, value: relation }
+			: relationInsideScope({ relation, dimension: scope.type, node: scope.value })
+		for (const action of actions) entries.push({ action, scope: held, source: 'grant' })
+	}
+	return entries
 }

@@ -184,11 +184,13 @@ bun test               # app-environment · canonical-path · client-address · 
 - **The claim parser must reject rather than coerce.** `parseAccessClaims` returns `null` on any
   malformed field. It runs on a payload whose signature has been checked but whose custom claims
   have not, so a lenient read is a trust bug, not a convenience.
-- **A scope type starting with `~` is reserved for IAM's derived pseudo-scopes** (`isReservedScopeType`). The only one
-  is `~rel` (`RELATION_SCOPE_TYPE`): an entry `{ action, scope: { type: '~rel', value: <relation> } }` says the
-  principal holds the action through that relation, which the data layer resolves per statement (ADR-0073). `permits`
-  reads it neither as a global grant nor as a scope value, so a consumer that knows no relations keeps it and grants
-  nothing by it. The artifact's relation fields (`relations`, a role's `via`, a table's `confers`, `when`, `reveals`,
+- **A scope type starting with `~` is reserved for IAM's derived pseudo-scopes** (`isReservedScopeType`). There are
+  two: `~rel` (`RELATION_SCOPE_TYPE`): an entry `{ action, scope: { type: '~rel', value: <relation> } }` says the
+  principal holds the action through that relation anywhere, which the data layer resolves per statement (ADR-0073);
+  `~relin` (`RELATION_INSIDE_SCOPE_TYPE`) says it holds it only inside one node, its value
+  `<relation>:<dimension>:<node>` (`relationInsideScope` builds it and refuses a name holding `:`; `parseRelationInside`
+  reads it from the left, the node verbatim). `permits` reads neither as a global grant nor as a scope value, so a
+  consumer that knows no relations keeps them and grants nothing by them. The artifact's relation fields (`relations`, a role's `via`, a table's `confers`, `when`, `reveals`,
   `readThrough`, `memberReveals`) are absent unless declared, so an artifact without them keeps its digest.
 
 ## Notes

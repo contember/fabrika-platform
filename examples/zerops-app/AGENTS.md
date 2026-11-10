@@ -4548,7 +4548,9 @@ statement. This file is an application of its own (`tasks` with assistants); its
 
 Ask the human before you add a relation, a role's `via`, a table's `confers` or its `assign`: each lets someone reach
 more, and the approver sees each as a widening. A `when` only narrows; removing or changing one widens. They need
-`@fabrika/app` `0.9.0-dev.13` or later: Control refuses to publish them for an application pinned to an earlier release.
+`@fabrika/app` `0.9.0-dev.13` or later, and a `relationWhen` `0.9.0-dev.14` or later: Control refuses to publish them for
+an application pinned to an earlier release. A relation held inside the node of a scoped grant needs `0.9.0-dev.14`;
+an earlier release holds nothing through it.
 
 ## The vocabulary: a relation and a role's `via`
 
@@ -4591,9 +4593,15 @@ export const vocabulary = defineVocabulary({
 - `relations: { <name>: { dimension } }` names a relation and the dimension of the node its rows name.
 - `via: { <relation>: [<action>, …] }` on a role: a holder of the role holds those actions at each node where a source
   row names them, and nowhere else. Its `grants` still hold globally, so an assistant's are empty.
-- `via` is only for a global, internal role without `member`: IAM grants `assistant` application-wide (an operator,
-  in IAM's console), and the rows say where it applies. A grant of the role in a scope value carries no relation, so
-  the proxy refuses its holder (403). A person from outside the organization (`external: true`) holds no relation.
+- `via` is for an internal role. A global grant of it (an operator gives `assistant` application-wide, in IAM's
+  console) holds the relation wherever the rows name its holder. A grant of it in a scope value, a membership role in
+  the value it is held in included, holds the relation only inside that value: a member row in another organization
+  reaches nothing, and a table or a reveal above the value gets nothing through it. A membership role's `via` names a
+  relation whose dimension is the role's own or lies inside it (`project` inside `org`), and the build refuses any
+  other. A person from outside the organization (`external: true`) holds no relation, and an external role takes no
+  `via`.
+- Whoever gives a membership role with `via` holds every action of the role, its `via` actions included, at that value
+  through a grant; an action they hold only through a relation does not count.
 - The token says only that the role holds those actions through `assisting`. The data layer reads the source rows on
   every statement, so an inserted row grants at the next request and a deleted one stops access at the next request.
   Nothing caches it.
@@ -4770,6 +4778,20 @@ export const tables = defineTables(vocabulary, columns)({
   (`{ project_id: { some: { tasks: … } } }` on `tasks`): a row inserted meanwhile could make the first two false,
   nothing names the new row yet, and the last would count the new task itself, since the condition is judged after
   the write. An upsert's conflict update is judged on the stored row.
+
+### `relationWhen`: a condition on what one relation reaches
+
+- `relationWhen: { <relation>: { <action>: <condition> } }` narrows only what that relation reaches of the table for
+  the action: through `assisting`, only open tasks, while the owner's IAM grant still reaches every task. The table's
+  own `when` still applies to every grant; a member reveal and an IAM grant are not narrowed by it.
+- The condition is a `when` in every rule above: the same operators, paths, `not` rule and insert rules. The relation
+  must be one the vocabulary declares and the action one the table names, and the relation must reach the table for
+  it (its dimension in the table's chain, a `readThrough`, or a reveal of it for that action); otherwise the policy is
+  refused. A view checks the relation against its parent, and its own `relationWhen` narrows its rows; the parent's
+  does not apply to it.
+- An `on` endpoint whose `Ref` the relation holds sees a row the condition does not admit as absent (404). An insert
+  through the relation that the condition refuses, with no other relation to hold it, is a 409 with nothing written.
+- A relation narrowed for an action does not count as holding it when a `writeThrough` column's writer is checked.
 
 ### A key that holds the tenant needs its ancestors NOT NULL
 
@@ -4966,7 +4988,8 @@ export const contract = app.contract((c) => ({
 
 ## Tests
 
-Grant the role app-wide (`{ role: 'assistant' }`, no scope), as IAM does, and let the endpoints write the rows:
+Grant the role app-wide (`{ role: 'assistant' }`, no scope), as IAM does, or in an organization to hold it only there, and let
+the endpoints write the rows:
 
 ```ts src/__tests__/assistants.test.ts
 import { createClient } from '@fabrika/app/client'
@@ -5053,21 +5076,30 @@ if (postgres !== null) {
 			).toBe(409)
 		})
 
-		test('a grant of the role in a scope value reaches nothing through the relation', async () => {
+		test('a grant of the role in an organization reaches only its projects', async () => {
 			const project = await ownerApi.projects.create({
 				orgId: 'acme',
 				name: 'Scoped',
 			})
-			const scoped = kit.testCaller([{ role: 'assistant', scope: acme }])
-			await coordinatorApi.projects.assign({
-				id: project.id,
-				assistant: scoped.id,
-				days: 1,
+			const inAcme = kit.testCaller([{ role: 'assistant', scope: acme }])
+			const inGlobex = kit.testCaller([
+				{ role: 'assistant', scope: kit.scope('org', 'globex') },
+			])
+			for (const scoped of [inAcme, inGlobex]) {
+				await coordinatorApi.projects.assign({
+					id: project.id,
+					assistant: scoped.id,
+					days: 1,
+				})
+			}
+			const acmeApi = createClient(contract, 'api', { fetch: kit.browser(inAcme) })
+			const globexApi = createClient(contract, 'api', {
+				fetch: kit.browser(inGlobex),
 			})
-			const scopedApi = createClient(contract, 'api', {
-				fetch: kit.browser(scoped),
-			})
-			expect(await statusOf(scopedApi.tasks.list({ projectId: project.id }))).toBe(
+			expect((await acmeApi.tasks.list({ projectId: project.id })).items).toEqual(
+				[],
+			)
+			expect(await statusOf(globexApi.tasks.list({ projectId: project.id }))).toBe(
 				403,
 			)
 		})
@@ -5106,8 +5138,7 @@ if (postgres !== null) {
 
 - No widening condition (`admits`): a `when` only narrows. A row that some other rule should open to more people is
   reached by a grant, a relation or an off-road declaration, never by a condition.
-- A relation holds only through a global grant of an internal role without `member`. A relation inside the node of a
-  scoped grant, and a relation for a person from outside the organization, are not built.
+- A relation for a person from outside the organization is not built.
 - A view is never a relation source: write the source rows to a table, under `assign`.
 - An assignment never changes in place: delete the row and insert a new one.
 - No raw SQL and no JSON column in a condition, and no path longer than three foreign keys.

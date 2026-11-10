@@ -7,6 +7,7 @@ export type {
 	LeaseFence,
 	Ref,
 	RefGrant,
+	RelationHold,
 	RowGrant,
 	RowRef,
 	Within,

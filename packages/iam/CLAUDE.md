@@ -665,13 +665,17 @@ fails if that stops being true — it is the guard, not documentation of one.
   (`exactActions`), the built-in `admin` included, so no grant tracks the catalog beyond its approved revision; only a
   platform audience still resolves one. Migration `0027_application_exact_actions.sql` is the preflight: it refuses
   while a contract application holds a pattern in a grant, a role or a key, or a grant of `admin`.
-- **A RELATION IS HELD THROUGH A GLOBAL GRANT ONLY, AND IAM DERIVES ITS ENTRY** (ADR-0073). `roles.via` (migration
-  `0029_role_via`, reconciled from a role's `via`) maps a relation to actions; `computePermissions` gives a global grant
-  of such a role, held by an internal principal and not a membership role, one `~rel` entry per action. A scoped grant,
-  an external principal and a membership role get none. A stored grant, inline grant or key grant whose scope type is
-  reserved (`isReservedScopeType`) grants nothing, and still counts as the key's downscope, so a key whose only inline
-  row is reserved mints no permission rather than its principal's full set. An application administrator gives a role
-  only when it holds every action the role carries, its `via` actions included (`delegatedActions`).
+- **A RELATION IS HELD ANYWHERE THROUGH A GLOBAL GRANT, AND INSIDE ITS NODE THROUGH A SCOPED ONE; IAM DERIVES THE ENTRY**
+  (ADR-0073). `roles.via` (migrations `0029_role_via` and `0030_membership_role_via`, reconciled from a role's `via`;
+  internal roles only, a membership role included) maps a relation to actions. `computePermissions` gives a global grant
+  of such a role one `~rel` entry per action, and a grant at a node, a membership role's included, one `~relin` entry
+  (`relationInsideScope`: `<relation>:<dimension>:<node>`) and never `~rel`; none for a name holding `:`. An external
+  principal and an external role get none. A stored grant, inline grant or key grant whose scope type is reserved
+  (`isReservedScopeType`) grants nothing, and still counts as the key's downscope, so a key whose only inline row is
+  reserved mints no permission rather than its principal's full set. An application administrator, and a membership
+  assigner, gives a role only when it holds every action the role carries, its `via` actions included
+  (`delegatedActions`), through a grant: `permits` reads no `~` entry, so an action held through a relation counts
+  for none.
 - **Both migration sets must land the same OUTCOME.** `migrations/` (SQLite/D1) and
   `migrations-postgres/` state the same schema; `src/db.ts` runs against both with one dialect switch (how a guarded
   change writes its record, above), and

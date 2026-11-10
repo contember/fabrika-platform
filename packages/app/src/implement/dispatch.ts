@@ -23,6 +23,7 @@ import {
 	type LinkTokenClaims,
 	matchAction,
 	parseEndpointHeader,
+	parseRelationInside,
 	type PermissionEntry,
 	permits,
 	planEndpoint,
@@ -30,6 +31,7 @@ import {
 	PROXY_TOKEN_HEADER,
 	rawRequestTarget,
 	type RedirectShape,
+	RELATION_INSIDE_SCOPE_TYPE,
 	RELATION_SCOPE_TYPE,
 	sameOriginTarget,
 	satisfies,
@@ -40,7 +42,7 @@ import {
 	type WebhookScheme,
 } from '@fabrika/auth-core'
 import { DatabaseError } from '@fabrika/db'
-import { type CapabilityAuthority, type ContainerGrant, MAX_WITHIN_VALUES, type WithinGrant } from '@fabrika/db/capability'
+import { type CapabilityAuthority, type ContainerGrant, MAX_WITHIN_VALUES, type RelationHold, type WithinGrant } from '@fabrika/db/capability'
 import type { DataAccess, FileBinding, FrameworkTables } from '@fabrika/db/framework'
 import type { DataKind } from '@fabrika/db/tables'
 import type { TokenVerifier } from '@fabrika/jwks'
@@ -318,11 +320,24 @@ export interface RevealedNode {
 
 /** The relations and grants a Ref is held through by a secondary path. */
 interface HeldThrough {
-	readonly relations: readonly string[]
+	readonly relations: readonly RelationHold[]
 	readonly paths: readonly ContainerGrant[]
 }
 
 const NONE_THROUGH: HeldThrough = Object.freeze({ relations: Object.freeze([]), paths: Object.freeze([]) })
+
+/** `first` and `second` without a hold twice: the relations a Ref carries. */
+function holdsOf(first: readonly RelationHold[], second: readonly RelationHold[]): RelationHold[] {
+	const seen = new Set<string>()
+	const holds: RelationHold[] = []
+	for (const hold of [...first, ...second]) {
+		const key = JSON.stringify([hold.relation, hold.inside?.dimension ?? null, hold.inside?.values ?? null])
+		if (seen.has(key)) continue
+		seen.add(key)
+		holds.push(hold)
+	}
+	return holds
+}
 
 /** A secondary path of a dimension's table: the dimension it reaches, and the actions a Ref holds through it. */
 export interface HeldPath {
@@ -991,14 +1006,17 @@ export class ContractRuntime {
 			}
 			return this.#parts.mint.ref(frame, dimension, action, caller.subject, value, chain)
 		}
-		const related = chain === null ? [] : await this.#relatedOn(caller.subject, candidates, action, dimension, value, chain)
-		const revealed = chain === null ? [] : await this.#revealedOn(revealing, action, dimension, value, chain)
-		const paths = chain === null ? NONE_THROUGH : await this.#heldThrough(caller.subject, through, action, dimension, value)
-		if (chain === null || (related.length === 0 && revealed.length === 0 && paths.relations.length === 0 && paths.paths.length === 0)) {
+		if (chain === null) {
 			throw new ForbiddenError(`The caller does not hold '${action}' in this ${dimension}`)
 		}
-		const relations = [...new Set([...related, ...paths.relations])]
-		return this.#parts.mint.ref(frame, dimension, action, caller.subject, value, chain, relations, revealed, paths.paths)
+		const related = await this.#relatedOn(caller.subject, this.#atObject(candidates, dimension, chain), action, dimension, value, chain)
+		const revealed = await this.#revealedOn(revealing, action, dimension, value, chain)
+		const asked = { relations: this.#atObject(through.relations, dimension, chain), paths: through.paths }
+		const paths = await this.#heldThrough(caller.subject, asked, action, dimension, value)
+		if (related.length === 0 && revealed.length === 0 && paths.relations.length === 0 && paths.paths.length === 0) {
+			throw new ForbiddenError(`The caller does not hold '${action}' in this ${dimension}`)
+		}
+		return this.#parts.mint.ref(frame, dimension, action, caller.subject, value, chain, holdsOf(related, paths.relations), revealed, paths.paths)
 	}
 
 	/** An object the caller acts on; one it may not act on is indistinguishable from a missing one. */
@@ -1011,15 +1029,16 @@ export class ContractRuntime {
 			return this.#parts.mint.ref(frame, dimension, action, caller.subject, value, chain)
 		}
 		const dimensions = [dimension, ...chain.keys()]
-		const candidates = this.#heldRelations(caller.perms, action, dimensions)
+		const candidates = this.#atObject(this.#heldRelations(caller.perms, action, dimensions), dimension, chain)
 		const related = await this.#relatedOn(caller.subject, candidates, action, dimension, value, chain)
 		const revealed = await this.#revealedOn(this.#heldRevealing(caller.perms, action, dimensions), action, dimension, value, chain)
-		const paths = await this.#heldThrough(caller.subject, this.#throughCandidates(caller.perms, action, dimension), action, dimension, value)
+		const through = this.#throughCandidates(caller.perms, action, dimension)
+		const asked = { relations: this.#atObject(through.relations, dimension, chain), paths: through.paths }
+		const paths = await this.#heldThrough(caller.subject, asked, action, dimension, value)
 		if (related.length === 0 && revealed.length === 0 && paths.relations.length === 0 && paths.paths.length === 0) {
 			throw new NotFoundError('Not found')
 		}
-		const relations = [...new Set([...related, ...paths.relations])]
-		return this.#parts.mint.ref(frame, dimension, action, caller.subject, value, chain, relations, revealed, paths.paths)
+		return this.#parts.mint.ref(frame, dimension, action, caller.subject, value, chain, holdsOf(related, paths.relations), revealed, paths.paths)
 	}
 
 	/**
@@ -1045,13 +1064,54 @@ export class ContractRuntime {
 		return { relations: this.#heldRelations(perms, action, dimensions), paths }
 	}
 
-	/** Of `candidates`, those that reach the object `value` of `dimension` through a path holding `action`, now. */
+	/**
+	 * Of `candidates`, those that reach the object `value` of `dimension` through a path holding `action`, or through a
+	 * relation held inside a node, now; such a relation comes back narrowed to the node the database matched. The grants
+	 * and the nodes go to the database in batches of at most `MAX_WITHIN_VALUES` values, as one statement binds them; the
+	 * relations held anywhere with the first.
+	 */
 	async #heldThrough(principal: string, candidates: HeldThrough, action: string, dimension: string, value: string): Promise<HeldThrough> {
 		const check = this.#parts.database?.holdsThrough
 		if (check === undefined || (candidates.relations.length === 0 && candidates.paths.length === 0)) {
 			return NONE_THROUGH
 		}
-		return await check(dimension, value, action, principal, candidates.relations, candidates.paths)
+		const batches: { relations: RelationHold[]; paths: ContainerGrant[]; size: number }[] = [{ relations: [], paths: [], size: 0 }]
+		const add = (values: readonly string[], put: (batch: { relations: RelationHold[]; paths: ContainerGrant[] }, chunk: string[]) => void) => {
+			for (let start = 0; start < values.length; start += MAX_WITHIN_VALUES) {
+				const chunk = values.slice(start, start + MAX_WITHIN_VALUES)
+				let batch = batches[batches.length - 1] ?? { relations: [], paths: [], size: 0 }
+				if (batch.size + chunk.length > MAX_WITHIN_VALUES) {
+					batch = { relations: [], paths: [], size: 0 }
+					batches.push(batch)
+				}
+				put(batch, chunk)
+				batch.size += chunk.length
+			}
+		}
+		for (const hold of candidates.relations) {
+			const inside = hold.inside
+			if (inside === null) {
+				batches[0]?.relations.push(hold)
+				continue
+			}
+			add(inside.values, (batch, chunk) => batch.relations.push({ relation: hold.relation, inside: { dimension: inside.dimension, values: chunk } }))
+		}
+		for (const grant of candidates.paths) {
+			add(grant.values, (batch, chunk) => batch.paths.push({ dimension: grant.dimension, values: chunk }))
+		}
+		let relations: RelationHold[] = []
+		const paths = new Map<string, Set<string>>()
+		for (const batch of batches) {
+			if (batch.relations.length === 0 && batch.paths.length === 0) continue
+			const held = await check(dimension, value, action, principal, batch.relations, batch.paths)
+			relations = holdsOf(relations, held.relations)
+			for (const grant of held.paths) {
+				const values = paths.get(grant.dimension) ?? new Set<string>()
+				for (const at of grant.values) values.add(at)
+				paths.set(grant.dimension, values)
+			}
+		}
+		return { relations, paths: [...paths].map(([at, values]) => ({ dimension: at, values: [...values] })) }
 	}
 
 	/**
@@ -1100,21 +1160,54 @@ export class ContractRuntime {
 	}
 
 	/**
-	 * The relations through which the caller holds `action` at a node of one of `dimensions` (a `~rel` entry, which IAM
-	 * gives a global grant of a role with `via`), at the relation's own dimension or at an ancestor a reveal of `action`
-	 * names. An entry of a relation the contract does not declare counts for none.
+	 * The relations through which the caller holds `action` at a node of one of `dimensions`, at the relation's own
+	 * dimension or at an ancestor a reveal of `action` names: a `~rel` entry (a global grant of a role with `via`) holds it
+	 * anywhere, a `~relin` entry (a scoped grant of one) only inside its node, so only where the relation's dimension and
+	 * the reveal's are the node's dimension or lie inside it. The nodes of one relation and dimension are one hold; a
+	 * relation held anywhere needs none. An entry of a relation the contract does not declare counts for none.
 	 */
-	#heldRelations(perms: PermissionEntry[], action: string, dimensions: readonly string[]): string[] {
-		const held: string[] = []
+	#heldRelations(perms: PermissionEntry[], action: string, dimensions: readonly string[]): RelationHold[] {
+		const anywhere: string[] = []
+		const inside = new Map<string, { relation: string; dimension: string; values: string[] }>()
 		for (const entry of perms) {
 			const scope = entry.scope
-			if (scope === null || scope.type !== RELATION_SCOPE_TYPE || !matchAction(entry.action, action)) continue
-			const relation = scope.value
-			const at = this.#parts.relations.get(relation)
-			const revealed = this.#revealed(relation, action).some((dimension) => dimensions.includes(dimension))
-			if (at !== undefined && (dimensions.includes(at) || revealed) && !held.includes(relation)) held.push(relation)
+			if (scope === null || !matchAction(entry.action, action)) continue
+			if (scope.type === RELATION_SCOPE_TYPE) {
+				if (this.#relationReaches(scope.value, action, dimensions, null) && !anywhere.includes(scope.value)) anywhere.push(scope.value)
+				continue
+			}
+			const held = scope.type === RELATION_INSIDE_SCOPE_TYPE ? parseRelationInside(scope) : null
+			if (held === null || !this.#relationReaches(held.relation, action, dimensions, held.dimension)) continue
+			const key = JSON.stringify([held.relation, held.dimension])
+			const hold = inside.get(key) ?? { relation: held.relation, dimension: held.dimension, values: [] }
+			if (!hold.values.includes(held.node)) hold.values.push(held.node)
+			inside.set(key, hold)
 		}
-		return held
+		const holds: RelationHold[] = anywhere.map((relation) => ({ relation, inside: null }))
+		for (const hold of inside.values()) {
+			if (!anywhere.includes(hold.relation)) holds.push({ relation: hold.relation, inside: { dimension: hold.dimension, values: hold.values } })
+		}
+		return holds
+	}
+
+	/**
+	 * Whether `relation` holds `action` at a node of one of `dimensions`: at its own dimension, or at an ancestor a reveal
+	 * of `action` names. Held inside a node of `within`, only where that dimension is `within` or lies inside it.
+	 */
+	#relationReaches(relation: string, action: string, dimensions: readonly string[], within: string | null): boolean {
+		const at = this.#parts.relations.get(relation)
+		const lies = (dimension: string) => within === null || dimension === within || (this.#parts.containers.get(dimension) ?? []).includes(within)
+		if (at === undefined || !lies(at)) return false
+		return dimensions.includes(at) || this.#revealed(relation, action).some((dimension) => dimensions.includes(dimension) && lies(dimension))
+	}
+
+	/**
+	 * Of `holds`, those that may reach an object of `dimension` whose chain is `chain`: every one held anywhere, and one
+	 * held inside nodes only where its dimension is the object's or lies on its chain. Its nodes stay as held: the database
+	 * compares the object's column with them (`holdsThrough`), as a `Within` of them would, never this process.
+	 */
+	#atObject(holds: readonly RelationHold[], dimension: string, chain: ReadonlyMap<string, string>): RelationHold[] {
+		return holds.filter((hold) => hold.inside === null || hold.inside.dimension === dimension || chain.has(hold.inside.dimension))
 	}
 
 	/** The ancestor dimensions a reveal of `relation` holds `action` at. */
@@ -1124,37 +1217,48 @@ export class ContractRuntime {
 
 	/**
 	 * Of `candidates`, the relations a row of which names the caller at the object or at a container on its chain, or
-	 * reaches a row that reveals one of them for `action`, now.
+	 * reaches a row that reveals one of them for `action`, now. One held inside a node is judged by the database on the
+	 * object's row (`holdsThrough`), which compares its column for the node's dimension too; a dimension no table owns
+	 * has no such row, so there it holds nothing.
 	 */
 	async #relatedOn(
 		principal: string,
-		candidates: readonly string[],
+		candidates: readonly RelationHold[],
 		action: string,
 		dimension: string,
 		value: string,
 		chain: ReadonlyMap<string, string>,
-	): Promise<string[]> {
+	): Promise<RelationHold[]> {
 		const relates = this.#parts.database?.relates
 		const reveals = this.#parts.database?.reveals
 		if (relates === undefined) {
 			return []
 		}
 		const nodeOf = (at: string | undefined) => (at === dimension ? value : at === undefined ? undefined : chain.get(at))
-		const related: string[] = []
-		for (const relation of candidates) {
+		const related: RelationHold[] = []
+		const inside: RelationHold[] = []
+		for (const hold of candidates) {
+			if (hold.inside !== null) {
+				inside.push(hold)
+				continue
+			}
+			const relation = hold.relation
 			const node = nodeOf(this.#parts.relations.get(relation))
 			if (node !== undefined && (await relates(relation, node, principal))) {
-				related.push(relation)
+				related.push(hold)
 				continue
 			}
 			if (reveals === undefined) continue
 			for (const revealed of this.#revealed(relation, action)) {
 				const at = nodeOf(revealed)
 				if (at !== undefined && (await reveals(relation, revealed, at, principal, action))) {
-					related.push(relation)
+					related.push(hold)
 					break
 				}
 			}
+		}
+		if (inside.length > 0 && this.#parts.ownedDimensions.has(dimension)) {
+			related.push(...(await this.#heldThrough(principal, { relations: inside, paths: [] }, action, dimension, value)).relations)
 		}
 		return related
 	}

@@ -381,6 +381,7 @@ const tablePolicy: z.ZodType<TablePolicyArtifact> = z.strictObject({
 		assign: z.strictObject({ maxDays: z.int().positive().nullable(), self: z.boolean() }).nullable(),
 	})).optional(),
 	when: z.record(action, condition).optional(),
+	relationWhen: record(z.record(action, condition)).optional(),
 	reveals: record(z.strictObject({
 		to: name,
 		actions: z.array(action).nonempty(),
@@ -417,9 +418,9 @@ export const contractArtifactSchema: z.ZodType<ContractArtifact> = z.strictObjec
 		}).refine((role) => role.external !== true || role.member !== null, {
 			path: ['external'],
 			message: 'only a membership role admits external principals',
-		}).refine((role) => role.via === undefined || (role.member === null && role.external !== true), {
+		}).refine((role) => role.via === undefined || role.external !== true, {
 			path: ['via'],
-			message: 'a relation holds actions through an application-wide role only, never a membership or external one',
+			message: 'a relation holds actions through an internal role only, never an external one',
 		}),
 	),
 	relations: record(z.strictObject({ dimension: name })).optional(),

@@ -350,6 +350,7 @@ function compareContracts(changes: Changes, before: ContractArtifact | null, aft
 				subjectOf('table', name),
 				...ruled('table.confers', confersChanges(name, undefined, table.confers)),
 				...ruled('table.when', whenChanges(name, undefined, table.when)),
+				...ruled('table.relation-when', relationWhenChanges(name, undefined, table.relationWhen)),
 				...ruled('table.reveals', revealsChanges(name, undefined, table.reveals)),
 				...ruled('table.read-through', readThroughChanges(name, undefined, table.readThrough)),
 				...ruled('table.write-through', writeThroughChanges(name, table.readThrough, undefined, table.writeThrough)),
@@ -1746,6 +1747,24 @@ function whenChanges(name: string, before: TablePolicyArtifact['when'], after: T
 	})
 }
 
+/** A relation's condition narrows only that relation's terms of an action: a new one narrows, a lost or changed one widens. */
+function relationWhenChanges(name: string, before: TablePolicyArtifact['relationWhen'], after: TablePolicyArtifact['relationWhen']): Line[] {
+	const from = before ?? {}
+	const to = after ?? {}
+	return union(Object.keys(from), Object.keys(to)).flatMap((relation): Line[] => {
+		const was = from[relation] ?? {}
+		const is = to[relation] ?? {}
+		return union(Object.keys(was), Object.keys(is)).flatMap((action): Line[] => {
+			const old = was[action]
+			const now = is[action]
+			const subject = `\`${action}\` through relation \`${relation}\``
+			if (old === undefined) return now === undefined ? [] : [narrowing(`${subject} holds a row of \`${name}\` only under its condition`)]
+			if (now === undefined) return [widening(`${subject} holds every row of \`${name}\` the relation reaches: its condition is removed`)]
+			return valueChange(`${subject} condition on \`${name}\``, old, now)
+		})
+	})
+}
+
 /** An external role may be held by a person from outside the organization (ADR-0051). */
 function externalChange(name: string, before: true | undefined, after: true | undefined): RuledLine[] {
 	if (before === after) return []
@@ -1942,6 +1961,7 @@ function tableChanges(name: string, from: TablePolicyArtifact, to: TablePolicyAr
 		...ruled('table.file-column', fileColumnChanges(name, from.files ?? {}, to.files ?? {})),
 		...ruled('table.confers', confersChanges(name, from.confers, to.confers)),
 		...ruled('table.when', whenChanges(name, from.when, to.when)),
+		...ruled('table.relation-when', relationWhenChanges(name, from.relationWhen, to.relationWhen)),
 		...ruled('table.reveals', revealsChanges(name, from.reveals, to.reveals)),
 		...ruled('table.read-through', readThroughChanges(name, from.readThrough, to.readThrough)),
 		...ruled('table.write-through', writeThroughChanges(name, to.readThrough, from.writeThrough, to.writeThrough)),

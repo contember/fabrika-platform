@@ -1,5 +1,5 @@
 // Relation grants through boot, behind the production proxy decision, on SQLite: a global grant of a role with `via`
-// carries `~rel` entries, and `on` and `over` endpoints reach a project exactly while a member row names the caller
+// carries `~rel` entries, a scoped one `~relin` entries that hold only inside its node, and `on` and `over` endpoints reach a project exactly while a member row names the caller
 // there. Assigning a member is a delegation the table's `assign` bounds; removing the row revokes at the next request.
 // A staff row confers through the person it references, whose directory row holds the principal.
 
@@ -91,7 +91,7 @@ describe('a relation grant through boot', () => {
 			assistant: createClient(contract, 'api', { fetch: kit.browser(assistant) }).projects,
 			lead: createClient(contract, 'api', { fetch: kit.browser(lead) }).projects,
 			scopedAssistant: createClient(contract, 'api', {
-				fetch: kit.browser(kit.testCaller([{ role: 'assistant', scope: kit.scope('project', 'p2') }], { id: 'user:scoped' })),
+				fetch: kit.browser(kit.testCaller([{ role: 'assistant', scope: kit.scope('project', 'p3') }], { id: 'user:scoped' })),
 			}).projects,
 		}
 	}
@@ -123,11 +123,16 @@ describe('a relation grant through boot', () => {
 		await expect(assistant.rename({ id: 'p3', name: 'x' })).rejects.toMatchObject({ httpStatus: 404 })
 	})
 
-	test('a scoped grant of the role carries no relation entry, so the proxy refuses it', async () => {
+	test('a scoped grant of the role holds the relation inside its node only', async () => {
 		const { scopedAssistant, lead } = world()
+		expect(await scopedAssistant.list({})).toEqual({ ids: [] })
 		await lead.assign({ id: 'p1', principal: 'user:scoped', days: 7 })
-		await expect(scopedAssistant.get({ id: 'p1' })).rejects.toMatchObject({ httpStatus: 403 })
-		await expect(scopedAssistant.list({})).rejects.toMatchObject({ httpStatus: 403 })
+		await expect(scopedAssistant.get({ id: 'p1' })).rejects.toMatchObject({ httpStatus: 404 })
+		expect(await scopedAssistant.list({})).toEqual({ ids: [] })
+		await lead.assign({ id: 'p3', principal: 'user:scoped', days: 7 })
+		expect(await scopedAssistant.get({ id: 'p3' })).toEqual({ name: 'archived' })
+		expect(await scopedAssistant.list({})).toEqual({ ids: ['p3'] })
+		await expect(scopedAssistant.rename({ id: 'p1', name: 'x' })).rejects.toMatchObject({ httpStatus: 404 })
 	})
 
 	test('a delegation longer than the bound, or to the delegator itself, is a 409 and writes nothing', async () => {

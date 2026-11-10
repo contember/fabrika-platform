@@ -20,7 +20,7 @@ export interface RoleRow {
 	assignable_by: string | null
 	/** 1 when an external principal may hold this membership role (ADR-0051); 0 for every other role. */
 	external: 0 | 1
-	/** JSON object relation → exact actions a global grant of the role carries as `~rel` entries; NULL = none. */
+	/** JSON object relation → exact actions a grant of the role carries as `~rel` (global) or `~relin` (at a node) entries; NULL = none. */
 	via: string | null
 	created_at: number
 }
