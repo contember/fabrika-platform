@@ -97,7 +97,8 @@ export interface RoleDef<A extends string, D extends string, R extends string> {
 	readonly external?: true
 	/**
 	 * Relation → actions: a holder of this role, granted globally, holds them at each node a row of the relation's
-	 * source names them at (`via: { owner: ['projects.edit'] }`). A scoped grant of the role carries none of them.
+	 * source names them at (`via: { owner: ['projects.edit'] }`). A grant at a value holds them only on rows inside that
+	 * value, so a membership role's relation has the role's dimension or one inside it. An external role takes none.
 	 */
 	readonly via?: { readonly [relation: string]: readonly A[] }
 }

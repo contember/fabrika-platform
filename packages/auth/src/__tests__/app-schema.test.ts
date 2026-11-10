@@ -150,10 +150,14 @@ describe('a role that holds actions through a relation', () => {
 		expect(appSchemaSchema.safeParse(starter({ assignee: ['notes.read', 'notes.write'] })).success).toBe(true)
 	})
 
-	test('is refused with an action outside the catalog, on a membership role, and on an external one', () => {
+	test('is accepted on an internal membership role, whose grant at a value holds it inside that value', () => {
+		expect(appSchemaSchema.safeParse(starter({ assignee: ['notes.read'] }, { member: { scope: 'workspace' } })).success).toBe(true)
+	})
+
+	test('is refused with an action outside the catalog, on an external role, and for a relation name with a colon', () => {
 		expect(messages(starter({ assignee: ['notes.delete'] })).join('\n')).toContain('notes.delete')
-		expect(appSchemaSchema.safeParse(starter({ assignee: ['notes.read'] }, { member: { scope: 'workspace' } })).success).toBe(false)
 		expect(appSchemaSchema.safeParse(starter({ assignee: ['notes.read'] }, { member: { scope: 'workspace' }, external: true })).success).toBe(false)
+		expect(messages(starter({ 'a:b': ['notes.read'] })).join('\n')).toContain("a relation name with ':'")
 	})
 })
 

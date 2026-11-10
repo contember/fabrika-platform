@@ -40,7 +40,7 @@ export interface RefGrant {
 	 * The relations the caller holds the action through on this object or a container, when no grant holds it: every
 	 * statement of the Ref then also requires a row of one of them. Empty for a Ref an IAM grant holds.
 	 */
-	readonly relations: readonly string[]
+	readonly relations: readonly RelationHold[]
 	/**
 	 * The caller's grants of the action at nodes whose rows reveal the object, or a container on its chain, to their
 	 * members (`memberReveals`), when no grant holds it: every statement of the Ref then also requires such a row, as
@@ -53,6 +53,16 @@ export interface RefGrant {
 	 * also requires the row to reach one of them through such a path. Empty for a Ref an IAM grant holds.
 	 */
 	readonly paths: readonly ContainerGrant[]
+}
+
+/**
+ * A relation the caller holds the action through: anywhere (`inside: null`, a `~rel` entry), or only on rows that lie
+ * inside one of `inside`'s values (`~relin` entries of grants at those values): a row whose column for that dimension,
+ * its key at its own dimension, names one of them. A row with no such column is not inside, so the hold reaches none.
+ */
+export interface RelationHold {
+	readonly relation: string
+	readonly inside: ContainerGrant | null
 }
 
 /** The values of one container dimension in which the caller holds the action: `organization → [o1]`. */
@@ -85,10 +95,10 @@ export interface WithinGrant {
 	 */
 	readonly contained: readonly ContainerGrant[]
 	/**
-	 * The relations through which the caller also holds the action (`~rel` entries of its token): a row lies in the
-	 * `Within` too where a row of one of them names the caller at the row's node, read by the statement itself.
+	 * The relations through which the caller also holds the action (`~rel` and `~relin` entries of its token): a row lies
+	 * in the `Within` too where a row of one of them names the caller at the row's node, read by the statement itself.
 	 */
-	readonly relations: readonly string[]
+	readonly relations: readonly RelationHold[]
 	/**
 	 * The caller's grants of the action at nodes whose rows reveal the `Within`'s dimension or a container of it to their
 	 * members (`memberReveals`): a row under a node such a row reveals is read too, the statement judging the revealing row.

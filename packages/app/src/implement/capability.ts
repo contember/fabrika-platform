@@ -15,6 +15,7 @@ import {
 	MAX_WITHIN_VALUES,
 	type Ref as RefCapability,
 	type RefGrant,
+	type RelationHold,
 	type RowGrant,
 	type RowRef as RowRefCapability,
 	type Within as WithinCapability,
@@ -175,6 +176,28 @@ function containerGrantsOf(containers: readonly ContainerGrant[]): readonly Cont
 	return freeze(copy)
 }
 
+/** A frozen copy of the relation holds, by index, each node list copied: what was minted stays what was checked. */
+function relationHoldsOf(holds: readonly RelationHold[]): readonly RelationHold[] {
+	const copy: RelationHold[] = []
+	for (let index = 0; index < holds.length; index++) {
+		const hold = holds[index]
+		if (hold !== undefined) {
+			const inside = hold.inside === null ? null : freeze({ dimension: hold.inside.dimension, values: copyOf(hold.inside.values) })
+			copy[copy.length] = freeze({ relation: hold.relation, inside })
+		}
+	}
+	return freeze(copy)
+}
+
+/** The nodes the relation holds carry, counted against `MAX_WITHIN_VALUES` beside the grants. */
+function insideCount(holds: readonly RelationHold[]): number {
+	let count = 0
+	for (let index = 0; index < holds.length; index++) {
+		count += holds[index]?.inside?.values.length ?? 0
+	}
+	return count
+}
+
 interface RefFacts {
 	readonly dimension: string
 	readonly action: string
@@ -182,7 +205,7 @@ interface RefFacts {
 	readonly id: string
 	readonly chain: Chain
 	/** The relations through which the caller holds the action on the object; empty for an IAM grant. */
-	readonly relations: readonly string[]
+	readonly relations: readonly RelationHold[]
 	/** The caller's grants at nodes whose rows reveal the object to their members; empty for an IAM grant. */
 	readonly revealing: readonly ContainerGrant[]
 	/** The caller's grants at nodes a path of the object's table names, which hold the action through it; empty for an IAM grant. */
@@ -219,7 +242,7 @@ export class Ref<D extends string, A extends string> implements RefCapability<D,
 		principal: string,
 		id: string,
 		chain: ReadonlyMap<string, string>,
-		relations: readonly string[],
+		relations: readonly RelationHold[],
 		revealing: readonly ContainerGrant[],
 		paths: readonly ContainerGrant[],
 	) {
@@ -228,7 +251,8 @@ export class Ref<D extends string, A extends string> implements RefCapability<D,
 		}
 		const revealed = containerGrantsOf(revealing)
 		const through = containerGrantsOf(paths)
-		let count = 0
+		const held = relationHoldsOf(relations)
+		let count = insideCount(held)
 		for (const grant of [...revealed, ...through]) {
 			count += grant.values.length
 		}
@@ -239,7 +263,7 @@ export class Ref<D extends string, A extends string> implements RefCapability<D,
 		}
 		this.#dimension = dimension
 		this.#action = action
-		this.#facts = freeze({ dimension, action, principal, id, chain: chainOf(chain), relations: copyOf(relations), revealing: revealed, paths: through })
+		this.#facts = freeze({ dimension, action, principal, id, chain: chainOf(chain), relations: held, revealing: revealed, paths: through })
 		this.#frame = frame
 		this.#issuer = issuer
 	}
@@ -306,7 +330,7 @@ export class Within<D extends string, A extends string> implements WithinCapabil
 		values: readonly string[] | 'all',
 		containers: readonly ContainerGrant[],
 		contained: readonly ContainerGrant[],
-		relations: readonly string[],
+		relations: readonly RelationHold[],
 		revealing: readonly ContainerGrant[],
 	) {
 		if (token !== MINT) {
@@ -315,7 +339,8 @@ export class Within<D extends string, A extends string> implements WithinCapabil
 		const held = values === 'all' ? freeze([]) : containerGrantsOf(containers)
 		const inside = values === 'all' ? freeze([]) : containerGrantsOf(contained)
 		const revealed = values === 'all' ? freeze([]) : containerGrantsOf(revealing)
-		let count = values === 'all' ? 0 : values.length
+		const holds = values === 'all' ? freeze([]) : relationHoldsOf(relations)
+		let count = values === 'all' ? 0 : values.length + insideCount(holds)
 		for (const group of [held, inside, revealed]) {
 			for (let index = 0; index < group.length; index++) {
 				count += group[index]?.values.length ?? 0
@@ -336,7 +361,7 @@ export class Within<D extends string, A extends string> implements WithinCapabil
 			values: values === 'all' ? 'all' : copyOf(values),
 			containers: held,
 			contained: inside,
-			relations: values === 'all' ? freeze([]) : copyOf(relations),
+			relations: holds,
 			revealing: revealed,
 		})
 		this.#frame = frame
@@ -477,7 +502,7 @@ export interface CapabilityMint {
 		principal: string,
 		id: string,
 		chain: ReadonlyMap<string, string>,
-		relations?: readonly string[],
+		relations?: readonly RelationHold[],
 		revealing?: readonly ContainerGrant[],
 		paths?: readonly ContainerGrant[],
 	): Ref<D, A>
@@ -489,7 +514,7 @@ export interface CapabilityMint {
 		values: readonly string[] | 'all',
 		containers?: readonly ContainerGrant[],
 		contained?: readonly ContainerGrant[],
-		relations?: readonly string[],
+		relations?: readonly RelationHold[],
 		revealing?: readonly ContainerGrant[],
 	): Within<D, A>
 	app<A extends string>(frame: RequestFrame, action: A, principal: string): AppCapability<A>
@@ -516,7 +541,7 @@ export function createCapabilityIssuer(): CapabilityIssuer {
 			principal: string,
 			id: string,
 			chain: ReadonlyMap<string, string>,
-			relations: readonly string[] = [],
+			relations: readonly RelationHold[] = [],
 			revealing: readonly ContainerGrant[] = [],
 			paths: readonly ContainerGrant[] = [],
 		): Ref<D, A> {
@@ -530,7 +555,7 @@ export function createCapabilityIssuer(): CapabilityIssuer {
 			values: readonly string[] | 'all',
 			containers: readonly ContainerGrant[] = [],
 			contained: readonly ContainerGrant[] = [],
-			relations: readonly string[] = [],
+			relations: readonly RelationHold[] = [],
 			revealing: readonly ContainerGrant[] = [],
 		): Within<D, A> {
 			return new Within(MINT, issuer, frame, dimension, action, principal, values, containers, contained, relations, revealing)

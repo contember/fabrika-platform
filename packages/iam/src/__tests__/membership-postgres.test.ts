@@ -22,6 +22,7 @@ import {
 	membershipFixture,
 	NOTES_SCHEMA,
 	type Person,
+	RELATION_SCHEMA,
 } from './helpers/membership'
 import { createPostgres, hasPostgres, type PostgresFixture, postgresUrl, skipReason } from './helpers/postgres'
 
@@ -70,6 +71,22 @@ async function workspaceOf(f: MembershipFixture, owner: Person): Promise<Scope> 
 let fixtureSeq = 0
 
 describe.skipIf(!hasPostgres)('membership on Postgres', () => {
+	test('a membership role with via reconciles, and only a holder of its via actions by a grant there gives it', async () => {
+		fixtureSeq += 1
+		const f = await membershipFixture(repositories)
+		expect((await f.putSchema(RELATION_SCHEMA)).status).toBe(200)
+		const owner = await f.person(`owner-${fixtureSeq}`)
+		const scope = await workspaceOf(f, owner)
+		const lead = await f.person(`lead-${fixtureSeq}`)
+		const target = await f.person(`target-${fixtureSeq}`)
+		const give = async (actor: Person, role: string, principalId: string) =>
+			assignMember(f.services, CALLER_ENV, f.ctx, { ...(await delegated(f, actor)), scope, role, member: { principalId } })
+		expect(await give(owner, 'lead', lead.id)).toMatchObject({ ok: true })
+		expect(await give(lead, 'assistant', target.id)).toEqual({ ok: false, reason: 'not_allowed' })
+		expect(await give(owner, 'assistant', target.id)).toMatchObject({ ok: true })
+		expect((await f.putSchema(NOTES_SCHEMA)).status).toBe(200)
+	})
+
 	test('a value, an assignment, an invitation accepted once, a list and a link', async () => {
 		fixtureSeq += 1
 		const email = new CapturingEmail()

@@ -7,6 +7,8 @@ import {
 	everyPath,
 	gateTerms,
 	heldThrough,
+	holdsBesides,
+	isIn,
 	type LayerRelation,
 	type MemberReveals,
 	memberTerms,
@@ -54,6 +56,7 @@ import {
 	MAX_WITHIN_VALUES,
 	type Ref,
 	type RefGrant,
+	type RelationHold,
 	type Within,
 	type WithinGrant,
 } from './capability'
@@ -509,10 +512,12 @@ function addMemberTerms(context: TableContext, grant: WithinGrant, predicates: O
 /** The relation terms of a `Within`'s relations; a relation whose dimension this table lies at no node of reaches none of its rows. */
 function addRelationTerms(context: TableContext, grant: WithinGrant, reads: boolean, predicates: OperationNode[], now: Date): void {
 	for (let index = 0; index < grant.relations.length; index++) {
+		const hold = grant.relations[index]
+		if (hold === undefined) continue
 		const terms = relationTerms(
 			context.relations,
 			context.model,
-			grant.relations[index] ?? '',
+			hold,
 			grant.principal,
 			grant.action,
 			now,
@@ -612,12 +617,12 @@ export function parentPredicate(context: TableContext, grant: RefGrant, key?: st
 	return refScope(context, context.model, context.model.chain, grant, new Date(), row)
 }
 
-/** Of `relations`, those a child view's `relationWhen` narrows for `action`: each reads the parent through a part of its own. */
-function viewNarrowed(view: TableModel, relations: readonly string[], action: string): readonly string[] {
+/** Of `holds`, the relations a child view's `relationWhen` narrows for `action`: each reads the parent through a part of its own. */
+function viewNarrowed(view: TableModel, holds: readonly RelationHold[], action: string): readonly string[] {
 	const narrowed: string[] = []
-	for (let index = 0; index < relations.length; index++) {
-		const relation = relations[index] ?? ''
-		if (relationCondition(view, relation, action) !== undefined) narrowed[narrowed.length] = relation
+	for (let index = 0; index < holds.length; index++) {
+		const relation = holds[index]?.relation ?? ''
+		if (relationCondition(view, relation, action) !== undefined && !includes(narrowed, relation)) narrowed[narrowed.length] = relation
 	}
 	return narrowed
 }
@@ -631,18 +636,16 @@ function splitRefReach(view: TableModel, parent: TableContext, grant: RefGrant, 
 	const model = parent.model
 	const chain = linksPredicate(model.name, linkValues(model.name, selfLinks(model), grant))
 	const paths = heldThrough(grant.action)
-	const others: string[] = []
-	for (let index = 0; index < grant.relations.length; index++) {
-		const relation = grant.relations[index] ?? ''
-		if (!includes(narrowed, relation)) others[others.length] = relation
-	}
+	const others = holdsBesides(grant.relations, narrowed)
 	const rest: RefGrant = { ...grant, relations: others }
 	const restTerms = others.length === 0 && rest.revealing.length === 0 && rest.paths.length === 0 ? [] : gateTerms(parent, model, rest, now, paths)
 	const relations: { reached: OperationNode; condition: ConditionModel }[] = []
-	for (let index = 0; index < narrowed.length; index++) {
-		const relation = narrowed[index] ?? ''
-		const condition = relationCondition(view, relation, grant.action)
-		const terms = relationTerms(parent.relations, model, relation, grant.principal, grant.action, now, paths)
+	for (let index = 0; index < grant.relations.length; index++) {
+		const hold = grant.relations[index]
+		const condition = hold === undefined || !includes(narrowed, hold.relation) ? undefined : relationCondition(view, hold.relation, grant.action)
+		const terms = hold === undefined || condition === undefined
+			? []
+			: relationTerms(parent.relations, model, hold, grant.principal, grant.action, now, paths)
 		if (condition !== undefined && terms.length > 0) relations[relations.length] = { reached: allOf([chain, anyOf(terms)]), condition }
 	}
 	if (restTerms.length === 0 && relations.length === 0) {
@@ -674,18 +677,17 @@ function throughParent(
 		const reached = reach(through.context, grant)
 		return reached === undefined ? undefined : viewScope(context.model, through, grant.action, reached, now)
 	}
-	const others: string[] = []
-	for (let index = 0; index < grant.relations.length; index++) {
-		const relation = grant.relations[index] ?? ''
-		if (!includes(narrowed, relation)) others[others.length] = relation
-	}
-	const rest = reach(through.context, { ...grant, relations: others })
+	const rest = reach(through.context, { ...grant, relations: holdsBesides(grant.relations, narrowed) })
 	const relations: { reached: OperationNode; condition: ConditionModel }[] = []
-	for (let index = 0; index < narrowed.length; index++) {
-		const relation = narrowed[index] ?? ''
-		const condition = relationCondition(context.model, relation, grant.action)
-		const alone: WithinGrant = { ...grant, values: [], containers: [], contained: [], revealing: [], relations: [relation] }
-		const reached = condition === undefined ? undefined : reach(through.context, alone)
+	for (let index = 0; index < grant.relations.length; index++) {
+		const hold = grant.relations[index]
+		const condition = hold === undefined || !includes(narrowed, hold.relation)
+			? undefined
+			: relationCondition(context.model, hold.relation, grant.action)
+		const alone: WithinGrant | undefined = hold === undefined
+			? undefined
+			: { ...grant, values: [], containers: [], contained: [], revealing: [], relations: [hold] }
+		const reached = condition === undefined || alone === undefined ? undefined : reach(through.context, alone)
 		if (condition !== undefined && reached !== undefined) relations[relations.length] = { reached, condition }
 	}
 	if (rest === undefined && relations.length === 0) {
@@ -2152,17 +2154,19 @@ function narrowedDestination(
 	defer: boolean,
 ): { readonly destination: RefGrant; readonly narrowed: readonly NarrowedInsert[] } {
 	const now = new Date()
-	const kept: string[] = []
+	const kept: RelationHold[] = []
 	const narrowed: NarrowedInsert[] = []
 	for (let index = 0; index < grant.relations.length; index++) {
-		const relation = grant.relations[index] ?? ''
+		const hold = grant.relations[index]
+		if (hold === undefined) continue
+		const relation = hold.relation
 		const condition = relationCondition(context.model, relation, grant.action)
 		const pathed = condition !== undefined && readPaths(condition).length > 0
-		if (condition !== undefined && pathed && defer) {
+		if (condition !== undefined && pathed && defer && !judgesRelation(narrowed, relation)) {
 			narrowed[narrowed.length] = { relation, condition }
 		}
 		if (condition === undefined || (pathed ? defer : rowSatisfies(condition, row, now))) {
-			kept[kept.length] = relation
+			kept[kept.length] = hold
 		}
 	}
 	if (kept.length === grant.relations.length) {
@@ -2172,6 +2176,14 @@ function narrowedDestination(
 		throw new ConflictError(`the row is outside what ${grant.action} inserts into ${context.model.name} through its relations`)
 	}
 	return { destination: { ...grant, relations: kept }, narrowed }
+}
+
+/** Whether `narrowed` already judges `relation`: two holds of one relation are judged once. */
+function judgesRelation(narrowed: readonly NarrowedInsert[], relation: string): boolean {
+	for (let index = 0; index < narrowed.length; index++) {
+		if (narrowed[index]?.relation === relation) return true
+	}
+	return false
 }
 
 /**
@@ -2199,11 +2211,7 @@ async function judgeNarrowed(
 	if (failed.length === 0) {
 		return
 	}
-	const kept: string[] = []
-	for (let index = 0; index < destination.relations.length; index++) {
-		const relation = destination.relations[index] ?? ''
-		if (!includes(failed, relation)) kept[kept.length] = relation
-	}
+	const kept = holdsBesides(destination.relations, failed)
 	const rest: RefGrant = { ...destination, relations: kept }
 	const held = kept.length > 0 || rest.revealing.length > 0 || rest.paths.length > 0
 	if (!held || !(await destinationHeld(transaction, context, rest))) {
@@ -2523,11 +2531,11 @@ async function checkPathWriters(
  * Of `relations`, those no table's `relationWhen` narrows for `action`: a relation that holds the action on some rows only
  * does not bound a writer who hands it out at a node.
  */
-function unnarrowed(relations: RelationSources, held: readonly string[], action: string): readonly string[] {
-	const kept: string[] = []
+function unnarrowed(relations: RelationSources, held: readonly RelationHold[], action: string): readonly RelationHold[] {
+	const kept: RelationHold[] = []
 	for (let index = 0; index < held.length; index++) {
-		const relation = held[index] ?? ''
-		if (!includes(relationSource(relations, relation).narrowed, action)) kept[kept.length] = relation
+		const hold = held[index]
+		if (hold !== undefined && !includes(relationSource(relations, hold.relation).narrowed, action)) kept[kept.length] = hold
 	}
 	return kept
 }
@@ -3064,7 +3072,7 @@ export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
 					id: string,
 					action: string,
 					principal: string,
-					relations: readonly string[],
+					relations: readonly RelationHold[],
 					paths: readonly ContainerGrant[],
 				) => heldThroughPaths(models, layer, bound, dimension, id, action, principal, relations, paths),
 				revealsToMembers: async (revealing: string, values: readonly string[], dimension: string, node: string, action: string) =>
@@ -3160,10 +3168,18 @@ function layerReach(
 		for (let position = 0; position < model.confers.length; position++) {
 			const source = model.confers[position]
 			if (source === undefined) continue
+			const revealed = ownEntry(reveals, source.relation) ?? []
+			const placed: Record<string, Readonly<Record<string, string>>> = {}
+			setOwn(placed, model.name, placementOf(model))
+			for (let next = 0; next < revealed.length; next++) {
+				const table = revealed[next]?.table ?? ''
+				const at = modelOf(models, table)
+				if (at !== undefined) setOwn(placed, table, placementOf(at))
+			}
 			setOwn(
 				relations,
 				source.relation,
-				freeze({ ...source, reveals: freeze(ownEntry(reveals, source.relation) ?? []), narrowed: freeze(ownEntry(narrowed, source.relation) ?? []) }),
+				freeze({ ...source, reveals: freeze(revealed), narrowed: freeze(ownEntry(narrowed, source.relation) ?? []), placed: freeze(placed) }),
 			)
 			select(source.table, source.node)
 			if (source.principalPath !== undefined) select(source.principalPath.table, source.principalPath.key)
@@ -3195,6 +3211,17 @@ function layerReach(
 		setOwn(revealing, source, freeze(ownEntry(members, source) ?? []))
 	}
 	return { relations: freeze(relations), members: freeze(revealing), subqueries: freeze(subqueries) }
+}
+
+/** `model`'s column for each dimension a row of it lies at: its key at its own dimension, then each link of its chain. */
+function placementOf(model: TableModel): Readonly<Record<string, string>> {
+	const placed: Record<string, string> = {}
+	if (model.scope.mode === 'dimension') setOwn(placed, model.scope.dimension, model.scope.key)
+	for (let index = 0; index < model.chain.length; index++) {
+		const link = model.chain[index]
+		if (link !== undefined && ownEntry(placed, link.dimension) === undefined) setOwn(placed, link.dimension, link.column)
+	}
+	return freeze(placed)
 }
 
 function addReach(condition: Parameters<typeof conditionReach>[0], select: (table: string, column: string) => void): void {
@@ -3295,10 +3322,15 @@ async function holdingRowLocked(transaction: Session, context: TableContext, gra
 		}
 	}
 	for (let index = 0; index < grant.relations.length; index++) {
-		const source = relationSource(context.relations, grant.relations[index] ?? '')
+		const hold = grant.relations[index]
+		if (hold === undefined) continue
+		const source = relationSource(context.relations, hold.relation)
 		const node = nodeOf(source.dimension)
-		if (node !== undefined) {
-			const address = allOf([equals(source.table, source.node, node), namesPrincipal(source, grant.principal)])
+		const sourceInside = insideRow(source, source.table, hold)
+		if (node !== undefined && sourceInside !== null) {
+			const parts = [equals(source.table, source.node, node), namesPrincipal(source, grant.principal)]
+			if (sourceInside !== undefined) parts[parts.length] = sourceInside
+			const address = allOf(parts)
 			const active = activeRow(source, now)
 			candidates[candidates.length] = {
 				table: source.table,
@@ -3311,11 +3343,13 @@ async function holdingRowLocked(transaction: Session, context: TableContext, gra
 			const held = reveal !== undefined && includes(reveal.actions, grant.action)
 				&& (reveal.path === undefined || includes(reveal.path.writes, grant.action))
 			const revealed = reveal === undefined || !held ? undefined : nodeOf(reveal.dimension)
-			if (reveal !== undefined && revealed !== undefined) {
+			const revealInside = reveal === undefined ? null : insideRow(source, reveal.table, hold)
+			if (reveal !== undefined && revealed !== undefined && revealInside !== null) {
+				const address = revealAddress(source, reveal, revealed, grant.principal, now)
 				candidates[candidates.length] = {
 					table: reveal.table,
 					column: reveal.column,
-					scope: revealAddress(source, reveal, revealed, grant.principal, now),
+					scope: revealInside === undefined ? address : allOf([address, revealInside]),
 				}
 			}
 		}
@@ -3334,6 +3368,20 @@ async function holdingRowLocked(transaction: Session, context: TableContext, gra
 		if (rows.length > 0) return true
 	}
 	return false
+}
+
+/**
+ * What a row of `table` (the relation's source or a reveal's table) must meet to hold under `hold`: nothing
+ * (`undefined`) for a hold anywhere, its column for the hold's dimension among the hold's values for one inside a node,
+ * and null when it has no such column, so it is not inside and holds nothing.
+ */
+function insideRow(source: LayerRelation, table: string, hold: RelationHold): OperationNode | undefined | null {
+	if (hold.inside === null) {
+		return undefined
+	}
+	const placed = ownEntry(source.placed, table)
+	const column = placed === undefined ? undefined : ownEntry(placed, hold.inside.dimension)
+	return column === undefined || hold.inside.values.length === 0 ? null : isIn(table, column, valueList(hold.inside.values))
 }
 
 /** `R.<ancestor> = $node and (R.<key> in (values) and <when>)`: a row at a node `values` name that reveals `node` now. */
@@ -3424,7 +3472,8 @@ async function membersRevealed(
 /**
  * Of `relations` and `paths`, the caller's relations and grants of `action` that reach the object `id` of `dimension`
  * through a relation row, a reveal or a secondary path that holds the action for a `Ref` (`writeThrough`): one guarded
- * select per candidate. What `on` and `in` mint a `Ref` held through a path with.
+ * select per candidate. What `on` and `in` mint a `Ref` held through a path with, and through a relation held inside a
+ * node: the statement compares the object's column for the node's dimension with the held values.
  */
 async function heldThroughPaths(
 	models: TableModels,
@@ -3434,19 +3483,15 @@ async function heldThroughPaths(
 	id: string,
 	action: string,
 	principal: string,
-	relations: readonly string[],
+	relations: readonly RelationHold[],
 	paths: readonly ContainerGrant[],
-): Promise<{ readonly relations: readonly string[]; readonly paths: readonly ContainerGrant[] }> {
+): Promise<{ readonly relations: readonly RelationHold[]; readonly paths: readonly ContainerGrant[] }> {
 	const owner = locatedOwner(models, dimension)
 	if (typeof id !== 'string' || id.length === 0 || typeof principal !== 'string' || principal.length === 0 || typeof action !== 'string') {
 		throw new QueryRefusedError('row_address', `a ${dimension} held through a path is addressed by its key, the principal and the action`)
 	}
-	const named = parseList(relations, (relation) => {
-		if (typeof relation !== 'string') throw new QueryRefusedError('row_address', 'a relation is named by its name')
-		return relation
-	})
 	let count = 0
-	const grants = parseList(paths, (grant): ContainerGrant => {
+	const grantOf = (grant: unknown, what: string): ContainerGrant => {
 		const at: unknown = typeof grant === 'object' && grant !== null ? ownDescriptor(grant, 'dimension')?.value : undefined
 		const values = typeof grant === 'object' && grant !== null
 			? parseList(ownDescriptor(grant, 'values')?.value, (value) => {
@@ -3455,11 +3500,18 @@ async function heldThroughPaths(
 			})
 			: undefined
 		if (typeof at !== 'string' || values === undefined) {
-			throw new QueryRefusedError('row_address', 'a grant of a path names its dimension and its nodes')
+			throw new QueryRefusedError('row_address', `${what} names its dimension and its nodes`)
 		}
 		count += values.length
 		return freeze({ dimension: at, values: freeze(values) })
+	}
+	const named = parseList(relations, (hold): RelationHold => {
+		const relation: unknown = typeof hold === 'object' && hold !== null ? ownDescriptor(hold, 'relation')?.value : undefined
+		const inside: unknown = typeof hold === 'object' && hold !== null ? ownDescriptor(hold, 'inside')?.value : undefined
+		if (typeof relation !== 'string') throw new QueryRefusedError('row_address', 'a relation is named by its name')
+		return freeze({ relation, inside: inside === null ? null : grantOf(inside, 'a relation held inside a node') })
 	})
+	const grants = parseList(paths, (grant): ContainerGrant => grantOf(grant, 'a grant of a path'))
 	if (named === undefined || grants === undefined) {
 		throw new QueryRefusedError('row_address', 'the candidates of a path are plain arrays')
 	}
@@ -3475,10 +3527,12 @@ async function heldThroughPaths(
 		const rows = await session.run<Readonly<Record<string, unknown>>>(locateNode(owner.name, [keyOf(owner)], scope), context)
 		return rows.length > 0
 	}
-	const held: string[] = []
+	const held: RelationHold[] = []
 	for (let index = 0; index < named.length; index++) {
-		const relation = named[index] ?? ''
-		if (await reaches(relationTerms(layer.relations, owner, relation, principal, action, now, heldThrough(action)))) held[held.length] = relation
+		const hold = named[index]
+		if (hold !== undefined && (await reaches(relationTerms(layer.relations, owner, hold, principal, action, now, heldThrough(action))))) {
+			held[held.length] = hold
+		}
 	}
 	const through: ContainerGrant[] = []
 	for (let index = 0; index < grants.length; index++) {

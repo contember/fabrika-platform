@@ -558,7 +558,11 @@ pass a recording one); `Database.fromEngine` takes another engine (`openSqlite`)
 ## Relations, conditions and reveals (ADR-0073)
 
 A relation grant is application data the layer reads on every statement; IAM only marks the actions a role holds
-through a relation (`~rel`, `@fabrika/auth-core`). `authority.ts` builds every predicate a capability scopes
+through a relation (`~rel` anywhere, `~relin` inside a node, `@fabrika/auth-core`). A capability carries each as a
+`RelationHold`; one held inside a node narrows every term of the relation at a table to its own column for the node's
+dimension (`(<term> and (T.<column> in (<nodes>)))`), and a table with no such column gets no term from it
+(`relationTerms`), so a reveal above the node reaches nothing. `holdingRowLocked` holds the source and reveal rows to
+the same column, and `holdsThrough` parses each hold before it compares. `authority.ts` builds every predicate a capability scopes
 (`refScope`, `viewScope`, `relationTerms`, `memberTerms`, `conditioned`), `conditions.ts` parses a condition (browser-safe, no Kysely) and
 `condition-nodes.ts` builds its predicate. The guard admits exactly these subquery shapes and nothing else.
 

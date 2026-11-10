@@ -30,7 +30,7 @@ import { unixNow } from '../repositories/sql'
 import { authorityDeadline, type HeldEntry, resolveAuthorityAt } from '../resolve'
 import { BUILTIN_ROLES } from '../roles'
 import type { Services } from '../services'
-import { parseStoredPermissions, parseStoredVia } from '../stored-permissions'
+import { delegatedActions, parseStoredPermissions } from '../stored-permissions'
 import { fail } from './context'
 import { IAM_APP } from './router'
 
@@ -102,13 +102,6 @@ async function grantableRoles(admin: PeopleAdministrator, administered: Administ
 		role.member_scope === null && !Object.hasOwn(BUILTIN_ROLES, role.role_key)
 		&& delegatedActions(role).every((action) => permits(administered.permissions, action))
 	)
-}
-
-/** Every action a grant of `role` carries: its own, and each one it holds through a relation (`via`). */
-function delegatedActions(role: RoleRow): string[] {
-	const actions = parseStoredPermissions(role.permissions)
-	for (const held of Object.values(parseStoredVia(role.via))) actions.push(...held)
-	return actions
 }
 
 async function grantableRole(admin: PeopleAdministrator, administered: AdministeredApp, roleKey: string): Promise<RoleRow> {

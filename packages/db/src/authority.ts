@@ -4,7 +4,7 @@
 
 import { AndNode, BinaryOperationNode, type OperationNode, OperatorNode, ParensNode, ValueNode } from 'kysely'
 import { ownEntry } from './builtins'
-import type { ContainerGrant, RefGrant, WithinGrant } from './capability'
+import type { ContainerGrant, RefGrant, RelationHold, WithinGrant } from './capability'
 import { conditionNode, subquery } from './condition-nodes'
 import type { ConditionModel } from './conditions'
 import { CapabilityError } from './errors'
@@ -27,6 +27,11 @@ export interface LayerRelation extends RelationSource {
 	readonly reveals: readonly RevealModel[]
 	/** The actions some table's `relationWhen` narrows the relation for: it holds them only on the rows that condition admits. */
 	readonly narrowed: readonly string[]
+	/**
+	 * The source's and each reveal table's column for every dimension a row of it lies at, by table: where a hold inside
+	 * a node finds whether a row that holds a destination lies inside that node.
+	 */
+	readonly placed: Readonly<Record<string, Readonly<Record<string, string>>>>
 }
 
 /** Every relation of the layer, by name, with its source table. */
@@ -80,7 +85,7 @@ function relationNodes(source: RelationSource, principal: string, now: Date): Op
 	return subquery(source.table, source.node, allOf([namesPrincipal(source, principal), ...activeRow(source, now)]))
 }
 
-function isIn(table: string, name: string, nodes: OperationNode): OperationNode {
+export function isIn(table: string, name: string, nodes: OperationNode): OperationNode {
 	return BinaryOperationNode.create(column(table, name), OperatorNode.create('in'), nodes)
 }
 
@@ -133,18 +138,29 @@ export function heldThrough(action: string): PathRule {
  * S.<principal> = $me and <active>)` where `model` lies at a node of the relation's dimension, and one
  * `T.<ancestor> in (<revealed nodes>)` per reveal of `action` to an ancestor `model` lies at. Empty where neither holds.
  * It also follows the secondary paths `paths` admits: the column `model` reaches the relation's dimension through, and
- * the reveals matched through one. Where `model`'s `relationWhen` narrows the relation for `action`, each term is
- * `(<term> and (<condition>))`, so no builder of a relation's reach leaves the condition out.
+ * the reveals matched through one. A hold inside a node narrows each term to the rows inside it, by `model`'s own
+ * column for the hold's dimension, and reaches none where `model` has no such column. Where `model`'s `relationWhen`
+ * narrows the relation for `action`, each term carries that condition too: `(<term> and (<narrowing>))`, so no builder
+ * of a relation's reach leaves either out.
  */
 export function relationTerms(
 	relations: RelationSources,
 	model: TableModel,
-	relation: string,
+	hold: RelationHold,
 	principal: string,
 	action: string,
 	now: Date,
 	paths: PathRule,
 ): readonly OperationNode[] {
+	const relation = hold.relation
+	const narrowing: OperationNode[] = []
+	if (hold.inside !== null) {
+		const column = nodeColumnOf(model, hold.inside.dimension)
+		if (column === undefined || hold.inside.values.length === 0) {
+			return []
+		}
+		narrowing[narrowing.length] = isIn(model.name, column, valueList(hold.inside.values))
+	}
 	const source = relationSource(relations, relation)
 	const at = nodeColumnOf(model, source.dimension)
 	const terms: OperationNode[] = at === undefined ? [] : [isIn(model.name, at, relationNodes(source, principal, now))]
@@ -164,15 +180,30 @@ export function relationTerms(
 		}
 	}
 	const condition = relationCondition(model, relation, action)
-	if (condition === undefined) {
+	if (condition !== undefined) {
+		narrowing[narrowing.length] = narrowing.length === 0
+			? conditionNode(model.name, condition, now)
+			: ParensNode.create(conditionNode(model.name, condition, now))
+	}
+	if (narrowing.length === 0) {
 		return terms
 	}
 	const narrowed: OperationNode[] = []
 	for (let index = 0; index < terms.length; index++) {
 		const term = terms[index]
-		if (term !== undefined) narrowed[narrowed.length] = narrowedTerm(term, conditionNode(model.name, condition, now))
+		if (term !== undefined) narrowed[narrowed.length] = narrowedTerm(term, allOf(narrowing))
 	}
 	return narrowed
+}
+
+/** `holds` without those of a relation `narrowed` names: the holds no `relationWhen` narrows. */
+export function holdsBesides(holds: readonly RelationHold[], narrowed: readonly string[]): readonly RelationHold[] {
+	const kept: RelationHold[] = []
+	for (let index = 0; index < holds.length; index++) {
+		const hold = holds[index]
+		if (hold !== undefined && !includes(narrowed, hold.relation)) kept[kept.length] = hold
+	}
+	return kept
 }
 
 /** The condition `model`'s `relationWhen` puts on the rows `relation` reaches for `action`, if any. */
@@ -352,7 +383,8 @@ export function gateTerms(reach: LayerReach, model: TableModel, grant: RefGrant,
 		}
 	}
 	for (let index = 0; index < grant.relations.length; index++) {
-		add(relationTerms(reach.relations, model, grant.relations[index] ?? '', grant.principal, grant.action, now, paths))
+		const hold = grant.relations[index]
+		if (hold !== undefined) add(relationTerms(reach.relations, model, hold, grant.principal, grant.action, now, paths))
 	}
 	if (grant.revealing.length > 0) {
 		add(revealingTerms(reach.members, model, `the Ref of ${grant.dimension}`, grant.action, grant.revealing, now, paths))

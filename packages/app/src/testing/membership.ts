@@ -49,7 +49,7 @@ import {
 	type RevokeMemberResult,
 	type Scope,
 } from '@fabrika/auth-core'
-import type { LabelledTestCaller, TestCaller, TestScope } from './caller'
+import { type LabelledTestCaller, relationEntries, type TestCaller, type TestScope } from './caller'
 
 /** A role a test caller holds in one scope value, or globally (`null`). */
 export interface TestMembership {
@@ -411,10 +411,12 @@ function membershipChanges(artifact: ContractArtifact, callers: DirectoryCallers
 	}
 }
 
-/** The permissions a role grants in `scope`, as IAM resolves a membership. */
+/** The permissions a role grants in `scope`, its relations' included, as IAM resolves a membership. */
 function roleEntries(artifact: ContractArtifact, held: TestMembership): PermissionEntry[] {
 	const scope = held.scope === null ? null : { type: held.scope.type, value: held.scope.value }
-	return (artifact.roles[held.role]?.grants ?? []).map((action) => ({ action, scope, source: 'grant' }))
+	const role = artifact.roles[held.role]
+	const entries: PermissionEntry[] = (role?.grants ?? []).map((action) => ({ action, scope, source: 'grant' }))
+	return role === undefined || role.external === true ? entries : [...entries, ...relationEntries(role.via, scope)]
 }
 
 const samePermission = (left: PermissionEntry, right: PermissionEntry): boolean =>
@@ -521,7 +523,8 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 
 	/**
 	 * Could `caller` give `role` in `scope`: it holds an assigning role — there, or an application-wide role globally —
-	 * and every action the role grants there.
+	 * and every action the role grants there, through a relation included, by a plain grant (`permits` reads no `~`
+	 * entry).
 	 */
 	const roleProblem = (caller: TestCaller, scope: Scope, role: string): MembershipFailure | null => {
 		const declared = Object.hasOwn(artifact.roles, role) ? artifact.roles[role] : undefined
@@ -536,7 +539,8 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 		const held = [...changes.rolesOf(caller.id, scope), ...appWide.map((grant) => grant.role)]
 		if (!declared.member.assignableBy.some((assigner) => held.includes(assigner))) return NOT_ALLOWED
 		const perms = [...permsOf(caller)]
-		return declared.grants.every((action) => permits(perms, action, scope)) ? null : NOT_ALLOWED
+		const delegated = [...declared.grants, ...Object.values(declared.via ?? {}).flat()]
+		return delegated.every((action) => permits(perms, action, scope)) ? null : NOT_ALLOWED
 	}
 
 	const requestDelegation = (input: RequestDelegationInput): RequestDelegationResult => {

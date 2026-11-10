@@ -524,18 +524,29 @@ class ArtifactBuilder {
 	}
 
 	/**
-	 * A role's `via`: known relations and actions, on an application-wide internal role only (ADR-0051 keeps an
-	 * external principal to its membership roles), and never an action that inserts a relation's rows, so a relation
-	 * never delegates itself onward.
+	 * A role's `via`: known relations and actions, on an internal role only (ADR-0051 keeps an external principal to its
+	 * membership roles' own grants), and never an action that inserts a relation's rows, so a relation never delegates
+	 * itself onward. A membership role holds a relation inside the value it is held in, so the relation's dimension is
+	 * the role's or lies inside it.
 	 */
 	#via(where: string, role: RoleDeclaration): Record<string, readonly string[]> | undefined {
 		if (role.via === undefined) {
 			return undefined
 		}
-		if (role.member !== undefined || role.external === true) {
-			this.#problem(where, 'holds actions via a relation and is a membership or external role: only an application-wide role declares via')
+		if (role.external === true) {
+			this.#problem(where, 'holds actions via a relation and is an external role: an external principal holds no relation')
 		}
 		const relations = this.#contract.relations ?? {}
+		const member = role.member?.scope
+		for (const relation of Object.keys(role.via)) {
+			const dimension = relations[relation]?.dimension
+			if (member !== undefined && dimension !== undefined && !this.#lies(dimension, member)) {
+				this.#problem(
+					where,
+					`holds actions via '${relation}', whose dimension '${dimension}' is not '${member}' and does not lie inside it: a membership role holds a relation inside the value it is held in`,
+				)
+			}
+		}
 		const assigning = new Set<string>()
 		for (const policy of Object.values(this.#tables)) {
 			if (policy.confers === undefined) continue
@@ -560,6 +571,18 @@ class ArtifactBuilder {
 			via[relation] = [...actions]
 		}
 		return via
+	}
+
+	/** Whether `dimension` is `ancestor` or lies inside it, by the contract's declared containment. */
+	#lies(dimension: string, ancestor: string): boolean {
+		const seen: string[] = []
+		let at: string | undefined = dimension
+		while (at !== undefined && !seen.includes(at)) {
+			if (at === ancestor) return true
+			seen.push(at)
+			at = this.#contract.dimensions[at]?.in
+		}
+		return false
 	}
 
 	// ── Mounts ──────────────────────────────────────────────────────────────────────────────────

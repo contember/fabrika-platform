@@ -5,6 +5,7 @@ import {
 	type PermissionSource,
 	type PrincipalAffiliation,
 	RELATION_SCOPE_TYPE,
+	relationInsideScope,
 	type RoleDef,
 	type RoleSource,
 	type Scope,
@@ -68,6 +69,14 @@ export interface HeldEntry {
 	until: number | null
 }
 
+/** The `~relin` scope of `relation` inside `scope`, or null when a name holds the `:` the entry's value cannot carry. */
+function insideScope(relation: string, scope: Scope): Scope | null {
+	if (relation.includes(':') || scope.type.includes(':')) {
+		return null
+	}
+	return relationInsideScope({ relation, dimension: scope.type, node: scope.value })
+}
+
 /**
  * Union the permission sources, expanding role keys into permission patterns via the
  * (app-aware) role source and adding inline grant patterns directly, then dedupe.
@@ -127,12 +136,15 @@ export function computeAuthority(inputs: ResolutionInputs, roles: RoleSource): R
 		for (const permission of role.permissions) {
 			add(permission, scope, source, until)
 		}
-		// A relation holds actions through a GLOBAL grant only: a scoped grant would hold them at nodes outside its scope.
-		if (scope === null && !external && role.member === undefined) {
-			for (const [relation, actions] of Object.entries(role.via ?? {})) {
-				for (const action of actions) {
-					add(action, { type: RELATION_SCOPE_TYPE, value: relation }, source, until)
-				}
+		// A global grant holds a relation anywhere (`~rel`); a grant at a node holds it only inside that node (`~relin`),
+		// never `~rel`, which would hold it at nodes outside the grant. An external principal holds no relation (ADR-0051).
+		if (external || role.external === true) {
+			return
+		}
+		for (const [relation, actions] of Object.entries(role.via ?? {})) {
+			const held = scope === null ? { type: RELATION_SCOPE_TYPE, value: relation } : insideScope(relation, scope)
+			for (const action of held === null ? [] : actions) {
+				add(action, held, source, until)
 			}
 		}
 	}

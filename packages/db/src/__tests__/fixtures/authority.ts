@@ -7,12 +7,21 @@ import type {
 	LeaseFence,
 	Ref,
 	RefGrant,
+	RelationHold,
 	RowGrant,
 	RowRef,
 	Within,
 	WithinGrant,
 } from '../../capability'
 import { CapabilityError } from '../../errors'
+
+/** A relation held anywhere by its name, or a hold as written: what a test hands a capability. */
+export type TestHold = string | RelationHold
+
+/** `holds` as the capability carries them: a name is a relation held anywhere (`~rel`). */
+export function holdsOf(holds: readonly TestHold[]): readonly RelationHold[] {
+	return holds.map((hold) => (typeof hold === 'string' ? { relation: hold, inside: null } : hold))
+}
 
 class TestRef<D extends string, A extends string> implements Ref<D, A> {
 	declare readonly '~capability': { readonly kind: 'ref'; readonly dimension: D; readonly action: A }
@@ -103,12 +112,22 @@ export class TestAuthority implements CapabilityAuthority {
 		action: A,
 		id: string,
 		chain: Readonly<Record<string, string>> = {},
-		relations: readonly string[] = [],
+		relations: readonly TestHold[] = [],
 		revealing: readonly ContainerGrant[] = [],
 		paths: readonly ContainerGrant[] = [],
 	): Ref<D, A> {
 		return new TestRef(
-			{ kind: 'ref', dimension, action, principal: this.#principal, id, chain: new Map(Object.entries(chain)), relations, revealing, paths },
+			{
+				kind: 'ref',
+				dimension,
+				action,
+				principal: this.#principal,
+				id,
+				chain: new Map(Object.entries(chain)),
+				relations: holdsOf(relations),
+				revealing,
+				paths,
+			},
 			this,
 		)
 	}
@@ -119,10 +138,20 @@ export class TestAuthority implements CapabilityAuthority {
 		values: readonly string[] | 'all',
 		containers: readonly ContainerGrant[] = [],
 		contained: readonly ContainerGrant[] = [],
-		relations: readonly string[] = [],
+		relations: readonly TestHold[] = [],
 		revealing: readonly ContainerGrant[] = [],
 	): Within<D, A> {
-		return new TestWithin({ kind: 'within', dimension, action, principal: this.#principal, values, containers, contained, relations, revealing }, this)
+		return new TestWithin({
+			kind: 'within',
+			dimension,
+			action,
+			principal: this.#principal,
+			values,
+			containers,
+			contained,
+			relations: holdsOf(relations),
+			revealing,
+		}, this)
 	}
 
 	/** The capability of an `app` endpoint: `action` held as a global grant. */

@@ -45,6 +45,7 @@ import {
 	NOTES_SCHEMA,
 	ORIGIN,
 	type Person,
+	RELATION_SCHEMA,
 } from './helpers/membership'
 
 // Every membership invariant of this package's CLAUDE.md (ADR-0012 §6), the share links and the
@@ -353,6 +354,24 @@ describe('members.assign', () => {
 			.toMatchObject({
 				ok: false,
 			})
+	})
+})
+
+describe('a membership role that holds actions through a relation', () => {
+	test("is given only by whoever holds its via actions there by a grant, and its holder's token carries them inside the value", async () => {
+		const f = await fixture()
+		expect((await f.putSchema(RELATION_SCHEMA)).status).toBe(200)
+		const owner = await f.person('owner')
+		const scope = await workspaceOf(f, owner)
+		const lead = await f.person('lead')
+		expect(await assign(f, owner, scope, 'lead', { principalId: lead.id })).toMatchObject({ ok: true })
+		const held = parseAccessClaims(decodeJwt(await lead.token()))?.perms ?? []
+		expect(held).toContainEqual({ action: 'notes.write', scope: { type: '~relin', value: `author:workspace:${scope.value}` }, source: 'grant' })
+		expect(held.some((entry) => entry.action === 'notes.write' && entry.scope?.type === 'workspace')).toBe(false)
+		// The lead holds notes.write there only through the relation, which gives it nothing to delegate.
+		const target = await f.person('target')
+		expect(await assign(f, lead, scope, 'assistant', { principalId: target.id })).toEqual({ ok: false, reason: 'not_allowed' })
+		expect(await assign(f, owner, scope, 'assistant', { principalId: target.id })).toMatchObject({ ok: true })
 	})
 })
 

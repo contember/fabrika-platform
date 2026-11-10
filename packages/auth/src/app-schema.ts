@@ -279,11 +279,19 @@ export const appSchemaSchema = appSchemaShape.superRefine((schema, ctx) => {
 			}
 		}
 		for (const [relation, actions] of Object.entries(role.via ?? {})) {
-			if (role.member !== undefined || role.external === true) {
+			if (role.external === true) {
 				ctx.addIssue({
 					code: 'custom',
 					path: ['roles', key, 'via'],
-					message: `role ${quote(key)} holds actions via a relation and is a membership or external role`,
+					message: `role ${quote(key)} holds actions via a relation and is an external role`,
+				})
+			}
+			if (relation.includes(':')) {
+				// A grant at a value carries `~relin` `<relation>:<dimension>:<value>`, which a ':' in the name would misread.
+				ctx.addIssue({
+					code: 'custom',
+					path: ['roles', key, 'via', relation],
+					message: `role ${quote(key)} holds actions via ${quote(relation)}, a relation name with ':'`,
 				})
 			}
 			for (const [index, action] of actions.entries()) {

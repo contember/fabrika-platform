@@ -1,7 +1,7 @@
 // A webhook binding outlives the request that made it, so it binds only with a Ref an IAM grant holds: a Ref held
 // through a relation, a member reveal or a secondary path is re-read at every statement, and a binding never is.
 
-import type { ContainerGrant } from '@fabrika/db/capability'
+import type { ContainerGrant, RelationHold } from '@fabrika/db/capability'
 import { describe, expect, test } from 'bun:test'
 import { CapabilityRefusedError, createCapabilityIssuer, RequestFrame, runInRequest } from '../implement/capability'
 import { webhookBindings } from '../implement/webhook'
@@ -9,7 +9,7 @@ import { webhookBindings } from '../implement/webhook'
 const team: ContainerGrant = { dimension: 'team', values: ['t1'] }
 
 interface Held {
-	readonly relations?: readonly string[]
+	readonly relations?: readonly RelationHold[]
 	readonly revealing?: readonly ContainerGrant[]
 	readonly paths?: readonly ContainerGrant[]
 }
@@ -47,7 +47,8 @@ async function bindHeld(held: Held): Promise<unknown> {
 
 describe('a webhook binding', () => {
 	const held: [string, Held][] = [
-		['a relation', { relations: ['maintainer'] }],
+		['a relation', { relations: [{ relation: 'maintainer', inside: null }] }],
+		['a relation held inside a node', { relations: [{ relation: 'maintainer', inside: { dimension: 'org', values: ['o1'] } }] }],
 		['a member reveal', { revealing: [team] }],
 		['a secondary path', { paths: [team] }],
 	]

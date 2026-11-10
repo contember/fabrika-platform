@@ -66,9 +66,10 @@ project_members: {
 ```
 
 - **IAM carries only a marker.** A global grant of a role with `via` carries
-  `{ action, scope: { type: '~rel', value: <relation> }, source: 'grant' }` for each of its relation actions. Scope
-  types that start with `~` are reserved: a stored grant naming one grants nothing, and no key can freeze one. Every
-  auth-core release in the window keeps the entry and reads it neither as a global grant nor as a scope value.
+  `{ action, scope: { type: '~rel', value: <relation> }, source: 'grant' }` for each of its relation actions; a grant
+  at a node carries `~relin` instead (section 4). Scope types that start with `~` are reserved: a stored grant naming
+  one grants nothing, and no key can freeze one. Every auth-core release in the window keeps either entry and reads it
+  neither as a global grant nor as a scope value.
 - **The data layer reads the relation on every statement.** A relation reaches a row's node while a source row names
   the caller there, is unexpired, and satisfies the relation's own `when`:
   `T.node in (select S.node from S where S.principal = $me and (S.expires is null or S.expires > $now) and <S.when>)`.
@@ -141,12 +142,35 @@ a source row are written by their own table's writers, outside the delegation bo
 Widening is a separate mechanism (`admits`, a step of the [coverage roadmap](../ideas/acl-coverage-roadmap.md)), and
 it is not part of `when`.
 
-### 4. Relations are for internal principals, through a global grant
+### 4. Relations are for internal principals, anywhere or inside the grant's node
 
-`via` is allowed only on a global, internal, non-membership role. IAM gives an external principal and a scoped grant
-no relation entry. ADR-0051 is unchanged: a person from outside the organization does not hold a relation until a
-later revision of this record says how. A relation held inside the node of a scoped grant (through-at-node) is a step
-of the [coverage roadmap](../ideas/acl-coverage-roadmap.md).
+`via` is allowed on an internal role, application-wide or membership, and never on an external one. ADR-0051 is
+unchanged: IAM gives an external principal no relation entry. A global grant of the role holds its relations anywhere
+(`~rel`). A grant at a node, a scoped grant or a membership role in the value it is held in, holds them only inside
+that node: it carries `{ action, scope: { type: '~relin', value: '<relation>:<dimension>:<node>' }, source: 'grant' }`
+for each relation action, and never `~rel`.
+
+- **The value is parsed from the left.** A relation and a dimension name hold no `:` (the build and IAM's schema refuse
+  one), so the relation ends at the first `:` and the dimension at the second; the node is the rest, verbatim, and may
+  hold `:`. IAM gives no entry for a name that holds one.
+- **Inside is strict.** The data layer narrows each term of the relation, its reveals and its secondary paths, to rows
+  whose own column for the grant's dimension names the node: `(<term> and (T.<column> in (<nodes>)))`. A table with no
+  column for that dimension gets no term from the entry, and neither does a reveal to a dimension above the node: its
+  rows lie at the node's ancestor, not inside the node. The framework counts an entry only where the relation's
+  dimension, and a reveal's, is the grant's dimension or lies inside it; `on` and `in` ask the database for the object
+  row with that comparison, and a `Ref` carries the node its object lies in.
+- **A membership role's relation lies inside its value.** Each relation of its `via` has the role's own dimension or one
+  inside it; the build refuses any other.
+- **Assigning the role is held to a plain grant.** IAM gives a membership role with `via` only to an assigner that holds
+  every action of the role at the node, its relation actions included, through a grant: `permits` reads no `~` entry,
+  so an action held through a relation does not count.
+- **An older reader fails closed.** An older auth-core keeps the entry, and the proxy's requirement counts it as it
+  counts `~rel`. The scope type names no dimension, so no release reads it as a value or a global grant, and a
+  framework before `0.9.0-dev.14` reads only `~rel`, so the entry holds nothing there.
+
+Scoped grants of a role with `via` that exist before the IAM upgrade carry `~relin` after it, with no artifact change:
+their reach grows from nothing to the relation's rows inside their node. The owner accepted this widening; the
+framework migration guide says so.
 
 ### 5. A platform release publishes relation fields only to a framework that enforces them
 
@@ -327,8 +351,9 @@ narrows, a removed or changed one widens.
   narrows, a removed or changed one widens.
 - **Rollout of an existing installation.** IAM migration `0029_role_via` adds a nullable `roles.via`. Every existing
   role reads as having none, and the next schema reconcile writes it for a role that declares it. An older IAM never
-  reads the column and signs no `~rel`, so a relation grant fails closed until IAM is upgraded. No generated
-  installation file, environment variable or provider state changes.
+  reads the column and signs no `~rel`, so a relation grant fails closed until IAM is upgraded. IAM migration
+  `0030_membership_role_via` lets a membership role carry `via`; after it, IAM signs `~relin` for every scoped grant of
+  a role with `via` (section 4). No generated installation file, environment variable or provider state changes.
 
 ## Alternatives considered
 
