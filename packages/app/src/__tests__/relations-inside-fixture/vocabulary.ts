@@ -8,10 +8,12 @@ export const vocabulary = defineVocabulary({
 		'projects.write': 'Rename projects',
 		'members.assign': 'Add a member to a project',
 	},
-	relations: { member: { dimension: 'project' } },
+	relations: { member: { dimension: 'project' }, colleague: { dimension: 'org' } },
 	roles: {
 		owner: { grants: ['projects.read', 'members.assign'], member: { scope: 'org', assignableBy: ['owner'] } },
 		// Held in an organization, it reaches a project of that organization only where a member row names its holder.
 		lead: { grants: [], member: { scope: 'org', assignableBy: ['owner'] }, via: { member: ['projects.read', 'projects.write'] } },
+		// Granted in a project, it holds nothing: its relation lies at the organization, above the node.
+		visitor: { grants: [], via: { colleague: ['projects.read'] } },
 	},
 })

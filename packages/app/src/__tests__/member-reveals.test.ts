@@ -55,12 +55,19 @@ const projectHook = app.webhook('/hooks/projects', {
 })
 	.handle(() => {})
 
-/** A binding outlives its request, so `on` handing it a Ref held through a member reveal is refused. */
+/** A binding outlives its request, so `on` or `in` handing it a Ref held through a member reveal is refused. */
 const hooks = app.group({ callers: ['human'] }, (r) => ({
 	project: r.mutation({
 		input: z.strictObject({ id: z.string().min(1) }),
 		output: WebhookSecret,
 		access: { action: 'projects.rename', on: 'project', from: 'id' },
+		binds: 'projectHook',
+	})
+		.handle(({ ctx }) => ctx.webhooks('projectHook').bind(ctx.target, 'account')),
+	projectIn: r.mutation({
+		input: z.strictObject({ id: z.string().min(1) }),
+		output: WebhookSecret,
+		access: { action: 'projects.rename', in: 'project', from: 'id' },
 		binds: 'projectHook',
 	})
 		.handle(({ ctx }) => ctx.webhooks('projectHook').bind(ctx.target, 'account')),
@@ -96,19 +103,19 @@ describe('a member reveal through boot', () => {
 		return createClient(contract, 'api', { fetch: kit.browser(kit.testCaller(grants, { id: 'user:member' })) }).hooks
 	}
 
-	test('on refuses to bind a webhook with a Ref it minted through a member reveal', async () => {
+	test.each(['project', 'projectIn'] as const)('%s refuses to bind a webhook with a Ref it minted through a member reveal', async (procedure) => {
 		const log = spyOn(console, 'error').mockImplementation(() => {})
 		try {
-			await expect(binderOf([{ action: 'projects.rename', scope: { type: 'step', value: 's1' } }]).project({ id: 'p1' })).rejects.toMatchObject({
+			await expect(binderOf([{ action: 'projects.rename', scope: { type: 'step', value: 's1' } }])[procedure]({ id: 'p1' })).rejects.toMatchObject({
 				httpStatus: 500,
 			})
 			const refusals = log.mock.calls.map((call) => String(call[0])).filter((line) => line.includes('conditional_binding'))
-			expect(refusals).toEqual([expect.stringContaining('api.hooks.project')])
+			expect(refusals).toEqual([expect.stringContaining(`api.hooks.${procedure}`)])
 		} finally {
 			log.mockRestore()
 		}
 		// The same project binds with a Ref an IAM grant holds.
-		expect(await binderOf([{ action: 'projects.rename', scope: { type: 'project', value: 'p1' } }]).project({ id: 'p1' })).toMatchObject({
+		expect(await binderOf([{ action: 'projects.rename', scope: { type: 'project', value: 'p1' } }])[procedure]({ id: 'p1' })).toMatchObject({
 			url: expect.any(String),
 		})
 	})

@@ -85,6 +85,15 @@ describe('a relation held inside an organization, through boot', () => {
 		expect(await lead.rename({ id: 'p1', name: 'renamed' })).toEqual({ done: true })
 	})
 
+	test('a role granted in a project holds nothing through a relation that lies at the organization above it', async () => {
+		const kit = testKit(serve(contract, { database: scoped(tables) }), { database: fresh.database })
+		const visitor = (scope: ReturnType<typeof kit.scope>) =>
+			createClient(contract, 'api', { fetch: kit.browser(kit.testCaller([{ role: 'visitor', scope }], { id: 'user:visitor' })) }).projects
+		// A colleague row names the visitor in o1: granted there, the role reaches o1's projects.
+		expect(await visitor(kit.scope('org', 'o1')).get({ id: 'p1' })).toEqual({ name: 'one' })
+		await expect(visitor(kit.scope('project', 'p1')).get({ id: 'p1' })).rejects.toMatchObject({ httpStatus: 404 })
+	})
+
 	test('a member row in another organization reaches nothing', async () => {
 		const { lead, owner } = world()
 		await owner.assign({ id: 'p3', principal: 'user:lead' })

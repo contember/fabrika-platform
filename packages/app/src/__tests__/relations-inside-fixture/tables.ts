@@ -4,12 +4,18 @@ import { vocabulary } from './vocabulary'
 
 export interface DB {
 	orgs: { id: string; name: string }
+	org_members: { id: string; org_id: string; principal_id: string }
 	projects: { id: string; org_id: string; name: string; version: number }
 	project_members: { id: string; project_id: string; org_id: string; principal_id: string }
 }
 
 export const columns: TypedColumnList<DB> = {
 	orgs: { columns: ['id', 'name'], foreignKeys: [], notNull: ['id', 'name'] },
+	org_members: {
+		columns: ['id', 'org_id', 'principal_id'],
+		foreignKeys: [{ columns: ['org_id'], table: 'orgs', references: ['id'] }],
+		notNull: ['id', 'org_id', 'principal_id'],
+	},
 	projects: {
 		columns: ['id', 'org_id', 'name', 'version'],
 		foreignKeys: [{ columns: ['org_id'], table: 'orgs', references: ['id'] }],
@@ -24,6 +30,7 @@ export const columns: TypedColumnList<DB> = {
 
 export const policies = {
 	orgs: { scope: { dimension: 'org' }, actions: { read: 'projects.read' } },
+	org_members: { scope: { child: 'orgs' }, actions: { read: 'projects.read' }, confers: { colleague: { principal: 'principal_id' } } },
 	projects: {
 		scope: { dimension: 'project' },
 		actions: { read: 'projects.read', update: 'projects.write' },

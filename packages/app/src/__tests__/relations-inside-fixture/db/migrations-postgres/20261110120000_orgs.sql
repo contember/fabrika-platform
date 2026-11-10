@@ -3,6 +3,11 @@ CREATE TABLE orgs (
 	id uuid PRIMARY KEY,
 	name text NOT NULL
 );
+CREATE TABLE org_members (
+	id text PRIMARY KEY,
+	org_id uuid NOT NULL REFERENCES orgs (id),
+	principal_id text NOT NULL
+);
 CREATE TABLE projects (
 	id text PRIMARY KEY,
 	org_id uuid NOT NULL REFERENCES orgs (id),
@@ -18,6 +23,7 @@ CREATE TABLE project_members (
 	FOREIGN KEY (project_id, org_id) REFERENCES projects (id, org_id) ON DELETE CASCADE
 );
 INSERT INTO orgs (id, name) VALUES ('0193a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a01', 'one'), ('0193a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a02', 'two');
+INSERT INTO org_members (id, org_id, principal_id) VALUES ('c1', '0193a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a01', 'user:visitor');
 INSERT INTO projects (id, org_id, name, version) VALUES
 	('p1', '0193a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a01', 'one', 1),
 	('p2', '0193a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a01', 'two', 1),

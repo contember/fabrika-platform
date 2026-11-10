@@ -66,12 +66,19 @@ const Event = z.strictObject({ id: z.string() })
 const taskHook = app.webhook('/hooks/tasks', { scheme: { hmac: signedBody }, boundTo: 'task', actions: ['tasks.write'], input: Event })
 	.handle(() => {})
 
-/** A binding outlives its request, so `on` handing it a Ref held through a path is refused. */
+/** A binding outlives its request, so `on` or `in` handing it a Ref held through a path is refused. */
 const hooks = app.group({ callers: ['human'] }, (r) => ({
 	task: r.mutation({
 		input: z.strictObject({ id: z.string().min(1) }),
 		output: WebhookSecret,
 		access: { action: 'tasks.write', on: 'task', from: 'id' },
+		binds: 'taskHook',
+	})
+		.handle(({ ctx }) => ctx.webhooks('taskHook').bind(ctx.target, 'account')),
+	taskIn: r.mutation({
+		input: z.strictObject({ id: z.string().min(1) }),
+		output: WebhookSecret,
+		access: { action: 'tasks.write', in: 'task', from: 'id' },
 		binds: 'taskHook',
 	})
 		.handle(({ ctx }) => ctx.webhooks('taskHook').bind(ctx.target, 'account')),
@@ -143,18 +150,18 @@ describe('a write path through boot', () => {
 		await expect(member.add({ project: 'p1', team: 't2', title: 'not a member' })).rejects.toMatchObject({ httpStatus: 409 })
 	})
 
-	test('on refuses to bind a webhook with a Ref it minted through a write path', async () => {
+	test.each(['task', 'taskIn'] as const)('%s refuses to bind a webhook with a Ref it minted through a write path', async (procedure) => {
 		const log = spyOn(console, 'error').mockImplementation(() => {})
 		try {
-			await expect(binderOf([atTeam('tasks.write', 't1')]).task({ id: 'k1' })).rejects.toMatchObject({ httpStatus: 500 })
+			await expect(binderOf([atTeam('tasks.write', 't1')])[procedure]({ id: 'k1' })).rejects.toMatchObject({ httpStatus: 500 })
 			const refusals = log.mock.calls.map((call) => String(call[0])).filter((line) => line.includes('conditional_binding'))
-			expect(refusals).toEqual([expect.stringContaining('api.hooks.task')])
+			expect(refusals).toEqual([expect.stringContaining(`api.hooks.${procedure}`)])
 		} finally {
 			log.mockRestore()
 		}
 		// The same task binds with a Ref an IAM grant holds.
 		const onTask: Grant = { action: 'tasks.write', scope: { type: 'task', value: 'k1' } }
-		expect(await binderOf([onTask]).task({ id: 'k1' })).toMatchObject({ url: expect.any(String) })
+		expect(await binderOf([onTask])[procedure]({ id: 'k1' })).toMatchObject({ url: expect.any(String) })
 	})
 
 	test('a grant at a team reads the projects of its tasks, and keeps its holder from naming that team in a new task', async () => {

@@ -1227,6 +1227,27 @@ describe('S8: a grant given through delegation ends no later than the authority 
 		expect(await expiryOf(f, staff, scope, 'editor')).toBe(until)
 	})
 
+	test("a role holding actions through a relation ends no later than the assigner's grant of those actions", async () => {
+		const f = await fixture()
+		expect((await f.putSchema(RELATION_SCHEMA)).status).toBe(200)
+		const owner = await f.person('owner')
+		const scope = await workspaceOf(f, owner)
+		const lead = await f.person('lead')
+		expect(await assign(f, owner, scope, 'lead', { principalId: lead.id })).toMatchObject({ ok: true })
+		const until = T()
+		await f.repositories.grants.createGrant({
+			principalId: lead.id,
+			app: APP,
+			permissions: ['notes.write'],
+			scopeType: scope.type,
+			scopeValue: scope.value,
+			expiresAt: until,
+		})
+		const target = await f.person('target')
+		expect(await assign(f, lead, scope, 'assistant', { principalId: target.id })).toMatchObject({ ok: true })
+		expect(await expiryOf(f, target, scope, 'assistant')).toBe(until)
+	})
+
 	test('an assigner whose grants never expire gives a grant that never expires', async () => {
 		const f = await fixture()
 		const owner = await f.person('owner')

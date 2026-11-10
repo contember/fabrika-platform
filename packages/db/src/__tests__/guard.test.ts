@@ -270,6 +270,32 @@ describe('a scope held through relations or narrowed by a condition', () => {
 		const [node, context] = scopedBy(members(mine))
 		refuses(node, { ...context, subqueries: {} }, 'the scope predicate must be true')
 	})
+
+	test("a relation narrowed by its own condition passes as one branch of the reach: the relation's rows AND a parenthesized scope tree", () => {
+		const related = members(allOf([mine, unexpired]))
+		const narrowed = ParensNode.create(AndNode.create(related, ParensNode.create(open)))
+		for (const shape of [narrowed, anyOf([workspaces, narrowed]), allOf([equals('notes', 'id', 'n1'), narrowed])]) {
+			const [node, context] = scopedBy(shape)
+			expect(() => assertAllowedTree(node, context)).not.toThrow()
+		}
+	})
+
+	test('a narrowed relation is refused in any other shape: an OR in place of the AND, or a right side that is no scope tree', () => {
+		const related = members(allOf([mine, unexpired]))
+		const elsewhere = BinaryOperationNode.create(column('secrets', 'id'), OperatorNode.create('='), ValueNode.create('s1'))
+		const shapes = [
+			ParensNode.create(OrNode.create(related, ParensNode.create(open))),
+			anyOf([workspaces, ParensNode.create(OrNode.create(related, ParensNode.create(open)))]),
+			ParensNode.create(AndNode.create(related, ParensNode.create(everything()))),
+			ParensNode.create(AndNode.create(related, ParensNode.create(elsewhere))),
+			ParensNode.create(AndNode.create(related, open)),
+			ParensNode.create(AndNode.create(open, ParensNode.create(related))),
+		]
+		for (const shape of shapes) {
+			const [node, context] = scopedBy(shape)
+			refuses(node, context, 'the scope predicate must be true')
+		}
+	})
 })
 
 describe('a relation whose principal is reached through a to-one path', () => {
