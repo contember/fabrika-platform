@@ -26,6 +26,18 @@ export type RelationCheck = (relation: string, node: string, principal: string) 
  */
 export type RevealCheck = (relation: string, dimension: string, node: string, principal: string) => Promise<boolean>
 
+/**
+ * Of `values`, the caller's grants of `action` at nodes of `revealing`, those whose row reveals `node` of `dimension` to
+ * its members now: what a Ref held through member reveals is minted on, and carries.
+ */
+export type MemberRevealCheck = (
+	revealing: string,
+	values: readonly string[],
+	dimension: string,
+	node: string,
+	action: string,
+) => Promise<readonly string[]>
+
 /** What the framework writes itself: its own `fabrika_*` tables. Usable once bound. */
 export interface FrameworkTables {
 	readonly webhooks: WebhookTables
@@ -43,6 +55,7 @@ export interface ProvisionalBinding {
 	readonly locate: Locator
 	readonly relates: RelationCheck
 	readonly reveals: RevealCheck
+	readonly revealsToMembers: MemberRevealCheck
 	release(): void
 }
 

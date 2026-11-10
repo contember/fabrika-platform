@@ -29,6 +29,11 @@ export interface ContractDatabase {
 	relates?(relation: string, node: string, principal: string): Promise<boolean>
 	/** Whether a row `relation` reaches for `principal` reveals `node` of `dimension` now; none in a layer of the application's own. */
 	reveals?(relation: string, dimension: string, node: string, principal: string): Promise<boolean>
+	/**
+	 * Of `values`, the caller's grants of `action` at nodes of `revealing`, those whose row reveals `node` of `dimension`
+	 * to its members now; none in a layer of the application's own.
+	 */
+	revealsToMembers?(revealing: string, values: readonly string[], dimension: string, node: string, action: string): Promise<readonly string[]>
 }
 
 /** `scoped(tables)` of `@fabrika/db`, which `boot` binds, or a `ContractDatabase` of the application's own. */

@@ -636,6 +636,10 @@ through a relation (`~rel`, `@fabrika/auth-core`). `authority.ts` builds every p
   roles name in `via`), while the reveal's `when` admits the row. A reveal matched through `readThrough` on a table with
   an insert needs `assign` (`self` to let the writer name a node where it holds the relation), because the writer picks
   the node. An insert into a node no table owns rechecks the relation rows that hold its `Ref`.
-- **`memberReveals`** makes a grant at a row's own node hold the listed actions at its ancestor in `to`, for a
-  `Within`'s reads. A member-revealing row is never written unscoped or by `ctx.sql`, never moves, and its key is the
-  layer's, so no write revives a node a former member still holds.
+- **`memberReveals`** makes a grant at a row's own node hold the listed actions at its ancestor in `to`: for a
+  `Within`'s reads (`WithinGrant.revealing`), and for a `Ref` the framework mints through it (`RefGrant.revealing`, the
+  caller's grants at the revealing dimension), whose every statement requires the member term (`relationGate`,
+  `revealingTerms`), ORed with its relation terms. An insert under such a `Ref` locks its owned destination under the
+  term, or, into a node no table owns, a revealing row `FOR SHARE` (`lockHoldingRow`, `memberAddress`); none left is a
+  404. `revealsToMembers` is the binding `on` and `in` mint through. A member-revealing row is never written unscoped or
+  by `ctx.sql`, never moves, and its key is the layer's, so no write revives a node a former member still holds.

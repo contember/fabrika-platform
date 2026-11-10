@@ -329,7 +329,7 @@ function unownedTarget(site: DataSite, dimension: string): Record<string, unknow
 
 /** The predicate of the target object, over the whole chain its `Ref` carries. */
 function targetPredicate(context: TableContext, grant: RefGrant): OperationNode {
-	return refScope(context.relations, context.model, selfLinks(context.model), grant, new Date())
+	return refScope(context, context.model, selfLinks(context.model), grant, new Date())
 }
 
 function targetRow(
@@ -428,7 +428,7 @@ function containedRows(context: TableContext, site: DataSite, run: Runner, capab
 	return freeze({
 		list: bound(site, async (options?: unknown) => {
 			const grant = namedRef(context, capability, dimension)
-			const scope = refScope(context.relations, context.model, context.model.chain, grant, new Date())
+			const scope = refScope(context, context.model, context.model.chain, grant, new Date())
 			return listRows(context, run, scope, visibleFor(context.model, grant.action), options, [keyOf(context.model)], grant.action)
 		}),
 		insert: writing(

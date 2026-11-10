@@ -405,14 +405,14 @@ function contractDatabase(
 		return null
 	}
 	try {
-		const { locate, relates, reveals, release } = bindScopedDatabaseProvisionally(database, {
+		const { locate, relates, reveals, revealsToMembers, release } = bindScopedDatabaseProvisionally(database, {
 			database: connection,
 			capabilities,
 			readOnly: requestIsReadOnly,
 			...(projectWakes === undefined ? {} : { projectWakes }),
 		})
 		return {
-			database: { tables: database.tables, locate, relates, reveals },
+			database: { tables: database.tables, locate, relates, reveals, revealsToMembers },
 			framework: frameworkTablesOf(database),
 			data: dataAccessOf(database),
 			release,

@@ -41,6 +41,12 @@ export interface RefGrant {
 	 * statement of the Ref then also requires a row of one of them. Empty for a Ref an IAM grant holds.
 	 */
 	readonly relations: readonly string[]
+	/**
+	 * The caller's grants of the action at nodes whose rows reveal the object, or a container on its chain, to their
+	 * members (`memberReveals`), when no grant holds it: every statement of the Ref then also requires such a row, as
+	 * for `relations`. Empty for a Ref an IAM grant holds.
+	 */
+	readonly revealing: readonly ContainerGrant[]
 }
 
 /** The values of one container dimension in which the caller holds the action: `organization → [o1]`. */

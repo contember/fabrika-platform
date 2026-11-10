@@ -590,8 +590,9 @@ vocabulary (`packages/db/CLAUDE.md`).
   it names the caller at the object or a container on its chain, or reaches a row that reveals one of them for the
   action, now (`Ref`'s relations; empty for an IAM grant); `over` puts the relations into its `Within` beside the IAM
   values. An entry of a relation the contract does not declare counts for none. `memberReveals` adds the caller's
-  grants at nodes whose rows reveal the `over` dimension to their members. Every statement then re-reads the relation
-  rows (`@fabrika/db`'s CLAUDE.md), so the framework caches nothing about them.
+  grants at nodes whose rows reveal the `over` dimension to their members; `on` and `in` mint a `Ref` through such a
+  row (`#revealedOn`, the db's `revealsToMembers`) and carry the grants it matched (`Ref`'s revealing). Every statement
+  then re-reads the relation and revealing rows (`@fabrika/db`'s CLAUDE.md), so the framework caches nothing about them.
 - **An `attachment()` output answers a file, encoded by the framework only** (`implement/attachment.ts`). Its value
   is the zod schema of the rows' array, marked (`attachmentOf`), so the handler's types, projection and validation are
   a list's; `describeContract` describes it as that array beside `attachment`, and `buildArtifact` writes the row's

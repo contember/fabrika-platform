@@ -94,8 +94,12 @@ export class TestAuthority implements CapabilityAuthority {
 		id: string,
 		chain: Readonly<Record<string, string>> = {},
 		relations: readonly string[] = [],
+		revealing: readonly ContainerGrant[] = [],
 	): Ref<D, A> {
-		return new TestRef({ kind: 'ref', dimension, action, principal: this.#principal, id, chain: new Map(Object.entries(chain)), relations }, this)
+		return new TestRef(
+			{ kind: 'ref', dimension, action, principal: this.#principal, id, chain: new Map(Object.entries(chain)), relations, revealing },
+			this,
+		)
 	}
 
 	within<const D extends string, const A extends string>(

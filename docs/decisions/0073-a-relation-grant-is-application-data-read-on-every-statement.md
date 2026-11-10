@@ -173,6 +173,31 @@ term reads the container at every statement: `T.<link> in (select C.<key> from C
 Nothing is stamped on the row, so no write keeps a copy in step (see Alternatives). An older framework refuses the
 dotted path at parse, so the form fails closed; the approval diff shows a new or changed path as a widening.
 
+### 7. A member reveal holds a Ref and the actions it lists
+
+`memberReveals: { <its own dimension>: { to, actions, when? } }` on a dimension table makes a grant of a listed action
+at a row's own node hold that action at the row's ancestor in `to`, while the reveal's `when` admits the row: a task's
+members read and write its project. A grant at a container of the row does not count, and the layer generates the row's
+key, so no writer picks a node someone already holds a grant at.
+
+- **A `Within` reads through it.** The term is `T.<to column> in (select R.<column> from R where R.<key> in (<values>)
+  and <R.when>)`, ORed with the `Within`'s other values.
+- **`on` and `in` mint a `Ref` through it**, for every action the reveal lists, writes included. The `Ref` carries the
+  caller's grants at the revealing dimension, not the rows they matched, and every statement of the `Ref` requires the
+  member term again, ORed with the relation terms it is held through. A row closed or deleted ends its reach at the
+  next statement, as a relation row does (section 1).
+- **An insert under such a `Ref` is rechecked under lock**, as a relation `Ref`'s is: into a node a table owns, the
+  destination row is locked `FOR SHARE` under the term; into a node no table owns, the revealing row is locked
+  `FOR SHARE` before the write, and an insert with none left is a 404.
+- **A member-revealing table delegates**: it is never written unscoped or by `ctx.sql`, its rows never move, and its key
+  is the layer's. A row that moved or was revived under an old key would hand its members another node.
+- **`ctx.sql.scope` refuses such a `Ref`**: the fragment renders column tests and would leave the term out.
+
+The declaration is unchanged, so the artifact and its digest are too. A framework release that reads the declaration
+only for a `Within` mints no such `Ref`, which fails closed. Raising the pin to one that mints them widens an existing
+declaration to `Ref`s and to the write actions it lists, with no artifact diff: the approver reviewed the declaration
+with the actions it lists, and no released framework read it more narrowly.
+
 ## Consequences
 
 - An application expresses row-dependent access as data the approver reviews, instead of handler code. What the

@@ -556,7 +556,7 @@ export function selfLinks(model: TableModel): readonly Container[] {
 export function objectPredicate(context: TableContext, capability: unknown, operation: Operation): OperationNode {
 	const scope = dimensionScope(context.model)
 	const grant = refGrant(context, capability, scope.dimension, operation)
-	return refScope(context.relations, context.model, selfLinks(context.model), grant, new Date())
+	return refScope(context, context.model, selfLinks(context.model), grant, new Date())
 }
 
 /** Rows of a dimension table within the scope values of its list dimension. */
@@ -576,9 +576,9 @@ export function parentPredicate(context: TableContext, grant: RefGrant, key?: st
 	if (through !== undefined) {
 		const parent = through.context
 		const now = new Date()
-		return viewScope(context.model, through, grant.action, refScope(parent.relations, parent.model, selfLinks(parent.model), grant, now), now, row)
+		return viewScope(context.model, through, grant.action, refScope(parent, parent.model, selfLinks(parent.model), grant, now), now, row)
 	}
-	return refScope(context.relations, context.model, context.model.chain, grant, new Date(), row)
+	return refScope(context, context.model, context.model.chain, grant, new Date(), row)
 }
 
 /**
@@ -750,11 +750,12 @@ export function scopeTerms(context: TableContext, capability: unknown, use: Scop
 	if (use !== 'read') {
 		checkWriteTarget(context, grant, use)
 	}
-	// The fragment renders column tests only; a relation's subquery or an action's condition would be left out.
-	if ((grant.kind !== 'app' && grant.relations.length > 0) || hasOwn(model.when, grant.action)) {
+	// The fragment renders column tests only; a relation's or a member reveal's subquery, or an action's condition, would be left out.
+	const held = grant.kind !== 'app' && (grant.relations.length > 0 || (grant.kind === 'ref' && grant.revealing.length > 0))
+	if (held || hasOwn(model.when, grant.action)) {
 		throw new CapabilityError(
 			'unenforceable',
-			`ctx.sql.scope cannot render a relation or a condition of ${grant.action} on ${model.name}: read it through ctx.db`,
+			`ctx.sql.scope cannot render a relation, a member reveal or a condition of ${grant.action} on ${model.name}: read it through ctx.db`,
 		)
 	}
 	// Nor the subquery through the parent row, which alone places a child view's rows.
@@ -1449,13 +1450,13 @@ export function keyOf(model: TableModel): string {
 async function lockDestination(transaction: Session, context: TableContext, grant: RefGrant): Promise<void> {
 	const owner = context.destination
 	if (owner === undefined) {
-		// No table owns the destination, so a Ref held through relations is checked on the rows that hold it.
-		if (grant.relations.length > 0) await lockRelationRow(transaction, context, grant)
+		// No table owns the destination, so a Ref held through relations or member reveals is checked on the rows that hold it.
+		if (grant.relations.length > 0 || grant.revealing.length > 0) await lockHoldingRow(transaction, context, grant)
 		return
 	}
 	const chain = linksPredicate(owner.name, linkValues(owner.name, selfLinks(owner), grant))
-	// A Ref held through a relation inserts only while a row of it still names the caller at the destination.
-	const gate = relationGate(context.relations, owner, grant, new Date())
+	// A Ref held through a relation or a member reveal inserts only while a row of it still holds the destination.
+	const gate = relationGate(context, owner, grant, new Date())
 	const scope = gate === undefined ? chain : allOf([chain, gate])
 	const node = lockNode(owner.name, keyOf(owner), scope)
 	const rows = await transaction.run(node, {
@@ -2701,6 +2702,8 @@ export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
 				relates: async (relation: string, node: string, principal: string) => relationHolds(relations, subqueries, bound, relation, node, principal),
 				reveals: async (relation: string, dimension: string, node: string, principal: string) =>
 					revealHolds(relations, subqueries, bound, relation, dimension, node, principal),
+				revealsToMembers: async (revealing: string, values: readonly string[], dimension: string, node: string, action: string) =>
+					membersRevealed(members, subqueries, bound, revealing, values, dimension, node, action),
 				release() {
 					if (connection.runtime === bound) {
 						connection.runtime = undefined
@@ -2888,14 +2891,25 @@ async function relationHolds(
 
 /**
  * Locks a row that still holds the Ref's action for its principal at the Ref's object or a container on its chain: a
- * source row naming it there, or a row the relation reaches that reveals that node. None is 404, and nothing is written.
+ * source row naming it there, a row the relation reaches that reveals that node, or a row at a node the Ref's revealing
+ * grants name that reveals it to its members. None is 404, and nothing is written.
  */
-async function lockRelationRow(transaction: Session, context: TableContext, grant: RefGrant): Promise<void> {
+async function lockHoldingRow(transaction: Session, context: TableContext, grant: RefGrant): Promise<void> {
 	const now = new Date()
 	const nodeOf = (dimension: string) => (dimension === grant.dimension ? grant.id : grant.chain.get(dimension))
+	const candidates: { table: string; column: string; scope: OperationNode }[] = []
+	for (let index = 0; index < grant.revealing.length; index++) {
+		const revealing = grant.revealing[index]
+		const reveals = revealing === undefined ? [] : ownEntry(context.members, revealing.dimension) ?? []
+		for (let position = 0; revealing !== undefined && position < reveals.length; position++) {
+			const reveal = reveals[position]
+			const revealed = reveal === undefined || !includes(reveal.actions, grant.action) ? undefined : nodeOf(reveal.dimension)
+			if (reveal === undefined || revealed === undefined || revealing.values.length === 0) continue
+			candidates[candidates.length] = { table: reveal.table, column: reveal.key, scope: memberAddress(reveal, revealing.values, revealed, now) }
+		}
+	}
 	for (let index = 0; index < grant.relations.length; index++) {
 		const source = relationSource(context.relations, grant.relations[index] ?? '')
-		const candidates: { table: string; column: string; scope: OperationNode }[] = []
 		const node = nodeOf(source.dimension)
 		if (node !== undefined) {
 			const address = allOf([equals(source.table, source.node, node), namesPrincipal(source, grant.principal)])
@@ -2918,21 +2932,28 @@ async function lockRelationRow(transaction: Session, context: TableContext, gran
 				}
 			}
 		}
-		for (let position = 0; position < candidates.length; position++) {
-			const candidate = candidates[position]
-			if (candidate === undefined) continue
-			const rows = await transaction.run(lockNode(candidate.table, candidate.column, candidate.scope), {
-				root: 'SelectQueryNode',
-				table: candidate.table,
-				joins: {},
-				scope: candidate.scope,
-				lock: 'share',
-				subqueries: context.subqueries,
-			})
-			if (rows.length > 0) return
-		}
+	}
+	for (let position = 0; position < candidates.length; position++) {
+		const candidate = candidates[position]
+		if (candidate === undefined) continue
+		const rows = await transaction.run(lockNode(candidate.table, candidate.column, candidate.scope), {
+			root: 'SelectQueryNode',
+			table: candidate.table,
+			joins: {},
+			scope: candidate.scope,
+			lock: 'share',
+			subqueries: context.subqueries,
+		})
+		if (rows.length > 0) return
 	}
 	throw new NotFoundError(`no row holds ${grant.action} for the Ref's principal at ${grant.dimension} ${grant.id} any more; obtain a fresh Ref`)
+}
+
+/** `R.<ancestor> = $node and (R.<key> in (values) and <when>)`: a row at a node `values` name that reveals `node` now. */
+function memberAddress(reveal: MemberRevealModel, values: readonly string[], node: string, now: Date): OperationNode {
+	const named = inList(reveal.table, reveal.key, values)
+	const held = reveal.when === undefined ? named : allOf([named, conditionNode(reveal.table, reveal.when, now)])
+	return AndNode.create(equals(reveal.table, reveal.column, node), ParensNode.create(held))
 }
 
 /** `R.<ancestor> = $node and (R.<ancestor> in (<revealed nodes>))`: a row of the reveal's table revealing `node` now. */
@@ -2969,6 +2990,44 @@ async function revealHolds(
 		if (rows.length > 0) return true
 	}
 	return false
+}
+
+/**
+ * Of `values`, nodes of `revealing` at which the caller holds `action`, the ones whose row reveals `node` of `dimension`
+ * for it now: one guarded select per member reveal of `revealing` to `dimension` that lists `action`.
+ */
+async function membersRevealed(
+	members: MemberReveals,
+	subqueries: Readonly<Record<string, readonly string[]>>,
+	runtime: DataLayerRuntime,
+	revealing: string,
+	values: readonly string[],
+	dimension: string,
+	node: string,
+	action: string,
+): Promise<readonly string[]> {
+	if (typeof node !== 'string' || node.length === 0 || !isArray(values) || values.length > MAX_WITHIN_VALUES) {
+		throw new QueryRefusedError('row_address', `a node ${revealing} reveals is addressed by its node and at most ${MAX_WITHIN_VALUES} grants`)
+	}
+	for (let index = 0; index < values.length; index++) {
+		if (typeof values[index] !== 'string' || values[index] === '') {
+			throw new QueryRefusedError('row_address', `a grant at ${revealing} names its node, a non-empty string`)
+		}
+	}
+	const reveals = ownEntry(members, revealing) ?? []
+	const found: string[] = []
+	for (let index = 0; values.length > 0 && index < reveals.length; index++) {
+		const reveal = reveals[index]
+		if (reveal === undefined || reveal.dimension !== dimension || !includes(reveal.actions, action)) continue
+		const scope = memberAddress(reveal, values, node, new Date())
+		const context: GuardContext = { root: 'SelectQueryNode', table: reveal.table, joins: {}, scope, subqueries }
+		const rows = await sessionOf(runtime).run<Readonly<Record<string, unknown>>>(locateNode(reveal.table, [reveal.key], scope), context)
+		for (let position = 0; position < rows.length; position++) {
+			const key = ownEntry(rows[position] ?? {}, reveal.key)
+			if (typeof key === 'string' && !includes(found, key)) found[found.length] = key
+		}
+	}
+	return freeze(found)
 }
 
 /** One guarded select by key of the containment columns the policy declares; the generated locator of the dimension. */

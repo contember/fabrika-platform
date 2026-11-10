@@ -4,7 +4,7 @@
 
 import { AndNode, BinaryOperationNode, type OperationNode, OperatorNode, ParensNode, ValueNode } from 'kysely'
 import { ownEntry } from './builtins'
-import type { RefGrant, WithinGrant } from './capability'
+import type { ContainerGrant, RefGrant, WithinGrant } from './capability'
 import { conditionNode, subquery } from './condition-nodes'
 import { CapabilityError } from './errors'
 import type { ViewParentLink } from './guard'
@@ -31,6 +31,12 @@ export type RelationSources = Readonly<Record<string, LayerRelation>>
 
 /** Every member reveal of the layer, by the dimension whose grants it reveals to. */
 export type MemberReveals = Readonly<Record<string, readonly MemberRevealModel[]>>
+
+/** What a capability is held through beyond its grants: the layer's relations and its member reveals. */
+export interface LayerReach {
+	readonly relations: RelationSources
+	readonly members: MemberReveals
+}
 
 export function relationSource(relations: RelationSources, relation: string): LayerRelation {
 	const source = ownEntry(relations, relation)
@@ -144,36 +150,56 @@ export function relationTerms(
 }
 
 /**
- * The rows of `model` a `Within`'s read reaches through member reveals: per grant it carries at a revealing dimension,
- * `T.<ancestor> in (select R.<ancestor> from R where R.<key> in (values) and <when>)` for each reveal of `action` to an
- * ancestor `model` lies at. A grant at a dimension that reveals no node for `action` is refused: the framework passes
- * none.
+ * The rows of `model` a `Within`'s read reaches through member reveals: `revealingTerms` of its grants at revealing
+ * dimensions.
  */
 export function memberTerms(members: MemberReveals, model: TableModel, grant: WithinGrant, now: Date): readonly OperationNode[] {
+	return revealingTerms(members, model, `the Within of ${grant.dimension}`, grant.action, grant.revealing, now)
+}
+
+/**
+ * The rows of `model` that `revealing`, grants of `action` at nodes of revealing dimensions, reach through member
+ * reveals: per grant, `T.<ancestor> in (select R.<ancestor> from R where R.<key> in (values) and <when>)` for each reveal
+ * of `action` to an ancestor `model` lies at. A grant at a dimension that reveals no node for `action` is refused: the
+ * framework passes none.
+ */
+export function revealingTerms(
+	members: MemberReveals,
+	model: TableModel,
+	holder: string,
+	action: string,
+	revealing: readonly ContainerGrant[],
+	now: Date,
+): readonly OperationNode[] {
 	const terms: OperationNode[] = []
-	for (let index = 0; index < grant.revealing.length; index++) {
-		const revealing = grant.revealing[index]
-		if (revealing === undefined) continue
-		const reveals = ownEntry(members, revealing.dimension) ?? []
+	for (let index = 0; index < revealing.length; index++) {
+		const grant = revealing[index]
+		if (grant === undefined) continue
+		const reveals = ownEntry(members, grant.dimension) ?? []
 		let named = false
 		for (let position = 0; position < reveals.length; position++) {
 			const reveal = reveals[position]
-			if (reveal === undefined || !includes(reveal.actions, grant.action)) continue
+			if (reveal === undefined || !includes(reveal.actions, action)) continue
 			named = true
 			const placed = nodeColumnOf(model, reveal.dimension)
-			if (placed === undefined || revealing.values.length === 0) continue
-			const reached = isIn(reveal.table, reveal.key, valueList(revealing.values))
-			const where = reveal.when === undefined ? reached : AndNode.create(reached, ParensNode.create(conditionNode(reveal.table, reveal.when, now)))
-			terms[terms.length] = isIn(model.name, placed, subquery(reveal.table, reveal.column, where))
+			if (placed === undefined || grant.values.length === 0) continue
+			terms[terms.length] = isIn(model.name, placed, memberRevealed(reveal, grant.values, now))
 		}
 		if (!named) {
 			throw new CapabilityError(
 				'unenforceable',
-				`the Within of ${grant.dimension} carries a grant on ${revealing.dimension}, whose rows reveal no node for ${grant.action}`,
+				`${holder} carries a grant on ${grant.dimension}, whose rows reveal no node for ${action}`,
 			)
 		}
 	}
 	return terms
+}
+
+/** `select R.<ancestor> from R where R.<key> in (values) and <when>`: the nodes a member reveal holds at for `values`. */
+export function memberRevealed(reveal: MemberRevealModel, values: readonly string[], now: Date): OperationNode {
+	const reached = isIn(reveal.table, reveal.key, valueList(values))
+	const where = reveal.when === undefined ? reached : AndNode.create(reached, ParensNode.create(conditionNode(reveal.table, reveal.when, now)))
+	return subquery(reveal.table, reveal.column, where)
 }
 
 /** The condition `action` holds a row of `model` under, or `undefined` when the action is not narrowed there. */
@@ -194,12 +220,12 @@ export function conditioned(model: TableModel, action: string, branch: Operation
 
 /**
  * A Ref's predicate over `links` of `model`: one equality per link of its chain (after `row`, the equality that
- * addresses one row by its key), then, when the Ref is held through relations, a row of one of them at the node, and
- * its action's condition. A relation that does not reach `model` leaves the Ref unenforceable there, never
- * unconditioned.
+ * addresses one row by its key), then, when the Ref is held through relations or member reveals, a row of one of them
+ * at the node, and its action's condition. A relation or a revealing grant that does not reach `model` leaves the Ref
+ * unenforceable there, never unconditioned.
  */
 export function refScope(
-	relations: RelationSources,
+	reach: LayerReach,
 	model: TableModel,
 	links: readonly Container[],
 	grant: RefGrant,
@@ -208,7 +234,7 @@ export function refScope(
 ): OperationNode {
 	const linked = linksPredicate(model.name, linkValues(model.name, links, grant))
 	const chain = row === undefined ? linked : allOf([row, linked])
-	const gate = relationGate(relations, model, grant, now)
+	const gate = relationGate(reach, model, grant, now)
 	return conditioned(model, grant.action, gate === undefined ? chain : allOf([chain, gate]), now)
 }
 
@@ -230,15 +256,18 @@ export function viewScope(
 	return conditioned(model, action, row === undefined ? member : allOf([row, member]), now)
 }
 
-/** The relation rows a Ref held through relations needs at `model`, or `undefined` for a Ref an IAM grant holds. */
-export function relationGate(relations: RelationSources, model: TableModel, grant: RefGrant, now: Date): OperationNode | undefined {
-	if (grant.relations.length === 0) {
+/**
+ * The rows a Ref held through relations or member reveals needs at `model`: a relation row at the node, or a revealing
+ * row the Ref's grants reveal it through; `undefined` for a Ref an IAM grant holds.
+ */
+export function relationGate(reach: LayerReach, model: TableModel, grant: RefGrant, now: Date): OperationNode | undefined {
+	if (grant.relations.length === 0 && grant.revealing.length === 0) {
 		return undefined
 	}
 	const terms: OperationNode[] = []
 	for (let index = 0; index < grant.relations.length; index++) {
 		const relation = grant.relations[index] ?? ''
-		const reached = relationTerms(relations, model, relation, grant.principal, grant.action, now, false)
+		const reached = relationTerms(reach.relations, model, relation, grant.principal, grant.action, now, false)
 		if (reached.length === 0) {
 			throw new CapabilityError(
 				'unenforceable',
@@ -247,6 +276,19 @@ export function relationGate(relations: RelationSources, model: TableModel, gran
 		}
 		for (let position = 0; position < reached.length; position++) {
 			const term = reached[position]
+			if (term !== undefined) terms[terms.length] = term
+		}
+	}
+	if (grant.revealing.length > 0) {
+		const revealed = revealingTerms(reach.members, model, `the Ref of ${grant.dimension}`, grant.action, grant.revealing, now)
+		if (revealed.length === 0) {
+			throw new CapabilityError(
+				'unenforceable',
+				`the Ref of ${grant.dimension} is held through member reveals, none of which reveals a node ${model.name} lies at for ${grant.action}`,
+			)
+		}
+		for (let position = 0; position < revealed.length; position++) {
+			const term = revealed[position]
 			if (term !== undefined) terms[terms.length] = term
 		}
 	}

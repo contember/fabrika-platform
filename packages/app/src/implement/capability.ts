@@ -170,6 +170,8 @@ interface RefFacts {
 	readonly chain: Chain
 	/** The relations through which the caller holds the action on the object; empty for an IAM grant. */
 	readonly relations: readonly string[]
+	/** The caller's grants at nodes whose rows reveal the object to their members; empty for an IAM grant. */
+	readonly revealing: readonly ContainerGrant[]
 }
 
 interface Bound {
@@ -203,13 +205,24 @@ export class Ref<D extends string, A extends string> implements RefCapability<D,
 		id: string,
 		chain: ReadonlyMap<string, string>,
 		relations: readonly string[],
+		revealing: readonly ContainerGrant[],
 	) {
 		if (token !== MINT) {
 			throw new CapabilityRefusedError('not_minted', 'a Ref is minted by the framework only; declare the access form in fabrika.contract.ts')
 		}
+		const revealed = containerGrantsOf(revealing)
+		let count = 0
+		for (let index = 0; index < revealed.length; index++) {
+			count += revealed[index]?.values.length ?? 0
+		}
+		if (count > MAX_WITHIN_VALUES) {
+			throw new CapabilityLimitError(
+				`the caller holds '${action}' on this ${dimension} through ${count} revealing grants; a Ref carries at most ${MAX_WITHIN_VALUES}`,
+			)
+		}
 		this.#dimension = dimension
 		this.#action = action
-		this.#facts = freeze({ dimension, action, principal, id, chain: chainOf(chain), relations: copyOf(relations) })
+		this.#facts = freeze({ dimension, action, principal, id, chain: chainOf(chain), relations: copyOf(relations), revealing: revealed })
 		this.#frame = frame
 		this.#issuer = issuer
 	}
@@ -246,6 +259,7 @@ export class Ref<D extends string, A extends string> implements RefCapability<D,
 				id: facts.id,
 				chain: mapOf(facts.chain),
 				relations: facts.relations,
+				revealing: facts.revealing,
 			})
 			return { grant, frame: value.#frame, issuer: value.#issuer }
 		}
@@ -446,6 +460,7 @@ export interface CapabilityMint {
 		id: string,
 		chain: ReadonlyMap<string, string>,
 		relations?: readonly string[],
+		revealing?: readonly ContainerGrant[],
 	): Ref<D, A>
 	within<D extends string, A extends string>(
 		frame: RequestFrame,
@@ -483,8 +498,9 @@ export function createCapabilityIssuer(): CapabilityIssuer {
 			id: string,
 			chain: ReadonlyMap<string, string>,
 			relations: readonly string[] = [],
+			revealing: readonly ContainerGrant[] = [],
 		): Ref<D, A> {
-			return new Ref(MINT, issuer, frame, dimension, action, principal, id, chain, relations)
+			return new Ref(MINT, issuer, frame, dimension, action, principal, id, chain, relations, revealing)
 		},
 		within<D extends string, A extends string>(
 			frame: RequestFrame,

@@ -254,8 +254,10 @@ one is refused and names the column: add a migration that sets it `NOT NULL`, th
   assignee of an open task reads its project. A reveal matched through `readThrough` on a table with an insert needs
   `assign: {}` (or `{ self: true }`), because the writer picks the node.
 - `memberReveals: { <own dimension>: { to, actions, when? } }`: a grant at the row's own node holds `actions` at its
-  ancestor in `to` too, for an `over` list's reads. Such a row is never written unscoped or by `ctx.sql`, and never
-  moves.
+  ancestor in `to` too, while `when` admits the row: an `over` list reads through it, and an `on` or `in` endpoint of a
+  listed action gets a `Ref` of the ancestor, writes included. A member of an open task renames its project; once the
+  task closes, the next statement answers 404. Such a row is never written unscoped or by `ctx.sql`, and never moves.
+  `ctx.sql.scope` refuses a `Ref` held this way: read it through `ctx.db`.
 - A view under a parent takes none of them: it is read through its parent row, so a relation, a reveal, a member
   reveal or a secondary path that reaches the parent reaches the view's rows of that parent.
 

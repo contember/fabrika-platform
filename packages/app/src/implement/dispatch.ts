@@ -956,8 +956,10 @@ export class ContractRuntime {
 	/** A scope value the caller acts in: without a grant on it or on a container of it, 403 whether it exists or not. */
 	async #inRef(caller: Caller, action: string, dimension: string, value: string, frame: RequestFrame): Promise<Ref<string, string>> {
 		const direct = permits(caller.perms, action, { type: dimension, value })
-		const candidates = this.#heldRelations(caller.perms, action, [dimension, ...(this.#parts.containers.get(dimension) ?? [])])
-		if (!direct && this.#heldContainers(caller.perms, action, dimension).length === 0 && candidates.length === 0) {
+		const dimensions = [dimension, ...(this.#parts.containers.get(dimension) ?? [])]
+		const candidates = this.#heldRelations(caller.perms, action, dimensions)
+		const revealing = this.#heldRevealing(caller.perms, action, dimensions)
+		if (!direct && this.#heldContainers(caller.perms, action, dimension).length === 0 && candidates.length === 0 && revealing.length === 0) {
 			throw new ForbiddenError(`The caller does not hold '${action}' in this ${dimension}`)
 		}
 		const chain = await this.#chain(dimension, value)
@@ -968,10 +970,11 @@ export class ContractRuntime {
 			return this.#parts.mint.ref(frame, dimension, action, caller.subject, value, chain)
 		}
 		const related = chain === null ? [] : await this.#relatedOn(caller.subject, candidates, action, dimension, value, chain)
-		if (chain === null || related.length === 0) {
+		const revealed = chain === null ? [] : await this.#revealedOn(revealing, action, dimension, value, chain)
+		if (chain === null || (related.length === 0 && revealed.length === 0)) {
 			throw new ForbiddenError(`The caller does not hold '${action}' in this ${dimension}`)
 		}
-		return this.#parts.mint.ref(frame, dimension, action, caller.subject, value, chain, related)
+		return this.#parts.mint.ref(frame, dimension, action, caller.subject, value, chain, related, revealed)
 	}
 
 	/** An object the caller acts on; one it may not act on is indistinguishable from a missing one. */
@@ -983,12 +986,46 @@ export class ContractRuntime {
 		if (holdsOnChain(caller.perms, action, dimension, value, chain)) {
 			return this.#parts.mint.ref(frame, dimension, action, caller.subject, value, chain)
 		}
-		const candidates = this.#heldRelations(caller.perms, action, [dimension, ...chain.keys()])
+		const dimensions = [dimension, ...chain.keys()]
+		const candidates = this.#heldRelations(caller.perms, action, dimensions)
 		const related = await this.#relatedOn(caller.subject, candidates, action, dimension, value, chain)
-		if (related.length === 0) {
+		const revealed = await this.#revealedOn(this.#heldRevealing(caller.perms, action, dimensions), action, dimension, value, chain)
+		if (related.length === 0 && revealed.length === 0) {
 			throw new NotFoundError('Not found')
 		}
-		return this.#parts.mint.ref(frame, dimension, action, caller.subject, value, chain, related)
+		return this.#parts.mint.ref(frame, dimension, action, caller.subject, value, chain, related, revealed)
+	}
+
+	/**
+	 * Of `revealing`, the caller's grants of `action` at nodes of revealing dimensions, those whose row reveals the object
+	 * or a container on its chain to its members for `action`, now: what a Ref held through member reveals carries.
+	 */
+	async #revealedOn(
+		revealing: readonly ContainerGrant[],
+		action: string,
+		dimension: string,
+		value: string,
+		chain: ReadonlyMap<string, string>,
+	): Promise<ContainerGrant[]> {
+		const check = this.#parts.database?.revealsToMembers
+		if (check === undefined || revealing.length === 0) {
+			return []
+		}
+		const nodeOf = (at: string) => (at === dimension ? value : chain.get(at))
+		const held: ContainerGrant[] = []
+		for (const grant of revealing) {
+			const found = new Set<string>()
+			for (const reveal of this.#parts.memberReveals.get(grant.dimension) ?? []) {
+				const node = reveal.actions.includes(action) ? nodeOf(reveal.dimension) : undefined
+				for (let start = 0; node !== undefined && start < grant.values.length; start += MAX_WITHIN_VALUES) {
+					for (const at of await check(grant.dimension, grant.values.slice(start, start + MAX_WITHIN_VALUES), reveal.dimension, node, action)) {
+						found.add(at)
+					}
+				}
+			}
+			if (found.size > 0) held.push({ dimension: grant.dimension, values: [...found] })
+		}
+		return held
 	}
 
 	/**
