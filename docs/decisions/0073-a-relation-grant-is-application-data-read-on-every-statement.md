@@ -121,8 +121,8 @@ one subquery shape `T.<column> in (select X.<column> from X where …)`, so the 
 nested at most four deep under a reveal. A child view's parent column is such a hop, though no foreign key declares it
 ([ADR-0072](0072-a-view-is-a-read-only-table.md)). An insert's condition is judged on the inserted row; one with a path,
 on the written row in the insert's transaction, every row on its paths locked `FOR SHARE` first, and a refusal fails
-the transaction. A `some` there reads rows that existed before the insert: it follows a path first, reads no rows of
-the inserted table at any depth (judged after the write, it would count the inserted row itself), and every row naming
+the transaction. A `some` there reads rows that existed before the insert: it follows a path first, takes no `some` of
+the inserted table's rows at any depth (judged after the write, one would count the inserted row itself), and every row naming
 the row the path reached is locked too, so a row inserted meanwhile can only make it truer. It takes no `none`, no
 `some` under `not` and no `some` of the rows naming the inserted row: a row inserted before the commit could turn the
 first two false, which no lock holds, and no row names the third yet. An upsert's conflict update is judged on the
