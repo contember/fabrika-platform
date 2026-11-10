@@ -1322,6 +1322,7 @@ async function listRows(
 		scope,
 		subqueries: context.subqueries,
 		through: context.through,
+		admitting: context.model.partition?.column,
 	})
 	const page = answerRows(dialect, table, rowColumnsOf(context.model), rows.slice(0, limit))
 	const last = page[page.length - 1]
@@ -1353,6 +1354,7 @@ async function countRows(
 		scope,
 		subqueries: context.subqueries,
 		through: context.through,
+		admitting: context.model.partition?.column,
 	})
 	const count = row === undefined ? '0' : row['count']
 	return typeof count === 'string' || typeof count === 'number' ? Number(count) : 0

@@ -205,7 +205,7 @@ const atTeams = (...values: string[]): ContainerGrant[] => [{ dimension: 'team',
 
 type Standing = Omit<WithinGrant, 'kind' | 'dimension' | 'action' | 'principal'>
 
-const byTeams = (...values: string[]): Standing => ({ values, containers: [], contained: [], relations: [], revealing: [] })
+const byTeams = (...values: string[]): Standing => ({ values, containers: [], contained: [], relations: [], revealing: [], admitting: [] })
 const byOrg = (org: string): Standing => ({ ...byTeams(), containers: [{ dimension: 'org', values: [org] }] })
 
 /** What the writer holds at teams, by action. */

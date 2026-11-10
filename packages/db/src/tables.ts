@@ -193,6 +193,7 @@ function artifactOf(model: TableModel): TablePolicyArtifact {
 		...(model.readThrough.length === 0 ? {} : { readThrough: readThroughArtifact(model) }),
 		...writeThroughArtifact(model),
 		...(model.memberReveals.length === 0 ? {} : { memberReveals: memberRevealsArtifact(model.memberReveals) }),
+		...(ownKeys(model.admits).length === 0 ? {} : { admits: whenArtifact(model.admits) }),
 	}
 }
 

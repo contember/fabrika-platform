@@ -272,6 +272,27 @@ export function memberRevealed(reveal: MemberRevealModel, values: readonly strin
 	return subquery(reveal.table, reveal.column, where)
 }
 
+/**
+ * The rows of `model` a `Within`'s read reaches through `admits` (ADR-0074): `(T.<partition column> in (<nodes>) and
+ * (<condition>))`, the nodes those of `grant.admitting` at the table's partition dimension. None where the table admits
+ * nothing for the action or the `Within` holds no node of its partition. The database compares the row's own column
+ * with the nodes, so every spelling it equates is one node.
+ */
+export function admitsTerms(model: TableModel, grant: WithinGrant, now: Date): readonly OperationNode[] {
+	const condition = ownEntry(model.admits, grant.action)
+	const partition = model.partition
+	if (condition === undefined || partition === undefined) {
+		return []
+	}
+	const terms: OperationNode[] = []
+	for (let index = 0; index < grant.admitting.length; index++) {
+		const held = grant.admitting[index]
+		if (held === undefined || held.dimension !== partition.dimension || held.values.length === 0) continue
+		terms[terms.length] = narrowedTerm(isIn(model.name, partition.column, valueList(held.values)), conditionNode(model.name, condition, now))
+	}
+	return terms
+}
+
 /** The condition `action` holds a row of `model` under, or `undefined` when the action is not narrowed there. */
 export function actionCondition(model: TableModel, action: string, now: Date): OperationNode | undefined {
 	const condition = ownEntry(model.when, action)

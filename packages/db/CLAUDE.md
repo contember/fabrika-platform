@@ -32,7 +32,7 @@ bun test    # policy · derived-tables · tables · store · guard · hardening 
 | `description.ts`       | `ScopedSelect`: the frozen, non-executable query description a store callback receives.                                                                                                                                                                                                                                                                                                                                      |
 | `nodes.ts`             | Kysely operation nodes built from a description and a scope predicate.                                                                                                                                                                                                                                                                                                                                                       |
 | `guard.ts`             | The allowlist over the final operation tree, run immediately before compiling.                                                                                                                                                                                                                                                                                                                                               |
-| `authority.ts`         | What a capability admits beyond its containment: the relations it is held through and its action's condition; `refScope`, `viewScope`, `relationTerms`, `memberTerms`, `conditioned`.                                                                                                                                                                                                                                        |
+| `authority.ts`         | What a capability admits beyond its containment: the relations it is held through and its action's condition; `refScope`, `viewScope`, `relationTerms`, `memberTerms`, `admitsTerms`, `conditioned`.                                                                                                                                                                                                                         |
 | `conditions.ts`        | The structured row conditions of `when`, `confers`, `reveals` and `memberReveals`: the one parse, and a condition's value on an insert's own row; browser-safe.                                                                                                                                                                                                                                                              |
 | `condition-nodes.ts`   | The predicate of a condition and the one subquery shape a scope predicate holds (Kysely nodes).                                                                                                                                                                                                                                                                                                                              |
 | `database.ts`          | `Database` over a `DatabaseEngine` of its dialect (`fromEngine`, `fromDialect`; no public query method), `Session` (the only path to it), `InvocationTransaction` (`enclose`), `runFixedStatement`, `applicationSchema`, `openFirstConnection`; no Bun.                                                                                                                                                                      |
@@ -373,7 +373,7 @@ pass a recording one); `Database.fromEngine` takes another engine (`openSqlite`)
   view's parent subquery over a predicate the guard would admit on the parent (never `true`) or with no WHERE (a
   `Within` of `all`: every parent row), alone or after an AND
   tree of `column = $n`: no column of the view stands in for the parent row.
-- **A Within carries at most `MAX_WITHIN_VALUES` (1000) scope values, its own, its containers' and its contained grants' together.** Each
+- **A Within carries at most `MAX_WITHIN_VALUES` (1000) scope values, its own, its containers', its contained grants' and its partition nodes (`admitting`) together.** Each
   is one bound parameter of every statement it scopes (Postgres binds at most 65535); the framework refuses to
   mint a larger one and the layer refuses to use one.
 - **A Ref's predicate covers every link of its chain, one equality per chain column.** A table carries
@@ -690,3 +690,14 @@ node the object's column stores (the statement compared it, so a `uuid` spelled 
   every spelling of a `uuid` is one node; no standing is refused). A `Ref` holds
   an action through it only where the path does (`writeThrough`): `revealingTerms` takes the `PathRule`, and
   `revealsToMembers` and `holdingRowLocked` skip it otherwise.
+- **`admits: { <read action>: <condition> }`** widens a `Within`'s read, and nothing else
+  ([ADR-0074](../../docs/decisions/0074-a-condition-widens-a-read-only-inside-a-tenant-partition.md)): `admitsTerms` ORs
+  `(T.<partition column> in (<nodes>) and (<condition>))` into the reach (list, count and aggregate; `layerReach` lists
+  its paths), and the table's `when` still ANDs over all of it. The partition is a top-level vocabulary dimension with
+  `partition: true` (`VocabularyModel.partitions`); the table is a dimension or child table whose chain ends in it, and
+  `TableModel.partition` holds its column (`rootDimension`, `nodeColumnOf`). The nodes are `WithinGrant.admitting`,
+  which `@fabrika/app` fills from `~relin` entries at a partition only. `parseAdmits` refuses an application, reference
+  or view table, a root that is no partition, an action that is no read action, and every condition `when` refuses. A
+  queue claim (the update action), a write, a `Ref` and its gate never carry it; a view's parent subquery leaves it out;
+  `ctx.sql.scope` refuses a `Within` it would widen. The guard admits the narrowed value membership only on a select with
+  no lock, on the column `GuardContext.admitting` names (the table's partition column).

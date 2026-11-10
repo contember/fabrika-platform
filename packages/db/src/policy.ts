@@ -128,6 +128,11 @@ interface WritablePolicy<Col extends string, A extends string, V extends Col, Ac
 	 * node in `to` too, while `when` admits the row.
 	 */
 	readonly memberReveals?: { readonly [dimension: string]: MemberRevealsPolicy<Col, A> }
+	/**
+	 * Read action → a condition that widens a `Within`'s read to the rows meeting it, inside a tenant partition node where
+	 * the caller holds the action through a relation (ADR-0074). The table's `when` still narrows them.
+	 */
+	readonly admits?: { readonly [action in A]?: ConditionPolicy<Col> }
 }
 
 /** What a row reveals to a caller with a grant at its node: its node in `to`, for `actions`, while `when` admits the row. */
@@ -345,6 +350,13 @@ export interface TableModel {
 	readonly readThrough: readonly SecondaryPath[]
 	/** The ancestor nodes this table's rows reveal to a grant at their own node. */
 	readonly memberReveals: readonly MemberRevealModel[]
+	/**
+	 * Read action → the condition a row meets to be read inside a partition node where the caller holds the action through
+	 * a relation (`~relin`): it widens a `Within`'s read, and the table's `when` still narrows it (ADR-0074).
+	 */
+	readonly admits: Readonly<Record<string, ConditionModel>>
+	/** The tenant partition `admits` widens within, with the table's column for it; `undefined` without `admits`. */
+	readonly partition: Container | undefined
 }
 
 /**
@@ -449,16 +461,19 @@ type ParsedScope =
 		readonly inherit: readonly string[] | undefined
 	}
 
-type ParsedTable = Omit<TableModel, 'chain' | 'scope' | 'confers' | 'when' | 'relationWhen' | 'reveals' | 'readThrough' | 'memberReveals'> & {
-	readonly scope: ParsedScope
-	readonly confersInput: unknown
-	readonly whenInput: unknown
-	readonly relationWhenInput: unknown
-	readonly revealsInput: unknown
-	readonly readThroughInput: unknown
-	readonly writeThroughInput: unknown
-	readonly memberRevealsInput: unknown
-}
+type ParsedTable =
+	& Omit<TableModel, 'chain' | 'scope' | 'confers' | 'when' | 'relationWhen' | 'reveals' | 'readThrough' | 'memberReveals' | 'admits' | 'partition'>
+	& {
+		readonly scope: ParsedScope
+		readonly confersInput: unknown
+		readonly whenInput: unknown
+		readonly relationWhenInput: unknown
+		readonly revealsInput: unknown
+		readonly readThroughInput: unknown
+		readonly writeThroughInput: unknown
+		readonly memberRevealsInput: unknown
+		readonly admitsInput: unknown
+	}
 
 let readModels: <DB, P>(tables: Tables<DB, P>) => TableModels
 let hasModels: (value: object) => boolean = () => false
@@ -533,6 +548,8 @@ interface VocabularyModel {
 	readonly actions: NameSet
 	/** Each relation of the vocabulary, by name, with the dimension its nodes are of. */
 	readonly relations: Readonly<Record<string, string>>
+	/** The top-level dimensions that declare themselves tenant partitions (`partition: true`), which `admits` widens within. */
+	readonly partitions: NameSet
 }
 
 /** A relation's name: it travels in a token's pseudo-scope `~rel:<name>`, so it is a plain word. */
@@ -543,12 +560,25 @@ function parseVocabulary(input: unknown): VocabularyModel {
 	const dimensions = plainRecord(ownEntry(vocabulary, 'dimensions'), 'the vocabulary dimensions')
 	const names = ownKeys(dimensions)
 	const containment: Record<string, { readonly container: string | undefined }> = {}
+	const partitions: string[] = []
 	for (let index = 0; index < names.length; index++) {
 		const name = names[index] ?? ''
-		const container = ownEntry(plainRecord(ownEntry(dimensions, name), `the vocabulary dimension ${name}`), 'in')
+		const declared = plainRecord(ownEntry(dimensions, name), `the vocabulary dimension ${name}`)
+		const container = ownEntry(declared, 'in')
 		if (container !== undefined && (typeof container !== 'string' || !hasOwn(dimensions, container))) {
 			throw new PolicyError(`the vocabulary puts ${name} in ${String(container)}, which is not one of its dimensions`)
 		}
+		const partition = ownEntry(declared, 'partition')
+		if (partition !== undefined && partition !== true) {
+			throw new PolicyError(`the vocabulary dimension ${name}: partition is true or absent`)
+		}
+		// Containment is a tree: two tables that share an ancestor share its root, which every tenant-holding key holds.
+		if (partition === true && container !== undefined) {
+			throw new PolicyError(
+				`the vocabulary dimension ${name} lies in ${String(container)}: only a top-level dimension is a tenant partition`,
+			)
+		}
+		if (partition === true) partitions[partitions.length] = name
 		setOwn(containment, name, freeze({ container }))
 	}
 	for (let index = 0; index < names.length; index++) {
@@ -578,7 +608,7 @@ function parseVocabulary(input: unknown): VocabularyModel {
 			setOwn(relations, relation, dimension)
 		}
 	}
-	return freeze({ dimensions: freeze(containment), actions: nameSet(actions), relations: freeze(relations) })
+	return freeze({ dimensions: freeze(containment), actions: nameSet(actions), relations: freeze(relations), partitions: nameSet(partitions) })
 }
 
 const COLUMN_LIST_FIELDS = nameSet(['columns', 'foreignKeys', 'dates', 'timestamps', 'booleans', 'json', 'notNull', 'view'])
@@ -600,6 +630,7 @@ const POLICY_FIELDS = nameSet([
 	'readThrough',
 	'writeThrough',
 	'memberReveals',
+	'admits',
 ])
 const REVEALS_FIELDS = nameSet(['to', 'actions', 'when', 'assign'])
 const MEMBER_REVEALS_FIELDS = nameSet(['to', 'actions', 'when', 'assign'])
@@ -840,6 +871,7 @@ function parseTable(table: string, columnList: unknown, policyInput: unknown, vo
 		readThroughInput: ownEntry(policy, 'readThrough'),
 		writeThroughInput: ownEntry(policy, 'writeThrough'),
 		memberRevealsInput: ownEntry(policy, 'memberReveals'),
+		admitsInput: ownEntry(policy, 'admits'),
 	}
 }
 
@@ -1372,7 +1404,8 @@ function linkTables(parsed: readonly ParsedTable[], vocabulary: VocabularyModel)
 	const linkedTable = (name: string): LinkedTable | undefined => {
 		const target = ownEntry(byName, name)
 		if (target === undefined) return undefined
-		const { confersInput, whenInput, relationWhenInput, revealsInput, readThroughInput, writeThroughInput, memberRevealsInput, ...rest } = target
+		const { confersInput, whenInput, relationWhenInput, revealsInput, readThroughInput, writeThroughInput, memberRevealsInput, admitsInput, ...rest } =
+			target
 		return { ...rest, ...resolve(target, []) }
 	}
 	const hopRule: HopRule = (from, column, to, key, backward) => {
@@ -1414,7 +1447,8 @@ function linkTables(parsed: readonly ParsedTable[], vocabulary: VocabularyModel)
 		const table = parsed[index]
 		if (table !== undefined) {
 			const { scope, chain } = resolve(table, [])
-			const { confersInput, whenInput, relationWhenInput, revealsInput, readThroughInput, writeThroughInput, memberRevealsInput, ...rest } = table
+			const { confersInput, whenInput, relationWhenInput, revealsInput, readThroughInput, writeThroughInput, memberRevealsInput, admitsInput, ...rest } =
+				table
 			const linked = { ...rest, scope, chain }
 			const ownerOf = (dimension: string): ResolvedOwner | undefined => {
 				const owner = ownEntry(owners, dimension)
@@ -1448,7 +1482,8 @@ function linkTables(parsed: readonly ParsedTable[], vocabulary: VocabularyModel)
 			const relationWhen = parseRelationWhen(linked, root, relationWhenInput, vocabulary, conditionTable, hopRule)
 			const reveals = parseReveals(linked, readThrough, revealsInput, vocabulary, conditionTable, hopRule)
 			const memberReveals = parseMemberReveals(linked, readThrough, memberRevealsInput, vocabulary, conditionTable, hopRule)
-			setOwn(models, table.name, freeze({ ...linked, confers, when, relationWhen, reveals, readThrough, memberReveals }))
+			const { admits, partition } = parseAdmits(linked, admitsInput, vocabulary, conditionTable, hopRule)
+			setOwn(models, table.name, freeze({ ...linked, confers, when, relationWhen, reveals, readThrough, memberReveals, admits, partition }))
 		}
 	}
 	checkRelationWhenReach(models, vocabulary)
@@ -1462,7 +1497,7 @@ function linkTables(parsed: readonly ParsedTable[], vocabulary: VocabularyModel)
 	return freeze(models)
 }
 
-type LinkedTable = Omit<TableModel, 'confers' | 'when' | 'relationWhen' | 'reveals' | 'readThrough' | 'memberReveals'>
+type LinkedTable = Omit<TableModel, 'confers' | 'when' | 'relationWhen' | 'reveals' | 'readThrough' | 'memberReveals' | 'admits' | 'partition'>
 
 /** Every action a table names: its operations', `appRead`, `appCount` and its columns' own. */
 function tableActionNames(table: LinkedTable): NameSet {
@@ -1575,6 +1610,65 @@ function parseRelationWhen(
 		setOwn(parsed, relation, freeze(conditions))
 	}
 	return freeze(parsed)
+}
+
+/**
+ * `admits`: read action → a condition that admits a row inside a partition node where the caller holds the action
+ * through a relation (ADR-0074). The table lies in a tenant partition, the vocabulary's top-level dimension its chain
+ * ends in (or its own, for the partition's table), so every path the hop rule admits stays in the row's partition node.
+ * The condition parses as `when`; only a dimension or child table that is no view takes one, and only for a read action.
+ */
+function parseAdmits(
+	table: LinkedTable,
+	input: unknown,
+	vocabulary: VocabularyModel,
+	tables: (name: string) => ConditionTable | undefined,
+	hops: HopRule,
+): { readonly admits: Readonly<Record<string, ConditionModel>>; readonly partition: Container | undefined } {
+	if (input === undefined) {
+		return { admits: freeze({}), partition: undefined }
+	}
+	if (table.scope.mode !== 'dimension' && table.scope.mode !== 'child') {
+		throw new PolicyError(`${table.name}: a ${table.scope.mode} table takes no admits; it lies in no tenant partition`)
+	}
+	if (table.view) {
+		throw new PolicyError(`${table.name}: a view takes no admits; its rows are read through its parent's`)
+	}
+	const root = rootDimension(table, vocabulary)
+	const column = root === undefined ? undefined : nodeColumnOf(table, root)
+	if (root === undefined || column === undefined || !inSet(vocabulary.partitions, root)) {
+		throw new PolicyError(
+			`${table.name}: admits widens a read only inside a tenant partition, and ${table.name} lies in ${
+				root ?? 'no dimension'
+			}, which the vocabulary does not declare partition: true`,
+		)
+	}
+	const declared = plainRecord(input, `${table.name}: admits`)
+	const actions = ownKeys(declared)
+	if (actions.length === 0) {
+		throw new PolicyError(`${table.name}: admits names no action`)
+	}
+	const admits: Record<string, ConditionModel> = {}
+	for (let index = 0; index < actions.length; index++) {
+		const action = actions[index] ?? ''
+		const what = `${table.name}: admits.${action}`
+		if (!includes(table.actions.read, action)) {
+			throw new PolicyError(`${what} names no read action of the table (${table.actions.read.join(', ')}): admits widens a read only`)
+		}
+		setOwn(admits, action, parseCondition(ownEntry(declared, action), table, tables, what, hops))
+	}
+	return { admits: freeze(admits), partition: freeze({ dimension: root, column }) }
+}
+
+/** The top-level dimension a dimension or child table lies in: the end of its chain, or its own dimension at the top. */
+function rootDimension(table: LinkedTable, vocabulary: VocabularyModel): string | undefined {
+	const last = table.chain[table.chain.length - 1]
+	let dimension = last?.dimension ?? (table.scope.mode === 'dimension' ? table.scope.dimension : undefined)
+	for (let above = dimension === undefined ? undefined : ownEntry(vocabulary.dimensions, dimension)?.container; above !== undefined;) {
+		dimension = above
+		above = ownEntry(vocabulary.dimensions, above)?.container
+	}
+	return dimension
 }
 
 /**

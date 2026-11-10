@@ -298,6 +298,47 @@ describe('a scope held through relations or narrowed by a condition', () => {
 	})
 })
 
+describe('rows admits widens a read to', () => {
+	const open = BinaryOperationNode.create(column('notes', 'word_count'), OperatorNode.create('<'), ValueNode.create(100))
+	const widened = (name = 'workspace_id') => ParensNode.create(AndNode.create(inList('notes', name, ['w1']), ParensNode.create(open)))
+	const reach = (term: OperationNode) => anyOf([inList('notes', 'id', ['n1']), term])
+	const admitting: GuardContext = { ...selectContext, admitting: 'workspace_id' }
+	const selectBy = (predicate: OperationNode): SelectQueryNode => select({ where: scopedWhere(equals('notes', 'title', 'x'), predicate) })
+
+	test('a membership of bound partition nodes narrowed by a condition passes in a select that locks nothing', () => {
+		for (const shape of [widened(), reach(widened())]) {
+			expect(() => assertAllowedTree(selectBy(shape), { ...admitting, scope: shape })).not.toThrow()
+		}
+	})
+
+	test('it is refused on a table without admits, on another column, on a write and on a lock', () => {
+		const shape = reach(widened())
+		refuses(selectBy(shape), { ...selectContext, scope: shape }, 'the scope predicate must be true')
+		const other = reach(widened('id'))
+		refuses(selectBy(other), { ...admitting, scope: other }, 'the scope predicate must be true')
+		const update = { ...legitUpdate(), where: scopedWhere(undefined, shape) }
+		refuses(update, { ...updateContext, scope: shape, admitting: 'workspace_id' }, 'the scope predicate must be true')
+		const remove = deleteNode('notes', scopedWhere(undefined, shape), 'id')
+		refuses(remove, { ...deleteContext, scope: shape, admitting: 'workspace_id' }, 'the scope predicate must be true')
+		for (const lock of ['share', 'update'] as const) {
+			refuses(lockNode('notes', 'id', shape, lock), { ...admitting, joins: {}, scope: shape, lock }, 'the scope predicate must be true')
+		}
+	})
+
+	test('it is refused in any other shape: unnarrowed is a plain membership only, and the condition is a scope tree', () => {
+		const elsewhere = BinaryOperationNode.create(column('secrets', 'id'), OperatorNode.create('='), ValueNode.create('s1'))
+		const shapes = [
+			ParensNode.create(OrNode.create(inList('notes', 'workspace_id', ['w1']), ParensNode.create(open))),
+			ParensNode.create(AndNode.create(inList('notes', 'workspace_id', ['w1']), ParensNode.create(elsewhere))),
+			ParensNode.create(AndNode.create(inList('notes', 'workspace_id', ['w1']), ParensNode.create(everything()))),
+			ParensNode.create(AndNode.create(open, ParensNode.create(inList('notes', 'workspace_id', ['w1'])))),
+		]
+		for (const shape of shapes) {
+			refuses(selectBy(shape), { ...admitting, scope: shape }, 'the scope predicate must be true')
+		}
+	})
+})
+
 describe('a relation whose principal is reached through a to-one path', () => {
 	const subqueries = { note_members: ['note_id'], people: ['id'], teams: ['id'], orgs: ['id'], accounts: ['id'] }
 	const scopedBy = (predicate: OperationNode): [SelectQueryNode, GuardContext] => [

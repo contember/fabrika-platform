@@ -201,7 +201,7 @@ function standAt(standing: Standing, only: readonly string[] = HANDED_OUT): void
 	for (const action of only) alice.standings.set(`team ${action}`, standing)
 }
 
-const byTeams = (...values: string[]): Standing => ({ values, containers: [], contained: [], relations: [], revealing: [] })
+const byTeams = (...values: string[]): Standing => ({ values, containers: [], contained: [], relations: [], revealing: [], admitting: [] })
 
 function suite(dialect: 'sqlite' | 'postgres', open: () => Promise<Backend>, close: () => Promise<void>): void {
 	describe.skipIf(dialect === 'postgres' && !hasPostgres)(`on ${dialect}`, () => {
@@ -479,7 +479,7 @@ function suite(dialect: 'sqlite' | 'postgres', open: () => Promise<Backend>, clo
 				const raw = () => sql(z.strictObject({}))`update tasks set team_id = ${'t1'} where id = ${'k3'}`
 				await expect(raw()).rejects.toThrow("'tasks' at line 1 hands out access")
 				const scope = () => sql.scope(task('tasks.read', 'k1', 'p1', atTeam('t1')), 'tasks')
-				expect(scope).toThrow('cannot render a relation, a member reveal, a secondary path or a condition')
+				expect(scope).toThrow('cannot render a relation, a member reveal, a secondary path, admits or a condition')
 			} finally {
 				await transaction.rollback()
 			}

@@ -36,6 +36,12 @@ export interface GuardContext {
 	 * reach>)`. Without it, a scope holds no such subquery.
 	 */
 	readonly through?: ViewParentLink | undefined
+	/**
+	 * The partition column of a table that declares `admits` (ADR-0074): a select's reach may hold `(T.<column> in
+	 * ($…) and (<scope tree>))`, a membership of bound partition nodes narrowed by a condition. Never on a write or a lock,
+	 * and never over another column.
+	 */
+	readonly admitting?: string | undefined
 }
 
 /** The parent a child view's scope reads its rows through: the view's parent column, the parent table and its key. */
@@ -169,10 +175,12 @@ function checkRoot(root: OperationNode, context: GuardContext, admitted: Admitte
 		throw new QueryRefusedError('scope_predicate', 'the scope predicate must be the top-level conjunct of WHERE')
 	}
 	const through = context.through
+	// Rows `admits` widens a read to stand only in a select that locks nothing, and only on the partition column.
+	const admitting = context.root === 'SelectQueryNode' && context.lock === undefined ? context.admitting : undefined
 	// A child view's rows are placed by its parent row only: no column of the view stands in for that reach.
 	const reach = (node: unknown) =>
 		through === undefined
-			? isReach(node, context.table, context.subqueries, admitted)
+			? isReach(node, context.table, context.subqueries, admitted, 0, admitting)
 			: isEverything(node) || isThroughParent(node, context.table, through, context.subqueries, admitted)
 	const scope = context.scope
 	const shaped = reach(scope)
@@ -191,14 +199,26 @@ function checkRoot(root: OperationNode, context: GuardContext, admitted: Admitte
  * What a capability reaches before its action's condition narrows it: everything (a global grant), a Ref's chain of
  * equalities, and after them a union of its relation rows and its secondary paths' memberships of bound values, or a
  * Within's memberships of values and relation rows. A relation's rows may be narrowed: `(<relation rows> and (<scope
- * tree>))`, the condition's subqueries beside the relation's, never nested in it.
+ * tree>))`, the condition's subqueries beside the relation's, never nested in it. With `admitting`, a membership of
+ * bound values on that column may be narrowed the same way: the rows `admits` widens a read to.
  */
-function isReach(node: unknown, table: string, subqueries: GuardContext['subqueries'], admitted: Admitted[], depth = 0): boolean {
+function isReach(
+	node: unknown,
+	table: string,
+	subqueries: GuardContext['subqueries'],
+	admitted: Admitted[],
+	depth = 0,
+	admitting?: string,
+): boolean {
 	const equality = (leaf: unknown) => isScopeEquality(leaf, table)
 	const related = (leaf: unknown) =>
 		isRelationMembership(leaf, table, subqueries, admitted, depth)
 		|| isNarrowed(leaf, table, subqueries, admitted, depth, (left) => isRelationMembership(left, table, subqueries, admitted, depth))
-	const member = (leaf: unknown) => isScopeMembership(leaf, table) || related(leaf)
+	const widened = (leaf: unknown) =>
+		admitting !== undefined
+		&& isNarrowed(leaf, table, subqueries, admitted, depth, (left) =>
+			isScopeMembership(left, table) && columnName(read(left, 'leftOperand')) === admitting)
+	const member = (leaf: unknown) => isScopeMembership(leaf, table) || related(leaf) || widened(leaf)
 	return isEverything(node)
 		|| isTreeOf(node, 'AndNode', equality)
 		|| isUnionOf(node, member)
@@ -464,6 +484,11 @@ function isScopeMembership(node: unknown, table: string): boolean {
 		}
 	}
 	return true
+}
+
+/** The name of the column a reference node names. */
+function columnName(node: unknown): unknown {
+	return read(read(read(node, 'column'), 'column'), 'name')
 }
 
 function isOwnColumn(node: unknown, table: string): boolean {

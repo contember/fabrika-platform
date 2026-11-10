@@ -149,8 +149,8 @@ upsert's conflict update is judged on the stored row. A relation source's condit
 (section 2), so under a reveal matched through a path it stays within four subqueries. It takes no `some`: rows naming
 a source row are written by their own table's writers, outside the delegation bound.
 
-Widening is a separate mechanism (`admits`, a step of the [coverage roadmap](../ideas/acl-coverage-roadmap.md)), and
-it is not part of `when`.
+Widening is a separate mechanism, `admits`, which adds rows only inside a tenant partition
+([ADR-0074](0074-a-condition-widens-a-read-only-inside-a-tenant-partition.md)); it is not part of `when`.
 
 ### 4. Relations are for internal principals, anywhere or inside the grant's node
 
@@ -385,8 +385,9 @@ narrows, a removed or changed one widens.
   hold the assistant's actions. Every realistic application would then grant the coordinator those actions, which is wider
   than the bound.
 - **`admits` together with `when`, or raw SQL in it.** Widening without a tenant partition lets a grant in one company
-  reach published rows of another. Raw SQL is the opposite of what a reviewable widening needs. `admits` is a step of
-  the coverage roadmap and takes its own ADR.
+  reach published rows of another. Raw SQL is the opposite of what a reviewable widening needs. `admits` widens only
+  inside a tenant partition, with a structured condition
+  ([ADR-0074](0074-a-condition-widens-a-read-only-inside-a-tenant-partition.md)).
 - **A stamped copy of the container's path column on the row**, for a read path that starts at the row's container.
   It reads one subquery shallower and would let a reveal match through it. But every insert, every move of the row and
   every write of the container's column would have to rewrite the copy on every row below, in the same transaction, or

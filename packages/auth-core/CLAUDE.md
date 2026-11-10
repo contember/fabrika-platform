@@ -191,7 +191,8 @@ bun test               # app-environment · canonical-path · client-address · 
   `<relation>:<dimension>:<node>` (`relationInsideScope` builds it and refuses a name holding `:`; `parseRelationInside`
   reads it from the left, the node verbatim). `permits` reads neither as a global grant nor as a scope value, so a
   consumer that knows no relations keeps them and grants nothing by them. The artifact's relation fields (`relations`, a role's `via`, a table's `confers`, `when`, `reveals`,
-  `readThrough`, `memberReveals`) are absent unless declared, so an artifact without them keeps its digest.
+  `readThrough`, `memberReveals`, `admits`, a dimension's `partition`) are absent unless declared, so an artifact without
+  them keeps its digest.
 
 ## Notes
 

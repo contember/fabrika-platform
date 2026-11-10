@@ -478,6 +478,11 @@ export interface DimensionArtifact {
 	readonly members: { readonly manage: string; readonly list: string } | null
 	/** `labels`: the member directory shows labels to `members.list` holders. Absent unless declared, so digests stay. */
 	readonly directory?: 'labels'
+	/**
+	 * A top-level dimension that is a tenant partition, which a table's `admits` widens a read only inside (ADR-0074).
+	 * Absent unless declared, so digests stay.
+	 */
+	readonly partition?: true
 }
 
 export interface RoleArtifact {
@@ -912,6 +917,11 @@ export interface TablePolicyArtifact {
 	 * unless declared, so the digest stays. A reader that ignores it reaches less, never more.
 	 */
 	readonly memberReveals?: Readonly<Record<string, MemberRevealsArtifact>>
+	/**
+	 * Read action → the condition a row meets to be read inside a tenant partition node where the caller holds the action
+	 * through a relation (ADR-0074). Absent unless declared, so the digest stays. A reader that ignores it reaches less.
+	 */
+	readonly admits?: Readonly<Record<string, ConditionArtifact>>
 }
 
 /**

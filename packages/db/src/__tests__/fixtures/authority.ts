@@ -103,7 +103,8 @@ export class TestAuthority implements CapabilityAuthority {
 
 	standing(dimension: string, action: string): WithinGrant | undefined {
 		if (!this.caller) return undefined
-		const held = this.standings.get(`${dimension} ${action}`) ?? { values: [], containers: [], contained: [], relations: [], revealing: [] }
+		const held = this.standings.get(`${dimension} ${action}`)
+			?? { values: [], containers: [], contained: [], relations: [], revealing: [], admitting: [] }
 		return { kind: 'within', dimension, action, principal: this.#principal, ...held }
 	}
 
@@ -140,6 +141,7 @@ export class TestAuthority implements CapabilityAuthority {
 		contained: readonly ContainerGrant[] = [],
 		relations: readonly TestHold[] = [],
 		revealing: readonly ContainerGrant[] = [],
+		admitting: readonly ContainerGrant[] = [],
 	): Within<D, A> {
 		return new TestWithin({
 			kind: 'within',
@@ -151,6 +153,7 @@ export class TestAuthority implements CapabilityAuthority {
 			contained,
 			relations: holdsOf(relations),
 			revealing,
+			admitting,
 		}, this)
 	}
 
