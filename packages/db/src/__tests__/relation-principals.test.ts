@@ -58,7 +58,7 @@ create table people (
 );
 create table project_staff (
 	id text not null primary key,
-	project_id text not null,
+	project_id text not null references projects (id) on delete cascade,
 	org_id text not null,
 	person_id text references people (id) on delete set null,
 	foreign key (project_id, org_id) references projects (id, org_id) on delete cascade
@@ -136,6 +136,7 @@ const columns: TypedColumnList<DB, 'org_cards' | 'project_titles'> = {
 		columns: ['id', 'project_id', 'org_id', 'person_id'],
 		foreignKeys: [
 			{ columns: ['project_id', 'org_id'], table: 'projects', references: ['id', 'org_id'] },
+			{ columns: ['project_id'], table: 'projects', references: ['id'] },
 			{ columns: ['person_id'], table: 'people', references: ['id'] },
 		],
 		notNull: ['id', 'project_id', 'org_id'],
@@ -183,9 +184,10 @@ const vocabulary = {
  * The layer's tables; `self` lets a writer staff itself, `reveal` makes a staffed project reveal its org. A ticket lies in
  * an org and names a project it is read through, where staff see it and its org's other tickets. A card names a board of
  * a project, so its reveal reads the card, the board, the staff row and the person: the deepest scope the layer builds,
- * one deeper under a view of the org, which reads its rows through the org row.
+ * one deeper under a view of the org, which reads its rows through the org row. `named` gives staff a condition on the
+ * project its row names, read beside the person at the same depth.
  */
-function tablesWith(options: { readonly self?: true; readonly reveal?: true } = {}) {
+function tablesWith(options: { readonly self?: true; readonly reveal?: true; readonly named?: string } = {}) {
 	return defineTables(vocabulary, columns)({
 		orgs: { scope: { dimension: 'org' }, actions: { read: 'projects.read' }, version: 'version' },
 		projects: {
@@ -208,7 +210,13 @@ function tablesWith(options: { readonly self?: true; readonly reveal?: true } = 
 			scope: { child: 'projects' },
 			actions: { read: 'projects.read', insert: 'staff.assign', delete: 'staff.assign' },
 			insert: ['person_id'],
-			confers: { staff: { principal: 'person_id.principal_id', assign: options.self === true ? { self: true } : {} } },
+			confers: {
+				staff: {
+					principal: 'person_id.principal_id',
+					assign: options.self === true ? { self: true } : {},
+					...(options.named === undefined ? {} : { when: { 'project_id.name': { eq: options.named } } }),
+				},
+			},
 		},
 		tickets: {
 			scope: { child: 'orgs' },
@@ -452,6 +460,27 @@ function suite(dialect: 'sqlite' | 'postgres', open: () => Promise<Backend>, clo
 			expect(await listed('org_cards', 'staff')).toEqual([])
 		})
 
+		test("a relation's condition on the row the source names is read at every statement, beside the principal path, at the deepest reveal", async () => {
+			use(tablesWith({ named: 'one' }))
+			await staff([['s1', 'p1', 'pe-alice'], ['s2', 'p2', 'pe-alice-2']])
+			const rename = (name: string) => backend.exec(`update projects set name = '${name}' where id = 'p2'`)
+			expect(await listed('projects', 'staff')).toEqual(['p1'])
+			expect(await relates('staff', 'p2', 'user:alice')).toBe(false)
+			await rename('one')
+			expect(await listed('projects', 'staff')).toEqual(['p1', 'p2'])
+			expect(await relates('staff', 'p2', 'user:alice')).toBe(true)
+			await rename('two')
+			await backend.exec(`
+				insert into boards (id, project_id, org_id, version) values ('b2', 'p2', 'o1', 1);
+				insert into cards (id, org_id, board_id, version) values ('c2', 'o1', 'b2', 1)
+			`)
+			expect(await listed('cards', 'staff')).toEqual([])
+			expect(await listed('org_cards', 'staff')).toEqual([])
+			await rename('one')
+			expect(await listed('cards', 'staff')).toEqual(['c2'])
+			expect(await listed('org_cards', 'staff')).toEqual(['o1'])
+		})
+
 		test('a Ref held through a relation reads a view of its parent only where the relation reaches the parent row', async () => {
 			await staff([['s1', 'p1', 'pe-alice']])
 			const title = (project: string) =>
@@ -611,7 +640,12 @@ const pathColumns = {
 		json: ['profile'],
 	},
 	crews: { columns: ['id', 'org_id', 'principal_id'], foreignKeys: [], view: true },
-	jobs: { columns: ['id', 'principal_id', 'attempts', 'due_at', 'version'], foreignKeys: [], timestamps: ['due_at'] },
+	jobs: {
+		columns: ['id', 'org_id', 'principal_id', 'attempts', 'due_at', 'version'],
+		foreignKeys: [{ columns: ['org_id'], table: 'orgs', references: ['id'] }],
+		notNull: ['id', 'org_id'],
+		timestamps: ['due_at'],
+	},
 	countries: { columns: ['code', 'principal_id'], foreignKeys: [] },
 	members: {
 		columns: ['id', 'org_id', 'principal_id'],
@@ -640,11 +674,15 @@ const pathColumns = {
 			{ columns: ['project_id', 'org_id'], table: 'projects', references: ['id', 'org_id'] },
 			{ columns: ['mentor_id'], table: 'people', references: ['id'] },
 			{ columns: ['mentor_id'], table: 'countries', references: ['code'] },
+			{ columns: ['mentor_id', 'org_id'], table: 'people', references: ['id', 'org_id'] },
 			{ columns: ['buddy_id'], table: 'people', references: ['id'] },
 			{ columns: ['buddy_id', 'org_id'], table: 'crews', references: ['id', 'org_id'] },
 			{ columns: ['peer_id'], table: 'people', references: ['id'] },
 			{ columns: ['peer_id', 'org_id'], table: 'people', references: ['id', 'org_id'] },
 			{ columns: ['member_id'], table: 'members', references: ['id'] },
+			{ columns: ['member_id', 'org_id'], table: 'members', references: ['id', 'org_id'] },
+			{ columns: ['crew_id', 'org_id'], table: 'crews', references: ['id', 'org_id'] },
+			{ columns: ['job_id', 'org_id'], table: 'jobs', references: ['id', 'org_id'] },
 			{ columns: ['org_id'], table: 'orgs', references: ['id'] },
 			{ columns: ['org_ref'], table: 'orgs', references: ['id'] },
 			{ columns: ['lead_project_id'], table: 'projects', references: ['id'] },
@@ -810,6 +848,74 @@ describe('the policy of a principal reached through a to-one path', () => {
 		const staff = { principal: 'person_id.principal_id', node: 'project_id', expires: null, assign: { maxDays: null, self: false } }
 		expect(tablePolicies(tables)['project_staff']?.confers).toEqual({ staff })
 		expect(tablePolicies(readPath('person_id.principal_id'))['project_staff']?.confers).toEqual({ staff })
+	})
+})
+
+/** The policies with `staff` conferred only under `when`, and any table's fields replaced. */
+function readWhen(when: unknown, changes: Readonly<Record<string, Readonly<Record<string, unknown>>>> = {}): ReturnType<typeof readTables> {
+	const policies: Record<string, Record<string, unknown>> = {}
+	for (const [name, policy] of Object.entries(pathPolicies)) {
+		policies[name] = { ...policy, ...changes[name] }
+	}
+	policies['project_staff'] = { ...policies['project_staff'], confers: { staff: { principal: 'person_id.principal_id', when, assign: {} } } }
+	return readTables(pathColumns, policies, vocabulary)
+}
+
+describe("the policy of a relation's condition on the row the source names", () => {
+	test('follows one foreign key the hop rule admits, to a row whose tested column nothing rewrites', () => {
+		expect(() => readWhen({ 'peer_id.alias': { eq: 'lead' } })).not.toThrow()
+		expect(() => readWhen({ allOf: [{ 'country_code.principal_id': { isNull: false } }, { 'peer_id.alias': { notEq: 'x' } }] })).not.toThrow()
+		expect(() => readWhen({ allOf: [{ 'country_code.principal_id': { isNull: false } }, { not: { 'peer_id.alias': { eq: 'x' } } }] })).toThrow(
+			'project_staff.peer_id may be null, and under not a path through a null key holds exactly when no row of people in any tenant matches',
+		)
+		expect(tablePolicies(readWhen({ 'peer_id.alias': { eq: 'lead' } }))['project_staff']?.confers?.['staff']?.when).toEqual({
+			'peer_id.alias': { eq: 'lead' },
+		})
+	})
+
+	test('follows at most one foreign key, and no key out of the containment', () => {
+		expect(() => readWhen({ 'peer_id.org_id.owner_principal_id': { eq: 'x' } })).toThrow(
+			"a relation's condition follows at most one foreign key, to the row the source row names",
+		)
+		expect(() => readWhen({ 'org_id.owner_principal_id': { eq: 'x' } })).toThrow("outside the row's own containment")
+	})
+
+	test('no update writes the tested column, on the far row or the key on the source', () => {
+		const updating = { actions: { read: 'projects.read', insert: 'people.add', update: 'people.add' } }
+		expect(() => readWhen({ 'peer_id.alias': { eq: 'lead' } }, { people: { ...updating, update: ['alias'] } })).toThrow(
+			'people.alias decides what a row confers, so no update of people writes it; replace the row instead',
+		)
+		expect(() => readWhen({ 'peer_id.alias': { eq: 'lead' } }, { people: { ...updating, columns: { alias: { write: 'staff.assign' } } } })).toThrow(
+			'no update of people writes it',
+		)
+		const staffing = { actions: { read: 'projects.read', insert: 'staff.assign', update: 'staff.assign' }, update: ['peer_id'] }
+		expect(() => readWhen({ 'peer_id.alias': { eq: 'lead' } }, { project_staff: staffing })).toThrow(
+			'peer_id decides what a row confers, so no update writes it',
+		)
+		expect(() => readWhen({ 'peer_id.version': { eq: 1 } })).toThrow('people.version is the version column')
+		expect(() => readWhen({ 'peer_id.org_id': { eq: 'o1' } })).toThrow('people.org_id is a containment column, which a move rewrites')
+	})
+
+	test('nothing a write elsewhere cascades rewrites the key, the tested column or the key it is reached by', () => {
+		expect(() => readWhen({ 'mentor_id.alias': { eq: 'lead' } })).toThrow(
+			"project_staff.mentor_id starts the condition's path and is a column of a foreign key to countries",
+		)
+		expect(() => readWhen({ 'member_id.principal_id': { eq: 'x' } })).toThrow(
+			"members.id is the key the condition's path follows and is a column of a foreign key to countries",
+		)
+		expect(() => readWhen({ 'peer_id.manager_principal_id': { eq: 'x' } })).toThrow(
+			'people.manager_principal_id decides what a row confers and is a column of a foreign key to people',
+		)
+	})
+
+	test('reads no view, no queue table and no top-level dimension table, whose key an insert takes from its Ref', () => {
+		expect(() => readWhen({ 'crew_id.principal_id': { eq: 'x' } })).toThrow('crews is a view')
+		expect(() => readWhen({ 'job_id.principal_id': { eq: 'x' } }, { jobs: { scope: { child: 'orgs' } } })).toThrow('jobs is a queue table')
+		expect(() =>
+			readWhen({ 'peer_id.alias': { eq: 'x' } }, {
+				projects: { confers: { owner: { principal: 'created_by', when: { 'org_id.owner_principal_id': { eq: 'x' } } } } },
+			})
+		).toThrow('orgs is a top-level dimension table, whose key an insert takes from its Ref')
 	})
 })
 

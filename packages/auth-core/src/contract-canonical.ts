@@ -16,6 +16,7 @@ import type {
 	OutputShape,
 	RevealsArtifact,
 	RoleArtifact,
+	RowsTestArtifact,
 	SchemaShape,
 	TableActionArtifact,
 	TablePolicyArtifact,
@@ -200,19 +201,32 @@ export function canonicalCondition(condition: ConditionArtifact): ConditionArtif
 	if ('not' in condition && isCondition(condition.not)) {
 		return { not: canonicalCondition(condition.not) }
 	}
+	const rows = canonicalRows(condition)
+	if (rows !== undefined) return rows
+	const tests: Record<string, ColumnTestArtifact | RowsTestArtifact> = {}
+	for (const [path, test] of Object.entries(condition)) {
+		const after = isCondition(test) ? canonicalRows(test) : undefined
+		if (after !== undefined) {
+			tests[path] = after
+			continue
+		}
+		// A parsed artifact holds nothing else here; dropping an unknown test would widen what the condition admits.
+		if (!isColumnTest(test)) throw new Error(`the condition test of ${path} is not a column test`)
+		tests[path] = canonicalTest(test)
+	}
+	return tests
+}
+
+/** `some` or `none` with its condition canonical, or `undefined` for any other form: one beside another key is no rows test. */
+function canonicalRows(condition: object): RowsTestArtifact | undefined {
+	if (Object.keys(condition).length !== 1) return undefined
 	if ('some' in condition && isConditionRecord(condition.some)) {
 		return { some: mapValues(condition.some, canonicalCondition) }
 	}
 	if ('none' in condition && isConditionRecord(condition.none)) {
 		return { none: mapValues(condition.none, canonicalCondition) }
 	}
-	const tests: Record<string, ColumnTestArtifact> = {}
-	for (const [path, test] of Object.entries(condition)) {
-		// A parsed artifact holds nothing else here; dropping an unknown test would widen what the condition admits.
-		if (!isColumnTest(test)) throw new Error(`the condition test of ${path} is not a column test`)
-		tests[path] = canonicalTest(test)
-	}
-	return tests
+	return undefined
 }
 
 function canonicalTest(test: ColumnTestArtifact): ColumnTestArtifact {

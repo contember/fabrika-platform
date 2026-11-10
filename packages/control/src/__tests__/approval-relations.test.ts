@@ -4,7 +4,7 @@
 
 import { readContractSource } from '@fabrika/check/contract'
 import { describe, expect, test } from 'bun:test'
-import { relationGrantsRefusal } from '../approval/enforcement'
+import { relationFields, relationGrantsRefusal } from '../approval/enforcement'
 import type { AccessSnapshot } from '../approval/snapshot'
 import { classifyAccess } from './helpers/access'
 import { kitFiles } from './helpers/kit-contract'
@@ -205,6 +205,18 @@ describe("a table's read path in the approval diff", () => {
 		})
 		expect(classifyAccess(through({ label: 'label_id' }), none).outcome).toBe('no-widening')
 	})
+
+	test("widens when added through the row's container, or moved between its own column and its container's", () => {
+		expect(lines(none, through({ label: 'project_id.label_id' }))).toContainEqual({
+			effect: 'widens',
+			line: 'A read of `label` reaches table `notes` through `project_id.label_id`',
+		})
+		expect(lines(through({ label: 'label_id' }), through({ label: 'project_id.label_id' }))).toContainEqual({
+			effect: 'widens',
+			line: 'A read of `label` reaches table `notes` through `project_id.label_id` instead of `label_id`',
+		})
+		expect(classifyAccess(through({ label: 'project_id.label_id' }), through({ label: 'label_id' })).outcome).toBe('widening')
+	})
 })
 
 describe("a table's member reveals in the approval diff", () => {
@@ -230,6 +242,52 @@ describe("a table's member reveals in the approval diff", () => {
 		})
 		expect(lines(read, none)).toContainEqual({ effect: 'narrows', line: `${subject} nothing any more` })
 		expect(classifyAccess(read, none).outcome).toBe('no-widening')
+	})
+})
+
+describe('a condition that reads the rows naming a row a path reaches', () => {
+	const lines = (before: AccessSnapshot, after: AccessSnapshot) => classifyAccess(before, after).changes.map(({ effect, line }) => ({ effect, line }))
+	const none = snapshot(files())
+	const conditioned = (when: NonNullable<NonNullable<AccessSnapshot['contract']>['tables'][string]['when']>): AccessSnapshot => {
+		const contract = none.contract
+		const notes = contract?.tables['notes']
+		if (contract === null || notes === undefined) throw new Error('the kit has a notes table')
+		return { ...none, contract: { ...contract, tables: { ...contract.tables, notes: { ...notes, when } } } }
+	}
+	const later = conditioned({ 'notes.write': { workspace_id: { none: { notes: { title: { eq: 'locked' } } } } } })
+
+	test('narrows when added, widens when changed, and counts as a when at publication', () => {
+		expect(lines(none, later)).toEqual([{ effect: 'narrows', line: '`notes.write` holds a row of `notes` only under its condition' }])
+		const changed = conditioned({ 'notes.write': { workspace_id: { some: { notes: { title: { eq: 'locked' } } } } } })
+		expect(classifyAccess(later, changed).outcome).toBe('widening')
+		expect(later.contract === null ? [] : relationFields(later.contract)).toContain('when of table notes')
+		expect(relationGrantsRefusal(later.contract, '0.9.0-dev.12')).toContain('4 relation grant fields')
+	})
+})
+
+describe("a relation's condition on the row its source names", () => {
+	const lines = (before: AccessSnapshot, after: AccessSnapshot) => classifyAccess(before, after).changes.map(({ effect, line }) => ({ effect, line }))
+	const plain = snapshot(files())
+	type SourceWhen = NonNullable<NonNullable<NonNullable<AccessSnapshot['contract']>['tables'][string]['confers']>[string]['when']>
+	const sourced = (when: SourceWhen): AccessSnapshot => {
+		const contract = plain.contract
+		const members = contract?.tables['note_members']
+		const member = members?.confers?.['member']
+		if (contract === null || members === undefined || member === undefined) throw new Error('the fixture confers member')
+		return {
+			...plain,
+			contract: { ...contract, tables: { ...contract.tables, note_members: { ...members, confers: { member: { ...member, when } } } } },
+		}
+	}
+	const titled = sourced({ 'note_id.title': { eq: 'shared' } })
+
+	test('narrows when added, widens when changed, and counts as a confers at publication', () => {
+		expect(lines(plain, titled)).toEqual([{
+			effect: 'narrows',
+			line: 'Table `note_members` relation `member` is conferred only by a row its condition holds',
+		}])
+		expect(classifyAccess(titled, sourced({ 'note_id.title': { eq: 'open' } })).outcome).toBe('widening')
+		expect(titled.contract === null ? [] : relationFields(titled.contract)).toContain('confers of table note_members')
 	})
 })
 

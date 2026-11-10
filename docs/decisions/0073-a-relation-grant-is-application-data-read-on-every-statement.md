@@ -88,8 +88,13 @@ bounded delegation:
 - `assign.self` must be stated for a row that names its writer.
 - No update writes the principal, the node, the expiry or a column the relation's `when` reads; a source row never
   moves; a queue table confers nothing.
-- `ctx.sql` on a writing site never names a source table, `unscoped` never writes one, and no seed helper reaches
-  production.
+- The relation's `when` may follow one foreign key of the source, under section 3's hop rule, to the row it names (the
+  far side of a many-to-many source). That row is held like the source row: it is no view, no queue table and no
+  top-level dimension row, whose key an insert takes from its Ref; no update writes the column tested, which is no
+  version or containment column; and no foreign key carries a cascade into that column, the row's key or the source's
+  key column.
+- `ctx.sql` on a writing site never names a source table or a table its principal path or its `when` reads, `unscoped`
+  never writes a source table, and no seed helper reaches production.
 
 The writer need not hold the actions the relation grants. That is the exception to S8, and this record names it: the
 bound replaces "holds what it gives". An approver sees each `confers` and its `assign` as a widening in the approval
@@ -100,14 +105,30 @@ diff.
 A table's `when: { <action>: <condition> }` is ANDed onto every grant of that action: global, IAM-scoped and relation
 alike. A condition is structured data, never SQL: `eq`, `notEq`, `in`, `notIn`, `isNull`, `lt`, `lte`, `gt`, `gte`
 over a column, with `allOf`, `anyOf` and `not`, `{ some: { <table>: … } }` and `none` over the rows whose foreign key
-names the row, and `{ now: true }` as the statement clock. A condition's path follows at most three foreign keys, a
-`some` counted as one. A hop's subquery reads its target unscoped, so a hop follows only a row's own container or parent
-column, a foreign key that also holds every ancestor the two tables share and references the target's key, or a key
-into a reference table; a `some` follows such a key backwards. A child view's parent column is such a hop, though no
-foreign key declares it ([ADR-0072](0072-a-view-is-a-read-only-table.md)). An insert's condition is judged on the inserted row; one with
-a path, on the written row in the insert's transaction, every row on its paths locked `FOR SHARE` first, and a refusal
-fails the transaction. It takes no `some`. An upsert's conflict
-update is judged on the stored row. A relation source's condition reads the source row only.
+names the row, and `{ now: true }` as the statement clock. A path may end in `some` or `none`
+(`{ '<fk column>': { some: … } }`): the rows naming the row the path reaches. A foreign key that is null reaches no row,
+so neither form holds there. A `not`, in any condition and at any depth, follows a path only through columns the column
+list declares NOT NULL: a hop's subquery reads its target unscoped, so on a null key it is false while no row anywhere
+matches and unknown otherwise, and under `not` the row would turn on other tenants' rows. A reference table's key is no
+exception, and neither is a child view's parent column: `ctx.db.app` reads a view's rows without the parent subquery,
+and codegen marks every view column nullable, so a view's `when` takes no `not` over a path. A `some` nests in a `some`, and a `some` through a link table is a `some` of the link
+rows followed by a path from them. A condition's path follows at most three foreign keys, the path before a `some`,
+the `some` and every hop inside it counted together. A hop's subquery reads its target unscoped, so a hop follows only
+a row's own container or parent column, a foreign key that also holds every ancestor the two tables share and
+references the target's key, or a key into a reference table; a `some` follows such a key backwards, but never one into
+a reference table, whose row every tenant's rows name: it reads only rows of the named row's own tenant. Each form is the
+one subquery shape `T.<column> in (select X.<column> from X where …)`, so the guard admits it by its table and column,
+nested at most four deep under a reveal. A child view's parent column is such a hop, though no foreign key declares it
+([ADR-0072](0072-a-view-is-a-read-only-table.md)). An insert's condition is judged on the inserted row; one with a path,
+on the written row in the insert's transaction, every row on its paths locked `FOR SHARE` first, and a refusal fails
+the transaction. A `some` there reads rows that existed before the insert: it follows a path first, takes no `some` of
+the inserted table's rows at any depth (judged after the write, one would count the inserted row itself), and every row naming
+the row the path reached is locked too, so a row inserted meanwhile can only make it truer. It takes no `none`, no
+`some` under `not` and no `some` of the rows naming the inserted row: a row inserted before the commit could turn the
+first two false, which no lock holds, and no row names the third yet. An upsert's conflict update is judged on the
+stored row. A relation source's condition reads the source row and at most the one row its foreign key names
+(section 2), so under a reveal matched through a path it stays within four subqueries. It takes no `some`: rows naming
+a source row are written by their own table's writers, outside the delegation bound.
 
 Widening is a separate mechanism (`admits`, a step of the [coverage roadmap](../ideas/acl-coverage-roadmap.md)), and
 it is not part of `when`.
@@ -125,6 +146,27 @@ Control refuses to publish an artifact that declares `relations`, `via`, `confer
 pinned framework release predates their enforcement. A reader that ignores a narrowing field widens access, so this is
 a refusal and not a warning. Every new field is absent from the artifact unless declared, so existing artifacts keep
 their digests.
+
+### 6. A read path may start at the row's container
+
+`readThrough: { <dimension>: <column> }` reads a row through a foreign key of its own to the table that owns a
+dimension outside the row's chain. When that key lives on the row's nearest container instead, the row names the
+container's path: `readThrough: { team: 'task_id.team_id' }` on a task's comments, read by the team the task names. The
+term reads the container at every statement: `T.<link> in (select C.<key> from C where C.<column> in (<nodes>))`.
+
+- `<link>` is the row's nearest containment column, which places it now, so a move takes the read along.
+- The container declares the same path through a column of its own, which no update writes. One container deep: a
+  path through the container's own container is refused.
+- The guard admits the one extra subquery by the container's table and key, the way it admits a chain link.
+- The container's own `when` is not applied: the subquery tests the container's path column only, as a child view's
+  parent subquery leaves the parent's `when` out ([ADR-0072](0072-a-view-is-a-read-only-table.md)). The row's own
+  `when` narrows it; a row that must follow its container's condition states that condition on a path of its own.
+- A reveal is not matched through such a path. A relation above the dimension, under its source's condition, would
+  read the revealing row, the container, the path's table, the source and the far row: five subqueries, past the
+  guard's bound of four. The reveal is declared on the container instead.
+
+Nothing is stamped on the row, so no write keeps a copy in step (see Alternatives). An older framework refuses the
+dotted path at parse, so the form fails closed; the approval diff shows a new or changed path as a widening.
 
 ## Consequences
 
@@ -157,6 +199,11 @@ their digests.
 - **`admits` together with `when`, or raw SQL in it.** Widening without a tenant partition lets a grant in one company
   reach published rows of another. Raw SQL is the opposite of what a reviewable widening needs. `admits` is a step of
   the coverage roadmap and takes its own ADR.
+- **A stamped copy of the container's path column on the row**, for a read path that starts at the row's container.
+  It reads one subquery shallower and would let a reveal match through it. But every insert, every move of the row and
+  every write of the container's column would have to rewrite the copy on every row below, in the same transaction, or
+  a row would stay readable by a team its container left. The container term reads the column where it lives, at every
+  statement, and needs nothing kept in step (section 6).
 - **A view as a relation source.** A view's rows change with every write to its base tables, and the delegation bound
   sees none of those writes: nobody could bound who gains access, and an approver could not review it. An application
   that needs one writes its source rows through a real table with `assign`.

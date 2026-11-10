@@ -128,7 +128,7 @@ deploys.
 From `0.9.0-dev.13`, `schema.generated.ts` lists each table's `notNull` columns, and a condition path or a `readThrough`
 over a foreign key that holds the row's tenant requires its ancestor columns there. Run `fabrika db codegen` after
 raising the pin: `codegen --verify` refuses the stale file at build, and a list without `notNull` names none, so the
-parse refuses such a path until the file is regenerated. Relation grants (`relations`, a role's `via`, a table's
+parse refuses such a path, and a condition's `not` over any path, until the file is regenerated. Relation grants (`relations`, a role's `via`, a table's
 `confers` and `when`; [ADR-0073](../decisions/0073-a-relation-grant-is-application-data-read-on-every-statement.md))
 need `0.9.0-dev.13` or later: Control refuses to publish them for an application pinned to an earlier release.
 

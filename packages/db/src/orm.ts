@@ -9,6 +9,7 @@ import { BinaryOperationNode, OperatorNode, ValueNode } from 'kysely'
 import { refScope } from './authority'
 import { freeze, hasOwn, inSet, isSafeInteger, nameSet, namesOf, ownDescriptor, ownKeys, ownNames, parseList, setOwn } from './builtins'
 import { type CapabilityGrant, describeGrant, type RefGrant } from './capability'
+import { conditionReach } from './conditions'
 import type { InvocationTransaction, Session } from './database'
 import {
 	columnOf,
@@ -200,8 +201,8 @@ export function dataAccess(parts: DataLayerParts): DataAccess {
 /**
  * The tables whose rows hand out access, which no raw statement writes, lowercased as the tag compares names: a relation
  * source or a path reveal, whose writer the layer bounds; a member-revealing table, whose key the layer generates so no
- * write revives a node a stale grant still names; and the table a principal path reads, whose column decides whom a
- * source row names.
+ * write revives a node a stale grant still names; and the tables a principal path or a relation's condition reads, whose
+ * columns decide whom a source row names and what it confers.
  */
 function accessTables(models: TableModels): readonly string[] {
 	const tables: string[] = []
@@ -212,8 +213,14 @@ function accessTables(models: TableModels): readonly string[] {
 			tables[tables.length] = model.name.toLowerCase()
 		}
 		for (let position = 0; model !== undefined && position < model.confers.length; position++) {
-			const path = model.confers[position]?.principalPath
+			const source = model.confers[position]
+			const path = source?.principalPath
 			if (path !== undefined) tables[tables.length] = path.table.toLowerCase()
+			if (source?.when !== undefined) {
+				conditionReach(source.when, (table) => {
+					tables[tables.length] = table.toLowerCase()
+				})
+			}
 		}
 	}
 	return tables

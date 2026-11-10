@@ -16,6 +16,7 @@ const vocabulary = {
 interface DB {
 	projects: { id: string; version: number }
 	tasks: { id: string; project_id: string; open: boolean }
+	steps: { id: string; project_id: string; done: boolean }
 }
 
 const columns: TypedColumnList<DB> = {
@@ -24,6 +25,11 @@ const columns: TypedColumnList<DB> = {
 		columns: ['id', 'project_id', 'open'],
 		foreignKeys: [{ columns: ['project_id'], table: 'projects', references: ['id'] }],
 		booleans: ['open'],
+	},
+	steps: {
+		columns: ['id', 'project_id', 'done'],
+		foreignKeys: [{ columns: ['project_id'], table: 'projects', references: ['id'] }],
+		booleans: ['done'],
 	},
 }
 
@@ -36,6 +42,11 @@ const tables = tablePolicies(
 			when: { 'projects.read': { anyOf: [{ some: { tasks: { open: { eq: true } } } }, { none: { tasks: { open: { eq: false } } } }] } },
 		},
 		tasks: { scope: { child: 'projects' }, actions: { read: 'projects.read' } },
+		steps: {
+			scope: { child: 'projects' },
+			actions: { read: 'projects.read' },
+			when: { 'projects.read': { project_id: { none: { tasks: { open: { eq: true } } } } } },
+		},
 	}),
 )
 
@@ -56,6 +67,19 @@ describe('some and none in the artifact', () => {
 		expect(compileContract(contract, tables).tables['projects']?.when).toEqual({
 			'projects.read': { anyOf: [{ none: { tasks: { open: { eq: false } } } }, { some: { tasks: { open: { eq: true } } } }] },
 		})
+	})
+
+	test('a some or none after a path is recorded under its path, and parsed back', () => {
+		expect(compileContract(contract, tables).tables['steps']?.when).toEqual({
+			'projects.read': { project_id: { none: { tasks: { open: { eq: true } } } } },
+		})
+	})
+
+	test('the parser refuses a path whose test is neither a column test nor one some or none', () => {
+		const steps = tables['steps']
+		if (steps === undefined) throw new Error('no steps policy')
+		const mixed = { ...tables, steps: { ...steps, when: { 'projects.read': { project_id: { some: { tasks: { open: { eq: true } } }, eq: 'x' } } } } }
+		expect(() => compileContract(contract, mixed)).toThrow('the condition test of project_id is not a column test')
 	})
 
 	test('the parser refuses a some that names two tables', () => {

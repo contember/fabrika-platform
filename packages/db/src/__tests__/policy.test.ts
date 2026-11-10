@@ -605,11 +605,28 @@ describe('a view (ADR-0072)', () => {
 		)
 	})
 
+	test('takes no not over its parent column, which an app-wide read meets null', () => {
+		const columns = { ...viewColumns, orphan_events: { columns: ['id', 'project_id', 'note'], foreignKeys: [], view: true } }
+		const orphans = (condition: unknown) => ({
+			...base,
+			orphan_events: { scope: { child: 'projects' }, actions: { read: 'projects.read' }, when: { 'projects.read': condition } },
+		})
+		expect(refusal(orphans({ not: { 'project_id.name': { eq: 'Apollo' } } }), columns)).toBe(
+			'orphan_events: when.projects.read.not.project_id.name: orphan_events.project_id may be null, and under not a path through a null key holds exactly when no row of projects in any tenant matches; declare orphan_events.project_id NOT NULL and run fabrika db codegen, or drop the not',
+		)
+		expect(refusal(orphans({ 'project_id.name': { notEq: 'Apollo' } }), columns)).toBe('accepted')
+	})
+
 	test("takes a when, whose path starts at its parent column and follows the parent's foreign keys from there", () => {
 		const when = (condition: unknown) => ({ ...base, project_summaries: { ...summary, when: { 'projects.read': condition } } })
 		expect(tablePolicies(read(when({ 'project_id.organization_id.name': { eq: 'One' } })))['project_summaries']?.when).toEqual({
 			'projects.read': { 'project_id.organization_id.name': { eq: 'One' } },
 		})
+		// ctx.db.app reads a view's rows without the parent subquery, and a view's parent column may be null.
+		expect(refusal(when({ not: { 'project_id.organization_id.name': { eq: 'One' } } }))).toContain(
+			'project_summaries.project_id may be null, and under not a path through a null key holds exactly when no row of projects in any tenant matches',
+		)
+		expect(() => read(when({ 'project_id.organization_id.name': { notEq: 'One' } }))).not.toThrow()
 		expect(refusal(when({ 'organization_id.name': { eq: 'One' } }))).toBe(
 			'project_summaries: when.projects.read.organization_id.name: project_summaries.organization_id is not a single-column foreign key, so a path cannot follow it',
 		)

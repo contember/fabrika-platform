@@ -79,7 +79,8 @@ a scope over them is as sound as that SQL.
    narrows a read action of a child view as it narrows a table's ([ADR-0073](0073-a-relation-grant-is-application-data-read-on-every-statement.md)),
    after the parent subquery. A path may start at the view's parent column, which the parse takes for a foreign key to
    the parent's key that no column list declares, and follows the parent's own foreign keys from there under the path
-   rule; that hop counts toward the three. No other column of a view is a foreign key, so no other path starts there,
+   rule; that hop counts toward the three. Every view column is nullable and `ctx.db.app` reads a view's rows without
+   the parent subquery, so no `not` follows such a path (ADR-0073's `not` rule). No other column of a view is a foreign key, so no other path starts there,
    and no `some` or `none` reads rows that name a view's. A reference view takes no `when`: every site reads it. A view
    confers no relation, and takes no `reveals`, `readThrough` or `memberReveals`: each of them places or reads rows of
    its own table at a node, and a view's rows lie at no node of their own. A relation, a reveal or a secondary path that

@@ -342,7 +342,8 @@ policy; without one only `ctx.sql` reads it. With one, `ctx.db` reads it like a 
 - `scope: { reference: '<why>' }` is a view every endpoint reads, through `ctx.db.reference.<view>`.
 - A child view takes a `when` on its read actions, as a table does (`references/relations.md`): a path may start at
   its parent column (`'deal_id.stage'`), though no foreign key declares it, and follows the parent's foreign keys from
-  there. The parent's own `when` does not narrow the view; state the view's.
+  there. The parent's own `when` does not narrow the view; state the view's. Every view column is nullable, so a
+  `not` over such a path is refused: state the condition without the `not`.
 - It takes `actions: { read, appRead?, appCount? }`, column `read` actions and a child view's `when` only. `insert`, `update`, `delete`,
   `version`, `createdBy`, `queue`, `files`, a column `write` and `unscoped: { <view>: 'write' }` are refused by tsc and
   the checker; its handles' writes are `Unavailable`, and the data layer refuses them.

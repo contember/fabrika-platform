@@ -563,7 +563,13 @@ through a relation (`~rel`, `@fabrika/auth-core`). `authority.ts` builds every p
 - **A relation reaches a row's node while a source row names the caller there, unexpired and admitted by the source's
   `when`**: an uncorrelated `T.node in (select S.node from S where S.principal = $me …)`, ORed into a `Within`'s values
   and carried by a `Ref` minted through it. Nothing caches it, so a deleted source row stops access at the next
-  statement. A source's `when` reads the source row only, never its `version`; a queue table confers nothing.
+  statement. A source's `when` never reads its `version`, and a queue table confers nothing. It may follow one foreign
+  key under the hop rule to the far row (`parseSourceWhen`), never two and no `some`, so a reveal through a path stays
+  four deep beside a principal path; `farColumn` holds the far row as `parsePrincipal` holds P (no view, queue or
+  top-level dimension, the tested column no version, containment or updated column, no cascade into it, its key or the
+  source's column), and `accessTables` keeps `ctx.sql` writes off it. The tag checks a statement when it runs, so a
+  writing statement that already names the far table, or a principal path's table, fails at run time from the release
+  whose policy adds that condition or path; no parse sees the application's statements.
 - **A principal may be read through one foreign key** (`principal: '<column>.<principal column>'`, `parsePrincipal`):
   `<column>` is a single-column foreign key to the key of a contained dimension, child or application table P (no view,
   no queue table, no top-level dimension, whose key an insert takes from its Ref), never the source's key, chain,
@@ -598,17 +604,34 @@ through a relation (`~rel`, `@fabrika/auth-core`). `authority.ts` builds every p
   condition is structured data, never SQL; `{ now: true }` is the statement clock, parsed to an identity, never the
   text `now`. A path follows at most three foreign keys, a `some`/`none` counting as one: a row's own container or
   parent column, a key into a reference table, or a key that holds the row's tenant (below); `some` follows such a key
-  backwards. Every hop also needs a single-column foreign key on its column (`singleForeignKey`), the composite
+  backwards, but never a key into a reference table (`HopRule`'s `backward`): every tenant's rows name a reference
+  row, and a `some` reads only rows of the named row's tenant. A path may end in one (`{ '<fk>': { some: … } }`, the model's `some` with `hops`): the rows naming the row
+  it reaches, `none` negated there, so a null key holds neither. A `not`, at any depth and in every condition, follows
+  a path only through columns in the column list's `notNull` (`negated` in `parseNode`): on a null key a hop's
+  unscoped subquery is false while no row anywhere matches and unknown otherwise, so under `not` the row would turn on
+  other tenants' rows. A reference table's key is no exception, and neither is a child view's parent column
+  (`conditionRoot`): `ctx.db.app` reads a view without the parent subquery, and every view column is nullable, so a
+  view's `when` takes no `not` over a path. A `some` nests, and a link table is a `some` and a path
+  from it; all of it counts towards the three. Every hop also needs a single-column foreign key on its column (`singleForeignKey`), the composite
   key of a tenant hop included, so a table with only `(project_id, org_id) references projects (id, org_id)` takes no
   path. An insert's condition is judged on the written row; one with a path in the insert's transaction, every
-  row on its paths locked `FOR SHARE` first, and it takes no `some`.
+  row on its paths locked `FOR SHARE` first (`readPaths`; a `some` after a path locks every row naming the row it
+  reached). `insertProblem` refuses a `none`, a `some` under `not` (a row inserted meanwhile falsifies them, and no
+  lock holds that), a `some` of the rows naming the inserted row, and a `some` of the inserted table's own rows at any
+  depth: judged after the write, it would count the inserted row itself.
 - **A tenant-holding key** is one foreign key of exactly the column and every ancestor column the two tables share,
   referencing the target's key (`holdsExactly`), with each ancestor column in the column list's `notNull`
   (`requireNotNullAncestors`, the invariant above). A hop's subquery reads its target unscoped, so any looser key would
   read another tenant's row.
 - **`readThrough: { <dimension>: <column> }`** lets a `Within` of a dimension outside the table's chain, or a relation
   at it, read the row through that tenant-holding key. Every write still follows containment only, and no update writes
-  the column. `DbIndex` lists the table under that dimension's `Within` (`ReadThroughOf`).
+  the column. `DbIndex` lists the table under that dimension's `Within` (`ReadThroughOf`). `'<link>.<column>'` reads
+  the row through its nearest container's own path instead (`throughContainer`, `SecondaryPath.via`):
+  `T.<link> in (select C.<key> from C where <C's term>)`, `<link>` the row's nearest containment column and `<column>`
+  the container's own single-column path for the dimension. Nothing is stamped, so a move or the container's column is
+  read as it stands; the guard admits `(C, key)` beside the path's table. C's `when` is not applied, as a view's
+  parent subquery leaves its parent's out: the row's own `when` narrows the row. A reveal is not matched through such a path:
+  a relation above it under a source's condition would nest five deep.
 - **`reveals`** makes a row a relation reaches reveal its ancestor node in `to` for the listed actions (those its
   roles name in `via`), while the reveal's `when` admits the row. A reveal matched through `readThrough` on a table with
   an insert needs `assign` (`self` to let the writer name a node where it holds the relation), because the writer picks

@@ -4702,7 +4702,11 @@ export const tables = defineTables(vocabulary, columns)({
 
 - `confers: { <relation>: { principal, node?, expires?, when?, assign? } }`. `node` defaults to the table's column of
   the relation's dimension. A row confers nothing once `expires` passed, nor while its own `when` does not admit it.
-  A source's `when` reads the source row only (no path, no `some`), never its `version`.
+  A source's `when` never reads its `version`. It may follow one foreign key to the row the source names, such as
+  `{ 'person_id.active': { eq: true } }`, the far side of a many-to-many table: no update of that table may write the
+  column it tests, and the table is no view, queue or top-level dimension table. It takes no second foreign key and no
+  `some`. That table joins the source table among those `ctx.sql` of a writing endpoint never names, so a writing
+  statement that already names it fails at run time once the condition is added: move that write to `ctx.db` first.
 - Inserting a row is delegation: the coordinator gives the assistant `tasks.read` and `tasks.write` without holding
   `tasks.write` itself. The insert's own action (`assistants.assign`) decides who may write it, and the layer bounds
   what it gives instead:
@@ -4746,12 +4750,26 @@ export const tables = defineTables(vocabulary, columns)({
   its parent column, which needs no foreign key.
 - `{ some: { <table>: <condition> } }` holds when a row of `<table>` whose single-column foreign key names this row
   meets the condition, `none` when no such row does: on `projects`, `{ some: { tasks: { done: { eq: false } } } }` is
-  a project with an open task.
-- A path follows at most three foreign keys, each `some` or `none` counting as one. Each hop is one more subquery in
-  every statement of the action; shorten a longer path with a stored column.
+  a project with an open task. The rows' foreign key is held like a path's hop, so it keeps to the row's tenant, and
+  a key into a reference table is not followed back: `{ tag_id: { some: { project_tags: … } } }` would count every
+  tenant's rows that name the tag, so the policy refuses it.
+- A path may end in `some` or `none`: on `tasks`, `{ project_id: { some: { project_tags: { 'tag_id.name': { eq:
+  'urgent' } } } } }` is a task of a project tagged urgent, through the link table `project_tags`. A `null` foreign key
+  reaches no row, so neither `some` nor `none` holds there. A `some` nests in a `some`.
+- A `not` follows a path only through columns declared `NOT NULL`, at any depth: on a null key the path's lookup
+  would turn on rows of every tenant. `{ not: { 'client_id.active': { eq: true } } }` with a nullable `client_id` is
+  refused and names the column: declare it `NOT NULL` in a migration and run `fabrika db codegen`, or say what a row
+  without a client gets, `{ anyOf: [{ client_id: { isNull: true } }, { 'client_id.active': { eq: false } }] }`. Like
+  the `not`, it leaves out a row whose client's `active` is null.
+- A path follows at most three foreign keys, the path before a `some`, the `some` and every hop inside it counted
+  together. Each hop is one more subquery in every statement of the action; shorten a longer path with a stored column.
 - An insert's condition is judged on the written row. One with a path runs in the insert's transaction, every row on
   its paths locked `FOR SHARE` first, so nobody changes the project while the task goes in. An insert action's
-  condition takes no `some` or `none`. An upsert's conflict update is judged on the stored row.
+  condition may end a path in `some` (`{ project_id: { some: … } }`), whose rows are locked too. It takes no `none`,
+  no `some` under `not`, no `some` straight on the inserted row, and no `some` of the inserted table's own rows
+  (`{ project_id: { some: { tasks: … } } }` on `tasks`): a row inserted meanwhile could make the first two false,
+  nothing names the new row yet, and the last would count the new task itself, since the condition is judged after
+  the write. An upsert's conflict update is judged on the stored row.
 
 ### A key that holds the tenant needs its ancestors NOT NULL
 
@@ -4766,7 +4784,11 @@ one is refused and names the column: add a migration that sets it `NOT NULL`, th
 
 - `readThrough: { <dimension>: <column> }` lets a `Within` of a dimension outside the table's chain, or a relation at
   it, read the row through that column's tenant-holding key: a task in a project, read by the members of the team its
-  `team_id` names. Every write still follows the task's containment, and no update writes the column.
+  `team_id` names. Every write still follows the task's containment, and no update writes the column. When the key
+  lives on the row's container, name the container's path from the row's own containment column:
+  `readThrough: { team: 'task_id.team_id' }` on a task's comments. The container declares `readThrough.team` through
+  a column of its own; the row follows it wherever the container's column points now. Such a table takes no reveal
+  matched through that path: declare the reveal on the container.
 - `reveals: { <relation>: { to, actions, when? } }` on a table the relation reaches: such a row also gives the
   relation `actions` (those its roles name in `via`) at its ancestor node in `to` while `when` admits the row: an
   assignee of an open task reads its project. A reveal matched through `readThrough` on a table with an insert needs
@@ -6357,7 +6379,8 @@ policy; without one only `ctx.sql` reads it. With one, `ctx.db` reads it like a 
 - `scope: { reference: '<why>' }` is a view every endpoint reads, through `ctx.db.reference.<view>`.
 - A child view takes a `when` on its read actions, as a table does (`references/relations.md`): a path may start at
   its parent column (`'deal_id.stage'`), though no foreign key declares it, and follows the parent's foreign keys from
-  there. The parent's own `when` does not narrow the view; state the view's.
+  there. The parent's own `when` does not narrow the view; state the view's. Every view column is nullable, so a
+  `not` over such a path is refused: state the condition without the `not`.
 - It takes `actions: { read, appRead?, appCount? }`, column `read` actions and a child view's `when` only. `insert`, `update`, `delete`,
   `version`, `createdBy`, `queue`, `files`, a column `write` and `unscoped: { <view>: 'write' }` are refused by tsc and
   the checker; its handles' writes are `Unavailable`, and the data layer refuses them.
