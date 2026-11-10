@@ -2,16 +2,19 @@
 // a task's `team_id` names, or a relation there, gets a Ref of the task from `on`, and through the reveal matched
 // through the path a Ref of its project. An insert that names a team needs its writer to hold, at that team, every
 // action the column hands out. A grant at the team also reads the task's project through a member reveal, whose
-// `assign` keeps a writer from naming a team where it holds such a grant.
+// `assign` keeps a writer from naming a team where it holds such a grant. A caller with more path grants than one
+// statement binds is asked in batches, on Postgres (FABRIKA_TEST_POSTGRES_URL).
 
 import { createClient } from '@fabrika/app/client'
 import { defineApp } from '@fabrika/app/contract'
 import { serve } from '@fabrika/app/implement'
 import { testKit } from '@fabrika/app/testing'
-import { scoped } from '@fabrika/db'
+import { MAX_WITHIN_VALUES, scoped } from '@fabrika/db'
+import { testDatabase as postgresDatabase } from '@fabrika/db/testing'
 import { testDatabase } from '@fabrika/db/testing-sqlite'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { z } from 'zod/v4'
+import { bootApp, environment, frameworkEnvFor, grant, resultOf, send, token } from './fixtures/implement/harness'
 import { tables } from './write-through-fixture/tables'
 import { vocabulary } from './write-through-fixture/vocabulary'
 
@@ -129,5 +132,28 @@ describe('a write path through boot', () => {
 			id: expect.any(String),
 		})
 		expect(await callerOf([atTeam('projects.read', 't1')]).projects({})).toEqual({ ids: ['p1', 'p2'] })
+	})
+})
+
+// A Durable Object's SQLite binds at most 100 parameters to a statement, so this case runs on Postgres only.
+describe('a write path through boot, on Postgres', () => {
+	test(`a grant among more than ${MAX_WITHIN_VALUES} team grants still gets its Ref: the candidates are asked in batches`, async () => {
+		const fresh = await postgresDatabase({
+			migrations: new URL('./write-through-fixture/db/postgres/', import.meta.url),
+			label: 'write-through.test.ts',
+		})
+		if (fresh === null) return
+		try {
+			// Past the kit's token size bound, so the token goes to boot directly, as the proxy forwards it.
+			const served = serve(contract, { database: scoped(tables) })
+			const audience = 'teams@prod'
+			const app = bootApp(served, { database: fresh.database, environment: environment({ ...frameworkEnvFor(served), FABRIKA_IAM_APP_ID: audience }) })
+			const teams = [...Array.from({ length: MAX_WITHIN_VALUES }, (_, index) => `pad-${index}`), 't1']
+			const held = await token('user', teams.map((team) => grant('tasks.read', { type: 'team', value: team })), audience)
+			expect(resultOf(await send(app, '/api/api.task', { token: held, body: { id: 'k1' } }))).toEqual({ title: 'one' })
+			expect((await send(app, '/api/api.task', { token: held, body: { id: 'k2' } })).status).toBe(404)
+		} finally {
+			await fresh.close()
+		}
 	})
 })

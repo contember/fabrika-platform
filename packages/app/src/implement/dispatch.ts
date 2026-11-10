@@ -1045,13 +1045,43 @@ export class ContractRuntime {
 		return { relations: this.#heldRelations(perms, action, dimensions), paths }
 	}
 
-	/** Of `candidates`, those that reach the object `value` of `dimension` through a path holding `action`, now. */
+	/**
+	 * Of `candidates`, those that reach the object `value` of `dimension` through a path holding `action`, now. The grants
+	 * go to the database in batches of at most `MAX_WITHIN_VALUES` values, as one statement binds them; the relations
+	 * with the first.
+	 */
 	async #heldThrough(principal: string, candidates: HeldThrough, action: string, dimension: string, value: string): Promise<HeldThrough> {
 		const check = this.#parts.database?.holdsThrough
 		if (check === undefined || (candidates.relations.length === 0 && candidates.paths.length === 0)) {
 			return NONE_THROUGH
 		}
-		return await check(dimension, value, action, principal, candidates.relations, candidates.paths)
+		const batches: ContainerGrant[][] = [[]]
+		let size = 0
+		for (const grant of candidates.paths) {
+			for (let start = 0; start < grant.values.length; start += MAX_WITHIN_VALUES) {
+				const values = grant.values.slice(start, start + MAX_WITHIN_VALUES)
+				if (size + values.length > MAX_WITHIN_VALUES) {
+					batches.push([])
+					size = 0
+				}
+				batches[batches.length - 1]?.push({ dimension: grant.dimension, values })
+				size += values.length
+			}
+		}
+		const relations = new Set<string>()
+		const paths = new Map<string, Set<string>>()
+		for (const [index, batch] of batches.entries()) {
+			const asked = index === 0 ? candidates.relations : []
+			if (asked.length === 0 && batch.length === 0) continue
+			const held = await check(dimension, value, action, principal, asked, batch)
+			for (const relation of held.relations) relations.add(relation)
+			for (const grant of held.paths) {
+				const values = paths.get(grant.dimension) ?? new Set<string>()
+				for (const at of grant.values) values.add(at)
+				paths.set(grant.dimension, values)
+			}
+		}
+		return { relations: [...relations], paths: [...paths].map(([at, values]) => ({ dimension: at, values: [...values] })) }
 	}
 
 	/**

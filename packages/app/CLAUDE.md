@@ -592,8 +592,9 @@ vocabulary (`packages/db/CLAUDE.md`).
   values. An entry of a relation the contract does not declare counts for none. `memberReveals` adds the caller's
   grants at nodes whose rows reveal the `over` dimension to their members; `on` and `in` mint a `Ref` through such a
   row (`#revealedOn`, the db's `revealsToMembers`) and carry the grants it matched (`Ref`'s revealing). A table's
-  `writeThrough` lets them mint a `Ref` through its path (`#throughCandidates`, the db's `holdsThrough`), carrying the
-  grants and relations at the path's dimension that matched (`Ref`'s paths). Every statement then re-reads the
+  `writeThrough` lets them mint a `Ref` through its path (`#throughCandidates`, the db's `holdsThrough`, asked in batches
+  of at most `MAX_WITHIN_VALUES` values as `#revealedOn` asks), carrying the grants and relations at the path's dimension
+  that matched (`Ref`'s paths). Every statement then re-reads the
   relation, revealing and path rows (`@fabrika/db`'s CLAUDE.md), so the framework caches nothing about them. The request
   frame's `standing` hands the db what the caller holds of an action in a dimension (empty when it holds none), which
   bounds the writer of a path column and of a member reveal's path under `assign`; a frame with no caller has none, so a
