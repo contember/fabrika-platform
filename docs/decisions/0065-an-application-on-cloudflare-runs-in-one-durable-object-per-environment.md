@@ -110,7 +110,9 @@ SQLite database. The Worker only forwards each request to it.**
    There is no function list on SQLite: its built-ins reach nothing outside the database. A `'read'` site's statement
    runs in a `transactionSync` of its own, also inside a writing invocation, and one whose cursor reports
    `rowsWritten` rolls back and fails the invocation. An application migration runs verbatim, so the checker refuses
-   one that names a `fabrika_*` table but `REFERENCES fabrika_files`, the file column's key (`cloudflare-framework-name`).
+   one that names a `fabrika_*` table but `REFERENCES fabrika_files`, the file column's key (`cloudflare-framework-name`),
+   and an `INSTEAD OF` trigger, which would make a read-only view writable ([ADR-0072](0072-a-view-is-a-read-only-table.md),
+   `cloudflare-view-trigger`).
    The provider deploys a site that declares `sql` from the release that serves it (`servesRawSql`, `0.9.0-dev.5`) on
    and refuses it for an older pin, whose boot would refuse it.
 8. **The platform's services stay on D1.** IAM, Control and Operations write through repository operations that are

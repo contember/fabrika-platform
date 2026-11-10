@@ -62,7 +62,8 @@ a scope over them is as sound as that SQL.
    column `write` are refused by the one parse, so the static reader refuses them from source. Its handles' `insert`,
    `update` and `remove` are `Unavailable` (`<view> is a view, which no site writes`), an `unscoped: { <view>: 'write' }`
    declaration is refused, its unscoped handle refuses every write, and the store refuses an insert, update or delete
-   root on a view before compiling (`read_only`).
+   root on a view before compiling (`read_only`). On SQLite an `INSTEAD OF` trigger would make a view writable, so the
+   checker refuses one in a migration (`cloudflare-view-trigger`).
 6. **The parent row places a view's rows.** The parent's own foreign keys place the parent row, so a view's
    containment rests on them and on its parent column alone. A chain column the view carries is read and joined, never
    compared for scope: a row whose chain columns disagree with its parent's lies where the parent lies. A row whose

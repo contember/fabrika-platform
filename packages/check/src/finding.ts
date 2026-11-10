@@ -48,6 +48,7 @@ export const REFUSAL_RULE_IDS = [
 	'cloudflare-job-segment',
 	'cloudflare-current-timestamp',
 	'cloudflare-framework-name',
+	'cloudflare-view-trigger',
 ] as const
 
 /** Rules that report a step out of the application architecture. */

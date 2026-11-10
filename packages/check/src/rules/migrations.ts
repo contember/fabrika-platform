@@ -106,6 +106,37 @@ export const checkSqliteFrameworkNames = (files: ReadonlyMap<string, string>): F
 	return findings
 }
 
+/**
+ * A view is read-only (ADR-0072); on SQLite an INSTEAD OF trigger would make a view writable, so it is refused. SQLite
+ * takes INSTEAD OF only on a view, so the timing alone, written before the trigger's `ON`, names one.
+ */
+export const checkSqliteViewTriggers = (files: ReadonlyMap<string, string>): Finding[] => {
+	const findings: Finding[] = []
+	for (const [path, sql] of files) {
+		if (!path.startsWith(MIGRATIONS_DIR) || !path.endsWith('.sql')) continue
+		for (const { tokens } of statementsOf(lexSqlite(sql).tokens)) {
+			if (upperWord(tokens[0]) !== 'CREATE') continue
+			const at = skipWords(tokens, skipWords(tokens, 1, 'TEMP'), 'TEMPORARY')
+			if (upperWord(tokens[at]) !== 'TRIGGER') continue
+			for (let index = at + 1; index < tokens.length && upperWord(tokens[index]) !== 'ON'; index++) {
+				const token = tokens[index]
+				if (token === undefined || upperWord(token) !== 'INSTEAD' || upperWord(tokens[index + 1]) !== 'OF') continue
+				findings.push({
+					file: path,
+					line: token.line,
+					column: 1,
+					severity: 'refusal',
+					rule: 'cloudflare-view-trigger',
+					message: 'an INSTEAD OF trigger makes a view writable, and a view is read-only (ADR-0072)',
+					allowed: 'a view without triggers, written through its source tables',
+				})
+				break
+			}
+		}
+	}
+	return findings
+}
+
 /** A declared file column: `table.column` holds files of `kind`. */
 export interface FileColumn {
 	readonly table: string

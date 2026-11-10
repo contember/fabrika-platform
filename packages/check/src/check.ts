@@ -41,6 +41,7 @@ import {
 	checkFileColumnMigrations,
 	checkMigrationNames,
 	checkSqliteFrameworkNames,
+	checkSqliteViewTriggers,
 	type ConflictInsert,
 	type FileColumn,
 } from './rules/migrations'
@@ -322,6 +323,7 @@ export const checkApplication = async (input: CheckInput): Promise<Finding[]> =>
 		if (artifact !== null) findings.push(...checkCloudflareContract(artifact))
 		findings.push(...checkCurrentTimestampDefaults(tree.files))
 		findings.push(...checkSqliteFrameworkNames(tree.files))
+		findings.push(...checkSqliteViewTriggers(tree.files))
 		findings.push(...(await checkBackupPlan(tree.files)))
 	}
 	if (declaredTables !== null) {
