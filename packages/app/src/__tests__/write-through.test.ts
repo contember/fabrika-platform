@@ -2,17 +2,18 @@
 // a task's `team_id` names, or a relation there, gets a Ref of the task from `on`, and through the reveal matched
 // through the path a Ref of its project. An insert that names a team needs its writer to hold, at that team, every
 // action the column hands out. A grant at the team also reads the task's project through a member reveal, whose
-// `assign` keeps a writer from naming a team where it holds such a grant. A caller with more path grants than one
+// `assign` keeps a writer from naming a team where it holds such a grant. A webhook binding refuses a Ref held through
+// the path. A caller with more path grants than one
 // statement binds is asked in batches, on Postgres (FABRIKA_TEST_POSTGRES_URL).
 
 import { createClient } from '@fabrika/app/client'
-import { defineApp } from '@fabrika/app/contract'
+import { defineApp, WebhookSecret } from '@fabrika/app/contract'
 import { serve } from '@fabrika/app/implement'
 import { testKit } from '@fabrika/app/testing'
 import { MAX_WITHIN_VALUES, scoped } from '@fabrika/db'
 import { testDatabase as postgresDatabase } from '@fabrika/db/testing'
 import { testDatabase } from '@fabrika/db/testing-sqlite'
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import { z } from 'zod/v4'
 import { bootApp, environment, frameworkEnvFor, grant, resultOf, send, token } from './fixtures/implement/harness'
 import { tables } from './write-through-fixture/tables'
@@ -60,7 +61,23 @@ const api = app.group({ callers: ['human'] }, (r) => ({
 		.handle(async ({ input, ctx }) => ({ id: (await ctx.db.target.tasks.insert({ title: input.title, team_id: input.team })).id })),
 }))
 
-const contract = app.contract((c) => ({ api: c.rpc('/api', { api }), health: c.health('/healthz') }))
+const signedBody = { header: 'X-Hook-Signature', algorithm: 'sha256', encoding: 'hex', signed: 'body' } as const
+const Event = z.strictObject({ id: z.string() })
+const taskHook = app.webhook('/hooks/tasks', { scheme: { hmac: signedBody }, boundTo: 'task', actions: ['tasks.write'], input: Event })
+	.handle(() => {})
+
+/** A binding outlives its request, so `on` handing it a Ref held through a path is refused. */
+const hooks = app.group({ callers: ['human'] }, (r) => ({
+	task: r.mutation({
+		input: z.strictObject({ id: z.string().min(1) }),
+		output: WebhookSecret,
+		access: { action: 'tasks.write', on: 'task', from: 'id' },
+		binds: 'taskHook',
+	})
+		.handle(({ ctx }) => ctx.webhooks('taskHook').bind(ctx.target, 'account')),
+}))
+
+const contract = app.contract((c) => ({ api: c.rpc('/api', { api, hooks }), health: c.health('/healthz'), taskHook }))
 
 type Action = 'tasks.read' | 'tasks.write' | 'tasks.insert' | 'projects.rename' | 'projects.read'
 type Grant =
@@ -81,6 +98,11 @@ describe('a write path through boot', () => {
 	function callerOf(grants: readonly Grant[], id = 'user:member') {
 		const kit = testKit(serve(contract, { database: scoped(tables) }), { database: fresh.database })
 		return createClient(contract, 'api', { fetch: kit.browser(kit.testCaller(grants, { id })) }).api
+	}
+
+	function binderOf(grants: readonly Grant[]) {
+		const kit = testKit(serve(contract, { database: scoped(tables) }), { database: fresh.database })
+		return createClient(contract, 'api', { fetch: kit.browser(kit.testCaller(grants, { id: 'user:member' })) }).hooks
 	}
 
 	const atTeam = (action: Action, team: string): Grant => ({ action, scope: { type: 'team', value: team } })
@@ -119,6 +141,20 @@ describe('a write path through boot', () => {
 		const member = callerOf([insert, { role: 'member' }])
 		expect(await member.add({ project: 'p1', team: 't1', title: 'by member' })).toMatchObject({ id: expect.any(String) })
 		await expect(member.add({ project: 'p1', team: 't2', title: 'not a member' })).rejects.toMatchObject({ httpStatus: 409 })
+	})
+
+	test('on refuses to bind a webhook with a Ref it minted through a write path', async () => {
+		const log = spyOn(console, 'error').mockImplementation(() => {})
+		try {
+			await expect(binderOf([atTeam('tasks.write', 't1')]).task({ id: 'k1' })).rejects.toMatchObject({ httpStatus: 500 })
+			const refusals = log.mock.calls.map((call) => String(call[0])).filter((line) => line.includes('conditional_binding'))
+			expect(refusals).toEqual([expect.stringContaining('api.hooks.task')])
+		} finally {
+			log.mockRestore()
+		}
+		// The same task binds with a Ref an IAM grant holds.
+		const onTask: Grant = { action: 'tasks.write', scope: { type: 'task', value: 'k1' } }
+		expect(await binderOf([onTask]).task({ id: 'k1' })).toMatchObject({ url: expect.any(String) })
 	})
 
 	test('a grant at a team reads the projects of its tasks, and keeps its holder from naming that team in a new task', async () => {
