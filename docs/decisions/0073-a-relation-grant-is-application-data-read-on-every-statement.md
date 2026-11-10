@@ -80,7 +80,8 @@ project_members: {
   through a relation, a member reveal or a secondary path.
 - **The predicate is an uncorrelated subquery**, chosen by measurement in #134. A correlated `exists` costs 0.4–1.6 s
   per count on SQLite. Resolving ids first costs 50–78 ms of planning per statement on Postgres at 20,000 ids, and
-  passes D1's 100-parameter limit. A source table needs an index on `(principal, node)`, and the checker requires one.
+  passes D1's 100-parameter limit. The measured cost assumes an index on the source's `(principal, node)`, which the
+  application creates in its migration: nothing requires one, so the framework's skill tells it to.
 
 ### 2. Writing a relation's source row is delegation, and the named exception to S8
 
@@ -92,6 +93,10 @@ bounded delegation:
 - `assign.self` must be stated for a row that names its writer.
 - No update writes the principal, the node, the expiry or a column the relation's `when` reads; a source row never
   moves; a queue table confers nothing.
+- The node is the source's key or its own container or parent column, never an inherited chain column, so a source
+  table's composite foreign key may carry `ON UPDATE CASCADE`: a move of an ancestor rewrites only the inherited
+  columns, and the source rows follow their node. The principal belongs to no foreign key, so no cascade changes whom
+  the rows name, and the far row below takes no cascade into its tested column or its key.
 - The relation's `when` may follow one foreign key of the source, under section 3's hop rule, to the row it names (the
   far side of a many-to-many source). That row is held like the source row: it is no view, no queue table and no
   top-level dimension row, whose key an insert takes from its Ref; no update writes the column tested, which is no
@@ -125,7 +130,10 @@ rows followed by a path from them. A condition's path follows at most three fore
 the `some` and every hop inside it counted together. A hop's subquery reads its target unscoped, so a hop follows only
 a row's own container or parent column, a foreign key that also holds every ancestor the two tables share and
 references the target's key, or a key into a reference table; a `some` follows such a key backwards, but never one into
-a reference table, whose row every tenant's rows name: it reads only rows of the named row's own tenant. Each form is the
+a reference table, whose row every tenant's rows name: it reads only rows of the named row's own tenant. Every hop also
+needs a single-column foreign key on its column, which the subquery follows: along a containment chain that is a second
+foreign key beside the composite one that holds the tenant, so a table with only `(project_id, org_id) references
+projects (id, org_id)` takes no path through `project_id`. Each form is the
 one subquery shape `T.<column> in (select X.<column> from X where …)`, so the guard admits it by its table and column,
 nested at most four deep under a reveal. A child view's parent column is such a hop, though no foreign key declares it
 ([ADR-0072](0072-a-view-is-a-read-only-table.md)). An insert's condition is judged on the inserted row; one with a path,
@@ -349,7 +357,8 @@ narrows, a removed or changed one widens.
 
 - An application expresses row-dependent access as data the approver reviews, instead of handler code. What the
   declarations do not express stays in handlers until a step of the coverage roadmap is built for it.
-- Every statement under a relation carries one more subquery. Its cost is measured (#134) and needs the source index.
+- Every statement under a relation carries one more subquery. Its cost is measured (#134) with the source index in
+  place, so an application that leaves the index out pays more on every statement.
 - The bounded delegation is a new kind of authority without a holder check. It must stay narrow: `assign` bounds,
   stamped nodes, immutable deciding columns and no source writes past the handles. Each of these is enforced in the
   data layer, not by convention.
