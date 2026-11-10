@@ -4749,7 +4749,9 @@ export const tables = defineTables(vocabulary, columns)({
   its parent column, which needs no foreign key.
 - `{ some: { <table>: <condition> } }` holds when a row of `<table>` whose single-column foreign key names this row
   meets the condition, `none` when no such row does: on `projects`, `{ some: { tasks: { done: { eq: false } } } }` is
-  a project with an open task.
+  a project with an open task. The rows' foreign key is held like a path's hop, so it keeps to the row's tenant, and
+  a key into a reference table is not followed back: `{ tag_id: { some: { project_tags: … } } }` would count every
+  tenant's rows that name the tag, so the policy refuses it.
 - A path may end in `some` or `none`: on `tasks`, `{ project_id: { some: { project_tags: { 'tag_id.name': { eq:
   'urgent' } } } } }` is a task of a project tagged urgent, through the link table `project_tags`. A `null` foreign key
   reaches no row, so neither `some` nor `none` holds there. A `some` nests in a `some`.

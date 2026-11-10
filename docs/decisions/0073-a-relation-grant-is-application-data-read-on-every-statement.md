@@ -111,7 +111,8 @@ so neither form holds there. A `some` nests in a `some`, and a `some` through a 
 rows followed by a path from them. A condition's path follows at most three foreign keys, the path before a `some`,
 the `some` and every hop inside it counted together. A hop's subquery reads its target unscoped, so a hop follows only
 a row's own container or parent column, a foreign key that also holds every ancestor the two tables share and
-references the target's key, or a key into a reference table; a `some` follows such a key backwards. Each form is the
+references the target's key, or a key into a reference table; a `some` follows such a key backwards, but never one into
+a reference table, whose row every tenant's rows name: it reads only rows of the named row's own tenant. Each form is the
 one subquery shape `T.<column> in (select X.<column> from X where …)`, so the guard admits it by its table and column,
 nested at most four deep under a reveal. A child view's parent column is such a hop, though no foreign key declares it
 ([ADR-0072](0072-a-view-is-a-read-only-table.md)). An insert's condition is judged on the inserted row; one with a path,

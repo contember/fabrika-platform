@@ -185,6 +185,7 @@ type Col<T extends keyof DB> = keyof DB[T] & string
 
 interface Conditions {
 	readonly projects?: ConditionPolicy<Col<'projects'>>
+	readonly projectTags?: ConditionPolicy<Col<'project_tags'>>
 	readonly tasks?: ConditionPolicy<Col<'tasks'>>
 	readonly steps?: ConditionPolicy<Col<'steps'>>
 	readonly checks?: ConditionPolicy<Col<'checks'>>
@@ -202,7 +203,7 @@ function tablesWith(conditions: Conditions = {}) {
 	return defineTables(vocabulary, columns)({
 		projects: { scope: { dimension: 'project' }, actions: { read: 'projects.read' }, version: 'version', ...read(conditions.projects) },
 		tags: { scope: { reference: 'a fixed list of tags' }, actions: { read: 'projects.read' } },
-		project_tags: { scope: { child: 'projects' }, actions: { read: 'projects.read' } },
+		project_tags: { scope: { child: 'projects' }, actions: { read: 'projects.read' }, ...read(conditions.projectTags) },
 		tasks: {
 			scope: { dimension: 'task' },
 			actions: { read: 'projects.read', insert: 'tasks.write' },
@@ -438,6 +439,16 @@ describe('the policy bounds the rows a condition reads past a path', () => {
 		)
 		expect(() => tablesWith({ steps: { 'task_id.project_id': { none: { tags: { name: { eq: 'x' } } } } } })).toThrow(
 			'tags has no single-column foreign key to projects',
+		)
+	})
+
+	test('a some reads no rows naming a reference row, which every tenant names; a path still reaches one', () => {
+		expect(() => tablesWith({ projectTags: { 'tag_id.name': { eq: 'urgent' } } })).not.toThrow()
+		expect(() => tablesWith({ projectTags: { tag_id: { some: { project_tags: { project_id: { eq: 'p2' } } } } } })).toThrow(
+			"project_tags: when.projects.read.tag_id.some: project_tags.tag_id is outside tags's containment; the rows read follow a child's parent column, a contained dimension's container column, or a foreign key that also holds every ancestor the two tables share, never a key into a reference table, whose rows every tenant's rows name",
+		)
+		expect(() => tablesWith({ projectTags: { tag_id: { none: { project_tags: { project_id: { eq: 'p2' } } } } } })).toThrow(
+			'never a key into a reference table',
 		)
 	})
 

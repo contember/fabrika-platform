@@ -1345,11 +1345,11 @@ function linkTables(parsed: readonly ParsedTable[], vocabulary: VocabularyModel)
 		const { confersInput, whenInput, revealsInput, readThroughInput, memberRevealsInput, ...rest } = target
 		return { ...rest, ...resolve(target, []) }
 	}
-	const hopRule: HopRule = (from, column, to, key) => {
+	const hopRule: HopRule = (from, column, to, key, backward) => {
 		const source = ownEntry(byName, from)
 		const target = ownEntry(byName, to)
 		if (target?.scope.mode === 'reference') {
-			return true
+			return !backward
 		}
 		if (source === undefined || target === undefined) {
 			return false

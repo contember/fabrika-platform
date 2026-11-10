@@ -101,8 +101,10 @@ const CONNECTIVES = freeze(['anyOf', 'allOf', 'not', 'some', 'none'])
  * Whether a path may follow `from.column` to the row of `to` whose `key` it holds. A hop reads its target unscoped, so
  * the rule admits only one that stays where the row is (its own container or parent), stays in its tenant (a foreign
  * key that also holds every ancestor the two tables share), or reaches what every site reads (a reference table).
+ * `backward` is a `some` reading the rows of `from` that name a row of `to`: those must stay in that row's tenant, so
+ * a reference row, which every tenant's rows name, is no shortcut there.
  */
-export type HopRule = (from: string, column: string, to: string, key: string) => boolean
+export type HopRule = (from: string, column: string, to: string, key: string, backward: boolean) => boolean
 
 /** Parses `input` as a condition over `table`. `hops` is the rule a path's foreign keys are held to. */
 export function parseCondition(
@@ -192,7 +194,7 @@ function parseTest(
 		if (target === undefined) {
 			throw new PolicyError(`${what}: ${current.name}.${name} references ${hop.table}, which has no policy`)
 		}
-		if (!hops(current.name, name, hop.table, hop.key)) {
+		if (!hops(current.name, name, hop.table, hop.key, false)) {
 			throw new PolicyError(
 				`${what}: ${current.name}.${name} leads to ${hop.table}, outside the row's own containment; a path follows a row's container or parent column, a foreign key that also holds every ancestor the two tables share, or reaches a reference table`,
 			)
@@ -270,9 +272,9 @@ function parseSome(
 				: `${what}: ${name} has ${count} single-column foreign keys to ${table.name}, so the rows it names are not one set`,
 		)
 	}
-	if (!hops(name, found.column, table.name, found.key)) {
+	if (!hops(name, found.column, table.name, found.key, true)) {
 		throw new PolicyError(
-			`${what}: ${name}.${found.column} is outside ${table.name}'s containment; the rows read follow a child's parent column, a contained dimension's container column, or a foreign key that also holds every ancestor the two tables share`,
+			`${what}: ${name}.${found.column} is outside ${table.name}'s containment; the rows read follow a child's parent column, a contained dimension's container column, or a foreign key that also holds every ancestor the two tables share, never a key into a reference table, whose rows every tenant's rows name`,
 		)
 	}
 	const term = parseNode(ownEntry(record, name), child, tables, `${what}.${name}`, hops, depth + 1, level + 1)
