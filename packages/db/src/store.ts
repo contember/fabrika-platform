@@ -1512,7 +1512,7 @@ export async function insertRow<O>(
 		if (prepared !== undefined) {
 			await checkPrincipalAssign(transaction, context, prepared.writer, given)
 			await checkRevealAssign(transaction, context, prepared.writer, given)
-			checkMemberRevealAssign(context, prepared.writer, given)
+			await checkMemberRevealAssign(transaction, context, prepared.writer, given)
 			await checkPathWriters(transaction, context, prepared.writer, given)
 		}
 		const [row] = await transaction.run<O>(insertNode(context.model.name, values, answer(context)), guard(context, 'InsertQueryNode', undefined))
@@ -2144,7 +2144,7 @@ export function insertPrepared(context: TableContext, run: Runner, prepared: Pre
 		}
 		await checkPrincipalAssign(transaction, context, prepared.writer, prepared.row)
 		await checkRevealAssign(transaction, context, prepared.writer, prepared.row)
-		checkMemberRevealAssign(context, prepared.writer, prepared.row)
+		await checkMemberRevealAssign(transaction, context, prepared.writer, prepared.row)
 		await checkPathWriters(transaction, context, prepared.writer, prepared.row)
 		const written = await insertOnConflict(context, run, transaction, prepared.row, conflict)
 		// A conflict writes no new row: `nothing` reads none, and `update` is judged on the stored row.
@@ -2242,10 +2242,16 @@ async function checkRevealAssign(
 /**
  * An inserted row whose path column a member reveal matches through, under the reveal's `assign`: without `self`, the
  * insert is refused while its writer holds a grant the reveal counts (one of its actions, at the node itself) at the
- * node the column names. The grants are the request's own, so nothing is locked; work with no request caller has none
- * to judge, and is refused.
+ * node the column names. The grants are the request's own; the database compares them with the node's key, so every
+ * spelling of a key it reads as one (a `uuid`) is that node. Work with no request caller has none to judge, and is
+ * refused.
  */
-function checkMemberRevealAssign(context: TableContext, writer: string, row: ReadonlyMap<string, Primitive | null>): void {
+async function checkMemberRevealAssign(
+	transaction: Session,
+	context: TableContext,
+	writer: string,
+	row: ReadonlyMap<string, Primitive | null>,
+): Promise<void> {
 	const model = context.model
 	const authority = runtimeOf(context.connection).capabilities
 	for (let index = 0; index < model.memberReveals.length; index++) {
@@ -2263,7 +2269,15 @@ function checkMemberRevealAssign(context: TableContext, writer: string, row: Rea
 					`a row of ${model.name} names in ${path.column} a ${path.dimension} its member reveal reveals to, and its writer's grants cannot be judged under assign without self: work with no request caller`,
 				)
 			}
-			if (standing.values !== 'all' && includes(standing.values, String(value))) {
+			if (standing.values === 'all' || standing.values.length === 0) continue
+			const scope = AndNode.create(equals(path.table, path.key, value), inList(path.table, path.key, standing.values))
+			const rows = await transaction.run(locateNode(path.table, [path.key], scope), {
+				root: 'SelectQueryNode',
+				table: path.table,
+				joins: {},
+				scope,
+			})
+			if (rows.length > 0) {
 				throw new ConflictError(
 					`a row of ${model.name} names in ${path.column} a ${path.dimension} where its writer holds a grant the member reveal counts, which the reveal's assign.self does not allow`,
 				)

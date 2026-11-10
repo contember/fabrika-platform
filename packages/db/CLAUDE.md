@@ -662,6 +662,7 @@ through a relation (`~rel`, `@fabrika/auth-core`). `authority.ts` builds every p
   column) holds at the node that column names, on a dimension or child table (a link row), revealing the nearest
   container only; a container's path is refused. Its writer picks the node, so an insertable table states `assign`, and
   without `self` an insert whose writer holds a listed action by a grant at that node itself is a 409
-  (`checkMemberRevealAssign`, judged on the request's standing before the insert; no standing is refused). A `Ref` holds
+  (`checkMemberRevealAssign`, judged on the request's standing before the insert, the node's key compared in SQL so
+  every spelling of a `uuid` is one node; no standing is refused). A `Ref` holds
   an action through it only where the path does (`writeThrough`): `revealingTerms` takes the `PathRule`, and
   `revealsToMembers` and `holdingRowLocked` skip it otherwise.

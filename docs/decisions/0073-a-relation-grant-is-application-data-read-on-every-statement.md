@@ -252,8 +252,9 @@ names the team, reveals its parent the same way: the members of every team linke
 - **The writer picks the node, bounded by `assign`**, as for a reveal through a path (section 2). An insertable table
   states `assign: { self? }`, and one without an insert action takes none. Without `self`, an insert is refused with a
   409 while its writer holds a grant the reveal counts at the node the column names: one of the listed actions, at that
-  node itself. The grants are the request's own standing (section 8), read in the insert's transaction before the
-  insert, so the inserted row never counts. Work with no request caller has no grants to judge and is refused. A grant
+  node itself. The grants are the request's own standing (section 8), compared with the node's key by the database in
+  the insert's transaction before the insert, so every spelling of one key is that node and the inserted row never
+  counts. Work with no request caller has no grants to judge and is refused. A grant
   above the node, or everywhere, is no membership (section 7), so it gains nothing through the reveal and is not counted.
 - **It reveals the row's nearest container only.** A move of an ancestor rewrites the column above it, and no bound
   sees that move. The row itself never moves, since it delegates (section 7).

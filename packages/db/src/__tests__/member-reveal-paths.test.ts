@@ -34,14 +34,19 @@ if (!hasPostgres) {
 	console.warn(`member-reveal-paths.test.ts: the Postgres half is skipped; set ${URL_VAR} to run it`)
 }
 
+// uuid keys: Postgres reads every spelling of one as the same node, so a bound compares keys in SQL, never as text.
+const T1 = '0195f0c2-7a10-7000-8000-0000000000a1'
+const T2 = '0195f0c2-7a10-7000-8000-0000000000a2'
+const T3 = '0195f0c2-7a10-7000-8000-0000000000a3'
+
 const migration = `
 create table orgs (id text not null primary key);
-create table teams (id text not null primary key, org_id text not null references orgs (id));
+create table teams (id uuid not null primary key, org_id text not null references orgs (id));
 create table projects (id text not null primary key, name text not null);
 create table tasks (
 	id text not null primary key,
 	project_id text not null references projects (id),
-	team_id text references teams (id),
+	team_id uuid references teams (id),
 	title text not null,
 	status text not null,
 	unique (id, project_id)
@@ -50,7 +55,7 @@ create table task_teams (
 	id text not null primary key,
 	task_id text not null,
 	project_id text not null,
-	team_id text not null references teams (id),
+	team_id uuid not null references teams (id),
 	foreign key (task_id, project_id) references tasks (id, project_id)
 );
 create table notes (
@@ -70,11 +75,11 @@ delete from projects;
 delete from teams;
 delete from orgs;
 insert into orgs (id) values ('o1'), ('o2');
-insert into teams (id, org_id) values ('t1', 'o1'), ('t2', 'o1'), ('t3', 'o2');
+insert into teams (id, org_id) values ('${T1}', 'o1'), ('${T2}', 'o1'), ('${T3}', 'o2');
 insert into projects (id, name) values ('p1', 'one'), ('p2', 'two'), ('p3', 'three');
 insert into tasks (id, project_id, team_id, title, status) values
-	('k1', 'p1', 't1', 'one', 'open'), ('k2', 'p1', 't2', 'two', 'open'), ('k3', 'p2', null, 'three', 'open'), ('k4', 'p2', 't1', 'four', 'done');
-insert into task_teams (id, task_id, project_id, team_id) values ('l1', 'k3', 'p2', 't2');
+	('k1', 'p1', '${T1}', 'one', 'open'), ('k2', 'p1', '${T2}', 'two', 'open'), ('k3', 'p2', null, 'three', 'open'), ('k4', 'p2', '${T1}', 'four', 'done');
+insert into task_teams (id, task_id, project_id, team_id) values ('l1', 'k3', 'p2', '${T2}');
 insert into notes (id, task_id, project_id, body) values ('n1', 'k3', 'p2', 'three'), ('n2', 'k1', 'p1', 'one');
 `
 
@@ -267,22 +272,22 @@ function suite(dialect: 'sqlite' | 'postgres', open: () => Promise<Backend>, clo
 
 		describe('a Within', () => {
 			test("reads the project of an open task that names a team the grant is at, and of no other task's", async () => {
-				expect(await projects('t1')).toEqual(['p1'])
-				expect(await projects('t2')).toEqual(['p1'])
-				expect(await projects('t3')).toEqual([])
+				expect(await projects(T1)).toEqual(['p1'])
+				expect(await projects(T2)).toEqual(['p1'])
+				expect(await projects(T3)).toEqual([])
 				await backend.exec("update tasks set status = 'open' where id = 'k4'")
-				expect(await projects('t1')).toEqual(['p1', 'p2'])
+				expect(await projects(T1)).toEqual(['p1', 'p2'])
 				await backend.exec("update tasks set status = 'done' where id = 'k1'")
-				expect(await projects('t1')).toEqual(['p2'])
+				expect(await projects(T1)).toEqual(['p2'])
 			})
 
 			test('reads the rows of a task a link row reveals to the members of the team it names', async () => {
 				const notes = async (...teams: string[]) =>
 					ids(await invoke('query', (db) => call(db.within(alice.within('task', 'tasks.read', [], [], [], [], atTeams(...teams))), 'notes.list')))
-				expect(await notes('t2')).toEqual(['n1'])
-				expect(await notes('t1')).toEqual([])
+				expect(await notes(T2)).toEqual(['n1'])
+				expect(await notes(T1)).toEqual([])
 				await backend.exec("delete from task_teams where id = 'l1'")
-				expect(await notes('t2')).toEqual([])
+				expect(await notes(T2)).toEqual([])
 			})
 		})
 
@@ -293,23 +298,23 @@ function suite(dialect: 'sqlite' | 'postgres', open: () => Promise<Backend>, clo
 				invoke('mutation', (db) => call(db.target(project('projects.rename', id, ...teams), 'on'), 'update', { name }))
 
 			test('is minted only for an action the path holds', async () => {
-				expect(await revealsToMembers('team', ['t1', 't2', 't3'], 'project', 'p1', 'projects.rename')).toEqual(['t1', 't2'])
-				expect(await revealsToMembers('team', ['t1'], 'project', 'p2', 'projects.rename')).toEqual([])
-				expect(await revealsToMembers('team', ['t1', 't2'], 'project', 'p1', 'projects.read')).toEqual([])
-				expect(await revealsToMembers('team', ['t2'], 'task', 'k3', 'tasks.read')).toEqual([])
+				expect(await revealsToMembers('team', [T1, T2, T3], 'project', 'p1', 'projects.rename')).toEqual([T1, T2])
+				expect(await revealsToMembers('team', [T1], 'project', 'p2', 'projects.rename')).toEqual([])
+				expect(await revealsToMembers('team', [T1, T2], 'project', 'p1', 'projects.read')).toEqual([])
+				expect(await revealsToMembers('team', [T2], 'task', 'k3', 'tasks.read')).toEqual([])
 			})
 
 			test('acts through the revealing task, re-read at every statement', async () => {
-				await rename('p1', 'renamed', 't1')
-				await expect(rename('p2', 'x', 't1')).rejects.toThrow(NotFoundError)
+				await rename('p1', 'renamed', T1)
+				await expect(rename('p2', 'x', T1)).rejects.toThrow(NotFoundError)
 				await backend.exec("update tasks set status = 'done' where id = 'k1'")
-				await expect(rename('p1', 'again', 't1')).rejects.toThrow(NotFoundError)
+				await expect(rename('p1', 'again', T1)).rejects.toThrow(NotFoundError)
 				const named = await backend.rows("select name from projects where id = 'p1'")
 				expect(named).toEqual([{ name: 'renamed' }])
 			})
 
 			test('of an action the path does not hold is unenforceable', async () => {
-				const read = () => invoke('query', (db) => call(db.target(project('projects.read', 'p1', 't1'), 'on'), 'get'))
+				const read = () => invoke('query', (db) => call(db.target(project('projects.read', 'p1', T1), 'on'), 'get'))
 				await expect(read()).rejects.toThrow(CapabilityError)
 				await expect(read()).rejects.toThrow('carries a grant on team, whose rows reveal no node for projects.read')
 			})
@@ -323,7 +328,7 @@ function suite(dialect: 'sqlite' | 'postgres', open: () => Promise<Backend>, clo
 				const written = new Promise<void>((resolve) => {
 					inserted = resolve
 				})
-				const ref = alice.ref('project', 'tasks.insert', 'p1', {}, [], atTeams('t1'))
+				const ref = alice.ref('project', 'tasks.insert', 'p1', {}, [], atTeams(T1))
 				const writing = invoke('mutation', async (db) => {
 					await call(db.target(ref, 'in'), 'tasks.insert', { title: 'held', team_id: null, status: 'open' })
 					inserted()
@@ -354,16 +359,24 @@ function suite(dialect: 'sqlite' | 'postgres', open: () => Promise<Backend>, clo
 			test('without self names no team where it holds an action the reveal counts', async () => {
 				// The path's own bound needs what it hands out at the team: an org's grant holds it there, and is no member.
 				stand({ 'projects.rename': byOrg('o1'), 'tasks.insert': byOrg('o1') })
-				await insert('t1', 'by org')
-				stand({ 'projects.rename': byOrg('o1'), 'tasks.insert': byOrg('o1'), 'projects.read': byTeams('t1') })
-				await expect(insert('t1', 'member')).rejects.toThrow(ConflictError)
-				await expect(insert('t1', 'member')).rejects.toThrow(
+				await insert(T1, 'by org')
+				stand({ 'projects.rename': byOrg('o1'), 'tasks.insert': byOrg('o1'), 'projects.read': byTeams(T1) })
+				await expect(insert(T1, 'member')).rejects.toThrow(ConflictError)
+				await expect(insert(T1, 'member')).rejects.toThrow(
 					"where its writer holds a grant the member reveal counts, which the reveal's assign.self does not allow",
 				)
-				await insert('t2', 'other team')
-				stand({ 'projects.rename': { ...byOrg('o1'), values: ['t2'] }, 'tasks.insert': byOrg('o1') })
-				await expect(insert('t2', 'renamer')).rejects.toThrow(ConflictError)
+				await insert(T2, 'other team')
+				stand({ 'projects.rename': { ...byOrg('o1'), values: [T2] }, 'tasks.insert': byOrg('o1') })
+				await expect(insert(T2, 'renamer')).rejects.toThrow(ConflictError)
 				expect(await titles()).toEqual(['by org', 'other team'])
+			})
+
+			test.skipIf(dialect !== 'postgres')('judges the team by its key, however the column or the grant spells it', async () => {
+				stand({ 'projects.rename': byOrg('o1'), 'tasks.insert': byOrg('o1'), 'projects.read': byTeams(T1) })
+				await expect(insert(T1.toUpperCase(), 'member')).rejects.toThrow(ConflictError)
+				stand({ 'projects.rename': byOrg('o1'), 'tasks.insert': byOrg('o1'), 'projects.read': byTeams(T1.toUpperCase()) })
+				await expect(insert(T1, 'member')).rejects.toThrow(ConflictError)
+				expect(await titles()).toEqual([])
 			})
 
 			test('a grant everywhere is no member, and a null column names no team', async () => {
@@ -372,7 +385,7 @@ function suite(dialect: 'sqlite' | 'postgres', open: () => Promise<Backend>, clo
 					'tasks.insert': { ...byTeams(), values: 'all' },
 					'projects.read': { ...byTeams(), values: 'all' },
 				})
-				await insert('t1', 'everywhere')
+				await insert(T1, 'everywhere')
 				alice.standings.clear()
 				await insert(null, 'no team')
 				expect(await titles()).toEqual(['everywhere', 'no team'])
@@ -380,17 +393,17 @@ function suite(dialect: 'sqlite' | 'postgres', open: () => Promise<Backend>, clo
 
 			test('work without a caller names no team: its grants cannot be seen', async () => {
 				alice.caller = false
-				await expect(insert('t1', 'job')).rejects.toThrow(ConflictError)
+				await expect(insert(T1, 'job')).rejects.toThrow(ConflictError)
 				await insert(null, 'job, no team')
 				expect(await titles()).toEqual(['job, no team'])
 			})
 
 			test('with self a member names its own team', async () => {
 				use(tablesWith({ self: true }))
-				stand({ 'projects.rename': byTeams('t1'), 'tasks.insert': byTeams('t1'), 'projects.read': byTeams('t1') })
-				await insert('t1', 'member')
+				stand({ 'projects.rename': byTeams(T1), 'tasks.insert': byTeams(T1), 'projects.read': byTeams(T1) })
+				await insert(T1, 'member')
 				expect(await titles()).toEqual(['member'])
-				expect(await projects('t1')).toEqual(['p1', 'p3'])
+				expect(await projects(T1)).toEqual(['p1', 'p3'])
 			})
 
 			test("a link row's writer is bounded the same way", async () => {
@@ -399,17 +412,17 @@ function suite(dialect: 'sqlite' | 'postgres', open: () => Promise<Backend>, clo
 						'mutation',
 						(db) => call(db.target(alice.ref('task', 'links.write', 'k1', { project: 'p1' }), 'on'), 'task_teams.insert', { team_id: team }),
 					)
-				stand({ 'tasks.read': byTeams('t2') })
-				await expect(link('t2')).rejects.toThrow(ConflictError)
+				stand({ 'tasks.read': byTeams(T2) })
+				await expect(link(T2)).rejects.toThrow(ConflictError)
 				// No path bound here: only the reveal's assign judges the writer, and without a caller it sees no grants.
 				alice.caller = false
-				await expect(link('t3')).rejects.toThrow('cannot be judged under assign without self')
+				await expect(link(T3)).rejects.toThrow('cannot be judged under assign without self')
 				alice.caller = true
-				await link('t3')
+				await link(T3)
 				use(tablesWith({ self: true }))
-				await link('t2')
+				await link(T2)
 				const linked = await backend.rows("select team_id from task_teams where task_id = 'k1' order by team_id")
-				expect(linked).toEqual([{ team_id: 't2' }, { team_id: 't3' }])
+				expect(linked).toEqual([{ team_id: T2 }, { team_id: T3 }])
 			})
 		})
 	})
