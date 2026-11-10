@@ -74,6 +74,9 @@ project_members: {
   `T.node in (select S.node from S where S.principal = $me and (S.expires is null or S.expires > $now) and <S.when>)`.
   A `Within` ORs this term with its IAM values. A `Ref` minted through a relation carries the same term on every
   statement, so a revocation takes effect at the next statement. Nothing caches it.
+- **A webhook binding takes no such `Ref`.** A binding outlives every statement, and each later delivery acts on the
+  bound node without the term. `ctx.webhooks(…).bind` takes only a `Ref` an IAM grant holds, and refuses one held
+  through a relation, a member reveal or a secondary path.
 - **The predicate is an uncorrelated subquery**, chosen by measurement in #134. A correlated `exists` costs 0.4–1.6 s
   per count on SQLite. Resolving ids first costs 50–78 ms of planning per statement on Postgres at 20,000 ids, and
   passes D1's 100-parameter limit. A source table needs an index on `(principal, node)`, and the checker requires one.

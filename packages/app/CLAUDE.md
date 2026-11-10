@@ -774,7 +774,8 @@ vocabulary (`packages/db/CLAUDE.md`).
 - **A binding is written by a procedure that declares `binds: '<webhook>'`** (`webhookBindings`): `ctx.webhooks('<name>')`
   names only that webhook, `.bind(capability, account)` and `.unbind(capability, id)` take a capability of this
   request on the bound value (a `Ref` of the webhook's dimension, an `AppCapability` for `'app'`) and run in the
-  procedure's transaction. A webhook bound to `'app'` has one row per binding with the scope `APP_BINDING_SCOPE`; its
+  procedure's transaction. A `Ref` held through a relation, a member reveal or a secondary path is refused
+  (`conditional_binding`): a binding outlives the rows every statement of such a `Ref` re-reads. A webhook bound to `'app'` has one row per binding with the scope `APP_BINDING_SCOPE`; its
   handler mints `ctx.app('<action>')` for a declared action, as a job does, and holds no `ctx.refs`.
 - **A webhook delivery is checked in a fixed order**: binding (404), signature over the
   raw body with that binding's secret (401), account (403), input after dropping every

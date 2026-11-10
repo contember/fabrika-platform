@@ -132,6 +132,9 @@ parse refuses such a path, and a condition's `not` over any path, until the file
 `confers` and `when`; [ADR-0073](../decisions/0073-a-relation-grant-is-application-data-read-on-every-statement.md))
 need `0.9.0-dev.13` or later: Control refuses to publish them for an application pinned to an earlier release.
 
+A webhook's `bind`, `unbind` and `setSecret` now refuse a `Ref` held through a relation, a member reveal or a secondary
+path (`conditional_binding`): bind with a `Ref` an IAM grant holds.
+
 ## 0.7 → 0.8
 
 0.8 changed no 0.7 form: it added the ALTCHA challenge provider. Raise the pin; nothing else changes. To move a public

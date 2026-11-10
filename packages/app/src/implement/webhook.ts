@@ -110,6 +110,14 @@ export function webhookBindings(site: BindingSite): (name: string) => WebhookBin
 			return APP_BINDING_SCOPE
 		}
 		if (webhook.boundTo.kind === 'dimension' && grant.kind === 'ref' && grant.dimension === webhook.boundTo.dimension) {
+			// A binding outlives every statement, so it takes no reach that a statement re-reads: a relation row, a
+			// member reveal or a secondary path may end before the next delivery.
+			if (grant.relations.length > 0 || grant.revealing.length > 0 || grant.paths.length > 0) {
+				throw new CapabilityRefusedError(
+					'conditional_binding',
+					`${site.site}: webhook '${webhook.name}' binds only with a Ref an IAM grant holds, and it was handed one held through a relation, a member reveal or a secondary path`,
+				)
+			}
 			return { type: grant.dimension, value: grant.id }
 		}
 		const wanted = webhook.boundTo.kind === 'app' ? 'an app capability (ctx.app)' : `a Ref of ${webhook.boundTo.dimension}`

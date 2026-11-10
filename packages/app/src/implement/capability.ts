@@ -35,6 +35,8 @@ export const CAPABILITY_REFUSALS = {
 	undeclared_signs: 'the site signed a token of a purpose it does not declare in signs, or for longer than the purpose allows',
 	undeclared_egress: 'the site called an origin it does not declare in egress',
 	wrong_binding: 'a webhook binding was handed a capability of another kind or dimension than the webhook is bound to',
+	conditional_binding:
+		'a webhook binding was handed a Ref held through a relation, a member reveal or a secondary path, which a binding would outlive',
 	missing_id: 'the job named an object without an id',
 	wrong_capability: 'an operation was handed a capability of another dimension or action than it needs',
 } as const
