@@ -802,6 +802,33 @@ describe('access tables: only the platform writes them', () => {
 		expect(classifyAccess(sql('CREATE TRIGGER seen AFTER INSERT OR UPDATE ON grants FOR EACH ROW EXECUTE FUNCTION touch();'))).toEqual([])
 	})
 
+	test('a rename to an access table or to a view over one is refused; a rename of either is not', () => {
+		const staged = `CREATE TABLE staging (id uuid PRIMARY KEY);\n${body('RETURN NULL;')}`
+		expect(
+			classifyAccess(
+				`${staged}CREATE TRIGGER keep BEFORE DELETE ON staging FOR EACH ROW EXECUTE FUNCTION touch();\nALTER TABLE staging RENAME TO grants;\n`,
+			),
+		)
+			.toEqual([{ file: FILE, line: 9, reason: 'a rename of staging to the access table grants' }])
+		expect(classifyAccess('CREATE TABLE staging (id uuid PRIMARY KEY);\nALTER TABLE IF EXISTS app_notes.staging RENAME TO "Members";\n')[0]?.reason)
+			.toBe('a rename of staging to the access table members')
+		expect(classifyAccess('CREATE VIEW titles AS SELECT id FROM notes;\nALTER VIEW titles RENAME TO grants;\n')[0]?.reason).toBe(
+			'a rename of titles to the access table grants',
+		)
+		expect(
+			classifyAccess(
+				'CREATE VIEW granted AS SELECT id FROM grants;\nCREATE VIEW titles AS SELECT id FROM notes;\nALTER VIEW titles RENAME TO granted;\n',
+			)[0]
+				?.reason,
+		).toBe('a rename of titles to the view granted over an access table')
+		expect(
+			classifyAccess(
+				'CREATE VIEW granted AS SELECT id FROM grants;\nALTER VIEW granted RENAME TO grant_ids;\nALTER TABLE grants RENAME TO grants_v2;\n',
+			),
+		)
+			.toEqual([])
+	})
+
 	test('a SQLite trigger that writes an access table is refused: the statement splitter cuts its body, as every SQLite trigger body', () => {
 		const sql = 'CREATE TRIGGER notes_grant AFTER INSERT ON notes BEGIN INSERT INTO grants (id) VALUES (1); END;\n'
 		expect(classifyAccess(sql).map((refusal) => refusal.reason)).toEqual(['CREATE TRIGGER without EXECUTE FUNCTION', 'END'])

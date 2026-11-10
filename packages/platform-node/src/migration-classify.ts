@@ -285,6 +285,14 @@ function accessRelation(name: string, context: Context): string | undefined {
 	return undefined
 }
 
+/** Renaming a relation to an access table's name, or to a view's over one, would bind its code and views to it. */
+function refuseAccessRename(from: string, to: string, context: Context, line: number): void {
+	const target = to.toLowerCase()
+	const isView = context.accessViews.has(target) && !context.accessViews.has(from.toLowerCase())
+	const access = context.accessTables.has(target) || isView ? accessRelation(target, context) : undefined
+	if (access !== undefined) throw new Refused(`a rename of ${from.toLowerCase()} to ${access}`, line)
+}
+
 /**
  * A query, a condition or a backfill, read as one (`ReadSql`): no schema but the application's, only allowlisted calls
  * and nested statements, and no CTE list it cannot read.
@@ -483,7 +491,8 @@ function createTrigger(tokens: readonly SqlToken[], at: number, context: Context
 	const on = wordAtDepthZero(tokens, 'ON', at + 1)
 	if (name === undefined || on === undefined) throw new Refused('CREATE TRIGGER', line)
 	const table = ownName(tokens, on + 1, context, 'CREATE TRIGGER')
-	// A BEFORE or INSTEAD OF trigger decides the row an access table stores, or whether it is stored, without any write.
+	// A BEFORE or INSTEAD OF trigger changes or replaces the row an access table stores without any write; an AFTER
+	// trigger can only refuse the statement, and stays a deviation.
 	const timing = tokens.slice(at + 1, on).map((token) => upperWord(token)).find((word) => word === 'BEFORE' || word === 'INSTEAD')
 	const access = accessRelation(table, context)
 	if (timing !== undefined && access !== undefined) {
@@ -703,7 +712,10 @@ function alterTable(tokens: readonly SqlToken[], context: Context, out: Collecte
 	// RENAME TO, RENAME [COLUMN] a TO b and RENAME CONSTRAINT a TO b each stand alone.
 	if (upperWord(rest[0]) === 'RENAME') {
 		const to = upperWord(rest[1]) === 'TO' ? nameText(rest[2]) : undefined
-		if (to !== undefined) out.changes.push({ change: 'rename table', from: table, to })
+		if (to !== undefined) {
+			refuseAccessRename(table, to, context, line)
+			out.changes.push({ change: 'rename table', from: table, to })
+		}
 		return
 	}
 	for (const clause of splitAtCommas(rest)) alterClause(clause, table, context, out)
@@ -774,6 +786,7 @@ function alterRename(tokens: readonly SqlToken[], context: Context, out: Collect
 		deviate(out, kinds[0] ?? 'trigger', renamed, line)
 		return
 	}
+	if (kind === 'VIEW') refuseAccessRename(name, target, context, line)
 	for (const objectKind of kinds) {
 		if (objectKind === 'function' || objectKind === 'procedure') refuseShadowing(target, objectKind, line)
 		out.changes.push({ change: 'rename', from: { kind: objectKind, name }, to: { kind: objectKind, name: target } })

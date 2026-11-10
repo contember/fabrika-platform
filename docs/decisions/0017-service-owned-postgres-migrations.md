@@ -205,7 +205,8 @@ checked, because a service is trusted platform code.
     a parenthesized target of `UPDATE`, `DELETE` or `INSERT INTO`, a rule
     with several actions, a function or procedure body or a rule action
     that writes one of the application's access tables or a view over one,
-    a `BEFORE` or `INSTEAD OF` trigger or a rule on either (ADR-0073;
+    a `BEFORE` or `INSTEAD OF` trigger or a rule on either, a rename of
+    another relation to either's name (ADR-0073;
     Control and the checker pass them, the boot runner does not), a
     Unicode-escaped name (`U&"…"`), a literal that never
     closes, and every form the classifier does not recognise, `SELECT`,
