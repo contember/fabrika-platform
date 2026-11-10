@@ -219,7 +219,8 @@ export const tables = defineTables(vocabulary, columns)({
 - A `not` follows a path only through columns declared `NOT NULL`, at any depth: on a null key the path's lookup
   would turn on rows of every tenant. `{ not: { 'client_id.active': { eq: true } } }` with a nullable `client_id` is
   refused and names the column: declare it `NOT NULL` in a migration and run `fabrika db codegen`, or say what a row
-  without a client gets, `{ anyOf: [{ client_id: { isNull: true } }, { 'client_id.active': { eq: false } }] }`.
+  without a client gets, `{ anyOf: [{ client_id: { isNull: true } }, { 'client_id.active': { eq: false } }] }`. Like
+  the `not`, it leaves out a row whose client's `active` is null.
 - A path follows at most three foreign keys, the path before a `some`, the `some` and every hop inside it counted
   together. Each hop is one more subquery in every statement of the action; shorten a longer path with a stored column.
 - An insert's condition is judged on the written row. One with a path runs in the insert's transaction, every row on
