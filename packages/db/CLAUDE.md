@@ -637,7 +637,9 @@ through a relation (`~rel`, `@fabrika/auth-core`). `authority.ts` builds every p
 - **`writeThrough: { <dimension>: [<actions>] }`** makes a path hold the listed actions for a `Ref` too
   (`SecondaryPath.writes`); a path holds reads only otherwise. `RefGrant.paths` carries the grants at the path's
   dimension and its containers that matched, and every statement of the `Ref` requires the path term again
-  (`relationGate`, `pathTerms`, `heldThrough(action)`); a reveal matched through a path holds a `Ref` only for an action
+  (`relationGate`, `pathTerms`, `heldThrough(action)`). The gate ORs every part's terms (relations, member reveals,
+  paths): a part that reaches no row of a table adds nothing there, and a `Ref` none of whose parts does is
+  `unenforceable` on it; a reveal matched through a path holds a `Ref` only for an action
   the path lists. The column's writer must hold each action it hands out at the node it names (`pathWriters`: the
   table's own list and those of every container path through the column), judged before the insert in its
   transaction (`checkPathWriters`): the node's row is locked `FOR SHARE`, then the request's standing

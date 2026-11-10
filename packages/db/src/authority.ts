@@ -236,8 +236,8 @@ export function conditioned(model: TableModel, action: string, branch: Operation
 /**
  * A Ref's predicate over `links` of `model`: one equality per link of its chain (after `row`, the equality that
  * addresses one row by its key), then, when the Ref is held through relations or member reveals, a row of one of them
- * at the node, and its action's condition. A relation or a revealing grant that does not reach `model` leaves the Ref
- * unenforceable there, never unconditioned.
+ * at the node, and its action's condition. A Ref whose relations, revealing grants and paths together reach no row of
+ * `model` is unenforceable there, never unconditioned.
  */
 export function refScope(
 	reach: LayerReach,
@@ -275,7 +275,8 @@ export function viewScope(
 /**
  * The rows a Ref held through relations, member reveals or secondary paths needs at `model`: a relation row at the node,
  * a revealing row the Ref's grants reveal it through, or a path `paths` admits naming a node its grants hold;
- * `undefined` for a Ref an IAM grant holds on its chain.
+ * `undefined` for a Ref an IAM grant holds on its chain. A part that reaches no row of `model` adds nothing; when none
+ * does, the Ref is unenforceable there, never unconditioned.
  */
 export function relationGate(
 	reach: LayerReach,
@@ -288,45 +289,26 @@ export function relationGate(
 		return undefined
 	}
 	const terms: OperationNode[] = []
-	for (let index = 0; index < grant.relations.length; index++) {
-		const relation = grant.relations[index] ?? ''
-		const reached = relationTerms(reach.relations, model, relation, grant.principal, grant.action, now, paths)
-		if (reached.length === 0) {
-			throw new CapabilityError(
-				'unenforceable',
-				`the Ref of ${grant.dimension} is held through ${relation}, whose dimension ${model.name} carries no column for, and which reveals none of its nodes for ${grant.action}`,
-			)
-		}
-		for (let position = 0; position < reached.length; position++) {
-			const term = reached[position]
+	const add = (more: readonly OperationNode[]): void => {
+		for (let index = 0; index < more.length; index++) {
+			const term = more[index]
 			if (term !== undefined) terms[terms.length] = term
 		}
+	}
+	for (let index = 0; index < grant.relations.length; index++) {
+		add(relationTerms(reach.relations, model, grant.relations[index] ?? '', grant.principal, grant.action, now, paths))
 	}
 	if (grant.revealing.length > 0) {
-		const revealed = revealingTerms(reach.members, model, `the Ref of ${grant.dimension}`, grant.action, grant.revealing, now, paths)
-		if (revealed.length === 0) {
-			throw new CapabilityError(
-				'unenforceable',
-				`the Ref of ${grant.dimension} is held through member reveals, none of which reveals a node ${model.name} lies at for ${grant.action}`,
-			)
-		}
-		for (let position = 0; position < revealed.length; position++) {
-			const term = revealed[position]
-			if (term !== undefined) terms[terms.length] = term
-		}
+		add(revealingTerms(reach.members, model, `the Ref of ${grant.dimension}`, grant.action, grant.revealing, now, paths))
 	}
 	if (grant.paths.length > 0) {
-		const through = pathTerms(model, grant.paths, paths)
-		if (through.length === 0) {
-			throw new CapabilityError(
-				'unenforceable',
-				`the Ref of ${grant.dimension} is held through a secondary path, and ${model.name} reads none that holds ${grant.action} here`,
-			)
-		}
-		for (let position = 0; position < through.length; position++) {
-			const term = through[position]
-			if (term !== undefined) terms[terms.length] = term
-		}
+		add(pathTerms(model, grant.paths, paths))
+	}
+	if (terms.length === 0) {
+		throw new CapabilityError(
+			'unenforceable',
+			`the Ref of ${grant.dimension} is held through relations, member reveals or secondary paths, none of which reaches a row of ${model.name} for ${grant.action}`,
+		)
 	}
 	return anyOf(terms)
 }

@@ -318,6 +318,17 @@ function suite(dialect: 'sqlite' | 'postgres', open: () => Promise<Backend>, clo
 			await expect(invoke('query', (db) => call(db.target(project('projects.read', 'p1'), 'on'), 'get'))).rejects.toThrow(CapabilityError)
 		})
 
+		test('a Ref held through a relation and a path is enforced by the part that reaches the table, and refused when none does', async () => {
+			// projects reads no path, so only the relation's reveal through the tasks' path reaches p1; the path part adds nothing.
+			const mixed = (id: string) => alice.ref('project', 'projects.rename', id, {}, ['teamMember'], [], atTeam('t1'))
+			await invoke('mutation', (db) => call(db.target(mixed('p1'), 'on'), 'update', { name: 'by mixed' }))
+			expect((await backend.rows("select name from projects where id = 'p1'"))[0]?.['name']).toBe('by mixed')
+			await expect(invoke('mutation', (db) => call(db.target(mixed('p2'), 'on'), 'update', { name: 'x' }))).rejects.toThrow(NotFoundError)
+			// Neither part reaches projects for projects.read through a Ref: the path holds no read here.
+			const reading = alice.ref('project', 'projects.read', 'p1', {}, ['teamMember'], [], atTeam('t1'))
+			await expect(invoke('query', (db) => call(db.target(reading, 'on'), 'get'))).rejects.toThrow(CapabilityError)
+		})
+
 		test('the binding answers the candidates that reach the object through a path holding the action', async () => {
 			const candidates = [{ dimension: 'team', values: ['t2'] }, { dimension: 'team', values: ['t1'] }, { dimension: 'org', values: ['o2'] }]
 			expect(await holdsThrough('task', 'k1', 'tasks.write', 'user:alice', ['teamMember'], candidates)).toEqual({
