@@ -19,5 +19,7 @@ decided work or status.
   conditions towards about 95 % of a production rule corpus; a step is built when an application needs it.
 - [A compact installation](compact-installation.md) — applications beside the platform on one HA database; reviewed,
   gated by two live-account facts, and only worth it if platform data must also be HA.
+- [An AWS provider](aws-provider.md): ECS on Fargate, RDS with point-in-time recovery, S3 and CodeBuild behind the
+  existing contract. What it takes, what it costs to run against Zerops, and why to build it with the first installation that needs it.
 - [A dev environment for MCP authoring](mcp-dev-containers.md) — a `dev` environment that takes each workspace
   commit in about two seconds through an in-container launcher that pulls from Control; measured on Zerops.
