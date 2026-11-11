@@ -1,0 +1,14 @@
+{
+	"name": "fabrika-example-orders-demo",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"approval-preview": "bun approval-preview.ts",
+		"screenshots": "bun screenshots.ts"
+	},
+	"dependencies": {
+		"playwright": "^1.60.0",
+		"react": "^19.0.0",
+		"react-dom": "^19.0.0"
+	}
+}

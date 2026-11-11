@@ -1,0 +1,4571 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Approval: orders · billing export</title>
+<style>/*
+ * The fabrika console design system.
+ *
+ * The rail carries the brand (the designer's mark and lockup) on the floor's own ground: the blue lockup in light,
+ * the white one on the brand's black in dark. The workspace is quiet tiles on the floor. The brand blue
+ * fills the one constructive button of a page; as text it is the lighter blueprint ink in dark. Status is carried by LAMPS (a dot with a soft halo) rather than by colouring everything.
+ * Status is a lamp, category is a chip: two different things must not look alike.
+ *
+ * Depth is borders + quiet surface shifts. Shadows are reserved for surfaces that genuinely float
+ * (modals). Identifiers, refs, shas and timestamps are set in IBM Plex Mono with tabular figures;
+ * column headings and plate labels in small letter-spaced mono capitals.
+ *
+ * Tokens are named after the world (floor / plate / recess / rule / engrave / lamp). This stylesheet
+ * is the only design system in the console: `access/styles.css` adds component styles written in these
+ * tokens and declares no base rules of its own.
+ *
+ * Theming uses `light-dark()`: `color-scheme` follows the OS unless `<html data-theme>` pins it.
+ */
+
+:root {
+	color-scheme: light dark;
+
+	/* ── Surfaces: the elevation ramp ──────────────────────────────────────── */
+	/* recess < floor < plate < plate-raised. In light the plate goes to paper white so a card reads as
+	   an object laid ON the floor. In dark the floor is the rail's black, so rail and workspace are one ground, and
+	   the surface a block stands on is a clear step above it: layers without borders or shadows. */
+	--rail-black: #080a0d;
+	--recess: light-dark(#f1f3f6, #0a0d11);
+	--floor: light-dark(#f6f7f9, var(--rail-black));
+	--plate: light-dark(#ffffff, #15191f);
+	--plate-raised: light-dark(#ffffff, #1b2027);
+
+	/* ── Rules: separation, weakest to strongest ───────────────────────────── */
+	--rule-soft: light-dark(rgba(14, 20, 32, 0.05), rgba(255, 255, 255, 0.055));
+	--rule: light-dark(rgba(14, 20, 32, 0.1), rgba(255, 255, 255, 0.1));
+	/* The ground a block stands on: in dark the surface step itself, in light a tint of the floor. */
+	--tile: light-dark(rgba(14, 20, 32, 0.045), #15191f);
+	--tile-hover: light-dark(rgba(14, 20, 32, 0.07), #1a1f26);
+	--rule-strong: light-dark(rgba(14, 20, 32, 0.18), rgba(255, 255, 255, 0.18));
+	--rule-focus: light-dark(color-mix(in srgb, var(--brand) 28%, transparent), color-mix(in srgb, var(--brand) 45%, transparent));
+
+	/* ── Ink: four levels of text, used deliberately ───────────────────────── */
+	--ink: light-dark(#0e1117, #f1f3f6);
+	--ink-2: light-dark(#343d4a, #b0b2b8);
+	--ink-3: light-dark(#4b5563, #85878e);
+	--ink-4: light-dark(#596372, #5c5e64);
+	/* The engraved label plate: small, letter-spaced, riding on a hairline. */
+	--engrave: light-dark(#4b5563, #8b8d94);
+
+	/* ── Blue: the identity's one blue, and only its mixes ──────────────────── */
+	/* The mark's blue from the designer's files. Every other blue in the console is this one mixed with
+	   white, black or the surface (never a second blue): the identity allows no other, and the full
+	   strength is kept for the logo and the page's one filled button. Links and the active rail item
+	   use a mix, so the blue reads as an accent rather than a block. */
+	--brand: #2544c2;
+	--brand-hover: color-mix(in srgb, var(--brand) 82%, black);
+	--brand-on: #ffffff;
+	--blueprint: light-dark(var(--brand), color-mix(in srgb, var(--brand) 45%, white));
+	--blueprint-hover: light-dark(color-mix(in srgb, var(--brand) 80%, black), color-mix(in srgb, var(--brand) 30%, white));
+	--blueprint-on: #ffffff;
+	--blueprint-wash: light-dark(color-mix(in srgb, var(--brand) 7%, transparent), color-mix(in srgb, var(--brand) 16%, transparent));
+	--blueprint-ink: light-dark(color-mix(in srgb, var(--brand) 85%, black), color-mix(in srgb, var(--brand) 35%, white));
+
+	/* ── Lamps: status only. Never used for branding or decoration ─────────── */
+	--lamp-ok: light-dark(#177a4a, #3fc084);
+	--lamp-run: light-dark(#a8630a, #efa93f);
+	--lamp-stop: light-dark(#bf2f2f, #f4736f);
+	--lamp-idle: light-dark(#8d9bad, #66748a);
+	--wash-ok: light-dark(rgba(23, 122, 74, 0.1), rgba(63, 192, 132, 0.14));
+	--wash-run: light-dark(rgba(168, 99, 10, 0.1), rgba(239, 169, 63, 0.14));
+	--wash-stop: light-dark(rgba(191, 47, 47, 0.09), rgba(244, 115, 111, 0.14));
+
+	/* ── Controls get their own tokens, tuned apart from layout surfaces ───── */
+	--control: light-dark(#ffffff, #11151a);
+	--control-rule: light-dark(rgba(14, 20, 32, 0.16), rgba(255, 255, 255, 0.15));
+	--control-hover: light-dark(#f2f4f7, #1b2027);
+
+	/* ── The rail: the floor itself in both themes, so rail and workspace are one ground ─ */
+	/* The welcome hero sets `color-scheme: dark` and so keeps the dark values in both themes. */
+	--rail: light-dark(#f6f7f9, var(--rail-black));
+	--rail-rule: light-dark(rgba(14, 20, 32, 0.08), rgba(255, 255, 255, 0.08));
+	--rail-ink: light-dark(#10151d, #e6e9ee);
+	--rail-ink-2: light-dark(#343d4a, #b4bac4);
+	--rail-ink-3: light-dark(#4b5563, #7a818c);
+	--rail-hover: light-dark(rgba(14, 20, 32, 0.045), rgba(255, 255, 255, 0.06));
+	--rail-active: light-dark(rgba(14, 20, 32, 0.075), rgba(255, 255, 255, 0.1));
+	--rail-scrollbar: light-dark(rgba(14, 20, 32, 0.18), rgba(255, 255, 255, 0.16));
+	/* The logo: the designer's blue lockup on a light rail, white on the dark one. */
+	--rail-logo: light-dark(var(--brand), #e6e9ee);
+
+	/* ── Geometry: 4px base, sharp-leaning radii (this is a technical tool) ── */
+	--s-1: 0.25rem;
+	--s-2: 0.5rem;
+	--s-3: 0.75rem;
+	--s-4: 1rem;
+	--s-5: 1.5rem;
+	--s-6: 2rem;
+	--s-7: 3rem;
+	--r-1: 4px;
+	--r-2: 6px;
+	--r-3: 10px;
+
+	/* ── Type ──────────────────────────────────────────────────────────────── */
+	/* IBM Plex was drawn for a machine company: humanist but mechanical, and its Mono is a superb
+	   face for refs, shas and log output. It is the reason the console reads as instrumentation. */
+	--font-ui: 'IBM Plex Sans Variable', ui-sans-serif, -apple-system, 'Segoe UI', sans-serif;
+	--font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+	--t-xxs: 0.6875rem;
+	--t-xs: 0.75rem;
+	--t-sm: 0.8125rem;
+	--t-base: 0.875rem;
+	--t-md: 0.9375rem;
+	--t-lg: 1.125rem;
+	--t-xl: 1.375rem;
+	/* Prose never runs wider than this, so a description never needs two eye movements per line. */
+	--measure: 74ch;
+
+	/* ── Overlay shadow: the only shadow in the system ────────────────────── */
+	--lift: 0 1px 2px light-dark(rgba(16, 27, 40, 0.08), rgba(0, 0, 0, 0.5)),
+		0 16px 40px -12px light-dark(rgba(16, 27, 40, 0.22), rgba(0, 0, 0, 0.7));
+
+	--shell-nav: 248px;
+	--shell-bar: 64px;
+	/* The workspace column, padding included: centred in the space right of the rail, and stops here. */
+	--shell-max: 1600px;
+}
+
+:root[data-theme='light'] {
+	color-scheme: light;
+}
+
+:root[data-theme='dark'] {
+	color-scheme: dark;
+}
+
+/* ── Base ──────────────────────────────────────────────────────────────────── */
+
+* {
+	box-sizing: border-box;
+}
+
+html,
+body {
+	margin: 0;
+	padding: 0;
+}
+
+body {
+	font-family: var(--font-ui);
+	font-size: var(--t-base);
+	font-weight: 400;
+	line-height: 1.5;
+	color: var(--ink);
+	background: var(--floor);
+	-webkit-font-smoothing: antialiased;
+	-moz-osx-font-smoothing: grayscale;
+	font-variant-numeric: tabular-nums;
+}
+
+::selection {
+	background: var(--blueprint-wash);
+}
+
+code,
+kbd,
+samp,
+pre {
+	font-family: var(--font-mono);
+	font-size: 0.92em;
+	font-variant-numeric: tabular-nums;
+}
+
+/* ── Typography ────────────────────────────────────────────────────────────── */
+
+h1 {
+	margin: 0;
+	font-size: 1.75rem;
+	font-weight: 600;
+	line-height: 1.2;
+	letter-spacing: -0.025em;
+	text-wrap: balance;
+}
+
+h2 {
+	margin: 0 0 var(--s-2);
+	font-size: var(--t-md);
+	font-weight: 600;
+	line-height: 1.35;
+	letter-spacing: -0.01em;
+	text-wrap: balance;
+}
+
+h3 {
+	margin: 0 0 var(--s-2);
+	font-size: var(--t-base);
+	font-weight: 600;
+	letter-spacing: -0.006em;
+}
+
+/* h4 IS the engraved label plate; the access pages and the run/namespace detail pages lean on it. */
+h4,
+.plate-label,
+.detail-grid dt {
+	margin: 0 0 var(--s-1);
+	font-size: var(--t-xxs);
+	font-weight: 600;
+	line-height: 1.4;
+	text-transform: uppercase;
+	letter-spacing: 0.085em;
+	color: var(--engrave);
+}
+
+p {
+	margin: 0 0 var(--s-3);
+	text-wrap: pretty;
+}
+
+p:last-child {
+	margin-bottom: 0;
+}
+
+a {
+	color: var(--blueprint);
+	text-decoration: none;
+	border-radius: 2px;
+}
+
+a:hover {
+	color: var(--blueprint-hover);
+	text-decoration: underline;
+	text-underline-offset: 2px;
+	text-decoration-thickness: 1px;
+}
+
+:focus-visible {
+	outline: 2px solid var(--blueprint);
+	outline-offset: 2px;
+}
+
+.muted {
+	color: var(--ink-3);
+}
+
+.small {
+	font-size: var(--t-sm);
+}
+
+.hint {
+	margin: var(--s-1) 0 0;
+	color: var(--ink-3);
+	font-size: var(--t-sm);
+	line-height: 1.55;
+	max-width: var(--measure);
+	text-wrap: pretty;
+}
+
+.eyebrow {
+	margin: 0 0 var(--s-2);
+	font-size: var(--t-xxs);
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.1em;
+	color: var(--blueprint);
+}
+
+.icon {
+	display: block;
+	flex: none;
+}
+
+.truncate {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	min-width: 0;
+}
+
+/* A value that means nothing broken across lines: a timestamp, a duration, an id. */
+/* A long unbroken name (a release, a path) wraps anywhere rather than pushing its table off the page. */
+.break-anywhere {
+	overflow-wrap: anywhere;
+}
+
+.nowrap {
+	white-space: nowrap;
+}
+
+/* ── Shell ─────────────────────────────────────────────────────────────────── */
+/* The rail is pinned to the window's left edge and the workspace takes the rest, so a wide monitor never
+   leaves the rail floating in the middle of an empty frame. */
+
+.app-shell {
+	display: grid;
+	grid-template-columns: var(--shell-nav) minmax(0, 1fr);
+	width: 100%;
+	min-height: 100vh;
+}
+
+/* The rail's head stays put, like the page's own head; on a short window everything under it (the
+   navigation) scrolls as one, under a quiet dark scrollbar. */
+.sidebar {
+	position: sticky;
+	top: 0;
+	/* Above the workspace and its sticky page head, so the account menu opening out of the rail lies over the page. */
+	z-index: 20;
+	display: flex;
+	flex-direction: column;
+	height: 100vh;
+	padding: 0 var(--s-4);
+	background: var(--rail);
+	color: var(--rail-ink-2);
+}
+
+/* The rail's head: the logo, and the person's avatar at its right. Its height is the page head's folded
+   height, so the logo and a folded title share one line. */
+.sidebar .brand {
+	display: flex;
+	align-items: center;
+	height: var(--shell-bar);
+	margin-inline: calc(var(--s-4) * -1);
+	padding-inline: calc(var(--s-4) + var(--s-1));
+	flex: none;
+}
+
+/* The logo on the rail: mark and wordmark, no tile. */
+.sidebar .brand-badge {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.6875rem;
+	color: var(--rail-logo);
+}
+
+.sidebar .brand-mark {
+	display: grid;
+	place-items: center;
+}
+
+.brand-glyph {
+	display: block;
+}
+
+/* Set like the designer's lockup (`fabrika-lockup.svg`): bold and tightly tracked. */
+.sidebar .brand-name {
+	font-size: 1.5rem;
+	font-weight: 700;
+	letter-spacing: -0.035em;
+	line-height: 1;
+}
+
+.sidebar-scroll {
+	display: flex;
+	flex-direction: column;
+	flex: 1;
+	min-height: 0;
+	margin-inline: calc(var(--s-4) * -1);
+	padding: 0 var(--s-4) var(--s-4);
+	overflow-y: auto;
+	overscroll-behavior: contain;
+	scrollbar-width: thin;
+	scrollbar-color: var(--rail-scrollbar) transparent;
+}
+
+.sidebar nav {
+	display: flex;
+	flex-direction: column;
+	gap: var(--s-3);
+	padding: var(--s-5) 0 var(--s-5);
+	flex: none;
+}
+
+.sidebar .nav-section {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+
+/* The frame draws no lines: sections are set apart by their labels and the space above them. */
+.sidebar .nav-section + .nav-section {
+	padding-top: var(--s-3);
+}
+
+.sidebar .nav-section-label {
+	padding: 0 var(--s-3) var(--s-2);
+	font-family: var(--font-mono);
+	font-size: 0.625rem;
+	font-weight: 500;
+	letter-spacing: 0.14em;
+	text-transform: uppercase;
+	color: var(--rail-ink-3);
+}
+
+.sidebar .nav-item {
+	display: flex;
+	align-items: center;
+	gap: var(--s-3);
+	padding: 0.4375rem var(--s-3);
+	border-radius: var(--r-2);
+	color: var(--rail-ink-2);
+	font-size: var(--t-base);
+	font-weight: 500;
+	line-height: 1.4;
+	transition: background 0.12s ease, color 0.12s ease;
+}
+
+.sidebar .nav-item .icon {
+	color: var(--rail-ink-3);
+	transition: color 0.12s ease;
+}
+
+.sidebar .nav-item:hover {
+	background: var(--rail-hover);
+	color: var(--rail-ink);
+	text-decoration: none;
+}
+
+.sidebar .nav-item:hover .icon {
+	color: var(--rail-ink-2);
+}
+
+/* The page you are on: a lighter ground and brighter ink, no colour. A blue tile here beside the blue
+   logo read as two logos. */
+.sidebar .nav-item.active {
+	background: var(--rail-active);
+	color: var(--rail-ink);
+	font-weight: 600;
+}
+
+.sidebar .nav-item.active .icon {
+	color: var(--blueprint);
+}
+
+.sidebar :focus-visible {
+	outline-color: var(--rail-ink);
+}
+
+/* The rail's last band, outside its scroll so it is always there: the person. */
+.sidebar-account {
+	flex: none;
+	padding: var(--s-3) 0 var(--s-4);
+}
+
+/* The spotlight's way in for a mouse: a quiet row under the logo that names its shortcut. */
+.palette-trigger {
+	display: flex;
+	align-items: center;
+	gap: var(--s-3);
+	flex: none;
+	margin-top: var(--s-2);
+	padding: 0.4375rem var(--s-3);
+	border: 1px solid var(--rule);
+	border-radius: var(--r-2);
+	background: transparent;
+	color: var(--rail-ink-3);
+	font: inherit;
+	font-size: var(--t-sm);
+	text-align: left;
+	cursor: pointer;
+	transition: background 0.12s ease, color 0.12s ease;
+}
+
+.palette-trigger:hover {
+	background: var(--rail-hover);
+	color: var(--rail-ink);
+}
+
+.palette-trigger-label {
+	flex: 1;
+}
+
+.palette-trigger kbd,
+.palette kbd {
+	padding: 0.0625rem 0.3125rem;
+	border: 1px solid var(--rule-strong);
+	border-radius: var(--r-1);
+	color: var(--ink-3);
+	font-size: var(--t-xs);
+	line-height: 1.4;
+}
+
+
+.content {
+	min-width: 0;
+	width: 100%;
+}
+
+/* The person reads as one more row of the rail: a quiet disc of initials, the name, and a chevron, lighting up like a
+   nav item on hover or while its menu is open. The menu opens upwards, over the page. */
+.sidebar .account-trigger {
+	display: flex;
+	width: 100%;
+	gap: 0.625rem;
+	padding: 0.375rem var(--s-2);
+	border-radius: var(--r-1);
+	color: var(--rail-ink-2);
+	font-size: var(--t-sm);
+	font-weight: 500;
+	text-align: left;
+}
+
+.account-name {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.sidebar .account-trigger > .icon {
+	color: var(--rail-ink-3);
+	transform: rotate(180deg);
+}
+
+.sidebar .avatar {
+	width: 1.75rem;
+	height: 1.75rem;
+	background: var(--rail-active);
+	color: var(--rail-ink-2);
+	font-size: var(--t-xxs);
+}
+
+.sidebar button.account-trigger:hover:not(:disabled),
+.sidebar button.account-trigger[aria-expanded='true'] {
+	background: var(--rail-hover);
+	border-color: transparent;
+	color: var(--rail-ink);
+}
+
+.sidebar .account-panel {
+	top: auto;
+	bottom: calc(100% + var(--s-2));
+}
+
+/* ── Workspace ─────────────────────────────────────────────────────────────── */
+
+/* The workspace column stops at a cap, past which tables and logs only get harder to read, and is centred in the
+   space right of the rail, as in the Cloudflare dashboard. */
+.workspace {
+	--gutter: var(--s-6);
+	width: 100%;
+	max-width: var(--shell-max);
+	margin-inline: auto;
+	padding-inline: var(--gutter);
+}
+
+/* ── Account menu: the person's things, behind the avatar ──────────────────── */
+
+.account {
+	position: relative;
+}
+
+.account-trigger {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.375rem;
+	min-height: 0;
+	padding: 0.1875rem 0.375rem 0.1875rem 0.1875rem;
+	border: 1px solid transparent;
+	border-radius: 999px;
+	background: none;
+	color: var(--ink-3);
+}
+
+button.account-trigger:hover:not(:disabled),
+button.account-trigger[aria-expanded='true'] {
+	background: var(--rule-soft);
+	border-color: var(--rule);
+	color: var(--ink);
+}
+
+.account-panel {
+	position: absolute;
+	top: calc(100% + var(--s-2));
+	left: 0;
+	z-index: 20;
+	display: flex;
+	flex-direction: column;
+	min-width: 15rem;
+	padding: var(--s-1);
+	background: var(--plate-raised);
+	border: 1px solid var(--rule);
+	border-radius: var(--r-2);
+	box-shadow: var(--lift);
+}
+
+/* `display: flex` above would otherwise override the closed panel's `hidden`. */
+.account-panel[hidden] {
+	display: none;
+}
+
+.account-panel > .signed-in {
+	margin: 0 0 var(--s-1);
+	padding: var(--s-2) var(--s-2) var(--s-3);
+	border-bottom: 1px solid var(--rule);
+}
+
+.account-item,
+button.account-item {
+	display: flex;
+	align-items: center;
+	justify-content: flex-start;
+	gap: 0.625rem;
+	min-height: 0;
+	padding: 0.5rem var(--s-2);
+	border: none;
+	border-radius: var(--r-1);
+	background: none;
+	color: var(--ink-2);
+	font-size: var(--t-sm);
+	font-weight: 500;
+	text-align: left;
+}
+
+.account-item .icon {
+	color: var(--ink-3);
+}
+
+.account-item:hover,
+button.account-item:hover:not(:disabled) {
+	background: var(--rule-soft);
+	border-color: transparent;
+	color: var(--ink);
+	text-decoration: none;
+}
+
+.account-version {
+	margin: var(--s-1) 0 0;
+	padding: var(--s-2) var(--s-2) var(--s-1);
+	border-top: 1px solid var(--rule);
+	font-family: var(--font-mono);
+	font-size: var(--t-xxs);
+	letter-spacing: 0.04em;
+	color: var(--ink-4);
+}
+
+.account-signout {
+	margin-top: var(--s-1);
+	border-top: 1px solid var(--rule);
+	border-radius: 0 0 var(--r-1) var(--r-1);
+}
+
+.signed-in {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--s-2);
+	max-width: 18rem;
+	min-width: 0;
+	font-size: var(--t-sm);
+	font-weight: 500;
+	color: var(--ink);
+}
+
+.signed-in-name {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* Initials on a dark disc, the way the mockups show who is signed in. */
+.avatar {
+	display: grid;
+	place-items: center;
+	flex: none;
+	width: 2rem;
+	height: 2rem;
+	border-radius: 50%;
+	background: var(--ink);
+	color: var(--plate);
+	font-size: var(--t-xs);
+	font-weight: 600;
+	letter-spacing: 0.02em;
+}
+
+.workspace {
+	--workspace-top: var(--s-6);
+	padding-block: var(--workspace-top) var(--s-7);
+}
+
+/* ── Page structure ────────────────────────────────────────────────────────── */
+
+/* The page head is a band of its own: everything under it is the work. It stays at the top of the window, on the
+   floor's own colour and across the gutters so nothing shows past it, carrying the workspace's top padding so it has
+   room above it there too. Once the page scrolls it folds to one line the height of the rail's head (the title
+   shrinks, the back link and the purpose line go), and keeps the height it gave up as margin, so the work under it
+   never moves (`useFoldedHead`). */
+.page-head {
+	position: sticky;
+	top: 0;
+	z-index: 10;
+	/* Half the space under it is its own padding, so the work sliding under a head that has not folded yet passes
+	   below a margin of floor, not right under its last line. */
+	margin: 0 calc(var(--gutter) * -1) var(--s-4);
+	padding: 0 var(--gutter) var(--s-4);
+	background: var(--floor);
+}
+
+.workspace > .page-head:first-child {
+	margin-top: calc(var(--workspace-top) * -1);
+	padding-top: var(--workspace-top);
+}
+
+[data-folded='true'] .workspace > .page-head:first-child {
+	display: flex;
+	flex-direction: column;
+	justify-content: center;
+	min-height: var(--shell-bar);
+	margin-bottom: calc(var(--s-4) + var(--fold-gap, 0px));
+	padding-block: var(--s-2);
+}
+
+/* The work slides under the head through a short fade rather than against a hard edge, folded or not; at the top of
+   the page the fade lies over the head's own margin, where there is nothing to fade. */
+.workspace > .page-head:first-child::after {
+	content: '';
+	position: absolute;
+	top: 100%;
+	left: 0;
+	right: 0;
+	height: var(--s-4);
+	background: linear-gradient(var(--floor), transparent);
+	pointer-events: none;
+}
+
+[data-folded='true'] .page-head h1 {
+	font-size: var(--t-lg);
+}
+
+[data-folded='true'] .page-head :is(.back-link, .hint, .subtitle) {
+	display: none;
+}
+
+[data-folded='true'] .page-head-row {
+	align-items: center;
+}
+
+.page-head-row {
+	align-items: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.page-head h1 {
+		transition: none;
+	}
+}
+
+.page-head-row {
+	display: flex;
+	align-items: flex-start;
+	gap: var(--s-4);
+}
+
+.page-head-row > h1,
+.page-head-row > h2,
+.page-head-row > div:first-child {
+	margin-right: auto;
+	min-width: 0;
+}
+
+/* The way back out of a detail or a form: above the title, at the left, where a reader starts. */
+.back-link {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.25rem;
+	margin-bottom: var(--s-2);
+	font-size: var(--t-sm);
+	font-weight: 500;
+	color: var(--ink-3);
+}
+
+.back-link:hover {
+	color: var(--ink);
+	text-decoration: none;
+}
+
+.back-link .icon {
+	color: var(--ink-4);
+}
+
+.subtitle {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: var(--s-2);
+	margin-top: var(--s-2);
+	font-size: var(--t-sm);
+	color: var(--ink-3);
+}
+
+section {
+	margin-block: var(--s-6);
+}
+
+/* The first block under the page head already has the head's margin above it. */
+.workspace > section:first-child,
+.workspace > *:first-child > section:first-child {
+	margin-top: 0;
+}
+
+.section-head {
+	display: flex;
+	align-items: center;
+	gap: var(--s-2);
+	margin-bottom: var(--s-3);
+}
+
+.section-head > .icon {
+	display: none;
+}
+
+/* A section's title in the text face at the overview's size: a heading, not a label. */
+.section-head h2 {
+	margin: 0;
+	font-size: var(--t-md);
+	font-weight: 500;
+	letter-spacing: -0.005em;
+	color: var(--ink);
+}
+
+.section-head .spacer {
+	flex: 1;
+}
+
+/* A one-line note riding with the section title rather than under it. */
+.section-note {
+	margin: calc(var(--s-2) * -1) 0 var(--s-3);
+	color: var(--ink-3);
+	font-size: var(--t-sm);
+	line-height: 1.55;
+	max-width: var(--measure);
+	text-wrap: pretty;
+}
+
+.toolbar {
+	display: flex;
+	align-items: center;
+	gap: var(--s-3);
+	margin: var(--s-4) 0;
+	flex-wrap: wrap;
+}
+
+.pager {
+	display: flex;
+	align-items: center;
+	gap: var(--s-2);
+	margin-top: var(--s-4);
+}
+
+.pager .pull {
+	flex: 1;
+}
+
+.add-row {
+	margin-top: var(--s-3);
+}
+
+.loading {
+	padding: var(--s-6);
+	color: var(--ink-3);
+	font-size: var(--t-sm);
+}
+
+/* ── Filter bar ────────────────────────────────────────────────────────────── */
+/* Every list filters the same way: engraved labels over compact controls, actions pushed to the right, the
+   result count last. The controls stand on the floor itself; they are their own boxes, and a block around them
+   would be a box around boxes. */
+
+.filters {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: var(--s-2) var(--s-4);
+	margin: 0 0 var(--s-4);
+}
+
+/* A toolbar, not a form: each label sits beside its control in the small mono label voice. */
+.filters label {
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	gap: var(--s-2);
+	min-width: 0;
+	font-family: var(--font-mono);
+	font-size: var(--t-xxs);
+	font-weight: 500;
+	letter-spacing: 0.12em;
+	text-transform: uppercase;
+	white-space: nowrap;
+	color: var(--engrave);
+}
+
+/* The control keeps the text face; `font: inherit` would otherwise hand it the label's mono capitals. */
+.filters label > :is(input, select) {
+	font-family: var(--font-ui);
+	font-size: var(--t-sm);
+	font-weight: 400;
+	letter-spacing: normal;
+	text-transform: none;
+	color: var(--ink);
+}
+
+/* A list's GitHub-style search (`QuerySearch`): the field takes the whole row, and the qualifiers it reads sit under
+   it as buttons that start one. The typed text is transparent over a layer that draws the same characters in colour; the
+   two share font, size and padding exactly, and the layer scrolls with the field. */
+.filters.query-search .field-wide {
+	flex: 1 1 100%;
+	max-width: none;
+}
+
+.query-field {
+	position: relative;
+	display: block;
+	width: 100%;
+}
+
+.query-field > input,
+.query-layer {
+	font-family: var(--font-mono);
+	font-size: var(--t-xs);
+	letter-spacing: normal;
+	text-transform: none;
+}
+
+.filters .query-field > input {
+	width: 100%;
+	color: transparent;
+	caret-color: var(--ink);
+}
+
+.query-field > input::selection {
+	color: transparent;
+}
+
+.query-layer {
+	position: absolute;
+	inset: 1px 2rem 1px calc(2rem + 1px);
+	display: flex;
+	align-items: center;
+	overflow: hidden;
+	white-space: pre;
+	pointer-events: none;
+	color: var(--ink);
+}
+
+.query-qualifier {
+	color: var(--blueprint);
+}
+
+.query-value {
+	color: var(--ink);
+}
+
+.query-text {
+	color: var(--ink);
+}
+
+.query-invalid {
+	color: var(--lamp-stop);
+	text-decoration: underline wavy;
+	text-decoration-thickness: 1px;
+	text-underline-offset: 3px;
+}
+
+/* A filterable value that also has a page of its own (a person, an application): the value filters, and a small
+   arrow beside it, shown when the row is pointed at or the arrow is focused, opens the page. */
+.linked-value {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--s-1);
+}
+
+td a.value-page {
+	display: inline-grid;
+	place-items: center;
+	color: var(--ink-3);
+	opacity: 0;
+	transition: opacity 0.12s ease;
+}
+
+tr:hover td a.value-page,
+td a.value-page:focus-visible {
+	opacity: 1;
+}
+
+td a.value-page:hover {
+	color: var(--blueprint);
+}
+
+/* A value in the audit table that narrows the log to it: the value's own colour, the link shown on hover. */
+td a.filter-link {
+	font-weight: inherit;
+}
+
+td a.filter-link:hover > :is(code, span) {
+	color: var(--blueprint);
+}
+
+.search-help {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--s-2);
+	flex-basis: 100%;
+	font-size: var(--t-xs);
+	color: var(--ink-3);
+}
+
+.search-help .error-text {
+	margin: 0;
+	font-size: inherit;
+}
+
+.search-aside {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--s-2);
+	margin-left: auto;
+	white-space: nowrap;
+}
+
+/* A value in a list that filters in the browser and narrows it to that value: drawn as the value, not as a button. */
+button.filter-value {
+	display: inline-flex;
+	min-height: 0;
+	padding: 0;
+	border: none;
+	background: none;
+	font: inherit;
+	color: inherit;
+}
+
+button.filter-value:hover:not(:disabled) {
+	border: none;
+	background: none;
+}
+
+button.filter-value:hover > * {
+	color: var(--blueprint);
+}
+
+button.qualifier {
+	min-height: 0;
+	padding: 0.0625rem 0.375rem;
+	border: 1px solid var(--rule);
+	border-radius: var(--r-1);
+	background: none;
+	font-family: var(--font-mono);
+	font-size: var(--t-xxs);
+	color: var(--ink-2);
+}
+
+button.qualifier:hover:not(:disabled) {
+	border-color: var(--rule-strong);
+	background: var(--tile-hover);
+	color: var(--ink);
+}
+
+/* The search: the field that takes the room that is left, a touch taller than the other controls and on the page's
+   own ground. A magnifier in the field says what it is, so its label is for assistive technology only (still the
+   field's accessible name). The clear button sits over the field's right end once something is typed; the browser's
+   own clear button is hidden. */
+.filters .search-box {
+	position: relative;
+	display: flex;
+	align-items: center;
+}
+
+.filters .search-box > label {
+	flex: 1;
+	gap: 0;
+	font-size: 0;
+}
+
+.filters .search-box input {
+	padding-right: 2rem;
+}
+
+input[type='search']::-webkit-search-cancel-button {
+	display: none;
+	-webkit-appearance: none;
+}
+
+button.search-clear {
+	position: absolute;
+	right: var(--s-1);
+	display: grid;
+	place-items: center;
+	width: 1.75rem;
+	min-height: 1.75rem;
+	padding: 0;
+	border: none;
+	border-radius: var(--r-1);
+	background: none;
+	color: var(--ink-3);
+}
+
+button.search-clear:hover:not(:disabled) {
+	background: var(--tile-hover);
+	color: var(--ink);
+}
+
+/* A free-text filter needs room for an id, not the window: the search alone takes the slack. */
+.filters label > input:not(.field-wide input) {
+	width: 9rem;
+}
+
+.filters .field-wide {
+	flex: 1 1 16rem;
+	max-width: 24rem;
+	gap: 0;
+	font-size: 0;
+}
+
+.filters .field-wide input {
+	width: 100%;
+	min-height: 2.25rem;
+	padding: var(--s-1) var(--s-2) var(--s-1) 2rem;
+	background-color: var(--floor);
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238b8d94' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='10.6' cy='10.6' r='6.35'/%3E%3Cpath d='M15.3 15.3 20 20'/%3E%3C/svg%3E");
+	background-repeat: no-repeat;
+	background-position: 0.625rem center;
+	background-size: 0.875rem;
+}
+
+.filter-actions {
+	display: flex;
+	gap: var(--s-2);
+}
+
+.filters .filter-actions {
+	margin-left: auto;
+}
+
+.filters .count {
+	margin-left: auto;
+	font-size: var(--t-sm);
+	color: var(--ink-3);
+	white-space: nowrap;
+}
+
+/* With both present the actions absorb the slack and the count trails them. */
+.filters .filter-actions ~ .count {
+	margin-left: 0;
+}
+
+.toolbar .count {
+	margin-left: auto;
+	font-size: var(--t-sm);
+	color: var(--ink-3);
+}
+
+.filter-group {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px;
+}
+
+.filter-option {
+	display: flex;
+	gap: 6px;
+	align-items: center;
+	min-height: 32px;
+	padding: 6px 10px;
+	background: transparent;
+	border: 0;
+	border-radius: var(--r-1);
+	font-size: var(--t-xs);
+	color: var(--ink-2);
+}
+
+button.filter-option:hover:not(:disabled) {
+	background: var(--rule-soft);
+	color: var(--ink);
+}
+
+.filter-option-count {
+	font: 10px var(--font-mono);
+	color: inherit;
+}
+
+.filter-option[aria-pressed="true"],
+button.filter-option[aria-pressed="true"]:hover:not(:disabled) {
+	background: var(--rail-active);
+	color: var(--blueprint);
+}
+
+.filter-option:focus-visible {
+	outline-offset: 2px;
+}
+
+@media (max-width: 700px) {
+	.filter-option {
+		min-height: 36px;
+		padding-inline: 8px;
+		font-size: 11px;
+		gap: 4px;
+		white-space: nowrap;
+	}
+}
+
+/* ── Panels & cards ────────────────────────────────────────────────────────── */
+
+.panel {
+	margin: var(--s-4) 0;
+	padding: var(--s-4);
+	background: var(--tile);
+	border: none;
+	border-radius: var(--r-2);
+}
+
+.card {
+	display: flex;
+	flex-direction: column;
+	background: var(--tile);
+	border: none;
+	border-radius: var(--r-2);
+	overflow: hidden;
+}
+
+.card-head {
+	display: flex;
+	align-items: center;
+	gap: var(--s-2);
+	min-height: var(--s-5);
+	padding: var(--s-4) var(--s-5) 0;
+}
+
+/* A card's title says what it is; an icon beside it only repeats that. A lamp (a state) stays. */
+.card-head > .icon {
+	display: none;
+}
+
+.card-head .icon {
+	color: var(--ink-2);
+}
+
+.card-head h2,
+.card-head h3 {
+	margin: 0;
+	font-size: var(--t-md);
+	font-weight: 500;
+	letter-spacing: -0.005em;
+	color: var(--ink);
+}
+
+.card-head .spacer {
+	flex: 1;
+}
+
+.card-link {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--s-1);
+	font-size: var(--t-sm);
+	font-weight: 500;
+	white-space: nowrap;
+}
+
+.card-body {
+	padding: var(--s-4) var(--s-5);
+}
+
+.card-body.flush {
+	padding: 0;
+}
+
+.card-body > .hint:first-child {
+	margin-top: 0;
+}
+
+.card-body > .form-actions {
+	margin-top: var(--s-4);
+}
+
+/* The card's own footer: an action bar divided from the body, not floating in it. */
+.card-foot {
+	display: flex;
+	align-items: center;
+	gap: var(--s-3);
+	padding: 0 var(--s-5) var(--s-4);
+}
+
+.card-foot .spacer {
+	flex: 1;
+}
+
+/* ── Instrument tiles: the overview's row of readings ──────────────────────── */
+/* One plate per reading: a plain label, the number large, one line of context under it, and the
+   reading's icon in the corner. Each tile stands on its own, as in the mockups. */
+
+.instrument-cluster {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr));
+	gap: var(--s-4);
+}
+
+.instrument {
+	position: relative;
+	padding: var(--s-4) var(--s-5) var(--s-4);
+	min-width: 0;
+	background: var(--tile);
+	border: none;
+	border-radius: var(--r-2);
+}
+
+a.instrument {
+	color: inherit;
+	transition: background-color 0.12s ease;
+}
+
+a.instrument:hover {
+	background: var(--tile-hover);
+	text-decoration: none;
+}
+
+/* The console's label voice, as on the rail and over table columns: small spaced mono capitals. */
+.instrument-label {
+	display: flex;
+	align-items: center;
+	gap: var(--s-2);
+	font-family: var(--font-mono);
+	font-size: var(--t-xxs);
+	font-weight: 500;
+	letter-spacing: 0.12em;
+	text-transform: uppercase;
+	color: var(--engrave);
+	transition: color 0.12s ease;
+}
+
+a.instrument:hover .instrument-label {
+	color: var(--ink);
+}
+
+.instrument-icon {
+	position: absolute;
+	top: var(--s-4);
+	right: var(--s-4);
+	color: var(--ink-2);
+}
+
+.instrument-value {
+	display: flex;
+	align-items: baseline;
+	gap: 0.375rem;
+	margin-top: var(--s-3);
+	font-size: 2.125rem;
+	font-weight: 600;
+	line-height: 1.05;
+	letter-spacing: -0.03em;
+	color: var(--ink);
+	font-variant-numeric: tabular-nums;
+}
+
+.instrument-value small {
+	font-size: var(--t-sm);
+	font-weight: 400;
+	color: var(--ink-4);
+	letter-spacing: 0;
+}
+
+/* A note starts at the tile's edge; a lamped one leads with its lamp, as the mockups' running dot does. */
+.instrument-note {
+	display: flex;
+	align-items: center;
+	margin-top: var(--s-2);
+	font-size: var(--t-sm);
+	color: var(--ink-3);
+}
+
+.instrument-note > .status {
+	font-size: inherit;
+	font-weight: 400;
+	color: inherit;
+}
+
+/* Readings use larger numbers and compact columns for the installation summary. */
+.readings {
+	grid-template-columns: repeat(auto-fit, minmax(min(100%, 8rem), 1fr));
+	gap: var(--s-4);
+}
+
+/* A block stands on the surface step: a flat ground, rounded, no border. */
+.overview-panel {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+	padding: var(--s-4) var(--s-5);
+	border: none;
+	border-radius: var(--r-2);
+	background: var(--tile);
+}
+
+.readings .instrument-value {
+	margin-top: var(--s-3);
+	font-size: 3rem;
+}
+
+/* Overview: one inset for readings, panels and their rows. */
+.overview {
+	--ov-panel-inset: 24px;
+}
+
+.ov-page-head {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	gap: 16px;
+	margin-bottom: 32px;
+}
+
+.ov-page-head h1 {
+	margin-bottom: 8px;
+}
+
+.ov-head-actions {
+	display: flex;
+	align-items: center;
+	gap: 9px;
+}
+
+.ov-updated {
+	font: 10px var(--font-mono);
+	color: var(--ink-3);
+	white-space: nowrap;
+}
+
+.ov-readings {
+	grid-template-columns: repeat(4, minmax(0, 1fr));
+	margin-bottom: 16px;
+}
+
+.ov-readings .instrument {
+	padding-inline: var(--ov-panel-inset);
+}
+
+.ov-readings .instrument-value {
+	min-height: 50px;
+}
+
+.ov-readings .instrument-value small {
+	color: var(--ink-3);
+}
+
+.ov-eyebrow {
+	font: 10px var(--font-mono);
+	color: var(--ink-3);
+	text-transform: uppercase;
+	letter-spacing: 0.075em;
+}
+
+.overview .ov-panel {
+	margin: 0 0 16px;
+	padding: 16px var(--ov-panel-inset);
+}
+
+.ov-section-head {
+	min-height: 24px;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 16px;
+	margin-bottom: 16px;
+}
+
+.ov-section-head h2 {
+	font-size: var(--t-md);
+	margin: 0;
+	font-weight: 500;
+}
+
+.ov-section-head > a {
+	font-size: var(--t-sm);
+	white-space: nowrap;
+}
+
+.ov-heading-group {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+}
+
+.ov-section-note {
+	font-size: var(--t-xs);
+	color: var(--ink-3);
+}
+
+.ov-filter-row {
+	margin-bottom: 8px;
+}
+
+.ov-attention-row {
+	display: grid;
+	grid-template-columns: 12px minmax(0, 1fr) 72px 140px;
+	gap: 12px;
+	align-items: center;
+	min-height: 72px;
+	padding: 12px 0;
+	border-top: 1px solid var(--rule-soft);
+}
+
+.ov-attention-row:first-child {
+	border-top: 0;
+}
+
+.ov-row-lamp {
+	align-self: start;
+	padding-top: 3px;
+}
+
+.ov-attention-title a {
+	color: var(--ink);
+	font-weight: 500;
+	font-size: var(--t-base);
+}
+
+.ov-row-context {
+	color: var(--ink-3);
+	font-size: var(--t-sm);
+	margin-top: 4px;
+	overflow-wrap: anywhere;
+}
+
+.ov-time {
+	font-size: var(--t-sm);
+	color: var(--ink-3);
+	white-space: nowrap;
+	text-align: right;
+}
+
+.ov-row-action {
+	display: flex;
+	justify-content: flex-end;
+	align-items: center;
+	gap: 8px;
+	font-size: var(--t-sm);
+}
+
+.ov-table-scroll {
+	position: relative;
+	overflow-x: auto;
+}
+
+.ov-app-table {
+	width: 100%;
+	border-collapse: collapse;
+	white-space: nowrap;
+	font-size: var(--t-sm);
+}
+
+.ov-app-table th {
+	padding: 8px 12px;
+	text-align: left;
+	background: none;
+	font: var(--t-xxs) var(--font-mono);
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	color: var(--ink-3);
+	border: none;
+}
+
+.ov-app-table td {
+	padding: 12px;
+	border: 0;
+	border-top: 1px solid var(--rule-soft);
+	vertical-align: middle;
+}
+
+.ov-app-table tbody tr:first-child td {
+	border-top: 0;
+}
+
+.ov-app-table :is(th, td):first-child {
+	padding-left: 0;
+}
+
+.ov-app-table :is(th, td):last-child {
+	padding-right: 0;
+}
+
+.ov-app-table tbody tr:hover {
+	background: var(--rule-soft);
+}
+
+.ov-app-table .grow {
+	width: 42%;
+}
+
+.ov-app-name {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-bottom: 3px;
+}
+
+.ov-app-name a {
+	font-weight: 500;
+	color: var(--ink);
+	font-size: var(--t-base);
+}
+
+.ov-domain {
+	color: var(--ink-3);
+	font-size: var(--t-xs);
+}
+
+.ov-cell-note {
+	display: block;
+	font-size: var(--t-xs);
+	color: var(--ink-3);
+	margin-top: 4px;
+}
+
+.ov-release-link {
+	color: var(--ink-2);
+}
+
+.ov-panel-foot {
+	padding-top: 16px;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	font-size: var(--t-xs);
+	color: var(--ink-3);
+}
+
+.ov-pair {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+	gap: 16px;
+	align-items: start;
+}
+
+.ov-count {
+	font: var(--t-xs) var(--font-mono);
+	color: var(--ink-3);
+}
+
+.ov-deploy {
+	border-top: 1px solid var(--rule-soft);
+	padding: 12px 0;
+}
+
+.ov-section-head + .ov-deploy {
+	border-top: 0;
+}
+
+.ov-deploy-title {
+	display: flex;
+	gap: 8px;
+	align-items: center;
+	font-size: var(--t-base);
+}
+
+.ov-deploy-title strong {
+	font-weight: 500;
+}
+
+.ov-deploy .spacer {
+	flex: 1;
+}
+
+.ov-deploy-title .status {
+	font-size: var(--t-sm);
+}
+
+.ov-deploy-ref {
+	display: flex;
+	gap: 8px;
+	align-items: center;
+	color: var(--ink-3);
+	font: var(--t-xs) var(--font-mono);
+	margin-top: 8px;
+}
+
+.ov-deploy-ref code {
+	margin-left: 8px;
+	font-size: inherit;
+}
+
+.ov-deploy-bottom {
+	display: flex;
+	justify-content: space-between;
+	color: var(--ink-3);
+	font-size: var(--t-xs);
+	gap: 12px;
+	margin-top: 12px;
+}
+
+.ov-approval-foot {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding-top: 16px;
+	color: var(--ink-3);
+	font-size: var(--t-xs);
+}
+
+.ov-approval-foot svg {
+	color: var(--lamp-run);
+}
+
+.ov-approval-foot a {
+	margin-left: auto;
+	white-space: nowrap;
+}
+
+.ov-change {
+	display: grid;
+	grid-template-columns: 16px minmax(0, 1fr) auto;
+	gap: 12px;
+	padding: 12px 0;
+	border-top: 1px solid var(--rule-soft);
+	font-size: var(--t-base);
+}
+
+.ov-change:first-child {
+	border-top: 0;
+}
+
+.ov-change a {
+	color: var(--ink);
+}
+
+.ov-change small {
+	display: block;
+	font-size: var(--t-sm);
+	color: var(--ink-3);
+	margin-top: 4px;
+	overflow-wrap: anywhere;
+}
+
+.ov-change-icon {
+	color: var(--ink-3);
+	padding-top: 2px;
+}
+
+.ov-change time {
+	font-size: var(--t-xs);
+	color: var(--ink-3);
+	padding-top: 2px;
+}
+
+.ov-changes-foot {
+	display: flex;
+	justify-content: space-between;
+	gap: 16px;
+	font-size: var(--t-sm);
+	padding-top: 16px;
+}
+
+.ov-chart-pair {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+	gap: 32px;
+}
+
+.ov-chart {
+	padding: 8px 0 0;
+	min-width: 0;
+}
+
+.ov-chart-heading {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+}
+
+.ov-chart-number {
+	font-size: 26px;
+	line-height: 1.5;
+	letter-spacing: -0.03em;
+	margin-top: 4px;
+}
+
+.ov-chart-number > span {
+	font-size: var(--t-sm);
+	letter-spacing: 0;
+	color: var(--ink-3);
+	margin-left: 12px;
+}
+
+.ov-legend {
+	display: flex;
+	flex-direction: column;
+	gap: 5px;
+	color: var(--ink-3);
+	font-size: var(--t-xxs);
+}
+
+.ov-legend span {
+	display: flex;
+	gap: 5px;
+	align-items: center;
+}
+
+.ov-legend i {
+	height: 5px;
+	width: 5px;
+	display: inline-block;
+	border-radius: 1px;
+}
+
+.ov-legend-ok,
+.ov-bar-succeeded {
+	background: color-mix(in srgb, var(--brand) 78%, var(--plate));
+}
+
+.ov-legend-stop,
+.ov-bar-failed {
+	background: var(--lamp-stop);
+}
+
+.ov-bars {
+	display: flex;
+	align-items: flex-end;
+	gap: 6px;
+	height: 112px;
+	margin-top: 16px;
+}
+
+.ov-bar-column {
+	display: flex;
+	align-items: flex-end;
+	flex: 1;
+	height: 100%;
+}
+
+.ov-bar-stack {
+	display: flex;
+	flex-direction: column;
+	gap: 1px;
+	width: 100%;
+	margin-inline: auto;
+	overflow: hidden;
+}
+
+.ov-axis {
+	display: flex;
+	justify-content: space-between;
+	color: var(--ink-3);
+	font-size: var(--t-xs);
+	margin-top: 8px;
+}
+
+.ov-line-chart {
+	height: 112px;
+	margin-top: 16px;
+}
+
+.ov-line-chart svg {
+	width: 100%;
+	height: 100%;
+	overflow: visible;
+}
+
+.ov-chart-area {
+	fill: var(--wash-stop);
+}
+
+.ov-chart-line {
+	fill: none;
+	stroke: var(--lamp-stop);
+	stroke-width: 1.5;
+}
+
+.ov-chart-footnote {
+	display: block;
+	font-size: var(--t-xxs);
+	color: var(--ink-3);
+	margin-top: 12px;
+}
+
+.ov-page-foot {
+	display: flex;
+	justify-content: space-between;
+	gap: 16px;
+	color: var(--ink-3);
+	font-size: 10px;
+}
+
+.ov-empty {
+	padding-block: 16px;
+	color: var(--ink-3);
+	font-size: var(--t-sm);
+}
+
+.ov-read-notices {
+	color: var(--ink-2);
+	margin-bottom: 16px;
+}
+@media (max-width: 1200px) {
+	.overview {
+		--ov-panel-inset: 16px;
+	}
+	.ov-head-actions .ov-updated,
+	.ov-heading-group .ov-section-note {
+		display: none;
+	}
+	.ov-attention-row {
+		grid-template-columns: 10px minmax(0, 1fr) 65px 112px;
+		gap: 10px;
+	}
+}
+
+@media (max-width: 950px) {
+	.ov-pair,
+	.ov-chart-pair {
+		grid-template-columns: 1fr;
+	}
+	.ov-pair {
+		gap: 0;
+	}
+	.ov-readings {
+		grid-template-columns: 1fr 1fr;
+	}
+	.ov-page-head {
+		align-items: flex-start;
+	}
+	.ov-attention-row {
+		grid-template-columns: 8px minmax(0, 1fr) 100px;
+	}
+	.ov-attention-row time {
+		display: none;
+	}
+	.ov-app-table {
+		min-width: 620px;
+	}
+	.ov-page-foot {
+		flex-direction: column;
+		gap: 8px;
+	}
+}
+
+@media (max-width: 700px) {
+	.ov-page-head {
+		flex-wrap: wrap;
+		gap: 16px;
+		margin-bottom: 24px;
+	}
+	.ov-head-actions {
+		width: 100%;
+		justify-content: flex-end;
+	}
+	.ov-head-actions .ov-updated {
+		display: inline;
+		margin-right: auto;
+	}
+	.ov-readings .instrument-label {
+		font-size: 9px;
+	}
+	.ov-readings .instrument-note {
+		font-size: 11px;
+	}
+	.ov-readings .instrument-note .status {
+		white-space: normal;
+	}
+	.ov-section-head {
+		gap: 8px;
+		flex-wrap: wrap;
+	}
+	.ov-attention-row {
+		grid-template-columns: 8px minmax(0, 1fr);
+		gap: 8px 12px;
+	}
+	.ov-row-context {
+		font-size: 12px;
+		line-height: 1.7;
+	}
+	.ov-row-action {
+		grid-column: 2;
+		justify-content: flex-start;
+		font-size: 12px;
+		margin-top: 4px;
+	}
+	.ov-panel-foot {
+		flex-direction: column;
+		align-items: flex-start;
+		gap: 8px;
+	}
+}
+
+/* ── Board: the overview's two-column body ─────────────────────────────────── */
+
+.board {
+	display: grid;
+	grid-template-columns: minmax(0, 1.65fr) minmax(0, 1fr);
+	gap: var(--s-4);
+	align-items: start;
+	margin-top: var(--s-4);
+}
+
+.board-col {
+	display: flex;
+	flex-direction: column;
+	gap: var(--s-4);
+	min-width: 0;
+}
+
+.board section {
+	margin: 0;
+}
+
+.chip-row {
+	display: inline-flex;
+	flex-wrap: wrap;
+	gap: var(--s-1);
+}
+
+td a.external-url {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.375rem;
+	max-width: 100%;
+	color: var(--blueprint);
+	font-weight: 400;
+}
+
+td a.external-url code {
+	color: inherit;
+}
+
+/* The welcome on a fresh installation: the one place the console speaks as the brand. Dark in both
+   themes, with the mark drawn large on a blueprint grid. */
+.welcome {
+	display: grid;
+	grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+	align-items: center;
+	gap: var(--s-6);
+	margin: 0 0 var(--s-5);
+	padding: var(--s-7) var(--s-7) var(--s-7);
+	border-radius: var(--r-2);
+	background: var(--rail);
+	color: var(--rail-ink-2);
+	color-scheme: dark;
+	overflow: hidden;
+}
+
+.welcome-eyebrow {
+	margin: 0 0 var(--s-4);
+	font-family: var(--font-mono);
+	font-size: var(--t-xxs);
+	font-weight: 500;
+	letter-spacing: 0.18em;
+	text-transform: uppercase;
+	color: var(--rail-ink-3);
+}
+
+.welcome h1 {
+	margin: 0 0 var(--s-4);
+	font-size: clamp(2.5rem, 5vw, 3.75rem);
+	font-weight: 700;
+	line-height: 1;
+	letter-spacing: -0.04em;
+	color: var(--rail-ink);
+}
+
+.welcome-copy > p:not(.welcome-eyebrow) {
+	max-width: 34rem;
+	font-size: var(--t-md);
+	line-height: 1.6;
+}
+
+.welcome-actions {
+	display: flex;
+	gap: var(--s-3);
+	margin-top: var(--s-5);
+}
+
+.welcome-art {
+	display: grid;
+	place-items: center;
+	align-self: stretch;
+	min-height: 15rem;
+	color: var(--brand);
+	background-image:
+		linear-gradient(var(--rail-rule) 1px, transparent 1px),
+		linear-gradient(90deg, var(--rail-rule) 1px, transparent 1px);
+	background-size: 24px 24px;
+	background-position: center;
+	border-radius: var(--r-1);
+}
+
+.welcome-art .brand-glyph {
+	width: min(100%, 13.75rem);
+	height: auto;
+}
+
+.welcome-steps {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: var(--s-4);
+}
+
+.welcome-steps > section {
+	margin: 0;
+}
+
+/* ── Feed: a list of runs / placements, denser and more legible than a table ─ */
+
+.feed {
+	display: flex;
+	flex-direction: column;
+}
+
+.feed-row {
+	display: flex;
+	align-items: center;
+	gap: var(--s-3);
+	padding: 0.75rem var(--s-5);
+	border-top: 1px solid var(--rule-soft);
+	min-width: 0;
+	color: inherit;
+}
+
+.feed-row:first-child {
+	border-top: none;
+}
+
+a.feed-row:hover {
+	background: var(--rule-soft);
+	text-decoration: none;
+}
+
+.feed-main {
+	display: flex;
+	flex-direction: column;
+	gap: 1px;
+	min-width: 0;
+	flex: 1;
+}
+
+.feed-title {
+	display: flex;
+	align-items: center;
+	gap: var(--s-2);
+	font-size: var(--t-base);
+	font-weight: 600;
+	color: var(--ink);
+	min-width: 0;
+}
+
+.feed-title .truncate {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.feed-meta {
+	display: flex;
+	align-items: center;
+	gap: var(--s-2);
+	font-size: var(--t-xs);
+	color: var(--ink-3);
+	min-width: 0;
+}
+
+.feed-meta code {
+	font-size: var(--t-xs);
+	color: var(--ink-3);
+}
+
+.feed-side {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-end;
+	gap: 1px;
+	flex: none;
+	font-size: var(--t-xs);
+	color: var(--ink-3);
+	white-space: nowrap;
+}
+
+/* Lay the side lines out as flex rows too, so `.dot-sep` gets the same gap it gets everywhere else
+   instead of colliding with the text before it. */
+.feed-side > span {
+	display: inline-flex;
+	align-items: baseline;
+	gap: var(--s-2);
+}
+
+.feed-side strong {
+	font-weight: 500;
+	color: var(--ink-2);
+	font-variant-numeric: tabular-nums;
+}
+
+.dot-sep::before {
+	content: '·';
+	margin-right: var(--s-2);
+	color: var(--ink-4);
+}
+
+/* A bare separator between two flex items already gets the row's gap on both sides; its own margin would double one. */
+.dot-sep:empty::before {
+	margin-right: 0;
+}
+
+/* ── Empty states ──────────────────────────────────────────────────────────── */
+
+.empty-state {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: var(--s-1);
+	padding: var(--s-2) 0;
+	text-align: left;
+}
+
+/* Empty says so in words where the content would start; a centred icon in a void reads as a broken page. */
+.empty-state .icon {
+	display: none;
+}
+
+.empty-title {
+	font-size: var(--t-sm);
+	font-weight: 600;
+	color: var(--ink-2);
+}
+
+.empty-body {
+	max-width: 46ch;
+	font-size: var(--t-sm);
+	color: var(--ink-3);
+	text-wrap: pretty;
+}
+
+.empty-state .empty-actions {
+	margin-top: var(--s-2);
+}
+
+/* A page whose content is gated on a choice above it (pick an app, pick a namespace). Same anatomy
+   as an empty table, on a block with the usual inset so the page doesn't read as broken. */
+.empty-panel {
+	padding: var(--s-4) var(--s-5);
+	background: var(--tile);
+	border-radius: var(--r-2);
+}
+
+.empty-panel .empty-state {
+	padding: 0;
+}
+
+/* ── Forms & controls ──────────────────────────────────────────────────────── */
+
+.form {
+	display: flex;
+	flex-direction: column;
+	gap: var(--s-4);
+	max-width: 34rem;
+}
+
+.form.inline {
+	flex-direction: row;
+	flex-wrap: wrap;
+	align-items: flex-end;
+	max-width: none;
+}
+
+/* A form with a multi-column editor in it (the capability grant grid) needs the room, but its
+   single-column fields must not stretch with it. */
+.form.wide {
+	max-width: 52rem;
+}
+
+.form.wide > label {
+	max-width: 30rem;
+}
+
+.form-row {
+	display: flex;
+	gap: var(--s-3);
+	flex-wrap: wrap;
+}
+
+.form-row > label {
+	flex: 1 1 12rem;
+}
+
+.form label {
+	display: flex;
+	flex-direction: column;
+	gap: 0.375rem;
+	font-size: var(--t-sm);
+	font-weight: 600;
+	color: var(--ink-2);
+}
+
+/* The hint belongs to the field above it, so it sits closer to that field than the next one. */
+.form label > .hint {
+	margin-top: 0;
+	font-weight: 400;
+}
+
+/* A label wrapping a single control reads as a row. The access pickers declare the same shape, so name
+   them here or the radios stack under their own text. */
+.form label.checkbox,
+label.checkbox,
+label.radio,
+.scope-picker label,
+.grant-mode label,
+.action-picker label,
+.action-list label {
+	flex-direction: row;
+	align-items: center;
+	gap: var(--s-2);
+	font-weight: 400;
+}
+
+/* The access fieldset pickers: the same recessed, hairline-bounded treatment as our controls. */
+.scope-picker,
+.grant-mode,
+.action-picker {
+	border: 1px solid var(--rule);
+	border-radius: var(--r-1);
+	background: var(--recess);
+	padding: var(--s-2) var(--s-3) var(--s-3);
+}
+
+.scope-picker legend,
+.grant-mode legend,
+.action-picker legend {
+	padding: 0 var(--s-1);
+	font-size: var(--t-xxs);
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.085em;
+	color: var(--engrave);
+}
+
+.action-list {
+	gap: var(--s-2) var(--s-4);
+}
+
+.action-list label {
+	align-items: baseline;
+	font-size: var(--t-sm);
+}
+
+.perm-chip {
+	display: inline-block;
+	margin: 0 var(--s-1) var(--s-1) 0;
+	padding: 0.0625rem 0.375rem;
+	border: 1px solid var(--rule);
+	border-radius: var(--r-1);
+	background: var(--recess);
+	color: var(--ink-2);
+	font-family: var(--font-mono);
+	font-size: var(--t-xxs);
+}
+
+.form-actions {
+	display: flex;
+	gap: var(--s-2);
+}
+
+input,
+select,
+textarea {
+	font: inherit;
+	font-size: var(--t-sm);
+	min-height: 2rem;
+	padding: 0.3125rem 0.5rem;
+	border: 1px solid var(--control-rule);
+	border-radius: var(--r-1);
+	background: var(--control);
+	color: var(--ink);
+	transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+
+textarea {
+	font-family: var(--font-mono);
+	font-size: var(--t-xs);
+	line-height: 1.6;
+	resize: vertical;
+	min-height: 6rem;
+}
+
+input::placeholder,
+textarea::placeholder {
+	color: var(--ink-4);
+}
+
+input:hover:not(:disabled),
+select:hover:not(:disabled),
+textarea:hover:not(:disabled) {
+	border-color: var(--rule-strong);
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+	outline: none;
+	outline-offset: 0;
+	border-color: var(--blueprint);
+	box-shadow: 0 0 0 3px var(--rule-focus);
+}
+
+input:disabled,
+select:disabled,
+textarea:disabled {
+	opacity: 0.55;
+	cursor: not-allowed;
+}
+
+select {
+	appearance: none;
+	padding-right: 1.75rem;
+	background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%);
+	background-position: calc(100% - 0.875rem) 55%, calc(100% - 0.5625rem) 55%;
+	background-size: 5px 5px, 5px 5px;
+	background-repeat: no-repeat;
+}
+
+input[type='checkbox'],
+input[type='radio'] {
+	min-height: 0;
+	width: 0.875rem;
+	height: 0.875rem;
+	padding: 0;
+	accent-color: var(--blueprint);
+}
+
+input[type='search']::-webkit-search-cancel-button {
+	cursor: pointer;
+}
+
+/* ── Buttons ───────────────────────────────────────────────────────────────── */
+/* One filled button per page, and it is the page's single constructive next step. Everything else
+   (filtering, editing, repairing, deleting) is an outline or a ghost. A console where four things
+   are blue is a console where nothing is. */
+
+button,
+.btn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 0.375rem;
+	font: inherit;
+	font-size: var(--t-sm);
+	font-weight: 500;
+	min-height: 2.25rem;
+	padding: 0.375rem 0.875rem;
+	border: 1px solid var(--control-rule);
+	border-radius: var(--r-1);
+	background: var(--control);
+	color: var(--ink);
+	cursor: pointer;
+	white-space: nowrap;
+	transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+
+.btn:hover {
+	text-decoration: none;
+}
+
+button:hover:not(:disabled),
+.btn:hover {
+	background: var(--control-hover);
+	border-color: var(--rule-strong);
+	color: var(--ink);
+}
+
+button:disabled,
+.btn[aria-disabled='true'] {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+
+button.primary,
+.btn.primary {
+	background: var(--brand);
+	border-color: var(--brand);
+	color: var(--brand-on);
+	font-weight: 600;
+}
+
+button.primary:hover:not(:disabled),
+.btn.primary:hover {
+	background: var(--brand-hover);
+	border-color: var(--brand-hover);
+	color: var(--brand-on);
+}
+
+/* The row-level equivalent of primary: reads as the row's main verb without spending the fill. */
+button.accent,
+.btn.accent {
+	color: var(--blueprint-ink);
+	border-color: color-mix(in srgb, var(--blueprint) 40%, transparent);
+	background: var(--blueprint-wash);
+	font-weight: 600;
+}
+
+button.accent:hover:not(:disabled),
+.btn.accent:hover {
+	color: var(--blueprint-ink);
+	border-color: color-mix(in srgb, var(--blueprint) 60%, transparent);
+	background: color-mix(in srgb, var(--blueprint) 16%, transparent);
+}
+
+/* Destructive is quiet by default: it should never out-shout the constructive action next to it. */
+button.danger,
+.btn.danger {
+	color: var(--lamp-stop);
+	border-color: transparent;
+	background: none;
+}
+
+button.danger:hover:not(:disabled),
+.btn.danger:hover {
+	background: var(--wash-stop);
+	border-color: color-mix(in srgb, var(--lamp-stop) 38%, transparent);
+	color: var(--lamp-stop);
+}
+
+/* The confirmed destructive act, inside a dialog that already explained it. */
+button.danger.strong,
+.btn.danger.strong {
+	border-color: color-mix(in srgb, var(--lamp-stop) 45%, transparent);
+	background: var(--wash-stop);
+}
+
+button.ghost,
+.btn.ghost {
+	background: none;
+	border-color: transparent;
+	color: var(--ink-2);
+}
+
+button.ghost:hover:not(:disabled),
+.btn.ghost:hover {
+	background: var(--rule-soft);
+	border-color: transparent;
+	color: var(--ink);
+}
+
+button.small,
+.btn.small,
+.row-actions .source-mutation > button {
+	min-height: 1.75rem;
+	padding: 0.1875rem 0.4375rem;
+	font-size: var(--t-xs);
+}
+
+button.icon-btn {
+	min-height: 2rem;
+	width: 2rem;
+	padding: 0;
+	border: 1px solid transparent;
+	background: none;
+	color: var(--ink-3);
+	font-size: inherit;
+	line-height: 1;
+}
+
+button.icon-btn:hover:not(:disabled) {
+	background: var(--rule-soft);
+	border-color: var(--rule);
+	color: var(--ink);
+}
+
+/* A link that acts as the page's primary next step. */
+.nav-cta {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.375rem;
+	font-size: var(--t-sm);
+	font-weight: 500;
+	white-space: nowrap;
+}
+
+.nav-cta:hover {
+	text-decoration: none;
+}
+
+/* ── Danger zone ───────────────────────────────────────────────────────────── */
+/* Irreversible acts live at the bottom of the page, past everything you might have come to do,
+   never in the page head, where every other screen puts its constructive CTA. */
+
+.danger-zone {
+	display: flex;
+	align-items: center;
+	gap: var(--s-4);
+	margin-top: var(--s-7);
+	padding: var(--s-3) var(--s-4);
+	border: none;
+	border-radius: var(--r-2);
+	background: var(--tile);
+}
+
+.danger-zone .spacer {
+	flex: 1;
+}
+
+.danger-zone-copy {
+	min-width: 0;
+	font-size: var(--t-sm);
+	color: var(--ink-3);
+	text-wrap: pretty;
+}
+
+.danger-zone-copy strong {
+	display: block;
+	color: var(--ink-2);
+	font-weight: 600;
+}
+
+/* ── Lamps: the console's signature status mark ────────────────────────────── */
+
+.lamp {
+	flex: none;
+	width: 0.4375rem;
+	height: 0.4375rem;
+	border-radius: 50%;
+	background: currentColor;
+	box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 18%, transparent);
+}
+
+.status {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.4375rem;
+	font-size: var(--t-sm);
+	font-weight: 500;
+	color: var(--ink-2);
+	white-space: nowrap;
+}
+
+.status-ok .lamp {
+	color: var(--lamp-ok);
+}
+
+.status-run .lamp {
+	color: var(--lamp-run);
+	animation: lamp-pulse 1.4s ease-in-out infinite;
+}
+
+.status-stop {
+	color: var(--lamp-stop);
+}
+
+.status-stop .lamp {
+	color: var(--lamp-stop);
+}
+
+.status-idle .lamp {
+	color: var(--lamp-idle);
+}
+
+.status-idle {
+	color: var(--ink-3);
+}
+
+@keyframes lamp-pulse {
+	0%,
+	100% {
+		opacity: 0.4;
+	}
+	50% {
+		opacity: 1;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.status-run .lamp {
+		animation: none;
+	}
+}
+
+/* `.run-dot` is the log toolbar's older name for the same idea. */
+.run-dot {
+	display: inline-block;
+	width: 0.4375rem;
+	height: 0.4375rem;
+	border-radius: 50%;
+	background: currentColor;
+	animation: lamp-pulse 1.4s ease-in-out infinite;
+}
+
+/* ── Chips: CATEGORY, never status ─────────────────────────────────────────── */
+
+.chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.25rem;
+	padding: 0.0625rem 0.375rem;
+	border: 1px solid var(--rule);
+	border-radius: var(--r-1);
+	background: var(--recess);
+	color: var(--ink-2);
+	font-family: var(--font-mono);
+	font-size: var(--t-xxs);
+	font-weight: 500;
+	line-height: 1.55;
+	white-space: nowrap;
+}
+
+.chip-accent {
+	border-color: transparent;
+	background: var(--blueprint-wash);
+	color: var(--blueprint-ink);
+}
+
+/* ── Badges: a category worth a tint (role origin, grant source) ───────────── */
+/* Never a status: status is a lamp. */
+
+.badge {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.3125rem;
+	padding: 0.0625rem 0.4375rem;
+	border: 1px solid transparent;
+	border-radius: var(--r-1);
+	font-size: var(--t-xxs);
+	font-weight: 600;
+	line-height: 1.6;
+	white-space: nowrap;
+}
+
+.badge-neutral {
+	background: var(--blueprint-wash);
+	color: var(--blueprint-ink);
+}
+
+.badge-good {
+	background: var(--wash-ok);
+	color: var(--lamp-ok);
+}
+
+.badge-warn {
+	background: var(--wash-run);
+	color: var(--lamp-run);
+}
+
+.badge-bad {
+	background: var(--wash-stop);
+	color: var(--lamp-stop);
+}
+
+.badge-muted {
+	background: var(--recess);
+	color: var(--ink-3);
+	border-color: var(--rule);
+}
+
+/* ── Tables ────────────────────────────────────────────────────────────────── */
+
+/* A table stands on the floor: its heading rule and row hairlines are structure enough without a ground. */
+.table-wrap {
+	overflow-x: auto;
+}
+
+.card-body.flush > .table-wrap,
+.table-wrap.bare {
+	border: none;
+	border-radius: 0;
+	background: none;
+}
+
+/* In a card the outer cells take the card's 24px inset, under its title. */
+.card-body.flush :is(th, td):first-child {
+	padding-left: var(--s-5);
+}
+
+.card-body.flush :is(th, td):last-child {
+	padding-right: var(--s-5);
+}
+
+.table-wrap.inline-add {
+	margin-top: var(--s-3);
+}
+
+table {
+	width: 100%;
+	border-collapse: collapse;
+}
+
+/* Cells sit 8px apart vertically and 12px horizontally; the outer cells have no inset, so a table's first column
+   lines up with the section title above it. */
+th,
+td {
+	text-align: left;
+	padding: var(--s-2) var(--s-3);
+	border-bottom: 1px solid var(--rule-soft);
+	vertical-align: middle;
+}
+
+td {
+	height: 2.75rem;
+}
+
+:is(th, td):first-child {
+	padding-left: 0;
+}
+
+:is(th, td):last-child {
+	padding-right: 0;
+}
+
+/* Two related values in one cell, the second under the first. */
+.cell-stack {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 2px;
+	min-width: 0;
+}
+
+.cell-stack:has(input) {
+	gap: var(--s-2);
+}
+
+/* Column headings over no rows are noise: an empty table is its one line. */
+table:has(> tbody > tr > td.empty) > thead {
+	display: none;
+}
+
+/* Without this, a table wider than its content spreads the slack across EVERY column and four short
+   columns end up floating in dead space. The columns marked `grow` absorb it instead. Mark more than
+   one and they share it, which is what a table with two long fields wants. */
+th.grow {
+	width: 100%;
+}
+
+/* Column headings are labels, not a band: small mono capitals on the plate itself. */
+th {
+	padding-top: var(--s-3);
+	padding-bottom: var(--s-2);
+	background: none;
+	border-bottom: 1px solid var(--rule);
+	font-family: var(--font-mono);
+	font-size: var(--t-xxs);
+	font-weight: 500;
+	text-transform: uppercase;
+	letter-spacing: 0.1em;
+	color: var(--engrave);
+	white-space: nowrap;
+}
+
+tbody tr:last-child td {
+	border-bottom: none;
+}
+
+tbody tr:hover td {
+	background: var(--rule-soft);
+}
+
+td code {
+	color: var(--ink-2);
+}
+
+/* A table of blue links scans as a wall of colour. The identifier stays ink and earns its underline
+   on hover; the row highlight already says the whole row is live. */
+td a {
+	color: var(--ink);
+	font-weight: 500;
+}
+
+td a:hover {
+	color: var(--blueprint);
+	text-decoration: underline;
+	text-underline-offset: 2px;
+}
+
+td a > code,
+td a:hover > code {
+	color: inherit;
+}
+
+/* An empty table says so on its first row, where a value would start: inset like a cell, not centred in a void. */
+td.empty {
+	height: auto;
+	padding: var(--s-3) 0;
+	color: var(--ink-3);
+	text-align: left;
+}
+
+td.empty > .empty-state {
+	padding: 0;
+}
+
+/* In a card the empty line takes the card's inset, as its rows do. */
+.card-body.flush > .empty-state {
+	padding: var(--s-2) var(--s-5) var(--s-4);
+}
+
+td.empty:hover {
+	background: none;
+}
+
+/* One line, always: a wrapped action cluster turns a table row into a paragraph. The wrap lives on
+   `.table-wrap` instead, which scrolls. */
+.row-actions {
+	display: flex;
+	gap: var(--s-1);
+	align-items: center;
+	justify-content: flex-end;
+	flex-wrap: nowrap;
+	white-space: nowrap;
+}
+
+/* As a table cell the cluster stays a cell, or the row's hairline and height stop short of it; its controls line up
+   inline at the right instead. */
+td.row-actions {
+	display: table-cell;
+	text-align: right;
+}
+
+td.row-actions > * {
+	vertical-align: middle;
+}
+
+td.row-actions > * + * {
+	margin-left: var(--s-1);
+}
+
+/* ── Detail grid ───────────────────────────────────────────────────────────── */
+
+.detail-grid {
+	/* Its own size decides how many columns fit, so a `.wide` cell can ask for two only when there are two. */
+	container-type: inline-size;
+	display: grid;
+	/* 14rem holds a full date and time on one line; 11rem let it run into the next column's label. Never more
+	   than four columns: on a wide monitor a fifth leaves the usual eight facts as five over three. */
+	grid-template-columns: repeat(auto-fit, minmax(min(100%, max(14rem, (100% - 3 * var(--s-6)) / 4)), 1fr));
+	gap: var(--s-4) var(--s-6);
+	padding: var(--s-4);
+	background: var(--tile);
+	border: none;
+	border-radius: var(--r-2);
+}
+
+.detail-grid > div {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+/* A value that is a sentence or a long id: two columns, so it reads on one line instead of breaking mid-word. */
+@container (min-width: 30rem) {
+	.detail-grid > .wide {
+		grid-column: span 2;
+	}
+}
+
+/* The operations pages write their facts as `dt`/`dd`; the `dt` is the label plate (with `h4` above), and
+   the `dd` loses the browser's definition-list indent. */
+.detail-grid dd {
+	margin: 0;
+}
+
+/* A control inside a fact sits under its label, not pushed to the right edge as in a table row. */
+.detail-grid .row-actions {
+	justify-content: flex-start;
+}
+
+/* Inside a card the grid is already framed, so drop its own plate. */
+.card-body > .detail-grid,
+.detail-row .detail-grid {
+	padding: 0;
+	background: none;
+	border: none;
+	border-radius: 0;
+}
+
+/* ── Namespace boundary ledger ─────────────────────────────────────────────── */
+
+.namespace-signature {
+	margin: var(--s-3) 0;
+	background: var(--tile);
+	border: none;
+	border-radius: var(--r-2);
+	overflow: hidden;
+}
+
+.namespace-signature-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--s-4);
+	padding: var(--s-3) var(--s-4);
+}
+
+.namespace-signature-head strong {
+	font-size: var(--t-base);
+	font-weight: 600;
+}
+
+.namespace-signature-kicker {
+	font-size: var(--t-xxs);
+	font-weight: 600;
+	letter-spacing: 0.085em;
+	text-transform: uppercase;
+	color: var(--engrave);
+}
+
+.namespace-ledger {
+	margin: 0;
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.namespace-ledger > div {
+	display: grid;
+	grid-template-columns: minmax(7rem, 0.75fr) minmax(0, 1.25fr);
+	gap: var(--s-3);
+	align-items: baseline;
+	padding: 0.4375rem var(--s-4);
+	border-bottom: 1px solid var(--rule-soft);
+}
+
+.namespace-ledger > div:nth-child(odd) {
+	border-right: 1px solid var(--rule-soft);
+}
+
+.namespace-ledger dt {
+	font-size: var(--t-xxs);
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.085em;
+	color: var(--engrave);
+}
+
+.namespace-ledger dd {
+	margin: 0;
+	min-width: 0;
+	font-size: var(--t-sm);
+	overflow-wrap: anywhere;
+}
+
+.namespace-instructions {
+	padding: var(--s-3) var(--s-4);
+}
+
+.namespace-instructions ol {
+	margin: var(--s-2) 0 0;
+	padding-left: var(--s-4);
+	font-size: var(--t-sm);
+	color: var(--ink-2);
+}
+
+.namespace-instructions li + li {
+	margin-top: var(--s-1);
+}
+
+.namespace-provision-actions,
+.namespace-detail-actions {
+	margin-top: var(--s-3);
+}
+
+.namespace-failure {
+	border-color: color-mix(in srgb, var(--lamp-stop) 34%, transparent);
+	background: var(--wash-stop);
+}
+
+/* Environment settings keep the app's own address separate from the pages allowed to call it. */
+.environment-table,
+.environment-editor {
+	container-type: inline-size;
+}
+
+.environment-table table:not(:has(td.empty)) {
+	min-width: 58rem;
+}
+
+.environment-row > td {
+	padding-block: var(--s-4);
+	font-size: var(--t-sm);
+}
+
+.environment-row strong {
+	font-weight: 600;
+}
+
+/* Technical values keep the same size in every column, including inside secondary text. */
+.environment-row code {
+	font-size: inherit;
+	font-weight: 400;
+}
+
+.environment-row .muted code {
+	color: inherit;
+}
+
+.environment-address {
+	min-width: 16rem;
+	max-width: 28rem;
+	overflow-wrap: anywhere;
+}
+
+.environment-row-actions {
+	display: flex;
+	align-items: center;
+	justify-content: flex-end;
+	gap: var(--s-2);
+	min-width: 9rem;
+}
+
+.environment-editor-row > td,
+.environment-editor-row:hover > td {
+	padding: 0;
+	background: none;
+}
+
+.environment-editor {
+	/* The table can scroll on small screens; the expanded form still fits the visible workspace. */
+	max-width: 100cqw;
+	margin-block: var(--s-3);
+	border-left: 2px solid var(--rule);
+	font-size: var(--t-sm);
+}
+
+.environment-add {
+	margin-top: var(--s-4);
+}
+
+.environment-head {
+	padding: var(--s-4) var(--s-5) 0;
+}
+
+.environment-head h3,
+.environment-field-group h4 {
+	margin: 0;
+	font-family: var(--font-ui);
+	font-size: var(--t-base);
+	font-weight: 600;
+	line-height: 1.5;
+	letter-spacing: normal;
+	text-transform: none;
+	color: var(--ink);
+}
+
+.environment-actions {
+	display: flex;
+	align-items: center;
+	gap: var(--s-2);
+	flex-wrap: wrap;
+}
+
+.environment-deploy {
+	display: grid;
+	justify-items: end;
+	gap: var(--s-1);
+	max-width: 16rem;
+}
+
+.environment-url {
+	display: inline-flex;
+	align-items: baseline;
+	gap: var(--s-1);
+	max-width: 100%;
+	color: var(--ink);
+}
+
+.environment-url code {
+	min-width: 0;
+}
+
+.environment-url .icon {
+	flex-shrink: 0;
+	color: var(--ink-3);
+}
+
+.environment-origins {
+	list-style: none;
+	padding: 0;
+	margin: 0;
+	display: grid;
+	gap: var(--s-1);
+	font-size: var(--t-sm);
+	min-width: 17rem;
+	max-width: 24rem;
+	overflow-wrap: anywhere;
+}
+
+.environment-form {
+	max-width: none;
+	gap: 0;
+}
+
+.environment-fields {
+	min-width: 0;
+	margin: 0;
+	padding: var(--s-5);
+	border: 0;
+	display: grid;
+	gap: var(--s-5);
+}
+
+.environment-form-grid {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: var(--s-5) var(--s-6);
+}
+
+.environment-field-group {
+	display: grid;
+	align-content: start;
+	gap: var(--s-4);
+	min-width: 0;
+}
+
+.environment-form label {
+	flex-direction: row;
+	align-items: baseline;
+	flex-wrap: wrap;
+	margin-bottom: var(--s-2);
+	font-weight: 500;
+}
+
+.environment-field-meta {
+	font-weight: 400;
+	font-size: inherit;
+	color: var(--ink-3);
+}
+
+.environment-form :is(input, select, textarea) {
+	width: 100%;
+	font-family: var(--font-mono);
+	font-size: var(--t-sm);
+	font-weight: 400;
+	line-height: 1.5;
+}
+
+.environment-name-field {
+	max-width: 30rem;
+}
+
+.environment-deployment-fields {
+	border-top: 1px solid var(--rule-soft);
+	padding-top: var(--s-5);
+}
+
+.environment-form .hint {
+	max-width: 68ch;
+}
+
+.environment-form-error {
+	margin: 0 var(--s-5) var(--s-4);
+}
+
+.environment-form-actions {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	flex-wrap: wrap;
+	gap: var(--s-3);
+	padding: var(--s-4) var(--s-5);
+	border-top: 1px solid var(--rule-soft);
+}
+
+.environment-form-actions > .environment-actions {
+	margin-left: auto;
+}
+
+@container (max-width: 36rem) {
+	.environment-form-grid {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.environment-head,
+	.environment-fields,
+	.environment-form-actions {
+		padding-inline: var(--s-4);
+	}
+}
+
+/* ── Source connection ────────────────────────────────────────────────────── */
+
+/* One physical signal path, not three cards: authority flows left to right and every boundary has
+   one lamp. The line remains useful at narrow widths by becoming the rail the nodes hang from. */
+.source-chain {
+	display: flex;
+	align-items: stretch;
+	margin: 0 0 var(--s-6);
+	padding: 0;
+	border: none;
+	border-radius: var(--r-2);
+	background: var(--tile);
+}
+
+.source-chain-segment {
+	display: contents;
+}
+
+.source-chain-node {
+	flex: 1 1 0;
+	min-width: 0;
+	padding: var(--s-4);
+}
+
+.source-chain-node > span:last-child {
+	display: block;
+	margin-top: var(--s-1);
+	color: var(--ink-3);
+	font-family: var(--font-mono);
+	font-size: var(--t-xs);
+	overflow-wrap: anywhere;
+}
+
+.source-chain-link {
+	display: flex;
+	align-items: center;
+	padding-inline: var(--s-2);
+	border-inline: 1px solid var(--rule-soft);
+	color: var(--ink-4);
+}
+
+.source-checkpoint {
+	max-width: 52rem;
+	padding: var(--s-5);
+	border: none;
+	border-radius: var(--r-2);
+	background: var(--tile);
+}
+
+.source-checkpoint > p {
+	max-width: var(--measure);
+	color: var(--ink-2);
+}
+
+.source-checkpoint-failed {
+	border-color: color-mix(in srgb, var(--lamp-stop) 34%, transparent);
+}
+
+.source-checkpoint .section-head {
+	margin-bottom: var(--s-2);
+}
+
+.source-checkpoint .form-actions {
+	align-items: flex-start;
+	margin-top: var(--s-4);
+	flex-wrap: wrap;
+}
+
+.source-checkpoint-meta,
+.source-app {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: var(--s-2) var(--s-4);
+	margin: var(--s-4) 0;
+	padding-block: var(--s-3);
+	border-block: 1px solid var(--rule-soft);
+	color: var(--ink-3);
+	font-size: var(--t-sm);
+}
+
+.source-checkpoint-meta code {
+	color: var(--ink-2);
+}
+
+.source-app a {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--s-1);
+	font-weight: 600;
+}
+
+.source-app span:not(:last-child)::after {
+	content: '·';
+	margin-left: var(--s-4);
+	color: var(--ink-4);
+}
+
+.source-facts {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	margin: var(--s-4) 0 0;
+	border-top: 1px solid var(--rule);
+	border-left: 1px solid var(--rule);
+}
+
+.source-facts > div {
+	min-width: 0;
+	padding: var(--s-3) var(--s-4);
+	border-right: 1px solid var(--rule);
+	border-bottom: 1px solid var(--rule);
+}
+
+.source-facts dt {
+	margin-bottom: var(--s-1);
+	color: var(--engrave);
+	font-size: var(--t-xxs);
+	font-weight: 600;
+	letter-spacing: 0.085em;
+	text-transform: uppercase;
+}
+
+.source-facts dd {
+	margin: 0;
+	color: var(--ink-2);
+	font-size: var(--t-sm);
+	overflow-wrap: anywhere;
+}
+
+.source-form {
+	max-width: none;
+	margin-top: var(--s-5);
+	padding-top: var(--s-5);
+	border-top: 1px solid var(--rule);
+}
+
+.source-visibility {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: var(--s-2) var(--s-4);
+	margin: 0;
+	padding: var(--s-3) var(--s-4);
+	border: 1px solid var(--rule);
+	border-radius: var(--r-1);
+	background: var(--recess);
+}
+
+.source-visibility legend {
+	padding-inline: var(--s-1);
+	color: var(--engrave);
+	font-size: var(--t-xxs);
+	font-weight: 600;
+	letter-spacing: 0.085em;
+	text-transform: uppercase;
+}
+
+.source-visibility label {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--s-2);
+	color: var(--ink-2);
+	font-size: var(--t-sm);
+}
+
+.source-visibility .hint {
+	flex: 1 1 100%;
+	margin: 0;
+}
+
+.source-mutation {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: var(--s-2);
+}
+
+/* In a table row the action keeps to the row's right edge, at the size of the other row actions. */
+.row-actions .source-mutation {
+	align-items: flex-end;
+}
+
+.source-notice {
+	max-width: 52rem;
+	margin: 0 0 var(--s-4);
+}
+
+.source-steps {
+	margin: var(--s-4) 0 0;
+	padding: 0;
+	list-style: none;
+	counter-reset: source-step;
+}
+
+.source-steps li {
+	display: grid;
+	grid-template-columns: 1.75rem minmax(0, 1fr) auto;
+	align-items: start;
+	gap: var(--s-3) var(--s-4);
+	padding: var(--s-4) 0;
+	border-top: 1px solid var(--rule-soft);
+	counter-increment: source-step;
+}
+
+.source-steps li::before {
+	content: counter(source-step);
+	display: grid;
+	place-items: center;
+	width: 1.75rem;
+	height: 1.75rem;
+	border: 1px solid var(--rule-strong);
+	border-radius: 50%;
+	color: var(--ink-3);
+	font-size: var(--t-sm);
+	font-weight: 600;
+}
+
+.source-steps li.current::before {
+	border-color: var(--blueprint);
+	background: var(--blueprint);
+	color: var(--blueprint-on);
+}
+
+.source-steps li > div strong {
+	display: block;
+	color: var(--ink);
+}
+
+.source-steps li > div span {
+	display: block;
+	max-width: var(--measure);
+	margin-top: var(--s-1);
+	color: var(--ink-3);
+	font-size: var(--t-sm);
+}
+
+@media (max-width: 720px) {
+	.source-chain {
+		flex-direction: column;
+	}
+
+	.source-chain-segment {
+		display: block;
+	}
+
+	.source-chain-node {
+		border-left: 2px solid var(--rule-strong);
+	}
+
+	.source-chain-link {
+		display: none;
+	}
+
+	.source-facts {
+		grid-template-columns: 1fr;
+	}
+
+	.source-steps li {
+		grid-template-columns: 1.75rem minmax(0, 1fr);
+	}
+
+	.source-steps li > :last-child {
+		grid-column: 2;
+	}
+}
+
+/* ── Notices ───────────────────────────────────────────────────────────────── */
+
+.error-text {
+	margin: 0;
+	color: var(--lamp-stop);
+	font-size: var(--t-sm);
+}
+
+.warn-text {
+	margin: 0;
+	color: var(--lamp-run);
+	font-size: var(--t-sm);
+}
+
+.notice {
+	display: flex;
+	align-items: flex-start;
+	gap: var(--s-3);
+	padding: var(--s-3) var(--s-4);
+	border: none;
+	border-radius: var(--r-2);
+	background: var(--tile);
+	font-size: var(--t-sm);
+	color: var(--ink-2);
+}
+
+.notice .icon {
+	margin-top: 0.125rem;
+	color: var(--ink-4);
+}
+
+.notice-bad {
+	border-color: color-mix(in srgb, var(--lamp-stop) 30%, transparent);
+	background: var(--wash-stop);
+}
+
+.notice-bad .icon {
+	color: var(--lamp-stop);
+}
+
+/* ── Operations plane ─────────────────────────────────────────────────────── */
+
+.ops-capabilities {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: var(--s-4);
+}
+
+.ops-capability {
+	color: inherit;
+}
+
+/* A long release name ends in an ellipsis inside its card instead of running out of it. */
+.ops-capability .card-head {
+	min-width: 0;
+}
+
+.ops-capability .card-head h2 {
+	flex: none;
+}
+
+.ops-capability .card-head .status {
+	min-width: 0;
+}
+
+.ops-capability:hover {
+	border-color: var(--rule-strong);
+	text-decoration: none;
+}
+
+.ops-capability .card-body p {
+	max-width: 52ch;
+	margin: 0;
+	color: var(--ink-3);
+}
+
+
+.ops-level {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--s-2);
+	font-family: var(--font-mono);
+	font-size: var(--t-xs);
+}
+
+.ops-level::before {
+	content: '';
+	width: 0.25rem;
+	height: 1rem;
+	border-radius: 2px;
+	background: var(--lamp-idle);
+}
+
+.ops-level-fatal::before,
+.ops-level-error::before {
+	background: var(--lamp-stop);
+}
+
+.ops-level-warning::before {
+	background: var(--lamp-run);
+}
+
+.ops-level-info::before {
+	background: var(--blueprint);
+}
+
+.cell-note {
+	margin-top: 0.125rem;
+	color: var(--ink-3);
+	font-size: var(--t-xs);
+}
+
+td.numeric,
+th.numeric {
+	font-family: var(--font-mono);
+	text-align: right;
+}
+
+/* A release's name is its whole identifier (app, environment, service, commit): one line, cut short with an ellipsis,
+   read in full on hover. */
+.release-cell {
+	max-width: 0;
+	width: 100%;
+}
+
+.release-name {
+	display: block;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: var(--t-xs);
+}
+
+.ops-occurrence {
+	display: flex;
+	flex-direction: column;
+	gap: var(--s-4);
+}
+
+.ops-trace-line {
+	display: flex;
+	justify-content: space-between;
+	gap: var(--s-4);
+	padding: var(--s-3) var(--s-4);
+	border: 1px solid var(--rule);
+	border-radius: var(--r-2);
+	background: var(--recess);
+	font-family: var(--font-mono);
+	font-size: var(--t-sm);
+	color: var(--ink-2);
+}
+
+.ops-exception {
+	overflow: hidden;
+	border: none;
+	border-radius: var(--r-2);
+	background: var(--tile);
+}
+
+.ops-exception > h3 {
+	margin: 0;
+	padding: var(--s-3) var(--s-4);
+	color: var(--lamp-stop);
+	font-family: var(--font-mono);
+}
+
+.ops-stack {
+	display: flex;
+	flex-direction: column;
+}
+
+.ops-frame {
+	padding: var(--s-3) var(--s-4);
+	border-bottom: 1px solid var(--rule-soft);
+	border-left: 3px solid transparent;
+}
+
+.ops-frame:last-child {
+	border-bottom: none;
+}
+
+.ops-frame.in-app {
+	border-left-color: var(--blueprint);
+	background: var(--blueprint-wash);
+}
+
+.ops-frame > div {
+	display: flex;
+	justify-content: space-between;
+	gap: var(--s-4);
+}
+
+.ops-frame code {
+	color: var(--ink-3);
+}
+
+.ops-source {
+	display: flex;
+	flex-direction: column;
+	overflow-x: auto;
+	margin: var(--s-3) 0 0;
+	padding: var(--s-2) 0;
+	background: var(--recess);
+	color: var(--ink-2);
+}
+
+.ops-source span {
+	padding: 0 var(--s-3);
+	white-space: pre;
+}
+
+.ops-source span.error-line {
+	background: var(--wash-stop);
+	color: var(--ink);
+}
+
+.ops-source b {
+	display: inline-block;
+	width: 3rem;
+	margin-right: var(--s-3);
+	color: var(--ink-4);
+	text-align: right;
+	font-weight: 400;
+}
+
+.ops-context-grid {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+	gap: var(--s-4);
+}
+
+.ops-context-grid section {
+	margin: 0;
+}
+
+.ops-raw {
+	margin-top: var(--s-4);
+	border-top: 1px solid var(--rule);
+	padding-top: var(--s-3);
+}
+
+.ops-raw summary {
+	cursor: pointer;
+	color: var(--ink-3);
+	font-size: var(--t-sm);
+}
+
+.ops-raw pre {
+	max-height: 28rem;
+	overflow: auto;
+	padding: var(--s-3);
+	background: var(--recess);
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+
+.ops-triage {
+	display: flex;
+	flex-direction: column;
+	gap: var(--s-4);
+}
+
+.ops-inline-action {
+	display: flex;
+	gap: var(--s-2);
+}
+
+.ops-inline-action input,
+.ops-inline-action select {
+	flex: 1;
+}
+
+.sr-only {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	padding: 0;
+	margin: -1px;
+	overflow: hidden;
+	clip: rect(0, 0, 0, 0);
+	white-space: nowrap;
+	border: 0;
+}
+
+/* ── Gate screen (route errors, permission walls, 404, outages) ───────────────── */
+/* `GateScreen`: the frame of the pages fabrika serves outside the console (`@fabrika/proxy-core/page-style`) in the
+   workspace. The words at the left, the state's glyph on the welcome's blueprint grid at the right, where those pages
+   draw the mark (the rail beside it carries the brand), and the context and the status in a line under it. On a plate,
+   as the console's cards are, and in the middle of the space the page would have filled. */
+
+.gate {
+	display: grid;
+	align-content: center;
+	max-width: 60rem;
+	min-height: min(72vh, 44rem);
+	margin: 0 auto;
+}
+
+.gate-screen {
+	display: grid;
+	grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+	gap: 2.5rem;
+	margin: 0;
+	padding: 2.75rem;
+	background: var(--plate);
+	border: 1px solid var(--rule);
+	border-radius: var(--r-2);
+}
+
+.gate-copy {
+	align-self: center;
+	min-width: 0;
+}
+
+.gate-copy h1 {
+	margin: 0 0 var(--s-4);
+	font-size: clamp(1.75rem, 4vw, 2.5rem);
+	font-weight: 700;
+	line-height: 1.05;
+	letter-spacing: -0.04em;
+}
+
+.gate-copy p {
+	max-width: 34rem;
+	color: var(--ink-2);
+	font-size: var(--t-md);
+	line-height: 1.6;
+}
+
+/* The state's colour is the art's; the message under the heading stays the screen's ink, so the two never disagree. */
+.gate-copy p.error-text {
+	color: var(--ink-2);
+}
+
+.gate-copy > :is(button, .btn, .nav-cta) {
+	margin-top: var(--s-2);
+}
+
+/* The glyph and its grid take the state's lamp colour, the grid's ground its wash, as a lamp carries a halo. A wall
+   or a missing page is neutral: nothing gets past it by waiting. */
+.gate-screen {
+	--gate-ink: var(--ink-3);
+	--gate-rule: var(--rail-rule);
+	--gate-wash: transparent;
+}
+
+.gate-screen[data-tone='run'] {
+	--gate-ink: var(--lamp-run);
+	--gate-rule: color-mix(in srgb, var(--lamp-run) 22%, transparent);
+	--gate-wash: var(--wash-run);
+}
+
+.gate-screen[data-tone='stop'] {
+	--gate-ink: var(--lamp-stop);
+	--gate-rule: color-mix(in srgb, var(--lamp-stop) 22%, transparent);
+	--gate-wash: var(--wash-stop);
+}
+
+.gate-art {
+	display: grid;
+	place-items: center;
+	min-height: 15rem;
+	color: var(--gate-ink);
+	background-color: var(--gate-wash);
+	background-image:
+		linear-gradient(var(--gate-rule) 1px, transparent 1px),
+		linear-gradient(90deg, var(--gate-rule) 1px, transparent 1px);
+	background-size: 24px 24px;
+	background-position: center;
+	border-radius: var(--r-1);
+}
+
+.gate-art .icon {
+	width: 5.5rem;
+	height: 5.5rem;
+}
+
+.gate-foot {
+	display: flex;
+	justify-content: space-between;
+	gap: var(--s-4);
+	margin: var(--s-4) 0 0;
+	padding-inline: var(--s-1);
+	color: var(--ink-3);
+	font-size: var(--t-xs);
+}
+
+.gate-status {
+	margin-left: auto;
+}
+
+@media (max-width: 720px) {
+	.gate-screen {
+		grid-template-columns: minmax(0, 1fr);
+		gap: var(--s-5);
+		padding: var(--s-5);
+	}
+
+	.gate-art {
+		order: -1;
+		min-height: 7rem;
+	}
+
+	.gate-art .icon {
+		width: 3.5rem;
+		height: 3.5rem;
+	}
+}
+
+/* ── Branding (ADR-0066) ─────────────────────────────────────────────────────── */
+/* The logo as fabrika's own pages draw it: on the blueprint grid of a light plate and of the welcome's dark panel, the
+   two grounds those pages have, whatever the console's own theme is. */
+
+.brand-preview {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));
+	gap: var(--s-4);
+	max-width: 44rem;
+}
+
+.brand-tile {
+	display: grid;
+	gap: var(--s-2);
+	margin: 0;
+}
+
+.brand-tile-art {
+	display: grid;
+	place-items: center;
+	min-height: 9rem;
+	padding: var(--s-4);
+	border: 1px solid rgba(14, 20, 32, 0.1);
+	border-radius: var(--r-2);
+	background-color: #ffffff;
+	background-image:
+		linear-gradient(rgba(14, 20, 32, 0.08) 1px, transparent 1px),
+		linear-gradient(90deg, rgba(14, 20, 32, 0.08) 1px, transparent 1px);
+	background-size: 24px 24px;
+	background-position: center;
+	color: var(--brand);
+}
+
+.brand-tile[data-scheme='dark'] .brand-tile-art {
+	border-color: rgba(255, 255, 255, 0.08);
+	background-color: #080a0d;
+	background-image:
+		linear-gradient(rgba(255, 255, 255, 0.08) 1px, transparent 1px),
+		linear-gradient(90deg, rgba(255, 255, 255, 0.08) 1px, transparent 1px);
+}
+
+.brand-tile-art img {
+	display: block;
+	max-width: 80%;
+	max-height: 5rem;
+}
+
+.brand-tile figcaption {
+	color: var(--ink-3);
+	font-size: var(--t-xs);
+}
+
+/* ── Command palette ─────────────────────────────────────────────────────── */
+/* Set high on the screen, where the eye already is, and as wide as a sentence; the list scrolls under the field. */
+
+.palette-backdrop {
+	z-index: 60;
+	align-items: flex-start;
+	padding-top: 12vh;
+}
+
+.palette {
+	display: flex;
+	flex-direction: column;
+	width: 100%;
+	max-width: 40rem;
+	max-height: min(32rem, 76vh);
+	overflow: hidden;
+	background: var(--plate-raised);
+	border: 1px solid var(--rule);
+	border-radius: var(--r-3);
+	box-shadow: var(--lift);
+}
+
+.palette-field {
+	display: flex;
+	align-items: center;
+	gap: var(--s-3);
+	padding: 0 var(--s-4);
+	border-bottom: 1px solid var(--rule);
+	color: var(--ink-3);
+}
+
+.palette-field input {
+	flex: 1;
+	min-width: 0;
+	height: 3.25rem;
+	padding: 0;
+	border: none;
+	background: transparent;
+	color: var(--ink);
+	font: inherit;
+	font-size: var(--t-base);
+	outline: none;
+	box-shadow: none;
+}
+
+.palette-list {
+	flex: 1;
+	min-height: 0;
+	overflow-y: auto;
+	overscroll-behavior: contain;
+	scrollbar-width: thin;
+	scrollbar-color: var(--rule-strong) transparent;
+	padding: var(--s-2);
+}
+
+.palette-group {
+	padding: var(--s-3) var(--s-3) var(--s-1);
+	color: var(--ink-4);
+	font-family: var(--font-mono);
+	font-size: var(--t-xs);
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+}
+
+.palette-option {
+	display: flex;
+	align-items: center;
+	gap: var(--s-3);
+	min-height: 2.5rem;
+	padding: 0 var(--s-3);
+	border-radius: var(--r-2);
+	color: var(--ink-2);
+	cursor: pointer;
+}
+
+.palette-option .icon {
+	flex: none;
+	color: var(--ink-4);
+}
+
+/* The chosen row reads like the rail's current page, a wash and a blueprint icon. The wash is lighter than the rail's:
+   on the raised panel the rail's own would glare. */
+.palette-option[aria-selected="true"] {
+	background: light-dark(rgba(14, 20, 32, 0.06), rgba(255, 255, 255, 0.05));
+	color: var(--ink);
+}
+
+.palette-option[aria-selected="true"] .icon {
+	color: var(--blueprint);
+}
+
+.palette-title {
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+}
+
+.palette-detail {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	color: var(--ink-4);
+	font-size: var(--t-sm);
+	white-space: nowrap;
+	text-overflow: ellipsis;
+}
+
+/* The arrow keeps to the row's right end, with or without a detail before it. */
+.palette-go {
+	display: flex;
+	margin-left: auto;
+}
+
+.palette-empty {
+	margin: 0;
+	padding: var(--s-4) var(--s-3);
+	color: var(--ink-3);
+	font-size: var(--t-sm);
+}
+
+.palette-foot {
+	display: flex;
+	align-items: center;
+	gap: var(--s-4);
+	padding: var(--s-2) var(--s-4);
+	border-top: 1px solid var(--rule);
+	color: var(--ink-4);
+	font-size: var(--t-xs);
+}
+
+.palette-foot kbd + kbd {
+	margin-left: 0.125rem;
+}
+
+.palette-loading {
+	margin-left: auto;
+}
+
+/* ── Modal ─────────────────────────────────────────────────────────────────── */
+
+.modal-backdrop {
+	position: fixed;
+	inset: 0;
+	z-index: 50;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: var(--s-4);
+	background: light-dark(rgba(16, 27, 40, 0.34), rgba(4, 6, 9, 0.62));
+	backdrop-filter: blur(2px);
+}
+
+.modal {
+	width: 100%;
+	max-width: 34rem;
+	max-height: 90vh;
+	overflow: auto;
+	background: var(--plate-raised);
+	border: 1px solid var(--rule);
+	border-radius: var(--r-3);
+	box-shadow: var(--lift);
+}
+
+.modal-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--s-3);
+	padding: var(--s-4) var(--s-5);
+	border-bottom: 1px solid var(--rule);
+}
+
+.modal-head h2 {
+	margin: 0;
+	font-size: var(--t-base);
+}
+
+.modal-body {
+	display: flex;
+	flex-direction: column;
+	gap: var(--s-3);
+	padding: var(--s-5);
+	font-size: var(--t-sm);
+}
+
+.confirm-body {
+	color: var(--ink-2);
+	text-wrap: pretty;
+}
+
+.modal-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: var(--s-2);
+	margin-top: var(--s-2);
+}
+
+/* ── Log view ──────────────────────────────────────────────────────────────── */
+/* The one place that stays dark in both themes: it is a terminal, and reads as one. */
+
+.log-view {
+	border: 1px solid light-dark(rgba(16, 27, 40, 0.14), var(--rule));
+	border-radius: var(--r-2);
+	overflow: hidden;
+	background: #0b0f14;
+}
+
+.log-toolbar {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--s-3);
+	padding: 0.375rem var(--s-3);
+	background: #111720;
+	border-bottom: 1px solid #1d2530;
+	color: #8593a3;
+	font-size: var(--t-xs);
+}
+
+.log-toolbar .muted,
+.log-toolbar .small {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.4375rem;
+	color: #8593a3;
+	font-size: var(--t-xs);
+}
+
+.log-toolbar .run-dot {
+	color: #efa93f;
+}
+
+.log-autoscroll {
+	display: inline-flex;
+	flex-direction: row;
+	align-items: center;
+	gap: 0.4375rem;
+	font-size: var(--t-xs);
+	font-weight: 400;
+	color: #8593a3;
+}
+
+.log-body {
+	max-height: 30rem;
+	overflow: auto;
+	padding: var(--s-2) var(--s-3);
+	font-family: var(--font-mono);
+	font-size: var(--t-xs);
+	line-height: 1.6;
+	color: #ccd6e0;
+	white-space: pre-wrap;
+	word-break: break-word;
+	scrollbar-width: thin;
+	scrollbar-color: #2a3441 transparent;
+}
+
+.log-empty {
+	padding: var(--s-4) 0;
+	color: #67727f;
+}
+
+.log-line {
+	display: flex;
+	gap: var(--s-3);
+}
+
+.log-line:hover {
+	background: rgba(255, 255, 255, 0.03);
+}
+
+.log-ts {
+	flex: 0 0 auto;
+	color: #55606d;
+	user-select: none;
+}
+
+.log-text {
+	flex: 1 1 auto;
+}
+
+.log-stderr .log-text {
+	color: #f4a09c;
+}
+
+.log-meta .log-text {
+	color: #8fb4ff;
+	font-style: italic;
+}
+
+.log-view .error-text {
+	padding: 0.375rem var(--s-3);
+	background: #111720;
+	border-top: 1px solid #1d2530;
+}
+
+/* ── Responsive ────────────────────────────────────────────────────────────── */
+
+@media (max-width: 1080px) {
+	.board,
+	.welcome,
+	.welcome-steps {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.welcome {
+		padding: var(--s-5);
+	}
+
+	.welcome-art {
+		display: none;
+	}
+}
+
+@media (max-width: 860px) {
+	.app-shell {
+		display: block;
+	}
+
+	.sidebar {
+		position: static;
+		height: auto;
+		overflow: visible;
+		width: 100%;
+		padding-bottom: var(--s-2);
+	}
+
+	.sidebar-scroll {
+		overflow: visible;
+		margin-inline: 0;
+		padding: 0;
+	}
+
+	.sidebar nav {
+		flex-direction: row;
+		gap: var(--s-4);
+		padding: var(--s-2) 0;
+		overflow-x: auto;
+	}
+
+	.sidebar .nav-section {
+		flex-direction: row;
+		flex: 0 0 auto;
+		gap: var(--s-1);
+	}
+
+	.sidebar .nav-section + .nav-section {
+		padding-top: 0;
+		border-top: none;
+		padding-left: var(--s-3);
+	}
+
+	.sidebar .nav-section-label {
+		align-self: center;
+		padding: 0 var(--s-2) 0 0;
+		white-space: nowrap;
+	}
+
+	.sidebar .nav-item {
+		white-space: nowrap;
+	}
+
+	.sidebar .brand {
+		height: auto;
+		padding-block: var(--s-3) var(--s-1);
+	}
+
+	/* On a phone the rail is the page's top, so the person shrinks to the avatar at the logo's right and the menu
+	   opens downwards. */
+	.sidebar {
+		position: relative;
+	}
+
+	.sidebar-account {
+		position: absolute;
+		top: var(--s-2);
+		right: var(--s-4);
+		padding: 0;
+	}
+
+	.sidebar .account-trigger {
+		padding: 0.1875rem;
+	}
+
+	/* The spotlight's button shrinks to its magnifier, left of the avatar. */
+	.palette-trigger {
+		position: absolute;
+		top: var(--s-2);
+		right: calc(var(--s-4) + 2.75rem);
+		margin: 0;
+		padding: 0.4375rem;
+		border: none;
+	}
+
+	.palette-trigger > :is(.palette-trigger-label, kbd) {
+		display: none;
+	}
+
+	.palette-backdrop {
+		padding-top: var(--s-4);
+	}
+
+	.sidebar .account-trigger > :is(.account-name, .icon) {
+		display: none;
+	}
+
+	.sidebar .account-panel {
+		top: calc(100% + var(--s-2));
+		bottom: auto;
+		left: auto;
+		right: 0;
+	}
+
+	.workspace {
+		--gutter: var(--s-4);
+	}
+
+	.workspace {
+		--workspace-top: var(--s-4);
+		padding-block: var(--workspace-top) var(--s-6);
+	}
+
+	.namespace-ledger {
+		grid-template-columns: 1fr;
+	}
+
+	.namespace-ledger > div:nth-child(odd) {
+		border-right: none;
+	}
+
+	.ops-capabilities,
+	.ops-context-grid {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.ops-trace-line,
+	.ops-frame > div {
+		flex-direction: column;
+		gap: var(--s-1);
+	}
+}
+
+/* An access change, one plain-language line per item (approvals). */
+.change-list {
+	margin: 0;
+	padding-left: 1.25rem;
+	display: grid;
+	gap: 0.35rem;
+}
+
+/* An access change by who gains access (approvals, ADR-0050 §7): the impact in readings, one card per group, one table
+   row per endpoint or subject with all its lines. A widening keeps its lamp colour; a group with none starts closed. */
+.change-impact {
+	margin-bottom: var(--s-4);
+}
+
+.change-group {
+	margin-top: var(--s-3);
+}
+
+.change-group > summary {
+	cursor: pointer;
+	list-style: none;
+	padding-bottom: var(--s-3);
+}
+
+.change-group > summary::-webkit-details-marker {
+	display: none;
+}
+
+/* A card's icon only repeats its title, but a group's says who it is about, so it stays. */
+.change-group > summary > .icon {
+	display: inline-block;
+}
+
+.change-lines {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+	display: grid;
+	gap: var(--s-1);
+}
+
+.change-lines > li {
+	display: flex;
+	gap: var(--s-2);
+	align-items: baseline;
+}
+
+.change-lines > li > .icon {
+	flex: none;
+	color: var(--ink-3);
+}
+
+.change-lines > .change-widens > .icon {
+	color: var(--lamp-run);
+}
+
+.change-lines > .change-narrows > .icon {
+	color: var(--lamp-ok);
+}
+
+.change-reason {
+	display: block;
+	margin-top: 0.125rem;
+}
+
+.folded-row > summary {
+	cursor: pointer;
+	color: var(--ink-2);
+}
+
+.folded-row > summary > code + code {
+	margin-left: var(--s-1);
+}
+
+.folded-row > .change-list {
+	margin-top: var(--s-2);
+	gap: var(--s-2);
+}
+
+.every-line {
+	margin-top: var(--s-5);
+}
+
+.every-line > summary {
+	cursor: pointer;
+	font-weight: 500;
+}
+
+.every-line > .filters {
+	margin-top: var(--s-3);
+}
+
+/* An environment's published surface and steps off the paved road (app detail): a summary line that opens on the list. */
+.deviations,
+.surface {
+	margin-top: var(--s-3);
+}
+
+.deviations summary,
+.surface summary {
+	cursor: pointer;
+}
+
+.deviations summary > * + *,
+.surface summary > * + * {
+	margin-left: var(--s-2);
+}
+
+.surface .table-wrap {
+	margin-top: var(--s-2);
+}
+
+.deviation-subjects {
+	margin: var(--s-2) 0 0;
+	padding-left: 1.25rem;
+	display: grid;
+	gap: var(--s-2);
+}
+
+.deviation-subjects .change-list {
+	margin-top: var(--s-1);
+	color: var(--ink-2);
+}
+</style>
+<style>body { padding: 24px 32px; max-width: 1100px; margin: 0 auto; }</style>
+</head>
+<body>
+<p class="hint">Preview of the console's Approvals page for the agent's change to <code>orders</code> on <code>prod</code>,
+rendered by the console's own component from Control's classification. Outcome: <strong>widening</strong>.</p>
+<section class="instrument-cluster readings change-impact"><div class="instrument"><div class="instrument-label">Signed-in people</div><div class="instrument-value">1</div><div class="instrument-note">endpoint</div></div></section><section><div class="section-head"><svg class="icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="9.5" cy="8.25" r="3.4"></circle><path d="M3.5 19.75a6.2 6.2 0 0 1 12 0"></path><path d="M16.4 5.35a3.4 3.4 0 0 1 0 5.8"></path><path d="M17.6 13.9a5.6 5.6 0 0 1 3.15 4"></path></svg><h2>Who gains access</h2></div><p class="hint">The endpoints this change touches, grouped by who reaches them, the group that needs the closest look first. A group that only narrows access or leaves it unchanged starts closed.</p><details class="card change-group" open=""><summary class="card-head"><svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="9.5" cy="8.25" r="3.4"></circle><path d="M3.5 19.75a6.2 6.2 0 0 1 12 0"></path><path d="M16.4 5.35a3.4 3.4 0 0 1 0 5.8"></path><path d="M17.6 13.9a5.6 5.6 0 0 1 3.15 4"></path></svg><h3>Signed-in people</h3><span class="muted small">1 widens · 1 unchanged</span><span class="spacer"></span></summary><div class="card-body flush"><div class="table-wrap"><table><thead><tr><th>Endpoint</th><th>Requires</th><th class="grow">Change</th><th>In front of it</th></tr></thead><tbody><tr><td><code>POST /api/billing.export</code><div class="muted small">api.billing.export</div></td><td>with `billing.export` (app-wide: a global grant)</td><td><ul class="change-lines"><li class="change-widens"><svg class="icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 3.6 21.1 20H2.9z"></path><path d="M12 9.85v4.35"></path><circle cx="12" cy="17.2" r="0.95" fill="currentColor" stroke="none"></circle></svg><span>New endpoint <code>api.billing.export</code> (POST /api/billing.export) for human callers with <code>billing.export</code> (app-wide: a global grant)</span></li><li class="change-neutral"><svg class="icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4.25 12h15.5M13.4 5.65 19.75 12l-6.35 6.35"></path></svg><span><code>api.billing.export</code> admits any number of calls; it waits at most 30 s for a body of at most 65536 bytes, then runs at most 10 s</span></li></ul></td><td>waits at most 30 s for a body of at most 65536 bytes, then runs at most 10 s</td></tr></tbody></table></div></div></details></section><section><div class="section-head"><svg class="icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M5.6 3.6v15.15a1.75 1.75 0 0 0 1.75 1.75h3.15"></path><path d="M5.6 4.5h5.1"></path><path d="M5.6 12.25h5.1"></path><rect x="10.7" y="2.75" width="9.05" height="3.5" rx="1.1"></rect><rect x="10.7" y="10.5" width="9.05" height="3.5" rx="1.1"></rect><rect x="10.7" y="18.25" width="9.05" height="3.5" rx="1.1"></rect></svg><h2>Data and runtime</h2></div><details class="card change-group" open=""><summary class="card-head"><svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M5.6 3.6v15.15a1.75 1.75 0 0 0 1.75 1.75h3.15"></path><path d="M5.6 4.5h5.1"></path><path d="M5.6 12.25h5.1"></path><rect x="10.7" y="2.75" width="9.05" height="3.5" rx="1.1"></rect><rect x="10.7" y="10.5" width="9.05" height="3.5" rx="1.1"></rect><rect x="10.7" y="18.25" width="9.05" height="3.5" rx="1.1"></rect></svg><h3>Actions</h3><span class="muted small">1 widens</span><span class="spacer"></span></summary><div class="card-body flush"><div class="table-wrap"><table><thead><tr><th>Subject</th><th class="grow">Change</th></tr></thead><tbody><tr><td><code>billing.export</code></td><td><ul class="change-lines"><li class="change-widens"><svg class="icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 3.6 21.1 20H2.9z"></path><path d="M12 9.85v4.35"></path><circle cx="12" cy="17.2" r="0.95" fill="currentColor" stroke="none"></circle></svg><span>New action <code>billing.export</code></span></li></ul></td></tr></tbody></table></div></div></details><details class="card change-group" open=""><summary class="card-head"><svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M5.6 3.6v15.15a1.75 1.75 0 0 0 1.75 1.75h3.15"></path><path d="M5.6 4.5h5.1"></path><path d="M5.6 12.25h5.1"></path><rect x="10.7" y="2.75" width="9.05" height="3.5" rx="1.1"></rect><rect x="10.7" y="10.5" width="9.05" height="3.5" rx="1.1"></rect><rect x="10.7" y="18.25" width="9.05" height="3.5" rx="1.1"></rect></svg><h3>Roles</h3><span class="muted small">2 widen</span><span class="spacer"></span></summary><div class="card-body flush"><div class="table-wrap"><table><thead><tr><th>Subject</th><th class="grow">Change</th></tr></thead><tbody><tr><td><code>majitel</code></td><td><ul class="change-lines"><li class="change-widens"><svg class="icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 3.6 21.1 20H2.9z"></path><path d="M12 9.85v4.35"></path><circle cx="12" cy="17.2" r="0.95" fill="currentColor" stroke="none"></circle></svg><span>Role <code>majitel</code> gains <code>billing.export</code></span></li></ul></td></tr><tr><td><code>uctarna</code></td><td><ul class="change-lines"><li class="change-widens"><svg class="icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 3.6 21.1 20H2.9z"></path><path d="M12 9.85v4.35"></path><circle cx="12" cy="17.2" r="0.95" fill="currentColor" stroke="none"></circle></svg><span>Role <code>uctarna</code> gains <code>billing.export</code></span></li></ul></td></tr></tbody></table></div></div></details><details class="card change-group" open=""><summary class="card-head"><svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M5.6 3.6v15.15a1.75 1.75 0 0 0 1.75 1.75h3.15"></path><path d="M5.6 4.5h5.1"></path><path d="M5.6 12.25h5.1"></path><rect x="10.7" y="2.75" width="9.05" height="3.5" rx="1.1"></rect><rect x="10.7" y="10.5" width="9.05" height="3.5" rx="1.1"></rect><rect x="10.7" y="18.25" width="9.05" height="3.5" rx="1.1"></rect></svg><h3>Tables</h3><span class="muted small">3 widen</span><span class="spacer"></span></summary><div class="card-body flush"><div class="table-wrap"><table><thead><tr><th>Subject</th><th class="grow">Change</th></tr></thead><tbody><tr><td><code>billing</code></td><td><ul class="change-lines"><li class="change-widens"><svg class="icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 3.6 21.1 20H2.9z"></path><path d="M12 9.85v4.35"></path><circle cx="12" cy="17.2" r="0.95" fill="currentColor" stroke="none"></circle></svg><span>Table <code>billing</code> is read app-wide with <code>billing.export</code></span></li></ul></td></tr><tr><td><code>customers</code></td><td><ul class="change-lines"><li class="change-widens"><svg class="icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 3.6 21.1 20H2.9z"></path><path d="M12 9.85v4.35"></path><circle cx="12" cy="17.2" r="0.95" fill="currentColor" stroke="none"></circle></svg><span>Table <code>customers</code> is read app-wide with <code>billing.export</code></span></li></ul></td></tr><tr><td><code>orders</code></td><td><ul class="change-lines"><li class="change-widens"><svg class="icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 3.6 21.1 20H2.9z"></path><path d="M12 9.85v4.35"></path><circle cx="12" cy="17.2" r="0.95" fill="currentColor" stroke="none"></circle></svg><span>Table <code>orders</code> is read app-wide with <code>billing.export</code></span></li></ul></td></tr></tbody></table></div></div></details></section><details class="every-line"><summary>Every line of the change <span class="muted">(8)</span></summary><div class="filters"><div class="field-wide search-box"><label>Find a line<input type="search" placeholder="an endpoint, a table, an action" value=""/></label></div></div><section><div class="section-head"><svg class="icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 3.6 21.1 20H2.9z"></path><path d="M12 9.85v4.35"></path><circle cx="12" cy="17.2" r="0.95" fill="currentColor" stroke="none"></circle></svg><h2>Widens access</h2></div><ul class="change-list"><li>New endpoint `api.billing.export` (POST /api/billing.export) for human callers with `billing.export` (app-wide: a global grant)</li><li>New action `billing.export`</li><li>Role `majitel` gains `billing.export`</li><li>Role `uctarna` gains `billing.export`</li><li>Table `billing` is read app-wide with `billing.export`</li><li>Table `customers` is read app-wide with `billing.export`</li><li>Table `orders` is read app-wide with `billing.export`</li></ul></section><section><div class="section-head"><svg class="icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4.25 12h15.5M13.4 5.65 19.75 12l-6.35 6.35"></path></svg><h2>Access unchanged</h2></div><p class="hint">These lines admit no one new and take nothing away, for example a path another endpoint now answers for the same callers.</p><ul class="change-list"><li>`api.billing.export` admits any number of calls; it waits at most 30 s for a body of at most 65536 bytes, then runs at most 10 s</li></ul></section></details>
+</body>
+</html>

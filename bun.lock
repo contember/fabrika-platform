@@ -92,6 +92,14 @@
         "typescript": "^5.9.3",
       },
     },
+    "examples/orders-demo": {
+      "name": "fabrika-example-orders-demo",
+      "dependencies": {
+        "playwright": "^1.60.0",
+        "react": "^19.0.0",
+        "react-dom": "^19.0.0",
+      },
+    },
     "examples/zerops-app": {
       "name": "fabrika-example-zerops",
       "dependencies": {
@@ -1371,6 +1379,8 @@
     "fabrika-example-crm": ["fabrika-example-crm@workspace:examples/crm"],
 
     "fabrika-example-orders": ["fabrika-example-orders@workspace:examples/orders"],
+
+    "fabrika-example-orders-demo": ["fabrika-example-orders-demo@workspace:examples/orders-demo"],
 
     "fabrika-example-zerops": ["fabrika-example-zerops@workspace:examples/zerops-app"],
 
