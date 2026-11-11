@@ -583,6 +583,7 @@ export function defineContract<
 		readonly dimensions: Dims & { readonly [K in D]: DimensionDef<NoInfer<A>, NoInfer<D>, NoInfer<R>> }
 		readonly actions: { readonly [K in A]: K extends `${string}*${string}` ? WildcardMessage : string }
 		readonly roles: RoleDefs<NoInfer<A>, NoInfer<D>, R>
+		readonly relations?: { readonly [name: string]: RelationDef<NoInfer<D>> }
 	},
 	surface: (c: Kit<A, D, CreatableDimension<Dims>>) => S,
 ): Contract<A, D, R, Dims, S> {
@@ -592,6 +593,7 @@ export function defineContract<
 			dimensions: vocabulary.dimensions,
 			actions: vocabulary.actions,
 			roles: vocabulary.roles,
+			...(vocabulary.relations === undefined ? {} : { relations: vocabulary.relations }),
 			...presentationOf(vocabulary),
 			...peopleOf(vocabulary),
 			...terminalOf(vocabulary),
