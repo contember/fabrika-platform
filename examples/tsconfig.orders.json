@@ -1,0 +1,18 @@
+{
+	"extends": "./orders/tsconfig.json",
+	"compilerOptions": {
+		"incremental": true,
+		"tsBuildInfoFile": "./.tsbuild/orders/tsconfig.tsbuildinfo",
+		"typeRoots": [
+			"./orders/node_modules/@types",
+			"./orders/node_modules"
+		]
+	},
+	"references": [
+		{ "path": "../packages/app/tsconfig.lib.json" },
+		{ "path": "../packages/check/tsconfig.lib.json" },
+		{ "path": "../packages/db/tsconfig.lib.json" },
+		{ "path": "../packages/platform/tsconfig.lib.json" },
+		{ "path": "../packages/ui/tsconfig.lib.json" }
+	]
+}

@@ -1,0 +1,59 @@
+/* The demo over the kit: the page itself, the caller in the top bar, and the refusal box. Only the kit's tokens. */
+
+html,
+body {
+	margin: 0;
+	background: var(--fui-bg);
+}
+
+.orders-brand {
+	font-weight: var(--fui-weight-semibold);
+	font-size: var(--fui-text-lg);
+}
+
+.orders-caller {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-end;
+	line-height: var(--fui-line-height-tight);
+}
+
+.orders-caller__label {
+	font-weight: var(--fui-weight-medium);
+	font-size: var(--fui-text-sm);
+}
+
+.orders-caller__email {
+	color: var(--fui-text-muted);
+	font-size: var(--fui-text-xs);
+}
+
+.orders-late {
+	color: var(--fui-danger-text);
+	font-weight: var(--fui-weight-medium);
+}
+
+.orders-refusal {
+	margin: 0 0 var(--fui-space-4);
+	padding: var(--fui-space-3) var(--fui-space-4);
+	border: 1px solid var(--fui-danger);
+	border-radius: var(--fui-radius-md);
+	background: var(--fui-danger-soft);
+}
+
+.orders-refusal p {
+	margin: var(--fui-space-1) 0 var(--fui-space-2);
+}
+
+.orders-subheading {
+	margin: var(--fui-space-6) 0 var(--fui-space-2);
+	font-size: var(--fui-text-lg);
+}
+
+.orders-sr {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	overflow: hidden;
+	clip: rect(0 0 0 0);
+}

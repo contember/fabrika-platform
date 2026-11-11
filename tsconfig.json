@@ -71,6 +71,7 @@
 		{ "path": "./packages/agent-canvas/daemon/review-widget/tsconfig.build.json" },
 		{ "path": "./examples/tsconfig.app.json" },
 		{ "path": "./examples/tsconfig.crm.json" },
+		{ "path": "./examples/tsconfig.orders.json" },
 		{ "path": "./examples/tsconfig.zerops-app.json" },
 		{ "path": "./scripts/tsconfig.build.json" }
 	]
