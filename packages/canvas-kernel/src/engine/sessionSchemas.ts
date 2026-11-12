@@ -69,3 +69,21 @@ export const remoteFeedbackEntrySchema = z.object({
 
 export const remoteFeedbackSchema = z.array(remoteFeedbackEntrySchema.optional().catch(undefined))
 	.transform(entries => entries.filter(entry => entry !== undefined)).catch([])
+
+/** What a submit says about each annotation it carried: enough for the host to open a thread on it later. */
+export const submittedAnnotationSchema = z.object({
+	id: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/),
+	snippet: z.string().max(20_000),
+	note: z.string().max(20_000),
+	canvasFile: z.string().max(500).optional(),
+	filePath: z.string().max(4_000).optional(),
+})
+export type SubmittedAnnotation = z.infer<typeof submittedAnnotationSchema>
+
+export const MAX_SUBMITTED_ANNOTATIONS = 500
+export const submittedAnnotationsSchema = z.array(submittedAnnotationSchema).max(MAX_SUBMITTED_ANNOTATIONS)
+
+// A submit is the user's feedback: an annotation the host cannot thread is left out, the feedback is still saved.
+export const submittedAnnotationsFrameSchema = z.array(submittedAnnotationSchema.optional().catch(undefined))
+	.transform(entries => entries.filter(entry => entry !== undefined).slice(0, MAX_SUBMITTED_ANNOTATIONS))
+	.catch([])

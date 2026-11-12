@@ -7,6 +7,7 @@
 import { type ChannelSocket, createNotificationChannel, type TopicChannel } from '@fabrika/daemon-kit'
 import { z } from 'zod'
 import type { RemoteFeedbackEntry, SessionManager } from './session'
+import { type SubmittedAnnotation, submittedAnnotationsFrameSchema } from './sessionSchemas'
 
 export type WSData = { type: 'browser' | 'wait'; sessionId: string }
 
@@ -25,6 +26,7 @@ interface CanvasRenderError {
 interface SubmitFrame {
 	type: 'submit'
 	feedback: string
+	annotations?: SubmittedAnnotation[]
 }
 
 interface RenderErrorFrame {
@@ -33,7 +35,7 @@ interface RenderErrorFrame {
 }
 
 const browserFrameSchema = z.discriminatedUnion('type', [
-	z.object({ type: z.literal('submit'), feedback: z.string() }).passthrough(),
+	z.object({ type: z.literal('submit'), feedback: z.string(), annotations: submittedAnnotationsFrameSchema.optional() }).passthrough(),
 	z.object({
 		type: z.literal('render-error'),
 		error: z.object({
@@ -80,7 +82,7 @@ export function createWebSocketManager(
 		const session = sessionManager.get(sessionId)
 		if (!session) return
 
-		sessionManager.saveFeedback(sessionId, session.currentRevision, frame.feedback)
+		sessionManager.saveFeedback(sessionId, session.currentRevision, frame.feedback, frame.annotations)
 		broadcastRevisionUpdate(sessionId)
 		if (!topic.hasWaiter()) return
 
@@ -151,11 +153,26 @@ export function createWebSocketManager(
 		channel.broadcastPresence(sessionId)
 	}
 
+	/** A host's own frame to the session's browsers. */
+	function broadcast(sessionId: string, frame: unknown) {
+		channel.broadcast(sessionId, frame)
+	}
+
+	/**
+	 * A host's own frame to the session's waiters. It does not end their wait: a one-shot waiter decides itself
+	 * whether the frame answers it. `false` when nobody was waiting.
+	 */
+	function notifyWaiters(sessionId: string, frame: unknown): boolean {
+		return channel.relayToWaiters(sessionId, frame, { close: false })
+	}
+
 	return {
 		handlers: channel.handlers,
 		broadcastPlanUpdate,
 		broadcastRevisionUpdate,
 		broadcastWatcherStatus,
 		broadcastRemoteFeedback,
+		broadcast,
+		notifyWaiters,
 	}
 }

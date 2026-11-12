@@ -22,6 +22,7 @@ export type {
 	FeedbackEntry,
 	PlanResponse,
 } from '#canvas/runtime'
+export type { SubmittedAnnotation } from '../engine/sessionSchemas'
 export { findAnnotationElement, scrollToAnnotation } from './annotationDom'
 export { annotationDraftKey, carryUnsubmittedDraft, clearPersistedDraft } from './annotationDraft'
 export type { AnnotationDraftPhase } from './annotationDraft'
@@ -40,7 +41,7 @@ export {
 	pruneStaleResponses,
 } from './generateMarkdown'
 export { CanvasHostContext, localCanvasHost, useCanvasHost } from './hostContext'
-export type { CanvasHost } from './hostContext'
+export type { CanvasHost, CanvasThread, CanvasThreadComment, CanvasThreads, CanvasThreadState } from './hostContext'
 export { pageHighlighter } from './pageGlobals'
 export { PlanRenderer } from './PlanRenderer'
 export { RenderErrorContext } from './RenderErrorContext'

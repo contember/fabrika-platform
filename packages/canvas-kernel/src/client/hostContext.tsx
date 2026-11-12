@@ -21,6 +21,40 @@ export interface CanvasHost {
 	uploadUrl: (() => string) | null
 	/** Fetch and `import()` a compiled canvas module. */
 	loadCanvasModule: (filename: string, revision?: number) => Promise<CanvasModule>
+	/** Threads the agent opened by answering submitted annotations, or `null` for a host whose agent cannot answer
+	 *  one: the submit then carries no annotation ids and the sidebar shows no threads. */
+	threads: CanvasThreads | null
+}
+
+/** `open` waits on the user, `queued` holds a reply the agent has not read, `working` is with the agent, `resolved` is closed. */
+export type CanvasThreadState = 'open' | 'queued' | 'working' | 'resolved'
+
+export interface CanvasThreadComment {
+	id: string
+	author: 'user' | 'agent'
+	body: string
+	createdAt: string
+}
+
+/** A conversation on one submitted annotation. It outlives the revision it was submitted on. */
+export interface CanvasThread {
+	/** The annotation's id. */
+	id: string
+	state: CanvasThreadState
+	/** The revision the annotation was submitted on. */
+	revision: number
+	snippet: string
+	canvasFile?: string
+	filePath?: string
+	comments: readonly CanvasThreadComment[]
+}
+
+/** A store the sidebar subscribes to; the host keeps it current. */
+export interface CanvasThreads {
+	subscribe: (onChange: () => void) => () => void
+	current: () => readonly CanvasThread[]
+	reply: (threadId: string, body: string) => Promise<void>
+	setResolved: (threadId: string, resolved: boolean) => Promise<void>
 }
 
 /** What the canvas compiler emits: one module whose default export renders the canvas. */
@@ -51,6 +85,7 @@ export const localCanvasHost: CanvasHost = {
 		const url = `/api/session/${localSessionId()}/canvas/${encodeURIComponent(jsName)}${query}`
 		return import(/* @vite-ignore */ url)
 	},
+	threads: null,
 }
 
 export const CanvasHostContext = createContext<CanvasHost>(localCanvasHost)

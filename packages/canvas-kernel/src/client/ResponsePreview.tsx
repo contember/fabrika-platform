@@ -1,7 +1,8 @@
-import { marked } from 'marked'
+import { Marked, marked } from 'marked'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAnnotations } from './AnnotationProvider'
 import { generateMarkdown, getMissingRequiredLabels } from './generateMarkdown'
+import { useCanvasHost } from './hostContext'
 
 interface ResponsePreviewProps {
 	open: boolean
@@ -13,6 +14,7 @@ interface ResponsePreviewProps {
 
 export function ResponsePreview({ open, onClose, onSubmit, includedRemoteIds, onToggleRemoteId }: ResponsePreviewProps) {
 	const { annotations, generalNote, submittableResponses, feedbackEntries } = useAnnotations()
+	const annotationIds = useCanvasHost().threads !== null
 	const [editedText, setEditedText] = useState('')
 	const [manuallyEdited, setManuallyEdited] = useState(false)
 	const [editMode, setEditMode] = useState(false)
@@ -40,8 +42,8 @@ export function ResponsePreview({ open, onClose, onSubmit, includedRemoteIds, on
 	}
 
 	const generatedText = useMemo(
-		() => generateMarkdown(annotations, generalNote, submittableResponses, feedbackEntries, includedRemoteIds),
-		[annotations, generalNote, submittableResponses, feedbackEntries, includedRemoteIds],
+		() => generateMarkdown(annotations, generalNote, submittableResponses, feedbackEntries, includedRemoteIds, { annotationIds }),
+		[annotations, generalNote, submittableResponses, feedbackEntries, includedRemoteIds, annotationIds],
 	)
 	const text = manuallyEdited ? editedText : generatedText
 
@@ -198,8 +200,29 @@ function rewriteUploadPaths(md: string): string {
 	return md.replace(UPLOADS_PATH_RE, (_match, alt, _fullPath, filename) => `![${alt}](/api/uploads/${filename})`)
 }
 
-export function MarkdownPreview({ text }: { text: string }) {
-	const html = useMemo(() => marked.parse(rewriteUploadPaths(text), { async: false }) as string, [text])
+const HTML_ESCAPES: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }
+const escapeHtml = (text: string) => text.replace(/[&<>"']/g, (char) => HTML_ESCAPES[char] ?? char)
+/** http(s), mailto, or a URL with no scheme of its own. */
+const isSafeUrl = (href: string) => /^(?:https?|mailto):/i.test(href) || !/^[^/?#]*:/.test(href)
+const titleAttribute = (title: string | null | undefined) => (title ? ` title="${escapeHtml(title)}"` : '')
+// URLs are written escaped, so the browser sees the text that was checked and an entity cannot spell a scheme.
+const escapingMarked = new Marked({
+	renderer: {
+		html: ({ text }) => escapeHtml(text),
+		link(token) {
+			const text = this.parser.parseInline(token.tokens)
+			return isSafeUrl(token.href) ? `<a href="${escapeHtml(token.href)}"${titleAttribute(token.title)}>${text}</a>` : text
+		},
+		image: (token) =>
+			isSafeUrl(token.href)
+				? `<img src="${escapeHtml(token.href)}" alt="${escapeHtml(token.text)}"${titleAttribute(token.title)}>`
+				: escapeHtml(token.text),
+	},
+})
+
+/** Renders markdown; `rawHtml: false` shows HTML in it as text, for text the canvas did not author. */
+export function MarkdownPreview({ text, rawHtml = true }: { text: string; rawHtml?: boolean }) {
+	const html = useMemo(() => (rawHtml ? marked : escapingMarked).parse(rewriteUploadPaths(text), { async: false }), [text, rawHtml])
 	// oxlint-disable-next-line react/no-danger -- Canvas modules already execute as code in this document.
 	return <div className="prose-canvas font-body text-body text-text-primary leading-relaxed" dangerouslySetInnerHTML={{ __html: html }} />
 }

@@ -1,5 +1,5 @@
 export { canvasFileReferences, compileJsx, compilePlan, KERNEL_COMPONENTS } from './src/engine/compiler'
-export type { CanvasComponents, CanvasComponentSpec, CompileOptions, CompileResult } from './src/engine/compiler'
+export type { CanvasComponents, CanvasComponentSpec, CompileOptions, CompileResult, FileReferenceProp } from './src/engine/compiler'
 export type { AssertReadable } from './src/engine/file-admission'
 export { createCanvasPaths } from './src/engine/paths'
 export type { CanvasPaths, CanvasPathsConfig } from './src/engine/paths'
@@ -15,6 +15,8 @@ export type {
 	SessionData,
 	ShareEntry,
 } from './src/engine/session'
+export { MAX_SUBMITTED_ANNOTATIONS, submittedAnnotationSchema } from './src/engine/sessionSchemas'
+export type { SubmittedAnnotation } from './src/engine/sessionSchemas'
 export { unwatchAll, unwatchSession, watchSession } from './src/engine/watcher'
 export type { WatchOptions } from './src/engine/watcher'
 export { createWebSocketManager } from './src/engine/websocket'

@@ -179,3 +179,57 @@ describe('session project root', () => {
 		expect(updated.currentRevision).toBe(2)
 	})
 })
+
+describe('submitted annotations', () => {
+	test('a submit keeps the annotations it carries, leaving out one it cannot thread', () => {
+		const sessionManager = createSessionManager()
+		const websocket = createWebSocketManager(sessionManager)
+		const browser = new FakeSocket({ type: 'browser', sessionId: 'session' })
+		websocket.handlers.open(browser)
+		websocket.handlers.message(
+			browser,
+			JSON.stringify({
+				type: 'submit',
+				feedback: 'two notes',
+				annotations: [
+					{ id: 'ann-1-abcd', snippet: 'Architecture', note: 'rename', canvasFile: 'architecture.jsx' },
+					{ id: '../escape', snippet: 'x', note: 'y' },
+				],
+			}),
+		)
+
+		expect(sessionManager.getFeedback('session', 1)).toBe('two notes')
+		expect(sessionManager.findSubmittedAnnotation('session', 'ann-1-abcd')).toEqual({
+			revision: 1,
+			annotation: { id: 'ann-1-abcd', snippet: 'Architecture', note: 'rename', canvasFile: 'architecture.jsx' },
+		})
+		expect(sessionManager.findSubmittedAnnotation('session', '../escape')).toBeNull()
+	})
+
+	test('the latest revision that carried an annotation wins', () => {
+		const sessionManager = createSessionManager()
+		sessionManager.saveFeedback('session', 1, 'first', [{ id: 'ann-1', snippet: 'old', note: 'first' }])
+		sessionManager.upsert('session', new Map([['architecture.jsx', '<Section title="v2" />']]), '/project')
+		sessionManager.saveFeedback('session', 2, 'second', [{ id: 'ann-1', snippet: 'new', note: 'again' }])
+
+		expect(sessionManager.findSubmittedAnnotation('session', 'ann-1')?.revision).toBe(2)
+	})
+})
+
+describe('host frames', () => {
+	test('notifying waiters leaves their wait open; a submit still ends it', () => {
+		const sessionManager = createSessionManager()
+		const websocket = createWebSocketManager(sessionManager)
+		const waiter = new FakeSocket({ type: 'wait', sessionId: 'session' })
+		websocket.handlers.open(waiter)
+
+		expect(websocket.notifyWaiters('session', { type: 'thread-queued' })).toBe(true)
+		expect(waiter.closed).toBe(false)
+
+		const browser = new FakeSocket({ type: 'browser', sessionId: 'session' })
+		websocket.handlers.open(browser)
+		websocket.handlers.message(browser, JSON.stringify({ type: 'submit', feedback: 'done' }))
+		expect(waiter.sent.map((message) => JSON.parse(message).type)).toEqual(['thread-queued', 'submit'])
+		expect(waiter.closed).toBe(true)
+	})
+})

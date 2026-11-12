@@ -70,6 +70,21 @@ export function withDefaultCsp(response: Response): Response {
 	return new Response(response.body, { status: response.status, statusText: response.statusText, headers })
 }
 
+/**
+ * What `Bun.serve` answers when a handler throws or a body fails to stream (an unreadable named file). Without it Bun
+ * serves its own HTML error page, scripted and with no policy, after `withDefaultCsp` has already run.
+ */
+function serverErrorResponse(error: Error): Response {
+	console.error('[agent-canvas] request failed:', error)
+	return Response.json({ error: 'Internal error' }, {
+		status: 500,
+		headers: { 'Content-Security-Policy': INERT_DOCUMENT_CSP, 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-store' },
+	})
+}
+
+/** The daemon's `Bun.serve` error options, shared with the test that holds them to an inert answer. */
+export const serveErrorOptions: { development: false; error: (error: Error) => Response } = { development: false, error: serverErrorResponse }
+
 async function serveSessionPage(): Promise<Response> {
 	const distDir = await getDistDir()
 	const file = Bun.file(join(distDir, 'index.html'))

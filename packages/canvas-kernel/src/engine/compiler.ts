@@ -497,21 +497,24 @@ function resolveFilePreviews(jsx: string, projectRoot: string, assertReadable?: 
 	)
 }
 
+/** A component prop whose string value names a local file. */
+export type FileReferenceProp = readonly [tag: string, prop: string]
+
 /** The kernel props that name a local file: what `/api/file` and `/api/image` are asked for when the canvas renders. */
-const FILE_REFERENCE_PROPS: ReadonlyArray<readonly [tag: string, prop: string]> = [
+const FILE_REFERENCE_PROPS: readonly FileReferenceProp[] = [
 	['FilePreview', 'path'],
 	['Markdown', 'file'],
 	['ImageView', 'src'],
 ]
 
 /**
- * The paths a canvas names as string literals in `FilePreview path`, `Markdown file` and `ImageView src`, as written.
- * A path computed at run time is not found, so a host that serves files by this list serves such a path only when it
- * would serve it anyway.
+ * The paths a canvas names as string literals in `FilePreview path`, `Markdown file`, `ImageView src` and the host's
+ * `hostProps`, as written. A path computed at run time is not found, so a host that serves files by this list serves
+ * such a path only when it would serve it anyway.
  */
-export function canvasFileReferences(jsx: string): string[] {
+export function canvasFileReferences(jsx: string, hostProps: readonly FileReferenceProp[] = []): string[] {
 	const references = new Set<string>()
-	for (const [tag, prop] of FILE_REFERENCE_PROPS) {
+	for (const [tag, prop] of [...FILE_REFERENCE_PROPS, ...hostProps]) {
 		const valuePattern = new RegExp(`(?:^|\\s)${prop}=(?:"([^"]+)"|'([^']+)'|\\{\\s*(?:"([^"]+)"|'([^']+)')\\s*\\})`)
 		for (const start of jsx.matchAll(new RegExp(`<${tag}\\b`, 'g'))) {
 			const from = start.index + start[0].length

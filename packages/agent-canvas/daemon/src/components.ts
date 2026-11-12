@@ -6,8 +6,13 @@
  * through `#canvas/components`. A name here with no matching export renders as
  * undefined.
  */
-import type { CanvasComponents } from '@fabrika/canvas-kernel/server'
+import type { CanvasComponents, FileReferenceProp } from '@fabrika/canvas-kernel/server'
 
 export const HOST_COMPONENTS: CanvasComponents = {
 	SecretInput: { requiredProps: { id: 'string', label: 'string', env: 'string' } },
+	Download: { requiredProps: { path: 'string' } },
+	FileDrop: { requiredProps: { id: 'string', label: 'string' } },
 }
+
+/** Host component props that name a local file, beside the kernel's; the file routes serve what they name. */
+export const HOST_FILE_REFERENCE_PROPS: readonly FileReferenceProp[] = [['Download', 'path']]
