@@ -50,12 +50,17 @@ export function renderPacket(state: PhaseState, opts: RenderOpts = {}): string {
 		const view = phase.gateView ?? `${phase.id}.jsx`
 		const write = phase.gateViewCommand ? `${phase.gateViewCommand} && ` : ''
 		lines.push(`Gate:    ${write}fabrika builder gate open ${phase.id} --view ${view} && fabrika builder gate wait`)
+	} else if (phase.reviewedAt) {
+		lines.push(`Gate:    (none - reviewed at the ${phase.reviewedAt} gate, with the next phase's output)`)
 	} else {
 		lines.push(`Gate:    (none - deterministic compile step; review optional)`)
 	}
 
 	if (phase.id === 'build') {
 		lines.push(`After OK: fabrika builder build   (apply agents/build-orchestrator.md in the main session)`)
+	} else if (!phase.gate) {
+		// Nothing to approve: the phase completes as soon as its files exist, and `advance` would judge the next one.
+		lines.push(`After OK: fabrika builder next`)
 	} else {
 		lines.push(`After OK: fabrika builder advance && fabrika builder next`)
 	}

@@ -4,8 +4,8 @@
 
 The builder runs seven deterministic phases:
 
-1. intake
-2. vision
+1. intake (no gate of its own)
+2. vision, whose gate reviews the brief with the glossary and principles
 3. flows
 4. technology
 5. opice test skeletons

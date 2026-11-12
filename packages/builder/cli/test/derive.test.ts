@@ -142,18 +142,38 @@ function writeThroughSkeletons(f: Fixture): void {
 	f.write('tests/browser/login.test.ts')
 }
 
+function writeIntent(f: Fixture): void {
+	f.write('.fabrika/intent/brief.md')
+	f.write('.fabrika/intent/glossary.md')
+	f.write('.fabrika/principles/principles.md')
+}
+
 test('with approvals kept, a reviewed gate stays current until advance approves it', () => {
 	fx = makeFixture(true, { approvals: true })
-	fx.write('.fabrika/intent/brief.md')
+	writeIntent(fx)
 	let state = derivePhase(fx.root, reviewed)
-	expect(state.current).toBe('intake')
+	expect(state.current).toBe('vision')
 	expect(state.satisfied).toBe(true)
 	expect(state.stale).toEqual([])
 
-	approve(fx.root, ['intake'])
+	approve(fx.root, ['vision'])
 	state = derivePhase(fx.root, reviewed)
+	expect(state.current).toBe('flows')
+	expect(state.completed).toEqual(['intake', 'vision'])
+})
+
+test('intake has no gate: the vision gate reviews the brief, and a brief edited after it re-opens vision', () => {
+	fx = makeFixture(true, { approvals: true })
+	fx.write('.fabrika/intent/brief.md')
+	expect(derivePhase(fx.root, unreviewed).completed).toEqual(['intake'])
+
+	writeIntent(fx)
+	approve(fx.root, ['vision'])
+	expect(derivePhase(fx.root, reviewed).current).toBe('flows')
+	fx.write('.fabrika/intent/brief.md', 'a changed brief')
+	const state = derivePhase(fx.root, reviewed)
 	expect(state.current).toBe('vision')
-	expect(state.completed).toEqual(['intake'])
+	expect(state.stale).toEqual(['.fabrika/intent/brief.md'])
 })
 
 test('an approved phase whose produced or read files changed is current again, earliest first', () => {
@@ -191,19 +211,19 @@ test('the build filling in a skeleton does not re-open the skeletons gate', () =
 
 test('a waived approval completes its phase without a review; a reviewed one still needs its review', () => {
 	fx = makeFixture(true, { approvals: true })
-	fx.write('.fabrika/intent/brief.md')
-	approve(fx.root, ['intake'], true)
-	expect(derivePhase(fx.root, unreviewed).current).toBe('vision')
+	writeIntent(fx)
+	approve(fx.root, ['vision'], true)
+	expect(derivePhase(fx.root, unreviewed).current).toBe('flows')
 
-	approve(fx.root, ['intake'])
-	expect(derivePhase(fx.root, unreviewed).current).toBe('intake')
+	approve(fx.root, ['vision'])
+	expect(derivePhase(fx.root, unreviewed).current).toBe('vision')
 })
 
 test('without the approvals file, gates are judged by their reviews alone', () => {
 	fx = makeFixture()
-	fx.write('.fabrika/intent/brief.md')
-	expect(derivePhase(fx.root, reviewed).current).toBe('vision')
-	expect(derivePhase(fx.root, unreviewed).current).toBe('intake')
+	writeIntent(fx)
+	expect(derivePhase(fx.root, reviewed).current).toBe('flows')
+	expect(derivePhase(fx.root, unreviewed).current).toBe('vision')
 })
 
 test('an approvals file that does not parse, or of another version, is refused rather than read as empty', () => {

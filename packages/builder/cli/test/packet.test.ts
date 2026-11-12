@@ -15,10 +15,9 @@ test('packet for intake has the expected sections', () => {
 	expect(packet).toContain('Read:')
 	expect(packet).toContain('Goal:')
 	expect(packet).not.toContain('Skills:')
-	expect(packet).toContain('Gate:')
-	expect(packet).toContain('After OK:')
-	expect(packet).toContain('fabrika builder gate open intake --view brief.jsx && fabrika builder gate wait')
-	expect(packet).toContain('fabrika builder advance && fabrika builder next')
+	expect(packet).toContain('Gate:    (none - reviewed at the vision gate')
+	expect(packet).toContain('After OK: fabrika builder next\n')
+	expect(packet).not.toContain('fabrika builder advance')
 })
 
 test('packet header shows completed phases with a checkmark', () => {
@@ -58,7 +57,7 @@ test('packetJson mirrors the structured fields', () => {
 	expect(json.index).toBe(1)
 	expect(json.number).toBe(2)
 	expect(json.gate).toBe(true)
-	expect(json.gateView).toBe('vision.jsx')
+	expect(json.gateView).toBe('brief.jsx')
 	expect(json.completed).toEqual(['intake'])
 	expect(json.produces).toContain('.fabrika/principles/principles.md')
 })

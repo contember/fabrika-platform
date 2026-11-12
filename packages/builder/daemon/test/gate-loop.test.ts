@@ -33,6 +33,20 @@ afterAll(() => {
 	rmSync(dataDir, { recursive: true, force: true })
 })
 
+/** Intake has no gate: the brief, glossary and principles bring a project to the vision gate that reviews them. */
+function writeIntent(repo: string): void {
+	mkdirSync(join(repo, '.fabrika', 'intent'), { recursive: true })
+	mkdirSync(join(repo, '.fabrika', 'principles'), { recursive: true })
+	writeFileSync(join(repo, '.fabrika', 'intent', 'brief.md'), '# brief\nbuild a thing')
+	writeFileSync(join(repo, '.fabrika', 'intent', 'glossary.md'), '# glossary')
+	writeFileSync(join(repo, '.fabrika', 'principles', 'principles.md'), '# principles')
+}
+
+function writeFlow(repo: string): void {
+	mkdirSync(join(repo, '.fabrika', 'architecture', 'flows'), { recursive: true })
+	writeFileSync(join(repo, '.fabrika', 'architecture', 'flows', 'checkout.flow.md'), '---\nroute: /cart\n---\n# Checkout\n')
+}
+
 async function openGate(sessionId: string, gate: string): Promise<void> {
 	const canvasDir = scratchDir('fabrika-gate-canvas-')
 	writeFileSync(join(canvasDir, 'view.jsx'), "<Section title='Review me'>body</Section>")
@@ -133,12 +147,12 @@ describe('gate interactive loop', () => {
 			join(repo, '.fabrika', 'config.json'),
 			JSON.stringify({ profile: 'cf-lightweight', sessionId, createdAt: new Date().toISOString() }),
 		)
-		writeFileSync(join(repo, '.fabrika', 'intent', 'brief.md'), '# brief\nbuild a thing')
+		writeIntent(repo)
 		const fabrikaDir = join(repo, '.fabrika')
 		const cliEnv = { FABRIKA_SESSION_ID: sessionId }
 
-		await openGate(sessionId, 'intake')
-		const feedbackMarkdown = 'Intake looks right. Proceed.'
+		await openGate(sessionId, 'vision')
+		const feedbackMarkdown = 'Brief looks right. Proceed.'
 		const browser = await openSocket(`${wsBase}/ws/session/${sessionId}`)
 		browser.send(JSON.stringify({ type: 'submit', feedback: feedbackMarkdown }))
 		await new Promise((r) => setTimeout(r, 100))
@@ -149,7 +163,7 @@ describe('gate interactive loop', () => {
 				`${base}/api/phase?root=${encodeURIComponent(fabrikaDir)}&session=${encodeURIComponent(sessionId)}`,
 			)
 		).json()
-		expect(beforePhase.current).toBe('intake')
+		expect(beforePhase.current).toBe('vision')
 
 		const waitR = await runCli(['gate', 'wait', '--root', repo], cliEnv)
 		expect(waitR.code).toBe(0)
@@ -162,8 +176,8 @@ describe('gate interactive loop', () => {
 
 		const advR = await runCli(['advance', '--dir', repo], cliEnv)
 		expect(advR.code).toBe(0)
-		expect(advR.stdout).toContain('OK: phase 1/7 (intake) satisfied.')
-		expect(advR.stdout).toContain('Next -> phase 2/7')
+		expect(advR.stdout).toContain('OK: phase 2/7 (vision) satisfied.')
+		expect(advR.stdout).toContain('Next -> phase 3/7')
 		expect(advR.stderr).toContain('submitted without a verdict')
 
 		const afterPhase = await (
@@ -171,8 +185,8 @@ describe('gate interactive loop', () => {
 				`${base}/api/phase?root=${encodeURIComponent(fabrikaDir)}&session=${encodeURIComponent(sessionId)}`,
 			)
 		).json()
-		expect(afterPhase.completed).toContain('intake')
-		expect(afterPhase.current).toBe('vision')
+		expect(afterPhase.completed).toContain('vision')
+		expect(afterPhase.current).toBe('flows')
 
 		rmSync(repo, { recursive: true, force: true })
 	})
@@ -182,13 +196,13 @@ describe('gate interactive loop', () => {
 
 		const repo = scratchDir('fabrika-reopen-repo-')
 		mkdirSync(join(repo, '.fabrika', 'intent'), { recursive: true })
-		writeFileSync(join(repo, '.fabrika', 'intent', 'brief.md'), '# brief\nbuild a thing')
+		writeIntent(repo)
 		const fabrikaDir = join(repo, '.fabrika')
 		const phaseUrl = `${base}/api/phase?root=${encodeURIComponent(fabrikaDir)}&session=${encodeURIComponent(sessionId)}`
 
-		await openGate(sessionId, 'intake')
+		await openGate(sessionId, 'vision')
 		const browser1 = await openSocket(`${wsBase}/ws/session/${sessionId}`)
-		browser1.send(JSON.stringify({ type: 'submit', feedback: 'Intake good, proceed.' }))
+		browser1.send(JSON.stringify({ type: 'submit', feedback: 'Brief good, proceed.' }))
 		await new Promise((r) => setTimeout(r, 100))
 		browser1.close()
 		const consume = await (
@@ -197,14 +211,14 @@ describe('gate interactive loop', () => {
 		expect(consume.found).toBe(true)
 
 		const afterConsume = await (await fetch(phaseUrl)).json()
-		expect(afterConsume.completed).toContain('intake')
-		expect(afterConsume.current).toBe('vision')
+		expect(afterConsume.completed).toContain('vision')
+		expect(afterConsume.current).toBe('flows')
 
-		await openGate(sessionId, 'intake')
+		await openGate(sessionId, 'vision')
 
 		const afterReopen = await (await fetch(phaseUrl)).json()
-		expect(afterReopen.current).toBe('intake')
-		expect(afterReopen.completed).not.toContain('intake')
+		expect(afterReopen.current).toBe('vision')
+		expect(afterReopen.completed).not.toContain('vision')
 
 		rmSync(repo, { recursive: true, force: true })
 	})
@@ -214,12 +228,12 @@ describe('gate interactive loop', () => {
 		const repo = scratchDir('fabrika-verdict-repo-')
 		mkdirSync(join(repo, '.fabrika', 'intent'), { recursive: true })
 		writeFileSync(join(repo, '.fabrika', 'config.json'), JSON.stringify({ profile: 'zerops-app', sessionId, createdAt: new Date().toISOString() }))
-		writeFileSync(join(repo, '.fabrika', 'intent', 'brief.md'), '# brief\nbuild a thing')
+		writeIntent(repo)
 		const fabrikaDir = join(repo, '.fabrika')
 		const phaseUrl = `${base}/api/phase?root=${encodeURIComponent(fabrikaDir)}&session=${encodeURIComponent(sessionId)}`
 		const cliEnv = { FABRIKA_SESSION_ID: sessionId }
 
-		await openGate(sessionId, 'intake')
+		await openGate(sessionId, 'vision')
 		const browser = await openSocket(`${wsBase}/ws/session/${sessionId}`)
 		browser.send(JSON.stringify({ type: 'submit', feedback: 'Scope is wrong.', responses: [{ id: 'verdict', value: 'Request changes' }] }))
 		await new Promise((r) => setTimeout(r, 100))
@@ -227,14 +241,14 @@ describe('gate interactive loop', () => {
 
 		const advR = await runCli(['advance', '--dir', repo], cliEnv)
 		expect(advR.code).toBe(0)
-		expect(advR.stderr).toContain('warning: gate "intake" was answered "Request changes"')
+		expect(advR.stderr).toContain('warning: gate "vision" was answered "Request changes"')
 
 		const after = await (await fetch(phaseUrl)).json()
-		expect(after.current).toBe('vision')
-		expect(after.verdicts).toEqual({ intake: 'changes' })
+		expect(after.current).toBe('flows')
+		expect(after.verdicts).toEqual({ vision: 'changes' })
 
 		const next = await runCli(['next', '--dir', repo], cliEnv)
-		expect(next.stdout).toContain('Review:  advanced over requested changes: intake')
+		expect(next.stdout).toContain('Review:  advanced over requested changes: vision')
 
 		rmSync(repo, { recursive: true, force: true })
 	})
@@ -245,7 +259,10 @@ describe('gate interactive loop', () => {
 		mkdirSync(join(repo, '.fabrika', 'intent'), { recursive: true })
 		writeFileSync(join(repo, '.fabrika', 'config.json'), JSON.stringify({ profile: 'zerops-app', sessionId, createdAt: new Date().toISOString() }))
 
-		await openGate(sessionId, 'intake')
+		writeFileSync(join(repo, '.fabrika', 'intent', 'brief.md'), '# brief\nbuild a thing')
+		writeFileSync(join(repo, '.fabrika', 'intent', 'glossary.md'), '# glossary')
+
+		await openGate(sessionId, 'vision')
 		const browser = await openSocket(`${wsBase}/ws/session/${sessionId}`)
 		browser.send(JSON.stringify({ type: 'submit', feedback: 'Wrong scope.', responses: [{ id: 'verdict', value: 'Request changes' }] }))
 		await new Promise((r) => setTimeout(r, 100))
@@ -253,8 +270,8 @@ describe('gate interactive loop', () => {
 
 		const advR = await runCli(['advance', '--dir', repo], { FABRIKA_SESSION_ID: sessionId })
 		expect(advR.code).toBe(1)
-		expect(advR.stderr).toContain('missing produce: .fabrika/intent/brief.md')
-		expect(advR.stderr).toContain('warning: gate "intake" was answered "Request changes"')
+		expect(advR.stderr).toContain('missing produce: .fabrika/principles/principles.md')
+		expect(advR.stderr).toContain('warning: gate "vision" was answered "Request changes"')
 
 		rmSync(repo, { recursive: true, force: true })
 	})
@@ -264,9 +281,9 @@ describe('gate interactive loop', () => {
 		const repo = scratchDir('fabrika-approve-repo-')
 		mkdirSync(join(repo, '.fabrika', 'intent'), { recursive: true })
 		writeFileSync(join(repo, '.fabrika', 'config.json'), JSON.stringify({ profile: 'zerops-app', sessionId, createdAt: new Date().toISOString() }))
-		writeFileSync(join(repo, '.fabrika', 'intent', 'brief.md'), '# brief\nbuild a thing')
+		writeIntent(repo)
 
-		await openGate(sessionId, 'intake')
+		await openGate(sessionId, 'vision')
 		const browser = await openSocket(`${wsBase}/ws/session/${sessionId}`)
 		browser.send(JSON.stringify({ type: 'submit', feedback: 'Good.', responses: [{ id: 'verdict', value: 'Approve' }] }))
 		await new Promise((r) => setTimeout(r, 100))
@@ -284,28 +301,27 @@ describe('gate interactive loop', () => {
 		const repo = scratchDir('fabrika-earlier-repo-')
 		mkdirSync(join(repo, '.fabrika', 'intent'), { recursive: true })
 		mkdirSync(join(repo, '.fabrika', 'principles'), { recursive: true })
-		writeFileSync(join(repo, '.fabrika', 'intent', 'brief.md'), '# brief\nbuild a thing')
+		writeIntent(repo)
 		const fabrikaDir = join(repo, '.fabrika')
 		const phaseUrl = `${base}/api/phase?root=${encodeURIComponent(fabrikaDir)}&session=${encodeURIComponent(sessionId)}`
 
-		await openGate(sessionId, 'intake')
+		await openGate(sessionId, 'vision')
 		const first = await openSocket(`${wsBase}/ws/session/${sessionId}`)
-		first.send(JSON.stringify({ type: 'submit', feedback: 'Intake good.' }))
+		first.send(JSON.stringify({ type: 'submit', feedback: 'Brief good.' }))
 		await new Promise((r) => setTimeout(r, 100))
 		first.close()
 		await fetch(`${base}/api/session/${sessionId}/feedback/consume`, { method: 'POST' })
 
-		writeFileSync(join(repo, '.fabrika', 'intent', 'glossary.md'), '# glossary')
-		writeFileSync(join(repo, '.fabrika', 'principles', 'principles.md'), '# principles')
-		await openGate(sessionId, 'vision')
+		writeFlow(repo)
+		await openGate(sessionId, 'flows')
 		const second = await openSocket(`${wsBase}/ws/session/${sessionId}`)
-		second.send(JSON.stringify({ type: 'submit', feedback: 'Vision pending.' }))
+		second.send(JSON.stringify({ type: 'submit', feedback: 'Flows pending.' }))
 		await new Promise((r) => setTimeout(r, 100))
 		second.close()
 
 		const state = await (await fetch(phaseUrl)).json()
-		expect(state.completed).toEqual(['intake'])
-		expect(state.current).toBe('vision')
+		expect(state.completed).toEqual(['intake', 'vision'])
+		expect(state.current).toBe('flows')
 		expect(state.satisfied).toBe(true)
 
 		rmSync(repo, { recursive: true, force: true })
@@ -396,19 +412,19 @@ describe('gate interactive loop', () => {
 		const repo = scratchDir('fabrika-reopen-repo-')
 		mkdirSync(join(repo, '.fabrika', 'intent'), { recursive: true })
 		writeApprovals(repo, {})
-		writeFileSync(join(repo, '.fabrika', 'intent', 'brief.md'), '# brief\nbuild a thing')
+		writeIntent(repo)
 		const phaseUrl = `${base}/api/phase?root=${encodeURIComponent(join(repo, '.fabrika'))}&session=${encodeURIComponent(sessionId)}`
 
-		await openGate(sessionId, 'intake')
+		await openGate(sessionId, 'vision')
 		const ws = await openSocket(`${wsBase}/ws/session/${sessionId}`)
 		ws.send(JSON.stringify({ type: 'submit', feedback: 'Tighten the non-goals.' }))
 		await new Promise((r) => setTimeout(r, 100))
 		ws.close()
-		await expect(openGate(sessionId, 'intake')).rejects.toThrow('Unconsumed feedback')
+		await expect(openGate(sessionId, 'vision')).rejects.toThrow('Unconsumed feedback')
 
 		const state = await (await fetch(phaseUrl)).json()
-		expect(state.current).toBe('intake')
-		expect(state.completed).toEqual([])
+		expect(state.current).toBe('vision')
+		expect(state.completed).toEqual(['intake'])
 
 		rmSync(repo, { recursive: true, force: true })
 	})
@@ -418,9 +434,8 @@ describe('gate interactive loop', () => {
 		const repo = scratchDir('fabrika-backfill-repo-')
 		mkdirSync(join(repo, '.fabrika', 'intent'), { recursive: true })
 		mkdirSync(join(repo, '.fabrika', 'principles'), { recursive: true })
-		writeFileSync(join(repo, '.fabrika', 'intent', 'brief.md'), '# brief\nbuild a thing')
-		writeFileSync(join(repo, '.fabrika', 'intent', 'glossary.md'), '# glossary')
-		writeFileSync(join(repo, '.fabrika', 'principles', 'principles.md'), '# principles')
+		writeIntent(repo)
+		writeFlow(repo)
 		writeFileSync(join(repo, '.fabrika', 'config.json'), JSON.stringify({ profile: 'zerops-app', sessionId, createdAt: new Date().toISOString() }))
 		const phaseUrl = `${base}/api/phase?root=${encodeURIComponent(join(repo, '.fabrika'))}&session=${encodeURIComponent(sessionId)}`
 		const submit = async (gate: string) => {
@@ -431,27 +446,27 @@ describe('gate interactive loop', () => {
 			ws.close()
 		}
 
-		await submit('intake')
-		await fetch(`${base}/api/session/${sessionId}/feedback/consume`, { method: 'POST' })
 		await submit('vision')
+		await fetch(`${base}/api/session/${sessionId}/feedback/consume`, { method: 'POST' })
+		await submit('flows')
 		expect(readApprovals(repo)).toBeNull()
 
 		const adv = await runCli(['advance', '--dir', repo], { FABRIKA_SESSION_ID: sessionId })
 		expect(adv.code).toBe(0)
 		const approvals = readApprovals(repo)
-		expect(Object.keys(approvals ?? {}).sort()).toEqual(['intake', 'vision'])
-		expect(approvals?.vision?.waived).toBeUndefined()
-		expect(approvals?.vision?.inputs['.fabrika/intent/glossary.md']).toMatch(/^[0-9a-f]{64}$/)
+		expect(Object.keys(approvals ?? {}).sort()).toEqual(['flows', 'vision'])
+		expect(approvals?.flows?.waived).toBeUndefined()
+		expect(approvals?.flows?.inputs['.fabrika/intent/glossary.md']).toMatch(/^[0-9a-f]{64}$/)
 
 		writeFileSync(join(repo, '.fabrika', 'intent', 'brief.md'), '# brief\nbuild a different thing')
 		const state = await (await fetch(phaseUrl)).json()
-		expect(state.current).toBe('intake')
+		expect(state.current).toBe('vision')
 		expect(state.stale).toEqual(['.fabrika/intent/brief.md'])
 
 		// A waived gate is recorded as waived.
 		const forced = await runCli(['advance', '--force', '--dir', repo], { FABRIKA_SESSION_ID: sessionId })
 		expect(forced.code).toBe(0)
-		expect(readApprovals(repo)?.intake?.waived).toBe(true)
+		expect(readApprovals(repo)?.vision?.waived).toBe(true)
 
 		rmSync(repo, { recursive: true, force: true })
 	})
@@ -463,7 +478,7 @@ describe('gate interactive loop', () => {
 		mkdirSync(join(repo, '.fabrika', 'principles'), { recursive: true })
 		writeFileSync(join(repo, '.fabrika', 'config.json'), JSON.stringify({ profile: 'zerops-app', sessionId, createdAt: new Date().toISOString() }))
 		writeApprovals(repo, {})
-		writeFileSync(join(repo, '.fabrika', 'intent', 'brief.md'), '# brief\nbuild a thing')
+		writeIntent(repo)
 		const env = { FABRIKA_SESSION_ID: sessionId }
 		const phaseUrl = `${base}/api/phase?root=${encodeURIComponent(join(repo, '.fabrika'))}&session=${encodeURIComponent(sessionId)}`
 		const submit = async (verdict: string) => {
@@ -473,38 +488,37 @@ describe('gate interactive loop', () => {
 			ws.close()
 		}
 
-		await openGate(sessionId, 'intake')
-		await submit('Approve')
-		expect((await runCli(['advance', '--dir', repo], env)).code).toBe(0)
-		expect(readApprovals(repo)?.intake?.revision).toBe(1)
-
-		writeFileSync(join(repo, '.fabrika', 'intent', 'glossary.md'), '# glossary')
-		writeFileSync(join(repo, '.fabrika', 'principles', 'principles.md'), '# principles')
 		await openGate(sessionId, 'vision')
 		await submit('Approve')
+		expect((await runCli(['advance', '--dir', repo], env)).code).toBe(0)
+		expect(readApprovals(repo)?.vision?.revision).toBe(1)
 
-		// The brief changes while the vision review waits: intake is current, and neither review approves it again.
+		writeFlow(repo)
+		await openGate(sessionId, 'flows')
+		await submit('Approve')
+
+		// The brief changes while the flows review waits: vision is current, and neither review approves it again.
 		writeFileSync(join(repo, '.fabrika', 'intent', 'brief.md'), '# brief\nbuild another thing')
-		expect((await (await fetch(phaseUrl)).json()).current).toBe('intake')
+		expect((await (await fetch(phaseUrl)).json()).current).toBe('vision')
 		const refused = await runCli(['advance', '--dir', repo], env)
 		expect(refused.code).toBe(1)
-		expect(refused.stderr).toContain('gate "intake" was approved at revision 1, before its files changed')
-		expect(readApprovals(repo)?.vision).toBeUndefined()
+		expect(refused.stderr).toContain('gate "vision" was approved at revision 1, before its files changed')
+		expect(readApprovals(repo)?.flows).toBeUndefined()
 
-		// Re-opening hands back the waiting vision review (409); the new intake review then approves intake.
-		await expect(openGate(sessionId, 'intake')).rejects.toThrow('Unconsumed feedback')
-		await openGate(sessionId, 'intake')
+		// Re-opening hands back the waiting flows review (409); the new vision review then approves vision.
+		await expect(openGate(sessionId, 'vision')).rejects.toThrow('Unconsumed feedback')
+		await openGate(sessionId, 'vision')
 		await submit('Approve')
 		expect((await runCli(['advance', '--dir', repo], env)).code).toBe(0)
-		expect(readApprovals(repo)?.intake?.revision).toBe(3)
+		expect(readApprovals(repo)?.vision?.revision).toBe(3)
 
 		// Re-opened over pending feedback again (409): the consumed review is not an approval.
-		await openGate(sessionId, 'intake')
+		await openGate(sessionId, 'vision')
 		await submit('Request changes')
-		await expect(openGate(sessionId, 'intake')).rejects.toThrow('Unconsumed feedback')
+		await expect(openGate(sessionId, 'vision')).rejects.toThrow('Unconsumed feedback')
 		const state = await (await fetch(phaseUrl)).json()
-		expect(state.current).toBe('intake')
-		expect(state.completed).toEqual([])
+		expect(state.current).toBe('vision')
+		expect(state.completed).toEqual(['intake'])
 
 		rmSync(repo, { recursive: true, force: true })
 	})

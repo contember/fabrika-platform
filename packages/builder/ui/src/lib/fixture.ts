@@ -14,14 +14,13 @@ export const FIXTURE_PHASE_STATE: PhaseState = {
 
 export const FIXTURE_META: SessionMeta = {
 	id: FIXTURE_SESSION_ID,
-	currentRevision: 5,
+	currentRevision: 4,
 	canvasFiles: [{ filename: 'review-grid.jsx', label: 'Skeleton review' }],
 	revisions: [
-		{ revision: 1, label: 'intake', canvasFiles: [{ filename: 'intake.jsx' }] },
-		{ revision: 2, label: 'vision', canvasFiles: [{ filename: 'vision.jsx' }] },
-		{ revision: 3, label: 'flows', canvasFiles: [{ filename: 'flows.jsx' }] },
-		{ revision: 4, label: 'tech', canvasFiles: [{ filename: 'tech.jsx' }] },
-		{ revision: 5, label: 'skeletons', canvasFiles: [{ filename: 'review-grid.jsx' }] },
+		{ revision: 1, label: 'vision', canvasFiles: [{ filename: 'brief.jsx' }] },
+		{ revision: 2, label: 'flows', canvasFiles: [{ filename: 'flows-review.jsx' }] },
+		{ revision: 3, label: 'tech', canvasFiles: [{ filename: 'tech.jsx' }] },
+		{ revision: 4, label: 'skeletons', canvasFiles: [{ filename: 'review-grid.jsx' }] },
 	],
 	gate: 'skeletons',
 	label: 'Opice skeletons',
