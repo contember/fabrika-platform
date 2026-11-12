@@ -53,6 +53,9 @@ export interface GitHubSourceRepositoryDto {
 	readonly name: string
 }
 
+/** Who owns a connection's GitHub App: an organization, or a personal account. */
+export type GitHubSourceOwnerType = 'Organization' | 'User'
+
 export interface GitHubSourceConnectionAppDto {
 	readonly id: number
 	readonly slug: string
@@ -60,7 +63,7 @@ export interface GitHubSourceConnectionAppDto {
 	readonly public: boolean
 	readonly owner: {
 		readonly login: string
-		readonly type: 'Organization'
+		readonly type: GitHubSourceOwnerType
 	}
 	readonly permissions: {
 		readonly contents: 'read'
@@ -151,7 +154,13 @@ export type GitHubSourceConnectionStatusDto =
 	| GitHubSourceConnectionRepairRequiredDto
 
 export interface StartGitHubSourceConnectionRequest {
+	/** The App owner's login: the organization's, or the personal account's when `ownerType` is `User`. */
 	readonly organization: string
+	/**
+	 * Absent means `Organization`. GitHub creates a personal account's App on whichever account is signed in, so the
+	 * person who continues the setup must be signed in to GitHub as that account.
+	 */
+	readonly ownerType?: GitHubSourceOwnerType
 	readonly appName: string
 	readonly visibility: 'private' | 'public'
 	readonly repositories: readonly GitHubSourceRepositoryDto[]

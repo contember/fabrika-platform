@@ -51,7 +51,7 @@ export async function installationSetup(deps: SourceConnectionWorkflowDeps, conn
 
 type SetupQuery = { readonly action: 'install' | 'update'; readonly installationId: number } | { readonly action: 'request' }
 
-/** `request` is an installation an organization owner still has to approve; GitHub sends no installation id with it. */
+/** `request` is an installation an organization owner still has to approve (a personal account never sends it); GitHub sends no installation id with it. */
 function setupQuery(query: URLSearchParams): SetupQuery {
 	const actions = query.getAll('setup_action')
 	const installationIds = query.getAll('installation_id')
@@ -172,7 +172,7 @@ export async function reconcileSourceConnection(deps: SourceConnectionWorkflowDe
 }
 
 function installationScope(attempt: GitHubSetupAttempt): SourceInstallationScope {
-	if (attempt.requestedRepositories.length === 0) return { kind: 'organization', organization: attempt.desiredOwner }
+	if (attempt.requestedRepositories.length === 0) return { kind: 'account', owner: attempt.desiredOwner, ownerType: attempt.desiredOwnerType }
 	return { kind: 'repositories', repositories: attempt.requestedRepositories.map(splitRepository) }
 }
 

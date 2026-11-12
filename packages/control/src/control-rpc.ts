@@ -242,6 +242,7 @@ const sourceConnectionId = z.object({ connectionId: z.string().min(1).max(128) }
 const sourceConnectionListInput = githubSourceConnectionListInputSchema
 const startSourceConnectionInput = z.object({
 	organization: githubOwner,
+	ownerType: z.enum(['Organization', 'User']).optional(),
 	appName: z.string().min(1).max(100),
 	visibility: z.enum(['private', 'public']),
 	repositories: z.array(z.object({ owner: githubOwner, name: githubRepositoryName }).strict()).max(100),

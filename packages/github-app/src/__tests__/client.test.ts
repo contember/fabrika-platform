@@ -412,6 +412,28 @@ describe('GitHubAppClient operator verification', () => {
 		for (const request of capture.requests) expect(request.init?.method).toBeUndefined()
 	})
 
+	test("resolves a personal account's installation and refuses an organization's answer for it", async () => {
+		const capture = capturingFetch([
+			Response.json(installation(73, 'Octocat', 'User')),
+			Response.json(installation(74, 'octocat')),
+			new Response('{}', { status: 404 }),
+		])
+		const github = await client(capture.fetch)
+		expect(await github.resolveUserInstallation('octocat')).toEqual({
+			id: 73,
+			accountLogin: 'Octocat',
+			accountType: 'User',
+			repositorySelection: 'selected',
+		})
+		await expect(github.resolveUserInstallation('octocat')).rejects.toThrow('GitHub App response is invalid')
+		expect(await github.resolveUserInstallation('octocat')).toBeNull()
+		expect(capture.requests.map((request) => request.url)).toEqual([
+			'https://github.example/api/v3/users/octocat/installation',
+			'https://github.example/api/v3/users/octocat/installation',
+			'https://github.example/api/v3/users/octocat/installation',
+		])
+	})
+
 	test('rejects an installation without a documented repository selection', async () => {
 		const response = installation(72)
 		delete response['repository_selection']

@@ -51,6 +51,8 @@ export async function startSourceConnection(
 		throw new SourceConnectionWorkflowError(400)
 	}
 	if (input.visibility !== 'private') throw new SourceConnectionWorkflowError(400)
+	const ownerType = input.ownerType ?? 'Organization'
+	if (ownerType !== 'Organization' && ownerType !== 'User') throw new SourceConnectionWorkflowError(400)
 	const owner = input.organization.toLowerCase()
 	const repositories = canonicalRepositories(input.organization, input.repositories)
 	const attemptId = uuidv7()
@@ -74,6 +76,7 @@ export async function startSourceConnection(
 			initiatedBy: principalId,
 			expectedOrigin: origin,
 			desiredOwner: owner,
+			desiredOwnerType: ownerType,
 			desiredAppName: input.appName,
 			desiredPublic: false,
 			requestedRepositories: repositories.map((repository) => `${repository.owner}/${repository.name}`),
@@ -123,14 +126,21 @@ export async function manifestHandoff(deps: SourceConnectionWorkflowDeps, connec
 	const nonce = randomToken(NONCE_BYTES, deps.randomBytes)
 	return secureHtml(
 		manifestHandoffHtml({
-			action: `https://github.com/organizations/${encodeURIComponent(attempt.desiredOwner)}/settings/apps/new?state=${encodeURIComponent(state)}`,
+			action: `${appCreationUrl(attempt)}?state=${encodeURIComponent(state)}`,
 			manifest: JSON.stringify(manifest),
-			organization: attempt.desiredOwner,
+			owner: attempt.desiredOwner,
+			ownerType: attempt.desiredOwnerType,
 			appName: attempt.desiredAppName,
 			nonce,
 		}),
 		manifestHandoffCsp(nonce),
 	)
+}
+
+/** GitHub creates an organization's App under the organization's settings, a personal account's under the signed-in account's. */
+function appCreationUrl(attempt: GitHubSetupAttempt): string {
+	if (attempt.desiredOwnerType === 'User') return 'https://github.com/settings/apps/new'
+	return `https://github.com/organizations/${encodeURIComponent(attempt.desiredOwner)}/settings/apps/new`
 }
 
 export async function manifestCallback(deps: SourceConnectionWorkflowDeps): Promise<Response> {
@@ -209,13 +219,13 @@ function exactQueryValue(request: Request, key: string, maxLength: number): stri
 }
 
 function canonicalRepositories(
-	organization: string,
+	appOwner: string,
 	repositories: readonly { readonly owner: string; readonly name: string }[],
 ): { readonly owner: string; readonly name: string }[] {
-	const owner = organization.toLowerCase()
+	const owner = appOwner.toLowerCase()
 	const unique = new Map<string, { readonly owner: string; readonly name: string }>()
 	for (const repository of repositories) {
-		if (repository.owner.toLowerCase() !== owner) throw new SourceConnectionWorkflowError(400, 'repositories must belong to the App organization')
+		if (repository.owner.toLowerCase() !== owner) throw new SourceConnectionWorkflowError(400, 'repositories must belong to the App owner')
 		if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(repository.owner) || !/^[A-Za-z0-9._-]{1,100}$/.test(repository.name)) {
 			throw new SourceConnectionWorkflowError(400)
 		}
@@ -225,10 +235,10 @@ function canonicalRepositories(
 	return [...unique.values()].sort((left, right) => `${left.owner}/${left.name}`.localeCompare(`${right.owner}/${right.name}`))
 }
 
-function buildManifest(organization: string, appName: string, origin: string, connectionId: string) {
+function buildManifest(owner: string, appName: string, origin: string, connectionId: string) {
 	try {
 		return buildGitHubAppManifest({
-			organization,
+			organization: owner,
 			appName,
 			homepageUrl: origin,
 			webhookUrl: `${origin}/webhooks/github/${encodeURIComponent(connectionId)}`,
@@ -272,15 +282,24 @@ async function settleCallbackFailure(
 }
 
 /**
- * The browser's answer when the callback failed the attempt. An App on a personal account is the operator's to fix, so
- * the answer says how; anything else names no cause.
+ * The browser's answer when the callback failed the attempt. An App on another owner than the setup asked for is the
+ * operator's to fix, so the answer says how; anything else names no cause.
  */
 function callbackFailed(claimed: GitHubSetupAttempt, error: unknown): SourceConnectionWorkflowError {
-	if (!(error instanceof SourceFailure) || error.code !== 'app_owner_not_organization') return new SourceConnectionWorkflowError(503)
-	return new SourceConnectionWorkflowError(
-		422,
-		`GitHub created the App on a personal account, not in the organization ${claimed.desiredOwner}. Delete that App in your GitHub developer settings, check that you may create Apps in ${claimed.desiredOwner}, and connect again.`,
-	)
+	if (!(error instanceof SourceFailure)) return new SourceConnectionWorkflowError(503)
+	if (error.code === 'app_owner_not_organization') {
+		return new SourceConnectionWorkflowError(
+			422,
+			`GitHub created the App on a personal account, not in the organization ${claimed.desiredOwner}. Delete that App in your GitHub developer settings, check that you may create Apps in ${claimed.desiredOwner}, and connect again.`,
+		)
+	}
+	if (error.code === 'app_owner_mismatch') {
+		return new SourceConnectionWorkflowError(
+			422,
+			`GitHub created the App on another account, not on the personal account ${claimed.desiredOwner}. Delete that App in your GitHub developer settings, sign in to GitHub as ${claimed.desiredOwner}, and connect again.`,
+		)
+	}
+	return new SourceConnectionWorkflowError(503)
 }
 
 function delay(milliseconds: number): Promise<void> {

@@ -5,6 +5,7 @@ import type {
 	GitHubSourceConnectionListResponse,
 	GitHubSourceConnectionSetupPendingDto,
 	GitHubSourceConnectionWorkflowDto,
+	GitHubSourceOwnerType,
 } from '@fabrika/control-contract'
 import { requireHuman, type SourceConnectionWorkflowDeps } from './context'
 import { SourceConnectionWorkflowError } from './errors'
@@ -118,6 +119,7 @@ function attemptAppDto(attempt: GitHubSetupAttempt): GitHubSourceConnectionAppDt
 		appHtmlUrl: attempt.appHtmlUrl,
 		appPublic: attempt.desiredPublic,
 		appOwner: attempt.desiredOwner,
+		appOwnerType: attempt.desiredOwnerType,
 	})
 }
 
@@ -127,6 +129,7 @@ function appDto(state: {
 	readonly appHtmlUrl: string
 	readonly appPublic: boolean
 	readonly appOwner: string
+	readonly appOwnerType: GitHubSourceOwnerType
 }): GitHubSourceConnectionAppDto {
 	const id = Number(state.appId)
 	if (!Number.isSafeInteger(id) || id <= 0) throw new SourceConnectionWorkflowError(500)
@@ -135,7 +138,7 @@ function appDto(state: {
 		slug: state.appSlug,
 		htmlUrl: state.appHtmlUrl,
 		public: state.appPublic,
-		owner: { login: state.appOwner, type: 'Organization' },
+		owner: { login: state.appOwner, type: state.appOwnerType },
 		permissions: { contents: 'read' },
 		events: ['push'],
 	}

@@ -21,9 +21,11 @@ repository by API (see [Zerops platform reference](../reference/zerops-platform.
 accept an uploaded archive: create an application version, PUT the archive to the returned upload
 URL, then call `build-and-deploy`. Zerops still runs the build and the deploy.
 
-A private GitHub App can be installed only in the organization that owns it. An operator who deploys
-private repositories from several organizations therefore needs one App per organization, unless the
-App is made public — which widens who can install it.
+A private GitHub App can be installed only on the account that owns it, an organization or a personal
+account. An operator who deploys private repositories from several accounts therefore needs one App per
+account, unless the App is made public — which widens who can install it. GitHub creates an
+organization's App from the organization's settings, but a personal account's App on whichever account
+is signed in to GitHub: the manifest flow cannot name the personal account.
 
 GitHub's manifest flow returns an App's private key exactly once. Whatever receives it must store it
 durably before it reports success, or the App is unrecoverable.
@@ -44,8 +46,10 @@ deploys applications ([ADR-0025](0025-the-operator-installs-the-platform-fabrika
 Both clouds use the one model below; nothing in it depends on the provider.
 
 **Connections.** An installation holds any number of GitHub connections. Each connection is one
-private App owned by one GitHub organization plus one verified installation of that App, keyed by a
-connection id. The case-insensitive organization login selects at most one connection. There is no
+private App owned by one GitHub account (an organization or a personal account) plus one verified
+installation of that App, keyed by a connection id. The connection records which of the two owns the
+App. The case-insensitive owner login selects at most one connection; organizations and personal
+accounts share GitHub's one namespace of logins. There is no
 connection-count limit; every request, response and page stays bounded. There is no unkeyed or
 default connection.
 
@@ -61,7 +65,7 @@ sources, holds the App keys and nothing else does.
 A user principal with `source.connection.manage` (service tokens are refused) creates a connection from the console:
 
 1. Control records a bounded, expiring, one-use setup state bound to the administrator, the exact
-   Control origin, the organization and the requested repositories. Only one nonterminal setup may
+   Control origin, the owner, its type and the requested repositories. Only one nonterminal setup may
    exist at a time; connected rows do not block a new one.
 2. The browser runs GitHub's manifest flow. `@fabrika/github-app` builds the manifest: private App,
    Contents and Pull requests write, the `push` event only, fixed `github.com`. No personal access token
@@ -74,13 +78,18 @@ A user principal with `source.connection.manage` (service tokens are refused) cr
    checkpoint, before it reports success**.
 4. Control generates a webhook secret, stores it in the vault, configures the App's webhook to
    `/webhooks/github/:connectionId`, and verifies the App identity (owner, visibility, permissions,
-   events) with the stored key. GitHub masks the secret, so readback proves only URL, JSON content
+   events) with the stored key. An App GitHub created on another owner than the setup asked for fails
+   the setup and leaves the vault, with its own code so the console says what to fix:
+   `app_owner_not_organization` when an organization's App landed on a personal account (the person may
+   not create Apps in the organization, or mistyped it), `app_owner_mismatch` when a personal account's
+   App landed on another account (the person was signed in as someone else). GitHub masks the secret, so readback proves only URL, JSON content
    type and TLS verification.
 5. The callback sends the browser straight on to the App's installation page. The manifest names
    `/api/source/github/setup/:connectionId` as the App's setup URL, with redirect on update, so GitHub
    returns the installer to Control. Control treats the returned `installation_id` as a hint: anyone can
    send that URL. It requires an authenticated principal with `source.connection.manage`, verifies the
-   installation for the organization or the requested repositories with App-JWT endpoints, refuses a
+   installation for the owner (`/orgs/{org}/installation` or `/users/{user}/installation`) or for the
+   requested repositories with App-JWT endpoints, refuses a
    returned id that names another installation, and publishes the connection named by the path. The
    console's verify action runs the same check when GitHub does not bring the browser back.
 
@@ -102,7 +111,7 @@ no unscoped `/webhooks/github` route.
 
 **Public repositories** need no connection, and the cron poller triggers them from the repository's Atom
 feed instead of a webhook. A read that names no binding still carries a token when it can: Control takes
-the connection of the organization that owns the repository and mints a token scoped to that repository.
+the connection of the account that owns the repository and mints a token scoped to that repository.
 GitHub refuses that token for a repository the installation does not cover, so minting it is the access
 check, and the read falls back to anonymous. Anonymous reads share the per-IP limit with every tenant of a
 cloud's egress address; an installation token has its own. The fallback grants nothing new: whoever names an
@@ -155,13 +164,13 @@ them.
 
 ## Consequences
 
-- A private application needs one App installation per organization, not a GUI step per service.
+- A private application needs one App installation per owning account, not a GUI step per service.
   Removing a repository from the App removes future deploy access at once.
 - Installations have no source service, no source RPC key and no GitHub credential in their
   environment, on either cloud. Source handling is Control code, testable in-process.
 - A fresh installation deploys public repositories only, until an administrator connects GitHub from
-  the console. Once an organization's App is connected and installed on a repository, every read of that
-  repository is authenticated, bound application or not; reads of other organizations' public
+  the console. Once an account's App is connected and installed on a repository, every read of that
+  repository is authenticated, bound application or not; reads of other accounts' public
   repositories stay anonymous. Not verified against a live App: whether an installation token reads a
   public repository outside its installation. Control never relies on it.
 - Losing the vault KEK loses every connection; each must be recreated, which creates a new App.
@@ -202,7 +211,10 @@ them.
   already has a vault and already holds the key on Cloudflare; a second custodian added hops and
   failure modes without reducing what a Control compromise exposes.
 - **One public App installed in every organization.** Widens installability beyond the operator's
-  organizations.
+  accounts.
+- **Organizations only.** Control first refused a personal account's App. It cost an operator whose
+  repositories live on a personal account an organization created for no other reason, and bought nothing:
+  installation tokens, webhooks and the tarball read work the same for both owner types.
 - **Try every webhook secret, or route by owner or installation id.** Work grows with the connection
   set, owner text is mutable, and an installation id does not name the App credential.
 - **Keep an unkeyed legacy credential path.** Two selectors invite answering through the wrong App.

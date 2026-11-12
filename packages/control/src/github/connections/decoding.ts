@@ -24,6 +24,7 @@ const PHASES: readonly GitHubSetupPhase[] = [...ACTIVE_PHASES, 'connected']
 const storedText = z.string().refine(value => value.trim() !== '')
 const storedDigest = z.string().regex(/^[0-9a-f]{64}$/)
 const storedVaultRef = z.string().startsWith('vault:').min(7)
+const storedOwnerType = z.enum(['Organization', 'User'])
 const storedBoolean = z.union([z.literal(0), z.literal(1)]).transform(value => value === 1)
 const attemptFieldsSchema = z.object({
 	id: storedText,
@@ -32,6 +33,7 @@ const attemptFieldsSchema = z.object({
 	initiated_by: storedText,
 	expected_origin: storedText,
 	desired_owner: storedText,
+	desired_owner_type: storedOwnerType,
 	desired_app_name: storedText,
 	desired_public: storedBoolean,
 	app_id: storedText.nullable(),
@@ -46,6 +48,7 @@ const connectionFieldsSchema = z.object({
 	app_slug: storedText,
 	app_html_url: storedText,
 	app_owner: storedText,
+	app_owner_type: storedOwnerType,
 	app_name: storedText,
 	app_public: storedBoolean,
 	app_credential_ref: storedVaultRef,
@@ -62,6 +65,7 @@ const storedFieldLabels: Readonly<Record<string, string>> = {
 	initiated_by: 'initiating principal',
 	expected_origin: 'expected origin',
 	desired_owner: 'desired owner',
+	desired_owner_type: 'desired owner type',
 	desired_app_name: 'desired app name',
 	desired_public: 'desired public',
 	app_id: 'app id',
@@ -71,6 +75,7 @@ const storedFieldLabels: Readonly<Record<string, string>> = {
 	webhook_secret_ref: 'vault ref',
 	connection_id: 'connection id',
 	app_owner: 'app owner',
+	app_owner_type: 'app owner type',
 	app_name: 'app name',
 	app_public: 'app public',
 	webhook_url: 'webhook URL',
@@ -106,6 +111,7 @@ export function decodeAttempt(row: GitHubSetupAttemptRow): GitHubSetupAttempt {
 		initiatedBy: fields.initiated_by,
 		expectedOrigin: fields.expected_origin,
 		desiredOwner: fields.desired_owner,
+		desiredOwnerType: fields.desired_owner_type,
 		desiredAppName: fields.desired_app_name,
 		desiredPublic: fields.desired_public,
 		requestedRepositories: parseRepositories(row.requested_repositories_json),
@@ -155,6 +161,7 @@ export function decodeConnection(row: GitHubSourceConnectionRow): GitHubSourceCo
 		appSlug: fields.app_slug,
 		appHtmlUrl: fields.app_html_url,
 		appOwner: fields.app_owner,
+		appOwnerType: fields.app_owner_type,
 		appName: fields.app_name,
 		appPublic: fields.app_public,
 		appCredentialRef: fields.app_credential_ref,
@@ -286,6 +293,7 @@ function parseOptionalErrorCode(value: string | null): GitHubSetupErrorCode | nu
 		'configuration_conflict',
 		'rate_limited',
 		'app_owner_not_organization',
+		'app_owner_mismatch',
 	]).nullable().safeParse(value)
 	if (parsed.success) return parsed.data
 	throw new Error('invalid GitHub setup error code')

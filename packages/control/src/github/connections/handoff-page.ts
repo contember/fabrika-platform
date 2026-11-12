@@ -1,11 +1,13 @@
+import type { GitHubSourceOwnerType } from '@fabrika/control-contract'
 import { PAGE_STYLE, pageBody } from '@fabrika/proxy-core/page-style'
 
 /** What the manifest handoff page needs; every value is escaped where it is written. */
 export interface ManifestHandoffPage {
-	/** GitHub's App-creation URL for the organization, carrying the one-use state. */
+	/** GitHub's App-creation URL for the owner, carrying the one-use state. */
 	readonly action: string
 	readonly manifest: string
-	readonly organization: string
+	readonly owner: string
+	readonly ownerType: GitHubSourceOwnerType
 	readonly appName: string
 	/** Admits this page's one style and one script element, and nothing else. */
 	readonly nonce: string
@@ -27,7 +29,10 @@ export function manifestHandoffCsp(nonce: string): string {
  * so the back button from GitHub stays on this page instead of bouncing forward again.
  */
 export function manifestHandoffHtml(page: ManifestHandoffPage): string {
-	const organization = html(page.organization)
+	const owner = html(page.owner)
+	const where = page.ownerType === 'User'
+		? `on the personal account <strong>${owner}</strong>. GitHub creates it on the account you are signed in as, so sign in to GitHub as ${owner} first`
+		: `in the <strong>${owner}</strong> organization`
 	return `<!doctype html>
 <html lang="en">
 <head>
@@ -42,10 +47,10 @@ ${
 		pageBody(
 			`<p class="eyebrow">Source connection</p>
 <h1>Create the GitHub App</h1>
-<p>Fabrika asks GitHub to create the private App <strong>${html(page.appName)}</strong> in the <strong>${organization}</strong> organization.</p>
+<p>Fabrika asks GitHub to create the private App <strong>${html(page.appName)}</strong> ${where}.</p>
 <ol class="steps">
 <li class="current"><strong>Create the App.</strong> GitHub shows its settings. Confirm them with <em>Create GitHub App</em>.</li>
-<li><strong>Install it on ${organization}.</strong> GitHub opens the installation next. Choose the repositories and confirm.</li>
+<li><strong>Install it on ${owner}.</strong> GitHub opens the installation next. Choose the repositories and confirm.</li>
 <li><strong>Return to the console.</strong> Fabrika verifies the installation and shows the connection.</li>
 </ol>
 <form id="handoff" method="post" action="${html(page.action)}">

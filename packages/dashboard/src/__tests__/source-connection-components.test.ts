@@ -62,10 +62,12 @@ describe('source connection collection components', () => {
 	test('renders the zero-connection private setup without a public-App control', () => {
 		const collection = connectedMarkup([])
 		const workflow = workflowMarkup({ provider: 'zerops', kind: 'github-app', state: 'anonymous' }, 0)
-		expect(collection).toContain('No organizations connected')
+		expect(collection).toContain('No accounts connected')
 		expect(workflow).toContain('The new App is private')
 		expect(workflow).toContain('Connect GitHub source')
 		expect(workflow).not.toContain('value="public"')
+		expect(workflow).toContain('<option value="Organization"')
+		expect(workflow).toContain('<option value="User"')
 	})
 
 	test('keeps a migrated connection readable, including legacy public state', () => {

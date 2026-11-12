@@ -298,13 +298,15 @@ GitHub App setup runs in the authenticated Control console at **Settings → Sou
 ([ADR-0029](../decisions/0029-github-app-sources.md)), the same way on Cloudflare and Zerops. Fresh
 installations boot with anonymous source access; neither `platform init` creates an App. The page lists stable connections in bounded pages and presents the
 one global setup or repair workflow separately. A human principal holding `source.connection.manage`
-can add another private organization-owned App while stable rows remain. Only one nonterminal workflow
-may exist, and the same organization cannot be connected twice, but Fabrika imposes no total
+can add another private App, owned by an organization or by a personal account, while stable rows remain.
+Only one nonterminal workflow may exist, and the same owner cannot be connected twice, but Fabrika imposes no total
 connection-count limit. Setup accepts an optional same-owner repository set. Control returns only a
 same-origin continuation path; no private key, webhook secret, manifest code or opaque state enters a
 browser DTO, URL log or error.
 
-The continuation is a page that submits a least-authority manifest directly to `github.com` by itself;
+The continuation is a page that submits a least-authority manifest directly to `github.com` by itself:
+to the organization's App settings, or for a personal account to `github.com/settings/apps/new`, which
+creates the App on whichever account is signed in, so the page asks the person to sign in as that account;
 its CSP admits only that page's nonce'd style and script, and form posts only to `https://github.com`.
 The manifest names the App's setup URL, `/api/source/github/setup/:connectionId`, with redirect on
 update. The callback requires the same authenticated human principal, exact Control origin and one-use
@@ -316,14 +318,14 @@ setup state stores only nonsecret phases, hashes, verified identities and vault 
 
 For every new connection, Control then (`packages/control/src/github/connections/`):
 
-1. verifies the organization-owned App identity, visibility, permissions and sole `push` event with the
-   vault key. Contents and Pull requests may be read or write; any other permission except Metadata read
+1. verifies the App identity (the owner and owner type the setup asked for), visibility, permissions and
+   sole `push` event with the vault key. Contents and Pull requests may be read or write; any other permission except Metadata read
    refuses the App. The manifest asks for both as write, for MCP authoring
    ([ADR-0029](../decisions/0029-github-app-sources.md)); a deploy token is still minted with Contents read
    only;
 2. creates a new webhook secret in the Control vault, configures the exact scoped HTTPS callback and
    verifies the returned URL, JSON content type and TLS setting;
-3. verifies the organization or every requested repository through App-JWT endpoints before
+3. verifies the owner's installation or every requested repository through App-JWT endpoints before
    publishing the connection, when GitHub returns the installer to the setup URL.
 
 The setup URL takes `installation_id` and `setup_action` as hints only. It needs a human principal with
