@@ -363,14 +363,14 @@ export const WS_AVAILABLE: boolean = !MODE.isShared
 
 // --- Kernel host binding ----------------------------------------------------
 
+/** The session's threads; a shared canvas has none, its reviewers' feedback goes through the author. */
+export const threadStore: LocalThreadStore | null = MODE.isShared ? null : createThreadStore(MODE.sessionId)
+
 /**
  * What the kernel's annotation surface needs from this host. agent-canvas
  * serves canvases in two modes, so these cannot use the kernel's local-only
  * defaults: shared canvases come from the worker (and may be encrypted).
  */
-/** The session's threads; a shared canvas has none, its reviewers' feedback goes through the author. */
-export const threadStore: LocalThreadStore | null = MODE.isShared ? null : createThreadStore(MODE.sessionId)
-
 export const canvasHost: CanvasHost = {
 	get sessionId() {
 		return getIdentifier()

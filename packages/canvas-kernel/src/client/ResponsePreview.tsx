@@ -201,7 +201,19 @@ function rewriteUploadPaths(md: string): string {
 }
 
 const HTML_ESCAPES: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }
-const escapingMarked = new Marked({ renderer: { html: ({ text }) => text.replace(/[&<>"']/g, (char) => HTML_ESCAPES[char] ?? char) } })
+const escapeHtml = (text: string) => text.replace(/[&<>"']/g, (char) => HTML_ESCAPES[char] ?? char)
+/** http(s), mailto, or a URL with no scheme of its own. */
+const isSafeUrl = (href: string) => /^(?:https?|mailto):/i.test(href) || !/^[^/?#]*:/.test(href)
+// Returning false keeps marked's own rendering; an unsafe link keeps only its text.
+const escapingMarked = new Marked({
+	renderer: {
+		html: ({ text }) => escapeHtml(text),
+		link(token) {
+			return isSafeUrl(token.href) ? false : this.parser.parseInline(token.tokens)
+		},
+		image: (token) => (isSafeUrl(token.href) ? false : escapeHtml(token.text)),
+	},
+})
 
 /** Renders markdown; `rawHtml: false` shows HTML in it as text, for text the canvas did not author. */
 export function MarkdownPreview({ text, rawHtml = true }: { text: string; rawHtml?: boolean }) {

@@ -14,9 +14,11 @@ describe('mergeThreads', () => {
 		expect(mergeThreads([posted], [claimed])).toEqual([claimed])
 	})
 
-	test('keeps threads the incoming list does not mention, and adds new ones', () => {
+	test('keeps the current order and the threads the incoming list does not mention, and appends new ones', () => {
 		const a = thread('a', '2026-01-01T00:00:01.000Z')
 		const b = thread('b', '2026-01-01T00:00:01.000Z')
-		expect(mergeThreads([a], [b])).toEqual([b, a])
+		const c = thread('c', '2026-01-01T00:00:01.000Z')
+		const newerB = thread('b', '2026-01-01T00:00:02.000Z', 'resolved')
+		expect(mergeThreads([a, b], [newerB, c])).toEqual([a, newerB, c])
 	})
 })

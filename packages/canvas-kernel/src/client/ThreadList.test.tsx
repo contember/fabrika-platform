@@ -41,7 +41,7 @@ function fakeThreads(initial: CanvasThread[]): CanvasThreads & { set: (next: Can
 }
 
 async function mount(threads: CanvasThreads): Promise<HTMLElement> {
-	const container = mountContainer()
+	const container = mountContainer('')
 	root = createRoot(container)
 	await act(async () =>
 		root?.render(
@@ -71,4 +71,13 @@ test('a reply draft survives the thread moving to the resolved list', async () =
 	})
 	await act(async () => store.set([thread('resolved', 'Done')]))
 	expect(container.querySelector('textarea')?.value).toBe('one more thing')
+})
+
+test('an agent reply keeps https links and drops script URLs to their text', async () => {
+	const body = '[docs](https://example.com/a) [click](javascript:alert(1)) ![x](javascript:alert(2)) <javascript:alert(3)>'
+	const container = await mount(fakeThreads([thread('open', body)]))
+	const hrefs = [...container.querySelectorAll('a')].map((link) => link.getAttribute('href'))
+	expect(hrefs).toEqual(['https://example.com/a'])
+	expect(container.querySelector('img')).toBeNull()
+	expect(container.textContent).toContain('click')
 })

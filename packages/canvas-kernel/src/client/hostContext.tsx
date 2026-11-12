@@ -26,12 +26,7 @@ export interface CanvasHost {
 	threads: CanvasThreads | null
 }
 
-/**
- * - `open`: answered by the agent, or reopened, waiting on the user.
- * - `queued`: the user replied; the agent has not picked it up yet.
- * - `working`: the agent picked it up.
- * - `resolved`: closed by the agent or the user.
- */
+/** `open` waits on the user, `queued` holds a reply the agent has not read, `working` is with the agent, `resolved` is closed. */
 export type CanvasThreadState = 'open' | 'queued' | 'working' | 'resolved'
 
 export interface CanvasThreadComment {

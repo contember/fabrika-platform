@@ -19,17 +19,17 @@ async function requestError(response: Response): Promise<Error> {
 }
 
 /**
- * The newer copy of each thread. Responses and socket frames can arrive out of order (a POST's response after the
- * frame for the agent's claim), and threads are never deleted, so a thread missing from `incoming` is kept.
+ * The newer copy of each thread, in the current order. Responses and socket frames can arrive out of order (a POST's
+ * response after the frame for the agent's claim), and threads are never deleted, so none is dropped.
  */
 export function mergeThreads(current: readonly CanvasThread[], incoming: readonly CanvasThread[]): readonly CanvasThread[] {
-	const known = new Map(current.map((thread) => [thread.id, thread]))
-	const merged = incoming.map((thread) => {
-		const mine = known.get(thread.id)
-		return mine !== undefined && mine.updatedAt > thread.updatedAt ? mine : thread
+	const arrived = new Map(incoming.map((thread) => [thread.id, thread]))
+	const merged = current.map((mine) => {
+		const theirs = arrived.get(mine.id)
+		return theirs !== undefined && theirs.updatedAt >= mine.updatedAt ? theirs : mine
 	})
-	const incomingIds = new Set(incoming.map((thread) => thread.id))
-	return [...merged, ...current.filter((thread) => !incomingIds.has(thread.id))]
+	const known = new Set(current.map((thread) => thread.id))
+	return [...merged, ...incoming.filter((thread) => !known.has(thread.id))]
 }
 
 /** The local daemon's threads for one session, kept current by its socket. */
