@@ -77,17 +77,25 @@ function Deck({ slides }) {
 	const slideElements =
 		() => [...(deck.current?.querySelectorAll('[data-slide]') ?? [])]
 	// The slide on screen, not the last one a key chose: the user may have scrolled since.
-	const currentSlide = () =>
-		Math.max(
+	const currentSlide = () => {
+		const all = slideElements()
+		// The last slide may never reach the top; at the end of the page it is the one on screen.
+		const atEnd = window.scrollY > 0
+			&& window.scrollY + window.innerHeight
+				>= document.documentElement.scrollHeight - 1
+		if (atEnd) return all.length - 1
+		return Math.max(
 			0,
-			slideElements().filter((slide) =>
+			all.filter((slide) =>
 				slide.getBoundingClientRect().top <= window.innerHeight / 3
 			).length - 1,
 		)
+	}
+	// An instant jump, so a second key press reads the slide it landed on.
 	const go = (step) => {
 		const all = slideElements()
 		all[Math.max(0, Math.min(all.length - 1, currentSlide() + step))]
-			?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+			?.scrollIntoView({ block: 'start' })
 	}
 	React.useEffect(() => {
 		const onKey = (event) => {
