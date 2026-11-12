@@ -8,6 +8,7 @@ import { resolveStackPointer, unsupportedProfileNote } from '../catalog'
 import { resolveContext } from '../context'
 import { consumeGate, postBuildEvent } from '../daemon-client'
 import { ensureDaemon } from '../daemon-lifecycle'
+import { describePair, DESIGN_GATE, DESIGN_PATH, failingPairs, readDesignContrast, summarizeContrast } from '../design-review'
 import { type Issue, readIssues } from '../issues'
 import { describeVerification, gitState, runVerification, type Verification } from '../verify'
 
@@ -21,6 +22,7 @@ export async function cmdBuild(argv: string[]): Promise<number> {
 			dir: { type: 'string' },
 			session: { type: 'string' },
 			assisted: { type: 'boolean', default: false },
+			'waive-contrast': { type: 'boolean', default: false },
 		},
 		allowPositionals: true,
 	})
@@ -59,7 +61,9 @@ export async function cmdBuild(argv: string[]): Promise<number> {
 					console.error(`[fabrika] ${issue.id} is proved by its "${issue.gate}" review gate; it takes no --verify or verify files.`)
 					return 1
 				}
-				return await recordGateReview(issue, issue.gate, ctx.sessionId, ctx.repoRoot, ctx.fabrikaDir, issues)
+				const check = issue.gate === DESIGN_GATE ? checkDesignContrast(issue, ctx.repoRoot, values['waive-contrast']) : ''
+				if (check === null) return 1
+				return await recordGateReview(issue, issue.gate, check, ctx.sessionId, ctx.repoRoot, ctx.fabrikaDir, issues)
 			}
 			if (values.verify && issue.verify.length > 0) {
 				console.error(`[fabrika] ${issue.id} is proved by ${issue.verify.join(', ')}; --verify is only for issues that name no acceptance file.`)
@@ -144,10 +148,38 @@ async function emitBrief(
 	return 0
 }
 
+/**
+ * The design checkpoint's deterministic half: the theme override's contrast. Unlike the advisory verdict, a pair below
+ * AA refuses `done` until the stylesheet is fixed or the reviewer waives it. Returns the evidence suffix, or null.
+ */
+function checkDesignContrast(issue: Issue, repoRoot: string, waive: boolean | undefined): string | null {
+	const contrast = readDesignContrast(repoRoot)
+	const failing = failingPairs(contrast)
+	const refused = contrast.kind === 'invalid' || failing.length > 0
+	if (refused && !waive) {
+		console.error(`[fabrika] ${issue.id} not marked done: ${summarizeContrast(contrast)}.`)
+		for (const pair of failing) console.error(`[fabrika]   ${describePair(pair)}`)
+		console.error(
+			contrast.kind === 'invalid'
+				? `[fabrika] Name the theme stylesheet in ${DESIGN_PATH} (front matter \`stylesheet: <path>\`), then run \`fabrika builder build done ${issue.id}\` again.`
+				: `[fabrika] Raise these pairs in the stylesheet and re-open the gate, or pass --waive-contrast when the reviewer accepts them.`,
+		)
+		return null
+	}
+	if (contrast.kind === 'checked') {
+		for (const r of contrast.results) {
+			if (r.status === 'unchecked') console.error(`[fabrika] warning: contrast not checked for ${r.mode} ${r.fg} on ${r.bg}: ${r.note ?? ''}`)
+		}
+	}
+	return ` · ${summarizeContrast(contrast)}${refused ? ' (waived)' : ''}`
+}
+
 /** An issue whose check is a review gate: record the gate's consumed verdict. Gates are advisory, so "changes" warns. */
 async function recordGateReview(
 	issue: Issue,
 	gate: string,
+	/** Appended to the evidence: what a deterministic check beside the gate found. */
+	checked: string,
 	sessionId: string,
 	repoRoot: string,
 	fabrikaDir: string,
@@ -163,7 +195,7 @@ async function recordGateReview(
 		return 1
 	}
 	const evidence: BuildEvidence = {
-		command: `${gate} gate review, revision ${review.revision}`,
+		command: `${gate} gate review, revision ${review.revision}${checked}`,
 		exitCode: 0,
 		durationMs: 0,
 		at: new Date().toISOString(),

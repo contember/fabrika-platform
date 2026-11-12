@@ -60,7 +60,8 @@ ensure daemon → fabrika builder next → do packet work → gate → advance �
      exactly as written: the daemon records it as the gate's verdict.
    - When the `Gate:` command starts with a `fabrika builder … review` command
      (flows, build), run it as written: it generates the view from the files.
-     Fix the files, never the generated view.
+     Fix the files, never the generated view. The design checkpoint
+     (`ISSUE-004`) is gated the same way on `fabrika builder design review`.
    - Run `bunx fabrika builder gate open <name> --view <view.jsx>`, then
      `bunx fabrika builder gate wait [--gate <name>]`. Read the raw feedback from
      stdout. On `Request changes`, address the feedback and re-open the gate.

@@ -324,6 +324,16 @@ describe('gate interactive loop', () => {
 			join(fabrikaDir, 'issues', 'ISSUE-004.md'),
 			'---\ngoal: Design checkpoint\nsatisfies: []\ndepends_on: []\ntouches: []\nverify: []\ngate: design-checkpoint\n---\nbody\n',
 		)
+		// The SPA resolves the kit's real tokens; its override keeps every pair at AA until the end of the test.
+		const kit = join(repo, 'web', 'node_modules', '@fabrika', 'ui')
+		mkdirSync(join(kit, 'src'), { recursive: true })
+		mkdirSync(join(repo, 'web', 'src'), { recursive: true })
+		mkdirSync(join(fabrikaDir, 'architecture'), { recursive: true })
+		writeFileSync(join(kit, 'package.json'), JSON.stringify({ name: '@fabrika/ui', exports: { './theme.css': './src/theme.css' } }))
+		writeFileSync(join(kit, 'src', 'theme.css'), readFileSync(resolve(HERE, '../../../ui/src/theme.css'), 'utf8'))
+		const stylesheet = join(repo, 'web', 'src', 'theme.css')
+		writeFileSync(stylesheet, ':root { --fui-accent: #a0522d; }')
+		writeFileSync(join(fabrikaDir, 'architecture', 'design.md'), '---\nstylesheet: web/src/theme.css\n---\n# Design\n')
 		const cliEnv = { FABRIKA_SESSION_ID: sessionId }
 
 		const unopened = await runCli(['build', 'done', 'ISSUE-004', '--dir', repo], cliEnv)
@@ -353,12 +363,22 @@ describe('gate interactive loop', () => {
 		expect(refused.code).toBe(1)
 		expect(refused.stderr).toContain('takes no --verify')
 
-		const done = await runCli(['build', 'done', 'ISSUE-004', '--dir', repo], cliEnv)
+		// The verdict is advisory; the contrast is not: a pair below AA refuses until the reviewer waives it.
+		writeFileSync(stylesheet, ':root { --fui-text-muted: #9aa0aa; }')
+		const lowContrast = await runCli(['build', 'done', 'ISSUE-004', '--dir', repo], cliEnv)
+		expect(lowContrast.code).toBe(1)
+		expect(lowContrast.stderr).toContain('light: --fui-text-muted on --fui-surface is 2.')
+		expect(lowContrast.stderr).toContain('--waive-contrast')
+
+		const done = await runCli(['build', 'done', 'ISSUE-004', '--waive-contrast', '--dir', repo], cliEnv)
 		expect(done.code).toBe(0)
 		expect(done.stderr).toContain('answered "Request changes"; recording ISSUE-004 anyway')
 		const board = JSON.parse(readFileSync(join(fabrikaDir, 'build', 'status.json'), 'utf-8'))
 		expect(board['ISSUE-004'].status).toBe('done')
-		expect(board['ISSUE-004'].evidence).toMatchObject({ command: 'design-checkpoint gate review, revision 2', verdict: 'changes' })
+		expect(board['ISSUE-004'].evidence).toMatchObject({
+			command: 'design-checkpoint gate review, revision 2 · contrast: 31 pass, 3 below AA, 2 below AA in the kit itself (waived)',
+			verdict: 'changes',
+		})
 
 		// The review stays readable after it was consumed; a gate never opened has none.
 		const again = await (await fetch(`${base}/api/session/${sessionId}/gate/design-checkpoint/consume`, { method: 'POST' })).json()

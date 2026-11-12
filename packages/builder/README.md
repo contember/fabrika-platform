@@ -14,7 +14,9 @@ The builder runs seven deterministic phases:
 
 Design is not a phase of its own. `induce` adds a design checkpoint issue, `ISSUE-004`, after the foundation issues and
 before every feature: the agent themes the running application through the UI kit's `--fui-*` tokens, and the human
-reviews it at the `design-checkpoint` gate in the live preview. `build done ISSUE-004` records that gate's verdict.
+reviews it at the `design-checkpoint` gate in the live preview. `fabrika builder design review` generates that gate's view,
+with the WCAG contrast of the kit's text and focus pairs under the override. `build done ISSUE-004` records the gate's
+verdict, and refuses a pair below AA unless the reviewer waives it with `--waive-contrast`.
 
 The current phase is derived from files in `.fabrika/`; it is not stored as a mutable counter. `advance` records the content of each approved phase's files, so a phase whose files change afterwards is current again. Review gates use a local dashboard with persistent annotations and responses.
 

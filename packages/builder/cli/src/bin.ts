@@ -3,6 +3,7 @@
 import { InvalidApprovalsError } from '../../shared/approvals'
 import { cmdAdvance } from './commands/advance'
 import { cmdBuild } from './commands/build'
+import { cmdDesign } from './commands/design'
 import { cmdEnsureDaemon } from './commands/ensure-daemon'
 import { cmdFlows } from './commands/flows'
 import { cmdGate } from './commands/gate'
@@ -35,9 +36,11 @@ Usage:
   fabrika builder gate wait [--gate <n>] [--timeout] Wait for submitted gate feedback
   fabrika builder ensure-daemon                      Start the daemon if it is not running
   fabrika builder flows review                       Write the flows gate view: the route map from the flow files
+  fabrika builder design review                      Write the design checkpoint view: overrides, contrast, routes
   fabrika builder induce [--force]                   Derive issues from opice skeleton metadata
   fabrika builder build [--issue <ID>] [--assisted]  Run the assisted per-issue build driver
   fabrika builder build done <ID> [--verify <cmd>]   Run the issue's check; record it as done only when green
+                                                    A design checkpoint takes [--waive-contrast] instead
   fabrika builder build block <ID> --reason <text>   Record an issue as blocked
   fabrika builder build status | review              Print the board | write the build gate view from it
 
@@ -88,6 +91,8 @@ async function dispatchBuilderCli(argv: readonly string[]): Promise<number> {
 			return cmdEnsureDaemon(rest)
 		case 'flows':
 			return cmdFlows(rest)
+		case 'design':
+			return cmdDesign(rest)
 		case 'induce':
 			return cmdInduce(rest)
 		case 'build':
