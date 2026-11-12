@@ -10,13 +10,24 @@
 
 import { builtinEmailProviders } from '@fabrika/email/providers'
 import {
+	AUTH_METHODS_FLAG,
+	type AuthMethods,
+	checkedOidcIssuer,
 	checkedSecretsFilePath,
 	describeArgument,
 	EMAIL_FLAGS,
+	type InstallationAuthentication,
 	type InstallationEmail,
+	OIDC_CLIENT_ID_FLAG,
+	OIDC_CLIENT_ID_INPUT,
+	OIDC_CLIENT_SECRET_INPUT,
+	OIDC_ISSUER_FLAG,
+	OIDC_ISSUER_INPUT,
+	readAuthMethods,
 	readEnv,
 	readFlag,
 	readInstallationEmail,
+	refuseFlags,
 	requiredSetting,
 	SECRETS_FILE_FLAG,
 	SECRETS_FILE_VARIABLE,
@@ -62,6 +73,8 @@ export interface PlatformInstallInput {
 	readonly tier: PlatformTier
 	/** The installation's mail transport, written on `iam` and `control`; `none` when the operator named no provider. */
 	readonly email: InstallationEmail
+	/** How people sign in, written on `iam`; password only when the operator named no method. */
+	readonly authentication: InstallationAuthentication
 	/** `--yes`: answer every confirmation yes, for a bring-up with nobody at the keyboard. */
 	readonly unattended: boolean
 }
@@ -79,6 +92,9 @@ const FLAGS = [
 	'--tier',
 	SECRETS_FILE_FLAG,
 	...EMAIL_FLAGS,
+	AUTH_METHODS_FLAG,
+	OIDC_ISSUER_FLAG,
+	OIDC_CLIENT_ID_FLAG,
 ] as const
 
 /** `--create-project`: bring the project up too, instead of naming one the operator made. */
@@ -154,6 +170,31 @@ const readProjectSource = (argv: readonly string[], env: Record<string, string |
 	return { kind: 'create', projectName: projectName ?? defaultProjectName(readEnvironment(argv, env)) }
 }
 
+/** What a run that names no method installs, so an existing invocation installs what it did. */
+const PASSWORD_ONLY: AuthMethods = { oidcEnabled: false, passwordEnabled: true }
+
+/**
+ * The sign-in methods and, with OIDC, its client: the issuer and the client id from a flag or the variable beside it,
+ * the client secret from the environment only. There are no placeholders: IAM refuses to boot with OIDC on and any of
+ * the three missing, so a run that turns OIDC on names a real client.
+ */
+const readAuthentication = (argv: readonly string[], env: Record<string, string | undefined>): InstallationAuthentication => {
+	const methods = readAuthMethods(argv, env, PASSWORD_ONLY)
+	if (!methods.oidcEnabled) {
+		refuseFlags(argv, [OIDC_ISSUER_FLAG, OIDC_CLIENT_ID_FLAG], 'OIDC is not among the IAM authentication methods')
+		return { passwordEnabled: methods.passwordEnabled }
+	}
+	const issuer = requiredSetting(setting(argv, env, OIDC_ISSUER_FLAG, OIDC_ISSUER_INPUT), OIDC_ISSUER_FLAG, OIDC_ISSUER_INPUT)
+	return {
+		passwordEnabled: methods.passwordEnabled,
+		oidc: {
+			issuer: checkedOidcIssuer(issuer),
+			clientId: requiredSetting(setting(argv, env, OIDC_CLIENT_ID_FLAG, OIDC_CLIENT_ID_INPUT), OIDC_CLIENT_ID_FLAG, OIDC_CLIENT_ID_INPUT),
+			clientSecret: requiredSetting(readEnv(env, OIDC_CLIENT_SECRET_INPUT), '(no flag)', OIDC_CLIENT_SECRET_INPUT),
+		},
+	}
+}
+
 /** Parse the command's arguments and environment into the one input `runInstall` takes. */
 export const parsePlatformInstallArgs = (
 	argv: readonly string[],
@@ -178,6 +219,7 @@ export const parsePlatformInstallArgs = (
 		tier: readTier(setting(argv, env, '--tier', 'FABRIKA_PLATFORM_TIER')),
 		// Optional, so an existing unattended install keeps working and installs without mail.
 		email: readInstallationEmail(argv, env, { registry: builtinEmailProviders, required: false }),
+		authentication: readAuthentication(argv, env),
 		unattended: argv.includes(UNATTENDED_FLAG),
 		...(apiBaseUrl === undefined ? {} : { apiBaseUrl }),
 	}

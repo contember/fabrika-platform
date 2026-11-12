@@ -6,6 +6,7 @@ import {
 	action as consoleAction,
 	confirmations,
 	generateInstallationSecrets,
+	IAM_OIDC_CLIENT_SECRET_VARIABLE,
 	info as consoleInfo,
 	type InstallationSecrets,
 	ok as consoleOk,
@@ -183,6 +184,7 @@ const installPreparedPlatform = async (
 		secrets,
 		zeropsAccessToken: token.token,
 		email: input.email,
+		authentication: input.authentication,
 		...(input.apiBaseUrl === undefined ? {} : { apiBaseUrl: input.apiBaseUrl }),
 	})
 	const total = [...desired.values()].reduce((sum, keys) => sum + keys.size, 0)
@@ -193,10 +195,12 @@ const installPreparedPlatform = async (
 				+ `Keep ${input.secretsFile} and arrange operator-owned recovery, or start a fresh installation in a separate empty project`,
 		)
 	}
-	// The mail credentials are the operator's own, so they neither mark an installation nor go to the secrets file.
+	// The mail credentials and the OIDC client secret are the operator's own, so they neither mark an installation nor
+	// go to the secrets file.
 	const emailSecrets = input.email.kind === 'none' ? [] : [...input.email.secretNames]
+	const operatorSecrets = (hostname: string): string[] => hostname === 'iam' ? [...emailSecrets, IAM_OIDC_CLIENT_SECRET_VARIABLE] : emailSecrets
 	for (const hostname of PLATFORM_DEPLOY_ORDER) {
-		const sensitive = new Set([...(GENERATED_SECRET_KEYS.get(hostname) ?? []), ...emailSecrets])
+		const sensitive = new Set([...(GENERATED_SECRET_KEYS.get(hostname) ?? []), ...operatorSecrets(hostname)])
 		await writeServiceEnv(serviceOf(services, hostname), desired.get(hostname) ?? new Map<string, string>(), collaborators, sensitive)
 	}
 
@@ -236,6 +240,18 @@ const installPreparedPlatform = async (
 	log.info('it holds the vault key, whose loss is unrecoverable, and Zerops does not hand any of them back.')
 	log.info('`platform init` and `control key issue` read their credentials from it under the names it uses.')
 	log.info(`The console answers at ${platformOrigin(input.scheme, hosts.control)}, once someone can sign in: nobody can yet.`)
+	const { oidc, passwordEnabled } = input.authentication
+	if (oidc !== undefined) {
+		log.action('REGISTER THE REDIRECT URI: single sign-on fails until the identity provider knows it', [
+			`${platformOrigin(input.scheme, hosts.iam)}/auth/callback   (OIDC client ${oidc.clientId} at ${oidc.issuer})`,
+		])
+	}
+	if (!passwordEnabled) {
+		log.info(
+			'Without the password method `platform admin` places the address and its admin grant, then fails to issue an enrollment: '
+				+ 'that person signs in with single sign-on instead.',
+		)
+	}
 	// `platform admin` is idempotent, so re-running it is safe.
 	log.action('ADMIT YOURSELF — the console has no administrator until this runs', [
 		withSecrets(`fabrika platform admin --provider=zerops --email=<you> --iam-host=${hosts.iam}`),

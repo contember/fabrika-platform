@@ -5,11 +5,12 @@
 // is where a service's data lives — a DSN or the cloud's reference to one — and where the proxy dials IAM
 // privately; it adds the variables of its own cloud beside these and writes the result.
 //
-// IAM's Bun runtime reads `ISSUER` and `ENVIRONMENT` UNPREFIXED and everything else with the
-// `FABRIKA_IAM_` prefix. Both spellings below are the ones it actually reads.
+// IAM's Bun runtime reads `ISSUER`, `ENVIRONMENT` and the OIDC client's `OIDC_*` UNPREFIXED and everything else
+// with the `FABRIKA_IAM_` prefix (`packages/iam/src/node/runtime.ts`). Both spellings below are the ones it reads.
 
 import { FABRIKA_SERVICE_TABLE_DIGEST, IAM_PROXY_SECRET_VARIABLE } from '@fabrika/auth-core'
 import { createHmac } from 'node:crypto'
+import type { OidcClient } from './auth-methods'
 import type { InstallationEmail } from './email'
 import type { IamOAuthConfig } from './mcp'
 import { type PlatformHosts, platformOrigin } from './proxy-manifest'
@@ -23,6 +24,19 @@ export type PlatformServiceEnvironment = Readonly<Record<PlatformService, Readon
 
 /** IAM's OAuth configuration for MCP clients (ADR-0049): written only when the installation enables MCP authoring. */
 export const IAM_OAUTH_CONFIG_VARIABLE = 'FABRIKA_IAM_OAUTH_CONFIG'
+
+/** IAM's OIDC client secret, as IAM's Bun runtime reads it. The operator's credential: written sensitive, never generated. */
+export const IAM_OIDC_CLIENT_SECRET_VARIABLE = 'OIDC_CLIENT_SECRET'
+
+/**
+ * How people sign in to IAM. The installer's parser refuses a run that enables neither method, as IAM refuses to boot
+ * with neither.
+ */
+export interface InstallationAuthentication {
+	readonly passwordEnabled: boolean
+	/** Absent: OIDC is off. */
+	readonly oidc?: OidcClient
+}
 
 /** An object store's coordinates, in the provider's own spelling (values or references to them). */
 export interface PlatformStorage {
@@ -58,6 +72,23 @@ export interface InstallationServiceInput extends PlatformPlacementInput {
 	readonly data: PlatformData
 	/** IAM sends its own mail with it, and Control hands it to applications whose job declares `mailer: 'installation'`. */
 	readonly email: InstallationEmail
+	readonly authentication: InstallationAuthentication
+}
+
+/**
+ * IAM's sign-in switches and, with OIDC on, its client. Both switches are STATED because IAM's own defaults are OIDC on
+ * and password off, and it refuses to boot with neither.
+ *
+ * Only the bring-up writes these. A deploy writes none of them and removes none, so a sign-in method an operator set
+ * by hand on an existing installation survives every later `platform deploy` and `platform upgrade`.
+ */
+const iamAuthentication = ({ passwordEnabled, oidc }: InstallationAuthentication): Array<[string, string]> => {
+	const switches: Array<[string, string]> = [
+		['FABRIKA_IAM_OIDC_ENABLED', String(oidc !== undefined)],
+		['FABRIKA_IAM_PASSWORD_ENABLED', String(passwordEnabled)],
+	]
+	if (oidc === undefined) return switches
+	return [...switches, ['OIDC_ISSUER', oidc.issuer], ['OIDC_CLIENT_ID', oidc.clientId], [IAM_OIDC_CLIENT_SECRET_VARIABLE, oidc.clientSecret]]
 }
 
 /** Compared byte-for-byte against a token's `iss`, so it is the PUBLIC issuer, never the private upstream. */
@@ -80,11 +111,7 @@ export const installationServiceEnvironment = (input: InstallationServiceInput):
 			['FABRIKA_IAM_DATABASE_URL', data.iamDatabase],
 			['ENVIRONMENT', input.environment],
 			['ISSUER', iamOrigin],
-			// Password only, by decision: OIDC needs an identity provider the operator has not been
-			// asked for. Both are STATED because IAM's own defaults are the other way round — OIDC on,
-			// password off — and it refuses to boot with neither.
-			['FABRIKA_IAM_OIDC_ENABLED', 'false'],
-			['FABRIKA_IAM_PASSWORD_ENABLED', 'true'],
+			...iamAuthentication(input.authentication),
 			['FABRIKA_IAM_SIGNING_KEYS', secrets.signingKeys],
 			['FABRIKA_IAM_RPC_KEY', secrets.rpcKey],
 			['FABRIKA_IAM_PROXY_KEY', secrets.proxyKey],

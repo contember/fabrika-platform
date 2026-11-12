@@ -20,6 +20,18 @@ required and startup fails without any of them, on **both** runtimes. Refusing t
 boot beats serving a method that can only fail at the redirect. A local
 `wrangler dev` therefore runs password-only.
 
+Where they are set depends on the installation. On Zerops they are variables of the
+`iam` service: `FABRIKA_IAM_OIDC_ENABLED`, `FABRIKA_IAM_PASSWORD_ENABLED`, and the
+unprefixed `OIDC_ISSUER`, `OIDC_CLIENT_ID` and `OIDC_CLIENT_SECRET` (sensitive), which
+is what IAM's Bun runtime reads (`packages/iam/src/node/runtime.ts`). `platform install`
+writes them from `--auth-methods`, `--oidc-issuer`, `--oidc-client-id` and
+`FABRIKA_IAM_OIDC_CLIENT_SECRET`, password only when none is given. Only the bring-up
+writes them: `platform deploy` and `platform upgrade` neither write nor remove any, so a
+change by hand survives both. IAM reads them at boot, so a change takes effect when `iam`
+restarts. The redirect URI to register at the provider is `https://<iam host>/auth/callback`
+(`ISSUER` + `/auth/callback`). The operator's procedure is the Zerops guide's "Turn on
+single sign-on" (`fabrika platform guide --provider=zerops`).
+
 The human-admission allowlist (`FABRIKA_IAM_HUMAN_EMAIL_DOMAINS` /
 `FABRIKA_IAM_HUMAN_EMAILS`, a `*` in either meaning admit-all) governs
 self-provisioning at the OIDC callback only, and is matched against the

@@ -9,6 +9,19 @@ export {
 	type IamAdminClient,
 	type IamAdminConnection,
 } from './admin'
+export {
+	AUTH_METHODS_FLAG,
+	type AuthMethods,
+	checkedOidcIssuer,
+	OIDC_CLIENT_ID_FLAG,
+	OIDC_CLIENT_ID_INPUT,
+	OIDC_CLIENT_SECRET_INPUT,
+	OIDC_ISSUER_FLAG,
+	OIDC_ISSUER_INPUT,
+	type OidcClient,
+	readAuthMethods,
+	refuseFlags,
+} from './auth-methods'
 export { CHECKOUT_FLAG, sidecarCheckoutDir } from './checkout'
 export { type Confirmations, confirmations, UNATTENDED_FLAG } from './confirmations'
 export { EMAIL_FLAGS, type InstallationEmail, readInstallationEmail } from './email'
@@ -68,7 +81,9 @@ export {
 	type DeployedServiceInput,
 	deriveIamProxySecret,
 	IAM_OAUTH_CONFIG_VARIABLE,
+	IAM_OIDC_CLIENT_SECRET_VARIABLE,
 	INSTALLATION_SECRET_VARIABLES,
+	type InstallationAuthentication,
 	installationServiceEnvironment,
 	type InstallationServiceInput,
 	type PlatformData,

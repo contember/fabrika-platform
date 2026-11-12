@@ -156,6 +156,13 @@ fabrika platform install --provider=zerops --create-project --client-id=<clientI
   provider's variables from their own `0600` files. `fabrika platform install --provider=zerops --help` lists the
   providers and their variables, each named after its provider (for Resend `FABRIKA_EMAIL_RESEND_API_KEY`). They have no flag. The install writes the set on `iam` and `control`, the credentials sensitive. They
   are the human's own, so they are not copied into the secrets file.
+- Sign-in is password only unless `--auth-methods` says otherwise. For single sign-on from the start, add
+  `--auth-methods=oidc,password --oidc-issuer=<issuer URL> --oidc-client-id=<client id>` and export
+  `FABRIKA_IAM_OIDC_CLIENT_SECRET` from its own `0600` file; it has no flag. The install writes the client on `iam`,
+  the secret sensitive and not into the secrets file. The IAM host exists only once pass 1 has run, so the log
+  ends with a `REGISTER THE REDIRECT URI` box: register that URI at the identity provider. `--auth-methods=oidc`
+  turns password sign-in off, and step 2 then issues no enrollment. To add single sign-on later, see
+  "Turn on single sign-on" below.
 
 **Check.** The log ends with the `Hand off` step: where the credentials are, `The console answers at
 https://<console host>`, and an `ADMIT YOURSELF` box that holds the step 2 command with `--iam-host` filled
@@ -426,6 +433,42 @@ none, and `install` cannot be re-run.
 Without a transport, a contract whose job declares `mailer: 'installation'` still deploys. On a release older than 0.7
 its jobs see that mail is not available and leave their messages queued, and after step 5 the next run sends them. On
 0.7 or newer the relay accepts and holds the messages, and Control sends them once it has a transport.
+
+## Turn on single sign-on
+
+An installation signs people in with a password unless it was installed with `--auth-methods`. To add sign-in through
+an OpenID Connect identity provider to an existing installation:
+
+No `fabrika` command does this, and none undoes it: `platform deploy` and `platform upgrade` write none of the variables
+below and remove none, so what you set survives every later deploy and upgrade. `install` cannot be re-run.
+
+1. At the identity provider, create a web application client and register its redirect URI as
+   `https://<IAM host>/auth/callback`, with the IAM host from step 1. Note the issuer URL (IAM reads
+   `<issuer>/.well-known/openid-configuration`), the client id and the client secret.
+2. Set these variables on the `iam` service, in the Zerops GUI or with `zcli`. The `OIDC_*` names carry no `FABRIKA_IAM_`
+   prefix: they are the names IAM reads.
+
+   | Variable                       | Value                                                                   |
+   | ------------------------------ | ----------------------------------------------------------------------- |
+   | `FABRIKA_IAM_OIDC_ENABLED`     | `true`                                                                  |
+   | `FABRIKA_IAM_PASSWORD_ENABLED` | `true` keeps password sign-in beside single sign-on, `false` removes it |
+   | `OIDC_ISSUER`                  | the issuer URL                                                          |
+   | `OIDC_CLIENT_ID`               | the client id                                                           |
+   | `OIDC_CLIENT_SECRET`           | the client secret, stored SENSITIVE                                     |
+
+   A readable `OIDC_CLIENT_SECRET` is read by every member of the project, and `platform deploy` refuses to run while it
+   is readable. A variable already stored readable does not become sensitive through `zops env set --sensitive`: delete
+   it and add it again as a secret one in the GUI.
+3. Restart `iam`. It reads these at boot, and with `FABRIKA_IAM_OIDC_ENABLED=true` it refuses to start while any of the
+   three `OIDC_*` is missing, which takes sign-in down: read its log until it serves again. The sign-in page then
+   offers single sign-on beside the password form, or, with password off, goes straight to the provider.
+4. Single sign-on admits only someone IAM already knows: an invited address or an existing user, matched by the e-mail
+   the provider verified. Anyone else is refused (`not_admitted`). The first sign-in links the person to the provider's
+   subject. With password off, `platform admin` still places the address and its admin grant, then fails to issue an
+   enrollment; that person signs in with single sign-on instead.
+
+To turn single sign-on off again, set `FABRIKA_IAM_OIDC_ENABLED=false` with `FABRIKA_IAM_PASSWORD_ENABLED=true` and
+restart `iam`; it refuses to start with both off.
 
 ## When something fails
 

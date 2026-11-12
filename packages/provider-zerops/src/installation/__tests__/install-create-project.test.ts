@@ -39,6 +39,7 @@ const input = (overrides: Partial<PlatformInstallInput> = {}): PlatformInstallIn
 	secretsFile: SECRETS_FILE,
 	tier: 'light',
 	email: { kind: 'none' },
+	authentication: { passwordEnabled: true },
 	unattended: false,
 	...overrides,
 })
