@@ -64,15 +64,18 @@ Claude uses different canvas flows depending on the task:
 
 ### Threads and following a session
 
-Submitted feedback labels each annotation with its id. The agent can answer one annotation with
-`bunx agent-canvas reply <annotation-id> "<text>" [--resolve]`; the reply appears under the annotation in the sidebar,
-where the user can answer back. The thread is kept with the session, so it stays visible on later revisions. The
-user's answer reaches the agent through `watch` like a submit.
+Submitted feedback labels each of the user's own annotations with its id; a remote reviewer's has none and opens no
+thread. The agent can answer one annotation with `bunx agent-canvas reply <annotation-id> "<text>" [--resolve]`; the
+reply appears under the annotation in the sidebar, where the user can answer back. The thread stays visible on later
+revisions and is kept until the session directory is removed; nothing deletes it automatically. The user's answer
+reaches the agent through `watch` and `fetch` like a submit. Answering a thread whose reply the agent has not read yet
+is refused until `watch` hands that reply over.
 
 `bunx agent-canvas watch --follow` keeps watching instead of exiting after the first answer. It prints one block per
 submit, thread reply, render error and remote-feedback arrival, for hosts that turn each output line into an event
 (Claude Code's Monitor). For remote feedback it prints only the count and the reviewers' self-typed names; their text
-reaches the agent when the user includes it in a submit.
+reaches the agent when the user includes it in a submit. A remote-feedback arrival is a best-effort notice: one that
+comes while the watcher is reconnecting is not repeated.
 
 ### Local secret handoff
 

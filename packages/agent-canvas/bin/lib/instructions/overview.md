@@ -102,8 +102,9 @@ bunx agent-canvas reply ann-1731400000000-k3x9 "Done." --resolve --session <sess
 ```
 
 The user sees the reply under the annotation in the sidebar and can answer back. Their answer reaches you through
-`watch` like a submit, under `## Thread replies`; answer it with `reply` again. Without `--resolve` the thread goes
-back to the user.
+`watch` (or `fetch`) like a submit, under `## Thread replies`; answer it with `reply` again. A `reply` to a thread
+whose answer you have not read yet is refused: run `watch` first. Without `--resolve` the thread goes back to the
+user. Annotations from remote reviewers carry no id and have no thread.
 
 ### 6. Follow a session (Claude Code's Monitor)
 
@@ -114,7 +115,8 @@ back to the user.
 - `thread-reply` — threads the user answered
 - `render-error` — a canvas failed to render; fix it and push
 - `remote-feedback-arrived` — reviewers of a shared link commented. Only the count and their self-typed names are
-  printed; their text reaches you when the user includes it in a submit.
+  printed; their text reaches you when the user includes it in a submit. Best-effort: one that arrives while the
+  watcher reconnects is not repeated.
 
 ```bash
 bunx agent-canvas watch --follow --session <session-id>
