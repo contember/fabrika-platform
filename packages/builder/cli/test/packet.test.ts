@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from 'bun:test'
+import { derivePhase } from '../../shared/derive'
 import { PHASE_COUNT, PHASES } from '../../shared/phases'
-import { derivePhase } from '../src/derive'
 import { packetJson, renderPacket } from '../src/packet'
 import { type Fixture, makeFixture } from './helpers'
 

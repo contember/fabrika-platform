@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import type { PhaseState } from '../cli/src/derive'
+import type { PhaseState } from './derive'
 import type { BuilderDeploymentState } from './index'
 import {
 	activeDaemonSchema,
@@ -72,7 +72,20 @@ test('health consumers retain distinct sessions and malformed-field tolerance', 
 })
 
 test('CLI phase projection drops gateName while UI retains explicit null and omits malformed fields', () => {
-	const phase: PhaseState = { current: 'intake', index: 0.5, completed: [], reads: [], produces: [], gate: true, satisfied: false }
+	const phase: PhaseState = {
+		current: 'intake',
+		index: 0.5,
+		completed: [],
+		reads: [],
+		produces: [],
+		gate: true,
+		satisfied: false,
+		verdicts: {},
+		unverified: [],
+	}
+	const { verdicts: _verdicts, unverified: _unverified, ...olderDaemon } = phase
+	expect(phaseStateSchema.parse(olderDaemon)).toEqual(phase)
+	expect(phaseStateSchema.parse({ ...phase, verdicts: { intake: 'maybe' }, unverified: 'x' })).toEqual(phase)
 	expect(phaseStateSchema.parse({ ...phase, gateName: 'intake' })).toEqual(phase)
 	expect(uiPhaseStateSchema.parse({ ...phase, gateName: null })).toEqual({ ...phase, gateName: null })
 	expect(uiPhaseStateSchema.parse({ ...phase, gateName: 12 })).toEqual(phase)
@@ -127,7 +140,8 @@ test('metadata recovers valid legacy entries and retains empty labels', () => {
 test('feedback projections preserve selection, permissive booleans and empty feedback recovery', () => {
 	expect(feedbackMetaSchema.parse({ revisions: [null, { revision: 'bad' }, { revision: -1, hasFeedback: true, feedbackConsumed: 'true' }] }))
 		.toEqual({ revisions: [{ revision: -1, hasFeedback: true, feedbackConsumed: false }] })
-	expect(consumedFeedbackSchema.parse({ found: true, feedback: 3 })).toEqual({ found: true, feedback: '' })
+	expect(consumedFeedbackSchema.parse({ found: true, feedback: 3 })).toEqual({ found: true, feedback: '', verdict: 'none' })
+	expect(consumedFeedbackSchema.parse({ found: true, feedback: 'x', verdict: 'changes' }).verdict).toBe('changes')
 	expect(consumedFeedbackSchema.safeParse({ found: false }).success).toBe(false)
 	expect(submitFeedbackSchema.parse({ type: 'submit' })).toEqual({ type: 'submit', feedback: '' })
 	expect(submitFeedbackSchema.safeParse({ type: 'other' }).success).toBe(false)

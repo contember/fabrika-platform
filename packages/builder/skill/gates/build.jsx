@@ -15,6 +15,6 @@
 	<Item id="blocked" label="Blocked issues need a decision" badge="triage" badgeVariant="warning">
 		For each blocked issue: relax the approach, split it, or accept the gap.
 	</Item>
-	<Choice id="build-ok" label="Accept this build?" required options={['Yes, ship', 'Re-try a blocked issue', 'Re-open an earlier phase']} />
 	<UserInput id="build-note" label="Notes for the blocked issues?" placeholder="write here…" multiline />
+	<Choice id="verdict" label="Verdict" required options={['Approve', 'Request changes']} />
 </Section>

@@ -55,13 +55,16 @@ ensure daemon → fabrika builder next → do packet work → gate → advance �
 4. Gate every packet that has a `Gate:` command.
    - Start from the matching `gates/*.jsx` template and replace every
      placeholder with real content from `.fabrika/`. Never open a gate with
-     placeholder or empty `<Item>` content. Keep the interactive controls.
+     placeholder or empty `<Item>` content. Keep the interactive controls,
+     and keep the closing `verdict` choice (`Approve` / `Request changes`)
+     exactly as written: the daemon records it as the gate's verdict.
    - For design, also write `.fabrika/architecture/design.md` with the `:root`
      token block required by the live preview.
    - Run `bunx fabrika builder gate open <name> --view <view.jsx>`, then
      `bunx fabrika builder gate wait [--gate <name>]`. Read the raw feedback from
-     stdout. Address requested changes and re-open the gate; advance only after
-     approval.
+     stdout. On `Request changes`, address the feedback and re-open the gate.
+     Gates are advisory: `advance` warns, but does not refuse, when the verdict
+     is not `Approve`. Advance over it only when the human says to move on.
 
 5. Run `bunx fabrika builder advance`. Fix any missing artifact or gate checklist item
    and retry. Use `--force` only when the human explicitly waives the gate.

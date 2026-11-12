@@ -24,4 +24,5 @@ export type {
 	PersistedState,
 	PlanResponse,
 	RevisionInfo,
+	SubmittedAnswer,
 } from '@fabrika/canvas-kernel/client'

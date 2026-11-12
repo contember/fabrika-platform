@@ -9,6 +9,6 @@
 	<Item id="flow-checkout" label="Checkout — /cart" badge="flow" badgeVariant="info">
 		Review items → provide details → confirm → see the result.
 	</Item>
-	<Choice id="flows-complete" label="Flows complete?" required options={['Yes, proceed', 'A flow is missing', 'Merge two flows']} />
 	<UserInput id="flows-note" label="Missing steps or edge cases?" placeholder="write here…" multiline />
+	<Choice id="verdict" label="Verdict" required options={['Approve', 'Request changes']} />
 </Section>

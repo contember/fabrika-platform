@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'os'
 import { dirname, join, resolve } from 'path'
 import { fileURLToPath } from 'url'
-import { derivePhase, offlineGateProbe } from '../src/derive'
+import { derivePhase, offlineGateProbe } from '../../shared/derive'
 import { type Fixture, makeFixture } from './helpers'
 
 const HERE = dirname(fileURLToPath(import.meta.url))

@@ -4,6 +4,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'fs'
 import { basename, dirname, extname, join } from 'path'
 import type { z } from 'zod'
 import { builderDaemonUrl, buildEventSchema, planInputSchema } from '../../shared'
+import { gateVerdict } from '../../shared/gate'
 import type { BuildEvent, BuildStream } from './build-stream'
 import { COMPILE_TEMP_DIR } from './paths'
 import { derivePhaseState, type GateOracle } from './phases'
@@ -33,15 +34,19 @@ export interface HandlerContext {
 
 function gateOracleFor(sm: SessionManager): GateOracle {
 	return {
-		getLatestUnconsumedFeedback: (id) => sm.getLatestUnconsumedFeedback(id),
-		hasGateRevision: (id, gateName) => {
+		gateReview: (id, gateName) => {
 			const session = sm.get(id)
-			if (!session) return false
+			if (!session) return { reviewed: false, verdict: 'none' }
 			for (let i = session.revisions.length - 1; i >= 0; i--) {
 				const r = session.revisions[i]!
-				if (r.label === gateName) return r.hasFeedback
+				if (r.label !== gateName) continue
+				// Only `advance` consumes feedback, so a consumed submission is a reviewed gate.
+				return {
+					reviewed: r.hasFeedback && r.feedbackConsumed,
+					verdict: r.hasFeedback ? gateVerdict(sm.getSubmittedResponses(id, r.revision)) : 'none',
+				}
 			}
-			return false
+			return { reviewed: false, verdict: 'none' }
 		},
 	}
 }
@@ -356,7 +361,8 @@ export function createHandlers(ctx: HandlerContext): Route[] {
 		if (!result) return jsonResponse({ found: false })
 		sessionManager.consumeFeedback(sessionId, result.revision)
 		broadcastRevisionUpdate(sessionId)
-		return jsonResponse({ found: true, revision: result.revision, feedback: result.feedback })
+		const verdict = gateVerdict(sessionManager.getSubmittedResponses(sessionId, result.revision))
+		return jsonResponse({ found: true, revision: result.revision, feedback: result.feedback, verdict })
 	}
 
 	function handleResponsesGet(_req: Request, _url: URL, match: URLPatternResult): Response {

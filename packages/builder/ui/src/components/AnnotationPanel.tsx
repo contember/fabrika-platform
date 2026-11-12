@@ -1,6 +1,6 @@
 import type { JSX } from 'react'
 import { useState } from 'react'
-import { AnnotationSidebar } from '../lib/kernel'
+import { AnnotationSidebar, type SubmittedAnswer } from '../lib/kernel'
 
 export function AnnotationPanel({
 	gateName,
@@ -11,7 +11,7 @@ export function AnnotationPanel({
 	gateName: string | null
 	hasGate: boolean
 	isCurrentGate: boolean
-	onSubmit: (feedback: string) => void
+	onSubmit: (feedback: string, answers: SubmittedAnswer[]) => void
 }): JSX.Element {
 	const [open, setOpen] = useState(true)
 

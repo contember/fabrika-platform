@@ -17,4 +17,5 @@
 	<Choice id="kind" label="Project shape?" required options={['Web app (recommended)', 'Mobile app', 'API only']} />
 	<Choice id="scale" label="Scale?" required options={['Prototype', 'Small SaaS', 'Consumer']} />
 	<UserInput id="missed" label="Anything missed or misread?" placeholder="write here…" multiline />
+	<Choice id="verdict" label="Verdict" required options={['Approve', 'Request changes']} />
 </Section>
