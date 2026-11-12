@@ -73,7 +73,7 @@ bunx agent-canvas exec \
 
 Secret resolution requires a daemon capability available to the CLI but not to canvas JavaScript. A new canvas revision, daemon shutdown, or session cleanup clears the value. The target command must not print its environment or credentials.
 
-The daemon answers only requests addressed to `localhost`, `127.0.0.1` or `[::1]` on its port. It refuses state-changing requests and WebSocket upgrades from any origin other than its own UI, requires the CLI capability on the routes only the CLI calls (push, feedback, secret resolution, review agent routes), and never serves its own temporary or data directory through the file routes.
+The daemon answers only requests addressed to `localhost`, `127.0.0.1` or `[::1]` on its port. It refuses state-changing requests and WebSocket upgrades from any origin other than its own UI, requires the CLI capability on the routes only the CLI calls (push, feedback, secret resolution, review agent routes), and never serves its own temporary or data directory through the file routes. The file routes serve a session's project root and, outside it, only the files its canvases name in `FilePreview path`, `Markdown file` or `ImageView src`.
 
 ### Review mode
 

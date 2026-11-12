@@ -1,4 +1,4 @@
-import type { SessionManager } from '@fabrika/canvas-kernel/server'
+import { canvasFileReferences, type SessionData, type SessionManager } from '@fabrika/canvas-kernel/server'
 import { jsonResponse, type Route } from '@fabrika/daemon-kit'
 import { realpathSync } from 'fs'
 import { readdir } from 'fs/promises'
@@ -39,11 +39,39 @@ function isInside(path: string, root: string): boolean {
 type SessionPathResolver = (sessionId: string, relPath: string) => { fullPath: string } | Response
 
 /**
- * Resolves a requested path against the session's project root. A relative path stays inside the root; an absolute
- * path may name any file the daemon owner can read, except one inside a denied root, symlinks resolved.
+ * The files outside the project root that the session's canvases name, in every revision, symlinks resolved. Revisions
+ * never change once written, so the set is rebuilt only when a push adds one.
+ */
+function createNamedFiles(sessionManager: SessionManager): (session: SessionData) => Set<string> {
+	const cache = new Map<string, { revisionCount: number; paths: Set<string> }>()
+	return (session) => {
+		const cached = cache.get(session.id)
+		if (cached?.revisionCount === session.revisions.length) return cached.paths
+		const paths = new Set<string>()
+		for (const revision of session.revisions) {
+			for (const { filename } of revision.canvasFiles) {
+				const jsx = sessionManager.readRevisionJsx(session.id, revision.revision, filename)
+				if (jsx === null) continue
+				for (const reference of canvasFileReferences(jsx)) {
+					const path = resolve(session.projectRoot, reference)
+					paths.add(path)
+					paths.add(realOrSelf(path))
+				}
+			}
+		}
+		cache.set(session.id, { revisionCount: session.revisions.length, paths })
+		return paths
+	}
+}
+
+/**
+ * Resolves a requested path against the session's project root. A relative path stays inside the root. A path outside
+ * the root is served only when one of the session's canvases names it as a file, so canvas JavaScript cannot read
+ * arbitrary files. Nothing inside a denied root is served, symlinks resolved.
  */
 function createSessionPathResolver(sessionManager: SessionManager, options: FileHandlerOptions): SessionPathResolver {
 	const deniedRoots = [...new Set(options.deniedRoots.flatMap((root) => [resolve(root), realOrSelf(resolve(root))]))]
+	const namedFiles = createNamedFiles(sessionManager)
 
 	return (sessionId, relPath) => {
 		const session = sessionManager.get(sessionId)
@@ -58,6 +86,9 @@ function createSessionPathResolver(sessionManager: SessionManager, options: File
 		const realPath = realOrSelf(fullPath)
 		if (deniedRoots.some((root) => isInside(fullPath, root) || isInside(realPath, root))) {
 			return jsonResponse({ error: 'Path is not served' }, 403)
+		}
+		if (!isInside(fullPath, resolve(session.projectRoot)) && !namedFiles(session).has(fullPath)) {
+			return jsonResponse({ error: 'Path outside the project root is not named by a canvas in this session' }, 403)
 		}
 
 		return { fullPath: realPath }

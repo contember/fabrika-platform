@@ -16,7 +16,8 @@ sends no `Origin` reaches them. Give the UI a per-daemon credential. Effort: M.
 request that changes state or upgrades to a WebSocket, and a CLI route without `X-Agent-Canvas-CLI-Token`. The file
 routes refuse the daemon's own `TEMP_DIR` and `DATA_DIR`. What is left open is every route the UI calls: a process of
 another OS user on the same machine can connect to the loopback port without an `Origin` and read
-`/api/file`/`/api/tree`/`/api/image` (absolute paths are served by design), list `/api/sessions` with their project
+`/api/file`/`/api/tree`/`/api/image` (inside a session's project root, plus the absolute paths its canvases name),
+list `/api/sessions` with their project
 roots, read session metadata and feedback, store or clear a `SecretInput` value, upload, share a revision, and open
 `/ws/session/:id`. It cannot resolve a secret or consume feedback any more; those need the CLI capability.
 

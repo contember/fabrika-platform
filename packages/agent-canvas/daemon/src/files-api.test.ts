@@ -14,7 +14,10 @@ afterEach(() => {
 	}
 })
 
-function setup() {
+/** `canvas` receives the directory outside the project root and returns the session's canvas JSX. */
+function setup(
+	canvas: (outsideRoot: string) => string = (outside) => `<FilePreview path="${outside}/external.ts" />\n<ImageView src="${outside}/image.svg" />`,
+) {
 	const directory = mkdtempSync(join(tmpdir(), 'agent-canvas-files-'))
 	directories.push(directory)
 	const projectRoot = join(directory, 'project')
@@ -31,7 +34,7 @@ function setup() {
 	writeFileSync(join(outsideRoot, 'external.ts'), 'export const external = true;')
 	writeFileSync(join(outsideRoot, 'image.svg'), '<svg xmlns="http://www.w3.org/2000/svg" />')
 	const manager = new SessionManager(join(directory, 'sessions'))
-	manager.upsert('files', new Map([['plan.jsx', '<Section />']]), projectRoot)
+	manager.upsert('files', new Map([['plan.jsx', canvas(outsideRoot)]]), projectRoot)
 	const routes = createFileHandlers(manager, { deniedRoots: [tempDir, dataDir] })
 
 	async function get(endpoint: string, path: string) {
@@ -43,10 +46,10 @@ function setup() {
 		return response
 	}
 
-	return { get, projectRoot, outsideRoot, tempDir, dataDir }
+	return { get, manager, projectRoot, outsideRoot, tempDir, dataDir }
 }
 
-test('serves relative paths and absolute paths inside and outside the project root', async () => {
+test('serves relative paths, absolute paths inside the project root, and absolute paths a canvas names', async () => {
 	const { get, projectRoot, outsideRoot } = setup()
 	for (const path of ['local.ts', join(projectRoot, 'local.ts'), join(outsideRoot, 'external.ts')]) {
 		const response = await get('file', path)
@@ -58,19 +61,28 @@ test('serves relative paths and absolute paths inside and outside the project ro
 	}
 })
 
-test('serves absolute image and directory paths outside the project root', async () => {
+test('serves an absolute image a canvas names outside the project root', async () => {
 	const { get, outsideRoot } = setup()
 	const image = await get('image', join(outsideRoot, 'image.svg'))
 	expect(image.status).toBe(200)
 	expect(image.headers.get('Content-Type')).toBe('image/svg+xml')
-	const tree = await get('tree', outsideRoot)
-	expect(tree.status).toBe(200)
-	expect(await tree.json()).toEqual({
-		entries: [
-			{ name: 'external.ts', type: 'file' },
-			{ name: 'image.svg', type: 'file' },
-		],
-	})
+})
+
+test('refuses a path outside the project root that no canvas names, and any directory outside it', async () => {
+	const { get, outsideRoot } = setup(() => '<Section />')
+	expect((await get('file', join(outsideRoot, 'external.ts'))).status).toBe(403)
+	expect((await get('image', join(outsideRoot, 'image.svg'))).status).toBe(403)
+	expect((await get('tree', outsideRoot)).status).toBe(403)
+	const named = setup()
+	expect((await named.get('tree', named.outsideRoot)).status).toBe(403)
+	expect((await named.get('file', join(named.outsideRoot, 'image.svg'))).status).toBe(200)
+	expect((await named.get('file', join(named.outsideRoot, 'other.ts'))).status).toBe(403)
+})
+
+test('keeps serving a file an earlier revision named', async () => {
+	const { get, manager, projectRoot, outsideRoot } = setup()
+	manager.upsert('files', new Map([['plan.jsx', '<Section />']]), projectRoot)
+	expect((await get('file', join(outsideRoot, 'external.ts'))).status).toBe(200)
 })
 
 test('rejects relative traversal into a sibling with the same root prefix', async () => {
@@ -80,8 +92,8 @@ test('rejects relative traversal into a sibling with the same root prefix', asyn
 	}
 })
 
-test('returns 404 for a missing absolute file', async () => {
-	const { get, outsideRoot } = setup()
+test('returns 404 for a missing absolute file a canvas names', async () => {
+	const { get, outsideRoot } = setup((outside) => `<FilePreview path="${outside}/missing.ts" />`)
 	expect((await get('file', join(outsideRoot, 'missing.ts'))).status).toBe(404)
 })
 

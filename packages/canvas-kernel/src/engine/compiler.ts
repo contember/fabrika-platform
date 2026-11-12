@@ -497,6 +497,30 @@ function resolveFilePreviews(jsx: string, projectRoot: string, assertReadable?: 
 	)
 }
 
+/** The kernel props that name a local file: what `/api/file` and `/api/image` are asked for when the canvas renders. */
+const FILE_REFERENCE_PROPS: ReadonlyArray<readonly [tag: string, prop: string]> = [
+	['FilePreview', 'path'],
+	['Markdown', 'file'],
+	['ImageView', 'src'],
+]
+
+/**
+ * The paths a canvas names as string literals in `FilePreview path`, `Markdown file` and `ImageView src`, as written.
+ * A path computed at run time is not found, so a host that serves files by this list serves such a path only when it
+ * would serve it anyway.
+ */
+export function canvasFileReferences(jsx: string): string[] {
+	const references = new Set<string>()
+	for (const [tag, prop] of FILE_REFERENCE_PROPS) {
+		const valuePattern = new RegExp(`(?:^|\\s)${prop}=(?:"([^"]+)"|'([^']+)'|\\{\\s*(?:"([^"]+)"|'([^']+)')\\s*\\})`)
+		for (const element of jsx.matchAll(new RegExp(`<${tag}\\b([^>]*?)\\/?>`, 'g'))) {
+			const path = element[1]?.match(valuePattern)?.slice(1).find((group) => group !== undefined)
+			if (path !== undefined) references.add(path)
+		}
+	}
+	return [...references]
+}
+
 /** @deprecated Use `compileJsx(jsx, { projectRoot, tempDir })`. */
 export async function compilePlan(jsx: string, projectRoot?: string): Promise<CompileResult> {
 	return compileJsx(jsx, { projectRoot })
