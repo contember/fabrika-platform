@@ -233,7 +233,27 @@ describe('gate interactive loop', () => {
 		expect(after.verdicts).toEqual({ intake: 'changes' })
 
 		const next = await runCli(['next', '--dir', repo], cliEnv)
-		expect(next.stdout).toContain('Review:  advanced without approval: intake (changes)')
+		expect(next.stdout).toContain('Review:  advanced over requested changes: intake')
+
+		rmSync(repo, { recursive: true, force: true })
+	})
+
+	test('a refused advance still prints the verdict warning for the feedback it consumed', async () => {
+		const sessionId = 'gate-loop-refused'
+		const repo = scratchDir('fabrika-refused-repo-')
+		mkdirSync(join(repo, '.fabrika', 'intent'), { recursive: true })
+		writeFileSync(join(repo, '.fabrika', 'config.json'), JSON.stringify({ profile: 'zerops-app', sessionId, createdAt: new Date().toISOString() }))
+
+		await openGate(sessionId, 'intake')
+		const browser = await openSocket(`${wsBase}/ws/session/${sessionId}`)
+		browser.send(JSON.stringify({ type: 'submit', feedback: 'Wrong scope.', responses: [{ id: 'verdict', value: 'Request changes' }] }))
+		await new Promise((r) => setTimeout(r, 100))
+		browser.close()
+
+		const advR = await runCli(['advance', '--dir', repo], { FABRIKA_SESSION_ID: sessionId })
+		expect(advR.code).toBe(1)
+		expect(advR.stderr).toContain('missing produce: .fabrika/intent/brief.md')
+		expect(advR.stderr).toContain('warning: gate "intake" was answered "Request changes"')
 
 		rmSync(repo, { recursive: true, force: true })
 	})

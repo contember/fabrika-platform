@@ -20,9 +20,10 @@ export function renderPacket(state: PhaseState, opts: RenderOpts = {}): string {
 	const completedSuffix = done ? `   (${done})` : ''
 	lines.push(`## Phase ${phase.number}/${PHASE_COUNT} - ${phase.title}${completedSuffix}`)
 
-	const overruled = state.completed.filter((id) => state.verdicts[id] !== undefined && state.verdicts[id] !== 'approve')
+	// Only an explicit "Request changes": sessions saved before verdicts existed read as `none` for every gate.
+	const overruled = state.completed.filter((id) => state.verdicts[id] === 'changes')
 	if (overruled.length > 0) {
-		lines.push(`Review:  advanced without approval: ${overruled.map((id) => `${id} (${state.verdicts[id]})`).join(', ')}`)
+		lines.push(`Review:  advanced over requested changes: ${overruled.join(', ')}`)
 	}
 	if (state.unverified.length > 0) {
 		lines.push(`Review:  not checked (daemon down), assumed reviewed: ${state.unverified.join(', ')} - run \`fabrika builder ensure-daemon\``)

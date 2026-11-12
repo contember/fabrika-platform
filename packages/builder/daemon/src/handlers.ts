@@ -40,7 +40,8 @@ function gateOracleFor(sm: SessionManager): GateOracle {
 			for (let i = session.revisions.length - 1; i >= 0; i--) {
 				const r = session.revisions[i]!
 				if (r.label !== gateName) continue
-				// Only `advance` consumes feedback, so a consumed submission is a reviewed gate.
+				// `advance` consumes feedback, and so does re-opening a gate over pending feedback (the 409 below);
+				// either way the person's answer was handed to the agent, which is what a reviewed gate means here.
 				return {
 					reviewed: r.hasFeedback && r.feedbackConsumed,
 					verdict: r.hasFeedback ? gateVerdict(sm.getSubmittedResponses(id, r.revision)) : 'none',

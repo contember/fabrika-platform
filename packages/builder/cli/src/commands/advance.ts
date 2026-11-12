@@ -64,13 +64,13 @@ export async function cmdAdvance(argv: string[]): Promise<number> {
 		}
 	}
 
+	if (verdictWarning) console.error(`[fabrika] warning: ${verdictWarning}`)
+
 	if (problems.length > 0) {
 		console.error(`[fabrika] cannot advance from phase ${phase.number}/${PHASE_COUNT} (${phase.id}):`)
 		for (const p of problems) console.error(`  - ${p}`)
 		return 1
 	}
-
-	if (verdictWarning) console.error(`[fabrika] warning: ${verdictWarning}`)
 
 	const idx = phaseIndex(phase.id)
 	const next = idx + 1 < PHASES.length ? PHASES[idx + 1] : null
