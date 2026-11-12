@@ -1,8 +1,8 @@
 import { useFeedback } from '#canvas/runtime'
 import { useEffect, useState } from 'react'
+import { ASSET_FIELD_ID_RE } from '../../src/assets'
 import { deleteLocalAsset, listLocalAssets, MODE, type StoredAsset, uploadLocalAsset } from '../clientApi'
 
-const FIELD_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 /** The daemon's own per-file limit; a canvas may set a lower one. */
 const DAEMON_MAX_BYTES = 25 * 1024 * 1024
 
@@ -28,8 +28,10 @@ export function FileDrop({ id, label, accept, maxBytes, required }: FileDropProp
 	const [busy, setBusy] = useState(!MODE.isShared)
 	const [error, setError] = useState<string | null>(null)
 	const [dragging, setDragging] = useState(false)
-	const validFieldId = FIELD_ID_RE.test(id)
+	const validFieldId = ASSET_FIELD_ID_RE.test(id)
 	const locallyAvailable = !MODE.isShared
+	// Only a field the user can fill can hold up the submit.
+	const enforced = required === true && locallyAvailable && validFieldId
 	const limit = Math.min(maxBytes ?? DAEMON_MAX_BYTES, DAEMON_MAX_BYTES)
 
 	useEffect(() => {
@@ -56,9 +58,10 @@ export function FileDrop({ id, label, accept, maxBytes, required }: FileDropProp
 	const feedback = files.length === 0
 		? ''
 		: `**${label}**\n${files.map((file) => `- \`${file.path}\` (${file.name}, ${formatSize(file.size)})`).join('\n')}\n`
-	useFeedback(`files:${id}`, feedback, { label, required: required && locallyAvailable })
+	useFeedback(`files:${id}`, feedback, { label, required: enforced })
 
 	const add = async (picked: readonly File[]) => {
+		if (busy || picked.length === 0) return
 		const tooLarge = picked.filter((file) => file.size > limit)
 		if (tooLarge.length > 0) {
 			setError(`${tooLarge.map((file) => file.name).join(', ')}: larger than ${formatSize(limit)}`)
@@ -96,7 +99,7 @@ export function FileDrop({ id, label, accept, maxBytes, required }: FileDropProp
 		<div data-md="filedrop" data-md-label={label} className="-mx-4 px-4 py-3 my-1 rounded-lg">
 			<div className="flex items-baseline gap-2 mb-2">
 				<label htmlFor={inputId} className="text-[13px] font-body font-medium text-text-primary">{label}</label>
-				{required && <span className="text-[10px] text-accent-red font-body">*</span>}
+				{enforced && <span className="text-[10px] text-accent-red font-body">*</span>}
 			</div>
 			{!validFieldId && <p className="text-[12px] text-accent-red font-body">Invalid field ID.</p>}
 			{!locallyAvailable && <p className="text-[12px] text-text-tertiary font-body">Files can be added only on the canvas author's machine.</p>}
@@ -106,7 +109,11 @@ export function FileDrop({ id, label, accept, maxBytes, required }: FileDropProp
 						event.preventDefault()
 						setDragging(true)
 					}}
-					onDragLeave={() => setDragging(false)}
+					onDragLeave={(event) => {
+						// Moving onto a child also fires dragleave on the zone.
+						if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return
+						setDragging(false)
+					}}
 					onDrop={(event) => {
 						event.preventDefault()
 						setDragging(false)
@@ -150,7 +157,7 @@ export function FileDrop({ id, label, accept, maxBytes, required }: FileDropProp
 				</ul>
 			)}
 			{error && <p role="alert" className="text-[12px] text-accent-red font-body mt-1">{error}</p>}
-			{required && locallyAvailable && files.length === 0 && <p className="text-[11px] text-accent-red font-body mt-1">This field is required.</p>}
+			{enforced && files.length === 0 && <p className="text-[11px] text-accent-red font-body mt-1">This field is required.</p>}
 		</div>
 	)
 }
