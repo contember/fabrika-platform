@@ -34,7 +34,7 @@ function corsHeaders(origin: string): Record<string, string> {
 	}
 }
 
-async function parseBody<T extends z.ZodTypeAny>(req: Request, schema: T): Promise<z.infer<T>> {
+export async function parseBody<T extends z.ZodTypeAny>(req: Request, schema: T): Promise<z.infer<T>> {
 	let body: unknown
 	try {
 		body = await req.json()

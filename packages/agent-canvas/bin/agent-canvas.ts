@@ -6,6 +6,7 @@ import { handleFetch } from './lib/commands/fetch.ts'
 import { handleInstall } from './lib/commands/install.ts'
 import { handleInstructions } from './lib/commands/instructions.ts'
 import { handlePush } from './lib/commands/push.ts'
+import { handleReply } from './lib/commands/reply.ts'
 import { handleReview } from './lib/commands/review.ts'
 import { handleWatch } from './lib/commands/watch.ts'
 import { VERSION } from './lib/config.ts'
@@ -18,7 +19,11 @@ Commands:
   agent-canvas instructions [topic]    Show usage instructions (for AI agents)
   agent-canvas push <directory>        Push canvases, open browser
   agent-canvas fetch [--session <id>]  Check for feedback (returns immediately)
-  agent-canvas watch [--session <id>]  Wait for user feedback (blocks until submitted)
+  agent-canvas watch [--session <id>]  Wait for user feedback or a thread reply (blocks until one arrives)
+  agent-canvas watch --follow          Keep watching; print every submit, thread reply, render error
+                                      and remote-feedback arrival as its own block
+  agent-canvas reply <annotation-id> "<text>" [--resolve]
+                                      Answer one submitted annotation in its thread
   agent-canvas review <command>        Comment on a running application (see: agent-canvas review --help)
   agent-canvas exec --secret ENV=id -- <command>
                                       Run a command with an in-memory secret
@@ -54,6 +59,8 @@ async function main() {
 			return handleFetch(rest)
 		case 'watch':
 			return handleWatch(rest)
+		case 'reply':
+			return handleReply(rest)
 		case 'review':
 			return handleReview(rest)
 		case 'exec':

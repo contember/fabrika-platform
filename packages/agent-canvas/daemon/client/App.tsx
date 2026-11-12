@@ -30,6 +30,7 @@ import {
 	RenderErrorContext,
 	RevisionContext,
 	type RevisionInfo,
+	type SubmittedAnnotation,
 	useAnnotations,
 } from '@fabrika/canvas-kernel/client'
 import { marked } from 'marked'
@@ -46,6 +47,7 @@ import {
 	setReviewerIdentity,
 	type SharedFeedbackPayload,
 	submitSharedFeedback,
+	threadStore,
 	WS_AVAILABLE,
 } from './clientApi'
 import { CompareView } from './CompareView'
@@ -377,6 +379,7 @@ function App() {
 			wsRef.current = ws
 			ws.onopen = () => {
 				setConnected(true)
+				threadStore?.load().catch((error: unknown) => console.warn(`[threads] ${errorMessage(error)}`))
 				for (const error of pendingRenderErrorsRef.current) {
 					ws.send(JSON.stringify({ type: 'render-error', error }))
 				}
@@ -424,6 +427,7 @@ function App() {
 							setRevisions(nextRevisions)
 						}
 					}
+					if (data.type === 'threads') threadStore?.receive(data.threads)
 					if (data.type === 'watcher-status') {
 						setAgentWatching(!!data.watching)
 					}
@@ -477,7 +481,7 @@ function App() {
 		}
 	}, [sessionId, selectedRevision])
 
-	const handleSubmit = useCallback(async (feedback: string) => {
+	const handleSubmit = useCallback(async (feedback: string, annotations: readonly SubmittedAnnotation[]) => {
 		if (isSharedMode) {
 			// Shared mode: POST feedback to the worker via the reviewer identity
 			// modal flow. If identity already cached, skip the modal.
@@ -492,7 +496,7 @@ function App() {
 		}
 
 		if (wsRef.current?.readyState === WebSocket.OPEN) {
-			wsRef.current.send(JSON.stringify({ type: 'submit', feedback }))
+			wsRef.current.send(JSON.stringify({ type: 'submit', feedback, annotations }))
 			// Server will broadcast revision-updated with hasFeedback: true
 			// which triggers isReadOnly via revisions state
 		}

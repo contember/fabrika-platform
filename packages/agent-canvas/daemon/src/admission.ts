@@ -17,6 +17,8 @@ const CLI_ROUTES: ReadonlyArray<{ method: string; pattern: URLPattern }> = [
 	{ method: 'POST', pattern: new URLPattern({ pathname: '/api/session/:id/plan' }) },
 	{ method: 'POST', pattern: new URLPattern({ pathname: '/api/session/:id/feedback/consume' }) },
 	{ method: 'POST', pattern: new URLPattern({ pathname: '/api/session/:id/secrets/resolve' }) },
+	{ method: 'POST', pattern: new URLPattern({ pathname: '/api/session/:id/threads/claim' }) },
+	{ method: 'POST', pattern: new URLPattern({ pathname: '/api/session/:id/threads/:thread/reply' }) },
 	{ method: 'GET', pattern: new URLPattern({ pathname: '/ws/wait/:id' }) },
 	{ method: 'GET', pattern: new URLPattern({ pathname: '/ws/review-wait/:project' }) },
 	{ method: 'POST', pattern: new URLPattern({ pathname: '/api/review/:project/claim' }) },

@@ -8,12 +8,14 @@ import { createApiHandlers } from './handlers/api'
 import { createAssetHandlers } from './handlers/assets'
 import { createFileHandlers } from './handlers/files'
 import { createStaticHandlers, serveErrorOptions, withDefaultCsp } from './handlers/static'
+import { createThreadHandlers } from './handlers/threads'
 import { createUploadHandlers } from './handlers/uploads'
 import { CLI_AUTH_FILE, DATA_DIR, PID_FILE, REVIEWS_DIR, SESSIONS_DIR, TEMP_DIR } from './paths'
 import { startRemoteFeedbackPoller } from './remote-feedback'
 import { ReviewProxies } from './review/proxy'
 import { createReviewServer, type ReviewSocketData } from './review/server'
 import { ReviewStore } from './review/store'
+import { CanvasThreadStore } from './threads'
 
 const PORT = parseInt(process.env.CANVAS_PORT || '19400', 10)
 const VERSION = JSON.parse(readFileSync(join(dirname(import.meta.dir), '..', 'package.json'), 'utf-8')).version as string
@@ -56,6 +58,11 @@ const routes = [
 	...createFileHandlers(sessionManager, { deniedRoots: [TEMP_DIR, DATA_DIR] }),
 	...createUploadHandlers(sessionManager),
 	...createAssetHandlers(sessionManager),
+	...createThreadHandlers({
+		store: new CanvasThreadStore(sessionManager),
+		broadcast: wsManager.broadcast,
+		notifyWaiters: wsManager.notifyWaiters,
+	}),
 	...createStaticHandlers(),
 ]
 
@@ -145,7 +152,16 @@ export const broadcastPlanUpdate = wsManager.broadcastPlanUpdate
 
 // Start polling for remote feedback from shared canvases.
 // No-ops if CANVAS_SHARE_ENDPOINT is not set.
-startRemoteFeedbackPoller(sessionManager, wsManager.broadcastRemoteFeedback, VERSION)
+startRemoteFeedbackPoller(sessionManager, (sessionId, revision, entries) => {
+	wsManager.broadcastRemoteFeedback(sessionId, revision, entries)
+	// Only that it arrived: what reviewers wrote reaches the agent when the user includes it in a submit.
+	wsManager.notifyWaiters(sessionId, {
+		type: 'remote-feedback-arrived',
+		revision,
+		count: entries.reduce((sum, entry) => sum + entry.annotations.length + (entry.generalNote?.trim() ? 1 : 0), 0),
+		reviewers: [...new Set(entries.map((entry) => entry.author.name))],
+	})
+}, VERSION)
 
 reviewProxies.restore()
 

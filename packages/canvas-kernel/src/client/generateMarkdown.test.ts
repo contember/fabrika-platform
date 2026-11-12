@@ -23,6 +23,23 @@ describe('generateMarkdown', () => {
 		expect(md).not.toContain('@1234,500,900,4000')
 	})
 
+	test('labels each annotation with its id only for a host whose agent answers them', () => {
+		const annotations = [annotation('selected wording', 'reword this')]
+		expect(generateMarkdown(annotations, '', undefined, undefined, undefined, { annotationIds: true }))
+			.toBe('## Canvas annotations\n\nAnnotation `ann-1`\n> selected wording\n\nreword this\n')
+		expect(generateMarkdown(annotations, '')).not.toContain('ann-1')
+	})
+
+	test("a remote reviewer's annotation carries no id, so the agent cannot open a thread on it", () => {
+		const remote: Annotation = { ...annotation('their wording', 'from a reviewer'), id: 'remote-1', source: 'remote' }
+		const md = generateMarkdown([annotation('selected wording', 'reword this'), remote], '', undefined, undefined, new Set(['remote-1']), {
+			annotationIds: true,
+		})
+		expect(md).toContain('Annotation `ann-1`')
+		expect(md).toContain('from a reviewer')
+		expect(md).not.toContain('remote-1')
+	})
+
 	test('every other annotation is still quoted exactly as it was', () => {
 		const md = generateMarkdown(
 			[annotation('[Item] Ship the beta', 'too early'), annotation('selected wording', 'reword this')],

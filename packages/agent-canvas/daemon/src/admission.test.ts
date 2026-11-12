@@ -70,6 +70,8 @@ describe('daemon admission', () => {
 			['POST', '/api/session/demo/plan'],
 			['POST', '/api/session/demo/feedback/consume'],
 			['POST', '/api/session/demo/secrets/resolve'],
+			['POST', '/api/session/demo/threads/claim'],
+			['POST', '/api/session/demo/threads/ann-1/reply'],
 			['GET', '/ws/wait/demo'],
 			['GET', '/ws/review-wait/app'],
 			['POST', '/api/review/app/claim'],
@@ -81,6 +83,13 @@ describe('daemon admission', () => {
 			expect(admit(path, { method, headers: { [CLI_TOKEN_HEADER]: 'wrong-capability' } })?.status).toBe(401)
 			expect(admit(path, { method, headers: { [CLI_TOKEN_HEADER]: TOKEN } })).toBeNull()
 		}
+	})
+
+	test("leaves the user's own thread routes to the browser", () => {
+		const headers = { Origin: `http://localhost:${PORT}`, 'Sec-Fetch-Site': 'same-origin' }
+		expect(admit('/api/session/demo/threads', { headers })).toBeNull()
+		expect(admit('/api/session/demo/threads/ann-1/comments', { method: 'POST', headers })).toBeNull()
+		expect(admit('/api/session/demo/threads/ann-1/resolved', { method: 'POST', headers })).toBeNull()
 	})
 
 	test('takes the capability from the query only on a WebSocket upgrade', () => {

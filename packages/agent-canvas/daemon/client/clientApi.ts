@@ -27,6 +27,7 @@ import { type StoredAsset, storedAssetSchema } from '../src/assets'
 import type { SharedResponse } from '../src/share-responses'
 import { type SessionMeta, sessionMetaSchema } from './apiSchemas'
 import { decryptString, ENCRYPTION_META, type EncryptionMeta, encryptString, importShareKey } from './shareCrypto'
+import { createThreadStore, type LocalThreadStore } from './threadStore'
 
 declare global {
 	interface Window {
@@ -362,6 +363,9 @@ export const WS_AVAILABLE: boolean = !MODE.isShared
 
 // --- Kernel host binding ----------------------------------------------------
 
+/** The session's threads; a shared canvas has none, its reviewers' feedback goes through the author. */
+export const threadStore: LocalThreadStore | null = MODE.isShared ? null : createThreadStore(MODE.sessionId)
+
 /**
  * What the kernel's annotation surface needs from this host. agent-canvas
  * serves canvases in two modes, so these cannot use the kernel's local-only
@@ -375,4 +379,5 @@ export const canvasHost: CanvasHost = {
 	fsAvailable: FS_AVAILABLE,
 	uploadUrl,
 	loadCanvasModule,
+	threads: threadStore,
 }

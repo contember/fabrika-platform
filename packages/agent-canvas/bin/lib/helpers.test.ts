@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { waitForFeedback } from './helpers'
+import { parseWaitFrame, waitForFeedback } from './helpers'
 
 class FakeSocket {
 	onopen: ((event: Event) => void) | null = null
@@ -31,6 +31,86 @@ describe('waitForFeedback', () => {
 		await expect(result).resolves.toBe('Done')
 		expect(sockets).toHaveLength(2)
 	})
+
+	test('a thread reply the socket announces is read through the probe', async () => {
+		let probes = 0
+		const result = waitForFeedback('session', {
+			createSocket: () => {
+				const socket = new FakeSocket()
+				queueMicrotask(() => {
+					socket.onopen?.(new Event('open'))
+					socket.onmessage?.(new MessageEvent('message', { data: JSON.stringify({ type: 'thread-queued' }) }))
+				})
+				return socket
+			},
+			// Empty on open; the announced reply is there when the frame asks for a recheck.
+			probe: async () => (++probes === 1 ? null : '## Thread replies\n'),
+			timeoutMs: 1_000,
+		})
+
+		await expect(result).resolves.toBe('## Thread replies\n')
+	})
+
+	test('a thread reply claimed while a submit settles the wait is still delivered', async () => {
+		let release = (_value: string | null) => {}
+		const result = waitForFeedback('session', {
+			createSocket: () => {
+				const socket = new FakeSocket()
+				queueMicrotask(() => {
+					socket.onopen?.(new Event('open'))
+					socket.onmessage?.(new MessageEvent('message', { data: JSON.stringify({ type: 'submit', feedback: 'Done' }) }))
+					release('## Thread replies\n')
+				})
+				return socket
+			},
+			probe: () => new Promise((resolve) => (release = resolve)),
+			timeoutMs: 1_000,
+		})
+
+		await expect(result).resolves.toBe('Done\n## Thread replies\n')
+	})
+
+	test('a thread reply claimed while the connection drops is delivered, not left for the timeout', async () => {
+		let release = (_value: string | null) => {}
+		const sockets: FakeSocket[] = []
+		const result = waitForFeedback('session', {
+			createSocket: () => {
+				const socket = new FakeSocket()
+				sockets.push(socket)
+				if (sockets.length === 1) {
+					queueMicrotask(() => {
+						socket.onopen?.(new Event('open'))
+						socket.onclose?.(new CloseEvent('close'))
+						release('## Thread replies\n')
+					})
+				}
+				return socket
+			},
+			probe: () => new Promise((resolve) => (release = resolve)),
+			timeoutMs: 1_000,
+			reconnectAttempts: 1,
+			reconnectDelayMs: 0,
+		})
+
+		await expect(result).resolves.toBe('## Thread replies\n')
+		expect(sockets).toHaveLength(1)
+	})
+
+	test('a probe that never answers does not hold the wait past its deadline', async () => {
+		const started = Date.now()
+		const result = waitForFeedback('session', {
+			createSocket: () => {
+				const socket = new FakeSocket()
+				queueMicrotask(() => socket.onopen?.(new Event('open')))
+				return socket
+			},
+			probe: () => new Promise(() => {}),
+			timeoutMs: 50,
+		})
+
+		await expect(result).rejects.toThrow('Timeout waiting for feedback.')
+		expect(Date.now() - started).toBeLessThan(4_000)
+	}, 5_000)
 
 	test('rejects when the connection keeps closing', async () => {
 		const result = waitForFeedback('session', {
@@ -79,5 +159,15 @@ describe('waitForFeedback', () => {
 			'Canvas render failed in architecture.jsx (revision 3):\nTable: required prop `headers` must be an array',
 		)
 		expect(sockets).toHaveLength(1)
+	})
+})
+
+describe('parseWaitFrame', () => {
+	test('reads the frames the CLI acts on and ignores the rest', () => {
+		expect(parseWaitFrame({ type: 'remote-feedback-arrived', revision: 2, count: 1, reviewers: ['Eve'] }))
+			.toEqual({ type: 'remote-feedback-arrived', revision: 2, count: 1, reviewers: ['Eve'] })
+		expect(parseWaitFrame({ type: 'thread-queued' })).toEqual({ type: 'thread-queued' })
+		expect(parseWaitFrame({ type: 'keepalive' })).toBeNull()
+		expect(parseWaitFrame({ type: 'render-error', error: { message: 'no revision' } })).toBeNull()
 	})
 })

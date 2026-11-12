@@ -39,6 +39,16 @@ export function canPruneResponses(
 	return canvasFiles.every((filename) => renderedCanvases.has(filename))
 }
 
+export interface MarkdownOptions {
+	/** Labels each local annotation with its id, for a host whose agent answers them one by one; remote ones have no thread. */
+	annotationIds?: boolean
+}
+
+/** The annotations a submit carries: local ones, and the remote ones the user included. */
+function includedAnnotations(annotations: Annotation[], includedRemoteIds?: Set<string>): Annotation[] {
+	return annotations.filter((a) => a.source !== 'remote' || (includedRemoteIds && includedRemoteIds.has(a.id)))
+}
+
 /**
  * Generate human-readable markdown feedback from annotations and responses.
  */
@@ -48,9 +58,12 @@ export function generateMarkdown(
 	responses?: Map<string, PlanResponse>,
 	feedbackEntries?: Map<string, FeedbackEntry>,
 	includedRemoteIds?: Set<string>,
+	options: MarkdownOptions = {},
 ): string {
 	const parts: string[] = []
-	const included = annotations.filter((a) => a.source !== 'remote' || (includedRemoteIds && includedRemoteIds.has(a.id)))
+	const included = includedAnnotations(annotations, includedRemoteIds)
+	const renderEntry = (ann: Annotation) =>
+		options.annotationIds && ann.source !== 'remote' ? `Annotation \`${ann.id}\`\n${renderAnnotation(ann)}` : renderAnnotation(ann)
 	const responseAnns = included.filter((a) => a.filePath === RESPONSE_ANNOTATION_PATH)
 	const canvasAnns = included.filter((a) => !a.filePath)
 	const fileAnns = included.filter((a) => a.filePath && a.filePath !== RESPONSE_ANNOTATION_PATH)
@@ -78,7 +91,7 @@ export function generateMarkdown(
 		parts.push('## Annotations on agent response')
 		parts.push('')
 		for (const ann of responseAnns) {
-			parts.push(renderAnnotation(ann))
+			parts.push(renderEntry(ann))
 		}
 	}
 
@@ -105,7 +118,7 @@ export function generateMarkdown(
 				parts.push('')
 			}
 			const grouped = groupByHierarchy(anns)
-			parts.push(renderHierarchyGroup(grouped))
+			parts.push(renderHierarchyGroup(grouped, renderEntry))
 		}
 	}
 
@@ -123,7 +136,7 @@ export function generateMarkdown(
 			parts.push(`### ${filePath}`)
 			parts.push('')
 			for (const ann of anns) {
-				parts.push(renderAnnotation(ann))
+				parts.push(renderEntry(ann))
 			}
 		}
 	}
@@ -241,16 +254,16 @@ function groupByHierarchy(annotations: Annotation[]): HierarchyNode {
 	return root
 }
 
-function renderHierarchyGroup(node: HierarchyNode, depth: number = 0): string {
+function renderHierarchyGroup(node: HierarchyNode, renderEntry: (ann: Annotation) => string, depth: number = 0): string {
 	const parts: string[] = []
 	for (const ann of node.annotations) {
-		parts.push(renderAnnotation(ann))
+		parts.push(renderEntry(ann))
 	}
 	for (const [, child] of node.children) {
 		const prefix = depth === 0 ? '###' : '####'
 		parts.push(`${prefix} ${child.label}`)
 		parts.push('')
-		parts.push(renderHierarchyGroup(child, depth + 1))
+		parts.push(renderHierarchyGroup(child, renderEntry, depth + 1))
 	}
 	return parts.join('\n')
 }
