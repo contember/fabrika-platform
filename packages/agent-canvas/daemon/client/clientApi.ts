@@ -159,6 +159,26 @@ export async function deleteLocalAsset(fieldId: string, assetId: string): Promis
 	if (!response.ok) throw await apiError(response)
 }
 
+const PROJECT_THEME_ELEMENT_ID = 'agent-canvas-project-theme'
+
+/**
+ * Applies the project's `.agent-canvas/theme.css`, as the daemon rebuilt it, after the base theme. A theme the daemon
+ * refuses leaves the base theme and a console warning that says why.
+ */
+export async function applyProjectTheme(): Promise<void> {
+	if (MODE.isShared) return
+	const response = await fetch(`/api/session/${encodeURIComponent(MODE.sessionId)}/theme.css`, { cache: 'no-store' })
+	const css = response.ok ? await response.text() : ''
+	if (!response.ok) console.warn(`Project theme not applied: ${(await secretApiError(response)).message}`)
+	let style = document.getElementById(PROJECT_THEME_ELEMENT_ID)
+	if (style === null) {
+		style = document.createElement('style')
+		style.id = PROJECT_THEME_ELEMENT_ID
+		document.head.append(style)
+	}
+	style.textContent = css
+}
+
 /** Return only readiness metadata. The secret value is never sent back to the browser. */
 export async function getLocalSecretStatus(fieldId: string): Promise<boolean> {
 	const response = await fetch(localSecretUrl(fieldId, 'status'), { cache: 'no-store' })

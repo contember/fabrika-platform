@@ -276,6 +276,12 @@ typed starting points for an agent. Theming is CSS variables with light and dark
 
 **Cost.** Theme: about 60 lines. Templates: documentation only. Slides: about 250 lines in the kernel.
 
+**As built (F5 PR).** `GET /api/session/:id/theme.css` parses the project's file and serves its own rebuild of the
+accepted declarations (`:root` and `[data-theme]` selectors, plain colour and font values, no `url()` or at-rules); a
+file that breaks a rule is refused whole (422) and the base theme stands. The local page applies it after the base
+theme on load and on each push; shared links do not. The slides template keeps every slide on the page, so
+annotations find their text; a `Slides` component is still deferred.
+
 ### F6 Watching: the agent is notified on change or comment
 
 Covered by F7, which is how F2, F3a and F3c reach the agent.

@@ -39,6 +39,7 @@ import { createRoot } from 'react-dom/client'
 import { answeredResponses, type SharedResponse } from '../src/share-responses'
 import { type RemoteFeedbackEntry, remoteFeedbackResponseSchema, type ShareEntry } from './apiSchemas'
 import {
+	applyProjectTheme,
 	canvasHost,
 	fetchMeta,
 	FS_AVAILABLE,
@@ -246,6 +247,13 @@ function App() {
 		const t = setTimeout(() => setToast(null), 4000)
 		return () => clearTimeout(t)
 	}, [toast])
+
+	// Re-read on each revision, so a theme the agent just edited shows with the push.
+	const latestRevision = Math.max(0, ...revisions.map((revision) => revision.revision))
+	useEffect(() => {
+		if (isSharedMode || !projectRoot) return
+		applyProjectTheme().catch((error: unknown) => console.warn('Project theme not applied:', error))
+	}, [isSharedMode, projectRoot, latestRevision])
 
 	// Dynamic document title
 	useEffect(() => {
