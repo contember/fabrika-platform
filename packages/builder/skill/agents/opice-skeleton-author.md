@@ -38,7 +38,8 @@ are invoked from inside a `fabrika builder next` task packet for the _skeletons_
 2. **Constrain the output to the fabrika contract:**
    - One skeleton per flow at `tests/browser/<slug>.test.ts` — **outside**
      `.fabrika/` (these are the acceptance artifact, not a `.fabrika/` layer).
-   - Metadata is **prescription**: `url` from the flow's surface URL, `seeds`
+   - Metadata is **prescription**: `url` from the flow's `route` or one of its
+     `leads_to` screens (a url on no flow's map is reported by `next`), `seeds`
      from the data the flow needs (named idempotent seeds per the stack),
      `roles` from the actor, `feature` = stable light id (opice `feature`-style).
    - Each flow step → a pending `step(name, { intent, hint })`. `intent` is the

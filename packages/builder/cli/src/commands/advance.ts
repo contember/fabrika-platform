@@ -5,6 +5,7 @@ import { PHASE_COUNT, phaseById, phaseIndex, PHASES } from '../../../shared/phas
 import { resolveContext } from '../context'
 import { consumeFeedback } from '../daemon-client'
 import { isDaemonRunning } from '../daemon-lifecycle'
+import { skeletonRouteWarnings } from '../flows'
 import { resolvePhaseState } from '../phase-state'
 
 export async function cmdAdvance(argv: string[]): Promise<number> {
@@ -67,6 +68,9 @@ export async function cmdAdvance(argv: string[]): Promise<number> {
 	}
 
 	if (verdictWarning) console.error(`[fabrika] warning: ${verdictWarning}`)
+	if (phaseIndex(phase.id) >= phaseIndex('skeletons')) {
+		for (const warning of skeletonRouteWarnings(ctx.repoRoot)) console.error(`[fabrika] warning: ${warning}`)
+	}
 
 	if (problems.length > 0) {
 		console.error(`[fabrika] cannot advance from phase ${phase.number}/${PHASE_COUNT} (${phase.id}):`)

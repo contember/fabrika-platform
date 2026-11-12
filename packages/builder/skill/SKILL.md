@@ -53,11 +53,14 @@ ensure daemon → fabrika builder next → do packet work → gate → advance �
      is unavailable, apply the role in the current session.
 
 4. Gate every packet that has a `Gate:` command.
-   - Start from the matching `gates/*.jsx` template and replace every
+   - For a template gate, start from the matching `gates/*.jsx` template and replace every
      placeholder with real content from `.fabrika/`. Never open a gate with
      placeholder or empty `<Item>` content. Keep the interactive controls,
      and keep the closing `verdict` choice (`Approve` / `Request changes`)
      exactly as written: the daemon records it as the gate's verdict.
+   - When the `Gate:` command starts with a `fabrika builder … review` command
+     (flows, build), run it as written: it generates the view from the files.
+     Fix the files, never the generated view.
    - Run `bunx fabrika builder gate open <name> --view <view.jsx>`, then
      `bunx fabrika builder gate wait [--gate <name>]`. Read the raw feedback from
      stdout. On `Request changes`, address the feedback and re-open the gate.

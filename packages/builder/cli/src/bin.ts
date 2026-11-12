@@ -3,6 +3,7 @@
 import { cmdAdvance } from './commands/advance'
 import { cmdBuild } from './commands/build'
 import { cmdEnsureDaemon } from './commands/ensure-daemon'
+import { cmdFlows } from './commands/flows'
 import { cmdGate } from './commands/gate'
 import { cmdInduce } from './commands/induce'
 import { cmdInit } from './commands/init'
@@ -32,6 +33,7 @@ Usage:
   fabrika builder gate open <name> --view <f.jsx>    Push a canvas gate and open the dashboard
   fabrika builder gate wait [--gate <n>] [--timeout] Wait for submitted gate feedback
   fabrika builder ensure-daemon                      Start the daemon if it is not running
+  fabrika builder flows review                       Write the flows gate view: the route map from the flow files
   fabrika builder induce [--force]                   Derive issues from opice skeleton metadata
   fabrika builder build [--issue <ID>] [--assisted]  Run the assisted per-issue build driver
   fabrika builder build done <ID> [--verify <cmd>]   Run the issue's check; record it as done only when green
@@ -83,6 +85,8 @@ async function dispatchBuilderCli(argv: readonly string[]): Promise<number> {
 			return cmdGate(rest)
 		case 'ensure-daemon':
 			return cmdEnsureDaemon(rest)
+		case 'flows':
+			return cmdFlows(rest)
 		case 'induce':
 			return cmdInduce(rest)
 		case 'build':

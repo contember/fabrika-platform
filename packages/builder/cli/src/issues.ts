@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'fs'
 import { basename, join } from 'path'
 import { BuilderCliError } from './errors'
+import { extractFrontMatter, list, scalar } from './frontmatter'
 
 export interface Issue {
 	id: string
@@ -51,41 +52,10 @@ export function isReady(issue: Issue, knownIds: Set<string>): boolean {
 	return issue.dependsOn.every((dep) => knownIds.has(dep))
 }
 
-interface FrontMatter {
-	body: Record<string, string>
-	rest: string
-}
-
-function extractFrontMatter(raw: string): FrontMatter {
-	const m = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/)
-	if (!m) return { body: {}, rest: raw }
-	const body: Record<string, string> = {}
-	for (const line of (m[1] ?? '').split(/\r?\n/)) {
-		const kv = line.match(/^\s*([A-Za-z0-9_-]+)\s*:\s*(.*)$/)
-		if (kv && kv[1]) body[kv[1]] = (kv[2] ?? '').trim()
-	}
-	return { body, rest: (m[2] ?? '').trim() }
-}
-
 // The name reaches a daemon URL; an issue that names an invalid one is refused, never read as ungated.
 function gateName(path: string, v: string | undefined): string | undefined {
 	const name = scalar(v)
 	if (!name) return undefined
 	if (!/^[a-z][a-z0-9-]*$/.test(name)) throw new BuilderCliError(`${path}: "${name}" is not a gate name (lowercase letters, digits and dashes).`)
 	return name
-}
-
-function scalar(v: string | undefined): string | undefined {
-	if (v === undefined) return undefined
-	return v.replace(/^["']|["']$/g, '')
-}
-
-function list(v: string | undefined): string[] {
-	if (!v) return []
-	const inner = v.replace(/^\[/, '').replace(/\]$/, '')
-	if (inner.trim() === '') return []
-	return inner
-		.split(',')
-		.map((s) => s.trim().replace(/^["']|["']$/g, ''))
-		.filter((s) => s.length > 0)
 }

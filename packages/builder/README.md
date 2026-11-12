@@ -70,6 +70,7 @@ fabrika builder advance [--force]
 fabrika builder gate open <name> --view <file.jsx>
 fabrika builder gate wait [--gate <revision>] [--timeout <ms>]
 fabrika builder ensure-daemon
+fabrika builder flows review
 fabrika builder induce [--force]
 fabrika builder build [--issue <ID>] [--assisted]
 fabrika builder build done <ID> [--verify "<command>"]
