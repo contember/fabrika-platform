@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from 'bun:test'
+import { symlinkSync } from 'fs'
 import { join } from 'path'
-import { type Approvals, readApprovals, writeApprovals } from '../../shared/approvals'
+import { type Approvals, InvalidApprovalsError, readApprovals, writeApprovals } from '../../shared/approvals'
 import { derivePhase, type GateProbe, isNonEmptyFile, matchGlob, phaseInputs, producesSatisfied } from '../../shared/derive'
 import { phaseById, type PhaseId } from '../../shared/phases'
 import { type Fixture, makeFixture } from './helpers'
@@ -205,4 +206,31 @@ test('without the approvals file, gates are judged by their reviews alone', () =
 	fx.write('.fabrika/intent/brief.md')
 	expect(derivePhase(fx.root, reviewed).current).toBe('vision')
 	expect(derivePhase(fx.root, unreviewed).current).toBe('intake')
+})
+
+test('an approvals file that does not parse, or of another version, is refused rather than read as empty', () => {
+	fx = makeFixture(true, { approvals: true })
+	fx.write('.fabrika/intent/brief.md')
+	for (const content of ['<<<<<<< HEAD\n{}', JSON.stringify({ version: 2, phases: {} })]) {
+		fx.write('.fabrika/approvals.json', content)
+		expect(() => derivePhase(fx!.root, reviewed)).toThrow(InvalidApprovalsError)
+	}
+})
+
+test('a record that does not parse reads as missing, and the others stay', () => {
+	fx = makeFixture(true, { approvals: true })
+	fx.write('.fabrika/intent/brief.md')
+	approve(fx.root, ['intake'])
+	const intake = readApprovals(fx.root)?.intake
+	fx.write('.fabrika/approvals.json', JSON.stringify({ version: 1, phases: { intake, vision: { at: 1 } } }))
+	expect(readApprovals(fx.root)).toEqual({ intake })
+})
+
+test('a dangling link under a hashed glob is not an input and does not break the derivation', () => {
+	fx = makeFixture(true, { approvals: true })
+	writeThroughSkeletons(fx)
+	symlinkSync(join(fx.root, 'missing.md'), join(fx.root, '.fabrika/architecture/flows/broken.flow.md'))
+	approve(fx.root, ['intake', 'vision', 'flows'])
+	expect(Object.keys(phaseInputs(fx.root, phaseById('flows')))).not.toContain('.fabrika/architecture/flows/broken.flow.md')
+	expect(derivePhase(fx.root, reviewed).current).toBe('tech')
 })

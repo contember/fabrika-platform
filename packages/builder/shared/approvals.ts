@@ -8,7 +8,7 @@ export const APPROVALS_FILE = 'approvals.json'
 
 const approvalSchema = z.object({
 	at: z.string(),
-	/** Repository-relative path → sha256 of its content, for every file the phase's `reads` matched. */
+	/** Repository-relative path → sha256 of its content, for every file the phase reads or produces (`phaseInputs`). */
 	inputs: z.record(z.string(), z.string()),
 	/** `advance --force`: the gate was waived, not reviewed. */
 	waived: z.boolean().optional(),
@@ -29,16 +29,26 @@ const approvalsSchema = z.object({
 })
 export type Approvals = Partial<Record<PhaseId, PhaseApproval>>
 
+/** A file that does not parse is refused, never read as empty: that would re-open every phase, and the next write would drop its records. */
+export class InvalidApprovalsError extends Error {
+	constructor() {
+		super(`Invalid .fabrika/${APPROVALS_FILE}; repair it, or delete it to judge the gates by their reviews alone, before continuing.`)
+	}
+}
+
 /** Null for a project initialized before approvals existed: its gates are judged by their reviews alone until `advance` writes the file. */
 export function readApprovals(repoRoot: string): Approvals | null {
 	const path = approvalsPath(repoRoot)
 	if (!existsSync(path)) return null
+	let raw: unknown
 	try {
-		const parsed = approvalsSchema.safeParse(JSON.parse(readFileSync(path, 'utf8')))
-		return parsed.success ? parsed.data : {}
+		raw = JSON.parse(readFileSync(path, 'utf8'))
 	} catch {
-		return {}
+		throw new InvalidApprovalsError()
 	}
+	const parsed = approvalsSchema.safeParse(raw)
+	if (!parsed.success) throw new InvalidApprovalsError()
+	return parsed.data
 }
 
 export function writeApprovals(repoRoot: string, approvals: Approvals): void {

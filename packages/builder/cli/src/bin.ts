@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 
+import { InvalidApprovalsError } from '../../shared/approvals'
 import { cmdAdvance } from './commands/advance'
 import { cmdBuild } from './commands/build'
 import { cmdEnsureDaemon } from './commands/ensure-daemon'
@@ -51,7 +52,7 @@ export async function runBuilderCli(argv: readonly string[]): Promise<number> {
 		return await dispatchBuilderCli(argv)
 	} catch (error) {
 		console.error(
-			error instanceof BuilderCliError
+			error instanceof BuilderCliError || error instanceof InvalidApprovalsError
 				? error.message
 				: 'Builder command failed. Check arguments, .fabrika/config.json, and the local dashboard; use --help for usage.',
 		)

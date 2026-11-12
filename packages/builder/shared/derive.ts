@@ -96,11 +96,20 @@ export function phaseInputs(repoRoot: string, phase: Phase): Record<string, stri
 	for (const glob of phase.producesEditedLater ? phase.reads : [...phase.reads, ...phase.produces]) {
 		if (isPhaseHint(glob)) continue
 		for (const abs of matchGlob(repoRoot, glob)) {
-			if (!statSync(abs).isFile()) continue
-			inputs[relative(repoRoot, abs)] = createHash('sha256').update(readFileSync(abs)).digest('hex')
+			const digest = fileDigest(abs)
+			if (digest !== null) inputs[relative(repoRoot, abs)] = digest
 		}
 	}
 	return inputs
+}
+
+/** Null for a directory, a dangling link or an unreadable file: none is an input, and one that becomes readable is a change. */
+function fileDigest(abs: string): string | null {
+	try {
+		return statSync(abs).isFile() ? createHash('sha256').update(readFileSync(abs)).digest('hex') : null
+	} catch {
+		return null
+	}
 }
 
 /** The inputs added, removed or changed since the approval, sorted. */

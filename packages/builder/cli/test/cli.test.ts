@@ -145,6 +145,14 @@ test('advance is reflected in subsequent next (derivation moves forward)', async
 	expect(nxt.stdout).toContain('vision ✓')
 })
 
+test('a corrupt approvals file stops next with the repair hint', async () => {
+	fx = makeFixture(true, { approvals: true })
+	fx.write('.fabrika/approvals.json', '{ not json')
+	const nxt = await run(['next', '--dir', fx.root])
+	expect(nxt.code).toBe(1)
+	expect(nxt.stderr).toContain('Invalid .fabrika/approvals.json; repair it, or delete it')
+})
+
 test('advance blocks with a checklist when produces are missing', async () => {
 	fx = makeFixture() // empty -> phase intake, brief.md missing
 	const { code, stderr } = await run(['advance', '--dir', fx.root, '--force'])
