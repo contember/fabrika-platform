@@ -96,6 +96,22 @@ describe('waitForFeedback', () => {
 		expect(sockets).toHaveLength(1)
 	})
 
+	test('a probe that never answers does not hold the wait past its deadline', async () => {
+		const started = Date.now()
+		const result = waitForFeedback('session', {
+			createSocket: () => {
+				const socket = new FakeSocket()
+				queueMicrotask(() => socket.onopen?.(new Event('open')))
+				return socket
+			},
+			probe: () => new Promise(() => {}),
+			timeoutMs: 50,
+		})
+
+		await expect(result).rejects.toThrow('Timeout waiting for feedback.')
+		expect(Date.now() - started).toBeLessThan(4_000)
+	}, 5_000)
+
 	test('rejects when the connection keeps closing', async () => {
 		const result = waitForFeedback('session', {
 			createSocket: () => {

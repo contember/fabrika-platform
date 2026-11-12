@@ -119,6 +119,8 @@ type ConnectionOutcome =
 	| { type: 'settled'; text: string; late: string[] }
 	| { type: 'failed'; error: unknown; late: string[] }
 
+const LATE_PROBE_GRACE_MS = 2_000
+
 /**
  * One connection's wait. A probe hands input over once, so one that resolves after its connection settled or
  * dropped is returned as `late` instead of being lost.
@@ -127,7 +129,11 @@ async function waitOnConnection(sessionId: string, options: FeedbackWaitOptions,
 	const { probe } = options
 	const reads: Promise<Input | null>[] = []
 	const late = async (settled: Input | null): Promise<string[]> => {
-		const inputs = await Promise.all(reads.map((read) => read.catch(() => null)))
+		// A probe is one local request; a daemon that never answers it must not hold the wait open.
+		let timer: ReturnType<typeof setTimeout> | undefined
+		const giveUp = new Promise<null>((resolve) => (timer = setTimeout(() => resolve(null), LATE_PROBE_GRACE_MS)))
+		const inputs = await Promise.all(reads.map((read) => Promise.race([read.catch(() => null), giveUp])))
+		clearTimeout(timer)
 		return inputs.flatMap((input) => (input === null || input === settled ? [] : [input.text]))
 	}
 	try {
