@@ -20,14 +20,22 @@ function setup() {
 	return { routes: createAssetHandlers(sessionManager), sessionManager }
 }
 
+/** A request as a browser sends it: a body carries its declared length unless it is a stream. */
 async function call(routes: Route[], method: string, path: string, body?: BodyInit, headers?: Record<string, string>): Promise<Response> {
 	const url = new URL(`http://localhost:19400${path}`)
-	const response = await dispatch(routes, new Request(url, { method, ...(body === undefined ? {} : { body }), ...(headers ? { headers } : {}) }), url)
+	let request = new Request(url, { method, ...(body === undefined ? {} : { body }), ...(headers ? { headers } : {}) })
+	if (body !== undefined && !(body instanceof ReadableStream) && !request.headers.has('Content-Length')) {
+		const bytes = await request.arrayBuffer()
+		const declared = new Headers(request.headers)
+		declared.set('Content-Length', String(bytes.byteLength))
+		request = new Request(url, { method, body: bytes, headers: declared })
+	}
+	const response = await dispatch(routes, request, url)
 	if (!response) throw new Error(`No route for ${method} ${path}`)
 	return response
 }
 
-function form(name: string, content: string | Uint8Array): FormData {
+function form(name: string, content: string | Uint8Array<ArrayBuffer>): FormData {
 	const body = new FormData()
 	body.append('file', new File([content], name))
 	return body
@@ -50,6 +58,7 @@ describe('file drop assets', () => {
 		expect(readFileSync(path, 'utf-8')).toBe('boot ok')
 		expect(path).toContain(join('intake', 'assets', 'logs'))
 		expect(statSync(path).mode & 0o777).toBe(0o600)
+		expect(statSync(dirname(path)).mode & 0o777).toBe(0o700)
 
 		const listed = await (await call(routes, 'GET', '/api/session/intake/assets/logs')).json()
 		expect(listed).toMatchObject({ files: [{ name: 'server.log', path, size: 7 }] })
@@ -88,10 +97,38 @@ describe('file drop assets', () => {
 		expect((await call(routes, 'POST', '/api/session/intake/assets/logs', form('big.bin', new Uint8Array(MAX_ASSET_BYTES + 1)))).status).toBe(413)
 
 		for (let i = 0; i < MAX_SESSION_ASSETS; i++) await call(routes, 'POST', '/api/session/intake/assets/logs', form(`${i}.txt`, 'x'))
-		expect((await call(routes, 'POST', '/api/session/intake/assets/logs', form('one-more.txt', 'x'))).status).toBe(413)
+		expect((await call(routes, 'POST', '/api/session/intake/assets/logs', form('one-more.txt', 'x'))).status).toBe(507)
 	})
 
-	test('files go with the session', async () => {
+	test('concurrent uploads cannot pass the session cap together', async () => {
+		const { routes } = setup()
+		for (let i = 0; i < MAX_SESSION_ASSETS - 1; i++) await call(routes, 'POST', '/api/session/intake/assets/logs', form(`${i}.txt`, 'x'))
+		const answers = await Promise.all(
+			Array.from({ length: 5 }, (_, i) => call(routes, 'POST', '/api/session/intake/assets/logs', form(`race-${i}.txt`, 'x'))),
+		)
+		expect(answers.map((answer) => answer.status).sort()).toEqual([200, 507, 507, 507, 507])
+	})
+
+	test('refuses a body without a declared length, which would be buffered before any limit applies', async () => {
+		const { routes } = setup()
+		const stream = new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(new TextEncoder().encode('x'))
+				controller.close()
+			},
+		})
+		expect((await call(routes, 'POST', '/api/session/intake/assets/logs', stream)).status).toBe(411)
+	})
+
+	test('lists files in upload order', async () => {
+		const { routes } = setup()
+		const names = ['c.txt', 'a.txt', 'b.txt']
+		for (const name of names) await call(routes, 'POST', '/api/session/intake/assets/logs', form(name, 'x'))
+		const listed = await (await call(routes, 'GET', '/api/session/intake/assets/logs')).json()
+		expect(listed).toMatchObject({ files: names.map((name) => ({ name })) })
+	})
+
+	test('files are kept until the session directory is removed', async () => {
 		const { routes, sessionManager } = setup()
 		const { path } = storedOf(await (await call(routes, 'POST', '/api/session/intake/assets/logs', form('a.txt', 'x'))).json())
 		sessionManager.remove('intake')

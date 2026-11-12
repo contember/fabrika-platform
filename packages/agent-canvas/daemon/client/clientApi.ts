@@ -23,6 +23,7 @@
 
 import type { CanvasHost } from '@fabrika/canvas-kernel/client'
 import { z } from 'zod'
+import { type StoredAsset, storedAssetSchema } from '../src/assets'
 import type { SharedResponse } from '../src/share-responses'
 import { type SessionMeta, sessionMetaSchema } from './apiSchemas'
 import { decryptString, ENCRYPTION_META, type EncryptionMeta, encryptString, importShareKey } from './shareCrypto'
@@ -129,9 +130,6 @@ async function apiError(response: Response): Promise<Error> {
 	return new Error(`Request failed with status ${response.status}`)
 }
 
-const storedAssetSchema = z.object({ id: z.string(), name: z.string(), path: z.string(), size: z.number() })
-export type StoredAsset = z.infer<typeof storedAssetSchema>
-
 function localAssetUrl(fieldId: string, assetId?: string): string {
 	if (MODE.isShared) throw new Error('File drops are available only on the local canvas daemon')
 	const base = `/api/session/${encodeURIComponent(MODE.sessionId)}/assets/${encodeURIComponent(fieldId)}`
@@ -139,6 +137,8 @@ function localAssetUrl(fieldId: string, assetId?: string): string {
 }
 
 /** The files the user dropped on one `FileDrop` field of this session. */
+export type { StoredAsset }
+
 export async function listLocalAssets(fieldId: string): Promise<StoredAsset[]> {
 	const response = await fetch(localAssetUrl(fieldId), { cache: 'no-store' })
 	if (!response.ok) throw await apiError(response)
