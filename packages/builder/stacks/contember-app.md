@@ -2,6 +2,7 @@
 id: contember-app
 title: "Contember (Postgres GraphQL CMS) + buzola/React admin SPA + bindx + Tailwind"
 goal: "From empty to a Contember backend (Postgres) with a typed schema + ACL, and a buzola/React admin SPA bound to it via bindx, green opice tests against the running SPA."
+support: unsupported
 decisions:
   - contember
   - postgres

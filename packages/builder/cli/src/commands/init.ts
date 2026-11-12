@@ -2,6 +2,7 @@ import { rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { parseArgs } from 'node:util'
 import { type BuilderPlatformStatus, parseBuilderOrigin } from '../../../shared'
+import { DEFAULT_PROFILE, resolveStackPointer, unsupportedProfileNote } from '../catalog'
 import { BASE_URL, SESSIONS_DIR } from '../config'
 import { ensureDaemon, openBrowser } from '../daemon-lifecycle'
 import { BuilderCliError } from '../errors'
@@ -47,7 +48,7 @@ export async function cmdInit(argv: string[]): Promise<number> {
 	const origin = values.url === undefined ? undefined : parseBuilderOrigin(values.url, 'control origin')
 	if (origin && values['no-daemon']) throw new BuilderCliError('--url cannot be combined with --no-daemon.')
 	const existing = readConfig(dir)
-	const profile = values.profile ?? existing?.profile ?? (origin ? 'zerops-app' : 'cf-lightweight')
+	const profile = values.profile ?? existing?.profile ?? DEFAULT_PROFILE
 	if (existing && (profile !== existing.profile || (values.session && values.session !== existing.sessionId))) {
 		throw new BuilderCliError('Existing project profile and session cannot be replaced by init.')
 	}
@@ -58,6 +59,7 @@ export async function cmdInit(argv: string[]): Promise<number> {
 		throw new BuilderCliError('Disconnect explicitly before changing installations.')
 	}
 	const result = scaffold(dir, { profile, sessionId: values.session })
+	if (resolveStackPointer(profile)?.support === 'unsupported') console.error(`[fabrika] warning: ${unsupportedProfileNote(profile)}`)
 	const support = injectAgentSupport(result.repoRoot, { hosts })
 
 	if (result.alreadyInitialized) {

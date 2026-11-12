@@ -2,9 +2,10 @@
 
 The guided application builder behind `fabrika builder …`. It owns the deterministic `.fabrika/`
 phase machine, its local daemon and dashboard, the installed agent skill, and the stack decision
-catalog. The public `@fabrika/cli` package only routes into this package. The builder supports
-Zerops installations only: it uses `@fabrika/provider-zerops` directly and refuses any other
-discovered provider (`daemon/src/platform-remote.ts`).
+catalog. The public `@fabrika/cli` package only routes into this package. The builder connects to and
+deploys through Zerops installations only: it uses `@fabrika/provider-zerops` directly and refuses any
+other discovered provider (`daemon/src/platform-remote.ts`). The `cf-app` preset builds for Cloudflare;
+its deployment runs outside the builder.
 
 ## Commands
 

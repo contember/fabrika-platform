@@ -74,6 +74,17 @@ test('tech packet emits an absolute Stack: pointer when a profile is given', () 
 	expect(packet).toContain('/decisions/')
 })
 
+test('tech packet warns on an unsupported preset and names the supported ones', () => {
+	fx = makeFixture()
+	landOnTech(fx)
+	const unsupported = renderPacket(derivePhase(fx.root), { profile: 'cf-lightweight' })
+	expect(unsupported).toContain('warning: the "cf-lightweight" preset is unsupported')
+	expect(unsupported).toContain('Supported presets: cf-app, zerops-app.')
+	const supported = renderPacket(derivePhase(fx.root), { profile: 'cf-app' })
+	expect(supported).toContain('Stack:   cf-app ->')
+	expect(supported).not.toContain('warning:')
+})
+
 test('tech packet omits the Stack: pointer when no profile is supplied', () => {
 	fx = makeFixture()
 	landOnTech(fx)

@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
+import type { StackPointer } from '../src/catalog'
 import { induceIssues, renderIssue } from '../src/induce'
 import { readSkeletons } from '../src/skeletons'
 
@@ -88,12 +89,13 @@ describe('issue induction', () => {
 	})
 
 	test('a resolved stack pointer is embedded in the foundation scaffold body', () => {
-		const stack = {
+		const stack: StackPointer = {
 			profile: 'cf-fat',
 			root: '/abs/fabrika',
 			stackFile: '/abs/fabrika/stacks/cf-fat.md',
 			stackFileExists: true,
 			decisionsDir: '/abs/fabrika/decisions',
+			support: 'unsupported',
 		}
 		const issues = induceIssues(
 			[{ file: 'tests/browser/x.test.ts', name: 'x', url: '/x', seeds: [], roles: [], invariants: [] }],
@@ -105,12 +107,13 @@ describe('issue induction', () => {
 	})
 
 	test('an unknown stack (file missing) embeds no pointer', () => {
-		const stack = {
+		const stack: StackPointer = {
 			profile: 'nope',
 			root: '/abs/fabrika',
 			stackFile: '/abs/fabrika/stacks/nope.md',
 			stackFileExists: false,
 			decisionsDir: '/abs/fabrika/decisions',
+			support: null,
 		}
 		const issues = induceIssues(
 			[{ file: 'tests/browser/x.test.ts', name: 'x', url: '/x', seeds: [], roles: [], invariants: [] }],

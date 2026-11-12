@@ -2,6 +2,7 @@
 id: content-site
 title: "pletivo (Bun-native SSG) + Preact islands + Tailwind — static content site"
 goal: "From empty to a statically-generated content site (file-based pages + content collections) with Preact islands and Tailwind, served locally, green opice smoke test."
+support: unsupported
 decisions:
   - pletivo
   - preact

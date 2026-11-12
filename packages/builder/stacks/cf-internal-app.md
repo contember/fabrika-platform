@@ -2,6 +2,7 @@
 id: cf-internal-app
 title: "Full internal Cloudflare app — Buzola SPA + Fabrika IAM + Fabrika Control"
 goal: "From empty to a full internal app: Buzola SPA + Worker API, D1/R2/Queue/Cron/Workers AI, local Vite+lopata, native Fabrika IAM login, Fabrika-managed production deploy, and green opice tests."
+support: unsupported
 decisions:
   - cloudflare
   - lopata

@@ -2,7 +2,7 @@ import { join } from 'node:path'
 import type { BuilderProjectConnection } from '../../shared'
 import type { PhaseState } from '../../shared/derive'
 import { PHASE_COUNT, phaseById, type PhaseId, phaseIndex } from '../../shared/phases'
-import { resolveStackPointer, type StackPointer } from './catalog'
+import { resolveStackPointer, type StackPointer, unsupportedProfileNote } from './catalog'
 
 export interface RenderOpts {
 	profile?: string
@@ -70,6 +70,7 @@ function stackPointerLines(profile: string): string[] {
 	return [
 		`Stack:   ${profile} -> ${p.stackFile}`,
 		`         read it, then resolve its \`decisions:\` ids under ${p.decisionsDir}/ (curated reference + live \`sources\` — verify against current APIs)`,
+		...(p.support === 'unsupported' ? [`         warning: ${unsupportedProfileNote(profile)}`] : []),
 	]
 }
 

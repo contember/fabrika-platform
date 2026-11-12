@@ -26,8 +26,8 @@ are invoked from inside a `fabrika builder next` task packet for the _skeletons_
 - The fabrika project root (the dir containing `.fabrika/`).
 - The inputs the packet listed under `Read:` —
   `.fabrika/architecture/flows/*.flow.md` and `.fabrika/architecture/spec/*.md`.
-- The active stack preset (default `cf-lightweight`), which fixes how `seeds`/`roles`
-  map (named idempotent D1 seeds; self-provisioning for signup flows).
+- The active stack preset (default `zerops-app`), which fixes how `seeds`/`roles`
+  map (its seed-strategy decision; self-provisioning for signup flows).
 
 ## What to do
 

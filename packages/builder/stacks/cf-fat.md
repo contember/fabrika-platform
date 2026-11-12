@@ -2,6 +2,7 @@
 id: cf-fat
 title: "React Router v7 SSR + vite + @cloudflare/vite-plugin + full CF bindings — fat"
 goal: "From empty to a Worker serving an SSR React app (workerd dev) with D1/KV/R2/Queue/AE/Cron wired (AE behind CountStore), auth in KV, and a green opice smoke test — no CF account needed for build/test."
+support: unsupported
 decisions:
   - cloudflare
   - cloudflare-vite-plugin

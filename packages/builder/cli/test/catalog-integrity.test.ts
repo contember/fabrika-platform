@@ -79,6 +79,7 @@ test('every stack preset is requires-closed, conflict-free and slot-safe', () =>
 		const yaml = frontmatter(join(stackDir, filename))
 		const stackId = scalar(yaml, 'id')
 		expect(stackId).toBe(basename(filename, '.md'))
+		expect(['supported', 'unsupported'], `${stackId}: support`).toContain(scalar(yaml, 'support'))
 		const selected = list(yaml, 'decisions')
 		const selectedSet = new Set(selected)
 		expect(selectedSet.size).toBe(selected.length)

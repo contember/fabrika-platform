@@ -35,6 +35,21 @@ test('init scaffolds layout and emits an ok JSON summary', async () => {
 	expect(existsSync(join(fx.root, '.fabrika', 'config.json'))).toBe(true)
 	expect(existsSync(join(fx.root, '.fabrika', 'intent'))).toBe(true)
 	expect(summary.agents).toEqual(['claude', 'codex'])
+	expect(summary.profile).toBe('zerops-app')
+})
+
+test('init warns when it selects an unsupported preset', async () => {
+	fx = makeFixture(false)
+	const unsupported = await run(['init', fx.root, '--profile', 'cf-fat', '--no-daemon', '--no-open'])
+	expect(unsupported.code).toBe(0)
+	expect(JSON.parse(unsupported.stdout.trim()).profile).toBe('cf-fat')
+	expect(unsupported.stderr).toContain('warning: the "cf-fat" preset is unsupported')
+	fx.cleanup()
+
+	fx = makeFixture(false)
+	const supported = await run(['init', fx.root, '--profile', 'cf-app', '--no-daemon', '--no-open'])
+	expect(supported.code).toBe(0)
+	expect(supported.stderr).not.toContain('warning:')
 })
 
 test('a project initialized in Codex can resume in Claude without losing phase state', async () => {

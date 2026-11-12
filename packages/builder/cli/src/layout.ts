@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { type BuilderProjectConfig, parseBuilderProjectConfig } from '../../shared'
+import { DEFAULT_PROFILE } from './catalog'
 import { FABRIKA_DIRNAME, hashRepoPath } from './config'
 import { BuilderCliError } from './errors'
 
@@ -55,7 +56,7 @@ export function scaffold(
 ): InitResult {
 	const root = resolve(repoRoot)
 	const fdir = fabrikaDir(root)
-	const profile = opts.profile ?? 'cf-lightweight'
+	const profile = opts.profile ?? DEFAULT_PROFILE
 	const createdDirs: string[] = []
 
 	const alreadyInitialized = isInitialized(root)
