@@ -1,16 +1,20 @@
-import { join } from 'path'
+import { mkdirSync, writeFileSync } from 'fs'
+import { dirname, join } from 'path'
 import { parseArgs } from 'util'
+import { BUILD_REVIEW_PATH, describeEvidence, renderBuildReview } from '../build-review'
 import { type BuildPlan, planBuild, readBoard, record } from '../build-status'
 import { resolveStackPointer, unsupportedProfileNote } from '../catalog'
 import { resolveContext } from '../context'
 import { postBuildEvent } from '../daemon-client'
 import { type Issue, readIssues } from '../issues'
+import { describeVerification, runVerification, type Verification } from '../verify'
 
 export async function cmdBuild(argv: string[]): Promise<number> {
 	const { values, positionals } = parseArgs({
 		args: argv,
 		options: {
 			reason: { type: 'string' },
+			verify: { type: 'string' },
 			issue: { type: 'string' },
 			dir: { type: 'string' },
 			session: { type: 'string' },
@@ -43,14 +47,42 @@ export async function cmdBuild(argv: string[]): Promise<number> {
 			return 0
 
 		case 'done': {
-			if (!idArg || !byId(idArg)) {
+			const issue = idArg ? byId(idArg) : null
+			if (!issue) {
 				console.error(`[fabrika] build done <ISSUE-ID> — unknown or missing issue id.`)
 				return 1
 			}
-			record(ctx.fabrikaDir, idArg, 'done', undefined, new Date().toISOString())
-			await postBuildEvent({ issue: idArg, status: 'passed', message: 'issue green (bun test passed)' })
-			console.log(`[fabrika] ✓ ${idArg} marked done.`)
+			const verification: Verification | null = values.verify
+				? { kind: 'command', command: values.verify }
+				: issue.verify.length > 0
+				? { kind: 'files', files: issue.verify }
+				: null
+			if (!verification) {
+				console.error(
+					`[fabrika] ${issue.id} names no acceptance file. Pass the check that proves it: `
+						+ `fabrika builder build done ${issue.id} --verify "<command>"`,
+				)
+				return 1
+			}
+			console.log(`[fabrika] ${issue.id}: running ${describeVerification(verification)}`)
+			const evidence = await runVerification(ctx.repoRoot, verification)
+			if (evidence.exitCode !== 0) {
+				await postBuildEvent({ issue: issue.id, status: 'failed', message: `check failed: ${describeEvidence(evidence)}` })
+				console.error(`[fabrika] ✗ ${issue.id} not marked done: \`${evidence.command}\` exited ${evidence.exitCode}.`)
+				return 1
+			}
+			record(ctx.fabrikaDir, issue.id, 'done', undefined, evidence.at, evidence)
+			await postBuildEvent({ issue: issue.id, status: 'passed', message: `check passed: ${describeEvidence(evidence)}` })
+			console.log(`[fabrika] ✓ ${issue.id} marked done (${describeEvidence(evidence)}).`)
 			return await reportProgress(issues, ctx.fabrikaDir)
+		}
+
+		case 'review': {
+			const path = join(ctx.repoRoot, BUILD_REVIEW_PATH)
+			mkdirSync(dirname(path), { recursive: true })
+			writeFileSync(path, renderBuildReview(issues, readBoard(ctx.fabrikaDir), new Date()))
+			console.log(path)
+			return 0
 		}
 
 		case 'block': {
@@ -189,8 +221,9 @@ function renderOrchestrationBrief(plan: BuildPlan, repoRoot: string, profile: st
 		...stackBriefLines(profile),
 		`Scaffold:    NO templates — read the stack preset + its decisions + the live sources`,
 		`             they point to, and scaffold from current APIs (your memory is likely stale).`,
-		`Record:      fabrika builder build done <ID>   |   fabrika builder build block <ID> --reason "…"`,
-		`             (both write status.json + stream a BuildEvent to the dashboard)`,
+		`Record:      fabrika builder build done <ID> [--verify "<command>"]   |   fabrika builder build block <ID> --reason "…"`,
+		`             (done RUNS the issue's check and refuses on red; both write status.json + stream a BuildEvent)`,
+		`Review:      fabrika builder build review && fabrika builder gate open build --view ${BUILD_REVIEW_PATH}`,
 		`Detail:      fabrika builder build --issue <ID>   (re-emit one issue's full packet)`,
 	].join('\n') + '\n'
 }
@@ -208,10 +241,14 @@ function renderBuildPacket(issue: Issue, repoRoot: string, profile: string): str
 		if (sp.support === 'unsupported') lines.push(`           warning: ${unsupportedProfileNote(profile)}`)
 	}
 	lines.push(`Pipeline:  implement -> opice-author (selectors vs running app) -> bun test (steps + invariants)`)
-	lines.push(`Done when: green \`bun test\` for the satisfied scenarios/invariants.`)
+	lines.push(
+		issue.verify.length > 0
+			? `Check:     bun test ${issue.verify.join(' ')}   (build done runs it)`
+			: `Check:     none recorded — pass the command that proves this issue: build done ${issue.id} --verify "<command>"`,
+	)
 	lines.push(`Repo:      ${repoRoot}`)
 	lines.push(``)
-	lines.push(`After green:  fabrika builder build done ${issue.id}    (records it + emits the next packet)`)
+	lines.push(`After green:  fabrika builder build done ${issue.id}    (runs the check, records it, emits the next packet)`)
 	lines.push(`If stuck:     fabrika builder build block ${issue.id} --reason "…"   (escalate, continue)`)
 	return lines.join('\n') + '\n'
 }

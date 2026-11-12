@@ -10,7 +10,7 @@ const GATES_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '../../skill/
 test('every gate view ends with the verdict question the daemon reads', () => {
 	const verdict = `<Choice id="${GATE_VERDICT_ID}" label="Verdict" required options={['${GATE_APPROVE}', '${GATE_CHANGES}']} />`
 	const views = readdirSync(GATES_DIR).filter((name) => name.endsWith('.jsx'))
-	for (const phase of PHASES.filter((p) => p.gate)) expect(views).toContain(phase.gateView ?? `${phase.id}.jsx`)
+	for (const phase of PHASES.filter((p) => p.gate && !p.gateViewCommand)) expect(views).toContain(phase.gateView ?? `${phase.id}.jsx`)
 	for (const view of views) {
 		const source = readFileSync(join(GATES_DIR, view), 'utf-8')
 		expect(source, view).toContain(verdict)

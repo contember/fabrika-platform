@@ -4,6 +4,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import type { StackPointer } from '../src/catalog'
 import { induceIssues, renderIssue } from '../src/induce'
+import { parseIssue } from '../src/issues'
 import { readSkeletons } from '../src/skeletons'
 
 function fixture(files: Record<string, string>): string {
@@ -63,11 +64,13 @@ describe('issue induction', () => {
 		const scaffold = issues.find((i) => i.id === 'ISSUE-001')!
 		expect(scaffold.dependsOn).toEqual([])
 		expect(scaffold.kind).toBe('foundation')
+		expect(scaffold.verify).toEqual([])
 
 		const checkout = issues.find((i) => i.satisfies.includes('F-CHK-02'))!
 		expect(checkout.kind).toBe('feature')
 		expect(checkout.dependsOn).toEqual(['ISSUE-001', 'ISSUE-002', 'ISSUE-003'])
 		expect(checkout.satisfies).toContain('card PAN is never rendered')
+		expect(checkout.verify).toEqual(['tests/browser/checkout.test.ts'])
 
 		const browse = issues.find((i) => i.satisfies.includes('browses menu'))!
 		expect(browse.dependsOn).toEqual(['ISSUE-001', 'ISSUE-002'])
@@ -82,6 +85,11 @@ describe('issue induction', () => {
 		const md = renderIssue(issues.find((i) => i.kind === 'feature')!)
 		expect(md).toContain('satisfies: ["x", "inv-a"]')
 		expect(md).toContain('depends_on: ["ISSUE-001"]')
+		expect(md).toContain('verify: ["tests/browser/x.test.ts"]')
+		const dir = mkdtempSync(join(tmpdir(), 'fabrika-issue-'))
+		writeFileSync(join(dir, 'ISSUE-101.md'), md)
+		expect(parseIssue(join(dir, 'ISSUE-101.md')).verify).toEqual(['tests/browser/x.test.ts'])
+		rmSync(dir, { recursive: true, force: true })
 	})
 
 	test('no skeletons → no issues', () => {

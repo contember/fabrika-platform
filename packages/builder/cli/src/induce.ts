@@ -7,6 +7,7 @@ export interface InducedIssue {
 	satisfies: string[]
 	dependsOn: string[]
 	touches: string[]
+	verify: string[]
 	body: string
 	kind: 'foundation' | 'feature'
 }
@@ -42,6 +43,7 @@ export function induceIssues(skeletons: Skeleton[], opts: InduceOpts = {}): Indu
 		satisfies: [],
 		dependsOn: [],
 		touches: ['app scaffold', 'routing', ...allUrls.map((u) => `route: ${u}`)],
+		verify: [],
 		body: [
 			...stackRef,
 			'Foundation. Scaffold the running app per the active stack preset — read its',
@@ -63,6 +65,7 @@ export function induceIssues(skeletons: Skeleton[], opts: InduceOpts = {}): Indu
 			satisfies: [],
 			dependsOn: [FOUNDATION_SCAFFOLD],
 			touches: ['schema/migrations', ...allSeeds.map((s) => `seed: ${s}`)],
+			verify: [],
 			body: [
 				'Foundation. Define the schema (idempotent migrations) and one named',
 				'idempotent seed per `seeds:` value, keyed on stable ids, in the form the',
@@ -82,6 +85,7 @@ export function induceIssues(skeletons: Skeleton[], opts: InduceOpts = {}): Indu
 			satisfies: [],
 			dependsOn: [FOUNDATION_SCAFFOLD],
 			touches: ['auth', 'identities'],
+			verify: [],
 			body: [
 				'Foundation. Provide auth for every acting identity in the skeletons.',
 				'',
@@ -106,6 +110,7 @@ export function induceIssues(skeletons: Skeleton[], opts: InduceOpts = {}): Indu
 			satisfies: uniq(satisfies),
 			dependsOn: deps,
 			touches: uniq([s.url ? `route: ${s.url}` : 'feature route/UI', ...s.seeds.map((sd) => `seed: ${sd}`)]),
+			verify: [relTest(s.file)],
 			body: [
 				`Feature slice satisfying the scenario **${s.name}**` + (s.feature ? ` (\`${s.feature}\`)` : '') + '.',
 				'',
@@ -133,6 +138,7 @@ export function renderIssue(issue: InducedIssue): string {
 		`satisfies: [${issue.satisfies.map(q).join(', ')}]`,
 		`depends_on: [${issue.dependsOn.map(q).join(', ')}]`,
 		`touches: [${issue.touches.map(q).join(', ')}]`,
+		`verify: [${issue.verify.map(q).join(', ')}]`,
 		'---',
 	].join('\n')
 	return `${fm}\n\n# ${issue.id} — ${issue.goal}\n\n${issue.body}\n`

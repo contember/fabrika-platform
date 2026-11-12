@@ -136,12 +136,19 @@ AND streams a `BuildEvent` to the daemon (the dashboard build pane the user
 watches):
 
 ```
-fabrika builder build done <ISSUE-ID>                 # records green + emits the next
-fabrika builder build block <ISSUE-ID> --reason "…"   # escalate; continue to independents
+fabrika builder build done <ISSUE-ID> [--verify "<command>"]   # runs the check, records it, emits the next
+fabrika builder build block <ISSUE-ID> --reason "…"            # escalate; continue to independents
 ```
 
-- Mark `done` **only** after a real green `bun test` + the invariant check (§5).
-  The CLI trusts your `done`; do not lie to it.
+- `done` **runs the issue's check itself** in the integrated tree and refuses
+  on red: the issue's `verify` files under `bun test`, or the `--verify`
+  command you name for an issue without one (the foundation issues: the
+  command that proves the app boots and its smoke test passes). It records
+  the command, exit code, duration and commit in `status.json`. Start the app
+  first when the check drives a browser. Never put a secret in `--verify`; the
+  command is recorded and shown on the dashboard.
+- Call `done` only after the invariant check (§5) as well: a green run of a
+  hollow invariant is still not done.
 - On a genuinely stuck issue: `block` it with a precise reason, **keep going** on
   independent issues, and collect all blocked issues for the final review. Don't
   let one blocked issue stall the DAG.
@@ -155,8 +162,11 @@ done and the rest is blocked):
 
 - run the **full** `bun test` once more in the integrated tree — all scenarios +
   invariants green together, not just per-worktree,
-- present a **final review**: issues green, issues blocked (with reasons +
-  what's needed to unblock), and any invariant you could not satisfy honestly.
+- generate the build gate's view from the recorded checks and open it:
+  `fabrika builder build review && fabrika builder gate open build --view .fabrika/build/review.jsx`.
+  Do not hand-write it. Add to the conversation what the view cannot show:
+  what is needed to unblock each blocked issue, and any invariant you could
+  not satisfy honestly.
 
 ## Rules
 

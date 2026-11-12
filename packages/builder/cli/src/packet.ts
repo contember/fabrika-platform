@@ -42,7 +42,8 @@ export function renderPacket(state: PhaseState, opts: RenderOpts = {}): string {
 
 	if (phase.gate) {
 		const view = phase.gateView ?? `${phase.id}.jsx`
-		lines.push(`Gate:    fabrika builder gate open ${phase.id} --view ${view} && fabrika builder gate wait`)
+		const write = phase.gateViewCommand ? `${phase.gateViewCommand} && ` : ''
+		lines.push(`Gate:    ${write}fabrika builder gate open ${phase.id} --view ${view} && fabrika builder gate wait`)
 	} else {
 		lines.push(`Gate:    (none - deterministic compile step; review optional)`)
 	}

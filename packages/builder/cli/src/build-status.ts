@@ -5,17 +5,50 @@ import type { Issue } from './issues'
 
 export type IssueStatus = 'done' | 'blocked'
 
+/** The check the builder itself ran before it recorded an issue as done. */
+export interface BuildEvidence {
+	command: string
+	exitCode: number
+	durationMs: number
+	at: string
+	/** HEAD of the repository when the check ran; null outside git. */
+	commit: string | null
+	/** Uncommitted changes outside `.fabrika/` were present, so the commit alone does not reproduce the run. */
+	dirty: boolean
+}
+
 export interface BuildRecord {
 	status: IssueStatus
 	reason?: string
 	at: string
+	evidence?: BuildEvidence
 }
 
 export type BuildBoard = Record<string, BuildRecord>
 
+const buildEvidenceSchema = z.object({
+	command: z.string(),
+	exitCode: z.number().int(),
+	durationMs: z.number().nonnegative(),
+	at: z.string(),
+	commit: z.string().nullable(),
+	dirty: z.boolean(),
+})
+
+// A record written before evidence existed keeps its status and reads as "no recorded check".
 const buildBoardSchema = z.record(
-	z.object({ status: z.enum(['done', 'blocked']), at: z.string(), reason: z.string().optional() })
-		.transform(({ status, at, reason }) => ({ status, at, ...(reason === undefined ? {} : { reason }) })),
+	z.object({
+		status: z.enum(['done', 'blocked']),
+		at: z.string(),
+		reason: z.string().optional(),
+		evidence: buildEvidenceSchema.optional().catch(undefined),
+	})
+		.transform(({ status, at, reason, evidence }) => ({
+			status,
+			at,
+			...(reason === undefined ? {} : { reason }),
+			...(evidence === undefined ? {} : { evidence }),
+		})),
 )
 
 function parseBoard(value: unknown): BuildBoard | null {
@@ -50,9 +83,10 @@ export function record(
 	status: IssueStatus,
 	reason: string | undefined,
 	at: string,
+	evidence?: BuildEvidence,
 ): BuildBoard {
 	const board = readBoard(fabrikaDir)
-	board[id] = { status, ...(reason ? { reason } : {}), at }
+	board[id] = { status, ...(reason ? { reason } : {}), at, ...(evidence ? { evidence } : {}) }
 	writeBoard(fabrikaDir, board)
 	return board
 }

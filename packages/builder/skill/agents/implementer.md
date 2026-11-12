@@ -34,6 +34,8 @@ Return only:
 
 - issue id and pass/blocked status,
 - files changed,
-- test commands and outcomes,
+- test commands and outcomes, and the one command that proves the issue
+  (the parent passes it to `build done --verify` when the issue has no
+  `verify` files),
 - confirmation that frozen intent/invariant statements are unchanged,
 - integration notes or the exact blocker.
