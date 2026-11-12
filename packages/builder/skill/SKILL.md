@@ -33,13 +33,13 @@ ensure daemon → fabrika builder next → do packet work → gate → advance �
      For an existing `zerops-app` project, use
      `bunx fabrika builder connect --url=https://control.example --no-open`.
      Repeat initialization preserves the existing profile, binding and artifacts.
-   - If `.fabrika/` is absent, run
-     `bunx fabrika builder init [dir] [--profile cf-lightweight]`. It installs both
-     Claude and Codex repo support by default, starts the daemon, and opens the
-     dashboard. Use `--agent claude` or `--agent codex` only when the user wants
-     a single host. When the brief explicitly calls for a full internal
-     Cloudflare app with native Fabrika IAM login and Fabrika Control deployment, select
-     `--profile cf-internal-app` instead of the lightweight default.
+   - If `.fabrika/` is absent, run `bunx fabrika builder init [dir]`. It selects
+     `zerops-app`, installs both Claude and Codex repo support by default, starts
+     the daemon, and opens the dashboard. Use `--agent claude` or `--agent codex`
+     only when the user wants a single host. When the application will run on a
+     Fabrika installation on Cloudflare, add `--profile cf-app`. Never select
+     another preset unless the human asks for it: they are unsupported, and
+     `init` warns.
    - Otherwise run `bunx fabrika builder ensure-daemon`.
 
 2. Run `bunx fabrika builder next` and follow the emitted task packet exactly. Read its

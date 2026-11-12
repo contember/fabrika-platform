@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { existsSync } from 'fs'
 import { join } from 'path'
-import { resolveCatalogRoot, resolveStackPointer } from '../src/catalog'
+import { DEFAULT_PROFILE, resolveCatalogRoot, resolveStackPointer, supportedProfiles } from '../src/catalog'
 
 test('resolveCatalogRoot finds the fabrika source root with stacks/ + decisions/', () => {
 	const root = resolveCatalogRoot()
@@ -26,4 +26,14 @@ test('resolveStackPointer flags an unknown preset but still hands back the decis
 	expect(p).not.toBeNull()
 	expect(p!.stackFileExists).toBe(false)
 	expect(existsSync(p!.decisionsDir)).toBe(true)
+})
+
+test('the default preset and cf-app are the supported ones; the others are marked unsupported', () => {
+	expect(DEFAULT_PROFILE).toBe('zerops-app')
+	expect(supportedProfiles()).toEqual(['cf-app', 'zerops-app'])
+	expect(resolveStackPointer('zerops-app')!.support).toBe('supported')
+	for (const profile of ['cf-lightweight', 'cf-fat', 'cf-internal-app', 'contember-app', 'content-site']) {
+		expect(resolveStackPointer(profile)!.support, profile).toBe('unsupported')
+	}
+	expect(resolveStackPointer('does-not-exist')!.support).toBeNull()
 })

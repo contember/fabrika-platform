@@ -41,8 +41,10 @@ Workers with first-party bindings to storage and messaging primitives
 - App is a Worker: code runs in a V8 isolate (web APIs, `nodejs_compat` flag for selected Node built-ins) — **not** full Node.
 - Bindings are defined in an oblaka resource graph, directly in `oblaka.ts` or
   through `fabrika.config.ts` for a Fabrika-managed app; never hand-edit the generated
-  `wrangler.jsonc`.
+  `wrangler.jsonc`. A contract application (`cf-contract-app`) declares no bindings of
+  its own: the deployer declares and binds its Durable Object.
 - Local dev emulates D1/KV/R2/Queue/Cron (`lopata` or `wrangler dev`/workerd). **`analytics-engine` has no local runtime** (see `count-store`).
+  A contract application runs locally with `fabrika app dev` instead (`cf-contract-app`).
 
 ## Recommendations — why
 

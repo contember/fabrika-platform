@@ -21,7 +21,8 @@ sources:
 > **Team preference.** We prefer **Bun + lopata + a non-vite stack**. Pick Bun as the
 > runtime/toolchain and Bun-native bundling (e.g. `@buzola/bun-plugin`, pletivo's
 > Bun build) wherever a decision offers it; reach for `vite` only when a chosen lib
-> still mandates it (e.g. React Router v7).
+> still mandates it (e.g. React Router v7). A contract application runs locally with
+> `fabrika app dev`, not lopata (`cf-contract-app`).
 
 ## What it is
 

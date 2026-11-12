@@ -4,7 +4,7 @@
 }
 <Section title="Phase 4 — Tech & scaffold decision">
 	<Item id="stack" label="Stack preset" badge="stack" badgeVariant="info">
-		e.g. cf-lightweight; for a Fabrika Control/IAM internal app use cf-internal-app.
+		zerops-app (the default), or cf-app for an installation on Cloudflare. Every other preset is unsupported.
 	</Item>
 	<Item id="data" label="Data layer" badge="data" badgeVariant="neutral">
 		Where state lives and how it is seeded for tests.

@@ -1,5 +1,6 @@
 import { resolve } from 'node:path'
 import type { BuilderProjectConnection } from '../../shared'
+import { DEFAULT_PROFILE } from './catalog'
 import { getSessionId } from './config'
 import { fabrikaDir, findRepoRoot, readConfig } from './layout'
 
@@ -24,7 +25,7 @@ export function resolveContext(opts: { dir?: string; session?: string } = {}): C
 		repoRoot,
 		fabrikaDir: fabrikaDir(repoRoot),
 		sessionId,
-		profile: config?.profile ?? 'cf-lightweight',
+		profile: config?.profile ?? DEFAULT_PROFILE,
 		initialized: config !== null,
 		...(config?.connection ? { connection: config.connection } : {}),
 	}

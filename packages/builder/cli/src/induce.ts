@@ -65,7 +65,8 @@ export function induceIssues(skeletons: Skeleton[], opts: InduceOpts = {}): Indu
 			touches: ['schema/migrations', ...allSeeds.map((s) => `seed: ${s}`)],
 			body: [
 				'Foundation. Define the schema (idempotent migrations) and one named',
-				'idempotent seed per `seeds:` value, keyed on stable ids.',
+				'idempotent seed per `seeds:` value, keyed on stable ids, in the form the',
+				"stack preset's seed strategy names.",
 				'',
 				'Named seeds to provide (union of skeleton `seeds`):',
 				...allSeeds.map((s) => `- \`${s}\``),

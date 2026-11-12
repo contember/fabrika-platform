@@ -2,6 +2,7 @@
 id: zerops-app
 title: "Platform-managed Zerops app — Bun + PostgreSQL + Fabrika IAM"
 goal: "Build and verify a local React/Buzola contract application behind real IAM and the proxy's endpoint table, then deploy its available Git revision through installed Fabrika Control."
+support: supported
 decisions:
   - zerops-platform
   - bun

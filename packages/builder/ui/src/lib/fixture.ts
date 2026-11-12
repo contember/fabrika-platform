@@ -50,7 +50,7 @@ export const FIXTURE_ARTIFACTS: Record<string, string> = {
 	flows:
 		`# Flow: checkout\n\n1. Shopper opens \`/cart\`.\n2. Reviews line items, adjusts quantities.\n3. Submits → \`/order/confirmation\`.\n\n# Flow: browse\n\n1. Shopper lands on \`/\`.\n2. Filters by roast level.\n3. Opens a product → adds to cart.`,
 	tech:
-		`# Tech\n\nStack: **cf-lightweight** (lopata + oblaka + vite/react).\n\n- Routes via the cf-lightweight stack conventions.\n- Data layer: D1 + seed infra from skeleton metadata.\n- Reasoning: matches the team's deployment target; opice harness wires in cleanly.`,
+		`# Tech\n\nStack: **zerops-app** (Bun + PostgreSQL + React/Buzola, Fabrika IAM behind the proxy).\n\n- Routes: the contract's mounts and the SPA.\n- Data layer: @fabrika/db over PostgreSQL + named SQL fixtures from skeleton metadata.\n- Reasoning: the paved road the installation deploys.`,
 	design:
 		`# Design tokens\n\nSemantic layer → Tailwind/CSS vars.\n\n- \`--surface\` → warm off-black\n- \`--accent\` → roast amber\n- \`--text\` → bone\n\nMockups: \`pages/checkout.jsx\`, \`pages/product.jsx\`. See the live-preview pane → it renders the kernel-compiled JSX with these tokens applied.`,
 	skeletons:

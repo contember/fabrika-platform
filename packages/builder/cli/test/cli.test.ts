@@ -35,6 +35,42 @@ test('init scaffolds layout and emits an ok JSON summary', async () => {
 	expect(existsSync(join(fx.root, '.fabrika', 'config.json'))).toBe(true)
 	expect(existsSync(join(fx.root, '.fabrika', 'intent'))).toBe(true)
 	expect(summary.agents).toEqual(['claude', 'codex'])
+	expect(summary.profile).toBe('zerops-app')
+})
+
+test('init warns when it selects an unsupported preset', async () => {
+	fx = makeFixture(false)
+	const unsupported = await run(['init', fx.root, '--profile', 'cf-fat', '--no-daemon', '--no-open'])
+	expect(unsupported.code).toBe(0)
+	expect(JSON.parse(unsupported.stdout.trim()).profile).toBe('cf-fat')
+	expect(unsupported.stderr).toContain('warning: the "cf-fat" preset is unsupported')
+	fx.cleanup()
+
+	fx = makeFixture(false)
+	const supported = await run(['init', fx.root, '--profile', 'cf-app', '--no-daemon', '--no-open'])
+	expect(supported.code).toBe(0)
+	expect(supported.stderr).not.toContain('warning:')
+	const again = await run(['init', fx.root, '--no-daemon', '--no-open'])
+	expect(JSON.parse(again.stdout.trim()).profile).toBe('cf-app')
+	fx.cleanup()
+
+	fx = makeFixture(false)
+	const unknown = await run(['init', fx.root, '--profile', 'no-such-preset', '--no-daemon', '--no-open'])
+	expect(unknown.code).toBe(0)
+	expect(unknown.stderr).toContain('warning: no "no-such-preset" preset')
+})
+
+test('the build brief warns on an unsupported preset', async () => {
+	fx = makeFixture()
+	fx.write('.fabrika/issues/ISSUE-001.md', '---\ngoal: scaffold\nsatisfies: []\ndepends_on: []\ntouches: []\n---\nbody\n')
+	const brief = await run(['build', '--dir', fx.root])
+	expect(brief.code).toBe(0)
+	expect(brief.stdout).toContain('warning: the "cf-lightweight" preset is unsupported')
+
+	const packet = await run(['build', 'next', '--issue', 'ISSUE-001', '--dir', fx.root])
+	expect(packet.code).toBe(0)
+	expect(packet.stdout).toContain('## Build issue ISSUE-001')
+	expect(packet.stdout).toContain('warning: the "cf-lightweight" preset is unsupported')
 })
 
 test('a project initialized in Codex can resume in Claude without losing phase state', async () => {

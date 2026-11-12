@@ -1,7 +1,7 @@
 import { join } from 'path'
 import { parseArgs } from 'util'
 import { type BuildPlan, planBuild, readBoard, record } from '../build-status'
-import { resolveStackPointer } from '../catalog'
+import { resolveStackPointer, unsupportedProfileNote } from '../catalog'
 import { resolveContext } from '../context'
 import { postBuildEvent } from '../daemon-client'
 import { type Issue, readIssues } from '../issues'
@@ -150,6 +150,7 @@ function stackBriefLines(profile: string): string[] {
 	return [
 		`Stack:       ${profile} -> ${p.stackFile}`,
 		`             resolve its \`decisions:\` ids under ${p.decisionsDir}/ and read the live \`sources\` they pin`,
+		...(p.support === 'unsupported' ? [`             warning: ${unsupportedProfileNote(profile)}`] : []),
 	]
 }
 
@@ -204,6 +205,7 @@ function renderBuildPacket(issue: Issue, repoRoot: string, profile: string): str
 	const sp = resolveStackPointer(profile)
 	if (sp?.stackFileExists) {
 		lines.push(`Stack:     ${profile} -> ${sp.stackFile}  (decisions under ${sp.decisionsDir}/)`)
+		if (sp.support === 'unsupported') lines.push(`           warning: ${unsupportedProfileNote(profile)}`)
 	}
 	lines.push(`Pipeline:  implement -> opice-author (selectors vs running app) -> bun test (steps + invariants)`)
 	lines.push(`Done when: green \`bun test\` for the satisfied scenarios/invariants.`)

@@ -16,6 +16,7 @@ gotchas — pure-reference, no resolver code (see `../decisions/README.md`).
 id: <kebab>            # == filename; the value stored in .fabrika config `profile`
 title: <human title>
 goal: <one line: from empty to a running, opice-green slice>
+support: supported | unsupported   # unsupported: kept for reference, off the paved road; init and the packet warn
 decisions: [id, …]     # the composition. requires-closure must hold (see below).
 build: <pointer to the per-issue verify recipe, if stack-shaped>
 ---
@@ -36,9 +37,14 @@ is a **starting point**, not a lock-in — add/drop decisions freely.
 
 ## Presets
 
-- **`zerops-app`** — local Bun + PostgreSQL + React/Buzola, Fabrika IAM and proxy access, deployed through an installed Fabrika Control plane.
+Supported: the paved road (contract, proxy, `@fabrika/ui`, `@fabrika/db`, `fabrika-check`).
 
-- **`cf-lightweight`** — buzola SPA + lopata + D1, **no SSR**. The preferred default and simplest end-to-end fabrika stack (bun/lopata path).
+- **`zerops-app`** (the default) — local Bun + PostgreSQL + React/Buzola, Fabrika IAM and proxy access, deployed through an installed Fabrika Control plane.
+- **`cf-app`** — the same contract application on Cloudflare: one Durable Object per environment over its SQLite, the proxy Worker, a local lopata run. Deployed by the installation's Control, outside the builder.
+
+Unsupported, kept for reference: they leave the paved road, and the platform can neither check nor deploy what they build.
+
+- **`cf-lightweight`** — buzola SPA + lopata + D1, **no SSR**. The simplest end-to-end Cloudflare stack (bun/lopata path).
 - **`cf-internal-app`** — the full internal-app stack: Buzola SPA +
   Worker API, D1/R2/Queue/Cron/Workers AI, native Fabrika IAM login and Fabrika Control deploy.
 - **`cf-fat`** — RRv7 **SSR** + vite + `@cloudflare/vite-plugin` (workerd) + the full CF primitive set (D1/KV/R2/Queue/AE/Cron); counts behind `count-store` so it stays locally testable.

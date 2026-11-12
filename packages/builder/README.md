@@ -71,7 +71,7 @@ fabrika builder induce [--force]
 fabrika builder build [--issue <ID>] [--assisted]
 ```
 
-Use `--profile cf-internal-app` for the full Buzola, Fabrika IAM, and Fabrika Control internal-app stack. The default is `cf-lightweight`.
+The default profile is `zerops-app`. `--profile cf-app` selects the same paved road on Cloudflare: a contract application in one Durable Object per environment. The builder's `connect` and `deploy` work with a Zerops installation only, so a `cf-app` application is deployed by the installation's own Control. The other presets (`cf-lightweight`, `cf-fat`, `cf-internal-app`, `contember-app`, `content-site`) are kept for reference but are unsupported: they leave the contract, the proxy, the kit and the checker. `init`, the tech packet and the build brief warn when one is selected. `init` never replaces a project's profile; to move a project to a supported preset, change `profile` in `.fabrika/config.json` and revisit `.fabrika/architecture/tech.md`.
 
 Connected initialization uses `zerops-app` for a new project. A person approves the application and environment in the installed console; the local daemon receives a thirty-day app-scoped credential. The agent and application stay local. Deployment requires a clean, remotely available Git revision and runs through Control. `disconnect` removes the local key only; revoke server access in the console. See [the connected workflow](../../docs/reference/local-builder.md) for prerequisites, custody and recovery.
 

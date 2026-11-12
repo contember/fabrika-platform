@@ -1,7 +1,8 @@
 ---
 id: cf-lightweight
-title: "buzola SPA + lopata + D1 on Cloudflare — lightweight, no SSR (preferred default)"
+title: "buzola SPA + lopata + D1 on Cloudflare — lightweight, no SSR (unsupported)"
 goal: "From empty to a buzola SPA on a local lopata CF dev server with a D1 binding and a green opice test — no SSR, local-first."
+support: unsupported
 decisions:
   - cloudflare
   - lopata
@@ -19,7 +20,7 @@ build: "see §build recipe below"
 
 # Stack: cf-lightweight
 
-The **preferred default**: a client-rendered **buzola SPA** (no SSR) on **lopata**
+**Unsupported** (no contract, proxy or checker; use `cf-app` on Cloudflare). A client-rendered **buzola SPA** (no SSR) on **lopata**
 (local-first CF runtime, Bun) with a single **D1** database, styled with Tailwind,
 tested by opice. Lighter than `cf-fat` — no SSR machinery, no workerd, the bun/lopata
 path. Replaces the old `cf-local` (which was RRv7 SSR); the SPA-no-SSR shape is the
