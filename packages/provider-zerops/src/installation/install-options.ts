@@ -185,14 +185,12 @@ const readAuthentication = (argv: readonly string[], env: Record<string, string 
 		return { passwordEnabled: methods.passwordEnabled }
 	}
 	const issuer = requiredSetting(setting(argv, env, OIDC_ISSUER_FLAG, OIDC_ISSUER_INPUT), OIDC_ISSUER_FLAG, OIDC_ISSUER_INPUT)
-	return {
-		passwordEnabled: methods.passwordEnabled,
-		oidc: {
-			issuer: checkedOidcIssuer(issuer),
-			clientId: requiredSetting(setting(argv, env, OIDC_CLIENT_ID_FLAG, OIDC_CLIENT_ID_INPUT), OIDC_CLIENT_ID_FLAG, OIDC_CLIENT_ID_INPUT),
-			clientSecret: requiredSetting(readEnv(env, OIDC_CLIENT_SECRET_INPUT), '(no flag)', OIDC_CLIENT_SECRET_INPUT),
-		},
+	const oidc = {
+		issuer: checkedOidcIssuer(issuer),
+		clientId: requiredSetting(setting(argv, env, OIDC_CLIENT_ID_FLAG, OIDC_CLIENT_ID_INPUT), OIDC_CLIENT_ID_FLAG, OIDC_CLIENT_ID_INPUT),
+		clientSecret: requiredSetting(readEnv(env, OIDC_CLIENT_SECRET_INPUT), '(no flag)', OIDC_CLIENT_SECRET_INPUT),
 	}
+	return methods.passwordEnabled ? { passwordEnabled: true, oidc } : { passwordEnabled: false, oidc }
 }
 
 /** Parse the command's arguments and environment into the one input `runInstall` takes. */

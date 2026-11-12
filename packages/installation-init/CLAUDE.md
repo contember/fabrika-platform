@@ -38,7 +38,8 @@ Public because both provider packages are, and
 - `scaffold.ts` — create or refresh a sidecar repository around a provider-supplied `materialize`.
 - `admin.ts` — the first administrator: a typed `/admin/rpc` client over the provisioning key, and
   `ensureFirstAdministrator` — list-or-invite the mailbox, ensure the CROSS-APP `admin` grant, issue one
-  enrollment. It returns the URL and never prints it.
+  enrollment. It returns the URL and never prints it. An installation without passwords but with single sign-on gets
+  no enrollment (`single-sign-on`): the invited address signs in through the identity provider.
 - `pin.ts` — `assertPinnedTag`: a sidecar pins a published tag, never a branch (ADR-0025).
 - `secrets.ts` — the generators (`randomSecret`, `randomPxKey`, `generateSigningKeys`, `generateVaultKey`) and the six
   values a container installation is seeded with (`generateInstallationSecrets`). Both providers generate through it.

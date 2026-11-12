@@ -49,6 +49,8 @@ const crossAppAdminGrant = (principalId: string): GrantDto => ({
 
 interface FakeOptions {
 	readonly principals?: FakePrincipal[]
+	/** What IAM reports of single sign-on; `unavailable`, IAM's answer when OIDC is off, by default. */
+	readonly oidc?: 'unavailable' | 'unlinked' | 'linked'
 	/** Force the pagination loop: a page is full at this many rows even though the caller asked for more. */
 	readonly pageSize?: number
 	/** Answer one procedure with an error envelope instead of a result. */
@@ -79,7 +81,7 @@ const fakeIam = (options: FakeOptions = {}): FakeIam => {
 		management: { account: true, passwordLinks: true, audit: true },
 		activatedAt: null,
 		disabledAt: null,
-		authentication: { oidc: { state: 'unavailable' }, password: { state: found.password, delivery: 'manual', latestAction: null } },
+		authentication: { oidc: { state: options.oidc ?? 'unavailable' }, password: { state: found.password, delivery: 'manual', latestAction: null } },
 	})
 
 	/** The one refusal the flow is expected to absorb rather than report. */
@@ -330,11 +332,27 @@ describe('the first administrator', () => {
 		)
 	})
 
-	test('refuses an installation that offers no password method, rather than reporting half an administrator', async () => {
+	test('with single sign-on and no password method, admits and grants, issues nothing, and reports single sign-on', async () => {
+		const iam = fakeIam({ oidc: 'unlinked', principals: [user('principal-1', 'operator@example.test', 'invited', 'unavailable')] })
+
+		const result = await ensureFirstAdministrator(iam.client, { email: 'operator@example.test' })
+
+		expect(result).toEqual({
+			principalId: 'principal-1',
+			email: 'operator@example.test',
+			principal: 'existing',
+			grant: 'created',
+			enrollment: { state: 'single-sign-on' },
+		})
+		expect(iam.issued).toHaveLength(0)
+		expect(iam.calls.map((call) => call.method)).not.toContain('passwords.issueEnrollment')
+	})
+
+	test('refuses an installation that offers no sign-in method at all, without telling it to enable passwords alone', async () => {
 		const iam = fakeIam({ principals: [user('principal-1', 'operator@example.test', 'active', 'unavailable')] })
 
 		await expect(ensureFirstAdministrator(iam.client, { email: 'operator@example.test' })).rejects.toThrow(
-			'offers no password authentication',
+			'offers neither password nor single sign-on',
 		)
 		expect(iam.issued).toHaveLength(0)
 	})

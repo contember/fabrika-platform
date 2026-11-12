@@ -594,7 +594,7 @@ describe('the hand-off', () => {
 		const register = fixture.log.lines.find((line) => line.startsWith('action: REGISTER THE REDIRECT URI')) ?? ''
 		expect(register).toContain(`https://${IAM_HOST}/auth/callback`)
 		expect(register).toContain('fabrika-console')
-		expect(transcript).toContain('signs in with single sign-on instead')
+		expect(transcript).toContain('issues no enrollment: that person signs in with single sign-on')
 	})
 
 	test('password only asks for no redirect URI and keeps the enrollment hand-off', async () => {
@@ -604,6 +604,7 @@ describe('the hand-off', () => {
 
 		expect(fixture.log.lines.some((line) => line.includes('/auth/callback'))).toBe(false)
 		expect(fixture.log.lines.some((line) => line.includes('single sign-on'))).toBe(false)
+		expect(fixture.log.lines.some((line) => line.startsWith('action: ADMIT YOURSELF'))).toBe(true)
 	})
 
 	test('points the hand-off at the secrets file, ready to run', async () => {
@@ -1002,8 +1003,11 @@ describe('the argument surface', () => {
 				FABRIKA_IAM_PASSWORD_ENABLED: 'false',
 				FABRIKA_IAM_OIDC_ISSUER: 'https://idp.example.com',
 				FABRIKA_IAM_OIDC_CLIENT_ID: 'from-env',
-			}).authentication.passwordEnabled,
-		).toBe(false)
+			}).authentication,
+		).toEqual({
+			passwordEnabled: false,
+			oidc: { issuer: 'https://idp.example.com', clientId: 'from-env', clientSecret: 'client-secret' },
+		})
 
 		expect(() => parsePlatformInstallArgs(oidc, env)).toThrow('FABRIKA_IAM_OIDC_CLIENT_SECRET is required')
 		expect(() => parsePlatformInstallArgs([...base, '--auth-methods=oidc', '--oidc-client-id=c'], secret)).toThrow(

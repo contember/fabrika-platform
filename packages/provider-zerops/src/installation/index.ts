@@ -191,8 +191,6 @@ installation, so a value invented here would not be one it accepts. Both are env
 	FABRIKA_ZEROPS_ACCESS_TOKEN       required   the INTEGRATION token install minted (the \`control\` service's env)
 	FABRIKA_IAM_PROVISIONING_KEY      required   the px_ key install wrote to its --secrets-file
 	FABRIKA_ZEROPS_API_URL            optional   region API base, when not the default
-	FABRIKA_IAM_OIDC_CLIENT_SECRET    with oidc  the OIDC client secret, environment only and no flag; written
-	                                             sensitive on \`iam\` and not into the secrets file
 
 Each is sent to GitHub over \`gh\` stdin, and never printed and never written to disk.
 

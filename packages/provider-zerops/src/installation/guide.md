@@ -16,15 +16,19 @@ message that names the flag or the variable to set. Read the message: it names t
 
 **Ask the human for these first.** You cannot produce them, and each one blocks a later step:
 
-| What                                                                                  | Needed at  |
-| ------------------------------------------------------------------------------------- | ---------- |
-| A Zerops PERSONAL access token of a client OWNER, generated in the Zerops GUI         | step 1     |
-| A verified Zerops account (credit topped up once); an unverified one owns ONE project | step 5     |
-| A `gh` login allowed to create a repository in the organization that owns it          | step 3     |
-| The administrator's e-mail address, and the human to open the enrollment URL          | step 2     |
-| For a PRIVATE application repository: the GitHub App connected in the console         | step 5     |
-| The fabrika release tag to install, for example `v0.4.3` (a branch is refused)        | steps 1, 3 |
-| The four decisions below                                                              | steps 1, 5 |
+| What                                                                                     | Needed at  |
+| ---------------------------------------------------------------------------------------- | ---------- |
+| A Zerops PERSONAL access token of a client OWNER, generated in the Zerops GUI            | step 1     |
+| A verified Zerops account (credit topped up once); an unverified one owns ONE project    | step 5     |
+| A `gh` login allowed to create a repository in the organization that owns it             | step 3     |
+| The administrator's e-mail address, and the human to open the enrollment URL             | step 2     |
+| For a PRIVATE application repository: the GitHub App connected in the console            | step 5     |
+| The fabrika release tag to install, for example `v0.4.3` (a branch is refused)           | steps 1, 3 |
+| The five decisions below                                                                 | steps 1, 5 |
+| Single sign-on only: the identity provider's issuer, client id and secret, and its admin | steps 1, 2 |
+
+The identity provider's admin is whoever can register the redirect URI that step 1 prints at its end; single sign-on
+fails until it is registered.
 
 Every namespace is a Zerops project of its own, so the first one fails with `clientProjectCountLimitExceededTopUp`
 on an unverified account (observed 2026-10-15).
@@ -95,6 +99,12 @@ container (a deploy raises the floor of an application with a database to 0.5 GB
 every environment. `SERIOUS` adds $10 per namespace and a highly available balancer in front of its proxy,
 and it can never be downgraded again.
 
+**5. Sign-in method** (`platform install --auth-methods`, step 1). Free either way. `password` (the default)
+needs nothing else: each person sets a password from an enrollment link. `oidc,password` adds single sign-on through
+the organization's OpenID Connect identity provider beside it, and `oidc` alone removes passwords. Single sign-on
+needs the provider's client (see Before you start), and admits only addresses someone invited. It can be turned
+on or off later by hand ("Turn on single sign-on" below).
+
 ## Secrets: rules for an agent
 
 - Every credential is read from the ENVIRONMENT ONLY. No command takes one as a flag.
@@ -161,7 +171,7 @@ fabrika platform install --provider=zerops --create-project --client-id=<clientI
   `FABRIKA_IAM_OIDC_CLIENT_SECRET` from its own `0600` file; it has no flag. The install writes the client on `iam`,
   the secret sensitive and not into the secrets file. The IAM host exists only once pass 1 has run, so the log
   ends with a `REGISTER THE REDIRECT URI` box: register that URI at the identity provider. `--auth-methods=oidc`
-  turns password sign-in off, and step 2 then issues no enrollment. To add single sign-on later, see
+  turns password sign-in off, and step 2 then admits the administrator without an enrollment. To add single sign-on later, see
   "Turn on single sign-on" below.
 
 **Check.** The log ends with the `Hand off` step: where the credentials are, `The console answers at
@@ -179,7 +189,9 @@ in. The secrets file exists with mode `0600`. The three hosts are printed earlie
 Without a mail provider it prints one enrollment URL and the time it expires. Nothing is e-mailed then, so
 do not tell the human to wait for a message. The URL is a credential: give it to the human only, and do not
 log it. The human opens it, sets a password and signs in at the console origin. With a mail provider, IAM
-e-mails the enrollment instead, and the command reports the address and the expiry.
+e-mails the enrollment instead, and the command reports the address and the expiry. On an installation without
+passwords (`--auth-methods=oidc`) it issues no enrollment: it reports that the administrator signs in with single
+sign-on and exits 0. The identity provider must vouch for the same e-mail address.
 
 The URL is valid for ONE HOUR. Hand it over at once. A re-run creates nothing new: while the enrollment is
 unused it only reports that one is outstanding, and it never prints the URL again. To get a new URL, after
@@ -464,8 +476,10 @@ below and remove none, so what you set survives every later deploy and upgrade. 
    offers single sign-on beside the password form, or, with password off, goes straight to the provider.
 4. Single sign-on admits only someone IAM already knows: an invited address or an existing user, matched by the e-mail
    the provider verified. Anyone else is refused (`not_admitted`). The first sign-in links the person to the provider's
-   subject. With password off, `platform admin` still places the address and its admin grant, then fails to issue an
-   enrollment; that person signs in with single sign-on instead.
+   subject. With password off, `platform admin` admits the address and grants it the admin role without an enrollment;
+   that person signs in with single sign-on. The Zerops installer offers no domain-wide admission (Cloudflare's
+   `--human-email-domains`): to admit everyone of a domain without an invitation, set `HUMAN_EMAIL_DOMAINS` on `iam` to
+   a JSON array such as `["example.com"]` (unprefixed, like the `OIDC_*` names) and restart it.
 
 To turn single sign-on off again, set `FABRIKA_IAM_OIDC_ENABLED=false` with `FABRIKA_IAM_PASSWORD_ENABLED=true` and
 restart `iam`; it refuses to start with both off.

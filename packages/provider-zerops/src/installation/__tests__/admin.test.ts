@@ -46,6 +46,7 @@ interface FakeOptions {
 	readonly existing?: PrincipalListItem
 	readonly grants?: GrantDto[]
 	readonly password?: 'unavailable' | 'disabled' | 'pending' | 'enabled'
+	readonly oidc?: 'unavailable' | 'unlinked' | 'linked'
 	readonly failOn?: keyof typeof PROCEDURES
 }
 
@@ -92,7 +93,10 @@ const fakeApi = (options: FakeOptions = {}): { api: FirstAdministratorApi; calls
 						management: { account: true, passwordLinks: true, audit: true },
 						activatedAt: null,
 						disabledAt: null,
-						authentication: { oidc: { state: 'unavailable' }, password: { state: options.password ?? 'disabled', delivery: 'manual', latestAction: null } },
+						authentication: {
+							oidc: { state: options.oidc ?? 'unavailable' },
+							password: { state: options.password ?? 'disabled', delivery: 'manual', latestAction: null },
+						},
 					}
 				},
 			},
@@ -180,6 +184,20 @@ describe('platform admin', () => {
 		expect(run.printed).toEqual([])
 		expect(calls).not.toContain('passwords.issueEnrollment')
 		expect(run.lines.join('\n')).toContain('a password is already set')
+	})
+
+	test('single sign-on without passwords admits and grants, issues no enrollment, and succeeds', async () => {
+		const { api, calls } = fakeApi({ password: 'unavailable', oidc: 'unlinked' })
+		const run = collaborators(api)
+
+		await runPlatformAdmin(input(), run)
+
+		expect(run.printed).toEqual([])
+		expect(calls).toEqual(['principals.list', 'principals.invite', 'principals.get', 'grants.create'])
+		expect(run.lines).toContain('ok: granted the cross-app `admin` role')
+		const transcript = run.lines.join('\n')
+		expect(transcript).toContain('Sign in at the console with single sign-on as operator@example.test')
+		expect(transcript).not.toMatch(/enable the password/i)
 	})
 
 	test('a refused key fails closed and prints no URL', async () => {

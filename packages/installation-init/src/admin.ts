@@ -17,7 +17,7 @@
  */
 
 import { createRpcClient, type InferRpcClient, RpcError, type RpcFetch } from '@fabrika/app'
-import type { GrantDto, IamAdminRpcContract, PrincipalListItem } from '@fabrika/iam-contract'
+import type { GrantDto, IamAdminRpcContract, PrincipalDetail, PrincipalListItem } from '@fabrika/iam-contract'
 
 /** The built-in cross-app role. It is the one role that carries `iam.admin`, which the Access plane checks. */
 export const ADMIN_ROLE_KEY = 'admin'
@@ -77,12 +77,16 @@ export interface FirstAdministratorRequest {
 	readonly reissueEnrollment?: boolean
 }
 
-/** What happened to the password enrollment. Only `issued` carries a URL, and only once. */
+/**
+ * What happened to the password enrollment. Only `issued` carries a URL, and only once. `single-sign-on`: the
+ * installation offers no password, so none was issued, and the administrator signs in through the identity provider.
+ */
 export type EnrollmentOutcome =
 	| { readonly state: 'issued'; readonly url: string; readonly expiresAt: number }
 	| { readonly state: 'emailed'; readonly email: string; readonly expiresAt: number }
 	| { readonly state: 'outstanding' }
 	| { readonly state: 'already-set' }
+	| { readonly state: 'single-sign-on' }
 
 export interface FirstAdministratorResult {
 	readonly principalId: string
@@ -256,29 +260,34 @@ export const ensureFirstAdministrator = async (
 		email,
 		principal: admitted.state,
 		grant: granted ? 'present' : 'created',
-		enrollment: await ensureEnrollment(client, principal.id, detail.authentication.password.state, request.reissueEnrollment === true),
+		enrollment: await ensureEnrollment(client, principal.id, detail.authentication, request.reissueEnrollment === true),
 	}
 }
 
 /**
  * Issue the password enrollment EXACTLY ONCE.
  *
- * `enabled` means a password is already set — IAM answers 409 and there is nothing to admit. `pending`
+ * `enabled` means a password is already set: IAM answers 409 and there is nothing to admit. `pending`
  * means an enrollment was already issued and never completed; a second URL is not issued for it,
  * because "print the URL once" is the property a re-run has to keep, and `reissue` is the explicit way
  * out when the first one expired unopened. `unavailable` means the installation offers no password
- * method at all, which no URL can fix, so it fails rather than reporting a half-admitted administrator.
+ * method: with single sign-on on, the principal and its grant are all an administrator needs, since an invited
+ * address signs in through the identity provider; with neither method IAM would not be serving, so that fails.
  */
 const ensureEnrollment = async (
 	client: FirstAdministratorApi,
 	principalId: string,
-	state: 'unavailable' | 'disabled' | 'pending' | 'enabled',
+	authentication: PrincipalDetail['authentication'],
 	reissue: boolean,
 ): Promise<EnrollmentOutcome> => {
+	const state = authentication.password.state
 	if (state === 'unavailable') {
+		if (authentication.oidc.state !== 'unavailable') {
+			return { state: 'single-sign-on' }
+		}
 		throw new Error(
-			'this installation offers no password authentication, so no enrollment can be issued — the principal and its '
-				+ 'cross-app admin grant are in place; enable the password method and run this again',
+			'this installation offers neither password nor single sign-on, so the administrator has no way to sign in. The '
+				+ "principal and its cross-app admin grant are in place; fix IAM's FABRIKA_IAM_OIDC_ENABLED and FABRIKA_IAM_PASSWORD_ENABLED",
 		)
 	}
 	if (state === 'enabled') {

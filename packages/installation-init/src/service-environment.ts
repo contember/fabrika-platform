@@ -29,14 +29,12 @@ export const IAM_OAUTH_CONFIG_VARIABLE = 'FABRIKA_IAM_OAUTH_CONFIG'
 export const IAM_OIDC_CLIENT_SECRET_VARIABLE = 'OIDC_CLIENT_SECRET'
 
 /**
- * How people sign in to IAM. The installer's parser refuses a run that enables neither method, as IAM refuses to boot
+ * How people sign in to IAM; `oidc` absent means OIDC is off. Neither method is not a value, as IAM refuses to boot
  * with neither.
  */
-export interface InstallationAuthentication {
-	readonly passwordEnabled: boolean
-	/** Absent: OIDC is off. */
-	readonly oidc?: OidcClient
-}
+export type InstallationAuthentication =
+	| { readonly passwordEnabled: true; readonly oidc?: OidcClient }
+	| { readonly passwordEnabled: false; readonly oidc: OidcClient }
 
 /** An object store's coordinates, in the provider's own spelling (values or references to them). */
 export interface PlatformStorage {

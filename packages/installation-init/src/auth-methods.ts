@@ -19,10 +19,10 @@ const PASSWORD_ENABLED_VARIABLE = 'FABRIKA_IAM_PASSWORD_ENABLED'
 
 const AUTH_METHODS = ['oidc', 'password'] as const
 
-export interface AuthMethods {
-	readonly oidcEnabled: boolean
-	readonly passwordEnabled: boolean
-}
+/** At least one method: IAM refuses to boot with neither, so neither is not a value. */
+export type AuthMethods =
+	| { readonly oidcEnabled: true; readonly passwordEnabled: boolean }
+	| { readonly oidcEnabled: false; readonly passwordEnabled: true }
 
 /** The OIDC client IAM signs people in with. */
 export interface OidcClient {
@@ -30,6 +30,12 @@ export interface OidcClient {
 	readonly clientId: string
 	/** Never logged, never printed. */
 	readonly clientSecret: string
+}
+
+const authMethods = (oidcEnabled: boolean, passwordEnabled: boolean): AuthMethods => {
+	if (oidcEnabled) return { oidcEnabled: true, passwordEnabled }
+	if (passwordEnabled) return { oidcEnabled: false, passwordEnabled: true }
+	throw new Error('At least one IAM authentication method must be enabled')
 }
 
 const parseBoolean = (value: string, name: string): boolean => {
@@ -51,7 +57,7 @@ export const readAuthMethods = (argv: readonly string[], env: CommandEnv, fallba
 		if (unknown !== undefined || methods.length > AUTH_METHODS.length) {
 			throw new Error(`${AUTH_METHODS_FLAG} takes oidc, password, or oidc,password, not \`${flag}\``)
 		}
-		return { oidcEnabled: methods.includes('oidc'), passwordEnabled: methods.includes('password') }
+		return authMethods(methods.includes('oidc'), methods.includes('password'))
 	}
 	const oidc = readEnv(env, OIDC_ENABLED_VARIABLE)
 	const password = readEnv(env, PASSWORD_ENABLED_VARIABLE)
@@ -64,14 +70,7 @@ export const readAuthMethods = (argv: readonly string[], env: CommandEnv, fallba
 	if (oidc === undefined || password === undefined) {
 		throw new Error(`${OIDC_ENABLED_VARIABLE} and ${PASSWORD_ENABLED_VARIABLE} must be configured together`)
 	}
-	const methods = {
-		oidcEnabled: parseBoolean(oidc, OIDC_ENABLED_VARIABLE),
-		passwordEnabled: parseBoolean(password, PASSWORD_ENABLED_VARIABLE),
-	}
-	if (!methods.oidcEnabled && !methods.passwordEnabled) {
-		throw new Error('At least one IAM authentication method must be enabled')
-	}
-	return methods
+	return authMethods(parseBoolean(oidc, OIDC_ENABLED_VARIABLE), parseBoolean(password, PASSWORD_ENABLED_VARIABLE))
 }
 
 /** An issuer IAM can discover `/.well-known/openid-configuration` under. The value is a public URL, so it is quoted. */

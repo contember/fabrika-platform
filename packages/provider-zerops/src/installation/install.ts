@@ -248,8 +248,8 @@ const installPreparedPlatform = async (
 	}
 	if (!passwordEnabled) {
 		log.info(
-			'Without the password method `platform admin` places the address and its admin grant, then fails to issue an enrollment: '
-				+ 'that person signs in with single sign-on instead.',
+			'Without the password method `platform admin` admits the address and grants it the admin role but issues no enrollment: '
+				+ 'that person signs in with single sign-on.',
 		)
 	}
 	// `platform admin` is idempotent, so re-running it is safe.

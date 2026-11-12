@@ -28,7 +28,10 @@ writes them from `--auth-methods`, `--oidc-issuer`, `--oidc-client-id` and
 `FABRIKA_IAM_OIDC_CLIENT_SECRET`, password only when none is given. Only the bring-up
 writes them: `platform deploy` and `platform upgrade` neither write nor remove any, so a
 change by hand survives both. IAM reads them at boot, so a change takes effect when `iam`
-restarts. The redirect URI to register at the provider is `https://<iam host>/auth/callback`
+restarts. The human-admission allowlist below is unprefixed there too: `HUMAN_EMAIL_DOMAINS`
+and `HUMAN_EMAILS`, each a JSON array of strings; the `FABRIKA_IAM_` spellings have no effect
+on Zerops. The Zerops installer does not write them (it offers no `--human-email-domains`),
+so they are set by hand. The redirect URI to register at the provider is `https://<iam host>/auth/callback`
 (`ISSUER` + `/auth/callback`). The operator's procedure is the Zerops guide's "Turn on
 single sign-on" (`fabrika platform guide --provider=zerops`).
 
