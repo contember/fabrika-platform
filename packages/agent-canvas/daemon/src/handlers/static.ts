@@ -25,10 +25,8 @@ async function getDistDir(): Promise<string> {
 }
 
 /**
- * The canvas page's Content-Security-Policy, derived from the page itself: scripts only from the daemon, the page's own
- * inline scripts by hash and the external scripts it names by exact URL. Canvas JavaScript runs in this page, so
- * `connect-src 'self'` is what keeps it from sending data off the machine. Images, fonts and stylesheets may come from
- * any https origin; such a URL can still carry data out, which is accepted.
+ * The canvas page's policy, derived from the page: scripts from the daemon, its inline scripts by hash, its external ones
+ * by URL, and connections only to the daemon. Images, fonts, styles, media and navigation can still carry data out.
  */
 export function sessionPageCsp(html: string): string {
 	const scripts = ["'self'"]
@@ -43,12 +41,28 @@ export function sessionPageCsp(html: string): string {
 		"style-src 'self' 'unsafe-inline' https:",
 		"img-src 'self' data: blob: https:",
 		"font-src 'self' data: https:",
+		"media-src 'self' data: blob: https:",
+		"frame-src 'none'",
 		"connect-src 'self'",
 		"object-src 'none'",
 		"base-uri 'none'",
 		"form-action 'none'",
 		"frame-ancestors 'none'",
 	].join('; ')
+}
+
+/**
+ * Every other response is a document in the daemon's origin when opened in a frame or window. Without a policy of its
+ * own it would let canvas JavaScript script it past the page's `connect-src`.
+ */
+export const INERT_DOCUMENT_CSP = "default-src 'none'; frame-ancestors 'none'; sandbox"
+
+export function withDefaultCsp(response: Response): Response {
+	if (response.headers.has('Content-Security-Policy')) return response
+	// A redirect's headers are immutable, so the response is rebuilt rather than edited.
+	const headers = new Headers(response.headers)
+	headers.set('Content-Security-Policy', INERT_DOCUMENT_CSP)
+	return new Response(response.body, { status: response.status, statusText: response.statusText, headers })
 }
 
 async function serveSessionPage(): Promise<Response> {

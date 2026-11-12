@@ -370,10 +370,13 @@ and stays open (rule 7).
    `127.0.0.1:<port>`. Require `application/json` on JSON routes. This is small and needs no further design.
 2. **File admission.** `/api/file` and `Download` serve paths inside the project root, plus absolute paths the
    compiler saw in that canvas's `FilePreview`, `Markdown file` or `Download` props. The kernel already has an
-   `assertReadable` hook in `file-admission.ts`. The file browser stays confined to the project root.
+   `assertReadable` hook in `file-admission.ts`. The file browser stays confined to the project root. As built (#153):
+   the list comes from string literals in the session's canvases, symlinks are resolved, and no directory outside the
+   root is listed. The canvas author writes that list, so it stops reads of paths no canvas names, not a hostile canvas.
 3. **CSP on the canvas page**: `connect-src 'self'`, with scripts and styles only from the daemon. Images and fonts
    from any `https:` URL are allowed (decided, Q5). This removes exfiltration through `fetch` and `WebSocket`. An
-   image URL remains a narrow leak, accepted for convenience.
+   image URL remains a narrow leak, accepted for convenience. So do stylesheets, media and navigation, which CSP does not
+   govern. Every other daemon response carries an inert policy, so a same-origin frame cannot bypass the page's.
 4. **Capabilities are declared per canvas and held by the daemon.** A canvas declares what it uses, for example a
    module export `export const capabilities = ["state", "files", "ask"]`. The compiler records the list on the
    revision. Routes for a capability refuse a revision that did not declare it. The UI shows the declared

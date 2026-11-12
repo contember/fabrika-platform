@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { createHash } from 'crypto'
-import { sessionPageCsp } from './handlers/static'
+import { INERT_DOCUMENT_CSP, sessionPageCsp, withDefaultCsp } from './handlers/static'
 
 function directive(csp: string, name: string): string[] {
 	const found = csp.split('; ').find((part) => part.startsWith(`${name} `))
@@ -30,4 +30,18 @@ test('keeps canvas JavaScript from connecting anywhere but the daemon', () => {
 	expect(directive(csp, 'form-action')).toEqual(["'none'"])
 	expect(directive(csp, 'img-src')).toContain('https:')
 	expect(directive(csp, 'font-src')).toContain('https:')
+})
+
+test('gives every other response an inert policy, keeping one a route set', () => {
+	expect(withDefaultCsp(Response.json({ ok: true })).headers.get('Content-Security-Policy')).toBe(INERT_DOCUMENT_CSP)
+	const redirect = withDefaultCsp(Response.redirect('http://localhost:19400/s/demo', 302))
+	expect(redirect.status).toBe(302)
+	expect(redirect.headers.get('Location')).toBe('http://localhost:19400/s/demo')
+	expect(redirect.headers.get('Content-Security-Policy')).toBe(INERT_DOCUMENT_CSP)
+	const page = new Response('<html></html>', { headers: { 'Content-Security-Policy': "default-src 'self'" } })
+	expect(withDefaultCsp(page).headers.get('Content-Security-Policy')).toBe("default-src 'self'")
+})
+
+test('allows no frames in the canvas page', () => {
+	expect(directive(sessionPageCsp('<body></body>'), 'frame-src')).toEqual(["'none'"])
 })
