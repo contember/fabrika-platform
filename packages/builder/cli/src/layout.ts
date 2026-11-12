@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { type BuilderProjectConfig, parseBuilderProjectConfig } from '../../shared'
+import { writeApprovals } from '../../shared/approvals'
 import { DEFAULT_PROFILE } from './catalog'
 import { FABRIKA_DIRNAME, hashRepoPath } from './config'
 import { BuilderCliError } from './errors'
@@ -88,6 +89,8 @@ export function scaffold(
 			createdAt: new Date().toISOString(),
 		}
 		writeFileSync(configPath(root), JSON.stringify(config, null, 2) + '\n')
+		// A new project keeps approvals from its first gate; one without the file is judged by its reviews alone.
+		writeApprovals(root, {})
 		createdConfig = true
 	}
 

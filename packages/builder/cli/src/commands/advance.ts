@@ -1,7 +1,8 @@
 import { parseArgs } from 'util'
-import { isNonEmptyFile, matchGlob, producesSatisfied } from '../../../shared/derive'
+import { readApprovals, writeApprovals } from '../../../shared/approvals'
+import { isNonEmptyFile, matchGlob, phaseInputs, producesSatisfied } from '../../../shared/derive'
 import { GATE_CHANGES } from '../../../shared/gate'
-import { PHASE_COUNT, phaseById, phaseIndex, PHASES } from '../../../shared/phases'
+import { PHASE_COUNT, phaseById, type PhaseId, phaseIndex, PHASES } from '../../../shared/phases'
 import { resolveContext } from '../context'
 import { consumeFeedback } from '../daemon-client'
 import { isDaemonRunning } from '../daemon-lifecycle'
@@ -78,6 +79,8 @@ export async function cmdAdvance(argv: string[]): Promise<number> {
 		return 1
 	}
 
+	recordApproval(ctx.repoRoot, state.completed, phase.id, values.force)
+
 	const idx = phaseIndex(phase.id)
 	const next = idx + 1 < PHASES.length ? PHASES[idx + 1] : null
 	if (next) {
@@ -87,4 +90,21 @@ export async function cmdAdvance(argv: string[]): Promise<number> {
 		console.log(`OK: all ${PHASE_COUNT} phases satisfied. Run \`fabrika builder build\`.`)
 	}
 	return 0
+}
+
+/**
+ * Approves the gated phase over the inputs it reads now. The first approval of a project that predates the file also
+ * records the gated phases it already completed, so they stay complete.
+ */
+function recordApproval(repoRoot: string, completed: readonly PhaseId[], current: PhaseId, waived: boolean): void {
+	const existing = readApprovals(repoRoot)
+	const approvals = { ...existing }
+	const at = new Date().toISOString()
+	const ids = existing === null ? [...completed, current] : [current]
+	for (const id of ids) {
+		const phase = phaseById(id)
+		if (!phase.gate) continue
+		approvals[id] = { at, inputs: phaseInputs(repoRoot, phase), ...(waived && id === current ? { waived: true } : {}) }
+	}
+	writeApprovals(repoRoot, approvals)
 }

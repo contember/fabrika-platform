@@ -1,6 +1,8 @@
 // The one phase derivation, shared by the CLI and the daemon. It reads the filesystem, so the dashboard never imports it.
-import { existsSync, readdirSync, statSync } from 'fs'
-import { basename, dirname, join, resolve } from 'path'
+import { createHash } from 'crypto'
+import { existsSync, readdirSync, readFileSync, statSync } from 'fs'
+import { basename, dirname, join, relative, resolve } from 'path'
+import { type Approvals, readApprovals } from './approvals'
 import type { GateVerdict } from './gate'
 import { isPhaseHint, type Phase, type PhaseId, phaseIndex, PHASES } from './phases'
 
@@ -16,6 +18,8 @@ export interface PhaseState {
 	verdicts: Partial<Record<PhaseId, GateVerdict>>
 	/** Completed gated phases whose review could not be checked (no daemon); they are assumed reviewed. */
 	unverified: PhaseId[]
+	/** The files that changed since the current phase was approved; empty unless it was approved and went stale. */
+	stale: string[]
 }
 
 /** A gate's review: `reviewed` once its latest revision's feedback was consumed by `advance`. */
@@ -86,26 +90,63 @@ export function resolveReads(repoRoot: string, phase: Phase): string[] {
 	return out
 }
 
-export function derivePhase(repoRoot: string, gateProbe: GateProbe = offlineGateProbe): PhaseState {
+/** The content of every file the phase reads or produces now, by repository-relative path. */
+export function phaseInputs(repoRoot: string, phase: Phase): Record<string, string> {
+	const inputs: Record<string, string> = {}
+	for (const glob of phase.producesEditedLater ? phase.reads : [...phase.reads, ...phase.produces]) {
+		if (isPhaseHint(glob)) continue
+		for (const abs of matchGlob(repoRoot, glob)) {
+			if (!statSync(abs).isFile()) continue
+			inputs[relative(repoRoot, abs)] = createHash('sha256').update(readFileSync(abs)).digest('hex')
+		}
+	}
+	return inputs
+}
+
+/** The inputs added, removed or changed since the approval, sorted. */
+export function changedInputs(approved: Readonly<Record<string, string>>, now: Readonly<Record<string, string>>): string[] {
+	const paths = new Set([...Object.keys(approved), ...Object.keys(now)])
+	return [...paths].filter((path) => approved[path] !== now[path]).sort()
+}
+
+/**
+ * A gated phase is complete when its outputs exist, its latest gate revision was reviewed, and — once the project keeps
+ * approvals — `advance` approved it over the inputs it reads now. The earliest phase whose inputs changed is current again.
+ */
+export function derivePhase(
+	repoRoot: string,
+	gateProbe: GateProbe = offlineGateProbe,
+	approvals: Approvals | null = readApprovals(repoRoot),
+): PhaseState {
 	const completed: PhaseId[] = []
 	const verdicts: Partial<Record<PhaseId, GateVerdict>> = {}
 	const unverified: PhaseId[] = []
+	const state = (phase: Phase, satisfied: boolean, stale: string[] = []): PhaseState =>
+		toState(repoRoot, phase, completed, satisfied, verdicts, unverified, stale)
 
 	for (const phase of PHASES) {
 		const produced = producesSatisfied(repoRoot, phase)
-		if (!produced) return toState(repoRoot, phase, completed, false, verdicts, unverified)
+		if (!produced) return state(phase, false)
 		if (phase.gate) {
-			const review = gateProbe(phase)
-			if (review === 'unknown') unverified.push(phase.id)
-			else if (!review.reviewed) return toState(repoRoot, phase, completed, true, verdicts, unverified)
-			else verdicts[phase.id] = review.verdict
+			const approval = approvals?.[phase.id]
+			if (approvals !== null && approval === undefined) return state(phase, true)
+			if (approval !== undefined) {
+				const stale = changedInputs(approval.inputs, phaseInputs(repoRoot, phase))
+				if (stale.length > 0) return state(phase, true, stale)
+			}
+			if (approval?.waived !== true) {
+				const review = gateProbe(phase)
+				if (review === 'unknown') unverified.push(phase.id)
+				else if (!review.reviewed) return state(phase, true)
+				else verdicts[phase.id] = review.verdict
+			}
 		}
 		completed.push(phase.id)
 	}
 
 	const build = PHASES.at(-1)
 	if (build === undefined) throw new Error('The builder has no phases')
-	return toState(repoRoot, build, completed.filter((id) => id !== build.id), true, verdicts, unverified.filter((id) => id !== build.id))
+	return toState(repoRoot, build, completed.filter((id) => id !== build.id), true, verdicts, unverified.filter((id) => id !== build.id), [])
 }
 
 function toState(
@@ -115,6 +156,7 @@ function toState(
 	satisfied: boolean,
 	verdicts: Partial<Record<PhaseId, GateVerdict>>,
 	unverified: PhaseId[],
+	stale: string[],
 ): PhaseState {
 	return {
 		current: phase.id,
@@ -126,5 +168,6 @@ function toState(
 		satisfied,
 		verdicts,
 		unverified,
+		stale,
 	}
 }

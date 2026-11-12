@@ -16,7 +16,7 @@ Design is not a phase of its own. `induce` adds a design checkpoint issue, `ISSU
 before every feature: the agent themes the running application through the UI kit's `--fui-*` tokens, and the human
 reviews it at the `design-checkpoint` gate in the live preview. `build done ISSUE-004` records that gate's verdict.
 
-The current phase is derived from files in `.fabrika/`; it is not stored as a mutable counter. Review gates use a local dashboard with persistent annotations and responses.
+The current phase is derived from files in `.fabrika/`; it is not stored as a mutable counter. `advance` records the content of each approved phase's files, so a phase whose files change afterwards is current again. Review gates use a local dashboard with persistent annotations and responses.
 
 ## Non-goals
 

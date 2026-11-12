@@ -20,7 +20,7 @@ The ordered phases are intake, vision, flows, technology, skeletons, issues, and
 
 Design is reviewed inside the build, on the running application: `induce` writes the design checkpoint `ISSUE-004` (`gate: design-checkpoint`, a name the removed design phase never used, so none of its old reviews counts), which depends on the foundation issues and which every feature issue depends on. `build done` on an issue with a `gate` records that gate's latest reviewed revision and its verdict as the issue's evidence, through `POST /api/session/:id/gate/:name/consume`; it refuses while the gate has no submitted feedback.
 
-The phase is always derived from application files and gate state. No mutable phase counter is authoritative.
+The phase is always derived from application files, gate state and `.fabrika/approvals.json`. No mutable phase counter is authoritative. On success `advance` records, for a gated phase, the sha256 of every file the phase reads or produces (`approvals.json`, `version: 1`; `--force` marks the approval `waived`). Once the file exists, a gated phase is complete only with an approval whose files are unchanged, plus a reviewed gate unless the approval is waived. The earliest gated phase whose files changed is current again, and its packet lists them on a `Stale:` line. The skeletons' approval covers only what they read, because the build fills in the test bodies. `init` writes an empty file for a new project. A project without the file is judged by its gate reviews alone until its first `advance`, which also records the gated phases it has already completed.
 
 ## Application state
 
@@ -44,7 +44,7 @@ The installed console owns human application creation/selection and initial plac
 4. `gate wait` observes feedback without consuming it.
 5. `advance` validates outputs and consumes the latest feedback.
 
-`advance` consumes feedback, and so does re-opening a gate over pending feedback, which answers 409 with that feedback. `gate wait` never consumes, so a retried wait sees the same feedback. A gate counts as reviewed once its latest revision's feedback was consumed; its verdict (the `verdict` answer) is recorded, and `advance` warns, without refusing, on anything but `Approve`.
+`advance` consumes feedback, and so does re-opening a gate over pending feedback, which answers 409 with that feedback. `gate wait` never consumes, so a retried wait sees the same feedback. A gate counts as reviewed once its latest revision's feedback was consumed, but in a project that keeps approvals only `advance` completes its phase; its verdict (the `verdict` answer) is recorded, and `advance` warns, without refusing, on anything but `Approve`.
 
 ## Release artifact
 

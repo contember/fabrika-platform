@@ -82,10 +82,11 @@ test('CLI phase projection drops gateName while UI retains explicit null and omi
 		satisfied: false,
 		verdicts: {},
 		unverified: [],
+		stale: [],
 	}
-	const { verdicts: _verdicts, unverified: _unverified, ...olderDaemon } = phase
+	const { verdicts: _verdicts, unverified: _unverified, stale: _stale, ...olderDaemon } = phase
 	expect(phaseStateSchema.parse(olderDaemon)).toEqual(phase)
-	expect(phaseStateSchema.parse({ ...phase, verdicts: { intake: 'maybe' }, unverified: 'x' })).toEqual(phase)
+	expect(phaseStateSchema.parse({ ...phase, verdicts: { intake: 'maybe' }, unverified: 'x', stale: [1] })).toEqual(phase)
 	expect(phaseStateSchema.parse({ ...phase, gateName: 'intake' })).toEqual(phase)
 	expect(uiPhaseStateSchema.parse({ ...phase, gateName: null })).toEqual({ ...phase, gateName: null })
 	expect(uiPhaseStateSchema.parse({ ...phase, gateName: 12 })).toEqual(phase)

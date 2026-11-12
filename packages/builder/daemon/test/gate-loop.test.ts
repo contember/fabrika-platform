@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { dirname, join, resolve } from 'path'
 import { fileURLToPath } from 'url'
+import { readApprovals, writeApprovals } from '../../shared/approvals'
 import { builderDaemonUrl } from '../../shared/urls'
 import { type RunningDaemon, startDaemon } from '../src/index'
 import { scratchDir } from './scratch'
@@ -364,6 +365,67 @@ describe('gate interactive loop', () => {
 		expect(again).toEqual({ found: true, revision: 2, verdict: 'changes' })
 		const missing = await (await fetch(`${base}/api/session/${sessionId}/gate/tech/consume`, { method: 'POST' })).json()
 		expect(missing).toEqual({ found: false })
+	test('re-opening a gate over pending feedback does not complete the phase of a project that keeps approvals', async () => {
+		const sessionId = 'gate-loop-reopen'
+		const repo = scratchDir('fabrika-reopen-repo-')
+		mkdirSync(join(repo, '.fabrika', 'intent'), { recursive: true })
+		writeApprovals(repo, {})
+		writeFileSync(join(repo, '.fabrika', 'intent', 'brief.md'), '# brief\nbuild a thing')
+		const phaseUrl = `${base}/api/phase?root=${encodeURIComponent(join(repo, '.fabrika'))}&session=${encodeURIComponent(sessionId)}`
+
+		await openGate(sessionId, 'intake')
+		const ws = await openSocket(`${wsBase}/ws/session/${sessionId}`)
+		ws.send(JSON.stringify({ type: 'submit', feedback: 'Tighten the non-goals.' }))
+		await new Promise((r) => setTimeout(r, 100))
+		ws.close()
+		await expect(openGate(sessionId, 'intake')).rejects.toThrow('Unconsumed feedback')
+
+		const state = await (await fetch(phaseUrl)).json()
+		expect(state.current).toBe('intake')
+		expect(state.completed).toEqual([])
+
+		rmSync(repo, { recursive: true, force: true })
+	})
+
+	test('the first advance of a project without approvals records the gated phases it completed, and an edit re-opens them', async () => {
+		const sessionId = 'gate-loop-backfill'
+		const repo = scratchDir('fabrika-backfill-repo-')
+		mkdirSync(join(repo, '.fabrika', 'intent'), { recursive: true })
+		mkdirSync(join(repo, '.fabrika', 'principles'), { recursive: true })
+		writeFileSync(join(repo, '.fabrika', 'intent', 'brief.md'), '# brief\nbuild a thing')
+		writeFileSync(join(repo, '.fabrika', 'intent', 'glossary.md'), '# glossary')
+		writeFileSync(join(repo, '.fabrika', 'principles', 'principles.md'), '# principles')
+		writeFileSync(join(repo, '.fabrika', 'config.json'), JSON.stringify({ profile: 'zerops-app', sessionId, createdAt: new Date().toISOString() }))
+		const phaseUrl = `${base}/api/phase?root=${encodeURIComponent(join(repo, '.fabrika'))}&session=${encodeURIComponent(sessionId)}`
+		const submit = async (gate: string) => {
+			await openGate(sessionId, gate)
+			const ws = await openSocket(`${wsBase}/ws/session/${sessionId}`)
+			ws.send(JSON.stringify({ type: 'submit', feedback: 'Fine.', responses: [{ id: 'verdict', value: 'Approve' }] }))
+			await new Promise((r) => setTimeout(r, 100))
+			ws.close()
+		}
+
+		await submit('intake')
+		await fetch(`${base}/api/session/${sessionId}/feedback/consume`, { method: 'POST' })
+		await submit('vision')
+		expect(readApprovals(repo)).toBeNull()
+
+		const adv = await runCli(['advance', '--dir', repo], { FABRIKA_SESSION_ID: sessionId })
+		expect(adv.code).toBe(0)
+		const approvals = readApprovals(repo)
+		expect(Object.keys(approvals ?? {}).sort()).toEqual(['intake', 'vision'])
+		expect(approvals?.vision?.waived).toBeUndefined()
+		expect(approvals?.vision?.inputs['.fabrika/intent/glossary.md']).toMatch(/^[0-9a-f]{64}$/)
+
+		writeFileSync(join(repo, '.fabrika', 'intent', 'brief.md'), '# brief\nbuild a different thing')
+		const state = await (await fetch(phaseUrl)).json()
+		expect(state.current).toBe('intake')
+		expect(state.stale).toEqual(['.fabrika/intent/brief.md'])
+
+		// A waived gate is recorded as waived.
+		const forced = await runCli(['advance', '--force', '--dir', repo], { FABRIKA_SESSION_ID: sessionId })
+		expect(forced.code).toBe(0)
+		expect(readApprovals(repo)?.intake?.waived).toBe(true)
 
 		rmSync(repo, { recursive: true, force: true })
 	})

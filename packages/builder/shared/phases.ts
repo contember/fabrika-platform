@@ -19,6 +19,8 @@ export interface Phase {
 	/** A template under skill/gates/, or with `gateViewCommand` a repository path that command writes. */
 	gateView?: string
 	gateViewCommand?: string
+	/** A later phase rewrites the outputs by design, so an approval covers only the inputs. */
+	producesEditedLater?: boolean
 	/** Installed agent skills that apply to the phase. */
 	skills?: string[]
 }
@@ -74,6 +76,8 @@ const PHASE_TABLE: Record<PhaseId, Omit<Phase, 'id' | 'number'>> = {
 			'For each flow -> tests/browser/<slug>.test.ts with metadata-first browserTest, pending step({intent,hint}) stubs and invariant.todo acceptances (skeleton, not authored).',
 		gate: true,
 		gateView: 'review-grid.jsx',
+		// The build fills in the step bodies; the step intents and invariants stay the human's.
+		producesEditedLater: true,
 		skills: ['opice-plan'],
 	},
 	issues: {

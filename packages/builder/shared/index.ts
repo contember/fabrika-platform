@@ -80,6 +80,7 @@ export const phaseStateSchema = z.object({
 	satisfied: z.boolean(),
 	verdicts: z.record(phaseIdSchema, gateVerdictSchema).catch({}),
 	unverified: z.array(phaseIdSchema).catch([]),
+	stale: z.array(z.string()).catch([]),
 })
 export const uiPhaseStateSchema = phaseStateSchema.extend({ gateName: z.string().nullable().optional().catch(undefined) })
 	.transform(({ gateName, ...state }) => ({ ...state, ...(gateName === undefined ? {} : { gateName }) }))

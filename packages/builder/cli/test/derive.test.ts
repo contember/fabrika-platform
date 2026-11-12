@@ -1,7 +1,8 @@
 import { afterEach, expect, test } from 'bun:test'
 import { join } from 'path'
-import { derivePhase, isNonEmptyFile, matchGlob, producesSatisfied } from '../../shared/derive'
-import { phaseById } from '../../shared/phases'
+import { type Approvals, readApprovals, writeApprovals } from '../../shared/approvals'
+import { derivePhase, type GateProbe, isNonEmptyFile, matchGlob, phaseInputs, producesSatisfied } from '../../shared/derive'
+import { phaseById, type PhaseId } from '../../shared/phases'
 import { type Fixture, makeFixture } from './helpers'
 
 let fx: Fixture | null = null
@@ -118,4 +119,90 @@ test('matchGlob resolves *.flow.md and ISSUE-*.md shapes', () => {
 test('build phase produces is a placeholder -> never auto-satisfied from FS', () => {
 	fx = makeFixture()
 	expect(producesSatisfied(fx.root, phaseById('build'))).toBe(false)
+})
+
+const reviewed: GateProbe = () => ({ reviewed: true, verdict: 'approve' })
+const unreviewed: GateProbe = () => ({ reviewed: false, verdict: 'none' })
+
+function approve(root: string, ids: PhaseId[], waived = false): void {
+	const approvals: Approvals = { ...readApprovals(root) }
+	for (const id of ids) {
+		approvals[id] = { at: '2026-01-01T00:00:00.000Z', inputs: phaseInputs(root, phaseById(id)), ...(waived ? { waived: true } : {}) }
+	}
+	writeApprovals(root, approvals)
+}
+
+function writeThroughSkeletons(f: Fixture): void {
+	f.write('.fabrika/intent/brief.md')
+	f.write('.fabrika/intent/glossary.md')
+	f.write('.fabrika/principles/principles.md')
+	f.write('.fabrika/architecture/flows/login.flow.md')
+	f.write('.fabrika/architecture/tech.md')
+	f.write('.fabrika/architecture/design.md')
+	f.write('.fabrika/pages/home.jsx')
+	f.write('tests/browser/login.test.ts')
+}
+
+test('with approvals kept, a reviewed gate stays current until advance approves it', () => {
+	fx = makeFixture(true, { approvals: true })
+	fx.write('.fabrika/intent/brief.md')
+	let state = derivePhase(fx.root, reviewed)
+	expect(state.current).toBe('intake')
+	expect(state.satisfied).toBe(true)
+	expect(state.stale).toEqual([])
+
+	approve(fx.root, ['intake'])
+	state = derivePhase(fx.root, reviewed)
+	expect(state.current).toBe('vision')
+	expect(state.completed).toEqual(['intake'])
+})
+
+test('an approved phase whose produced or read files changed is current again, earliest first', () => {
+	fx = makeFixture(true, { approvals: true })
+	writeThroughSkeletons(fx)
+	approve(fx.root, ['intake', 'vision', 'flows', 'tech', 'design', 'skeletons'])
+	expect(derivePhase(fx.root, reviewed).current).toBe('issues')
+
+	// A flow edited after the skeletons were approved re-opens the flows gate, not only the phases that read it.
+	fx.write('.fabrika/architecture/flows/login.flow.md', 'a changed flow')
+	let state = derivePhase(fx.root, reviewed)
+	expect(state.current).toBe('flows')
+	expect(state.completed).toEqual(['intake', 'vision'])
+	expect(state.stale).toEqual(['.fabrika/architecture/flows/login.flow.md'])
+
+	approve(fx.root, ['flows'])
+	state = derivePhase(fx.root, reviewed)
+	expect(state.current).toBe('tech')
+	expect(state.stale).toEqual(['.fabrika/architecture/flows/login.flow.md'])
+
+	// A new input counts as a change too.
+	approve(fx.root, ['tech', 'design', 'skeletons'])
+	fx.write('.fabrika/architecture/flows/signup.flow.md')
+	expect(derivePhase(fx.root, reviewed).stale).toEqual(['.fabrika/architecture/flows/signup.flow.md'])
+})
+
+test('the build filling in a skeleton does not re-open the skeletons gate', () => {
+	fx = makeFixture(true, { approvals: true })
+	writeThroughSkeletons(fx)
+	fx.write('.fabrika/issues/ISSUE-001.md')
+	approve(fx.root, ['intake', 'vision', 'flows', 'tech', 'design', 'skeletons'])
+	fx.write('tests/browser/login.test.ts', 'step bodies filled in')
+	expect(derivePhase(fx.root, reviewed).current).toBe('build')
+})
+
+test('a waived approval completes its phase without a review; a reviewed one still needs its review', () => {
+	fx = makeFixture(true, { approvals: true })
+	fx.write('.fabrika/intent/brief.md')
+	approve(fx.root, ['intake'], true)
+	expect(derivePhase(fx.root, unreviewed).current).toBe('vision')
+
+	approve(fx.root, ['intake'])
+	expect(derivePhase(fx.root, unreviewed).current).toBe('intake')
+})
+
+test('without the approvals file, gates are judged by their reviews alone', () => {
+	fx = makeFixture()
+	fx.write('.fabrika/intent/brief.md')
+	expect(derivePhase(fx.root, reviewed).current).toBe('vision')
+	expect(derivePhase(fx.root, unreviewed).current).toBe('intake')
 })
