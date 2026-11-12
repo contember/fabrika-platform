@@ -598,6 +598,28 @@ describe('GitHub source connection workflow', () => {
 		expect(await queryRowsFromEnv(env, `SELECT label FROM vault WHERE label LIKE '%:app-credential'`)).toEqual([])
 	})
 
+	test("fails a personal account's repair that finds the App on another account, and says to sign in as the owner", async () => {
+		const env = environment()
+		const source = new FakeSourceConnection()
+		source.verifyFails = true
+		const started = await startSourceConnection(
+			deps(env, source, mutationRequest('/api/rpc')),
+			{ organization: 'octocat', ownerType: 'User', appName: 'fabrika-source', visibility: 'private', repositories: [] },
+		)
+		await manifestCallback({
+			...deps(env, source, new Request(`${ORIGIN}/api/source/github/callback?code=one&state=${token(32)}`)),
+			exchangeManifest: () => Promise.resolve(createdApp()),
+		})
+		source.verifyFails = false
+		source.githubOwner = 'someone-else'
+		source.githubOwnerType = 'User'
+		await expect(repairSourceConnection(deps(env, source, mutationRequest('/api/rpc')), started.connectionId))
+			.rejects.toMatchObject({ httpStatus: 422, message: expect.stringContaining('sign in to GitHub as octocat') })
+		expect(await env.REPOSITORIES.githubConnections.getAttempt(started.connectionId))
+			.toMatchObject({ status: 'failed', lastErrorCode: 'app_owner_mismatch' })
+		expect(await queryRowsFromEnv(env, `SELECT label FROM vault WHERE label LIKE '%:app-credential'`)).toEqual([])
+	})
+
 	test('reports unavailable and refuses to start without a vault', async () => {
 		const { FABRIKA_CONTROL_VAULT_KEY: _vaultKey, ...withoutVault } = environment()
 		const available = new FakeSourceConnection()

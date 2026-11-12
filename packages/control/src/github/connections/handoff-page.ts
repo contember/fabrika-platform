@@ -9,7 +9,7 @@ export interface ManifestHandoffPage {
 	readonly owner: string
 	readonly ownerType: GitHubSourceOwnerType
 	readonly appName: string
-	/** Admits this page's one style and one script element, and nothing else. */
+	/** Admits this page's one style element and, for an organization, its one script element, and nothing else. */
 	readonly nonce: string
 }
 
