@@ -7,6 +7,8 @@ import { resolveStackPointer, type StackPointer, unsupportedProfileNote } from '
 export interface RenderOpts {
 	profile?: string
 	connection?: BuilderProjectConnection
+	/** Skeleton urls off the flows' route map (`skeletonRouteWarnings`). */
+	routeWarnings?: string[]
 }
 
 const CHECK = '✓' // ✓
@@ -37,6 +39,7 @@ export function renderPacket(state: PhaseState, opts: RenderOpts = {}): string {
 	}
 
 	lines.push(`Goal:    ${phase.goal}`)
+	for (const warning of opts.routeWarnings ?? []) lines.push(`Routes:  warning: ${warning}`)
 
 	if (phase.skills) lines.push(`Skills:  ${phase.skills.join(', ')}`)
 

@@ -48,9 +48,11 @@ const PHASE_TABLE: Record<PhaseId, Omit<Phase, 'id' | 'number'>> = {
 		label: 'User flows',
 		reads: ['.fabrika/intent/*', '.fabrika/principles/*'],
 		produces: ['.fabrika/architecture/flows/*.flow.md'],
-		goal: 'For each user-facing journey, write .fabrika/architecture/flows/<slug>.flow.md (actor, preconditions, steps, success/failure).',
+		goal:
+			'For each user-facing journey, write .fabrika/architecture/flows/<slug>.flow.md: front matter `actor`, `goal`, `route` (the screen it starts on) and `leads_to` (the screens it moves to), then preconditions, steps and success/failure.',
 		gate: true,
-		gateView: 'flows.jsx',
+		gateView: '.fabrika/architecture/flows-review.jsx',
+		gateViewCommand: 'fabrika builder flows review',
 	},
 	tech: {
 		title: 'Tech + scaffold decision',

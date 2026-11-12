@@ -37,12 +37,26 @@ that lane.
    goal end-to-end (e.g. "shopper checks out a cart", "admin seeds the
    catalog"). Split signup/auth flows out from the feature flows — they map to
    different opice metadata (`roles`, self-provisioning vs `seeds`).
-3. **Write one `.fabrika/architecture/flows/<slug>.flow.md` per journey**, each
-   with: front-matter `actor`, `goal`; an ordered list of **steps** (each step =
-   what the user does + the UI surface it happens on + the data it reads/writes);
-   the **URL** the surface lives at (this is _prescription_ — it becomes the
-   opice skeleton `url` and the route the build must create); and explicit
-   **success** and **failure** outcomes.
+3. **Write one `.fabrika/architecture/flows/<slug>.flow.md` per journey**
+   (`<slug>`: lowercase letters, digits and dashes). Start it with front matter,
+   one `key: value` per line:
+
+   ```markdown
+   ---
+   actor: shopper
+   goal: checks out a cart
+   route: /cart
+   leads_to: [/checkout, /orders/:id]
+   ---
+   ```
+
+   `route` is the screen the flow starts on and `leads_to` the screens it moves
+   to, as paths (`:name` for a parameter). They are _prescription_: the routes
+   the build must create, and the `url` an opice skeleton may name. The flows
+   gate draws them as one map (`fabrika builder flows review`), and a skeleton
+   whose `url` is not on it is reported. Then write an ordered list of **steps**
+   (each step = what the user does + the UI surface it happens on + the data it
+   reads/writes), and explicit **success** and **failure** outcomes.
 4. **Keep it derivable.** Phrase steps so phase 5 (opice skeletons) can turn
    each step into a `step{intent, hint}` and each invariant-worthy outcome into
    an `invariant.todo`. Name data
