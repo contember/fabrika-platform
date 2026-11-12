@@ -97,6 +97,8 @@ export interface GitHubSourceConnectionSetupPendingDto extends GitHubSourceConne
 	readonly phase: 'starting' | 'awaiting-manifest-callback' | 'persisting' | 'activating'
 	/** Present only while the same-origin manifest handoff can be resumed. */
 	readonly continuePath?: string
+	/** Present while a handoff link for an organization owner is outstanding: when it, and the setup, expire. */
+	readonly handoff?: { readonly expiresAt: number }
 }
 
 export interface GitHubSourceConnectionInstallationRequiredDto extends GitHubSourceConnectionBaseDto {
@@ -170,6 +172,29 @@ export interface StartGitHubSourceConnectionResponse {
 	readonly connectionId: string
 	/** Same-origin path that starts the GitHub manifest handoff. */
 	readonly continuePath: string
+}
+
+export interface GitHubSourceConnectionHandoffInput {
+	readonly connectionId: string
+	/** How long the link stays usable: 600 to 86400 seconds, 3600 when omitted. It holds the one setup slot that long. */
+	readonly expiresInSeconds?: number
+}
+
+/** The setup that was cancelled before GitHub created its App. */
+export interface GitHubSourceConnectionCancelDto {
+	readonly connectionId: string
+}
+
+/**
+ * A link for an owner of the organization who has no console session: opening it posts the manifest, and the owner
+ * creates and installs the App from their own browser. Shown once; a new one replaces it.
+ */
+export interface GitHubSourceConnectionHandoffDto {
+	readonly connectionId: string
+	/** Absolute URL on the console's origin; it carries the token, so treat it as a secret. */
+	readonly url: string
+	/** Unix seconds after which the link, and the setup it belongs to, expire. */
+	readonly expiresAt: number
 }
 
 /** One redacted line of deploy output: the runner's NDJSON log line and the control API's view of it. */

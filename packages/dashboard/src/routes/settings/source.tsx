@@ -1,5 +1,6 @@
 import { createPage, useRouter, useSearchParams } from '@buzola/router'
 import { useEffect, useState } from 'react'
+import { CopyField } from '../../access/components/CopyField'
 import { Icon } from '../../components/Icon'
 import { type Lamp, Status } from '../../components/Status'
 import { EmptyState, Table } from '../../components/Table'
@@ -10,10 +11,12 @@ import {
 	GITHUB_SOURCE_CONNECTION_DEFAULT_PAGE_SIZE,
 	type GitHubSourceConnectionAppDto,
 	type GitHubSourceConnectionConnectedDto,
+	type GitHubSourceConnectionHandoffDto,
 	type GitHubSourceConnectionStatusDto,
 	type GitHubSourceConnectionWorkflowDto,
 	type GitHubSourceOwnerType,
 } from '../../lib/api'
+import { fmtDate } from '../../lib/format'
 import {
 	appendSourceConnectionPage,
 	initialSourceConnectionCollection,
@@ -261,7 +264,18 @@ function SourceAction(
 					<button type="button" onClick={invalidate}>
 						<Icon name="refresh" size={14} /> Refresh now
 					</button>
+					{continuePath !== null && (
+						<ConnectionMutation
+							label="Cancel setup"
+							ariaLabel={`Cancel GitHub setup ${status.connectionId}`}
+							connectionId={status.connectionId}
+							pending="Cancelling…"
+							action={() => api.sourceConnection.cancel(sourceConnectionInput(status.connectionId))}
+							onDone={invalidate}
+						/>
+					)}
 				</div>
+				{continuePath !== null && <OwnerHandoff connectionId={status.connectionId} outstanding={status.handoff?.expiresAt ?? null} />}
 			</section>
 		)
 	}
@@ -284,6 +298,71 @@ function SourceAction(
 			</section>
 		)
 	}
+}
+
+/**
+ * Only an owner of the GitHub account can create its App. When that is someone else, they finish the setup from a link in
+ * their own browser, with no console account; this page then follows the setup as it does for the administrator.
+ */
+const HANDOFF_SPANS: readonly { readonly seconds: number; readonly label: string }[] = [
+	{ seconds: 60 * 60, label: '1 hour' },
+	{ seconds: 8 * 60 * 60, label: '8 hours' },
+	{ seconds: 24 * 60 * 60, label: '24 hours' },
+]
+
+function OwnerHandoff({ connectionId, outstanding }: { connectionId: string; outstanding: number | null }) {
+	const [handoff, setHandoff] = useState<GitHubSourceConnectionHandoffDto | null>(null)
+	const [span, setSpan] = useState(HANDOFF_SPANS[0]?.seconds ?? 3600)
+	const [busy, setBusy] = useState(false)
+	const [error, setError] = useState<string | null>(null)
+	async function mint() {
+		setBusy(true)
+		setError(null)
+		try {
+			setHandoff(await api.sourceConnection.handoff({ connectionId, expiresInSeconds: span }))
+		} catch (cause) {
+			setError(cause instanceof ApiError ? cause.message : 'The link could not be created.')
+		} finally {
+			setBusy(false)
+		}
+	}
+	return (
+		<div className="source-handoff">
+			<p className="muted small">
+				Cannot create the App on that GitHub account yourself? Send its owner a link: they create and install the App from their own browser, without a
+				console account.
+			</p>
+			{handoff === null && outstanding !== null && (
+				<p className="muted small">
+					A link for an owner is out and works until {fmtDate(outstanding)}. A new link replaces it, and the owner's page stops working.
+				</p>
+			)}
+			{handoff === null
+				? (
+					<div className="source-handoff-mint">
+						<label>
+							Valid for{' '}
+							<select value={span} onChange={(event) => setSpan(Number(event.target.value))} disabled={busy}>
+								{HANDOFF_SPANS.map((option) => <option key={option.seconds} value={option.seconds}>{option.label}</option>)}
+							</select>
+						</label>
+						<button type="button" disabled={busy} onClick={mint} aria-label={`Create a link for the account owner ${connectionId}`}>
+							{busy ? 'Creating…' : outstanding === null ? 'Create a link for an owner' : 'Replace the link'}
+						</button>
+					</div>
+				)
+				: (
+					<>
+						<CopyField label="Link for the account owner" value={handoff.url} multiline />
+						<p className="muted small">
+							Shown once. It works until {fmtDate(handoff.expiresAt)}{' '}
+							or until the App is created, and a new link replaces it. No other setup can start meanwhile; cancel the setup to end it sooner.
+						</p>
+					</>
+				)}
+			{error !== null && <p className="error-text" role="alert">{error}</p>}
+		</div>
+	)
 }
 
 /** GitHub's return to the setup URL normally finishes both steps; these are for when it did not come back. */

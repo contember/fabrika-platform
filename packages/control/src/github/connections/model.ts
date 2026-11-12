@@ -17,6 +17,8 @@ export type GitHubSetupErrorCode =
 	| 'app_owner_not_organization'
 	/** GitHub made a personal account's App on another account; the attempt cannot pass and has failed. */
 	| 'app_owner_mismatch'
+	/** An administrator cancelled the setup before GitHub created the App. */
+	| 'cancelled'
 
 export type GitHubSetupPhase =
 	| 'awaiting_manifest_callback'
@@ -35,6 +37,8 @@ export interface GitHubSetupAttempt {
 	version: number
 	stateHash: string | null
 	manifestStateSecretRef: string | null
+	/** SHA-256 of the handoff token an administrator minted; the attempt then also takes the handoff routes. */
+	handoffTokenHash: string | null
 	initiatedBy: string
 	expectedOrigin: string
 	desiredOwner: string
@@ -89,6 +93,7 @@ export interface GitHubSetupAttemptRow {
 	version: number
 	state_hash: string | null
 	manifest_state_secret_ref: string | null
+	handoff_token_hash: string | null
 	initiated_by: string
 	expected_origin: string
 	desired_owner: string

@@ -85,6 +85,8 @@ const MOUNTS: readonly Call[] = [
 ]
 const GITHUB: readonly Call[] = [
 	rpc('sourceConnection.start', { organization: 'acme', appName: 'Acme', visibility: 'private', repositories: [] }),
+	rpc('sourceConnection.handoff', { connectionId: 'missing' }),
+	rpc('sourceConnection.cancel', { connectionId: 'missing' }),
 	rpc('sourceConnection.verifyInstallation', { connectionId: 'missing' }),
 	rpc('sourceConnection.repair', { connectionId: 'missing' }),
 	rpc('sourceConnection.reconcile', { connectionId: 'missing' }),
@@ -149,4 +151,31 @@ describe('a bearer is explicit authority', () => {
 			expect(await fetch(call(target, 'bearer and cookie'))).toBe('control 403')
 		})
 	}
+})
+
+describe("an organization owner's browser has no console session", () => {
+	const fetch = admissionFixture()
+	const get = (path: string) => fetch(new Request(`${CONSOLE_ORIGIN}${path}`))
+
+	test('the handoff routes reach Control, which authenticates them by the attempt', async () => {
+		expect(await get('/api/source/github/handoff/missing')).toBe('control 200')
+		const posted = await fetch(
+			new Request(`${CONSOLE_ORIGIN}/api/source/github/handoff/missing`, {
+				method: 'POST',
+				headers: { 'content-type': 'application/x-www-form-urlencoded' },
+				body: 'token=guess',
+			}),
+		)
+		expect(posted).toBe('control 404')
+		expect(await get('/api/source/github/handoff-callback?code=one-time&state=guess')).toBe('control 409')
+		expect(await get('/api/source/github/handoff-setup/missing?installation_id=1&setup_action=install')).toBe('control 404')
+	})
+
+	test("the administrator's own routes still need a session", async () => {
+		for (
+			const path of ['/api/source/github/manifest/missing', '/api/source/github/callback?code=one-time&state=guess', '/api/source/github/setup/missing']
+		) {
+			expect(await get(path)).toStartWith('proxy ')
+		}
+	})
 })

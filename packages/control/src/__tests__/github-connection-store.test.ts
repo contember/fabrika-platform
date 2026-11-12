@@ -11,6 +11,7 @@ import { connectionDto, workflowDto } from '../github/connections/status'
 import { GitHubConnectionStore } from '../github/connections/store'
 import { GitHubConnectionWebhookSecretProvider } from '../github/connections/webhook-secret'
 import { Vault } from '../vault'
+import { cancelStoreScenario, handoffStoreScenario } from './helpers/handoff-store'
 import { createHarness, type Harness, queryRows } from './helpers/harness'
 
 function testKey(): string {
@@ -767,5 +768,19 @@ describe('GitHubConnectionStore', () => {
 		await flow.vault.delete(flow.webhook.ref)
 		const connected = new GitHubConnectionWebhookSecretProvider(flow.store, flow.vault, flow.started.id)
 		await expect(connected.getSecret()).rejects.toThrow('unresolvable vault ref')
+	})
+})
+
+describe('handoff writes on SQLite', () => {
+	test('a mint rotates the state, the renew keeps a longer expiry, and the session-free claim needs a link', async () => {
+		const harness = createHarness(() => 1_000)
+		const vault = await Vault.create(harness.d1, testKey(), () => 1_000)
+		await handoffStoreScenario(harness.repositories.githubConnections, vault, harness.d1, 'attempt-handoff', 1_000)
+	})
+
+	test('a cancel fails the waiting attempt and removes its state', async () => {
+		const harness = createHarness(() => 1_000)
+		const vault = await Vault.create(harness.d1, testKey(), () => 1_000)
+		await cancelStoreScenario(harness.repositories.githubConnections, vault, harness.d1, 'attempt-cancel', 1_000)
 	})
 })

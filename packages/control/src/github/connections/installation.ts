@@ -1,8 +1,9 @@
-import type { GitHubSourceConnectionStatusDto } from '@fabrika/control-contract'
+import type { AuthContext } from '@fabrika/auth'
+import type { GitHubSetupOutcome, GitHubSourceConnectionStatusDto } from '@fabrika/control-contract'
 import { vault } from '../../services'
-import { consoleRedirect } from './browser'
+import { consoleRedirect, handoffResult } from './browser'
 import { advanceWithDeadline, CONFIGURATION_DEADLINE_MS, matchesConnectionIdentity, settleFailedStep, webhookUrl } from './configuration'
-import { audit, linkedDeadline, requireHuman, type SourceConnectionWorkflowDeps, throwIfAborted } from './context'
+import { audit, linkedDeadline, requireHuman, type SourceConnectionRequestDeps, type SourceConnectionWorkflowDeps, throwIfAborted } from './context'
 import { appOwnerFailed, reconcileUnavailable, repairFailed, SourceConnectionWorkflowError, sourceUnavailable } from './errors'
 import { type GitHubSetupAttempt, type GitHubSetupPhase, type GitHubSourceConnection } from './model'
 import type { SourceGitHubAppIdentity, SourceInstallationScope, SourceInstallationVerification } from './port'
@@ -16,7 +17,7 @@ const MAX_SETUP_QUERY_LENGTH = 1024
 export async function verifySourceInstallation(deps: SourceConnectionWorkflowDeps, connectionId: string): Promise<GitHubSourceConnectionStatusDto> {
 	requireHuman(deps.auth)
 	const attempt = await requireAttempt(deps, connectionId, 'installation_required')
-	return connectionDto(deps.source.provider, await publishVerifiedInstallation(deps, attempt, null))
+	return connectionDto(deps.source.provider, await publishVerifiedInstallation(deps, deps.auth, attempt, null))
 }
 
 /**
@@ -27,26 +28,47 @@ export async function verifySourceInstallation(deps: SourceConnectionWorkflowDep
  */
 export async function installationSetup(deps: SourceConnectionWorkflowDeps, connectionId: string): Promise<Response> {
 	requireHuman(deps.auth)
+	const outcome = await completeInstallationSetup(deps, deps.auth, connectionId, false)
+	return consoleRedirect(outcome ?? undefined)
+}
+
+/**
+ * The same return for an App whose manifest was posted through a handoff link, in the owner's browser, which has no
+ * console session. It needs no caller because the setup URL never was evidence: the App's own key finds the
+ * installation. It serves only an attempt an administrator minted a link for, and answers a page, not the console.
+ */
+export async function handedOffInstallationSetup(deps: SourceConnectionRequestDeps, connectionId: string): Promise<Response> {
+	const outcome = await completeInstallationSetup(deps, null, connectionId, true)
+	return handoffResult(outcome ?? 'setup-incomplete', deps.randomBytes)
+}
+
+async function completeInstallationSetup(
+	deps: SourceConnectionRequestDeps,
+	caller: AuthContext | null,
+	connectionId: string,
+	handedOff: boolean,
+): Promise<GitHubSetupOutcome | null> {
 	const url = new URL(deps.request.url)
 	if (connectionId === '' || connectionId.length > MAX_CONNECTION_ID_LENGTH || url.search.length > MAX_SETUP_QUERY_LENGTH) {
 		throw new SourceConnectionWorkflowError(400)
 	}
 	const setup = setupQuery(url.searchParams)
-	if (await deps.env.REPOSITORIES.githubConnections.getConnectionById(connectionId) !== null) return consoleRedirect('connected')
 	const attempt = await deps.env.REPOSITORIES.githubConnections.getAttempt(connectionId)
+	if (handedOff && (attempt === null || attempt.handoffTokenHash === null)) throw new SourceConnectionWorkflowError(404)
+	if (await deps.env.REPOSITORIES.githubConnections.getConnectionById(connectionId) !== null) return 'connected'
 	if (attempt === null) throw new SourceConnectionWorkflowError(404)
-	if (attempt.status !== 'active' || attempt.phase !== 'installation_required') return consoleRedirect()
-	if (setup.action === 'request') return consoleRedirect('approval-requested')
+	if (attempt.status !== 'active' || attempt.phase !== 'installation_required') return null
+	if (setup.action === 'request') return 'approval-requested'
 	try {
-		await publishVerifiedInstallation(deps, attempt, setup.installationId)
+		await publishVerifiedInstallation(deps, caller, attempt, setup.installationId)
 	} catch (error) {
 		throwIfAborted(deps.request.signal)
 		if (!(error instanceof SourceConnectionWorkflowError)) throw error
 		// A concurrent verify from the console may have published it first.
 		const published = await deps.env.REPOSITORIES.githubConnections.getConnectionById(connectionId)
-		return consoleRedirect(published === null ? 'unverified' : 'connected')
+		return published === null ? 'unverified' : 'connected'
 	}
-	return consoleRedirect('connected')
+	return 'connected'
 }
 
 type SetupQuery = { readonly action: 'install' | 'update'; readonly installationId: number } | { readonly action: 'request' }
@@ -68,9 +90,13 @@ function setupQuery(query: URLSearchParams): SetupQuery {
 	throw new SourceConnectionWorkflowError(400)
 }
 
-/** Find the attempt's installation with the App's vault key and publish it; `expected` must then name the same one. */
+/**
+ * Find the attempt's installation with the App's vault key and publish it; `expected` must then name the same one. A
+ * handed-off setup has no caller to audit as; the administrator's minting of the link is the audited act.
+ */
 async function publishVerifiedInstallation(
-	deps: SourceConnectionWorkflowDeps,
+	deps: SourceConnectionRequestDeps,
+	caller: AuthContext | null,
 	attempt: GitHubSetupAttempt,
 	expected: number | null,
 ): Promise<GitHubSourceConnection> {
@@ -108,7 +134,7 @@ async function publishVerifiedInstallation(
 		verifiedAt: deps.now?.() ?? Math.floor(Date.now() / 1000),
 	})
 	if (published === null) throw new SourceConnectionWorkflowError(409)
-	await audit(deps.auth, 'source.connection.connected', attempt.id)
+	if (caller !== null) await audit(caller, 'source.connection.connected', attempt.id)
 	return published
 }
 

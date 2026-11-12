@@ -49,6 +49,13 @@ export function controlServiceContract(options: ControlServiceOptions) {
 			'github-manifest': s.service('GET', '/api/source/github/manifest/:connectionId', { callers: ['human'] }),
 			'github-callback': s.service('GET', '/api/source/github/callback', { callers: ['human'] }),
 			'github-setup': s.service('GET', '/api/source/github/setup/:connectionId', { callers: ['human'] }),
+			// An organization owner's browser without a console session (ADR-0029): each authenticates by the attempt's
+			// own secrets, the posted handoff token or the one-use manifest state, and the setup by the App's key.
+			// The link opens a page with no secret; it posts the token from the URL's fragment back to the same path.
+			'github-handoff': s.protocol('GET', '/api/source/github/handoff/:connectionId'),
+			'github-handoff-open': s.protocol('POST', '/api/source/github/handoff/:connectionId'),
+			'github-handoff-callback': s.protocol('GET', '/api/source/github/handoff-callback'),
+			'github-handoff-setup': s.protocol('GET', '/api/source/github/handoff-setup/:connectionId'),
 			'rpc': s.service('POST', '/api/rpc', { callers: ['human', 'machine'], admission: JSON_BODY }),
 			'api-root': s.service('*', '/api', { callers: ['human'] }),
 			'iam-admin-rpc': s.service('POST', '/iam/admin/rpc', { callers: ['human', 'machine'], admission: JSON_BODY }),

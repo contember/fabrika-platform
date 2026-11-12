@@ -29,6 +29,7 @@ import { GitHubConnectionStore } from '../github/connections/store'
 import { CATALOG_LEASE_KEY, LEASE_TTL_MS } from '../lease'
 import type { DeployJobMessage } from '../run-lifecycle'
 import { Vault } from '../vault'
+import { cancelStoreScenario, handoffStoreScenario } from './helpers/handoff-store'
 import { fixtureProtect, fixtureRuns } from './helpers/lock'
 import { createPostgres, hasPostgres, type PostgresFixture, postgresUrl, skipReason } from './helpers/postgres'
 import { interleaving } from './helpers/postgres-interleave'
@@ -171,6 +172,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			{ bundle: 'control', name: '0029_dev_sandbox_create_attempt.sql' },
 			{ bundle: 'control', name: '0030_dev_sandbox_keys_expiry.sql' },
 			{ bundle: 'control', name: '0031_github_owner_type.sql' },
+			{ bundle: 'control', name: '0032_github_setup_handoff.sql' },
 		])
 	})
 
@@ -935,6 +937,16 @@ describe.skipIf(!hasPostgres)('src/vault.ts — envelope encryption, unmodified,
 })
 
 describe.skipIf(!hasPostgres)('GitHub source connection persistence on Postgres', () => {
+	test('handoff writes: a mint rotates the state, the renew keeps a longer expiry, the session-free claim needs a link', async () => {
+		await reset()
+		await handoffStoreScenario(db.githubConnections, await Vault.create(raw, kek()), raw, uuidv7(), now())
+	})
+
+	test('handoff writes: a cancel fails the waiting attempt and removes its state', async () => {
+		await reset()
+		await cancelStoreScenario(db.githubConnections, await Vault.create(raw, kek()), raw, uuidv7(), now())
+	})
+
 	test('uses the same callback CAS and atomic platform-secret checkpoint', async () => {
 		await reset()
 		const vault = await Vault.create(raw, kek())

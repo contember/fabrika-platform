@@ -47,6 +47,18 @@ export const MANIFEST_PATH = '/api/source/github/manifest'
 /** The App's setup URL; GitHub sends the installer here after an install or an installation update. */
 export const SETUP_PATH = '/api/source/github/setup'
 
+/**
+ * The handoff link an administrator gives the GitHub account's owner: `<path>/<connectionId>#<token>`. The owner's browser
+ * has no console session, so this route and the two below authenticate by the attempt's own secrets, not by a caller.
+ */
+export const HANDOFF_PATH = '/api/source/github/handoff'
+
+/** The manifest's redirect URL when the page was opened through a handoff link. */
+export const HANDOFF_CALLBACK_PATH = '/api/source/github/handoff-callback'
+
+/** The App's setup URL when the manifest was posted through a handoff link. */
+export const HANDOFF_SETUP_PATH = '/api/source/github/handoff-setup'
+
 /** GitHub's installation page of a verified App, whose `htmlUrl` is `https://github.com/apps/<slug>`. */
 export function installationUrl(appHtmlUrl: string): string {
 	return `${appHtmlUrl}/installations/new`
@@ -87,7 +99,11 @@ export function workflowDto(provider: string, attempt: GitHubSetupAttempt): GitH
 			phase: publicPhase(attempt.phase),
 		}
 		if (attempt.phase !== 'awaiting_manifest_callback') return pending
-		return { ...pending, continuePath: `${MANIFEST_PATH}/${encodeURIComponent(attempt.id)}` }
+		return {
+			...pending,
+			continuePath: `${MANIFEST_PATH}/${encodeURIComponent(attempt.id)}`,
+			...(attempt.handoffTokenHash === null ? {} : { handoff: { expiresAt: attempt.expiresAt } }),
+		}
 	}
 }
 

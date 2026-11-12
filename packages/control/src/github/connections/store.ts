@@ -219,13 +219,31 @@ export class GitHubConnectionStore {
 		return await this.markExpired(attempt, now, 'repair_required', errorForExpiredPhase(attempt.phase))
 	}
 
-	async claimCallback(stateHash: string, principalId: string): Promise<GitHubSetupAttempt | null> {
+	/** Consume the manifest state for the callback of the principal that started the attempt. */
+	claimCallback(stateHash: string, principalId: string): Promise<GitHubSetupAttempt | null> {
+		return this.claimManifestState(stateHash, { principalId })
+	}
+
+	/**
+	 * Consume the manifest state for a callback without a console session: a browser that came through a handoff link.
+	 * Accepted only for an attempt an administrator minted a link for; the one-use state is the browser's proof.
+	 */
+	claimHandedOffCallback(stateHash: string): Promise<GitHubSetupAttempt | null> {
+		return this.claimManifestState(stateHash, 'handoff')
+	}
+
+	private async claimManifestState(
+		stateHash: string,
+		claimant: { readonly principalId: string } | 'handoff',
+	): Promise<GitHubSetupAttempt | null> {
 		validateSha256(stateHash, 'state hash')
 		const now = this.now()
+		const claimantClause = claimant === 'handoff' ? 'handoff_token_hash IS NOT NULL' : 'initiated_by = ?'
+		const claimantBinds = claimant === 'handoff' ? [] : [claimant.principalId]
 		const existing = await this.db.prepare(`SELECT * FROM github_source_setup_attempts
-			WHERE state_hash = ? AND initiated_by = ? AND status = 'active'
+			WHERE state_hash = ? AND ${claimantClause} AND status = 'active'
 				AND phase = 'awaiting_manifest_callback' AND expires_at > ?`)
-			.bind(stateHash, principalId, now)
+			.bind(stateHash, ...claimantBinds, now)
 			.first<GitHubSetupAttemptRow>()
 		if (existing === null || existing.manifest_state_secret_ref === null) return null
 		const attempt = decodeAttempt(existing)
@@ -235,10 +253,10 @@ export class GitHubConnectionStore {
 		const claim = this.db.prepare(`UPDATE github_source_setup_attempts
 			SET phase = 'exchange_claimed', state_hash = NULL, version = version + 1, updated_at = ?, expires_at = ?
 			WHERE id = ? AND version = ? AND state_hash = ? AND manifest_state_secret_ref = ?
-				AND initiated_by = ? AND status = 'active' AND phase = 'awaiting_manifest_callback' AND expires_at > ?
+				AND ${claimantClause} AND status = 'active' AND phase = 'awaiting_manifest_callback' AND expires_at > ?
 				AND EXISTS (SELECT 1 FROM vault WHERE id = ? AND scope = 'platform' AND label = ?)
 			RETURNING *`)
-			.bind(now, this.leaseExpiresAt(), attempt.id, attempt.version, stateHash, ref, principalId, now, vaultId, label)
+			.bind(now, this.leaseExpiresAt(), attempt.id, attempt.version, stateHash, ref, ...claimantBinds, now, vaultId, label)
 		const remove = this.db.prepare(`DELETE FROM vault WHERE id = ? AND scope = 'platform' AND label = ? AND EXISTS (
 			SELECT 1 FROM github_source_setup_attempts WHERE id = ? AND version = ? AND status = 'active'
 				AND phase = 'exchange_claimed' AND state_hash IS NULL AND manifest_state_secret_ref = ?
@@ -275,17 +293,109 @@ export class GitHubConnectionStore {
 	): Promise<GitHubSetupAttempt | null> {
 		const now = this.now()
 		if (!Number.isSafeInteger(expiresAt) || expiresAt <= now) throw new Error('invalid manifest handoff expiry')
+		// Never shortens: a handoff link minted for a longer stretch keeps working after the administrator opens the page.
 		const row = await this.db.prepare(`UPDATE github_source_setup_attempts SET
-			expires_at = ?, version = version + 1, updated_at = ?
+			expires_at = CASE WHEN expires_at > ? THEN expires_at ELSE ? END, version = version + 1, updated_at = ?
 			WHERE id = ? AND version = ? AND initiated_by = ? AND expected_origin = ?
 				AND status = 'active' AND phase = 'awaiting_manifest_callback' AND expires_at > ?
 				AND manifest_state_secret_ref IS NOT NULL AND EXISTS (
 					SELECT 1 FROM vault WHERE id = substr(manifest_state_secret_ref, 7)
 						AND scope = 'platform' AND label = ?
 				) RETURNING *`)
-			.bind(expiresAt, now, id, expectedVersion, principalId, expectedOrigin, now, githubManifestStateSecretLabel(id))
+			.bind(expiresAt, expiresAt, now, id, expectedVersion, principalId, expectedOrigin, now, githubManifestStateSecretLabel(id))
 			.first<GitHubSetupAttemptRow>()
 		return row === null ? null : decodeAttempt(row)
+	}
+
+	/**
+	 * Record the hash of a new handoff token, hold the attempt open until `expiresAt`, and replace the one-use manifest
+	 * state with a new one in the same batch. A new link thus revokes the one before it and every page already opened
+	 * with it, the console's own included: their state no longer claims anything. Only the principal that started the
+	 * attempt mints one.
+	 */
+	async mintHandoff(input: {
+		readonly attempt: GitHubSetupAttempt
+		readonly principalId: string
+		readonly expectedOrigin: string
+		readonly tokenHash: string
+		readonly stateHash: string
+		readonly state: PreparedVaultSecret
+		readonly expiresAt: number
+	}): Promise<GitHubSetupAttempt | null> {
+		const { attempt, state: secret } = input
+		validateSha256(input.tokenHash, 'handoff token hash')
+		validateSha256(input.stateHash, 'state hash')
+		const now = this.now()
+		if (!Number.isSafeInteger(input.expiresAt) || input.expiresAt <= now) throw new Error('invalid handoff expiry')
+		const label = githubManifestStateSecretLabel(attempt.id)
+		if (
+			secret.scope !== 'platform' || secret.label !== label || secret.ref !== vaultRef(secret.id)
+			|| secret.ciphertext === '' || secret.valueIv === '' || secret.wrappedDek === '' || secret.dekIv === ''
+		) throw new Error('invalid GitHub manifest state secret')
+		const oldRef = attempt.manifestStateSecretRef
+		if (oldRef === null || oldRef === secret.ref) return null
+		const rotate = this.db.prepare(`UPDATE github_source_setup_attempts SET
+			handoff_token_hash = ?, state_hash = ?, manifest_state_secret_ref = ?, expires_at = ?, version = version + 1, updated_at = ?
+			WHERE id = ? AND version = ? AND initiated_by = ? AND expected_origin = ?
+				AND status = 'active' AND phase = 'awaiting_manifest_callback' AND expires_at > ?
+				AND manifest_state_secret_ref = ?
+			RETURNING *`)
+			.bind(
+				input.tokenHash,
+				input.stateHash,
+				secret.ref,
+				input.expiresAt,
+				now,
+				attempt.id,
+				attempt.version,
+				input.principalId,
+				input.expectedOrigin,
+				now,
+				oldRef,
+			)
+		const removeOld = this.db.prepare(`DELETE FROM vault WHERE id = ? AND scope = 'platform' AND label = ? AND EXISTS (
+			SELECT 1 FROM github_source_setup_attempts WHERE id = ? AND version = ? AND manifest_state_secret_ref = ?
+		) RETURNING id`).bind(oldRef.slice('vault:'.length), label, attempt.id, attempt.version + 1, secret.ref)
+		// The second branch inserts a row the vault's scope CHECK refuses, failing the whole batch when the rotation did
+		// not apply, so no orphan secret is written.
+		const insertNew = this.db.prepare(`INSERT INTO vault (id, scope, label, ciphertext, value_iv, wrapped_dek, dek_iv)
+			SELECT ?, ?, ?, ?, ?, ?, ? FROM github_source_setup_attempts
+			WHERE id = ? AND version = ? AND manifest_state_secret_ref = ? AND state_hash = ?
+			UNION ALL SELECT ?, 'invalid', ?, ?, ?, ?, ? WHERE (
+				SELECT COUNT(*) FROM github_source_setup_attempts
+				WHERE id = ? AND version = ? AND manifest_state_secret_ref = ? AND state_hash = ?
+			) <> 1 RETURNING id`)
+			.bind(
+				secret.id,
+				secret.scope,
+				secret.label,
+				secret.ciphertext,
+				secret.valueIv,
+				secret.wrappedDek,
+				secret.dekIv,
+				attempt.id,
+				attempt.version + 1,
+				secret.ref,
+				input.stateHash,
+				secret.id,
+				secret.label,
+				secret.ciphertext,
+				secret.valueIv,
+				secret.wrappedDek,
+				secret.dekIv,
+				attempt.id,
+				attempt.version + 1,
+				secret.ref,
+				input.stateHash,
+			)
+		try {
+			const results = await this.db.batch<GitHubSetupAttemptRow>([rotate, removeOld, insertNew])
+			const row = results[0]?.results[0]
+			if (results[0]?.results.length !== 1 || results[2]?.results.length !== 1 || row === undefined) return null
+			return decodeAttempt(row)
+		} catch {
+			return null
+		}
 	}
 
 	async resumeRepair(id: string, expectedVersion: number): Promise<GitHubSetupAttempt | null> {
@@ -535,18 +645,37 @@ export class GitHubConnectionStore {
 		return row === null ? null : decodeAttempt(row)
 	}
 
-	private async expireManifestCallback(attempt: GitHubSetupAttempt, now: number): Promise<GitHubSetupAttempt | null> {
+	/**
+	 * Fail a setup that still waits for GitHub's manifest callback and remove its encrypted state, so no handoff link,
+	 * console page or callback can continue it and a new setup may start. Nothing exists on GitHub yet.
+	 */
+	cancelAwaitingAttempt(attempt: GitHubSetupAttempt): Promise<GitHubSetupAttempt | null> {
+		return this.endManifestCallback(attempt, this.now(), 'cancelled')
+	}
+
+	private expireManifestCallback(attempt: GitHubSetupAttempt, now: number): Promise<GitHubSetupAttempt | null> {
+		return this.endManifestCallback(attempt, now, 'callback_expired')
+	}
+
+	private async endManifestCallback(
+		attempt: GitHubSetupAttempt,
+		now: number,
+		code: 'callback_expired' | 'cancelled',
+	): Promise<GitHubSetupAttempt | null> {
 		if (attempt.manifestStateSecretRef === null) return null
+		// Expiry ends only an attempt whose time is up; a cancellation ends it at any time.
+		const due = code === 'callback_expired' ? 'AND expires_at <= ?' : ''
+		const dueBinds = code === 'callback_expired' ? [now] : []
 		const ref = attempt.manifestStateSecretRef
 		const vaultId = ref.slice('vault:'.length)
 		const label = githubManifestStateSecretLabel(attempt.id)
 		const expire = this.db.prepare(`UPDATE github_source_setup_attempts SET
-			status = 'failed', state_hash = NULL, last_error_code = 'callback_expired', version = version + 1,
+			status = 'failed', state_hash = NULL, last_error_code = ?, version = version + 1,
 			updated_at = ?, terminal_at = ?
 			WHERE id = ? AND version = ? AND status = 'active' AND phase = 'awaiting_manifest_callback'
-				AND expires_at <= ? AND manifest_state_secret_ref = ?
+				${due} AND manifest_state_secret_ref = ?
 				AND EXISTS (SELECT 1 FROM vault WHERE id = ? AND scope = 'platform' AND label = ?)
-			RETURNING id`).bind(now, now, attempt.id, attempt.version, now, ref, vaultId, label)
+			RETURNING id`).bind(code, now, now, attempt.id, attempt.version, ...dueBinds, ref, vaultId, label)
 		const remove = this.db.prepare(`DELETE FROM vault WHERE id = ? AND scope = 'platform' AND label = ? AND EXISTS (
 			SELECT 1 FROM github_source_setup_attempts WHERE id = ? AND version = ? AND status = 'failed'
 				AND phase = 'awaiting_manifest_callback' AND manifest_state_secret_ref = ?
@@ -560,28 +689,31 @@ export class GitHubConnectionStore {
 			const results = await this.db.batch<GitHubSetupAttemptRow>([expire, remove, clear])
 			const expired = results[2]?.results[0]
 			if (results[0]?.results.length !== 1 || results[1]?.results.length !== 1 || results[2]?.results.length !== 1 || expired === undefined) {
-				return await this.expireManifestCallbackWithoutResolvableSecret(attempt, now, vaultId, label)
+				return await this.endManifestCallbackWithoutResolvableSecret(attempt, now, code, vaultId, label)
 			}
 			return decodeAttempt(expired)
 		} catch {
-			return await this.expireManifestCallbackWithoutResolvableSecret(attempt, now, vaultId, label)
+			return await this.endManifestCallbackWithoutResolvableSecret(attempt, now, code, vaultId, label)
 		}
 	}
 
-	private async expireManifestCallbackWithoutResolvableSecret(
+	private async endManifestCallbackWithoutResolvableSecret(
 		attempt: GitHubSetupAttempt,
 		now: number,
+		code: 'callback_expired' | 'cancelled',
 		vaultId: string,
 		label: string,
 	): Promise<GitHubSetupAttempt | null> {
+		const due = code === 'callback_expired' ? 'AND expires_at <= ?' : ''
+		const dueBinds = code === 'callback_expired' ? [now] : []
 		const row = await this.db.prepare(`UPDATE github_source_setup_attempts SET
 			status = 'failed', state_hash = NULL, manifest_state_secret_ref = NULL,
-			last_error_code = 'callback_expired', version = version + 1, updated_at = ?, terminal_at = ?
+			last_error_code = ?, version = version + 1, updated_at = ?, terminal_at = ?
 			WHERE id = ? AND version = ? AND status = 'active' AND phase = 'awaiting_manifest_callback'
-				AND expires_at <= ? AND manifest_state_secret_ref = ? AND NOT EXISTS (
+				${due} AND manifest_state_secret_ref = ? AND NOT EXISTS (
 					SELECT 1 FROM vault WHERE id = ? AND scope = 'platform' AND label = ?
 				) RETURNING *`)
-			.bind(now, now, attempt.id, attempt.version, now, attempt.manifestStateSecretRef, vaultId, label)
+			.bind(code, now, now, attempt.id, attempt.version, ...dueBinds, attempt.manifestStateSecretRef, vaultId, label)
 			.first<GitHubSetupAttemptRow>()
 		return row === null ? null : decodeAttempt(row)
 	}

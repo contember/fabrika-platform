@@ -6,9 +6,11 @@ import { builderPublicResponse } from './builder-bootstrap'
 import { controlRpcRouter } from './control-rpc'
 import { handleDevSource } from './dev/receiver'
 import type { Env } from './env'
+import { handoffRefusal } from './github/connections/browser'
+import type { SourceConnectionRequestDeps } from './github/connections/context'
 import { SourceConnectionWorkflowError } from './github/connections/errors'
-import { installationSetup } from './github/connections/installation'
-import { manifestCallback, manifestHandoff } from './github/connections/manifest'
+import { handedOffInstallationSetup, installationSetup } from './github/connections/installation'
+import { handedOffCallback, handedOffManifest, handoffOpening, manifestCallback, manifestHandoff } from './github/connections/manifest'
 import type { SourceConnectionPort } from './github/connections/port'
 import { handleWebhook } from './github/triggers/webhook'
 import { error } from './http'
@@ -65,6 +67,12 @@ export function createControlApp(mcp: McpRoute | null): FetchService<ControlAppE
 		'github-manifest': authenticated((ctx, params) => sourceConnectionBrowserCall(ctx, (deps) => manifestHandoff(deps, params['connectionId'] ?? ''))),
 		'github-callback': authenticated((ctx) => sourceConnectionBrowserCall(ctx, manifestCallback)),
 		'github-setup': authenticated((ctx, params) => sourceConnectionBrowserCall(ctx, (deps) => installationSetup(deps, params['connectionId'] ?? ''))),
+		'github-handoff': serve((ctx, params) => sourceConnectionHandoffCall(ctx, (deps) => handoffOpening(deps, params['connectionId'] ?? ''))),
+		'github-handoff-open': serve((ctx, params) => sourceConnectionHandoffCall(ctx, (deps) => handedOffManifest(deps, params['connectionId'] ?? ''))),
+		'github-handoff-callback': serve((ctx) => sourceConnectionHandoffCall(ctx, handedOffCallback)),
+		'github-handoff-setup': serve((ctx, params) =>
+			sourceConnectionHandoffCall(ctx, (deps) => handedOffInstallationSetup(deps, params['connectionId'] ?? ''))
+		),
 		'rpc': authenticated((ctx) => dispatchRpcRequest({ router: controlRpcRouter, ctx, request: ctx.request })),
 		'api-root': notFound,
 		'iam-admin-rpc': serve(iamAdmin),
@@ -111,7 +119,32 @@ function sourceConnectionBrowserCall(
 	handler: (deps: Parameters<typeof manifestHandoff>[0]) => Promise<Response>,
 ): Promise<Response> {
 	if (ctx.auth === undefined || ctx.auth === null) return Promise.resolve(secureBrowserResponse(error(401, 'authentication required')))
-	return handler({ env: ctx.env, source: ctx.sourceConnection, auth: ctx.auth, request: ctx.request })
+	return browserResponse(handler({ env: ctx.env, source: ctx.sourceConnection, auth: ctx.auth, request: ctx.request }))
+}
+
+/**
+ * A handoff route: no caller, by design. The handler authenticates the request by the attempt's own secrets. Its
+ * refusals are pages for an organization owner, who reads no JSON and has no console to return to.
+ */
+function sourceConnectionHandoffCall(
+	ctx: ControlAppContext,
+	handler: (deps: SourceConnectionRequestDeps) => Response | Promise<Response>,
+): Promise<Response> {
+	return browserResponse(
+		Promise.resolve()
+			.then(() => handler({ env: ctx.env, source: ctx.sourceConnection, request: ctx.request }))
+			.catch((cause: unknown) => {
+				if (cause instanceof SourceConnectionWorkflowError) return handoffRefusal(cause.httpStatus)
+				if (cause instanceof DOMException && cause.name === 'AbortError') throw cause
+				// A vault or database failure: the owner gets the page that sends them back to the administrator.
+				console.error('source connection handoff request failed')
+				return handoffRefusal(500)
+			}),
+	)
+}
+
+function browserResponse(response: Promise<Response>): Promise<Response> {
+	return response
 		.then(secureBrowserResponse)
 		.catch((cause: unknown) => {
 			if (cause instanceof SourceConnectionWorkflowError) return secureBrowserResponse(error(cause.httpStatus, cause.message))

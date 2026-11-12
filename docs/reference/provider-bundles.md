@@ -317,7 +317,20 @@ The manifest names the App's setup URL, `/api/source/github/setup/:connectionId`
 update. The callback requires the same authenticated human principal, exact Control origin and one-use
 encrypted state. It rejects unknown or duplicate query fields, bounds the GitHub response and, once the
 App is configured, redirects to the App's installation page on GitHub (to a clean `/settings/source`
-URL when the setup needs repair). Before the browser can observe success, Control stores GitHub's one-time App id
+URL when the setup needs repair).
+
+When the administrator is not an owner of the organization, the setup page's **Create a link for an owner**
+(`sourceConnection.handoff`) mints a link, shown once and valid for an hour (up to 24 hours on request) or until the App
+is created; the setup page says while one is out. Minting replaces the setup's manifest state, so a new link revokes an
+older one and any page opened with it. **Cancel setup** (`sourceConnection.cancel`) ends a setup that still waits for
+GitHub, with its link, so a mistyped organization does not hold the one setup slot until it expires. The owner opens
+the link in their own browser without a console account. Its token is in the fragment, which reaches no request log;
+the page posts it back, and the answer is a manifest whose callback and setup URLs are the session-free `protocol` rows
+`/api/source/github/handoff-callback` and `/api/source/github/handoff-setup/:connectionId`. Those pages, and every
+refusal on the handoff routes, tell the owner the outcome instead of sending them to the console. The administrator's
+page follows the setup as usual ([ADR-0029](../decisions/0029-github-app-sources.md)).
+
+Before the browser can observe success, Control stores GitHub's one-time App id
 and private key in its encrypted platform vault, in the same transaction as the setup checkpoint. The
 setup state stores only nonsecret phases, hashes, verified identities and vault references.
 

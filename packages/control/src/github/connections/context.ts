@@ -6,15 +6,19 @@ import { controlPublicOrigin } from '../../iam'
 import { SourceConnectionWorkflowError } from './errors'
 import type { SourceConnectionPort } from './port'
 
-export interface SourceConnectionWorkflowDeps {
+/** What a step of the workflow needs besides the caller: the handoff routes run the same steps without a session. */
+export interface SourceConnectionRequestDeps {
 	readonly env: Env
 	readonly source: SourceConnectionPort
-	readonly auth: AuthContext
 	readonly request: Request
 	readonly now?: () => number
 	readonly randomBytes?: (length: number) => Uint8Array
 	readonly exchangeManifest?: typeof exchangeGitHubAppManifestCode
 	readonly githubFetch?: GitHubAppFetch
+}
+
+export interface SourceConnectionWorkflowDeps extends SourceConnectionRequestDeps {
+	readonly auth: AuthContext
 }
 
 export function requireHuman(auth: AuthContext): string {

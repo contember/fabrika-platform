@@ -30,6 +30,7 @@ const attemptFieldsSchema = z.object({
 	id: storedText,
 	state_hash: storedDigest.nullable(),
 	manifest_state_secret_ref: storedVaultRef.nullable(),
+	handoff_token_hash: storedDigest.nullable(),
 	initiated_by: storedText,
 	expected_origin: storedText,
 	desired_owner: storedText,
@@ -62,6 +63,7 @@ const storedFieldLabels: Readonly<Record<string, string>> = {
 	id: 'attempt id',
 	state_hash: 'state hash',
 	manifest_state_secret_ref: 'vault ref',
+	handoff_token_hash: 'handoff token hash',
 	initiated_by: 'initiating principal',
 	expected_origin: 'expected origin',
 	desired_owner: 'desired owner',
@@ -108,6 +110,7 @@ export function decodeAttempt(row: GitHubSetupAttemptRow): GitHubSetupAttempt {
 		version: row.version,
 		stateHash: fields.state_hash,
 		manifestStateSecretRef: fields.manifest_state_secret_ref,
+		handoffTokenHash: fields.handoff_token_hash,
 		initiatedBy: fields.initiated_by,
 		expectedOrigin: fields.expected_origin,
 		desiredOwner: fields.desired_owner,
@@ -294,6 +297,7 @@ function parseOptionalErrorCode(value: string | null): GitHubSetupErrorCode | nu
 		'rate_limited',
 		'app_owner_not_organization',
 		'app_owner_mismatch',
+		'cancelled',
 	]).nullable().safeParse(value)
 	if (parsed.success) return parsed.data
 	throw new Error('invalid GitHub setup error code')

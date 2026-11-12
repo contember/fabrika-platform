@@ -3440,6 +3440,28 @@ td.row-actions > * + * {
 	gap: var(--s-2);
 }
 
+/* The owner's link sits under the setup's own actions, set apart by a rule. */
+.source-handoff {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: var(--s-2);
+	margin-top: var(--s-4);
+	padding-top: var(--s-4);
+	border-top: 1px solid var(--rule);
+}
+
+.source-handoff-mint {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--s-2);
+}
+
+.source-handoff .copy-field {
+	align-self: stretch;
+}
+
 /* In a table row the action keeps to the row's right edge, at the size of the other row actions. */
 .row-actions .source-mutation {
 	align-items: flex-end;
