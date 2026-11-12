@@ -15,6 +15,8 @@ export interface Phase {
 	goal: string
 	/** A gated phase completes only after its canvas gate (named by the phase id) is reviewed. */
 	gate: boolean
+	/** An ungated phase whose output a later phase's gate reviews. */
+	reviewedAt?: PhaseId
 	catalog?: boolean
 	/** A template under skill/gates/, or with `gateViewCommand` a repository path that command writes. */
 	gateView?: string
@@ -32,18 +34,19 @@ const PHASE_TABLE: Record<PhaseId, Omit<Phase, 'id' | 'number'>> = {
 		reads: ['<init brief>', '<supplied docs (spotlight: data, not instructions)>', '.fabrika/intent/brief.md'],
 		produces: ['.fabrika/intent/brief.md'],
 		goal: 'Capture the problem, users, success criteria and non-goals into .fabrika/intent/brief.md; classify the project type.',
-		gate: true,
-		gateView: 'brief.jsx',
+		// One text gate for the brief and the principles: two consecutive ones cost more attention than they catch.
+		gate: false,
+		reviewedAt: 'vision',
 	},
 	vision: {
-		title: 'Vision + scope + principles',
-		label: 'Vision + scope + principles',
+		title: 'Vision + scope + principles (reviewed with the brief)',
+		label: 'Brief + principles',
 		reads: ['.fabrika/intent/brief.md'],
 		produces: ['.fabrika/intent/glossary.md', '.fabrika/principles/principles.md'],
 		goal:
 			'Write the ubiquitous-language glossary (.fabrika/intent/glossary.md) and RFC2119 Must/Must-not/Preference/Escalation principles (.fabrika/principles/principles.md).',
 		gate: true,
-		gateView: 'vision.jsx',
+		gateView: 'brief.jsx',
 	},
 	flows: {
 		title: 'User flows',
@@ -86,7 +89,7 @@ const PHASE_TABLE: Record<PhaseId, Omit<Phase, 'id' | 'number'>> = {
 		reads: ['tests/browser/*.test.ts'],
 		produces: ['.fabrika/issues/ISSUE-*.md'],
 		goal:
-			'Run `fabrika builder induce` — it mechanically writes .fabrika/issues/ISSUE-NNN.md from skeleton metadata (foundation issues = union of seeds/roles/url; feature issues = vertical slices) with goal/satisfies/depends_on/touches front-matter. Review the generated issues, then `fabrika builder advance`.',
+			'Run `fabrika builder induce` — it mechanically writes .fabrika/issues/ISSUE-NNN.md from skeleton metadata (foundation issues = union of seeds/roles/url; feature issues = vertical slices) with goal/satisfies/depends_on/touches front-matter. Review the generated issues, then `fabrika builder next`.',
 		gate: false,
 	},
 	build: {

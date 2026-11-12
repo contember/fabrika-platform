@@ -4,8 +4,8 @@
 
 The builder runs seven deterministic phases:
 
-1. intake
-2. vision
+1. intake (no gate of its own)
+2. vision, whose gate reviews the brief with the glossary and principles
 3. flows
 4. technology
 5. opice test skeletons
@@ -55,6 +55,9 @@ fabrika builder gate open <phase> --view <canvas.jsx>
 fabrika builder gate wait
 fabrika builder advance
 ```
+
+A phase without a gate (intake, issues) completes as soon as its files exist: run `next` again instead of the gate and
+`advance` steps. The vision gate reviews the brief that intake wrote.
 
 All commands:
 

@@ -15,10 +15,9 @@ test('packet for intake has the expected sections', () => {
 	expect(packet).toContain('Read:')
 	expect(packet).toContain('Goal:')
 	expect(packet).not.toContain('Skills:')
-	expect(packet).toContain('Gate:')
-	expect(packet).toContain('After OK:')
-	expect(packet).toContain('fabrika builder gate open intake --view brief.jsx && fabrika builder gate wait')
-	expect(packet).toContain('fabrika builder advance && fabrika builder next')
+	expect(packet).toContain('Gate:    (none - reviewed at the vision gate')
+	expect(packet).toContain('After OK: fabrika builder next\n')
+	expect(packet).not.toContain('fabrika builder advance')
 })
 
 test('packet header shows completed phases with a checkmark', () => {
@@ -58,7 +57,7 @@ test('packetJson mirrors the structured fields', () => {
 	expect(json.index).toBe(1)
 	expect(json.number).toBe(2)
 	expect(json.gate).toBe(true)
-	expect(json.gateView).toBe('vision.jsx')
+	expect(json.gateView).toBe('brief.jsx')
 	expect(json.completed).toEqual(['intake'])
 	expect(json.produces).toContain('.fabrika/principles/principles.md')
 })
@@ -141,4 +140,18 @@ test('phases name only skills the builder ships or installs alongside opice', ()
 	for (const phase of PHASES) {
 		for (const skill of phase.skills ?? []) expect(known.has(skill), `${phase.id} names unknown skill ${skill}`).toBe(true)
 	}
+})
+
+test('no ungated packet tells the agent to advance: the phase completes from its files', () => {
+	fx = makeFixture()
+	expect(packetJson(derivePhase(fx.root)).reviewedAt).toBe('vision')
+	fx.write('.fabrika/intent/brief.md')
+	fx.write('.fabrika/intent/glossary.md')
+	fx.write('.fabrika/principles/principles.md')
+	fx.write('.fabrika/architecture/flows/login.flow.md')
+	fx.write('.fabrika/architecture/tech.md')
+	fx.write('tests/browser/login.test.ts')
+	const state = derivePhase(fx.root)
+	expect(state.current).toBe('issues')
+	expect(renderPacket(state)).not.toContain('builder advance')
 })

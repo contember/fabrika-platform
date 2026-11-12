@@ -167,13 +167,15 @@ test('advance succeeds online when gate feedback is consumable', async () => {
 test('advance online blocks when no feedback is pending', async () => {
 	fx = makeFixture()
 	fx.write('.fabrika/intent/brief.md', '# brief')
+	fx.write('.fabrika/intent/glossary.md', '# glossary')
+	fx.write('.fabrika/principles/principles.md', '# principles')
 
 	const phaseState = {
-		current: 'intake',
-		index: 0,
-		completed: [],
-		reads: [],
-		produces: ['.fabrika/intent/brief.md'],
+		current: 'vision',
+		index: 1,
+		completed: ['intake'],
+		reads: ['.fabrika/intent/brief.md'],
+		produces: ['.fabrika/intent/glossary.md', '.fabrika/principles/principles.md'],
 		gate: true,
 		satisfied: true,
 	}

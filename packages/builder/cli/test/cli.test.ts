@@ -90,7 +90,6 @@ test('a project initialized in Codex can resume in Claude without losing phase s
 	expect(existsSync(join(fx.root, '.claude'))).toBe(false)
 
 	fx.write('.fabrika/intent/brief.md', '# Shared brief')
-	expect((await run(['advance', '--force', '--dir', fx.root])).code).toBe(0)
 	const beforeHandoff = await run(['next', '--dir', fx.root])
 	expect(beforeHandoff.stdout).toContain('## Phase 2/7 - Vision')
 

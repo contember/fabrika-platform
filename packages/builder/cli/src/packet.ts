@@ -50,12 +50,17 @@ export function renderPacket(state: PhaseState, opts: RenderOpts = {}): string {
 		const view = phase.gateView ?? `${phase.id}.jsx`
 		const write = phase.gateViewCommand ? `${phase.gateViewCommand} && ` : ''
 		lines.push(`Gate:    ${write}fabrika builder gate open ${phase.id} --view ${view} && fabrika builder gate wait`)
+	} else if (phase.reviewedAt) {
+		lines.push(`Gate:    (none - reviewed at the ${phase.reviewedAt} gate, with the next phase's output)`)
 	} else {
 		lines.push(`Gate:    (none - deterministic compile step; review optional)`)
 	}
 
 	if (phase.id === 'build') {
 		lines.push(`After OK: fabrika builder build   (apply agents/build-orchestrator.md in the main session)`)
+	} else if (!phase.gate) {
+		// Nothing to approve: the phase completes as soon as its files exist, and `advance` would judge the next one.
+		lines.push(`After OK: fabrika builder next`)
 	} else {
 		lines.push(`After OK: fabrika builder advance && fabrika builder next`)
 	}
@@ -91,6 +96,8 @@ export interface PacketJson {
 	gate: boolean
 	gateView: string | null
 	gateViewCommand: string | null
+	/** An ungated phase whose output this later phase's gate reviews. */
+	reviewedAt: PhaseId | null
 	skills: string[]
 	completed: PhaseId[]
 	satisfied: boolean
@@ -114,6 +121,7 @@ export function packetJson(state: PhaseState, opts: RenderOpts = {}): PacketJson
 		gate: phase.gate,
 		gateView: phase.gateView ?? null,
 		gateViewCommand: phase.gateViewCommand ?? null,
+		reviewedAt: phase.reviewedAt ?? null,
 		skills: phase.skills ?? [],
 		completed: state.completed,
 		satisfied: state.satisfied,

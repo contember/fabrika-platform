@@ -26,6 +26,15 @@ afterAll(() => {
 	rmSync(sessionsDir, { recursive: true, force: true })
 })
 
+/** The brief, glossary and principles: through intake, which has no gate, to the vision gate that reviews them. */
+function writeIntent(fabrikaDir: string): void {
+	mkdirSync(join(fabrikaDir, 'intent'), { recursive: true })
+	mkdirSync(join(fabrikaDir, 'principles'), { recursive: true })
+	writeFileSync(join(fabrikaDir, 'intent', 'brief.md'), '# Brief\ncontent')
+	writeFileSync(join(fabrikaDir, 'intent', 'glossary.md'), '# Glossary')
+	writeFileSync(join(fabrikaDir, 'principles', 'principles.md'), '# Principles')
+}
+
 describe('daemon http endpoints', () => {
 	test('GET /health responds with ok + version + sessions', async () => {
 		const res = await fetch(`${base}/health`)
@@ -50,7 +59,7 @@ describe('daemon http endpoints', () => {
 		expect(state.current).toBe('intake')
 		expect(state.index).toBe(0)
 		expect(state.completed).toEqual([])
-		expect(state.gate).toBe(true)
+		expect(state.gate).toBe(false)
 		expect(state.satisfied).toBe(false)
 
 		rmSync(repo, { recursive: true, force: true })
@@ -138,8 +147,7 @@ describe('daemon http endpoints', () => {
 	test('a pushed-but-unanswered gate does NOT complete its phase', async () => {
 		const repo = scratchDir('fabrika-gate-repo-')
 		const fabrikaDir = join(repo, '.fabrika')
-		mkdirSync(join(fabrikaDir, 'intent'), { recursive: true })
-		writeFileSync(join(fabrikaDir, 'intent', 'brief.md'), '# Brief\ncontent')
+		writeIntent(fabrikaDir)
 
 		const canvasDir = scratchDir('fabrika-gate-canvas-')
 		writeFileSync(join(canvasDir, 'brief.jsx'), "<Section title='Brief'>x</Section>")
@@ -148,14 +156,14 @@ describe('daemon http endpoints', () => {
 		const open = await fetch(`${base}/api/session/${sessionId}/plan`, {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ directory: canvasDir, projectRoot: repo, gate: 'intake' }),
+			body: JSON.stringify({ directory: canvasDir, projectRoot: repo, gate: 'vision' }),
 		})
 		expect(open.status).toBe(200)
 
 		const url = `${base}/api/phase?root=${encodeURIComponent(fabrikaDir)}&session=${sessionId}`
 		const state = await (await fetch(url)).json()
-		expect(state.current).toBe('intake')
-		expect(state.completed).not.toContain('intake')
+		expect(state.current).toBe('vision')
+		expect(state.completed).not.toContain('vision')
 
 		rmSync(repo, { recursive: true, force: true })
 		rmSync(canvasDir, { recursive: true, force: true })
@@ -384,34 +392,31 @@ describe('derivePhaseState (filesystem fixture)', () => {
 
 	test('gate oracle blocks completion until the gate is reviewed', () => {
 		const dir = freshFabrika()
-		mkdirSync(join(dir, 'intent'), { recursive: true })
-		writeFileSync(join(dir, 'intent', 'brief.md'), '# Brief')
+		writeIntent(dir)
 		const oracle: GateOracle = { gateReview: () => ({ reviewed: false, verdict: 'none', revision: 1 }) }
 		const state = derivePhaseState(dir, 'sess', oracle)
-		expect(state.current).toBe('intake')
+		expect(state.current).toBe('vision')
 		expect(state.satisfied).toBe(true)
 		rmSync(dirname(dir), { recursive: true, force: true })
 	})
 
 	test('a reviewed gate completes its phase whatever the verdict, and the state keeps the verdict', () => {
 		const dir = freshFabrika()
-		mkdirSync(join(dir, 'intent'), { recursive: true })
-		writeFileSync(join(dir, 'intent', 'brief.md'), '# Brief')
+		writeIntent(dir)
 		const oracle: GateOracle = { gateReview: () => ({ reviewed: true, verdict: 'changes', revision: 1 }) }
 		const state = derivePhaseState(dir, 'sess', oracle)
-		expect(state.current).toBe('vision')
-		expect(state.verdicts).toEqual({ intake: 'changes' })
+		expect(state.current).toBe('flows')
+		expect(state.verdicts).toEqual({ vision: 'changes' })
 		expect(state.unverified).toEqual([])
 		rmSync(dirname(dir), { recursive: true, force: true })
 	})
 
 	test('without an oracle a passed gate is reported as unverified, not as reviewed', () => {
 		const dir = freshFabrika()
-		mkdirSync(join(dir, 'intent'), { recursive: true })
-		writeFileSync(join(dir, 'intent', 'brief.md'), '# Brief')
+		writeIntent(dir)
 		const state = derivePhaseState(dir)
-		expect(state.current).toBe('vision')
-		expect(state.unverified).toEqual(['intake'])
+		expect(state.current).toBe('flows')
+		expect(state.unverified).toEqual(['vision'])
 		expect(state.verdicts).toEqual({})
 		rmSync(dirname(dir), { recursive: true, force: true })
 	})

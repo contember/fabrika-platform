@@ -56,6 +56,6 @@ export async function cmdInduce(argv: string[]): Promise<number> {
 			+ `${foundation} foundation + ${feature} feature.`,
 	)
 	console.log(`[fabrika] wrote ${written}, skipped ${skipped} existing (use --force to overwrite).`)
-	console.log(`[fabrika] → .fabrika/issues/  · next: fabrika builder advance && fabrika builder next  (build)`)
+	console.log(`[fabrika] → .fabrika/issues/  · next: fabrika builder next  (build)`)
 	return 0
 }
