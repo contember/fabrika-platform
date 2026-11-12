@@ -1,4 +1,4 @@
-import { type WaiterSocket, waitForEvent, type WaitVerdict } from '@fabrika/daemon-kit'
+import { WaitError, type WaiterSocket, waitForEvent, type WaitVerdict } from '@fabrika/daemon-kit'
 import { spawn } from 'child_process'
 import { randomUUID } from 'crypto'
 import { z } from 'zod'
@@ -95,12 +95,17 @@ export function formatCanvasRenderError(error: CanvasRenderError): string {
 	return details.join('\n')
 }
 
+/** One handed-over input. Boxed so the wait can tell which probe settled it, whatever the text. */
+interface Input {
+	text: string
+}
+
 /** A canvas that failed to render is the answer — retrying the socket cannot fix it. */
-function readFeedbackFrame(raw: unknown): WaitVerdict<string> | undefined {
+function readFeedbackFrame(raw: unknown): WaitVerdict<Input> | undefined {
 	const frame = parseWaitFrame(raw)
 	switch (frame?.type) {
 		case 'submit':
-			return { type: 'settle', value: frame.feedback }
+			return { type: 'settle', value: { text: frame.feedback } }
 		case 'render-error':
 			return { type: 'fail', error: new Error(formatCanvasRenderError(frame.error)) }
 		case 'thread-queued':
@@ -110,49 +115,66 @@ function readFeedbackFrame(raw: unknown): WaitVerdict<string> | undefined {
 	}
 }
 
-export async function waitForFeedback(sessionId: string, options: FeedbackWaitOptions = {}): Promise<string> {
+type ConnectionOutcome =
+	| { type: 'settled'; text: string; late: string[] }
+	| { type: 'failed'; error: unknown; late: string[] }
+
+/**
+ * One connection's wait. A probe hands input over once, so one that resolves after its connection settled or
+ * dropped is returned as `late` instead of being lost.
+ */
+async function waitOnConnection(sessionId: string, options: FeedbackWaitOptions, timeoutMs: number): Promise<ConnectionOutcome> {
 	const { probe } = options
-	// A probe hands input over once, so one still in flight when the wait settles must not be dropped.
-	const probes: Promise<string | null>[] = []
-	const late = async (settled: string | null): Promise<string[]> => {
-		const values = (await Promise.all(probes.map((read) => read.catch(() => null)))).filter((value) => value !== null)
-		const own = settled === null ? -1 : values.indexOf(settled)
-		return values.filter((_, index) => index !== own)
+	const reads: Promise<Input | null>[] = []
+	const late = async (settled: Input | null): Promise<string[]> => {
+		const inputs = await Promise.all(reads.map((read) => read.catch(() => null)))
+		return inputs.flatMap((input) => (input === null || input === settled ? [] : [input.text]))
 	}
-	const wait = waitForEvent<string>({
-		url: `${WS_URL}/ws/wait/${sessionId}`,
-		onFrame: readFeedbackFrame,
-		...(probe === undefined ? {} : {
-			probe: async () => {
-				const read = probe()
-				probes.push(read)
-				const input = await read
-				return input === null ? undefined : { value: input }
-			},
-			alreadyProbed: true,
-		}),
-		createSocket: options.createSocket ?? ((url) => new WebSocket(cliSocketUrl(url))),
-		timeoutMs: options.timeoutMs ?? TIMEOUT_MS,
-		reconnect: {
-			attempts: options.reconnectAttempts ?? 3,
-			delayMs: options.reconnectDelayMs ?? 1_000,
-		},
-		messages: {
-			timeout: 'Timeout waiting for feedback.',
-			closed: 'WebSocket closed before feedback was submitted.',
-			connectionFailed: 'WebSocket connection failed.',
-		},
-	})
-	let settled: string
 	try {
-		settled = await wait
+		const settled = await waitForEvent<Input>({
+			url: `${WS_URL}/ws/wait/${sessionId}`,
+			onFrame: readFeedbackFrame,
+			...(probe === undefined ? {} : {
+				probe: async () => {
+					const read = probe().then((text) => (text === null ? null : { text }))
+					reads.push(read)
+					const input = await read
+					return input === null ? undefined : { value: input }
+				},
+				alreadyProbed: true,
+			}),
+			createSocket: options.createSocket ?? ((url) => new WebSocket(cliSocketUrl(url))),
+			timeoutMs,
+			messages: {
+				timeout: 'Timeout waiting for feedback.',
+				closed: 'WebSocket closed before feedback was submitted.',
+				connectionFailed: 'WebSocket connection failed.',
+			},
+		})
+		return { type: 'settled', text: settled.text, late: await late(settled) }
 	} catch (error) {
-		const extra = await late(null)
-		if (extra.length === 0) throw error
-		const message = error instanceof Error ? error.message : String(error)
-		throw new Error(`${message}\n\n${extra.join('\n')}`, { cause: error })
+		return { type: 'failed', error, late: await late(null) }
 	}
-	return [settled, ...(await late(settled))].join('\n')
+}
+
+export async function waitForFeedback(sessionId: string, options: FeedbackWaitOptions = {}): Promise<string> {
+	const deadline = Date.now() + (options.timeoutMs ?? TIMEOUT_MS)
+	const reconnectAttempts = options.reconnectAttempts ?? 3
+	const reconnectDelayMs = options.reconnectDelayMs ?? 1_000
+	// Reconnects here rather than in the waiter, so input claimed on a dropped connection is seen before the next one.
+	for (let attempt = 0;; attempt++) {
+		const outcome = await waitOnConnection(sessionId, options, deadline - Date.now())
+		if (outcome.type === 'settled') return [outcome.text, ...outcome.late].join('\n')
+		const { error, late } = outcome
+		const dropped = error instanceof WaitError && error.retryable
+		if (dropped && late.length > 0) return late.join('\n')
+		if (!dropped || attempt >= reconnectAttempts) {
+			if (late.length === 0) throw error
+			const message = error instanceof Error ? error.message : String(error)
+			throw new Error(`${message}\n\n${late.join('\n')}`, { cause: error })
+		}
+		await Bun.sleep(Math.min(reconnectDelayMs, Math.max(0, deadline - Date.now())))
+	}
 }
 
 export async function readLine(): Promise<string> {

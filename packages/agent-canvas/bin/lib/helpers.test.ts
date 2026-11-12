@@ -70,6 +70,32 @@ describe('waitForFeedback', () => {
 		await expect(result).resolves.toBe('Done\n## Thread replies\n')
 	})
 
+	test('a thread reply claimed while the connection drops is delivered, not left for the timeout', async () => {
+		let release = (_value: string | null) => {}
+		const sockets: FakeSocket[] = []
+		const result = waitForFeedback('session', {
+			createSocket: () => {
+				const socket = new FakeSocket()
+				sockets.push(socket)
+				if (sockets.length === 1) {
+					queueMicrotask(() => {
+						socket.onopen?.(new Event('open'))
+						socket.onclose?.(new CloseEvent('close'))
+						release('## Thread replies\n')
+					})
+				}
+				return socket
+			},
+			probe: () => new Promise((resolve) => (release = resolve)),
+			timeoutMs: 1_000,
+			reconnectAttempts: 1,
+			reconnectDelayMs: 0,
+		})
+
+		await expect(result).resolves.toBe('## Thread replies\n')
+		expect(sockets).toHaveLength(1)
+	})
+
 	test('rejects when the connection keeps closing', async () => {
 		const result = waitForFeedback('session', {
 			createSocket: () => {
