@@ -16,7 +16,9 @@ export interface Phase {
 	/** A gated phase completes only after its canvas gate (named by the phase id) is reviewed. */
 	gate: boolean
 	catalog?: boolean
+	/** A template under skill/gates/, or with `gateViewCommand` a repository path that command writes. */
 	gateView?: string
+	gateViewCommand?: string
 	/** Installed agent skills that apply to the phase. */
 	skills?: string[]
 }
@@ -99,7 +101,8 @@ const PHASE_TABLE: Record<PhaseId, Omit<Phase, 'id' | 'number'>> = {
 		goal:
 			'Run `fabrika builder build` for the orchestration brief, apply the bundled build-orchestrator playbook in the MAIN session, and fan out direct implementer subagents per ready issue (worktree-isolated); each must implement -> opice-author -> bun test green. Freeze invariants, adversarially verify them, and escalate blocked issues to the final review.',
 		gate: true,
-		gateView: 'build.jsx',
+		gateView: '.fabrika/build/review.jsx',
+		gateViewCommand: 'fabrika builder build review',
 		skills: ['fabrika', 'opice-author'],
 	},
 }

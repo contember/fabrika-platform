@@ -34,6 +34,9 @@ Usage:
   fabrika builder ensure-daemon                      Start the daemon if it is not running
   fabrika builder induce [--force]                   Derive issues from opice skeleton metadata
   fabrika builder build [--issue <ID>] [--assisted]  Run the assisted per-issue build driver
+  fabrika builder build done <ID> [--verify <cmd>]   Run the issue's check; record it as done only when green
+  fabrika builder build block <ID> --reason <text>   Record an issue as blocked
+  fabrika builder build status | review              Print the board | write the build gate view from it
 
 Environment:
   FABRIKA_PORT         Daemon port (default 19410)

@@ -69,6 +69,10 @@ fabrika builder gate wait [--gate <revision>] [--timeout <ms>]
 fabrika builder ensure-daemon
 fabrika builder induce [--force]
 fabrika builder build [--issue <ID>] [--assisted]
+fabrika builder build done <ID> [--verify "<command>"]
+fabrika builder build block <ID> --reason "<text>"
+fabrika builder build status
+fabrika builder build review
 ```
 
 The default profile is `zerops-app`. `--profile cf-app` selects the same paved road on Cloudflare: a contract application in one Durable Object per environment. The builder's `connect` and `deploy` work with a Zerops installation only, so a `cf-app` application is deployed by the installation's own Control. The other presets (`cf-lightweight`, `cf-fat`, `cf-internal-app`, `contember-app`, `content-site`) are kept for reference but are unsupported: they leave the contract, the proxy, the kit and the checker. `init`, the tech packet and the build brief warn when one is selected. `init` never replaces a project's profile; to move a project to a supported preset, change `profile` in `.fabrika/config.json` and revisit `.fabrika/architecture/tech.md`.

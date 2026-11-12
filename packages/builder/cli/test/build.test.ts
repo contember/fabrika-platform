@@ -3,7 +3,7 @@ import { type BuildBoard, planBuild } from '../src/build-status'
 import type { Issue } from '../src/issues'
 
 function issue(id: string, dependsOn: string[] = []): Issue {
-	return { id, path: `${id}.md`, goal: id, satisfies: [], dependsOn, touches: [], body: '' }
+	return { id, path: `${id}.md`, goal: id, satisfies: [], dependsOn, touches: [], verify: [], body: '' }
 }
 
 const ISSUES: Issue[] = [

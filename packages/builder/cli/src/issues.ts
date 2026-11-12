@@ -8,6 +8,8 @@ export interface Issue {
 	satisfies: string[]
 	dependsOn: string[]
 	touches: string[]
+	/** Repository-relative acceptance files `build done` runs; empty for an issue whose check the driver names. */
+	verify: string[]
 	body: string
 }
 
@@ -35,6 +37,7 @@ export function parseIssue(path: string): Issue {
 		satisfies: list(fm.body['satisfies']),
 		dependsOn: list(fm.body['depends_on']),
 		touches: list(fm.body['touches']),
+		verify: list(fm.body['verify']),
 		body: fm.rest,
 	}
 }
