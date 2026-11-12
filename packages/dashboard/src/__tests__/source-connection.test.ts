@@ -65,6 +65,18 @@ describe('source connection presentation', () => {
 		expect(sourceConnectionInput('connection-2')).toEqual({ connectionId: 'connection-2' })
 	})
 
+	test("builds a personal account's request and names its repositories after the account", () => {
+		expect(privateSourceConnectionRequest(' Octocat ', 'octo-fabrika', [], 'User')).toEqual({
+			organization: 'octocat',
+			ownerType: 'User',
+			appName: 'octo-fabrika',
+			visibility: 'private',
+			repositories: [],
+		})
+		expect(parseSourceRepositories('octocat/site', 'Octocat', 'User')).toEqual([{ owner: 'octocat', name: 'site' }])
+		expect(() => parseSourceRepositories('acme/site', 'octocat', 'User')).toThrow('belong to the same personal account')
+	})
+
 	test('reopens exhausted ascending pagination once when a pending workflow becomes connection 52', () => {
 		const original = Array.from({ length: GITHUB_SOURCE_CONNECTION_DEFAULT_PAGE_SIZE + 1 }, (_, index) => {
 			const sequence = String(index + 1).padStart(3, '0')

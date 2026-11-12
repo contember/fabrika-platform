@@ -1,3 +1,5 @@
+import type { GitHubSourceOwnerType } from '@fabrika/control-contract'
+
 export type GitHubSetupStatus = 'active' | 'repair_required' | 'completed' | 'failed'
 
 export type GitHubSetupErrorCode =
@@ -11,8 +13,10 @@ export type GitHubSetupErrorCode =
 	| 'configuration_conflict'
 	/** GitHub's rate limit stopped a step; a repair once it resets resumes the setup. */
 	| 'rate_limited'
-	/** GitHub made the App on a personal account; the attempt cannot pass and has failed. */
+	/** GitHub made the App on a personal account for an organization's setup; the attempt cannot pass and has failed. */
 	| 'app_owner_not_organization'
+	/** GitHub made a personal account's App on another account; the attempt cannot pass and has failed. */
+	| 'app_owner_mismatch'
 
 export type GitHubSetupPhase =
 	| 'awaiting_manifest_callback'
@@ -34,6 +38,7 @@ export interface GitHubSetupAttempt {
 	initiatedBy: string
 	expectedOrigin: string
 	desiredOwner: string
+	desiredOwnerType: GitHubSourceOwnerType
 	desiredAppName: string
 	desiredPublic: boolean
 	requestedRepositories: string[]
@@ -55,6 +60,7 @@ export interface GitHubSourceConnection {
 	appSlug: string
 	appHtmlUrl: string
 	appOwner: string
+	appOwnerType: GitHubSourceOwnerType
 	appName: string
 	appPublic: boolean
 	appCredentialRef: string
@@ -86,6 +92,7 @@ export interface GitHubSetupAttemptRow {
 	initiated_by: string
 	expected_origin: string
 	desired_owner: string
+	desired_owner_type: string
 	desired_app_name: string
 	desired_public: number
 	requested_repositories_json: string
@@ -107,6 +114,7 @@ export interface GitHubSourceConnectionRow {
 	app_slug: string
 	app_html_url: string
 	app_owner: string
+	app_owner_type: string
 	app_name: string
 	app_public: number
 	app_credential_ref: string
@@ -139,6 +147,7 @@ export interface BeginGitHubSetupInput {
 	initiatedBy: string
 	expectedOrigin: string
 	desiredOwner: string
+	desiredOwnerType: GitHubSourceOwnerType
 	desiredAppName: string
 	desiredPublic: boolean
 	requestedRepositories: readonly string[]

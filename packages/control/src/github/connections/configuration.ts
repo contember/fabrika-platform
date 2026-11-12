@@ -81,9 +81,17 @@ function requiredCredentialRef(attempt: GitHubSetupAttempt): string {
 }
 
 function validateIdentity(attempt: GitHubSetupAttempt, app: SourceGitHubAppIdentity): void {
+	if (!validRemoteIdentity(app)) throw new Error('verified App identity does not match setup')
+	// Their own codes, so the console says what to fix. GitHub creates the App on a personal account when the person may not
+	// create Apps in the organization (or mistyped it), and a personal account's App on whichever account is signed in.
+	if (attempt.desiredOwnerType === 'Organization' && app.owner.type !== 'Organization') {
+		throw new SourceFailure('app_owner_not_organization', 'credentials')
+	}
+	if (attempt.desiredOwnerType === 'User' && (app.owner.type !== 'User' || app.owner.login.toLowerCase() !== attempt.desiredOwner.toLowerCase())) {
+		throw new SourceFailure('app_owner_mismatch', 'credentials')
+	}
 	if (
-		!validRemoteIdentity(app)
-		|| app.owner.type !== 'Organization' || app.owner.login.toLowerCase() !== attempt.desiredOwner.toLowerCase()
+		app.owner.login.toLowerCase() !== attempt.desiredOwner.toLowerCase()
 		|| app.public !== attempt.desiredPublic || app.permissions.contents !== 'read'
 		|| app.events.length !== 1 || app.events[0] !== 'push'
 	) throw new Error('verified App identity does not match setup')
@@ -92,7 +100,7 @@ function validateIdentity(attempt: GitHubSetupAttempt, app: SourceGitHubAppIdent
 export function matchesConnectionIdentity(connection: GitHubSourceConnection, app: SourceGitHubAppIdentity): boolean {
 	return validRemoteIdentity(app)
 		&& app.id === Number(connection.appId) && app.slug === connection.appSlug && app.htmlUrl === connection.appHtmlUrl
-		&& app.public === connection.appPublic && app.owner.type === 'Organization'
+		&& app.public === connection.appPublic && app.owner.type === connection.appOwnerType
 		&& app.owner.login.toLowerCase() === connection.appOwner.toLowerCase()
 		&& app.permissions.contents === 'read' && app.events.length === 1 && app.events[0] === 'push'
 }
@@ -105,8 +113,8 @@ function validRemoteIdentity(app: SourceGitHubAppIdentity): boolean {
 }
 
 /**
- * Park an attempt whose step failed with `error` where an operator can act on it. An App GitHub made on a personal
- * account can never pass, so its attempt fails and its key leaves the vault; GitHub's rate limit waits for a repair under
+ * Park an attempt whose step failed with `error` where an operator can act on it. An App GitHub made on another owner
+ * than the setup asked for can never pass, so its attempt fails and its key leaves the vault; GitHub's rate limit waits for a repair under
  * its own code; anything else waits for a repair from its phase. `null` when the attempt moved meanwhile.
  */
 export async function settleFailedStep(
@@ -116,7 +124,7 @@ export async function settleFailedStep(
 ): Promise<GitHubSetupAttempt | null> {
 	const store = deps.env.REPOSITORIES.githubConnections
 	const code = error instanceof SourceFailure ? error.code : undefined
-	if (code === 'app_owner_not_organization') return await store.failWithCredential(attempt, code)
+	if (code === 'app_owner_not_organization' || code === 'app_owner_mismatch') return await store.failWithCredential(attempt, code)
 	return await store.markRepairRequired(attempt.id, attempt.version, code === 'rate_limited' ? code : errorForPhase(attempt.phase))
 }
 

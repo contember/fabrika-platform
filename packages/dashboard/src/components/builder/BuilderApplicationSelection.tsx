@@ -165,7 +165,7 @@ export function BuilderApplicationSelection({ onSelect }: {
 									</select>
 								</label>
 								<p className="hint">
-									The server derives source coordinates from the existing repository organization. This page does not create repositories or configure GitHub.
+									The server derives source coordinates from the existing repository owner. This page does not create repositories or configure GitHub.
 								</p>
 							</>
 						)}

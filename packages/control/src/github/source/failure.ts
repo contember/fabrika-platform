@@ -11,8 +11,10 @@ export type SourceFailureCode =
 	/** The sandbox host refused the archive for its size (413); a smaller repository is the remedy, not a retry. */
 	| 'upload_too_large'
 	| 'credentials_invalid'
-	/** The GitHub App belongs to a personal account; Control connects an organization's App only. */
+	/** An organization's setup got an App GitHub created on a personal account. */
 	| 'app_owner_not_organization'
+	/** A personal account's setup got an App GitHub created on another account. */
+	| 'app_owner_mismatch'
 	| 'rate_limited'
 	| 'cancelled'
 	| 'internal'

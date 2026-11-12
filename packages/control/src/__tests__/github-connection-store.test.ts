@@ -1,6 +1,11 @@
 import type { SqlDatabase, SqlQueryResult, SqlStatement } from '@fabrika/platform'
 import { describe, expect, test } from 'bun:test'
-import { GitHubConnectionCasError, type GitHubSetupAttempt, type PublishGitHubConnectionInput } from '../github/connections/model'
+import {
+	type BeginGitHubSetupInput,
+	GitHubConnectionCasError,
+	type GitHubSetupAttempt,
+	type PublishGitHubConnectionInput,
+} from '../github/connections/model'
 import { githubAppCredentialSecretLabel, githubManifestStateSecretLabel, githubWebhookSecretLabel } from '../github/connections/secrets'
 import { connectionDto, workflowDto } from '../github/connections/status'
 import { GitHubConnectionStore } from '../github/connections/store'
@@ -55,6 +60,7 @@ async function attemptAtAppVerified(
 		initiatedBy: 'alice',
 		expectedOrigin: 'https://control.example',
 		desiredOwner: owner,
+		desiredOwnerType: 'Organization',
 		desiredAppName: appSlug,
 		desiredPublic: false,
 		requestedRepositories: [],
@@ -138,6 +144,7 @@ async function configuredAttempt() {
 		initiatedBy: 'principal-1',
 		expectedOrigin: 'https://control.example',
 		desiredOwner: 'acme',
+		desiredOwnerType: 'Organization',
 		desiredAppName: 'fabrika-source',
 		desiredPublic: false,
 		requestedRepositories: ['acme/z', 'acme/a', 'acme/a'],
@@ -239,6 +246,7 @@ describe('GitHubConnectionStore', () => {
 			initiatedBy: 'alice',
 			expectedOrigin: 'https://control.example',
 			desiredOwner: 'acme',
+			desiredOwnerType: 'Organization',
 			desiredAppName: 'source',
 			desiredPublic: false,
 			requestedRepositories: [],
@@ -256,6 +264,7 @@ describe('GitHubConnectionStore', () => {
 			initiatedBy: 'alice',
 			expectedOrigin: 'https://control.example',
 			desiredOwner: 'acme',
+			desiredOwnerType: 'Organization',
 			desiredAppName: 'source',
 			desiredPublic: false,
 			requestedRepositories: [],
@@ -275,6 +284,7 @@ describe('GitHubConnectionStore', () => {
 			initiatedBy: 'alice',
 			expectedOrigin: 'https://control.example',
 			desiredOwner: 'acme',
+			desiredOwnerType: 'Organization',
 			desiredAppName: 'source',
 			desiredPublic: false,
 			requestedRepositories: [],
@@ -299,6 +309,7 @@ describe('GitHubConnectionStore', () => {
 			initiatedBy: 'alice',
 			expectedOrigin: 'https://control.example',
 			desiredOwner: 'acme',
+			desiredOwnerType: 'Organization',
 			desiredAppName: 'source',
 			desiredPublic: false,
 			requestedRepositories: [],
@@ -325,6 +336,7 @@ describe('GitHubConnectionStore', () => {
 			initiatedBy: 'alice',
 			expectedOrigin: 'https://control.example',
 			desiredOwner: 'acme',
+			desiredOwnerType: 'Organization',
 			desiredAppName: 'source',
 			desiredPublic: false,
 			requestedRepositories: [],
@@ -392,6 +404,7 @@ describe('GitHubConnectionStore', () => {
 			initiatedBy: 'alice',
 			expectedOrigin: 'https://control.example',
 			desiredOwner: 'acme',
+			desiredOwnerType: 'Organization',
 			desiredAppName: 'source',
 			desiredPublic: false,
 			requestedRepositories: [],
@@ -411,12 +424,13 @@ describe('GitHubConnectionStore', () => {
 		const vault = await Vault.create(d1, testKey(), () => clock)
 		const firstState = await vault.prepareSecret('platform', githubManifestStateSecretLabel('a'), 'first-state')
 		const nextState = await vault.prepareSecret('platform', githubManifestStateSecretLabel('b'), 'next-state')
-		const input = {
+		const input: BeginGitHubSetupInput = {
 			id: 'a',
 			stateHash: STATE_DIGEST,
 			initiatedBy: 'alice',
 			expectedOrigin: 'https://control.example',
 			desiredOwner: 'acme',
+			desiredOwnerType: 'Organization',
 			desiredAppName: 'source',
 			desiredPublic: false,
 			requestedRepositories: [],
@@ -534,6 +548,7 @@ describe('GitHubConnectionStore', () => {
 			initiatedBy: 'alice',
 			expectedOrigin: 'https://control.example',
 			desiredOwner: 'acme',
+			desiredOwnerType: 'Organization',
 			desiredAppName: 'source',
 			desiredPublic: false,
 			requestedRepositories: [],
@@ -589,6 +604,7 @@ describe('GitHubConnectionStore', () => {
 			initiatedBy: 'principal-1',
 			expectedOrigin: 'https://control.example',
 			desiredOwner: 'acme',
+			desiredOwnerType: 'Organization',
 			desiredAppName: 'source',
 			desiredPublic: false,
 			requestedRepositories: [],
@@ -647,6 +663,7 @@ describe('GitHubConnectionStore', () => {
 			initiatedBy: 'principal-2',
 			expectedOrigin: 'https://control.example',
 			desiredOwner: 'ACME',
+			desiredOwnerType: 'Organization',
 			desiredAppName: 'late-source',
 			desiredPublic: false,
 			requestedRepositories: [],

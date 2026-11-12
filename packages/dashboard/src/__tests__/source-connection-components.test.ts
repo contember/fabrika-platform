@@ -3,10 +3,15 @@ import { BuzolaProvider } from '@buzola/router/react'
 import { describe, expect, test } from 'bun:test'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import type { GitHubSourceConnectionConnectedDto, GitHubSourceConnectionWorkflowDto } from '../lib/api'
+import type { GitHubSourceConnectionConnectedDto, GitHubSourceConnectionWorkflowDto, GitHubSourceOwnerType } from '../lib/api'
 import { ConnectedConnections, SourceWorkflow } from '../routes/settings/source'
 
-const connection = (connectionId: string, owner: string, isPublic = false): GitHubSourceConnectionConnectedDto => ({
+const connection = (
+	connectionId: string,
+	owner: string,
+	isPublic = false,
+	ownerType: GitHubSourceOwnerType = 'Organization',
+): GitHubSourceConnectionConnectedDto => ({
 	provider: 'zerops',
 	kind: 'github-app',
 	state: 'connected',
@@ -16,7 +21,7 @@ const connection = (connectionId: string, owner: string, isPublic = false): GitH
 		slug: `${owner}-fabrika`,
 		htmlUrl: `https://github.com/apps/${owner}-fabrika`,
 		public: isPublic,
-		owner: { login: owner, type: 'Organization' },
+		owner: { login: owner, type: ownerType },
 		permissions: { contents: 'read' },
 		events: ['push'],
 	},
@@ -62,10 +67,12 @@ describe('source connection collection components', () => {
 	test('renders the zero-connection private setup without a public-App control', () => {
 		const collection = connectedMarkup([])
 		const workflow = workflowMarkup({ provider: 'zerops', kind: 'github-app', state: 'anonymous' }, 0)
-		expect(collection).toContain('No organizations connected')
+		expect(collection).toContain('No accounts connected')
 		expect(workflow).toContain('The new App is private')
 		expect(workflow).toContain('Connect GitHub source')
 		expect(workflow).not.toContain('value="public"')
+		expect(workflow).toContain('<option value="Organization"')
+		expect(workflow).toContain('<option value="User"')
 	})
 
 	test('keeps a migrated connection readable, including legacy public state', () => {
@@ -98,6 +105,20 @@ describe('source connection collection components', () => {
 		expect(stable).toContain('GitHub source connection for acme')
 		expect(pending).toContain('Setup is in progress')
 		expect(pending).toContain('href="/api/source/github/manifest/connection-2"')
+	})
+
+	test("names a personal account's App as one while it waits for its installation", () => {
+		const installation = (ownerType: GitHubSourceOwnerType): string =>
+			workflowMarkup({
+				provider: 'zerops',
+				kind: 'github-app',
+				state: 'installation-required',
+				connectionId: 'connection-3',
+				app: connection('connection-3', 'octocat', false, ownerType).app,
+				installationUrl: 'https://github.com/apps/octocat-fabrika/installations/new',
+			}, 0)
+		expect(installation('User')).toContain('octocat · personal account')
+		expect(installation('Organization')).toContain('octocat · organization')
 	})
 
 	test('names installation and repair actions for their exact organization', () => {

@@ -44,6 +44,7 @@ function client(overrides: Partial<SourceGitHubClient> = {}): SourceGitHubClient
 			return { url: input.url, contentType: 'json', insecureSsl: '0' }
 		},
 		resolveOrganizationInstallation: async () => installation(41),
+		resolveUserInstallation: async () => ({ ...installation(44, 'octocat'), accountType: 'User' }),
 		resolveRepositoryInstallation: async () => installation(42),
 		mintRepositoryToken: async () => ({ token: 'ghs_unused', expiresAt: Date.now() + 60_000 }),
 		...overrides,
@@ -98,11 +99,10 @@ describe('GitHub App administration over vault-held keys', () => {
 		})
 	})
 
-	test('names an App GitHub made on a personal account, so the console says what to fix', async () => {
-		const f = await fixture(client({ getAuthenticatedApp: async () => identity({ owner: { login: 'someone', type: 'User' } }) }))
-		await expect(f.port.verifyApp({ credentialRef: f.credentialRef, connectionId: 'connection-1', signal: signal() })).rejects.toMatchObject({
-			code: 'app_owner_not_organization',
-			stage: 'credentials',
+	test("reports a personal account's App with its owner type, for the setup to compare with the owner it asked for", async () => {
+		const f = await fixture(client({ getAuthenticatedApp: async () => identity({ owner: { login: 'octocat', type: 'User' } }) }))
+		expect(await f.port.verifyApp({ credentialRef: f.credentialRef, connectionId: 'connection-1', signal: signal() })).toMatchObject({
+			owner: { login: 'octocat', type: 'User' },
 		})
 	})
 
@@ -190,7 +190,7 @@ describe('GitHub App administration over vault-held keys', () => {
 		const f = await fixture()
 		const verify = (port: SourceConnectionPort, scope: Parameters<SourceConnectionPort['verifyInstallations']>[0]['scope']) =>
 			port.verifyInstallations({ credentialRef: f.credentialRef, connectionId: 'connection-1', scope, signal: signal() })
-		expect(await verify(f.port, { kind: 'organization', organization: 'contember' })).toEqual({
+		expect(await verify(f.port, { kind: 'account', owner: 'contember', ownerType: 'Organization' })).toEqual({
 			status: 'installed',
 			installationId: 41,
 			accountLogin: 'contember',
@@ -213,9 +213,31 @@ describe('GitHub App administration over vault-held keys', () => {
 			await missing.port.verifyInstallations({
 				credentialRef: missing.credentialRef,
 				connectionId: 'connection-1',
-				scope: { kind: 'organization', organization: 'contember' },
+				scope: { kind: 'account', owner: 'contember', ownerType: 'Organization' },
 				signal: signal(),
 			}),
 		).toEqual({ status: 'missing' })
+	})
+
+	test("verifies a personal account's installation through the user endpoint", async () => {
+		const users: string[] = []
+		const f = await fixture(client({
+			resolveOrganizationInstallation: async () => {
+				throw new Error('an organization lookup for a personal account')
+			},
+			resolveUserInstallation: async (user) => {
+				users.push(user)
+				return { ...installation(44, 'octocat'), accountType: 'User' }
+			},
+		}))
+		expect(
+			await f.port.verifyInstallations({
+				credentialRef: f.credentialRef,
+				connectionId: 'connection-1',
+				scope: { kind: 'account', owner: 'octocat', ownerType: 'User' },
+				signal: signal(),
+			}),
+		).toEqual({ status: 'installed', installationId: 44, accountLogin: 'octocat', repositorySelection: 'selected' })
+		expect(users).toEqual(['octocat'])
 	})
 })

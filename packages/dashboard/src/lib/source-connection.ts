@@ -5,6 +5,7 @@ import type {
 	GitHubSourceConnectionListResponse,
 	GitHubSourceConnectionStatusDto,
 	GitHubSourceConnectionWorkflowDto,
+	GitHubSourceOwnerType,
 	GitHubSourceRepositoryDto,
 	StartGitHubSourceConnectionRequest,
 	StartGitHubSourceConnectionResponse,
@@ -35,10 +36,19 @@ export interface SourceConnectionCollectionState {
 	readonly workflowConnectionId: string | null
 }
 
-export function parseSourceRepositories(value: string, organization: string): readonly GitHubSourceRepositoryDto[] {
+/** How the console names an App owner of either type. */
+export function sourceOwnerNoun(ownerType: GitHubSourceOwnerType): string {
+	return ownerType === 'User' ? 'personal account' : 'organization'
+}
+
+export function parseSourceRepositories(
+	value: string,
+	appOwner: string,
+	ownerType: GitHubSourceOwnerType = 'Organization',
+): readonly GitHubSourceRepositoryDto[] {
 	if (value.length > MAX_SOURCE_REPOSITORIES_TEXT_LENGTH) throw new Error(`Enter no more than ${MAX_SOURCE_REPOSITORIES} repositories.`)
-	const owner = organization.trim().toLowerCase()
-	if (!OWNER.test(owner)) throw new Error('Enter a valid GitHub organization.')
+	const owner = appOwner.trim().toLowerCase()
+	if (!OWNER.test(owner)) throw new Error(`Enter a valid GitHub ${sourceOwnerNoun(ownerType)}.`)
 	const repositories: GitHubSourceRepositoryDto[] = []
 	const seen = new Set<string>()
 	for (const line of value.split('\n')) {
@@ -46,7 +56,7 @@ export function parseSourceRepositories(value: string, organization: string): re
 		if (coordinate === '') continue
 		const parts = coordinate.split('/')
 		if (parts.length !== 2 || parts[0] !== owner || !REPOSITORY.test(parts[1] ?? '')) {
-			throw new Error(`Every repository must use the ${owner}/repository form and belong to the same organization.`)
+			throw new Error(`Every repository must use the ${owner}/repository form and belong to the same ${sourceOwnerNoun(ownerType)}.`)
 		}
 		if (seen.has(coordinate)) throw new Error(`Repository ${coordinate} is listed more than once.`)
 		if (repositories.length >= MAX_SOURCE_REPOSITORIES) throw new Error(`Enter no more than ${MAX_SOURCE_REPOSITORIES} repositories.`)
@@ -57,12 +67,14 @@ export function parseSourceRepositories(value: string, organization: string): re
 }
 
 export function privateSourceConnectionRequest(
-	organization: string,
+	appOwner: string,
 	appName: string,
 	repositories: readonly GitHubSourceRepositoryDto[],
+	ownerType: GitHubSourceOwnerType = 'Organization',
 ): StartGitHubSourceConnectionRequest {
 	return {
-		organization: organization.trim().toLowerCase(),
+		organization: appOwner.trim().toLowerCase(),
+		...(ownerType === 'User' ? { ownerType } : {}),
 		appName: appName.trim(),
 		visibility: 'private',
 		repositories,

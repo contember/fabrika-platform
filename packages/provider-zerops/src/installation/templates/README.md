@@ -62,7 +62,7 @@ Namespace source resolution verifies public commit availability before its effec
 
 Written by `fabrika platform init --provider=zerops {{INSTALLATION}}`, not by hand.
 
-Public repositories deploy without a GitHub App. Configure an organization-owned GitHub App in the
+Public repositories deploy without a GitHub App. Configure a GitHub App, owned by an organization or a personal account, in the
 authenticated Control console at **Settings → Source**. Its private key and webhook secret stay in
 Control's encrypted vault; neither is copied into this repository or Environment. Init never reads or
 writes a GitHub App credential or a local credential recovery file.

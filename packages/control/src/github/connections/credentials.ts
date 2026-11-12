@@ -66,6 +66,7 @@ export interface SourceGitHubClient {
 	getWebhookConfig(signal?: AbortSignal): Promise<GitHubAppWebhookConfig>
 	updateWebhookConfig(input: GitHubAppWebhookUpdate): Promise<GitHubAppWebhookConfig>
 	resolveOrganizationInstallation(organization: string, signal?: AbortSignal): Promise<GitHubAppInstallation | null>
+	resolveUserInstallation(user: string, signal?: AbortSignal): Promise<GitHubAppInstallation | null>
 	resolveRepositoryInstallation(owner: string, repository: string, signal?: AbortSignal): Promise<GitHubAppInstallation | null>
 	mintRepositoryToken(input: GitHubRepositoryTokenRequest): Promise<GitHubInstallationToken>
 }
@@ -100,7 +101,7 @@ export interface GitHubSourceCredentials {
 	/** A repository-scoped installation token from exactly the bound connection; a failure fails the read. */
 	repositoryToken(input: GitHubSourceCredentialRequest): Promise<string>
 	/**
-	 * For a read no binding names: a repository-scoped token from the connection of the organization that owns the
+	 * For a read no binding names: a repository-scoped token from the connection of the account that owns the
 	 * repository, when that connection's installation can read it. `undefined` leaves the read anonymous.
 	 */
 	ownerConnectionToken(input: GitHubSourceOwnerRequest): Promise<string | undefined>

@@ -1,3 +1,4 @@
+import type { GitHubSourceOwnerType } from '@fabrika/control-contract'
 import { type GitHubAppIdentity, type GitHubAppInstallation, GitHubRateLimitError } from '@fabrika/github-app'
 import type { Vault } from '../../vault'
 import { cancelled, SourceFailure, SourceRateLimited, throwIfAborted } from '../source/failure'
@@ -8,13 +9,14 @@ export interface SourceGitHubAppIdentity {
 	readonly slug: string
 	readonly htmlUrl: string
 	readonly public: boolean
-	readonly owner: { readonly login: string; readonly type: 'Organization' }
+	readonly owner: { readonly login: string; readonly type: GitHubSourceOwnerType }
 	readonly permissions: { readonly contents: 'read' }
 	readonly events: readonly string[]
 }
 
 export type SourceInstallationScope =
-	| { readonly kind: 'organization'; readonly organization: string }
+	/** Every repository of the account that owns the App, an organization or a personal account. */
+	| { readonly kind: 'account'; readonly owner: string; readonly ownerType: GitHubSourceOwnerType }
 	| { readonly kind: 'repositories'; readonly repositories: readonly { readonly owner: string; readonly name: string }[] }
 
 export type SourceInstallationVerification =
@@ -90,9 +92,14 @@ export function createSourceConnections(options: SourceConnectionsOptions): Sour
 			}),
 		verifyInstallations: (input) =>
 			withClient(input, async (client) => {
-				const installation = input.scope.kind === 'organization'
-					? await abortable(client.resolveOrganizationInstallation(input.scope.organization, input.signal), input.signal)
-					: await resolveRepositoryInstallations(client, input.scope.repositories, input.signal)
+				const installation = input.scope.kind === 'repositories'
+					? await resolveRepositoryInstallations(client, input.scope.repositories, input.signal)
+					: await abortable(
+						input.scope.ownerType === 'User'
+							? client.resolveUserInstallation(input.scope.owner, input.signal)
+							: client.resolveOrganizationInstallation(input.scope.owner, input.signal),
+						input.signal,
+					)
 				if (installation === null) return { status: 'missing' }
 				return {
 					status: 'installed',
@@ -123,13 +130,11 @@ async function resolveRepositoryInstallations(
 	return verified ?? null
 }
 
-/** The App the vault key authenticates as must be the stored App, organization-owned, subscribed to `push` only. */
+/**
+ * The App the vault key authenticates as must be the stored App, subscribed to `push` only. Whether its owner is the one
+ * the setup asked for is the caller's check: it alone knows which owner that was.
+ */
 function verifiedIdentity(identity: GitHubAppIdentity, expectedAppId: string): SourceGitHubAppIdentity {
-	// Its own code, so the console says what to fix: GitHub made the App on a personal account (an organization the
-	// user may not create Apps in, or a mistyped one, sends the manifest there).
-	if (String(identity.id) === expectedAppId && identity.owner.type !== 'Organization') {
-		throw new SourceFailure('app_owner_not_organization', 'credentials')
-	}
 	if (
 		String(identity.id) !== expectedAppId
 		|| identity.events.length !== 1
@@ -142,7 +147,7 @@ function verifiedIdentity(identity: GitHubAppIdentity, expectedAppId: string): S
 		slug: identity.slug,
 		htmlUrl: identity.htmlUrl,
 		public: identity.public,
-		owner: { login: identity.owner.login, type: 'Organization' },
+		owner: { login: identity.owner.login, type: identity.owner.type },
 		permissions: { contents: 'read' },
 		events: ['push'],
 	}

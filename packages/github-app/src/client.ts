@@ -157,6 +157,14 @@ export class GitHubAppClient {
 		return this.decodeInstallation(body, organization, 'Organization')
 	}
 
+	/** Resolve and strictly bind the installation authority owned by one personal account. A 404 is an expected miss. */
+	async resolveUserInstallation(user: string, signal?: AbortSignal): Promise<GitHubAppInstallation | null> {
+		validateRepositoryComponent(user)
+		const body = await this.requestJson(`/users/${user}/installation`, {}, signal, true)
+		if (body === NOT_FOUND) return null
+		return this.decodeInstallation(body, user, 'User')
+	}
+
 	/** Resolve the App installation for one GitHub repository. A 404 is an expected miss. */
 	async resolveInstallationId(owner: string, repository: string, signal?: AbortSignal): Promise<number | null> {
 		return (await this.resolveRepositoryInstallation(owner, repository, signal))?.id ?? null

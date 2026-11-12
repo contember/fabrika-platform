@@ -14,7 +14,9 @@ import type {
 	SourceConnectionCredential,
 	SourceConnectionPort,
 	SourceGitHubAppIdentity,
+	SourceInstallationScope,
 	SourceInstallationVerification,
+	SourceInstallationVerificationInput,
 	SourceWebhookConfigurationInput,
 } from '../github/connections/port'
 import { githubAppCredentialSecretLabel } from '../github/connections/secrets'
@@ -59,6 +61,8 @@ class FakeSourceConnection implements SourceConnectionPort {
 	readonly calls: string[] = []
 	readonly credentialRefs: string[] = []
 	githubOwner = 'acme'
+	githubOwnerType: 'Organization' | 'User' = 'Organization'
+	readonly installationScopes: SourceInstallationScope[] = []
 	githubAppId = 123
 	githubAppSlug = 'fabrika-source'
 	verifyFails = false
@@ -73,7 +77,7 @@ class FakeSourceConnection implements SourceConnectionPort {
 		if (this.verifyFails) return Promise.reject(new Error('verify failed with private material'))
 		if (this.verifyFailure !== undefined) return Promise.reject(this.verifyFailure)
 		this.credentialRefs.push(input.credentialRef)
-		return Promise.resolve(identity(this.githubOwner, this.githubAppId, this.githubAppSlug))
+		return Promise.resolve(identity(this.githubOwner, this.githubAppId, this.githubAppSlug, this.githubOwnerType))
 	}
 
 	configureWebhook(input: SourceWebhookConfigurationInput): Promise<void> {
@@ -86,8 +90,9 @@ class FakeSourceConnection implements SourceConnectionPort {
 		return Promise.resolve()
 	}
 
-	verifyInstallations(): Promise<SourceInstallationVerification> {
+	verifyInstallations(input: SourceInstallationVerificationInput): Promise<SourceInstallationVerification> {
 		this.calls.push('installation')
+		this.installationScopes.push(input.scope)
 		return Promise.resolve(this.installation)
 	}
 }
@@ -133,13 +138,18 @@ class StaleSourceConnectionPreflightStore extends GitHubConnectionStore {
 	}
 }
 
-function identity(owner = 'acme', appId = 123, appSlug = 'fabrika-source'): SourceGitHubAppIdentity {
+function identity(
+	owner = 'acme',
+	appId = 123,
+	appSlug = 'fabrika-source',
+	ownerType: 'Organization' | 'User' = 'Organization',
+): SourceGitHubAppIdentity {
 	return {
 		id: appId,
 		slug: appSlug,
 		htmlUrl: `https://github.com/apps/${appSlug}`,
 		public: false,
-		owner: { login: owner, type: 'Organization' },
+		owner: { login: owner, type: ownerType },
 		permissions: { contents: 'read' },
 		events: ['push'],
 	}
@@ -458,7 +468,8 @@ describe('GitHub source connection workflow', () => {
 	test('fails an App GitHub made on a personal account, drops its key, and says what to fix', async () => {
 		const env = environment()
 		const source = new FakeSourceConnection()
-		source.verifyFailure = new SourceFailure('app_owner_not_organization', 'credentials')
+		source.githubOwner = 'someone'
+		source.githubOwnerType = 'User'
 		const started = await startSourceConnection(
 			deps(env, source, mutationRequest('/api/rpc')),
 			{ organization: 'acme', appName: 'fabrika-source', visibility: 'private', repositories: [] },
@@ -472,6 +483,69 @@ describe('GitHub source connection workflow', () => {
 			.toMatchObject({ status: 'failed', lastErrorCode: 'app_owner_not_organization' })
 		expect(await queryRowsFromEnv(env, `SELECT label FROM vault WHERE label LIKE '%:app-credential'`)).toEqual([])
 		expect((await sourceConnectionList(deps(env, source, new Request(`${ORIGIN}/api/rpc`)), {})).workflow).toMatchObject({ state: 'anonymous' })
+	})
+
+	test("connects a personal account's App: GitHub's own creation page, the user installation, and its owner type throughout", async () => {
+		const env = environment()
+		const source = new FakeSourceConnection()
+		source.githubOwner = 'octocat'
+		source.githubOwnerType = 'User'
+		source.installation = { status: 'installed', installationId: 789, accountLogin: 'Octocat', repositorySelection: 'all' }
+		const started = await startSourceConnection(
+			deps(env, source, mutationRequest('/api/rpc')),
+			{ organization: 'Octocat', ownerType: 'User', appName: 'fabrika-source', visibility: 'private', repositories: [] },
+		)
+		const body = await (await manifestHandoff(deps(env, source, new Request(`${ORIGIN}${started.continuePath}`)), started.connectionId)).text()
+		expect(body).toContain('action="https://github.com/settings/apps/new?state=')
+		expect(body).not.toContain('/organizations/')
+		expect(body).toContain('sign in to GitHub as octocat first')
+		// Nothing posts the manifest before the person has read which account GitHub will use.
+		expect(body).not.toContain('<script')
+		expect(body).toContain('Continue to GitHub as octocat')
+		const callback = await manifestCallback({
+			...deps(env, source, new Request(`${ORIGIN}/api/source/github/callback?code=one&state=${token(32)}`)),
+			exchangeManifest: () => Promise.resolve(createdApp()),
+		})
+		expect(callback.status).toBe(303)
+		expect((await sourceConnectionList(deps(env, source, new Request(`${ORIGIN}/api/rpc`)), {})).workflow)
+			.toMatchObject({ state: 'installation-required', app: { owner: { login: 'octocat', type: 'User' } } })
+
+		const connected = await verifySourceInstallation(deps(env, source, mutationRequest('/api/rpc')), started.connectionId)
+		expect(source.installationScopes).toEqual([{ kind: 'account', owner: 'octocat', ownerType: 'User' }])
+		expect(connected).toMatchObject({ state: 'connected', app: { owner: { login: 'octocat', type: 'User' } }, installation: { id: 789 } })
+		expect(await env.REPOSITORIES.githubConnections.getConnectionById(started.connectionId)).toMatchObject({ appOwnerType: 'User' })
+		expect(await reconcileSourceConnection(deps(env, source, mutationRequest('/api/rpc')), started.connectionId)).toMatchObject({ state: 'connected' })
+
+		// The stored owner type is part of the identity a reconcile checks.
+		source.githubOwnerType = 'Organization'
+		await expect(reconcileSourceConnection(deps(env, source, mutationRequest('/api/rpc')), started.connectionId))
+			.rejects.toMatchObject({ httpStatus: 409 })
+	})
+
+	test("fails a personal account's setup when GitHub made the App on another account, and says to sign in as the owner", async () => {
+		const env = environment()
+		const source = new FakeSourceConnection()
+		source.githubOwner = 'someone-else'
+		source.githubOwnerType = 'User'
+		const started = await startSourceConnection(
+			deps(env, source, mutationRequest('/api/rpc')),
+			{ organization: 'octocat', ownerType: 'User', appName: 'fabrika-source', visibility: 'private', repositories: [] },
+		)
+		await expect(manifestCallback({
+			...deps(env, source, new Request(`${ORIGIN}/api/source/github/callback?code=one&state=${token(32)}`)),
+			exchangeManifest: () => Promise.resolve(createdApp()),
+		})).rejects.toMatchObject({ httpStatus: 422, message: expect.stringContaining('sign in to GitHub as octocat') })
+		expect(await env.REPOSITORIES.githubConnections.getAttempt(started.connectionId))
+			.toMatchObject({ status: 'failed', lastErrorCode: 'app_owner_mismatch' })
+		expect(await queryRowsFromEnv(env, `SELECT label FROM vault WHERE label LIKE '%:app-credential'`)).toEqual([])
+	})
+
+	test('scopes an organization setup without repositories to the organization installation', async () => {
+		const env = environment()
+		const source = new FakeSourceConnection()
+		await connectKeyed(env, source)
+		expect(source.installationScopes).toEqual([{ kind: 'account', owner: 'acme', ownerType: 'Organization' }])
+		expect(await env.REPOSITORIES.githubConnections.getConnectionByOwner('acme')).toMatchObject({ appOwnerType: 'Organization' })
 	})
 
 	test('parks a setup that GitHub rate-limited under its own reason, and a repair resumes it', async () => {
@@ -515,11 +589,34 @@ describe('GitHub source connection workflow', () => {
 			exchangeManifest: () => Promise.resolve(createdApp()),
 		})
 		source.verifyFails = false
-		source.verifyFailure = new SourceFailure('app_owner_not_organization', 'credentials')
+		source.githubOwner = 'someone'
+		source.githubOwnerType = 'User'
 		await expect(repairSourceConnection(deps(env, source, mutationRequest('/api/rpc')), started.connectionId))
-			.rejects.toMatchObject({ httpStatus: 502, message: expect.stringContaining('app_owner_not_organization') })
+			.rejects.toMatchObject({ httpStatus: 422, message: expect.stringContaining('personal account, not in the organization acme') })
 		expect(await env.REPOSITORIES.githubConnections.getAttempt(started.connectionId))
 			.toMatchObject({ status: 'failed', lastErrorCode: 'app_owner_not_organization' })
+		expect(await queryRowsFromEnv(env, `SELECT label FROM vault WHERE label LIKE '%:app-credential'`)).toEqual([])
+	})
+
+	test("fails a personal account's repair that finds the App on another account, and says to sign in as the owner", async () => {
+		const env = environment()
+		const source = new FakeSourceConnection()
+		source.verifyFails = true
+		const started = await startSourceConnection(
+			deps(env, source, mutationRequest('/api/rpc')),
+			{ organization: 'octocat', ownerType: 'User', appName: 'fabrika-source', visibility: 'private', repositories: [] },
+		)
+		await manifestCallback({
+			...deps(env, source, new Request(`${ORIGIN}/api/source/github/callback?code=one&state=${token(32)}`)),
+			exchangeManifest: () => Promise.resolve(createdApp()),
+		})
+		source.verifyFails = false
+		source.githubOwner = 'someone-else'
+		source.githubOwnerType = 'User'
+		await expect(repairSourceConnection(deps(env, source, mutationRequest('/api/rpc')), started.connectionId))
+			.rejects.toMatchObject({ httpStatus: 422, message: expect.stringContaining('sign in to GitHub as octocat') })
+		expect(await env.REPOSITORIES.githubConnections.getAttempt(started.connectionId))
+			.toMatchObject({ status: 'failed', lastErrorCode: 'app_owner_mismatch' })
 		expect(await queryRowsFromEnv(env, `SELECT label FROM vault WHERE label LIKE '%:app-credential'`)).toEqual([])
 	})
 

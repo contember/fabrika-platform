@@ -12,6 +12,7 @@ import {
 	type GitHubSourceConnectionConnectedDto,
 	type GitHubSourceConnectionStatusDto,
 	type GitHubSourceConnectionWorkflowDto,
+	type GitHubSourceOwnerType,
 } from '../../lib/api'
 import {
 	appendSourceConnectionPage,
@@ -26,6 +27,7 @@ import {
 	sourceChain,
 	sourceConnectionInput,
 	sourceManifestContinuePath,
+	sourceOwnerNoun,
 	sourceSetupNotice,
 	sourceStartContinuePath,
 } from '../../lib/source-connection'
@@ -73,7 +75,7 @@ export default createPage()
 			<>
 				<div className="page-head">
 					<h1>Source connection</h1>
-					<p className="hint">Connect one private GitHub App per organization without placing App credentials in this browser.</p>
+					<p className="hint">Connect one private GitHub App per organization or personal account without placing App credentials in this browser.</p>
 				</div>
 				<ConnectedConnections connections={collection.items} invalidate={invalidate} />
 				{loadError !== null && <p className="error-text" role="alert">{loadError}</p>}
@@ -101,19 +103,19 @@ export function ConnectedConnections(
 	return (
 		<section aria-labelledby="connected-source-connections">
 			<div className="section-head">
-				<h2 id="connected-source-connections">Connected organizations</h2>
+				<h2 id="connected-source-connections">Connected accounts</h2>
 			</div>
 			<p className="section-note">
-				Each organization uses its own GitHub App, installation and private source credential. Reconcile repairs the credential binding and reapplies the
-				stored webhook configuration without exposing or replacing the private key.
+				Each organization or personal account uses its own GitHub App, installation and private source credential. Reconcile repairs the credential
+				binding and reapplies the stored webhook configuration without exposing or replacing the private key.
 			</p>
 			<Table
 				colSpan={5}
 				isEmpty={connections.length === 0}
-				empty={<EmptyState icon="link" title="No organizations connected" body="Add the first private GitHub source connection below." />}
+				empty={<EmptyState icon="link" title="No accounts connected" body="Add the first private GitHub source connection below." />}
 				head={
 					<tr>
-						<th className="grow">Organization and App</th>
+						<th className="grow">Account and App</th>
 						<th>Installation</th>
 						<th>Repository access</th>
 						<th>Status</th>
@@ -189,8 +191,8 @@ export function SourceWorkflow(
 			{idle && connectionCount > 0 && !adding
 				? (
 					<div className="source-checkpoint">
-						<CheckpointHead lamp="ok" title="Ready for another organization" />
-						<p>Connected organizations remain active while you add another private GitHub App.</p>
+						<CheckpointHead lamp="ok" title="Ready for another account" />
+						<p>Connected accounts remain active while you add another private GitHub App.</p>
 						<div className="form-actions">
 							<button className="primary" type="button" onClick={onAdd}>Add connection</button>
 						</div>
@@ -337,25 +339,28 @@ function InstallationSteps(
 
 function ConnectionForm({ onCancel }: { onCancel?: () => void }) {
 	const router = useRouter()
-	const [organization, setOrganization] = useState('')
+	const [ownerType, setOwnerType] = useState<GitHubSourceOwnerType>('Organization')
+	const [owner, setOwner] = useState('')
 	const [appName, setAppName] = useState('')
 	const [repositories, setRepositories] = useState('')
 	const [busy, setBusy] = useState(false)
 	const [error, setError] = useState<string | null>(null)
+
+	const noun = sourceOwnerNoun(ownerType)
 
 	async function submit(event: React.FormEvent) {
 		event.preventDefault()
 		setError(null)
 		let parsedRepositories: ReturnType<typeof parseSourceRepositories>
 		try {
-			parsedRepositories = parseSourceRepositories(repositories, organization)
+			parsedRepositories = parseSourceRepositories(repositories, owner, ownerType)
 		} catch (cause) {
 			setError(cause instanceof Error ? cause.message : 'Repository list is invalid.')
 			return
 		}
 		setBusy(true)
 		try {
-			const started = await api.sourceConnection.start(privateSourceConnectionRequest(organization, appName, parsedRepositories))
+			const started = await api.sourceConnection.start(privateSourceConnectionRequest(owner, appName, parsedRepositories, ownerType))
 			const continuePath = sourceStartContinuePath(started)
 			if (continuePath === null) throw new Error('invalid source connection handoff')
 			// Control serves this path, not the console (ADR-0029). `location.assign` would raise a
@@ -370,18 +375,28 @@ function ConnectionForm({ onCancel }: { onCancel?: () => void }) {
 
 	return (
 		<section className="source-checkpoint">
-			<CheckpointHead lamp="idle" title="Create the organization-owned App" />
+			<CheckpointHead lamp="idle" title="Create the GitHub App" />
 			<p>
-				GitHub asks you to create the App and then to install it on the organization. Fabrika keeps the App key in its vault, verifies the installation
-				and brings you back here.
+				GitHub asks you to create the App and then to install it on its{' '}
+				{noun}. Fabrika keeps the App key in its vault, verifies the installation and brings you back here.
 			</p>
 			<form className="form source-form" onSubmit={submit}>
+				<label>
+					Owned by<select
+						value={ownerType}
+						onChange={(event) => setOwnerType(event.target.value === 'User' ? 'User' : 'Organization')}
+					>
+						<option value="Organization">A GitHub organization</option>
+						<option value="User">A personal account</option>
+					</select>
+				</label>
 				<div className="form-row">
 					<label>
-						GitHub organization<input
+						{ownerType === 'User' ? 'GitHub account' : 'GitHub organization'}
+						<input
 							required
-							value={organization}
-							onChange={(event) => setOrganization(event.target.value)}
+							value={owner}
+							onChange={(event) => setOwner(event.target.value)}
 							placeholder="acme"
 							maxLength={MAX_SOURCE_ORGANIZATION_LENGTH}
 							autoComplete="off"
@@ -398,7 +413,11 @@ function ConnectionForm({ onCancel }: { onCancel?: () => void }) {
 						/>
 					</label>
 				</div>
-				<p className="hint">The new App is private and belongs only to this organization.</p>
+				<p className="hint">
+					{ownerType === 'User'
+						? 'The new App is private and belongs only to this personal account. GitHub creates it on the account you are signed in as, so sign in to GitHub as this account first.'
+						: 'The new App is private and belongs only to this organization.'}
+				</p>
 				<label>
 					Repositories (optional)<textarea
 						value={repositories}
@@ -407,11 +426,11 @@ function ConnectionForm({ onCancel }: { onCancel?: () => void }) {
 						maxLength={MAX_SOURCE_REPOSITORIES_TEXT_LENGTH}
 						spellCheck={false}
 					/>
-					<span className="hint">One owner/repository per line. Every repository must belong to the organization above.</span>
+					<span className="hint">One owner/repository per line. Every repository must belong to the {noun} above.</span>
 				</label>
 				{error !== null && <p className="error-text" role="alert">{error}</p>}
 				<div className="form-actions">
-					<button className="primary" type="submit" disabled={busy || organization.trim() === '' || appName.trim() === ''}>
+					<button className="primary" type="submit" disabled={busy || owner.trim() === '' || appName.trim() === ''}>
 						{busy ? 'Starting…' : 'Connect GitHub source'}
 					</button>
 					{onCancel !== undefined && <button className="ghost" type="button" disabled={busy} onClick={onCancel}>Cancel</button>}
@@ -479,7 +498,7 @@ function AppFacts({ app }: { app: GitHubSourceConnectionAppDto }) {
 			<a href={app.htmlUrl} target="_blank" rel="noreferrer">
 				{app.slug} <Icon name="external" size={13} />
 			</a>
-			<span>{app.owner.login}</span>
+			<span>{app.owner.login} · {sourceOwnerNoun(app.owner.type)}</span>
 			<span>{app.public ? 'public App' : 'private App'}</span>
 			<span>contents: read</span>
 			<span>push events</span>
@@ -502,7 +521,7 @@ function phaseCopy(phase: Extract<GitHubSourceConnectionStatusDto, { state: 'set
 
 function repairCopy(reason: Extract<GitHubSourceConnectionStatusDto, { state: 'repair-required' }>['reason']): string {
 	if (reason === 'credential-activation') return 'The durable App credentials are not active on the private source.'
-	if (reason === 'installation-verification') return 'The App installation no longer matches the configured organization or repositories.'
+	if (reason === 'installation-verification') return 'The App installation no longer matches the configured account or repositories.'
 	if (reason === 'rate-limited') return "GitHub's rate limit stopped the setup. Repair it in a few minutes, once the limit resets."
 	return 'A previous setup stopped after GitHub created the App. Resume from the durable checkpoint.'
 }

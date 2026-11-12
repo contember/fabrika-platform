@@ -170,6 +170,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			{ bundle: 'control', name: '0028_workspace_key_cascade.sql' },
 			{ bundle: 'control', name: '0029_dev_sandbox_create_attempt.sql' },
 			{ bundle: 'control', name: '0030_dev_sandbox_keys_expiry.sql' },
+			{ bundle: 'control', name: '0031_github_owner_type.sql' },
 		])
 	})
 
@@ -945,6 +946,7 @@ describe.skipIf(!hasPostgres)('GitHub source connection persistence on Postgres'
 			initiatedBy: 'principal-1',
 			expectedOrigin: 'https://control.example',
 			desiredOwner: 'acme',
+			desiredOwnerType: 'Organization',
 			desiredAppName: 'fabrika-source',
 			desiredPublic: false,
 			requestedRepositories: ['acme/app'],
@@ -968,6 +970,28 @@ describe.skipIf(!hasPostgres)('GitHub source connection persistence on Postgres'
 		expect(await db.githubConnections.claimCallback('a'.repeat(64), 'principal-1')).toBeNull()
 	})
 
+	test("stores a personal account's owner type, and the schema admits no other", async () => {
+		await reset()
+		const vault = await Vault.create(raw, kek())
+		const attemptId = uuidv7()
+		const manifestState = await vault.prepareSecret('platform', githubManifestStateSecretLabel(attemptId), 'opaque-state')
+		await db.githubConnections.beginAttemptWithManifestState({
+			id: attemptId,
+			stateHash: 'c'.repeat(64),
+			initiatedBy: 'principal-1',
+			expectedOrigin: 'https://control.example',
+			desiredOwner: 'octocat',
+			desiredOwnerType: 'User',
+			desiredAppName: 'fabrika-source',
+			desiredPublic: false,
+			requestedRepositories: [],
+			expiresAt: now() + 60,
+		}, manifestState)
+		expect(await db.githubConnections.getAttempt(attemptId)).toMatchObject({ desiredOwner: 'octocat', desiredOwnerType: 'User' })
+		await expect(raw.prepare(`UPDATE github_source_setup_attempts SET desired_owner_type = 'Team' WHERE id = ?`).bind(attemptId).run())
+			.rejects.toThrow()
+	})
+
 	test('two real connections have exactly one atomic secret-checkpoint CAS winner', async () => {
 		await reset()
 		if (postgresUrl === null || fixture === null) throw new Error('Postgres fixture is unavailable')
@@ -983,6 +1007,7 @@ describe.skipIf(!hasPostgres)('GitHub source connection persistence on Postgres'
 				initiatedBy: 'principal-1',
 				expectedOrigin: 'https://control.example',
 				desiredOwner: 'acme',
+				desiredOwnerType: 'Organization',
 				desiredAppName: 'fabrika-source',
 				desiredPublic: false,
 				requestedRepositories: [],
@@ -1023,6 +1048,7 @@ describe.skipIf(!hasPostgres)('GitHub source connection persistence on Postgres'
 				initiatedBy: 'principal-1',
 				expectedOrigin: 'https://control.example',
 				desiredOwner: 'acme',
+				desiredOwnerType: 'Organization',
 				desiredAppName: 'fabrika-source',
 				desiredPublic: false,
 				requestedRepositories: ['acme/app'],

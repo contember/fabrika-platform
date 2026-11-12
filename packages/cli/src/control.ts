@@ -111,7 +111,7 @@ repeats: the flags given are the environment's whole list. Each is an exact orig
 On Zerops the change reaches the namespace proxy at once; on Cloudflare the next deploy of the environment
 applies it.
 
-\`--installation-id\` has three states: omitted resolves the installation from the organization's
+\`--installation-id\` has three states: omitted resolves the installation from the repository owner's
 connected GitHub App, \`none\` registers an anonymous PUBLIC repository source, and a number names one
 installation outright. With \`none\`, control reads the repository once without a token and refuses one
 GitHub hides: a private repository needs the GitHub App connected in the console first.

@@ -57,6 +57,7 @@ export class GitHubConnectionStore {
 		validateNonEmpty(input.initiatedBy, 'principal')
 		validateControlOrigin(input.expectedOrigin)
 		validateGitHubOwner(input.desiredOwner)
+		if (input.desiredOwnerType !== 'Organization' && input.desiredOwnerType !== 'User') throw new Error('invalid GitHub owner type')
 		validateNonEmpty(input.desiredAppName, 'desired app name')
 		if (!Number.isSafeInteger(input.expiresAt) || input.expiresAt <= now) throw new Error('invalid setup expiry')
 		const repositories = canonicalRepositories(input.requestedRepositories)
@@ -66,8 +67,8 @@ export class GitHubConnectionStore {
 		) throw new Error('invalid GitHub manifest state secret')
 		const attempt = this.db.prepare(`INSERT INTO github_source_setup_attempts (
 			id, status, phase, version, state_hash, manifest_state_secret_ref, initiated_by, expected_origin, desired_owner,
-			desired_app_name, desired_public, requested_repositories_json, created_at, updated_at, expires_at
-		) SELECT ?, 'active', 'awaiting_manifest_callback', 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+			desired_owner_type, desired_app_name, desired_public, requested_repositories_json, created_at, updated_at, expires_at
+		) SELECT ?, 'active', 'awaiting_manifest_callback', 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 		WHERE NOT EXISTS (
 			SELECT 1 FROM github_source_connections_keyed WHERE lower(app_owner) = lower(?)
 		) RETURNING *`)
@@ -78,6 +79,7 @@ export class GitHubConnectionStore {
 				input.initiatedBy,
 				input.expectedOrigin,
 				input.desiredOwner,
+				input.desiredOwnerType,
 				input.desiredAppName,
 				input.desiredPublic ? 1 : 0,
 				JSON.stringify(repositories),
@@ -447,12 +449,12 @@ export class GitHubConnectionStore {
 			.bind(terminalAt, terminalAt, input.attemptId, input.expectedVersion, attempt.webhookSecretRef, webhookVaultId, webhookLabel)
 		// When the attempt did not complete, the sentinel row breaks the `app_credential_ref` CHECK and rolls the batch back.
 		const connectionInsert = this.db.prepare(`INSERT INTO github_source_connections_keyed (
-			connection_id, app_id, app_slug, app_html_url, app_owner, app_name, app_public,
+			connection_id, app_id, app_slug, app_html_url, app_owner, app_owner_type, app_name, app_public,
 			app_credential_ref, webhook_url, webhook_secret_ref, installation_id,
 			installation_account_login, installation_selection, verified_repositories_json,
 			requested_repositories_json, connected_by, connected_at, verified_at, version
 		) SELECT id,
-			app_id, app_slug, app_html_url, desired_owner, desired_app_name, desired_public,
+			app_id, app_slug, app_html_url, desired_owner, desired_owner_type, desired_app_name, desired_public,
 			app_credential_ref, ?, webhook_secret_ref, ?, ?, ?, ?, requested_repositories_json,
 			initiated_by, ?, ?, 1 FROM github_source_setup_attempts
 			WHERE id = ? AND version = ? AND status = 'completed' AND phase = 'connected'
@@ -460,7 +462,7 @@ export class GitHubConnectionStore {
 				AND app_credential_ref IS NOT NULL AND webhook_secret_ref = ?
 				AND EXISTS (SELECT 1 FROM vault WHERE id = ? AND scope = 'platform' AND label = ?)
 			UNION ALL SELECT
-				'invalid', '1', 'invalid', 'https://github.com/apps/invalid', 'invalid', 'invalid', 0,
+				'invalid', '1', 'invalid', 'https://github.com/apps/invalid', 'invalid', 'Organization', 'invalid', 0,
 				'invalid', 'https://invalid.example/webhooks/github', 'vault:invalid', 1, 'invalid', 'selected', '[]', '[]', 'invalid', 0, 0, 1
 			WHERE (
 				SELECT COUNT(*) FROM github_source_setup_attempts

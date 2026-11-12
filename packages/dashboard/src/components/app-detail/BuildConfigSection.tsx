@@ -31,7 +31,7 @@ function Field({ label, value, mono }: { label: string; value: string | null; mo
 }
 
 /**
- * The app's GitHub source binding: "Detect" binds the source connection of the repository's organization
+ * The app's GitHub source binding: "Detect" binds the source connection of the repository's owner
  * (server-side); "Edit" names the installation, which must be that connection's. Without one the app is public.
  * Changing it needs global `app.manage`, as registration does; an app-scoped holder sees it read-only.
  */

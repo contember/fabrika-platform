@@ -283,7 +283,7 @@ retry helps, and never carries upstream text, which may hold a token or a clone 
    the application's repository: a workspace is a branch Control commits to, and `open_pull_request`
    opens a pull request. An App created from the console asks for both. An App created before MCP
    authoring has `contents: read` only: raise both in the App's settings on GitHub. GitHub then asks the
-   owner of each installation (the organization owner) to accept the new permissions, and the App keeps its
+   owner of each installation (the organization owner, or the personal account itself) to accept the new permissions, and the App keeps its
    old ones until they do.
 3. **Mark one non-production environment as the authoring target** through `apps.environments.put`
    with `authoring: true`. Only an environment of an app with a GitHub connection, on a provider that declares

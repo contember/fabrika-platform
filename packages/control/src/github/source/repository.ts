@@ -278,7 +278,7 @@ export class TarballRepositorySource {
 	}
 
 	/**
-	 * A bound read names exactly one connection. An unbound one uses the owning organization's connection when its
+	 * A bound read names exactly one connection. An unbound one uses the owning account's connection when its
 	 * installation can read the repository, and is anonymous otherwise.
 	 */
 	private async token(

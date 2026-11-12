@@ -77,6 +77,7 @@ export interface CreatedGitHubApp {
 }
 
 export interface GitHubAppManifestInput {
+	/** The App owner's login, an organization's or a personal account's; validated only, GitHub's creation URL names the owner. */
 	readonly organization: string
 	readonly appName: string
 	readonly homepageUrl: string
@@ -84,7 +85,7 @@ export interface GitHubAppManifestInput {
 	readonly redirectUrl?: string
 	/** Where GitHub sends the installer after an install or an installation update, with `installation_id` and `setup_action`. */
 	readonly setupUrl?: string
-	/** GitHub requires a public App when repositories outside its owner organization need it. */
+	/** GitHub requires a public App when repositories outside its owner account need it. */
 	readonly public: boolean
 }
 
