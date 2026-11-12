@@ -81,3 +81,19 @@ test('an agent reply keeps https links and drops script URLs to their text', asy
 	expect(container.querySelector('img')).toBeNull()
 	expect(container.textContent).toContain('click')
 })
+
+test('an entity cannot spell a script or data URL in an agent reply', async () => {
+	const body = [
+		'[a](javascript&colon;alert(1))',
+		'[b](&#106;avascript:alert(1))',
+		'[c](javascript&#58;alert(1))',
+		'[d][ref]',
+		'![e](&#100;ata:text/html,x)',
+	].join(' ') + '\n\n[ref]: javascript&colon;alert(1)\n'
+	const container = await mount(fakeThreads([thread('open', body)]))
+	const urls = [
+		...[...container.querySelectorAll('a')].map((link) => link.getAttribute('href') ?? ''),
+		...[...container.querySelectorAll('img')].map((image) => image.getAttribute('src') ?? ''),
+	]
+	for (const url of urls) expect(new URL(url, 'https://canvas.test/').protocol).toBe('https:')
+})

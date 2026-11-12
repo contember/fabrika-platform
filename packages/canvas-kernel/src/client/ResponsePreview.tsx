@@ -204,14 +204,19 @@ const HTML_ESCAPES: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '
 const escapeHtml = (text: string) => text.replace(/[&<>"']/g, (char) => HTML_ESCAPES[char] ?? char)
 /** http(s), mailto, or a URL with no scheme of its own. */
 const isSafeUrl = (href: string) => /^(?:https?|mailto):/i.test(href) || !/^[^/?#]*:/.test(href)
-// Returning false keeps marked's own rendering; an unsafe link keeps only its text.
+const titleAttribute = (title: string | null | undefined) => (title ? ` title="${escapeHtml(title)}"` : '')
+// URLs are written escaped, so the browser sees the text that was checked and an entity cannot spell a scheme.
 const escapingMarked = new Marked({
 	renderer: {
 		html: ({ text }) => escapeHtml(text),
 		link(token) {
-			return isSafeUrl(token.href) ? false : this.parser.parseInline(token.tokens)
+			const text = this.parser.parseInline(token.tokens)
+			return isSafeUrl(token.href) ? `<a href="${escapeHtml(token.href)}"${titleAttribute(token.title)}>${text}</a>` : text
 		},
-		image: (token) => (isSafeUrl(token.href) ? false : escapeHtml(token.text)),
+		image: (token) =>
+			isSafeUrl(token.href)
+				? `<img src="${escapeHtml(token.href)}" alt="${escapeHtml(token.text)}"${titleAttribute(token.title)}>`
+				: escapeHtml(token.text),
 	},
 })
 
