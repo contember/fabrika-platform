@@ -304,10 +304,10 @@ connection-count limit. Setup accepts an optional same-owner repository set. Con
 same-origin continuation path; no private key, webhook secret, manifest code or opaque state enters a
 browser DTO, URL log or error.
 
-The continuation is a page that submits a least-authority manifest directly to `github.com` by itself:
-to the organization's App settings, or for a personal account to `github.com/settings/apps/new`, which
-creates the App on whichever account is signed in, so the page asks the person to sign in as that account;
-its CSP admits only that page's nonce'd style and script, and form posts only to `https://github.com`.
+The continuation is a page that submits a least-authority manifest directly to `github.com`: by itself to
+the organization's App settings, or for a personal account to `github.com/settings/apps/new` only on a
+click, because GitHub creates that App on whichever account is signed in and the page first asks the person
+to sign in as that account; its CSP admits only that page's nonce'd style and script, and form posts only to `https://github.com`.
 The manifest names the App's setup URL, `/api/source/github/setup/:connectionId`, with redirect on
 update. The callback requires the same authenticated human principal, exact Control origin and one-use
 encrypted state. It rejects unknown or duplicate query fields, bounds the GitHub response and, once the

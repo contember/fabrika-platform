@@ -118,19 +118,23 @@ export async function repairSourceConnection(deps: SourceConnectionWorkflowDeps,
 	const resumed = await deps.env.REPOSITORIES.githubConnections.resumeRepair(attempt.id, attempt.version)
 	if (resumed === null) throw new SourceConnectionWorkflowError(409)
 	let failure: unknown
+	let settled: GitHubSetupAttempt | null = null
 	try {
 		await advanceWithDeadline(deps, resumed)
 	} catch (error) {
 		failure = error
 		const current = await deps.env.REPOSITORIES.githubConnections.getAttempt(resumed.id).catch(() => null)
-		if (current !== null && current.status === 'active') await settleFailedStep(deps, current, error).catch(() => null)
+		if (current !== null && current.status === 'active') settled = await settleFailedStep(deps, current, error).catch(() => null)
 		throwIfAborted(deps.request.signal)
 	}
 	await audit(deps.auth, 'source.connection.repair', attempt.id)
 	// A resume that changed nothing used to answer 200 with the same red lamp, which reads as success
 	// to every caller and leaves the console with no reason to show.
-	// An App on another owner failed the attempt for good: say how to fix it, as the callback does.
-	if (failure !== undefined) throw appOwnerFailed(attempt.desiredOwner, failure) ?? repairFailed(failure)
+	// An App on another owner failed the attempt for good: say how to fix it, as the callback does. Only once the attempt
+	// has failed, though; one a concurrent request moved is not over, and starting again would be the wrong advice.
+	if (failure !== undefined) {
+		throw (settled?.status === 'failed' ? appOwnerFailed(attempt.desiredOwner, failure) : undefined) ?? repairFailed(failure)
+	}
 	const current = await deps.env.REPOSITORIES.githubConnections.getAttempt(attempt.id)
 	if (current === null) throw new SourceConnectionWorkflowError(409)
 	return workflowDto(deps.source.provider, current)
