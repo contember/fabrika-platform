@@ -25,14 +25,20 @@ export function manifestHandoffCsp(nonce: string): string {
 }
 
 /**
- * The page posts the manifest to GitHub by itself. It does not when the browser came back to it through history,
- * so the back button from GitHub stays on this page instead of bouncing forward again.
+ * The page posts an organization's manifest to GitHub by itself. It does not when the browser came back to it through
+ * history, so the back button from GitHub stays on this page instead of bouncing forward again. A personal account's
+ * page waits for the click: GitHub creates that App on whichever account is signed in, so the person reads which
+ * account to be signed in as before anything reaches GitHub.
  */
 export function manifestHandoffHtml(page: ManifestHandoffPage): string {
 	const owner = html(page.owner)
-	const where = page.ownerType === 'User'
+	const personal = page.ownerType === 'User'
+	const where = personal
 		? `on the personal account <strong>${owner}</strong>. GitHub creates it on the account you are signed in as, so sign in to GitHub as ${owner} first`
 		: `in the <strong>${owner}</strong> organization`
+	const button = personal ? `Continue to GitHub as ${owner}` : 'Continue to GitHub'
+	const script = personal ? '' : `<script nonce="${html(page.nonce)}">${AUTO_SUBMIT}</script>
+`
 	return `<!doctype html>
 <html lang="en">
 <head>
@@ -55,13 +61,12 @@ ${
 </ol>
 <form id="handoff" method="post" action="${html(page.action)}">
 <input type="hidden" name="manifest" value="${html(page.manifest)}">
-<button type="submit">Continue to GitHub</button>
+<button type="submit">${button}</button>
 </form>`,
 			{ runsOn: 'Runs on' },
 		)
 	}
-<script nonce="${html(page.nonce)}">${AUTO_SUBMIT}</script>
-</body>
+${script}</body>
 </html>`
 }
 

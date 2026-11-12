@@ -139,7 +139,7 @@ Custom compositions use `CloudflareCloneSource` for clone authorization. The
 The GitHub composition resolves the requested ref, or a recorded commit, with one
 `GET /commits/{ref}`; GitHub resolves branch-versus-tag names and peels annotated
 tags.
-A public repository is read with a repository-scoped token from the connection of the organization that
+A public repository is read with a repository-scoped token from the connection of the account that
 owns it, when that connection's installation covers the repository, and anonymously otherwise; private resolution
 uses a repository-scoped read-only token minted from the app's bound GitHub
 connection — its App key read from Control's vault (see
@@ -346,8 +346,8 @@ A stable connection can be reconciled from the same page. Reconciliation re-veri
 with the vault key and reapplies the connection's exact stored webhook URL, content type, TLS setting
 and secret. It never changes the App, webhook secret, connection id or application binding.
 
-A private application is registered against the connection whose canonical organization owns its
-repository. Control persists both the connection id and GitHub installation id or neither. Deploy
+A private application is registered against the connection whose canonical owner (an organization or a
+personal account) owns its repository. Control persists both the connection id and GitHub installation id or neither. Deploy
 resolution and scoped webhooks require that exact pair. Changing the repository owner of an already
 bound application is refused; re-registration is required. Public repositories need no pair.
 

@@ -499,6 +499,9 @@ describe('GitHub source connection workflow', () => {
 		expect(body).toContain('action="https://github.com/settings/apps/new?state=')
 		expect(body).not.toContain('/organizations/')
 		expect(body).toContain('sign in to GitHub as octocat first')
+		// Nothing posts the manifest before the person has read which account GitHub will use.
+		expect(body).not.toContain('<script')
+		expect(body).toContain('Continue to GitHub as octocat')
 		const callback = await manifestCallback({
 			...deps(env, source, new Request(`${ORIGIN}/api/source/github/callback?code=one&state=${token(32)}`)),
 			exchangeManifest: () => Promise.resolve(createdApp()),

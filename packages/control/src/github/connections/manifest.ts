@@ -52,7 +52,6 @@ export async function startSourceConnection(
 	}
 	if (input.visibility !== 'private') throw new SourceConnectionWorkflowError(400)
 	const ownerType = input.ownerType ?? 'Organization'
-	if (ownerType !== 'Organization' && ownerType !== 'User') throw new SourceConnectionWorkflowError(400)
 	const owner = input.organization.toLowerCase()
 	const repositories = canonicalRepositories(input.organization, input.repositories)
 	const attemptId = uuidv7()

@@ -157,7 +157,7 @@ export async function sourceBindingFields(
 	const repository = parseGitHubRepo(repoUrl)
 	if (repository === null) fail(400, 'a private source must be a GitHub repository')
 	const connection = await c.repositories.githubConnections.getConnectionByOwner(repository.owner)
-	if (connection === null) fail(409, 'the repository organization has no GitHub source connection')
+	if (connection === null) fail(409, 'the repository owner has no GitHub source connection')
 	if (
 		existing?.github_connection_id !== null && existing?.github_connection_id !== undefined
 		&& existing.github_connection_id !== connection.connectionId
@@ -165,7 +165,7 @@ export async function sourceBindingFields(
 		fail(409, 'an application source connection cannot be reassigned')
 	}
 	if (input.githubInstallationId !== undefined && input.githubInstallationId !== connection.installationId) {
-		fail(409, 'the GitHub installation does not match the repository organization')
+		fail(409, 'the GitHub installation does not match the repository owner')
 	}
 	return { githubConnectionId: connection.connectionId, githubInstallationId: connection.installationId }
 }

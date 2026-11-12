@@ -75,13 +75,13 @@ submodules even without their marker. Control never executes repository code.
 The code lives in `packages/control/src/github/source/`.
 
 Private repositories are read through operator-owned GitHub Apps — one App per
-GitHub organization, created and verified from the authenticated console
+GitHub organization or personal account, created and verified from the authenticated console
 ([ADR-0029](../decisions/0029-github-app-sources.md)). On both clouds, every
 connection's App id and private key live in control's vault next to that
 connection's webhook secret. `@fabrika/github-app` is the shared client: the least-authority manifest
 builder, the bounded manifest-code exchange, installation-token minting, and
 webhook configuration. A public repository needs no App at all: it is fetched
-anonymously, or with the owning organization's App when that App is installed on it.
+anonymously, or with the owning account's App when that App is installed on it.
 
 An environment deploys on a push to its trigger ref: through the App's push webhook, or for a public repository
 without the App through a once-a-minute poll. Control stores the trigger ref as a full git ref, because a push names
