@@ -8,6 +8,7 @@ import { createApiHandlers } from './handlers/api'
 import { createAssetHandlers } from './handlers/assets'
 import { createFileHandlers } from './handlers/files'
 import { createStaticHandlers, serveErrorOptions, withDefaultCsp } from './handlers/static'
+import { createThemeHandlers } from './handlers/theme'
 import { createThreadHandlers } from './handlers/threads'
 import { createUploadHandlers } from './handlers/uploads'
 import { CLI_AUTH_FILE, DATA_DIR, PID_FILE, REVIEWS_DIR, SESSIONS_DIR, TEMP_DIR } from './paths'
@@ -63,6 +64,7 @@ const routes = [
 		broadcast: wsManager.broadcast,
 		notifyWaiters: wsManager.notifyWaiters,
 	}),
+	...createThemeHandlers(sessionManager),
 	...createStaticHandlers(),
 ]
 
