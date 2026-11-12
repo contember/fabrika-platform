@@ -134,6 +134,7 @@ All components are globally available in canvas JSX — no imports needed. For i
 - **FilePreview** — project file preview. Props: `path`, `lines` ([start, end])
 - **Markdown** — renders markdown content. Props: `file` (path) or children (inline markdown string)
 - **ImageView** — displays an image. Props: `src`, `alt`, `caption`, `width`
+- **Download** — a download link for a file you produced. Props: `path` (string literal), `label`
 - **Diff** — side-by-side diff view. Props: `before`, `after`, `language`
 - **Table** — data table. Props: `headers`, `rows`
 - **Checklist** — checkbox list. Props: `items` ([{ label, checked }])

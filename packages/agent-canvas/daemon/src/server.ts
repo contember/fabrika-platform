@@ -6,7 +6,7 @@ import { dirname, join } from 'path'
 import { admitRequest } from './admission'
 import { createApiHandlers } from './handlers/api'
 import { createFileHandlers } from './handlers/files'
-import { createStaticHandlers, withDefaultCsp } from './handlers/static'
+import { createStaticHandlers, serveErrorOptions, withDefaultCsp } from './handlers/static'
 import { createUploadHandlers } from './handlers/uploads'
 import { CLI_AUTH_FILE, DATA_DIR, PID_FILE, REVIEWS_DIR, SESSIONS_DIR, TEMP_DIR } from './paths'
 import { startRemoteFeedbackPoller } from './remote-feedback'
@@ -111,6 +111,7 @@ function handle(req: Request, server: Upgrader): Response | Promise<Response> | 
 const server = Bun.serve<SocketData>({
 	port: PORT,
 	hostname: 'localhost',
+	...serveErrorOptions,
 	fetch(req, server) {
 		const response = handle(req, server)
 		if (response === undefined) return undefined
