@@ -67,6 +67,7 @@ function isReviewPath(pathname: string): boolean {
  * - a request that changes state, and every WebSocket upgrade, must come from the daemon's own UI or from a client that
  *   sends no `Origin` (the CLI); browsers send `Origin` on such requests, so a cross-site page is refused whatever the
  *   content type;
+ * - no API request or upgrade may come from a cross-site page (`Sec-Fetch-Site`), reads included;
  * - CLI routes require the CLI capability.
  *
  * Returns the refusal, or null when the request is admitted.
@@ -78,11 +79,15 @@ export function admitRequest(req: Request, url: URL, options: AdmissionOptions):
 	}
 
 	const isUpgrade = req.headers.get('Upgrade')?.toLowerCase() === 'websocket' || url.pathname.startsWith('/ws/')
+	const isApi = url.pathname.startsWith('/api/') || url.pathname.startsWith('/ws/')
+	// A cross-site page's no-cors read (an <img> of /api/image) sends no Origin, but still learns whether a file exists.
+	if (isApi && !isReviewPath(url.pathname) && req.headers.get('Sec-Fetch-Site') === 'cross-site') {
+		return jsonResponse({ error: 'Origin not allowed' }, 403)
+	}
 	const changesState = req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'OPTIONS'
 	if ((changesState || isUpgrade) && !isReviewPath(url.pathname)) {
 		const origin = req.headers.get('Origin')
 		if (origin !== null && !daemonOrigins(options.port).has(origin)) return jsonResponse({ error: 'Origin not allowed' }, 403)
-		if (origin === null && req.headers.get('Sec-Fetch-Site') === 'cross-site') return jsonResponse({ error: 'Origin not allowed' }, 403)
 	}
 
 	const presented = req.headers.get(CLI_TOKEN_HEADER) ?? (isUpgrade ? url.searchParams.get(CLI_TOKEN_QUERY) : null)

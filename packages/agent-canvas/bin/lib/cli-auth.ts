@@ -1,9 +1,6 @@
 import { readFileSync } from 'fs'
+import { CLI_TOKEN_HEADER, CLI_TOKEN_QUERY } from '../../daemon/src/admission.ts'
 import { CLI_AUTH_FILE } from './config.ts'
-
-/** Must match `CLI_TOKEN_HEADER` and `CLI_TOKEN_QUERY` in daemon/src/admission.ts. */
-const CLI_TOKEN_HEADER = 'X-Agent-Canvas-CLI-Token'
-const CLI_TOKEN_QUERY = 'cli_token'
 
 /**
  * The capability the running daemon wrote for its owner's CLI, or undefined when no daemon wrote one. Read on every

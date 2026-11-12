@@ -37,6 +37,16 @@ describe('daemon admission', () => {
 		expect(admit('/api/session/demo/upload', { method: 'POST', headers: { 'Sec-Fetch-Site': 'cross-site' } })?.status).toBe(403)
 	})
 
+	test('refuses a cross-site read of the API, but not of the page or its assets', () => {
+		for (const path of ['/api/image?session=s&path=/abs/photo.png', '/api/file?session=s&path=/etc/hosts', '/api/sessions', '/ws/session/demo']) {
+			expect(admit(path, { headers: { 'Sec-Fetch-Site': 'cross-site' } })?.status).toBe(403)
+		}
+		for (const path of ['/s/demo', '/assets/review.js', '/api/review/app/threads']) {
+			expect(admit(path, { headers: { 'Sec-Fetch-Site': 'cross-site' } })).toBeNull()
+		}
+		expect(admit('/api/image?session=s&path=/abs/photo.png', { headers: { 'Sec-Fetch-Site': 'same-origin' } })).toBeNull()
+	})
+
 	test('refuses a cross-site WebSocket upgrade', () => {
 		expect(admit('/ws/session/demo', { headers: { Origin: 'https://site.example', Upgrade: 'websocket' } })?.status).toBe(403)
 	})
