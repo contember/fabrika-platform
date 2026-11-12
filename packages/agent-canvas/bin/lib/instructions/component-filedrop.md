@@ -4,7 +4,9 @@ Lets the user hand you files from the canvas: a screenshot, a CSV export, a log,
 the user has and you cannot fetch yourself.
 
 The daemon stores each file with the session, under `~/.claude/agent-canvas/sessions/<session-id>/assets/<id>/`.
-The feedback lists each file's absolute path; read it with your own tools. The files are deleted with the session.
+The feedback lists each file's absolute path; read it with your own tools. The files are kept until the session
+directory is removed; nothing deletes them automatically. They stay attached to the field on later revisions, so
+the feedback lists them again until the user removes them; use a new `id` for a fresh set.
 Nothing serves them back to the browser.
 
 ## Props
