@@ -66,8 +66,10 @@ level, wait for the level to settle before starting dependents.
 - `ISSUE-004` is the design checkpoint (`gate: design-checkpoint`), and every feature issue
   depends on it. Do it yourself in the main session, never in a subagent: it needs
   the human. Follow its body: theme the running app through `--fui-*` overrides,
-  publish the preview, open the `design-checkpoint` gate and wait. `build done ISSUE-004`
-  records the gate's verdict; it refuses until the gate has feedback.
+  publish the preview, run `fabrika builder design review`, raise any pair it reports
+  below AA, then open the `design-checkpoint` gate on the generated view and wait.
+  `build done ISSUE-004` records the gate's verdict; it refuses until the gate has
+  feedback, and while a pair is below AA unless the human waives it (`--waive-contrast`).
 - Feature issues that share no `touches` and have their deps `done` → fan out
   concurrently with the host's subagent mechanism. Prefer the bundled
   `fabrika-implementer` role when the host exposes it.

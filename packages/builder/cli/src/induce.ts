@@ -1,5 +1,6 @@
 import { basename } from 'path'
 import type { StackPointer } from './catalog'
+import { DESIGN_GATE, DESIGN_PATH, DESIGN_REVIEW_PATH } from './design-review'
 import type { Skeleton } from './skeletons'
 
 export interface InducedIssue {
@@ -19,8 +20,6 @@ const FOUNDATION_SCAFFOLD = 'ISSUE-001'
 const FOUNDATION_DATA = 'ISSUE-002'
 const FOUNDATION_AUTH = 'ISSUE-003'
 const DESIGN_CHECKPOINT = 'ISSUE-004'
-// Not `design`: that label belongs to the removed design phase, whose old reviews must not count here.
-const DESIGN_GATE = 'design-checkpoint'
 
 export interface InduceOpts {
 	stack?: StackPointer
@@ -118,14 +117,18 @@ export function induceIssues(skeletons: Skeleton[], opts: InduceOpts = {}): Indu
 			"   SPA's own stylesheet, imported after `@fabrika/ui/styles.css` (the `fabrika-app`",
 			'   skill\'s `spa.md`, "Theming"). Never restyle a `.fui-` class. On a stack without',
 			"   `@fabrika/ui`, theme that stack's own tokens the same way.",
-			'2. Record the decisions in `.fabrika/architecture/design.md`: each overridden token,',
-			'   its value and why, and the stylesheet that holds them.',
+			'2. Record the decisions in `' + DESIGN_PATH + '`: front matter',
+			'   `stylesheet: <repository-relative path>` naming that stylesheet, then each',
+			'   overridden token, its value and why.',
 			'3. Start the application with its seeds and publish its address:',
 			'   `fabrika builder preview --url=<local url>`.',
-			"4. Fill the skill's `gates/design.jsx` with the real tokens and the routes to look at,",
-			'   then `fabrika builder gate open design-checkpoint --view <view.jsx> && fabrika builder gate wait`.',
-			'5. On "Request changes", change the tokens and re-open the gate.',
-			'6. `fabrika builder build done ' + DESIGN_CHECKPOINT + "` records the gate's verdict.",
+			'4. `fabrika builder design review` writes the gate view `' + DESIGN_REVIEW_PATH + '`:',
+			"   the overrides, the WCAG contrast of the kit's text and focus pairs under them, and",
+			'   the routes below. Raise every pair it reports below AA, then',
+			'   `fabrika builder gate open ' + DESIGN_GATE + ' --view ' + DESIGN_REVIEW_PATH + ' && fabrika builder gate wait`.',
+			'5. On "Request changes", change the tokens, run `design review` again and re-open the gate.',
+			'6. `fabrika builder build done ' + DESIGN_CHECKPOINT + "` records the gate's verdict. It refuses a pair",
+			'   below AA unless the reviewer accepts it: then pass `--waive-contrast`.',
 			'',
 			'Screens to review (skeleton `url` metadata):',
 			...(allUrls.length ? allUrls.map((u) => `- \`${u}\``) : ['- (none declared)']),
