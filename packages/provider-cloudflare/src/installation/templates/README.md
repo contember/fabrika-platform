@@ -50,7 +50,7 @@ the Environment with its secrets and variables, and triggers the workflow. The r
 runner container image into the account.
 
 Public repositories deploy without a GitHub App. To deploy private repositories, connect GitHub from the
-control plane at **Settings → Source**: each connection is an organization-owned GitHub App whose key
+control plane at **Settings → Source**: each connection is a GitHub App owned by an organization or a personal account, whose key
 Control keeps in its encrypted vault, never in this Environment.
 
 To close the escape hatch once IAM grants you admin, set the `{{ACCOUNT}}` Environment variable

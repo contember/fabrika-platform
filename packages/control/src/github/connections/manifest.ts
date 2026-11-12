@@ -289,7 +289,7 @@ function callbackFailed(claimed: GitHubSetupAttempt, error: unknown): SourceConn
 	if (error.code === 'app_owner_not_organization') {
 		return new SourceConnectionWorkflowError(
 			422,
-			`GitHub created the App on a personal account, not in the organization ${claimed.desiredOwner}. Delete that App in your GitHub developer settings, check that you may create Apps in ${claimed.desiredOwner}, and connect again.`,
+			`GitHub created the App on a personal account, not in the organization ${claimed.desiredOwner}. Delete that App in your GitHub developer settings, check that you may create Apps in ${claimed.desiredOwner}, and connect again. If ${claimed.desiredOwner} is a personal account, connect it as a personal account.`,
 		)
 	}
 	if (error.code === 'app_owner_mismatch') {

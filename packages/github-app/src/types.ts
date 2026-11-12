@@ -77,6 +77,7 @@ export interface CreatedGitHubApp {
 }
 
 export interface GitHubAppManifestInput {
+	/** The App owner's login, an organization's or a personal account's; validated only, GitHub's creation URL names the owner. */
 	readonly organization: string
 	readonly appName: string
 	readonly homepageUrl: string

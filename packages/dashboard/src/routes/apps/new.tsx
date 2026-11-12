@@ -205,10 +205,10 @@ export default createPage()
 						Repository access
 						<select value={source} onChange={(e) => setSource(e.target.value === 'connection' ? 'connection' : 'public')}>
 							<option value="public">Public repository (no GitHub credentials)</option>
-							<option value="connection">Private, through the organization's GitHub source connection</option>
+							<option value="connection">Private, through the owner's GitHub source connection</option>
 						</select>
 						<span className="hint">
-							A private repository binds the GitHub source connection of its organization. Connect it first in{' '}
+							A private repository binds the GitHub source connection of its owner, an organization or a personal account. Connect it first in{' '}
 							<Link to="settings/source">Source connection</Link>.
 						</span>
 					</label>
