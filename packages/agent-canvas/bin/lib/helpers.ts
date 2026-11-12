@@ -2,6 +2,7 @@ import { type WaiterSocket, waitForEvent, type WaitVerdict } from '@fabrika/daem
 import { spawn } from 'child_process'
 import { randomUUID } from 'crypto'
 import { z } from 'zod'
+import { cliAuthHeaders, cliSocketUrl } from './cli-auth.ts'
 import { BASE_URL, TIMEOUT_MS, WS_URL } from './config.ts'
 
 export function getSessionId(session?: string): string {
@@ -19,7 +20,7 @@ const consumeResponseSchema = z.discriminatedUnion('found', [
 ])
 
 export async function consumeFeedback(sessionId: string): Promise<string | null> {
-	const res = await fetch(`${BASE_URL}/api/session/${sessionId}/feedback/consume`, { method: 'POST' })
+	const res = await fetch(`${BASE_URL}/api/session/${sessionId}/feedback/consume`, { method: 'POST', headers: cliAuthHeaders() })
 	const data = consumeResponseSchema.parse(await res.json())
 	if (data.found) return data.feedback
 	return null
@@ -91,7 +92,7 @@ export function waitForFeedback(sessionId: string, options: FeedbackWaitOptions 
 	return waitForEvent<string>({
 		url: `${WS_URL}/ws/wait/${sessionId}`,
 		onFrame: readFeedbackFrame,
-		...(options.createSocket ? { createSocket: options.createSocket } : {}),
+		createSocket: options.createSocket ?? ((url) => new WebSocket(cliSocketUrl(url))),
 		timeoutMs: options.timeoutMs ?? TIMEOUT_MS,
 		reconnect: {
 			attempts: options.reconnectAttempts ?? 3,

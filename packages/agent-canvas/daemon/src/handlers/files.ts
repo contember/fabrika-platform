@@ -1,5 +1,6 @@
-import type { SessionManager } from '@fabrika/canvas-kernel/server'
+import { canvasFileReferences, type RevisionInfo, type SessionData, type SessionManager } from '@fabrika/canvas-kernel/server'
 import { jsonResponse, type Route } from '@fabrika/daemon-kit'
+import { realpathSync } from 'fs'
 import { readdir } from 'fs/promises'
 import { isAbsolute, relative, resolve, sep } from 'path'
 import { LANG_MAP } from '../../langMap'
@@ -16,30 +17,97 @@ const IMAGE_MIME: Record<string, string> = {
 	avif: 'image/avif',
 }
 
-function resolveSessionPath(
-	sessionManager: SessionManager,
-	sessionId: string,
-	relPath: string,
-): { fullPath: string; session: ReturnType<SessionManager['get']> & {} } | Response {
-	const session = sessionManager.get(sessionId)
-	if (!session) return jsonResponse({ error: 'Session not found' }, 404)
-
-	const fullPath = resolve(session.projectRoot, relPath)
-	const relativePath = relative(resolve(session.projectRoot), fullPath)
-	if (!isAbsolute(relPath) && (relativePath === '..' || relativePath.startsWith(`..${sep}`))) {
-		return jsonResponse({ error: 'Path traversal rejected' }, 403)
-	}
-
-	return { fullPath, session }
+export interface FileHandlerOptions {
+	/** Directories whose contents the file routes never return: the daemon's own state. */
+	deniedRoots: readonly string[]
 }
 
-export function createFileHandlers(sessionManager: SessionManager): Route[] {
+/** The path with symlinks resolved, or the path itself when it does not exist (reading it then fails as missing). */
+function realOrSelf(path: string): string {
+	try {
+		return realpathSync.native(path)
+	} catch {
+		return path
+	}
+}
+
+function isInside(path: string, root: string): boolean {
+	const relativePath = relative(root, path)
+	return relativePath === '' || (relativePath !== '..' && !relativePath.startsWith(`..${sep}`) && !isAbsolute(relativePath))
+}
+
+type SessionPathResolver = (sessionId: string, relPath: string, kind: 'file' | 'directory') => { fullPath: string } | Response
+
+/**
+ * The files the session's canvases name, in every revision, as written and with symlinks resolved. A push or a new
+ * session replaces the revisions array, so the array is the cache key.
+ */
+function createNamedFiles(sessionManager: SessionManager): (session: SessionData) => Set<string> {
+	const cache = new WeakMap<readonly RevisionInfo[], Set<string>>()
+	return (session) => {
+		const cached = cache.get(session.revisions)
+		if (cached !== undefined) return cached
+		const paths = new Set<string>()
+		for (const revision of session.revisions) {
+			for (const { filename } of revision.canvasFiles) {
+				const jsx = sessionManager.readRevisionJsx(session.id, revision.revision, filename)
+				if (jsx === null) continue
+				for (const reference of canvasFileReferences(jsx)) {
+					const path = resolve(session.projectRoot, reference)
+					paths.add(path)
+					paths.add(realOrSelf(path))
+				}
+			}
+		}
+		cache.set(session.revisions, paths)
+		return paths
+	}
+}
+
+/**
+ * Resolves a path against the session's project root. Outside it, symlinks resolved, only a file a canvas of the session
+ * names is served and no directory is listed; nothing in a denied root is. The canvas author controls that list, so it
+ * stops computed paths and other clients' reads, not a hostile canvas.
+ */
+function createSessionPathResolver(sessionManager: SessionManager, options: FileHandlerOptions): SessionPathResolver {
+	const deniedRoots = [...new Set(options.deniedRoots.flatMap((root) => [resolve(root), realOrSelf(resolve(root))]))]
+	const namedFiles = createNamedFiles(sessionManager)
+
+	return (sessionId, relPath, kind) => {
+		const session = sessionManager.get(sessionId)
+		if (!session) return jsonResponse({ error: 'Session not found' }, 404)
+
+		const fullPath = resolve(session.projectRoot, relPath)
+		const relativePath = relative(resolve(session.projectRoot), fullPath)
+		if (!isAbsolute(relPath) && (relativePath === '..' || relativePath.startsWith(`..${sep}`))) {
+			return jsonResponse({ error: 'Path traversal rejected' }, 403)
+		}
+
+		const realPath = realOrSelf(fullPath)
+		if (deniedRoots.some((root) => isInside(fullPath, root) || isInside(realPath, root))) {
+			return jsonResponse({ error: 'Path is not served' }, 403)
+		}
+		const lexicalRoot = resolve(session.projectRoot)
+		// realOrSelf leaves a missing path unresolved, so one under a symlinked root is judged by where it was asked for.
+		const insideRoot = isInside(realPath, realOrSelf(lexicalRoot)) || (realPath === fullPath && isInside(fullPath, lexicalRoot))
+		if (!insideRoot) {
+			const named = kind === 'file' && (namedFiles(session).has(fullPath) || namedFiles(session).has(realPath))
+			if (!named) return jsonResponse({ error: 'Path outside the project root is not named by a canvas in this session' }, 403)
+		}
+
+		return { fullPath: realPath }
+	}
+}
+
+export function createFileHandlers(sessionManager: SessionManager, options: FileHandlerOptions): Route[] {
+	const resolveSessionPath = createSessionPathResolver(sessionManager, options)
+
 	async function handleFileServe(_req: Request, url: URL): Promise<Response> {
 		const sessionId = url.searchParams.get('session')
 		const relPath = url.searchParams.get('path')
 		if (!sessionId || !relPath) return jsonResponse({ error: 'Missing session or path' }, 400)
 
-		const resolved = resolveSessionPath(sessionManager, sessionId, relPath)
+		const resolved = resolveSessionPath(sessionId, relPath, 'file')
 		if (resolved instanceof Response) return resolved
 
 		try {
@@ -61,7 +129,7 @@ export function createFileHandlers(sessionManager: SessionManager): Route[] {
 		const relPath = url.searchParams.get('path')
 		if (!sessionId || !relPath) return jsonResponse({ error: 'Missing session or path' }, 400)
 
-		const resolved = resolveSessionPath(sessionManager, sessionId, relPath)
+		const resolved = resolveSessionPath(sessionId, relPath, 'file')
 		if (resolved instanceof Response) return resolved
 
 		try {
@@ -77,6 +145,9 @@ export function createFileHandlers(sessionManager: SessionManager): Route[] {
 				headers: {
 					'Content-Type': mime,
 					'Cache-Control': 'public, max-age=300',
+					// An SVG opened as a document would otherwise run its scripts in the daemon's origin.
+					'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox",
+					'X-Content-Type-Options': 'nosniff',
 				},
 			})
 		} catch {
@@ -89,7 +160,7 @@ export function createFileHandlers(sessionManager: SessionManager): Route[] {
 		const relPath = url.searchParams.get('path') || ''
 		if (!sessionId) return jsonResponse({ error: 'Missing session' }, 400)
 
-		const resolved = resolveSessionPath(sessionManager, sessionId, relPath)
+		const resolved = resolveSessionPath(sessionId, relPath, 'directory')
 		if (resolved instanceof Response) return resolved
 
 		const ignoreDirs = new Set(['.git', 'node_modules', '.next', '__pycache__', 'dist', '.cache'])

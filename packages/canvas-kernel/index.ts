@@ -1,4 +1,4 @@
-export { compileJsx, compilePlan, KERNEL_COMPONENTS } from './src/engine/compiler'
+export { canvasFileReferences, compileJsx, compilePlan, KERNEL_COMPONENTS } from './src/engine/compiler'
 export type { CanvasComponents, CanvasComponentSpec, CompileOptions, CompileResult } from './src/engine/compiler'
 export type { AssertReadable } from './src/engine/file-admission'
 export { createCanvasPaths } from './src/engine/paths'

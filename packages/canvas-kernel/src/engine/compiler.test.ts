@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { compileJsx, compilePlan } from './compiler'
+import { canvasFileReferences, compileJsx, compilePlan } from './compiler'
 
 // Regression coverage for the error-reporting path. Bun surfaces JSX syntax
 // errors through three shapes (Transpiler throw, build logs, AggregateError
@@ -69,4 +69,28 @@ test('missing required component prop fails before the browser renders', async (
 test('component prop validation accepts valid table props', async () => {
 	const result = await compilePlan(`<Table headers={["Name"]} rows={[["Canvas"]]} />`)
 	expect(result.ok).toBe(true)
+})
+
+test('names the files a canvas references as literals, and only those', () => {
+	const jsx = `
+		<Section title="Files">
+			<FilePreview path="/abs/src/auth.ts" lines={[1, 45]} />
+			<Markdown file='docs/notes.md' />
+			<ImageView src={"/abs/shot.png"} alt="shot" data-src="/not/a/reference.png" />
+			<FilePreview path={computed} />
+			<Item id="x" label="path=/not/a/reference" />
+		</Section>
+	`
+	expect(canvasFileReferences(jsx).sort()).toEqual(['/abs/shot.png', '/abs/src/auth.ts', 'docs/notes.md'])
+})
+
+test('reads a file prop past a > inside another attribute', () => {
+	const jsx = `<ImageView alt="a > b" src="/abs/a.png" />
+		<FilePreview onClick={() => open()} path="/abs/b.ts" />`
+	expect(canvasFileReferences(jsx).sort()).toEqual(['/abs/a.png', '/abs/b.ts'])
+})
+
+test('stops an unterminated attribute at the next tag', () => {
+	const jsx = `<Note>{'<ImageView'}'s alt</Note>\n<Item label="x" src="/not/named.png" />\n<ImageView src="/abs/c.png" />`
+	expect(canvasFileReferences(jsx)).toEqual(['/abs/c.png'])
 })

@@ -1,7 +1,8 @@
-import { existsSync, readFileSync } from 'fs'
+import { existsSync } from 'fs'
 import { resolve } from 'path'
 import { parseArgs } from 'util'
-import { BASE_URL, CLI_AUTH_FILE } from '../config.ts'
+import { readCliAuthToken } from '../cli-auth.ts'
+import { BASE_URL } from '../config.ts'
 import { ensureDaemon } from '../daemon-lifecycle.ts'
 import { getSessionId } from '../helpers.ts'
 
@@ -44,8 +45,8 @@ export function parseSecretAssignments(rawAssignments: string[]): SecretAssignme
 }
 
 async function resolveSecretValues(sessionId: string, fieldIds: string[]): Promise<Map<string, string>> {
-	if (!existsSync(CLI_AUTH_FILE)) throw new Error('Canvas daemon CLI capability is unavailable')
-	const cliAuthToken = readFileSync(CLI_AUTH_FILE, 'utf-8').trim()
+	const cliAuthToken = readCliAuthToken()
+	if (cliAuthToken === undefined) throw new Error('Canvas daemon CLI capability is unavailable')
 	const response = await fetch(`${BASE_URL}/api/session/${encodeURIComponent(sessionId)}/secrets/resolve`, {
 		method: 'POST',
 		headers: {

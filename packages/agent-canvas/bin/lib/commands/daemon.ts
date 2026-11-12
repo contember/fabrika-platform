@@ -1,5 +1,6 @@
 import { parseArgs } from 'util'
 import { z } from 'zod'
+import { cliAuthHeaders } from '../cli-auth.ts'
 import { BASE_URL, DAEMON_PORT } from '../config.ts'
 import { isDaemonRunning, startDaemon, stopDaemon } from '../daemon-lifecycle.ts'
 
@@ -16,7 +17,7 @@ export async function handleDaemon(args: string[]) {
 	switch (subcommand) {
 		case 'status': {
 			try {
-				const res = await fetch(`${BASE_URL}/health`, { signal: AbortSignal.timeout(2000) })
+				const res = await fetch(`${BASE_URL}/health`, { headers: cliAuthHeaders(), signal: AbortSignal.timeout(2000) })
 				const data = healthResponseSchema.parse(await res.json())
 				console.log(`Daemon: running on port ${DAEMON_PORT}`)
 				console.log(`Sessions: ${data.sessions.length > 0 ? data.sessions.join(', ') : 'none'}`)

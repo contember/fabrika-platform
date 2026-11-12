@@ -497,6 +497,54 @@ function resolveFilePreviews(jsx: string, projectRoot: string, assertReadable?: 
 	)
 }
 
+/** The kernel props that name a local file: what `/api/file` and `/api/image` are asked for when the canvas renders. */
+const FILE_REFERENCE_PROPS: ReadonlyArray<readonly [tag: string, prop: string]> = [
+	['FilePreview', 'path'],
+	['Markdown', 'file'],
+	['ImageView', 'src'],
+]
+
+/**
+ * The paths a canvas names as string literals in `FilePreview path`, `Markdown file` and `ImageView src`, as written.
+ * A path computed at run time is not found, so a host that serves files by this list serves such a path only when it
+ * would serve it anyway.
+ */
+export function canvasFileReferences(jsx: string): string[] {
+	const references = new Set<string>()
+	for (const [tag, prop] of FILE_REFERENCE_PROPS) {
+		const valuePattern = new RegExp(`(?:^|\\s)${prop}=(?:"([^"]+)"|'([^']+)'|\\{\\s*(?:"([^"]+)"|'([^']+)')\\s*\\})`)
+		for (const start of jsx.matchAll(new RegExp(`<${tag}\\b`, 'g'))) {
+			const from = start.index + start[0].length
+			const path = jsx.slice(from, tagEnd(jsx, from)).match(valuePattern)?.slice(1).find((group) => group !== undefined)
+			if (path !== undefined) references.add(path)
+		}
+	}
+	return [...references]
+}
+
+/** Where the opening tag whose attributes start at `from` ends: the first `>` (or a stray `<`) outside a quoted or `{…}` value. */
+function tagEnd(jsx: string, from: number): number {
+	let quote: string | null = null
+	let depth = 0
+	for (let index = from; index < jsx.length; index++) {
+		const char = jsx[index]
+		if (quote !== null) {
+			if (char === quote) quote = null
+		} else if (char === '"' || char === "'" || char === '`') {
+			quote = char
+		} else if (char === '{') {
+			depth++
+		} else if (char === '}') {
+			depth--
+		} else if (char === '>' && depth === 0) {
+			return index
+		} else if (char === '<' && depth === 0) {
+			return index
+		}
+	}
+	return jsx.length
+}
+
 /** @deprecated Use `compileJsx(jsx, { projectRoot, tempDir })`. */
 export async function compilePlan(jsx: string, projectRoot?: string): Promise<CompileResult> {
 	return compileJsx(jsx, { projectRoot })

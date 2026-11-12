@@ -3,11 +3,12 @@ import { corsHeaders, dispatch, jsonResponse } from '@fabrika/daemon-kit'
 import { randomBytes } from 'crypto'
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { dirname, join } from 'path'
+import { admitRequest } from './admission'
 import { createApiHandlers } from './handlers/api'
 import { createFileHandlers } from './handlers/files'
-import { createStaticHandlers } from './handlers/static'
+import { createStaticHandlers, withDefaultCsp } from './handlers/static'
 import { createUploadHandlers } from './handlers/uploads'
-import { CLI_AUTH_FILE, PID_FILE, REVIEWS_DIR, SESSIONS_DIR, TEMP_DIR } from './paths'
+import { CLI_AUTH_FILE, DATA_DIR, PID_FILE, REVIEWS_DIR, SESSIONS_DIR, TEMP_DIR } from './paths'
 import { startRemoteFeedbackPoller } from './remote-feedback'
 import { ReviewProxies } from './review/proxy'
 import { createReviewServer, type ReviewSocketData } from './review/server'
@@ -50,58 +51,70 @@ const routes = [
 		version: VERSION,
 		cliAuthToken,
 	}),
-	...createFileHandlers(sessionManager),
+	// The file routes never return the daemon's own state, the CLI capability included.
+	...createFileHandlers(sessionManager, { deniedRoots: [TEMP_DIR, DATA_DIR] }),
 	...createUploadHandlers(sessionManager),
 	...createStaticHandlers(),
 ]
+
+type Upgrader = { upgrade(req: Request, options: { data: SocketData }): boolean }
+
+function handle(req: Request, server: Upgrader): Response | Promise<Response> | undefined {
+	const url = new URL(req.url)
+
+	const refusal = admitRequest(req, url, { port: PORT, cliAuthToken })
+	if (refusal !== null) return refusal
+
+	// Review mode answers its own preflights: the application under review runs on another port.
+	const reviewResponse = review.fetch(req, url, server)
+	if (reviewResponse === 'upgraded') return undefined
+	if (reviewResponse !== null) return reviewResponse
+
+	// CORS preflight
+	if (req.method === 'OPTIONS') {
+		return new Response(null, { status: 204, headers: corsHeaders(PORT) })
+	}
+
+	// WebSocket upgrade: /ws/session/:id
+	const wsBrowserMatch = url.pathname.match(/^\/ws\/session\/([^/]+)$/)
+	if (wsBrowserMatch) {
+		const upgraded = server.upgrade(req, { data: { type: 'browser', sessionId: wsBrowserMatch[1] } })
+		if (!upgraded) return new Response('WebSocket upgrade failed', { status: 400 })
+		return undefined
+	}
+
+	// WebSocket upgrade: /ws/wait/:id
+	const wsWaitMatch = url.pathname.match(/^\/ws\/wait\/([^/]+)$/)
+	if (wsWaitMatch) {
+		const upgraded = server.upgrade(req, { data: { type: 'wait', sessionId: wsWaitMatch[1] } })
+		if (!upgraded) return new Response('WebSocket upgrade failed', { status: 400 })
+		return undefined
+	}
+
+	// Route dispatch
+	const response = dispatch(routes, req, url)
+	if (response) return response
+
+	// Root redirect
+	if (url.pathname === '/' && req.method === 'GET') {
+		const sessions = sessionManager.list()
+		if (sessions.length > 0) {
+			const latest = sessions.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())[0]
+			return Response.redirect(`/s/${latest.id}`, 302)
+		}
+		return jsonResponse({ message: 'No active sessions', sessions: [] })
+	}
+
+	return jsonResponse({ error: 'Not found' }, 404)
+}
 
 const server = Bun.serve<SocketData>({
 	port: PORT,
 	hostname: 'localhost',
 	fetch(req, server) {
-		const url = new URL(req.url)
-
-		// Review mode answers its own preflights: the application under review runs on another port.
-		const reviewResponse = review.fetch(req, url, server)
-		if (reviewResponse === 'upgraded') return undefined
-		if (reviewResponse !== null) return reviewResponse
-
-		// CORS preflight
-		if (req.method === 'OPTIONS') {
-			return new Response(null, { status: 204, headers: corsHeaders(PORT) })
-		}
-
-		// WebSocket upgrade: /ws/session/:id
-		const wsBrowserMatch = url.pathname.match(/^\/ws\/session\/([^/]+)$/)
-		if (wsBrowserMatch) {
-			const upgraded = server.upgrade(req, { data: { type: 'browser', sessionId: wsBrowserMatch[1] } })
-			if (!upgraded) return new Response('WebSocket upgrade failed', { status: 400 })
-			return undefined
-		}
-
-		// WebSocket upgrade: /ws/wait/:id
-		const wsWaitMatch = url.pathname.match(/^\/ws\/wait\/([^/]+)$/)
-		if (wsWaitMatch) {
-			const upgraded = server.upgrade(req, { data: { type: 'wait', sessionId: wsWaitMatch[1] } })
-			if (!upgraded) return new Response('WebSocket upgrade failed', { status: 400 })
-			return undefined
-		}
-
-		// Route dispatch
-		const response = dispatch(routes, req, url)
-		if (response) return response
-
-		// Root redirect
-		if (url.pathname === '/' && req.method === 'GET') {
-			const sessions = sessionManager.list()
-			if (sessions.length > 0) {
-				const latest = sessions.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())[0]
-				return Response.redirect(`/s/${latest.id}`, 302)
-			}
-			return jsonResponse({ message: 'No active sessions', sessions: [] })
-		}
-
-		return jsonResponse({ error: 'Not found' }, 404)
+		const response = handle(req, server)
+		if (response === undefined) return undefined
+		return response instanceof Promise ? response.then(withDefaultCsp) : withDefaultCsp(response)
 	},
 
 	websocket: {

@@ -31,6 +31,11 @@ fresh, so the variable will not survive between commands.
 Always use absolute filesystem paths for local file references in canvas components
 (such as `FilePreview`), and verify that the referenced files exist. Resolve them
 against the user's project directory, not the temporary directory containing the JSX.
+Write each path as a string literal (`path="/abs/file.ts"`): the daemon serves a file outside
+the project root only when a canvas names it that way.
+Canvas JavaScript may connect only to the daemon: `fetch` or a WebSocket to another host,
+an `<iframe>` and scripts from other origins are blocked. Images, fonts, stylesheets, audio
+and video may come from any https URL.
 
 Run these commands from the user's project root before using Canvas:
 

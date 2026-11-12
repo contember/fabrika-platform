@@ -2,6 +2,7 @@ import { existsSync, statSync } from 'fs'
 import { basename, resolve } from 'path'
 import { parseArgs } from 'util'
 import { z } from 'zod'
+import { cliAuthHeaders } from '../cli-auth.ts'
 import { BASE_URL } from '../config.ts'
 import { ensureDaemon, startDaemon, stopDaemon } from '../daemon-lifecycle.ts'
 import { getSessionId, openBrowser } from '../helpers.ts'
@@ -60,7 +61,7 @@ export async function handlePush(args: string[]) {
 
 	const response = await fetch(`${BASE_URL}/api/session/${sessionId}/plan`, {
 		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
+		headers: { 'Content-Type': 'application/json', ...cliAuthHeaders() },
 		body: JSON.stringify({
 			directory: resolvedPath,
 			projectRoot,
@@ -89,7 +90,7 @@ export async function handlePush(args: string[]) {
 		await startDaemon()
 		const retryResponse = await fetch(`${BASE_URL}/api/session/${sessionId}/plan`, {
 			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
+			headers: { 'Content-Type': 'application/json', ...cliAuthHeaders() },
 			body: JSON.stringify({
 				directory: resolvedPath,
 				projectRoot,

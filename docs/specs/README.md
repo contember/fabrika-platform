@@ -23,5 +23,7 @@ something a future reader needs; the durable _why_ goes to `../decisions/` and t
 - [Fleet overview](fleet-overview.md) — owner, last use, framework lag and idle sandboxes per application; a retire
   action comes later.
 - [Agent task keys](agent-task-keys.md) — short-lived, budgeted delegation marked as an agent acting for a person.
+- [Agent-canvas artifact features](agent-canvas-artifact-features.md) — which hosted-artifact features fit the canvas
+  feedback loop: comment threads the agent answers, a streaming watcher, file intake, downloads and project themes.
 
 The order they are built in: [sprint — platform feedback loops](../sprints/sprint-2026-11-02-platform-feedback-loops.md).

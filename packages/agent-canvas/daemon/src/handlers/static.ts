@@ -1,4 +1,5 @@
 import type { Route } from '@fabrika/daemon-kit'
+import { createHash } from 'crypto'
 import { dirname, join } from 'path'
 import { DATA_DIR } from '../paths'
 
@@ -23,11 +24,59 @@ async function getDistDir(): Promise<string> {
 	return cachedDistDir
 }
 
+/**
+ * The canvas page's policy, derived from the page: scripts from the daemon, its inline scripts by hash, its external ones
+ * by URL, and connections only to the daemon. Images, fonts, styles, media and navigation can still carry data out.
+ */
+export function sessionPageCsp(html: string): string {
+	const scripts = ["'self'"]
+	for (const [, attributes = '', body = ''] of html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/g)) {
+		const src = attributes.match(/\bsrc="([^"]+)"/)?.[1]
+		if (src === undefined) scripts.push(`'sha256-${createHash('sha256').update(body).digest('base64')}'`)
+		else if (src.startsWith('https://')) scripts.push(src)
+	}
+	return [
+		"default-src 'self'",
+		`script-src ${scripts.join(' ')}`,
+		"style-src 'self' 'unsafe-inline' https:",
+		"img-src 'self' data: blob: https:",
+		"font-src 'self' data: https:",
+		"media-src 'self' data: blob: https:",
+		"frame-src 'none'",
+		"connect-src 'self'",
+		"object-src 'none'",
+		"base-uri 'none'",
+		"form-action 'none'",
+		"frame-ancestors 'none'",
+	].join('; ')
+}
+
+/**
+ * Every other response is a document in the daemon's origin when opened in a frame or window. Without a policy of its
+ * own it would let canvas JavaScript script it past the page's `connect-src`.
+ */
+export const INERT_DOCUMENT_CSP = "default-src 'none'; frame-ancestors 'none'; sandbox"
+
+export function withDefaultCsp(response: Response): Response {
+	if (response.headers.has('Content-Security-Policy')) return response
+	try {
+		response.headers.set('Content-Security-Policy', INERT_DOCUMENT_CSP)
+		return response
+	} catch {
+		// A redirect's headers are immutable; a rebuilt file response would lose its length and range support.
+	}
+	const headers = new Headers(response.headers)
+	headers.set('Content-Security-Policy', INERT_DOCUMENT_CSP)
+	return new Response(response.body, { status: response.status, statusText: response.statusText, headers })
+}
+
 async function serveSessionPage(): Promise<Response> {
 	const distDir = await getDistDir()
 	const file = Bun.file(join(distDir, 'index.html'))
 	if (await file.exists()) {
-		return new Response(file, { headers: { 'Content-Type': 'text/html' } })
+		// Read on every request: a watch rebuild rewrites the page and its inline scripts.
+		const html = await file.text()
+		return new Response(html, { headers: { 'Content-Type': 'text/html', 'Content-Security-Policy': sessionPageCsp(html) } })
 	}
 	return new Response('Build not found. Run: bun run daemon/build.ts', { status: 500 })
 }
