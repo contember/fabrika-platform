@@ -16,6 +16,8 @@
 		"index.ts",
 		"cli/src",
 		"daemon/src",
+		"shared/derive.ts",
+		"shared/gate.ts",
 		"shared/index.ts",
 		"shared/phases.ts",
 		"shared/urls.ts",
