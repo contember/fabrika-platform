@@ -9,7 +9,8 @@ interface DownloadProps {
 
 /** A file the agent hands the user. The daemon serves only a path a canvas of the session names as a literal. */
 export function Download({ path, label }: DownloadProps) {
-	const name = path.split(/[\\/]/).pop() || 'download'
+	// Split as the daemon names the attachment, on `/` only.
+	const name = path.split('/').pop() || 'download'
 	if (MODE.isShared) {
 		return <p className="text-[13px] font-body text-text-tertiary my-2">{label || name} (download available only on the canvas author's machine)</p>
 	}

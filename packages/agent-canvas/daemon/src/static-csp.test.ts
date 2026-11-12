@@ -1,9 +1,8 @@
 import { expect, test } from 'bun:test'
 import { createHash } from 'crypto'
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
-import { join } from 'path'
-import { INERT_DOCUMENT_CSP, serverErrorResponse, sessionPageCsp, withDefaultCsp } from './handlers/static'
+import { INERT_DOCUMENT_CSP, serveErrorOptions, sessionPageCsp, withDefaultCsp } from './handlers/static'
 
 function directive(csp: string, name: string): string[] {
 	const found = csp.split('; ').find((part) => part.startsWith(`${name} `))
@@ -56,11 +55,9 @@ test('edits a file response in place, so Bun still serves its length and ranges'
 })
 
 test('a file that fails to stream gets an inert JSON error, not a scripted error page', async () => {
-	const directory = mkdtempSync(join(tmpdir(), 'agent-canvas-error-'))
-	const unreadable = join(directory, 'secret.txt')
-	writeFileSync(unreadable, 'secret')
-	chmodSync(unreadable, 0o000)
-	const server = Bun.serve({ port: 0, development: false, error: serverErrorResponse, fetch: () => new Response(Bun.file(unreadable)) })
+	// A directory cannot be streamed, for any user; an unreadable file would still be read by root.
+	const directory = mkdtempSync(`${tmpdir()}/agent-canvas-error-`)
+	const server = Bun.serve({ port: 0, ...serveErrorOptions, fetch: () => new Response(Bun.file(directory)) })
 	try {
 		const response = await fetch(server.url)
 		expect(response.status).toBe(500)

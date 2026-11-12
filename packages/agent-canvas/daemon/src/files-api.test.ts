@@ -184,9 +184,9 @@ test('the attachment carries the name the canvas wrote, not the one a symlink re
 	const { get, projectRoot } = setup(() => '<Download path="latest.csv" />')
 	writeFileSync(join(projectRoot, 'report-2026-11-12.csv'), 'a,b')
 	symlinkSync(join(projectRoot, 'report-2026-11-12.csv'), join(projectRoot, 'latest.csv'))
-	expect((await get('download', 'latest.csv')).headers.get('Content-Disposition')).toBe(
-		`attachment; filename="latest.csv"; filename*=UTF-8''latest.csv`,
-	)
+	for (const path of ['latest.csv', 'latest.csv/x/..']) {
+		expect((await get('download', path)).headers.get('Content-Disposition')).toBe(`attachment; filename="latest.csv"; filename*=UTF-8''latest.csv`)
+	}
 })
 
 test('a Download path also admits the file to the read routes, a computed one does not', async () => {

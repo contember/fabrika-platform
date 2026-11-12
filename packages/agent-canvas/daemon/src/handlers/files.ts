@@ -46,7 +46,8 @@ function isInside(path: string, root: string): boolean {
 
 /** `named-file`: a file a canvas of the session names, wherever it is; inside the project root too. */
 type PathKind = 'file' | 'directory' | 'named-file'
-type SessionPathResolver = (sessionId: string, relPath: string, kind: PathKind) => { fullPath: string } | Response
+/** `fullPath` has symlinks resolved; `requestedPath` is the path as asked for, normalised. */
+type SessionPathResolver = (sessionId: string, relPath: string, kind: PathKind) => { fullPath: string; requestedPath: string } | Response
 
 /**
  * The files the session's canvases name, in every revision, as written and with symlinks resolved. A push or a new
@@ -106,7 +107,7 @@ function createSessionPathResolver(sessionManager: SessionManager, options: File
 			return jsonResponse({ error: 'Path outside the project root is not named by a canvas in this session' }, 403)
 		}
 
-		return { fullPath: realPath }
+		return { fullPath: realPath, requestedPath: fullPath }
 	}
 }
 
@@ -180,7 +181,7 @@ export function createFileHandlers(sessionManager: SessionManager, options: File
 		return new Response(file, {
 			headers: {
 				'Content-Type': 'application/octet-stream',
-				'Content-Disposition': attachmentDisposition(basename(relPath)),
+				'Content-Disposition': attachmentDisposition(basename(resolved.requestedPath)),
 				'Cache-Control': 'no-store',
 				'X-Content-Type-Options': 'nosniff',
 			},
