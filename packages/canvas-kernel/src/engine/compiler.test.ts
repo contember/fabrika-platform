@@ -1,4 +1,7 @@
 import { expect, test } from 'bun:test'
+import { mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
 import { canvasFileReferences, compileJsx, compilePlan } from './compiler'
 
 // Regression coverage for the error-reporting path. Bun surfaces JSX syntax
@@ -36,6 +39,34 @@ test('syntax error line maps back to the authored file (1-based, not offset by i
 test('well-formed canvas compiles', async () => {
 	const result = await compilePlan(`<Section title="Hello"><Item id="a" label="b">text</Item></Section>`)
 	expect(result.ok).toBe(true)
+})
+
+// String contents decode to plain text in the bundle, so the validation must not match module syntax inside them.
+test('module syntax inside string values neither runs nor breaks the validation', async () => {
+	const injected = await compilePlan(
+		`<Table headers={["Goal"]} rows={[["Remove the stale import {"], ["} from \\u0022x\\u0022\\u0022, globalThis.__canvasInjected=1, /*"], ["*/ ]]//"]]} />`,
+	)
+	expect(injected.ok).toBe(true)
+	expect('__canvasInjected' in globalThis).toBe(false)
+
+	const plain = await compilePlan(
+		`<Table headers={["Goal"]} rows={[["Drop the unused import {"], ["Keep only } from \\u0022react\\u0022 in the header"]]} />`,
+	)
+	expect(plain.ok).toBe(true)
+})
+
+test('a canvas that imports a local module compiles: the bundle places its own imports after that module', async () => {
+	const dir = mkdtempSync(join(tmpdir(), 'canvas-compile-'))
+	try {
+		writeFileSync(join(dir, 'value.js'), 'export const value = "from a module"')
+		const result = await compileJsx(
+			`import { value } from ${JSON.stringify(join(dir, 'value.js'))}\nexport default function Plan() { return <Section title={value}>x</Section> }`,
+			{ projectRoot: dir, tempDir: dir },
+		)
+		expect(result).toMatchObject({ ok: true })
+	} finally {
+		rmSync(dir, { recursive: true, force: true })
+	}
 })
 
 test('a host component is unknown until the host declares it', async () => {
