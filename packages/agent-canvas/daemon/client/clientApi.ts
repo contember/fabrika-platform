@@ -165,11 +165,16 @@ const PROJECT_THEME_ELEMENT_ID = 'agent-canvas-project-theme'
  * Applies the project's `.agent-canvas/theme.css`, as the daemon rebuilt it, after the base theme. A theme the daemon
  * refuses leaves the base theme and a console warning that says why.
  */
+let projectThemeRequest = 0
+
 export async function applyProjectTheme(): Promise<void> {
 	if (MODE.isShared) return
+	// Two pushes in a row can answer out of order; only the latest request applies.
+	const request = ++projectThemeRequest
 	const response = await fetch(`/api/session/${encodeURIComponent(MODE.sessionId)}/theme.css`, { cache: 'no-store' })
 	const css = response.ok ? await response.text() : ''
-	if (!response.ok) console.warn(`Project theme not applied: ${(await secretApiError(response)).message}`)
+	if (!response.ok) console.warn(`Project theme not applied: ${(await apiError(response)).message}`)
+	if (request !== projectThemeRequest) return
 	let style = document.getElementById(PROJECT_THEME_ELEMENT_ID)
 	if (style === null) {
 		style = document.createElement('style')
