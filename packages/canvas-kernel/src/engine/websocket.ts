@@ -40,7 +40,7 @@ const browserFrameSchema = z.discriminatedUnion('type', [
 		type: z.literal('submit'),
 		feedback: z.string(),
 		annotations: submittedAnnotationsFrameSchema.optional(),
-		responses: submittedResponsesSchema.optional(),
+		responses: submittedResponsesSchema.optional().catch(undefined),
 	}).passthrough(),
 	z.object({
 		type: z.literal('render-error'),

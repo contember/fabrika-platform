@@ -61,6 +61,12 @@ describe('submitted answers', () => {
 
 		websocket.handlers.message(browser, JSON.stringify({ type: 'submit', feedback: 'again' }))
 		expect(manager.getSubmittedResponses('session', 1)).toEqual([])
+
+		for (const responses of [null, {}, 'verdict']) {
+			websocket.handlers.message(browser, JSON.stringify({ type: 'submit', feedback: `kept ${JSON.stringify(responses)}`, responses }))
+			expect(manager.getFeedback('session', 1)).toBe(`kept ${JSON.stringify(responses)}`)
+			expect(manager.getSubmittedResponses('session', 1)).toEqual([])
+		}
 	})
 })
 

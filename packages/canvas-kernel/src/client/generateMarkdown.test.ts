@@ -1,6 +1,6 @@
 import { RESPONSE_ANNOTATION_PATH } from '@fabrika/annotations'
 import { describe, expect, test } from 'bun:test'
-import { canPruneResponses, generateMarkdown, pruneStaleResponses } from './generateMarkdown'
+import { canPruneResponses, generateMarkdown, pruneStaleResponses, submittedAnswers } from './generateMarkdown'
 import type { Annotation, FeedbackEntry, PlanResponse } from './runtime'
 
 function response(id: string, label: string): PlanResponse {
@@ -151,6 +151,18 @@ describe('generateMarkdown', () => {
 		}
 		const md = generateMarkdown([theirs], '', undefined, undefined, new Set(['r1']))
 		expect(md).toContain('![screenshot](https://share.example/blob/a)')
+	})
+})
+
+describe('submittedAnswers', () => {
+	test('sends each answered question as its id and value, and skips unanswered ones', () => {
+		const responses = new Map<string, PlanResponse>([
+			['verdict', { id: 'verdict', type: 'radio', label: 'Verdict', value: 'Approve', options: ['Approve', 'Request changes'] }],
+			['tags', { id: 'tags', type: 'checkbox', label: 'Tags', value: ['a'] }],
+			['blank', { id: 'blank', type: 'text', label: 'Blank', value: '   ' }],
+			['none', { id: 'none', type: 'checkbox', label: 'None', value: [] }],
+		])
+		expect(submittedAnswers(responses)).toEqual([{ id: 'verdict', value: 'Approve' }, { id: 'tags', value: ['a'] }])
 	})
 })
 
