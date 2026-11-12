@@ -62,6 +62,18 @@ Claude uses different canvas flows depending on the task:
 
 `<FileDrop id label accept maxBytes required>` lets the user hand the agent a file from the canvas. The daemon stores it with the session (`sessions/<id>/assets/<field>/`, mode 0600), caps a file at 25 MB and a session at 100 files and 250 MB, and keeps the files until the session directory is removed; nothing deletes them automatically. A field's files stay listed on later revisions. The feedback lists their absolute paths; the agent reads them with its own tools. No route serves them back, so an upload is never rendered as a page or run as a script.
 
+### Threads and following a session
+
+Submitted feedback labels each annotation with its id. The agent can answer one annotation with
+`bunx agent-canvas reply <annotation-id> "<text>" [--resolve]`; the reply appears under the annotation in the sidebar,
+where the user can answer back. The thread is kept with the session, so it stays visible on later revisions. The
+user's answer reaches the agent through `watch` like a submit.
+
+`bunx agent-canvas watch --follow` keeps watching instead of exiting after the first answer. It prints one block per
+submit, thread reply, render error and remote-feedback arrival, for hosts that turn each output line into an event
+(Claude Code's Monitor). For remote feedback it prints only the count and the reviewers' self-typed names; their text
+reaches the agent when the user includes it in a submit.
+
 ### Local secret handoff
 
 Runbooks can use `SecretInput` when a command needs a token that must stay out of feedback and model context. The browser stores the value only in the local daemon's memory. Feedback contains the field ID and environment variable name, not the value.
@@ -77,7 +89,7 @@ bunx agent-canvas exec \
 
 Secret resolution requires a daemon capability available to the CLI but not to canvas JavaScript. A new canvas revision, daemon shutdown, or session cleanup clears the value. The target command must not print its environment or credentials.
 
-The daemon answers only requests addressed to `localhost`, `127.0.0.1` or `[::1]` on its port. It refuses state-changing requests and WebSocket upgrades from any origin other than its own UI, requires the CLI capability on the routes only the CLI calls (push, feedback, secret resolution, review agent routes), and never serves its own temporary or data directory through the file routes. The file routes serve a session's project root and, outside it, only the files its canvases name in `FilePreview path`, `Markdown file`, `ImageView src` or `Download path`, symlinks resolved; they list no directory outside it. `/api/download`, behind `<Download path>`, serves only a named file, inside the root too, as an `application/octet-stream` attachment. The canvas author controls that list, so it stops reads of paths no canvas names, not a hostile canvas. The canvas page carries a Content-Security-Policy that lets canvas JavaScript connect only to the daemon. Images, fonts, stylesheets and media may come from any https origin, and such a URL, like a navigation, can still carry data out. Every other daemon response carries an inert policy, so a frame or window of it cannot be scripted past the page's.
+The daemon answers only requests addressed to `localhost`, `127.0.0.1` or `[::1]` on its port. It refuses state-changing requests and WebSocket upgrades from any origin other than its own UI, requires the CLI capability on the routes only the CLI calls (push, feedback, secret resolution, thread replies and claims, review agent routes), and never serves its own temporary or data directory through the file routes. The file routes serve a session's project root and, outside it, only the files its canvases name in `FilePreview path`, `Markdown file`, `ImageView src` or `Download path`, symlinks resolved; they list no directory outside it. `/api/download`, behind `<Download path>`, serves only a named file, inside the root too, as an `application/octet-stream` attachment. The canvas author controls that list, so it stops reads of paths no canvas names, not a hostile canvas. The canvas page carries a Content-Security-Policy that lets canvas JavaScript connect only to the daemon. Images, fonts, stylesheets and media may come from any https origin, and such a URL, like a navigation, can still carry data out. Every other daemon response carries an inert policy, so a frame or window of it cannot be scripted past the page's.
 
 ### Review mode
 

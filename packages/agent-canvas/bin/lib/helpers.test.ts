@@ -32,6 +32,25 @@ describe('waitForFeedback', () => {
 		expect(sockets).toHaveLength(2)
 	})
 
+	test('a thread reply the socket announces is read through the probe', async () => {
+		let probes = 0
+		const result = waitForFeedback('session', {
+			createSocket: () => {
+				const socket = new FakeSocket()
+				queueMicrotask(() => {
+					socket.onopen?.(new Event('open'))
+					socket.onmessage?.(new MessageEvent('message', { data: JSON.stringify({ type: 'thread-queued' }) }))
+				})
+				return socket
+			},
+			// Empty on open; the announced reply is there when the frame asks for a recheck.
+			probe: async () => (++probes === 1 ? null : '## Thread replies\n'),
+			timeoutMs: 1_000,
+		})
+
+		await expect(result).resolves.toBe('## Thread replies\n')
+	})
+
 	test('rejects when the connection keeps closing', async () => {
 		const result = waitForFeedback('session', {
 			createSocket: () => {

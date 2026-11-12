@@ -27,6 +27,7 @@ import { type StoredAsset, storedAssetSchema } from '../src/assets'
 import type { SharedResponse } from '../src/share-responses'
 import { type SessionMeta, sessionMetaSchema } from './apiSchemas'
 import { decryptString, ENCRYPTION_META, type EncryptionMeta, encryptString, importShareKey } from './shareCrypto'
+import { createThreadStore, type LocalThreadStore } from './threadStore'
 
 declare global {
 	interface Window {
@@ -367,6 +368,9 @@ export const WS_AVAILABLE: boolean = !MODE.isShared
  * serves canvases in two modes, so these cannot use the kernel's local-only
  * defaults: shared canvases come from the worker (and may be encrypted).
  */
+/** The session's threads; a shared canvas has none, its reviewers' feedback goes through the author. */
+export const threadStore: LocalThreadStore | null = MODE.isShared ? null : createThreadStore(MODE.sessionId)
+
 export const canvasHost: CanvasHost = {
 	get sessionId() {
 		return getIdentifier()
@@ -375,4 +379,5 @@ export const canvasHost: CanvasHost = {
 	fsAvailable: FS_AVAILABLE,
 	uploadUrl,
 	loadCanvasModule,
+	threads: threadStore,
 }

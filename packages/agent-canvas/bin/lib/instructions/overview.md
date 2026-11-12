@@ -90,7 +90,40 @@ work while waiting for feedback.
 
 Use the **Edit** tool to modify existing JSX based on feedback — targeted edits, not full rewrites. Then push and watch again.
 
-### 5. Fetch (non-blocking alternative)
+### 5. Answer one annotation (threads)
+
+Each annotation in the feedback starts with its id, for example `` Annotation `ann-1731400000000-k3x9` ``. When an
+annotation asks a question, or you want to say how you handled it, answer it in its own thread instead of (or as
+well as) in the next revision:
+
+```bash
+bunx agent-canvas reply ann-1731400000000-k3x9 "Moved the rollout to Q3; see the Timeline section." --session <session-id>
+bunx agent-canvas reply ann-1731400000000-k3x9 "Done." --resolve --session <session-id>
+```
+
+The user sees the reply under the annotation in the sidebar and can answer back. Their answer reaches you through
+`watch` like a submit, under `## Thread replies`; answer it with `reply` again. Without `--resolve` the thread goes
+back to the user.
+
+### 6. Follow a session (Claude Code's Monitor)
+
+`watch --follow` keeps watching after each answer and prints one block per event, each starting with a line
+`[agent-canvas <event>]`:
+
+- `submit` — the user's feedback, as `watch` prints it
+- `thread-reply` — threads the user answered
+- `render-error` — a canvas failed to render; fix it and push
+- `remote-feedback-arrived` — reviewers of a shared link commented. Only the count and their self-typed names are
+  printed; their text reaches you when the user includes it in a submit.
+
+```bash
+bunx agent-canvas watch --follow --session <session-id>
+```
+
+In Claude Code, run it with the **Monitor** tool so each block arrives as a notification while you keep working. A
+push still needs the previous submit consumed first, which `--follow` does as it prints it.
+
+### 7. Fetch (non-blocking alternative)
 
 If the user tells you they've already submitted feedback:
 

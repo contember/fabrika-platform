@@ -26,6 +26,20 @@ export async function consumeFeedback(sessionId: string): Promise<string | null>
 	return null
 }
 
+const claimResponseSchema = z.object({ markdown: z.string().nullable() })
+
+/** The thread replies the user sent since the last claim, as markdown; each is handed over once. */
+export async function claimThreadReplies(sessionId: string): Promise<string | null> {
+	const res = await fetch(`${BASE_URL}/api/session/${sessionId}/threads/claim`, { method: 'POST', headers: cliAuthHeaders() })
+	if (!res.ok) throw new Error(`Claiming thread replies failed with status ${res.status}`)
+	return claimResponseSchema.parse(await res.json()).markdown
+}
+
+/** What the user sent and the agent has not read yet: a submit first, then thread replies. */
+export async function pendingInput(sessionId: string): Promise<string | null> {
+	return (await consumeFeedback(sessionId)) ?? (await claimThreadReplies(sessionId))
+}
+
 export function openBrowser(url: string) {
 	const candidates = process.platform === 'darwin'
 		? ['open']
@@ -43,6 +57,8 @@ export function openBrowser(url: string) {
 
 interface FeedbackWaitOptions {
 	createSocket?: (url: string) => WaiterSocket
+	/** Reads input the socket only announces (a thread reply) or that arrived while it was reconnecting. */
+	probe?: () => Promise<string | null>
 	timeoutMs?: number
 	reconnectAttempts?: number
 	reconnectDelayMs?: number
@@ -69,7 +85,7 @@ function isCanvasRenderError(value: unknown): value is CanvasRenderError {
 		&& (!('componentStack' in value) || value.componentStack === undefined || typeof value.componentStack === 'string')
 }
 
-function formatCanvasRenderError(error: CanvasRenderError): string {
+export function formatCanvasRenderError(error: CanvasRenderError): string {
 	const details = [`Canvas render failed in ${error.filename} (revision ${error.revision}):`, error.message]
 	if (error.componentStack?.trim()) details.push(`Component stack:${error.componentStack}`)
 	if (error.stack?.trim()) details.push(`Browser stack:\n${error.stack}`)
@@ -85,13 +101,22 @@ function readFeedbackFrame(frame: unknown): WaitVerdict<string> | undefined {
 	if (frame.type === 'render-error' && isCanvasRenderError(frame.error)) {
 		return { type: 'fail', error: new Error(formatCanvasRenderError(frame.error)) }
 	}
+	if (frame.type === 'thread-queued') return { type: 'recheck' }
 	return undefined
 }
 
 export function waitForFeedback(sessionId: string, options: FeedbackWaitOptions = {}): Promise<string> {
+	const { probe } = options
 	return waitForEvent<string>({
 		url: `${WS_URL}/ws/wait/${sessionId}`,
 		onFrame: readFeedbackFrame,
+		...(probe === undefined ? {} : {
+			probe: async () => {
+				const input = await probe()
+				return input === null ? undefined : { value: input }
+			},
+			alreadyProbed: true,
+		}),
 		createSocket: options.createSocket ?? ((url) => new WebSocket(cliSocketUrl(url))),
 		timeoutMs: options.timeoutMs ?? TIMEOUT_MS,
 		reconnect: {
