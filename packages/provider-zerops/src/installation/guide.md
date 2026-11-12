@@ -340,8 +340,11 @@ install the newest patch instead (step 6 upgrades an installation).
    `deploy interrupted: …; run the deploy again` lost Control mid-run, typically to step 3's workflow
    redeploying it: deploy again once Control is back.
 
-   The deploy fails when the repository at the deployed commit does not match the registered manifest.
-   Commit and push, rebuild the manifest, `apps environments put` it, and deploy again.
+   `source resolve failed (descriptor_mismatch): zerops.yaml at commit <sha> has sha256 <a>, but the
+   environment's registered manifest names sha256 <b>` means the repository's `zerops.yaml` changed (its
+   `build.base`, say) since the manifest was built. Deploying again fails the same way: rebuild the manifest
+   from that commit (`fabrika app build --env=<name>`), send it with `control apps environments put` and the
+   same placement flags as on `register`, and deploy again. The log line names the exact command.
 
    On an environment named `prod`, a change that widens access waits for a person to approve it in the
    console before it deploys.

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import type { GitHubSourceCredentialRequest, GitHubSourceCredentials } from '../../connections/credentials'
-import { SourceFailure, SourceRateLimited } from '../failure'
+import { SourceDescriptorMismatch, SourceFailure, SourceRateLimited } from '../failure'
 import {
 	codeloadUrl,
 	descriptor,
@@ -248,6 +248,24 @@ describe('the GitHub tarball repository', () => {
 		await expect(
 			source.resolve({ repository, requestedRef: 'main', descriptorSha256, signal: new AbortController().signal }),
 		).rejects.toMatchObject({ ...expected, stage: 'resolve' })
+	})
+
+	test('a drifted descriptor names the file, the commit and both digests', async () => {
+		const drifted = 'zerops: drifted\n'
+		const source = handSource(handTarball([file(`${handPrefix}zerops.yaml`, drifted)]))
+		const raised = await source
+			.resolve({ repository, requestedRef: 'main', descriptorSha256, signal: new AbortController().signal })
+			.then(() => undefined, (error: unknown) => error)
+
+		const actualSha256 = new Bun.CryptoHasher('sha256').update(drifted).digest('hex')
+		expect(raised).toBeInstanceOf(SourceDescriptorMismatch)
+		expect(raised).toMatchObject({
+			code: 'descriptor_mismatch',
+			stage: 'resolve',
+			detail: { path: 'zerops.yaml', commitSha: handCommitSha, expectedSha256: descriptorSha256, actualSha256 },
+			message: `source resolve failed (descriptor_mismatch): zerops.yaml at commit ${handCommitSha} has sha256 ${actualSha256}, `
+				+ `but the environment's registered manifest names sha256 ${descriptorSha256}`,
+		})
 	})
 
 	test.each([

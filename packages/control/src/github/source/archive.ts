@@ -1,5 +1,5 @@
 import { createHash, type Hash } from 'node:crypto'
-import { SourceFailure } from './failure'
+import { SourceDescriptorMismatch, SourceFailure } from './failure'
 import { safeRepositoryPath, SOURCE_MAX_TREE_ENTRIES } from './tree'
 import type { SourceDataFile, SourceDescriptorRule } from './types'
 
@@ -409,8 +409,11 @@ class TarRewriter {
 		if (hash === undefined) return
 		this.descriptorHash = undefined
 		const digest = hash.digest('hex')
-		if (this.input.descriptorSha256 !== undefined && digest !== this.input.descriptorSha256) {
-			throw new SourceFailure('descriptor_mismatch', 'archive')
+		const expected = this.input.descriptorSha256
+		if (expected !== undefined && digest !== expected) {
+			const commitSha = this.commitSha
+			if (commitSha === undefined) throw commitMismatch()
+			throw new SourceDescriptorMismatch('archive', { path: this.input.descriptor.path, commitSha, expectedSha256: expected, actualSha256: digest })
 		}
 		this.descriptorDigest = digest
 	}

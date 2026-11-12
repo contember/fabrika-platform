@@ -81,6 +81,7 @@ import {
 	workspacePublication,
 } from './dev/sandbox-keys'
 import type { CommitSource } from './github/source/commit-files'
+import { SourceDescriptorMismatch } from './github/source/failure'
 import { type IamSchemaPort, isIamUnavailable } from './iam-schema'
 import type { InstallationBrandSource } from './installation-brand'
 import { acquireLease, type Lease, type LeaseClock, type LeaseFence, namespaceLeaseKey, runLeaseKey } from './lease'
@@ -716,6 +717,9 @@ async function deployUnder(
 				...(expectedCommitSha === undefined ? {} : { expectedCommitSha }),
 				...(sourceBinding === undefined ? {} : { sourceBinding }),
 				signal: invocation.work.signal,
+			}).catch((error: unknown) => {
+				if (!(error instanceof SourceDescriptorMismatch)) throw error
+				throw error.withRemedy(descriptorMismatchRemedy(deps.provider.id, app.id, appEnv.env))
 			})
 			const commitSha = immutableGitObjectId(resolution.commitSha, 'resolved commit')
 			await invocation.boundary()
@@ -1106,6 +1110,15 @@ function operationLine(result: DriveResult, operation: DataOperationRow, recorde
 	if (result === 'succeeded') return `${named} succeeded: the migrations ran and the environment is open`
 	if (result === 'failed') return `${named} failed at ${operation.step} (${operation.error_code ?? 'unknown'}); ${after}`
 	return `${named} stopped at ${operation.step} without an answer from the environment's object; ${after}`
+}
+
+/**
+ * What an operator does when the descriptor at the deployed commit (a changed `zerops.yaml`) is not the one the
+ * environment registered: a manifest built from that commit, sent to the environment. Deploying again alone fails the same way.
+ */
+function descriptorMismatchRemedy(providerId: string, appId: string, env: string): string {
+	return `rebuild the manifest from that commit (\`fabrika app build --env=${env}\`), send it with \`fabrika control apps environments put `
+		+ `--provider=${providerId} --app=${appId} --env=${env} --manifest=<path>\` and the environment's placement flags, and deploy again`
 }
 
 /** A failed run's cause as one credential-free line: never the error object, which can carry a clone URL with a token. */

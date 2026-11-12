@@ -32,6 +32,7 @@ import { getRunLogUseCase } from '../api/runs'
 import type { ControlRepositories, RunRow } from '../db'
 import { OperationsReleaseRepository } from '../db'
 import type { Env } from '../env'
+import { SourceDescriptorMismatch } from '../github/source/failure'
 import type { IamSchemaPort } from '../iam-schema'
 import { opsKeyPurpose, VaultOpsKeys } from '../ops-key'
 import { reconcileProviderRuns } from '../provider-reconcile'
@@ -542,6 +543,26 @@ describe('provider-neutral run lifecycle', () => {
 			'deploy failed: source resolve failed (ref_not_found) at https://github.com/acme/notes.git',
 		])
 		expect(stored.objects.get(`runs/${runId}/logs.ndjson`)).not.toContain('ghs_leaked')
+	})
+
+	test('a drifted descriptor fails the run with its digests and the command that sends the manifest again', async () => {
+		const { db } = createHarness()
+		const runId = await seedRun(db)
+		const provider = makeProvider([], { state: 'succeeded' })
+		const detail = { path: 'zerops.yaml', commitSha: 'c'.repeat(40), expectedSha256: 'e'.repeat(64), actualSha256: 'a'.repeat(64) }
+		provider.resolveSource = () => Promise.reject(new SourceDescriptorMismatch('resolve', detail))
+		const deps = makeDeps(db, provider)
+		const stored = memoryLogs()
+		deps.logs = stored.logs
+
+		expect((await executeDeploy(deps, { runId })).status).toBe('failed')
+		const response = await getRunLogUseCase({ repositories: db, logs: stored.logs, auth: allowAllAuth() }, runId)
+		expect(response.lines.map((line) => line.text)).toEqual([
+			`deploy failed: source resolve failed (descriptor_mismatch): zerops.yaml at commit ${'c'.repeat(40)} has sha256 ${'a'.repeat(64)}, `
+			+ `but the environment's registered manifest names sha256 ${'e'.repeat(64)}; rebuild the manifest from that commit `
+			+ '(`fabrika app build --env=prod`), send it with `fabrika control apps environments put --provider=memory --app=app --env=prod '
+			+ "--manifest=<path>` and the environment's placement flags, and deploy again",
+		])
 	})
 
 	test('does not resolve source during a dry run', async () => {

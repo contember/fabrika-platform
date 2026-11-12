@@ -31,6 +31,40 @@ export class SourceFailure extends Error {
 	}
 }
 
+/** What a descriptor mismatch names: the file, the commit it was read at, and both digests. A digest is not a secret. */
+export interface SourceDescriptorMismatchDetail {
+	readonly path: string
+	readonly commitSha: string
+	/** The digest the environment's registered manifest names. */
+	readonly expectedSha256: string
+	/** The digest of the file at the commit. */
+	readonly actualSha256: string
+}
+
+/**
+ * The descriptor at the commit is not the one the environment's manifest registered. A retry fails the same way: the
+ * remedy is a manifest built from that commit, so the message names the file, the commit and both digests, and a caller
+ * that knows the environment adds the commands that send it. The code stays `descriptor_mismatch`.
+ */
+export class SourceDescriptorMismatch extends SourceFailure {
+	constructor(
+		stage: SourceFailureStage,
+		readonly detail: SourceDescriptorMismatchDetail,
+		readonly remedy?: string,
+	) {
+		super(
+			'descriptor_mismatch',
+			stage,
+			`source ${stage} failed (descriptor_mismatch): ${detail.path} at commit ${detail.commitSha} has sha256 ${detail.actualSha256}, `
+				+ `but the environment's registered manifest names sha256 ${detail.expectedSha256}${remedy === undefined ? '' : `; ${remedy}`}`,
+		)
+	}
+
+	withRemedy(remedy: string): SourceDescriptorMismatch {
+		return new SourceDescriptorMismatch(this.stage, this.detail, remedy)
+	}
+}
+
 /**
  * GitHub refused a read for its rate limit. The message is the user's: whose limit it was, when it resets, and how to
  * avoid it. An anonymous read counts against the address Control calls from, which other tenants of a cloud share.
@@ -78,6 +112,7 @@ export function rateLimitFailure(
 /** A failure of one step, reported at the stage of the operation that took it. Anything else passes unchanged. */
 export function atStage(error: unknown, stage: SourceFailureStage): unknown {
 	if (error instanceof SourceRateLimited) return new SourceRateLimited(stage, error.anonymous, error.resetAt)
+	if (error instanceof SourceDescriptorMismatch) return new SourceDescriptorMismatch(stage, error.detail, error.remedy)
 	if (error instanceof SourceFailure) return new SourceFailure(error.code, stage)
 	return error
 }

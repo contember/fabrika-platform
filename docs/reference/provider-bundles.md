@@ -285,6 +285,9 @@ Validation happens while the PUT is in flight, so a rejected repository aborts t
 transport settles the archive verdict before it blames the network: the run sees `archive_rejected`,
 `descriptor_missing`, `descriptor_mismatch` or `commit_mismatch` rather than `upload_failed`. Every
 such failure is pre-trigger, and the provider deletes the app version on every pre-trigger failure.
+A `descriptor_mismatch` from the archive pass names the descriptor's path, the commit and both digests
+(`SourceDescriptorMismatch`), and a deploy run's log adds the commands that rebuild the environment's
+manifest and send it again (`descriptorMismatchRemedy`, `packages/control/src/run-lifecycle.ts`).
 
 The same example commit reached `ACTIVE` through application-version upload while the repository was
 public and again after it became private. A later private push also completed the scoped webhook path
