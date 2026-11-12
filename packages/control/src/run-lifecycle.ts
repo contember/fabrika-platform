@@ -1133,7 +1133,7 @@ function descriptorMismatchRemedy(providerId: string, appEnv: AppEnvRow, detail:
 		...(appEnv.trigger_ref === null ? [] : [`--trigger-ref=${shellWord(appEnv.trigger_ref)}`]),
 	].join(' ')
 	return `the manifest registered for ${appEnv.app_id}/${env} expects that sha256. `
-		+ `If the manifest was built from a ${detail.path} that is not pushed yet, push that commit (or deploy the ref that has it) and deploy again. `
+		+ `If the manifest was built from a ${detail.path} change that is not pushed yet, commit and push the change (or deploy the ref that has it) and deploy again. `
 		+ `If ${detail.path} changed after the manifest was built, rebuild the manifest from a checkout of commit ${detail.commitSha} `
 		+ `(\`fabrika app build --env=${env}\`), send it with \`${put}\`, and deploy again`
 }

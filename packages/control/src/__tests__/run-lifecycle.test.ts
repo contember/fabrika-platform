@@ -80,6 +80,7 @@ async function seedRun(
 		commitSha?: string
 		sourceBinding?: { connectionId: string; installationId: number }
 		triggerRef?: string
+		domain?: string | null
 	} = {},
 ): Promise<string> {
 	const provider = options.provider ?? 'memory'
@@ -98,7 +99,7 @@ async function seedRun(
 	await db.registry.upsertAppEnv({
 		appId: 'app',
 		env: 'prod',
-		domain: 'app.example.com',
+		domain: options.domain === undefined ? 'app.example.com' : options.domain,
 		publicOrigin: 'https://public.example.com',
 		crossOrigins: ['https://partner.example.org'],
 		namespaceId: null,
@@ -548,11 +549,21 @@ describe('provider-neutral run lifecycle', () => {
 	})
 
 	test.each([
-		{ name: 'a branch', triggerRef: 'refs/heads/deploy/prod', flag: '--trigger-ref=refs/heads/deploy/prod' },
-		{ name: 'a tag glob, quoted for the shell', triggerRef: 'refs/tags/v*', flag: `--trigger-ref='refs/tags/v*'` },
-	])('a drifted descriptor fails the run with its digests, both causes, and a put that keeps $name trigger', async ({ triggerRef, flag }) => {
+		{
+			name: 'its branch trigger',
+			seed: { triggerRef: 'refs/heads/deploy/prod' },
+			flags: ' --domain=app.example.com --trigger-ref=refs/heads/deploy/prod',
+		},
+		{
+			name: 'its tag glob trigger, quoted for the shell',
+			seed: { triggerRef: 'refs/tags/v*' },
+			flags: ` --domain=app.example.com --trigger-ref='refs/tags/v*'`,
+		},
+		{ name: 'its domain, with no trigger to keep', seed: {}, flags: ' --domain=app.example.com' },
+		{ name: 'nothing, with neither a domain nor a trigger', seed: { domain: null }, flags: '' },
+	])('a drifted descriptor fails the run with its digests, both causes, and a put that keeps $name', async ({ seed, flags }) => {
 		const { db } = createHarness()
-		const runId = await seedRun(db, { triggerRef })
+		const runId = await seedRun(db, seed)
 		const provider = makeProvider([], { state: 'succeeded' })
 		const detail = { path: 'zerops.yaml', commitSha: 'c'.repeat(40), expectedSha256: 'e'.repeat(64), actualSha256: 'a'.repeat(64) }
 		provider.resolveSource = () => Promise.reject(new SourceDescriptorMismatch('resolve', detail))
@@ -565,10 +576,11 @@ describe('provider-neutral run lifecycle', () => {
 		expect(response.lines.map((line) => line.text)).toEqual([
 			`deploy failed: source resolve failed (descriptor_mismatch): zerops.yaml at commit ${'c'.repeat(40)} has sha256 ${'a'.repeat(64)}, `
 			+ `expected sha256 ${'e'.repeat(64)}; the manifest registered for app/prod expects that sha256. `
-			+ 'If the manifest was built from a zerops.yaml that is not pushed yet, push that commit (or deploy the ref that has it) and deploy again. '
+			+ 'If the manifest was built from a zerops.yaml change that is not pushed yet, commit and push the change (or deploy the ref that has it) '
+			+ 'and deploy again. '
 			+ `If zerops.yaml changed after the manifest was built, rebuild the manifest from a checkout of commit ${'c'.repeat(40)} `
 			+ '(`fabrika app build --env=prod`), send it with `fabrika control apps environments put --provider=memory --app=app --env=prod '
-			+ `--manifest=fabrika.manifest.json --domain=app.example.com ${flag}\`, and deploy again`,
+			+ `--manifest=fabrika.manifest.json${flags}\`, and deploy again`,
 		])
 	})
 
