@@ -23,6 +23,13 @@ describe('generateMarkdown', () => {
 		expect(md).not.toContain('@1234,500,900,4000')
 	})
 
+	test('labels each annotation with its id only for a host whose agent answers them', () => {
+		const annotations = [annotation('selected wording', 'reword this')]
+		expect(generateMarkdown(annotations, '', undefined, undefined, undefined, { annotationIds: true }))
+			.toBe('## Canvas annotations\n\nAnnotation `ann-1`\n> selected wording\n\nreword this\n')
+		expect(generateMarkdown(annotations, '')).not.toContain('ann-1')
+	})
+
 	test('every other annotation is still quoted exactly as it was', () => {
 		const md = generateMarkdown(
 			[annotation('[Item] Ship the beta', 'too early'), annotation('selected wording', 'reword this')],

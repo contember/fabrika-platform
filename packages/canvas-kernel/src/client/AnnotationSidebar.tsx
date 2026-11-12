@@ -1,16 +1,18 @@
 import { SessionContext } from '#canvas/runtime'
 import { AnnotationDraftFooter, AnnotationList, fileAnnotationPath, RESPONSE_ANNOTATION_PATH } from '@fabrika/annotations'
 import React, { useCallback, useContext, useEffect, useMemo, useState } from 'react'
+import type { SubmittedAnnotation } from '../engine/sessionSchemas'
 import { findAnnotationElement, scrollToAnnotation } from './annotationDom'
 import { useAnnotations } from './AnnotationProvider'
 import type { Annotation } from './AnnotationProvider'
 import { ActiveViewContext, RevisionContext } from './appContext'
 import { FileIcon } from './FileIcon'
-import { generateMarkdown, getMissingRequiredLabels, hasValue } from './generateMarkdown'
+import { generateMarkdown, getMissingRequiredLabels, hasValue, includedAnnotations } from './generateMarkdown'
 import { useCanvasHost } from './hostContext'
 import { feedbackResponseSchema } from './persistenceSchemas'
 import { MarkdownPreview } from './ResponsePreview'
 import { ResponsePreview } from './ResponsePreview'
+import { ThreadList } from './ThreadList'
 
 /**
  * The canvas host's sidebar: the reusable annotation list and draft footer,
@@ -19,7 +21,8 @@ import { ResponsePreview } from './ResponsePreview'
  */
 
 interface AnnotationSidebarProps {
-	onSubmit: (feedback: string) => void
+	/** `annotations` are the submitted ones a host with threads records; empty for a host without. */
+	onSubmit: (feedback: string, annotations: readonly SubmittedAnnotation[]) => void
 	collapseButton?: React.ReactNode
 }
 
@@ -215,6 +218,9 @@ function FeedbackDisplayContent({ sessionId, revision }: { sessionId: string; re
 
 	return (
 		<div className="flex-1 overflow-y-auto px-4">
+			<div className="-mx-4">
+				<ThreadList />
+			</div>
 			{loading
 				? <p className="text-[12px] text-text-tertiary font-body py-4">Loading...</p>
 				: feedback
@@ -340,9 +346,13 @@ function AnnotationSidebarInner({ onSubmit, agentWatching, collapseButton }: Omi
 	const hasContent = annotations.length > 0 || generalNote.trim().length > 0 || hasResponses || hasFeedback
 	const [validationError, setValidationError] = useState<string | null>(null)
 
+	const withThreads = host.threads !== null
+	const submit = (feedback: string) => {
+		const submitted = withThreads ? includedAnnotations(annotations, includedRemoteIds).map(toSubmitted) : []
+		onSubmit(feedback, submitted)
+	}
 	const submitMarkdown = () => {
-		const md = generateMarkdown(annotations, generalNote, submittableResponses, feedbackEntries, includedRemoteIds)
-		onSubmit(md)
+		submit(generateMarkdown(annotations, generalNote, submittableResponses, feedbackEntries, includedRemoteIds, { annotationIds: withThreads }))
 	}
 
 	return (
@@ -368,6 +378,7 @@ function AnnotationSidebarInner({ onSubmit, agentWatching, collapseButton }: Omi
 
 			{/* Annotation list */}
 			<div className="flex-1 overflow-y-auto">
+				<ThreadList />
 				{annotations.length === 0 && (
 					<p className="text-[12px] text-text-tertiary px-3 py-4 leading-relaxed font-body">
 						Select text in the canvas or in files to add annotations.
@@ -392,7 +403,7 @@ function AnnotationSidebarInner({ onSubmit, agentWatching, collapseButton }: Omi
 					setValidationError(null)
 					submitMarkdown()
 				}}
-				onSubmitEmpty={() => onSubmit('No feedback — looks good.')}
+				onSubmitEmpty={() => onSubmit('No feedback — looks good.', [])}
 				notice={validationError && (
 					<div className="px-4 py-2 text-[12px] text-accent-red font-body border-t border-border-subtle flex-shrink-0 flex items-center justify-between gap-2">
 						<span>{validationError}</span>
@@ -420,10 +431,14 @@ function AnnotationSidebarInner({ onSubmit, agentWatching, collapseButton }: Omi
 			<ResponsePreview
 				open={previewOpen}
 				onClose={() => setPreviewOpen(false)}
-				onSubmit={onSubmit}
+				onSubmit={submit}
 				includedRemoteIds={includedRemoteIds}
 				onToggleRemoteId={toggleRemoteId}
 			/>
 		</div>
 	)
+}
+
+function toSubmitted(annotation: Annotation): SubmittedAnnotation {
+	return { id: annotation.id, snippet: annotation.snippet, note: annotation.note, canvasFile: annotation.canvasFile, filePath: annotation.filePath }
 }

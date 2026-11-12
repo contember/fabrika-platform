@@ -1,6 +1,6 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { remoteFeedbackSchema, savedSessionMetadataSchema } from './sessionSchemas'
+import { remoteFeedbackSchema, savedSessionMetadataSchema, type SubmittedAnnotation, submittedAnnotationsSchema } from './sessionSchemas'
 
 export interface DiffStats {
 	added: number
@@ -449,10 +449,12 @@ export class SessionManager {
 		}
 	}
 
-	saveFeedback(id: string, rev: number, markdown: string) {
+	/** `annotations` are the ones the feedback carries, kept so a host can open a thread on one later. */
+	saveFeedback(id: string, rev: number, markdown: string, annotations: readonly SubmittedAnnotation[] = []) {
 		const revDir = this.revisionDir(id, rev)
 		mkdirSync(revDir, { recursive: true })
 		writeFileSync(join(revDir, 'feedback.md'), markdown)
+		writeFileSync(join(revDir, 'annotations.json'), JSON.stringify(annotations, null, 2))
 
 		const session = this.sessions.get(id)
 		if (session) {
@@ -471,6 +473,44 @@ export class SessionManager {
 	/** Where a host keeps files the user handed to this session; removed with the session. */
 	assetsDir(id: string): string {
 		return join(this.sessionDir(id), 'assets')
+	}
+
+	/** The latest submitted annotation with this id, and the revision it was submitted on. */
+	findSubmittedAnnotation(id: string, annotationId: string): { revision: number; annotation: SubmittedAnnotation } | null {
+		const session = this.sessions.get(id)
+		if (!session) return null
+		for (let i = session.revisions.length - 1; i >= 0; i--) {
+			const revision = session.revisions[i]?.revision
+			if (revision === undefined) continue
+			const annotation = this.getSubmittedAnnotations(id, revision).find((candidate) => candidate.id === annotationId)
+			if (annotation) return { revision, annotation }
+		}
+		return null
+	}
+
+	getSubmittedAnnotations(id: string, rev: number): SubmittedAnnotation[] {
+		const file = join(this.revisionDir(id, rev), 'annotations.json')
+		if (!existsSync(file)) return []
+		return submittedAnnotationsSchema.parse(JSON.parse(readFileSync(file, 'utf-8')))
+	}
+
+	/**
+	 * The host's threads on this session's annotations, kept beside the session so they outlive revisions and go
+	 * with the session. Opaque payload — the shape is the host's.
+	 */
+	saveThreads(id: string, payload: unknown): void {
+		const dir = this.sessionDir(id)
+		mkdirSync(dir, { recursive: true })
+		const file = join(dir, 'threads.json')
+		const temporary = `${file}.${process.pid}.tmp`
+		writeFileSync(temporary, JSON.stringify(payload, null, 2))
+		renameSync(temporary, file)
+	}
+
+	getThreads(id: string): unknown | null {
+		const file = join(this.sessionDir(id), 'threads.json')
+		if (!existsSync(file)) return null
+		return JSON.parse(readFileSync(file, 'utf-8'))
 	}
 
 	getFeedback(id: string, rev: number): string | null {

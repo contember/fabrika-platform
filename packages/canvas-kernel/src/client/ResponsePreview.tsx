@@ -2,6 +2,7 @@ import { marked } from 'marked'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAnnotations } from './AnnotationProvider'
 import { generateMarkdown, getMissingRequiredLabels } from './generateMarkdown'
+import { useCanvasHost } from './hostContext'
 
 interface ResponsePreviewProps {
 	open: boolean
@@ -13,6 +14,7 @@ interface ResponsePreviewProps {
 
 export function ResponsePreview({ open, onClose, onSubmit, includedRemoteIds, onToggleRemoteId }: ResponsePreviewProps) {
 	const { annotations, generalNote, submittableResponses, feedbackEntries } = useAnnotations()
+	const annotationIds = useCanvasHost().threads !== null
 	const [editedText, setEditedText] = useState('')
 	const [manuallyEdited, setManuallyEdited] = useState(false)
 	const [editMode, setEditMode] = useState(false)
@@ -40,8 +42,8 @@ export function ResponsePreview({ open, onClose, onSubmit, includedRemoteIds, on
 	}
 
 	const generatedText = useMemo(
-		() => generateMarkdown(annotations, generalNote, submittableResponses, feedbackEntries, includedRemoteIds),
-		[annotations, generalNote, submittableResponses, feedbackEntries, includedRemoteIds],
+		() => generateMarkdown(annotations, generalNote, submittableResponses, feedbackEntries, includedRemoteIds, { annotationIds }),
+		[annotations, generalNote, submittableResponses, feedbackEntries, includedRemoteIds, annotationIds],
 	)
 	const text = manuallyEdited ? editedText : generatedText
 
