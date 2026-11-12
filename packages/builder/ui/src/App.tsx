@@ -9,7 +9,15 @@ import { Workspace } from './components/Workspace'
 import { canvasFilesForRevision } from './lib/canvasSelection'
 import { daemon, sessionIdFromPath } from './lib/daemonClient'
 import { FIXTURE_ARTIFACTS, FIXTURE_META, FIXTURE_PHASE_STATE, FIXTURE_SESSION_ID } from './lib/fixture'
-import { type ActiveView, ActiveViewContext, AnnotationProvider, RevisionContext, type RevisionInfo, SessionContext } from './lib/kernel'
+import {
+	type ActiveView,
+	ActiveViewContext,
+	AnnotationProvider,
+	RevisionContext,
+	type RevisionInfo,
+	SessionContext,
+	type SubmittedAnswer,
+} from './lib/kernel'
 import { parseBuilderPersistedState } from './lib/persistedState'
 import { platformClient } from './lib/platformClient'
 import type { CanvasFileInfo, ConnStatus, PhaseId, PhaseState, RevisionMeta, SessionMeta } from './lib/types'
@@ -143,9 +151,9 @@ export function App(): JSX.Element {
 		setFocused(id)
 	}
 
-	const onSubmitGate = (feedback: string) => {
+	const onSubmitGate = (feedback: string, answers: SubmittedAnswer[]) => {
 		const ws = wsRef.current
-		if (ws && daemon.submitGate(ws, feedback)) setSubmitting(true)
+		if (ws && daemon.submitGate(ws, feedback, answers)) setSubmitting(true)
 	}
 
 	const live = status === 'live'

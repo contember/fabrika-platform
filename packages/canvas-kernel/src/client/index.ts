@@ -31,6 +31,7 @@ export { ActiveViewContext, RevisionContext } from './appContext'
 export type { CanvasFileInfo, RevisionInfo } from './appContext'
 export * as components from './components'
 export { FileIcon } from './FileIcon'
+export type { SubmittedAnswer } from './generateMarkdown'
 export {
 	canPruneResponses,
 	generateMarkdown,

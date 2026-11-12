@@ -69,6 +69,7 @@ export interface BuilderErrorResponse {
 const wireNumberSchema = z.union([z.number(), z.nan()])
 const optionalTextSchema = z.string().optional().catch(undefined)
 const phaseIdSchema = z.enum(PHASE_IDS)
+const gateVerdictSchema = z.enum(['approve', 'changes', 'none'])
 export const phaseStateSchema = z.object({
 	current: phaseIdSchema,
 	index: wireNumberSchema,
@@ -77,6 +78,8 @@ export const phaseStateSchema = z.object({
 	produces: z.array(z.string()),
 	gate: z.boolean(),
 	satisfied: z.boolean(),
+	verdicts: z.record(phaseIdSchema, gateVerdictSchema).catch({}),
+	unverified: z.array(phaseIdSchema).catch([]),
 })
 export const uiPhaseStateSchema = phaseStateSchema.extend({ gateName: z.string().nullable().optional().catch(undefined) })
 	.transform(({ gateName, ...state }) => ({ ...state, ...(gateName === undefined ? {} : { gateName }) }))
@@ -144,7 +147,7 @@ export const planInputSchema = z.object({
 	response: optionalTextSchema,
 })
 export const feedbackTextSchema = z.object({ feedback: z.string().catch('') })
-export const consumedFeedbackSchema = feedbackTextSchema.extend({ found: z.literal(true) })
+export const consumedFeedbackSchema = feedbackTextSchema.extend({ found: z.literal(true), verdict: gateVerdictSchema.catch('none') })
 export const submitFeedbackSchema = feedbackTextSchema.extend({ type: z.literal('submit') })
 export const feedbackRevisionSchema = z.object({
 	revision: wireNumberSchema,

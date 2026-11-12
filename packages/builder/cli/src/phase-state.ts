@@ -1,5 +1,5 @@
+import { derivePhase, offlineGateProbe, type PhaseState } from '../../shared/derive'
 import { fetchPhase } from './daemon-client'
-import { derivePhase, offlineGateProbe, type PhaseState } from './derive'
 
 export interface ResolvedPhase {
 	state: PhaseState

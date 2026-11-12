@@ -152,6 +152,16 @@ export function generateMarkdown(
 	return parts.join('\n').trim() + '\n'
 }
 
+/** A submitted answer: the question's id and its value, sent beside the markdown so a host can act on it without parsing prose. */
+export interface SubmittedAnswer {
+	id: string
+	value: unknown
+}
+
+export function submittedAnswers(responses: Map<string, PlanResponse>): SubmittedAnswer[] {
+	return Array.from(responses.values()).filter(hasValue).map(({ id, value }) => ({ id, value }))
+}
+
 export function hasValue(r: PlanResponse): boolean {
 	if (r.note?.trim()) return true
 	if (r.value === null || r.value === undefined) return false

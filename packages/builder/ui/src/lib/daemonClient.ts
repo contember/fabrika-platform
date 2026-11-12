@@ -10,6 +10,7 @@ import {
 	uiPhaseStateSchema,
 	wsMessageSchema,
 } from '../../../shared'
+import type { SubmittedAnswer } from './kernel'
 import type { BuildEvent, CanvasFileInfo, PhaseState, SessionMeta, Skeleton, WSMessage } from './types'
 
 export function normCanvasFiles(raw: unknown): CanvasFileInfo[] {
@@ -126,9 +127,9 @@ export const daemon = {
 		return ws
 	},
 
-	submitGate(ws: WebSocket, feedback: string): boolean {
+	submitGate(ws: WebSocket, feedback: string, answers: SubmittedAnswer[]): boolean {
 		if (ws.readyState === WebSocket.OPEN) {
-			ws.send(JSON.stringify({ type: 'submit', feedback }))
+			ws.send(JSON.stringify({ type: 'submit', feedback, responses: answers }))
 			return true
 		}
 		return false

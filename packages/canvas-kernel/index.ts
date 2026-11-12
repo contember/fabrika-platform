@@ -14,6 +14,7 @@ export type {
 	SecretResolution,
 	SessionData,
 	ShareEntry,
+	SubmittedResponse,
 } from './src/engine/session'
 export { MAX_SUBMITTED_ANNOTATIONS, submittedAnnotationSchema } from './src/engine/sessionSchemas'
 export type { SubmittedAnnotation } from './src/engine/sessionSchemas'

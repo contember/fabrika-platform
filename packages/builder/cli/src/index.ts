@@ -1,3 +1,13 @@
+export {
+	derivePhase,
+	type GateProbe,
+	isNonEmptyFile,
+	matchGlob,
+	offlineGateProbe,
+	type PhaseState,
+	producesSatisfied,
+	resolveReads,
+} from '../../shared/derive'
 export { type Phase, PHASE_COUNT, PHASE_IDS, phaseById, type PhaseId, phaseIndex, PHASES } from '../../shared/phases'
 export { resolveCatalogRoot, resolveStackPointer, type StackPointer } from './catalog'
 export {
@@ -12,7 +22,6 @@ export {
 	TEMP_DIR,
 	WS_URL,
 } from './config'
-export { derivePhase, type GateProbe, isNonEmptyFile, matchGlob, offlineGateProbe, type PhaseState, producesSatisfied, resolveReads } from './derive'
 export {
 	type AgentHost,
 	injectAgentSupport,

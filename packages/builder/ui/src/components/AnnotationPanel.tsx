@@ -1,6 +1,6 @@
 import type { JSX } from 'react'
 import { useState } from 'react'
-import { AnnotationSidebar } from '../lib/kernel'
+import { AnnotationSidebar, type SubmittedAnswer } from '../lib/kernel'
 
 export function AnnotationPanel({
 	gateName,
@@ -11,7 +11,7 @@ export function AnnotationPanel({
 	gateName: string | null
 	hasGate: boolean
 	isCurrentGate: boolean
-	onSubmit: (feedback: string) => void
+	onSubmit: (feedback: string, answers: SubmittedAnswer[]) => void
 }): JSX.Element {
 	const [open, setOpen] = useState(true)
 
@@ -48,7 +48,7 @@ export function AnnotationPanel({
 	return (
 		<aside className="flex h-full w-72 flex-col border-l border-border-subtle bg-bg-surface">
 			{hasGate
-				? <AnnotationSidebar onSubmit={onSubmit} collapseButton={collapseButton} />
+				? <AnnotationSidebar onSubmit={(feedback, _annotations, answers) => onSubmit(feedback, answers)} collapseButton={collapseButton} />
 				: (
 					<>
 						<div className="flex items-center justify-between border-b border-border-subtle px-4 py-3">

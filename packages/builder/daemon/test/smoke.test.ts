@@ -4,7 +4,7 @@ import { dirname, join } from 'path'
 import { PHASES } from '../../shared/phases'
 import { builderDaemonUrl } from '../../shared/urls'
 import { type RunningDaemon, startDaemon } from '../src/index'
-import { derivePhaseState } from '../src/phases'
+import { derivePhaseState, type GateOracle } from '../src/phases'
 import { scratchDir } from './scratch'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -48,7 +48,7 @@ describe('daemon http endpoints', () => {
 		expect(res.status).toBe(200)
 		const state = await res.json()
 		expect(state.current).toBe('intake')
-		expect(state.index).toBe(1)
+		expect(state.index).toBe(0)
 		expect(state.completed).toEqual([])
 		expect(state.gate).toBe(true)
 		expect(state.satisfied).toBe(false)
@@ -382,17 +382,37 @@ describe('derivePhaseState (filesystem fixture)', () => {
 		rmSync(dirname(dir), { recursive: true, force: true })
 	})
 
-	test('gate oracle blocks completion when feedback is unconsumed', () => {
+	test('gate oracle blocks completion until the gate is reviewed', () => {
 		const dir = freshFabrika()
 		mkdirSync(join(dir, 'intent'), { recursive: true })
 		writeFileSync(join(dir, 'intent', 'brief.md'), '# Brief')
-		const oracle = {
-			getLatestUnconsumedFeedback: () => ({ revision: 1, feedback: 'fix this' }),
-			hasGateRevision: () => true,
-		}
+		const oracle: GateOracle = { gateReview: () => ({ reviewed: false, verdict: 'none' }) }
 		const state = derivePhaseState(dir, 'sess', oracle)
 		expect(state.current).toBe('intake')
 		expect(state.satisfied).toBe(true)
+		rmSync(dirname(dir), { recursive: true, force: true })
+	})
+
+	test('a reviewed gate completes its phase whatever the verdict, and the state keeps the verdict', () => {
+		const dir = freshFabrika()
+		mkdirSync(join(dir, 'intent'), { recursive: true })
+		writeFileSync(join(dir, 'intent', 'brief.md'), '# Brief')
+		const oracle: GateOracle = { gateReview: () => ({ reviewed: true, verdict: 'changes' }) }
+		const state = derivePhaseState(dir, 'sess', oracle)
+		expect(state.current).toBe('vision')
+		expect(state.verdicts).toEqual({ intake: 'changes' })
+		expect(state.unverified).toEqual([])
+		rmSync(dirname(dir), { recursive: true, force: true })
+	})
+
+	test('without an oracle a passed gate is reported as unverified, not as reviewed', () => {
+		const dir = freshFabrika()
+		mkdirSync(join(dir, 'intent'), { recursive: true })
+		writeFileSync(join(dir, 'intent', 'brief.md'), '# Brief')
+		const state = derivePhaseState(dir)
+		expect(state.current).toBe('vision')
+		expect(state.unverified).toEqual(['intake'])
+		expect(state.verdicts).toEqual({})
 		rmSync(dirname(dir), { recursive: true, force: true })
 	})
 

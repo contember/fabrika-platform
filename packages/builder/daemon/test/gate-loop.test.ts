@@ -163,6 +163,7 @@ describe('gate interactive loop', () => {
 		expect(advR.code).toBe(0)
 		expect(advR.stdout).toContain('OK: phase 1/8 (intake) satisfied.')
 		expect(advR.stdout).toContain('Next -> phase 2/8')
+		expect(advR.stderr).toContain('submitted without a verdict')
 
 		const afterPhase = await (
 			await fetch(
@@ -203,6 +204,108 @@ describe('gate interactive loop', () => {
 		const afterReopen = await (await fetch(phaseUrl)).json()
 		expect(afterReopen.current).toBe('intake')
 		expect(afterReopen.completed).not.toContain('intake')
+
+		rmSync(repo, { recursive: true, force: true })
+	})
+
+	test('advance over a "Request changes" verdict warns, advances, and the phase state keeps the verdict', async () => {
+		const sessionId = 'gate-loop-verdict'
+		const repo = scratchDir('fabrika-verdict-repo-')
+		mkdirSync(join(repo, '.fabrika', 'intent'), { recursive: true })
+		writeFileSync(join(repo, '.fabrika', 'config.json'), JSON.stringify({ profile: 'zerops-app', sessionId, createdAt: new Date().toISOString() }))
+		writeFileSync(join(repo, '.fabrika', 'intent', 'brief.md'), '# brief\nbuild a thing')
+		const fabrikaDir = join(repo, '.fabrika')
+		const phaseUrl = `${base}/api/phase?root=${encodeURIComponent(fabrikaDir)}&session=${encodeURIComponent(sessionId)}`
+		const cliEnv = { FABRIKA_SESSION_ID: sessionId }
+
+		await openGate(sessionId, 'intake')
+		const browser = await openSocket(`${wsBase}/ws/session/${sessionId}`)
+		browser.send(JSON.stringify({ type: 'submit', feedback: 'Scope is wrong.', responses: [{ id: 'verdict', value: 'Request changes' }] }))
+		await new Promise((r) => setTimeout(r, 100))
+		browser.close()
+
+		const advR = await runCli(['advance', '--dir', repo], cliEnv)
+		expect(advR.code).toBe(0)
+		expect(advR.stderr).toContain('warning: gate "intake" was answered "Request changes"')
+
+		const after = await (await fetch(phaseUrl)).json()
+		expect(after.current).toBe('vision')
+		expect(after.verdicts).toEqual({ intake: 'changes' })
+
+		const next = await runCli(['next', '--dir', repo], cliEnv)
+		expect(next.stdout).toContain('Review:  advanced over requested changes: intake')
+
+		rmSync(repo, { recursive: true, force: true })
+	})
+
+	test('a refused advance still prints the verdict warning for the feedback it consumed', async () => {
+		const sessionId = 'gate-loop-refused'
+		const repo = scratchDir('fabrika-refused-repo-')
+		mkdirSync(join(repo, '.fabrika', 'intent'), { recursive: true })
+		writeFileSync(join(repo, '.fabrika', 'config.json'), JSON.stringify({ profile: 'zerops-app', sessionId, createdAt: new Date().toISOString() }))
+
+		await openGate(sessionId, 'intake')
+		const browser = await openSocket(`${wsBase}/ws/session/${sessionId}`)
+		browser.send(JSON.stringify({ type: 'submit', feedback: 'Wrong scope.', responses: [{ id: 'verdict', value: 'Request changes' }] }))
+		await new Promise((r) => setTimeout(r, 100))
+		browser.close()
+
+		const advR = await runCli(['advance', '--dir', repo], { FABRIKA_SESSION_ID: sessionId })
+		expect(advR.code).toBe(1)
+		expect(advR.stderr).toContain('missing produce: .fabrika/intent/brief.md')
+		expect(advR.stderr).toContain('warning: gate "intake" was answered "Request changes"')
+
+		rmSync(repo, { recursive: true, force: true })
+	})
+
+	test('an approved gate advances without a warning', async () => {
+		const sessionId = 'gate-loop-approve'
+		const repo = scratchDir('fabrika-approve-repo-')
+		mkdirSync(join(repo, '.fabrika', 'intent'), { recursive: true })
+		writeFileSync(join(repo, '.fabrika', 'config.json'), JSON.stringify({ profile: 'zerops-app', sessionId, createdAt: new Date().toISOString() }))
+		writeFileSync(join(repo, '.fabrika', 'intent', 'brief.md'), '# brief\nbuild a thing')
+
+		await openGate(sessionId, 'intake')
+		const browser = await openSocket(`${wsBase}/ws/session/${sessionId}`)
+		browser.send(JSON.stringify({ type: 'submit', feedback: 'Good.', responses: [{ id: 'verdict', value: 'Approve' }] }))
+		await new Promise((r) => setTimeout(r, 100))
+		browser.close()
+
+		const advR = await runCli(['advance', '--dir', repo], { FABRIKA_SESSION_ID: sessionId })
+		expect(advR.code).toBe(0)
+		expect(advR.stderr).not.toContain('warning')
+
+		rmSync(repo, { recursive: true, force: true })
+	})
+
+	test('pending feedback on a later gate leaves an earlier reviewed gate complete', async () => {
+		const sessionId = 'gate-loop-earlier'
+		const repo = scratchDir('fabrika-earlier-repo-')
+		mkdirSync(join(repo, '.fabrika', 'intent'), { recursive: true })
+		mkdirSync(join(repo, '.fabrika', 'principles'), { recursive: true })
+		writeFileSync(join(repo, '.fabrika', 'intent', 'brief.md'), '# brief\nbuild a thing')
+		const fabrikaDir = join(repo, '.fabrika')
+		const phaseUrl = `${base}/api/phase?root=${encodeURIComponent(fabrikaDir)}&session=${encodeURIComponent(sessionId)}`
+
+		await openGate(sessionId, 'intake')
+		const first = await openSocket(`${wsBase}/ws/session/${sessionId}`)
+		first.send(JSON.stringify({ type: 'submit', feedback: 'Intake good.' }))
+		await new Promise((r) => setTimeout(r, 100))
+		first.close()
+		await fetch(`${base}/api/session/${sessionId}/feedback/consume`, { method: 'POST' })
+
+		writeFileSync(join(repo, '.fabrika', 'intent', 'glossary.md'), '# glossary')
+		writeFileSync(join(repo, '.fabrika', 'principles', 'principles.md'), '# principles')
+		await openGate(sessionId, 'vision')
+		const second = await openSocket(`${wsBase}/ws/session/${sessionId}`)
+		second.send(JSON.stringify({ type: 'submit', feedback: 'Vision pending.' }))
+		await new Promise((r) => setTimeout(r, 100))
+		second.close()
+
+		const state = await (await fetch(phaseUrl)).json()
+		expect(state.completed).toEqual(['intake'])
+		expect(state.current).toBe('vision')
+		expect(state.satisfied).toBe(true)
 
 		rmSync(repo, { recursive: true, force: true })
 	})

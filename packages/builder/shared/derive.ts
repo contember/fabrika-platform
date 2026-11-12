@@ -1,6 +1,8 @@
+// The one phase derivation, shared by the CLI and the daemon. It reads the filesystem, so the dashboard never imports it.
 import { existsSync, readdirSync, statSync } from 'fs'
 import { basename, dirname, join, resolve } from 'path'
-import { isPhaseHint, type Phase, type PhaseId, phaseIndex, PHASES } from '../../shared/phases'
+import type { GateVerdict } from './gate'
+import { isPhaseHint, type Phase, type PhaseId, phaseIndex, PHASES } from './phases'
 
 export interface PhaseState {
 	current: PhaseId
@@ -10,11 +12,22 @@ export interface PhaseState {
 	produces: string[]
 	gate: boolean
 	satisfied: boolean
+	/** The verdict of each completed gated phase whose review is known. */
+	verdicts: Partial<Record<PhaseId, GateVerdict>>
+	/** Completed gated phases whose review could not be checked (no daemon); they are assumed reviewed. */
+	unverified: PhaseId[]
 }
 
-export type GateProbe = (phase: Phase) => boolean
+/** A gate's review: `reviewed` once its latest revision's feedback was consumed by `advance`. */
+export interface GateReview {
+	reviewed: boolean
+	verdict: GateVerdict
+}
 
-export const offlineGateProbe: GateProbe = () => true
+export type GateProbe = (phase: Phase) => GateReview | 'unknown'
+
+/** Without the daemon no review can be checked; the derivation then says so instead of guessing. */
+export const offlineGateProbe: GateProbe = () => 'unknown'
 
 export function matchGlob(repoRoot: string, glob: string): string[] {
 	if (!glob.includes('*')) {
@@ -75,24 +88,34 @@ export function resolveReads(repoRoot: string, phase: Phase): string[] {
 
 export function derivePhase(repoRoot: string, gateProbe: GateProbe = offlineGateProbe): PhaseState {
 	const completed: PhaseId[] = []
+	const verdicts: Partial<Record<PhaseId, GateVerdict>> = {}
+	const unverified: PhaseId[] = []
 
 	for (const phase of PHASES) {
 		const produced = producesSatisfied(repoRoot, phase)
-		const gateOk = !produced ? false : phase.gate ? gateProbe(phase) : true
-
-		if (produced && gateOk) {
-			completed.push(phase.id)
-			continue
+		if (!produced) return toState(repoRoot, phase, completed, false, verdicts, unverified)
+		if (phase.gate) {
+			const review = gateProbe(phase)
+			if (review === 'unknown') unverified.push(phase.id)
+			else if (!review.reviewed) return toState(repoRoot, phase, completed, true, verdicts, unverified)
+			else verdicts[phase.id] = review.verdict
 		}
-		return toState(repoRoot, phase, completed, produced)
+		completed.push(phase.id)
 	}
 
 	const build = PHASES.at(-1)
 	if (build === undefined) throw new Error('The builder has no phases')
-	return toState(repoRoot, build, completed.filter((id) => id !== build.id), true)
+	return toState(repoRoot, build, completed.filter((id) => id !== build.id), true, verdicts, unverified.filter((id) => id !== build.id))
 }
 
-function toState(repoRoot: string, phase: Phase, completed: PhaseId[], satisfied: boolean): PhaseState {
+function toState(
+	repoRoot: string,
+	phase: Phase,
+	completed: PhaseId[],
+	satisfied: boolean,
+	verdicts: Partial<Record<PhaseId, GateVerdict>>,
+	unverified: PhaseId[],
+): PhaseState {
 	return {
 		current: phase.id,
 		index: phaseIndex(phase.id),
@@ -101,5 +124,7 @@ function toState(repoRoot: string, phase: Phase, completed: PhaseId[], satisfied
 		produces: phase.produces,
 		gate: phase.gate,
 		satisfied,
+		verdicts,
+		unverified,
 	}
 }

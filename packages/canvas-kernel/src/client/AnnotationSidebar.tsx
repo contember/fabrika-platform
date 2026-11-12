@@ -7,7 +7,7 @@ import { useAnnotations } from './AnnotationProvider'
 import type { Annotation } from './AnnotationProvider'
 import { ActiveViewContext, RevisionContext } from './appContext'
 import { FileIcon } from './FileIcon'
-import { generateMarkdown, getMissingRequiredLabels, hasValue } from './generateMarkdown'
+import { generateMarkdown, getMissingRequiredLabels, hasValue, type SubmittedAnswer, submittedAnswers } from './generateMarkdown'
 import { useCanvasHost } from './hostContext'
 import { feedbackResponseSchema } from './persistenceSchemas'
 import { MarkdownPreview } from './ResponsePreview'
@@ -21,8 +21,8 @@ import { ThreadList } from './ThreadList'
  */
 
 interface AnnotationSidebarProps {
-	/** `annotations` are the submitted ones a host with threads records; empty for a host without. */
-	onSubmit: (feedback: string, annotations: readonly SubmittedAnnotation[]) => void
+	/** `annotations` are the submitted ones a host with threads records; empty for a host without. `answers` are the answered questions. */
+	onSubmit: (feedback: string, annotations: readonly SubmittedAnnotation[], answers: SubmittedAnswer[]) => void
 	collapseButton?: React.ReactNode
 }
 
@@ -350,7 +350,7 @@ function AnnotationSidebarInner({ onSubmit, agentWatching, collapseButton }: Omi
 	const submit = (feedback: string) => {
 		// Threads are between the user and the agent; a remote reviewer's note is not one the user can answer for.
 		const submitted = withThreads ? annotations.filter((a) => a.source !== 'remote').map(toSubmitted) : []
-		onSubmit(feedback, submitted)
+		onSubmit(feedback, submitted, submittedAnswers(submittableResponses))
 	}
 	const submitMarkdown = () => {
 		submit(generateMarkdown(annotations, generalNote, submittableResponses, feedbackEntries, includedRemoteIds, { annotationIds: withThreads }))
@@ -404,7 +404,7 @@ function AnnotationSidebarInner({ onSubmit, agentWatching, collapseButton }: Omi
 					setValidationError(null)
 					submitMarkdown()
 				}}
-				onSubmitEmpty={() => onSubmit('No feedback — looks good.', [])}
+				onSubmitEmpty={() => onSubmit('No feedback — looks good.', [], [])}
 				notice={validationError && (
 					<div className="px-4 py-2 text-[12px] text-accent-red font-body border-t border-border-subtle flex-shrink-0 flex items-center justify-between gap-2">
 						<span>{validationError}</span>

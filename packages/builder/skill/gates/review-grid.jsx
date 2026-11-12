@@ -22,11 +22,6 @@
 			"Invariants capture the durable 'why', not UI details",
 		]}
 	/>
-	<Choice
-		id="skeletons-ok"
-		label="Acceptance contract complete?"
-		required
-		options={['Yes, induce issues', 'A scenario is missing', 'An invariant is too weak']}
-	/>
 	<UserInput id="skeletons-note" label="Missing scenarios or invariants?" placeholder="write here…" multiline />
+	<Choice id="verdict" label="Verdict" required options={['Approve', 'Request changes']} />
 </Section>

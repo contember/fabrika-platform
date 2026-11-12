@@ -7,8 +7,9 @@ import {
 	planResultSchema,
 	submitFeedbackSchema,
 } from '../../shared'
+import type { PhaseState } from '../../shared/derive'
+import type { GateVerdict } from '../../shared/gate'
 import { BASE_URL, TIMEOUT_MS, WS_URL } from './config'
-import type { PhaseState } from './derive'
 
 const HEALTH_TIMEOUT_MS = 1000
 
@@ -81,14 +82,19 @@ export async function peekFeedback(sessionId: string): Promise<string | null> {
 	}
 }
 
-export async function consumeFeedback(sessionId: string): Promise<string | null> {
+export interface ConsumedFeedback {
+	feedback: string
+	verdict: GateVerdict
+}
+
+export async function consumeFeedback(sessionId: string): Promise<ConsumedFeedback | null> {
 	try {
 		const res = await fetch(`${BASE_URL}/api/session/${sessionId}/feedback/consume`, {
 			method: 'POST',
 			signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
 		})
 		const result = consumedFeedbackSchema.safeParse(await res.json())
-		return result.success ? result.data.feedback : null
+		return result.success ? { feedback: result.data.feedback, verdict: result.data.verdict } : null
 	} catch {
 		return null
 	}

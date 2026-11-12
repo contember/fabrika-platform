@@ -1,9 +1,10 @@
 import { parseArgs } from 'util'
+import { isNonEmptyFile, matchGlob, producesSatisfied } from '../../../shared/derive'
+import { GATE_CHANGES } from '../../../shared/gate'
 import { PHASE_COUNT, phaseById, phaseIndex, PHASES } from '../../../shared/phases'
 import { resolveContext } from '../context'
 import { consumeFeedback } from '../daemon-client'
 import { isDaemonRunning } from '../daemon-lifecycle'
-import { isNonEmptyFile, matchGlob, producesSatisfied } from '../derive'
 import { resolvePhaseState } from '../phase-state'
 
 export async function cmdAdvance(argv: string[]): Promise<number> {
@@ -38,6 +39,7 @@ export async function cmdAdvance(argv: string[]): Promise<number> {
 		}
 	}
 
+	let verdictWarning: string | null = null
 	if (phase.gate && !values.force) {
 		const daemonUp = await isDaemonRunning()
 		if (!daemonUp) {
@@ -47,6 +49,12 @@ export async function cmdAdvance(argv: string[]): Promise<number> {
 			)
 		} else {
 			const feedback = await consumeFeedback(ctx.sessionId)
+			if (feedback !== null && feedback.verdict !== 'approve') {
+				// Gates are advisory: a person may move on over requested changes, but never silently.
+				verdictWarning = feedback.verdict === 'changes'
+					? `gate "${phase.id}" was answered "${GATE_CHANGES}"; advancing anyway (gates are advisory). Address the requested changes or re-open the gate.`
+					: `gate "${phase.id}" was submitted without a verdict; advancing anyway (gates are advisory).`
+			}
 			if (feedback === null) {
 				problems.push(
 					`gate "${phase.id}" has no submitted feedback to consume. `
@@ -55,6 +63,8 @@ export async function cmdAdvance(argv: string[]): Promise<number> {
 			}
 		}
 	}
+
+	if (verdictWarning) console.error(`[fabrika] warning: ${verdictWarning}`)
 
 	if (problems.length > 0) {
 		console.error(`[fabrika] cannot advance from phase ${phase.number}/${PHASE_COUNT} (${phase.id}):`)

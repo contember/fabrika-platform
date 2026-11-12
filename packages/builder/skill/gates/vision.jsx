@@ -22,6 +22,6 @@
 			'PREFERENCE: a tie-breaker',
 		]}
 	/>
-	<Choice id="principles-ok" label="Principles + glossary agreed?" required options={['Yes, proceed', 'Edit a term', 'Add a principle']} />
 	<UserInput id="vision-note" label="Edits to scope or wording?" placeholder="write here…" multiline />
+	<Choice id="verdict" label="Verdict" required options={['Approve', 'Request changes']} />
 </Section>

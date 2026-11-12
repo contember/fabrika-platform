@@ -1,8 +1,8 @@
 import { join } from 'node:path'
 import type { BuilderProjectConnection } from '../../shared'
+import type { PhaseState } from '../../shared/derive'
 import { PHASE_COUNT, phaseById, type PhaseId, phaseIndex } from '../../shared/phases'
 import { resolveStackPointer, type StackPointer } from './catalog'
-import type { PhaseState } from './derive'
 
 export interface RenderOpts {
 	profile?: string
@@ -19,6 +19,15 @@ export function renderPacket(state: PhaseState, opts: RenderOpts = {}): string {
 	const done = state.completed.map((id) => `${id} ${CHECK}`).join(', ')
 	const completedSuffix = done ? `   (${done})` : ''
 	lines.push(`## Phase ${phase.number}/${PHASE_COUNT} - ${phase.title}${completedSuffix}`)
+
+	// Only an explicit "Request changes": sessions saved before verdicts existed read as `none` for every gate.
+	const overruled = state.completed.filter((id) => state.verdicts[id] === 'changes')
+	if (overruled.length > 0) {
+		lines.push(`Review:  advanced over requested changes: ${overruled.join(', ')}`)
+	}
+	if (state.unverified.length > 0) {
+		lines.push(`Review:  not checked (daemon down), assumed reviewed: ${state.unverified.join(', ')} - run \`fabrika builder ensure-daemon\``)
+	}
 
 	const reads = state.reads.length > 0 ? state.reads.join(', ') : phase.reads.join(', ')
 	lines.push(`Read:    ${reads}`)
@@ -76,6 +85,8 @@ export interface PacketJson {
 	skills: string[]
 	completed: PhaseId[]
 	satisfied: boolean
+	verdicts: PhaseState['verdicts']
+	unverified: PhaseId[]
 	stack: StackPointer | null
 	platform: ReturnType<typeof connectionContext> | null
 }
@@ -95,6 +106,8 @@ export function packetJson(state: PhaseState, opts: RenderOpts = {}): PacketJson
 		skills: phase.skills ?? [],
 		completed: state.completed,
 		satisfied: state.satisfied,
+		verdicts: state.verdicts,
+		unverified: state.unverified,
 		stack: phase.catalog && opts.profile ? resolveStackPointer(opts.profile) : null,
 	}
 }

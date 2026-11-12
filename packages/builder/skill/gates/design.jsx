@@ -17,6 +17,6 @@
 		]}
 	/>
 	<Choice id="palette" label="Primary palette?" required options={['As shown (recommended)', 'Darker', 'Lighter / minimal']} />
-	<Choice id="layout-ok" label="Screen layout reads well?" required options={['Yes, approve', 'Adjust hierarchy', 'Bigger primary action']} />
 	<UserInput id="design-note" label="Token or layout tweaks?" placeholder="e.g. more contrast on the price" multiline />
+	<Choice id="verdict" label="Verdict" required options={['Approve', 'Request changes']} />
 </Section>

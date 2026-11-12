@@ -42,7 +42,7 @@ The installed console owns human application creation/selection and initial plac
 4. `gate wait` observes feedback without consuming it.
 5. `advance` validates outputs and consumes the latest feedback.
 
-Only `advance` consumes feedback. This keeps retries and re-opened gates pending until the agent explicitly advances.
+`advance` consumes feedback, and so does re-opening a gate over pending feedback, which answers 409 with that feedback. `gate wait` never consumes, so a retried wait sees the same feedback. A gate counts as reviewed once its latest revision's feedback was consumed; its verdict (the `verdict` answer) is recorded, and `advance` warns, without refusing, on anything but `Approve`.
 
 ## Release artifact
 
