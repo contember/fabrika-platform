@@ -15,6 +15,20 @@ The builder runs eight deterministic phases:
 
 The current phase is derived from files in `.fabrika/`; it is not stored as a mutable counter. Review gates use a local dashboard with persistent annotations and responses.
 
+## Non-goals
+
+The builder takes one brief for a new web application to a running application on the paved road: one UI kit, the
+contract, the proxy and the checker. It does not grow into a general design tool. These are out of scope:
+
+- **A node graph or node editor.** The phase machine is a fixed sequence derived from files; nobody wires the steps by
+  hand.
+- **Multiplatform code generation** (native mobile or desktop UI) and **device simulators**. A Fabrika application is a
+  web SPA on `@fabrika/ui`.
+- **Editing controls in the dashboard,** such as token sliders or drag and drop. The dashboard is where a person
+  reviews and sees evidence; the agent makes every edit, and the person asks for changes through the gate.
+
+A proposal for one of these needs a new decision first, not a feature request.
+
 ## Usage
 
 Install the public CLI with this package, which it loads but does not install, and initialize the builder in an
