@@ -1,6 +1,14 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { remoteFeedbackSchema, savedSessionMetadataSchema, type SubmittedAnnotation, submittedAnnotationsSchema } from './sessionSchemas'
+import { z } from 'zod'
+import {
+	remoteFeedbackSchema,
+	savedSessionMetadataSchema,
+	type SubmittedAnnotation,
+	submittedAnnotationsSchema,
+	submittedResponseSchema,
+	submittedResponsesSchema,
+} from './sessionSchemas'
 
 export interface DiffStats {
 	added: number
@@ -35,6 +43,8 @@ export interface RevisionInfo {
  * the author's own annotations. `annotations` is the structured list of
  * highlighted-text comments; `generalNote` is the free-form markdown.
  */
+export type SubmittedResponse = z.output<typeof submittedResponseSchema>
+
 export interface RemoteFeedbackEntry {
 	/** Stable unique id assigned by the worker; used to dedupe on re-poll */
 	id: string
@@ -449,12 +459,22 @@ export class SessionManager {
 		}
 	}
 
-	/** `annotations` are the ones the feedback carries, kept so a host can open a thread on one later. */
-	saveFeedback(id: string, rev: number, markdown: string, annotations: readonly SubmittedAnnotation[] = []) {
+	/**
+	 * `annotations` are the ones the feedback carries, kept so a host can open a thread on one later; `responses` are its answered questions.
+	 * Both are written on every submission, so a later one never inherits an earlier one's.
+	 */
+	saveFeedback(
+		id: string,
+		rev: number,
+		markdown: string,
+		annotations: readonly SubmittedAnnotation[] = [],
+		responses: readonly SubmittedResponse[] = [],
+	) {
 		const revDir = this.revisionDir(id, rev)
 		mkdirSync(revDir, { recursive: true })
 		writeFileSync(join(revDir, 'feedback.md'), markdown)
 		writeFileSync(join(revDir, 'annotations.json'), JSON.stringify(annotations, null, 2))
+		writeFileSync(join(revDir, 'feedback-responses.json'), JSON.stringify(responses))
 
 		const session = this.sessions.get(id)
 		if (session) {
@@ -518,6 +538,22 @@ export class SessionManager {
 			return readFileSync(join(this.revisionDir(id, rev), 'feedback.md'), 'utf-8')
 		} catch {
 			return null
+		}
+	}
+
+	/** The structured answers of the revision's latest submission; empty when none were sent. */
+	getSubmittedResponses(id: string, rev: number): SubmittedResponse[] {
+		let raw: string
+		try {
+			raw = readFileSync(join(this.revisionDir(id, rev), 'feedback-responses.json'), 'utf-8')
+		} catch {
+			return []
+		}
+		try {
+			const parsed = submittedResponsesSchema.safeParse(JSON.parse(raw))
+			return parsed.success ? parsed.data : []
+		} catch {
+			return []
 		}
 	}
 

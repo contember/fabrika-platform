@@ -6,8 +6,8 @@
 
 import { type ChannelSocket, createNotificationChannel, type TopicChannel } from '@fabrika/daemon-kit'
 import { z } from 'zod'
-import type { RemoteFeedbackEntry, SessionManager } from './session'
-import { type SubmittedAnnotation, submittedAnnotationsFrameSchema } from './sessionSchemas'
+import type { RemoteFeedbackEntry, SessionManager, SubmittedResponse } from './session'
+import { type SubmittedAnnotation, submittedAnnotationsFrameSchema, submittedResponsesSchema } from './sessionSchemas'
 
 export type WSData = { type: 'browser' | 'wait'; sessionId: string }
 
@@ -27,6 +27,7 @@ interface SubmitFrame {
 	type: 'submit'
 	feedback: string
 	annotations?: SubmittedAnnotation[]
+	responses?: SubmittedResponse[]
 }
 
 interface RenderErrorFrame {
@@ -35,7 +36,12 @@ interface RenderErrorFrame {
 }
 
 const browserFrameSchema = z.discriminatedUnion('type', [
-	z.object({ type: z.literal('submit'), feedback: z.string(), annotations: submittedAnnotationsFrameSchema.optional() }).passthrough(),
+	z.object({
+		type: z.literal('submit'),
+		feedback: z.string(),
+		annotations: submittedAnnotationsFrameSchema.optional(),
+		responses: submittedResponsesSchema.optional(),
+	}).passthrough(),
 	z.object({
 		type: z.literal('render-error'),
 		error: z.object({
@@ -82,7 +88,7 @@ export function createWebSocketManager(
 		const session = sessionManager.get(sessionId)
 		if (!session) return
 
-		sessionManager.saveFeedback(sessionId, session.currentRevision, frame.feedback, frame.annotations)
+		sessionManager.saveFeedback(sessionId, session.currentRevision, frame.feedback, frame.annotations, frame.responses)
 		broadcastRevisionUpdate(sessionId)
 		if (!topic.hasWaiter()) return
 
@@ -90,7 +96,7 @@ export function createWebSocketManager(
 			sessionManager.consumeFeedback(sessionId, session.currentRevision)
 			broadcastRevisionUpdate(sessionId)
 		}
-		topic.relayToWaiters({ type: 'submit', feedback: frame.feedback })
+		topic.relayToWaiters({ type: 'submit', feedback: frame.feedback, responses: frame.responses ?? [] })
 	}
 
 	function renderError(frame: RenderErrorFrame, topic: TopicChannel) {

@@ -87,3 +87,17 @@ export const submittedAnnotationsSchema = z.array(submittedAnnotationSchema).max
 export const submittedAnnotationsFrameSchema = z.array(submittedAnnotationSchema.optional().catch(undefined))
 	.transform(entries => entries.filter(entry => entry !== undefined).slice(0, MAX_SUBMITTED_ANNOTATIONS))
 	.catch([])
+
+/** One answered question of a submitted review, kept beside the feedback markdown so a host can act on it without parsing prose. */
+export const submittedResponseSchema = z.object({
+	id: z.string(),
+	value: z.union([z.string(), z.array(z.string()), z.number()]),
+})
+
+// A malformed answer is dropped, not the submission: the markdown still carries every answer.
+export const submittedResponsesSchema = z.array(z.unknown()).transform(list =>
+	list.flatMap(response => {
+		const parsed = submittedResponseSchema.safeParse(response)
+		return parsed.success ? [parsed.data] : []
+	})
+)

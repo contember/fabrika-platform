@@ -42,6 +42,28 @@ function createSessionManager(): SessionManager {
 	return manager
 }
 
+describe('submitted answers', () => {
+	test('stores the parsed answers beside the feedback and relays them; a later submission without answers clears them', () => {
+		const manager = createSessionManager()
+		const websocket = createWebSocketManager(manager, { feedbackConsumption: 'external' })
+		const browser = new FakeSocket({ type: 'browser', sessionId: 'session' })
+		const waiter = new FakeSocket({ type: 'wait', sessionId: 'session' })
+		websocket.handlers.open(browser)
+		websocket.handlers.open(waiter)
+
+		const responses = [{ id: 'verdict', value: 'Approve' }, { id: 'tags', value: ['a', 'b'] }, { id: 'broken', value: { nested: true } }, 'junk']
+		websocket.handlers.message(browser, JSON.stringify({ type: 'submit', feedback: 'ok', responses }))
+
+		const parsed = [{ id: 'verdict', value: 'Approve' }, { id: 'tags', value: ['a', 'b'] }]
+		expect(manager.getFeedback('session', 1)).toBe('ok')
+		expect(manager.getSubmittedResponses('session', 1)).toEqual(parsed)
+		expect(waiter.sent).toEqual([JSON.stringify({ type: 'submit', feedback: 'ok', responses: parsed })])
+
+		websocket.handlers.message(browser, JSON.stringify({ type: 'submit', feedback: 'again' }))
+		expect(manager.getSubmittedResponses('session', 1)).toEqual([])
+	})
+})
+
 describe('canvas render errors', () => {
 	test('rejects malformed frames and keeps render error extension fields on delivery', () => {
 		const manager = createSessionManager()
