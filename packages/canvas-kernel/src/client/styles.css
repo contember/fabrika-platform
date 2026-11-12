@@ -85,7 +85,7 @@
 /* ── Base styles ── */
 @layer base {
   body {
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    font-family: var(--font-body);
     background-color: var(--color-bg-base);
     color: var(--color-text-primary);
     -webkit-font-smoothing: antialiased;
@@ -94,7 +94,7 @@
 }
 
 code, pre, .font-mono {
-  font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
+  font-family: var(--font-mono);
 }
 
 /* Selection color */
