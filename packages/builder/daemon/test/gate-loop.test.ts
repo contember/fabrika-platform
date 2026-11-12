@@ -376,7 +376,9 @@ describe('gate interactive loop', () => {
 		const board = JSON.parse(readFileSync(join(fabrikaDir, 'build', 'status.json'), 'utf-8'))
 		expect(board['ISSUE-004'].status).toBe('done')
 		expect(board['ISSUE-004'].evidence).toMatchObject({
-			command: 'design-checkpoint gate review, revision 2 · contrast: 31 pass, 3 below AA, 2 below AA in the kit itself (waived)',
+			command: 'design-checkpoint gate review, revision 2 · contrast: 49 pass, 4 below AA, 3 below AA in the kit itself (waived: '
+				+ 'light --fui-text-muted on --fui-bg, light --fui-text-muted on --fui-surface, light --fui-text-muted on --fui-surface-muted, '
+				+ 'light --fui-table-head-color on --fui-surface-muted)',
 			verdict: 'changes',
 		})
 

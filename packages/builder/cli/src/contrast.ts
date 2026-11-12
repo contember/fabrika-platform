@@ -3,11 +3,19 @@
 export type ThemeMode = 'light' | 'dark'
 type Tokens = Record<string, string>
 
+interface Declared {
+	value: string
+	important: boolean
+}
+type Block = Record<string, Declared>
+
 export interface ThemeBlocks {
 	/** Top-level `:root` declarations of custom properties. */
-	light: Tokens
+	light: Block
 	/** Top-level `:root[data-theme='dark']` declarations of custom properties. */
-	dark: Tokens
+	dark: Block
+	/** `--fui-*` names also declared in a rule this reader does not cascade: another selector, or inside an at-rule. */
+	elsewhere: string[]
 }
 
 interface Pair {
@@ -22,21 +30,31 @@ const PAIRS: readonly Pair[] = [
 	{ fg: '--fui-text', bg: '--fui-bg', min: 4.5 },
 	{ fg: '--fui-text', bg: '--fui-surface', min: 4.5 },
 	{ fg: '--fui-text', bg: '--fui-surface-muted', min: 4.5 },
+	{ fg: '--fui-text', bg: '--fui-border', min: 4.5 },
+	{ fg: '--fui-text', bg: '--fui-accent-soft', min: 4.5 },
 	{ fg: '--fui-text-muted', bg: '--fui-bg', min: 4.5 },
 	{ fg: '--fui-text-muted', bg: '--fui-surface', min: 4.5 },
 	{ fg: '--fui-text-muted', bg: '--fui-surface-muted', min: 4.5 },
+	{ fg: '--fui-text-subtle', bg: '--fui-bg', min: 4.5 },
 	{ fg: '--fui-text-subtle', bg: '--fui-surface', min: 4.5 },
+	{ fg: '--fui-label-color', bg: '--fui-bg', min: 4.5 },
+	{ fg: '--fui-label-color', bg: '--fui-surface', min: 4.5 },
+	{ fg: '--fui-table-head-color', bg: '--fui-surface-muted', min: 4.5 },
 	{ fg: '--fui-accent', bg: '--fui-bg', min: 4.5 },
 	{ fg: '--fui-accent', bg: '--fui-surface', min: 4.5 },
 	{ fg: '--fui-accent', bg: '--fui-accent-soft', min: 4.5 },
 	{ fg: '--fui-accent-contrast', bg: '--fui-accent', min: 4.5 },
 	{ fg: '--fui-accent-contrast', bg: '--fui-accent-hover', min: 4.5 },
+	{ fg: '--fui-accent-contrast', bg: '--fui-danger', min: 4.5 },
+	{ fg: '--fui-accent-contrast', bg: '--fui-danger-text', min: 4.5 },
+	{ fg: '--fui-danger-text', bg: '--fui-surface', min: 4.5 },
 	{ fg: '--fui-success-text', bg: '--fui-success-soft', min: 4.5 },
 	{ fg: '--fui-warning-text', bg: '--fui-warning-soft', min: 4.5 },
 	{ fg: '--fui-danger-text', bg: '--fui-danger-soft', min: 4.5 },
 	{ fg: '--fui-info-text', bg: '--fui-info-soft', min: 4.5 },
 	{ fg: '--fui-focus', bg: '--fui-bg', min: 3 },
 	{ fg: '--fui-focus', bg: '--fui-surface', min: 3 },
+	{ fg: '--fui-focus', bg: '--fui-surface-muted', min: 3 },
 ]
 
 export interface ContrastResult {
@@ -46,6 +64,8 @@ export interface ContrastResult {
 	min: number
 	/** Null when either colour could not be computed (`note` says why). */
 	ratio: number | null
+	/** The same pair with the kit's own values; null when it cannot be computed. */
+	kitRatio: number | null
 	/**
 	 * `inherited`: below the minimum with the kit's own values too, and the override does not lower it — the kit's
 	 * defect, not the application's. Only `fail` is the override's.
@@ -54,15 +74,21 @@ export interface ContrastResult {
 	note?: string
 }
 
-const DARK_SELECTOR = ":root[data-theme='dark']"
+const LIGHT_SELECTOR = ':root'
+// Quotes removed: `[data-theme=dark]` and `[data-theme="dark"]` are the same selector.
+const DARK_SELECTOR = ':root[data-theme=dark]'
+const FUI_DECLARATION = /(--fui-[\w-]+)\s*:/g
 
 /**
  * Reads the custom properties of the top-level `:root` and `:root[data-theme='dark']` rules, the two blocks the kit
- * declares its tokens in. Rules inside an at-rule (`@media`, `@layer`) and any other selector are not read.
+ * declares its tokens in. A `--fui-*` token declared anywhere else is listed in `elsewhere`, so no pair that reads it
+ * passes on values the browser may not use.
  */
 export function readThemeBlocks(css: string): ThemeBlocks {
 	const src = css.replace(/\/\*[\s\S]*?\*\//g, '')
-	const blocks: ThemeBlocks = { light: {}, dark: {} }
+	const light: Block = {}
+	const dark: Block = {}
+	const read = new Map<string, number>()
 	let depth = 0
 	let start = 0
 	let bodyStart = 0
@@ -78,8 +104,14 @@ export function readThemeBlocks(css: string): ThemeBlocks {
 		} else if (ch === '}') {
 			depth--
 			if (depth === 0) {
-				const target = blockFor(selector, blocks)
-				if (target) Object.assign(target, declarations(src.slice(bodyStart, i)))
+				const selectors = selector.split(',').map((s) => s.replace(/\s+/g, '').replace(/["']/g, ''))
+				const targets = [selectors.includes(LIGHT_SELECTOR) ? light : null, selectors.includes(DARK_SELECTOR) ? dark : null]
+				const body = src.slice(bodyStart, i)
+				if (targets.some((t) => t !== null) && !body.includes('{')) {
+					const declared = declarations(body)
+					for (const target of targets) if (target) Object.assign(target, declared)
+					for (const name of Object.keys(declared)) read.set(name, (read.get(name) ?? 0) + 1)
+				}
 				start = i + 1
 			}
 			if (depth < 0) depth = 0
@@ -87,24 +119,22 @@ export function readThemeBlocks(css: string): ThemeBlocks {
 			start = i + 1
 		}
 	}
-	return blocks
+	const total = new Map<string, number>()
+	for (const m of src.matchAll(FUI_DECLARATION)) total.set(m[1] ?? '', (total.get(m[1] ?? '') ?? 0) + 1)
+	const elsewhere = [...total].filter(([name, count]) => count > (read.get(name) ?? 0)).map(([name]) => name)
+	return { light, dark, elsewhere }
 }
 
-function blockFor(selector: string, blocks: ThemeBlocks): Tokens | null {
-	const selectors = selector.split(',').map((s) => s.replace(/\s+/g, '').replaceAll('"', "'"))
-	if (selectors.includes(':root')) return blocks.light
-	if (selectors.includes(DARK_SELECTOR)) return blocks.dark
-	return null
-}
-
-function declarations(body: string): Tokens {
-	const out: Tokens = {}
+function declarations(body: string): Block {
+	const out: Block = {}
 	for (const decl of body.split(';')) {
 		const colon = decl.indexOf(':')
 		if (colon < 0) continue
 		const name = decl.slice(0, colon).trim()
 		if (!name.startsWith('--')) continue
-		out[name] = decl.slice(colon + 1).replace(/!important\s*$/i, '').trim()
+		const raw = decl.slice(colon + 1).trim()
+		const important = /!\s*important$/i.test(raw)
+		out[name] = { value: important ? raw.replace(/!\s*important$/i, '').trim() : raw, important }
 	}
 	return out
 }
@@ -112,55 +142,72 @@ function declarations(body: string): Tokens {
 /**
  * The token values each mode computes to with the application's stylesheet imported after the kit's. The dark rule is
  * more specific than `:root`, so an application's `:root` override reaches dark mode only where the kit's dark rule
- * declares nothing.
+ * declares nothing, or with `!important`, which outranks every normal declaration.
  */
 export function cascade(kit: ThemeBlocks, app: ThemeBlocks): Record<ThemeMode, Tokens> {
-	return {
-		light: { ...kit.light, ...app.light },
-		dark: { ...kit.light, ...app.light, ...kit.dark, ...app.dark },
+	const light = [kit.light, app.light]
+	const dark = [kit.light, app.light, kit.dark, app.dark]
+	return { light: layered(light), dark: layered(dark) }
+}
+
+/** Blocks in ascending precedence: normal declarations first, then the important ones in the same order. */
+function layered(blocks: Block[]): Tokens {
+	const out: Tokens = {}
+	for (const important of [false, true]) {
+		for (const block of blocks) {
+			for (const [name, d] of Object.entries(block)) if (d.important === important) out[name] = d.value
+		}
 	}
+	return out
 }
 
 export function checkContrast(kit: ThemeBlocks, app: ThemeBlocks): ContrastResult[] {
 	const themed = cascade(kit, app)
-	const baseline = cascade(kit, { light: {}, dark: {} })
+	const baseline = cascade(kit, { light: {}, dark: {}, elsewhere: [] })
+	const elsewhere = new Set(app.elsewhere)
 	const modes: ThemeMode[] = ['light', 'dark']
 	return modes.flatMap((mode) =>
 		PAIRS.map((pair): ContrastResult => {
-			const measured = pairRatio(themed[mode], pair)
-			const base = { fg: pair.fg, bg: pair.bg, mode, min: pair.min }
+			const kitMeasured = pairRatio(baseline[mode], pair, new Set())
+			const kitRatio = typeof kitMeasured === 'number' ? kitMeasured : null
+			const base = { fg: pair.fg, bg: pair.bg, mode, min: pair.min, kitRatio }
+			const measured = pairRatio(themed[mode], pair, elsewhere)
 			if (typeof measured === 'string') return { ...base, ratio: null, status: 'unchecked', note: measured }
 			if (measured >= pair.min) return { ...base, ratio: measured, status: 'pass' }
-			const kitRatio = pairRatio(baseline[mode], pair)
-			const inherited = typeof kitRatio === 'number' && kitRatio < pair.min && measured >= kitRatio
+			const inherited = kitRatio !== null && kitRatio < pair.min && measured >= kitRatio
 			return { ...base, ratio: measured, status: inherited ? 'inherited' : 'fail' }
 		})
 	)
 }
 
 /** The ratio, or why it cannot be computed. */
-function pairRatio(tokens: Tokens, pair: Pair): number | string {
-	const fg = tokenColor(tokens, pair.fg)
+function pairRatio(tokens: Tokens, pair: Pair, elsewhere: Set<string>): number | string {
+	const fg = tokenColor(tokens, pair.fg, elsewhere)
 	if (typeof fg === 'string') return fg
-	const bg = tokenColor(tokens, pair.bg)
+	const bg = tokenColor(tokens, pair.bg, elsewhere)
 	if (typeof bg === 'string') return bg
 	if (bg.a < 1) return `${pair.bg} is translucent`
 	return contrastRatio(over(fg, bg), bg)
 }
 
-function tokenColor(tokens: Tokens, name: string): Rgba | string {
-	const value = resolveVar(tokens, name, 0)
+function tokenColor(tokens: Tokens, name: string, elsewhere: Set<string>): Rgba | string {
+	const chain: string[] = []
+	const value = resolveVar(tokens, name, chain)
+	const unread = chain.find((n) => elsewhere.has(n))
+	if (unread) return `${unread} is also declared in a rule the check does not read (another selector, or inside an at-rule)`
 	if (value === null) return `${name} is not declared, or its var() chain does not resolve`
 	const color = parseColor(value)
-	return color ?? `${name} is \`${value}\`, a colour syntax the check does not read`
+	return color ?? `${name} is \`${value}\`, a colour the check does not read`
 }
 
-function resolveVar(tokens: Tokens, name: string, depth: number): string | null {
+/** Follows a `var()` chain; `chain` collects every token name it read. */
+function resolveVar(tokens: Tokens, name: string, chain: string[]): string | null {
+	chain.push(name)
 	const value = tokens[name]
-	if (value === undefined || depth > 16) return null
+	if (value === undefined || chain.length > 16) return null
 	const ref = /^var\(\s*(--[\w-]+)\s*(?:,\s*(.+))?\)$/.exec(value)
 	if (!ref) return value
-	return resolveVar(tokens, ref[1] ?? '', depth + 1) ?? ref[2]?.trim() ?? null
+	return resolveVar(tokens, ref[1] ?? '', chain) ?? ref[2]?.trim() ?? null
 }
 
 /** Encoded sRGB channels and alpha, each in [0, 1]. */
@@ -171,65 +218,36 @@ interface Rgba {
 	a: number
 }
 
+/** OKLCH here; every other CSS colour through `Bun.color`, which does not read OKLCH. Null when neither reads it. */
 export function parseColor(value: string): Rgba | null {
 	const v = value.trim().toLowerCase()
-	if (v.startsWith('#')) return parseHex(v.slice(1))
-	const fn = /^(rgba?|hsla?|oklch)\(([^()]*)\)$/.exec(v)
-	if (!fn) return null
-	const parts = (fn[2] ?? '').split(/[\s,/]+/).filter((p) => p.length > 0)
+	const oklch = /^oklch\(([^()]*)\)$/.exec(v)
+	if (oklch) return parseOklch(oklch[1] ?? '')
+	const rgba = Bun.color(v, '{rgba}')
+	return rgba ? { r: rgba.r / 255, g: rgba.g / 255, b: rgba.b / 255, a: rgba.a } : null
+}
+
+function parseOklch(args: string): Rgba | null {
+	const parts = args.split(/[\s/]+/).filter((p) => p.length > 0)
 	if (parts.length !== 3 && parts.length !== 4) return null
-	const alpha = parts[3] === undefined ? 1 : unit(parts[3], 1)
-	if (alpha === null) return null
-	const kind = fn[1] ?? ''
-	if (kind.startsWith('rgb')) {
-		const [r, g, b] = parts.map((p) => unit(p, 255))
-		return r == null || g == null || b == null ? null : { r, g, b, a: alpha }
-	}
-	if (kind.startsWith('hsl')) {
-		const h = degrees(parts[0] ?? '')
-		const s = unit(parts[1] ?? '', 100)
-		const l = unit(parts[2] ?? '', 100)
-		return h === null || s === null || l === null ? null : { ...hslToRgb(h, s, l), a: alpha }
-	}
-	const l = unit(parts[0] ?? '', 1)
+	const l = number(parts[0] ?? '', 1)
 	// Chroma's 100% is 0.4 (CSS Color 4).
-	const c = parts[1]?.endsWith('%') ? scaled(unit(parts[1], 1), 0.4) : unit(parts[1] ?? '', 1)
-	const h = degrees(parts[2] ?? '')
-	return l === null || c === null || h === null ? null : { ...oklchToRgb(l, c, h), a: alpha }
+	const c = number(parts[1] ?? '', 0.4)
+	const hue = Number((parts[2] ?? '').replace(/deg$/, ''))
+	const a = parts[3] === undefined ? 1 : number(parts[3], 1)
+	if (l === null || c === null || a === null || !Number.isFinite(hue)) return null
+	return { ...oklchToRgb(Math.min(1, Math.max(0, l)), Math.max(0, c), hue), a: Math.min(1, Math.max(0, a)) }
 }
 
-function parseHex(hex: string): Rgba | null {
-	if (!/^(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/.test(hex)) return null
-	const full = hex.length <= 4 ? [...hex].map((ch) => ch + ch).join('') : hex
-	const channel = (i: number) => parseInt(full.slice(i * 2, i * 2 + 2), 16) / 255
-	return { r: channel(0), g: channel(1), b: channel(2), a: full.length === 8 ? channel(3) : 1 }
-}
-
-/** A number divided by `scale`, or a percentage of 1; clamped to [0, 1]. */
-function unit(part: string, scale: number): number | null {
+/** A plain number, or a percentage of `full`. */
+function number(part: string, full: number): number | null {
 	const pct = part.endsWith('%')
 	const n = Number(pct ? part.slice(0, -1) : part)
 	if (!Number.isFinite(n)) return null
-	return Math.min(1, Math.max(0, pct ? n / 100 : n / scale))
+	return pct ? (n / 100) * full : n
 }
 
-function scaled(v: number | null, by: number): number | null {
-	return v === null ? null : v * by
-}
-
-function degrees(part: string): number | null {
-	const n = Number(part.endsWith('deg') ? part.slice(0, -3) : part)
-	return Number.isFinite(n) ? ((n % 360) + 360) % 360 : null
-}
-
-function hslToRgb(h: number, s: number, l: number): { r: number; g: number; b: number } {
-	const k = (n: number) => (n + h / 30) % 12
-	const a = s * Math.min(l, 1 - l)
-	const f = (n: number) => l - a * Math.max(-1, Math.min(k(n) - 3, 9 - k(n), 1))
-	return { r: f(0), g: f(8), b: f(4) }
-}
-
-/** OKLCH to encoded sRGB, clamped into gamut channel by channel. */
+/** OKLCH to encoded sRGB. An out-of-gamut colour is clipped channel by channel, not chroma-reduced as a browser may. */
 function oklchToRgb(l: number, c: number, h: number): { r: number; g: number; b: number } {
 	const rad = (h * Math.PI) / 180
 	const a = c * Math.cos(rad)

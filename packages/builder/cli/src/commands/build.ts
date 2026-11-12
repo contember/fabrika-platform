@@ -56,6 +56,10 @@ export async function cmdBuild(argv: string[]): Promise<number> {
 				console.error(`[fabrika] build done <ISSUE-ID> — unknown or missing issue id.`)
 				return 1
 			}
+			if (values['waive-contrast'] && issue.gate !== DESIGN_GATE) {
+				console.error(`[fabrika] --waive-contrast applies only to the "${DESIGN_GATE}" gate's issue; ${issue.id} has no contrast check.`)
+				return 1
+			}
 			if (issue.gate) {
 				if (values.verify || issue.verify.length > 0) {
 					console.error(`[fabrika] ${issue.id} is proved by its "${issue.gate}" review gate; it takes no --verify or verify files.`)
@@ -170,8 +174,11 @@ function checkDesignContrast(issue: Issue, repoRoot: string, waive: boolean | un
 		for (const r of contrast.results) {
 			if (r.status === 'unchecked') console.error(`[fabrika] warning: contrast not checked for ${r.mode} ${r.fg} on ${r.bg}: ${r.note ?? ''}`)
 		}
+	} else if (contrast.kind === 'no-kit') {
+		console.error(`[fabrika] warning: ${summarizeContrast(contrast)}; on the paved road, run \`bun install\` where the SPA lives.`)
 	}
-	return ` · ${summarizeContrast(contrast)}${refused ? ' (waived)' : ''}`
+	const waived = failing.map((r) => `${r.mode} ${r.fg} on ${r.bg}`)
+	return ` · ${summarizeContrast(contrast)}${refused ? ` (waived${waived.length ? `: ${waived.join(', ')}` : ''})` : ''}`
 }
 
 /** An issue whose check is a review gate: record the gate's consumed verdict. Gates are advisory, so "changes" warns. */

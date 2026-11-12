@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, realpathSync, statSync } from 'fs'
-import { dirname, isAbsolute, join, relative, resolve } from 'path'
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'path'
 import { GATE_APPROVE, GATE_CHANGES, GATE_VERDICT_ID } from '../../shared/gate'
 import { literal } from './build-review'
 import { checkContrast, type ContrastResult, formatRatio, readThemeBlocks } from './contrast'
@@ -33,7 +33,8 @@ export function readDesignContrast(repoRoot: string): DesignContrast {
 	const app = readThemeBlocks(readFileSync(file, 'utf8'))
 	const kit = readThemeBlocks(readFileSync(kitFile, 'utf8'))
 	const names = [...new Set([...Object.keys(app.light), ...Object.keys(app.dark)])].sort()
-	const overrides = names.map((name) => [name, app.light[name] ?? '', app.dark[name] ?? ''])
+	const shown = (d: { value: string; important: boolean } | undefined) => (d ? `${d.value}${d.important ? ' !important' : ''}` : '')
+	const overrides = names.map((name) => [name, shown(app.light[name]), shown(app.dark[name])])
 	return { kind: 'checked', stylesheet, overrides, results: checkContrast(kit, app) }
 }
 
@@ -43,7 +44,7 @@ function insideRepository(repoRoot: string, path: string): string | null {
 	if (!existsSync(target)) return null
 	const real = realpathSync(target)
 	const rel = relative(realpathSync(repoRoot), real)
-	if (rel.startsWith('..') || isAbsolute(rel) || !statSync(real).isFile()) return null
+	if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel) || !statSync(real).isFile()) return null
 	return real
 }
 
@@ -53,7 +54,12 @@ export function failingPairs(contrast: DesignContrast): ContrastResult[] {
 
 export function describePair(r: ContrastResult): string {
 	const ratio = r.ratio === null ? 'not computed' : formatRatio(r.ratio)
-	return `${r.mode}: ${r.fg} on ${r.bg} is ${ratio}, needs ${r.min}:1`
+	const line = `${r.mode}: ${r.fg} on ${r.bg} is ${ratio}, needs ${r.min}:1`
+	// A pair the kit already leaves below AA fails once the override lowers it further: name what to raise.
+	if (r.status === 'fail' && r.kitRatio !== null && r.kitRatio < r.min) {
+		return `${line}; the kit's own values give ${formatRatio(r.kitRatio)} and the override lowers it, so raise ${r.fg} as well`
+	}
+	return line
 }
 
 /** One line for the build evidence and the console. */
@@ -67,8 +73,10 @@ export function summarizeContrast(contrast: DesignContrast): string {
 	return `contrast: ${parts.join(', ')}`
 }
 
-/** The design checkpoint's view: generated, like the build review, so the reviewer sees computed ratios, not claimed ones. */
-/** `withDesign`: `design.md` exists, so the view shows the recorded decisions beside the computed values. */
+/**
+ * The design checkpoint's view: generated, like the build review, so the reviewer sees computed ratios, not claimed ones.
+ * `withDesign`: `design.md` exists, so the view shows the recorded decisions beside the computed values.
+ */
 export function renderDesignReview(contrast: DesignContrast, urls: string[], withDesign: boolean, now: Date): string {
 	const lines = [
 		`<Section title="Design checkpoint — theme of the running app">`,

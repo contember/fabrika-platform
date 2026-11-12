@@ -47,7 +47,7 @@ test('a stylesheet without the kit is not checked; with it, its overrides are ju
 	const good = readDesignContrast(fx.root)
 	expect(good).toMatchObject({ kind: 'checked', stylesheet: 'web/src/theme.css', overrides: [['--fui-accent', '#a0522d', '']] })
 	expect(failingPairs(good)).toEqual([])
-	expect(summarizeContrast(good)).toBe('contrast: 34 pass, 0 below AA, 2 below AA in the kit itself')
+	expect(summarizeContrast(good)).toBe('contrast: 53 pass, 0 below AA, 3 below AA in the kit itself')
 
 	fx.write('web/src/theme.css', ':root { --fui-accent: #f4a460; }')
 	const bad = readDesignContrast(fx.root)
@@ -81,9 +81,21 @@ test('design review writes the view and names every pair below AA', async () => 
 	const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()])
 	expect(await proc.exited).toBe(0)
 	expect(stdout.trim()).toBe(join(fx.root, '.fabrika/build/design-review.jsx'))
-	expect(stderr).toContain('contrast: 31 pass, 3 below AA, 2 below AA in the kit itself')
+	expect(stderr).toContain('contrast: 49 pass, 4 below AA, 3 below AA in the kit itself')
 	expect(stderr).toContain('below AA: light: --fui-text-muted on --fui-surface is 2.')
 	const view = readFileSync(join(fx.root, '.fabrika/build/design-review.jsx'), 'utf8')
 	expect(view).toContain('BELOW AA')
 	expect(view).toContain('/cart')
+})
+
+test('--waive-contrast is refused on an issue without the contrast check', async () => {
+	fx = makeFixture()
+	fx.write('.fabrika/issues/ISSUE-101.md', '---\ngoal: Feature\nsatisfies: []\ndepends_on: []\ntouches: []\nverify: []\n---\nbody\n')
+	const proc = Bun.spawn([process.execPath, BIN, 'build', 'done', 'ISSUE-101', '--waive-contrast', '--dir', fx.root], {
+		stdout: 'pipe',
+		stderr: 'pipe',
+	})
+	const stderr = await new Response(proc.stderr).text()
+	expect(await proc.exited).toBe(1)
+	expect(stderr).toContain('--waive-contrast applies only to the "design-checkpoint" gate')
 })

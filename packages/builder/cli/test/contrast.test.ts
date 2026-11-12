@@ -15,6 +15,7 @@ describe('contrast of the kit tokens', () => {
 		const results = checkContrast(KIT, NO_OVERRIDE)
 		expect(results.filter((r) => r.status === 'fail' || r.status === 'unchecked')).toEqual([])
 		expect(results.filter((r) => r.status === 'inherited').map((r) => `${r.mode} ${r.fg}/${r.bg}`)).toEqual([
+			'light --fui-text-subtle/--fui-bg',
 			'light --fui-text-subtle/--fui-surface',
 			'dark --fui-accent/--fui-accent-soft',
 		])
@@ -48,7 +49,7 @@ describe('contrast of the kit tokens', () => {
 	})
 
 	test('a colour the check cannot read is reported unchecked, never passed or failed', () => {
-		const results = checkContrast(KIT, readThemeBlocks(':root { --fui-surface: color-mix(in srgb, white 90%, black); }'))
+		const results = checkContrast(KIT, readThemeBlocks(':root { --fui-surface: color-mix(in srgb, var(--brand) 90%, black); }'))
 		const pair = find(results, '--fui-text', '--fui-surface', 'light')
 		expect(pair?.status).toBe('unchecked')
 		expect(pair?.note).toContain('color-mix')
@@ -61,9 +62,41 @@ describe('contrast of the kit tokens', () => {
 		expect(find(glass, '--fui-text', '--fui-surface', 'light')?.status).toBe('unchecked')
 	})
 
-	test('rules inside an at-rule and other selectors are not read', () => {
-		const app = readThemeBlocks('@media (min-width: 1px) { :root { --fui-text: #fff; } } .x { --fui-text: #fff; } :root { --fui-bg: #000; }')
-		expect(app).toEqual({ light: { '--fui-bg': '#000' }, dark: {} })
+	test('a token also declared in a rule the check does not read leaves its pairs unchecked, never passed', () => {
+		for (
+			const css of [
+				'@media (min-width: 1px) { :root { --fui-text: #eee; } }',
+				'.fui-app { --fui-text: #eee; }',
+				"html[data-theme='dark'] { --fui-text: #222; }",
+			]
+		) {
+			const app = readThemeBlocks(`${css} :root { --fui-bg: #fff; }`)
+			expect(app.light).toEqual({ '--fui-bg': { value: '#fff', important: false } })
+			expect(app.elsewhere).toEqual(['--fui-text'])
+			const pair = find(checkContrast(KIT, app), '--fui-text', '--fui-bg', 'dark')
+			expect(pair?.status).toBe('unchecked')
+			expect(pair?.note).toContain('--fui-text is also declared in a rule the check does not read')
+		}
+	})
+
+	test('!important, a selector list and an unquoted attribute reach dark mode as the browser applies them', () => {
+		for (
+			const css of [
+				':root { --fui-text: #222 !important; }',
+				":root, :root[data-theme='dark'] { --fui-text: #222; }",
+				':root[data-theme=dark] { --fui-text: #222; }',
+			]
+		) {
+			const dark = find(checkContrast(KIT, readThemeBlocks(css)), '--fui-text', '--fui-bg', 'dark')
+			expect(dark?.status).toBe('fail')
+			expect(dark?.ratio).toBeLessThan(1.5)
+		}
+	})
+
+	test('an override that lowers a pair the kit already leaves below AA fails, and keeps the kit ratio for the message', () => {
+		const pair = find(checkContrast(KIT, readThemeBlocks(':root { --fui-surface: #fbf7f0; }')), '--fui-text-subtle', '--fui-surface', 'light')
+		expect(pair?.status).toBe('fail')
+		expect(pair?.kitRatio).toBeGreaterThan(pair?.ratio ?? 0)
 	})
 })
 
@@ -74,7 +107,13 @@ describe('colour parsing', () => {
 			expect(c?.a).toBe(1)
 			expect([c?.r, c?.g, c?.b].map((v) => Math.round((v ?? 0) * 255))).toEqual([255, 255, 255])
 		}
-		expect(parseColor('rebeccapurple')).toBeNull()
+		expect(parseColor('white')).toEqual({ r: 1, g: 1, b: 1, a: 1 })
+		expect(parseColor('var(--x)')).toBeNull()
+	})
+
+	test('reads a chromatic oklch: the CSS Color 4 sRGB red', () => {
+		const red = parseColor('oklch(62.8% 0.2577 29.23deg)')
+		expect([red?.r, red?.g, red?.b].map((v) => Math.round((v ?? 0) * 255))).toEqual([255, 0, 0])
 	})
 })
 
