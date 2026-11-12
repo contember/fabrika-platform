@@ -89,6 +89,21 @@ describe('canvas threads', () => {
 		expect((await call(routes, 'POST', '/api/session/plan/threads/claim')).json).toEqual({ markdown: null })
 	})
 
+	test('the agent cannot answer over a reply it has not read', async () => {
+		const { routes } = setup()
+		await call(routes, 'POST', '/api/session/plan/threads/ann-1/reply', { body: 'Moved to Q3.', resolve: false })
+		await call(routes, 'POST', '/api/session/plan/threads/ann-1/comments', { body: 'Q4 is safer.' })
+		expect((await call(routes, 'POST', '/api/session/plan/threads/ann-1/reply', { body: 'Done.', resolve: true })).status).toBe(409)
+
+		await call(routes, 'POST', '/api/session/plan/threads/claim')
+		expect((await call(routes, 'POST', '/api/session/plan/threads/ann-1/reply', { body: 'Q4 then.', resolve: true })).status).toBe(200)
+	})
+
+	test('claiming on a session the daemon does not know hands over nothing', async () => {
+		const { routes } = setup()
+		expect(await call(routes, 'POST', '/api/session/other/threads/claim')).toEqual({ status: 200, json: { markdown: null } })
+	})
+
 	test('the user resolves and reopens a thread; an empty answer is refused', async () => {
 		const { routes } = setup()
 		await call(routes, 'POST', '/api/session/plan/threads/ann-1/reply', { body: 'Moved.', resolve: false })

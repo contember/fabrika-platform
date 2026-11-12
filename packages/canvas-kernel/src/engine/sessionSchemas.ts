@@ -72,7 +72,7 @@ export const remoteFeedbackSchema = z.array(remoteFeedbackEntrySchema.optional()
 
 /** What a submit says about each annotation it carried: enough for the host to open a thread on it later. */
 export const submittedAnnotationSchema = z.object({
-	id: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/),
+	id: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/),
 	snippet: z.string().max(20_000),
 	note: z.string().max(20_000),
 	canvasFile: z.string().max(500).optional(),

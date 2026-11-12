@@ -43,6 +43,10 @@ export class CanvasThreadStore {
 	agentReply(sessionId: string, annotationId: string, body: string, resolve: boolean): CanvasThread {
 		const threads = this.list(sessionId)
 		const existing = threads.find((thread) => thread.id === annotationId)
+		// Answering over an unread answer would hand the thread back to the user and the answer would never be claimed.
+		if (existing?.state === 'queued') {
+			throw new ReviewError(`The user answered ${annotationId} since you last read it; read the answer with watch first`, 409)
+		}
 		const thread = existing ?? this.opened(sessionId, annotationId)
 		const next = agentReplied(thread, this.comment('agent', body), resolve)
 		this.save(sessionId, existing ? threads.map((candidate) => (candidate.id === annotationId ? next : candidate)) : [...threads, next])
@@ -58,8 +62,9 @@ export class CanvasThreadStore {
 		return this.update(sessionId, threadId, (thread) => resolvedAs(thread, resolved, this.timestamp()))
 	}
 
-	/** Hands every thread the user answered to the agent, once. */
+	/** Hands every thread the user answered to the agent, once. A session the daemon does not know has none. */
 	claimQueued(sessionId: string): readonly CanvasThread[] {
+		if (!this.sessions.get(sessionId)) return []
 		const result = claimed(this.list(sessionId), this.timestamp())
 		if (result.claimed.length > 0) this.save(sessionId, result.threads)
 		return result.claimed
