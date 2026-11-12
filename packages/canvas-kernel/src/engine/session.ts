@@ -468,6 +468,11 @@ export class SessionManager {
 		}
 	}
 
+	/** Where a host keeps files the user handed to this session; removed with the session. */
+	assetsDir(id: string): string {
+		return join(this.sessionDir(id), 'assets')
+	}
+
 	getFeedback(id: string, rev: number): string | null {
 		try {
 			return readFileSync(join(this.revisionDir(id, rev), 'feedback.md'), 'utf-8')

@@ -149,6 +149,7 @@ All components are globally available in canvas JSX — no imports needed. For i
 - **MultiChoice** — multi-select checkboxes. Props: `id`, `label`, `options`, `required`
 - **UserInput** — free text input. Props: `id`, `label`, `placeholder`, `required`
 - **SecretInput** — local in-memory secret handoff. Props: `id`, `label`, `env`, `placeholder`, `required`
+- **FileDrop** — the user hands you files; feedback lists their paths. Props: `id`, `label`, `accept`, `maxBytes`, `required`
 - **RangeInput** — numeric slider. Props: `id`, `label`, `min`, `max`, `minLabel`, `maxLabel`, `required`
 
 ### Advanced
