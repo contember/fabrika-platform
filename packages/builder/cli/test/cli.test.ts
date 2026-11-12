@@ -223,9 +223,28 @@ test('build done runs the check itself, records its evidence, and refuses a red 
 	const review = await run(['build', 'review', '--dir', fx.root])
 	expect(review.code).toBe(0)
 	const view = readFileSync(join(fx.root, '.fabrika/build/review.jsx'), 'utf-8')
-	expect(view).toContain('bun test tests/browser/cart.test.ts · exit 0')
-	expect(view).toContain('no recorded check')
+	const text = view.replace(/\\u([0-9a-f]{4})/g, (_, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)))
+	expect(text).toContain('bun test tests/browser/cart.test.ts · exit 0')
+	expect(text).toContain('no recorded check')
 	expect(view).toContain(`<Choice id="verdict" label="Verdict" required options={['Approve', 'Request changes']} />`)
 	const compiled = await compileJsx(view, { tempDir: fx.root })
 	expect(compiled.ok).toBe(true)
+})
+
+test('build done refuses a red acceptance file, and --verify never replaces one', async () => {
+	fx = makeFixture()
+	fx.write(
+		'.fabrika/issues/ISSUE-101.md',
+		'---\ngoal: cart page\nsatisfies: [cart-add]\ndepends_on: []\ntouches: []\nverify: ["tests/browser/cart.test.ts"]\n---\nbody\n',
+	)
+	fx.write('tests/browser/cart.test.ts', "import { expect, test } from 'bun:test'\ntest('cart', () => expect(1).toBe(2))\n")
+
+	const red = await run(['build', 'done', 'ISSUE-101', '--dir', fx.root])
+	expect(red.code).toBe(1)
+	expect(red.stderr).toContain('ISSUE-101 not marked done')
+
+	const replaced = await run(['build', 'done', 'ISSUE-101', '--verify', 'true', '--dir', fx.root])
+	expect(replaced.code).toBe(1)
+	expect(replaced.stderr).toContain('--verify is only for issues that name no acceptance file')
+	expect(existsSync(join(fx.root, '.fabrika/build/status.json'))).toBe(false)
 })

@@ -58,7 +58,9 @@ export async function cmdAdvance(argv: string[]): Promise<number> {
 			if (feedback === null) {
 				problems.push(
 					`gate "${phase.id}" has no submitted feedback to consume. `
-						+ `Run: fabrika builder gate open ${phase.id} --view ${phase.gateView ?? phase.id + '.jsx'} && fabrika builder gate wait`,
+						+ `Run: ${phase.gateViewCommand ? `${phase.gateViewCommand} && ` : ''}fabrika builder gate open ${phase.id} --view ${
+							phase.gateView ?? phase.id + '.jsx'
+						} && fabrika builder gate wait`,
 				)
 			}
 		}

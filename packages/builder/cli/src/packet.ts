@@ -84,6 +84,7 @@ export interface PacketJson {
 	produces: string[]
 	gate: boolean
 	gateView: string | null
+	gateViewCommand: string | null
 	skills: string[]
 	completed: PhaseId[]
 	satisfied: boolean
@@ -105,6 +106,7 @@ export function packetJson(state: PhaseState, opts: RenderOpts = {}): PacketJson
 		produces: state.produces,
 		gate: phase.gate,
 		gateView: phase.gateView ?? null,
+		gateViewCommand: phase.gateViewCommand ?? null,
 		skills: phase.skills ?? [],
 		completed: state.completed,
 		satisfied: state.satisfied,

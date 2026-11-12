@@ -52,6 +52,10 @@ export async function cmdBuild(argv: string[]): Promise<number> {
 				console.error(`[fabrika] build done <ISSUE-ID> — unknown or missing issue id.`)
 				return 1
 			}
+			if (values.verify && issue.verify.length > 0) {
+				console.error(`[fabrika] ${issue.id} is proved by ${issue.verify.join(', ')}; --verify is only for issues that name no acceptance file.`)
+				return 1
+			}
 			const verification: Verification | null = values.verify
 				? { kind: 'command', command: values.verify }
 				: issue.verify.length > 0

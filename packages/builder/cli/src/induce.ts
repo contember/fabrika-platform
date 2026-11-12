@@ -1,3 +1,4 @@
+import { basename } from 'path'
 import type { StackPointer } from './catalog'
 import type { Skeleton } from './skeletons'
 
@@ -144,9 +145,9 @@ export function renderIssue(issue: InducedIssue): string {
 	return `${fm}\n\n# ${issue.id} — ${issue.goal}\n\n${issue.body}\n`
 }
 
+// readSkeletons reads only the top level of the repository's tests/browser/.
 function relTest(file: string): string {
-	const i = file.indexOf('tests/browser/')
-	return i !== -1 ? file.slice(i) : file
+	return `tests/browser/${basename(file)}`
 }
 
 function uniq<T>(xs: T[]): T[] {
