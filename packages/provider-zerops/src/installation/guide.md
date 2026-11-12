@@ -102,8 +102,8 @@ and it can never be downgraded again.
 **5. Sign-in method** (`platform install --auth-methods`, step 1). Free either way. `password` (the default)
 needs nothing else: each person sets a password from an enrollment link. `oidc,password` adds single sign-on through
 the organization's OpenID Connect identity provider beside it, and `oidc` alone removes passwords. Single sign-on
-needs the provider's client (see Before you start), and admits only addresses someone invited. It can be turned
-on or off later by hand ("Turn on single sign-on" below).
+needs the provider's client (see Before you start). Who it admits is step 4 of "Turn on single sign-on" below,
+which also turns it on or off later by hand.
 
 ## Secrets: rules for an agent
 
