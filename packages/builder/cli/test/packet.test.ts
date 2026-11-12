@@ -141,3 +141,17 @@ test('phases name only skills the builder ships or installs alongside opice', ()
 		for (const skill of phase.skills ?? []) expect(known.has(skill), `${phase.id} names unknown skill ${skill}`).toBe(true)
 	}
 })
+
+test('no ungated packet tells the agent to advance: the phase completes from its files', () => {
+	fx = makeFixture()
+	expect(packetJson(derivePhase(fx.root)).reviewedAt).toBe('vision')
+	fx.write('.fabrika/intent/brief.md')
+	fx.write('.fabrika/intent/glossary.md')
+	fx.write('.fabrika/principles/principles.md')
+	fx.write('.fabrika/architecture/flows/login.flow.md')
+	fx.write('.fabrika/architecture/tech.md')
+	fx.write('tests/browser/login.test.ts')
+	const state = derivePhase(fx.root)
+	expect(state.current).toBe('issues')
+	expect(renderPacket(state)).not.toContain('builder advance')
+})

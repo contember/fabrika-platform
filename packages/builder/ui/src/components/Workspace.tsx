@@ -55,6 +55,8 @@ function PacketHeader({
 				<dd className="min-w-0 break-words font-mono text-code text-text-secondary">
 					{p.gate
 						? <>fabrika builder gate open {focused} --view view.jsx &amp;&amp; fabrika builder gate wait</>
+						: p.reviewedAt
+						? <span className="text-text-tertiary">— (reviewed at the {p.reviewedAt} gate)</span>
 						: <span className="text-text-tertiary">— (ungated compile step)</span>}
 				</dd>
 			</dl>

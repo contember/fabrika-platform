@@ -96,6 +96,8 @@ export interface PacketJson {
 	gate: boolean
 	gateView: string | null
 	gateViewCommand: string | null
+	/** An ungated phase whose output this later phase's gate reviews. */
+	reviewedAt: PhaseId | null
 	skills: string[]
 	completed: PhaseId[]
 	satisfied: boolean
@@ -119,6 +121,7 @@ export function packetJson(state: PhaseState, opts: RenderOpts = {}): PacketJson
 		gate: phase.gate,
 		gateView: phase.gateView ?? null,
 		gateViewCommand: phase.gateViewCommand ?? null,
+		reviewedAt: phase.reviewedAt ?? null,
 		skills: phase.skills ?? [],
 		completed: state.completed,
 		satisfied: state.satisfied,

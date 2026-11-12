@@ -89,7 +89,7 @@ const PHASE_TABLE: Record<PhaseId, Omit<Phase, 'id' | 'number'>> = {
 		reads: ['tests/browser/*.test.ts'],
 		produces: ['.fabrika/issues/ISSUE-*.md'],
 		goal:
-			'Run `fabrika builder induce` — it mechanically writes .fabrika/issues/ISSUE-NNN.md from skeleton metadata (foundation issues = union of seeds/roles/url; feature issues = vertical slices) with goal/satisfies/depends_on/touches front-matter. Review the generated issues, then `fabrika builder advance`.',
+			'Run `fabrika builder induce` — it mechanically writes .fabrika/issues/ISSUE-NNN.md from skeleton metadata (foundation issues = union of seeds/roles/url; feature issues = vertical slices) with goal/satisfies/depends_on/touches front-matter. Review the generated issues, then `fabrika builder next`.',
 		gate: false,
 	},
 	build: {

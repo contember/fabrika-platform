@@ -45,7 +45,7 @@ export function PhaseRail({
 				<div className="font-heading text-xl text-text-primary">fabrika</div>
 				<div className="text-tiny uppercase tracking-wide text-text-tertiary">guided app build</div>
 				<p className="mt-2 text-tiny leading-snug text-text-tertiary">
-					7 phases from brief to build. Each ends in a review gate — click a phase to see its canvas.
+					7 phases from brief to build, most ending in a review gate — click a phase to see its canvas.
 				</p>
 			</div>
 			<ol className="flex-1 overflow-y-auto py-2">

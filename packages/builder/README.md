@@ -56,6 +56,9 @@ fabrika builder gate wait
 fabrika builder advance
 ```
 
+A phase without a gate (intake, issues) completes as soon as its files exist: run `next` again instead of the gate and
+`advance` steps. The vision gate reviews the brief that intake wrote.
+
 All commands:
 
 ```text
