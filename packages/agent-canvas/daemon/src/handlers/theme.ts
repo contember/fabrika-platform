@@ -67,7 +67,7 @@ function blankComments(source: string): string | null {
 export function parseProjectTheme(source: string): ThemeResult {
 	const text = blankComments(source)
 	if (text === null) return { ok: false, error: 'a comment is not closed' }
-	// Errors name a line, never the file's text: the reason reaches the page and the log.
+	// Errors name a line and at most an accepted property name, never a value: the reason reaches the page and the log.
 	const lineAt = (offset: number) => text.slice(0, offset).split('\n').length
 	const rules: string[] = []
 	let position = 0

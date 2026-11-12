@@ -160,13 +160,12 @@ export async function deleteLocalAsset(fieldId: string, assetId: string): Promis
 }
 
 const PROJECT_THEME_ELEMENT_ID = 'agent-canvas-project-theme'
+let projectThemeRequest = 0
 
 /**
  * Applies the project's `.agent-canvas/theme.css`, as the daemon rebuilt it, after the base theme. A theme the daemon
  * refuses leaves the base theme and a console warning that says why.
  */
-let projectThemeRequest = 0
-
 export async function applyProjectTheme(): Promise<void> {
 	if (MODE.isShared) return
 	// Two pushes in a row can answer out of order; only the latest request applies.
