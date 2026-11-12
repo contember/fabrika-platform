@@ -7,7 +7,7 @@ component: copy it and change the slides.
 
 - One idea per slide: a title, at most about five short lines or one diagram, table or image.
 - Every slide stays on the page, one under another, so the user can annotate any of them and the annotation finds its
-  text again. The arrow keys and the buttons move between slides.
+  text again. The arrow keys, Page Up/Down and the buttons move from the slide on screen. Put one deck on a page.
 - The user's feedback names the slide through the annotated text; there is no per-slide comment box.
 - Colours come from CSS variables only (see `theming`).
 
@@ -15,7 +15,6 @@ component: copy it and change the slides.
 function Slide({ index, total, title, children }) {
 	return (
 		<section
-			id={`slide-${index}`}
 			data-slide={index}
 			style={{
 				aspectRatio: '16 / 9',
@@ -74,37 +73,47 @@ const navButton = {
 }
 
 function Deck({ slides }) {
-	const [current, setCurrent] = React.useState(0)
-	const go = (next) => {
-		const index = Math.max(0, Math.min(slides.length - 1, next))
-		setCurrent(index)
-		document.getElementById(`slide-${index}`)?.scrollIntoView({
-			behavior: 'smooth',
-			block: 'start',
-		})
+	const deck = React.useRef(null)
+	const slideElements =
+		() => [...(deck.current?.querySelectorAll('[data-slide]') ?? [])]
+	// The slide on screen, not the last one a key chose: the user may have scrolled since.
+	const currentSlide = () =>
+		Math.max(
+			0,
+			slideElements().filter((slide) =>
+				slide.getBoundingClientRect().top <= window.innerHeight / 3
+			).length - 1,
+		)
+	const go = (step) => {
+		const all = slideElements()
+		all[Math.max(0, Math.min(all.length - 1, currentSlide() + step))]
+			?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 	}
 	React.useEffect(() => {
 		const onKey = (event) => {
-			// Typing in a note or a field must not turn the slide.
 			if (
-				event.target instanceof HTMLElement
-				&& event.target.closest('input, textarea, [contenteditable="true"]')
+				event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey
+				|| event.shiftKey
 			) return
-			if (event.key === 'ArrowRight' || event.key === 'PageDown') go(current + 1)
-			if (event.key === 'ArrowLeft' || event.key === 'PageUp') go(current - 1)
+			// Typing in a note or a field must not turn the slide.
+			const target = event.target
+			if (
+				target instanceof HTMLElement
+				&& (target.isContentEditable || target.closest('input, textarea, select'))
+			) return
+			const step =
+				{ ArrowRight: 1, PageDown: 1, ArrowLeft: -1, PageUp: -1 }[event.key]
+			if (step === undefined) return
+			event.preventDefault()
+			go(step)
 		}
 		window.addEventListener('keydown', onKey)
 		return () => window.removeEventListener('keydown', onKey)
-	})
+	}, [])
 	return (
-		<div>
+		<div ref={deck}>
 			{slides.map((slide, index) => (
-				<Slide
-					key={slide.title}
-					index={index}
-					total={slides.length}
-					title={slide.title}
-				>
+				<Slide key={index} index={index} total={slides.length} title={slide.title}>
 					{slide.body}
 				</Slide>
 			))}
@@ -117,22 +126,10 @@ function Deck({ slides }) {
 					gap: 8,
 				}}
 			>
-				<button
-					type="button"
-					style={navButton}
-					onClick={() => go(current - 1)}
-					disabled={current === 0}
-				>
+				<button type="button" style={navButton} onClick={() => go(-1)}>
 					Previous
 				</button>
-				<button
-					type="button"
-					style={navButton}
-					onClick={() => go(current + 1)}
-					disabled={current === slides.length - 1}
-				>
-					Next
-				</button>
+				<button type="button" style={navButton} onClick={() => go(1)}>Next</button>
 			</div>
 		</div>
 	)

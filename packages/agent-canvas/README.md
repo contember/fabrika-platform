@@ -132,10 +132,11 @@ stored on this machine. `watch`, `reply`, `fetch` and `list` work as above.
 
 Agent Canvas supports light and dark themes, automatically matching your system preference.
 
-A project can set its own colours and fonts in `.agent-canvas/theme.css` at its root. The daemon accepts only
-`--color-*` and `--font-*` variables on `:root`, `[data-theme="light"]` and `[data-theme="dark"]`, and serves its own
-rebuild of them, so a theme cannot load a URL or style the page otherwise. A file that breaks a rule is not applied;
-the daemon log and the browser console say why. The `template-dashboard` and `template-slides` instructions topics
+A project can set its own colours and fonts in `.agent-canvas/theme.css` at its root; they apply to the canvases and
+the UI around them. The daemon accepts only `--color-*` and `--font-*` variables on `:root`, `[data-theme="light"]`
+and `[data-theme="dark"]`, with balanced plain values, and serves its own rebuild of them, so a theme cannot load a
+URL or style the page otherwise. The file must stay inside the project (no symlink out) and under 64 KB. A file that
+breaks a rule is not applied; the daemon log and the browser console give the line. The `template-dashboard` and `template-slides` instructions topics
 are starting points for a status dashboard and a deck.
 
 **Dark mode**
