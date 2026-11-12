@@ -94,3 +94,9 @@ test('stops an unterminated attribute at the next tag', () => {
 	const jsx = `<Note>{'<ImageView'}'s alt</Note>\n<Item label="x" src="/not/named.png" />\n<ImageView src="/abs/c.png" />`
 	expect(canvasFileReferences(jsx)).toEqual(['/abs/c.png'])
 })
+
+test("reads a host component's file prop only when the host names it", () => {
+	const jsx = `<Download path="/abs/report.pdf" label="Report" />`
+	expect(canvasFileReferences(jsx)).toEqual([])
+	expect(canvasFileReferences(jsx, [['Download', 'path']])).toEqual(['/abs/report.pdf'])
+})

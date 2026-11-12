@@ -2,8 +2,9 @@ import { canvasFileReferences, type RevisionInfo, type SessionData, type Session
 import { jsonResponse, type Route } from '@fabrika/daemon-kit'
 import { realpathSync } from 'fs'
 import { readdir } from 'fs/promises'
-import { isAbsolute, relative, resolve, sep } from 'path'
+import { basename, isAbsolute, relative, resolve, sep } from 'path'
 import { LANG_MAP } from '../../langMap'
+import { HOST_FILE_REFERENCE_PROPS } from '../components'
 
 const IMAGE_MIME: Record<string, string> = {
 	png: 'image/png',
@@ -31,12 +32,21 @@ function realOrSelf(path: string): string {
 	}
 }
 
+/** `attachment` with an ASCII fallback name and the exact one in RFC 5987 form. */
+export function attachmentDisposition(name: string): string {
+	const fallback = name.replace(/[^A-Za-z0-9._-]/g, '_') || 'download'
+	const exact = encodeURIComponent(name).replace(/['()*]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`)
+	return `attachment; filename="${fallback}"; filename*=UTF-8''${exact}`
+}
+
 function isInside(path: string, root: string): boolean {
 	const relativePath = relative(root, path)
 	return relativePath === '' || (relativePath !== '..' && !relativePath.startsWith(`..${sep}`) && !isAbsolute(relativePath))
 }
 
-type SessionPathResolver = (sessionId: string, relPath: string, kind: 'file' | 'directory') => { fullPath: string } | Response
+/** `named-file`: a file a canvas of the session names, wherever it is; inside the project root too. */
+type PathKind = 'file' | 'directory' | 'named-file'
+type SessionPathResolver = (sessionId: string, relPath: string, kind: PathKind) => { fullPath: string } | Response
 
 /**
  * The files the session's canvases name, in every revision, as written and with symlinks resolved. A push or a new
@@ -52,7 +62,7 @@ function createNamedFiles(sessionManager: SessionManager): (session: SessionData
 			for (const { filename } of revision.canvasFiles) {
 				const jsx = sessionManager.readRevisionJsx(session.id, revision.revision, filename)
 				if (jsx === null) continue
-				for (const reference of canvasFileReferences(jsx)) {
+				for (const reference of canvasFileReferences(jsx, HOST_FILE_REFERENCE_PROPS)) {
 					const path = resolve(session.projectRoot, reference)
 					paths.add(path)
 					paths.add(realOrSelf(path))
@@ -90,9 +100,10 @@ function createSessionPathResolver(sessionManager: SessionManager, options: File
 		const lexicalRoot = resolve(session.projectRoot)
 		// realOrSelf leaves a missing path unresolved, so one under a symlinked root is judged by where it was asked for.
 		const insideRoot = isInside(realPath, realOrSelf(lexicalRoot)) || (realPath === fullPath && isInside(fullPath, lexicalRoot))
-		if (!insideRoot) {
-			const named = kind === 'file' && (namedFiles(session).has(fullPath) || namedFiles(session).has(realPath))
-			if (!named) return jsonResponse({ error: 'Path outside the project root is not named by a canvas in this session' }, 403)
+		const named = () => namedFiles(session).has(fullPath) || namedFiles(session).has(realPath)
+		if (kind === 'named-file' && !named()) return jsonResponse({ error: 'Path is not named by a canvas in this session' }, 403)
+		if (!insideRoot && (kind === 'directory' || !named())) {
+			return jsonResponse({ error: 'Path outside the project root is not named by a canvas in this session' }, 403)
 		}
 
 		return { fullPath: realPath }
@@ -155,6 +166,27 @@ export function createFileHandlers(sessionManager: SessionManager, options: File
 		}
 	}
 
+	/** A file the agent produced and named in `<Download path>` (or any file reference), as an attachment. */
+	async function handleDownload(_req: Request, url: URL): Promise<Response> {
+		const sessionId = url.searchParams.get('session')
+		const relPath = url.searchParams.get('path')
+		if (!sessionId || !relPath) return jsonResponse({ error: 'Missing session or path' }, 400)
+
+		const resolved = resolveSessionPath(sessionId, relPath, 'named-file')
+		if (resolved instanceof Response) return resolved
+
+		const file = Bun.file(resolved.fullPath)
+		if (!(await file.exists())) return jsonResponse({ error: 'File not found' }, 404)
+		return new Response(file, {
+			headers: {
+				'Content-Type': 'application/octet-stream',
+				'Content-Disposition': attachmentDisposition(basename(resolved.fullPath)),
+				'Cache-Control': 'no-store',
+				'X-Content-Type-Options': 'nosniff',
+			},
+		})
+	}
+
 	async function handleTreeServe(_req: Request, url: URL): Promise<Response> {
 		const sessionId = url.searchParams.get('session')
 		const relPath = url.searchParams.get('path') || ''
@@ -187,5 +219,6 @@ export function createFileHandlers(sessionManager: SessionManager, options: File
 		{ method: 'GET', pattern: new URLPattern({ pathname: '/api/file' }), handler: handleFileServe },
 		{ method: 'GET', pattern: new URLPattern({ pathname: '/api/image' }), handler: handleImageServe },
 		{ method: 'GET', pattern: new URLPattern({ pathname: '/api/tree' }), handler: handleTreeServe },
+		{ method: 'GET', pattern: new URLPattern({ pathname: '/api/download' }), handler: handleDownload },
 	]
 }

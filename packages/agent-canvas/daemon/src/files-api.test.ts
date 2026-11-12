@@ -4,7 +4,7 @@ import { afterEach, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { createFileHandlers } from './handlers/files'
+import { attachmentDisposition, createFileHandlers } from './handlers/files'
 
 const directories: string[] = []
 
@@ -150,4 +150,36 @@ test('answers 404, not 403, for a missing file under a project root reached thro
 	manager.upsert('files', new Map([['plan.jsx', '<Section />']]), linkedRoot)
 	expect((await get('file', 'missing.ts')).status).toBe(404)
 	expect((await get('file', 'local.ts')).status).toBe(200)
+})
+
+test('downloads only a file a canvas names, inside the project root too, as an attachment', async () => {
+	const { get, projectRoot, outsideRoot, dataDir } = setup((outside) =>
+		`<Download path="${outside}/external.ts" label="Patch" />\n<Download path="local.ts" />`
+	)
+
+	const outside = await get('download', join(outsideRoot, 'external.ts'))
+	expect(outside.status).toBe(200)
+	expect(outside.headers.get('Content-Disposition')).toBe(`attachment; filename="external.ts"; filename*=UTF-8''external.ts`)
+	expect(outside.headers.get('Content-Type')).toBe('application/octet-stream')
+	expect(outside.headers.get('X-Content-Type-Options')).toBe('nosniff')
+	expect(await outside.text()).toBe('export const external = true;')
+
+	expect((await get('download', 'local.ts')).status).toBe(200)
+	// Readable through /api/file, but no canvas offers it for download.
+	writeFileSync(join(projectRoot, 'other.ts'), 'x')
+	expect((await get('download', 'other.ts')).status).toBe(403)
+	expect((await get('download', join(dataDir, 'state.json'))).status).toBe(403)
+})
+
+test('a Download path also admits the file to the read routes, a computed one does not', async () => {
+	const { get, outsideRoot } = setup((outside) => `<Download path={"${outside}/external.ts"} />\n<Download path={dir + '/image.svg'} />`)
+	expect((await get('file', join(outsideRoot, 'external.ts'))).status).toBe(200)
+	expect((await get('download', join(outsideRoot, 'image.svg'))).status).toBe(403)
+})
+
+test('an attachment name cannot break out of its header', () => {
+	expect(attachmentDisposition('report "final"; x=1.pdf')).toBe(
+		`attachment; filename="report__final___x_1.pdf"; filename*=UTF-8''report%20%22final%22%3B%20x%3D1.pdf`,
+	)
+	expect(attachmentDisposition("it's (draft).txt")).toBe(`attachment; filename="it_s__draft_.txt"; filename*=UTF-8''it%27s%20%28draft%29.txt`)
 })
