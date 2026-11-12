@@ -365,6 +365,10 @@ describe('gate interactive loop', () => {
 		expect(again).toEqual({ found: true, revision: 2, verdict: 'changes' })
 		const missing = await (await fetch(`${base}/api/session/${sessionId}/gate/tech/consume`, { method: 'POST' })).json()
 		expect(missing).toEqual({ found: false })
+
+		rmSync(repo, { recursive: true, force: true })
+	})
+
 	test('re-opening a gate over pending feedback does not complete the phase of a project that keeps approvals', async () => {
 		const sessionId = 'gate-loop-reopen'
 		const repo = scratchDir('fabrika-reopen-repo-')

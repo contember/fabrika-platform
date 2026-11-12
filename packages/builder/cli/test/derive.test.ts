@@ -139,8 +139,6 @@ function writeThroughSkeletons(f: Fixture): void {
 	f.write('.fabrika/principles/principles.md')
 	f.write('.fabrika/architecture/flows/login.flow.md')
 	f.write('.fabrika/architecture/tech.md')
-	f.write('.fabrika/architecture/design.md')
-	f.write('.fabrika/pages/home.jsx')
 	f.write('tests/browser/login.test.ts')
 }
 
@@ -161,7 +159,7 @@ test('with approvals kept, a reviewed gate stays current until advance approves 
 test('an approved phase whose produced or read files changed is current again, earliest first', () => {
 	fx = makeFixture(true, { approvals: true })
 	writeThroughSkeletons(fx)
-	approve(fx.root, ['intake', 'vision', 'flows', 'tech', 'design', 'skeletons'])
+	approve(fx.root, ['intake', 'vision', 'flows', 'tech', 'skeletons'])
 	expect(derivePhase(fx.root, reviewed).current).toBe('issues')
 
 	// A flow edited after the skeletons were approved re-opens the flows gate, not only the phases that read it.
@@ -177,7 +175,7 @@ test('an approved phase whose produced or read files changed is current again, e
 	expect(state.stale).toEqual(['.fabrika/architecture/flows/login.flow.md'])
 
 	// A new input counts as a change too.
-	approve(fx.root, ['tech', 'design', 'skeletons'])
+	approve(fx.root, ['tech', 'skeletons'])
 	fx.write('.fabrika/architecture/flows/signup.flow.md')
 	expect(derivePhase(fx.root, reviewed).stale).toEqual(['.fabrika/architecture/flows/signup.flow.md'])
 })
@@ -186,7 +184,7 @@ test('the build filling in a skeleton does not re-open the skeletons gate', () =
 	fx = makeFixture(true, { approvals: true })
 	writeThroughSkeletons(fx)
 	fx.write('.fabrika/issues/ISSUE-001.md')
-	approve(fx.root, ['intake', 'vision', 'flows', 'tech', 'design', 'skeletons'])
+	approve(fx.root, ['intake', 'vision', 'flows', 'tech', 'skeletons'])
 	fx.write('tests/browser/login.test.ts', 'step bodies filled in')
 	expect(derivePhase(fx.root, reviewed).current).toBe('build')
 })
