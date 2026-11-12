@@ -108,7 +108,7 @@ ${
 		pageBody(
 			`<p class="eyebrow">Source connection</p>
 <h1>Opening the GitHub setup</h1>
-<p id="message">Your administrator sent you this link to connect a GitHub organization. If nothing happens, open the link again exactly as you received it.</p>
+<p id="message">Your administrator sent you this link to connect a GitHub account. If nothing happens, open the link again exactly as you received it.</p>
 <form id="open" method="post">
 <input type="hidden" name="token">
 <button type="submit" hidden>Continue</button>
@@ -155,7 +155,7 @@ const OUTCOMES: Readonly<Record<HandoffOutcome, { readonly title: string; readon
 	'unverified': {
 		title: 'The installation is not verified yet',
 		body:
-			'Fabrika could not confirm the installation on GitHub. Check that the App is installed on the organization, then ask your administrator to verify it from the console.',
+			'Fabrika could not confirm the installation on GitHub. Check that the App is installed on the account, then ask your administrator to verify it from the console.',
 	},
 	'setup-incomplete': {
 		title: 'The App needs your administrator',

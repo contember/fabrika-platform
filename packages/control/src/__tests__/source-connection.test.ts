@@ -1333,6 +1333,41 @@ describe('a handoff link for an organization owner', () => {
 		expect(await env.REPOSITORIES.githubConnections.getAttempt(connectionId)).toMatchObject({ status: 'active', phase: 'installation_required' })
 	})
 
+	test("hands a personal account's setup to its owner, whose page waits for the click", async () => {
+		const env = environment()
+		const source = new FakeSourceConnection()
+		source.githubOwner = 'octocat'
+		source.githubOwnerType = 'User'
+		source.installation = { status: 'installed', installationId: 789, accountLogin: 'octocat', repositorySelection: 'all' }
+		const { connectionId } = await startSourceConnection(
+			deps(env, source, mutationRequest('/api/rpc')),
+			{ organization: 'octocat', ownerType: 'User', appName: 'fabrika-source', visibility: 'private', repositories: [] },
+		)
+		const handoff = await mint(env, source, connectionId)
+		const body = await (await open(env, source, handoff.url, connectionId)).text()
+		expect(body).toContain('action="https://github.com/settings/apps/new?state=')
+		expect(body).not.toContain('<script')
+		expect(body).toContain(`${ORIGIN}/api/source/github/handoff-callback`)
+		expect(body).toContain(`${ORIGIN}/api/source/github/handoff-setup/${connectionId}`)
+		expect((await ownerCallback(env, source)).status).toBe(303)
+		expect(await (await ownerSetup(env, source, connectionId, '?installation_id=789&setup_action=install')).text()).toContain('GitHub is connected')
+		expect(await env.REPOSITORIES.githubConnections.getConnectionById(connectionId)).toMatchObject({ appOwnerType: 'User' })
+	})
+
+	test("refuses the owner's App on another account with the owner's page", async () => {
+		const env = environment()
+		const source = new FakeSourceConnection()
+		source.githubOwner = 'someone-else'
+		source.githubOwnerType = 'User'
+		const { connectionId } = await startSourceConnection(
+			deps(env, source, mutationRequest('/api/rpc')),
+			{ organization: 'octocat', ownerType: 'User', appName: 'fabrika-source', visibility: 'private', repositories: [] },
+		)
+		await mint(env, source, connectionId)
+		await expect(ownerCallback(env, source)).rejects.toMatchObject({ httpStatus: 422 })
+		expect(await env.REPOSITORIES.githubConnections.getAttempt(connectionId)).toMatchObject({ status: 'failed', lastErrorCode: 'app_owner_mismatch' })
+	})
+
 	test('only the person who started the setup mints a link, and only while it waits for GitHub', async () => {
 		const env = environment()
 		const source = new FakeSourceConnection()
