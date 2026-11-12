@@ -8,6 +8,28 @@ import { SourceFailure } from '../source/failure'
  */
 const sourceFailureReason = (error: unknown): string | undefined => error instanceof SourceFailure ? error.code : undefined
 
+/**
+ * The answer when GitHub created the App on another owner than the setup asked for: the attempt has failed, and only the
+ * operator can fix it, so the answer says how. `undefined` for any other failure. `owner` is the validated login the
+ * setup asked for, never upstream text.
+ */
+export const appOwnerFailed = (owner: string, error: unknown): SourceConnectionWorkflowError | undefined => {
+	const reason = sourceFailureReason(error)
+	if (reason === 'app_owner_not_organization') {
+		return new SourceConnectionWorkflowError(
+			422,
+			`GitHub created the App on a personal account, not in the organization ${owner}. Delete that App in your GitHub developer settings, check that you may create Apps in ${owner}, and connect again. If ${owner} is a personal account, connect it as a personal account.`,
+		)
+	}
+	if (reason === 'app_owner_mismatch') {
+		return new SourceConnectionWorkflowError(
+			422,
+			`GitHub created the App on another account, not on the personal account ${owner}. Delete that App in your GitHub developer settings, sign in to GitHub as ${owner}, and connect again.`,
+		)
+	}
+	return undefined
+}
+
 /** Same, for a resumed setup: the phase lamp says WHERE it stopped, this says why. */
 export const repairFailed = (error: unknown): SourceConnectionWorkflowError => {
 	const reason = sourceFailureReason(error)

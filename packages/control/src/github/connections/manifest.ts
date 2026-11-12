@@ -2,7 +2,6 @@ import type { StartGitHubSourceConnectionRequest, StartGitHubSourceConnectionRes
 import { buildGitHubAppManifest, exchangeGitHubAppManifestCode } from '@fabrika/github-app'
 import { uuidv7 } from '@fabrika/platform'
 import { vault } from '../../services'
-import { SourceFailure } from '../source/failure'
 import { cleanRedirect, consoleRedirect } from './browser'
 import { advanceWithDeadline, settleFailedStep } from './configuration'
 import {
@@ -17,7 +16,7 @@ import {
 	throwIfAborted,
 } from './context'
 import { encodeGitHubAppCredential } from './credentials'
-import { SourceConnectionWorkflowError } from './errors'
+import { appOwnerFailed, SourceConnectionWorkflowError } from './errors'
 import { manifestHandoffCsp, manifestHandoffHtml } from './handoff-page'
 import { type GitHubSetupAttempt } from './model'
 import { githubAppCredentialSecretLabel, githubManifestStateSecretLabel } from './secrets'
@@ -285,20 +284,7 @@ async function settleCallbackFailure(
  * operator's to fix, so the answer says how; anything else names no cause.
  */
 function callbackFailed(claimed: GitHubSetupAttempt, error: unknown): SourceConnectionWorkflowError {
-	if (!(error instanceof SourceFailure)) return new SourceConnectionWorkflowError(503)
-	if (error.code === 'app_owner_not_organization') {
-		return new SourceConnectionWorkflowError(
-			422,
-			`GitHub created the App on a personal account, not in the organization ${claimed.desiredOwner}. Delete that App in your GitHub developer settings, check that you may create Apps in ${claimed.desiredOwner}, and connect again. If ${claimed.desiredOwner} is a personal account, connect it as a personal account.`,
-		)
-	}
-	if (error.code === 'app_owner_mismatch') {
-		return new SourceConnectionWorkflowError(
-			422,
-			`GitHub created the App on another account, not on the personal account ${claimed.desiredOwner}. Delete that App in your GitHub developer settings, sign in to GitHub as ${claimed.desiredOwner}, and connect again.`,
-		)
-	}
-	return new SourceConnectionWorkflowError(503)
+	return appOwnerFailed(claimed.desiredOwner, error) ?? new SourceConnectionWorkflowError(503)
 }
 
 function delay(milliseconds: number): Promise<void> {

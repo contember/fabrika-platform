@@ -3,7 +3,7 @@ import { vault } from '../../services'
 import { consoleRedirect } from './browser'
 import { advanceWithDeadline, CONFIGURATION_DEADLINE_MS, matchesConnectionIdentity, settleFailedStep, webhookUrl } from './configuration'
 import { audit, linkedDeadline, requireHuman, type SourceConnectionWorkflowDeps, throwIfAborted } from './context'
-import { reconcileUnavailable, repairFailed, SourceConnectionWorkflowError, sourceUnavailable } from './errors'
+import { appOwnerFailed, reconcileUnavailable, repairFailed, SourceConnectionWorkflowError, sourceUnavailable } from './errors'
 import { type GitHubSetupAttempt, type GitHubSetupPhase, type GitHubSourceConnection } from './model'
 import type { SourceGitHubAppIdentity, SourceInstallationScope, SourceInstallationVerification } from './port'
 import { githubWebhookSecretLabel } from './secrets'
@@ -129,7 +129,8 @@ export async function repairSourceConnection(deps: SourceConnectionWorkflowDeps,
 	await audit(deps.auth, 'source.connection.repair', attempt.id)
 	// A resume that changed nothing used to answer 200 with the same red lamp, which reads as success
 	// to every caller and leaves the console with no reason to show.
-	if (failure !== undefined) throw repairFailed(failure)
+	// An App on another owner failed the attempt for good: say how to fix it, as the callback does.
+	if (failure !== undefined) throw appOwnerFailed(attempt.desiredOwner, failure) ?? repairFailed(failure)
 	const current = await deps.env.REPOSITORIES.githubConnections.getAttempt(attempt.id)
 	if (current === null) throw new SourceConnectionWorkflowError(409)
 	return workflowDto(deps.source.provider, current)

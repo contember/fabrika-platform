@@ -592,7 +592,7 @@ describe('GitHub source connection workflow', () => {
 		source.githubOwner = 'someone'
 		source.githubOwnerType = 'User'
 		await expect(repairSourceConnection(deps(env, source, mutationRequest('/api/rpc')), started.connectionId))
-			.rejects.toMatchObject({ httpStatus: 502, message: expect.stringContaining('app_owner_not_organization') })
+			.rejects.toMatchObject({ httpStatus: 422, message: expect.stringContaining('personal account, not in the organization acme') })
 		expect(await env.REPOSITORIES.githubConnections.getAttempt(started.connectionId))
 			.toMatchObject({ status: 'failed', lastErrorCode: 'app_owner_not_organization' })
 		expect(await queryRowsFromEnv(env, `SELECT label FROM vault WHERE label LIKE '%:app-credential'`)).toEqual([])
