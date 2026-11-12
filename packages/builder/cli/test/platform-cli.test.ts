@@ -135,6 +135,7 @@ test('malformed config and incompatible init refuse before writing; repeat init 
 	f.fx.write('.fabrika/intent/brief.md', 'keep this')
 	expect((await f.run(['init', '--url=https://control.example', '--no-daemon'])).code).toBe(1)
 	expect((await f.run(['init', '--profile=cf-lightweight', '--url=https://control.example'])).code).toBe(1)
+	expect((await f.run(['init', '--profile=cf-app', '--url=https://control.example'])).code).toBe(1)
 	expect((await f.run(['init', '--url=https://control.example', '--no-open'])).code).toBe(0)
 	expect(f.requests.map(r => r.path.split('/').at(-1))).toEqual(['register'])
 	expect(JSON.parse(readFileSync(join(f.fx.root, '.fabrika/config.json'), 'utf8')).connection).toEqual(connection)

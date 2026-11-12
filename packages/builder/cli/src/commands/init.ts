@@ -59,7 +59,11 @@ export async function cmdInit(argv: string[]): Promise<number> {
 		throw new BuilderCliError('Disconnect explicitly before changing installations.')
 	}
 	const result = scaffold(dir, { profile, sessionId: values.session })
-	if (resolveStackPointer(profile)?.support === 'unsupported') console.error(`[fabrika] warning: ${unsupportedProfileNote(profile)}`)
+	const stack = resolveStackPointer(profile)
+	if (stack?.support === 'unsupported') console.error(`[fabrika] warning: ${unsupportedProfileNote(profile)}`)
+	if (stack && !stack.stackFileExists) {
+		console.error(`[fabrika] warning: no "${profile}" preset in ${stack.root}/stacks/; the tech phase will ask for one.`)
+	}
 	const support = injectAgentSupport(result.repoRoot, { hosts })
 
 	if (result.alreadyInitialized) {

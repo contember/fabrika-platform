@@ -50,6 +50,22 @@ test('init warns when it selects an unsupported preset', async () => {
 	const supported = await run(['init', fx.root, '--profile', 'cf-app', '--no-daemon', '--no-open'])
 	expect(supported.code).toBe(0)
 	expect(supported.stderr).not.toContain('warning:')
+	const again = await run(['init', fx.root, '--no-daemon', '--no-open'])
+	expect(JSON.parse(again.stdout.trim()).profile).toBe('cf-app')
+	fx.cleanup()
+
+	fx = makeFixture(false)
+	const unknown = await run(['init', fx.root, '--profile', 'no-such-preset', '--no-daemon', '--no-open'])
+	expect(unknown.code).toBe(0)
+	expect(unknown.stderr).toContain('warning: no "no-such-preset" preset')
+})
+
+test('the build brief warns on an unsupported preset', async () => {
+	fx = makeFixture()
+	fx.write('.fabrika/issues/ISSUE-001.md', '---\ngoal: scaffold\nsatisfies: []\ndepends_on: []\ntouches: []\n---\nbody\n')
+	const brief = await run(['build', '--dir', fx.root])
+	expect(brief.code).toBe(0)
+	expect(brief.stdout).toContain('warning: the "cf-lightweight" preset is unsupported')
 })
 
 test('a project initialized in Codex can resume in Claude without losing phase state', async () => {

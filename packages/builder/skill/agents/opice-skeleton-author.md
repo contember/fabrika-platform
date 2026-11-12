@@ -27,7 +27,7 @@ are invoked from inside a `fabrika builder next` task packet for the _skeletons_
 - The inputs the packet listed under `Read:` —
   `.fabrika/architecture/flows/*.flow.md` and `.fabrika/architecture/spec/*.md`.
 - The active stack preset (default `zerops-app`), which fixes how `seeds`/`roles`
-  map (its seed-strategy decision; self-provisioning for signup flows).
+  map (the seed strategy its decisions name; self-provisioning for signup flows).
 
 ## What to do
 

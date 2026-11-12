@@ -7,7 +7,7 @@ provides: [authentication, authorization, proxy-enforcement]
 requires: [cloudflare]
 recommends: []
 conflicts: [fabrika-iam, cloudflare-access, auth-password-kv, zerops-fabrika-auth]
-npm: ["@fabrika/app@0.9.0-dev.13", "@fabrika/db@0.9.0-dev.13", "@fabrika/provider-cloudflare@0.9.0-dev.13", "zod@^3.25.76"]
+npm: ["@fabrika/app@0.9.0-dev.13", "@fabrika/db@0.9.0-dev.13", "@fabrika/ui@0.9.0-dev.13", "@fabrika/provider-cloudflare@0.9.0-dev.13", "@fabrika/check@0.9.0-dev.13", "@fabrika/cli@0.9.0-dev.13", "zod@^3.25.76"]
 status: wip
 sources:
   - where: "packages/app/skill/SKILL.md in fabrika-platform (the `fabrika-app` skill)"
@@ -26,7 +26,8 @@ access form, the SPA (`c.spa`) and `c.health`. There are no other routes,
 middleware or custom server.
 
 `fabrika.config.ts` is `defineApp({ id, pipeline })` from
-`@fabrika/provider-cloudflare` and nothing else. The deployer reads the contract
+`@fabrika/provider-cloudflare`, with at most the `worker` settings the app skill
+allows (`app-setup.md`); it declares no resources, schema or platform bindings. The deployer reads the contract
 from the checkout with the static reader Control uses, builds the proxy Worker
 from `contractProxyTable(artifact)`, binds the application Worker to it, and
 writes the framework variables, the proxy secret, the object binding and the

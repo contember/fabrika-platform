@@ -35,8 +35,7 @@ SPA backed by a Cloudflare Worker. It runs as a Vite SPA plus a lopata Worker
 locally, ships as one Worker with static assets in production, logs people in
 through native Fabrika IAM, and delegates the whole production lifecycle to Fabrika Control.
 
-Use `cf-lightweight` when an app only needs SPA + D1 and does not belong to the
-Fabrika Control/Fabrika IAM ecosystem. This preset deliberately includes the operational
+For a new application on Cloudflare, use the supported `cf-app` preset instead. This preset deliberately includes the operational
 primitives available to the stack: R2, Queue, Cron and Workers AI. Drop any of those at the
 tech gate when the product has no corresponding workload.
 

@@ -115,7 +115,7 @@ See `../stacks/README.md`.
 | error tracking (`error-tracking`)  | `sentry`                                                                                   |
 | testing                            | `opice`                                                                                    |
 
-The platform-managed Zerops path adds [`zerops-platform`](technologies/zerops-platform.md) and [`zerops-fabrika-auth`](technologies/zerops-fabrika-auth.md).
+The platform-managed Zerops path adds [`zerops-platform`](technologies/zerops-platform.md) and [`zerops-fabrika-auth`](technologies/zerops-fabrika-auth.md). The Cloudflare contract path adds [`cf-fabrika-contract`](technologies/cf-fabrika-contract.md).
 
 ### Patterns (`patterns/`)
 
@@ -130,7 +130,7 @@ Applied _over_ the technologies they `require` (no package; `kind: pattern`).
 | CI / CD                 | `app-deploy` (direct), `fabrika-app-deploy` (control plane), `lib-publish`                  |
 | observability           | `structured-logging`, `observability`                                                       |
 
-Zerops composition uses [`zerops-local-app`](patterns/zerops-local-app.md), [`zerops-control-deploy`](patterns/zerops-control-deploy.md), and [`zerops-postgres-seeds`](patterns/zerops-postgres-seeds.md).
+Zerops composition uses [`zerops-local-app`](patterns/zerops-local-app.md), [`zerops-control-deploy`](patterns/zerops-control-deploy.md), and [`zerops-postgres-seeds`](patterns/zerops-postgres-seeds.md). The Cloudflare contract composition uses [`cf-contract-app`](patterns/cf-contract-app.md).
 
 ### Tooling (`tooling/`)
 

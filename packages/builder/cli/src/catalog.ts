@@ -62,7 +62,7 @@ export function unsupportedProfileNote(profile: string): string {
 // A preset that does not say it is supported is treated as unsupported.
 function stackSupport(source: string): StackSupport {
 	const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---/.exec(source)?.[1] ?? ''
-	return /^support:\s*supported\s*$/m.test(frontmatter) ? 'supported' : 'unsupported'
+	return /^support:\s*(["']?)supported\1\s*$/m.test(frontmatter) ? 'supported' : 'unsupported'
 }
 
 function isDir(p: string): boolean {

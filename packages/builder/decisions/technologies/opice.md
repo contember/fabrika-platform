@@ -31,7 +31,7 @@ from**.
 
 ## Impacts & gotchas
 
-- **Skeleton metadata is a contract**: `url` → a route must exist; `seeds: ['x']` → `seeds/x.sql` must exist; `roles` → an auth foundation. fabrika `induce` unions these.
+- **Skeleton metadata is a contract**: `url` → a route must exist; `seeds: ['x']` → the named data the preset's seed strategy provides (`seeds/x.sql` with `named-seeds` or `zerops-postgres-seeds`; created by `dev/seed.ts` with `cf-contract-app`); `roles` → an auth foundation. fabrika `induce` unions these.
 - Selector priority: **byRole → byLabel → getByText → el(testid)**. The app must be accessibility-first (every interactive element named, every section a heading) or opice-author has no stable selector.
 - Runs against the **running** dev server (`APP_URL`); `bunx opice test <file>` for one, `bun test tests/browser` for all. WIP — read installed types.
 
