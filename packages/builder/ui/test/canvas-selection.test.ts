@@ -61,8 +61,9 @@ describe('revisionForPhase', () => {
 	const revisions: RevisionMeta[] = [
 		revision({ revision: 1, label: 'tech' }),
 		revision({ revision: 2, label: 'build' }),
-		revision({ revision: 3, label: 'design' }),
+		revision({ revision: 3, label: 'design-checkpoint' }),
 		revision({ revision: 4, label: null }),
+		revision({ revision: 5, label: 'design' }),
 	]
 
 	test('a phase shows its own latest revision', () => {
@@ -73,5 +74,9 @@ describe('revisionForPhase', () => {
 	test('the build shows a gate opened inside it, such as the design checkpoint', () => {
 		expect(revisionForPhase(revisions, 'build')?.revision).toBe(3)
 		expect(revisionForPhase(revisions.slice(0, 2), 'build')?.revision).toBe(2)
+	})
+
+	test('the build never shows a mockup from the former design phase', () => {
+		expect(revisionForPhase([revisions[1], revisions[4]].filter((r) => r !== undefined), 'build')?.revision).toBe(2)
 	})
 })

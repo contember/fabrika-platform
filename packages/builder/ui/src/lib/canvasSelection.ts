@@ -26,7 +26,8 @@ export function canvasFilesForRevision(
 	return changed.length > 0 ? changed : revision.canvasFiles
 }
 
-const PHASE_LABELS: ReadonlySet<string> = new Set(PHASE_IDS)
+// `design` was a phase before the design checkpoint moved into the build; an older session's mockup is not the build's.
+const PHASE_LABELS: ReadonlySet<string> = new Set([...PHASE_IDS, 'design'])
 
 /**
  * The latest revision a phase shows. The build hosts the gates opened inside it (the design checkpoint), whose labels
