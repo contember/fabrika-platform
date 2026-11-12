@@ -5,6 +5,7 @@ import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { dirname, join } from 'path'
 import { admitRequest } from './admission'
 import { createApiHandlers } from './handlers/api'
+import { createAssetHandlers } from './handlers/assets'
 import { createFileHandlers } from './handlers/files'
 import { createStaticHandlers, serveErrorOptions, withDefaultCsp } from './handlers/static'
 import { createUploadHandlers } from './handlers/uploads'
@@ -54,6 +55,7 @@ const routes = [
 	// The file routes never return the daemon's own state, the CLI capability included.
 	...createFileHandlers(sessionManager, { deniedRoots: [TEMP_DIR, DATA_DIR] }),
 	...createUploadHandlers(sessionManager),
+	...createAssetHandlers(sessionManager),
 	...createStaticHandlers(),
 ]
 

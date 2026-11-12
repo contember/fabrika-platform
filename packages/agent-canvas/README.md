@@ -58,6 +58,10 @@ Claude uses different canvas flows depending on the task:
 | **Decision** | Choosing between options                            | Single canvas with comparison                              |
 | **Runbook**  | User must complete manual setup or provide a secret | Instructions → secure handoff → command → result           |
 
+### Files from the user
+
+`<FileDrop id label accept maxBytes required>` lets the user hand the agent a file from the canvas. The daemon stores it with the session (`sessions/<id>/assets/<field>/`, mode 0600), caps a file at 25 MB and a session at 100 files and 250 MB, and keeps the files until the session directory is removed; nothing deletes them automatically. A field's files stay listed on later revisions. The feedback lists their absolute paths; the agent reads them with its own tools. No route serves them back, so an upload is never rendered as a page or run as a script.
+
 ### Local secret handoff
 
 Runbooks can use `SecretInput` when a command needs a token that must stay out of feedback and model context. The browser stores the value only in the local daemon's memory. Feedback contains the field ID and environment variable name, not the value.

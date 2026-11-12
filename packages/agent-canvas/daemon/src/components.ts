@@ -11,6 +11,7 @@ import type { CanvasComponents, FileReferenceProp } from '@fabrika/canvas-kernel
 export const HOST_COMPONENTS: CanvasComponents = {
 	SecretInput: { requiredProps: { id: 'string', label: 'string', env: 'string' } },
 	Download: { requiredProps: { path: 'string' } },
+	FileDrop: { requiredProps: { id: 'string', label: 'string' } },
 }
 
 /** Host component props that name a local file, beside the kernel's; the file routes serve what they name. */

@@ -22,6 +22,8 @@
  */
 
 import type { CanvasHost } from '@fabrika/canvas-kernel/client'
+import { z } from 'zod'
+import { type StoredAsset, storedAssetSchema } from '../src/assets'
 import type { SharedResponse } from '../src/share-responses'
 import { type SessionMeta, sessionMetaSchema } from './apiSchemas'
 import { decryptString, ENCRYPTION_META, type EncryptionMeta, encryptString, importShareKey } from './shareCrypto'
@@ -120,18 +122,46 @@ function localSecretUrl(fieldId: string, suffix: 'status' | 'value'): string {
 	return `/api/session/${encodeURIComponent(MODE.sessionId)}/secrets/${encodeURIComponent(fieldId)}/${suffix}`
 }
 
-async function secretApiError(response: Response): Promise<Error> {
+async function apiError(response: Response): Promise<Error> {
 	const raw: unknown = await response.json().catch(() => null)
 	if (typeof raw === 'object' && raw !== null && 'error' in raw && typeof raw.error === 'string') {
 		return new Error(raw.error)
 	}
-	return new Error(`Secret API request failed with status ${response.status}`)
+	return new Error(`Request failed with status ${response.status}`)
+}
+
+function localAssetUrl(fieldId: string, assetId?: string): string {
+	if (MODE.isShared) throw new Error('File drops are available only on the local canvas daemon')
+	const base = `/api/session/${encodeURIComponent(MODE.sessionId)}/assets/${encodeURIComponent(fieldId)}`
+	return assetId === undefined ? base : `${base}/${encodeURIComponent(assetId)}`
+}
+
+export type { StoredAsset }
+
+/** The files the user dropped on one `FileDrop` field of this session. */
+export async function listLocalAssets(fieldId: string): Promise<StoredAsset[]> {
+	const response = await fetch(localAssetUrl(fieldId), { cache: 'no-store' })
+	if (!response.ok) throw await apiError(response)
+	return z.object({ files: z.array(storedAssetSchema) }).parse(await response.json()).files
+}
+
+export async function uploadLocalAsset(fieldId: string, file: File): Promise<StoredAsset> {
+	const body = new FormData()
+	body.append('file', file)
+	const response = await fetch(localAssetUrl(fieldId), { method: 'POST', body })
+	if (!response.ok) throw await apiError(response)
+	return z.object({ file: storedAssetSchema }).parse(await response.json()).file
+}
+
+export async function deleteLocalAsset(fieldId: string, assetId: string): Promise<void> {
+	const response = await fetch(localAssetUrl(fieldId, assetId), { method: 'DELETE' })
+	if (!response.ok) throw await apiError(response)
 }
 
 /** Return only readiness metadata. The secret value is never sent back to the browser. */
 export async function getLocalSecretStatus(fieldId: string): Promise<boolean> {
 	const response = await fetch(localSecretUrl(fieldId, 'status'), { cache: 'no-store' })
-	if (!response.ok) throw await secretApiError(response)
+	if (!response.ok) throw await apiError(response)
 	const raw: unknown = await response.json()
 	return typeof raw === 'object' && raw !== null && 'ready' in raw && raw.ready === true
 }
@@ -144,7 +174,7 @@ export async function storeLocalSecret(fieldId: string, value: string): Promise<
 		cache: 'no-store',
 		body: JSON.stringify({ value }),
 	})
-	if (!response.ok) throw await secretApiError(response)
+	if (!response.ok) throw await apiError(response)
 }
 
 /** Remove a deposited secret without retrieving its value. */
@@ -153,7 +183,7 @@ export async function clearLocalSecret(fieldId: string): Promise<void> {
 		method: 'DELETE',
 		cache: 'no-store',
 	})
-	if (!response.ok) throw await secretApiError(response)
+	if (!response.ok) throw await apiError(response)
 }
 
 // --- Meta fetch (with optional decryption) ---------------------------------
