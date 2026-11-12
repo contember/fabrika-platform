@@ -17,17 +17,19 @@ The current phase is derived from files in `.fabrika/`; it is not stored as a mu
 
 ## Non-goals
 
-The builder takes one brief for a new web application to a running application on the paved road: one UI kit, the
-contract, the proxy and the checker. It does not grow into a general design tool. These are out of scope:
+The builder exists to take one brief for a new web application to a running application on the paved road: one UI kit,
+the contract, the proxy and the checker ([ADR-0052](../../docs/decisions/0052-react-and-an-own-component-kit-for-application-spas.md)).
+It does not grow into a general design tool. These are out of scope:
 
-- **A node graph or node editor.** The phase machine is a fixed sequence derived from files; nobody wires the steps by
-  hand.
-- **Multiplatform code generation** (native mobile or desktop UI) and **device simulators**. A Fabrika application is a
-  web SPA on `@fabrika/ui`.
-- **Editing controls in the dashboard,** such as token sliders or drag and drop. The dashboard is where a person
-  reviews and sees evidence; the agent makes every edit, and the person asks for changes through the gate.
+- **A node graph or node editor.** The phases are a fixed sequence, and the current one is derived from files and gate
+  state; nobody wires the steps by hand.
+- **Multiplatform code generation** (native mobile or desktop UI) and **device simulators**. The paved road's
+  application is a web SPA on `@fabrika/ui`.
+- **Editing controls in the dashboard,** such as token sliders or drag and drop. The dashboard edits nothing: a person
+  reviews there, sees the evidence, runs the connect and deploy actions, and asks for changes through the gate. The
+  agent makes the requested edits, and a person may still edit a file in their own editor.
 
-A proposal for one of these needs a new decision first, not a feature request.
+A proposal for one of these needs a new ADR in `docs/decisions/` first, not a feature request.
 
 ## Usage
 
