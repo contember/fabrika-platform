@@ -136,9 +136,9 @@ function localAssetUrl(fieldId: string, assetId?: string): string {
 	return assetId === undefined ? base : `${base}/${encodeURIComponent(assetId)}`
 }
 
-/** The files the user dropped on one `FileDrop` field of this session. */
 export type { StoredAsset }
 
+/** The files the user dropped on one `FileDrop` field of this session. */
 export async function listLocalAssets(fieldId: string): Promise<StoredAsset[]> {
 	const response = await fetch(localAssetUrl(fieldId), { cache: 'no-store' })
 	if (!response.ok) throw await apiError(response)

@@ -221,6 +221,11 @@ served as HTML or JS.
 **Drop.** Asset libraries, listing or deleting from the page, and uploads from remote viewers beyond the existing
 annotation images.
 
+**As built (#199).** `FileDrop` is an agent-canvas host component, like `SecretInput`; the kernel only gains
+`SessionManager.assetsDir`. Files go to `sessions/<id>/assets/<field>/<uuidv7>-<name>` and are kept until the session
+directory is removed. The field lists its files and the user can remove one, so a wrong file leaves the feedback. No
+route serves an asset back, and annotation image uploads stay where they were.
+
 #### F3f Handing the viewer a file to download
 
 **Fit: yes, nearly free.** A page can already build a `Blob` and use `<a download>`. Add `<Download path="…" />` for

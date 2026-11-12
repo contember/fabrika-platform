@@ -1,10 +1,7 @@
 import { useFeedback } from '#canvas/runtime'
 import { useEffect, useState } from 'react'
-import { ASSET_FIELD_ID_RE } from '../../src/assets'
+import { ASSET_FIELD_ID_RE, MAX_ASSET_BYTES } from '../../src/assets'
 import { deleteLocalAsset, listLocalAssets, MODE, type StoredAsset, uploadLocalAsset } from '../clientApi'
-
-/** The daemon's own per-file limit; a canvas may set a lower one. */
-const DAEMON_MAX_BYTES = 25 * 1024 * 1024
 
 interface FileDropProps {
 	id: string
@@ -32,7 +29,7 @@ export function FileDrop({ id, label, accept, maxBytes, required }: FileDropProp
 	const locallyAvailable = !MODE.isShared
 	// Only a field the user can fill can hold up the submit.
 	const enforced = required === true && locallyAvailable && validFieldId
-	const limit = Math.min(maxBytes ?? DAEMON_MAX_BYTES, DAEMON_MAX_BYTES)
+	const limit = Math.min(maxBytes ?? MAX_ASSET_BYTES, MAX_ASSET_BYTES)
 
 	useEffect(() => {
 		if (!locallyAvailable || !validFieldId) {
@@ -61,7 +58,11 @@ export function FileDrop({ id, label, accept, maxBytes, required }: FileDropProp
 	useFeedback(`files:${id}`, feedback, { label, required: enforced })
 
 	const add = async (picked: readonly File[]) => {
-		if (busy || picked.length === 0) return
+		if (picked.length === 0) return
+		if (busy) {
+			setError('Wait until the current upload finishes')
+			return
+		}
 		const tooLarge = picked.filter((file) => file.size > limit)
 		if (tooLarge.length > 0) {
 			setError(`${tooLarge.map((file) => file.name).join(', ')}: larger than ${formatSize(limit)}`)

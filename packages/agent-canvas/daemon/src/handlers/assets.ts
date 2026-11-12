@@ -2,7 +2,7 @@ import type { SessionManager } from '@fabrika/canvas-kernel/server'
 import { jsonResponse, type Route } from '@fabrika/daemon-kit'
 import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'fs'
 import { join } from 'path'
-import { ASSET_FIELD_ID_RE, type StoredAsset } from '../assets'
+import { ASSET_FIELD_ID_RE, MAX_ASSET_BYTES, type StoredAsset } from '../assets'
 
 /**
  * Files the user hands the agent through `<FileDrop>`: `sessions/<id>/assets/<field>/<uuid>-<name>`. The feedback
@@ -10,7 +10,7 @@ import { ASSET_FIELD_ID_RE, type StoredAsset } from '../assets'
  * upload is never rendered as a page or a script. Files are kept until the session directory is removed.
  */
 
-export const MAX_ASSET_BYTES = 25 * 1024 * 1024
+export { MAX_ASSET_BYTES }
 export const MAX_SESSION_ASSET_BYTES = 250 * 1024 * 1024
 export const MAX_SESSION_ASSETS = 100
 
@@ -46,6 +46,16 @@ export function createAssetHandlers(sessionManager: SessionManager): Route[] {
 		return { count: files.length, bytes: files.reduce((sum, file) => sum + file.size, 0) }
 	}
 
+	/** The refusal when the session cannot take `adding` more bytes in one more file, or null. */
+	function sessionFull(sessionId: string, adding: number): Response | null {
+		const used = usage(sessionId)
+		if (used.count >= MAX_SESSION_ASSETS) return jsonResponse({ error: `This session already holds ${MAX_SESSION_ASSETS} files` }, 507)
+		if (used.bytes + adding > MAX_SESSION_ASSET_BYTES) {
+			return jsonResponse({ error: `This session's files would exceed ${MAX_SESSION_ASSET_BYTES / 1024 / 1024} MB` }, 507)
+		}
+		return null
+	}
+
 	/** The session and field of a request, or the refusal. */
 	function target(match: URLPatternResult): { sessionId: string; field: string } | Response {
 		const sessionId = match.pathname.groups['id'] ?? ''
@@ -69,6 +79,9 @@ export function createAssetHandlers(sessionManager: SessionManager): Route[] {
 		const declared = Number(req.headers.get('Content-Length') ?? 'NaN')
 		if (!Number.isFinite(declared)) return jsonResponse({ error: 'Content-Length required' }, 411)
 		if (declared > MAX_ASSET_BYTES + MULTIPART_OVERHEAD) return tooLarge
+		// Fails fast before the body is buffered; the check after the read is the one that counts.
+		const fullBeforeRead = sessionFull(at.sessionId, 0)
+		if (fullBeforeRead) return fullBeforeRead
 
 		let file: FormDataEntryValue | null
 		try {
@@ -81,11 +94,8 @@ export function createAssetHandlers(sessionManager: SessionManager): Route[] {
 		const bytes = new Uint8Array(await file.arrayBuffer())
 
 		// No await from here to the write, so concurrent uploads cannot all pass the same check.
-		const used = usage(at.sessionId)
-		if (used.count >= MAX_SESSION_ASSETS) return jsonResponse({ error: `This session already holds ${MAX_SESSION_ASSETS} files` }, 507)
-		if (used.bytes + bytes.byteLength > MAX_SESSION_ASSET_BYTES) {
-			return jsonResponse({ error: `This session's files would exceed ${MAX_SESSION_ASSET_BYTES / 1024 / 1024} MB` }, 507)
-		}
+		const full = sessionFull(at.sessionId, bytes.byteLength)
+		if (full) return full
 
 		const dir = fieldDir(at.sessionId, at.field)
 		mkdirSync(dir, { recursive: true, mode: 0o700 })
