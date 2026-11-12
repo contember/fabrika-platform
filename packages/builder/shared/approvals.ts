@@ -12,6 +12,8 @@ const approvalSchema = z.object({
 	inputs: z.record(z.string(), z.string()),
 	/** `advance --force`: the gate was waived, not reviewed. */
 	waived: z.boolean().optional(),
+	/** The gate revision whose review `advance` approved; absent when waived or recorded before revisions were kept. */
+	revision: z.number().int().positive().optional(),
 })
 export type PhaseApproval = z.infer<typeof approvalSchema>
 

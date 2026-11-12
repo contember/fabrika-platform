@@ -26,6 +26,8 @@ export interface PhaseState {
 export interface GateReview {
 	reviewed: boolean
 	verdict: GateVerdict
+	/** The gate's latest revision; null before it was ever opened. */
+	revision: number | null
 }
 
 export type GateProbe = (phase: Phase) => GateReview | 'unknown'
@@ -147,6 +149,8 @@ export function derivePhase(
 				const review = gateProbe(phase)
 				if (review === 'unknown') unverified.push(phase.id)
 				else if (!review.reviewed) return state(phase, true)
+				// A gate re-opened after its approval is approved again only by `advance`, whoever consumed its feedback.
+				else if (approval?.revision !== undefined && review.revision !== approval.revision) return state(phase, true)
 				else verdicts[phase.id] = review.verdict
 			}
 		}

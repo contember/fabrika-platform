@@ -386,7 +386,7 @@ describe('derivePhaseState (filesystem fixture)', () => {
 		const dir = freshFabrika()
 		mkdirSync(join(dir, 'intent'), { recursive: true })
 		writeFileSync(join(dir, 'intent', 'brief.md'), '# Brief')
-		const oracle: GateOracle = { gateReview: () => ({ reviewed: false, verdict: 'none' }) }
+		const oracle: GateOracle = { gateReview: () => ({ reviewed: false, verdict: 'none', revision: 1 }) }
 		const state = derivePhaseState(dir, 'sess', oracle)
 		expect(state.current).toBe('intake')
 		expect(state.satisfied).toBe(true)
@@ -397,7 +397,7 @@ describe('derivePhaseState (filesystem fixture)', () => {
 		const dir = freshFabrika()
 		mkdirSync(join(dir, 'intent'), { recursive: true })
 		writeFileSync(join(dir, 'intent', 'brief.md'), '# Brief')
-		const oracle: GateOracle = { gateReview: () => ({ reviewed: true, verdict: 'changes' }) }
+		const oracle: GateOracle = { gateReview: () => ({ reviewed: true, verdict: 'changes', revision: 1 }) }
 		const state = derivePhaseState(dir, 'sess', oracle)
 		expect(state.current).toBe('vision')
 		expect(state.verdicts).toEqual({ intake: 'changes' })

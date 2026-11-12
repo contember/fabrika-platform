@@ -122,8 +122,8 @@ test('build phase produces is a placeholder -> never auto-satisfied from FS', ()
 	expect(producesSatisfied(fx.root, phaseById('build'))).toBe(false)
 })
 
-const reviewed: GateProbe = () => ({ reviewed: true, verdict: 'approve' })
-const unreviewed: GateProbe = () => ({ reviewed: false, verdict: 'none' })
+const reviewed: GateProbe = () => ({ reviewed: true, verdict: 'approve', revision: 1 })
+const unreviewed: GateProbe = () => ({ reviewed: false, verdict: 'none', revision: 1 })
 
 function approve(root: string, ids: PhaseId[], waived = false): void {
 	const approvals: Approvals = { ...readApprovals(root) }

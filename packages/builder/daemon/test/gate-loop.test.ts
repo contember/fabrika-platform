@@ -434,6 +434,59 @@ describe('gate interactive loop', () => {
 		rmSync(repo, { recursive: true, force: true })
 	})
 
+	test('a stale phase is approved again only on a new review of its own gate', async () => {
+		const sessionId = 'gate-loop-stale'
+		const repo = scratchDir('fabrika-stale-repo-')
+		mkdirSync(join(repo, '.fabrika', 'intent'), { recursive: true })
+		mkdirSync(join(repo, '.fabrika', 'principles'), { recursive: true })
+		writeFileSync(join(repo, '.fabrika', 'config.json'), JSON.stringify({ profile: 'zerops-app', sessionId, createdAt: new Date().toISOString() }))
+		writeApprovals(repo, {})
+		writeFileSync(join(repo, '.fabrika', 'intent', 'brief.md'), '# brief\nbuild a thing')
+		const env = { FABRIKA_SESSION_ID: sessionId }
+		const phaseUrl = `${base}/api/phase?root=${encodeURIComponent(join(repo, '.fabrika'))}&session=${encodeURIComponent(sessionId)}`
+		const submit = async (verdict: string) => {
+			const ws = await openSocket(`${wsBase}/ws/session/${sessionId}`)
+			ws.send(JSON.stringify({ type: 'submit', feedback: 'Seen.', responses: [{ id: 'verdict', value: verdict }] }))
+			await new Promise((r) => setTimeout(r, 100))
+			ws.close()
+		}
+
+		await openGate(sessionId, 'intake')
+		await submit('Approve')
+		expect((await runCli(['advance', '--dir', repo], env)).code).toBe(0)
+		expect(readApprovals(repo)?.intake?.revision).toBe(1)
+
+		writeFileSync(join(repo, '.fabrika', 'intent', 'glossary.md'), '# glossary')
+		writeFileSync(join(repo, '.fabrika', 'principles', 'principles.md'), '# principles')
+		await openGate(sessionId, 'vision')
+		await submit('Approve')
+
+		// The brief changes while the vision review waits: intake is current, and neither review approves it again.
+		writeFileSync(join(repo, '.fabrika', 'intent', 'brief.md'), '# brief\nbuild another thing')
+		expect((await (await fetch(phaseUrl)).json()).current).toBe('intake')
+		const refused = await runCli(['advance', '--dir', repo], env)
+		expect(refused.code).toBe(1)
+		expect(refused.stderr).toContain('gate "intake" was approved at revision 1, before its files changed')
+		expect(readApprovals(repo)?.vision).toBeUndefined()
+
+		// Re-opening hands back the waiting vision review (409); the new intake review then approves intake.
+		await expect(openGate(sessionId, 'intake')).rejects.toThrow('Unconsumed feedback')
+		await openGate(sessionId, 'intake')
+		await submit('Approve')
+		expect((await runCli(['advance', '--dir', repo], env)).code).toBe(0)
+		expect(readApprovals(repo)?.intake?.revision).toBe(3)
+
+		// Re-opened over pending feedback again (409): the consumed review is not an approval.
+		await openGate(sessionId, 'intake')
+		await submit('Request changes')
+		await expect(openGate(sessionId, 'intake')).rejects.toThrow('Unconsumed feedback')
+		const state = await (await fetch(phaseUrl)).json()
+		expect(state.current).toBe('intake')
+		expect(state.completed).toEqual([])
+
+		rmSync(repo, { recursive: true, force: true })
+	})
+
 	test('fast-path: POST feedback/consume returns pending feedback when no waiter was connected', async () => {
 		const sessionId = 'gate-loop-fastpath'
 		await openGate(sessionId, 'design')

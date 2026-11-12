@@ -36,18 +36,20 @@ function gateOracleFor(sm: SessionManager): GateOracle {
 	return {
 		gateReview: (id, gateName) => {
 			const session = sm.get(id)
-			if (!session) return { reviewed: false, verdict: 'none' }
+			if (!session) return { reviewed: false, verdict: 'none', revision: null }
 			for (let i = session.revisions.length - 1; i >= 0; i--) {
 				const r = session.revisions[i]!
 				if (r.label !== gateName) continue
 				// `advance` consumes feedback, and so does re-opening a gate over pending feedback (the 409 below). In a project
-				// that keeps approvals only `advance` completes the phase; a legacy project counts either as reviewed.
+				// that keeps approvals only `advance` completes the phase, by recording this revision; a legacy project counts
+				// either as reviewed.
 				return {
 					reviewed: r.hasFeedback && r.feedbackConsumed,
 					verdict: r.hasFeedback ? gateVerdict(sm.getSubmittedResponses(id, r.revision)) : 'none',
+					revision: r.revision,
 				}
 			}
-			return { reviewed: false, verdict: 'none' }
+			return { reviewed: false, verdict: 'none', revision: null }
 		},
 	}
 }

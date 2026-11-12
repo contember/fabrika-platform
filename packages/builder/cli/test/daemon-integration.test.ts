@@ -89,6 +89,9 @@ function startMockDaemon(opts: {
 				opts.onPhaseQuery?.(url.searchParams)
 				return Response.json(opts.phaseState)
 			}
+			if (/\/gate\/[^/]+\/consume$/.test(url.pathname) && req.method === 'POST') {
+				return Response.json(feedback !== null ? { found: true, revision: 1, verdict: 'approve' } : { found: false })
+			}
 			if (url.pathname.endsWith('/feedback/consume') && req.method === 'POST') {
 				if (feedback !== null) {
 					const out = feedback
