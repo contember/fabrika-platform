@@ -83,3 +83,9 @@ test('names the files a canvas references as literals, and only those', () => {
 	`
 	expect(canvasFileReferences(jsx).sort()).toEqual(['/abs/shot.png', '/abs/src/auth.ts', 'docs/notes.md'])
 })
+
+test('reads a file prop past a > inside another attribute', () => {
+	const jsx = `<ImageView alt="a > b" src="/abs/a.png" />
+		<FilePreview onClick={() => open()} path="/abs/b.ts" />`
+	expect(canvasFileReferences(jsx).sort()).toEqual(['/abs/a.png', '/abs/b.ts'])
+})

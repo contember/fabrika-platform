@@ -513,12 +513,34 @@ export function canvasFileReferences(jsx: string): string[] {
 	const references = new Set<string>()
 	for (const [tag, prop] of FILE_REFERENCE_PROPS) {
 		const valuePattern = new RegExp(`(?:^|\\s)${prop}=(?:"([^"]+)"|'([^']+)'|\\{\\s*(?:"([^"]+)"|'([^']+)')\\s*\\})`)
-		for (const element of jsx.matchAll(new RegExp(`<${tag}\\b([^>]*?)\\/?>`, 'g'))) {
-			const path = element[1]?.match(valuePattern)?.slice(1).find((group) => group !== undefined)
+		for (const start of jsx.matchAll(new RegExp(`<${tag}\\b`, 'g'))) {
+			const from = start.index + start[0].length
+			const path = jsx.slice(from, tagEnd(jsx, from)).match(valuePattern)?.slice(1).find((group) => group !== undefined)
 			if (path !== undefined) references.add(path)
 		}
 	}
 	return [...references]
+}
+
+/** Where the opening tag whose attributes start at `from` ends: the first `>` outside a quoted or `{…}` value. */
+function tagEnd(jsx: string, from: number): number {
+	let quote: string | null = null
+	let depth = 0
+	for (let index = from; index < jsx.length; index++) {
+		const char = jsx[index]
+		if (quote !== null) {
+			if (char === quote) quote = null
+		} else if (char === '"' || char === "'" || char === '`') {
+			quote = char
+		} else if (char === '{') {
+			depth++
+		} else if (char === '}') {
+			depth--
+		} else if (char === '>' && depth === 0) {
+			return index
+		}
+	}
+	return jsx.length
 }
 
 /** @deprecated Use `compileJsx(jsx, { projectRoot, tempDir })`. */

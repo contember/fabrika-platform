@@ -118,3 +118,27 @@ test("refuses a symlink that resolves into the daemon's state", async () => {
 	expect((await get('file', join(outsideRoot, 'state-link', 'daemon-auth-token'))).status).toBe(403)
 	expect((await get('tree', join(outsideRoot, 'state-link'))).status).toBe(403)
 })
+
+test('treats a symlink inside the project root that leads out of it as outside', async () => {
+	const { get, projectRoot, outsideRoot } = setup(() => '<Section />')
+	symlinkSync(outsideRoot, join(projectRoot, 'link'))
+	expect((await get('file', 'link/external.ts')).status).toBe(403)
+	expect((await get('tree', 'link')).status).toBe(403)
+	const named = setup((outside) => `<FilePreview path="${outside}/external.ts" />`)
+	symlinkSync(named.outsideRoot, join(named.projectRoot, 'link'))
+	expect((await named.get('file', 'link/external.ts')).status).toBe(200)
+})
+
+test('never lists a directory outside the project root, even one a canvas names', async () => {
+	const { get, outsideRoot } = setup((outside) => `<FilePreview path="${outside}" />`)
+	expect((await get('tree', outsideRoot)).status).toBe(403)
+})
+
+test('forgets the names of a removed session that comes back with as many revisions', async () => {
+	const { get, manager, projectRoot, outsideRoot } = setup()
+	expect((await get('file', join(outsideRoot, 'external.ts'))).status).toBe(200)
+	manager.remove('files')
+	manager.upsert('files', new Map([['plan.jsx', `<ImageView src="${outsideRoot}/image.svg" />`]]), projectRoot)
+	expect((await get('file', join(outsideRoot, 'external.ts'))).status).toBe(403)
+	expect((await get('image', join(outsideRoot, 'image.svg'))).status).toBe(200)
+})

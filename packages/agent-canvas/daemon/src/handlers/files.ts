@@ -36,17 +36,18 @@ function isInside(path: string, root: string): boolean {
 	return relativePath === '' || (relativePath !== '..' && !relativePath.startsWith(`..${sep}`) && !isAbsolute(relativePath))
 }
 
-type SessionPathResolver = (sessionId: string, relPath: string) => { fullPath: string } | Response
+type SessionPathResolver = (sessionId: string, relPath: string, kind: 'file' | 'directory') => { fullPath: string } | Response
 
 /**
- * The files outside the project root that the session's canvases name, in every revision, symlinks resolved. Revisions
- * never change once written, so the set is rebuilt only when a push adds one.
+ * The files the session's canvases name, in every revision, as written and with symlinks resolved. Revisions never
+ * change once written; a removed and re-created session has a new `createdAt`.
  */
 function createNamedFiles(sessionManager: SessionManager): (session: SessionData) => Set<string> {
-	const cache = new Map<string, { revisionCount: number; paths: Set<string> }>()
+	const cache = new Map<string, { key: string; paths: Set<string> }>()
 	return (session) => {
+		const key = `${session.createdAt}:${session.revisions.length}`
 		const cached = cache.get(session.id)
-		if (cached?.revisionCount === session.revisions.length) return cached.paths
+		if (cached?.key === key) return cached.paths
 		const paths = new Set<string>()
 		for (const revision of session.revisions) {
 			for (const { filename } of revision.canvasFiles) {
@@ -59,21 +60,21 @@ function createNamedFiles(sessionManager: SessionManager): (session: SessionData
 				}
 			}
 		}
-		cache.set(session.id, { revisionCount: session.revisions.length, paths })
+		cache.set(session.id, { key, paths })
 		return paths
 	}
 }
 
 /**
- * Resolves a requested path against the session's project root. A relative path stays inside the root. A path outside
- * the root is served only when one of the session's canvases names it as a file, so canvas JavaScript cannot read
- * arbitrary files. Nothing inside a denied root is served, symlinks resolved.
+ * Resolves a path against the session's project root. Outside it, symlinks resolved, only a file a canvas of the session
+ * names is served and no directory is listed; nothing in a denied root is. The canvas author controls that list, so it
+ * stops computed paths and other clients' reads, not a hostile canvas.
  */
 function createSessionPathResolver(sessionManager: SessionManager, options: FileHandlerOptions): SessionPathResolver {
 	const deniedRoots = [...new Set(options.deniedRoots.flatMap((root) => [resolve(root), realOrSelf(resolve(root))]))]
 	const namedFiles = createNamedFiles(sessionManager)
 
-	return (sessionId, relPath) => {
+	return (sessionId, relPath, kind) => {
 		const session = sessionManager.get(sessionId)
 		if (!session) return jsonResponse({ error: 'Session not found' }, 404)
 
@@ -87,8 +88,9 @@ function createSessionPathResolver(sessionManager: SessionManager, options: File
 		if (deniedRoots.some((root) => isInside(fullPath, root) || isInside(realPath, root))) {
 			return jsonResponse({ error: 'Path is not served' }, 403)
 		}
-		if (!isInside(fullPath, resolve(session.projectRoot)) && !namedFiles(session).has(fullPath)) {
-			return jsonResponse({ error: 'Path outside the project root is not named by a canvas in this session' }, 403)
+		if (!isInside(realPath, realOrSelf(resolve(session.projectRoot)))) {
+			const named = kind === 'file' && (namedFiles(session).has(fullPath) || namedFiles(session).has(realPath))
+			if (!named) return jsonResponse({ error: 'Path outside the project root is not named by a canvas in this session' }, 403)
 		}
 
 		return { fullPath: realPath }
@@ -103,7 +105,7 @@ export function createFileHandlers(sessionManager: SessionManager, options: File
 		const relPath = url.searchParams.get('path')
 		if (!sessionId || !relPath) return jsonResponse({ error: 'Missing session or path' }, 400)
 
-		const resolved = resolveSessionPath(sessionId, relPath)
+		const resolved = resolveSessionPath(sessionId, relPath, 'file')
 		if (resolved instanceof Response) return resolved
 
 		try {
@@ -125,7 +127,7 @@ export function createFileHandlers(sessionManager: SessionManager, options: File
 		const relPath = url.searchParams.get('path')
 		if (!sessionId || !relPath) return jsonResponse({ error: 'Missing session or path' }, 400)
 
-		const resolved = resolveSessionPath(sessionId, relPath)
+		const resolved = resolveSessionPath(sessionId, relPath, 'file')
 		if (resolved instanceof Response) return resolved
 
 		try {
@@ -156,7 +158,7 @@ export function createFileHandlers(sessionManager: SessionManager, options: File
 		const relPath = url.searchParams.get('path') || ''
 		if (!sessionId) return jsonResponse({ error: 'Missing session' }, 400)
 
-		const resolved = resolveSessionPath(sessionId, relPath)
+		const resolved = resolveSessionPath(sessionId, relPath, 'directory')
 		if (resolved instanceof Response) return resolved
 
 		const ignoreDirs = new Set(['.git', 'node_modules', '.next', '__pycache__', 'dist', '.cache'])
