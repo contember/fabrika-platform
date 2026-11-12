@@ -286,6 +286,14 @@ included, is the tag's version: `bun pm ls --all | grep @fabrika/`. Releases up 
 `@fabrika/*` dependencies by a range, so a transitive one can still resolve a later patch of that line. Then
 install the newest patch instead (step 6 upgrades an installation).
 
+**Build on the Bun that wrote `bun.lock`.** The platform build runs `bun install --frozen-lockfile` on the
+`build.base` of the application's `zerops.yaml` (`alpine/bun@1.3` when it names none), and an older Bun cannot
+read a newer lockfile: Bun 1.4 writes `"lockfileVersion": 2`, which Bun 1.3 refuses, so the build fails with
+`Unknown lockfile version ... lockfile is frozen`. Read the version with `head -2 bun.lock` and `bun --version`.
+Lockfile versions 0 and 1 need `alpine/bun@1.2` or later; version 2 needs `alpine/bun@1.4` or later. Set
+`build.base` to match, or run `bun install` with the Bun of the base. `fabrika app build` and `app register`
+refuse a base that cannot read the lockfile and name the one to use.
+
 1. **Create a namespace** with the preset and core package the human chose (see Decisions). Without a
    custom domain bound to its proxy, pass `--public-access=zerops-subdomain`; the default is
    `custom-domain`, which serves no host until you bind one.

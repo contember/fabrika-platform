@@ -268,6 +268,12 @@ bun test
   `envVariables` or `routing.headers` value that `plainCredentialFinding` flags, unless `target.notSecret` names it. It
   runs in `compileFabrikaManifest` after the parse and NEVER in `parseFabrikaManifest`: a decode-time refusal would stop
   a stored manifest of an older release from deploying, which a platform upgrade must never do (ADR-0062).
+- **`fabrika app build` and `app register` refuse a build base that cannot read the repository-root `bun.lock`**
+  (`src/build-base.ts`, called from `src/cli.ts` after the compile): the platform build installs with
+  `--frozen-lockfile` on `build.base` (`ZEROPS_APPLICATION_RUNTIME` when a contract application names none), and an
+  older Bun fails it late with `Unknown lockfile version`. Only a base named `[alpine/|ubuntu/]bun@<major>.<minor>` is
+  checked; an alias or another runtime is not. `LOCKFILE_READERS` maps each `lockfileVersion` to the oldest Bun that
+  reads it: add a row when a Bun release writes a new one. Like the plain-credential check, it never runs on decode.
 - **No authored variable may copy a framework-only one.** `assertAuthoredManagedDocument` refuses, in every
   `envVariables`/`envSecrets` mapping at any depth, a framework-only name as a key and a reference to one in
   a key or a value (`frameworkVariableReference`: `${NAME}`, `${RUNTIME_NAME}`, `${<host>_NAME}`, nested).

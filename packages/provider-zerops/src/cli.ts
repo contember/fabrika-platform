@@ -5,6 +5,7 @@ import { open } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { z } from 'zod'
 import { isZeropsAppConfig } from './authoring'
+import { buildBaseLockfileRefusal, zeropsBuildBase } from './build-base'
 import { parseZeropsCliArgs } from './cli-args'
 import {
 	compileFabrikaManifest,
@@ -78,10 +79,23 @@ export interface ZeropsManifestBuildOptions {
 	readonly env: string
 }
 
+/**
+ * Refuse a build base whose Bun cannot read the repository-root `bun.lock`, which the platform build installs from with
+ * `--frozen-lockfile`. Without a `bun.lock` there is nothing to compare; Control refuses a commit without one.
+ */
+export const assertBuildBaseReadsLockfile = async (manifest: FabrikaManifest, root: string = process.cwd()): Promise<void> => {
+	const lockfile = Bun.file(resolve(root, 'bun.lock'))
+	if (!(await lockfile.exists())) return
+	const refusal = buildBaseLockfileRefusal(await lockfile.text(), zeropsBuildBase(manifest))
+	if (refusal !== null) throw new Error(`fabrika app build: ${refusal}`)
+}
+
 const compileManifest = async (options: ZeropsManifestBuildOptions): Promise<FabrikaManifest> => {
 	const config = await loadConfig(options.config)
 	const sourceDescriptor = await readZeropsSourceDescriptor()
-	return compileFabrikaManifest(config, options.env, sourceDescriptor)
+	const manifest = compileFabrikaManifest(config, options.env, sourceDescriptor)
+	await assertBuildBaseReadsLockfile(manifest)
+	return manifest
 }
 
 const serializeManifest = (manifest: FabrikaManifest): string => `${JSON.stringify(manifest, null, '\t')}\n`
