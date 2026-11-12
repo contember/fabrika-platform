@@ -1,4 +1,4 @@
-import { marked } from 'marked'
+import { Marked, marked } from 'marked'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAnnotations } from './AnnotationProvider'
 import { generateMarkdown, getMissingRequiredLabels } from './generateMarkdown'
@@ -200,8 +200,12 @@ function rewriteUploadPaths(md: string): string {
 	return md.replace(UPLOADS_PATH_RE, (_match, alt, _fullPath, filename) => `![${alt}](/api/uploads/${filename})`)
 }
 
-export function MarkdownPreview({ text }: { text: string }) {
-	const html = useMemo(() => marked.parse(rewriteUploadPaths(text), { async: false }) as string, [text])
+const HTML_ESCAPES: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }
+const escapingMarked = new Marked({ renderer: { html: ({ text }) => text.replace(/[&<>"']/g, (char) => HTML_ESCAPES[char] ?? char) } })
+
+/** Renders markdown; `rawHtml: false` shows HTML in it as text, for text the canvas did not author. */
+export function MarkdownPreview({ text, rawHtml = true }: { text: string; rawHtml?: boolean }) {
+	const html = useMemo(() => (rawHtml ? marked : escapingMarked).parse(rewriteUploadPaths(text), { async: false }), [text, rawHtml])
 	// oxlint-disable-next-line react/no-danger -- Canvas modules already execute as code in this document.
 	return <div className="prose-canvas font-body text-body text-text-primary leading-relaxed" dangerouslySetInnerHTML={{ __html: html }} />
 }

@@ -7,7 +7,7 @@ import { useAnnotations } from './AnnotationProvider'
 import type { Annotation } from './AnnotationProvider'
 import { ActiveViewContext, RevisionContext } from './appContext'
 import { FileIcon } from './FileIcon'
-import { generateMarkdown, getMissingRequiredLabels, hasValue, includedAnnotations } from './generateMarkdown'
+import { generateMarkdown, getMissingRequiredLabels, hasValue } from './generateMarkdown'
 import { useCanvasHost } from './hostContext'
 import { feedbackResponseSchema } from './persistenceSchemas'
 import { MarkdownPreview } from './ResponsePreview'
@@ -348,7 +348,8 @@ function AnnotationSidebarInner({ onSubmit, agentWatching, collapseButton }: Omi
 
 	const withThreads = host.threads !== null
 	const submit = (feedback: string) => {
-		const submitted = withThreads ? includedAnnotations(annotations, includedRemoteIds).map(toSubmitted) : []
+		// Threads are between the user and the agent; a remote reviewer's note is not one the user can answer for.
+		const submitted = withThreads ? annotations.filter((a) => a.source !== 'remote').map(toSubmitted) : []
 		onSubmit(feedback, submitted)
 	}
 	const submitMarkdown = () => {

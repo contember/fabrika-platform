@@ -40,12 +40,12 @@ export function canPruneResponses(
 }
 
 export interface MarkdownOptions {
-	/** Label each annotation with its id, for a host whose agent answers annotations one by one. */
+	/** Labels each local annotation with its id, for a host whose agent answers them one by one; remote ones have no thread. */
 	annotationIds?: boolean
 }
 
 /** The annotations a submit carries: local ones, and the remote ones the user included. */
-export function includedAnnotations(annotations: Annotation[], includedRemoteIds?: Set<string>): Annotation[] {
+function includedAnnotations(annotations: Annotation[], includedRemoteIds?: Set<string>): Annotation[] {
 	return annotations.filter((a) => a.source !== 'remote' || (includedRemoteIds && includedRemoteIds.has(a.id)))
 }
 
@@ -62,7 +62,8 @@ export function generateMarkdown(
 ): string {
 	const parts: string[] = []
 	const included = includedAnnotations(annotations, includedRemoteIds)
-	const renderEntry = (ann: Annotation) => options.annotationIds ? `Annotation \`${ann.id}\`\n${renderAnnotation(ann)}` : renderAnnotation(ann)
+	const renderEntry = (ann: Annotation) =>
+		options.annotationIds && ann.source !== 'remote' ? `Annotation \`${ann.id}\`\n${renderAnnotation(ann)}` : renderAnnotation(ann)
 	const responseAnns = included.filter((a) => a.filePath === RESPONSE_ANNOTATION_PATH)
 	const canvasAnns = included.filter((a) => !a.filePath)
 	const fileAnns = included.filter((a) => a.filePath && a.filePath !== RESPONSE_ANNOTATION_PATH)

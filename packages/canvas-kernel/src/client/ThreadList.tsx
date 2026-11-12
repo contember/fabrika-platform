@@ -1,4 +1,5 @@
-import { useState, useSyncExternalStore } from 'react'
+import { RESPONSE_ANNOTATION_PATH } from '@fabrika/annotations'
+import { useId, useState, useSyncExternalStore } from 'react'
 import { type CanvasThread, type CanvasThreads, useCanvasHost } from './hostContext'
 import { MarkdownPreview } from './ResponsePreview'
 
@@ -23,6 +24,9 @@ const STATE_LABELS: Record<CanvasThread['state'], string> = {
 export function ThreadList() {
 	const store = useCanvasHost().threads
 	const threads = useCanvasThreads()
+	// Kept here, not in the card, so a draft survives the card moving between the open and resolved lists.
+	const [drafts, setDrafts] = useState<ReadonlyMap<string, string>>(() => new Map())
+	const setDraft = (threadId: string, draft: string) => setDrafts((current) => new Map(current).set(threadId, draft))
 	if (store === null || threads.length === 0) return null
 	const active = threads.filter((thread) => thread.state !== 'resolved')
 	const resolved = threads.filter((thread) => thread.state === 'resolved')
@@ -30,19 +34,42 @@ export function ThreadList() {
 	return (
 		<section aria-label="Threads" className="px-3 pt-1 pb-3 border-b border-border-subtle">
 			<div className="text-[10px] uppercase tracking-widest text-text-tertiary font-body px-1 mb-1">Threads</div>
-			{active.map((thread) => <ThreadCard key={thread.id} thread={thread} store={store} />)}
+			{active.map((thread) => (
+				<ThreadCard
+					key={thread.id}
+					thread={thread}
+					store={store}
+					draft={drafts.get(thread.id) ?? ''}
+					onDraft={(draft) => setDraft(thread.id, draft)}
+				/>
+			))}
 			{resolved.length > 0 && (
 				<details className="mt-1">
 					<summary className="text-[11px] text-text-tertiary font-body px-1 cursor-pointer">Resolved ({resolved.length})</summary>
-					{resolved.map((thread) => <ThreadCard key={thread.id} thread={thread} store={store} />)}
+					{resolved.map((thread) => (
+						<ThreadCard
+							key={thread.id}
+							thread={thread}
+							store={store}
+							draft={drafts.get(thread.id) ?? ''}
+							onDraft={(draft) => setDraft(thread.id, draft)}
+						/>
+					))}
 				</details>
 			)}
 		</section>
 	)
 }
 
-function ThreadCard({ thread, store }: { thread: CanvasThread; store: CanvasThreads }) {
-	const [draft, setDraft] = useState('')
+interface ThreadCardProps {
+	thread: CanvasThread
+	store: CanvasThreads
+	draft: string
+	onDraft: (draft: string) => void
+}
+
+function ThreadCard({ thread, store, draft, onDraft }: ThreadCardProps) {
+	const replyId = useId()
 	const [error, setError] = useState<string | null>(null)
 	const [busy, setBusy] = useState(false)
 
@@ -61,10 +88,10 @@ function ThreadCard({ thread, store }: { thread: CanvasThread; store: CanvasThre
 	const send = () =>
 		run(async () => {
 			await store.reply(thread.id, draft.trim())
-			setDraft('')
+			onDraft('')
 		})
 
-	const where = thread.filePath ?? thread.canvasFile?.replace(/\.jsx$/, '')
+	const where = thread.filePath === RESPONSE_ANNOTATION_PATH ? 'Agent response' : thread.filePath ?? thread.canvasFile?.replace(/\.jsx$/, '')
 
 	return (
 		<article className="rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 mt-2" data-thread-id={thread.id}>
@@ -81,16 +108,18 @@ function ThreadCard({ thread, store }: { thread: CanvasThread; store: CanvasThre
 				{thread.comments.map((comment) => (
 					<li key={comment.id} className="text-[13px] font-body">
 						<div className="text-[10px] uppercase tracking-widest text-text-tertiary">{comment.author === 'agent' ? 'Agent' : 'You'}</div>
-						{/* The agent's text has the same trust as the canvas it wrote; the user's own is shown as typed. */}
-						{comment.author === 'agent' ? <MarkdownPreview text={comment.body} /> : <p className="whitespace-pre-wrap text-text-primary">{comment.body}</p>}
+						{/* The agent's markdown is formatted, with any HTML in it shown as text; the user's own is shown as typed. */}
+						{comment.author === 'agent'
+							? <MarkdownPreview text={comment.body} rawHtml={false} />
+							: <p className="whitespace-pre-wrap text-text-primary">{comment.body}</p>}
 					</li>
 				))}
 			</ol>
-			<label className="sr-only" htmlFor={`thread-reply-${thread.id}`}>Reply</label>
+			<label className="sr-only" htmlFor={replyId}>Reply</label>
 			<textarea
-				id={`thread-reply-${thread.id}`}
+				id={replyId}
 				value={draft}
-				onInput={(event) => setDraft(event.currentTarget.value)}
+				onInput={(event) => onDraft(event.currentTarget.value)}
 				placeholder="Reply to the agent"
 				rows={2}
 				className="mt-2 w-full rounded-md bg-bg-input px-2 py-1.5 text-[13px] font-body text-text-primary"
