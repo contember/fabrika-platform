@@ -90,6 +90,7 @@ test('a project initialized in Codex can resume in Claude without losing phase s
 	expect(existsSync(join(fx.root, '.claude'))).toBe(false)
 
 	fx.write('.fabrika/intent/brief.md', '# Shared brief')
+	expect((await run(['advance', '--force', '--dir', fx.root])).code).toBe(0)
 	const beforeHandoff = await run(['next', '--dir', fx.root])
 	expect(beforeHandoff.stdout).toContain('## Phase 2/7 - Vision')
 
@@ -142,6 +143,14 @@ test('advance is reflected in subsequent next (derivation moves forward)', async
 	nxt = await run(['next', '--dir', fx.root])
 	expect(nxt.stdout).toContain('## Phase 3/7 - User flows')
 	expect(nxt.stdout).toContain('vision ✓')
+})
+
+test('a corrupt approvals file stops next with the repair hint', async () => {
+	fx = makeFixture(true, { approvals: true })
+	fx.write('.fabrika/approvals.json', '{ not json')
+	const nxt = await run(['next', '--dir', fx.root])
+	expect(nxt.code).toBe(1)
+	expect(nxt.stderr).toContain('Invalid .fabrika/approvals.json; repair it, or delete it')
 })
 
 test('advance blocks with a checklist when produces are missing', async () => {

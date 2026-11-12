@@ -30,6 +30,9 @@ export function renderPacket(state: PhaseState, opts: RenderOpts = {}): string {
 	if (state.unverified.length > 0) {
 		lines.push(`Review:  not checked (daemon down), assumed reviewed: ${state.unverified.join(', ')} - run \`fabrika builder ensure-daemon\``)
 	}
+	if (state.stale.length > 0) {
+		lines.push(`Stale:   approved earlier, but its inputs changed since: ${state.stale.join(', ')} - re-open the gate for a new review`)
+	}
 
 	const reads = state.reads.length > 0 ? state.reads.join(', ') : phase.reads.join(', ')
 	lines.push(`Read:    ${reads}`)
@@ -93,6 +96,7 @@ export interface PacketJson {
 	satisfied: boolean
 	verdicts: PhaseState['verdicts']
 	unverified: PhaseId[]
+	stale: string[]
 	stack: StackPointer | null
 	platform: ReturnType<typeof connectionContext> | null
 }
@@ -115,6 +119,7 @@ export function packetJson(state: PhaseState, opts: RenderOpts = {}): PacketJson
 		satisfied: state.satisfied,
 		verdicts: state.verdicts,
 		unverified: state.unverified,
+		stale: state.stale,
 		stack: phase.catalog && opts.profile ? resolveStackPointer(opts.profile) : null,
 	}
 }

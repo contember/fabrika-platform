@@ -11,10 +11,12 @@ export interface Fixture {
 	cleanup(): void
 }
 
-export function makeFixture(init = true): Fixture {
+/** `approvals: false` (the default) drops the approvals file `init` writes: the project derives from files and reviews alone, as one initialized before approvals existed. */
+export function makeFixture(init = true, opts: { approvals?: boolean } = {}): Fixture {
 	const root = mkdtempSync(join(tmpdir(), 'fabrika-test-'))
 	if (init) {
 		scaffold(root, { profile: 'cf-lightweight', sessionId: 's_test' })
+		if (!opts.approvals) rmSync(join(root, '.fabrika', 'approvals.json'))
 	}
 	const fabrikaDir = join(root, '.fabrika')
 

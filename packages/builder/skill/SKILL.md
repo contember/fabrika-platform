@@ -68,7 +68,9 @@ ensure daemon → fabrika builder next → do packet work → gate → advance �
      is not `Approve`. Advance over it only when the human says to move on.
 
 5. Run `bunx fabrika builder advance`. Fix any missing artifact or gate checklist item
-   and retry. Use `--force` only when the human explicitly waives the gate.
+   and retry. Use `--force` only when the human explicitly waives the gate; the
+   approval is then recorded as waived. When `next` prints a `Stale:` line, an
+   approved phase's files changed since: re-open its gate for a new review.
 
 6. Repeat until build. Run `bunx fabrika builder build`, then read and apply
    `agents/build-orchestrator.md` in the current/main session. The main session

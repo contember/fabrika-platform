@@ -1,0 +1,65 @@
+// What `advance` approved: per phase, the content of every input it read at that moment. Shared by the CLI and the daemon.
+import { existsSync, readFileSync, renameSync, writeFileSync } from 'fs'
+import { join } from 'path'
+import { z } from 'zod'
+import { PHASE_IDS, type PhaseId } from './phases'
+
+export const APPROVALS_FILE = 'approvals.json'
+
+const approvalSchema = z.object({
+	at: z.string(),
+	/** Repository-relative path → sha256 of its content, for every file the phase reads or produces (`phaseInputs`). */
+	inputs: z.record(z.string(), z.string()),
+	/** `advance --force`: the gate was waived, not reviewed. */
+	waived: z.boolean().optional(),
+	/** The gate revision whose review `advance` approved; absent when waived or recorded before revisions were kept. */
+	revision: z.number().int().positive().optional(),
+})
+export type PhaseApproval = z.infer<typeof approvalSchema>
+
+const approvalsSchema = z.object({
+	version: z.literal(1),
+	phases: z.record(z.string(), z.unknown()),
+}).transform(({ phases }) => {
+	const out: Partial<Record<PhaseId, PhaseApproval>> = {}
+	for (const id of PHASE_IDS) {
+		// A record that does not parse reads as missing: its phase is approved again rather than trusted.
+		const parsed = approvalSchema.safeParse(phases[id])
+		if (parsed.success) out[id] = parsed.data
+	}
+	return out
+})
+export type Approvals = Partial<Record<PhaseId, PhaseApproval>>
+
+/** A file that does not parse is refused, never read as empty: that would re-open every phase, and the next write would drop its records. */
+export class InvalidApprovalsError extends Error {
+	constructor() {
+		super(`Invalid .fabrika/${APPROVALS_FILE}; repair it, or delete it to judge the gates by their reviews alone, before continuing.`)
+	}
+}
+
+/** Null for a project initialized before approvals existed: its gates are judged by their reviews alone until `advance` writes the file. */
+export function readApprovals(repoRoot: string): Approvals | null {
+	const path = approvalsPath(repoRoot)
+	if (!existsSync(path)) return null
+	let raw: unknown
+	try {
+		raw = JSON.parse(readFileSync(path, 'utf8'))
+	} catch {
+		throw new InvalidApprovalsError()
+	}
+	const parsed = approvalsSchema.safeParse(raw)
+	if (!parsed.success) throw new InvalidApprovalsError()
+	return parsed.data
+}
+
+export function writeApprovals(repoRoot: string, approvals: Approvals): void {
+	const path = approvalsPath(repoRoot)
+	const tmp = `${path}.${process.pid}.tmp`
+	writeFileSync(tmp, JSON.stringify({ version: 1, phases: approvals }, null, 2) + '\n')
+	renameSync(tmp, path)
+}
+
+function approvalsPath(repoRoot: string): string {
+	return join(repoRoot, '.fabrika', APPROVALS_FILE)
+}

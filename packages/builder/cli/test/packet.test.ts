@@ -29,6 +29,14 @@ test('packet header shows completed phases with a checkmark', () => {
 	expect(packet).toContain('(intake ✓)')
 })
 
+test('a stale phase names the files that changed since its approval', () => {
+	fx = makeFixture()
+	const state = { ...derivePhase(fx.root), stale: ['.fabrika/intent/brief.md'] }
+	expect(renderPacket(state)).toContain('Stale:   approved earlier, but its inputs changed since: .fabrika/intent/brief.md')
+	expect(packetJson(state).stale).toEqual(['.fabrika/intent/brief.md'])
+	expect(renderPacket(derivePhase(fx.root))).not.toContain('Stale:')
+})
+
 test('ungated phase (issues) emits a no-gate line', () => {
 	fx = makeFixture()
 	fx.write('.fabrika/intent/brief.md')
