@@ -214,6 +214,9 @@ User wants to make a decision? → DECISION flow
 Agent needs the user to complete manual steps? → RUNBOOK flow
 ```
 
+For numbers at a glance or a deck, start from a template: `bunx agent-canvas instructions template-dashboard` or
+`template-slides`.
+
 **Adapt dynamically**: flows are guidelines, not rigid pipelines. Skip or combine phases when appropriate:
 
 | Situation                                      | Action                                       |
