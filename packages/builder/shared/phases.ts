@@ -1,4 +1,4 @@
-export const PHASE_IDS = ['intake', 'vision', 'flows', 'tech', 'design', 'skeletons', 'issues', 'build'] as const
+export const PHASE_IDS = ['intake', 'vision', 'flows', 'tech', 'skeletons', 'issues', 'build'] as const
 
 export type PhaseId = (typeof PHASE_IDS)[number]
 
@@ -62,16 +62,6 @@ const PHASE_TABLE: Record<PhaseId, Omit<Phase, 'id' | 'number'>> = {
 		gate: true,
 		catalog: true,
 		gateView: 'tech.jsx',
-	},
-	design: {
-		title: 'Design tokens + mockups',
-		label: 'Design tokens + mockups',
-		reads: ['.fabrika/architecture/flows/*.flow.md', '.fabrika/architecture/tech.md'],
-		produces: ['.fabrika/architecture/design.md', '.fabrika/pages/*.jsx'],
-		goal:
-			'Define semantic design tokens (.fabrika/architecture/design.md, semantic -> Tailwind/CSS vars) and JSX page mockups (.fabrika/pages/*.jsx) rendered live in the preview pane.',
-		gate: true,
-		gateView: 'design.jsx',
 	},
 	skeletons: {
 		title: 'Opice skeletons',

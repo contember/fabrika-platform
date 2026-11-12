@@ -1,5 +1,4 @@
 import {
-	artifactResponseSchema,
 	buildEventSchema,
 	canvasFilesSchema,
 	responsesEnvelopeSchema,
@@ -59,20 +58,6 @@ export const daemon = {
 		const result = sessionMetaSchema.safeParse(await getJson(`/api/session/${encodeURIComponent(id)}/meta`))
 		if (!result.success) throw new Error('Invalid session response')
 		return { id, ...result.data }
-	},
-
-	async artifact(id: string, path: string): Promise<string | null> {
-		try {
-			const res = await fetch(
-				`${daemonOrigin()}/api/session/${encodeURIComponent(id)}/artifact?path=${encodeURIComponent(path)}`,
-				{ headers: { accept: 'application/json' } },
-			)
-			if (!res.ok) return null
-			const result = artifactResponseSchema.safeParse(await res.json())
-			return result.success ? result.data.content : null
-		} catch {
-			return null
-		}
 	},
 
 	async sessions(): Promise<{ id: string; label?: string }[]> {

@@ -157,8 +157,8 @@ test('advance succeeds online when gate feedback is consumable', async () => {
 
 	const r = await run(['advance', '--dir', fx.root], port)
 	expect(r.code).toBe(0)
-	expect(r.stdout).toContain('OK: phase 1/8 (intake) satisfied.')
-	expect(r.stdout).toContain('Next -> phase 2/8')
+	expect(r.stdout).toContain('OK: phase 1/7 (intake) satisfied.')
+	expect(r.stdout).toContain('Next -> phase 2/7')
 })
 
 test('advance online blocks when no feedback is pending', async () => {
@@ -250,7 +250,7 @@ test("next uses the daemon's canonical phase state when reachable", async () => 
 	const port = startMockDaemon({ phaseState })
 
 	const r = await run(['next', '--dir', fx.root], port)
-	expect(r.stdout).toContain('## Phase 3/8 - User flows')
+	expect(r.stdout).toContain('## Phase 3/7 - User flows')
 	expect(r.stdout).toContain('intake ✓')
 	expect(r.stdout).toContain('vision ✓')
 })

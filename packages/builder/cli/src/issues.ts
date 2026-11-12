@@ -1,5 +1,6 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'fs'
 import { basename, join } from 'path'
+import { BuilderCliError } from './errors'
 
 export interface Issue {
 	id: string
@@ -10,6 +11,8 @@ export interface Issue {
 	touches: string[]
 	/** Repository-relative acceptance files `build done` runs; empty for an issue whose check the driver names. */
 	verify: string[]
+	/** A review gate whose verdict `build done` records instead of running a check. */
+	gate?: string
 	body: string
 }
 
@@ -30,6 +33,7 @@ export function readIssues(fabrikaDir: string): Issue[] {
 export function parseIssue(path: string): Issue {
 	const raw = readFileSync(path, 'utf-8')
 	const fm = extractFrontMatter(raw)
+	const gate = gateName(path, fm.body['gate'])
 	return {
 		id: basename(path).replace(/\.md$/i, ''),
 		path,
@@ -38,6 +42,7 @@ export function parseIssue(path: string): Issue {
 		dependsOn: list(fm.body['depends_on']),
 		touches: list(fm.body['touches']),
 		verify: list(fm.body['verify']),
+		...(gate ? { gate } : {}),
 		body: fm.rest,
 	}
 }
@@ -60,6 +65,14 @@ function extractFrontMatter(raw: string): FrontMatter {
 		if (kv && kv[1]) body[kv[1]] = (kv[2] ?? '').trim()
 	}
 	return { body, rest: (m[2] ?? '').trim() }
+}
+
+// The name reaches a daemon URL; an issue that names an invalid one is refused, never read as ungated.
+function gateName(path: string, v: string | undefined): string | undefined {
+	const name = scalar(v)
+	if (!name) return undefined
+	if (!/^[a-z][a-z0-9-]*$/.test(name)) throw new BuilderCliError(`${path}: "${name}" is not a gate name (lowercase letters, digits and dashes).`)
+	return name
 }
 
 function scalar(v: string | undefined): string | undefined {

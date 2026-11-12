@@ -11,7 +11,6 @@ export const LAYER_DIRS = [
 	'architecture',
 	'architecture/flows',
 	'architecture/spec',
-	'pages',
 	'issues',
 ]
 

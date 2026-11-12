@@ -6,7 +6,7 @@ import { Header } from './components/Header'
 import { PhaseRail } from './components/PhaseRail'
 import { PreviewPane } from './components/PreviewPane'
 import { Workspace } from './components/Workspace'
-import { canvasFilesForRevision } from './lib/canvasSelection'
+import { canvasFilesForRevision, revisionForPhase } from './lib/canvasSelection'
 import { daemon, sessionIdFromPath } from './lib/daemonClient'
 import { FIXTURE_ARTIFACTS, FIXTURE_META, FIXTURE_PHASE_STATE, FIXTURE_SESSION_ID } from './lib/fixture'
 import {
@@ -23,8 +23,9 @@ import { platformClient } from './lib/platformClient'
 import type { CanvasFileInfo, ConnStatus, PhaseId, PhaseState, RevisionMeta, SessionMeta } from './lib/types'
 import { usePlatform } from './lib/usePlatform'
 
+// The design checkpoint runs inside the build, on the running application, so only the build shows a preview.
 function phaseHasPreview(phase: PhaseId): boolean {
-	return phase === 'design' || phase === 'build'
+	return phase === 'build'
 }
 
 const EMPTY_PHASE_STATE: PhaseState = {
@@ -158,13 +159,7 @@ export function App(): JSX.Element {
 
 	const live = status === 'live'
 
-	const focusedRev = useMemo<RevisionMeta | null>(() => {
-		if (!meta) return null
-		for (let i = meta.revisions.length - 1; i >= 0; i--) {
-			if (meta.revisions[i]!.label === focused) return meta.revisions[i]!
-		}
-		return null
-	}, [meta, focused])
+	const focusedRev = useMemo<RevisionMeta | null>(() => (meta ? revisionForPhase(meta.revisions, focused) : null), [meta, focused])
 
 	const gateName = phaseState.gateName ?? meta?.gate ?? null
 	const isCurrentGate = live && focused === phaseState.current && !!gateName
@@ -215,7 +210,7 @@ export function App(): JSX.Element {
 				sessionId={sessionId}
 				live={live}
 			/>
-			{showPreview && <PreviewPane phase={focused} sessionId={sessionId} live={live} previewUrl={platform.data?.previewUrl ?? null} />}
+			{showPreview && <PreviewPane previewUrl={platform.data?.previewUrl ?? null} />}
 			<AnnotationPanel
 				gateName={gateName}
 				hasGate={hasCanvas}

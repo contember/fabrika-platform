@@ -147,6 +147,7 @@ export const planInputSchema = z.object({
 	response: optionalTextSchema,
 })
 export const feedbackTextSchema = z.object({ feedback: z.string().catch('') })
+export const consumedGateSchema = z.object({ found: z.literal(true), revision: z.number().int(), verdict: gateVerdictSchema.catch('none') })
 export const consumedFeedbackSchema = feedbackTextSchema.extend({ found: z.literal(true), verdict: gateVerdictSchema.catch('none') })
 export const submitFeedbackSchema = feedbackTextSchema.extend({ type: z.literal('submit') })
 export const feedbackRevisionSchema = z.object({

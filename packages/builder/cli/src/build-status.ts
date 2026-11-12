@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { dirname, join } from 'path'
 import { z } from 'zod'
+import type { GateVerdict } from '../../shared/gate'
 import type { Issue } from './issues'
 
 export type IssueStatus = 'done' | 'blocked'
@@ -15,6 +16,8 @@ export interface BuildEvidence {
 	commit: string | null
 	/** Uncommitted changes outside `.fabrika/` were present, so the commit alone does not reproduce the run. */
 	dirty: boolean
+	/** Set when the check was a review gate (the design checkpoint) rather than a command. */
+	verdict?: GateVerdict
 }
 
 export interface BuildRecord {
@@ -33,7 +36,8 @@ const buildEvidenceSchema = z.object({
 	at: z.string(),
 	commit: z.string().nullable(),
 	dirty: z.boolean(),
-})
+	verdict: z.enum(['approve', 'changes', 'none']).optional().catch(undefined),
+}).transform(({ verdict, ...evidence }) => ({ ...evidence, ...(verdict === undefined ? {} : { verdict }) }))
 
 // A record written before evidence existed keeps its status and reads as "no recorded check".
 const buildBoardSchema = z.record(

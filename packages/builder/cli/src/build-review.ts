@@ -1,4 +1,4 @@
-import { GATE_APPROVE, GATE_CHANGES, GATE_VERDICT_ID } from '../../shared/gate'
+import { GATE_APPROVE, GATE_CHANGES, GATE_VERDICT_ID, type GateVerdict } from '../../shared/gate'
 import type { BuildBoard, BuildEvidence } from './build-status'
 import type { Issue } from './issues'
 
@@ -37,9 +37,14 @@ export function renderBuildReview(issues: Issue[], board: BuildBoard, now: Date)
 	return lines.join('\n') + '\n'
 }
 
+const VERDICT_TEXT: Record<GateVerdict, string> = { approve: 'approved', changes: 'changes requested', none: 'no verdict' }
+
 export function describeEvidence(evidence: BuildEvidence): string {
 	const commit = `${evidence.commit === null ? 'no commit' : `at ${evidence.commit.slice(0, 7)}`}${evidence.dirty ? ' with uncommitted changes' : ''}`
-	return `${evidence.command} · exit ${evidence.exitCode} · ${(evidence.durationMs / 1000).toFixed(1)} s · ${commit} · ${evidence.at}`
+	const result = evidence.verdict === undefined
+		? `exit ${evidence.exitCode} · ${(evidence.durationMs / 1000).toFixed(1)} s`
+		: VERDICT_TEXT[evidence.verdict]
+	return `${evidence.command} · ${result} · ${commit} · ${evidence.at}`
 }
 
 function note(now: Date): string {

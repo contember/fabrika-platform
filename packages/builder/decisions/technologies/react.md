@@ -24,7 +24,7 @@ the Worker can serve as static assets.
 
 ## When & why to use
 
-- Default UI layer — the routers, opice selector conventions, and design-token mockups all assume React.
+- Default UI layer — the routers, the opice selector conventions and `@fabrika/ui` all assume React.
 
 ## Impacts & gotchas
 

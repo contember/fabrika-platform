@@ -1,4 +1,5 @@
-import type { CanvasFileInfo, RevisionMeta } from './types'
+import { PHASE_IDS } from '../../../shared/phases'
+import type { CanvasFileInfo, PhaseId, RevisionMeta } from './types'
 
 export function canvasFilesForRevision(
 	revision: RevisionMeta | null,
@@ -23,4 +24,20 @@ export function canvasFilesForRevision(
 			|| file.diffStats.removed !== 0,
 	)
 	return changed.length > 0 ? changed : revision.canvasFiles
+}
+
+// `design` was a phase before the design checkpoint moved into the build; an older session's mockup is not the build's.
+const PHASE_LABELS: ReadonlySet<string> = new Set([...PHASE_IDS, 'design'])
+
+/**
+ * The latest revision a phase shows. The build hosts the gates opened inside it (the design checkpoint), whose labels
+ * are not phase ids.
+ */
+export function revisionForPhase(revisions: readonly RevisionMeta[], phase: PhaseId): RevisionMeta | null {
+	for (let i = revisions.length - 1; i >= 0; i--) {
+		const label = revisions[i]?.label
+		if (!label) continue
+		if (label === phase || (phase === 'build' && !PHASE_LABELS.has(label))) return revisions[i] ?? null
+	}
+	return null
 }

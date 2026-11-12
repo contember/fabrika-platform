@@ -109,8 +109,7 @@ function SkeletonGrid({
 		<div className="p-6">
 			{upcoming && (
 				<p className="mb-4 text-body text-text-tertiary">
-					Not reached yet — once the design gate is approved, this phase turns each user flow into an opice <span className="font-mono">*.test.ts</span>
-					{' '}
+					Not reached yet — once the tech gate is approved, this phase turns each user flow into an opice <span className="font-mono">*.test.ts</span>{' '}
 					skeleton (the acceptance contract), reviewed here as a grid.
 				</p>
 			)}

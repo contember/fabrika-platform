@@ -3,15 +3,11 @@ import type { BuildEvent, PhaseState, SessionMeta } from './types'
 export const FIXTURE_SESSION_ID = 'fixture-session'
 
 export const FIXTURE_PHASE_STATE: PhaseState = {
-	current: 'design',
+	current: 'skeletons',
 	index: 4,
 	completed: ['intake', 'vision', 'flows', 'tech'],
-	reads: [
-		'.fabrika/architecture/flows/checkout.flow.md',
-		'.fabrika/architecture/flows/browse.flow.md',
-		'.fabrika/architecture/tech.md',
-	],
-	produces: ['.fabrika/architecture/design.md', '.fabrika/pages/*.jsx'],
+	reads: ['.fabrika/architecture/flows/checkout.flow.md', '.fabrika/architecture/flows/browse.flow.md'],
+	produces: ['tests/browser/*.test.ts'],
 	gate: true,
 	satisfied: false,
 }
@@ -19,23 +15,16 @@ export const FIXTURE_PHASE_STATE: PhaseState = {
 export const FIXTURE_META: SessionMeta = {
 	id: FIXTURE_SESSION_ID,
 	currentRevision: 5,
-	canvasFiles: [
-		{ filename: 'checkout-mockup.jsx', label: 'Checkout mockup' },
-		{ filename: 'design-tokens.jsx', label: 'Design tokens' },
-	],
+	canvasFiles: [{ filename: 'review-grid.jsx', label: 'Skeleton review' }],
 	revisions: [
 		{ revision: 1, label: 'intake', canvasFiles: [{ filename: 'intake.jsx' }] },
 		{ revision: 2, label: 'vision', canvasFiles: [{ filename: 'vision.jsx' }] },
 		{ revision: 3, label: 'flows', canvasFiles: [{ filename: 'flows.jsx' }] },
 		{ revision: 4, label: 'tech', canvasFiles: [{ filename: 'tech.jsx' }] },
-		{
-			revision: 5,
-			label: 'design',
-			canvasFiles: [{ filename: 'checkout-mockup.jsx' }, { filename: 'design-tokens.jsx' }],
-		},
+		{ revision: 5, label: 'skeletons', canvasFiles: [{ filename: 'review-grid.jsx' }] },
 	],
-	gate: 'design',
-	label: 'Design tokens + mockups',
+	gate: 'skeletons',
+	label: 'Opice skeletons',
 }
 
 export const FIXTURE_BUILD_EVENTS: BuildEvent[] = [
@@ -51,12 +40,10 @@ export const FIXTURE_ARTIFACTS: Record<string, string> = {
 		`# Flow: checkout\n\n1. Shopper opens \`/cart\`.\n2. Reviews line items, adjusts quantities.\n3. Submits → \`/order/confirmation\`.\n\n# Flow: browse\n\n1. Shopper lands on \`/\`.\n2. Filters by roast level.\n3. Opens a product → adds to cart.`,
 	tech:
 		`# Tech\n\nStack: **zerops-app** (Bun + PostgreSQL + React/Buzola, Fabrika IAM behind the proxy).\n\n- Routes: the contract's mounts and the SPA.\n- Data layer: @fabrika/db over PostgreSQL + named SQL fixtures from skeleton metadata.\n- Reasoning: the paved road the installation deploys.`,
-	design:
-		`# Design tokens\n\nSemantic layer → Tailwind/CSS vars.\n\n- \`--surface\` → warm off-black\n- \`--accent\` → roast amber\n- \`--text\` → bone\n\nMockups: \`pages/checkout.jsx\`, \`pages/product.jsx\`. See the live-preview pane → it renders the kernel-compiled JSX with these tokens applied.`,
 	skeletons:
 		`# Opice skeletons\n\nOne \`*.test.ts\` per flow, each a metadata-first \`browserTest\` with pending \`step{intent,hint}\` stubs and \`invariant.todo\` acceptances. Reviewed as a grid in the workspace.`,
 	issues:
-		`# Issues (induced)\n\nDeterministic compile step — issues induced from skeleton metadata.\n\n- ISSUE-001 Foundation: routes + seed infra.\n- ISSUE-002 Feature: cart + checkout vertical slice.`,
+		`# Issues (induced)\n\nDeterministic compile step — issues induced from skeleton metadata.\n\n- ISSUE-001 Foundation: routes + seed infra.\n- ISSUE-004 Design checkpoint: theme the running app, reviewed at the design gate.\n- ISSUE-101 Feature: cart + checkout vertical slice.`,
 	build:
 		`# Build\n\nPer-issue assisted pipeline. The live-preview pane (right) will host the real running app (localhost:5173) once an issue is in flight.`,
 }

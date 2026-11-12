@@ -9,6 +9,8 @@ export interface InducedIssue {
 	dependsOn: string[]
 	touches: string[]
 	verify: string[]
+	/** The review gate whose consumed verdict `build done` records instead of running a check. */
+	gate?: string
 	body: string
 	kind: 'foundation' | 'feature'
 }
@@ -16,6 +18,9 @@ export interface InducedIssue {
 const FOUNDATION_SCAFFOLD = 'ISSUE-001'
 const FOUNDATION_DATA = 'ISSUE-002'
 const FOUNDATION_AUTH = 'ISSUE-003'
+const DESIGN_CHECKPOINT = 'ISSUE-004'
+// Not `design`: that label belongs to the removed design phase, whose old reviews must not count here.
+const DESIGN_GATE = 'design-checkpoint'
 
 export interface InduceOpts {
 	stack?: StackPointer
@@ -96,11 +101,43 @@ export function induceIssues(skeletons: Skeleton[], opts: InduceOpts = {}): Indu
 		})
 	}
 
+	issues.push({
+		id: DESIGN_CHECKPOINT,
+		kind: 'foundation',
+		goal: 'Design checkpoint: theme the running application and get the design gate reviewed.',
+		satisfies: [],
+		dependsOn: issues.map((i) => i.id),
+		touches: ['theme stylesheet'],
+		verify: [],
+		gate: DESIGN_GATE,
+		body: [
+			'Foundation. The design is reviewed on the real application, not on drawings:',
+			"the screens are the kit's components with the seeded data.",
+			'',
+			"1. Theme through the kit's tokens only: override `--fui-*` custom properties in the",
+			"   SPA's own stylesheet, imported after `@fabrika/ui/styles.css` (the `fabrika-app`",
+			'   skill\'s `spa.md`, "Theming"). Never restyle a `.fui-` class. On a stack without',
+			"   `@fabrika/ui`, theme that stack's own tokens the same way.",
+			'2. Record the decisions in `.fabrika/architecture/design.md`: each overridden token,',
+			'   its value and why, and the stylesheet that holds them.',
+			'3. Start the application with its seeds and publish its address:',
+			'   `fabrika builder preview --url=<local url>`.',
+			"4. Fill the skill's `gates/design.jsx` with the real tokens and the routes to look at,",
+			'   then `fabrika builder gate open design-checkpoint --view <view.jsx> && fabrika builder gate wait`.',
+			'5. On "Request changes", change the tokens and re-open the gate.',
+			'6. `fabrika builder build done ' + DESIGN_CHECKPOINT + "` records the gate's verdict.",
+			'',
+			'Screens to review (skeleton `url` metadata):',
+			...(allUrls.length ? allUrls.map((u) => `- \`${u}\``) : ['- (none declared)']),
+		].join('\n'),
+	})
+
 	let n = 101
 	for (const s of skeletons) {
 		const deps = [FOUNDATION_SCAFFOLD]
 		if (s.seeds.length && allSeeds.length) deps.push(FOUNDATION_DATA)
 		if (s.roles.length && allRoles.length) deps.push(FOUNDATION_AUTH)
+		deps.push(DESIGN_CHECKPOINT)
 
 		const satisfies = [s.feature ?? s.name, ...s.invariants]
 
@@ -140,6 +177,7 @@ export function renderIssue(issue: InducedIssue): string {
 		`depends_on: [${issue.dependsOn.map(q).join(', ')}]`,
 		`touches: [${issue.touches.map(q).join(', ')}]`,
 		`verify: [${issue.verify.map(q).join(', ')}]`,
+		...(issue.gate ? [`gate: ${issue.gate}`] : []),
 		'---',
 	].join('\n')
 	return `${fm}\n\n# ${issue.id} — ${issue.goal}\n\n${issue.body}\n`

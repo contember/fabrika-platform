@@ -1,9 +1,9 @@
 {
-	/* Gate: skeletons (phase 6). One row per tests/browser/*.test.ts. Confirm the
+	/* Gate: skeletons (phase 5). One row per tests/browser/*.test.ts. Confirm the
     acceptance contract (scenarios + frozen invariants) before issue induction.
     The dashboard also shows the live skeleton grid from /api/session/:id/skeletons. */
 }
-<Section title="Phase 6 — Opice skeletons (acceptance contract)">
+<Section title="Phase 5 — Opice skeletons (acceptance contract)">
 	<Note>
 		Each skeleton is the definition of "done" for its flow. The `intent` of every step and every invariant is FROZEN here — the build may write the
 		check body but must not weaken the claim.

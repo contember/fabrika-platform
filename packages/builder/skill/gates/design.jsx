@@ -1,22 +1,27 @@
 {
-	/* Gate: design (phase 5). Pair this review canvas with the live mockup the
-    dashboard renders from .fabrika/architecture/design.md tokens. Push BOTH the
-    mockup spec and the token table; the right pane shows the themed screen. */
+	/* Gate: design-checkpoint (ISSUE-004, inside the build). The app already runs on the
+    paved-road kit; this gate reviews its theme on the real screens, not a mockup. List the
+    --fui-* overrides from the SPA's stylesheet, and the routes the reviewer should open in the
+    live preview (publish it first with `fabrika builder preview --url=…`). */
 }
-<Section title="Phase 5 — Design tokens + mockup">
-	<Item id="header" label="Screen: the primary flow surface" badge="h1" badgeVariant="info">
-		The key screen from a user flow (heading + the main action).
-	</Item>
+<Section title="Design — theme of the running app">
+	<Note>Open each route in the preview pane. The values below are the overrides in the SPA stylesheet, imported after @fabrika/ui/styles.css.</Note>
 	<Table
 		headers={['Token', 'Role', 'Value']}
 		rows={[
-			['color.brand', 'primary action, brand', '#6F4E37'],
-			['color.surface', 'page + card background', '#FBF7F0'],
-			['color.accent', 'prices, badges', '#C8853A'],
-			['radius.card', 'cards, inputs, buttons', '12px'],
+			['--fui-accent', 'primary action', '#6F4E37'],
+			['--fui-surface', 'cards and panels', '#FBF7F0'],
+			['--fui-radius-md', 'cards, inputs, buttons', '12px'],
 		]}
 	/>
-	<Choice id="palette" label="Primary palette?" required options={['As shown (recommended)', 'Darker', 'Lighter / minimal']} />
-	<UserInput id="design-note" label="Token or layout tweaks?" placeholder="e.g. more contrast on the price" multiline />
+	<Table
+		headers={['Route', 'Screen', 'Flow']}
+		rows={[
+			['/', 'catalog', 'browse'],
+			['/cart', 'cart and checkout', 'checkout'],
+		]}
+	/>
+	<Choice id="palette" label="Palette?" required options={['As shown', 'More contrast', 'Calmer']} />
+	<UserInput id="design-note" label="Which screen or token should change?" placeholder="e.g. the price is hard to read on /cart" multiline />
 	<Choice id="verdict" label="Verdict" required options={['Approve', 'Request changes']} />
 </Section>

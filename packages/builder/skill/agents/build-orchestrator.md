@@ -1,7 +1,7 @@
 ---
 name: fabrika-build-orchestrator
 description: >
-  Phase 8 (build) playbook. The MAIN Fabrika session reads this and drives the
+  Phase 7 (build) playbook. The MAIN Fabrika session reads this and drives the
   build: it does NOT hand-code the whole DAG — it fans out implementer
   subagents directly (one per issue, in isolated git worktrees), supervises them, gates
   each on a green opice `bun test`, guards the frozen invariants, and escalates
@@ -63,6 +63,11 @@ level, wait for the level to settle before starting dependents.
 - Foundation issues (`ISSUE-001` scaffold, `…002` data, `…003` auth) are usually
   serial (data/auth depend on scaffold) — do them first, yourself or via one
   subagent each, and verify the app boots before fanning out features.
+- `ISSUE-004` is the design checkpoint (`gate: design-checkpoint`), and every feature issue
+  depends on it. Do it yourself in the main session, never in a subagent: it needs
+  the human. Follow its body: theme the running app through `--fui-*` overrides,
+  publish the preview, open the `design-checkpoint` gate and wait. `build done ISSUE-004`
+  records the gate's verdict; it refuses until the gate has feedback.
 - Feature issues that share no `touches` and have their deps `done` → fan out
   concurrently with the host's subagent mechanism. Prefer the bundled
   `fabrika-implementer` role when the host exposes it.
@@ -119,7 +124,7 @@ boots + a smoke `bun test` is green before building features on top.
 
 ## 5. Frozen-invariant guardrail (the whole point of fabrika)
 
-The `invariant` _statements_ were frozen by a human at phase 6 — they are the
+The `invariant` _statements_ were frozen by a human at phase 5 — they are the
 acceptance contract. **Implementers (and opice-author) may write only the check
 body, never soften, narrow, or delete the claim.** A test that passes by gutting
 its invariant is a FAILURE, not a pass.

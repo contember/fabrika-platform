@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
-import { mkdirSync, rmSync, writeFileSync } from 'fs'
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { dirname, join, resolve } from 'path'
 import { fileURLToPath } from 'url'
 import { builderDaemonUrl } from '../../shared/urls'
@@ -161,8 +161,8 @@ describe('gate interactive loop', () => {
 
 		const advR = await runCli(['advance', '--dir', repo], cliEnv)
 		expect(advR.code).toBe(0)
-		expect(advR.stdout).toContain('OK: phase 1/8 (intake) satisfied.')
-		expect(advR.stdout).toContain('Next -> phase 2/8')
+		expect(advR.stdout).toContain('OK: phase 1/7 (intake) satisfied.')
+		expect(advR.stdout).toContain('Next -> phase 2/7')
 		expect(advR.stderr).toContain('submitted without a verdict')
 
 		const afterPhase = await (
@@ -306,6 +306,64 @@ describe('gate interactive loop', () => {
 		expect(state.completed).toEqual(['intake'])
 		expect(state.current).toBe('vision')
 		expect(state.satisfied).toBe(true)
+
+		rmSync(repo, { recursive: true, force: true })
+	})
+
+	test('build done on the design checkpoint refuses before a review, then records the design gate verdict', async () => {
+		const sessionId = 'gate-loop-design-checkpoint'
+		const repo = scratchDir('fabrika-design-repo-')
+		const fabrikaDir = join(repo, '.fabrika')
+		mkdirSync(join(fabrikaDir, 'issues'), { recursive: true })
+		writeFileSync(
+			join(fabrikaDir, 'config.json'),
+			JSON.stringify({ profile: 'zerops-app', sessionId, createdAt: new Date().toISOString() }),
+		)
+		writeFileSync(
+			join(fabrikaDir, 'issues', 'ISSUE-004.md'),
+			'---\ngoal: Design checkpoint\nsatisfies: []\ndepends_on: []\ntouches: []\nverify: []\ngate: design-checkpoint\n---\nbody\n',
+		)
+		const cliEnv = { FABRIKA_SESSION_ID: sessionId }
+
+		const unopened = await runCli(['build', 'done', 'ISSUE-004', '--dir', repo], cliEnv)
+		expect(unopened.code).toBe(1)
+		expect(unopened.stderr).toContain('the "design-checkpoint" gate has no submitted review')
+
+		// A review from the removed design phase, approved and consumed, never stands in for the checkpoint's.
+		await openGate(sessionId, 'design')
+		const old = await openSocket(`${wsBase}/ws/session/${sessionId}`)
+		old.send(JSON.stringify({ type: 'submit', feedback: 'Mockup ok.', responses: [{ id: 'verdict', value: 'Approve' }] }))
+		await new Promise((r) => setTimeout(r, 100))
+		old.close()
+		await fetch(`${base}/api/session/${sessionId}/feedback/consume`, { method: 'POST' })
+		const stale = await runCli(['build', 'done', 'ISSUE-004', '--dir', repo], cliEnv)
+		expect(stale.code).toBe(1)
+
+		await openGate(sessionId, 'design-checkpoint')
+		const unreviewed = await runCli(['build', 'done', 'ISSUE-004', '--dir', repo], cliEnv)
+		expect(unreviewed.code).toBe(1)
+
+		const browser = await openSocket(`${wsBase}/ws/session/${sessionId}`)
+		browser.send(JSON.stringify({ type: 'submit', feedback: 'Price is hard to read.', responses: [{ id: 'verdict', value: 'Request changes' }] }))
+		await new Promise((r) => setTimeout(r, 100))
+		browser.close()
+
+		const refused = await runCli(['build', 'done', 'ISSUE-004', '--verify', 'true', '--dir', repo], cliEnv)
+		expect(refused.code).toBe(1)
+		expect(refused.stderr).toContain('takes no --verify')
+
+		const done = await runCli(['build', 'done', 'ISSUE-004', '--dir', repo], cliEnv)
+		expect(done.code).toBe(0)
+		expect(done.stderr).toContain('answered "Request changes"; recording ISSUE-004 anyway')
+		const board = JSON.parse(readFileSync(join(fabrikaDir, 'build', 'status.json'), 'utf-8'))
+		expect(board['ISSUE-004'].status).toBe('done')
+		expect(board['ISSUE-004'].evidence).toMatchObject({ command: 'design-checkpoint gate review, revision 2', verdict: 'changes' })
+
+		// The review stays readable after it was consumed; a gate never opened has none.
+		const again = await (await fetch(`${base}/api/session/${sessionId}/gate/design-checkpoint/consume`, { method: 'POST' })).json()
+		expect(again).toEqual({ found: true, revision: 2, verdict: 'changes' })
+		const missing = await (await fetch(`${base}/api/session/${sessionId}/gate/tech/consume`, { method: 'POST' })).json()
+		expect(missing).toEqual({ found: false })
 
 		rmSync(repo, { recursive: true, force: true })
 	})

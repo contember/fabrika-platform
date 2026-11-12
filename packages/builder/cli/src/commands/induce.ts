@@ -28,7 +28,7 @@ export async function cmdInduce(argv: string[]): Promise<number> {
 	if (skeletons.length === 0) {
 		console.error(
 			`[fabrika] no opice skeletons in ${testsBrowserDir}. `
-				+ `Author them in phase 6 (skeletons) first.`,
+				+ `Author them in phase 5 (skeletons) first.`,
 		)
 		return 1
 	}

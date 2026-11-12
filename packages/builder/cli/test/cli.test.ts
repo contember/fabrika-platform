@@ -91,7 +91,7 @@ test('a project initialized in Codex can resume in Claude without losing phase s
 
 	fx.write('.fabrika/intent/brief.md', '# Shared brief')
 	const beforeHandoff = await run(['next', '--dir', fx.root])
-	expect(beforeHandoff.stdout).toContain('## Phase 2/8 - Vision')
+	expect(beforeHandoff.stdout).toContain('## Phase 2/7 - Vision')
 
 	const claudeResume = await run([
 		'init',
@@ -106,7 +106,7 @@ test('a project initialized in Codex can resume in Claude without losing phase s
 	expect(existsSync(join(fx.root, '.claude/skills/fabrika/SKILL.md'))).toBe(true)
 
 	const afterHandoff = await run(['next', '--dir', fx.root])
-	expect(afterHandoff.stdout).toContain('## Phase 2/8 - Vision')
+	expect(afterHandoff.stdout).toContain('## Phase 2/7 - Vision')
 	expect(afterHandoff.stdout).toContain('(intake ✓)')
 })
 
@@ -114,7 +114,7 @@ test('next emits the phase-1 packet on a fresh init', async () => {
 	fx = makeFixture() // already inited
 	const { code, stdout } = await run(['next', '--dir', fx.root])
 	expect(code).toBe(0)
-	expect(stdout).toContain('## Phase 1/8 - Intake')
+	expect(stdout).toContain('## Phase 1/7 - Intake')
 	expect(stdout).toContain('Gate:')
 })
 
@@ -122,7 +122,7 @@ test('advance is reflected in subsequent next (derivation moves forward)', async
 	fx = makeFixture()
 
 	let nxt = await run(['next', '--dir', fx.root])
-	expect(nxt.stdout).toContain('## Phase 1/8 - Intake')
+	expect(nxt.stdout).toContain('## Phase 1/7 - Intake')
 
 	const blocked = await run(['advance', '--dir', fx.root, '--force'])
 	expect(blocked.code).toBe(1)
@@ -130,7 +130,7 @@ test('advance is reflected in subsequent next (derivation moves forward)', async
 
 	fx.write('.fabrika/intent/brief.md', '# brief')
 	nxt = await run(['next', '--dir', fx.root])
-	expect(nxt.stdout).toContain('## Phase 2/8 - Vision')
+	expect(nxt.stdout).toContain('## Phase 2/7 - Vision')
 	expect(nxt.stdout).toContain('(intake ✓)')
 
 	const visionBlocked = await run(['advance', '--dir', fx.root, '--force'])
@@ -140,7 +140,7 @@ test('advance is reflected in subsequent next (derivation moves forward)', async
 	fx.write('.fabrika/intent/glossary.md', '# glossary')
 	fx.write('.fabrika/principles/principles.md', '# principles')
 	nxt = await run(['next', '--dir', fx.root])
-	expect(nxt.stdout).toContain('## Phase 3/8 - User flows')
+	expect(nxt.stdout).toContain('## Phase 3/7 - User flows')
 	expect(nxt.stdout).toContain('vision ✓')
 })
 
