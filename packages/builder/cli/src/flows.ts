@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, statSync } from 'fs'
+import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from 'fs'
 import { join } from 'path'
 import { GATE_APPROVE, GATE_CHANGES, GATE_VERDICT_ID } from '../../shared/gate'
 import { literal } from './build-review'
@@ -20,6 +20,8 @@ export interface Flow {
 	leadsTo: string[]
 	/** What the reviewer must fix before the map can be trusted. */
 	problems: string[]
+	/** Only a regular file under a slug name is shown and mapped; a link could pull in any file on the machine. */
+	shown: boolean
 }
 
 // A route is a path: segments of URL-safe characters, `:name` parameters included. Anything else stays off the map.
@@ -33,22 +35,35 @@ export function readFlows(repoRoot: string): Flow[] {
 	for (const entry of readdirSync(dir).sort()) {
 		if (!entry.endsWith('.flow.md')) continue
 		const file = join(dir, entry)
-		if (!statSync(file).isFile() || statSync(file).size === 0) continue
-		flows.push(parseFlow(entry.slice(0, -'.flow.md'.length), readFileSync(file, 'utf8')))
+		const slug = entry.slice(0, -'.flow.md'.length)
+		const stat = lstatSync(file)
+		if (stat.isSymbolicLink() || !stat.isFile()) {
+			flows.push(unreadable(slug, 'not a regular file (a link or a directory); it is not read'))
+			continue
+		}
+		if (stat.size === 0) continue
+		flows.push(parseFlow(slug, readFileSync(file, 'utf8')))
 	}
 	return flows
+}
+
+function unreadable(slug: string, problem: string): Flow {
+	return { slug, path: `${FLOWS_DIR}/${slug}.flow.md`, actor: '', goal: '', route: null, leadsTo: [], problems: [problem], shown: false }
 }
 
 export function parseFlow(slug: string, raw: string): Flow {
 	const fm = extractFrontMatter(raw).body
 	const problems: string[] = []
-	if (!SLUG.test(slug)) problems.push('rename the file to lowercase letters, digits and dashes')
+	const shown = SLUG.test(slug)
+	if (!shown) problems.push('rename the file to lowercase letters, digits and dashes; it is not mapped until then')
 	const rawRoute = scalar(fm['route'])
 	let route: string | null = null
 	if (rawRoute === undefined || rawRoute === '') problems.push('no `route:` in its front matter')
 	else if (!ROUTE.test(rawRoute)) problems.push(`\`route: ${rawRoute}\` is not a path`)
 	else route = rawRoute
 	const leadsTo: string[] = []
+	// The reader is flat: a block list (`leads_to:` then `- /x` lines) reads as empty, which must not pass silently.
+	if (fm['leads_to'] === '') problems.push('write `leads_to` on one line, as `[/a, /b]`')
 	for (const target of list(fm['leads_to'])) {
 		if (ROUTE.test(target)) leadsTo.push(target)
 		else problems.push(`\`leads_to\` entry \`${target}\` is not a path`)
@@ -61,18 +76,26 @@ export function parseFlow(slug: string, raw: string): Flow {
 		route,
 		leadsTo,
 		problems,
+		shown,
 	}
 }
 
-/** Every screen on the map: each flow's start and every screen a flow leads to. */
+/** Every screen on the map: each shown flow's start and every screen it leads to. */
 export function mappedRoutes(flows: readonly Flow[]): Set<string> {
-	return new Set(flows.flatMap((flow) => [...(flow.route ? [flow.route] : []), ...flow.leadsTo]))
+	return new Set(flows.filter((flow) => flow.shown).flatMap((flow) => [...(flow.route ? [flow.route] : []), ...flow.leadsTo]))
 }
 
-/** The skeleton URLs no flow puts on the map; a skeleton without a URL is not checked. */
+/** The skeleton URLs on no screen of the map: a `:name` segment matches any one segment, and a trailing slash is ignored. */
 export function unmappedUrls(flows: readonly Flow[], urls: readonly string[]): string[] {
-	const routes = mappedRoutes(flows)
-	return [...new Set(urls)].filter((url) => !routes.has(url.split(/[?#]/)[0] ?? url)).sort()
+	const routes = [...mappedRoutes(flows)].map(segments)
+	return [...new Set(urls)].filter((url) => {
+		const path = segments(url.split(/[?#]/)[0] ?? url)
+		return !routes.some((route) => route.length === path.length && route.every((part, i) => part.startsWith(':') || part === path[i]))
+	}).sort()
+}
+
+function segments(path: string): string[] {
+	return path.split('/').filter((part) => part !== '')
 }
 
 /** The route check `next` and `advance` report from the skeletons phase on: the issues are induced from these urls. */
@@ -93,7 +116,7 @@ export function routeMapMermaid(flows: readonly Flow[]): string {
 	}
 	const edges: string[] = []
 	for (const flow of flows) {
-		if (!flow.route || !SLUG.test(flow.slug)) continue
+		if (!flow.route || !flow.shown) continue
 		const from = id(flow.route)
 		for (const target of flow.leadsTo) edges.push(`  ${from} -->|${flow.slug}| ${id(target)}`)
 	}
@@ -123,7 +146,7 @@ export function renderFlowsReview(flows: readonly Flow[], now: Date): string {
 	)
 	if (problems.length > 0) lines.push(`\t<Table headers={${literal(['Flow file', 'Problem'])}} rows={${literal(problems)}} />`)
 	for (const flow of flows) {
-		if (!SLUG.test(flow.slug)) continue
+		if (!flow.shown) continue
 		lines.push(
 			`\t<Item id={${literal(`flow-${flow.slug}`)}} label={${literal(`${flow.slug} — ${flow.route ?? 'no route'}`)}} badge="flow" badgeVariant="info">`,
 			`\t\t<Markdown file="${flow.path}" />`,

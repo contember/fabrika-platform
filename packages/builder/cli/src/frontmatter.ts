@@ -5,7 +5,8 @@ export interface FrontMatter {
 }
 
 export function extractFrontMatter(raw: string): FrontMatter {
-	const m = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/)
+	// An editor's byte-order mark would otherwise hide the whole front matter.
+	const m = raw.replace(/^\uFEFF/, '').match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/)
 	if (!m) return { body: {}, rest: raw }
 	const body: Record<string, string> = {}
 	for (const line of (m[1] ?? '').split(/\r?\n/)) {

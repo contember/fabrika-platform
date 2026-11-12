@@ -53,7 +53,7 @@ ensure daemon → fabrika builder next → do packet work → gate → advance �
      is unavailable, apply the role in the current session.
 
 4. Gate every packet that has a `Gate:` command.
-   - Start from the matching `gates/*.jsx` template and replace every
+   - For a template gate, start from the matching `gates/*.jsx` template and replace every
      placeholder with real content from `.fabrika/`. Never open a gate with
      placeholder or empty `<Item>` content. Keep the interactive controls,
      and keep the closing `verdict` choice (`Approve` / `Request changes`)

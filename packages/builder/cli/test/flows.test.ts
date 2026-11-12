@@ -1,5 +1,6 @@
 import { compileJsx } from '@fabrika/canvas-kernel/server'
 import { afterEach, expect, test } from 'bun:test'
+import { symlinkSync } from 'fs'
 import { join } from 'path'
 import { fileURLToPath } from 'url'
 import { mappedRoutes, parseFlow, readFlows, renderFlowsReview, routeMapMermaid, unmappedUrls } from '../src/flows'
@@ -21,11 +22,33 @@ test('a flow names its start and the screens it leads to; anything not a path is
 	expect(bad.route).toBeNull()
 	expect(bad.leadsTo).toEqual(['/ok'])
 	expect(bad.problems).toEqual([
-		'rename the file to lowercase letters, digits and dashes',
+		'rename the file to lowercase letters, digits and dashes; it is not mapped until then',
 		'`route: cart"]` is not a path',
 		'`leads_to` entry `javascript:x` is not a path',
 	])
-	expect(routeMapMermaid([bad])).toBe('flowchart LR\n  s0["/ok"]')
+	expect(routeMapMermaid([bad])).toBe('flowchart LR')
+
+	const block = parseFlow('block', flow('route: /a\nleads_to:\n  - /b'))
+	expect(block.leadsTo).toEqual([])
+	expect(block.problems).toEqual(['write `leads_to` on one line, as `[/a, /b]`'])
+	expect(parseFlow('bom', `\uFEFF${flow('route: /a')}`).route).toBe('/a')
+})
+
+test('a flow file that is a link is never read, and a dangling one breaks nothing', () => {
+	fx = makeFixture()
+	fx.write('secret.txt', 'route: /leaked')
+	fx.write('.fabrika/architecture/flows/real.flow.md', flow('route: /a'))
+	symlinkSync(join(fx.root, 'secret.txt'), join(fx.root, '.fabrika/architecture/flows/leak.flow.md'))
+	symlinkSync(join(fx.root, 'missing.md'), join(fx.root, '.fabrika/architecture/flows/gone.flow.md'))
+	const flows = readFlows(fx.root)
+	expect(flows.map((f) => [f.slug, f.shown, f.problems])).toEqual([
+		['gone', false, ['not a regular file (a link or a directory); it is not read']],
+		['leak', false, ['not a regular file (a link or a directory); it is not read']],
+		['real', true, []],
+	])
+	const view = renderFlowsReview(flows, new Date(0))
+	expect(view).not.toContain('leak.flow.md" />')
+	expect([...mappedRoutes(flows)]).toEqual(['/a'])
 })
 
 test('the map joins flows on shared screens, and skeleton urls off the map are reported', () => {
@@ -44,7 +67,10 @@ test('the map joins flows on shared screens, and skeleton urls off the map are r
 		'  s2 -->|checkout| s1',
 		'  s2 -->|checkout| s3',
 	].join('\n'))
-	expect(unmappedUrls(flows, ['/cart?step=2', '/admin', '/admin', '/'])).toEqual(['/admin'])
+	expect(unmappedUrls(flows, ['/cart?step=2', '/admin', '/admin', '/', '/orders/42', '/cart/', '/orders/42/edit'])).toEqual([
+		'/admin',
+		'/orders/42/edit',
+	])
 })
 
 test('the generated flows view compiles, renders the map, and keeps flow text as text', async () => {
@@ -62,9 +88,11 @@ test('the generated flows view compiles, renders the map, and keeps flow text as
 	expect(view).toContain('<Markdown file=".fabrika/architecture/flows/checkout.flow.md" />')
 	expect(view.trimEnd().endsWith(`<Choice id="verdict" label="Verdict" required options={['Approve', 'Request changes']} />\n</Section>`)).toBe(true)
 
-	const compiled = await compileJsx(view, { projectRoot: fx.root, tempDir: fx.root })
-	expect(compiled.ok).toBe(true)
-	expect(compiled.ok && compiled.js).toContain('flowchart LR')
+	for (const options of [{}, { assertReadable: () => {} }]) {
+		const compiled = await compileJsx(view, { projectRoot: fx.root, tempDir: fx.root, ...options })
+		expect(compiled.ok).toBe(true)
+		expect(compiled.ok && compiled.js).toContain('flowchart LR')
+	}
 	expect('FABRIKA_FLOWS_INJECTED' in globalThis).toBe(false)
 })
 
@@ -101,4 +129,6 @@ test('flows review writes the gate view, and the packets from the skeletons on r
 	const skeletons = await run(['next', '--dir', fx.root])
 	expect(skeletons.stdout).toContain('## Phase 6/7 - Induce issues')
 	expect(skeletons.stdout).toContain("Routes:  warning: skeleton url /admin is on no flow's route map (route or leads_to)")
+	const advance = await run(['advance', '--dir', fx.root])
+	expect(advance.stderr).toContain("warning: skeleton url /admin is on no flow's route map (route or leads_to)")
 })
