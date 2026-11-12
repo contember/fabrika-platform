@@ -20,6 +20,10 @@ Public because both provider packages are, and
 
 - `options.ts` — `readFlag` / `readEnv` / `setting` / `requiredSetting`: a flag beats the environment
   variable beside it, a blank value is absent, a flag given twice is refused.
+- `auth-methods.ts`: `readAuthMethods` (`--auth-methods`, or the `FABRIKA_IAM_OIDC_ENABLED` +
+  `FABRIKA_IAM_PASSWORD_ENABLED` pair; a provider may pass the default it installs when neither is given),
+  `checkedOidcIssuer`, `refuseFlags`, and the OIDC flag and input names both installers read. The client secret's
+  input, `FABRIKA_IAM_OIDC_CLIENT_SECRET`, is environment only.
 - `confirmations.ts` — `confirmations` and `UNATTENDED_FLAG`: confirm on a TTY, `--yes` answers every
   confirmation, and no terminal without `--yes` is refused.
 - `prompt.ts` — `confirm`, the only interactive question; a TTY only, a fresh readline per question.
@@ -34,7 +38,8 @@ Public because both provider packages are, and
 - `scaffold.ts` — create or refresh a sidecar repository around a provider-supplied `materialize`.
 - `admin.ts` — the first administrator: a typed `/admin/rpc` client over the provisioning key, and
   `ensureFirstAdministrator` — list-or-invite the mailbox, ensure the CROSS-APP `admin` grant, issue one
-  enrollment. It returns the URL and never prints it.
+  enrollment. It returns the URL and never prints it. An installation without passwords but with single sign-on gets
+  no enrollment (`single-sign-on`): the invited address signs in through the identity provider.
 - `pin.ts` — `assertPinnedTag`: a sidecar pins a published tag, never a branch (ADR-0025).
 - `secrets.ts` — the generators (`randomSecret`, `randomPxKey`, `generateSigningKeys`, `generateVaultKey`) and the six
   values a container installation is seeded with (`generateInstallationSecrets`). Both providers generate through it.
@@ -44,6 +49,7 @@ Public because both provider packages are, and
   `deployedServiceEnvironment` (what a deploy derives from the hosts: the issuer, the IAM proxy secret, the console
   table digest, IAM's OAuth configuration), per service. The provider supplies where the data lives and the proxy's
   private IAM upstream, adds its own variables and writes them. `INSTALLATION_SECRET_VARIABLES` names the generated ones.
+  IAM's sign-in switches and OIDC client are the bring-up's alone: a deploy writes none of them.
 - `proxy-manifest.ts` — the platform proxy manifest TEMPLATE type, `resolvePlatformProxyManifest` and
   `platformServiceTableDigest`. The template itself is a provider's generated data (Zerops: `generated/`).
 - `mcp.ts` — the operator's MCP client list and IAM's `FABRIKA_IAM_OAUTH_CONFIG` built from it (ADR-0049).

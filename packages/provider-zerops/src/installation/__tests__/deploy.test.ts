@@ -453,6 +453,60 @@ describe('what it writes', () => {
 	})
 })
 
+describe('single sign-on an operator turned on by hand', () => {
+	const SECRET = 'oidc-client-secret-that-must-never-be-printed'
+	const HAND_SET = {
+		FABRIKA_IAM_OIDC_ENABLED: 'true',
+		FABRIKA_IAM_PASSWORD_ENABLED: 'true',
+		OIDC_ISSUER: 'https://idp.example.com',
+		OIDC_CLIENT_ID: 'fabrika-console',
+		OIDC_CLIENT_SECRET: SECRET,
+	}
+	const handSet = (sensitive: readonly string[]) =>
+		fakeZerops({
+			...PROJECT,
+			services: platformServices({ proxy: { zeropsSubdomain: SUBDOMAINS }, iam: HAND_SET })
+				.map((service) => service.name === 'iam' ? { ...service, sensitive } : service),
+		})
+	const deploy = (zerops: FakeZerops, log = recordingDeployLog()) =>
+		deployPlatform(input(), {
+			...fakeSourceCollaborators,
+			uploadFetch: zerops.uploadFetch,
+			api: zerops.api,
+			reconcileSchema: async () => {},
+			sleep: async () => {},
+			log,
+			signal: new AbortController().signal,
+		})
+
+	test('survives a deploy: none of its variables is written or removed, and the secret is never logged', async () => {
+		const zerops = handSet(['OIDC_CLIENT_SECRET'])
+		const log = recordingDeployLog()
+
+		await deploy(zerops, log)
+
+		for (const [key, value] of Object.entries(HAND_SET)) {
+			expect(zerops.env('iam').get(key)).toBe(value)
+			expect(zerops.calls).not.toContain(`env:iam:${key}`)
+			expect(zerops.calls).not.toContain(`env-delete:iam:${key}`)
+		}
+		expect(zerops.calls).toContain('deploy:iam')
+		expect(log.lines.join('\n')).not.toContain(SECRET)
+	})
+
+	test('a client secret stored readable is refused, naming it and never its value', async () => {
+		const zerops = handSet([])
+
+		const refusal = await deploy(zerops).then(() => null, (error: unknown) => error)
+
+		const message = refusal instanceof Error ? refusal.message : ''
+		expect(message).toContain('iam/OIDC_CLIENT_SECRET')
+		expect(message).not.toContain('iam/OIDC_CLIENT_ID')
+		expect(message).not.toContain(SECRET)
+		expect(zerops.calls).toEqual([])
+	})
+})
+
 describe('the IAM proxy secret', () => {
 	const expected = createHmac('sha256', 'px_admin').update('fabrika-installation-proxy-secret:iam').digest('hex')
 

@@ -102,6 +102,7 @@ describe('a checkout whose checker npm does not have', () => {
 			secretsFile: join(tmpdir(), `fabrika-install-test-${crypto.randomUUID()}.env`),
 			tier: 'light',
 			email: { kind: 'none' },
+			authentication: { passwordEnabled: true },
 			unattended: true,
 		}, {
 			...collaborators,

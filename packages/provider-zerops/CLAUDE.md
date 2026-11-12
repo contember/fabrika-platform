@@ -420,6 +420,11 @@ Invariants:
   (`platformServiceTableDigest`); Control refuses to start when it names neither table. The template's
   `oauthResource` is generated from `CONTROL_MCP_PATH` / `CONTROL_MCP_SCOPE`; `platform-artifacts`'
   `proxy-manifest.test.ts` pins the resolved tables to `controlServiceContract({ mcp })`.
+- **The sign-in methods are the bring-up's alone.** `install` writes `FABRIKA_IAM_OIDC_ENABLED`,
+  `FABRIKA_IAM_PASSWORD_ENABLED` and, with `--auth-methods` naming `oidc`, `OIDC_ISSUER`, `OIDC_CLIENT_ID` and
+  `OIDC_CLIENT_SECRET` (sensitive, the operator's own, so neither a generated key nor in the secrets file) on `iam`,
+  password only by default. `deployedServiceEnvironment` writes none of them, so single sign-on an operator turns on by
+  hand (the guide's "Turn on single sign-on") survives every `deploy` and `upgrade`; never add them to a deploy.
 - **There is no `source` service (ADR-0029).** A leftover one is ignored with one warning and never deleted.
 - **The platform proxy's manifest is the platform's composition alone, shipped in the proxy's archive.** No
   application shares the platform proxy (ADR-0034). `install` pass 1 and `deploy` append the manifest to the

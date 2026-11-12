@@ -104,7 +104,9 @@ Re-running install after any generated secret was placed is refused.
 Two tiers, one project each. \`light\` (core LIGHT): one single-node PostgreSQL and one bucket shared by
 IAM, control and Operations, one container per service. \`standard\` (core SERIOUS): an HA PostgreSQL for
 IAM and control, a second HA PostgreSQL and bucket for Operations, two containers of IAM and the proxy.
-Authentication is PASSWORD ONLY; no administrator exists yet when this finishes.
+Authentication is PASSWORD ONLY unless \`--auth-methods\` says otherwise; no administrator exists yet when this
+finishes. With OIDC, register \`https://<iam host>/auth/callback\` at the identity provider once the install
+prints the host; to turn it on for an existing installation, see \`platform guide\`.
 
 Options (a flag beats the environment variable beside it):
 
@@ -122,11 +124,17 @@ Options (a flag beats the environment variable beside it):
   --email-provider=<name>           FABRIKA_EMAIL_PROVIDER          default none; or one of: ${EMAIL_PROVIDERS}
   --email-from=<address>            FABRIKA_EMAIL_FROM              the sender, required with a provider
   --email-from-name=<name>          FABRIKA_EMAIL_FROM_NAME         the sender's display name, optional
+  --auth-methods=<oidc|password|oidc,password>                      default password; or FABRIKA_IAM_OIDC_ENABLED
+                                                                    + FABRIKA_IAM_PASSWORD_ENABLED, both true/false
+  --oidc-issuer=<url>               FABRIKA_IAM_OIDC_ISSUER         required with oidc
+  --oidc-client-id=<id>             FABRIKA_IAM_OIDC_CLIENT_ID      required with oidc
   ${UNATTENDED_FLAG}                                                             answer every confirmation yes —
                                                                     required when stdin is not a terminal
 
 	FABRIKA_ZEROPS_ACCESS_TOKEN       required   Zerops access token, environment only and no flag
 	FABRIKA_ZEROPS_API_URL            optional   region API base, when not the default
+	FABRIKA_IAM_OIDC_CLIENT_SECRET    with oidc  the OIDC client secret, environment only and no flag; written
+	                                             sensitive on \`iam\` and not into the secrets file
 	FABRIKA_EMAIL_<PROVIDER>_*        the selected provider's variables, environment only and no flag:
 ${EMAIL_PROVIDER_VARIABLES}
 

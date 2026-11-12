@@ -171,6 +171,7 @@ describe('exact installation source', () => {
 			secretsFile: SECRETS_FILE,
 			tier: 'light',
 			email: { kind: 'none' },
+			authentication: { passwordEnabled: true },
 			unattended: true,
 		}, { ...invalid, log: recordingInitLog(), prompts: { confirm: async () => true }, storeSecrets: async () => {} })).rejects.toThrow()
 		expect(zerops.calls).toEqual([])
@@ -199,6 +200,7 @@ describe('exact installation source', () => {
 			secretsFile: SECRETS_FILE,
 			tier: 'light',
 			email: { kind: 'none' },
+			authentication: { passwordEnabled: true },
 			unattended: true,
 		}, install)).rejects.toThrow('selected setup')
 		expect(zerops.calls).toEqual([])
@@ -226,6 +228,7 @@ describe('exact installation source', () => {
 			secretsFile: SECRETS_FILE,
 			tier: 'light',
 			email: { kind: 'none' },
+			authentication: { passwordEnabled: true },
 			unattended: true,
 		}, {
 			...fixture().collaborators,

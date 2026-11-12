@@ -96,12 +96,17 @@ const report = (result: FirstAdministratorResult, log: AdminLog): void => {
  * The one place the enrollment URL is ever written, and it is written once.
  *
  * A URL that sets a password is a credential: it goes to stdout on a line of its own, is stored
- * nowhere, and is not repeated. The three other outcomes carry no URL at all and say what was found.
+ * nowhere, and is not repeated. The other outcomes carry no URL at all and say what was found.
  */
 const announceEnrollment = (result: FirstAdministratorResult, log: AdminLog, print: (line: string) => void): void => {
 	if (result.enrollment.state === 'already-set') {
 		log.ok('a password is already set for this principal — no enrollment was issued')
 		log.info('Sign in at the console. A forgotten password is a reset, which the Access plane issues to a signed-in administrator.')
+		return
+	}
+	if (result.enrollment.state === 'single-sign-on') {
+		log.ok('this installation offers no password, so no enrollment was issued')
+		log.info(`Sign in at the console with single sign-on as ${result.email}: the identity provider must vouch for that address.`)
 		return
 	}
 	if (result.enrollment.state === 'outstanding') {

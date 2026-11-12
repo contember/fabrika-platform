@@ -47,6 +47,7 @@ const input = (overrides: Partial<PlatformInstallInput> = {}): PlatformInstallIn
 	secretsFile: SECRETS_FILE,
 	tier: 'light',
 	email: { kind: 'none' },
+	authentication: { passwordEnabled: true },
 	unattended: false,
 	...overrides,
 })
@@ -345,6 +346,7 @@ describe('what reaches which service', () => {
 		// Password only, by decision — and IAM's own defaults are the other way round.
 		expect(fixture.zerops.env('iam').get('FABRIKA_IAM_OIDC_ENABLED')).toBe('false')
 		expect(fixture.zerops.env('iam').get('FABRIKA_IAM_PASSWORD_ENABLED')).toBe('true')
+		expect([...fixture.zerops.env('iam').keys()].filter((key) => key.startsWith('OIDC_'))).toEqual([])
 		for (const hostname of PLATFORM_DEPLOY_ORDER) {
 			expect(fixture.zerops.env(hostname).get('ENVIRONMENT')).toBe('stage')
 		}
@@ -384,6 +386,7 @@ describe('what reaches which service', () => {
 			secrets,
 			zeropsAccessToken: 'minted',
 			email: { kind: 'none' },
+			authentication: { passwordEnabled: true },
 			tier: 'light',
 		})
 		const generated = new Set<string>([...Object.values(secrets), 'minted'])
@@ -406,6 +409,7 @@ describe('what reaches which service', () => {
 			secrets: generateInstallationSecrets(),
 			zeropsAccessToken: 'minted',
 			email: { kind: 'none' },
+			authentication: { passwordEnabled: true },
 			tier: 'light',
 			apiBaseUrl: 'https://api.app-brn1.zerops.io/api/rest/public',
 		})
@@ -423,6 +427,7 @@ describe('what reaches which service', () => {
 			secrets: generateInstallationSecrets(),
 			zeropsAccessToken: 'minted',
 			email: { kind: 'none' },
+			authentication: { passwordEnabled: true },
 			tier: 'light',
 		})
 		expect([...matrix.keys()].sort()).toEqual(['control', 'iam', 'operations', 'proxy'])
@@ -451,6 +456,7 @@ describe('what reaches which service', () => {
 			secrets: generateInstallationSecrets(),
 			zeropsAccessToken: 'minted',
 			email: { kind: 'none' },
+			authentication: { passwordEnabled: true },
 			tier,
 		})
 		const platformDatabase = '${db_connectionTlsString}/${db_dbName}?sslmode=require'
@@ -558,6 +564,47 @@ describe('the hand-off', () => {
 		}
 		expect(fixture.stored.join('\n')).not.toContain('FABRIKA_EMAIL_')
 		expect(fixture.log.lines.join('\n')).not.toContain(apiKey)
+	})
+
+	test("writes the operator's OIDC client on iam only, its secret sensitive, never in the secrets file or the transcript", async () => {
+		const fixture = harness()
+		const clientSecret = 'oidc-client-secret-that-must-never-be-printed'
+
+		await fixture.run({
+			authentication: { passwordEnabled: false, oidc: { issuer: 'https://idp.example.com', clientId: 'fabrika-console', clientSecret } },
+		})
+
+		const iam = fixture.zerops.env('iam')
+		expect([
+			iam.get('FABRIKA_IAM_OIDC_ENABLED'),
+			iam.get('FABRIKA_IAM_PASSWORD_ENABLED'),
+			iam.get('OIDC_ISSUER'),
+			iam.get('OIDC_CLIENT_ID'),
+			iam.get('OIDC_CLIENT_SECRET'),
+		]).toEqual(['true', 'false', 'https://idp.example.com', 'fabrika-console', clientSecret])
+		expect([...fixture.zerops.sensitive('iam')].sort()).toEqual(
+			[...(GENERATED_SECRET_KEYS.get('iam') ?? []), ...derivedSecretKeys('iam'), 'OIDC_CLIENT_SECRET'].sort(),
+		)
+		for (const hostname of ['operations', 'control', 'proxy'] as const) {
+			expect([...fixture.zerops.env(hostname).keys()].filter((key) => key.startsWith('OIDC_'))).toEqual([])
+		}
+		expect(fixture.stored.join('\n')).not.toContain('OIDC')
+		const transcript = fixture.log.lines.join('\n')
+		expect(transcript).not.toContain(clientSecret)
+		const register = fixture.log.lines.find((line) => line.startsWith('action: REGISTER THE REDIRECT URI')) ?? ''
+		expect(register).toContain(`https://${IAM_HOST}/auth/callback`)
+		expect(register).toContain('fabrika-console')
+		expect(transcript).toContain('issues no enrollment: that person signs in with single sign-on')
+	})
+
+	test('password only asks for no redirect URI and keeps the enrollment hand-off', async () => {
+		const fixture = harness()
+
+		await fixture.run()
+
+		expect(fixture.log.lines.some((line) => line.includes('/auth/callback'))).toBe(false)
+		expect(fixture.log.lines.some((line) => line.includes('single sign-on'))).toBe(false)
+		expect(fixture.log.lines.some((line) => line.startsWith('action: ADMIT YOURSELF'))).toBe(true)
 	})
 
 	test('points the hand-off at the secrets file, ready to run', async () => {
@@ -891,6 +938,7 @@ describe('the argument surface', () => {
 			secretsFile: SECRETS_FILE,
 			tier: 'light',
 			email: { kind: 'none' },
+			authentication: { passwordEnabled: true },
 			unattended: false,
 		})
 		expect(() => parsePlatformInstallArgs(['--token=nope'], {})).toThrow('unexpected argument')
@@ -924,6 +972,63 @@ describe('the argument surface', () => {
 			'FABRIKA_EMAIL_RESEND_API_KEY is missing',
 		)
 		expect(() => parsePlatformInstallArgs([...base, '--email-resend-api-key=re_key'], env)).toThrow('unexpected argument')
+	})
+
+	test('reads the sign-in methods: password only by default, OIDC with a client whose secret comes from the environment only', () => {
+		const base = ['--project-id=p1', '--client-id=c1', '--env=stage']
+		const env = { FABRIKA_ZEROPS_ACCESS_TOKEN: 'token' }
+		const oidc = [...base, '--auth-methods=oidc,password', '--oidc-issuer=https://idp.example.com', '--oidc-client-id=fabrika-console']
+		const secret = { ...env, FABRIKA_IAM_OIDC_CLIENT_SECRET: 'client-secret' }
+
+		expect(parsePlatformInstallArgs(base, env).authentication).toEqual({ passwordEnabled: true })
+		expect(parsePlatformInstallArgs(oidc, secret).authentication).toEqual({
+			passwordEnabled: true,
+			oidc: { issuer: 'https://idp.example.com', clientId: 'fabrika-console', clientSecret: 'client-secret' },
+		})
+		expect(
+			parsePlatformInstallArgs([...base, '--auth-methods=oidc'], {
+				...secret,
+				FABRIKA_IAM_OIDC_ISSUER: 'https://idp.example.com',
+				FABRIKA_IAM_OIDC_CLIENT_ID: 'from-env',
+			}).authentication,
+		).toEqual({
+			passwordEnabled: false,
+			oidc: { issuer: 'https://idp.example.com', clientId: 'from-env', clientSecret: 'client-secret' },
+		})
+		// The pair of switches stands in for the flag, as on the Cloudflare installer.
+		expect(
+			parsePlatformInstallArgs(base, {
+				...secret,
+				FABRIKA_IAM_OIDC_ENABLED: 'true',
+				FABRIKA_IAM_PASSWORD_ENABLED: 'false',
+				FABRIKA_IAM_OIDC_ISSUER: 'https://idp.example.com',
+				FABRIKA_IAM_OIDC_CLIENT_ID: 'from-env',
+			}).authentication,
+		).toEqual({
+			passwordEnabled: false,
+			oidc: { issuer: 'https://idp.example.com', clientId: 'from-env', clientSecret: 'client-secret' },
+		})
+
+		expect(() => parsePlatformInstallArgs(oidc, env)).toThrow('FABRIKA_IAM_OIDC_CLIENT_SECRET is required')
+		expect(() => parsePlatformInstallArgs([...base, '--auth-methods=oidc', '--oidc-client-id=c'], secret)).toThrow(
+			'--oidc-issuer=<value> or FABRIKA_IAM_OIDC_ISSUER is required',
+		)
+		expect(() => parsePlatformInstallArgs([...base, '--auth-methods=oidc', '--oidc-issuer=https://idp.example.com'], secret)).toThrow(
+			'--oidc-client-id=<value> or FABRIKA_IAM_OIDC_CLIENT_ID is required',
+		)
+		expect(() => parsePlatformInstallArgs([...base, '--auth-methods=oidc', '--oidc-issuer=idp', '--oidc-client-id=c'], secret)).toThrow(
+			'is not a URL',
+		)
+		expect(() => parsePlatformInstallArgs([...base, '--auth-methods=sso'], env)).toThrow('--auth-methods takes oidc, password, or oidc,password')
+		expect(() => parsePlatformInstallArgs([...base, '--oidc-issuer=https://idp.example.com'], env)).toThrow(
+			'--oidc-issuer was given, but OIDC is not among the IAM authentication methods',
+		)
+		expect(() => parsePlatformInstallArgs(base, { ...env, FABRIKA_IAM_OIDC_ENABLED: 'false', FABRIKA_IAM_PASSWORD_ENABLED: 'false' })).toThrow(
+			'At least one IAM authentication method must be enabled',
+		)
+		// A credential has no flag, and the refusal does not echo the value.
+		expect(() => parsePlatformInstallArgs([...oidc, '--oidc-client-secret=leaked'], secret)).toThrow('unexpected argument `--oidc-client-secret`')
+		expect(() => parsePlatformInstallArgs([...oidc, '--oidc-client-secret=leaked'], secret)).not.toThrow('leaked')
 	})
 
 	test('`--yes` is the one flag that carries no value, and it is off unless it is written', () => {

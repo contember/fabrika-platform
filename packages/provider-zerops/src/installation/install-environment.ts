@@ -1,5 +1,6 @@
 import {
 	INSTALLATION_SECRET_VARIABLES,
+	type InstallationAuthentication,
 	type InstallationEmail,
 	type InstallationSecrets,
 	installationServiceEnvironment,
@@ -68,6 +69,8 @@ export interface InstallationEnvInput {
 	readonly zeropsAccessToken: string
 	/** IAM sends its own mail with it, and Control hands it to applications whose job declares `mailer: 'installation'`. */
 	readonly email: InstallationEmail
+	/** How people sign in; written on `iam`, the OIDC client secret sensitive. */
+	readonly authentication: InstallationAuthentication
 }
 
 /**
@@ -90,6 +93,7 @@ export const installationServiceEnv = (input: InstallationEnvInput): ReadonlyMap
 		iamUpstream: PRIVATE_IAM_UPSTREAM,
 		secrets,
 		email: input.email,
+		authentication: input.authentication,
 		data: {
 			iamDatabase: postgresUrl('db'),
 			controlDatabase: postgresUrl('db'),

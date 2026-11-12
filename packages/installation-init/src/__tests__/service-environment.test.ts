@@ -6,6 +6,7 @@ import { generateInstallationSecrets } from '../secrets'
 import {
 	deployedServiceEnvironment,
 	IAM_OAUTH_CONFIG_VARIABLE,
+	IAM_OIDC_CLIENT_SECRET_VARIABLE,
 	INSTALLATION_SECRET_VARIABLES,
 	installationServiceEnvironment,
 	type InstallationServiceInput,
@@ -35,6 +36,7 @@ const input = (overrides: Partial<InstallationServiceInput> = {}): InstallationS
 		operationsBlobs: storage('blobs'),
 	},
 	email: { kind: 'none' },
+	authentication: { passwordEnabled: true },
 	...overrides,
 })
 
@@ -86,6 +88,46 @@ describe('the bring-up environment', () => {
 		expect(env.control.get('FABRIKA_EMAIL_PROVIDER')).toBe('resend')
 		expect(env.operations.has('FABRIKA_EMAIL_PROVIDER')).toBe(false)
 		expect(env.proxy.has('FABRIKA_EMAIL_PROVIDER')).toBe(false)
+	})
+})
+
+describe('the sign-in methods', () => {
+	const oidc = { issuer: 'https://idp.example.com', clientId: 'fabrika-console', clientSecret: 'client-secret' }
+
+	test('password only states both switches and writes no OIDC client', () => {
+		const env = installationServiceEnvironment(input())
+		expect([env.iam.get('FABRIKA_IAM_OIDC_ENABLED'), env.iam.get('FABRIKA_IAM_PASSWORD_ENABLED')]).toEqual(['false', 'true'])
+		expect([...env.iam.keys()].filter((key) => key.startsWith('OIDC_'))).toEqual([])
+	})
+
+	test('OIDC writes the client under the names IAM reads on Bun, on iam alone', () => {
+		const env = installationServiceEnvironment(input({ authentication: { passwordEnabled: false, oidc } }))
+		expect([
+			env.iam.get('FABRIKA_IAM_OIDC_ENABLED'),
+			env.iam.get('FABRIKA_IAM_PASSWORD_ENABLED'),
+			env.iam.get('OIDC_ISSUER'),
+			env.iam.get('OIDC_CLIENT_ID'),
+			env.iam.get(IAM_OIDC_CLIENT_SECRET_VARIABLE),
+		]).toEqual(['true', 'false', 'https://idp.example.com', 'fabrika-console', 'client-secret'])
+		expect(IAM_OIDC_CLIENT_SECRET_VARIABLE).toBe('OIDC_CLIENT_SECRET')
+		for (const service of ['operations', 'control', 'proxy'] as const) {
+			expect([...env[service].keys()].filter((key) => key.includes('OIDC'))).toEqual([])
+		}
+	})
+
+	test('a deploy writes no sign-in variable, so one an operator set by hand survives it', () => {
+		const env = deployedServiceEnvironment({
+			environment: 'stage',
+			scheme: 'https',
+			hosts: { iam: 'iam.example.com', control: 'console.example.com', operations: 'errors.example.com' },
+			iamUpstream: 'iam:3000',
+			provisioningKey: 'px_admin',
+			controlTableDigest: 'digest',
+			oauthConfig: { clients: [], resources: [] },
+		})
+		for (const service of SERVICES) {
+			expect([...env[service].keys()].filter((key) => key.includes('OIDC') || key.includes('PASSWORD'))).toEqual([])
+		}
 	})
 })
 
