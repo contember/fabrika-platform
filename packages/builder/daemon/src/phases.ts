@@ -1,12 +1,13 @@
 import { dirname } from 'path'
 import { derivePhase, type GateReview, offlineGateProbe, type PhaseState as SharedPhaseState } from '../../shared/derive'
+import type { PhaseId } from '../../shared/phases'
 
 export interface PhaseState extends SharedPhaseState {
 	gateName?: string
 }
 
 export interface GateOracle {
-	gateReview(sessionId: string, gateName: string): GateReview
+	gateReview(sessionId: string, gateName: PhaseId): GateReview
 }
 
 export function derivePhaseState(

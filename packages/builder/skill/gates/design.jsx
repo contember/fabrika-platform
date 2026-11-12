@@ -1,5 +1,5 @@
 {
-	/* Gate: design (the ISSUE-004 design checkpoint in the build). The app already runs on the
+	/* Gate: design-checkpoint (ISSUE-004, inside the build). The app already runs on the
     paved-road kit; this gate reviews its theme on the real screens, not a mockup. List the
     --fui-* overrides from the SPA's stylesheet, and the routes the reviewer should open in the
     live preview (publish it first with `fabrika builder preview --url=…`). */

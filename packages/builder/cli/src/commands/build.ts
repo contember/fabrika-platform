@@ -7,6 +7,7 @@ import { type BuildEvidence, type BuildPlan, planBuild, readBoard, record } from
 import { resolveStackPointer, unsupportedProfileNote } from '../catalog'
 import { resolveContext } from '../context'
 import { consumeGate, postBuildEvent } from '../daemon-client'
+import { ensureDaemon } from '../daemon-lifecycle'
 import { type Issue, readIssues } from '../issues'
 import { describeVerification, gitState, runVerification, type Verification } from '../verify'
 
@@ -53,7 +54,13 @@ export async function cmdBuild(argv: string[]): Promise<number> {
 				console.error(`[fabrika] build done <ISSUE-ID> — unknown or missing issue id.`)
 				return 1
 			}
-			if (issue.gate) return await recordGateReview(issue, issue.gate, ctx.sessionId, ctx.repoRoot, ctx.fabrikaDir, issues)
+			if (issue.gate) {
+				if (values.verify || issue.verify.length > 0) {
+					console.error(`[fabrika] ${issue.id} is proved by its "${issue.gate}" review gate; it takes no --verify or verify files.`)
+					return 1
+				}
+				return await recordGateReview(issue, issue.gate, ctx.sessionId, ctx.repoRoot, ctx.fabrikaDir, issues)
+			}
 			if (values.verify && issue.verify.length > 0) {
 				console.error(`[fabrika] ${issue.id} is proved by ${issue.verify.join(', ')}; --verify is only for issues that name no acceptance file.`)
 				return 1
@@ -146,6 +153,7 @@ async function recordGateReview(
 	fabrikaDir: string,
 	issues: Issue[],
 ): Promise<number> {
+	await ensureDaemon({ quiet: true })
 	const review = await consumeGate(sessionId, gate)
 	if (!review) {
 		console.error(
@@ -244,7 +252,8 @@ function renderOrchestrationBrief(plan: BuildPlan, repoRoot: string, profile: st
 		const note = marker.get(i.id) === '…'
 			? `  (waiting on ${i.dependsOn.filter((d) => !doneIds.has(d)).join(', ')})`
 			: ''
-		return `  ${marker.get(i.id) ?? '?'} ${i.id}  ${i.goal}${deps}${note}`
+		const gate = i.gate ? `  [${i.gate} gate: main session, needs the human]` : ''
+		return `  ${marker.get(i.id) ?? '?'} ${i.id}  ${i.goal}${deps}${note}${gate}`
 	})
 
 	return [
@@ -284,7 +293,11 @@ function renderBuildPacket(issue: Issue, repoRoot: string, profile: string): str
 		lines.push(`Stack:     ${profile} -> ${sp.stackFile}  (decisions under ${sp.decisionsDir}/)`)
 		if (sp.support === 'unsupported') lines.push(`           warning: ${unsupportedProfileNote(profile)}`)
 	}
-	lines.push(`Pipeline:  implement -> opice-author (selectors vs running app) -> bun test (steps + invariants)`)
+	lines.push(
+		issue.gate
+			? `Pipeline:  follow the steps in ${issue.path} in the MAIN session; the "${issue.gate}" gate needs the human`
+			: `Pipeline:  implement -> opice-author (selectors vs running app) -> bun test (steps + invariants)`,
+	)
 	lines.push(
 		issue.gate
 			? `Check:     the "${issue.gate}" review gate (build done records its verdict)`

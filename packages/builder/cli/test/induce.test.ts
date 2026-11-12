@@ -68,7 +68,7 @@ describe('issue induction', () => {
 
 		const design = issues.find((i) => i.id === 'ISSUE-004')!
 		expect(design.kind).toBe('foundation')
-		expect(design.gate).toBe('design')
+		expect(design.gate).toBe('design-checkpoint')
 		expect(design.dependsOn).toEqual(['ISSUE-001', 'ISSUE-002', 'ISSUE-003'])
 		expect(design.verify).toEqual([])
 		expect(design.body).toContain('`/cart`')
@@ -97,9 +97,9 @@ describe('issue induction', () => {
 		writeFileSync(join(dir, 'ISSUE-101.md'), md)
 		expect(parseIssue(join(dir, 'ISSUE-101.md')).verify).toEqual(['tests/browser/x.test.ts'])
 		const design = renderIssue(issues.find((i) => i.id === 'ISSUE-004')!)
-		expect(design).toContain('gate: design')
+		expect(design).toContain('gate: design-checkpoint')
 		writeFileSync(join(dir, 'ISSUE-004.md'), design)
-		expect(parseIssue(join(dir, 'ISSUE-004.md')).gate).toBe('design')
+		expect(parseIssue(join(dir, 'ISSUE-004.md')).gate).toBe('design-checkpoint')
 		expect(parseIssue(join(dir, 'ISSUE-101.md')).gate).toBeUndefined()
 		rmSync(dir, { recursive: true, force: true })
 	})

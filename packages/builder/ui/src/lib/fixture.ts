@@ -43,7 +43,7 @@ export const FIXTURE_ARTIFACTS: Record<string, string> = {
 	skeletons:
 		`# Opice skeletons\n\nOne \`*.test.ts\` per flow, each a metadata-first \`browserTest\` with pending \`step{intent,hint}\` stubs and \`invariant.todo\` acceptances. Reviewed as a grid in the workspace.`,
 	issues:
-		`# Issues (induced)\n\nDeterministic compile step — issues induced from skeleton metadata.\n\n- ISSUE-001 Foundation: routes + seed infra.\n- ISSUE-004 Design checkpoint: theme the running app, reviewed at the design gate.\n- ISSUE-005 Feature: cart + checkout vertical slice.`,
+		`# Issues (induced)\n\nDeterministic compile step — issues induced from skeleton metadata.\n\n- ISSUE-001 Foundation: routes + seed infra.\n- ISSUE-004 Design checkpoint: theme the running app, reviewed at the design gate.\n- ISSUE-101 Feature: cart + checkout vertical slice.`,
 	build:
 		`# Build\n\nPer-issue assisted pipeline. The live-preview pane (right) will host the real running app (localhost:5173) once an issue is in flight.`,
 }

@@ -6,7 +6,7 @@ import { Header } from './components/Header'
 import { PhaseRail } from './components/PhaseRail'
 import { PreviewPane } from './components/PreviewPane'
 import { Workspace } from './components/Workspace'
-import { canvasFilesForRevision } from './lib/canvasSelection'
+import { canvasFilesForRevision, revisionForPhase } from './lib/canvasSelection'
 import { daemon, sessionIdFromPath } from './lib/daemonClient'
 import { FIXTURE_ARTIFACTS, FIXTURE_META, FIXTURE_PHASE_STATE, FIXTURE_SESSION_ID } from './lib/fixture'
 import {
@@ -159,13 +159,7 @@ export function App(): JSX.Element {
 
 	const live = status === 'live'
 
-	const focusedRev = useMemo<RevisionMeta | null>(() => {
-		if (!meta) return null
-		for (let i = meta.revisions.length - 1; i >= 0; i--) {
-			if (meta.revisions[i]!.label === focused) return meta.revisions[i]!
-		}
-		return null
-	}, [meta, focused])
+	const focusedRev = useMemo<RevisionMeta | null>(() => (meta ? revisionForPhase(meta.revisions, focused) : null), [meta, focused])
 
 	const gateName = phaseState.gateName ?? meta?.gate ?? null
 	const isCurrentGate = live && focused === phaseState.current && !!gateName

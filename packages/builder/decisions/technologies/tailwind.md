@@ -28,7 +28,7 @@ the CLI).
 ## When & why to use
 
 - Default styling for app UIs — semantic tokens → utilities, no separate CSS-in-JS runtime.
-- Pairs with the design-tokens phase (`design.md`) and with accessible semantic markup (good for opice selectors).
+- Pairs with the design checkpoint's token record (`design.md`) and with accessible semantic markup (good for opice selectors).
 
 ## When NOT to use
 

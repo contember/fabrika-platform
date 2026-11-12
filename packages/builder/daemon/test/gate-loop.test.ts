@@ -321,15 +321,25 @@ describe('gate interactive loop', () => {
 		)
 		writeFileSync(
 			join(fabrikaDir, 'issues', 'ISSUE-004.md'),
-			'---\ngoal: Design checkpoint\nsatisfies: []\ndepends_on: []\ntouches: []\nverify: []\ngate: design\n---\nbody\n',
+			'---\ngoal: Design checkpoint\nsatisfies: []\ndepends_on: []\ntouches: []\nverify: []\ngate: design-checkpoint\n---\nbody\n',
 		)
 		const cliEnv = { FABRIKA_SESSION_ID: sessionId }
 
 		const unopened = await runCli(['build', 'done', 'ISSUE-004', '--dir', repo], cliEnv)
 		expect(unopened.code).toBe(1)
-		expect(unopened.stderr).toContain('the "design" gate has no submitted review')
+		expect(unopened.stderr).toContain('the "design-checkpoint" gate has no submitted review')
 
+		// A review from the removed design phase, approved and consumed, never stands in for the checkpoint's.
 		await openGate(sessionId, 'design')
+		const old = await openSocket(`${wsBase}/ws/session/${sessionId}`)
+		old.send(JSON.stringify({ type: 'submit', feedback: 'Mockup ok.', responses: [{ id: 'verdict', value: 'Approve' }] }))
+		await new Promise((r) => setTimeout(r, 100))
+		old.close()
+		await fetch(`${base}/api/session/${sessionId}/feedback/consume`, { method: 'POST' })
+		const stale = await runCli(['build', 'done', 'ISSUE-004', '--dir', repo], cliEnv)
+		expect(stale.code).toBe(1)
+
+		await openGate(sessionId, 'design-checkpoint')
 		const unreviewed = await runCli(['build', 'done', 'ISSUE-004', '--dir', repo], cliEnv)
 		expect(unreviewed.code).toBe(1)
 
@@ -338,16 +348,20 @@ describe('gate interactive loop', () => {
 		await new Promise((r) => setTimeout(r, 100))
 		browser.close()
 
+		const refused = await runCli(['build', 'done', 'ISSUE-004', '--verify', 'true', '--dir', repo], cliEnv)
+		expect(refused.code).toBe(1)
+		expect(refused.stderr).toContain('takes no --verify')
+
 		const done = await runCli(['build', 'done', 'ISSUE-004', '--dir', repo], cliEnv)
 		expect(done.code).toBe(0)
 		expect(done.stderr).toContain('answered "Request changes"; recording ISSUE-004 anyway')
 		const board = JSON.parse(readFileSync(join(fabrikaDir, 'build', 'status.json'), 'utf-8'))
 		expect(board['ISSUE-004'].status).toBe('done')
-		expect(board['ISSUE-004'].evidence).toMatchObject({ command: 'design gate review, revision 1', verdict: 'changes' })
+		expect(board['ISSUE-004'].evidence).toMatchObject({ command: 'design-checkpoint gate review, revision 2', verdict: 'changes' })
 
 		// The review stays readable after it was consumed; a gate never opened has none.
-		const again = await (await fetch(`${base}/api/session/${sessionId}/gate/design/consume`, { method: 'POST' })).json()
-		expect(again).toEqual({ found: true, revision: 1, verdict: 'changes' })
+		const again = await (await fetch(`${base}/api/session/${sessionId}/gate/design-checkpoint/consume`, { method: 'POST' })).json()
+		expect(again).toEqual({ found: true, revision: 2, verdict: 'changes' })
 		const missing = await (await fetch(`${base}/api/session/${sessionId}/gate/tech/consume`, { method: 'POST' })).json()
 		expect(missing).toEqual({ found: false })
 

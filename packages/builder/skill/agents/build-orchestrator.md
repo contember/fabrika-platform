@@ -63,10 +63,10 @@ level, wait for the level to settle before starting dependents.
 - Foundation issues (`ISSUE-001` scaffold, `…002` data, `…003` auth) are usually
   serial (data/auth depend on scaffold) — do them first, yourself or via one
   subagent each, and verify the app boots before fanning out features.
-- `ISSUE-004` is the design checkpoint (`gate: design`), and every feature issue
+- `ISSUE-004` is the design checkpoint (`gate: design-checkpoint`), and every feature issue
   depends on it. Do it yourself in the main session, never in a subagent: it needs
   the human. Follow its body: theme the running app through `--fui-*` overrides,
-  publish the preview, open the `design` gate and wait. `build done ISSUE-004`
+  publish the preview, open the `design-checkpoint` gate and wait. `build done ISSUE-004`
   records the gate's verdict; it refuses until the gate has feedback.
 - Feature issues that share no `touches` and have their deps `done` → fan out
   concurrently with the host's subagent mechanism. Prefer the bundled

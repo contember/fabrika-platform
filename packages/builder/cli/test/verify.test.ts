@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
+import { describeEvidence } from '../src/build-review'
 import { readBoard } from '../src/build-status'
 import { gitState } from '../src/verify'
 import { type Fixture, makeFixture } from './helpers'
@@ -37,4 +38,30 @@ test('a build record written before evidence existed still reads', () => {
 	fx = makeFixture()
 	fx.write('.fabrika/build/status.json', JSON.stringify({ 'ISSUE-001': { status: 'done', at: '2026-01-01T00:00:00.000Z' } }))
 	expect(readBoard(fx.fabrikaDir)).toEqual({ 'ISSUE-001': { status: 'done', at: '2026-01-01T00:00:00.000Z' } })
+})
+
+test('a gate review records its verdict, and a bad verdict reads as none recorded', () => {
+	fx = makeFixture()
+	const evidence = {
+		command: 'design-checkpoint gate review, revision 2',
+		exitCode: 0,
+		durationMs: 0,
+		at: '2026-01-01T00:00:00.000Z',
+		commit: null,
+		dirty: false,
+	}
+	fx.write(
+		'.fabrika/build/status.json',
+		JSON.stringify({
+			'ISSUE-004': { status: 'done', at: evidence.at, evidence: { ...evidence, verdict: 'changes' } },
+			'ISSUE-005': { status: 'done', at: evidence.at, evidence: { ...evidence, verdict: 'maybe' } },
+		}),
+	)
+	const board = readBoard(fx.fabrikaDir)
+	expect(board['ISSUE-004']?.evidence?.verdict).toBe('changes')
+	expect(board['ISSUE-005']?.evidence).toEqual(evidence)
+	const reviewed = board['ISSUE-004']?.evidence
+	expect(reviewed && describeEvidence(reviewed)).toBe(
+		'design-checkpoint gate review, revision 2 · changes requested · no commit · 2026-01-01T00:00:00.000Z',
+	)
 })

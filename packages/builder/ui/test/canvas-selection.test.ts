@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { canvasFilesForRevision } from '../src/lib/canvasSelection'
+import { canvasFilesForRevision, revisionForPhase } from '../src/lib/canvasSelection'
 import type { RevisionMeta } from '../src/lib/types'
 
 function revision(overrides: Partial<RevisionMeta>): RevisionMeta {
@@ -54,5 +54,24 @@ describe('canvasFilesForRevision', () => {
 		}))
 
 		expect(files.map((file) => file.filename)).toEqual(['vision.jsx'])
+	})
+})
+
+describe('revisionForPhase', () => {
+	const revisions: RevisionMeta[] = [
+		revision({ revision: 1, label: 'tech' }),
+		revision({ revision: 2, label: 'build' }),
+		revision({ revision: 3, label: 'design' }),
+		revision({ revision: 4, label: null }),
+	]
+
+	test('a phase shows its own latest revision', () => {
+		expect(revisionForPhase(revisions, 'tech')?.revision).toBe(1)
+		expect(revisionForPhase(revisions, 'flows')).toBeNull()
+	})
+
+	test('the build shows a gate opened inside it, such as the design checkpoint', () => {
+		expect(revisionForPhase(revisions, 'build')?.revision).toBe(3)
+		expect(revisionForPhase(revisions.slice(0, 2), 'build')?.revision).toBe(2)
 	})
 })

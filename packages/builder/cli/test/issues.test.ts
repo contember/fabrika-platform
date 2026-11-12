@@ -48,3 +48,9 @@ test('empty issue files are ignored', () => {
 	fx.writeEmpty('.fabrika/issues/ISSUE-001.md')
 	expect(readIssues(fx.fabrikaDir).length).toBe(0)
 })
+
+test('an issue that names an invalid gate is refused, never read as ungated', () => {
+	fx = makeFixture()
+	fx.write('.fabrika/issues/ISSUE-004.md', '---\ngoal: design\nsatisfies: []\ndepends_on: []\ntouches: []\ngate: ../x\n---\nbody\n')
+	expect(() => readIssues(fx!.fabrikaDir)).toThrow('is not a gate name')
+})

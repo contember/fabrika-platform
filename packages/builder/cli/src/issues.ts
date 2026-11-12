@@ -1,5 +1,6 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'fs'
 import { basename, join } from 'path'
+import { BuilderCliError } from './errors'
 
 export interface Issue {
 	id: string
@@ -32,7 +33,7 @@ export function readIssues(fabrikaDir: string): Issue[] {
 export function parseIssue(path: string): Issue {
 	const raw = readFileSync(path, 'utf-8')
 	const fm = extractFrontMatter(raw)
-	const gate = gateName(fm.body['gate'])
+	const gate = gateName(path, fm.body['gate'])
 	return {
 		id: basename(path).replace(/\.md$/i, ''),
 		path,
@@ -66,9 +67,12 @@ function extractFrontMatter(raw: string): FrontMatter {
 	return { body, rest: (m[2] ?? '').trim() }
 }
 
-function gateName(v: string | undefined): string | undefined {
+// The name reaches a daemon URL; an issue that names an invalid one is refused, never read as ungated.
+function gateName(path: string, v: string | undefined): string | undefined {
 	const name = scalar(v)
-	return name && /^[a-z][a-z0-9-]*$/.test(name) ? name : undefined
+	if (!name) return undefined
+	if (!/^[a-z][a-z0-9-]*$/.test(name)) throw new BuilderCliError(`${path}: "${name}" is not a gate name (lowercase letters, digits and dashes).`)
+	return name
 }
 
 function scalar(v: string | undefined): string | undefined {

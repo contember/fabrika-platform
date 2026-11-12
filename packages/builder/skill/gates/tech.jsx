@@ -1,6 +1,6 @@
 {
 	/* Gate: tech (phase 4). From .fabrika/architecture/tech.md — the stack pointer
-    + reasoning. Confirm the stack + data layer before design/skeletons. */
+    + reasoning. Confirm the stack + data layer before the skeletons. */
 }
 <Section title="Phase 4 — Tech & scaffold decision">
 	<Item id="stack" label="Stack preset" badge="stack" badgeVariant="info">
