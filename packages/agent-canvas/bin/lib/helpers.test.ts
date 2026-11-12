@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { waitForFeedback } from './helpers'
+import { parseWaitFrame, waitForFeedback } from './helpers'
 
 class FakeSocket {
 	onopen: ((event: Event) => void) | null = null
@@ -117,5 +117,15 @@ describe('waitForFeedback', () => {
 			'Canvas render failed in architecture.jsx (revision 3):\nTable: required prop `headers` must be an array',
 		)
 		expect(sockets).toHaveLength(1)
+	})
+})
+
+describe('parseWaitFrame', () => {
+	test('reads the frames the CLI acts on and ignores the rest', () => {
+		expect(parseWaitFrame({ type: 'remote-feedback-arrived', revision: 2, count: 1, reviewers: ['Eve'] }))
+			.toEqual({ type: 'remote-feedback-arrived', revision: 2, count: 1, reviewers: ['Eve'] })
+		expect(parseWaitFrame({ type: 'thread-queued' })).toEqual({ type: 'thread-queued' })
+		expect(parseWaitFrame({ type: 'keepalive' })).toBeNull()
+		expect(parseWaitFrame({ type: 'render-error', error: { message: 'no revision' } })).toBeNull()
 	})
 })
