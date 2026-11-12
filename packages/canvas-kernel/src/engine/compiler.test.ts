@@ -89,3 +89,8 @@ test('reads a file prop past a > inside another attribute', () => {
 		<FilePreview onClick={() => open()} path="/abs/b.ts" />`
 	expect(canvasFileReferences(jsx).sort()).toEqual(['/abs/a.png', '/abs/b.ts'])
 })
+
+test('stops an unterminated attribute at the next tag', () => {
+	const jsx = `<Note>{'<ImageView'}'s alt</Note>\n<Item label="x" src="/not/named.png" />\n<ImageView src="/abs/c.png" />`
+	expect(canvasFileReferences(jsx)).toEqual(['/abs/c.png'])
+})

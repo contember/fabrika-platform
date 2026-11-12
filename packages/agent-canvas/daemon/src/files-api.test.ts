@@ -142,3 +142,12 @@ test('forgets the names of a removed session that comes back with as many revisi
 	expect((await get('file', join(outsideRoot, 'external.ts'))).status).toBe(403)
 	expect((await get('image', join(outsideRoot, 'image.svg'))).status).toBe(200)
 })
+
+test('answers 404, not 403, for a missing file under a project root reached through a symlink', async () => {
+	const { get, projectRoot, manager } = setup(() => '<Section />')
+	const linkedRoot = `${projectRoot}-link`
+	symlinkSync(projectRoot, linkedRoot)
+	manager.upsert('files', new Map([['plan.jsx', '<Section />']]), linkedRoot)
+	expect((await get('file', 'missing.ts')).status).toBe(404)
+	expect((await get('file', 'local.ts')).status).toBe(200)
+})

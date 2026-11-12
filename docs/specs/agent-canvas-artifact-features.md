@@ -375,7 +375,7 @@ and stays open (rule 7).
    root is listed. The canvas author writes that list, so it stops reads of paths no canvas names, not a hostile canvas.
 3. **CSP on the canvas page**: `connect-src 'self'`, with scripts and styles only from the daemon. Images and fonts
    from any `https:` URL are allowed (decided, Q5). This removes exfiltration through `fetch` and `WebSocket`. An
-   image URL remains a narrow leak, accepted for convenience. So do stylesheets, media and navigation, which CSP does not
+   image URL remains a narrow leak, accepted for convenience. So do stylesheets and media, which the policy allows from any https origin, and navigation, which CSP does not
    govern. Every other daemon response carries an inert policy, so a same-origin frame cannot bypass the page's.
 4. **Capabilities are declared per canvas and held by the daemon.** A canvas declares what it uses, for example a
    module export `export const capabilities = ["state", "files", "ask"]`. The compiler records the list on the

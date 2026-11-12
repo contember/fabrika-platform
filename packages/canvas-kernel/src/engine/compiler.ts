@@ -522,7 +522,7 @@ export function canvasFileReferences(jsx: string): string[] {
 	return [...references]
 }
 
-/** Where the opening tag whose attributes start at `from` ends: the first `>` outside a quoted or `{…}` value. */
+/** Where the opening tag whose attributes start at `from` ends: the first `>` (or a stray `<`) outside a quoted or `{…}` value. */
 function tagEnd(jsx: string, from: number): number {
 	let quote: string | null = null
 	let depth = 0
@@ -537,6 +537,8 @@ function tagEnd(jsx: string, from: number): number {
 		} else if (char === '}') {
 			depth--
 		} else if (char === '>' && depth === 0) {
+			return index
+		} else if (char === '<' && depth === 0) {
 			return index
 		}
 	}

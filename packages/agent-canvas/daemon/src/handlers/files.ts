@@ -1,4 +1,4 @@
-import { canvasFileReferences, type SessionData, type SessionManager } from '@fabrika/canvas-kernel/server'
+import { canvasFileReferences, type RevisionInfo, type SessionData, type SessionManager } from '@fabrika/canvas-kernel/server'
 import { jsonResponse, type Route } from '@fabrika/daemon-kit'
 import { realpathSync } from 'fs'
 import { readdir } from 'fs/promises'
@@ -39,15 +39,14 @@ function isInside(path: string, root: string): boolean {
 type SessionPathResolver = (sessionId: string, relPath: string, kind: 'file' | 'directory') => { fullPath: string } | Response
 
 /**
- * The files the session's canvases name, in every revision, as written and with symlinks resolved. Revisions never
- * change once written; a removed and re-created session has a new `createdAt`.
+ * The files the session's canvases name, in every revision, as written and with symlinks resolved. A push or a new
+ * session replaces the revisions array, so the array is the cache key.
  */
 function createNamedFiles(sessionManager: SessionManager): (session: SessionData) => Set<string> {
-	const cache = new Map<string, { key: string; paths: Set<string> }>()
+	const cache = new WeakMap<readonly RevisionInfo[], Set<string>>()
 	return (session) => {
-		const key = `${session.createdAt}:${session.revisions.length}`
-		const cached = cache.get(session.id)
-		if (cached?.key === key) return cached.paths
+		const cached = cache.get(session.revisions)
+		if (cached !== undefined) return cached
 		const paths = new Set<string>()
 		for (const revision of session.revisions) {
 			for (const { filename } of revision.canvasFiles) {
@@ -60,7 +59,7 @@ function createNamedFiles(sessionManager: SessionManager): (session: SessionData
 				}
 			}
 		}
-		cache.set(session.id, { key, paths })
+		cache.set(session.revisions, paths)
 		return paths
 	}
 }
@@ -88,7 +87,10 @@ function createSessionPathResolver(sessionManager: SessionManager, options: File
 		if (deniedRoots.some((root) => isInside(fullPath, root) || isInside(realPath, root))) {
 			return jsonResponse({ error: 'Path is not served' }, 403)
 		}
-		if (!isInside(realPath, realOrSelf(resolve(session.projectRoot)))) {
+		const lexicalRoot = resolve(session.projectRoot)
+		// realOrSelf leaves a missing path unresolved, so one under a symlinked root is judged by where it was asked for.
+		const insideRoot = isInside(realPath, realOrSelf(lexicalRoot)) || (realPath === fullPath && isInside(fullPath, lexicalRoot))
+		if (!insideRoot) {
 			const named = kind === 'file' && (namedFiles(session).has(fullPath) || namedFiles(session).has(realPath))
 			if (!named) return jsonResponse({ error: 'Path outside the project root is not named by a canvas in this session' }, 403)
 		}

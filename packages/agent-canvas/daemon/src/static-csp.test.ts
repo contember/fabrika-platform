@@ -45,3 +45,9 @@ test('gives every other response an inert policy, keeping one a route set', () =
 test('allows no frames in the canvas page', () => {
 	expect(directive(sessionPageCsp('<body></body>'), 'frame-src')).toEqual(["'none'"])
 })
+
+test('edits a file response in place, so Bun still serves its length and ranges', () => {
+	const file = new Response(Bun.file(import.meta.path))
+	expect(withDefaultCsp(file)).toBe(file)
+	expect(file.headers.get('Content-Security-Policy')).toBe(INERT_DOCUMENT_CSP)
+})

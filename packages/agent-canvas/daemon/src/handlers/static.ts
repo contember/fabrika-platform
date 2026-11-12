@@ -59,7 +59,12 @@ export const INERT_DOCUMENT_CSP = "default-src 'none'; frame-ancestors 'none'; s
 
 export function withDefaultCsp(response: Response): Response {
 	if (response.headers.has('Content-Security-Policy')) return response
-	// A redirect's headers are immutable, so the response is rebuilt rather than edited.
+	try {
+		response.headers.set('Content-Security-Policy', INERT_DOCUMENT_CSP)
+		return response
+	} catch {
+		// A redirect's headers are immutable; a rebuilt file response would lose its length and range support.
+	}
 	const headers = new Headers(response.headers)
 	headers.set('Content-Security-Policy', INERT_DOCUMENT_CSP)
 	return new Response(response.body, { status: response.status, statusText: response.statusText, headers })
