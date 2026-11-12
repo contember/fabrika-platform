@@ -180,7 +180,7 @@ export function createFileHandlers(sessionManager: SessionManager, options: File
 		return new Response(file, {
 			headers: {
 				'Content-Type': 'application/octet-stream',
-				'Content-Disposition': attachmentDisposition(basename(resolved.fullPath)),
+				'Content-Disposition': attachmentDisposition(basename(relPath)),
 				'Cache-Control': 'no-store',
 				'X-Content-Type-Options': 'nosniff',
 			},

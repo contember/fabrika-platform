@@ -154,7 +154,12 @@ test('answers 404, not 403, for a missing file under a project root reached thro
 
 test('downloads only a file a canvas names, inside the project root too, as an attachment', async () => {
 	const { get, projectRoot, outsideRoot, dataDir } = setup((outside) =>
-		`<Download path="${outside}/external.ts" label="Patch" />\n<Download path="local.ts" />`
+		[
+			`<Download path="${outside}/external.ts" label="Patch" />`,
+			'<Download path="local.ts" />',
+			`<Download path="${outside}/missing.ts" />`,
+			`<Download path="${join(outside, '..', 'daemon-data')}/state.json" />`,
+		].join('\n')
 	)
 
 	const outside = await get('download', join(outsideRoot, 'external.ts'))
@@ -168,7 +173,20 @@ test('downloads only a file a canvas names, inside the project root too, as an a
 	// Readable through /api/file, but no canvas offers it for download.
 	writeFileSync(join(projectRoot, 'other.ts'), 'x')
 	expect((await get('download', 'other.ts')).status).toBe(403)
+	expect((await get('download', join(outsideRoot, 'missing.ts'))).status).toBe(404)
+	// Named, but inside the daemon's own state.
 	expect((await get('download', join(dataDir, 'state.json'))).status).toBe(403)
+	// The project root is still listed after the kind split.
+	expect((await get('tree', '')).status).toBe(200)
+})
+
+test('the attachment carries the name the canvas wrote, not the one a symlink resolves to', async () => {
+	const { get, projectRoot } = setup(() => '<Download path="latest.csv" />')
+	writeFileSync(join(projectRoot, 'report-2026-11-12.csv'), 'a,b')
+	symlinkSync(join(projectRoot, 'report-2026-11-12.csv'), join(projectRoot, 'latest.csv'))
+	expect((await get('download', 'latest.csv')).headers.get('Content-Disposition')).toBe(
+		`attachment; filename="latest.csv"; filename*=UTF-8''latest.csv`,
+	)
 })
 
 test('a Download path also admits the file to the read routes, a computed one does not', async () => {
