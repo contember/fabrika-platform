@@ -66,6 +66,11 @@ test('the build brief warns on an unsupported preset', async () => {
 	const brief = await run(['build', '--dir', fx.root])
 	expect(brief.code).toBe(0)
 	expect(brief.stdout).toContain('warning: the "cf-lightweight" preset is unsupported')
+
+	const packet = await run(['build', 'next', '--issue', 'ISSUE-001', '--dir', fx.root])
+	expect(packet.code).toBe(0)
+	expect(packet.stdout).toContain('## Build issue ISSUE-001')
+	expect(packet.stdout).toContain('warning: the "cf-lightweight" preset is unsupported')
 })
 
 test('a project initialized in Codex can resume in Claude without losing phase state', async () => {
