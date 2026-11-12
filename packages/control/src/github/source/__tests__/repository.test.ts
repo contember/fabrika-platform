@@ -1,8 +1,12 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import type { GitHubSourceCredentialRequest, GitHubSourceCredentials } from '../../connections/credentials'
-import { SourceFailure, SourceRateLimited } from '../failure'
+import { createGitHubSource } from '..'
+import type { SourceBytes } from '../archive'
+import { SourceDescriptorMismatch, SourceFailure, SourceRateLimited } from '../failure'
+import type { SourceResolveInput } from '../types'
 import {
 	codeloadUrl,
+	DESCRIPTOR,
 	descriptor,
 	descriptorSha256,
 	file,
@@ -248,6 +252,43 @@ describe('the GitHub tarball repository', () => {
 		await expect(
 			source.resolve({ repository, requestedRef: 'main', descriptorSha256, signal: new AbortController().signal }),
 		).rejects.toMatchObject({ ...expected, stage: 'resolve' })
+	})
+
+	test.each([
+		{ name: 'the repository reader', resolve: (tarball: SourceBytes) => (input: SourceResolveInput) => handSource(tarball).resolve(input) },
+		{
+			// What an installation runs: the transport's timeout and failure mapping sit between the reader and the provider.
+			name: 'the GitHub source a composition builds',
+			resolve: (tarball: SourceBytes) => (input: SourceResolveInput) =>
+				createGitHubSource({
+					credentials: { repositoryToken: () => Promise.reject(new Error('no credential expected')), ownerConnectionToken: async () => undefined },
+					descriptor: DESCRIPTOR,
+					isUploadDestination: () => false,
+					metadataFetch: () => Promise.reject(new Error('resolve reads no REST metadata')),
+					downloadFetch: async (url) =>
+						url.startsWith('https://api.github.com/')
+							? new Response(null, { status: 302, headers: { location: codeloadUrl } })
+							: new Response(Bun.gzipSync(tarball)),
+				}).resolve(input),
+		},
+	])('a drifted descriptor out of $name names the file, the commit and both digests', async ({ resolve }) => {
+		const drifted = 'zerops: drifted\n'
+		const raised = await resolve(handTarball([file(`${handPrefix}zerops.yaml`, drifted)]))({
+			repository,
+			requestedRef: 'main',
+			descriptorSha256,
+			signal: new AbortController().signal,
+		}).then(() => undefined, (error: unknown) => error)
+
+		const actualSha256 = new Bun.CryptoHasher('sha256').update(drifted).digest('hex')
+		expect(raised).toBeInstanceOf(SourceDescriptorMismatch)
+		expect(raised).toMatchObject({
+			code: 'descriptor_mismatch',
+			stage: 'resolve',
+			detail: { path: 'zerops.yaml', commitSha: handCommitSha, expectedSha256: descriptorSha256, actualSha256 },
+			message: `source resolve failed (descriptor_mismatch): zerops.yaml at commit ${handCommitSha} has sha256 ${actualSha256}, `
+				+ `expected sha256 ${descriptorSha256}`,
+		})
 	})
 
 	test.each([

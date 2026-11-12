@@ -32,6 +32,7 @@ import { getRunLogUseCase } from '../api/runs'
 import type { ControlRepositories, RunRow } from '../db'
 import { OperationsReleaseRepository } from '../db'
 import type { Env } from '../env'
+import { SourceDescriptorMismatch } from '../github/source/failure'
 import type { IamSchemaPort } from '../iam-schema'
 import { opsKeyPurpose, VaultOpsKeys } from '../ops-key'
 import { reconcileProviderRuns } from '../provider-reconcile'
@@ -78,6 +79,8 @@ async function seedRun(
 		externalId?: string
 		commitSha?: string
 		sourceBinding?: { connectionId: string; installationId: number }
+		triggerRef?: string
+		domain?: string | null
 	} = {},
 ): Promise<string> {
 	const provider = options.provider ?? 'memory'
@@ -96,10 +99,11 @@ async function seedRun(
 	await db.registry.upsertAppEnv({
 		appId: 'app',
 		env: 'prod',
-		domain: 'app.example.com',
+		domain: options.domain === undefined ? 'app.example.com' : options.domain,
 		publicOrigin: 'https://public.example.com',
 		crossOrigins: ['https://partner.example.org'],
 		namespaceId: null,
+		...(options.triggerRef === undefined ? {} : { triggerRef: options.triggerRef }),
 		provider,
 		providerTargetJson: JSON.stringify(provider === 'cloudflare' ? { provider, version: 1, payload: {} } : envelope(provider, 'target')),
 		providerArtifactJson: JSON.stringify(
@@ -542,6 +546,42 @@ describe('provider-neutral run lifecycle', () => {
 			'deploy failed: source resolve failed (ref_not_found) at https://github.com/acme/notes.git',
 		])
 		expect(stored.objects.get(`runs/${runId}/logs.ndjson`)).not.toContain('ghs_leaked')
+	})
+
+	test.each([
+		{
+			name: 'its branch trigger',
+			seed: { triggerRef: 'refs/heads/deploy/prod' },
+			flags: ' --domain=app.example.com --trigger-ref=refs/heads/deploy/prod',
+		},
+		{
+			name: 'its tag glob trigger, quoted for the shell',
+			seed: { triggerRef: 'refs/tags/v*' },
+			flags: ` --domain=app.example.com --trigger-ref='refs/tags/v*'`,
+		},
+		{ name: 'its domain, with no trigger to keep', seed: {}, flags: ' --domain=app.example.com' },
+		{ name: 'nothing, with neither a domain nor a trigger', seed: { domain: null }, flags: '' },
+	])('a drifted descriptor fails the run with its digests, both causes, and a put that keeps $name', async ({ seed, flags }) => {
+		const { db } = createHarness()
+		const runId = await seedRun(db, seed)
+		const provider = makeProvider([], { state: 'succeeded' })
+		const detail = { path: 'zerops.yaml', commitSha: 'c'.repeat(40), expectedSha256: 'e'.repeat(64), actualSha256: 'a'.repeat(64) }
+		provider.resolveSource = () => Promise.reject(new SourceDescriptorMismatch('resolve', detail))
+		const deps = makeDeps(db, provider)
+		const stored = memoryLogs()
+		deps.logs = stored.logs
+
+		expect((await executeDeploy(deps, { runId })).status).toBe('failed')
+		const response = await getRunLogUseCase({ repositories: db, logs: stored.logs, auth: allowAllAuth() }, runId)
+		expect(response.lines.map((line) => line.text)).toEqual([
+			`deploy failed: source resolve failed (descriptor_mismatch): zerops.yaml at commit ${'c'.repeat(40)} has sha256 ${'a'.repeat(64)}, `
+			+ `expected sha256 ${'e'.repeat(64)}; the manifest registered for app/prod expects that sha256. `
+			+ 'If the manifest was built from a zerops.yaml change that is not pushed yet, commit and push the change (or deploy the ref that has it) '
+			+ 'and deploy again. '
+			+ `If zerops.yaml changed after the manifest was built, rebuild the manifest from a checkout of commit ${'c'.repeat(40)} `
+			+ '(`fabrika app build --env=prod`), send it with `fabrika control apps environments put --provider=memory --app=app --env=prod '
+			+ `--manifest=fabrika.manifest.json${flags}\`, and deploy again`,
+		])
 	})
 
 	test('does not resolve source during a dry run', async () => {
