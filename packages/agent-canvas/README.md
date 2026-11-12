@@ -136,8 +136,8 @@ A project can set its own colours and fonts in `.agent-canvas/theme.css` at its 
 the UI around them. The daemon accepts only `--color-*` and `--font-*` variables on `:root`, `[data-theme="light"]`
 and `[data-theme="dark"]`, with balanced plain values, and serves its own rebuild of them, so a theme cannot load a
 URL or style the page otherwise. The file must stay inside the project (no symlink out) and under 64 KB. A file that
-breaks a rule is not applied; the daemon log and the browser console give the line. The `template-dashboard` and `template-slides` instructions topics
-are starting points for a status dashboard and a deck.
+breaks a rule is not applied; the daemon log and the browser console give the line. The `template-dashboard` and
+`template-slides` instructions topics are starting points for a status dashboard and a deck.
 
 **Dark mode**
 
