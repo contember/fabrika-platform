@@ -66,6 +66,8 @@ test('serves an absolute image a canvas names outside the project root', async (
 	const image = await get('image', join(outsideRoot, 'image.svg'))
 	expect(image.status).toBe(200)
 	expect(image.headers.get('Content-Type')).toBe('image/svg+xml')
+	expect(image.headers.get('Content-Security-Policy')).toContain('sandbox')
+	expect(image.headers.get('X-Content-Type-Options')).toBe('nosniff')
 })
 
 test('refuses a path outside the project root that no canvas names, and any directory outside it', async () => {

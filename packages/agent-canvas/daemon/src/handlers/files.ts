@@ -141,6 +141,9 @@ export function createFileHandlers(sessionManager: SessionManager, options: File
 				headers: {
 					'Content-Type': mime,
 					'Cache-Control': 'public, max-age=300',
+					// An SVG opened as a document would otherwise run its scripts in the daemon's origin.
+					'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox",
+					'X-Content-Type-Options': 'nosniff',
 				},
 			})
 		} catch {
