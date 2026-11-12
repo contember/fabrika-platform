@@ -37,6 +37,8 @@ const holdersOfSecret = (): number[] =>
 const [report, mode] = process.argv.slice(2)
 
 await serveContract(async () => {
+	// Before the report: the test signals as soon as the report exists.
+	if (mode === 'wait') process.on('SIGTERM', () => process.exit(0))
 	const inherited = Bun.spawnSync(['cat', '/proc/self/environ'])
 	writeFileSync(
 		report ?? '',
@@ -50,9 +52,6 @@ await serveContract(async () => {
 			holders: holdersOfSecret(),
 		}),
 	)
-	if (mode === 'wait') {
-		process.on('SIGTERM', () => process.exit(0))
-		await new Promise(() => {})
-	}
+	if (mode === 'wait') await new Promise(() => {})
 	process.exit(Number(mode))
 }, process.env)
