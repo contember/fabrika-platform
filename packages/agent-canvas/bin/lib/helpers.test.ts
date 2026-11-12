@@ -51,6 +51,25 @@ describe('waitForFeedback', () => {
 		await expect(result).resolves.toBe('## Thread replies\n')
 	})
 
+	test('a thread reply claimed while a submit settles the wait is still delivered', async () => {
+		let release = (_value: string | null) => {}
+		const result = waitForFeedback('session', {
+			createSocket: () => {
+				const socket = new FakeSocket()
+				queueMicrotask(() => {
+					socket.onopen?.(new Event('open'))
+					socket.onmessage?.(new MessageEvent('message', { data: JSON.stringify({ type: 'submit', feedback: 'Done' }) }))
+					release('## Thread replies\n')
+				})
+				return socket
+			},
+			probe: () => new Promise((resolve) => (release = resolve)),
+			timeoutMs: 1_000,
+		})
+
+		await expect(result).resolves.toBe('Done\n## Thread replies\n')
+	})
+
 	test('rejects when the connection keeps closing', async () => {
 		const result = waitForFeedback('session', {
 			createSocket: () => {

@@ -1,9 +1,16 @@
 import { parseArgs } from 'util'
-import { z } from 'zod'
 import { cliSocketUrl } from '../cli-auth.ts'
 import { WS_URL } from '../config.ts'
 import { ensureDaemon } from '../daemon-lifecycle.ts'
-import { claimThreadReplies, consumeFeedback, formatCanvasRenderError, getSessionId, pendingInput, waitForFeedback } from '../helpers.ts'
+import {
+	claimThreadReplies,
+	consumeFeedback,
+	formatCanvasRenderError,
+	getSessionId,
+	parseWaitFrame,
+	pendingInput,
+	waitForFeedback,
+} from '../helpers.ts'
 
 export async function handleWatch(args: string[]) {
 	const { values } = parseArgs({
@@ -34,28 +41,12 @@ export async function handleWatch(args: string[]) {
 	}
 }
 
-const followFrameSchema = z.discriminatedUnion('type', [
-	z.object({ type: z.literal('submit'), feedback: z.string() }),
-	z.object({
-		type: z.literal('render-error'),
-		error: z.object({
-			revision: z.number().int(),
-			filename: z.string(),
-			message: z.string(),
-			stack: z.string().optional(),
-			componentStack: z.string().optional(),
-		}),
-	}),
-	z.object({ type: z.literal('thread-queued') }),
-	z.object({ type: z.literal('remote-feedback-arrived'), revision: z.number().int(), count: z.number().int(), reviewers: z.array(z.string()) }),
-])
-
 const RECONNECT_MS = 2_000
 const GIVE_UP_MS = 60_000
 const MAX_NAME = 40
 
 /** A name a reviewer typed, as a quoted label that cannot pass for anything else in the agent's output. */
-function reviewerLabel(name: string): string {
+export function reviewerLabel(name: string): string {
 	return JSON.stringify(name.replace(/\p{Cc}/gu, ' ').trim().slice(0, MAX_NAME))
 }
 
@@ -92,10 +83,8 @@ function followSession(sessionId: string): Promise<never> {
 		} catch {
 			return
 		}
-		const parsed = followFrameSchema.safeParse(json)
-		if (!parsed.success) return
-		const frame = parsed.data
-		switch (frame.type) {
+		const frame = parseWaitFrame(json)
+		switch (frame?.type) {
 			case 'submit':
 				return emit('submit', frame.feedback)
 			case 'render-error':
@@ -108,6 +97,8 @@ function followSession(sessionId: string): Promise<never> {
 					`${frame.count} comment(s) on revision ${frame.revision} from reviewer(s) ${frame.reviewers.map(reviewerLabel).join(', ')}`
 						+ ' (names as they typed them). Their text reaches you only when the user includes it in a submit.',
 				)
+			default:
+				return
 		}
 	}
 
