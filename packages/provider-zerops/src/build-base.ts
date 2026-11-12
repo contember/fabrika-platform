@@ -1,11 +1,12 @@
-// Whether the Bun of an application's build base reads its `bun.lock`. The platform build installs with
+// Whether the Bun of a contract application's build base reads its `bun.lock`. The platform build installs with
 // `bun install --frozen-lockfile` on the base the selected setup names in `build.base` (ADR-0043), and a Bun older than
 // the one that wrote the lockfile fails that install late, in a started build container, with `Unknown lockfile
-// version`. `fabrika app build` and `app register` refuse such a base before anything deploys. PURE: no filesystem.
+// version`. `fabrika app build`, `app register` and the builder's deploy refuse such a base before anything deploys,
+// from the lockfile they compile beside; a commit after registration is not checked. PURE: no filesystem.
 
 import type { JsonValue } from '@fabrika/provider-contract'
-import { appliedZeropsSetups, parseZeropsDescriptor, selectZeropsDescriptorSetup } from './descriptor'
-import { ZEROPS_APPLICATION_RUNTIME } from './execution'
+import { parseZeropsDescriptor, selectZeropsDescriptorSetup } from './descriptor'
+import { lockedAuthoredBuild, ZEROPS_APPLICATION_RUNTIME } from './execution'
 import type { FabrikaManifest } from './manifest'
 
 interface BunRelease {
@@ -14,14 +15,18 @@ interface BunRelease {
 }
 
 /**
- * The oldest Bun that reads each `lockfileVersion` of a text `bun.lock`. A version missing here is newer than every
- * Bun this list knows. Add a row when a Bun release writes a new version.
+ * The oldest Bun that reads each `lockfileVersion` of a text `bun.lock` (measured: 1.1.45 reads 0 and refuses 1, 1.2
+ * and 1.3 read 1 and refuse 2, 1.4 writes 2 for a new lockfile). A version missing here is newer than every Bun this
+ * list knows. Add a row when a Bun release writes a new version.
  */
 const LOCKFILE_READERS: ReadonlyMap<number, BunRelease> = new Map([
-	[0, { major: 1, minor: 2 }],
+	[0, { major: 1, minor: 1 }],
 	[1, { major: 1, minor: 2 }],
 	[2, { major: 1, minor: 4 }],
 ])
+
+/** The oldest Bun base Zerops offers (`alpine/bun@1.3`, `ubuntu/bun@1.3`): a refusal never names an older one. */
+const OLDEST_OFFERED_BUN: BunRelease = { major: 1, minor: 3 }
 
 /** The newest Bun the table knows: it writes the newest `lockfileVersion` there, and reads no newer one. */
 const NEWEST_KNOWN_BUN: BunRelease = { major: 1, minor: 4 }
@@ -40,34 +45,36 @@ const named = (release: BunRelease): string => `${release.major}.${release.minor
  * key; the rest of the file is JSONC (trailing commas), which this never parses.
  */
 export function bunLockfileVersion(text: string): number | null {
-	const match = /^﻿?\s*\{\s*"lockfileVersion"\s*:\s*(\d+)\s*[,}]/.exec(text)
+	const unmarked = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text
+	const match = /^\s*\{\s*"lockfileVersion"\s*:\s*(\d+)\s*[,}]/.exec(unmarked)
 	return match?.[1] === undefined ? null : Number(match[1])
 }
 
 /** The build base of the manifest's selected setup, and whether the application named it or the platform's default applies. */
 export interface ZeropsBuildBase {
 	readonly setup: string
-	/** Each base the build image is made of; empty when the setup names none and the platform adds none. */
+	/** Each base the build image is made of; empty for an application without a contract, whose build is its own. */
 	readonly bases: readonly string[]
 	readonly authored: boolean
 }
 
-const isMapping = (value: JsonValue | undefined): value is { readonly [key: string]: JsonValue } =>
-	typeof value === 'object' && value !== null && !Array.isArray(value)
+const isSetup = (value: JsonValue, setup: string): value is { readonly [key: string]: JsonValue } =>
+	typeof value === 'object' && value !== null && !Array.isArray(value) && value['setup'] === setup
 
 /**
- * The bases the manifest's selected setup builds on. Zerops merges `extends` per whole section, so the `build` of the
- * first applied setup that has one is the build. A contract application without `build.base` builds on the platform's
- * runtime (`renderLockedSetup`).
+ * The bases the platform build of a contract application runs on, read as `renderLockedSetup` reads them: the selected
+ * setup's `build.base`, or the platform's runtime when it names none. The platform does not generate the build of an
+ * application without a contract, so it has none here.
  */
 export function zeropsBuildBase(manifest: FabrikaManifest): ZeropsBuildBase {
 	const parsed = parseZeropsDescriptor(manifest.target.sourceDescriptor.contents)
 	const setup = selectZeropsDescriptorSetup(parsed, manifest.target.zeropsSetup)
-	const build = appliedZeropsSetups(parsed, setup).map((entry) => isMapping(entry) ? entry['build'] : undefined).find(isMapping)
-	const base = build?.['base']
-	if (typeof base === 'string') return { setup, bases: [base], authored: true }
-	if (Array.isArray(base)) return { setup, bases: base.filter((entry) => typeof entry === 'string'), authored: true }
-	return { setup, bases: manifest.target.contract === undefined ? [] : [ZEROPS_APPLICATION_RUNTIME], authored: false }
+	const entries = parsed.document['zerops']
+	const entry = Array.isArray(entries) ? entries.find((candidate) => isSetup(candidate, setup)) : undefined
+	if (manifest.target.contract === undefined || entry === undefined) return { setup, bases: [], authored: false }
+	const base = lockedAuthoredBuild(entry, setup).base
+	if (base === null) return { setup, bases: [ZEROPS_APPLICATION_RUNTIME], authored: false }
+	return { setup, bases: typeof base === 'string' ? [base] : base, authored: true }
 }
 
 /**
@@ -96,10 +103,15 @@ export function buildBaseLockfileRefusal(lockfile: string, build: ZeropsBuildBas
 			continue
 		}
 		if (!atLeast(bun, reader)) {
-			return `bun.lock has lockfileVersion ${version}, which Bun ${named(bun)} cannot read, and ${install}; set build.base: ${match[1] ?? ''}bun@${
-				named(reader)
-			} (Bun ${named(reader)} or later reads it), or write bun.lock with Bun ${named(bun)}`
+			const remedy = `${match[1] ?? ''}bun@${named(atLeast(reader, OLDEST_OFFERED_BUN) ? reader : OLDEST_OFFERED_BUN)}`
+			return `bun.lock has lockfileVersion ${version}, which Bun ${
+				named(bun)
+			} cannot read, and ${install}; set build.base: ${remedy}, or regenerate bun.lock with Bun ${named(bun)}, which resolves every dependency afresh`
 		}
 	}
 	return null
 }
+
+/** Why the manifest's build cannot install from a `bun.lock` of this text, or null; what every compile runs. */
+export const lockfileBuildBaseRefusal = (manifest: FabrikaManifest, lockfile: string): string | null =>
+	buildBaseLockfileRefusal(lockfile, zeropsBuildBase(manifest))

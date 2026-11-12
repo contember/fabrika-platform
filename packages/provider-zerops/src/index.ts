@@ -40,6 +40,7 @@ export type {
 } from './api'
 export { defineApp, isZeropsAppConfig, useSharedPostgres, zeropsSharedServiceHostname, zeropsSharedServicePrefix } from './authoring'
 export type { ZeropsAuthoredAppConfig } from './authoring'
+export { lockfileBuildBaseRefusal } from './build-base'
 export { parseZeropsCliArgs } from './cli-args'
 export type { ZeropsCliArgs } from './cli-args'
 export { defaultSleep, defaultZeropsCollaborators } from './collaborators'

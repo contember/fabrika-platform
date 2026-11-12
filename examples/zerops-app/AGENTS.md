@@ -608,9 +608,11 @@ zerops:
 ```
 
 `build.base` must be a Bun that reads the committed `bun.lock`: the build installs with `--frozen-lockfile`, and an
-older Bun fails it with `Unknown lockfile version`. Bun 1.4 writes `"lockfileVersion": 2`, which needs
-`alpine/bun@1.4` or later; versions 0 and 1 build on `alpine/bun@1.2` and later. Without `build.base` the build runs on
-`alpine/bun@1.3`. `fabrika app build` refuses a base that cannot read the lockfile and names the one to use.
+older Bun fails it with `Unknown lockfile version`. A `bun.lock` that Bun 1.4 creates or regenerates has
+`"lockfileVersion": 2`, which needs `alpine/bun@1.4`; versions 0 and 1 build on `alpine/bun@1.3`, which is also the
+base without `build.base`. Raise `build.base` to `alpine/bun@1.4` rather than regenerate the lockfile with Bun 1.3, which
+resolves every dependency afresh. `fabrika app build` refuses a base that cannot read the lockfile and names the one to
+use.
 
 The platform's build runs the tests, writes the entrypoint, runs `fabrika-check` and the type check. Its init commands
 run `fabrika db migrate`, `fabrika db codegen --verify` and `fabrika db test-isolation` before the server starts: a
