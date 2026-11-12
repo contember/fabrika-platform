@@ -81,7 +81,7 @@ import {
 	workspacePublication,
 } from './dev/sandbox-keys'
 import type { CommitSource } from './github/source/commit-files'
-import { SourceDescriptorMismatch } from './github/source/failure'
+import { SourceDescriptorMismatch, type SourceDescriptorMismatchDetail } from './github/source/failure'
 import { type IamSchemaPort, isIamUnavailable } from './iam-schema'
 import type { InstallationBrandSource } from './installation-brand'
 import { acquireLease, type Lease, type LeaseClock, type LeaseFence, namespaceLeaseKey, runLeaseKey } from './lease'
@@ -719,7 +719,7 @@ async function deployUnder(
 				signal: invocation.work.signal,
 			}).catch((error: unknown) => {
 				if (!(error instanceof SourceDescriptorMismatch)) throw error
-				throw error.withRemedy(descriptorMismatchRemedy(deps.provider.id, app.id, appEnv.env))
+				throw error.withRemedy(descriptorMismatchRemedy(deps.provider.id, appEnv, error.detail))
 			})
 			const commitSha = immutableGitObjectId(resolution.commitSha, 'resolved commit')
 			await invocation.boundary()
@@ -1113,12 +1113,34 @@ function operationLine(result: DriveResult, operation: DataOperationRow, recorde
 }
 
 /**
- * What an operator does when the descriptor at the deployed commit (a changed `zerops.yaml`) is not the one the
- * environment registered: a manifest built from that commit, sent to the environment. Deploying again alone fails the same way.
+ * What an operator does when the descriptor at the deployed commit is not the one the environment's manifest was built
+ * from. Deploying again alone fails the same way, and either side can be the newer one: a manifest built from a working
+ * tree that was not pushed, or a descriptor changed after the manifest was built.
+ *
+ * Only a provider whose source port checks a descriptor throws `SourceDescriptorMismatch`, and today that is Zerops
+ * alone (`zerops.yaml`, built by `fabrika app build --env=…`); Cloudflare's `resolveSource` never does. That is why
+ * Zerops' build command can be named here, in the shared lifecycle, without a provider hook for one sentence.
+ *
+ * The `put` command is the one to run as shown: `put` replaces the record, so a domain or a trigger ref it is not given
+ * is cleared (`putAppEnvUseCase`), and the line carries the stored ones. What an omitted flag keeps (public origin,
+ * cross origins, namespace, kind) it leaves out. `fabrika.manifest.json` is `app build`'s default output.
  */
-function descriptorMismatchRemedy(providerId: string, appId: string, env: string): string {
-	return `rebuild the manifest from that commit (\`fabrika app build --env=${env}\`), send it with \`fabrika control apps environments put `
-		+ `--provider=${providerId} --app=${appId} --env=${env} --manifest=<path>\` and the environment's placement flags, and deploy again`
+function descriptorMismatchRemedy(providerId: string, appEnv: AppEnvRow, detail: SourceDescriptorMismatchDetail): string {
+	const env = appEnv.env
+	const put = [
+		`fabrika control apps environments put --provider=${providerId} --app=${appEnv.app_id} --env=${env} --manifest=fabrika.manifest.json`,
+		...(appEnv.domain === null || appEnv.domain === '' ? [] : [`--domain=${shellWord(appEnv.domain)}`]),
+		...(appEnv.trigger_ref === null ? [] : [`--trigger-ref=${shellWord(appEnv.trigger_ref)}`]),
+	].join(' ')
+	return `the manifest registered for ${appEnv.app_id}/${env} expects that sha256. `
+		+ `If the manifest was built from a ${detail.path} that is not pushed yet, push that commit (or deploy the ref that has it) and deploy again. `
+		+ `If ${detail.path} changed after the manifest was built, rebuild the manifest from a checkout of commit ${detail.commitSha} `
+		+ `(\`fabrika app build --env=${env}\`), send it with \`${put}\`, and deploy again`
+}
+
+/** A value as one shell word: as it is when it needs no quoting, else single-quoted (a trigger ref may be a glob). */
+function shellWord(value: string): string {
+	return /^[A-Za-z0-9_./:@%+,=-]+$/.test(value) ? value : `'${value.replaceAll(`'`, `'\\''`)}'`
 }
 
 /** A failed run's cause as one credential-free line: never the error object, which can carry a clone URL with a token. */

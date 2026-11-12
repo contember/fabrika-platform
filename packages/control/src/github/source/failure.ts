@@ -35,16 +35,16 @@ export class SourceFailure extends Error {
 export interface SourceDescriptorMismatchDetail {
 	readonly path: string
 	readonly commitSha: string
-	/** The digest the environment's registered manifest names. */
+	/** The digest the caller asked for: an environment's registered manifest, or a namespace proxy's source pin. */
 	readonly expectedSha256: string
 	/** The digest of the file at the commit. */
 	readonly actualSha256: string
 }
 
 /**
- * The descriptor at the commit is not the one the environment's manifest registered. A retry fails the same way: the
- * remedy is a manifest built from that commit, so the message names the file, the commit and both digests, and a caller
- * that knows the environment adds the commands that send it. The code stays `descriptor_mismatch`.
+ * The descriptor at the commit is not the one the caller expected. A retry fails the same way, so the message names the
+ * file, the commit and both digests. Whose expectation it was, and what to do about it, only the caller knows: the
+ * wording stays neutral, and a caller adds its remedy with `withRemedy`. The code stays `descriptor_mismatch`.
  */
 export class SourceDescriptorMismatch extends SourceFailure {
 	constructor(
@@ -56,7 +56,7 @@ export class SourceDescriptorMismatch extends SourceFailure {
 			'descriptor_mismatch',
 			stage,
 			`source ${stage} failed (descriptor_mismatch): ${detail.path} at commit ${detail.commitSha} has sha256 ${detail.actualSha256}, `
-				+ `but the environment's registered manifest names sha256 ${detail.expectedSha256}${remedy === undefined ? '' : `; ${remedy}`}`,
+				+ `expected sha256 ${detail.expectedSha256}${remedy === undefined ? '' : `; ${remedy}`}`,
 		)
 	}
 

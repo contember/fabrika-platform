@@ -79,6 +79,7 @@ async function seedRun(
 		externalId?: string
 		commitSha?: string
 		sourceBinding?: { connectionId: string; installationId: number }
+		triggerRef?: string
 	} = {},
 ): Promise<string> {
 	const provider = options.provider ?? 'memory'
@@ -101,6 +102,7 @@ async function seedRun(
 		publicOrigin: 'https://public.example.com',
 		crossOrigins: ['https://partner.example.org'],
 		namespaceId: null,
+		...(options.triggerRef === undefined ? {} : { triggerRef: options.triggerRef }),
 		provider,
 		providerTargetJson: JSON.stringify(provider === 'cloudflare' ? { provider, version: 1, payload: {} } : envelope(provider, 'target')),
 		providerArtifactJson: JSON.stringify(
@@ -545,9 +547,12 @@ describe('provider-neutral run lifecycle', () => {
 		expect(stored.objects.get(`runs/${runId}/logs.ndjson`)).not.toContain('ghs_leaked')
 	})
 
-	test('a drifted descriptor fails the run with its digests and the command that sends the manifest again', async () => {
+	test.each([
+		{ name: 'a branch', triggerRef: 'refs/heads/deploy/prod', flag: '--trigger-ref=refs/heads/deploy/prod' },
+		{ name: 'a tag glob, quoted for the shell', triggerRef: 'refs/tags/v*', flag: `--trigger-ref='refs/tags/v*'` },
+	])('a drifted descriptor fails the run with its digests, both causes, and a put that keeps $name trigger', async ({ triggerRef, flag }) => {
 		const { db } = createHarness()
-		const runId = await seedRun(db)
+		const runId = await seedRun(db, { triggerRef })
 		const provider = makeProvider([], { state: 'succeeded' })
 		const detail = { path: 'zerops.yaml', commitSha: 'c'.repeat(40), expectedSha256: 'e'.repeat(64), actualSha256: 'a'.repeat(64) }
 		provider.resolveSource = () => Promise.reject(new SourceDescriptorMismatch('resolve', detail))
@@ -559,9 +564,11 @@ describe('provider-neutral run lifecycle', () => {
 		const response = await getRunLogUseCase({ repositories: db, logs: stored.logs, auth: allowAllAuth() }, runId)
 		expect(response.lines.map((line) => line.text)).toEqual([
 			`deploy failed: source resolve failed (descriptor_mismatch): zerops.yaml at commit ${'c'.repeat(40)} has sha256 ${'a'.repeat(64)}, `
-			+ `but the environment's registered manifest names sha256 ${'e'.repeat(64)}; rebuild the manifest from that commit `
+			+ `expected sha256 ${'e'.repeat(64)}; the manifest registered for app/prod expects that sha256. `
+			+ 'If the manifest was built from a zerops.yaml that is not pushed yet, push that commit (or deploy the ref that has it) and deploy again. '
+			+ `If zerops.yaml changed after the manifest was built, rebuild the manifest from a checkout of commit ${'c'.repeat(40)} `
 			+ '(`fabrika app build --env=prod`), send it with `fabrika control apps environments put --provider=memory --app=app --env=prod '
-			+ "--manifest=<path>` and the environment's placement flags, and deploy again",
+			+ `--manifest=fabrika.manifest.json --domain=app.example.com ${flag}\`, and deploy again`,
 		])
 	})
 
