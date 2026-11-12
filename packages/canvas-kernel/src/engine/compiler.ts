@@ -183,26 +183,23 @@ const MOCK_REACT = {
 	StrictMode: Stub,
 }
 
+/** One ESM import Bun emits for an external module: a default, namespace or named clause, alone on its line. */
+const IMPORT_LINE = /^import\s+(?:\w+|\*\s+as\s+\w+|\{[^}]*\})\s+from\s+"[^"]+";?$/
+const DEFAULT_EXPORT_TAIL = /(?:export\s*\{\s*(\w+)\s+as\s+default\s*\}|export\s+default\s+(\w+));?\s*$/
+
+/**
+ * Removes the module syntax of Bun's bundle: each import is a whole line, the default export ends the file. Matching
+ * across lines or mid-line would also match string contents, which the bundle holds decoded.
+ */
+function stripModuleSyntax(js: string): { code: string; defaultName: string | null } {
+	const body = js.split('\n').filter((line) => !IMPORT_LINE.test(line)).join('\n')
+	const tail = DEFAULT_EXPORT_TAIL.exec(body)
+	if (!tail) return { code: body, defaultName: null }
+	return { code: body.slice(0, tail.index), defaultName: tail[1] ?? tail[2] ?? null }
+}
+
 async function validateCompiledPlan(js: string, stubs: Record<string, unknown>): Promise<{ ok: true } | { ok: false; error: string }> {
-	let code = js
-
-	// Strip ESM import statements
-	code = code.replace(/import\s+\w+\s+from\s+"[^"]+";?/g, '')
-	code = code.replace(/import\s+\*\s+as\s+\w+\s+from\s+"[^"]+";?/g, '')
-	code = code.replace(/import\s*\{[^}]*\}\s*from\s+"[^"]+";?/g, '')
-
-	// Strip export, extract default name
-	let defaultName: string | null = null
-	code = code.replace(/export\s*\{\s*(\w+)\s+as\s+default\s*\};?/g, (_, name) => {
-		defaultName = name
-		return ''
-	})
-	if (!defaultName) {
-		code = code.replace(/export\s+default\s+(\w+);?/g, (_, name) => {
-			defaultName = name
-			return ''
-		})
-	}
+	const { code, defaultName } = stripModuleSyntax(js)
 
 	const callDefault = defaultName
 		? `\nreturn typeof ${defaultName} === "function" ? ${defaultName}() : null;`
