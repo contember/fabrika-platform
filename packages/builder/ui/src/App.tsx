@@ -23,8 +23,9 @@ import { platformClient } from './lib/platformClient'
 import type { CanvasFileInfo, ConnStatus, PhaseId, PhaseState, RevisionMeta, SessionMeta } from './lib/types'
 import { usePlatform } from './lib/usePlatform'
 
+// The design checkpoint runs inside the build, on the running application, so only the build shows a preview.
 function phaseHasPreview(phase: PhaseId): boolean {
-	return phase === 'design' || phase === 'build'
+	return phase === 'build'
 }
 
 const EMPTY_PHASE_STATE: PhaseState = {
@@ -215,7 +216,7 @@ export function App(): JSX.Element {
 				sessionId={sessionId}
 				live={live}
 			/>
-			{showPreview && <PreviewPane phase={focused} sessionId={sessionId} live={live} previewUrl={platform.data?.previewUrl ?? null} />}
+			{showPreview && <PreviewPane previewUrl={platform.data?.previewUrl ?? null} />}
 			<AnnotationPanel
 				gateName={gateName}
 				hasGate={hasCanvas}

@@ -55,8 +55,6 @@ test('full chain through to skeletons/issues; build is terminal', () => {
 	fx.write('.fabrika/principles/principles.md')
 	fx.write('.fabrika/architecture/flows/login.flow.md')
 	fx.write('.fabrika/architecture/tech.md')
-	fx.write('.fabrika/architecture/design.md')
-	fx.write('.fabrika/pages/home.jsx')
 	fx.write('tests/browser/login.test.ts')
 	fx.write('.fabrika/issues/ISSUE-001.md')
 
@@ -67,27 +65,24 @@ test('full chain through to skeletons/issues; build is terminal', () => {
 		'vision',
 		'flows',
 		'tech',
-		'design',
 		'skeletons',
 		'issues',
 	])
 })
 
-test('self-correcting: deleting design.md re-targets phase 5 (design)', () => {
+test('self-correcting: emptying tech.md re-targets phase 4 (tech)', () => {
 	fx = makeFixture()
 	fx.write('.fabrika/intent/brief.md')
 	fx.write('.fabrika/intent/glossary.md')
 	fx.write('.fabrika/principles/principles.md')
 	fx.write('.fabrika/architecture/flows/login.flow.md')
 	fx.write('.fabrika/architecture/tech.md')
-	fx.write('.fabrika/architecture/design.md')
-	fx.write('.fabrika/pages/home.jsx')
 	let state = derivePhase(fx.root)
 	expect(state.current).toBe('skeletons')
 
-	fx.writeEmpty('.fabrika/architecture/design.md')
+	fx.writeEmpty('.fabrika/architecture/tech.md')
 	state = derivePhase(fx.root)
-	expect(state.current).toBe('design')
+	expect(state.current).toBe('tech')
 })
 
 test('empty files do NOT satisfy produces', () => {

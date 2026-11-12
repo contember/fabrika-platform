@@ -16,7 +16,9 @@ The builder CLI and dashboard must not import daemon implementation modules. The
 
 ## Phase model
 
-The ordered phases are intake, vision, flows, technology, design, skeletons, issues, and build. A phase is complete when every required output exists and its review gate, when present, has submitted and consumed feedback.
+The ordered phases are intake, vision, flows, technology, skeletons, issues, and build. A phase is complete when every required output exists and its review gate, when present, has submitted and consumed feedback.
+
+Design is reviewed inside the build, on the running application: `induce` writes the design checkpoint `ISSUE-004` (`gate: design`), which depends on the foundation issues and which every feature issue depends on. `build done` on an issue with a `gate` records that gate's latest reviewed revision and its verdict as the issue's evidence, through `POST /api/session/:id/gate/:name/consume`; it refuses while the gate has no submitted feedback.
 
 The phase is always derived from application files and gate state. No mutable phase counter is authoritative.
 

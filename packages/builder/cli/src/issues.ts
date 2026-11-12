@@ -10,6 +10,8 @@ export interface Issue {
 	touches: string[]
 	/** Repository-relative acceptance files `build done` runs; empty for an issue whose check the driver names. */
 	verify: string[]
+	/** A review gate whose verdict `build done` records instead of running a check. */
+	gate?: string
 	body: string
 }
 
@@ -30,6 +32,7 @@ export function readIssues(fabrikaDir: string): Issue[] {
 export function parseIssue(path: string): Issue {
 	const raw = readFileSync(path, 'utf-8')
 	const fm = extractFrontMatter(raw)
+	const gate = gateName(fm.body['gate'])
 	return {
 		id: basename(path).replace(/\.md$/i, ''),
 		path,
@@ -38,6 +41,7 @@ export function parseIssue(path: string): Issue {
 		dependsOn: list(fm.body['depends_on']),
 		touches: list(fm.body['touches']),
 		verify: list(fm.body['verify']),
+		...(gate ? { gate } : {}),
 		body: fm.rest,
 	}
 }
@@ -60,6 +64,11 @@ function extractFrontMatter(raw: string): FrontMatter {
 		if (kv && kv[1]) body[kv[1]] = (kv[2] ?? '').trim()
 	}
 	return { body, rest: (m[2] ?? '').trim() }
+}
+
+function gateName(v: string | undefined): string | undefined {
+	const name = scalar(v)
+	return name && /^[a-z][a-z0-9-]*$/.test(name) ? name : undefined
 }
 
 function scalar(v: string | undefined): string | undefined {

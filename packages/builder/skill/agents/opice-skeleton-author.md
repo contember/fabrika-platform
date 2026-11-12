@@ -1,7 +1,7 @@
 ---
 name: fabrika-opice-skeleton-author
 description: >
-  Phase 6 helper. Turns fabrika user flows + feature specs into reviewable
+  Phase 5 helper. Turns fabrika user flows + feature specs into reviewable
   **opice test skeletons** — one `tests/browser/<slug>.test.ts` per flow,
   outside `.fabrika/`. Each skeleton is metadata-first (`name`, `url`, `seeds`,
   `roles`, `feature`), with pending `step(name, { intent, hint })` stubs and
@@ -53,10 +53,10 @@ are invoked from inside a `fabrika builder next` task packet for the _skeletons_
 ## Rules
 
 - Do NOT author executable steps or resolve selectors — that's `opice-author`
-  (phase 8 build), against the running app.
+  (phase 7 build), against the running app.
 - Do NOT weaken or omit an invariant to make a flow "simpler".
 - Keep `seeds`/`roles`/`url` consistent across skeletons so the issue-induction
-  step (phase 7) can union them into foundation issues.
+  step (phase 6) can union them into foundation issues.
 
 ## What to return
 
@@ -64,5 +64,5 @@ A compact summary, nothing else:
 
 - `skeletons`: the list of `tests/browser/*.test.ts` paths written.
 - `manifest`: the union of `seeds`, `roles`, and `url`s across all skeletons
-  (this is what phase 7 induces foundation issues from).
+  (this is what phase 6 induces foundation issues from).
 - any flow you couldn't turn into a skeleton, and why.

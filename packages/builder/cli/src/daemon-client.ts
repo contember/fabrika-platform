@@ -1,6 +1,7 @@
 import { waitForEvent } from '@fabrika/daemon-kit'
 import {
 	consumedFeedbackSchema,
+	consumedGateSchema,
 	feedbackMetaSchema,
 	feedbackTextSchema,
 	phaseStateSchema,
@@ -95,6 +96,25 @@ export async function consumeFeedback(sessionId: string): Promise<ConsumedFeedba
 		})
 		const result = consumedFeedbackSchema.safeParse(await res.json())
 		return result.success ? { feedback: result.data.feedback, verdict: result.data.verdict } : null
+	} catch {
+		return null
+	}
+}
+
+export interface ConsumedGate {
+	revision: number
+	verdict: GateVerdict
+}
+
+/** Consumes a named gate's latest submission; null when the daemon is down or nothing was submitted. */
+export async function consumeGate(sessionId: string, gateName: string): Promise<ConsumedGate | null> {
+	try {
+		const res = await fetch(`${BASE_URL}/api/session/${encodeURIComponent(sessionId)}/gate/${encodeURIComponent(gateName)}/consume`, {
+			method: 'POST',
+			signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
+		})
+		const result = consumedGateSchema.safeParse(await res.json())
+		return result.success ? { revision: result.data.revision, verdict: result.data.verdict } : null
 	} catch {
 		return null
 	}

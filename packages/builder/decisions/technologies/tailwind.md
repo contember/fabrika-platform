@@ -12,7 +12,7 @@ status: stable
 sources:
   - where: "tailwindcss.com/docs (v4) + @tailwindcss/vite"
     read: "v4 setup, the CSS-first config, and how design tokens map to utilities/CSS vars."
-  - where: ".fabrika/architecture/design.md (fabrika design phase) + nua/@nuasite/components"
+  - where: ".fabrika/architecture/design.md (fabrika design checkpoint, ISSUE-004) + nua/@nuasite/components"
     read: "How fabrika's semantic design tokens compile to Tailwind/CSS vars, and a real component set."
 ---
 
@@ -20,9 +20,9 @@ sources:
 
 ## What it is
 
-The utility-first styling layer. fabrika's **design phase** defines _semantic_ tokens
-(`--surface`, `--accent`, …) that map to Tailwind/CSS vars, so mockups and the built
-app share one token system. v4 is CSS-first (config in CSS, `@tailwindcss/vite` or
+The utility-first styling layer. fabrika's **design checkpoint** (`ISSUE-004`, reviewed on
+the running app) records _semantic_ tokens (`--surface`, `--accent`, …) that map to
+Tailwind/CSS vars, so the whole app shares one token system. v4 is CSS-first (config in CSS, `@tailwindcss/vite` or
 the CLI).
 
 ## When & why to use

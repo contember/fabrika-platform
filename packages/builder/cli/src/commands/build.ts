@@ -1,13 +1,14 @@
 import { mkdirSync, writeFileSync } from 'fs'
 import { dirname, join } from 'path'
 import { parseArgs } from 'util'
+import { GATE_CHANGES } from '../../../shared/gate'
 import { BUILD_REVIEW_PATH, describeEvidence, renderBuildReview } from '../build-review'
-import { type BuildPlan, planBuild, readBoard, record } from '../build-status'
+import { type BuildEvidence, type BuildPlan, planBuild, readBoard, record } from '../build-status'
 import { resolveStackPointer, unsupportedProfileNote } from '../catalog'
 import { resolveContext } from '../context'
-import { postBuildEvent } from '../daemon-client'
+import { consumeGate, postBuildEvent } from '../daemon-client'
 import { type Issue, readIssues } from '../issues'
-import { describeVerification, runVerification, type Verification } from '../verify'
+import { describeVerification, gitState, runVerification, type Verification } from '../verify'
 
 export async function cmdBuild(argv: string[]): Promise<number> {
 	const { values, positionals } = parseArgs({
@@ -35,7 +36,7 @@ export async function cmdBuild(argv: string[]): Promise<number> {
 	const issues = readIssues(ctx.fabrikaDir)
 	if (issues.length === 0) {
 		console.error(
-			`[fabrika] no issues in ${ctx.fabrikaDir}/issues/. Run \`fabrika builder induce\` (phase 7) first.`,
+			`[fabrika] no issues in ${ctx.fabrikaDir}/issues/. Run \`fabrika builder induce\` (phase 6) first.`,
 		)
 		return 1
 	}
@@ -52,6 +53,7 @@ export async function cmdBuild(argv: string[]): Promise<number> {
 				console.error(`[fabrika] build done <ISSUE-ID> — unknown or missing issue id.`)
 				return 1
 			}
+			if (issue.gate) return await recordGateReview(issue, issue.gate, ctx.sessionId, ctx.repoRoot, ctx.fabrikaDir, issues)
 			if (values.verify && issue.verify.length > 0) {
 				console.error(`[fabrika] ${issue.id} is proved by ${issue.verify.join(', ')}; --verify is only for issues that name no acceptance file.`)
 				return 1
@@ -133,6 +135,44 @@ async function emitBrief(
 	})
 	process.stdout.write('\n' + renderOrchestrationBrief(plan, repoRoot, profile))
 	return 0
+}
+
+/** An issue whose check is a review gate: record the gate's consumed verdict. Gates are advisory, so "changes" warns. */
+async function recordGateReview(
+	issue: Issue,
+	gate: string,
+	sessionId: string,
+	repoRoot: string,
+	fabrikaDir: string,
+	issues: Issue[],
+): Promise<number> {
+	const review = await consumeGate(sessionId, gate)
+	if (!review) {
+		console.error(
+			`[fabrika] ${issue.id} not marked done: the "${gate}" gate has no submitted review (or the daemon is down). `
+				+ `Open it, have it reviewed, then run \`fabrika builder build done ${issue.id}\` again.`,
+		)
+		return 1
+	}
+	const evidence: BuildEvidence = {
+		command: `${gate} gate review, revision ${review.revision}`,
+		exitCode: 0,
+		durationMs: 0,
+		at: new Date().toISOString(),
+		...gitState(repoRoot),
+		verdict: review.verdict,
+	}
+	if (review.verdict !== 'approve') {
+		console.error(
+			`[fabrika] warning: the "${gate}" gate was ${
+				review.verdict === 'changes' ? `answered "${GATE_CHANGES}"` : 'submitted without a verdict'
+			}; recording ${issue.id} anyway (gates are advisory).`,
+		)
+	}
+	record(fabrikaDir, issue.id, 'done', undefined, evidence.at, evidence)
+	await postBuildEvent({ issue: issue.id, status: 'passed', message: `reviewed: ${describeEvidence(evidence)}` })
+	console.log(`[fabrika] ✓ ${issue.id} marked done (${describeEvidence(evidence)}).`)
+	return await reportProgress(issues, fabrikaDir)
 }
 
 async function reportProgress(issues: Issue[], fabrikaDir: string): Promise<number> {
@@ -246,7 +286,9 @@ function renderBuildPacket(issue: Issue, repoRoot: string, profile: string): str
 	}
 	lines.push(`Pipeline:  implement -> opice-author (selectors vs running app) -> bun test (steps + invariants)`)
 	lines.push(
-		issue.verify.length > 0
+		issue.gate
+			? `Check:     the "${issue.gate}" review gate (build done records its verdict)`
+			: issue.verify.length > 0
 			? `Check:     bun test ${issue.verify.join(' ')}   (build done runs it)`
 			: `Check:     none recorded — pass the command that proves this issue: build done ${issue.id} --verify "<command>"`,
 	)

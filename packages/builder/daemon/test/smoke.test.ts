@@ -416,10 +416,10 @@ describe('derivePhaseState (filesystem fixture)', () => {
 		rmSync(dirname(dir), { recursive: true, force: true })
 	})
 
-	test('PHASES table has 8 ordered phases', () => {
-		expect(PHASES.length).toBe(8)
-		expect(PHASES.map((p) => p.number)).toEqual([1, 2, 3, 4, 5, 6, 7, 8])
+	test('PHASES table has 7 ordered phases', () => {
+		expect(PHASES.length).toBe(7)
+		expect(PHASES.map((p) => p.number)).toEqual([1, 2, 3, 4, 5, 6, 7])
 		expect(PHASES[0]!.id).toBe('intake')
-		expect(PHASES[7]!.id).toBe('build')
+		expect(PHASES[6]!.id).toBe('build')
 	})
 })

@@ -356,6 +356,22 @@ export function createHandlers(ctx: HandlerContext): Route[] {
 		return jsonResponse({ feedback })
 	}
 
+	/** Consumes a named gate's latest submission: how a gate inside the build (the design checkpoint) is reviewed. */
+	function handleGateConsume(_req: Request, _url: URL, match: URLPatternResult): Response {
+		const sessionId = routeParam(match, 'id')
+		const gateName = routeParam(match, 'name')
+		const revisions = sessionManager.get(sessionId)?.revisions ?? []
+		let revision: (typeof revisions)[number] | undefined
+		for (let i = revisions.length - 1; i >= 0 && !revision; i--) if (revisions[i]!.label === gateName) revision = revisions[i]
+		if (!revision?.hasFeedback) return jsonResponse({ found: false })
+		if (!revision.feedbackConsumed) {
+			sessionManager.consumeFeedback(sessionId, revision.revision)
+			broadcastRevisionUpdate(sessionId)
+		}
+		const verdict = gateVerdict(sessionManager.getSubmittedResponses(sessionId, revision.revision))
+		return jsonResponse({ found: true, revision: revision.revision, verdict })
+	}
+
 	function handleFeedbackConsume(_req: Request, _url: URL, match: URLPatternResult): Response {
 		const sessionId = routeParam(match, 'id')
 		const result = sessionManager.getLatestUnconsumedFeedback(sessionId)
@@ -457,6 +473,7 @@ export function createHandlers(ctx: HandlerContext): Route[] {
 		{ method: 'GET', pattern: new URLPattern({ pathname: '/api/session/:id/skeletons' }), handler: handleSkeletons },
 		{ method: 'GET', pattern: new URLPattern({ pathname: '/api/session/:id/revision/:rev/feedback' }), handler: handleFeedbackGet },
 		{ method: 'POST', pattern: new URLPattern({ pathname: '/api/session/:id/feedback/consume' }), handler: handleFeedbackConsume },
+		{ method: 'POST', pattern: new URLPattern({ pathname: '/api/session/:id/gate/:name/consume' }), handler: handleGateConsume },
 		{ method: 'POST', pattern: new URLPattern({ pathname: '/api/session/:id/reset' }), handler: handleSessionReset },
 		{ method: 'GET', pattern: new URLPattern({ pathname: '/api/session/:id/revision/:rev/responses' }), handler: handleResponsesGet },
 		{ method: 'PUT', pattern: new URLPattern({ pathname: '/api/session/:id/revision/:rev/responses' }), handler: handleResponsesPut },

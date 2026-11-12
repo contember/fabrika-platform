@@ -2,16 +2,19 @@
 
 `@fabrika/builder` guides a coding agent from an initial application brief to a reviewed acceptance contract and an assisted implementation.
 
-The builder runs eight deterministic phases:
+The builder runs seven deterministic phases:
 
 1. intake
 2. vision
 3. flows
 4. technology
-5. design
-6. opice test skeletons
-7. implementation issues
-8. build
+5. opice test skeletons
+6. implementation issues
+7. build
+
+Design is not a phase of its own. `induce` adds a design checkpoint issue, `ISSUE-004`, after the foundation issues and
+before every feature: the agent themes the running application through the UI kit's `--fui-*` tokens, and the human
+reviews it at the `design` gate in the live preview. `build done ISSUE-004` records that gate's verdict.
 
 The current phase is derived from files in `.fabrika/`; it is not stored as a mutable counter. Review gates use a local dashboard with persistent annotations and responses.
 

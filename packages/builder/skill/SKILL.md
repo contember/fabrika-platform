@@ -2,7 +2,7 @@
 name: fabrika
 description: >
   Drive local-first guided application creation through Fabrika's deterministic
-  intake, vision, flows, tech, design, skeletons, issues, and build phases. Use
+  intake, vision, flows, tech, skeletons, issues, and build phases. Use
   when the user invokes /fabrika or $fabrika, asks to start/build/resume a
   Fabrika project, or supplies a brief to turn into a reviewed app contract and
   implementation. Works in Claude Code and Codex; the CLI owns sequencing and
@@ -58,8 +58,6 @@ ensure daemon → fabrika builder next → do packet work → gate → advance �
      placeholder or empty `<Item>` content. Keep the interactive controls,
      and keep the closing `verdict` choice (`Approve` / `Request changes`)
      exactly as written: the daemon records it as the gate's verdict.
-   - For design, also write `.fabrika/architecture/design.md` with the `:root`
-     token block required by the live preview.
    - Run `bunx fabrika builder gate open <name> --view <view.jsx>`, then
      `bunx fabrika builder gate wait [--gate <name>]`. Read the raw feedback from
      stdout. On `Request changes`, address the feedback and re-open the gate.
