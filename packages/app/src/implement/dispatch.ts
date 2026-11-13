@@ -76,6 +76,7 @@ import {
 import type { RequestExecutionContext } from '../fetch'
 import { FileWork, type StoredFileKinds, storedFilesHandle } from '../files/kinds'
 import { FileDownload, fileResponse, withFileTreatment } from '../files/treatment'
+import { namesSourceMap } from '../source-map-path'
 import { abortedBody, bootstrapPath, bootstrapResponse, readBodyInTime, withBootstrap } from './anonymous'
 import { attachmentResponse } from './attachment'
 import { boundedStream, type Deadline, deadline, handlerSignal, readBoundedBytes } from './bounded'
@@ -574,9 +575,12 @@ export class ContractRuntime {
 		return await this.#asset(served, request)
 	}
 
-	/** A file of the mount's directory. A source map goes to Operations at build and is never served: it holds the source. */
+	/**
+	 * A file of the mount's directory. A source map goes to Operations at build and is never served: it holds the source.
+	 * The check reads the path as the asset servers resolve it (`namesSourceMap`), so no spelling of one reaches them.
+	 */
 	async #asset(served: { readonly prefix: string; readonly dir: string }, request: Request): Promise<Response> {
-		if (rawRequestTarget(request.url).pathname.endsWith('.map')) {
+		if (namesSourceMap(rawRequestTarget(request.url).pathname)) {
 			throw new NotFoundError('A source map is not served')
 		}
 		return await this.#assets().serve({ prefix: served.prefix, dir: served.dir }, request)

@@ -2,8 +2,10 @@
 // test kit serves a built directory the same way.
 
 import { rawRequestTarget } from '@fabrika/auth-core'
-import { join, resolve, sep } from 'node:path'
+import type { BunFile } from 'bun'
+import { basename, join, resolve, sep } from 'node:path'
 import type { SpaAssets } from './implement/dispatch.js'
+import { isSourceMapName } from './source-map-path.js'
 import { isPageRoute } from './spa-fallback.js'
 
 /**
@@ -18,13 +20,23 @@ export function diskAssets(root: string): SpaAssets {
 			const relative = mount.prefix === '/' ? pathname.slice(1) : pathname.slice(mount.prefix.length + 1)
 			// The path is canonical, so every segment decodes and none is `.` or `..`.
 			const file = join(dir, ...relative.split('/').filter((segment) => segment !== '').map((segment) => decodeURIComponent(segment)))
-			const candidate = file.startsWith(`${dir}${sep}`) ? Bun.file(file) : null
-			const found = candidate !== null && (await candidate.exists()) ? candidate : null
+			// The mount refuses a source map before it asks; this holds for any caller that serves through it directly.
+			const found = file.startsWith(`${dir}${sep}`) && !isSourceMapName(basename(file)) ? await existing(file) : null
 			const served = found ?? (isPageRoute(request) ? Bun.file(join(dir, 'index.html')) : null)
 			if (served === null || !(await served.exists())) {
 				return new Response('Not found', { status: 404 })
 			}
 			return new Response(served)
 		},
+	}
+}
+
+/** The file at `path` when it exists. A name no file can have (a decoded control character) is a missing asset, not a fault. */
+async function existing(path: string): Promise<BunFile | null> {
+	try {
+		const file = Bun.file(path)
+		return (await file.exists()) ? file : null
+	} catch {
+		return null
 	}
 }
