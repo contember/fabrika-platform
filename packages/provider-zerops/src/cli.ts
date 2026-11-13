@@ -5,6 +5,7 @@ import { open } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { z } from 'zod'
 import { isZeropsAppConfig } from './authoring'
+import { lockfileBuildBaseRefusal } from './build-base'
 import { parseZeropsCliArgs } from './cli-args'
 import {
 	compileFabrikaManifest,
@@ -78,17 +79,31 @@ export interface ZeropsManifestBuildOptions {
 	readonly env: string
 }
 
-const compileManifest = async (options: ZeropsManifestBuildOptions): Promise<FabrikaManifest> => {
+/**
+ * Refuse a build base whose Bun cannot read the repository-root `bun.lock`, which the platform build installs from with
+ * `--frozen-lockfile`. Without a `bun.lock` there is nothing to compare; Control refuses a commit without one. `command`
+ * names what ran, as the refusal's prefix.
+ */
+export const assertBuildBaseReadsLockfile = async (manifest: FabrikaManifest, command: string, root: string = process.cwd()): Promise<void> => {
+	const lockfile = Bun.file(resolve(root, 'bun.lock'))
+	if (!(await lockfile.exists())) return
+	const refusal = lockfileBuildBaseRefusal(manifest, await lockfile.text())
+	if (refusal !== null) throw new Error(`${command}: ${refusal}`)
+}
+
+const compileManifest = async (options: ZeropsManifestBuildOptions, command: string): Promise<FabrikaManifest> => {
 	const config = await loadConfig(options.config)
 	const sourceDescriptor = await readZeropsSourceDescriptor()
-	return compileFabrikaManifest(config, options.env, sourceDescriptor)
+	const manifest = compileFabrikaManifest(config, options.env, sourceDescriptor)
+	await assertBuildBaseReadsLockfile(manifest, command)
+	return manifest
 }
 
 const serializeManifest = (manifest: FabrikaManifest): string => `${JSON.stringify(manifest, null, '\t')}\n`
 
-/** The exact text `build` writes to `fabrika.manifest.json`, produced in memory and written nowhere. */
+/** The exact text `build` writes to `fabrika.manifest.json`, produced in memory and written nowhere: what `app register` sends. */
 export const buildZeropsManifestText = async (options: ZeropsManifestBuildOptions): Promise<string> =>
-	serializeManifest(await compileManifest(options))
+	serializeManifest(await compileManifest(options, 'fabrika app register'))
 
 export const runZeropsCli = async (argv: readonly string[]): Promise<void> => {
 	const args = parseZeropsCliArgs(argv)
@@ -102,7 +117,7 @@ export const runZeropsCli = async (argv: readonly string[]): Promise<void> => {
 	if (args.env === undefined || args.env === '') {
 		throw new Error('`build` requires --env=<env>')
 	}
-	const manifest = await compileManifest({ config: args.config, env: args.env })
+	const manifest = await compileManifest({ config: args.config, env: args.env }, 'fabrika app build')
 	const output = resolve(process.cwd(), args.output)
 	await Bun.write(output, serializeManifest(manifest))
 	console.info(`wrote ${output} (${manifestServiceHostnames(manifest).length} service(s))`)

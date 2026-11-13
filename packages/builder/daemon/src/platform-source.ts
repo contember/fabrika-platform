@@ -1,6 +1,7 @@
 import type { AppDto } from '@fabrika/control-contract'
 import {
 	type FabrikaManifest,
+	lockfileBuildBaseRefusal,
 	normalizeZeropsSourceRepository,
 	parseFabrikaManifest,
 	verifyZeropsArtifactSourceDescriptor,
@@ -137,6 +138,13 @@ export async function compileProject(root: string, env: string, appId: string, t
 		await verifyZeropsArtifactSourceDescriptor(manifest.target.sourceDescriptor)
 		if (manifest.target.sourceDescriptor.contents !== readFileSync(join(root, 'zerops.yaml'), 'utf8')) {
 			throw new PlatformError('Compiled descriptor differs from the source')
+		}
+		// Here, not in the child: its output is discarded, and this refusal is the hint the person needs.
+		const lockfile = join(root, 'bun.lock')
+		noSymlinks(lockfile)
+		if (lstatSync(lockfile, { throwIfNoEntry: false })?.isFile() === true) {
+			const refusal = lockfileBuildBaseRefusal(manifest, readFileSync(lockfile, 'utf8'))
+			if (refusal !== null) throw new PlatformError(refusal)
 		}
 		return manifest
 	} catch (error) {
