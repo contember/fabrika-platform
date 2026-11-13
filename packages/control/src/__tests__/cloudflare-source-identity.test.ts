@@ -13,7 +13,12 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { type CloudflareRunnerJob, cloudflareRunnerJobSchema, createCloudflareControlProvider } from '../../../provider-cloudflare/src/control'
+import {
+	type CloudflareRunnerJob,
+	cloudflareRunnerJobSchema,
+	createCloudflareControlProvider,
+	DEPLOY_VALUES_FILE_ENV,
+} from '../../../provider-cloudflare/src/control'
 import { type ArtifactFetch, Runner, type SpawnSpec } from '../../../runner-container/src/runner'
 import { bunSpawner } from '../../../runner-container/src/spawn'
 import { type ControlRepositories, type RunTrigger } from '../db'
@@ -115,6 +120,8 @@ interface CheckoutObservation {
 	map: string
 	gitConfig: string
 	env: Record<string, string>
+	/** What the executor reads at the values file its environment names, while the file exists. */
+	values: unknown
 	linesBeforeChild: RunLogLine[]
 }
 
@@ -221,6 +228,7 @@ async function joinedSourceWitness(trigger: RunTrigger, selectedObjectUnavailabl
 						}
 						if (spec.command !== 'bun' && spec.command !== 'fabrika-cloudflare-executor') throw new Error('unexpected repository child')
 						if (spec.command === 'bun' && spec.args.join(' ') !== 'install') throw new Error('unexpected Bun child')
+						const valuesFile = spec.env?.[DEPLOY_VALUES_FILE_ENV]
 						checkouts.push({
 							command: spec.command,
 							head: await requireGit(runner.checkoutDir, ['log', '-1', '--format=%H', '--']),
@@ -229,6 +237,7 @@ async function joinedSourceWitness(trigger: RunTrigger, selectedObjectUnavailabl
 							map: await readFile(join(spec.cwd, 'build', 'app.js.map'), 'utf8'),
 							gitConfig: await readFile(join(runner.checkoutDir, '.git', 'config'), 'utf8'),
 							env: spec.env ?? {},
+							values: valuesFile === undefined ? undefined : JSON.parse(await readFile(valuesFile, 'utf8')),
 							linesBeforeChild: [...runner.lines()],
 						})
 						if (spec.command === 'fabrika-cloudflare-executor') await writeFile(runner.outcomeFilePath, '{}')
@@ -334,7 +343,10 @@ async function joinedSourceWitness(trigger: RunTrigger, selectedObjectUnavailabl
 			expect(witness).toBeGreaterThanOrEqual(0)
 			expect(install).toBeGreaterThan(witness)
 		}
-		expect(checkouts[1]?.env[FABRIKA_RELEASE]).toBe(releaseName)
+		// The executor receives the release through its values file, never through its process environment.
+		expect(checkouts[1]?.values).toMatchObject({ [FABRIKA_RELEASE]: releaseName })
+		expect(checkouts[1]?.env[FABRIKA_RELEASE]).toBeUndefined()
+		expect(checkouts[0]?.env[DEPLOY_VALUES_FILE_ENV]).toBeUndefined()
 		expect(uploads).toHaveLength(1)
 		const upload = uploads[0]
 		if (upload === undefined) throw new Error('missing source-map HTTP upload')

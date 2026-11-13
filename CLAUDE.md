@@ -153,7 +153,7 @@ needed only when there is no app config. Platform commands load the provider's
   (`noUncheckedIndexedAccess`, `noPropertyAccessFromIndexSignature`) ONLY to tolerate oblaka's raw-TS
   source. Keep our own code strict; never widen the relaxation and never work around oblaka with a
   cast — ask first.
-- **NEVER log credentials or secret values.** They flow control-plane → `RunnerJob` → child env only;
+- **NEVER log credentials or secret values.** They flow control-plane → `RunnerJob` → child env (credentials) or a run file beside the checkout (an application's secrets) only;
   on error log a short message, never an error object that may carry a clone URL with an embedded token.
 - **The proxy is the ONLY enforcement point: exactly one enforcement decision, in `@fabrika/proxy-core`
   over `@fabrika/auth-core`'s planner, and only the proxy runs it** (ADR-0022). App services are not

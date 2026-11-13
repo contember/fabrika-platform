@@ -5,7 +5,14 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import { parseCloudflareArgs, platformComponents } from '../cli-args'
-import { parseApplicationObjectsEnvironment, parseCrossOrigins, parseInstallationApps, parseReturnOrigins, readApprovedAccess } from '../command'
+import {
+	parseApplicationObjectsEnvironment,
+	parseCrossOrigins,
+	parseInstallationApps,
+	parseReturnOrigins,
+	readApprovedAccess,
+	readDeployValues,
+} from '../command'
 import type { RunnerApprovedAccess } from '../runner-protocol'
 
 describe('parseCloudflareArgs', () => {
@@ -155,5 +162,43 @@ describe('readApprovedAccess', () => {
 		await expect(readApprovedAccess('/nonexistent/run.access.json')).rejects.toThrow('does not name a readable JSON file')
 		const forged = { kind: 'contract', contract: notesArtifact, contractDigest: 'sha256:other' }
 		await expect(readApprovedAccess(await accessFile(JSON.stringify(forged)))).rejects.toThrow('does not hold the access Control approved')
+	})
+})
+
+describe('readDeployValues', () => {
+	const roots: string[] = []
+	afterAll(async () => {
+		for (const root of roots) await rm(root, { recursive: true, force: true })
+	})
+	const valuesFile = async (contents: string): Promise<string> => {
+		const root = await mkdtemp(join(tmpdir(), 'fabrika-values-'))
+		roots.push(root)
+		const path = join(root, 'run.values.json')
+		await writeFile(path, contents)
+		return path
+	}
+
+	test("a runner's file is the only source of authored values: the process environment is never read", async () => {
+		const lookup = await readDeployValues(await valuesFile('{"BUN_OPTIONS":"dummy-bun-options","__proto__":"dummy-proto","API_KEY":"dummy"}'))
+		expect(lookup('BUN_OPTIONS')).toBe('dummy-bun-options')
+		expect(lookup('__proto__')).toBe('dummy-proto')
+		expect(lookup('API_KEY')).toBe('dummy')
+		// Set in this process, absent from the file.
+		expect(process.env['PATH']).toBeDefined()
+		expect(lookup('PATH')).toBeUndefined()
+		expect(lookup('toString')).toBeUndefined()
+	})
+
+	test('outside a runner, authored values come from the environment', async () => {
+		const lookup = await readDeployValues(undefined)
+		expect(lookup('PATH')).toBe(process.env['PATH'])
+	})
+
+	test('an unreadable or malformed file fails the deploy, and no value reaches the message', async () => {
+		await expect(readDeployValues('/nonexistent/run.values.json')).rejects.toThrow('does not name a readable JSON file')
+		await expect(readDeployValues(await valuesFile('["dummy-secret"]'))).rejects.toThrow('does not hold an object of names to values')
+		const nested = readDeployValues(await valuesFile('{"API_KEY":{"value":"dummy-secret"}}'))
+		await expect(nested).rejects.toThrow('does not hold an object of names to values')
+		await expect(nested).rejects.not.toThrow('dummy-secret')
 	})
 })
