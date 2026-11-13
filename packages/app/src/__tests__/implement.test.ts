@@ -209,8 +209,23 @@ describe('the SPA', () => {
 	test('never serves a source map, whose sources went to Operations at build', async () => {
 		const member = { token: await token('user', [inW1('notes.read')]) }
 		expect((await send(app, '/chunk-abc.js', member)).body).toBe('dist/app /chunk-abc.js')
-		expect((await send(app, '/chunk-abc.js.map', member)).status).toBe(404)
-		expect((await send(app, '/nested/chunk-abc.css.map', member)).status).toBe(404)
+		for (
+			const path of [
+				'/chunk-abc.js.map',
+				'/chunk-abc.js.m%61p',
+				'/chunk-abc.js%2emap',
+				'/chunk-abc.js%2E%4D%41%50',
+				'/chunk-abc.js.map/',
+				'/chunk-abc.js.MAP',
+				'/chunk-abc.js.Map',
+				'/nested/chunk-abc.css.map',
+			]
+		) {
+			const sent = await send(app, path, member)
+			expect([path, sent.status]).toEqual([path, 404])
+		}
+		// A doubled slash is not a canonical path: refused before any mount is asked.
+		expect((await send(app, '/nested//chunk-abc.css.map/', member)).status).toBe(400)
 	})
 })
 

@@ -139,6 +139,7 @@ describe('diskAssets', () => {
 	mkdirSync(join(root, 'dist', 'app', 'assets'), { recursive: true })
 	writeFileSync(join(root, 'dist', 'app', 'index.html'), '<main>app</main>')
 	writeFileSync(join(root, 'dist', 'app', 'assets', 'main.js'), 'console.info(1)')
+	writeFileSync(join(root, 'dist', 'app', 'assets', 'main.js.map'), '{"sources":["src/main.ts"]}')
 	writeFileSync(join(root, 'secret.txt'), 'not served')
 	afterAll(() => rmSync(root, { recursive: true, force: true }))
 	const assets = diskAssets(root)
@@ -154,6 +155,15 @@ describe('diskAssets', () => {
 		const outside = new Request(`${ORIGIN}/..%2Fsecret.txt`, { headers: { Accept: 'text/html' } })
 		expect(await (await assets.serve({ prefix: '/', dir: 'dist/app' }, outside)).text()).toBe('<main>app</main>')
 		expect((await assets.serve({ prefix: '/', dir: 'dist/app' }, new Request(`${ORIGIN}/..%2Fsecret.txt`))).status).toBe(404)
+	})
+
+	test('never serves a source map, whatever the path form', async () => {
+		for (const path of ['/assets/main.js.map', '/assets/main.js.m%61p', '/assets/main.js%2emap', '/assets/main.js.map/', '/assets/main.js.MAP']) {
+			const served = await assets.serve(mount, new Request(`${ORIGIN}${path}`))
+			// A form whose last segment is empty reads as a route of the page and gets index.html; never the map.
+			expect([path, await served.text()]).not.toEqual([path, expect.stringContaining('src/main.ts')])
+		}
+		expect((await assets.serve(mount, new Request(`${ORIGIN}/assets/main.js.m%61p`))).status).toBe(404)
 	})
 
 	test('a missing asset is 404, not the index; a navigation to a dotted route is the page', async () => {
