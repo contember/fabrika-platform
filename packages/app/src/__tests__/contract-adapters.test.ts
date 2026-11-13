@@ -166,6 +166,10 @@ describe('diskAssets', () => {
 		expect((await assets.serve(mount, new Request(`${ORIGIN}/assets/main.js.m%61p`))).status).toBe(404)
 	})
 
+	test('a name no file can have is a missing asset, not a fault', async () => {
+		expect((await assets.serve(mount, new Request(`${ORIGIN}/assets/main.js%00`))).status).toBe(404)
+	})
+
 	test('a missing asset is 404, not the index; a navigation to a dotted route is the page', async () => {
 		const missing = await assets.serve(mount, new Request(`${ORIGIN}/assets/old.js`))
 		expect([missing.status, await missing.text()]).toEqual([404, 'Not found'])
