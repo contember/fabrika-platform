@@ -1,9 +1,25 @@
 import type { AuthContext, DomainEvent } from '@fabrika/auth'
 import { describe, expect, test } from 'bun:test'
 import type { Env } from '../env'
+import { handoffRefusal } from '../github/connections/browser'
 import { readGitHubAppCredential } from '../github/connections/credentials'
-import { installationSetup, reconcileSourceConnection, repairSourceConnection, verifySourceInstallation } from '../github/connections/installation'
-import { manifestCallback, manifestHandoff, startSourceConnection } from '../github/connections/manifest'
+import {
+	handedOffInstallationSetup,
+	installationSetup,
+	reconcileSourceConnection,
+	repairSourceConnection,
+	verifySourceInstallation,
+} from '../github/connections/installation'
+import {
+	cancelSourceConnection,
+	handedOffCallback,
+	handedOffManifest,
+	handoffOpening,
+	manifestCallback,
+	manifestHandoff,
+	mintSourceConnectionHandoff,
+	startSourceConnection,
+} from '../github/connections/manifest'
 import {
 	type GitHubSetupAttempt,
 	type GitHubSourceConnection,
@@ -103,6 +119,13 @@ class FailingCredentialStore extends GitHubConnectionStore {
 		const secret: PreparedVaultSecret = args[5]
 		if (secret.label === githubAppCredentialSecretLabel(args[0])) return Promise.reject(new Error('vault write failed'))
 		return super.storeSecretAndCheckpoint(...args)
+	}
+}
+
+/** A store whose cleanup never runs, so a handler's own expiry check is what refuses. */
+class NoReapStore extends GitHubConnectionStore {
+	override reapExpiredAttempt(): Promise<GitHubSetupAttempt | null> {
+		return Promise.resolve(null)
 	}
 }
 
@@ -1031,6 +1054,336 @@ describe("GitHub's return to the App's setup URL", () => {
 	})
 })
 
+describe('a handoff link for an organization owner', () => {
+	const HANDOFF_TTL = 60 * 60
+
+	async function started(env: Env, source: FakeSourceConnection, now: () => number = () => 1_000): Promise<string> {
+		const result = await startSourceConnection(
+			deps(env, source, mutationRequest('/api/rpc'), auth(), now),
+			{ organization: 'acme', appName: 'fabrika-source', visibility: 'private', repositories: [] },
+		)
+		return result.connectionId
+	}
+
+	/**
+	 * Mint with bytes that differ per draw: the token is `tokenOf(32, fill)` and the rotated manifest state
+	 * `tokenOf(32, fill + 1)`, so neither passes for the other, nor for the state the setup started with (fill 7).
+	 */
+	async function mint(
+		env: Env,
+		source: FakeSourceConnection,
+		connectionId: string,
+		fill = 9,
+		caller = auth(),
+		now: () => number = () => 1_000,
+		expiresInSeconds?: number,
+	) {
+		return await mintSourceConnectionHandoff(
+			{ ...deps(env, source, mutationRequest('/api/rpc'), caller, now), randomBytes: drawsFrom(fill) },
+			expiresInSeconds === undefined ? { connectionId } : { connectionId, expiresInSeconds },
+		)
+	}
+
+	const consoleCallback = (env: Env, source: SourceConnectionPort, state = token(32)) =>
+		manifestCallback({
+			...deps(env, source, new Request(`${ORIGIN}/api/source/github/callback?code=created&state=${state}`)),
+			exchangeManifest: () => Promise.resolve(createdApp()),
+		})
+
+	/** What the opening page's script does: post the fragment's token back to the link's path. */
+	const post = (
+		env: Env,
+		source: SourceConnectionPort,
+		connectionId: string,
+		body: string,
+		now: () => number = () => 1_000,
+		contentType = 'application/x-www-form-urlencoded',
+		query = '',
+	) =>
+		handedOffManifest({
+			env,
+			source,
+			request: new Request(`${ORIGIN}/api/source/github/handoff/${connectionId}${query}`, {
+				method: 'POST',
+				headers: { 'content-type': contentType },
+				body,
+			}),
+			now,
+		}, connectionId)
+
+	const open = (env: Env, source: SourceConnectionPort, url: string, connectionId: string, now: () => number = () => 1_000) =>
+		post(env, source, connectionId, `token=${encodeURIComponent(new URL(url).hash.slice(1))}`, now)
+
+	/** The state a link minted with the default fill carries: minting replaces the manifest state. */
+	const ownerCallback = (env: Env, source: SourceConnectionPort, state = tokenOf(32, 10)) =>
+		handedOffCallback({
+			env,
+			source,
+			request: new Request(`${ORIGIN}/api/source/github/handoff-callback?code=created&state=${state}`),
+			exchangeManifest: () => Promise.resolve(createdApp()),
+		})
+
+	const ownerSetup = (env: Env, source: SourceConnectionPort, connectionId: string, query: string) =>
+		handedOffInstallationSetup(
+			{ env, source, request: new Request(`${ORIGIN}/api/source/github/handoff-setup/${connectionId}${query}`) },
+			connectionId,
+		)
+
+	test('lets an owner without a console session create and install the App, and spends the link', async () => {
+		const env = environment()
+		const source = new FakeSourceConnection()
+		const connectionId = await started(env, source)
+		const caller = auth()
+		const handoff = await mint(env, source, connectionId, 9, caller)
+		expect(handoff).toEqual({
+			connectionId,
+			url: `${ORIGIN}/api/source/github/handoff/${connectionId}#${tokenOf(32, 9)}`,
+			expiresAt: 1_000 + HANDOFF_TTL,
+		})
+		expect(caller.events).toEqual([{ action: 'source.connection.handoff', resourceType: 'source_connection', resourceId: connectionId }])
+		expect(JSON.stringify(await queryRowsFromEnv(env, 'SELECT * FROM github_source_setup_attempts'))).not.toContain(tokenOf(32, 9))
+
+		// The link's path opens a page that holds no secret and reads nothing stored.
+		const opening = handoffOpening({ env, source, request: new Request(handoff.url) }, connectionId)
+		expect(opening.headers.get('content-security-policy')).toContain("form-action 'self'")
+		const openingBody = await opening.text()
+		expect(openingBody).toContain('location.hash')
+		expect(openingBody).not.toContain(tokenOf(32, 9))
+		// A mail tool's tracking parameters do not break the link.
+		expect(
+			handoffOpening({ env, source, request: new Request(`${ORIGIN}/api/source/github/handoff/${connectionId}?utm_source=mail`) }, connectionId).status,
+		)
+			.toBe(200)
+
+		const page = await open(env, source, handoff.url, connectionId)
+		expect(page.status).toBe(200)
+		expect(page.headers.get('cache-control')).toBe('no-store')
+		const body = await page.text()
+		expect(body).toContain(`${ORIGIN}/api/source/github/handoff-callback`)
+		expect(body).toContain(`${ORIGIN}/api/source/github/handoff-setup/${connectionId}`)
+		expect(body).not.toContain(`${ORIGIN}/api/source/github/callback`)
+		expect(body).toContain('your administrator sees the connection')
+
+		const callback = await ownerCallback(env, source)
+		expect(callback.status).toBe(303)
+		expect(callback.headers.get('location')).toBe('https://github.com/apps/fabrika-source/installations/new')
+		expect(await open(env, source, handoff.url, connectionId).catch((error: unknown) => error)).toMatchObject({ httpStatus: 404 })
+
+		source.calls.splice(0)
+		const installed = await ownerSetup(env, source, connectionId, '?installation_id=456&setup_action=install')
+		expect(installed.status).toBe(200)
+		expect(installed.headers.get('content-security-policy')).not.toContain('unsafe-inline')
+		expect(await installed.text()).toContain('GitHub is connected')
+		expect(source.calls).toEqual(['installation'])
+		expect(await env.REPOSITORIES.githubConnections.getConnectionById(connectionId)).toMatchObject({ installationId: 456 })
+		expect(await (await ownerSetup(env, source, connectionId, '?installation_id=456&setup_action=update')).text()).toContain('GitHub is connected')
+	})
+
+	test('refuses a wrong, replaced or expired token and a link with anything else in its query', async () => {
+		let clock = 1_000
+		const now = () => clock
+		const env = environment(now)
+		const source = new FakeSourceConnection()
+		const connectionId = await started(env, source, now)
+		const first = await mint(env, source, connectionId, 9, auth(), now)
+		const second = await mint(env, source, connectionId, 11, auth(), now)
+		await expect(open(env, source, first.url, connectionId, now)).rejects.toMatchObject({ httpStatus: 404 })
+		await expect(post(env, source, connectionId, `token=${token(32)}`, now)).rejects.toMatchObject({ httpStatus: 404 })
+		// The manifest state is visible in the manifest page and in GitHub's URL; it never passes for the token.
+		await expect(post(env, source, connectionId, `token=${tokenOf(32, 12)}`, now)).rejects.toMatchObject({ httpStatus: 404 })
+		expect((await env.REPOSITORIES.githubConnections.getAttempt(connectionId))?.stateHash).toBe(await sha256Hex(tokenOf(32, 12)))
+		const secondToken = new URL(second.url).hash.slice(1)
+		for (
+			const [body, contentType, query] of [
+				[`token=${secondToken}&state=${token(32)}`, 'application/x-www-form-urlencoded', ''],
+				[`token=${secondToken}&token=${secondToken}`, 'application/x-www-form-urlencoded', ''],
+				['', 'application/x-www-form-urlencoded', ''],
+				[JSON.stringify({ token: secondToken }), 'application/json', ''],
+				[`token=${secondToken}`, 'application/x-www-form-urlencoded', `?token=${secondToken}`],
+			] as const
+		) {
+			await expect(post(env, source, connectionId, body, now, contentType, query)).rejects.toMatchObject({ httpStatus: 400 })
+		}
+		expect((await open(env, source, second.url, connectionId, now)).status).toBe(200)
+
+		// A newer link replaced the manifest state too: a page opened with the first link cannot finish the setup.
+		await expect(ownerCallback(env, source, tokenOf(32, 10))).rejects.toMatchObject({ httpStatus: 409 })
+		expect(await env.REPOSITORIES.githubConnections.getAttempt(connectionId)).toMatchObject({ phase: 'awaiting_manifest_callback' })
+
+		// The administrator opening the console's page keeps the link's own expiry.
+		await manifestHandoff(deps(env, source, new Request(`${ORIGIN}/api/source/github/manifest/${connectionId}`), auth(), now), connectionId)
+		expect(await env.REPOSITORIES.githubConnections.getAttempt(connectionId)).toMatchObject({ expiresAt: 1_000 + HANDOFF_TTL })
+
+		clock = 1_000 + HANDOFF_TTL
+		await expect(open(env, source, second.url, connectionId, now)).rejects.toMatchObject({ httpStatus: 404 })
+	})
+
+	test('the link itself checks its expiry, even when no cleanup ended the setup yet', async () => {
+		let clock = 1_000
+		const now = () => clock
+		const harness = environment(now)
+		const env: Env = { ...harness, REPOSITORIES: { ...harness.REPOSITORIES, githubConnections: new NoReapStore(harness.DB, now) } }
+		const source = new FakeSourceConnection()
+		const connectionId = await started(env, source, now)
+		const handoff = await mint(env, source, connectionId, 9, auth(), now)
+		clock = handoff.expiresAt
+		await expect(open(env, source, handoff.url, connectionId, now)).rejects.toMatchObject({ httpStatus: 404 })
+		expect(await env.REPOSITORIES.githubConnections.getAttempt(connectionId)).toMatchObject({ status: 'active' })
+	})
+
+	test('takes no callback or setup without a session for an attempt nobody minted a link for', async () => {
+		const env = environment()
+		const source = new FakeSourceConnection()
+		const connectionId = await started(env, source)
+		await expect(ownerCallback(env, source, token(32))).rejects.toMatchObject({ httpStatus: 409 })
+		expect(await env.REPOSITORIES.githubConnections.getAttempt(connectionId)).toMatchObject({ phase: 'awaiting_manifest_callback' })
+
+		await manifestCallback({
+			...deps(env, source, new Request(`${ORIGIN}/api/source/github/callback?code=created&state=${token(32)}`)),
+			exchangeManifest: () => Promise.resolve(createdApp()),
+		})
+		source.calls.splice(0)
+		await expect(ownerSetup(env, source, connectionId, '?installation_id=456&setup_action=install')).rejects.toMatchObject({ httpStatus: 404 })
+		expect(source.calls).toEqual([])
+		expect(await env.REPOSITORIES.githubConnections.getConnectionById(connectionId)).toBeNull()
+	})
+
+	test('tells the owner to hand back when the installation cannot be verified or awaits approval', async () => {
+		const env = environment()
+		const source = new FakeSourceConnection()
+		const connectionId = await started(env, source)
+		await mint(env, source, connectionId)
+		await ownerCallback(env, source)
+		expect(await (await ownerSetup(env, source, connectionId, '?setup_action=request')).text()).toContain('Waiting for approval')
+		expect(await (await ownerSetup(env, source, connectionId, '?installation_id=999&setup_action=install')).text()).toContain(
+			'ask your administrator to verify it',
+		)
+		expect(await env.REPOSITORIES.githubConnections.getConnectionById(connectionId)).toBeNull()
+	})
+
+	test('refuses the owner with a page in the words an owner can act on, never the console JSON', async () => {
+		for (
+			const [status, words] of [[400, 'incomplete'], [404, 'not valid any more'], [409, 'not valid any more'], [422, 'another account'], [
+				503,
+				'Tell your administrator',
+			]] as const
+		) {
+			const refusal = handoffRefusal(status)
+			expect(refusal.status).toBe(status)
+			expect(refusal.headers.get('content-type')).toBe('text/html; charset=utf-8')
+			expect(refusal.headers.get('cache-control')).toBe('no-store')
+			expect(await refusal.text()).toContain(words)
+		}
+	})
+
+	test('lasts as long as the administrator asks, from 10 minutes to 24 hours', async () => {
+		const env = environment()
+		const source = new FakeSourceConnection()
+		const connectionId = await started(env, source)
+		expect((await mint(env, source, connectionId, 9, auth(), () => 1_000, 24 * 60 * 60)).expiresAt).toBe(1_000 + 24 * 60 * 60)
+		expect(await env.REPOSITORIES.githubConnections.getAttempt(connectionId)).toMatchObject({ expiresAt: 1_000 + 24 * 60 * 60 })
+		for (const span of [599, 24 * 60 * 60 + 1, 1.5]) {
+			await expect(mint(env, source, connectionId, 9, auth(), () => 1_000, span)).rejects.toMatchObject({ httpStatus: 400 })
+		}
+	})
+
+	test('replays of the manifest state are refused, through either callback', async () => {
+		const env = environment()
+		const source = new FakeSourceConnection()
+		const connectionId = await started(env, source)
+		await mint(env, source, connectionId)
+		expect((await ownerCallback(env, source)).status).toBe(303)
+		await expect(ownerCallback(env, source)).rejects.toMatchObject({ httpStatus: 409 })
+		await expect(consoleCallback(env, source)).rejects.toMatchObject({ httpStatus: 409 })
+		expect(await env.REPOSITORIES.githubConnections.getAttempt(connectionId)).toMatchObject({ phase: 'installation_required', stateHash: null })
+	})
+
+	test('a cancel ends the setup, its link and its state, and frees the slot for a new setup', async () => {
+		const env = environment()
+		const source = new FakeSourceConnection()
+		const connectionId = await started(env, source)
+		const handoff = await mint(env, source, connectionId)
+		await expect(cancelSourceConnection(deps(env, source, mutationRequest('/api/rpc'), auth('service')), connectionId)).rejects.toMatchObject({
+			httpStatus: 403,
+		})
+
+		// Another administrator may cancel it: the one who started it may be away.
+		const other = { ...auth(), principal: { id: 'user-2', type: 'user' as const, label: 'other@example.test' } }
+		expect(await cancelSourceConnection(deps(env, source, mutationRequest('/api/rpc'), other), connectionId)).toEqual({ connectionId })
+		expect(other.events).toEqual([{ action: 'source.connection.cancel', resourceType: 'source_connection', resourceId: connectionId }])
+		expect(await env.REPOSITORIES.githubConnections.getAttempt(connectionId)).toMatchObject({
+			status: 'failed',
+			lastErrorCode: 'cancelled',
+			stateHash: null,
+			manifestStateSecretRef: null,
+		})
+		expect((await queryRowsFromEnv(env, 'SELECT * FROM vault')).length).toBe(0)
+		await expect(open(env, source, handoff.url, connectionId)).rejects.toMatchObject({ httpStatus: 404 })
+		await expect(ownerCallback(env, source)).rejects.toMatchObject({ httpStatus: 409 })
+		await expect(cancelSourceConnection(deps(env, source, mutationRequest('/api/rpc')), connectionId)).rejects.toMatchObject({ httpStatus: 404 })
+		expect(await started(env, source)).not.toBe(connectionId)
+	})
+
+	test('a setup is not cancelled once GitHub created its App', async () => {
+		const env = environment()
+		const source = new FakeSourceConnection()
+		const connectionId = await started(env, source)
+		await consoleCallback(env, source)
+		await expect(cancelSourceConnection(deps(env, source, mutationRequest('/api/rpc')), connectionId)).rejects.toMatchObject({ httpStatus: 404 })
+		expect(await env.REPOSITORIES.githubConnections.getAttempt(connectionId)).toMatchObject({ status: 'active', phase: 'installation_required' })
+	})
+
+	test("hands a personal account's setup to its owner, whose page waits for the click", async () => {
+		const env = environment()
+		const source = new FakeSourceConnection()
+		source.githubOwner = 'octocat'
+		source.githubOwnerType = 'User'
+		source.installation = { status: 'installed', installationId: 789, accountLogin: 'octocat', repositorySelection: 'all' }
+		const { connectionId } = await startSourceConnection(
+			deps(env, source, mutationRequest('/api/rpc')),
+			{ organization: 'octocat', ownerType: 'User', appName: 'fabrika-source', visibility: 'private', repositories: [] },
+		)
+		const handoff = await mint(env, source, connectionId)
+		const body = await (await open(env, source, handoff.url, connectionId)).text()
+		expect(body).toContain('action="https://github.com/settings/apps/new?state=')
+		expect(body).not.toContain('<script')
+		expect(body).toContain(`${ORIGIN}/api/source/github/handoff-callback`)
+		expect(body).toContain(`${ORIGIN}/api/source/github/handoff-setup/${connectionId}`)
+		expect((await ownerCallback(env, source)).status).toBe(303)
+		expect(await (await ownerSetup(env, source, connectionId, '?installation_id=789&setup_action=install')).text()).toContain('GitHub is connected')
+		expect(await env.REPOSITORIES.githubConnections.getConnectionById(connectionId)).toMatchObject({ appOwnerType: 'User' })
+	})
+
+	test("refuses the owner's App on another account with the owner's page", async () => {
+		const env = environment()
+		const source = new FakeSourceConnection()
+		source.githubOwner = 'someone-else'
+		source.githubOwnerType = 'User'
+		const { connectionId } = await startSourceConnection(
+			deps(env, source, mutationRequest('/api/rpc')),
+			{ organization: 'octocat', ownerType: 'User', appName: 'fabrika-source', visibility: 'private', repositories: [] },
+		)
+		await mint(env, source, connectionId)
+		await expect(ownerCallback(env, source)).rejects.toMatchObject({ httpStatus: 422 })
+		expect(await env.REPOSITORIES.githubConnections.getAttempt(connectionId)).toMatchObject({ status: 'failed', lastErrorCode: 'app_owner_mismatch' })
+	})
+
+	test('only the person who started the setup mints a link, and only while it waits for GitHub', async () => {
+		const env = environment()
+		const source = new FakeSourceConnection()
+		const connectionId = await started(env, source)
+		const other = { ...auth(), principal: { id: 'user-2', type: 'user' as const, label: 'other@example.test' } }
+		await expect(mint(env, source, connectionId, 9, other)).rejects.toMatchObject({ httpStatus: 404 })
+		await expect(mint(env, source, connectionId, 9, auth('service'))).rejects.toMatchObject({ httpStatus: 403 })
+		await expect(mint(env, source, connectionId, 9, auth('user', false))).rejects.toMatchObject({ httpStatus: 403 })
+		await manifestCallback({
+			...deps(env, source, new Request(`${ORIGIN}/api/source/github/callback?code=created&state=${token(32)}`)),
+			exchangeManifest: () => Promise.resolve(createdApp()),
+		})
+		await expect(mint(env, source, connectionId)).rejects.toMatchObject({ httpStatus: 404 })
+	})
+})
+
 function mutationRequest(path: string): Request {
 	return new Request(`${ORIGIN}${path}`, { method: 'POST', headers: { origin: ORIGIN } })
 }
@@ -1063,9 +1416,24 @@ function createdApp(id = 123, slug = 'fabrika-source') {
 	}
 }
 
+/** A random-bytes source whose every draw differs: the first is filled with `first`, the next with `first + 1`, … */
+function drawsFrom(first: number): (length: number) => Uint8Array {
+	let next = first
+	return (length) => new Uint8Array(length).fill(next++)
+}
+
+async function sha256Hex(value: string): Promise<string> {
+	const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)))
+	return [...digest].map((byte) => byte.toString(16).padStart(2, '0')).join('')
+}
+
 function token(length: number): string {
+	return tokenOf(length, 7)
+}
+
+function tokenOf(length: number, fill: number): string {
 	let binary = ''
-	for (const byte of new Uint8Array(length).fill(7)) binary += String.fromCharCode(byte)
+	for (const byte of new Uint8Array(length).fill(fill)) binary += String.fromCharCode(byte)
 	return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '')
 }
 

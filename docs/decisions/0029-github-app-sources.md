@@ -73,9 +73,32 @@ A user principal with `source.connection.manage` (service tokens are refused) cr
    ([ADR-0049](0049-author-applications-through-mcp-in-control.md)), which commits to workspace branches and
    opens pull requests. Each token is narrower than the App: a deploy mints a repository-scoped token with
    Contents read only, and only a workspace operation mints one with both write permissions.
-3. The callback requires the same authenticated principal, consumes the state once, exchanges the
-   code, and writes the App id and private key into the vault **in the same transaction as the setup
-   checkpoint, before it reports success**.
+3. The console's callback requires the principal that started the setup; the handoff callback below requires a
+   minted link instead. Either consumes the state once, exchanges the code, and writes the App id and private key
+   into the vault **in the same transaction as the setup checkpoint, before it reports success**.
+
+   Only an owner of the GitHub account (an organization's owner, or the person of a personal account) can create its
+   App, and that owner is often not the administrator. So the
+   administrator who started the setup may mint a **handoff link** for it: a 32-byte token, kept only as its
+   SHA-256 on the attempt, which holds the attempt open for the span the administrator chose (an hour unless asked
+   otherwise, at most 24 hours) instead of ten minutes. Minting also replaces the one-use manifest state, so a new
+   link revokes the one before it and every page already opened with either. Since only one setup may be in
+   progress, any person with `source.connection.manage` can cancel a setup that still waits for GitHub to create the
+   App: the attempt fails as `cancelled`, its encrypted state is deleted, and its link, console page and callback
+   stop working at once.
+
+   The owner opens the link in their own browser, with no console account. The token rides in the URL's fragment,
+   which no browser sends, so it reaches no request log on either cloud. Four `protocol` rows serve that browser,
+   each authenticating by the attempt's own secrets rather than a caller: `GET /api/source/github/handoff/:connectionId`
+   is a page with no secret that posts the fragment's token to the same path; the `POST` checks it and answers a
+   manifest whose redirect and setup URLs name the other two; `/api/source/github/handoff-callback` accepts the
+   one-use state alone, and only for an attempt with a minted link; `/api/source/github/handoff-setup/:connectionId`
+   runs the setup verification of step 5, which never trusted the caller anyway, and only for such an attempt.
+   Their refusals are pages for the owner, never the console's JSON. The link is spent once the callback claims the
+   state. The minting is audited; the steps the owner's browser drives have no principal to audit, and the
+   connection's `connected_by` names the administrator who started and handed off the setup. Whoever holds the link
+   gets a connection only for an App on the account the administrator named, which GitHub creates only for someone
+   allowed to (an organization's owner, or the personal account itself); the callback refuses an App on any other.
 4. Control generates a webhook secret, stores it in the vault, configures the App's webhook to
    `/webhooks/github/:connectionId`, and verifies the App identity (owner, visibility, permissions,
    events) with the stored key. An App GitHub created on another owner than the setup asked for fails
@@ -228,5 +251,10 @@ them.
 - **Assemble the archive from Git objects, or stage the tarball on disk.** Both keep a disk ceiling
   (and the first needs `git` subprocesses and a second tree read) to buy byte determinism or error
   ordering that nothing needs.
+- **Let the owner's browser carry a console session for the handoff.** The owner would need an account on
+  the installation only to click through GitHub, and the operator's relay that held the administrator's
+  session in a third browser is exactly what the handoff link replaces.
+- **A `fabrika control source …` command that prints or cancels the link.** Not built: every source-connection
+  action needs a person, and `fabrika control` signs in with a service key, which step 1 refuses.
 - **Create the App from `platform init` with a local recovery file.** Puts one-time credentials on an
   operator's disk and makes an install command the ongoing connection authority.

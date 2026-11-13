@@ -25,6 +25,9 @@ import type {
 	CursorList,
 	DeploymentNamespaceDetailDto,
 	DeploymentNamespaceListResponse,
+	GitHubSourceConnectionCancelDto,
+	GitHubSourceConnectionHandoffDto,
+	GitHubSourceConnectionHandoffInput,
 	GitHubSourceConnectionListInput,
 	GitHubSourceConnectionListResponse,
 	GitHubSourceConnectionStatusDto,
@@ -154,6 +157,8 @@ export interface GitHubSourceConnectionInput {
 export interface GitHubSourceConnectionRpcContract {
 	list: RpcProcedure<GitHubSourceConnectionListInput, GitHubSourceConnectionListResponse>
 	start: RpcProcedure<StartGitHubSourceConnectionRequest, StartGitHubSourceConnectionResponse>
+	handoff: RpcProcedure<GitHubSourceConnectionHandoffInput, GitHubSourceConnectionHandoffDto>
+	cancel: RpcProcedure<GitHubSourceConnectionInput, GitHubSourceConnectionCancelDto>
 	verifyInstallation: RpcProcedure<GitHubSourceConnectionInput, GitHubSourceConnectionStatusDto>
 	repair: RpcProcedure<GitHubSourceConnectionInput, GitHubSourceConnectionStatusDto>
 	reconcile: RpcProcedure<GitHubSourceConnectionInput, GitHubSourceConnectionStatusDto>

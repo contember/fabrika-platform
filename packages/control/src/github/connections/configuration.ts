@@ -1,6 +1,6 @@
 import { vault } from '../../services'
 import { SourceFailure } from '../source/failure'
-import { linkedDeadline, randomToken, type SourceConnectionWorkflowDeps } from './context'
+import { linkedDeadline, randomToken, type SourceConnectionRequestDeps } from './context'
 import { type GitHubSetupAttempt, type GitHubSetupErrorCode, type GitHubSetupPhase, type GitHubSourceConnection } from './model'
 import type { SourceGitHubAppIdentity } from './port'
 import { githubWebhookSecretLabel } from './secrets'
@@ -11,7 +11,7 @@ export const CONFIGURATION_DEADLINE_MS = 5 * 60_000
 const WEBHOOK_SECRET_BYTES = 32
 
 /** Resume a setup from its durable checkpoint; every step reads the App key from the vault. */
-async function advanceConfiguration(deps: SourceConnectionWorkflowDeps, initial: GitHubSetupAttempt, signal: AbortSignal): Promise<void> {
+async function advanceConfiguration(deps: SourceConnectionRequestDeps, initial: GitHubSetupAttempt, signal: AbortSignal): Promise<void> {
 	let attempt = initial
 	if (attempt.phase === 'credential_stored') {
 		const app = await deps.source.verifyApp({ credentialRef: requiredCredentialRef(attempt), connectionId: attempt.id, signal })
@@ -66,7 +66,7 @@ async function advanceConfiguration(deps: SourceConnectionWorkflowDeps, initial:
 	}
 }
 
-export async function advanceWithDeadline(deps: SourceConnectionWorkflowDeps, attempt: GitHubSetupAttempt): Promise<void> {
+export async function advanceWithDeadline(deps: SourceConnectionRequestDeps, attempt: GitHubSetupAttempt): Promise<void> {
 	const deadline = linkedDeadline(deps.request.signal, CONFIGURATION_DEADLINE_MS)
 	try {
 		await advanceConfiguration(deps, attempt, deadline.signal)
@@ -118,7 +118,7 @@ function validRemoteIdentity(app: SourceGitHubAppIdentity): boolean {
  * its own code; anything else waits for a repair from its phase. `null` when the attempt moved meanwhile.
  */
 export async function settleFailedStep(
-	deps: SourceConnectionWorkflowDeps,
+	deps: SourceConnectionRequestDeps,
 	attempt: GitHubSetupAttempt,
 	error: unknown,
 ): Promise<GitHubSetupAttempt | null> {

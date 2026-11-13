@@ -106,7 +106,13 @@ import {
 import type { ControlRepositories, MailMessageRepository, MailMessageRow, MailRuleRow } from './db'
 import type { Env } from './env'
 import { reconcileSourceConnection, repairSourceConnection, verifySourceInstallation } from './github/connections/installation'
-import { startSourceConnection } from './github/connections/manifest'
+import {
+	cancelSourceConnection,
+	HANDOFF_MAX_TTL_SECONDS,
+	HANDOFF_MIN_TTL_SECONDS,
+	mintSourceConnectionHandoff,
+	startSourceConnection,
+} from './github/connections/manifest'
 import type { SourceConnectionPort } from './github/connections/port'
 import { sourceConnectionList } from './github/connections/status'
 import { appScope } from './iam'
@@ -239,6 +245,10 @@ const describeConnectorInput = z.object({
 const githubOwner = z.string().regex(/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/)
 const githubRepositoryName = z.string().regex(/^[A-Za-z0-9._-]{1,100}$/)
 const sourceConnectionId = z.object({ connectionId: z.string().min(1).max(128) }).strict()
+const sourceConnectionHandoffInput = z.object({
+	connectionId: z.string().min(1).max(128),
+	expiresInSeconds: z.number().int().min(HANDOFF_MIN_TTL_SECONDS).max(HANDOFF_MAX_TTL_SECONDS).optional(),
+}).strict()
 const sourceConnectionListInput = githubSourceConnectionListInputSchema
 const startSourceConnectionInput = z.object({
 	organization: githubOwner,
@@ -295,6 +305,12 @@ export function createControlRpcRouter(
 			),
 			start: rpc.procedure.input(startSourceConnectionInput).require(CONTROL_ACTIONS.SOURCE_CONNECTION_MANAGE).mutation(({ ctx, input }) =>
 				controlCall(() => startSourceConnection(sourceConnectionContext(ctx), input))
+			),
+			handoff: rpc.procedure.input(sourceConnectionHandoffInput).require(CONTROL_ACTIONS.SOURCE_CONNECTION_MANAGE).mutation((
+				{ ctx, input },
+			) => controlCall(() => mintSourceConnectionHandoff(sourceConnectionContext(ctx), input))),
+			cancel: rpc.procedure.input(sourceConnectionId).require(CONTROL_ACTIONS.SOURCE_CONNECTION_MANAGE).mutation(({ ctx, input }) =>
+				controlCall(() => cancelSourceConnection(sourceConnectionContext(ctx), input.connectionId))
 			),
 			verifyInstallation: rpc.procedure.input(sourceConnectionId).require(CONTROL_ACTIONS.SOURCE_CONNECTION_MANAGE).mutation(({ ctx, input }) =>
 				controlCall(() => verifySourceInstallation(sourceConnectionContext(ctx), input.connectionId))
