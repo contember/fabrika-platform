@@ -1018,6 +1018,7 @@ function bootOnce(app: ContractImplementation, options: BootOptions, binding: Bi
 		ownedDimensions: owned,
 		containers,
 		relations: new Map(Object.entries(artifact.relations ?? {}).map(([name, relation]) => [name, relation.dimension])),
+		partitions: new Set(Object.entries(artifact.dimensions).filter(([, dimension]) => dimension.partition === true).map(([name]) => name)),
 		reveals: revealsOf(artifact),
 		memberReveals: memberRevealsOf(artifact),
 		paths: pathsOf(artifact),

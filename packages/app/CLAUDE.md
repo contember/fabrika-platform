@@ -595,7 +595,10 @@ vocabulary (`packages/db/CLAUDE.md`).
   `Within`, where the db narrows each table's term by its own column. `on` and `in` mint a `Ref` through a relation only when a row of
   it names the caller at the object or a container on its chain, or reaches a row that reveals one of them for the
   action, now (`Ref`'s relations; empty for an IAM grant); `over` puts the relations into its `Within` beside the IAM
-  values. An entry of a relation the contract does not declare counts for none. `memberReveals` adds the caller's
+  values, and the nodes of its `~relin` entries for the action at a tenant partition (`#admitting`: a dimension the
+  artifact marks `partition`, `RuntimeParts.partitions`; a declared relation) as `admitting`, which a table's `admits`
+  widens the read within (ADR-0074); a `~rel` entry, and one inside the partition, give none, and `on` and `in` mint
+  nothing through it. An entry of a relation the contract does not declare counts for none. `memberReveals` adds the caller's
   grants at nodes whose rows reveal the `over` dimension to their members; `on` and `in` mint a `Ref` through such a
   row (`#revealedOn`, the db's `revealsToMembers`) and carry the grants it matched (`Ref`'s revealing). A table's
   `writeThrough` lets them mint a `Ref` through its path (`#throughCandidates`, the db's `holdsThrough`, asked in batches

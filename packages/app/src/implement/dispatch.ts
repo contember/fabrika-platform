@@ -363,6 +363,8 @@ export interface RuntimeParts {
 	readonly containers: ReadonlyMap<string, readonly string[]>
 	/** Each relation of the contract with its dimension: a `~rel` entry holds its action at that dimension's nodes. */
 	readonly relations: ReadonlyMap<string, string>
+	/** The dimensions declared `partition: true`: a `~relin` entry at one of their nodes admits the rows `admits` widens a read to. */
+	readonly partitions: ReadonlySet<string>
 	/** Each relation's reveals: a `~rel` entry of one of their actions also holds it at the ancestor nodes they reveal. */
 	readonly reveals: ReadonlyMap<string, readonly RevealedNode[]>
 	/** Each dimension's member reveals: a grant of one of their actions at its node also reads under the ancestor they reveal. */
@@ -982,10 +984,29 @@ export class ContractRuntime {
 		const inside = this.#heldContained(caller.perms, action, dimension)
 		const related = this.#heldRelations(caller.perms, action, [dimension, ...(this.#parts.containers.get(dimension) ?? [])])
 		const revealing = this.#heldRevealing(caller.perms, action, [dimension, ...(this.#parts.containers.get(dimension) ?? [])])
-		if (direct.length === 0 && held.length === 0 && inside.length === 0 && related.length === 0 && revealing.length === 0) {
+		const admitting = this.#admitting(caller.perms, action)
+		const none = related.length === 0 && revealing.length === 0 && admitting.length === 0
+		if (direct.length === 0 && held.length === 0 && inside.length === 0 && none) {
 			throw new ForbiddenError(`The caller holds '${action}' in no ${dimension}`)
 		}
-		return this.#parts.mint.within(frame, dimension, action, caller.subject, direct, held, inside, related, revealing)
+		return this.#parts.mint.within(frame, dimension, action, caller.subject, direct, held, inside, related, revealing, admitting)
+	}
+
+	/**
+	 * The tenant partition nodes where the caller holds `action` through a relation inside the node (`~relin` at a
+	 * `partition: true` dimension, of a relation the contract declares), grouped by dimension: where `admits` widens a
+	 * read. A `~rel` entry holds no node, so it admits nothing; a grant inside a partition node does not count either.
+	 */
+	#admitting(perms: PermissionEntry[], action: string): ContainerGrant[] {
+		const nodes = new Map<string, string[]>()
+		for (const entry of perms) {
+			const held = entry.scope === null || !matchAction(entry.action, action) ? null : parseRelationInside(entry.scope)
+			if (held === null || !this.#parts.partitions.has(held.dimension) || !this.#parts.relations.has(held.relation)) continue
+			const values = nodes.get(held.dimension) ?? []
+			if (!values.includes(held.node)) values.push(held.node)
+			nodes.set(held.dimension, values)
+		}
+		return [...nodes].map(([dimension, values]) => ({ dimension, values }))
 	}
 
 	/** A scope value the caller acts in: without a grant on it or on a container of it, 403 whether it exists or not. */
@@ -1124,7 +1145,7 @@ export class ContractRuntime {
 		const relations = this.#heldRelations(caller.perms, action, dimensions)
 		const revealing = this.#heldRevealing(caller.perms, action, dimensions)
 		const values = scopedValues(caller.perms, action, dimension) ?? 'all'
-		return { kind: 'within', dimension, action, principal: caller.subject, values, containers, contained: [], relations, revealing }
+		return { kind: 'within', dimension, action, principal: caller.subject, values, containers, contained: [], relations, revealing, admitting: [] }
 	}
 
 	/**

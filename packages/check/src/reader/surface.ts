@@ -277,10 +277,11 @@ class SurfaceReader {
 	}
 
 	#dimension(name: string, value: LiteralValue): DimensionDef<string, string, string> {
-		const fields = strictFields(value, `dimension '${name}'`, [], ['in', 'creator', 'members', 'directory'])
+		const fields = strictFields(value, `dimension '${name}'`, [], ['in', 'creator', 'members', 'directory', 'partition'])
 		const members = fields.get('members')
 		const memberFields = members === undefined ? undefined : strictFields(members, `dimension '${name}' members`, ['manage', 'list'], [])
 		const directory = fields.get('directory')
+		const partition = fields.get('partition')
 		return {
 			in: optionalText(fields.get('in'), 'in'),
 			creator: optionalText(fields.get('creator'), 'creator'),
@@ -288,6 +289,7 @@ class SurfaceReader {
 				? undefined
 				: { manage: text(memberFields.get('manage'), value, 'manage'), list: text(memberFields.get('list'), value, 'list') },
 			...(directory === undefined ? {} : { directory: directoryOf(directory, value) }),
+			...(partition === undefined ? {} : { partition: partitionOf(partition) }),
 		}
 	}
 
@@ -941,6 +943,14 @@ function localeOf(value: LiteralValue, owner: Owner): Locale {
 function externalOf(value: LiteralValue): true {
 	if (!boolean(value, 'external')) {
 		throw new Refused(value.at, 'external is false', 'external: true, or no external')
+	}
+	return true
+}
+
+/** A dimension's `partition`, which only `true` is: a tenant partition `admits` widens within (ADR-0074). */
+function partitionOf(value: LiteralValue): true {
+	if (!boolean(value, 'partition')) {
+		throw new Refused(value.at, 'partition is false', 'partition: true, or no partition')
 	}
 	return true
 }

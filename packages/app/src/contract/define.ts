@@ -80,6 +80,11 @@ export interface DimensionDef<A extends string, D extends string, R extends stri
 	 * picker. A user's label spells its address, so this widens what members see of each other: a reviewed declaration.
 	 */
 	readonly directory?: 'labels'
+	/**
+	 * A top-level dimension that is a tenant partition: a table's `admits` widens a read only inside one of its values,
+	 * where the caller holds the action through a relation (ADR-0074). A reviewed declaration.
+	 */
+	readonly partition?: true
 }
 
 export interface RoleDef<A extends string, D extends string, R extends string> {

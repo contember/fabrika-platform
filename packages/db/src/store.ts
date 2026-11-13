@@ -3,6 +3,7 @@ import { AndNode, BinaryOperationNode, type OperationNode, OperatorNode, ParensN
 import { admissions } from './admissions'
 import {
 	activeRow,
+	admitsTerms,
 	conditioned,
 	everyPath,
 	gateTerms,
@@ -450,6 +451,9 @@ function withinCount(grant: WithinGrant): number {
 	for (let index = 0; index < grant.revealing.length; index++) {
 		count += grant.revealing[index]?.values.length ?? 0
 	}
+	for (let index = 0; index < grant.admitting.length; index++) {
+		count += grant.admitting[index]?.values.length ?? 0
+	}
 	return count
 }
 
@@ -497,8 +501,19 @@ function withinPredicate(context: TableContext, column: string, grant: WithinGra
 		throw new CapabilityError('within_size', `a Within carries at most ${MAX_WITHIN_VALUES} scope values; this one carries ${count}`)
 	}
 	addRelationTerms(context, grant, operation === 'read', predicates, now)
-	if (operation === 'read') addMemberTerms(context, grant, predicates, now)
+	if (operation === 'read') {
+		addMemberTerms(context, grant, predicates, now)
+		addTerms(predicates, admitsTerms(model, grant, now))
+	}
 	return predicates.length === 0 ? undefined : conditioned(model, grant.action, anyOf(predicates), now)
+}
+
+/** Appends `terms` to `predicates`, by an index loop. */
+function addTerms(predicates: OperationNode[], terms: readonly OperationNode[]): void {
+	for (let index = 0; index < terms.length; index++) {
+		const term = terms[index]
+		if (term !== undefined) predicates[predicates.length] = term
+	}
 }
 
 /** A `Within`'s read also reaches the rows under a node its member reveals hold the action at; no write does. */
@@ -569,6 +584,7 @@ function secondaryPredicate(context: TableContext, paths: readonly SecondaryPath
 	}
 	addRelationTerms(context, grant, true, predicates, now)
 	addMemberTerms(context, grant, predicates, now)
+	addTerms(predicates, admitsTerms(model, grant, now))
 	return predicates.length === 0 ? undefined : conditioned(model, grant.action, anyOf(predicates), now)
 }
 
@@ -848,13 +864,15 @@ export function scopeTerms(context: TableContext, capability: unknown, use: Scop
 	if (use !== 'read') {
 		checkWriteTarget(context, grant, use)
 	}
-	// The fragment renders column tests only; a relation's, a member reveal's or a path's subquery, or an action's condition, would be left out.
+	// The fragment renders column tests only; a relation's, a member reveal's or a path's subquery, an action's condition,
+	// or the rows `admits` widens a Within's read to, would be left out.
 	const held = grant.kind !== 'app'
 		&& (grant.relations.length > 0 || (grant.kind === 'ref' && (grant.revealing.length > 0 || grant.paths.length > 0)))
-	if (held || hasOwn(model.when, grant.action)) {
+	const admitted = grant.kind === 'within' && admitsTerms(model, grant, new Date()).length > 0
+	if (held || admitted || hasOwn(model.when, grant.action)) {
 		throw new CapabilityError(
 			'unenforceable',
-			`ctx.sql.scope cannot render a relation, a member reveal, a secondary path or a condition of ${grant.action} on ${model.name}: read it through ctx.db`,
+			`ctx.sql.scope cannot render a relation, a member reveal, a secondary path, admits or a condition of ${grant.action} on ${model.name}: read it through ctx.db`,
 		)
 	}
 	// Nor the subquery through the parent row, which alone places a child view's rows.
@@ -1227,7 +1245,11 @@ export function childObjectPredicate(context: TableContext, parent: unknown, key
 	return parentPredicate(context, grant, key)
 }
 
-export function guard(context: TableContext, root: RootKind, scope: OperationNode | undefined): GuardContext {
+/**
+ * The guard's context for a statement of `context`'s table. `listed` marks a `Within`'s list or aggregate, the only
+ * statements whose scope may carry the term `admits` widens a read with (ADR-0074); every other select is refused it.
+ */
+export function guard(context: TableContext, root: RootKind, scope: OperationNode | undefined, listed = false): GuardContext {
 	// Every store write reaches its statement through here: a view's rows are its tables', never written (ADR-0072).
 	if (context.model.view && root !== 'SelectQueryNode') {
 		throw new QueryRefusedError('read_only', `${context.model.name} is a view, which no handler writes`)
@@ -1239,6 +1261,7 @@ export function guard(context: TableContext, root: RootKind, scope: OperationNod
 		scope,
 		subqueries: context.subqueries,
 		through: context.through,
+		admitting: listed && root === 'SelectQueryNode' ? context.model.partition?.column : undefined,
 	}
 }
 
@@ -1394,7 +1417,7 @@ async function selectRows<S>(
 	}
 	const dialect = dialectOf(context)
 	const node = selectNode(boundState(context, { ...state, joins }), visible, scope, undefined, context.model.dates, dialect)
-	const rows = await (await run.read()).run<S>(node, guard(context, 'SelectQueryNode', scope))
+	const rows = await (await run.read()).run<S>(node, guard(context, 'SelectQueryNode', scope, true))
 	return answerRows(dialect, context.model.name, joinedColumns(context, state), rows)
 }
 
@@ -1988,7 +2011,7 @@ export async function aggregateRows<Row, O>(
 	const dialect = dialectOf(context)
 	const conditions = boundConditions(context, context.model, filter?.conditions ?? [])
 	const node = aggregateNode(context.model.name, columns, conditions, scope, context.model.dates)
-	const rows = await (await run.read()).run<O>(node, guard(context, 'SelectQueryNode', scope))
+	const rows = await (await run.read()).run<O>(node, guard(context, 'SelectQueryNode', scope, true))
 	const own = rowColumnsOf(context.model)
 	const answered = answerRows(dialect, context.model.name, {
 		days: aggregated(own.days, columns),
@@ -3078,7 +3101,7 @@ export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
 				column: model.scope.column,
 				table: parent.name,
 				key: parent.scope.key,
-				context: contextOf(freeze({ ...parent, when: freeze({}), relationWhen: freeze({}) })),
+				context: contextOf(freeze({ ...parent, when: freeze({}), relationWhen: freeze({}), admits: freeze({}), partition: undefined })),
 			})
 			: undefined
 		const joinable = joinShapes(models, model)
@@ -3195,7 +3218,8 @@ export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
 
 /**
  * Every relation of the layer by name, and the tables a scope predicate's subqueries read (a relation's source by its
- * node column, a condition path's target by its key), which the guard admits and nothing else.
+ * node column, a condition path's target by its key, a `when`'s, a `relationWhen`'s and an `admits`' alike), which the
+ * guard admits and nothing else.
  */
 function layerReach(
 	models: TableModels,
@@ -3279,6 +3303,11 @@ function layerReach(
 		const actions = ownKeys(model.when)
 		for (let position = 0; position < actions.length; position++) {
 			const condition = ownEntry(model.when, actions[position] ?? '')
+			if (condition !== undefined) addReach(condition, select)
+		}
+		const admitting = ownKeys(model.admits)
+		for (let position = 0; position < admitting.length; position++) {
+			const condition = ownEntry(model.admits, admitting[position] ?? '')
 			if (condition !== undefined) addReach(condition, select)
 		}
 	}

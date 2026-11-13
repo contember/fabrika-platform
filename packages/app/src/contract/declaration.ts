@@ -129,6 +129,8 @@ export interface DimensionDeclaration {
 	readonly members?: { readonly manage: string; readonly list: string }
 	/** `'labels'` only; `buildArtifact` refuses another value. */
 	readonly directory?: string
+	/** `true` only, on a top-level dimension; `buildArtifact` refuses another value. */
+	readonly partition?: boolean
 }
 
 export interface RoleDeclaration {

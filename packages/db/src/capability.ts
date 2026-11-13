@@ -104,6 +104,12 @@ export interface WithinGrant {
 	 * members (`memberReveals`): a row under a node such a row reveals is read too, the statement judging the revealing row.
 	 */
 	readonly revealing: readonly ContainerGrant[]
+	/**
+	 * The nodes of tenant partitions in which the caller holds the action through a relation held inside the node (a
+	 * `~relin` entry at a partition): a table's `admits` widens the `Within`'s read to its rows there that meet the
+	 * condition, the statement comparing the row's own column with them (ADR-0074).
+	 */
+	readonly admitting: readonly ContainerGrant[]
 }
 
 /** An `app` endpoint's grant: the action everywhere in the application, which the proxy checked was held globally. */

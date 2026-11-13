@@ -267,6 +267,7 @@ describe('boot binds the data layer once', () => {
 					contained: [],
 					relations: [],
 					revealing: [],
+					admitting: [],
 				}),
 				row: () => {
 					throw new Error('the test claims no row')

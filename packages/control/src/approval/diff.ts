@@ -248,7 +248,13 @@ function compareContracts(changes: Changes, before: ContractArtifact | null, aft
 		changed: dimensionChanges,
 	})
 	for (const [name, dimension] of Object.entries(candidate.dimensions)) {
-		if (!Object.hasOwn(baseline.dimensions, name)) changes.add(subjectOf('dimension', name), ...directoryChange(name, undefined, dimension.directory))
+		if (!Object.hasOwn(baseline.dimensions, name)) {
+			changes.add(
+				subjectOf('dimension', name),
+				...directoryChange(name, undefined, dimension.directory),
+				...partitionChange(name, undefined, dimension.partition),
+			)
+		}
 	}
 	for (const name of union(opaqueRoots(baseline), opaqueRoots(candidate))) {
 		changes.add(subjectOf('dimension', name), ...opaqueRootChange(name, baseline, candidate))
@@ -351,6 +357,7 @@ function compareContracts(changes: Changes, before: ContractArtifact | null, aft
 				...ruled('table.confers', confersChanges(name, undefined, table.confers)),
 				...ruled('table.when', whenChanges(name, undefined, table.when)),
 				...ruled('table.relation-when', relationWhenChanges(name, undefined, table.relationWhen)),
+				...ruled('table.admits', admitsChanges(name, undefined, table.admits)),
 				...ruled('table.reveals', revealsChanges(name, undefined, table.reveals)),
 				...ruled('table.read-through', readThroughChanges(name, undefined, table.readThrough)),
 				...ruled('table.write-through', writeThroughChanges(name, table.readThrough, undefined, table.writeThrough)),
@@ -1765,6 +1772,23 @@ function relationWhenChanges(name: string, before: TablePolicyArtifact['relation
 	})
 }
 
+/**
+ * A widening condition lets a read action reach, inside a tenant partition the caller holds it in through a relation,
+ * every row the condition admits (ADR-0074): a new one widens, a removed one narrows, a changed one widens.
+ */
+function admitsChanges(name: string, before: TablePolicyArtifact['admits'], after: TablePolicyArtifact['admits']): Line[] {
+	const from = before ?? {}
+	const to = after ?? {}
+	return union(Object.keys(from), Object.keys(to)).flatMap((action): Line[] => {
+		const was = from[action]
+		const is = to[action]
+		const subject = `\`${action}\` held through a relation in a tenant partition`
+		if (was === undefined) return is === undefined ? [] : [widening(`${subject} lists every row of \`${name}\` in it its widening condition admits`)]
+		if (is === undefined) return [narrowing(`${subject} no longer lists the rows of \`${name}\` its widening condition admitted`)]
+		return valueChange(`\`${action}\` widening condition on \`${name}\``, was, is)
+	})
+}
+
 /** An external role may be held by a person from outside the organization (ADR-0051). */
 function externalChange(name: string, before: true | undefined, after: true | undefined): RuledLine[] {
 	if (before === after) return []
@@ -1962,6 +1986,7 @@ function tableChanges(name: string, from: TablePolicyArtifact, to: TablePolicyAr
 		...ruled('table.confers', confersChanges(name, from.confers, to.confers)),
 		...ruled('table.when', whenChanges(name, from.when, to.when)),
 		...ruled('table.relation-when', relationWhenChanges(name, from.relationWhen, to.relationWhen)),
+		...ruled('table.admits', admitsChanges(name, from.admits, to.admits)),
 		...ruled('table.reveals', revealsChanges(name, from.reveals, to.reveals)),
 		...ruled('table.read-through', readThroughChanges(name, from.readThrough, to.readThrough)),
 		...ruled('table.write-through', writeThroughChanges(name, to.readThrough, from.writeThrough, to.writeThrough)),
@@ -2144,9 +2169,21 @@ function opaqueRootChange(name: string, baseline: ContractArtifact, candidate: C
 }
 
 function dimensionChanges(name: string, from: DimensionArtifact, to: DimensionArtifact): RuledLine[] {
-	const { directory: before, ...fromRest } = from
-	const { directory: after, ...toRest } = to
-	return [...ruled('dimension.declaration', valueChange(`Dimension \`${name}\``, fromRest, toRest)), ...directoryChange(name, before, after)]
+	const { directory: before, partition: was, ...fromRest } = from
+	const { directory: after, partition: is, ...toRest } = to
+	return [
+		...ruled('dimension.declaration', valueChange(`Dimension \`${name}\``, fromRest, toRest)),
+		...directoryChange(name, before, after),
+		...partitionChange(name, was, is),
+	]
+}
+
+/** A partition only places the rows a table's `admits` widens a read to; the table's own line judges that widening. */
+function partitionChange(name: string, before: true | undefined, after: true | undefined): RuledLine[] {
+	if (before === after) return []
+	return ruled('dimension.partition', [
+		neutral(after === true ? `Dimension \`${name}\` is a tenant partition` : `Dimension \`${name}\` is no longer a tenant partition`),
+	])
 }
 
 /**

@@ -45,7 +45,7 @@ export type ColumnViews<C> = typeof viewNames extends keyof C
  */
 export interface TableVocabulary {
 	readonly actions: { readonly [action: string]: string }
-	readonly dimensions: { readonly [dimension: string]: { readonly in?: string } }
+	readonly dimensions: { readonly [dimension: string]: { readonly in?: string; readonly partition?: true } }
 	readonly relations?: { readonly [relation: string]: { readonly dimension: string } }
 }
 
@@ -121,6 +121,11 @@ interface WritableFields<Col extends string, A extends string, Ver extends Col, 
 	readonly writeThrough?: { readonly [dimension: string]: readonly A[] }
 	/** The table's own dimension → the ancestor node a row reveals to a grant at its node, for a `Within`'s reads. */
 	readonly memberReveals?: { readonly [dimension: string]: MemberRevealsPolicy<Col, A> }
+	/**
+	 * Read action → a condition that widens a `Within`'s read to the rows meeting it, inside a tenant partition node where
+	 * the caller holds the action through a relation (ADR-0074).
+	 */
+	readonly admits?: { readonly [action in A]?: ConditionPolicy<Col> }
 }
 
 /**

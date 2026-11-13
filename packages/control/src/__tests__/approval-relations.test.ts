@@ -18,6 +18,8 @@ interface RelationOptions {
 	readonly when?: string
 	readonly relationWhen?: string
 	readonly reveals?: string
+	readonly admits?: string
+	readonly partition?: boolean
 }
 
 const ROLES = "roles: { owner: { grants: ['notes.read', 'notes.write'], member: { scope: 'workspace', assignableBy: ['owner'] } } },"
@@ -26,6 +28,10 @@ const NOTE_TABLE = "insert: ['title'],\n\t\tupdate: ['title'],\n\t},"
 function files(options: RelationOptions = {}): Map<string, string> {
 	const base = kitFiles()
 	const vocabulary = (base['src/vocabulary.ts'] ?? '')
+		.replace(
+			"workspace: { creator: 'owner' }",
+			options.partition === true ? "workspace: { creator: 'owner', partition: true }" : "workspace: { creator: 'owner' }",
+		)
 		.replace("'notes.write': 'Write notes' }", "'notes.write': 'Write notes', 'notes.share': 'Share a note' }")
 		.replace(
 			ROLES,
@@ -46,7 +52,9 @@ function files(options: RelationOptions = {}): Map<string, string> {
 		NOTE_TABLE,
 		`${NOTE_TABLE.slice(0, -3)}${options.when === undefined ? '' : `\n\t\twhen: ${options.when},`}${
 			options.relationWhen === undefined ? '' : `\n\t\trelationWhen: ${options.relationWhen},`
-		}${options.reveals === undefined ? '' : `\n\t\treveals: ${options.reveals},`}\n\t},
+		}${options.reveals === undefined ? '' : `\n\t\treveals: ${options.reveals},`}${
+			options.admits === undefined ? '' : `\n\t\tadmits: ${options.admits},`
+		}\n\t},
 	note_members: {
 		scope: { child: 'notes' },
 		actions: { read: 'notes.read', insert: 'notes.share', delete: 'notes.share' },
@@ -395,6 +403,37 @@ describe("a relation's condition on the table it reads", () => {
 		expect(relationGrantsRefusal(contract, '0.9.0-dev.12')).toContain('relation member')
 		expect(relationGrantsRefusal(contract, '0.9.0-dev.14')).toBeNull()
 		expect(relationGrantsRefusal(open.contract, '0.9.0-dev.13')).toBeNull()
+	})
+})
+
+describe('a widening condition in a tenant partition', () => {
+	const lines = (before: AccessSnapshot, after: AccessSnapshot) => classifyAccess(before, after).changes.map(({ effect, line }) => ({ effect, line }))
+	const partitioned = snapshot(files({ partition: true }))
+	const titled = snapshot(files({ partition: true, admits: "{ 'notes.read': { title: { eq: 'public' } } }" }))
+
+	test('is read from source, widens when added or changed, and narrows when removed', () => {
+		expect(titled.contract?.tables['notes']?.admits).toEqual({ 'notes.read': { title: { eq: 'public' } } })
+		expect(titled.contract?.dimensions['workspace']?.partition).toBe(true)
+		expect(lines(partitioned, titled)).toEqual([{
+			effect: 'widens',
+			line: '`notes.read` held through a relation in a tenant partition lists every row of `notes` in it its widening condition admits',
+		}])
+		expect(classifyAccess(partitioned, titled).outcome).toBe('widening')
+		expect(lines(titled, partitioned)).toEqual([{
+			effect: 'narrows',
+			line: '`notes.read` held through a relation in a tenant partition no longer lists the rows of `notes` its widening condition admitted',
+		}])
+		const shared = snapshot(files({ partition: true, admits: "{ 'notes.read': { title: { eq: 'shared' } } }" }))
+		expect(classifyAccess(titled, shared).outcome).toBe('widening')
+	})
+
+	test('a partition is a neutral line of its dimension; the table states the widening', () => {
+		expect(lines(snapshot(files()), partitioned)).toEqual([{ effect: 'neutral', line: 'Dimension `workspace` is a tenant partition' }])
+		expect(lines(partitioned, snapshot(files()))).toEqual([{ effect: 'neutral', line: 'Dimension `workspace` is no longer a tenant partition' }])
+	})
+
+	test('needs no floor: a release that does not read it refuses the field', () => {
+		expect(titled.contract === null ? [] : relationFields(titled.contract)).not.toContain('admits of table notes')
 	})
 })
 

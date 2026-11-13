@@ -658,7 +658,10 @@ other environment, before the provider prepares anything, and the write maps a r
   `via`): a new `via` action, source table, reveal, read-through or write-through action widens, a longer or self
   delegation widens, an added `when` or `relationWhen` narrows, a removed or changed one widens. A member
   reveal keyed by a read-through dimension names its path and shows its `assign` as a reveal's. `writeThrough` and such
-  a member reveal reach less when ignored, so `relationFields` does not count them. A membership role's `via` needs no
+  a member reveal reach less when ignored, so `relationFields` does not count them. `table.admits` (ADR-0074): an added
+  action widens, a removed one narrows, a changed condition widens; a dimension's `partition` is a neutral
+  `dimension.partition` line. `admits` has no floor: an older data layer refuses the unknown policy field and does not
+  boot, so `relationFields` does not count it. A membership role's `via` needs no
   floor of its own: a framework before `0.9.0-dev.14` refuses to build one, and reads no `~relin` entry, which IAM
   signs for a scoped grant of a role with `via`; `relation-token-compat.test.ts` holds every auth-core release of the
   window to reading neither `~rel` nor `~relin` as a value or a global grant.

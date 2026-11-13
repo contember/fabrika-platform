@@ -346,7 +346,8 @@ day, queue tables and `claim`, e-mail through `ctx.mail` with attachments and un
 this skill), `public-intake.md`, a public page, public procedures, a job that claims their rows, issues links and
 e-mails them, a link holder's files, HR's review with its history, and `relations.md`, access that rows of the
 application grant and narrow (a relation, a role's `via`, a source table's `confers` and `assign`, a table's `when`
-conditions, `readThrough`, `reveals` and `memberReveals`).
+conditions, `readThrough`, `reveals`, `memberReveals`, and `admits`, a condition that widens a list inside a tenant
+partition).
 
 ## Not built yet
 
@@ -4793,6 +4794,30 @@ export const tables = defineTables(vocabulary, columns)({
   through the relation that the condition refuses, with no other relation to hold it, is a 409 with nothing written.
 - A relation narrowed for an action does not count as holding it when a `writeThrough` column's writer is checked.
 
+### `admits`: a condition widens a read inside a tenant partition
+
+- `admits: { <read action>: <condition> }` on a table adds the rows that meet the condition to an `over` list of that
+  action, inside each tenant partition node where the caller holds the action through a relation: with
+  `admits: { 'tasks.read': { visibility: { eq: 'public' } } }` on `tasks`, a coordinator of an organization lists the
+  tasks of the projects it assists and every public task of that organization, and no public task of another. It
+  needs `@fabrika/app` `0.9.0-dev.14` or later; an earlier release refuses the policy and does not boot. Ask the human
+  first: the approver sees each `admits` as a widening, and a changed condition widens too.
+- The partition is a top-level dimension the vocabulary marks `partition: true` (`org: { partition: true, … }`): one
+  fact, "an organization is a tenant". A nested dimension takes no `partition`. The table is a dimension or child table
+  whose chain ends in the partition (or the partition's own table); an application, reference or view table takes no
+  `admits`, and neither does a table in no partition.
+- Only a relation held at the partition node counts: a membership role or a grant in an organization whose role has
+  `via` (`coordinator: { grants: [], member: { scope: 'org', … }, via: { assisting: ['tasks.read'] } }`). A role
+  held application-wide, one held at a node inside the partition (a project), an IAM grant without `via`, and a person
+  from outside the organization admit nothing. An IAM grant at the organization already reads all of it.
+- The condition is a `when` in every rule above: the same operators, paths and `not` rule, so a path never leaves the
+  row's tenant. The table's own `when` still applies to every row, admitted ones included.
+- It widens reads only, and only an `over` list, its count and its aggregates. An `on` or `in` endpoint does not reach
+  a row only `admits` lists (404 and 403): a list may show a public task whose `on: 'task'` endpoint refuses it, so read
+  its detail through an `over` endpoint filtered by key. A queue claim, an insert, an update, a delete and a move never
+  count it, a view's rows never follow its parent's `admits`, and `ctx.sql.scope` refuses a `Within` it would widen:
+  read those rows through `ctx.db`.
+
 ### A key that holds the tenant needs its ancestors NOT NULL
 
 A path into another scoped table, other than the container or parent, and a `readThrough` follow a foreign key of
@@ -5136,8 +5161,10 @@ if (postgres !== null) {
 
 ## Not built yet
 
-- No widening condition (`admits`): a `when` only narrows. A row that some other rule should open to more people is
-  reached by a grant, a relation or an off-road declaration, never by a condition.
+- `admits` widens only an `over` list, and only for a relation held at the partition node. A relation held inside the
+  partition (a project role) admits nothing, an `on` or `in` endpoint does not reach an admitted row, and no write is
+  judged by it. Outside that, a row that some other rule should open to more people is reached by a grant, a relation
+  or an off-road declaration.
 - A relation for a person from outside the organization is not built.
 - A view is never a relation source: write the source rows to a table, under `assign`.
 - An assignment never changes in place: delete the row and insert a new one.

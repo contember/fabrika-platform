@@ -396,6 +396,7 @@ const tablePolicy: z.ZodType<TablePolicyArtifact> = z.strictObject({
 		when: condition.optional(),
 		assign: z.strictObject({ self: z.boolean() }).optional(),
 	})).optional(),
+	admits: z.record(action, condition).optional(),
 })
 
 export const contractArtifactSchema: z.ZodType<ContractArtifact> = z.strictObject({
@@ -406,6 +407,7 @@ export const contractArtifactSchema: z.ZodType<ContractArtifact> = z.strictObjec
 		creator: nullableName,
 		members: z.strictObject({ manage: action, list: action }).nullable(),
 		directory: z.literal('labels').optional(),
+		partition: z.literal(true).optional(),
 	})),
 	actions: z.record(action, z.string()),
 	roles: z.record(

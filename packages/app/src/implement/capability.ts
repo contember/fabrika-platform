@@ -332,6 +332,7 @@ export class Within<D extends string, A extends string> implements WithinCapabil
 		contained: readonly ContainerGrant[],
 		relations: readonly RelationHold[],
 		revealing: readonly ContainerGrant[],
+		admitting: readonly ContainerGrant[],
 	) {
 		if (token !== MINT) {
 			throw new CapabilityRefusedError('not_minted', 'a Within is minted by the framework only; declare the access form in fabrika.contract.ts')
@@ -339,9 +340,10 @@ export class Within<D extends string, A extends string> implements WithinCapabil
 		const held = values === 'all' ? freeze([]) : containerGrantsOf(containers)
 		const inside = values === 'all' ? freeze([]) : containerGrantsOf(contained)
 		const revealed = values === 'all' ? freeze([]) : containerGrantsOf(revealing)
+		const admitted = values === 'all' ? freeze([]) : containerGrantsOf(admitting)
 		const holds = values === 'all' ? freeze([]) : relationHoldsOf(relations)
 		let count = values === 'all' ? 0 : values.length + insideCount(holds)
-		for (const group of [held, inside, revealed]) {
+		for (const group of [held, inside, revealed, admitted]) {
 			for (let index = 0; index < group.length; index++) {
 				count += group[index]?.values.length ?? 0
 			}
@@ -363,6 +365,7 @@ export class Within<D extends string, A extends string> implements WithinCapabil
 			contained: inside,
 			relations: holds,
 			revealing: revealed,
+			admitting: admitted,
 		})
 		this.#frame = frame
 		this.#issuer = issuer
@@ -516,6 +519,7 @@ export interface CapabilityMint {
 		contained?: readonly ContainerGrant[],
 		relations?: readonly RelationHold[],
 		revealing?: readonly ContainerGrant[],
+		admitting?: readonly ContainerGrant[],
 	): Within<D, A>
 	app<A extends string>(frame: RequestFrame, action: A, principal: string): AppCapability<A>
 }
@@ -557,8 +561,9 @@ export function createCapabilityIssuer(): CapabilityIssuer {
 			contained: readonly ContainerGrant[] = [],
 			relations: readonly RelationHold[] = [],
 			revealing: readonly ContainerGrant[] = [],
+			admitting: readonly ContainerGrant[] = [],
 		): Within<D, A> {
-			return new Within(MINT, issuer, frame, dimension, action, principal, values, containers, contained, relations, revealing)
+			return new Within(MINT, issuer, frame, dimension, action, principal, values, containers, contained, relations, revealing, admitting)
 		},
 		app<A extends string>(frame: RequestFrame, action: A, principal: string): AppCapability<A> {
 			return new AppCapability(MINT, issuer, frame, action, principal)

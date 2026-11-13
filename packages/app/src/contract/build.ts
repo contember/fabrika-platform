@@ -430,11 +430,18 @@ class ArtifactBuilder {
 			if (dimension.directory !== undefined && dimension.members === undefined) {
 				this.#problem(where, 'declares a directory and no members: { manage, list } whose list it labels')
 			}
+			if (dimension.partition !== undefined && dimension.partition !== true) {
+				this.#problem(where, `its partition is '${String(dimension.partition)}' (allowed: true)`)
+			}
+			if (dimension.partition === true && dimension.in !== undefined) {
+				this.#problem(where, `lies in '${dimension.in}': only a top-level dimension is a tenant partition`)
+			}
 			dimensions[name] = {
 				in: dimension.in ?? null,
 				creator: dimension.creator ?? null,
 				members: dimension.members === undefined ? null : { manage: dimension.members.manage, list: dimension.members.list },
 				...(dimension.directory === 'labels' ? { directory: 'labels' } : {}),
+				...(dimension.partition === true ? { partition: true } : {}),
 			}
 		}
 		for (const name of Object.keys(declared)) {

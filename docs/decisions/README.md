@@ -21,7 +21,8 @@ a commit message suffices.
   browser-bound session handoff, [0050](0050-approved-access.md) for how access changes are
   approved and published, [0051](0051-external-principals.md) for people from outside the organization,
   [0058](0058-user-administration-is-grantable-on-its-own.md) for who may manage people without administering IAM, and
-  [0073](0073-a-relation-grant-is-application-data-read-on-every-statement.md) for access that rows of the application grant.
+  [0073](0073-a-relation-grant-is-application-data-read-on-every-statement.md) for access that rows of the application grant,
+  and [0074](0074-a-condition-widens-a-read-only-inside-a-tenant-partition.md) for a condition that widens a read inside a tenant.
 - **Application framework:** [0012](0012-fabrika-app-runtime.md) — one contract built with the staged kit,
   a declaration that states the surface and never an operation, handlers beside their endpoints on a paved road, and
   every step off it (raw SQL, `unscoped`, connectors, link issuing, database code) declared;
@@ -96,3 +97,4 @@ a commit message suffices.
 | [0071](0071-an-application-keeps-its-developer-tools-in-tools.md)                       | Keep developer tools in tools/, outside the application rules, and load them from nothing outside it      |
 | [0072](0072-a-view-is-a-read-only-table.md)                                             | A view is a read-only table of the data layer                                                             |
 | [0073](0073-a-relation-grant-is-application-data-read-on-every-statement.md)            | A relation grant is application data, read on every statement                                             |
+| [0074](0074-a-condition-widens-a-read-only-inside-a-tenant-partition.md)                | A condition widens a read only inside a tenant partition                                                  |

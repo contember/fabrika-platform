@@ -144,6 +144,11 @@ pinned before `0.9.0-dev.14` ignores the entry. Review the scoped grants of each
 A table's `relationWhen` (a condition on what one relation reaches) needs `0.9.0-dev.14` or later: Control refuses to
 publish it for an application pinned to an earlier release, which would ignore it and reach more.
 
+A dimension's `partition: true` and a table's `admits` (a condition that widens an `over` list inside a tenant
+partition; [ADR-0074](../decisions/0074-a-condition-widens-a-read-only-inside-a-tenant-partition.md)) need
+`0.9.0-dev.14` or later. Control sets no floor for them: an earlier release refuses the unknown field, and the
+application does not boot.
+
 A webhook's `bind`, `unbind` and `setSecret` now refuse a `Ref` held through a relation, a member reveal or a secondary
 path (`conditional_binding`): bind with a `Ref` an IAM grant holds.
 

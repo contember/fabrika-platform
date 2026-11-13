@@ -167,6 +167,7 @@ function canonicalTable(table: TablePolicyArtifact): TablePolicyArtifact {
 		...(table.confers === undefined ? {} : { confers: mapValues(table.confers, canonicalConfers) }),
 		...(table.reveals === undefined ? {} : { reveals: mapValues(table.reveals, canonicalReveals) }),
 		...(table.memberReveals === undefined ? {} : { memberReveals: mapValues(table.memberReveals, canonicalMemberReveals) }),
+		...(table.admits === undefined ? {} : { admits: mapValues(table.admits, canonicalCondition) }),
 	}
 }
 
