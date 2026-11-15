@@ -14,11 +14,12 @@ Usage:
 Options:
   --env=<env>            Target environment.
   --config=<path>        App config path (default: ./fabrika.config.ts).
-  --managed-var=<name>   Platform-owned environment name; repeatable. Values stay in the environment.
+  --managed-var=<name>   Platform-owned environment name; repeatable. Its value is read like a declared secret.
   --dry-run              Plan only; do not mutate remote resources.
   -h, --help             Show this help.
 
-Credentials, declared secrets and declared vars are read only from the environment.
+Credentials are read only from the environment. Declared secrets and vars are read from the file
+FABRIKA_DEPLOY_VALUES_FILE names when it is set (a runner sets it), and from the environment otherwise.
 `
 
 const die = (message: string): never => {

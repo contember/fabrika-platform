@@ -2,11 +2,12 @@ import {
 	APPROVED_ACCESS_FILE_ENV,
 	type CloudflareRunnerJob,
 	cloudflareRunnerJobSchema,
+	DEPLOY_VALUES_FILE_ENV,
 	RUNNER_OUTCOME_FILE_ENV,
 } from '@fabrika/provider-cloudflare/runner'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdtempSync } from 'node:fs'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
@@ -293,7 +294,7 @@ describe('Runner pipeline', () => {
 		])
 	})
 
-	test('32 admitted 32-KiB secrets construct a Runner, reach a real child env and are all redacted', async () => {
+	test('32 admitted 32-KiB secrets construct a Runner, reach a real child through the values file and are all redacted', async () => {
 		const secrets: Record<string, string> = {}
 		for (let index = 0; index < 32; index++) {
 			const prefix = `large-secret-${index}-`
@@ -313,9 +314,11 @@ describe('Runner pipeline', () => {
 					args: [
 						'-e',
 						`
-					const keys = Object.keys(process.env).filter(key => key.startsWith('LARGE_SECRET_'))
+					const values = JSON.parse(require('node:fs').readFileSync(process.env.${DEPLOY_VALUES_FILE_ENV}, 'utf8'))
+					const keys = Object.keys(values).filter(key => key.startsWith('LARGE_SECRET_'))
 					if (keys.length !== 32) process.exit(2)
-					for (const key of keys) console.log('secret=' + process.env[key])
+					if (Object.keys(process.env).some(key => key.startsWith('LARGE_SECRET_'))) process.exit(3)
+					for (const key of keys) console.log('secret=' + values[key])
 				`,
 					],
 					cwd: spec.cwd,
@@ -427,9 +430,28 @@ describe('Runner pipeline', () => {
 		expect(lines.some((l) => l.text === 'Cloning https://github.com/acme/app.git @ main')).toBe(true)
 	})
 
-	test('credentials, secrets, vars, managed environment and state namespace go into child env only', async () => {
+	/** Run one job, recording the executor's spec and what it finds at the values file its environment names. */
+	const runSeeingValues = async (job: CloudflareRunnerJob) => {
 		const rec: RecordedSpawn[] = []
-		const spawn = makeSpawner(rec, () => ({ exitCode: 0 }))
+		let values: unknown
+		let mode: number | undefined
+		const spawn = async (spec: SpawnSpec, handlers: SpawnHandlers): Promise<SpawnResult> => {
+			rec.push({ spec })
+			if (spec.command === 'git' && spec.args[0] === 'log') handlers.onStdout(`${COMMIT}\n`)
+			const path = spec.command === 'fabrika-cloudflare-executor' ? spec.env?.[DEPLOY_VALUES_FILE_ENV] : undefined
+			if (path !== undefined) {
+				values = JSON.parse(await readFile(path, 'utf8'))
+				mode = (await stat(path)).mode & 0o777
+			}
+			return { exitCode: 0 }
+		}
+		const env = makeEnv(spawn)
+		const status = await new Runner(job, env).run()
+		const deploy = rec.find((r) => r.spec.command === 'fabrika-cloudflare-executor')?.spec
+		return { status, rec, deploy, values, mode, workspace: env.workspace }
+	}
+
+	test('credentials and runner values go into the executor env; secrets, vars and managed values into the values file', async () => {
 		const job = baseJob({
 			domain: 'stage.acme.com',
 			stateNamespace: 'legacy-state',
@@ -442,19 +464,25 @@ describe('Runner pipeline', () => {
 				FABRIKA_RELEASE: 'fabrika/app/stage/default/commit',
 			},
 		})
-		await new Runner(job, makeEnv(spawn)).run()
+		const { rec, deploy, values, mode, workspace } = await runSeeingValues(job)
 
-		const deploy = rec.find((r) => r.spec.command === 'fabrika-cloudflare-executor')?.spec
-		expect(deploy?.env).toMatchObject({
+		expect(deploy?.env).toEqual({
 			CLOUDFLARE_ACCOUNT_ID: 'acc-123456',
 			CLOUDFLARE_API_TOKEN: 'tok-abcdef',
 			FABRIKA_CONTROL_DOMAIN: 'stage.acme.com',
 			CLOUDFLARE_STATE_NAMESPACE: 'legacy-state',
+			[DEPLOY_VALUES_FILE_ENV]: join(workspace, 'run-1.values.json'),
+			[RUNNER_OUTCOME_FILE_ENV]: join(workspace, 'run-1.outcome.json'),
+			[APPROVED_ACCESS_FILE_ENV]: join(workspace, 'run-1.access.json'),
+		})
+		expect(values).toEqual({
 			SAMPLE_API_KEY: 'super-secret-value',
 			PUBLIC_ORIGIN: 'public-value',
 			FABRIKA_OPERATIONS_DSN: 'https://operations-public-key@errors.test/1',
 			FABRIKA_RELEASE: 'fabrika/app/stage/default/commit',
 		})
+		expect(mode).toBe(0o600)
+		expect(await Bun.file(join(workspace, 'run-1.values.json')).exists()).toBe(false)
 		expect(deploy?.args).toContain('--managed-var=FABRIKA_OPERATIONS_DSN')
 		expect(deploy?.args).toContain('--managed-var=FABRIKA_RELEASE')
 		// No secret/cred value ever appears on argv.
@@ -464,6 +492,37 @@ describe('Runner pipeline', () => {
 		expect(argvAll).not.toContain('public-value')
 		expect(argvAll).not.toContain('operations-public-key')
 		expect(argvAll).not.toContain('fabrika/app/stage/default/commit')
+	})
+
+	test("an application name that steers a process or names a credential never reaches the executor's environment", async () => {
+		const job = baseJob({
+			secrets: { BUN_OPTIONS: 'dummy-bun-options', BASH_ENV: 'dummy-bash-env', CLOUDFLARE_API_TOKEN: 'dummy-token', ['__proto__']: 'dummy-proto' },
+			vars: { PATH: 'dummy-path', NODE_OPTIONS: 'dummy-node-options' },
+			managedEnvironment: { [DEPLOY_VALUES_FILE_ENV]: 'dummy-values-file', [RUNNER_OUTCOME_FILE_ENV]: 'dummy-outcome-file' },
+		})
+		const { status, rec, deploy, values, workspace } = await runSeeingValues(job)
+
+		expect(status.state).toBe('succeeded')
+		expect(deploy?.env?.['CLOUDFLARE_API_TOKEN']).toBe('tok-abcdef')
+		expect(deploy?.env?.['CLOUDFLARE_ACCOUNT_ID']).toBe('acc-123456')
+		expect(deploy?.env?.[DEPLOY_VALUES_FILE_ENV]).toBe(join(workspace, 'run-1.values.json'))
+		expect(deploy?.env?.[RUNNER_OUTCOME_FILE_ENV]).toBe(join(workspace, 'run-1.outcome.json'))
+		for (const name of ['BUN_OPTIONS', 'BASH_ENV', 'PATH', 'NODE_OPTIONS', '__proto__']) {
+			expect(Object.hasOwn(deploy?.env ?? {}, name)).toBe(false)
+		}
+		// No child the runner spawns carries an authored value in its environment.
+		expect(JSON.stringify(rec.map((r) => r.spec.env ?? {}))).not.toContain('dummy-')
+		// They still reach the executor, as the deployed Worker's values under their own names.
+		expect(values).toEqual({
+			BUN_OPTIONS: 'dummy-bun-options',
+			BASH_ENV: 'dummy-bash-env',
+			CLOUDFLARE_API_TOKEN: 'dummy-token',
+			['__proto__']: 'dummy-proto',
+			PATH: 'dummy-path',
+			NODE_OPTIONS: 'dummy-node-options',
+			[DEPLOY_VALUES_FILE_ENV]: 'dummy-values-file',
+			[RUNNER_OUTCOME_FILE_ENV]: 'dummy-outcome-file',
+		})
 	})
 
 	test("Control's registry reaches the executor as JSON, and no job-supplied name replaces or plants it", async () => {

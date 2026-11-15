@@ -2,8 +2,8 @@
 //
 // A `Runner` drives one job through verified checkout → install → `fabrika-cloudflare-executor deploy`, narrating progress and
 // streaming child stdout/stderr line-by-line into an in-memory log buffer. Secret values and
-// credentials are redacted from every line before it lands in the buffer; they only ever reach
-// the `fabrika` child through its environment, never argv, never a log.
+// credentials are redacted from every line before it lands in the buffer. Credentials reach the executor through its
+// environment; secrets and vars through a values file beside the checkout. Never argv, never a log.
 
 import { type ArtifactFetch, collectSourceMaps, type SourceMapCollection, uploadSourceMaps } from '@fabrika/check/source-maps'
 import type { RunLogLine } from '@fabrika/control-contract'
@@ -13,6 +13,7 @@ import {
 	checkoutRelativeDirectory,
 	type CloudflareRunnerJob,
 	CROSS_ORIGINS_ENV,
+	DEPLOY_VALUES_FILE_ENV,
 	INSTALLATION_APPS_ENV,
 	OPERATIONS_ORIGIN_ENV,
 	RUNNER_OUTCOME_FILE_ENV,
@@ -296,6 +297,23 @@ export class Runner {
 		return `${this.env.workspace}/${this.job.runId}.access.json`
 	}
 
+	/** Where the executor reads the job's secrets, vars and managed values — beside the checkout, never in an environment. */
+	get deployValuesFilePath(): string {
+		return `${this.env.workspace}/${this.job.runId}.values.json`
+	}
+
+	/**
+	 * The job's secrets, vars and managed values as one object, in the precedence the executor reads them with. A Map
+	 * first, so a name such as `__proto__` stays a name; `JSON.stringify` of `Object.fromEntries` keeps it one.
+	 */
+	private deployValues(): Record<string, string> {
+		const values = new Map<string, string>()
+		for (const source of [this.job.secrets, this.job.vars, this.job.managedEnvironment]) {
+			for (const [name, value] of Object.entries(source ?? {})) values.set(name, value)
+		}
+		return Object.fromEntries(values)
+	}
+
 	/** Append a line (redacted) to the buffer and fan it out to subscribers. */
 	private emit(stream: RunLogLine['stream'], rawText: string): void {
 		const text = this.redactor.redact(rawText)
@@ -451,19 +469,9 @@ export class Runner {
 		if (this.job.stateNamespace !== undefined) {
 			env['CLOUDFLARE_STATE_NAMESPACE'] = this.job.stateNamespace
 		}
-		// Secrets are read by the CLI from the environment by their own name.
-		for (const [name, value] of Object.entries(this.job.secrets ?? {})) {
-			env[name] = value
-		}
-		// Non-secret deploy vars: same env-by-name forwarding (the CLI reads pipeline.vars from the env).
-		for (const [name, value] of Object.entries(this.job.vars ?? {})) {
-			env[name] = value
-		}
-		// Platform-managed values use the same env transport; only their names are added to argv.
-		for (const [name, value] of Object.entries(this.job.managedEnvironment ?? {})) {
-			env[name] = value
-		}
-		// Last, so no job-supplied name can redirect where the executor reports its outcome or drop the registry it checks.
+		// Secrets, vars and managed values travel in the values file, never here: their names are the application's, and
+		// in this environment a name such as a runtime's options variable would steer the process that holds the credential.
+		env[DEPLOY_VALUES_FILE_ENV] = this.deployValuesFilePath
 		env[RUNNER_OUTCOME_FILE_ENV] = this.outcomeFilePath
 		if (this.job.installationApps === undefined) delete env[INSTALLATION_APPS_ENV]
 		else env[INSTALLATION_APPS_ENV] = JSON.stringify(this.job.installationApps)
@@ -585,6 +593,10 @@ export class Runner {
 		if (!(await this.writeApprovedAccessFile())) {
 			return this.refuse('could not write the approved access file')
 		}
+		if (!(await this.writeDeployValuesFile())) {
+			await rm(this.approvedAccessFilePath, { force: true }).catch(() => {})
+			return this.refuse('could not write the deploy values file')
+		}
 		let deploy: SpawnResult
 		let outcome: RunnerOutcomeFile | undefined
 		try {
@@ -602,6 +614,7 @@ export class Runner {
 		} finally {
 			await this.clearOutcomeFile()
 			await rm(this.approvedAccessFilePath, { force: true }).catch(() => {})
+			await rm(this.deployValuesFilePath, { force: true }).catch(() => {})
 		}
 		if (deploy.exitCode === 0) {
 			this.iamReconcile = outcome?.iamReconcile
@@ -622,6 +635,17 @@ export class Runner {
 		try {
 			await rm(this.approvedAccessFilePath, { force: true })
 			if (this.job.approvedAccess !== undefined) await writeFile(this.approvedAccessFilePath, JSON.stringify(this.job.approvedAccess), 'utf8')
+			return true
+		} catch {
+			return false
+		}
+	}
+
+	/** Owner-only: the file holds the application's secrets for the length of the deploy step, and is removed after it. */
+	private async writeDeployValuesFile(): Promise<boolean> {
+		try {
+			await rm(this.deployValuesFilePath, { force: true })
+			await writeFile(this.deployValuesFilePath, JSON.stringify(this.deployValues()), { encoding: 'utf8', mode: 0o600, flag: 'wx' })
 			return true
 		} catch {
 			return false
