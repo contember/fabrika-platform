@@ -180,6 +180,15 @@ export function checkContrast(kit: ThemeBlocks, app: ThemeBlocks): ContrastResul
 	)
 }
 
+/** The opaque colour a token computes to in a mode, as `#rrggbb`; null when it cannot be computed or is translucent. */
+export function tokenHex(kit: ThemeBlocks, app: ThemeBlocks, mode: ThemeMode, name: string): string | null {
+	const value = resolveVar(cascade(kit, app)[mode], name, [])
+	const color = value === null ? null : parseColor(value)
+	if (!color || color.a < 1) return null
+	const byte = (c: number) => Math.round(c * 255).toString(16).padStart(2, '0')
+	return `#${byte(color.r)}${byte(color.g)}${byte(color.b)}`
+}
+
 /** The ratio, or why it cannot be computed. */
 function pairRatio(tokens: Tokens, pair: Pair, elsewhere: Set<string>): number | string {
 	const fg = tokenColor(tokens, pair.fg, elsewhere)

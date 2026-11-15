@@ -3,7 +3,15 @@ import { afterEach, expect, test } from 'bun:test'
 import { readFileSync, symlinkSync } from 'fs'
 import { join } from 'path'
 import { fileURLToPath } from 'url'
-import { DESIGN_PATH, failingPairs, readDesignContrast, renderDesignReview, summarizeContrast } from '../src/design-review'
+import {
+	appliedVariant,
+	DESIGN_PATH,
+	failingPairs,
+	readDesign,
+	readDesignContrast,
+	renderDesignReview,
+	summarizeContrast,
+} from '../src/design-review'
 import { type Fixture, makeFixture } from './helpers'
 
 const BIN = fileURLToPath(new URL('../src/bin.ts', import.meta.url))
@@ -64,7 +72,7 @@ test('the generated view keeps repository text as text for the canvas compiler',
 	withKit(fx)
 	fx.write('web/src/theme.css', ':root { --fui-surface: color-mix(in srgb, "}export default function X(){}" 50%, white); --x: </Section>; }')
 	fx.write(DESIGN_PATH, design('web/src/theme.css'))
-	const view = renderDesignReview(readDesignContrast(fx.root), ['/cart?a="b"', '/'], true, new Date('2026-01-01T00:00:00.000Z'))
+	const view = renderDesignReview(readDesign(fx.root), ['/cart?a="b"', '/'], true, new Date('2026-01-01T00:00:00.000Z'))
 	expect(view).not.toContain('export default function X')
 	expect(view).toContain(`<Markdown file="${DESIGN_PATH}" />`)
 	const compiled = await compileJsx(view, { projectRoot: fx.root, tempDir: fx.root })
@@ -98,4 +106,41 @@ test('--waive-contrast is refused on an issue without the contrast check', async
 	const stderr = await new Response(proc.stderr).text()
 	expect(await proc.exited).toBe(1)
 	expect(stderr).toContain('--waive-contrast applies only to the "design-checkpoint" gate')
+})
+
+test('variants are compared side by side, with swatches, contrast and a required choice', async () => {
+	fx = makeFixture()
+	withKit(fx)
+	const warm = ':root { --fui-accent: #a0522d; }'
+	fx.write('web/src/themes/warm.css', warm)
+	fx.write('web/src/themes/calm.css', ':root { --fui-accent: #f4a460; }')
+	fx.write('web/src/theme.css', warm)
+	fx.write(DESIGN_PATH, `---\nstylesheet: web/src/theme.css\nvariants: [web/src/themes/warm.css, web/src/themes/calm.css]\n---\n# Design\n`)
+
+	const design = readDesign(fx.root)
+	expect(design.problems).toEqual([])
+	expect(design.variants.map((v) => [v.name, failingPairs(v.contrast).length])).toEqual([['warm', 0], ['calm', 4]])
+	expect(appliedVariant(design)).toBe('warm')
+	const first = design.variants[0]?.contrast
+	expect(first?.kind === 'checked' && first.swatches.light.find(([token]) => token === '--fui-accent')).toEqual(['--fui-accent', '#a0522d'])
+
+	const view = renderDesignReview(design, ['/'], true, new Date('2026-01-01T00:00:00.000Z'))
+	expect(view).toContain('<Choice id="variant" label="Which variant?" required options={["warm", "calm"]} />')
+	expect(view).toContain('badge={"4 below AA"} badgeVariant="warning"')
+	const compiled = await compileJsx(view, { projectRoot: fx.root, tempDir: fx.root })
+	expect(compiled.ok).toBe(true)
+
+	fx.write('web/src/theme.css', ':root { --fui-accent: #123456; }')
+	expect(appliedVariant(readDesign(fx.root))).toBeNull()
+})
+
+test('a single variant is a problem, shown and warned, and asks for no choice', () => {
+	fx = makeFixture()
+	withKit(fx)
+	fx.write('web/src/theme.css', ':root { --fui-accent: #a0522d; }')
+	fx.write(DESIGN_PATH, `---\nstylesheet: web/src/theme.css\nvariants: [web/src/theme.css]\n---\n# Design\n`)
+	const design = readDesign(fx.root)
+	expect(design.problems).toEqual(['list two or three `variants:` to compare, not 1'])
+	const view = renderDesignReview(design, [], true, new Date('2026-01-01T00:00:00.000Z'))
+	expect(view).not.toContain('id="variant"')
 })
