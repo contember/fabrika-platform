@@ -49,6 +49,9 @@ const HOSTILE = [
 	'<a href="javascript:alert(1)">x</a>',
 	'<script>globalThis.__pwned = 1</script>',
 	'<iframe src="javascript:alert(1)"></iframe>',
+	'a <pre> <img src=x onerror=alert(1)//',
+	'a <script> <img src=x onerror=alert(1)//',
+	'x <pre>\n\n<img src=x onerror=alert(1)//',
 ]
 
 describe('MarkdownPreview over reviewer-authored text', () => {
@@ -63,7 +66,7 @@ describe('MarkdownPreview over reviewer-authored text', () => {
 	test('a remote annotation with markup in every field renders it as text', async () => {
 		const md = renderAnnotation({
 			snippet: '<img src=x onerror=alert(1)>',
-			note: 'see <svg onload=alert(1)></svg> and [here](javascript:alert(1))',
+			note: 'see <svg onload=alert(1)></svg> and [here](javascript:alert(1)) <pre> <img src=x onerror=alert(5)//',
 			filePath: '<img src=x onerror=alert(2)>',
 			context: { before: '<b onmouseover=alert(3)>', after: '', hierarchy: [] },
 			attachments: [{ url: 'javascript:alert(4)', mime: 'image/png' }],

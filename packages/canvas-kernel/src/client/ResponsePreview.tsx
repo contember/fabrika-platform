@@ -209,6 +209,10 @@ const titleAttribute = (title: string | null | undefined) => (title ? ` title="$
 const escapingMarked = new Marked({
 	renderer: {
 		html: ({ text }) => escapeHtml(text),
+		// marked leaves the text after an unclosed `<pre>` or `<script>` tag unescaped; escape every plain text.
+		text(token) {
+			return 'tokens' in token && token.tokens ? this.parser.parseInline(token.tokens) : escapeHtml(token.text)
+		},
 		link(token) {
 			const text = this.parser.parseInline(token.tokens)
 			return isSafeUrl(token.href) ? `<a href="${escapeHtml(token.href)}"${titleAttribute(token.title)}>${text}</a>` : text
