@@ -243,8 +243,8 @@ const isWithin = (root: string, dir: string): boolean => {
 }
 
 /**
- * The executor's environment carries the platform credentials and the run the application's and the managed secrets,
- * and the CLI is checkout code whose failed output reaches the log: it inherits nothing and gets only
+ * The executor holds the platform credentials in its environment and the run's application and managed secrets in
+ * memory, and the CLI is checkout code whose failed output reaches the log: it inherits nothing and gets only
  * `ENTRY_BUILD_VARIABLES`.
  */
 const entryBuildEnvironment = (): { readonly env: Record<string, string>; readonly omitEnv: readonly string[] } => {
