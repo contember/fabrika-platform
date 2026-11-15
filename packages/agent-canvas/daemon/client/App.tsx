@@ -28,12 +28,12 @@ import {
 	parsePersistedState,
 	PlanRenderer,
 	RenderErrorContext,
+	renderUntrustedMarkdown,
 	RevisionContext,
 	type RevisionInfo,
 	type SubmittedAnnotation,
 	useAnnotations,
 } from '@fabrika/canvas-kernel/client'
-import { marked } from 'marked'
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { answeredResponses, type SharedResponse } from '../src/share-responses'
@@ -950,7 +950,7 @@ function ResizableSidebar({ children, collapsed, onToggle }: { children: React.R
 
 function ResponseBanner({ markdown }: { markdown: string }) {
 	const [dismissed, setDismissed] = useState(false)
-	const html = useMemo(() => marked.parse(markdown, { async: false }) as string, [markdown])
+	const html = useMemo(() => renderUntrustedMarkdown(markdown), [markdown])
 	const contentRef = useRef<HTMLDivElement>(null)
 	const {
 		annotations,
@@ -1080,7 +1080,7 @@ function ResponseBanner({ markdown }: { markdown: string }) {
 					</svg>
 					<span className="text-[11px] font-medium uppercase tracking-widest text-accent-blue font-body">Agent Response</span>
 				</div>
-				{/* oxlint-disable-next-line react/no-danger -- The response is the local agent's markdown, the same author whose canvas modules already execute as code here. */}
+				{/* oxlint-disable-next-line react/no-danger -- The agent's response can quote reviewer feedback; renderUntrustedMarkdown escapes raw HTML and drops script URLs. */}
 				<div ref={contentRef} className="prose-canvas text-sm" dangerouslySetInnerHTML={{ __html: html }} />
 			</div>
 

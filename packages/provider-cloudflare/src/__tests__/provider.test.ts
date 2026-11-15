@@ -580,6 +580,16 @@ describe('Cloudflare provider', () => {
 		}
 	})
 
+	test("hands the checkout build the run's secrets and managed values, but never under a platform credential name", async () => {
+		await deploy(rec, config({ pipeline: { build: 'bun run build' } }), {
+			secrets: { API_KEY: 'dummy-api-key', CLOUDFLARE_API_TOKEN: 'dummy-token' },
+			managedEnvironment: { FABRIKA_OPERATIONS_DSN: 'https://public@errors.test/1' },
+		})
+
+		expect(rec.commands[0]?.env).toEqual({ API_KEY: 'dummy-api-key', FABRIKA_OPERATIONS_DSN: 'https://public@errors.test/1' })
+		expect(rec.commands[0]?.omitEnv).toContain('CLOUDFLARE_API_TOKEN')
+	})
+
 	test('refuses a config that names a platform resource, before any provisioning', async () => {
 		const platformWorker = config({
 			resources: () => new Worker({ dir: '.', ...PRIVATE, name: 'vozka', compatibility_flags: [], bindings: {}, main: ENTRY }),

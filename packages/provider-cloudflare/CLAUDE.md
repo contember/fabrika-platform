@@ -45,6 +45,13 @@ this one import.
   checks its digest. The runner writes it to `<workspace>/<runId>.access.json` beside the checkout and names it in
   `FABRIKA_APPROVED_ACCESS_FILE`, set after every job-supplied name; the executor reads it (`readApprovedAccess`)
   before the config runs. Unset outside a runner (a local deploy).
+- **Application-authored names never enter the executor's environment.** The runner writes the job's secrets, vars
+  and managed values to `<workspace>/<runId>.values.json` and names it in `FABRIKA_DEPLOY_VALUES_FILE`; the executor
+  then reads every declared secret, var and `--managed-var` from that file alone (`readDeployValues`), never from
+  `process.env`, so a name such as `BUN_OPTIONS`, `PATH` or `CLOUDFLARE_API_TOKEN` is only ever the deployed Worker's
+  own value. Outside a runner they come from the environment. The checkout's `pipeline.build` gets the declared
+  secrets and vars and the managed values in its own environment (`buildEnvironment`), never under a platform
+  credential name, and no undeclared job secret.
 - **A contract application from framework 0.9 runs in its Durable Object; an older one keeps its stateless Worker**
   (ADR-0065, ADR-0062). The release gate is `runsInObject` (`src/contract-support.ts`), read from the release the
   application pins: `applicationRelease(ProviderEnvironment.access)` in `control.ts`, which also fills
@@ -106,7 +113,7 @@ this one import.
   config's directory, so the entry and the inlined migrations come from the pinned commit, not the committed copies.
   The CLI is the first `node_modules/.bin/fabrika` from the config's directory up to the executor's working directory
   (where the runner installed), never above. It is checkout code whose failed output is logged, so it inherits nothing
-  of the executor's environment, which carries the application's and the managed secrets: it gets `PATH`, `HOME` and
+  of the executor's environment or the run's values: it gets `PATH`, `HOME` and
   `TMPDIR` only. An older release, a Control that
   names no release, and a local deploy keep their authored `main` and the old plan (ADR-0062).
 - **Every managed credential is a Worker secret, uploaded with the version** (`src/managed-secrets.ts`): token keys,
