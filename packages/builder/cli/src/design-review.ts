@@ -62,7 +62,9 @@ export function readDesign(repoRoot: string): Design {
 	const paths = list(front['variants'])
 	const variants = paths.map((path) => ({ name: basename(path).replace(/\.[^.]*$/, ''), contrast: readStylesheet(repoRoot, path) }))
 	const problems: string[] = []
+	if (front['variants'] !== undefined && paths.length === 0) problems.push('write `variants` on one line, as `[a.css, b.css]`')
 	if (paths.length === 1 || paths.length > 3) problems.push(`list two or three \`variants:\` to compare, not ${paths.length}`)
+	for (const v of variants) if (v.contrast.kind === 'invalid') problems.push(`${v.contrast.problem}; it is not offered as a choice`)
 	const names = variants.map((v) => v.name)
 	if (new Set(names).size !== names.length) problems.push('two variants share a file name; the reviewer could not tell them apart')
 	return { applied, variants, problems }
@@ -86,11 +88,16 @@ function readStylesheet(repoRoot: string, stylesheet: string): DesignContrast {
 	return { kind: 'checked', stylesheet, overrides, results: checkContrast(kit, app), swatches: { light: swatch('light'), dark: swatch('dark') } }
 }
 
-/** The variant whose overrides the applied stylesheet declares exactly, or null. */
+/**
+ * The variant whose `--fui-*` overrides the applied stylesheet declares exactly, or null. Only the kit's tokens count:
+ * the applied stylesheet also holds the application's own properties. Values compare without case or extra spaces.
+ */
 export function appliedVariant(design: Design): string | null {
 	const { applied } = design
 	if (applied.kind !== 'checked') return null
-	const same = design.variants.find((v) => v.contrast.kind === 'checked' && JSON.stringify(v.contrast.overrides) === JSON.stringify(applied.overrides))
+	const tokens = (overrides: string[][]) =>
+		JSON.stringify(overrides.filter(([name]) => name?.startsWith('--fui-')).map((row) => row.map((cell) => cell.toLowerCase().replace(/\s+/g, ' '))))
+	const same = design.variants.find((v) => v.contrast.kind === 'checked' && tokens(v.contrast.overrides) === tokens(applied.overrides))
 	return same?.name ?? null
 }
 
@@ -172,8 +179,11 @@ export function renderDesignReview(design: Design, urls: string[], withDesign: b
 		}} />`,
 		`\t<UserInput id="design-note" label="Which screen or token should change?" placeholder="e.g. the price is hard to read on /cart" multiline />`,
 	)
-	if (variants.length >= 2) {
-		lines.push(`\t<Choice id="${VARIANT_CHOICE_ID}" label="Which variant?" required options={${literal(variants.map((v) => v.name))}} />`)
+	const offered = variants.filter((v) => v.contrast.kind !== 'invalid').map((v) => v.name)
+	if (offered.length >= 2) {
+		lines.push(
+			`\t<Choice id="${VARIANT_CHOICE_ID}" label="Which variant? (the closest one when requesting changes)" required options={${literal(offered)}} />`,
+		)
 	}
 	lines.push(`\t<Choice id="${GATE_VERDICT_ID}" label="Verdict" required options={['${GATE_APPROVE}', '${GATE_CHANGES}']} />`, '</Section>')
 	return lines.join('\n') + '\n'

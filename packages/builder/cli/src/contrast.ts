@@ -182,7 +182,10 @@ export function checkContrast(kit: ThemeBlocks, app: ThemeBlocks): ContrastResul
 
 /** The opaque colour a token computes to in a mode, as `#rrggbb`; null when it cannot be computed or is translucent. */
 export function tokenHex(kit: ThemeBlocks, app: ThemeBlocks, mode: ThemeMode, name: string): string | null {
-	const value = resolveVar(cascade(kit, app)[mode], name, [])
+	const chain: string[] = []
+	const value = resolveVar(cascade(kit, app)[mode], name, chain)
+	// A token also declared in a rule the check does not cascade has no definite colour, as its pairs are unchecked.
+	if (chain.some((n) => app.elsewhere.includes(n))) return null
 	const color = value === null ? null : parseColor(value)
 	if (!color || color.a < 1) return null
 	const byte = (c: number) => Math.round(c * 255).toString(16).padStart(2, '0')

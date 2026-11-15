@@ -69,7 +69,8 @@ level, wait for the level to settle before starting dependents.
   propose two or three theme variants, publish the preview, run
   `fabrika builder design review`, raise any pair it reports
   below AA, then open the `design-checkpoint` gate on the generated view and wait.
-  Apply the variant the feedback names, and run `design review` again.
+  Apply the variant the feedback names (requested changes go into its file first),
+  copy it into the imported stylesheet, and run `design review` again.
   `build done ISSUE-004` records the gate's verdict; it refuses until the gate has
   feedback, and while a pair is below AA unless the human waives it (`--waive-contrast`).
 - Feature issues that share no `touches` and have their deps `done` → fan out

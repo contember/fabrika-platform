@@ -125,7 +125,9 @@ test('variants are compared side by side, with swatches, contrast and a required
 	expect(first?.kind === 'checked' && first.swatches.light.find(([token]) => token === '--fui-accent')).toEqual(['--fui-accent', '#a0522d'])
 
 	const view = renderDesignReview(design, ['/'], true, new Date('2026-01-01T00:00:00.000Z'))
-	expect(view).toContain('<Choice id="variant" label="Which variant?" required options={["warm", "calm"]} />')
+	expect(view).toContain(
+		'<Choice id="variant" label="Which variant? (the closest one when requesting changes)" required options={["warm", "calm"]} />',
+	)
 	expect(view).toContain('badge={"4 below AA"} badgeVariant="warning"')
 	const compiled = await compileJsx(view, { projectRoot: fx.root, tempDir: fx.root })
 	expect(compiled.ok).toBe(true)
@@ -143,4 +145,41 @@ test('a single variant is a problem, shown and warned, and asks for no choice', 
 	expect(design.problems).toEqual(['list two or three `variants:` to compare, not 1'])
 	const view = renderDesignReview(design, [], true, new Date('2026-01-01T00:00:00.000Z'))
 	expect(view).not.toContain('id="variant"')
+})
+
+test('the applied stylesheet matches a variant on the kit tokens alone, whatever else it declares', () => {
+	fx = makeFixture()
+	withKit(fx)
+	fx.write('web/src/themes/warm.css', ':root { --fui-accent: #a0522d; }')
+	fx.write('web/src/themes/calm.css', ':root { --fui-accent: #2f6f4f; }')
+	fx.write('web/src/theme.css', ':root { --fui-accent: #A0522D; --app-header-height: 3rem; }')
+	fx.write(DESIGN_PATH, `---\nstylesheet: web/src/theme.css\nvariants: [web/src/themes/warm.css, web/src/themes/calm.css]\n---\n`)
+	const design = readDesign(fx.root)
+	expect(appliedVariant(design)).toBe('warm')
+	const calm = design.variants[1]?.contrast
+	expect(calm?.kind === 'checked' && calm.swatches.dark.find(([token]) => token === '--fui-accent')).toEqual(['--fui-accent', '#7390f0'])
+})
+
+test('an unreadable variant and a block-style list are problems; an unreadable variant is never offered', () => {
+	fx = makeFixture()
+	withKit(fx)
+	fx.write('web/src/theme.css', ':root { --fui-accent: #a0522d; }')
+	fx.write('web/src/themes/warm.css', ':root { --fui-accent: #a0522d; }')
+	fx.write('web/src/themes/calm.css', ':root { --fui-accent: #2f6f4f; }')
+	fx.write(DESIGN_PATH, `---\nstylesheet: web/src/theme.css\nvariants: [web/src/themes/warm.css, web/src/themes/calm.css, ../outside.css]\n---\n`)
+	const design = readDesign(fx.root)
+	expect(design.problems).toEqual(['stylesheet ../outside.css is not a file inside the repository; it is not offered as a choice'])
+	expect(renderDesignReview(design, [], true, new Date(0))).toContain('options={["warm", "calm"]}')
+
+	fx.write(DESIGN_PATH, `---\nstylesheet: web/src/theme.css\nvariants:\n  - web/src/themes/warm.css\n---\n`)
+	expect(readDesign(fx.root).problems).toEqual(['write `variants` on one line, as `[a.css, b.css]`'])
+})
+
+test('a swatch of a token also declared in a rule the check does not read is not computed', () => {
+	fx = makeFixture()
+	withKit(fx)
+	fx.write('web/src/theme.css', '@media (min-width: 1px) { :root { --fui-accent: #000; } } :root { --fui-accent: #a0522d; }')
+	fx.write(DESIGN_PATH, `---\nstylesheet: web/src/theme.css\n---\n`)
+	const applied = readDesign(fx.root).applied
+	expect(applied.kind === 'checked' && applied.swatches.light.find(([token]) => token === '--fui-accent')).toEqual(['--fui-accent', null])
 })
