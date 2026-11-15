@@ -325,8 +325,6 @@ class Alarm {
 	}
 }
 
-const WORKERD_MAX_PARAMETERS = 100
-
 interface Sqlite {
 	readonly database: BunDatabase
 	readonly alarm: Alarm
@@ -352,13 +350,8 @@ async function sqlite(): Promise<Sqlite> {
 	}
 	const inner = bunSqliteStorage(database)
 	const storage: ApplicationStorage = {
-		// workerd binds at most 100 parameters a statement; bun:sqlite allows far more.
-		sql: {
-			exec: (query, ...bindings) => {
-				if (bindings.length > WORKERD_MAX_PARAMETERS) throw new Error('too many SQL variables: SQLITE_ERROR')
-				return inner.sql.exec(query, ...bindings)
-			},
-		},
+		// bunSqliteStorage refuses more than 100 parameters a statement, as workerd does.
+		sql: inner.sql,
 		transactionSync: inner.transactionSync,
 		transaction: (closure) => alarm.within((run) => inner.transaction(run), closure),
 		getAlarm: () => Promise.resolve(alarm.scheduled),
