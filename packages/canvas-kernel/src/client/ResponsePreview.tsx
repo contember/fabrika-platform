@@ -202,6 +202,8 @@ function rewriteUploadPaths(md: string): string {
 
 const HTML_ESCAPES: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }
 const escapeHtml = (text: string) => text.replace(/[&<>"']/g, (char) => HTML_ESCAPES[char] ?? char)
+// Text nodes only: an entity there decodes to text, so `&amp;` keeps showing as `&`, as marked shows it.
+const escapeText = (text: string) => text.replace(/&(?!#?\w+;)|[<>"']/g, (char) => HTML_ESCAPES[char] ?? char)
 /** http(s), mailto, or a URL with no scheme of its own. */
 const isSafeUrl = (href: string) => /^(?:https?|mailto):/i.test(href) || !/^[^/?#]*:/.test(href)
 const titleAttribute = (title: string | null | undefined) => (title ? ` title="${escapeHtml(title)}"` : '')
@@ -211,7 +213,7 @@ const escapingMarked = new Marked({
 		html: ({ text }) => escapeHtml(text),
 		// marked leaves the text after an unclosed `<pre>` or `<script>` tag unescaped; escape every plain text.
 		text(token) {
-			return 'tokens' in token && token.tokens ? this.parser.parseInline(token.tokens) : escapeHtml(token.text)
+			return 'tokens' in token && token.tokens ? this.parser.parseInline(token.tokens) : escapeText(token.text)
 		},
 		link(token) {
 			const text = this.parser.parseInline(token.tokens)

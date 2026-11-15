@@ -51,6 +51,8 @@ const HOSTILE = [
 	'<iframe src="javascript:alert(1)"></iframe>',
 	'a <pre> <img src=x onerror=alert(1)//',
 	'a <script> <img src=x onerror=alert(1)//',
+	'a <CODE class=x> <img src=x onerror=alert(1)//',
+	'a <kbd> <img src=x onerror=alert(1)//',
 	'x <pre>\n\n<img src=x onerror=alert(1)//',
 ]
 
@@ -87,6 +89,12 @@ describe('MarkdownPreview keeps ordinary markdown', () => {
 		expect(container.querySelector('p code')?.textContent).toBe('code')
 		expect(container.querySelectorAll('li')).toHaveLength(2)
 		expect(container.querySelector('pre code')?.textContent).toBe('const a = 1 < 2\n')
+	})
+
+	test('entities in text show as the characters they name', async () => {
+		const container = await renderPreview('AT&amp;T &lt;b&gt; &copy;')
+		expect(container.textContent?.trim()).toBe('AT&T <b> ©')
+		expect(container.querySelector('b')).toBeNull()
 	})
 
 	test('https, mailto and relative links keep their href', async () => {
