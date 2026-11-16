@@ -20,6 +20,8 @@ import { vocabulary } from './kit-fixture/src/vocabulary'
 import { migration } from './orm-fixture/migration'
 
 const app = defineApp(vocabulary, tables)
+/** Bun's own `fetch`, before any test stubs or guards it. */
+const nativeFetch = globalThis.fetch
 const APP_ID = 'crm@prod'
 
 /** What the crawl job fetched last, and what it read. */
@@ -242,7 +244,7 @@ describe('the guard under public egress', () => {
 		await runAsSite(site, NO_RULES, () => fetch('https://www.example.com/', { headers, redirect: 'manual' }))
 		expect(calls.map((call) => call.url)).toEqual(['https://www.example.com/', 'https://cdn.example.net/', 'https://www.example.com/'])
 		for (const call of calls) {
-			expect([...new Headers(call.init?.headers).keys()]).toEqual(['user-agent'])
+			expect([...new Headers(call.init?.headers).entries()]).toEqual([['accept-encoding', 'identity'], ['user-agent', 'site-auditor']])
 		}
 	})
 
@@ -299,8 +301,27 @@ describe('the guard under public egress', () => {
 		expect(await refusalOf(() => runAsSite(site, NO_RULES, () => fetch('https://big.example.com/declared')))).toMatchObject({
 			reason: 'oversized_egress',
 		})
-		const streamed = await runAsSite(site, NO_RULES, () => fetch('https://big.example.com/streamed'))
-		expect(await refusalOf(() => streamed.arrayBuffer())).toMatchObject({ reason: 'oversized_egress' })
+		// The guard reads the body before the caller gets the answer, so a body past the cap never reaches it.
+		expect(await refusalOf(() => runAsSite(site, NO_RULES, () => fetch('https://big.example.com/streamed')))).toMatchObject({
+			reason: 'oversized_egress',
+		})
+	})
+
+	test('asks every hop for identity with no decoding, and refuses an encoded answer unread', async () => {
+		let cancelled = false
+		const { calls, stub } = stubFetch(() =>
+			new Response(new ReadableStream({ pull: () => new Promise<void>(() => {}), cancel: () => void (cancelled = true) }), {
+				headers: { 'content-encoding': 'br' },
+			})
+		)
+		restore = () => stub.mockRestore()
+		const headers = { 'accept-encoding': 'gzip, br' }
+		expect(await refusalOf(() => runAsSite(site, NO_RULES, () => fetch('https://www.example.com/', { headers })))).toMatchObject({
+			reason: 'encoded_egress',
+		})
+		expect(cancelled).toBe(true)
+		expect(new Headers(calls[0]?.init?.headers).get('accept-encoding')).toBe('identity')
+		expect(Reflect.get(calls[0]?.init ?? {}, 'decompress')).toBe(false)
 	})
 
 	test('bounds the request in time, beside the caller signal', async () => {
@@ -347,9 +368,128 @@ describe('the guard under public egress', () => {
 			const { stub } = stubFetch(() => new Response(stalled()))
 			restore = () => stub.mockRestore()
 			const caller = new AbortController()
-			const response = await runAsSite(site, NO_RULES, () => fetch('https://www.example.com/', { signal: caller.signal }))
 			ended(caller)
-			expect(await refusalOf(() => response.arrayBuffer())).toMatchObject({ message: 'caller gave up' })
+			expect(await refusalOf(() => runAsSite(site, NO_RULES, () => fetch('https://www.example.com/', { signal: caller.signal })))).toMatchObject({
+				message: 'caller gave up',
+			})
+		})
+	})
+
+	describe("a stage that stalls ends at the guard's own deadline, with no caller signal", () => {
+		const original = globalThis.setTimeout
+		afterEach(() => Reflect.set(globalThis, 'setTimeout', original))
+		// The guard's deadline, shortened: every other timer keeps its delay.
+		const shortenDeadline = (): void => {
+			Reflect.set(
+				globalThis,
+				'setTimeout',
+				(handler: () => void, delay?: number) => original(handler, delay === PUBLIC_EGRESS_LIMITS.timeoutMs ? 20 : delay),
+			)
+		}
+		const timedOut = { name: 'TimeoutError', message: 'public egress request timed out' }
+
+		test('the resolver', async () => {
+			const { calls, stub } = stubFetch(() => new Response('ok'))
+			restore = () => stub.mockRestore()
+			shortenDeadline()
+			const rules: PublicEgressRules = { refusedHosts: new Set(), resolve: () => new Promise(() => {}) }
+			expect(await refusalOf(() => runAsSite(site, rules, () => fetch('https://www.example.com/')))).toMatchObject(timedOut)
+			expect(calls).toEqual([])
+		})
+
+		test('the connection, whose signal the guard aborts', async () => {
+			const { calls, stub } = stubFetch((_url, init) =>
+				new Promise<Response>((_resolve, reject) => init?.signal?.addEventListener('abort', () => reject(init.signal?.reason)))
+			)
+			restore = () => stub.mockRestore()
+			shortenDeadline()
+			expect(await refusalOf(() => runAsSite(site, NO_RULES, () => fetch('https://www.example.com/')))).toMatchObject(timedOut)
+			expect(calls[0]?.init?.signal?.aborted).toBe(true)
+		})
+
+		test("the answer's body, which the guard cancels", async () => {
+			let cancelled = false
+			const { stub } = stubFetch(() =>
+				new Response(new ReadableStream({ pull: () => new Promise<void>(() => {}), cancel: () => void (cancelled = true) }))
+			)
+			restore = () => stub.mockRestore()
+			shortenDeadline()
+			expect(await refusalOf(() => runAsSite(site, NO_RULES, () => fetch('https://www.example.com/')))).toMatchObject(timedOut)
+			expect(cancelled).toBe(true)
+		})
+	})
+
+	describe("over Bun's own fetch, to a local server standing in for a public host", () => {
+		let stop: (() => Promise<void>) | undefined
+		afterEach(async () => {
+			await stop?.()
+			stop = undefined
+		})
+		/** Serves `answer` locally and sends every hop of the guard there through Bun's own `fetch`, its `init` as given. */
+		const serving = (answer: (path: string) => Response) => {
+			const encodings: (string | null)[] = []
+			const server = Bun.serve({
+				hostname: '127.0.0.1',
+				port: 0,
+				fetch: (request) => {
+					encodings.push(request.headers.get('accept-encoding'))
+					return answer(new URL(request.url).pathname)
+				},
+			})
+			stop = () => server.stop(true)
+			const { stub } = stubFetch((url, init) => nativeFetch(`http://127.0.0.1:${server.port}${new URL(url).pathname}`, init))
+			restore = () => stub.mockRestore()
+			return encodings
+		}
+		/** 64 MiB, one MiB every 10 ms as a network delivers it; `cancelled` settles with what was sent when the client hung up. */
+		const paced = () => {
+			const { promise: cancelled, resolve } = Promise.withResolvers<number>()
+			let sent = 0
+			const chunk = new Uint8Array(1024 * 1024)
+			const body = new ReadableStream<Uint8Array>({
+				async pull(controller) {
+					await Bun.sleep(10)
+					if (sent >= 64 * chunk.byteLength) return controller.close()
+					sent += chunk.byteLength
+					controller.enqueue(chunk)
+				},
+				cancel: () => resolve(sent),
+			})
+			return { body, cancelled, all: 64 * chunk.byteLength }
+		}
+
+		test('a compressed answer (a gzip bomb) is refused undecoded, and the request asked for identity', async () => {
+			const bomb = Bun.gzipSync(new Uint8Array(64 * 1024 * 1024))
+			const encodings = serving(() => new Response(bomb, { headers: { 'content-encoding': 'gzip' } }))
+			expect(await refusalOf(() => runAsSite(site, NO_RULES, () => fetch('https://www.example.com/')))).toMatchObject({
+				reason: 'encoded_egress',
+			})
+			expect(encodings).toEqual(['identity'])
+		})
+
+		test('a body past the cap closes the connection at the cap, though the caller never reads it', async () => {
+			const { body, cancelled, all } = paced()
+			serving(() => new Response(body))
+			expect(await refusalOf(() => runAsSite(site, NO_RULES, () => fetch('https://www.example.com/')))).toMatchObject({
+				reason: 'oversized_egress',
+			})
+			expect(await cancelled).toBeLessThan(all)
+		})
+
+		test("a redirect's body is not downloaded once the guard follows the redirect", async () => {
+			const { body, cancelled, all } = paced()
+			serving((path) => path === '/old' ? new Response(body, { status: 302, headers: { location: '/new' } }) : new Response('new'))
+			const response = await runAsSite(site, NO_RULES, () => fetch('https://www.example.com/old'))
+			expect(await response.text()).toBe('new')
+			expect(await cancelled).toBeLessThan(all)
+		})
+
+		test('a public answer within the bounds reaches the caller whole', async () => {
+			serving(() => new Response('<html>ok</html>', { headers: { 'content-type': 'text/html' } }))
+			const response = await runAsSite(site, NO_RULES, () => fetch('https://www.example.com/'))
+			expect(await response.text()).toBe('<html>ok</html>')
+			expect(response.headers.get('content-type')).toBe('text/html')
+			expect(response.url).toBe('https://www.example.com/')
 		})
 	})
 

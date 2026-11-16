@@ -783,7 +783,10 @@ vocabulary (`packages/db/CLAUDE.md`).
   and the adapter's `resolveHost`, which only the Bun adapter passes). Each hop goes out with `redirect: 'manual'` after
   `publicEgressRefusal` (`@fabrika/auth-core`, shared with the checker) and the resolver admit it, to the checked
   address with the checked name as `Host` and `keepalive: false` (Bun pools by address; `public-egress-pinning.test.ts`
-  holds Bun to both); the guard follows redirects itself and bounds each request (`PUBLIC_EGRESS_LIMITS`). No other
+  holds Bun to both); the guard follows redirects itself and bounds each request (`PUBLIC_EGRESS_LIMITS`): it
+  reads the body whole before `fetch` answers and aborts the hop's request at the cap or when it drops a redirect, since
+  cancelling a reader leaves Bun downloading, and asks for `identity` with Bun's `decompress: false`, refusing an encoded
+  answer (`encoded_egress`). No other
   site runs with the rules: `siteEgress` turns a `'public'` it was never meant to hold into no reach.
 - **A webhook's `limits` bound its body and its handler** (`WEBHOOK_LIMITS`): `maxBytes` (1 MiB by default and at most)
   is its row's body limit, read within the deadline `bodyDeadlineMs` derives from it; `timeoutMs` (10 s, at most 60 s)

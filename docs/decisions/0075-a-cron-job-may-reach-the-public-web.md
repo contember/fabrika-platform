@@ -28,8 +28,10 @@ Opening `fetch` to arbitrary hosts is a server-side request forgery risk. The fo
 - **Private networks.** On Zerops an application shares a project's private network with its database, its object
   store and, behind a namespace, its proxy and other applications. Internal service names have one label, and a public
   name can resolve to a private address. Cloud metadata answers at `169.254.169.254`.
-- **The runtimes differ.** A Bun process can resolve a name before it connects. A Worker cannot: Cloudflare exposes no
-  DNS resolution to it, and its `fetch` leaves through Cloudflare's network, not the installation's.
+- **The runtimes differ.** A Bun process can resolve a name and then connect to the address it checked. A Worker can
+  resolve a name too (`node:dns`, over DNS over HTTPS), but its `fetch` resolves the name again inside Cloudflare's
+  network, so no answer the Worker checks decides where the request goes. That `fetch` leaves through Cloudflare's
+  network, not the installation's.
 - **Redirects.** The runtime follows a redirect inside `fetch`, after the guard has admitted the first URL, so a
   public page can redirect a job anywhere.
 - **Holding the environment.** On Cloudflare a procedure waits for an outside call inside the object's transaction
@@ -79,7 +81,7 @@ Before each hop, and so again after each redirect:
   the guard refuses a name with any address that is not public unicast: private, loopback, link-local (the metadata
   address), shared (CGNAT, which holds Alibaba's metadata address), multicast, reserved, documentation, IPv6 forms that
   carry an IPv4 address it cannot vouch for, and Azure's host endpoint `168.63.129.16`, a public address that answers
-  inside the VM. A Worker passes no resolver.
+  inside the VM. A Worker passes no resolver: an answer it checked would not pin its `fetch`.
 - **Then connects to the address it checked.** A hop the resolver admitted is sent to the checked address (IPv4 first:
   a container without an IPv6 route still connects), with the checked name as `Host` and `keepalive: false`. Bun
   sends that `Host`, checks the server's certificate against it, and under `keepalive: false` takes no pooled
@@ -103,7 +105,16 @@ A refusal is `capability_refused: refused_egress`, and the job fails with it.
   `tls` cannot send a request to an admitted origin elsewhere. The checker refuses `Bun.fetch` and `WebSocket`, which
   the guard does not see.
 - **60 seconds per request**, its redirects and the reading of its body included, beside the caller's own signal.
-- **16 MiB per response body**, by its `Content-Length` or while it streams (`capability_refused: oversized_egress`).
+- **16 MiB per response body**, by its `Content-Length` or as it arrives (`capability_refused: oversized_egress`). The
+  guard reads the body whole before the caller gets the answer: Bun buffers a body as it arrives whether or not anyone
+  reads it, and cancelling the body's reader leaves Bun downloading it, so the guard aborts the hop's request at the cap
+  (and when it drops a redirect's body), which closes the connection.
+- **No compressed body.** Every hop asks for `Accept-Encoding: identity` and, on Bun, turns off the runtime's own
+  decoding (`decompress: false`), which grows a body natively without bound (a 64 KiB gzip answer decodes to 64 MiB
+  before any reader sees it). An answer whose `Content-Encoding` is anything else is refused unread
+  (`capability_refused: encoded_egress`). A server must honour `identity` (RFC 9110); one that does not is out of
+  reach. Decoding with a bound of the guard's own would need a streaming decoder whose output it can meter, which
+  neither runtime offers for every encoding.
 - A site that declares origins keeps today's guard: exact origins, the runtime's own redirect handling, no bounds.
 
 ### 4. Review

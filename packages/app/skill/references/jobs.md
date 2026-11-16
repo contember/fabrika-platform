@@ -150,7 +150,8 @@ export const contract = app.contract((c) => ({
   one label (`localhost`, an internal service), a name under `.local`, `.internal`, `.workers.dev`, `.zerops.app` and similar, a port,
   the installation's own hosts (IAM, Control, Operations, every application's domain) and, on Bun (Zerops), a name
   that resolves to a private address. Every redirect is checked again: `redirect: 'manual'` gets the redirect, the default
-  follows at most 10. A request has 60 s, a response body at most 16 MiB (`oversized_egress`); pass `ctx.signal`, or
+  follows at most 10. A request has 60 s, a response body at most 16 MiB (`oversized_egress`), read whole before `fetch` answers; a
+  compressed answer is refused (`encoded_egress`: the guard asks for `identity`); pass `ctx.signal`, or
   `AbortSignal.any([ctx.signal, AbortSignal.timeout(8_000)])` for a shorter bound per page. The approver reviews it
   closely, as reach to anywhere public. Keep the sites operators enter in a table the job reads.
 - `ctx.signal` aborts when the attempt ends (its timeout, a lost lease). Call `ctx.signal.throwIfAborted()` before

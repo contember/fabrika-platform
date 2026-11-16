@@ -1348,8 +1348,9 @@ each hop, with `capability_refused: refused_egress`:
   passes `resolveHost` to `boot`), Azure's host endpoint `168.63.129.16` included. The hop is then sent to the checked
   address (IPv4 first) with the checked name as `Host` and `keepalive: false`, so the name is resolved once per hop and
   a changed answer (DNS rebinding) reaches nothing; Bun checks the certificate against that `Host` and takes no pooled
-  connection, which it keys by address (`public-egress-pinning.test.ts`). A Worker exposes no resolution, so on
-  Cloudflare the guard checks no address; an installation there has no private network for one to point at.
+  connection, which it keys by address (`public-egress-pinning.test.ts`). A Worker's `fetch` resolves the name inside
+  Cloudflare's network, where no answer the guard checked would pin it, so on Cloudflare the guard checks no address;
+  an installation there has no private network for one to point at.
 
 Every hop goes out with `redirect: 'manual'`. Under the caller's `follow` the guard follows at most 10 redirects
 itself, checking each; a 303 (and a 301 or 302 of a `POST`) becomes a `GET` without its body, and another origin loses
@@ -1358,9 +1359,12 @@ No hop carries a forbidden request header of the Fetch standard (`Host` among th
 `X-Real-IP`, `Proxy-*`, `Sec-*` or `X-Fabrika-*`. A preconnect under public egress is refused, and one under an origin
 list reaches only a declared origin; a site with origins passes only the standard fields of its `init` (no `unix`,
 `proxy` or `tls`).
-A request has 60 seconds, its redirects and the reading of its body included, beside the caller's signal; a response body is read up to 16 MiB,
-refused past it by its `Content-Length` or while it streams (`capability_refused: oversized_egress`). The response
-carries the URL of its last hop. The approval diff shows gaining `'public'` as one line for closer review, and the
+A request has 60 seconds, its redirects and the reading of its body included, beside the caller's signal. The guard
+reads the body whole before `fetch` answers, up to 16 MiB, refused past it by its `Content-Length` or as it arrives
+(`capability_refused: oversized_egress`); it aborts the hop's request at the cap and when it drops a redirect's body,
+since cancelling a reader leaves Bun downloading. Every hop asks for `Accept-Encoding: identity` with Bun's decoding
+off (`decompress: false`), and an answer with any other `Content-Encoding` is refused unread
+(`capability_refused: encoded_egress`). The response carries the URL of its last hop. The approval diff shows gaining `'public'` as one line for closer review, and the
 checker's `cross-app-fetch` accepts an http(s) prefix the URL rules admit, or whose host is not complete yet, where
 some job declares it (`public-egress.test.ts`).
 

@@ -144,7 +144,10 @@ export function platformCall<T>(work: () => T): T {
 	return scope.exit(work)
 }
 
-type Fetch = (input: string, init: RequestInit) => Promise<Response>
+/** A hop's `init`: the standard fields, and Bun's `decompress`, which another runtime ignores. */
+type HopInit = RequestInit & { readonly decompress?: boolean }
+
+type Fetch = (input: string, init: HopInit) => Promise<Response>
 
 /**
  * Wraps the global `fetch` in the guard, once: a `fetch` that is already a guard stays. A test that replaces `fetch`
@@ -295,24 +298,15 @@ async function publicFetch(
 	// Durable Object awake until it fires.
 	const deadline = new AbortController()
 	const timer = setTimeout(() => deadline.abort(new DOMException('public egress request timed out', 'TimeoutError')), PUBLIC_EGRESS_LIMITS.timeoutMs)
-	const done = (): void => clearTimeout(timer)
 	try {
-		return await follow(send, site, rules, request, AbortSignal.any([request.signal, deadline.signal]), done)
-	} catch (error) {
-		done()
-		throw error
+		return await follow(send, site, rules, request, AbortSignal.any([request.signal, deadline.signal]))
+	} finally {
+		clearTimeout(timer)
 	}
 }
 
-/** The hops of one request; `done` clears its deadline once its last answer's body is read. */
-async function follow(
-	send: Fetch,
-	site: string,
-	rules: PublicEgressRules,
-	request: Request,
-	signal: AbortSignal,
-	done: () => void,
-): Promise<Response> {
+/** The hops of one request, its last answer's body read whole. */
+async function follow(send: Fetch, site: string, rules: PublicEgressRules, request: Request, signal: AbortSignal): Promise<Response> {
 	const mode = request.redirect
 	let url = new URL(request.url)
 	let method = request.method
@@ -321,20 +315,28 @@ async function follow(
 	let body: ArrayBuffer | null = request.body === null ? null : await untilAborted(signal, request.arrayBuffer())
 	for (let hop = 0;; hop++) {
 		const address = await admit(site, rules, url, signal)
+		// Cancelling a body leaves Bun downloading it into memory; only aborting the request closes the connection.
+		const dropped = new AbortController()
 		const response = await send(address === null ? url.href : pinnedUrl(url, address), {
 			method,
 			headers: hopHeaders(headers, url, address),
 			body,
 			redirect: 'manual',
-			signal,
+			signal: AbortSignal.any([signal, dropped.signal]),
+			// Bun decompresses natively and unbounded: the guard asks for `identity` and reads the bytes as they came.
+			decompress: false,
 			// Bun pools connections by address and port: a pooled one was checked against another name's certificate.
 			...(address === null ? {} : { keepalive: false }),
 		})
 		const location = REDIRECTS.has(response.status) ? response.headers.get('location') : null
 		if (location === null || mode === 'manual') {
-			return await capped(site, response, url, hop > 0, signal, done)
+			return await bounded(site, response, url, hop > 0, signal).catch((error: unknown) => {
+				dropped.abort(error)
+				throw error
+			})
 		}
-		await response.body?.cancel()
+		dropped.abort()
+		void response.body?.cancel().catch(() => undefined)
 		if (mode === 'error') {
 			throw new TypeError(`${site}: ${url.origin} redirects, and the request's redirect mode is 'error'`)
 		}
@@ -400,71 +402,76 @@ function pinnedUrl(url: URL, address: string): string {
  */
 function hopHeaders(headers: Headers, url: URL, address: string | null): Headers {
 	const hop = new Headers(headers)
+	hop.set('accept-encoding', 'identity')
 	if (address !== null) hop.set('host', normalizedHost(url.hostname))
 	return hop
 }
 
+/** The statuses whose answer has no body (Fetch, "null body status"); `Response` refuses one with a body. */
+const NULL_BODY_STATUSES: ReadonlySet<number> = new Set([101, 103, 204, 205, 304])
+
 /**
- * `response` with its body bounded by `maxResponseBytes`, and the URL and redirect flag of the request it answers,
- * which a response the guard builds would otherwise lose.
+ * `response` read whole before the caller sees it, at most `maxResponseBytes`, within the request's deadline, with the
+ * URL and redirect flag of the request it answers. Bun buffers a body as it arrives whether or not anyone reads it, so
+ * the guard reads it at once and cancels it at the cap. An encoded body is refused unread: the guard asked for
+ * `identity`, and decoding it would grow it without a bound the guard controls.
  */
-async function capped(
-	site: string,
-	response: Response,
-	url: URL,
-	redirected: boolean,
-	signal: AbortSignal,
-	done: () => void,
-): Promise<Response> {
+async function bounded(site: string, response: Response, url: URL, redirected: boolean, signal: AbortSignal): Promise<Response> {
+	const encoding = response.headers.get('content-encoding')?.trim().toLowerCase() ?? ''
+	if (encoding !== '' && encoding !== 'identity') {
+		void response.body?.cancel().catch(() => undefined)
+		throw new CapabilityRefusedError(
+			'encoded_egress',
+			`${site}: ${url.origin} answers with Content-Encoding ${encoding}, which public egress neither asks for nor decodes`,
+		)
+	}
+	const init = { status: response.status, statusText: response.statusText, headers: response.headers }
+	if (response.status < 200 || response.status > 599) {
+		void response.body?.cancel().catch(() => undefined)
+		return withRequestUrl(response, url, redirected)
+	}
+	const body = await readCapped(site, response, url, signal)
+	return withRequestUrl(new Response(NULL_BODY_STATUSES.has(response.status) ? null : body, init), url, redirected)
+}
+
+/** The bytes of `response`'s body, refused past `maxResponseBytes` by its `Content-Length` or as they arrive. */
+async function readCapped(site: string, response: Response, url: URL, signal: AbortSignal): Promise<Uint8Array<ArrayBuffer>> {
 	const max = PUBLIC_EGRESS_LIMITS.maxResponseBytes
 	const tooLarge = () =>
 		new CapabilityRefusedError(
 			'oversized_egress',
 			`${site}: ${url.origin} answers more than ${max} bytes, the most public egress reads of one response`,
 		)
+	if (response.body === null) {
+		return new Uint8Array()
+	}
 	const declared = Number(response.headers.get('content-length') ?? '0')
 	if (Number.isFinite(declared) && declared > max) {
-		await response.body?.cancel()
+		void response.body.cancel().catch(() => undefined)
 		throw tooLarge()
 	}
-	if (response.body === null || response.status < 200 || response.status > 599) {
-		done()
-		return withRequestUrl(response, url, redirected)
-	}
 	const reader = response.body.getReader()
+	const chunks: Uint8Array[] = []
 	let seen = 0
-	const bound = new ReadableStream<Uint8Array>({
-		async pull(controller) {
-			const read = await untilAborted(signal, reader.read()).catch(async (error: unknown) => {
-				done()
-				await reader.cancel(error).catch(() => undefined)
-				throw error
-			})
-			if (read.done) {
-				done()
-				controller.close()
-				return
-			}
+	try {
+		for (;;) {
+			const read = await untilAborted(signal, reader.read())
+			if (read.done) break
 			seen += read.value.byteLength
-			if (seen > max) {
-				done()
-				await reader.cancel()
-				controller.error(tooLarge())
-				return
-			}
-			controller.enqueue(read.value)
-		},
-		async cancel(reason) {
-			done()
-			await reader.cancel(reason)
-		},
-	})
-	const answer = new Response(bound, {
-		status: response.status,
-		statusText: response.statusText,
-		headers: response.headers,
-	})
-	return withRequestUrl(answer, url, redirected)
+			if (seen > max) throw tooLarge()
+			chunks.push(read.value)
+		}
+	} catch (error) {
+		void reader.cancel(error).catch(() => undefined)
+		throw error
+	}
+	const bytes = new Uint8Array(seen)
+	let offset = 0
+	for (const chunk of chunks) {
+		bytes.set(chunk, offset)
+		offset += chunk.byteLength
+	}
+	return bytes
 }
 
 /**
