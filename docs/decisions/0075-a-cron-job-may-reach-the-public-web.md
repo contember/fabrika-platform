@@ -61,7 +61,7 @@ request. Gaining it is a widening for closer review.**
 Before each hop, and so again after each redirect:
 
 - **By the URL** (`publicEgressRefusal` in `@fabrika/auth-core`, which the checker shares): a scheme other than
-  `https:` and `http:`, a port other than the default, every IP literal (a public one too: a website has a name), a
+  `https:` and `http:`, a port other than the default, credentials in the URL (`user:pass@`), every IP literal (a public one too: a website has a name), a
   name of one label (`localhost`, `iam`, a Zerops service), and every name under `localhost`, `local`, `internal`,
   `intranet`, `lan`, `home`, `corp`, `private`, `arpa`, `test`, `invalid`, `example`, `onion`, `alt`, `zerops`,
   and the platform subdomains an installation is served on beside its own domains: `workers.dev`, where its Workers
@@ -77,8 +77,15 @@ Before each hop, and so again after each redirect:
   so. Every such domain sits behind its proxy, which admits the job as it admits anyone on the internet.
 - **By the address, where the runtime resolves.** The Bun adapter resolves the host (`node:dns`, every address) and
   the guard refuses a name with any address that is not public unicast: private, loopback, link-local (the metadata
-  address), shared, multicast, reserved, documentation, and IPv6 forms that carry an IPv4 address it cannot vouch for.
-  A Worker passes no resolver.
+  address), shared (CGNAT, which holds Alibaba's metadata address), multicast, reserved, documentation, IPv6 forms that
+  carry an IPv4 address it cannot vouch for, and Azure's host endpoint `168.63.129.16`, a public address that answers
+  inside the VM. A Worker passes no resolver.
+- **Then connects to the address it checked.** A hop the resolver admitted is sent to the checked address (IPv4 first:
+  a container without an IPv6 route still connects), with the checked name as `Host` and `keepalive: false`. Bun
+  sends that `Host`, checks the server's certificate against it, and under `keepalive: false` takes no pooled
+  connection; Bun keys its pool by address and port, so a pooled connection may have been checked against another
+  name's certificate. The name is resolved once per hop, so an answer that changes after the check (DNS rebinding)
+  reaches nothing. `public-egress-pinning.test.ts` holds the pinned Bun release to all three behaviours.
 
 A refusal is `capability_refused: refused_egress`, and the job fails with it.
 
@@ -113,15 +120,16 @@ A refusal is `capability_refused: refused_egress`, and the job fails with it.
 
 ### 5. What is enforced where
 
-| Check                                          | Bun (Zerops, local)         | Cloudflare object                                       |
-| ---------------------------------------------- | --------------------------- | ------------------------------------------------------- |
-| Scheme, port, IP literal, refused name suffix  | guard                       | guard                                                   |
-| The installation's hosts                       | guard                       | guard                                                   |
-| A public name of a private address             | guard, at each hop          | not checked: Cloudflare's network decides where it goes |
-| Each redirect hop                              | guard                       | guard                                                   |
-| Time and body bounds                           | guard                       | guard                                                   |
-| DNS rebinding between the check and connecting | not prevented               | not applicable                                          |
-| Code that bypasses the guard                   | not prevented (ADR-0012 §8) | not prevented (ADR-0012 §8)                             |
+| Check                                          | Bun (Zerops, local)                    | Cloudflare object                                                                                                |
+| ---------------------------------------------- | -------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| Scheme, port, IP literal, refused name suffix  | guard                                  | guard                                                                                                            |
+| The installation's hosts                       | guard                                  | guard                                                                                                            |
+| Credentials in the URL                         | guard                                  | guard                                                                                                            |
+| A public name of a private address             | guard, at each hop                     | not checked by the guard (no resolver): an installation on Cloudflare has no private network or metadata address |
+| Each redirect hop                              | guard                                  | guard                                                                                                            |
+| Time and body bounds                           | guard                                  | guard                                                                                                            |
+| DNS rebinding between the check and connecting | guard: connects to the checked address | not applicable: the guard resolves nothing                                                                       |
+| Code that bypasses the guard                   | not prevented (ADR-0012 §8)            | not prevented (ADR-0012 §8)                                                                                      |
 
 The guard is still no sandbox. It stops a mistake and a page that points a crawler at the installation; it does not
 contain code written to escape it.
@@ -139,9 +147,12 @@ contain code written to escape it.
 - **Rollout on an existing installation.** The variable is a managed variable, written by each deploy like
   `FABRIKA_APP_ORIGIN`: no generated file and no provider state changes, and `fabrika platform upgrade` needs no step.
   An application on an older framework release never declares the form and ignores the variable.
-- On Bun each hop costs one name resolution before the connection, which resolves the name again. A name whose answer
-  changes between the two (DNS rebinding) can still reach a private address; closing that needs connecting to the
-  checked address, which `fetch` does not offer.
+- On Bun each hop costs one name resolution and a fresh connection: a crawl reuses no connection between its requests.
+  The pinning relies on how Bun's `fetch` treats `Host` and `keepalive`, which is not part of the Fetch standard; a Bun
+  upgrade that changes either fails `public-egress-pinning.test.ts`.
+- On Cloudflare the guard has no resolver and checks no address. A Worker's subrequest leaves through Cloudflare's
+  network, and an installation there has no private network or metadata address for a public name to point at; the
+  URL rules and the installation's hosts still hold.
 
 ## Alternatives considered
 
@@ -152,6 +163,10 @@ contain code written to escape it.
   deployment, and the crawl would leave the review entirely.
 - **`'public'` on any site that declares egress today.** A query or a mutation that fetches a caller's URL is a
   request-forgery proxy for that caller, and on Cloudflare a mutation would hold the whole environment while it waits.
+- **Resolving, checking, then letting `fetch` resolve again.** Simpler, but a name whose answer changes between the
+  two lookups reaches a private address. Connecting to the checked address closes that on Bun.
+- **Resolving names over DNS-over-HTTPS on Cloudflare.** It would check an answer Cloudflare's own connection does not
+  use, against a network that holds nothing private of the installation.
 - **Refusing only private IP literals and leaving names to the runtime.** On Workers that would be enough, since no
   private network is reachable; on Zerops it is not, because a public name can resolve to a private address. Refusing
   every IP literal, and resolving names where the runtime can, holds on both.

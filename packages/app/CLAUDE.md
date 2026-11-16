@@ -54,7 +54,8 @@ bun test src/__tests__/jobs.test.ts             # the job runner: leases, fenced
 bun test src/__tests__/error-reports.test.ts    # what a report carries: scrubbing, frames, causes, caps; crash reports of both adapters
 bun test src/__tests__/intake.test.ts           # the intake recipe's job: each stop, bad records, batches, locks, keys (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/request-signal.test.ts   # ctx.signal of a request handler: a cancelled request, the budget
-bun test src/__tests__/public-egress.test.ts    # a cron job's egress: 'public': the URL rules, the installation's hosts, redirects, bounds, the resolver (the job run needs FABRIKA_TEST_POSTGRES_URL)
+bun test src/__tests__/public-egress.test.ts    # a cron job's egress: 'public': the URL rules, the installation's hosts, redirects, bounds, the resolver, pinning (the job run needs FABRIKA_TEST_POSTGRES_URL)
+bun test src/__tests__/public-egress-pinning.test.ts  # what a pinned hop relies on in Bun: Host, the certificate checked against it, no pooled connection (TLS half needs openssl)
 bun test src/__tests__/request-budget.test.ts   # a writing mutation past REQUEST_BUDGET_MS: aborted, 500, nothing written (10 s; needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/outbox-rule.test.ts      # the generated cases of an outbox write and of an outbound call (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/job-types.test.ts        # the job handler mistakes, compiled by tsc
@@ -780,9 +781,10 @@ vocabulary (`packages/db/CLAUDE.md`).
 - **A cron job's `egress: 'public'` reaches public hosts only** (ADR-0075): `runAsSite` takes the job runner's
   `PublicEgressRules` (`publicEgressRules`: the hosts the framework variables and `FABRIKA_EGRESS_REFUSED_HOSTS` name,
   and the adapter's `resolveHost`, which only the Bun adapter passes). Each hop goes out with `redirect: 'manual'` after
-  `publicEgressRefusal` (`@fabrika/auth-core`, shared with the checker) and the resolver admit it; the guard follows
-  redirects itself and bounds each request (`PUBLIC_EGRESS_LIMITS`). No other site runs with the rules: `siteEgress`
-  turns a `'public'` it was never meant to hold into no reach.
+  `publicEgressRefusal` (`@fabrika/auth-core`, shared with the checker) and the resolver admit it, to the checked
+  address with the checked name as `Host` and `keepalive: false` (Bun pools by address; `public-egress-pinning.test.ts`
+  holds Bun to both); the guard follows redirects itself and bounds each request (`PUBLIC_EGRESS_LIMITS`). No other
+  site runs with the rules: `siteEgress` turns a `'public'` it was never meant to hold into no reach.
 - **A webhook's `limits` bound its body and its handler** (`WEBHOOK_LIMITS`): `maxBytes` (1 MiB by default and at most)
   is its row's body limit, read within the deadline `bodyDeadlineMs` derives from it; `timeoutMs` (10 s, at most 60 s)
   is its handler's, which the artifact records on the mount and the delivery claim's lease outlasts.

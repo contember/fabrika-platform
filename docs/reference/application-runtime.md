@@ -1335,7 +1335,7 @@ origins; the build and the types refuse `'public'` there. The artifact records `
 format stays 2. The guard (`implement/egress.ts`, over `publicEgressRefusal` in `@fabrika/auth-core`) refuses before
 each hop, with `capability_refused: refused_egress`:
 
-- another scheme, a non-default port, every IP literal, a name of one label, and a name under `localhost`, `local`,
+- another scheme, a non-default port, credentials in the URL, every IP literal, a name of one label, and a name under `localhost`, `local`,
   `internal`, `intranet`, `lan`, `home`, `corp`, `private`, `arpa`, `test`, `invalid`, `example`, `onion`, `alt`,
   `zerops`, `workers.dev` or `zerops.app` (the platform subdomains of an installation's Workers, proxies, Control and
   IAM, which Control holds no list of), and a name with an empty label; trailing dots are dropped first;
@@ -1345,8 +1345,11 @@ each hop, with `capability_refused: refused_egress`:
   otherwise). The list is the registry at the deploy: a domain added later is refused from the environment's next
   deploy;
 - on Bun, a host with any resolved address that is not public unicast (`node:dns`, every address; the Bun adapter
-  passes `resolveHost` to `boot`). A Worker exposes no resolution, so on Cloudflare a public name of a private address
-  is Cloudflare's network's to route, and DNS rebinding between the check and Bun's own connection is not prevented.
+  passes `resolveHost` to `boot`), Azure's host endpoint `168.63.129.16` included. The hop is then sent to the checked
+  address (IPv4 first) with the checked name as `Host` and `keepalive: false`, so the name is resolved once per hop and
+  a changed answer (DNS rebinding) reaches nothing; Bun checks the certificate against that `Host` and takes no pooled
+  connection, which it keys by address (`public-egress-pinning.test.ts`). A Worker exposes no resolution, so on
+  Cloudflare the guard checks no address; an installation there has no private network for one to point at.
 
 Every hop goes out with `redirect: 'manual'`. Under the caller's `follow` the guard follows at most 10 redirects
 itself, checking each; a 303 (and a 301 or 302 of a `POST`) becomes a `GET` without its body, and another origin loses

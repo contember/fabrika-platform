@@ -132,6 +132,9 @@ describe('the guard under public egress', () => {
 		['a workers.dev route', 'https://crm-prod.acme.workers.dev/'],
 		['a port', 'https://www.example.com:8443/'],
 		['another scheme', 'ftp://ftp.example.com/'],
+		['credentials in the URL', 'https://crawler:secret@www.example.com/'],
+		['the IPv4-mapped loopback', 'http://[::ffff:127.0.0.1]/'],
+		["Azure's host endpoint", 'http://168.63.129.16/metadata/instance'],
 	])('refuses %s before anything is sent', async (_name, url) => {
 		const { calls, stub } = stubFetch(() => new Response('ok'))
 		restore = () => stub.mockRestore()
@@ -181,6 +184,20 @@ describe('the guard under public egress', () => {
 		calls.length = 0
 		expect(await refusalOf(() => runAsSite(site, NO_RULES, () => fetch('https://www.example.com/sneaky')))).toMatchObject({ reason: 'refused_egress' })
 		expect(calls.map((call) => call.url)).toEqual(['https://www.example.com/sneaky'])
+	})
+
+	test.each([
+		['the metadata address', 'http://169.254.169.254/latest/meta-data/'],
+		['a private address', 'https://10.0.0.5/'],
+		['localhost', 'http://localhost:8080/'],
+		['an internal name', 'http://metadata.google.internal/computeMetadata/v1/'],
+		['credentials', 'https://user:pass@cdn.example.net/'],
+		['another scheme', 'file:///etc/passwd'],
+	])('refuses a redirect to %s, and sends nothing to it', async (_name, location) => {
+		const { calls, stub } = stubFetch(() => new Response(null, { status: 302, headers: { location } }))
+		restore = () => stub.mockRestore()
+		expect(await refusalOf(() => runAsSite(site, NO_RULES, () => fetch('https://www.example.com/')))).toMatchObject({ reason: 'refused_egress' })
+		expect(calls.map((call) => call.url)).toEqual(['https://www.example.com/'])
 	})
 
 	test("hands a manual redirect to the caller, refuses one under 'error', and stops past the limit", async () => {
@@ -338,7 +355,7 @@ describe('the guard under public egress', () => {
 
 	test('with a resolver, refuses a public name of a private address, at every hop', async () => {
 		const { calls, stub } = stubFetch((url) =>
-			url === 'https://www.example.com/'
+			url === 'https://93.184.216.34/'
 				? new Response(null, { status: 302, headers: { location: 'https://rebound.example.net/' } })
 				: new Response('ok')
 		)
@@ -358,7 +375,57 @@ describe('the guard under public egress', () => {
 		expect(await refusalOf(() => runAsSite(site, rules, () => fetch('https://www.example.com/')))).toMatchObject({
 			message: expect.stringContaining('rebound.example.net resolves to ::ffff:10.1.2.3'),
 		})
-		expect(calls.map((call) => call.url)).toEqual(['https://www.example.com/'])
+		expect(calls.map((call) => call.url)).toEqual(['https://93.184.216.34/'])
+	})
+
+	test.each([
+		['fe80::1', 'link-local'],
+		['fd00:ec2::254', "AWS's IPv6 metadata address"],
+		['100.100.100.200', "Alibaba's metadata address (shared address space)"],
+		['192.0.0.192', "Oracle's metadata address"],
+		['100.64.0.1', 'shared address space (CGNAT)'],
+		['::ffff:169.254.169.254', 'the metadata address, IPv4-mapped'],
+		['64:ff9b::a9fe:a9fe', 'the metadata address behind NAT64'],
+	])('with a resolver, refuses a public name of %s (%s)', async (address) => {
+		const { calls, stub } = stubFetch(() => new Response('ok'))
+		restore = () => stub.mockRestore()
+		const rules: PublicEgressRules = { refusedHosts: new Set(), resolve: async () => ['93.184.216.34', address] }
+		expect(await refusalOf(() => runAsSite(site, rules, () => fetch('https://mixed.example.com/')))).toMatchObject({
+			reason: 'refused_egress',
+			message: expect.stringContaining(`resolves to ${address}`),
+		})
+		expect(calls).toEqual([])
+	})
+
+	test('connects each hop to the address it checked, with the name as Host, so a name that rebinds reaches nothing new', async () => {
+		const { calls, stub } = stubFetch((url) =>
+			url === 'https://93.184.216.34/start'
+				? new Response(null, { status: 302, headers: { location: 'https://v6.example.net/next' } })
+				: new Response('ok')
+		)
+		restore = () => stub.mockRestore()
+		// A rebinding name: the first answer is public, every later one private.
+		const asked: string[] = []
+		const answers: Readonly<Record<string, readonly (readonly string[])[]>> = {
+			'www.example.com': [['2606:2800:220:1:248:1893:25c8:1946', '93.184.216.34'], ['127.0.0.1']],
+			'v6.example.net': [['2a00:1450:4014:80c::200e'], ['10.0.0.1']],
+		}
+		const rules: PublicEgressRules = {
+			refusedHosts: new Set(),
+			resolve: async (host) => {
+				const answer = answers[host]?.[asked.filter((name) => name === host).length] ?? []
+				asked.push(host)
+				return answer
+			},
+		}
+		const response = await runAsSite(site, rules, () => fetch('https://WWW.Example.com./start', { headers: { host: 'iam.acme.cz' } }))
+		expect(await response.text()).toBe('ok')
+		expect(asked).toEqual(['www.example.com', 'v6.example.net'])
+		expect(calls.map((call) => call.url)).toEqual(['https://93.184.216.34/start', 'https://[2a00:1450:4014:80c::200e]/next'])
+		expect(calls.map((call) => new Headers(call.init?.headers).get('host'))).toEqual(['www.example.com', 'v6.example.net'])
+		// Bun pools connections by address: a pooled one may have been checked against another name's certificate.
+		expect(calls.map((call) => call.init?.keepalive)).toEqual([false, false])
+		expect(response.url).toBe('https://v6.example.net/next')
 	})
 
 	test('a site with origins keeps its exact list: public egress is a cron job declaration, not a wider list', async () => {
@@ -443,6 +510,6 @@ describe.skipIf(!hasPostgres)('a cron job that declares it', () => {
 				errors.mockRestore()
 			}
 		}
-		expect(calls.map((call) => call.url)).toEqual(['https://www.example.com/'])
+		expect(calls.map((call) => call.url)).toEqual(['https://93.184.216.34/'])
 	})
 })

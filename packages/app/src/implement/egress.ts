@@ -25,7 +25,7 @@ export type HostResolver = (hostname: string) => Promise<readonly string[]>
 export interface PublicEgressRules {
 	/** The installation's own hosts, normalized: every host a framework variable names, and `FABRIKA_EGRESS_REFUSED_HOSTS`. */
 	readonly refusedHosts: ReadonlySet<string>
-	/** Resolves each hop's host before it is sent, so a public name of a private address is refused; `null` on Cloudflare. */
+	/** Resolves each hop's host once, before it is sent to an address checked here; `null` on Cloudflare. */
 	readonly resolve: HostResolver | null
 }
 
@@ -320,8 +320,16 @@ async function follow(
 	// Read once, so that a 307 or a 308 sends it again.
 	let body: ArrayBuffer | null = request.body === null ? null : await untilAborted(signal, request.arrayBuffer())
 	for (let hop = 0;; hop++) {
-		await admit(site, rules, url, signal)
-		const response = await send(url.href, { method, headers: new Headers(headers), body, redirect: 'manual', signal })
+		const address = await admit(site, rules, url, signal)
+		const response = await send(address === null ? url.href : pinnedUrl(url, address), {
+			method,
+			headers: hopHeaders(headers, url, address),
+			body,
+			redirect: 'manual',
+			signal,
+			// Bun pools connections by address and port: a pooled one was checked against another name's certificate.
+			...(address === null ? {} : { keepalive: false }),
+		})
 		const location = REDIRECTS.has(response.status) ? response.headers.get('location') : null
 		if (location === null || mode === 'manual') {
 			return await capped(site, response, url, hop > 0, signal, done)
@@ -348,20 +356,24 @@ async function follow(
 	}
 }
 
-/** Refuses a hop public egress does not reach: by the URL, by the installation's hosts, by what its name resolves to. */
-async function admit(site: string, rules: PublicEgressRules, url: URL, signal: AbortSignal): Promise<void> {
+/**
+ * Refuses a hop public egress does not reach: by the URL, by the installation's hosts, by what its name resolves to.
+ * Answers the checked address the hop must connect to, or `null` where the runtime resolves nothing (a Worker).
+ */
+async function admit(site: string, rules: PublicEgressRules, url: URL, signal: AbortSignal): Promise<string | null> {
 	const refusal = publicEgressRefusal(url, rules.refusedHosts)
 	if (refusal !== null) {
 		throw new CapabilityRefusedError('refused_egress', `${site} calls ${url.origin}, which public egress refuses: ${refusal}`)
 	}
 	const resolve = rules.resolve
 	if (resolve === null) {
-		return
+		return null
 	}
 	const host = normalizedHost(url.hostname)
 	const addresses = await untilAborted(signal, platformCall(() => resolve(host)))
 	const internal = addresses.find((address) => !isPublicAddress(address))
-	if (addresses.length === 0 || internal !== undefined) {
+	const address = addresses.find((candidate) => !candidate.includes(':')) ?? addresses[0]
+	if (address === undefined || internal !== undefined) {
 		throw new CapabilityRefusedError(
 			'refused_egress',
 			`${site} calls ${url.origin}, which public egress refuses: ${
@@ -369,6 +381,27 @@ async function admit(site: string, rules: PublicEgressRules, url: URL, signal: A
 			}`,
 		)
 	}
+	return address
+}
+
+/**
+ * `url` with its host replaced by the checked `address`, so the runtime connects where the guard looked and never
+ * resolves the name again (DNS rebinding). IPv4 first: a container without an IPv6 route still connects.
+ */
+function pinnedUrl(url: URL, address: string): string {
+	const pinned = new URL(url.href)
+	pinned.hostname = address.includes(':') ? `[${address}]` : address
+	return pinned.href
+}
+
+/**
+ * A hop's headers: for a pinned hop, `Host` names the checked host, which Bun sends and checks the server's certificate
+ * against (`public-egress-pinning.test.ts` holds the pinned Bun release to it).
+ */
+function hopHeaders(headers: Headers, url: URL, address: string | null): Headers {
+	const hop = new Headers(headers)
+	if (address !== null) hop.set('host', normalizedHost(url.hostname))
+	return hop
 }
 
 /**
