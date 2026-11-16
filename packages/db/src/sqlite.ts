@@ -10,6 +10,7 @@ import {
 	type DialectAdapter,
 	type Driver,
 	Kysely,
+	type OperationNode,
 	OperatorNode,
 	type QueryResult,
 	type SelectModifierNode,
@@ -17,6 +18,8 @@ import {
 	SqliteAdapter,
 	SqliteIntrospector,
 	SqliteQueryCompiler,
+	ValueListNode,
+	ValueNode,
 } from 'kysely'
 import { Database, freezePrototypeChain, type LooseDB, type TransactionRunner } from './database'
 import { DatabaseError, QueryRefusedError } from './errors'
@@ -39,6 +42,14 @@ export interface SqliteStorage {
 	/** Runs `closure` in one transaction of its own, nested in a savepoint inside an open one; rolls back when it throws. */
 	transactionSync<T>(closure: () => T): T
 }
+
+// Captured at load, as the compiler's prototype is frozen at load: a later patch would change what a list binds.
+const stringify = JSON.stringify
+const test = RegExp.prototype.test
+const apply = Reflect.apply
+const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/
+
+const MEMBERSHIP_OPERATORS: ReadonlySet<string> = new Set(['in', 'not in'])
 
 const LIKE_OPERATORS: ReadonlyMap<string, string> = new Map([
 	['like', 'like'],
@@ -64,7 +75,17 @@ class SqliteCompiler extends SqliteQueryCompiler {
 	}
 
 	protected override visitBinaryOperation(node: BinaryOperationNode): void {
-		const pattern = OperatorNode.is(node.operator) ? LIKE_OPERATORS.get(node.operator.operator) : undefined
+		const operator = OperatorNode.is(node.operator) ? node.operator.operator : undefined
+		const texts = operator !== undefined && MEMBERSHIP_OPERATORS.has(operator) ? jsonTexts(node.rightOperand) : undefined
+		if (texts !== undefined) {
+			// workerd binds at most 100 parameters a statement, and a Within alone carries up to MAX_WITHIN_VALUES.
+			this.visitNode(node.leftOperand)
+			this.append(` ${operator} (select value from json_each(`)
+			this.appendValue(texts)
+			this.append('))')
+			return
+		}
+		const pattern = operator === undefined ? undefined : LIKE_OPERATORS.get(operator)
 		if (pattern === undefined) {
 			super.visitBinaryOperation(node)
 			return
@@ -79,6 +100,30 @@ class SqliteCompiler extends SqliteQueryCompiler {
 		const modifiers = node.endModifiers?.filter((modifier) => !isLockModifier(modifier))
 		super.visitSelectQuery({ ...node, endModifiers: modifiers === undefined || modifiers.length === 0 ? undefined : modifiers })
 	}
+}
+
+/**
+ * An `in` list of bound texts as one JSON array text, or undefined when it holds anything else. Each text is serialized
+ * on its own (a string has no `toJSON` to consult). A text with a lone surrogate keeps its own parameter: each driver
+ * encodes one its own way, and json_each would not decode it to the same bytes.
+ */
+function jsonTexts(node: OperationNode): string | undefined {
+	if (!ValueListNode.is(node)) {
+		return undefined
+	}
+	const values = node.values
+	let json = '['
+	for (let index = 0; index < values.length; index++) {
+		const value = values[index]
+		if (value === undefined || !ValueNode.is(value) || value.immediate === true || typeof value.value !== 'string') {
+			return undefined
+		}
+		if (apply(test, LONE_SURROGATE, [value.value])) {
+			return undefined
+		}
+		json += (index === 0 ? '' : ',') + stringify(value.value)
+	}
+	return `${json}]`
 }
 
 function sqliteParameter(parameter: unknown): unknown {

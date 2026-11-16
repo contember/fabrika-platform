@@ -775,9 +775,9 @@ function claiming(parts: DataLayerParts, context: TableContext, site: DataSite, 
 }
 
 /**
- * How many claimed ids one lease update binds. SQLite in a Durable Object binds at most 100 parameters a statement, and
- * the update binds the attempts, the due, the version step and the scope's values beside the ids: a claim of one
- * update per attempt count failed every run once about 100 rows with the same attempts were due, and the queue stopped.
+ * How many claimed ids one lease update names. SQLite in a Durable Object binds at most 100 parameters a statement; its
+ * compiler now binds an `in` list of texts (the ids, a Within's values) as one JSON parameter, so this only bounds a
+ * statement's size. Every chunk runs in the claim's one fenced transaction.
  */
 const CLAIM_UPDATE_IDS = 50
 

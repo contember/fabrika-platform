@@ -131,7 +131,10 @@ pass a recording one); `Database.fromEngine` takes another engine (`openSqlite`)
   `stored-files.ts`; a pair or a switch on `session.dialect` in `admissions.ts` and `file-columns.ts`), and the session's
   dialect picks the one `runFixedStatement` runs. A new framework statement gets both texts and a test on both.
 - **The SQLite compiler** (`SqliteCompiler` in `sqlite.ts`, frozen at load like the Postgres one) binds a `Date` as its
-  ISO text, a boolean as 0 or 1, a `bigint` as a safe integer (else `invalid_value`); it gives every `like` `escape '\'`,
+  ISO text, a boolean as 0 or 1, a `bigint` as a safe integer (else `invalid_value`); it writes an `in` / `not in` list
+  of bound texts (a Within's values, a claim's ids) as `in (select value from json_each(?))`, one JSON parameter,
+  because workerd binds at most 100 parameters a statement and a Within carries up to `MAX_WITHIN_VALUES`; any other
+  list keeps one parameter a value. It gives every `like` `escape '\'`,
   writes `ilike` as `like` (case-insensitive for ASCII only), and drops every lock modifier (`FOR UPDATE`, `FOR SHARE`,
   `SKIP LOCKED`, `NOWAIT`): while a transaction is open the object serves no other event, so no row lock is needed, and
   the SQLite texts carry none either. An order term states Postgres's null order (`nodes.ts`), so a keyset page reads the
@@ -374,8 +377,8 @@ pass a recording one); `Database.fromEngine` takes another engine (`openSqlite`)
   `Within` of `all`: every parent row), alone or after an AND
   tree of `column = $n`: no column of the view stands in for the parent row.
 - **A Within carries at most `MAX_WITHIN_VALUES` (1000) scope values, its own, its containers' and its contained grants' together.** Each
-  is one bound parameter of every statement it scopes (Postgres binds at most 65535); the framework refuses to
-  mint a larger one and the layer refuses to use one.
+  is one bound parameter of every statement it scopes on Postgres (which binds at most 65535; on SQLite the compiler
+  binds the list as one JSON parameter); the framework refuses to mint a larger one and the layer refuses to use one.
 - **A Ref's predicate covers every link of its chain, one equality per chain column.** A table carries
   a column for each ancestor (`TableModel.chain`, resolved by `defineTables` through the tables that own
   each dimension); a `Ref` whose chain names a dimension the table has no column for is refused, never
