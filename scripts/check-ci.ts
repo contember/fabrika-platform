@@ -276,19 +276,18 @@ const runTestMatrix = async (env: Record<string, string | undefined>, backends: 
 		TEST_SHARDS.map((shard) => ({ label: `test (${postgres.label}, shard ${shard}/${TEST_SHARDS.length})`, shard, postgres }))
 	)
 	const runJob = (job: TestJob): Promise<boolean> => runTestJob(job, env, backends.s3, results)
-	const passed: boolean[] = []
-	if (backends.concurrent) {
-		// Settle every job before throwing, so no job is still running when the containers are removed.
-		const settled = await Promise.allSettled(jobs.map(runJob))
-		for (const outcome of settled) {
-			if (outcome.status === 'rejected') throw outcome.reason
-			passed.push(outcome.value)
-		}
-	} else {
-		for (const job of jobs) passed.push(await runJob(job))
+	if (!backends.concurrent) {
+		for (const job of jobs) if (!await runJob(job)) throw new StepFailure(`${job.label} failed`)
+		return
 	}
-	const failed = jobs.filter((_, index) => passed[index] === false)
-	if (failed.length > 0) throw new StepFailure(`${failed.map((job) => job.label).join(', ')} failed`)
+	// Settle every job before throwing, so no job is still running when the containers are removed.
+	const settled = await Promise.allSettled(jobs.map(runJob))
+	const failed = jobs.flatMap((job, index) => {
+		const outcome = settled[index]
+		if (outcome?.status === 'rejected') return [`${job.label} (${outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason)})`]
+		return outcome?.value === false ? [job.label] : []
+	})
+	if (failed.length > 0) throw new StepFailure(`${failed.join(', ')} failed`)
 }
 
 const run = async (results: StepResult[], skipped: string[]): Promise<void> => {

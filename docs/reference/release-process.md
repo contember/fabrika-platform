@@ -15,7 +15,7 @@ The workflow is also callable by `.github/workflows/release.yml`. A tag cannot r
 
 ### The same gates locally
 
-`bun run check:ci` (`scripts/check-ci.ts`) runs every `run` step of `ci.yml` in order: the frozen install once, the quality steps, the test matrix, the builds and the release-artifact steps. It stops at the first failing step and names it; in the test matrix it lets the running jobs finish, prints the output of each failed one and names them all.
+`bun run check:ci` (`scripts/check-ci.ts`) runs every `run` step of `ci.yml` in order: the frozen install once, the quality steps, the test matrix, the builds and the release-artifact steps. It stops at the first failing step and names it; when the test matrix runs concurrently, it lets every job finish, prints the output of each failed one and names them all.
 
 - **Test matrix.** CI's test job runs once per PostgreSQL major and shard: `bun run test:unit --shard=<n>/4` (bun splits the main suite's files round-robin), and in shard 1 also `bun run test:isolated`. `bun run test` runs both parts unsharded.
 - **PostgreSQL.** When `FABRIKA_TEST_POSTGRES_URL` is unset and docker answers, each job of the matrix gets a throwaway `postgres:<major>-alpine` container on a random loopback port, removed after its run, and the jobs run concurrently with their output captured. A set `FABRIKA_TEST_POSTGRES_URL` replaces the majors, and the shards then run against it one at a time.
