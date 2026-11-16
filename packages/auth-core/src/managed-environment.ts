@@ -3,6 +3,7 @@ import { FABRIKA_CONTRACT_DIGEST } from './endpoint-digest'
 import { FABRIKA_IAM_ISSUER } from './environment'
 import {
 	FABRIKA_APP_ORIGIN,
+	FABRIKA_EGRESS_REFUSED_HOSTS,
 	FABRIKA_OPS_KEY_DIGESTS,
 	FABRIKA_TOKEN_KEYS,
 	FRAMEWORK_VARIABLE_PREFIXES,
@@ -35,6 +36,7 @@ export const MANAGED_VARIABLE_NAMES = [
 	FABRIKA_APP_ORIGIN,
 	FABRIKA_TOKEN_KEYS,
 	FABRIKA_OPS_KEY_DIGESTS,
+	FABRIKA_EGRESS_REFUSED_HOSTS,
 ] as const satisfies readonly FrameworkVariableName[]
 
 export type ManagedVariableName = (typeof MANAGED_VARIABLE_NAMES)[number]
@@ -53,6 +55,8 @@ const PUBLIC_VARIABLES: ReadonlySet<string> = new Set<FrameworkVariableName>([
 	FABRIKA_APP_ORIGIN,
 	// SHA-256 of 256-bit random keys: a digest neither is a key nor lets anyone forge one.
 	FABRIKA_OPS_KEY_DIGESTS,
+	// Host names anyone can look up in DNS.
+	FABRIKA_EGRESS_REFUSED_HOSTS,
 ])
 
 const PLATFORM_URL_VARIABLES: ReadonlySet<string> = new Set(PLATFORM_RECEIVERS.map((receiver) => platformTransportVariables(receiver).url))

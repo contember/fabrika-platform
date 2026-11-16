@@ -1,5 +1,5 @@
 import { type AnyContract, compileContract, ContractError } from '@fabrika/app/contract'
-import { type ContractArtifact, egressAdmits, type EgressEntry, parseEgressEntry } from '@fabrika/auth-core'
+import { type ContractArtifact, egressAdmits, type EgressEntry, parseEgressEntry, PUBLIC_EGRESS, publicEgressRefusal } from '@fabrika/auth-core'
 import { accessTables, type TablePolicies, tablePolicies, type Tables } from '@fabrika/db/tables'
 import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -191,6 +191,8 @@ const URL_ENDPOINT_ALLOWED = "the id of a procedure of the contract: ctx.url('<m
 interface CompiledReach {
 	readonly procedures: ReadonlySet<string>
 	readonly egress: readonly EgressEntry[]
+	/** Some cron job declares `egress: 'public'`. */
+	readonly publicEgress: boolean
 }
 
 /** The contract's artifact, or `null` when it does not compile, which its own rule reports. */
@@ -211,22 +213,27 @@ const compiledReach = (artifact: ContractArtifact): CompiledReach => {
 	return {
 		procedures: new Set(procedures.map((row) => row.id)),
 		egress: Object.values(artifact.declared ?? {}).flatMap((reach) =>
-			(reach.egress ?? []).flatMap((value) => {
+			(reach.egress === undefined || reach.egress === PUBLIC_EGRESS ? [] : reach.egress).flatMap((value) => {
 				const parsed = parseEgressEntry(value)
 				return parsed.ok ? [parsed.entry] : []
 			})
 		),
+		publicEgress: Object.values(artifact.declared ?? {}).some((reach) => reach.egress === PUBLIC_EGRESS),
 	}
 }
 
 /**
  * A `fetch` of an absolute URL stands when no site declares its origin (a static prefix that ends inside the host is
- * not accepted, nor an interpolated label a pattern does not cover), and every one stands when the contract does not
- * compile. A `ctx.url` stands when the contract compiles and names no such procedure. The runtime guard on `fetch`
- * still checks the site that runs.
+ * not accepted, nor an interpolated label a pattern does not cover) and, where a cron job declares `egress: 'public'`,
+ * when public egress would refuse it: another scheme, or a host its URL alone refuses (an IP address, a local or
+ * internal name, a port). A prefix that ends inside the host is then the runtime's to judge. Every one stands when the
+ * contract does not compile. A `ctx.url` stands when the contract compiles and names no such procedure. The runtime
+ * guard on `fetch` still checks the site that runs.
  */
 const contractDependentFindings = (dependent: ContractDependent, reach: CompiledReach | null): Finding[] => [
-	...dependent.fetches.filter((fetch) => reach === null || !isDeclaredFetch(fetch, reach.egress)).map(({ finding }) => finding),
+	...dependent.fetches.filter((fetch) =>
+		reach === null || (!isDeclaredFetch(fetch, reach.egress) && !(reach.publicEgress && isPublicTarget(fetch.target)))
+	).map(({ finding }) => finding),
 	...(reach === null ? [] : dependent.urls.filter(({ endpoint }) => !reach.procedures.has(endpoint)).map(({ finding }) => finding)),
 ]
 
@@ -246,6 +253,19 @@ const urlOf = (value: string): URL | null => {
 		return new URL(value)
 	} catch {
 		return null
+	}
+}
+
+/** A static prefix public egress may reach: http(s), and a host that is not yet complete or that its URL admits. */
+const isPublicTarget = (target: string): boolean => {
+	const scheme = /^(https?):\/\//i.exec(target)
+	if (scheme === null) return false
+	const rest = target.slice(scheme[0].length)
+	if (!/[/?#]/.test(rest)) return true
+	try {
+		return publicEgressRefusal(new URL(target)) === null
+	} catch {
+		return false
 	}
 }
 
