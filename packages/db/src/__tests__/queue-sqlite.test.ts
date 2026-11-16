@@ -126,4 +126,27 @@ describe('a claim through a Within of many scope values on SQLite', () => {
 			expect(attempts()).toEqual([{ attempts: 0, n: 5 }, { attempts: 1, n: size }])
 		})
 	}
+
+	test('a toJSON patched onto arrays after load does not widen the bound list', async () => {
+		const orgs = seed(3)
+		const original = Object.getOwnPropertyDescriptor(Array.prototype, 'toJSON')
+		Object.defineProperty(Array.prototype, 'toJSON', { configurable: true, value: () => orgs })
+		try {
+			expect(await claim([orgs[0] ?? ''], MAX_CLAIM)).toEqual([`r-${orgs[0]}`])
+		} finally {
+			if (original === undefined) Reflect.deleteProperty(Array.prototype, 'toJSON')
+			else Object.defineProperty(Array.prototype, 'toJSON', original)
+		}
+	})
+
+	test('a value with a lone surrogate matches as its bound text did, as U+FFFD', async () => {
+		seed(MAX_WITHIN_VALUES)
+		storage.sql.exec("insert into deals (id, org_id, name) values ('d-x', ?, 'deal')", '\ud800')
+		storage.sql.exec(
+			"insert into report_requests (id, deal_id, org_id, kind, next_attempt_at, version) values ('r-x', 'd-x', ?, 'summary', ?, 1)",
+			'\ud800',
+			new Date(Date.now() - 60_000).toISOString(),
+		)
+		expect(await claim(['\ud800', ...Array.from({ length: 200 }, (_, index) => `none-${index}`)], MAX_CLAIM)).toEqual(['r-x'])
+	})
 })

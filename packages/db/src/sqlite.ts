@@ -43,8 +43,11 @@ export interface SqliteStorage {
 	transactionSync<T>(closure: () => T): T
 }
 
-/** Captured at load, as the compiler's prototype is frozen at load: a later patch would change what a list binds. */
+// Captured at load, as the compiler's prototype is frozen at load: a later patch would change what a list binds.
 const stringify = JSON.stringify
+const replace = String.prototype.replace
+const apply = Reflect.apply
+const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g
 
 const MEMBERSHIP_OPERATORS: ReadonlySet<string> = new Set(['in', 'not in'])
 
@@ -73,12 +76,12 @@ class SqliteCompiler extends SqliteQueryCompiler {
 
 	protected override visitBinaryOperation(node: BinaryOperationNode): void {
 		const operator = OperatorNode.is(node.operator) ? node.operator.operator : undefined
-		const texts = operator !== undefined && MEMBERSHIP_OPERATORS.has(operator) ? textList(node.rightOperand) : undefined
+		const texts = operator !== undefined && MEMBERSHIP_OPERATORS.has(operator) ? jsonTexts(node.rightOperand) : undefined
 		if (texts !== undefined) {
 			// workerd binds at most 100 parameters a statement, and a Within alone carries up to MAX_WITHIN_VALUES.
 			this.visitNode(node.leftOperand)
 			this.append(` ${operator} (select value from json_each(`)
-			this.appendValue(stringify(texts))
+			this.appendValue(texts)
 			this.append('))')
 			return
 		}
@@ -99,19 +102,24 @@ class SqliteCompiler extends SqliteQueryCompiler {
 	}
 }
 
-/** The bound texts of an `in` list, or undefined when it holds anything else: a list of texts binds as one JSON array. */
-function textList(node: OperationNode): string[] | undefined {
+/**
+ * An `in` list of bound texts as one JSON array text, or undefined when it holds anything else. Each text is serialized
+ * on its own (a string has no `toJSON` to consult), and a lone surrogate becomes U+FFFD, as binding the text did.
+ */
+function jsonTexts(node: OperationNode): string | undefined {
 	if (!ValueListNode.is(node)) {
 		return undefined
 	}
-	const texts: string[] = []
-	for (const value of node.values) {
-		if (!ValueNode.is(value) || value.immediate === true || typeof value.value !== 'string') {
+	const values = node.values
+	let json = '['
+	for (let index = 0; index < values.length; index++) {
+		const value = values[index]
+		if (value === undefined || !ValueNode.is(value) || value.immediate === true || typeof value.value !== 'string') {
 			return undefined
 		}
-		texts.push(value.value)
+		json += (index === 0 ? '' : ',') + stringify(apply(replace, value.value, [LONE_SURROGATE, '\ufffd']))
 	}
-	return texts
+	return `${json}]`
 }
 
 function sqliteParameter(parameter: unknown): unknown {
