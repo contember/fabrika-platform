@@ -168,11 +168,14 @@ covers:
 - containment, roles and their actions, membership rules;
 - **the member directory an endpoint may read** (`ctx.members`, recorded in the artifact's `directories`): the
   runtime grants it by the access form alone, so its line says what the handler can do ("can list the members of
-  `team`"), not what it does. A reach that no approved endpoint of the same action has for the same callers widens, with
-  closer review where the dimension shows labels. A reach that an approved endpoint of the same action already has, at
-  least as far and for every caller kind the new one admits, leaves access unchanged and names that endpoint: IAM
-  answers a directory by the action held live on the dimension's value, so no caller learns of a member it could not
-  learn of before. The endpoint's own lines (a new endpoint, a changed requirement) still widen. A removed reach narrows;
+  `team`"), not what it does. The approved endpoints of the same action that reach that directory at least as far, the
+  endpoint's own approved row among them, are its peers. A caller kind the endpoint admits that no peer admits widens,
+  with closer review where the dimension shows labels: a new reach with no peer, and an endpoint that keeps its reach but
+  gains a caller kind, which the line names ("for `machine` callers too"). When the peers admit every caller kind the
+  endpoint admits, a new reach leaves access unchanged and names a peer, one the change keeps where there is one ("as the
+  approved `api.get` already can"; "could" when the change removes it): IAM answers a directory by the action held live
+  on the dimension's value, so no caller learns of a member it could not learn of before. The endpoint's own lines (a
+  new endpoint, a changed requirement) still widen. A removed reach narrows;
 - table and column policies, with the actions each column is read and written with; a new application table
   (`scope: { app }`) is shown with its reason and every action. A table operation that names a list of actions is
   compared by action: an action the list gains widens, one it loses narrows;
@@ -443,7 +446,8 @@ never from the words of a line:
   by the contract's identifiers (a link mount name, a requirement's action); the contract declares no display label for
   them. A group's heading counts its rows, the unit the approver sees ("2 endpoints, both widen access"), not its lines.
 - **A row says each fact once.** A row names its endpoint, route and requirement in its own columns, so a line there
-  shows the words the diff built for a row (`inRow`: "New endpoint, answering a stored file of kind `issued`"), and
+  shows the words the diff built for a row (`inRow`: "New endpoint, answering a stored file of kind `rendered`"; only a
+  comparison that phrases its lines from the endpoint's name sets them, the rest keep their whole line), and
   what stands in front of the endpoint leaves out the notes a line of the row already states (`states`). Identifiers
   set in backticks render as code everywhere on the page.
 - **Rank is derived, there is no severity field.** Groups and facts are ordered by effect and review (a widening with

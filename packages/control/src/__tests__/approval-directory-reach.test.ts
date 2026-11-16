@@ -105,9 +105,35 @@ describe('the member directory an endpoint may read', () => {
 		)
 		expect(directoryLines(baseline, candidate)).toEqual([{
 			effect: 'widens',
-			line: "Endpoint `bots.render` can list the members of `team`, with their labels, which spell users' email addresses",
+			line: "Endpoint `bots.render` can list the members of `team` for `machine` callers too, with their labels, which spell users' email addresses",
 			review: 'closer',
 		}])
+	})
+
+	test('an endpoint that keeps its reach and gains a caller kind no approved endpoint of that reach admitted widens for closer review', () => {
+		const baseline = snapshot(contract("'human'", ''))
+		const candidate = snapshot(contract("'human', 'machine'", ''))
+		expect(directoryLines(baseline, candidate)).toEqual([{
+			effect: 'widens',
+			line: "Endpoint `api.get` can list the members of `team` for `machine` callers too, with their labels, which spell users' email addresses",
+			review: 'closer',
+		}])
+		// A caller kind another approved endpoint of that reach already admits shows no one anything new.
+		const machines = `\tbots: c.rpc('/bots', { callers: ['machine'] }, {\n${RENDER}\t}),\n\thealth`
+		const both = snapshot(contract("'human'", '').replace('\t}),\n\thealth', `\t}),\n${machines}`))
+		expect(directoryLines(both, snapshot(contract("'human', 'machine'", '').replace('\t}),\n\thealth', `\t}),\n${machines}`)))).toEqual([])
+	})
+
+	test('a precedent this change removes is named as one that could, not one that still can', () => {
+		const baseline = snapshot(contract("'human'", ''))
+		const moved = snapshot(contract("'human'", RENDER).replace(/\t\tget: .*\n/, ''))
+		expect(directoryLines(baseline, moved)).toEqual([
+			{ effect: 'narrows', line: 'Endpoint `api.get` no longer reads the members of `team`' },
+			{
+				effect: 'neutral',
+				line: 'Endpoint `api.render` can list the members of `team`, as the approved `api.get` could for the same callers',
+			},
+		])
 	})
 
 	test('an action that reached no member before keeps the closer review', () => {
