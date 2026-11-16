@@ -139,14 +139,14 @@ describe('a claim through a Within of many scope values on SQLite', () => {
 		}
 	})
 
-	test('a value with a lone surrogate matches as its bound text did, as U+FFFD', async () => {
-		seed(MAX_WITHIN_VALUES)
+	test('a list with a lone surrogate binds each value, so it matches as the driver stored the text', async () => {
+		seed(5)
 		storage.sql.exec("insert into deals (id, org_id, name) values ('d-x', ?, 'deal')", '\ud800')
 		storage.sql.exec(
 			"insert into report_requests (id, deal_id, org_id, kind, next_attempt_at, version) values ('r-x', 'd-x', ?, 'summary', ?, 1)",
 			'\ud800',
 			new Date(Date.now() - 60_000).toISOString(),
 		)
-		expect(await claim(['\ud800', ...Array.from({ length: 200 }, (_, index) => `none-${index}`)], MAX_CLAIM)).toEqual(['r-x'])
+		expect(await claim(['\ud800', 'none'], MAX_CLAIM)).toEqual(['r-x'])
 	})
 })

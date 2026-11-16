@@ -45,9 +45,9 @@ export interface SqliteStorage {
 
 // Captured at load, as the compiler's prototype is frozen at load: a later patch would change what a list binds.
 const stringify = JSON.stringify
-const replace = String.prototype.replace
+const test = RegExp.prototype.test
 const apply = Reflect.apply
-const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g
+const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/
 
 const MEMBERSHIP_OPERATORS: ReadonlySet<string> = new Set(['in', 'not in'])
 
@@ -104,7 +104,8 @@ class SqliteCompiler extends SqliteQueryCompiler {
 
 /**
  * An `in` list of bound texts as one JSON array text, or undefined when it holds anything else. Each text is serialized
- * on its own (a string has no `toJSON` to consult), and a lone surrogate becomes U+FFFD, as binding the text did.
+ * on its own (a string has no `toJSON` to consult). A text with a lone surrogate keeps its own parameter: each driver
+ * encodes one its own way, and json_each would not decode it to the same bytes.
  */
 function jsonTexts(node: OperationNode): string | undefined {
 	if (!ValueListNode.is(node)) {
@@ -117,7 +118,10 @@ function jsonTexts(node: OperationNode): string | undefined {
 		if (value === undefined || !ValueNode.is(value) || value.immediate === true || typeof value.value !== 'string') {
 			return undefined
 		}
-		json += (index === 0 ? '' : ',') + stringify(apply(replace, value.value, [LONE_SURROGATE, '\ufffd']))
+		if (apply(test, LONE_SURROGATE, [value.value])) {
+			return undefined
+		}
+		json += (index === 0 ? '' : ',') + stringify(value.value)
 	}
 	return `${json}]`
 }
