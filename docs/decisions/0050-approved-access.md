@@ -166,6 +166,13 @@ covers:
   name and form), input domains and output shapes (a file output by its kind, a `redirect()` by where it may send a
   caller), and each endpoint's HTTP shape;
 - containment, roles and their actions, membership rules;
+- **the member directory an endpoint may read** (`ctx.members`, recorded in the artifact's `directories`): the
+  runtime grants it by the access form alone, so its line says what the handler can do ("can list the members of
+  `team`"), not what it does. A reach that no approved endpoint of the same action has for the same callers widens, with
+  closer review where the dimension shows labels. A reach that an approved endpoint of the same action already has, at
+  least as far and for every caller kind the new one admits, leaves access unchanged and names that endpoint: IAM
+  answers a directory by the action held live on the dimension's value, so no caller learns of a member it could not
+  learn of before. The endpoint's own lines (a new endpoint, a changed requirement) still widen. A removed reach narrows;
 - table and column policies, with the actions each column is read and written with; a new application table
   (`scope: { app }`) is shown with its reason and every action. A table operation that names a list of actions is
   compared by action: an action the list gains widens, one it loses narrows;

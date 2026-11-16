@@ -64,7 +64,7 @@ import {
 	type SurfaceReach,
 } from '@fabrika/control-contract'
 import type { MigrationDeviation } from '@fabrika/platform-node/sql'
-import { type AccessSnapshot, deviationKey } from './snapshot'
+import { type AccessSnapshot, compareText, deviationKey } from './snapshot'
 
 /**
  * What one line does to access: `widens` when it can grant access the baseline did not, `narrows` when it can only take
@@ -516,15 +516,24 @@ function baselineDirectories(artifact: ContractArtifact): Directories {
 }
 
 /**
- * The member directory each endpoint reads. A new reach widens: an endpoint that looks a member up learns whether a
- * person it names is a member, one that lists learns them all; where the dimension shows labels, the approver reads
- * the code behind it, because a label spells an email address. A removed reach narrows.
+ * The member directory each endpoint may read through `ctx.members`: the runtime grants it by the endpoint's access
+ * form alone, so the line says what the handler can do, not what it does. A new reach widens: an endpoint that looks a
+ * member up learns whether a person it names is a member, one that lists learns them all; where the dimension shows
+ * labels, the approver reads the code behind it, because a label spells an email address. A removed reach narrows.
+ *
+ * A reach the approved baseline already gives another endpoint shows no one anything new: IAM answers a directory by the
+ * action held live on the dimension's value (the dimension's `members.list` for a list, the endpoint's own action among
+ * the dimension's lookups for one member), so an endpoint of the same action, reaching the same directory as far, for
+ * the same callers, adds a handler but no person who learns who the members are. Such a line is neutral; it names the
+ * endpoint that already reached the directory. The endpoint's own lines (a new endpoint, a changed requirement) still
+ * widen as they always do.
  */
 function compareDirectories(changes: Changes, baseline: ContractArtifact, candidate: ContractArtifact): void {
 	const before = baselineDirectories(baseline)
 	const after = candidate.directories ?? {}
 	const reachOf = (reach: EndpointDirectory): string =>
-		reach.lists ? `lists the members of \`${reach.dimension}\`` : `looks up one member of \`${reach.dimension}\``
+		reach.lists ? `can list the members of \`${reach.dimension}\`` : `can look up one member of \`${reach.dimension}\``
+	const candidateRows = endpointMap(candidate.endpoints)
 	for (const endpoint of union(Object.keys(before), Object.keys(after))) {
 		const from = before[endpoint]
 		const to = after[endpoint]
@@ -537,6 +546,12 @@ function compareDirectories(changes: Changes, baseline: ContractArtifact, candid
 			if (from.lists && !to.lists) place(narrowing(`Endpoint \`${endpoint}\` no longer lists the members of \`${to.dimension}\``))
 			continue
 		}
+		const row = candidateRows.get(endpoint)
+		const precedent = row === undefined ? undefined : approvedDirectoryReach(baseline, before, row, to)
+		if (precedent !== undefined) {
+			place(neutral(`Endpoint \`${endpoint}\` ${reachOf(to)}, as the approved \`${precedent}\` already can for the same callers`))
+			continue
+		}
 		const labels = candidate.dimensions[to.dimension]?.directory === 'labels'
 		place(
 			labels
@@ -544,6 +559,24 @@ function compareDirectories(changes: Changes, baseline: ContractArtifact, candid
 				: widening(`Endpoint \`${endpoint}\` ${reachOf(to)}`),
 		)
 	}
+}
+
+/**
+ * The first approved endpoint (by id) that already reads `reach`'s directory at least as far with the same action, when
+ * the approved endpoints of that reach together admit every caller kind `row` admits; undefined otherwise. A link caller
+ * never reaches a directory (`directoryReach`), so the comparison covers the credentialed kinds only.
+ */
+function approvedDirectoryReach(baseline: ContractArtifact, before: Directories, row: EndpointRow, reach: EndpointDirectory): string | undefined {
+	if (row.requirement?.kind !== 'action') return undefined
+	const action = row.requirement.action
+	const peers = baseline.endpoints.filter((other) => {
+		const held = Object.hasOwn(before, other.id) ? before[other.id] : undefined
+		return other.requirement?.kind === 'action' && other.requirement.action === action && held !== undefined && held.dimension === reach.dimension
+			&& (held.lists || !reach.lists)
+	})
+	const callers = new Set(peers.flatMap((other) => other.callers))
+	if (peers.length === 0 || !row.callers.every((caller) => callers.has(caller))) return undefined
+	return peers.map((other) => other.id).sort(compareText)[0]
 }
 
 // ── Steps off the paved road ────────────────────────────────────────────────────────────────────

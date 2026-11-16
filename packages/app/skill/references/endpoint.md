@@ -698,7 +698,8 @@ containing it, that declares `members`: a task endpoint reads its org's. A dimen
   `member.principalId` and `member.label`, never a label from the input.
 - `disabled` is a person an operator disabled in IAM: still a member, but unable to sign in. Refuse to assign one
   (`assign` in `SKILL.md`), and leave them out of a picker.
-- The approver sees each endpoint that reads a directory ("looks up one member of `org`"): a new one widens.
+- The approver sees each endpoint that can read a directory ("can look up one member of `org`"): the first one of an
+  action and its callers widens; another endpoint of the same action and callers is shown as unchanged.
 - With the directory's `members.list` action (`tasks.read` here) also `ctx.members.list()`, answering
   `{ principalId, label, roles, disabled }` per member, for an assignee picker. IAM checks that action on the org
   itself too.

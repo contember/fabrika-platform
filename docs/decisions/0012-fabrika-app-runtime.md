@@ -223,7 +223,7 @@ metadata from the application's schema: containment, the creator role, the membe
   approved endpoints asks. The lookup needs no second action. `ctx.members.list()` (with roles) exists only where the
   endpoint's action is that dimension's `members.list`, and IAM checks that action live on the directory's value
   itself. Neither spends a delegation grant. Each endpoint's reach is recorded in the artifact (`directories`), so the
-  digest covers it and its first appearance widens.
+  digest covers it and its first appearance for an action and its callers widens ([ADR-0050](0050-approved-access.md) §3).
   A member's label is derived from its email, so both answer it as `null` unless the dimension opts in with
   `directory: 'labels'` in the vocabulary; that opt-in is in the approved artifact and widens with closer review
   ([ADR-0050](0050-approved-access.md) §3). Emails and open invitations stay with `members.manage`. A lookup tells a

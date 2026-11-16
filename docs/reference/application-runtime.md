@@ -880,7 +880,9 @@ request the schema cannot express); an IAM that cannot be asked is 503.
   invitation. `label` is `null` unless the dimension declares `directory: 'labels'` in
   the vocabulary (a user's label spells its address); that declaration is in the contract,
   and adding it widens for closer review. Under it the type is `string`, and the framework
-  refuses an IAM answer without a label (`iam_answer_unlabelled`, 500).
+  refuses an IAM answer without a label (`iam_answer_unlabelled`, 500). The approval shows each endpoint that can read
+  a directory: the first of an action and its callers widens (for closer review where labels show), and another
+  endpoint of the same action and callers is shown as unchanged, naming the approved one.
 - **The application's own people.** A vocabulary that declares `members: { manage, list }` (and optionally
   `directory: 'labels'`) has people of its own: every principal holding one of its roles, globally or in a value. An
   `app: true` endpoint whose action is that `members.list` gets `ctx.members.list({ after? })`, a page of at most 100
