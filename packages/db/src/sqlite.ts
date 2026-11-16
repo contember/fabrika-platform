@@ -10,6 +10,7 @@ import {
 	type DialectAdapter,
 	type Driver,
 	Kysely,
+	type OperationNode,
 	OperatorNode,
 	type QueryResult,
 	type SelectModifierNode,
@@ -17,6 +18,8 @@ import {
 	SqliteAdapter,
 	SqliteIntrospector,
 	SqliteQueryCompiler,
+	ValueListNode,
+	ValueNode,
 } from 'kysely'
 import { Database, freezePrototypeChain, type LooseDB, type TransactionRunner } from './database'
 import { DatabaseError, QueryRefusedError } from './errors'
@@ -39,6 +42,11 @@ export interface SqliteStorage {
 	/** Runs `closure` in one transaction of its own, nested in a savepoint inside an open one; rolls back when it throws. */
 	transactionSync<T>(closure: () => T): T
 }
+
+/** Captured at load, as the compiler's prototype is frozen at load: a later patch would change what a list binds. */
+const stringify = JSON.stringify
+
+const MEMBERSHIP_OPERATORS: ReadonlySet<string> = new Set(['in', 'not in'])
 
 const LIKE_OPERATORS: ReadonlyMap<string, string> = new Map([
 	['like', 'like'],
@@ -64,7 +72,17 @@ class SqliteCompiler extends SqliteQueryCompiler {
 	}
 
 	protected override visitBinaryOperation(node: BinaryOperationNode): void {
-		const pattern = OperatorNode.is(node.operator) ? LIKE_OPERATORS.get(node.operator.operator) : undefined
+		const operator = OperatorNode.is(node.operator) ? node.operator.operator : undefined
+		const texts = operator !== undefined && MEMBERSHIP_OPERATORS.has(operator) ? textList(node.rightOperand) : undefined
+		if (texts !== undefined) {
+			// workerd binds at most 100 parameters a statement, and a Within alone carries up to MAX_WITHIN_VALUES.
+			this.visitNode(node.leftOperand)
+			this.append(` ${operator} (select value from json_each(`)
+			this.appendValue(stringify(texts))
+			this.append('))')
+			return
+		}
+		const pattern = operator === undefined ? undefined : LIKE_OPERATORS.get(operator)
 		if (pattern === undefined) {
 			super.visitBinaryOperation(node)
 			return
@@ -79,6 +97,21 @@ class SqliteCompiler extends SqliteQueryCompiler {
 		const modifiers = node.endModifiers?.filter((modifier) => !isLockModifier(modifier))
 		super.visitSelectQuery({ ...node, endModifiers: modifiers === undefined || modifiers.length === 0 ? undefined : modifiers })
 	}
+}
+
+/** The bound texts of an `in` list, or undefined when it holds anything else: a list of texts binds as one JSON array. */
+function textList(node: OperationNode): string[] | undefined {
+	if (!ValueListNode.is(node)) {
+		return undefined
+	}
+	const texts: string[] = []
+	for (const value of node.values) {
+		if (!ValueNode.is(value) || value.immediate === true || typeof value.value !== 'string') {
+			return undefined
+		}
+		texts.push(value.value)
+	}
+	return texts
 }
 
 function sqliteParameter(parameter: unknown): unknown {
