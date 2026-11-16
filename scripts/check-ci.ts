@@ -2,12 +2,13 @@
 // green CI run. `release.yml` calls that workflow as its `verify` job, so this is also the gate a tag must pass.
 //
 // Each job of the test matrix (PostgreSQL major × shard) gets its own throwaway PostgreSQL and SeaweedFS containers on
-// random loopback ports, as each CI job gets its own runner, and the jobs run concurrently. A backend the environment
-// already names is used as it is, by one job at a time. What cannot run here — no docker, no npm — is skipped and named
-// in the summary, never silently.
+// random loopback ports, as each CI job gets its own runner, and the jobs run concurrently, one per available CPU. A
+// backend the environment already names is used as it is, by one job at a time. What cannot run here — no docker, no
+// npm — is skipped and named in the summary, never silently.
 // `scripts/__tests__/check-ci.test.ts` fails when these steps and `ci.yml` drift apart.
 
 import { randomUUID } from 'node:crypto'
+import { availableParallelism } from 'node:os'
 import { resolve } from 'node:path'
 
 const ROOT = resolve(import.meta.dir, '..')
@@ -280,13 +281,20 @@ const runTestMatrix = async (env: Record<string, string | undefined>, backends: 
 		for (const job of jobs) if (!await runJob(job)) throw new StepFailure(`${job.label} failed`)
 		return
 	}
-	// Settle every job before throwing, so no job is still running when the containers are removed.
-	const settled = await Promise.allSettled(jobs.map(runJob))
-	const failed = jobs.flatMap((job, index) => {
-		const outcome = settled[index]
-		if (outcome?.status === 'rejected') return [`${job.label} (${outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason)})`]
-		return outcome?.value === false ? [job.label] : []
-	})
+	// One job per CPU the run may use: each job's suite runs serially, and more at once push tests past their timeouts.
+	// A worker never throws, so every job has ended before the containers are removed.
+	const failed: string[] = []
+	let next = 0
+	const worker = async (): Promise<void> => {
+		for (let job = jobs[next++]; job !== undefined; job = jobs[next++]) {
+			try {
+				if (!await runJob(job)) failed.push(job.label)
+			} catch (error) {
+				failed.push(`${job.label} (${error instanceof Error ? error.message : String(error)})`)
+			}
+		}
+	}
+	await Promise.all(Array.from({ length: Math.min(availableParallelism(), jobs.length) }, worker))
 	if (failed.length > 0) throw new StepFailure(`${failed.join(', ')} failed`)
 }
 
