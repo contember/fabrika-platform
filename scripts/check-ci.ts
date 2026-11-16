@@ -1,9 +1,10 @@
 // `bun run check:ci` runs locally what `.github/workflows/ci.yml` runs, in the same order, so a green run here is a
 // green CI run. `release.yml` calls that workflow as its `verify` job, so this is also the gate a tag must pass.
 //
-// The test job's backends are throwaway containers on random loopback ports, one PostgreSQL per major of the CI
-// matrix and one SeaweedFS, removed at the end. A backend the environment already names is used as it is. What cannot
-// run here — no docker, no npm — is skipped and named in the summary, never silently.
+// Each job of the test matrix (PostgreSQL major × shard) gets its own throwaway PostgreSQL and SeaweedFS containers on
+// random loopback ports, as each CI job gets its own runner, and the jobs run concurrently. A backend the environment
+// already names is used as it is, by one job at a time. What cannot run here — no docker, no npm — is skipped and named
+// in the summary, never silently.
 // `scripts/__tests__/check-ci.test.ts` fails when these steps and `ci.yml` drift apart.
 
 import { randomUUID } from 'node:crypto'
@@ -31,8 +32,22 @@ export const QUALITY_STEPS: readonly CiStep[] = [
 	{ job: 'quality', name: 'Check generated Zerops artifacts', run: 'bun run --filter @fabrika/platform-artifacts gen:check' },
 ]
 
-/** Runs once per PostgreSQL target. `ci.yml`'s other test step, "Start SeaweedFS", is the backend this script starts. */
-export const TEST_STEP: CiStep = { job: 'test', name: 'Run full test suite', run: 'bun run test' }
+export interface TestStep extends CiStep {
+	/** The step's `if: matrix.shard == <n>` in `ci.yml`: it runs in that shard only. */
+	readonly onlyInShard?: number
+}
+
+/** The `${{ matrix.shard }}` of a test step's `run`, replaced with each shard of `TEST_SHARDS`. */
+export const SHARD_PLACEHOLDER = '${{ matrix.shard }}'
+
+/** The test job's shard axis of the matrix; every shard runs against every PostgreSQL major. */
+export const TEST_SHARDS: readonly number[] = [1, 2, 3, 4]
+
+/** Run once per test job. `ci.yml`'s other test step, "Start SeaweedFS", is a backend this script starts. */
+export const TEST_STEPS: readonly TestStep[] = [
+	{ job: 'test', name: 'Run a shard of the main suite', run: `bun run test:unit --shard=${SHARD_PLACEHOLDER}/${TEST_SHARDS.length}` },
+	{ job: 'test', name: 'Run the isolated suites', run: 'bun run test:isolated', onlyInShard: 1 },
+]
 export const S3_START_STEP_NAME = 'Start SeaweedFS'
 
 export const BUILD_STEPS: readonly CiStep[] = [
@@ -62,16 +77,31 @@ export const S3_VALUES = {
 
 const READINESS_ATTEMPTS = 60
 
-interface PostgresDatabase {
-	readonly url: string
-	/** The container this run started for it, removed once its test run ends. */
+/** One test job's backend: the environment values that name it, and the container this run started for it. */
+interface Backend {
+	readonly env: Record<string, string>
+	/** Removed once its test job ends. */
 	readonly container?: string
 }
 
 interface PostgresTarget {
 	readonly label: string
-	/** Started on first use, so only one database runs at a time. `undefined`: the suites that need one skip. */
-	readonly open: (() => Promise<PostgresDatabase>) | undefined
+	/** Opens one test job's database. `undefined`: the suites that need one skip. */
+	readonly open: (() => Promise<Backend>) | undefined
+}
+
+interface TestBackends {
+	readonly postgres: readonly PostgresTarget[]
+	/** Opens one test job's S3. */
+	readonly s3: () => Promise<Backend>
+	/** Every job gets backends of its own, so the jobs may run at once; a given backend serves one job at a time. */
+	readonly concurrent: boolean
+}
+
+interface TestJob {
+	readonly label: string
+	readonly shard: number
+	readonly postgres: PostgresTarget
 }
 
 interface StepResult {
@@ -125,7 +155,7 @@ const waitUntil = async (what: string, probe: readonly string[]): Promise<void> 
 	throw new StepFailure(`${what} was not ready after ${READINESS_ATTEMPTS} s`)
 }
 
-const startPostgres = async (major: string): Promise<PostgresDatabase> => {
+const startPostgres = async (major: string): Promise<Backend> => {
 	const name = await startContainer(`fabrika-check-ci-postgres-${major}`, [
 		'--publish',
 		'127.0.0.1::5432',
@@ -135,10 +165,10 @@ const startPostgres = async (major: string): Promise<PostgresDatabase> => {
 	])
 	// Over TCP: the entrypoint's temporary init server listens on the socket only, so it never answers this probe.
 	await waitUntil(`PostgreSQL ${major}`, ['docker', 'exec', name, 'pg_isready', '--host=127.0.0.1', '--username=postgres'])
-	return { url: `postgres://postgres:postgres@127.0.0.1:${await publishedPort(name, 5432)}/postgres`, container: name }
+	return { env: { FABRIKA_TEST_POSTGRES_URL: `postgres://postgres:postgres@127.0.0.1:${await publishedPort(name, 5432)}/postgres` }, container: name }
 }
 
-const startSeaweedfs = async (): Promise<Record<string, string>> => {
+const startSeaweedfs = async (): Promise<Backend> => {
 	const name = await startContainer('fabrika-check-ci-s3', [
 		'--publish',
 		'127.0.0.1::9000',
@@ -165,7 +195,7 @@ const startSeaweedfs = async (): Promise<Record<string, string>> => {
 		'/dev/null',
 		`http://127.0.0.1:8888/buckets/${S3_VALUES.FABRIKA_TEST_S3_BUCKET}/?limit=1`,
 	])
-	return { ...S3_VALUES, FABRIKA_TEST_S3_ENDPOINT: `http://127.0.0.1:${await publishedPort(name, 9000)}` }
+	return { env: { ...S3_VALUES, FABRIKA_TEST_S3_ENDPOINT: `http://127.0.0.1:${await publishedPort(name, 9000)}` }, container: name }
 }
 
 const runStep = async (step: CiStep, label: string, env: Record<string, string | undefined>, results: StepResult[]): Promise<void> => {
@@ -177,27 +207,88 @@ const runStep = async (step: CiStep, label: string, env: Record<string, string |
 	results.push({ label, seconds: (performance.now() - started) / 1000 })
 }
 
-const postgresTargets = (docker: boolean, skipped: string[]): readonly PostgresTarget[] => {
-	const given = process.env['FABRIKA_TEST_POSTGRES_URL']
-	if (given !== undefined && given !== '') {
-		skipped.push(`the PostgreSQL ${POSTGRES_MAJORS.join(' and ')} matrix: the suite ran once, against FABRIKA_TEST_POSTGRES_URL`)
-		return [{ label: 'FABRIKA_TEST_POSTGRES_URL', open: () => Promise.resolve({ url: given }) }]
-	}
-	if (!docker) {
+const testBackends = (docker: boolean, skipped: string[]): TestBackends => {
+	const givenPostgres = process.env['FABRIKA_TEST_POSTGRES_URL']
+	const givenS3 = process.env['FABRIKA_TEST_S3_ENDPOINT']
+	const postgresGiven = givenPostgres !== undefined && givenPostgres !== ''
+	const s3Given = givenS3 !== undefined && givenS3 !== ''
+
+	let postgres: readonly PostgresTarget[]
+	if (postgresGiven) {
+		skipped.push(`the PostgreSQL ${POSTGRES_MAJORS.join(' and ')} matrix: each shard ran once, against FABRIKA_TEST_POSTGRES_URL`)
+		postgres = [{ label: 'FABRIKA_TEST_POSTGRES_URL', open: () => Promise.resolve({ env: {} }) }]
+	} else if (docker) {
+		postgres = POSTGRES_MAJORS.map((major) => ({ label: `PostgreSQL ${major}`, open: () => startPostgres(major) }))
+	} else {
 		skipped.push('every suite that needs PostgreSQL: docker is not available and FABRIKA_TEST_POSTGRES_URL is unset')
-		return [{ label: 'no PostgreSQL', open: undefined }]
+		postgres = [{ label: 'no PostgreSQL', open: undefined }]
 	}
-	return POSTGRES_MAJORS.map((major) => ({ label: `PostgreSQL ${major}`, open: () => startPostgres(major) }))
+
+	if (!s3Given && !docker) skipped.push('every suite that needs S3: docker is not available and FABRIKA_TEST_S3_ENDPOINT is unset')
+	const s3 = s3Given || !docker ? () => Promise.resolve({ env: {} }) : startSeaweedfs
+	return { postgres, s3, concurrent: !postgresGiven && !s3Given }
 }
 
-const s3Environment = async (docker: boolean, skipped: string[]): Promise<Record<string, string>> => {
-	const given = process.env['FABRIKA_TEST_S3_ENDPOINT']
-	if (given !== undefined && given !== '') return {}
-	if (!docker) {
-		skipped.push('every suite that needs S3: docker is not available and FABRIKA_TEST_S3_ENDPOINT is unset')
-		return {}
+/** Runs a step with its stdout and stderr captured together, so concurrent jobs do not interleave their output. */
+const captureStep = async (run: string, env: Record<string, string | undefined>): Promise<{ readonly exitCode: number; readonly output: string }> => {
+	const child = Bun.spawn(['bash', '-eo', 'pipefail', '-c', `exec 2>&1\n${run}`], { cwd: ROOT, env, stdout: 'pipe', stderr: 'inherit' })
+	const [exitCode, output] = await Promise.all([child.exited, new Response(child.stdout).text()])
+	return { exitCode, output }
+}
+
+/** Runs one job of the test matrix on backends of its own; false when a step failed, after printing its output. */
+const runTestJob = async (
+	job: TestJob,
+	env: Record<string, string | undefined>,
+	openS3: () => Promise<Backend>,
+	results: StepResult[],
+): Promise<boolean> => {
+	const opened: Backend[] = []
+	try {
+		const database = job.postgres.open === undefined ? undefined : await job.postgres.open()
+		if (database !== undefined) opened.push(database)
+		const s3 = await openS3()
+		opened.push(s3)
+		const jobEnv = { ...env, ...s3.env, ...database?.env }
+		for (const step of TEST_STEPS) {
+			if (step.onlyInShard !== undefined && step.onlyInShard !== job.shard) continue
+			const run = step.run.replaceAll(SHARD_PLACEHOLDER, String(job.shard))
+			const label = `${job.label}: ${step.name}`
+			console.info(`\n▸ ${label}\n  $ ${run}`)
+			const started = performance.now()
+			const { exitCode, output } = await captureStep(run, jobEnv)
+			if (exitCode !== 0) {
+				console.error(`\n✗ ${label} failed (exit ${exitCode}):\n${output}`)
+				return false
+			}
+			const seconds = (performance.now() - started) / 1000
+			results.push({ label, seconds })
+			console.info(`✓ ${label} (${seconds.toFixed(1)} s)`)
+		}
+		return true
+	} finally {
+		await removeContainers(opened.flatMap((backend) => backend.container === undefined ? [] : [backend.container]))
 	}
-	return await startSeaweedfs()
+}
+
+const runTestMatrix = async (env: Record<string, string | undefined>, backends: TestBackends, results: StepResult[]): Promise<void> => {
+	const jobs = backends.postgres.flatMap((postgres) =>
+		TEST_SHARDS.map((shard) => ({ label: `test (${postgres.label}, shard ${shard}/${TEST_SHARDS.length})`, shard, postgres }))
+	)
+	const runJob = (job: TestJob): Promise<boolean> => runTestJob(job, env, backends.s3, results)
+	const passed: boolean[] = []
+	if (backends.concurrent) {
+		// Settle every job before throwing, so no job is still running when the containers are removed.
+		const settled = await Promise.allSettled(jobs.map(runJob))
+		for (const outcome of settled) {
+			if (outcome.status === 'rejected') throw outcome.reason
+			passed.push(outcome.value)
+		}
+	} else {
+		for (const job of jobs) passed.push(await runJob(job))
+	}
+	const failed = jobs.filter((_, index) => passed[index] === false)
+	if (failed.length > 0) throw new StepFailure(`${failed.map((job) => job.label).join(', ')} failed`)
 }
 
 const run = async (results: StepResult[], skipped: string[]): Promise<void> => {
@@ -205,15 +296,7 @@ const run = async (results: StepResult[], skipped: string[]): Promise<void> => {
 	await runStep(INSTALL_STEP, `quality: ${INSTALL_STEP.name}`, env, results)
 	for (const step of QUALITY_STEPS) await runStep(step, `${step.job}: ${step.name}`, env, results)
 
-	const docker = await dockerAvailable()
-	const s3 = await s3Environment(docker, skipped)
-	for (const target of postgresTargets(docker, skipped)) {
-		const database = target.open === undefined ? undefined : await target.open()
-		const testEnv = database === undefined ? { ...env, ...s3 } : { ...env, ...s3, FABRIKA_TEST_POSTGRES_URL: database.url }
-		await runStep(TEST_STEP, `test (${target.label}): ${TEST_STEP.name}`, testEnv, results)
-		if (database?.container !== undefined) await removeContainers([database.container])
-	}
-	await removeAllContainers()
+	await runTestMatrix(env, testBackends(await dockerAvailable(), skipped), results)
 
 	for (const step of BUILD_STEPS) await runStep(step, `${step.job}: ${step.name}`, env, results)
 
