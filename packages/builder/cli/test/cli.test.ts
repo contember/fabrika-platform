@@ -139,9 +139,31 @@ test('advance is reflected in subsequent next (derivation moves forward)', async
 
 	fx.write('.fabrika/intent/glossary.md', '# glossary')
 	fx.write('.fabrika/principles/principles.md', '# principles')
+	expect((await run(['advance', '--dir', fx.root, '--force'])).code).toBe(0)
 	nxt = await run(['next', '--dir', fx.root])
 	expect(nxt.stdout).toContain('## Phase 3/7 - User flows')
 	expect(nxt.stdout).toContain('vision ✓')
+})
+
+test('without the daemon, a project created before approvals is refused at its first unassessed gate', async () => {
+	fx = makeFixture()
+	expect(existsSync(join(fx.root, '.fabrika/approvals.json'))).toBe(false)
+	for (
+		const file of ['intent/brief.md', 'intent/glossary.md', 'principles/principles.md', 'architecture/flows/login.flow.md', 'architecture/tech.md']
+	) {
+		fx.write(`.fabrika/${file}`)
+	}
+	fx.write('tests/browser/login.test.ts')
+	fx.write('.fabrika/issues/ISSUE-001.md')
+
+	const nxt = await run(['next', '--dir', fx.root])
+	expect(nxt.stdout).toContain('## Phase 2/7 - Vision')
+	expect(nxt.stdout).not.toContain('assumed reviewed')
+
+	const refused = await run(['advance', '--dir', fx.root])
+	expect(refused.code).toBe(1)
+	expect(refused.stderr).toContain('gate "vision" cannot be validated offline (daemon down)')
+	expect(existsSync(join(fx.root, '.fabrika/approvals.json'))).toBe(false)
 })
 
 test('a corrupt approvals file stops next with the repair hint', async () => {

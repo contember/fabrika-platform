@@ -1,7 +1,22 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { dirname, join } from 'path'
+import { type Approvals, readApprovals, writeApprovals } from '../../shared/approvals'
+import { type GateProbe, phaseInputs } from '../../shared/derive'
+import { phaseById, type PhaseId } from '../../shared/phases'
 import { scaffold } from '../src/layout'
+
+/** The daemon's answer for a gate whose latest revision was reviewed. */
+export const reviewed: GateProbe = () => ({ reviewed: true, verdict: 'approve', revision: 1 })
+
+/** Records `advance`'s approval of each phase over the files it reads now. */
+export function approve(root: string, ids: PhaseId[], waived = false): void {
+	const approvals: Approvals = { ...readApprovals(root) }
+	for (const id of ids) {
+		approvals[id] = { at: '2026-01-01T00:00:00.000Z', inputs: phaseInputs(root, phaseById(id)), ...(waived ? { waived: true } : {}) }
+	}
+	writeApprovals(root, approvals)
+}
 
 export interface Fixture {
 	root: string

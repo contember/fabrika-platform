@@ -4,7 +4,7 @@ import { symlinkSync } from 'fs'
 import { join } from 'path'
 import { fileURLToPath } from 'url'
 import { mappedRoutes, parseFlow, readFlows, renderFlowsReview, routeMapMermaid, unmappedUrls } from '../src/flows'
-import { type Fixture, makeFixture } from './helpers'
+import { approve, type Fixture, makeFixture } from './helpers'
 
 const BIN = fileURLToPath(new URL('../src/bin.ts', import.meta.url))
 
@@ -107,10 +107,11 @@ async function run(args: string[]) {
 }
 
 test('flows review writes the gate view, and the packets from the skeletons on report a url off the map', async () => {
-	fx = makeFixture()
+	fx = makeFixture(true, { approvals: true })
 	fx.write('.fabrika/intent/brief.md')
 	fx.write('.fabrika/intent/glossary.md')
 	fx.write('.fabrika/principles/principles.md')
+	approve(fx.root, ['vision'], true)
 	const flowsPacket = await run(['next', '--dir', fx.root])
 	expect(flowsPacket.stdout).toContain(
 		'Gate:    fabrika builder flows review && fabrika builder gate open flows --view .fabrika/architecture/flows-review.jsx',
@@ -126,6 +127,7 @@ test('flows review writes the gate view, and the packets from the skeletons on r
 
 	fx.write('.fabrika/architecture/tech.md')
 	fx.write('tests/browser/admin.test.ts', "browserTest('admin edits', { url: '/admin', seeds: [], roles: [] }, async () => {})\n")
+	approve(fx.root, ['flows', 'tech', 'skeletons'], true)
 	const skeletons = await run(['next', '--dir', fx.root])
 	expect(skeletons.stdout).toContain('## Phase 6/7 - Induce issues')
 	expect(skeletons.stdout).toContain("Routes:  warning: skeleton url /admin is on no flow's route map (route or leads_to)")

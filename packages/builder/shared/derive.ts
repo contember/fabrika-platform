@@ -16,7 +16,7 @@ export interface PhaseState {
 	satisfied: boolean
 	/** The verdict of each completed gated phase whose review is known. */
 	verdicts: Partial<Record<PhaseId, GateVerdict>>
-	/** Completed gated phases whose review could not be checked (no daemon); they are assumed reviewed. */
+	/** Gated phases `advance` approved whose review could not be checked (no daemon); they are assumed reviewed. */
 	unverified: PhaseId[]
 	/** The files that changed since the current phase was approved; empty unless it was approved and went stale. */
 	stale: string[]
@@ -147,8 +147,11 @@ export function derivePhase(
 			}
 			if (approval?.waived !== true) {
 				const review = gateProbe(phase)
-				if (review === 'unknown') unverified.push(phase.id)
-				else if (!review.reviewed) return state(phase, true)
+				if (review === 'unknown') {
+					// Without approvals nothing records that this gate was ever reviewed: refuse rather than assume it.
+					if (approval === undefined) return state(phase, true)
+					unverified.push(phase.id)
+				} else if (!review.reviewed) return state(phase, true)
 				// A gate re-opened after its approval is approved again only by `advance`, whoever consumed its feedback.
 				else if (approval?.revision !== undefined && review.revision !== approval.revision) return state(phase, true)
 				else verdicts[phase.id] = review.verdict
