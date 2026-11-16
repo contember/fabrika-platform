@@ -801,7 +801,7 @@ export interface DeclaredReach {
 	/**
 	 * The HTTPS origins this site's code calls (`fetch`), sorted, each an exact origin or a one-label pattern
 	 * (`parseEgressEntry`): a credentialed procedure, a webhook or a job. Or `'public'` (a cron job only): every public
-	 * host over HTTPS or HTTP, never the installation or a private network (ADR-0071). Absent unless declared, so the
+	 * host over HTTPS or HTTP, never the installation or a private network (ADR-0075). Absent unless declared, so the
 	 * digest stays.
 	 */
 	readonly egress?: DeclaredEgress

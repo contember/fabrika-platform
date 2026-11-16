@@ -787,7 +787,7 @@ function reachSteps(from: DeclaredReach, to: DeclaredReach): RuledLine[] {
 }
 
 /**
- * A job's `egress: 'public'` (ADR-0071): its code may send what it holds to any public host, wherever an operator, a row
+ * A job's `egress: 'public'` (ADR-0075): its code may send what it holds to any public host, wherever an operator, a row
  * or a page it fetched points it, so gaining it widens with closer review. Losing it narrows; `egressChanges` shows
  * each origin the job calls instead as a widening of its own. The guard keeps it off private addresses and the
  * installation's own hosts, as listed at the environment's deploy.

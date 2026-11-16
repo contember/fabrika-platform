@@ -2445,7 +2445,7 @@ class ArtifactBuilder {
 	/**
 	 * The HTTPS origins a site's code calls: a credentialed procedure of an RPC mount, a webhook or a job, never a public,
 	 * export or link procedure. Each is an exact origin or a one-label pattern (`parseEgressEntry`), once. Or `'public'`,
-	 * every public host (ADR-0071), which only a cron job declares: it calls outside any transaction, and its schedule,
+	 * every public host (ADR-0075), which only a cron job declares: it calls outside any transaction, and its schedule,
 	 * not a caller, decides when. `null` when it declares none or after a problem.
 	 */
 	#egress(where: string, value: unknown, place: DeclaringSite): DeclaredEgress | null {

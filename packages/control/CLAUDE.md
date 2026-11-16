@@ -317,7 +317,7 @@ other environment, before the provider prepares anything, and the write maps a r
   only when the approved contract declares a token purpose; `apps.environments.rotateTokenKey` asks the next deploy to
   rotate, and a retired key verifies until its retirement plus the largest `maxDays` the contract had while it signed.
   Every deploy writes `FABRIKA_APP_ORIGIN` (the environment's public origin, or `null`, which removes it).
-- **The installation's hosts go to a job with public egress (`src/egress-hosts.ts`, ADR-0071).** A deploy whose approved
+- **The installation's hosts go to a job with public egress (`src/egress-hosts.ts`, ADR-0075).** A deploy whose approved
   contract has a cron job with `egress: 'public'` hands `FABRIKA_EGRESS_REFUSED_HOSTS`: the hosts of Control's origin,
   IAM's issuer, the environment's Operations ingest and every environment of the provider (domain and public origin),
   normalized, sorted, joined by `,`; a public variable. Every other deploy hands `null`, which removes a stale list. A

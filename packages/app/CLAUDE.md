@@ -777,7 +777,7 @@ vocabulary (`packages/db/CLAUDE.md`).
   connector, IAM, the object store, the JWKS) runs through `platformCall`/`platformFacility`, outside the site's scope;
   a new facility that makes its own requests must too, or every site that uses it needs an egress it never declared.
   It is no sandbox: code that kept the `fetch` it found before boot, or opens sockets, escapes it.
-- **A cron job's `egress: 'public'` reaches public hosts only** (ADR-0071): `runAsSite` takes the job runner's
+- **A cron job's `egress: 'public'` reaches public hosts only** (ADR-0075): `runAsSite` takes the job runner's
   `PublicEgressRules` (`publicEgressRules`: the hosts the framework variables and `FABRIKA_EGRESS_REFUSED_HOSTS` name,
   and the adapter's `resolveHost`, which only the Bun adapter passes). Each hop goes out with `redirect: 'manual'` after
   `publicEgressRefusal` (`@fabrika/auth-core`, shared with the checker) and the resolver admit it; the guard follows

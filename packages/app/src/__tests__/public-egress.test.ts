@@ -1,4 +1,4 @@
-// `egress: 'public'` (ADR-0071): a cron job that calls the websites its operators name reaches any public host over
+// `egress: 'public'` (ADR-0075): a cron job that calls the websites its operators name reaches any public host over
 // HTTPS or HTTP, never the installation or a private network. The build admits it on a cron job only and records it in
 // the artifact; the guard refuses by the URL, by the installation's hosts and, where the runtime resolves names, by the
 // addresses; it checks every redirect and bounds each request. The job runs need FABRIKA_TEST_POSTGRES_URL, since a

@@ -96,4 +96,4 @@ a commit message suffices.
 | [0071](0071-an-application-keeps-its-developer-tools-in-tools.md)                       | Keep developer tools in tools/, outside the application rules, and load them from nothing outside it      |
 | [0072](0072-a-view-is-a-read-only-table.md)                                             | A view is a read-only table of the data layer                                                             |
 | [0073](0073-a-relation-grant-is-application-data-read-on-every-statement.md)            | A relation grant is application data, read on every statement                                             |
-| [0071](0071-a-cron-job-may-reach-the-public-web.md)                                     | A cron job may reach the public web; the guard keeps it off the installation and private networks         |
+| [0075](0075-a-cron-job-may-reach-the-public-web.md)                                     | A cron job may reach the public web; the guard keeps it off the installation and private networks         |

@@ -1330,7 +1330,7 @@ origin (`egress.test.ts`).
 
 `egress: 'public'` on a cron job, instead of a list, reaches every public host over HTTPS or HTTP on the scheme's
 default port: a job that calls the websites its operators name, such as a crawler or an auditor
-([ADR-0071](../decisions/0071-a-cron-job-may-reach-the-public-web.md)). A procedure, a mutation and a webhook name their
+([ADR-0075](../decisions/0075-a-cron-job-may-reach-the-public-web.md)). A procedure, a mutation and a webhook name their
 origins; the build and the types refuse `'public'` there. The artifact records `'public'` under the job's site, and the
 format stays 2. The guard (`implement/egress.ts`, over `publicEgressRefusal` in `@fabrika/auth-core`) refuses before
 each hop, with `capability_refused: refused_egress`:

@@ -1,6 +1,6 @@
 // `egress`: while a site's handler runs, the global `fetch` reaches only the HTTPS origins the site declares, exactly or
 // by a one-label pattern (`egressAdmits` of `@fabrika/auth-core`), or, for a cron job that declares `egress: 'public'`,
-// only public hosts (ADR-0071). It stops a mistake and makes a bypass conspicuous; it is not a sandbox (ADR-0012 §8):
+// only public hosts (ADR-0075). It stops a mistake and makes a bypass conspicuous; it is not a sandbox (ADR-0012 §8):
 // code that kept the `fetch` it found before boot, or opens its own sockets, escapes it. The framework's own facilities
 // (mail, connectors, IAM, the object store) run outside the site's scope, under their own declarations.
 

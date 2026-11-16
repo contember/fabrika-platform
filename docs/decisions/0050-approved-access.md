@@ -289,7 +289,7 @@ whole table or a whole column stays a removal.
 job — and each effect of its declaration is compared on its own, so a handler body that moves with the same
 declaration is unchanged. A new `sql` mode, a new `unscoped` table, `read` → `write` in either, a new connector,
 a new link mount to issue (an endpoint's, or a job's `issues`, keyed by the job), a new `egress` origin, a job's
-`egress: 'public'` ([ADR-0071](0071-a-cron-job-may-reach-the-public-web.md)), a new `binds`
+`egress: 'public'` ([ADR-0075](0075-a-cron-job-may-reach-the-public-web.md)), a new `binds`
 webhook and a job that starts sending through the installation's mail transport each widen; a removal and `write` → `read` narrow. Database code is keyed by file, kind and
 object: new code widens, code in a file whose text changed widens again (the diff cannot tell what changed in it),
 and removed code narrows. A contract that leaves the staged kit, whose sites' reach is then no longer declared,

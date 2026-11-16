@@ -394,7 +394,7 @@ Each has a fixture in `direct-forms.test.ts` that asserts it passes, so that clo
   not only the site the call is in; the runtime guard on `fetch` checks the site that runs. A template whose first
   label alone is interpolated (`` `https://${tenant}.<domain>/…` ``) is accepted under a declared pattern of that
   domain and port; what the label holds at runtime is the guard's to check.
-  Where a cron job declares `egress: 'public'` (ADR-0071) it accepts an http(s) prefix the URL rules of
+  Where a cron job declares `egress: 'public'` (ADR-0075) it accepts an http(s) prefix the URL rules of
   `@fabrika/auth-core` admit, or one whose host is not complete yet (`` `https://${host}/` ``), and still refuses
   `http://localhost/` or an IP address: the installation's hosts and resolved addresses are the runtime guard's to judge.
 - `cross-app-fetch` and `url-endpoint` wait for the contract: the checker compiles it against `src/db/tables.ts` once

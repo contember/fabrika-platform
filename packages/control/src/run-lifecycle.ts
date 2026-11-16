@@ -870,7 +870,7 @@ async function deployUnder(
 			: appEnv.public_origin === null || appEnv.public_origin === ''
 			? null
 			: appEnv.public_origin
-		// The installation's own hosts, which a cron job's public egress refuses (ADR-0071); `null` removes a stale list.
+		// The installation's own hosts, which a cron job's public egress refuses (ADR-0075); `null` removes a stale list.
 		managedEnvironment[FABRIKA_EGRESS_REFUSED_HOSTS] = declaresPublicEgress(approvedContract)
 			? installationHosts(
 				[deps.controlOrigin, deps.iamIssuer, operationsOrigin],

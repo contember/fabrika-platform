@@ -1,11 +1,11 @@
 ---
-id: 0071
+id: 0075
 title: A cron job may reach the public web
 status: proposed
 date: 2026-10-25
 ---
 
-# 0071 — A cron job may reach the public web
+# 0075 — A cron job may reach the public web
 
 ## Context
 

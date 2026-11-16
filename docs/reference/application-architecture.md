@@ -241,7 +241,7 @@ An import is judged by the file or package Bun loads for it:
   | `signs: ['<purpose>']`                     | `ctx.tokens.sign`; also on a job and a webhook      |
   | `kicks: ['<job>']`                         | `ctx.kick`; also on a webhook and a job             |
   | `egress: ['https://<host>']`               | `fetch` to those origins; also on a job, webhook    |
-  | `egress: 'public'`                         | `fetch` to public hosts; a cron job only (ADR-0071) |
+  | `egress: 'public'`                         | `fetch` to public hosts; a cron job only (ADR-0075) |
 
 - **Logic** (`logic.ts`) is pure: values in, values out. It does not see `ctx`, a handle or a row it did not get as an
   argument. Its tests need no database.

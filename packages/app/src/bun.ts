@@ -589,7 +589,7 @@ async function startContractServer(
 
 /**
  * Every address `hostname` resolves to, as the operating system's resolver answers Bun's own `fetch`: a cron job's public
- * egress refuses a hop whose name resolves to any private one (ADR-0071).
+ * egress refuses a hop whose name resolves to any private one (ADR-0075).
  */
 const resolveHost = async (hostname: string): Promise<readonly string[]> =>
 	(await lookup(hostname, { all: true, verbatim: true })).map((entry) => entry.address)
