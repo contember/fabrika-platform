@@ -14,14 +14,14 @@ import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from 'b
 import { createServer } from 'node:net'
 import { z } from 'zod/v4'
 import { CapabilityRefusedError } from '../implement/capability'
-import { installEgressGuard, PUBLIC_EGRESS_LIMITS, type PublicEgressRules, publicEgressRules, runAsSite } from '../implement/egress'
+import { installEgressGuard, platformCall, PUBLIC_EGRESS_LIMITS, type PublicEgressRules, publicEgressRules, runAsSite } from '../implement/egress'
 import { bootApp, environment, frameworkEnvFor, ISSUER, workloadTokensFor } from './fixtures/implement/harness'
 import { tables } from './kit-fixture/src/db/tables'
 import { vocabulary } from './kit-fixture/src/vocabulary'
 import { migration } from './orm-fixture/migration'
 
 const app = defineApp(vocabulary, tables)
-/** Bun's own `fetch`, before any test stubs or guards it. */
+/** The `fetch` this file found: Bun's own, or already guarded when an earlier file in the run booted an application. */
 const nativeFetch = globalThis.fetch
 const APP_ID = 'crm@prod'
 
@@ -429,7 +429,8 @@ describe('the guard under public egress', () => {
 		/** Sends every hop of the guard to `port` through Bun's own `fetch`, its `init` as given; `observe` sees a copy of each answer. */
 		const forwardingTo = (port: number, observe?: (response: Response) => Promise<void>) => {
 			const { stub } = stubFetch(async (url, init) => {
-				const response = await nativeFetch(`http://127.0.0.1:${port}${new URL(url).pathname}`, init)
+				// Outside the site's scope: a guard installed before this file would refuse the local port.
+				const response = await platformCall(() => nativeFetch(`http://127.0.0.1:${port}${new URL(url).pathname}`, init))
 				await observe?.(response.clone())
 				return response
 			})
