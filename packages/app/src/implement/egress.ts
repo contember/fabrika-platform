@@ -407,8 +407,8 @@ function hopHeaders(headers: Headers, url: URL, address: string | null): Headers
 	return hop
 }
 
-/** The statuses whose answer has no body (Fetch, "null body status"); `Response` refuses one with a body. */
-const NULL_BODY_STATUSES: ReadonlySet<number> = new Set([101, 103, 204, 205, 304])
+/** The statuses from 200 up whose answer has no body (Fetch, "null body status"); `Response` refuses one with a body. */
+const NULL_BODY_STATUSES: ReadonlySet<number> = new Set([204, 205, 304])
 
 /**
  * `response` read whole before the caller sees it, at most `maxResponseBytes`, within the request's deadline, with the
@@ -425,11 +425,11 @@ async function bounded(site: string, response: Response, url: URL, redirected: b
 			`${site}: ${url.origin} answers with Content-Encoding ${encoding}, which public egress neither asks for nor decodes`,
 		)
 	}
-	const init = { status: response.status, statusText: response.statusText, headers: response.headers }
 	if (response.status < 200 || response.status > 599) {
-		void response.body?.cancel().catch(() => undefined)
-		return withRequestUrl(response, url, redirected)
+		// Bun answers a status a `Response` cannot carry (600 and up); refusing it lets the caller abort the hop.
+		throw new TypeError(`${site}: ${url.origin} answers status ${response.status}, which public egress does not read`)
 	}
+	const init = { status: response.status, statusText: response.statusText, headers: response.headers }
 	const body = await readCapped(site, response, url, signal)
 	return withRequestUrl(new Response(NULL_BODY_STATUSES.has(response.status) ? null : body, init), url, redirected)
 }

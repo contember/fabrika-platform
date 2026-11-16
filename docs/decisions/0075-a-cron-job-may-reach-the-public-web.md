@@ -108,7 +108,8 @@ A refusal is `capability_refused: refused_egress`, and the job fails with it.
 - **16 MiB per response body**, by its `Content-Length` or as it arrives (`capability_refused: oversized_egress`). The
   guard reads the body whole before the caller gets the answer: Bun buffers a body as it arrives whether or not anyone
   reads it, and cancelling the body's reader leaves Bun downloading it, so the guard aborts the hop's request at the cap
-  (and when it drops a redirect's body), which closes the connection.
+  (and when it drops a redirect's body), which closes the connection. An answer with a status outside 200–599, which
+  Bun passes on and a `Response` cannot carry, fails the request the same way.
 - **No compressed body.** Every hop asks for `Accept-Encoding: identity` and, on Bun, turns off the runtime's own
   decoding (`decompress: false`), which grows a body natively without bound (a 64 KiB gzip answer decodes to 64 MiB
   before any reader sees it). An answer whose `Content-Encoding` is anything else is refused unread

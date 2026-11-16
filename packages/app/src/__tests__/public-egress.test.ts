@@ -11,6 +11,7 @@ import { FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
 import { openPostgres } from '@fabrika/db/postgres'
 import { SQL } from 'bun'
 import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from 'bun:test'
+import { createServer } from 'node:net'
 import { z } from 'zod/v4'
 import { CapabilityRefusedError } from '../implement/capability'
 import { installEgressGuard, PUBLIC_EGRESS_LIMITS, type PublicEgressRules, publicEgressRules, runAsSite } from '../implement/egress'
@@ -425,8 +426,17 @@ describe('the guard under public egress', () => {
 			await stop?.()
 			stop = undefined
 		})
-		/** Serves `answer` locally and sends every hop of the guard there through Bun's own `fetch`, its `init` as given. */
-		const serving = (answer: (path: string) => Response) => {
+		/** Sends every hop of the guard to `port` through Bun's own `fetch`, its `init` as given; `observe` sees a copy of each answer. */
+		const forwardingTo = (port: number, observe?: (response: Response) => Promise<void>) => {
+			const { stub } = stubFetch(async (url, init) => {
+				const response = await nativeFetch(`http://127.0.0.1:${port}${new URL(url).pathname}`, init)
+				await observe?.(response.clone())
+				return response
+			})
+			restore = () => stub.mockRestore()
+		}
+		/** Serves `answer` locally and sends every hop of the guard there. */
+		const serving = (answer: (path: string) => Response, observe?: (response: Response) => Promise<void>) => {
 			const encodings: (string | null)[] = []
 			const server = Bun.serve({
 				hostname: '127.0.0.1',
@@ -437,8 +447,7 @@ describe('the guard under public egress', () => {
 				},
 			})
 			stop = () => server.stop(true)
-			const { stub } = stubFetch((url, init) => nativeFetch(`http://127.0.0.1:${server.port}${new URL(url).pathname}`, init))
-			restore = () => stub.mockRestore()
+			forwardingTo(Number(server.url.port), observe)
 			return encodings
 		}
 		/** 64 MiB, one MiB every 10 ms as a network delivers it; `cancelled` settles with what was sent when the client hung up. */
@@ -460,11 +469,17 @@ describe('the guard under public egress', () => {
 
 		test('a compressed answer (a gzip bomb) is refused undecoded, and the request asked for identity', async () => {
 			const bomb = Bun.gzipSync(new Uint8Array(64 * 1024 * 1024))
-			const encodings = serving(() => new Response(bomb, { headers: { 'content-encoding': 'gzip' } }))
+			const received: number[] = []
+			const encodings = serving(
+				() => new Response(bomb, { headers: { 'content-encoding': 'gzip' } }),
+				async (response) => void received.push((await response.arrayBuffer()).byteLength),
+			)
 			expect(await refusalOf(() => runAsSite(site, NO_RULES, () => fetch('https://www.example.com/')))).toMatchObject({
 				reason: 'encoded_egress',
 			})
 			expect(encodings).toEqual(['identity'])
+			// What Bun handed over with the guard's own options: the compressed bytes, not 64 MiB it decoded.
+			expect(received).toEqual([bomb.byteLength])
 		})
 
 		test('a body past the cap closes the connection at the cap, though the caller never reads it', async () => {
@@ -474,6 +489,35 @@ describe('the guard under public egress', () => {
 				reason: 'oversized_egress',
 			})
 			expect(await cancelled).toBeLessThan(all)
+		})
+
+		test('a status no Response carries (600) is refused, and the connection closes before the body arrives', async () => {
+			const { promise: closed, resolve } = Promise.withResolvers<number>()
+			const chunk = Buffer.alloc(1024 * 1024)
+			const server = createServer((socket) => {
+				let sent = 0
+				socket.once('close', () => resolve(sent))
+				socket.once('data', async () => {
+					socket.write('HTTP/1.1 600 Custom\r\nContent-Type: application/octet-stream\r\nTransfer-Encoding: chunked\r\n\r\n')
+					for (let index = 0; index < 64 && !socket.destroyed; index++) {
+						await Bun.sleep(10)
+						socket.write(`${chunk.byteLength.toString(16)}\r\n`)
+						socket.write(chunk)
+						socket.write('\r\n')
+						sent += chunk.byteLength
+					}
+					socket.end('0\r\n\r\n')
+				})
+			})
+			const { promise: listening, resolve: listened } = Promise.withResolvers<number>()
+			server.listen(0, '127.0.0.1', () => {
+				const address = server.address()
+				listened(typeof address === 'object' && address !== null ? address.port : 0)
+			})
+			stop = () => new Promise((done) => server.close(() => done()))
+			forwardingTo(await listening)
+			await expect(runAsSite(site, NO_RULES, () => fetch('https://www.example.com/'))).rejects.toThrow('answers status 600')
+			expect(await closed).toBeLessThan(64 * chunk.byteLength)
 		})
 
 		test("a redirect's body is not downloaded once the guard follows the redirect", async () => {
