@@ -1838,11 +1838,11 @@ message. The refusal's own message names the place (`'sqlite_master' at line 2`,
 (`references/tests.md`). The codes
 you meet most:
 
-| Code                 | Means                                                                                                                                                                                                                                                                          |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `query_refused`      | the data layer refused a statement or an operation: `undeclared_reach`, `sql_read_only`, `unknown_column`, `read_only`, `sql_outside_transaction`, `sql_scope`, `sql_name` …; the reason's text names the rule                                                                 |
-| `capability_refused` | a capability of another kind, dimension or action than the call takes (`wrong_capability`, `wrong_action`, `out_of_reach`), one kept past its request (`ended`, `foreign_work`), or a `fetch` its `egress` refuses (`undeclared_egress`, `refused_egress`, `oversized_egress`) |
-| `handler_failed`     | your handler threw something else; the log has no more: the Operations issue has the stack, `app dev` prints it                                                                                                                                                                |
+| Code                 | Means                                                                                                                                                                                                                                                                                            |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `query_refused`      | the data layer refused a statement or an operation: `undeclared_reach`, `sql_read_only`, `unknown_column`, `read_only`, `sql_outside_transaction`, `sql_scope`, `sql_name` …; the reason's text names the rule                                                                                   |
+| `capability_refused` | a capability of another kind, dimension or action than the call takes (`wrong_capability`, `wrong_action`, `out_of_reach`), one kept past its request (`ended`, `foreign_work`), or a `fetch` its `egress` refuses (`undeclared_egress`, `refused_egress`, `oversized_egress`, `encoded_egress`) |
+| `handler_failed`     | your handler threw something else; the log has no more: the Operations issue has the stack, `app dev` prints it                                                                                                                                                                                  |
 
 With an Operations DSN the same 500 is a `RequestFailed` issue in Operations. Its event also carries what your handler
 threw: the error's type, its message, its stack and its `cause` chain. Read the stack there, not in the log. A crash
@@ -2447,7 +2447,8 @@ export const contract = app.contract((c) => ({
   one label (`localhost`, an internal service), a name under `.local`, `.internal`, `.workers.dev`, `.zerops.app` and similar, a port,
   the installation's own hosts (IAM, Control, Operations, every application's domain) and, on Bun (Zerops), a name
   that resolves to a private address. Every redirect is checked again: `redirect: 'manual'` gets the redirect, the default
-  follows at most 10. A request has 60 s, a response body at most 16 MiB (`oversized_egress`); pass `ctx.signal`, or
+  follows at most 10. A request has 60 s, a response body at most 16 MiB (`oversized_egress`), read whole before `fetch` answers; a
+  compressed answer is refused (`encoded_egress`: the guard asks for `identity`); pass `ctx.signal`, or
   `AbortSignal.any([ctx.signal, AbortSignal.timeout(8_000)])` for a shorter bound per page. The approver reviews it
   closely, as reach to anywhere public. Keep the sites operators enter in a table the job reads.
 - `ctx.signal` aborts when the attempt ends (its timeout, a lost lease). Call `ctx.signal.throwIfAborted()` before
