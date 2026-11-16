@@ -79,8 +79,8 @@ describe('the surface in the console', () => {
 			+ '<span>1 for anyone · 1 for machines, published by <a href="/runs/01a144a6-prod">run <code>01a144a6</code></a></span>',
 		])
 		expect(markup).toContain('<span class="chip chip-accent">anyone</span>')
-		expect(markup).toContain('<td><span class="muted">nothing</span></td><td>no rate limit and no challenge</td>')
-		expect(markup).toContain('<td><span class="muted small">human, machine</span> with `notes.read` (on `note`)</td>')
+		expect(markup).toContain('<td><span class="muted">nothing</span></td><td><span>no rate limit and no challenge</span></td>')
+		expect(markup).toContain('<td><span class="muted small">human, machine</span> with <code>notes.read</code> (on <code>note</code>)</td>')
 	})
 
 	test('an application with nothing published shows no section', () => {

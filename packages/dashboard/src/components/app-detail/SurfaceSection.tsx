@@ -4,6 +4,7 @@ import type { AppEnvDto, SurfaceEndpointDto } from '../../lib/api'
 import { Icon } from '../Icon'
 import { Chip } from '../Status'
 import { Table } from '../Table'
+import { Words } from '../Words'
 
 const REACH_LABELS: Record<SurfaceReach, string> = {
 	anyone: 'anyone',
@@ -91,11 +92,20 @@ function SurfaceRow({ endpoint }: { endpoint: SurfaceEndpointDto }) {
 			<td>
 				{endpoint.requirement === null ? <span className="muted">nothing</span> : (
 					<>
-						<span className="muted small">{endpoint.callers.join(', ')}</span> {endpoint.requirement}
+						<span className="muted small">{endpoint.callers.join(', ')}</span> <Words text={endpoint.requirement} />
 					</>
 				)}
 			</td>
-			<td>{endpoint.notes.length === 0 ? <span className="muted">—</span> : endpoint.notes.join(' · ')}</td>
+			<td>
+				{endpoint.notes.length === 0
+					? <span className="muted">—</span>
+					: endpoint.notes.map((note, index) => (
+						<span key={`${index}:${note}`}>
+							{index > 0 && ' · '}
+							<Words text={note} />
+						</span>
+					))}
+			</td>
 		</tr>
 	)
 }

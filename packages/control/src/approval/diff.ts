@@ -61,10 +61,11 @@ import {
 	type DeviationSubjectDto,
 	type ReviewReason,
 	SURFACE_REACHES,
+	type SurfaceNoteTopic,
 	type SurfaceReach,
 } from '@fabrika/control-contract'
 import type { MigrationDeviation } from '@fabrika/platform-node/sql'
-import { type AccessSnapshot, deviationKey } from './snapshot'
+import { type AccessSnapshot, compareText, deviationKey } from './snapshot'
 
 /**
  * What one line does to access: `widens` when it can grant access the baseline did not, `narrows` when it can only take
@@ -85,6 +86,10 @@ type Line =
 		readonly line: string
 		readonly environmentOrigins?: true
 		readonly consequence?: ChangeConsequenceDto
+		/** The words in a row that already names the endpoint, its route and its audience (`AccessChangeDto.inRow`). */
+		readonly inRow?: string
+		/** The surface notes of the endpoint the line already says (`AccessChangeDto.states`). */
+		readonly states?: SurfaceNoteTopic[]
 	}
 	& ({ readonly review?: undefined; readonly reason?: undefined } | { readonly review: 'closer'; readonly reason: ReviewReason })
 
@@ -173,6 +178,23 @@ function withAudience(change: AccessChange, reaching: ChangeAudienceDto | undefi
 	return { ...placed, subject: { ...change.subject, method: row.method, path: row.path }, audience: reaching ?? audienceOf(row) }
 }
 
+/** Words that follow a subject, as a sentence of their own: `gains caller \`machine\`` → `Gains caller \`machine\``. */
+function sentence(rest: string): string {
+	return `${rest.charAt(0).toUpperCase()}${rest.slice(1)}`
+}
+
+/**
+ * The lines a comparison built as `${name} …` from the `name` it handed its builders, each with its words for a row
+ * that names the endpoint already (`AccessChangeDto.inRow`). Only a comparison that builds its lines that way calls it,
+ * so no other line gets a shorter form nobody wrote; a line that does not start with `name` keeps none.
+ */
+function named(name: string, lines: readonly RuledLine[]): RuledLine[] {
+	const prefix = `${name} `
+	return lines.map((
+		line,
+	) => (line.inRow === undefined && line.line.startsWith(prefix) ? { ...line, inRow: sentence(line.line.slice(prefix.length)) } : line))
+}
+
 /** Who reaches a row, in the surface's terms. */
 function audienceOf(row: EndpointRow): ChangeAudienceDto {
 	const reach = endpointReach(row)
@@ -180,6 +202,7 @@ function audienceOf(row: EndpointRow): ChangeAudienceDto {
 		reach,
 		...(reach === 'link' && row.source.kind === 'mount' ? { mount: row.source.name } : {}),
 		requirement: row.requirement === null ? null : requirementPhrase(row.requirement),
+		callers: [...row.callers].sort(compareText),
 	}
 }
 
@@ -389,17 +412,21 @@ function compareProcedures(changes: Changes, baseline: ContractArtifact, candida
 		const row = candidate.endpoints.find((endpoint) => endpoint.id === id)
 		const from = Object.hasOwn(before, id) ? before[id] : undefined
 		const subject = subjectOf('endpoint', id)
+		const name = `\`${id}\``
 		if (from === undefined) {
 			changes.add(
 				subject,
-				...ruled('procedure.admission', [
-					neutral(`\`${id}\` admits ${ratePhrase(rules.rate)}${challengePhrase(rules.challenge)}; it ${runPhrase(row, rules.timeoutMs)}`),
+				...named(name, [
+					...ruled('procedure.admission', [{
+						...neutral(`${name} admits ${ratePhrase(rules.rate)}${challengePhrase(rules.challenge)}; it ${runPhrase(row, rules.timeoutMs)}`),
+						states: ['guards', 'limits'],
+					}]),
+					...ruled('procedure.get-mutation', rules.changesStateOnGet === true ? [closer('get-mutation', stateOnGet(name))] : []),
 				]),
-				...ruled('procedure.get-mutation', rules.changesStateOnGet === true ? [closer('get-mutation', stateOnGet(`\`${id}\``))] : []),
 			)
 			continue
 		}
-		changes.add(subject, ...procedureChanges(`\`${id}\``, from, rules))
+		changes.add(subject, ...named(name, procedureChanges(name, from, rules)))
 	}
 }
 
@@ -516,34 +543,82 @@ function baselineDirectories(artifact: ContractArtifact): Directories {
 }
 
 /**
- * The member directory each endpoint reads. A new reach widens: an endpoint that looks a member up learns whether a
- * person it names is a member, one that lists learns them all; where the dimension shows labels, the approver reads
- * the code behind it, because a label spells an email address. A removed reach narrows.
+ * The member directory each endpoint may read through `ctx.members`: the runtime grants it by the endpoint's access
+ * form alone, so the line says what the handler can do, not what it does. A new reach widens: an endpoint that looks a
+ * member up learns whether a person it names is a member, one that lists learns them all; where the dimension shows
+ * labels, the approver reads the code behind it, because a label spells an email address. A removed reach narrows.
+ *
+ * A reach the approved baseline already gives another endpoint shows no one anything new: IAM answers a directory by the
+ * action held live on the dimension's value (the dimension's `members.list` for a list, the endpoint's own action among
+ * the dimension's lookups for one member), so an endpoint of the same action, reaching the same directory as far, for
+ * the same callers, adds a handler but no person who learns who the members are. Such a line is neutral; it names the
+ * endpoint that already reached the directory. The endpoint's own lines (a new endpoint, a changed requirement) still
+ * widen as they always do.
+ *
+ * Who is checked is every caller kind the endpoint admits, its own approved row counted among the peers: an endpoint
+ * that keeps its reach but gains a caller kind no approved endpoint of that reach admitted widens too, naming the kinds,
+ * because a caller of that kind learns of members it could not before.
  */
 function compareDirectories(changes: Changes, baseline: ContractArtifact, candidate: ContractArtifact): void {
 	const before = baselineDirectories(baseline)
 	const after = candidate.directories ?? {}
+	const reachAfter = (id: string): EndpointDirectory | undefined => (Object.hasOwn(after, id) ? after[id] : undefined)
 	const reachOf = (reach: EndpointDirectory): string =>
-		reach.lists ? `lists the members of \`${reach.dimension}\`` : `looks up one member of \`${reach.dimension}\``
+		reach.lists ? `can list the members of \`${reach.dimension}\`` : `can look up one member of \`${reach.dimension}\``
+	const candidateRows = endpointMap(candidate.endpoints)
 	for (const endpoint of union(Object.keys(before), Object.keys(after))) {
 		const from = before[endpoint]
 		const to = after[endpoint]
-		const place = (line: Line) => changes.add(subjectOf('endpoint', endpoint), ...ruled('endpoint.directory', [line]))
+		const place = (line: Line, rest: string) =>
+			changes.add(subjectOf('endpoint', endpoint), ...ruled('endpoint.directory', [{ ...line, inRow: sentence(rest) }]))
+		const say = (rest: string) => `Endpoint \`${endpoint}\` ${rest}`
 		if (to === undefined) {
-			if (from !== undefined) place(narrowing(`Endpoint \`${endpoint}\` no longer reads the members of \`${from.dimension}\``))
+			const rest = `no longer reads the members of \`${from?.dimension ?? ''}\``
+			if (from !== undefined) place(narrowing(say(rest)), rest)
 			continue
 		}
-		if (from !== undefined && from.dimension === to.dimension && (from.lists || !to.lists)) {
-			if (from.lists && !to.lists) place(narrowing(`Endpoint \`${endpoint}\` no longer lists the members of \`${to.dimension}\``))
+		const row = candidateRows.get(endpoint)
+		const peers = row === undefined ? [] : approvedPeers(baseline, before, row, to)
+		const admitted = new Set(peers.flatMap((other) => other.callers))
+		const unadmitted = (row?.callers ?? []).filter((caller) => !admitted.has(caller))
+		const kept = from !== undefined && from.dimension === to.dimension && (from.lists || !to.lists)
+		if (kept && unadmitted.length === 0) {
+			const rest = `no longer lists the members of \`${to.dimension}\``
+			if (from.lists && !to.lists) place(narrowing(say(rest)), rest)
 			continue
 		}
+		if (unadmitted.length === 0) {
+			// A peer the candidate keeps at that reach, so the line does not name a reach this change takes away.
+			const stays = peers.filter((other) => {
+				const held = reachAfter(other.id)
+				return held !== undefined && held.dimension === to.dimension && (held.lists || !to.lists)
+			})
+			const precedent = (stays.length > 0 ? stays : peers).map((other) => other.id).sort(compareText)[0] ?? ''
+			const rest = `${reachOf(to)}, as the approved \`${precedent}\` ${stays.length > 0 ? 'already can' : 'could'} for the same callers`
+			place(neutral(say(rest)), rest)
+			continue
+		}
+		// Some caller kinds an approved endpoint of that reach already admitted: name the ones it gains.
+		const whom = peers.length === 0 ? '' : ` for ${andList(unadmitted.map((caller) => `\`${caller}\``))} callers too`
 		const labels = candidate.dimensions[to.dimension]?.directory === 'labels'
-		place(
-			labels
-				? closer('people', `Endpoint \`${endpoint}\` ${reachOf(to)}, with their labels, which spell users' email addresses`)
-				: widening(`Endpoint \`${endpoint}\` ${reachOf(to)}`),
-		)
+		const rest = labels ? `${reachOf(to)}${whom}, with their labels, which spell users' email addresses` : `${reachOf(to)}${whom}`
+		place(labels ? closer('people', say(rest)) : widening(say(rest)), rest)
 	}
+}
+
+/**
+ * The approved endpoints that already read `reach`'s directory at least as far with the same action as `row`, the
+ * endpoint's own approved row among them. Every caller kind `row` admits is compared with theirs; a `link` caller never
+ * reaches a directory (`directoryReach`), so one would only ever count as unadmitted, the safe side.
+ */
+function approvedPeers(baseline: ContractArtifact, before: Directories, row: EndpointRow, reach: EndpointDirectory): EndpointRow[] {
+	if (row.requirement?.kind !== 'action') return []
+	const action = row.requirement.action
+	return baseline.endpoints.filter((other) => {
+		const held = Object.hasOwn(before, other.id) ? before[other.id] : undefined
+		return other.requirement?.kind === 'action' && other.requirement.action === action && held !== undefined && held.dimension === reach.dimension
+			&& (held.lists || !reach.lists)
+	})
 }
 
 // ── Steps off the paved road ────────────────────────────────────────────────────────────────────
@@ -581,13 +656,15 @@ function compareDeclared(
 	for (const site of union(Object.keys(sites), Object.keys(after))) {
 		changes.add(
 			siteSubject(site),
-			...reachChanges(site, sites[site] ?? NO_REACH, after[site] ?? NO_REACH),
-			...endpointKickChange(site, sites[site]?.then, after[site]?.then),
-			...kicksChanges(site, sites[site]?.kicks ?? [], after[site] ?? NO_REACH),
-			...workloadActionChanges(site, sites[site]?.actions ?? [], after[site]?.actions ?? []),
-			...bindsChange(site, sites[site]?.binds, after[site]?.binds),
-			...signsChanges(site, sites[site]?.signs ?? [], after[site]?.signs ?? []),
-			...egressChanges(site, sites[site]?.egress ?? [], after[site]?.egress ?? []),
+			...named(siteName(site), [
+				...reachChanges(site, sites[site] ?? NO_REACH, after[site] ?? NO_REACH),
+				...endpointKickChange(site, sites[site]?.then, after[site]?.then),
+				...kicksChanges(site, sites[site]?.kicks ?? [], after[site] ?? NO_REACH),
+				...workloadActionChanges(site, sites[site]?.actions ?? [], after[site]?.actions ?? []),
+				...bindsChange(site, sites[site]?.binds, after[site]?.binds),
+				...signsChanges(site, sites[site]?.signs ?? [], after[site]?.signs ?? []),
+				...egressChanges(site, sites[site]?.egress ?? [], after[site]?.egress ?? []),
+			]),
 		)
 	}
 }
@@ -864,9 +941,16 @@ export function snapshotDeviations(snapshot: AccessSnapshot): DeviationSubjectDt
 function compareEndpoints(changes: Changes, baseline: ContractArtifact, candidate: ContractArtifact): ReadonlySet<string> {
 	compareKeyed(changes, 'endpoint', endpointMap(baseline.endpoints), endpointMap(candidate.endpoints), {
 		added: (id, row) => {
-			const line = `New endpoint \`${id}\` (${route(row)}) ${audience(row)}${answersFile(row)}${callableFrom(row)}${reusedFor(row.cache)}`
+			const details = `${answersFile(row)}${callableFrom(row)}${reusedFor(row.cache)}`
+			const line = `New endpoint \`${id}\` (${route(row)}) ${audience(row)}${details}`
 			// Code anyone can call gets a closer review than code a signed-in caller reaches.
-			const change = row.kind === 'public' ? closer('anyone-calls', line) : widening(line)
+			const words = row.kind === 'public' ? closer('anyone-calls', line) : widening(line)
+			// Its row names the endpoint, its route and its audience; the file it answers and the origins it opens to are
+			// said here, so the row's notes leave them out.
+			const states: SurfaceNoteTopic[] = []
+			if (row.output !== null && (isFileShape(row.output) || isAttachmentShape(row.output))) states.push('answers-file')
+			if (row.crossOrigin !== undefined) states.push('cross-origin')
+			const change = { ...words, inRow: `New endpoint${details}`, ...(states.length === 0 ? {} : { states }) }
 			return row.crossOrigin === 'environment' ? { ...change, environmentOrigins: true } : change
 		},
 		removed: () => [],
@@ -1154,7 +1238,7 @@ function andList(values: readonly string[]): string {
 function endpointChanges(id: string, from: EndpointRow, to: EndpointRow): RuledLine[] {
 	const name = `Endpoint \`${id}\``
 	const becomesPublic = from.requirement !== null && (to.kind === 'public-spa' || to.kind === 'public')
-	return [
+	return named(name, [
 		...ruled(
 			'endpoint.public',
 			!becomesPublic ? [] : to.kind === 'public'
@@ -1171,7 +1255,7 @@ function endpointChanges(id: string, from: EndpointRow, to: EndpointRow): RuledL
 		...ruled('endpoint.authorization', authorizationChange(name, from.authorization, to.authorization)),
 		...ruled('endpoint.input', schemaChanges({ endpoint: name, side: 'input', path: '' }, from.input, to.input)),
 		...ruled('endpoint.output', outputChanges(name, from.output, to.output)),
-	]
+	])
 }
 
 /**

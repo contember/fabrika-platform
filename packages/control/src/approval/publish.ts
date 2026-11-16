@@ -2,7 +2,7 @@
 // on a protected environment until a human approves it, and publish with a compare-and-swap on the generation.
 
 import { incompatibleMountChanges } from '@fabrika/app/contract'
-import { type AccessChangeDto, CHANGE_SUBJECT_KINDS, REVIEW_REASONS, SURFACE_REACHES } from '@fabrika/control-contract'
+import { type AccessChangeDto, CHANGE_SUBJECT_KINDS, REVIEW_REASONS, SURFACE_NOTE_TOPICS, SURFACE_REACHES } from '@fabrika/control-contract'
 import type { ProviderApprovedAccess } from '@fabrika/provider-contract'
 import { z } from 'zod'
 import { consumerEdgeProblems, ownerEdgeProblems } from '../connectors'
@@ -65,7 +65,12 @@ const subjectSchema = z.object({
 	path: z.string().optional(),
 }).strict()
 
-const audienceSchema = z.object({ reach: z.enum(SURFACE_REACHES), mount: z.string().optional(), requirement: z.string().nullable() }).strict()
+const audienceSchema = z.object({
+	reach: z.enum(SURFACE_REACHES),
+	mount: z.string().optional(),
+	requirement: z.string().nullable(),
+	callers: z.array(z.string()).optional(),
+}).strict()
 
 const changeSchema: z.ZodType<AccessChangeDto, z.ZodTypeDef, unknown> = z.union([
 	z.object({
@@ -78,6 +83,8 @@ const changeSchema: z.ZodType<AccessChangeDto, z.ZodTypeDef, unknown> = z.union(
 		subject: subjectSchema.optional(),
 		audience: audienceSchema.optional(),
 		consequence: z.object({ kind: z.literal('starts-job'), job: z.string() }).strict().optional(),
+		inRow: z.string().optional(),
+		states: z.array(z.enum(SURFACE_NOTE_TOPICS)).optional(),
 	}).strict(),
 	z.object({ widens: z.boolean(), line: z.string(), review }).strict().transform(({ widens, line, review }): AccessChangeDto => ({
 		effect: widens ? 'widens' : isJobStartLine(line) ? 'neutral' : 'narrows',

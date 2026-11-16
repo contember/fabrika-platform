@@ -7,14 +7,17 @@ import { Icon, type IconName } from '../../components/Icon'
 import { SearchField } from '../../components/SearchField'
 import { Chip, RunStatus, Status } from '../../components/Status'
 import { Table } from '../../components/Table'
+import { Words } from '../../components/Words'
 import {
 	approvalStage,
+	callerGroupPhrase,
 	callerGroupTitle,
 	changesWith,
 	EFFECT_SECTIONS,
 	type EffectSection,
 	reviewReason,
 	SUBJECT_TITLES,
+	surfaceNotes,
 } from '../../lib/access-changes'
 import { type AccessChangeDto, api, ApiError, type ApprovalDto, type SurfaceEndpointDto } from '../../lib/api'
 import { fmtDate, shortRef, shortSha } from '../../lib/format'
@@ -102,9 +105,11 @@ export default createPage()
 export function AccessChangeView({ view, approval }: { view: ApprovalView; approval: ApprovalDto }) {
 	const endpoints = new Map(approval.endpoints.map((endpoint) => [endpoint.id, endpoint]))
 	const crossOrigins = approval.crossOrigins
+	// The framework's default limits, said once: a row says only the limits of its own.
+	const defaults = approval.endpoints.flatMap(surfaceNotes).find((note) => note.default === true)
 	return (
 		<>
-			{view.impact.callers.length + view.impact.migrations > 0 && <Impact view={view} />}
+			{approval.changes.length > 0 && <Summary view={view} approval={approval} />}
 			{view.callers.length > 0 && (
 				<section>
 					<div className="section-head">
@@ -114,6 +119,11 @@ export function AccessChangeView({ view, approval }: { view: ApprovalView; appro
 					<p className="hint">
 						The endpoints this change touches, grouped by who reaches them, the group that needs the closest look first. A group that only narrows access or
 						leaves it unchanged starts closed.
+						{defaults !== undefined && (
+							<>
+								{' '}A row marked <em>default limits</em> <Words text={defaults.text} />.
+							</>
+						)}
 					</p>
 					{view.callers.map((group) => <GroupCard key={group.key} group={group} endpoints={endpoints} crossOrigins={crossOrigins} />)}
 				</section>
@@ -136,51 +146,94 @@ export function AccessChangeView({ view, approval }: { view: ApprovalView; appro
 
 const REACH_ICONS: Record<string, IconName> = { anyone: 'globe', link: 'link', app: 'app', machine: 'key', human: 'users' }
 
-/** The head of the page: per caller group the endpoints that change, and the migrations. */
-function Impact({ view }: { view: ApprovalView }) {
-	const closerIn = (key: string) => view.callers.find((group) => group.key === key)?.tally.closer ?? 0
+/**
+ * The head of the page, in plain words: what the change does to endpoints and to whom, what else it changes, whether it
+ * waits, and the lines to check first, each with the reason it needs a closer look.
+ */
+function Summary({ view, approval }: { view: ApprovalView; approval: ApprovalDto }) {
+	const { summary, impact } = view
+	const reached = impact.callers.map((entry) => {
+		const count = entry.endpoints + entry.removedEndpoints + entry.removedMounts
+		return `${callerGroupPhrase(entry.reach, entry.mount, entry.people)} (${count})`
+	})
+	const others = view.data.map((group) => (group.kind === 'subject' ? SUBJECT_TITLES[group.subject].toLowerCase() : ''))
+	const closer = summary.check.some((change) => change.review === 'closer')
 	return (
-		<section className="instrument-cluster readings change-impact">
-			{view.impact.callers.map((entry) => (
-				<div key={entry.key} className="instrument">
-					<div className="instrument-label">
-						<Words text={callerGroupTitle(entry.reach, entry.mount)} />
-					</div>
-					<div className="instrument-value">{entry.endpoints + entry.removedEndpoints + entry.removedMounts}</div>
-					<div className="instrument-note">
-						{reachedThings(entry)}
-						{closerIn(entry.key) > 0 && (
-							<>
-								{', '}
-								<span className="badge badge-warn">
-									{closerIn(entry.key)} {closerIn(entry.key) === 1 ? 'line' : 'lines'} for closer review
-								</span>
-							</>
+		<section className="card change-summary">
+			<div className="card-body">
+				<p className="change-summary-lead">
+					<Words text={endpointSentence(summary)} />
+					{others.length > 0 && <>{' '}It also changes {andList(others)}.</>}
+					{impact.migrations > 0 && (
+						<>
+							{' '}
+							{impact.migrations === 1 ? '1 migration is' : `${impact.migrations} migrations are`} new or changed.
+						</>
+					)}
+				</p>
+				{reached.length > 0 && (
+					<p>
+						Who reaches the endpoints: <Words text={reached.join(', ')} />.
+					</p>
+				)}
+				<p className="muted">{outcomeSentence(approval)}</p>
+				{summary.check.length > 0 && (
+					<div className="change-summary-check">
+						<h3>Check first</h3>
+						<ul className="change-lines">
+							{summary.check.map((change, index) => {
+								const reason = reviewReason(change)
+								return (
+									<li key={`${index}:${change.line}`} className={`change-${change.effect}`}>
+										<Icon name={EFFECT_ICONS[change.effect]} size={13} />
+										<span>
+											<Words text={change.line} />
+											{reason !== null && (
+												<>
+													{' '}
+													<CloserReview />
+													<span className="change-reason muted small">
+														<Words text={reason} />
+													</span>
+												</>
+											)}
+										</span>
+									</li>
+								)
+							})}
+						</ul>
+						{!closer && (
+							<p className="muted small">
+								Nothing in this change needs closer review: no step off the paved road, nothing anyone sets off without signing in, no people revealed.
+							</p>
 						)}
 					</div>
-				</div>
-			))}
-			{view.impact.migrations > 0 && (
-				<div className="instrument">
-					<div className="instrument-label">Migrations</div>
-					<div className="instrument-value">{view.impact.migrations}</div>
-					<div className="instrument-note">new or changed</div>
-				</div>
-			)}
+				)}
+			</div>
 		</section>
 	)
 }
 
-/** `endpoints`, or `2 endpoints, 1 removed mount` when the group holds removals too. */
-function reachedThings(entry: ApprovalView['impact']['callers'][number]): string {
-	const { endpoints, removedEndpoints, removedMounts } = entry
-	if (removedEndpoints + removedMounts === 0) return endpoints === 1 ? 'endpoint' : 'endpoints'
-	const counted: [number, string, string][] = [
-		[endpoints, 'endpoint', 'endpoints'],
-		[removedEndpoints, 'removed endpoint', 'removed endpoints'],
-		[removedMounts, 'removed mount', 'removed mounts'],
-	]
-	return counted.flatMap(([count, one, many]) => (count === 0 ? [] : [`${count} ${count === 1 ? one : many}`])).join(', ')
+/** `This change adds 1 endpoint and changes 2.`, `This change removes 3 endpoints.`, or that it touches none. */
+function endpointSentence({ added, changed, removed }: ApprovalView['summary']): string {
+	const counted = (count: number, verb: string) => (count === 0 ? [] : [`${verb} ${count} ${count === 1 ? 'endpoint' : 'endpoints'}`])
+	const parts = [...counted(added, 'adds'), ...counted(changed, 'changes'), ...counted(removed, 'removes')]
+	if (parts.length === 0) return 'This change touches no endpoint.'
+	// The noun once: "adds 1 endpoint and changes 2".
+	const [first, ...rest] = parts
+	return `This change ${andList([first ?? '', ...rest.map((part) => part.replace(/ endpoints?$/, ''))])}.`
+}
+
+/** Whether the change widens access, and what that means for this run. */
+function outcomeSentence(approval: ApprovalDto): string {
+	if (approval.outcome !== 'widening') return 'It only narrows access or leaves it unchanged, so it publishes without waiting.'
+	if (!approval.protected) return 'It widens access; this environment is not protected, so it publishes without waiting.'
+	return approval.run.status === 'awaiting_approval' ? 'It widens access, so it waits for your approval.' : 'It widens access.'
+}
+
+function andList(items: readonly string[]): string {
+	if (items.length <= 1) return items.join('')
+	return `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`
 }
 
 /** One group: a caller group's endpoints with what each requires and what stands in front of it, or one kind of subject. */
@@ -192,7 +245,8 @@ export function GroupCard(
 	},
 ) {
 	const callers = group.kind === 'caller'
-	const title = callers ? callerGroupTitle(group.reach, group.mount) : SUBJECT_TITLES[group.subject]
+	const title = callers ? callerGroupTitle(group.reach, group.mount, group.people) : SUBJECT_TITLES[group.subject]
+	const { closer } = group.standing
 	return (
 		<details className="card change-group" open={!group.collapsed}>
 			<summary className="card-head">
@@ -201,8 +255,11 @@ export function GroupCard(
 					<Words text={title} />
 				</h3>
 				<span className="muted small">{tallyText(group)}</span>
-				<span className="spacer" />
-				{group.tally.closer > 0 && <CloserReview />}
+				{closer > 0 && (
+					<span className="badge badge-warn">
+						{closer === 1 ? (callers ? '1 endpoint needs' : '1 needs') : `${closer} ${callers ? 'endpoints ' : ''}need`} closer review, below
+					</span>
+				)}
 			</summary>
 			<div className="card-body flush">
 				<Table
@@ -244,7 +301,7 @@ function GroupRow(
 							{row.subjects.map((subject) => (
 								<li key={`${subject.subject.kind}:${subject.subject.name}`}>
 									<SubjectName row={subject} />
-									<ChangeLines changes={subject.changes} crossOrigins={crossOrigins} />
+									<ChangeLines changes={subject.changes} crossOrigins={crossOrigins} inRow={callers} />
 								</li>
 							))}
 						</ul>
@@ -255,23 +312,46 @@ function GroupRow(
 	}
 	// A removed mount may share an endpoint's name; only an endpoint has a surface row.
 	const surface = row.subject.kind === 'endpoint' ? endpoints.get(row.subject.name) : undefined
+	const requirement = row.audience?.requirement ?? null
 	return (
 		<tr>
 			<td>
 				<SubjectName row={row} />
 			</td>
-			{callers && <td>{row.audience?.requirement ?? <span className="muted">nothing</span>}</td>}
+			{callers && <td>{requirement === null ? <span className="muted">nothing</span> : <Words text={requirement} />}</td>}
 			<td>
-				<ChangeLines changes={row.changes} crossOrigins={crossOrigins} />
+				<ChangeLines changes={row.changes} crossOrigins={crossOrigins} inRow={callers} />
 			</td>
 			{callers && (
 				<td>
-					{surface === undefined || surface.notes.length === 0
-						? <span className="muted">{surface === undefined ? 'removed' : 'nothing listed'}</span>
-						: surface.notes.join(' · ')}
+					<InFrontOf surface={surface} changes={row.changes} />
 				</td>
 			)}
 		</tr>
+	)
+}
+
+/**
+ * What stands in front of an endpoint, without what its lines already say and without the framework's default limits,
+ * which the section says once.
+ */
+function InFrontOf({ surface, changes }: { surface: SurfaceEndpointDto | undefined; changes: readonly AccessChangeDto[] }) {
+	if (surface === undefined) return <span className="muted">removed</span>
+	const stated = new Set(changes.flatMap((change) => change.states ?? []))
+	const unsaid = surfaceNotes(surface).filter((note) => note.topic === undefined || !stated.has(note.topic))
+	const shown = unsaid.filter((note) => note.default !== true)
+	const defaults = unsaid.some((note) => note.default === true)
+	if (shown.length === 0) return <span className="muted">{defaults ? 'default limits' : '—'}</span>
+	return (
+		<>
+			{shown.map((note, index) => (
+				<span key={`${note.topic}:${note.text}`}>
+					{index > 0 && ' · '}
+					<Words text={note.text} />
+				</span>
+			))}
+			{defaults && <span className="muted">{' · '}default limits</span>}
+		</>
 	)
 }
 
@@ -289,8 +369,13 @@ function SubjectName({ row }: { row: SubjectRow }) {
 	)
 }
 
-/** One subject's lines, each with its effect, the closer-review mark and the reason for it. */
-function ChangeLines({ changes, crossOrigins }: { changes: readonly AccessChangeDto[]; crossOrigins: readonly string[] | undefined }) {
+/**
+ * One subject's lines, each with its effect, the closer-review mark and the reason for it. In a caller group's row,
+ * which names the endpoint, its route and who reaches it already, a line says only the rest (`inRow`).
+ */
+function ChangeLines(
+	{ changes, crossOrigins, inRow }: { changes: readonly AccessChangeDto[]; crossOrigins: readonly string[] | undefined; inRow: boolean },
+) {
 	return (
 		<ul className="change-lines">
 			{changes.map((change, index) => {
@@ -300,7 +385,7 @@ function ChangeLines({ changes, crossOrigins }: { changes: readonly AccessChange
 					<li key={`${index}:${change.line}`} className={`change-${change.effect}`}>
 						<Icon name={EFFECT_ICONS[change.effect]} size={13} />
 						<span>
-							<Words text={change.line} />
+							<Words text={inRow ? (change.inRow ?? change.line) : change.line} />
 							{change.environmentOrigins === true && crossOrigins !== undefined && <EnvironmentOrigins origins={crossOrigins} />}
 							{reason !== null && (
 								<>
@@ -319,14 +404,6 @@ function ChangeLines({ changes, crossOrigins }: { changes: readonly AccessChange
 	)
 }
 
-/** A line's words with each `name` set as code, the way the diff quotes identifiers. */
-export function Words({ text }: { text: string }) {
-	const parts = text.split('`')
-	// An odd count of backticks leaves the last one open: show the text as it is.
-	if (parts.length % 2 === 0) return <>{text}</>
-	return <>{parts.map((part, index) => (index % 2 === 1 ? <code key={`${index}:${part}`}>{part}</code> : part))}</>
-}
-
 const EFFECT_ICONS: Record<AccessChangeDto['effect'], IconName> = { widens: 'alert', narrows: 'check', neutral: 'arrow-right' }
 
 function rowKey(row: ChangeRow): string {
@@ -335,14 +412,13 @@ function rowKey(row: ChangeRow): string {
 		: `folded:${row.rules.map((rule) => `${rule.rule} ${rule.effect}`).join('|')}`
 }
 
-/** `2 widen · 1 for closer review · 40 narrow`, leaving out what the group does not have. */
+/** What the heading counts, the rows of the group: `2 endpoints, both widen access`, `4 changes, none widens access`. */
 function tallyText(group: ChangeGroup): string {
-	const { widens, narrows, neutral } = group.tally
-	return [
-		widens > 0 ? `${widens} ${widens === 1 ? 'widens' : 'widen'}` : '',
-		narrows > 0 ? `${narrows} ${narrows === 1 ? 'narrows' : 'narrow'}` : '',
-		neutral > 0 ? `${neutral} unchanged` : '',
-	].filter((part) => part !== '').join(' · ')
+	const { subjects, widening } = group.standing
+	const noun = group.kind === 'caller' ? (subjects === 1 ? 'endpoint' : 'endpoints') : subjects === 1 ? 'change' : 'changes'
+	if (widening === 0) return `${subjects} ${noun}, none widens access`
+	if (widening === subjects) return `${subjects} ${noun}, ${subjects === 1 ? 'it widens' : subjects === 2 ? 'both widen' : 'all widen'} access`
+	return `${subjects} ${noun}, ${widening} ${widening === 1 ? 'widens' : 'widen'} access`
 }
 
 function foldedEffect(row: Extract<ChangeRow, { kind: 'folded' }>): string {
@@ -410,12 +486,17 @@ export function ChangeList(
 			<ul className="change-list">
 				{changes.map((change, index) => (
 					<li key={`${index}:${change.line}`}>
-						{change.line}
+						<Words text={change.line} />
 						{change.environmentOrigins === true && crossOrigins !== undefined && <EnvironmentOrigins origins={crossOrigins} />}
 						{change.review === 'closer' && (
 							<>
 								{' '}
 								<CloserReview />
+								{reviewReason(change) !== null && (
+									<span className="change-reason muted small">
+										<Words text={reviewReason(change) ?? ''} />
+									</span>
+								)}
 							</>
 						)}
 					</li>

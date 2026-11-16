@@ -6,7 +6,7 @@ import { describe, expect, test } from 'bun:test'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { approvalStage } from '../lib/access-changes'
-import type { AccessChangeDto, ApprovalDto, ChangeAudienceDto, RunDto } from '../lib/api'
+import type { AccessChangeDto, ApprovalDto, ChangeAudienceDto, RunDto, SurfaceNoteDto } from '../lib/api'
 import { AccessChangeView } from '../routes/approvals/detail'
 
 const anyone: ChangeAudienceDto = { reach: 'anyone', requirement: null }
@@ -78,7 +78,16 @@ const APPROVAL: ApprovalDto = {
 			reach: 'anyone',
 			callers: [],
 			requirement: null,
-			notes: ['at most 10 calls a minute per client', 'turnstile challenge'],
+			notes: [
+				'at most 10 calls a minute per client',
+				'turnstile challenge',
+				'waits at most 30 s for a body of at most 65536 bytes, then runs at most 10 s',
+			],
+			noteFacts: [
+				{ topic: 'guards', text: 'at most 10 calls a minute per client' },
+				{ topic: 'guards', text: 'turnstile challenge' },
+				{ topic: 'limits', text: 'waits at most 30 s for a body of at most 65536 bytes, then runs at most 10 s', default: true },
+			],
 		},
 	],
 	approval: null,
@@ -92,8 +101,69 @@ describe('the approval page', () => {
 	test('opens the group anyone reaches, with what stands in front of each endpoint, and keeps a narrowing-only group closed', () => {
 		expect(markup).toContain('<details class="card change-group" open="">')
 		expect(markup).toContain('Anyone, without signing in')
-		expect(markup).toContain('at most 10 calls a minute per client · turnstile challenge')
+		expect(markup).toContain('<span>at most 10 calls a minute per client</span><span> · turnstile challenge</span>')
 		expect(markup.match(/<details class="card change-group">/g)).toHaveLength(1)
+	})
+
+	test('leads with a plain summary: what changes, who reaches it, whether it waits, and what to check first and why', () => {
+		const summary = markup.slice(markup.indexOf('change-summary'), markup.indexOf('Who gains access'))
+		expect(summary).toContain('This change adds 1 endpoint and changes 4.')
+		expect(summary).toContain('anyone without signing in (1), signed-in people (4)')
+		expect(summary).toContain('It widens access, so it waits for your approval.')
+		expect(summary).toContain('Check first')
+		expect(summary).toContain('Anyone on the internet decides when job <code>intake</code> runs.')
+	})
+
+	test('says the default limits once, and in a row only the limits of its own', () => {
+		expect(markup).toContain('A row marked <em>default limits</em> waits at most 30 s for a body of at most 65536 bytes, then runs at most 10 s.')
+		expect(markup).toContain('<span class="muted"> · default limits</span>')
+		expect(markup.match(/waits at most 30 s/g)).toHaveLength(1)
+	})
+
+	test('a heading counts its endpoints and points to the ones for closer review', () => {
+		expect(markup).toContain('1 endpoint, it widens access')
+		expect(markup).toContain('4 endpoints, none widens access')
+		expect(markup).toContain('1 endpoint needs closer review, below')
+	})
+
+	test('a row of machines and signed-in people says so, renders its requirement, and says no fact twice', () => {
+		const both: ChangeAudienceDto = { reach: 'machine', requirement: 'with `documents.read` (on `document`)', callers: ['human', 'machine'] }
+		const added = endpoint(
+			'api.render',
+			both,
+			'New endpoint `api.render` (POST /api.render) for human, machine callers …, answering a stored file',
+			{
+				effect: 'widens',
+				rule: 'endpoint.added',
+				inRow: 'New endpoint, answering a stored file of kind `rendered`',
+				states: ['answers-file'],
+			},
+		)
+		const facts: SurfaceNoteDto[] = [
+			{ topic: 'answers-file', text: 'answers a stored file of kind `rendered`' },
+			{ topic: 'limits', text: 'waits at most 30 s for a body of at most 65536 bytes, then runs at most 10 s', default: true },
+		]
+		const page = render({
+			...APPROVAL,
+			changes: [added],
+			endpoints: [{
+				id: 'api.render',
+				method: 'POST',
+				path: '/api.render',
+				kind: 'mutation',
+				reach: 'machine',
+				callers: ['human', 'machine'],
+				requirement: 'with `documents.read` (on `document`)',
+				notes: facts.map((note) => note.text),
+				noteFacts: facts,
+			}],
+		})
+		const group = page.slice(page.indexOf('change-group'))
+		expect(group).toContain('Machines and signed-in people')
+		expect(group).toContain('with <code>documents.read</code> (on <code>document</code>)')
+		expect(group).toContain('New endpoint, answering a stored file of kind <code>rendered</code>')
+		expect(group).not.toContain('answers a stored file')
+		expect(group).toContain('<span class="muted">default limits</span>')
 	})
 
 	test('says why a line needs closer review, naming the job anyone sets off', () => {

@@ -305,6 +305,43 @@ export interface SurfaceEndpointDto {
 	requirement: string | null
 	/** What else opens the endpoint: another origin, a file it answers, a body limit, a form's protection, a signature. */
 	notes: string[]
+	/**
+	 * The same notes, in the same order, each with what it is about. Beside `notes`, never instead of it: a builder
+	 * daemon of an older release reads `notes` as text and drops a field it does not know. Absent from a Control
+	 * released before it.
+	 */
+	noteFacts?: SurfaceNoteDto[]
+}
+
+/**
+ * What a surface note is about: an opaque root it takes, another origin it is callable from, a file it answers or
+ * takes, an upload's body limit, a form's protection, a procedure's buckets and challenge (`guards`), how long it waits
+ * for a body of what size and how long it runs (`limits`), a webhook's signature. A line that already says one
+ * (`AccessChangeDto.states`) lets the approval page leave that note out of the line's row.
+ */
+export const SURFACE_NOTE_TOPICS = [
+	'opaque-root',
+	'cross-origin',
+	'answers-file',
+	'takes-files',
+	'body-limit',
+	'form',
+	'guards',
+	'limits',
+	'signature',
+] as const
+
+export type SurfaceNoteTopic = (typeof SURFACE_NOTE_TOPICS)[number]
+
+/** One thing that opens an endpoint or stands in front of it, in the approval's words. */
+export interface SurfaceNoteDto {
+	topic: SurfaceNoteTopic
+	text: string
+	/**
+	 * The procedure's `limits` are the framework's defaults (its body limit and time limit, without file fields): the
+	 * approval page says them once for every such row instead of on each.
+	 */
+	default?: true
 }
 
 export interface PutAppEnvRequest {
@@ -582,6 +619,11 @@ export interface ChangeAudienceDto {
 	mount?: string
 	/** What a caller must hold, as `SurfaceEndpointDto.requirement` words it; null for an anonymous kind. */
 	requirement: string | null
+	/**
+	 * Every caller kind the endpoint admits, sorted, as `SurfaceEndpointDto.callers`; empty for an anonymous kind. Absent
+	 * on a line classified before lines carried it.
+	 */
+	callers?: string[]
 }
 
 /**
@@ -618,6 +660,13 @@ export interface AccessChangeDto {
 	/** Who reaches the endpoint, on an endpoint subject. */
 	audience?: ChangeAudienceDto
 	consequence?: ChangeConsequenceDto
+	/**
+	 * The line's words in a row that already names its endpoint, route and audience (the approval page's caller groups):
+	 * `New endpoint`, `Output \`header\` gains field \`reference\``. Absent where the line has no shorter form.
+	 */
+	inRow?: string
+	/** The surface notes of its endpoint the line already says, so its row does not say them again. */
+	states?: SurfaceNoteTopic[]
 }
 
 /** A run's access change against its environment's active snapshot (ADR-0050 §3). */

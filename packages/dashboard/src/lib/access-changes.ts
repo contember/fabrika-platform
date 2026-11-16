@@ -1,7 +1,7 @@
 // The three effects of an access change line (ADR-0050 §3), in the order the console shows them, and how the list and
 // the approval page name each one; the approval page's group titles, its review reasons and where a decided run stands.
 
-import type { AccessChangeDto, ApprovalDto, ChangeSubjectKind, SurfaceReach } from '@fabrika/control-contract'
+import type { AccessChangeDto, ApprovalDto, ChangeSubjectKind, SurfaceEndpointDto, SurfaceNoteDto, SurfaceReach } from '@fabrika/control-contract'
 import { type Lamp, runLamp } from '../components/Status'
 
 export type AccessEffect = AccessChangeDto['effect']
@@ -41,8 +41,19 @@ export function effectCounts(changes: readonly AccessChangeDto[]): string {
 		.join(', ')
 }
 
-/** Who a caller group's endpoints are reached by, as its heading says it. */
-export function callerGroupTitle(reach: SurfaceReach, mount?: string): string {
+/** A note of what stands in front of an endpoint; one from a Control that sent text alone has no topic. */
+export type ShownNote = Pick<SurfaceNoteDto, 'text'> & Partial<Pick<SurfaceNoteDto, 'topic' | 'default'>>
+
+/** An endpoint's notes with what each is about, or as text alone when Control sent no facts. */
+export function surfaceNotes(endpoint: SurfaceEndpointDto): ShownNote[] {
+	return endpoint.noteFacts ?? endpoint.notes.map((text) => ({ text }))
+}
+
+/**
+ * Who a caller group's endpoints are reached by, as its heading says it. `people`: machines and signed-in people both
+ * reach them.
+ */
+export function callerGroupTitle(reach: SurfaceReach, mount?: string, people?: true): string {
 	switch (reach) {
 		case 'anyone':
 			return 'Anyone, without signing in'
@@ -51,10 +62,15 @@ export function callerGroupTitle(reach: SurfaceReach, mount?: string): string {
 		case 'app':
 			return 'Other applications'
 		case 'machine':
-			return 'Machines'
+			return people === true ? 'Machines and signed-in people' : 'Machines'
 		case 'human':
 			return 'Signed-in people'
 	}
+}
+
+/** The same, inside a sentence: `reached by machines and signed-in people`. */
+export function callerGroupPhrase(reach: SurfaceReach, mount?: string, people?: true): string {
+	return reach === 'anyone' ? 'anyone without signing in' : callerGroupTitle(reach, mount, people).replace(/^\w/, (first) => first.toLowerCase())
 }
 
 export const SUBJECT_TITLES: Record<ChangeSubjectKind, string> = {

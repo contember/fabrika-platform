@@ -48,9 +48,20 @@ describe('deviations in the console', () => {
 			],
 		}))
 		expect(items(markup)).toEqual([
-			'Role `editor` gains `notes.delete`',
-			'Endpoint `api.notes.summary` declares raw SQL (`read`) <span class="badge badge-warn">needs closer review</span>',
+			'Role <code>editor</code> gains <code>notes.delete</code>',
+			'Endpoint <code>api.notes.summary</code> declares raw SQL (<code>read</code>) <span class="badge badge-warn">needs closer review</span>',
 		])
+	})
+
+	test('every line for closer review in the list of every line says why', () => {
+		const markup = renderToStaticMarkup(createElement(ChangeList, {
+			title: 'Widens access',
+			icon: 'alert',
+			changes: [{ effect: 'widens', line: 'Endpoint `api.notes.summary` declares raw SQL (`read`)', review: 'closer', reason: 'off-road' }],
+		}))
+		expect(markup).toContain(
+			'<span class="badge badge-warn">needs closer review</span><span class="change-reason muted small">A step off the paved road: read the code behind it, not only this line.</span>',
+		)
 	})
 
 	test("the environment page summarizes each environment's published deviations, protected or not, and lists them on demand", () => {

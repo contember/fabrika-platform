@@ -304,20 +304,20 @@ describe('classifyAccess', () => {
 		}
 		expect(classifyAccess(unrecorded(listed), listed)).toEqual({
 			outcome: 'widening',
-			changes: [{ effect: 'widens', line: 'Endpoint `api.get` lists the members of `workspace`' }, {
+			changes: [{ effect: 'widens', line: 'Endpoint `api.get` can list the members of `workspace`' }, {
 				effect: 'widens',
-				line: 'Endpoint `api.remove` looks up one member of `workspace`',
+				line: 'Endpoint `api.remove` can look up one member of `workspace`',
 			}],
 		})
 		expect(classifyAccess(unrecorded(labelled), labelled).changes).toEqual([
 			{
 				effect: 'widens',
-				line: "Endpoint `api.get` lists the members of `workspace`, with their labels, which spell users' email addresses",
+				line: "Endpoint `api.get` can list the members of `workspace`, with their labels, which spell users' email addresses",
 				review: 'closer',
 			},
 			{
 				effect: 'widens',
-				line: "Endpoint `api.remove` looks up one member of `workspace`, with their labels, which spell users' email addresses",
+				line: "Endpoint `api.remove` can look up one member of `workspace`, with their labels, which spell users' email addresses",
 				review: 'closer',
 			},
 		])

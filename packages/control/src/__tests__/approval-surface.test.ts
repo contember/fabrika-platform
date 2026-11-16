@@ -87,25 +87,43 @@ describe('the surface of a published snapshot', () => {
 			input: { type: 'object', fields: {} },
 			output: { type: 'object', fields: {} },
 		}
-		const notesOf = (rules: ProcedureArtifact) =>
-			snapshotSurface({ version: 1, contract: { ...notesArtifact, endpoints: [cta], procedures: { [cta.id]: rules } }, migrations: [], checker: '' })[0]
-				?.notes
+		const notesOf = (rules: ProcedureArtifact, row = cta) =>
+			snapshotSurface({ version: 1, contract: { ...notesArtifact, endpoints: [row], procedures: { [row.id]: rules } }, migrations: [], checker: '' })[0]
+				?.noteFacts
 		const rate = { perClient: 10, perCaller: null, perEndpoint: 100, bytesPerHour: null }
 		expect(notesOf({ rate, challenge: { provider: 'turnstile', secret: 'TURNSTILE_SECRET', action: 'api_stats_cta' }, timeoutMs: 10_000 })).toEqual([
-			'at most 10 calls a minute per client (one client on Zerops)',
-			'at most 100 calls a minute in all',
-			'turnstile challenge',
-			'waits at most 30 s for a body of at most 1024 bytes, then runs at most 10 s',
+			{ topic: 'guards', text: 'at most 10 calls a minute per client (one client on Zerops)' },
+			{ topic: 'guards', text: 'at most 100 calls a minute in all' },
+			{ topic: 'guards', text: 'turnstile challenge' },
+			{ topic: 'limits', text: 'waits at most 30 s for a body of at most 1024 bytes, then runs at most 10 s' },
 		])
 		expect(notesOf({ rate: { ...rate, perClient: null, perEndpoint: null }, challenge: null, timeoutMs: 10_000 })).toEqual([
-			'no rate limit and no challenge',
-			'waits at most 30 s for a body of at most 1024 bytes, then runs at most 10 s',
+			{ topic: 'guards', text: 'no rate limit and no challenge' },
+			{ topic: 'limits', text: 'waits at most 30 s for a body of at most 1024 bytes, then runs at most 10 s' },
 		])
+		// The framework's default body and time limits are marked, so the approval page says them once.
+		const unguarded = { rate: { ...rate, perClient: null, perEndpoint: null }, challenge: null }
+		const byDefault: EndpointRow = { ...cta, admission: { contentTypes: ['application/json'], maxBytes: 65536 } }
+		expect(notesOf({ ...unguarded, timeoutMs: 10_000 }, byDefault)?.at(-1)).toEqual({
+			topic: 'limits',
+			text: 'waits at most 30 s for a body of at most 65536 bytes, then runs at most 10 s',
+			default: true,
+		})
+		expect(notesOf({ ...unguarded, timeoutMs: 20_000 }, byDefault)?.at(-1)?.default).toBeUndefined()
+		// `notes` stays the text alone, as a builder daemon of an older release reads it.
+		const [endpoint] = snapshotSurface({
+			version: 1,
+			contract: { ...notesArtifact, endpoints: [cta], procedures: { [cta.id]: { ...unguarded, timeoutMs: 10_000 } } },
+			migrations: [],
+			checker: '',
+		})
+		expect(endpoint?.notes).toEqual((endpoint?.noteFacts ?? []).map((note) => note.text))
+		expect(endpoint?.notes).toHaveLength(2)
 	})
 
 	test('a form with neither a rate limit nor a challenge says so', () => {
 		const form = snapshotSurface(snapshot(exposed(''))).find((endpoint) => endpoint.kind === 'form')
-		expect(form?.notes).toEqual(['no rate limit and no challenge'])
+		expect(form?.noteFacts).toEqual([{ topic: 'form', text: 'no rate limit and no challenge' }])
 	})
 
 	test('an endpoint that takes a value of an opaque root says that an application-wide grant admits any value', () => {
@@ -116,9 +134,9 @@ describe('the surface of a published snapshot', () => {
 		const surface = (tables: Readonly<Record<string, TablePolicyArtifact>>) =>
 			snapshotSurface({ version: 1, contract: readContractSource(new Map([['fabrika.contract.ts', listed]]), tables), migrations: [], checker: '0.0.0' })
 		const note = 'takes any `workspace` value under an application-wide grant: an opaque root, unchecked'
-		expect(surface({}).find((endpoint) => endpoint.id === 'api.list')?.notes).toEqual([note])
-		expect(surface({}).find((endpoint) => endpoint.id === 'api.get')?.notes).toEqual([])
-		expect(surface({ workspaces: WORKSPACES }).find((endpoint) => endpoint.id === 'api.list')?.notes).toEqual([])
+		expect(surface({}).find((endpoint) => endpoint.id === 'api.list')?.noteFacts).toEqual([{ topic: 'opaque-root', text: note }])
+		expect(surface({}).find((endpoint) => endpoint.id === 'api.get')?.noteFacts).toEqual([])
+		expect(surface({ workspaces: WORKSPACES }).find((endpoint) => endpoint.id === 'api.list')?.noteFacts).toEqual([])
 	})
 
 	test('an environment with nothing published has no surface', () => {
