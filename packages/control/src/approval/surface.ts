@@ -1,3 +1,4 @@
+import { PROCEDURE_LIMITS } from '@fabrika/app/contract'
 import {
 	type ContractArtifact,
 	type EndpointRow,
@@ -6,7 +7,7 @@ import {
 	type ProcedureArtifact,
 	type SchemaShape,
 } from '@fabrika/auth-core'
-import { SURFACE_REACHES, type SurfaceEndpointDto, type SurfaceReach } from '@fabrika/control-contract'
+import { SURFACE_REACHES, type SurfaceEndpointDto, type SurfaceNoteDto, type SurfaceNoteTopic, type SurfaceReach } from '@fabrika/control-contract'
 import { attachmentName, bucketBounds, crossOriginReach, endpointReach, opaqueRoots, requirementPhrase, runPhrase, storedFileName } from './diff'
 import { type AccessSnapshot, compareText } from './snapshot'
 
@@ -25,6 +26,7 @@ export function snapshotSurface(snapshot: AccessSnapshot, only?: ReadonlySet<str
 }
 
 function surfaceEndpoint(contract: ContractArtifact, roots: ReadonlySet<string>, row: EndpointRow): SurfaceEndpointDto {
+	const notes = notesOf(contract, roots, row)
 	return {
 		id: row.id,
 		method: row.method,
@@ -33,27 +35,29 @@ function surfaceEndpoint(contract: ContractArtifact, roots: ReadonlySet<string>,
 		reach: endpointReach(row),
 		callers: [...row.callers],
 		requirement: row.requirement === null ? null : requirementPhrase(row.requirement),
-		notes: notesOf(contract, roots, row),
+		notes: notes.map((note) => note.text),
+		noteFacts: notes,
 	}
 }
 
-function notesOf(contract: ContractArtifact, roots: ReadonlySet<string>, row: EndpointRow): string[] {
-	const notes: string[] = []
+function notesOf(contract: ContractArtifact, roots: ReadonlySet<string>, row: EndpointRow): SurfaceNoteDto[] {
+	const notes: SurfaceNoteDto[] = []
+	const note = (topic: SurfaceNoteTopic, text: string) => notes.push({ topic, text })
 	for (const dimension of assertedValues(row)) {
-		if (roots.has(dimension)) notes.push(`takes any \`${dimension}\` value under an application-wide grant: an opaque root, unchecked`)
+		if (roots.has(dimension)) note('opaque-root', `takes any \`${dimension}\` value under an application-wide grant: an opaque root, unchecked`)
 	}
-	if (row.crossOrigin !== undefined) notes.push(`callable from ${crossOriginReach(row.crossOrigin)}`)
+	if (row.crossOrigin !== undefined) note('cross-origin', `callable from ${crossOriginReach(row.crossOrigin)}`)
 	const file = attachmentName(row)
-	if (file !== null) notes.push(`answers ${file}`)
-	if (row.output !== null && isFileShape(row.output)) notes.push(`answers ${storedFileName(row.output)}`)
+	if (file !== null) note('answers-file', `answers ${file}`)
+	if (row.output !== null && isFileShape(row.output)) note('answers-file', `answers ${storedFileName(row.output)}`)
 	const taken = inputFileKinds(row.input)
-	if (taken.length > 0) notes.push(`takes files of kind ${taken.map((kind) => `\`${kind}\``).join(', ')}`)
-	if (row.kind === 'upload' && row.admission !== null) notes.push(uploadLimit(row.admission.maxBytes))
+	if (taken.length > 0) note('takes-files', `takes files of kind ${taken.map((kind) => `\`${kind}\``).join(', ')}`)
+	if (row.kind === 'upload' && row.admission !== null) note('body-limit', uploadLimit(row.admission.maxBytes))
 	const mount = row.source.kind === 'mount' ? contract.mounts[row.source.name] : undefined
-	if (mount?.kind === 'form') notes.push(...formProtection(mount))
+	if (mount?.kind === 'form') { for (const text of formProtection(mount)) note('form', text) }
 	const rules = contract.procedures?.[row.id]
-	if (rules !== undefined) notes.push(...procedureProtection(row, rules))
-	if (mount?.kind === 'webhook') notes.push(`verifies a ${mount.scheme} signature`)
+	if (rules !== undefined) notes.push(...procedureProtection(row, rules, taken.length > 0))
+	if (mount?.kind === 'webhook') note('signature', `verifies a ${mount.scheme} signature`)
 	return notes
 }
 
@@ -91,11 +95,15 @@ function formProtection(form: FormMountArtifact): string[] {
 /**
  * A procedure's buckets and challenge, which stand in front of its handler, then how long it waits for a body of what
  * size and how long it runs, in the approval's words. A public one without a bucket or a challenge says so, as a form
- * does; a signed-in one names only the buckets it has.
+ * does; a signed-in one names only the buckets it has. Limits that are the framework's defaults (a procedure without
+ * file fields, whose default body limit depends on its kinds) are marked, so a page can say them once.
  */
-function procedureProtection(row: EndpointRow, rules: ProcedureArtifact): string[] {
+function procedureProtection(row: EndpointRow, rules: ProcedureArtifact, takesFiles: boolean): SurfaceNoteDto[] {
 	const guards = [...bucketBounds(rules.rate), ...(rules.challenge === null ? [] : [`${rules.challenge.provider} challenge`])]
-	return [...(guards.length === 0 && row.requirement === null ? ['no rate limit and no challenge'] : guards), runPhrase(row, rules.timeoutMs)]
+	const shown = guards.length === 0 && row.requirement === null ? ['no rate limit and no challenge'] : guards
+	const byDefault = !takesFiles && row.admission?.maxBytes === PROCEDURE_LIMITS.maxBytes && rules.timeoutMs === PROCEDURE_LIMITS.timeoutMs
+	const limits: SurfaceNoteDto = { topic: 'limits', text: runPhrase(row, rules.timeoutMs) }
+	return [...shown.map((text): SurfaceNoteDto => ({ topic: 'guards', text })), byDefault ? { ...limits, default: true } : limits]
 }
 
 function reachRank(reach: SurfaceReach): number {

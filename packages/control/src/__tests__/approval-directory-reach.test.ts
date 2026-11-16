@@ -2,10 +2,13 @@
 // alone, so a new endpoint whose action is its container's `members.list` can list that directory whatever its handler
 // does. A reach the approved contract already gives an endpoint of the same action, for the same callers, shows no one
 // anything new: its line is neutral and the people mark stays off. A reach no approved endpoint had keeps it.
+// The same change as the approval page groups it: a line in a row that names its endpoint says only the rest, and says
+// which of the endpoint's notes it already states.
 
 import type { TablePolicyArtifact } from '@fabrika/auth-core'
 import { readContractSource } from '@fabrika/check/contract'
 import { describe, expect, test } from 'bun:test'
+import { classifyAccess as classifyWithFacts } from '../approval/diff'
 import type { AccessSnapshot } from '../approval/snapshot'
 import { classifyAccess } from './helpers/access'
 
@@ -126,5 +129,28 @@ describe('the member directory an endpoint may read', () => {
 			line: "Endpoint `api.get` can list the members of `team`, with their labels, which spell users' email addresses",
 			review: 'closer',
 		}])
+	})
+})
+
+describe('the same change in its rows', () => {
+	test('a line in a row that names its endpoint says only the rest, and which notes of the endpoint it already states', () => {
+		const baseline = snapshot(contract("'human', 'machine'", ''))
+		const candidate = snapshot(contract("'human', 'machine'", RENDER))
+		const render = classifyWithFacts(baseline, candidate).changes.filter((change) => change.subject.name === 'api.render')
+		expect(render.map(({ line, inRow, states, audience }) => ({ line, inRow, states, audience }))).toEqual([
+			{
+				line:
+					'New endpoint `api.render` (POST /api/render) for human, machine callers with `documents.read` (on `document`), answering a stored file of kind `rendered`',
+				inRow: 'New endpoint, answering a stored file of kind `rendered`',
+				states: ['answers-file'],
+				audience: { reach: 'machine', requirement: 'with `documents.read` (on `document`)', callers: ['human', 'machine'] },
+			},
+			{
+				line: 'Endpoint `api.render` can list the members of `team`, as the approved `api.get` already can for the same callers',
+				inRow: 'Can list the members of `team`, as the approved `api.get` already can for the same callers',
+				states: undefined,
+				audience: { reach: 'machine', requirement: 'with `documents.read` (on `document`)', callers: ['human', 'machine'] },
+			},
+		])
 	})
 })

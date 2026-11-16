@@ -61,6 +61,7 @@ import {
 	type DeviationSubjectDto,
 	type ReviewReason,
 	SURFACE_REACHES,
+	type SurfaceNoteTopic,
 	type SurfaceReach,
 } from '@fabrika/control-contract'
 import type { MigrationDeviation } from '@fabrika/platform-node/sql'
@@ -85,6 +86,10 @@ type Line =
 		readonly line: string
 		readonly environmentOrigins?: true
 		readonly consequence?: ChangeConsequenceDto
+		/** The words in a row that already names the endpoint, its route and its audience (`AccessChangeDto.inRow`). */
+		readonly inRow?: string
+		/** The surface notes of the endpoint the line already says (`AccessChangeDto.states`). */
+		readonly states?: SurfaceNoteTopic[]
 	}
 	& ({ readonly review?: undefined; readonly reason?: undefined } | { readonly review: 'closer'; readonly reason: ReviewReason })
 
@@ -169,8 +174,21 @@ const subjectKey = (subject: ChangeSubjectDto): string => `${subject.kind}:${sub
 function withAudience(change: AccessChange, reaching: ChangeAudienceDto | undefined, rows: ReadonlyMap<string, EndpointRow>): AccessChange {
 	const placed = reaching === undefined ? change : { ...change, audience: reaching }
 	const row = change.subject.kind === 'endpoint' ? rows.get(change.subject.name) : undefined
-	if (row === undefined) return placed
-	return { ...placed, subject: { ...change.subject, method: row.method, path: row.path }, audience: reaching ?? audienceOf(row) }
+	if (row === undefined) return withRowWords(placed)
+	return withRowWords({ ...placed, subject: { ...change.subject, method: row.method, path: row.path }, audience: reaching ?? audienceOf(row) })
+}
+
+/**
+ * The words of an endpoint's line in a row that names the endpoint already (`AccessChangeDto.inRow`): a line built as
+ * "Endpoint \`id\` …" or "\`id\` …" without that subject, the rest as a sentence. A line that sets its own, or that goes
+ * on with the route (a removal), keeps what it has.
+ */
+function withRowWords(change: AccessChange): AccessChange {
+	if (change.inRow !== undefined || change.subject.kind !== 'endpoint' || change.audience === undefined) return change
+	const name = `\`${change.subject.name}\` `
+	const rest = [`Endpoint ${name}`, name].flatMap((prefix) => (change.line.startsWith(prefix) ? [change.line.slice(prefix.length)] : []))[0]
+	if (rest === undefined || rest === '' || rest.startsWith('(')) return change
+	return { ...change, inRow: `${rest.charAt(0).toUpperCase()}${rest.slice(1)}` }
 }
 
 /** Who reaches a row, in the surface's terms. */
@@ -180,6 +198,7 @@ function audienceOf(row: EndpointRow): ChangeAudienceDto {
 		reach,
 		...(reach === 'link' && row.source.kind === 'mount' ? { mount: row.source.name } : {}),
 		requirement: row.requirement === null ? null : requirementPhrase(row.requirement),
+		callers: [...row.callers].sort(compareText),
 	}
 }
 
@@ -392,9 +411,10 @@ function compareProcedures(changes: Changes, baseline: ContractArtifact, candida
 		if (from === undefined) {
 			changes.add(
 				subject,
-				...ruled('procedure.admission', [
-					neutral(`\`${id}\` admits ${ratePhrase(rules.rate)}${challengePhrase(rules.challenge)}; it ${runPhrase(row, rules.timeoutMs)}`),
-				]),
+				...ruled('procedure.admission', [{
+					...neutral(`\`${id}\` admits ${ratePhrase(rules.rate)}${challengePhrase(rules.challenge)}; it ${runPhrase(row, rules.timeoutMs)}`),
+					states: ['guards', 'limits'],
+				}]),
 				...ruled('procedure.get-mutation', rules.changesStateOnGet === true ? [closer('get-mutation', stateOnGet(`\`${id}\``))] : []),
 			)
 			continue
@@ -897,9 +917,16 @@ export function snapshotDeviations(snapshot: AccessSnapshot): DeviationSubjectDt
 function compareEndpoints(changes: Changes, baseline: ContractArtifact, candidate: ContractArtifact): ReadonlySet<string> {
 	compareKeyed(changes, 'endpoint', endpointMap(baseline.endpoints), endpointMap(candidate.endpoints), {
 		added: (id, row) => {
-			const line = `New endpoint \`${id}\` (${route(row)}) ${audience(row)}${answersFile(row)}${callableFrom(row)}${reusedFor(row.cache)}`
+			const details = `${answersFile(row)}${callableFrom(row)}${reusedFor(row.cache)}`
+			const line = `New endpoint \`${id}\` (${route(row)}) ${audience(row)}${details}`
 			// Code anyone can call gets a closer review than code a signed-in caller reaches.
-			const change = row.kind === 'public' ? closer('anyone-calls', line) : widening(line)
+			const words = row.kind === 'public' ? closer('anyone-calls', line) : widening(line)
+			// Its row names the endpoint, its route and its audience; the file it answers and the origins it opens to are
+			// said here, so the row's notes leave them out.
+			const states: SurfaceNoteTopic[] = []
+			if (row.output !== null && (isFileShape(row.output) || isAttachmentShape(row.output))) states.push('answers-file')
+			if (row.crossOrigin !== undefined) states.push('cross-origin')
+			const change = { ...words, inRow: `New endpoint${details}`, ...(states.length === 0 ? {} : { states }) }
 			return row.crossOrigin === 'environment' ? { ...change, environmentOrigins: true } : change
 		},
 		removed: () => [],

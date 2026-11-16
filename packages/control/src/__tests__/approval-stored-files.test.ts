@@ -73,7 +73,13 @@ describe('files as values in the approval', () => {
 
 	test('the surface notes a file output and the kinds a procedure takes', () => {
 		const surface = snapshotSurface(snapshot(artifact))
-		expect(surface.find((endpoint) => endpoint.id === 'api.shop.image')?.notes).toContain('answers a stored file of kind `catalog`')
-		expect(surface.find((endpoint) => endpoint.id === 'api.attachments.uploadMany')?.notes).toContain('takes files of kind `attachments`')
+		expect(surface.find((endpoint) => endpoint.id === 'api.shop.image')?.noteFacts).toContainEqual({
+			topic: 'answers-file',
+			text: 'answers a stored file of kind `catalog`',
+		})
+		expect(surface.find((endpoint) => endpoint.id === 'api.attachments.uploadMany')?.noteFacts).toContainEqual({
+			topic: 'takes-files',
+			text: 'takes files of kind `attachments`',
+		})
 	})
 })
