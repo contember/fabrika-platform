@@ -429,23 +429,34 @@ A deploy of an agent-authored change can carry hundreds of lines, most of them h
 glance who gains access to what, and the few lines that decide it. The page is built from the facts of section 3,
 never from the words of a line:
 
-- **Impact first.** The head counts the changed endpoints per caller group and the migrations the change adds or edits, for
-  example "5 endpoints anyone calls, 2 endpoints a share link of `student` reaches".
+- **A summary first, in plain words.** The head says what the change does to endpoints ("adds 1 endpoint and changes
+  2"), who reaches them per caller group, what else it changes (tables, roles, migrations), whether it waits, and what
+  to check first: every closer-review line, each with its reason; without one, the widening line most worth a look (a
+  new endpoint the most exposed callers reach, else the most exposed widening), and that nothing needs closer review.
 - **Grouped by caller.** The facts of an endpoint fall under its audience, in the order and words of the environment
   page's surface: anyone, the share links of each link mount, another application, machines, and signed-in people,
-  each endpoint's requirement on its row. A removed endpoint or mount whose paths now reach a more exposed endpoint
-  stands there with every line about it, and the head counts removed endpoints and mounts apart from the endpoints
-  that change. Facts on any other subject form a second part, data and runtime, grouped by
-  subject kind: tables, roles, jobs, migrations, the application. A group is named by the contract's identifiers (a
-  link mount name, a requirement's action); the contract declares no display label for them.
+  each endpoint's requirement on its row. An endpoint that machines and signed-in people both reach stands in a group
+  of its own, "Machines and signed-in people", so a title never names fewer callers than its rows admit. A removed
+  endpoint or mount whose paths now reach a more exposed endpoint stands there with every line about it, and the head
+  counts removed endpoints and mounts apart from the endpoints that change. Facts on any other subject form a second
+  part, data and runtime, grouped by subject kind: tables, roles, jobs, migrations, the application. A group is named
+  by the contract's identifiers (a link mount name, a requirement's action); the contract declares no display label for
+  them. A group's heading counts its rows, the unit the approver sees ("2 endpoints, both widen access"), not its lines.
+- **A row says each fact once.** A row names its endpoint, route and requirement in its own columns, so a line there
+  shows the words the diff built for a row (`inRow`: "New endpoint, answering a stored file of kind `issued`"), and
+  what stands in front of the endpoint leaves out the notes a line of the row already states (`states`). Identifiers
+  set in backticks render as code everywhere on the page.
 - **Rank is derived, there is no severity field.** Groups and facts are ordered by effect and review (a widening with
   closer review, a widening, a narrowing with closer review, a neutral line, a narrowing), then by reach, anyone
   first. Nothing else enters the rank, so it cannot disagree with the classification.
-- **A warning says why.** A closer-review fact shows one fixed sentence for its reason; `anyone-calls` on a kick, for
-  example, reads "anyone on the internet decides when job `mailing` runs".
+- **A warning says why.** Wherever a closer-review fact shows, in a row, in the summary or among every line, it shows
+  one fixed sentence for its reason; `anyone-calls` on a kick, for example, reads "anyone on the internet decides when
+  job `mailing` runs". A group's heading counts the endpoints that need closer review and points to their rows.
 - **Protection is shown, not asked for.** A procedure shows its effective admission from the candidate snapshot
   beside it, in the words of its diff line: buckets, challenge, body limit, how long it waits for the body and its
-  time limit. A public one without a bucket or a challenge says so. The page never asks the approver to verify
+  time limit. Limits that are the framework's defaults (the surface marks them) are said once for the section, and a
+  row marked "default limits" has them, so only an endpoint's own limits stand on its row. A public one without a
+  bucket or a challenge says so. The page never asks the approver to verify
   something the snapshot states. Whether a bot check holds is read from the endpoint's challenge, never from a browser
   config variable: a removed `siteKey` variable is a line about what a page reads, and a dropped challenge is its own
   widening line on the endpoint. The environment's cross-origin list is named as section 3 says, and nothing presents

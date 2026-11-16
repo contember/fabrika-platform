@@ -139,6 +139,53 @@ describe('the approval view', () => {
 			effect: 'narrows',
 			line: 'Mount `old` is removed',
 		}]
-		expect(approvalView(stored)).toEqual({ impact: { callers: [], migrations: 0 }, callers: [], data: [], unsorted: stored })
+		expect(approvalView(stored)).toEqual({
+			summary: { added: 0, changed: 0, removed: 0, check: stored.slice(0, 1) },
+			impact: { callers: [], migrations: 0 },
+			callers: [],
+			data: [],
+			unsorted: stored,
+		})
+	})
+
+	test('the summary counts endpoints by what happened to them and leads with every line for closer review', () => {
+		const { summary } = approvalView(intake)
+		// Five public procedures, two signed-in endpoints and a link upload are new; forty endpoints change.
+		expect([summary.added, summary.changed, summary.removed]).toEqual([7, 40, 0])
+		expect(summary.check.map((change) => `${change.subject?.name} ${change.rule}`)).toEqual([
+			...['cta', 'interest', 'register', 'resend', 'unsubscribe'].map((name) => `${name} endpoint.added`),
+			'register reach.kicks',
+			'0002.sql migration.adopt',
+		])
+	})
+
+	test('without a line for closer review, the summary names the new endpoint the most exposed callers reach', () => {
+		const quiet = intake.filter((change) => change.review !== 'closer')
+		expect(approvalView(quiet).summary.check.map((change) => change.subject?.name)).toEqual(['student.upload'])
+		expect(approvalView(quiet.filter((change) => change.rule !== 'endpoint.added')).summary.check.map((change) => change.subject?.name)).toEqual([
+			'0002.sql',
+		])
+		expect(approvalView(quiet.filter((change) => change.effect !== 'widens')).summary.check).toEqual([])
+	})
+
+	test('endpoints machines and signed-in people both reach form a group of their own, and a heading counts endpoints', () => {
+		const both: ChangeAudienceDto = { reach: 'machine', requirement: 'with `documents.read` (on `document`)', callers: ['human', 'machine'] }
+		const robots: ChangeAudienceDto = { reach: 'machine', requirement: 'with `documents.read` (on `document`)', callers: ['machine'] }
+		const view = approvalView([
+			endpoint('api.render', both, { effect: 'widens', rule: 'endpoint.added' }),
+			endpoint('api.render', both, { effect: 'neutral', rule: 'procedure.admission' }),
+			endpoint('api.get', both, { effect: 'widens', rule: 'endpoint.output' }),
+			endpoint('api.sync', robots, { effect: 'narrows', rule: 'endpoint.body-limit' }),
+		])
+		expect(view.callers.map((group) => ({ key: group.key, people: group.kind === 'caller' ? group.people : undefined, standing: group.standing })))
+			.toEqual([
+				{ key: 'machine+human', people: true, standing: { subjects: 2, widening: 2, closer: 0 } },
+				{ key: 'machine', people: undefined, standing: { subjects: 1, widening: 0, closer: 0 } },
+			])
+		expect(view.impact.callers.map((entry) => [entry.key, entry.people, entry.endpoints])).toEqual([['machine+human', true, 2], [
+			'machine',
+			undefined,
+			1,
+		]])
 	})
 })

@@ -4463,8 +4463,38 @@ th.numeric {
 
 /* An access change by who gains access (approvals, ADR-0050 §7): the impact in readings, one card per group, one table
    row per endpoint or subject with all its lines. A widening keeps its lamp colour; a group with none starts closed. */
-.change-impact {
+.change-summary {
 	margin-bottom: var(--s-4);
+}
+
+.change-summary .card-body {
+	display: grid;
+	gap: var(--s-2);
+}
+
+.change-summary p {
+	margin: 0;
+	max-width: 72ch;
+}
+
+.change-summary-lead {
+	font-size: 1.0625rem;
+	line-height: 1.5;
+}
+
+.change-summary-check {
+	display: grid;
+	gap: var(--s-2);
+	margin-top: var(--s-2);
+}
+
+.change-summary-check > h3 {
+	margin: 0;
+	font-size: 0.875rem;
+}
+
+.change-group > summary > .badge {
+	margin-left: var(--s-2);
 }
 
 .change-group {

@@ -13,12 +13,16 @@ import {
 	type SurfaceReach,
 } from './index.js'
 
-/** The endpoints of one caller group: everyone a reach admits, or the holders of one link mount's share links. */
+/**
+ * The endpoints of one caller group: everyone a reach admits, or the holders of one link mount's share links. `people`
+ * marks the machine endpoints that signed-in people reach too, a group of their own, so its title names both.
+ */
 export interface CallerGroup {
 	readonly kind: 'caller'
 	readonly key: string
 	readonly reach: SurfaceReach
 	readonly mount?: string
+	readonly people?: true
 }
 
 /** The lines about one kind of subject other than an endpoint: tables, roles, migrations, the application. */
@@ -55,16 +59,38 @@ export interface EffectTally {
 	readonly closer: number
 }
 
+/** A group's subjects by what their lines do: how many there are, how many widen access, how many need closer review. */
+export interface SubjectTally {
+	readonly subjects: number
+	readonly widening: number
+	readonly closer: number
+}
+
 export type ChangeGroup = (CallerGroup | SubjectGroup) & {
 	readonly rows: readonly ChangeRow[]
 	/** How many subjects the group holds, folded ones included. */
 	readonly subjects: number
+	/** The group's lines by effect. */
 	readonly tally: EffectTally
+	/** The group's subjects (its rows' endpoints, tables, …) by effect: what its heading counts. */
+	readonly standing: SubjectTally
 	/** Whether the page collapses the group by default: only when it holds no widening line. */
 	readonly collapsed: boolean
 }
 
 export interface ApprovalView {
+	/**
+	 * The change in a sentence or two, which the page leads with: the endpoints it adds, changes and removes, and what to
+	 * check first. `check` is every line that needs closer review, the most important first; without one, the widening
+	 * line most worth a look: a new endpoint the most exposed callers reach, else the most exposed widening. Empty when
+	 * nothing widens or needs closer review.
+	 */
+	readonly summary: {
+		readonly added: number
+		readonly changed: number
+		readonly removed: number
+		readonly check: readonly AccessChangeDto[]
+	}
 	/**
 	 * Per caller group the endpoints that change, apart from the removed endpoints and mounts its paths reach (a removal
 	 * that widens stands with whoever its paths reach now), and the migration files the change adds or edits.
@@ -74,6 +100,7 @@ export interface ApprovalView {
 			readonly key: string
 			readonly reach: SurfaceReach
 			readonly mount?: string
+			readonly people?: true
 			readonly endpoints: number
 			readonly removedEndpoints: number
 			readonly removedMounts: number
@@ -110,10 +137,14 @@ export function approvalView(changes: readonly AccessChangeDto[]): ApprovalView 
 		const subject = change.subject
 		if (subject === undefined) unsorted.push(change)
 		else if (change.audience !== undefined) {
-			const { reach, mount } = change.audience
-			const key = mount === undefined ? reach : `${reach}:${mount}`
+			const { reach, mount, callers: kinds } = change.audience
+			// An endpoint machines and signed-in people both reach is listed under machines, its most exposed caller, in a
+			// group of its own whose title names both.
+			const people = reach === 'machine' && kinds?.includes('human') === true
+			const key = mount !== undefined ? `${reach}:${mount}` : people ? `${reach}+human` : reach
 			const group = callers.get(key)
-			if (group === undefined) callers.set(key, { head: { kind: 'caller', key, reach, ...(mount === undefined ? {} : { mount }) }, changes: [change] })
+			const head: CallerGroup = { kind: 'caller', key, reach, ...(mount === undefined ? {} : { mount }), ...(people ? { people: true } : {}) }
+			if (group === undefined) callers.set(key, { head, changes: [change] })
 			else group.changes.push(change)
 		} else {
 			const kind = data.get(subject.kind)
@@ -133,7 +164,16 @@ export function approvalView(changes: readonly AccessChangeDto[]): ApprovalView 
 		entry.rows.flatMap(subjectRows).filter((row) =>
 			row.subject.kind === kind && row.changes.some((change) => change.rule === 'endpoint.removed' || change.rule === 'mount.removed') === removed
 		).length
+	// Each endpoint once, by what its lines say happened to it.
+	const fates = new Map<string, 'added' | 'removed' | 'changed'>()
+	for (const change of changes) {
+		if (change.subject?.kind !== 'endpoint') continue
+		const fate = change.rule === 'endpoint.added' ? 'added' : change.rule === 'endpoint.removed' ? 'removed' : 'changed'
+		if (fate !== 'changed' || !fates.has(change.subject.name)) fates.set(change.subject.name, fate)
+	}
+	const fateCount = (fate: 'added' | 'removed' | 'changed') => [...fates.values()].filter((each) => each === fate).length
 	return {
+		summary: { added: fateCount('added'), changed: fateCount('changed'), removed: fateCount('removed'), check: checkFirst(changes) },
 		impact: {
 			callers: callerGroups.flatMap((entry) =>
 				entry.kind === 'caller'
@@ -141,6 +181,7 @@ export function approvalView(changes: readonly AccessChangeDto[]): ApprovalView 
 						key: entry.key,
 						reach: entry.reach,
 						...(entry.mount === undefined ? {} : { mount: entry.mount }),
+						...(entry.people === true ? { people: true as const } : {}),
 						endpoints: counted(entry, 'endpoint', false),
 						removedEndpoints: counted(entry, 'endpoint', true),
 						removedMounts: counted(entry, 'mount', true),
@@ -153,6 +194,21 @@ export function approvalView(changes: readonly AccessChangeDto[]): ApprovalView 
 		data: dataGroups,
 		unsorted,
 	}
+}
+
+/**
+ * What the approver checks first: every line for closer review, by rank; without one, the one widening line most worth a
+ * look: a new endpoint before any other line, the most exposed callers first, then the line's place.
+ */
+function checkFirst(changes: readonly AccessChangeDto[]): AccessChangeDto[] {
+	const placed = changes.map((change, index) => ({ change, index }))
+	const closer = placed.filter(({ change }) => change.review === 'closer')
+	if (closer.length > 0) return closer.sort((a, b) => changeRank(a.change) - changeRank(b.change) || a.index - b.index).map(({ change }) => change)
+	const reach = (change: AccessChangeDto) => (change.audience === undefined ? SURFACE_REACHES.length : SURFACE_REACHES.indexOf(change.audience.reach))
+	const added = (change: AccessChangeDto) => (change.rule === 'endpoint.added' ? 0 : 1)
+	const first = placed.filter(({ change }) => change.effect === 'widens')
+		.sort((a, b) => added(a.change) - added(b.change) || reach(a.change) - reach(b.change) || a.index - b.index)[0]
+	return first === undefined ? [] : [first.change]
 }
 
 /** Every line a row holds. */
@@ -194,6 +250,11 @@ function group(head: CallerGroup | SubjectGroup, changes: readonly AccessChangeD
 		rows: fold(rows.sort((a, b) => rowRank(a) - rowRank(b) || compareText(a.subject.name, b.subject.name))),
 		subjects: rows.length,
 		tally: tallyOf(changes),
+		standing: {
+			subjects: rows.length,
+			widening: rows.filter((row) => row.changes.some((change) => change.effect === 'widens')).length,
+			closer: rows.filter((row) => row.changes.some((change) => change.review === 'closer')).length,
+		},
 		collapsed: !changes.some((change) => change.effect === 'widens'),
 	}
 }
