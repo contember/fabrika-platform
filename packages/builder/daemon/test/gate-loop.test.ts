@@ -3,6 +3,7 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { dirname, join, resolve } from 'path'
 import { fileURLToPath } from 'url'
 import { readApprovals, writeApprovals } from '../../shared/approvals'
+import { derivePhase } from '../../shared/derive'
 import { builderDaemonUrl } from '../../shared/urls'
 import { type RunningDaemon, startDaemon } from '../src/index'
 import { scratchDir } from './scratch'
@@ -467,6 +468,37 @@ describe('gate interactive loop', () => {
 		const forced = await runCli(['advance', '--force', '--dir', repo], { FABRIKA_SESSION_ID: sessionId })
 		expect(forced.code).toBe(0)
 		expect(readApprovals(repo)?.vision?.waived).toBe(true)
+
+		rmSync(repo, { recursive: true, force: true })
+	})
+
+	test('a project without approvals in its build adopts the gates the daemon judged reviewed, and derives the same without the daemon', async () => {
+		const sessionId = 'gate-loop-adopt'
+		const repo = scratchDir('fabrika-adopt-repo-')
+		writeIntent(repo)
+		writeFlow(repo)
+		writeFileSync(join(repo, '.fabrika', 'architecture', 'tech.md'), '# tech')
+		mkdirSync(join(repo, 'tests', 'browser'), { recursive: true })
+		writeFileSync(join(repo, 'tests', 'browser', 'checkout.test.ts'), '// skeleton')
+		mkdirSync(join(repo, '.fabrika', 'issues'), { recursive: true })
+		writeFileSync(join(repo, '.fabrika', 'issues', 'ISSUE-001.md'), '# issue')
+		writeFileSync(join(repo, '.fabrika', 'config.json'), JSON.stringify({ profile: 'zerops-app', sessionId, createdAt: new Date().toISOString() }))
+		for (const gate of ['vision', 'flows', 'tech', 'skeletons']) {
+			await openGate(sessionId, gate)
+			const ws = await openSocket(`${wsBase}/ws/session/${sessionId}`)
+			ws.send(JSON.stringify({ type: 'submit', feedback: 'Fine.', responses: [{ id: 'verdict', value: 'Approve' }] }))
+			await new Promise((r) => setTimeout(r, 100))
+			ws.close()
+			await fetch(`${base}/api/session/${sessionId}/feedback/consume`, { method: 'POST' })
+		}
+		expect(derivePhase(repo).current).toBe('vision')
+
+		const next = await runCli(['next', '--dir', repo], { FABRIKA_SESSION_ID: sessionId })
+		expect(next.code).toBe(0)
+		expect(next.stdout).toContain('## Phase 7/7 - Build')
+		const approvals = readApprovals(repo)
+		expect(Object.keys(approvals ?? {}).sort()).toEqual(['flows', 'skeletons', 'tech', 'vision'])
+		expect(derivePhase(repo).current).toBe('build')
 
 		rmSync(repo, { recursive: true, force: true })
 	})

@@ -1,17 +1,17 @@
 import { afterEach, expect, test } from 'bun:test'
 import { symlinkSync } from 'fs'
 import { join } from 'path'
-import { type Approvals, InvalidApprovalsError, readApprovals, writeApprovals } from '../../shared/approvals'
-import { derivePhase, type GateProbe, isNonEmptyFile, matchGlob, phaseInputs, producesSatisfied } from '../../shared/derive'
-import { phaseById, type PhaseId } from '../../shared/phases'
-import { type Fixture, makeFixture } from './helpers'
+import { InvalidApprovalsError, readApprovals } from '../../shared/approvals'
+import { derivePhase, type GateProbe, isNonEmptyFile, matchGlob, offlineGateProbe, phaseInputs, producesSatisfied } from '../../shared/derive'
+import { phaseById } from '../../shared/phases'
+import { approve, type Fixture, makeFixture, reviewed } from './helpers'
 
 let fx: Fixture | null = null
 afterEach(() => fx?.cleanup())
 
 test('empty .fabrika/ -> current phase is intake', () => {
 	fx = makeFixture()
-	const state = derivePhase(fx.root)
+	const state = derivePhase(fx.root, reviewed)
 	expect(state.current).toBe('intake')
 	expect(state.index).toBe(0)
 	expect(state.completed).toEqual([])
@@ -21,7 +21,7 @@ test('empty .fabrika/ -> current phase is intake', () => {
 test('brief.md present -> current phase is vision; intake completed', () => {
 	fx = makeFixture()
 	fx.write('.fabrika/intent/brief.md', '# brief')
-	const state = derivePhase(fx.root)
+	const state = derivePhase(fx.root, reviewed)
 	expect(state.current).toBe('vision')
 	expect(state.completed).toEqual(['intake'])
 })
@@ -30,11 +30,11 @@ test('vision needs BOTH glossary AND principles (all produces globs)', () => {
 	fx = makeFixture()
 	fx.write('.fabrika/intent/brief.md')
 	fx.write('.fabrika/intent/glossary.md') // only one of two produces
-	let state = derivePhase(fx.root)
+	let state = derivePhase(fx.root, reviewed)
 	expect(state.current).toBe('vision') // not satisfied yet
 
 	fx.write('.fabrika/principles/principles.md')
-	state = derivePhase(fx.root)
+	state = derivePhase(fx.root, reviewed)
 	expect(state.current).toBe('flows')
 	expect(state.completed).toEqual(['intake', 'vision'])
 })
@@ -45,7 +45,7 @@ test('flows is glob-satisfied by >=1 *.flow.md', () => {
 	fx.write('.fabrika/intent/glossary.md')
 	fx.write('.fabrika/principles/principles.md')
 	fx.write('.fabrika/architecture/flows/login.flow.md')
-	const state = derivePhase(fx.root)
+	const state = derivePhase(fx.root, reviewed)
 	expect(state.current).toBe('tech')
 	expect(state.completed).toEqual(['intake', 'vision', 'flows'])
 })
@@ -60,7 +60,7 @@ test('full chain through to skeletons/issues; build is terminal', () => {
 	fx.write('tests/browser/login.test.ts')
 	fx.write('.fabrika/issues/ISSUE-001.md')
 
-	const state = derivePhase(fx.root)
+	const state = derivePhase(fx.root, reviewed)
 	expect(state.current).toBe('build')
 	expect(state.completed).toEqual([
 		'intake',
@@ -79,18 +79,18 @@ test('self-correcting: emptying tech.md re-targets phase 4 (tech)', () => {
 	fx.write('.fabrika/principles/principles.md')
 	fx.write('.fabrika/architecture/flows/login.flow.md')
 	fx.write('.fabrika/architecture/tech.md')
-	let state = derivePhase(fx.root)
+	let state = derivePhase(fx.root, reviewed)
 	expect(state.current).toBe('skeletons')
 
 	fx.writeEmpty('.fabrika/architecture/tech.md')
-	state = derivePhase(fx.root)
+	state = derivePhase(fx.root, reviewed)
 	expect(state.current).toBe('tech')
 })
 
 test('empty files do NOT satisfy produces', () => {
 	fx = makeFixture()
 	fx.writeEmpty('.fabrika/intent/brief.md')
-	const state = derivePhase(fx.root)
+	const state = derivePhase(fx.root, reviewed)
 	expect(state.current).toBe('intake') // empty brief doesn't count
 })
 
@@ -122,16 +122,7 @@ test('build phase produces is a placeholder -> never auto-satisfied from FS', ()
 	expect(producesSatisfied(fx.root, phaseById('build'))).toBe(false)
 })
 
-const reviewed: GateProbe = () => ({ reviewed: true, verdict: 'approve', revision: 1 })
 const unreviewed: GateProbe = () => ({ reviewed: false, verdict: 'none', revision: 1 })
-
-function approve(root: string, ids: PhaseId[], waived = false): void {
-	const approvals: Approvals = { ...readApprovals(root) }
-	for (const id of ids) {
-		approvals[id] = { at: '2026-01-01T00:00:00.000Z', inputs: phaseInputs(root, phaseById(id)), ...(waived ? { waived: true } : {}) }
-	}
-	writeApprovals(root, approvals)
-}
 
 function writeThroughSkeletons(f: Fixture): void {
 	f.write('.fabrika/intent/brief.md')
@@ -224,6 +215,27 @@ test('without the approvals file, gates are judged by their reviews alone', () =
 	writeIntent(fx)
 	expect(derivePhase(fx.root, reviewed).current).toBe('flows')
 	expect(derivePhase(fx.root, unreviewed).current).toBe('vision')
+})
+
+test('without the approvals file or the daemon, the first gate is refused, not assumed reviewed', () => {
+	fx = makeFixture()
+	writeThroughSkeletons(fx)
+	fx.write('.fabrika/issues/ISSUE-001.md')
+	const state = derivePhase(fx.root, offlineGateProbe)
+	expect(state.current).toBe('vision')
+	expect(state.satisfied).toBe(true)
+	expect(state.completed).toEqual(['intake'])
+	expect(state.unverified).toEqual([])
+})
+
+test('without the daemon, a gate advance approved is assumed reviewed and reported as unverified', () => {
+	fx = makeFixture(true, { approvals: true })
+	writeIntent(fx)
+	approve(fx.root, ['vision'])
+	const state = derivePhase(fx.root, offlineGateProbe)
+	expect(state.current).toBe('flows')
+	expect(state.unverified).toEqual(['vision'])
+	expect(state.verdicts).toEqual({})
 })
 
 test('an approvals file that does not parse, or of another version, is refused rather than read as empty', () => {

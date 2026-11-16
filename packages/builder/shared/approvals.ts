@@ -38,7 +38,7 @@ export class InvalidApprovalsError extends Error {
 	}
 }
 
-/** Null for a project initialized before approvals existed: its gates are judged by their reviews alone until `advance` writes the file. */
+/** Null for a project initialized before approvals existed: its gates are judged by the daemon's reviews alone, and refused without it, until the CLI writes the file. */
 export function readApprovals(repoRoot: string): Approvals | null {
 	const path = approvalsPath(repoRoot)
 	if (!existsSync(path)) return null

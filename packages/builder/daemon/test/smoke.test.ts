@@ -411,12 +411,13 @@ describe('derivePhaseState (filesystem fixture)', () => {
 		rmSync(dirname(dir), { recursive: true, force: true })
 	})
 
-	test('without an oracle a passed gate is reported as unverified, not as reviewed', () => {
+	test('without an oracle a project without approvals stops at its gate instead of assuming it reviewed', () => {
 		const dir = freshFabrika()
 		writeIntent(dir)
 		const state = derivePhaseState(dir)
-		expect(state.current).toBe('flows')
-		expect(state.unverified).toEqual(['vision'])
+		expect(state.current).toBe('vision')
+		expect(state.satisfied).toBe(true)
+		expect(state.unverified).toEqual([])
 		expect(state.verdicts).toEqual({})
 		rmSync(dirname(dir), { recursive: true, force: true })
 	})

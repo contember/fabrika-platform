@@ -2,14 +2,14 @@ import { afterEach, expect, test } from 'bun:test'
 import { derivePhase } from '../../shared/derive'
 import { PHASE_COUNT, PHASES } from '../../shared/phases'
 import { packetJson, renderPacket } from '../src/packet'
-import { type Fixture, makeFixture } from './helpers'
+import { type Fixture, makeFixture, reviewed } from './helpers'
 
 let fx: Fixture | null = null
 afterEach(() => fx?.cleanup())
 
 test('packet for intake has the expected sections', () => {
 	fx = makeFixture()
-	const packet = renderPacket(derivePhase(fx.root))
+	const packet = renderPacket(derivePhase(fx.root, reviewed))
 
 	expect(packet).toContain(`## Phase 1/${PHASE_COUNT} - Intake`)
 	expect(packet).toContain('Read:')
@@ -23,17 +23,17 @@ test('packet for intake has the expected sections', () => {
 test('packet header shows completed phases with a checkmark', () => {
 	fx = makeFixture()
 	fx.write('.fabrika/intent/brief.md')
-	const packet = renderPacket(derivePhase(fx.root))
+	const packet = renderPacket(derivePhase(fx.root, reviewed))
 	expect(packet).toContain(`## Phase 2/${PHASE_COUNT} - Vision`)
 	expect(packet).toContain('(intake ✓)')
 })
 
 test('a stale phase names the files that changed since its approval', () => {
 	fx = makeFixture()
-	const state = { ...derivePhase(fx.root), stale: ['.fabrika/intent/brief.md'] }
+	const state = { ...derivePhase(fx.root, reviewed), stale: ['.fabrika/intent/brief.md'] }
 	expect(renderPacket(state)).toContain('Stale:   approved earlier, but its inputs changed since: .fabrika/intent/brief.md')
 	expect(packetJson(state).stale).toEqual(['.fabrika/intent/brief.md'])
-	expect(renderPacket(derivePhase(fx.root))).not.toContain('Stale:')
+	expect(renderPacket(derivePhase(fx.root, reviewed))).not.toContain('Stale:')
 })
 
 test('ungated phase (issues) emits a no-gate line', () => {
@@ -44,7 +44,7 @@ test('ungated phase (issues) emits a no-gate line', () => {
 	fx.write('.fabrika/architecture/flows/login.flow.md')
 	fx.write('.fabrika/architecture/tech.md')
 	fx.write('tests/browser/login.test.ts')
-	const packet = renderPacket(derivePhase(fx.root))
+	const packet = renderPacket(derivePhase(fx.root, reviewed))
 	expect(packet).toContain(`## Phase 6/${PHASE_COUNT}`)
 	expect(packet).toContain('Gate:    (none')
 })
@@ -52,7 +52,7 @@ test('ungated phase (issues) emits a no-gate line', () => {
 test('packetJson mirrors the structured fields', () => {
 	fx = makeFixture()
 	fx.write('.fabrika/intent/brief.md')
-	const json = packetJson(derivePhase(fx.root))
+	const json = packetJson(derivePhase(fx.root, reviewed))
 	expect(json.phase).toBe('vision')
 	expect(json.index).toBe(1)
 	expect(json.number).toBe(2)
@@ -72,7 +72,7 @@ function landOnTech(fx: Fixture): void {
 test('tech packet emits an absolute Stack: pointer when a profile is given', () => {
 	fx = makeFixture()
 	landOnTech(fx)
-	const packet = renderPacket(derivePhase(fx.root), { profile: 'cf-lightweight' })
+	const packet = renderPacket(derivePhase(fx.root, reviewed), { profile: 'cf-lightweight' })
 	expect(packet).toContain(`## Phase 4/${PHASE_COUNT} - Tech`)
 	expect(packet).toContain('Stack:   cf-lightweight ->')
 	expect(packet).toContain('/stacks/cf-lightweight.md')
@@ -82,10 +82,10 @@ test('tech packet emits an absolute Stack: pointer when a profile is given', () 
 test('tech packet warns on an unsupported preset and names the supported ones', () => {
 	fx = makeFixture()
 	landOnTech(fx)
-	const unsupported = renderPacket(derivePhase(fx.root), { profile: 'cf-lightweight' })
+	const unsupported = renderPacket(derivePhase(fx.root, reviewed), { profile: 'cf-lightweight' })
 	expect(unsupported).toContain('warning: the "cf-lightweight" preset is unsupported')
 	expect(unsupported).toContain('Supported presets: cf-app, zerops-app.')
-	const supported = renderPacket(derivePhase(fx.root), { profile: 'cf-app' })
+	const supported = renderPacket(derivePhase(fx.root, reviewed), { profile: 'cf-app' })
 	expect(supported).toContain('Stack:   cf-app ->')
 	expect(supported).not.toContain('warning:')
 })
@@ -93,14 +93,14 @@ test('tech packet warns on an unsupported preset and names the supported ones', 
 test('tech packet omits the Stack: pointer when no profile is supplied', () => {
 	fx = makeFixture()
 	landOnTech(fx)
-	const packet = renderPacket(derivePhase(fx.root))
+	const packet = renderPacket(derivePhase(fx.root, reviewed))
 	expect(packet).toContain(`## Phase 4/${PHASE_COUNT} - Tech`)
 	expect(packet).not.toContain('/stacks/cf-lightweight.md')
 })
 
 test('a non-catalog phase has no Stack: pointer even with a profile', () => {
 	fx = makeFixture()
-	const packet = renderPacket(derivePhase(fx.root), { profile: 'cf-lightweight' })
+	const packet = renderPacket(derivePhase(fx.root, reviewed), { profile: 'cf-lightweight' })
 	expect(packet).toContain(`## Phase 1/${PHASE_COUNT} - Intake`)
 	expect(packet).not.toContain('/stacks/cf-lightweight.md')
 })
@@ -108,14 +108,14 @@ test('a non-catalog phase has no Stack: pointer even with a profile', () => {
 test('packetJson carries the resolved stack pointer for the tech phase only', () => {
 	fx = makeFixture()
 	landOnTech(fx)
-	const techJson = packetJson(derivePhase(fx.root), { profile: 'cf-lightweight' })
+	const techJson = packetJson(derivePhase(fx.root, reviewed), { profile: 'cf-lightweight' })
 	expect(techJson.phase).toBe('tech')
 	expect(techJson.stack).not.toBeNull()
 	expect(techJson.stack!.stackFileExists).toBe(true)
 
 	fx.cleanup()
 	fx = makeFixture()
-	const intakeJson = packetJson(derivePhase(fx.root), { profile: 'cf-lightweight' })
+	const intakeJson = packetJson(derivePhase(fx.root, reviewed), { profile: 'cf-lightweight' })
 	expect(intakeJson.phase).toBe('intake')
 	expect(intakeJson.stack).toBeNull()
 })
@@ -129,7 +129,7 @@ test('build phase packet uses the build After-OK line', () => {
 	fx.write('.fabrika/architecture/tech.md')
 	fx.write('tests/browser/login.test.ts')
 	fx.write('.fabrika/issues/ISSUE-001.md')
-	const packet = renderPacket(derivePhase(fx.root))
+	const packet = renderPacket(derivePhase(fx.root, reviewed))
 	expect(packet).toContain(`## Phase 7/${PHASE_COUNT} - Build`)
 	expect(packet).toContain('Skills:  fabrika, opice-author')
 	expect(packet).toContain('fabrika builder build')
@@ -144,14 +144,14 @@ test('phases name only skills the builder ships or installs alongside opice', ()
 
 test('no ungated packet tells the agent to advance: the phase completes from its files', () => {
 	fx = makeFixture()
-	expect(packetJson(derivePhase(fx.root)).reviewedAt).toBe('vision')
+	expect(packetJson(derivePhase(fx.root, reviewed)).reviewedAt).toBe('vision')
 	fx.write('.fabrika/intent/brief.md')
 	fx.write('.fabrika/intent/glossary.md')
 	fx.write('.fabrika/principles/principles.md')
 	fx.write('.fabrika/architecture/flows/login.flow.md')
 	fx.write('.fabrika/architecture/tech.md')
 	fx.write('tests/browser/login.test.ts')
-	const state = derivePhase(fx.root)
+	const state = derivePhase(fx.root, reviewed)
 	expect(state.current).toBe('issues')
 	expect(renderPacket(state)).not.toContain('builder advance')
 })

@@ -87,7 +87,7 @@ export async function cmdAdvance(argv: string[]): Promise<number> {
 		return 1
 	}
 
-	recordApproval(ctx.repoRoot, state.completed, phase.id, values.force, reviewedRevision)
+	recordApproval(ctx.repoRoot, phase.id, values.force, reviewedRevision)
 
 	const idx = phaseIndex(phase.id)
 	const next = idx + 1 < PHASES.length ? PHASES[idx + 1] : null
@@ -100,20 +100,17 @@ export async function cmdAdvance(argv: string[]): Promise<number> {
 	return 0
 }
 
-/**
- * Approves the gated phase over the inputs it reads now. The first approval of a project that predates the file also
- * records the gated phases it already completed, so they stay complete.
- */
-function recordApproval(repoRoot: string, completed: readonly PhaseId[], current: PhaseId, waived: boolean, revision: number | undefined): void {
-	const existing = readApprovals(repoRoot)
-	const approvals = { ...existing }
-	const at = new Date().toISOString()
-	const ids = existing === null ? [...completed, current] : [current]
-	for (const id of ids) {
-		const phase = phaseById(id)
-		if (!phase.gate) continue
-		const own = id === current ? { ...(waived ? { waived: true } : {}), ...(revision !== undefined ? { revision } : {}) } : {}
-		approvals[id] = { at, inputs: phaseInputs(repoRoot, phase), ...own }
+/** Approves the gated phase over the inputs it reads now. */
+function recordApproval(repoRoot: string, current: PhaseId, waived: boolean, revision: number | undefined): void {
+	const approvals = { ...readApprovals(repoRoot) }
+	const phase = phaseById(current)
+	if (phase.gate) {
+		approvals[current] = {
+			at: new Date().toISOString(),
+			inputs: phaseInputs(repoRoot, phase),
+			...(waived ? { waived: true } : {}),
+			...(revision !== undefined ? { revision } : {}),
+		}
 	}
 	writeApprovals(repoRoot, approvals)
 }
