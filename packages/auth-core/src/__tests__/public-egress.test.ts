@@ -31,6 +31,9 @@ describe('publicEgressRefusal', () => {
 		['https://proxy-ns1-8080.prg1.zerops.app/', '.zerops.app'],
 		['https://www.example..com/', 'empty label'],
 		['http://app.prg1.zerops/', '.zerops'],
+		['https://user:secret@www.example.com/', 'carries credentials'],
+		['https://user@www.example.com/', 'carries credentials'],
+		['https://:secret@www.example.com/', 'carries credentials'],
 	])('refuses %s', (url, reason) => {
 		expect(refusal(url)).toContain(reason)
 	})
@@ -76,6 +79,12 @@ describe('isPublicAddress', () => {
 		'203.0.113.9',
 		'224.0.0.1',
 		'255.255.255.255',
+		'168.63.129.16',
+		'100.100.100.200',
+		'192.0.0.192',
+		'fd00:ec2::254',
+		'::ffff:169.254.169.254',
+		'::ffff:a9fe:a9fe',
 		'::',
 		'::1',
 		'fe80::1',
@@ -103,5 +112,7 @@ describe('isPublicAddress', () => {
 		expect(isPublicAddress('100.128.0.1')).toBe(true)
 		expect(isPublicAddress('11.0.0.1')).toBe(true)
 		expect(isPublicAddress('192.169.0.1')).toBe(true)
+		expect(isPublicAddress('168.63.129.15')).toBe(true)
+		expect(isPublicAddress('168.63.129.17')).toBe(true)
 	})
 })

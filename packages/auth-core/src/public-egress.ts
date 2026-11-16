@@ -49,13 +49,14 @@ const IPV4 = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/
 
 /**
  * Why public egress refuses `url`, or `null` when the URL alone admits it: a scheme other than `https:` and `http:`, a
- * port other than the scheme's default, an IP literal, a name of one label, a name under a refused suffix, or one of
- * `refusedHosts` (normalized names). A host it admits may still resolve to a private address, which only a runtime that
- * resolves names refuses.
+ * port other than the scheme's default, credentials in the URL, an IP literal, a name of one label, a name under a
+ * refused suffix, or one of `refusedHosts` (normalized names). A host it admits may still resolve to a private address,
+ * which only a runtime that resolves names refuses.
  */
 export function publicEgressRefusal(url: URL, refusedHosts: ReadonlySet<string> = new Set()): string | null {
 	if (url.protocol !== 'https:' && url.protocol !== 'http:') return `${url.protocol} is not https: or http:`
 	if (url.port !== '') return `port ${url.port} is not the default port of ${url.protocol}`
+	if (url.username !== '' || url.password !== '') return 'the URL carries credentials, which a public request never sends'
 	const host = normalizedHost(url.hostname)
 	if (host.startsWith('[') || IPV4.test(host)) return `${host} is an IP address, not a public host name`
 	if (!host.includes('.')) return `${host} is a name of one label, as an internal service or a local machine has`
@@ -99,6 +100,7 @@ const IPV4_REFUSED: readonly (readonly [number, number])[] = [
 	[0x64400000, 10], // 100.64.0.0/10 shared address space
 	[0x7f000000, 8], // 127.0.0.0/8 loopback
 	[0xa9fe0000, 16], // 169.254.0.0/16 link-local, the cloud metadata address
+	[0xa83f8110, 32], // 168.63.129.16 Azure's host endpoint (metadata, DNS), a public address answered inside the VM
 	[0xac100000, 12], // 172.16.0.0/12 private
 	[0xc0000000, 24], // 192.0.0.0/24 IETF protocol assignments
 	[0xc0000200, 24], // 192.0.2.0/24 documentation
