@@ -7,7 +7,7 @@ provides: [iac, binding-definitions, wrangler-generation]
 requires: [cloudflare]
 recommends: []
 conflicts: []
-npm: ["oblaka-iac@^0.0.18"]
+npm: ["oblaka-iac@^0.0.22"]
 status: wip
 sources:
   - where: "oblaka (repo) + `oblaka-iac` on npm (installed types)"

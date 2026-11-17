@@ -147,7 +147,7 @@ needed only when there is no app config. Platform commands load the provider's
   Object migration history; regenerating from scratch shifts tags when a DO class is added or removed
   and `wrangler deploy` fails with code 10074. Regenerate with `bun run oblaka` after a resource-graph
   change and commit the result. Never hand-edit it.
-- **`oblaka-iac` resolves from npm, pinned to `^0.0.18`.** fabrika + oblaka are co-versioned — bump the
+- **`oblaka-iac` resolves from npm, pinned to `^0.0.22`.** fabrika + oblaka are co-versioned — bump the
   pin deliberately, in every package plus `runner-container/docker/package.json`.
 - **`provider-cloudflare`, `control`, and `runner-cloudflare` relax exactly two strict flags**
   (`noUncheckedIndexedAccess`, `noPropertyAccessFromIndexSignature`) ONLY to tolerate oblaka's raw-TS

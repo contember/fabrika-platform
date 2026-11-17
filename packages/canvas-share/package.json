@@ -20,7 +20,7 @@
 	"devDependencies": {
 		"@cloudflare/workers-types": "^4.20260702.1",
 		"lopata": "^0.21.0",
-		"oblaka-iac": "^0.0.18",
+		"oblaka-iac": "^0.0.22",
 		"typescript": "^7.0.2",
 		"wrangler": "^4.24.0"
 	}
