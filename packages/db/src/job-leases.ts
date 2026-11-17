@@ -383,13 +383,14 @@ function refuseEnded(fence: LeaseFence): void {
 }
 
 const SQL_CLOCK: DialectTexts = {
-	postgres: 'select clock_timestamp() as now',
+	postgres: `select date_trunc('milliseconds', clock_timestamp() + interval '999 microseconds') as now`,
 	sqlite: `select ${N} as now`,
 }
 
 /**
  * The database's clock inside `session`'s transaction: a queue claim compares and moves `due` by it, so no process
- * clock decides when a row is due.
+ * clock decides when a row is due. On Postgres it is rounded up to the millisecond a `Date` holds: truncated, it fell
+ * behind a `due` that `now()` wrote with microseconds in the same millisecond, and the claim skipped that due row.
  */
 export async function databaseNow(session: Session): Promise<Date> {
 	const [row] = await rows(session, SQL_CLOCK, [])

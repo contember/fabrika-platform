@@ -5,9 +5,10 @@ import { openPostgres } from '@fabrika/db/postgres'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
 import type { LeaseFence } from '../capability'
-import { Database, type Session } from '../database'
+import { Database, runFixedStatement, type Session, sessionOf } from '../database'
 import { CapabilityError, ConflictError, LeaseLostError, QueryRefusedError } from '../errors'
 import { bindScopedDatabase, type DataAccess, dataAccessOf, type DataSite, frameworkTablesOf, type JobLeases } from '../framework'
+import { databaseNow } from '../job-leases'
 import { FRAMEWORK_MIGRATIONS } from '../migrations'
 import type { DataKind } from '../orm-types'
 import { readTables } from '../policy'
@@ -326,6 +327,22 @@ describeDb('claim', () => {
 		})
 		const stored = await outboxRows()
 		expect(stored.map((row) => [row.recipient, row.attempts, row.due?.getTime()])).toEqual([['b@example.com', 0, at.getTime()]])
+	})
+
+	test("the claim's clock never falls behind the database's, so a due now() wrote with microseconds is due at once", async () => {
+		const field = (rows: readonly unknown[], name: string): unknown => {
+			const [row] = rows
+			return typeof row === 'object' && row !== null ? Reflect.get(row, name) : undefined
+		}
+		await sessionOf({ database }).transaction(async (session) => {
+			for (let read = 0; read < 50; read++) {
+				const earlier = field(await runFixedStatement(session, 'select clock_timestamp()::text as at', []), 'at')
+				if (typeof earlier !== 'string') throw new TypeError('clock_timestamp() answers a text')
+				const now = (await databaseNow(session)).toISOString()
+				const judged = await runFixedStatement(session, 'select $1::timestamptz >= $2::timestamptz as caught_up', [now, earlier])
+				expect({ now, earlier, caughtUp: field(judged, 'caught_up') }).toEqual({ now, earlier, caughtUp: true })
+			}
+		})
 	})
 
 	test('a failed transaction leaves the claimed row due after its backoff, not at once', async () => {
