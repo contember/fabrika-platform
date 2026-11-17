@@ -67,6 +67,8 @@ interface World {
 	contract: string | null
 	/** Every other file of that commit. */
 	files: Record<string, string>
+	/** What the provider answers the next deploy; it succeeds otherwise. */
+	nextOutcome?: ProviderDeployOutcome
 }
 
 function world(): World {
@@ -103,7 +105,9 @@ function provider(w: World): ControlProvider {
 		resolveSource: () => Promise.resolve({ commitSha: COMMIT }),
 		deploy: (input) => {
 			w.deploys.push(input)
-			return Promise.resolve({ state: 'succeeded' })
+			const outcome = w.nextOutcome ?? { state: 'succeeded' }
+			delete w.nextOutcome
+			return Promise.resolve(outcome)
 		},
 		namespaces: {
 			normalize: (namespace) => namespace,
@@ -409,6 +413,47 @@ describe('approved access through the run lifecycle', () => {
 		await approve(w, parked.runId)
 		expect((await executeDeploy(deps(w), { runId: parked.runId })).status).toBe('succeeded')
 		expect(await published(w, 'prod')).toEqual({ runId: parked.runId, generation: 2 })
+		// The provider backs the database up before the version that runs the migration starts; the first deploy needed none.
+		expect(w.deploys.map((input) => input.backupBeforeMigrations)).toEqual([undefined, { migrations: ['0001_purge.sql'] }])
+	})
+
+	test('a migration that deletes data is backed up on every deploy until a version that holds it succeeds', async () => {
+		const w = world()
+		await seed(w)
+		expect((await deploy(w, 'stage')).status).toBe('succeeded')
+
+		w.files = DELETES_NOTES
+		// Published, and the provider failed: the publication holds the file, but no version ran it.
+		w.nextOutcome = { state: 'failed' }
+		expect((await deploy(w, 'stage')).status).toBe('failed')
+		expect((await deploy(w, 'stage')).status).toBe('succeeded')
+		// The version running holds the file as it is, so a redeploy backs nothing up; a second such file is backed up alone.
+		expect((await deploy(w, 'stage')).status).toBe('succeeded')
+		w.files = DELETES_MORE
+		expect((await deploy(w, 'stage')).status).toBe('succeeded')
+		expect(w.deploys.map((input) => input.backupBeforeMigrations)).toEqual([
+			undefined,
+			{ migrations: ['0001_purge.sql'] },
+			{ migrations: ['0001_purge.sql'] },
+			undefined,
+			{ migrations: ['0002_purge_again.sql'] },
+		])
+	})
+
+	test('a migration that only overwrites data, or is not known to keep every value, is backed up too', async () => {
+		const w = world()
+		await seed(w)
+		expect((await deploy(w, 'stage')).status).toBe('succeeded')
+		w.files = { 'db/migrations/0001_retitle.sql': "UPDATE notes SET title = '';" }
+		expect((await deploy(w, 'stage')).status).toBe('succeeded')
+		// A rename is `UNPROVEN`: another table or column may take the old name, so it counts like a delete.
+		w.files = { ...w.files, 'db/migrations/0002_rename.sql': 'ALTER TABLE notes RENAME COLUMN title TO heading;' }
+		expect((await deploy(w, 'stage')).status).toBe('succeeded')
+		expect(w.deploys.map((input) => input.backupBeforeMigrations)).toEqual([
+			undefined,
+			{ migrations: ['0001_retitle.sql'] },
+			{ migrations: ['0002_rename.sql'] },
+		])
 	})
 
 	test('a pending widening is published nowhere: no provider environment, namespace member or deploy carries it', async () => {

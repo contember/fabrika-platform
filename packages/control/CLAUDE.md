@@ -453,6 +453,11 @@ other environment, before the provider prepares anything, and the write maps a r
   (ADR-0044); the operation's outcome is the last line of the run's log. A running migration whose lease is free has
   lost its driver (the run's invocation holds the lease from its start to its settlement): the maintenance pass resumes
   it as a successor, and a held lease makes `advanceDataOperation` answer busy, so a live driver is never overtaken.
+- **A migration that may change stored data runs only behind a backup (ADR-0050, `deployUnder`).** The files are the candidate's
+  `dataLoss` of any kind that the environment's last succeeded run did not deploy as they are now (`unheldDataLoss`, never the
+  publication). A provider with `dataOperations` deploys them only through the migration phase: without an installed
+  barrier the run is refused before any provider effect, naming the cause. Any other provider is handed
+  `backupBeforeMigrations` and backs up itself. A dry run and a dev bootstrap are handed nothing.
 - **A side restore is a `restore` data operation (`startRestore`, `data.start` kind `restore` with a past `at`;
   ADR-0070 §9).** `data.start` only records it, the operation and its `app_env_restores` row in one lease-fenced batch,
   and returns it at `list`; the maintenance pass (`runBackupSchedule`, both hosts) owns it and drives it under the lease

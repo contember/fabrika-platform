@@ -18,6 +18,7 @@ import type { RunLogLine } from '@fabrika/control-contract'
 import { OPERATIONS_MANAGED_ENVIRONMENT_KEYS, operationsManagedEnvironment } from '@fabrika/operations-contract/ingest'
 import { FABRIKA_RELEASE } from '@fabrika/operations-contract/releases'
 import type { BlobStore, DeployLocks, JobQueue } from '@fabrika/platform'
+import type { MigrationDataLoss } from '@fabrika/platform-node/sql'
 import {
 	abortableWait,
 	type ControlProvider,
@@ -43,9 +44,10 @@ import {
 	unconfirmedUpdateRefusal,
 } from './api/namespaces'
 import { lifecycleEnvelopeSchema } from './api/provider-envelope'
+import { dataLossBeyond } from './approval/diff'
 import { protectedRunRefusal } from './approval/human'
-import { publishRunSnapshot } from './approval/publish'
-import { type AccessSnapshot, approvedProviderAccess, approvedSnapshot, type ProviderAccessFields } from './approval/snapshot'
+import { publishRunSnapshot, readableSnapshot } from './approval/publish'
+import { type AccessSnapshot, approvedProviderAccess, approvedSnapshot, parseSnapshot, type ProviderAccessFields } from './approval/snapshot'
 import { connectorAddresses } from './connectors'
 import {
 	type DriveResult,
@@ -896,6 +898,23 @@ async function deployUnder(
 		const barrier = opsChannel && deps.provider.dataOperations?.(approvedAccess) === true
 		// Once the run succeeds, this is what the next deploy reads to know whether the running version holds the barrier.
 		if (!dryRun) await invocation.write((fence) => runs.recordRunMigrationBarrier(runId, barrier, fence))
+		const barrierInstalled = !operationDeploy && barrier && (await runs.deployedMigrationBarrier({ appId: app.id, env: appEnv.env }))
+		// A migration that may change stored data, any `dataLoss` kind, runs only behind a backup (ADR-0050): the migration phase's where the barrier is
+		// installed, else the provider's own. A dev bootstrap's database is the workspace's sandbox, which nothing backs up.
+		const deletesData = dryRun || operationDeploy || sandbox !== null ? [] : await unheldDataLoss(runs, startedRun)
+		const deletingFiles = [...new Set(deletesData.map((loss) => loss.file))]
+		if (deletingFiles.length > 0 && deps.provider.dataOperations !== undefined && !barrierInstalled) {
+			const cause = !hasDomain
+				? 'the environment has no domain. Give it one, deploy once without that migration, then deploy it'
+				: !barrier
+				? "the application's framework release does not hold the barrier. Raise its @fabrika/app pin to a release that does, deploy once without that migration, then deploy it"
+				: 'the version running does not hold it yet. Deploy once without that migration, then deploy it'
+			throw new Error(
+				`${deletingFiles.map((file) => `\`${file}\``).join(', ')} may change stored data, `
+					+ `and Control backs up this environment before a migration only once the version running holds the backup barrier: ${cause}`,
+			)
+		}
+		const backupBeforeMigrations = deletingFiles.length === 0 || deps.provider.dataOperations !== undefined ? null : { migrations: deletingFiles }
 		const sandboxKey = sandbox === null || dryRun ? null : await sandboxHostKey(deps, sandbox.namespaceId)
 		// Parsed once, before any provider effect: a provider writes what it is handed and checks none of it again.
 		const handed = parseManagedEnvironment(managedEnvironment)
@@ -950,6 +969,7 @@ async function deployUnder(
 					vars,
 					managedEnvironment: handed,
 					applicationObjects: pointer,
+					...(backupBeforeMigrations === null ? {} : { backupBeforeMigrations }),
 					dryRun,
 					...(sourceBinding === undefined ? {} : { sourceBinding }),
 					...(sandbox === null || sandboxKey === null
@@ -1009,7 +1029,7 @@ async function deployUnder(
 			await projectTerminalRun(deps, runId, dryRun, finished, outcome.artifactState)
 			return finished
 		}
-		const guarded = operationDeploy || !barrier ? null : await guardedMigrations(deps, approvedRow, invocation.work.signal)
+		const guarded = barrierInstalled ? await guardedMigrations(deps, approvedRow, invocation.work.signal) : null
 		if (guarded === null) return { runId, status: await deployRun() }
 		const pending = guarded.pending.length === 1 ? '1 application migration' : `${guarded.pending.length} application migrations`
 		runLogs.log(
@@ -1061,6 +1081,19 @@ async function deployUnder(
 	}
 }
 
+/**
+ * The run's `dataLoss` statements of every kind, each one that may change stored data, in migration files the environment's last succeeded run did not deploy
+ * as they are now. Not the published snapshot: a publication precedes the provider, and a run that failed after it may
+ * not have run its migrations. A succeeded snapshot this release cannot read holds no file, so every statement counts.
+ */
+async function unheldDataLoss(runs: RunRepository, run: RunRow): Promise<readonly MigrationDataLoss[]> {
+	if (run.snapshot_json === null) return []
+	const candidate = parseSnapshot(run.snapshot_json)
+	if (candidate.dataLoss === undefined) return []
+	const running = await runs.getLatestSucceededRunWithSnapshot({ appId: run.app_id, env: run.env })
+	return dataLossBeyond(readableSnapshot(running?.snapshot_json ?? null)?.migrations ?? [], candidate)
+}
+
 /** The actor a migration records for a run created before runs recorded one. */
 const MIGRATION_ACTOR = 'deploy'
 
@@ -1078,7 +1111,6 @@ async function guardedMigrations(
 	signal: AbortSignal,
 ): Promise<{ readonly ops: OpsTransport; readonly pending: readonly string[] } | null> {
 	const target = { appId: candidate.app_id, env: candidate.env }
-	if (!(await deps.repositories.runs.deployedMigrationBarrier(target))) return null
 	const answer = await pendingMigrations(
 		deps.ops,
 		target,

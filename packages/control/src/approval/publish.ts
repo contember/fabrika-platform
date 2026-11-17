@@ -330,7 +330,7 @@ function assertRelationGrants(candidate: AccessSnapshot, log: (line: string) => 
  * Another run's stored snapshot, or null when this release cannot read it (a newer Control wrote it). Reading it as
  * holding no custody can only refuse a candidate, never hand the credential.
  */
-function readableSnapshot(raw: string | null): AccessSnapshot | null {
+export function readableSnapshot(raw: string | null): AccessSnapshot | null {
 	if (raw === null) return null
 	try {
 		return parseSnapshot(raw)

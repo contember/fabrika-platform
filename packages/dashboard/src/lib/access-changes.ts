@@ -121,7 +121,7 @@ export function reviewReason(change: AccessChangeDto): string | null {
 		case 'terminal':
 			return "The application decides who is signed in on a shared computer, within the terminal's ceiling."
 		case 'deletes-data':
-			return 'It deletes, overwrites or may change stored data, and no later deploy brings it back.'
+			return 'It deletes, overwrites or may change stored data, and no later deploy brings it back. The platform backs the data up before the migration runs.'
 		case undefined:
 			return null
 	}
