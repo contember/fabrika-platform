@@ -250,7 +250,9 @@ this one import.
   has a CLI that checks no SQLite schema, so those two are left out and the log says so (ADR-0062).
 - **Only declared application secrets reach the Worker.** Control hands the deploy every secret stored for the
   environment; `sync-secrets` writes those `pipeline.secrets` names, and `deploy-worker` logs every other one by name
-  (`undeclaredSecrets`), never its value, so a secret set in the console but not declared does not vanish silently.
+  (`undeclaredSecrets`), never its value, so a secret set in the console but not declared does not vanish silently. A
+  declared one without a value fails the deploy before any step (`assertDeclaredSecrets`), naming every missing name and
+  the environment, never a value; `sync-secrets` would find it only after `deploy-worker` shipped the Worker.
 - **The proxy topology is: public Worker owns the route, private application Worker is bound to it.**
   IAM remains a global service binding, at its application entrypoint. See ADR-0022.
 - **`deploy-worker` deploys the generated configs in dependency order** (`src/deploy-order.ts`), not oblaka's,
