@@ -917,8 +917,7 @@ export interface TablePolicyArtifact {
 	readonly memberReveals?: Readonly<Record<string, MemberRevealsArtifact>>
 	/**
 	 * Relation → the access view that lists the rows it reaches (ADR-0076). Absent unless declared, so the digest stays.
-	 * The artifact schema does not accept it until the approval diff shows it, so a contract that declares one fails its
-	 * build rather than publishing access no approver saw.
+	 * A reader that ignores it reaches less, never more.
 	 */
 	readonly access?: Readonly<Record<string, AccessArtifact>>
 }

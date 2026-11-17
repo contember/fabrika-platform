@@ -1,5 +1,5 @@
-// Authority an artifact states that an older framework release would not enforce (ADR-0062): a relation, a role's
-// `via`, a table's `confers`, `when` or `relationWhen`. The reader of the current minor reads them from any release of
+// Authority an artifact states that an older framework release would not enforce or run (ADR-0062): a relation, a
+// role's `via`, a table's `confers`, `when`, `relationWhen` or `access`. The reader of the current minor reads them from any release of
 // that minor, so a deploy of a release before the first one that enforces them is refused before anything publishes.
 
 import type { ContractArtifact } from '@fabrika/auth-core'
@@ -14,7 +14,10 @@ import { comparePrecedence, FRAMEWORK_PACKAGE, parseRelease, type Release } from
  */
 export const RELATION_GRANTS_SINCE: Release = { text: '0.9.0-dev.13', major: 0, minor: 9, patch: 0 }
 
-/** The first framework release that ANDs a table's `relationWhen` onto its relation's terms; an earlier one ignores it. */
+/**
+ * The first framework release that ANDs a table's `relationWhen` onto its relation's terms, and reads a table's access
+ * views (ADR-0076). An earlier one ignores `relationWhen` and refuses `access` at build and boot.
+ */
 export const RELATION_WHEN_SINCE: Release = { text: '0.9.0-dev.14', major: 0, minor: 9, patch: 0 }
 
 /** The fields of a contract one floor guards, as `field` or `field of name`. */
@@ -35,6 +38,7 @@ export function relationFloors(contract: ContractArtifact): FloorFields[] {
 		if (table.confers !== undefined && Object.keys(table.confers).length > 0) grants.push(`confers of table ${name}`)
 		if (table.when !== undefined && Object.keys(table.when).length > 0) grants.push(`when of table ${name}`)
 		if (table.relationWhen !== undefined && Object.keys(table.relationWhen).length > 0) relationWhen.push(`relationWhen of table ${name}`)
+		if (table.access !== undefined && Object.keys(table.access).length > 0) relationWhen.push(`access of table ${name}`)
 	}
 	return [{ since: RELATION_GRANTS_SINCE, fields: grants }, { since: RELATION_WHEN_SINCE, fields: relationWhen }]
 }

@@ -500,7 +500,10 @@ class ArtifactBuilder {
 		return roles
 	}
 
-	/** Each relation names a dimension of the contract, and exactly one table's rows confer it. */
+	/**
+	 * Each relation names a dimension of the contract, and is reached through at most one table's rows that confer it,
+	 * through access views (ADR-0076), or both; never through neither.
+	 */
 	#relations(): Record<string, { readonly dimension: string }> {
 		const relations: Record<string, { readonly dimension: string }> = {}
 		for (const [name, relation] of Object.entries(this.#contract.relations ?? {})) {
@@ -510,8 +513,12 @@ class ArtifactBuilder {
 				this.#problem(where, `names the dimension '${relation.dimension}', which is not a dimension of the contract`)
 			}
 			const sources = Object.entries(this.#tables).filter(([, table]) => table.confers !== undefined && Object.hasOwn(table.confers, name))
-			if (sources.length !== 1) {
-				this.#problem(where, `is conferred by ${sources.length} tables; exactly one table declares confers.${name}`)
+			const viewed = Object.values(this.#tables).some((table) => table.access !== undefined && Object.hasOwn(table.access, name))
+			if (sources.length > 1 || (sources.length === 0 && !viewed)) {
+				this.#problem(
+					where,
+					`is conferred by ${sources.length} tables; exactly one table declares confers.${name}, or a table names an access view for it`,
+				)
 			}
 			relations[name] = { dimension: relation.dimension }
 		}
@@ -519,6 +526,11 @@ class ArtifactBuilder {
 			for (const relation of Object.keys(policy.confers ?? {})) {
 				if (!Object.hasOwn(relations, relation)) {
 					this.#problem(`table '${table}'`, `confers '${relation}', which is not a relation of the vocabulary`)
+				}
+			}
+			for (const relation of Object.keys(policy.access ?? {})) {
+				if (!Object.hasOwn(relations, relation)) {
+					this.#problem(`table '${table}'`, `names an access view for '${relation}', which is not a relation of the vocabulary`)
 				}
 			}
 		}

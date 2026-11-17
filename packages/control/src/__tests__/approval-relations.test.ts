@@ -18,6 +18,7 @@ interface RelationOptions {
 	readonly when?: string
 	readonly relationWhen?: string
 	readonly reveals?: string
+	readonly access?: string
 }
 
 const ROLES = "roles: { owner: { grants: ['notes.read', 'notes.write'], member: { scope: 'workspace', assignableBy: ['owner'] } } },"
@@ -40,13 +41,15 @@ function files(options: RelationOptions = {}): Map<string, string> {
 		)
 		.replace(
 			"\tnotes: { columns: ['id', 'workspace_id', 'title'], foreignKeys: [] },",
-			"\tnote_members: {\n\t\tcolumns: ['id', 'note_id', 'workspace_id', 'principal_id', 'person_id', 'expires_at'],\n\t\tforeignKeys: [{ columns: ['note_id', 'workspace_id'], table: 'notes', references: ['id', 'workspace_id'] }, { columns: ['person_id'], table: 'people', references: ['id'] }],\n\t\ttimestamps: ['expires_at'],\n\t},\n\tnotes: { columns: ['id', 'workspace_id', 'title'], foreignKeys: [] },\n\tpeople: { columns: ['id', 'principal_id'], foreignKeys: [] },",
+			"\tnote_members: {\n\t\tcolumns: ['id', 'note_id', 'workspace_id', 'principal_id', 'person_id', 'expires_at'],\n\t\tforeignKeys: [{ columns: ['note_id', 'workspace_id'], table: 'notes', references: ['id', 'workspace_id'] }, { columns: ['person_id'], table: 'people', references: ['id'] }],\n\t\ttimestamps: ['expires_at'],\n\t},\n\tnotes: { columns: ['id', 'workspace_id', 'title'], foreignKeys: [] },\n\tpeople: { columns: ['id', 'principal_id'], foreignKeys: [] },\n\tshared_notes: { columns: ['note_id', 'principal_id', 'workspace_id'], foreignKeys: [], view: true },",
 		)
 	const tables = (base['src/db/tables.ts'] ?? '').replace(
 		NOTE_TABLE,
 		`${NOTE_TABLE.slice(0, -3)}${options.when === undefined ? '' : `\n\t\twhen: ${options.when},`}${
 			options.relationWhen === undefined ? '' : `\n\t\trelationWhen: ${options.relationWhen},`
-		}${options.reveals === undefined ? '' : `\n\t\treveals: ${options.reveals},`}\n\t},
+		}${options.reveals === undefined ? '' : `\n\t\treveals: ${options.reveals},`}${
+			options.access === undefined ? '' : `\n\t\taccess: ${options.access},`
+		}\n\t},
 	note_members: {
 		scope: { child: 'notes' },
 		actions: { read: 'notes.read', insert: 'notes.share', delete: 'notes.share' },
@@ -395,6 +398,86 @@ describe("a relation's condition on the table it reads", () => {
 		expect(relationGrantsRefusal(contract, '0.9.0-dev.12')).toContain('relation member')
 		expect(relationGrantsRefusal(contract, '0.9.0-dev.14')).toBeNull()
 		expect(relationGrantsRefusal(open.contract, '0.9.0-dev.13')).toBeNull()
+	})
+})
+
+describe("a table's access view in the approval diff", () => {
+	const lines = (before: AccessSnapshot, after: AccessSnapshot) =>
+		classifyAccess(before, after).changes.map(({ effect, line, review }) => ({ effect, line, review }))
+	const shared = (bindings: string) => snapshot(files({ access: `{ member: { view: 'shared_notes', row: 'note_id', ${bindings} } }` }))
+
+	test('is read from source, widens with closer review when added or changed, and narrows when removed', () => {
+		expect(
+			readContractSource(files({ access: "{ member: { view: 'shared_notes', row: 'note_id', principal: 'principal_id' } }" })).tables['notes']?.access,
+		)
+			.toEqual({ member: { view: 'shared_notes', row: 'note_id', principal: 'principal_id', member: null } })
+		const none = snapshot(files())
+		const principal = shared("principal: 'principal_id'")
+		expect(lines(none, principal)).toContainEqual({
+			effect: 'widens',
+			line: 'Relation `member` reaches the rows of `notes` that view `shared_notes` lists for the caller in `principal_id`',
+			review: 'closer',
+		})
+		expect(lines(principal, shared("member: 'workspace_id'"))).toContainEqual({
+			effect: 'widens',
+			line: 'Relation `member` reaches the rows of `notes` that view `shared_notes` lists for the nodes it is held inside in `workspace_id`, '
+				+ 'instead of view `shared_notes` for the caller in `principal_id`',
+			review: 'closer',
+		})
+		expect(lines(principal, none)).toContainEqual({
+			effect: 'narrows',
+			line: 'Relation `member` no longer reaches the rows of `notes` that view `shared_notes` lists',
+			review: undefined,
+		})
+		expect(classifyAccess(principal, none).outcome).toBe('no-widening')
+		expect(classifyAccess(principal, principal).changes).toEqual([])
+	})
+
+	test('is shown on a new table, and publishes only to a release from its floor', () => {
+		const viewed = shared("principal: 'principal_id'")
+		const contract = viewed.contract
+		if (contract === null) throw new Error('the fixture has a contract')
+		const { notes: _, ...tables } = contract.tables
+		expect(lines({ ...viewed, contract: { ...contract, tables } }, viewed)).toContainEqual({
+			effect: 'widens',
+			line: 'Relation `member` reaches the rows of `notes` that view `shared_notes` lists for the caller in `principal_id`',
+			review: 'closer',
+		})
+		expect(relationFields(contract)).toContain('access of table notes')
+		expect(relationGrantsRefusal(contract, '0.9.0-dev.13')).toContain('enforces from 0.9.0-dev.14')
+		expect(relationGrantsRefusal(contract, '0.9.0-dev.14')).toBeNull()
+	})
+
+	test("an access entry over a view already deployed shows the view's SQL again", async () => {
+		const sql = 'CREATE VIEW shared_notes AS SELECT note_id, principal_id, workspace_id FROM note_members;\n'
+		const read = async (source: Map<string, string>) => {
+			const commit = await memoryCommits({ ...Object.fromEntries(source), 'db/migrations/20261012110000_shared.sql': sql }).open({
+				repoUrl: 'github.com/acme/notes',
+				commitSha: 'c'.repeat(40),
+				signal: new AbortController().signal,
+			})
+			return readAccessSnapshot(commit, '', 'notes', [])
+		}
+		const before = await read(files())
+		const after = await read(files({ access: "{ member: { view: 'shared_notes', row: 'note_id', principal: 'principal_id' } }" }))
+		const shown = lines(before, after).find(({ line }) => line.startsWith('Migration'))
+		expect(shown?.line).toContain('its SQL decides who relation `member` on `notes` reaches, which a new access entry names')
+		expect(shown?.review).toBe('closer')
+		expect(lines(after, after)).toEqual([])
+	})
+
+	test("the view's SQL is shown as database code that decides the relation", async () => {
+		const source = files({ access: "{ member: { view: 'shared_notes', row: 'note_id', principal: 'principal_id' } }" })
+		const sql = 'CREATE VIEW shared_notes AS SELECT note_id, principal_id, workspace_id FROM note_members;\n'
+		const commit = await memoryCommits({ ...Object.fromEntries(source), 'db/migrations/20261012110000_shared.sql': sql }).open({
+			repoUrl: 'github.com/acme/notes',
+			commitSha: 'c'.repeat(40),
+			signal: new AbortController().signal,
+		})
+		const after = await readAccessSnapshot(commit, '', 'notes', [])
+		const decided = lines(snapshot(source), after).find(({ line }) => line.includes('shared_notes') && line.startsWith('Migration'))
+		expect(decided?.line).toContain('an access view: its SQL decides who relation `member` on `notes` reaches')
+		expect(decided?.review).toBe('closer')
 	})
 })
 

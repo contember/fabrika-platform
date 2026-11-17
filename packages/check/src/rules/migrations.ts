@@ -13,7 +13,7 @@ import {
 	upperWord,
 } from '@fabrika/platform-node/sql'
 import type { Finding } from '../finding'
-import { MIGRATIONS_DIR } from '../layout'
+import { MIGRATIONS_DIR, TABLES_FILE } from '../layout'
 
 const MIGRATION_NAME = /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})_[a-z0-9]+(?:_[a-z0-9]+)*\.sql$/
 const ALLOWED = 'db/migrations/YYYYMMDDHHMMSS_slug.sql with a lowercase snake_case slug, as fabrika db new <slug> writes it'
@@ -357,6 +357,108 @@ export const checkConflictIndexes = (
 	return checked.filter((insert) => !present.has(`${insert.table}(${keyOf(insert.columns)})`)).map((insert) => insert.finding)
 }
 
+/** A table that names an access view under `key` (ADR-0076). */
+export interface AccessKey {
+	readonly table: string
+	readonly key: string
+	readonly views: readonly string[]
+}
+
+/**
+ * A table that names an access view needs its key unique on its own, or the view's `row` names several rows at once
+ * (ADR-0076 section 1). A view as the target keeps its key unique by its SQL; any other name no migration creates as a
+ * table is refused, so a statement the reader does not follow fails closed.
+ */
+export const checkAccessViewKeys = (files: ReadonlyMap<string, string>, keys: readonly AccessKey[]): Finding[] => {
+	if (keys.length === 0) {
+		return []
+	}
+	const unique: UniqueIndex[] = []
+	const created = new Map<string, { readonly path: string; readonly line: number }>()
+	const views = new Set<string>()
+	const migrations = [...files.entries()]
+		.filter(([path]) => path.startsWith(MIGRATIONS_DIR) && path.endsWith('.sql'))
+		.sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+	for (const [path, sql] of migrations) {
+		for (const statement of topLevelStatements(sql)) {
+			readUniqueIndexes(statement.tokens, unique)
+			const table = createdTable(statement.tokens)
+			if (table !== undefined) created.set(table, { path, line: statement.line })
+			const view = createdView(statement.tokens)
+			if (view !== undefined) views.add(view)
+			for (const dropped of droppedTables(statement.tokens)) created.delete(dropped)
+			const renamed = renamedTable(statement.tokens)
+			const at = renamed === undefined ? undefined : created.get(renamed.from)
+			if (renamed !== undefined && at !== undefined) {
+				created.delete(renamed.from)
+				created.set(renamed.to, at)
+			}
+		}
+	}
+	const findings: Finding[] = []
+	for (const { table, key, views: named } of keys) {
+		const at = created.get(table)
+		if (at === undefined && views.has(table)) continue
+		if (at !== undefined && unique.some((index) => index.table === table && index.columns.length === 1 && index.columns[0] === key)) continue
+		findings.push({
+			file: at?.path ?? TABLES_FILE,
+			line: at?.line ?? 1,
+			column: 1,
+			severity: 'refusal',
+			rule: 'access-view-key',
+			message: at === undefined
+				? `${table} names the access view ${named.join(', ')}, and no migration creates ${table} as a table or a view`
+				: `${table} names the access view ${named.join(', ')}, and no migration makes its key ${key} unique on its own`,
+			allowed: `${key} as the primary key of ${table}, or create unique index ${table}_${key} on ${table} (${key})`,
+		})
+	}
+	return findings
+}
+
+/** The table a `CREATE [UNLOGGED | TEMP | TEMPORARY] TABLE` statement creates. */
+function createdTable(tokens: readonly SqlToken[]): string | undefined {
+	if (upperWord(tokens[0]) !== 'CREATE') return undefined
+	const at = skipOne(tokens, 1, 'UNLOGGED', 'TEMP', 'TEMPORARY')
+	if (upperWord(tokens[at]) !== 'TABLE') return undefined
+	return objectNameAt(tokens, skipWords(tokens, at + 1, 'IF', 'NOT', 'EXISTS'))?.name
+}
+
+/** The view a `CREATE [OR REPLACE] [TEMP] [MATERIALIZED] VIEW` statement creates. */
+function createdView(tokens: readonly SqlToken[]): string | undefined {
+	if (upperWord(tokens[0]) !== 'CREATE') return undefined
+	const at = skipOne(tokens, skipOne(tokens, skipWords(tokens, 1, 'OR', 'REPLACE'), 'TEMP', 'TEMPORARY'), 'MATERIALIZED')
+	if (upperWord(tokens[at]) !== 'VIEW') return undefined
+	return objectNameAt(tokens, skipWords(tokens, at + 1, 'IF', 'NOT', 'EXISTS'))?.name
+}
+
+/** Past one of `words` at `at`, when the token there is one of them. */
+function skipOne(tokens: readonly SqlToken[], at: number, ...words: readonly string[]): number {
+	const word = upperWord(tokens[at])
+	return word !== undefined && words.includes(word) ? at + 1 : at
+}
+
+/** The tables a `DROP TABLE` statement drops. */
+function droppedTables(tokens: readonly SqlToken[]): string[] {
+	if (upperWord(tokens[0]) !== 'DROP' || upperWord(tokens[1]) !== 'TABLE') return []
+	const at = skipWords(tokens, 2, 'IF', 'EXISTS')
+	return splitAtCommas(tokens.slice(at)).flatMap((part) => objectNameAt(part, 0)?.name ?? [])
+}
+
+/** `ALTER TABLE from RENAME TO to`. */
+function renamedTable(tokens: readonly SqlToken[]): { readonly from: string; readonly to: string } | undefined {
+	if (upperWord(tokens[0]) !== 'ALTER' || upperWord(tokens[1]) !== 'TABLE') return undefined
+	const at = skipWords(tokens, skipWords(tokens, 2, 'IF', 'EXISTS'), 'ONLY')
+	const from = objectNameAt(tokens, at)?.name
+	const end = afterName(tokens, at)
+	if (from === undefined || end === undefined || upperWord(tokens[end]) !== 'RENAME' || upperWord(tokens[end + 1]) !== 'TO') return undefined
+	const to = objectNameAt(tokens, end + 2)?.name
+	return to === undefined ? undefined : { from, to }
+}
+
+function defaultConstraintName(table: string, primary: boolean, columns: readonly string[]): string {
+	return primary ? `${table}_pkey` : `${table}_${columns.join('_')}_key`
+}
+
 interface UniqueIndex {
 	readonly name: string | undefined
 	readonly table: string
@@ -366,23 +468,28 @@ interface UniqueIndex {
 function readUniqueIndexes(tokens: readonly SqlToken[], unique: UniqueIndex[]): void {
 	const verb = upperWord(tokens[0])
 	const object = upperWord(tokens[1])
-	if (verb === 'CREATE' && object === 'TABLE') {
-		const at = skipWords(tokens, 2, 'IF', 'NOT', 'EXISTS')
+	const keep = (kept: (index: UniqueIndex) => boolean) => unique.splice(0, unique.length, ...unique.filter(kept))
+	const tableAt = verb === 'CREATE' ? skipOne(tokens, 1, 'UNLOGGED', 'TEMP', 'TEMPORARY') : 1
+	if (verb === 'CREATE' && upperWord(tokens[tableAt]) === 'TABLE') {
+		const at = skipWords(tokens, tableAt + 1, 'IF', 'NOT', 'EXISTS')
 		const table = objectNameAt(tokens, at)?.name
 		const open = afterName(tokens, at)
 		const close = open === undefined ? undefined : closingParenthesis(tokens, open)
 		if (table === undefined || open === undefined || close === undefined) return
+		keep((index) => index.table !== table)
 		for (const element of splitAtCommas(tokens.slice(open + 1, close))) {
 			readUniqueElement(table, element, unique)
 		}
+	} else if (verb === 'DROP' && object === 'TABLE') {
+		const dropped = new Set(splitAtCommas(tokens.slice(skipWords(tokens, 2, 'IF', 'EXISTS'))).map((part) => objectNameAt(part, 0)?.name))
+		keep((index) => !dropped.has(index.table))
 	} else if (verb === 'ALTER' && object === 'TABLE') {
 		const at = skipWords(tokens, skipWords(tokens, 2, 'IF', 'EXISTS'), 'ONLY')
 		const table = objectNameAt(tokens, at)?.name
 		const end = afterName(tokens, at)
 		if (table === undefined || end === undefined) return
 		for (const action of splitAtCommas(tokens.slice(end))) {
-			if (upperWord(action[0]) !== 'ADD') continue
-			readUniqueElement(table, action.slice(skipWords(action, skipWords(action, 1, 'COLUMN'), 'IF', 'NOT', 'EXISTS')), unique)
+			alterUnique(table, action, unique, keep)
 		}
 	} else if (verb === 'CREATE' && object === 'UNIQUE' && upperWord(tokens[2]) === 'INDEX') {
 		const rest = tokens.slice(3)
@@ -406,7 +513,41 @@ function readUniqueIndexes(tokens: readonly SqlToken[], unique: UniqueIndex[]): 
 	}
 }
 
-/** A column with `UNIQUE` or `PRIMARY KEY`, or a `UNIQUE (…)` or `PRIMARY KEY (…)` table constraint. */
+/**
+ * One action of `ALTER TABLE table`: `ADD` a unique column or constraint, `DROP CONSTRAINT` one by name, `DROP COLUMN`,
+ * or `RENAME` the table or a column, which the unique keys follow.
+ */
+function alterUnique(table: string, action: readonly SqlToken[], unique: UniqueIndex[], keep: (kept: (index: UniqueIndex) => boolean) => void): void {
+	const verb = upperWord(action[0])
+	if (verb === 'ADD') {
+		readUniqueElement(table, action.slice(skipWords(action, skipWords(action, 1, 'COLUMN'), 'IF', 'NOT', 'EXISTS')), unique)
+	} else if (verb === 'DROP' && upperWord(action[1]) === 'CONSTRAINT') {
+		const name = objectNameAt(action, skipWords(action, 2, 'IF', 'EXISTS'))?.name
+		keep((index) => index.table !== table || index.name !== name)
+	} else if (verb === 'DROP') {
+		const column = objectNameAt(action, skipWords(action, skipWords(action, 1, 'COLUMN'), 'IF', 'EXISTS'))?.name
+		keep((index) => index.table !== table || column === undefined || !index.columns.includes(column))
+	} else if (verb === 'RENAME' && upperWord(action[1]) === 'TO') {
+		const to = objectNameAt(action, 2)?.name
+		if (to !== undefined) unique.splice(0, unique.length, ...unique.map((index) => (index.table === table ? { ...index, table: to } : index)))
+	} else if (verb === 'RENAME') {
+		const at = skipWords(action, 1, 'COLUMN')
+		const from = objectNameAt(action, at)?.name
+		const after = afterName(action, at)
+		const to = after === undefined || upperWord(action[after]) !== 'TO' ? undefined : objectNameAt(action, after + 1)?.name
+		if (from === undefined || to === undefined) return
+		unique.splice(
+			0,
+			unique.length,
+			...unique.map((index) => index.table === table ? { ...index, columns: index.columns.map((column) => (column === from ? to : column)) } : index),
+		)
+	}
+}
+
+/**
+ * A column with `UNIQUE` or `PRIMARY KEY`, or a `UNIQUE (…)` or `PRIMARY KEY (…)` table constraint, named as declared or
+ * as Postgres names it by default (`<table>_pkey`, `<table>_<columns>_key`), so a later `DROP CONSTRAINT` finds it.
+ */
 function readUniqueElement(table: string, element: readonly SqlToken[], unique: UniqueIndex[]): void {
 	const head = upperWord(element[0])
 	if (head !== undefined && TABLE_CONSTRAINTS.has(head)) {
@@ -416,12 +557,16 @@ function readUniqueElement(table: string, element: readonly SqlToken[], unique: 
 		const list = open === undefined ? undefined : columnList(constraint, open)
 		const columns = list?.columns.filter((column) => column !== undefined) ?? []
 		if (list !== undefined && columns.length > 0 && columns.length === list.columns.length) {
-			unique.push({ name: undefined, table, columns })
+			const declared = head === 'CONSTRAINT' ? nameText(element[1]) : undefined
+			unique.push({ name: declared ?? defaultConstraintName(table, kind === 'PRIMARY', columns), table, columns })
 		}
 		return
 	}
 	const column = nameText(element[0])
-	if (column !== undefined && depthZeroWords(element.slice(1)).some((word) => word === 'UNIQUE' || word === 'PRIMARY')) {
-		unique.push({ name: undefined, table, columns: [column] })
+	const words = depthZeroWords(element.slice(1))
+	if (column !== undefined && words.some((word) => word === 'UNIQUE' || word === 'PRIMARY')) {
+		const named = element.findIndex((token) => upperWord(token) === 'CONSTRAINT')
+		const declared = named < 0 ? undefined : nameText(element[named + 1])
+		unique.push({ name: declared ?? defaultConstraintName(table, words.includes('PRIMARY'), [column]), table, columns: [column] })
 	}
 }

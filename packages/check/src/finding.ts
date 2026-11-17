@@ -22,6 +22,7 @@ export const REFUSAL_RULE_IDS = [
 	'cross-app-fetch',
 	'url-endpoint',
 	'on-conflict-index',
+	'access-view-key',
 	'key-literal',
 	'client-identity',
 	'sensitive-log',

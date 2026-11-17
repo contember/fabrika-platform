@@ -660,11 +660,25 @@ describe('buildArtifact refuses a declaration the types would refuse', () => {
 		expect(buildArtifact(fill('read'), tables).tables['note_summaries']?.view).toBe(true)
 	})
 
-	test('an access view, until the artifact schema and the approval diff read it (ADR-0076)', () => {
+	test('an access view is carried as declared (ADR-0076)', () => {
 		const notesTable = noteTables['notes']
 		if (notesTable === undefined) throw new Error('the notes fixture changed')
 		const access = { owner: { view: 'note_owners', row: 'note_id', principal: 'principal_id', member: null } }
-		expect(problemsOf(() => buildArtifact(base, { ...noteTables, notes: { ...notesTable, access } })).join('\n')).toContain('access')
+		const related = { ...base, relations: { owner: { dimension: 'workspace' } } }
+		const viewed = { ...noteTables, notes: { ...notesTable, access } }
+		expect(buildArtifact(related, viewed).tables['notes']?.access).toEqual(access)
+		expect(buildArtifact(base, noteTables).tables['notes']).not.toHaveProperty('access')
+		// A relation reached by an access view alone needs no table that confers it; one reached by neither is refused.
+		expect(problemsOf(() => buildArtifact(related, noteTables))).toEqual([
+			"relation 'owner': is conferred by 0 tables; exactly one table declares confers.owner, or a table names an access view for it",
+		])
+		const unbound = { owner: { view: 'note_owners', row: 'note_id', principal: null, member: null } }
+		expect(() => buildArtifact(related, { ...noteTables, notes: { ...notesTable, access: unbound } })).toThrow(
+			/binds the principal, a member node or both/,
+		)
+		expect(problemsOf(() => buildArtifact(base, viewed))).toEqual([
+			"table 'notes': names an access view for 'owner', which is not a relation of the vocabulary",
+		])
 	})
 
 	test('a mutation in an export', () => {

@@ -1051,6 +1051,34 @@
 			"enum_labels": []
 		},
 		{
+			"table_name": "finished_tasks",
+			"view": true,
+			"column_name": "task_id",
+			"type_name": "uuid",
+			"type_type": "b",
+			"type_category": "U",
+			"nullable": true,
+			"generated": "no",
+			"computed": false,
+			"formatted_type": "uuid",
+			"keyed": false,
+			"enum_labels": []
+		},
+		{
+			"table_name": "finished_tasks",
+			"view": true,
+			"column_name": "org_id",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": true,
+			"generated": "no",
+			"computed": false,
+			"formatted_type": "text",
+			"keyed": false,
+			"enum_labels": []
+		},
+		{
 			"table_name": "project_assistants",
 			"view": false,
 			"column_name": "id",

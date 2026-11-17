@@ -4,6 +4,7 @@
 
 import { bodyDeadlineMs } from '@fabrika/app/contract'
 import {
+	type AccessArtifact,
 	type AdmissionRate,
 	APP_CALLER_PREFIX,
 	type AttachmentShape,
@@ -382,6 +383,7 @@ function compareContracts(changes: Changes, before: ContractArtifact | null, aft
 				...ruled('table.read-through', readThroughChanges(name, undefined, table.readThrough)),
 				...ruled('table.write-through', writeThroughChanges(name, table.readThrough, undefined, table.writeThrough)),
 				...ruled('table.member-reveals', memberRevealsChanges(name, table.readThrough, undefined, table.memberReveals)),
+				...ruled('table.access', accessChanges(name, undefined, table.access)),
 			)
 		}
 	}
@@ -881,6 +883,9 @@ function siteSubject(site: string): ChangeSubjectDto {
  * does code in a file whose text changed, since the diff cannot tell what changed in it; removed code narrows.
  */
 function compareDatabaseCode(changes: Changes, baseline: AccessSnapshot, candidate: AccessSnapshot): void {
+	const decides = accessViewsOf(candidate.contract)
+	const declares = (deviation: MigrationDeviation) => `${databaseObject(deviation)}${decidedBy(decides, deviation)}`
+	const newlyDecided = viewsNewlyDeciding(baseline.contract, candidate.contract)
 	const before = new Map((baseline.databaseCode ?? []).map((deviation) => [deviationKey(deviation), deviation]))
 	const after = new Map((candidate.databaseCode ?? []).map((deviation) => [deviationKey(deviation), deviation]))
 	const beforeFiles = byName(baseline.migrations)
@@ -891,11 +896,30 @@ function compareDatabaseCode(changes: Changes, baseline: AccessSnapshot, candida
 		const place = (file: string, line: Line) => changes.add(subjectOf('migration', file), ...ruled('migration.database-code', [line]))
 		if (to === undefined) {
 			if (from !== undefined) place(from.file, narrowing(`${migrationName(from.file)} no longer declares ${databaseObject(from)}`))
-		} else if (from === undefined) place(to.file, closer('off-road', `${migrationName(to.file)} declares ${databaseObject(to)}`))
+		} else if (from === undefined) place(to.file, closer('off-road', `${migrationName(to.file)} declares ${declares(to)}`))
 		else if (beforeFiles.get(to.file)?.checksum !== afterFiles.get(to.file)?.checksum) {
-			place(to.file, closer('off-road', `${migrationName(to.file)} changes, and declares ${databaseObject(to)}`))
+			place(to.file, closer('off-road', `${migrationName(to.file)} changes, and declares ${declares(to)}`))
+		} else if (to.kind === 'view' && newlyDecided.has(to.object)) {
+			// SQL approved before it decided anything is read again once an access entry makes it decide (ADR-0076).
+			place(to.file, closer('off-road', `${migrationName(to.file)} declares ${declares(to)}, which a new access entry names`))
 		}
 	}
+}
+
+/** The views an access entry the candidate adds or changes names: their SQL now decides access it did not decide before. */
+function viewsNewlyDeciding(before: ContractArtifact | null, after: ContractArtifact | null): ReadonlySet<string> {
+	const views = new Set<string>()
+	for (const [table, policy] of Object.entries(after?.tables ?? {})) {
+		for (const [relation, access] of Object.entries(policy.access ?? {})) {
+			const was = before?.tables[table]?.access?.[relation]
+			if (was === undefined || !sameAccess(was, access)) views.add(access.view)
+		}
+	}
+	return views
+}
+
+function sameAccess(left: AccessArtifact, right: AccessArtifact): boolean {
+	return left.view === right.view && left.row === right.row && left.principal === right.principal && left.member === right.member
 }
 
 /**
@@ -983,6 +1007,23 @@ function updateWords(loss: MigrationDataLoss): string {
 	return loss.columns === undefined
 		? `overwrites values of \`${loss.object}\` in every row it matches`
 		: `overwrites ${loss.columns.map((column) => `\`${loss.object}.${column}\``).join(', ')} in every row it matches`
+}
+
+/** View → the table and relation pairs whose reach it decides (ADR-0076), in the candidate's contract. */
+function accessViewsOf(contract: ContractArtifact | null): ReadonlyMap<string, readonly string[]> {
+	const views = new Map<string, string[]>()
+	for (const [table, policy] of Object.entries(contract?.tables ?? {})) {
+		for (const [relation, access] of Object.entries(policy.access ?? {})) {
+			views.set(access.view, [...(views.get(access.view) ?? []), `relation \`${relation}\` on \`${table}\``])
+		}
+	}
+	return views
+}
+
+/** The access a view's SQL decides, so the approver knows the code they read is an access rule. */
+function decidedBy(views: ReadonlyMap<string, readonly string[]>, deviation: MigrationDeviation): string {
+	const decided = deviation.kind === 'view' ? views.get(deviation.object) : undefined
+	return decided === undefined ? '' : `, an access view: its SQL decides who ${decided.join(' and who ')} reaches`
 }
 
 function migrationName(file: string): string {
@@ -1914,6 +1955,33 @@ function whenChanges(name: string, before: TablePolicyArtifact['when'], after: T
 	})
 }
 
+/**
+ * An access view's SQL decides which rows of the table a relation reaches (ADR-0076), and its writers are bound by
+ * nothing: a new or changed one widens with closer review, a removed one narrows.
+ */
+function accessChanges(name: string, before: TablePolicyArtifact['access'], after: TablePolicyArtifact['access']): Line[] {
+	const from = before ?? {}
+	const to = after ?? {}
+	return union(Object.keys(from), Object.keys(to)).flatMap((relation): Line[] => {
+		const was = from[relation]
+		const is = to[relation]
+		if (is === undefined) {
+			return was === undefined ? [] : [narrowing(`Relation \`${relation}\` no longer reaches the rows of \`${name}\` that view \`${was.view}\` lists`)]
+		}
+		const reach = `Relation \`${relation}\` reaches the rows of \`${name}\` that view \`${is.view}\` lists for ${accessBindings(is)}`
+		if (was === undefined) return [closer('off-road', reach)]
+		if (sameAccess(was, is)) return []
+		return [closer('off-road', `${reach}, instead of view \`${was.view}\` for ${accessBindings(was)}`)]
+	})
+}
+
+function accessBindings(access: AccessArtifact): string {
+	const bound: string[] = []
+	if (access.principal !== null) bound.push(`the caller in \`${access.principal}\``)
+	if (access.member !== null) bound.push(`the nodes it is held inside in \`${access.member}\``)
+	return bound.join(' and ')
+}
+
 /** A relation's condition narrows only that relation's terms of an action: a new one narrows, a lost or changed one widens. */
 function relationWhenChanges(name: string, before: TablePolicyArtifact['relationWhen'], after: TablePolicyArtifact['relationWhen']): Line[] {
 	const from = before ?? {}
@@ -2133,6 +2201,7 @@ function tableChanges(name: string, from: TablePolicyArtifact, to: TablePolicyAr
 		...ruled('table.read-through', readThroughChanges(name, from.readThrough, to.readThrough)),
 		...ruled('table.write-through', writeThroughChanges(name, to.readThrough, from.writeThrough, to.writeThrough)),
 		...ruled('table.member-reveals', memberRevealsChanges(name, to.readThrough, from.memberReveals, to.memberReveals)),
+		...ruled('table.access', accessChanges(name, from.access, to.access)),
 	]
 }
 
