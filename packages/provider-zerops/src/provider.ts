@@ -128,7 +128,7 @@ const BACKUP_POLL_INTERVAL_MS = 10_000
 export const ZEROPS_BACKUP_POLLS = 180
 
 /**
- * The tag of the backup a run takes before its migrations delete data. A user tag is at most 24 characters of
+ * The tag of the backup a run takes before its migrations may change stored data. A user tag is at most 24 characters of
  * `[A-Za-z0-9:_-]`, so it carries the first 20 of the run id's own: a UUIDv7's, which start with its timestamp.
  * The tag is not protected: default retention removes a manual backup only past 50 files or 5 GiB, while protected ones
  * would pile up toward the project's backup storage, past which no backup is stored at all.
@@ -825,7 +825,7 @@ const sizeDatabase = async (env: StepEnv): Promise<void> => {
 }
 
 /**
- * Backs up the application's database before a version that runs migrations deleting data can start: those run in its
+ * Backs up the application's database before a version that runs migrations that may change stored data can start: those run in its
  * init commands, at container start. A backup that fails or is not stored fails the run before a version is reserved.
  * A `cheap` namespace's shared database is backed up whole.
  */
@@ -835,7 +835,7 @@ const backupDatabase = async (env: StepEnv): Promise<void> => {
 	if (request === undefined) return
 	const migrations = request.migrations.map((file) => `\`${file}\``).join(', ')
 	const database = applicationDatabaseOf(run.artifact)
-	if (database === null) throw new Error(`zerops: ${migrations} delete data, and the application declares no database to back up`)
+	if (database === null) throw new Error(`zerops: ${migrations} may change stored data, and the application declares no database to back up`)
 	const tag = zeropsBackupTag(request.runId)
 	const named = database.shared ? `${database.hostname}, the namespace's shared database,` : database.hostname
 	if (dryRun) {
@@ -845,7 +845,7 @@ const backupDatabase = async (env: StepEnv): Promise<void> => {
 	assertRunning(signal)
 	const service = await zerops.api.findService({ projectId: run.target.projectId, hostname: database.hostname, signal })
 	if (service === null) throw new Error(`zerops: the database ${database.hostname} does not exist, so it cannot be backed up`)
-	log(`  ${migrations} delete data: backing up ${named} under the tag \`${tag}\``)
+	log(`  ${migrations} may change stored data: backing up ${named} under the tag \`${tag}\``)
 	const stored = await storeTaggedBackup({
 		api: zerops.api,
 		sleep: zerops.sleep,

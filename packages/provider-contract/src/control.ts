@@ -166,7 +166,7 @@ export interface ProviderDeployInput {
 	 */
 	readonly applicationObjects?: ApplicationObjects
 	/**
-	 * Present when the deploy brings migration files that delete stored data and that the version running does not hold
+	 * Present when the deploy brings migration files with a `dataLoss` statement of any kind, which may change stored data, and that the version running does not hold
 	 * (ADR-0050): the provider backs up the application's database, and waits until the backup is stored, before any
 	 * version that can run them starts. A backup that fails or does not finish fails the run with nothing deployed.
 	 * Control hands it only to a provider without `dataOperations`, whose migration phase backs up itself (ADR-0070 §8),

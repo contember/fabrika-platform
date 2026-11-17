@@ -144,7 +144,7 @@ const SECTION_POSTGRES_MIN_RAM =
 	"Verified live (2026-10-16) — the autoscaling API raises a PostgreSQL service's minimum RAM and its `max_connections` — docs/reference/zerops-platform.md"
 const SECTION_BACKUP_SCHEDULE = "UNVERIFIED: a managed service's backup schedule, set through the API — docs/reference/zerops-platform.md"
 const SECTION_BACKUP_BEFORE_MIGRATION =
-	'Verified live (2026-11-17) — a tagged backup before migrations that delete data — docs/reference/zerops-platform.md'
+	'Verified live (2026-11-17) — a tagged backup before migrations that may change stored data — docs/reference/zerops-platform.md'
 const SECTION_BACKUP_UNVERIFIED = 'UNVERIFIED: a backup that runs in the background — docs/reference/zerops-platform.md'
 /** The 24 characters a backup tag may hold at most, the length of the tag a deploy writes. */
 const BACKUP_TAG = 'run-0123456789abcdefghij'

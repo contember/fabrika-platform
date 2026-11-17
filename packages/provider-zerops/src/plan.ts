@@ -30,7 +30,7 @@ export const resolveDeployHostname = (manifest: FabrikaManifest): string => {
 
 /**
  * Build the provider-owned deploy order without touching the platform. `backup` adds the backup of the application's
- * database, which a deploy takes when its migrations delete data: before anything but the verified import changes, and
+ * database, which a deploy takes when its migrations may change stored data: before anything but the verified import changes, and
  * before a version is reserved, so a backup that does not finish leaves nothing to clean up.
  */
 export const buildZeropsPlan = (manifest: FabrikaManifest, options: { readonly backup?: boolean } = {}): readonly ZeropsStep[] => {
@@ -51,7 +51,7 @@ export const buildZeropsPlan = (manifest: FabrikaManifest, options: { readonly b
 		steps.push({
 			id: 'backup-database',
 			kind: 'backup-database',
-			description: "Back up the application's database before migrations that delete data, and wait until the backup is stored",
+			description: "Back up the application's database before migrations that may change stored data, and wait until the backup is stored",
 		})
 	}
 	steps.push({ id: 'write-service-env', kind: 'write-service-env', description: 'Write the managed service variables' })

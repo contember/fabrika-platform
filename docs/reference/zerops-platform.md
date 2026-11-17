@@ -1672,10 +1672,10 @@ write, a response that does not parse, or a read-back that differs is a warning 
 The row imports its own database and prints what a fresh one reads, so its log records the format; it runs with
 `FABRIKA_LIVE_ZEROPS_SLOW=1`.
 
-#### Verified live (2026-11-17) — a tagged backup before migrations that delete data
+#### Verified live (2026-11-17) — a tagged backup before migrations that may change stored data
 
 An application's migrations run in its init commands, when a new version's containers start. When Control hands a
-deploy `backupBeforeMigrations` (migration files that delete data and that the version running does not hold,
+deploy `backupBeforeMigrations` (migration files that may change stored data, or call database code that may, and that the version running does not hold,
 ADR-0050), the deploy's `backup-database` step backs up the application's PostgreSQL service right after
 `verify-exposure`: before any service variable is written and before a version is reserved. A `cheap` application's is
 the namespace's shared `postgres`, backed up whole. The step requests the backup under the tag `run-<the first 20

@@ -1352,7 +1352,7 @@ describe('the backup before migrations that delete data', () => {
 		// `async: false` is a finished backup: one list confirms it, and nothing waits.
 		expect(recorded.calls.filter((call) => call === 'listBackups')).toHaveLength(1)
 		expect(recorded.sleeps).not.toContain(10_000)
-		expect(recorded.logs).toContain(`  \`0002_purge.sql\` delete data: backing up db under the tag \`${TAG}\``)
+		expect(recorded.logs).toContain(`  \`0002_purge.sql\` may change stored data: backing up db under the tag \`${TAG}\``)
 		expect(recorded.logs).toContain('  db: backup `2026-11-17 10:17:07` is stored')
 	})
 
@@ -1376,7 +1376,9 @@ describe('the backup before migrations that delete data', () => {
 		expect((await deploy({}, run)).status).toBe('succeeded')
 		expect(recorded.calls).toContain('findService:postgres')
 		expect(recorded.backups).toEqual([{ serviceId: DATABASE_SERVICE_ID, tags: [TAG] }])
-		expect(recorded.logs).toContain(`  \`0002_purge.sql\` delete data: backing up postgres, the namespace's shared database, under the tag \`${TAG}\``)
+		expect(recorded.logs).toContain(
+			`  \`0002_purge.sql\` may change stored data: backing up postgres, the namespace's shared database, under the tag \`${TAG}\``,
+		)
 	})
 
 	test('a backup that is refused, does not start, or is not listed fails the run, and nothing is deployed', async () => {
@@ -1423,7 +1425,9 @@ describe('the backup before migrations that delete data', () => {
 	test('an application without a database fails rather than run such a migration unprotected', async () => {
 		const run = deleting({ ...deployRun(recorded), artifact: compileFabrikaManifest(app([API]), 'prod', SOURCE_DESCRIPTOR) })
 		const result = await deploy({}, run)
-		expect(stepError(result, 'backup-database')).toBe('zerops: `0002_purge.sql` delete data, and the application declares no database to back up')
+		expect(stepError(result, 'backup-database')).toBe(
+			'zerops: `0002_purge.sql` may change stored data, and the application declares no database to back up',
+		)
 		expect(recorded.creates).toEqual([])
 	})
 

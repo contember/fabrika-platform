@@ -1330,7 +1330,9 @@ describe('Zerops ControlProvider lifecycle', () => {
 		const control = createTestControlProvider({ accessToken: 'token', api: makeApi(recorded), sleep: async () => {} })
 		const backupBeforeMigrations = { migrations: ['0002_purge.sql'] }
 		expect(await control.deploy({ ...deployInput(recorded), backupBeforeMigrations })).toEqual({ state: 'failed' })
-		expect(recorded.logs).toContain('✗ backup-database: zerops: `0002_purge.sql` delete data, and the application declares no database to back up')
+		expect(recorded.logs).toContain(
+			'✗ backup-database: zerops: `0002_purge.sql` may change stored data, and the application declares no database to back up',
+		)
 		expect(recorded.externalIds).toEqual([])
 	})
 
