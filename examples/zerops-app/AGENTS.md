@@ -1757,6 +1757,7 @@ The refusals agents meet most, and their fix:
 | `skipped-test`                 | `.skip`, `.only`, `.todo`                                                                                                                                                                                                                                 | run the test                                                                                                      |
 | `file-column-migration`        | a file column without `REFERENCES fabrika_files (id)` or without an index it leads                                                                                                                                                                        | both, in a new migration (`references/table-and-migration.md`)                                                    |
 | `on-conflict-index`            | `insert(…, { onConflict: { columns } })` whose columns are no unique index the migrations create                                                                                                                                                          | a `UNIQUE` constraint or a `CREATE UNIQUE INDEX` without `WHERE` on exactly those columns                         |
+| `access-view-key`              | a table that names an access view has no single-column primary or unique key on its key                                                                                                                                                                   | a `PRIMARY KEY` or `UNIQUE` on that column alone (`references/relations.md`)                                      |
 | `cross-app-fetch`              | a `fetch` of an absolute URL under no origin a site declares in `egress`, or one a job's `egress: 'public'` refuses (an IP address, `localhost`)                                                                                                          | `egress: ['https://…']` on the site that calls it (`references/endpoint.md`)                                      |
 | `url-endpoint`                 | `ctx.url('<id>')` names no procedure of the contract                                                                                                                                                                                                      | the endpoint id `<mount>.<group>.<procedure>`                                                                     |
 | `cloudflare-scan`              | on Cloudflare, a file kind with `scan: true`                                                                                                                                                                                                              | the kind without `scan`, and no public procedure that takes its files                                             |
@@ -4574,7 +4575,8 @@ Ask the human before you add a relation, a role's `via`, a table's `confers` or 
 more, and the approver sees each as a widening. A `when` only narrows; removing or changing one widens. They need
 `@fabrika/app` `0.9.0-dev.13` or later, and a `relationWhen` `0.9.0-dev.14` or later: Control refuses to publish them for
 an application pinned to an earlier release. A relation held inside the node of a scoped grant needs `0.9.0-dev.14`;
-an earlier release holds nothing through it.
+an earlier release holds nothing through it. A table's `access` needs `0.9.0-dev.14` or later: an earlier release refuses
+the contract.
 
 ## The vocabulary: a relation and a role's `via`
 
@@ -4596,6 +4598,7 @@ export const vocabulary = defineVocabulary({
 	},
 	relations: {
 		assisting: { dimension: 'project' },
+		auditing: { dimension: 'org' },
 	},
 	roles: {
 		owner: {
@@ -4609,6 +4612,10 @@ export const vocabulary = defineVocabulary({
 		assistant: {
 			grants: [],
 			via: { assisting: ['tasks.read', 'tasks.write'] },
+		},
+		auditor: {
+			grants: [],
+			via: { auditing: ['tasks.read'] },
 		},
 	},
 })
@@ -4669,6 +4676,10 @@ CREATE TABLE project_assistants (
 	FOREIGN KEY (project_id, org_id) REFERENCES projects (id, org_id) ON UPDATE CASCADE ON DELETE CASCADE
 );
 CREATE INDEX project_assistants_principal ON project_assistants (principal_id, project_id);
+
+-- An access view: the finished tasks of each organization, for whoever audits it there.
+CREATE VIEW finished_tasks AS
+	SELECT id AS task_id, org_id FROM tasks WHERE done;
 ```
 
 - A source table is an ordinary child or dimension table with a principal column (`TEXT`, an IAM principal id), the
@@ -4708,6 +4719,9 @@ export const tables = defineTables(vocabulary, columns)({
 					{ 'project_id.ends_at': { gt: { now: true } } },
 				],
 			},
+		},
+		access: {
+			auditing: { view: 'finished_tasks', row: 'task_id', member: 'org_id' },
 		},
 	},
 	project_assistants: {
@@ -4816,6 +4830,23 @@ export const tables = defineTables(vocabulary, columns)({
 - An `on` endpoint whose `Ref` the relation holds sees a row the condition does not admit as absent (404). An insert
   through the relation that the condition refuses, with no other relation to hold it, is a 409 with nothing written.
 - A relation narrowed for an action does not count as holding it when a `writeThrough` column's writer is checked.
+
+### `access`: a view decides what a relation reaches
+
+When no declaration above says who reaches a row (a published row of another organization, a grant that is active only
+under a join, several paths to one row), write the rule as SQL in a view and name it under the relation (ADR-0076):
+
+- `access: { <relation>: { view, row, principal?, member? } }`. `row` is the view's column with the table's key.
+  `member` is compared with the nodes the relation is held inside (a grant of the role in a scope value, at the
+  relation's own dimension); `principal` with the caller's principal id. At least one is required.
+- The data layer adds `key in (select <row> from <view> where …)` to every statement under the relation, beside the
+  action's other grants. `when` and `relationWhen` still narrow it. A `member`-bound view is not narrowed to the node:
+  it may list rows of other organizations, and that is how a cross-tenant rule is written.
+- The view takes no policy, and a table's key needs a single-column primary or unique key (`access-view-key`).
+- The view's SQL is the access rule. The approver reads it as database code that decides the relation, and nothing
+  checks what it selects: a `cross join` or a missing tenant join widens access to everyone. Whoever writes the rows
+  it reads changes who reaches the table, with no bound. Prefer `confers` when a row per grant fits.
+- Test what each principal reads through it, as `an auditor` below does: one inside the node, one outside it.
 
 ### A key that holds the tenant needs its ancestors NOT NULL
 
@@ -4952,6 +4983,21 @@ export const tasks = app.group({ callers: ['human'] }, (r) => ({
 			fromPage(
 				Task,
 				await ctx.db.target.tasks.list({
+					orderBy: [['title', 'asc']],
+					after: input.after,
+				}),
+			)
+		),
+	finished: r.query({
+		input: MyTasks,
+		output: TaskPage,
+		access: { action: 'tasks.read', over: 'project' },
+	})
+		.handle(async ({ input, ctx }) =>
+			fromPage(
+				Task,
+				await ctx.db.within.tasks.list({
+					where: [['done', '=', true]],
 					orderBy: [['title', 'asc']],
 					after: input.after,
 				}),
@@ -5129,6 +5175,38 @@ if (postgres !== null) {
 		})
 	})
 
+	describe('an auditor', () => {
+		test('reads the finished tasks of the organization it audits, and only those', async () => {
+			const project = await ownerApi.projects.create({
+				orgId: 'acme',
+				name: 'Audited',
+			})
+			const open = await ownerApi.tasks.create({
+				projectId: project.id,
+				title: 'Open',
+			})
+			const done = await ownerApi.tasks.create({
+				projectId: project.id,
+				title: 'Done',
+			})
+			await ownerApi.tasks.finish({ id: done.id, expectVersion: 1 })
+			const auditorApi = createClient(contract, 'api', {
+				fetch: kit.browser(kit.testCaller([{ role: 'auditor', scope: acme }])),
+			})
+			const outsiderApi = createClient(contract, 'api', {
+				fetch: kit.browser(
+					kit.testCaller([{ role: 'auditor', scope: kit.scope('org', 'globex') }]),
+				),
+			})
+			const finished = (await auditorApi.tasks.finished({})).items.map((item) =>
+				item.id
+			)
+			expect(finished).toContain(done.id)
+			expect(finished).not.toContain(open.id)
+			expect((await outsiderApi.tasks.finished({})).items).toEqual([])
+		})
+	})
+
 	describe('a project past its end', () => {
 		test('is read, and takes no new task from anyone', async () => {
 			const ended = await ownerApi.projects.create({
@@ -5161,7 +5239,7 @@ if (postgres !== null) {
 ## Not built yet
 
 - No widening condition (`admits`): a `when` only narrows. A row that some other rule should open to more people is
-  reached by a grant, a relation or an off-road declaration, never by a condition.
+  reached by a grant, a relation or an access view, never by a condition.
 - A relation for a person from outside the organization is not built.
 - A view is never a relation source: write the source rows to a table, under `assign`.
 - An assignment never changes in place: delete the row and insert a new one.
