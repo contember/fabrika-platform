@@ -4575,8 +4575,8 @@ Ask the human before you add a relation, a role's `via`, a table's `confers` or 
 more, and the approver sees each as a widening. A `when` only narrows; removing or changing one widens. They need
 `@fabrika/app` `0.9.0-dev.13` or later, and a `relationWhen` `0.9.0-dev.14` or later: Control refuses to publish them for
 an application pinned to an earlier release. A relation held inside the node of a scoped grant needs `0.9.0-dev.14`;
-an earlier release holds nothing through it. A table's `access` needs `0.9.0-dev.14` or later: an earlier release refuses
-the contract.
+an earlier release holds nothing through it. A table's `access` needs `0.9.0-dev.14` or later, which Control
+checks the same way.
 
 ## The vocabulary: a relation and a role's `via`
 
@@ -4846,7 +4846,8 @@ under a join, several paths to one row), write the rule as SQL in a view and nam
 - The view's SQL is the access rule. The approver reads it as database code that decides the relation, and nothing
   checks what it selects: a `cross join` or a missing tenant join widens access to everyone. Whoever writes the rows
   it reads changes who reaches the table, with no bound. Prefer `confers` when a row per grant fits.
-- Test what each principal reads through it, as `an auditor` below does: one inside the node, one outside it.
+- Test what each principal reads through it, as `an auditor` below does: one inside the node, one outside it, through
+  an endpoint that filters nothing itself, so the test fails when the view's filter is wrong.
 
 ### A key that holds the tenant needs its ancestors NOT NULL
 
@@ -4988,7 +4989,7 @@ export const tasks = app.group({ callers: ['human'] }, (r) => ({
 				}),
 			)
 		),
-	finished: r.query({
+	reachable: r.query({
 		input: MyTasks,
 		output: TaskPage,
 		access: { action: 'tasks.read', over: 'project' },
@@ -4997,7 +4998,6 @@ export const tasks = app.group({ callers: ['human'] }, (r) => ({
 			fromPage(
 				Task,
 				await ctx.db.within.tasks.list({
-					where: [['done', '=', true]],
 					orderBy: [['title', 'asc']],
 					after: input.after,
 				}),
@@ -5198,12 +5198,13 @@ if (postgres !== null) {
 					kit.testCaller([{ role: 'auditor', scope: kit.scope('org', 'globex') }]),
 				),
 			})
-			const finished = (await auditorApi.tasks.finished({})).items.map((item) =>
+			// `reachable` filters nothing itself: only the view keeps the open task from the auditor.
+			const audited = (await auditorApi.tasks.reachable({})).items.map((item) =>
 				item.id
 			)
-			expect(finished).toContain(done.id)
-			expect(finished).not.toContain(open.id)
-			expect((await outsiderApi.tasks.finished({})).items).toEqual([])
+			expect(audited).toContain(done.id)
+			expect(audited).not.toContain(open.id)
+			expect((await outsiderApi.tasks.reachable({})).items).toEqual([])
 		})
 	})
 
