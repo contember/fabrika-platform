@@ -1,10 +1,11 @@
-import { createPage, Link } from '@buzola/router'
+import { createPage, Link, useNavigate } from '@buzola/router'
 import { CONTROL_ACTIONS } from '@fabrika/control-contract'
-import { useState } from 'react'
+import { useRef, useState } from 'react'
+import { ConfirmDialog } from '../../components/ConfirmDialog'
 import { Icon } from '../../components/Icon'
 import { LogView } from '../../components/LogView'
 import { Chip, RunStatus } from '../../components/Status'
-import { api, ApiError } from '../../lib/api'
+import { api, ApiError, type createControlClient, type RunDto } from '../../lib/api'
 import { mayDo, opensApplications } from '../../lib/console-access'
 import { useConsoleAccess } from '../../lib/console-caller'
 import { fmtDate, fmtDuration, shortRef, shortSha } from '../../lib/format'
@@ -24,9 +25,7 @@ export default createPage()
 	.route('/runs/:id')
 	.render(({ data, invalidate }) => {
 		const { run, appEnv } = data
-		const inFlight = run.status === 'pending' || run.status === 'running' || run.status === 'awaiting_approval'
 		const access = useConsoleAccess()
-		const at = { app: run.appId, env: run.env }
 
 		return (
 			<>
@@ -49,10 +48,7 @@ export default createPage()
 								<span className="dot-sep">{run.trigger}</span>
 							</div>
 						</div>
-						<div className="row-actions">
-							<RunStatus status={run.status} />
-							{inFlight && mayDo(access, CONTROL_ACTIONS.DEPLOY_TRIGGER, at) && <CancelButton runId={run.id} onDone={invalidate} />}
-						</div>
+						<RunActions run={run} onDone={invalidate} />
 					</div>
 				</div>
 
@@ -99,6 +95,80 @@ export default createPage()
 			</>
 		)
 	})
+
+/** The run's status and what the caller may do with it: cancel an in-flight run, or deploy a succeeded run's commit again. */
+export function RunActions({ run, onDone }: { run: RunDto; onDone: () => void }) {
+	const access = useConsoleAccess()
+	const inFlight = run.status === 'pending' || run.status === 'running' || run.status === 'awaiting_approval'
+	const mayDeploy = mayDo(access, CONTROL_ACTIONS.DEPLOY_TRIGGER, { app: run.appId, env: run.env })
+
+	return (
+		<div className="row-actions">
+			<RunStatus status={run.status} />
+			{inFlight && mayDeploy && <CancelButton runId={run.id} onDone={onDone} />}
+			{run.status === 'succeeded' && run.commitSha !== null && mayDeploy && (
+				<DeployAgainButton appId={run.appId} env={run.env} commitSha={run.commitSha} />
+			)}
+		</div>
+	)
+}
+
+/** A rollback is a new deploy (ADR-0050 §6): a new run of the same commit to the same environment. */
+export function deployAgain(
+	client: ReturnType<typeof createControlClient>,
+	target: { appId: string; env: string; commitSha: string },
+): Promise<RunDto> {
+	return client.deploy({ appId: target.appId, env: target.env, ref: target.commitSha })
+}
+
+/** Deploys a succeeded run's commit again after a confirmation, then opens the new run. */
+function DeployAgainButton({ appId, env, commitSha }: { appId: string; env: string; commitSha: string }) {
+	const navigate = useNavigate()
+	const [confirming, setConfirming] = useState(false)
+	const button = useRef<HTMLButtonElement>(null)
+
+	async function deploy() {
+		const next = await deployAgain(api, { appId, env, commitSha })
+		navigate('runs/detail', { params: { id: next.id } })
+	}
+
+	function close() {
+		setConfirming(false)
+		requestAnimationFrame(() => button.current?.focus())
+	}
+
+	return (
+		<>
+			<button ref={button} type="button" className="small" onClick={() => setConfirming(true)} disabled={confirming}>
+				<Icon name="refresh" size={13} />
+				Deploy again
+			</button>
+			{confirming && <DeployAgainDialog env={env} commitSha={commitSha} onConfirm={deploy} onClose={close} />}
+		</>
+	)
+}
+
+/** Names the commit and the environment, because the caller may be rolling back production. A refusal shows in the dialog. */
+export function DeployAgainDialog({ env, commitSha, onConfirm, onClose }: {
+	env: string
+	commitSha: string
+	onConfirm: () => Promise<void>
+	onClose: () => void
+}) {
+	return (
+		<ConfirmDialog
+			title="Deploy this commit again"
+			confirmLabel="Deploy again"
+			body={
+				<p>
+					Deploy commit <code>{shortSha(commitSha)}</code> to <strong>{env}</strong> again? It replaces what runs there now.
+				</p>
+			}
+			onConfirm={onConfirm}
+			onClose={onClose}
+		/>
+	)
+}
 
 /**
  * Cancel button for a pending/running run: destroys its deploy container and marks the run failed. Shown
