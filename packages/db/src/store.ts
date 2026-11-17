@@ -3322,9 +3322,14 @@ function layerReach(
 	for (let index = 0; index < names.length; index++) {
 		const model = modelOf(models, names[index] ?? '')
 		for (let position = 0; model !== undefined && position < model.access.length; position++) {
-			const relation = model.access[position]?.relation ?? ''
-			if (ownEntry(relations, relation) !== undefined) continue
-			setOwn(relations, relation, freeze({ kind: 'access', relation, dimension: '', narrowed: freeze(ownEntry(narrowed, relation) ?? []) }))
+			const access = model.access[position]
+			if (access === undefined || ownEntry(relations, access.relation) !== undefined) continue
+			const relation = access.relation
+			setOwn(
+				relations,
+				relation,
+				freeze({ kind: 'access', relation, dimension: access.dimension, narrowed: freeze(ownEntry(narrowed, relation) ?? []) }),
+			)
 		}
 	}
 	const subqueries: Record<string, readonly string[]> = {}
@@ -3400,24 +3405,25 @@ export function ownerOf(models: TableModels, dimension: string): TableModel | un
 }
 
 /**
- * Whether an access view of `relation` lists `node` for `principal`: a guarded select of the dimension table's row by
- * its key under the access term. Only a principal-bound view answers; one bound to a member node lists nothing for a
- * hold anywhere, which is all `relates` asks about.
+ * Whether an access view of `relation` lists `node` for `principal`: a guarded select of the row of the table that owns
+ * the relation's dimension, by its key, under the access term. Only a principal-bound view answers; one bound to a
+ * member node lists nothing for a hold anywhere, which is all `relates` asks about.
  */
 async function accessHolds(
 	models: TableModels,
 	subqueries: Readonly<Record<string, readonly string[]>>,
 	runtime: DataLayerRuntime,
 	relation: string,
+	dimension: string,
 	node: string,
 	principal: string,
 ): Promise<boolean> {
 	const names = ownKeys(models)
 	for (let index = 0; index < names.length; index++) {
 		const model = modelOf(models, names[index] ?? '')
-		if (model === undefined || model.scope.mode !== 'dimension') continue
+		if (model === undefined || model.scope.mode !== 'dimension' || model.scope.dimension !== dimension) continue
 		const terms = relationTerms(
-			{ [relation]: freeze({ kind: 'access', relation, dimension: '', narrowed: freeze([]) }) },
+			{ [relation]: freeze({ kind: 'access', relation, dimension, narrowed: freeze([]) }) },
 			model,
 			{ relation, inside: null },
 			principal,
@@ -3456,8 +3462,9 @@ async function relationHolds(
 	if (typeof node !== 'string' || node.length === 0 || typeof principal !== 'string' || principal.length === 0) {
 		throw new QueryRefusedError('row_address', `a ${relation} row is addressed by its node and its principal, non-empty strings`)
 	}
-	if (knownRelation(relations, relation).kind === 'access') {
-		return accessHolds(models, subqueries, runtime, relation, node, principal)
+	const known = knownRelation(relations, relation)
+	if (known.kind === 'access') {
+		return accessHolds(models, subqueries, runtime, relation, known.dimension, node, principal)
 	}
 	const source = relationSource(relations, relation)
 	const address = allOf([equals(source.table, source.node, node), namesPrincipal(source, principal)])
@@ -3465,7 +3472,8 @@ async function relationHolds(
 	const scope = active.length === 0 ? address : AndNode.create(address, ParensNode.create(allOf(active)))
 	const context: GuardContext = { root: 'SelectQueryNode', table: source.table, joins: {}, scope, subqueries }
 	const rows = await sessionOf(runtime).run<Readonly<Record<string, unknown>>>(locateNode(source.table, [source.node], scope), context)
-	return rows.length > 0
+	// A relation with a source table may also name access views: the same term answers through them.
+	return rows.length > 0 || accessHolds(models, subqueries, runtime, relation, source.dimension, node, principal)
 }
 
 /**
@@ -3491,7 +3499,8 @@ async function holdingRowLocked(transaction: Session, context: TableContext, gra
 	}
 	for (let index = 0; index < grant.relations.length; index++) {
 		const hold = grant.relations[index]
-		if (hold === undefined) continue
+		// An access view's base rows are not the data layer's to lock (ADR-0076): such a hold holds no destination here.
+		if (hold === undefined || knownRelation(context.relations, hold.relation).kind === 'access') continue
 		const source = relationSource(context.relations, hold.relation)
 		const node = nodeOf(source.dimension)
 		const sourceInside = insideRow(source, source.table, hold)
@@ -3714,6 +3723,8 @@ async function heldThroughPaths(
 		if (typeof node !== 'string') {
 			throw new PolicyError(`${owner.name}.${column} came back as ${typeof node}; a containment column holds its scope value as text`)
 		}
+		// A member-bound access term is not narrowed to the node (ADR-0076): a row it maps outside the hold's nodes gets no Ref.
+		if (!hold.inside.values.includes(node)) continue
 		held[held.length] = freeze({ relation: hold.relation, inside: freeze({ dimension: hold.inside.dimension, values: freeze([node]) }) })
 	}
 	const through: ContainerGrant[] = []

@@ -1446,6 +1446,7 @@ function linkTables(parsed: readonly ParsedTable[], vocabulary: VocabularyModel,
 		return true
 	}
 	const sources: Record<string, string> = {}
+	const viewed: Record<string, string> = {}
 	const models: Record<string, TableModel> = {}
 	for (let index = 0; index < parsed.length; index++) {
 		const table = parsed[index]
@@ -1489,7 +1490,7 @@ function linkTables(parsed: readonly ParsedTable[], vocabulary: VocabularyModel,
 			const access = parseAccess(linked, accessInput, vocabulary, views)
 			for (let position = 0; position < access.length; position++) {
 				const relation = access[position]?.relation ?? ''
-				if (!hasOwn(sources, relation)) setOwn(sources, relation, `${table.name} (access)`)
+				if (!hasOwn(viewed, relation)) setOwn(viewed, relation, table.name)
 			}
 			setOwn(models, table.name, freeze({ ...linked, confers, when, relationWhen, reveals, readThrough, memberReveals, access }))
 		}
@@ -1498,11 +1499,31 @@ function linkTables(parsed: readonly ParsedTable[], vocabulary: VocabularyModel,
 	const relations = ownKeys(vocabulary.relations)
 	for (let index = 0; index < relations.length; index++) {
 		const relation = relations[index] ?? ''
-		if (!hasOwn(sources, relation)) {
-			throw new PolicyError(`the vocabulary relation ${relation} has no source: declare confers.${relation} on the table whose rows hold it`)
+		if (!hasOwn(sources, relation) && !hasOwn(viewed, relation)) {
+			throw new PolicyError(
+				`the vocabulary relation ${relation} has no source: declare confers.${relation} on the table whose rows hold it, or name an access view for it`,
+			)
 		}
 	}
+	checkRevealSources(models, sources)
 	return freeze(models)
+}
+
+/** A reveal is matched through the relation's source rows, so a relation that access views alone serve reveals nothing. */
+function checkRevealSources(models: Readonly<Record<string, TableModel>>, sources: Readonly<Record<string, string>>): void {
+	const tables = ownKeys(models)
+	for (let index = 0; index < tables.length; index++) {
+		const model = ownEntry(models, tables[index] ?? '')
+		const reveals = model?.reveals ?? []
+		for (let position = 0; position < reveals.length; position++) {
+			const relation = reveals[position]?.relation ?? ''
+			if (model !== undefined && !hasOwn(sources, relation)) {
+				throw new PolicyError(
+					`${model.name}: reveals.${relation} is matched through the rows that confer it, and only access views serve it; declare confers.${relation}`,
+				)
+			}
+		}
+	}
 }
 
 type LinkedTable = Omit<TableModel, 'confers' | 'when' | 'relationWhen' | 'reveals' | 'readThrough' | 'memberReveals' | 'access'>

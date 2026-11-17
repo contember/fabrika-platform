@@ -7,7 +7,7 @@ import { ownEntry } from './builtins'
 import type { ContainerGrant, RefGrant, RelationHold, WithinGrant } from './capability'
 import { conditionNode, subquery } from './condition-nodes'
 import type { ConditionModel } from './conditions'
-import { CapabilityError } from './errors'
+import { CapabilityError, PolicyError } from './errors'
 import type { ViewParentLink } from './guard'
 import { linksPredicate, linkValues } from './links'
 import { allOf, anyOf, column, equals, valueList } from './nodes'
@@ -246,7 +246,8 @@ export function accessReach(model: TableModel, hold: RelationHold, principal: st
 
 /** The key column a row of `model` is named by: a child's `key`, a dimension table's own key. */
 function keyColumnOf(model: TableModel): string {
-	return model.scope.mode === 'child' || model.scope.mode === 'dimension' ? model.scope.key : 'id'
+	if (model.scope.mode === 'child' || model.scope.mode === 'dimension') return model.scope.key
+	throw new PolicyError(`${model.name}: an access view names a row of a dimension or child table only`)
 }
 
 /** `terms` with the relation's `relationWhen` for `action`, when the table declares one. */

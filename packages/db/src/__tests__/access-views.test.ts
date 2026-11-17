@@ -11,7 +11,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:tes
 import { z } from 'zod/v4'
 import type { Database } from '../database'
 import { CapabilityError, NotFoundError, PolicyError, QueryRefusedError } from '../errors'
-import { bindScopedDatabaseProvisionally, type DataAccess, dataAccessOf, type DataHandles, type DataSite } from '../framework'
+import { bindScopedDatabaseProvisionally, type DataAccess, dataAccessOf, type DataHandles, type DataSite, type PathCheck } from '../framework'
 import type { DataKind } from '../orm-types'
 import { defineTables, readTables } from '../policy'
 import type { RelationCheck } from '../registry'
@@ -129,7 +129,7 @@ const columns: TypedColumnList<DB, Views> = {
 
 const vocabulary = {
 	app: 'access-views',
-	dimensions: { person: {}, account: {}, company: {}, case: {} },
+	dimensions: { person: {}, account: {}, company: {}, module: { in: 'company' }, case: {} },
 	actions: {
 		'profiles.read': 'Read a profile',
 		'profiles.write': 'Edit a profile',
@@ -162,7 +162,7 @@ const policies = {
 	accounts: { scope: { dimension: 'account' }, actions: { read: 'accounts.read' } },
 	companies: { scope: { dimension: 'company' }, actions: { read: 'companies.read' } },
 	modules: {
-		scope: { child: 'companies' },
+		scope: { dimension: 'module' },
 		actions: { read: 'modules.read' },
 		access: { marketplace: { view: 'published_modules', row: 'module_id', member: 'company_id' } },
 	}, // A view as the target: its access lists rows beside what its parent's reach reads.
@@ -230,6 +230,7 @@ function suite(dialect: 'sqlite' | 'postgres', open: () => Promise<Backend>, clo
 		let backend: Backend
 		let data: DataAccess
 		let relates: RelationCheck
+		let holdsThrough: PathCheck
 		let release: () => void = () => {}
 
 		beforeAll(async () => {
@@ -267,6 +268,7 @@ function suite(dialect: 'sqlite' | 'postgres', open: () => Promise<Backend>, clo
 			const binding = bindScopedDatabaseProvisionally(layer, { database: backend.database, capabilities: alice })
 			release = () => binding.release()
 			relates = binding.relates
+			holdsThrough = binding.holdsThrough
 			data = dataAccessOf(layer)
 		})
 
@@ -353,6 +355,17 @@ function suite(dialect: 'sqlite' | 'postgres', open: () => Promise<Backend>, clo
 				expect(await cards(['c1'], [inside('marketplace', 'company', ['c1'])])).toEqual(['m1', 'm2', 'm4'])
 				expect(await cards([], [inside('marketplace', 'company', ['c1'])])).toEqual(['m2', 'm4'])
 				expect(await cards(['c1'], [])).toEqual(['m1', 'm2'])
+			})
+
+			test('an on or in binding counts the hold only for a row inside its node: no Ref of a row the view maps elsewhere', async () => {
+				const held = (id: string) => holdsThrough('module', id, 'modules.read', 'user:alice', [inside('marketplace', 'company', ['c1'])], [])
+				expect(await held('m2')).toEqual({ relations: [inside('marketplace', 'company', ['c1'])], paths: [] })
+				expect(await held('m4')).toEqual({ relations: [], paths: [] })
+			})
+
+			test('relates finds nothing through a view bound to member nodes: a hold anywhere names no node', async () => {
+				expect(await relates('marketplace', 'c1', 'user:alice')).toBe(false)
+				expect(await relates('marketplace', 'c2', 'user:alice')).toBe(false)
 			})
 
 			test('a row the clock has not published yet is out until it is', async () => {
@@ -484,6 +497,23 @@ describe('what the parse refuses', () => {
 			withPolicy({ cases: { ...policies.cases, access: { grantee: { view: 'active_case_access', row: 'id', principal: 'principal_id' } } } })
 		)
 			.toThrow(/not a column of active_case_access/)
+	})
+
+	test('nothing when a relation has a source table and an access view, in either order of the column list', () => {
+		const grants = { scope: { child: 'cases' }, actions: { read: 'cases.admin' }, confers: { grantee: { principal: 'principal_id' } } }
+		const reversed = Object.fromEntries(Object.entries(columns).reverse())
+		expect(() => withPolicy({ case_grants: grants })).not.toThrow()
+		expect(() => readTables(reversed, { ...policies, case_grants: grants }, vocabulary)).not.toThrow()
+	})
+
+	test('a reveal of a relation that access views alone serve, which has no row to match it through', () => {
+		const curated = { ...vocabulary, relations: { ...vocabulary.relations, curator: { dimension: 'module' } } }
+		const modules = {
+			...policies.modules,
+			access: { curator: { view: 'published_modules', row: 'module_id', member: 'company_id' } },
+			reveals: { curator: { to: 'company', actions: ['modules.read'] } },
+		}
+		expect(() => readTables(columns, { ...policies, modules }, curated)).toThrow(/only access views serve it/)
 	})
 
 	test('a relation the vocabulary does not declare', () => {
