@@ -6,7 +6,7 @@ import { firstRow } from './returning'
 
 export type RunTrigger = 'webhook' | 'manual' | 'poll'
 
-/** `awaiting_approval`: a widening on a protected environment parked the run until a human decides (ADR-0050). */
+/** `awaiting_approval`: a closer-review change on a protected environment parked the run until a human decides (ADR-0050). */
 export type RunStatus = 'pending' | 'running' | 'awaiting_approval' | 'succeeded' | 'failed'
 
 export interface RunRow {
@@ -349,7 +349,7 @@ export class RunRepository {
 	}
 
 	/**
-	 * Park a running run whose widening waits for a human (ADR-0050), with the classification the approver reads. An
+	 * Park a running run whose change waits for a human (ADR-0050), with the classification the approver reads. An
 	 * approval the run held stays: it names the digests it approved, so it approves nothing this classification shows,
 	 * and the approval page says it lapsed.
 	 */

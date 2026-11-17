@@ -181,7 +181,7 @@ workspace its own running application, where one pinned service could show only 
     - Nothing from a sandbox is promoted. A commit reaches stage and production only by its own build.
 
 Built (work unit B6): a workspace may edit `fabrika.contract.ts`, and every other `fabrika.*` file stays
-protected; a widening it brings to a protected environment parks the run, and `get_deployment` reports it
+protected; a change that needs closer review it brings to a protected environment parks the run, and `get_deployment` reports it
 with the approval link.
 
 ## Consequences
@@ -219,8 +219,8 @@ with the approval link.
 - The application owns its data and data authorization; the platform does not isolate generated code
   from the app's database.
 - An agent can add endpoints, roles and tables without an operator. A stage environment is not
-  protected by default, so the change applies there at once; on production a widening waits for a
-  human.
+  protected by default, so the change applies there at once; on production a change that needs closer
+  review (ADR-0050) waits for a human.
 - Every refusal of the checker and the build must be one short, actionable line in the build log,
   because that log is the agent's only feedback. Control's snapshot reader is the exception: it logs
   before the run's secrets are known, so it gives a fixed code and a count, and `fabrika-check` names the

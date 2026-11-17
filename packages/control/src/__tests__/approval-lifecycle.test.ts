@@ -1,6 +1,6 @@
-// ADR-0050 end to end through Control: a run reads its snapshot at its commit, a widening waits on a protected
-// environment and applies on an unprotected one, a pending change is published nowhere, only a person in the console
-// approves, an approval holds only for its baseline, a lost publication classifies again, and a removal runs through.
+// ADR-0050 end to end through Control: a run reads its snapshot at its commit, a change needing closer review waits on a
+// protected environment and applies on an unprotected one, a pending change is published nowhere, only a person in the
+// console approves, an approval holds only for its baseline, a lost publication classifies again, a removal runs through.
 
 import type { AuthContext } from '@fabrika/auth'
 import { CONTRACT_FORMAT, contractDigest, permits, type Scope } from '@fabrika/auth-core'
@@ -82,6 +82,14 @@ const ARTIFACT_PUBLICATION = JSON.stringify({
 	checker: '0.0.1',
 	artifact: { gates: { rules: [{ path: '/*', kind: 'human' }] }, schema: null },
 })
+
+/**
+ * A migration that deletes rows of `notes`: its line needs closer review, so a deploy that brings it waits on a protected
+ * environment. `DELETES_MORE` is a second one, which waits again against a baseline that holds `DELETES_NOTES`.
+ */
+const DELETES_NOTES = { 'db/migrations/0001_purge.sql': 'DELETE FROM notes;' }
+const DELETES_MORE = { ...DELETES_NOTES, 'db/migrations/0002_purge_again.sql': 'DELETE FROM notes;' }
+const DELETES_NOTES_LINE = 'Migration `0001_purge.sql` deletes data: deletes rows of `notes`'
 
 const MISSING_CONTRACT = 'access: the commit has no `fabrika.contract.ts`; Fabrika deploys an application only with a contract'
 
@@ -233,9 +241,11 @@ async function lapsed(w: World): Promise<string> {
 	await seed(w)
 	const firstId = uuidv7()
 	w.contract = WITH_EXPORT
+	w.files = DELETES_MORE
 	const wider = await deploy(w, 'prod')
 	await approve(w, wider.runId)
 	w.contract = BASE
+	w.files = DELETES_NOTES
 	const first = await deploy(w, 'prod', firstId)
 	await approve(w, first.runId)
 	await executeDeploy(deps(w), { runId: first.runId })
@@ -331,9 +341,24 @@ describe('approved access through the run lifecycle', () => {
 		expect(w.deploys).toHaveLength(1)
 	})
 
-	test('a widening applies at once on stage and waits on prod; the first deploy to a protected environment waits', async () => {
+	test('a widening without a line that needs closer review publishes at once on prod', async () => {
 		const w = world()
 		await seed(w)
+
+		const first = await deploy(w, 'prod')
+		expect(first.status).toBe('succeeded')
+		expect(await published(w, 'prod')).toEqual({ runId: first.runId, generation: 1 })
+		const classification = parseClassification((await run(w, first.runId)).classification_json ?? '')
+		expect(classification).toMatchObject({ outcome: 'widening', protected: true, baselineRunId: null })
+		expect(classification.changes.some((change) => change.review === 'closer')).toBe(false)
+		expect(w.logs.get(`runs/${first.runId}/logs.ndjson`)).not.toContain('waiting for a human')
+		expect(w.deploys.map((input) => input.environment.access?.contractDigest)).toEqual([DIGEST])
+	})
+
+	test('a change with a line that needs closer review applies at once on stage and waits on prod', async () => {
+		const w = world()
+		await seed(w)
+		w.files = DELETES_NOTES
 
 		expect((await deploy(w, 'stage')).status).toBe('succeeded')
 		const stage = await published(w, 'stage')
@@ -353,15 +378,41 @@ describe('approved access through the run lifecycle', () => {
 		expect(classification.protected).toBe(true)
 		expect(classification.baselineRunId).toBeNull()
 		expect(classification.changes.map((change) => change.line)).toContain('The application becomes the contract application `notes`')
+		expect(classification.changes.map((change) => change.line)).toContain(DELETES_NOTES_LINE)
 		expect(w.logs.get(`runs/${parked.runId}/logs.ndjson`)).toContain('waiting for a human with access.approve')
 		expect(await published(w, 'prod')).toEqual({ runId: null, generation: 0 })
 		expect(w.deploys).toHaveLength(1)
 		expect(w.republished.map((entry) => entry.namespace)).toEqual(['apps-stage'])
 	})
 
+	test('a migration that deletes data waits on prod, and publishes once a person approves it', async () => {
+		const w = world()
+		await seed(w)
+		const first = await deploy(w, 'prod')
+		expect(first.status).toBe('succeeded')
+
+		w.files = DELETES_NOTES
+		const parked = await deploy(w, 'prod')
+		expect(parked.status).toBe('awaiting_approval')
+		const approval = await getApprovalUseCase(approvals(w, auth()), parked.runId)
+		expect(approval.changes.find((change) => change.line === DELETES_NOTES_LINE)).toMatchObject({
+			effect: 'neutral',
+			review: 'closer',
+			reason: 'deletes-data',
+			rule: 'migration.deletes-data',
+		})
+		expect(approval.changes.filter((change) => change.review === 'closer').map((change) => change.line)).toEqual([DELETES_NOTES_LINE])
+		expect(await published(w, 'prod')).toEqual({ runId: first.runId, generation: 1 })
+
+		await approve(w, parked.runId)
+		expect((await executeDeploy(deps(w), { runId: parked.runId })).status).toBe('succeeded')
+		expect(await published(w, 'prod')).toEqual({ runId: parked.runId, generation: 2 })
+	})
+
 	test('a pending widening is published nowhere: no provider environment, namespace member or deploy carries it', async () => {
 		const w = world()
 		await seed(w)
+		w.files = DELETES_NOTES
 		const parked = await deploy(w, 'prod')
 		expect(parked.status).toBe('awaiting_approval')
 
@@ -393,9 +444,7 @@ describe('approved access through the run lifecycle', () => {
 	test('dropping the contract from the commit fails the run, and the approved contract stays published', async () => {
 		const w = world()
 		await seed(w)
-		const first = await deploy(w, 'prod')
-		await approve(w, first.runId)
-		await executeDeploy(deps(w), { runId: first.runId })
+		expect((await deploy(w, 'prod')).status).toBe('succeeded')
 		const before = await published(w, 'prod')
 
 		w.contract = null
@@ -420,6 +469,7 @@ describe('approved access through the run lifecycle', () => {
 	test('a publication that holds artifact access approves nothing: the first contract waits on prod, and applies on stage', async () => {
 		const w = world()
 		await seed(w)
+		w.files = DELETES_NOTES
 		const legacy = uuidv7()
 		await w.db.runs.createRun({ id: legacy, appId: 'notes', env: 'prod', ref: 'refs/heads/main', trigger: 'manual', actor: 'user:test' })
 		for (const env of ['prod', 'stage']) {
@@ -447,6 +497,7 @@ describe('approved access through the run lifecycle', () => {
 		for (const workerDir of ['.', './']) {
 			const w = world()
 			await seed(w, workerDir)
+			w.files = DELETES_NOTES
 			const parked = await deploy(w, 'prod')
 			expect(parked.status).toBe('awaiting_approval')
 			expect(parseClassification((await run(w, parked.runId)).classification_json ?? '').outcome).toBe('widening')
@@ -466,6 +517,7 @@ describe('approved access through the run lifecycle', () => {
 	test('a parked run can be cancelled; it fails without reaching the provider', async () => {
 		const w = world()
 		await seed(w)
+		w.files = DELETES_NOTES
 		const parked = await deploy(w, 'prod')
 		await cancelDeploy(deps(w), await run(w, parked.runId))
 		expect((await run(w, parked.runId)).status).toBe('failed')
@@ -476,6 +528,7 @@ describe('approved access through the run lifecycle', () => {
 	test('a person in the console approves; the run classifies again, publishes and deploys with the approved access', async () => {
 		const w = world()
 		await seed(w)
+		w.files = DELETES_NOTES
 		const parked = await deploy(w, 'prod')
 		const caller = auth()
 
@@ -503,7 +556,7 @@ describe('approved access through the run lifecycle', () => {
 	test("a waiting approval that opens an endpoint to the environment's origins shows the list as it stands now, which no approval covers", async () => {
 		const w = world()
 		const { 'fabrika.contract.ts': contract, ...files } = kitFiles({ summary: "admission: { origins: 'listed' }" })
-		w.files = files
+		w.files = { ...files, ...DELETES_NOTES }
 		w.contract = contract
 		await seed(w)
 		const parked = await deploy(w, 'prod')
@@ -564,6 +617,7 @@ describe('approved access through the run lifecycle', () => {
 	test('a service principal, an OAuth (MCP) token, a key and an operator cannot approve', async () => {
 		const w = world()
 		await seed(w)
+		w.files = DELETES_NOTES
 		const parked = await deploy(w, 'prod')
 		const operator = auth({ permissions: [{ action: 'deploy.*', scope: null }] })
 
@@ -581,10 +635,12 @@ describe('approved access through the run lifecycle', () => {
 		// The publication in between is an OLDER run, so it does not supersede the approved one.
 		const firstId = uuidv7()
 		w.contract = WITH_EXPORT
+		w.files = DELETES_MORE
 		const wider = await deploy(w, 'prod')
 		await approve(w, wider.runId)
 
 		w.contract = BASE
+		w.files = DELETES_NOTES
 		const first = await deploy(w, 'prod', firstId)
 		await approve(w, first.runId)
 		expect((await executeDeploy(deps(w), { runId: first.runId })).status).toBe('succeeded')
@@ -594,6 +650,8 @@ describe('approved access through the run lifecycle', () => {
 		expect(again.baselineRunId).toBe(first.runId)
 		expect(again.changes.map((change) => change.line)).toEqual([
 			'New endpoint `api.export` (POST /api/export) for human callers with `notes.read` (on `note`)',
+			'New migration `0002_purge_again.sql`',
+			'Migration `0002_purge_again.sql` deletes data: deletes rows of `notes`',
 		])
 		expect(await published(w, 'prod')).toEqual({ runId: first.runId, generation: 1 })
 		// The approval stays on the run, bound to the digests it approved, so the page says it lapsed.
@@ -620,6 +678,7 @@ describe('approved access through the run lifecycle', () => {
 		// The publication in between is an OLDER run, so it does not supersede the approved one.
 		const sameId = uuidv7()
 		w.contract = WITH_EXPORT
+		w.files = DELETES_NOTES
 		const approved = await deploy(w, 'prod')
 		await approve(w, approved.runId)
 		const same = await deploy(w, 'prod', sameId)
@@ -662,9 +721,7 @@ describe('approved access through the run lifecycle', () => {
 	test('a removal runs through on prod without approval', async () => {
 		const w = world()
 		await seed(w)
-		const first = await deploy(w, 'prod')
-		await approve(w, first.runId)
-		await executeDeploy(deps(w), { runId: first.runId })
+		expect((await deploy(w, 'prod')).status).toBe('succeeded')
 
 		w.contract = WITHOUT_REMOVE
 		const removal = await deploy(w, 'prod')
@@ -680,9 +737,7 @@ describe('approved access through the run lifecycle', () => {
 		const ROOT = "app: c.spa('/', { dir: 'dist/app', access: { member: true } }),"
 		w.contract = edited(ROOT, `${PUBLIC}\n\tinterest: c.spa('/interest', { dir: 'dist/interest', access: { public: true } }),`)
 		await seed(w)
-		const first = await deploy(w, 'prod')
-		await approve(w, first.runId)
-		await executeDeploy(deps(w), { runId: first.runId })
+		expect((await deploy(w, 'prod')).status).toBe('succeeded')
 
 		w.contract = edited(ROOT, PUBLIC)
 		const neutral = await deploy(w, 'prod')
@@ -697,7 +752,7 @@ describe('approved access through the run lifecycle', () => {
 		const w = world()
 		await seed(w)
 		const secret = 'sk-live-0f3a9c'
-		w.files = { [`db/migrations/0001_${secret}.sql`]: 'CREATE TABLE notes (id TEXT);' }
+		w.files = { [`db/migrations/0001_${secret}.sql`]: 'CREATE TABLE notes (id TEXT);\nDELETE FROM notes;' }
 		const printed: string[] = []
 		const info = spyOn(console, 'info').mockImplementation((...args: unknown[]) => void printed.push(args.map(String).join(' ')))
 		try {
@@ -727,6 +782,7 @@ describe('approved access through the run lifecycle', () => {
 	test('only a person with access.approve changes the protected flag, and it is audited', async () => {
 		const w = world()
 		await seed(w)
+		w.files = DELETES_NOTES
 		expect(await status(setEnvironmentProtectionUseCase(approvals(w, auth({ type: 'service' })), { appId: 'notes', env: 'stage', protected: true })))
 			.toBe(403)
 		expect(await status(setEnvironmentProtectionUseCase(approvals(w, auth({ oauth: true })), { appId: 'notes', env: 'prod', protected: false })))
@@ -741,6 +797,7 @@ describe('approved access through the run lifecycle', () => {
 	test('turning protection off approves no parked run: it waits for a decision, while a new deploy publishes at once', async () => {
 		const w = world()
 		await seed(w)
+		w.files = DELETES_NOTES
 		const parked = await deploy(w, 'prod')
 		expect(parked.status).toBe('awaiting_approval')
 
@@ -767,6 +824,7 @@ describe('approved access through the run lifecycle', () => {
 	test('an approved parked run deploys when no newer run of its environment succeeded', async () => {
 		const w = world()
 		await seed(w)
+		w.files = DELETES_NOTES
 		const parked = await deploy(w, 'prod')
 		await setEnvironmentProtectionUseCase(approvals(w, auth()), { appId: 'notes', env: 'prod', protected: false })
 		const stage = await deploy(w, 'stage')

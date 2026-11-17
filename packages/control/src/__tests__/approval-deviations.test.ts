@@ -4,13 +4,16 @@
 
 import { canonicalArtifactJson, canonicalJson, sha256Hex } from '@fabrika/auth-core'
 import { readContractSource } from '@fabrika/check/contract'
+import { waitsForApproval } from '@fabrika/control-contract'
 import type { BlobStore } from '@fabrika/platform'
 import { uuidv7 } from '@fabrika/platform'
+import type { DataLossStatement, MigrationDataLoss } from '@fabrika/platform-node/sql'
 import type { ControlProvider } from '@fabrika/provider-contract'
 import { describe, expect, test } from 'bun:test'
 import { toAppEnvDto } from '../api/registry/registration'
 import { completeApprovalUseCase } from '../approval/api'
 import { snapshotDeviations } from '../approval/diff'
+import { classifyAccess as classifyWithFacts } from '../approval/diff'
 import { parseClassification, type StoredClassification } from '../approval/publish'
 import { readAccessSnapshot, snapshotReads, SnapshotRefused } from '../approval/read'
 import { type AccessSnapshot, approvedSnapshot, parseSnapshot, serializePublished, serializeSnapshot, snapshotDigest } from '../approval/snapshot'
@@ -402,6 +405,182 @@ describe('a file collection adopted into a table (ADR-0061)', () => {
 		expect(JSON.parse(published.published_snapshot_json ?? '{}')).not.toHaveProperty('fileAdoptions')
 		const run = await w.db.runs.getRun(published.published_run_id ?? '')
 		expect(JSON.parse(run?.snapshot_json ?? '{}').fileAdoptions).toHaveLength(2)
+	})
+})
+
+const DATA_LOSS_MIGRATION = {
+	name: '20261117120000_drop_audit.sql',
+	sql: `DELETE FROM notes WHERE title = '';
+ALTER TABLE notes DROP COLUMN workspace_id;
+DROP TABLE audit;
+`,
+}
+
+describe('a migration that deletes data', () => {
+	test('the snapshot records each statement, keeps them through storage, leaves the digest as it was, and the publication leaves them out', async () => {
+		const snapshot = await snapshotOf(commitOf({}, [NOTES_MIGRATION, DATA_LOSS_MIGRATION]))
+		expect(snapshot.dataLoss).toEqual([
+			{ statement: 'DELETE', object: 'notes', file: DATA_LOSS_MIGRATION.name, line: 1 },
+			{ statement: 'DROP COLUMN', object: 'notes.workspace_id', file: DATA_LOSS_MIGRATION.name, line: 2 },
+			{ statement: 'DROP TABLE', object: 'audit', file: DATA_LOSS_MIGRATION.name, line: 3 },
+		])
+		expect(parseSnapshot(serializeSnapshot(snapshot)).dataLoss).toEqual(snapshot.dataLoss)
+		const { dataLoss: _, ...without } = snapshot
+		expect(snapshotDigest(snapshot)).toBe(snapshotDigest(without))
+		expect(JSON.parse(serializeSnapshot(await snapshotOf(commitOf())))).not.toHaveProperty('dataLoss')
+		expect(JSON.parse(serializePublished(snapshot))).not.toHaveProperty('dataLoss')
+	})
+
+	test('each statement of a new or changed file is its own closer-review line that leaves access unchanged; a file that ran adds none', async () => {
+		const before = await snapshotOf(commitOf())
+		const after = await snapshotOf(commitOf({}, [NOTES_MIGRATION, DATA_LOSS_MIGRATION]))
+		const { changes } = classifyWithFacts(before, after)
+		const lines = changes.filter((change) => change.rule === 'migration.deletes-data')
+		expect(lines.map(({ effect, line, review, reason, subject }) => ({ effect, line, review, reason, subject }))).toEqual([
+			{
+				effect: 'neutral',
+				line: 'Migration `20261117120000_drop_audit.sql` deletes data: deletes rows of `notes`',
+				review: 'closer',
+				reason: 'deletes-data',
+				subject: { kind: 'migration', name: DATA_LOSS_MIGRATION.name },
+			},
+			{
+				effect: 'neutral',
+				line: 'Migration `20261117120000_drop_audit.sql` deletes data: drops column `notes.workspace_id` with its values',
+				review: 'closer',
+				reason: 'deletes-data',
+				subject: { kind: 'migration', name: DATA_LOSS_MIGRATION.name },
+			},
+			{
+				effect: 'neutral',
+				line: 'Migration `20261117120000_drop_audit.sql` deletes data: drops table `audit` with every row',
+				review: 'closer',
+				reason: 'deletes-data',
+				subject: { kind: 'migration', name: DATA_LOSS_MIGRATION.name },
+			},
+		])
+		expect(waitsForApproval(changes)).toBe(true)
+		expect(classifyWithFacts(after, after).changes).toEqual([])
+		const edited = await snapshotOf(commitOf({}, [NOTES_MIGRATION, { ...DATA_LOSS_MIGRATION, sql: `${DATA_LOSS_MIGRATION.sql}\n` }]))
+		expect(classifyWithFacts(after, edited).changes.filter((change) => change.rule === 'migration.deletes-data')).toHaveLength(3)
+	})
+
+	test('a new migration that keeps every row widens, needs no closer review, and does not wait', async () => {
+		const before = await snapshotOf(commitOf())
+		const added = { name: '20261117130000_titles.sql', sql: 'ALTER TABLE notes ADD COLUMN subtitle text;\n' }
+		const { outcome, changes } = classifyWithFacts(before, await snapshotOf(commitOf({}, [NOTES_MIGRATION, added])))
+		expect(outcome).toBe('widening')
+		expect(changes.map((change) => change.rule)).toEqual(['migration.added'])
+		expect(waitsForApproval(changes)).toBe(false)
+	})
+})
+
+describe('a migration that overwrites data or calls database code', () => {
+	/** Applied already: the type a later migration drops and the function a later one calls. */
+	const SETTLED = {
+		name: '20261117100000_status.sql',
+		sql: "CREATE TYPE status AS ENUM ('open', 'done');\nCREATE FUNCTION purge_drafts() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$;\n",
+	}
+	const NAME = '20261117140000_change.sql'
+
+	test('a DROP TYPE … CASCADE, an UPDATE and a call of database code each need closer review on their own line, and wait', async () => {
+		const before = await snapshotOf(commitOf({}, [NOTES_MIGRATION, SETTLED]))
+		for (
+			const [sql, line] of [
+				[
+					'DROP TYPE status CASCADE;\n',
+					`Migration \`${NAME}\` deletes data: drops \`type status\` with CASCADE, which also removes what depends on it, stored columns included`,
+				],
+				[
+					"UPDATE notes SET title = '' WHERE title IS NULL;\n",
+					`Migration \`${NAME}\` overwrites data: overwrites \`notes.title\` in every row it matches`,
+				],
+				[
+					'INSERT INTO audit (id, workspace_id, note_id) SELECT id, workspace_id, id FROM notes WHERE purge_drafts() > 0;\n',
+					`Migration \`${NAME}\` may change data: calls database code \`purge_drafts\``,
+				],
+			] as const
+		) {
+			const { changes } = classifyWithFacts(before, await snapshotOf(commitOf({}, [NOTES_MIGRATION, SETTLED, { name: NAME, sql }])))
+			const closer = changes.filter((change) => change.review === 'closer')
+			expect(closer.map(({ rule, reason, line }) => ({ rule, reason, line }))).toEqual([{
+				rule: 'migration.deletes-data',
+				reason: 'deletes-data',
+				line,
+			}])
+			expect(waitsForApproval(changes)).toBe(true)
+		}
+	})
+
+	test('filling and converting what the same file created does not wait', async () => {
+		const before = await snapshotOf(commitOf())
+		for (
+			const sql of [
+				'ALTER TABLE notes ADD COLUMN subtitle text;\nUPDATE notes SET subtitle = title;\n',
+				'ALTER TABLE notes ADD COLUMN rank int;\nALTER TABLE notes ALTER rank TYPE bigint;\n',
+				"CREATE TABLE drafts (id uuid PRIMARY KEY, body text);\nINSERT INTO drafts (id, body) SELECT id, title FROM notes;\nUPDATE drafts SET body = '';\n",
+				"CREATE TABLE drafts (id uuid PRIMARY KEY, body text);\nINSERT INTO drafts (id, body) VALUES (gen_random_uuid(), '') ON CONFLICT (id) DO UPDATE SET body = excluded.body;\n",
+			]
+		) {
+			const { changes } = classifyWithFacts(before, await snapshotOf(commitOf({}, [NOTES_MIGRATION, { name: NAME, sql }])))
+			expect(changes.map((change) => change.rule)).toEqual(['migration.added'])
+			expect(waitsForApproval(changes)).toBe(false)
+		}
+	})
+
+	test('each form round 2 found losing stored data waits, or is refused', async () => {
+		const before = await snapshotOf(commitOf())
+		const waits = async (sql: string) => {
+			const { changes } = classifyWithFacts(before, await snapshotOf(commitOf({}, [NOTES_MIGRATION, { name: NAME, sql }])))
+			return { waits: waitsForApproval(changes), lines: changes.filter((change) => change.reason === 'deletes-data').map((change) => change.line) }
+		}
+		expect(
+			await waits(
+				"INSERT INTO notes AS conflict (id, workspace_id, title) VALUES (gen_random_uuid(), 'w', 't') ON CONFLICT (id) DO UPDATE SET title = excluded.title;\n",
+			),
+		)
+			.toEqual({ waits: true, lines: [`Migration \`${NAME}\` overwrites data: overwrites rows of \`notes\` that already exist`] })
+		expect(await waits("INSERT OR REPLACE INTO notes (id, workspace_id, title) VALUES ('1', 'w', 't');\n")).toEqual({
+			waits: true,
+			lines: [`Migration \`${NAME}\` may change data: \`INSERT OR REPLACE INTO\` at line 1`],
+		})
+		await expect(
+			snapshotOf(commitOf({}, [NOTES_MIGRATION, { name: NAME, sql: 'CREATE TABLE kv (k TEXT PRIMARY KEY ON CONFLICT REPLACE, v TEXT);\n' }])),
+		)
+			.rejects.toEqual(new SnapshotRefused('migrations-refused', 1))
+		expect(
+			await waits(
+				"ALTER TABLE audit ADD COLUMN title text;\nALTER INDEX audit RENAME TO audit_old;\nALTER INDEX notes RENAME TO audit;\nUPDATE audit SET title = '';\n",
+			),
+		)
+			.toEqual({
+				waits: true,
+				lines: [
+					`Migration \`${NAME}\` may change data: \`ALTER INDEX\` at line 2`,
+					`Migration \`${NAME}\` may change data: \`ALTER INDEX\` at line 3`,
+					`Migration \`${NAME}\` overwrites data: overwrites \`audit.title\` in every row it matches`,
+				],
+			})
+	})
+
+	test('every data-loss kind survives storage', async () => {
+		const at = { file: NAME, line: 1 }
+		const every: Record<DataLossStatement, MigrationDataLoss> = {
+			'DROP TABLE': { statement: 'DROP TABLE', object: 'audit', ...at },
+			'DROP COLUMN': { statement: 'DROP COLUMN', object: 'notes.title', ...at },
+			'DROP CASCADE': { statement: 'DROP CASCADE', object: 'type status', ...at },
+			TRUNCATE: { statement: 'TRUNCATE', object: 'notes', ...at },
+			'TRUNCATE CASCADE': { statement: 'TRUNCATE CASCADE', object: 'notes', ...at },
+			DELETE: { statement: 'DELETE', object: 'notes', ...at },
+			UPDATE: { statement: 'UPDATE', object: 'notes', columns: ['title'], ...at },
+			'UPDATE OR REPLACE': { statement: 'UPDATE OR REPLACE', object: 'notes', ...at },
+			UPSERT: { statement: 'UPSERT', object: 'notes', ...at },
+			'ALTER COLUMN TYPE': { statement: 'ALTER COLUMN TYPE', object: 'notes.title', ...at },
+			CALL: { statement: 'CALL', object: 'purge', ...at },
+			UNPROVEN: { statement: 'UNPROVEN', object: 'ALTER INDEX', ...at },
+		}
+		const snapshot = { ...(await snapshotOf(commitOf())), dataLoss: Object.values(every) }
+		expect(parseSnapshot(serializeSnapshot(snapshot)).dataLoss).toEqual(Object.values(every))
 	})
 })
 

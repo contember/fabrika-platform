@@ -1,5 +1,5 @@
 import { createPage, Link } from '@buzola/router'
-import { type ApprovalView, approvalView, type ChangeGroup, type ChangeRow, type SubjectRow } from '@fabrika/control-contract'
+import { type ApprovalView, approvalView, type ChangeGroup, type ChangeRow, type SubjectRow, waitsForApproval } from '@fabrika/control-contract'
 import { useState } from 'react'
 import { CloserReview } from '../../components/CloserReview'
 import { ConfirmDialog } from '../../components/ConfirmDialog'
@@ -224,11 +224,19 @@ function endpointSentence({ added, changed, removed }: ApprovalView['summary']):
 	return `This change ${andList([first ?? '', ...rest.map((part) => part.replace(/ endpoints?$/, ''))])}.`
 }
 
-/** Whether the change widens access, and what that means for this run. */
+/**
+ * Whether the change widens access, and what that means for this run. A run that waits, or that was approved, says so
+ * whatever its lines need now: an earlier release parked every widening on a protected environment.
+ */
 function outcomeSentence(approval: ApprovalDto): string {
-	if (approval.outcome !== 'widening') return 'It only narrows access or leaves it unchanged, so it publishes without waiting.'
-	if (!approval.protected) return 'It widens access; this environment is not protected, so it publishes without waiting.'
-	return approval.run.status === 'awaiting_approval' ? 'It widens access, so it waits for your approval.' : 'It widens access.'
+	const waits = waitsForApproval(approval.changes)
+	const what = approval.outcome === 'widening' ? 'It widens access' : 'It only narrows access or leaves it unchanged'
+	const closer = waits ? ', and a line needs closer review' : ''
+	if (approval.run.status === 'awaiting_approval') return `${what}${closer}, so it waits for your approval.`
+	if (approval.approval !== null) return `${what}${closer}, so it waited for approval.`
+	if (!waits) return `${what}, and nothing in it needs closer review, so it publishes without waiting.`
+	if (!approval.protected) return `${what}; this environment is not protected, so it publishes without waiting.`
+	return `${what}, and a line needs closer review.`
 }
 
 function andList(items: readonly string[]): string {

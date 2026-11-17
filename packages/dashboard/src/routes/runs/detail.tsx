@@ -79,7 +79,7 @@ export default createPage()
 				{run.status === 'awaiting_approval' && (
 					<section>
 						<p className="hint">
-							This deploy widens access on a protected environment and waits for a person.{' '}
+							This deploy has a change that needs closer review on a protected environment, so it waits for a person.{' '}
 							<Link to="approvals/detail" params={{ id: run.id }}>Review the access change</Link>
 						</p>
 					</section>

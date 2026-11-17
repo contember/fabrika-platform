@@ -15,7 +15,9 @@ export default createPage()
 		<>
 			<div className="page-head">
 				<h1>Approvals</h1>
-				<p className="hint">Deploys that widen access on a protected environment. Each waits until a person reads the change and decides.</p>
+				<p className="hint">
+					Deploys to a protected environment with a change that needs closer review. Each waits until a person reads the change and decides.
+				</p>
 			</div>
 
 			<Table

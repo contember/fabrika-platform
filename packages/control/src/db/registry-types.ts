@@ -45,7 +45,7 @@ export interface AppEnvRow {
 	published_snapshot_json: string | null
 	/** Advanced by every publication; a publication names the generation it read (compare-and-swap). */
 	generation: number
-	/** 1 when a widening waits for a human's approval here (ADR-0050), else 0. */
+	/** 1 when a change that needs closer review waits for a human's approval here (ADR-0050), else 0. */
 	protected: number
 	/** Advanced by every change of `protected`; a publication names the revision it classified under. */
 	protection_revision: number

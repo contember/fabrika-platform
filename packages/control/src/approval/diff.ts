@@ -66,7 +66,7 @@ import {
 	type SurfaceNoteTopic,
 	type SurfaceReach,
 } from '@fabrika/control-contract'
-import type { MigrationDeviation } from '@fabrika/platform-node/sql'
+import type { MigrationDataLoss, MigrationDeviation } from '@fabrika/platform-node/sql'
 import { type AccessSnapshot, compareText, deviationKey } from './snapshot'
 
 /**
@@ -105,8 +105,9 @@ type RuledLine = Line & { readonly rule: string }
 export type AccessChange = RuledLine & { readonly subject: ChangeSubjectDto; readonly audience?: ChangeAudienceDto }
 
 /**
- * `none`: no line at all. `no-widening`: lines, none of which widens (they narrow or leave access unchanged). Both
- * publish at once; `widening` waits for a human on a protected environment.
+ * `none`: no line at all. `no-widening`: lines, none of which widens (they narrow or leave access unchanged).
+ * `widening`: a line widens. Whether a run waits is not the outcome: on a protected environment a change with a line
+ * that needs closer review waits for a human (`waitsForApproval`), whatever its outcome.
  */
 export type AccessOutcome = 'none' | 'no-widening' | 'widening'
 
@@ -129,6 +130,7 @@ export function classifyAccess(baseline: AccessSnapshot, candidate: AccessSnapsh
 	})
 	compareDatabaseCode(changes, baseline, candidate)
 	compareFileAdoptions(changes, baseline, candidate)
+	compareDataLoss(changes, baseline, candidate)
 	// The candidate's row of an endpoint, or the baseline's for a removed one.
 	const rows = new Map([...baseline.contract?.endpoints ?? [], ...candidate.contract?.endpoints ?? []].map((row) => [row.id, row]))
 	const list = changes.list.map((change) => withAudience(change, changes.reaching.get(subjectKey(change.subject)), rows))
@@ -925,6 +927,62 @@ function compareFileAdoptions(changes: Changes, baseline: AccessSnapshot, candid
 				])),
 		)
 	}
+}
+
+/**
+ * The statements of a new or changed migration file that delete or overwrite stored data, or that are not known to keep
+ * every stored value, each its own line: access is unchanged, but no later deploy brings the data back, so a person approves it on a
+ * protected environment and the platform backs the data up before it runs. A file the baseline holds unchanged has run
+ * already.
+ */
+function compareDataLoss(changes: Changes, baseline: AccessSnapshot, candidate: AccessSnapshot): void {
+	const beforeFiles = byName(baseline.migrations)
+	const afterFiles = byName(candidate.migrations)
+	for (const loss of candidate.dataLoss ?? []) {
+		if (beforeFiles.get(loss.file)?.checksum === afterFiles.get(loss.file)?.checksum) continue
+		const { does, what } = dataLossWords(loss)
+		changes.add(
+			subjectOf('migration', loss.file),
+			...ruled('migration.deletes-data', [closer('deletes-data', `${migrationName(loss.file)} ${does}: ${what}`, 'neutral')]),
+		)
+	}
+}
+
+function dataLossWords(loss: MigrationDataLoss): { readonly does: string; readonly what: string } {
+	const deletes = (what: string) => ({ does: 'deletes data', what })
+	const overwrites = (what: string) => ({ does: 'overwrites data', what })
+	switch (loss.statement) {
+		case 'DROP TABLE':
+			return deletes(`drops table \`${loss.object}\` with every row`)
+		case 'DROP COLUMN':
+			return deletes(`drops column \`${loss.object}\` with its values`)
+		case 'DROP CASCADE':
+			return deletes(`drops \`${loss.object}\` with CASCADE, which also removes what depends on it, stored columns included`)
+		case 'TRUNCATE':
+			return deletes(`empties table \`${loss.object}\``)
+		case 'TRUNCATE CASCADE':
+			return deletes(`empties table \`${loss.object}\` and every table that references it`)
+		case 'DELETE':
+			return deletes(`deletes rows of \`${loss.object}\``)
+		case 'UPDATE':
+			return overwrites(updateWords(loss))
+		case 'UPDATE OR REPLACE':
+			return overwrites(`${updateWords(loss)}, and may delete the rows it conflicts with`)
+		case 'UPSERT':
+			return overwrites(`overwrites rows of \`${loss.object}\` that already exist`)
+		case 'ALTER COLUMN TYPE':
+			return overwrites(`converts \`${loss.object}\` to a new type, which may change its values`)
+		case 'CALL':
+			return { does: 'may change data', what: `calls database code \`${loss.object}\`` }
+		case 'UNPROVEN':
+			return { does: 'may change data', what: `\`${loss.object}\` at line ${loss.line}` }
+	}
+}
+
+function updateWords(loss: MigrationDataLoss): string {
+	return loss.columns === undefined
+		? `overwrites values of \`${loss.object}\` in every row it matches`
+		: `overwrites ${loss.columns.map((column) => `\`${loss.object}.${column}\``).join(', ')} in every row it matches`
 }
 
 function migrationName(file: string): string {
