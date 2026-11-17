@@ -8,8 +8,11 @@ import type { GitHubMetadataClient } from './metadata'
 import type { TarballRepositorySource } from './repository'
 import { SOURCE_TIMEOUTS_MS } from './transport'
 
-/** A wanted file above this is refused when read: no snapshot reader accepts more. */
-const MAX_KEPT_FILE_BYTES = 1024 * 1024
+/**
+ * A wanted file above this is refused when read: no snapshot read accepts more. The largest file a snapshot reads is
+ * the lockfile (`SNAPSHOT_LIMITS.lockfileBytes`); a reader input takes up to `readerFileBytes`.
+ */
+const MAX_KEPT_FILE_BYTES = 8 * 1024 * 1024
 /** Wanted files beyond this total are read one by one through the contents API instead. */
 const MAX_KEPT_BYTES = 32 * 1024 * 1024
 
