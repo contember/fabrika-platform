@@ -166,7 +166,7 @@ for each relation action, and never `~rel`.
 - **Inside is strict.** The data layer narrows each term of the relation, its reveals and its secondary paths, to rows
   whose own column for the grant's dimension names the node: `(<term> and (T.<column> in (<nodes>)))`. The one
   exception is an access view bound to the node (ADR-0076 section 2): its SQL decides which rows the node reaches, for
-  a `Within`'s reads, and a grant at the node reaches whatever it maps the node to. A table with no
+  a `Within`'s reads, and a grant at the node reaches whatever it maps the node to. Otherwise, a table with no
   column for that dimension gets no term from the entry, and neither does a reveal to a dimension above the node: its
   rows lie at the node's ancestor, not inside the node. The framework counts an entry only where the relation's
   dimension, and a reveal's, is the grant's dimension or lies inside it; `on` and `in` ask the database for the object

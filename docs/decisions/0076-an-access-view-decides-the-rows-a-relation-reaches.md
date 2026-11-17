@@ -27,7 +27,7 @@ Most of the rest fall into a few large classes. Counts are of all rules with the
 - **Conditions the structured form does not reach.** Examples: more than three foreign keys, a hop the hop rule
   refuses, or a JSON value.
 
-The coverage roadmap extended the declarations one class at a time. Each step was an ADR section, a parser, a guard form
+The earlier steps of ADR-0073 extended the declarations one class at a time. Each step was an ADR section, a parser, a guard form
 and an approval-diff line, and each cost days for a few points. `admits` was a structured widening inside a tenant
 partition. It would have covered one class and deliberately left out the cross-tenant branch.
 
@@ -87,8 +87,8 @@ it holds through it. `access` says only how the relation reaches this table's ro
 - A relation may have source tables, access views or both.
 - A table may name several access views, one per relation.
 - A table that names no access view for a relation served only by access views gets no term from it.
-- The table's key must name one row on its own. The checker requires a single-column primary or unique key on a
-  table's key. For a view as the target, the view's author keeps its key unique.
+- The table's key must name one row on its own. The checker requires a single-column primary or unique key on the key
+  of a table that names an access view. For a view as the target, the view's author keeps its key unique.
 
 ### 2. The term is one more subquery
 
@@ -194,7 +194,6 @@ the approver reads.
     not hold.
   - The access-view figure comes from classifying each rule the declarations leave out. Five representative rules ran
     end to end on SQLite and Postgres.
-  - The coverage roadmap is closed and its remaining steps are not built.
 - **A wrong view widens access, across tenants too**: for example a `cross join` without a filter, or a missing tenant
   join. The guard cannot see it. What catches it:
   - the approval diff, with closer review;
