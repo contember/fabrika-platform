@@ -39,7 +39,7 @@ self-report of the build the agent controls.
 change on a protected environment that needs closer review wait for a human.** A change that needs closer review
 is one with a closer-review line (section 3): a step off the paved road, something anyone sets off without
 signing in, a mutation served on `GET`, people becoming visible, a file collection adopted or released, a terminal
-naming who is signed in, or a migration that deletes or overwrites stored data. Any other change, a plain widening included,
+naming who is signed in, or a migration statement not known to keep every stored value. Any other change, a plain widening included,
 publishes at once with its lines recorded: the people who deploy ordinary work are often not the ones who can read
 an access diff, and a prompt on every new endpoint teaches them to approve without reading.
 
@@ -239,19 +239,44 @@ The outcome does not decide whether a run waits. **On a protected environment a 
 review** (`waitsForApproval`, `@fabrika/control-contract`, the one predicate Control and the console share), whatever
 the outcome; a plain widening publishes at once and keeps its lines on the run.
 
-**A migration that deletes or overwrites stored data is its own closer-review line.** The runner's classifier
-records each such statement of the application's own schema in the snapshot's `dataLoss` (by file, statement, object
-and line). Before this rule every new migration waited on a protected environment, so a statement it misses would now
-publish unreviewed. It records:
+**A migration statement not known to keep every stored value waits.** Before this rule every new migration waited on
+a protected environment, so the data rule fails closed: a list of destructive forms is never complete. The runner's
+classifier records every top-level statement of a migration file that it cannot show keeps every stored value in the
+snapshot's `dataLoss` (by file, statement, object and line). A statement keeps every stored value, and records
+nothing, when it is:
 
-- what deletes data: `DROP TABLE`, `ALTER TABLE … DROP [COLUMN]`, `TRUNCATE` and `DELETE`, and every `DROP … CASCADE`,
-  which also drops what depends on the object: dropping a type or a domain drops each column of it, with its values;
-- what overwrites data: every `UPDATE`, with or without `WHERE`, every `INSERT … ON CONFLICT … DO UPDATE`, and every
-  `ALTER COLUMN … TYPE`, with or without `USING`, since an implicit cast can round or cut a value. An `UPDATE` that sets
-  only columns an earlier `ADD COLUMN` of the same file added (not `ADD COLUMN IF NOT EXISTS`, and no rename between
-  them) overwrites nothing stored and is not recorded;
-- what may change data: a migration statement that calls a function the migration set declares, once per function and
-  statement. A call of a built-in is not recorded.
+- `CREATE …`: a new table, index or enum holds nothing yet, and database code is a closer-review line of its own; a
+  `DO` block is one too;
+- `ALTER TABLE … ADD [COLUMN]`, `ADD CONSTRAINT` and `DROP CONSTRAINT`, and `ALTER COLUMN … SET|DROP DEFAULT` and
+  `SET|DROP NOT NULL`;
+- `COMMENT ON`, and `ALTER TYPE … ADD VALUE`;
+- a `DROP` without `CASCADE` of an index, a type, a domain, database code, a view or a materialized view: Postgres
+  refuses it while a column, a default or a constraint depends on it;
+- a plain `INSERT … VALUES|SELECT`, with no conflict clause or `ON CONFLICT DO NOTHING`, no SQLite `OR <action>`, and
+  no read of a view the migration set declares;
+- an `UPDATE` or upsert of a table an earlier `CREATE TABLE` of the same file created, and an `UPDATE` or
+  `ALTER COLUMN … TYPE` of columns an earlier `ADD COLUMN` of the same file added (not with `IF NOT EXISTS`), while
+  no rename statement came before it in the file and it reads no declared view;
+- the framework's `fabrika_files_copy_legacy` call, which inserts with `ON CONFLICT DO NOTHING`, and its
+  `fabrika_files_release` call, a closer-review adoption line of its own.
+
+Every other statement records a line, worded when the classifier knows what it does:
+
+- deletes data: `DROP TABLE`, `ALTER TABLE … DROP [COLUMN]`, `TRUNCATE` (`TRUNCATE … CASCADE` names the tables that
+  reference it too), `DELETE`, and every `DROP … CASCADE`, which also drops what depends on the object: dropping a type
+  or a domain drops each column of it, with its values;
+- overwrites data: `UPDATE` (`UPDATE OR REPLACE` may also delete the rows it conflicts with), `INSERT … ON CONFLICT …
+  DO UPDATE`, and `ALTER COLUMN … TYPE`, with or without `USING`, since an implicit cast can round or cut a value;
+- may change data: a call of a function the migration set declares, once per function and statement (a built-in
+  records nothing), and, generically, "may change data: `<the statement's first keywords>` at line N" for anything
+  else. That covers every rename (`ALTER TABLE|INDEX … RENAME`, `RENAME COLUMN`, `ALTER TYPE … RENAME VALUE`, a rename of
+  database code), `VALIDATE CONSTRAINT`, which runs the check on every row and may call declared code through it, an
+  identity change, SQLite's `INSERT OR <action>`, an `INSERT` that reads a declared view, which may call declared code,
+  a `DROP` of a sequence or an extension, and every form not named above. A rename also ends the same-file exceptions
+  for the rest of the file, since another table or column may then carry a created name.
+
+A conflict clause on a constraint (SQLite's `ON CONFLICT REPLACE` in `CREATE TABLE` or `ALTER TABLE`) is refused: it
+turns every later plain `INSERT` into a delete of the row it meets.
 
 For a new or changed file each is a line that leaves access unchanged, rule `migration.deletes-data`, reason
 `deletes-data`, worded by what it does: "Migration `<file>` deletes data: drops table `audit` with every row",
@@ -259,8 +284,11 @@ For a new or changed file each is a line that leaves access unchanged, rule `mig
 `purge`". It waits for a person on a protected environment like any other closer-review line, separate from the line
 that adds the migration. Like the file adoptions, `dataLoss` follows from the checksummed files, so it is not part of
 the digest, and a publication leaves it out; the diff reads it only from a candidate. A statement inside a function,
-trigger or `DO` body is not recorded: that code is a closer-review line of its own. A `DELETE` that cascades through
-a foreign key's `ON DELETE CASCADE` names only its own table.
+trigger or `DO` body is not recorded: that code is a closer-review line of its own.
+
+What stays uncovered: declared code a migration reaches only through a trigger or a rule an earlier migration
+declared and a person approved. A plain `INSERT` into such a table runs it with no line of its own. A `DELETE` that
+cascades through a foreign key's `ON DELETE CASCADE` names only its own table.
 
 **A removed endpoint is classified by who answers its paths now.** The proxy selects the most specific endpoint
 ([ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md)), so a literal endpoint can shadow a broader parameter
@@ -519,10 +547,10 @@ never from the words of a line:
 
 ## Consequences
 
-- An agent can no longer take a step off the road on production silently: such a change, or a migration that
-  deletes or overwrites stored data or calls database code, waits on `prod` until a human reads the plain-language
-  lines and approves. A plain widening (a new endpoint for signed-in people, a new role, a new migration that only
-  adds tables, columns and rows, or fills a column it added) publishes on `prod` at once; its lines stay on the run
+- An agent can no longer take a step off the road on production silently: such a change, or a migration with a
+  statement not known to keep every stored value, waits on `prod` until a human reads the plain-language
+  lines and approves. A plain widening (a new endpoint for signed-in people, a new role, a new migration whose every
+  statement is known to keep every stored value) publishes on `prod` at once; its lines stay on the run
   and the environment page lists the published surface, so it is reviewed after the fact, not before.
 - A run that an earlier release parked for a widening alone still waits after the upgrade, and the approval page says
   it waits, whatever its stored lines need under this rule.
