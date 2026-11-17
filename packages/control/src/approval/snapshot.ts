@@ -39,7 +39,7 @@ export interface AccessSnapshot {
 	 */
 	readonly fileAdoptions?: readonly FileAdoption[]
 	/**
-	 * The statements of the migration files that delete stored data, in file order. Absent when there is none. Like the
+	 * The statements of the migration files that delete or overwrite stored data, or call database code that may, in file order. Absent when there is none. Like the
 	 * file adoptions, not part of the digest, and read only from a candidate.
 	 */
 	readonly dataLoss?: readonly MigrationDataLoss[]
@@ -72,8 +72,20 @@ const fileAdoptionSchema = z.discriminatedUnion('step', [
 ]) satisfies z.ZodType<FileAdoption>
 
 const dataLossSchema = z.object({
-	statement: z.enum(['DROP TABLE', 'DROP COLUMN', 'TRUNCATE', 'DELETE']),
+	statement: z.enum([
+		'DROP TABLE',
+		'DROP COLUMN',
+		'DROP CASCADE',
+		'TRUNCATE',
+		'TRUNCATE CASCADE',
+		'DELETE',
+		'UPDATE',
+		'UPSERT',
+		'ALTER COLUMN TYPE',
+		'CALL',
+	]),
 	object: z.string().min(1),
+	columns: z.array(z.string().min(1)).min(1).optional(),
 	file: z.string().min(1),
 	line: z.number().int().positive(),
 }).strict() satisfies z.ZodType<MigrationDataLoss>
@@ -118,7 +130,7 @@ export function serializeSnapshot(snapshot: AccessSnapshot): string {
 /**
  * The stored form of a publication: without the file adoptions and the data loss, which the diff reads only from a
  * candidate, so that a Control rolled back below the release that recorded them still reads every environment's
- * publication. Only the run snapshot of a commit that adopts files or deletes data stays unreadable to it.
+ * publication. Only the run snapshot of a commit that adopts files or records data loss stays unreadable to it.
  */
 export function serializePublished(snapshot: AccessSnapshot): string {
 	const { fileAdoptions: _, dataLoss: __, ...published } = snapshot

@@ -474,6 +474,52 @@ describe('a migration that deletes data', () => {
 	})
 })
 
+describe('a migration that overwrites data or calls database code', () => {
+	/** Applied already: the type a later migration drops and the function a later one calls. */
+	const SETTLED = {
+		name: '20261117100000_status.sql',
+		sql: "CREATE TYPE status AS ENUM ('open', 'done');\nCREATE FUNCTION purge_drafts() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$;\n",
+	}
+	const NAME = '20261117140000_change.sql'
+
+	test('a DROP TYPE … CASCADE, an UPDATE and a call of database code each need closer review on their own line, and wait', async () => {
+		const before = await snapshotOf(commitOf({}, [NOTES_MIGRATION, SETTLED]))
+		for (
+			const [sql, line] of [
+				[
+					'DROP TYPE status CASCADE;\n',
+					`Migration \`${NAME}\` deletes data: drops \`type status\` with CASCADE, which also removes what depends on it, stored columns included`,
+				],
+				[
+					"UPDATE notes SET title = '' WHERE title IS NULL;\n",
+					`Migration \`${NAME}\` overwrites data: overwrites \`notes.title\` in every row it matches`,
+				],
+				[
+					'INSERT INTO audit (id, workspace_id, note_id) SELECT id, workspace_id, id FROM notes WHERE purge_drafts() > 0;\n',
+					`Migration \`${NAME}\` may change data: calls database code \`purge_drafts\``,
+				],
+			] as const
+		) {
+			const { changes } = classifyWithFacts(before, await snapshotOf(commitOf({}, [NOTES_MIGRATION, SETTLED, { name: NAME, sql }])))
+			const closer = changes.filter((change) => change.review === 'closer')
+			expect(closer.map(({ rule, reason, line }) => ({ rule, reason, line }))).toEqual([{
+				rule: 'migration.deletes-data',
+				reason: 'deletes-data',
+				line,
+			}])
+			expect(waitsForApproval(changes)).toBe(true)
+		}
+	})
+
+	test('an UPDATE that only fills a column the same file added does not wait', async () => {
+		const before = await snapshotOf(commitOf())
+		const added = { name: NAME, sql: 'ALTER TABLE notes ADD COLUMN subtitle text;\nUPDATE notes SET subtitle = title;\n' }
+		const { changes } = classifyWithFacts(before, await snapshotOf(commitOf({}, [NOTES_MIGRATION, added])))
+		expect(changes.map((change) => change.rule)).toEqual(['migration.added'])
+		expect(waitsForApproval(changes)).toBe(false)
+	})
+})
+
 describe('the snapshot digest', () => {
 	test('a snapshot without database code keeps the digest formula approvals were stored under', async () => {
 		const snapshot = await snapshotOf(commitOf({ summary: "sql: 'read'" }))

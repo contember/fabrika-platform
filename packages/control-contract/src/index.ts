@@ -629,7 +629,7 @@ export interface ChangeAudienceDto {
 /**
  * Why a line needs closer review: a step off the paved road, something anyone without signing in sets off, a mutation
  * served on `GET`, people becoming visible, a file collection adopted or released, the application naming who signs
- * in at an enrolled terminal, or a migration that deletes stored data.
+ * in at an enrolled terminal, or a migration that deletes or overwrites stored data.
  */
 export const REVIEW_REASONS = ['off-road', 'anyone-calls', 'get-mutation', 'people', 'adoption', 'terminal', 'deletes-data'] as const
 

@@ -930,32 +930,52 @@ function compareFileAdoptions(changes: Changes, baseline: AccessSnapshot, candid
 }
 
 /**
- * The statements of a new or changed migration file that delete stored data, each its own line: access is unchanged,
- * but no later deploy brings the data back, so a person approves it on a protected environment and the platform backs
- * the data up before it runs. A file the baseline holds unchanged has run already.
+ * The statements of a new or changed migration file that delete or overwrite stored data, or call database code that
+ * may, each its own line: access is unchanged, but no later deploy brings the data back, so a person approves it on a
+ * protected environment and the platform backs the data up before it runs. A file the baseline holds unchanged has run
+ * already.
  */
 function compareDataLoss(changes: Changes, baseline: AccessSnapshot, candidate: AccessSnapshot): void {
 	const beforeFiles = byName(baseline.migrations)
 	const afterFiles = byName(candidate.migrations)
 	for (const loss of candidate.dataLoss ?? []) {
 		if (beforeFiles.get(loss.file)?.checksum === afterFiles.get(loss.file)?.checksum) continue
+		const { does, what } = dataLossWords(loss)
 		changes.add(
 			subjectOf('migration', loss.file),
-			...ruled('migration.deletes-data', [closer('deletes-data', `${migrationName(loss.file)} deletes data: ${dataLossWords(loss)}`, 'neutral')]),
+			...ruled('migration.deletes-data', [closer('deletes-data', `${migrationName(loss.file)} ${does}: ${what}`, 'neutral')]),
 		)
 	}
 }
 
-function dataLossWords(loss: MigrationDataLoss): string {
+function dataLossWords(loss: MigrationDataLoss): { readonly does: string; readonly what: string } {
+	const deletes = (what: string) => ({ does: 'deletes data', what })
+	const overwrites = (what: string) => ({ does: 'overwrites data', what })
 	switch (loss.statement) {
 		case 'DROP TABLE':
-			return `drops table \`${loss.object}\` with every row`
+			return deletes(`drops table \`${loss.object}\` with every row`)
 		case 'DROP COLUMN':
-			return `drops column \`${loss.object}\` with its values`
+			return deletes(`drops column \`${loss.object}\` with its values`)
+		case 'DROP CASCADE':
+			return deletes(`drops \`${loss.object}\` with CASCADE, which also removes what depends on it, stored columns included`)
 		case 'TRUNCATE':
-			return `empties table \`${loss.object}\``
+			return deletes(`empties table \`${loss.object}\``)
+		case 'TRUNCATE CASCADE':
+			return deletes(`empties table \`${loss.object}\` and every table that references it`)
 		case 'DELETE':
-			return `deletes rows of \`${loss.object}\``
+			return deletes(`deletes rows of \`${loss.object}\``)
+		case 'UPDATE':
+			return overwrites(
+				loss.columns === undefined
+					? `overwrites values of \`${loss.object}\` in every row it matches`
+					: `overwrites ${loss.columns.map((column) => `\`${loss.object}.${column}\``).join(', ')} in every row it matches`,
+			)
+		case 'UPSERT':
+			return overwrites(`overwrites rows of \`${loss.object}\` that already exist`)
+		case 'ALTER COLUMN TYPE':
+			return overwrites(`converts \`${loss.object}\` to a new type, which may change its values`)
+		case 'CALL':
+			return { does: 'may change data', what: `calls database code \`${loss.object}\`` }
 	}
 }
 

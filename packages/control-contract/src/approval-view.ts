@@ -15,7 +15,7 @@ import {
 
 /**
  * Whether a change waits for a person on a protected environment (ADR-0050 §3): it has a line that needs closer review,
- * a step off the paved road, something anyone sets off, people becoming visible or a migration that deletes data. Any
+ * a step off the paved road, something anyone sets off, people becoming visible or a migration that deletes or overwrites data. Any
  * other change publishes at once, its lines recorded.
  */
 export function waitsForApproval(changes: readonly Pick<AccessChangeDto, 'review'>[]): boolean {
