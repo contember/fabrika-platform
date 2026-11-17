@@ -12,8 +12,8 @@ const SOURCE = [
 ].join('')
 
 /** Every node's line and column as the parser reports them, in `walk` order. */
-const parserPositions = (text: string): string[] => {
-	const program: unknown = parse(text, { sourceType: 'module', plugins: ['typescript', 'estree'] }).program
+const parserPositions = (text: string, jsx = false): string[] => {
+	const program: unknown = parse(text, { sourceType: 'module', plugins: jsx ? ['typescript', 'jsx', 'estree'] : ['typescript', 'estree'] }).program
 	if (!isNode(program)) throw new Error('no program')
 	const positions: string[] = []
 	walk(program, (node) => {
@@ -25,6 +25,15 @@ const parserPositions = (text: string): string[] => {
 	})
 	return positions
 }
+
+const JSX_SOURCE = [
+	'\ufeffexport const A = () => (\r\n',
+	'\t<div title="a\r\nb" data-x={1}>\u2028',
+	'\t\ttext\r\n\t\t{/* c */}\u2029',
+	'\t\t😀 <b>x</b>\n',
+	'\t</div>\r\n',
+	')\n',
+].join('')
 
 describe('positions', () => {
 	test("every node's line and column are the parser's, across each kind of line break and astral characters", () => {
@@ -38,6 +47,18 @@ describe('positions', () => {
 		const expected = parserPositions(SOURCE)
 		expect(positions.length).toBeGreaterThan(50)
 		expect(positions).toEqual(expected)
+	})
+
+	test("in JSX text and attributes, and after a byte-order mark, a node's line and column are the parser's", () => {
+		const parsed = parseModule('src/sample.tsx', JSX_SOURCE)
+		if (!parsed.ok) throw new Error(parsed.message)
+		const positions: string[] = []
+		walk(parsed.module.program, (node: AstNode) => {
+			const { line, column } = positionOf(node)
+			positions.push(`${node.type} ${line}:${column}`)
+		})
+		expect(positions.length).toBeGreaterThan(15)
+		expect(positions).toEqual(parserPositions(JSX_SOURCE, true))
 	})
 
 	test("a comment's line and column are the parser's", () => {

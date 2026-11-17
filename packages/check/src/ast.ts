@@ -167,7 +167,10 @@ export const isValueReference = (node: AstNode, parent: AstNode | undefined): bo
 	}
 }
 
-/** A node's line and column (from 1), as the parser counts them: its `loc` is the start of its line (`lineLocations`). */
+/**
+ * A node's line and column (from 1), as the parser counts them, for a tree `parseModule` returns: its `loc` is the
+ * start of its line (`lineLocations`). A tree parsed any other way has no such `loc` and reads as 1:1.
+ */
 export const positionOf = (node: AstNode): Position => {
 	const loc = node['loc']
 	const start = node['start']
