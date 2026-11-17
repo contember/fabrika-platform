@@ -314,6 +314,11 @@ platform build controls.
 A schema value carries its expanded node count, so a const reused at every level (`S1 = { left: S0, right: S0 }`,
 …) is refused at the level that crosses the budget, without expanding it.
 
+The reader's memory is its syntax trees, held for the whole read. `parseModule` keeps them small: a node's `loc` is the
+start of its line, shared by every node of that line, and `positionOf` adds the node's offset; no comment is attached to
+a node. The contract's graph drops each module's top-level type declarations (`withoutTypeDeclarations`), which no
+rule of the reader reads.
+
 ## Documented escapes (D11)
 
 Each has a fixture in `direct-forms.test.ts` that asserts it passes, so that closing one is a visible change:

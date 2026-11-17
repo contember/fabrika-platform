@@ -5,7 +5,7 @@
 import { type AnyContract, compileContract } from '@fabrika/app/contract'
 import type { ContractArtifact, TablePolicyArtifact } from '@fabrika/auth-core'
 import { type TablePolicies, tablePolicies, type Tables } from '@fabrika/db/tables'
-import { importedSpecifiers, nodeDepth, type ParsedModule, utf8Bytes } from './ast'
+import { child, children, importedSpecifiers, nodeDepth, type ParsedModule, utf8Bytes } from './ast'
 import { type Finding, formatFinding } from './finding'
 import { ModuleGraph } from './graph'
 import { CONTRACT_EXPORT, CONTRACT_FILE, isRelativeSpecifier, isSourceFile, resolveRelative, TABLES_FILE } from './layout'
@@ -229,7 +229,7 @@ function parseSourceGraph(files: ReadonlyMap<string, string>, entry: string): Pa
 		if (nodeDepth(parsed.module.program) > CONTRACT_LIMITS.astDepth) {
 			return { ok: false, findings: [overBudget(path, `the syntax nests deeper than ${CONTRACT_LIMITS.astDepth} levels`)] }
 		}
-		modules.set(path, parsed.module)
+		modules.set(path, withoutTypeDeclarations(parsed.module))
 		for (const specifier of importedSpecifiers(parsed.module)) {
 			const resolution = isRelativeSpecifier(specifier) ? resolveRelative((candidate) => files.has(candidate), path, specifier) : undefined
 			if (resolution?.kind === 'file') {
@@ -240,6 +240,18 @@ function parseSourceGraph(files: ReadonlyMap<string, string>, entry: string): Pa
 		}
 	}
 	return findings.length > 0 ? { ok: false, findings } : { ok: true, graph: new ModuleGraph(modules) }
+}
+
+/** Top-level type declarations: the module index binds no name to them, and the literal rule passes over them. */
+const TYPE_DECLARATIONS = new Set(['TSTypeAliasDeclaration', 'TSInterfaceDeclaration'])
+
+/** The module without its top-level type declarations, which the reader would otherwise hold until it is done. */
+function withoutTypeDeclarations(module: ParsedModule): ParsedModule {
+	const body = children(module.program, 'body').filter((statement) => {
+		const declaration = statement?.type === 'ExportNamedDeclaration' ? child(statement, 'declaration') : statement
+		return declaration === null || declaration === undefined || !TYPE_DECLARATIONS.has(declaration.type)
+	})
+	return { ...module, program: { ...module.program, body } }
 }
 
 function missingFile(file: string): Finding {

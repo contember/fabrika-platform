@@ -167,15 +167,56 @@ export const isValueReference = (node: AstNode, parent: AstNode | undefined): bo
 	}
 }
 
+/** A node's line and column (from 1), as the parser counts them: its `loc` is the start of its line (`lineLocations`). */
 export const positionOf = (node: AstNode): Position => {
 	const loc = node['loc']
-	if (isRecord(loc)) {
-		const start = loc['start']
-		if (isRecord(start) && typeof start['line'] === 'number' && typeof start['column'] === 'number') {
-			return { line: start['line'], column: start['column'] + 1 }
-		}
+	const start = node['start']
+	if (isRecord(loc) && typeof loc['line'] === 'number' && typeof loc['offset'] === 'number' && typeof start === 'number') {
+		return { line: loc['line'], column: start - loc['offset'] + 1 }
 	}
 	return { line: 1, column: 1 }
+}
+
+/** Where a line starts: a line break is the parser's (`\r\n`, `\n`, `\r`, U+2028, U+2029). */
+interface LineStart {
+	readonly line: number
+	readonly offset: number
+}
+
+const LINE_BREAK = /\r\n|[\n\r\u2028\u2029]/g
+
+const isMutableNode = (value: unknown): value is Record<string, unknown> =>
+	typeof value === 'object' && value !== null && !Array.isArray(value) && 'type' in value && typeof value.type === 'string'
+
+/**
+ * Replaces the parser's location of every node below `roots` (an object and two positions per node) with the start of
+ * the node's line, one object per line, which `positionOf` reads with the node's offset. The syntax trees of a
+ * contract are most of the memory its reader holds, and these locations were the largest part of them.
+ */
+function lineLocations(text: string, roots: readonly unknown[]): void {
+	const lines: LineStart[] = [{ line: 1, offset: 0 }]
+	for (const match of text.matchAll(LINE_BREAK)) lines.push({ line: lines.length + 1, offset: match.index + match[0].length })
+	const lineAt = (offset: number): LineStart | undefined => {
+		let low = 0
+		let high = lines.length - 1
+		while (low < high) {
+			const middle = (low + high + 1) >> 1
+			if ((lines[middle]?.offset ?? 0) <= offset) low = middle
+			else high = middle - 1
+		}
+		return lines[low]
+	}
+	const pending: unknown[] = [...roots]
+	while (pending.length > 0) {
+		const value = pending.pop()
+		if (Array.isArray(value)) {
+			for (const item of value) pending.push(item)
+		} else if (isMutableNode(value)) {
+			const start = value['start']
+			value['loc'] = typeof start === 'number' ? lineAt(start) : undefined
+			for (const [key, child] of Object.entries(value)) if (!NON_CHILD_KEYS.has(key) && typeof child === 'object') pending.push(child)
+		}
+	}
 }
 
 /** Visits every node below `root`, depth first, with the chain of its ancestors (nearest last); `'skip'` prunes a subtree. */
@@ -245,9 +286,11 @@ export const nodeDepth = (root: AstNode): number => {
 
 export const parseModule = (file: string, text: string): ParseResult => {
 	try {
-		const ast = parse(text, { sourceType: 'module', sourceFilename: file, plugins: pluginsFor(file) })
+		// Nothing reads a comment from the node it is attached to; `ast.comments` lists them all.
+		const ast = parse(text, { sourceType: 'module', sourceFilename: file, plugins: pluginsFor(file), attachComment: false })
 		const program: unknown = ast.program
 		if (!isNode(program)) return { ok: false, message: 'the parser returned no program', position: { line: 1, column: 1 } }
+		lineLocations(text, [program, ast.comments])
 		return { ok: true, module: { file, program, comments: readComments(ast.comments), bytes: utf8Bytes(text) } }
 	} catch (error) {
 		const message = error instanceof Error ? (error.message.split('\n')[0] ?? error.message) : 'unparseable source'
