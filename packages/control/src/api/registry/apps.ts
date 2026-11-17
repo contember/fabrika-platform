@@ -1,6 +1,6 @@
 import type { AppDto, AppOptionalFields, CreateAppRequest, ListResponse, OkResponse, UpdateAppRequest } from '@fabrika/control-contract'
 import { CONTROL_ACTIONS } from '@fabrika/control-contract'
-import { requireHumanForProtectedDelete } from '../../approval/human'
+import { requireHumanForProtectedDelete, requirePersonToRedirect } from '../../approval/human'
 import { AppEnvChangedError, type AppEnvRow, type AppRow, type NamespaceResourceClaimRow } from '../../db'
 import { normalizeRepoUrl, parseGitHubRepo } from '../../github/triggers/push-event'
 import { fail } from '../domain'
@@ -47,14 +47,17 @@ export async function updateAppUseCase(c: RegistryUseCaseContext, id: string, in
 		fail(403, 'not authorized: changing an application repository or its GitHub source binding needs global app.manage')
 	}
 	const sourceBinding = await sourceBindingFields(c, input, repoUrl, existing)
+	const githubConnectionId = sourceBinding.githubConnectionId === undefined ? existing.github_connection_id : sourceBinding.githubConnectionId
+	const githubInstallationId = sourceBinding.githubInstallationId === undefined ? existing.github_installation_id : sourceBinding.githubInstallationId
+	const bindingChanged = githubConnectionId !== existing.github_connection_id || githubInstallationId !== existing.github_installation_id
+	if (repoUrlChanged || bindingChanged) {
+		requirePersonToRedirect(c.auth, await c.repositories.registry.listAppEnvs(id), "its application's repository or GitHub source binding")
+	}
 	const row = await c.repositories.registry.updateApp(id, {
 		...(repoUrlChanged ? { repoUrl } : {}),
 		...appFields(input),
 		...sourceBinding,
 	})
-	const githubConnectionId = sourceBinding.githubConnectionId === undefined ? existing.github_connection_id : sourceBinding.githubConnectionId
-	const githubInstallationId = sourceBinding.githubInstallationId === undefined ? existing.github_installation_id : sourceBinding.githubInstallationId
-	const bindingChanged = githubConnectionId !== existing.github_connection_id || githubInstallationId !== existing.github_installation_id
 	const metadata = {
 		...(repoUrlChanged ? { repoUrl, previousRepoUrl: existing.repo_url } : {}),
 		...(bindingChanged

@@ -169,6 +169,53 @@ describe('ACL enforcement (resolved auth context)', () => {
 		expect(queue).toHaveLength(3)
 	})
 
+	test('only a person changes what a push deploys to a protected environment', async () => {
+		const manager = authWithActions(['app.manage'], 'op@fabrika.test')
+		const service: AuthContext = { ...manager, principal: { id: 'svc', type: 'service', label: 'builder' } }
+		const envelopes = {
+			target: { provider: 'harbor', version: 1, payload: { kind: 'target' } },
+			artifact: { provider: 'harbor', version: 1, payload: { kind: 'artifact' } },
+		}
+		const put = (env: string, triggerRef: string) =>
+			rpcRequest('apps.environments.put', { appId: 'app', env, environment: { ...envelopes, triggerRef } })
+		const seeded = async (auth: AuthContext) => {
+			const { deps } = makeDeps(auth)
+			await deps.repositories.registry.createApp({ id: 'app', repoUrl: 'github.com/acme/app', defaultBranch: 'main' })
+			await deps.repositories.registry.upsertAppEnv(providerEnvironment('app', 'prod', { triggerRef: 'refs/heads/main' }))
+			await deps.repositories.registry.upsertAppEnv(providerEnvironment('app', 'stage', { triggerRef: 'refs/heads/develop' }))
+			return deps
+		}
+
+		const key = await seeded(service)
+		const redirected = await rpcResult(put('prod', 'refs/heads/unreviewed'), key)
+		expect(redirected.status).toBe(403)
+		expect(await redirected.text()).toContain(
+			'environment `prod` is protected: only a person changes its trigger ref, which decides what a push deploys there; '
+				+ 'an agent, a builder key or a service key cannot',
+		)
+		expect((await key.repositories.registry.getAppEnv('app', 'prod'))?.trigger_ref).toBe('refs/heads/main')
+		// The same trigger ref is no change, and an unprotected environment takes a key.
+		expect((await rpcResult(put('prod', 'main'), key)).status).toBe(200)
+		expect((await rpcResult(put('stage', 'refs/heads/feature'), key)).status).toBe(200)
+		const moved = await rpcResult(rpcRequest('apps.update', { appId: 'app', app: { repoUrl: 'github.com/other/app' } }), key)
+		expect(moved.status).toBe(403)
+		expect(await moved.text()).toContain(
+			"environment `prod` is protected: only a person changes its application's repository or GitHub source binding, which decides",
+		)
+		expect((await key.repositories.registry.getApp('app'))?.repo_url).toBe('github.com/acme/app')
+		// Another field of the app is no redirect.
+		expect((await rpcResult(rpcRequest('apps.update', { appId: 'app', app: { buildCmd: 'bun run build' } }), key)).status).toBe(200)
+
+		const person = await seeded(manager)
+		expect((await rpcResult(put('prod', 'refs/heads/release'), person)).status).toBe(200)
+		expect((await rpcResult(rpcRequest('apps.update', { appId: 'app', app: { repoUrl: 'github.com/other/app' } }), person)).status).toBe(200)
+
+		// Without a protected environment, a key moves the repository.
+		const unprotected = await seeded(service)
+		await unprotected.repositories.registry.deleteAppEnv('app', 'prod')
+		expect((await rpcResult(rpcRequest('apps.update', { appId: 'app', app: { repoUrl: 'github.com/other/app' } }), unprotected)).status).toBe(200)
+	})
+
 	test('a caller without deploy.trigger learns nothing of a protected environment', async () => {
 		const reader = authWithActions(['deploy.read'], 'r@fabrika.test')
 		const { deps } = makeDeps({ ...reader, principal: { id: 'svc', type: 'service', label: 'reader' } })

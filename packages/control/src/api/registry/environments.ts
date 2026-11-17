@@ -1,6 +1,6 @@
 import type { AppEnvDto, ListResponse, OkResponse, PutAppEnvRequest, RotateTokenKeyResponse } from '@fabrika/control-contract'
 import type { ControlProvider, ProviderApp, ProviderRegistration } from '@fabrika/provider-contract'
-import { requireHumanForProtectedDelete } from '../../approval/human'
+import { requireHumanForProtectedDelete, requirePersonToRedirect } from '../../approval/human'
 import {
 	AppEnvChangedError,
 	appEnvCrossOrigins,
@@ -41,6 +41,8 @@ export async function putAppEnvUseCase(c: RegistryUseCaseContext, appId: string,
 	if (input.kind !== undefined && existing !== null && input.kind !== existing.kind) {
 		fail(409, `environment ${env} is ${existing.kind}; an environment's kind is set when it is created`)
 	}
+	// Clearing the trigger ref stops push deploys; naming another one points them at other code.
+	if (existing !== null && triggerRef !== null && triggerRef !== existing.trigger_ref) requirePersonToRedirect(c.auth, [existing], 'its trigger ref')
 	const kind = existing?.kind ?? input.kind ?? 'standard'
 	if (kind === 'dev') await assertDevEnvironment(c, app, env, existing, input.authoring === true, triggerRef, input.domain ?? null)
 	if (input.authoring === true) {

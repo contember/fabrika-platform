@@ -1,6 +1,6 @@
-// The human rule of ADR-0050 §4–5, shared by approving, changing `protected`, deleting a protected environment and
-// deploying to one by hand. These checks are authorization; the proxy's session admission keeps another site's page out
-// (ADR-0022).
+// The human rule of ADR-0050 §4–5, shared by approving, changing `protected`, deleting a protected environment,
+// deploying to one by hand and redirecting what it deploys. These checks are authorization; the proxy's session
+// admission keeps another site's page out (ADR-0022).
 
 import type { AuthContext } from '@fabrika/auth'
 import { CONTROL_ACTIONS } from '@fabrika/control-contract'
@@ -104,4 +104,18 @@ function protectedRunCause(env: string, run: { readonly byPerson: boolean; reado
 export function requirePersonForProtectedDeploy(auth: AuthContext, appEnv: AppEnvRow, ref: string): void {
 	const refusal = protectedRunRefusal(appEnv, { byPerson: isPerson(auth), ref })
 	if (refusal !== null) fail(refusal.status, refusal.message)
+}
+
+/**
+ * Changing what a push deploys to a protected environment (its trigger ref, its application's repository or source
+ * binding) takes a person too, or a key would redirect the environment it cannot deploy by hand.
+ */
+export function requirePersonToRedirect(auth: AuthContext, envs: readonly AppEnvRow[], change: string): void {
+	const guarded = envs.find((row) => row.protected === 1)
+	if (guarded === undefined || isPerson(auth)) return
+	fail(
+		403,
+		`environment \`${guarded.env}\` is protected: only a person changes ${change}, which decides what a push deploys there; `
+			+ 'an agent, a builder key or a service key cannot',
+	)
 }
