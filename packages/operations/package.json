@@ -111,7 +111,7 @@
 		"@fabrika/proxy-core": "workspace:*",
 		"@types/bun": "^1.4.3",
 		"jose": "^5.9.0",
-		"oblaka-iac": "^0.0.18",
+		"oblaka-iac": "^0.0.22",
 		"wrangler": "^4.24.0"
 	}
 }

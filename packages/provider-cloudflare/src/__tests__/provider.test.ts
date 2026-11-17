@@ -864,13 +864,28 @@ describe('Cloudflare provider', () => {
 		const { root, app } = provisioned()
 		const services = (worker: Worker) => {
 			const iam = worker.options.bindings?.['IAM']
-			return iam !== undefined && 'configureBinding' in iam && !('getId' in iam)
+			return iam && 'configureBinding' in iam && !('getId' in iam)
 				? iam.configureBinding({ config: {}, binding: 'IAM', env: 'stage' }).services
 				: undefined
 		}
 		const binding = { binding: 'IAM', service: 'stage-propustka-worker', entrypoint: 'PropustkaApplication' }
 		expect(services(app)).toEqual([{ ...binding, props: { app: 'demo@stage', worker: 'application' } }])
 		expect(services(root)).toEqual([{ ...binding, props: { app: 'demo@stage' } }])
+	})
+
+	test('a binding set to false, null or undefined is skipped, as oblaka skips it', async () => {
+		const skipping = new Worker({
+			dir: '.',
+			...PRIVATE,
+			name: 'demo',
+			compatibility_flags: [],
+			bindings: { IAM: false, APP: null, DEBUG: undefined },
+			main: ENTRY,
+		})
+		await expect(deploy(rec, config({ resources: () => skipping }))).resolves.toMatchObject({ status: 'succeeded' })
+		const { app } = provisioned()
+		expect(Object.keys(app.options.bindings)).not.toContain('DEBUG')
+		expect(Object.values(app.options.bindings).every(Boolean)).toBe(true)
 	})
 
 	test('a platform component keeps binding the default entrypoint under the platform policy', async () => {
@@ -1407,8 +1422,8 @@ describe("another application's names (ADR-0048)", () => {
 		expect(result.status).toBe('succeeded')
 		const { app } = provisioned()
 		const reference = app.options.bindings?.['FABRIKA_CONNECT_CATALOG']
-		expect(reference).toBeInstanceOf(ServiceReference)
-		expect(reference?.configureBinding({ config: {}, binding: 'FABRIKA_CONNECT_CATALOG', env: 'prod' })).toEqual({
+		if (!(reference instanceof ServiceReference)) throw new Error('FABRIKA_CONNECT_CATALOG is not a ServiceReference')
+		expect(reference.configureBinding({ config: {}, binding: 'FABRIKA_CONNECT_CATALOG', env: 'prod' })).toEqual({
 			services: [{ binding: 'FABRIKA_CONNECT_CATALOG', service: 'prod-catalog-proxy', entrypoint: undefined }],
 		})
 		expect(app.options.vars?.['FABRIKA_CONNECT_CATALOG_URL']).toBe('https://catalog.example.com')
