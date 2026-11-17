@@ -76,6 +76,23 @@ function backupAndRehearsal(g: number): string[] {
 	]
 }
 
+/** What the provider double does, and what it saw. */
+interface ProviderState {
+	serves: boolean
+	outcome: ProviderDeployOutcome
+	settlement: 'succeeded' | 'failed' | 'running'
+	/** Where in the object's requests each deploy happened, the migrations each one deployed, and any backup it was handed. */
+	deploys: { at: number; migrations: string[]; backup?: { readonly migrations: readonly string[] } }[]
+	reconciles: number
+	migrations: string[]
+	/** The candidate is an older release, which the provider serves no ops channel at. */
+	older: boolean
+	/** The release serves the data operations beside the channel; a 0.9.0 prerelease serves only `inspect`. */
+	barrier: boolean
+	/** The provider refuses the deploy before accepting it. */
+	refuses: boolean
+}
+
 interface Backend {
 	repositories: ControlRepositories
 	db: SqlDatabase
@@ -151,19 +168,15 @@ for (const backend of backends) {
 				holders.push(await holder())
 				return undefined
 			}
-			const state = {
+			const state: ProviderState = {
 				serves: true,
-				outcome: { state: 'succeeded' } as ProviderDeployOutcome,
-				settlement: 'succeeded' as 'succeeded' | 'failed' | 'running',
-				/** Where in the object's requests each deploy happened, the migrations each one deployed, and any backup it was handed. */
-				deploys: [] as { at: number; migrations: string[]; backup?: { readonly migrations: readonly string[] } }[],
+				outcome: { state: 'succeeded' },
+				settlement: 'succeeded',
+				deploys: [],
 				reconciles: 0,
 				migrations: [FIRST],
-				/** The candidate is an older release, which the provider serves no ops channel at. */
 				older: false,
-				/** The release serves the data operations beside the channel; a 0.9.0 prerelease serves only `inspect`. */
 				barrier: true,
-				/** The provider refuses the deploy before accepting it. */
 				refuses: false,
 			}
 			const provider: ControlProvider = {
