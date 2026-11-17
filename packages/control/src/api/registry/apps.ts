@@ -50,8 +50,10 @@ export async function updateAppUseCase(c: RegistryUseCaseContext, id: string, in
 	const githubConnectionId = sourceBinding.githubConnectionId === undefined ? existing.github_connection_id : sourceBinding.githubConnectionId
 	const githubInstallationId = sourceBinding.githubInstallationId === undefined ? existing.github_installation_id : sourceBinding.githubInstallationId
 	const bindingChanged = githubConnectionId !== existing.github_connection_id || githubInstallationId !== existing.github_installation_id
-	if (repoUrlChanged || bindingChanged) {
-		requirePersonToRedirect(c.auth, await c.repositories.registry.listAppEnvs(id), "its application's repository or GitHub source binding")
+	const changed = sourceChanges(existing, input, { repoUrlChanged, bindingChanged })
+	if (changed.length > 0) {
+		const guarded = (await c.repositories.registry.listAppEnvs(id)).find((row) => row.protected === 1)
+		requirePersonToRedirect(c.auth, guarded?.env ?? null, `its application's ${changed.join(', ')}`)
 	}
 	const row = await c.repositories.registry.updateApp(id, {
 		...(repoUrlChanged ? { repoUrl } : {}),
@@ -122,6 +124,22 @@ export function toAppDto(row: AppRow): AppDto {
 		githubInstallationId: row.github_installation_id,
 		createdAt: row.created_at,
 	}
+}
+
+/**
+ * The fields of an update that change what a deploy of the app runs or where it comes from: every field it takes. A
+ * `null` keeps the stored value (`updateApp`), so it changes nothing.
+ */
+function sourceChanges(existing: AppRow, input: UpdateAppRequest, source: { repoUrlChanged: boolean; bindingChanged: boolean }): string[] {
+	const differs = (value: string | null | undefined, stored: string | null): boolean => value !== undefined && value !== null && value !== stored
+	return [
+		...(source.repoUrlChanged ? ['repoUrl'] : []),
+		...(source.bindingChanged ? ['GitHub source binding'] : []),
+		...(differs(input.defaultBranch, existing.default_branch) ? ['defaultBranch'] : []),
+		...(differs(input.workerDir, existing.worker_dir) ? ['workerDir'] : []),
+		...(differs(input.buildCmd, existing.build_cmd) ? ['buildCmd'] : []),
+		...(differs(input.configPath, existing.config_path) ? ['configPath'] : []),
+	]
 }
 
 function appFields(input: AppOptionalFields): {

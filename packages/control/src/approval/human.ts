@@ -107,15 +107,15 @@ export function requirePersonForProtectedDeploy(auth: AuthContext, appEnv: AppEn
 }
 
 /**
- * Changing what a push deploys to a protected environment (its trigger ref, its application's repository or source
- * binding) takes a person too, or a key would redirect the environment it cannot deploy by hand.
+ * Changing what a deploy of a protected environment runs (its trigger ref, its application's source and build) takes a
+ * person too, or a key would redirect the environment it cannot deploy by hand. `protectedEnv` names the protected
+ * environment the change reaches, null when none.
  */
-export function requirePersonToRedirect(auth: AuthContext, envs: readonly AppEnvRow[], change: string): void {
-	const guarded = envs.find((row) => row.protected === 1)
-	if (guarded === undefined || isPerson(auth)) return
+export function requirePersonToRedirect(auth: AuthContext, protectedEnv: string | null, change: string): void {
+	if (protectedEnv === null || isPerson(auth)) return
 	fail(
 		403,
-		`environment \`${guarded.env}\` is protected: only a person changes ${change}, which decides what a push deploys there; `
+		`environment \`${protectedEnv}\` is protected: only a person changes ${change}, which decides what a deploy there runs; `
 			+ 'an agent, a builder key or a service key cannot',
 	)
 }

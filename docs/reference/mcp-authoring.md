@@ -432,5 +432,5 @@ paved road and need closer review, parked or not.
   and the sandboxes share one IAM application. In a sandbox jobs do not run.
 - Production is a human merge in GitHub followed by the existing Delivery trigger. Control enforces it: only a
   person starts a manual run of a protected environment, so an MCP token, the builder key and any service key get a
-  `403`, a workspace ref is refused there whoever asks, and a key cannot change the trigger ref or the repository
-  that a push deploys there from.
+  `403`, a workspace ref is refused there whoever asks, and a key cannot change the trigger ref, the repository or
+  the build settings that a deploy there runs from.

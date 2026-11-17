@@ -461,9 +461,11 @@ fails with the same message in its run log and deploys nothing. A restore's own 
 restore's lease and redeploys the commit the environment already runs
 ([ADR-0070](0070-data-protection-of-an-application-environment-on-cloudflare.md) §9).
 
-A key cannot redirect what a push deploys to a protected environment either: `apps.environments.put` that names a
-different trigger ref for one, and `apps.update` that moves the repository or the GitHub source binding of an app with
-one, take a person (403). Clearing the trigger ref stops push deploys and stays open to a key.
+A key cannot redirect what a deploy of a protected environment runs either. `apps.environments.put` that names a
+different trigger ref for one, or creates one with a trigger ref (a new `prod`, or one whose protection was kept), takes
+a person (403). So does `apps.update` of an app with a protected environment that changes any field it takes:
+`repoUrl`, the GitHub source binding, `defaultBranch`, `workerDir`, `buildCmd` or `configPath`. Clearing the trigger
+ref stops push deploys and stays open to a key, as does a `null` field, which keeps the stored value.
 
 These are authorization checks in Control's use cases, after `deploy.trigger`, so a caller without it still gets the
 404 of an absent environment. For the same reason an MCP authoring target is never protected:
