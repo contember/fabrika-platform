@@ -5,7 +5,15 @@ import { BuzolaProvider } from '@buzola/router/react'
 import { describe, expect, test } from 'bun:test'
 import type { ReactElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { type ConsoleAccessDto, type ControlFetch, createControlClient, type RunDto, type RunStatus } from '../lib/api'
+import {
+	type AppEnvDto,
+	type AppEnvKind,
+	type ConsoleAccessDto,
+	type ControlFetch,
+	createControlClient,
+	type RunDto,
+	type RunStatus,
+} from '../lib/api'
 import { ConsoleAccessContext } from '../lib/console-caller'
 import { deployAgain, DeployAgainDialog, RunActions } from '../routes/runs/detail'
 
@@ -30,6 +38,26 @@ const run = (status: RunStatus, overrides: Partial<RunDto> = {}): RunDto => ({
 	...overrides,
 })
 
+const environment = (kind: AppEnvKind): AppEnvDto => ({
+	appId: 'notes',
+	env: 'prod',
+	kind,
+	domain: null,
+	publicOrigin: null,
+	crossOrigins: [],
+	triggerRef: 'refs/heads/main',
+	authoring: false,
+	protected: true,
+	publishedRunId: null,
+	deviationSubjects: [],
+	surface: [],
+	namespaceId: null,
+	provider: 'zerops',
+	target: { provider: 'zerops', version: 1, payload: {} },
+	artifact: { provider: 'zerops', version: 1, payload: {} },
+	createdAt: 0,
+})
+
 const holding = (global: string[], scope?: { type: 'app' | 'environment'; value: string; actions: string[] }): ConsoleAccessDto => ({
 	principal: null,
 	global,
@@ -49,10 +77,10 @@ const withRouter = (element: ReactElement): ReactElement => (
 	</BuzolaProvider>
 )
 
-const actions = (subject: RunDto, access: ConsoleAccessDto | null): string =>
+const actions = (subject: RunDto, access: ConsoleAccessDto | null, appEnv: AppEnvDto | null = environment('standard')): string =>
 	renderToStaticMarkup(withRouter(
 		<ConsoleAccessContext.Provider value={access}>
-			<RunActions run={subject} onDone={() => undefined} />
+			<RunActions run={subject} appEnv={appEnv} onDone={() => undefined} />
 		</ConsoleAccessContext.Provider>,
 	))
 
@@ -76,6 +104,12 @@ describe('deploy again on the run detail', () => {
 		expect(actions(run('succeeded'), holding([], { type: 'app', value: 'other', actions: ['deploy.trigger'] }))).not.toContain('Deploy again')
 	})
 
+	test('a run of a dev or a deleted environment does not offer it, because Control refuses that deploy', () => {
+		const deployer = holding(['deploy.trigger'])
+		expect(actions(run('succeeded'), deployer, environment('dev'))).not.toContain('Deploy again')
+		expect(actions(run('succeeded'), deployer, null)).not.toContain('Deploy again')
+	})
+
 	test('the confirmation names the short commit and the environment', () => {
 		const html = renderToStaticMarkup(<DeployAgainDialog env="prod" commitSha={SHA} onConfirm={async () => undefined} onClose={() => undefined} />)
 		expect(html).toContain('role="dialog"')
@@ -95,7 +129,7 @@ describe('deploy again on the run detail', () => {
 		expect(calls).toEqual([{ method: 'deploy', input: { appId: 'notes', env: 'prod', ref: SHA } }])
 	})
 
-	test('a refusal reaches the dialog as an error', async () => {
+	test('a refusal rejects with the server message, which the dialog shows', async () => {
 		const fetcher: ControlFetch = async () => Response.json({ error: { type: 'error', message: 'refused' } }, { status: 403 })
 		await expect(deployAgain(createControlClient(fetcher), { appId: 'notes', env: 'prod', commitSha: SHA })).rejects.toThrow('refused')
 	})

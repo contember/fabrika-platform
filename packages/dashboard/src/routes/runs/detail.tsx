@@ -5,7 +5,7 @@ import { ConfirmDialog } from '../../components/ConfirmDialog'
 import { Icon } from '../../components/Icon'
 import { LogView } from '../../components/LogView'
 import { Chip, RunStatus } from '../../components/Status'
-import { api, ApiError, type createControlClient, type RunDto } from '../../lib/api'
+import { api, ApiError, type AppEnvDto, type createControlClient, type RunDto } from '../../lib/api'
 import { mayDo, opensApplications } from '../../lib/console-access'
 import { useConsoleAccess } from '../../lib/console-caller'
 import { fmtDate, fmtDuration, shortRef, shortSha } from '../../lib/format'
@@ -48,7 +48,7 @@ export default createPage()
 								<span className="dot-sep">{run.trigger}</span>
 							</div>
 						</div>
-						<RunActions run={run} onDone={invalidate} />
+						<RunActions run={run} appEnv={appEnv} onDone={invalidate} />
 					</div>
 				</div>
 
@@ -96,8 +96,11 @@ export default createPage()
 		)
 	})
 
-/** The run's status and what the caller may do with it: cancel an in-flight run, or deploy a succeeded run's commit again. */
-export function RunActions({ run, onDone }: { run: RunDto; onDone: () => void }) {
+/**
+ * The run's status and what the caller may do with it: cancel an in-flight run, or deploy a succeeded run's commit again.
+ * A dev environment deploys only per workspace and a deleted one not at all, so neither offers it: Control would refuse.
+ */
+export function RunActions({ run, appEnv, onDone }: { run: RunDto; appEnv: AppEnvDto | null; onDone: () => void }) {
 	const access = useConsoleAccess()
 	const inFlight = run.status === 'pending' || run.status === 'running' || run.status === 'awaiting_approval'
 	const mayDeploy = mayDo(access, CONTROL_ACTIONS.DEPLOY_TRIGGER, { app: run.appId, env: run.env })
@@ -106,7 +109,7 @@ export function RunActions({ run, onDone }: { run: RunDto; onDone: () => void })
 		<div className="row-actions">
 			<RunStatus status={run.status} />
 			{inFlight && mayDeploy && <CancelButton runId={run.id} onDone={onDone} />}
-			{run.status === 'succeeded' && run.commitSha !== null && mayDeploy && (
+			{run.status === 'succeeded' && run.commitSha !== null && appEnv !== null && appEnv.kind !== 'dev' && mayDeploy && (
 				<DeployAgainButton appId={run.appId} env={run.env} commitSha={run.commitSha} />
 			)}
 		</div>
