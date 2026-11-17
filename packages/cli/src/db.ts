@@ -91,11 +91,18 @@ const refuseArguments = (command: string, argv: readonly string[]): void => {
 	if (argv.length > 0) throw new Error(`db ${command} takes no argument ${argv[0]}\n\n${DB_USAGE}`)
 }
 
-/** The dialect the config at `configPath` names, read as the checker reads `fabrika.config.ts`; Postgres without a config. */
-const dialectAt = async (cwd: string, configPath: string = CONFIG_FILE): Promise<ApplicationDialect> => {
+/** `files` with the config at `configPath` as `fabrika.config.ts`, the one name the checker's readers know; none without one. */
+const withSelectedConfig = async (cwd: string, files: ReadonlyMap<string, string>, configPath: string): Promise<ReadonlyMap<string, string>> => {
 	const config = await readFile(join(cwd, configPath), 'utf8').catch(() => undefined)
-	return applicationDialect(new Map(config === undefined ? [] : [[CONFIG_FILE, config]]))
+	const selected = new Map(files)
+	if (config === undefined) selected.delete(CONFIG_FILE)
+	else selected.set(CONFIG_FILE, config)
+	return selected
 }
+
+/** The dialect the config at `configPath` names, read as the checker reads `fabrika.config.ts`; Postgres without a config. */
+const dialectAt = async (cwd: string, configPath: string = CONFIG_FILE): Promise<ApplicationDialect> =>
+	applicationDialect(await withSelectedConfig(cwd, new Map(), configPath))
 
 const CONFIG_OPTION = '--config='
 
@@ -208,13 +215,15 @@ const codegen = async (argv: readonly string[], deps: DbCommandDependencies): Pr
 	deps.write(`${SCHEMA_FILE}\n`)
 }
 
+/** The generated tests the scaffold writes for the application, on the dialect of the config at `configPath`. */
 const expectedTests = async (
 	cwd: string,
+	configPath: string = CONFIG_FILE,
 ): Promise<
 	{ readonly files: ReadonlyMap<string, string>; readonly tests: ReadonlyMap<string, GeneratedTest>; readonly missing: readonly Finding[] }
 > => {
 	const { files } = await readApplicationTree(cwd)
-	const inputs = scaffoldInputs(files)
+	const inputs = scaffoldInputs(await withSelectedConfig(cwd, files, configPath))
 	return {
 		files,
 		tests: await generatedTests(inputs.policies, inputs.artifact, inputs.fixtures, inputs.dialect),
@@ -287,7 +296,7 @@ const testIsolation = async (argv: readonly string[], deps: DbCommandDependencie
 	refuseArguments('test-isolation', rest.filter((arg) => arg !== '--verbose'))
 	const sqlite = (await dialectAt(deps.cwd, config)) === 'sqlite'
 	const url = sqlite ? undefined : required(deps.source, 'FABRIKA_APP_DATABASE_URL')
-	const { files, tests, missing } = await expectedTests(deps.cwd)
+	const { files, tests, missing } = await expectedTests(deps.cwd, config)
 	if (missing.length > 0) throw new Error(`db test-isolation: the endpoint access tests are incomplete\n${missing.map(formatFinding).join('\n')}`)
 	for (const [path, { text }] of tests) {
 		if (files.get(path) !== text) throw new Error(`db test-isolation: ${path} is not the test fabrika db test-scaffold writes; run it`)

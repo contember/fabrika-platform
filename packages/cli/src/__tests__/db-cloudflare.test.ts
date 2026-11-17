@@ -5,7 +5,7 @@ import { checkApplication, formatFinding } from '@fabrika/check'
 import { generateSqliteSchema } from '@fabrika/db/codegen-sqlite'
 import { SQLITE_FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations-sqlite'
 import { afterAll, describe, expect, setDefaultTimeout, test } from 'bun:test'
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { runDbCommand } from '../db'
@@ -156,5 +156,16 @@ describe('the generated tests on Cloudflare', () => {
 		symlinkSync(join(import.meta.dir, '..', '..', 'node_modules'), join(root, 'node_modules'))
 		await run(root, 'test-scaffold')
 		expect(await run(root, 'test-isolation', [], { PATH: process.env['PATH'] })).toBe('108 generated cases passed\n')
+	})
+
+	test('test-isolation --config reads the dialect of the tests it expects from the named config', async () => {
+		const root = isolationApp(CLOUDFLARE_CONFIG)
+		symlinkSync(join(import.meta.dir, '..', '..', 'node_modules'), join(root, 'node_modules'))
+		await run(root, 'test-scaffold')
+		// The application has only a config of another name: the SQLite tests are the scaffold's, not the Postgres ones.
+		renameSync(join(root, 'fabrika.config.ts'), join(root, 'cloudflare.config.ts'))
+		expect(await run(root, 'test-isolation', ['--config=cloudflare.config.ts'], { PATH: process.env['PATH'] })).toBe(
+			'108 generated cases passed\n',
+		)
 	})
 })
