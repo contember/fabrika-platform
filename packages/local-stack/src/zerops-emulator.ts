@@ -37,6 +37,8 @@ import {
 } from './zerops-emulator/protocol'
 import {
 	autoscalingRequestSchema,
+	BACKUP_TAG,
+	backupRequestSchema,
 	buildRequestSchema,
 	integrationTokenRequestSchema,
 	parseImportRequest,
@@ -47,6 +49,19 @@ import {
 } from './zerops-emulator/requests'
 import { activateRunEnvironment } from './zerops-emulator/runtime-environment'
 import { capabilityDigest, matchesCapability, readUploadedSource } from './zerops-emulator/upload'
+
+/** The retention a fresh single PostgreSQL 18 read on 2026-11-17 (`docs/reference/zerops-platform.md`). */
+const DEFAULT_BACKUP_RETENTION = {
+	maxTotalFiles: 50,
+	maxTotalGiB: 5,
+	protectedTags: [],
+	minDaily: 7,
+	maxDaily: 0,
+	minWeekly: 4,
+	maxWeekly: 0,
+	minMonthly: 3,
+	maxMonthly: 0,
+}
 
 /** A runtime service's RAM bounds in GB when nothing custom is set (`docs/reference/zerops-platform.md`). */
 const PLATFORM_MIN_RAM_GB = 0.125
@@ -296,6 +311,42 @@ class ZeropsEmulator {
 			const started = this.createProcess('stack.autoscaling', { serviceStackId: found.id })
 			await this.persist()
 			return json({ process: this.processResponse(started) })
+		}
+
+		// Verified live 2026-11-17 on a single PostgreSQL 18 with an empty database: the request answered `async: false`
+		// and the list showed the file at once. A backup that takes longer, `async: true`, is not modelled.
+		const backup = path.match(/^\/service-stack\/([^/]+)\/backup$/)
+		if (backup !== null && request.method === 'POST') {
+			const found = this.service(decodeURIComponent(backup[1] ?? ''))
+			if (found === undefined) return serviceStackNotFound()
+			const tags = backupRequestSchema.parse(await parseJsonBody(request)).tags ?? []
+			const refused = tags.find((tag) => !BACKUP_TAG.test(tag))
+			if (refused !== undefined) {
+				return error(
+					400,
+					'backupTagNameFormat',
+					`Tag ${refused} must be between 1 and 24 characters. Valid characters are lower and upper case letters (a-z, A-Z), numbers (0-9) and following characters : _ -`,
+				)
+			}
+			this.state.backups.push({ serviceStackId: found.id, name: new Date(this.now()).toISOString().slice(0, 19).replace('T', ' '), tags })
+			await this.persist()
+			return json({ success: true, async: false })
+		}
+		if (backup !== null && request.method === 'GET') {
+			const found = this.service(decodeURIComponent(backup[1] ?? ''))
+			if (found === undefined) return serviceStackNotFound()
+			const files = this.state.backups.filter((item) => item.serviceStackId === found.id).map((item) => ({
+				path: `${found.id}/${item.name}`,
+				name: item.name,
+				size: 2150,
+				metadata: {
+					file_name: `backup-${found.name}-${item.name.replace(' ', '-').replaceAll(':', '')}.zip`,
+					mode: 'MANUAL',
+					stack_name: found.name,
+					tags: item.tags,
+				},
+			}))
+			return json({ files, backupPeriod: '31 0 * * *', retentionPolicy: null, defaultRetentionPolicy: DEFAULT_BACKUP_RETENTION })
 		}
 
 		const serviceByName = path.match(/^\/service-stack-by-name\/([^/]+)\/([^/]+)$/)

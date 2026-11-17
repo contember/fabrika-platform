@@ -396,7 +396,15 @@ describe('the platform-facts table, against the double', () => {
 				method: 'POST',
 				headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
 				body: JSON.stringify({
-					yaml: ['project:', '  name: platformfacts', 'services:', '  - hostname: bootstrap', '    type: alpine@3.21'].join('\n'),
+					yaml: [
+						'project:',
+						'  name: platformfacts',
+						'services:',
+						'  - hostname: bootstrap',
+						'    type: alpine@3.21',
+						'  - hostname: factbackup',
+						'    type: postgresql:single@18',
+					].join('\n'),
 				}),
 			}),
 		)
@@ -413,6 +421,16 @@ describe('the platform-facts table, against the double', () => {
 		context.set('absentHostname', 'factabsent')
 		context.set('setupProbeHostname', 'factsetup')
 		context.set('absentAppVersionId', 'version-999999')
+		// Live, the backup-period script imports this database; the double has it from the project import.
+		const backup = await handler(
+			new Request(`${baseUrl}/service-stack-by-name/${projectId}/factbackup`, { headers: { authorization: `Bearer ${token}` } }),
+		)
+		const backupServiceId = stringField(await backup.json(), 'id')
+		if (backupServiceId === undefined) {
+			throw new Error('the emulator did not import the database the backup rows need')
+		}
+		context.set('backupServiceId', backupServiceId)
+		context.set('backupHostname', 'factbackup')
 	})
 
 	for (const fact of factsFor('emulator')) {

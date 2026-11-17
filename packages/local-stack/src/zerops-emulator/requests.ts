@@ -15,6 +15,9 @@ export const autoscalingRequestSchema = z.union([
 		}),
 	}),
 ])
+/** A user tag, as the platform admits one (verified live 2026-11-17); anything else is 400 `backupTagNameFormat`. */
+export const BACKUP_TAG = /^[A-Za-z0-9:_-]{1,24}$/
+export const backupRequestSchema = z.object({ tags: z.array(z.string()).nullish() })
 export const buildRequestSchema = z.object({ zeropsYaml: z.string(), zeropsYamlSetup: z.string().optional() })
 const descriptorSchema = z.object({
 	zerops: z.array(z.object({

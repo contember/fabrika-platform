@@ -74,6 +74,7 @@ const tokenSchema = z.object({
 	projects: z.array(grantSchema),
 	roleCode: roleCodeSchema.optional(),
 })
+const backupSchema = z.object({ serviceStackId: z.string(), name: z.string(), tags: z.array(z.string()) })
 const snapshotSchema = z.object({
 	nextProject: counter,
 	nextService: counter,
@@ -88,6 +89,8 @@ const snapshotSchema = z.object({
 	processes: z.array(processSchema),
 	integrationTokens: z.array(tokenSchema),
 	uploadGrants: z.array(localSourceUploadGrantSchema),
+	// A state file written before the double kept backups holds none.
+	backups: z.array(backupSchema).default([]),
 })
 
 export function parseSnapshot(value: unknown): EmulatorSnapshot {
