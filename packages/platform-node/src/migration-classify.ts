@@ -77,6 +77,20 @@ export type FileAdoption =
 	| { readonly step: 'adopt'; readonly collection: string; readonly table: string; readonly file: string; readonly line: number }
 	| { readonly step: 'release'; readonly collection: string; readonly file: string; readonly line: number }
 
+/**
+ * A statement that deletes stored data in the application's own schema: a dropped table or column, an emptied table, a
+ * `DELETE`. Allowed, and shown to the approver on its own, because no later deploy brings the data back.
+ */
+export interface MigrationDataLoss {
+	readonly statement: DataLossStatement
+	/** `<table>`, or `<table>.<column>` for a dropped column. */
+	readonly object: string
+	readonly file: string
+	readonly line: number
+}
+
+export type DataLossStatement = 'DROP TABLE' | 'DROP COLUMN' | 'TRUNCATE' | 'DELETE'
+
 /** A file adoption step before the file it lies in is known. */
 type AdoptionStep = WithoutFile<FileAdoption>
 type WithoutFile<T> = T extends unknown ? Omit<T, 'file'> : never
@@ -105,6 +119,8 @@ export interface MigrationClassification {
 	readonly deviations: readonly MigrationDeviation[]
 	/** The file's adoption steps, in order. */
 	readonly adoptions: readonly FileAdoption[]
+	/** The file's statements that delete stored data, in order. */
+	readonly dataLoss: readonly MigrationDataLoss[]
 	/** The objects the file creates. */
 	readonly objects: readonly DatabaseObject[]
 	readonly changes: readonly ManifestChange[]
@@ -248,6 +264,7 @@ class Refused extends Error {
 interface Collected {
 	readonly deviations: { readonly kind: DeviationKind; readonly object: string; readonly line: number }[]
 	readonly adoptions: AdoptionStep[]
+	readonly dataLoss: WithoutFile<MigrationDataLoss>[]
 	readonly changes: ManifestChange[]
 }
 
@@ -710,7 +727,12 @@ function alterClause(clause: readonly SqlToken[], table: string, context: Contex
 		classifyElement(clause.slice(skipWords(clause, skipWords(clause, 1, 'COLUMN'), 'IF', 'NOT', 'EXISTS')), table, context, out)
 		return
 	}
-	if (action === 'DROP') return
+	if (action === 'DROP') {
+		if (next === 'CONSTRAINT') return
+		const column = nameText(clause[skipWords(clause, skipWords(clause, 1, 'COLUMN'), 'IF', 'EXISTS')])
+		if (column !== undefined) out.dataLoss.push({ statement: 'DROP COLUMN', object: `${table}.${column}`, line })
+		return
+	}
 	if (action === 'VALIDATE' && next === 'CONSTRAINT') return
 	if (action === 'ALTER' && next !== 'CONSTRAINT') {
 		const columnAt = next === 'COLUMN' ? 2 : 1
@@ -860,7 +882,22 @@ function classifyDrop(tokens: readonly SqlToken[], context: Context, out: Collec
 	// An extension may live in another schema; CASCADE would drop what other schemas built on it.
 	if (kind === 'EXTENSION' && tokens.some((token) => upperWord(token) === 'CASCADE')) throw new Refused('DROP EXTENSION … CASCADE', line)
 	refuseForeignDdl(tokens, context, statementKind(tokens))
-	out.changes.push(...dropChanges(tokens, kind, context))
+	const changes = dropChanges(tokens, kind, context)
+	out.changes.push(...changes)
+	for (const change of changes) {
+		if (change.change === 'drop table') out.dataLoss.push({ statement: 'DROP TABLE', object: change.table, line })
+	}
+}
+
+/** `TRUNCATE [TABLE] [ONLY] name [*], …`: each table it empties. */
+function classifyTruncate(tokens: readonly SqlToken[], context: Context, out: Collected): void {
+	refuseForeignDdl(tokens, context, 'TRUNCATE')
+	const line = tokens[0]?.line ?? 1
+	const names = skipWords(tokens, 1, 'TABLE')
+	for (const part of splitAtCommas(tokens.slice(names))) {
+		const object = objectNameAt(part, skipWords(part, 0, 'ONLY'))
+		if (object !== undefined) out.dataLoss.push({ statement: 'TRUNCATE', object: object.name, line })
+	}
 }
 
 function classifyCreate(tokens: readonly SqlToken[], context: Context, out: Collected): void {
@@ -1040,13 +1077,17 @@ function classifyStatement(tokens: readonly SqlToken[], context: Context, out: C
 	if (first === 'INSERT' || first === 'UPDATE' || first === 'DELETE') {
 		checkQuery(ReadSql.query(tokens), context, first)
 		if (!context.framework) out.adoptions.push(...adoptionSteps(tokens, adopted))
+		if (first === 'DELETE' && upperWord(tokens[1]) === 'FROM') {
+			const object = objectNameAt(tokens, skipWords(tokens, 2, 'ONLY'))
+			if (object !== undefined) out.dataLoss.push({ statement: 'DELETE', object: object.name, line })
+		}
 		return
 	}
 	if (first === 'COMMENT' && upperWord(tokens[1]) === 'ON') return classifyComment(tokens, context)
 	if (first === 'DO') return classifyDo(tokens, context, out)
 	if (first === 'CREATE') return classifyCreate(tokens, context, out)
 	if (first === 'DROP') return classifyDrop(tokens, context, out)
-	if (first === 'TRUNCATE') return refuseForeignDdl(tokens, context, 'TRUNCATE')
+	if (first === 'TRUNCATE') return classifyTruncate(tokens, context, out)
 	const second = upperWord(tokens[1])
 	if (first === 'ALTER' && second === 'TABLE') return alterTable(tokens, context, out)
 	if (first === 'ALTER' && (second === 'INDEX' || second === 'TYPE')) return alterIndexOrType(tokens, second, context)
@@ -1082,6 +1123,7 @@ export function classifyMigration(sql: string, schema: string, options: Classify
 	const refused: MigrationRefusal[] = []
 	const deviations: MigrationDeviation[] = []
 	const adoptions: FileAdoption[] = []
+	const dataLoss: MigrationDataLoss[] = []
 	const changes: ManifestChange[] = []
 	const keys = new Set<string>()
 	const { tokens: all, unterminated } = lexMigration(sql, context.dialect)
@@ -1094,7 +1136,7 @@ export function classifyMigration(sql: string, schema: string, options: Classify
 		refused.push({ reason: 'a parameter (?, :, @, $ or #), which a migration cannot bind', file: options.file, line: parameter.line })
 	}
 	for (const { tokens, line } of statementsOf(all)) {
-		const out: Collected = { deviations: [], adoptions: [], changes: [] }
+		const out: Collected = { deviations: [], adoptions: [], dataLoss: [], changes: [] }
 		try {
 			classifyStatement(tokens, context, out)
 		} catch (error) {
@@ -1109,10 +1151,11 @@ export function classifyMigration(sql: string, schema: string, options: Classify
 			deviations.push({ ...deviation, file: options.file })
 		}
 		adoptions.push(...out.adoptions.map((step) => ({ ...step, file: options.file })))
+		dataLoss.push(...out.dataLoss.map((loss) => ({ ...loss, file: options.file })))
 		changes.push(...out.changes)
 	}
 	const objects = changes.flatMap((change) => (change.change === 'create' || change.change === 'create routine' ? [change.object] : []))
-	return { file: options.file, refused, deviations, adoptions, objects, changes }
+	return { file: options.file, refused, deviations, adoptions, dataLoss, objects, changes }
 }
 
 /**

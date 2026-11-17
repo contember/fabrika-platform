@@ -48,7 +48,15 @@ describe('a paved migration', () => {
 			'DROP EXTENSION IF EXISTS citext;',
 			'-- CREATE TRIGGER t',
 		].join('\n')
-		expect(classify(sql)).toEqual({ file: FILE, refused: [], deviations: [], adoptions: [], objects: [], changes: expect.any(Array) })
+		expect(classify(sql)).toEqual({
+			file: FILE,
+			refused: [],
+			deviations: [],
+			adoptions: [],
+			dataLoss: expect.any(Array),
+			objects: [],
+			changes: expect.any(Array),
+		})
 	})
 
 	test("a file collection's table and its indexes may use their framework names", () => {
@@ -78,6 +86,7 @@ describe('a paved migration', () => {
 				{ step: 'adopt', collection: 'attachments', table: 'deal_attachments', file: FILE, line: 6 },
 				{ step: 'release', collection: 'attachments', file: FILE, line: 7 },
 			],
+			dataLoss: [],
 			objects: [],
 			changes: expect.any(Array),
 		})
@@ -119,6 +128,45 @@ describe('a paved migration', () => {
 		) {
 			expect(classify(altered).refused).toEqual([expect.objectContaining({ reason: expect.stringContaining('fabrika_files_attachments') })])
 		}
+	})
+})
+
+describe('data loss: a statement that deletes stored data', () => {
+	const losses = (sql: string): string[] => classify(sql).dataLoss.map((loss) => `${loss.line} ${loss.statement} ${loss.object}`)
+
+	test('a dropped table or column, an emptied table and a DELETE each name what they delete, with their line', () => {
+		const sql = [
+			'DROP TABLE IF EXISTS app_notes.copy, archive;',
+			'ALTER TABLE deals DROP COLUMN IF EXISTS old, DROP note, DROP CONSTRAINT deals_check;',
+			'TRUNCATE TABLE ONLY deals, app_notes.deals_old RESTART IDENTITY;',
+			'DELETE FROM ONLY deals USING deals_old o WHERE deals.id = o.id;',
+		].join('\n')
+		expect(losses(sql)).toEqual([
+			'1 DROP TABLE copy',
+			'1 DROP TABLE archive',
+			'2 DROP COLUMN deals.old',
+			'2 DROP COLUMN deals.note',
+			'3 TRUNCATE deals',
+			'3 TRUNCATE deals_old',
+			'4 DELETE deals',
+		])
+	})
+
+	test('what keeps every stored row deletes nothing', () => {
+		const sql = [
+			'CREATE TABLE notes (id uuid PRIMARY KEY, body text);',
+			'ALTER TABLE notes ADD COLUMN title text, ALTER COLUMN body DROP DEFAULT, ALTER body DROP NOT NULL, DROP CONSTRAINT IF EXISTS c;',
+			'ALTER TABLE notes RENAME COLUMN body TO text;',
+			"UPDATE notes SET title = '';",
+			'DROP INDEX notes_title;',
+			'DROP VIEW IF EXISTS recent;',
+		].join('\n')
+		expect(losses(sql)).toEqual([])
+	})
+
+	test('a refused statement records no loss', () => {
+		expect(losses('TRUNCATE other.deals;')).toEqual([])
+		expect(classify('TRUNCATE other.deals;').refused).toHaveLength(1)
 	})
 })
 
