@@ -388,7 +388,7 @@ const assertContractSchema = (schema: AppSchema | null, contract: ContractArtifa
  * `ops` adds Control's ops row to the table.
  */
 const platformProxied = (authored: Worker, served: ServedContract, run: ApplicationTarget, ops: boolean): Worker => {
-	if (authored.options.bindings?.['APP'] !== undefined) {
+	if (authored.options.bindings?.['APP']) {
 		throw new Error(
 			`cloudflare: \`resources\` returns the Worker \`${authored.options.name}\` binding \`APP\`, a proxy of its own; return the application Worker, and the platform builds the proxy Worker from its contract`,
 		)

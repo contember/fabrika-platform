@@ -873,6 +873,21 @@ describe('Cloudflare provider', () => {
 		expect(services(root)).toEqual([{ ...binding, props: { app: 'demo@stage' } }])
 	})
 
+	test('a binding set to false, null or undefined is skipped, as oblaka skips it', async () => {
+		const skipping = new Worker({
+			dir: '.',
+			...PRIVATE,
+			name: 'demo',
+			compatibility_flags: [],
+			bindings: { IAM: false, APP: null, DEBUG: undefined },
+			main: ENTRY,
+		})
+		await expect(deploy(rec, config({ resources: () => skipping }))).resolves.toMatchObject({ status: 'succeeded' })
+		const { app } = provisioned()
+		expect(Object.keys(app.options.bindings)).not.toContain('DEBUG')
+		expect(Object.values(app.options.bindings).every(Boolean)).toBe(true)
+	})
+
 	test('a platform component keeps binding the default entrypoint under the platform policy', async () => {
 		const control = config({ resources: () => bindingIam(new ServiceReference('propustka-worker')) })
 		await expect(deploy(rec, control, { platformResources: 'allow' })).resolves.toMatchObject({ status: 'succeeded' })

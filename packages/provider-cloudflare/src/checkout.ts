@@ -36,6 +36,8 @@ export const runnerWorkerGraph = (value: unknown, path: readonly unknown[] = [])
 	const bindings: Record<string, Binding> = {}
 	for (const [key, binding] of Object.entries(typeof authored === 'object' && authored !== null ? authored : {})) {
 		const resolved: unknown = binding
+		// oblaka skips these entries, so the rebuilt graph leaves them out.
+		if (resolved === false || resolved === null || resolved === undefined) continue
 		if (isWorkerResource(resolved)) bindings[key] = runnerWorkerGraph(resolved, [...path, value])
 		else if (isBinding(resolved)) bindings[key] = resolved
 		else throw new Error(`cloudflare: Worker \`${name}\` binding \`${key}\` is not an oblaka binding`)
