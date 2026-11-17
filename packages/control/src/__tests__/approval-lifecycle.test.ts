@@ -44,7 +44,7 @@ import { frameworkLockfile, memoryCommits } from './helpers/commits'
 import { BASE, edited, WITH_EXPORT, WITHOUT_REMOVE } from './helpers/contracts'
 import { createHarness, harnessDatabase, queryRows } from './helpers/harness'
 import { kitFiles } from './helpers/kit-contract'
-import { makeFakeLock } from './helpers/lock'
+import { fixtureProtect, makeFakeLock } from './helpers/lock'
 import { protectionRaceScenario } from './helpers/protection-race'
 import { refusedClaimScenario } from './helpers/refused-claims'
 import { fixedProxySecrets } from './helpers/vault'
@@ -792,6 +792,33 @@ describe('approved access through the run lifecycle', () => {
 		expect(dto.protected).toBe(true)
 		expect(caller.audited).toEqual(['access.protect'])
 		expect((await deploy(w, 'stage')).status).toBe('awaiting_approval')
+	})
+
+	test('an authoring environment cannot be protected, also when it became one after the check read it', async () => {
+		const w = world()
+		await seed(w)
+		const stage = await w.db.registry.getAppEnv('notes', 'stage')
+		if (stage === null) throw new Error('no stage')
+		await w.db.registry.upsertAppEnv({
+			appId: 'notes',
+			env: 'stage',
+			domain: stage.domain,
+			namespaceId: stage.namespace_id,
+			provider: 'harbor',
+			providerTargetJson: stage.provider_target_json,
+			providerArtifactJson: stage.provider_artifact_json,
+			authoring: true,
+		})
+		const refused = setEnvironmentProtectionUseCase(approvals(w, auth()), { appId: 'notes', env: 'stage', protected: true })
+		await expect(refused).rejects.toMatchObject({
+			httpStatus: 409,
+			message: "environment `stage` is the app's authoring target, where an agent deploys unreviewed workspace heads, so it cannot be "
+				+ 'protected; clear its authoring flag with apps.environments.put first',
+		})
+		expect((await w.db.registry.getAppEnv('notes', 'stage'))?.protected).toBe(0)
+		// The write itself refuses it, so a put that set the flag between the read and the write cannot slip through.
+		expect(await fixtureProtect(w.db.registry, makeFakeLock(w.db), { appId: 'notes', env: 'stage' }, true)).toBeNull()
+		expect((await fixtureProtect(w.db.registry, makeFakeLock(w.db), { appId: 'notes', env: 'stage' }, false))?.protected).toBe(0)
 	})
 
 	test('turning protection off approves no parked run: it waits for a decision, while a new deploy publishes at once', async () => {

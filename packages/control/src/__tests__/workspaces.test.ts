@@ -123,13 +123,40 @@ for (const backend of backends) {
 			test('allows one authoring environment per app', async () => {
 				const w = await world()
 				const registry = registryContext(w.repositories)
-				await expect(putAppEnvUseCase(registry, 'shop', 'prod', { ...zeropsEnvelopes(), authoring: true })).rejects.toMatchObject({
+				await putAppEnvUseCase(registry, 'shop', 'qa', zeropsEnvelopes())
+				await expect(putAppEnvUseCase(registry, 'shop', 'qa', { ...zeropsEnvelopes(), authoring: true })).rejects.toMatchObject({
 					httpStatus: 409,
+					message: 'app shop already authors environment stage; clear its authoring flag first',
 				})
-				expect((await w.repositories.registry.getAppEnv('shop', 'prod'))?.authoring).toBe(0)
+				expect((await w.repositories.registry.getAppEnv('shop', 'qa'))?.authoring).toBe(0)
 				expect((await putAppEnvUseCase(registry, 'shop', 'stage', { ...zeropsEnvelopes(), authoring: true })).authoring).toBe(true)
 				await putAppEnvUseCase(registry, 'shop', 'stage', { ...zeropsEnvelopes(), authoring: false })
-				expect((await putAppEnvUseCase(registry, 'shop', 'prod', { ...zeropsEnvelopes(), authoring: true })).authoring).toBe(true)
+				expect((await putAppEnvUseCase(registry, 'shop', 'qa', { ...zeropsEnvelopes(), authoring: true })).authoring).toBe(true)
+			})
+
+			test('refuses a protected environment, new or registered, because only a person deploys to it', async () => {
+				const w = await world()
+				const registry = registryContext(w.repositories)
+				await putAppEnvUseCase(registry, 'shop', 'stage', { ...zeropsEnvelopes(), authoring: false })
+				const refusal = (env: string) => ({
+					httpStatus: 409,
+					message: `environment \`${env}\` is protected, so it cannot be an authoring target: an agent deploys unreviewed workspace `
+						+ 'heads there, and only a person deploys to a protected environment; author another environment, such as stage',
+				})
+				await expect(putAppEnvUseCase(registry, 'shop', 'prod', { ...zeropsEnvelopes(), authoring: true })).rejects.toMatchObject(refusal('prod'))
+				expect((await w.repositories.registry.getAppEnv('shop', 'prod'))?.authoring).toBe(0)
+				// A new `prod` starts protected, so it is refused before it exists.
+				await w.repositories.registry.createApp({
+					id: 'kiosk',
+					repoUrl: 'github.com/acme/kiosk',
+					defaultBranch: 'main',
+					githubConnectionId: CONNECTION_ID,
+					githubInstallationId: INSTALLATION_ID,
+				})
+				await expect(putAppEnvUseCase(registry, 'kiosk', 'prod', { ...zeropsEnvelopes(), authoring: true })).rejects.toMatchObject(
+					refusal('prod'),
+				)
+				expect(await w.repositories.registry.getAppEnv('kiosk', 'prod')).toBeNull()
 			})
 
 			test('refuses a provider that does not support authoring', async () => {
@@ -770,6 +797,18 @@ for (const backend of backends) {
 					changes: ['Role `editor` gains `notes.delete`', 'Endpoint `api.notes.export` declares raw SQL (`read`)'],
 				})
 				expect(deployment.deviations).toEqual(['Endpoint `api.notes.export` declares raw SQL (`read`)'])
+			})
+
+			test('a protected authoring environment left from before the rule takes no workspace run', async () => {
+				const w = await world()
+				const created = await workspace(w)
+				await requireOpened().db.prepare("UPDATE app_envs SET protected = 1 WHERE app_id = 'shop' AND env = 'stage'").run()
+				await expect(deployStageUseCase(w.context(author), { workspaceId: created.id })).rejects.toMatchObject({
+					httpStatus: 403,
+					message: 'environment `stage` is protected: only a person deploys to it, from the console or their own CLI login; '
+						+ 'an agent, a builder key or a service key cannot',
+				})
+				expect(w.queued).toEqual([])
 			})
 
 			test('the live head is read once and pinned', async () => {

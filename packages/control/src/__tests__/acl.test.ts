@@ -117,6 +117,50 @@ describe('ACL enforcement (resolved auth context)', () => {
 		expect(queue).toEqual([{ runId }])
 	})
 
+	test('only a person deploys to a protected environment by hand, and never a workspace branch', async () => {
+		const deployer = authWithActions(['deploy.*'], 'op@fabrika.test')
+		const service: AuthContext = { ...deployer, principal: { id: 'svc', type: 'service', label: 'builder' } }
+		const agent: AuthContext = {
+			...deployer,
+			oauth: { app: 'vozka', clientId: 'https://claude.ai/oauth/client.json', scopes: ['authoring'], grantId: 'g', tokenId: 't' },
+		}
+		const person = 'environment `prod` is protected: only a person deploys to it, from the console or their own CLI login; '
+			+ 'an agent, a builder key or a service key cannot'
+		const workspace = "environment `prod` is protected: a workspace branch reaches it only after it is merged into the environment's trigger ref"
+		for (const auth of [service, agent]) {
+			const { deps, queue } = makeDeps(auth)
+			await deps.repositories.registry.createApp({ id: 'app', repoUrl: 'github.com/acme/app', defaultBranch: 'main' })
+			await deps.repositories.registry.upsertAppEnv(providerEnvironment('app', 'prod'))
+			await deps.repositories.registry.upsertAppEnv(providerEnvironment('app', 'stage'))
+			const refused = await rpcResult(rpcRequest('deploy', { appId: 'app', env: 'prod' }), deps)
+			expect(refused.status).toBe(403)
+			expect(await refused.text()).toContain(person)
+			// An unprotected environment still takes a key or an agent.
+			expect((await rpcResult(rpcRequest('deploy', { appId: 'app', env: 'stage' }), deps)).status).toBe(200)
+			expect(queue).toHaveLength(1)
+		}
+
+		const { deps, queue } = makeDeps(deployer)
+		await deps.repositories.registry.createApp({ id: 'app', repoUrl: 'github.com/acme/app', defaultBranch: 'main' })
+		await deps.repositories.registry.upsertAppEnv(providerEnvironment('app', 'prod'))
+		const branch = await rpcResult(rpcRequest('deploy', { appId: 'app', env: 'prod', ref: 'refs/heads/fabrika/0190' }), deps)
+		expect(branch.status).toBe(403)
+		expect(await branch.text()).toContain(workspace)
+		expect(queue).toEqual([])
+		expect((await rpcResult(rpcRequest('deploy', { appId: 'app', env: 'prod' }), deps)).status).toBe(200)
+		expect(queue).toHaveLength(1)
+	})
+
+	test('a caller without deploy.trigger learns nothing of a protected environment', async () => {
+		const reader = authWithActions(['deploy.read'], 'r@fabrika.test')
+		const { deps } = makeDeps({ ...reader, principal: { id: 'svc', type: 'service', label: 'reader' } })
+		await deps.repositories.registry.createApp({ id: 'app', repoUrl: 'github.com/acme/app' })
+		await deps.repositories.registry.upsertAppEnv(providerEnvironment('app', 'prod'))
+		const hidden = await rpcResult(rpcRequest('deploy', { appId: 'app', env: 'prod' }), deps)
+		expect(hidden.status).toBe(404)
+		expect(await hidden.text()).toBe(await (await rpcResult(rpcRequest('deploy', { appId: 'missing', env: 'prod' }), deps)).text())
+	})
+
 	test('unknown RPC procedure → 404', async () => {
 		const { deps } = makeDeps(allowAllAuth())
 		expect((await rpcResult(rpcRequest('nope'), deps)).status).toBe(404)

@@ -78,8 +78,10 @@ function laneContract(database: () => SqlDatabase): void {
 			queue: { send: () => Promise.resolve() },
 			auth: allowAllAuth(),
 		}
-		const laned = await createManualRun(context, { appId, env: 'dev', ref: 'main', lane: 'workspace-a' })
-		const plain = await createManualRun(context, { appId, env: 'dev', ref: 'main' })
+		const appEnv = await repositories.registry.getAppEnv(appId, 'dev')
+		if (appEnv === null) throw new Error('no dev environment')
+		const laned = await createManualRun(context, { appEnv, ref: 'main', lane: 'workspace-a' })
+		const plain = await createManualRun(context, { appEnv, ref: 'main' })
 		expect((await repositories.runs.getRun(laned.id))?.lane).toBe('workspace-a')
 		expect((await repositories.runs.getRun(plain.id))?.lane).toBeNull()
 	})

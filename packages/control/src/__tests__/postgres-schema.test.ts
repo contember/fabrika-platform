@@ -588,6 +588,10 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 		})
 		// A put advances the generation; the stored flag stays.
 		expect(await db.registry.upsertAppEnv(providerEnvironment('acme', 'stage'))).toMatchObject({ protected: 1, generation: 2 })
+		// An authoring target is never protected (ADR-0049 rule 7): the write itself refuses it.
+		await db.registry.upsertAppEnv({ ...providerEnvironment('acme', 'qa'), authoring: true })
+		expect(await fixtureProtect(db.registry, new SqlDeployLocks(raw), { appId: 'acme', env: 'qa' }, true)).toBeNull()
+		expect((await db.registry.getAppEnv('acme', 'qa'))?.protected).toBe(0)
 		// The flag and the counters outlive the row: a recreated environment starts with them.
 		expect(await db.registry.deleteAppEnv('acme', 'stage')).toBe(true)
 		expect(await db.registry.upsertAppEnv(providerEnvironment('acme', 'stage'))).toMatchObject({ protected: 1, generation: 3, protection_revision: 1 })
