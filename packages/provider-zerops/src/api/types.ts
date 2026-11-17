@@ -225,9 +225,9 @@ export interface ZeropsBackupConfig {
 }
 
 /**
- * One stored backup of a managed service. VERIFIED AS A SHAPE: `OutDtoServiceStackBackupFile`, narrowed to its `name` and
- * the `tags` of its `metadata`. UNVERIFIED: how `tags` is encoded. The OpenAPI document types `metadata` as a map of
- * strings while its example lists `tags` as an array, so the reader takes either, and reads anything else as no tag.
+ * One stored backup of a managed service: `OutDtoServiceStackBackupFile`, narrowed to its `name` and the `tags` of its
+ * `metadata`. Verified live 2026-11-17: `metadata.tags` is a JSON array of strings, and the metadata keys are snake_case
+ * (`file_name`, `stack_name`), not the documented `filename` and `stackname`.
  */
 export interface ZeropsBackupFile {
 	/** The moment the backup was taken, as the platform names the file. */
@@ -239,7 +239,7 @@ export interface ZeropsBackupFile {
 export interface ZeropsBackupStart {
 	/** The backup was started, and is finished or running in the background. */
 	success: boolean
-	/** It ran past 10 s and goes on in the background. */
+	/** It ran past the platform's 10 s window and goes on in the background; `false` answers a finished backup. */
 	async: boolean
 }
 
@@ -580,13 +580,14 @@ export interface ZeropsApi {
 	/**
 	 * Back a managed service up now, under `tags`. VERIFIED AS A SHAPE: `POST /service-stack/{id}/backup`
 	 * (`BackupServiceStack`), body `RequestPostServiceStackBackup`, response `ResponseServiceStackBackup`. It names no
-	 * process: the backup is done once `listBackups` lists it. A user tag is at most 24 characters of `[A-Za-z0-9:_-]`.
+	 * process. Verified live 2026-11-17: `async: false` answers a finished backup, listed at once; a user tag outside 1–24
+	 * characters of `[A-Za-z0-9:_-]` is 400 `backupTagNameFormat`.
 	 */
 	createBackup(input: { serviceId: string; tags: string[]; signal: AbortSignal }): Promise<ZeropsBackupStart>
 
 	/**
 	 * The stored backups of a managed service. VERIFIED AS A SHAPE: the `files` of `GET /service-stack/{id}/backup`
-	 * (`ListBackups`). UNVERIFIED: whether a backup still running is listed.
+	 * (`ListBackups`). UNVERIFIED: whether a backup still running (`async: true`) is listed before it completes.
 	 */
 	listBackups(input: { serviceId: string; signal: AbortSignal }): Promise<ZeropsBackupFile[]>
 

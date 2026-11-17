@@ -120,13 +120,18 @@ const POLL_INTERVAL_MS = 3000
 /** A run stops waiting for its version this long after it started. Zerops' own pipeline limit is 1 hour. */
 export const ZEROPS_VERSION_DEADLINE_MS = 75 * 60 * 1000
 
-/** How often `backup-database` lists the database's backups, and how many times before the run fails: 10 minutes. */
+/**
+ * How often `backup-database` lists the backups of a database whose backup runs in the background, and how many times
+ * before the run fails: 30 minutes, well inside `ZEROPS_VERSION_DEADLINE_MS`.
+ */
 const BACKUP_POLL_INTERVAL_MS = 10_000
-export const ZEROPS_BACKUP_POLLS = 60
+export const ZEROPS_BACKUP_POLLS = 180
 
 /**
  * The tag of the backup a run takes before its migrations delete data. A user tag is at most 24 characters of
  * `[A-Za-z0-9:_-]`, so it carries the first 20 of the run id's own: a UUIDv7's, which start with its timestamp.
+ * The tag is not protected: default retention removes a manual backup only past 50 files or 5 GiB, while protected ones
+ * would pile up toward the project's backup storage, past which no backup is stored at all.
  */
 export const zeropsBackupTag = (runId: string): string => `run-${runId.replace(/[^A-Za-z0-9]/g, '').slice(0, 20)}`
 
@@ -855,9 +860,10 @@ const backupDatabase = async (env: StepEnv): Promise<void> => {
 }
 
 /**
- * Requests a backup of a managed service under `tag` and answers it once the list shows it stored. The request names no
- * process, so the list is the only evidence; a refusal, or no such file after `ZEROPS_BACKUP_POLLS`, throws. The deploy's
- * `backup-database`, and the live platform-facts probe of the same path.
+ * Requests a backup of a managed service under `tag` and answers the stored file. `async: false` answers a finished
+ * backup (verified live), so one list read confirms it; `async: true` runs on in the background, and the list is polled
+ * until it shows the tag. A refusal, a finished backup the list does not show, or no file after `ZEROPS_BACKUP_POLLS`
+ * throws.
  */
 export const storeTaggedBackup = async (input: {
 	api: Pick<ZeropsApi, 'createBackup' | 'listBackups'>
@@ -881,6 +887,20 @@ export const storeTaggedBackup = async (input: {
 		throw error
 	}
 	if (!started.success) throw new Error(`zerops: the backup of ${hostname} did not start; nothing was deployed`)
+	if (!started.async) {
+		await input.boundary()
+		assertRunning(signal)
+		let files: ZeropsBackupFile[]
+		try {
+			files = await api.listBackups({ serviceId: input.serviceId, signal })
+		} catch {
+			assertRunning(signal)
+			throw new Error(`zerops: the backup of ${hostname} finished, and its list could not be read to confirm it; nothing was deployed`)
+		}
+		const stored = files.find((file) => file.tags.includes(tag))
+		if (stored === undefined) throw new Error(`zerops: the backup of ${hostname} finished, and the list does not show it; nothing was deployed`)
+		return stored
+	}
 	for (let poll = 0; poll < ZEROPS_BACKUP_POLLS; poll++) {
 		if (poll > 0) await input.sleep(BACKUP_POLL_INTERVAL_MS, signal)
 		await input.boundary()

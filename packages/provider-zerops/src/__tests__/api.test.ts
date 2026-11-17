@@ -1201,32 +1201,33 @@ describe('Zerops upload-backed app versions', () => {
 		await expect(api.getBackupConfig({ serviceId: 'db-1', signal: signal() })).rejects.toThrow('zerops: list backups returned an invalid response')
 	})
 
-	test('takes a tagged backup, and lists the backups with their tags in either encoding', async () => {
+	test('takes a tagged backup, and lists the backups with their tags', async () => {
 		const requests: { method: string; url: string; body: unknown }[] = []
+		const meta = (fileName: string, tags: unknown) => ({ file_name: fileName, mode: 'MANUAL', stack_name: 'db', tags })
 		const fetchImpl: FetchLike = async (url, init) => {
 			requests.push({ method: init?.method ?? 'GET', url, body: init?.body === undefined ? undefined : JSON.parse(init.body) })
-			if (init?.method === 'POST') return jsonResponse({ success: true, async: true })
+			if (init?.method === 'POST') return jsonResponse({ success: true, async: false })
+			// The shape verified live on 2026-11-17, plus the files a reader must not take for a tagged one.
 			return jsonResponse({
 				files: [
-					{ path: 'stack/2026-10-21 00:00:06', name: '2026-10-21 00:00:06', size: 399, metadata: { tags: ['daily', 'weekly'] } },
-					{ path: 'stack/2026-10-21 10:17:07', name: '2026-10-21 10:17:07', size: 401, metadata: { tags: 'run-019a,protected' } },
-					{ path: 'stack/2026-10-21 10:20:00', name: '2026-10-21 10:20:00', size: 402, metadata: { tags: '["run-019b"]' } },
-					{ path: 'stack/2026-10-21 10:30:00', name: '2026-10-21 10:30:00', size: 403, metadata: { tags: 7 } },
-					{ path: 'stack/2026-10-21 10:40:00', name: '2026-10-21 10:40:00', size: 404, metadata: null },
+					{ path: 'stack/2026-11-17 00:31:06', name: '2026-11-17 00:31:06', size: 399, metadata: meta('backup-db-2026-11-17-003106.zip', ['daily']) },
+					{ path: 'stack/2026-11-17 11:18:16', name: '2026-11-17 11:18:16', size: 2150, metadata: meta('backup-db-2026-11-17-111816.zip', ['run-019a']) },
+					{ path: 'stack/2026-11-17 11:20:00', name: '2026-11-17 11:20:00', size: 403, metadata: meta('backup-db-2026-11-17-112000.zip', 'run-019a') },
+					{ path: 'stack/2026-11-17 11:30:00', name: '2026-11-17 11:30:00', size: 404, metadata: null },
 				],
-				backupPeriod: '0 0 * * *',
+				backupPeriod: '31 0 * * *',
+				retentionPolicy: null,
 				defaultRetentionPolicy: null,
 			})
 		}
 		const api = createZeropsApi({ token: 'zerops-secret', baseUrl: 'https://zerops.test', fetchImpl })
 
-		await expect(api.createBackup({ serviceId: 'db-1', tags: ['run-019a'], signal: signal() })).resolves.toEqual({ success: true, async: true })
+		await expect(api.createBackup({ serviceId: 'db-1', tags: ['run-019a'], signal: signal() })).resolves.toEqual({ success: true, async: false })
 		await expect(api.listBackups({ serviceId: 'db-1', signal: signal() })).resolves.toEqual([
-			{ name: '2026-10-21 00:00:06', tags: ['daily', 'weekly'] },
-			{ name: '2026-10-21 10:17:07', tags: ['run-019a', 'protected'] },
-			{ name: '2026-10-21 10:20:00', tags: ['run-019b'] },
-			{ name: '2026-10-21 10:30:00', tags: [] },
-			{ name: '2026-10-21 10:40:00', tags: [] },
+			{ name: '2026-11-17 00:31:06', tags: ['daily'] },
+			{ name: '2026-11-17 11:18:16', tags: ['run-019a'] },
+			{ name: '2026-11-17 11:20:00', tags: [] },
+			{ name: '2026-11-17 11:30:00', tags: [] },
 		])
 		expect(requests).toEqual([
 			{ method: 'POST', url: 'https://zerops.test/service-stack/db-1/backup', body: { tags: ['run-019a'] } },

@@ -190,10 +190,11 @@ bun test
 - **A deploy handed `backupBeforeMigrations` backs up the application's database before anything else changes
   (ADR-0050).** Migrations run in the init commands at container start, so `backup-database` runs right after
   `verify-exposure` and before a version is reserved: `storeTaggedBackup` (`src/provider.ts`) requests the backup under
-  `zeropsBackupTag(runId)` and waits until `listBackups` shows a file with that tag, 10 s apart, at most 10 minutes. A
-  refusal or no such file fails the run with nothing deployed; never move the step after `reserve-version` or let a
-  timeout pass. The provider computes no data loss itself: Control decides. How the platform encodes the listed tags is
-  UNVERIFIED (`docs/reference/zerops-platform.md`).
+  `zeropsBackupTag(runId)`. An answer `async: false` is a finished backup (verified live), confirmed by one list read;
+  `async: true` is polled until `listBackups` shows a file with that tag, 10 s apart, at most 30 minutes. A refusal or
+  no such file fails the run with nothing deployed; never move the step after `reserve-version` or let a timeout pass.
+  The tag stays unprotected (`docs/reference/zerops-platform.md`). The provider computes no data loss itself: Control
+  decides.
 - **Before a version can activate, `verify-exposure` reads every declared service back (`src/exposure.ts`).**
   `subdomainAccess` must be exactly `false` (absent or unreadable is a refusal), and every object-storage
   service must be created by this run's import (`stack.create`) or named by the `FABRIKA_STORAGE_PROVENANCE`

@@ -201,16 +201,10 @@ export const backupConfigSchema = z.object({
 	...(retentionPolicy === null || retentionPolicy === undefined ? {} : { retentionPolicy }),
 }))
 
-/** An array of tags, or one string of them (`"a,b"`, `"[\"a\",\"b\"]"`); anything else is no tag. */
-const backupTagsSchema = z.union([
-	z.array(z.string()),
-	z.string().transform((tags) => tags.split(/[\s,[\]"]+/).filter((tag) => tag !== '')),
-]).catch([])
-
-/** A file whose metadata does not parse has no tag: a backup is looked for by its tag, so it is never taken for one. */
+/** A file whose tags do not parse has none: a backup is looked for by its tag, so it is never taken for one. */
 const backupFileSchema = z.object({
 	name: z.string(),
-	metadata: z.object({ tags: backupTagsSchema.optional() }).nullish().catch(null),
+	metadata: z.object({ tags: z.array(z.string()).catch([]).optional() }).nullish().catch(null),
 }).transform(({ name, metadata }): ZeropsBackupFile => ({ name, tags: metadata?.tags ?? [] }))
 
 export const backupFilesSchema = z.object({ files: z.array(backupFileSchema).nullable() }).transform(({ files }) => files ?? [])

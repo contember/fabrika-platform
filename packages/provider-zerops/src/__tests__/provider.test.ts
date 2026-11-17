@@ -134,9 +134,9 @@ interface Overrides {
 	databaseMaxRam?: number
 	/** Its autoscaling profile; `oltp-hobby` by default. */
 	databaseProfile?: string
-	/** What a backup request answers, or the error it throws; it runs in the background by default. */
+	/** What a backup request answers, or the error it throws; a finished backup by default, as verified live. */
 	backupStart?: ZeropsBackupStart | Error
-	/** The list of backups that first shows the requested one, counting from 1; 2 by default, null for never. */
+	/** The list of backups that first shows the requested one, counting from 1; 1 by default, null for never. */
 	backupListedAt?: number | null
 	/** How many lists of backups fail before one answers. */
 	backupListErrors?: number
@@ -259,7 +259,7 @@ const makeApi = (recorded: Recorded, overrides: Overrides = {}): ZeropsApi => {
 			recorded.timeline.push('backup')
 			recorded.backups.push({ serviceId, tags })
 			if (overrides.backupStart instanceof Error) throw overrides.backupStart
-			return overrides.backupStart ?? { success: true, async: true }
+			return overrides.backupStart ?? { success: true, async: false }
 		},
 		listBackups: async () => {
 			recorded.calls.push('listBackups')
@@ -268,7 +268,7 @@ const makeApi = (recorded: Recorded, overrides: Overrides = {}): ZeropsApi => {
 				throw new Error('backup list unavailable')
 			}
 			backupLists++
-			const listedAt = overrides.backupListedAt === undefined ? 2 : overrides.backupListedAt
+			const listedAt = overrides.backupListedAt === undefined ? 1 : overrides.backupListedAt
 			const daily = { name: '2026-11-17 00:00:06', tags: ['daily'] }
 			const requested = recorded.backups.at(-1)
 			if (listedAt === null || backupLists < listedAt || requested === undefined) return [daily]
@@ -1324,14 +1324,15 @@ describe('the backup before migrations that delete data', () => {
 		backupBeforeMigrations: { migrations: ['0002_purge.sql'], runId: RUN_ID },
 	})
 	const deploy = (overrides: Overrides, run: ZeropsDeployRun = deleting()) => createZeropsDeployer(() => makeCollaborators(recorded, overrides))(run)
+	const BACKGROUND: Overrides = { backupStart: { success: true, async: true } }
 
 	test('the tag carries the run id in the 24 characters a Zerops tag may hold', () => {
 		expect(zeropsBackupTag(RUN_ID)).toBe(TAG)
 		expect(TAG).toHaveLength(24)
 	})
 
-	test("backs up the application's database under the run's tag, and deploys only once the list shows the backup", async () => {
-		const result = await deploy({ backupListedAt: 3 })
+	test("backs up the application's database under the run's tag, and deploys once the platform answers it finished", async () => {
+		const result = await deploy({})
 		expect(result.status).toBe('succeeded')
 		expect(result.steps.map((step) => step.id)).toEqual([
 			'apply-import',
@@ -1348,14 +1349,23 @@ describe('the backup before migrations that delete data', () => {
 		expect(recorded.backups).toEqual([{ serviceId: DATABASE_SERVICE_ID, tags: [TAG] }])
 		expect(recorded.timeline.slice(0, 3)).toEqual(['backup', 'backup-listed', 'put:FABRIKA_PROXY_SECRET'])
 		expect(recorded.timeline.indexOf('backup-listed')).toBeLessThan(recorded.timeline.indexOf('build-call'))
-		expect(recorded.calls.filter((call) => call === 'listBackups')).toHaveLength(3)
-		expect(recorded.sleeps.slice(0, 2)).toEqual([10_000, 10_000])
+		// `async: false` is a finished backup: one list confirms it, and nothing waits.
+		expect(recorded.calls.filter((call) => call === 'listBackups')).toHaveLength(1)
+		expect(recorded.sleeps).not.toContain(10_000)
 		expect(recorded.logs).toContain(`  \`0002_purge.sql\` delete data: backing up db under the tag \`${TAG}\``)
 		expect(recorded.logs).toContain('  db: backup `2026-11-17 10:17:07` is stored')
 	})
 
-	test('a list that fails is read again', async () => {
-		expect((await deploy({ backupListErrors: 2, backupListedAt: 1 })).status).toBe('succeeded')
+	test('a backup that runs on in the background is waited for until the list shows it', async () => {
+		const result = await deploy({ ...BACKGROUND, backupListedAt: 3 })
+		expect(result.status).toBe('succeeded')
+		expect(recorded.timeline.slice(0, 3)).toEqual(['backup', 'backup-listed', 'put:FABRIKA_PROXY_SECRET'])
+		expect(recorded.calls.filter((call) => call === 'listBackups')).toHaveLength(3)
+		expect(recorded.sleeps.slice(0, 2)).toEqual([10_000, 10_000])
+	})
+
+	test('while a backup runs in the background, a list that fails is read again', async () => {
+		expect((await deploy({ ...BACKGROUND, backupListErrors: 2, backupListedAt: 1 })).status).toBe('succeeded')
 		expect(recorded.logs.filter((line) => line === '  db: the backup list is unavailable; retrying')).toHaveLength(2)
 		expect(recorded.builds).toHaveLength(1)
 	})
@@ -1369,16 +1379,18 @@ describe('the backup before migrations that delete data', () => {
 		expect(recorded.logs).toContain(`  \`0002_purge.sql\` delete data: backing up postgres, the namespace's shared database, under the tag \`${TAG}\``)
 	})
 
-	test('a backup that is refused, does not start or is never listed fails the run, and nothing is deployed', async () => {
+	test('a backup that is refused, does not start, or is not listed fails the run, and nothing is deployed', async () => {
 		const cases: Array<[Overrides, string]> = [
 			[
 				{ backupStart: new ZeropsApiError('zerops: back up failed (400)', 400, 'BackupUnsupportedStackType') },
 				'zerops: the backup of db was refused (BackupUnsupportedStackType); nothing was deployed',
 			],
 			[{ backupStart: { success: false, async: false } }, 'zerops: the backup of db did not start; nothing was deployed'],
+			[{ backupListedAt: null }, 'zerops: the backup of db finished, and the list does not show it; nothing was deployed'],
+			[{ backupListErrors: 1 }, 'zerops: the backup of db finished, and its list could not be read to confirm it; nothing was deployed'],
 			[
-				{ backupListedAt: null },
-				"zerops: the backup of db was not stored within 10 minutes, so nothing was deployed; a backup larger than the project's backup storage is never stored",
+				{ ...BACKGROUND, backupListedAt: null },
+				"zerops: the backup of db was not stored within 30 minutes, so nothing was deployed; a backup larger than the project's backup storage is never stored",
 			],
 		]
 		for (const [overrides, error] of cases) {
@@ -1393,8 +1405,8 @@ describe('the backup before migrations that delete data', () => {
 		}
 	})
 
-	test('a backup never listed is given up after the bounded number of lists', async () => {
-		const result = await deploy({ backupListedAt: null })
+	test('a background backup never listed is given up after the bounded number of lists', async () => {
+		const result = await deploy({ ...BACKGROUND, backupListedAt: null })
 		expect(result.status).toBe('failed')
 		expect(recorded.calls.filter((call) => call === 'listBackups')).toHaveLength(ZEROPS_BACKUP_POLLS)
 		expect(recorded.sleeps).toEqual(Array.from({ length: ZEROPS_BACKUP_POLLS - 1 }, () => 10_000))
