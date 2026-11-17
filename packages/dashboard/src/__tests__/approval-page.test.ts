@@ -114,6 +114,22 @@ describe('the approval page', () => {
 		expect(summary).toContain('Anyone on the internet decides when job <code>intake</code> runs.')
 	})
 
+	test('a run an earlier release parked for a widening without a closer-review line still says it waits, or that it waited', () => {
+		const quiet = CHANGES.filter((change) => change.review !== 'closer')
+		const summary = (approval: ApprovalDto) => {
+			const page = render(approval)
+			return page.slice(page.indexOf('change-summary'), page.indexOf('Who gains access'))
+		}
+		expect(summary({ ...APPROVAL, outcome: 'widening', changes: quiet })).toContain('It widens access, so it waits for your approval.')
+		const approved = { principalId: 'p-ada', label: 'ada@example.test', approvedAt: 2, holds: true }
+		expect(summary({ ...APPROVAL, changes: quiet, run: { ...RUN, status: 'succeeded' }, approval: approved })).toContain(
+			'It widens access, so it waited for approval.',
+		)
+		expect(summary({ ...APPROVAL, changes: quiet, run: { ...RUN, status: 'succeeded' } })).toContain(
+			'It widens access, and nothing in it needs closer review, so it publishes without waiting.',
+		)
+	})
+
 	test('says the default limits once, and in a row only the limits of its own', () => {
 		expect(markup).toContain('A row marked <em>default limits</em> waits at most 30 s for a body of at most 65536 bytes, then runs at most 10 s.')
 		expect(markup).toContain('<span class="muted"> · default limits</span>')
