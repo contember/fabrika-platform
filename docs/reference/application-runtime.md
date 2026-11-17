@@ -1906,9 +1906,9 @@ database with `@fabrika/db/testing`'s `testDatabase`: a fresh schema `app_test_<
 that the real migration runner fills with the framework's tables and then `db/migrations/`, as
 `fabrika db migrate` does. Without
 `FABRIKA_TEST_POSTGRES_URL` it prints the standard skip message and the file registers no
-test; `FABRIKA_TEST_POSTGRES_REQUIRED=1` turns that into a failure. The Zerops build has no
-database: it counts those skip lines and reports `fabrika-tests: N Postgres-backed test files did
-not run`. Of them only the generated isolation tests run again, at container start.
+test; `FABRIKA_TEST_POSTGRES_REQUIRED=1` turns that into a failure. The Zerops build runs the
+tests before any database: it counts those skip lines and reports `fabrika-tests: N Postgres-backed
+test files did not run`. Of them only the generated isolation tests run again, later in the build.
 
 - **Throwaway schemas.** A schema is held by a session-level advisory lock derived from its
   name, taken before it exists and kept for its whole life. Every test database first drops
@@ -2068,16 +2068,17 @@ not run`. Of them only the generated isolation tests run again, at container sta
   replaced one (header or not) and a generated test the scaffold no longer writes are
   `generated-test-hash` findings. `bunfig.toml` may not set `[test] root`,
   `pathIgnorePatterns` or `retry` (`skipped-test`).
-- **The platform runs them** at container start on Zerops, after `fabrika db migrate`
-  and `fabrika db codegen --verify` (the build has no database), which also fails on a
-  schema that holds database code no migration declares, such as one created at runtime: `fabrika db
-  test-isolation` runs exactly the generated files with an empty `bunfig.toml` and the
-  platform's preload, against a throwaway schema of the application's database, and fails
+- **The platform runs them** in the Zerops build, on a throwaway PostgreSQL 18 the build migrates
+  from scratch, after `fabrika db migrate` and `fabrika db codegen --verify` (on a build image other
+  than Alpine, at container start against the application's database instead; that `codegen --verify`
+  also fails on a schema that holds database code no migration declares, such as one created at
+  runtime): `fabrika db test-isolation` runs exactly the generated files with an empty `bunfig.toml` and the
+  platform's preload, against a throwaway schema, and fails
   unless every case name the scaffold wrote is reported as passed, with an assertion, in the
   JUnit report. It prints none of the tests' output, only the counts and the failed case
-  names, because a dependency may write a credential into it; `--verbose`, which the start
-  script never passes, prints the output locally. A failure leaves nothing to answer the
-  readiness check.
+  names, because a dependency may write a credential into it; `--verbose`, which the platform
+  never passes, prints the output locally. A failure fails the build (or, at container start,
+  stops the activation).
 
 ## The agent skill
 

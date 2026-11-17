@@ -459,7 +459,7 @@ Measured by the platform-facts table's live suite (`live: 'build'`, `FABRIKA_LIV
 
 The generated run section of a contract application
 ([ADR-0043](../decisions/0043-validate-and-render-one-zerops-descriptor-meaning.md)) depends on the second row: its
-migrations, its schema check and its generated isolation tests are init commands. Its readiness check is an `exec`
+migrations are an init command (and its schema checks too, on a build image other than Alpine). Its readiness check is an `exec`
 against the contract's health endpoint (below).
 
 #### Verified live (2026-10-21, a throwaway `alpine/bun@1.3` service): one `exec` readiness attempt may wait for the server
@@ -1422,11 +1422,38 @@ remedies, neither of which needs sudo: when the bucket's `stack.create` process 
 set the variable on the deploy service to the bucket's service id, not sensitive; otherwise delete the bucket
 and deploy again.
 
-The build container has no database, so a contract application's init commands run `fabrika db migrate`, then
-`fabrika db codegen --verify` and `fabrika db test-isolation`, and its start script only starts the server: a stale
-committed `schema.generated.ts` or a generated isolation case that did not pass fails an init command, which stops the
-activation. The checks run before `run.start`, outside the readiness window (above), however long the isolation tests
-take.
+A contract application with a database checks its schema in the build. After `fabrika-check`, one generated build
+command installs `postgresql18`, starts a throwaway cluster on a unix socket under `/tmp/fabrika-build-postgres` (no TCP
+listener, `scram-sha-256` with a random password), migrates it from scratch with `fabrika db migrate`, runs
+`fabrika db codegen --verify` and `fabrika db test-isolation` on it and stops it; a failed check prints
+`fabrika: the build check failed: <check>` and fails the build (`contractRecipe`, `packages/app/src/build-recipe.ts`). It
+is one command because each build command runs in its own shell. The cluster is outside the source root, so nothing of
+it is deployed. The application's own database may be an older major: the checks need only a server that runs its
+migrations. Its init command runs only `fabrika db migrate`, and its start script only starts the server.
+
+A build image other than Alpine (an authored `build.os` other than `alpine`, or a `build.base` of another OS) has no
+`apk`, so it keeps the earlier form (`zeropsSchemaChecks`, `packages/provider-zerops/src/execution.ts`): the init
+commands run `fabrika db migrate`, then `fabrika db codegen --verify` and `fabrika db test-isolation`, before `run.start`
+and outside the readiness window (above), and a stale committed `schema.generated.ts` or a generated isolation case that
+did not pass fails an init command, which stops the activation.
+
+#### Verified live (2026-11-17, a throwaway project, since deleted) — the build container runs a throwaway PostgreSQL
+
+Measured with build base `alpine/bun@1.3`:
+
+| Behaviour                                                                    | Result                                                                                                                                                                          |
+| ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/etc/alpine-release`, `bun --version` and the user of a build command       | **3.23.5**, **1.3.14**, `zerops` (uid 2023)                                                                                                                                     |
+| `sudo apk add --no-cache postgresql18`                                       | **Works natively** (no repository pin), about 3 s; PostgreSQL 18.7                                                                                                              |
+| `initdb` and `pg_ctl start` as `zerops`, inside one multi-line build command | About 2 s; `psql` over the unix socket works                                                                                                                                    |
+| A `trap … EXIT` that stops the cluster at the end of that command            | No postgres process left: the next build command's `pgrep` found none                                                                                                           |
+| `$X`, `${X}` and `$(echo ok)` in a build command                             | Reach the shell unchanged. `${X}` was a name that is no Zerops variable; a braced name that is one may be resolved by Zerops, so a generated command uses only unbraced `$NAME` |
+
+Measured locally on `alpine:3.23` with Bun 1.3.14 as a non-root user (2026-11-17), the generated command over the Notes
+example: `apk` 6.2 s, `initdb` 1.2 s, start 0.1 s, `migrate` 1.0 s, `codegen --verify` 0.4 s, `test-isolation` 4.0 s
+(49 cases); about 13 s in all. The cluster has no TCP listener and refuses a wrong password, and no postgres process is
+left after a pass or a failed check. `Bun.SQL` reaches a unix socket only through `?path=<directory>` (Bun 1.3.9 and
+1.3.14), not `?host=`.
 
 `FABRIKA_APP_DATABASE_URL` carries the PostgreSQL service's superuser on the direct port:
 

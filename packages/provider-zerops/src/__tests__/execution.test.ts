@@ -106,8 +106,8 @@ describe('the generated execution descriptor of a contract application', () => {
 					expect.stringMatching(/^printf '%s\\n' '\{"compilerOptions":.*' > fabrika\/tsconfig\.platform\.json$/),
 					`cd /tmp && bun x --bun -p typescript@${PLATFORM_TYPESCRIPT_VERSION} tsc -p /build/source/fabrika/tsconfig.platform.json`,
 					`cd /tmp && bun x --bun -p @fabrika/check@${FABRIKA_CHECK_VERSION} fabrika-check /build/source`,
+					expect.stringMatching(/^set -eu\n.*sudo apk add --no-cache --quiet postgresql18\n.*fabrika db test-isolation .*--mode=fast stop >\/dev\/null$/s),
 					"printf '%s\\n' '#!/bin/sh' 'set -eu' 'cd /var/www' 'FABRIKA_APP_ID=notes exec ./node_modules/.bin/fabrika db migrate' > fabrika/migrate.generated.sh",
-					"printf '%s\\n' '#!/bin/sh' 'set -eu' 'cd /var/www' 'FABRIKA_APP_ID=notes ./node_modules/.bin/fabrika db codegen --verify' 'FABRIKA_APP_ID=notes exec ./node_modules/.bin/fabrika db test-isolation' > fabrika/verify.generated.sh",
 					"printf '%s\\n' '#!/bin/sh' 'set -eu' 'cd /var/www' 'exec bun --max-http-header-size=65536 fabrika/entry.generated.ts' > fabrika/start.generated.sh",
 				],
 				deployFiles: ['./'],
@@ -117,7 +117,7 @@ describe('the generated execution descriptor of a contract application', () => {
 			run: {
 				base: 'alpine/bun@1.3',
 				prepareCommands: ['sudo apk add --no-cache ffmpeg vips'],
-				initCommands: ['sh /var/www/fabrika/migrate.generated.sh', 'sh /var/www/fabrika/verify.generated.sh'],
+				initCommands: ['sh /var/www/fabrika/migrate.generated.sh'],
 				start: 'sh /var/www/fabrika/start.generated.sh',
 				ports: [{ port: 3000, httpSupport: true }],
 				healthCheck: {
@@ -141,16 +141,51 @@ describe('the generated execution descriptor of a contract application', () => {
 		})
 	})
 
-	test('the schema check and the isolation tests run after the migrations, before `run.start` opens the readiness window', async () => {
+	test('the build migrates a throwaway database and runs the schema checks on it; a container start only migrates', async () => {
 		const setup = render(await compile(contractApp()))
-		expect(mapping(setup['run'])['initCommands']).toEqual(['sh /var/www/fabrika/migrate.generated.sh', 'sh /var/www/fabrika/verify.generated.sh'])
+		expect(mapping(setup['run'])['initCommands']).toEqual(['sh /var/www/fabrika/migrate.generated.sh'])
 		const commands = mapping(setup['build'])['buildCommands']
-		const verify = Array.isArray(commands) ? commands.find((command) => String(command).includes('verify.generated.sh')) : undefined
-		expect(String(verify)).toMatch(
-			/'set -eu' 'cd \/var\/www' 'FABRIKA_APP_ID=notes \S+ db codegen --verify' 'FABRIKA_APP_ID=notes exec \S+ db test-isolation'/,
-		)
-		const start = Array.isArray(commands) ? commands.find((command) => String(command).includes('start.generated.sh')) : undefined
-		expect(String(start)).not.toContain('fabrika db')
+		if (!Array.isArray(commands)) throw new Error('expected build commands')
+		const position = (needle: string): number => commands.findIndex((command) => String(command).includes(needle))
+		expect(position('postgresql18')).toBe(position('fabrika-check /build/source') + 1)
+		const lines = String(commands[position('postgresql18')]).split('\n')
+		const at = (needle: string): number => lines.findIndex((line) => line.includes(needle))
+		const order = ['initdb ', ' start ', 'db migrate', 'db codegen --verify', 'db test-isolation', '--mode=fast stop'].map(at)
+		expect(order.every((line) => line >= 0)).toBe(true)
+		expect(order).toEqual([...order].sort((left, right) => left - right))
+		expect(position('verify.generated.sh')).toBe(-1)
+		expect(String(commands[position('start.generated.sh')])).not.toContain('fabrika db')
+	})
+
+	for (
+		const [label, build] of [
+			['an authored build OS other than Alpine', 'os: ubuntu'],
+			['an authored base of another OS', 'base: ubuntu/bun@1.3'],
+			['a base list with one of another OS', 'base: [alpine/bun@1.3, ubuntu/go@1]'],
+		] as const
+	) {
+		test(`${label} keeps the schema checks in the init commands, after the migrations`, async () => {
+			const setup = render(
+				await compile(contractApp(), `zerops:\n  - setup: notesapi\n    build:\n      ${build}\n      buildCommands: ["bun run build:spa"]\n`),
+			)
+			expect(mapping(setup['run'])['initCommands']).toEqual(['sh /var/www/fabrika/migrate.generated.sh', 'sh /var/www/fabrika/verify.generated.sh'])
+			const commands = mapping(setup['build'])['buildCommands']
+			if (!Array.isArray(commands)) throw new Error('expected build commands')
+			expect(commands.some((command) => String(command).includes('postgresql18'))).toBe(false)
+			const verify = commands.find((command) => String(command).includes('verify.generated.sh'))
+			expect(String(verify)).toMatch(
+				/'set -eu' 'cd \/var\/www' 'FABRIKA_APP_ID=notes \S+ db codegen --verify' 'FABRIKA_APP_ID=notes exec \S+ db test-isolation'/,
+			)
+		})
+	}
+
+	test('an authored Alpine build runs the schema checks in the build', async () => {
+		for (const build of ['os: alpine', 'base: bun@1.3', 'base: [alpine/bun@1.3, go@1]']) {
+			const setup = render(
+				await compile(contractApp(), `zerops:\n  - setup: notesapi\n    build:\n      ${build}\n      buildCommands: ["bun run build:spa"]\n`),
+			)
+			expect(mapping(setup['run'])['initCommands']).toEqual(['sh /var/www/fabrika/migrate.generated.sh'])
+		}
 	})
 
 	test('the authored tests run before the reinstall, the regenerated entrypoint and every check', async () => {
@@ -178,6 +213,8 @@ describe('the generated execution descriptor of a contract application', () => {
 		})
 		expect(JSON.stringify(setup)).not.toContain('migrate')
 		expect(JSON.stringify(setup)).not.toContain('verify.generated.sh')
+		expect(JSON.stringify(setup)).not.toContain('postgresql18')
+		expect(JSON.stringify(setup)).not.toContain('fabrika db')
 		expect(JSON.stringify(setup)).not.toContain('FABRIKA_RELEASE')
 	})
 

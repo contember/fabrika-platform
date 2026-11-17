@@ -74,7 +74,7 @@ schema.
 **`run`** is generated:
 
 - `initCommands` runs `fabrika db migrate`
-  ([ADR-0017](0017-service-owned-postgres-migrations.md));
+  ([ADR-0017](0017-service-owned-postgres-migrations.md)); the schema checks run in the build (below);
 - `start` runs the generated entrypoint;
 - the crontab comes from the contract's jobs;
 - a generated readiness check;
@@ -108,16 +108,23 @@ specifiers, an `overrides` block of them alone, and their lockfile entries. The 
 command is generated and never passes it, so a deployed application still installs every `@fabrika/*` package from the
 registry with its hash.
 
-The build has no database. The migrations, the verification of the committed schema types and the
-generated isolation tests therefore run at container start, as init commands: `run.initCommands` runs
-`fabrika db migrate`, then `fabrika db codegen --verify` against the application's real schema and
-`fabrika db test-isolation` on a throwaway schema, each script under `set -eu`, and the start script only starts the
-server. A failed init command stops the activation, so a stale `schema.generated.ts` or a generated case that did not
-pass leaves the version `DEPLOY_FAILED`, and the previous version keeps serving.
+**The schema checks run in the build, on a throwaway database.** After `fabrika-check`, one generated build command
+installs PostgreSQL 18 (`sudo apk add postgresql18`), starts a cluster on a unix socket behind a random password,
+migrates it from scratch with `fabrika db migrate`, runs `fabrika db codegen --verify` and `fabrika db test-isolation`
+on it, and stops it. A stale `schema.generated.ts`, a migration that does not apply to an empty schema, or a generated
+case that did not pass fails the build, so no version is created and the previous one keeps serving. A container start
+runs only `fabrika db migrate` as an init command, and the start script only starts the server. The checks no longer
+cost every start, restart and added container the time of the isolation tests (almost 3 minutes for the CRM's 605
+cases on a small database).
 
-They run before `run.start` because the readiness window opens with `run.start`, and it is fixed at 180 s: the
-application cannot raise it. While the checks ran in the start script they shared that window with the server. The
-CRM's 605 generated cases took almost 3 minutes on a small database, and two deploys in a row failed although every
+The cluster is 18, the platform's application databases' major; an application that declares an older one still
+builds against 18, because the checks need only a server that runs its migrations. Only an Alpine build image has
+`apk`, so a build whose authored `build.os` or `build.base` names another OS keeps the earlier form: the init commands
+run `fabrika db migrate`, then `fabrika db codegen --verify` against the application's real schema and
+`fabrika db test-isolation` on a throwaway schema, each script under `set -eu`, and a failed one stops the activation
+(ADR-0062: no application has to change its build to deploy). Init commands run before `run.start` because the
+readiness window opens with `run.start`, and it is fixed at 180 s: the application cannot raise it. While the checks
+ran in the start script they shared that window with the server, and two CRM deploys in a row failed although every
 check passed.
 
 **A container starts with the memory its init commands need.** The isolation tests run as `fabrika db
@@ -128,8 +135,8 @@ reacts in 10–20 s, so the platform killed the run on 2 of 3 first deploys and 
 service's minimum RAM to 0.5 GB for an application with a database, and to 2 GB for one that scans uploads, in the
 `raise-start-memory` step before it reserves a version. An import cannot do it: Zerops ignores a changed
 `verticalAutoscaling` of an existing service. The step changes only that field through the autoscaling API, reads it
-back, and never lowers it. The tests still run at every container start, so an active version still proves that they
-passed for the version that serves.
+back, and never lowers it. Since the schema checks moved into the build, only a build image other than Alpine still
+needs that memory at start; the minimum stays, because an existing service never lowers it either.
 
 **Every process of an application fits its database's connection limit.** The deploy's `size-database`
 step, after `raise-start-memory`, reads the minimum RAM and the profile of the application's PostgreSQL
@@ -317,9 +324,7 @@ execution document carries the generated `run` and `build`.
   collection in the CLI nothing, and the test child alone holds more than 0.125 GB.
 - **Run the isolation tests once per version (`zsc execOnce ${ZEROPS_appVersionId}`).** Rejected: the run they
   start on still needs the same memory, which is what failed, and the command is not established to work in an
-  init command. Running at every start keeps the check on every container. It costs about two seconds for the
-  Notes example and almost 3 minutes for the CRM on a small database, which every restart and added container now
-  waits before it starts.
+  init command. The build now runs them once per version, on its own throwaway database.
 - **Make the application declare `verticalAutoscaling.minRam`, as a scanning one does.** Rejected as the only
   mechanism: an import does not change an existing service, so an installation would not converge, and every
   application would carry a platform number. The build still refuses a scanning application without its 2 GB.

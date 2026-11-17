@@ -141,12 +141,15 @@ bun test
   produces or checks what deploys, and `tsc` before the checker, as the application skill's loop runs them: the checker
   refuses the cast or `any` that silences a type error, so it has the last word. The tests command counts the files
   `@fabrika/db/testing` skipped (its skip line has the same text in every release) and prints `fabrika-tests: N
-  Postgres-backed test files did not run …`: the build has no database. Of those files only the generated ones run
-  again, at container start. The init commands run
-  `fabrika db migrate`, then `fabrika db codegen --verify` and `fabrika db test-isolation` (the generated tests on
-  a throwaway schema), and the start script only `exec`s the server, so a failed migration, a stale
-  `schema.generated.ts` or a generated case that did not pass fails an init command, which stops the activation
-  (verified live 2026-10-16); the build has no database. Never move them back into the start script: the readiness
+  Postgres-backed test files did not run …`: the tests run before any database. Of those files only the generated
+  ones run again, as `test-isolation`. With a database, the build's last check is one command that installs
+  `postgresql18`, starts a throwaway cluster on a unix socket behind a random password, migrates it from scratch, runs
+  `fabrika db codegen --verify` and `fabrika db test-isolation` on it and stops it, so a failed one fails the build; the
+  init command runs only `fabrika db migrate`. Its `$PW` is unbraced on purpose: Zerops may resolve a braced `${name}`
+  in a build command (verified live 2026-11-17), and the recipe refuses one. Only an Alpine build has `apk`, so a build
+  whose authored `build.os` or `build.base` names another OS keeps the schema checks in the init commands
+  (`zeropsSchemaChecks`): `fabrika db migrate`, then `fabrika db codegen --verify` and `fabrika db test-isolation`, a
+  failure stopping the activation (verified live 2026-10-16). Never move them into the start script: the readiness
   window (180 s, not the application's to raise) opens with `run.start`, and the CRM's isolation tests alone took
   almost 3 minutes there (issue #27); the window opens only after the init commands (verified live 2026-10-21). A `DEPLOY_FAILED` version's error names the init commands and the readiness check. The run section names the application's one PostgreSQL
   (`FABRIKA_APP_DATABASE_URL`) and its one object-storage service (`FABRIKA_APP_STORAGE_*`) only as `${<host>_…}`
@@ -170,8 +173,9 @@ bun test
   log (`readSourceMapUploadReport`): a succeeded run reports `artifactState: 'complete'` only when that line said so, else
   `incomplete`. Every build command, the authored ones included, can read the bearer, and so can the runtime until the
   next deploy replaces it: it reaches only this run's release and expires two hours after the run started.
-- **`raise-start-memory` raises the deploy service's minimum RAM before a version is reserved (ADR-0043).** The init
-  commands' `fabrika db test-isolation` peaks above the runtime's 0.125 GB faster than vertical autoscaling reacts, so
+- **`raise-start-memory` raises the deploy service's minimum RAM before a version is reserved (ADR-0043).** It was
+  sized for `fabrika db test-isolation` at start, which a build other than Alpine still runs there and which peaks above
+  the runtime's 0.125 GB faster than vertical autoscaling reacts, so
   `zeropsStartMinRam` (`src/execution.ts`) names the floor: 0.5 GB with a database, 2 GB with a scanner. An import
   cannot change an existing service, so the step reads `customAutoscaling` back, sends it WHOLE with only
   `minResource.memoryGBytes` changed, under the keys `verticalAutoscaling` / `horizontalAutoscaling`, and decides by

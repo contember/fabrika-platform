@@ -149,7 +149,8 @@ and every other one, a missing config included, on Postgres. On SQLite no comman
   generated tests are committed and run with this package's suite, always on a copy in a private temporary directory
   (concurrent runs of the suite share the committed directory); `db.test.ts` fails when they differ from what the
   scaffold writes, and when its `schema.generated.ts` differs from codegen's.
-- `db test-isolation` is the platform's run of them (a Zerops init command): the files must equal the scaffold's
+- `db test-isolation` is the platform's run of them (in the Zerops build, on a throwaway database; an init command on
+  a build image other than Alpine): the files must equal the scaffold's
   output and no endpoint may lack its input fixture, then `bun --config=<empty> test
   --preload=<@fabrika/app/testing/preload> <files> --reporter=junit` runs them, as a throwaway provisioner
   `createTestProvisioner` makes from `FABRIKA_APP_DATABASE_URL` and drops afterwards (the tests load application code,
@@ -161,7 +162,7 @@ and every other one, a missing config included, on Postgres. On SQLite no comman
   a failed run whose output names a refused connection (`reportsExhaustedConnections`) fails saying so, never as a
   count of passed cases (ADR-0043). **It prints none of the child's output**, only the counts and the failed case names, which come from the
   scaffold: a dependency may write a credential into the output in any form. `--verbose` prints it, locally only;
-  the init command never passes it. On SQLite it makes no provisioner, reads no database URL and passes no
+  the platform never passes it. On SQLite it makes no provisioner, reads no database URL and passes no
   `FABRIKA_TEST_POSTGRES_*` variable: the SQLite kit opens an in-memory database; the scaffold and JUnit checks are the
   same.
 - `FABRIKA_APP_ID` and `FABRIKA_APP_DATABASE_URL` (Postgres) come from the ENVIRONMENT ONLY.
