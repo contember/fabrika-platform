@@ -469,19 +469,24 @@ for (const backend of backends) {
 			expect(await recordedMaintenance(f.b, TARGET)).toBe('open')
 		})
 
-		test('a failed backup or rehearsal opens the original again at a new generation', async () => {
-			for (
-				const [fault, code] of [
-					[(sent: Sent) => sent.op === 'export' && sent.part === 2 ? { refused: 'row_too_large' as const, table: 't2' } : undefined, BACKUP_FAILED_CODE],
-					[
-						(sent: Sent) =>
-							sent.op === 'import' && sent.object === 'rehearsal' && sent.step === 'verify'
-								? { refused: 'verify_mismatch' as const, table: 't1' }
-								: undefined,
-						REHEARSAL_FAILED_CODE,
-					],
-				] as const
-			) {
+		for (
+			const [what, fault, code] of [
+				[
+					'backup',
+					(sent: Sent) => sent.op === 'export' && sent.part === 2 ? { refused: 'row_too_large' as const, table: 't2' } : undefined,
+					BACKUP_FAILED_CODE,
+				],
+				[
+					'rehearsal',
+					(sent: Sent) =>
+						sent.op === 'import' && sent.object === 'rehearsal' && sent.step === 'verify'
+							? { refused: 'verify_mismatch' as const, table: 't1' }
+							: undefined,
+					REHEARSAL_FAILED_CODE,
+				],
+			] as const
+		) {
+			test(`a failed ${what} opens the original again at a new generation`, async () => {
 				const f = await open()
 				await f.deployFirst()
 				f.fake.fault = fault
@@ -489,10 +494,8 @@ for (const backend of backends) {
 				expect(f.fake.requests().at(-1)).toBe('state application open @4')
 				expect(f.fake.requests().filter((request) => request.startsWith('state application-'))).toEqual([])
 				expect(await recordedMaintenance(f.b, TARGET)).toBe('open')
-				await opened?.close()
-				opened = null
-			}
-		})
+			})
+		}
 
 		test('a refused import discards the clone and opens the original again; the same backup is not retried', async () => {
 			const f = await open()
@@ -525,8 +528,8 @@ for (const backend of backends) {
 			expect(await recordedMaintenance(f.b, TARGET)).toBe('open')
 		})
 
-		test('a pointer deploy that left the original serving is refuted by prepare and pointed back before anything is armed', async () => {
-			for (const variant of ['failed', 'ignored'] as const) {
+		for (const variant of ['failed', 'ignored'] as const) {
+			test(`a pointer deploy that left the original serving is refuted by prepare and pointed back before anything is armed: ${variant}`, async () => {
 				const f = await open()
 				await f.deployFirst()
 				// A provider failed the deploy after accepting it, or the deployed version did not take the serving object.
@@ -547,10 +550,8 @@ for (const backend of backends) {
 				expect(await f.restoreRow()).toMatchObject({ failure: POINTER_NOT_DEPLOYED_CODE, target_bookmark: null, arms: 0 })
 				expect(await recordedObjects(f.b, TARGET)).toEqual({ object: 'application', objects: ['application', 'rehearsal', clone] })
 				expect(await recordedMaintenance(f.b, TARGET)).toBe('open')
-				await opened?.close()
-				opened = null
-			}
-		})
+			})
+		}
 
 		test('a pointer deploy that failed after its version went live goes on once the clone is confirmed', async () => {
 			const f = await open()
@@ -816,8 +817,8 @@ for (const backend of backends) {
 			expect(f.state.deploys).toHaveLength(1)
 		})
 
-		test('a recovery after a pointer deploy that failed before going live keeps the original, where traffic still goes', async () => {
-			for (const crashAt of ['point', 'serve'] as const) {
+		for (const crashAt of ['point', 'serve'] as const) {
+			test(`a recovery after a pointer deploy that failed before going live keeps the original, where traffic still goes: ${crashAt}`, async () => {
 				const f = await open()
 				await f.deployFirst()
 				const id = await f.start()
@@ -844,10 +845,8 @@ for (const backend of backends) {
 				expect(f.mode(clone)?.mode).toBe('inspect')
 				expect(f.mode('application')?.mode).toBe('open')
 				expect(f.state.deploys.map((deploy) => deploy.objects?.object)).toEqual(['application', clone, 'application'])
-				await opened?.close()
-				opened = null
-			}
-		})
+			})
+		}
 
 		test('a recovery that cannot tell where traffic goes opens nothing, and recovering it keeps the clone', async () => {
 			const f = await open()
@@ -875,8 +874,8 @@ for (const backend of backends) {
 			expect(await f.b.repositories.dataOperations.get(firstId)).toMatchObject({ state: 'failed', error_code: 'recovered_open' })
 		})
 
-		test('recovering a recovery interrupted while it published keeps the clone of the restore it recovers', async () => {
-			for (const resolution of ['open', 'resume'] as const) {
+		for (const resolution of ['open', 'resume'] as const) {
+			test(`recovering a recovery interrupted while it published keeps the clone of the restore it recovers: ${resolution}`, async () => {
 				const f = await open()
 				await f.deployFirst()
 				const id = await f.start()
@@ -896,10 +895,8 @@ for (const backend of backends) {
 				expect(f.mode('application')?.mode).toBe('inspect')
 				expect(f.state.deploys.map((deploy) => deploy.objects?.object)).toEqual(['application', clone])
 				expect(await f.b.repositories.dataOperations.get(id)).toMatchObject({ state: 'failed' })
-				await opened?.close()
-				opened = null
-			}
-		})
+			})
+		}
 
 		test('a recovery past a moved pointer settles on a clone that never boots, and an ordinary deploy is not refused', async () => {
 			const f = await open()
@@ -1006,14 +1003,16 @@ for (const backend of backends) {
 			expect(f.state.deploys).toEqual([])
 		})
 
-		test('an environment without a domain, a release without ops, nothing deployed or a future time is refused', async () => {
-			const refusal = async (f: Awaited<ReturnType<typeof open>>, at = AT) =>
-				await startRestore(f.deps(), { ...TARGET, at, actor: 'user:test', now: NOW })
+		const refusal = async (f: Awaited<ReturnType<typeof open>>, at = AT) =>
+			await startRestore(f.deps(), { ...TARGET, at, actor: 'user:test', now: NOW })
+
+		test('an environment without a domain is refused', async () => {
 			const noDomain = await open({ domain: null })
 			await noDomain.deployFirst()
 			expect(await refusal(noDomain)).toEqual({ kind: 'refused', reason: 'not_served' })
-			await opened?.close()
+		})
 
+		test('a release without ops or a future time is refused', async () => {
 			const noOps = await open()
 			await noOps.deployFirst()
 			noOps.state.serves = false
@@ -1022,8 +1021,9 @@ for (const backend of backends) {
 			expect(await refusal(noOps, '2027-01-15T10:00:00.000Z')).toEqual({ kind: 'refused', reason: 'not_past' })
 			expect(await noOps.operations()).toEqual([])
 			expect(noOps.fake.sent).toEqual([])
-			await opened?.close()
+		})
 
+		test('an environment with nothing deployed is refused', async () => {
 			const nothing = await open()
 			expect(await refusal(nothing)).toEqual({ kind: 'refused', reason: 'nothing_deployed' })
 			expect(await nothing.operations()).toEqual([])

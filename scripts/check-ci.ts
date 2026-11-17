@@ -44,12 +44,19 @@ export const SHARD_PLACEHOLDER = '${{ matrix.shard }}'
 /** The test job's shard axis of the matrix; every shard runs against every PostgreSQL major. */
 export const TEST_SHARDS: readonly number[] = [1, 2, 3, 4]
 
-/** Run once per test job. `ci.yml`'s other test step, "Start SeaweedFS", is a backend this script starts. */
+/**
+ * Run once per test job. `ci.yml`'s other test steps are backends this script starts: "Start SeaweedFS", and the
+ * Postgres settings step, which this script passes to its Postgres as `-c` flags instead.
+ */
 export const TEST_STEPS: readonly TestStep[] = [
 	{ job: 'test', name: 'Run a shard of the main suite', run: `bun run test:unit --shard=${SHARD_PLACEHOLDER}/${TEST_SHARDS.length}` },
 	{ job: 'test', name: 'Run the isolated suites', run: 'bun run test:isolated', onlyInShard: 1 },
 ]
 export const S3_START_STEP_NAME = 'Start SeaweedFS'
+export const POSTGRES_SETTINGS_STEP_NAME = 'Run the test Postgres without durability'
+
+/** A test database needs no durability: a relation drop's WAL flush stalled DDL-heavy suites past their timeout. */
+export const POSTGRES_TEST_SETTINGS: Readonly<Record<string, string>> = { fsync: 'off', full_page_writes: 'off', synchronous_commit: 'off' }
 
 export const BUILD_STEPS: readonly CiStep[] = [
 	{ job: 'build', name: 'Build dashboard', run: 'bun run --filter @fabrika/dashboard build' },
@@ -163,6 +170,8 @@ const startPostgres = async (major: string): Promise<Backend> => {
 		'--env',
 		'POSTGRES_PASSWORD=postgres',
 		postgresImage(major),
+		'postgres',
+		...Object.entries(POSTGRES_TEST_SETTINGS).flatMap(([name, value]) => ['-c', `${name}=${value}`]),
 	])
 	// Over TCP: the entrypoint's temporary init server listens on the socket only, so it never answers this probe.
 	await waitUntil(`PostgreSQL ${major}`, ['docker', 'exec', name, 'pg_isready', '--host=127.0.0.1', '--username=postgres'])

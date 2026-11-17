@@ -85,6 +85,16 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      # A test database needs no durability. With it, a commit that drops a relation waits for a WAL flush, which during a
+      # checkpoint on a busy disk took seconds and timed out DDL-heavy Postgres suites. All three settings reload.
+      - name: Run the test Postgres without durability
+        run: |
+          docker exec ${{ job.services.postgres.id }} psql -U postgres -v ON_ERROR_STOP=1 \
+            -c 'alter system set fsync = off' \
+            -c 'alter system set full_page_writes = off' \
+            -c 'alter system set synchronous_commit = off' \
+            -c 'select pg_reload_conf()'
+
       - name: Start SeaweedFS
         run: |
           docker run --detach --name fabrika-test-s3 --publish 127.0.0.1:9000:9000 \
