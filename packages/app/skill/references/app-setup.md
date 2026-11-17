@@ -254,7 +254,7 @@ use.
 
 The platform's build runs the tests, writes the entrypoint, runs `fabrika-check` and the type check, then
 `fabrika db migrate`, `fabrika db codegen --verify` and `fabrika db test-isolation` on a throwaway database: a version
-is not built until every generated test passes. Its init command runs `fabrika db migrate` before the server starts. It writes every `FABRIKA_*` variable; never set one.
+does not deploy until every generated test passes. Its init command runs `fabrika db migrate` before the server starts. It writes every `FABRIKA_*` variable; never set one.
 
 ## The deploy surface (Cloudflare)
 
