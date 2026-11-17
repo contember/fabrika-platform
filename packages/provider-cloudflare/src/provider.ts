@@ -1,4 +1,12 @@
-import { CLOUDFLARE_APPLICATION_BINDING, CLOUDFLARE_APPLICATION_CLASS, CLOUDFLARE_FILES_BINDING, GENERATED_ENTRY_FILE } from '@fabrika/app/build'
+import {
+	CLOUDFLARE_APPLICATION_BINDING,
+	CLOUDFLARE_APPLICATION_CLASS,
+	CLOUDFLARE_FILES_BINDING,
+	contractChecks,
+	GENERATED_ENTRY_FILE,
+	ISOLATION_TESTS_CHECK,
+	SCHEMA_TYPES_CHECK,
+} from '@fabrika/app/build'
 import {
 	type AppEnvironment,
 	appEnvironmentId,
@@ -24,7 +32,7 @@ import { type DeployStepResult, type ProviderManagedEnvironment, runSteps, type 
 import { isPolicyOrigin } from '@fabrika/proxy-core/headers'
 import { contractProxyTable } from '@fabrika/proxy-core/manifest'
 import { createHash } from 'node:crypto'
-import { stat } from 'node:fs/promises'
+import { mkdir, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, relative, resolve } from 'node:path'
 import { DurableObject, type GeneratedConfig, R2Bucket, ServiceReference, Worker } from 'oblaka-iac'
 import { assertLiteralAssets } from './assets'
@@ -44,6 +52,7 @@ import { configSchema } from './config-schema'
 import {
 	assertCloudflareContract,
 	capsJobSegments,
+	checksSqliteSchema,
 	needsMinuteTick,
 	pinsGeneratedEntry,
 	runsInObject,
@@ -267,6 +276,60 @@ const buildEntry = async (build: EntryBuild, run: CloudflareDeployRun, cf: Cloud
 	const command = await applicationCli(build)
 	const result = await cf.runCommand({ command, args, cwd: build.cwd, ...entryBuildEnvironment(), signal: run.signal })
 	if (result.exitCode !== 0) throw commandError('fabrika app build', result)
+}
+
+/** What a failed check names: the check, as the step error says it. */
+type CheckSubject = 'tests' | 'tsc' | 'fabrika-check' | 'schema types are stale' | 'isolation tests'
+
+/** The last 2,000 characters of a failed check's output: a test run or a type check reports its failures last. */
+const checkError = (subject: CheckSubject, result: { exitCode: number; stdout: string; stderr: string }): Error => {
+	const detail = (result.stderr.trim() || result.stdout.trim() || '(no output)').slice(-2000)
+	return new Error(`check failed: ${subject} (exit ${result.exitCode}): ${detail}`)
+}
+
+/**
+ * The checks the Zerops build runs (`contractChecks`), then the schema checks its containers run before they start, in
+ * the application directory after the entry build, with what the entry build gets of the environment. The checker is the
+ * release Control approved the access with; without one the step fails rather than deploy unchecked code.
+ */
+const runChecks = async (build: EntryBuild, run: CloudflareDeployRun, cf: CloudflareCollaborators): Promise<void> => {
+	const checker = run.approved?.checker
+	if (checker === undefined) {
+		throw new Error(
+			'check: Control named no `@fabrika/check` release for this run, so the application cannot be checked; upgrade Control to the release of its runner, then deploy again',
+		)
+	}
+	const { tsconfig, checks } = contractChecks(build.cwd, checker)
+	const release = run.approved?.framework
+	const schema = release !== undefined && checksSqliteSchema(release)
+	const schemaChecks: readonly (readonly [CheckSubject, readonly string[]])[] = schema
+		? [['schema types are stale', SCHEMA_TYPES_CHECK], ['isolation tests', ISOLATION_TESTS_CHECK]]
+		: []
+	if (run.dryRun) {
+		const names = [...checks.map((check) => check.name), ...schemaChecks.map(([, args]) => `fabrika ${args.join(' ')}`)]
+		run.log(`  [dry-run] would run the checks in ${build.cwd}: ${names.join(', ')}`)
+		return
+	}
+	// Written afresh, so a committed file or link under that name is never what `tsc` reads or what is written through.
+	const tsconfigPath = resolve(build.cwd, tsconfig.write)
+	await mkdir(dirname(tsconfigPath), { recursive: true })
+	await rm(tsconfigPath, { force: true })
+	await writeFile(tsconfigPath, `${tsconfig.lines.join('\n')}\n`, { flag: 'wx' })
+	for (const check of checks) {
+		assertRunning(run.signal)
+		const result = await cf.runCommand({ command: 'sh', args: ['-c', check.command], cwd: build.cwd, ...entryBuildEnvironment(), signal: run.signal })
+		if (result.exitCode !== 0) throw checkError(check.name, result)
+	}
+	if (!schema) {
+		run.log(`  the CLI of framework ${release ?? '(unnamed)'} does not check a SQLite schema; the schema types and isolation tests are not checked`)
+		return
+	}
+	const command = await applicationCli(build)
+	for (const [subject, args] of schemaChecks) {
+		assertRunning(run.signal)
+		const result = await cf.runCommand({ command, args: [...args], cwd: build.cwd, ...entryBuildEnvironment(), signal: run.signal })
+		if (result.exitCode !== 0) throw checkError(subject, result)
+	}
 }
 
 /**
@@ -582,6 +645,11 @@ const runStep = async (spec: CloudflareStep, env: StepEnv): Promise<void> => {
 				if (result.exitCode !== 0) throw commandError(`build (\`${build}\`)`, result)
 			}
 			if (env.entryBuild !== null) await buildEntry(env.entryBuild, run, cf)
+			return
+		}
+		case 'check': {
+			if (env.entryBuild === null) throw new Error('check: the deploy checks only an application whose entry it regenerates')
+			await runChecks(env.entryBuild, run, cf)
 			return
 		}
 		case 'provision-resources': {

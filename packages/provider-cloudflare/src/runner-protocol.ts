@@ -68,6 +68,11 @@ export interface RunnerApprovedAccess {
 	 * older shape.
 	 */
 	readonly framework?: string
+	/**
+	 * The `@fabrika/check` release Control read the application with (`ProviderApprovedAccess.checker`), which the
+	 * deploy's `check` step runs. Absent from a Control older than the runner; that step then fails until Control is upgraded.
+	 */
+	readonly checker?: string
 }
 
 export const runnerApprovedAccessSchema = z.object({
@@ -75,6 +80,7 @@ export const runnerApprovedAccessSchema = z.object({
 	contract: z.unknown(),
 	contractDigest: z.string().refine(isDigest),
 	framework: z.string().regex(FRAMEWORK_RELEASE_PATTERN).optional(),
+	checker: z.string().regex(FRAMEWORK_RELEASE_PATTERN).optional(),
 })
 	.strict()
 	.transform((access, context): RunnerApprovedAccess => {
@@ -88,6 +94,7 @@ export const runnerApprovedAccessSchema = z.object({
 			contract: contract.data,
 			contractDigest: access.contractDigest,
 			...(access.framework === undefined ? {} : { framework: access.framework }),
+			...(access.checker === undefined ? {} : { checker: access.checker }),
 		}
 	})
 

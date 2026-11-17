@@ -41,7 +41,7 @@ this one import.
   serves a contract registers the schema itself, so it must declare one. A declared one must say `contract: true`
   (`assertContractSchema`). `createCloudflareProxyWorker` takes an endpoint table or an installation table, and refuses `gates`.
 - **The job carries Control's approved access** (`CloudflareRunnerJob.approvedAccess`: the contract and its
-  digest). Control refuses a non-dry deploy without it, the job schema refuses one too, and it parses the contract and
+  digest, the framework release the application pins and the `@fabrika/check` release Control read it with). Control refuses a non-dry deploy without it, the job schema refuses one too, and it parses the contract and
   checks its digest. The runner writes it to `<workspace>/<runId>.access.json` beside the checkout and names it in
   `FABRIKA_APPROVED_ACCESS_FILE`, set after every job-supplied name; the executor reads it (`readApprovedAccess`)
   before the config runs. Unset outside a runner (a local deploy).
@@ -110,7 +110,8 @@ this one import.
   `main` to resolve to `fabrika/entry.generated.ts` beside the config, and refuses `workflows`, `containers` and any
   Durable Object binding but `FABRIKA_APPLICATION`: the generated entry exports none of them. The plan then always has
   `build`: `pipeline.build` first, if any, then the application's own `fabrika app build --provider=cloudflare` in the
-  config's directory, so the entry and the inlined migrations come from the pinned commit, not the committed copies.
+  config's directory, so the entry and the inlined migrations come from the pinned commit, not the committed copies,
+  and `check` after it (below).
   The CLI is the first `node_modules/.bin/fabrika` from the config's directory up to the executor's working directory
   (where the runner installed), never above. It is checkout code whose failed output is logged, so it inherits nothing
   of the executor's environment or the run's values: it gets `PATH`, `HOME` and
@@ -241,10 +242,19 @@ this one import.
   what was staged for exactly those mounts, or with it beside an authored `assets`.
 - **This package is one of the four that relax two strict flags for oblaka** — see the root
   CLAUDE.md. Keep our own code strict; never work around oblaka with a cast.
-- **The plan is ordered step kinds**, not free-form work: `build` → `provision-resources` →
+- **The plan is ordered step kinds**, not free-form work: `build` → `check` → `provision-resources` →
   `migrate` → `deploy-worker` → `reconcile-schema` → `sync-secrets`. `build` is present when the config sets
-  `pipeline.build` or the release pins the generated entry. `runSteps` executes them in the
-  order supplied and never interprets a step's `kind`.
+  `pipeline.build` or the release pins the generated entry, and `check` exactly when the deploy regenerates the entry.
+  `runSteps` executes them in the order supplied and never interprets a step's `kind`.
+- **`check` refuses what the Zerops build refuses, before any resource is touched** (`runChecks`, `src/provider.ts`). In
+  the application directory it writes the platform tsconfig and runs `contractChecks` of `@fabrika/app/build` (the
+  tests, `tsc` at the platform TypeScript, `fabrika-check` at the checker release), then the application CLI's
+  `SCHEMA_TYPES_CHECK` and `ISOLATION_TESTS_CHECK` on its SQLite; every command gets only `PATH`, `HOME` and `TMPDIR`,
+  as the entry build does. The error names the check (`tests`, `tsc`, `fabrika-check`, `schema types are stale`,
+  `isolation tests`) and keeps the last 2,000 characters of its output. The checker release is
+  `approvedAccess.checker`: a Control older than the runner sends none, and the step then fails saying to upgrade
+  Control; it never skips the checker. A release before `checksSqliteSchema` (`0.9.0-dev.5`; every `cloudflare.<n>`)
+  has a CLI that checks no SQLite schema, so those two are left out and the log says so (ADR-0062).
 - **Only declared application secrets reach the Worker.** Control hands the deploy every secret stored for the
   environment; `sync-secrets` writes those `pipeline.secrets` names, and `deploy-worker` logs every other one by name
   (`undeclaredSecrets`), never its value, so a secret set in the console but not declared does not vanish silently.

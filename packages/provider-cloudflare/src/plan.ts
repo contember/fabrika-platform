@@ -1,7 +1,7 @@
 import { Worker } from 'oblaka-iac'
 import type { CloudflareAppConfig } from './authoring'
 
-export type CloudflareStepKind = 'build' | 'provision-resources' | 'migrate' | 'deploy-worker' | 'reconcile-schema' | 'sync-secrets'
+export type CloudflareStepKind = 'build' | 'check' | 'provision-resources' | 'migrate' | 'deploy-worker' | 'reconcile-schema' | 'sync-secrets'
 
 export interface CloudflareStep {
 	readonly id: string
@@ -48,7 +48,10 @@ export const findMigratableDatabases = (worker: Worker): MigratableDatabase[] =>
 
 const ENTRY_BUILD = '`fabrika app build --provider=cloudflare`'
 
-/** `regeneratesEntry`: the release pins the generated entry, so the build step always runs, after `pipeline.build`. */
+/**
+ * `regeneratesEntry`: the release pins the generated entry, so the build step always runs, after `pipeline.build`, and the
+ * check step after it, before any resource is touched: its `tsc` reads the regenerated entry.
+ */
 export const buildPlan = (config: CloudflareAppConfig, worker: Worker, regeneratesEntry: boolean): readonly CloudflareStep[] => {
 	const steps: CloudflareStep[] = []
 
@@ -59,6 +62,14 @@ export const buildPlan = (config: CloudflareAppConfig, worker: Worker, regenerat
 		steps.push({ id: 'build', kind: 'build', description: `Build the Worker (\`${build}\`)` })
 	} else if (regeneratesEntry) {
 		steps.push({ id: 'build', kind: 'build', description: `Regenerate the Worker's entry (${ENTRY_BUILD})` })
+	}
+
+	if (regeneratesEntry) {
+		steps.push({
+			id: 'check',
+			kind: 'check',
+			description: 'Check the application: its tests, `tsc`, `fabrika-check`, the schema types and the isolation tests',
+		})
 	}
 
 	steps.push({ id: 'provision-resources', kind: 'provision-resources', description: 'Provision Cloudflare resources via oblaka' })
