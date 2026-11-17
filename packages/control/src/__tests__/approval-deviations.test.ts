@@ -32,6 +32,8 @@ interface World {
 	readonly logs: Map<string, string>
 	/** The commit the next deploy reads. */
 	files: Record<string, string>
+	/** The provider's `applicationDialect`; absent means Postgres. */
+	dialect?: 'postgres' | 'sqlite'
 }
 
 const migrationFiles = (...migrations: readonly { name: string; sql: string }[]): Record<string, string> =>
@@ -44,13 +46,14 @@ const commitOf = (options: KitOptions = {}, migrations = [NOTES_MIGRATION]): Rec
 
 const ENVELOPE = JSON.stringify({ provider: 'harbor', version: 1, payload: {} })
 
-function provider(): ControlProvider {
+function provider(dialect?: 'postgres' | 'sqlite'): ControlProvider {
 	return {
 		id: 'harbor',
 		normalizeRegistration: (input) => input,
 		applicationRoot: () => '',
 		resolveSource: () => Promise.resolve({ commitSha: COMMIT }),
 		deploy: () => Promise.resolve({ state: 'succeeded' }),
+		...(dialect === undefined ? {} : { applicationDialect: dialect }),
 	}
 }
 
@@ -63,7 +66,7 @@ function deps(w: World): RunDeps {
 	}
 	return {
 		repositories: w.db,
-		provider: provider(),
+		provider: provider(w.dialect),
 		secrets: new VaultSecretResolver({}),
 		lock: makeFakeLock(w.db),
 		queue: { send: () => Promise.resolve() },
@@ -302,6 +305,30 @@ describe('database code in the reviewed snapshot', () => {
 		// An edit of the settled file is classified again, as the runner refuses it again.
 		const edited = commitOf({}, [NOTES_MIGRATION, { ...legacy, sql: `${legacy.sql}\n` }])
 		await expect(snapshotOf(edited, settled)).rejects.toEqual(new SnapshotRefused('migrations-refused', 1))
+	})
+})
+
+describe("SQLite's table options in the provider's dialect", () => {
+	const STRICT_MIGRATION = {
+		name: '20261012100000_tags.sql',
+		sql: 'CREATE TABLE tags (id TEXT PRIMARY KEY, note_id TEXT NOT NULL) STRICT, WITHOUT ROWID;',
+	}
+
+	test('a provider whose applications run on SQLite publishes a STRICT table; on Postgres the run fails as before', async () => {
+		const sqlite = await world()
+		sqlite.dialect = 'sqlite'
+		sqlite.files = commitOf({}, [NOTES_MIGRATION, STRICT_MIGRATION])
+		expect((await deploy(sqlite, 'stage')).status).toBe('succeeded')
+		expect((await environment(sqlite, 'stage')).published_run_id).not.toBeNull()
+
+		for (const dialect of [undefined, 'postgres'] as const) {
+			const postgres = await world()
+			if (dialect !== undefined) postgres.dialect = dialect
+			postgres.files = commitOf({}, [NOTES_MIGRATION, STRICT_MIGRATION])
+			const refused = await deploy(postgres, 'stage')
+			expect({ dialect, status: refused.status }).toEqual({ dialect, status: 'failed' })
+			expect(postgres.logs.get(`runs/${refused.runId}/logs.ndjson`) ?? '').toContain('access: snapshot refused (migrations-refused, 1 problem)')
+		}
 	})
 })
 

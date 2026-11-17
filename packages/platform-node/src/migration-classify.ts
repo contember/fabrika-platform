@@ -109,8 +109,13 @@ export interface MigrationClassification {
 	readonly changes: readonly ManifestChange[]
 }
 
+/** The database an application's migrations run on: Postgres, or SQLite in its Durable Object on Cloudflare (ADR-0065). */
+export type MigrationDialect = 'postgres' | 'sqlite'
+
 export interface ClassifyMigrationOptions {
 	readonly file: string
+	/** Postgres when absent. SQLite only adds the table options SQLite has (`STRICT`, `WITHOUT ROWID`). */
+	readonly dialect?: MigrationDialect
 	/** The functions and procedures the whole migration set declares in the schema: a body or an expression may call them. */
 	readonly functions?: ReadonlySet<string>
 	/** The framework's own bundle, which alone may name the framework's `fabrika_*` tables. */
@@ -123,6 +128,8 @@ export interface ClassifyMigrationOptions {
 
 /** What the whole migration set is classified against besides its schema. */
 export interface ClassifyMigrationsOptions {
+	/** Postgres when absent. */
+	readonly dialect?: MigrationDialect
 	/** The application's access tables, lowercased (`accessTables` of `@fabrika/db/tables`): no stored code writes one. */
 	readonly accessTables?: ReadonlySet<string>
 }
@@ -221,6 +228,7 @@ const RULE_ACTIONS: ReadonlySet<string> = new Set(['NOTHING', 'SELECT', 'INSERT'
 
 interface Context {
 	readonly schema: string
+	readonly dialect: MigrationDialect
 	readonly functions: ReadonlySet<string>
 	readonly framework: boolean
 	readonly accessTables: ReadonlySet<string>
@@ -626,14 +634,26 @@ function classifyElement(element: readonly SqlToken[], table: string, context: C
 	checkExpression(element.slice(1), `${table}.${column}`, context, out)
 }
 
-/** `CREATE TABLE [IF NOT EXISTS] <name> (<columns and constraints>)` and nothing after it; `LIKE` without `INCLUDING`. */
+/** Whether `options` is SQLite's table-options list: `STRICT` and `WITHOUT ROWID`, separated by commas. */
+function isSqliteTableOptions(options: readonly SqlToken[]): boolean {
+	return splitAtCommas(options).every((option) =>
+		(option.length === 1 && upperWord(option[0]) === 'STRICT')
+		|| (option.length === 2 && upperWord(option[0]) === 'WITHOUT' && upperWord(option[1]) === 'ROWID')
+	)
+}
+
+/**
+ * `CREATE TABLE [IF NOT EXISTS] <name> (<columns and constraints>)` and nothing after it, but SQLite's table options on
+ * SQLite; `LIKE` without `INCLUDING`.
+ */
 function createTable(tokens: readonly SqlToken[], context: Context, out: Collected): void {
 	const line = tokens[0]?.line ?? 1
 	const nameAt = skipWords(tokens, 2, 'IF', 'NOT', 'EXISTS')
 	const named = afterName(tokens, nameAt)
 	const close = named === undefined || !isPunct(tokens[named], '(') ? undefined : closingParenthesis(tokens, named)
 	if (named === undefined || close === undefined) throw new Refused('CREATE TABLE other than a column list', line)
-	if (close !== tokens.length - 1) {
+	const sqliteOptions = context.dialect === 'sqlite' && isSqliteTableOptions(tokens.slice(close + 1))
+	if (close !== tokens.length - 1 && !sqliteOptions) {
 		const after = tokens[close + 1]
 		throw new Refused(`CREATE TABLE … ${upperWord(after) ?? statementKind(tokens.slice(close + 1))}`, line)
 	}
@@ -1041,6 +1061,7 @@ function classifyStatement(tokens: readonly SqlToken[], context: Context, out: C
 export function classifyMigration(sql: string, schema: string, options: ClassifyMigrationOptions): MigrationClassification {
 	const context: Context = {
 		schema,
+		dialect: options.dialect ?? 'postgres',
 		functions: options.functions ?? new Set(),
 		framework: options.framework === true,
 		accessTables: options.accessTables ?? new Set(),
@@ -1195,7 +1216,13 @@ export function classifyMigrations(
 		? {}
 		: { accessTables: options.accessTables, accessViews: accessViews(files, schema, options.accessTables) }
 	const classified = files.map((file) =>
-		classifyMigration(file.sql, schema, { file: file.name, functions, framework: file.framework === true, ...access })
+		classifyMigration(file.sql, schema, {
+			file: file.name,
+			functions,
+			framework: file.framework === true,
+			...(options.dialect === undefined ? {} : { dialect: options.dialect }),
+			...access,
+		})
 	)
 	const withOverloads = refuseOverloads(classified)
 	return { files: withOverloads, objects: migrationManifest(withOverloads) }

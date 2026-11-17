@@ -1268,7 +1268,9 @@ describe('bunfig.toml is read as Bun reads it', () => {
 describe('migration-refused: the access tables', () => {
 	const MIGRATION = 'db/migrations/20261024120000_touch.sql'
 	const at = (sql: string, access: readonly string[]) =>
-		checkMigrationClassification(new Map([[MIGRATION, sql]]), 'notes', access).map((finding) => `${finding.file}:${finding.line} ${finding.message}`)
+		checkMigrationClassification(new Map([[MIGRATION, sql]]), 'notes', access, 'postgres').map((finding) =>
+			`${finding.file}:${finding.line} ${finding.message}`
+		)
 
 	test('a function body that writes one is refused at its line, naming the table; another table passes', () => {
 		const sql =

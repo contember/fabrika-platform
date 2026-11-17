@@ -3,6 +3,7 @@
 
 import { incompatibleMountChanges } from '@fabrika/app/contract'
 import { type AccessChangeDto, CHANGE_SUBJECT_KINDS, REVIEW_REASONS, SURFACE_NOTE_TOPICS, SURFACE_REACHES } from '@fabrika/control-contract'
+import type { MigrationDialect } from '@fabrika/platform-node/sql'
 import type { ProviderApprovedAccess } from '@fabrika/provider-contract'
 import { z } from 'zod'
 import { consumerEdgeProblems, ownerEdgeProblems } from '../connectors'
@@ -131,6 +132,8 @@ export interface PublicationInput {
 	readonly app: { readonly id: string; readonly repo_url: string }
 	/** The repository-relative application root the provider executes from (`ControlProvider.applicationRoot`); null is invalid. */
 	readonly root: string | null
+	/** The dialect the application's migrations are classified in (`ControlProvider.applicationDialect`). */
+	readonly dialect: MigrationDialect
 	readonly commitSha: string
 	readonly sourceBinding?: { readonly connectionId: string; readonly installationId: number }
 	/**
@@ -232,7 +235,7 @@ async function readCandidate(
 			signal: invocation.signal,
 		})
 		const settled = approvedSnapshot(await requireAppEnv(deps.repositories, input.run)).snapshot.migrations
-		snapshot = await readAccessSnapshot(commit, root, input.app.id, settled)
+		snapshot = await readAccessSnapshot(commit, root, input.app.id, settled, input.dialect)
 	} catch (error) {
 		invocation.signal.throwIfAborted()
 		if (error instanceof ContractMissing) input.log(`access: ${error.message}`)

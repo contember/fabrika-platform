@@ -834,3 +834,62 @@ describe('access tables: only the platform writes them', () => {
 		expect(classifyAccess(sql).map((refusal) => refusal.reason)).toEqual(['CREATE TRIGGER without EXECUTE FUNCTION', 'END'])
 	})
 })
+
+describe("SQLite's table options", () => {
+	const OPTIONS = ['STRICT', 'WITHOUT ROWID', 'STRICT, WITHOUT ROWID', 'without rowid,strict'] as const
+	const table = (options: string) => `CREATE TABLE IF NOT EXISTS deals (id TEXT PRIMARY KEY, amount INTEGER NOT NULL CHECK (amount >= 0)) ${options}`
+	const reasons = (sql: string, dialect?: 'postgres' | 'sqlite'): string[] =>
+		classifyMigrations([{ name: FILE, sql }], SCHEMA, dialect === undefined ? {} : { dialect }).files.flatMap((file) =>
+			file.refused.map((refused) => refused.reason)
+		)
+
+	test('a SQLite application may end CREATE TABLE with them, as SQLite accepts them', () => {
+		for (const options of OPTIONS) {
+			const db = new Database(':memory:')
+			db.run(table(options))
+			db.close()
+			expect({ options, refused: reasons(table(options), 'sqlite') }).toEqual({ options, refused: [] })
+		}
+		const sql = ['CREATE TABLE a (id TEXT PRIMARY KEY) STRICT;', 'CREATE TABLE b (id TEXT PRIMARY KEY, a_id TEXT REFERENCES a (id)) STRICT;'].join('\n')
+		expect(classifyMigrations([{ name: FILE, sql }], SCHEMA, { dialect: 'sqlite' }).files[0]).toMatchObject({ refused: [], deviations: [] })
+	})
+
+	test('the columns of a SQLite table are classified as before', () => {
+		expect(reasons('CREATE TABLE deals (id TEXT CHECK (evil(id))) STRICT', 'sqlite')).toEqual(['a call of evil'])
+		expect(
+			classifyMigrations([{ name: FILE, sql: 'CREATE TABLE tags (id TEXT DEFAULT (hex(randomblob(16)))) STRICT' }], SCHEMA, { dialect: 'sqlite' })
+				.files[0]?.deviations,
+		)
+			.toMatchObject([{ kind: 'expression', object: 'tags.id calls hex' }, { kind: 'expression', object: 'tags.id calls randomblob' }])
+	})
+
+	test('anything else after the column list is still refused on SQLite', () => {
+		for (
+			const [options, reason] of [
+				['STRICT STRICT', 'CREATE TABLE … STRICT'],
+				['STRICT,', 'CREATE TABLE … STRICT'],
+				[', STRICT', 'CREATE TABLE … ,'],
+				['WITHOUT OIDS', 'CREATE TABLE … WITHOUT'],
+				['WITHOUT ROWID TABLESPACE fast', 'CREATE TABLE … WITHOUT'],
+				['STRICT, TABLESPACE fast', 'CREATE TABLE … STRICT'],
+				['TABLESPACE fast', 'CREATE TABLE … TABLESPACE'],
+				['INHERITS (other)', 'CREATE TABLE … INHERITS'],
+			] as const
+		) {
+			expect({ options, refused: reasons(table(options), 'sqlite') }).toEqual({ options, refused: [reason] })
+		}
+	})
+
+	test('a Postgres application is classified as before: the options are refused', () => {
+		for (const options of OPTIONS) {
+			const reason = `CREATE TABLE … ${options.split(/[ ,]/)[0]?.toUpperCase() ?? ''}`
+			expect({ options, refused: reasons(table(options)) }).toEqual({ options, refused: [reason] })
+			expect({ options, refused: reasons(table(options), 'postgres') }).toEqual({ options, refused: [reason] })
+		}
+		const paved =
+			'CREATE TABLE deals (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), n bigint GENERATED ALWAYS AS IDENTITY);\nCREATE INDEX deals_n ON deals (n);'
+		expect(classifyMigrations([{ name: FILE, sql: paved }], SCHEMA, { dialect: 'postgres' })).toEqual(
+			classifyMigrations([{ name: FILE, sql: paved }], SCHEMA),
+		)
+	})
+})

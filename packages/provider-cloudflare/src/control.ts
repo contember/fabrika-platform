@@ -387,6 +387,7 @@ export const createCloudflareControlProvider = (options: CloudflareControlOption
 	dataOperations: (access) => servesOps(applicationRelease(access)) && servesDataOperations(applicationRelease(access)),
 	normalizeRegistration,
 	applicationRoot: (source) => checkoutRelativeDirectory(source.workerDir),
+	applicationDialect: 'sqlite',
 	source: { binding: 'connection' },
 	resolveSource: async (input) => {
 		input.signal.throwIfAborted()
