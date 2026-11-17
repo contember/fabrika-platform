@@ -176,15 +176,18 @@ the approver reads.
 
 - **The artifact carries `access` on a table only when declared**, so an application without it keeps its digest.
   - An older data layer refuses the unknown field at parse and does not boot, so it fails closed.
-  - A reader that ignores the field would reach less, not more, so ADR-0073 section 5's publish refusal does not count
-    it.
+  - A reader that ignores the field would reach less, not more. ADR-0073 section 5's publish refusal still counts it,
+    at the floor of `relationWhen`, so an application pinned to an older release is refused before anything publishes
+    rather than failing its own build ([ADR-0062](0062-a-platform-release-serves-older-framework-releases.md)).
   - The token, the manifest and IAM do not change: the term reads the `~rel` and `~relin` entries IAM already signs.
 - **The approval diff shows each `access` entry** as a line naming the table, the relation, the view and its bindings.
   An added or changed entry widens, with closer review. A removed one narrows.
 - **The view's SQL is the migration's database code**, which the diff already shows with closer review. Beside it, the
-  diff names the relations the view decides, so the approver knows they are reading access.
-- **`fabrika-check` reads `access` statically.** It checks that the named view is created as a view in the migrations,
-  that it has the bound columns, and that the table's key is unique on its own. It cannot check what the SQL selects.
+  diff names the relations the view decides, so the approver knows they are reading access. An entry that newly names
+  a view whose migration has already run shows that view's SQL again: it was approved when it decided nothing.
+- **Static checks.** The policy parse, which `fabrika-check` runs against the generated column list, checks that the
+  named view is a view, has the bound columns and has no policy. `fabrika-check`'s `access-view-key` checks in the
+  migrations that the table's key is unique on its own. Neither can check what the SQL selects.
 
 ## Consequences
 
