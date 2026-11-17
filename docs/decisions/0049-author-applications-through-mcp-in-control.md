@@ -66,8 +66,8 @@ workspace its own running application, where one pinned service could show only 
    none may name that namespace, so a workspace reaches an environment only through `deploy_stage`, which
    needs `deploy.trigger`.
 5. **An operator marks an app environment as an authoring target.** A user may author it when they
-   also hold `source.workspace.*` grants at its coordinates. One stage environment per app; deploying a
-   workspace creates an ordinary run for the exact head SHA in that environment.
+   also hold `source.workspace.*` grants at its coordinates. One stage environment per app, never a protected one
+   (rule 7); deploying a workspace creates an ordinary run for the exact head SHA in that environment.
 6. **Repository configuration is protected; the contract files are classified.** Control refuses edits
    to the provider's deploy files at any depth (`ControlProvider.authoring.protectedFiles`: `zerops.yaml` /
    `zerops.yml` on Zerops; a provider without `authoring` has no authoring target), `fabrika.*` files and everything under `.github/`; the
@@ -78,8 +78,13 @@ workspace its own running application, where one pinned service could show only 
    not lift the protection of a file that is protected otherwise.
 7. **Production is not an MCP operation.** The tool opens a pull request. A human reviews and merges
    in GitHub, and the existing Delivery trigger deploys the merged commit. When that commit widens
-   access on a protected environment, the run waits for approval. `get_deployment` reports a waiting
-   run as `awaiting_approval` with the approval link.
+   access on a protected environment, the run waits for approval. Control enforces it in its use cases
+   (authorization, not the proxy's enforcement decision): only a person, a user principal without OAuth or
+   link claims, starts a manual run of a protected environment, so `deploy_stage` and any other agent or key
+   is refused there with a 403, and a workspace ref is refused there whoever asks. `apps.environments.put`
+   refuses `authoring: true` on a protected environment (`prod` starts protected), and
+   `apps.environments.protect` refuses an authoring target, so `deploy_stage` never meets a protected
+   environment.
 8. **No MCP token approves.** An OAuth or MCP token is refused by `approvals.complete`, whatever its
    scope (ADR-0050). Every run records its actor, including runs created through MCP.
 9. **Zerops only** for this version.
@@ -181,8 +186,9 @@ workspace its own running application, where one pinned service could show only 
     - Nothing from a sandbox is promoted. A commit reaches stage and production only by its own build.
 
 Built (work unit B6): a workspace may edit `fabrika.contract.ts`, and every other `fabrika.*` file stays
-protected; a change that needs closer review it brings to a protected environment parks the run, and `get_deployment` reports it
-with the approval link.
+protected. Rule 7 is built: a new workspace run never reaches a protected environment. `get_deployment` still reports
+a parked workspace run with the approval link, which only a run parked on a protected authoring target before rule 7
+was built can be; `deploy_stage` to such a target is refused until an operator clears one of the two flags.
 
 ## Consequences
 
@@ -218,9 +224,9 @@ with the approval link.
   ([ADR-0062](0062-a-platform-release-serves-older-framework-releases.md)).
 - The application owns its data and data authorization; the platform does not isolate generated code
   from the app's database.
-- An agent can add endpoints, roles and tables without an operator. A stage environment is not
-  protected by default, so the change applies there at once; on production a change that needs closer
-  review (ADR-0050) waits for a human.
+- An agent can add endpoints, roles and tables without an operator. An authoring target is never
+  protected, so the change applies there at once; on production a change that needs closer review (ADR-0050) waits
+  for a human, and only a person's merge or manual deploy brings it there.
 - Every refusal of the checker and the build must be one short, actionable line in the build log,
   because that log is the agent's only feedback. Control's snapshot reader is the exception: it logs
   before the run's secrets are known, so it gives a fixed code and a count, and `fabrika-check` names the

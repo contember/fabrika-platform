@@ -437,9 +437,21 @@ environment starts from it, else from the default. Deleting a protected environm
 with one, takes the same human with `access.approve`.
 
 Unprotected environments do not wait. Every environment with `protected = true` requires approval
-for a change that needs closer review, whatever its name or role. Staging and MCP authoring targets are unprotected by
-default, so a change applies there at once. When the same commit is deployed to a protected
-environment, Control classifies it again against that environment's active snapshot.
+for a change that needs closer review, whatever its name or role. Staging is unprotected by default, so a change applies
+there at once. When the same commit is deployed to a protected environment, Control classifies it again against that
+environment's active snapshot.
+
+The flag also limits who deploys. Only a person starts a manual run of a protected environment: a user principal
+without OAuth or link claims, from the console or their own CLI login (`isPerson`, `src/approval/human.ts`). A service
+principal, the builder key ([ADR-0042](0042-connect-local-builders-through-human-consent.md)), an IAM service key and
+an MCP agent are refused with a 403 that names the cause; Control cannot tell the builder key from any other service
+key, so all of them are refused. A workspace ref (`refs/heads/fabrika/…`) is refused there whoever asks: a workspace
+reaches a protected environment only after a merge into its trigger ref
+([ADR-0049](0049-author-applications-through-mcp-in-control.md) rule 7). A push or a poll is unaffected: a person
+pushed. These are authorization checks in Control's use cases, after `deploy.trigger`, so a caller without it still
+gets the 404 of an absent environment. For the same reason an MCP authoring target is never protected:
+`apps.environments.put` refuses `authoring: true` on a protected environment, and `apps.environments.protect`
+refuses an authoring target (409).
 
 Staging must not hold production data. This is a rule for operators; the platform does not enforce it.
 
