@@ -14,7 +14,7 @@
 // reachable ONLY via the binding — but the binding is not a credential, so every method verifies
 // `FABRIKA_RUNNER_KEY` first (see runner-key.ts).
 
-import { type CloudflareRunnerJob, cloudflareRunnerJobSchema, type RunnerStatus } from '@fabrika/provider-cloudflare/runner'
+import { type CloudflareRunnerJob, cloudflareRunnerJobSchema, runnerJobRefusal, type RunnerStatus } from '@fabrika/provider-cloudflare/runner'
 import { WorkerEntrypoint } from 'cloudflare:workers'
 import { type ContainerLike, type RelayResult, relayRun } from './relay'
 import { readTerminalStatus } from './run-outcome'
@@ -44,7 +44,7 @@ export class VozkaRunner extends WorkerEntrypoint<Env> {
 	async startRun(input: CloudflareRunnerJob): Promise<RelayResult> {
 		const parsed = cloudflareRunnerJobSchema.safeParse(input)
 		if (!parsed.success) {
-			throw new Error('runner: invalid job')
+			throw new Error(`runner: ${runnerJobRefusal(parsed.error)}`)
 		}
 		const job = parsed.data
 		// The key is OPTIONAL to the validator, because the relay strips it before the container hop.

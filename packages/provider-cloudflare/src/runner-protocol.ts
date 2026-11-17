@@ -3,6 +3,9 @@ import { type ContractArtifact, isDigest, parseApplicationObjects } from '@fabri
 import { FRAMEWORK_RELEASE_PATTERN } from '@fabrika/provider-contract'
 import { z } from 'zod'
 
+/** How the runner, and the check step after the tests, install a checkout: the dependencies its `bun.lock` pins. */
+export const CHECKOUT_INSTALL_ARGS: readonly string[] = ['install', '--frozen-lockfile']
+
 export const runnerStateSchema = z.enum(['pending', 'cloning', 'installing', 'deploying', 'succeeded', 'failed'])
 
 /** The lifecycle a run moves through inside the transport container. */
@@ -91,6 +94,15 @@ export const runnerApprovedAccessSchema = z.object({
 			...(access.checker === undefined ? {} : { checker: access.checker }),
 		}
 	})
+
+/**
+ * Why a runner refuses a job, in one line. A job with a field this runner's schema does not know comes from a Control of a
+ * newer release, so the line says the two differ; it names no field, because the job is parsed before its key is checked.
+ */
+export const runnerJobRefusal = (error: z.ZodError): string =>
+	error.issues.some((issue) => issue.code === z.ZodIssueCode.unrecognized_keys)
+		? "the job carries a field this runner does not know: Control runs a newer release than the runner; deploy the runner of Control's release"
+		: 'invalid job'
 
 /** Where the runner leaves the job's `RunnerApprovedAccess` as JSON for the executor — beside the checkout, never inside it. */
 export const APPROVED_ACCESS_FILE_ENV = 'FABRIKA_APPROVED_ACCESS_FILE'
