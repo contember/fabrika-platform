@@ -36,6 +36,8 @@ import { checkJsonStrings } from './rules/json'
 import { checkLiteralGraph } from './rules/literal'
 import { checkMigrationHistory, type MigrationBase } from './rules/migration-history'
 import {
+	type AccessKey,
+	checkAccessViewKeys,
 	checkConflictIndexes,
 	checkCurrentTimestampDefaults,
 	checkFileColumnMigrations,
@@ -54,6 +56,15 @@ import { checkGeneratedTest, checkMockModule, checkTestNode, checkTestSuiteConfi
 import { checkComments, checkTypeNode } from './rules/types'
 import { moduleSlice, sliceFinding } from './slice'
 import { BUNFIG_FILE, checkTrustedResolution } from './trust'
+
+/** Every table that names an access view, with its key (ADR-0076). */
+const accessKeys = (policies: TablePolicies): AccessKey[] =>
+	Object.entries(policies).flatMap(([table, policy]) => {
+		const views = Object.values(policy.access ?? {}).map((access) => access.view)
+		const scope = policy.scope
+		const key = scope.mode === 'dimension' || scope.mode === 'child' || scope.mode === 'app' ? scope.key : undefined
+		return views.length === 0 || key === undefined ? [] : [{ table, key, views: [...new Set(views)].sort() }]
+	})
 
 /** Every file column the table policies declare, with its kind. */
 const fileColumns = (policies: TablePolicies): FileColumn[] =>
@@ -353,6 +364,7 @@ export const checkApplication = async (input: CheckInput): Promise<Finding[]> =>
 		const policies = tablePolicies(declaredTables)
 		findings.push(...checkFileColumnMigrations(tree.files, fileColumns(policies)))
 		findings.push(...checkConflictIndexes(tree.files, new Set(Object.keys(policies)), dependent.inserts))
+		findings.push(...checkAccessViewKeys(tree.files, accessKeys(policies)))
 	}
 	const bunfig = tree.files.get(BUNFIG_FILE)
 	if (bunfig !== undefined) findings.push(...checkTestSuiteConfig(bunfig))

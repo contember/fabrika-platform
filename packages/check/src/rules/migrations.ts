@@ -357,6 +357,56 @@ export const checkConflictIndexes = (
 	return checked.filter((insert) => !present.has(`${insert.table}(${keyOf(insert.columns)})`)).map((insert) => insert.finding)
 }
 
+/** A table that names an access view under `key` (ADR-0076). */
+export interface AccessKey {
+	readonly table: string
+	readonly key: string
+	readonly views: readonly string[]
+}
+
+/**
+ * A table that names an access view needs its key unique on its own, or the view's `row` names several rows at once
+ * (ADR-0076 section 1). Only a table a migration creates is checked: a view as the target keeps its key unique by its SQL.
+ */
+export const checkAccessViewKeys = (files: ReadonlyMap<string, string>, keys: readonly AccessKey[]): Finding[] => {
+	if (keys.length === 0) {
+		return []
+	}
+	const unique: UniqueIndex[] = []
+	const created = new Map<string, { readonly path: string; readonly line: number }>()
+	const migrations = [...files.entries()]
+		.filter(([path]) => path.startsWith(MIGRATIONS_DIR) && path.endsWith('.sql'))
+		.sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+	for (const [path, sql] of migrations) {
+		for (const statement of topLevelStatements(sql)) {
+			readUniqueIndexes(statement.tokens, unique)
+			const table = createdTable(statement.tokens)
+			if (table !== undefined && !created.has(table)) created.set(table, { path, line: statement.line })
+		}
+	}
+	const findings: Finding[] = []
+	for (const { table, key, views } of keys) {
+		const at = created.get(table)
+		if (at === undefined || unique.some((index) => index.table === table && index.columns.length === 1 && index.columns[0] === key)) continue
+		findings.push({
+			file: at.path,
+			line: at.line,
+			column: 1,
+			severity: 'refusal',
+			rule: 'access-view-key',
+			message: `${table} names the access view ${views.join(', ')}, and no migration makes its key ${key} unique on its own`,
+			allowed: `${key} as the primary key of ${table}, or create unique index ${table}_${key} on ${table} (${key})`,
+		})
+	}
+	return findings
+}
+
+/** The table a `CREATE TABLE` statement creates. */
+function createdTable(tokens: readonly SqlToken[]): string | undefined {
+	if (upperWord(tokens[0]) !== 'CREATE' || upperWord(tokens[1]) !== 'TABLE') return undefined
+	return objectNameAt(tokens, skipWords(tokens, 2, 'IF', 'NOT', 'EXISTS'))?.name
+}
+
 interface UniqueIndex {
 	readonly name: string | undefined
 	readonly table: string

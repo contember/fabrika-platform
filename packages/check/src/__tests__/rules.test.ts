@@ -15,6 +15,7 @@ import {
 	CLEAN_SCHEMA_GENERATED,
 	CLEAN_SCHEMAS,
 	CLEAN_TABLES,
+	CLEAN_VOCABULARY,
 	locations,
 } from './helpers'
 
@@ -36,6 +37,29 @@ const FILE_COLUMN_APPLICATION: Readonly<Record<string, string>> = {
 	...FILE_COLUMN_SOURCES,
 	...Object.fromEntries([...(await generatedTests(fileColumnInputs.policies, fileColumnInputs.artifact))].map(([file, test]) => [file, test.text])),
 }
+/** The clean application whose notes a relation reaches through an access view (ADR-0076). */
+const ACCESS_VIEW_SOURCES: Readonly<Record<string, string>> = {
+	...CLEAN_APPLICATION,
+	'src/vocabulary.ts': CLEAN_VOCABULARY.replace("\tactions: {", "\trelations: { shared: { dimension: 'note' } },\n\tactions: {"),
+	'src/db/tables.ts': CLEAN_TABLES.replace(
+		"\t\tinsert: ['title'],\n",
+		"\t\tinsert: ['title'],\n\t\taccess: { shared: { view: 'shared_notes', row: 'note_id', principal: 'principal_id' } },\n",
+	),
+	'src/db/schema.generated.ts': CLEAN_SCHEMA_GENERATED.replace(
+		'title: string }\n',
+		'title: string }\n\tshared_notes: { note_id: string; principal_id: string }\n',
+	).replace(
+		"foreignKeys: [] } }",
+		"foreignKeys: [] }, shared_notes: { columns: ['note_id', 'principal_id'], foreignKeys: [], view: true } }",
+	),
+}
+const accessViewInputs = scaffoldInputs(new Map(Object.entries(ACCESS_VIEW_SOURCES)))
+const ACCESS_VIEW_APPLICATION: Readonly<Record<string, string>> = {
+	...ACCESS_VIEW_SOURCES,
+	...Object.fromEntries([...(await generatedTests(accessViewInputs.policies, accessViewInputs.artifact))].map(([file, test]) => [file, test.text])),
+}
+const SHARED_NOTES_VIEW = 'CREATE VIEW shared_notes AS SELECT id AS note_id, workspace_id AS principal_id FROM notes;\n'
+
 /** A `fabrika.config.ts` that `@fabrika/provider-cloudflare`'s `defineApp` authors: the application runs on SQLite. */
 const CLOUDFLARE_CONFIG =
 	"import { defineApp } from '@fabrika/provider-cloudflare'\n\nexport default defineApp({ id: 'notes', resources: () => [] })\n"
@@ -636,6 +660,18 @@ const cases: readonly RuleCase[] = [
 		good: {
 			...FILE_COLUMN_APPLICATION,
 			'db/migrations/20261001000000_notes.sql': `${NOTES_TABLE} REFERENCES fabrika_files (id));\nCREATE INDEX notes_picture ON notes (picture);\n`,
+		},
+	},
+	{
+		rule: 'access-view-key',
+		bad: {
+			...ACCESS_VIEW_APPLICATION,
+			'db/migrations/20261001000000_notes.sql': `CREATE TABLE notes (id TEXT NOT NULL, workspace_id TEXT NOT NULL, title TEXT NOT NULL);\n${SHARED_NOTES_VIEW}`,
+		},
+		expected: ['db/migrations/20261001000000_notes.sql:1:1'],
+		good: {
+			...ACCESS_VIEW_APPLICATION,
+			'db/migrations/20261001000000_notes.sql': `CREATE TABLE notes (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, title TEXT NOT NULL);\n${SHARED_NOTES_VIEW}`,
 		},
 	},
 	{
