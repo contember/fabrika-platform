@@ -227,7 +227,7 @@ async function joinedSourceWitness(trigger: RunTrigger, selectedObjectUnavailabl
 							return bunSpawner({ ...spec, env }, handlers)
 						}
 						if (spec.command !== 'bun' && spec.command !== 'fabrika-cloudflare-executor') throw new Error('unexpected repository child')
-						if (spec.command === 'bun' && spec.args.join(' ') !== 'install') throw new Error('unexpected Bun child')
+						if (spec.command === 'bun' && spec.args.join(' ') !== 'install --frozen-lockfile') throw new Error('unexpected Bun child')
 						const valuesFile = spec.env?.[DEPLOY_VALUES_FILE_ENV]
 						checkouts.push({
 							command: spec.command,
