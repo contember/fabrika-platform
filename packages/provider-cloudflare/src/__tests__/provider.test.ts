@@ -2183,6 +2183,29 @@ describe("the check step: the application's tests, types, checker and schema bef
 	})
 })
 
+describe('a declared secret without a value', () => {
+	test('fails the deploy before any step, naming every missing secret and the environment, never a value', async () => {
+		const app = config({ pipeline: { build: 'bun run build', secrets: ['API_KEY', 'MAIL_KEY', 'SET_KEY'] } })
+		await expect(deploy(rec, app, { env: 'prod', secrets: { SET_KEY: 'set-value', MAIL_KEY: '' } })).rejects.toThrow(
+			'cloudflare: secrets `API_KEY`, `MAIL_KEY` are declared in fabrika.config.ts but have no value on environment `prod`; set them in the console before deploying',
+		)
+		expect(rec.commands).toEqual([])
+		expect(rec.provisions).toEqual([])
+		expect(rec.logs).toEqual([])
+	})
+
+	test('names a single one, and a platform deploy points at its own environment', async () => {
+		const app = config({ pipeline: { secrets: ['API_KEY'] } })
+		await expect(deploy(rec, app)).rejects.toThrow(
+			'cloudflare: secret `API_KEY` is declared in fabrika.config.ts but has no value on environment `stage`; set it in the console before deploying',
+		)
+		await expect(deploy(rec, app, { platformResources: 'allow' })).rejects.toThrow(
+			"cloudflare: secret `API_KEY` is declared in fabrika.config.ts but has no value on environment `stage`; set it in the deploy's environment before deploying",
+		)
+		expect(rec.commands).toEqual([])
+	})
+})
+
 describe('the ops channel of a gated release (servesOps, ADR-0069)', () => {
 	/** The endpoint table the proxy Worker of the provisioned graph serves. */
 	const proxiedEndpoints = () => {

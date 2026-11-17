@@ -333,6 +333,26 @@ const runChecks = async (build: EntryBuild, run: CloudflareDeployRun, cf: Cloudf
 }
 
 /**
+ * Every secret `pipeline.secrets` declares that the run has no value for, refused before any step runs: found in
+ * `sync-secrets`, it would fail the run after `deploy-worker` had shipped a Worker without it. Names only, never a value.
+ */
+const assertDeclaredSecrets = (config: CloudflareAppConfig, run: CloudflareDeployRun, platformResources: 'refuse' | 'allow'): void => {
+	const missing = [...new Set(config.pipeline?.secrets ?? [])].filter((name) => {
+		const value = run.secrets[name]
+		return value === undefined || value === ''
+	})
+	if (missing.length === 0) return
+	const names = missing.map((name) => `\`${name}\``).join(', ')
+	const where = platformResources === 'allow' ? "in the deploy's environment" : 'in the console'
+	const declared = `declared in ${basename(run.configPath)}`
+	throw new Error(
+		missing.length === 1
+			? `cloudflare: secret ${names} is ${declared} but has no value on environment \`${run.env}\`; set it ${where} before deploying`
+			: `cloudflare: secrets ${names} are ${declared} but have no value on environment \`${run.env}\`; set them ${where} before deploying`,
+	)
+}
+
+/**
  * The objects of a release that serves ops (ADR-0069) when Control names none: ordinary traffic reaches `application`,
  * and ops requests reach it and the object a backup is rehearsed in (ADR-0070).
  */
@@ -757,6 +777,7 @@ const runStep = async (spec: CloudflareStep, env: StepEnv): Promise<void> => {
 			const secretsDir = resolve(dir, applicationWorker(worker).options.dir)
 			for (const name of config.pipeline?.secrets ?? []) {
 				const value = run.secrets[name]
+				// Unreachable after `assertDeclaredSecrets`; kept so this step never pipes an absent value.
 				if (value === undefined) throw new Error(`sync-secrets: missing value for secret \`${name}\` (not in run.secrets)`)
 				if (dryRun) {
 					run.log(`  [dry-run] would run: wrangler secret put ${name} (value piped from run.secrets)`)
@@ -861,6 +882,7 @@ export const createCloudflareDeployer = (options: CloudflareDeployerOptions) => 
 		throw new Error(`Cloudflare config declares app "${loaded.config.id}", expected "${run.appId}"`)
 	}
 	const platformResources = options.platformResources ?? 'refuse'
+	assertDeclaredSecrets(loaded.config, run, platformResources)
 	const served = await servedContract(cf, loaded.cwd, run.approved)
 	const contract = served?.contract ?? null
 	// Fabrika's own components (`allow`) are its trusted installation path; an application needs a contract.
