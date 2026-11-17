@@ -81,7 +81,9 @@ workspace its own running application, where one pinned service could show only 
    access on a protected environment, the run waits for approval. Control enforces it in its use cases
    (authorization, not the proxy's enforcement decision): only a person, a user principal without OAuth or
    link claims, starts a manual run of a protected environment, so `deploy_stage` and any other agent or key
-   is refused there with a 403, and a workspace ref is refused there whoever asks. `apps.environments.put`
+   is refused there with a 403, and a workspace ref is refused there whoever asks. The ref must be a full ref or a
+   commit SHA, so no short spelling of a workspace branch passes, and Control checks the run again when it starts
+   (ADR-0050 §4). `apps.environments.put`
    refuses `authoring: true` on a protected environment (`prod` starts protected), and
    `apps.environments.protect` refuses an authoring target, so `deploy_stage` never meets a protected
    environment.

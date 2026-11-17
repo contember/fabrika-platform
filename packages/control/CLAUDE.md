@@ -703,10 +703,13 @@ other environment, before the provider prepares anything, and the write maps a r
   (a busy environment answers 409); it is never an unfenced run write. Runs record their actor (`runActor`).
   Deleting a protected environment, or an app with one, takes the same human (`requireHumanForProtectedDelete`,
   over `RegistryUseCaseContext.admission`). A manual run of a protected environment takes a person too
-  (`requirePersonForProtectedDeploy`, in `createManualRun`, so `triggerDeploy` and `deploy_stage` share it): `isPerson`,
-  a user principal without OAuth or link claims, with a bearer allowed (a person's CLI login), and never a workspace
-  ref. It runs after the `deploy.trigger` check, so a caller without it still gets the 404; the builder key and every
-  service key get the 403 (ADR-0050 §4). The flag and the counters outlive the row in `app_env_protection`; a
+  (`protectedRunRefusal`): `isPerson`, a user principal without OAuth or link claims (a bearer is not refused, though
+  no flow issues a person one), and a full ref or a 40-hex SHA that is not a workspace ref. `createManualRun` checks
+  it (`requirePersonForProtectedDeploy`, so `triggerDeploy` and `deploy_stage` share it) after `deploy.trigger`, so a
+  caller without it still gets the 404; `deployUnder` checks it again when a manual run starts, from the run's actor,
+  and fails the run into its log. A restore's own deploy (`operationDeploy`) is exempt: it redeploys the running
+  commit. `requirePersonToRedirect` keeps a key from changing a protected environment's trigger ref, or its app's
+  repository or source binding (ADR-0050 §4). The flag and the counters outlive the row in `app_env_protection`; a
   change of the flag bumps `protection_revision` and `generation`, and a registry write bumps `generation`, so an
   in-flight publication loses. Registry put and delete apply only at the generation they read (409 otherwise), and
   every write of an environment takes its coordinate lock first (`DATABASE.md`). `apps.environments.protect` takes
