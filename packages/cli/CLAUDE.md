@@ -137,6 +137,9 @@ and every other one, a missing config included, on Postgres. On SQLite no comman
   generated column the module leaves out. On SQLite the schema is the bundles the object applies,
   `SQLITE_FRAMEWORK_MIGRATIONS` then `db/migrations` (`applicationMigrations` of `@fabrika/app/build`, the files the
   build bundles), run in an in-memory database by `@fabrika/db/codegen-sqlite`.
+- `db codegen` and `db test-isolation` take `--config=<path>`, the config whose provider decides the dialect
+  (`fabrika.config.ts` by default), as `app build` does: the Cloudflare deploy's check step names a config of another
+  name. A release before it refuses the flag, so the deploy names only a config that is not the default.
 - `db test-scaffold` writes `@fabrika/check`'s `generatedTests` of what `scaffoldInputs` reads (the checker's own
   read of the contract and `src/db/tables.ts`) and deletes a generated test it no longer writes; a hand-written test
   is never touched. It connects to nothing. The tests open the test database of the application's dialect
