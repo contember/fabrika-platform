@@ -198,6 +198,12 @@ interface Backend {
 	rows(text: string): Promise<readonly Record<string, unknown>[]>
 }
 
+/** Who an invocation runs for: the data access of a layer bound to that principal's authority. */
+interface Caller {
+	readonly data: DataAccess
+	readonly principal: string
+}
+
 const rowList = z.array(z.record(z.string(), z.unknown()))
 
 async function postgresAdmin<T>(work: (sql: SQL) => Promise<T>): Promise<T> {
@@ -272,24 +278,40 @@ function suite(dialect: 'sqlite' | 'postgres', open: () => Promise<Backend>, clo
 			data = dataAccessOf(layer)
 		})
 
-		async function invoke<T>(kind: DataKind, work: (handles: DataHandles) => Promise<T>): Promise<T> {
-			const transaction = data.invocation(kind === 'query')
+		async function invoke<T>(
+			kind: DataKind,
+			work: (handles: DataHandles) => Promise<T>,
+			caller: Caller = { data, principal: 'user:alice' },
+		): Promise<T> {
+			const transaction = caller.data.invocation(kind === 'query')
 			const site: DataSite = {
 				kind,
 				unscoped: {},
-				principal: 'user:alice',
+				principal: caller.principal,
 				check() {
 					if (transaction.ended) throw new QueryRefusedError('ended', 'this invocation has ended')
 				},
 				session: () => transaction.session(),
 			}
 			try {
-				const result = await work(data.handles(site))
+				const result = await work(caller.data.handles(site))
 				await transaction.commit()
 				return result
 			} catch (error) {
 				await transaction.rollback()
 				throw error
+			}
+		}
+
+		/** Runs `work` for another principal, over a layer bound to its own authority, which mints its capabilities. */
+		async function asCaller<T>(principal: string, work: (authority: TestAuthority, caller: Caller) => Promise<T>): Promise<T> {
+			const authority = new TestAuthority(principal)
+			const layer = scoped(tables)
+			const binding = bindScopedDatabaseProvisionally(layer, { database: backend.database, capabilities: authority })
+			try {
+				return await work(authority, { data: dataAccessOf(layer), principal })
+			} finally {
+				binding.release()
 			}
 		}
 
@@ -321,6 +343,46 @@ function suite(dialect: 'sqlite' | 'postgres', open: () => Promise<Backend>, clo
 			test('a change of the row the view reads takes effect at the next statement', async () => {
 				await backend.exec("update profiles set principal_id = 'user:carol' where id = 'pa'")
 				expect(await listed()).toEqual([])
+			})
+
+			// A person directory: each entry names the identity it belongs to, and the rule "read and update the entry whose
+			// identity is the caller" is this one view.
+			test('each principal lists only its own entry, and one the view names nowhere lists nothing', async () => {
+				const listedBy = (principal: string) =>
+					asCaller(
+						principal,
+						(authority, caller) =>
+							invoke('query', (db) => call(db.within(authority.within('person', 'profiles.read', [], [], [], ['self'])), 'profiles.list'), caller).then(ids),
+					)
+				expect(await listedBy('user:bob')).toEqual(['pb'])
+				expect(await listedBy('user:carol')).toEqual([])
+			})
+
+			test('a Ref through the relation reads the own entry, and finds no other', async () => {
+				await asCaller('user:bob', async (authority, caller) => {
+					const read = (id: string) =>
+						invoke('query', (db) => call(db.target(authority.ref('person', 'profiles.read', id, {}, ['self']), 'on'), 'get'), caller)
+					expect(await read('pb')).toMatchObject({ id: 'pb', display_name: 'Bob' })
+					await expect(read('pa')).rejects.toThrow(NotFoundError)
+				})
+			})
+
+			test('another principal edits its own entry and not the caller’s', async () => {
+				await asCaller('user:bob', async (authority, caller) => {
+					const update = (id: string) =>
+						invoke(
+							'mutation',
+							(db) =>
+								call(db.target(authority.ref('person', 'profiles.write', id, {}, ['self']), 'on'), 'update', { display_name: 'B.' }, { expectVersion: 1 }),
+							caller,
+						)
+					await update('pb')
+					await expect(update('pa')).rejects.toThrow(NotFoundError)
+				})
+				expect(await backend.rows('select id, display_name from profiles order by id')).toEqual([{ id: 'pa', display_name: 'Alice' }, {
+					id: 'pb',
+					display_name: 'B.',
+				}])
 			})
 		})
 
