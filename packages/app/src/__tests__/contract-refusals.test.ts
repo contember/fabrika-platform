@@ -672,6 +672,10 @@ describe('buildArtifact refuses a declaration the types would refuse', () => {
 		expect(problemsOf(() => buildArtifact(related, noteTables))).toEqual([
 			"relation 'owner': is conferred by 0 tables; exactly one table declares confers.owner, or a table names an access view for it",
 		])
+		const unbound = { owner: { view: 'note_owners', row: 'note_id', principal: null, member: null } }
+		expect(() => buildArtifact(related, { ...noteTables, notes: { ...notesTable, access: unbound } })).toThrow(
+			/binds the principal, a member node or both/,
+		)
 		expect(problemsOf(() => buildArtifact(base, viewed))).toEqual([
 			"table 'notes': names an access view for 'owner', which is not a relation of the vocabulary",
 		])

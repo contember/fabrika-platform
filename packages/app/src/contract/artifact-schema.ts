@@ -398,7 +398,12 @@ const tablePolicy: z.ZodType<TablePolicyArtifact> = z.strictObject({
 		when: condition.optional(),
 		assign: z.strictObject({ self: z.boolean() }).optional(),
 	})).optional(),
-	access: record(z.strictObject({ view: name, row: name, principal: nullableName, member: nullableName })).optional(),
+	access: record(
+		z.strictObject({ view: name, row: name, principal: nullableName, member: nullableName }).refine(
+			(access) => access.principal !== null || access.member !== null,
+			'an access view binds the principal, a member node or both (ADR-0076)',
+		),
+	).optional(),
 })
 
 export const contractArtifactSchema: z.ZodType<ContractArtifact> = z.strictObject({
