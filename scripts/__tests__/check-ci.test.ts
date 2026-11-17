@@ -6,6 +6,8 @@ import {
 	type CiStep,
 	INSTALL_STEP,
 	POSTGRES_MAJORS,
+	POSTGRES_SETTINGS_STEP_NAME,
+	POSTGRES_TEST_SETTINGS,
 	postgresImage,
 	QUALITY_STEPS,
 	RELEASE_ARTIFACT_STEPS,
@@ -38,7 +40,8 @@ describe('check:ci', () => {
 		expect(new Set(install.map((step) => step.run))).toEqual(new Set([INSTALL_STEP.run]))
 		expect(install.map((step) => step.job)).toEqual(Object.keys(ci.jobs))
 
-		const rest = ciRunSteps().filter((step) => step.name !== INSTALL_STEP.name && step.name !== S3_START_STEP_NAME)
+		const backends = [INSTALL_STEP.name, S3_START_STEP_NAME, POSTGRES_SETTINGS_STEP_NAME]
+		const rest = ciRunSteps().filter((step) => !backends.includes(step.name))
 		const testSteps = TEST_STEPS.map(({ job, name, run }) => ({ job, name, run }))
 		expect(rest).toEqual([...QUALITY_STEPS, ...testSteps, ...BUILD_STEPS, ...RELEASE_ARTIFACT_STEPS])
 	})
@@ -57,5 +60,8 @@ describe('check:ci', () => {
 		const s3Start = job?.steps.find((step) => step.name === S3_START_STEP_NAME)?.run ?? ''
 		expect(s3Start).toContain(SEAWEEDFS_IMAGE)
 		for (const [name, value] of Object.entries(S3_VALUES)) expect(job?.env?.[name], name).toBe(value)
+		const settings = job?.steps.find((step) => step.name === POSTGRES_SETTINGS_STEP_NAME)?.run ?? ''
+		const set = [...settings.matchAll(/alter system set (\w+) = (\w+)/g)].map(([, name, value]) => [name, value])
+		expect(Object.fromEntries(set)).toEqual(POSTGRES_TEST_SETTINGS)
 	})
 })
