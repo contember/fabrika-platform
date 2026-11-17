@@ -707,9 +707,12 @@ other environment, before the provider prepares anything, and the write maps a r
   no flow issues a person one), and a full ref or a 40-hex SHA that is not a workspace ref. `createManualRun` checks
   it (`requirePersonForProtectedDeploy`, so `triggerDeploy` and `deploy_stage` share it) after `deploy.trigger`, so a
   caller without it still gets the 404; `deployUnder` checks it again when a manual run starts, from the run's actor,
-  and fails the run into its log. A restore's own deploy (`operationDeploy`) is exempt: it redeploys the running
-  commit. `requirePersonToRedirect` keeps a key from naming a protected environment's trigger ref (also on a new one
-  that starts protected) and from changing any field of `apps.update` on its app (ADR-0050 §4). The flag and the counters outlive the row in `app_env_protection`; a
+  and fails the run into its log. A restore's own deploy is exempt: it redeploys the running commit, and the restore's
+  record names the run (`RestoreRepository.namesRun`), so an approved restore deploy queued again stays exempt.
+  `requirePersonToPointTriggerRef` keeps a key from naming a protected environment's trigger ref (also on a new one that
+  starts protected, through `put` or `register`), and `requirePersonToRedirect` from changing any field of `apps.update`
+  on its app (ADR-0050 §4). `apps.update` writes only the fields that change, and a key's write is conditional in SQL
+  on no protected environment (`updateApp` with `unlessProtected`). The flag and the counters outlive the row in `app_env_protection`; a
   change of the flag bumps `protection_revision` and `generation`, and a registry write bumps `generation`, so an
   in-flight publication loses. Registry put and delete apply only at the generation they read (409 otherwise), and
   every write of an environment takes its coordinate lock first (`DATABASE.md`). `apps.environments.protect` takes

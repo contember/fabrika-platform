@@ -457,15 +457,20 @@ console's own redeploy of a run names its commit by SHA.
 
 Control checks the run again when it starts, against the environment as it is then, because the flag may have been
 set after the run was queued: a manual run whose actor is not a person (`user:`), or whose ref is refused as above,
-fails with the same message in its run log and deploys nothing. A restore's own deploy is exempt: it runs under the
-restore's lease and redeploys the commit the environment already runs
-([ADR-0070](0070-data-protection-of-an-application-environment-on-cloudflare.md) §9).
+fails with the same message in its run log and deploys nothing. A restore's own deploy is exempt: it redeploys the
+commit the environment last ran ([ADR-0070](0070-data-protection-of-an-application-environment-on-cloudflare.md) §9).
+The exemption comes from the restore's record, which names the run before the run exists, so it holds also for a
+restore's deploy that waited for approval and was queued again once a person approved it.
 
 A key cannot redirect what a deploy of a protected environment runs either. `apps.environments.put` that names a
 different trigger ref for one, or creates one with a trigger ref (a new `prod`, or one whose protection was kept), takes
-a person (403). So does `apps.update` of an app with a protected environment that changes any field it takes:
-`repoUrl`, the GitHub source binding, `defaultBranch`, `workerDir`, `buildCmd` or `configPath`. Clearing the trigger
-ref stops push deploys and stays open to a key, as does a `null` field, which keeps the stored value.
+a person (403), as does `apps.register` of an app whose environment starts protected with a trigger ref. So does
+`apps.update` of an app with a protected environment that changes any field it takes: `repoUrl`, the GitHub source
+binding, `defaultBranch`, `workerDir`, `buildCmd` or `configPath`. Clearing the trigger ref stops push deploys and stays
+open to a key, as does a `null` field, which keeps the stored value. `apps.update` writes only the fields whose value
+differs from what it read, so a value a key sends again never undoes a change made since; a key's write applies only
+while no environment of the app is protected, judged in the write's own statement, so a protection that lands after the
+check still refuses it.
 
 These are authorization checks in Control's use cases, after `deploy.trigger`, so a caller without it still gets the
 404 of an absent environment. For the same reason an MCP authoring target is never protected:
