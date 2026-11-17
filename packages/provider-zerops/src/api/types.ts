@@ -224,6 +224,25 @@ export interface ZeropsBackupConfig {
 	retentionPolicy?: ZeropsBackupRetentionPolicy
 }
 
+/**
+ * One stored backup of a managed service: `OutDtoServiceStackBackupFile`, narrowed to its `name` and the `tags` of its
+ * `metadata`. Verified live 2026-11-17: `metadata.tags` is a JSON array of strings, and the metadata keys are snake_case
+ * (`file_name`, `stack_name`), not the documented `filename` and `stackname`.
+ */
+export interface ZeropsBackupFile {
+	/** The moment the backup was taken, as the platform names the file. */
+	name: string
+	tags: string[]
+}
+
+/** What a backup request answers. VERIFIED AS A SHAPE: `ResponseServiceStackBackup`. */
+export interface ZeropsBackupStart {
+	/** The backup was started, and is finished or running in the background. */
+	success: boolean
+	/** It ran past the platform's 10 s window and goes on in the background; `false` answers a finished backup. */
+	async: boolean
+}
+
 /** One service. VERIFIED: `ResponseServiceStack` (narrowed to the fields fabrika reads). */
 export interface ZeropsService {
 	id: string
@@ -557,6 +576,20 @@ export interface ZeropsApi {
 		retentionPolicy: ZeropsBackupRetentionPolicy
 		signal: AbortSignal
 	}): Promise<ZeropsProcess | null>
+
+	/**
+	 * Back a managed service up now, under `tags`. VERIFIED AS A SHAPE: `POST /service-stack/{id}/backup`
+	 * (`BackupServiceStack`), body `RequestPostServiceStackBackup`, response `ResponseServiceStackBackup`. It names no
+	 * process. Verified live 2026-11-17: `async: false` answers a finished backup, listed at once; a user tag outside 1–24
+	 * characters of `[A-Za-z0-9:_-]` is 400 `backupTagNameFormat`.
+	 */
+	createBackup(input: { serviceId: string; tags: string[]; signal: AbortSignal }): Promise<ZeropsBackupStart>
+
+	/**
+	 * The stored backups of a managed service. VERIFIED AS A SHAPE: the `files` of `GET /service-stack/{id}/backup`
+	 * (`ListBackups`). UNVERIFIED: whether a backup still running (`async: true`) is listed before it completes.
+	 */
+	listBackups(input: { serviceId: string; signal: AbortSignal }): Promise<ZeropsBackupFile[]>
 
 	// ── service-stack / project: reading state ────────────────────────────────────
 

@@ -290,6 +290,25 @@ What stays uncovered: declared code a migration reaches only through a trigger o
 declared and a person approved. A plain `INSERT` into such a table runs it with no line of its own. A `DELETE` that
 cascades through a foreign key's `ON DELETE CASCADE` names only its own table.
 
+**The platform backs the data up before such a migration runs.** The files to back up for are the candidate's with
+a `dataLoss` statement of any kind, deleting, overwriting or not known to keep every value, and that the environment's last succeeded run did not deploy as they are now: not the publication, which
+precedes the provider and survives a failed run, so a retry after a failed deploy is backed up again. On Zerops,
+Control hands them to the provider as `backupBeforeMigrations`, and the deploy backs up the application's database and
+waits until the backup is listed before a version that runs them can start; a backup that fails or does not finish
+fails the run with nothing deployed ([`zerops-platform.md`](../reference/zerops-platform.md)). On Cloudflare the
+migration phase takes the backup ([ADR-0070](0070-data-protection-of-an-application-environment-on-cloudflare.md) §8),
+so such a migration deploys only once the version running holds the backup barrier; without it Control refuses the run
+before any deploy and says what to do: give the environment a domain, raise the framework pin, or deploy once without
+that migration. A dev environment's database is its workspace sandbox's, and nothing backs it up. A missing record
+never reads as "nothing changes data": a run parked by a release before the classifier stored no `dataLoss`, so when it
+resumes Control classifies its commit again, and when the commit no longer reads, every migration file the last
+succeeded run did not hold counts. A side restore's deploys redeploy what runs, under the restore's lease and with the
+object frozen or pointed away, where no backup can run
+([ADR-0070](0070-data-protection-of-an-application-environment-on-cloudflare.md) §9). One that would bring such a file
+anyway (the application's directory changed since) is refused, and the restore fails before anything is frozen. Which
+run is a restore's deploy comes from the restore's record, as for the start check below, so the refusal holds also for
+one an approval queued again.
+
 **A removed endpoint is classified by who answers its paths now.** The proxy selects the most specific endpoint
 ([ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md)), so a literal endpoint can shadow a broader parameter
 or wildcard endpoint, and removing it sends its paths to the broader one. A broader endpoint may also answer only some

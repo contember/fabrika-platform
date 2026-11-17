@@ -38,6 +38,8 @@ const KEY = runLeaseKey(APP, ENV)
 const FIRST = '20261025000000_notes.sql'
 const SECOND = '20261026000000_note_tags.sql'
 const THIRD = '20261027000000_note_links.sql'
+/** A migration that deletes data: it drops the table `FIRST` creates. */
+const DROPS = '20261028000000_drop_notes.sql'
 /** The health path of the contract an older release deploys, by which the provider double tells its access apart. */
 const OLDER_HEALTH = '/healthz-older'
 
@@ -47,7 +49,9 @@ const vault = await createTestVault()
 function tree(migrations: readonly string[], older = false): Record<string, string> {
 	const contract = older ? healthOnly(APP).replace("'/healthz'", `'${OLDER_HEALTH}'`) : healthOnly(APP)
 	const files: Record<string, string> = { 'fabrika.contract.ts': contract }
-	for (const name of migrations) files[`db/migrations/${name}`] = `CREATE TABLE t_${name.slice(15, -4)} (id TEXT PRIMARY KEY);`
+	for (const name of migrations) {
+		files[`db/migrations/${name}`] = name === DROPS ? 'DROP TABLE t_notes;' : `CREATE TABLE t_${name.slice(15, -4)} (id TEXT PRIMARY KEY);`
+	}
 	return files
 }
 
@@ -70,6 +74,23 @@ function backupAndRehearsal(g: number): string[] {
 		`import verify @${g}`,
 		`import discard @${g}`,
 	]
+}
+
+/** What the provider double does, and what it saw. */
+interface ProviderState {
+	serves: boolean
+	outcome: ProviderDeployOutcome
+	settlement: 'succeeded' | 'failed' | 'running'
+	/** Where in the object's requests each deploy happened, the migrations each one deployed, and any backup it was handed. */
+	deploys: { at: number; migrations: string[]; backup?: { readonly migrations: readonly string[] } }[]
+	reconciles: number
+	migrations: string[]
+	/** The candidate is an older release, which the provider serves no ops channel at. */
+	older: boolean
+	/** The release serves the data operations beside the channel; a 0.9.0 prerelease serves only `inspect`. */
+	barrier: boolean
+	/** The provider refuses the deploy before accepting it. */
+	refuses: boolean
 }
 
 interface Backend {
@@ -147,19 +168,15 @@ for (const backend of backends) {
 				holders.push(await holder())
 				return undefined
 			}
-			const state = {
+			const state: ProviderState = {
 				serves: true,
-				outcome: { state: 'succeeded' } as ProviderDeployOutcome,
-				settlement: 'succeeded' as 'succeeded' | 'failed' | 'running',
-				/** Where in the object's requests each deploy happened, and the migrations each one deployed. */
-				deploys: [] as { at: number; migrations: string[] }[],
+				outcome: { state: 'succeeded' },
+				settlement: 'succeeded',
+				deploys: [],
 				reconciles: 0,
 				migrations: [FIRST],
-				/** The candidate is an older release, which the provider serves no ops channel at. */
 				older: false,
-				/** The release serves the data operations beside the channel; a 0.9.0 prerelease serves only `inspect`. */
 				barrier: true,
-				/** The provider refuses the deploy before accepting it. */
 				refuses: false,
 			}
 			const provider: ControlProvider = {
@@ -172,7 +189,11 @@ for (const backend of backends) {
 				deploy: async (input) => {
 					holders.push(await holder())
 					if (state.refuses) throw new Error('the provider refused the deploy')
-					state.deploys.push({ at: fake.requests().length, migrations: [...state.migrations] })
+					state.deploys.push({
+						at: fake.requests().length,
+						migrations: [...state.migrations],
+						...(input.backupBeforeMigrations === undefined ? {} : { backup: input.backupBeforeMigrations }),
+					})
 					await input.events.externalId(`${input.runId}-external`)
 					// The release now running bundles the deployed migrations; it applies them on a `migrate` request.
 					fake.bundled = [...state.migrations]
@@ -475,6 +496,51 @@ for (const backend of backends) {
 			expect(await executeDeploy(deps(), { runId: guarded })).toEqual({ runId: guarded, status: 'succeeded' })
 			expect(timeline()).toEqual(['inspect', ...backupAndRehearsal(1), 'deploy', 'migrate @1', 'state application open @2'])
 			expect(fake.ledger.map((row) => row.name)).toEqual([FIRST, SECOND, THIRD])
+		})
+
+		test('a migration that deletes data runs behind the barrier: backed up by the migration phase, never handed to the provider', async () => {
+			const { state, deps, run, deployFirst, timeline, operations } = await open()
+			await deployFirst()
+			state.deploys.length = 0
+			state.migrations = [FIRST, DROPS]
+			const drops = await run()
+			expect(await executeDeploy(deps(), { runId: drops })).toEqual({ runId: drops, status: 'succeeded' })
+			expect(timeline()).toEqual(['inspect', ...backupAndRehearsal(1), 'deploy', 'migrate @1', 'state application open @2'])
+			expect(state.deploys.map((deploy) => deploy.backup)).toEqual([undefined])
+			expect(await operations()).toMatchObject([{ kind: 'migrate', state: 'succeeded', run_id: drops }])
+		})
+
+		/** Deploys a migration that deletes data, and expects the run refused before any deploy, saying why and what to do. */
+		async function refusedDrop(env: Awaited<ReturnType<typeof open>>, cause: string): Promise<void> {
+			const { fake, state, deps, run, log, operations } = env
+			state.deploys.length = 0
+			state.migrations = [FIRST, DROPS]
+			const drops = await run()
+			expect(await executeDeploy(deps(), { runId: drops })).toEqual({ runId: drops, status: 'failed' })
+			expect(state.deploys).toEqual([])
+			expect(fake.requests()).toEqual([])
+			expect(await operations()).toEqual([])
+			expect(log(drops)).toContain(
+				`\`${DROPS}\` may change stored data, and Control backs up this environment before a migration only once the version running holds the backup barrier: ${cause}`,
+			)
+		}
+
+		test('a migration that deletes data in the first deploy at a gated release is refused: the version running holds no barrier yet', async () => {
+			await refusedDrop(await open(), 'the version running does not hold it yet. Deploy once without that migration, then deploy it')
+		})
+
+		test('a migration that deletes data at a release without the barrier is refused, and the run names the pin raise', async () => {
+			const env = await open()
+			env.state.barrier = false
+			await env.deployFirst()
+			await refusedDrop(
+				env,
+				"the application's framework release does not hold the barrier. Raise its @fabrika/app pin to a release that does, deploy once without that migration, then deploy it",
+			)
+		})
+
+		test('a migration that deletes data on an environment without a domain is refused, and the run names the domain', async () => {
+			await refusedDrop(await open({ domain: null }), 'the environment has no domain. Give it one, deploy once without that migration, then deploy it')
 		})
 
 		test('an installed channel whose object does not answer inspect gets no unguarded deploy, and the run says why', async () => {

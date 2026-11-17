@@ -11,6 +11,8 @@ import {
 	type ZeropsApi,
 	ZeropsApiError,
 	type ZeropsAppVersion,
+	type ZeropsBackupFile,
+	type ZeropsBackupStart,
 	type ZeropsImportedService,
 	type ZeropsLogAccess,
 	type ZeropsProcess,
@@ -19,20 +21,51 @@ import {
 } from '../api'
 import { withoutSensitiveContent } from '../api/service-env-response'
 import { useSharedPostgres } from '../authoring'
-import type { ZeropsCollaborators } from '../collaborators'
+import type { ZeropsClock, ZeropsCollaborators } from '../collaborators'
 import { assertZeropsInvariants, compileImportYaml, compileProvisioningYaml } from '../compile'
 import { parseZeropsCheckpoint } from '../control'
 import { FABRIKA_CHECK_VERSION, PLATFORM_TYPESCRIPT_VERSION, ZEROPS_SCAN_MIN_RAM_GB, ZEROPS_START_MIN_RAM_GB } from '../execution'
 import type { ExposureAlert } from '../exposure'
 import { compileFabrikaManifest, createZeropsArtifactSourceDescriptor } from '../manifest'
-import { createZeropsDeployer, type ZeropsDeployResult, type ZeropsDeployRun } from '../provider'
+import {
+	createZeropsDeployer,
+	storeTaggedBackup,
+	ZEROPS_BACKUP_LIST_TIMEOUT_MS,
+	ZEROPS_BACKUP_REQUEST_TIMEOUT_MS,
+	ZEROPS_BACKUP_WAIT_MS,
+	zeropsBackupTag,
+	type ZeropsDeployResult,
+	type ZeropsDeployRun,
+} from '../provider'
 import type { ZeropsServiceType } from '../schema.generated'
 import type { ZeropsSourceArchive } from '../source/port'
 import type { ZeropsAppConfig, ZeropsRuntimeTarget, ZeropsServiceSpec } from '../types'
 import { approvedContract } from './fixtures/access'
 import { SOURCE_DESCRIPTOR } from './fixtures/descriptor'
 
+/** A clock that moves only when the fake sleeps or a fake request takes time; a timeout aborts once it is passed. */
+class FakeClock implements ZeropsClock {
+	nowMs = Date.parse('2026-11-17T10:00:00.000Z')
+	private readonly timers: Array<{ readonly at: number; readonly controller: AbortController }> = []
+	now(): number {
+		return this.nowMs
+	}
+	timeout(ms: number): AbortSignal {
+		const controller = new AbortController()
+		this.timers.push({ at: this.nowMs + ms, controller })
+		this.advance(0)
+		return controller.signal
+	}
+	advance(ms: number): void {
+		this.nowMs += ms
+		for (const timer of this.timers) {
+			if (timer.at <= this.nowMs && !timer.controller.signal.aborted) timer.controller.abort(new DOMException('timed out', 'TimeoutError'))
+		}
+	}
+}
+
 interface Recorded {
+	clock: FakeClock
 	calls: string[]
 	imports: Array<{ projectId: string; yaml: string }>
 	triggers: Array<{ serviceId: string; buildFromGit?: string; zeropsSetup?: string }>
@@ -52,9 +85,12 @@ interface Recorded {
 	autoscaling: ZeropsServiceAutoscaling[]
 	/** Each custom autoscaling the deploy sent to the database `db`. */
 	databaseAutoscaling: ZeropsServiceAutoscaling[]
+	/** Each backup the deploy requested. */
+	backups: Array<{ serviceId: string; tags: string[] }>
 }
 
 const fresh = (): Recorded => ({
+	clock: new FakeClock(),
 	calls: [],
 	imports: [],
 	triggers: [],
@@ -72,6 +108,7 @@ const fresh = (): Recorded => ({
 	alerts: [],
 	autoscaling: [],
 	databaseAutoscaling: [],
+	backups: [],
 })
 
 const UPLOAD_URL = 'https://proxy.app-prg1.zerops.io/api/rest/object-storage/upload?signature=test'
@@ -130,6 +167,12 @@ interface Overrides {
 	databaseMaxRam?: number
 	/** Its autoscaling profile; `oltp-hobby` by default. */
 	databaseProfile?: string
+	/** What a backup request answers, or the error it throws; a finished backup by default, as verified live. */
+	backupStart?: ZeropsBackupStart | Error
+	/** The list of backups that first shows the requested one, counting from 1; 1 by default, null for never. */
+	backupListedAt?: number | null
+	/** How many lists of backups fail before one answers. */
+	backupListErrors?: number
 }
 
 /** The id of the database `db` in the fake platform; the deploy service is `service-1`. */
@@ -168,6 +211,8 @@ const makeApi = (recorded: Recorded, overrides: Overrides = {}): ZeropsApi => {
 	let customMinRam = overrides.minRam === undefined ? ZEROPS_START_MIN_RAM_GB : overrides.minRam
 	let databaseMinRam = overrides.databaseMinRam ?? 1
 	let maxContainers = overrides.maxContainers === undefined ? 4 : overrides.maxContainers
+	let backupLists = 0
+	let backupListErrors = overrides.backupListErrors ?? 0
 	const database = (): ZeropsService => ({
 		id: DATABASE_SERVICE_ID,
 		name: 'db',
@@ -242,6 +287,27 @@ const makeApi = (recorded: Recorded, overrides: Overrides = {}): ZeropsApi => {
 		configureAutoscaling: () => Promise.reject(new Error('the deploy driver must not change a profile')),
 		getBackupConfig: () => Promise.reject(new Error('the deploy driver must not read a backup schedule')),
 		configureBackup: () => Promise.reject(new Error('the deploy driver must not change a backup schedule')),
+		createBackup: async ({ serviceId, tags }) => {
+			recorded.calls.push(`createBackup:${serviceId}`)
+			recorded.timeline.push('backup')
+			recorded.backups.push({ serviceId, tags })
+			if (overrides.backupStart instanceof Error) throw overrides.backupStart
+			return overrides.backupStart ?? { success: true, async: false }
+		},
+		listBackups: async () => {
+			recorded.calls.push('listBackups')
+			if (backupListErrors > 0) {
+				backupListErrors--
+				throw new Error('backup list unavailable')
+			}
+			backupLists++
+			const listedAt = overrides.backupListedAt === undefined ? 1 : overrides.backupListedAt
+			const daily = { name: '2026-11-17 00:00:06', tags: ['daily'] }
+			const requested = recorded.backups.at(-1)
+			if (listedAt === null || backupLists < listedAt || requested === undefined) return [daily]
+			recorded.timeline.push('backup-listed')
+			return [daily, { name: '2026-11-17 10:17:07', tags: requested.tags }]
+		},
 		startService: () => Promise.reject(new Error('the deploy driver never starts a service')),
 		stopService: () => Promise.reject(new Error('the deploy driver never stops a service')),
 		configureCustomAutoscaling: async ({ serviceId, autoscaling }) => {
@@ -339,7 +405,9 @@ const makeCollaborators = (recorded: Recorded, overrides: Overrides = {}): Zerop
 	},
 	sleep: async (ms) => {
 		recorded.sleeps.push(ms)
+		recorded.clock.advance(ms)
 	},
+	clock: recorded.clock,
 })
 
 const SCHEMA: AppSchema = { scopes: [], actions: [], roles: {} }
@@ -1279,6 +1347,222 @@ describe("the application's database connections", () => {
 		expect((await deploy({ databaseMinRam: 0.25 }, deployRun(recorded, target(), true))).status).toBe('succeeded')
 		expect(recorded.databaseAutoscaling).toEqual([])
 		expect(recorded.logs).toContain('  [dry-run] would size each process of api to the connection limit of db')
+	})
+})
+
+// A migration that deletes data runs in the init commands at container start, so its backup is stored before (ADR-0050).
+describe('the backup before migrations that delete data', () => {
+	const RUN_ID = '019a8f3c-1d2e-7f00-8a00-0123456789ab'
+	const TAG = 'run-019a8f3c1d2e7f008a00'
+	const deleting = (run: ZeropsDeployRun = deployRun(recorded)): ZeropsDeployRun => ({
+		...run,
+		backupBeforeMigrations: { migrations: ['0002_purge.sql'], runId: RUN_ID },
+	})
+	const deploy = (overrides: Overrides, run: ZeropsDeployRun = deleting()) => createZeropsDeployer(() => makeCollaborators(recorded, overrides))(run)
+	const BACKGROUND: Overrides = { backupStart: { success: true, async: true } }
+
+	test('the tag carries the run id in the 24 characters a Zerops tag may hold', () => {
+		expect(zeropsBackupTag(RUN_ID)).toBe(TAG)
+		expect(TAG).toHaveLength(24)
+	})
+
+	test("backs up the application's database under the run's tag, and deploys once the platform answers it finished", async () => {
+		const result = await deploy({})
+		expect(result.status).toBe('succeeded')
+		expect(result.steps.map((step) => step.id)).toEqual([
+			'apply-import',
+			'verify-exposure',
+			'backup-database',
+			'write-service-env',
+			'raise-start-memory',
+			'size-database',
+			'reserve-version',
+			'upload-source',
+			'trigger-build',
+			'await-version',
+		])
+		expect(recorded.backups).toEqual([{ serviceId: DATABASE_SERVICE_ID, tags: [TAG] }])
+		expect(recorded.timeline.slice(0, 3)).toEqual(['backup', 'backup-listed', 'put:FABRIKA_PROXY_SECRET'])
+		expect(recorded.timeline.indexOf('backup-listed')).toBeLessThan(recorded.timeline.indexOf('build-call'))
+		// `async: false` is a finished backup: one list confirms it, and nothing waits.
+		expect(recorded.calls.filter((call) => call === 'listBackups')).toHaveLength(1)
+		expect(recorded.sleeps).not.toContain(10_000)
+		expect(recorded.logs).toContain(`  \`0002_purge.sql\` may change stored data: backing up db under the tag \`${TAG}\``)
+		expect(recorded.logs).toContain('  db: backup `2026-11-17 10:17:07` is stored')
+	})
+
+	test('a backup that runs on in the background is waited for until the list shows it', async () => {
+		const result = await deploy({ ...BACKGROUND, backupListedAt: 3 })
+		expect(result.status).toBe('succeeded')
+		expect(recorded.timeline.slice(0, 3)).toEqual(['backup', 'backup-listed', 'put:FABRIKA_PROXY_SECRET'])
+		expect(recorded.calls.filter((call) => call === 'listBackups')).toHaveLength(3)
+		expect(recorded.sleeps.slice(0, 2)).toEqual([10_000, 10_000])
+	})
+
+	test('while a backup runs in the background, a list that fails is read again', async () => {
+		expect((await deploy({ ...BACKGROUND, backupListErrors: 2, backupListedAt: 1 })).status).toBe('succeeded')
+		expect(recorded.logs.filter((line) => line === '  db: the backup list is unavailable; retrying')).toHaveLength(2)
+		expect(recorded.builds).toHaveLength(1)
+	})
+
+	test("a namespace's shared database is backed up whole", async () => {
+		const shared: ZeropsAppConfig = { ...app([API]), target: { ...app([API]).target, namespaceResources: [useSharedPostgres()] } }
+		const run = deleting({ ...deployRun(recorded), artifact: compileFabrikaManifest(shared, 'prod', SOURCE_DESCRIPTOR) })
+		expect((await deploy({}, run)).status).toBe('succeeded')
+		expect(recorded.calls).toContain('findService:postgres')
+		expect(recorded.backups).toEqual([{ serviceId: DATABASE_SERVICE_ID, tags: [TAG] }])
+		expect(recorded.logs).toContain(
+			`  \`0002_purge.sql\` may change stored data: backing up postgres, the namespace's shared database, under the tag \`${TAG}\``,
+		)
+	})
+
+	test('a backup that is refused, does not start, or is not listed fails the run, and nothing is deployed', async () => {
+		const cases: Array<[Overrides, string]> = [
+			[
+				{ backupStart: new ZeropsApiError('zerops: back up failed (400)', 400, 'BackupUnsupportedStackType') },
+				'zerops: the backup of db was refused (BackupUnsupportedStackType); nothing was deployed',
+			],
+			[{ backupStart: { success: false, async: false } }, 'zerops: the backup of db did not start; nothing was deployed'],
+			[{ backupListedAt: null }, 'zerops: the backup of db finished, and the list does not show it; nothing was deployed'],
+			[{ backupListErrors: 1 }, 'zerops: the backup of db finished, and its list could not be read to confirm it; nothing was deployed'],
+			[
+				{ ...BACKGROUND, backupListedAt: null },
+				"zerops: the backup of db was not stored within 30 minutes, so nothing was deployed; a backup larger than the project's backup storage is never stored",
+			],
+		]
+		for (const [overrides, error] of cases) {
+			recorded = fresh()
+			const result = await deploy(overrides)
+			expect(result.status).toBe('failed')
+			expect(stepError(result, 'backup-database')).toBe(error)
+			expect(result.steps.filter((step) => step.status === 'skipped').map((step) => step.id)).toContain('reserve-version')
+			expect(recorded.creates).toEqual([])
+			expect(recorded.builds).toEqual([])
+			expect(recorded.envWrites).toEqual([])
+		}
+	})
+
+	test('a background backup never listed is given up after 30 minutes of elapsed time, a list every 10 s', async () => {
+		const startedMs = recorded.clock.now()
+		const result = await deploy({ ...BACKGROUND, backupListedAt: null })
+		expect(result.status).toBe('failed')
+		expect(recorded.clock.now() - startedMs).toBe(ZEROPS_BACKUP_WAIT_MS)
+		expect(recorded.calls.filter((call) => call === 'listBackups')).toHaveLength(180)
+		expect(recorded.sleeps.every((ms) => ms === 10_000)).toBe(true)
+	})
+
+	test('without migrations that delete data, nothing is backed up', async () => {
+		const result = await deploy({}, deployRun(recorded))
+		expect(result.status).toBe('succeeded')
+		expect(result.steps.map((step) => step.id)).not.toContain('backup-database')
+		expect(recorded.backups).toEqual([])
+		expect(recorded.calls).not.toContain('listBackups')
+	})
+
+	test('an application without a database fails rather than run such a migration unprotected', async () => {
+		const run = deleting({ ...deployRun(recorded), artifact: compileFabrikaManifest(app([API]), 'prod', SOURCE_DESCRIPTOR) })
+		const result = await deploy({}, run)
+		expect(stepError(result, 'backup-database')).toBe(
+			'zerops: `0002_purge.sql` may change stored data, and the application declares no database to back up',
+		)
+		expect(recorded.creates).toEqual([])
+	})
+
+	test('a dry run says what it would back up and calls nothing', async () => {
+		expect((await deploy({}, deleting(deployRun(recorded, target(), true)))).status).toBe('succeeded')
+		expect(recorded.backups).toEqual([])
+		expect(recorded.logs).toContain(`  [dry-run] would back up db under the tag \`${TAG}\` and wait until the backup is stored`)
+	})
+})
+
+// The wait is elapsed time on the clock, request times included, so a slow platform cannot stretch it (ADR-0050).
+describe('the backup wait is bounded in elapsed time', () => {
+	const TAG = 'run-019a8f3c1d2e7f008a00'
+	const STORED: ZeropsBackupFile = { name: '2026-11-17 10:17:07', tags: [TAG] }
+	interface Platform {
+		/** How long the backup request takes to answer, and what it answers. */
+		requestMs?: number
+		start?: ZeropsBackupStart
+		/** How long each list takes to answer. */
+		listMs?: number
+		/** How many of the first lists hang past their own timeout. */
+		hangingLists?: number
+		/** The first list, counting from 1, that shows the backup; null for never. */
+		listedAt?: number | null
+		/** A list that answers after its timeout, as a response racing the abort can. */
+		ignoresTimeout?: boolean
+	}
+	const wait = async (platform: Platform, budgetMs: number = 75 * 60 * 1000) => {
+		const clock = new FakeClock()
+		const startedMs = clock.now()
+		let lists = 0
+		const outcome = await storeTaggedBackup({
+			api: {
+				createBackup: async ({ signal }) => {
+					clock.advance(platform.requestMs ?? 0)
+					signal.throwIfAborted()
+					return platform.start ?? { success: true, async: true }
+				},
+				listBackups: async ({ signal }) => {
+					lists++
+					clock.advance(lists <= (platform.hangingLists ?? 0) ? ZEROPS_BACKUP_LIST_TIMEOUT_MS + 1 : platform.listMs ?? 0)
+					if (platform.ignoresTimeout !== true) signal.throwIfAborted()
+					const listedAt = platform.listedAt === undefined ? 1 : platform.listedAt
+					return listedAt !== null && lists >= listedAt ? [STORED] : []
+				},
+			},
+			sleep: async (ms) => clock.advance(ms),
+			clock,
+			budgetEndMs: startedMs + budgetMs,
+			signal: new AbortController().signal,
+			boundary: async () => {},
+			log: () => {},
+			serviceId: DATABASE_SERVICE_ID,
+			hostname: 'db',
+			tag: TAG,
+		}).then((file) => ({ file }), (error: unknown) => ({ error: error instanceof Error ? error.message : String(error) }))
+		return { outcome, lists, elapsedMs: clock.now() - startedMs }
+	}
+	const NOT_STORED = (minutes: number) =>
+		`zerops: the backup of db was not stored within ${minutes} minutes, so nothing was deployed; a backup larger than the project's backup storage is never stored`
+
+	test('lists that take 20 s each still end the wait at 30 minutes, not after 180 lists', async () => {
+		const { outcome, lists, elapsedMs } = await wait({ listMs: 20_000, listedAt: null })
+		expect(outcome).toEqual({ error: NOT_STORED(30) })
+		expect(elapsedMs).toBe(ZEROPS_BACKUP_WAIT_MS)
+		expect(lists).toBe(60)
+	})
+
+	test('a deploy budget shorter than 30 minutes bounds the wait', async () => {
+		const { outcome, elapsedMs } = await wait({ listedAt: null }, 5 * 60 * 1000)
+		expect(outcome).toEqual({ error: NOT_STORED(5) })
+		expect(elapsedMs).toBe(5 * 60 * 1000)
+	})
+
+	test('a list that hangs is cut at its own timeout and read again', async () => {
+		const { outcome, lists, elapsedMs } = await wait({ hangingLists: 1 })
+		expect(outcome).toEqual({ file: STORED })
+		expect(lists).toBe(2)
+		expect(elapsedMs).toBe(ZEROPS_BACKUP_LIST_TIMEOUT_MS + 1 + 10_000)
+	})
+
+	test('a tag that a list shows only after the deadline is a failure', async () => {
+		// Lists take 25 s, 35 s apart: the 52nd starts at 29:45 and answers at 30:10, past its timeout, showing the backup.
+		const { outcome, lists } = await wait({ listMs: 25_000, listedAt: 52, ignoresTimeout: true })
+		expect(lists).toBe(52)
+		expect(outcome).toEqual({ error: NOT_STORED(30) })
+	})
+
+	test('a backup request that does not answer in time fails, and nothing waits on it', async () => {
+		const { outcome, lists, elapsedMs } = await wait({ requestMs: ZEROPS_BACKUP_REQUEST_TIMEOUT_MS + 1 })
+		expect(outcome).toEqual({ error: 'zerops: the backup request for db got no answer; nothing was deployed' })
+		expect(lists).toBe(0)
+		expect(elapsedMs).toBe(ZEROPS_BACKUP_REQUEST_TIMEOUT_MS + 1)
+	})
+
+	test('a finished backup the list shows only after the deadline is a failure', async () => {
+		const { outcome } = await wait({ start: { success: true, async: false }, listMs: 6 * 60 * 1000, ignoresTimeout: true }, 5 * 60 * 1000)
+		expect(outcome).toEqual({ error: 'zerops: the backup of db finished, and the list does not show it; nothing was deployed' })
 	})
 })
 

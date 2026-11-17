@@ -258,6 +258,8 @@ export const fakeZerops = (options: {
 		getProjectEnv: NEVER('getProjectEnv'),
 		getLogAccess: NEVER('getLogAccess'),
 		readBuildLog: NEVER('readBuildLog'),
+		createBackup: NEVER('createBackup'),
+		listBackups: NEVER('listBackups'),
 		listProjects: NEVER('listProjects'),
 		findService: NEVER('findService'),
 

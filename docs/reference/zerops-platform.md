@@ -1672,6 +1672,57 @@ write, a response that does not parse, or a read-back that differs is a warning 
 The row imports its own database and prints what a fresh one reads, so its log records the format; it runs with
 `FABRIKA_LIVE_ZEROPS_SLOW=1`.
 
+#### Verified live (2026-11-17) — a tagged backup before migrations that may change stored data
+
+An application's migrations run in its init commands, when a new version's containers start. When Control hands a
+deploy `backupBeforeMigrations` (migration files with a statement that may change stored data and that the version
+running does not hold, ADR-0050), the deploy's `backup-database` step backs up the application's PostgreSQL service
+right after `verify-exposure`: before any service variable is written and before a version is reserved. A `cheap`
+application's is the namespace's shared `postgres`, backed up whole. The step requests the backup under the tag
+`run-<the first 20 letters and digits of the run id>` (a UUIDv7 starts with its timestamp). An answer `async: false` is
+a finished backup: one list read confirms it under the tag. An answer `async: true` goes on in the background, and the
+step lists the service's backups, 10 s apart, until one carries the tag. The wait is elapsed time, request times
+included: at most 30 minutes, and never past the run's 75-minute version deadline; the request has 60 s to answer and
+each list 30 s, both inside it. A refused or unanswered request, a `success: false`, a finished backup the list does
+not show, or no such file by the deadline (a list that answers later counts as none) fails the run before a version is
+reserved, so nothing is deployed (`storeTaggedBackup`, `src/provider.ts`). Restoring is the operator's, in the Zerops
+GUI: the API has no restore.
+
+Verified on a single PostgreSQL 18 with an empty database:
+
+| Endpoint                          | Body / response                                                                                                                                                                                       |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /service-stack/{id}/backup` | `{ tags }` → `{ success: true, async: false }` after about 12 s. No process: `async: false` means it finished within the platform's 10 s window, `async: true` that it still runs                     |
+| `POST`, a 25-character tag        | 400 `backupTagNameFormat`: a tag is 1 to 24 characters of `[A-Za-z0-9:_-]`                                                                                                                            |
+| `GET /service-stack/{id}/backup`  | Half a second after `async: false`, `files[]` lists it: `{ path: "<serviceId>/<name>", name: "2026-11-17 11:18:16", size, metadata: { file_name, mode: "MANUAL", stack_name, tags: ["<the tag>"] } }` |
+| `GET`, top level                  | `backupPeriod: "31 0 * * *"`, `retentionPolicy: null`, `defaultRetentionPolicy: { maxTotalFiles: 50, maxTotalGiB: 5, protectedTags: [], minDaily: 7, minWeekly: 4, minMonthly: 3, max*: 0 }`          |
+
+`metadata.tags` is a JSON array, and the metadata keys are snake_case (`file_name`, `stack_name`), not the documented
+`filename` and `stackname`. A file whose tags are not an array of strings reads as untagged, so it is never taken for
+the run's backup.
+
+The run's tag is not protected. Default retention removes a manual backup only past 50 files or 5 GiB, while protected
+backups would pile up toward the project's backup storage, past which the documentation says a backup is not stored at
+all.
+
+Still UNVERIFIED:
+
+- whether a backup that answered `async: true` is listed before it completes. If it is, the deploy goes on before the
+  dump is complete; no database big enough to run past 10 s was seeded;
+- how long a backup of a real application's database takes, and whether 30 minutes covers it;
+- that a backup over the project's backup storage is not stored (from the Zerops documentation);
+- whether retention prunes a tagged manual backup by `maxTotalFiles` and `maxTotalGiB` alone. The documentation says a
+  manual backup gets no `daily`, `weekly` or `monthly` tag.
+
+| Behaviour                                                                                     | Row                                                          |
+| --------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| A backup of an empty database answers `async: false` and is listed at once, its tags an array | `postgres-tagged-backup-is-finished-and-listed-at-once`      |
+| A 25-character tag is refused with `backupTagNameFormat`                                      | `postgres-backup-tag-over-24-characters-is-refused`          |
+| UNVERIFIED: a background backup is listed only once stored                                    | `unverified-background-backup-is-listed-before-it-completes` |
+
+The first two rows run on the database the backup-period row imports, with `FABRIKA_LIVE_ZEROPS_SLOW=1`, and against the
+local emulator, which answers every backup `async: false` and lists it at once.
+
 ### The checker version
 
 Every contract application build fetches the checker by version: `bun x -p @fabrika/check@<version>`, for

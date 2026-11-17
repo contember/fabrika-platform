@@ -6,6 +6,8 @@ import {
 	appVersionListSchema,
 	appVersionSchema,
 	backupConfigSchema,
+	backupFilesSchema,
+	backupStartSchema,
 	importResultSchema,
 	integrationTokenSchema,
 	logAccessSchema,
@@ -381,6 +383,12 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 			})
 			return readResponse('configure backup', processNilSchema, payload).process ?? null
 		},
+
+		createBackup: async ({ serviceId, tags, signal }) =>
+			readResponse('back up', backupStartSchema, await request('back up', 'POST', `/service-stack/${serviceId}/backup`, { body: { tags }, signal })),
+
+		listBackups: async ({ serviceId, signal }) =>
+			readResponse('list backups', backupFilesSchema, await request('list backups', 'GET', `/service-stack/${serviceId}/backup`, { signal })),
 
 		getService: async ({ serviceId, signal }) =>
 			readResponse('get service', serviceSchema, await request('get service', 'GET', `/service-stack/${serviceId}`, { signal })),

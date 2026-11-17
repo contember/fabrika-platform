@@ -167,7 +167,10 @@ INSERT INTO priorities (code, label, rank) VALUES ('low', 'Low', 1), ('normal', 
   `SET`, transaction control, `SECURITY DEFINER`, a domain, `serial` and sequences (use `GENERATED ALWAYS AS IDENTITY`),
   a function overload, and calls outside the reviewed built-ins.
 - Never edit, rename or delete a committed migration; add a new one. Change a schema by expand, switch, contract, and
-  ask before you drop or rename anything.
+  ask before you drop or rename anything. A migration statement that is not known to keep every stored value (it
+  drops a table or a column, empties, deletes, updates or upserts rows, changes a column's type, renames, or calls its
+  own database code) shows a separate line that says it deletes, overwrites or may change data. That line waits for a
+  person on a protected environment, and the platform backs the database up before the migration runs.
 
 ## On Cloudflare: SQLite migrations
 

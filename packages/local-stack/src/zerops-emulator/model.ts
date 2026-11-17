@@ -73,6 +73,17 @@ export interface ProcessRecord {
 	pendingReads: number
 }
 
+/**
+ * One stored backup of a service, in the shape verified live on 2026-11-17: a request answers `async: false` and the
+ * file is listed at once. The double backs up any service; the platform refuses a type it cannot back up.
+ */
+export interface BackupRecord {
+	serviceStackId: string
+	/** The moment it was taken, `YYYY-MM-DD HH:MM:SS` in UTC, as the platform names the file. */
+	name: string
+	tags: string[]
+}
+
 /** The tiered access role shared by an integration token's request and its response. */
 export type RoleCode = 'OWNER' | 'ADMIN' | 'BASIC_USER' | 'READ_ONLY' | 'NO_ACCESS'
 
@@ -111,6 +122,7 @@ export interface EmulatorSnapshot {
 	processes: ProcessRecord[]
 	integrationTokens: IntegrationTokenRecord[]
 	uploadGrants: LocalSourceUploadGrant[]
+	backups: BackupRecord[]
 }
 
 /**
@@ -162,6 +174,7 @@ export const emptySnapshot = (): EmulatorSnapshot => ({
 	processes: [],
 	integrationTokens: [],
 	uploadGrants: [],
+	backups: [],
 })
 
 /** A record as the env and user-data listings report it: a descriptor variable reads as `USER` since 2026-10-13. */

@@ -475,6 +475,9 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 				artifact,
 				...(input.environment.access === undefined ? {} : { access: input.environment.access }),
 				...(input.artifactUpload === undefined ? {} : { artifactUpload: input.artifactUpload }),
+				...(input.backupBeforeMigrations === undefined
+					? {}
+					: { backupBeforeMigrations: { migrations: input.backupBeforeMigrations.migrations, runId: input.runId } }),
 				dryRun: input.dryRun,
 				signal: input.signal,
 				events: input.events,

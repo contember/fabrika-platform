@@ -338,8 +338,9 @@ The verification of the migration phase (ADR-0069 §3) is this rehearsal.
   Control knows from the last succeeded deploy, not from the latest publication: a publication precedes the provider,
   and a run that failed after it changed nothing that runs. A version without the channel (an older release, or a gated
   one deployed without a domain) gets a plain deploy, and the object migrates on its cold start. An object whose
-  installed channel does not answer gets no deploy. The operation's deploy is the run's own. A deploy or a migration
-  that fails leaves the object restricted, for a recovery.
+  installed channel does not answer gets no deploy. A migration that may change stored data (any `dataLoss` statement) gets no plain deploy: without an
+  installed barrier Control refuses the run ([ADR-0050](0050-approved-access.md)). The operation's deploy is the run's
+  own. A deploy or a migration that fails leaves the object restricted, for a recovery.
 - **Opting out** stops the daily backup only. The pre-migration backup belongs to the migration phase and always runs.
 - An environment on an older release gets no backups, and the console says so.
 

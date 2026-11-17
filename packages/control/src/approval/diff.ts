@@ -960,16 +960,23 @@ function compareFileAdoptions(changes: Changes, baseline: AccessSnapshot, candid
  * already.
  */
 function compareDataLoss(changes: Changes, baseline: AccessSnapshot, candidate: AccessSnapshot): void {
-	const beforeFiles = byName(baseline.migrations)
-	const afterFiles = byName(candidate.migrations)
-	for (const loss of candidate.dataLoss ?? []) {
-		if (beforeFiles.get(loss.file)?.checksum === afterFiles.get(loss.file)?.checksum) continue
+	for (const loss of dataLossBeyond(baseline.migrations, candidate)) {
 		const { does, what } = dataLossWords(loss)
 		changes.add(
 			subjectOf('migration', loss.file),
 			...ruled('migration.deletes-data', [closer('deletes-data', `${migrationName(loss.file)} ${does}: ${what}`, 'neutral')]),
 		)
 	}
+}
+
+/**
+ * The candidate's `dataLoss` statements of every kind, each one not known to keep every stored value, in the migration
+ * files `held` does not hold unchanged. What the backup and the approval line both count, so neither filters by kind.
+ */
+export function dataLossBeyond(held: AccessSnapshot['migrations'], candidate: AccessSnapshot): MigrationDataLoss[] {
+	const heldFiles = byName(held)
+	const candidateFiles = byName(candidate.migrations)
+	return (candidate.dataLoss ?? []).filter((loss) => heldFiles.get(loss.file)?.checksum !== candidateFiles.get(loss.file)?.checksum)
 }
 
 function dataLossWords(loss: MigrationDataLoss): { readonly does: string; readonly what: string } {

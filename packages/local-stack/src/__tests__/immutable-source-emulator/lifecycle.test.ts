@@ -432,8 +432,14 @@ test('a current state file with every record kind round-trips through JSON', () 
 			{ appVersionId: 'v1', capabilitySha256: 'a'.repeat(64), deleted: false, receipt: { compressedBytes: 10, compressedSha256: 'b'.repeat(64) } },
 			{ appVersionId: 'v2', capabilitySha256: 'c'.repeat(64), deleted: true },
 		],
+		backups: [{ serviceStackId: 's', name: '2026-11-17 11:18:16', tags: ['run-0123456789abcdefghij'] }],
 	}
 	expect(parseSnapshot(JSON.parse(JSON.stringify(snapshot)))).toEqual(snapshot)
+})
+
+test('a state file written before the double kept backups reads with none', () => {
+	const { backups: _backups, ...older } = emptySnapshot()
+	expect(parseSnapshot(older)).toEqual(emptySnapshot())
 })
 
 test('the state file refuses a non-string run variable and a raw upload capability', () => {

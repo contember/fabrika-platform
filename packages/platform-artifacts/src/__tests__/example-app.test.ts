@@ -163,6 +163,8 @@ const makeApi = (rec: Recorded, statuses: ZeropsAppVersionStatus[]): ZeropsApi =
 		configureAutoscaling: () => Promise.reject(new Error('an application deploy must not change a profile')),
 		getBackupConfig: () => Promise.reject(new Error('an application deploy must not read a backup schedule')),
 		configureBackup: () => Promise.reject(new Error('an application deploy must not change a backup schedule')),
+		createBackup: () => Promise.reject(new Error('this application deploy deletes no data, so it takes no backup')),
+		listBackups: () => Promise.reject(new Error('this application deploy deletes no data, so it lists no backup')),
 		startService: () => Promise.reject(new Error('an application deploy never starts a service')),
 		stopService: () => Promise.reject(new Error('an application deploy never stops a service')),
 		configureCustomAutoscaling: ({ serviceId, autoscaling: sent }) => {

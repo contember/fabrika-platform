@@ -187,6 +187,15 @@ bun test
   one restart of a single-node database. A namespace's shared `postgres` is never raised. The count is the literal
   `FABRIKA_APP_DATABASE_CONNECTIONS` of the generated run section (`sizedExecution`); a build of an application with a
   database is never sent without it. Change the budget's constants only with a measurement.
+- **A deploy handed `backupBeforeMigrations` backs up the application's database before anything else changes
+  (ADR-0050).** Migrations run in the init commands at container start, so `backup-database` runs right after
+  `verify-exposure` and before a version is reserved: `storeTaggedBackup` (`src/provider.ts`) requests the backup under
+  `zeropsBackupTag(runId)`. An answer `async: false` is a finished backup (verified live), confirmed by one list read;
+  `async: true` is polled until `listBackups` shows a file with that tag, 10 s apart, for at most 30 minutes of elapsed
+  time on the collaborators' clock, request times included and never past the run deadline; each request has its own
+  timeout. A tag a late answer shows is a failure. A refusal or no such file fails the run with nothing deployed; never
+  move the step after `reserve-version` or let a timeout pass. The tag stays unprotected
+  (`docs/reference/zerops-platform.md`). The provider computes no data loss itself: Control decides.
 - **Before a version can activate, `verify-exposure` reads every declared service back (`src/exposure.ts`).**
   `subdomainAccess` must be exactly `false` (absent or unreadable is a refusal), and every object-storage
   service must be created by this run's import (`stack.create`) or named by the `FABRIKA_STORAGE_PROVENANCE`

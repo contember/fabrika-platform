@@ -6,6 +6,7 @@
 
 import { type ApplicationObjects, MAX_APPLICATION_OBJECTS } from '@fabrika/auth-core'
 import { type BlobStore, type SqlDatabase, SqlDeployLocks, uuidv7 } from '@fabrika/platform'
+import { checkoutRelativeDirectory } from '@fabrika/provider-cloudflare/runner'
 import type { ControlProvider } from '@fabrika/provider-contract'
 import { Database } from 'bun:sqlite'
 import { afterEach, describe, expect, test } from 'bun:test'
@@ -59,6 +60,9 @@ const APPLIED = { bundle: 'app', name: MIGRATION, checksum: 'a'.repeat(64), appl
 const AT = '2027-01-15T07:00:00.000Z'
 const NOW = Date.parse('2027-01-15T09:00:00.000Z')
 const DEFAULTS: ApplicationObjects = { object: 'application', objects: ['application', 'rehearsal'] }
+/** An application root the app's `workerDir` can move to: the same contract and migration, and a migration that deletes rows. */
+const NEXT_ROOT = 'next'
+const PURGE = '20261026000000_purge.sql'
 
 const vault = await createTestVault()
 
@@ -191,6 +195,7 @@ for (const backend of backends) {
 			const provider: ControlProvider = {
 				id: TEST_PROVIDER_ID,
 				normalizeRegistration: (input) => input,
+				applicationRoot: (source) => checkoutRelativeDirectory(source.workerDir),
 				source: { binding: 'connection' },
 				resolveSource: () => Promise.resolve({ commitSha: 'a'.repeat(40) }),
 				opsChannel: () => state.serves,
@@ -215,7 +220,13 @@ for (const backend of backends) {
 				provider,
 				logs: store,
 				runLogs: store,
-				commits: memoryCommits({ 'fabrika.contract.ts': healthOnly(APP), [`db/migrations/${MIGRATION}`]: 'CREATE TABLE notes (id TEXT PRIMARY KEY);' }),
+				commits: memoryCommits({
+					'fabrika.contract.ts': healthOnly(APP),
+					[`db/migrations/${MIGRATION}`]: 'CREATE TABLE notes (id TEXT PRIMARY KEY);',
+					[`${NEXT_ROOT}/fabrika.contract.ts`]: healthOnly(APP),
+					[`${NEXT_ROOT}/db/migrations/${MIGRATION}`]: 'CREATE TABLE notes (id TEXT PRIMARY KEY);',
+					[`${NEXT_ROOT}/db/migrations/${PURGE}`]: 'DELETE FROM notes;',
+				}),
 				opsKeys: new VaultOpsKeys(b.repositories.opsKeys, () => Promise.resolve(vault)),
 				ops: fake,
 			})
@@ -306,6 +317,7 @@ for (const backend of backends) {
 				mode,
 				locks,
 				provider,
+				logs,
 			}
 		}
 
@@ -427,6 +439,22 @@ for (const backend of backends) {
 			expect(f.fake.requests()).toEqual(['inspect', 'state application open @2'])
 			expect(await f.b.repositories.applicationObjects.get(APP, ENV)).toBeNull()
 			expect(await recordedMaintenance(f.b, TARGET)).toBe('open')
+		})
+
+		test("a restore's deploy that would bring a new migration changing stored data is refused before any deploy or freeze", async () => {
+			const f = await open()
+			await f.deployFirst()
+			// The restore redeploys the commit that runs, but from the app's current directory, which now holds a purge.
+			await f.b.repositories.registry.updateApp(APP, { workerDir: NEXT_ROOT })
+			expect(await f.restore()).toMatchObject({ result: 'failed', operation: { state: 'failed', step: 'list', error_code: LIST_FAILED_CODE } })
+			expect(f.state.deploys).toEqual([])
+			expect(f.fake.requests()).toEqual(['inspect', 'state application open @2'])
+			expect(await recordedMaintenance(f.b, TARGET)).toBe('open')
+			const listRun = (await f.restoreRow())?.list_run_id ?? ''
+			expect([...f.logs.values()].join('\n')).toContain(
+				`\`${PURGE}\` may change stored data, and the version running does not hold it: a restore's deploy brings no such migration`,
+			)
+			expect((await f.b.repositories.runs.getRun(listRun))?.status).toBe('failed')
 		})
 
 		test('a runner that does not forward the pointer is caught by the listing, before anything is frozen', async () => {

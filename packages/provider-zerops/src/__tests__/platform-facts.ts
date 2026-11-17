@@ -143,6 +143,11 @@ const SECTION_UNVERIFIED_HA_NEW_ROLE =
 const SECTION_POSTGRES_MIN_RAM =
 	"Verified live (2026-10-16) — the autoscaling API raises a PostgreSQL service's minimum RAM and its `max_connections` — docs/reference/zerops-platform.md"
 const SECTION_BACKUP_SCHEDULE = "UNVERIFIED: a managed service's backup schedule, set through the API — docs/reference/zerops-platform.md"
+const SECTION_BACKUP_BEFORE_MIGRATION =
+	'Verified live (2026-11-17) — a tagged backup before migrations that may change stored data — docs/reference/zerops-platform.md'
+const SECTION_BACKUP_UNVERIFIED = 'UNVERIFIED: a backup that runs in the background — docs/reference/zerops-platform.md'
+/** The 24 characters a backup tag may hold at most, the length of the tag a deploy writes. */
+const BACKUP_TAG = 'run-0123456789abcdefghij'
 const SECTION_REST_API = 'REST API — docs/reference/zerops-platform.md:149'
 const SECTION_HIERARCHY = 'Hierarchy and isolation — docs/reference/zerops-platform.md:28'
 const SECTION_AUTHORIZATION_FORWARDED =
@@ -1288,7 +1293,55 @@ export const PLATFORM_FACTS: readonly PlatformFact[] = [
 		script: 'postgres-backup-period',
 		live: 'build',
 		emulator: false,
-		emulatorNote: 'the double keeps no backups',
+		emulatorNote: 'the double keeps no backup schedule',
+	},
+	{
+		id: 'postgres-tagged-backup-is-finished-and-listed-at-once',
+		section: SECTION_BACKUP_BEFORE_MIGRATION,
+		// On the empty database the row before imported: `async: false` answers a finished backup, which the very next list
+		// shows under its tag in a JSON array, with snake_case metadata keys. The retention it reads is why a run's tag is
+		// not protected: an unprotected manual backup goes only past 50 files or 5 GiB.
+		request: { method: 'POST', path: '/service-stack/{backupServiceId}/backup', body: { tags: [BACKUP_TAG] } },
+		expect: { status: 200, bodyShape: { success: { kind: 'boolean', value: true }, async: { kind: 'boolean', value: false } } },
+		then: [
+			{
+				method: 'GET',
+				path: '/service-stack/{backupServiceId}/backup',
+				expect: {
+					status: 200,
+					bodyShape: {
+						'files[*].metadata.file_name': { kind: 'nonEmptyString' },
+						'files[*].metadata.stack_name': { kind: 'equals', value: '{backupHostname}' },
+						'files[*].metadata.filename': { kind: 'absent' },
+						'defaultRetentionPolicy.maxTotalFiles': { kind: 'number', value: 50 },
+						'defaultRetentionPolicy.maxTotalGiB': { kind: 'number', value: 5 },
+						'defaultRetentionPolicy.protectedTags': { kind: 'emptyArray' },
+					},
+					bodyCounts: { [`files[*].metadata.tags[=${BACKUP_TAG}]`]: 1 },
+				},
+			},
+		],
+		live: 'build',
+		emulator: true,
+	},
+	{
+		id: 'postgres-backup-tag-over-24-characters-is-refused',
+		section: SECTION_BACKUP_BEFORE_MIGRATION,
+		request: { method: 'POST', path: '/service-stack/{backupServiceId}/backup', body: { tags: [`${BACKUP_TAG}k`] } },
+		expect: { status: 400, code: 'backupTagNameFormat', messageContains: 'must be between 1 and 24 characters' },
+		live: 'build',
+		emulator: true,
+	},
+	{
+		id: 'unverified-background-backup-is-listed-before-it-completes',
+		section: SECTION_BACKUP_UNVERIFIED,
+		// What `backup-database` would rely on if it did not wait: a backup answered `async: true` is not listed until stored.
+		request: { method: 'GET', path: '/service-stack/{backupServiceId}/backup' },
+		expect: { status: 200 },
+		live: 'not-probed',
+		liveNote: "needs a database whose backup runs past the platform's 10 s window; the table seeds none",
+		emulator: false,
+		emulatorNote: 'the double answers every backup finished, `async: false`',
 	},
 ]
 
@@ -1348,7 +1401,7 @@ const substituteBody = (value: unknown, context: FactContext): unknown => {
 	return value
 }
 
-const SEGMENT = /^([A-Za-z0-9_]+)(?:\[(\*|[A-Za-z0-9_]+=[^\]]*)\])?$/
+const SEGMENT = /^([A-Za-z0-9_]+)(?:\[(\*|[A-Za-z0-9_]*=[^\]]*)\])?$/
 
 const member = (value: unknown, key: string): unknown =>
 	typeof value === 'object' && value !== null && key in value ? Reflect.get(value, key) : undefined
@@ -1357,7 +1410,7 @@ const member = (value: unknown, key: string): unknown =>
  * Resolve a dotted path to every value it matches.
  *
  * Two bracket forms, which is all the rows need: `name[*]` walks every element of an array, and
- * `name[field=value]` selects the elements of an array whose `field` equals `value`.
+ * `name[field=value]` selects the elements of an array whose `field` equals `value` (`name[=value]`: that are `value`).
  */
 /** Segments split on `.` — but never inside a bracket, where a filter value may hold one. */
 const segmentsOf = (path: string): string[] => path.match(/[^.[\]]+(?:\[[^\]]*\])?/g) ?? []
@@ -1386,7 +1439,7 @@ export const resolvePath = (value: unknown, path: string): unknown[] => {
 			const separator = filter.indexOf('=')
 			const field = filter.slice(0, separator)
 			const wanted = filter.slice(separator + 1)
-			next.push(...found.filter((item) => member(item, field) === wanted))
+			next.push(...found.filter((item) => (field === '' ? item : member(item, field)) === wanted))
 		}
 		current = next
 	}
