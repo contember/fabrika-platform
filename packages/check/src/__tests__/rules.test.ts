@@ -40,6 +40,7 @@ const FILE_COLUMN_APPLICATION: Readonly<Record<string, string>> = {
 /** The clean application whose notes a relation reaches through an access view (ADR-0076). */
 const ACCESS_VIEW_SOURCES: Readonly<Record<string, string>> = {
 	...CLEAN_APPLICATION,
+	'fabrika.contract.ts': CLEAN_CONTRACT.replace("\tactions: {", "\trelations: { shared: { dimension: 'note' } },\n\tactions: {"),
 	'src/vocabulary.ts': CLEAN_VOCABULARY.replace("\tactions: {", "\trelations: { shared: { dimension: 'note' } },\n\tactions: {"),
 	'src/db/tables.ts': CLEAN_TABLES.replace(
 		"\t\tinsert: ['title'],\n",
