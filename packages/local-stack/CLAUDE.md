@@ -91,8 +91,8 @@ bun run test:browser  # the opice suites in tests/browser/
   `@fabrika/*` pins at the source version the container runs (`applicationFixtureSource`), pinned by
   tree in `fixtures/source/manifest.json`, so Control approves the contract the composed container serves. An edit of
   the example moves the pin: run `bun run fixtures:pin` here. `deployable.test.ts` runs the build's checker and, on
-  Postgres, the init commands' steps over the archive itself. The container runs
-  the platform's init-command steps and the generated entrypoint with the variables `prepare.ts` writes. Never give it
+  Postgres, the build's schema checks over the archive itself. The container runs
+  the platform's init-command step (`fabrika db migrate`) and the generated entrypoint with the variables `prepare.ts` writes. Never give it
   a variable the platform would not write: the apps proxy serves its endpoint table.
 - **The composition follows a deploy only when told to (`src/notes-follow.ts`).** The emulator runs no code, so
   `followNotesDeploy` makes the composed Notes container and the apps proxy serve what the emulator's active Notes

@@ -256,7 +256,7 @@ services:
       timeout: 3s
       retries: 30
 
-  # The Notes example as the platform starts a contract application on Zerops: the generated init commands' steps,
+  # The Notes example as the platform starts a contract application on Zerops: the generated init command's step,
   # then the generated entrypoint, with the variables the deploy writes (`prepare.ts` generates the local ones).
   # `followNotesDeploy` points it at another fixture commit the emulator activated (`src/notes-follow.ts`).
   notes:
@@ -265,15 +265,13 @@ services:
     image: fabrika-local-app:clamav
     build: app-image
     working_dir: ${FABRIKA_LOCAL_NOTES_ROOT:-/workspace/examples/zerops-app}
-    # The generated init commands' steps, with the source's own `fabrika` as the platform runs it: a release fixture
-    # (`local:compat`) migrates and checks with the framework it pins.
+    # The generated init command's step, with the source's own `fabrika` as the platform runs it: a release fixture
+    # (`local:compat`) migrates with the framework it pins. The schema checks run in the platform build, not at start.
     command:
       - sh
       - -c
       - >-
         ./node_modules/.bin/fabrika db migrate &&
-        ./node_modules/.bin/fabrika db codegen --verify &&
-        ./node_modules/.bin/fabrika db test-isolation &&
         exec bun --max-http-header-size=65536 fabrika/entry.generated.ts
     # `notes-workloads.env` holds the jobs' and webhooks' keys (`workload-keys.ts`), `notes-membership.env` IAM's
     # membership transport (`membership-key.ts`); `up` writes both before Notes starts.

@@ -100,8 +100,7 @@ discards all local data, including the retained MinIO volume and credentials.
 ## The Notes container
 
 The `notes` service runs `examples/zerops-app` as the platform starts a contract
-application on Zerops: the source's own `./node_modules/.bin/fabrika` runs `db migrate`, `db codegen --verify` and
-`db test-isolation`, then the generated entrypoint
+application on Zerops: the source's own `./node_modules/.bin/fabrika` runs `db migrate`, then the generated entrypoint
 (`fabrika/entry.generated.ts`, which preparation writes, as the platform build does).
 Preparation writes the variables a deploy writes: `notes.env` holds the database URL,
 the proxy secret and the bucket credentials, `notes-contract.env` the digest of the
@@ -155,7 +154,7 @@ table `note_labels` with its policy and migration, a migration that declares a t
 approval marks "needs closer review"), and the regenerated code and tests. It also holds one commit per
 release fixture, the example as a released tag holds it ([The compatibility suite](#the-compatibility-suite)).
 `deployable.test.ts` checks the application and agent change archives as a production build does: the checker, and
-on Postgres `fabrika db migrate`, `fabrika db codegen --verify` and `fabrika db
+on Postgres the build's schema checks, `fabrika db migrate`, `fabrika db codegen --verify` and `fabrika db
 test-isolation`. Preparation stores their manifests and archives
 under `.state/source-fixtures/`. Their commits do not depend on the enclosing
 checkout's HEAD, index, or uncommitted files. Control receives the platform
