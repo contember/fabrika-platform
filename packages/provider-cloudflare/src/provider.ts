@@ -54,6 +54,7 @@ import {
 	assertCloudflareContract,
 	capsJobSegments,
 	checksSqliteSchema,
+	namesSchemaCheckConfig,
 	needsMinuteTick,
 	pinsGeneratedEntry,
 	runsInObject,
@@ -242,12 +243,22 @@ const isFile = async (path: string): Promise<boolean> => {
 	}
 }
 
-/** The first `node_modules/.bin/fabrika` from the application directory up to `root`: a workspace links it at its root. */
-const applicationCli = async ({ cwd, root }: CheckTarget): Promise<string> => {
+/** The directories from the application directory up to `root`, where the CLI is looked for, nearest first. */
+const cliSearchPath = ({ cwd, root }: CheckTarget): readonly string[] => {
+	const dirs: string[] = []
 	for (let dir = cwd; isWithin(root, dir); dir = dirname(dir)) {
+		dirs.push(dir)
+		if (dir === root) break
+	}
+	return dirs
+}
+
+/** The first `node_modules/.bin/fabrika` from the application directory up to `root`: a workspace links it at its root. */
+const applicationCli = async (target: CheckTarget): Promise<string> => {
+	const { cwd, root } = target
+	for (const dir of cliSearchPath(target)) {
 		const candidate = resolve(dir, ...APPLICATION_CLI)
 		if (await isFile(candidate)) return candidate
-		if (dir === root) break
 	}
 	throw new Error(
 		`fabrika app build: no \`${APPLICATION_CLI.join('/')}\` from \`${cwd}\` up to \`${root}\`; the application installs \`@fabrika/cli\``,
@@ -295,13 +306,23 @@ const runCheckoutCommand = async (
 }
 
 /**
- * The Zerops build's order, for a run Control approved. The application's tests run first: they are checkout code, so
- * everything after them is reinstalled, regenerated or written afresh. For a release that pins the generated entry that
- * is a frozen install into an emptied `node_modules`, the entry (`fabrika app build`), the platform tsconfig, then `tsc`,
- * the checker and the schema checks; an older release keeps its authored `main`, and only the checker follows, which
- * reads no entry. The checker is the release Control approved the access with; without one the step fails rather than
- * deploy unchecked code.
+ * The Zerops build's order, for a run Control approved. The application's tests run first, and what they may leave
+ * behind by accident is reinstalled, regenerated or written afresh after them; this does not stop a hostile test, since
+ * Bun hardlinks installed files to its cache, so a dependency edited in place comes back with the reinstall. For a
+ * release that pins the generated entry that is a frozen install into emptied `node_modules`, the entry (`fabrika app
+ * build`), the platform tsconfig, then `tsc`, the checker and the schema checks; an older release keeps its authored
+ * `main`, and only the checker follows, which reads no entry. The checker is the release Control approved the access
+ * with; without one the step fails rather than deploy unchecked code.
  */
+/** Why the CLI of `release` cannot run the schema checks of the config `config`, or null when it can (ADR-0062). */
+const schemaCheckGap = (release: string | undefined, config: string): string | null => {
+	if (release === undefined || !checksSqliteSchema(release)) return `the CLI of framework ${release ?? '(unnamed)'} does not check a SQLite schema`
+	if (config !== DEFAULT_CONFIG && !namesSchemaCheckConfig(release)) {
+		return `the CLI of framework ${release} takes no \`--config\`, so it cannot read \`${config}\``
+	}
+	return null
+}
+
 const runChecks = async (target: CheckTarget, run: CloudflareDeployRun, cf: CloudflareCollaborators): Promise<void> => {
 	const checker = run.approved?.checker
 	if (checker === undefined) {
@@ -311,7 +332,8 @@ const runChecks = async (target: CheckTarget, run: CloudflareDeployRun, cf: Clou
 	}
 	const { tsconfig, checks: [tests, tsc, check] } = contractChecks(target.cwd, checker)
 	const release = run.approved?.framework
-	const schema = target.regeneratesEntry && release !== undefined && checksSqliteSchema(release)
+	const gap = target.regeneratesEntry ? schemaCheckGap(release, target.config) : null
+	const schema = target.regeneratesEntry && gap === null
 	// An older `fabrika db` refuses any argument, so the default config is not named.
 	const config = target.config === DEFAULT_CONFIG ? [] : [`--config=${target.config}`]
 	const schemaChecks: (readonly [CheckSubject, readonly string[]])[] = []
@@ -341,8 +363,8 @@ const runChecks = async (target: CheckTarget, run: CloudflareDeployRun, cf: Clou
 		await shell(check)
 		return
 	}
-	// The tests may have rewritten `node_modules`, one of the application directory included, where the CLI is looked for first.
-	for (const dir of new Set([target.root, target.cwd])) await rm(resolve(dir, 'node_modules'), { recursive: true, force: true })
+	// Every `node_modules` the CLI is looked for in, so none the tests left on the way wins the lookup.
+	for (const dir of cliSearchPath(target)) await rm(resolve(dir, 'node_modules'), { recursive: true, force: true })
 	const installed = await runCheckoutCommand(cf, run, target.root, 'bun', CHECKOUT_INSTALL_ARGS)
 	if (installed.exitCode !== 0) throw commandError(`bun ${CHECKOUT_INSTALL_ARGS.join(' ')}`, installed)
 	const cli = await applicationCli(target)
@@ -355,8 +377,8 @@ const runChecks = async (target: CheckTarget, run: CloudflareDeployRun, cf: Clou
 	await writeFile(tsconfigPath, `${tsconfig.lines.join('\n')}\n`, { flag: 'wx' })
 	await shell(tsc)
 	await shell(check)
-	if (!schema) {
-		run.log(`  the CLI of framework ${release ?? '(unnamed)'} does not check a SQLite schema; the schema types and isolation tests are not checked`)
+	if (gap !== null) {
+		run.log(`  ${gap}; the schema types and isolation tests are not checked`)
 		return
 	}
 	if (!target.tables) run.log('  the contract declares no table, so there are no schema types to check')

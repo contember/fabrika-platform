@@ -33,6 +33,7 @@ import {
 	type StagedLocalAssets,
 	stageLocalAssets,
 } from '..'
+import { SCHEMA_CHECK_CONFIG_SINCE } from '../contract-support'
 import { deployOrder } from '../deploy-order'
 import type { PlatformIamTarget } from '../provider'
 import { CLOUDFLARE_PROXY_WORKER_DIR, PROXY_MANIFEST_DEFINE, proxyManifestJson } from '../proxy'
@@ -2182,7 +2183,7 @@ describe("the check step: the application's tests, types, checker and schema bef
 		expect(tsconfig.include).toEqual(['../fabrika.contract.ts', '../src', '../web', 'entry.generated.ts'])
 	})
 
-	test('what the tests rewrite cannot change what `tsc` checks, which CLI builds the entry, or the entry it builds', async () => {
+	test('a tsconfig, CLI or entry the tests leave behind is not what `tsc` reads or what builds the entry', async () => {
 		const outside = await mkdtemp(join(tmpdir(), 'fabrika-outside-'))
 		fixtures.push(outside)
 		await writeFile(join(outside, 'tsconfig.json'), 'outside')
@@ -2194,7 +2195,7 @@ describe("the check step: the application's tests, types, checker and schema bef
 			const result = await deploy(rec, config(), {
 				runCommand: async (spec) => {
 					if (spec.args[1] === tests[2]) {
-						// The tests point the tsconfig outside the checkout, plant a CLI of their own and write an entry.
+						// Leftovers of the tests: the tsconfig linked outside the checkout, a CLI of their own, an entry.
 						await mkdir(dirname(tsconfigPath), { recursive: true })
 						await rm(tsconfigPath, { force: true })
 						await symlink(join(outside, 'tsconfig.json'), tsconfigPath)
@@ -2264,6 +2265,43 @@ describe("the check step: the application's tests, types, checker and schema bef
 			['db', 'codegen', '--verify', '--config=cloudflare.config.ts'],
 			['db', 'test-isolation', '--config=cloudflare.config.ts'],
 		])
+	})
+
+	test('a CLI before `--config` checks the schema of the default config, and leaves the schema of another one unchecked, saying so', async () => {
+		const older = '0.9.0-dev.13'
+		const named = { configPath: 'app/cloudflare.config.ts', framework: older }
+		for (
+			const [options, cli] of [
+				[{ framework: SCHEMA_CHECK_CONFIG_SINCE, configPath: 'app/cloudflare.config.ts' }, ['app', 'db', 'db']],
+				[{ framework: older }, ['app', 'db', 'db']],
+				[named, ['app']],
+			] as const
+		) {
+			rec.commands.splice(0)
+			rec.logs.splice(0)
+			const result = await deploy(rec, config(), options)
+			expect(result.status).toBe('succeeded')
+			expect(rec.commands.filter((command) => command.command === APP_CLI).map((command) => command.args[0])).toEqual([...cli])
+		}
+		expect(rec.logs).toContain(
+			`  the CLI of framework ${older} takes no \`--config\`, so it cannot read \`cloudflare.config.ts\`; the schema types and isolation tests are not checked`,
+		)
+	})
+
+	test('every `node_modules` from the checkout down to the application is emptied before the CLI is looked for', async () => {
+		const checkout = await mkdtemp(join(tmpdir(), 'fabrika-workspace-'))
+		fixtures.push(checkout)
+		const cli = await withApplicationCli(checkout)
+		const demo = join(checkout, 'packages', 'demo')
+		await withBuiltMounts(demo)
+		// Between the two ends, so the lookup would reach it before the checkout's own.
+		const planted = join(checkout, 'packages', 'node_modules', '.bin', 'fabrika')
+		await mkdir(dirname(planted), { recursive: true })
+		await writeFile(planted, 'planted')
+		const result = await deploy(rec, config(), { checkoutDir: demo, cwd: checkout, configPath: 'packages/demo/fabrika.config.ts' })
+		expect(result.status).toBe('succeeded')
+		expect(existsSync(planted)).toBe(false)
+		expect(rec.commands.find((command) => command.args[0] === 'app')?.command).toBe(cli)
 	})
 
 	test('a run from a Control that names no checker release fails the check, saying to upgrade Control, and runs nothing', async () => {

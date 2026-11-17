@@ -209,6 +209,15 @@ const SQLITE_SCHEMA_CHECKS_SINCE = '0.9.0-dev.5'
 export const checksSqliteSchema = (release: string): boolean => releaseFrom(release, SQLITE_SCHEMA_CHECKS_SINCE)
 
 /**
+ * The first framework release whose `fabrika db codegen` and `fabrika db test-isolation` take `--config=<file>`; an
+ * older one refuses any argument, so it reads only `fabrika.config.ts`.
+ */
+export const SCHEMA_CHECK_CONFIG_SINCE = '0.9.0-dev.14'
+
+/** Whether the deploy may name a config of another name to the schema checks of an application on release `release`. */
+export const namesSchemaCheckConfig = (release: string): boolean => releaseFrom(release, SCHEMA_CHECK_CONFIG_SINCE)
+
+/**
  * Refuse what a stateless Worker of an older release cannot run: a job, a webhook, a public procedure, installation
  * mail and token purposes all need the object's database or a Worker secret it never reads.
  */
