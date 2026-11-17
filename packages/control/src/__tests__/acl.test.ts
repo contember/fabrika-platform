@@ -124,8 +124,8 @@ describe('ACL enforcement (resolved auth context)', () => {
 			...deployer,
 			oauth: { app: 'vozka', clientId: 'https://claude.ai/oauth/client.json', scopes: ['authoring'], grantId: 'g', tokenId: 't' },
 		}
-		const person = 'environment `prod` is protected: only a person deploys to it, from the console or their own CLI login; '
-			+ 'an agent, a builder key or a service key cannot'
+		const person = 'environment `prod` is protected: only a person deploys it by hand, from the console; an agent, a builder key or a '
+			+ "service key cannot. A push to the environment's trigger ref still deploys it"
 		const workspace = "environment `prod` is protected: a workspace branch reaches it only after it is merged into the environment's trigger ref"
 		for (const auth of [service, agent]) {
 			const { deps, queue } = makeDeps(auth)
@@ -149,6 +149,24 @@ describe('ACL enforcement (resolved auth context)', () => {
 		expect(queue).toEqual([])
 		expect((await rpcResult(rpcRequest('deploy', { appId: 'app', env: 'prod' }), deps)).status).toBe(200)
 		expect(queue).toHaveLength(1)
+	})
+
+	test('a protected environment takes a full ref or a commit SHA, so a workspace branch has no short spelling', async () => {
+		const { deps, queue } = makeDeps(authWithActions(['deploy.*'], 'op@fabrika.test'))
+		await deps.repositories.registry.createApp({ id: 'app', repoUrl: 'github.com/acme/app', defaultBranch: 'main' })
+		await deps.repositories.registry.upsertAppEnv(providerEnvironment('app', 'prod'))
+		for (const ref of ['fabrika/0190', 'heads/fabrika/0190', 'main', 'refs/heads/', 'a'.repeat(39), 'A'.repeat(40)]) {
+			const refused = await rpcResult(rpcRequest('deploy', { appId: 'app', env: 'prod', ref }), deps)
+			expect(refused.status).toBe(400)
+			expect(await refused.text()).toContain(
+				`environment \`prod\` is protected: ref \`${ref}\` must be a full ref (refs/heads/<branch>, refs/tags/<tag>) or a 40-character commit SHA`,
+			)
+		}
+		expect(queue).toEqual([])
+		for (const ref of ['a'.repeat(40), 'refs/tags/v1.2.0', 'refs/heads/main']) {
+			expect((await rpcResult(rpcRequest('deploy', { appId: 'app', env: 'prod', ref }), deps)).status).toBe(200)
+		}
+		expect(queue).toHaveLength(3)
 	})
 
 	test('a caller without deploy.trigger learns nothing of a protected environment', async () => {

@@ -284,7 +284,7 @@ for (const backend of backends) {
 			expect(await recordedMaintenance(b, TARGET)).toBe('open')
 			// The record and the object agree, so a deploy runs.
 			const run = uuidv7()
-			await b.repositories.runs.createRun({ id: run, appId: APP, env: ENV, ref: 'main', trigger: 'manual', actor: 'user:test' })
+			await b.repositories.runs.createRun({ id: run, appId: APP, env: ENV, ref: 'refs/heads/main', trigger: 'manual', actor: 'user:test' })
 			const runDeps: RunDeps = {
 				repositories: b.repositories,
 				lock: new SqlDeployLocks(b.db),
@@ -428,7 +428,7 @@ for (const backend of backends) {
 
 			async function run(b: Backend): Promise<string> {
 				const id = uuidv7()
-				await b.repositories.runs.createRun({ id, appId: APP, env: ENV, ref: 'main', trigger: 'manual', actor: 'user:test' })
+				await b.repositories.runs.createRun({ id, appId: APP, env: ENV, ref: 'refs/heads/main', trigger: 'manual', actor: 'user:test' })
 				return id
 			}
 

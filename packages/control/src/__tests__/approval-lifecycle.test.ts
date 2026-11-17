@@ -31,12 +31,13 @@ import { parseClassification } from '../approval/publish'
 import { MIGRATION_GUIDE } from '../approval/readers'
 import { type AccessSnapshot, approvedSnapshot, serializeSnapshot } from '../approval/snapshot'
 import type { AppEnvRow, ControlRepositories, RunRow } from '../db'
+import { acquireLease, runLeaseKey } from '../lease'
 import { type InstallationMail, NO_INSTALLATION_MAIL } from '../mail-transport'
 import { type MembershipKeyIssuer, VaultMembershipTransport } from '../membership-transport'
 import { VaultPlatformTransport } from '../platform-transport'
 import { type ProviderReconcileDeps, reconcileProviderRuns } from '../provider-reconcile'
 import type { ControlJobMessage } from '../run-lifecycle'
-import { cancelDeploy, executeDeploy, providerEnvironment, type RunDeps } from '../run-lifecycle'
+import { cancelDeploy, executeDeploy, executeDeployUnderLease, providerEnvironment, type RunDeps } from '../run-lifecycle'
 import { VaultSecretResolver } from '../secret-resolver'
 import { Vault } from '../vault'
 import { VaultWorkloadCredentials, type WorkloadKeyIssuer } from '../workload-credentials'
@@ -1898,5 +1899,79 @@ describe('a dev environment', () => {
 		const w = world()
 		await seedDev(w)
 		expect(await status(setEnvironmentProtectionUseCase(approvals(w, auth()), { appId: 'notes', env: 'dev', protected: true }))).toBe(409)
+	})
+})
+
+describe('a protected environment is checked again when its run starts', () => {
+	const NOT_A_PERSON = 'environment `stage` is protected: only a person deploys it by hand, from the console; an agent, a builder key or a '
+		+ "service key cannot. A push to the environment's trigger ref still deploys it"
+
+	/**
+	 * A run queued on the unprotected `stage`, which a person then protects before the run starts. `stage` already runs
+	 * the contract, so a run that starts deploys without waiting for approval; that first deploy is not counted.
+	 */
+	async function queuedThenProtected(w: World, run: { trigger: RunRow['trigger']; actor: string; ref?: string }): Promise<string> {
+		await seed(w)
+		expect((await deploy(w, 'stage')).status).toBe('succeeded')
+		w.deploys.splice(0)
+		w.republished.splice(0)
+		const runId = uuidv7()
+		await w.db.runs.createRun({ id: runId, appId: 'notes', env: 'stage', ref: run.ref ?? 'refs/heads/main', trigger: run.trigger, actor: run.actor })
+		expect((await fixtureProtect(w.db.registry, makeFakeLock(w.db), { appId: 'notes', env: 'stage' }, true))?.protected).toBe(1)
+		return runId
+	}
+
+	test("a key's run queued before the protection fails at start, logs why, and deploys nothing", async () => {
+		const w = world()
+		const runId = await queuedThenProtected(w, { trigger: 'manual', actor: 'service:builder' })
+		expect(await executeDeploy(deps(w), { runId })).toEqual({ runId, status: 'failed' })
+		expect(w.deploys).toEqual([])
+		expect(w.republished).toEqual([])
+		expect(w.logs.get(`runs/${runId}/logs.ndjson`)).toContain(NOT_A_PERSON)
+		expect((await run(w, runId)).commit_sha).toBeNull()
+	})
+
+	test("an MCP agent's run and a run older than actors fail the same way", async () => {
+		for (const actor of ['oauth:p-agent', 'anonymous']) {
+			const w = world()
+			const runId = await queuedThenProtected(w, { trigger: 'manual', actor })
+			expect((await executeDeploy(deps(w), { runId })).status).toBe('failed')
+			expect(w.deploys).toEqual([])
+		}
+	})
+
+	test("a person's run still deploys, unless it names a workspace branch or a short ref", async () => {
+		const w = world()
+		const runId = await queuedThenProtected(w, { trigger: 'manual', actor: 'user:p-ada' })
+		expect((await executeDeploy(deps(w), { runId })).status).toBe('succeeded')
+		expect(w.deploys.map((input) => input.runId)).toEqual([runId])
+		for (const ref of ['refs/heads/fabrika/0190', 'fabrika/0190', 'heads/fabrika/0190', 'main']) {
+			const refused = uuidv7()
+			await w.db.runs.createRun({ id: refused, appId: 'notes', env: 'stage', ref, trigger: 'manual', actor: 'user:p-ada' })
+			expect((await executeDeploy(deps(w), { runId: refused })).status).toBe('failed')
+		}
+		expect(w.deploys).toHaveLength(1)
+	})
+
+	test('a push or a poll run is unaffected', async () => {
+		for (const [trigger, actor] of [['webhook', 'webhook:conn'], ['poll', 'poll']] as const) {
+			const w = world()
+			const runId = await queuedThenProtected(w, { trigger, actor })
+			expect((await executeDeploy(deps(w), { runId })).status).toBe('succeeded')
+			expect(w.deploys).toHaveLength(1)
+		}
+	})
+
+	test("a restore's own deploy, under its lease, is exempt: it brings no new code", async () => {
+		const w = world()
+		const runId = await queuedThenProtected(w, { trigger: 'manual', actor: 'service:operator' })
+		const lease = await acquireLease(makeFakeLock(w.db), runLeaseKey('notes', 'stage'))
+		if (lease === null) throw new Error('the lease is held')
+		try {
+			expect((await executeDeployUnderLease(deps(w), { runId }, lease)).status).toBe('succeeded')
+		} finally {
+			await lease.release()
+		}
+		expect(w.deploys).toHaveLength(1)
 	})
 })

@@ -16,7 +16,7 @@ export interface ConsoleAdmission {
 
 /**
  * The caller is a person: a user principal, not an OAuth (MCP) token or a share link. A service principal, the builder
- * key and any agent credential are not, whatever they carry. A person's own CLI login is one.
+ * key and any agent credential are not, whatever they carry. A user principal's bearer counts too.
  */
 export function isPerson(auth: AuthContext): boolean {
 	const principal = auth.principal
@@ -50,20 +50,58 @@ export function requireHumanForProtectedDelete(auth: AuthContext, admission: Con
 	}
 }
 
+/** Why a manual run of a protected environment is refused: the HTTP status its creation answers, and the message. */
+export interface ProtectedRunRefusal {
+	readonly status: 400 | 403
+	readonly message: string
+}
+
+/** The refs a protected environment's manual run names: a full branch or tag ref, or a commit SHA. */
+const PROTECTED_REF = /^(?:refs\/(?:heads|tags)\/[^/].*|[0-9a-f]{40})$/
+
 /**
- * A manual run of a protected environment: only a person starts one, from the console or their own CLI login, so a
- * bearer is allowed here (ADR-0050 §4). A workspace branch never reaches one, whoever asks (ADR-0049 rules 4 and 7).
+ * A manual run of a protected environment: only a person starts one (ADR-0050 §4), and it names a full ref or a commit
+ * SHA, never a workspace branch (ADR-0049 rules 4 and 7). A SHA or a tag is not traced back to a workspace. Checked when
+ * the run is created and again when it starts, since the flag may have been set in between. Null when it may run.
  */
+export function protectedRunRefusal(appEnv: AppEnvRow, run: { readonly byPerson: boolean; readonly ref: string }): ProtectedRunRefusal | null {
+	if (appEnv.protected !== 1) return null
+	const refusal = protectedRunCause(appEnv.env, run)
+	if (refusal === null || appEnv.authoring !== 1) return refusal
+	// Both flags predate ADR-0049 rule 7, which now keeps them apart; only an operator can clear one.
+	return {
+		status: refusal.status,
+		message: `${refusal.message}. It is also the app's authoring target, which a protected environment no longer is: an operator `
+			+ 'clears its authoring flag (apps.environments.put with authoring: false) or its protection',
+	}
+}
+
+function protectedRunCause(env: string, run: { readonly byPerson: boolean; readonly ref: string }): ProtectedRunRefusal | null {
+	if (!run.byPerson) {
+		return {
+			status: 403,
+			message: `environment \`${env}\` is protected: only a person deploys it by hand, from the console; an agent, a builder key or a `
+				+ "service key cannot. A push to the environment's trigger ref still deploys it",
+		}
+	}
+	if (!PROTECTED_REF.test(run.ref)) {
+		return {
+			status: 400,
+			message: `environment \`${env}\` is protected: ref \`${run.ref}\` must be a full ref (refs/heads/<branch>, refs/tags/<tag>) `
+				+ 'or a 40-character commit SHA',
+		}
+	}
+	if (isWorkspaceRef(run.ref)) {
+		return {
+			status: 403,
+			message: `environment \`${env}\` is protected: a workspace branch reaches it only after it is merged into the environment's trigger ref`,
+		}
+	}
+	return null
+}
+
+/** `protectedRunRefusal` for a caller creating a manual run; a bearer counts, since `isPerson` reads no header. */
 export function requirePersonForProtectedDeploy(auth: AuthContext, appEnv: AppEnvRow, ref: string): void {
-	if (appEnv.protected !== 1) return
-	if (!isPerson(auth)) {
-		fail(
-			403,
-			`environment \`${appEnv.env}\` is protected: only a person deploys to it, from the console or their own CLI login; `
-				+ 'an agent, a builder key or a service key cannot',
-		)
-	}
-	if (isWorkspaceRef(ref)) {
-		fail(403, `environment \`${appEnv.env}\` is protected: a workspace branch reaches it only after it is merged into the environment's trigger ref`)
-	}
+	const refusal = protectedRunRefusal(appEnv, { byPerson: isPerson(auth), ref })
+	if (refusal !== null) fail(refusal.status, refusal.message)
 }

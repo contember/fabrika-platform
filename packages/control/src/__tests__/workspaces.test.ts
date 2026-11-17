@@ -805,8 +805,10 @@ for (const backend of backends) {
 				await requireOpened().db.prepare("UPDATE app_envs SET protected = 1 WHERE app_id = 'shop' AND env = 'stage'").run()
 				await expect(deployStageUseCase(w.context(author), { workspaceId: created.id })).rejects.toMatchObject({
 					httpStatus: 403,
-					message: 'environment `stage` is protected: only a person deploys to it, from the console or their own CLI login; '
-						+ 'an agent, a builder key or a service key cannot',
+					message: 'environment `stage` is protected: only a person deploys it by hand, from the console; an agent, a builder key or a '
+						+ "service key cannot. A push to the environment's trigger ref still deploys it. It is also the app's authoring target, "
+						+ 'which a protected environment no longer is: an operator clears its authoring flag (apps.environments.put with '
+						+ 'authoring: false) or its protection',
 				})
 				expect(w.queued).toEqual([])
 			})
