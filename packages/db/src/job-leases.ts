@@ -389,8 +389,8 @@ const SQL_CLOCK: DialectTexts = {
 
 /**
  * The database's clock inside `session`'s transaction: a queue claim compares and moves `due` by it, so no process
- * clock decides when a row is due. On Postgres it is rounded up to the millisecond a `Date` holds: truncated, it fell
- * behind a `due` that `now()` wrote with microseconds in the same millisecond, and the claim skipped that due row.
+ * clock decides when a row is due. On Postgres it is rounded up to the millisecond a `Date` holds, so it is never
+ * earlier than a `due` that `now()` wrote with microseconds.
  */
 export async function databaseNow(session: Session): Promise<Date> {
 	const [row] = await rows(session, SQL_CLOCK, [])

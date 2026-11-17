@@ -329,7 +329,7 @@ describeDb('claim', () => {
 		expect(stored.map((row) => [row.recipient, row.attempts, row.due?.getTime()])).toEqual([['b@example.com', 0, at.getTime()]])
 	})
 
-	test("the claim's clock never falls behind the database's, so a due now() wrote with microseconds is due at once", async () => {
+	test("the claim's clock is never earlier than the database's clock_timestamp(), microseconds included", async () => {
 		const field = (rows: readonly unknown[], name: string): unknown => {
 			const [row] = rows
 			return typeof row === 'object' && row !== null ? Reflect.get(row, name) : undefined
