@@ -1,6 +1,6 @@
 {
 	"name": "@fabrika/github-app",
-	"version": "0.9.0-dev.13",
+	"version": "0.9.0-dev.14",
 	"type": "module",
 	"repository": {
 		"type": "git",
