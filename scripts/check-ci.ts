@@ -2,7 +2,7 @@
 // green CI run. `release.yml` calls that workflow as its `verify` job, so this is also the gate a tag must pass.
 //
 // Each job of the test matrix (PostgreSQL major × shard) gets its own throwaway PostgreSQL and SeaweedFS containers on
-// random loopback ports, as each CI job gets its own runner, and the jobs run concurrently, one per available CPU. A
+// random loopback ports, as each CI job gets its own runner, and the jobs run concurrently, one per two available CPUs. A
 // backend the environment already names is used as it is, by one job at a time. What cannot run here — no docker, no
 // npm — is skipped and named in the summary, never silently.
 // `scripts/__tests__/check-ci.test.ts` fails when these steps and `ci.yml` drift apart.
@@ -281,7 +281,7 @@ const runTestMatrix = async (env: Record<string, string | undefined>, backends: 
 		for (const job of jobs) if (!await runJob(job)) throw new StepFailure(`${job.label} failed`)
 		return
 	}
-	// One job per CPU the run may use: each job's suite runs serially, and more at once push tests past their timeouts.
+	// One job per two CPUs the run may use: on 4 vCPU (2 cores), 4 jobs at once pushed tests past their 5 s timeouts.
 	// A worker never throws, so every job has ended before the containers are removed.
 	const failed: string[] = []
 	let next = 0
@@ -294,7 +294,8 @@ const runTestMatrix = async (env: Record<string, string | undefined>, backends: 
 			}
 		}
 	}
-	await Promise.all(Array.from({ length: Math.min(availableParallelism(), jobs.length) }, worker))
+	const workers = Math.max(1, Math.min(Math.floor(availableParallelism() / 2), jobs.length))
+	await Promise.all(Array.from({ length: workers }, worker))
 	if (failed.length > 0) throw new StepFailure(`${failed.join(', ')} failed`)
 }
 
