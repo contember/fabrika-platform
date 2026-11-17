@@ -71,6 +71,12 @@ describe('cloudflare-current-timestamp', () => {
 		expect(found[0]).toContain('unexpected_row')
 	})
 
+	test('reads the migration as SQLite does: a default after a nested comment opener is found', async () => {
+		const files = application(true)
+		files.set(MIGRATION, '/* /* */ create table audit (at timestamp default current_timestamp); -- */\n')
+		expect(await findingsOf('cloudflare-current-timestamp', files)).toEqual([expect.stringContaining(`${MIGRATION}:1 refusal`)])
+	})
+
 	test('no refusal on Postgres, nor for the strftime default', async () => {
 		const postgres = application(false)
 		postgres.set(MIGRATION, 'create table audit (id uuid primary key, at timestamptz not null default current_timestamp);\n')

@@ -11,7 +11,7 @@ import {
 	legacyStatusCheckName,
 	STORED_FILES_TABLE,
 } from './file-table-ddl'
-import { lexSql, type SqlToken, topLevelStatements, upperWord } from './migration-sql'
+import { lexSql, type SqlToken, type Statement, statementsOf, upperWord } from './migration-sql'
 import { PG_CATALOG_FUNCTIONS, SQL_KEYWORDS } from './pg-catalog-names'
 import {
 	afterName,
@@ -40,6 +40,7 @@ import {
 	wordAtDepthZero,
 	writeTargets,
 } from './sql-names'
+import { lexSqlite, SQLITE_PARAMETER_STARTS } from './sqlite-sql'
 
 /** A database object a migration declares, named as the catalog check names it (`trigger deals.audit`). */
 export type DatabaseObjectKind = 'function' | 'procedure' | 'trigger' | 'view' | 'materialized view' | 'rule' | 'policy'
@@ -634,6 +635,16 @@ function classifyElement(element: readonly SqlToken[], table: string, context: C
 	checkExpression(element.slice(1), `${table}.${column}`, context, out)
 }
 
+/**
+ * The tokens of a migration as its database reads it. A comment, a literal or a quoted name ends where that database
+ * ends it, so every statement the database runs is one the classifier reads.
+ */
+function lexMigration(sql: string, dialect: MigrationDialect): { readonly tokens: SqlToken[]; readonly unterminated: number | undefined } {
+	return dialect === 'sqlite' ? lexSqlite(sql) : lexSql(sql)
+}
+
+const migrationStatements = (sql: string, dialect: MigrationDialect): Statement[] => statementsOf(lexMigration(sql, dialect).tokens)
+
 /** Whether `options` is SQLite's table-options list: `STRICT` and `WITHOUT ROWID`, separated by commas. */
 function isSqliteTableOptions(options: readonly SqlToken[]): boolean {
 	return splitAtCommas(options).every((option) =>
@@ -1073,11 +1084,16 @@ export function classifyMigration(sql: string, schema: string, options: Classify
 	const adoptions: FileAdoption[] = []
 	const changes: ManifestChange[] = []
 	const keys = new Set<string>()
-	const { unterminated } = lexSql(sql)
+	const { tokens: all, unterminated } = lexMigration(sql, context.dialect)
 	if (unterminated !== undefined) {
 		refused.push({ reason: 'a literal, a quoted name or a comment that never closes', file: options.file, line: unterminated })
 	}
-	for (const { tokens, line } of topLevelStatements(sql)) {
+	// A migration runs without bindings, and what follows a SQLite parameter may lex otherwise than SQLite reads it.
+	const parameter = context.dialect === 'sqlite' ? all.find((token) => token.kind === 'punct' && SQLITE_PARAMETER_STARTS.has(token.char)) : undefined
+	if (parameter !== undefined) {
+		refused.push({ reason: 'a parameter (?, :, @, $ or #), which a migration cannot bind', file: options.file, line: parameter.line })
+	}
+	for (const { tokens, line } of statementsOf(all)) {
 		const out: Collected = { deviations: [], adoptions: [], changes: [] }
 		try {
 			classifyStatement(tokens, context, out)
@@ -1104,11 +1120,16 @@ export function classifyMigration(sql: string, schema: string, options: Classify
  * a view, and the names those views are renamed to. A rule action writes through a view with its owner's privileges.
  * Read across the whole set and in no order, so a view counts whichever file creates or renames it.
  */
-function accessViews(files: readonly MigrationFile[], schema: string, accessTables: ReadonlySet<string>): ReadonlySet<string> {
+function accessViews(
+	files: readonly MigrationFile[],
+	schema: string,
+	accessTables: ReadonlySet<string>,
+	dialect: MigrationDialect,
+): ReadonlySet<string> {
 	const views: { readonly name: string; readonly reads: readonly string[] }[] = []
 	const renames: { readonly from: string; readonly to: string }[] = []
 	for (const file of files) {
-		for (const { tokens } of topLevelStatements(file.sql)) {
+		for (const { tokens } of migrationStatements(file.sql, dialect)) {
 			const first = upperWord(tokens[0])
 			if (first === 'CREATE') {
 				const at = skipWords(tokens, skipWords(tokens, skipWords(tokens, skipWords(tokens, 1, 'OR', 'REPLACE'), 'TEMP'), 'TEMPORARY'), 'RECURSIVE')
@@ -1148,9 +1169,9 @@ function accessViews(files: readonly MigrationFile[], schema: string, accessTabl
 }
 
 /** The names of the functions and procedures a migration creates or renames to in `schema`, read without classifying them. */
-export function declaredFunctions(sql: string, schema: string): string[] {
+export function declaredFunctions(sql: string, schema: string, dialect: MigrationDialect = 'postgres'): string[] {
 	const names: string[] = []
-	for (const { tokens } of topLevelStatements(sql)) {
+	for (const { tokens } of migrationStatements(sql, dialect)) {
 		const first = upperWord(tokens[0])
 		const at = first === 'CREATE' ? skipWords(tokens, 1, 'OR', 'REPLACE') : 1
 		const kind = upperWord(tokens[at])
@@ -1211,16 +1232,17 @@ export function classifyMigrations(
 	schema: string,
 	options: ClassifyMigrationsOptions = {},
 ): MigrationSetClassification {
-	const functions = new Set(files.flatMap((file) => declaredFunctions(file.sql, schema)))
+	const dialect = options.dialect ?? 'postgres'
+	const functions = new Set(files.flatMap((file) => declaredFunctions(file.sql, schema, dialect)))
 	const access = options.accessTables === undefined
 		? {}
-		: { accessTables: options.accessTables, accessViews: accessViews(files, schema, options.accessTables) }
+		: { accessTables: options.accessTables, accessViews: accessViews(files, schema, options.accessTables, dialect) }
 	const classified = files.map((file) =>
 		classifyMigration(file.sql, schema, {
 			file: file.name,
 			functions,
 			framework: file.framework === true,
-			...(options.dialect === undefined ? {} : { dialect: options.dialect }),
+			dialect,
 			...access,
 		})
 	)

@@ -3,6 +3,13 @@
 
 import type { SqlToken } from './migration-sql'
 
+/**
+ * What starts a parameter SQLite binds by name or by position (`?`, `:x`, `@x`, `$x`, `#x`), each a `punct` token here.
+ * SQLite reads `$x(…)` up to a space or `)` as one parameter, a quote included, so the tokens after one may not be what
+ * SQLite reads: a reader of SQLite text refuses it at the first.
+ */
+export const SQLITE_PARAMETER_STARTS: ReadonlySet<string> = new Set(['?', ':', '@', '$', '#'])
+
 /** SQLite's space (`sqlite3Isspace`), and the UTF-8 byte-order mark, which its tokenizer skips as space anywhere. */
 const isSpace = (char: string): boolean => /[ \t\n\r\f\v﻿]/.test(char)
 /** Every character from U+0080 up but the byte-order mark is part of a name, as SQLite reads any byte from 0x80. */
