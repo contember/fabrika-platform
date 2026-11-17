@@ -677,7 +677,8 @@ other environment, before the provider prepares anything, and the write maps a r
 - **Steps off the paved road are in the reviewed snapshot, never refused by it (`diff.ts`).** Two kinds only: the
   reach a staged-kit site declares (`ContractArtifact.declared`: `sql`, `unscoped`, `connect`, `issues`), and the
   database code the migrations declare (`AccessSnapshot.databaseCode`, from `classifyMigrations` of
-  `@fabrika/platform-node/sql`, the runner's own classifier, over every file under `db/migrations/`). A site is keyed by
+  `@fabrika/platform-node/sql`, the runner's own classifier, over every file under `db/migrations/`, in the provider's
+  `applicationDialect`). A site is keyed by
   its endpoint id or `job:<name>`, a database object by file, kind and object, never by line, so a moved handler is no
   change. A new site, table, connector, mount or object, `read` → `write`, an edited file holding code, and a contract
   that leaves the staged kit widen with `review: 'closer'`; removals narrow. `databaseCode` is absent when empty and

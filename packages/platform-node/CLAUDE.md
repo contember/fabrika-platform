@@ -75,7 +75,9 @@ Read this before moving a service onto this driver.
   object, file, line }`, keyed by `kind` + `object`, never the line) or refused, and the runner refuses a
   file the ledger has not recorded that holds a refusal. An allowlist at every level, never a blocklist:
   a statement form, an `ALTER TABLE` clause, a body statement and a function call it does not name are
-  refused, so a form a later Postgres adds is refused instead of executed. Bodies are parsed with the
+  refused, so a form a later Postgres adds is refused instead of executed. The grammar is Postgres'; the SQLite
+  dialect (`ClassifyMigrationsOptions.dialect`, a Cloudflare application's, ADR-0065) adds only SQLite's table options
+  after a `CREATE TABLE` column list (`STRICT`, `WITHOUT ROWID`). Bodies are parsed with the
   same lexer; a qualified name is a schema only where it names a relation, a call or a type
   (`nameReferences`, `sql-names.ts`), so `NEW.x` and `alias.col` stay columns. Inside the migration's
   transaction, before its commit, `databaseCodeCheck` (`database-code.ts`) fails it on an integrity

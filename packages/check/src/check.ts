@@ -338,10 +338,11 @@ export const checkApplication = async (input: CheckInput): Promise<Finding[]> =>
 	const declaredTables = tables !== undefined && literal.length === 0 ? readTablesValue(graph, tables, new ReaderProblems()) : null
 	const artifact = read?.ok === true ? compiledArtifact(read.contract, declaredTables) : null
 	findings.push(...contractDependentFindings(dependent, artifact === null ? null : compiledReach(artifact)))
+	const dialect = applicationDialect(tree.files)
 	if (artifact !== null) {
-		findings.push(...checkMigrationClassification(tree.files, artifact.app, declaredTables === null ? [] : accessTables(declaredTables)))
+		findings.push(...checkMigrationClassification(tree.files, artifact.app, declaredTables === null ? [] : accessTables(declaredTables), dialect))
 	}
-	if (applicationDialect(tree.files) === 'sqlite') {
+	if (dialect === 'sqlite') {
 		if (artifact !== null) findings.push(...checkCloudflareContract(artifact))
 		findings.push(...checkCurrentTimestampDefaults(tree.files))
 		findings.push(...checkSqliteFrameworkNames(tree.files))

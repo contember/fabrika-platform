@@ -10,6 +10,7 @@ import {
 	classifyMigrations,
 	type FileAdoption,
 	type MigrationDeviation,
+	type MigrationDialect,
 	type MigrationSetClassification,
 } from '@fabrika/platform-node/sql'
 import type { CommitFiles } from '../github/source/commit-files'
@@ -108,13 +109,14 @@ export class ContractMissing extends Error {
  * The snapshot of the application at `root` (repository-relative, `''` for the root) in `commit`. A commit without
  * `fabrika.contract.ts` is refused (`ContractMissing`), whatever its configuration says. `settled` are the migrations
  * the environment's published snapshot holds: as the runner skips an applied file, a refused statement in one of them,
- * unchanged, does not refuse the read.
+ * unchanged, does not refuse the read. `dialect` is the database the provider runs the application's migrations on.
  */
 export async function readAccessSnapshot(
 	commit: CommitFiles,
 	root: string,
 	appId: string,
 	settled: readonly MigrationEntry[] = [],
+	dialect: MigrationDialect = 'postgres',
 ): Promise<AccessSnapshot> {
 	const inRepository = (path: string): string => (root === '' ? path : `${root}/${path}`)
 	const exists = (path: string): boolean => commit.paths.has(inRepository(path))
@@ -135,7 +137,7 @@ export async function readAccessSnapshot(
 	if (read.contract.app !== appId) {
 		throw new SnapshotRefused('contract-app-mismatch')
 	}
-	const { databaseCode, fileAdoptions } = readDatabaseCode(migrations, appId, settled, accessTables)
+	const { databaseCode, fileAdoptions } = readDatabaseCode(migrations, appId, settled, accessTables, dialect)
 	return {
 		version: 1,
 		...read,
@@ -172,11 +174,12 @@ function readDatabaseCode(
 	appId: string,
 	settled: readonly MigrationEntry[],
 	accessTables: readonly string[],
+	dialect: MigrationDialect,
 ): { databaseCode: MigrationDeviation[]; fileAdoptions: FileAdoption[] } {
 	if (migrations.length === 0) return { databaseCode: [], fileAdoptions: [] }
 	let classified: MigrationSetClassification
 	try {
-		classified = classifyMigrations(migrations, applicationDatabaseSchema(appId), { accessTables: new Set(accessTables) })
+		classified = classifyMigrations(migrations, applicationDatabaseSchema(appId), { accessTables: new Set(accessTables), dialect })
 	} catch {
 		// An unexpected classifier error may quote the checkout; only the code leaves this function.
 		throw new SnapshotRefused('migrations-unreadable')

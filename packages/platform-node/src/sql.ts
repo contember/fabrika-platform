@@ -27,6 +27,7 @@ export {
 	type ManifestChange,
 	type MigrationClassification,
 	type MigrationDeviation,
+	type MigrationDialect,
 	type MigrationFile,
 	migrationManifest,
 	type MigrationRefusal,
