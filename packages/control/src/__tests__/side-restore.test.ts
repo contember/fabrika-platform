@@ -377,6 +377,25 @@ for (const backend of backends) {
 			expect(f.state.deploys.map((deploy) => deploy.objects)).toEqual([{ object: clone, objects: ['application', 'rehearsal', clone] }])
 		})
 
+		test("a key's restore of a protected environment redeploys, since its record names its runs; the key's own run does not", async () => {
+			const f = await open()
+			await f.deployFirst()
+			expect((await fixtureProtect(f.b.repositories.registry, f.locks, TARGET, true))?.protected).toBe(1)
+			const started = await startRestore(f.deps(), { ...TARGET, at: AT, actor: 'service:operator', now: NOW })
+			if (started.kind !== 'started') throw new Error(`the restore did not start: ${JSON.stringify(started)}`)
+			expect(await f.drive(started.operation.id)).toMatchObject({ result: 'succeeded' })
+			const restore = await f.restoreRow()
+			expect(f.state.deploys).toHaveLength(2)
+			for (const runId of [restore?.list_run_id, restore?.point_run_id]) {
+				expect(await f.b.repositories.runs.getRun(runId ?? '')).toMatchObject({ status: 'succeeded', actor: 'service:operator' })
+			}
+
+			const own = uuidv7()
+			await f.b.repositories.runs.createRun({ id: own, appId: APP, env: ENV, ref: 'refs/heads/main', trigger: 'manual', actor: 'service:operator' })
+			expect(await executeDeploy(f.runDeps(), { runId: own })).toEqual({ runId: own, status: 'failed' })
+			expect(f.state.deploys).toHaveLength(2)
+		})
+
 		test('the pass leaves a restore whose lease is held alone, and takes it over once the lease is free', async () => {
 			const f = await open()
 			await f.deployFirst()

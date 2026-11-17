@@ -30,8 +30,9 @@ import {
 import { parseClassification } from '../approval/publish'
 import { MIGRATION_GUIDE } from '../approval/readers'
 import { type AccessSnapshot, approvedSnapshot, serializeSnapshot } from '../approval/snapshot'
+import { LIST_FAILED_CODE } from '../data-operations'
 import type { AppEnvRow, ControlRepositories, RunRow } from '../db'
-import { acquireLease, runLeaseKey } from '../lease'
+import { acquireLease, type LeaseFence, runLeaseKey } from '../lease'
 import { type InstallationMail, NO_INSTALLATION_MAIL } from '../mail-transport'
 import { type MembershipKeyIssuer, VaultMembershipTransport } from '../membership-transport'
 import { VaultPlatformTransport } from '../platform-transport'
@@ -1962,16 +1963,79 @@ describe('a protected environment is checked again when its run starts', () => {
 		}
 	})
 
-	test("a restore's own deploy, under its lease, is exempt: it brings no new code", async () => {
+	/**
+	 * Run a restore's listing deploy as the restore does (ADR-0070 §9): a key records the restore, which names its run
+	 * before creating it, and the deploy runs under the restore's lease. `settle` ends the restore under that lease.
+	 */
+	async function restoreDeploy(
+		w: World,
+		env: string,
+		runId: string,
+		settle: (operationId: string, fence: LeaseFence) => Promise<boolean>,
+	): Promise<string> {
+		const lease = await acquireLease(makeFakeLock(w.db), runLeaseKey('notes', env))
+		if (lease === null) throw new Error('the lease is held')
+		try {
+			const operationId = uuidv7()
+			const generation = await w.db.dataOperations.allocateGeneration('notes', env)
+			const restore = { at: '2027-01-15T07:00:00.000Z', original: 'application', clone: `application-${operationId}` }
+			const operation = { id: operationId, appId: 'notes', env, step: 'list' as const, targetMode: 'open' as const, generation }
+			expect(await w.db.dataOperations.create({ ...operation, kind: 'restore', actor: 'service:operator', restore }, lease.fence())).not.toBeNull()
+			expect(await w.db.restores.nameRun(operationId, 'list', runId, lease.fence())).toBe(true)
+			await w.db.runs.createRun({
+				id: runId,
+				appId: 'notes',
+				env,
+				ref: 'refs/heads/main',
+				commitSha: COMMIT,
+				trigger: 'manual',
+				actor: 'service:operator',
+			})
+			const { status } = await executeDeployUnderLease(deps(w), { runId }, lease)
+			expect(await settle(operationId, lease.fence())).toBe(true)
+			return status
+		} finally {
+			await lease.release()
+		}
+	}
+
+	test("a restore's own deploy is exempt, though a key started it: it brings no new code", async () => {
+		const w = world()
+		await queuedThenProtected(w, { trigger: 'manual', actor: 'service:operator' })
+		const runId = uuidv7()
+		expect(await restoreDeploy(w, 'stage', runId, (id, fence) => w.db.dataOperations.finish(id, fence))).toBe('succeeded')
+		expect(w.deploys.map((input) => input.runId)).toEqual([runId])
+	})
+
+	test("a key's restore whose deploy parks for approval still deploys once a person approves it", async () => {
+		const w = world()
+		await seed(w)
+		// The commit the restore redeploys deletes rows, a line that needs closer review, so its deploy waits on `prod`.
+		w.files = DELETES_NOTES
+		const runId = uuidv7()
+		// A parked run is no deploy the restore can wait for: it fails, and the environment opens again.
+		const parked = await restoreDeploy(w, 'prod', runId, (id, fence) => w.db.dataOperations.fail(id, LIST_FAILED_CODE, fence))
+		expect(parked).toBe('awaiting_approval')
+		expect(w.deploys).toEqual([])
+		await approve(w, runId)
+		expect(w.queued).toContainEqual({ runId })
+		// The approval queues it as an ordinary run; the restore's record, not that invocation, exempts it.
+		expect(await executeDeploy(deps(w), { runId })).toEqual({ runId, status: 'succeeded' })
+		expect(w.deploys.map((input) => input.runId)).toEqual([runId])
+		expect(w.logs.get(`runs/${runId}/logs.ndjson`) ?? '').not.toContain('is protected')
+	})
+
+	test("a key's run that no restore names is not exempt, under a lease or not", async () => {
 		const w = world()
 		const runId = await queuedThenProtected(w, { trigger: 'manual', actor: 'service:operator' })
 		const lease = await acquireLease(makeFakeLock(w.db), runLeaseKey('notes', 'stage'))
 		if (lease === null) throw new Error('the lease is held')
 		try {
-			expect((await executeDeployUnderLease(deps(w), { runId }, lease)).status).toBe('succeeded')
+			expect((await executeDeployUnderLease(deps(w), { runId }, lease)).status).toBe('failed')
 		} finally {
 			await lease.release()
 		}
-		expect(w.deploys).toHaveLength(1)
+		expect(w.deploys).toEqual([])
+		expect(w.logs.get(`runs/${runId}/logs.ndjson`)).toContain(NOT_A_PERSON)
 	})
 })
