@@ -388,7 +388,7 @@ describe('Runner pipeline', () => {
 		// clone into the run-keyed checkout dir
 		expect(rec[0]?.spec.args).toEqual(['clone', '--depth', '1', '--branch', 'main', '--', 'https://github.com/acme/app.git', runner.checkoutDir])
 		// install + deploy run in workerDir
-		expect(rec[1]?.spec).toMatchObject({ command: 'bun', args: ['install'], cwd: `${runner.checkoutDir}/worker` })
+		expect(rec[1]?.spec).toMatchObject({ command: 'bun', args: ['install', '--frozen-lockfile'], cwd: `${runner.checkoutDir}/worker` })
 		// deploy is faithful to M1's CLI contract
 		expect(rec[2]?.spec).toMatchObject({
 			command: 'fabrika-cloudflare-executor',
@@ -701,6 +701,17 @@ describe('Runner pipeline', () => {
 		expect(status.state).toBe('failed')
 		expect(status.error).toContain('git clone failed')
 		expect(status.exitCode).toBeUndefined()
+	})
+
+	test('a frozen install that fails stops the pipeline before the executor and names the lockfile', async () => {
+		const rec: RecordedSpawn[] = []
+		const spawn = makeSpawner(rec, (spec) => ({ exitCode: spec.command === 'bun' ? 1 : 0 }))
+		const status = await new Runner(baseJob({ ref: 'main', dryRun: true }), makeEnv(spawn)).run()
+
+		expect(rec.map((r) => r.spec.command)).toEqual(['git', 'bun'])
+		expect(rec[1]?.spec.args).toEqual(['install', '--frozen-lockfile'])
+		expect(status.state).toBe('failed')
+		expect(status.error).toBe('bun install --frozen-lockfile failed (exit 1); a bun.lock that does not match package.json fails it')
 	})
 
 	test('a rejected clone, install or deploy becomes a credential-safe terminal failure', async () => {

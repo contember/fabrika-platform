@@ -567,9 +567,12 @@ export class Runner {
 		// ── install ──
 		this.state = 'installing'
 		this.emit('meta', `Installing dependencies in ${dir}`)
-		const install = await this.step({ command: 'bun', args: ['install'], cwd: dir })
+		// Frozen, as the Zerops build installs: the deploy runs the dependencies the commit's `bun.lock` names, or none.
+		const install = await this.step({ command: 'bun', args: ['install', '--frozen-lockfile'], cwd: dir })
 		if (install.exitCode !== 0) {
-			this.finish('failed', { error: `bun install failed (exit ${install.exitCode})` })
+			this.finish('failed', {
+				error: `bun install --frozen-lockfile failed (exit ${install.exitCode}); a bun.lock that does not match package.json fails it`,
+			})
 			this.emit('meta', `Install failed (exit ${install.exitCode})`)
 			return this.status()
 		}
