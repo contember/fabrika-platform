@@ -10,7 +10,7 @@ import {
 	SURFACE_REACHES,
 	waitsForApproval,
 } from '@fabrika/control-contract'
-import type { MigrationDialect } from '@fabrika/platform-node/sql'
+import type { MigrationDataLoss, MigrationDialect } from '@fabrika/platform-node/sql'
 import type { ProviderApprovedAccess } from '@fabrika/provider-contract'
 import { z } from 'zod'
 import { consumerEdgeProblems, ownerEdgeProblems } from '../connectors'
@@ -155,8 +155,17 @@ export interface PublicationInput {
 }
 
 export type PublicationResult =
-	| { readonly kind: 'published'; readonly classification: StoredClassification }
+	| { readonly kind: 'published'; readonly classification: StoredClassification; readonly candidate: PublishedCandidate }
 	| { readonly kind: 'parked'; readonly classification: StoredClassification }
+
+/**
+ * The snapshot a run published. `dataLossRead` is false for a snapshot stored before this invocation that records no
+ * `dataLoss`: a release before the data classifier stored none whatever its migrations do, so absent is not "none".
+ */
+export interface PublishedCandidate {
+	readonly snapshot: AccessSnapshot
+	readonly dataLossRead: boolean
+}
 
 /** A publication that keeps losing its compare-and-swap is someone else's change landing each time; stop and retry later. */
 const MAX_PUBLICATION_ATTEMPTS = 3
@@ -172,7 +181,9 @@ export async function publishRunSnapshot(
 	input: PublicationInput,
 ): Promise<PublicationResult> {
 	const runs = deps.repositories.runs
-	const candidate = input.run.snapshot_json === null ? await readCandidate(deps, invocation, input) : parseSnapshot(input.run.snapshot_json)
+	const stored = input.run.snapshot_json
+	const candidate = stored === null ? await readCandidate(deps, invocation, input) : parseSnapshot(stored)
+	const publishedCandidate: PublishedCandidate = { snapshot: candidate, dataLossRead: stored === null || candidate.dataLoss !== undefined }
 	// A run whose snapshot was stored without a contract, before those were refused, is refused like a new one.
 	const access = approvedAccess(candidate)
 	if (access === undefined) {
@@ -206,7 +217,7 @@ export async function publishRunSnapshot(
 		const expected = { generation: active.generation, protectionRevision: appEnv.protection_revision }
 		if (await runs.publishRunSnapshot(run.id, expected, serializePublished(candidate), invocation.fence())) {
 			input.log(`access: published as generation ${active.generation + 1} of \`${appEnv.env}\``)
-			return { kind: 'published', classification }
+			return { kind: 'published', classification, candidate: publishedCandidate }
 		}
 		input.log('access: another publication, registry write or protection change landed first; classifying again')
 	}
@@ -228,7 +239,40 @@ async function readCandidate(
 	invocation: PublicationInvocation,
 	input: PublicationInput,
 ): Promise<AccessSnapshot> {
-	let snapshot: AccessSnapshot
+	const snapshot = await readAtCommit(deps, invocation.signal, input)
+	await invocation.write((fence) => deps.repositories.runs.recordRunSnapshot(input.run.id, serializeSnapshot(snapshot), fence))
+	return snapshot
+}
+
+/**
+ * The data changes of a stored candidate whose `dataLoss` was not read (`PublishedCandidate`): its commit read again
+ * with this release's classifier. Null when the commit cannot be read again, or no longer holds those migration files.
+ */
+export async function rereadDataLoss(
+	deps: { readonly repositories: ControlRepositories; readonly commits: CommitSource },
+	signal: AbortSignal,
+	input: PublicationInput,
+	candidate: AccessSnapshot,
+): Promise<readonly MigrationDataLoss[] | null> {
+	let reread: AccessSnapshot
+	try {
+		reread = await readAtCommit(deps, signal, input)
+	} catch {
+		signal.throwIfAborted()
+		return null
+	}
+	const same = reread.migrations.length === candidate.migrations.length
+		&& reread.migrations.every((entry, index) =>
+			entry.name === candidate.migrations[index]?.name && entry.checksum === candidate.migrations[index]?.checksum
+		)
+	return same ? reread.dataLoss ?? [] : null
+}
+
+async function readAtCommit(
+	deps: { readonly repositories: ControlRepositories; readonly commits: CommitSource },
+	signal: AbortSignal,
+	input: PublicationInput,
+): Promise<AccessSnapshot> {
 	try {
 		const root = input.root
 		if (root === null) {
@@ -239,12 +283,12 @@ async function readCandidate(
 			commitSha: input.commitSha,
 			wanted: snapshotReads(root),
 			...(input.sourceBinding === undefined ? {} : { sourceBinding: input.sourceBinding }),
-			signal: invocation.signal,
+			signal,
 		})
 		const settled = approvedSnapshot(await requireAppEnv(deps.repositories, input.run)).snapshot.migrations
-		snapshot = await readAccessSnapshot(commit, root, input.app.id, settled, input.dialect)
+		return await readAccessSnapshot(commit, root, input.app.id, settled, input.dialect)
 	} catch (error) {
-		invocation.signal.throwIfAborted()
+		signal.throwIfAborted()
 		if (error instanceof ContractMissing) input.log(`access: ${error.message}`)
 		// Its line names only versions the release pattern admitted and fixed file names, never other checkout text.
 		if (error instanceof FrameworkReleaseRefused) input.log(`access: ${error.message}`)
@@ -253,8 +297,6 @@ async function readCandidate(
 		else if (error instanceof SourceFailure) input.log(`access: the commit's files cannot be read (${error.code})`)
 		throw error
 	}
-	await invocation.write((fence) => deps.repositories.runs.recordRunSnapshot(input.run.id, serializeSnapshot(snapshot), fence))
-	return snapshot
 }
 
 /** Where the author finds what the run log does not name: the checkout's text stays out of the log. */

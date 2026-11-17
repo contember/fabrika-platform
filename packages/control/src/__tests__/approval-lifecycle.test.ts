@@ -29,7 +29,7 @@ import {
 } from '../approval/api'
 import { parseClassification } from '../approval/publish'
 import { MIGRATION_GUIDE } from '../approval/readers'
-import { type AccessSnapshot, approvedSnapshot, serializeSnapshot } from '../approval/snapshot'
+import { type AccessSnapshot, approvedSnapshot, parseSnapshot, serializeSnapshot } from '../approval/snapshot'
 import { LIST_FAILED_CODE } from '../data-operations'
 import type { AppEnvRow, ControlRepositories, RunRow } from '../db'
 import { acquireLease, type LeaseFence, runLeaseKey } from '../lease'
@@ -94,6 +94,15 @@ const ARTIFACT_PUBLICATION = JSON.stringify({
 const DELETES_NOTES = { 'db/migrations/0001_purge.sql': 'DELETE FROM notes;' }
 const DELETES_MORE = { ...DELETES_NOTES, 'db/migrations/0002_purge_again.sql': 'DELETE FROM notes;' }
 const DELETES_NOTES_LINE = 'Migration `0001_purge.sql` deletes data: deletes rows of `notes`'
+/** A migration that declares database code: a line that needs closer review, and no data change. */
+const DECLARES_CODE = {
+	'db/migrations/0001_count.sql': 'CREATE FUNCTION note_count() RETURNS bigint LANGUAGE sql STABLE AS $$ SELECT count(*) FROM notes $$;',
+}
+/** A migration that only creates a table, and one after it that deletes rows of `notes`. */
+const CREATES_AND_DELETES = {
+	'db/migrations/0001_extra.sql': 'CREATE TABLE extra (id text PRIMARY KEY);',
+	'db/migrations/0002_purge.sql': 'DELETE FROM notes;',
+}
 
 const MISSING_CONTRACT = 'access: the commit has no `fabrika.contract.ts`; Fabrika deploys an application only with a contract'
 
@@ -438,6 +447,40 @@ describe('approved access through the run lifecycle', () => {
 			undefined,
 			{ migrations: ['0002_purge_again.sql'] },
 		])
+	})
+
+	/** Parks a run that brings `CREATES_AND_DELETES`, then strips its stored `dataLoss` as a release before the classifier stored it. */
+	async function parkedByAnOlderRelease(w: World): Promise<string> {
+		await seed(w)
+		expect((await deploy(w, 'prod')).status).toBe('succeeded')
+		w.files = CREATES_AND_DELETES
+		const parked = await deploy(w, 'prod')
+		expect(parked.status).toBe('awaiting_approval')
+		const stored = (await run(w, parked.runId)).snapshot_json
+		if (stored === null) throw new Error('the parked run stored no snapshot')
+		const { dataLoss, ...legacy } = parseSnapshot(stored)
+		expect(dataLoss?.map((loss) => loss.file)).toEqual(['0002_purge.sql'])
+		w.sqlite.query('UPDATE runs SET snapshot_json = ? WHERE id = ?').run(serializeSnapshot(legacy), parked.runId)
+		await approve(w, parked.runId)
+		return parked.runId
+	}
+
+	test('a run parked by a release before the data classifier is classified again when it resumes, and backs up', async () => {
+		const w = world()
+		const parked = await parkedByAnOlderRelease(w)
+		expect((await executeDeploy(deps(w), { runId: parked })).status).toBe('succeeded')
+		// Read again at its commit: only the file that deletes is backed up, the one that only creates a table is not.
+		expect(w.deploys.at(-1)?.backupBeforeMigrations).toEqual({ migrations: ['0002_purge.sql'] })
+	})
+
+	test('a resumed run whose missing data record cannot be read again backs up every migration file the version running lacks', async () => {
+		const w = world()
+		const parked = await parkedByAnOlderRelease(w)
+		// The commit no longer reads: its contract is gone, so the classifier cannot run on it again.
+		w.contract = null
+		expect((await executeDeploy(deps(w), { runId: parked })).status).toBe('succeeded')
+		expect(w.deploys.at(-1)?.backupBeforeMigrations).toEqual({ migrations: ['0001_extra.sql', '0002_purge.sql'] })
+		expect(w.logs.get(`runs/${parked}/logs.ndjson`)).toContain('every new migration file counts as one that may change stored data')
 	})
 
 	test('a migration that only overwrites data, or is not known to keep every value, is backed up too', async () => {
@@ -2055,8 +2098,9 @@ describe('a protected environment is checked again when its run starts', () => {
 	test("a key's restore whose deploy parks for approval still deploys once a person approves it", async () => {
 		const w = world()
 		await seed(w)
-		// The commit the restore redeploys deletes rows, a line that needs closer review, so its deploy waits on `prod`.
-		w.files = DELETES_NOTES
+		// The commit the restore redeploys declares database code, a line that needs closer review, so its deploy waits on
+		// `prod`. Not a data change: a restore's deploy that brings one is refused (the test below).
+		w.files = DECLARES_CODE
 		const runId = uuidv7()
 		// A parked run is no deploy the restore can wait for: it fails, and the environment opens again.
 		const parked = await restoreDeploy(w, 'prod', runId, (id, fence) => w.db.dataOperations.fail(id, LIST_FAILED_CODE, fence))
@@ -2068,6 +2112,25 @@ describe('a protected environment is checked again when its run starts', () => {
 		expect(await executeDeploy(deps(w), { runId })).toEqual({ runId, status: 'succeeded' })
 		expect(w.deploys.map((input) => input.runId)).toEqual([runId])
 		expect(w.logs.get(`runs/${runId}/logs.ndjson`) ?? '').not.toContain('is protected')
+	})
+
+	test("a restore's deploy queued again by an approval is still refused a migration that changes stored data", async () => {
+		const w = world()
+		await seed(w)
+		w.files = DELETES_NOTES
+		const runId = uuidv7()
+		const parked = await restoreDeploy(w, 'prod', runId, (id, fence) => w.db.dataOperations.fail(id, LIST_FAILED_CODE, fence))
+		expect(parked).toBe('awaiting_approval')
+		await approve(w, runId)
+		// An ordinary invocation now, but the restore's record names the run: the start check exempts it, and the data check
+		// knows it for a restore's deploy, where no backup can run.
+		expect(await executeDeploy(deps(w), { runId })).toEqual({ runId, status: 'failed' })
+		expect(w.deploys).toEqual([])
+		const log = w.logs.get(`runs/${runId}/logs.ndjson`) ?? ''
+		expect(log).not.toContain('is protected')
+		expect(log).toContain(
+			"`0001_purge.sql` may change stored data, and the version running does not hold it: a restore's deploy brings no such migration",
+		)
 	})
 
 	test("a key's run that no restore names is not exempt, under a lease or not", async () => {

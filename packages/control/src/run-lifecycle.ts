@@ -46,8 +46,8 @@ import {
 import { lifecycleEnvelopeSchema } from './api/provider-envelope'
 import { dataLossBeyond } from './approval/diff'
 import { protectedRunRefusal } from './approval/human'
-import { publishRunSnapshot, readableSnapshot } from './approval/publish'
-import { type AccessSnapshot, approvedProviderAccess, approvedSnapshot, parseSnapshot, type ProviderAccessFields } from './approval/snapshot'
+import { type PublicationInput, type PublishedCandidate, publishRunSnapshot, readableSnapshot, rereadDataLoss } from './approval/publish'
+import { type AccessSnapshot, approvedProviderAccess, approvedSnapshot, type ProviderAccessFields } from './approval/snapshot'
 import { connectorAddresses } from './connectors'
 import {
 	type DriveResult,
@@ -699,7 +699,8 @@ async function deployUnder(
 		// the commit the environment already ran, so it brings no new code (ADR-0070 §9). The restore's record names the run,
 		// so the exemption holds also when the run parked for approval and an approval queued it again.
 		const refusal = run.trigger === 'manual' ? protectedRunRefusal(appEnv, { byPerson: run.actor?.startsWith('user:') === true, ref: run.ref }) : null
-		if (refusal !== null && !(await deps.repositories.restores.namesRun(run.app_id, run.env, run.id))) throw new Error(refusal.message)
+		const restoreDeploy = await deps.repositories.restores.namesRun(run.app_id, run.env, run.id)
+		if (refusal !== null && !restoreDeploy) throw new Error(refusal.message)
 		const sandbox = await devBootstrapSandbox(deps, appEnv, run, dryRun)
 		// Read under the lease every data operation holds, so no transition moves while this deploy runs.
 		const maintenance = operationDeploy ? 'open' : await recordedMaintenance(deps, { appId: app.id, env: appEnv.env })
@@ -715,6 +716,8 @@ async function deployUnder(
 			?? { app: appInput, environment: environmentInput }
 		await assertNamespaceResourceClaims(deps.repositories.registry, deps.provider, registration)
 		const resolveSource = deps.provider.resolveSource
+		/** The snapshot this run published, and how to classify its data changes again when it predates the classifier. */
+		let published: { readonly candidate: PublishedCandidate; readonly reread: () => Promise<readonly MigrationDataLoss[] | null> } | null = null
 		if (!dryRun && resolveSource !== undefined) {
 			await invocation.boundary()
 			const expectedCommitSha = startedRun.commit_sha === null
@@ -742,12 +745,7 @@ async function deployUnder(
 			// A pending change is published nowhere (ADR-0050): parked here, the run reaches no proxy and no IAM.
 			const commits = deps.commits
 			if (commits === undefined) throw new Error('no commit source is configured to read the run snapshot')
-			const publication = await publishRunSnapshot({ repositories: deps.repositories, commits }, {
-				signal: invocation.work.signal,
-				boundary: () => invocation.boundary(),
-				write: (mutation) => invocation.write(mutation),
-				fence: () => invocation.lease.fence(),
-			}, {
+			const publicationInput: PublicationInput = {
 				run: startedRun,
 				app,
 				root: deps.provider.applicationRoot === undefined ? '' : deps.provider.applicationRoot(registration.app.source),
@@ -763,10 +761,21 @@ async function deployUnder(
 					deps.provider.validateAccess({ environment, access })
 				},
 				log: (line) => runLogs.log(line),
-			})
+			}
+			const publication = await publishRunSnapshot({ repositories: deps.repositories, commits }, {
+				signal: invocation.work.signal,
+				boundary: () => invocation.boundary(),
+				write: (mutation) => invocation.write(mutation),
+				fence: () => invocation.lease.fence(),
+			}, publicationInput)
 			if (publication.kind === 'parked') {
 				await runLogs.flush()
 				return { runId, status: 'awaiting_approval' }
+			}
+			published = {
+				candidate: publication.candidate,
+				reread: () =>
+					rereadDataLoss({ repositories: deps.repositories, commits }, invocation.work.signal, publicationInput, publication.candidate.snapshot),
 			}
 			startedRun = await invocation.boundary()
 			if (sandbox !== null) {
@@ -899,10 +908,22 @@ async function deployUnder(
 		// Once the run succeeds, this is what the next deploy reads to know whether the running version holds the barrier.
 		if (!dryRun) await invocation.write((fence) => runs.recordRunMigrationBarrier(runId, barrier, fence))
 		const barrierInstalled = !operationDeploy && barrier && (await runs.deployedMigrationBarrier({ appId: app.id, env: appEnv.env }))
-		// A migration that may change stored data, any `dataLoss` kind, runs only behind a backup (ADR-0050): the migration phase's where the barrier is
-		// installed, else the provider's own. A dev bootstrap's database is the workspace's sandbox, which nothing backs up.
-		const deletesData = dryRun || operationDeploy || sandbox !== null ? [] : await unheldDataLoss(runs, startedRun)
-		const deletingFiles = [...new Set(deletesData.map((loss) => loss.file))]
+		// A migration that may change stored data, any `dataLoss` kind, runs only behind a backup (ADR-0050): the migration
+		// phase's where the barrier is installed, else the provider's own. A dev bootstrap's database is the workspace's
+		// sandbox, which nothing backs up.
+		const deletingFiles = published === null || sandbox !== null
+			? []
+			: await unheldDataChanges(runs, startedRun, published.candidate, published.reread, (line) => runLogs.log(line))
+		const named = deletingFiles.map((file) => `\`${file}\``).join(', ')
+		if (deletingFiles.length > 0 && restoreDeploy) {
+			// A restore's deploy runs under the restore's lease with the object frozen or pointed away, where no backup can run
+			// (ADR-0070 §9); it redeploys what runs, so anything new is the application's change, not the restore's. Named by
+			// the restore's record, like the start check, so a deploy an approval queued again is still the restore's.
+			throw new Error(
+				`${named} may change stored data, and the version running does not hold it: a restore's deploy brings no such migration. `
+					+ 'Let the restore finish, then deploy the change on its own',
+			)
+		}
 		if (deletingFiles.length > 0 && deps.provider.dataOperations !== undefined && !barrierInstalled) {
 			const cause = !hasDomain
 				? 'the environment has no domain. Give it one, deploy once without that migration, then deploy it'
@@ -910,7 +931,7 @@ async function deployUnder(
 				? "the application's framework release does not hold the barrier. Raise its @fabrika/app pin to a release that does, deploy once without that migration, then deploy it"
 				: 'the version running does not hold it yet. Deploy once without that migration, then deploy it'
 			throw new Error(
-				`${deletingFiles.map((file) => `\`${file}\``).join(', ')} may change stored data, `
+				`${named} may change stored data, `
 					+ `and Control backs up this environment before a migration only once the version running holds the backup barrier: ${cause}`,
 			)
 		}
@@ -1082,16 +1103,33 @@ async function deployUnder(
 }
 
 /**
- * The run's `dataLoss` statements of every kind, each one that may change stored data, in migration files the environment's last succeeded run did not deploy
- * as they are now. Not the published snapshot: a publication precedes the provider, and a run that failed after it may
- * not have run its migrations. A succeeded snapshot this release cannot read holds no file, so every statement counts.
+ * The run's migration files with a `dataLoss` statement of any kind, each one that may change stored data, that the
+ * environment's last succeeded run did not deploy as they are now. Not the published snapshot: a publication precedes
+ * the provider, and a run that failed after it may not have run its migrations. A succeeded snapshot this release cannot
+ * read holds no file. A candidate whose `dataLoss` was not read is classified again at its commit; when that fails,
+ * every file the version running does not hold counts, since a missing record never means nothing changes data.
  */
-async function unheldDataLoss(runs: RunRepository, run: RunRow): Promise<readonly MigrationDataLoss[]> {
-	if (run.snapshot_json === null) return []
-	const candidate = parseSnapshot(run.snapshot_json)
-	if (candidate.dataLoss === undefined) return []
+async function unheldDataChanges(
+	runs: RunRepository,
+	run: RunRow,
+	published: PublishedCandidate,
+	reread: () => Promise<readonly MigrationDataLoss[] | null>,
+	log: (line: string) => void,
+): Promise<readonly string[]> {
 	const running = await runs.getLatestSucceededRunWithSnapshot({ appId: run.app_id, env: run.env })
-	return dataLossBeyond(readableSnapshot(running?.snapshot_json ?? null)?.migrations ?? [], candidate)
+	const held = readableSnapshot(running?.snapshot_json ?? null)?.migrations ?? []
+	const candidate = published.snapshot
+	const heldChecksums = new Map(held.map((entry) => [entry.name, entry.checksum]))
+	const unheld = candidate.migrations.filter((entry) => heldChecksums.get(entry.name) !== entry.checksum).map((entry) => entry.name)
+	if (unheld.length === 0) return []
+	const dataLoss = published.dataLossRead ? candidate.dataLoss ?? [] : await reread()
+	if (dataLoss === null) {
+		log(
+			'access: the stored snapshot predates the data classifier, and its commit cannot be read again: every new migration file counts as one that may change stored data',
+		)
+		return unheld
+	}
+	return [...new Set(dataLossBeyond(held, { ...candidate, dataLoss }).map((loss) => loss.file))]
 }
 
 /** The actor a migration records for a run created before runs recorded one. */

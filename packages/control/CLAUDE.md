@@ -454,10 +454,12 @@ other environment, before the provider prepares anything, and the write maps a r
   lost its driver (the run's invocation holds the lease from its start to its settlement): the maintenance pass resumes
   it as a successor, and a held lease makes `advanceDataOperation` answer busy, so a live driver is never overtaken.
 - **A migration that may change stored data runs only behind a backup (ADR-0050, `deployUnder`).** The files are the candidate's
-  `dataLoss` of any kind that the environment's last succeeded run did not deploy as they are now (`unheldDataLoss`, never the
-  publication). A provider with `dataOperations` deploys them only through the migration phase: without an installed
-  barrier the run is refused before any provider effect, naming the cause. Any other provider is handed
-  `backupBeforeMigrations` and backs up itself. A dry run and a dev bootstrap are handed nothing.
+  `dataLoss` of any kind that the environment's last succeeded run did not deploy as they are now (`unheldDataChanges`,
+  never the publication). A stored snapshot without `dataLoss` is classified again at its commit (`rereadDataLoss`), and
+  when that fails every unheld file counts: absent never means "changes nothing". A provider with `dataOperations` deploys
+  them only through the migration phase: without an installed barrier the run is refused before any provider effect,
+  naming the cause. Any other provider is handed `backupBeforeMigrations` and backs up itself. A restore's deploy that
+  would bring one is refused; which run is a restore's comes from its record (`RestoreRepository.namesRun`). A dry run and a dev bootstrap are handed nothing.
 - **A side restore is a `restore` data operation (`startRestore`, `data.start` kind `restore` with a past `at`;
   ADR-0070 §9).** `data.start` only records it, the operation and its `app_env_restores` row in one lease-fenced batch,
   and returns it at `list`; the maintenance pass (`runBackupSchedule`, both hosts) owns it and drives it under the lease
