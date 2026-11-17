@@ -19,11 +19,16 @@ import type { SnapshotContract } from './formats'
 import { type ContractReader, FRAMEWORK_PACKAGE, FrameworkReleaseRefused, readerFor, type ReaderOutcome } from './readers'
 import type { AccessSnapshot, MigrationEntry } from './snapshot'
 
-/** What one snapshot read may cost: files, rounds of import discovery, and bytes per file. */
+/** What one snapshot read may cost: files, rounds of import discovery, bytes per file and in all. */
 export const SNAPSHOT_LIMITS = {
 	readerFiles: 256,
 	readerRounds: 32,
 	readerFileBytes: CONTRACT_LIMITS.sourceBytes,
+	/**
+	 * The reader's inputs held in memory together: its modules, which the reader bounds by `sourceBytes` only once it
+	 * parses them, and their configuration files. A round may name many modules at once.
+	 */
+	readerTotalChars: 2 * CONTRACT_LIMITS.sourceBytes,
 	lockfileBytes: 8 * 1024 * 1024,
 	migrations: 1000,
 	migrationBytes: 1024 * 1024,
@@ -126,13 +131,19 @@ export async function readAccessSnapshot(
 	const reader = readerFor(framework)
 	const migrations = await readMigrations(commit, root)
 	const files = new Map<string, string>()
+	let chars = 0
 	for (let round = 0;; round++) {
 		const missing = reader.inputs(files, exists)
 		if (missing.length === 0) break
 		if (round >= SNAPSHOT_LIMITS.readerRounds || files.size + missing.length > SNAPSHOT_LIMITS.readerFiles) {
 			throw new SnapshotRefused('contract-too-large')
 		}
-		for (const path of missing) files.set(path, await commit.read(inRepository(path), SNAPSHOT_LIMITS.readerFileBytes))
+		for (const path of missing) {
+			const text = await commit.read(inRepository(path), SNAPSHOT_LIMITS.readerFileBytes)
+			chars += text.length
+			if (chars > SNAPSHOT_LIMITS.readerTotalChars) throw new SnapshotRefused('contract-too-large')
+			files.set(path, text)
+		}
 	}
 	const { contract: read, accessTables } = readContract(reader, files)
 	if (read.contract.app !== appId) {

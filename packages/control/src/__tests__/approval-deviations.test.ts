@@ -15,7 +15,7 @@ import { completeApprovalUseCase } from '../approval/api'
 import { snapshotDeviations } from '../approval/diff'
 import { classifyAccess as classifyWithFacts } from '../approval/diff'
 import { parseClassification, type StoredClassification } from '../approval/publish'
-import { readAccessSnapshot, snapshotReads, SnapshotRefused } from '../approval/read'
+import { readAccessSnapshot, SNAPSHOT_LIMITS, snapshotReads, SnapshotRefused } from '../approval/read'
 import { type AccessSnapshot, approvedSnapshot, parseSnapshot, serializePublished, serializeSnapshot, snapshotDigest } from '../approval/snapshot'
 import type { ControlRepositories } from '../db'
 import { executeDeploy, type RunDeps } from '../run-lifecycle'
@@ -336,6 +336,28 @@ describe("SQLite's table options in the provider's dialect", () => {
 })
 
 describe('the files a snapshot may read', () => {
+	/** The kit commit, its contract importing a module of `chars` characters (mostly a comment) per entry. */
+	const padded = (sizes: readonly number[]): Record<string, string> => {
+		const files = commitOf()
+		const contract = files['fabrika.contract.ts'] ?? ''
+		const imports = sizes.map((_, index) => `import { pad${index} } from './src/pad${index}'\n`).join('')
+		const modules = Object.fromEntries(
+			sizes.map((size, index) => [`src/pad${index}.ts`, `export const pad${index} = 1\n// ${'x'.repeat(size)}\n`]),
+		)
+		return { ...files, ...modules, 'fabrika.contract.ts': imports + contract }
+	}
+
+	test('a contract over the former 512 KiB limit is read', async () => {
+		const snapshot = await snapshotOf(padded([1024 * 1024]))
+		expect(snapshot.contract?.app).toBe('notes')
+	})
+
+	test('modules a round names that together pass the total are refused before they are parsed', async () => {
+		const each = Math.floor(SNAPSHOT_LIMITS.readerFileBytes * 0.75)
+		expect(each * 3).toBeGreaterThan(SNAPSHOT_LIMITS.readerTotalChars)
+		await expect(snapshotOf(padded([each, each, each]))).rejects.toEqual(new SnapshotRefused('contract-too-large'))
+	})
+
 	test('are the reader inputs and the migrations under the application root, nothing beside it', () => {
 		const reads = snapshotReads('apps/notes')
 		expect(

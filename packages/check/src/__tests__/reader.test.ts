@@ -434,6 +434,12 @@ describe('the resource budget', () => {
 		expect(findings[0]).toBe("fabrika.contract.ts:31:8 contract the contract's schemas expand to over 20000 nodes")
 	})
 
+	test('source over the former 512 KiB limit reads as the same contract', () => {
+		const padding = `// ${'x'.repeat(1024 * 1024)}\n`
+		expect(CONTRACT_LIMITS.sourceBytes).toBe(2 * 1024 * 1024)
+		expect(readContractSource(application(BASE, padding + SCHEMAS))).toEqual(readContractSource(application(BASE)))
+	})
+
 	test('source over the byte limit, and syntax nested deeper than the limit', () => {
 		const padding = `// ${'x'.repeat(CONTRACT_LIMITS.sourceBytes)}\n`
 		expect(refusal(application(BASE, padding + SCHEMAS))).toEqual([
