@@ -36,8 +36,8 @@ machine API key described below.
    run, and waits for that run's external app-version id. Notes is a contract
    application: Control reads `fabrika.contract.ts`, the table policies and the
    migrations at the commit, and every access of that snapshot is new, so its first
-   deploy to the protected `prod` waits for approval
-   ([ADR-0050](../decisions/0050-approved-access.md)): the smoke signs in to the
+   deploy to the protected `prod` waits for approval when a line needs closer review
+   ([ADR-0050](../decisions/0050-approved-access.md)): the smoke then signs in to the
    console through the real handoff (`LOCAL_DEV_LOGIN`) and approves it with
    `approvals.complete` from the console's origin, as a person does;
 4. hard-kills control while the emulated pipeline is `BUILDING`;
@@ -133,7 +133,7 @@ version deployed: the endpoint table Control published on the namespace proxy, t
 contract digest, workload keys and membership transport the deploy wrote, and the source of that commit. The
 browser stack uses it: its `notes-agent-change` seed deploys and approves the pinned
 commit, follows it, and pushes the agent change commit through the notes connection's
-webhook, where it waits for approval. The scenario
+webhook, where it waits for approval: it declares a trigger function, which needs closer review. The scenario
 `tests/browser/notes-agent-adds-endpoint-and-table.test.ts` approves it in the console and
 follows the deploy. Every `up` returns the container to the workspace example.
 

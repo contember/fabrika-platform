@@ -414,7 +414,7 @@ under `.github/`. The operator changes them through normal review.
 
 The contract, its schema modules, `src/db/tables.ts` and `db/migrations/` are editable: Control classifies
 their change at deploy time ([ADR-0050](../decisions/0050-approved-access.md)). The authoring target is
-unprotected by default, so a change applies there at once. When a widening reaches a protected
+unprotected by default, so a change applies there at once. When a change that needs closer review reaches a protected
 environment, `get_deployment` reports the run as `awaiting_approval` with the console's approval link and the
 change in plain language. No OAuth or MCP token can approve it. Its `deviations` name the lines that step off the
 paved road and need closer review, parked or not.

@@ -9,6 +9,7 @@ import {
 	applicationDatabaseSchema,
 	classifyMigrations,
 	type FileAdoption,
+	type MigrationDataLoss,
 	type MigrationDeviation,
 	type MigrationDialect,
 	type MigrationSetClassification,
@@ -137,13 +138,14 @@ export async function readAccessSnapshot(
 	if (read.contract.app !== appId) {
 		throw new SnapshotRefused('contract-app-mismatch')
 	}
-	const { databaseCode, fileAdoptions } = readDatabaseCode(migrations, appId, settled, accessTables, dialect)
+	const { databaseCode, fileAdoptions, dataLoss } = readDatabaseCode(migrations, appId, settled, accessTables, dialect)
 	return {
 		version: 1,
 		...read,
 		migrations: migrations.map(({ name, checksum }) => ({ name, checksum })),
 		...(databaseCode.length === 0 ? {} : { databaseCode }),
 		...(fileAdoptions.length === 0 ? {} : { fileAdoptions }),
+		...(dataLoss.length === 0 ? {} : { dataLoss }),
 		checker: reader.checker,
 		framework,
 	}
@@ -165,7 +167,7 @@ function readContract(
 }
 
 /**
- * The deviations and file adoptions of every migration file, classified as one set against the application's schema,
+ * The deviations, file adoptions and data loss of every migration file, classified as one set against the application's schema,
  * as the runner classifies them before it applies one. A refused statement in a file not yet settled fails the read:
  * the runner would refuse the file.
  */
@@ -175,8 +177,8 @@ function readDatabaseCode(
 	settled: readonly MigrationEntry[],
 	accessTables: readonly string[],
 	dialect: MigrationDialect,
-): { databaseCode: MigrationDeviation[]; fileAdoptions: FileAdoption[] } {
-	if (migrations.length === 0) return { databaseCode: [], fileAdoptions: [] }
+): { databaseCode: MigrationDeviation[]; fileAdoptions: FileAdoption[]; dataLoss: MigrationDataLoss[] } {
+	if (migrations.length === 0) return { databaseCode: [], fileAdoptions: [], dataLoss: [] }
 	let classified: MigrationSetClassification
 	try {
 		classified = classifyMigrations(migrations, applicationDatabaseSchema(appId), { accessTables: new Set(accessTables), dialect })
@@ -188,7 +190,11 @@ function readDatabaseCode(
 	const pending = new Set(migrations.filter((migration) => settledChecksums.get(migration.name) !== migration.checksum).map(({ name }) => name))
 	const refused = classified.files.filter((file) => pending.has(file.file)).reduce((count, file) => count + file.refused.length, 0)
 	if (refused > 0) throw new SnapshotRefused('migrations-refused', refused)
-	return { databaseCode: classified.files.flatMap((file) => file.deviations), fileAdoptions: classified.files.flatMap((file) => file.adoptions) }
+	return {
+		databaseCode: classified.files.flatMap((file) => file.deviations),
+		fileAdoptions: classified.files.flatMap((file) => file.adoptions),
+		dataLoss: classified.files.flatMap((file) => file.dataLoss),
+	}
 }
 
 interface ReadMigration extends MigrationEntry {

@@ -624,7 +624,8 @@ other environment, before the provider prepares anything, and the write maps a r
   `contractReaderInputs` names the files: on Zerops one archive pass keeps the files `snapshotReads(root)` wants,
   `archiveCommitSource`; on Cloudflare the commit's tree and files through the GitHub metadata client), stores it
   on the run, classifies it against the active snapshot (`classifyAccess`, pure, conservative) and either parks
-  the run in `awaiting_approval` (a widening on a `protected` environment without a matching approval) or
+  the run in `awaiting_approval` (a closer-review line, `waitsForApproval`, on a `protected` environment without a
+  matching approval) or
   publishes it with `publishRunSnapshot`, a compare-and-swap on `app_envs.generation` and `protection_revision`
   fenced on the run lease and taken under the namespace lease; a lost swap classifies again. Before each attempt,
   the provider's optional, mutation-free `validateAccess` checks the candidate against the current placement, so an

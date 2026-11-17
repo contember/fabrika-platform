@@ -1,7 +1,15 @@
 // The three effects of an access change line (ADR-0050 §3), in the order the console shows them, and how the list and
 // the approval page name each one; the approval page's group titles, its review reasons and where a decided run stands.
 
-import type { AccessChangeDto, ApprovalDto, ChangeSubjectKind, SurfaceEndpointDto, SurfaceNoteDto, SurfaceReach } from '@fabrika/control-contract'
+import {
+	type AccessChangeDto,
+	type ApprovalDto,
+	type ChangeSubjectKind,
+	type SurfaceEndpointDto,
+	type SurfaceNoteDto,
+	type SurfaceReach,
+	waitsForApproval,
+} from '@fabrika/control-contract'
 import { type Lamp, runLamp } from '../components/Status'
 
 export type AccessEffect = AccessChangeDto['effect']
@@ -112,6 +120,8 @@ export function reviewReason(change: AccessChangeDto): string | null {
 			return "It moves stored files under a table's policy, or deletes the ones no column took."
 		case 'terminal':
 			return "The application decides who is signed in on a shared computer, within the terminal's ceiling."
+		case 'deletes-data':
+			return 'It deletes stored data, and no later deploy brings it back.'
 		case undefined:
 			return null
 	}
@@ -153,8 +163,8 @@ export function approvalStage(approval: ApprovalDto): { readonly lamp: Lamp; rea
  * A run without an approval: one that waited and was refused (a refusal is the only way out of waiting without an
  * approval or a cancellation), or one that never waited, because its change narrows or its environment is unprotected.
  */
-function unapproved({ run, outcome, protected: guarded }: ApprovalDto): { readonly lamp: Lamp; readonly text: string } {
-	if (outcome === 'widening' && guarded && run.status === 'failed') return { lamp: 'stop', text: 'Refused' }
+function unapproved({ run, changes, protected: guarded }: ApprovalDto): { readonly lamp: Lamp; readonly text: string } {
+	if (waitsForApproval(changes) && guarded && run.status === 'failed') return { lamp: 'stop', text: 'Refused' }
 	switch (run.status) {
 		case 'pending':
 		case 'running':

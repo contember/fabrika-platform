@@ -4,6 +4,7 @@
 
 import { canonicalArtifactJson, canonicalJson, sha256Hex } from '@fabrika/auth-core'
 import { readContractSource } from '@fabrika/check/contract'
+import { waitsForApproval } from '@fabrika/control-contract'
 import type { BlobStore } from '@fabrika/platform'
 import { uuidv7 } from '@fabrika/platform'
 import type { ControlProvider } from '@fabrika/provider-contract'
@@ -11,6 +12,7 @@ import { describe, expect, test } from 'bun:test'
 import { toAppEnvDto } from '../api/registry/registration'
 import { completeApprovalUseCase } from '../approval/api'
 import { snapshotDeviations } from '../approval/diff'
+import { classifyAccess as classifyWithFacts } from '../approval/diff'
 import { parseClassification, type StoredClassification } from '../approval/publish'
 import { readAccessSnapshot, snapshotReads, SnapshotRefused } from '../approval/read'
 import { type AccessSnapshot, approvedSnapshot, parseSnapshot, serializePublished, serializeSnapshot, snapshotDigest } from '../approval/snapshot'
@@ -402,6 +404,73 @@ describe('a file collection adopted into a table (ADR-0061)', () => {
 		expect(JSON.parse(published.published_snapshot_json ?? '{}')).not.toHaveProperty('fileAdoptions')
 		const run = await w.db.runs.getRun(published.published_run_id ?? '')
 		expect(JSON.parse(run?.snapshot_json ?? '{}').fileAdoptions).toHaveLength(2)
+	})
+})
+
+const DATA_LOSS_MIGRATION = {
+	name: '20261117120000_drop_audit.sql',
+	sql: `DELETE FROM notes WHERE title = '';
+ALTER TABLE notes DROP COLUMN workspace_id;
+DROP TABLE audit;
+`,
+}
+
+describe('a migration that deletes data', () => {
+	test('the snapshot records each statement, keeps them through storage, leaves the digest as it was, and the publication leaves them out', async () => {
+		const snapshot = await snapshotOf(commitOf({}, [NOTES_MIGRATION, DATA_LOSS_MIGRATION]))
+		expect(snapshot.dataLoss).toEqual([
+			{ statement: 'DELETE', object: 'notes', file: DATA_LOSS_MIGRATION.name, line: 1 },
+			{ statement: 'DROP COLUMN', object: 'notes.workspace_id', file: DATA_LOSS_MIGRATION.name, line: 2 },
+			{ statement: 'DROP TABLE', object: 'audit', file: DATA_LOSS_MIGRATION.name, line: 3 },
+		])
+		expect(parseSnapshot(serializeSnapshot(snapshot)).dataLoss).toEqual(snapshot.dataLoss)
+		const { dataLoss: _, ...without } = snapshot
+		expect(snapshotDigest(snapshot)).toBe(snapshotDigest(without))
+		expect(JSON.parse(serializeSnapshot(await snapshotOf(commitOf())))).not.toHaveProperty('dataLoss')
+		expect(JSON.parse(serializePublished(snapshot))).not.toHaveProperty('dataLoss')
+	})
+
+	test('each statement of a new or changed file is its own closer-review line that leaves access unchanged; a file that ran adds none', async () => {
+		const before = await snapshotOf(commitOf())
+		const after = await snapshotOf(commitOf({}, [NOTES_MIGRATION, DATA_LOSS_MIGRATION]))
+		const { changes } = classifyWithFacts(before, after)
+		const lines = changes.filter((change) => change.rule === 'migration.deletes-data')
+		expect(lines.map(({ effect, line, review, reason, subject }) => ({ effect, line, review, reason, subject }))).toEqual([
+			{
+				effect: 'neutral',
+				line: 'Migration `20261117120000_drop_audit.sql` deletes data: deletes rows of `notes`',
+				review: 'closer',
+				reason: 'deletes-data',
+				subject: { kind: 'migration', name: DATA_LOSS_MIGRATION.name },
+			},
+			{
+				effect: 'neutral',
+				line: 'Migration `20261117120000_drop_audit.sql` deletes data: drops column `notes.workspace_id` with its values',
+				review: 'closer',
+				reason: 'deletes-data',
+				subject: { kind: 'migration', name: DATA_LOSS_MIGRATION.name },
+			},
+			{
+				effect: 'neutral',
+				line: 'Migration `20261117120000_drop_audit.sql` deletes data: drops table `audit` with every row',
+				review: 'closer',
+				reason: 'deletes-data',
+				subject: { kind: 'migration', name: DATA_LOSS_MIGRATION.name },
+			},
+		])
+		expect(waitsForApproval(changes)).toBe(true)
+		expect(classifyWithFacts(after, after).changes).toEqual([])
+		const edited = await snapshotOf(commitOf({}, [NOTES_MIGRATION, { ...DATA_LOSS_MIGRATION, sql: `${DATA_LOSS_MIGRATION.sql}\n` }]))
+		expect(classifyWithFacts(after, edited).changes.filter((change) => change.rule === 'migration.deletes-data')).toHaveLength(3)
+	})
+
+	test('a new migration that keeps every row widens, needs no closer review, and does not wait', async () => {
+		const before = await snapshotOf(commitOf())
+		const added = { name: '20261117130000_titles.sql', sql: 'ALTER TABLE notes ADD COLUMN subtitle text;\n' }
+		const { outcome, changes } = classifyWithFacts(before, await snapshotOf(commitOf({}, [NOTES_MIGRATION, added])))
+		expect(outcome).toBe('widening')
+		expect(changes.map((change) => change.rule)).toEqual(['migration.added'])
+		expect(waitsForApproval(changes)).toBe(false)
 	})
 })
 

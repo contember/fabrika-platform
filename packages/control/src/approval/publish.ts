@@ -2,7 +2,14 @@
 // on a protected environment until a human approves it, and publish with a compare-and-swap on the generation.
 
 import { incompatibleMountChanges } from '@fabrika/app/contract'
-import { type AccessChangeDto, CHANGE_SUBJECT_KINDS, REVIEW_REASONS, SURFACE_NOTE_TOPICS, SURFACE_REACHES } from '@fabrika/control-contract'
+import {
+	type AccessChangeDto,
+	CHANGE_SUBJECT_KINDS,
+	REVIEW_REASONS,
+	SURFACE_NOTE_TOPICS,
+	SURFACE_REACHES,
+	waitsForApproval,
+} from '@fabrika/control-contract'
 import type { MigrationDialect } from '@fabrika/platform-node/sql'
 import type { ProviderApprovedAccess } from '@fabrika/provider-contract'
 import { z } from 'zod'
@@ -156,7 +163,7 @@ const MAX_PUBLICATION_ATTEMPTS = 3
 
 /**
  * Read (or reuse) the run's snapshot, classify it against the environment's active snapshot and publish it, or park the
- * run when a widening needs approval. A lost compare-and-swap classifies again against the new active snapshot, so an
+ * run on a protected environment when a line needs closer review and no approval covers the change. A lost compare-and-swap classifies again against the new active snapshot, so an
  * approval for the old baseline no longer counts (ADR-0050 §2).
  */
 export async function publishRunSnapshot(
@@ -190,7 +197,7 @@ export async function publishRunSnapshot(
 		const classification = classify(active, candidate, appEnv)
 		logClassification(input.log, classification, appEnv.env)
 		const serialized = JSON.stringify(classification)
-		if (classification.outcome === 'widening' && classification.protected && !approves(run, classification)) {
+		if (classification.protected && waitsForApproval(classification.changes) && !approves(run, classification)) {
 			await invocation.write((fence) => runs.parkRunForApproval(run.id, serialized, fence))
 			input.log(`access: waiting for a human with access.approve to approve this change on \`${appEnv.env}\``)
 			return { kind: 'parked', classification }

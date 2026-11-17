@@ -1,7 +1,7 @@
 // How the approval page shows one access change (ADR-0050 §7): the classification's facts grouped by who reaches an
 // endpoint and by what else they are about, one row per subject with all its lines, ranked by effect, review and
 // reach, and quiet subjects that changed alike folded into one row. Pure, and it decides nothing: whether a run waits is
-// the classification's outcome alone.
+// `waitsForApproval` of its lines and its environment's protection alone.
 
 import {
 	type AccessChangeDto,
@@ -12,6 +12,15 @@ import {
 	SURFACE_REACHES,
 	type SurfaceReach,
 } from './index.js'
+
+/**
+ * Whether a change waits for a person on a protected environment (ADR-0050 §3): it has a line that needs closer review,
+ * a step off the paved road, something anyone sets off, people becoming visible or a migration that deletes data. Any
+ * other change publishes at once, its lines recorded.
+ */
+export function waitsForApproval(changes: readonly Pick<AccessChangeDto, 'review'>[]): boolean {
+	return changes.some((change) => change.review === 'closer')
+}
 
 /**
  * The endpoints of one caller group: everyone a reach admits, or the holders of one link mount's share links. `people`

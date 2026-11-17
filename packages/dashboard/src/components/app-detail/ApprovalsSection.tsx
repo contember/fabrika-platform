@@ -10,7 +10,7 @@ import { Icon } from '../Icon'
 import { Chip } from '../Status'
 import { Table } from '../Table'
 
-/** Whether a deploy that widens an environment's access waits for a person with `access.approve` (ADR-0050 §4). */
+/** Whether a deploy whose change needs closer review waits for a person with `access.approve` (ADR-0050 §4). */
 export function ApprovalsSection({ appId, envs, onDone }: { appId: string; envs: readonly AppEnvDto[]; onDone: () => void }) {
 	if (envs.length === 0) return null
 	return (
@@ -20,9 +20,10 @@ export function ApprovalsSection({ appId, envs, onDone }: { appId: string; envs:
 				<h2>Access approvals</h2>
 			</div>
 			<p className="hint">
-				A deploy that widens access on an environment that requires approval waits until a person with <code>access.approve</code>{' '}
-				approves it. A team that already reviews every merge to the trigger branch on GitHub may turn this off. Only a person signed in to the console
-				changes it, and the audit log records each change.
+				On an environment that requires approval, a deploy whose change needs closer review (raw SQL, a table read across scopes, a public endpoint,
+				people becoming visible, a migration that deletes data) waits until a person with <code>access.approve</code>{' '}
+				approves it. Any other deploy goes out at once. A team that already reviews every merge to the trigger branch on GitHub may turn this off. Only a
+				person signed in to the console changes it, and the audit log records each change.
 			</p>
 			<Table
 				head={

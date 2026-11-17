@@ -3,7 +3,7 @@
 
 import { schemaFromContract } from '@fabrika/app/contract'
 import { canonicalJson, type ContractArtifact, sha256Hex } from '@fabrika/auth-core'
-import type { FileAdoption, MigrationDeviation } from '@fabrika/platform-node/sql'
+import type { FileAdoption, MigrationDataLoss, MigrationDeviation } from '@fabrika/platform-node/sql'
 import { FRAMEWORK_RELEASE_PATTERN, type ProviderApprovedAccess } from '@fabrika/provider-contract'
 import { z } from 'zod'
 import type { AppEnvRow } from '../db'
@@ -38,6 +38,11 @@ export interface AccessSnapshot {
 	 * there is none. Not part of the digest: it follows from the migration files, whose checksums the digest covers.
 	 */
 	readonly fileAdoptions?: readonly FileAdoption[]
+	/**
+	 * The statements of the migration files that delete stored data, in file order. Absent when there is none. Like the
+	 * file adoptions, not part of the digest, and read only from a candidate.
+	 */
+	readonly dataLoss?: readonly MigrationDataLoss[]
 	/** The `@fabrika/check` release of the reader that read it; empty for the empty snapshot. */
 	readonly checker: string
 	/** The `@fabrika/app` release the application's `bun.lock` pins. Absent in a snapshot read before Control recorded it. */
@@ -66,12 +71,20 @@ const fileAdoptionSchema = z.discriminatedUnion('step', [
 	z.object({ step: z.literal('release'), collection: z.string().min(1), file: z.string().min(1), line: z.number().int().positive() }).strict(),
 ]) satisfies z.ZodType<FileAdoption>
 
+const dataLossSchema = z.object({
+	statement: z.enum(['DROP TABLE', 'DROP COLUMN', 'TRUNCATE', 'DELETE']),
+	object: z.string().min(1),
+	file: z.string().min(1),
+	line: z.number().int().positive(),
+}).strict() satisfies z.ZodType<MigrationDataLoss>
+
 const snapshotSchema = z.object({
 	version: z.literal(1),
 	contract: z.unknown(),
 	migrations: z.array(z.object({ name: z.string().min(1), checksum: z.string().regex(/^[0-9a-f]{64}$/) }).strict()),
 	databaseCode: z.array(deviationSchema).optional(),
 	fileAdoptions: z.array(fileAdoptionSchema).optional(),
+	dataLoss: z.array(dataLossSchema).optional(),
 	checker: z.string(),
 	framework: z.string().regex(FRAMEWORK_RELEASE_PATTERN).optional(),
 	// The gates and IAM schema of an application without a contract, in a snapshot stored before those were refused.
@@ -90,6 +103,7 @@ export function parseSnapshot(raw: string): AccessSnapshot {
 		migrations: parsed.migrations,
 		...(parsed.databaseCode === undefined || parsed.databaseCode.length === 0 ? {} : { databaseCode: parsed.databaseCode }),
 		...(parsed.fileAdoptions === undefined || parsed.fileAdoptions.length === 0 ? {} : { fileAdoptions: parsed.fileAdoptions }),
+		...(parsed.dataLoss === undefined || parsed.dataLoss.length === 0 ? {} : { dataLoss: parsed.dataLoss }),
 		checker: parsed.checker,
 		...(parsed.framework === undefined ? {} : { framework: parsed.framework }),
 	}
@@ -102,12 +116,12 @@ export function serializeSnapshot(snapshot: AccessSnapshot): string {
 }
 
 /**
- * The stored form of a publication: without the file adoptions, which the diff reads only from a candidate, so that a
- * Control rolled back below the release that recorded them still reads every environment's publication. Only the run
- * snapshot of a commit that adopts files stays unreadable to it.
+ * The stored form of a publication: without the file adoptions and the data loss, which the diff reads only from a
+ * candidate, so that a Control rolled back below the release that recorded them still reads every environment's
+ * publication. Only the run snapshot of a commit that adopts files or deletes data stays unreadable to it.
  */
 export function serializePublished(snapshot: AccessSnapshot): string {
-	const { fileAdoptions: _, ...published } = snapshot
+	const { fileAdoptions: _, dataLoss: __, ...published } = snapshot
 	return serializeSnapshot(published)
 }
 

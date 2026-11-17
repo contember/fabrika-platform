@@ -103,7 +103,8 @@ function attentionItems(data: OverviewData): AttentionItem[] {
 			lamp: 'run',
 			title: 'A deploy needs your approval',
 			context: `${approval.run.appId} / ${approval.run.env} · ${
-				approval.changes.find((change) => change.effect === 'widens')?.line ?? 'Access change awaiting review'
+				(approval.changes.find((change) => change.review === 'closer') ?? approval.changes.find((change) => change.effect === 'widens'))?.line
+					?? 'Access change awaiting review'
 			}`,
 			time: approval.run.startedAt ?? approval.run.createdAt,
 			action: 'Review change',

@@ -66,7 +66,7 @@ import {
 	type SurfaceNoteTopic,
 	type SurfaceReach,
 } from '@fabrika/control-contract'
-import type { MigrationDeviation } from '@fabrika/platform-node/sql'
+import type { MigrationDataLoss, MigrationDeviation } from '@fabrika/platform-node/sql'
 import { type AccessSnapshot, compareText, deviationKey } from './snapshot'
 
 /**
@@ -105,8 +105,9 @@ type RuledLine = Line & { readonly rule: string }
 export type AccessChange = RuledLine & { readonly subject: ChangeSubjectDto; readonly audience?: ChangeAudienceDto }
 
 /**
- * `none`: no line at all. `no-widening`: lines, none of which widens (they narrow or leave access unchanged). Both
- * publish at once; `widening` waits for a human on a protected environment.
+ * `none`: no line at all. `no-widening`: lines, none of which widens (they narrow or leave access unchanged).
+ * `widening`: a line widens. Whether a run waits is not the outcome: on a protected environment a change with a line
+ * that needs closer review waits for a human (`waitsForApproval`), whatever its outcome.
  */
 export type AccessOutcome = 'none' | 'no-widening' | 'widening'
 
@@ -129,6 +130,7 @@ export function classifyAccess(baseline: AccessSnapshot, candidate: AccessSnapsh
 	})
 	compareDatabaseCode(changes, baseline, candidate)
 	compareFileAdoptions(changes, baseline, candidate)
+	compareDataLoss(changes, baseline, candidate)
 	// The candidate's row of an endpoint, or the baseline's for a removed one.
 	const rows = new Map([...baseline.contract?.endpoints ?? [], ...candidate.contract?.endpoints ?? []].map((row) => [row.id, row]))
 	const list = changes.list.map((change) => withAudience(change, changes.reaching.get(subjectKey(change.subject)), rows))
@@ -924,6 +926,36 @@ function compareFileAdoptions(changes: Changes, baseline: AccessSnapshot, candid
 					),
 				])),
 		)
+	}
+}
+
+/**
+ * The statements of a new or changed migration file that delete stored data, each its own line: access is unchanged,
+ * but no later deploy brings the data back, so a person approves it on a protected environment and the platform backs
+ * the data up before it runs. A file the baseline holds unchanged has run already.
+ */
+function compareDataLoss(changes: Changes, baseline: AccessSnapshot, candidate: AccessSnapshot): void {
+	const beforeFiles = byName(baseline.migrations)
+	const afterFiles = byName(candidate.migrations)
+	for (const loss of candidate.dataLoss ?? []) {
+		if (beforeFiles.get(loss.file)?.checksum === afterFiles.get(loss.file)?.checksum) continue
+		changes.add(
+			subjectOf('migration', loss.file),
+			...ruled('migration.deletes-data', [closer('deletes-data', `${migrationName(loss.file)} deletes data: ${dataLossWords(loss)}`, 'neutral')]),
+		)
+	}
+}
+
+function dataLossWords(loss: MigrationDataLoss): string {
+	switch (loss.statement) {
+		case 'DROP TABLE':
+			return `drops table \`${loss.object}\` with every row`
+		case 'DROP COLUMN':
+			return `drops column \`${loss.object}\` with its values`
+		case 'TRUNCATE':
+			return `empties table \`${loss.object}\``
+		case 'DELETE':
+			return `deletes rows of \`${loss.object}\``
 	}
 }
 

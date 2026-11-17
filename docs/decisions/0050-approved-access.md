@@ -36,7 +36,12 @@ self-report of the build the agent controls.
 ## Decision
 
 **We will publish an application's access only from an approved snapshot, and we will make every
-widening on a protected environment wait for a human.**
+change on a protected environment that needs closer review wait for a human.** A change that needs closer review
+is one with a closer-review line (section 3): a step off the paved road, something anyone sets off without
+signing in, a mutation served on `GET`, people becoming visible, a file collection adopted or released, a terminal
+naming who is signed in, or a migration that deletes stored data. Any other change, a plain widening included,
+publishes at once with its lines recorded: the people who deploy ordinary work are often not the ones who can read
+an access diff, and a prompt on every new endpoint teaches them to approve without reading.
 
 Built in work unit B6 (`packages/control/src/approval/`). Details the sections below leave open:
 
@@ -57,8 +62,8 @@ Built in work unit B6 (`packages/control/src/approval/`). Details the sections b
   `gates`; the Zerops manifest parser refuses `proxy.gates`.
 - A stored snapshot may still hold the `artifact` access of an application published before contracts
   were required. It parses with that field dropped. A publication without a contract approves nothing:
-  `approvedSnapshot` reads it as the empty baseline, so the application's first contract is a widening
-  that a human approves on a protected environment. The empty unpublished baseline stays valid.
+  `approvedSnapshot` reads it as the empty baseline, so the application's first contract is classified as a
+  whole, and waits on a protected environment when it holds a closer-review line. The empty unpublished baseline stays valid.
   `runs.pending_access_json` is no longer read or written; a later migration drops it.
 - The published snapshot is stored on `app_envs.published_snapshot_json`, written by the same
   compare-and-swap as `published_run_id`.
@@ -228,7 +233,21 @@ should know it). The console shows the three in their own sections. The rule has
 - **`none`**, no line at all, passes.
 - **`no-widening`**, lines that narrow or leave access unchanged and none that widens, passes. A removal is not
   always such a line (the two exceptions below).
-- **`widening`**, everything else, waits for approval on a protected environment.
+- **`widening`**, everything else.
+
+The outcome does not decide whether a run waits. **On a protected environment a run waits when a line needs closer
+review** (`waitsForApproval`, `@fabrika/control-contract`, the one predicate Control and the console share), whatever
+the outcome; a plain widening publishes at once and keeps its lines on the run.
+
+**A migration that deletes stored data is its own closer-review line.** The runner's classifier records each
+statement of the application's own schema that deletes data, `DROP TABLE`, `ALTER TABLE … DROP [COLUMN]`, `TRUNCATE`
+and `DELETE`, in the snapshot's `dataLoss` (by file, statement, object and line). For a new or changed file each is a
+line that leaves access unchanged, rule `migration.deletes-data`, reason `deletes-data`: "Migration `<file>` deletes
+data: drops table `audit` with every row". It waits for a person on a protected environment like any other
+closer-review line, separate from the line that adds the migration. Like the file adoptions, `dataLoss` follows from
+the checksummed files, so it is not part of the digest, and a publication leaves it out; the diff reads it only from
+a candidate. A `DELETE` inside database code or a `DO` block is not recorded: that code is a closer-review line of its
+own. An `UPDATE` that overwrites values is not recorded either.
 
 **A removed endpoint is classified by who answers its paths now.** The proxy selects the most specific endpoint
 ([ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md)), so a literal endpoint can shadow a broader parameter
@@ -244,7 +263,7 @@ compares the callers each endpoint that now answers one admits with the callers 
 - every path reaches an endpoint, and each one admits exactly the removed endpoint's callers, with no body and no
   other origin the removed one refused: access is unchanged;
 - each one admits no caller more: it narrows;
-- otherwise it widens, and it waits like any other widening. A signed-in page falling through to a public SPA is
+- otherwise it widens. A signed-in page falling through to a public SPA is
   the typical case.
 
 "The same callers" is read narrowly. Two signed-in endpoints admit the same callers when they have the same kind, the
@@ -298,8 +317,8 @@ holder there reads each member's email-derived label and every endpoint below it
 widens too. Each of these widening lines carries
 `review: 'closer'`: the approval page marks it "needs closer review",
 because the approver must read the code behind the line, not only the line. The diff leaves no change unclassified:
-a change it has no finer rule for (`valueChange`, a union, an equivalent rewrite of a schema) widens, so it waits
-like any other widening, without a closer-review mark. A closer-review line names its reason (below), so the mark is the result of a rule
+a change it has no finer rule for (`valueChange`, a union, an equivalent rewrite of a schema) widens, without a
+closer-review mark, so it alone does not make a run wait. A closer-review line names its reason (below), so the mark is the result of a rule
 the approver can read, never a label. On an unprotected environment the run publishes at once, with the same lines.
 
 **An endpoint's input and output are compared by the values they admit.** A change that can only admit
@@ -352,7 +371,7 @@ outside approval because it grants no authority: a request from a listed origin 
 no `Allow-Credentials`, the session cookie never read), so it reaches only what the `px_` key it carries already
 reaches from any server. Listing an origin lets a page in a browser use a key it already has; it does not let the page
 act as the person who visits it. What does widen is the contract opening an endpoint to the list at all, or a removed
-endpoint's paths falling to one that is open to it, and that line waits like any other widening. While a run waits for
+endpoint's paths falling to one that is open to it; such a line widens, and waits when the change needs closer review. While a run waits for
 a decision, the approval page names the list as it stands beside each such line. A decided approval names none: the list may have changed since, and nothing records it with the
 decision. The environment page shows the list too.
 
@@ -377,7 +396,7 @@ environment starts from it, else from the default. Deleting a protected environm
 with one, takes the same human with `access.approve`.
 
 Unprotected environments do not wait. Every environment with `protected = true` requires approval
-for a widening, whatever its name or role. Staging and MCP authoring targets are unprotected by
+for a change that needs closer review, whatever its name or role. Staging and MCP authoring targets are unprotected by
 default, so a change applies there at once. When the same commit is deployed to a protected
 environment, Control classifies it again against that environment's active snapshot.
 
@@ -487,27 +506,29 @@ never from the words of a line:
 
 ## Consequences
 
-- An agent can no longer widen production access silently. A widening on `prod` waits until a human
-  reads the plain-language lines and approves.
+- An agent can no longer take a step off the road on production silently: such a change, or one that deletes data,
+  waits on `prod` until a human reads the plain-language lines and approves. A plain widening (a new endpoint for
+  signed-in people, a new role, a new migration that keeps every row) publishes on `prod` at once; its lines stay on
+  the run and the environment page lists the published surface, so it is reviewed after the fact, not before.
 - A removal deploys without a prompt, unless the endpoints that answer its paths now admit a caller the removed one
   did not, or it removes a column read policy. Moving a page's paths to another page for the same callers, the usual
   refactor, does not prompt. A change of handler code that leaves the shell and the migrations as they were deploys without a prompt too. A
-  change that declares a new step off the road, or widens one, waits like any other widening. Unprotected
-  environments, including staging and MCP authoring targets by default, do not wait.
+  change that declares a new step off the road, or widens one, waits. Unprotected environments, including staging and
+  MCP authoring targets by default, do not wait.
 - A deviation is not a refusal. The approver sees each one marked for closer review; what an admitted statement can
   then do in Postgres is bounded by the application's role family
   ([ADR-0017](0017-service-owned-postgres-migrations.md)), not by the approval and not by the classifiers' name
   rules, which are defense in depth.
-- The first deploy to a protected environment always waits: against the empty snapshot, every item is
-  an addition.
+- The first deploy to a protected environment waits only when it holds a closer-review line: against the empty
+  snapshot, every item is an addition, and every step off the road among them is marked.
 - An agent cannot unprotect an environment to avoid the prompt: the flag change needs the same human
   approval.
 - Every path that touches published access goes through one function and one compare-and-swap. A new
   write path must use `approvedSnapshot(app, env)`; a path that reads the provider artifact for access
   data is a bug.
-- The diff is conservative. It does not recognize a harmless addition and shows no head counts, so
-  approvals on `prod` may be frequent. Approval fatigue is a real risk; the number of prompts per
-  deploy must be measured. For a removal it takes the smallest step towards a reachability classifier: it compares
+- The diff is conservative. It does not recognize a harmless addition and shows no head counts. Parking only on
+  closer-review lines keeps approvals on `prod` to the changes a person has to read the code behind; the number of
+  prompts per deploy must still be measured. For a removal it takes the smallest step towards a reachability classifier: it compares
   who the endpoints that answer the removed paths admit with who the removed one admitted, field by field over every
   field of an endpoint row and its delegation. The comparison is total over `EndpointRow`, so a field the proxy
   comes to apply fails Control's typecheck until the comparison decides it; it is never waved through. Additions are
@@ -516,8 +537,9 @@ never from the words of a line:
   (the older schema is strict and knows only `widens`): the approval page, the approvals list and MCP's
   `get_deployment` fail for those runs. Before 1.0 that is accepted; no dual format is written. The same holds for
   rolling back below the version that writes structured facts (section 3). Rolling back below the version that records
-  file adoptions breaks only the runs whose snapshot holds one (a deploy waiting for approval fails when it resumes);
-  the environment's publication never carries them, so every other deploy and republish still reads it.
+  file adoptions, or data loss with its `deletes-data` reason, breaks only the runs whose snapshot or classification
+  holds one (a deploy waiting for approval fails when it resumes); the environment's publication never carries them,
+  so every other deploy and republish still reads it.
 - A run classified before lines carried facts keeps its stored lines without `rule`, `subject` or `audience`. The
   approval page shows them in their effect sections as unsorted lines and builds no groups for that run; a parked run
   that is classified again gets facts. No migration rewrites a stored classification.
@@ -526,7 +548,8 @@ never from the words of a line:
 - The approval proves a signed-in user with `access.approve`, not a physical human. An agent that drives
   the approver's own signed-in browser can approve. The skill forbids it; WebAuthn on
   `approvals.complete` is the next step.
-- A rollback that restores removed access waits for approval like any other widening.
+- A rollback that restores removed access is classified like any other change: it waits when it restores a step off
+  the road.
 - Approval exists only on protected environments. Staging is unprotected by default, so it must hold
   no production data.
 - Control needs the static reader on both runtimes, and the dashboard needs an approval page.

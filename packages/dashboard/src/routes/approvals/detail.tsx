@@ -1,5 +1,5 @@
 import { createPage, Link } from '@buzola/router'
-import { type ApprovalView, approvalView, type ChangeGroup, type ChangeRow, type SubjectRow } from '@fabrika/control-contract'
+import { type ApprovalView, approvalView, type ChangeGroup, type ChangeRow, type SubjectRow, waitsForApproval } from '@fabrika/control-contract'
 import { useState } from 'react'
 import { CloserReview } from '../../components/CloserReview'
 import { ConfirmDialog } from '../../components/ConfirmDialog'
@@ -226,9 +226,13 @@ function endpointSentence({ added, changed, removed }: ApprovalView['summary']):
 
 /** Whether the change widens access, and what that means for this run. */
 function outcomeSentence(approval: ApprovalDto): string {
-	if (approval.outcome !== 'widening') return 'It only narrows access or leaves it unchanged, so it publishes without waiting.'
-	if (!approval.protected) return 'It widens access; this environment is not protected, so it publishes without waiting.'
-	return approval.run.status === 'awaiting_approval' ? 'It widens access, so it waits for your approval.' : 'It widens access.'
+	const waits = waitsForApproval(approval.changes)
+	const what = approval.outcome === 'widening' ? 'It widens access' : 'It only narrows access or leaves it unchanged'
+	if (!waits) return `${what}, and nothing in it needs closer review, so it publishes without waiting.`
+	if (!approval.protected) return `${what}; this environment is not protected, so it publishes without waiting.`
+	return approval.run.status === 'awaiting_approval'
+		? `${what}, and a line needs closer review, so it waits for your approval.`
+		: `${what}, and a line needs closer review.`
 }
 
 function andList(items: readonly string[]): string {

@@ -628,10 +628,10 @@ export interface ChangeAudienceDto {
 
 /**
  * Why a line needs closer review: a step off the paved road, something anyone without signing in sets off, a mutation
- * served on `GET`, people becoming visible, a file collection adopted or released, or the application naming who signs
- * in at an enrolled terminal.
+ * served on `GET`, people becoming visible, a file collection adopted or released, the application naming who signs
+ * in at an enrolled terminal, or a migration that deletes stored data.
  */
-export const REVIEW_REASONS = ['off-road', 'anyone-calls', 'get-mutation', 'people', 'adoption', 'terminal'] as const
+export const REVIEW_REASONS = ['off-road', 'anyone-calls', 'get-mutation', 'people', 'adoption', 'terminal', 'deletes-data'] as const
 
 export type ReviewReason = (typeof REVIEW_REASONS)[number]
 
@@ -672,7 +672,10 @@ export interface AccessChangeDto {
 /** A run's access change against its environment's active snapshot (ADR-0050 §3). */
 export interface ApprovalDto {
 	run: RunDto
-	/** `none`: no line. `no-widening`: lines that narrow or leave access unchanged; it publishes at once. */
+	/**
+	 * `none`: no line. `no-widening`: lines that narrow or leave access unchanged. `widening`: a line widens. On a
+	 * protected environment only a change with a closer-review line waits (`waitsForApproval`); any other publishes at once.
+	 */
 	outcome: 'none' | 'no-widening' | 'widening'
 	changes: AccessChangeDto[]
 	/** The digest of the run's snapshot and of the active one it was compared with: an approval is bound to both. */

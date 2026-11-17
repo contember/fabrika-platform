@@ -109,7 +109,7 @@ describe('the approval page', () => {
 		const summary = markup.slice(markup.indexOf('change-summary'), markup.indexOf('Who gains access'))
 		expect(summary).toContain('This change adds 1 endpoint and changes 4.')
 		expect(summary).toContain('anyone without signing in (1), signed-in people (4)')
-		expect(summary).toContain('It widens access, so it waits for your approval.')
+		expect(summary).toContain('It widens access, and a line needs closer review, so it waits for your approval.')
 		expect(summary).toContain('Check first')
 		expect(summary).toContain('Anyone on the internet decides when job <code>intake</code> runs.')
 	})

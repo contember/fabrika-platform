@@ -48,7 +48,7 @@ Application creation and subsequent changes share one identity without remote co
 
 There is a new credential-establishment protocol and durable state on both IAM and Control. Both database implementations must implement the same lifecycle. Lost-response recovery is explicit because IAM cannot retrieve a stored plaintext key. Consent and revocation need ordinary-user surfaces distinct from IAM administration.
 
-A widening that the local agent deploys to a protected environment waits for a human in the dashboard. The builder can deploy it and report that it waits, but it cannot complete it.
+A change needing closer review that the local agent deploys to a protected environment waits for a human in the dashboard. The builder can deploy it and report that it waits, but it cannot complete it.
 
 Approvers need actual IAM-resolved Control grants. A human admitted only by Control's bootstrap override cannot delegate them. Namespace selection initially uses the human's existing namespace-management permission; the daemon never receives it.
 
