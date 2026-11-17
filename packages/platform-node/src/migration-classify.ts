@@ -78,14 +78,14 @@ export type FileAdoption =
 	| { readonly step: 'release'; readonly collection: string; readonly file: string; readonly line: number }
 
 /**
- * A statement that deletes or overwrites stored data in the application's own schema, or may: allowed, and shown to the
- * approver on its own, because no later deploy brings the data back.
+ * A statement that deletes or overwrites stored data in the application's own schema, or that the classifier cannot show
+ * keeps every stored value: allowed, and shown to the approver on its own, because no later deploy brings the data back.
  */
 export interface MigrationDataLoss {
 	readonly statement: DataLossStatement
 	/**
 	 * `<table>`; `<table>.<column>` for a dropped or converted column; `<kind> <name>` for a `DROP … CASCADE`; the
-	 * function's name for a call of database code.
+	 * function's name for a call of database code; the statement's first keywords for `UNPROVEN`.
 	 */
 	readonly object: string
 	/** The columns an `UPDATE` sets, when the classifier could read every one. */
@@ -97,9 +97,10 @@ export interface MigrationDataLoss {
 /**
  * What a statement does to stored data. It deletes: `DROP TABLE`, `DROP COLUMN`, any `DROP … CASCADE` (it also drops
  * the columns of a dropped type or domain), `TRUNCATE` (`TRUNCATE CASCADE` empties every table that references one too)
- * and `DELETE`. It overwrites: `UPDATE` (except one that sets only columns an earlier `ADD COLUMN` of the file added),
+ * and `DELETE`. It overwrites: `UPDATE` (`UPDATE OR REPLACE` also deletes the rows it conflicts with),
  * `INSERT … ON CONFLICT … DO UPDATE` (`UPSERT`) and `ALTER COLUMN … TYPE`, whose cast may change a value. It may change
- * data: `CALL`, a migration statement that calls a function the migration set declares, whose body may write anything.
+ * data: `CALL`, a migration statement that calls a function the migration set declares, whose body may write anything;
+ * `UNPROVEN`, any other statement that is not known to keep every stored value (`classifyStatement`).
  */
 export type DataLossStatement =
 	| 'DROP TABLE'
@@ -109,9 +110,11 @@ export type DataLossStatement =
 	| 'TRUNCATE CASCADE'
 	| 'DELETE'
 	| 'UPDATE'
+	| 'UPDATE OR REPLACE'
 	| 'UPSERT'
 	| 'ALTER COLUMN TYPE'
 	| 'CALL'
+	| 'UNPROVEN'
 
 /** A file adoption step before the file it lies in is known. */
 type AdoptionStep = WithoutFile<FileAdoption>
@@ -157,6 +160,8 @@ export interface ClassifyMigrationOptions {
 	readonly dialect?: MigrationDialect
 	/** The functions and procedures the whole migration set declares in the schema: a body or an expression may call them. */
 	readonly functions?: ReadonlySet<string>
+	/** The views and materialized views the whole migration set declares in the schema: reading one may run database code. */
+	readonly views?: ReadonlySet<string>
 	/** The framework's own bundle, which alone may name the framework's `fabrika_*` tables. */
 	readonly framework?: boolean
 	/** The application's access tables, lowercased (`accessTables` of `@fabrika/db/tables`): no stored code writes one. */
@@ -269,15 +274,18 @@ interface Context {
 	readonly schema: string
 	readonly dialect: MigrationDialect
 	readonly functions: ReadonlySet<string>
+	readonly views: ReadonlySet<string>
 	readonly framework: boolean
 	readonly accessTables: ReadonlySet<string>
 	readonly accessViews: ReadonlySet<string>
 	doBlocks: number
 	/**
-	 * `<table>.<column>` of each column an `ADD COLUMN` of this file added and no later statement of it renamed or
-	 * dropped: it holds no value stored before the file ran.
+	 * What this file created: each table a `CREATE TABLE` created (`<table>`), and each column an `ADD COLUMN` added to
+	 * another table (`<table>.<column>`). Neither holds a value stored before the file ran, until a rename
+	 * (`renamed`) could give another table or column its name.
 	 */
-	readonly addedColumns: Set<string>
+	readonly created: { readonly tables: Set<string>; readonly columns: Set<string> }
+	renamed: boolean
 }
 
 /** Thrown inside one statement's classification; the statement then contributes only its refusal. */
@@ -293,6 +301,23 @@ interface Collected {
 	readonly adoptions: AdoptionStep[]
 	readonly dataLoss: WithoutFile<MigrationDataLoss>[]
 	readonly changes: ManifestChange[]
+	/**
+	 * Whether the statement is not shown to keep every stored value, nor worded by a data line or a closer-review line of
+	 * its own. True until a path of `classifyStatement` proves otherwise, so a form nobody judged waits for a person.
+	 */
+	unproven: boolean
+}
+
+/** A table, or a column of one, that this file created and no rename may have swapped since. */
+function isFresh(context: Context, table: string, column?: string): boolean {
+	if (context.renamed) return false
+	return context.created.tables.has(table) || (column !== undefined && context.created.columns.has(`${table}.${column}`))
+}
+
+/** A rename may bring another table's or column's values under a created name: no later statement of the file is fresh. */
+function voidFresh(context: Context, out: Collected): void {
+	context.renamed = true
+	out.unproven = true
 }
 
 function deviate(out: Collected, kind: DeviationKind, object: string, line: number): void {
@@ -724,6 +749,7 @@ function createTable(tokens: readonly SqlToken[], context: Context, out: Collect
 		throw new Refused(`CREATE TABLE … ${upperWord(after) ?? statementKind(tokens.slice(close + 1))}`, line)
 	}
 	refuseForeignDdl(tokens, context, 'CREATE TABLE')
+	refuseConflictClause(tokens, 'CREATE TABLE')
 	const table = ownName(tokens, nameAt, context, 'CREATE TABLE')
 	for (const element of splitAtCommas(tokens.slice(named + 1, close))) {
 		// `LIKE … INCLUDING` copies defaults, constraints and indexes from a table the classifier has not read.
@@ -732,6 +758,17 @@ function createTable(tokens: readonly SqlToken[], context: Context, out: Collect
 		}
 		classifyElement(element, table, context, out)
 	}
+	// `IF NOT EXISTS` may find the table already there, with its rows.
+	if (nameAt === 2) context.created.tables.add(table)
+}
+
+/**
+ * SQLite's conflict clause on a constraint (`PRIMARY KEY ON CONFLICT REPLACE`): every later plain `INSERT` that meets a
+ * stored row deletes it. Postgres has no such clause, so the form is refused rather than followed into each statement.
+ */
+function refuseConflictClause(tokens: readonly SqlToken[], label: string): void {
+	const clause = tokens.findIndex((token, index) => upperWord(token) === 'ON' && upperWord(tokens[index + 1]) === 'CONFLICT')
+	if (clause !== -1) throw new Refused(`${label} … ON CONFLICT, a conflict clause on a constraint`, tokens[clause]?.line ?? 1)
 }
 
 /** `CREATE [UNIQUE] INDEX [IF NOT EXISTS] [name] ON [ONLY] table [USING method] (…) …`. */
@@ -753,7 +790,10 @@ function createIndex(tokens: readonly SqlToken[], context: Context, out: Collect
 	checkExpression(tokens.slice(index), name ?? table, context, out)
 }
 
-/** Why one `ALTER TABLE` clause is outside the allowlist; its expressions are classified as a column's or a table's. */
+/**
+ * Why one `ALTER TABLE` clause is outside the allowlist; its expressions are classified as a column's or a table's. A
+ * clause not known to keep every stored value, nor worded by a data line, marks the statement `unproven`.
+ */
 function alterClause(clause: readonly SqlToken[], table: string, context: Context, out: Collected): void {
 	const line = clause[0]?.line ?? 1
 	const [action, next] = [upperWord(clause[0]), upperWord(clause[1])]
@@ -767,19 +807,24 @@ function alterClause(clause: readonly SqlToken[], table: string, context: Contex
 		classifyElement(element, table, context, out)
 		// `IF NOT EXISTS` may find the column already there, with its values.
 		const column = nameText(element[0])
-		if (column !== undefined && upperWord(clause[named]) !== 'IF') context.addedColumns.add(`${table}.${column}`)
+		if (column !== undefined && upperWord(clause[named]) !== 'IF') context.created.columns.add(`${table}.${column}`)
 		return
 	}
 	if (action === 'DROP') {
 		if (next === 'CONSTRAINT') return
 		const column = nameText(clause[skipWords(clause, skipWords(clause, 1, 'COLUMN'), 'IF', 'EXISTS')])
-		if (column !== undefined) {
+		if (column === undefined) out.unproven = true
+		else {
 			out.dataLoss.push({ statement: 'DROP COLUMN', object: `${table}.${column}`, line })
-			context.addedColumns.delete(`${table}.${column}`)
+			context.created.columns.delete(`${table}.${column}`)
 		}
 		return
 	}
-	if (action === 'VALIDATE' && next === 'CONSTRAINT') return
+	// A validation runs the constraint's check, which may call database code, over every stored row.
+	if (action === 'VALIDATE' && next === 'CONSTRAINT') {
+		out.unproven = true
+		return
+	}
 	if (action === 'ALTER' && next !== 'CONSTRAINT') {
 		const columnAt = next === 'COLUMN' ? 2 : 1
 		const column = nameText(clause[columnAt])
@@ -795,9 +840,10 @@ function alterClause(clause: readonly SqlToken[], table: string, context: Contex
 		if (columnAction[1] === 'DEFAULT' && columnAction[0] === 'SET') checkExpression(rest, `${table}.${column}`, context, out)
 		else if (columnAction[0] === 'TYPE' || columnAction[1] === 'DATA') {
 			// Even without `USING`, an implicit cast rewrites every value: a numeric may round, a text may be cut.
-			out.dataLoss.push({ statement: 'ALTER COLUMN TYPE', object: `${table}.${column}`, line })
+			if (!isFresh(context, table, column)) out.dataLoss.push({ statement: 'ALTER COLUMN TYPE', object: `${table}.${column}`, line })
 			recordCalls(out, checkQuery(ReadSql.clause(rest), context, 'ALTER TABLE … USING'), line)
-		}
+		} // A default or a NOT NULL changes no stored value; an identity's sequence and counter are stored state.
+		else if (columnAction[1] !== 'DEFAULT' && columnAction[1] !== 'NOT') out.unproven = true
 		return
 	}
 	throw new Refused(`ALTER TABLE … ${action ?? 'an action'}`, line)
@@ -812,29 +858,25 @@ function alterTable(tokens: readonly SqlToken[], context: Context, out: Collecte
 	if (named === undefined) throw new Refused('ALTER TABLE', line)
 	const table = ownName(tokens, start, context, 'ALTER TABLE')
 	const rest = tokens.slice(isPunct(tokens[named], '*') ? named + 1 : named)
+	refuseConflictClause(rest, 'ALTER TABLE')
 	// RENAME TO, RENAME [COLUMN] a TO b and RENAME CONSTRAINT a TO b each stand alone.
 	if (upperWord(rest[0]) === 'RENAME') {
 		const to = upperWord(rest[1]) === 'TO' ? nameText(rest[2]) : undefined
-		// A renamed column or table may bring another one's values under an added column's name.
-		forgetAddedColumns(context, table)
+		voidFresh(context, out)
 		if (to !== undefined) {
-			forgetAddedColumns(context, to)
 			refuseAccessRename(table, to, context, line)
 			out.changes.push({ change: 'rename table', from: table, to })
 		}
 		return
 	}
+	out.unproven = false
 	for (const clause of splitAtCommas(rest)) alterClause(clause, table, context, out)
 }
 
-function forgetAddedColumns(context: Context, table: string): void {
-	for (const key of context.addedColumns) {
-		if (key.startsWith(`${table}.`)) context.addedColumns.delete(key)
-	}
-}
-
-function alterIndexOrType(tokens: readonly SqlToken[], kind: string, context: Context): void {
+/** `ALTER INDEX … RENAME TO` (Postgres renames a table this way too) and `ALTER TYPE … ADD|RENAME VALUE`. */
+function alterIndexOrType(tokens: readonly SqlToken[], kind: string, context: Context, out: Collected): void {
 	const line = tokens[0]?.line ?? 1
+	let rename = true
 	if (kind === 'INDEX') {
 		const named = afterName(tokens, skipWords(tokens, 2, 'IF', 'EXISTS'))
 		const isRename = named !== undefined && upperWord(tokens[named]) === 'RENAME' && upperWord(tokens[named + 1]) === 'TO'
@@ -844,8 +886,12 @@ function alterIndexOrType(tokens: readonly SqlToken[], kind: string, context: Co
 		const action = named === undefined ? undefined : upperWord(tokens[named])
 		const isValue = named !== undefined && (action === 'ADD' || action === 'RENAME') && upperWord(tokens[named + 1]) === 'VALUE'
 		if (!isValue) throw new Refused('ALTER TYPE other than ADD VALUE or RENAME VALUE', line)
+		rename = action === 'RENAME'
 	}
 	refuseForeignDdl(tokens, context, `ALTER ${kind}`)
+	// A renamed value changes what every stored value of it means; an added one changes none.
+	if (rename) voidFresh(context, out)
+	else out.unproven = false
 }
 
 /** The kinds of database code `ALTER … RENAME TO` may rename, and what each names in the manifest. */
@@ -866,6 +912,7 @@ const RENAMEABLE: Readonly<Record<string, readonly DatabaseObjectKind[]>> = {
  */
 function alterRename(tokens: readonly SqlToken[], context: Context, out: Collected): void {
 	const line = tokens[0]?.line ?? 1
+	voidFresh(context, out)
 	const materialized = upperWord(tokens[1]) === 'MATERIALIZED' && upperWord(tokens[2]) === 'VIEW'
 	const kind = materialized ? 'VIEW' : (upperWord(tokens[1]) ?? '')
 	const kinds: readonly DatabaseObjectKind[] = materialized ? ['materialized view'] : Object.hasOwn(RENAMEABLE, kind) ? (RENAMEABLE[kind] ?? []) : []
@@ -944,9 +991,7 @@ function classifyDrop(tokens: readonly SqlToken[], context: Context, out: Collec
 	const changes = dropChanges(tokens, kind, context)
 	out.changes.push(...changes)
 	for (const change of changes) {
-		if (change.change !== 'drop table') continue
-		out.dataLoss.push({ statement: 'DROP TABLE', object: change.table, line })
-		forgetAddedColumns(context, change.table)
+		if (change.change === 'drop table') out.dataLoss.push({ statement: 'DROP TABLE', object: change.table, line })
 	}
 	// CASCADE drops what depends on the object: a column of a dropped type or domain goes with its values.
 	if (hasCascade(tokens)) {
@@ -956,7 +1001,30 @@ function classifyDrop(tokens: readonly SqlToken[], context: Context, out: Collec
 			out.dataLoss.push({ statement: 'DROP CASCADE', object: name === undefined ? label : `${label} ${name}`, line })
 		}
 	}
+	out.unproven = out.dataLoss.length === 0 && !DROP_KEEPS_EVERY_VALUE.has(kind)
 }
+
+/**
+ * What a `DROP` without `CASCADE` removes while every stored value stays: Postgres refuses it while a column, a default
+ * or a constraint depends on it, and a materialized view's rows are derived from its tables. A sequence keeps a counter
+ * and an extension may own tables, so those are not among them.
+ */
+const DROP_KEEPS_EVERY_VALUE: ReadonlySet<string> = new Set([
+	'INDEX',
+	'TYPE',
+	'DOMAIN',
+	'TRIGGER',
+	'FUNCTION',
+	'PROCEDURE',
+	'ROUTINE',
+	'AGGREGATE',
+	'RULE',
+	'VIEW',
+	'MATERIALIZED',
+	'POLICY',
+	'OPERATOR',
+	'STATISTICS',
+])
 
 const hasCascade = (tokens: readonly SqlToken[]): boolean => tokens.some((token) => upperWord(token) === 'CASCADE')
 
@@ -984,18 +1052,22 @@ function classifyTruncate(tokens: readonly SqlToken[], context: Context, out: Co
 		const object = objectNameAt(part, skipWords(part, 0, 'ONLY'))
 		if (object !== undefined) out.dataLoss.push({ statement, object: object.name, line })
 	}
+	out.unproven = out.dataLoss.length === 0
 }
 
 /**
- * `UPDATE [ONLY] table [*] [[AS] alias] SET …`: the table, and the columns it sets when every assignment reads as
- * `column [.field | [subscript]] = …` or `(column, …) = …`.
+ * `UPDATE [OR action] [ONLY] table [*] [[AS] alias] SET …`: the table, SQLite's conflict action, and the columns it sets
+ * when every assignment reads as `column [.field | [subscript]] = …` or `(column, …) = …`.
  */
-function updateTarget(tokens: readonly SqlToken[]): { readonly table: string; readonly columns: readonly string[] | undefined } | undefined {
-	const at = skipWords(tokens, 1, 'ONLY')
+function updateTarget(
+	tokens: readonly SqlToken[],
+): { readonly table: string; readonly or: string | undefined; readonly columns: readonly string[] | undefined } | undefined {
+	const or = upperWord(tokens[1]) === 'OR' ? upperWord(tokens[2]) : undefined
+	const at = skipWords(tokens, or === undefined ? 1 : 3, 'ONLY')
 	const table = objectNameAt(tokens, at)?.name
 	if (table === undefined) return undefined
 	const set = wordAtDepthZero(tokens, 'SET', at)
-	if (set === undefined) return { table, columns: undefined }
+	if (set === undefined) return { table, or, columns: undefined }
 	let end = tokens.length
 	for (let index = set + 1, depth = 0; index < tokens.length; index++) {
 		if (isPunct(tokens[index], '(')) depth++
@@ -1007,9 +1079,10 @@ function updateTarget(tokens: readonly SqlToken[]): { readonly table: string; re
 			break
 		}
 	}
-	return { table, columns: assignedColumns(tokens.slice(set + 1, end)) }
+	return { table, or, columns: assignedColumns(tokens.slice(set + 1, end)) }
 }
 
+/** The columns of an assignment list, or `undefined` when one does not read as a column name (an empty one included). */
 function assignedColumns(assignments: readonly SqlToken[]): string[] | undefined {
 	const columns: string[] = []
 	for (const part of splitAtCommas(assignments)) {
@@ -1018,44 +1091,69 @@ function assignedColumns(assignments: readonly SqlToken[]): string[] | undefined
 			if (close === undefined || !isPunct(part[close + 1], '=')) return undefined
 			for (const name of splitAtCommas(part.slice(1, close))) {
 				const column = name.length === 1 ? nameText(name[0]) : undefined
-				if (column === undefined) return undefined
+				if (column === undefined || column === '') return undefined
 				columns.push(column)
 			}
 			continue
 		}
 		const column = nameText(part[0])
 		const next = part[1]
-		if (column === undefined || !(isPunct(next, '=') || isPunct(next, '.') || isPunct(next, '['))) return undefined
+		if (column === undefined || column === '' || !(isPunct(next, '=') || isPunct(next, '.') || isPunct(next, '['))) return undefined
 		columns.push(column)
 	}
 	return [...new Set(columns)]
 }
 
-/** `INSERT … ON CONFLICT … DO UPDATE`: the table whose existing rows it overwrites, else `undefined`. */
-function upsertTarget(tokens: readonly SqlToken[]): string | undefined {
-	const conflict = wordAtDepthZero(tokens, 'CONFLICT')
-	if (conflict === undefined || upperWord(tokens[conflict - 1]) !== 'ON') return undefined
-	const action = wordAtDepthZero(tokens, 'DO', conflict)
-	if (action === undefined || upperWord(tokens[action + 1]) !== 'UPDATE') return undefined
-	return objectNameAt(tokens, skipWords(tokens, 1, 'INTO'))?.name
+/**
+ * An `INSERT`'s conflict clause: `none` without one, `nothing` for `ON CONFLICT … DO NOTHING`, `update` for `ON CONFLICT
+ * … DO UPDATE`, and `unread` for any other. Found as the words `ON CONFLICT` at depth 0, so an alias named `conflict`
+ * is not taken for it.
+ */
+function conflictAction(tokens: readonly SqlToken[]): 'none' | 'nothing' | 'update' | 'unread' {
+	let clause: number | undefined
+	for (let index = 0, depth = 0; index < tokens.length && clause === undefined; index++) {
+		if (isPunct(tokens[index], '(')) depth++
+		else if (isPunct(tokens[index], ')')) depth--
+		else if (depth === 0 && upperWord(tokens[index]) === 'ON' && upperWord(tokens[index + 1]) === 'CONFLICT') clause = index
+	}
+	if (clause === undefined) return 'none'
+	const action = wordAtDepthZero(tokens, 'DO', clause)
+	const word = action === undefined ? undefined : upperWord(tokens[action + 1])
+	return word === 'NOTHING' ? 'nothing' : word === 'UPDATE' ? 'update' : 'unread'
 }
 
-/** What a backfill deletes or overwrites; a call of the set's own functions is recorded by its caller. */
+/**
+ * What a backfill deletes or overwrites, or whether it keeps every stored value: a plain `INSERT` (`ON CONFLICT DO
+ * NOTHING` included) and an `UPDATE` or upsert of what this file created do, unless they read a view the migration set
+ * declares, which may run database code. A call of the set's own functions is recorded by its caller.
+ */
 function backfillLoss(tokens: readonly SqlToken[], first: string, context: Context, out: Collected, line: number): void {
-	if (first === 'DELETE' && upperWord(tokens[1]) === 'FROM') {
-		const object = objectNameAt(tokens, skipWords(tokens, 2, 'ONLY'))
-		if (object !== undefined) out.dataLoss.push({ statement: 'DELETE', object: object.name, line })
+	const readsView = dmlRelations(ReadSql.query(tokens)).some((reference) => context.views.has(reference.name))
+	if (first === 'DELETE') {
+		const object = upperWord(tokens[1]) === 'FROM' ? objectNameAt(tokens, skipWords(tokens, 2, 'ONLY')) : undefined
+		if (object === undefined) return
+		out.dataLoss.push({ statement: 'DELETE', object: object.name, line })
 	} else if (first === 'UPDATE') {
 		const target = updateTarget(tokens)
 		if (target === undefined) return
-		const { table, columns } = target
-		// Columns this file added hold no value stored before it ran.
-		if (columns !== undefined && columns.every((column) => context.addedColumns.has(`${table}.${column}`))) return
-		out.dataLoss.push({ statement: 'UPDATE', object: table, ...(columns === undefined ? {} : { columns }), line })
-	} else if (first === 'INSERT') {
-		const table = upsertTarget(tokens)
-		if (table !== undefined) out.dataLoss.push({ statement: 'UPSERT', object: table, line })
+		const { table, or, columns } = target
+		const replace = or === 'REPLACE'
+		const fresh = isFresh(context, table) || (columns !== undefined && columns.every((column) => isFresh(context, table, column)))
+		if (!(fresh && !readsView && !replace)) {
+			out.dataLoss.push({ statement: replace ? 'UPDATE OR REPLACE' : 'UPDATE', object: table, ...(columns === undefined ? {} : { columns }), line })
+		}
+	} else {
+		// SQLite's `INSERT OR <action>`: `OR REPLACE` deletes the stored rows it conflicts with.
+		if (upperWord(tokens[1]) === 'OR') return
+		const action = conflictAction(tokens)
+		if (action === 'unread') return
+		const table = objectNameAt(tokens, skipWords(tokens, 1, 'INTO'))?.name
+		if (action === 'update') {
+			if (table === undefined) return
+			if (!isFresh(context, table) || readsView) out.dataLoss.push({ statement: 'UPSERT', object: table, line })
+		} else if (readsView) return
 	}
+	out.unproven = false
 }
 
 function classifyCreate(tokens: readonly SqlToken[], context: Context, out: Collected): void {
@@ -1218,6 +1316,43 @@ function adoptionSteps(tokens: readonly SqlToken[], adopted: ReadonlySet<string>
 	return [...adopted].sort().map((name) => ({ step: 'adopt', collection: name.slice(FILE_TABLE_PREFIX.length), table, line }))
 }
 
+/** The keywords a statement begins with (`INSERT OR REPLACE INTO`, `ALTER INDEX`), at most four, to name it on a data line. */
+function leadingKeywords(tokens: readonly SqlToken[]): string {
+	const words: string[] = []
+	for (const token of tokens.slice(0, 4)) {
+		const word = upperWord(token)
+		// SQLite's conflict actions (`OR IGNORE`) are no Postgres keywords.
+		if (word === undefined || !(SQL_KEYWORDS.has(word.toLowerCase()) || words.at(-1) === 'OR')) break
+		words.push(word)
+	}
+	return words.length === 0 ? statementKind(tokens) : words.join(' ')
+}
+
+/**
+ * The statements a migration may run without a data line, because each keeps every stored value or
+ * already has a closer-review line of its own. Every other statement records one: worded when the classifier knows what
+ * it deletes or overwrites, `UNPROVEN` otherwise, so a form nobody judged waits for a person.
+ *
+ * - `CREATE …`: a new table, index or enum holds nothing yet; database code is a deviation, a closer-review line.
+ * - `DO`: a deviation, a closer-review line.
+ * - `COMMENT ON`: metadata only.
+ * - `ALTER TABLE … ADD [COLUMN]` and `ADD CONSTRAINT`: a new column holds its default; a constraint refuses, never rewrites.
+ * - `ALTER TABLE … DROP CONSTRAINT`: removes a rule, no value.
+ * - `ALTER COLUMN … SET|DROP DEFAULT` and `SET|DROP NOT NULL`: change what a later write gets, or refuse, never a value.
+ * - `ALTER TYPE … ADD VALUE`: no stored value changes meaning.
+ * - `DROP` of an index, a type, a domain, database code, a view or a materialized view without `CASCADE`
+ *   (`DROP_KEEPS_EVERY_VALUE`).
+ * - `INSERT … VALUES|SELECT` with no conflict clause or `ON CONFLICT DO NOTHING`, no `OR <action>`, and no read of a view
+ *   the migration set declares.
+ * - an `UPDATE` or upsert of a table this file created, an `UPDATE` that sets only columns this file added, and an
+ *   `ALTER COLUMN … TYPE` of either, with no rename anywhere before it in the file and no read of a declared view.
+ * - `SELECT fabrika_files_copy_legacy(…)`: inserts the rows an older instance wrote, `ON CONFLICT DO NOTHING`;
+ *   `SELECT fabrika_files_release(…)`: its own closer-review adoption line.
+ *
+ * Not among them, so each records a line: every rename (`ALTER TABLE|INDEX … RENAME`, `RENAME COLUMN`, `ALTER TYPE …
+ * RENAME VALUE`, a rename of database code), `VALIDATE CONSTRAINT`, an identity change, `UPDATE OR <action>`, `INSERT
+ * OR <action>`, a `DROP` of a sequence or an extension, and every form not listed.
+ */
 function classifyStatement(tokens: readonly SqlToken[], context: Context, out: Collected): void {
 	const line = tokens[0]?.line ?? 1
 	const unicode = unicodeIdentifier(tokens)
@@ -1225,6 +1360,7 @@ function classifyStatement(tokens: readonly SqlToken[], context: Context, out: C
 	const call = context.framework ? undefined : fileAdoptionCall(tokens)
 	if (call !== undefined) {
 		if (call.called === FILES_RELEASE_FUNCTION) out.adoptions.push({ step: 'release', collection: call.collection, line: tokens[0]?.line ?? 1 })
+		out.unproven = false
 		return
 	}
 	const adopted = adoptedTableNames(tokens)
@@ -1239,14 +1375,22 @@ function classifyStatement(tokens: readonly SqlToken[], context: Context, out: C
 		recordCalls(out, calls, line)
 		return
 	}
-	if (first === 'COMMENT' && upperWord(tokens[1]) === 'ON') return classifyComment(tokens, context)
-	if (first === 'DO') return classifyDo(tokens, context, out)
-	if (first === 'CREATE') return classifyCreate(tokens, context, out)
+	if (first === 'COMMENT' && upperWord(tokens[1]) === 'ON') {
+		classifyComment(tokens, context)
+		out.unproven = false
+		return
+	}
+	if (first === 'DO' || first === 'CREATE') {
+		if (first === 'DO') classifyDo(tokens, context, out)
+		else classifyCreate(tokens, context, out)
+		out.unproven = false
+		return
+	}
 	if (first === 'DROP') return classifyDrop(tokens, context, out)
 	if (first === 'TRUNCATE') return classifyTruncate(tokens, context, out)
 	const second = upperWord(tokens[1])
 	if (first === 'ALTER' && second === 'TABLE') return alterTable(tokens, context, out)
-	if (first === 'ALTER' && (second === 'INDEX' || second === 'TYPE')) return alterIndexOrType(tokens, second, context)
+	if (first === 'ALTER' && (second === 'INDEX' || second === 'TYPE')) return alterIndexOrType(tokens, second, context, out)
 	if (first === 'ALTER' && second !== undefined && (Object.hasOwn(RENAMEABLE, second) || second === 'MATERIALIZED')) {
 		return alterRename(tokens, context, out)
 	}
@@ -1261,21 +1405,25 @@ function classifyStatement(tokens: readonly SqlToken[], context: Context, out: C
  * `ALTER … RENAME TO`, `DO`, and a stored expression that calls anything but a paved built-in. Refused: a schema
  * other than `schema` (`pg_catalog` relations included), a framework `fabrika_*` name, `SECURITY DEFINER`, a function
  * `SET` clause, a language other than `sql` and `plpgsql`, a body that is not literal or that holds dynamic `EXECUTE`
- * or a statement outside its allowlist, a call outside the function allowlist, and every form not named here:
+ * or a statement outside its allowlist, a call outside the function allowlist, a conflict clause on a constraint
+ * (SQLite's `ON CONFLICT REPLACE`, which turns a plain `INSERT` into a delete), and every form not named here:
  * `COPY`, `GRANT`, `REVOKE`, roles, extensions, event triggers, domains (codegen cannot bind one), `SELECT`, `WITH`
  * and `MERGE` among them. Transaction control and
- * `SET`/`RESET` are refused for every plan before this runs (`refusedStatement`).
+ * `SET`/`RESET` are refused for every plan before this runs (`refusedStatement`). Apart from all three, a statement not
+ * known to keep every stored value records a data line (`dataLoss`, `classifyStatement`).
  */
 export function classifyMigration(sql: string, schema: string, options: ClassifyMigrationOptions): MigrationClassification {
 	const context: Context = {
 		schema,
 		dialect: options.dialect ?? 'postgres',
 		functions: options.functions ?? new Set(),
+		views: options.views ?? new Set(),
 		framework: options.framework === true,
 		accessTables: options.accessTables ?? new Set(),
 		accessViews: options.accessViews ?? new Set(),
 		doBlocks: 0,
-		addedColumns: new Set(),
+		created: { tables: new Set(), columns: new Set() },
+		renamed: false,
 	}
 	const refused: MigrationRefusal[] = []
 	const deviations: MigrationDeviation[] = []
@@ -1293,7 +1441,7 @@ export function classifyMigration(sql: string, schema: string, options: Classify
 		refused.push({ reason: 'a parameter (?, :, @, $ or #), which a migration cannot bind', file: options.file, line: parameter.line })
 	}
 	for (const { tokens, line } of statementsOf(all)) {
-		const out: Collected = { deviations: [], adoptions: [], dataLoss: [], changes: [] }
+		const out: Collected = { deviations: [], adoptions: [], dataLoss: [], changes: [], unproven: true }
 		try {
 			classifyStatement(tokens, context, out)
 		} catch (error) {
@@ -1301,6 +1449,7 @@ export function classifyMigration(sql: string, schema: string, options: Classify
 			refused.push({ reason: error.reason, file: options.file, line: error.line || line })
 			continue
 		}
+		if (out.unproven) out.dataLoss.push({ statement: 'UNPROVEN', object: leadingKeywords(tokens), line: tokens[0]?.line ?? line })
 		for (const deviation of out.deviations) {
 			const key = `${deviation.kind} ${deviation.object}`
 			if (keys.has(key)) continue
@@ -1392,6 +1541,44 @@ export function declaredFunctions(sql: string, schema: string, dialect: Migratio
 	return names.filter((name) => !shadows(name))
 }
 
+/**
+ * The views and materialized views the migration set declares in `schema`, and every name one is renamed to (by `ALTER
+ * VIEW` or `ALTER TABLE`), read without classifying them and in no order: a read of any may run database code.
+ */
+function declaredViews(files: readonly MigrationFile[], schema: string, dialect: MigrationDialect): ReadonlySet<string> {
+	const views = new Set<string>()
+	const renames: { readonly from: string; readonly to: string }[] = []
+	for (const file of files) {
+		for (const { tokens } of migrationStatements(file.sql, dialect)) {
+			const first = upperWord(tokens[0])
+			if (first === 'CREATE') {
+				const at = skipWords(tokens, skipWords(tokens, skipWords(tokens, 1, 'OR', 'REPLACE'), 'RECURSIVE'), 'MATERIALIZED')
+				if (upperWord(tokens[at]) !== 'VIEW') continue
+				const object = objectNameAt(tokens, skipWords(tokens, at + 1, 'IF', 'NOT', 'EXISTS'))
+				if (object !== undefined && (object.qualifier === undefined || object.qualifier === schema)) views.add(object.name)
+			} else if (first === 'ALTER') {
+				const kindAt = skipWords(tokens, 1, 'MATERIALIZED')
+				const kind = upperWord(tokens[kindAt])
+				if (kind !== 'VIEW' && kind !== 'TABLE') continue
+				const from = objectNameAt(tokens, skipWords(tokens, kindAt + 1, 'IF', 'EXISTS'))
+				const rename = tokens.findIndex((token, index) => upperWord(token) === 'RENAME' && upperWord(tokens[index + 1]) === 'TO')
+				const to = rename === -1 ? undefined : nameText(tokens[rename + 2])
+				if (from !== undefined && to !== undefined) renames.push({ from: from.name, to })
+			}
+		}
+	}
+	for (let grown = true; grown;) {
+		grown = false
+		for (const { from, to } of renames) {
+			if (views.has(from) && !views.has(to)) {
+				views.add(to)
+				grown = true
+			}
+		}
+	}
+	return views
+}
+
 const objectKey = (object: DatabaseObject): string => `${object.kind} ${object.name}`
 const ON_TABLE: ReadonlySet<DatabaseObjectKind> = new Set(['trigger', 'rule', 'policy'])
 
@@ -1434,6 +1621,7 @@ export function classifyMigrations(
 ): MigrationSetClassification {
 	const dialect = options.dialect ?? 'postgres'
 	const functions = new Set(files.flatMap((file) => declaredFunctions(file.sql, schema, dialect)))
+	const views = declaredViews(files, schema, dialect)
 	const access = options.accessTables === undefined
 		? {}
 		: { accessTables: options.accessTables, accessViews: accessViews(files, schema, options.accessTables, dialect) }
@@ -1441,6 +1629,7 @@ export function classifyMigrations(
 		classifyMigration(file.sql, schema, {
 			file: file.name,
 			functions,
+			views,
 			framework: file.framework === true,
 			dialect,
 			...access,

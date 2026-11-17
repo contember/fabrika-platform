@@ -197,41 +197,71 @@ describe('data loss: a statement that deletes or overwrites stored data, or call
 		])
 	})
 
-	test('an UPDATE that sets only columns an ADD COLUMN of the same file added overwrites no stored value', () => {
-		const fills = ['ALTER TABLE notes ADD COLUMN title text, ADD subtitle text;', "UPDATE notes SET title = '', subtitle = title;"]
-		expect(losses(fills.join('\n'))).toEqual([])
-		for (
-			const [before, recorded] of [
-				// The column was there already, with its values.
-				['ALTER TABLE notes ADD COLUMN IF NOT EXISTS title text;', '2 UPDATE notes (title)'],
-				// Another column takes the added one's name.
-				[
-					'ALTER TABLE notes ADD COLUMN title text; ALTER TABLE notes RENAME COLUMN title TO old; ALTER TABLE notes RENAME COLUMN body TO title;',
-					'2 UPDATE notes (title)',
-				],
-				[
-					'ALTER TABLE drafts ADD COLUMN title text; ALTER TABLE drafts RENAME TO archive; ALTER TABLE notes RENAME TO drafts;',
-					'2 UPDATE drafts (title)',
-				],
-			] as const
-		) {
-			const table = recorded.includes('drafts') ? 'drafts' : 'notes'
-			expect(losses(`${before}\nUPDATE ${table} SET title = '';`)).toEqual([recorded])
-		}
+	test('an UPDATE, an upsert or a type change of what the same file created overwrites no stored value', () => {
+		const sql = [
+			'CREATE TABLE drafts (id uuid PRIMARY KEY, body text, n int);',
+			"INSERT INTO drafts (id, body) VALUES (gen_random_uuid(), 'x') ON CONFLICT (id) DO UPDATE SET body = excluded.body;",
+			"UPDATE drafts SET body = '';",
+			'ALTER TABLE drafts ALTER n TYPE bigint;',
+			'ALTER TABLE notes ADD COLUMN title text, ADD subtitle text, ADD rank int;',
+			"UPDATE notes SET title = '', subtitle = title;",
+			'ALTER TABLE notes ALTER rank TYPE numeric(4, 1) USING rank / 10;',
+		].join('\n')
+		expect(classify(sql).refused).toEqual([])
+		expect(losses(sql)).toEqual([])
+		// The column or the table was there already, with its values.
+		expect(losses("ALTER TABLE notes ADD COLUMN IF NOT EXISTS title text;\nUPDATE notes SET title = '';")).toEqual(['2 UPDATE notes (title)'])
+		expect(losses('CREATE TABLE IF NOT EXISTS drafts (id uuid);\nUPDATE drafts SET id = NULL;')).toEqual(['2 UPDATE drafts (id)'])
 		expect(losses("ALTER TABLE notes ADD COLUMN title text;\nUPDATE notes SET title = '', body = '';")).toEqual(['2 UPDATE notes (title, body)'])
 		// A column another file added has been written since.
-		expect(classifyMigrations([{ name: '1.sql', sql: fills[0] ?? '' }, { name: '2.sql', sql: fills[1] ?? '' }], SCHEMA).files[1]?.dataLoss).toEqual([
-			{ statement: 'UPDATE', object: 'notes', columns: ['title', 'subtitle'], file: '2.sql', line: 1 },
+		const files = [{ name: '1.sql', sql: 'ALTER TABLE notes ADD COLUMN title text;' }, { name: '2.sql', sql: "UPDATE notes SET title = '';" }]
+		expect(classifyMigrations(files, SCHEMA).files[1]?.dataLoss).toEqual([
+			{ statement: 'UPDATE', object: 'notes', columns: ['title'], file: '2.sql', line: 1 },
 		])
 	})
 
-	test('an upsert overwrites the rows that already exist; a plain INSERT or ON CONFLICT DO NOTHING overwrites none', () => {
+	test('any rename voids that for the rest of the file: another table or column may take a created name', () => {
+		for (
+			const rename of [
+				'ALTER INDEX notes RENAME TO archive;',
+				'ALTER TABLE drafts RENAME TO archive;',
+				'ALTER TABLE drafts RENAME COLUMN body TO text;',
+				'ALTER VIEW recent RENAME TO older;',
+				"ALTER TYPE mood RENAME VALUE 'calm' TO 'quiet';",
+			]
+		) {
+			const sql = ['CREATE TABLE drafts (id uuid, body text);', 'ALTER TABLE notes ADD COLUMN title text;', rename, "UPDATE notes SET title = '';"]
+			expect(losses(sql.join('\n'))).toEqual([`3 UNPROVEN ${rename.split(' ').slice(0, 2).join(' ')}`, '4 UPDATE notes (title)'])
+		}
+	})
+
+	test('an upsert overwrites the rows that already exist, whatever the alias; a plain INSERT or ON CONFLICT DO NOTHING overwrites none', () => {
 		const sql = [
 			"INSERT INTO deals (id, stage) VALUES (1, 'open') ON CONFLICT (id) DO UPDATE SET stage = excluded.stage;",
+			"INSERT INTO deals AS conflict (id, stage) VALUES (1, 'open') ON CONFLICT (id) DO UPDATE SET stage = conflict.stage;",
 			"INSERT INTO deals (id, stage) VALUES (1, 'open') ON CONFLICT DO NOTHING;",
 			'INSERT INTO deals (id) SELECT id FROM deals_old;',
 		].join('\n')
-		expect(losses(sql)).toEqual(['1 UPSERT deals'])
+		expect(losses(sql)).toEqual(['1 UPSERT deals', '2 UPSERT deals'])
+	})
+
+	test("SQLite's OR <action> is named: UPDATE OR REPLACE says it deletes, INSERT OR <action> is not known to keep every value", () => {
+		const sql = [
+			"UPDATE OR REPLACE notes SET slug = 'a';",
+			"UPDATE OR IGNORE notes SET slug = 'a';",
+			"INSERT OR REPLACE INTO notes (id, slug) VALUES (1, 'a');",
+			"INSERT OR IGNORE INTO notes (id, slug) VALUES (1, 'a');",
+		].join('\n')
+		expect(losses(sql)).toEqual([
+			'1 UPDATE OR REPLACE notes (slug)',
+			'2 UPDATE notes (slug)',
+			'3 UNPROVEN INSERT OR REPLACE INTO',
+			'4 UNPROVEN INSERT OR IGNORE INTO',
+		])
+	})
+
+	test('a column the classifier cannot name is not named', () => {
+		expect(losses('UPDATE notes SET "" = 1;')).toEqual(['1 UPDATE notes'])
 	})
 
 	test('a column converted to another type, with or without USING, may change its values', () => {
@@ -265,17 +295,63 @@ describe('data loss: a statement that deletes or overwrites stored data, or call
 		expect(losses(declared, ['purge', 'tidy'])).toEqual([])
 	})
 
-	test('what keeps every stored value records nothing', () => {
+	test('what is known to keep every stored value records nothing', () => {
 		const sql = [
+			"CREATE TYPE mood AS ENUM ('calm');",
+			"ALTER TYPE mood ADD VALUE 'tense';",
 			'CREATE TABLE notes (id uuid PRIMARY KEY, body text);',
-			'ALTER TABLE notes ADD COLUMN title text, ALTER COLUMN body DROP DEFAULT, ALTER body DROP NOT NULL, DROP CONSTRAINT IF EXISTS c;',
-			'ALTER TABLE notes RENAME COLUMN body TO text;',
+			"ALTER TABLE notes ADD COLUMN title text, ADD CONSTRAINT c CHECK (title <> '') NOT VALID, DROP CONSTRAINT IF EXISTS old;",
+			"ALTER TABLE notes ALTER COLUMN body SET DEFAULT '', ALTER body DROP DEFAULT, ALTER body SET NOT NULL, ALTER body DROP NOT NULL;",
+			'CREATE INDEX notes_title ON notes (title);',
+			"COMMENT ON TABLE notes IS 'notes';",
 			"INSERT INTO notes (id, title) VALUES (gen_random_uuid(), '');",
+			'INSERT INTO notes (id) SELECT id FROM drafts ON CONFLICT DO NOTHING;',
+			'CREATE VIEW recent AS SELECT id FROM notes;',
+			'DO $$ BEGIN PERFORM 1; END $$;',
 			'DROP INDEX notes_title;',
 			'DROP VIEW IF EXISTS recent;',
 			'DROP TYPE IF EXISTS mood RESTRICT;',
+			'DROP FUNCTION IF EXISTS legacy();',
 		].join('\n')
+		expect(classify(sql).refused).toEqual([])
 		expect(losses(sql)).toEqual([])
+	})
+
+	test('any other statement records a line naming its first keywords, since it is not known to keep every value', () => {
+		const sql = [
+			'ALTER TABLE notes VALIDATE CONSTRAINT c;',
+			'ALTER TABLE notes ALTER id ADD GENERATED ALWAYS AS IDENTITY;',
+			'ALTER TABLE notes ALTER id RESTART;',
+			'ALTER TABLE notes ADD COLUMN x int, VALIDATE CONSTRAINT c;',
+			'DROP SEQUENCE legacy_seq;',
+			'DROP EXTENSION IF EXISTS citext;',
+			'ALTER FUNCTION tidy(text) RENAME TO neat;',
+		].join('\n')
+		expect(classify(sql).refused).toEqual([])
+		expect(losses(sql)).toEqual([
+			'1 UNPROVEN ALTER TABLE',
+			'2 UNPROVEN ALTER TABLE',
+			'3 UNPROVEN ALTER TABLE',
+			'4 UNPROVEN ALTER TABLE',
+			'5 UNPROVEN DROP SEQUENCE',
+			'6 UNPROVEN DROP EXTENSION IF EXISTS',
+			'7 UNPROVEN ALTER FUNCTION',
+		])
+	})
+
+	test('a plain INSERT that reads a view the migration set declares may run database code', () => {
+		const files = [
+			{ name: '1.sql', sql: 'CREATE FUNCTION purge() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$;\nCREATE VIEW purging AS SELECT purge() AS n;' },
+			{ name: '2.sql', sql: 'ALTER VIEW purging RENAME TO cleaning;' },
+			{
+				name: '3.sql',
+				sql: 'INSERT INTO counts (n) SELECT n FROM purging;\nINSERT INTO counts (n) SELECT n FROM cleaning;\nINSERT INTO counts (n) SELECT 1;',
+			},
+		]
+		expect(classifyMigrations(files, SCHEMA).files[2]?.dataLoss.map((loss) => `${loss.line} ${loss.statement} ${loss.object}`)).toEqual([
+			'1 UNPROVEN INSERT INTO',
+			'2 UNPROVEN INSERT INTO',
+		])
 	})
 
 	test('a refused statement records no loss', () => {
@@ -312,6 +388,8 @@ describe('refused: what escapes the schema, the transaction or the platform', ()
 				['CREATE FUNCTION app_other.f() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$', 'CREATE FUNCTION naming the schema app_other'],
 				['DO LANGUAGE plperl $$ 1 $$', 'LANGUAGE plperl'],
 				['CREATE TYPE pair AS (a int, b int)', 'CREATE TYPE other than AS ENUM'],
+				['CREATE TABLE kv (k text PRIMARY KEY ON CONFLICT REPLACE, v text)', 'CREATE TABLE … ON CONFLICT, a conflict clause on a constraint'],
+				['ALTER TABLE kv ADD COLUMN w text UNIQUE ON CONFLICT IGNORE', 'ALTER TABLE … ON CONFLICT, a conflict clause on a constraint'],
 				['CREATE DOMAIN positive AS int CHECK (VALUE > 0)', 'CREATE DOMAIN'],
 				['ALTER FUNCTION f() OWNER TO someone', 'ALTER FUNCTION other than RENAME TO'],
 				['ALTER FUNCTION f() SECURITY DEFINER', 'ALTER FUNCTION other than RENAME TO'],
