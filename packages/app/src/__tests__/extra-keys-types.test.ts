@@ -48,7 +48,13 @@ type Extra = { readonly kind: 'note'; readonly title: string; readonly done: boo
 type _ExtraMember = Expect<Equals<ExtraKeys<ItemValue | Extra, ItemValue>, 'done' | 'title'>>
 type _ExtraMemberRefused = Expect<Refused<Exact<ItemValue | Extra, typeof Item>>>
 type Undeclared = { readonly kind: 'event'; readonly at: string }
+type _UndeclaredMember = Expect<Equals<ExtraKeys<ItemValue | Undeclared, ItemValue>, 'at'>>
 type _UndeclaredMemberRefused = Expect<Refused<Exact<ItemValue | Undeclared, typeof Item>>>
+// Only an optional key that can hold nothing but `undefined` is ignored.
+type WithOptionalSecret = NoteValue & { readonly secret?: string }
+type _OptionalExtra = Expect<Equals<ExtraKeys<WithOptionalSecret | TaskValue, ItemValue>, 'secret' | 'title'>>
+type _OptionalExtraRefused = Expect<Refused<Exact<WithOptionalSecret | TaskValue, typeof Item>>>
+type _OptionalUndefinedUnion = Expect<Equals<ExtraKeys<NoteValue & { readonly secret?: string | undefined }, NoteValue>, 'secret'>>
 // A required `undefined` key is a field the output does not declare.
 type _RequiredUndefined = Expect<Equals<ExtraKeys<NoteValue & { readonly done: undefined }, NoteValue>, 'done'>>
 
