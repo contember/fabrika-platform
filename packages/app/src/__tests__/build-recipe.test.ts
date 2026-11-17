@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from 'bun:test'
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -63,8 +63,10 @@ describe('contractRecipe', () => {
 		const at = (fragment: string): number => lines.findIndex((line) => line.includes(fragment))
 		const order = [
 			'sudo apk add --no-cache --quiet postgresql18',
-			'initdb ',
 			'trap "pg_ctl',
+			'trap "exit 143" TERM',
+			'printf %s "$PW"',
+			'initdb ',
 			' start ',
 			'fabrika db migrate',
 			'fabrika db codegen --verify',
@@ -146,10 +148,17 @@ describe('contractChecks', () => {
 	})
 })
 
-// The build's throwaway database command, run by `sh` with stand-ins for `sudo`, `initdb`, `pg_ctl` and the CLI that log
-// each call, so its order, its stop and its failures are observed without a PostgreSQL. Its directory moves under the
-// test's own root, so parallel runs do not share it.
-describe('the build schema checks command', () => {
+// The build's throwaway database command, run by `sh` and BusyBox `sh` with stand-ins for `sudo`, `initdb`, `pg_ctl` and
+// the CLI that log each call, so its order, its cleanup and its failures are observed without a PostgreSQL. Its
+// directory moves under the test's own root, so parallel runs do not share it.
+const BUSYBOX = Bun.which('busybox')
+const SHELLS: readonly (readonly [label: string, command: readonly string[]])[] = [
+	['sh', ['sh']],
+	...(BUSYBOX === null ? [] : [['BusyBox sh', [BUSYBOX, 'sh']] as const]),
+]
+if (BUSYBOX === null) console.warn('build-recipe.test.ts: the BusyBox sh runs skipped; install busybox to run them')
+
+describe.each(SHELLS)('the build schema checks command under %s', (_label, shell) => {
 	const roots: string[] = []
 	afterAll(async () => {
 		for (const root of roots) await rm(root, { recursive: true, force: true })
@@ -160,7 +169,16 @@ describe('the build schema checks command', () => {
 		await chmod(path, 0o755)
 	}
 
-	const run = async (failing: string | null): Promise<{ code: number; stderr: string; calls: string[] }> => {
+	const readdirOrNull = (path: string): Promise<string[] | null> => readdir(path).catch(() => null)
+
+	interface Run {
+		/** The CLI command that fails, or `initdb`, or the fast stop. */
+		readonly failing?: 'codegen' | 'initdb' | 'fast-stop'
+		/** Sends SIGTERM to the shell while `test-isolation` runs. */
+		readonly terminate?: true
+	}
+
+	const run = async (options: Run = {}): Promise<{ code: number; stderr: string; calls: string[]; left: boolean }> => {
 		const root = await mkdtemp(join(tmpdir(), 'fabrika-build-schema-checks-'))
 		roots.push(root)
 		const bin = join(root, 'bin')
@@ -169,27 +187,43 @@ describe('the build schema checks command', () => {
 		const log = join(root, 'calls.log')
 		const record = `echo "$(basename "$0") $*" >> ${log}`
 		await stub(join(bin, 'sudo'), record)
-		await stub(join(bin, 'initdb'), `${record}\nmkdir -p ${root}/postgres/data`)
-		await stub(join(bin, 'pg_ctl'), record)
+		await stub(join(bin, 'initdb'), `${record}\n${options.failing === 'initdb' ? 'exit 1' : `mkdir -p ${root}/postgres/data`}`)
+		await stub(join(bin, 'pg_ctl'), `${record}\n${options.failing === 'fast-stop' ? 'case "$*" in *--mode=fast*) exit 1;; esac' : ''}`)
 		await stub(
 			join(root, 'node_modules', '.bin', 'fabrika'),
-			`echo "fabrika $* url=$FABRIKA_APP_DATABASE_URL" >> ${log}\n[ "$2" = "${failing ?? ''}" ] && { echo "the $2 check failed" >&2; exit 1; }\nexit 0`,
+			[
+				`echo "fabrika $* url=$FABRIKA_APP_DATABASE_URL" >> ${log}`,
+				...(options.terminate === true ? [`[ "$2" = test-isolation ] && { touch ${root}/running; sleep 1; }`] : []),
+				`[ "$2" = "${options.failing ?? ''}" ] && { echo "the $2 check failed" >&2; exit 1; }`,
+				'exit 0',
+			].join('\n'),
 		)
 		const step = contractRecipe(input).build.find((candidate) => 'run' in candidate && candidate.run.includes('postgresql18'))
 		if (step === undefined || !('run' in step)) throw new Error('expected the schema checks command')
-		const child = Bun.spawn(['sh', '-c', step.run.replaceAll('/tmp/fabrika-build-postgres', `${root}/postgres`)], {
+		const child = Bun.spawn([...shell, '-c', step.run.replaceAll('/tmp/fabrika-build-postgres', `${root}/postgres`)], {
 			cwd: root,
 			env: { PATH: `${bin}:${process.env['PATH'] ?? ''}` },
 			stdout: 'pipe',
 			stderr: 'pipe',
 		})
+		if (options.terminate === true) {
+			while (!(await Bun.file(join(root, 'running')).exists())) await Bun.sleep(20)
+			child.kill('SIGTERM')
+		}
 		const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()])
 		const calls = (await readFile(log, 'utf8')).trim().replaceAll(root, '<root>').split('\n')
-		return { code, stderr, calls }
+		return {
+			code,
+			stderr,
+			calls,
+			left: (await readdirOrNull(join(root, 'postgres'))) !== null,
+		}
 	}
 
-	test('starts the database, runs the three commands against it with a random password, and stops it', async () => {
-		const { code, calls } = await run(null)
+	const IMMEDIATE_STOP = 'pg_ctl --pgdata=<root>/postgres/data --mode=immediate stop'
+
+	test('starts the database, runs the three commands against it with a random password, stops it and removes it', async () => {
+		const { code, calls, left } = await run()
 		expect(code).toBe(0)
 		expect(calls.map((call) => call.split(' ').slice(0, 2).join(' '))).toEqual([
 			'sudo apk',
@@ -199,18 +233,45 @@ describe('the build schema checks command', () => {
 			'fabrika db',
 			'fabrika db',
 			'pg_ctl --pgdata=<root>/postgres/data',
+			'pg_ctl --pgdata=<root>/postgres/data',
 		])
 		expect(calls.at(2)).toEndWith(' start')
 		expect(calls.slice(3, 6).map((call) => call.split(' ')[2])).toEqual(['migrate', 'codegen', 'test-isolation'])
 		expect(calls.at(3)).toMatch(/url=postgresql:\/\/fabrika:[0-9a-f]{32}@localhost\/postgres\?path=<root>\/postgres$/)
-		expect(calls.at(-1)).toBe('pg_ctl --pgdata=<root>/postgres/data --mode=fast stop')
+		expect(calls.at(6)).toBe('pg_ctl --pgdata=<root>/postgres/data --mode=fast stop')
+		// The cleanup stays armed: its immediate stop finds nothing left to stop, and the directory goes.
+		expect(calls.at(7)).toBe(IMMEDIATE_STOP)
+		expect(left).toBe(false)
 	})
 
-	test('a failed check fails the command, names the check, skips the rest and still stops the database', async () => {
-		const { code, stderr, calls } = await run('codegen')
+	test('a failed check fails the command, names the check, skips the rest, stops the database and removes it', async () => {
+		const { code, stderr, calls, left } = await run({ failing: 'codegen' })
 		expect(code).toBe(1)
 		expect(stderr).toContain('fabrika: the build check failed: schema types are stale (fabrika db codegen --verify)')
 		expect(calls.some((call) => call.startsWith('fabrika db test-isolation'))).toBe(false)
-		expect(calls.at(-1)).toBe('pg_ctl --pgdata=<root>/postgres/data --mode=immediate stop')
+		expect(calls.at(-1)).toBe(IMMEDIATE_STOP)
+		expect(left).toBe(false)
+	})
+
+	test('a failed initdb fails the command and leaves no password file', async () => {
+		const { code, calls, left } = await run({ failing: 'initdb' })
+		expect(code).not.toBe(0)
+		expect(calls.some((call) => call.startsWith('fabrika'))).toBe(false)
+		expect(left).toBe(false)
+	})
+
+	test('a failed fast stop falls back to an immediate stop, and the passed checks still pass', async () => {
+		const { code, calls, left } = await run({ failing: 'fast-stop' })
+		expect(code).toBe(0)
+		expect(calls.slice(-3)).toEqual(['pg_ctl --pgdata=<root>/postgres/data --mode=fast stop', IMMEDIATE_STOP, IMMEDIATE_STOP])
+		expect(left).toBe(false)
+	})
+
+	test('SIGTERM stops the database and removes it', async () => {
+		const { code, calls, left } = await run({ terminate: true })
+		expect(code).toBe(143)
+		expect(calls.at(-1)).toBe(IMMEDIATE_STOP)
+		expect(calls.some((call) => call.endsWith('--mode=fast stop'))).toBe(false)
+		expect(left).toBe(false)
 	})
 })

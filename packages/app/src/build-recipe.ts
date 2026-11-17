@@ -162,29 +162,33 @@ export function contractChecks(sourceRoot: string, checkRelease: string): Contra
  * One build command that migrates a throwaway PostgreSQL from scratch with the application's migrations, runs the schema
  * checks on it and stops it. It is one command because each build command runs in its own shell. The cluster listens on
  * a unix socket in a private directory only, behind a random password, and the generated tests still get only the
- * throwaway provisioner `test-isolation` creates. A failed check names itself and stops the cluster.
+ * throwaway provisioner `test-isolation` creates. A failed check names itself. The cleanup is armed before the password
+ * is written and stays armed to the end: every exit, a signal's too, stops the cluster and removes its directory.
  */
 const buildSchemaChecksCommand = (appId: string): string => {
 	const data = `${BUILD_POSTGRES_DIR}/data`
+	const stop = (mode: 'fast' | 'immediate'): string => `pg_ctl --pgdata=${data} --mode=${mode} stop >/dev/null`
 	const failed = (check: string): string => `|| { echo "fabrika: the build check failed: ${check}" >&2; exit 1; }`
 	const command = [
 		'set -eu',
 		'umask 077',
 		`sudo apk add --no-cache --quiet ${BUILD_POSTGRES_PACKAGE}`,
+		// A signal runs the EXIT trap only through an `exit` of its own, in POSIX `sh` and BusyBox `sh` alike.
+		`trap "${stop('immediate')} 2>&1 || true; rm -rf ${BUILD_POSTGRES_DIR}" EXIT`,
+		'trap "exit 130" INT',
+		'trap "exit 143" TERM',
 		`rm -rf ${BUILD_POSTGRES_DIR}`,
 		`mkdir ${BUILD_POSTGRES_DIR}`,
 		'PW=$(od -An -N16 -tx1 /dev/urandom | tr -dc 0-9a-f)',
 		`printf %s "$PW" > ${BUILD_POSTGRES_DIR}/password`,
 		`initdb --pgdata=${data} --username=fabrika --auth=scram-sha-256 --pwfile=${BUILD_POSTGRES_DIR}/password --no-sync --no-instructions >/dev/null`,
 		`rm ${BUILD_POSTGRES_DIR}/password`,
-		`trap "pg_ctl --pgdata=${data} --mode=immediate stop >/dev/null" EXIT`,
 		`pg_ctl --pgdata=${data} --log=${BUILD_POSTGRES_DIR}/server.log --wait --options="-c listen_addresses= -c unix_socket_directories=${BUILD_POSTGRES_DIR} -c fsync=off" start >/dev/null || { cat ${BUILD_POSTGRES_DIR}/server.log >&2; exit 1; }`,
 		`export FABRIKA_APP_ID=${appId} FABRIKA_APP_DATABASE_URL="postgresql://fabrika:$PW@localhost/postgres?path=${BUILD_POSTGRES_DIR}"`,
 		`${MIGRATE.join(' ')} ${failed('the migrations (fabrika db migrate)')}`,
 		`${[FABRIKA_BIN, ...SCHEMA_TYPES_CHECK].join(' ')} ${failed('schema types are stale (fabrika db codegen --verify)')}`,
 		`${[FABRIKA_BIN, ...ISOLATION_TESTS_CHECK].join(' ')} ${failed('isolation tests (fabrika db test-isolation)')}`,
-		'trap - EXIT',
-		`pg_ctl --pgdata=${data} --mode=fast stop >/dev/null`,
+		`${stop('fast')} || ${stop('immediate')}`,
 	].join('\n')
 	// Zerops may resolve a braced `${name}` in a build command as its own variable; an unbraced `$NAME` reaches the shell.
 	if (command.includes('${')) throw new Error('the build schema checks must expand no braced variable')
