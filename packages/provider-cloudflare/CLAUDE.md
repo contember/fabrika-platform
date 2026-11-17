@@ -241,18 +241,23 @@ this one import.
   and never interprets a step's `kind`.
 - **`check` refuses what the Zerops build refuses, in its order, before any resource is touched** (`runChecks`,
   `src/provider.ts`). Every command gets only `PATH`, `HOME` and `TMPDIR`. The application's tests run first
-  (`contractChecks` of `@fabrika/app/build`). They are checkout code, so for a release that pins the generated entry
-  everything after them is redone: `node_modules` is emptied where the runner installed and in the application
-  directory, `bun install --frozen-lockfile` runs where the runner installed, the entry is regenerated, the platform
-  tsconfig is written afresh (never through a file or link the tests left), then `tsc` at the platform TypeScript,
-  `fabrika-check` at the checker release, and the application CLI's `SCHEMA_TYPES_CHECK` (only when the contract
-  declares a table) and `ISOLATION_TESTS_CHECK`, each with `--config=<config>` when the config has another name. An
-  older release keeps its authored `main`, and runs only the tests and the checker, which reads no generated entry.
+  (`contractChecks` of `@fabrika/app/build`). For a release that pins the generated entry, what they may have left
+  behind is then redone: every `node_modules` from where the runner installed down to the application directory (each
+  one the CLI is looked for in) is emptied, `bun install --frozen-lockfile` runs where the runner installed, the entry is
+  regenerated, the platform tsconfig is written afresh (never through a file or link the tests left), then `tsc` at the
+  platform TypeScript, `fabrika-check` at the checker release, and the application CLI's `SCHEMA_TYPES_CHECK` (only when
+  the contract declares a table) and `ISOLATION_TESTS_CHECK`. An older release keeps its authored `main`, and runs only
+  the tests and the checker, which reads no generated entry.
+  This guards against accidental leftovers, not a hostile test: Bun hardlinks installed files to its cache, so a test
+  that edits an installed dependency in place edits the cache, and the frozen reinstall brings the edit back. A
+  tamper-proof build needs a sandboxed runner, which is deferred.
   The error names the check (`tests`, `tsc`, `fabrika-check`, `schema types are stale`, `isolation tests`) and keeps
   the last 2,000 characters of its output. The checker release is `approvedAccess.checker`: a Control older than the
   runner sends none, and the step then fails saying to upgrade Control; it never skips the checker. A release before
   `checksSqliteSchema` (`0.9.0-dev.5`; every `cloudflare.<n>`) has a CLI that checks no SQLite schema, so those two are
-  left out and the log says so (ADR-0062).
+  left out and the log says so (ADR-0062). The schema checks get `--config=<config>` only for a config of another name,
+  and only from `SCHEMA_CHECK_CONFIG_SINCE` (`namesSchemaCheckConfig`): an older CLI refuses any argument, so for such a
+  config they are left out the same way, and the log says why.
 - **Only declared application secrets reach the Worker.** Control hands the deploy every secret stored for the
   environment; `sync-secrets` writes those `pipeline.secrets` names, and `deploy-worker` logs every other one by name
   (`undeclaredSecrets`), never its value, so a secret set in the console but not declared does not vanish silently. A
