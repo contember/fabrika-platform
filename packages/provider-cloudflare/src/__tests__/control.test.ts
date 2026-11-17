@@ -124,6 +124,19 @@ describe('Cloudflare control provider', () => {
 		expect(provider.devSandboxes).toBeUndefined()
 	})
 
+	test("declares SQLite as its applications' dialect, so Control classifies their migrations in it", () => {
+		const provider = createCloudflareControlProvider({
+			accountId: 'account',
+			apiToken: 'token',
+			runnerKey: 'key',
+			...sourceOptions,
+			prepareClone: async (source) => ({ repoUrl: source.repoUrl }),
+			startRun: async () => ({ state: 'succeeded' }),
+			cancelRun: async () => {},
+		})
+		expect(provider.applicationDialect).toBe('sqlite')
+	})
+
 	test('serves the ops channel from the release that gets the composed row, and writes the key digests as a plain var', () => {
 		const provider = createCloudflareControlProvider({
 			accountId: 'account',

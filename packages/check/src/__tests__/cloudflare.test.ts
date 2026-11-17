@@ -81,6 +81,21 @@ describe('cloudflare-current-timestamp', () => {
 	})
 })
 
+describe("migration-refused: SQLite's table options", () => {
+	const STRICT = 'CREATE TABLE audit (\n\tid TEXT PRIMARY KEY,\n\tat TEXT NOT NULL\n) STRICT, WITHOUT ROWID;\n'
+
+	test('a Cloudflare application may write them; a Postgres application is refused as before', async () => {
+		const cloudflare = application(true)
+		cloudflare.set(MIGRATION, STRICT)
+		expect(await findingsOf('migration-refused', cloudflare)).toEqual([])
+		const postgres = application(false)
+		postgres.set(MIGRATION, STRICT)
+		expect(await findingsOf('migration-refused', postgres)).toEqual([
+			`${MIGRATION}:1 refusal CREATE TABLE … STRICT is not allowed: Control refuses the deploy that brings this migration`,
+		])
+	})
+})
+
 describe('cloudflare-view-trigger', () => {
 	const NOTES = 'CREATE TABLE notes (id TEXT PRIMARY KEY, body TEXT NOT NULL);\nCREATE VIEW open_notes AS SELECT id, body FROM notes;\n'
 

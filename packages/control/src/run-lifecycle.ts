@@ -743,6 +743,7 @@ async function deployUnder(
 				run: startedRun,
 				app,
 				root: deps.provider.applicationRoot === undefined ? '' : deps.provider.applicationRoot(registration.app.source),
+				dialect: deps.provider.applicationDialect ?? 'postgres',
 				commitSha,
 				...(sourceBinding === undefined ? {} : { sourceBinding }),
 				...(sandbox === null ? {} : { workspaceBaseline: sandbox.baseline }),

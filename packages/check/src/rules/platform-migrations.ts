@@ -6,7 +6,7 @@ import { describeOpsDumpSchema, planOpsDump } from '@fabrika/auth-core'
 import { withMigratedSqlite } from '@fabrika/db/codegen-sqlite'
 import { FRAMEWORK_MIGRATION_BUNDLE } from '@fabrika/db/migrations'
 import { SQLITE_FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations-sqlite'
-import { applicationDatabaseSchema, classifyMigrations } from '@fabrika/platform-node/sql'
+import { applicationDatabaseSchema, classifyMigrations, type MigrationDialect } from '@fabrika/platform-node/sql'
 import type { Finding } from '../finding'
 import { MIGRATIONS_DIR } from '../layout'
 
@@ -24,15 +24,21 @@ const migrationTexts = (files: ReadonlyMap<string, string>): MigrationText[] =>
 	}).sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0))
 
 /**
- * Every statement Control's classifier refuses, at its file and line, against the application's access tables. Control refuses a deploy whose new migration holds
+ * Every statement Control's classifier refuses, at its file and line, against the application's access tables and in its
+ * dialect. Control refuses a deploy whose new migration holds
  * one (`migrations-refused`), and its run log names neither, so this is where the author finds it. Every file is
  * checked, applied or not: the checker does not know which an environment holds.
  */
-export const checkMigrationClassification = (files: ReadonlyMap<string, string>, appId: string, accessTables: readonly string[]): Finding[] => {
+export const checkMigrationClassification = (
+	files: ReadonlyMap<string, string>,
+	appId: string,
+	accessTables: readonly string[],
+	dialect: MigrationDialect,
+): Finding[] => {
 	const texts = migrationTexts(files)
 	if (texts.length === 0) return []
 	const paths = new Map(texts.map((text) => [text.name, text.path]))
-	const options = { accessTables: new Set(accessTables) }
+	const options = { accessTables: new Set(accessTables), dialect }
 	return classifyMigrations(texts.map(({ name, sql }) => ({ name, sql })), applicationDatabaseSchema(appId), options).files.flatMap((file) =>
 		file.refused.map((refusal): Finding => ({
 			file: paths.get(refusal.file) ?? `${MIGRATIONS_DIR}${refusal.file}`,

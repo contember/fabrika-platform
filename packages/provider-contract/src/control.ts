@@ -716,4 +716,9 @@ export interface ControlProvider {
 	 * access snapshot there (ADR-0050). Absent means the repository root.
 	 */
 	applicationRoot?(source: ProviderSource): string | null
+	/**
+	 * The database an application of this provider runs its migrations on, which Control classifies them for: SQLite in
+	 * the application's Durable Object on Cloudflare (ADR-0065). Absent means Postgres.
+	 */
+	readonly applicationDialect?: 'postgres' | 'sqlite'
 }

@@ -215,13 +215,24 @@ export type HandlersOf<C, Snap = unknown> =
 /** An `any` comes from an error elsewhere in the handler; reporting it here too would only add noise. */
 export type IsAny<T> = 0 extends 1 & T ? true : false
 
-/** Fields of `R` that the output `O` does not declare. When `O` is a union, a value that fits one branch has none. */
+/**
+ * Fields of `R` that the output `O` does not declare. Each member of a union `R` is paired with `O` on its own, and a
+ * member that fits one branch of a union `O` has none.
+ */
 export type ExtraKeys<R, O> = IsAny<R> extends true ? never
-	: true extends (O extends unknown ? ([ExtraKeysOf<R, O>] extends [never] ? true : false) : never) ? never
-	: ExtraKeysOf<R, O>
+	: R extends unknown ? true extends (O extends unknown ? ([ExtraKeysOf<R, O>] extends [never] ? true : false) : never) ? never
+		: ExtraKeysOf<R, O>
+	: never
+
+/**
+ * Optional keys that can hold only `undefined`: TypeScript adds them when it widens object literals of different
+ * shapes to one type (`{ x } | { x, y }` read as `{ x, y?: undefined }`). They carry no value, and projection drops them.
+ */
+type EmptyKeys<R> = { [K in keyof R]-?: object extends Pick<R, K> ? ([Exclude<R[K], undefined>] extends [never] ? K : never) : never }[keyof R]
 
 type ExtraKeysOf<R, O> = R extends readonly (infer RE)[] ? (O extends readonly (infer OE)[] ? ExtraKeys<RE, OE> : never)
-	: R extends object ? O extends object ? Exclude<keyof R, keyof O> | { [Q in keyof R & keyof O]: ExtraKeys<R[Q], O[Q]> }[keyof R & keyof O]
+	: R extends object
+		? O extends object ? Exclude<keyof R, keyof O | EmptyKeys<R>> | { [Q in keyof R & keyof O]: ExtraKeys<R[Q], O[Q]> }[keyof R & keyof O]
 		: never
 	: never
 
