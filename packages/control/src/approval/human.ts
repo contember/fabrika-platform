@@ -6,7 +6,7 @@ import type { AuthContext } from '@fabrika/auth'
 import { CONTROL_ACTIONS } from '@fabrika/control-contract'
 import { fail } from '../api/domain'
 import { canAtCoordinates } from '../api/runs'
-import type { AppEnvRow } from '../db'
+import { type AppEnvRow, type ControlRepositories, defaultProtected } from '../db'
 import { isWorkspaceRef } from '../ref-match'
 
 /** The request a console call arrived on. */
@@ -118,4 +118,28 @@ export function requirePersonToRedirect(auth: AuthContext, protectedEnv: string 
 		`environment \`${protectedEnv}\` is protected: only a person changes ${change}, which decides what a deploy there runs; `
 			+ 'an agent, a builder key or a service key cannot',
 	)
+}
+
+/** Whether the environment is protected, or a new one starts protected: as `prod` or as a deleted protected one. */
+export async function startsProtected(
+	registry: Pick<ControlRepositories['registry'], 'getKeptProtection'>,
+	appId: string,
+	env: string,
+	existing: AppEnvRow | null,
+): Promise<boolean> {
+	if (existing !== null) return existing.protected === 1
+	return ((await registry.getKeptProtection(appId, env)) ?? defaultProtected(env)) === 1
+}
+
+/**
+ * Naming the trigger ref of an environment that is protected, or of a new one that starts protected, takes a person
+ * (`apps.environments.put`, `apps.register`). Clearing it stops push deploys and stays open to a key.
+ */
+export async function requirePersonToPointTriggerRef(
+	c: { readonly auth: AuthContext; readonly repositories: Pick<ControlRepositories, 'registry'> },
+	target: { readonly appId: string; readonly env: string; readonly existing: AppEnvRow | null; readonly triggerRef: string | null },
+): Promise<void> {
+	const { appId, env, existing, triggerRef } = target
+	if (triggerRef === null || triggerRef === existing?.trigger_ref || isPerson(c.auth)) return
+	if (await startsProtected(c.repositories.registry, appId, env, existing)) requirePersonToRedirect(c.auth, env, 'its trigger ref')
 }

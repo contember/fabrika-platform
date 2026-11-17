@@ -1,6 +1,6 @@
 import type { AppEnvDto, ListResponse, OkResponse, PutAppEnvRequest, RotateTokenKeyResponse } from '@fabrika/control-contract'
 import type { ControlProvider, ProviderApp, ProviderRegistration } from '@fabrika/provider-contract'
-import { requireHumanForProtectedDelete, requirePersonToRedirect } from '../../approval/human'
+import { requireHumanForProtectedDelete, requirePersonToPointTriggerRef, startsProtected } from '../../approval/human'
 import {
 	AppEnvChangedError,
 	appEnvCrossOrigins,
@@ -8,7 +8,6 @@ import {
 	type AppEnvRow,
 	AppEnvTriggerRefConflictError,
 	type AppRow,
-	defaultProtected,
 	NamespaceResourceClaimConflictError,
 } from '../../db'
 import { fail } from '../domain'
@@ -41,10 +40,7 @@ export async function putAppEnvUseCase(c: RegistryUseCaseContext, appId: string,
 	if (input.kind !== undefined && existing !== null && input.kind !== existing.kind) {
 		fail(409, `environment ${env} is ${existing.kind}; an environment's kind is set when it is created`)
 	}
-	// Clearing the trigger ref stops push deploys; naming another one, or one for a new environment, points them at code.
-	if (triggerRef !== null && triggerRef !== existing?.trigger_ref && await startsProtected(c, appId, env, existing)) {
-		requirePersonToRedirect(c.auth, env, 'its trigger ref')
-	}
+	await requirePersonToPointTriggerRef(c, { appId, env, existing, triggerRef })
 	const kind = existing?.kind ?? input.kind ?? 'standard'
 	if (kind === 'dev') await assertDevEnvironment(c, app, env, existing, input.authoring === true, triggerRef, input.domain ?? null)
 	if (input.authoring === true) {
@@ -204,18 +200,12 @@ function assertAuthoringTarget(provider: ControlProvider, app: AppRow): void {
 	}
 }
 
-/** Whether the environment is protected, or a new one starts protected: as `prod` or as a deleted protected one. */
-async function startsProtected(c: RegistryUseCaseContext, appId: string, env: string, existing: AppEnvRow | null): Promise<boolean> {
-	if (existing !== null) return existing.protected === 1
-	return ((await c.repositories.registry.getKeptProtection(appId, env)) ?? defaultProtected(env)) === 1
-}
-
 /**
  * ADR-0049 rule 7: `deploy_stage` deploys unreviewed workspace heads to the authoring target, and only a person deploys
  * to a protected environment, so the two never meet.
  */
 async function assertUnprotectedAuthoringTarget(c: RegistryUseCaseContext, appId: string, env: string, existing: AppEnvRow | null): Promise<void> {
-	if (await startsProtected(c, appId, env, existing)) {
+	if (await startsProtected(c.repositories.registry, appId, env, existing)) {
 		fail(
 			409,
 			`environment \`${env}\` is protected, so it cannot be an authoring target: an agent deploys unreviewed workspace heads there, `

@@ -2,6 +2,7 @@ import { isStructuralError } from '@fabrika/app'
 import type { AppEnvDto, RegisterAppRequest, RegisterAppResponse } from '@fabrika/control-contract'
 import type { ControlProvider, ProviderApp, ProviderDeploymentNamespace, ProviderEnvironment, ProviderRegistration } from '@fabrika/provider-contract'
 import { snapshotDeviations } from '../../approval/diff'
+import { requirePersonToPointTriggerRef } from '../../approval/human'
 import { approvedSnapshot } from '../../approval/snapshot'
 import { snapshotSurface } from '../../approval/surface'
 import { appEnvCrossOrigins, type AppEnvRow, type AppRow, NamespaceResourceClaimConflictError } from '../../db'
@@ -19,6 +20,7 @@ export async function registerAppUseCase(c: RegistryUseCaseContext, input: Regis
 	if (await c.repositories.registry.getApp(id)) fail(409, 'an app with this id already exists')
 	assertProxyDomain(input.domain)
 	const triggerRef = triggerRefInput(input.triggerRef)
+	await requirePersonToPointTriggerRef(c, { appId: id, env, existing: null, triggerRef })
 	const crossOrigins = input.crossOrigins ?? []
 	assertCrossOrigins(crossOrigins, input.domain ?? null)
 	const normalized = normalizeRepoUrl(repoUrl)

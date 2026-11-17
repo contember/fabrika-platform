@@ -1,5 +1,5 @@
 // A key cannot redirect what a deploy of a protected environment runs (ADR-0050 §4): not with an update interleaved
-// with a person's, and not when a protection lands between its check and its write. Through
+// with a person's, not when a protection lands between its check and its write, and not by registering the app. Through
 // the real RPC router and the shipped SQL, on SQLite always and on Postgres when FABRIKA_TEST_POSTGRES_URL is set.
 
 import type { AuthContext } from '@fabrika/auth'
@@ -128,6 +128,31 @@ for (const backend of backends) {
 			f.registry.beforeWrite = () => f.protect('stage')
 			expect((await f.update(manager, { buildCmd: 'bun run build:all', configPath: 'deploy/fabrika.config.ts' })).status).toBe(200)
 			expect(await f.registry.getApp('app')).toMatchObject({ build_cmd: 'bun run build:all', config_path: 'deploy/fabrika.config.ts' })
+		})
+
+		test('only a person registers an app whose environment starts protected with a trigger ref', async () => {
+			const f = await open()
+			const register = (auth: AuthContext, env: string, triggerRef: string | null) =>
+				rpcResult(rpcRequest('register', { id: 'app', repoUrl: 'github.com/acme/app', env, triggerRef, ...envelopes }), f.as(auth))
+			const refused = await register(key, 'prod', 'refs/heads/unreviewed')
+			expect(refused.status).toBe(403)
+			expect(await refused.text()).toContain(refusal('prod', 'its trigger ref'))
+			expect(await f.registry.getApp('app')).toBeNull()
+			expect(await f.registry.getAppEnv('app', 'prod')).toBeNull()
+
+			// Without a trigger ref, the key registers prod; a person names one.
+			expect((await register(key, 'prod', null)).status).toBe(200)
+			expect(await f.registry.getAppEnv('app', 'prod')).toMatchObject({ protected: 1, trigger_ref: null })
+		})
+
+		test('a person registers a protected environment with a trigger ref, and a key an unprotected one', async () => {
+			const f = await open()
+			const register = (auth: AuthContext, id: string, env: string) =>
+				rpcResult(rpcRequest('register', { id, repoUrl: `github.com/acme/${id}`, env, triggerRef: 'refs/heads/main', ...envelopes }), f.as(auth))
+			expect((await register(manager, 'app', 'prod')).status).toBe(200)
+			expect(await f.registry.getAppEnv('app', 'prod')).toMatchObject({ protected: 1, trigger_ref: 'refs/heads/main' })
+			expect((await register(key, 'other', 'stage')).status).toBe(200)
+			expect(await f.registry.getAppEnv('other', 'stage')).toMatchObject({ protected: 0, trigger_ref: 'refs/heads/main' })
 		})
 	})
 }
