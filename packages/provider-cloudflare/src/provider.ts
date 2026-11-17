@@ -337,9 +337,11 @@ const runChecks = async (build: EntryBuild, run: CloudflareDeployRun, cf: Cloudf
  * `sync-secrets`, it would fail the run after `deploy-worker` had shipped a Worker without it. Names only, never a value.
  */
 const assertDeclaredSecrets = (config: CloudflareAppConfig, run: CloudflareDeployRun, platformResources: 'refuse' | 'allow'): void => {
+	// An own property only: `constructor` or `toString` would otherwise read as set.
 	const missing = [...new Set(config.pipeline?.secrets ?? [])].filter((name) => {
-		const value = run.secrets[name]
-		return value === undefined || value === ''
+		if (!Object.hasOwn(run.secrets, name)) return true
+		const value: unknown = run.secrets[name]
+		return typeof value !== 'string' || value === ''
 	})
 	if (missing.length === 0) return
 	const names = missing.map((name) => `\`${name}\``).join(', ')

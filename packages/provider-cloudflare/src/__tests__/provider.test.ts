@@ -2194,6 +2194,14 @@ describe('a declared secret without a value', () => {
 		expect(rec.logs).toEqual([])
 	})
 
+	test('a name the secrets object inherits is not a value', async () => {
+		const app = config({ pipeline: { secrets: ['constructor', 'toString'] } })
+		await expect(deploy(rec, app)).rejects.toThrow(
+			'cloudflare: secrets `constructor`, `toString` are declared in fabrika.config.ts but have no value on environment `stage`; set them in the console before deploying',
+		)
+		expect(rec.commands).toEqual([])
+	})
+
 	test('names a single one, and a platform deploy points at its own environment', async () => {
 		const app = config({ pipeline: { secrets: ['API_KEY'] } })
 		await expect(deploy(rec, app)).rejects.toThrow(
