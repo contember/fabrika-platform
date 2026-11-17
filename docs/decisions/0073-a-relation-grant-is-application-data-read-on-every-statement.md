@@ -24,8 +24,8 @@ We measured this against a production rule corpus of an existing application: 4,
 entity and an operation with at least one predicate) across five rule sets. Today's model expresses 31.4 % of them. The
 spike in [#134](https://github.com/contember/fabrika-platform/pull/134) built relation grants and narrowing conditions
 end to end. They express 50.9 % as the spike stands, and 59.2 % once the principal id is stored on the relation's row.
-This record states the model. The steps that would extend it towards about 95 % are a frozen roadmap in
-[ideas/acl-coverage-roadmap.md](../ideas/acl-coverage-roadmap.md): a step is built when an application needs it.
+This record states the model. What its declarations do not express, an access view expresses
+([ADR-0076](0076-an-access-view-decides-the-rows-a-relation-reaches.md)).
 
 The forces:
 
@@ -149,8 +149,8 @@ upsert's conflict update is judged on the stored row. A relation source's condit
 (section 2), so under a reveal matched through a path it stays within four subqueries. It takes no `some`: rows naming
 a source row are written by their own table's writers, outside the delegation bound.
 
-Widening is a separate mechanism (`admits`, a step of the [coverage roadmap](../ideas/acl-coverage-roadmap.md)), and
-it is not part of `when`.
+Widening is a separate mechanism, an access view
+([ADR-0076](0076-an-access-view-decides-the-rows-a-relation-reaches.md)), and it is not part of `when`.
 
 ### 4. Relations are for internal principals, anywhere or inside the grant's node
 
@@ -164,7 +164,9 @@ for each relation action, and never `~rel`.
   one), so the relation ends at the first `:` and the dimension at the second; the node is the rest, verbatim, and may
   hold `:`. IAM gives no entry for a name that holds one.
 - **Inside is strict.** The data layer narrows each term of the relation, its reveals and its secondary paths, to rows
-  whose own column for the grant's dimension names the node: `(<term> and (T.<column> in (<nodes>)))`. A table with no
+  whose own column for the grant's dimension names the node: `(<term> and (T.<column> in (<nodes>)))`. The one
+  exception is an access view bound to the node (ADR-0076 section 2): its SQL decides which rows the node reaches, for
+  a `Within`'s reads, and a grant at the node reaches whatever it maps the node to. Otherwise, a table with no
   column for that dimension gets no term from the entry, and neither does a reveal to a dimension above the node: its
   rows lie at the node's ancestor, not inside the node. The framework counts an entry only where the relation's
   dimension, and a reveal's, is the grant's dimension or lies inside it; `on` and `in` ask the database for the object
@@ -330,7 +332,8 @@ still narrows every grant.
 
 - **The parse refuses what reaches nothing.** The relation is one the vocabulary declares, the action one the table
   names, and the relation reaches the table for the action: its dimension is in the table's chain, a secondary path
-  reads it, or a reveal of the relation for that action names a node the row lies at. A view is judged against its
+  reads it, a reveal of the relation for that action names a node the row lies at, or the table names an access view
+  for it (ADR-0076). A view is judged against its
   parent. An application or reference table takes none.
 - **The nesting bound holds.** The condition stands beside the term, not inside its subquery, so its paths count as a
   `when`'s do: at most three foreign keys, and the deepest term stays the four of section 3.
@@ -356,7 +359,8 @@ narrows, a removed or changed one widens.
 ## Consequences
 
 - An application expresses row-dependent access as data the approver reviews, instead of handler code. What the
-  declarations do not express stays in handlers until a step of the coverage roadmap is built for it.
+  declarations do not express goes through an access view
+  ([ADR-0076](0076-an-access-view-decides-the-rows-a-relation-reaches.md)).
 - Every statement under a relation carries one more subquery. Its cost is measured (#134) with the source index in
   place, so an application that leaves the index out pays more on every statement.
 - The bounded delegation is a new kind of authority without a holder check. It must stay narrow: `assign` bounds,
@@ -384,9 +388,10 @@ narrows, a removed or changed one widens.
 - **Source writes held to S8** (the writer must hold what the relation grants). A coordinator who assigns does not
   hold the assistant's actions. Every realistic application would then grant the coordinator those actions, which is wider
   than the bound.
-- **`admits` together with `when`, or raw SQL in it.** Widening without a tenant partition lets a grant in one company
-  reach published rows of another. Raw SQL is the opposite of what a reviewable widening needs. `admits` is a step of
-  the coverage roadmap and takes its own ADR.
+- **Widening in `when`, or raw SQL in it.** A condition only narrows, so the approval diff reads its direction and
+  section 5 refuses a reader that ignores it. Raw SQL is the opposite of what a reviewable widening needs. Widening goes
+  through an access view ([ADR-0076](0076-an-access-view-decides-the-rows-a-relation-reaches.md)), whose SQL
+  is a migration the approver reads.
 - **A stamped copy of the container's path column on the row**, for a read path that starts at the row's container.
   It reads one subquery shallower and would let a reveal match through it. But every insert, every move of the row and
   every write of the container's column would have to rewrite the copy on every row below, in the same transaction, or
@@ -398,8 +403,10 @@ narrows, a removed or changed one widens.
 - **A move through a path, bounded by the path.** The moved row's path column satisfies the path term wherever the row
   lands, so the destination check bounds nothing; holding the destination's containment actions is a containment `Ref`.
 - **A view as a relation source.** A view's rows change with every write to its base tables, and the delegation bound
-  sees none of those writes: nobody could bound who gains access, and an approver could not review it. An application
-  that needs one writes its source rows through a real table with `assign`.
+  sees none of those writes: nobody could bound who gains access. An application that needs bounded delegation writes
+  its source rows through a real table with `assign`. One that needs a rule over its rows names an access view instead
+  ([ADR-0076](0076-an-access-view-decides-the-rows-a-relation-reaches.md)): it is reviewed as a rule, and its
+  writers are named as unbounded.
 - **Raw SQL in a condition.** A structured condition is reviewable and checkable by the guard; SQL is neither.
 - **A JSON column compared in a condition, or a path of more than three foreign keys.** The data layer never compares
   JSON, and each hop is a subquery in every statement of the action. An application extracts the value into a typed

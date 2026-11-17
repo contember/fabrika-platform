@@ -15,8 +15,6 @@ decided work or status.
   platform reads only its surface and access, and delivers, fronts and authenticates it.
 - [One authorization model](authorization-model.md) — concepts and twelve guarantees the platform and any runtime
   behind it share: serializable grants, declarative rules, and code that narrows freely but widens only when declared.
-- [The ACL coverage roadmap](acl-coverage-roadmap.md) — frozen steps that would extend ADR-0073's relation grants and
-  conditions towards about 95 % of a production rule corpus; a step is built when an application needs it.
 - [A compact installation](compact-installation.md) — applications beside the platform on one HA database; reviewed,
   gated by two live-account facts, and only worth it if platform data must also be HA.
 - [An AWS provider](aws-provider.md): ECS on Fargate, RDS with point-in-time recovery, S3 and CodeBuild behind the

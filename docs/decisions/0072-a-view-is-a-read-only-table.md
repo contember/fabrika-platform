@@ -54,7 +54,8 @@ a scope over them is as sound as that SQL.
    statement, for its declared parent column, parent table and key, over a predicate it would admit on a statement of
    the parent, never `true`, or with no WHERE for every parent row, alone or after an AND of `V.<column> = $n`
    equalities. On a child view's statement it admits no other reach but `true`: no equality, value list or relation
-   row over the view's own columns. The subquery counts apart from the nesting bound of the parent's predicate, so a
+   row over the view's own columns, except the view's own access term ([ADR-0076](0076-an-access-view-decides-the-rows-a-relation-reaches.md)): `V.<key> in (select A.<row> from A
+   where …)` for an access view the view declares, in the union beside the parent subquery. The subquery counts apart from the nesting bound of the parent's predicate, so a
    view's scope nests at most one deeper than its parent's. `ctx.sql.scope` renders no
    `Ref` or `Within` of a child view: its fragment holds column tests only, and no column of the view places a row.
 5. **Writes are refused at the type level and at run time.** The policy types allow only `actions.read`, `appRead`,
@@ -68,8 +69,9 @@ a scope over them is as sound as that SQL.
    containment rests on them and on its parent column alone. A chain column the view carries is read and joined, never
    compared for scope: a row whose chain columns disagree with its parent's lies where the parent lies. A row whose
    parent column is null, names no parent row, or names a row the capability does not reach, is read by no `Ref` or
-   `Within`, a `Within` of `all` included. What the view's SQL still decides is which parent row each row names; it
-   is a migration deviation the approver reviews closer ([ADR-0050](0050-approved-access.md)).
+   `Within`, a `Within` of `all` included, except a `Within`'s read through an access view the view declares
+   (ADR-0076). What the view's SQL still decides is which parent row each row names, and an access view's SQL which
+   rows its relation lists; each is a migration deviation the approver reviews closer ([ADR-0050](0050-approved-access.md)).
 7. **The artifact marks a view.** A view's `TablePolicyArtifact` carries `view: true`, absent for a table, so every
    existing artifact keeps its digest. The approval diff says `New view policy …` and reports a table that becomes a
    view or stops being one; the database code lines show the view's SQL as before.
@@ -84,7 +86,8 @@ a scope over them is as sound as that SQL.
    the parent subquery, so no `not` follows such a path (ADR-0073's `not` rule). No other column of a view is a foreign key, so no other path starts there,
    and no `some` or `none` reads rows that name a view's. A reference view takes no `when`: every site reads it. A view
    confers no relation, and takes no `reveals`, `readThrough` or `memberReveals`: each of them places or reads rows of
-   its own table at a node, and a view's rows lie at no node of their own. A relation, a reveal or a secondary path that
+   its own table at a node, and a view's rows lie at no node of their own. A child view may name an access view
+   (ADR-0076), whose term lists its rows for a `Within`'s reads beside the parent subquery. A relation, a reveal or a secondary path that
    reaches the parent reaches the view's rows through the parent row (item 4).
 
 ## Consequences
@@ -97,6 +100,8 @@ a scope over them is as sound as that SQL.
   cast. An application targets one dialect, so this is a difference of authoring, not of a deployed application.
 - A view's isolation rests on its parent column: the data layer reads every row through the parent row it names, so a
   view's SQL can attach a row to the wrong parent, which the approver reads, but cannot place it outside its parent.
+  A view that names an access view (ADR-0076) is the exception: the access view's SQL decides the rows its relation
+  lists, wherever their parent lies.
 - A read of a child view runs one subquery on its parent, the parent's predicate inside it.
 - A view declared in the first form of this decision, with every chain column, keeps its artifact and its digest:
   `inherit` still names the columns it carries. Raising the pin changes which of its rows a capability reads, both
