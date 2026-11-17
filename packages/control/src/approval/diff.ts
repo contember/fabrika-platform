@@ -930,8 +930,8 @@ function compareFileAdoptions(changes: Changes, baseline: AccessSnapshot, candid
 }
 
 /**
- * The statements of a new or changed migration file that delete or overwrite stored data, or call database code that
- * may, each its own line: access is unchanged, but no later deploy brings the data back, so a person approves it on a
+ * The statements of a new or changed migration file that delete or overwrite stored data, or that are not known to keep
+ * every stored value, each its own line: access is unchanged, but no later deploy brings the data back, so a person approves it on a
  * protected environment and the platform backs the data up before it runs. A file the baseline holds unchanged has run
  * already.
  */
@@ -965,18 +965,24 @@ function dataLossWords(loss: MigrationDataLoss): { readonly does: string; readon
 		case 'DELETE':
 			return deletes(`deletes rows of \`${loss.object}\``)
 		case 'UPDATE':
-			return overwrites(
-				loss.columns === undefined
-					? `overwrites values of \`${loss.object}\` in every row it matches`
-					: `overwrites ${loss.columns.map((column) => `\`${loss.object}.${column}\``).join(', ')} in every row it matches`,
-			)
+			return overwrites(updateWords(loss))
+		case 'UPDATE OR REPLACE':
+			return overwrites(`${updateWords(loss)}, and may delete the rows it conflicts with`)
 		case 'UPSERT':
 			return overwrites(`overwrites rows of \`${loss.object}\` that already exist`)
 		case 'ALTER COLUMN TYPE':
 			return overwrites(`converts \`${loss.object}\` to a new type, which may change its values`)
 		case 'CALL':
 			return { does: 'may change data', what: `calls database code \`${loss.object}\`` }
+		case 'UNPROVEN':
+			return { does: 'may change data', what: `\`${loss.object}\` at line ${loss.line}` }
 	}
+}
+
+function updateWords(loss: MigrationDataLoss): string {
+	return loss.columns === undefined
+		? `overwrites values of \`${loss.object}\` in every row it matches`
+		: `overwrites ${loss.columns.map((column) => `\`${loss.object}.${column}\``).join(', ')} in every row it matches`
 }
 
 function migrationName(file: string): string {

@@ -39,8 +39,9 @@ export interface AccessSnapshot {
 	 */
 	readonly fileAdoptions?: readonly FileAdoption[]
 	/**
-	 * The statements of the migration files that delete or overwrite stored data, or call database code that may, in file order. Absent when there is none. Like the
-	 * file adoptions, not part of the digest, and read only from a candidate.
+	 * The statements of the migration files that delete or overwrite stored data, or are not known to keep every value,
+	 * in file order. Absent when there is none. Like the file adoptions, not part of the digest, and read only from a
+	 * candidate.
 	 */
 	readonly dataLoss?: readonly MigrationDataLoss[]
 	/** The `@fabrika/check` release of the reader that read it; empty for the empty snapshot. */
@@ -80,9 +81,11 @@ const dataLossSchema = z.object({
 		'TRUNCATE CASCADE',
 		'DELETE',
 		'UPDATE',
+		'UPDATE OR REPLACE',
 		'UPSERT',
 		'ALTER COLUMN TYPE',
 		'CALL',
+		'UNPROVEN',
 	]),
 	object: z.string().min(1),
 	columns: z.array(z.string().min(1)).min(1).optional(),

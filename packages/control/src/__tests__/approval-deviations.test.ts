@@ -7,6 +7,7 @@ import { readContractSource } from '@fabrika/check/contract'
 import { waitsForApproval } from '@fabrika/control-contract'
 import type { BlobStore } from '@fabrika/platform'
 import { uuidv7 } from '@fabrika/platform'
+import type { DataLossStatement, MigrationDataLoss } from '@fabrika/platform-node/sql'
 import type { ControlProvider } from '@fabrika/provider-contract'
 import { describe, expect, test } from 'bun:test'
 import { toAppEnvDto } from '../api/registry/registration'
@@ -511,12 +512,75 @@ describe('a migration that overwrites data or calls database code', () => {
 		}
 	})
 
-	test('an UPDATE that only fills a column the same file added does not wait', async () => {
+	test('filling and converting what the same file created does not wait', async () => {
 		const before = await snapshotOf(commitOf())
-		const added = { name: NAME, sql: 'ALTER TABLE notes ADD COLUMN subtitle text;\nUPDATE notes SET subtitle = title;\n' }
-		const { changes } = classifyWithFacts(before, await snapshotOf(commitOf({}, [NOTES_MIGRATION, added])))
-		expect(changes.map((change) => change.rule)).toEqual(['migration.added'])
-		expect(waitsForApproval(changes)).toBe(false)
+		for (
+			const sql of [
+				'ALTER TABLE notes ADD COLUMN subtitle text;\nUPDATE notes SET subtitle = title;\n',
+				'ALTER TABLE notes ADD COLUMN rank int;\nALTER TABLE notes ALTER rank TYPE bigint;\n',
+				"CREATE TABLE drafts (id uuid PRIMARY KEY, body text);\nINSERT INTO drafts (id, body) SELECT id, title FROM notes;\nUPDATE drafts SET body = '';\n",
+				"CREATE TABLE drafts (id uuid PRIMARY KEY, body text);\nINSERT INTO drafts (id, body) VALUES (gen_random_uuid(), '') ON CONFLICT (id) DO UPDATE SET body = excluded.body;\n",
+			]
+		) {
+			const { changes } = classifyWithFacts(before, await snapshotOf(commitOf({}, [NOTES_MIGRATION, { name: NAME, sql }])))
+			expect(changes.map((change) => change.rule)).toEqual(['migration.added'])
+			expect(waitsForApproval(changes)).toBe(false)
+		}
+	})
+
+	test('each form round 2 found losing stored data waits, or is refused', async () => {
+		const before = await snapshotOf(commitOf())
+		const waits = async (sql: string) => {
+			const { changes } = classifyWithFacts(before, await snapshotOf(commitOf({}, [NOTES_MIGRATION, { name: NAME, sql }])))
+			return { waits: waitsForApproval(changes), lines: changes.filter((change) => change.reason === 'deletes-data').map((change) => change.line) }
+		}
+		expect(
+			await waits(
+				"INSERT INTO notes AS conflict (id, workspace_id, title) VALUES (gen_random_uuid(), 'w', 't') ON CONFLICT (id) DO UPDATE SET title = excluded.title;\n",
+			),
+		)
+			.toEqual({ waits: true, lines: [`Migration \`${NAME}\` overwrites data: overwrites rows of \`notes\` that already exist`] })
+		expect(await waits("INSERT OR REPLACE INTO notes (id, workspace_id, title) VALUES ('1', 'w', 't');\n")).toEqual({
+			waits: true,
+			lines: [`Migration \`${NAME}\` may change data: \`INSERT OR REPLACE INTO\` at line 1`],
+		})
+		await expect(
+			snapshotOf(commitOf({}, [NOTES_MIGRATION, { name: NAME, sql: 'CREATE TABLE kv (k TEXT PRIMARY KEY ON CONFLICT REPLACE, v TEXT);\n' }])),
+		)
+			.rejects.toEqual(new SnapshotRefused('migrations-refused', 1))
+		expect(
+			await waits(
+				"ALTER TABLE audit ADD COLUMN title text;\nALTER INDEX audit RENAME TO audit_old;\nALTER INDEX notes RENAME TO audit;\nUPDATE audit SET title = '';\n",
+			),
+		)
+			.toEqual({
+				waits: true,
+				lines: [
+					`Migration \`${NAME}\` may change data: \`ALTER INDEX\` at line 2`,
+					`Migration \`${NAME}\` may change data: \`ALTER INDEX\` at line 3`,
+					`Migration \`${NAME}\` overwrites data: overwrites \`audit.title\` in every row it matches`,
+				],
+			})
+	})
+
+	test('every data-loss kind survives storage', async () => {
+		const at = { file: NAME, line: 1 }
+		const every: Record<DataLossStatement, MigrationDataLoss> = {
+			'DROP TABLE': { statement: 'DROP TABLE', object: 'audit', ...at },
+			'DROP COLUMN': { statement: 'DROP COLUMN', object: 'notes.title', ...at },
+			'DROP CASCADE': { statement: 'DROP CASCADE', object: 'type status', ...at },
+			TRUNCATE: { statement: 'TRUNCATE', object: 'notes', ...at },
+			'TRUNCATE CASCADE': { statement: 'TRUNCATE CASCADE', object: 'notes', ...at },
+			DELETE: { statement: 'DELETE', object: 'notes', ...at },
+			UPDATE: { statement: 'UPDATE', object: 'notes', columns: ['title'], ...at },
+			'UPDATE OR REPLACE': { statement: 'UPDATE OR REPLACE', object: 'notes', ...at },
+			UPSERT: { statement: 'UPSERT', object: 'notes', ...at },
+			'ALTER COLUMN TYPE': { statement: 'ALTER COLUMN TYPE', object: 'notes.title', ...at },
+			CALL: { statement: 'CALL', object: 'purge', ...at },
+			UNPROVEN: { statement: 'UNPROVEN', object: 'ALTER INDEX', ...at },
+		}
+		const snapshot = { ...(await snapshotOf(commitOf())), dataLoss: Object.values(every) }
+		expect(parseSnapshot(serializeSnapshot(snapshot)).dataLoss).toEqual(Object.values(every))
 	})
 })
 

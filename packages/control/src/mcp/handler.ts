@@ -301,7 +301,7 @@ function controlMcpServer(c: DevUseCaseContext): McpServer {
 			}every fabrika.* file but fabrika.contract.ts and `
 			+ 'everything under .github/ are protected and cannot be changed. A change of the contract, its schema modules, '
 			+ 'src/db/tables.ts or db/migrations/ is classified at deploy time; on a protected environment a change that needs closer '
-			+ 'review (raw SQL, an unscoped table, a public endpoint, people becoming visible, a migration that deletes or overwrites data) waits for '
+			+ 'review (raw SQL, an unscoped table, a public endpoint, people becoming visible, a migration that may change stored data) waits for '
 			+ 'a person to approve it. A file may hold at most 512 KiB. When the workspace has a dev sandbox (bind_dev), '
 			+ 'the answer also carries dev: the head it serves, its state, its URL and the newest log lines, after waiting up to 10 s '
 			+ 'for the commit to serve; state pending means get_dev_status reads the rest, and state not_followed means you may not '
