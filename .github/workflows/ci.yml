@@ -46,15 +46,16 @@ jobs:
         run: bun run --filter @fabrika/platform-artifacts gen:check
 
   test:
-    name: Test with PostgreSQL ${{ matrix.postgres }} and S3
+    name: Test shard ${{ matrix.shard }}/4 with PostgreSQL ${{ matrix.postgres }} and S3
     runs-on: ubuntu-latest
-    # why: the suite takes 11–17 minutes on a hosted runner, so 10 would fail every run.
-    timeout-minutes: 20
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
         # Every supported major: Zerops runs 18, and `pg-catalog-names.ts` is the union of these.
         postgres: ['17', '18']
+        # The serial main suite takes 11–16 minutes on one runner; bun's `--shard` splits its files round-robin.
+        shard: [1, 2, 3, 4]
     services:
       postgres:
         image: postgres:${{ matrix.postgres }}-alpine
@@ -102,8 +103,12 @@ jobs:
           done
           docker exec fabrika-test-s3 curl -fsS -o /dev/null 'http://127.0.0.1:8888/buckets/fabrika-test/?limit=1'
 
-      - name: Run full test suite
-        run: bun run test
+      - name: Run a shard of the main suite
+        run: bun run test:unit --shard=${{ matrix.shard }}/4
+
+      - name: Run the isolated suites
+        if: matrix.shard == 1
+        run: bun run test:isolated
 
   build:
     name: Build deployable artifacts

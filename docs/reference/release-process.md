@@ -15,13 +15,15 @@ The workflow is also callable by `.github/workflows/release.yml`. A tag cannot r
 
 ### The same gates locally
 
-`bun run check:ci` (`scripts/check-ci.ts`) runs every `run` step of `ci.yml` in order: the frozen install once, the quality steps, the test suite, the builds and the release-artifact steps. It stops at the first failing step and names it.
+`bun run check:ci` (`scripts/check-ci.ts`) runs every `run` step of `ci.yml` in order: the frozen install once, the quality steps, the test matrix, the builds and the release-artifact steps. It stops at the first failing step and names it; when the test matrix runs concurrently, it lets every job finish, prints the output of each failed one and names them all.
 
-- **PostgreSQL.** When `FABRIKA_TEST_POSTGRES_URL` is unset and docker answers, it runs the test suite once per major of the CI matrix, each against a throwaway `postgres:<major>-alpine` container on a random loopback port, removed after its run. A set `FABRIKA_TEST_POSTGRES_URL` is used for one run instead of the matrix.
-- **S3.** When `FABRIKA_TEST_S3_ENDPOINT` is unset and docker answers, it starts the same SeaweedFS `mini` instance as CI on a random loopback port and sets every `FABRIKA_TEST_S3_*` value. Otherwise the environment's own values are used as they are.
+- **Test matrix.** CI's test job runs once per PostgreSQL major and shard: `bun run test:unit --shard=<n>/4` (bun splits the main suite's files round-robin), and in shard 1 also `bun run test:isolated`. `bun run test` runs both parts unsharded.
+- **PostgreSQL.** When `FABRIKA_TEST_POSTGRES_URL` is unset and docker answers, each job of the matrix gets a throwaway `postgres:<major>-alpine` container on a random loopback port, removed after its run, and the jobs run concurrently, one per two CPUs the process may use (two on 4 vCPU), with their output captured. A set `FABRIKA_TEST_POSTGRES_URL` replaces the majors, and the shards then run against it one at a time.
+- **S3.** When `FABRIKA_TEST_S3_ENDPOINT` is unset and docker answers, each job gets the same SeaweedFS `mini` instance as CI on a random loopback port, with every `FABRIKA_TEST_S3_*` value set. Otherwise the environment's own values are used as they are, by one job at a time.
 - **Release artifacts** need npm on `PATH`, as CI gets it from `setup-node`.
+- **Duration.** Every CI job ends under its 10-minute `timeout-minutes`, because each job has a runner of its own. That limit does not apply to `check:ci`, which runs all eight test jobs on one machine: on 4 vCPU (2 cores) its test matrix takes about 18 minutes. More jobs at once do not shorten it: four at once on 4 vCPU pushed tests past their 5 s timeouts.
 
-Whatever it could not run — a backend without docker, the matrix replaced by a given database, the release-artifact steps without npm — it lists under `SKIPPED` at the end, with the duration of every step that ran. `scripts/__tests__/check-ci.test.ts` fails when its steps, the PostgreSQL majors, the images or the S3 values drift from `ci.yml`.
+Whatever it could not run — a backend without docker, the matrix replaced by a given database, the release-artifact steps without npm — it lists under `SKIPPED` at the end, with the duration of every step that ran. `scripts/__tests__/check-ci.test.ts` fails when its steps, the shards, the PostgreSQL majors, the images or the S3 values drift from `ci.yml`.
 
 ## Public package contract
 
