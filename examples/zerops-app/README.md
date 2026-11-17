@@ -25,7 +25,7 @@ directly.
 | `src/app.ts`                                                 | `serve(contract, { database: scoped(tables) })`, which the generated entrypoint boots.             |
 | `db/migrations/`                                             | Plain SQL of the application's schema; the last two adopt the old `attachments` file collection.   |
 | `src/db/schema.generated.ts`                                 | Written by `fabrika db codegen` from the migrated schema.                                          |
-| `src/db/__tests__/`, `src/__tests__/endpoint-access.test.ts` | Written by `fabrika db test-scaffold`; the platform runs them at container start. Never edited.    |
+| `src/db/__tests__/`, `src/__tests__/endpoint-access.test.ts` | Written by `fabrika db test-scaffold`; the platform build runs them. Never edited.                 |
 | `src/__tests__/endpoint-access.fixtures.ts`                  | The state the generated tests seed: a note in the trash, and an attachment row of the note.        |
 | `src/__tests__/notes.test.ts`                                | The author's own tests, through `testKit`: each allowed call has a refused twin; the job runs too. |
 | `web/`, `build-web.ts`                                       | The SPA, its error reporting, and its build through `@fabrika/check/bun-plugin` (no handlers).     |
@@ -45,8 +45,8 @@ contract, the table policies and the migrations at the commit; a change that wid
 to approve it in the console.
 
 On Zerops the platform owns the setup. The build runs the SPA build (`bun run build:web`), then installs, runs
-`bun test`, writes the entrypoint, runs `fabrika-check` and the type check. The init commands run `fabrika db migrate`, `fabrika db codegen --verify` and
-`fabrika db test-isolation`, then the start script runs the server; the crontab runs `fabrika job run purge`. Every `FABRIKA_*` variable is
+`bun test`, writes the entrypoint, runs `fabrika-check` and the type check, then `fabrika db migrate`, `fabrika db codegen --verify` and
+`fabrika db test-isolation` on a throwaway database. The init command runs `fabrika db migrate`, then the start script runs the server; the crontab runs `fabrika job run purge`. Every `FABRIKA_*` variable is
 the platform's: the database URL from `notesdb`, the storage from `notesfiles`, the IAM issuer and audience, the proxy
 secret, the contract digest and the Operations DSN.
 

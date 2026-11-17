@@ -219,8 +219,8 @@ CREATE TRIGGER tasks_done_clears_overdue BEFORE UPDATE ON tasks
 	FOR EACH ROW EXECUTE FUNCTION tasks_done_clears_overdue();
 ```
 
-The platform runs `fabrika db codegen --verify` at every start; it fails when the schema holds database code that no
-migration declares.
+The platform's build runs `fabrika db codegen --verify` on a database it migrates from scratch; it fails when the
+committed `schema.generated.ts` is stale, or the schema holds database code that no migration declares.
 
 ## The table policies
 

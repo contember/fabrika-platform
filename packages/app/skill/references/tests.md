@@ -22,8 +22,8 @@ longer writes. Commit them; never edit, format or import them (`generated-test-h
   actions: the membership roles the input names, or every one of the dimension when it names none. The caller of an
   endpoint that `issues` also holds the actions its link grants.
 
-Run them after every change of the contract or the tables. The platform runs them at every start, and the
-application is not ready until each passes. A failing generated test is a bug in the handler, the policy or the
+Run them after every change of the contract or the tables. The platform's build runs them, and no version deploys
+until each passes. A failing generated test is a bug in the handler, the policy or the
 fixtures, never in the test: do not loosen access to make it pass. A case that throws instead of failing an
 assertion names what the generator could not build: an input the schema refuses, an input the handler refused (400),
 which the fixtures below supply, or a `SeedLimitError` of the seed (below). Do not reshape the contract or the schema
