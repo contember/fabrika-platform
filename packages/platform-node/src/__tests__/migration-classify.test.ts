@@ -893,3 +893,53 @@ describe("SQLite's table options", () => {
 		)
 	})
 })
+
+describe("SQLite's lexical rules", () => {
+	const HIDDEN = 'CREATE TRIGGER audit AFTER INSERT ON t BEGIN DELETE FROM t; END;'
+	const triggersAfter = (sql: string): number => {
+		const db = new Database(':memory:')
+		db.run(sql)
+		const count = db.query<{ n: number }, []>("SELECT count(*) AS n FROM sqlite_master WHERE type = 'trigger'").get()?.n ?? 0
+		db.close()
+		return count
+	}
+	const reasons = (sql: string, dialect: 'postgres' | 'sqlite'): string[] =>
+		classifyMigrations([{ name: FILE, sql }], SCHEMA, { dialect }).files.flatMap((file) => file.refused.map((refused) => refused.reason))
+
+	test('a statement SQLite runs is classified, where Postgres would read a comment or a dollar-quoted body', () => {
+		for (
+			const sql of [
+				// SQLite's block comment does not nest: it ends at the first `*/`.
+				`CREATE TABLE t (x TEXT) /* /* */ ; ${HIDDEN} -- */`,
+				// SQLite has no dollar quoting: `$q$` is a parameter, and the text after it runs.
+				`CREATE TABLE t (x TEXT); INSERT INTO t (x) VALUES ($q$); ${HIDDEN} -- $q$);`,
+			]
+		) {
+			expect({ sql, triggers: triggersAfter(sql) }).toEqual({ sql, triggers: 1 })
+			expect({ sql, refused: reasons(sql, 'sqlite') }).toEqual({ sql, refused: ['CREATE TRIGGER without EXECUTE FUNCTION', 'END'] })
+			// Postgres reads the same text as a comment or a dollar-quoted body, as the classifier always did.
+			expect({ sql, refused: reasons(sql, 'postgres') }).toEqual({ sql, refused: [] })
+		}
+	})
+
+	test('text SQLite reads as a comment or a quoted name is one, as SQLite reads it', () => {
+		const comment = `CREATE TABLE t (x TEXT); -- a note\r${HIDDEN}`
+		expect(triggersAfter(comment)).toBe(0)
+		expect(reasons(comment, 'sqlite')).toEqual([])
+		expect(reasons(comment, 'postgres')).toEqual(['CREATE TRIGGER without EXECUTE FUNCTION', 'END'])
+		for (const sql of ['CREATE TABLE [odd;name] (x TEXT) STRICT', 'CREATE TABLE `odd;name` (x TEXT) STRICT']) {
+			expect({ sql, triggers: triggersAfter(sql) }).toEqual({ sql, triggers: 0 })
+			expect({ sql, refused: reasons(sql, 'sqlite') }).toEqual({ sql, refused: [] })
+		}
+	})
+
+	test("a SQLite file's framework names and access views are read with its own rules", () => {
+		const sql = 'CREATE VIEW open_grants AS SELECT * FROM [grants]; CREATE VIEW nested AS /* /* */ SELECT * FROM [fabrika_jobs]; -- */'
+		expect(reasons(sql, 'sqlite')).toEqual(["a reference to the framework's fabrika_jobs"])
+		const classified = classifyMigrations([{ name: FILE, sql: 'CREATE VIEW open_grants AS SELECT * FROM [grants];' }], SCHEMA, {
+			dialect: 'sqlite',
+			accessTables: new Set(['grants']),
+		})
+		expect(classified.files[0]?.deviations.map((deviation) => `${deviation.kind} ${deviation.object}`)).toEqual(['view open_grants'])
+	})
+})
