@@ -346,7 +346,7 @@ function suite(dialect: 'sqlite' | 'postgres', open: () => Promise<Backend>, clo
 			})
 
 			// A person directory: each entry names the identity it belongs to, and the rule "read and update the entry whose
-			// identity is the caller" is this one view. Every principal sees its own entry, and only that one.
+			// identity is the caller" is this one view.
 			test('each principal lists only its own entry, and one the view names nowhere lists nothing', async () => {
 				const listedBy = (principal: string) =>
 					asCaller(
@@ -359,8 +359,12 @@ function suite(dialect: 'sqlite' | 'postgres', open: () => Promise<Backend>, clo
 			})
 
 			test('a Ref through the relation reads the own entry, and finds no other', async () => {
-				expect(await invoke('query', (db) => call(db.target(ref('profiles.read', 'pa'), 'on'), 'get'))).toMatchObject({ id: 'pa', display_name: 'Alice' })
-				await expect(invoke('query', (db) => call(db.target(ref('profiles.read', 'pb'), 'on'), 'get'))).rejects.toThrow(NotFoundError)
+				await asCaller('user:bob', async (authority, caller) => {
+					const read = (id: string) =>
+						invoke('query', (db) => call(db.target(authority.ref('person', 'profiles.read', id, {}, ['self']), 'on'), 'get'), caller)
+					expect(await read('pb')).toMatchObject({ id: 'pb', display_name: 'Bob' })
+					await expect(read('pa')).rejects.toThrow(NotFoundError)
+				})
 			})
 
 			test('another principal edits its own entry and not the caller’s', async () => {
