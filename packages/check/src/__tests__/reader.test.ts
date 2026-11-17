@@ -384,6 +384,22 @@ describe('initialization order', () => {
 	})
 })
 
+describe("a schema module's type declarations", () => {
+	test('a type alias or an interface between consts leaves the contract as it was', () => {
+		const typed = SCHEMAS.replace('export const Note', 'export type Id = string\ninterface Row { id: Id }\nexport const Note')
+		expect(typed).not.toBe(SCHEMAS)
+		expect(readContractSource(application(BASE, typed), {})).toEqual(readContractSource(application(BASE), {}))
+	})
+
+	test('an enum, a declare module and an export of a type are still refused where they are', () => {
+		expect(refusal(application(BASE, `${SCHEMAS}enum E { A }\n`))).toEqual(['src/schemas.ts:4:1 literal top-level TSEnumDeclaration'])
+		expect(refusal(application(BASE, `${SCHEMAS}declare module 'm' {}\n`))).toEqual(['src/schemas.ts:4:1 literal top-level TSModuleDeclaration'])
+		expect(refusal(application(BASE, `${SCHEMAS}type T = string\nexport { T }\n`))).toEqual([
+			"src/schemas.ts:5:10 literal exports 'T', which is not a const of this module",
+		])
+	})
+})
+
 describe('the resource budget', () => {
 	/** `S0 = z.string()`, then each `Si` holds the previous one twice: 2^depth nodes once expanded. */
 	const exponential = (depth: number): string => {
