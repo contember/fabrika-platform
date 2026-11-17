@@ -3698,9 +3698,15 @@ async function heldThroughPaths(
 	}
 	const now = new Date()
 	const session = sessionOf(runtime)
-	const reached = async (terms: readonly OperationNode[], column: string): Promise<Readonly<Record<string, unknown>> | undefined> => {
+	const reached = async (
+		terms: readonly OperationNode[],
+		column: string,
+		inside?: readonly string[],
+	): Promise<Readonly<Record<string, unknown>> | undefined> => {
 		if (terms.length === 0) return undefined
-		const scope = AndNode.create(equals(owner.name, keyOf(owner), id), anyOf(terms))
+		const found = AndNode.create(equals(owner.name, keyOf(owner), id), anyOf(terms))
+		// A member-bound access term is not narrowed to the node (ADR-0076): the object's own column is, as the database compares it.
+		const scope = inside === undefined ? found : AndNode.create(found, ParensNode.create(isIn(owner.name, column, valueList(inside))))
 		const context: GuardContext = { root: 'SelectQueryNode', table: owner.name, joins: {}, scope, subqueries: layer.subqueries }
 		const columns = column === keyOf(owner) ? [column] : [keyOf(owner), column]
 		const [row] = await session.run<Readonly<Record<string, unknown>>>(locateNode(owner.name, columns, scope), context)
@@ -3713,7 +3719,7 @@ async function heldThroughPaths(
 		const column = hold.inside === null ? keyOf(owner) : nodeColumnOf(owner, hold.inside.dimension)
 		const row = column === undefined
 			? undefined
-			: await reached(relationTerms(layer.relations, owner, hold, principal, action, now, heldThrough(action)), column)
+			: await reached(relationTerms(layer.relations, owner, hold, principal, action, now, heldThrough(action)), column, hold.inside?.values)
 		if (row === undefined || column === undefined) continue
 		if (hold.inside === null) {
 			held[held.length] = hold
@@ -3723,8 +3729,6 @@ async function heldThroughPaths(
 		if (typeof node !== 'string') {
 			throw new PolicyError(`${owner.name}.${column} came back as ${typeof node}; a containment column holds its scope value as text`)
 		}
-		// A member-bound access term is not narrowed to the node (ADR-0076): a row it maps outside the hold's nodes gets no Ref.
-		if (!hold.inside.values.includes(node)) continue
 		held[held.length] = freeze({ relation: hold.relation, inside: freeze({ dimension: hold.inside.dimension, values: freeze([node]) }) })
 	}
 	const through: ContainerGrant[] = []
