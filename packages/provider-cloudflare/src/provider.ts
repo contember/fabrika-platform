@@ -329,8 +329,8 @@ const connectorBindings = (contract: ContractArtifact | null): Readonly<Record<s
 const withIamIdentity = (authored: Worker, iamAppId: string): Worker => {
 	const application = applicationWorker(authored)
 	const declared = application.options.bindings?.['IAM']
-	// A resource under the name is no IAM binding; oblaka provisions it, and the bounds check whatever it emits.
-	if (declared === undefined || 'getId' in declared) return authored
+	// A skipped binding or a resource under the name is no IAM binding; oblaka provisions it, and the bounds check whatever it emits.
+	if (!declared || 'getId' in declared) return authored
 	const configured = new Worker({
 		...application.options,
 		bindings: { ...application.options.bindings, IAM: new IamApplicationReference(iamAppId, 'application', declared) },

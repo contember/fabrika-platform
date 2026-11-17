@@ -864,7 +864,7 @@ describe('Cloudflare provider', () => {
 		const { root, app } = provisioned()
 		const services = (worker: Worker) => {
 			const iam = worker.options.bindings?.['IAM']
-			return iam !== undefined && 'configureBinding' in iam && !('getId' in iam)
+			return iam && 'configureBinding' in iam && !('getId' in iam)
 				? iam.configureBinding({ config: {}, binding: 'IAM', env: 'stage' }).services
 				: undefined
 		}
@@ -1407,8 +1407,8 @@ describe("another application's names (ADR-0048)", () => {
 		expect(result.status).toBe('succeeded')
 		const { app } = provisioned()
 		const reference = app.options.bindings?.['FABRIKA_CONNECT_CATALOG']
-		expect(reference).toBeInstanceOf(ServiceReference)
-		expect(reference?.configureBinding({ config: {}, binding: 'FABRIKA_CONNECT_CATALOG', env: 'prod' })).toEqual({
+		if (!(reference instanceof ServiceReference)) throw new Error('FABRIKA_CONNECT_CATALOG is not a ServiceReference')
+		expect(reference.configureBinding({ config: {}, binding: 'FABRIKA_CONNECT_CATALOG', env: 'prod' })).toEqual({
 			services: [{ binding: 'FABRIKA_CONNECT_CATALOG', service: 'prod-catalog-proxy', entrypoint: undefined }],
 		})
 		expect(app.options.vars?.['FABRIKA_CONNECT_CATALOG_URL']).toBe('https://catalog.example.com')
