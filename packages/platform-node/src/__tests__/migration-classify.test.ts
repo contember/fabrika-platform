@@ -131,8 +131,11 @@ describe('a paved migration', () => {
 	})
 })
 
-describe('data loss: a statement that deletes stored data', () => {
-	const losses = (sql: string): string[] => classify(sql).dataLoss.map((loss) => `${loss.line} ${loss.statement} ${loss.object}`)
+describe('data loss: a statement that deletes or overwrites stored data, or calls code that may', () => {
+	const losses = (sql: string, functions: readonly string[] = []): string[] =>
+		classify(sql, functions).dataLoss.map((loss) =>
+			`${loss.line} ${loss.statement} ${loss.object}${loss.columns === undefined ? '' : ` (${loss.columns.join(', ')})`}`
+		)
 
 	test('a dropped table or column, an emptied table and a DELETE each name what they delete, with their line', () => {
 		const sql = [
@@ -152,14 +155,125 @@ describe('data loss: a statement that deletes stored data', () => {
 		])
 	})
 
-	test('what keeps every stored row deletes nothing', () => {
+	test('a DROP … CASCADE names each object, since it also drops what depends on it, a column of a dropped type included', () => {
+		const sql = [
+			'DROP TYPE status CASCADE;',
+			'DROP DOMAIN IF EXISTS app_notes.email, phone CASCADE;',
+			'DROP FUNCTION score(int) CASCADE;',
+			'DROP MATERIALIZED VIEW totals CASCADE;',
+			'DROP TRIGGER audit ON deals CASCADE;',
+			'DROP TABLE archive CASCADE;',
+			'DROP TYPE mood;',
+		].join('\n')
+		expect(classify(sql).refused).toEqual([])
+		expect(losses(sql)).toEqual([
+			'1 DROP CASCADE type status',
+			'2 DROP CASCADE domain email',
+			'2 DROP CASCADE domain phone',
+			'3 DROP CASCADE function score',
+			'4 DROP CASCADE materialized view totals',
+			'5 DROP CASCADE trigger deals.audit',
+			'6 DROP TABLE archive',
+			'6 DROP CASCADE table archive',
+		])
+	})
+
+	test('a TRUNCATE … CASCADE says it empties the tables that reference each one too', () => {
+		expect(losses('TRUNCATE deals, deals_old CASCADE;')).toEqual(['1 TRUNCATE CASCADE deals', '1 TRUNCATE CASCADE deals_old'])
+	})
+
+	test('an UPDATE overwrites what it sets, with or without WHERE, and names the columns when it reads every assignment', () => {
+		const sql = [
+			"UPDATE notes SET title = '';",
+			"UPDATE ONLY app_notes.notes AS n SET body = lower(n.body), (a, b) = (1, 2), tags[1] = 'x' WHERE n.id IS DISTINCT FROM NULL;",
+			'UPDATE notes SET flag = a IS DISTINCT FROM b, archived = true FROM other o WHERE o.id = notes.id;',
+			'UPDATE notes SET list = ARRAY[1, 2];',
+		].join('\n')
+		expect(losses(sql)).toEqual([
+			'1 UPDATE notes (title)',
+			'2 UPDATE notes (body, a, b, tags)',
+			'3 UPDATE notes (flag, archived)',
+			'4 UPDATE notes',
+		])
+	})
+
+	test('an UPDATE that sets only columns an ADD COLUMN of the same file added overwrites no stored value', () => {
+		const fills = ['ALTER TABLE notes ADD COLUMN title text, ADD subtitle text;', "UPDATE notes SET title = '', subtitle = title;"]
+		expect(losses(fills.join('\n'))).toEqual([])
+		for (
+			const [before, recorded] of [
+				// The column was there already, with its values.
+				['ALTER TABLE notes ADD COLUMN IF NOT EXISTS title text;', '2 UPDATE notes (title)'],
+				// Another column takes the added one's name.
+				[
+					'ALTER TABLE notes ADD COLUMN title text; ALTER TABLE notes RENAME COLUMN title TO old; ALTER TABLE notes RENAME COLUMN body TO title;',
+					'2 UPDATE notes (title)',
+				],
+				[
+					'ALTER TABLE drafts ADD COLUMN title text; ALTER TABLE drafts RENAME TO archive; ALTER TABLE notes RENAME TO drafts;',
+					'2 UPDATE drafts (title)',
+				],
+			] as const
+		) {
+			const table = recorded.includes('drafts') ? 'drafts' : 'notes'
+			expect(losses(`${before}\nUPDATE ${table} SET title = '';`)).toEqual([recorded])
+		}
+		expect(losses("ALTER TABLE notes ADD COLUMN title text;\nUPDATE notes SET title = '', body = '';")).toEqual(['2 UPDATE notes (title, body)'])
+		// A column another file added has been written since.
+		expect(classifyMigrations([{ name: '1.sql', sql: fills[0] ?? '' }, { name: '2.sql', sql: fills[1] ?? '' }], SCHEMA).files[1]?.dataLoss).toEqual([
+			{ statement: 'UPDATE', object: 'notes', columns: ['title', 'subtitle'], file: '2.sql', line: 1 },
+		])
+	})
+
+	test('an upsert overwrites the rows that already exist; a plain INSERT or ON CONFLICT DO NOTHING overwrites none', () => {
+		const sql = [
+			"INSERT INTO deals (id, stage) VALUES (1, 'open') ON CONFLICT (id) DO UPDATE SET stage = excluded.stage;",
+			"INSERT INTO deals (id, stage) VALUES (1, 'open') ON CONFLICT DO NOTHING;",
+			'INSERT INTO deals (id) SELECT id FROM deals_old;',
+		].join('\n')
+		expect(losses(sql)).toEqual(['1 UPSERT deals'])
+	})
+
+	test('a column converted to another type, with or without USING, may change its values', () => {
+		const sql =
+			'ALTER TABLE deals ALTER amount TYPE numeric(10, 0), ALTER COLUMN note SET DATA TYPE varchar(80) USING btrim(note), ALTER note SET NOT NULL;'
+		expect(losses(sql)).toEqual(['1 ALTER COLUMN TYPE deals.amount', '1 ALTER COLUMN TYPE deals.note'])
+	})
+
+	test('a statement that calls a function of the migration set may change data, once per function; a built-in records nothing', () => {
+		const sql = [
+			'DELETE FROM notes WHERE purge() > 0 AND purge() > 1;',
+			"INSERT INTO notes (title) VALUES (app_notes.slug('x')), (lower('y'));",
+			'ALTER TABLE notes ALTER body TYPE text USING tidy(body);',
+			"UPDATE notes SET title = btrim(title) WHERE length(title) > 0 AND now() > '2026-01-01';",
+		].join('\n')
+		expect(losses(sql, ['purge', 'slug', 'tidy'])).toEqual([
+			'1 DELETE notes',
+			'1 CALL purge',
+			'2 CALL slug',
+			'3 ALTER COLUMN TYPE notes.body',
+			'3 CALL tidy',
+			'4 UPDATE notes (title)',
+		])
+		// A body, a default and a trigger condition run later, not as the migration's statement: database code, reviewed as such.
+		const declared = [
+			'CREATE FUNCTION tidy(t text) RETURNS text LANGUAGE sql AS $$ SELECT purge()::text || t $$;',
+			'CREATE TRIGGER notes_tidy BEFORE INSERT ON notes FOR EACH ROW WHEN (purge() > 0) EXECUTE FUNCTION purge();',
+			"ALTER TABLE notes ALTER COLUMN body SET DEFAULT tidy('');",
+		].join('\n')
+		expect(classify(declared, ['purge', 'tidy']).refused).toEqual([])
+		expect(losses(declared, ['purge', 'tidy'])).toEqual([])
+	})
+
+	test('what keeps every stored value records nothing', () => {
 		const sql = [
 			'CREATE TABLE notes (id uuid PRIMARY KEY, body text);',
 			'ALTER TABLE notes ADD COLUMN title text, ALTER COLUMN body DROP DEFAULT, ALTER body DROP NOT NULL, DROP CONSTRAINT IF EXISTS c;',
 			'ALTER TABLE notes RENAME COLUMN body TO text;',
-			"UPDATE notes SET title = '';",
+			"INSERT INTO notes (id, title) VALUES (gen_random_uuid(), '');",
 			'DROP INDEX notes_title;',
 			'DROP VIEW IF EXISTS recent;',
+			'DROP TYPE IF EXISTS mood RESTRICT;',
 		].join('\n')
 		expect(losses(sql)).toEqual([])
 	})
