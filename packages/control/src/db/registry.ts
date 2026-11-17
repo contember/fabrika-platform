@@ -196,6 +196,10 @@ export class ControlRegistryRepository {
 			)
 	}
 
+	/**
+	 * With `unlessProtected`, the update applies only while no environment of the app is protected, judged in the same
+	 * statement. Null when the app is missing or, with it, when one is protected.
+	 */
 	async updateApp(id: string, patch: {
 		repoUrl?: string
 		defaultBranch?: string
@@ -204,7 +208,10 @@ export class ControlRegistryRepository {
 		configPath?: string | null
 		githubConnectionId?: string | null
 		githubInstallationId?: number | null
-	}): Promise<AppRow | null> {
+	}, options: { readonly unlessProtected?: boolean } = {}): Promise<AppRow | null> {
+		const unprotected = options.unlessProtected === true
+			? ' AND NOT EXISTS (SELECT 1 FROM app_envs WHERE app_envs.app_id = apps.id AND app_envs.protected = 1)'
+			: ''
 		return this.d1
 			.prepare(`UPDATE apps SET
 				repo_url = COALESCE(?, repo_url),
@@ -214,7 +221,7 @@ export class ControlRegistryRepository {
 				config_path = COALESCE(?, config_path),
 				github_connection_id = CASE WHEN ? = 1 THEN ? ELSE github_connection_id END,
 				github_installation_id = CASE WHEN ? = 1 THEN ? ELSE github_installation_id END
-				WHERE id = ? RETURNING *`)
+				WHERE id = ?${unprotected} RETURNING *`)
 			.bind(
 				patch.repoUrl ?? null,
 				patch.defaultBranch ?? null,
