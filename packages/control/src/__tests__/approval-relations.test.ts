@@ -433,6 +433,39 @@ describe("a table's access view in the approval diff", () => {
 		expect(classifyAccess(principal, principal).changes).toEqual([])
 	})
 
+	test('is shown on a new table, and publishes only to a release from its floor', () => {
+		const viewed = shared("principal: 'principal_id'")
+		const contract = viewed.contract
+		if (contract === null) throw new Error('the fixture has a contract')
+		const { notes: _, ...tables } = contract.tables
+		expect(lines({ ...viewed, contract: { ...contract, tables } }, viewed)).toContainEqual({
+			effect: 'widens',
+			line: 'Relation `member` reaches the rows of `notes` that view `shared_notes` lists for the caller in `principal_id`',
+			review: 'closer',
+		})
+		expect(relationFields(contract)).toContain('access of table notes')
+		expect(relationGrantsRefusal(contract, '0.9.0-dev.13')).toContain('enforces from 0.9.0-dev.14')
+		expect(relationGrantsRefusal(contract, '0.9.0-dev.14')).toBeNull()
+	})
+
+	test("an access entry over a view already deployed shows the view's SQL again", async () => {
+		const sql = 'CREATE VIEW shared_notes AS SELECT note_id, principal_id, workspace_id FROM note_members;\n'
+		const read = async (source: Map<string, string>) => {
+			const commit = await memoryCommits({ ...Object.fromEntries(source), 'db/migrations/20261012110000_shared.sql': sql }).open({
+				repoUrl: 'github.com/acme/notes',
+				commitSha: 'c'.repeat(40),
+				signal: new AbortController().signal,
+			})
+			return readAccessSnapshot(commit, '', 'notes', [])
+		}
+		const before = await read(files())
+		const after = await read(files({ access: "{ member: { view: 'shared_notes', row: 'note_id', principal: 'principal_id' } }" }))
+		const shown = lines(before, after).find(({ line }) => line.startsWith('Migration'))
+		expect(shown?.line).toContain('its SQL decides who relation `member` on `notes` reaches, which a new access entry names')
+		expect(shown?.review).toBe('closer')
+		expect(lines(after, after)).toEqual([])
+	})
+
 	test("the view's SQL is shown as database code that decides the relation", async () => {
 		const source = files({ access: "{ member: { view: 'shared_notes', row: 'note_id', principal: 'principal_id' } }" })
 		const sql = 'CREATE VIEW shared_notes AS SELECT note_id, principal_id, workspace_id FROM note_members;\n'

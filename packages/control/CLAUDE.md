@@ -667,8 +667,10 @@ other environment, before the provider prepares anything, and the write maps a r
   `table.access`, a role's `via`): a new `via` action, source table, reveal, read-through or write-through action
   widens, a longer or self delegation widens, an added `when` or `relationWhen` narrows, a removed or changed one
   widens. An added or changed access view widens with closer review, and a removed one narrows (ADR-0076); the
-  database-code line of a view that some table names under `access` says which relations its SQL decides. A reader that
-  ignores `access` reaches less, so `relationFields` does not count it. A member
+  database-code line of a view that some table names under `access` says which relations its SQL decides, and an entry
+  that newly names an already-deployed view shows its SQL again. `access` counts at `RELATION_WHEN_SINCE`: an older
+  release refuses the field at build and boot rather than ignoring it, and the floor turns that failure into a refusal
+  before anything publishes. A member
   reveal keyed by a read-through dimension names its path and shows its `assign` as a reveal's. `writeThrough` and such
   a member reveal reach less when ignored, so `relationFields` does not count them. A membership role's `via` needs no
   floor of its own: a framework before `0.9.0-dev.14` refuses to build one, and reads no `~relin` entry, which IAM

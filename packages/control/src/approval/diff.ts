@@ -885,6 +885,7 @@ function siteSubject(site: string): ChangeSubjectDto {
 function compareDatabaseCode(changes: Changes, baseline: AccessSnapshot, candidate: AccessSnapshot): void {
 	const decides = accessViewsOf(candidate.contract)
 	const declares = (deviation: MigrationDeviation) => `${databaseObject(deviation)}${decidedBy(decides, deviation)}`
+	const newlyDecided = viewsNewlyDeciding(baseline.contract, candidate.contract)
 	const before = new Map((baseline.databaseCode ?? []).map((deviation) => [deviationKey(deviation), deviation]))
 	const after = new Map((candidate.databaseCode ?? []).map((deviation) => [deviationKey(deviation), deviation]))
 	const beforeFiles = byName(baseline.migrations)
@@ -898,8 +899,27 @@ function compareDatabaseCode(changes: Changes, baseline: AccessSnapshot, candida
 		} else if (from === undefined) place(to.file, closer('off-road', `${migrationName(to.file)} declares ${declares(to)}`))
 		else if (beforeFiles.get(to.file)?.checksum !== afterFiles.get(to.file)?.checksum) {
 			place(to.file, closer('off-road', `${migrationName(to.file)} changes, and declares ${declares(to)}`))
+		} else if (to.kind === 'view' && newlyDecided.has(to.object)) {
+			// SQL approved before it decided anything is read again once an access entry makes it decide (ADR-0076).
+			place(to.file, closer('off-road', `${migrationName(to.file)} declares ${declares(to)}, which a new access entry names`))
 		}
 	}
+}
+
+/** The views an access entry the candidate adds or changes names: their SQL now decides access it did not decide before. */
+function viewsNewlyDeciding(before: ContractArtifact | null, after: ContractArtifact | null): ReadonlySet<string> {
+	const views = new Set<string>()
+	for (const [table, policy] of Object.entries(after?.tables ?? {})) {
+		for (const [relation, access] of Object.entries(policy.access ?? {})) {
+			const was = before?.tables[table]?.access?.[relation]
+			if (was === undefined || !sameAccess(was, access)) views.add(access.view)
+		}
+	}
+	return views
+}
+
+function sameAccess(left: AccessArtifact, right: AccessArtifact): boolean {
+	return left.view === right.view && left.row === right.row && left.principal === right.principal && left.member === right.member
 }
 
 /**
@@ -1950,7 +1970,7 @@ function accessChanges(name: string, before: TablePolicyArtifact['access'], afte
 		}
 		const reach = `Relation \`${relation}\` reaches the rows of \`${name}\` that view \`${is.view}\` lists for ${accessBindings(is)}`
 		if (was === undefined) return [closer('off-road', reach)]
-		if (was.view === is.view && was.row === is.row && was.principal === is.principal && was.member === is.member) return []
+		if (sameAccess(was, is)) return []
 		return [closer('off-road', `${reach}, instead of view \`${was.view}\` for ${accessBindings(was)}`)]
 	})
 }
