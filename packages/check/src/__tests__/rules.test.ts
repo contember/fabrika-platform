@@ -40,8 +40,8 @@ const FILE_COLUMN_APPLICATION: Readonly<Record<string, string>> = {
 /** The clean application whose notes a relation reaches through an access view (ADR-0076). */
 const ACCESS_VIEW_SOURCES: Readonly<Record<string, string>> = {
 	...CLEAN_APPLICATION,
-	'fabrika.contract.ts': CLEAN_CONTRACT.replace("\tactions: {", "\trelations: { shared: { dimension: 'note' } },\n\tactions: {"),
-	'src/vocabulary.ts': CLEAN_VOCABULARY.replace("\tactions: {", "\trelations: { shared: { dimension: 'note' } },\n\tactions: {"),
+	'fabrika.contract.ts': CLEAN_CONTRACT.replace('\tactions: {', "\trelations: { shared: { dimension: 'note' } },\n\tactions: {"),
+	'src/vocabulary.ts': CLEAN_VOCABULARY.replace('\tactions: {', "\trelations: { shared: { dimension: 'note' } },\n\tactions: {"),
 	'src/db/tables.ts': CLEAN_TABLES.replace(
 		"\t\tinsert: ['title'],\n",
 		"\t\tinsert: ['title'],\n\t\taccess: { shared: { view: 'shared_notes', row: 'note_id', principal: 'principal_id' } },\n",
@@ -50,7 +50,7 @@ const ACCESS_VIEW_SOURCES: Readonly<Record<string, string>> = {
 		'title: string }\n',
 		'title: string }\n\tshared_notes: { note_id: string; principal_id: string }\n',
 	).replace(
-		"foreignKeys: [] } }",
+		'foreignKeys: [] } }',
 		"foreignKeys: [] }, shared_notes: { columns: ['note_id', 'principal_id'], foreignKeys: [], view: true } }",
 	),
 }
@@ -667,12 +667,14 @@ const cases: readonly RuleCase[] = [
 		rule: 'access-view-key',
 		bad: {
 			...ACCESS_VIEW_APPLICATION,
-			'db/migrations/20261001000000_notes.sql': `CREATE TABLE notes (id TEXT NOT NULL, workspace_id TEXT NOT NULL, title TEXT NOT NULL);\n${SHARED_NOTES_VIEW}`,
+			'db/migrations/20261001000000_notes.sql':
+				`CREATE TABLE notes (id TEXT NOT NULL, workspace_id TEXT NOT NULL, title TEXT NOT NULL);\n${SHARED_NOTES_VIEW}`,
 		},
 		expected: ['db/migrations/20261001000000_notes.sql:1:1'],
 		good: {
 			...ACCESS_VIEW_APPLICATION,
-			'db/migrations/20261001000000_notes.sql': `CREATE TABLE notes (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, title TEXT NOT NULL);\n${SHARED_NOTES_VIEW}`,
+			'db/migrations/20261001000000_notes.sql':
+				`CREATE TABLE notes (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, title TEXT NOT NULL);\n${SHARED_NOTES_VIEW}`,
 		},
 	},
 	{
