@@ -39,8 +39,12 @@ import { CLOUDFLARE_PROXY_WORKER_DIR, PROXY_MANIFEST_DEFINE, proxyManifestJson }
 import type { RunnerOutcomeFile } from '../runner-protocol'
 import { PUBLISHED_PRERELEASES } from './published-prereleases'
 
+/** Every directory a fixture linked the CLI in: a frozen install of the same checkout links it there again. */
+const linkedClis = new Set<string>()
+
 /** Link the application's CLI where the checkout's `bun install` would, under `dir`. */
 const withApplicationCli = async (dir: string): Promise<string> => {
+	linkedClis.add(dir)
 	const cli = join(dir, 'node_modules', '.bin', 'fabrika')
 	await mkdir(dirname(cli), { recursive: true })
 	await writeFile(cli, '')
@@ -115,6 +119,8 @@ type Bindable = Pick<ServiceReference, 'configureBinding'>
 /** Every command succeeds; the application Worker holds no secret yet, so `wrangler secret list` prints an empty list. */
 const succeeded = (spec: CommandSpec): CommandResult => ({ exitCode: 0, stdout: isSecretList(spec) ? '[]' : '', stderr: '' })
 
+const isReinstall = (spec: CommandSpec): boolean => spec.command === 'bun' && spec.args.join(' ') === 'install --frozen-lockfile'
+
 const isSecretList = (spec: CommandSpec): boolean => spec.args[0] === 'secret' && spec.args[1] === 'list'
 
 /** The command the deploy runs after the application Worker's `wrangler deploy`, to find the managed secrets it no longer writes. */
@@ -140,6 +146,10 @@ const makeCollaborators = (
 	},
 	runCommand: async (spec) => {
 		rec.commands.push(spec)
+		// The check step empties `node_modules` and reinstalls: the install links the application's CLI again.
+		if (isReinstall(spec)) {
+			for (const dir of linkedClis) if (dir === spec.cwd || dir.startsWith(`${spec.cwd}/`)) await withApplicationCli(dir)
+		}
 		return runCommand === undefined ? commandResult(spec) : runCommand(spec)
 	},
 	provision: async (input) => {
@@ -182,7 +192,7 @@ const deploy = (
 		readonly stateNamespace?: string
 		readonly env?: string
 		readonly checkoutDir?: string
-		/** Where the runner installed the checkout: the parent of `checkoutDir` by default. */
+		/** Where the runner installed the checkout: `REPO` by default, or `checkoutDir` when one is given. */
 		readonly cwd?: string
 		readonly configPath?: string
 		readonly generatedServices?: GeneratedService[]
@@ -236,7 +246,8 @@ const deploy = (
 		...(options.returnOrigins === undefined ? {} : { returnOrigins: options.returnOrigins }),
 		...(options.crossOrigins === undefined ? {} : { crossOrigins: options.crossOrigins }),
 		...(options.operationsOrigin === undefined ? {} : { operationsOrigin: options.operationsOrigin }),
-		cwd: options.cwd ?? dirname(options.checkoutDir ?? `${REPO}/app`),
+		// Never above a fixture: the check step empties `node_modules` where the runner installed.
+		cwd: options.cwd ?? options.checkoutDir ?? REPO,
 		configPath: options.configPath ?? 'fabrika.config.ts',
 		...(options.stateNamespace === undefined ? {} : { stateNamespace: options.stateNamespace }),
 		secrets: options.secrets ?? {},
@@ -361,7 +372,6 @@ describe('Cloudflare provider', () => {
 		expect(result.status).toBe('succeeded')
 		expect(rec.commands.map((command) => [command.command, ...command.args])).toEqual([
 			['sh', '-c', 'bun run build'],
-			APP_BUILD,
 			...checkCommands(),
 			['wrangler', 'd1', 'migrations', 'apply', 'DB', '--remote'],
 			['wrangler', 'deploy'],
@@ -369,10 +379,12 @@ describe('Cloudflare provider', () => {
 			SECRET_LIST,
 			['wrangler', 'secret', 'put', 'API_KEY'],
 		])
-		// The build runs in the Worker's directory; the entry build and every check in the application's.
+		// The build runs in the Worker's directory, the reinstall where the runner installed, and every check in the application's.
 		expect(rec.commands.map((command) => command.cwd)).toEqual([
 			`${REPO}/app/worker`,
-			...Array.from({ length: 6 }, () => `${REPO}/app`),
+			`${REPO}/app`,
+			REPO,
+			...Array.from({ length: 5 }, () => `${REPO}/app`),
 			`${REPO}/app/worker`,
 			// The application is deployed first, from the checkout; the proxy that binds it after, from the platform's own copy
 			// of this package; the application's secrets are swept last.
@@ -445,15 +457,14 @@ describe('Cloudflare provider', () => {
 		expect(rec.provisions[0]?.stateNamespace).toBe('demo-state')
 		expect(rec.commands.map((command) => [command.command, ...command.args])).toEqual([
 			['sh', '-c', 'bun run build'],
-			APP_BUILD,
 			...checkCommands(),
 			['wrangler', 'deploy'],
 			['wrangler', 'deploy'],
 			SECRET_LIST,
 			['wrangler', 'secret', 'put', 'API_KEY'],
 		])
-		expect(rec.commands[7]?.env).toEqual({ CLOUDFLARE_API_TOKEN: 'tok-1', CLOUDFLARE_ACCOUNT_ID: 'acc-1' })
-		expect(rec.commands[10]?.stdin).toBe('secret-value')
+		expect(rec.commands[8]?.env).toEqual({ CLOUDFLARE_API_TOKEN: 'tok-1', CLOUDFLARE_ACCOUNT_ID: 'acc-1' })
+		expect(rec.commands[11]?.stdin).toBe('secret-value')
 		expect(rec.outcomes).toEqual([{ iamReconcile: { app: 'demo', schemaJson: '{"scopes":[],"actions":[],"roles":{},"contract":true}' } }])
 	})
 
@@ -464,7 +475,6 @@ describe('Cloudflare provider', () => {
 		expect(rec.outcomes).toEqual([{ iamReconcile: { app: 'demo', schemaJson: JSON.stringify(schema) } }])
 		expect(rec.reconciled).toEqual([])
 		expect(rec.commands.map((command) => [command.command, ...command.args])).toEqual([
-			APP_BUILD,
 			...checkCommands(),
 			['wrangler', 'deploy'],
 			['wrangler', 'deploy'],
@@ -505,7 +515,7 @@ describe('Cloudflare provider', () => {
 				return { exitCode: 0, stdout: '', stderr: '' }
 			},
 		})
-		expect(result.steps.map((step) => step.status)).toEqual(['succeeded', 'succeeded', 'succeeded', 'failed', 'skipped'])
+		expect(result.steps.map((step) => step.status)).toEqual(['succeeded', 'succeeded', 'failed', 'skipped'])
 		expect(stepError(result, 'deploy-worker')).toBe('deploy cancelled')
 		expect(rec.outcomes).toHaveLength(0)
 	})
@@ -525,7 +535,7 @@ describe('Cloudflare provider', () => {
 		expect(rec.outcomes).toHaveLength(0)
 		expect(rec.logs.some((line) => line.includes('would run build'))).toBe(true)
 		expect(rec.logs).toContain(
-			`  [dry-run] would run the checks in ${REPO}/app: tests, tsc, fabrika-check, fabrika db codegen --verify, fabrika db test-isolation`,
+			`  [dry-run] would run the checks in ${REPO}/app: tests, bun install --frozen-lockfile into an empty node_modules, fabrika app build --provider=cloudflare --config=fabrika.config.ts, tsc, fabrika-check, fabrika db codegen --verify, fabrika db test-isolation`,
 		)
 		expect(rec.logs.some((line) => line.includes('wrangler secret put API_KEY'))).toBe(true)
 	})
@@ -537,8 +547,8 @@ describe('Cloudflare provider', () => {
 	test('honours an already-aborted run before the first mutation', async () => {
 		const result = await deploy(rec, config(), { signal: AbortSignal.abort() })
 		expect(result.status).toBe('failed')
-		expect(result.steps.map((step) => step.status)).toEqual(['skipped', 'skipped', 'skipped', 'skipped', 'skipped'])
-		expect(rec.logs).toContain('∅ build: deploy cancelled')
+		expect(result.steps.map((step) => step.status)).toEqual(['skipped', 'skipped', 'skipped', 'skipped'])
+		expect(rec.logs).toContain('∅ check: deploy cancelled')
 		expect(rec.provisions).toHaveLength(0)
 	})
 
@@ -567,11 +577,11 @@ describe('Cloudflare provider', () => {
 					: { exitCode: 0, stdout: '', stderr: '' },
 		})
 		expect(result.status).toBe('failed')
-		expect(result.steps.map((step) => step.status)).toEqual(['succeeded', 'succeeded', 'succeeded', 'failed', 'skipped', 'skipped'])
+		expect(result.steps.map((step) => step.status)).toEqual(['succeeded', 'succeeded', 'failed', 'skipped', 'skipped'])
 		expect(stepError(result, 'deploy-worker')).toBe('wrangler deploy failed (exit 1): deploy failed')
 		expect(rec.logs).toContain('  • deploy-worker — Deploy the Worker (`wrangler deploy`)')
 		expect(rec.logs).toContain('✗ deploy-worker: wrangler deploy failed (exit 1): deploy failed')
-		expect(rec.commands.map((command) => command.args[0])).toEqual(['app', ...CHECK_ARGS, 'deploy'])
+		expect(rec.commands.map((command) => command.args[0])).toEqual([...CHECK_ARGS, 'deploy'])
 	})
 
 	test('runs the checkout build with no platform credential in its environment', async () => {
@@ -1051,7 +1061,6 @@ describe('Cloudflare provider', () => {
 		})
 		await deploy(rec, assetsApp(), { checkoutDir })
 		expect(rec.commands.map((command) => [command.command, ...command.args, command.cwd === CLOUDFLARE_PROXY_WORKER_DIR])).toEqual([
-			[join(checkoutDir, 'node_modules', '.bin', 'fabrika'), ...APP_BUILD.slice(1), false],
 			...checkCommands(checkoutDir).map((command) => [...command, false]),
 			['wrangler', 'deploy', false],
 			['wrangler', 'deploy', true],
@@ -1079,13 +1088,10 @@ describe('Cloudflare provider', () => {
 				`Worker \`stage-demo\` assets directory \`public\` contains \`${path}\`, which is a symbolic link; wrangler follows it and would publish its target`,
 			)
 		}
-		// The entry build runs before the walk; nothing of the application is deployed.
+		// The checks, the entry build among them, run before the walk; nothing of the application is deployed.
 		expect(rec.commands.filter((command) => command.cwd !== CLOUDFLARE_PROXY_WORKER_DIR).map((command) => command.args[0])).toEqual([
-			'app',
 			...CHECK_ARGS,
-			'app',
 			...CHECK_ARGS,
-			'app',
 			...CHECK_ARGS,
 		])
 	})
@@ -1099,10 +1105,7 @@ describe('Cloudflare provider', () => {
 		expect(stepError(result, 'deploy-worker')).toContain(
 			'Worker `stage-demo` assets directory `public` is a symbolic link; wrangler follows it and would publish its target',
 		)
-		expect(rec.commands.filter((command) => command.cwd !== CLOUDFLARE_PROXY_WORKER_DIR).map((command) => command.args[0])).toEqual([
-			'app',
-			...CHECK_ARGS,
-		])
+		expect(rec.commands.filter((command) => command.cwd !== CLOUDFLARE_PROXY_WORKER_DIR).map((command) => command.args[0])).toEqual(CHECK_ARGS)
 	})
 
 	test('refuses a symbolic link the checkout plants in its own build step, after `open` has returned', async () => {
@@ -1121,7 +1124,6 @@ describe('Cloudflare provider', () => {
 		expect(stepError(result, 'deploy-worker')).toContain('Worker `stage-demo` assets directory `public` contains `x`, which is a symbolic link')
 		expect(rec.commands.filter((command) => command.cwd !== CLOUDFLARE_PROXY_WORKER_DIR).map((command) => command.args[0])).toEqual([
 			'-c',
-			'app',
 			...CHECK_ARGS,
 		])
 	})
@@ -1271,7 +1273,7 @@ describe('a contract application on Cloudflare (ADR-0048)', () => {
 			secrets: {},
 			vars: {},
 			managedEnvironment: {},
-			approved: { kind: 'contract', contract: notesArtifact, contractDigest: contractDigest(notesArtifact) },
+			approved: { kind: 'contract', contract: notesArtifact, contractDigest: contractDigest(notesArtifact), checker: '0.9.1' },
 			dryRun: true,
 			signal: new AbortController().signal,
 			log: () => {},
@@ -1659,7 +1661,6 @@ describe('a full contract application on Cloudflare (ADR-0065)', () => {
 		expect(result.status).toBe('succeeded')
 		const commands = rec.commands.map((command) => [command.command, ...command.args.filter((arg) => !arg.startsWith('/'))])
 		expect(commands).toEqual([
-			APP_BUILD,
 			...checkCommands(),
 			['wrangler', 'deploy', '--secrets-file'],
 			['wrangler', 'deploy'],
@@ -1684,14 +1685,13 @@ describe('a full contract application on Cloudflare (ADR-0065)', () => {
 		expect(result.status).toBe('failed')
 		expect(stepError(result, 'deploy-worker')).toBe('wrangler secret list failed (exit 1): listing refused')
 		expect(rec.commands.map((command) => [command.command, ...command.args])).toEqual([
-			APP_BUILD,
 			...checkCommands(),
 			['wrangler', 'deploy'],
 			['wrangler', 'deploy'],
 			SECRET_LIST,
 		])
 		expect(rec.commands.map((command) => command.cwd === CLOUDFLARE_PROXY_WORKER_DIR)).toEqual([
-			...Array.from({ length: 7 }, () => false),
+			...Array.from({ length: 8 }, () => false),
 			true,
 			false,
 		])
@@ -1912,18 +1912,34 @@ const APP_CLI = `${REPO}/app/node_modules/.bin/fabrika`
 
 const APP_BUILD = [APP_CLI, 'app', 'build', '--provider=cloudflare', '--config=fabrika.config.ts']
 
-/** The `check` step's commands in `appDir`, after the entry build: the build's checks through `sh -c`, then the CLI's schema checks. */
-const checkCommands = (appDir = `${REPO}/app`): string[][] => {
-	const cli = join(appDir, 'node_modules', '.bin', 'fabrika')
+/** The `check` step's shell commands in `appDir`: the tests, `tsc` and the checker. */
+const shellChecks = (appDir = `${REPO}/app`): { readonly tests: string[]; readonly tsc: string[]; readonly check: string[] } => {
+	const [tests, tsc, check] = contractChecks(appDir, '0.9.1').checks.map((step) => ['sh', '-c', step.command])
+	if (tests === undefined || tsc === undefined || check === undefined) throw new Error('contractChecks returns three checks')
+	return { tests, tsc, check }
+}
+
+const REINSTALL = ['bun', 'install', '--frozen-lockfile']
+
+/**
+ * The `check` step's commands of an application in `appDir` whose release pins the entry: the tests, a frozen install, the
+ * entry build, `tsc`, the checker, then the CLI's schema checks (the schema types only for a contract with a table).
+ */
+const checkCommands = (appDir = `${REPO}/app`, tables = true, cli = join(appDir, 'node_modules', '.bin', 'fabrika')): string[][] => {
+	const { tests, tsc, check } = shellChecks(appDir)
 	return [
-		...contractChecks(appDir, '0.9.1').checks.map((check) => ['sh', '-c', check.command]),
-		[cli, 'db', 'codegen', '--verify'],
+		tests,
+		REINSTALL,
+		[cli, ...APP_BUILD.slice(1)],
+		tsc,
+		check,
+		...(tables ? [[cli, 'db', 'codegen', '--verify']] : []),
 		[cli, 'db', 'test-isolation'],
 	]
 }
 
 /** The first argument of each `check` command. */
-const CHECK_ARGS = ['-c', '-c', '-c', 'db', 'db']
+const CHECK_ARGS = ['-c', 'install', 'app', '-c', '-c', 'db', 'db']
 
 const authoredWorker = (main: string, bindings: Record<string, Bindable> = {}): CloudflareAppConfig =>
 	config({ resources: () => new Worker({ dir: '.', ...PRIVATE, name: 'demo', compatibility_flags: [], bindings, main }) })
@@ -1962,12 +1978,12 @@ describe('the generated entry of a gated release (pinsGeneratedEntry)', () => {
 		expect(rec.provisions).toEqual([])
 	})
 
-	test("the build step runs the authored pipeline, then the application's own `fabrika app build`", async () => {
+	test("the build step runs the authored pipeline alone; the check step regenerates the entry with the application's own CLI", async () => {
 		const result = await deploy(rec, config({ pipeline: { build: 'bun run build' } }))
 		expect(result.status).toBe('succeeded')
 		expect(result.steps.map((step) => step.id)).toEqual(['build', 'check', 'provision-resources', 'deploy-worker', 'reconcile-schema'])
-		expect(rec.commands.slice(0, 2).map((command) => [command.command, ...command.args])).toEqual([['sh', '-c', 'bun run build'], APP_BUILD])
-		expect(rec.commands[1]?.cwd).toBe(`${REPO}/app`)
+		expect(rec.commands.slice(0, 8).map((command) => [command.command, ...command.args])).toEqual([['sh', '-c', 'bun run build'], ...checkCommands()])
+		expect(rec.commands[3]?.cwd).toBe(`${REPO}/app`)
 	})
 
 	test("the application's CLI gets only PATH, HOME and TMPDIR of the executor's environment, and a failed build logs none of the rest", async () => {
@@ -1978,14 +1994,16 @@ describe('the generated entry of a gated release (pinsGeneratedEntry)', () => {
 			for (const pipeline of [undefined, { build: 'true' }]) {
 				rec.provisions.splice(0)
 				rec.commands.splice(0)
-				// The real command runner, with the CLI swapped for one that prints the environment it got and fails.
+				// The real command runner for the CLI alone, swapped for one that prints the environment it got and fails.
 				const result = await deploy(rec, config(pipeline === undefined ? {} : { pipeline }), {
 					secrets: { API_KEY: executor.API_KEY },
 					managedEnvironment: { FABRIKA_PROXY_SECRET: executor.FABRIKA_PROXY_SECRET },
 					runCommand: (spec) =>
-						defaultCloudflareCollaborators.runCommand(spec.command === APP_CLI ? { ...spec, command: 'sh', args: ['-c', 'env >&2; exit 1'] } : spec),
+						spec.command === APP_CLI
+							? defaultCloudflareCollaborators.runCommand({ ...spec, command: 'sh', args: ['-c', 'env >&2; exit 1'] })
+							: Promise.resolve(succeeded(spec)),
 				})
-				const error = stepError(result, 'build') ?? ''
+				const error = stepError(result, 'check') ?? ''
 				expect(error).toStartWith('fabrika app build failed (exit 1): ')
 				expect(error).toContain('PATH=')
 				for (const value of Object.values(executor)) expect(error).not.toContain(value)
@@ -2003,7 +2021,7 @@ describe('the generated entry of a gated release (pinsGeneratedEntry)', () => {
 		}
 	})
 
-	test("a nested config finds the application's CLI where the workspace links it, up to the checkout and no higher", async () => {
+	test("a nested config reinstalls where the runner installed and finds the application's CLI where the workspace links it, no higher", async () => {
 		const checkout = await mkdtemp(join(tmpdir(), 'fabrika-workspace-'))
 		fixtures.push(checkout)
 		const cli = await withApplicationCli(checkout)
@@ -2012,23 +2030,25 @@ describe('the generated entry of a gated release (pinsGeneratedEntry)', () => {
 		const nested = { checkoutDir: demo, cwd: checkout, configPath: 'apps/demo/fabrika.config.ts' }
 		const result = await deploy(rec, config(), nested)
 		expect(result.status).toBe('succeeded')
-		expect(rec.commands[0]).toMatchObject({ command: cli, args: ['app', 'build', '--provider=cloudflare', '--config=fabrika.config.ts'], cwd: demo })
+		expect(rec.commands.slice(0, 7).map((command) => [command.command, ...command.args])).toEqual(checkCommands(demo, true, cli))
+		expect(rec.commands.slice(0, 3).map((command) => command.cwd)).toEqual([demo, checkout, demo])
 		// The runner installed in `apps/`, so a CLI above it is not the application's.
 		rec.commands.splice(0)
+		rec.provisions.splice(0)
 		const above = await deploy(rec, config(), { ...nested, cwd: join(checkout, 'apps'), configPath: 'demo/fabrika.config.ts' })
-		expect(stepError(above, 'build')).toBe(
+		expect(stepError(above, 'check')).toBe(
 			`fabrika app build: no \`node_modules/.bin/fabrika\` from \`${demo}\` up to \`${
 				join(checkout, 'apps')
 			}\`; the application installs \`@fabrika/cli\``,
 		)
-		expect(rec.commands).toEqual([])
+		expect(rec.commands.map((command) => command.command)).toEqual(['sh', 'bun'])
+		expect(rec.provisions).toEqual([])
 	})
 
-	test("without an authored pipeline the plan still builds, with the application's `fabrika app build` alone", async () => {
+	test('without an authored pipeline the plan has no build step: the check step builds the entry', async () => {
 		const result = await deploy(rec, config())
-		expect(result.steps.map((step) => step.id)).toEqual(['build', 'check', 'provision-resources', 'deploy-worker', 'reconcile-schema'])
+		expect(result.steps.map((step) => step.id)).toEqual(['check', 'provision-resources', 'deploy-worker', 'reconcile-schema'])
 		expect(rec.commands.map((command) => [command.command, ...command.args])).toEqual([
-			APP_BUILD,
 			...checkCommands(),
 			['wrangler', 'deploy'],
 			['wrangler', 'deploy'],
@@ -2036,33 +2056,62 @@ describe('the generated entry of a gated release (pinsGeneratedEntry)', () => {
 		])
 	})
 
-	test('a failed entry build fails the build step, and nothing is provisioned', async () => {
+	test('a failed entry build fails the check step, and nothing is provisioned', async () => {
 		const result = await deploy(rec, config(), {
-			commandResult: (spec) => spec.command === APP_CLI ? { exitCode: 1, stdout: '', stderr: 'no contract' } : succeeded(spec),
+			commandResult: (spec) => spec.command === APP_CLI && spec.args[0] === 'app' ? { exitCode: 1, stdout: '', stderr: 'no contract' } : succeeded(spec),
 		})
 		expect(result.status).toBe('failed')
-		expect(stepError(result, 'build')).toBe('fabrika app build failed (exit 1): no contract')
+		expect(stepError(result, 'check')).toBe('fabrika app build failed (exit 1): no contract')
 		expect(rec.provisions).toEqual([])
 	})
 
-	test('a dry run names the entry build and runs nothing', async () => {
-		await deploy(rec, config({ pipeline: { build: 'bun run build' } }), { dryRun: true })
-		expect(rec.commands).toEqual([])
-		expect(rec.logs).toContain(`  [dry-run] would run: fabrika app build --provider=cloudflare --config=fabrika.config.ts in ${REPO}/app`)
+	test('a failed frozen install fails the check step before the entry build', async () => {
+		const result = await deploy(rec, config(), {
+			commandResult: (spec) => isReinstall(spec) ? { exitCode: 1, stdout: '', stderr: 'lockfile had changes' } : succeeded(spec),
+		})
+		expect(stepError(result, 'check')).toBe('bun install --frozen-lockfile failed (exit 1): lockfile had changes')
+		expect(rec.commands.map((command) => command.command)).toEqual(['sh', 'bun'])
+		expect(rec.provisions).toEqual([])
 	})
 
-	test('an older release, or a Control that names none, deploys as before: its own `main`, its keys, no entry build', async () => {
+	test('a dry run names the reinstall and the entry build and runs nothing', async () => {
+		await deploy(rec, config({ pipeline: { build: 'bun run build' } }), { dryRun: true })
+		expect(rec.commands).toEqual([])
+		expect(rec.logs).toContain(
+			`  [dry-run] would run the checks in ${REPO}/app: tests, bun install --frozen-lockfile into an empty node_modules, fabrika app build --provider=cloudflare --config=fabrika.config.ts, tsc, fabrika-check, fabrika db codegen --verify, fabrika db test-isolation`,
+		)
+	})
+
+	test('an older release, or a Control that names none, deploys its own `main` with its keys, after its tests and the checker alone', async () => {
 		const workflow = { workflows: [{ binding: 'FLOW', name: 'stage-demo-flow', class_name: 'Flow' }] }
+		const { tests, check } = shellChecks()
 		for (const framework of ['0.8.2', null]) {
 			const result = await deploy(rec, authoredWorker('src/index.ts', { X: emitting(workflow) }), { contract: notesArtifact, framework })
 			expect(result.status).toBe('succeeded')
-			expect(result.steps.map((step) => step.id)).toEqual(['provision-resources', 'deploy-worker', 'reconcile-schema'])
-			expect(rec.commands.some((command) => command.command === APP_CLI)).toBe(false)
+			expect(result.steps.map((step) => step.id)).toEqual(['check', 'provision-resources', 'deploy-worker', 'reconcile-schema'])
+			expect(rec.commands.slice(0, 2).map((command) => [command.command, ...command.args])).toEqual([tests, check])
+			expect(rec.commands.some((command) => command.command === APP_CLI || isReinstall(command))).toBe(false)
 			rec.commands.splice(0)
 		}
 		const built = await deploy(rec, config({ pipeline: { build: 'bun run build' } }), { framework: '0.8.2' })
-		expect(built.steps.map((step) => step.id)).toEqual(['build', 'provision-resources', 'deploy-worker', 'reconcile-schema'])
-		expect(rec.commands.map((command) => command.command)).toEqual(['sh', 'wrangler', 'wrangler', 'wrangler'])
+		expect(built.steps.map((step) => step.id)).toEqual(['build', 'check', 'provision-resources', 'deploy-worker', 'reconcile-schema'])
+		expect(rec.commands.map((command) => command.command)).toEqual(['sh', 'sh', 'sh', 'wrangler', 'wrangler', 'wrangler'])
+		rec.logs.splice(0)
+		await deploy(rec, config(), { framework: '0.8.2', dryRun: true })
+		expect(rec.logs).toContain(`  [dry-run] would run the checks in ${REPO}/app: tests, fabrika-check`)
+	})
+
+	test('an older release whose test fails is refused before any resource, and its checker does not run', async () => {
+		const { tests } = shellChecks()
+		const result = await deploy(rec, authoredWorker('src/index.ts'), {
+			contract: notesArtifact,
+			framework: '0.8.2',
+			commandResult: (spec) => spec.args[1] === tests[2] ? { exitCode: 1, stdout: '1 fail', stderr: '' } : succeeded(spec),
+		})
+		expect(result.status).toBe('failed')
+		expect(stepError(result, 'check')).toBe('check failed: tests (exit 1): 1 fail')
+		expect(rec.commands.map((command) => [command.command, ...command.args])).toEqual([tests])
+		expect(rec.provisions).toEqual([])
 	})
 })
 
@@ -2070,10 +2119,11 @@ describe("the check step: the application's tests, types, checker and schema bef
 	test('runs after the build and before provisioning, in the application directory, with only PATH, HOME and TMPDIR', async () => {
 		const result = await deploy(rec, config({ pipeline: { build: 'bun run build' } }))
 		expect(result.steps.map((step) => step.id)).toEqual(['build', 'check', 'provision-resources', 'deploy-worker', 'reconcile-schema'])
-		const checks = rec.commands.slice(2, 7)
+		const checks = rec.commands.slice(1, 8)
 		expect(checks.map((command) => [command.command, ...command.args])).toEqual(checkCommands())
+		// The frozen install runs where the runner installed the checkout; everything else in the application directory.
+		expect(checks.map((command) => command.cwd)).toEqual(checks.map((command) => isReinstall(command) ? REPO : `${REPO}/app`))
 		for (const command of checks) {
-			expect(command.cwd).toBe(`${REPO}/app`)
 			expect(Object.keys(command.env ?? {}).filter((name) => !['PATH', 'HOME', 'TMPDIR'].includes(name))).toEqual([])
 		}
 		// The platform's tsconfig, which `tsc` reads, beside the regenerated entry.
@@ -2081,9 +2131,51 @@ describe("the check step: the application's tests, types, checker and schema bef
 		expect(tsconfig.include).toEqual(['../fabrika.contract.ts', '../src', '../web', 'entry.generated.ts'])
 	})
 
+	test('what the tests rewrite cannot change what `tsc` checks, which CLI builds the entry, or the entry it builds', async () => {
+		const outside = await mkdtemp(join(tmpdir(), 'fabrika-outside-'))
+		fixtures.push(outside)
+		await writeFile(join(outside, 'tsconfig.json'), 'outside')
+		const tsconfigPath = join(REPO, 'app', 'fabrika', 'tsconfig.platform.json')
+		const entryPath = join(REPO, 'app', 'fabrika', 'entry.generated.ts')
+		const { tests, tsc } = shellChecks()
+		const seen: { tsconfig?: string; cli?: string } = {}
+		try {
+			const result = await deploy(rec, config(), {
+				runCommand: async (spec) => {
+					if (spec.args[1] === tests[2]) {
+						// The tests point the tsconfig outside the checkout, plant a CLI of their own and write an entry.
+						await mkdir(dirname(tsconfigPath), { recursive: true })
+						await rm(tsconfigPath, { force: true })
+						await symlink(join(outside, 'tsconfig.json'), tsconfigPath)
+						await writeFile(APP_CLI, 'planted')
+						await writeFile(entryPath, 'planted')
+					}
+					if (spec.args[1] === tsc[2]) seen.tsconfig = await readFile(tsconfigPath, 'utf8')
+					if (spec.command === APP_CLI && spec.args[0] === 'app') seen.cli = await readFile(APP_CLI, 'utf8')
+					return succeeded(spec)
+				},
+			})
+			expect(result.status).toBe('succeeded')
+			expect(JSON.parse(seen.tsconfig ?? '{}').include).toEqual(['../fabrika.contract.ts', '../src', '../web', 'entry.generated.ts'])
+			expect(await readFile(join(outside, 'tsconfig.json'), 'utf8')).toBe('outside')
+			// The planted CLI went with `node_modules`; the one the frozen install linked builds the entry, after the tests.
+			expect(seen.cli).toBe('')
+			const order = rec.commands.map((command) => command.command === APP_CLI ? command.args.slice(0, 2).join(' ') : command.command)
+			expect(order.slice(0, 3)).toEqual(['sh', 'bun', 'app build'])
+		} finally {
+			await rm(entryPath, { force: true })
+		}
+	})
+
 	test('a failed check fails the run before any resource is touched, naming the check and keeping the end of its output', async () => {
-		const subjects = ['tests', 'tsc', 'fabrika-check', 'schema types are stale', 'isolation tests']
-		for (const [index, subject] of subjects.entries()) {
+		const subjects: readonly (readonly [string, number])[] = [
+			['tests', 0],
+			['tsc', 3],
+			['fabrika-check', 4],
+			['schema types are stale', 5],
+			['isolation tests', 6],
+		]
+		for (const [subject, index] of subjects) {
 			rec.commands.splice(0)
 			rec.provisions.splice(0)
 			const failing = checkCommands()[index]
@@ -2100,8 +2192,27 @@ describe("the check step: the application's tests, types, checker and schema bef
 			expect(result.steps.find((step) => step.id === 'provision-resources')?.status).toBe('skipped')
 			expect(rec.provisions).toEqual([])
 			// No later check runs.
-			expect(rec.commands).toHaveLength(2 + index)
+			expect(rec.commands).toHaveLength(index + 1)
 		}
+	})
+
+	test('a contract without a table deploys without the schema types check, and says so', async () => {
+		const tableless: ContractArtifact = { ...notesArtifact, tables: {} }
+		const result = await deploy(rec, config(), { contract: tableless })
+		expect(result.status).toBe('succeeded')
+		expect(rec.commands.slice(0, 6).map((command) => [command.command, ...command.args])).toEqual(checkCommands(`${REPO}/app`, false))
+		expect(rec.commands.some((command) => command.args.includes('codegen'))).toBe(false)
+		expect(rec.logs).toContain('  the contract declares no table, so there are no schema types to check')
+	})
+
+	test('a config of another name is the one the entry build and the schema checks read', async () => {
+		const result = await deploy(rec, config(), { configPath: 'app/cloudflare.config.ts' })
+		expect(result.status).toBe('succeeded')
+		expect(rec.commands.filter((command) => command.command === APP_CLI).map((command) => command.args)).toEqual([
+			['app', 'build', '--provider=cloudflare', '--config=cloudflare.config.ts'],
+			['db', 'codegen', '--verify', '--config=cloudflare.config.ts'],
+			['db', 'test-isolation', '--config=cloudflare.config.ts'],
+		])
 	})
 
 	test('a run from a Control that names no checker release fails the check, saying to upgrade Control, and runs nothing', async () => {
@@ -2113,8 +2224,15 @@ describe("the check step: the application's tests, types, checker and schema bef
 				'check: Control named no `@fabrika/check` release for this run, so the application cannot be checked; upgrade Control to the release of its runner, then deploy again',
 			)
 			expect(rec.provisions).toEqual([])
-			expect(rec.commands.map((command) => command.command)).toEqual(dryRun ? [] : [APP_CLI])
+			expect(rec.commands).toEqual([])
 		}
+	})
+
+	test('a local deploy and a platform component have no check step', async () => {
+		const local = await deploy(rec, config(), { checkoutContract: notesArtifact })
+		const platform = await deploy(rec, config({ schema: { scopes: [], actions: [], roles: {} } }), { platformResources: 'allow' })
+		for (const result of [local, platform]) expect(result.steps.map((step) => step.id)).not.toContain('check')
+		expect(rec.commands.some((command) => command.command === 'sh' || isReinstall(command))).toBe(false)
 	})
 
 	test('a published prerelease whose CLI checks no SQLite schema runs the other checks and says the schema is not checked', async () => {
@@ -2123,8 +2241,8 @@ describe("the check step: the application's tests, types, checker and schema bef
 			rec.logs.splice(0)
 			const result = await deploy(rec, config(), { framework })
 			expect(result.status).toBe('succeeded')
-			expect(rec.commands.slice(1, 4).map((command) => [command.command, ...command.args])).toEqual(checkCommands().slice(0, 3))
-			expect(rec.commands.slice(4).every((command) => command.command === 'wrangler')).toBe(true)
+			expect(rec.commands.slice(0, 5).map((command) => [command.command, ...command.args])).toEqual(checkCommands().slice(0, 5))
+			expect(rec.commands.slice(5).every((command) => command.command === 'wrangler')).toBe(true)
 			expect(rec.logs).toContain(
 				`  the CLI of framework ${framework} does not check a SQLite schema; the schema types and isolation tests are not checked`,
 			)
