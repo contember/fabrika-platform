@@ -4,6 +4,7 @@
 // the deployed commit.
 // Nothing here decides access: an approved snapshot is the only thing Control publishes (ADR-0050).
 
+import { ISOLATION_TESTS_CHECK, SCHEMA_TYPES_CHECK } from '@fabrika/app/build'
 import { FABRIKA_CONTRACT_DIGEST, isWorkloadKeyVariable } from '@fabrika/auth-core'
 import { ZEROPS_NAMESPACE_PROXY_HOSTNAME } from '@fabrika/provider-zerops'
 import { isApplicationEntry, parseProxyManifestJson } from '@fabrika/proxy-core/manifest'
@@ -66,7 +67,7 @@ const run = async (command: string[], cwd: string): Promise<void> => {
 
 /**
  * Stage a release fixture's commit as its platform build does: its packages from npm by its own `bun.lock`, the
- * entrypoint written by its own framework, and its SPA. The container then runs its own `fabrika` for the init commands.
+ * entrypoint written by its own framework, and its SPA. The container then runs its own `fabrika` for the init command.
  */
 async function stageReleaseSource(kind: LocalSourceReleaseKind, files: ReadonlyMap<string, Uint8Array<ArrayBuffer>>): Promise<string> {
 	const target = resolve(STATE_DIR, NOTES_SOURCE_DIRECTORY)
@@ -80,6 +81,18 @@ async function stageReleaseSource(kind: LocalSourceReleaseKind, files: ReadonlyM
 	await buildNotesSpa(target)
 	console.info(`Notes source staged as ${kind} holds it, installed from npm`)
 	return `${CONTAINER_STATE_DIR}/${NOTES_SOURCE_DIRECTORY}`
+}
+
+/** The application CLI as the staged source installed it, run from its root. */
+const FABRIKA = './node_modules/.bin/fabrika'
+
+/**
+ * The platform build's schema checks of a release fixture, which the emulator does not run: its own `fabrika` migrates
+ * the Notes database, then runs `codegen --verify` and `test-isolation`, in a one-off Notes container on the staged root.
+ */
+async function checkReleaseSchema(options: Pick<ComposeOptions, 'browser'>, root: string): Promise<void> {
+	const checks = [['db', 'migrate'], SCHEMA_TYPES_CHECK, ISOLATION_TESTS_CHECK].map((args) => [FABRIKA, ...args].join(' '))
+	await compose(['run', '--rm', '--no-deps', 'notes', 'sh', '-c', checks.join(' && ')], { ...options, env: { FABRIKA_LOCAL_NOTES_ROOT: root } })
 }
 
 /**
@@ -130,6 +143,7 @@ export async function followNotesDeploy(options: Pick<ComposeOptions, 'browser'>
 	const { endpoints, reservedPrefixes, snapshot: tableSnapshot, csp } = entry
 	await writeAppsProxyConfig(localAppsProxyManifest({ endpoints, reservedPrefixes, snapshot: tableSnapshot, csp }))
 
+	if (release !== undefined && root !== undefined) await checkReleaseSchema(options, root)
 	const composeOptions = { ...options, showOutput: false, ...(root === undefined ? {} : { env: { FABRIKA_LOCAL_NOTES_ROOT: root } }) }
 	await compose(['up', '--detach', '--wait', '--force-recreate', 'notes'], composeOptions)
 	await compose(['up', '--detach', '--wait', '--force-recreate', '--no-deps', 'apps-proxy-auth', 'apps-proxy'], composeOptions)

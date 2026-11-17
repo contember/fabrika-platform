@@ -125,8 +125,10 @@ bun run test:browser  # the opice suites in tests/browser/
 - **`local:compat` deploys released code, not the workspace's.** A release fixture is the example as its tag holds it,
   recorded in `fixtures/source/releases/` with the `bun.lock` npm resolves for it (`bun run fixtures:release <tag>`,
   then `fixtures:pin`), because a CI checkout holds no tags. `followNotesDeploy` stages such a commit as its platform
-  build does: `bun install --frozen-lockfile` from npm, the entrypoint its own framework writes, its SPA; the container
-  runs its own `./node_modules/.bin/fabrika`, as the generated init commands do. Never point a release fixture at a
+  build does: `bun install --frozen-lockfile` from npm, the entrypoint its own framework writes, its SPA; then it runs
+  the build's schema checks with the release's own `./node_modules/.bin/fabrika` in a one-off Notes container
+  (`checkReleaseSchema`: `db migrate`, `db codegen --verify`, `db test-isolation`), because the emulator runs no build,
+  and the container runs its own `fabrika db migrate`, as the generated init command does. Never point a release fixture at a
   workspace package: the suite exists to run what an operator's application runs. Each release starts from an empty
   Notes database (`dropApplicationDatabase`), and the suite ages files past the pending grace before the sweep, so
   only a reference keeps one.

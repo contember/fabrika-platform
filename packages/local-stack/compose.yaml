@@ -266,7 +266,8 @@ services:
     build: app-image
     working_dir: ${FABRIKA_LOCAL_NOTES_ROOT:-/workspace/examples/zerops-app}
     # The generated init command's step, with the source's own `fabrika` as the platform runs it: a release fixture
-    # (`local:compat`) migrates with the framework it pins. The schema checks run in the platform build, not at start.
+    # (`local:compat`) migrates with the framework it pins. The schema checks run in the platform build, not at start;
+    # `followNotesDeploy` runs them for a release fixture before it starts the container (`checkReleaseSchema`).
     command:
       - sh
       - -c
