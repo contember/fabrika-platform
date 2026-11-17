@@ -11,6 +11,7 @@ import {
 	type ZeropsApi,
 	ZeropsApiError,
 	type ZeropsAppVersion,
+	type ZeropsBackupFile,
 	type ZeropsBackupStart,
 	type ZeropsImportedService,
 	type ZeropsLogAccess,
@@ -20,20 +21,51 @@ import {
 } from '../api'
 import { withoutSensitiveContent } from '../api/service-env-response'
 import { useSharedPostgres } from '../authoring'
-import type { ZeropsCollaborators } from '../collaborators'
+import type { ZeropsClock, ZeropsCollaborators } from '../collaborators'
 import { assertZeropsInvariants, compileImportYaml, compileProvisioningYaml } from '../compile'
 import { parseZeropsCheckpoint } from '../control'
 import { FABRIKA_CHECK_VERSION, PLATFORM_TYPESCRIPT_VERSION, ZEROPS_SCAN_MIN_RAM_GB, ZEROPS_START_MIN_RAM_GB } from '../execution'
 import type { ExposureAlert } from '../exposure'
 import { compileFabrikaManifest, createZeropsArtifactSourceDescriptor } from '../manifest'
-import { createZeropsDeployer, ZEROPS_BACKUP_POLLS, zeropsBackupTag, type ZeropsDeployResult, type ZeropsDeployRun } from '../provider'
+import {
+	createZeropsDeployer,
+	storeTaggedBackup,
+	ZEROPS_BACKUP_LIST_TIMEOUT_MS,
+	ZEROPS_BACKUP_REQUEST_TIMEOUT_MS,
+	ZEROPS_BACKUP_WAIT_MS,
+	zeropsBackupTag,
+	type ZeropsDeployResult,
+	type ZeropsDeployRun,
+} from '../provider'
 import type { ZeropsServiceType } from '../schema.generated'
 import type { ZeropsSourceArchive } from '../source/port'
 import type { ZeropsAppConfig, ZeropsRuntimeTarget, ZeropsServiceSpec } from '../types'
 import { approvedContract } from './fixtures/access'
 import { SOURCE_DESCRIPTOR } from './fixtures/descriptor'
 
+/** A clock that moves only when the fake sleeps or a fake request takes time; a timeout aborts once it is passed. */
+class FakeClock implements ZeropsClock {
+	nowMs = Date.parse('2026-11-17T10:00:00.000Z')
+	private readonly timers: Array<{ readonly at: number; readonly controller: AbortController }> = []
+	now(): number {
+		return this.nowMs
+	}
+	timeout(ms: number): AbortSignal {
+		const controller = new AbortController()
+		this.timers.push({ at: this.nowMs + ms, controller })
+		this.advance(0)
+		return controller.signal
+	}
+	advance(ms: number): void {
+		this.nowMs += ms
+		for (const timer of this.timers) {
+			if (timer.at <= this.nowMs && !timer.controller.signal.aborted) timer.controller.abort(new DOMException('timed out', 'TimeoutError'))
+		}
+	}
+}
+
 interface Recorded {
+	clock: FakeClock
 	calls: string[]
 	imports: Array<{ projectId: string; yaml: string }>
 	triggers: Array<{ serviceId: string; buildFromGit?: string; zeropsSetup?: string }>
@@ -58,6 +90,7 @@ interface Recorded {
 }
 
 const fresh = (): Recorded => ({
+	clock: new FakeClock(),
 	calls: [],
 	imports: [],
 	triggers: [],
@@ -372,7 +405,9 @@ const makeCollaborators = (recorded: Recorded, overrides: Overrides = {}): Zerop
 	},
 	sleep: async (ms) => {
 		recorded.sleeps.push(ms)
+		recorded.clock.advance(ms)
 	},
+	clock: recorded.clock,
 })
 
 const SCHEMA: AppSchema = { scopes: [], actions: [], roles: {} }
@@ -1407,11 +1442,13 @@ describe('the backup before migrations that delete data', () => {
 		}
 	})
 
-	test('a background backup never listed is given up after the bounded number of lists', async () => {
+	test('a background backup never listed is given up after 30 minutes of elapsed time, a list every 10 s', async () => {
+		const startedMs = recorded.clock.now()
 		const result = await deploy({ ...BACKGROUND, backupListedAt: null })
 		expect(result.status).toBe('failed')
-		expect(recorded.calls.filter((call) => call === 'listBackups')).toHaveLength(ZEROPS_BACKUP_POLLS)
-		expect(recorded.sleeps).toEqual(Array.from({ length: ZEROPS_BACKUP_POLLS - 1 }, () => 10_000))
+		expect(recorded.clock.now() - startedMs).toBe(ZEROPS_BACKUP_WAIT_MS)
+		expect(recorded.calls.filter((call) => call === 'listBackups')).toHaveLength(180)
+		expect(recorded.sleeps.every((ms) => ms === 10_000)).toBe(true)
 	})
 
 	test('without migrations that delete data, nothing is backed up', async () => {
@@ -1435,6 +1472,97 @@ describe('the backup before migrations that delete data', () => {
 		expect((await deploy({}, deleting(deployRun(recorded, target(), true)))).status).toBe('succeeded')
 		expect(recorded.backups).toEqual([])
 		expect(recorded.logs).toContain(`  [dry-run] would back up db under the tag \`${TAG}\` and wait until the backup is stored`)
+	})
+})
+
+// The wait is elapsed time on the clock, request times included, so a slow platform cannot stretch it (ADR-0050).
+describe('the backup wait is bounded in elapsed time', () => {
+	const TAG = 'run-019a8f3c1d2e7f008a00'
+	const STORED: ZeropsBackupFile = { name: '2026-11-17 10:17:07', tags: [TAG] }
+	interface Platform {
+		/** How long the backup request takes to answer, and what it answers. */
+		requestMs?: number
+		start?: ZeropsBackupStart
+		/** How long each list takes to answer. */
+		listMs?: number
+		/** How many of the first lists hang past their own timeout. */
+		hangingLists?: number
+		/** The first list, counting from 1, that shows the backup; null for never. */
+		listedAt?: number | null
+		/** A list that answers after its timeout, as a response racing the abort can. */
+		ignoresTimeout?: boolean
+	}
+	const wait = async (platform: Platform, budgetMs: number = 75 * 60 * 1000) => {
+		const clock = new FakeClock()
+		const startedMs = clock.now()
+		let lists = 0
+		const outcome = await storeTaggedBackup({
+			api: {
+				createBackup: async ({ signal }) => {
+					clock.advance(platform.requestMs ?? 0)
+					signal.throwIfAborted()
+					return platform.start ?? { success: true, async: true }
+				},
+				listBackups: async ({ signal }) => {
+					lists++
+					clock.advance(lists <= (platform.hangingLists ?? 0) ? ZEROPS_BACKUP_LIST_TIMEOUT_MS + 1 : platform.listMs ?? 0)
+					if (platform.ignoresTimeout !== true) signal.throwIfAborted()
+					const listedAt = platform.listedAt === undefined ? 1 : platform.listedAt
+					return listedAt !== null && lists >= listedAt ? [STORED] : []
+				},
+			},
+			sleep: async (ms) => clock.advance(ms),
+			clock,
+			budgetEndMs: startedMs + budgetMs,
+			signal: new AbortController().signal,
+			boundary: async () => {},
+			log: () => {},
+			serviceId: DATABASE_SERVICE_ID,
+			hostname: 'db',
+			tag: TAG,
+		}).then((file) => ({ file }), (error: unknown) => ({ error: error instanceof Error ? error.message : String(error) }))
+		return { outcome, lists, elapsedMs: clock.now() - startedMs }
+	}
+	const NOT_STORED = (minutes: number) =>
+		`zerops: the backup of db was not stored within ${minutes} minutes, so nothing was deployed; a backup larger than the project's backup storage is never stored`
+
+	test('lists that take 20 s each still end the wait at 30 minutes, not after 180 lists', async () => {
+		const { outcome, lists, elapsedMs } = await wait({ listMs: 20_000, listedAt: null })
+		expect(outcome).toEqual({ error: NOT_STORED(30) })
+		expect(elapsedMs).toBe(ZEROPS_BACKUP_WAIT_MS)
+		expect(lists).toBe(60)
+	})
+
+	test('a deploy budget shorter than 30 minutes bounds the wait', async () => {
+		const { outcome, elapsedMs } = await wait({ listedAt: null }, 5 * 60 * 1000)
+		expect(outcome).toEqual({ error: NOT_STORED(5) })
+		expect(elapsedMs).toBe(5 * 60 * 1000)
+	})
+
+	test('a list that hangs is cut at its own timeout and read again', async () => {
+		const { outcome, lists, elapsedMs } = await wait({ hangingLists: 1 })
+		expect(outcome).toEqual({ file: STORED })
+		expect(lists).toBe(2)
+		expect(elapsedMs).toBe(ZEROPS_BACKUP_LIST_TIMEOUT_MS + 1 + 10_000)
+	})
+
+	test('a tag that a list shows only after the deadline is a failure', async () => {
+		// Lists take 25 s, 35 s apart: the 52nd starts at 29:45 and answers at 30:10, past its timeout, showing the backup.
+		const { outcome, lists } = await wait({ listMs: 25_000, listedAt: 52, ignoresTimeout: true })
+		expect(lists).toBe(52)
+		expect(outcome).toEqual({ error: NOT_STORED(30) })
+	})
+
+	test('a backup request that does not answer in time fails, and nothing waits on it', async () => {
+		const { outcome, lists, elapsedMs } = await wait({ requestMs: ZEROPS_BACKUP_REQUEST_TIMEOUT_MS + 1 })
+		expect(outcome).toEqual({ error: 'zerops: the backup request for db got no answer; nothing was deployed' })
+		expect(lists).toBe(0)
+		expect(elapsedMs).toBe(ZEROPS_BACKUP_REQUEST_TIMEOUT_MS + 1)
+	})
+
+	test('a finished backup the list shows only after the deadline is a failure', async () => {
+		const { outcome } = await wait({ start: { success: true, async: false }, listMs: 6 * 60 * 1000, ignoresTimeout: true }, 5 * 60 * 1000)
+		expect(outcome).toEqual({ error: 'zerops: the backup of db finished, and the list does not show it; nothing was deployed' })
 	})
 })
 

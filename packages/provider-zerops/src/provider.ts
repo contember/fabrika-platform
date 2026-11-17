@@ -39,7 +39,14 @@ import {
 	type ZeropsService,
 	type ZeropsServiceAutoscaling,
 } from './api'
-import { defaultZeropsCollaborators, type Sleeper, type ZeropsCollaboratorFactory, type ZeropsCollaborators } from './collaborators'
+import {
+	defaultZeropsCollaborators,
+	type Sleeper,
+	systemClock,
+	type ZeropsClock,
+	type ZeropsCollaboratorFactory,
+	type ZeropsCollaborators,
+} from './collaborators'
 import { assertZeropsInvariants, renderYaml } from './compile'
 import {
 	MIN_PROCESS_CONNECTIONS,
@@ -121,11 +128,15 @@ const POLL_INTERVAL_MS = 3000
 export const ZEROPS_VERSION_DEADLINE_MS = 75 * 60 * 1000
 
 /**
- * How often `backup-database` lists the backups of a database whose backup runs in the background, and how many times
- * before the run fails: 30 minutes, well inside `ZEROPS_VERSION_DEADLINE_MS`.
+ * `backup-database` waits at most this long of elapsed time for the backup to be stored, request times included, and
+ * never past the run's own deadline. The build that follows has the rest of `ZEROPS_VERSION_DEADLINE_MS`.
  */
+export const ZEROPS_BACKUP_WAIT_MS = 30 * 60 * 1000
+/** How long to wait between two lists of a backup that runs in the background. */
 const BACKUP_POLL_INTERVAL_MS = 10_000
-export const ZEROPS_BACKUP_POLLS = 180
+/** The backup request answers within the platform's 10 s window, past which it reports the backup `async`. */
+export const ZEROPS_BACKUP_REQUEST_TIMEOUT_MS = 60_000
+export const ZEROPS_BACKUP_LIST_TIMEOUT_MS = 30_000
 
 /**
  * The tag of the backup a run takes before its migrations may change stored data. A user tag is at most 24 characters of
@@ -849,6 +860,8 @@ const backupDatabase = async (env: StepEnv): Promise<void> => {
 	const stored = await storeTaggedBackup({
 		api: zerops.api,
 		sleep: zerops.sleep,
+		clock: zerops.clock ?? systemClock,
+		budgetEndMs: env.deadlineMs,
 		signal,
 		boundary: () => run.events.boundary(),
 		log,
@@ -861,13 +874,17 @@ const backupDatabase = async (env: StepEnv): Promise<void> => {
 
 /**
  * Requests a backup of a managed service under `tag` and answers the stored file. `async: false` answers a finished
- * backup (verified live), so one list read confirms it; `async: true` runs on in the background, and the list is polled
- * until it shows the tag. A refusal, a finished backup the list does not show, or no file after `ZEROPS_BACKUP_POLLS`
- * throws.
+ * backup (verified live), so one list read confirms it; `async: true` runs on in the background, and the list is read
+ * until it shows the tag. The wait is elapsed time on `clock`, at most `ZEROPS_BACKUP_WAIT_MS` and never past
+ * `budgetEndMs`, and each request has its own timeout inside it. A refusal, no answer, a finished backup the list does
+ * not show, or a tag not seen before the deadline throws: a tag a late answer shows is still too late.
  */
 export const storeTaggedBackup = async (input: {
 	api: Pick<ZeropsApi, 'createBackup' | 'listBackups'>
 	sleep: Sleeper
+	clock: ZeropsClock
+	/** The instant the deploy's own deadline falls; the wait never runs past it. */
+	budgetEndMs: number
 	signal: AbortSignal
 	/** Crossed before each list, so a cancel or a lost lease stops the wait. */
 	boundary: () => Promise<void>
@@ -876,50 +893,68 @@ export const storeTaggedBackup = async (input: {
 	hostname: string
 	tag: string
 }): Promise<ZeropsBackupFile> => {
-	const { api, signal, hostname, tag } = input
+	const { api, clock, signal, hostname, tag, serviceId } = input
+	const startedMs = clock.now()
+	const deadlineMs = Math.min(input.budgetEndMs, startedMs + ZEROPS_BACKUP_WAIT_MS)
+	const remaining = (): number => deadlineMs - clock.now()
+	/** The run's signal, and a timeout of `ms` that never reaches past the deadline. */
+	const within = (ms: number): AbortSignal => AbortSignal.any([signal, clock.timeout(Math.max(0, Math.min(ms, remaining())))])
+	const notStored = (): Error => {
+		const minutes = Math.round((deadlineMs - startedMs) / 60_000)
+		return new Error(
+			`zerops: the backup of ${hostname} was not stored within ${minutes} minutes, so nothing was deployed; `
+				+ "a backup larger than the project's backup storage is never stored",
+		)
+	}
+	/** The listed file under the tag, `undefined` when it is not there, or null when the list could not be read in time. */
+	const listTagged = async (): Promise<ZeropsBackupFile | undefined | null> => {
+		let files: ZeropsBackupFile[]
+		try {
+			files = await api.listBackups({ serviceId, signal: within(ZEROPS_BACKUP_LIST_TIMEOUT_MS) })
+		} catch {
+			assertRunning(signal)
+			return null
+		}
+		return files.find((file) => file.tags.includes(tag))
+	}
+	if (remaining() <= 0) throw notStored()
 	let started: ZeropsBackupStart
 	try {
-		started = await api.createBackup({ serviceId: input.serviceId, tags: [tag], signal })
+		started = await api.createBackup({ serviceId, tags: [tag], signal: within(ZEROPS_BACKUP_REQUEST_TIMEOUT_MS) })
 	} catch (error) {
+		assertRunning(signal)
 		if (error instanceof ZeropsApiError) {
 			throw new Error(`zerops: the backup of ${hostname} was refused (${error.code === '' ? error.status : error.code}); nothing was deployed`)
 		}
-		throw error
+		throw new Error(`zerops: the backup request for ${hostname} got no answer; nothing was deployed`)
 	}
 	if (!started.success) throw new Error(`zerops: the backup of ${hostname} did not start; nothing was deployed`)
 	if (!started.async) {
 		await input.boundary()
 		assertRunning(signal)
-		let files: ZeropsBackupFile[]
-		try {
-			files = await api.listBackups({ serviceId: input.serviceId, signal })
-		} catch {
-			assertRunning(signal)
+		const stored = await listTagged()
+		if (stored === null) {
 			throw new Error(`zerops: the backup of ${hostname} finished, and its list could not be read to confirm it; nothing was deployed`)
 		}
-		const stored = files.find((file) => file.tags.includes(tag))
-		if (stored === undefined) throw new Error(`zerops: the backup of ${hostname} finished, and the list does not show it; nothing was deployed`)
+		if (stored === undefined || remaining() < 0) {
+			throw new Error(`zerops: the backup of ${hostname} finished, and the list does not show it; nothing was deployed`)
+		}
 		return stored
 	}
-	for (let poll = 0; poll < ZEROPS_BACKUP_POLLS; poll++) {
-		if (poll > 0) await input.sleep(BACKUP_POLL_INTERVAL_MS, signal)
+	while (remaining() > 0) {
 		await input.boundary()
 		assertRunning(signal)
-		let files: ZeropsBackupFile[]
-		try {
-			files = await api.listBackups({ serviceId: input.serviceId, signal })
-		} catch {
-			input.log(`  ${hostname}: the backup list is unavailable; retrying`)
-			continue
-		}
-		const stored = files.find((file) => file.tags.includes(tag))
-		if (stored !== undefined) return stored
+		const stored = await listTagged()
+		if (stored === null) input.log(`  ${hostname}: the backup list is unavailable; retrying`)
+		// A list that answered past the deadline proves nothing in time, whatever it shows.
+		if (remaining() < 0) break
+		if (stored !== null && stored !== undefined) return stored
+		const pause = Math.min(BACKUP_POLL_INTERVAL_MS, remaining())
+		if (pause <= 0) break
+		await input.sleep(pause, signal)
 	}
-	const minutes = (ZEROPS_BACKUP_POLLS * BACKUP_POLL_INTERVAL_MS) / 60_000
-	throw new Error(
-		`zerops: the backup of ${hostname} was not stored within ${minutes} minutes, so nothing was deployed; `
-			+ "a backup larger than the project's backup storage is never stored",
-	)
+	assertRunning(signal)
+	throw notStored()
 }
 
 /** The locked execution with the connections `size-database` sized; an application with a database is never sent without. */

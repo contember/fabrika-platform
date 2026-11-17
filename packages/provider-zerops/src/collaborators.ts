@@ -5,6 +5,15 @@ import type { ZeropsRuntimeTarget } from './types'
 
 export type Sleeper = (ms: number, signal: AbortSignal) => Promise<void>
 
+/** Elapsed time and the per-request timeouts measured on it. */
+export interface ZeropsClock {
+	now(): number
+	/** A signal that aborts `ms` from now. */
+	timeout(ms: number): AbortSignal
+}
+
+export const systemClock: ZeropsClock = { now: () => Date.now(), timeout: (ms) => AbortSignal.timeout(ms) }
+
 export const defaultSleep: Sleeper = (ms, signal) =>
 	new Promise<void>((resolve) => {
 		if (signal.aborted) {
@@ -29,6 +38,8 @@ export interface ZeropsCollaborators {
 	/** Raises the Operations alert for a refused activation; best-effort. */
 	alertExposure: ExposureAlerter
 	sleep: Sleeper
+	/** The clock the database backup's wait runs on; the system clock when absent. */
+	clock?: ZeropsClock
 }
 
 export type ZeropsCollaboratorFactory = (target: ZeropsRuntimeTarget) => ZeropsCollaborators

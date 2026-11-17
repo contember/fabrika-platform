@@ -1675,16 +1675,18 @@ The row imports its own database and prints what a fresh one reads, so its log r
 #### Verified live (2026-11-17) — a tagged backup before migrations that may change stored data
 
 An application's migrations run in its init commands, when a new version's containers start. When Control hands a
-deploy `backupBeforeMigrations` (migration files that may change stored data, or call database code that may, and that the version running does not hold,
-ADR-0050), the deploy's `backup-database` step backs up the application's PostgreSQL service right after
-`verify-exposure`: before any service variable is written and before a version is reserved. A `cheap` application's is
-the namespace's shared `postgres`, backed up whole. The step requests the backup under the tag `run-<the first 20
-letters and digits of the run id>` (a UUIDv7 starts with its timestamp). An answer `async: false` is a finished backup:
-one list read confirms it under the tag. An answer `async: true` goes on in the background, and the step lists the
-service's backups every 10 s until one carries the tag, at most 180 times. A refused request, a `success: false`, a
-finished backup the list does not show, or no such file after 30 minutes (inside the 75-minute version deadline) fails
-the run before a version is reserved, so nothing is deployed (`storeTaggedBackup`, `src/provider.ts`). Restoring is the
-operator's, in the Zerops GUI: the API has no restore.
+deploy `backupBeforeMigrations` (migration files with a statement that may change stored data and that the version
+running does not hold, ADR-0050), the deploy's `backup-database` step backs up the application's PostgreSQL service
+right after `verify-exposure`: before any service variable is written and before a version is reserved. A `cheap`
+application's is the namespace's shared `postgres`, backed up whole. The step requests the backup under the tag
+`run-<the first 20 letters and digits of the run id>` (a UUIDv7 starts with its timestamp). An answer `async: false` is
+a finished backup: one list read confirms it under the tag. An answer `async: true` goes on in the background, and the
+step lists the service's backups, 10 s apart, until one carries the tag. The wait is elapsed time, request times
+included: at most 30 minutes, and never past the run's 75-minute version deadline; the request has 60 s to answer and
+each list 30 s, both inside it. A refused or unanswered request, a `success: false`, a finished backup the list does
+not show, or no such file by the deadline (a list that answers later counts as none) fails the run before a version is
+reserved, so nothing is deployed (`storeTaggedBackup`, `src/provider.ts`). Restoring is the operator's, in the Zerops
+GUI: the API has no restore.
 
 Verified on a single PostgreSQL 18 with an empty database:
 
