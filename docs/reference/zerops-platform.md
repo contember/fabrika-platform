@@ -459,7 +459,7 @@ Measured by the platform-facts table's live suite (`live: 'build'`, `FABRIKA_LIV
 
 The generated run section of a contract application
 ([ADR-0043](../decisions/0043-validate-and-render-one-zerops-descriptor-meaning.md)) depends on the second row: its
-migrations are an init command (and its schema checks too, on a build image other than Alpine). Its readiness check is an `exec`
+migrations are an init command (and its schema checks too, on a build base not known to carry `postgresql18`). Its readiness check is an `exec`
 against the contract's health endpoint (below).
 
 #### Verified live (2026-10-21, a throwaway `alpine/bun@1.3` service): one `exec` readiness attempt may wait for the server
@@ -1431,8 +1431,10 @@ is one command because each build command runs in its own shell. The cluster is 
 it is deployed. The application's own database may be an older major: the checks need only a server that runs its
 migrations. Its init command runs only `fabrika db migrate`, and its start script only starts the server.
 
-A build image other than Alpine (an authored `build.os` other than `alpine`, or a `build.base` of another OS) has no
-`apk`, so it keeps the earlier form (`zeropsSchemaChecks`, `packages/provider-zerops/src/execution.ts`): the init
+Only a build whose every base is known to be Alpine 3.23 or later runs them there (`zeropsSchemaChecks`,
+`packages/provider-zerops/src/execution.ts`): today `alpine/bun@1.3`, the default, verified below, also named bare as
+`bun@1.3` under the default `os`. Alpine 3.22 has no `postgresql18`, and an image's Alpine release cannot be read from
+its name, so any other base, or a `build.os` other than `alpine`, keeps the earlier form: the init
 commands run `fabrika db migrate`, then `fabrika db codegen --verify` and `fabrika db test-isolation`, before `run.start`
 and outside the readiness window (above), and a stale committed `schema.generated.ts` or a generated isolation case that
 did not pass fails an init command, which stops the activation.

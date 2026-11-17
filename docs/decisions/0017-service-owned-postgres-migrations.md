@@ -282,7 +282,7 @@ and type with `pg_catalog`. The catalog check sets `search_path` to
 query has no backslash and carries the manifest as hex text, so a file that
 changed either setting cannot blind it.
 
-`fabrika db codegen`, and so the build's `codegen --verify` (at every start on a Zerops build other than Alpine), runs the same
+`fabrika db codegen`, and so the build's `codegen --verify` (at every start on a Zerops build base not known to carry PostgreSQL 18), runs the same
 catalog query against the manifest of all the migration files, in a
 read-only transaction with the same pinned settings, whatever the role or
 the database sets for its sessions. The test database does the same.

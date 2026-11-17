@@ -150,7 +150,7 @@ and every other one, a missing config included, on Postgres. On SQLite no comman
   (concurrent runs of the suite share the committed directory); `db.test.ts` fails when they differ from what the
   scaffold writes, and when its `schema.generated.ts` differs from codegen's.
 - `db test-isolation` is the platform's run of them (in the Zerops build, on a throwaway database; an init command on
-  a build image other than Alpine): the files must equal the scaffold's
+  a build base not known to carry PostgreSQL 18): the files must equal the scaffold's
   output and no endpoint may lack its input fixture, then `bun --config=<empty> test
   --preload=<@fabrika/app/testing/preload> <files> --reporter=junit` runs them, as a throwaway provisioner
   `createTestProvisioner` makes from `FABRIKA_APP_DATABASE_URL` and drops afterwards (the tests load application code,

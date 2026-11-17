@@ -112,14 +112,16 @@ registry with its hash.
 installs PostgreSQL 18 (`sudo apk add postgresql18`), starts a cluster on a unix socket behind a random password,
 migrates it from scratch with `fabrika db migrate`, runs `fabrika db codegen --verify` and `fabrika db test-isolation`
 on it, and stops it. A stale `schema.generated.ts`, a migration that does not apply to an empty schema, or a generated
-case that did not pass fails the build, so no version is created and the previous one keeps serving. A container start
+case that did not pass fails the build: the version the deploy reserved before it triggered the build ends
+`BUILD_FAILED`, never activates, and the previous one keeps serving. A container start
 runs only `fabrika db migrate` as an init command, and the start script only starts the server. The checks no longer
 cost every start, restart and added container the time of the isolation tests (almost 3 minutes for the CRM's 605
 cases on a small database).
 
 The cluster is 18, the platform's application databases' major; an application that declares an older one still
-builds against 18, because the checks need only a server that runs its migrations. Only an Alpine build image has
-`apk`, so a build whose authored `build.os` or `build.base` names another OS keeps the earlier form: the init commands
+builds against 18, because the checks need only a server that runs its migrations. Only a build whose every base is
+known to be Alpine 3.23 or later carries `postgresql18` (today the default `alpine/bun@1.3`, verified live; Alpine 3.22
+has none, and a name does not tell the release), so any other build keeps the earlier form: the init commands
 run `fabrika db migrate`, then `fabrika db codegen --verify` against the application's real schema and
 `fabrika db test-isolation` on a throwaway schema, each script under `set -eu`, and a failed one stops the activation
 (ADR-0062: no application has to change its build to deploy). Init commands run before `run.start` because the
@@ -135,7 +137,7 @@ reacts in 10–20 s, so the platform killed the run on 2 of 3 first deploys and 
 service's minimum RAM to 0.5 GB for an application with a database, and to 2 GB for one that scans uploads, in the
 `raise-start-memory` step before it reserves a version. An import cannot do it: Zerops ignores a changed
 `verticalAutoscaling` of an existing service. The step changes only that field through the autoscaling API, reads it
-back, and never lowers it. Since the schema checks moved into the build, only a build image other than Alpine still
+back, and never lowers it. Since the schema checks moved into the build, only a build on another base still
 needs that memory at start; the minimum stays, because an existing service never lowers it either.
 
 **Every process of an application fits its database's connection limit.** The deploy's `size-database`

@@ -146,9 +146,10 @@ bun test
   `postgresql18`, starts a throwaway cluster on a unix socket behind a random password, migrates it from scratch, runs
   `fabrika db codegen --verify` and `fabrika db test-isolation` on it and stops it, so a failed one fails the build; the
   init command runs only `fabrika db migrate`. Its `$PW` is unbraced on purpose: Zerops may resolve a braced `${name}`
-  in a build command (verified live 2026-11-17), and the recipe refuses one. Only an Alpine build has `apk`, so a build
-  whose authored `build.os` or `build.base` names another OS keeps the schema checks in the init commands
-  (`zeropsSchemaChecks`): `fabrika db migrate`, then `fabrika db codegen --verify` and `fabrika db test-isolation`, a
+  in a build command (verified live 2026-11-17), and the recipe refuses one. Only a build whose every base is known to be Alpine 3.23 or
+  later (`POSTGRES18_BUILD_BASES`: `alpine/bun@1.3`, verified live; a bare name is the `alpine/` one) has
+  `postgresql18`; any other keeps the schema checks in the init commands (`zeropsSchemaChecks`). Add a base only once
+  its Alpine release is verified; never select by trying `apk add` in the build, which hides a misconfiguration: `fabrika db migrate`, then `fabrika db codegen --verify` and `fabrika db test-isolation`, a
   failure stopping the activation (verified live 2026-10-16). Never move them into the start script: the readiness
   window (180 s, not the application's to raise) opens with `run.start`, and the CRM's isolation tests alone took
   almost 3 minutes there (issue #27); the window opens only after the init commands (verified live 2026-10-21). A `DEPLOY_FAILED` version's error names the init commands and the readiness check. The run section names the application's one PostgreSQL
@@ -174,7 +175,7 @@ bun test
   `incomplete`. Every build command, the authored ones included, can read the bearer, and so can the runtime until the
   next deploy replaces it: it reaches only this run's release and expires two hours after the run started.
 - **`raise-start-memory` raises the deploy service's minimum RAM before a version is reserved (ADR-0043).** It was
-  sized for `fabrika db test-isolation` at start, which a build other than Alpine still runs there and which peaks above
+  sized for `fabrika db test-isolation` at start, which a build on another base still runs there and which peaks above
   the runtime's 0.125 GB faster than vertical autoscaling reacts, so
   `zeropsStartMinRam` (`src/execution.ts`) names the floor: 0.5 GB with a database, 2 GB with a scanner. An import
   cannot change an existing service, so the step reads `customAutoscaling` back, sends it WHOLE with only

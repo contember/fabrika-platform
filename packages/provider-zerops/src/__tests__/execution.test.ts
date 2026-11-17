@@ -15,6 +15,7 @@ import {
 	renderLockedExecutionDescriptor,
 	zeropsAssetRoots,
 	zeropsContractRun,
+	zeropsSchemaChecks,
 } from '../execution'
 import {
 	compileFabrikaManifest,
@@ -106,7 +107,9 @@ describe('the generated execution descriptor of a contract application', () => {
 					expect.stringMatching(/^printf '%s\\n' '\{"compilerOptions":.*' > fabrika\/tsconfig\.platform\.json$/),
 					`cd /tmp && bun x --bun -p typescript@${PLATFORM_TYPESCRIPT_VERSION} tsc -p /build/source/fabrika/tsconfig.platform.json`,
 					`cd /tmp && bun x --bun -p @fabrika/check@${FABRIKA_CHECK_VERSION} fabrika-check /build/source`,
-					expect.stringMatching(/^set -eu\n.*sudo apk add --no-cache --quiet postgresql18\n.*fabrika db test-isolation .*--mode=fast stop >\/dev\/null$/s),
+					expect.stringMatching(
+						/^set -eu\n.*sudo apk add --no-cache --quiet postgresql18\n.*fabrika db test-isolation .*--mode=fast stop >\/dev\/null \|\| pg_ctl \S+ --mode=immediate stop >\/dev\/null$/s,
+					),
 					"printf '%s\\n' '#!/bin/sh' 'set -eu' 'cd /var/www' 'FABRIKA_APP_ID=notes exec ./node_modules/.bin/fabrika db migrate' > fabrika/migrate.generated.sh",
 					"printf '%s\\n' '#!/bin/sh' 'set -eu' 'cd /var/www' 'exec bun --max-http-header-size=65536 fabrika/entry.generated.ts' > fabrika/start.generated.sh",
 				],
@@ -157,35 +160,41 @@ describe('the generated execution descriptor of a contract application', () => {
 		expect(String(commands[position('start.generated.sh')])).not.toContain('fabrika db')
 	})
 
-	for (
-		const [label, build] of [
-			['an authored build OS other than Alpine', 'os: ubuntu'],
-			['an authored base of another OS', 'base: ubuntu/bun@1.3'],
-			['a base list with one of another OS', 'base: [alpine/bun@1.3, ubuntu/go@1]'],
-		] as const
-	) {
-		test(`${label} keeps the schema checks in the init commands, after the migrations`, async () => {
-			const setup = render(
-				await compile(contractApp(), `zerops:\n  - setup: notesapi\n    build:\n      ${build}\n      buildCommands: ["bun run build:spa"]\n`),
-			)
-			expect(mapping(setup['run'])['initCommands']).toEqual(['sh /var/www/fabrika/migrate.generated.sh', 'sh /var/www/fabrika/verify.generated.sh'])
-			const commands = mapping(setup['build'])['buildCommands']
-			if (!Array.isArray(commands)) throw new Error('expected build commands')
-			expect(commands.some((command) => String(command).includes('postgresql18'))).toBe(false)
-			const verify = commands.find((command) => String(command).includes('verify.generated.sh'))
-			expect(String(verify)).toMatch(
-				/'set -eu' 'cd \/var\/www' 'FABRIKA_APP_ID=notes \S+ db codegen --verify' 'FABRIKA_APP_ID=notes exec \S+ db test-isolation'/,
-			)
-		})
-	}
+	test('a build base not known to carry PostgreSQL 18 keeps the schema checks in the init commands, after the migrations', async () => {
+		const setup = render(
+			await compile(contractApp(), 'zerops:\n  - setup: notesapi\n    build:\n      base: ubuntu@24.04\n      buildCommands: ["bun run build:spa"]\n'),
+		)
+		expect(mapping(setup['run'])['initCommands']).toEqual(['sh /var/www/fabrika/migrate.generated.sh', 'sh /var/www/fabrika/verify.generated.sh'])
+		const commands = mapping(setup['build'])['buildCommands']
+		if (!Array.isArray(commands)) throw new Error('expected build commands')
+		expect(commands.some((command) => String(command).includes('postgresql18'))).toBe(false)
+		const verify = commands.find((command) => String(command).includes('verify.generated.sh'))
+		expect(String(verify)).toMatch(
+			/'set -eu' 'cd \/var\/www' 'FABRIKA_APP_ID=notes \S+ db codegen --verify' 'FABRIKA_APP_ID=notes exec \S+ db test-isolation'/,
+		)
+	})
 
-	test('an authored Alpine build runs the schema checks in the build', async () => {
-		for (const build of ['os: alpine', 'base: bun@1.3', 'base: [alpine/bun@1.3, go@1]']) {
-			const setup = render(
-				await compile(contractApp(), `zerops:\n  - setup: notesapi\n    build:\n      ${build}\n      buildCommands: ["bun run build:spa"]\n`),
-			)
-			expect(mapping(setup['run'])['initCommands']).toEqual(['sh /var/www/fabrika/migrate.generated.sh'])
-		}
+	test('only build bases known to be Alpine 3.23 or later check the schema in the build; anything else at start', () => {
+		const at = (base: string | string[] | null, os: string | null = null) => zeropsSchemaChecks({ base, os })
+		// The platform's default, verified live as Alpine 3.23.5, by its name, a bare name of the default OS, or a list of them.
+		expect(at(null)).toBe('build')
+		expect(at('alpine/bun@1.3')).toBe('build')
+		expect(at('bun@1.3')).toBe('build')
+		expect(at('bun@1.3', 'alpine')).toBe('build')
+		expect(at(['alpine/bun@1.3', 'bun@1.3'])).toBe('build')
+		// A bare Ubuntu base names no OS, and Alpine 3.22 has no `postgresql18`.
+		expect(at('ubuntu@24.04')).toBe('init')
+		expect(at('alpine@3.22')).toBe('init')
+		expect(at(['alpine/bun@1.3', 'ubuntu@24.04'])).toBe('init')
+		expect(at(['alpine/bun@1.3', 'alpine@3.22'])).toBe('init')
+		expect(at(['alpine/bun@1.3', 'go@1'])).toBe('init')
+		// Another OS, or an Alpine release that cannot be told from the name.
+		expect(at(null, 'ubuntu')).toBe('init')
+		expect(at('bun@1.3', 'ubuntu')).toBe('init')
+		expect(at('ubuntu/bun@1.3')).toBe('init')
+		expect(at('alpine/bun@1.2')).toBe('init')
+		expect(at('alpine/bun@latest')).toBe('init')
+		expect(at([])).toBe('init')
 	})
 
 	test('the authored tests run before the reinstall, the regenerated entrypoint and every check', async () => {

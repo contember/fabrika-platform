@@ -52,7 +52,7 @@ export const ZEROPS_SCAN_MIN_RAM_GB = 2
  * The RAM in GB a container of an application with a database starts with. It was sized for `fabrika db test-isolation`
  * at container start, whose CLI and `bun test` child together peak at 161 MiB of anonymous memory for the Notes example
  * and 225 MiB for the CRM example (measured locally, 2026-10-15), beside Bun's own mapped binary; Zerops' 0.125 GB floor
- * kills that within a second. An Alpine build now runs it in the build; a build on another OS still runs it at start.
+ * kills that within a second. A build on a known base now runs it in the build; any other still runs it at start.
  */
 export const ZEROPS_START_MIN_RAM_GB = 0.5
 
@@ -271,13 +271,22 @@ const readinessCommand = (path: string): string => {
 export type ZeropsSchemaChecks = 'build' | 'init'
 
 /**
- * The build installs its throwaway PostgreSQL with `sudo apk`, so only an Alpine build image runs the schema checks: the
- * default `os`, with no base of another OS. Any other build keeps them in the init commands (ADR-0062).
+ * The build bases whose image is known to be Alpine 3.23 or later, where `apk` carries `postgresql18`: verified live
+ * (`alpine/bun@1.3` is Alpine 3.23.5, 2026-11-17, `docs/reference/zerops-platform.md`). Alpine 3.22 has no
+ * `postgresql18`, and an image's Alpine release cannot be read from its name, so a base is added here only once verified.
+ */
+const POSTGRES18_BUILD_BASES: ReadonlySet<string> = new Set([ZEROPS_APPLICATION_RUNTIME])
+
+/**
+ * Where the schema checks of an application with a database run: in the build only when every build base is a known one
+ * (a bare name such as `bun@1.3` is the `alpine/` image of the default `os`); any other build keeps them in the init
+ * commands (ADR-0062).
  */
 export function zeropsSchemaChecks(authored: Pick<AuthoredBuild, 'base' | 'os'>): ZeropsSchemaChecks {
-	const bases = authored.base === null ? [] : typeof authored.base === 'string' ? [authored.base] : authored.base
-	const alpine = (authored.os === null || authored.os === 'alpine') && bases.every((base) => !base.includes('/') || base.startsWith('alpine/'))
-	return alpine ? 'build' : 'init'
+	if (authored.os !== null && authored.os !== 'alpine') return 'init'
+	const bases = authored.base === null ? [ZEROPS_APPLICATION_RUNTIME] : typeof authored.base === 'string' ? [authored.base] : authored.base
+	const known = bases.length > 0 && bases.every((base) => POSTGRES18_BUILD_BASES.has(base.includes('/') ? base : `alpine/${base}`))
+	return known ? 'build' : 'init'
 }
 
 /** `@fabrika/app/build`'s recipe at this installation's paths. */
