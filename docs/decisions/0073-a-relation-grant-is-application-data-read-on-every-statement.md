@@ -25,8 +25,7 @@ entity and an operation with at least one predicate) across five rule sets. Toda
 spike in [#134](https://github.com/contember/fabrika-platform/pull/134) built relation grants and narrowing conditions
 end to end. They express 50.9 % as the spike stands, and 59.2 % once the principal id is stored on the relation's row.
 This record states the model. What its declarations do not express, an access view expresses
-([ADR-0076](0076-an-access-view-decides-the-rows-a-relation-reaches.md)); the remaining steps of the
-[coverage roadmap](../ideas/acl-coverage-roadmap.md) are not built.
+([ADR-0076](0076-an-access-view-decides-the-rows-a-relation-reaches.md)).
 
 The forces:
 
@@ -165,7 +164,9 @@ for each relation action, and never `~rel`.
   one), so the relation ends at the first `:` and the dimension at the second; the node is the rest, verbatim, and may
   hold `:`. IAM gives no entry for a name that holds one.
 - **Inside is strict.** The data layer narrows each term of the relation, its reveals and its secondary paths, to rows
-  whose own column for the grant's dimension names the node: `(<term> and (T.<column> in (<nodes>)))`. A table with no
+  whose own column for the grant's dimension names the node: `(<term> and (T.<column> in (<nodes>)))`. The one
+  exception is an access view bound to the node (ADR-0076 section 2): its SQL decides which rows the node reaches, for
+  a `Within`'s reads, and a grant at the node reaches whatever it maps the node to. A table with no
   column for that dimension gets no term from the entry, and neither does a reveal to a dimension above the node: its
   rows lie at the node's ancestor, not inside the node. The framework counts an entry only where the relation's
   dimension, and a reveal's, is the grant's dimension or lies inside it; `on` and `in` ask the database for the object
@@ -331,7 +332,8 @@ still narrows every grant.
 
 - **The parse refuses what reaches nothing.** The relation is one the vocabulary declares, the action one the table
   names, and the relation reaches the table for the action: its dimension is in the table's chain, a secondary path
-  reads it, or a reveal of the relation for that action names a node the row lies at. A view is judged against its
+  reads it, a reveal of the relation for that action names a node the row lies at, or the table names an access view
+  for it (ADR-0076). A view is judged against its
   parent. An application or reference table takes none.
 - **The nesting bound holds.** The condition stands beside the term, not inside its subquery, so its paths count as a
   `when`'s do: at most three foreign keys, and the deepest term stays the four of section 3.
