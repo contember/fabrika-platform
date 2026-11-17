@@ -317,6 +317,23 @@ describe('data loss: a statement that deletes or overwrites stored data, or call
 		expect(losses(sql)).toEqual([])
 	})
 
+	test("a SQLite table's options only create: STRICT and WITHOUT ROWID record nothing, and an UPDATE of an older table still does", () => {
+		const sql = [
+			'CREATE TABLE notes (id TEXT PRIMARY KEY, body TEXT) STRICT;',
+			'CREATE TABLE tags (id TEXT PRIMARY KEY) WITHOUT ROWID;',
+			'CREATE TABLE [odd;name] (id TEXT PRIMARY KEY) STRICT, WITHOUT ROWID;',
+			'CREATE TABLE `other;name` (id TEXT PRIMARY KEY) without rowid,strict;',
+			'ALTER TABLE notes ADD COLUMN title TEXT;',
+			'CREATE INDEX notes_title ON notes (title);',
+			"INSERT INTO notes (id, body) VALUES ('a', '');",
+			"UPDATE notes SET title = '';",
+			"UPDATE deals SET stage = 'lead';",
+		].join('\n')
+		const file = classifyMigrations([{ name: FILE, sql }], SCHEMA, { dialect: 'sqlite' }).files[0]
+		expect(file?.refused).toEqual([])
+		expect(file?.dataLoss.map((loss) => `${loss.line} ${loss.statement} ${loss.object}`)).toEqual(['9 UPDATE deals'])
+	})
+
 	test('any other statement records a line naming its first keywords, since it is not known to keep every value', () => {
 		const sql = [
 			'ALTER TABLE notes VALIDATE CONSTRAINT c;',
