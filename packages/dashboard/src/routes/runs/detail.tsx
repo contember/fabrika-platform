@@ -139,7 +139,7 @@ function DeployAgainButton({ appId, env, commitSha }: { appId: string; env: stri
 
 	return (
 		<>
-			<button ref={button} type="button" className="small" onClick={() => setConfirming(true)} disabled={confirming}>
+			<button ref={button} type="button" className="small" onClick={() => setConfirming(true)} aria-haspopup="dialog">
 				<Icon name="refresh" size={13} />
 				Deploy again
 			</button>
