@@ -14,6 +14,7 @@ export {
 } from './db/backups'
 export { BuilderConnectionRepository } from './db/builder-connections'
 export { type ControlRepositories, createControlRepositories } from './db/composition'
+export { defaultProtected } from './db/coordinate-lock'
 export {
 	type DataOperationAdvance,
 	type DataOperationFields,

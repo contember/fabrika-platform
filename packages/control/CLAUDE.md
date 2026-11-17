@@ -572,6 +572,9 @@ other environment, before the provider prepares anything, and the write maps a r
   answers the body of `@fabrika/app`'s `skill/SKILL.md`; the server `instructions` stay under 2,000
   characters (some clients cut them at 2 KB) and point to it. Never restate the rules beyond those three lines.
   One authoring environment per app, on a provider that declares `authoring`: `apps.environments.put` answers 409 while another env holds the flag.
+  An authoring environment is never protected (ADR-0049 rule 7): `put` refuses `authoring: true` on a protected one (a
+  new `prod` included), and `apps.environments.protect` refuses an authoring one, in the use case and in the
+  conditional write of `setAppEnvProtected`.
 - **A `dev` environment gives each MCP workspace its own sandbox, which follows the workspace without a run
   (ADR-0049 rule 10).** `app_envs.kind = 'dev'` is set at creation and never changes; one per app, never `prod`, never
   protected, never authoring, no trigger ref, with a `domain` (the wildcard base), and only on a provider with
@@ -699,7 +702,17 @@ other environment, before the provider prepares anything, and the write maps a r
   proxy admitted the session's POST from the console itself. The decision is written under the run lease
   (a busy environment answers 409); it is never an unfenced run write. Runs record their actor (`runActor`).
   Deleting a protected environment, or an app with one, takes the same human (`requireHumanForProtectedDelete`,
-  over `RegistryUseCaseContext.admission`). The flag and the counters outlive the row in `app_env_protection`; a
+  over `RegistryUseCaseContext.admission`). A manual run of a protected environment takes a person too
+  (`protectedRunRefusal`): `isPerson`, a user principal without OAuth or link claims (a bearer is not refused, though
+  no flow issues a person one), and a full ref or a 40-hex SHA that is not a workspace ref. `createManualRun` checks
+  it (`requirePersonForProtectedDeploy`, so `triggerDeploy` and `deploy_stage` share it) after `deploy.trigger`, so a
+  caller without it still gets the 404; `deployUnder` checks it again when a manual run starts, from the run's actor,
+  and fails the run into its log. A restore's own deploy is exempt: it redeploys the running commit, and the restore's
+  record names the run (`RestoreRepository.namesRun`), so an approved restore deploy queued again stays exempt.
+  `requirePersonToPointTriggerRef` keeps a key from naming a protected environment's trigger ref (also on a new one that
+  starts protected, through `put` or `register`), and `requirePersonToRedirect` from changing any field of `apps.update`
+  on its app (ADR-0050 §4). `apps.update` writes only the fields that change, and a key's write is conditional in SQL
+  on no protected environment (`updateApp` with `unlessProtected`). The flag and the counters outlive the row in `app_env_protection`; a
   change of the flag bumps `protection_revision` and `generation`, and a registry write bumps `generation`, so an
   in-flight publication loses. Registry put and delete apply only at the generation they read (409 otherwise), and
   every write of an environment takes its coordinate lock first (`DATABASE.md`). `apps.environments.protect` takes

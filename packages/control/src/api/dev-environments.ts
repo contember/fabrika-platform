@@ -237,8 +237,7 @@ export async function bindDevUseCase(c: DevUseCaseContext, input: { workspaceId:
 	// A sandbox Box created again holds nothing: it is bootstrapped like a new one.
 	const started = ensured.replaced || contact.silent || await needsBootstrap(c, dev, appEnv, contact.record, owned, head)
 		? await createManualRun(c, {
-			appId: appEnv.app_id,
-			env: appEnv.env,
+			appEnv,
 			ref: `refs/heads/${owned.workspace.branch}`,
 			commitSha: head,
 			lane: workspaceId,

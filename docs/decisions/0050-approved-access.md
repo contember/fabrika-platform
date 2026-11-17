@@ -437,9 +437,45 @@ environment starts from it, else from the default. Deleting a protected environm
 with one, takes the same human with `access.approve`.
 
 Unprotected environments do not wait. Every environment with `protected = true` requires approval
-for a change that needs closer review, whatever its name or role. Staging and MCP authoring targets are unprotected by
-default, so a change applies there at once. When the same commit is deployed to a protected
-environment, Control classifies it again against that environment's active snapshot.
+for a change that needs closer review, whatever its name or role. Staging is unprotected by default, so a change applies
+there at once. When the same commit is deployed to a protected environment, Control classifies it again against that
+environment's active snapshot.
+
+The flag also limits who deploys. Only a person starts a manual run of a protected environment: a user principal
+without OAuth or link claims (`isPerson`, `src/approval/human.ts`), which in practice is a person in the console. No
+flow issues a person a bearer of their own: `fabrika control` and the builder's device flow run with service keys. A
+service principal, the builder key ([ADR-0042](0042-connect-local-builders-through-human-consent.md)), an IAM service
+key and an MCP agent are refused with a 403 that names the cause; Control cannot tell the builder key from any other
+service key, so all of them are refused. A push or a poll is unaffected: a person pushed.
+
+A manual run of a protected environment names a full ref (`refs/heads/…`, `refs/tags/…`) or a 40-character commit
+SHA; any other spelling is refused with a 400 that names the accepted forms. A workspace ref (`refs/heads/fabrika/…`)
+is refused there whoever asks: a workspace reaches a protected environment only after a merge into its trigger ref
+([ADR-0049](0049-author-applications-through-mcp-in-control.md) rule 7). The limit: a SHA or a tag is not traced back
+to a workspace, so a person can still deploy a workspace head by its SHA. Only a person gets that far, and the
+console's own redeploy of a run names its commit by SHA.
+
+Control checks the run again when it starts, against the environment as it is then, because the flag may have been
+set after the run was queued: a manual run whose actor is not a person (`user:`), or whose ref is refused as above,
+fails with the same message in its run log and deploys nothing. A restore's own deploy is exempt: it redeploys the
+commit the environment last ran ([ADR-0070](0070-data-protection-of-an-application-environment-on-cloudflare.md) §9).
+The exemption comes from the restore's record, which names the run before the run exists, so it holds also for a
+restore's deploy that waited for approval and was queued again once a person approved it.
+
+A key cannot redirect what a deploy of a protected environment runs either. `apps.environments.put` that names a
+different trigger ref for one, or creates one with a trigger ref (a new `prod`, or one whose protection was kept), takes
+a person (403), as does `apps.register` of an app whose environment starts protected with a trigger ref. So does
+`apps.update` of an app with a protected environment that changes any field it takes: `repoUrl`, the GitHub source
+binding, `defaultBranch`, `workerDir`, `buildCmd` or `configPath`. Clearing the trigger ref stops push deploys and stays
+open to a key, as does a `null` field, which keeps the stored value. `apps.update` writes only the fields whose value
+differs from what it read, so a value a key sends again never undoes a change made since; a key's write applies only
+while no environment of the app is protected, judged in the write's own statement, so a protection that lands after the
+check still refuses it.
+
+These are authorization checks in Control's use cases, after `deploy.trigger`, so a caller without it still gets the
+404 of an absent environment. For the same reason an MCP authoring target is never protected:
+`apps.environments.put` refuses `authoring: true` on a protected environment, and `apps.environments.protect`
+refuses an authoring target (409).
 
 Staging must not hold production data. This is a rule for operators; the platform does not enforce it.
 

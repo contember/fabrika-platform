@@ -196,6 +196,10 @@ export class ControlRegistryRepository {
 			)
 	}
 
+	/**
+	 * With `unlessProtected`, the update applies only while no environment of the app is protected, judged in the same
+	 * statement. Null when the app is missing or, with it, when one is protected.
+	 */
 	async updateApp(id: string, patch: {
 		repoUrl?: string
 		defaultBranch?: string
@@ -204,7 +208,10 @@ export class ControlRegistryRepository {
 		configPath?: string | null
 		githubConnectionId?: string | null
 		githubInstallationId?: number | null
-	}): Promise<AppRow | null> {
+	}, options: { readonly unlessProtected?: boolean } = {}): Promise<AppRow | null> {
+		const unprotected = options.unlessProtected === true
+			? ' AND NOT EXISTS (SELECT 1 FROM app_envs WHERE app_envs.app_id = apps.id AND app_envs.protected = 1)'
+			: ''
 		return this.d1
 			.prepare(`UPDATE apps SET
 				repo_url = COALESCE(?, repo_url),
@@ -214,7 +221,7 @@ export class ControlRegistryRepository {
 				config_path = COALESCE(?, config_path),
 				github_connection_id = CASE WHEN ? = 1 THEN ? ELSE github_connection_id END,
 				github_installation_id = CASE WHEN ? = 1 THEN ? ELSE github_installation_id END
-				WHERE id = ? RETURNING *`)
+				WHERE id = ?${unprotected} RETURNING *`)
 			.bind(
 				patch.repoUrl ?? null,
 				patch.defaultBranch ?? null,
@@ -915,7 +922,7 @@ export class ControlRegistryRepository {
 	 * change advances `generation`, so a run that classified under the old flag loses its publication, and the flag is
 	 * kept for these coordinates beyond the environment's deletion. It is fenced on the environment's deployment lease
 	 * and refused while a run is `running`: that run's job applies what the old flag allowed. Null when the environment is
-	 * missing, the lease is lost or a run is running.
+	 * missing, the lease is lost, a run is running, or protecting an environment that became an authoring target.
 	 */
 	async setAppEnvProtected(appId: string, env: string, value: boolean, fence: LeaseFence): Promise<AppEnvRow | null> {
 		const key = runLeaseKey(appId, env)
@@ -933,7 +940,8 @@ export class ControlRegistryRepository {
 				WHERE app_id = ? AND env = ?
 					AND EXISTS (SELECT 1 FROM deploy_locks WHERE lock_key = ? AND holder = ? AND expires_at > ?)
 					AND NOT EXISTS (SELECT 1 FROM runs WHERE runs.app_id = app_envs.app_id AND runs.env = app_envs.env AND runs.status = 'running')
-				RETURNING *`).bind(value ? 1 : 0, appId, env, key, fence.holder, fence.nowMs),
+					AND (? = 0 OR authoring = 0)
+				RETURNING *`).bind(value ? 1 : 0, appId, env, key, fence.holder, fence.nowMs, value ? 1 : 0),
 		])
 		return results[leading.length]?.results[0] ?? null
 	}

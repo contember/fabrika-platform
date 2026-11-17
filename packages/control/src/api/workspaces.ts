@@ -581,8 +581,7 @@ export async function deployStageUseCase(c: WorkspaceUseCaseContext, input: { wo
 	const owned = await requireWorkspace(c, input.workspaceId, CONTROL_ACTIONS.DEPLOY_TRIGGER)
 	const commitSha = await requireHead(c, owned)
 	return createManualRun(c, {
-		appId: owned.workspace.app_id,
-		env: owned.workspace.env,
+		appEnv: owned.appEnv,
 		ref: `refs/heads/${owned.workspace.branch}`,
 		commitSha,
 	})

@@ -30,13 +30,15 @@ import {
 import { parseClassification } from '../approval/publish'
 import { MIGRATION_GUIDE } from '../approval/readers'
 import { type AccessSnapshot, approvedSnapshot, serializeSnapshot } from '../approval/snapshot'
+import { LIST_FAILED_CODE } from '../data-operations'
 import type { AppEnvRow, ControlRepositories, RunRow } from '../db'
+import { acquireLease, type LeaseFence, runLeaseKey } from '../lease'
 import { type InstallationMail, NO_INSTALLATION_MAIL } from '../mail-transport'
 import { type MembershipKeyIssuer, VaultMembershipTransport } from '../membership-transport'
 import { VaultPlatformTransport } from '../platform-transport'
 import { type ProviderReconcileDeps, reconcileProviderRuns } from '../provider-reconcile'
 import type { ControlJobMessage } from '../run-lifecycle'
-import { cancelDeploy, executeDeploy, providerEnvironment, type RunDeps } from '../run-lifecycle'
+import { cancelDeploy, executeDeploy, executeDeployUnderLease, providerEnvironment, type RunDeps } from '../run-lifecycle'
 import { VaultSecretResolver } from '../secret-resolver'
 import { Vault } from '../vault'
 import { VaultWorkloadCredentials, type WorkloadKeyIssuer } from '../workload-credentials'
@@ -44,7 +46,7 @@ import { frameworkLockfile, memoryCommits } from './helpers/commits'
 import { BASE, edited, WITH_EXPORT, WITHOUT_REMOVE } from './helpers/contracts'
 import { createHarness, harnessDatabase, queryRows } from './helpers/harness'
 import { kitFiles } from './helpers/kit-contract'
-import { makeFakeLock } from './helpers/lock'
+import { fixtureProtect, makeFakeLock } from './helpers/lock'
 import { protectionRaceScenario } from './helpers/protection-race'
 import { refusedClaimScenario } from './helpers/refused-claims'
 import { fixedProxySecrets } from './helpers/vault'
@@ -792,6 +794,33 @@ describe('approved access through the run lifecycle', () => {
 		expect(dto.protected).toBe(true)
 		expect(caller.audited).toEqual(['access.protect'])
 		expect((await deploy(w, 'stage')).status).toBe('awaiting_approval')
+	})
+
+	test('an authoring environment cannot be protected, also when it became one after the check read it', async () => {
+		const w = world()
+		await seed(w)
+		const stage = await w.db.registry.getAppEnv('notes', 'stage')
+		if (stage === null) throw new Error('no stage')
+		await w.db.registry.upsertAppEnv({
+			appId: 'notes',
+			env: 'stage',
+			domain: stage.domain,
+			namespaceId: stage.namespace_id,
+			provider: 'harbor',
+			providerTargetJson: stage.provider_target_json,
+			providerArtifactJson: stage.provider_artifact_json,
+			authoring: true,
+		})
+		const refused = setEnvironmentProtectionUseCase(approvals(w, auth()), { appId: 'notes', env: 'stage', protected: true })
+		await expect(refused).rejects.toMatchObject({
+			httpStatus: 409,
+			message: "environment `stage` is the app's authoring target, where an agent deploys unreviewed workspace heads, so it cannot be "
+				+ 'protected; clear its authoring flag with apps.environments.put first',
+		})
+		expect((await w.db.registry.getAppEnv('notes', 'stage'))?.protected).toBe(0)
+		// The write itself refuses it, so a put that set the flag between the read and the write cannot slip through.
+		expect(await fixtureProtect(w.db.registry, makeFakeLock(w.db), { appId: 'notes', env: 'stage' }, true)).toBeNull()
+		expect((await fixtureProtect(w.db.registry, makeFakeLock(w.db), { appId: 'notes', env: 'stage' }, false))?.protected).toBe(0)
 	})
 
 	test('turning protection off approves no parked run: it waits for a decision, while a new deploy publishes at once', async () => {
@@ -1871,5 +1900,142 @@ describe('a dev environment', () => {
 		const w = world()
 		await seedDev(w)
 		expect(await status(setEnvironmentProtectionUseCase(approvals(w, auth()), { appId: 'notes', env: 'dev', protected: true }))).toBe(409)
+	})
+})
+
+describe('a protected environment is checked again when its run starts', () => {
+	const NOT_A_PERSON = 'environment `stage` is protected: only a person deploys it by hand, from the console; an agent, a builder key or a '
+		+ "service key cannot. A push to the environment's trigger ref still deploys it"
+
+	/**
+	 * A run queued on the unprotected `stage`, which a person then protects before the run starts. `stage` already runs
+	 * the contract, so a run that starts deploys without waiting for approval; that first deploy is not counted.
+	 */
+	async function queuedThenProtected(w: World, run: { trigger: RunRow['trigger']; actor: string; ref?: string }): Promise<string> {
+		await seed(w)
+		expect((await deploy(w, 'stage')).status).toBe('succeeded')
+		w.deploys.splice(0)
+		w.republished.splice(0)
+		const runId = uuidv7()
+		await w.db.runs.createRun({ id: runId, appId: 'notes', env: 'stage', ref: run.ref ?? 'refs/heads/main', trigger: run.trigger, actor: run.actor })
+		expect((await fixtureProtect(w.db.registry, makeFakeLock(w.db), { appId: 'notes', env: 'stage' }, true))?.protected).toBe(1)
+		return runId
+	}
+
+	test("a key's run queued before the protection fails at start, logs why, and deploys nothing", async () => {
+		const w = world()
+		const runId = await queuedThenProtected(w, { trigger: 'manual', actor: 'service:builder' })
+		expect(await executeDeploy(deps(w), { runId })).toEqual({ runId, status: 'failed' })
+		expect(w.deploys).toEqual([])
+		expect(w.republished).toEqual([])
+		expect(w.logs.get(`runs/${runId}/logs.ndjson`)).toContain(NOT_A_PERSON)
+		expect((await run(w, runId)).commit_sha).toBeNull()
+	})
+
+	test("an MCP agent's run and a run older than actors fail the same way", async () => {
+		for (const actor of ['oauth:p-agent', 'anonymous']) {
+			const w = world()
+			const runId = await queuedThenProtected(w, { trigger: 'manual', actor })
+			expect((await executeDeploy(deps(w), { runId })).status).toBe('failed')
+			expect(w.deploys).toEqual([])
+		}
+	})
+
+	test("a person's run still deploys, unless it names a workspace branch or a short ref", async () => {
+		const w = world()
+		const runId = await queuedThenProtected(w, { trigger: 'manual', actor: 'user:p-ada' })
+		expect((await executeDeploy(deps(w), { runId })).status).toBe('succeeded')
+		expect(w.deploys.map((input) => input.runId)).toEqual([runId])
+		for (const ref of ['refs/heads/fabrika/0190', 'fabrika/0190', 'heads/fabrika/0190', 'main']) {
+			const refused = uuidv7()
+			await w.db.runs.createRun({ id: refused, appId: 'notes', env: 'stage', ref, trigger: 'manual', actor: 'user:p-ada' })
+			expect((await executeDeploy(deps(w), { runId: refused })).status).toBe('failed')
+		}
+		expect(w.deploys).toHaveLength(1)
+	})
+
+	test('a push or a poll run is unaffected', async () => {
+		for (const [trigger, actor] of [['webhook', 'webhook:conn'], ['poll', 'poll']] as const) {
+			const w = world()
+			const runId = await queuedThenProtected(w, { trigger, actor })
+			expect((await executeDeploy(deps(w), { runId })).status).toBe('succeeded')
+			expect(w.deploys).toHaveLength(1)
+		}
+	})
+
+	/**
+	 * Run a restore's listing deploy as the restore does (ADR-0070 §9): a key records the restore, which names its run
+	 * before creating it, and the deploy runs under the restore's lease. `settle` ends the restore under that lease.
+	 */
+	async function restoreDeploy(
+		w: World,
+		env: string,
+		runId: string,
+		settle: (operationId: string, fence: LeaseFence) => Promise<boolean>,
+	): Promise<string> {
+		const lease = await acquireLease(makeFakeLock(w.db), runLeaseKey('notes', env))
+		if (lease === null) throw new Error('the lease is held')
+		try {
+			const operationId = uuidv7()
+			const generation = await w.db.dataOperations.allocateGeneration('notes', env)
+			const restore = { at: '2027-01-15T07:00:00.000Z', original: 'application', clone: `application-${operationId}` }
+			const operation = { id: operationId, appId: 'notes', env, step: 'list' as const, targetMode: 'open' as const, generation }
+			expect(await w.db.dataOperations.create({ ...operation, kind: 'restore', actor: 'service:operator', restore }, lease.fence())).not.toBeNull()
+			expect(await w.db.restores.nameRun(operationId, 'list', runId, lease.fence())).toBe(true)
+			await w.db.runs.createRun({
+				id: runId,
+				appId: 'notes',
+				env,
+				ref: 'refs/heads/main',
+				commitSha: COMMIT,
+				trigger: 'manual',
+				actor: 'service:operator',
+			})
+			const { status } = await executeDeployUnderLease(deps(w), { runId }, lease)
+			expect(await settle(operationId, lease.fence())).toBe(true)
+			return status
+		} finally {
+			await lease.release()
+		}
+	}
+
+	test("a restore's own deploy is exempt, though a key started it: it brings no new code", async () => {
+		const w = world()
+		await queuedThenProtected(w, { trigger: 'manual', actor: 'service:operator' })
+		const runId = uuidv7()
+		expect(await restoreDeploy(w, 'stage', runId, (id, fence) => w.db.dataOperations.finish(id, fence))).toBe('succeeded')
+		expect(w.deploys.map((input) => input.runId)).toEqual([runId])
+	})
+
+	test("a key's restore whose deploy parks for approval still deploys once a person approves it", async () => {
+		const w = world()
+		await seed(w)
+		// The commit the restore redeploys deletes rows, a line that needs closer review, so its deploy waits on `prod`.
+		w.files = DELETES_NOTES
+		const runId = uuidv7()
+		// A parked run is no deploy the restore can wait for: it fails, and the environment opens again.
+		const parked = await restoreDeploy(w, 'prod', runId, (id, fence) => w.db.dataOperations.fail(id, LIST_FAILED_CODE, fence))
+		expect(parked).toBe('awaiting_approval')
+		expect(w.deploys).toEqual([])
+		await approve(w, runId)
+		expect(w.queued).toContainEqual({ runId })
+		// The approval queues it as an ordinary run; the restore's record, not that invocation, exempts it.
+		expect(await executeDeploy(deps(w), { runId })).toEqual({ runId, status: 'succeeded' })
+		expect(w.deploys.map((input) => input.runId)).toEqual([runId])
+		expect(w.logs.get(`runs/${runId}/logs.ndjson`) ?? '').not.toContain('is protected')
+	})
+
+	test("a key's run that no restore names is not exempt, under a lease or not", async () => {
+		const w = world()
+		const runId = await queuedThenProtected(w, { trigger: 'manual', actor: 'service:operator' })
+		const lease = await acquireLease(makeFakeLock(w.db), runLeaseKey('notes', 'stage'))
+		if (lease === null) throw new Error('the lease is held')
+		try {
+			expect((await executeDeployUnderLease(deps(w), { runId }, lease)).status).toBe('failed')
+		} finally {
+			await lease.release()
+		}
+		expect(w.deploys).toEqual([])
+		expect(w.logs.get(`runs/${runId}/logs.ndjson`)).toContain(NOT_A_PERSON)
 	})
 })

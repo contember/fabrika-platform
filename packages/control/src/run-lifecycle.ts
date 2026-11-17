@@ -43,6 +43,7 @@ import {
 	unconfirmedUpdateRefusal,
 } from './api/namespaces'
 import { lifecycleEnvelopeSchema } from './api/provider-envelope'
+import { protectedRunRefusal } from './approval/human'
 import { publishRunSnapshot } from './approval/publish'
 import { type AccessSnapshot, approvedProviderAccess, approvedSnapshot, type ProviderAccessFields } from './approval/snapshot'
 import { connectorAddresses } from './connectors'
@@ -692,6 +693,11 @@ async function deployUnder(
 				`configured provider "${deps.provider.id}" cannot deploy ${app.id}/${appEnv.env} owned by "${appEnv.provider}"`,
 			)
 		}
+		// The environment may have been protected since the run was queued. A restore's own deploy is exempt: it redeploys
+		// the commit the environment already ran, so it brings no new code (ADR-0070 §9). The restore's record names the run,
+		// so the exemption holds also when the run parked for approval and an approval queued it again.
+		const refusal = run.trigger === 'manual' ? protectedRunRefusal(appEnv, { byPerson: run.actor?.startsWith('user:') === true, ref: run.ref }) : null
+		if (refusal !== null && !(await deps.repositories.restores.namesRun(run.app_id, run.env, run.id))) throw new Error(refusal.message)
 		const sandbox = await devBootstrapSandbox(deps, appEnv, run, dryRun)
 		// Read under the lease every data operation holds, so no transition moves while this deploy runs.
 		const maintenance = operationDeploy ? 'open' : await recordedMaintenance(deps, { appId: app.id, env: appEnv.env })

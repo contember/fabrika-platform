@@ -104,6 +104,7 @@ export async function setEnvironmentProtectionUseCase(c: ApprovalUseCaseContext,
 	if (before === null) fail(404, 'app env not found')
 	// ADR-0050: a dev environment runs unreviewed workspace heads, and approval never applies to it.
 	if (before.kind === 'dev' && input.protected) fail(409, 'a dev environment is never protected')
+	if (before.authoring === 1 && input.protected) fail(409, authoringNeverProtected(input.env))
 	// A job started under the old flag would still apply what it allowed, so the change waits for the deployment.
 	const lease = await acquireLease(c.lock, runLeaseKey(input.appId, input.env), c.leaseClock)
 	if (lease === null) fail(409, 'a deployment is running; retry')
@@ -114,7 +115,9 @@ export async function setEnvironmentProtectionUseCase(c: ApprovalUseCaseContext,
 		await lease.release()
 	}
 	if (row === null) {
-		if ((await c.repositories.registry.getAppEnv(input.appId, input.env)) === null) fail(404, 'app env not found')
+		const now = await c.repositories.registry.getAppEnv(input.appId, input.env)
+		if (now === null) fail(404, 'app env not found')
+		if (now.authoring === 1 && input.protected) fail(409, authoringNeverProtected(input.env))
 		fail(409, 'a deployment is running; retry')
 	}
 	await c.auth.audit({
@@ -124,6 +127,12 @@ export async function setEnvironmentProtectionUseCase(c: ApprovalUseCaseContext,
 		metadata: { appId: input.appId, env: input.env, from: before.protected === 1, to: input.protected },
 	})
 	return toAppEnvDto(row)
+}
+
+/** ADR-0049 rule 7: an agent deploys unreviewed workspace heads to the authoring target, and a protected one takes a person. */
+function authoringNeverProtected(env: string): string {
+	return `environment \`${env}\` is the app's authoring target, where an agent deploys unreviewed workspace heads, so it cannot be `
+		+ 'protected; clear its authoring flag with apps.environments.put first'
 }
 
 function mayApprove(auth: AuthContext, run: RunRow): boolean {

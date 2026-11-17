@@ -289,8 +289,9 @@ retry helps, and never carries upstream text, which may hold a token or a clone 
    with `authoring: true`. Only an environment of an app with a GitHub connection, on a provider that declares
    `authoring` (Zerops today), is accepted.
    Control refuses a second authoring environment for the same app (`409`); clear the flag on the
-   first one before moving it. Never mark production: `deploy_stage` deploys unreviewed workspace
-   heads to the authoring environment.
+   first one before moving it. `deploy_stage` deploys unreviewed workspace heads to the authoring environment, so
+   Control refuses a protected one (`409`; `prod` is protected by default), and refuses to protect an authoring
+   environment until its flag is cleared.
 4. **Grant the users** `source.workspace.read`, `source.workspace.write`,
    `source.pull-request.create`, `deploy.trigger` and `deploy.read`, scoped to the app. The token
    carries the intersection of these grants and the scope grant above.
@@ -414,9 +415,11 @@ under `.github/`. The operator changes them through normal review.
 
 The contract, its schema modules, `src/db/tables.ts` and `db/migrations/` are editable: Control classifies
 their change at deploy time ([ADR-0050](../decisions/0050-approved-access.md)). The authoring target is
-unprotected by default, so a change applies there at once. When a change that needs closer review reaches a protected
-environment, `get_deployment` reports the run as `awaiting_approval` with the console's approval link and the
-change in plain language. No OAuth or MCP token can approve it. Its `deviations` name the lines that step off the
+never protected, so a change applies there at once. A change that needs closer review reaches a protected environment
+only after a person merges it. On an authoring target protected before that rule was built, `deploy_stage` is refused
+until an operator clears one of the two flags, and a workspace run parked there earlier is still reported by
+`get_deployment` as `awaiting_approval`, with the console's approval link and the change in plain language. No OAuth or
+MCP token can approve it. Its `deviations` name the lines that step off the
 paved road and need closer review, parked or not.
 
 ## Limits
@@ -424,7 +427,10 @@ paved road and need closer review, parked or not.
 - An access token stays valid until it expires, at most 300 s after a grant or session is revoked.
   Revocation stops refresh and new code exchanges.
 - Zerops only.
-- One authoring environment per app, never production; it shows one workspace at a time.
+- One authoring environment per app, never protected; it shows one workspace at a time.
 - One dev environment per app, never production or protected, on Zerops only; each workspace gets its own sandbox,
   and the sandboxes share one IAM application. In a sandbox jobs do not run.
-- Production is a human merge in GitHub followed by the existing Delivery trigger.
+- Production is a human merge in GitHub followed by the existing Delivery trigger. Control enforces it: only a
+  person starts a manual run of a protected environment, so an MCP token, the builder key and any service key get a
+  `403`, a workspace ref is refused there whoever asks, and a key cannot change the trigger ref, the repository or
+  the build settings that a deploy there runs from.

@@ -1,6 +1,6 @@
 import type { AppDto, AppOptionalFields, CreateAppRequest, ListResponse, OkResponse, UpdateAppRequest } from '@fabrika/control-contract'
 import { CONTROL_ACTIONS } from '@fabrika/control-contract'
-import { requireHumanForProtectedDelete } from '../../approval/human'
+import { isPerson, requireHumanForProtectedDelete, requirePersonToRedirect } from '../../approval/human'
 import { AppEnvChangedError, type AppEnvRow, type AppRow, type NamespaceResourceClaimRow } from '../../db'
 import { normalizeRepoUrl, parseGitHubRepo } from '../../github/triggers/push-event'
 import { fail } from '../domain'
@@ -47,14 +47,22 @@ export async function updateAppUseCase(c: RegistryUseCaseContext, id: string, in
 		fail(403, 'not authorized: changing an application repository or its GitHub source binding needs global app.manage')
 	}
 	const sourceBinding = await sourceBindingFields(c, input, repoUrl, existing)
-	const row = await c.repositories.registry.updateApp(id, {
-		...(repoUrlChanged ? { repoUrl } : {}),
-		...appFields(input),
-		...sourceBinding,
-	})
 	const githubConnectionId = sourceBinding.githubConnectionId === undefined ? existing.github_connection_id : sourceBinding.githubConnectionId
 	const githubInstallationId = sourceBinding.githubInstallationId === undefined ? existing.github_installation_id : sourceBinding.githubInstallationId
 	const bindingChanged = githubConnectionId !== existing.github_connection_id || githubInstallationId !== existing.github_installation_id
+	// Only the fields that change are written, so a value resent from a stale read never undoes a change made since.
+	const fields = changedAppFields(existing, input)
+	const patch = { ...(repoUrlChanged ? { repoUrl } : {}), ...fields, ...(bindingChanged ? sourceBinding : {}) }
+	// Every field the update takes decides what a deploy of the app runs, or where it comes from.
+	const changed = [...(repoUrlChanged ? ['repoUrl'] : []), ...(bindingChanged ? ['GitHub source binding'] : []), ...Object.keys(fields)]
+	const byKey = changed.length > 0 && !isPerson(c.auth)
+	if (byKey) await requirePersonToChangeSource(c, id, changed)
+	// A key's write applies only while no environment is protected, in the same statement, so a protect after the check holds.
+	const row = await c.repositories.registry.updateApp(id, patch, { unlessProtected: byKey })
+	if (row === null && byKey && (await c.repositories.registry.getApp(id)) !== null) {
+		await requirePersonToChangeSource(c, id, changed)
+		fail(409, `app ${id} changed while the request ran; retry`)
+	}
 	const metadata = {
 		...(repoUrlChanged ? { repoUrl, previousRepoUrl: existing.repo_url } : {}),
 		...(bindingChanged
@@ -118,6 +126,24 @@ export function toAppDto(row: AppRow): AppDto {
 		githubConnectionId: row.github_connection_id,
 		githubInstallationId: row.github_installation_id,
 		createdAt: row.created_at,
+	}
+}
+
+/** Changing what a deploy of an app with a protected environment runs, or where it comes from, takes a person. */
+async function requirePersonToChangeSource(c: RegistryUseCaseContext, appId: string, changed: readonly string[]): Promise<void> {
+	const guarded = (await c.repositories.registry.listAppEnvs(appId)).find((row) => row.protected === 1)
+	requirePersonToRedirect(c.auth, guarded?.env ?? null, `its application's ${changed.join(', ')}`)
+}
+
+/** The fields of `appFields` whose value differs from the stored one. A `null` keeps the stored value (`updateApp`). */
+function changedAppFields(existing: AppRow, input: AppOptionalFields): ReturnType<typeof appFields> {
+	const differs = (value: string | null | undefined, stored: string | null): value is string =>
+		value !== undefined && value !== null && value !== stored
+	return {
+		...(differs(input.defaultBranch, existing.default_branch) ? { defaultBranch: input.defaultBranch } : {}),
+		...(differs(input.workerDir, existing.worker_dir) ? { workerDir: input.workerDir } : {}),
+		...(differs(input.buildCmd, existing.build_cmd) ? { buildCmd: input.buildCmd } : {}),
+		...(differs(input.configPath, existing.config_path) ? { configPath: input.configPath } : {}),
 	}
 }
 

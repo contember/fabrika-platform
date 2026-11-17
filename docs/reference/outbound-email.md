@@ -466,7 +466,9 @@ whose jobs declare `mailer: 'installation'`.
 - **Adding or rotating it on Cloudflare.** Re-run `fabrika platform init` with the new
   values: the workflow redeploys IAM and Control. The environments that use it get the
   new set at their next deploy: `fabrika control deploy --app=<id> --env=<name>`, or
-  **Deploy** on the environment in the console.
+  **Deploy** on the environment in the console. `fabrika control deploy` runs with a key,
+  which a protected environment (`prod` by default) refuses: a person deploys it from the
+  console, or a push to its trigger ref does.
 - **Rollout on Cloudflare.** A `fabrika.ref` bump does not rewrite the workflow, and an
   older release's `init` writes the workflow without Control's copy. Bump `fabrika.ref`
   to a release that holds it, then re-run `fabrika platform init --provider=cloudflare`

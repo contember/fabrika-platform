@@ -12,7 +12,8 @@ import {
 	type TriggerDeployRequest,
 } from '@fabrika/control-contract'
 import { type BlobStore, type JobQueue, uuidv7 } from '@fabrika/platform'
-import type { ControlRepositories, RunRow } from '../db'
+import { requirePersonForProtectedDeploy } from '../approval/human'
+import type { AppEnvRow, ControlRepositories, RunRow } from '../db'
 import { DEV_RUN_NEEDS_WORKSPACE } from '../dev/sandbox-keys'
 import { appScope, envScope } from '../iam'
 import { isRefPattern } from '../ref-match'
@@ -196,18 +197,22 @@ export async function triggerDeployUseCase(c: RunsUseCaseContext, input: Trigger
 	// the default branch — pass an explicit `ref` to manually deploy a specific tag of a pattern env.
 	const concreteTriggerRef = appEnv.trigger_ref !== null && !isRefPattern(appEnv.trigger_ref) ? appEnv.trigger_ref : null
 	const ref = input.ref ?? concreteTriggerRef ?? `refs/heads/${app.default_branch}`
-	return createManualRun(c, { appId, env, ref })
+	return createManualRun(c, { appEnv, ref })
 }
 
 /**
  * Write a `pending` manual run, then enqueue it, then audit. The caller has already authorized
- * `deploy.trigger` at the coordinates. A `commitSha` pins the run to that exact commit of `ref`.
+ * `deploy.trigger` at the coordinates, so a protected environment's refusal names nothing it cannot see.
+ * A `commitSha` pins the run to that exact commit of `ref`.
  */
 export async function createManualRun(
 	c: RunTriggerContext,
-	input: { appId: string; env: string; ref: string; commitSha?: string; lane?: string },
+	input: { appEnv: AppEnvRow; ref: string; commitSha?: string; lane?: string },
 ): Promise<RunDto> {
-	const { appId, env, ref } = input
+	const { appEnv, ref } = input
+	requirePersonForProtectedDeploy(c.auth, appEnv, ref)
+	const appId = appEnv.app_id
+	const env = appEnv.env
 	const run = await c.repositories.runs.createRun({
 		id: uuidv7(),
 		appId,

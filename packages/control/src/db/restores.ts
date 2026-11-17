@@ -88,6 +88,16 @@ export class RestoreRepository {
 		return await this.d1.prepare('SELECT * FROM app_env_restores WHERE operation_id = ?').bind(operationId).first<RestoreRow>()
 	}
 
+	/** Whether a restore of the environment names the run as one of its deploys; it is named before the run exists. */
+	async namesRun(appId: string, env: string, runId: string): Promise<boolean> {
+		const row = await this.d1
+			.prepare(`SELECT operation_id FROM app_env_restores
+				WHERE app_id = ? AND env = ? AND (list_run_id = ? OR point_run_id = ? OR revert_run_id = ?)`)
+			.bind(appId, env, runId, runId, runId)
+			.first<{ operation_id: string }>()
+		return row !== null
+	}
+
 	/** Names the run of one of its deploys, once: a run already named stays. */
 	async nameRun(operationId: string, deploy: RestoreDeploy, runId: string, fence: LeaseFence): Promise<boolean> {
 		const column = `${deploy}_run_id`
