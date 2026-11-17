@@ -398,6 +398,7 @@ const tablePolicy: z.ZodType<TablePolicyArtifact> = z.strictObject({
 		when: condition.optional(),
 		assign: z.strictObject({ self: z.boolean() }).optional(),
 	})).optional(),
+	access: record(z.strictObject({ view: name, row: name, principal: nullableName, member: nullableName })).optional(),
 })
 
 export const contractArtifactSchema: z.ZodType<ContractArtifact> = z.strictObject({
