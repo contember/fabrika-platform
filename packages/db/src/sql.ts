@@ -16,6 +16,7 @@ import {
 	ReadSql,
 	referencedForeignSchema,
 	refusedCall,
+	SQLITE_PARAMETER_STARTS,
 	type SqlToken,
 	statementKind,
 	statementsOf,
@@ -119,8 +120,6 @@ const WRITE_WORDS: ReadonlySet<string> = new Set(['INSERT', 'UPDATE', 'DELETE', 
 const LOCK_WORDS: ReadonlySet<string> = new Set(['UPDATE', 'NO', 'SHARE', 'KEY'])
 /** ctx.sql calls reviewed built-ins only: the functions the migrations declare are not known at runtime. */
 const NO_DECLARED_FUNCTIONS: ReadonlySet<string> = new Set()
-/** What starts a parameter SQLite binds by name or by position (`?`, `:x`, `@x`, `$x`, `#x`): only the tag writes one. */
-const SQLITE_PARAMETER_STARTS: ReadonlySet<string> = new Set(['?', ':', '@', '$', '#'])
 
 function refuse(reason: QueryRefusal, message: string): never {
 	throw new QueryRefusedError(reason, `ctx.sql: ${message}`)

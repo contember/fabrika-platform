@@ -64,4 +64,4 @@ export {
 	statementKind,
 	unicodeIdentifier,
 } from './sql-names'
-export { lexSqlite } from './sqlite-sql'
+export { lexSqlite, SQLITE_PARAMETER_STARTS } from './sqlite-sql'

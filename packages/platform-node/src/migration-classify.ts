@@ -40,7 +40,7 @@ import {
 	wordAtDepthZero,
 	writeTargets,
 } from './sql-names'
-import { lexSqlite } from './sqlite-sql'
+import { lexSqlite, SQLITE_PARAMETER_STARTS } from './sqlite-sql'
 
 /** A database object a migration declares, named as the catalog check names it (`trigger deals.audit`). */
 export type DatabaseObjectKind = 'function' | 'procedure' | 'trigger' | 'view' | 'materialized view' | 'rule' | 'policy'
@@ -1087,6 +1087,11 @@ export function classifyMigration(sql: string, schema: string, options: Classify
 	const { tokens: all, unterminated } = lexMigration(sql, context.dialect)
 	if (unterminated !== undefined) {
 		refused.push({ reason: 'a literal, a quoted name or a comment that never closes', file: options.file, line: unterminated })
+	}
+	// A migration runs without bindings, and what follows a SQLite parameter may lex otherwise than SQLite reads it.
+	const parameter = context.dialect === 'sqlite' ? all.find((token) => token.kind === 'punct' && SQLITE_PARAMETER_STARTS.has(token.char)) : undefined
+	if (parameter !== undefined) {
+		refused.push({ reason: 'a parameter (?, :, @, $ or #), which a migration cannot bind', file: options.file, line: parameter.line })
 	}
 	for (const { tokens, line } of statementsOf(all)) {
 		const out: Collected = { deviations: [], adoptions: [], changes: [] }

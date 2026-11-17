@@ -906,20 +906,47 @@ describe("SQLite's lexical rules", () => {
 	const reasons = (sql: string, dialect: 'postgres' | 'sqlite'): string[] =>
 		classifyMigrations([{ name: FILE, sql }], SCHEMA, { dialect }).files.flatMap((file) => file.refused.map((refused) => refused.reason))
 
+	const PARAMETER = 'a parameter (?, :, @, $ or #), which a migration cannot bind'
+
 	test('a statement SQLite runs is classified, where Postgres would read a comment or a dollar-quoted body', () => {
 		for (
-			const sql of [
+			const [sql, refused] of [
 				// SQLite's block comment does not nest: it ends at the first `*/`.
-				`CREATE TABLE t (x TEXT) /* /* */ ; ${HIDDEN} -- */`,
+				[`CREATE TABLE t (x TEXT) /* /* */ ; ${HIDDEN} -- */`, ['CREATE TRIGGER without EXECUTE FUNCTION', 'END']],
 				// SQLite has no dollar quoting: `$q$` is a parameter, and the text after it runs.
-				`CREATE TABLE t (x TEXT); INSERT INTO t (x) VALUES ($q$); ${HIDDEN} -- $q$);`,
-			]
+				[`CREATE TABLE t (x TEXT); INSERT INTO t (x) VALUES ($q$); ${HIDDEN} -- $q$);`, [PARAMETER, 'CREATE TRIGGER without EXECUTE FUNCTION', 'END']],
+			] as const
 		) {
 			expect({ sql, triggers: triggersAfter(sql) }).toEqual({ sql, triggers: 1 })
-			expect({ sql, refused: reasons(sql, 'sqlite') }).toEqual({ sql, refused: ['CREATE TRIGGER without EXECUTE FUNCTION', 'END'] })
+			expect({ sql, refused: reasons(sql, 'sqlite') }).toEqual({ sql, refused: [...refused] })
 			// Postgres reads the same text as a comment or a dollar-quoted body, as the classifier always did.
 			expect({ sql, refused: reasons(sql, 'postgres') }).toEqual({ sql, refused: [] })
 		}
+	})
+
+	test('a parameter refuses the file: SQLite reads `$x(…)` up to a space or `)`, a quote included', () => {
+		for (const start of ['$', ':', '@']) {
+			const sql = `CREATE TABLE t (x TEXT); INSERT INTO t (x) VALUES (${start}lower(')); ${HIDDEN} --'));`
+			expect({ sql, triggers: triggersAfter(sql) }).toEqual({ sql, triggers: 1 })
+			expect({ sql, refused: reasons(sql, 'sqlite') }).toEqual({ sql, refused: [PARAMETER] })
+		}
+		for (const sql of ['CREATE TABLE t (x TEXT DEFAULT ?);', 'CREATE TABLE t (x TEXT DEFAULT ?1);', 'CREATE TABLE t (x TEXT DEFAULT #x);']) {
+			expect({ sql, refused: reasons(sql, 'sqlite') }).toEqual({ sql, refused: [PARAMETER] })
+		}
+		const file = classifyMigrations([{ name: FILE, sql: 'CREATE TABLE t (x TEXT);\n\nINSERT INTO t (x) VALUES (:x);' }], SCHEMA, { dialect: 'sqlite' })
+		expect(file.files[0]?.refused.map((refused) => refused.line)).toEqual([3])
+	})
+
+	test('SQLite text that never closes is refused at the line it opens', () => {
+		for (const sql of ['CREATE TABLE t (x TEXT);\nCREATE TABLE [u (x TEXT);', 'CREATE TABLE t (x TEXT);\nCREATE TABLE `u (x TEXT);']) {
+			const refused = classifyMigrations([{ name: FILE, sql }], SCHEMA, { dialect: 'sqlite' }).files[0]?.refused ?? []
+			expect({ sql, refused: refused.map((item) => `${item.line} ${item.reason}`)[0] }).toEqual({
+				sql,
+				refused: '2 a literal, a quoted name or a comment that never closes',
+			})
+		}
+		const hidden = classifyMigrations([{ name: FILE, sql: `CREATE TABLE t (x TEXT)\n/* /* */ ;\n${HIDDEN} -- */` }], SCHEMA, { dialect: 'sqlite' })
+		expect(hidden.files[0]?.refused.map((refused) => refused.line)).toEqual([3, 3])
 	})
 
 	test('text SQLite reads as a comment or a quoted name is one, as SQLite reads it', () => {

@@ -56,7 +56,7 @@ export const checkCurrentTimestampDefaults = (files: ReadonlyMap<string, string>
 	const findings: Finding[] = []
 	for (const [path, sql] of files) {
 		if (!path.startsWith(MIGRATIONS_DIR) || !path.endsWith('.sql')) continue
-		for (const { tokens } of topLevelStatements(sql)) {
+		for (const { tokens } of statementsOf(lexSqlite(sql).tokens)) {
 			tokens.forEach((token, index) => {
 				if (upperWord(token) !== 'DEFAULT') return
 				const value = isPunct(tokens[index + 1], '(') ? tokens[index + 2] : tokens[index + 1]

@@ -78,8 +78,8 @@ Read this before moving a service onto this driver.
   refused, so a form a later Postgres adds is refused instead of executed. The grammar is Postgres'; the SQLite
   dialect (`ClassifyMigrationsOptions.dialect`, a Cloudflare application's, ADR-0065) adds only SQLite's table options
   after a `CREATE TABLE` column list (`STRICT`, `WITHOUT ROWID`), and reads the file with SQLite's lexical rules
-  (`lexSqlite`): a comment or a quote ends where SQLite ends it, so every statement SQLite runs is one the classifier
-  reads. Bodies are parsed with the
+  (`lexSqlite`): a comment or a quote ends where SQLite ends it, and a parameter (`SQLITE_PARAMETER_STARTS`), after
+  which SQLite may read the text otherwise, refuses the file, so every statement SQLite runs is one the classifier reads. Bodies are parsed with the
   same lexer; a qualified name is a schema only where it names a relation, a call or a type
   (`nameReferences`, `sql-names.ts`), so `NEW.x` and `alias.col` stay columns. Inside the migration's
   transaction, before its commit, `databaseCodeCheck` (`database-code.ts`) fails it on an integrity
