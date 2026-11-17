@@ -21,7 +21,7 @@ export function ApprovalsSection({ appId, envs, onDone }: { appId: string; envs:
 			</div>
 			<p className="hint">
 				On an environment that requires approval, a deploy whose change needs closer review (raw SQL, a table read across scopes, a public endpoint,
-				people becoming visible, a migration that deletes or overwrites data) waits until a person with <code>access.approve</code>{' '}
+				people becoming visible, a migration that may change stored data) waits until a person with <code>access.approve</code>{' '}
 				approves it. Any other deploy goes out at once. A team that already reviews every merge to the trigger branch on GitHub may turn this off. Only a
 				person signed in to the console changes it, and the audit log records each change.
 			</p>
