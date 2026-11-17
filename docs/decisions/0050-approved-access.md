@@ -39,7 +39,7 @@ self-report of the build the agent controls.
 change on a protected environment that needs closer review wait for a human.** A change that needs closer review
 is one with a closer-review line (section 3): a step off the paved road, something anyone sets off without
 signing in, a mutation served on `GET`, people becoming visible, a file collection adopted or released, a terminal
-naming who is signed in, or a migration that deletes stored data. Any other change, a plain widening included,
+naming who is signed in, or a migration that deletes or overwrites stored data. Any other change, a plain widening included,
 publishes at once with its lines recorded: the people who deploy ordinary work are often not the ones who can read
 an access diff, and a prompt on every new endpoint teaches them to approve without reading.
 
@@ -239,15 +239,28 @@ The outcome does not decide whether a run waits. **On a protected environment a 
 review** (`waitsForApproval`, `@fabrika/control-contract`, the one predicate Control and the console share), whatever
 the outcome; a plain widening publishes at once and keeps its lines on the run.
 
-**A migration that deletes stored data is its own closer-review line.** The runner's classifier records each
-statement of the application's own schema that deletes data, `DROP TABLE`, `ALTER TABLE … DROP [COLUMN]`, `TRUNCATE`
-and `DELETE`, in the snapshot's `dataLoss` (by file, statement, object and line). For a new or changed file each is a
-line that leaves access unchanged, rule `migration.deletes-data`, reason `deletes-data`: "Migration `<file>` deletes
-data: drops table `audit` with every row". It waits for a person on a protected environment like any other
-closer-review line, separate from the line that adds the migration. Like the file adoptions, `dataLoss` follows from
-the checksummed files, so it is not part of the digest, and a publication leaves it out; the diff reads it only from
-a candidate. A `DELETE` inside database code or a `DO` block is not recorded: that code is a closer-review line of its
-own. An `UPDATE` that overwrites values is not recorded either.
+**A migration that deletes or overwrites stored data is its own closer-review line.** The runner's classifier
+records each such statement of the application's own schema in the snapshot's `dataLoss` (by file, statement, object
+and line). Before this rule every new migration waited on a protected environment, so a statement it misses would now
+publish unreviewed. It records:
+
+- what deletes data: `DROP TABLE`, `ALTER TABLE … DROP [COLUMN]`, `TRUNCATE` and `DELETE`, and every `DROP … CASCADE`,
+  which also drops what depends on the object: dropping a type or a domain drops each column of it, with its values;
+- what overwrites data: every `UPDATE`, with or without `WHERE`, every `INSERT … ON CONFLICT … DO UPDATE`, and every
+  `ALTER COLUMN … TYPE`, with or without `USING`, since an implicit cast can round or cut a value. An `UPDATE` that sets
+  only columns an earlier `ADD COLUMN` of the same file added (not `ADD COLUMN IF NOT EXISTS`, and no rename between
+  them) overwrites nothing stored and is not recorded;
+- what may change data: a migration statement that calls a function the migration set declares, once per function and
+  statement. A call of a built-in is not recorded.
+
+For a new or changed file each is a line that leaves access unchanged, rule `migration.deletes-data`, reason
+`deletes-data`, worded by what it does: "Migration `<file>` deletes data: drops table `audit` with every row",
+"… overwrites data: overwrites `notes.title` in every row it matches", "… may change data: calls database code
+`purge`". It waits for a person on a protected environment like any other closer-review line, separate from the line
+that adds the migration. Like the file adoptions, `dataLoss` follows from the checksummed files, so it is not part of
+the digest, and a publication leaves it out; the diff reads it only from a candidate. A statement inside a function,
+trigger or `DO` body is not recorded: that code is a closer-review line of its own. A `DELETE` that cascades through
+a foreign key's `ON DELETE CASCADE` names only its own table.
 
 **A removed endpoint is classified by who answers its paths now.** The proxy selects the most specific endpoint
 ([ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md)), so a literal endpoint can shadow a broader parameter
@@ -506,10 +519,13 @@ never from the words of a line:
 
 ## Consequences
 
-- An agent can no longer take a step off the road on production silently: such a change, or one that deletes data,
-  waits on `prod` until a human reads the plain-language lines and approves. A plain widening (a new endpoint for
-  signed-in people, a new role, a new migration that keeps every row) publishes on `prod` at once; its lines stay on
-  the run and the environment page lists the published surface, so it is reviewed after the fact, not before.
+- An agent can no longer take a step off the road on production silently: such a change, or a migration that
+  deletes or overwrites stored data or calls database code, waits on `prod` until a human reads the plain-language
+  lines and approves. A plain widening (a new endpoint for signed-in people, a new role, a new migration that only
+  adds tables, columns and rows, or fills a column it added) publishes on `prod` at once; its lines stay on the run
+  and the environment page lists the published surface, so it is reviewed after the fact, not before.
+- A run that an earlier release parked for a widening alone still waits after the upgrade, and the approval page says
+  it waits, whatever its stored lines need under this rule.
 - A removal deploys without a prompt, unless the endpoints that answer its paths now admit a caller the removed one
   did not, or it removes a column read policy. Moving a page's paths to another page for the same callers, the usual
   refactor, does not prompt. A change of handler code that leaves the shell and the migrations as they were deploys without a prompt too. A

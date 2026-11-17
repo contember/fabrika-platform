@@ -296,8 +296,9 @@ fails the run). It classifies the snapshot against the environment's active snap
 `app_envs.published_run_id`). A step off the paved road — a site's declared `sql`, `unscoped`, `connect` or link
 issuing, or a migration's database code — is a widening line marked "needs closer review", not a refusal; the
 console's environment page lists the published snapshot's, beside its surface: every endpoint under its most exposed
-caller (`snapshotSurface`). A migration statement that deletes data (`DROP TABLE`, `DROP COLUMN`, `TRUNCATE`,
-`DELETE`) is its own "deletes data" line that needs closer review. A change with a closer-review line on an
+caller (`snapshotSurface`). A migration statement that deletes data (`DROP TABLE`, `DROP COLUMN`, any
+`DROP … CASCADE`, `TRUNCATE`, `DELETE`), overwrites it (`UPDATE`, an upsert, `ALTER COLUMN … TYPE`) or calls a function
+the migrations declare is its own line that needs closer review. A change with a closer-review line on an
 environment with `protected` set (`prod` by default) parks the run in `awaiting_approval`; it publishes nothing until
 a person approves it in the console. Any other change, a plain widening included, publishes at once. Otherwise the run publishes its snapshot with a compare-and-swap on `app_envs.generation` and
 `protection_revision`, under the namespace lease. Every provider environment and namespace member then carries
