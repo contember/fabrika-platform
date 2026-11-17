@@ -128,6 +128,20 @@ interface WritablePolicy<Col extends string, A extends string, V extends Col, Ac
 	 * node in `to` too, while `when` admits the row.
 	 */
 	readonly memberReveals?: { readonly [dimension: string]: MemberRevealsPolicy<Col, A> }
+	/**
+	 * Relation → an access view that lists the rows the relation reaches: the escape path for a rule no structured
+	 * declaration expresses. The view's SQL decides; the layer binds only the caller's principal and the nodes it holds
+	 * the relation inside, never a handler value.
+	 */
+	readonly access?: { readonly [relation: string]: AccessPolicy }
+}
+
+/** An access view: `row` names this table's key; `principal` is compared to the caller, `member` to the nodes it holds the relation inside. */
+export interface AccessPolicy {
+	readonly view: string
+	readonly row: string
+	readonly principal?: string
+	readonly member?: string
 }
 
 /** What a row reveals to a caller with a grant at its node: its node in `to`, for `actions`, while `when` admits the row. */
@@ -345,6 +359,19 @@ export interface TableModel {
 	readonly readThrough: readonly SecondaryPath[]
 	/** The ancestor nodes this table's rows reveal to a grant at their own node. */
 	readonly memberReveals: readonly MemberRevealModel[]
+	/** The access views of the relations whose reach a view's SQL decides. */
+	readonly access: readonly AccessModel[]
+}
+
+/** A relation's access view over this table: `T.<key> in (select V.<row> from V where <bindings>)`. */
+export interface AccessModel {
+	readonly relation: string
+	/** The relation's dimension: a hold inside a node of it alone binds `member`. */
+	readonly dimension: string
+	readonly view: string
+	readonly row: string
+	readonly principal: string | undefined
+	readonly member: string | undefined
 }
 
 /**
@@ -449,16 +476,19 @@ type ParsedScope =
 		readonly inherit: readonly string[] | undefined
 	}
 
-type ParsedTable = Omit<TableModel, 'chain' | 'scope' | 'confers' | 'when' | 'relationWhen' | 'reveals' | 'readThrough' | 'memberReveals'> & {
-	readonly scope: ParsedScope
-	readonly confersInput: unknown
-	readonly whenInput: unknown
-	readonly relationWhenInput: unknown
-	readonly revealsInput: unknown
-	readonly readThroughInput: unknown
-	readonly writeThroughInput: unknown
-	readonly memberRevealsInput: unknown
-}
+type ParsedTable =
+	& Omit<TableModel, 'chain' | 'scope' | 'confers' | 'when' | 'relationWhen' | 'reveals' | 'readThrough' | 'memberReveals' | 'access'>
+	& {
+		readonly scope: ParsedScope
+		readonly confersInput: unknown
+		readonly whenInput: unknown
+		readonly relationWhenInput: unknown
+		readonly revealsInput: unknown
+		readonly readThroughInput: unknown
+		readonly writeThroughInput: unknown
+		readonly memberRevealsInput: unknown
+		readonly accessInput: unknown
+	}
 
 let readModels: <DB, P>(tables: Tables<DB, P>) => TableModels
 let hasModels: (value: object) => boolean = () => false
@@ -600,6 +630,7 @@ const POLICY_FIELDS = nameSet([
 	'readThrough',
 	'writeThrough',
 	'memberReveals',
+	'access',
 ])
 const REVEALS_FIELDS = nameSet(['to', 'actions', 'when', 'assign'])
 const MEMBER_REVEALS_FIELDS = nameSet(['to', 'actions', 'when', 'assign'])
@@ -640,10 +671,15 @@ function parseTables(columnsInput: unknown, policiesInput: unknown, vocabulary: 
 		}
 	}
 	const parsed: ParsedTable[] = []
+	const views: Record<string, ViewColumns> = {}
 	for (let index = 0; index < tables.length; index++) {
 		const table = tables[index] ?? ''
 		const policy = ownEntry(policies, table)
 		const entry = ownEntry(columns, table)
+		if (isViewEntry(table, entry)) {
+			const names = parseList(ownEntry(plainRecord(entry, `${table}: the column list entry`), 'columns'), (name) => String(name))
+			setOwn(views, table, freeze({ columns: nameSet(names ?? []), policy: policy !== undefined }))
+		}
 		// A view without a policy stays what it was before codegen read views: only ctx.sql reads it.
 		if (policy === undefined && isViewEntry(table, entry)) {
 			continue
@@ -653,7 +689,7 @@ function parseTables(columnsInput: unknown, policiesInput: unknown, vocabulary: 
 		}
 		parsed[parsed.length] = parseTable(table, entry, policy, vocabulary)
 	}
-	return linkTables(parsed, vocabulary)
+	return linkTables(parsed, vocabulary, views)
 }
 
 /** Whether a column list entry marks a view: its `view` is `true`, or absent for a table. */
@@ -840,6 +876,7 @@ function parseTable(table: string, columnList: unknown, policyInput: unknown, vo
 		readThroughInput: ownEntry(policy, 'readThrough'),
 		writeThroughInput: ownEntry(policy, 'writeThrough'),
 		memberRevealsInput: ownEntry(policy, 'memberReveals'),
+		accessInput: ownEntry(policy, 'access'),
 	}
 }
 
@@ -1317,7 +1354,7 @@ export function includes(names: readonly string[], name: unknown): boolean {
 }
 
 /** Resolves every table's containment chain and refuses a shape the layer cannot enforce. */
-function linkTables(parsed: readonly ParsedTable[], vocabulary: VocabularyModel): TableModels {
+function linkTables(parsed: readonly ParsedTable[], vocabulary: VocabularyModel, views: Readonly<Record<string, ViewColumns>>): TableModels {
 	const containment = vocabulary.dimensions
 	const byName: Record<string, ParsedTable> = {}
 	const owners: Record<string, ParsedTable> = {}
@@ -1414,7 +1451,8 @@ function linkTables(parsed: readonly ParsedTable[], vocabulary: VocabularyModel)
 		const table = parsed[index]
 		if (table !== undefined) {
 			const { scope, chain } = resolve(table, [])
-			const { confersInput, whenInput, relationWhenInput, revealsInput, readThroughInput, writeThroughInput, memberRevealsInput, ...rest } = table
+			const { confersInput, whenInput, relationWhenInput, revealsInput, readThroughInput, writeThroughInput, memberRevealsInput, accessInput, ...rest } =
+				table
 			const linked = { ...rest, scope, chain }
 			const ownerOf = (dimension: string): ResolvedOwner | undefined => {
 				const owner = ownEntry(owners, dimension)
@@ -1448,7 +1486,12 @@ function linkTables(parsed: readonly ParsedTable[], vocabulary: VocabularyModel)
 			const relationWhen = parseRelationWhen(linked, root, relationWhenInput, vocabulary, conditionTable, hopRule)
 			const reveals = parseReveals(linked, readThrough, revealsInput, vocabulary, conditionTable, hopRule)
 			const memberReveals = parseMemberReveals(linked, readThrough, memberRevealsInput, vocabulary, conditionTable, hopRule)
-			setOwn(models, table.name, freeze({ ...linked, confers, when, relationWhen, reveals, readThrough, memberReveals }))
+			const access = parseAccess(linked, accessInput, vocabulary, views)
+			for (let position = 0; position < access.length; position++) {
+				const relation = access[position]?.relation ?? ''
+				if (!hasOwn(sources, relation)) setOwn(sources, relation, `${table.name} (access)`)
+			}
+			setOwn(models, table.name, freeze({ ...linked, confers, when, relationWhen, reveals, readThrough, memberReveals, access }))
 		}
 	}
 	checkRelationWhenReach(models, vocabulary)
@@ -1462,7 +1505,72 @@ function linkTables(parsed: readonly ParsedTable[], vocabulary: VocabularyModel)
 	return freeze(models)
 }
 
-type LinkedTable = Omit<TableModel, 'confers' | 'when' | 'relationWhen' | 'reveals' | 'readThrough' | 'memberReveals'>
+type LinkedTable = Omit<TableModel, 'confers' | 'when' | 'relationWhen' | 'reveals' | 'readThrough' | 'memberReveals' | 'access'>
+
+/** A view of the column list: its columns, and whether a policy makes it a table of the layer. */
+interface ViewColumns {
+	readonly columns: NameSet
+	readonly policy: boolean
+}
+
+const ACCESS_FIELDS = nameSet(['view', 'row', 'principal', 'member'])
+
+/**
+ * `access`: relation → the view whose rows name the table's rows the relation reaches. The view is one the column list
+ * marks, `row` and each binding are its columns, and at least one binding is stated, so the subquery never reads every
+ * row: `principal` is compared to the caller, `member` to the nodes of the relation's dimension it holds the relation in.
+ */
+function parseAccess(
+	table: LinkedTable,
+	input: unknown,
+	vocabulary: VocabularyModel,
+	views: Readonly<Record<string, ViewColumns>>,
+): readonly AccessModel[] {
+	if (input === undefined) {
+		return freeze([])
+	}
+	if (table.scope.mode !== 'dimension' && table.scope.mode !== 'child') {
+		throw new PolicyError(`${table.name}: only a dimension or child table, or a child view, takes access; its rows are what a relation reaches`)
+	}
+	const declared = plainRecord(input, `${table.name}: access`)
+	const relations = ownKeys(declared)
+	const parsed: AccessModel[] = []
+	for (let index = 0; index < relations.length; index++) {
+		const relation = relations[index] ?? ''
+		const what = `${table.name}: access.${relation}`
+		if (!hasOwn(vocabulary.relations, relation)) {
+			throw new PolicyError(`${what} names a relation the vocabulary does not declare (${ownKeys(vocabulary.relations).join(', ')})`)
+		}
+		const entry = plainRecord(ownEntry(declared, relation), what)
+		onlyFields(entry, ACCESS_FIELDS, what)
+		const view = ownEntry(entry, 'view')
+		const named = typeof view === 'string' ? ownEntry(views, view) : undefined
+		if (typeof view !== 'string' || named === undefined) {
+			throw new PolicyError(`${what}.view names ${String(view)}, which the column list does not mark as a view`)
+		}
+		// Read directly, the view would show the caller who else reaches which row.
+		if (named.policy) {
+			throw new PolicyError(`${what}.view names ${view}, which has a policy; an access view takes none, so only the relation's term reads it`)
+		}
+		const columns = named.columns
+		const viewColumn = (field: string, required: boolean): string | undefined => {
+			const name = ownEntry(entry, field)
+			if (name === undefined && !required) return undefined
+			if (typeof name !== 'string' || !inSet(columns, name)) {
+				throw new PolicyError(`${what}.${field} names ${String(name)}, which is not a column of ${view}`)
+			}
+			return name
+		}
+		const row = viewColumn('row', true) ?? ''
+		const principal = viewColumn('principal', false)
+		const member = viewColumn('member', false)
+		if (principal === undefined && member === undefined) {
+			throw new PolicyError(`${what} binds neither principal nor member: an access view is read for the caller, never whole`)
+		}
+		parsed[parsed.length] = freeze({ relation, dimension: ownEntry(vocabulary.relations, relation) ?? '', view, row, principal, member })
+	}
+	return freeze(parsed)
+}
 
 /** Every action a table names: its operations', `appRead`, `appCount` and its columns' own. */
 function tableActionNames(table: LinkedTable): NameSet {
@@ -1615,7 +1723,7 @@ function checkRelationWhenReach(models: Readonly<Record<string, TableModel>>, vo
 
 /** Whether `relation` of `dimension` reaches a row of `model` for `action`, as the relation terms of the store find one. */
 function relationReaches(model: TableModel, relation: string, dimension: string, action: string, reveals: readonly RevealModel[]): boolean {
-	if (nodeColumnOf(model, dimension) !== undefined) {
+	if (nodeColumnOf(model, dimension) !== undefined || model.access.some((access) => access.relation === relation)) {
 		return true
 	}
 	for (let index = 0; index < model.readThrough.length; index++) {

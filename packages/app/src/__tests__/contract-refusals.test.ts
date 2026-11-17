@@ -660,6 +660,13 @@ describe('buildArtifact refuses a declaration the types would refuse', () => {
 		expect(buildArtifact(fill('read'), tables).tables['note_summaries']?.view).toBe(true)
 	})
 
+	test('an access view, until the artifact schema and the approval diff read it (ADR-0076)', () => {
+		const notesTable = noteTables['notes']
+		if (notesTable === undefined) throw new Error('the notes fixture changed')
+		const access = { owner: { view: 'note_owners', row: 'note_id', principal: 'principal_id', member: null } }
+		expect(problemsOf(() => buildArtifact(base, { ...noteTables, notes: { ...notesTable, access } })).join('\n')).toContain('access')
+	})
+
 	test('a mutation in an export', () => {
 		const products = base.exports['products']
 		if (products === undefined) {

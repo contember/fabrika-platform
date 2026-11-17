@@ -43,6 +43,15 @@ export interface ViewParentLink {
 	readonly column: string
 	readonly table: string
 	readonly key: string
+	/** The view's own access views, which list its rows beside the parent's reach (ADR-0076). */
+	readonly access?: readonly ViewAccessLink[]
+}
+
+/** An access view of a child view: `V.<key> in (select A.<row> from A where <bindings>)`. */
+export interface ViewAccessLink {
+	readonly key: string
+	readonly view: string
+	readonly row: string
 }
 
 /** A subquery of the scope predicate the shape check admitted, and the one table it reads. */
@@ -218,11 +227,44 @@ function isThroughParent(
 	subqueries: GuardContext['subqueries'],
 	admitted: Admitted[],
 ): boolean {
-	const membership = (leaf: unknown) => isParentMembership(leaf, table, parent, subqueries, admitted)
+	const membership = (leaf: unknown) =>
+		isParentMembership(leaf, table, parent, subqueries, admitted) || isViewAccess(leaf, table, parent.access ?? [], subqueries, admitted)
 	const member = (leaf: unknown) => isUnionOf(leaf, (branch) => membership(branch) || isNarrowed(branch, table, subqueries, admitted, 0, membership))
 	return member(node)
 		|| (kindOf(node) === 'AndNode' && hasOnly(node, CONNECTIVE_KEYS) && isTreeOf(read(node, 'left'), 'AndNode', (leaf) => isScopeEquality(leaf, table))
 			&& member(read(node, 'right')))
+}
+
+/**
+ * `V.<key> in (select A.<row> from A where <bindings>)` for one access view the view declares: the only test of a view's
+ * own column that places its rows, because the access view's SQL is the reviewed rule that decides them.
+ */
+function isViewAccess(
+	node: unknown,
+	table: string,
+	links: readonly ViewAccessLink[],
+	subqueries: GuardContext['subqueries'],
+	admitted: Admitted[],
+): boolean {
+	if (kindOf(node) !== 'BinaryOperationNode' || !hasOnly(node, BINARY_KEYS) || read(read(node, 'operator'), 'operator') !== 'in') {
+		return false
+	}
+	const select = read(node, 'rightOperand')
+	const froms = read(read(select, 'from'), 'froms')
+	const selections = read(select, 'selections')
+	if (!isArray(froms) || froms.length !== 1 || !isArray(selections) || selections.length !== 1) {
+		return false
+	}
+	for (let index = 0; index < links.length; index++) {
+		const link = links[index]
+		if (
+			link !== undefined && isReference(read(node, 'leftOperand'), table, link.key) && tableName(froms[0]) === link.view
+			&& isReference(read(selections[0], 'selection'), link.view, link.row)
+		) {
+			return isScopeSubquery(select, subqueries, admitted, 1, true)
+		}
+	}
+	return false
 }
 
 function isParentMembership(

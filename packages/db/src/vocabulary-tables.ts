@@ -3,6 +3,7 @@
 
 import type { ConditionPolicy } from './conditions'
 import type {
+	AccessPolicy,
 	ColumnList,
 	ColumnPolicies,
 	ConfersPolicy,
@@ -121,6 +122,8 @@ interface WritableFields<Col extends string, A extends string, Ver extends Col, 
 	readonly writeThrough?: { readonly [dimension: string]: readonly A[] }
 	/** The table's own dimension → the ancestor node a row reveals to a grant at its node, for a `Within`'s reads. */
 	readonly memberReveals?: { readonly [dimension: string]: MemberRevealsPolicy<Col, A> }
+	/** Relation → the access view that lists the rows it reaches: the escape path, decided by the view's SQL. */
+	readonly access?: { readonly [relation: string]: AccessPolicy }
 }
 
 /**
