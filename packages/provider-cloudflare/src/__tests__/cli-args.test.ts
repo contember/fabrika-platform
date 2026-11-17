@@ -158,6 +158,20 @@ describe('readApprovedAccess', () => {
 		expect(await readApprovedAccess(undefined)).toBeUndefined()
 	})
 
+	test('carries the framework and the checker release Control names, and refuses one that is not a release', async () => {
+		const access: RunnerApprovedAccess = {
+			kind: 'contract',
+			contract: notesArtifact,
+			contractDigest: contractDigest(notesArtifact),
+			framework: '0.9.0-dev.13',
+			checker: '0.9.1',
+		}
+		expect(await readApprovedAccess(await accessFile(JSON.stringify(access)))).toEqual(access)
+		await expect(readApprovedAccess(await accessFile(JSON.stringify({ ...access, checker: '0.9.1 && id' })))).rejects.toThrow(
+			'does not hold the access Control approved',
+		)
+	})
+
 	test('an unreadable or malformed file fails the deploy rather than falling back to the checkout', async () => {
 		await expect(readApprovedAccess('/nonexistent/run.access.json')).rejects.toThrow('does not name a readable JSON file')
 		const forged = { kind: 'contract', contract: notesArtifact, contractDigest: 'sha256:other' }

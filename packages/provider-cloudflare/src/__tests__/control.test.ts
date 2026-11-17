@@ -609,7 +609,13 @@ describe('Cloudflare control provider', () => {
 			configPath: 'deploy.config.ts',
 			stateNamespace: 'api-state',
 			domain: 'api.example.com',
-			approvedAccess: { kind: 'contract', contract: notesArtifact, contractDigest: APPROVED.contractDigest, framework: APPROVED.framework },
+			approvedAccess: {
+				kind: 'contract',
+				contract: notesArtifact,
+				contractDigest: APPROVED.contractDigest,
+				framework: APPROVED.framework,
+				checker: APPROVED.checker,
+			},
 			dryRun: true,
 			runnerKey: 'test-runner-key',
 			credentials: {
@@ -971,12 +977,13 @@ describe('Cloudflare control provider', () => {
 		const outcome = await provider.deploy({ ...input, dryRun: false, environment: { ...environment, access } })
 
 		expect(outcome).toMatchObject({ state: 'succeeded' })
-		// The runner deploys the proxy table and the digest from this, not from the checkout.
+		// The runner deploys the proxy table and the digest from this, not from the checkout, and checks with its checker.
 		expect(jobs[0]?.approvedAccess).toEqual({
 			kind: 'contract',
 			contract: notesArtifact,
 			contractDigest: access.contractDigest,
 			framework: access.framework,
+			checker: access.checker,
 		})
 		expect(cloudflareRunnerJobSchema.safeParse(jobs[0]).success).toBe(true)
 	})

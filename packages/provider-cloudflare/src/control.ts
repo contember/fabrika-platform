@@ -284,6 +284,7 @@ const runnerApprovedAccess = (environment: ProviderEnvironment): RunnerApprovedA
 			contract: environment.access.contract,
 			contractDigest: environment.access.contractDigest,
 			framework: applicationRelease(environment.access),
+			checker: environment.access.checker,
 		}
 
 const buildJob = async (options: CloudflareControlOptions, input: ProviderDeployInput): Promise<CloudflareRunnerJob> => {
