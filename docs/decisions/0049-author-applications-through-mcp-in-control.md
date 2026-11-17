@@ -77,8 +77,8 @@ workspace its own running application, where one pinned service could show only 
    Every other `fabrika.*` file, `fabrika.config.ts` included, stays protected. A contract import does
    not lift the protection of a file that is protected otherwise.
 7. **Production is not an MCP operation.** The tool opens a pull request. A human reviews and merges
-   in GitHub, and the existing Delivery trigger deploys the merged commit. When that commit widens
-   access on a protected environment, the run waits for approval. Control enforces it in its use cases
+   in GitHub, and the existing Delivery trigger deploys the merged commit. When that commit carries
+   a change that needs closer review on a protected environment, the run waits for approval. Control enforces it in its use cases
    (authorization, not the proxy's enforcement decision): only a person, a user principal without OAuth or
    link claims, starts a manual run of a protected environment, so `deploy_stage` and any other agent or key
    is refused there with a 403, and a workspace ref is refused there whoever asks. The ref must be a full ref or a
