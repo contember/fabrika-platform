@@ -11,6 +11,7 @@ import {
 	type ZeropsApi,
 	ZeropsApiError,
 	type ZeropsAppVersion,
+	type ZeropsBackupStart,
 	type ZeropsImportedService,
 	type ZeropsLogAccess,
 	type ZeropsProcess,
@@ -25,7 +26,7 @@ import { parseZeropsCheckpoint } from '../control'
 import { FABRIKA_CHECK_VERSION, PLATFORM_TYPESCRIPT_VERSION, ZEROPS_SCAN_MIN_RAM_GB, ZEROPS_START_MIN_RAM_GB } from '../execution'
 import type { ExposureAlert } from '../exposure'
 import { compileFabrikaManifest, createZeropsArtifactSourceDescriptor } from '../manifest'
-import { createZeropsDeployer, type ZeropsDeployResult, type ZeropsDeployRun } from '../provider'
+import { createZeropsDeployer, ZEROPS_BACKUP_POLLS, zeropsBackupTag, type ZeropsDeployResult, type ZeropsDeployRun } from '../provider'
 import type { ZeropsServiceType } from '../schema.generated'
 import type { ZeropsSourceArchive } from '../source/port'
 import type { ZeropsAppConfig, ZeropsRuntimeTarget, ZeropsServiceSpec } from '../types'
@@ -52,6 +53,8 @@ interface Recorded {
 	autoscaling: ZeropsServiceAutoscaling[]
 	/** Each custom autoscaling the deploy sent to the database `db`. */
 	databaseAutoscaling: ZeropsServiceAutoscaling[]
+	/** Each backup the deploy requested. */
+	backups: Array<{ serviceId: string; tags: string[] }>
 }
 
 const fresh = (): Recorded => ({
@@ -72,6 +75,7 @@ const fresh = (): Recorded => ({
 	alerts: [],
 	autoscaling: [],
 	databaseAutoscaling: [],
+	backups: [],
 })
 
 const UPLOAD_URL = 'https://proxy.app-prg1.zerops.io/api/rest/object-storage/upload?signature=test'
@@ -130,6 +134,12 @@ interface Overrides {
 	databaseMaxRam?: number
 	/** Its autoscaling profile; `oltp-hobby` by default. */
 	databaseProfile?: string
+	/** What a backup request answers, or the error it throws; it runs in the background by default. */
+	backupStart?: ZeropsBackupStart | Error
+	/** The list of backups that first shows the requested one, counting from 1; 2 by default, null for never. */
+	backupListedAt?: number | null
+	/** How many lists of backups fail before one answers. */
+	backupListErrors?: number
 }
 
 /** The id of the database `db` in the fake platform; the deploy service is `service-1`. */
@@ -168,6 +178,8 @@ const makeApi = (recorded: Recorded, overrides: Overrides = {}): ZeropsApi => {
 	let customMinRam = overrides.minRam === undefined ? ZEROPS_START_MIN_RAM_GB : overrides.minRam
 	let databaseMinRam = overrides.databaseMinRam ?? 1
 	let maxContainers = overrides.maxContainers === undefined ? 4 : overrides.maxContainers
+	let backupLists = 0
+	let backupListErrors = overrides.backupListErrors ?? 0
 	const database = (): ZeropsService => ({
 		id: DATABASE_SERVICE_ID,
 		name: 'db',
@@ -242,6 +254,27 @@ const makeApi = (recorded: Recorded, overrides: Overrides = {}): ZeropsApi => {
 		configureAutoscaling: () => Promise.reject(new Error('the deploy driver must not change a profile')),
 		getBackupConfig: () => Promise.reject(new Error('the deploy driver must not read a backup schedule')),
 		configureBackup: () => Promise.reject(new Error('the deploy driver must not change a backup schedule')),
+		createBackup: async ({ serviceId, tags }) => {
+			recorded.calls.push(`createBackup:${serviceId}`)
+			recorded.timeline.push('backup')
+			recorded.backups.push({ serviceId, tags })
+			if (overrides.backupStart instanceof Error) throw overrides.backupStart
+			return overrides.backupStart ?? { success: true, async: true }
+		},
+		listBackups: async () => {
+			recorded.calls.push('listBackups')
+			if (backupListErrors > 0) {
+				backupListErrors--
+				throw new Error('backup list unavailable')
+			}
+			backupLists++
+			const listedAt = overrides.backupListedAt === undefined ? 2 : overrides.backupListedAt
+			const daily = { name: '2026-11-17 00:00:06', tags: ['daily'] }
+			const requested = recorded.backups.at(-1)
+			if (listedAt === null || backupLists < listedAt || requested === undefined) return [daily]
+			recorded.timeline.push('backup-listed')
+			return [daily, { name: '2026-11-17 10:17:07', tags: requested.tags }]
+		},
 		startService: () => Promise.reject(new Error('the deploy driver never starts a service')),
 		stopService: () => Promise.reject(new Error('the deploy driver never stops a service')),
 		configureCustomAutoscaling: async ({ serviceId, autoscaling }) => {
@@ -1279,6 +1312,113 @@ describe("the application's database connections", () => {
 		expect((await deploy({ databaseMinRam: 0.25 }, deployRun(recorded, target(), true))).status).toBe('succeeded')
 		expect(recorded.databaseAutoscaling).toEqual([])
 		expect(recorded.logs).toContain('  [dry-run] would size each process of api to the connection limit of db')
+	})
+})
+
+// A migration that deletes data runs in the init commands at container start, so its backup is stored before (ADR-0050).
+describe('the backup before migrations that delete data', () => {
+	const RUN_ID = '019a8f3c-1d2e-7f00-8a00-0123456789ab'
+	const TAG = 'run-019a8f3c1d2e7f008a00'
+	const deleting = (run: ZeropsDeployRun = deployRun(recorded)): ZeropsDeployRun => ({
+		...run,
+		backupBeforeMigrations: { migrations: ['0002_purge.sql'], runId: RUN_ID },
+	})
+	const deploy = (overrides: Overrides, run: ZeropsDeployRun = deleting()) => createZeropsDeployer(() => makeCollaborators(recorded, overrides))(run)
+
+	test('the tag carries the run id in the 24 characters a Zerops tag may hold', () => {
+		expect(zeropsBackupTag(RUN_ID)).toBe(TAG)
+		expect(TAG).toHaveLength(24)
+	})
+
+	test("backs up the application's database under the run's tag, and deploys only once the list shows the backup", async () => {
+		const result = await deploy({ backupListedAt: 3 })
+		expect(result.status).toBe('succeeded')
+		expect(result.steps.map((step) => step.id)).toEqual([
+			'apply-import',
+			'verify-exposure',
+			'backup-database',
+			'write-service-env',
+			'raise-start-memory',
+			'size-database',
+			'reserve-version',
+			'upload-source',
+			'trigger-build',
+			'await-version',
+		])
+		expect(recorded.backups).toEqual([{ serviceId: DATABASE_SERVICE_ID, tags: [TAG] }])
+		expect(recorded.timeline.slice(0, 3)).toEqual(['backup', 'backup-listed', 'put:FABRIKA_PROXY_SECRET'])
+		expect(recorded.timeline.indexOf('backup-listed')).toBeLessThan(recorded.timeline.indexOf('build-call'))
+		expect(recorded.calls.filter((call) => call === 'listBackups')).toHaveLength(3)
+		expect(recorded.sleeps.slice(0, 2)).toEqual([10_000, 10_000])
+		expect(recorded.logs).toContain(`  \`0002_purge.sql\` delete data: backing up db under the tag \`${TAG}\``)
+		expect(recorded.logs).toContain('  db: backup `2026-11-17 10:17:07` is stored')
+	})
+
+	test('a list that fails is read again', async () => {
+		expect((await deploy({ backupListErrors: 2, backupListedAt: 1 })).status).toBe('succeeded')
+		expect(recorded.logs.filter((line) => line === '  db: the backup list is unavailable; retrying')).toHaveLength(2)
+		expect(recorded.builds).toHaveLength(1)
+	})
+
+	test("a namespace's shared database is backed up whole", async () => {
+		const shared: ZeropsAppConfig = { ...app([API]), target: { ...app([API]).target, namespaceResources: [useSharedPostgres()] } }
+		const run = deleting({ ...deployRun(recorded), artifact: compileFabrikaManifest(shared, 'prod', SOURCE_DESCRIPTOR) })
+		expect((await deploy({}, run)).status).toBe('succeeded')
+		expect(recorded.calls).toContain('findService:postgres')
+		expect(recorded.backups).toEqual([{ serviceId: DATABASE_SERVICE_ID, tags: [TAG] }])
+		expect(recorded.logs).toContain(`  \`0002_purge.sql\` delete data: backing up postgres, the namespace's shared database, under the tag \`${TAG}\``)
+	})
+
+	test('a backup that is refused, does not start or is never listed fails the run, and nothing is deployed', async () => {
+		const cases: Array<[Overrides, string]> = [
+			[
+				{ backupStart: new ZeropsApiError('zerops: back up failed (400)', 400, 'BackupUnsupportedStackType') },
+				'zerops: the backup of db was refused (BackupUnsupportedStackType); nothing was deployed',
+			],
+			[{ backupStart: { success: false, async: false } }, 'zerops: the backup of db did not start; nothing was deployed'],
+			[
+				{ backupListedAt: null },
+				"zerops: the backup of db was not stored within 10 minutes, so nothing was deployed; a backup larger than the project's backup storage is never stored",
+			],
+		]
+		for (const [overrides, error] of cases) {
+			recorded = fresh()
+			const result = await deploy(overrides)
+			expect(result.status).toBe('failed')
+			expect(stepError(result, 'backup-database')).toBe(error)
+			expect(result.steps.filter((step) => step.status === 'skipped').map((step) => step.id)).toContain('reserve-version')
+			expect(recorded.creates).toEqual([])
+			expect(recorded.builds).toEqual([])
+			expect(recorded.envWrites).toEqual([])
+		}
+	})
+
+	test('a backup never listed is given up after the bounded number of lists', async () => {
+		const result = await deploy({ backupListedAt: null })
+		expect(result.status).toBe('failed')
+		expect(recorded.calls.filter((call) => call === 'listBackups')).toHaveLength(ZEROPS_BACKUP_POLLS)
+		expect(recorded.sleeps).toEqual(Array.from({ length: ZEROPS_BACKUP_POLLS - 1 }, () => 10_000))
+	})
+
+	test('without migrations that delete data, nothing is backed up', async () => {
+		const result = await deploy({}, deployRun(recorded))
+		expect(result.status).toBe('succeeded')
+		expect(result.steps.map((step) => step.id)).not.toContain('backup-database')
+		expect(recorded.backups).toEqual([])
+		expect(recorded.calls).not.toContain('listBackups')
+	})
+
+	test('an application without a database fails rather than run such a migration unprotected', async () => {
+		const run = deleting({ ...deployRun(recorded), artifact: compileFabrikaManifest(app([API]), 'prod', SOURCE_DESCRIPTOR) })
+		const result = await deploy({}, run)
+		expect(stepError(result, 'backup-database')).toBe('zerops: `0002_purge.sql` delete data, and the application declares no database to back up')
+		expect(recorded.creates).toEqual([])
+	})
+
+	test('a dry run says what it would back up and calls nothing', async () => {
+		expect((await deploy({}, deleting(deployRun(recorded, target(), true)))).status).toBe('succeeded')
+		expect(recorded.backups).toEqual([])
+		expect(recorded.logs).toContain(`  [dry-run] would back up db under the tag \`${TAG}\` and wait until the backup is stored`)
 	})
 })
 

@@ -1672,6 +1672,45 @@ write, a response that does not parse, or a read-back that differs is a warning 
 The row imports its own database and prints what a fresh one reads, so its log records the format; it runs with
 `FABRIKA_LIVE_ZEROPS_SLOW=1`.
 
+#### UNVERIFIED: a tagged backup before migrations that delete data
+
+An application's migrations run in its init commands, when a new version's containers start. When Control hands a
+deploy `backupBeforeMigrations` (migration files that delete data and that the version running does not hold,
+ADR-0050), the deploy's `backup-database` step backs up the application's PostgreSQL service right after
+`verify-exposure`: before any service variable is written and before a version is reserved. A `cheap` application's is
+the namespace's shared `postgres`, backed up whole. The step requests the backup under the tag `run-<the first 20
+letters and digits of the run id>` (a UUIDv7 starts with its timestamp) and lists the service's backups every 10 s until
+one carries the tag, at most 60 times. A refused request, a `success: false`, or no such file after 10 minutes fails the
+run before a version is reserved, so nothing is deployed (`storeTaggedBackup`, `src/provider.ts`). Restoring is the
+operator's, in the Zerops GUI: the API has no restore.
+
+Read off the published OpenAPI document, not measured:
+
+| Endpoint                          | Body / response                                                                                                                       |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /service-stack/{id}/backup` | `BackupServiceStack`, `{ tags }` → `{ success, async }`. No process: `async` says it ran past 10 s and goes on in the background      |
+| `GET /service-stack/{id}/backup`  | `ListBackups` → `files[]`, each `{ path, name, size, metadata }`; `name` is the moment it was taken. 400 `BackupUnsupportedStackType` |
+
+Unverified:
+
+- how `metadata.tags` is encoded: the document types `metadata` as a map of strings, and its example lists `tags` as an
+  array. The reader takes an array, or a string it splits on commas, spaces, brackets and quotes; anything else is no
+  tag, and the deploy then fails at the 10 minutes rather than run the migration unprotected;
+- whether a backup still running is listed. If it is, the deploy goes on before the dump is complete;
+- how long a backup of a real application's database takes, and whether 10 minutes covers it;
+- the tag rule (at most 24 characters of `[A-Za-z0-9:_-]`) and that a backup over the project's backup storage is not
+  stored, both from the Zerops documentation;
+- whether retention prunes a tagged manual backup, and when. The documentation says a manual backup gets no `daily`,
+  `weekly` or `monthly` tag, so only `maxTotalFiles` would count it; nothing makes the run's tag a protected one.
+
+| Behaviour                                                                        | Row                                |
+| -------------------------------------------------------------------------------- | ---------------------------------- |
+| A backup requested under a tag is listed with that tag on `postgresql:single@18` | `postgres-tagged-backup-is-listed` |
+
+The row runs on the database the row above imports, through `storeTaggedBackup`, and prints the listed files' raw
+metadata, so its log records the encoding; it runs with `FABRIKA_LIVE_ZEROPS_SLOW=1`. The local emulator keeps no
+backups, so a local-stack deploy whose migrations delete data fails at this step.
+
 ### The checker version
 
 Every contract application build fetches the checker by version: `bun x -p @fabrika/check@<version>`, for

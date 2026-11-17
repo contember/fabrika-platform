@@ -23,7 +23,7 @@ import { z } from 'zod'
 import { createZeropsApi } from '../api'
 import { zeropsPostgresMaxConnections } from '../database-budget'
 import { ensureBackupPeriod, PLATFORM_DATABASE_BACKUP_PERIOD } from '../installation/deploy'
-import { raiseMinRam } from '../provider'
+import { raiseMinRam, storeTaggedBackup, zeropsBackupTag } from '../provider'
 import {
 	assertLiveRowIsSafe,
 	awaitProcessTerminal,
@@ -583,6 +583,34 @@ const backupPeriodRow: FactScript = async ({ transport, context, fact }) => {
 	}
 }
 
+/**
+ * Backs up the database the backup-period row imported, under a tag, through the deploy step's own `storeTaggedBackup`.
+ * The fact holds when the list shows a file with the tag. The printed lines record how long that took and the listed
+ * file's raw metadata: how the platform encodes `tags`.
+ */
+const taggedBackupRow: FactScript = async ({ transport, context, fact }) => {
+	const databaseId = context.get('backupServiceId')
+	if (databaseId === undefined) {
+		throw new PlatformFactError(fact.id, fact.section, 'needs the database `postgres-backup-period-round-trips` imports')
+	}
+	const tag = zeropsBackupTag(required(context, 'hostname'))
+	context.set('backupTag', tag)
+	const startedAtMs = Date.now()
+	const stored = await storeTaggedBackup({
+		api: createZeropsApi({ token: transport.token }),
+		sleep: (ms) => transport.sleep(ms),
+		signal: transport.signal,
+		boundary: async () => {},
+		log: (line) => console.info(`platform-facts.live:${line}`),
+		serviceId: databaseId,
+		hostname: required(context, 'backupHostname'),
+		tag,
+	})
+	console.info(`platform-facts.live: backup ${JSON.stringify(stored.name)} listed under ${tag} after ${Date.now() - startedAtMs} ms`)
+	const read = await callApi(transport, 'GET', `/service-stack/${databaseId}/backup`)
+	console.info(`platform-facts.live: the listed files' metadata: ${JSON.stringify(resolvePath(read.body, 'files[*].metadata'))}`)
+}
+
 const scripts: Record<string, FactScript> = {
 	'unpacker-flat-archive': unpackerProbe({ directoryEntries: false, expected: 'BUILD_FAILED' }),
 	'unpacker-directory-entries': unpackerProbe({ directoryEntries: true, expected: 'ACTIVE' }),
@@ -592,6 +620,7 @@ const scripts: Record<string, FactScript> = {
 	'authorization-forwarded': authorizationForwarded,
 	...postgres.scripts,
 	'postgres-backup-period': backupPeriodRow,
+	'postgres-tagged-backup': taggedBackupRow,
 }
 
 describe.skipIf(!hasLiveAccount)('the platform-facts table, against a real Zerops account', () => {

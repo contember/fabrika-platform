@@ -220,6 +220,8 @@ const makeApi = (
 		configureCustomAutoscaling: () => Promise.reject(new Error('the control provider must not change autoscaling')),
 		getBackupConfig: () => Promise.reject(new Error('the control provider must not read a backup schedule')),
 		configureBackup: () => Promise.reject(new Error('the control provider must not change a backup schedule')),
+		createBackup: () => Promise.reject(new Error('this deploy deletes no data, so it takes no backup')),
+		listBackups: () => Promise.reject(new Error('this deploy deletes no data, so it lists no backup')),
 		startService: async ({ serviceId }) => {
 			recorded.calls.push(`startService:${serviceId}`)
 			return { id: 'process-start', status: 'PENDING' }
@@ -1322,6 +1324,14 @@ describe('Zerops ControlProvider lifecycle', () => {
 		// A build log that cannot be read leaves the maps unconfirmed.
 		const unread = createTestControlProvider({ accessToken: 'token', api: makeApi(recorded), sleep: async () => {} })
 		expect(await unread.deploy({ ...deployInput(recorded), artifactUpload })).toEqual({ state: 'succeeded', artifactState: 'incomplete' })
+	})
+
+	test('a deploy whose migrations delete data runs the backup first, and fails before a version without a database to back up', async () => {
+		const control = createTestControlProvider({ accessToken: 'token', api: makeApi(recorded), sleep: async () => {} })
+		const backupBeforeMigrations = { migrations: ['0002_purge.sql'] }
+		expect(await control.deploy({ ...deployInput(recorded), backupBeforeMigrations })).toEqual({ state: 'failed' })
+		expect(recorded.logs).toContain('✗ backup-database: zerops: `0002_purge.sql` delete data, and the application declares no database to back up')
+		expect(recorded.externalIds).toEqual([])
 	})
 
 	test('a failed pipeline process fails the deploy, and a cancel of a version stuck UPLOADING settles at the deadline', async () => {

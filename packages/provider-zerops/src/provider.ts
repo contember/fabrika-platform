@@ -29,14 +29,17 @@ import {
 	ZEROPS_PROCESS_FINISHED,
 	ZEROPS_PROCESS_TERMINAL,
 	ZEROPS_TERMINAL,
+	type ZeropsApi,
 	ZeropsApiError,
 	type ZeropsAppVersion,
+	type ZeropsBackupFile,
+	type ZeropsBackupStart,
 	type ZeropsLogAccess,
 	type ZeropsProcess,
 	type ZeropsService,
 	type ZeropsServiceAutoscaling,
 } from './api'
-import { defaultZeropsCollaborators, type ZeropsCollaboratorFactory, type ZeropsCollaborators } from './collaborators'
+import { defaultZeropsCollaborators, type Sleeper, type ZeropsCollaboratorFactory, type ZeropsCollaborators } from './collaborators'
 import { assertZeropsInvariants, renderYaml } from './compile'
 import {
 	MIN_PROCESS_CONNECTIONS,
@@ -95,6 +98,8 @@ export interface ZeropsDeployRun {
 	readonly access?: ProviderApprovedAccess
 	/** The run-scoped source-map destination Control minted; the build uploads to it. */
 	readonly artifactUpload?: ProviderDeployInput['artifactUpload']
+	/** Control's `backupBeforeMigrations`, with the run whose tag the backup carries. Absent: no backup. */
+	readonly backupBeforeMigrations?: { readonly migrations: readonly string[]; readonly runId: string }
 	readonly dryRun: boolean
 	readonly signal: AbortSignal
 	readonly events: ProviderRunEvents
@@ -114,6 +119,16 @@ const POLL_INTERVAL_MS = 3000
 
 /** A run stops waiting for its version this long after it started. Zerops' own pipeline limit is 1 hour. */
 export const ZEROPS_VERSION_DEADLINE_MS = 75 * 60 * 1000
+
+/** How often `backup-database` lists the database's backups, and how many times before the run fails: 10 minutes. */
+const BACKUP_POLL_INTERVAL_MS = 10_000
+export const ZEROPS_BACKUP_POLLS = 60
+
+/**
+ * The tag of the backup a run takes before its migrations delete data. A user tag is at most 24 characters of
+ * `[A-Za-z0-9:_-]`, so it carries the first 20 of the run id's own: a UUIDv7's, which start with its timestamp.
+ */
+export const zeropsBackupTag = (runId: string): string => `run-${runId.replace(/[^A-Za-z0-9]/g, '').slice(0, 20)}`
 
 /** Abandon the step if the run was cancelled. Checked before every real mutation and each poll iteration. */
 const assertRunning = (signal: AbortSignal): void => {
@@ -804,6 +819,89 @@ const sizeDatabase = async (env: StepEnv): Promise<void> => {
 	log(`  ${database.hostname}: ${limit} connections at ${ram} GB; each process opens at most ${connections}, for ${holders}`)
 }
 
+/**
+ * Backs up the application's database before a version that runs migrations deleting data can start: those run in its
+ * init commands, at container start. A backup that fails or is not stored fails the run before a version is reserved.
+ * A `cheap` namespace's shared database is backed up whole.
+ */
+const backupDatabase = async (env: StepEnv): Promise<void> => {
+	const { run, zerops, log, signal, dryRun } = env
+	const request = run.backupBeforeMigrations
+	if (request === undefined) return
+	const migrations = request.migrations.map((file) => `\`${file}\``).join(', ')
+	const database = applicationDatabaseOf(run.artifact)
+	if (database === null) throw new Error(`zerops: ${migrations} delete data, and the application declares no database to back up`)
+	const tag = zeropsBackupTag(request.runId)
+	const named = database.shared ? `${database.hostname}, the namespace's shared database,` : database.hostname
+	if (dryRun) {
+		log(`  [dry-run] would back up ${named} under the tag \`${tag}\` and wait until the backup is stored`)
+		return
+	}
+	assertRunning(signal)
+	const service = await zerops.api.findService({ projectId: run.target.projectId, hostname: database.hostname, signal })
+	if (service === null) throw new Error(`zerops: the database ${database.hostname} does not exist, so it cannot be backed up`)
+	log(`  ${migrations} delete data: backing up ${named} under the tag \`${tag}\``)
+	const stored = await storeTaggedBackup({
+		api: zerops.api,
+		sleep: zerops.sleep,
+		signal,
+		boundary: () => run.events.boundary(),
+		log,
+		serviceId: service.id,
+		hostname: database.hostname,
+		tag,
+	})
+	log(`  ${database.hostname}: backup \`${stored.name}\` is stored`)
+}
+
+/**
+ * Requests a backup of a managed service under `tag` and answers it once the list shows it stored. The request names no
+ * process, so the list is the only evidence; a refusal, or no such file after `ZEROPS_BACKUP_POLLS`, throws. The deploy's
+ * `backup-database`, and the live platform-facts probe of the same path.
+ */
+export const storeTaggedBackup = async (input: {
+	api: Pick<ZeropsApi, 'createBackup' | 'listBackups'>
+	sleep: Sleeper
+	signal: AbortSignal
+	/** Crossed before each list, so a cancel or a lost lease stops the wait. */
+	boundary: () => Promise<void>
+	log: (line: string) => void
+	serviceId: string
+	hostname: string
+	tag: string
+}): Promise<ZeropsBackupFile> => {
+	const { api, signal, hostname, tag } = input
+	let started: ZeropsBackupStart
+	try {
+		started = await api.createBackup({ serviceId: input.serviceId, tags: [tag], signal })
+	} catch (error) {
+		if (error instanceof ZeropsApiError) {
+			throw new Error(`zerops: the backup of ${hostname} was refused (${error.code === '' ? error.status : error.code}); nothing was deployed`)
+		}
+		throw error
+	}
+	if (!started.success) throw new Error(`zerops: the backup of ${hostname} did not start; nothing was deployed`)
+	for (let poll = 0; poll < ZEROPS_BACKUP_POLLS; poll++) {
+		if (poll > 0) await input.sleep(BACKUP_POLL_INTERVAL_MS, signal)
+		await input.boundary()
+		assertRunning(signal)
+		let files: ZeropsBackupFile[]
+		try {
+			files = await api.listBackups({ serviceId: input.serviceId, signal })
+		} catch {
+			input.log(`  ${hostname}: the backup list is unavailable; retrying`)
+			continue
+		}
+		const stored = files.find((file) => file.tags.includes(tag))
+		if (stored !== undefined) return stored
+	}
+	const minutes = (ZEROPS_BACKUP_POLLS * BACKUP_POLL_INTERVAL_MS) / 60_000
+	throw new Error(
+		`zerops: the backup of ${hostname} was not stored within ${minutes} minutes, so nothing was deployed; `
+			+ "a backup larger than the project's backup storage is never stored",
+	)
+}
+
 /** The locked execution with the connections `size-database` sized; an application with a database is never sent without. */
 const sizedExecution = (locked: ZeropsLockedExecution, attempt: Attempt): ZeropsLockedExecution => {
 	if (locked.databaseUrl === null) return locked
@@ -858,6 +956,11 @@ const runStep = async (spec: ZeropsStep, env: StepEnv): Promise<void> => {
 
 		case 'verify-exposure': {
 			await verifyExposure(env)
+			return
+		}
+
+		case 'backup-database': {
+			await backupDatabase(env)
 			return
 		}
 
@@ -1027,7 +1130,7 @@ async (run: ZeropsDeployRun): Promise<ZeropsDeployResult> => {
 		managed: run.managedEnvironment,
 		deadlineMs: Date.now() + ZEROPS_VERSION_DEADLINE_MS,
 	}
-	const steps = buildZeropsPlan(run.artifact)
+	const steps = buildZeropsPlan(run.artifact, { backup: run.backupBeforeMigrations !== undefined })
 	const options = { appId: run.appId, env: run.env, dryRun: run.dryRun, signal: run.signal, log: run.events.log }
 	const result = await runSteps(steps, options, (step) => runStep(step, env))
 	const { appVersionId, triggered } = env.attempt

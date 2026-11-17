@@ -143,6 +143,7 @@ const SECTION_UNVERIFIED_HA_NEW_ROLE =
 const SECTION_POSTGRES_MIN_RAM =
 	"Verified live (2026-10-16) — the autoscaling API raises a PostgreSQL service's minimum RAM and its `max_connections` — docs/reference/zerops-platform.md"
 const SECTION_BACKUP_SCHEDULE = "UNVERIFIED: a managed service's backup schedule, set through the API — docs/reference/zerops-platform.md"
+const SECTION_BACKUP_BEFORE_MIGRATION = 'UNVERIFIED: a tagged backup before migrations that delete data — docs/reference/zerops-platform.md'
 const SECTION_REST_API = 'REST API — docs/reference/zerops-platform.md:149'
 const SECTION_HIERARCHY = 'Hierarchy and isolation — docs/reference/zerops-platform.md:28'
 const SECTION_AUTHORIZATION_FORWARDED =
@@ -1286,6 +1287,18 @@ export const PLATFORM_FACTS: readonly PlatformFact[] = [
 		request: { method: 'PUT', path: '/service-stack/{backupServiceId}/backup-config' },
 		expect: { status: 200 },
 		script: 'postgres-backup-period',
+		live: 'build',
+		emulator: false,
+		emulatorNote: 'the double keeps no backups',
+	},
+	{
+		id: 'postgres-tagged-backup-is-listed',
+		section: SECTION_BACKUP_BEFORE_MIGRATION,
+		// On the database the row before imported: the deploy step's own `storeTaggedBackup` requests the backup under a
+		// tag and waits until the list shows a file with it; the script prints that file's raw metadata.
+		request: { method: 'POST', path: '/service-stack/{backupServiceId}/backup', body: { tags: ['{backupTag}'] } },
+		expect: { status: 200, bodyShape: { success: { kind: 'boolean', value: true } } },
+		script: 'postgres-tagged-backup',
 		live: 'build',
 		emulator: false,
 		emulatorNote: 'the double keeps no backups',

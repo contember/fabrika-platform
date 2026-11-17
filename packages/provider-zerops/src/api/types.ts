@@ -224,6 +224,25 @@ export interface ZeropsBackupConfig {
 	retentionPolicy?: ZeropsBackupRetentionPolicy
 }
 
+/**
+ * One stored backup of a managed service. VERIFIED AS A SHAPE: `OutDtoServiceStackBackupFile`, narrowed to its `name` and
+ * the `tags` of its `metadata`. UNVERIFIED: how `tags` is encoded. The OpenAPI document types `metadata` as a map of
+ * strings while its example lists `tags` as an array, so the reader takes either, and reads anything else as no tag.
+ */
+export interface ZeropsBackupFile {
+	/** The moment the backup was taken, as the platform names the file. */
+	name: string
+	tags: string[]
+}
+
+/** What a backup request answers. VERIFIED AS A SHAPE: `ResponseServiceStackBackup`. */
+export interface ZeropsBackupStart {
+	/** The backup was started, and is finished or running in the background. */
+	success: boolean
+	/** It ran past 10 s and goes on in the background. */
+	async: boolean
+}
+
 /** One service. VERIFIED: `ResponseServiceStack` (narrowed to the fields fabrika reads). */
 export interface ZeropsService {
 	id: string
@@ -557,6 +576,19 @@ export interface ZeropsApi {
 		retentionPolicy: ZeropsBackupRetentionPolicy
 		signal: AbortSignal
 	}): Promise<ZeropsProcess | null>
+
+	/**
+	 * Back a managed service up now, under `tags`. VERIFIED AS A SHAPE: `POST /service-stack/{id}/backup`
+	 * (`BackupServiceStack`), body `RequestPostServiceStackBackup`, response `ResponseServiceStackBackup`. It names no
+	 * process: the backup is done once `listBackups` lists it. A user tag is at most 24 characters of `[A-Za-z0-9:_-]`.
+	 */
+	createBackup(input: { serviceId: string; tags: string[]; signal: AbortSignal }): Promise<ZeropsBackupStart>
+
+	/**
+	 * The stored backups of a managed service. VERIFIED AS A SHAPE: the `files` of `GET /service-stack/{id}/backup`
+	 * (`ListBackups`). UNVERIFIED: whether a backup still running is listed.
+	 */
+	listBackups(input: { serviceId: string; signal: AbortSignal }): Promise<ZeropsBackupFile[]>
 
 	// ── service-stack / project: reading state ────────────────────────────────────
 

@@ -3,6 +3,7 @@ import { type FabrikaManifest, manifestServiceHostnames } from './manifest'
 export type ZeropsStepKind =
 	| 'apply-import'
 	| 'verify-exposure'
+	| 'backup-database'
 	| 'write-service-env'
 	| 'raise-start-memory'
 	| 'size-database'
@@ -27,8 +28,12 @@ export const resolveDeployHostname = (manifest: FabrikaManifest): string => {
 	return deployService
 }
 
-/** Build the provider-owned deploy order without touching the platform. */
-export const buildZeropsPlan = (manifest: FabrikaManifest): readonly ZeropsStep[] => {
+/**
+ * Build the provider-owned deploy order without touching the platform. `backup` adds the backup of the application's
+ * database, which a deploy takes when its migrations delete data: before anything but the verified import changes, and
+ * before a version is reserved, so a backup that does not finish leaves nothing to clean up.
+ */
+export const buildZeropsPlan = (manifest: FabrikaManifest, options: { readonly backup?: boolean } = {}): readonly ZeropsStep[] => {
 	const serviceHostnames = manifestServiceHostnames(manifest)
 	const steps: ZeropsStep[] = []
 
@@ -42,6 +47,13 @@ export const buildZeropsPlan = (manifest: FabrikaManifest): readonly ZeropsStep[
 		kind: 'verify-exposure',
 		description: 'Read back that no service has subdomain access and every bucket is one the platform created private',
 	})
+	if (options.backup === true) {
+		steps.push({
+			id: 'backup-database',
+			kind: 'backup-database',
+			description: "Back up the application's database before migrations that delete data, and wait until the backup is stored",
+		})
+	}
 	steps.push({ id: 'write-service-env', kind: 'write-service-env', description: 'Write the managed service variables' })
 	steps.push({
 		id: 'raise-start-memory',

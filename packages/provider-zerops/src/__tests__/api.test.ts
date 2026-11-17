@@ -1201,6 +1201,39 @@ describe('Zerops upload-backed app versions', () => {
 		await expect(api.getBackupConfig({ serviceId: 'db-1', signal: signal() })).rejects.toThrow('zerops: list backups returned an invalid response')
 	})
 
+	test('takes a tagged backup, and lists the backups with their tags in either encoding', async () => {
+		const requests: { method: string; url: string; body: unknown }[] = []
+		const fetchImpl: FetchLike = async (url, init) => {
+			requests.push({ method: init?.method ?? 'GET', url, body: init?.body === undefined ? undefined : JSON.parse(init.body) })
+			if (init?.method === 'POST') return jsonResponse({ success: true, async: true })
+			return jsonResponse({
+				files: [
+					{ path: 'stack/2026-10-21 00:00:06', name: '2026-10-21 00:00:06', size: 399, metadata: { tags: ['daily', 'weekly'] } },
+					{ path: 'stack/2026-10-21 10:17:07', name: '2026-10-21 10:17:07', size: 401, metadata: { tags: 'run-019a,protected' } },
+					{ path: 'stack/2026-10-21 10:20:00', name: '2026-10-21 10:20:00', size: 402, metadata: { tags: '["run-019b"]' } },
+					{ path: 'stack/2026-10-21 10:30:00', name: '2026-10-21 10:30:00', size: 403, metadata: { tags: 7 } },
+					{ path: 'stack/2026-10-21 10:40:00', name: '2026-10-21 10:40:00', size: 404, metadata: null },
+				],
+				backupPeriod: '0 0 * * *',
+				defaultRetentionPolicy: null,
+			})
+		}
+		const api = createZeropsApi({ token: 'zerops-secret', baseUrl: 'https://zerops.test', fetchImpl })
+
+		await expect(api.createBackup({ serviceId: 'db-1', tags: ['run-019a'], signal: signal() })).resolves.toEqual({ success: true, async: true })
+		await expect(api.listBackups({ serviceId: 'db-1', signal: signal() })).resolves.toEqual([
+			{ name: '2026-10-21 00:00:06', tags: ['daily', 'weekly'] },
+			{ name: '2026-10-21 10:17:07', tags: ['run-019a', 'protected'] },
+			{ name: '2026-10-21 10:20:00', tags: ['run-019b'] },
+			{ name: '2026-10-21 10:30:00', tags: [] },
+			{ name: '2026-10-21 10:40:00', tags: [] },
+		])
+		expect(requests).toEqual([
+			{ method: 'POST', url: 'https://zerops.test/service-stack/db-1/backup', body: { tags: ['run-019a'] } },
+			{ method: 'GET', url: 'https://zerops.test/service-stack/db-1/backup', body: undefined },
+		])
+	})
+
 	test('a null list of protected tags reads as the empty list', async () => {
 		const retention = {
 			maxTotalFiles: 50,
