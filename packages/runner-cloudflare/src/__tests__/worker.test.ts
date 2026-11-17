@@ -147,6 +147,17 @@ describe('VozkaRunner.startRun', () => {
 		expect(touched).toEqual([])
 	})
 
+	test('approved access with a field this runner does not know says Control runs a newer release, naming no field', async () => {
+		const { worker, touched } = harness(RUNNER_KEY)
+		// What a runner refuses when a later Control adds a field to the approved access, as `checker` was added.
+		const later = asJob({ ...job, approvedAccess: { ...job.approvedAccess, fieldOfALaterRelease: 'x' } })
+		const refused = await worker.startRun(later).then(() => '', (error: unknown) => String(error))
+		expect(refused).toBe(
+			"Error: runner: the job carries a field this runner does not know: Control runs a newer release than the runner; deploy the runner of Control's release",
+		)
+		expect(touched).toEqual([])
+	})
+
 	test('a job with no key at all is unauthorized, not merely malformed', async () => {
 		const { worker, touched } = harness(RUNNER_KEY)
 		const { runnerKey: _unused, ...keyless } = job
