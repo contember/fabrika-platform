@@ -646,6 +646,18 @@ node the object's column stores (the statement compared it, so a `uuid` spelled 
   has no row values before it (`MovedRow.narrowed`); the moved row never holds its own move. A relation narrowed for an action does
   not count towards a path writer's bound (`unnarrowed`). A view's parent subquery leaves the parent's `relationWhen`
   out, as its `when`; the view's own splits the subquery into the rest and one part per narrowed relation (`SplitReach`).
+- **`access: { <relation>: { view, row, principal?, member? } }`** (ADR-0076) names an access view whose SQL decides
+  which rows of the table the relation reaches: `T.<key> in (select V.<row> from V where [V.<member> in (<nodes>)]
+  [and V.<principal> = $me])` (`accessTerms`, `accessReach`), ORed with the relation's other terms and narrowed by its
+  `relationWhen`. `parseAccess` takes it on a dimension or child table, or a child view, and refuses a view with a
+  policy (read directly it would show who reaches which row), a column the view lacks and an entry binding neither.
+  A `member` binding counts only a hold inside a node (`~relin`) and is not narrowed to the node by the table's column;
+  a `principal`-only one is, like every relation term. A relation no table confers is an `AccessRelation` in the
+  layer's `RelationSources`: `relationSource` refuses it (no row to check or lock), `relates` answers through the term
+  (`accessHolds`), and an insert under a `Ref` held through it locks its owned destination under the term; the view
+  itself is never locked. On a child view the term sits beside the parent subquery in one union (`viewScope`'s
+  `access`), and the guard admits it only for an access view the view declares (`ViewParentLink.access`,
+  `isViewAccess`). Every access view joins the guard's subquery allowlist by its `row` column (`layerReach`).
 - **A tenant-holding key** is one foreign key of exactly the column and every ancestor column the two tables share,
   referencing the target's key (`holdsExactly`), with each ancestor column in the column list's `notNull`
   (`requireNotNullAncestors`, the invariant above). A hop's subquery reads its target unscoped, so any looser key would

@@ -432,6 +432,42 @@ describe("a child view's rows read through its parent row", () => {
 		const [node, context] = scopedBy(AndNode.create(everything(), ParensNode.create(open)))
 		expect(() => assertAllowedTree(node, context)).not.toThrow()
 	})
+
+	test("an access view the view declares lists its rows by the view's key, beside the parent, and only that one", () => {
+		const access = [{ key: 'id', view: 'note_access', row: 'note_id' }]
+		const withAccess = { ...subqueries, note_access: ['note_id'], secret_access: ['note_id'] }
+		const listed = (where: OperationNode, view = 'note_access', row = 'note_id', key = 'id') =>
+			BinaryOperationNode.create(column('notes', key), OperatorNode.create('in'), subquery(view, row, where))
+		const mine = equals('note_access', 'principal_id', 'user:alice')
+		const scoped = (shape: OperationNode): [SelectQueryNode, GuardContext] => {
+			const [node, context] = scopedBy(shape)
+			return [node, { ...context, subqueries: withAccess, through: { ...through, access } }]
+		}
+		for (
+			const shape of [
+				listed(mine),
+				anyOf([parentRows(ref), listed(mine)]),
+				anyOf([parentRows(ref), listed(inList('note_access', 'member_id', ['w1']))]),
+				AndNode.create(anyOf([parentRows(ref), listed(mine)]), ParensNode.create(open)),
+			]
+		) {
+			const [node, context] = scoped(shape)
+			expect(() => assertAllowedTree(node, context)).not.toThrow()
+		}
+		for (
+			const shape of [
+				listed(mine, 'secret_access'),
+				listed(mine, 'note_access', 'note_id', 'workspace_id'),
+				listed(open),
+				listed(equals('note_access', 'principal_id', 'user:alice'), 'note_access', 'principal_id'),
+			]
+		) {
+			const [node, context] = scoped(shape)
+			refuses(node, context, 'the scope predicate must be true')
+		}
+		const [node, context] = scopedBy(listed(mine))
+		refuses(node, { ...context, subqueries: withAccess }, 'the scope predicate must be true')
+	})
 })
 
 describe('the scope predicate is the top-level conjunct', () => {

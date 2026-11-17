@@ -2,6 +2,7 @@
 // driver, so `@fabrika/app/contract` and the static contract reader in `@fabrika/check` import it.
 
 import type {
+	AccessArtifact,
 	ColumnPolicyArtifact,
 	ConditionArtifact,
 	ConfersArtifact,
@@ -16,6 +17,7 @@ import { freeze, namesOf, ownEntry, ownKeys, setOwn } from './builtins'
 import { conditionArtifact, type ConditionModel } from './conditions'
 import { PolicyError } from './errors'
 import {
+	type AccessModel,
 	accessTablesOf,
 	type MemberRevealModel,
 	modelOf,
@@ -193,7 +195,19 @@ function artifactOf(model: TableModel): TablePolicyArtifact {
 		...(model.readThrough.length === 0 ? {} : { readThrough: readThroughArtifact(model) }),
 		...writeThroughArtifact(model),
 		...(model.memberReveals.length === 0 ? {} : { memberReveals: memberRevealsArtifact(model.memberReveals) }),
+		...(model.access.length === 0 ? {} : { access: accessArtifact(model.access) }),
 	}
+}
+
+function accessArtifact(access: readonly AccessModel[]): Record<string, AccessArtifact> {
+	const artifact: Record<string, AccessArtifact> = {}
+	for (let index = 0; index < access.length; index++) {
+		const entry = access[index]
+		if (entry !== undefined) {
+			setOwn(artifact, entry.relation, { view: entry.view, row: entry.row, principal: entry.principal ?? null, member: entry.member ?? null })
+		}
+	}
+	return artifact
 }
 
 function memberRevealsArtifact(reveals: readonly MemberRevealModel[]): Record<string, MemberRevealsArtifact> {

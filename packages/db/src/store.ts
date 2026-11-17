@@ -2,6 +2,8 @@ import { uuidv7 } from '@fabrika/platform'
 import { AndNode, BinaryOperationNode, type OperationNode, OperatorNode, ParensNode, type ReturningNode, ValueNode } from 'kysely'
 import { admissions } from './admissions'
 import {
+	accessReach,
+	type AccessRelation,
 	activeRow,
 	conditioned,
 	everyPath,
@@ -9,6 +11,7 @@ import {
 	heldThrough,
 	holdsBesides,
 	isIn,
+	knownRelation,
 	type LayerRelation,
 	type MemberReveals,
 	memberTerms,
@@ -84,7 +87,7 @@ import { CapabilityError, ConflictError, NotFoundError, PolicyError, QueryRefuse
 import { answerFiles, type FileBinding, fileValue, referenceFiles, rowScope, storedRowScope } from './file-columns'
 import { fileReference } from './file-references'
 import { webhookTables } from './framework-tables'
-import type { ForeignKeyPair, GuardContext, RootKind, ViewParentLink } from './guard'
+import type { ForeignKeyPair, GuardContext, RootKind, ViewAccessLink, ViewParentLink } from './guard'
 import { fencedTransaction, jobLeases } from './job-leases'
 import { jobWakes, leaseProjection } from './job-wakes'
 import { jsonInput } from './json'
@@ -199,6 +202,16 @@ export interface PathBound extends PathWriter {
 /** A child view's parent link, with the parent's context: its model without conditions, as only the view's own narrow a read. */
 export interface ViewParent extends ViewParentLink {
 	readonly context: TableContext
+}
+
+/** A child view's access views, as the guard admits them on its statements: its key in each view's row column. */
+function viewAccessLinks(model: TableModel, key: string): readonly ViewAccessLink[] {
+	const links: ViewAccessLink[] = []
+	for (let index = 0; index < model.access.length; index++) {
+		const access = model.access[index]
+		if (access !== undefined) links[links.length] = freeze({ key, view: access.view, row: access.row })
+	}
+	return freeze(links)
 }
 
 /** The dialect of the database the layer is bound to: what a read answers and a write binds depends on it. */
@@ -661,7 +674,8 @@ function splitRefReach(view: TableModel, parent: TableContext, grant: RefGrant, 
 /**
  * A child view's rows a `Within` reaches: those whose parent row `reach` admits over the parent's context; for `all`,
  * those whose parent row exists. A relation the view narrows (`relationWhen`) reaches the parent through a part of its
- * own, ANDed with the view's condition. Undefined where nothing is reached: the empty `Within`.
+ * own, ANDed with the view's condition. The view's own access views list rows beside them. Undefined where nothing is
+ * reached: the empty `Within`.
  */
 function throughParent(
 	context: TableContext,
@@ -673,10 +687,19 @@ function throughParent(
 	if (grant.values === 'all') {
 		return viewScope(context.model, through, grant.action, 'all', now)
 	}
+	const own: OperationNode[] = []
+	for (let index = 0; index < grant.relations.length; index++) {
+		const hold = grant.relations[index]
+		const terms = hold === undefined ? [] : accessReach(context.model, hold, grant.principal, grant.action, now)
+		for (let position = 0; position < terms.length; position++) {
+			const term = terms[position]
+			if (term !== undefined) own[own.length] = term
+		}
+	}
 	const narrowed = viewNarrowed(context.model, grant.relations, grant.action)
 	if (narrowed.length === 0) {
 		const reached = reach(through.context, grant)
-		return reached === undefined ? undefined : viewScope(context.model, through, grant.action, reached, now)
+		return reached === undefined && own.length === 0 ? undefined : viewScope(context.model, through, grant.action, reached, now, undefined, own)
 	}
 	const rest = reach(through.context, { ...grant, relations: holdsBesides(grant.relations, narrowed) })
 	const relations: { reached: OperationNode; condition: ConditionModel }[] = []
@@ -691,10 +714,10 @@ function throughParent(
 		const reached = condition === undefined || alone === undefined ? undefined : reach(through.context, alone)
 		if (condition !== undefined && reached !== undefined) relations[relations.length] = { reached, condition }
 	}
-	if (rest === undefined && relations.length === 0) {
+	if (rest === undefined && relations.length === 0 && own.length === 0) {
 		return undefined
 	}
-	return viewScope(context.model, through, grant.action, { rest, relations }, now)
+	return viewScope(context.model, through, grant.action, { rest, relations }, now, undefined, own)
 }
 
 export function childListPredicate(context: TableContext, capability: unknown, operation: Operation): OperationNode | undefined {
@@ -2608,7 +2631,7 @@ function unnarrowed(relations: RelationSources, held: readonly RelationHold[], a
 	const kept: RelationHold[] = []
 	for (let index = 0; index < held.length; index++) {
 		const hold = held[index]
-		if (hold !== undefined && !includes(relationSource(relations, hold.relation).narrowed, action)) kept[kept.length] = hold
+		if (hold !== undefined && !includes(knownRelation(relations, hold.relation).narrowed, action)) kept[kept.length] = hold
 	}
 	return kept
 }
@@ -3078,6 +3101,7 @@ export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
 				column: model.scope.column,
 				table: parent.name,
 				key: parent.scope.key,
+				access: viewAccessLinks(model, model.scope.key),
 				context: contextOf(freeze({ ...parent, when: freeze({}), relationWhen: freeze({}) })),
 			})
 			: undefined
@@ -3148,7 +3172,8 @@ export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
 			connection.runtime = bound
 			return freeze({
 				locate: async (dimension: string, id: string, using?: Session) => locateObject(models, bound, dimension, id, using),
-				relates: async (relation: string, node: string, principal: string) => relationHolds(relations, subqueries, bound, relation, node, principal),
+				relates: async (relation: string, node: string, principal: string) =>
+					relationHolds(models, relations, subqueries, bound, relation, node, principal),
 				reveals: async (relation: string, dimension: string, node: string, principal: string, action: string) =>
 					revealHolds(relations, subqueries, bound, relation, dimension, node, principal, action),
 				holdsThrough: async (
@@ -3200,7 +3225,7 @@ export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
 function layerReach(
 	models: TableModels,
 ): { readonly relations: RelationSources; readonly members: MemberReveals; readonly subqueries: Readonly<Record<string, readonly string[]>> } {
-	const relations: Record<string, LayerRelation> = {}
+	const relations: Record<string, LayerRelation | AccessRelation> = {}
 	const members: Record<string, MemberRevealModel[]> = {}
 	const selected: Record<string, string[]> = {}
 	const select = (table: string, column: string): void => {
@@ -3263,11 +3288,22 @@ function layerReach(
 			setOwn(
 				relations,
 				source.relation,
-				freeze({ ...source, reveals: freeze(revealed), narrowed: freeze(ownEntry(narrowed, source.relation) ?? []), placed: freeze(placed) }),
+				freeze({
+					...source,
+					kind: 'source',
+					reveals: freeze(revealed),
+					narrowed: freeze(ownEntry(narrowed, source.relation) ?? []),
+					placed: freeze(placed),
+				}),
 			)
 			select(source.table, source.node)
 			if (source.principalPath !== undefined) select(source.principalPath.table, source.principalPath.key)
 			if (source.when !== undefined) addReach(source.when, select)
+		}
+		for (let position = 0; position < model.access.length; position++) {
+			const access = model.access[position]
+			if (access === undefined) continue
+			select(access.view, access.row)
 		}
 		for (let position = 0; position < model.readThrough.length; position++) {
 			const path = model.readThrough[position]
@@ -3280,6 +3316,20 @@ function layerReach(
 		for (let position = 0; position < actions.length; position++) {
 			const condition = ownEntry(model.when, actions[position] ?? '')
 			if (condition !== undefined) addReach(condition, select)
+		}
+	}
+	// A relation no table confers is served by the access views alone; a table that confers it adds them to its source.
+	for (let index = 0; index < names.length; index++) {
+		const model = modelOf(models, names[index] ?? '')
+		for (let position = 0; model !== undefined && position < model.access.length; position++) {
+			const access = model.access[position]
+			if (access === undefined || ownEntry(relations, access.relation) !== undefined) continue
+			const relation = access.relation
+			setOwn(
+				relations,
+				relation,
+				freeze({ kind: 'access', relation, dimension: access.dimension, narrowed: freeze(ownEntry(narrowed, relation) ?? []) }),
+			)
 		}
 	}
 	const subqueries: Record<string, readonly string[]> = {}
@@ -3354,6 +3404,42 @@ export function ownerOf(models: TableModels, dimension: string): TableModel | un
 	return undefined
 }
 
+/**
+ * Whether an access view of `relation` lists `node` for `principal`: a guarded select of the row of the table that owns
+ * the relation's dimension, by its key, under the access term. Only a principal-bound view answers; one bound to a
+ * member node lists nothing for a hold anywhere, which is all `relates` asks about.
+ */
+async function accessHolds(
+	models: TableModels,
+	subqueries: Readonly<Record<string, readonly string[]>>,
+	runtime: DataLayerRuntime,
+	relation: string,
+	dimension: string,
+	node: string,
+	principal: string,
+): Promise<boolean> {
+	const names = ownKeys(models)
+	for (let index = 0; index < names.length; index++) {
+		const model = modelOf(models, names[index] ?? '')
+		if (model === undefined || model.scope.mode !== 'dimension' || model.scope.dimension !== dimension) continue
+		const terms = relationTerms(
+			{ [relation]: freeze({ kind: 'access', relation, dimension, narrowed: freeze([]) }) },
+			model,
+			{ relation, inside: null },
+			principal,
+			'',
+			new Date(),
+			noPath,
+		)
+		if (terms.length === 0) continue
+		const scope = AndNode.create(equals(model.name, keyOf(model), node), anyOf(terms))
+		const context: GuardContext = { root: 'SelectQueryNode', table: model.name, joins: {}, scope, subqueries }
+		const rows = await sessionOf(runtime).run<Readonly<Record<string, unknown>>>(locateNode(model.name, [keyOf(model)], scope), context)
+		if (rows.length > 0) return true
+	}
+	return false
+}
+
 /** The table that owns `dimension`, which the locator reads; a dimension no table owns is located by nothing. */
 function locatedOwner(models: TableModels, dimension: unknown): TableModel {
 	const owner = typeof dimension === 'string' ? ownerOf(models, dimension) : undefined
@@ -3365,6 +3451,7 @@ function locatedOwner(models: TableModels, dimension: unknown): TableModel {
 
 /** One guarded select of a source row naming `principal` at `node` that confers `relation` now. */
 async function relationHolds(
+	models: TableModels,
 	relations: RelationSources,
 	subqueries: Readonly<Record<string, readonly string[]>>,
 	runtime: DataLayerRuntime,
@@ -3375,13 +3462,18 @@ async function relationHolds(
 	if (typeof node !== 'string' || node.length === 0 || typeof principal !== 'string' || principal.length === 0) {
 		throw new QueryRefusedError('row_address', `a ${relation} row is addressed by its node and its principal, non-empty strings`)
 	}
+	const known = knownRelation(relations, relation)
+	if (known.kind === 'access') {
+		return accessHolds(models, subqueries, runtime, relation, known.dimension, node, principal)
+	}
 	const source = relationSource(relations, relation)
 	const address = allOf([equals(source.table, source.node, node), namesPrincipal(source, principal)])
 	const active = activeRow(source, new Date())
 	const scope = active.length === 0 ? address : AndNode.create(address, ParensNode.create(allOf(active)))
 	const context: GuardContext = { root: 'SelectQueryNode', table: source.table, joins: {}, scope, subqueries }
 	const rows = await sessionOf(runtime).run<Readonly<Record<string, unknown>>>(locateNode(source.table, [source.node], scope), context)
-	return rows.length > 0
+	// A relation with a source table may also name access views: the same term answers through them.
+	return rows.length > 0 || accessHolds(models, subqueries, runtime, relation, source.dimension, node, principal)
 }
 
 /**
@@ -3407,7 +3499,8 @@ async function holdingRowLocked(transaction: Session, context: TableContext, gra
 	}
 	for (let index = 0; index < grant.relations.length; index++) {
 		const hold = grant.relations[index]
-		if (hold === undefined) continue
+		// An access view's base rows are not the data layer's to lock (ADR-0076): such a hold holds no destination here.
+		if (hold === undefined || knownRelation(context.relations, hold.relation).kind === 'access') continue
 		const source = relationSource(context.relations, hold.relation)
 		const node = nodeOf(source.dimension)
 		const sourceInside = insideRow(source, source.table, hold)
@@ -3605,9 +3698,15 @@ async function heldThroughPaths(
 	}
 	const now = new Date()
 	const session = sessionOf(runtime)
-	const reached = async (terms: readonly OperationNode[], column: string): Promise<Readonly<Record<string, unknown>> | undefined> => {
+	const reached = async (
+		terms: readonly OperationNode[],
+		column: string,
+		inside?: readonly string[],
+	): Promise<Readonly<Record<string, unknown>> | undefined> => {
 		if (terms.length === 0) return undefined
-		const scope = AndNode.create(equals(owner.name, keyOf(owner), id), anyOf(terms))
+		const found = AndNode.create(equals(owner.name, keyOf(owner), id), anyOf(terms))
+		// A member-bound access term is not narrowed to the node (ADR-0076): the object's own column is, as the database compares it.
+		const scope = inside === undefined ? found : AndNode.create(found, ParensNode.create(isIn(owner.name, column, valueList(inside))))
 		const context: GuardContext = { root: 'SelectQueryNode', table: owner.name, joins: {}, scope, subqueries: layer.subqueries }
 		const columns = column === keyOf(owner) ? [column] : [keyOf(owner), column]
 		const [row] = await session.run<Readonly<Record<string, unknown>>>(locateNode(owner.name, columns, scope), context)
@@ -3620,7 +3719,7 @@ async function heldThroughPaths(
 		const column = hold.inside === null ? keyOf(owner) : nodeColumnOf(owner, hold.inside.dimension)
 		const row = column === undefined
 			? undefined
-			: await reached(relationTerms(layer.relations, owner, hold, principal, action, now, heldThrough(action)), column)
+			: await reached(relationTerms(layer.relations, owner, hold, principal, action, now, heldThrough(action)), column, hold.inside?.values)
 		if (row === undefined || column === undefined) continue
 		if (hold.inside === null) {
 			held[held.length] = hold

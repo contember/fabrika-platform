@@ -7,7 +7,7 @@ import { ownEntry } from './builtins'
 import type { ContainerGrant, RefGrant, RelationHold, WithinGrant } from './capability'
 import { conditionNode, subquery } from './condition-nodes'
 import type { ConditionModel } from './conditions'
-import { CapabilityError } from './errors'
+import { CapabilityError, PolicyError } from './errors'
 import type { ViewParentLink } from './guard'
 import { linksPredicate, linkValues } from './links'
 import { allOf, anyOf, column, equals, valueList } from './nodes'
@@ -24,6 +24,7 @@ import {
 
 /** A relation of the layer: its source table, and the tables whose rows it reaches reveal an ancestor node. */
 export interface LayerRelation extends RelationSource {
+	readonly kind: 'source'
 	readonly reveals: readonly RevealModel[]
 	/** The actions some table's `relationWhen` narrows the relation for: it holds them only on the rows that condition admits. */
 	readonly narrowed: readonly string[]
@@ -34,8 +35,16 @@ export interface LayerRelation extends RelationSource {
 	readonly placed: Readonly<Record<string, Readonly<Record<string, string>>>>
 }
 
-/** Every relation of the layer, by name, with its source table. */
-export type RelationSources = Readonly<Record<string, LayerRelation>>
+/** A relation no table confers: only access views decide what it reaches, so it has no source row to check or lock. */
+export interface AccessRelation {
+	readonly kind: 'access'
+	readonly relation: string
+	readonly dimension: string
+	readonly narrowed: readonly string[]
+}
+
+/** Every relation of the layer, by name, with its source table, or the mark that only access views serve it. */
+export type RelationSources = Readonly<Record<string, LayerRelation | AccessRelation>>
 
 /** Every member reveal of the layer, by the dimension whose grants it reveals to. */
 export type MemberReveals = Readonly<Record<string, readonly MemberRevealModel[]>>
@@ -47,11 +56,51 @@ export interface LayerReach {
 }
 
 export function relationSource(relations: RelationSources, relation: string): LayerRelation {
-	const source = ownEntry(relations, relation)
-	if (source === undefined) {
-		throw new CapabilityError('unenforceable', `the capability is held through the relation ${relation}, which no table of the layer confers`)
+	const source = knownRelation(relations, relation)
+	if (source.kind === 'access') {
+		throw new CapabilityError('unenforceable', `the relation ${relation} is served by access views only: it has no source row to check or lock`)
 	}
 	return source
+}
+
+/** The relation by name, conferred or served by access views; one the layer does not know is unenforceable, never ignored. */
+export function knownRelation(relations: RelationSources, relation: string): LayerRelation | AccessRelation {
+	const known = ownEntry(relations, relation)
+	if (known === undefined) {
+		throw new CapabilityError('unenforceable', `the capability is held through the relation ${relation}, which no table of the layer confers`)
+	}
+	return known
+}
+
+/**
+ * The rows of `model` the relation's access views list for the caller: `T.<key> in (select V.<row> from V where
+ * V.<principal> = $me [and V.<member> in (<nodes>)])`. A hold inside a node binds `member` to the node; a view with only
+ * a member binding lists nothing for a hold anywhere, and one with only a principal binding is narrowed to the node by
+ * the table's own column as every relation term is. The view's SQL decides the rest; nothing of a handler is bound.
+ */
+function accessTerms(
+	model: TableModel,
+	key: string,
+	hold: RelationHold,
+	principal: string,
+): { readonly bound: readonly OperationNode[]; readonly free: readonly OperationNode[] } {
+	const bound: OperationNode[] = []
+	const free: OperationNode[] = []
+	for (let index = 0; index < model.access.length; index++) {
+		const access = model.access[index]
+		if (access === undefined || access.relation !== hold.relation) continue
+		const parts: OperationNode[] = []
+		if (access.member !== undefined) {
+			// A node of another dimension (a grant at an ancestor) is no key the member column holds.
+			if (hold.inside === null || hold.inside.dimension !== access.dimension || hold.inside.values.length === 0) continue
+			parts[parts.length] = isIn(access.view, access.member, valueList(hold.inside.values))
+		}
+		if (access.principal !== undefined) parts[parts.length] = equals(access.view, access.principal, principal)
+		const term = isIn(model.name, key, subquery(access.view, access.row, allOf(parts)))
+		if (access.member === undefined) free[free.length] = term
+		else bound[bound.length] = term
+	}
+	return { bound, free }
 }
 
 /** A source row that confers its relation now: unexpired, and admitted by the relation's own condition. */
@@ -153,32 +202,74 @@ export function relationTerms(
 	paths: PathRule,
 ): readonly OperationNode[] {
 	const relation = hold.relation
+	const known = knownRelation(relations, relation)
+	const access = accessReach(model, hold, principal, action, now)
+	if (known.kind === 'access') {
+		return access
+	}
 	const narrowing: OperationNode[] = []
 	if (hold.inside !== null) {
 		const column = nodeColumnOf(model, hold.inside.dimension)
 		if (column === undefined || hold.inside.values.length === 0) {
-			return []
+			return access
 		}
 		narrowing[narrowing.length] = isIn(model.name, column, valueList(hold.inside.values))
 	}
-	const source = relationSource(relations, relation)
+	const source = known
+	const rest: OperationNode[] = []
 	const at = nodeColumnOf(model, source.dimension)
-	const terms: OperationNode[] = at === undefined ? [] : [isIn(model.name, at, relationNodes(source, principal, now))]
-	for (let index = 0; index < model.readThrough.length; index++) {
-		const path = model.readThrough[index]
-		const through = path === undefined || !paths(path)
-			? undefined
-			: throughPath(model.name, path, source.dimension, relationNodes(source, principal, now))
-		if (through !== undefined) terms[terms.length] = through
+	if (at !== undefined) rest[rest.length] = isIn(model.name, at, relationNodes(source, principal, now))
+	const others = relationTermsOf(source, model, principal, action, now, paths, rest)
+	return [...access, ...narrowedTerms(model, relation, action, now, others, narrowing)]
+}
+
+/**
+ * The rows of `model` its access views list for `hold`, each carrying the relation's `relationWhen` for `action`. A view
+ * bound to the hold's node decides which rows lie inside it, so the table's own column does not narrow it; a view bound
+ * to the principal alone is narrowed to the node by that column, and reaches nothing where `model` has none.
+ */
+export function accessReach(model: TableModel, hold: RelationHold, principal: string, action: string, now: Date): readonly OperationNode[] {
+	const { bound, free } = accessTerms(model, keyColumnOf(model), hold, principal)
+	const terms = narrowedByRelation(model, hold.relation, action, now, bound)
+	if (free.length === 0) {
+		return terms
 	}
-	for (let index = 0; index < source.reveals.length; index++) {
-		const reveal = source.reveals[index]
-		const held = reveal !== undefined && includes(reveal.actions, action) && (reveal.path === undefined || paths(reveal.path))
-		const placed = reveal === undefined || !held ? undefined : nodeColumnOf(model, reveal.dimension)
-		if (reveal !== undefined && placed !== undefined) {
-			terms[terms.length] = isIn(model.name, placed, revealedNodes(source, reveal, principal, now))
-		}
+	if (hold.inside === null) {
+		return [...terms, ...narrowedByRelation(model, hold.relation, action, now, free)]
 	}
+	const column = nodeColumnOf(model, hold.inside.dimension)
+	if (column === undefined || hold.inside.values.length === 0) {
+		return terms
+	}
+	return [...terms, ...narrowedTerms(model, hold.relation, action, now, free, [isIn(model.name, column, valueList(hold.inside.values))])]
+}
+
+/** The key column a row of `model` is named by: a child's `key`, a dimension table's own key. */
+function keyColumnOf(model: TableModel): string {
+	if (model.scope.mode === 'child' || model.scope.mode === 'dimension') return model.scope.key
+	throw new PolicyError(`${model.name}: an access view names a row of a dimension or child table only`)
+}
+
+/** `terms` with the relation's `relationWhen` for `action`, when the table declares one. */
+function narrowedByRelation(
+	model: TableModel,
+	relation: string,
+	action: string,
+	now: Date,
+	terms: readonly OperationNode[],
+): readonly OperationNode[] {
+	return narrowedTerms(model, relation, action, now, terms, [])
+}
+
+function narrowedTerms(
+	model: TableModel,
+	relation: string,
+	action: string,
+	now: Date,
+	terms: readonly OperationNode[],
+	inside: readonly OperationNode[],
+): readonly OperationNode[] {
+	const narrowing: OperationNode[] = [...inside]
 	const condition = relationCondition(model, relation, action)
 	if (condition !== undefined) {
 		narrowing[narrowing.length] = narrowing.length === 0
@@ -194,6 +285,34 @@ export function relationTerms(
 		if (term !== undefined) narrowed[narrowed.length] = narrowedTerm(term, allOf(narrowing))
 	}
 	return narrowed
+}
+
+/** The secondary-path and reveal terms of a conferred relation, appended to `terms`. */
+function relationTermsOf(
+	source: LayerRelation,
+	model: TableModel,
+	principal: string,
+	action: string,
+	now: Date,
+	paths: PathRule,
+	terms: OperationNode[],
+): readonly OperationNode[] {
+	for (let index = 0; index < model.readThrough.length; index++) {
+		const path = model.readThrough[index]
+		const through = path === undefined || !paths(path)
+			? undefined
+			: throughPath(model.name, path, source.dimension, relationNodes(source, principal, now))
+		if (through !== undefined) terms[terms.length] = through
+	}
+	for (let index = 0; index < source.reveals.length; index++) {
+		const reveal = source.reveals[index]
+		const held = reveal !== undefined && includes(reveal.actions, action) && (reveal.path === undefined || paths(reveal.path))
+		const placed = reveal === undefined || !held ? undefined : nodeColumnOf(model, reveal.dimension)
+		if (reveal !== undefined && placed !== undefined) {
+			terms[terms.length] = isIn(model.name, placed, revealedNodes(source, reveal, principal, now))
+		}
+	}
+	return terms
 }
 
 /** `holds` without those of a relation `narrowed` names: the holds no `relationWhen` narrows. */
@@ -326,24 +445,29 @@ export function viewScope(
 	model: TableModel,
 	parent: ViewParentLink,
 	action: string,
-	reached: OperationNode | 'all' | SplitReach,
+	reached: OperationNode | 'all' | SplitReach | undefined,
 	now: Date,
 	row?: OperationNode,
+	access: readonly OperationNode[] = [],
 ): OperationNode {
 	const membership = (where: OperationNode | undefined) => isIn(model.name, parent.column, subquery(parent.table, parent.key, where))
-	let member: OperationNode
+	const parts: OperationNode[] = []
 	if (reached === 'all') {
-		member = membership(undefined)
-	} else if ('rest' in reached) {
-		const parts: OperationNode[] = reached.rest === undefined ? [] : [membership(reached.rest)]
+		parts[parts.length] = membership(undefined)
+	} else if (reached !== undefined && 'rest' in reached) {
+		if (reached.rest !== undefined) parts[parts.length] = membership(reached.rest)
 		for (let index = 0; index < reached.relations.length; index++) {
 			const part = reached.relations[index]
 			if (part !== undefined) parts[parts.length] = narrowedTerm(membership(part.reached), conditionNode(model.name, part.condition, now))
 		}
-		member = anyOf(parts)
-	} else {
-		member = membership(reached)
+	} else if (reached !== undefined) {
+		parts[parts.length] = membership(reached)
 	}
+	for (let index = 0; index < access.length; index++) {
+		const term = access[index]
+		if (term !== undefined) parts[parts.length] = term
+	}
+	const member = anyOf(parts)
 	return conditioned(model, action, row === undefined ? member : allOf([row, member]), now)
 }
 
