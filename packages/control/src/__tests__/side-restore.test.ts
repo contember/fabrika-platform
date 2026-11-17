@@ -916,8 +916,8 @@ for (const backend of backends) {
 			expect(f.mode('application')?.mode).toBe('open')
 		})
 
-		test('a successor carries a failed restore back to the original after its holder died at revert or at open', async () => {
-			for (const at of ['revert', 'open'] as const) {
+		for (const at of ['revert', 'open'] as const) {
+			test(`a successor carries a failed restore back to the original after its holder died at ${at}`, async () => {
 				const f = await open()
 				await f.deployFirst()
 				const id = await f.start()
@@ -946,10 +946,8 @@ for (const backend of backends) {
 				expect(f.mode(clone)).toEqual({ mode: 'inspect', generation: failed?.generation ?? 0 })
 				expect(f.mode('application')).toEqual({ mode: 'open', generation: failed?.generation ?? 0 })
 				expect(await recordedMaintenance(f.b, TARGET)).toBe('open')
-				await opened?.close()
-				opened = null
-			}
-		})
+			})
+		}
 
 		test('a restore is refused while the list holds the most objects the ops channel reaches', async () => {
 			const f = await open()
