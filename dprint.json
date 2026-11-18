@@ -24,7 +24,7 @@
 		".claude",
 		// What `fabrika app build` writes from the SQLite migrations, verbatim, so their checksums stay the files'.
 		"**/fabrika/migrations.generated.ts",
-		// What `fabrika app build` writes from the compiled contract: one string literal, the bytes its digest is taken over.
+		// What `fabrika app build` writes from the compiled contract: one string literal, the encoded artifact verbatim.
 		"**/fabrika/contract.generated.ts",
 		// What `fabrika db test-scaffold` writes: the checker compares it byte for byte (`generated-test-hash`).
 		"examples/*/src/__tests__/endpoint-access.test.ts",

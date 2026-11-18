@@ -1103,9 +1103,10 @@ object directly over `bunSqliteStorage` (the IAM binding, the assets, the crash 
 
 - **The generated Cloudflare entry exports `FabrikaApplication` and the Worker.** `fabrika app build` writes
   `fabrika/entry.generated.ts` and `fabrika/migrations.generated.ts`, the `.sql` files of `db/migrations` by name with
-  their text verbatim, so their checksums stay the files'. It also writes `fabrika/contract.generated.ts`, the canonical
-  text of the contract compiled in a child process; `boot` checks its digest and parses it instead of compiling the
-  contract, which would not fit a large contract's evaluated schemas and its compile in the isolate's 128 MB.
+  their text verbatim, so their checksums stay the files'. It also writes `fabrika/contract.generated.ts`, the contract
+  compiled in a child process, in the shared encoding (`encodeArtifact`); `boot` decodes it (`parseEncodedArtifact`)
+  and checks its digest instead of compiling the contract, which would not fit a large contract's evaluated schemas
+  and its compile in the isolate's 128 MB.
   `createContractWorker(load, { migrations, approvedContract })` registers the loader; the Worker's `fetch` removes `X-Fabrika-Tick` (`TICK_HEADER`), sets the proxy secret and forwards the request
   to the object `FABRIKA_APPLICATION_OBJECT` names in `FABRIKA_APPLICATION` (`application` without the object
   variables, an older deploy); its `scheduled` sends the repair tick there with the `scheduledTime`. Without

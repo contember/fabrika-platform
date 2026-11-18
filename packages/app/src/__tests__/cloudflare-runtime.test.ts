@@ -5,7 +5,7 @@
 import { compileContract } from '@fabrika/app/contract'
 import { boot, BootError, serve } from '@fabrika/app/implement'
 import {
-	canonicalArtifactJson,
+	encodedArtifactJson,
 	ENDPOINT_HEADER,
 	FABRIKA_APPLICATION_OBJECT,
 	FABRIKA_APPLICATION_OBJECTS,
@@ -86,7 +86,7 @@ async function deploy(options: { readonly secret?: string | null; readonly vars?
 	const served = notesApp(world)
 	const migrations = await applicationMigrations(FIXTURE_ROOT)
 	// As the generated entrypoint hands it: the contract the build compiled, which boot reads instead of compiling.
-	const approvedContract = canonicalArtifactJson(compileContract(served.implementation.contract, served.implementation.database?.tables ?? {}))
+	const approvedContract = encodedArtifactJson(compileContract(served.implementation.contract, served.implementation.database?.tables ?? {}))
 	const worker = createContractWorker(() => Promise.resolve({ default: served.implementation }), { migrations, approvedContract })
 	const testEnv = await createTestEnv({
 		// Lopata's own clock, which only its alarm timers read, an hour behind: no alarm fires by itself while a test runs,

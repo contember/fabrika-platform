@@ -5,7 +5,7 @@
 
 import { IamMembership } from '@fabrika/auth'
 import {
-	canonicalContractDigest,
+	canonicalArtifactDigest,
 	compileEndpointTable,
 	type ContractArtifact,
 	contractDigest,
@@ -40,7 +40,7 @@ import type { EmailProviderRegistry } from '@fabrika/email'
 import { builtinEmailProviders } from '@fabrika/email/providers'
 import { TokenVerifier } from '@fabrika/jwks'
 import type { FileObjectStore } from '@fabrika/platform'
-import { contractArtifactSchema } from '../contract/artifact-schema'
+import { parseEncodedArtifact } from '../contract/artifact-schema'
 import { compileContract } from '../contract/compile'
 import { exportDescription } from '../contract/connect'
 import { containersOf } from '../contract/containers'
@@ -95,8 +95,9 @@ export interface BootOptions {
 	readonly environment: CapturedEnvironment
 	readonly iam: IamKeySource
 	/**
-	 * The canonical text of the contract artifact the build compiled (`fabrika/contract.generated.ts`). Boot checks its
-	 * digest against `FABRIKA_CONTRACT_DIGEST` and reads it instead of compiling the contract; without it, boot compiles.
+	 * The contract artifact the build compiled, as the text of its shared encoding (`fabrika/contract.generated.ts`). Boot
+	 * decodes it, checks its digest against `FABRIKA_CONTRACT_DIGEST` and reads it instead of compiling the contract;
+	 * without it, boot compiles.
 	 */
 	readonly approvedContract?: string
 	/** Serves the SPA mounts. Without it, a contract that declares one does not boot. */
@@ -264,20 +265,26 @@ function compiledArtifact(app: ContractImplementation, framework: Readonly<Recor
 	return artifact
 }
 
-/** The artifact the build compiled, as its canonical text: the digest is taken over the text, which is then parsed. */
+/**
+ * The artifact the build compiled, decoded from its shared encoding. Decoding yields the canonical artifact with each
+ * shared shape one object, and its digest is taken as it is serialized, so neither the expanded artifact nor its text
+ * is ever built.
+ */
 function approvedArtifact(text: string, framework: Readonly<Record<string, string>>, problems: string[]): ContractArtifact {
-	checkContractDigest(framework, canonicalContractDigest(text), problems)
 	let json: unknown
 	try {
 		json = JSON.parse(text)
 	} catch {
 		throw new BootError([...problems, 'the bundled contract is not JSON; rebuild the application with `fabrika app build`'])
 	}
-	const parsed = contractArtifactSchema.safeParse(json)
-	if (!parsed.success) {
-		throw new BootError([...problems, 'the bundled contract is not a contract artifact; rebuild the application with `fabrika app build`'])
+	let artifact: ContractArtifact
+	try {
+		artifact = parseEncodedArtifact(json)
+	} catch {
+		throw new BootError([...problems, 'the bundled contract is not an encoded contract artifact; rebuild the application with `fabrika app build`'])
 	}
-	return parsed.data
+	checkContractDigest(framework, canonicalArtifactDigest(artifact), problems)
+	return artifact
 }
 
 /** The deploy was approved with one contract; this build must be that contract, or it does not start (ADR-0022 rule 5). */

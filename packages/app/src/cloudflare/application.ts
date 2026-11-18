@@ -49,7 +49,7 @@ export interface ApplicationMigration {
 export interface ContractWorkerOptions {
 	/** The application's own SQLite migrations, applied as the bundle `app` after the framework's `fabrika`. */
 	readonly migrations?: readonly ApplicationMigration[]
-	/** The canonical text of the contract artifact the build compiled, which boot reads instead of compiling (`BootOptions`). */
+	/** The contract artifact the build compiled, in its shared encoding, which boot reads instead of compiling (`BootOptions`). */
 	readonly approvedContract?: string
 	/** Where the isolate hears of an unhandled rejection; the global `unhandledrejection` event by default. */
 	readonly rejections?: CrashEvents

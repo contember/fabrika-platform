@@ -346,3 +346,41 @@ function sortKeys(_key: string, value: unknown): unknown {
 	}
 	return Object.fromEntries(Object.entries(value).sort(([a], [b]) => compare(a, b)))
 }
+
+/**
+ * `canonicalJson(value)` written in pieces to `write`, so a digest of a large value never holds its whole text. Each
+ * object is rebuilt as `sortKeys` rebuilds it, so integer-like keys come first exactly as `JSON.stringify` orders them.
+ */
+export function writeCanonicalJson(value: unknown, write: (piece: string) => void): void {
+	if (Array.isArray(value)) {
+		write('[')
+		for (const [index, item] of value.entries()) {
+			if (index > 0) write(',')
+			if (isOmitted(item)) write('null')
+			else writeCanonicalJson(item, write)
+		}
+		write(']')
+		return
+	}
+	if (typeof value === 'object' && value !== null) {
+		write('{')
+		let first = true
+		const rebuilt = Object.fromEntries(Object.entries(value).sort(([a], [b]) => compare(a, b)))
+		for (const [key, item] of Object.entries(rebuilt)) {
+			if (isOmitted(item)) continue
+			if (!first) write(',')
+			first = false
+			write(JSON.stringify(key))
+			write(':')
+			writeCanonicalJson(item, write)
+		}
+		write('}')
+		return
+	}
+	write(JSON.stringify(value) ?? 'null')
+}
+
+/** What `JSON.stringify` leaves out of an object and writes as `null` in an array. */
+function isOmitted(value: unknown): boolean {
+	return value === undefined || typeof value === 'function' || typeof value === 'symbol'
+}

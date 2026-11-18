@@ -9,9 +9,9 @@ import {
 	generatedEntry,
 	writeGeneratedEntry,
 } from '@fabrika/app/build'
-import { compileContract } from '@fabrika/app/contract'
+import { compileContract, parseEncodedArtifact } from '@fabrika/app/contract'
 import { isContractImplementation } from '@fabrika/app/implement'
-import { canonicalContractDigest, contractDigest } from '@fabrika/auth-core'
+import { canonicalArtifactDigest, contractDigest } from '@fabrika/auth-core'
 import { checkApplication, CONTRACT_FILE, GENERATED_ENTRY_FILE as CHECKED_ENTRY_FILE } from '@fabrika/check'
 import { describe, expect, test } from 'bun:test'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -92,7 +92,7 @@ describe('the generated entrypoint', () => {
 				typeof module === 'object' && module !== null ? Reflect.get(module, 'default') : undefined
 			)
 			if (typeof text !== 'string' || !isContractImplementation(served)) throw new Error('the generated modules are not what the build writes')
-			expect(canonicalContractDigest(text)).toBe(contractDigest(compileContract(served.contract, {})))
+			expect(canonicalArtifactDigest(parseEncodedArtifact(JSON.parse(text)))).toBe(contractDigest(compileContract(served.contract, {})))
 		})
 	})
 

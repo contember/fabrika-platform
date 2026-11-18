@@ -261,8 +261,10 @@ loses what the kit keeps beside it (the handlers, whether it has tables) and is 
 Zerops; on Cloudflare `createContractWorker(() => import('../src/app'), { migrations, approvedContract })` and
 `export { FabrikaApplication }`, with `fabrika/migrations.generated.ts`, which holds every `.sql`
 file of `db/migrations` by name and text ([On Cloudflare](#on-cloudflare)), and `fabrika/contract.generated.ts`, the
-canonical text of the compiled contract. The build compiles it in a child process that loads `src/app.ts` with no
-variable but `PATH` and `HOME`; a contract that does not compile fails the build. The adapter
+compiled contract in the shared encoding of `@fabrika/auth-core`'s `encodeArtifact`: the canonical artifact with each
+composite schema shape that occurs more than once written once and referenced by index, and no null constraint. The
+build compiles it in a child process that loads `src/app.ts` with no variable but `PATH` and `HOME`; a contract that
+does not compile fails the build. The adapter
 first takes every `FABRIKA_*` variable out of `process.env` and `Bun.env`, then imports
 the application, so no module of it can copy one through `process.env`. The process's original environment
 block (`/proc/self/environ` on Linux) still holds them. The adapter then calls
@@ -285,8 +287,8 @@ to start. `boot` verifies tokens for the audience
 `FABRIKA_IAM_APP_ID` (`<app>@<env>`, whose application must be the contract's), reads
 `FABRIKA_IAM_ISSUER` and `FABRIKA_OPERATIONS_DSN`, and refuses to start when
 `FABRIKA_CONTRACT_DIGEST` is missing or is not `contractDigest` of the compiled contract
-(ADR-0022 rule 5; given `approvedContract`, the digest of that text, which `boot` then parses instead of compiling the
-contract), when a job cannot run (see Jobs), when an
+(ADR-0022 rule 5; given `approvedContract`, the digest of the artifact it decodes to, which `boot` reads instead of
+compiling the contract; the digest is taken as the artifact is serialized, so its text is never built), when a job cannot run (see Jobs), when an
 import has no matching snapshot or no owner, when a file kind
 cannot be served ([Stored files](#stored-files)), when an `on` dimension or a link mount's dimension has no
 table, when an access form reaches a dimension that lies in a container no table can

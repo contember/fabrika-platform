@@ -65,9 +65,10 @@ application.
 The application's startup check is the backstop for the reader. The application
 compares its own contract digest with `FABRIKA_CONTRACT_DIGEST` and refuses to start
 on a mismatch ([ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md)). On Cloudflare
-the build compiles the evaluated contract and bundles its canonical text, and the startup
-check takes the digest of that text: compiling a large contract does not fit beside the
-application in a Worker isolate's memory.
+the build compiles the evaluated contract and bundles the artifact in its shared encoding
+(each repeated schema shape written once), and the startup check takes the digest of the
+decoded artifact: compiling a large contract does not fit beside the application in a
+Worker isolate's memory. The encoding is a storage form; the digest is the same.
 
 `readContractSource` in `@fabrika/check/contract` is the reader, and the application checker runs it in the
 build. Control runs it on the files of each deploy run's pinned commit, which `contractReaderInputs` names
