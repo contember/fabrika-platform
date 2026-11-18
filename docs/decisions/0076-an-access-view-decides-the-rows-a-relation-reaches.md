@@ -192,11 +192,20 @@ the approver reads.
 ## Consequences
 
 - **Coverage.**
-  - Every rule of the corpus is expressible by the declarations or an access view: 4,397 of 4,409 (99.7 %).
-  - The exceptions are 12 rules that read other principals' memberships from IAM, which an application's database does
-    not hold.
-  - The access-view figure comes from classifying each rule the declarations leave out. Five representative rules ran
-    end to end on SQLite and Postgres.
+  - The declarations or an access view express 4,389 of the corpus's 4,409 rules (99.5 %).
+  - A replay measured the access-view part. Each of the 976 rules the declarations leave out became an access view,
+    generated from the rule's own predicate: the source system's compiled condition, with each variable a column of a
+    cross-joined domain. On Postgres with random rows, the replay compared the rows the data layer reaches through the
+    view with the rows the source system's own SQL admits. Reads went through a `Within`, writes through a `Ref` of the
+    write action. 968 rules agree on every seed.
+  - The 20 exceptions:
+    - 12 rules read other principals' memberships from IAM, which an application's database does not hold;
+    - 6 rules take their condition from the membership itself, not a value;
+    - 2 rules require memberships at two dimensions at once, an AND that one term cannot express.
+  - **A principal-bound view reaches only the principals that the application's rows name.** A branch for every holder
+    of a role is an OR with no variable. It needs a `member` binding, or a table of the application's principals that
+    the view joins.
+  - The replay does not measure a view's cost, hand-written views or SQLite.
 - **A wrong view widens access, across tenants too**: for example a `cross join` without a filter, or a missing tenant
   join. The guard cannot see it. What catches it:
   - the approval diff, with closer review;
