@@ -183,6 +183,8 @@ describe('the guard under public egress', () => {
 		expect(calls.map((call) => call.url)).toEqual(['https://www.example.com/start', 'https://www.example.com/', 'https://cdn.example.net/home'])
 		expect(new Headers(calls[1]?.init?.headers).get('authorization')).toBe('Bearer k')
 		expect(new Headers(calls[2]?.init?.headers).get('authorization')).toBeNull()
+		// Without a resolver (a Worker) no hop is pinned: no serverName, and the runtime's own pooling.
+		expect(calls.map((call) => call.init !== undefined && ('tls' in call.init || 'keepalive' in call.init))).toEqual([false, false, false])
 
 		calls.length = 0
 		expect(await refusalOf(() => runAsSite(site, NO_RULES, () => fetch('https://www.example.com/sneaky')))).toMatchObject({ reason: 'refused_egress' })

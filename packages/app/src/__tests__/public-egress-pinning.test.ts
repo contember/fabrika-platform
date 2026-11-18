@@ -77,6 +77,9 @@ describe('what a pinned hop relies on in Bun', () => {
 			const other = 'other.example.com'
 			expect(await failure(() => fetch(url, { headers: new Headers({ host: other }), keepalive: false, tls: { ca, serverName: other } })))
 				.toContain('ERR_TLS_CERT_ALTNAME_INVALID')
+			// The checked name as Host does not stand in for the serverName.
+			expect(await failure(() => fetch(url, { headers: new Headers({ host: NAME }), keepalive: false, tls: { ca, serverName: other } })))
+				.toContain('ERR_TLS_CERT_ALTNAME_INVALID')
 			expect(await failure(() => fetch(url, { keepalive: false, tls: { ca } }))).not.toBe('')
 		})
 	})
