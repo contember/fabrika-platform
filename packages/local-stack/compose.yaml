@@ -1,7 +1,7 @@
 name: fabrika-local
 
 x-bun: &bun
-  image: oven/bun:1.3.14-alpine
+  image: oven/bun:1.4.4-alpine
   working_dir: /workspace
   volumes:
     - ../..:/workspace
