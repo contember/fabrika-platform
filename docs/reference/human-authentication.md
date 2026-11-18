@@ -262,10 +262,10 @@ An application invites an address to a membership role through IAM's
    invited mailbox and nothing would create one (the invitation does not create
    its principal, below, and single sign-on is off or its allowlist does not
    admit the mailbox): then the page says the address has no account here and
-   to ask the inviter for one, and the invitation stays open. With one, IAM accepts only when the
-   signed-in principal's mailbox is the invited one, checks again that the
-   inviter can still give the role, and then marks the invitation accepted and
-   writes the grant in one transaction.
+   to ask the inviter for one, and the invitation stays open. With a session,
+   IAM accepts only when the signed-in principal's mailbox is the invited one,
+   checks again that the inviter can still give the role, and then marks the
+   invitation accepted and writes the grant in one transaction.
 5. An accepted invitation lands on the application's registered return origin.
    Without one, IAM answers its outcome page.
 
