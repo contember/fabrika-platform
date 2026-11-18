@@ -1,7 +1,7 @@
 // @fabrika/app/contract — the contract of an application: the staged kit (`defineVocabulary`, `defineApp`, its
 // groups), `defineContract`, `compileContract`, the artifact parser, and the IAM schema it compiles to. Browser-safe:
 // no server runtime, no Node or Bun API.
-export { contractArtifactSchema, parseContractArtifact, schemaShapeSchema } from './artifact-schema'
+export { contractArtifactSchema, isEncodedArtifact, parseContractArtifact, parseEncodedArtifact, schemaShapeSchema } from './artifact-schema'
 export {
 	type Attachment,
 	attachment,

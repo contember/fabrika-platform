@@ -29,6 +29,8 @@ export type BuilderKind =
 /** The only imported names a literal module may use: the builders the platform reads without executing them. */
 export const BUILDER_IMPORTS: Readonly<Record<string, Readonly<Record<string, BuilderKind>>>> = {
 	'zod/v4': { z: 'zod', '*': 'zod' },
+	// The same subset, each schema held as data; the reader reads both alike.
+	'@fabrika/app/schema': { z: 'zod', '*': 'zod' },
 	'@fabrika/app/contract': {
 		defineContract: 'contract',
 		defineVocabulary: 'vocabulary',
@@ -164,7 +166,7 @@ const ALLOWED_SCHEMA = 'a schema of the supported z subset (packages/check/CLAUD
 const ALLOWED_CALLBACK =
 	'a function only as a builder callback: defineContract(…, (c) => ({ … })), app.contract((c) => ({ … })), app.group(…, (r) => ({ … })), procedures: (l) => ({ … }) of a link or an export, and the handler of .handle(…)'
 const ALLOWED_IMPORT =
-	'z from zod/v4, defineContract, defineVocabulary or defineApp from @fabrika/app/contract, defineTables from @fabrika/db/tables, or a literal const of the application'
+	'z from zod/v4 or @fabrika/app/schema, defineContract, defineVocabulary or defineApp from @fabrika/app/contract, defineTables from @fabrika/db/tables, or a literal const of the application'
 
 export type Link = { readonly kind: 'member'; readonly name: string | undefined; readonly node: AstNode } | {
 	readonly kind: 'call'

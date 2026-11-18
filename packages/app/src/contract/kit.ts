@@ -5,7 +5,6 @@
 
 import type { JobMailer, RpcCaller, WebhookScheme } from '@fabrika/auth-core'
 import type { AnyDbIndex, DbIndex, Tables, Unavailable, UnscopedDeclaration, UnscopedMode } from '@fabrika/db/tables'
-import type { z } from 'zod/v4'
 import type { Declared, JobKitContext, KickContext, KitImports, KitTypes, NoTablesIndex, SqlMode, TokensContext, WebhookKitContext } from './context'
 import {
 	type AccessDeclaration,
@@ -43,6 +42,7 @@ import {
 	type ProcedureTree,
 	type RpcMount,
 	type Schema,
+	type SchemaOutput,
 	type Surface,
 	surfaceKit,
 	terminalOf,
@@ -157,7 +157,7 @@ export interface WebhookBuilder<
 > {
 	handle(
 		handler: (
-			args: { readonly input: z.output<I>; readonly ctx: WebhookKitContext<K, B, Acts, D> & KickContext<Ks> & TokensContext<K, Sg> },
+			args: { readonly input: SchemaOutput<I>; readonly ctx: WebhookKitContext<K, B, Acts, D> & KickContext<Ks> & TokensContext<K, Sg> },
 		) => void | Promise<void>,
 	): KitWebhook<B, Acts, I, D>
 }

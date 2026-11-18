@@ -3,6 +3,7 @@
 // zod schema of what the handler returns (the rows' array), marked with what it declares beside it.
 
 import { z } from 'zod/v4'
+import { type ZodOf, zodOf } from '../schema/data-schema'
 import { type AttachmentDeclaration, unknownOptions } from './declaration'
 import type { InputSchema, NotLoose, Schema } from './define'
 
@@ -17,8 +18,8 @@ export interface AttachmentMark {
 /** The marks `attachmentOutput` made: a property another module set on a schema is no attachment. */
 const marks = new WeakSet<object>()
 
-/** An attachment output of rows `R`: the handler returns `z.input<R>[]`, and the caller receives a file. */
-export type Attachment<R extends InputSchema> = z.ZodArray<R> & AttachmentBrand
+/** An attachment output of rows `R`: the handler returns `SchemaInput<R>[]`, and the caller receives a file. */
+export type Attachment<R extends InputSchema> = z.ZodArray<ZodOf<R>> & AttachmentBrand
 
 /** What tells an attachment output from a JSON one in the types. */
 export interface AttachmentBrand {
@@ -60,7 +61,7 @@ export function attachment<R extends InputSchema>(options: AttachmentOptions<R &
 export function attachmentOutput<R extends InputSchema>(row: R, declaration: AttachmentDeclaration): Attachment<R> {
 	const mark: AttachmentMark = Object.freeze({ declaration: Object.freeze({ ...declaration }), row })
 	marks.add(mark)
-	return Object.assign(z.array(row), { [ATTACHMENT]: mark })
+	return Object.assign(z.array(zodOf(row)), { [ATTACHMENT]: mark })
 }
 
 /** The mark of an `attachment()` output, or `null` for any other schema. */

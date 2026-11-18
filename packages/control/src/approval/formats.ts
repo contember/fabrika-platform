@@ -4,7 +4,7 @@
 // schema) reads the artifact upcast to this release's model instead.
 
 import { parseContractArtifact as parseContractArtifact05 } from '@fabrika/app-0.5/contract'
-import { parseContractArtifact } from '@fabrika/app/contract'
+import { isEncodedArtifact, parseContractArtifact, parseEncodedArtifact } from '@fabrika/app/contract'
 import { canonicalArtifactJson, CONTRACT_FORMAT, type ContractArtifact, contractDigest } from '@fabrika/auth-core'
 import type { ContractArtifact as ContractArtifact04 } from '@fabrika/auth-core-0.4'
 import {
@@ -28,8 +28,12 @@ export interface SnapshotContract {
 /** The 0.5 artifact carries no `format`. */
 const isFormat05 = (value: unknown): boolean => typeof value === 'object' && value !== null && !('format' in value)
 
-/** Parse a stored artifact of any format in the window by its own schema, and upcast it. */
+/**
+ * Parse a stored artifact of any format in the window by its own schema, and upcast it. This release's artifact may be
+ * stored in the shared encoding (`serializeSnapshot`), which decodes to the same artifact.
+ */
 export function parseStoredArtifact(value: unknown): SnapshotContract {
+	if (isEncodedArtifact(value)) return { contract: parseEncodedArtifact(value) }
 	if (isFormat05(value)) return fromOlder(parseContractArtifact05(value))
 	return { contract: parseContractArtifact(value) }
 }

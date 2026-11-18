@@ -167,4 +167,5 @@ rest of custom domains, a client address on a dedicated IPv4, a release and reco
 - [284](284-the-canvas-ui-has-no-credential.md): The `agent-canvas` browser UI calls the daemon without a credential, so a local client that sends no `Origin` reaches files, sessions and secret storage.
 - [285](285-a-quoted-export-default-in-an-inlined-file-drops-the-canvas-wrapper.md): A canvas whose inlined file contains a quoted `export default` compiles without its `Plan` wrapper.
 - [286](286-access-view-statements-without-a-test.md): Aggregates, queue claims, deletes, moves and unowned-node inserts through an access view have no test.
+- [287](287-an-attachments-row-schema-is-not-compared-with-its-approved-columns.md): An attachment's cells are validated by the evaluated row schema, not the approved columns.
 - [10](10-app-scope-secrets-on-zerops.md) — Control refuses an `app`-scoped secret on Zerops today; record that as the decision, or replicate per service.

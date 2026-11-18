@@ -122,7 +122,16 @@ query are type errors at the endpoint's line.
   every shell module as its slice, so they never fetch, parse or run a module that only a handler imports. A
   `.handle` the slice cannot remove whole (a named function, a computed or wrapped spelling) is refused. `boot`
   refuses a compiled contract other than the approved `FABRIKA_CONTRACT_DIGEST`, which backs what the slice cannot
-  see.
+  see. On Cloudflare the build compiles it into `fabrika/contract.generated.ts`, and `boot` decodes and digests that
+  artifact instead of compiling inside the isolate.
+- **An endpoint validates by the approved shapes, with the application's own schemas.** Boot no longer evaluates the
+  schemas against the artifact. So the first time an endpoint takes an input or answers JSON, the runtime compares the
+  canonical shape of the schema it holds with the endpoint's row. On a mismatch that endpoint answers 500
+  (`schema_unapproved`) and the others serve. The application's own schema keeps its messages and defaults. A schema
+  rebuilt from the row's shape would have neither, so it validates only a query's input and a connector's answer.
+  Schemas may be held as data (`@fabrika/app/schema`, the same subset with zod's names and types): the runtime builds
+  the zod when it validates and keeps a bounded number of builds, so a large contract does not keep the zod of every
+  endpoint in an isolate's 128 MB.
 - The entrypoint is generated (`fabrika app build` writes `fabrika/entry.generated.ts`). Its runtime adapter
   ([ADR-0013](0013-explicit-runtime-adapter-entrypoints.md)) takes the framework's variables out of `process.env`
   before it imports the application, then calls `boot`, which binds the data layer and serves.

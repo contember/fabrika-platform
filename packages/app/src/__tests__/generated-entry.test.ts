@@ -4,15 +4,18 @@
 import {
 	CONTRACT_FILE as BUILT_CONTRACT_FILE,
 	type EntryRuntime,
+	GENERATED_CONTRACT_FILE,
 	GENERATED_ENTRY_FILE,
 	generatedEntry,
 	writeGeneratedEntry,
 } from '@fabrika/app/build'
+import { compileContract, parseEncodedArtifact } from '@fabrika/app/contract'
+import { isContractImplementation } from '@fabrika/app/implement'
+import { canonicalArtifactDigest, contractDigest } from '@fabrika/auth-core'
 import { checkApplication, CONTRACT_FILE, GENERATED_ENTRY_FILE as CHECKED_ENTRY_FILE } from '@fabrika/check'
 import { describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 
 const fixtures = join(import.meta.dir, 'fixtures', 'implement')
 
@@ -63,15 +66,49 @@ describe('the generated entrypoint', () => {
 		expect(findings.map((finding) => `${finding.file} ${finding.rule}`)).toContain('src/server.ts env-read')
 	})
 
-	test('is written under the application root', async () => {
-		const root = mkdtempSync(join(tmpdir(), 'fabrika-entry-'))
+	/** An application root under this package, so the build's compile of its contract resolves `@fabrika/app`. */
+	const withRoot = async (files: ReadonlyMap<string, string>, run: (root: string) => Promise<void>): Promise<void> => {
+		const root = mkdtempSync(join(import.meta.dir, '.tmp-entry-'))
 		try {
-			const path = await writeGeneratedEntry(root, 'cloudflare')
-			expect(path).toBe(join(root, 'fabrika', 'entry.generated.ts'))
-			expect(readFileSync(path, 'utf8')).toBe(generatedEntry('cloudflare'))
+			for (const [path, text] of files) {
+				if (path === GENERATED_ENTRY_FILE) continue
+				mkdirSync(dirname(join(root, path)), { recursive: true })
+				writeFileSync(join(root, path), text)
+			}
+			await run(root)
 		} finally {
 			rmSync(root, { recursive: true, force: true })
 		}
+	}
+
+	test('is written under the application root, with the contract compiled to the approved digest on Cloudflare', async () => {
+		await withRoot(applicationFiles('cloudflare'), async (root) => {
+			const path = await writeGeneratedEntry(root, 'cloudflare')
+			expect(path).toBe(join(root, 'fabrika', 'entry.generated.ts'))
+			expect(readFileSync(path, 'utf8')).toBe(generatedEntry('cloudflare'))
+			const generated: unknown = await import(join(root, GENERATED_CONTRACT_FILE))
+			const text = typeof generated === 'object' && generated !== null ? Reflect.get(generated, 'approvedContract') : undefined
+			const served: unknown = await import(join(root, 'src', 'app.ts')).then((module: unknown) =>
+				typeof module === 'object' && module !== null ? Reflect.get(module, 'default') : undefined
+			)
+			if (typeof text !== 'string' || !isContractImplementation(served)) throw new Error('the generated modules are not what the build writes')
+			expect(canonicalArtifactDigest(parseEncodedArtifact(JSON.parse(text)))).toBe(contractDigest(compileContract(served.contract, {})))
+		})
+	})
+
+	test('a contract that does not compile fails the build', async () => {
+		const files = applicationFiles('cloudflare')
+		files.set('src/app.ts', 'export default {}\n')
+		await withRoot(files, async (root) => {
+			await expect(writeGeneratedEntry(root, 'cloudflare')).rejects.toThrow('does not default-export serve(contract, { … })')
+		})
+	})
+
+	test('the Bun entrypoint compiles no contract at build: its boot does', async () => {
+		await withRoot(applicationFiles('bun'), async (root) => {
+			await writeGeneratedEntry(root, 'bun')
+			expect(existsSync(join(root, GENERATED_CONTRACT_FILE))).toBe(false)
+		})
 	})
 })
 

@@ -36,8 +36,8 @@ this shape; do not add them.
   `fabrika db codegen` writes, and `src/app.ts` is
   `serve(contract, { database: scoped(tables) })`.
 - **The Worker entrypoint is generated** by `fabrika app build --provider=cloudflare`
-  (`fabrika/entry.generated.ts`, `fabrika/migrations.generated.ts`). Never edit
-  either. Which generated files are committed and which are ignored is the app
+  (`fabrika/entry.generated.ts`, `fabrika/migrations.generated.ts`,
+  `fabrika/contract.generated.ts`). Never edit them. Which generated files are committed and which are ignored is the app
   skill's list (`app-setup.md`, "Ignored files").
 - **The SPA** is built with Bun (`build-web.ts`) into the directory its `c.spa`
   mount names, and the config's `pipeline.build` runs that build. Build it on the

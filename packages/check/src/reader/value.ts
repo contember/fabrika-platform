@@ -1,5 +1,5 @@
 // Reads the literal subset of `rules/literal.ts` into values, without executing the application: names resolve through
-// `ModuleGraph`, `z` chains build real zod schemas, `c.*` calls stay unapplied for `surface.ts`.
+// `ModuleGraph`, `z` chains build schemas held as data (each step checked against zod), `c.*` calls stay unapplied for `surface.ts`.
 
 import { file, signedToken, WebhookSecret } from '@fabrika/app/contract'
 import type { z } from 'zod/v4'
@@ -18,7 +18,7 @@ import {
 	stringStepProblem,
 } from '../rules/literal'
 import type { ReaderProblems } from './problems'
-import { buildSchema } from './schema'
+import { buildSchema, type ReadSchema } from './schema'
 
 /**
  * The builder kit a call belongs to: `c` of `defineContract` and `l` of its link's `procedures`; `app`, the kit
@@ -41,7 +41,7 @@ export type LiteralValue =
 	/** `nodes` counts the schema with every shared part expanded, as the artifact will hold it; `depth` its nesting. */
 	| {
 		readonly kind: 'schema'
-		readonly schema: z.ZodType
+		readonly schema: ReadSchema
 		readonly nodes: number
 		readonly depth: number
 		/** The chain that built it, factory first (`iso` for `z.iso.*`), across a const and the methods applied to it. */
@@ -553,7 +553,7 @@ export class ValueReader {
 		return args === null ? null : { kind: 'contract', args, at: located }
 	}
 
-	/** `z.<factory>(…)` or `z.iso.<format>(…)`, then `.<method>(…)` links, each applied to a real zod schema. */
+	/** `z.<factory>(…)` or `z.iso.<format>(…)`, then `.<method>(…)` links, each checked against zod as it is applied. */
 	#zodChain(located: Located, links: readonly Link[], scope: Scope): LiteralValue | null {
 		const isIso = links[0]?.kind === 'member' && links[0].name === 'iso'
 		const steps = this.#steps(located, links, isIso ? 1 : 0)
@@ -595,7 +595,7 @@ export class ValueReader {
 				return null
 			}
 		}
-		let schema: z.ZodType | undefined = receiver?.schema
+		let schema: ReadSchema | undefined = receiver?.schema
 		let size: SchemaSize = receiver === null ? { nodes: 0, depth: 0 } : { nodes: receiver.nodes, depth: receiver.depth }
 		for (const step of steps) {
 			const at = { module: located.module, node: step.call }

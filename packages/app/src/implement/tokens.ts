@@ -10,6 +10,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto'
 import { z } from 'zod/v4'
 import type { Schema } from '../contract/define'
 import { BadRequestError } from '../errors'
+import { zodSchemaOf } from '../schema/data-schema'
 import { CapabilityRefusedError } from './capability'
 import { ServerFault } from './faults'
 
@@ -107,7 +108,7 @@ export class SignedTokens {
 				`${site} signed a '${purpose}' token for ${String(days)} days; the purpose allows 1 to ${declared.maxDays}`,
 			)
 		}
-		const parsed = z.safeParse(declared.claims, claims)
+		const parsed = z.safeParse(zodSchemaOf(declared.claims), claims)
 		if (!parsed.success) {
 			throw new ServerFault('token_claims_refused', `${site} signed a '${purpose}' token whose claims its schema refuses`)
 		}
@@ -143,7 +144,7 @@ export class SignedTokens {
 		if (body.x <= Math.floor(this.#now() / 1000)) {
 			throw new BadRequestError('The signed token has expired')
 		}
-		const claims = z.safeParse(declared.claims, body.c)
+		const claims = z.safeParse(zodSchemaOf(declared.claims), body.c)
 		if (!claims.success || !isRecord(claims.data)) {
 			throw invalid()
 		}

@@ -207,6 +207,27 @@ export const Note = z.strictObject({
 	})
 })
 
+describe('a contract whose schemas are held as data', () => {
+	const asData = (text: string): string => text.replaceAll("import { z } from 'zod/v4'", "import { z } from '@fabrika/app/schema'")
+
+	test('reads to the artifact of the same contract written with zod', () => {
+		const schemas =
+			`${SCHEMAS}export const Status = z.enum(['open', 'done']).describe('state')\nexport const Moved = Note.extend({ status: Status }).pick({ id: true, status: true })\n`
+		const contract = edited(
+			"import { Note } from './src/schemas'",
+			"import { Moved } from './src/schemas'",
+			edited('output: Note,', 'output: z.strictObject({ moved: Moved, tags: z.array(z.string().min(1)).nullable() }),'),
+		)
+		expect(readContractSource(application(asData(contract), asData(schemas)), {})).toEqual(readContractSource(application(contract, schemas), {}))
+	})
+
+	test('refuses what the zod contract refuses, in the same words', () => {
+		const loose = edited('input: z.strictObject({ id: z.uuid() })', "input: z.strictObject({ id: z.uuid() }).extend({ id: z.string().regex('x') })")
+		expect(refusal(application(asData(loose), asData(SCHEMAS)))).toEqual(refusal(application(loose)))
+		expect(refusal(application(loose)).length).toBeGreaterThan(0)
+	})
+})
+
 describe('a schema method on a literal schema const', () => {
 	const SCHEMAS_WITH_STATUS = `${SCHEMAS}export const Status = z.enum(['open', 'done'])\n`
 	const INPUT = 'z.strictObject({ id: z.uuid(), status: Status.optional(), any: Status.nullable().array() })'

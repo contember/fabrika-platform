@@ -4,7 +4,6 @@
 
 import type { EndpointCache, RpcCaller } from '@fabrika/auth-core'
 import type { AnyDbIndex, ReadOnlyUnscoped, Unavailable, UnscopedDeclaration, UnscopedMode } from '@fabrika/db/tables'
-import type { z } from 'zod/v4'
 import type { Snake } from '../from-row'
 import type { ExtraKeys, HandlerInput, IsAny } from '../implement/types'
 import type { AttachmentBrand } from './attachment'
@@ -38,6 +37,8 @@ import type {
 	PublicAccess,
 	QueryAccess,
 	Schema,
+	SchemaInput,
+	SchemaOutput,
 } from './define'
 import type { WithClaims } from './token'
 
@@ -227,7 +228,7 @@ export type ListOf<U extends string, Listed extends string = ''> = [U] extends [
 	: ListOf<Exclude<U, LastOf<U>>, Listed extends '' ? LastOf<U> & string : `${LastOf<U> & string}, ${Listed}`>
 
 /** The fields, at any depth, that a handler `F` returns and the output `O` does not declare. */
-export type UndeclaredFields<F, O extends Schema> = ExtraKeys<Returned<F>, z.input<O>>
+export type UndeclaredFields<F, O extends Schema> = ExtraKeys<Returned<F>, SchemaInput<O>>
 
 /** An object with a camelCase field, which a database row names in snake_case. */
 type HasCamel<V> = { [K in keyof V]: K extends string ? (Snake<K> extends K ? never : K) : never }[keyof V]
@@ -246,10 +247,10 @@ type RowShaped<V> = V extends readonly (infer Item)[] ? readonly RowShaped<Item>
  * `ExactReturn` refuses with the fix, as it refuses anything but rows from an attachment's handler. Any other mistake
  * keeps the compiler's own message about the output.
  */
-export type HandlerReturn<F, O extends Schema> = [Returned<F>] extends [z.input<O>] ? z.input<O>
+export type HandlerReturn<F, O extends Schema> = [Returned<F>] extends [SchemaInput<O>] ? SchemaInput<O>
 	: [O] extends [AttachmentBrand] ? unknown
-	: [Returned<F>] extends [RowShaped<z.input<O>>] ? RowShaped<z.input<O>>
-	: z.input<O>
+	: [Returned<F>] extends [RowShaped<SchemaInput<O>>] ? RowShaped<SchemaInput<O>>
+	: SchemaInput<O>
 
 /** A kit endpoint's handler, returning `R`; `X` adds what its HTTP shape reads beside the input (`query`). */
 export type KitHandler<In, Ctx, R, X = unknown> = (args: { readonly input: In; readonly ctx: Ctx } & X) => R | Promise<R>
@@ -259,7 +260,7 @@ export type KitHandler<In, Ctx, R, X = unknown> = (args: { readonly input: In; r
  * as the claims of its purpose.
  */
 export type QueryArgs<Q, T = Record<never, never>> = [Q] extends [never] ? unknown
-	: Q extends InputSchema ? { readonly query: WithClaims<z.output<Q>, T> }
+	: Q extends InputSchema ? { readonly query: WithClaims<SchemaOutput<Q>, T> }
 	: unknown
 
 /**
@@ -282,7 +283,7 @@ export interface HttpOption<Q> {
  * returns a database row where the output is camelCase, anything but rows for an attachment, or, at any depth, a
  * field the output does not declare. A field whose type is an error elsewhere in the handler is not reported again here.
  */
-export type ExactReturn<F, O extends Schema, E> = [Returned<F>] extends [z.input<O>] ? [UndeclaredFields<F, O>] extends [never] ? E
+export type ExactReturn<F, O extends Schema, E> = [Returned<F>] extends [SchemaInput<O>] ? [UndeclaredFields<F, O>] extends [never] ? E
 	: IsAny<UndeclaredFields<F, O>> extends true ? E
 	: Unavailable<`the handler returns ${ListOf<UndeclaredFields<F, O> & string>}, which the output does not declare: return only declared fields`>
 	: [O] extends [AttachmentBrand] ? Unavailable<'an attachment handler returns its rows: an array of its row schema, with nothing around it'>

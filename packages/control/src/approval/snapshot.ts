@@ -2,7 +2,7 @@
 // path that publishes access reads it through.
 
 import { schemaFromContract } from '@fabrika/app/contract'
-import { canonicalJson, type ContractArtifact, sha256Hex } from '@fabrika/auth-core'
+import { canonicalJson, type ContractArtifact, encodeArtifact, sha256Hex } from '@fabrika/auth-core'
 import type { FileAdoption, MigrationDataLoss, MigrationDeviation } from '@fabrika/platform-node/sql'
 import { FRAMEWORK_RELEASE_PATTERN, type ProviderApprovedAccess } from '@fabrika/provider-contract'
 import { z } from 'zod'
@@ -124,10 +124,35 @@ export function parseSnapshot(raw: string): AccessSnapshot {
 	}
 }
 
-/** The stored form: the artifact as the application's release read it, never the upcast. */
+/**
+ * The stored form: the artifact as the application's release read it, never the upcast. A snapshot whose plain form
+ * would not fit `STORED_SNAPSHOT_BYTES` stores this release's artifact in the shared encoding instead; one that fits
+ * keeps the plain form, which a Control older than the encoding reads too.
+ */
 export function serializeSnapshot(snapshot: AccessSnapshot): string {
 	const { older, contract, ...rest } = snapshot
-	return JSON.stringify({ ...rest, contract: older ?? contract })
+	const plain = JSON.stringify({ ...rest, contract: older ?? contract })
+	if (older !== undefined || contract === null || utf8Length(plain) <= STORED_SNAPSHOT_BYTES) return plain
+	return JSON.stringify({ ...rest, contract: encodeArtifact(contract) })
+}
+
+/** The plain stored snapshot's ceiling: a D1 row holds at most 2,000,000 bytes, and the run's other columns share it. */
+export const STORED_SNAPSHOT_BYTES = 1_500_000
+
+/** The UTF-8 length of `text`, counted without encoding it. */
+function utf8Length(text: string): number {
+	let bytes = 0
+	for (let index = 0; index < text.length; index++) {
+		const unit = text.charCodeAt(index)
+		if (unit < 0x80) bytes += 1
+		else if (unit < 0x800) bytes += 2
+		else if (unit >= 0xd800 && unit <= 0xdbff && index + 1 < text.length) {
+			// A surrogate pair is one code point of four bytes.
+			bytes += 4
+			index++
+		} else bytes += 3
+	}
+	return bytes
 }
 
 /**

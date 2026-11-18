@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { ConditionArtifact, ConditionLiteralArtifact, ContractArtifact, SchemaShape } from '../contract'
-import { canonicalArtifactJson, canonicalizeArtifact, tableActions } from '../contract-canonical'
-import { contractDigest } from '../endpoint-digest'
+import { canonicalArtifactJson, canonicalizeArtifact, canonicalJson, tableActions, writeCanonicalJson } from '../contract-canonical'
+import { canonicalArtifactDigest, contractDigest } from '../endpoint-digest'
 import { notesArtifact } from './fixtures/notes-artifact'
 
 /** Every key order and every unordered list of the artifact reversed. */
@@ -116,5 +116,23 @@ describe('relation fields and conditions', () => {
 	test("the order of a connective, an in list and a reveal's actions never changes the digest", () => {
 		expect(contractDigest(withConditions('reversed'))).toBe(contractDigest(withConditions('declared')))
 		expect(canonicalArtifactJson(canonicalizeArtifact(withConditions('reversed')))).toBe(canonicalArtifactJson(withConditions('declared')))
+	})
+})
+
+describe('writeCanonicalJson', () => {
+	test('writes in pieces exactly what canonicalJson writes', () => {
+		const value = {
+			b: 1,
+			a: [undefined, () => 1, { z: null, '10': 1, '9': 2, y: [] }],
+			c: undefined,
+			d: -0,
+			e: Number.NaN,
+			s: ' "quoted"\\ č',
+			nested: { deeper: { list: [true, false, null, 1.5e-7] } },
+		}
+		const pieces: string[] = []
+		writeCanonicalJson(value, (piece) => pieces.push(piece))
+		expect(pieces.join('')).toBe(canonicalJson(value))
+		expect(canonicalArtifactDigest(canonicalizeArtifact(notesArtifact))).toBe(contractDigest(notesArtifact))
 	})
 })

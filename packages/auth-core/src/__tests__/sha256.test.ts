@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { sha256Hex } from '../sha256'
+import { Sha256, sha256Hex } from '../sha256'
 
 async function webCryptoHex(text: string): Promise<string> {
 	const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))
@@ -20,5 +20,14 @@ describe('sha256Hex', () => {
 		for (const text of texts) {
 			expect(sha256Hex(text)).toBe(await webCryptoHex(text))
 		}
+	})
+})
+
+describe('Sha256', () => {
+	test('fed in pieces, digests what the pieces spell together', async () => {
+		const pieces = ['{"a":', '"příliš"', ',"b":[1,2,3]', '}', '', 'x'.repeat(130), '🦊', 'y'.repeat(55)]
+		const hash = new Sha256()
+		for (const piece of pieces) hash.update(piece)
+		expect(hash.hex()).toBe(await webCryptoHex(pieces.join('')))
 	})
 })

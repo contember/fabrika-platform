@@ -17,6 +17,10 @@ export class Problems {
 		this.#problems.push(`${where}: ${problem}`)
 	}
 
+	isEmpty(): boolean {
+		return this.#problems.length === 0
+	}
+
 	throwIfAny(): void {
 		if (this.#problems.length > 0) {
 			throw new ContractError([...this.#problems])

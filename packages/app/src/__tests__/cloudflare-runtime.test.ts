@@ -5,6 +5,7 @@
 import { compileContract } from '@fabrika/app/contract'
 import { boot, BootError, serve } from '@fabrika/app/implement'
 import {
+	encodedArtifactJson,
 	ENDPOINT_HEADER,
 	FABRIKA_APPLICATION_OBJECT,
 	FABRIKA_APPLICATION_OBJECTS,
@@ -20,7 +21,7 @@ import { ObjectExistsError, ObjectTooLargeError } from '@fabrika/platform'
 import { Database as BunDatabase } from 'bun:sqlite'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { createTestEnv, TestClock, type TestEnv } from 'lopata/testing'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { bunSqliteStorage } from '../../../db/src/sqlite-bun'
@@ -30,8 +31,7 @@ import {
 	CLOUDFLARE_APPLICATION_CLASS,
 	CLOUDFLARE_FILES_BINDING,
 	GENERATED_MIGRATIONS_FILE,
-	generatedEntry,
-	writeGeneratedEntry,
+	writeGeneratedMigrations,
 } from '../build'
 import { type ApplicationState, createContractWorker, FabrikaApplication } from '../cloudflare'
 import { r2MaintenanceStore } from '../cloudflare/maintenance'
@@ -85,7 +85,9 @@ async function deploy(options: { readonly secret?: string | null; readonly vars?
 	const world: NotesWorld = { runs: [] }
 	const served = notesApp(world)
 	const migrations = await applicationMigrations(FIXTURE_ROOT)
-	const worker = createContractWorker(() => Promise.resolve({ default: served.implementation }), { migrations })
+	// As the generated entrypoint hands it: the contract the build compiled, which boot reads instead of compiling.
+	const approvedContract = encodedArtifactJson(compileContract(served.implementation.contract, served.implementation.database?.tables ?? {}))
+	const worker = createContractWorker(() => Promise.resolve({ default: served.implementation }), { migrations, approvedContract })
 	const testEnv = await createTestEnv({
 		// Lopata's own clock, which only its alarm timers read, an hour behind: no alarm fires by itself while a test runs,
 		// whatever the hour, so a cron wake that falls due mid-test runs nothing; a test fires one with `triggerAlarm`.
@@ -391,8 +393,7 @@ describe('the migrations', () => {
 			writeFileSync(join(root, 'db', 'migrations', '0002_b.sql'), "select 'b';\n")
 			writeFileSync(join(root, 'db', 'migrations', '0001_a.sql'), 'select `a`;\n-- ${not interpolated}\n')
 			writeFileSync(join(root, 'db', 'migrations', 'README.md'), 'not a migration')
-			const entry = await writeGeneratedEntry(root, 'cloudflare')
-			expect(readFileSync(entry, 'utf8')).toBe(generatedEntry('cloudflare'))
+			expect(await writeGeneratedMigrations(root)).toBe(join(root, GENERATED_MIGRATIONS_FILE))
 			const module: unknown = await import(join(root, GENERATED_MIGRATIONS_FILE))
 			expect(typeof module === 'object' && module !== null ? Reflect.get(module, 'migrations') : null).toEqual([
 				{ name: '0001_a.sql', sql: 'select `a`;\n-- ${not interpolated}\n' },

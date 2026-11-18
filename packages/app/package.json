@@ -37,6 +37,11 @@
 			"types": "./src/contract/index.ts",
 			"default": "./src/contract/index.ts"
 		},
+		"./schema": {
+			"bun": "./src/schema/index.ts",
+			"types": "./src/schema/index.ts",
+			"default": "./src/schema/index.ts"
+		},
 		"./client": {
 			"bun": "./src/client/index.ts",
 			"types": "./src/client/index.ts",

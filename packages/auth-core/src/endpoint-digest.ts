@@ -2,9 +2,9 @@
 // with every allowed request, and one for the whole contract, checked once at startup.
 
 import type { ContractArtifact, EndpointRow, ExportDescription } from './contract'
-import { canonicalAdmission, canonicalArtifactJson, canonicalJson, canonicalShape } from './contract-canonical'
+import { canonicalAdmission, canonicalArtifactJson, canonicalJson, canonicalShape, writeCanonicalJson } from './contract-canonical'
 import type { InstallationEndpointRow, InstallationEndpointTable } from './installation-endpoint'
-import { sha256Hex } from './sha256'
+import { Sha256, sha256Hex } from './sha256'
 
 /** The variable that carries the digest of the contract a deploy was approved with; the application compares its own. */
 export const FABRIKA_CONTRACT_DIGEST = 'FABRIKA_CONTRACT_DIGEST'
@@ -108,6 +108,26 @@ function sortedCodeUnits(values: readonly string[]): string[] {
 export function contractDigest(artifact: ContractArtifact): string {
 	return digestOf(canonicalArtifactJson(artifact))
 }
+
+/**
+ * `contractDigest` of an artifact that already is canonical (`canonicalizeArtifact`'s, as a decoded artifact is),
+ * hashed as it is serialized: neither a canonical copy nor its text is built. A shared shape is hashed at each place.
+ */
+export function canonicalArtifactDigest(canonical: ContractArtifact): string {
+	const hash = new Sha256()
+	let pending = ''
+	writeCanonicalJson(canonical, (piece) => {
+		pending += piece
+		if (pending.length >= HASH_CHUNK) {
+			hash.update(pending)
+			pending = ''
+		}
+	})
+	return `sha256:${hash.update(pending).hex()}`
+}
+
+/** Pieces are hashed in chunks of about this many code units: one encode per piece would dominate the digest. */
+const HASH_CHUNK = 16_384
 
 /**
  * The digest of an installation service's table: each row's id and `requirementDigest`, and the reserved prefixes. A

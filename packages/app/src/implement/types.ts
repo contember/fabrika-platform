@@ -1,10 +1,22 @@
 // The handler types `implement` checks against the contract: one handler per declared procedure, nothing else, each
 // with the context its access form grants and returning only the fields its output declares.
 
-import type { z } from 'zod/v4'
 import type { ConnectSnapshot } from '../contract/connect'
 import type { SurfaceSection } from '../contract/declaration'
-import type { Export, InputOf, InputSchema, LinkMount, MemberAccess, Procedure, RoleOf, RpcMount, Schema, WebhookMount } from '../contract/define'
+import type {
+	Export,
+	InputOf,
+	InputSchema,
+	LinkMount,
+	MemberAccess,
+	Procedure,
+	RoleOf,
+	RpcMount,
+	Schema,
+	SchemaInput,
+	SchemaOutput,
+	WebhookMount,
+} from '../contract/define'
 import type { JobHandlersOf } from '../jobs/types'
 import type { AppCapability, Ref, Within } from './capability'
 import type { ConnectResult } from './connect'
@@ -116,7 +128,7 @@ export type HandlerInput<I, Acc> = IsAny<Acc> extends true ? InputOf<I>
 /** `In` without the fields `F`, read-only: the only copy of each removed id a handler has is the checked capability. */
 type Without<In, F> = { readonly [K in keyof In as K extends F ? never : K]: In[K] }
 
-export type Handler<In, Ctx, O extends Schema> = (args: { readonly input: In; readonly ctx: Ctx }) => z.input<O> | Promise<z.input<O>>
+export type Handler<In, Ctx, O extends Schema> = (args: { readonly input: In; readonly ctx: Ctx }) => SchemaInput<O> | Promise<SchemaInput<O>>
 
 // ── Connectors: `ctx.connect` in the handlers an import's `usedBy` names, typed by the vendored snapshot ────────
 
@@ -134,8 +146,8 @@ type ImportedProcedures<C, K> = K extends keyof ImportsOf<C>
 	: never
 
 /** A connector call never throws for the owner's answer: it resolves to a typed outcome. */
-export type ConnectCall<I, O extends Schema> = [I] extends [InputSchema] ? (input: z.input<I>) => Promise<ConnectResult<z.output<O>>>
-	: (input?: Record<never, never>) => Promise<ConnectResult<z.output<O>>>
+export type ConnectCall<I, O extends Schema> = [I] extends [InputSchema] ? (input: SchemaInput<I>) => Promise<ConnectResult<SchemaOutput<O>>>
+	: (input?: Record<never, never>) => Promise<ConnectResult<SchemaOutput<O>>>
 
 type ConnectorOf<S, P extends string> = {
 	readonly [Path in P]: S extends
@@ -180,7 +192,7 @@ type LinkHandlers<D extends string, T> = {
  * stable key. It runs at least once per delivery: a failed run is run again on GitHub's redelivery.
  */
 export type WebhookHandler<B extends string, Acts extends string, I> = (args: {
-	readonly input: z.output<I>
+	readonly input: SchemaOutput<I>
 	readonly ctx: RequestContext<WebhookPrincipal> & { readonly refs: { readonly [A in Acts]: Ref<B, A> }; readonly delivery: WebhookDelivery }
 }) => void | Promise<void>
 

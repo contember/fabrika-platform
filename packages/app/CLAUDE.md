@@ -121,6 +121,7 @@ src/
     serve.ts          serveService: the dispatcher over planEndpoint
   build.ts            @fabrika/app/build — the generated entrypoint fabrika app build writes; on Cloudflare also
                       fabrika/migrations.generated.ts (db/migrations as a module: a Worker reads no file system)
+                      and fabrika/contract.generated.ts (the compiled contract, from build-contract-child.ts)
   build-recipe.ts     contractRecipe: a contract application's build, init, start and jobs in a Bun container, as
                       data a provider renders (re-exported by @fabrika/app/build). PLATFORM PROTOCOL: the
                       platform renders its own copy for older applications, so change it only additively
@@ -194,6 +195,10 @@ src/
     connect.ts        exportDescription, ConnectSnapshot, describeSnapshot, parseExportDescription
     snapshot-source.ts  snapshotSource: the vendored snapshot module fabrika connect writes
     schema-from-shape.ts  schemaFromShape and declaredPath: what a connector validates with and reports
+  schema/             @fabrika/app/schema — browser-safe: the contract subset's schemas held as data
+    builder.ts        z: the subset's factories, each returning the DataSchema node of its call, typed as zod's
+    data-schema.ts    DataSchema, DataObject, DataEnum; zodOf / zodSchemaOf, the bounded cache of builds (BUILT_SCHEMAS)
+    replay.ts         replayStep: one factory or method replayed against zod, the checker's refusals word for word
   implement/          @fabrika/app/implement — serving a contract (node:async_hooks)
     implement.ts      ContractImplementation; implement, the framework tests' handler tree (not exported)
     serve.ts          serve(contract, { database, deps }) and defineDeps: serving a kit contract
@@ -335,6 +340,16 @@ src/
   `compileContract` and the checker refuse `z.object`. Compose schemas through
   factories (`z.nullable(Note)`, `z.array(Note)`): the checker refuses a method
   call on a schema const.
+- **A schema may be held as data.** `z` of `@fabrika/app/schema` is the subset with zod's names and types, but each
+  call returns a frozen `DataSchema` recording the factory or method and its arguments, not a zod schema. Wherever the
+  framework takes zod it takes one (`Schema`, `InputSchema`; the derived types go through `SchemaOutput`/`SchemaInput`,
+  `ZodOf` of either), and builds the zod when it validates (`zodSchemaOf`), replaying the calls through `replayStep`.
+  The builds sit in one LRU cache of `BUILT_SCHEMAS` (64; an endpoint holds two), so a runtime that served every
+  endpoint of a large contract does not hold all their zod. `zodOf` carries the package's one type assertion: the replay calls
+  exactly the zod functions whose types define the builder's, and `data-schema.test.ts` compares each replay with zod.
+  `DataObject` keeps `.shape`, `extend`, `pick`, `omit`, `partial`; `DataEnum` keeps `options`, `enum`, `exclude`,
+  `extract`; anything else of zod's API is `zodOf(schema)`'s. A zod schema may sit inside a data one. The checker's
+  reader records the same nodes (`packages/check/CLAUDE.md`), so a contract of either kind compiles to one artifact.
 - The type witnesses live in `src/__tests__/contract-mistakes/`, excluded from the
   package typecheck and compiled by `contract-types.test.ts`, which asserts the
   diagnostic text on the line after each `// mistake:` marker. A new rule the
@@ -500,6 +515,15 @@ vocabulary (`packages/db/CLAUDE.md`).
   requirement and access form are authorization; same-origin and content type are
   admission. Neither is the proxy's enforcement decision; never reorder them so that admission or input
   parsing answers a caller the requirement refused.
+- **An endpoint validates with its schema once its shape is the approved one** (`approved.ts`). Boot reads the
+  bundled artifact and checks its digest, not the evaluated schemas. So the first time an endpoint takes an input or
+  answers JSON, `approvedInput`/`approvedOutput` describe the schema the application evaluated and compare its
+  canonical shape with the row's. The same shape validates with the application's own schema (its messages, defaults,
+  transforms); another is a 500 with `framework_fault: schema_unapproved` for that endpoint alone. A redirect, an
+  attachment and a file output are not compared; a query's input is already built from the row's shape.
+  What else boot still takes from the evaluated contract it compares with the artifact at boot and refuses to start on a
+  difference: a procedure's kind and whether it has an input and an output, an SPA's and a link's prefix and directory, a
+  webhook's actions (served from the artifact) and a token purpose's claims shape.
 - **The proxy names the endpoint, and the application agrees or answers 503**
   (ADR-0022 rule 5). `X-Fabrika-Endpoint: <id>@<digest>` must name the endpoint
   `planEndpoint` selected, with this version's `requirementDigest` of its row; a
@@ -1102,8 +1126,11 @@ object directly over `bunSqliteStorage` (the IAM binding, the assets, the crash 
 
 - **The generated Cloudflare entry exports `FabrikaApplication` and the Worker.** `fabrika app build` writes
   `fabrika/entry.generated.ts` and `fabrika/migrations.generated.ts`, the `.sql` files of `db/migrations` by name with
-  their text verbatim, so their checksums stay the files'. `createContractWorker(load, { migrations })` registers the
-  loader; the Worker's `fetch` removes `X-Fabrika-Tick` (`TICK_HEADER`), sets the proxy secret and forwards the request
+  their text verbatim, so their checksums stay the files'. It also writes `fabrika/contract.generated.ts`, the contract
+  compiled in a child process, in the shared encoding (`encodeArtifact`); `boot` decodes it (`parseEncodedArtifact`)
+  and checks its digest instead of compiling the contract, which would not fit a large contract's evaluated schemas
+  and its compile in the isolate's 128 MB.
+  `createContractWorker(load, { migrations, approvedContract })` registers the loader; the Worker's `fetch` removes `X-Fabrika-Tick` (`TICK_HEADER`), sets the proxy secret and forwards the request
   to the object `FABRIKA_APPLICATION_OBJECT` names in `FABRIKA_APPLICATION` (`application` without the object
   variables, an older deploy); its `scheduled` sends the repair tick there with the `scheduledTime`. Without
   `FABRIKA_PROXY_SECRET` or the binding it forwards nothing.

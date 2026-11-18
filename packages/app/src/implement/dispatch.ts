@@ -76,8 +76,10 @@ import {
 import type { RequestExecutionContext } from '../fetch'
 import { FileWork, type StoredFileKinds, storedFilesHandle } from '../files/kinds'
 import { FileDownload, fileResponse, withFileTreatment } from '../files/treatment'
+import { zodSchemaOf } from '../schema/data-schema'
 import { namesSourceMap } from '../source-map-path'
 import { abortedBody, bootstrapPath, bootstrapResponse, readBodyInTime, withBootstrap } from './anonymous'
+import { approvedInput, approvedOutput } from './approved'
 import { attachmentResponse } from './attachment'
 import { boundedStream, type Deadline, deadline, handlerSignal, readBoundedBytes } from './bounded'
 import type { BrowserConfig } from './browser-config'
@@ -795,7 +797,7 @@ export class ContractRuntime {
 		if (served.input === null) {
 			throw new ServerFault('contract_inconsistent', `'${served.row.id}' takes files and declares no input`)
 		}
-		return strictInput(served.row, served.input, { ...multipart.json, ...files })
+		return strictInput(served.row, approvedInput(served.row, served.input), { ...multipart.json, ...files })
 	}
 
 	/**
@@ -817,7 +819,7 @@ export class ContractRuntime {
 		if (file !== null) {
 			return attachmentResponse(served.row.id, file, served.output, result)
 		}
-		return outputResponse(served.row, served.output, result, request, carried)
+		return outputResponse(served.row, approvedOutput(served.row, served.output), result, request, carried)
 	}
 
 	/** A POST's `query`, parsed from the URL, each signed token in it verified; `undefined` without one. */
@@ -1537,7 +1539,7 @@ export class ContractRuntime {
 				const output = served.row.output
 				const answer = output !== null && isFileShape(output)
 					? await this.#fileKinds(served.row.id).download(work, served.row.id, output.kind, result)
-					: outputResponse(served.row, served.output, result, request, carried)
+					: outputResponse(served.row, approvedOutput(served.row, served.output), result, request, carried)
 				outcome = 'committing'
 				await commitAnswer(invocation, signal, answer)
 				return answer
@@ -1604,7 +1606,7 @@ export class ContractRuntime {
 		if (served.scheme === 'github-sha256' && !githubAccounts(payload).includes(binding.account)) {
 			throw new ForbiddenError('The delivery names another account than its binding accepts')
 		}
-		const input = strictInput(served.row, served.input, stripped(served, payload))
+		const input = strictInput(served.row, approvedInput(served.row, served.input), stripped(served, payload))
 		const bound = served.boundTo.kind === 'app' ? APP_BINDING_SCOPE.type : served.boundTo.dimension
 		if (binding.scope.type !== bound) {
 			throw new ServerFault(
@@ -1824,7 +1826,7 @@ function holdsOnChain(perms: PermissionEntry[], action: string, dimension: strin
  * request's verified tokens carry: a URL among them is a target the application signed.
  */
 function outputResponse(row: EndpointRow, schema: Schema, result: unknown, request: Request, carried: ReadonlySet<string>): Response {
-	const output = z.safeParse(schema, projectSchema(row.id, schema, result))
+	const output = z.safeParse(zodSchemaOf(schema), projectSchema(row.id, schema, result))
 	if (!output.success) {
 		throw new ServerFault('output_refused', `'${row.id}' returned a value its output schema refuses`)
 	}
@@ -1947,7 +1949,7 @@ function stripped(served: Extract<ServedEndpoint, { kind: 'webhook' }>, payload:
 
 /** `value` parsed with the endpoint's strict input schema; a refusal is a 400 naming each issue. */
 function strictInput(row: EndpointRow, schema: Schema, value: unknown): Readonly<Record<string, unknown>> {
-	const parsed = z.safeParse(schema, value)
+	const parsed = z.safeParse(zodSchemaOf(schema), value)
 	if (!parsed.success) {
 		const issues = parsed.error.issues.map((issue) => ({ path: issue.path.map(String).join('.'), code: issue.code, message: issue.message }))
 		const first = issues[0]
@@ -2027,7 +2029,7 @@ async function readInput(
 		}
 		return {}
 	}
-	return strictInput(served.row, served.input, body)
+	return strictInput(served.row, approvedInput(served.row, served.input), body)
 }
 
 /**

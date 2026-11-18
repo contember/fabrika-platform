@@ -38,6 +38,7 @@ import {
 	unknownOptions,
 	type Vocabulary,
 } from '@fabrika/app/contract'
+import { DataObject } from '@fabrika/app/schema'
 import {
 	type CspSource,
 	isLocale,
@@ -182,7 +183,7 @@ class SurfaceReader {
 		const [definition] = args(value, 'attachment', 1, 1)
 		const options = builderOptions(definition, value, 'attachment')
 		const row = this.#schema(options.get('row'), value, 'row')
-		if (!(row instanceof z.ZodObject)) {
+		if (!(row instanceof z.ZodObject || row instanceof DataObject)) {
 			throw new Refused(options.get('row')?.at ?? value.at, 'the row is not an object schema', 'row: z.strictObject({ … })')
 		}
 		const maxRows = optionalNumber(options.get('maxRows'), 'maxRows')

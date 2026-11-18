@@ -10,6 +10,7 @@ import { attachmentAt, type ClientNode, clientNodeOf, type DownloadedFile, downl
 import { startErrorReporting } from '../client/error-reporting'
 import { RpcError, type RpcFetch } from '../client/transport'
 import { BROWSER_CONFIG_FILE, joinPath, PAGE_CALLER_FILE } from '../contract/defaults'
+import { zodSchemaOf } from '../schema/data-schema'
 import { type FabrikaError, toFabrikaError } from './errors'
 import { QueryStore, type StoreTarget } from './store'
 
@@ -80,7 +81,7 @@ function issuesOf(error: z.core.$ZodError): readonly { readonly path: string; re
 function validated(node: ClientNode, input: unknown): unknown {
 	const schema = node.procedure?.input ?? null
 	if (schema === null) return input
-	const parsed = z.safeParse(schema, input ?? {})
+	const parsed = z.safeParse(zodSchemaOf(schema), input ?? {})
 	if (parsed.success) return input
 	const issues = issuesOf(parsed.error)
 	const first = issues[0]

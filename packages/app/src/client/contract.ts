@@ -10,8 +10,9 @@ import { type AttachmentBrand, attachmentOf } from '../contract/attachment'
 import { isProcedure, type ProcedureTreeDeclaration, type ProcedureType, SURFACE_SECTIONS } from '../contract/declaration'
 import { FILE_INPUT_PART } from '../contract/defaults'
 import { challengePath, declaredChallengeAction, joinPath, LINK_API_SEGMENT, procedurePath } from '../contract/defaults'
-import type { AnyContract, InputSchema, Procedure, Schema, Surface } from '../contract/define'
+import type { AnyContract, InputSchema, Procedure, Schema, SchemaInput, SchemaOutput, Surface } from '../contract/define'
 import { type ClientInput, type FileBrand, fileOf } from '../contract/file'
+import { zodSchemaOf } from '../schema/data-schema'
 import { type BounceConfig, type BounceOption, exchange, exchangeFile, resolveBounce, RpcError, type RpcFetch } from './transport'
 
 type SurfaceOf<C> = C extends { readonly surface: infer S } ? S : never
@@ -26,7 +27,8 @@ export type ClientMount<C> =
  * it parses with (`@fabrika/app/react` reads a cached answer back through it).
  */
 export type ProcedureCall<I, O extends Schema> =
-	& ([I] extends [InputSchema] ? (input: ClientInput<z.input<I>>) => Promise<z.output<O>> : (input?: Record<never, never>) => Promise<z.output<O>>)
+	& ([I] extends [InputSchema] ? (input: ClientInput<SchemaInput<I>>) => Promise<SchemaOutput<O>>
+		: (input?: Record<never, never>) => Promise<SchemaOutput<O>>)
 	& { readonly output: O }
 
 export type ClientTree<T> = {
@@ -170,7 +172,7 @@ function caller(target: CallTarget, at: TreeAt, options: ClientOptions, bounce: 
 		const result = target.method === 'GET'
 			? await exchange(options.fetch ?? fetch, withParams(target.url, input), getRequestOf(options), bounce)
 			: await exchange(options.fetch ?? fetch, target.url, requestOf(options, input), bounce)
-		const parsed = z.safeParse(target.output, result)
+		const parsed = z.safeParse(zodSchemaOf(target.output), result)
 		if (!parsed.success) {
 			throw new RpcError({ type: 'invalid-response', message: `'${target.id}' answered a value its output schema refuses`, httpStatus: 200 })
 		}
@@ -364,7 +366,7 @@ export function attachmentAt(value: unknown): { readonly mount: string; readonly
 }
 
 /** The input `download` takes: the procedure's, or none. */
-export type DownloadInput<I> = [I] extends [InputSchema] ? [input: z.input<I>] : [input?: Record<never, never>]
+export type DownloadInput<I> = [I] extends [InputSchema] ? [input: SchemaInput<I>] : [input?: Record<never, never>]
 
 /**
  * Calls a procedure that answers a file (an attachment, or a `file('<kind>')` output) with the caller's credential, and

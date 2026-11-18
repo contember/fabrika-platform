@@ -256,7 +256,7 @@ Which promise the types, the checker, boot, the runtime or the approver keeps, a
   no `package.json`. Its tests run in the platform build, so they test its logic, without a keychain or a network.
 - Never log an error object, a request, headers or the environment.
 - Never edit a generated file (`src/db/schema.generated.ts`, the generated tests, `fabrika/entry.generated.ts`,
-  `fabrika/migrations.generated.ts`, `fabrika/connect/`) or a committed migration. Regenerate the file; write a new migration.
+  `fabrika/migrations.generated.ts`, `fabrika/contract.generated.ts`, `fabrika/connect/`) or a committed migration. Regenerate the file; write a new migration.
 
 ## Ask the human first
 
@@ -798,7 +798,8 @@ await Bun.write(
 ## Ignored files
 
 `.gitignore`: `node_modules/`, `fabrika.manifest.json`, `/fabrika/entry.generated.ts`, `/dist/`, and on Cloudflare
-`/fabrika/assets/`, where a deploy stages the SPA's files.
+`/fabrika/assets/`, where a deploy stages the SPA's files, and `/fabrika/contract.generated.ts`, which every build
+rewrites from the contract.
 
 ---
 
@@ -939,11 +940,18 @@ export const WorkloadRow = z.strictObject({
 
 - `z` comes from `zod/v4`. Objects are `z.strictObject`, never `z.object`. No `transform`, `refine`, `pipe`,
   `preprocess`, `passthrough`, `lazy` or `custom`: the shell is read without running it.
+- A large contract (hundreds of endpoints) imports `z` from `@fabrika/app/schema` instead. It is the same subset with the
+  same names and types, and the same artifact. It holds each schema as data and builds the zod only when it validates,
+  so the runtime does not hold the zod of every endpoint at once. Such a schema keeps `.shape`, `.extend`, `.pick`, `.omit`,
+  `.partial` (objects), `.options`, `.enum`, `.exclude`, `.extract` (enums), `.parse` and `.safeParse`. For anything
+  else of zod's API, call `zodOf(schema)` from `@fabrika/app/schema`. `@fabrika/app/schema`'s factories take a
+  zod schema as a child, but `zod/v4`'s do not take a schema held as data. Wrap one with the builder that made it:
+  `z.array(Row)`, where this `z` is the one that built `Row`.
 - `src/schemas.ts` holds what several slices, or a slice and the SPA, share, as literal consts only. A slice declares
   its own schemas in its `endpoints.ts` (`Task`, `NewTask` in `SKILL.md`), and may declare other consts there too.
 - A pure function both the server and the SPA run (a template fill, a label) lives in `src/shared/<name>.ts`, once: a
   handler and a `web/` module import the same function, so the preview and the e-mail cannot drift. A shared module
-  imports only `zod/v4` and other modules of `src/shared/` (`shared-import`); no slice, no `src/db/`, no `@fabrika/*`,
+  imports only `zod/v4`, `@fabrika/app/schema` and other modules of `src/shared/` (`shared-import`); no slice, no `src/db/`, no `@fabrika/*`,
   no global object, no environment.
 - `z.iso.datetime()` takes UTC (`…Z`) only; `z.iso.date()` is `YYYY-MM-DD`.
 - Optional or nullable: on a create, a field the caller may leave out is `.optional()`, never a required

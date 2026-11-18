@@ -216,7 +216,18 @@ one back from JSON. Both refuse a `*` in an action and a role named after one of
 own roles (`admin`); `creates` takes only a dimension that lies in no other. `tables` is
 what `defineTables` returned, or the artifact form of each policy; `@fabrika/db/tables`
 (browser-safe) converts one into the other. Schemas are the zod 4 subset that
-`@fabrika/check` accepts.
+`@fabrika/check` accepts, written with `z` from `zod/v4` or from `@fabrika/app/schema`. The second holds each schema as
+data, the factory and method calls with their arguments, and the framework builds the zod when it validates. A
+runtime then holds the zod only of the schemas it used lately, a bounded number, not of every endpoint. Both compile
+to the same artifact and digest.
+
+The runtime validates with the application's own schemas. Boot checks only the bundled artifact's digest, so the first
+time an endpoint takes an input or answers JSON, the runtime compares the canonical shape of the schema the
+application evaluated with the endpoint's row. A schema of another shape answers 500 and logs
+`framework_fault: schema_unapproved` for that endpoint only. A redirect, an attachment and a file output are not
+compared. The rest of what the runtime takes from the evaluated contract is compared at boot: a procedure's kind and
+whether it has an input and an output, an SPA's and a link's prefix and directory, a webhook's actions and a token
+purpose's claims. On any difference the application does not start.
 
 The artifact compiles to what the proxy and IAM consume. On Zerops, `fabrika.config.ts`
 hands both to its provider: `target.proxy` (`{ upstream, ...contractProxyTable(artifact) }`)
@@ -258,9 +269,13 @@ loses what the kit keeps beside it (the handlers, whether it has tables) and is 
 
 `fabrika app build` writes `fabrika/entry.generated.ts` for an application with a
 `fabrika.contract.ts`: `serveContract(() => import('../src/app'), process.env)` on
-Zerops; on Cloudflare `createContractWorker(() => import('../src/app'), { migrations })` and
+Zerops; on Cloudflare `createContractWorker(() => import('../src/app'), { migrations, approvedContract })` and
 `export { FabrikaApplication }`, with `fabrika/migrations.generated.ts`, which holds every `.sql`
-file of `db/migrations` by name and text ([On Cloudflare](#on-cloudflare)). The adapter
+file of `db/migrations` by name and text ([On Cloudflare](#on-cloudflare)), and `fabrika/contract.generated.ts`, the
+compiled contract in the shared encoding of `@fabrika/auth-core`'s `encodeArtifact`: the canonical artifact with each
+composite schema shape that occurs more than once written once and referenced by index, and no null constraint. The
+build compiles it in a child process that loads `src/app.ts` with no variable but `PATH` and `HOME`; a contract that
+does not compile fails the build. The adapter
 first takes every `FABRIKA_*` variable out of `process.env` and `Bun.env`, then imports
 the application, so no module of it can copy one through `process.env`. The process's original environment
 block (`/proc/self/environ` on Linux) still holds them. The adapter then calls
@@ -283,7 +298,8 @@ to start. `boot` verifies tokens for the audience
 `FABRIKA_IAM_APP_ID` (`<app>@<env>`, whose application must be the contract's), reads
 `FABRIKA_IAM_ISSUER` and `FABRIKA_OPERATIONS_DSN`, and refuses to start when
 `FABRIKA_CONTRACT_DIGEST` is missing or is not `contractDigest` of the compiled contract
-(ADR-0022 rule 5), when a job cannot run (see Jobs), when an
+(ADR-0022 rule 5; given `approvedContract`, the digest of the artifact it decodes to, which `boot` reads instead of
+compiling the contract; the digest is taken as the artifact is serialized, so its text is never built), when a job cannot run (see Jobs), when an
 import has no matching snapshot or no owner, when a file kind
 cannot be served ([Stored files](#stored-files)), when an `on` dimension or a link mount's dimension has no
 table, when an access form reaches a dimension that lies in a container no table can
