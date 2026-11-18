@@ -2,6 +2,7 @@ import { BUILDER_DAEMON_HOST } from '../../shared/urls'
 
 export function admitRequest(req: Request, url: URL, port: number): Response | null {
 	const authority = req.headers.get('host')
+	// Bun ≥ 1.4 builds `url` from Host even for an absolute-form target (against RFC 9112 §3.2.2), so its authority is unseen.
 	const allowedHostname = url.hostname === BUILDER_DAEMON_HOST || url.hostname === 'localhost'
 	const allowedAuthority = authority === `${url.hostname}:${port}` || (port === 80 && authority === url.hostname)
 	const expectedPort = port === 80 ? '' : String(port)

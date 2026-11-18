@@ -115,8 +115,8 @@ describe('daemon request admission on the bound dynamic port', () => {
 		expect(daemon.sessionManager.get('protected')).toBeDefined()
 	})
 
-	test('rejects an absolute request target with a foreign authority despite a local Host', async () => {
-		expect(await send(`http://foreign.example:${daemon.port}/health`, 'GET')).toBe(403)
+	test('rejects a foreign Host despite an absolute request target with the local authority', async () => {
+		expect(await send(`${origin}/health`, 'GET', { Host: `foreign.example:${daemon.port}` })).toBe(403)
 	})
 
 	test('allows originless CLI and exact same-origin HTTP writes', async () => {
