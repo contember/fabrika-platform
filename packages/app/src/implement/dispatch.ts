@@ -160,7 +160,8 @@ export interface InvocationGate {
 
 const invocationGate = new AsyncLocalStorage<InvocationGate>()
 
-const UNGATED: InvocationAdmission = Object.freeze({ signal: new AbortController().signal, track: () => {}, release: () => {} })
+// Made on first use: workerd refuses a module whose top level creates an `AbortController`.
+let ungated: InvocationAdmission | undefined
 
 /** Runs `work` with `gate` admitting every invocation it starts, the background work it hands on included. */
 export function runGated<T>(gate: InvocationGate, work: () => T): T {
@@ -170,7 +171,11 @@ export function runGated<T>(gate: InvocationGate, work: () => T): T {
 /** Admits an invocation of `kind` at the current event's gate; outside an object every invocation is admitted, uncounted. */
 export function admitInvocation(kind: InvocationKind): InvocationAdmission | null {
 	const gate = invocationGate.getStore()
-	return gate === undefined ? UNGATED : gate.admit(kind)
+	if (gate !== undefined) {
+		return gate.admit(kind)
+	}
+	ungated ??= Object.freeze({ signal: new AbortController().signal, track: () => {}, release: () => {} })
+	return ungated
 }
 
 /** How long a refused caller waits before it tries again, in seconds. */
