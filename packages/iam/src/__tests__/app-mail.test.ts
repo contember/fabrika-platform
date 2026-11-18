@@ -132,6 +132,7 @@ describe("an application's e-mail template", () => {
 			message: "<script>alert('x')</script>\nsee you",
 			actionUrl: 'https://iam.test/auth/invitations/accept?app=portal%40prod&x=1#token=t',
 			expiresAt: 0,
+			acceptance: 'create',
 		})
 		expect(rendered.subject).toBe('Eve Bcc: x@example.test invites you to <b>Q&A</b>')
 		expect(rendered.text).toBe(
@@ -197,6 +198,7 @@ describe("an application's e-mail template", () => {
 			message: '"><img src=x onerror=alert(1)>',
 			actionUrl: 'https://iam.test/auth/invitations/accept?app=portal%40prod&x=1#token=t',
 			expiresAt: 0,
+			acceptance: 'create',
 		})
 		expect(rendered.text).toBe('https://iam.test/auth/invitations/accept?app=portal%40prod&x=1#token=t')
 		expect(rendered.html).toBe(

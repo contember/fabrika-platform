@@ -418,6 +418,11 @@ fails if that stops being true — it is the guard, not documentation of one.
   hash in its guarded write, so a resend (`invitation.resend`, `rotateInvitation`: a new hash and a new 7 days) ends the
   old link even mid-submission. An invitation's `company_label` and `message` are plain text, bounded by
   `invitationOptionsProblem` (`@fabrika/auth-core`), and reach the e-mail as `{{companyLabel}}`/`{{message}}`.
+  **IAM's words never promise a password the invitation does not offer.** `invitationAcceptance` (`create`, `sign_in`,
+  `no_account`) picks the catalog e-mail's sentence on how to accept, and the accept page's GET, which cannot see the
+  token, stays neutral. A `no_account` invitation (no principal holds the mailbox, it creates none, and single sign-on
+  is off or does not admit the mailbox) answers its POST without a session with a page naming the address and asking
+  for an account, never a sign-in its owner cannot pass; the invitation stays open.
 - **AN INVITATION CREATES A PRINCIPAL ONLY AT ACCEPTANCE, AND ONLY AN EXTERNAL ONE WITH NOTHING BEFORE IT** (ADR-0020,
   ADR-0051, `invitationOffer`, `acceptCreatingPrincipal`, `MembershipRepository.acceptAsNewPrincipal`). The offer is
   `create` only for an open invitation whose role is declared external, with password and e-mail enabled, a mailbox no

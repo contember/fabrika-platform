@@ -91,8 +91,9 @@ describe('/auth/invitations/accept', () => {
 		expect(await response.text()).not.toContain('invitee@example.test')
 	})
 
-	test('without a session the page asks to sign in and accepts nothing', async () => {
+	test('without a session the page asks the mailbox owner to sign in and accepts nothing', async () => {
 		const i = await invited()
+		await i.f.person('invitee')
 		const response = await send(i, accept(i.token))
 		expect(response.status).toBe(401)
 		expect(await response.text()).toContain('/auth/login?redirect=')
