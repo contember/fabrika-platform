@@ -35,6 +35,7 @@ export const SERVER_FAULTS = {
 	attachment_size: 'the encoded attachment is larger than it declares (maxBytes); no body was sent',
 	redirect_refused:
 		"the handler redirected to a target that is neither its own origin's path, an origin its redirect() lists, nor a URL a verified token of the request carries",
+	schema_unapproved: 'a schema the application evaluated has another shape than its approved contract holds for the endpoint',
 	token_claims_refused: "the claims a site signed are not what the token purpose's claims schema admits",
 	token_keys_missing: 'a site signed a token, and the environment holds no token key',
 	url_unbuildable:

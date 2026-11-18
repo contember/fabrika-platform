@@ -79,6 +79,7 @@ import { FileDownload, fileResponse, withFileTreatment } from '../files/treatmen
 import { zodSchemaOf } from '../schema/data-schema'
 import { namesSourceMap } from '../source-map-path'
 import { abortedBody, bootstrapPath, bootstrapResponse, readBodyInTime, withBootstrap } from './anonymous'
+import { approvedInput, approvedOutput } from './approved'
 import { attachmentResponse } from './attachment'
 import { boundedStream, type Deadline, deadline, handlerSignal, readBoundedBytes } from './bounded'
 import type { BrowserConfig } from './browser-config'
@@ -796,7 +797,7 @@ export class ContractRuntime {
 		if (served.input === null) {
 			throw new ServerFault('contract_inconsistent', `'${served.row.id}' takes files and declares no input`)
 		}
-		return strictInput(served.row, served.input, { ...multipart.json, ...files })
+		return strictInput(served.row, approvedInput(served.row, served.input), { ...multipart.json, ...files })
 	}
 
 	/**
@@ -818,7 +819,7 @@ export class ContractRuntime {
 		if (file !== null) {
 			return attachmentResponse(served.row.id, file, served.output, result)
 		}
-		return outputResponse(served.row, served.output, result, request, carried)
+		return outputResponse(served.row, approvedOutput(served.row, served.output), result, request, carried)
 	}
 
 	/** A POST's `query`, parsed from the URL, each signed token in it verified; `undefined` without one. */
@@ -1538,7 +1539,7 @@ export class ContractRuntime {
 				const output = served.row.output
 				const answer = output !== null && isFileShape(output)
 					? await this.#fileKinds(served.row.id).download(work, served.row.id, output.kind, result)
-					: outputResponse(served.row, served.output, result, request, carried)
+					: outputResponse(served.row, approvedOutput(served.row, served.output), result, request, carried)
 				outcome = 'committing'
 				await commitAnswer(invocation, signal, answer)
 				return answer
@@ -1605,7 +1606,7 @@ export class ContractRuntime {
 		if (served.scheme === 'github-sha256' && !githubAccounts(payload).includes(binding.account)) {
 			throw new ForbiddenError('The delivery names another account than its binding accepts')
 		}
-		const input = strictInput(served.row, served.input, stripped(served, payload))
+		const input = strictInput(served.row, approvedInput(served.row, served.input), stripped(served, payload))
 		const bound = served.boundTo.kind === 'app' ? APP_BINDING_SCOPE.type : served.boundTo.dimension
 		if (binding.scope.type !== bound) {
 			throw new ServerFault(
@@ -2028,7 +2029,7 @@ async function readInput(
 		}
 		return {}
 	}
-	return strictInput(served.row, served.input, body)
+	return strictInput(served.row, approvedInput(served.row, served.input), body)
 }
 
 /**
