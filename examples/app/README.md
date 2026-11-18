@@ -24,7 +24,7 @@ The rules an agent follows when it changes this application are `@fabrika/app`'s
 | `fabrika.contract.ts`                                        | `app.contract(…)`: the `/api` and `/notes` mounts, the SPA, the health check, the `attachments` file kind, the job. |
 | `web/`, `build-web.ts`                                       | The SPA (`site`, at `/`, for every member): a page that names the signed-in person; `bun run build:web` builds it.  |
 | `src/app.ts`                                                 | `serve(contract, { database: scoped(tables) })`.                                                                    |
-| `fabrika/entry.generated.ts`                                 | The Worker entrypoint `fabrika app build` writes, with `fabrika/migrations.generated.ts`. Do not edit them.         |
+| `fabrika/entry.generated.ts`                                 | The Worker entrypoint `fabrika app build` writes, with `fabrika/{migrations,contract}.generated.ts`. Do not edit.   |
 | `fabrika.config.ts`                                          | The deploy surface: `defineApp({ id: 'example-app' })` and the SPA build as `pipeline.build`, the whole of it.      |
 | `oblaka.ts`, `lopata.config.ts`                              | A local run of the proxy, the application with its Durable Object and bucket, and IAM over service bindings.        |
 | `src/__tests__/app.test.ts`                                  | The endpoints behind the production proxy decision (`testKit`) on `@fabrika/db/testing-sqlite`, denials included.   |
@@ -56,7 +56,7 @@ After a change to the contract or the handlers:
 ```bash
 bunx fabrika db codegen         # after a migration: rewrites src/db/schema.generated.ts
 bunx fabrika db test-scaffold   # after a contract or table change: rewrites the generated tests
-bun run build       # fabrika app build --provider=cloudflare: rewrites fabrika/entry.generated.ts and migrations.generated.ts
+bun run build       # fabrika app build --provider=cloudflare: rewrites fabrika/entry.generated.ts, migrations.generated.ts and contract.generated.ts
 bun run check       # fabrika-check: the Cloudflare build does not run it yet
 bun run typecheck
 bun run test        # bun test --isolate: the generated endpoint access test boots the same application

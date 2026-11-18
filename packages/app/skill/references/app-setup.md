@@ -435,4 +435,5 @@ await Bun.write(
 ## Ignored files
 
 `.gitignore`: `node_modules/`, `fabrika.manifest.json`, `/fabrika/entry.generated.ts`, `/dist/`, and on Cloudflare
-`/fabrika/assets/`, where a deploy stages the SPA's files.
+`/fabrika/assets/`, where a deploy stages the SPA's files, and `/fabrika/contract.generated.ts`, which every build
+rewrites from the contract.

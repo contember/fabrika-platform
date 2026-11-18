@@ -1,7 +1,6 @@
 import { generatedEntry } from '@fabrika/app/build'
 import { describe, expect, test } from 'bun:test'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { parseCliArgs, providerFromConfig, runCli } from '..'
 
@@ -71,13 +70,27 @@ describe('provider inference', () => {
 })
 
 describe('app build for a contract application', () => {
+	// Under this package, so the build's compile of the contract resolves `@fabrika/app`.
 	const withRoot = async (contract: boolean, run: (config: string, root: string) => Promise<void>): Promise<void> => {
-		const root = mkdtempSync(join(tmpdir(), 'fabrika-cli-'))
+		const root = mkdtempSync(join(import.meta.dir, '.tmp-cli-'))
 		const stderr = console.error
 		console.error = () => {}
 		try {
 			if (contract) {
-				writeFileSync(join(root, 'fabrika.contract.ts'), 'export {}\n')
+				mkdirSync(join(root, 'src'))
+				writeFileSync(
+					join(root, 'fabrika.contract.ts'),
+					[
+						"import { defineApp, defineVocabulary } from '@fabrika/app/contract'",
+						"const app = defineApp(defineVocabulary({ app: 'notes', dimensions: {}, actions: {}, roles: {} }))",
+						"export const contract = app.contract((c) => ({ health: c.health('/healthz') }))",
+						'',
+					].join('\n'),
+				)
+				writeFileSync(
+					join(root, 'src', 'app.ts'),
+					"import { serve } from '@fabrika/app/implement'\nimport { contract } from '../fabrika.contract'\n\nexport default serve(contract, { database: null })\n",
+				)
 			}
 			await run(join(root, 'fabrika.config.ts'), root)
 		} finally {
@@ -90,6 +103,7 @@ describe('app build for a contract application', () => {
 		await withRoot(true, async (config, root) => {
 			await runCli(['app', 'build', '--provider=cloudflare', `--config=${config}`])
 			expect(readFileSync(join(root, 'fabrika', 'entry.generated.ts'), 'utf8')).toBe(generatedEntry('cloudflare'))
+			expect(readFileSync(join(root, 'fabrika', 'contract.generated.ts'), 'utf8')).toContain('export const approvedContract: string = ')
 		})
 	})
 

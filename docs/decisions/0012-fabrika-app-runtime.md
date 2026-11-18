@@ -122,7 +122,8 @@ query are type errors at the endpoint's line.
   every shell module as its slice, so they never fetch, parse or run a module that only a handler imports. A
   `.handle` the slice cannot remove whole (a named function, a computed or wrapped spelling) is refused. `boot`
   refuses a compiled contract other than the approved `FABRIKA_CONTRACT_DIGEST`, which backs what the slice cannot
-  see.
+  see. On Cloudflare the build compiles it (`fabrika/contract.generated.ts`) and `boot` hashes and reads that text
+  instead of compiling inside the isolate.
 - The entrypoint is generated (`fabrika app build` writes `fabrika/entry.generated.ts`). Its runtime adapter
   ([ADR-0013](0013-explicit-runtime-adapter-entrypoints.md)) takes the framework's variables out of `process.env`
   before it imports the application, then calls `boot`, which binds the data layer and serves.

@@ -209,6 +209,7 @@ arguments and reports.
   `fabrika.contract.ts` sits next to the config: the Bun entrypoint on Zerops, then
   the provider's build; on Cloudflare the Worker entrypoint, which exports `FabrikaApplication`, and
   `fabrika/migrations.generated.ts` (the `.sql` files of `db/migrations`, which the object applies when it boots), and
+  `fabrika/contract.generated.ts` (the compiled contract, which the object reads instead of compiling), and
   nothing else. An application without a contract builds as before.
 - `app dev` (`src/app-dev.ts`) resolves no provider: it loads `src/app.ts` with `@fabrika/app/bun`'s
   `implementationAt` and serves it through `@fabrika/app/testing`'s `devKit` (the test kit and its stand-in IAM), on

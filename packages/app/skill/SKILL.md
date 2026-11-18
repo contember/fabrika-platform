@@ -264,7 +264,7 @@ Which promise the types, the checker, boot, the runtime or the approver keeps, a
   no `package.json`. Its tests run in the platform build, so they test its logic, without a keychain or a network.
 - Never log an error object, a request, headers or the environment.
 - Never edit a generated file (`src/db/schema.generated.ts`, the generated tests, `fabrika/entry.generated.ts`,
-  `fabrika/migrations.generated.ts`, `fabrika/connect/`) or a committed migration. Regenerate the file; write a new migration.
+  `fabrika/migrations.generated.ts`, `fabrika/contract.generated.ts`, `fabrika/connect/`) or a committed migration. Regenerate the file; write a new migration.
 
 ## Ask the human first
 

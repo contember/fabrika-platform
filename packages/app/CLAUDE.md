@@ -121,6 +121,7 @@ src/
     serve.ts          serveService: the dispatcher over planEndpoint
   build.ts            @fabrika/app/build — the generated entrypoint fabrika app build writes; on Cloudflare also
                       fabrika/migrations.generated.ts (db/migrations as a module: a Worker reads no file system)
+                      and fabrika/contract.generated.ts (the compiled contract, from build-contract-child.ts)
   build-recipe.ts     contractRecipe: a contract application's build, init, start and jobs in a Bun container, as
                       data a provider renders (re-exported by @fabrika/app/build). PLATFORM PROTOCOL: the
                       platform renders its own copy for older applications, so change it only additively
@@ -1102,8 +1103,10 @@ object directly over `bunSqliteStorage` (the IAM binding, the assets, the crash 
 
 - **The generated Cloudflare entry exports `FabrikaApplication` and the Worker.** `fabrika app build` writes
   `fabrika/entry.generated.ts` and `fabrika/migrations.generated.ts`, the `.sql` files of `db/migrations` by name with
-  their text verbatim, so their checksums stay the files'. `createContractWorker(load, { migrations })` registers the
-  loader; the Worker's `fetch` removes `X-Fabrika-Tick` (`TICK_HEADER`), sets the proxy secret and forwards the request
+  their text verbatim, so their checksums stay the files'. It also writes `fabrika/contract.generated.ts`, the canonical
+  text of the contract compiled in a child process; `boot` checks its digest and parses it instead of compiling the
+  contract, which would not fit a large contract's evaluated schemas and its compile in the isolate's 128 MB.
+  `createContractWorker(load, { migrations, approvedContract })` registers the loader; the Worker's `fetch` removes `X-Fabrika-Tick` (`TICK_HEADER`), sets the proxy secret and forwards the request
   to the object `FABRIKA_APPLICATION_OBJECT` names in `FABRIKA_APPLICATION` (`application` without the object
   variables, an older deploy); its `scheduled` sends the repair tick there with the `scheduledTime`. Without
   `FABRIKA_PROXY_SECRET` or the binding it forwards nothing.

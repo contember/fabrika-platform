@@ -634,7 +634,7 @@ through the platform proxy.
 
 At startup the application compares its contract digest with `FABRIKA_CONTRACT_DIGEST`, a literal in
 the execution descriptor ([ADR-0043](0043-validate-and-render-one-zerops-descriptor-meaning.md)). It
-refuses to start on a mismatch.
+refuses to start on a mismatch. On Cloudflare the digest is that of the contract the build compiled and bundled.
 
 Within one application's publish the order stays proxy, application, IAM. Because of the digest check that order is
 safe in both directions for a change of endpoint rules. During a switch, changed endpoints answer 503 and new endpoints
