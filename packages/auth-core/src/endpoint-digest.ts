@@ -106,7 +106,12 @@ function sortedCodeUnits(values: readonly string[]): string[] {
 
 /** The digest of the whole artifact, over its one canonical serialization. */
 export function contractDigest(artifact: ContractArtifact): string {
-	return digestOf(canonicalArtifactJson(artifact))
+	return canonicalContractDigest(canonicalArtifactJson(artifact))
+}
+
+/** `contractDigest` of the artifact whose canonical serialization (`canonicalArtifactJson`) `json` already is. */
+export function canonicalContractDigest(json: string): string {
+	return digestOf(json)
 }
 
 /**

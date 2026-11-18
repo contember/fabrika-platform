@@ -49,6 +49,8 @@ export interface ApplicationMigration {
 export interface ContractWorkerOptions {
 	/** The application's own SQLite migrations, applied as the bundle `app` after the framework's `fabrika`. */
 	readonly migrations?: readonly ApplicationMigration[]
+	/** The canonical text of the contract artifact the build compiled, which boot reads instead of compiling (`BootOptions`). */
+	readonly approvedContract?: string
 	/** Where the isolate hears of an unhandled rejection; the global `unhandledrejection` event by default. */
 	readonly rejections?: CrashEvents
 	/** What posts a report to Operations' ingest; `fetch` by default. */
@@ -329,6 +331,7 @@ async function bootApplication(
 		// The proxy Worker sets `X-Fabrika-Client-Ip` from `CF-Connecting-IP`, the visitor Cloudflare saw.
 		clientAddress: 'vouched',
 		projectWakes: (transaction) => projectWakes(setup, transaction),
+		...(setup.options.approvedContract === undefined ? {} : { approvedContract: setup.options.approvedContract }),
 		...(setup.options.operationsFetch === undefined ? {} : { operationsFetch: setup.options.operationsFetch }),
 	})
 	const booted: Booted = { app, migrates }

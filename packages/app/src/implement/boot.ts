@@ -1,9 +1,11 @@
 // `boot(app, { environment, iam })`: called once, by the generated entrypoint through its runtime adapter, after the
-// adapter captured the framework's variables and scrubbed them from the process. It compiles the contract, binds
-// every handler to its endpoint and refuses to start when anything declared cannot be served.
+// adapter captured the framework's variables and scrubbed them from the process. It reads the approved contract (the
+// artifact the build compiled, or compiles it), binds every handler to its endpoint and refuses to start when anything
+// declared cannot be served.
 
 import { IamMembership } from '@fabrika/auth'
 import {
+	canonicalContractDigest,
 	compileEndpointTable,
 	type ContractArtifact,
 	contractDigest,
@@ -38,6 +40,7 @@ import type { EmailProviderRegistry } from '@fabrika/email'
 import { builtinEmailProviders } from '@fabrika/email/providers'
 import { TokenVerifier } from '@fabrika/jwks'
 import type { FileObjectStore } from '@fabrika/platform'
+import { contractArtifactSchema } from '../contract/artifact-schema'
 import { compileContract } from '../contract/compile'
 import { exportDescription } from '../contract/connect'
 import { containersOf } from '../contract/containers'
@@ -91,6 +94,11 @@ export interface BootOptions {
 	/** The variables `captureEnvironment` took before the application's modules loaded. */
 	readonly environment: CapturedEnvironment
 	readonly iam: IamKeySource
+	/**
+	 * The canonical text of the contract artifact the build compiled (`fabrika/contract.generated.ts`). Boot checks its
+	 * digest against `FABRIKA_CONTRACT_DIGEST` and reads it instead of compiling the contract; without it, boot compiles.
+	 */
+	readonly approvedContract?: string
 	/** Serves the SPA mounts. Without it, a contract that declares one does not boot. */
 	readonly assets?: SpaAssets
 	/** The application's Postgres connection, which the Bun adapter opens. Without it, an application on `@fabrika/db` does not boot. */
@@ -249,10 +257,32 @@ function readFramework(framework: Readonly<Record<string, string>>, contractApp:
 	return { iamAppId, issuer: issuer ?? '', operationsOrigin }
 }
 
+/** The contract compiled from the evaluated one, which must be the approved one. */
+function compiledArtifact(app: ContractImplementation, framework: Readonly<Record<string, string>>, problems: string[]): ContractArtifact {
+	const artifact = compileContract(app.contract, app.database?.tables ?? {})
+	checkContractDigest(framework, contractDigest(artifact), problems)
+	return artifact
+}
+
+/** The artifact the build compiled, as its canonical text: the digest is taken over the text, which is then parsed. */
+function approvedArtifact(text: string, framework: Readonly<Record<string, string>>, problems: string[]): ContractArtifact {
+	checkContractDigest(framework, canonicalContractDigest(text), problems)
+	let json: unknown
+	try {
+		json = JSON.parse(text)
+	} catch {
+		throw new BootError([...problems, 'the bundled contract is not JSON; rebuild the application with `fabrika app build`'])
+	}
+	const parsed = contractArtifactSchema.safeParse(json)
+	if (!parsed.success) {
+		throw new BootError([...problems, 'the bundled contract is not a contract artifact; rebuild the application with `fabrika app build`'])
+	}
+	return parsed.data
+}
+
 /** The deploy was approved with one contract; this build must be that contract, or it does not start (ADR-0022 rule 5). */
-function checkContractDigest(framework: Readonly<Record<string, string>>, artifact: ContractArtifact, problems: string[]): void {
+function checkContractDigest(framework: Readonly<Record<string, string>>, actual: string, problems: string[]): void {
 	const expected = framework[FABRIKA_CONTRACT_DIGEST]?.trim() ?? ''
-	const actual = contractDigest(artifact)
 	if (expected === '') {
 		problems.push(`${FABRIKA_CONTRACT_DIGEST} is not set; it is the digest of the contract the deploy was approved with`)
 	} else if (expected !== actual) {
@@ -756,8 +786,9 @@ function bootOnce(app: ContractImplementation, options: BootOptions, binding: Bi
 	const terminalRpc = options.terminals === undefined ? undefined : platformFacility(options.terminals)
 	const workloadTokens = options.workloadTokens === undefined ? undefined : platformFacility(options.workloadTokens)
 	const variables = readFramework(options.environment.framework, app.contract.vocabulary.app, problems)
-	const artifact = compileContract(app.contract, app.database?.tables ?? {})
-	checkContractDigest(options.environment.framework, artifact, problems)
+	const artifact = options.approvedContract === undefined
+		? compiledArtifact(app, options.environment.framework, problems)
+		: approvedArtifact(options.approvedContract, options.environment.framework, problems)
 	const proxySecret = readProxySecret(options.environment.framework, options.requireProxySecret === true, problems)
 	const tokens = new SignedTokens(runtimePurposes(app.contract, artifact), readTokenKeys(options.environment.framework, artifact, problems))
 	const origin = readAppOrigin(options.environment.framework, problems)
