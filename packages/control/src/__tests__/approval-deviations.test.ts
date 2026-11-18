@@ -348,7 +348,7 @@ describe('the files a snapshot may read', () => {
 	}
 
 	test('a contract over the former 512 KiB limit is read', async () => {
-		const snapshot = await snapshotOf(padded([1024 * 1024]))
+		const snapshot = await snapshotOf(padded([400 * 1024, 400 * 1024]))
 		expect(snapshot.contract?.app).toBe('notes')
 	})
 

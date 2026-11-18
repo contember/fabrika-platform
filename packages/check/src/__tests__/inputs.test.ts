@@ -1,7 +1,7 @@
 // The files a caller reads at a commit so that the reader sees exactly what it would see in the whole tree.
 
 import { describe, expect, test } from 'bun:test'
-import { contractReaderInputs, ContractSourceError, readContractSource } from '../contract'
+import { CONTRACT_LIMITS, contractReaderInputs, ContractSourceError, readContractSource } from '../contract'
 import { CLEAN_APPLICATION } from './helpers'
 
 /** Read a commit the way Control does: ask, read the answer, ask again until nothing is missing. */
@@ -64,6 +64,15 @@ describe('contractReaderInputs', () => {
 	test('a configuration that redirects a trusted package is read and refused', () => {
 		const tree = { ...CLEAN_APPLICATION, 'src/schemas/tsconfig.json': '{ "compilerOptions": { "paths": { "zod/*": ["./fake/*"] } } }' }
 		expect(() => readContractSource(readAsControl(tree))).toThrow(ContractSourceError)
+	})
+
+	test('a module over the limit of one module is not parsed for its imports, and the reader refuses it', () => {
+		const large = `import { Extra } from './extra'\nexport const Note = Extra\n// ${'x'.repeat(CONTRACT_LIMITS.moduleBytes)}\n`
+		const tree = { ...CLEAN_APPLICATION, 'src/schemas/notes.ts': large, 'src/schemas/extra.ts': 'export const Extra = 1\n' }
+		const files = readAsControl(tree)
+		expect(files.has('src/schemas/notes.ts')).toBe(true)
+		expect(files.has('src/schemas/extra.ts')).toBe(false)
+		expect(() => readContractSource(files)).toThrow(`over ${CONTRACT_LIMITS.moduleBytes} for one module`)
 	})
 
 	test('an application without a contract needs no file', () => {
