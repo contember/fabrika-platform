@@ -136,18 +136,16 @@ describe('the sequence', () => {
 		const spine = fixture.zerops.calls.filter((call) =>
 			call.startsWith('import:') || call.startsWith('token:') || call.startsWith('deploy:') || call.startsWith('subdomain:')
 		)
-		expect(spine).toEqual([
+		expect(spine.slice(0, 3)).toEqual([
 			'import:proj-1',
 			'token:client-1',
 			// Pass 1: the proxy alone, so it publishes the ports its public hostnames are named after.
 			'deploy:proxy',
-			// Pass 2, handed to `deployPlatform`: the order is a security property (ADR-0027).
-			'deploy:iam',
-			'deploy:operations',
-			'deploy:proxy',
-			'deploy:control',
-			'subdomain:proxy',
 		])
+		// Pass 2, handed to `deployPlatform`: iam and operations deploy concurrently, so their order is not fixed;
+		// the proxy after both, then control, is a security property (ADR-0027).
+		expect([...spine.slice(3, 5)].sort()).toEqual(['deploy:iam', 'deploy:operations'])
+		expect(spine.slice(5)).toEqual(['deploy:proxy', 'deploy:control', 'subdomain:proxy'])
 	})
 
 	test("pass 2 leaves the new database's backups hourly", async () => {
@@ -836,12 +834,10 @@ describe('every outward step is confirmed', () => {
 			`env:iam:${IAM_PROXY_SECRET_VARIABLE}`,
 			`env:proxy:${IAM_PROXY_SECRET_VARIABLE}`,
 		])
-		expect(fixture.zerops.calls.filter((call) => call.startsWith('deploy:'))).toEqual([
-			'deploy:iam',
-			'deploy:operations',
-			'deploy:proxy',
-			'deploy:control',
-		])
+		const deploys = fixture.zerops.calls.filter((call) => call.startsWith('deploy:'))
+		// iam and operations deploy concurrently, so only the pair is fixed, not its order.
+		expect([...deploys.slice(0, 2)].sort()).toEqual(['deploy:iam', 'deploy:operations'])
+		expect(deploys.slice(2)).toEqual(['deploy:proxy', 'deploy:control'])
 		expect(writtenSecrets(fixture.zerops)).toEqual(credentials)
 		expect(fixture.reconciled[0]?.adminKey).toBe(iamAdminKey)
 	})
