@@ -267,8 +267,11 @@ export function isDataSchema(value: unknown): value is DataSchema {
 
 // ── Building zod ────────────────────────────────────────────────────────────────────────────────
 
-/** How many built schemas stay cached: each holds the zod of one schema something validated with. */
-export const BUILT_SCHEMAS = 256
+/**
+ * How many built schemas stay cached: each holds the zod of one schema something validated with, and an endpoint uses
+ * two. Sized so a runtime that serves every endpoint of a large contract stays far below a Worker's 128 MB.
+ */
+export const BUILT_SCHEMAS = 64
 
 const built = new Map<DataSchema, z.ZodType>()
 
