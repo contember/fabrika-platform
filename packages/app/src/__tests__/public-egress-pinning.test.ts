@@ -1,8 +1,9 @@
-// Public egress (ADR-0075) sends each hop to the address it checked, with the checked name as `Host` and
-// `keepalive: false`, so a name that rebinds between the check and the connection reaches nothing new. That holds only
-// while Bun's `fetch` sends that `Host`, checks the certificate against it, and, under `keepalive: false`, takes no
-// pooled connection, which Bun keys by address and port, not by name. These tests hold the pinned Bun release to that
-// against a local server. The TLS half needs `openssl` on PATH for its throwaway certificate.
+// Public egress (ADR-0075) sends each hop to the address it checked, with the checked name as `Host` and TLS
+// `serverName` and `keepalive: false`, so a name that rebinds between the check and the connection reaches nothing new.
+// That holds only while Bun's `fetch` sends that `Host`, checks the certificate against the `serverName` (since Bun 1.4
+// no longer against `Host`), and, under `keepalive: false`, takes no pooled connection, which Bun keys by address and
+// port, not by name. These tests hold the pinned Bun release to that against a local server. The TLS half needs
+// `openssl` on PATH for its throwaway certificate.
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
@@ -65,15 +66,19 @@ describe('what a pinned hop relies on in Bun', () => {
 
 		const failure = async (work: () => Promise<Response>): Promise<string> => await work().then(() => '', (error: unknown) => String(error))
 
-		test('the certificate is checked against the Host: the checked name passes', async () => {
-			const response = await fetch(`https://127.0.0.1:${server?.port}/`, { headers: new Headers({ host: NAME }), tls: { ca } })
+		test('the certificate is checked against the serverName: the checked name passes', async () => {
+			const response = await fetch(`https://127.0.0.1:${server?.port}/`, { headers: new Headers({ host: NAME }), tls: { ca, serverName: NAME } })
 			expect(await response.text()).toBe(NAME)
 		})
 
 		test('another name, or none, fails the certificate check, though a connection to the address is pooled', async () => {
 			const url = `https://127.0.0.1:${server?.port}/`
-			await (await fetch(url, { headers: new Headers({ host: NAME }), tls: { ca } })).text()
-			expect(await failure(() => fetch(url, { headers: new Headers({ host: 'other.example.com' }), keepalive: false, tls: { ca } })))
+			await (await fetch(url, { headers: new Headers({ host: NAME }), tls: { ca, serverName: NAME } })).text()
+			const other = 'other.example.com'
+			expect(await failure(() => fetch(url, { headers: new Headers({ host: other }), keepalive: false, tls: { ca, serverName: other } })))
+				.toContain('ERR_TLS_CERT_ALTNAME_INVALID')
+			// The checked name as Host does not stand in for the serverName.
+			expect(await failure(() => fetch(url, { headers: new Headers({ host: NAME }), keepalive: false, tls: { ca, serverName: other } })))
 				.toContain('ERR_TLS_CERT_ALTNAME_INVALID')
 			expect(await failure(() => fetch(url, { keepalive: false, tls: { ca } }))).not.toBe('')
 		})

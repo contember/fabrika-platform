@@ -463,7 +463,7 @@ describe.skipIf(!hasPostgres)('codegen against real Postgres', () => {
 		expect(typeof row === 'object' && row !== null ? Reflect.get(row, 'meta') : undefined).toEqual({ a: [1, 'x', null] })
 	})
 
-	test("pins Bun.SQL's jsonb binding, unprepared as the layer runs it: JSON text binds as its value, an object is refused", async () => {
+	test("pins Bun.SQL's jsonb binding, unprepared as the layer runs it: JSON text binds as its value, an object as its JSON", async () => {
 		const schema = await migrated('CREATE TABLE docs (id int4 PRIMARY KEY, body jsonb NOT NULL);')
 		const sql = new SQL({ url, adapter: 'postgres', max: 1, prepare: false })
 		try {
@@ -483,12 +483,12 @@ describe.skipIf(!hasPostgres)('codegen against real Postgres', () => {
 				// A top-level JSON null decodes as null, as SQL NULL does.
 				{ id: 4, body: null, kind: 'null' },
 			])
-			// Settled into a plain promise first: `expect(...).rejects` spins on Bun.SQL's lazy query.
-			const refused = await sql.unsafe(`INSERT INTO ${schema}.docs (id, body) VALUES (9, $1)`, [{ a: 1 }]).then(
-				() => undefined,
-				(error: unknown) => error,
+			// Since Bun 1.4 the driver serializes an object itself; `ctx.sql` refuses one before it (`sql.ts`), so a JSON
+			// column is written only through the layer's checked text.
+			const stored = z.array(z.object({ text: z.string() })).parse(
+				await sql.unsafe(`INSERT INTO ${schema}.docs (id, body) VALUES (9, $1) RETURNING body::text AS text`, [{ a: 1 }]),
 			)
-			expect(String(refused)).toContain('invalid input syntax for type json')
+			expect(stored).toEqual([{ text: '{"a": 1}' }])
 		} finally {
 			await sql.close()
 		}

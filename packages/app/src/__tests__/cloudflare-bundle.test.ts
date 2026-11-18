@@ -9,7 +9,7 @@ import { join } from 'node:path'
 const GUARDED = ['env']
 
 /** The modules outside `@fabrika/app` whose `AbortSignal.timeout` the bundle still carries: this list only shrinks. */
-const UNCLEARED = ['../auth/src/rpc-http.ts', '../email/src/http.ts']
+const UNCLEARED = ['../email/src/http.ts']
 
 /** The bundle of the Cloudflare fixture application, as `bun build` prints it, its module headers relative to this package. */
 function bundle(): string {

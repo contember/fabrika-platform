@@ -72,8 +72,9 @@ An application pins an exact release inside its installation's window. The MCP a
 - The runner image copies it and passes it to the Bun installer.
 - Both generated sidecar workflows read it from the checkout of the pinned `fabrika.ref`, so an installation installs the Bun its tag was released with. A newer Bun can rewrite the lockfile, which `bun install --frozen-lockfile` refuses. A tag up to v0.4.3 has no `.bun-version`; the workflow then installs 1.3.14, the release all of those tags were built with. The workflows never install `latest`.
 - The local stack's `oven/bun:<version>-alpine` images (`packages/local-stack/compose.yaml` and `app-image/Dockerfile`) repeat it, because an image tag cannot read a file.
+- The dev sandbox base (`packages/provider-zerops/sandbox/Dockerfile`) repeats it as `oven/bun:<version>-alpine@sha256:<digest>`, pinned to the linux/amd64 image digest Docker Hub lists for that tag (not the multi-platform index digest). A new digest changes the hash in the base's name, so the sandbox host builds a new base.
 
-To move to another Bun, change `.bun-version` and the two local-stack image tags, run `bun install` so the lockfile is the one that Bun writes, and land it before the release it should ship with. `scripts/__tests__/bun-version.test.ts` fails when a CI step, the runner image or a local-stack image does not follow the file.
+To move to another Bun, change `.bun-version`, the two local-stack image tags and the sandbox base image with its digest, run `bun install` so the lockfile is the one that Bun writes, and land it before the release it should ship with. `scripts/__tests__/bun-version.test.ts` fails when a CI step, the runner image, a local-stack image or the sandbox base does not follow the file.
 
 The Zerops platform services build and run on the `alpine/bun@1.3` base. Zerops resolves that alias to the newest concrete 1.3 release in its catalog ([`zerops-platform.md`](zerops-platform.md)), and offers no way to name `.bun-version` there.
 

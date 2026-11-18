@@ -144,8 +144,8 @@ export function platformCall<T>(work: () => T): T {
 	return scope.exit(work)
 }
 
-/** A hop's `init`: the standard fields, and Bun's `decompress`, which another runtime ignores. */
-type HopInit = RequestInit & { readonly decompress?: boolean }
+/** A hop's `init`: the standard fields, and Bun's `decompress` and `tls`, which another runtime ignores. */
+type HopInit = RequestInit & { readonly decompress?: boolean; readonly tls?: { readonly serverName: string } }
 
 type Fetch = (input: string, init: HopInit) => Promise<Response>
 
@@ -325,8 +325,9 @@ async function follow(send: Fetch, site: string, rules: PublicEgressRules, reque
 			signal: AbortSignal.any([signal, dropped.signal]),
 			// Bun decompresses natively and unbounded: the guard asks for `identity` and reads the bytes as they came.
 			decompress: false,
-			// Bun pools connections by address and port: a pooled one was checked against another name's certificate.
-			...(address === null ? {} : { keepalive: false }),
+			// Bun checks the certificate against `serverName`, not `Host`, and pools connections by address and port: a
+			// pooled one was checked against another name's certificate.
+			...(address === null ? {} : { keepalive: false, tls: { serverName: normalizedHost(url.hostname) } }),
 		})
 		const location = REDIRECTS.has(response.status) ? response.headers.get('location') : null
 		if (location === null || mode === 'manual') {
@@ -397,8 +398,8 @@ function pinnedUrl(url: URL, address: string): string {
 }
 
 /**
- * A hop's headers: for a pinned hop, `Host` names the checked host, which Bun sends and checks the server's certificate
- * against (`public-egress-pinning.test.ts` holds the pinned Bun release to it).
+ * A hop's headers: for a pinned hop, `Host` names the checked host, which Bun sends; `follow` names it as the TLS
+ * `serverName` too (`public-egress-pinning.test.ts` holds the pinned Bun release to both).
  */
 function hopHeaders(headers: Headers, url: URL, address: string | null): Headers {
 	const hop = new Headers(headers)

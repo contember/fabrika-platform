@@ -83,11 +83,11 @@ Before each hop, and so again after each redirect:
   carry an IPv4 address it cannot vouch for, and Azure's host endpoint `168.63.129.16`, a public address that answers
   inside the VM. A Worker passes no resolver: an answer it checked would not pin its `fetch`.
 - **Then connects to the address it checked.** A hop the resolver admitted is sent to the checked address (IPv4 first:
-  a container without an IPv6 route still connects), with the checked name as `Host` and `keepalive: false`. Bun
-  sends that `Host`, checks the server's certificate against it, and under `keepalive: false` takes no pooled
-  connection; Bun keys its pool by address and port, so a pooled connection may have been checked against another
-  name's certificate. The name is resolved once per hop, so an answer that changes after the check (DNS rebinding)
-  reaches nothing. `public-egress-pinning.test.ts` holds the pinned Bun release to all three behaviours.
+  a container without an IPv6 route still connects), with the checked name as `Host` and as the TLS `serverName`, and
+  `keepalive: false`. Bun sends that `Host`, checks the server's certificate against the `serverName`, and under
+  `keepalive: false` takes no pooled connection; Bun keys its pool by address and port, so a pooled connection may
+  have been checked against another name's certificate. The name is resolved once per hop, so an answer that changes
+  after the check (DNS rebinding) reaches nothing. `public-egress-pinning.test.ts` holds the pinned Bun release to all three behaviours.
 
 A refusal is `capability_refused: refused_egress`, and the job fails with it.
 
