@@ -353,9 +353,26 @@ describe('the files a snapshot may read', () => {
 	})
 
 	test('modules a round names that together pass the total are refused before they are parsed', async () => {
-		const each = Math.floor(SNAPSHOT_LIMITS.readerFileBytes * 0.75)
-		expect(each * 3).toBeGreaterThan(SNAPSHOT_LIMITS.readerTotalChars)
-		await expect(snapshotOf(padded([each, each, each]))).rejects.toEqual(new SnapshotRefused('contract-too-large'))
+		const sizes = Array.from({ length: 11 }, () => Math.floor(SNAPSHOT_LIMITS.readerFileBytes * 0.75))
+		expect(sizes.reduce((total, size) => total + size, 0)).toBeGreaterThan(SNAPSHOT_LIMITS.readerTotalChars)
+		await expect(snapshotOf(padded(sizes))).rejects.toEqual(new SnapshotRefused('contract-too-large'))
+	})
+
+	test('a module over the limit of one module is not read, so no reader of the window parses it', async () => {
+		const files = padded([SNAPSHOT_LIMITS.readerFileBytes + 1])
+		const commit = await memoryCommits(files).open({ repoUrl: 'github.com/acme/notes', commitSha: COMMIT, signal: new AbortController().signal })
+		const reads: string[] = []
+		const bounded = {
+			paths: commit.paths,
+			read: async (path: string, maxBytes: number): Promise<string> => {
+				const text = await commit.read(path, maxBytes)
+				if (new TextEncoder().encode(text).byteLength > maxBytes) throw new Error(`${path} is over ${maxBytes} bytes`)
+				reads.push(path)
+				return text
+			},
+		}
+		await expect(readAccessSnapshot(bounded, '', 'notes')).rejects.toThrow('src/pad0.ts is over 524288 bytes')
+		expect(reads).not.toContain('src/pad0.ts')
 	})
 
 	test('are the reader inputs and the migrations under the application root, nothing beside it', () => {

@@ -476,6 +476,18 @@ describe('the resource budget', () => {
 		expect(budget[0]).toMatch(/^fabrika\.contract\.ts fabrika\.contract\.ts and its modules hold 2\d{5} syntax nodes, over the budget of 200000$/)
 	})
 
+	test('the checker refuses a tables graph over the budget, as the reader does', async () => {
+		const tables = `export const tables = 1\n// ${'x'.repeat(CONTRACT_LIMITS.moduleBytes)}\n`
+		const bytes = new TextEncoder().encode(tables).byteLength
+		const findings = await check({ 'fabrika.contract.ts': BASE, 'src/schemas.ts': SCHEMAS, 'src/db/tables.ts': tables })
+		expect(findings.filter((finding) => finding.rule === 'contract').map((finding) => `${finding.file} ${finding.message}`)).toEqual([
+			`src/db/tables.ts the module is ${bytes} bytes, over ${CONTRACT_LIMITS.moduleBytes} for one module`,
+		])
+		expect(() => readTablesSource(new Map([...application(BASE), ['src/db/tables.ts', tables]]))).toThrow(
+			`over ${CONTRACT_LIMITS.moduleBytes} for one module`,
+		)
+	})
+
 	test('top-level type declarations are not counted against the node budget', () => {
 		const types = `export type Dense = [${'0,'.repeat(CONTRACT_LIMITS.astNodes)}]\n`
 		expect(readContractSource(application(BASE, SCHEMAS + types))).toEqual(readContractSource(application(BASE)))

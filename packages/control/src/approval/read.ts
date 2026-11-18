@@ -23,7 +23,8 @@ import type { AccessSnapshot, MigrationEntry } from './snapshot'
 export const SNAPSHOT_LIMITS = {
 	readerFiles: 256,
 	readerRounds: 32,
-	readerFileBytes: CONTRACT_LIMITS.sourceBytes,
+	/** One module's limit, which every reader of the window holds: an older reader parses what it is given before it counts. */
+	readerFileBytes: CONTRACT_LIMITS.moduleBytes,
 	/**
 	 * The reader's inputs held in memory together: its modules, which the reader bounds by `sourceBytes` only once it
 	 * parses them, and their configuration files. A round may name many modules at once.

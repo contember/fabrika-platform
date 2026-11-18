@@ -81,7 +81,7 @@ describe("a run's snapshot read from one archive pass", () => {
 			signal: new AbortController().signal,
 		})
 
-		expect(await commit.read('db/migrations/0002.sql', SNAPSHOT_LIMITS.readerFileBytes)).toHaveLength(2 * 1024 * 1024)
+		expect(await commit.read('db/migrations/0002.sql', SNAPSHOT_LIMITS.lockfileBytes)).toHaveLength(2 * 1024 * 1024)
 		expect(requests).toHaveLength(2)
 	})
 

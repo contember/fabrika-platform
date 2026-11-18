@@ -305,14 +305,14 @@ platform build controls.
 
 `CONTRACT_LIMITS` (`limits.ts`, exported from `@fabrika/check/contract`), each enforced before the next step runs:
 
-| Limit         | Value   | Enforced                                                                                                  |
-| ------------- | ------- | --------------------------------------------------------------------------------------------------------- |
-| `sourceBytes` | 2 MiB   | UTF-8 bytes of the contract graph, before each module is parsed                                           |
-| `moduleBytes` | 512 KiB | UTF-8 bytes of one module, before it is parsed; `contractReaderInputs` does not parse a larger one either |
-| `astNodes`    | 200 000 | syntax nodes of the contract graph, top-level type declarations left out, after each module is parsed     |
-| `astDepth`    | 128     | syntax nesting of each module, measured without recursion, before any rule walks it                       |
-| `schemaNodes` | 20 000  | schema nodes with shared schemas expanded: per schema while built, per placement summed                   |
-| `schemaDepth` | 32      | nesting of one schema, while it is built                                                                  |
+| Limit         | Value   | Enforced                                                                                                                    |
+| ------------- | ------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `sourceBytes` | 2 MiB   | UTF-8 bytes of the contract graph, before each module is parsed                                                             |
+| `moduleBytes` | 512 KiB | UTF-8 bytes of one module, before it is parsed; `contractReaderInputs` does not parse a larger one either                   |
+| `astNodes`    | 200 000 | syntax nodes of each graph (the contract's, the tables'), top-level type declarations left out, after each module is parsed |
+| `astDepth`    | 128     | syntax nesting of each module, measured without recursion, before any rule walks it                                         |
+| `schemaNodes` | 20 000  | schema nodes with shared schemas expanded: per schema while built, per placement summed                                     |
+| `schemaDepth` | 32      | nesting of one schema, while it is built                                                                                    |
 
 A schema value carries its expanded node count, so a const reused at every level (`S1 = { left: S0, right: S0 }`,
 …) is refused at the level that crosses the budget, without expanding it.
