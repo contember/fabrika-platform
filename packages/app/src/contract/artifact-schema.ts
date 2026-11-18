@@ -65,7 +65,7 @@ const fileKindName = name.refine(
 /** IAM's own role keys win over an application role of the same key at resolution. */
 const roleKey = name.refine((key) => !BUILTIN_ROLE_KEYS.includes(key), 'a built-in IAM role key is not a contract role name')
 
-const stringShape: z.ZodType<StringShape> = z.strictObject({
+const stringShape = z.strictObject({
 	type: z.literal('string'),
 	format: z.enum(['uuid', 'email', 'url', 'datetime', 'date', 'time', 'duration']).nullable(),
 	minLength: z.int().nonnegative().nullable(),
@@ -74,9 +74,9 @@ const stringShape: z.ZodType<StringShape> = z.strictObject({
 	startsWith: z.string().nullable(),
 	endsWith: z.string().nullable(),
 	includes: z.string().nullable(),
-})
+}) satisfies z.ZodType<StringShape>
 
-const numberShape: z.ZodType<NumberShape> = z.strictObject({
+const numberShape = z.strictObject({
 	type: z.literal('number'),
 	int: z.boolean(),
 	min: z.number().nullable(),
@@ -84,11 +84,11 @@ const numberShape: z.ZodType<NumberShape> = z.strictObject({
 	max: z.number().nullable(),
 	exclusiveMax: z.boolean(),
 	multipleOf: z.number().positive().nullable(),
-})
+}) satisfies z.ZodType<NumberShape>
 
-/** A `SchemaShape` read back as JSON. */
+/** A `SchemaShape` read back as JSON, dispatched on its `type`: one branch per node, never a trial of each. */
 export const schemaShapeSchema: z.ZodType<SchemaShape> = z.lazy(() =>
-	z.union([
+	z.discriminatedUnion('type', [
 		stringShape,
 		numberShape,
 		z.strictObject({ type: z.enum(['boolean', 'null']) }),
@@ -106,22 +106,22 @@ export const schemaShapeSchema: z.ZodType<SchemaShape> = z.lazy(() =>
 	])
 )
 
-const arrayShape: z.ZodType<ArrayShape> = z.lazy(() =>
-	z.strictObject({
-		type: z.literal('array'),
-		items: schemaShapeSchema,
-		minItems: z.int().nonnegative().nullable(),
-		maxItems: z.int().nonnegative().nullable(),
-	})
-)
+const arrayShape = z.strictObject({
+	type: z.literal('array'),
+	items: schemaShapeSchema,
+	minItems: z.int().nonnegative().nullable(),
+	maxItems: z.int().nonnegative().nullable(),
+}) satisfies z.ZodType<ArrayShape>
 
-const tupleShape: z.ZodType<TupleShape> = z.lazy(() =>
-	z.strictObject({ type: z.literal('tuple'), items: z.array(schemaShapeSchema), rest: schemaShapeSchema.nullable() })
-)
+const tupleShape = z.strictObject({
+	type: z.literal('tuple'),
+	items: z.array(schemaShapeSchema),
+	rest: schemaShapeSchema.nullable(),
+}) satisfies z.ZodType<
+	TupleShape
+>
 
-const recordShape: z.ZodType<RecordShape> = z.lazy(() =>
-	z.strictObject({ type: z.literal('record'), key: schemaShapeSchema, value: schemaShapeSchema })
-)
+const recordShape = z.strictObject({ type: z.literal('record'), key: schemaShapeSchema, value: schemaShapeSchema }) satisfies z.ZodType<RecordShape>
 
 const attachmentShape: z.ZodType<AttachmentShape> = z.strictObject({
 	type: z.literal('attachment'),
