@@ -4,6 +4,7 @@
 import type { ContractArtifact, SchemaShape, TablePolicyArtifact } from '@fabrika/auth-core'
 import { isTables, tablePolicies, type Tables } from '@fabrika/db/tables'
 import { z } from 'zod/v4'
+import { DataSchema } from '../schema/data-schema'
 import { attachmentOf } from './attachment'
 import { buildArtifact } from './build'
 import {
@@ -173,7 +174,7 @@ class SchemaReader {
 	}
 }
 
-/** Whether `value` is a zod schema: what a contract writes where a schema stands. */
+/** Whether `value` is a schema, zod or held as data: what a contract writes where a schema stands. */
 function isSchema(value: unknown): value is Schema {
-	return value instanceof z.ZodType
+	return value instanceof z.ZodType || value instanceof DataSchema
 }

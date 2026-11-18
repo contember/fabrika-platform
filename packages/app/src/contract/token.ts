@@ -4,7 +4,7 @@
 // handler the purpose's typed claims. A token is single-purpose and no credential: it opens no mount.
 
 import { z } from 'zod/v4'
-import type { InputSchema, NotLoose, Schema } from './define'
+import type { InputSchema, NotLoose, Schema, SchemaInput, SchemaOutput } from './define'
 
 const SIGNED_TOKEN = Symbol('fabrika.signedToken')
 
@@ -77,7 +77,8 @@ export type TokenPurposeOf<V> = V extends { readonly [z.core.$brand]: infer B } 
 /** One field as the handler holds it: a signed token as the claims of its purpose, any other field as it is. */
 type ClaimsField<V, T> = [TokenPurposeOf<NonNullable<V>>] extends [never] ? V
 	:
-		| (TokenPurposeOf<NonNullable<V>> extends keyof T ? T[TokenPurposeOf<NonNullable<V>>] extends TokenPurpose<infer C> ? z.output<C> : never : never)
+		| (TokenPurposeOf<NonNullable<V>> extends keyof T ? T[TokenPurposeOf<NonNullable<V>>] extends TokenPurpose<infer C> ? SchemaOutput<C> : never
+			: never)
 		| (undefined extends V ? undefined : never)
 
 /** An input as its handler receives it: each signed token field replaced by the verified claims of its purpose. */
@@ -85,5 +86,5 @@ export type WithClaims<In, T> = [keyof In] extends [never] ? In : { readonly [F 
 
 /** `ctx.tokens` of a site that declares `signs`: a token of one of those purposes, valid for `days`. */
 export interface TokenSigning<T extends TokenPurposes, S extends string> {
-	sign<const P extends S & keyof T & string>(purpose: P, claims: z.input<T[P]['claims']>, options: { readonly days: number }): string
+	sign<const P extends S & keyof T & string>(purpose: P, claims: SchemaInput<T[P]['claims']>, options: { readonly days: number }): string
 }

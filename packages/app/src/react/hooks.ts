@@ -5,7 +5,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { z } from 'zod/v4'
 import type { AttachmentProcedure, DownloadedFile, DownloadInput, FileProcedure } from '../client/contract'
-import type { Schema } from '../contract/define'
+import type { Schema, SchemaOutput } from '../contract/define'
+import { zodOf } from '../schema/data-schema'
 import { type FabrikaError, toFabrikaError } from './errors'
 import { parentOf, prefixOf, useFabrika } from './provider'
 import type { PagesEntry, QueryEntry } from './store'
@@ -29,8 +30,8 @@ const IDLE = Object.freeze({ status: 'idle', data: undefined, error: null, fetch
 const NO_ENTRY = { subscribe: () => () => {}, snapshot: null }
 
 /** An answer the cache holds, read back through the output schema; a value it refuses is an error, never a cast. */
-function readBack<O extends Schema>(schema: O, value: unknown): { readonly ok: true; readonly data: z.output<O> } | { readonly ok: false } {
-	const parsed = z.safeParse(schema, value)
+function readBack<O extends Schema>(schema: O, value: unknown): { readonly ok: true; readonly data: SchemaOutput<O> } | { readonly ok: false } {
+	const parsed = z.safeParse(zodOf(schema), value)
 	return parsed.success ? { ok: true, data: parsed.data } : { ok: false }
 }
 
@@ -58,17 +59,17 @@ export interface QueryOptions {
 export function useQuery<O extends Schema>(
 	procedure: TypedProcedure<Record<never, never> | undefined, O>,
 	input?: typeof skip,
-): QueryState<z.output<O>>
+): QueryState<SchemaOutput<O>>
 export function useQuery<I, O extends Schema>(
 	procedure: TypedProcedure<I, O>,
 	input: I | typeof skip,
 	options?: QueryOptions,
-): QueryState<z.output<O>>
+): QueryState<SchemaOutput<O>>
 export function useQuery<I, O extends Schema>(
 	procedure: TypedProcedure<I, O>,
 	input?: I | typeof skip,
 	options: QueryOptions = {},
-): QueryState<z.output<O>> {
+): QueryState<SchemaOutput<O>> {
 	const fabrika = useFabrika('useQuery')
 	const target = useMemo(() => fabrika.target(procedure, 'useQuery'), [fabrika, procedure])
 	if (target.node.procedure?.type === 'mutation') throw new Error(`useQuery: '${target.id}' is a mutation; use useMutation`)
@@ -80,7 +81,7 @@ export function useQuery<I, O extends Schema>(
 	const snapshot = useSyncExternalStore((listener) => source.subscribe(listener), () => source.snapshot, () => source.snapshot)
 	useLoad(entry)
 	const refetch = useCallback(() => entry?.load() ?? Promise.resolve(), [entry])
-	const state = useMemo((): QueryState<z.output<O>> => {
+	const state = useMemo((): QueryState<SchemaOutput<O>> => {
 		if (snapshot === null) return IDLE
 		const fetching = snapshot.fetching
 		if (snapshot.status === 'loading') return { status: 'loading', data: undefined, error: null, fetching, refetch }
@@ -92,7 +93,7 @@ export function useQuery<I, O extends Schema>(
 			? { status: 'loading', data: undefined, error: null, fetching, refetch }
 			: { status: 'success', data, error: null, fetching, refetch }
 	}, [snapshot, procedure, refetch])
-	const previous = useRef<z.output<O> | undefined>(undefined)
+	const previous = useRef<SchemaOutput<O> | undefined>(undefined)
 	useEffect(() => {
 		if (state.status === 'success') previous.current = state.data
 	}, [state])
@@ -246,11 +247,11 @@ function useRun<I, T>(run: (input: I) => Promise<T>, after: () => Promise<void>,
  */
 export function useMutation<I, O extends Schema>(
 	procedure: TypedProcedure<I, O>,
-	options: MutationOptions<z.output<O>> = {},
-): MutationState<InputArgument<I>, z.output<O>> {
+	options: MutationOptions<SchemaOutput<O>> = {},
+): MutationState<InputArgument<I>, SchemaOutput<O>> {
 	const fabrika = useFabrika('useMutation')
 	const target = useMemo(() => fabrika.target(procedure, 'useMutation'), [fabrika, procedure])
-	const run = useCallback(async (input: InputArgument<I>): Promise<z.output<O>> => {
+	const run = useCallback(async (input: InputArgument<I>): Promise<SchemaOutput<O>> => {
 		const read = readBack(procedure.output, await target.run(input ?? undefined))
 		if (!read.ok) throw new Error(`'${target.id}' answered a value its output schema refuses`)
 		return read.data

@@ -5,7 +5,12 @@
 // `YYYY-MM-DD` text from the data layer.
 
 import { z } from 'zod/v4'
+import type { SchemaInput, SchemaOutput } from './contract/define'
 import { project } from './implement/project'
+import { type DataObject, zodOf } from './schema/data-schema'
+
+/** An object schema: a zod one, or one held as data. */
+type ObjectSchema = z.ZodObject | DataObject<z.core.$ZodShape, z.core.$ZodObjectConfig>
 
 /** `companyId` → `company_id`: the column a field is read from. */
 export type Snake<S extends string> = S extends `${infer Head}${infer Tail}`
@@ -16,7 +21,7 @@ export type Snake<S extends string> = S extends `${infer Head}${infer Tail}`
 type Widened<V> = V extends string ? string | Date : V
 
 /** The row `fromRow` takes for `S`: one column per declared field; any other column is allowed and dropped. */
-export type RowInput<S extends z.ZodObject> = { readonly [K in keyof z.input<S> as Snake<K & string>]: Widened<z.input<S>[K]> }
+export type RowInput<S extends ObjectSchema> = { readonly [K in keyof SchemaInput<S> as Snake<K & string>]: Widened<SchemaInput<S>[K]> }
 
 function camel(column: string): string {
 	return column.replace(/_([a-z0-9])/g, (_match, next: string) => next.toUpperCase())
@@ -35,19 +40,20 @@ function dateText(schema: z.ZodObject, field: string, value: Date): string {
 }
 
 /** The row as `schema`'s output; a row the schema refuses throws, as a handler's bug. */
-export function fromRow<const S extends z.ZodObject>(schema: S, row: RowInput<S>): z.output<S> {
+export function fromRow<const S extends ObjectSchema>(schema: S, row: RowInput<S>): SchemaOutput<S> {
+	const object = zodOf(schema)
 	const fields: Record<string, unknown> = {}
 	for (const [column, value] of Object.entries(row)) {
 		const field = camel(column)
-		Object.defineProperty(fields, field, { value: value instanceof Date ? dateText(schema, field, value) : value, enumerable: true })
+		Object.defineProperty(fields, field, { value: value instanceof Date ? dateText(object, field, value) : value, enumerable: true })
 	}
-	return z.parse(schema, project(schema, fields))
+	return z.parse(object, project(object, fields))
 }
 
 /** A list's page as a page output: each row through `fromRow`, and `next` as the list answered it. */
-export function fromPage<const S extends z.ZodObject>(
+export function fromPage<const S extends ObjectSchema>(
 	schema: S,
 	page: { readonly items: readonly RowInput<S>[]; readonly next: string | null },
-): { items: z.output<S>[]; next: string | null } {
+): { items: SchemaOutput<S>[]; next: string | null } {
 	return { items: page.items.map((row) => fromRow(schema, row)), next: page.next }
 }

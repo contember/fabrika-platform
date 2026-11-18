@@ -9,6 +9,7 @@ import { attachmentOf } from '../contract/attachment'
 import { ATTACHMENT_LIMITS, CSV_CONTENT_TYPE, XLSX_CONTENT_TYPE } from '../contract/defaults'
 import type { Schema } from '../contract/define'
 import { contentDisposition } from '../files/treatment'
+import { zodSchemaOf } from '../schema/data-schema'
 import { ServerFault } from './faults'
 import { project, ProjectionRefusedError } from './project'
 import { encodeXlsx } from './xlsx'
@@ -58,7 +59,7 @@ function validRow(endpoint: string, schema: Schema, row: unknown): unknown {
 		}
 		throw error
 	}
-	const parsed = z.safeParse(schema, projected)
+	const parsed = z.safeParse(zodSchemaOf(schema), projected)
 	if (!parsed.success) {
 		throw new ServerFault('output_refused', `'${endpoint}' returned a row its row schema refuses`)
 	}

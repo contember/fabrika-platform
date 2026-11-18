@@ -2,7 +2,7 @@
 // schema parses it.
 
 import type { z } from 'zod/v4'
-import type { Schema } from '../contract/define'
+import type { Schema, SchemaOutput } from '../contract/define'
 
 /** A query or mutation of a client that `createClient` built. */
 export type ClientProcedure = ((input: never) => Promise<unknown>) & { readonly output: Schema }
@@ -25,7 +25,7 @@ export type TypedProcedure<I, O extends Schema> = ((input: I) => Promise<unknown
 export type InputArgument<I> = undefined extends I ? I | void : I
 
 /** The answer, as the procedure's output schema parses it. */
-export type ProcedureResult<F extends ClientProcedure> = z.output<F['output']>
+export type ProcedureResult<F extends ClientProcedure> = SchemaOutput<F['output']>
 
 /** The answer of a cursor list: `{ items, next }`. */
 export interface PageAnswer<Item> {

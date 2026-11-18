@@ -76,6 +76,7 @@ import {
 import type { RequestExecutionContext } from '../fetch'
 import { FileWork, type StoredFileKinds, storedFilesHandle } from '../files/kinds'
 import { FileDownload, fileResponse, withFileTreatment } from '../files/treatment'
+import { zodSchemaOf } from '../schema/data-schema'
 import { namesSourceMap } from '../source-map-path'
 import { abortedBody, bootstrapPath, bootstrapResponse, readBodyInTime, withBootstrap } from './anonymous'
 import { attachmentResponse } from './attachment'
@@ -1824,7 +1825,7 @@ function holdsOnChain(perms: PermissionEntry[], action: string, dimension: strin
  * request's verified tokens carry: a URL among them is a target the application signed.
  */
 function outputResponse(row: EndpointRow, schema: Schema, result: unknown, request: Request, carried: ReadonlySet<string>): Response {
-	const output = z.safeParse(schema, projectSchema(row.id, schema, result))
+	const output = z.safeParse(zodSchemaOf(schema), projectSchema(row.id, schema, result))
 	if (!output.success) {
 		throw new ServerFault('output_refused', `'${row.id}' returned a value its output schema refuses`)
 	}
@@ -1947,7 +1948,7 @@ function stripped(served: Extract<ServedEndpoint, { kind: 'webhook' }>, payload:
 
 /** `value` parsed with the endpoint's strict input schema; a refusal is a 400 naming each issue. */
 function strictInput(row: EndpointRow, schema: Schema, value: unknown): Readonly<Record<string, unknown>> {
-	const parsed = z.safeParse(schema, value)
+	const parsed = z.safeParse(zodSchemaOf(schema), value)
 	if (!parsed.success) {
 		const issues = parsed.error.issues.map((issue) => ({ path: issue.path.map(String).join('.'), code: issue.code, message: issue.message }))
 		const first = issues[0]

@@ -20,7 +20,6 @@ import type {
 	UnscopedTables,
 	WithinTables,
 } from '@fabrika/db/tables'
-import type { z } from 'zod/v4'
 import type { StoredFilesHandle, StoredFilesReadHandle } from '../files/handle'
 import type { AppCapability, Ref, Within } from '../implement/capability'
 import type { ApplicationDirectory, LinkIssuing, MemberDirectory, MemberLookup, MemberManagement } from '../implement/membership'
@@ -30,7 +29,7 @@ import type { CapabilityOf, ConnectCall, RequestContext } from '../implement/typ
 import type { WebhookDelivery, WebhookPrincipal } from '../implement/webhook'
 import type { AppMail, JobContext } from '../jobs/types'
 import type { ConnectSnapshot } from './connect'
-import type { MemberAccess, Schema } from './define'
+import type { MemberAccess, Schema, SchemaOutput } from './define'
 import type { App } from './kit'
 import type { TokenPurposes, TokenSigning } from './token'
 import type { WebhookBindings } from './webhook-binding'
@@ -116,7 +115,7 @@ export type SqlValue = string | number | boolean | bigint | Date | null | readon
  * transaction; each row is parsed (snake_case → camelCase, `Date` → ISO text, then `Row`).
  */
 export interface SqlTag<Ix extends AnyDbIndex = AnyDbIndex, M extends SqlMode = SqlMode> {
-	<Row extends Schema>(row: Row): (text: TemplateStringsArray, ...values: readonly (SqlValue | SqlScope)[]) => Promise<z.output<Row>[]>
+	<Row extends Schema>(row: Row): (text: TemplateStringsArray, ...values: readonly (SqlValue | SqlScope)[]) => Promise<SchemaOutput<Row>[]>
 	/**
 	 * The capability's whole predicate on `table`: the object's key and every link of its chain for a `Ref`, what
 	 * `ctx.db.within` matches for a `Within`, every row for `ctx.app`. Interpolated as

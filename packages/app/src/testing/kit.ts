@@ -39,11 +39,10 @@ import { type IamGateway, REQUEST_ID_HEADER, stripFabrikaCookies } from '@fabrik
 import { exportJWK, generateKeyPair, SignJWT } from 'jose'
 import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
-import type { z } from 'zod/v4'
 import { challengeUrl } from '../client/contract'
 import type { RpcFetch } from '../client/transport'
 import { compileContract } from '../contract/compile'
-import type { AnyContract, DimensionOf } from '../contract/define'
+import type { AnyContract, DimensionOf, SchemaInput } from '../contract/define'
 import type { TokenPurpose } from '../contract/token'
 import { diskAssets } from '../disk-assets'
 import type { RequestExecutionContext } from '../fetch'
@@ -247,7 +246,8 @@ type TokensOf<C> = C extends { readonly surface: { readonly tokens: infer T } } 
 export type TokenPurposeName<C> = keyof TokensOf<C> & string
 
 /** What a token of purpose `P` carries, as a site passes it to `sign`. */
-export type TokenClaimsInput<C, P extends string> = TokensOf<C> extends { readonly [K in P]: TokenPurpose<infer Claims> } ? z.input<Claims> : never
+export type TokenClaimsInput<C, P extends string> = TokensOf<C> extends { readonly [K in P]: TokenPurpose<infer Claims> } ? SchemaInput<Claims>
+	: never
 
 /** Each SPA mount from its built directory under `root` when one exists, as the deploy serves it; an empty page otherwise. */
 function builtAssets(root: string): SpaAssets {

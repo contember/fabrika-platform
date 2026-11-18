@@ -2,6 +2,7 @@
 // schema then validates what is left, so an undeclared field is dropped rather than leaked or refused.
 
 import { z } from 'zod/v4'
+import { type DataSchema, zodSchemaOf } from '../schema/data-schema'
 
 /** No branch of a union accepts the value, whatever it is reduced to. */
 export class ProjectionRefusedError extends Error {
@@ -17,7 +18,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * in declaration order, whose schema accepts the value reduced to that branch. Anything else is left for
  * validation.
  */
-export function project(schema: z.core.$ZodType, value: unknown): unknown {
+export function project(declared: z.core.$ZodType | DataSchema, value: unknown): unknown {
+	const schema = zodSchemaOf(declared)
 	if (schema instanceof z.core.$ZodObject) {
 		if (!isRecord(value)) {
 			return value

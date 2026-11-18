@@ -3,6 +3,7 @@
 
 import type { BuiltinRoleKey, ChallengeProvider, Locale, MailTemplates, RpcCaller, WebhookScheme } from '@fabrika/auth-core'
 import type { z } from 'zod/v4'
+import type { DataObject, DataSchema, ZodOf } from '../schema/data-schema'
 import {
 	type CronDeclaration,
 	type CspDeclaration,
@@ -36,19 +37,30 @@ export interface JobLimitsOption {
 	readonly timeoutMs?: number
 }
 
-/** Any zod 4 schema. `compileContract` refuses every form outside the contract subset. */
-export type Schema = z.core.$ZodType
+/**
+ * Any zod 4 schema, or one held as data (`@fabrika/app/schema`). `compileContract` refuses every form outside the
+ * contract subset.
+ */
+export type Schema = z.core.$ZodType | DataSchema
+
+/** What a schema admits once parsed. */
+export type SchemaOutput<S> = z.output<ZodOf<S>>
+
+/** What a schema takes before parsing. */
+export type SchemaInput<S> = z.input<ZodOf<S>>
 
 /**
  * An input object. zod 4's types do not tell `z.object` from `z.strictObject`, so the type refuses only loose
  * objects; `compileContract` and `@fabrika/check` refuse `z.object` too.
  */
-export type InputSchema = z.ZodObject<z.core.$ZodShape, z.core.$ZodObjectConfig>
+export type InputSchema = z.ZodObject<z.core.$ZodShape, z.core.$ZodObjectConfig> | DataObject<z.core.$ZodShape, z.core.$ZodObjectConfig>
 
 type LooseMessage = 'a loose object admits undeclared keys: declare it with z.strictObject({ … })'
 
 /** `S`, unless it is an object that admits undeclared keys (`.loose()`, `.passthrough()`, `.catchall()`). */
-export type NotLoose<S> = S extends z.ZodObject<z.core.$ZodShape, infer Config extends z.core.$ZodObjectConfig>
+export type NotLoose<S> = S extends Schema ? LooseChecked<S, ZodOf<S>> : S
+
+type LooseChecked<S, Z> = Z extends z.ZodObject<z.core.$ZodShape, infer Config extends z.core.$ZodObjectConfig>
 	? string extends keyof Config['out'] ? LooseMessage : S
 	: S
 
@@ -230,7 +242,7 @@ export interface PublicAccess {
 }
 
 /** Without an `input`, TS infers `I` as its whole constraint, not the `null` default; both mean "no input". */
-export type InputOf<I> = [I] extends [InputSchema] ? z.output<I> : Record<never, never>
+export type InputOf<I> = [I] extends [InputSchema] ? SchemaOutput<I> : Record<never, never>
 
 /** Input fields of string type: the only fields a scope value can be read from. */
 export type StringField<In> = { [K in keyof In]-?: In[K] extends string ? K : never }[keyof In] & string
