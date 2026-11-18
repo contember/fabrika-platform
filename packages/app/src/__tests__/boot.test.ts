@@ -4,7 +4,14 @@
 
 import { compileContract, defineContract, parseEncodedArtifact } from '@fabrika/app/contract'
 import { boot, BootError, captureEnvironment, type ContractImplementation } from '@fabrika/app/implement'
-import { canonicalizeArtifact, encodedArtifactJson } from '@fabrika/auth-core'
+import {
+	canonicalizeArtifact,
+	type ContractArtifact,
+	contractDigest,
+	encodedArtifactJson,
+	type EndpointRow,
+	FABRIKA_CONTRACT_DIGEST,
+} from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import { z } from 'zod/v4'
 import { implement } from '../implement/implement'
@@ -108,6 +115,26 @@ describe('the contract the build compiled', () => {
 		const other = encodedArtifactJson({ ...compiled, csp: { ...compiled.csp, imgSrc: [{ origin: 'https://other.test', purpose: 'avatars' }] } })
 		const [problem] = problemsOf(startWith(other))
 		expect(problem).toEndWith('this build is not the contract the deploy was approved with')
+	})
+
+	test('does not start when the evaluated contract states a fact again that its approved artifact holds otherwise', () => {
+		const approving = (artifact: ContractArtifact) => () =>
+			boot(app, {
+				environment: environment({ ...frameworkEnvFor(app), [FABRIKA_CONTRACT_DIGEST]: contractDigest(artifact) }),
+				iam: keySource,
+				assets: echoAssets,
+				approvedContract: encodedArtifactJson(artifact),
+			})
+		const asQuery = (row: EndpointRow): EndpointRow => row.id === 'api.notes.create' && row.kind === 'mutation' ? { ...row, kind: 'query' } : row
+		expect(problemsOf(approving({ ...compiled, endpoints: compiled.endpoints.map(asQuery) }))).toEqual([
+			"procedure 'api.notes.create': its kind (mutation) is not the approved one; this build is not the contract the deploy was approved with",
+		])
+		const spa = compiled.mounts['spa']
+		expect(spa?.kind).toBe('spa')
+		const moved = spa?.kind === 'spa' ? { ...compiled, mounts: { ...compiled.mounts, spa: { ...spa, dir: 'dist/other' } } } : compiled
+		expect(problemsOf(approving(moved))).toEqual([
+			"mount 'spa': its prefix or directory is not the approved one; this build is not the contract the deploy was approved with",
+		])
 	})
 
 	test('does not start when it is no artifact', () => {

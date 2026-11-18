@@ -225,7 +225,9 @@ The runtime validates with the application's own schemas. Boot checks only the b
 time an endpoint takes an input or answers JSON, the runtime compares the canonical shape of the schema the
 application evaluated with the endpoint's row. A schema of another shape answers 500 and logs
 `framework_fault: schema_unapproved` for that endpoint only. A redirect, an attachment and a file output are not
-compared.
+compared. The rest of what the runtime takes from the evaluated contract is compared at boot: a procedure's kind and
+whether it has an input and an output, an SPA's and a link's prefix and directory, a webhook's actions and a token
+purpose's claims. On any difference the application does not start.
 
 The artifact compiles to what the proxy and IAM consume. On Zerops, `fabrika.config.ts`
 hands both to its provider: `target.proxy` (`{ upstream, ...contractProxyTable(artifact) }`)

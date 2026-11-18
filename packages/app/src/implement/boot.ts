@@ -56,6 +56,7 @@ import { type MailStandIn, resolveMailTransports } from '../jobs/mail'
 import { logReporter, type OperationsReporter, operationsReporter, operationsSettings, type ReportSource } from '../jobs/report'
 import { bindJobs, type ContractJobs } from '../jobs/runner'
 import { environmentScrubber } from '../jobs/scrub'
+import { hasShape } from './approved'
 import { browserConfigs } from './browser-config'
 import { createCapabilityIssuer, requestIsReadOnly } from './capability'
 import type { ChallengeFetch, ChallengeWork } from './challenge'
@@ -756,16 +757,34 @@ function pathsOf(artifact: ContractArtifact): ReadonlyMap<string, readonly HeldP
 }
 
 /** Each approved token purpose with the claims schema the application declared for it. */
-function runtimePurposes(contract: AnyContract, artifact: ContractArtifact): ReadonlyMap<string, RuntimePurpose> {
+function runtimePurposes(contract: AnyContract, artifact: ContractArtifact, problems: string[]): ReadonlyMap<string, RuntimePurpose> {
 	const declared = contract.surface.tokens ?? {}
 	const purposes = new Map<string, RuntimePurpose>()
 	for (const [purpose, approved] of Object.entries(artifact.tokens ?? {})) {
 		const own = Object.hasOwn(declared, purpose) ? declared[purpose] : undefined
-		if (own !== undefined) {
-			purposes.set(purpose, { claims: own.claims, maxDays: approved.maxDays })
+		if (own === undefined) {
+			continue
 		}
+		if (!hasShape(own.claims, approved.claims, `token '${purpose}' claims`)) {
+			problems.push(unapproved(`token '${purpose}'`, 'claims schema'))
+		}
+		purposes.set(purpose, { claims: own.claims, maxDays: approved.maxDays })
 	}
 	return purposes
+}
+
+/**
+ * A fact the evaluated contract states again, which differs from the approved artifact. Boot reads the artifact the build
+ * compiled, so it compares what it still takes from the evaluated contract instead of compiling it.
+ */
+function unapproved(where: string, fact: string): string {
+	return `${where}: its ${fact} is not the approved one; this build is not the contract the deploy was approved with`
+}
+
+/** Whether two action lists hold the same actions, in any order. */
+function sameActions(left: readonly string[], right: readonly string[]): boolean {
+	const sorted = [...right].sort()
+	return left.length === right.length && [...left].sort().every((action, index) => action === sorted[index])
 }
 
 export function boot(app: ContractImplementation, options: BootOptions): ContractApp {
@@ -797,7 +816,7 @@ function bootOnce(app: ContractImplementation, options: BootOptions, binding: Bi
 		? compiledArtifact(app, options.environment.framework, problems)
 		: approvedArtifact(options.approvedContract, options.environment.framework, problems)
 	const proxySecret = readProxySecret(options.environment.framework, options.requireProxySecret === true, problems)
-	const tokens = new SignedTokens(runtimePurposes(app.contract, artifact), readTokenKeys(options.environment.framework, artifact, problems))
+	const tokens = new SignedTokens(runtimePurposes(app.contract, artifact, problems), readTokenKeys(options.environment.framework, artifact, problems))
 	const origin = readAppOrigin(options.environment.framework, problems)
 	const url = appUrl(artifact, origin)
 	const operations = operationsSettings(options.environment.framework, problems)
@@ -872,6 +891,10 @@ function bootOnce(app: ContractImplementation, options: BootOptions, binding: Bi
 				endpoints.set(name, { kind: 'health', row })
 			}
 		} else if (mount.kind === 'spa') {
+			const approvedSpa = artifact.mounts[name]
+			if (approvedSpa?.kind !== 'spa' || approvedSpa.prefix !== mount.prefix || approvedSpa.dir !== mount.dir) {
+				problems.push(unapproved(`mount '${name}'`, 'prefix or directory'))
+			}
 			const row = rows.get(name)
 			const config = configs.get(name)
 			if (config !== undefined && isCredentialed(row)) {
@@ -884,7 +907,14 @@ function bootOnce(app: ContractImplementation, options: BootOptions, binding: Bi
 				endpoints.set(bare.id, { kind: 'spa-prefix', row: bare, prefix: mount.prefix })
 			}
 		} else if (mount.kind === 'rpc' || mount.kind === 'link') {
+			const approvedMount = artifact.mounts[name]
+			if (approvedMount?.kind !== mount.kind || approvedMount.prefix !== mount.prefix) {
+				problems.push(unapproved(`mount '${name}'`, 'kind or prefix'))
+			}
 			if (mount.kind === 'link') {
+				if (approvedMount?.kind === 'link' && approvedMount.spa !== mount.spa) {
+					problems.push(unapproved(`mount '${name}'`, 'directory'))
+				}
 				const row = rows.get(name)
 				if (row !== undefined) {
 					endpoints.set(name, { kind: 'link-spa', row, prefix: mount.prefix, dir: mount.spa })
@@ -893,6 +923,14 @@ function bootOnce(app: ContractImplementation, options: BootOptions, binding: Bi
 			for (const { id, path, procedure } of declaredProcedures(name, mount.procedures)) {
 				declared.add(id)
 				const row = rows.get(id)
+				if (isCredentialed(row)) {
+					if (row.kind !== procedure.type) {
+						problems.push(unapproved(`procedure '${id}'`, `kind (${procedure.type})`))
+					}
+					if ((procedure.input === null) !== (row.input === null) || (procedure.output === null) !== (row.output === null)) {
+						problems.push(unapproved(`procedure '${id}'`, 'input or output'))
+					}
+				}
 				const bound = boundHandler(path.reduce<unknown>(childAt, handlers), id, `procedure '${id}'`, procedure.type, artifact, problems)
 				if (row?.kind === 'public') {
 					const served = publicEndpoint(row, procedure, bound, artifact, workloads, options, problems)
@@ -934,7 +972,9 @@ function bootOnce(app: ContractImplementation, options: BootOptions, binding: Bi
 			const approved = artifact.mounts[name]
 			if (row === undefined || bound === null) {
 				problems.push(`webhook '${name}' has no handler; add handlers.${name}: ({ input, ctx }) => …`)
-			} else if (credential !== undefined && approved?.kind === 'webhook') {
+			} else if (approved?.kind !== 'webhook' || !sameActions(approved.actions, mount.actions)) {
+				problems.push(unapproved(`webhook '${name}'`, 'actions'))
+			} else if (credential !== undefined) {
 				endpoints.set(name, {
 					kind: 'webhook',
 					row,
@@ -942,7 +982,7 @@ function bootOnce(app: ContractImplementation, options: BootOptions, binding: Bi
 					scheme: approved.scheme,
 					boundTo: approved.boundTo,
 					timeoutMs: approved.timeoutMs,
-					actions: mount.actions,
+					actions: approved.actions,
 					input: mount.input,
 					handler: bound.handler,
 					credential,

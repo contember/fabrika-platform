@@ -521,6 +521,9 @@ vocabulary (`packages/db/CLAUDE.md`).
   canonical shape with the row's. The same shape validates with the application's own schema (its messages, defaults,
   transforms); another is a 500 with `framework_fault: schema_unapproved` for that endpoint alone. A redirect, an
   attachment and a file output are not compared; a query's input is already built from the row's shape.
+  What else boot still takes from the evaluated contract it compares with the artifact at boot and refuses to start on a
+  difference: a procedure's kind and whether it has an input and an output, an SPA's and a link's prefix and directory, a
+  webhook's actions (served from the artifact) and a token purpose's claims shape.
 - **The proxy names the endpoint, and the application agrees or answers 503**
   (ADR-0022 rule 5). `X-Fabrika-Endpoint: <id>@<digest>` must name the endpoint
   `planEndpoint` selected, with this version's `requirementDigest` of its row; a

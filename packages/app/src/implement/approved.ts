@@ -42,13 +42,16 @@ function approvedIn(row: EndpointRow, slot: Slot, expected: SchemaShape | null, 
 	if (checked?.get(slot) === schema) {
 		return schema
 	}
-	const problems = new Problems()
-	const actual = describeSchema(schema, `'${row.id}' ${slot}`, problems)
-	if (
-		expected === null || actual === null || !problems.isEmpty() || canonicalJson(canonicalShape(actual)) !== canonicalJson(canonicalShape(expected))
-	) {
+	if (expected === null || !hasShape(schema, expected, `'${row.id}' ${slot}`)) {
 		throw new ServerFault('schema_unapproved', `'${row.id}': the ${slot} schema the application evaluated is not the one its approved contract holds`)
 	}
 	approved.set(row, (checked ?? new Map<Slot, Schema>()).set(slot, schema))
 	return schema
+}
+
+/** Whether `schema` reads to the canonical shape `expected`; a schema outside the subset never does. */
+export function hasShape(schema: Schema, expected: SchemaShape, where: string): boolean {
+	const problems = new Problems()
+	const actual = describeSchema(schema, where, problems)
+	return actual !== null && problems.isEmpty() && canonicalJson(canonicalShape(actual)) === canonicalJson(canonicalShape(expected))
 }
