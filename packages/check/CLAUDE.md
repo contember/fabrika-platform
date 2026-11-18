@@ -305,12 +305,14 @@ platform build controls.
 
 `CONTRACT_LIMITS` (`limits.ts`, exported from `@fabrika/check/contract`), each enforced before the next step runs:
 
-| Limit         | Value   | Enforced                                                                                |
-| ------------- | ------- | --------------------------------------------------------------------------------------- |
-| `sourceBytes` | 512 KiB | UTF-8 bytes of the contract graph, before each module is parsed                         |
-| `astDepth`    | 128     | syntax nesting of each module, measured without recursion, before any rule walks it     |
-| `schemaNodes` | 20 000  | schema nodes with shared schemas expanded: per schema while built, per placement summed |
-| `schemaDepth` | 32      | nesting of one schema, while it is built                                                |
+| Limit         | Value   | Enforced                                                                                                                    |
+| ------------- | ------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `sourceBytes` | 2 MiB   | UTF-8 bytes of the contract graph, before each module is parsed                                                             |
+| `moduleBytes` | 512 KiB | UTF-8 bytes of one module, before it is parsed; `contractReaderInputs` does not parse a larger one either                   |
+| `astNodes`    | 200 000 | syntax nodes of each graph (the contract's, the tables'), top-level type declarations left out, after each module is parsed |
+| `astDepth`    | 128     | syntax nesting of each module, measured without recursion, before any rule walks it                                         |
+| `schemaNodes` | 20 000  | schema nodes with shared schemas expanded: per schema while built, per placement summed                                     |
+| `schemaDepth` | 32      | nesting of one schema, while it is built                                                                                    |
 
 A schema value carries its expanded node count, so a const reused at every level (`S1 = { left: S0, right: S0 }`,
 …) is refused at the level that crosses the budget, without expanding it.
@@ -319,6 +321,13 @@ The reader's memory is its syntax trees, held for the whole read. `parseModule` 
 start of its line, shared by every node of that line, and `positionOf` adds the node's offset; no comment is attached to
 a node. The contract's graph drops each module's top-level type declarations (`withoutTypeDeclarations`), which no
 rule of the reader reads.
+
+Control reads in a Worker isolate of 128 MB, so the byte limits bound the parse and `astNodes` bounds the trees the
+reader holds. Measured as the smallest V8 heap the read completes in: 3 680 schema lines of `z.strictObject({ … })` in
+four modules (200 000 nodes, 611 KB) need 52 MB. Not covered: a dense module, such as one literal of 199 000 `0,`
+elements (398 KB, under every limit), needs 136 MB, and the node count comes only after its parse. Only a developer of
+the installation's applications can write one, and it restarts the isolate; it leaks nothing. Reading the contract
+outside the Worker closes it.
 
 ## Documented escapes (D11)
 

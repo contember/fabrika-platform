@@ -1,9 +1,10 @@
 // Which files of an application the static reader needs. Control reads a commit file by file, and the reader cannot
 // tell a missing file from one it was not given, so the caller asks here until nothing is missing. Worker-safe.
 
-import { importedSpecifiers } from './ast'
+import { importedSpecifiers, utf8Bytes } from './ast'
 import { parseJsonc } from './jsonc'
 import { CONTRACT_FILE, isRelativeSpecifier, isSourceFile, joinRelative, resolveRelative, TABLES_FILE } from './layout'
+import { CONTRACT_LIMITS } from './limits'
 import { parseShellModule } from './slice'
 import { BUNFIG_FILE } from './trust'
 
@@ -49,7 +50,8 @@ export function contractReaderInputs(files: ReadonlyMap<string, string>, exists:
 			want(path)
 			continue
 		}
-		const parsed = isSourceFile(path) ? parseShellModule(path, text).parsed : undefined
+		// A module over the limit is not parsed here: the reader refuses it, and its own parse would be the peak.
+		const parsed = isSourceFile(path) && utf8Bytes(text) <= CONTRACT_LIMITS.moduleBytes ? parseShellModule(path, text).parsed : undefined
 		if (parsed?.ok !== true) continue
 		for (const specifier of importedSpecifiers(parsed.module)) {
 			if (!isRelativeSpecifier(specifier)) continue

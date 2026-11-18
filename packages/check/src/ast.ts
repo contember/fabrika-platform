@@ -287,6 +287,23 @@ export const nodeDepth = (root: AstNode): number => {
 	return deepest
 }
 
+/** The number of syntax nodes in the tree below `root`, `root` included, counted without recursion. */
+export const nodeCount = (root: AstNode): number => {
+	let count = 0
+	const pending: AstNode[] = [root]
+	for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+		count++
+		for (const [key, value] of Object.entries(node)) {
+			if (NON_CHILD_KEYS.has(key)) continue
+			if (isNode(value)) pending.push(value)
+			else if (Array.isArray(value)) {
+				for (const item of value) if (isNode(item)) pending.push(item)
+			}
+		}
+	}
+	return count
+}
+
 export const parseModule = (file: string, text: string): ParseResult => {
 	try {
 		// Nothing reads a comment from the node it is attached to; `ast.comments` lists them all.

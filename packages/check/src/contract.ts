@@ -5,7 +5,7 @@
 import { type AnyContract, compileContract } from '@fabrika/app/contract'
 import type { ContractArtifact, TablePolicyArtifact } from '@fabrika/auth-core'
 import { type TablePolicies, tablePolicies, type Tables } from '@fabrika/db/tables'
-import { child, children, importedSpecifiers, nodeDepth, type ParsedModule, utf8Bytes } from './ast'
+import { child, children, importedSpecifiers, nodeCount, nodeDepth, type ParsedModule, utf8Bytes } from './ast'
 import { type Finding, formatFinding } from './finding'
 import { ModuleGraph } from './graph'
 import { CONTRACT_EXPORT, CONTRACT_FILE, isRelativeSpecifier, isSourceFile, resolveRelative, TABLES_FILE } from './layout'
@@ -161,20 +161,33 @@ export function contractModules(graph: ModuleGraph, entry: ParsedModule): Parsed
 	return [...reached.values()]
 }
 
-/** The source and syntax-depth limits of `CONTRACT_LIMITS` over the modules of one entry (the contract or the tables). */
+/** The source and syntax limits of `CONTRACT_LIMITS` over the modules of one entry (the contract or the tables). */
 function sourceBudget(modules: readonly ParsedModule[], entry = CONTRACT_FILE): Finding[] {
 	const findings: Finding[] = []
 	const bytes = modules.reduce((total, module) => total + module.bytes, 0)
 	if (bytes > CONTRACT_LIMITS.sourceBytes) {
 		findings.push(overBudget(entry, `${entry} and its modules are ${bytes} bytes, over ${CONTRACT_LIMITS.sourceBytes}`))
 	}
+	let nodes = 0
 	for (const module of modules) {
+		if (module.bytes > CONTRACT_LIMITS.moduleBytes) {
+			findings.push(overBudget(module.file, moduleTooLarge(module.bytes)))
+		}
 		if (nodeDepth(module.program) > CONTRACT_LIMITS.astDepth) {
 			findings.push(overBudget(module.file, `the syntax nests deeper than ${CONTRACT_LIMITS.astDepth} levels`))
 		}
+		nodes += heldNodes(module)
+	}
+	if (nodes > CONTRACT_LIMITS.astNodes) {
+		findings.push(overBudget(entry, `${entry} and its modules hold ${nodes} syntax nodes, over the budget of ${CONTRACT_LIMITS.astNodes}`))
 	}
 	return findings
 }
+
+const moduleTooLarge = (bytes: number): string => `the module is ${bytes} bytes, over ${CONTRACT_LIMITS.moduleBytes} for one module`
+
+/** The syntax nodes the reader holds of a module: all but its top-level type declarations. */
+const heldNodes = (module: ParsedModule): number => nodeCount(withoutTypeDeclarations(module).program)
 
 function overBudget(file: string, message: string): Finding {
 	return {
@@ -193,8 +206,8 @@ type ParsedGraph = { readonly ok: true; readonly graph: ModuleGraph } | { readon
 /**
  * Parses `entry` (`fabrika.contract.ts` or `src/db/tables.ts`) and the modules its imports reach among `files`, and
  * nothing else; each module as its shell slice, so an import only a handler uses is never followed. Every candidate of an import is parsed, so that `rules/literal.ts` sees an ambiguous or directory
- * import; the size limit holds before a module is parsed and the depth limit right after, before any recursive rule
- * walks it.
+ * import; the byte limits hold before a module is parsed, and the depth and node limits right after, before any
+ * recursive rule walks it.
  */
 function parseSourceGraph(files: ReadonlyMap<string, string>, entry: string): ParsedGraph {
 	const modules = new Map<string, ParsedModule>()
@@ -203,13 +216,18 @@ function parseSourceGraph(files: ReadonlyMap<string, string>, entry: string): Pa
 		return { ok: false, findings: [missingFile(entry)] }
 	}
 	let bytes = 0
+	let nodes = 0
 	const queue = [entry]
 	for (let path = queue.shift(); path !== undefined; path = queue.shift()) {
 		const text = files.get(path)
 		if (modules.has(path) || text === undefined || !isSourceFile(path)) {
 			continue
 		}
-		bytes += utf8Bytes(text)
+		const moduleBytes = utf8Bytes(text)
+		if (moduleBytes > CONTRACT_LIMITS.moduleBytes) {
+			return { ok: false, findings: [overBudget(path, moduleTooLarge(moduleBytes))] }
+		}
+		bytes += moduleBytes
 		if (bytes > CONTRACT_LIMITS.sourceBytes) {
 			return { ok: false, findings: [overBudget(path, `${entry} and its modules are over ${CONTRACT_LIMITS.sourceBytes} bytes`)] }
 		}
@@ -229,7 +247,12 @@ function parseSourceGraph(files: ReadonlyMap<string, string>, entry: string): Pa
 		if (nodeDepth(parsed.module.program) > CONTRACT_LIMITS.astDepth) {
 			return { ok: false, findings: [overBudget(path, `the syntax nests deeper than ${CONTRACT_LIMITS.astDepth} levels`)] }
 		}
-		modules.set(path, withoutTypeDeclarations(parsed.module))
+		const held = withoutTypeDeclarations(parsed.module)
+		nodes += nodeCount(held.program)
+		if (nodes > CONTRACT_LIMITS.astNodes) {
+			return { ok: false, findings: [overBudget(path, `${entry} and its modules hold over ${CONTRACT_LIMITS.astNodes} syntax nodes`)] }
+		}
+		modules.set(path, held)
 		for (const specifier of importedSpecifiers(parsed.module)) {
 			const resolution = isRelativeSpecifier(specifier) ? resolveRelative((candidate) => files.has(candidate), path, specifier) : undefined
 			if (resolution?.kind === 'file') {

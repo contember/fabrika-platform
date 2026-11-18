@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { SNAPSHOT_LIMITS } from '../../../approval/read'
 import { archiveCommitSource } from '../commit-archive'
 import { GitHubMetadataClient } from '../metadata'
 import { TarballRepositorySource } from '../repository'
@@ -69,6 +70,19 @@ describe("a run's snapshot read from one archive pass", () => {
 		await expect(commit.read('db/migrations/0002.sql', 1024 * 1024)).rejects.toMatchObject({ code: 'archive_rejected', stage: 'resolve' })
 		expect(await commit.read('docs/guide.md', 1024)).toBe('# guide, read alone\n')
 		expect(requests.slice(2)).toEqual([`https://api.github.com/repos/contember/fixture/contents/docs/guide.md?ref=${handCommitSha}`])
+	})
+
+	test('keeps a wanted file as large as each snapshot read accepts', async () => {
+		const requests: string[] = []
+		const commit = await commitSource(requests).open({
+			repoUrl: 'github.com/contember/fixture',
+			commitSha: handCommitSha,
+			wanted: (path) => path.startsWith('db/migrations/'),
+			signal: new AbortController().signal,
+		})
+
+		expect(await commit.read('db/migrations/0002.sql', SNAPSHOT_LIMITS.lockfileBytes)).toHaveLength(2 * 1024 * 1024)
+		expect(requests).toHaveLength(2)
 	})
 
 	test('refuses an archive that names another commit', async () => {

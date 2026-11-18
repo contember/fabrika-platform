@@ -434,15 +434,63 @@ describe('the resource budget', () => {
 		expect(findings[0]).toBe("fabrika.contract.ts:31:8 contract the contract's schemas expand to over 20000 nodes")
 	})
 
-	test('source over the byte limit, and syntax nested deeper than the limit', () => {
-		const padding = `// ${'x'.repeat(CONTRACT_LIMITS.sourceBytes)}\n`
+	/** The contract importing `count` more modules, each a const and a comment of `chars` characters. */
+	const padded = (count: number, chars: number): ReadonlyMap<string, string> => {
+		const imports = Array.from({ length: count }, (_, index) => `import { P${index} } from './src/p${index}'\n`).join('')
+		const modules = Array.from(
+			{ length: count },
+			(_, index): [string, string] => [`src/p${index}.ts`, `export const P${index} = 1\n// ${'x'.repeat(chars)}\n`],
+		)
+		return new Map([...application(imports + BASE), ...modules])
+	}
+
+	test('source over the former 512 KiB limit reads as the same contract', () => {
+		expect(CONTRACT_LIMITS.sourceBytes).toBe(2 * 1024 * 1024)
+		expect(readContractSource(padded(3, 400 * 1024))).toEqual(readContractSource(application(BASE)))
+	})
+
+	test('source over the byte limit, a module over its own, and syntax nested deeper than the limit', () => {
+		expect(refusal(padded(5, CONTRACT_LIMITS.moduleBytes - 1024))).toEqual([
+			`src/p4.ts:1:1 contract fabrika.contract.ts and its modules are over ${CONTRACT_LIMITS.sourceBytes} bytes`,
+		])
+		const padding = `// ${'x'.repeat(CONTRACT_LIMITS.moduleBytes)}\n`
+		const bytes = new TextEncoder().encode(padding + SCHEMAS).byteLength
 		expect(refusal(application(BASE, padding + SCHEMAS))).toEqual([
-			`src/schemas.ts:1:1 contract fabrika.contract.ts and its modules are over ${CONTRACT_LIMITS.sourceBytes} bytes`,
+			`src/schemas.ts:1:1 contract the module is ${bytes} bytes, over ${CONTRACT_LIMITS.moduleBytes} for one module`,
 		])
 		const deep = `export const Deep = ${'['.repeat(CONTRACT_LIMITS.astDepth)}${']'.repeat(CONTRACT_LIMITS.astDepth)}\n`
 		expect(refusal(application(BASE, SCHEMAS + deep))).toEqual([
 			`src/schemas.ts:1:1 contract the syntax nests deeper than ${CONTRACT_LIMITS.astDepth} levels`,
 		])
+	})
+
+	test('modules within the byte limits that hold more syntax nodes than the budget, in the reader and the checker', async () => {
+		const dense = `${SCHEMAS}export const Dense = [${'0,'.repeat(CONTRACT_LIMITS.astNodes)}]\n`
+		expect(new TextEncoder().encode(dense).byteLength).toBeLessThan(CONTRACT_LIMITS.moduleBytes)
+		expect(refusal(application(BASE, dense))).toEqual([
+			`src/schemas.ts:1:1 contract fabrika.contract.ts and its modules hold over ${CONTRACT_LIMITS.astNodes} syntax nodes`,
+		])
+		const findings = await check({ 'fabrika.contract.ts': BASE, 'src/schemas.ts': dense })
+		const budget = findings.filter((finding) => finding.rule === 'contract').map((finding) => `${finding.file} ${finding.message}`)
+		expect(budget).toHaveLength(1)
+		expect(budget[0]).toMatch(/^fabrika\.contract\.ts fabrika\.contract\.ts and its modules hold 2\d{5} syntax nodes, over the budget of 200000$/)
+	})
+
+	test('the checker refuses a tables graph over the budget, as the reader does', async () => {
+		const tables = `export const tables = 1\n// ${'x'.repeat(CONTRACT_LIMITS.moduleBytes)}\n`
+		const bytes = new TextEncoder().encode(tables).byteLength
+		const findings = await check({ 'fabrika.contract.ts': BASE, 'src/schemas.ts': SCHEMAS, 'src/db/tables.ts': tables })
+		expect(findings.filter((finding) => finding.rule === 'contract').map((finding) => `${finding.file} ${finding.message}`)).toEqual([
+			`src/db/tables.ts the module is ${bytes} bytes, over ${CONTRACT_LIMITS.moduleBytes} for one module`,
+		])
+		expect(() => readTablesSource(new Map([...application(BASE), ['src/db/tables.ts', tables]]))).toThrow(
+			`over ${CONTRACT_LIMITS.moduleBytes} for one module`,
+		)
+	})
+
+	test('top-level type declarations are not counted against the node budget', () => {
+		const types = `export type Dense = [${'0,'.repeat(CONTRACT_LIMITS.astNodes)}]\n`
+		expect(readContractSource(application(BASE, SCHEMAS + types))).toEqual(readContractSource(application(BASE)))
 	})
 })
 
