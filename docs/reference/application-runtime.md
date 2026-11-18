@@ -1346,8 +1346,9 @@ each hop, with `capability_refused: refused_egress`:
   deploy;
 - on Bun, a host with any resolved address that is not public unicast (`node:dns`, every address; the Bun adapter
   passes `resolveHost` to `boot`), Azure's host endpoint `168.63.129.16` included. The hop is then sent to the checked
-  address (IPv4 first) with the checked name as `Host` and `keepalive: false`, so the name is resolved once per hop and
-  a changed answer (DNS rebinding) reaches nothing; Bun checks the certificate against that `Host` and takes no pooled
+  address (IPv4 first) with the checked name as `Host` and TLS `serverName` and `keepalive: false`, so the name is
+  resolved once per hop and a changed answer (DNS rebinding) reaches nothing; Bun checks the certificate against that
+  `serverName` and takes no pooled
   connection, which it keys by address (`public-egress-pinning.test.ts`). A Worker's `fetch` resolves the name inside
   Cloudflare's network, where no answer the guard checked would pin it, so on Cloudflare the guard checks no address;
   an installation there has no private network for one to point at.

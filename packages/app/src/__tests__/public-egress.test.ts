@@ -582,7 +582,7 @@ describe('the guard under public egress', () => {
 		expect(calls).toEqual([])
 	})
 
-	test('connects each hop to the address it checked, with the name as Host, so a name that rebinds reaches nothing new', async () => {
+	test('connects each hop to the address it checked, with the name as Host and serverName, so a name that rebinds reaches nothing new', async () => {
 		const { calls, stub } = stubFetch((url) =>
 			url === 'https://93.184.216.34/start'
 				? new Response(null, { status: 302, headers: { location: 'https://v6.example.net/next' } })
@@ -608,6 +608,11 @@ describe('the guard under public egress', () => {
 		expect(asked).toEqual(['www.example.com', 'v6.example.net'])
 		expect(calls.map((call) => call.url)).toEqual(['https://93.184.216.34/start', 'https://[2a00:1450:4014:80c::200e]/next'])
 		expect(calls.map((call) => new Headers(call.init?.headers).get('host'))).toEqual(['www.example.com', 'v6.example.net'])
+		// Bun checks the certificate against the TLS serverName, not Host.
+		expect(calls.map((call) => (call.init !== undefined && 'tls' in call.init ? call.init.tls : undefined))).toEqual([
+			{ serverName: 'www.example.com' },
+			{ serverName: 'v6.example.net' },
+		])
 		// Bun pools connections by address: a pooled one may have been checked against another name's certificate.
 		expect(calls.map((call) => call.init?.keepalive)).toEqual([false, false])
 		expect(response.url).toBe('https://v6.example.net/next')

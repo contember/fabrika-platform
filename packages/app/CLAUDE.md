@@ -55,7 +55,7 @@ bun test src/__tests__/error-reports.test.ts    # what a report carries: scrubbi
 bun test src/__tests__/intake.test.ts           # the intake recipe's job: each stop, bad records, batches, locks, keys (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/request-signal.test.ts   # ctx.signal of a request handler: a cancelled request, the budget
 bun test src/__tests__/public-egress.test.ts    # a cron job's egress: 'public': the URL rules, the installation's hosts, redirects, bounds, the resolver, pinning (the job run needs FABRIKA_TEST_POSTGRES_URL)
-bun test src/__tests__/public-egress-pinning.test.ts  # what a pinned hop relies on in Bun: Host, the certificate checked against it, no pooled connection (TLS half needs openssl)
+bun test src/__tests__/public-egress-pinning.test.ts  # what a pinned hop relies on in Bun: Host, the certificate checked against the TLS serverName, no pooled connection (TLS half needs openssl)
 bun test src/__tests__/request-budget.test.ts   # a writing mutation past REQUEST_BUDGET_MS: aborted, 500, nothing written (10 s; needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/outbox-rule.test.ts      # the generated cases of an outbox write and of an outbound call (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/job-types.test.ts        # the job handler mistakes, compiled by tsc
