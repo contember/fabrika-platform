@@ -192,20 +192,26 @@ the approver reads.
 ## Consequences
 
 - **Coverage.**
-  - The declarations or an access view express 4,389 of the corpus's 4,409 rules (99.5 %).
-  - A replay measured the access-view part. Each of the 976 rules the declarations leave out became an access view,
-    generated from the rule's own predicate: the source system's compiled condition, with each variable a column of a
-    cross-joined domain. On Postgres with random rows, the replay compared the rows the data layer reaches through the
-    view with the rows the source system's own SQL admits. Reads went through a `Within`, writes through a `Ref` of the
-    write action. 968 rules agree on every seed.
-  - The 20 exceptions:
+  - The declarations or an access view express 4,389 of the corpus's 4,409 rules (99.5 %). With every ADR-0073 step,
+    built or not, the declarations express 3,421; the access view takes 968 of the 988 they leave out.
+  - A replay measured the access-view part. It took the 976 rules that the declarations leave out and that read no IAM
+    data, and generated an access view from each rule's own predicate: the source system's compiled condition, with
+    each variable a column of a cross-joined domain. A rule whose OR mixes bindings became one view per binding. On
+    Postgres with random rows, the replay compared the rows the data layer reaches through the view with the rows the
+    source system's own SQL admits. Reads went through a `Within`. Writes read the existing rows through a `Ref` of the
+    write action; no write ran.
+  - Each of the 968 runnable rules agrees on every seed for a caller whose principal the rows name. 910 of them had a
+    seed where the rule both admits and refuses rows.
+  - The 20 exceptions, not replayed:
     - 12 rules read other principals' memberships from IAM, which an application's database does not hold;
     - 6 rules take their condition from the membership itself, not a value;
     - 2 rules require memberships at two dimensions at once, an AND that one term cannot express.
-  - **A principal-bound view reaches only the principals that the application's rows name.** A branch for every holder
-    of a role is an OR with no variable. It needs a `member` binding, or a table of the application's principals that
-    the view joins.
-  - The replay does not measure a view's cost, hand-written views or SQLite.
+  - **A principal-bound view reaches only the principals that the application's rows name.** For a principal no row
+    names, 262 rules reach fewer rows than the source system, never more: each has a branch for every holder of a role,
+    an OR with no variable. It needs a `member` binding, or a table of the application's principals that the view joins.
+    The replay did not run either remedy.
+  - The replay does not measure a view's cost, hand-written views, SQLite, or the SQL of the source system's own view
+    entities, which it seeded as tables. The data layer's own access-view tests run on SQLite.
 - **A wrong view widens access, across tenants too**: for example a `cross join` without a filter, or a missing tenant
   join. The guard cannot see it. What catches it:
   - the approval diff, with closer review;
