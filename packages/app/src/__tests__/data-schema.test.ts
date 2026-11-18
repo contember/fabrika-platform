@@ -205,6 +205,17 @@ describe('a schema held as data', () => {
 		expect(Object.isFrozen(schema)).toBe(true)
 	})
 
+	test('keeps its arguments as they were at the call, so a rebuild after eviction builds the same schema', () => {
+		const shape: Record<string, ReturnType<typeof d.string>> = { a: d.string() }
+		const schema = d.strictObject(shape)
+		shape['b'] = d.string()
+		for (let index = 0; index < BUILT_SCHEMAS; index++) {
+			zodOf(d.number().min(index))
+		}
+		expect(zodOf(schema).safeParse({ a: 'x' }).success).toBe(true)
+		expect(Object.keys(zodOf(schema).shape)).toEqual(['a'])
+	})
+
 	test('keeps the most recently used builds, up to its bound', () => {
 		const first = d.string()
 		const kept = zodOf(first)

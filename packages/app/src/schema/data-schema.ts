@@ -31,6 +31,20 @@ type Text = (z.ZodString | z.ZodStringFormat) & z.core.$ZodType
 /** The name `~zod` marks a node that wraps a zod schema given where a schema stands. */
 const WRAPPED = '~zod'
 
+/**
+ * A call's argument as the node keeps it: a plain object or array copied and frozen all the way down, so a shape changed
+ * after the call cannot change a later rebuild of the same node. A schema, a regex or a function is kept as it is.
+ */
+function held(value: unknown): unknown {
+	if (Array.isArray(value)) {
+		return Object.freeze(value.map(held))
+	}
+	if (typeof value === 'object' && value !== null && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null)) {
+		return Object.freeze(Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, held(entry)])))
+	}
+	return value
+}
+
 export class DataSchema<T extends z.core.$ZodType = z.core.$ZodType> {
 	/** The zod type this schema denotes; declared only, never set. */
 	declare readonly '~type'?: T
@@ -50,7 +64,7 @@ export class DataSchema<T extends z.core.$ZodType = z.core.$ZodType> {
 		while (length > 0 && args[length - 1] === undefined) {
 			length--
 		}
-		this.args = Object.freeze(args.slice(0, length))
+		this.args = Object.freeze(args.slice(0, length).map(held))
 		Object.freeze(this)
 	}
 
