@@ -216,7 +216,16 @@ one back from JSON. Both refuse a `*` in an action and a role named after one of
 own roles (`admin`); `creates` takes only a dimension that lies in no other. `tables` is
 what `defineTables` returned, or the artifact form of each policy; `@fabrika/db/tables`
 (browser-safe) converts one into the other. Schemas are the zod 4 subset that
-`@fabrika/check` accepts.
+`@fabrika/check` accepts, written with `z` from `zod/v4` or from `@fabrika/app/schema`. The second holds each schema as
+data, the factory and method calls with their arguments, and the framework builds the zod when it validates. A
+runtime then holds the zod only of the schemas it used lately, a bounded number, not of every endpoint. Both compile
+to the same artifact and digest.
+
+The runtime validates with the application's own schemas. Boot checks only the bundled artifact's digest, so the first
+time an endpoint takes an input or answers JSON, the runtime compares the canonical shape of the schema the
+application evaluated with the endpoint's row. A schema of another shape answers 500 and logs
+`framework_fault: schema_unapproved` for that endpoint only. A redirect, an attachment and a file output are not
+compared.
 
 The artifact compiles to what the proxy and IAM consume. On Zerops, `fabrika.config.ts`
 hands both to its provider: `target.proxy` (`{ upstream, ...contractProxyTable(artifact) }`)
