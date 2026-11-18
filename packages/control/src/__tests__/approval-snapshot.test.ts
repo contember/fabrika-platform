@@ -1,7 +1,25 @@
-import { canonicalArtifactJson, canonicalJson, sha256Hex } from '@fabrika/auth-core'
+import {
+	canonicalArtifactJson,
+	canonicalizeArtifact,
+	canonicalJson,
+	type ContractArtifact,
+	contractDigest,
+	type SchemaShape,
+	sha256Hex,
+	SHARED_SHAPES_ENCODING,
+} from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
-import { approvedProviderAccess, approvedSnapshot, EMPTY_SNAPSHOT, parseSnapshot, serializeSnapshot, snapshotDigest } from '../approval/snapshot'
+import {
+	type AccessSnapshot,
+	approvedProviderAccess,
+	approvedSnapshot,
+	EMPTY_SNAPSHOT,
+	parseSnapshot,
+	serializeSnapshot,
+	snapshotDigest,
+	STORED_SNAPSHOT_BYTES,
+} from '../approval/snapshot'
 
 const MIGRATIONS = [{ name: '20260101000000_init.sql', checksum: 'a'.repeat(64) }]
 
@@ -54,5 +72,40 @@ describe('a stored snapshot after applications without a contract are refused', 
 
 	test('a snapshot is stored without the artifact key', () => {
 		expect(JSON.parse(serializeSnapshot(EMPTY_SNAPSHOT))).toEqual({ version: 1, contract: null, migrations: [], checker: '' })
+	})
+})
+
+describe('a snapshot whose plain form does not fit a row', () => {
+	const text: SchemaShape = {
+		type: 'string',
+		format: null,
+		minLength: null,
+		maxLength: null,
+		pattern: null,
+		startsWith: null,
+		endsWith: null,
+		includes: null,
+	}
+	const wide: SchemaShape = { type: 'object', fields: Object.fromEntries(Array.from({ length: 6000 }, (_, index) => [`field${index}`, text])) }
+	const large: ContractArtifact = {
+		...notesArtifact,
+		endpoints: notesArtifact.endpoints.map((row) => row.kind === 'query' ? { ...row, output: wide } : row),
+	}
+	const snapshot: AccessSnapshot = { version: 1, contract: large, migrations: MIGRATIONS, checker: '0.0.1' }
+
+	test('is stored in the shared encoding, and reads back to the same contract and digests', () => {
+		expect(JSON.stringify({ ...snapshot }).length).toBeGreaterThan(STORED_SNAPSHOT_BYTES)
+		const stored = serializeSnapshot(snapshot)
+		expect(new TextEncoder().encode(stored).length).toBeLessThanOrEqual(STORED_SNAPSHOT_BYTES)
+		expect(JSON.parse(stored).contract.encoding).toBe(SHARED_SHAPES_ENCODING)
+		const read = parseSnapshot(stored)
+		expect(read.contract).toEqual(canonicalizeArtifact(large))
+		expect(read.contract === null ? null : contractDigest(read.contract)).toBe(contractDigest(large))
+		expect(snapshotDigest(read)).toBe(snapshotDigest(snapshot))
+	})
+
+	test('one that fits keeps the plain form an older Control reads', () => {
+		const stored = serializeSnapshot({ ...snapshot, contract: notesArtifact })
+		expect(JSON.parse(stored).contract).toEqual(notesArtifact)
 	})
 })

@@ -627,6 +627,11 @@ export function parseContractArtifact(value: unknown): ContractArtifact {
 	return contractArtifactSchema.parse(value)
 }
 
+/** Whether a stored artifact is in the shared encoding, which `parseEncodedArtifact` reads, rather than plain. */
+export function isEncodedArtifact(value: unknown): boolean {
+	return typeof value === 'object' && value !== null && 'encoding' in value
+}
+
 const encodedArtifactSchema = z.strictObject({ encoding: z.literal(SHARED_SHAPES_ENCODING), shapes: z.array(z.unknown()), artifact: z.unknown() })
 
 /**

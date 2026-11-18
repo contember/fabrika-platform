@@ -646,7 +646,10 @@ other environment, before the provider prepares anything, and the write maps a r
   without `fabrika.contract.ts` fails its run with `ContractMissing` before the provider is called, and publishes
   nothing. A stored snapshot's legacy `artifact` field is dropped when it parses, and a publication without a contract
   reads as the empty baseline (`approvedSnapshot`). `runs.pending_access_json` is no longer read or written. The
-  published snapshot lives in `app_envs.published_snapshot_json`. Snapshot log lines are codes and counts only. A new write path must take it the same way; reading access
+  published snapshot lives in `app_envs.published_snapshot_json`. A snapshot whose plain JSON exceeds
+  `STORED_SNAPSHOT_BYTES` (a D1 row holds 2,000,000 bytes) stores its contract in the shared encoding (`encodeArtifact`),
+  which `parseStoredArtifact` decodes to the same artifact and digests; one that fits stays plain, so a Control rolled
+  back below the encoding still reads it. Snapshot log lines are codes and counts only. A new write path must take it the same way; reading access
   from the provider artifact is a bug. An approval names both digests and holds only for them.
 - **An application is read by the reader of the framework release it pins (ADR-0062, `readers.ts`, `formats.ts`).**
   `readAccessSnapshot` reads the `@fabrika/app` release from `<root>/bun.lock` and picks this release's reader for its
