@@ -76,21 +76,60 @@ function rotateRight(value: number, bits: number): number {
 
 /** The SHA-256 of `text`'s UTF-8 bytes, as 64 lower-case hex digits. */
 export function sha256Hex(text: string): string {
-	const bytes = new TextEncoder().encode(text)
-	// The message, a 0x80 byte, zero padding and the 64-bit bit length fill whole 64-byte blocks.
-	const padded = new Uint8Array(Math.ceil((bytes.length + 9) / 64) * 64)
-	padded.set(bytes)
-	padded[bytes.length] = 0x80
-	const view = new DataView(padded.buffer)
-	const bitLength = bytes.length * 8
-	view.setUint32(padded.length - 8, Math.floor(bitLength / 0x1_0000_0000))
-	view.setUint32(padded.length - 4, bitLength >>> 0)
+	return new Sha256().update(text).hex()
+}
 
-	const hash = new Uint32Array(INITIAL_HASH)
-	const schedule = new Uint32Array(64)
-	for (let offset = 0; offset < padded.length; offset += 64) {
+/**
+ * SHA-256 over text fed in pieces, so a digest of a large serialization never needs the whole text in memory. Each
+ * piece is whole text: a surrogate pair split across two pieces encodes as two replacement characters.
+ */
+export class Sha256 {
+	readonly #hash = new Uint32Array(INITIAL_HASH)
+	readonly #schedule = new Uint32Array(64)
+	readonly #block = new Uint8Array(64)
+	readonly #blockView = new DataView(this.#block.buffer)
+	readonly #encoder = new TextEncoder()
+	#filled = 0
+	#length = 0
+
+	update(text: string): this {
+		const bytes = this.#encoder.encode(text)
+		this.#length += bytes.length
+		let offset = 0
+		while (offset < bytes.length) {
+			const taken = Math.min(64 - this.#filled, bytes.length - offset)
+			this.#block.set(bytes.subarray(offset, offset + taken), this.#filled)
+			this.#filled += taken
+			offset += taken
+			if (this.#filled === 64) {
+				this.#compress()
+				this.#filled = 0
+			}
+		}
+		return this
+	}
+
+	/** The digest of everything fed so far; the hash takes no piece after it. */
+	hex(): string {
+		const bitLength = this.#length * 8
+		// The message, a 0x80 byte, zero padding and the 64-bit bit length fill whole 64-byte blocks.
+		this.#block[this.#filled] = 0x80
+		this.#block.fill(0, this.#filled + 1)
+		if (this.#filled + 1 > 56) {
+			this.#compress()
+			this.#block.fill(0)
+		}
+		this.#blockView.setUint32(56, Math.floor(bitLength / 0x1_0000_0000))
+		this.#blockView.setUint32(60, bitLength >>> 0)
+		this.#compress()
+		return Array.from(this.#hash, (word) => word.toString(16).padStart(8, '0')).join('')
+	}
+
+	#compress(): void {
+		const hash = this.#hash
+		const schedule = this.#schedule
 		for (let index = 0; index < 16; index++) {
-			schedule[index] = view.getUint32(offset + index * 4)
+			schedule[index] = this.#blockView.getUint32(index * 4)
 		}
 		for (let index = 16; index < 64; index++) {
 			const early = schedule[index - 15] ?? 0
@@ -121,5 +160,4 @@ export function sha256Hex(text: string): string {
 			hash[index] = (hash[index] ?? 0) + value
 		}
 	}
-	return Array.from(hash, (word) => word.toString(16).padStart(8, '0')).join('')
 }
