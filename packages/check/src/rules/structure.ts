@@ -129,12 +129,13 @@ const runtimeClosure = (graph: StructureGraph, start: Targets, descend: (path: s
 const isDataPackage = (specifier: string): boolean => specifier === '@fabrika/db' || specifier.startsWith('@fabrika/db/')
 
 /** The framework modules logic and queries may import; the rest of `@fabrika/*` is the framework's own composition. */
-const LAYER_PACKAGES: ReadonlySet<string> = new Set(['@fabrika/app', '@fabrika/db'])
+const LAYER_PACKAGES: ReadonlySet<string> = new Set(['@fabrika/app', '@fabrika/app/schema', '@fabrika/db'])
 
 /** The framework modules an SPA loads: the typed client, its React hooks, the component kit and its challenge widget. */
 const SPA_PACKAGES: ReadonlySet<string> = new Set([
 	'@fabrika/app/client',
 	'@fabrika/app/react',
+	'@fabrika/app/schema',
 	'@fabrika/ui',
 	'@fabrika/ui/challenge',
 	'@fabrika/ui/styles.css',
@@ -142,7 +143,7 @@ const SPA_PACKAGES: ReadonlySet<string> = new Set([
 ])
 
 const SPA_ALLOWED =
-	'@fabrika/app/client, @fabrika/app/react, @fabrika/ui, @fabrika/ui/challenge, fabrika.contract.ts, src/schemas.ts, modules under src/shared/ and modules under web/; a type-only import of anything else'
+	'@fabrika/app/client, @fabrika/app/react, @fabrika/app/schema, @fabrika/ui, @fabrika/ui/challenge, fabrika.contract.ts, src/schemas.ts, modules under src/shared/ and modules under web/; a type-only import of anything else'
 
 const isSchemaModule = (path: string): boolean => path === SCHEMAS_FILE || path.startsWith(SCHEMAS_DIR)
 
@@ -169,18 +170,18 @@ const checkSpaReference = (graph: StructureGraph, reference: ModuleReference, ta
 	if (server !== undefined) report(reference.node, 'spa-server-import', viaMessage(reference, server, 'server code', 'the SPA'), SPA_ALLOWED)
 }
 
-/** The one package shared code loads; everything else it needs is in other modules of `src/shared/`. */
-const SHARED_PACKAGE = 'zod/v4'
+/** The packages shared code loads, zod's schemas either way; everything else it needs is in other modules of `src/shared/`. */
+const SHARED_PACKAGES: ReadonlySet<string> = new Set(['zod/v4', '@fabrika/app/schema'])
 
 /** A shared module runs in the SPA and in every slice, so it loads nothing either side lacks. */
 const checkSharedReference = (reference: ModuleReference, targets: Targets, report: Report): void => {
-	const outside = targets.packages.find((specifier) => specifier !== SHARED_PACKAGE) ?? targets.files.find((path) => !isSharedModule(path))
+	const outside = targets.packages.find((specifier) => !SHARED_PACKAGES.has(specifier)) ?? targets.files.find((path) => !isSharedModule(path))
 	if (outside === undefined) return
 	report(
 		reference.node,
 		'shared-import',
 		viaMessage(reference, outside, 'outside src/shared/', 'shared code'),
-		'zod/v4 and other modules under src/shared/; a type-only import of anything else',
+		'zod/v4, @fabrika/app/schema and other modules under src/shared/; a type-only import of anything else',
 	)
 }
 

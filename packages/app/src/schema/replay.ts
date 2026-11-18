@@ -5,7 +5,26 @@
 import { z } from 'zod/v4'
 
 /** A plain argument of a step, with every schema in it already zod. */
-export type ReplayArg = string | number | boolean | null | RegExp | z.ZodType | readonly ReplayArg[] | { readonly [key: string]: ReplayArg }
+export type ReplayArg =
+	| string
+	| number
+	| boolean
+	| null
+	| RegExp
+	| z.ZodType
+	| Unreadable
+	| readonly ReplayArg[]
+	| { readonly [key: string]: ReplayArg }
+
+/** An argument a reader of source read that is no value of the subset (a builder call, say): refused by its kind. */
+export class Unreadable {
+	readonly kind: string
+
+	constructor(kind: string) {
+		this.kind = kind
+		Object.freeze(this)
+	}
+}
 
 /** `z.<factory>(…)`, `z.iso.<factory>(…)` or `.<method>(…)` on a receiver. */
 export type ReplayStep = { readonly factory: string; readonly iso: boolean } | { readonly method: string; readonly receiver: z.ZodType }
@@ -304,6 +323,9 @@ function kindOf(value: ReplayArg): string {
 	if (value instanceof z.ZodType) {
 		return 'schema'
 	}
+	if (value instanceof Unreadable) {
+		return value.kind
+	}
 	if (Array.isArray(value)) {
 		return 'array'
 	}
@@ -311,7 +333,9 @@ function kindOf(value: ReplayArg): string {
 }
 
 function entriesOf(value: ReplayArg | undefined): Entries | undefined {
-	if (typeof value !== 'object' || value === null || value instanceof RegExp || value instanceof z.ZodType || isList(value)) {
+	if (
+		typeof value !== 'object' || value === null || value instanceof RegExp || value instanceof z.ZodType || value instanceof Unreadable || isList(value)
+	) {
 		return undefined
 	}
 	const prototype: unknown = Object.getPrototypeOf(value)

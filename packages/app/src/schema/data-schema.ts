@@ -3,7 +3,7 @@
 // recently used builds, so an application's schemas cost their recipe, not the whole zod graph, while it runs.
 
 import { z } from 'zod/v4'
-import { type ReplayArg, replayStep, SCHEMA_SUBSET, SchemaRefusal } from './replay'
+import { type ReplayArg, replayStep, SCHEMA_SUBSET, SchemaRefusal, Unreadable } from './replay'
 
 /** A schema a contract may hold: one held as data, or a zod schema (a framework schema such as `signedToken()`). */
 export type AnySchema = DataSchema<z.ZodType> | z.ZodType
@@ -326,7 +326,7 @@ function replayArg(value: unknown, node: DataSchema): ReplayArg {
 	if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean' || value instanceof RegExp) {
 		return value
 	}
-	if (value instanceof z.ZodType) {
+	if (value instanceof z.ZodType || value instanceof Unreadable) {
 		return value
 	}
 	if (Array.isArray(value)) {

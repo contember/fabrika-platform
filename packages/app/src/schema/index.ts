@@ -15,4 +15,4 @@ export {
 	zodOf,
 	zodSchemaOf,
 } from './data-schema'
-export { type ReplayArg, type ReplayStep, replayStep, SCHEMA_SUBSET, SchemaRefusal } from './replay'
+export { type ReplayArg, type ReplayStep, replayStep, SCHEMA_SUBSET, SchemaRefusal, Unreadable } from './replay'
