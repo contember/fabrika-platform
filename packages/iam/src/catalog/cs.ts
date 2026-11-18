@@ -116,7 +116,7 @@ export const cs: Catalog = {
 		},
 		invitation: {
 			title: 'Přijetí pozvánky',
-			text: 'Přijměte pozvánku. Máte-li zde účet, nejprve se přihlaste pozvanou adresou. Pokud ho nemáte, v dalším kroku si zvolíte heslo.',
+			text: 'Přijměte pozvánku. V dalším kroku se přihlásíte pozvanou adresou, nebo si zvolíte heslo, pokud pozvánka zakládá nový účet.',
 			submit: 'Přijmout pozvánku',
 			createTitle: 'Zvolte si heslo',
 			createText: (address) => `Váš účet se přihlašuje adresou ${address} a heslem, které si zde zvolíte. Zvolením hesla pozvánku přijmete.`,
@@ -128,6 +128,9 @@ export const cs: Catalog = {
 			signInFirstTitle: 'Nejprve se přihlaste',
 			signInFirstText: 'Přihlaste se pozvanou adresou a potom znovu otevřete odkaz z pozvánky.',
 			signIn: 'Přihlásit se',
+			noAccountTitle: 'Pro tuto adresu tu není účet',
+			noAccountText: (address) =>
+				`Pro adresu ${address} tu není účet a tato pozvánka ho nezakládá. Požádejte toho, kdo vás pozval, aby vám pro tuto adresu zřídil účet, a potom znovu otevřete odkaz z pozvánky.`,
 			unavailableTitle: 'Pozvánka není k dispozici',
 			accountCannotAccept: 'Tento účet nemůže přijímat pozvánky.',
 			wrongAddressTitle: 'Pozvánka pro jinou adresu',
@@ -137,15 +140,20 @@ export const cs: Catalog = {
 			acceptedTitle: 'Pozvánka přijata',
 			acceptedText: ({ role, scope, appName }) => `V aplikaci ${appName} teď máte roli ${role} (${scope}).`,
 			invalidTitle: 'Odkaz není k dispozici',
-			invalidText: 'Tato pozvánka je neplatná, vypršela, byla zrušena, nebo už byla použita.',
+			invalidText:
+				'Tato pozvánka je neplatná, vypršela, byla zrušena, nebo už byla použita. Pokud jste ji ještě nepřijali, požádejte toho, kdo vás pozval, aby ji poslal znovu.',
 		},
 	},
 	messages: {
-		invitation: ({ appName, role, scope, inviterLabel, companyLabel, message, actionUrl }) => {
+		invitation: ({ appName, role, scope, inviterLabel, companyLabel, message, actionUrl, acceptance }) => {
 			const what = `do aplikace ${appName} s rolí ${role} (${scope})${companyLabel === '' ? '' : ` za ${companyLabel}`}`
 			const note = message === '' ? null : { intro: `${inviterLabel} píše:`, message }
-			const accept =
-				'Pozvánku přijmete tímto jednorázovým odkazem. Máte-li zde účet, nejprve se přihlaste touto adresou; pokud ho nemáte, zvolíte si heslo.'
+			const accept = {
+				create: 'Pozvánku přijmete tímto jednorázovým odkazem. Máte-li zde účet, nejprve se přihlaste touto adresou; pokud ho nemáte, zvolíte si heslo.',
+				sign_in: 'Pozvánku přijmete tímto jednorázovým odkazem po přihlášení touto adresou.',
+				no_account:
+					'Pro tuto adresu tu zatím není účet a tato pozvánka ho nezakládá. Požádejte toho, kdo vás pozval, aby vám ho zřídil; potom pozvánku přijmete tímto jednorázovým odkazem po přihlášení.',
+			}[acceptance]
 			return {
 				subject: `Pozvánka do aplikace ${appName}`,
 				text: [`Dostali jste pozvánku ${what}.`, ...(note === null ? [] : [note.intro, note.message]), accept, actionUrl, IGNORE_INVITATION].join(

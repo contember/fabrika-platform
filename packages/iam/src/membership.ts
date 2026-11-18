@@ -50,6 +50,7 @@ import { EmailDeliveryError, type EmailMessage } from '@fabrika/email'
 import { uuidv7 } from '@fabrika/platform'
 import { appQuery, presentationFor } from './app-presentation'
 import { type CallerResolution, resolveCaller, resolveLinkCaller } from './auth'
+import type { InvitationAcceptance } from './catalog'
 import { contractGrantProblem, externalGrantProblem } from './contract-rules'
 import {
 	type AppMembersRow,
@@ -65,7 +66,7 @@ import {
 } from './db'
 import { issuerAuthority } from './delegation'
 import type { Env, RequestContext } from './env'
-import { organizationMailbox } from './human-admission'
+import { admitted, organizationMailbox } from './human-admission'
 import { logError } from './log'
 import { EMAIL_SEND_DEADLINE_MS, renderEmail } from './messages'
 import { randomToken } from './oidc'
@@ -587,6 +588,7 @@ async function invitationEmail(
 			message: invitation.message ?? '',
 			actionUrl: url.toString(),
 			expiresAt: invitation.expires_at,
+			acceptance: await invitationAcceptance(services, invitation),
 		},
 		idempotencyKey,
 	})
@@ -949,13 +951,15 @@ function acceptanceEvent(invitation: InvitationRow, principalId: string, request
  * What an invitation link offers the browser that submits it. `create`: the role is declared external, the
  * installation enables password authentication and e-mail, no principal holds the invited mailbox, the organization
  * does not name it (`organizationMailbox`), and the inviter could still give the role — so accepting creates the
- * external principal with a password the person chooses (ADR-0020). `sign_in`: every other open invitation, accepted
- * by the mailbox's principal signed in here. Reading the offer changes nothing.
+ * external principal with a password the person chooses (ADR-0020). `no_account`: no principal holds the mailbox and
+ * nothing here would create one, so its owner cannot accept until someone gives it an account. `sign_in`: every other
+ * open invitation, accepted by the mailbox's principal signed in here. Reading the offer changes nothing.
  */
 export type InvitationOffer =
 	| { readonly kind: 'invalid' }
 	| { readonly kind: 'not_allowed' }
 	| { readonly kind: 'sign_in' }
+	| { readonly kind: 'no_account'; readonly invitation: InvitationRow }
 	| { readonly kind: 'create'; readonly invitation: InvitationRow }
 
 export async function invitationOffer(services: Services, token: string): Promise<InvitationOffer> {
@@ -963,10 +967,29 @@ export async function invitationOffer(services: Services, token: string): Promis
 	if (invitation === null) {
 		return { kind: 'invalid' }
 	}
-	if (!(await createsPrincipal(services, invitation))) {
+	const acceptance = await invitationAcceptance(services, invitation)
+	if (acceptance === 'sign_in') {
 		return { kind: 'sign_in' }
 	}
+	if (acceptance === 'no_account') {
+		return { kind: 'no_account', invitation }
+	}
 	return (await inviterAssigners(services, invitation)) === null ? { kind: 'not_allowed' } : { kind: 'create', invitation }
+}
+
+/**
+ * How the owner of an open invitation's mailbox accepts it now (`InvitationAcceptance`): the e-mail and the accept
+ * page say what this answers, and promise a password only when accepting creates the account. A mailbox no principal
+ * holds that single sign-on admits (`admitted`) may still get its principal there, so it is `sign_in`.
+ */
+export async function invitationAcceptance(services: Services, invitation: InvitationRow): Promise<InvitationAcceptance> {
+	if (await createsPrincipal(services, invitation)) {
+		return 'create'
+	}
+	if ((await services.repositories.principals.getUserByEmail(invitation.email)) !== null) {
+		return 'sign_in'
+	}
+	return services.config.authentication.oidc.enabled && admitted(invitation.email, services.config) ? 'sign_in' : 'no_account'
 }
 
 async function createsPrincipal(services: Services, invitation: InvitationRow): Promise<boolean> {

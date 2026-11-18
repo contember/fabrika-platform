@@ -21,7 +21,9 @@ const tokenSchema = z.string().max(512).regex(/^[A-Za-z0-9_-]{32,}$/)
  * An invitation that creates its principal (`invitationOffer`) answers that POST with a set-password form instead;
  * its POST, with the password, creates the external principal and accepts in one transaction, then signs the browser
  * in on IAM. Neither the GET nor the POST without a password changes anything, so a mail scanner spends nothing. A
- * browser signed in here as anyone gets neither: it is told to sign out or use another browser profile first.
+ * browser signed in here as anyone gets neither: it is told to sign out or use another browser profile first. An
+ * invitation whose mailbox no principal holds and whose acceptance creates none (`no_account`, a role not declared
+ * external among them) answers that the address has no account here instead of a sign-in it could not pass.
  *
  * The link's `?app=` picks the page's language; an accepted invitation lands on its own application's
  * registered origin, where the application's proxy signs the browser in through the normal handoff.
@@ -76,6 +78,15 @@ export async function handleInvitation(request: Request, services: Services, ctx
 	}
 	const session = await currentSession(request, services)
 	if (session === null) {
+		if (offer.kind === 'no_account') {
+			// A sign-in form would be a dead end: no principal holds the mailbox and no sign-in here creates one.
+			return invitationOutcomePage({
+				presentation: await presentationFor(services, offer.invitation.app, linked.brand),
+				title: (t) => t.noAccountTitle,
+				text: (t) => t.noAccountText(offer.invitation.email),
+				status: 403,
+			})
+		}
 		// The application's own address signs the browser in through its handoff, in its language; without one, IAM's.
 		const signIn = landingUrl(linked) ?? ownSignIn(services, linked.app)
 		return invitationOutcomePage({

@@ -116,7 +116,8 @@ export const en: Catalog = {
 		},
 		invitation: {
 			title: 'Accept invitation',
-			text: 'Accept the invitation. With an account here, sign in with the invited address first. Without one, you choose its password next.',
+			text:
+				'Accept the invitation. The next step asks you to sign in with the invited address, or to choose a password when the invitation creates your account.',
 			submit: 'Accept invitation',
 			createTitle: 'Choose your password',
 			createText: (address) => `Your account signs in with ${address} and the password you choose here. Choosing it accepts the invitation.`,
@@ -128,6 +129,9 @@ export const en: Catalog = {
 			signInFirstTitle: 'Sign in first',
 			signInFirstText: 'Sign in with the invited address, then open the invitation link again.',
 			signIn: 'Sign in',
+			noAccountTitle: 'No account for this address',
+			noAccountText: (address) =>
+				`There is no account for ${address} here, and this invitation does not create one. Ask the person who invited you to have an account set up for this address, then open the invitation link again.`,
 			unavailableTitle: 'Invitation unavailable',
 			accountCannotAccept: 'This account cannot accept invitations.',
 			wrongAddressTitle: 'Invitation for another address',
@@ -137,14 +141,20 @@ export const en: Catalog = {
 			acceptedTitle: 'Invitation accepted',
 			acceptedText: ({ role, scope, appName }) => `You are now ${role} of a ${scope} of ${appName}.`,
 			invalidTitle: 'Link unavailable',
-			invalidText: 'This invitation is invalid, expired, cancelled or already used.',
+			invalidText:
+				'This invitation is invalid, expired, cancelled or already used. If you have not accepted it yet, ask the person who invited you to send it again.',
 		},
 	},
 	messages: {
-		invitation: ({ appName, role, scope, inviterLabel, companyLabel, message, actionUrl }) => {
+		invitation: ({ appName, role, scope, inviterLabel, companyLabel, message, actionUrl, acceptance }) => {
 			const what = `${scope} of ${appName} as ${role}${companyLabel === '' ? '' : `, for ${companyLabel}`}`
 			const note = message === '' ? null : { intro: `${inviterLabel} writes:`, message }
-			const accept = 'Open this one-time link to accept. With an account here, sign in with this address first; without one, you choose a password.'
+			const accept = {
+				create: 'Open this one-time link to accept. With an account here, sign in with this address first; without one, you choose a password.',
+				sign_in: 'Open this one-time link and sign in with this address to accept.',
+				no_account:
+					'There is no account for this address here yet, and this invitation does not create one. Ask the person who invited you to have one set up, then open this one-time link and sign in to accept.',
+			}[acceptance]
 			return {
 				subject: `You are invited to ${appName}`,
 				text: [`You are invited to join a ${what}.`, ...(note === null ? [] : [note.intro, note.message]), accept, actionUrl, IGNORE_INVITATION].join(

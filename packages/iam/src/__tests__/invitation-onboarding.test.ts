@@ -57,6 +57,7 @@ let seq = 0
 
 async function onboarding(options: {
 	password?: boolean
+	oidc?: boolean
 	human?: { emailDomains?: readonly string[]; emails?: readonly string[] }
 	bootstrapAdmins?: ReadonlySet<string>
 } = {}): Promise<Onboarding> {
@@ -67,7 +68,7 @@ async function onboarding(options: {
 	const f = await membershipFixture(repositories, {
 		email,
 		services: {
-			authentication: { oidc: true, password: options.password ?? true },
+			authentication: { oidc: options.oidc ?? true, password: options.password ?? true },
 			passwordHasher: new PlainHasher(),
 			human: options.human ?? { emailDomains: ['org.test'], emails: ['named@partner.test', '*'] },
 			bootstrapAdmins: options.bootstrapAdmins ?? new Set(['boss@partner.test']),
@@ -412,6 +413,91 @@ describe('a change between the check of an acceptance and its write', () => {
 			expect(await o.f.repositories.membership.listOpenInvitations(APP, o.scope)).toHaveLength(1)
 		})
 	}
+})
+
+// A role not declared external never creates its principal, so neither the e-mail nor the page may promise a password.
+// On a password-only installation a new mailbox then has no way to an account but an administrator: the page says so
+// instead of a sign-in form its owner cannot pass.
+describe('an invitation to a role not declared external', () => {
+	const STRANGER = 'stranger@elsewhere.test'
+	const PROMISE = 'you choose a password'
+
+	test('for a mailbox nobody holds, on a password-only installation: the e-mail and the page say there is no account', async () => {
+		const o = await onboarding({ oidc: false })
+		expect(await o.invite(STRANGER, { role: 'editor' })).toMatchObject({ ok: true })
+		const mail = o.email.messages.at(-1)
+		expect(mail?.text).not.toContain(PROMISE)
+		expect(mail?.text).toContain('There is no account for this address here yet')
+		const token = o.email.lastToken()
+
+		const page = await o.send(new Request(`${ORIGIN}/auth/invitations/accept?app=${encodeURIComponent(APP)}`))
+		expect(await page.text()).not.toContain('Without one, you choose its password')
+
+		const submissions: Record<string, string>[] = [{ token }, { token, password: PASSWORD }]
+		for (const fields of submissions) {
+			const response = await o.send(accept(fields))
+			expect(response.status).toBe(403)
+			const html = await response.text()
+			expect(html).toContain('No account for this address')
+			expect(html).toContain(STRANGER)
+			expect(html).not.toContain('name="password"')
+			expect(html).not.toContain('class="button"')
+		}
+		expect(await o.f.repositories.principals.getUserByEmail(STRANGER)).toBeNull()
+
+		// Once an administrator gives the mailbox an account, the same link signs in and accepts.
+		const invitee = await o.f.repositories.principals.inviteUser(STRANGER, STRANGER)
+		expect((await o.send(accept({ token }))).status).toBe(401)
+		const cookie = `${SESSION_COOKIE}=${await o.h.signSession(invitee.id, { idpSub: null, authenticationMethod: 'password' })}`
+		expect((await o.send(accept({ token }, { Cookie: cookie }))).status).toBe(302)
+		expect((await o.f.repositories.membership.listRoleGrantsAt(APP, invitee.id, o.scope)).map((grant) => grant.role_key)).toEqual(['editor'])
+	})
+
+	test('for a mailbox a principal holds: the e-mail asks to sign in, and promises no password', async () => {
+		const o = await onboarding({ oidc: false })
+		await o.f.person('invitee')
+		await o.invite('invitee@example.test', { role: 'editor' })
+		const mail = o.email.messages.at(-1)
+		expect(mail?.text).toContain('sign in with this address to accept')
+		expect(mail?.text).not.toContain(PROMISE)
+		expect((await o.send(accept({ token: o.email.lastToken() }))).status).toBe(401)
+	})
+
+	test('for a mailbox single sign-on admits: the e-mail and the page ask to sign in', async () => {
+		const o = await onboarding()
+		await o.invite(STRANGER, { role: 'editor' })
+		expect(o.email.messages.at(-1)?.text).toContain('sign in with this address to accept')
+		const response = await o.send(accept({ token: o.email.lastToken() }))
+		expect(response.status).toBe(401)
+		expect(await response.text()).toContain('class="button"')
+	})
+
+	test('a role declared external keeps the promise of a password', async () => {
+		const o = await onboarding({ oidc: false })
+		await o.invite(NEWCOMER)
+		expect(o.email.messages.at(-1)?.text).toContain(PROMISE)
+	})
+})
+
+describe('the lifetime of an invitation link', () => {
+	test('an expired link is unavailable and asks for a new invitation; inviting again mails a working link', async () => {
+		const o = await onboarding()
+		await o.invite(NEWCOMER)
+		const expired = o.email.lastToken()
+		// Opening the set-password form spends nothing: the link stays valid until it expires.
+		expect((await o.send(accept({ token: expired }))).status).toBe(200)
+		o.h.sqlite.query('UPDATE membership_invitations SET expires_at = expires_at - 8 * 24 * 3600').run()
+
+		const response = await o.send(accept({ token: expired, password: PASSWORD }))
+		expect(response.status).toBe(400)
+		expect(await response.text()).toContain('ask the person who invited you to send it again')
+
+		await o.invite(NEWCOMER)
+		expect(o.email.messages).toHaveLength(2)
+		const fresh = o.email.lastToken()
+		expect(fresh).not.toBe(expired)
+		expect((await o.send(accept({ token: fresh, password: PASSWORD }))).status).toBe(302)
+	})
 })
 
 describe('an invitation that creates its principal, opened in a browser signed in as someone else', () => {

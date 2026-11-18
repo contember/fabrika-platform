@@ -258,7 +258,11 @@ An application invites an address to a membership role through IAM's
 3. A `GET` renders the form without consuming anything; the page copies the
    fragment into the same-origin `POST` form.
 4. The `POST` needs an IAM session on IAM's host. Without one the page asks the
-   person to sign in and open the link again. With one, IAM accepts only when the
+   person to sign in and open the link again, unless no principal holds the
+   invited mailbox and nothing would create one (the invitation does not create
+   its principal, below, and single sign-on is off or its allowlist does not
+   admit the mailbox): then the page says the address has no account here and
+   to ask the inviter for one, and the invitation stays open. With one, IAM accepts only when the
    signed-in principal's mailbox is the invited one, checks again that the
    inviter can still give the role, and then marks the invitation accepted and
    writes the grant in one transaction.
@@ -271,6 +275,16 @@ text). Both reach the e-mail, IAM's wording and an application's
 `{{companyLabel}}`/`{{message}}` alike, and are escaped in its HTML part. A
 resend (`invitation.resend`) gives the open invitation a new link and a new
 7 days and mails it again; the earlier link stops working.
+
+IAM's e-mail says how the invited person accepts, as IAM can tell when it sends
+(`invitationAcceptance`): choose a password when the invitation creates its
+principal, sign in when a principal holds the mailbox or single sign-on would
+admit it, and otherwise that the address has no account here yet. Only the first
+promises a password. An application's own template is sent as written.
+
+An application that invites people who have no account yet declares their role
+`external` (below). Inviting a new mailbox to a role not declared external reaches
+only a person an administrator, or single sign-on, gives an account.
 
 ### An invitation that creates its principal
 

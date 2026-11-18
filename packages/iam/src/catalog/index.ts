@@ -89,6 +89,12 @@ export interface PageText {
 		readonly signInFirstTitle: string
 		readonly signInFirstText: string
 		readonly signIn: string
+		/**
+		 * No principal holds `address`, this invitation creates none, and no sign-in here would create one: the person
+		 * cannot accept on their own. The invitation stays open.
+		 */
+		readonly noAccountTitle: string
+		readonly noAccountText: (address: string) => string
 		readonly unavailableTitle: string
 		readonly accountCannotAccept: string
 		readonly wrongAddressTitle: string
@@ -127,10 +133,20 @@ export interface MessageValues {
 		readonly message: string
 		readonly actionUrl: string
 		readonly expiresAt: number
+		/** How the mailbox's owner accepts, as IAM can tell when it sends; it picks IAM's words, and is no placeholder. */
+		readonly acceptance: InvitationAcceptance
 	}
 	readonly enrollment: PasswordActionValues
 	readonly reset: PasswordActionValues
 }
+
+/**
+ * How the owner of an invitation's mailbox accepts it. `create`: no principal holds the mailbox and accepting creates
+ * one with the password its owner chooses (ADR-0051). `sign_in`: a principal holds it, or single sign-on would admit
+ * it, so its owner signs in and accepts. `no_account`: neither, so the owner cannot accept until someone gives the
+ * mailbox an account.
+ */
+export type InvitationAcceptance = 'create' | 'sign_in' | 'no_account'
 
 export interface PasswordActionValues {
 	/** The application the action returns to; `null` for an action on the installation itself. */
