@@ -168,4 +168,5 @@ rest of custom domains, a client address on a dedicated IPv4, a release and reco
 - [285](285-a-quoted-export-default-in-an-inlined-file-drops-the-canvas-wrapper.md): A canvas whose inlined file contains a quoted `export default` compiles without its `Plan` wrapper.
 - [286](286-access-view-statements-without-a-test.md): Aggregates, queue claims, deletes, moves and unowned-node inserts through an access view have no test.
 - [287](287-an-attachments-row-schema-is-not-compared-with-its-approved-columns.md): An attachment's cells are validated by the evaluated row schema, not the approved columns.
+- [288](288-reader-input-discovery-parses-every-held-module-each-round.md): Control's import discovery parses every held module in each round, so a deep import chain can exceed the Worker's CPU limit.
 - [10](10-app-scope-secrets-on-zerops.md) — Control refuses an `app`-scoped secret on Zerops today; record that as the decision, or replicate per service.

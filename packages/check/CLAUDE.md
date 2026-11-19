@@ -327,6 +327,10 @@ reader holds. Measured in workerd as the smallest total V8 heap (`--max-heap-siz
 probe) in which Control's whole read completes, from the commit's files through the serialized snapshot: a contract at
 the limits, 4 194 958 bytes in 217 modules of schemas and endpoints with their handlers, 397 125 syntax nodes and
 59 513 schema nodes, needs 95 MB, 25 MB of it the isolate before the read; the contract's read and check is the peak.
+That input is ASCII; Control holds up to 8 Mi characters of it (`readerTotalChars`), as two-byte strings once a module
+has a character outside Latin-1, which is not measured. Control also refuses a contract whose stored snapshot does not
+fit its row (`storedSnapshotFits`): the stored form costs each distinct field its name, so many distinct long field
+names reach that bound before `schemaNodes`; that contract stores 1 625 988 bytes, over the 1 500 000 bytes it allows.
 Not covered: a dense module, such as one literal of 210 000 `0,` elements (420 KB, under every limit) beside 189 000
 nodes of ordinary code, needs 123 MB, and the node count comes only after its parse. Only a developer of the
 installation's applications can write one, and it restarts the isolate; it leaks nothing. Reading the contract outside

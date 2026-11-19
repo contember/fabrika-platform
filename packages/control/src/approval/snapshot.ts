@@ -139,6 +139,14 @@ export function serializeSnapshot(snapshot: AccessSnapshot): string {
 /** The plain stored snapshot's ceiling: a D1 row holds at most 2,000,000 bytes, and the run's other columns share it. */
 export const STORED_SNAPSHOT_BYTES = 1_500_000
 
+/**
+ * Whether this release's stored form fits `STORED_SNAPSHOT_BYTES`: the shared encoding still costs every distinct
+ * field its name. An older release's artifact is stored plain and bounded by its own reader's limits.
+ */
+export function storedSnapshotFits(snapshot: AccessSnapshot): boolean {
+	return snapshot.older !== undefined || utf8Length(serializeSnapshot(snapshot)) <= STORED_SNAPSHOT_BYTES
+}
+
 /** The UTF-8 length of `text`, counted without encoding it. */
 function utf8Length(text: string): number {
 	let bytes = 0

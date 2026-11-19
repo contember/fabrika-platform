@@ -17,7 +17,7 @@ import {
 import type { CommitFiles } from '../github/source/commit-files'
 import type { SnapshotContract } from './formats'
 import { type ContractReader, FRAMEWORK_PACKAGE, FrameworkReleaseRefused, readerFor, type ReaderOutcome } from './readers'
-import type { AccessSnapshot, MigrationEntry } from './snapshot'
+import { type AccessSnapshot, type MigrationEntry, storedSnapshotFits } from './snapshot'
 
 /** What one snapshot read may cost: files, rounds of import discovery, bytes per file and in all. */
 export const SNAPSHOT_LIMITS = {
@@ -151,7 +151,7 @@ export async function readAccessSnapshot(
 		throw new SnapshotRefused('contract-app-mismatch')
 	}
 	const { databaseCode, fileAdoptions, dataLoss } = readDatabaseCode(migrations, appId, settled, accessTables, dialect)
-	return {
+	const snapshot: AccessSnapshot = {
 		version: 1,
 		...read,
 		migrations: migrations.map(({ name, checksum }) => ({ name, checksum })),
@@ -161,6 +161,9 @@ export async function readAccessSnapshot(
 		checker: reader.checker,
 		framework,
 	}
+	// Refused here, where the run log names it, rather than by the database when the run records it.
+	if (!storedSnapshotFits(snapshot)) throw new SnapshotRefused('contract-too-large')
+	return snapshot
 }
 
 function readContract(

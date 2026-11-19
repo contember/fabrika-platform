@@ -446,10 +446,16 @@ describe('the resource budget', () => {
 	})
 
 	test('placements that together expand past the budget, though each schema fits', () => {
-		// exponential(9) is 1023 nodes, so the 59th placement crosses the budget of 60 000.
-		const procedures = Array.from({ length: 70 }, (_, index) => `\t\tq${index}: c.query({ output: Note, access: { member: true } }),`).join('\n')
-		const contract = edited('\t\tget: c.query(', `${procedures}\n\t\tget: c.query(`)
-		const findings = refusal(application(contract, exponential(9)))
+		// exponential(9) is 1023 nodes, so the 59th placement crosses the budget of 60 000; `get` places it once more.
+		const placed = (count: number): string =>
+			edited(
+				'\t\tget: c.query(',
+				`${
+					Array.from({ length: count }, (_, index) => `\t\tq${index}: c.query({ output: Note, access: { member: true } }),\n`).join('')
+				}\t\tget: c.query(`,
+			)
+		expect(refusal(application(placed(57), exponential(9)))).toEqual([])
+		const findings = refusal(application(placed(70), exponential(9)))
 		expect(findings[0]).toBe(`fabrika.contract.ts:70:8 contract the contract's schemas expand to over ${CONTRACT_LIMITS.schemaNodes} nodes`)
 	})
 
@@ -503,6 +509,7 @@ describe('the resource budget', () => {
 		expect(refusal(files)).toEqual([
 			`src/p1.ts:1:1 contract fabrika.contract.ts and its modules hold over ${CONTRACT_LIMITS.astNodes} syntax nodes`,
 		])
+		expect(readContractSource(dense(2, CONTRACT_LIMITS.astNodes / 2 - 1000, 'const'))).toEqual(readContractSource(application(BASE)))
 		const findings = await check(Object.fromEntries(files))
 		const budget = findings.filter((finding) => finding.rule === 'contract').map((finding) => `${finding.file} ${finding.message}`)
 		expect(budget).toHaveLength(1)
