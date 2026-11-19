@@ -435,7 +435,7 @@ describe('the resource budget', () => {
 	for (const depth of [16, 30]) {
 		test(`a schema that doubles at each of ${depth} levels is refused at the level that crosses the budget, unexpanded`, () => {
 			const findings = refusal(application(BASE, exponential(depth)))
-			expect(findings).toEqual([`src/schemas.ts:17:20 contract the schema expands to 32767 nodes nested 15 deep`])
+			expect(findings).toEqual([`src/schemas.ts:18:20 contract the schema expands to 65535 nodes nested 16 deep`])
 		})
 	}
 
@@ -446,30 +446,48 @@ describe('the resource budget', () => {
 	})
 
 	test('placements that together expand past the budget, though each schema fits', () => {
-		const procedures = Array.from({ length: 30 }, (_, index) => `\t\tq${index}: c.query({ output: Note, access: { member: true } }),`).join('\n')
-		const contract = edited('\t\tget: c.query(', `${procedures}\n\t\tget: c.query(`)
-		const findings = refusal(application(contract, exponential(9)))
-		expect(findings[0]).toBe("fabrika.contract.ts:31:8 contract the contract's schemas expand to over 20000 nodes")
+		// exponential(9) is 1023 nodes, so the 59th placement crosses the budget of 60 000; `get` places it once more.
+		const placed = (count: number): string =>
+			edited(
+				'\t\tget: c.query(',
+				`${
+					Array.from({ length: count }, (_, index) => `\t\tq${index}: c.query({ output: Note, access: { member: true } }),\n`).join('')
+				}\t\tget: c.query(`,
+			)
+		expect(refusal(application(placed(57), exponential(9)))).toEqual([])
+		const findings = refusal(application(placed(70), exponential(9)))
+		expect(findings[0]).toBe(`fabrika.contract.ts:70:8 contract the contract's schemas expand to over ${CONTRACT_LIMITS.schemaNodes} nodes`)
 	})
 
-	/** The contract importing `count` more modules, each a const and a comment of `chars` characters. */
-	const padded = (count: number, chars: number): ReadonlyMap<string, string> => {
-		const imports = Array.from({ length: count }, (_, index) => `import { P${index} } from './src/p${index}'\n`).join('')
-		const modules = Array.from(
-			{ length: count },
-			(_, index): [string, string] => [`src/p${index}.ts`, `export const P${index} = 1\n// ${'x'.repeat(chars)}\n`],
-		)
+	/** The contract importing one more module per body, `src/p<i>.ts`, whose body exports `P<i>`. */
+	const importing = (bodies: readonly string[]): ReadonlyMap<string, string> => {
+		const imports = bodies.map((_, index) => `import { P${index} } from './src/p${index}'\n`).join('')
+		const modules = bodies.map((body, index): [string, string] => [`src/p${index}.ts`, body])
 		return new Map([...application(imports + BASE), ...modules])
 	}
 
-	test('source over the former 512 KiB limit reads as the same contract', () => {
-		expect(CONTRACT_LIMITS.sourceBytes).toBe(2 * 1024 * 1024)
-		expect(readContractSource(padded(3, 400 * 1024))).toEqual(readContractSource(application(BASE)))
+	/** The contract importing `count` more modules, each a const and a comment of `chars` characters. */
+	const padded = (count: number, chars: number): ReadonlyMap<string, string> =>
+		importing(Array.from({ length: count }, (_, index) => `export const P${index} = 1\n// ${'x'.repeat(chars)}\n`))
+
+	/** `count` modules of one array literal each, `elements` syntax nodes apiece: under the byte limits, dense in nodes. */
+	const dense = (count: number, elements: number, declaration: 'const' | 'type'): ReadonlyMap<string, string> =>
+		importing(
+			Array.from({ length: count }, (_, index) => {
+				const literal = `[${'0,'.repeat(elements)}]`
+				return declaration === 'const' ? `export const P${index} = ${literal}\n` : `export const P${index} = 1\nexport type D${index} = ${literal}\n`
+			}),
+		)
+
+	test('source over the former 2 MiB limit reads as the same contract', () => {
+		expect(CONTRACT_LIMITS.sourceBytes).toBe(4 * 1024 * 1024)
+		expect(readContractSource(padded(6, 400 * 1024))).toEqual(readContractSource(application(BASE)))
 	})
 
 	test('source over the byte limit, a module over its own, and syntax nested deeper than the limit', () => {
-		expect(refusal(padded(5, CONTRACT_LIMITS.moduleBytes - 1024))).toEqual([
-			`src/p4.ts:1:1 contract fabrika.contract.ts and its modules are over ${CONTRACT_LIMITS.sourceBytes} bytes`,
+		const count = Math.floor(CONTRACT_LIMITS.sourceBytes / (CONTRACT_LIMITS.moduleBytes - 1024)) + 1
+		expect(refusal(padded(count, CONTRACT_LIMITS.moduleBytes - 1024))).toEqual([
+			`src/p${count - 1}.ts:1:1 contract fabrika.contract.ts and its modules are over ${CONTRACT_LIMITS.sourceBytes} bytes`,
 		])
 		const padding = `// ${'x'.repeat(CONTRACT_LIMITS.moduleBytes)}\n`
 		const bytes = new TextEncoder().encode(padding + SCHEMAS).byteLength
@@ -483,15 +501,20 @@ describe('the resource budget', () => {
 	})
 
 	test('modules within the byte limits that hold more syntax nodes than the budget, in the reader and the checker', async () => {
-		const dense = `${SCHEMAS}export const Dense = [${'0,'.repeat(CONTRACT_LIMITS.astNodes)}]\n`
-		expect(new TextEncoder().encode(dense).byteLength).toBeLessThan(CONTRACT_LIMITS.moduleBytes)
-		expect(refusal(application(BASE, dense))).toEqual([
-			`src/schemas.ts:1:1 contract fabrika.contract.ts and its modules hold over ${CONTRACT_LIMITS.astNodes} syntax nodes`,
+		// One module of `0,` elements under moduleBytes holds fewer nodes than astNodes, so two share the budget.
+		const files = dense(2, CONTRACT_LIMITS.astNodes / 2 + 1, 'const')
+		const sizes = [...files.values()].map((text) => new TextEncoder().encode(text).byteLength)
+		expect(sizes.every((size) => size < CONTRACT_LIMITS.moduleBytes)).toBe(true)
+		expect(sizes.reduce((total, size) => total + size, 0)).toBeLessThan(CONTRACT_LIMITS.sourceBytes)
+		expect(refusal(files)).toEqual([
+			`src/p1.ts:1:1 contract fabrika.contract.ts and its modules hold over ${CONTRACT_LIMITS.astNodes} syntax nodes`,
 		])
-		const findings = await check({ 'fabrika.contract.ts': BASE, 'src/schemas.ts': dense })
+		expect(readContractSource(dense(2, CONTRACT_LIMITS.astNodes / 2 - 1000, 'const'))).toEqual(readContractSource(application(BASE)))
+		const findings = await check(Object.fromEntries(files))
 		const budget = findings.filter((finding) => finding.rule === 'contract').map((finding) => `${finding.file} ${finding.message}`)
 		expect(budget).toHaveLength(1)
-		expect(budget[0]).toMatch(/^fabrika\.contract\.ts fabrika\.contract\.ts and its modules hold 2\d{5} syntax nodes, over the budget of 200000$/)
+		const held = /^fabrika\.contract\.ts fabrika\.contract\.ts and its modules hold (\d+) syntax nodes, over the budget of (\d+)$/.exec(budget[0] ?? '')
+		expect([Number(held?.[1]) > CONTRACT_LIMITS.astNodes, Number(held?.[2])]).toEqual([true, CONTRACT_LIMITS.astNodes])
 	})
 
 	test('the checker refuses a tables graph over the budget, as the reader does', async () => {
@@ -507,8 +530,7 @@ describe('the resource budget', () => {
 	})
 
 	test('top-level type declarations are not counted against the node budget', () => {
-		const types = `export type Dense = [${'0,'.repeat(CONTRACT_LIMITS.astNodes)}]\n`
-		expect(readContractSource(application(BASE, SCHEMAS + types))).toEqual(readContractSource(application(BASE)))
+		expect(readContractSource(dense(2, CONTRACT_LIMITS.astNodes / 2 + 1, 'type'))).toEqual(readContractSource(application(BASE)))
 	})
 })
 

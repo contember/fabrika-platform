@@ -307,11 +307,11 @@ platform build controls.
 
 | Limit         | Value   | Enforced                                                                                                                    |
 | ------------- | ------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `sourceBytes` | 2 MiB   | UTF-8 bytes of the contract graph, before each module is parsed                                                             |
+| `sourceBytes` | 4 MiB   | UTF-8 bytes of the contract graph, before each module is parsed                                                             |
 | `moduleBytes` | 512 KiB | UTF-8 bytes of one module, before it is parsed; `contractReaderInputs` does not parse a larger one either                   |
-| `astNodes`    | 200 000 | syntax nodes of each graph (the contract's, the tables'), top-level type declarations left out, after each module is parsed |
+| `astNodes`    | 400 000 | syntax nodes of each graph (the contract's, the tables'), top-level type declarations left out, after each module is parsed |
 | `astDepth`    | 128     | syntax nesting of each module, measured without recursion, before any rule walks it                                         |
-| `schemaNodes` | 20 000  | schema nodes with shared schemas expanded: per schema while built, per placement summed                                     |
+| `schemaNodes` | 60 000  | schema nodes with shared schemas expanded: per schema while built, per placement summed                                     |
 | `schemaDepth` | 32      | nesting of one schema, while it is built                                                                                    |
 
 A schema value carries its expanded node count, so a const reused at every level (`S1 = { left: S0, right: S0 }`,
@@ -323,11 +323,18 @@ a node. The contract's graph drops each module's top-level type declarations (`w
 rule of the reader reads.
 
 Control reads in a Worker isolate of 128 MB, so the byte limits bound the parse and `astNodes` bounds the trees the
-reader holds. Measured as the smallest V8 heap the read completes in: 3 680 schema lines of `z.strictObject({ … })` in
-four modules (200 000 nodes, 611 KB) need 52 MB. Not covered: a dense module, such as one literal of 199 000 `0,`
-elements (398 KB, under every limit), needs 136 MB, and the node count comes only after its parse. Only a developer of
-the installation's applications can write one, and it restarts the isolate; it leaks nothing. Reading the contract
-outside the Worker closes it.
+reader holds. Measured in workerd as the smallest total V8 heap (`--max-heap-size`, 2 MB steps, a fresh isolate per
+probe) in which Control's whole read completes, from the commit's files through the serialized snapshot: a contract at
+the limits, 4 194 958 bytes in 217 modules of schemas and endpoints with their handlers, 397 125 syntax nodes and
+59 513 schema nodes, needs 95 MB, 25 MB of it the isolate before the read; the contract's read and check is the peak.
+That input is ASCII; Control holds up to 8 Mi characters of it (`readerTotalChars`), as two-byte strings once a module
+has a character outside Latin-1, which is not measured. Control also refuses a contract whose stored snapshot does not
+fit its row (`storedSnapshotFits`): the stored form costs each distinct field its name, so many distinct long field
+names reach that bound before `schemaNodes`; that contract stores 1 625 988 bytes, over the 1 500 000 bytes it allows.
+Not covered: a dense module, such as one literal of 210 000 `0,` elements (420 KB, under every limit) beside 189 000
+nodes of ordinary code, needs 123 MB, and the node count comes only after its parse. Only a developer of the
+installation's applications can write one, and it restarts the isolate; it leaks nothing. Reading the contract outside
+the Worker closes it.
 
 ## Documented escapes (D11)
 

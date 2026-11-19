@@ -347,16 +347,47 @@ describe('the files a snapshot may read', () => {
 		return { ...files, ...modules, 'fabrika.contract.ts': imports + contract }
 	}
 
-	test('a contract over the former 512 KiB limit is read', async () => {
-		const snapshot = await snapshotOf(padded([400 * 1024, 400 * 1024]))
+	test('a contract over the former 2 MiB limit is read', async () => {
+		const snapshot = await snapshotOf(padded(Array.from({ length: 6 }, () => 400 * 1024)))
 		expect(snapshot.contract?.app).toBe('notes')
 	})
 
 	test('modules a round names that together pass the total are refused before they are parsed', async () => {
-		const sizes = Array.from({ length: 11 }, () => Math.floor(SNAPSHOT_LIMITS.readerFileBytes * 0.75))
+		const size = Math.floor(SNAPSHOT_LIMITS.readerFileBytes * 0.75)
+		const sizes = Array.from({ length: Math.floor(SNAPSHOT_LIMITS.readerTotalChars / size) + 1 }, () => size)
 		expect(sizes.reduce((total, size) => total + size, 0)).toBeGreaterThan(SNAPSHOT_LIMITS.readerTotalChars)
 		await expect(snapshotOf(padded(sizes))).rejects.toEqual(new SnapshotRefused('contract-too-large'))
 	})
+
+	test('a contract the reader accepts whose stored form would not fit its row is refused as too large', async () => {
+		// 24 000 distinct fields of 60-character names: within every reader limit, about 2 MB in the shared encoding.
+		const files = commitOf()
+		const schemas = Array.from({ length: 24 }, (_, index) => {
+			const fields = Array.from({ length: 1000 }, (_, field) => `\t${`f${index}_${field}_`.padEnd(60, 'x')}: z.string(),`).join('\n')
+			return `export const S${index} = z.strictObject({\n${fields}\n})\n`
+		})
+		const modules = Object.fromEntries(
+			Array.from(
+				{ length: 4 },
+				(_, module) => [`src/wide/s${module}.ts`, `import { z } from 'zod/v4'\n${schemas.slice(module * 6, module * 6 + 6).join('')}`],
+			),
+		)
+		const imports = schemas.map((_, index) => `import { S${index} } from './s${Math.floor(index / 6)}'\n`).join('')
+		const procedures = schemas.map((_, index) =>
+			`\tq${index}: r.query({ input: ById, output: S${index}, access: { action: 'notes.read', on: 'note', from: 'id' } }),`
+		)
+		const wide = `import { z } from 'zod/v4'\nimport { app } from '../app-kit'\n${imports}\nconst ById = z.strictObject({ id: z.uuid() })\n\n`
+			+ `export const wide = app.group({ callers: ['human'] }, (r) => ({\n${procedures.join('\n')}\n}))\n`
+		const contract = (files['fabrika.contract.ts'] ?? '')
+			.replace(
+				"import { notes } from './src/notes/endpoints'\n",
+				"import { notes } from './src/notes/endpoints'\nimport { wide } from './src/wide/endpoints'\n",
+			)
+			.replace("c.rpc('/api', { notes })", "c.rpc('/api', { notes, wide })")
+		const large = { ...files, ...modules, 'src/wide/endpoints.ts': wide, 'fabrika.contract.ts': contract }
+		expect(readContractSource(new Map(Object.entries(large))).endpoints.filter((row) => row.id.startsWith('api.wide.'))).toHaveLength(24)
+		await expect(snapshotOf(large)).rejects.toEqual(new SnapshotRefused('contract-too-large'))
+	}, 60_000)
 
 	test('a module over the limit of one module is not read, so no reader of the window parses it', async () => {
 		const files = padded([SNAPSHOT_LIMITS.readerFileBytes + 1])
