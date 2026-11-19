@@ -1,7 +1,8 @@
-// The launcher of a dev environment against a stub of Control's source receiver: a handler change serves within a
-// second, a lockfile change or a change of the contract digest is refused with its reason, a boot reconciles before it serves, and (with
-// FABRIKA_TEST_POSTGRES_URL) a migration change migrates and respawns, a reset starts the schema from scratch, and a new
-// container over the schema another commit left runs a pending reset first, or reports the failure with its remedy.
+// The launcher of a dev environment against a stub of Control's source receiver: a handler change reaches the long
+// poll the launcher holds and serves, a lockfile change or a change of the contract digest is refused with its reason,
+// a boot reconciles before it serves, and (with FABRIKA_TEST_POSTGRES_URL) a migration change migrates and respawns, a
+// reset starts the schema from scratch, and a new container over the schema another commit left runs a pending reset
+// first, or reports the failure with its remedy.
 
 import { contractDigest, DEV_LAUNCHER_BOOTED_FILE, DEV_LAUNCHER_STATE_FILE, type DevLauncherConfig } from '@fabrika/auth-core'
 import { dropApplicationDatabase } from '@fabrika/platform-node'
@@ -41,6 +42,8 @@ const SCHEMA_FILE = 'src/db/schema.generated.ts'
 /** Control's receiver as the launcher sees it: a linear history of commits, generations, and the reports it got. */
 class StubControl {
 	readonly reports: DevReport[] = []
+	/** Each answer that carried a sync: its target, and whether a commit woke the held wait that answered it. */
+	readonly syncs: { to: string; woken: boolean }[] = []
 	private readonly history: { sha: string; files: readonly DevSourceFile[] }[]
 	private waiters: (() => void)[] = []
 	private reportWaiters: (() => void)[] = []
@@ -60,6 +63,11 @@ class StubControl {
 
 	get url(): string {
 		return `http://127.0.0.1:${this.server.port}`
+	}
+
+	/** Whether the launcher holds a long poll a commit would wake. */
+	get holding(): boolean {
+		return this.waiters.length > 0
 	}
 
 	get target(): string {
@@ -125,6 +133,7 @@ class StubControl {
 		const parsed = parseDevWaitRequest(await request.json())
 		if (!parsed.ok) return new Response('bad wait', { status: 400 })
 		const wait = parsed.value
+		let woken = false
 		const pending = (): boolean =>
 			wait.bootstrap !== this.bootstrap || wait.head !== this.target || (wait.reset !== null && wait.reset < this.reset)
 			|| (wait.checks !== null && wait.checks < this.checks)
@@ -133,12 +142,15 @@ class StubControl {
 				const timer = setTimeout(resolve, 2_000)
 				this.waiters.push(() => {
 					clearTimeout(timer)
+					woken = true
 					resolve()
 				})
 			})
 		}
 		if (wait.bootstrap !== this.bootstrap) return new Response('superseded', { status: 409 })
-		return Response.json(this.answer(wait.head, wait.reset === null ? Math.min(this.resetApplied ?? 0, this.reset) : this.reset))
+		const answer = this.answer(wait.head, wait.reset === null ? Math.min(this.resetApplied ?? 0, this.reset) : this.reset)
+		if (answer.sync !== null) this.syncs.push({ to: answer.sync.to, woken })
+		return Response.json(answer)
 	}
 
 	private answer(head: string, reset: number): DevWaitAnswer {
@@ -296,27 +308,38 @@ async function get(value: Fixture, path = '/'): Promise<string> {
 	return response.text()
 }
 
-async function until(read: () => Promise<string>, expected: string, timeoutMs = 10_000): Promise<number> {
+async function until(read: () => Promise<string>, expected: string, timeoutMs = 10_000): Promise<void> {
 	const started = performance.now()
 	while (performance.now() - started < timeoutMs) {
 		const text = await read().catch(() => '')
-		if (text === expected) return performance.now() - started
+		if (text === expected) return
 		await Bun.sleep(5)
 	}
 	throw new Error(`never read ${expected}`)
 }
 
+/** Until the launcher holds its long poll, so a commit made right after reaches that poll and no later one. */
+async function holding(control: StubControl, timeoutMs = 10_000): Promise<void> {
+	const deadline = performance.now() + timeoutMs
+	while (!control.holding) {
+		if (performance.now() > deadline) throw new Error('the launcher never held its long poll')
+		await Bun.sleep(5)
+	}
+}
+
 describe('the dev launcher', () => {
-	test('a handler change serves within a second, and the application holds neither credential', async () => {
+	// No clock: the commit must wake the poll the launcher holds; after the sync it waits only on its 25 ms health polls.
+	test('a handler change reaches the held long poll and serves, and the application holds neither credential', async () => {
 		const value = await fixture()
 		await start(value).ready
 		expect(await get(value)).toBe('one')
 		expect(JSON.parse(await get(value, '/env'))).toEqual({ provisioning: false, sourceKey: false, runtime: false })
 
 		const serving = value.control.nextReport((report) => report.status === 'serving' && report.head === sha(2))
+		await holding(value.control)
 		value.control.commit(sha(2), { 'src/message.ts': "export const message = 'two'\n" })
-		const elapsed = await until(() => get(value), 'two')
-		expect(elapsed).toBeLessThan(1_000)
+		await until(() => get(value), 'two')
+		expect(value.control.syncs).toEqual([{ to: sha(2), woken: true }])
 		expect((await serving).message).toBeNull()
 		expect(JSON.parse(readFileSync(join(value.root, DEV_LAUNCHER_STATE_FILE), 'utf8')).head).toBe(sha(2))
 	})
