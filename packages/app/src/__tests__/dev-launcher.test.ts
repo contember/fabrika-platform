@@ -139,12 +139,17 @@ class StubControl {
 			|| (wait.checks !== null && wait.checks < this.checks)
 		if (wait.hold && !pending()) {
 			await new Promise<void>((resolve) => {
-				const timer = setTimeout(resolve, 2_000)
-				this.waiters.push(() => {
+				const waiter = (): void => {
 					clearTimeout(timer)
 					woken = true
 					resolve()
-				})
+				}
+				// A wait its timer ended is no longer held, so `holding` must not count it.
+				const timer = setTimeout(() => {
+					this.waiters = this.waiters.filter((held) => held !== waiter)
+					resolve()
+				}, 2_000)
+				this.waiters.push(waiter)
 			})
 		}
 		if (wait.bootstrap !== this.bootstrap) return new Response('superseded', { status: 409 })
@@ -328,7 +333,7 @@ async function holding(control: StubControl, timeoutMs = 10_000): Promise<void> 
 }
 
 describe('the dev launcher', () => {
-	// No clock: the commit must wake the poll the launcher holds; after the sync it waits only on its 25 ms health polls.
+	// No clock: what a second guarded is that the commit wakes the poll the launcher holds; the respawn takes what load makes it.
 	test('a handler change reaches the held long poll and serves, and the application holds neither credential', async () => {
 		const value = await fixture()
 		await start(value).ready

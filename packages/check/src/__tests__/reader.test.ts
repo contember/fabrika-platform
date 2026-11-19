@@ -431,7 +431,7 @@ describe('the resource budget', () => {
 		return `${lines.join('\n')}\nexport const Note = S${depth}\n`
 	}
 
-	// No clock: expanding depth 30 would build 2^30 nodes, which the runner's timeout stops long before it ends.
+	// No clock: the read is synchronous, so a clock fails only once it returns, and expanding depth 30 (2^30 nodes) never does.
 	for (const depth of [16, 30]) {
 		test(`a schema that doubles at each of ${depth} levels is refused at the level that crosses the budget, unexpanded`, () => {
 			const findings = refusal(application(BASE, exponential(depth)))
