@@ -347,13 +347,14 @@ describe('the files a snapshot may read', () => {
 		return { ...files, ...modules, 'fabrika.contract.ts': imports + contract }
 	}
 
-	test('a contract over the former 512 KiB limit is read', async () => {
-		const snapshot = await snapshotOf(padded([400 * 1024, 400 * 1024]))
+	test('a contract over the former 2 MiB limit is read', async () => {
+		const snapshot = await snapshotOf(padded(Array.from({ length: 6 }, () => 400 * 1024)))
 		expect(snapshot.contract?.app).toBe('notes')
 	})
 
 	test('modules a round names that together pass the total are refused before they are parsed', async () => {
-		const sizes = Array.from({ length: 11 }, () => Math.floor(SNAPSHOT_LIMITS.readerFileBytes * 0.75))
+		const size = Math.floor(SNAPSHOT_LIMITS.readerFileBytes * 0.75)
+		const sizes = Array.from({ length: Math.floor(SNAPSHOT_LIMITS.readerTotalChars / size) + 1 }, () => size)
 		expect(sizes.reduce((total, size) => total + size, 0)).toBeGreaterThan(SNAPSHOT_LIMITS.readerTotalChars)
 		await expect(snapshotOf(padded(sizes))).rejects.toEqual(new SnapshotRefused('contract-too-large'))
 	})
