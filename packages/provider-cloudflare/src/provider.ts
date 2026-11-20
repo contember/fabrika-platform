@@ -214,7 +214,7 @@ const APPLICATION_CLI = ['node_modules', '.bin', 'fabrika']
 
 const ENTRY_BUILD_ARGS = ['app', 'build', '--provider=cloudflare']
 
-/** All the CLI gets of the executor's environment: what Bun needs to run, as the generated tests of `fabrika db` get. */
+/** All the CLI gets of the executor's environment: what Bun needs to run. */
 const ENTRY_BUILD_VARIABLES: readonly string[] = ['PATH', 'HOME', 'TMPDIR']
 
 const isFile = async (path: string): Promise<boolean> => {

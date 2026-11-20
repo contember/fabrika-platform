@@ -79,7 +79,7 @@ export interface FrameworkSide {
 	/** Connects the layer once and answers its binding; a call while one is connected throws. */
 	bind(runtime: DataLayerRuntime): ProvisionalBinding
 	readonly framework: FrameworkTables
-	/** The untyped handle over one table that `@fabrika/db/testing` hands the isolation tests. */
+	/** The untyped handle over one table that `@fabrika/db/testing` hands the policy isolation kit. */
 	probe(table: string): TableProbe
 	/** One table's context, for the framework's own store builders (`defineStore`, `@fabrika/db/testing`). */
 	tableContext(table: string, mode: 'dimension' | 'child'): TableContext

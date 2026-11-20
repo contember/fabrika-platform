@@ -542,7 +542,7 @@ function applicationMigrations(directory: string): SqliteMigrationBundle['migrat
 /**
  * A fresh in-memory database with the framework's and the application's migrations applied by the runner a Durable
  * Object boots with (`@fabrika/db/sqlite-migrate`), opened with its engine (`@fabrika/db/sqlite`). Never `null`: it
- * needs no backend, so it never skips; its type is still assignable to `@fabrika/db/testing`'s, so a generated test
+ * needs no backend, so it never skips; its type is still assignable to `@fabrika/db/testing`'s, so a test
  * that checks for `null` compiles against both kits.
  */
 export async function testDatabase(options: TestDatabaseOptions): Promise<TestDatabase> {

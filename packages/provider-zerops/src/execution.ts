@@ -274,7 +274,7 @@ const recipeOf = (execution: ZeropsLockedExecution): ContractRecipe =>
 		sourceRoot: SOURCE_ROOT,
 		runtimeRoot: RUNTIME_ROOT,
 		// The build has no database; a container's init commands run the migrations and schema checks, and the readiness
-		// window opens only with `run.start`, after them (both verified live), so the CRM's ~3 minutes does not race it.
+		// window opens only with `run.start`, after them (both verified live), so a long migration does not race it.
 		database: execution.databaseUrl !== null,
 		sourceMaps: execution.sourceMaps !== null,
 		jobs: execution.contract.jobs,

@@ -392,7 +392,7 @@ const cleanScanner: FileScanner = {
 }
 
 /**
- * The variables `boot` requires of `app` that a generated case never uses: each challenge's secret and site key, since
+ * The variables `boot` requires of `app` that a case of the kit never uses: each challenge's secret and site key, since
  * no case solves a challenge, and each SPA mount's `public` variables, since no case reads a page's config. The kit's
  * challenge stand-in refuses every token, so no verification leaves the process.
  */
@@ -1025,7 +1025,7 @@ export function endpointAccessKit<DB, P>(
 
 	// The cases of one call: `removals` takes the removal of the application rows it seeds, which `drained` runs once
 	// the call and the runs it kicked are over. A list per call, so a concurrent case never removes the rows another
-	// was given; the generated cases run one after another, since a row a required foreign key needed is shared.
+	// was given; the cases of a file run one after another, since a row a required foreign key needed is shared.
 	const accessKitOf = (removals: (() => Promise<void>)[]): EndpointAccessKit => {
 		/** The pins of `endpoint`, whose seeded rows this call removes once it is over. */
 		const pinningOf = (endpoint: string): Pinning => ({ pins: options.pins?.[endpoint] ?? {}, removals })

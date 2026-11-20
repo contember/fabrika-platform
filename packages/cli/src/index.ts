@@ -52,7 +52,7 @@ A bare \`--trigger-ref\` is a branch (\`deploy/prod\` deploys on a push to \`ref
 \`refs/tags/<tag>\` or a glob such as \`refs/tags/v*\`. \`fabrika control --help\` lists every form.
 
 \`fabrika db\` manages an application's Postgres schema: migration files, applying them (the template's
-\`run.initCommands\`), the generated types and the generated isolation tests. Run \`fabrika db --help\` for its surface.
+\`run.initCommands\`) and the generated types. Run \`fabrika db --help\` for its surface.
 
 \`fabrika job run <name>\` runs one c.cron job of a contract application: the command each crontab entry runs. Run
 \`fabrika job --help\` for its surface.

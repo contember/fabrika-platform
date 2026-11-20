@@ -2917,7 +2917,7 @@ function probeRunner(context: TableContext): { readonly run: Runner; readonly he
 }
 
 /**
- * One table's operations without the store types, for `@fabrika/db/testing` only: the generated isolation tests address
+ * One table's operations without the store types, for `@fabrika/db/testing` only: the policy isolation kit addresses
  * a table by name. Every runtime check of a store applies; a child row is addressed by its parent's capability and
  * `key`, a dimension row by its capability alone.
  */

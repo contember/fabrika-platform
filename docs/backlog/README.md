@@ -170,4 +170,6 @@ rest of custom domains, a client address on a dedicated IPv4, a release and reco
 - [288](288-reader-input-discovery-parses-every-held-module-each-round.md): Control's import discovery parses every held module in each round, so a deep import chain can exceed the Worker's CPU limit.
 - [289](289-caller-rows-reach-only-the-global-case.md): The leak sweep's callers carry no caller rows and no principal-shaped id, so a handler that needs a caller's record answers 403.
 - [290](290-verify-the-brevo-email-adapter-on-a-live-account.md): The Brevo email adapter is verified only against a stubbed `fetch`; its idempotency key, text-only body, unsubscribe headers and refusals wait for a live account.
+- [291](291-an-existing-cloudflare-installation-keeps-its-legacy-names.md): A Cloudflare installation created before `FABRIKA_CLOUDFLARE_NAMES` keeps its legacy resource names; nothing moves it onto the `fabrika-*` names.
+- [292](292-boot-every-platform-worker-in-workerd.md): Only Control's Worker is booted in workerd by a test; a module-load error only workerd refuses in IAM's, Operations' or the runner's Worker reaches a live deploy.
 - [10](10-app-scope-secrets-on-zerops.md) — Control refuses an `app`-scoped secret on Zerops today; record that as the decision, or replicate per service.

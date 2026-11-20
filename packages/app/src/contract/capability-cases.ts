@@ -1,5 +1,5 @@
-// Which capability of an endpoint of several has no denied case: the rule both the scaffold and the endpoint access kit
-// read, so the generated tests never ask the kit for a case it refuses.
+// Which capability of an endpoint of several has no denied case: the rule by which the endpoint access kit refuses a
+// denied case; `@fabrika/app/contract` exports it so a test can skip that case.
 
 import type { CapabilityRequirement, DimensionArtifact } from '@fabrika/auth-core'
 import { containersOf } from './containers'

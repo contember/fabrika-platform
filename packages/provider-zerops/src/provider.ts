@@ -311,13 +311,13 @@ const terminalFailure = (version: ZeropsAppVersion, checks: boolean): string => 
 /**
  * What a version that built but did not activate tells the operator. Zerops' own log of it is the refused readiness
  * attempts, which read as a server that never started whatever stopped it. `checks`: the generated init commands run
- * the migrations, the schema check and the isolation tests, as for a contract application with a database.
+ * the migrations and the schema check, as for a contract application with a database.
  */
 const activationHint = (version: ZeropsAppVersion, checks: boolean): string => {
 	if (version.status !== 'DEPLOY_FAILED') return ''
 	const failed = ': an init command failed or the readiness check never answered'
 	return checks
-		? `${failed}. The init commands run the migrations, the schema check and the generated isolation tests; the runtime lines above show how far they got`
+		? `${failed}. The init commands run the migrations and the schema check; the runtime lines above show how far they got`
 		: failed
 }
 

@@ -1121,7 +1121,7 @@ describe('Zerops provider', () => {
 		)
 		const failed = stepError(await provider(deployRun(recorded)), 'await-version')
 		expect(failed).toStartWith('Zerops pipeline failed: app-version version-inactive is DEPLOY_FAILED: an init command failed or the readiness check')
-		expect(failed).toContain('the generated isolation tests')
+		expect(failed).toContain('The init commands run the migrations and the schema check')
 
 		const withoutDatabase = createZeropsDeployer(() =>
 			makeCollaborators(recorded, { statuses: ['DEPLOY_FAILED'], processStatuses: ['FINISHED'], triggerVersionId: 'version-inactive' })
