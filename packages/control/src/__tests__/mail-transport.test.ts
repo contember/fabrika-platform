@@ -1,6 +1,7 @@
 import { CONTRACT_FORMAT, type ContractArtifact, type DeclaredReach } from '@fabrika/auth-core'
 import { builtinEmailProviders, builtinEmailProviderSince } from '@fabrika/email/providers'
 import { describe, expect, test } from 'bun:test'
+import { z } from 'zod'
 import {
 	CLOUDFLARE_MAIL_REMEDY,
 	type InstallationMail,
@@ -192,8 +193,49 @@ describe('a provider newer than the application', () => {
 		expect(refusal).not.toThrow('cf-private-token')
 	})
 
+	test('Brevo is handed from the prerelease that holds it on, and refused to an earlier prerelease', () => {
+		const brevoVariables = {
+			FABRIKA_EMAIL_PROVIDER: 'brevo',
+			FABRIKA_EMAIL_FROM: 'mail@example.test',
+			FABRIKA_EMAIL_BREVO_API_KEY: 'xkeysib-private-key',
+		}
+		const brevo: InstallationMail = {
+			kind: 'transport',
+			transport: { variables: brevoVariables, secretNames: new Set(['FABRIKA_EMAIL_BREVO_API_KEY']) },
+		}
+		for (const framework of ['0.9.0-dev.17', '0.9.0-dev.18', '0.9.0', '0.9.1', '1.0.0']) {
+			expect(installationMailEnvironment(brevo, needs, framework)).toEqual(brevoVariables)
+		}
+		for (const framework of ['0.9.0-dev.16', '0.9.0-dev.15', '0.9.0-cloudflare.1', '0.8.2']) {
+			const refusal = (): unknown => installationMailEnvironment(brevo, needs, framework)
+			expect(refusal).toThrow(
+				`the installation's provider \`brevo\` is unknown to framework ${framework}, which this version pins: it needs 0.9.0-dev.17 or newer`,
+			)
+			expect(refusal).not.toThrow('xkeysib-private-key')
+		}
+	})
+
 	test('every built-in provider states its release', () => {
 		expect(Object.keys(builtinEmailProviderSince).sort()).toEqual(Object.keys(builtinEmailProviders).sort())
+	})
+
+	// A floor names the release after the newest one published without its provider. The source version names the last
+	// release cut, so the source holds every provider, or a provider still unreleased names the very next prerelease. A
+	// bump that cut the release holding it under another name would refuse it to that release, and this fails then.
+	test('every provider floor is held by the source version, or is its next prerelease', async () => {
+		const manifest = z.object({ version: z.string() }).parse(await Bun.file(new URL('../../../app/package.json', import.meta.url)).json())
+		const next = /^(\d+\.\d+\.\d+-[0-9A-Za-z-]+\.)(\d+)$/.exec(manifest.version)
+		for (const [provider, since] of Object.entries(builtinEmailProviderSince)) {
+			if (since === null) continue
+			const mail: InstallationMail = { kind: 'transport', transport: { variables: { FABRIKA_EMAIL_PROVIDER: provider }, secretNames: new Set() } }
+			let held = true
+			try {
+				installationMailEnvironment(mail, needs, manifest.version)
+			} catch {
+				held = false
+			}
+			if (!held) expect([provider, since]).toEqual([provider, next === null ? manifest.version : `${next[1]}${Number(next[2]) + 1}`])
+		}
 	})
 })
 

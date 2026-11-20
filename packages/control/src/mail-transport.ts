@@ -13,7 +13,7 @@ import {
 } from '@fabrika/email'
 import { PLATFORM_EMAIL_PROVIDER } from '@fabrika/email/platform'
 import { builtinEmailProviderSince } from '@fabrika/email/providers'
-import { compareReleases, parseRelease, type Release } from './approval/readers'
+import { comparePrecedence, compareReleases, parseRelease, type Release } from './approval/readers'
 
 /** The installation's default transport: what Control hands an application whose job declares mailer 'installation'. */
 export interface InstallationMailTransport {
@@ -115,10 +115,14 @@ function providerSince(provider: string): Release | undefined {
 	return since === undefined || since === null ? undefined : (parseRelease(since) ?? undefined)
 }
 
-/** A snapshot that records no release predates every provider with a `since`. */
+/**
+ * A snapshot that records no release predates every provider with a `since`. A `since` without a prerelease admits every
+ * prerelease of its version; one with a prerelease (a provider added between two prereleases) admits only the later ones.
+ */
 function holdsRelease(framework: string | undefined, since: Release): boolean {
 	const release = framework === undefined ? null : parseRelease(framework)
-	return release !== null && compareReleases(release, since) >= 0
+	if (release === null) return false
+	return (since.text.includes('-') ? comparePrecedence(release, since) : compareReleases(release, since)) >= 0
 }
 
 /** The secret values a deploy handed, for the run log to redact. */

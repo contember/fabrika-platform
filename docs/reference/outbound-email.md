@@ -82,7 +82,7 @@ name, the subject, the body and the idempotency key before any provider I/O.
 
 A composition hands the package a provider registry, a name-to-factory map. The
 registry is open: a composition can add its own provider. `@fabrika/email/providers`
-exports `builtinEmailProviders` (`ahasend`, `cloudflare`, `lettermint`, `postmark`, `resend`, `smartemailing`), sorted by name, the
+exports `builtinEmailProviders` (`ahasend`, `brevo`, `cloudflare`, `lettermint`, `postmark`, `resend`, `smartemailing`), sorted by name, the
 order every help text and refusal lists them in. Memory is never
 selected by a variable. Directory is a composition input of IAM, and a `directory`
 provider that only a local composition registers (below).
@@ -104,6 +104,7 @@ sender, which does no I/O.
 | `FABRIKA_EMAIL_AHASEND_API_KEY`            | yes    | required for `ahasend`; an API key v2 scoped to `messages:send:{domain}` at least                                             |
 | `FABRIKA_EMAIL_AHASEND_ACCOUNT_ID`         | no     | required for `ahasend`; `[A-Za-z0-9-]{1,64}`                                                                                  |
 | `FABRIKA_EMAIL_AHASEND_BROADCAST_FROM`     | no     | optional, the address a `broadcast` message is sent from, on the account's Marketing domain; without it, `ahasend` sends none |
+| `FABRIKA_EMAIL_BREVO_API_KEY`              | yes    | required for `brevo`; an API key (v3) of the account                                                                          |
 | `FABRIKA_EMAIL_CLOUDFLARE_API_TOKEN`       | yes    | required for `cloudflare`; an account API token with only the Email Sending Write permission                                  |
 | `FABRIKA_EMAIL_CLOUDFLARE_ACCOUNT_ID`      | no     | required for `cloudflare`; the account's ID, 32 hexadecimal digits                                                            |
 | `FABRIKA_EMAIL_LETTERMINT_PROJECT_TOKEN`   | yes    | required for `lettermint`; a project API token                                                                                |
@@ -127,6 +128,7 @@ conformance kit against a stubbed `fetch`.
 | provider        | idempotent | confirmation | unsubscribe | attachments | broadcast                            | checked against                                                                                                                             |
 | --------------- | ---------- | ------------ | ----------- | ----------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
 | `ahasend`       | yes        | `sync`       | yes         | 12 MiB      | from its Marketing domain, unchecked | live, 2026-10-22                                                                                                                            |
+| `brevo`         | no         | `sync`       | no          | 10 MiB      | no                                   | stubbed ([backlog 290](../backlog/290-verify-the-brevo-email-adapter-on-a-live-account.md))                                                 |
 | `cloudflare`    | no         | `sync`       | yes         | 3 MiB       | no                                   | accepted answer live, 2026-10-25; refusals stubbed ([backlog 241](../backlog/241-verify-the-cloudflare-email-adapter-on-a-live-account.md)) |
 | `lettermint`    | yes        | `sync`       | yes         | 15 MiB      | its broadcast route, unchecked       | live, 2026-10-22                                                                                                                            |
 | `postmark`      | no         | `sync`       | yes         | 10 MiB      | its broadcast stream                 | live, 2026-10-22                                                                                                                            |
@@ -154,9 +156,13 @@ error text never reaches an error.
 A new provider is one module (its sender and its `EmailProvider` declaration), its entry in
 `builtinEmailProviders` (`builtinEmailProviderVariables` lists every provider's variables from it), its release in
 `builtinEmailProviderSince` (the release after the newest one published without it; the type refuses a provider
-without one; Control compares releases without their prerelease tag, so `0.9.0` also admits the `0.9.0-dev.*`
-prereleases published before `cloudflare`), its
-`package.json` export, a unit test and a conformance harness. The installers, the
+without one), its `package.json` export, a unit test and a conformance harness. Control compares a release without a
+prerelease tag by its version alone, so `0.9.0` also admits the `0.9.0-dev.*` prereleases published before
+`cloudflare`; a provider added between two prereleases names the first prerelease that holds it, as `brevo` names
+`0.9.0-dev.17`, and Control then compares the prerelease too. One gap no floor closes: `0.9.0-dev.0` to `0.9.0-dev.4`
+hold only `resend` and `smartemailing`, yet the floors `0.8.2` and `0.9.0` admit them: where Control hands the
+credential directly rather than through the relay, such an application is handed `ahasend`, `lettermint`, `postmark` or
+`cloudflare`, and its boot refuses the variable. The installers, the
 Cloudflare workflow and its README read the registry, so neither needs an edit.
 
 A provider that takes a shorter idempotency key than the contract's 256 characters gets one through
@@ -258,6 +264,43 @@ A `broadcast` message goes through the project's broadcast route (`route`), `bro
 created; a route the project lacks is a 422 that the adapter answers as `provider_rejected`, naming the variable. Not
 checked live: the test project had no broadcast route, so how Lettermint treats the unsubscribe headers there is not
 known.
+
+## Brevo adapter
+
+`BrevoEmailSender` (`@fabrika/email/brevo`) calls Brevo's transactional email API,
+`POST https://api.brevo.com/v3/smtp/email`, with the account's API key in the `api-key` header. The sender is
+`sender: {email, name}`, the recipient `to: [{email}]`, the reply-to `replyTo: {email}`, the bodies `htmlContent` and
+`textContent`, and an attachment `name` and base64 `content`. Brevo requires an HTML body when a request names no
+template, so a text-only message, or one whose HTML is blank, carries its text, HTML-escaped with each line break a
+`<br>`, as `htmlContent` too. A 201 carries the `messageId`; one without it is `malformed_response`.
+
+Brevo dedupes an idempotency key that its guide places in the request's `headers` as `idempotencyKey`, a UUID, for 30
+minutes. The adapter sends the message's key there as a UUID derived from it (the first 16 bytes of its SHA-256 with the
+version 4 bits), the same UUID on every retry. A retry after the window could deliver twice
+([ADR-0019](../decisions/0019-portable-outbound-email.md)), so the adapter is **not idempotent**, and an unknown outcome
+over it (a timeout, a lost answer, a 5xx) waits for a person, as over Postmark. The key still stops a repeat inside the
+window. A repeated key (`duplicate_parameter`), an identical request too soon (`duplicate_request`) or
+`Request already processed` is `idempotency_conflict`: Brevo took a request under the key and does not say whether its
+content matched, so the outcome is unknown and a person decides.
+
+Capabilities: not idempotent, `sync`, and `maxAttachmentBytes` of 10 MiB: Brevo bounds a message at 20 MB with its
+attachments base64. Brevo takes no media type for an attachment and derives it from the file name, and it takes only the
+extensions its API reference lists, so the adapter refuses any other file, and a message's sender name over Brevo's 70
+characters, as `invalid_message` before the request. A configured sender name (`FABRIKA_EMAIL_FROM_NAME`, or the display
+name in `FABRIKA_EMAIL_FROM`) over 70 characters is refused earlier, as an invalid configuration when IAM, Control or an
+installer reads the transport. Through Control's relay the allowlist is checked only when Control dispatches the
+message, after the relay accepted it: a job's attachment of another type (`.json`, `.svg`, `.webp`) fails there, which
+the operator sees and the job does not. Brevo's `headers` take no standard header, so the adapter writes no `List-Unsubscribe`
+and has neither `listUnsubscribe` nor `broadcast`: it sends transactional mail only.
+
+A refusal carries a documented `code`, read only to classify it: a 402, `not_enough_credits` or `Insufficient credits`
+is `quota_exceeded`; `unauthorized`, `Authentication failed`, `api-key not found`, `permission_denied` and
+`account_under_validation` are `provider_unauthorized`; every other answer by its status (401 and 403
+`provider_unauthorized`, 429 `rate_limited`, 5xx `provider_unavailable`, any other 4xx `provider_rejected`). An account
+that limits its API keys to authorised IP addresses refuses a request from any other with a 401: Workers and Zerops send
+from addresses that change, so turn the restriction off for the key's account, or the mail fails
+`provider_unauthorized`. Not checked live
+([backlog 290](../backlog/290-verify-the-brevo-email-adapter-on-a-live-account.md)).
 
 ## Cloudflare adapter
 
