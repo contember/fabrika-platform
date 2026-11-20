@@ -3,7 +3,7 @@
 import { defineVocabulary } from '@fabrika/app/contract'
 
 export const vocabulary = defineVocabulary({
-	app: 'example-app',
+	app: 'subdir-app',
 	dimensions: {
 		organization: {},
 		project: {},

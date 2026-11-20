@@ -12,7 +12,7 @@ export const exampleArtifact = compileContract(contract, {})
 export const buildExampleWorker = (): Worker =>
 	new Worker({
 		dir: '.',
-		name: 'example-app',
+		name: 'subdir-app',
 		main: './fabrika/entry.generated.ts',
 		compatibility_flags: ['nodejs_compat_v2'],
 		compatibility_date: '2025-10-01',
