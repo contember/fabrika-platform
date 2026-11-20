@@ -74,6 +74,32 @@ export async function configureEnvironment(
 	detail(`Recommended hardening — require your own approval before a deploy: ${environmentReviewerCommand(repo, environment)}`)
 }
 
+const variableLineSchema = z.object({ name: z.string(), value: z.string() })
+
+/**
+ * The variables an Environment already holds, or null when the repository or the Environment does not exist. Any other
+ * failure throws: a caller decides from the answer whether an installation already exists, and must not guess.
+ */
+export async function environmentVariables(
+	repo: string,
+	environment: string,
+	gh: GhAttempt = attempt,
+): Promise<Readonly<Record<string, string>> | null> {
+	const path = `repos/${repo}/environments/${environment}/variables`
+	const result = await gh({ command: 'gh', args: ['api', '--paginate', path, '--jq', '.variables[] | {name, value}'], cwd: ANCHOR })
+	if (result.exitCode !== 0) {
+		if (ghHttpStatus(result) === 404) return null
+		throw new Error(`\`gh api ${path}\` failed (${unavailableReason(result)}).`)
+	}
+	const variables: Record<string, string> = {}
+	for (const line of result.stdout.split('\n')) {
+		if (line.trim() === '') continue
+		const variable = variableLineSchema.parse(JSON.parse(line))
+		variables[variable.name] = variable.value
+	}
+	return variables
+}
+
 /**
  * Idempotent create, carrying the deployment-branch policy MERGED over whatever protection rules the
  * environment already has — a PUT replaces the whole object, so a reviewer or wait timer the operator

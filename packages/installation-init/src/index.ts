@@ -29,6 +29,7 @@ export {
 	configureEnvironment,
 	type EnvironmentConfig,
 	type EnvironmentEffects,
+	environmentVariables,
 	type ExistingEnvironmentProtection,
 	existingEnvironmentProtection,
 	triggerPlatformWorkflow,
