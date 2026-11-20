@@ -58,6 +58,32 @@ CREATE TABLE retirements (
 	ended_by_id TEXT REFERENCES people (id),
 	CHECK ((ended_at IS NULL) = (ended_by_id IS NULL))
 );
+CREATE TABLE sites (
+	id TEXT PRIMARY KEY,
+	owner_id TEXT NOT NULL REFERENCES people (id),
+	name TEXT NOT NULL,
+	UNIQUE (id, owner_id)
+);
+CREATE TABLE visits (
+	id TEXT PRIMARY KEY,
+	owner_id TEXT NOT NULL REFERENCES people (id),
+	site_id TEXT NOT NULL,
+	FOREIGN KEY (site_id, owner_id) REFERENCES sites (id, owner_id)
+);
+CREATE TABLE purposes (code TEXT PRIMARY KEY);
+CREATE TABLE purpose_directions (
+	purpose TEXT NOT NULL REFERENCES purposes (code),
+	direction TEXT NOT NULL CHECK (direction IN ('in', 'out')),
+	PRIMARY KEY (purpose, direction)
+);
+INSERT INTO purposes (code) VALUES ('stock'), ('repair');
+INSERT INTO purpose_directions (purpose, direction) VALUES ('stock', 'in'), ('repair', 'out');
+CREATE TABLE moves (
+	id TEXT PRIMARY KEY,
+	purpose TEXT NOT NULL REFERENCES purposes (code),
+	direction TEXT NOT NULL,
+	FOREIGN KEY (purpose, direction) REFERENCES purpose_directions (purpose, direction)
+);
 CREATE TABLE items (id TEXT PRIMARY KEY, name TEXT NOT NULL);
 CREATE TABLE variants (
 	id TEXT PRIMARY KEY,
@@ -89,6 +115,11 @@ interface DB {
 	claims: { id: string; witness_id: string | null; witness_name: string | null }
 	invoices: { id: string; supplier_id: string | null; document_id: string | null }
 	retirements: { id: string; person_id: string; ended_at: string | null; ended_by_id: string | null }
+	sites: { id: string; owner_id: string; name: string }
+	visits: { id: string; owner_id: string; site_id: string }
+	purposes: { code: string }
+	purpose_directions: { purpose: string; direction: string }
+	moves: { id: string; purpose: string; direction: string }
 	items: { id: string; name: string }
 	variants: { id: string; item_id: string; base_item_id: string }
 	days: { id: string; day: string }
@@ -120,6 +151,24 @@ const columns: TypedColumnList<DB> = {
 	retirements: {
 		columns: ['id', 'person_id', 'ended_at', 'ended_by_id'],
 		foreignKeys: [{ columns: ['person_id'], table: 'people', references: ['id'] }, { columns: ['ended_by_id'], table: 'people', references: ['id'] }],
+	},
+	sites: { columns: ['id', 'owner_id', 'name'], foreignKeys: [{ columns: ['owner_id'], table: 'people', references: ['id'] }] },
+	// The key of the owner comes first: the site's key reads the owner it fills.
+	visits: {
+		columns: ['id', 'owner_id', 'site_id'],
+		foreignKeys: [
+			{ columns: ['owner_id'], table: 'people', references: ['id'] },
+			{ columns: ['site_id', 'owner_id'], table: 'sites', references: ['id', 'owner_id'] },
+		],
+	},
+	purposes: { columns: ['code'], foreignKeys: [] },
+	purpose_directions: { columns: ['purpose', 'direction'], foreignKeys: [{ columns: ['purpose'], table: 'purposes', references: ['code'] }] },
+	moves: {
+		columns: ['id', 'purpose', 'direction'],
+		foreignKeys: [
+			{ columns: ['purpose'], table: 'purposes', references: ['code'] },
+			{ columns: ['purpose', 'direction'], table: 'purpose_directions', references: ['purpose', 'direction'] },
+		],
 	},
 	items: { columns: ['id', 'name'], foreignKeys: [] },
 	variants: {
@@ -159,6 +208,11 @@ const tables = defineTables(vocabulary, columns)({
 	claims: app('a witness by key or by name'),
 	invoices: app('a supplier with its document'),
 	retirements: app('ended by someone, or not ended'),
+	sites: app('a site of an owner'),
+	visits: app('a visit of an owner at one of its sites'),
+	purposes: { scope: { reference: 'the purposes a migration lists' }, actions: { read: 'rows.read' } },
+	purpose_directions: { scope: { reference: 'the directions of each purpose' }, actions: { read: 'rows.read' } },
+	moves: app('a move for a purpose in one of its directions'),
 	items: app('items'),
 	variants: app('a variant of another item'),
 	days: app('one row a day'),
@@ -240,6 +294,13 @@ for (const [dialect, database] of [['SQLite', sqlite], ['Postgres', postgres]] a
 			expect(endedRow['ended_by_id']).toEqual(expect.any(String))
 			await open.remove()
 			await ended.remove()
+		})
+
+		test('a key that shares a column with a key filled before it references a row that holds the same value', async () => {
+			const visit = await row('visits')
+			expect(visit['site_id']).toEqual(expect.any(String))
+			const move = await row('moves')
+			expect([['stock', 'in'], ['repair', 'out']]).toContainEqual([String(move['purpose']), String(move['direction'])])
 		})
 
 		test('two foreign keys a CHECK keeps apart reference two rows', async () => {

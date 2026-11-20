@@ -441,16 +441,64 @@ interface SlotOption {
 	readonly values: (row: ReadonlyMap<string, SampleValue>) => Promise<ReadonlyMap<string, SampleValue>>
 }
 
-/** Columns the fixture fills together (one column, or a foreign key's open columns) and the ways it may fill them, first first. */
+/**
+ * Columns the fixture fills together (one column, or a foreign key's open columns) and the ways it may fill them, first
+ * first. `reads` are the columns of the row its options read, which other slots fill first.
+ */
 interface Slot {
 	readonly columns: readonly string[]
 	readonly options: readonly SlotOption[]
+	readonly reads?: readonly string[]
 }
 
-/** An option whose values do not depend on the row, computed once: a fresh referenced row is inserted only once. */
-function keptOption(compute: () => Promise<ReadonlyMap<string, SampleValue>>): SlotOption {
-	let values: Promise<ReadonlyMap<string, SampleValue>> | undefined
-	return { grouped: false, values: () => (values ??= compute()) }
+/**
+ * An option computed once for each value of `reads` in the row: a fresh referenced row is inserted once for the values
+ * it shares with the row, and again only when they change.
+ */
+function keptOption(
+	compute: (row: ReadonlyMap<string, SampleValue>) => Promise<ReadonlyMap<string, SampleValue>>,
+	reads: readonly string[] = [],
+): SlotOption {
+	const computed = new Map<string, Promise<ReadonlyMap<string, SampleValue>>>()
+	return {
+		grouped: false,
+		values: (row) => {
+			const key = reads.map((name) => valueKey(row.get(name) ?? null)).join('\u0000')
+			const values = computed.get(key) ?? compute(row)
+			computed.set(key, values)
+			return values
+		},
+	}
+}
+
+function valueKey(value: SampleValue): string {
+	if (value === null) return 'null'
+	return `${typeof value}:${value instanceof Date ? value.toISOString() : String(value)}`
+}
+
+/**
+ * The order the fixture fills `slots` in: a slot after the slots that fill the columns it reads, and a slot that numbers
+ * within the row's group last, once every other slot placed the row. A cycle keeps the declared order.
+ */
+function slotOrder(slots: readonly Slot[]): number[] {
+	const filledBy = new Map<string, number>()
+	slots.forEach((slot, index) => {
+		for (const name of slot.columns) filledBy.set(name, index)
+	})
+	const grouped = (index: number): boolean => slots[index]?.options.some((option) => option.grouped) ?? false
+	const pending = [...slots.keys()].sort((left, right) => Number(grouped(left)) - Number(grouped(right)))
+	const order: number[] = []
+	while (pending.length > 0) {
+		const ready = pending.findIndex((index) =>
+			(slots[index]?.reads ?? []).every((name) => {
+				const filler = filledBy.get(name)
+				return filler === undefined || filler === index || order.includes(filler)
+			})
+		)
+		const [next] = pending.splice(Math.max(ready, 0), 1)
+		if (next !== undefined) order.push(next)
+	}
+	return order
 }
 
 function valueOption(name: string, value: SampleValue): SlotOption {
@@ -634,10 +682,16 @@ export function testSeeding(backend: SeedingBackend): TestSeeding {
 		if (open.every((name) => columns.find((column) => column.name === name)?.nullable === true)) {
 			options.push({ grouped: false, values: async () => new Map(open.map((name) => [name, null])) })
 		}
-		const fixed = new Map<string, SampleValue>()
-		key.columns.forEach((name, index) => {
-			if (!open.includes(name)) fixed.set(key.references[index] ?? '', assigned.get(name) ?? null)
-		})
+		// The key's columns the row holds already, or another slot fills first (a column two keys share), as the referenced
+		// row names them.
+		const shared = key.columns.filter((name) => !open.includes(name))
+		const fixedOf = (row: ReadonlyMap<string, SampleValue>): Map<string, SampleValue> => {
+			const fixed = new Map<string, SampleValue>()
+			key.columns.forEach((name, index) => {
+				if (shared.includes(name)) fixed.set(key.references[index] ?? '', row.get(name) ?? null)
+			})
+			return fixed
+		}
 		const target = modelOf(models, key.table)
 		const scoped = target?.scope.mode === 'dimension' || target?.scope.mode === 'child'
 		const refused = key.table === table
@@ -647,20 +701,20 @@ export function testSeeding(backend: SeedingBackend): TestSeeding {
 			: undefined
 		if (refused === undefined) {
 			if (!scoped) {
-				options.push(keptOption(async () => {
-					const existing = await backend.firstRow(key.table, key.references, fixed)
+				options.push(keptOption(async (row) => {
+					const existing = await backend.firstRow(key.table, key.references, fixedOf(row))
 					if (existing === undefined) throw new SeedLimitError(`the isolation fixture finds no row of ${key.table} to reference`)
 					return keyValues(key, open, existing)
-				}))
+				}, shared))
 			}
-			options.push(keptOption(async () => keyValues(key, open, await freshRow(models, key, fixed, depth + 1, inserted))))
+			options.push(keptOption(async (row) => keyValues(key, open, await freshRow(models, key, fixedOf(row), depth + 1, inserted)), shared))
 		}
 		if (options.length === 0) {
 			throw new SeedLimitError(
 				`the isolation fixture cannot fill ${table}.${open.join(', ')}: a required foreign key to ${key.table} outside the containment chain, ${refused}`,
 			)
 		}
-		return { columns: open, options }
+		return { columns: open, options, reads: shared.filter((name) => !assigned.has(name)) }
 	}
 
 	/**
@@ -844,10 +898,7 @@ export function testSeeding(backend: SeedingBackend): TestSeeding {
 			if (assigned.has(column.name) || column.defaulted || slotted.has(column.name)) continue
 			slots.push(await columnSlot(model, table, column, markers, inserted, ungrouped))
 		}
-		// A slot that numbers within the row's group is filled once every other slot placed the row.
-		const order = [...slots.keys()].sort((left, right) =>
-			Number(slots[left]?.options.some((option) => option.grouped)) - Number(slots[right]?.options.some((option) => option.grouped))
-		)
+		const order = slotOrder(slots)
 		const choice = slots.map(() => 0)
 		const involved: number[] = []
 		// The refusal of the row the fixture prefers, which the error names once no other row passes.
