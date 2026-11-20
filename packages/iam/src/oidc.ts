@@ -202,7 +202,9 @@ export class OidcClient {
 			return cached.metadata
 		}
 		const url = `${this.config.issuer.replace(/\/+$/, '')}/.well-known/openid-configuration`
-		const response = await fetch(url)
+		// Never follow a redirect: the document picks the endpoint that receives the client secret and the
+		// keys that vouch for identities, and the issuer check below cannot tell an echoed issuer apart.
+		const response = await fetch(url, { redirect: 'manual' })
 		if (!response.ok) {
 			throw new Error(`OIDC discovery failed for ${this.config.issuer}: ${response.status}`)
 		}
