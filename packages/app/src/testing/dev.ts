@@ -102,9 +102,10 @@ export interface DevKit<C extends AnyContract> {
 	invitations(): readonly SentInvitation[]
 	/**
 	 * The invitation e-mail the stand-in IAM sent for `invitationId`, as IAM writes it: in its `mailLocale`, from the
-	 * application's `mail` template of that language or IAM's own wording, with `actionUrl` as its link.
+	 * application's `mail` template of that language or IAM's own wording, with `actionUrl` as its link and `appUrl` as
+	 * the application's address (`{{appUrl}}`; without one, a template that names it is IAM's wording).
 	 */
-	invitationMail(invitationId: string, actionUrl: string): RenderedMessage | undefined
+	invitationMail(invitationId: string, actionUrl: string, appUrl?: string | null): RenderedMessage | undefined
 	/** Every message the application's jobs handed to the mail stand-in, oldest first; one refused before the handoff is absent. */
 	mails(): readonly DevMail[]
 }
@@ -131,7 +132,7 @@ export function devKit<C extends AnyContract>(app: ContractImplementation<C>, op
 		},
 		membershipsOf: (caller: TestCaller) => standIn.membershipsOf(caller),
 		invitations: () => standIn.invitations(),
-		invitationMail: (invitationId: string, actionUrl: string) => standIn.invitationMail(invitationId, actionUrl),
+		invitationMail: (invitationId: string, actionUrl: string, appUrl?: string | null) => standIn.invitationMail(invitationId, actionUrl, appUrl),
 		mails: () => {
 			const prefix = mailKeyPrefix(kit.mailKeyScope)
 			return kit.mail.handoffs.map((handoff, index) => devMail(handoff, index + 1, prefix))

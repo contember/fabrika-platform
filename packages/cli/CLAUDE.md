@@ -217,7 +217,7 @@ arguments and reports.
   - The routes under `/__fabrika/dev`: the picker, `as` (a persona, a role in a scope value, an accepted invitee, or
     anonymous; it sets the cookie the application never sees), `accept` (an invitation the stand-in IAM sent),
     `state` (the toolbar's JSON), `toolbar.js`, `outbox/<id>` (a captured request, as text) and `mail/<id>` (a job's
-    message, or an invitation's e-mail as IAM writes it: `devKit`'s `invitationMail`, in the language IAM chooses, from
+    message, or an invitation's e-mail as IAM writes it: `devKit`'s `invitationMail`, in the language IAM chooses, with this server's address as `{{appUrl}}`, from
     `@fabrika/auth-core`'s `iamMessageTemplate`, never strings of this package, with its row's accept or continue-as
     button, since the frame's link opens nothing; its fields, its text, and its HTML in a `sandbox=""` `srcdoc` frame
     under the page's own CSP, marked `lang` when the message's language is not the page's). Every `text/html` 200 of an SPA or link mount gets the toolbar's

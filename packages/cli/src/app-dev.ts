@@ -362,10 +362,13 @@ async function serveDevKit(
 
 	/**
 	 * The e-mail the stand-in IAM would have sent for an invitation, in the language IAM chooses for it: its link is this
-	 * server's accept route, where IAM's would be its own accept page.
+	 * server's accept route, where IAM's would be its own accept page, and `{{appUrl}}` is this server, where the
+	 * application's registered return origin would be.
 	 */
-	const invitationMailOf = (invitation: SentInvitation) =>
-		dev.invitationMail(invitation.id, new URL(acceptHref(invitation.id, firstSpa), `http://${urlHost}:${port}`).toString())
+	const invitationMailOf = (invitation: SentInvitation) => {
+		const origin = `http://${urlHost}:${port}`
+		return dev.invitationMail(invitation.id, new URL(acceptHref(invitation.id, firstSpa), origin).toString(), `${origin}/`)
+	}
 
 	/** What an invitation offers: accept it while it is open, or continue as the invitee who accepted it here. */
 	const invitationActions = (invitation: SentInvitation, next: string): MailAction[] =>

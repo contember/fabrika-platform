@@ -138,8 +138,10 @@ export interface KitMembership {
 	/**
 	 * The e-mail IAM would have sent for its invitation `invitationId` at its latest send, with `actionUrl` as its link:
 	 * the application's `mail` template of the e-mail's language, else IAM's own wording; `undefined` for any other id.
+	 * `appUrl` is the application's address IAM builds `{{appUrl}}` from (its registered return origin, with a trailing
+	 * slash); without one, a template that names `{{appUrl}}` is IAM's wording, as IAM sends it then.
 	 */
-	invitationMail(invitationId: string, actionUrl: string): RenderedMessage | undefined
+	invitationMail(invitationId: string, actionUrl: string, appUrl?: string | null): RenderedMessage | undefined
 }
 
 /** A share link the stand-in issued, as its key resolves. */
@@ -850,16 +852,15 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 			...(locale === null ? {} : { locale }),
 			mailLocale,
 		}))
-	const invitationMail = (invitationId: string, actionUrl: string): RenderedMessage | undefined => {
+	const invitationMail = (invitationId: string, actionUrl: string, appUrl: string | null = null): RenderedMessage | undefined => {
 		const invitation = invitations.get(invitationId)
 		if (invitation === undefined) return undefined
 		const template = artifact.mail?.invitation?.[invitation.mailLocale] ?? null
-		// The kit registers no return origin, so a template that names `{{appUrl}}` is IAM's wording, as IAM sends it then.
 		const render = iamMessageTemplate('invitation', {
 			locale: invitation.mailLocale,
 			template,
 			displayName: artifact.displayName ?? artifact.app,
-			appUrl: null,
+			appUrl,
 			maxSubjectLength: MAX_EMAIL_SUBJECT_LENGTH,
 		})
 		return render({
