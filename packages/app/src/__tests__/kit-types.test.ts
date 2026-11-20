@@ -7,10 +7,8 @@ import { join } from 'node:path'
 import { compileFixtures, expectMistakes } from './type-fixtures'
 
 const EXPECTED: Readonly<Record<string, string>> = {
-	'01-group-in-another-file/group.ts': 'the handler returns margin, which the output does not declare: return only declared fields',
+	'01-group-in-another-file/group.ts': "Types of property 'title' are incompatible.",
 	'02-groups-with-different-callers.ts': 'every group of one RPC mount that names callers names the same ones, in the same order',
-	// The compiler lists a union's fields in no fixed order.
-	'03-wrong-output-field.ts': 'which the output does not declare: return only declared fields',
 	'04-get-for-update-in-a-query.ts': 'getForUpdate locks the row, so it runs only in a mutation: declare the endpoint with r.mutation',
 	'05-sql-without-declaration.ts': "ctx.sql needs a declaration: add sql: 'read' (or 'write' on a mutation) to this site",
 	'06-unscoped-table-outside-tables.ts':
@@ -37,10 +35,9 @@ const EXPECTED: Readonly<Record<string, string>> = {
 	// The typo is the only diagnostic: the mount does not ask for a `.handle(…)` the endpoint has.
 	'26-handler-error-stays-in-the-handler.ts': "Property 'lable' does not exist on type 'UserPrincipal'. Did you mean 'label'?",
 	'27-table-the-access-form-does-not-reach.ts': "deals is not under in: 'org' (it lies in company): declare access in: 'company' or on: 'deal'",
-	// The compiler lists a union's fields in no fixed order.
-	'28-raw-row-for-a-camel-case-output.ts': 'where the output is camelCase: map it with fromRow(Schema, row) from @fabrika/app',
+	'28-raw-row-for-a-camel-case-output.ts': `Property 'companyId' is missing in type 'Omit<DealsTable, "margin">'`,
 	'29-members-without-the-list-action.ts': "listing the members of org needs the action 'crm.read'; get(principalId) checks one",
-	'30-attachment-handler-returns-no-rows.ts': 'an attachment handler returns its rows: an array of its row schema, with nothing around it',
+	'30-attachment-handler-returns-no-rows.ts': "is missing the following properties from type '{ title: string; stage: string; }[]': length",
 	'31-job-links-without-issues.ts': "declare issues: '<link mount>' on this job to issue its share links",
 	'34-unscoped-write-of-a-reference-table.ts':
 		"countries is a reference table, which no site writes: its rows come from a migration, so declare unscoped: { countries: 'read' }",
@@ -65,10 +62,14 @@ const EXPECTED: Readonly<Record<string, string>> = {
 /**
  * The compiler elaborates these through the declaration's own types, so each is held to its line and text only: an
  * optional field an annotation allows, an `unscoped` object typed apart from its call, whose whole type the compiler
- * prints, and an input field the access form removed, where the compiler prints the input that is left.
+ * prints, an input field the access form removed, where the compiler prints the input that is left, and a handler's
+ * return that does not fit the output, where the compiler prints the handler's type.
  */
 const ELABORATED = [
+	'01-group-in-another-file/group.ts',
 	'11-declaration-only-in-a-type.ts',
+	'28-raw-row-for-a-camel-case-output.ts',
+	'30-attachment-handler-returns-no-rows.ts',
 	'39-unscoped-union-mode-of-a-reference-table.ts',
 	'59-input-field-removed-by-capabilities.ts',
 ]

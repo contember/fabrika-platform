@@ -2,8 +2,8 @@
 
 An endpoint is declared and handled in one place: `r.query({ input, output, access, … }).handle(async ({ input,
 ctx }) => …)` inside `app.group({ callers }, (r) => ({ … }))` of a slice's `endpoints.ts`. The kit types the handler by
-its endpoint: a field the output does not declare, a handle the access form does not give and a write in a query are
-type errors at their line.
+its endpoint: a missing or mistyped output field, a handle the access form does not give and a write in a query are
+type errors at their line. A returned field the output does not declare is no error: the answer drops it.
 
 ## Schemas
 

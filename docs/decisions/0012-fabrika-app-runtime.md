@@ -109,8 +109,8 @@ Rules of the shell:
 
 Each procedure, job, webhook, link procedure and export procedure takes its handler beside its declaration:
 `r.query({ input, output, access }).handle(async ({ input, ctx }) => …)`. The kit types each handler by its
-endpoint: a returned field the output does not declare, a handle the access form does not give, and a write in a
-query are type errors at the endpoint's line.
+endpoint: a missing or mistyped output field, a handle the access form does not give, and a write in a query are type
+errors; a returned field the output does not declare is dropped from the answer, not refused.
 
 - `serve(contract, { database, deps })` (`@fabrika/app/implement`) is the application's composition entry. It
   takes only the object `app.contract` returned and refuses an endpoint, job or webhook without `.handle(…)`.

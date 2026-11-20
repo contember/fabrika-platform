@@ -264,8 +264,8 @@ manifest that still declares `gates`.
 
 `@fabrika/app/implement` serves a contract with `serve(contract, { database, deps })`. Its handlers sit beside
 their endpoints ([An application in the staged kit](#an-application-in-the-staged-kit)), so `src/app.ts` only
-composes. The kit types each handler by its endpoint: a returned field the output does not declare, a handle its access form
-does not give and a write in a query are type errors. `serve` refuses an endpoint, job or webhook without `.handle(…)`.
+composes. The kit types each handler by its endpoint: a missing or mistyped output field, a handle its access form does not give
+and a write in a query are type errors; a returned field the output does not declare is dropped from the answer. `serve` refuses an endpoint, job or webhook without `.handle(…)`.
 `defineDeps(build)` declares dependencies, which `build` makes at each boot from the application's own variables; a
 handler reads them with `get()`. `scoped(tables)` of `@fabrika/db` has no connection, no locator and no handle of its
 own; nothing reaches the database until `boot` binds it. An application without tables writes `defineApp(vocabulary)` and `serve(contract, { database: null })`; its handlers have no

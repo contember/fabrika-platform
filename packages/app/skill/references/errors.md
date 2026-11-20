@@ -57,8 +57,7 @@ A kit error lands on the line of the mistake, in one or two lines that name the 
 | The compiler says                                                               | Fix                                                                     |
 | ------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
 | `add .handle(…) to tasks.get: every endpoint takes its handler beside it`       | add the handler; when the handler exists, fix the error inside it first |
-| `the handler returns version, which the output does not declare`                | return only the output's fields                                         |
-| `… where the output is camelCase: map it with fromRow(Schema, row)`             | `fromRow(Schema, row)`                                                  |
+| `Property 'dueAt' is missing in type …` where a handler returns a row           | `fromRow(Schema, row)` maps snake_case columns to the output's fields   |
 | `update on tasks needs the action 'tasks.write', and this endpoint holds '…'`   | the endpoint's action, a column write action, or a separate endpoint    |
 | `getForUpdate locks the row, so it runs only in a mutation`                     | `r.mutation`                                                            |
 | `update acts on one object: declare access with on`                             | access `on`, not `in` or `over`                                         |

@@ -186,7 +186,7 @@ src/
   contract/           @fabrika/app/contract — browser-safe
     vocabulary.ts     defineVocabulary: the first module of the staged kit
     kit.ts            defineApp(vocabulary, tables): App (group, cron, webhook, link, export, contract), ContractKit
-    group.ts          the endpoint builders of a group, a link and an export; .handle; ExactReturn
+    group.ts          the endpoint builders of a group, a link and an export; .handle
     context.ts        what a kit handler receives: ctx by access form and declaration (types only)
     define.ts         defineContract, the c.* kit and every type an agent meets
     attachment.ts     attachment(): an output that answers a file of rows (the rows' array schema, marked)
@@ -416,9 +416,9 @@ vocabulary (`packages/db/CLAUDE.md`).
   its line with the message, which names the fix. `kit-types.test.ts` compiles `kit-mistakes/` with `plain: true` (at
   most two lines, no `never`, no truncated or object type printed). A new rule the kit's types enforce gets a mistake
   there and a row in `kit-fixture/matrix.ts`.
-- **`.handle` answers the endpoint without the handler's type**, or, when the handler returns a field the output does
-  not declare, an `Unavailable` the group refuses at the endpoint's line (`ExactReturn`). A group does not nest; a
-  mount nests groups. A group accepts an endpoint without `.handle`, because an options-first call cannot be checked
+- **`.handle` answers the endpoint without the handler's type.** The handler's return is checked against the output's
+  input type only: a missing or mistyped declared field is a type error, a field the output does not declare is not,
+  and the answer drops it (`project`, then the strict schema). A group does not nest; a mount nests groups. A group accepts an endpoint without `.handle`, because an options-first call cannot be checked
   against its own callback; `c.rpc` refuses it, naming `<group>.<endpoint>`, and refuses a group whose type is
   widened to admit one (`GroupInput`). A callback the group refused falls back to `GroupBuild`, which the mount
   skips, so the error is not repeated there.
@@ -441,9 +441,8 @@ vocabulary (`packages/db/CLAUDE.md`).
 - **The runtime builds plain declarations, and `defineApp`'s signature is its only typed face.** `RuntimeApp` (in
   `kit.ts`) builds the same `ProcedureDeclaration`, `CronDeclaration`, `WebhookMountDeclaration`, link and export
   declarations `defineContract` builds, with `declared` (`declaredOf`: only the fields the options carry) and
-  `unknownOptions` without the declared fields (`kitUnknownOptions`). The face answers types no implementation can
-  return (`.handle`'s `ExactReturn`, `contract`'s `imports` by the kit's imports), so the compiler relates the two
-  nowhere else; `kit-runtime.test.ts` holds each builder to what its type says.
+  `unknownOptions` without the declared fields (`kitUnknownOptions`). The face answers a type no implementation can
+  return (`contract`'s `imports` by the kit's imports), so the compiler relates the two nowhere else; `kit-runtime.test.ts` holds each builder to what its type says.
 - **A site's handler is kept beside its declaration, never in it** (`contract/handled.ts`, a `WeakMap`): `.handle`
   returns a copy of the declaration, and a pending site carries `handle` on its prototype, so `compileContract`, the
   static reader and a spread see the declaration only, handled or not. The SPA's sliced bundle therefore evaluates to
