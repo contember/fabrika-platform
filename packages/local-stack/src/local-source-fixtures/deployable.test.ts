@@ -1,7 +1,7 @@
 // Both application commits are ones a production build accepts: the archive Control uploads, unpacked, passes the
-// checker, and on Postgres the init commands' `fabrika db migrate` and `fabrika db codegen --verify`. The composed Notes
-// container runs the workspace copy of the same files, so this is what ties the container's behaviour to the deployed
-// source. The URL is a credential: no assertion prints it.
+// checker, and on Postgres the build's schema check, `fabrika db migrate` and `fabrika db codegen --verify`. The composed
+// Notes container runs the workspace copy of the same files, so this is what ties the container's behaviour to the
+// deployed source. The URL is a credential: no assertion prints it.
 
 import { checkApplication } from '@fabrika/check'
 import { dropApplicationDatabase } from '@fabrika/platform-node'
@@ -14,7 +14,7 @@ import { applicationFixtureRoot, generateFixture } from './generate'
 const REPO_ROOT = resolve(import.meta.dir, '..', '..', '..', '..')
 const CLI = join(REPO_ROOT, 'packages', 'cli', 'src', 'index.ts')
 const url = process.env['FABRIKA_TEST_POSTGRES_URL'] ?? ''
-if (url === '') console.warn('deployable.test.ts: the Postgres half skipped; set FABRIKA_TEST_POSTGRES_URL to run the init commands on the archive')
+if (url === '') console.warn('deployable.test.ts: the Postgres half skipped; set FABRIKA_TEST_POSTGRES_URL to run the schema checks on the archive')
 
 const staging = await mkdtemp(join(import.meta.dir, '.deployable-'))
 const appIds: string[] = []
@@ -63,7 +63,7 @@ for (const kind of ['application', 'agentChange'] satisfies LocalSourceFixtureKi
 	})
 
 	describe.skipIf(url === '')(`the ${kind} fixture archive on Postgres`, () => {
-		test("passes the init commands' steps: migrate and codegen --verify", async () => {
+		test("passes the build's schema check: migrate and codegen --verify", async () => {
 			// The build installed the example's packages; its workspace install stands in for them.
 			await symlink(join(applicationFixtureRoot, 'node_modules'), join(root, 'node_modules'))
 			expect(await fabrika('migrate')).toMatchObject({ code: 0 })

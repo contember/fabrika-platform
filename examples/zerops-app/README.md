@@ -43,8 +43,8 @@ contract, the table policies and the migrations at the commit; a change that wid
 to approve it in the console.
 
 On Zerops the platform owns the setup. The build runs the SPA build (`bun run build:web`), then installs, runs
-`bun test`, writes the entrypoint, runs `fabrika-check` and the type check. The init commands run `fabrika db migrate` and `fabrika db codegen --verify`,
-then the start script runs the server; the crontab runs `fabrika job run purge`. Every `FABRIKA_*` variable is
+`bun test`, writes the entrypoint, runs `fabrika-check` and the type check, then `fabrika db migrate` and
+`fabrika db codegen --verify` on a throwaway database. The init command runs `fabrika db migrate`, then the start script runs the server; the crontab runs `fabrika job run purge`. Every `FABRIKA_*` variable is
 the platform's: the database URL from `notesdb`, the storage from `notesfiles`, the IAM issuer and audience, the proxy
 secret, the contract digest and the Operations DSN.
 

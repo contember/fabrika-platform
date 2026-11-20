@@ -91,8 +91,8 @@ bun run test:browser  # the opice suites in tests/browser/
   `@fabrika/*` pins at the source version the container runs (`applicationFixtureSource`), pinned by
   tree in `fixtures/source/manifest.json`, so Control approves the contract the composed container serves. An edit of
   the example moves the pin: run `bun run fixtures:pin` here. `deployable.test.ts` runs the build's checker and, on
-  Postgres, the init commands' steps over the archive itself. The container runs
-  the platform's init-command steps and the generated entrypoint with the variables `prepare.ts` writes. Never give it
+  Postgres, the build's schema check over the archive itself. The container runs
+  the platform's init-command step (`fabrika db migrate`) and the generated entrypoint with the variables `prepare.ts` writes. Never give it
   a variable the platform would not write: the apps proxy serves its endpoint table.
 - **The composition follows a deploy only when told to (`src/notes-follow.ts`).** The emulator runs no code, so
   `followNotesDeploy` makes the composed Notes container and the apps proxy serve what the emulator's active Notes
@@ -125,8 +125,10 @@ bun run test:browser  # the opice suites in tests/browser/
 - **`local:compat` deploys released code, not the workspace's.** A release fixture is the example as its tag holds it,
   recorded in `fixtures/source/releases/` with the `bun.lock` npm resolves for it (`bun run fixtures:release <tag>`,
   then `fixtures:pin`), because a CI checkout holds no tags. `followNotesDeploy` stages such a commit as its platform
-  build does: `bun install --frozen-lockfile` from npm, the entrypoint its own framework writes, its SPA; the container
-  runs its own `./node_modules/.bin/fabrika`, as the generated init commands do. Never point a release fixture at a
+  build does: `bun install --frozen-lockfile` from npm, the entrypoint its own framework writes, its SPA; then it runs
+  the build's schema check with the release's own `./node_modules/.bin/fabrika` in a one-off Notes container
+  (`checkReleaseSchema`: `db migrate`, `db codegen --verify`), because the emulator runs no build,
+  and the container runs its own `fabrika db migrate`, as the generated init command does. Never point a release fixture at a
   workspace package: the suite exists to run what an operator's application runs. Each release starts from an empty
   Notes database (`dropApplicationDatabase`), and the suite ages files past the pending grace before the sweep, so
   only a reference keeps one.
