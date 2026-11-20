@@ -445,6 +445,21 @@ describe('buildArtifact refuses a declaration the types would refuse', () => {
 		])
 	})
 
+	test("a table read with 'any' is an application table, and its writes name actions of the contract", () => {
+		const countries = noteTables['countries']
+		if (countries === undefined) throw new Error('the notes fixture changed')
+		const board: TablePolicyArtifact = {
+			...countries,
+			scope: { mode: 'app', reason: 'notices of the whole board', key: 'id' },
+			actions: { read: 'any', insert: 'notes.write', update: null, delete: null },
+		}
+		expect(buildArtifact(base, { ...noteTables, board }).tables['board']?.actions.read).toBe('any')
+		const anyCountries = { ...countries, actions: { ...countries.actions, read: 'any' } }
+		expect(problemsOf(() => buildArtifact(base, { ...noteTables, countries: anyCountries }))).toEqual([
+			"table 'countries': is read with 'any', which only an application table is; name its read actions",
+		])
+	})
+
 	test('a locale IAM does not speak, and a display name that is not one short line', () => {
 		expect(build({ ...base, locale: 'de', displayName: ' Notes\n' })).toEqual([
 			"locale: 'de' is not a language IAM speaks (allowed: 'en', 'cs', 'uk')",

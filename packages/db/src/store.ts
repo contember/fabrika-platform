@@ -874,7 +874,9 @@ export function scopeTerms(context: TableContext, capability: unknown, use: Scop
 	// The fragment renders column tests only; a relation's, a member reveal's or a path's subquery, or an action's condition, would be left out.
 	const held = grant.kind !== 'app'
 		&& (grant.relations.length > 0 || (grant.kind === 'ref' && (grant.revealing.length > 0 || grant.paths.length > 0)))
-	if (held || hasOwn(model.when, grant.action)) {
+	// An `'any'` read is unconditioned: a `when` keyed by the action narrows only its writes.
+	const readsEvery = grant.kind === 'app' && use === 'read' && readsAny(context, grant)
+	if (held || (!readsEvery && hasOwn(model.when, grant.action))) {
 		throw new CapabilityError(
 			'unenforceable',
 			`ctx.sql.scope cannot render a relation, a member reveal, a secondary path or a condition of ${grant.action} on ${model.name}: read it through ctx.db`,
@@ -888,7 +890,7 @@ export function scopeTerms(context: TableContext, capability: unknown, use: Scop
 		)
 	}
 	if (grant.kind === 'app') {
-		if (use === 'read') {
+		if (use === 'read' && !readsEvery) {
 			// The action is held as a global grant, so its scope is every row of a table it reaches.
 			checkAppReach(context, grant)
 		}
@@ -1107,15 +1109,44 @@ function appGrant(context: TableContext, capability: unknown, operation: Operati
 	if (operation !== 'read') {
 		checkApplicationTable(context, operation)
 	}
+	if (operation === 'read' && readsAny(context, grant)) {
+		return grant
+	}
 	checkAppReach(context, grant)
 	checkAction(context, operation, grant.action)
 	return grant
 }
 
-/** Every row a capability of an `app` endpoint reads in `table`, by the table's read action: `true`. */
+/**
+ * Whether `grant` reads `context`'s table because it is read with `'any'`: every `app` grant but a public procedure's,
+ * which is refused there. The read is unconditioned: a `when` of the grant's action narrows only its writes.
+ */
+function readsAny(context: TableContext, grant: AppGrant): boolean {
+	const model = context.model
+	if (model.scope.mode !== 'app' || !model.actions.readAny) {
+		return false
+	}
+	if (grant.public) {
+		throw new CapabilityError(
+			'wrong_capability',
+			`a public procedure does not read ${model.name}: it is read with 'any', which an app endpoint, a job and a webhook hold`,
+		)
+	}
+	return true
+}
+
+/** The rows `grant` reads of `context`'s table within `branch`: narrowed by its action's condition, unless read with `'any'`. */
+function appReadPredicate(context: TableContext, grant: AppGrant, branch: OperationNode | 'all'): OperationNode {
+	if (context.model.scope.mode === 'app' && context.model.actions.readAny) {
+		return branch === 'all' ? ValueNode.createImmediate(true) : branch
+	}
+	return conditioned(context.model, grant.action, branch, new Date())
+}
+
+/** Every row a capability of an `app` endpoint reads in `table`, by the table's read action or `'any'`: `true`. */
 export function appListPredicate(context: TableContext, capability: unknown): OperationNode {
 	const grant = appGrant(context, capability, 'read')
-	return conditioned(context.model, grant.action, 'all', new Date())
+	return appReadPredicate(context, grant, 'all')
 }
 
 /**
@@ -1131,6 +1162,12 @@ export function scopedApplicationRead(context: TableContext, capability: unknown
 	if (grant.kind === 'app') {
 		throw new CapabilityError('wrong_capability', `a read of ${model.name} from a scoped site needs a Ref or a Within, got ${describeGrant(grant)}`)
 	}
+	if (model.actions.readAny) {
+		throw new CapabilityError(
+			'wrong_capability',
+			`a scoped site does not read ${model.name}: it is read with 'any', which an app endpoint, a job and a webhook hold`,
+		)
+	}
 	const read = requiredActions(context, 'read')
 	if (!includes(read, grant.action)) {
 		throw new CapabilityError(
@@ -1145,7 +1182,8 @@ export function scopedApplicationRead(context: TableContext, capability: unknown
 export function appRowPredicate(context: TableContext, capability: unknown, key: unknown, operation: Operation): OperationNode {
 	checkApplicationTable(context, operation)
 	const grant = appGrant(context, capability, operation)
-	return conditioned(context.model, grant.action, appKeyPredicate(context.model, key), new Date())
+	const row = appKeyPredicate(context.model, key)
+	return operation === 'read' ? appReadPredicate(context, grant, row) : conditioned(context.model, grant.action, row, new Date())
 }
 
 /**
@@ -1208,6 +1246,11 @@ export function claimedRowPredicate(context: TableContext, capability: unknown, 
 /** The row of an application table `key` names, as `action` reaches it: within the action's condition. */
 export function appKeyScope(model: TableModel, action: string, key: unknown): OperationNode {
 	return conditioned(model, action, appKeyPredicate(model, key), new Date())
+}
+
+/** The row `key` names, as a read by key with `action` reaches it: unconditioned in a table read with `'any'`. */
+export function appGetScope(model: TableModel, action: string, key: unknown): OperationNode {
+	return model.actions.readAny ? appKeyPredicate(model, key) : appKeyScope(model, action, key)
 }
 
 /** The row of an application table `key` names. */

@@ -183,7 +183,9 @@ covers:
   new endpoint, a changed requirement) still widen. A removed reach narrows;
 - table and column policies, with the actions each column is read and written with; a new application table
   (`scope: { app }`) is shown with its reason and every action. A table operation that names a list of actions is
-  compared by action: an action the list gains widens, one it loses narrows;
+  compared by action: an action the list gains widens, one it loses narrows. A read that becomes `'any'` widens to
+  every `app` endpoint, job and webhook, and one that leaves it for a list widens too, because the list may admit a
+  public procedure or a scoped endpoint that `'any'` refused;
 - anonymous kinds (a new public SPA, or an SPA that becomes public, widens) and link mounts;
 - **public procedures**: a new one, or an endpoint that becomes public, widens with closer review ("for anyone,
   without signing in"), and so does each workload action it gains ("runs as its own workload with `<action>`, for

@@ -16,6 +16,7 @@ import type {
 	InsertValues,
 	ListDimensionOf,
 	ParentOf,
+	ReadsAny,
 	Tables,
 	UpdateValues,
 } from './policy'
@@ -81,7 +82,10 @@ export interface IndexedTable {
 	readonly list: string
 	/** A child table's parent table. */
 	readonly parent: string
+	/** `read` is `never` for a table read with `'any'` (`readsAny`). */
 	readonly actions: { readonly read: string; readonly insert: string; readonly update: string; readonly delete: string }
+	/** An application table read with `'any'`: every `app` endpoint, job and webhook reads it, no public procedure or scoped site. */
+	readonly readsAny: boolean
 	/** The actions besides `read` with which an `app` endpoint lists every row (`actions.appRead`). */
 	readonly appRead: string
 	/** The actions with which an `app` endpoint only counts every row (`actions.appCount`). */
@@ -118,6 +122,7 @@ type IndexedTableOf<DB, P, T extends keyof P & keyof DB & string, V = unknown> =
 		readonly update: ActionOf<P, T, 'update'>
 		readonly delete: ActionOf<P, T, 'delete'>
 	}
+	readonly readsAny: ReadsAny<P, T>
 	readonly appRead: AppActionsOf<P, T, 'appRead'>
 	readonly appCount: AppActionsOf<P, T, 'appCount'>
 	readonly row: WithFiles<RowType<DB[T]>, FileColumnsOf<P, T>>
@@ -460,18 +465,30 @@ export type WithinTables<Ix extends AnyDbIndex, D extends string, A extends stri
 	readonly [T in WithinIn<Ix, D>]: WithinRows<T, Ix['tables'][T], A, K>
 }
 
+/** `Member` where `ctx.db.app` of action `A` lists the application table: by its read action, or any action for `'any'`. */
+type AppList<T extends string, E extends IndexedTable, A extends string, Member> = [E['readsAny']] extends [true] ? Member
+	: A extends E['actions']['read'] ? Member
+	: Unavailable<ListRefusal<T, E, A>>
+
+/** `Member` where `ctx.db.app` of action `A` reads a row of the application table by its key. */
+type AppGet<T extends string, E extends IndexedTable, A extends string, Member> = [E['readsAny']] extends [true] ? Member : Read<T, E, A, Member>
+
+/** `Member` where a public procedure of action `A` reads the application table: under its read action, never `'any'`. */
+type PublicRead<T extends string, E extends IndexedTable, A extends string, Member> = [E['readsAny']] extends [true] ? Unavailable<
+		`a public procedure does not read ${T}: it is read with 'any', which an app endpoint, a job and a webhook hold`
+	>
+	: A extends E['actions']['read'] ? Member
+	: Unavailable<ListRefusal<T, E, A>>
+
 /** An application table under the capability of an `app` endpoint of action `A`, in a site of kind `K`. */
 export interface ApplicationRows<T extends string, E extends IndexedTable, A extends string, K extends DataKind> {
-	readonly list: A extends E['actions']['read'] ? (options?: ListOptions<RowFor<E, A>>) => Promise<ListPage<RowFor<E, A>>>
-		: Unavailable<ListRefusal<T, E, A>>
-	readonly count: A extends E['actions']['read'] ? (options?: CountOptions<RowFor<E, A>>) => Promise<number> : Unavailable<ListRefusal<T, E, A>>
-	readonly aggregate: A extends E['actions']['read']
-		? <const S extends AggregateSpec<RowFor<E, A>>>(spec: S) => Promise<AggregateRow<RowFor<E, A>, S>[]>
-		: Unavailable<ListRefusal<T, E, A>>
+	readonly list: AppList<T, E, A, (options?: ListOptions<RowFor<E, A>>) => Promise<ListPage<RowFor<E, A>>>>
+	readonly count: AppList<T, E, A, (options?: CountOptions<RowFor<E, A>>) => Promise<number>>
+	readonly aggregate: AppList<T, E, A, <const S extends AggregateSpec<RowFor<E, A>>>(spec: S) => Promise<AggregateRow<RowFor<E, A>, S>[]>>
 	/** One row by its key; a column that declares another read action than `A` is hidden. */
-	readonly get: Read<T, E, A, (key: string) => Promise<RowFor<E, A>>>
+	readonly get: AppGet<T, E, A, (key: string) => Promise<RowFor<E, A>>>
 	/** `SELECT … FOR UPDATE` of one row by its key: a precondition read that no concurrent write overtakes. */
-	readonly getForUpdate: K extends 'mutation' ? Read<T, E, A, (key: string) => Promise<RowFor<E, A>>>
+	readonly getForUpdate: K extends 'mutation' ? AppGet<T, E, A, (key: string) => Promise<RowFor<E, A>>>
 		: K extends 'job' ? Unavailable<'a job writes inside ctx.transaction((tx) => …): use tx.db there'>
 		: Unavailable<'getForUpdate locks the row, so it runs only in a mutation: declare the endpoint with r.mutation'>
 	/** Leases due rows of a queue table: a job's drain, before its transactions. */
@@ -508,10 +525,10 @@ type PublicVersioned<T extends string, E extends IndexedTable, Member> = E['vers
  * under `expectVersion`; never locked or claimed.
  */
 export interface PublicApplicationRows<T extends string, E extends IndexedTable, A extends string, K extends DataKind> {
-	readonly list: ApplicationRows<T, E, A, K>['list']
-	readonly count: ApplicationRows<T, E, A, K>['count']
-	readonly aggregate: ApplicationRows<T, E, A, K>['aggregate']
-	readonly get: A extends E['actions']['read'] ? (key: string) => Promise<RowFor<E, A>> : Unavailable<ListRefusal<T, E, A>>
+	readonly list: PublicRead<T, E, A, (options?: ListOptions<RowFor<E, A>>) => Promise<ListPage<RowFor<E, A>>>>
+	readonly count: PublicRead<T, E, A, (options?: CountOptions<RowFor<E, A>>) => Promise<number>>
+	readonly aggregate: PublicRead<T, E, A, <const S extends AggregateSpec<RowFor<E, A>>>(spec: S) => Promise<AggregateRow<RowFor<E, A>, S>[]>>
+	readonly get: PublicRead<T, E, A, (key: string) => Promise<RowFor<E, A>>>
 	readonly getForUpdate: PublicRefusal<'lock'>
 	readonly claim: PublicRefusal<'claim'>
 	/** By the id a verified signed token of the request carries; answers only the new version. */
@@ -597,7 +614,10 @@ export interface ScopedApplicationRows<E extends IndexedTable> {
  * read-only; any other is the message that names its read action.
  */
 export type ScopedApplicationTables<Ix extends AnyDbIndex, A extends string> = {
-	readonly [T in Ix['applications']]: [A] extends [Ix['tables'][T]['actions']['read']] ? ScopedApplicationRows<Ix['tables'][T]>
+	readonly [T in Ix['applications']]: [Ix['tables'][T]['readsAny']] extends [true] ? Unavailable<
+			`a scoped endpoint does not read ${T}: it is read with 'any', which an app endpoint, a job and a webhook hold`
+		>
+		: [A] extends [Ix['tables'][T]['actions']['read']] ? ScopedApplicationRows<Ix['tables'][T]>
 		: Unavailable<
 			`a scoped endpoint reads ${T} with its read action '${Ix['tables'][T]['actions']['read'] & string}', and this endpoint holds '${A}'`
 		>
@@ -721,7 +741,8 @@ type WithinFragment<Ix extends AnyDbIndex, D extends string, A extends string, M
 
 /** The tables a fragment of an `app` capability of `A` reaches: as `ctx.db.app` lists them for that action. */
 type AppFragment<Ix extends AnyDbIndex, A extends string> = {
-	[T in TableName<Ix>]: Ix['tables'][T]['mode'] extends 'app' ? (A extends NamedActions<Ix['tables'][T]> ? T : never)
+	[T in TableName<Ix>]: Ix['tables'][T]['mode'] extends 'app'
+		? ([Ix['tables'][T]['readsAny']] extends [true] ? T : A extends NamedActions<Ix['tables'][T]> ? T : never)
 		: Ix['tables'][T]['mode'] extends 'dimension' | 'child' ? (A extends Ix['tables'][T]['actions']['read'] | Ix['tables'][T]['appRead'] ? T : never)
 		: never
 }[TableName<Ix>]

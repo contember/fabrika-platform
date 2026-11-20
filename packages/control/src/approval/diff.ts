@@ -46,6 +46,7 @@ import {
 	type ProcedureArtifact,
 	type ProcedureChallenge,
 	PUBLIC_EGRESS,
+	READ_ANY,
 	type RedirectShape,
 	type RevealsArtifact,
 	type RoleArtifact,
@@ -2120,8 +2121,9 @@ function appReachClauses(table: TablePolicyArtifact): string {
 	].join('')
 }
 
-/** One operation's actions as the approver reads them: `` `a` `` or `` `a` or `b` ``. */
+/** One operation's actions as the approver reads them: `` `a` `` or `` `a` or `b` ``, and who a read of `'any'` admits. */
 function actionsText(actions: TableActionArtifact): string {
+	if (actions === READ_ANY) return `\`${READ_ANY}\` (every app endpoint, job and webhook)`
 	return tableActions(actions).map((action) => `\`${action}\``).join(' or ')
 }
 
@@ -2146,6 +2148,10 @@ function newTableLine(name: string, table: TablePolicyArtifact): string {
  * the operation gains widens and each it loses narrows.
  */
 function operationChanges(table: string, operation: string, from: TableActionArtifact | null, to: TableActionArtifact | null): Line[] {
+	// Either way it widens: `'any'` reaches every app endpoint, job and webhook, and a list a public procedure and a scoped site.
+	if (operation === 'read' && from !== null && to !== null && (from === READ_ANY) !== (to === READ_ANY)) {
+		return [widening(`${table} is read with ${actionsText(to)} instead of ${actionsText(from)}`)]
+	}
 	if ((from === null || typeof from === 'string') && (to === null || typeof to === 'string')) {
 		return valueChange(`${table} ${operation} action`, from, to)
 	}

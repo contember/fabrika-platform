@@ -5,7 +5,7 @@
 // application's handlers and stores never run. Each attempt seeds two fresh rows that share no scope value and asks as
 // a caller holding every action of the table in the scope of one of them.
 
-import { tableActions, type TablePolicyArtifact } from '@fabrika/auth-core'
+import { READ_ANY, tableActions, type TablePolicyArtifact } from '@fabrika/auth-core'
 import { scoped, type Tables } from '@fabrika/db'
 import { tablePolicies } from '@fabrika/db/tables'
 import { type IsolationWorlds, type SampleValue, tableProbe, type TestDatabase } from '@fabrika/db/testing'
@@ -281,6 +281,9 @@ export function appPolicyIsolationKit<C extends AnyContract, DB, P>(
 	const scope = policy.scope
 	if (scope.mode !== 'app') {
 		throw new Error(`${table} is a ${scope.mode} table; policyIsolationKit probes a dimension or child table`)
+	}
+	if (policy.actions.read === READ_ANY) {
+		throw new Error(`${table} is read with '${READ_ANY}': no probe action stands for every action, and @fabrika/db's own tests cover it`)
 	}
 	const actions = probeActions(policy.actions)
 	const layer = scoped(tables)

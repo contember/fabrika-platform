@@ -520,6 +520,13 @@ names the same fix at runtime.
   allows the operation. With several read actions, a column's own read action hides it from the others, and a handle
   reads the columns of its own capability's action. The artifact keeps one action as its text and several as a sorted
   list, so a policy that names one action keeps its digest.
+- **An application table's read may be `'any'`** (`actions: { read: 'any', insert: 'board.post' }`): every `app`
+  endpoint, job and webhook reads it under its own action, every row, with the columns that action reads; a `when`
+  narrows only writes there, and one keyed by an action that writes nothing is refused. Through `ctx.db`, a public
+  procedure and an `on`, `in` or `over` endpoint are refused it, by the types and by the data layer, and a link
+  procedure and an export, which read through a `Ref` or a `Within`, too; a declared `unscoped` read or raw `sql`
+  reaches it as it reaches any table. The artifact
+  carries `read: 'any'`; the platform release that reads it ships before the framework release that emits it.
 - **A public procedure's reach is narrow.** Its `ctx.db.app('<action>')` reaches application tables only. A read needs
   the table's read action. An insert reads nothing back: it answers the new key, which the data layer generated, and
   takes `onConflict: { do: 'nothing' }` only. An update or a remove needs its action, a versioned table and a row id that

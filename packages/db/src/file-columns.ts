@@ -27,12 +27,16 @@ export interface FileBinding {
 /**
  * Whether a reference read with `action` lets its holder serve, open and copy the file: the table's or the column's
  * read action, or a table read action among `held`, the actions a job holds over the whole application. A column with
- * its own read action is answered only under that action (`visibleFor`), so `held` never widens it.
+ * its own read action is answered only under that action (`visibleFor`), so `held` never widens it. A table read with
+ * `'any'` admits whoever read the row: the store refused every other reader.
  */
 function readsFile(model: TableModel, column: string, action: string, held: NameSet): boolean {
 	const own = hasOwn(model.columnReads, column) ? model.columnReads[column] : undefined
 	if (own !== undefined) {
 		return own === action
+	}
+	if (model.actions.readAny) {
+		return true
 	}
 	const reads = model.actions.read
 	for (let index = 0; index < reads.length; index++) {

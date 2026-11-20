@@ -1488,7 +1488,7 @@ export class ContractRuntime {
 			if (!permits([...perms], action)) {
 				throw new CapabilityRefusedError('undeclared_action', `the token IAM signed for the key of '${served.row.id}' does not carry this action`)
 			}
-			return this.#parts.mint.app(frame, action, subject)
+			return this.#parts.mint.publicApp(frame, action, subject)
 		}
 		let outcome: 'open' | 'committing' = 'open'
 		let budget: Deadline | null = null
