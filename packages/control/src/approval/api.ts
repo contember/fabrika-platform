@@ -17,6 +17,7 @@ import { toAppEnvDto } from '../api/registry/registration'
 import { canAtCoordinates, type DeployQueue, toRunDto } from '../api/runs'
 import { appEnvCrossOrigins, type AppEnvRow, type ControlRepositories, type RunRow } from '../db'
 import { acquireLease, type LeaseClock, runLeaseKey } from '../lease'
+import { snapshotAccessMap } from './access-map'
 import { type ConsoleAdmission, requireHumanApprover } from './human'
 import { parseApproval, parseClassification, type StoredApproval } from './publish'
 import { parseSnapshot } from './snapshot'
@@ -177,6 +178,7 @@ function toApprovalDto(run: RunRow, view: 'list' | 'detail' = 'detail'): Approva
 		outcome: classification.outcome,
 		changes: [...classification.changes],
 		endpoints: view === 'list' ? [] : namedEndpoints(run, classification.changes),
+		...(view === 'list' || run.snapshot_json === null ? {} : { accessMap: snapshotAccessMap(parseSnapshot(run.snapshot_json)) }),
 		candidateDigest: classification.candidateDigest,
 		baselineDigest: classification.baselineDigest,
 		baselineRunId: classification.baselineRunId,

@@ -1,6 +1,7 @@
 import { isStructuralError } from '@fabrika/app'
 import type { AppEnvDto, RegisterAppRequest, RegisterAppResponse } from '@fabrika/control-contract'
 import type { ControlProvider, ProviderApp, ProviderDeploymentNamespace, ProviderEnvironment, ProviderRegistration } from '@fabrika/provider-contract'
+import { snapshotAccessMap } from '../../approval/access-map'
 import { snapshotDeviations } from '../../approval/diff'
 import { requirePersonToPointTriggerRef } from '../../approval/human'
 import { approvedSnapshot } from '../../approval/snapshot'
@@ -249,6 +250,7 @@ export function toAppEnvDto(row: AppEnvRow): AppEnvDto {
 		publishedRunId: row.published_run_id,
 		deviationSubjects: snapshotDeviations(snapshot),
 		surface: snapshotSurface(snapshot),
+		accessMap: snapshotAccessMap(snapshot),
 		namespaceId: row.namespace_id,
 		provider: row.provider,
 		target: parseStoredEnvelope(row.provider_target_json, `target for ${row.app_id}/${row.env}`),

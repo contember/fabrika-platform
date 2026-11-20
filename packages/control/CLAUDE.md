@@ -707,6 +707,9 @@ other environment, before the provider prepares anything, and the write maps a r
   refuses it. Checker structure hints never enter the snapshot. `AppEnvDto.deviationSubjects` lists the published
   snapshot's, grouped by site and migration, and `AppEnvDto.surface` (`surface.ts`) its endpoints under their most
   exposed caller, in `diff.ts`'s words.
+  `AppEnvDto.accessMap` and the approval detail's `ApprovalDto.accessMap` (`access-map.ts`) read the same snapshot by
+  role: each role's actions, and once per action its endpoints, tables and member or link reach. They are additive
+  fields; a console reads their absence as an older Control.
 - **An opaque root is derived from the artifact, never a field of it (`opaqueRoots`, `diff.ts`).** A root dimension
   (`in: null`) that no `dimension`-mode table owns has no row to check a value against: an application-wide grant admits
   any well-formed value, as `boot` derives it from the same `tables`. The diff shows one becoming opaque as a widening
