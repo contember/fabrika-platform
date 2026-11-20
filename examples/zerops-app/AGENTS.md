@@ -6456,9 +6456,9 @@ export const tables = defineTables(vocabulary, columns)({
   its read action reads it, every row and read-only, so its read action decides who reads it.
 - An application table that every `app: true` endpoint, job and webhook reads says so: `actions: { read: 'any', … }`.
   Each of them reads it under its own action, and none needs to be listed. A public procedure, an `on`, `in` or `over`
-  endpoint, a link procedure and an export never read such a table; give it a read list for them. Its writes keep their
-  actions, a column with its own read action is still read only with that action, and a `when` keyed by an action
-  narrows only that action's writes. Write `'any'` only on a table with nothing sensitive in it: it is a widening the
+  endpoint, a link procedure and an export do not read such a table through `ctx.db`; give it a read list for them. Its
+  writes keep their actions, a column with its own read action is still read only with that action, and a `when` keyed
+  by an action narrows only that action's writes (a `when` of an action that writes nothing is refused). Write `'any'` only on a table with nothing sensitive in it: it is a widening the
   approver sees. A dimension, child or reference table names its read actions.
 - A reference table (`priorities`) takes `actions: { read: '<action>' }` and, at most, `columns` with read actions: no
   `insert`, `update`, `version` or `createdBy`. Its rows change by a migration only. No handle writes it, and

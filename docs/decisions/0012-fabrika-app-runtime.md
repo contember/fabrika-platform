@@ -276,9 +276,10 @@ minted, the site's kind (query, mutation, job, webhook, export) and its declarat
   narrower still ([ADR-0063](0063-a-public-procedure-runs-as-its-own-workload.md)). Each operation of a table policy
   names one action or a list, any one of which allows it, so staff and a public procedure can read one table under
   their own actions. An application table's read may say `'any'` instead: every `app` endpoint, job and webhook reads
-  it, whatever its action, and never a public procedure, an `on`, `in` or `over` endpoint, a link procedure or an
-  export. A column with its own read action stays readable only with it, writes keep their actions, and a `when` keyed
-  by an action narrows only that action's writes there. `'any'` is written per table; a table without a read action is
+  it, whatever its action, and no public procedure, `on`, `in` or `over` endpoint, link procedure or export reads it
+  through `ctx.db` (a declared `unscoped` read or raw `sql` stays the approver's to see, as on any table). A column
+  with its own read action stays readable only with it, writes keep their actions, and a `when` keyed by an action
+  narrows only that action's writes there; one keyed by an action that writes nothing is refused. `'any'` is written per table; a table without a read action is
   read by none, so nothing becomes readable by omission. A
   capability reads its own target, except a column that declares another action's read
   ([ADR-0050](0050-approved-access.md) §3). Writes answer `{ id, version }`; `update` and `remove` take

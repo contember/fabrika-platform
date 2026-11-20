@@ -158,9 +158,10 @@ describe("an application table read with 'any'", () => {
 				const intake = db.app(alice.publicApp('intake.submit'))
 				await call(intake, 'notices.insert', { body: 'anonymous', status: 'open', internal: '' })
 				for (const read of ['list', 'count']) {
-					await expect(call(intake, `notices.${read}`)).rejects.toThrow(
-						"a public procedure does not read notices: it is read with 'any', which an app endpoint, a job and a webhook hold",
-					)
+					await expect(call(intake, `notices.${read}`)).rejects.toMatchObject({
+						reason: 'wrong_capability',
+						message: "a public procedure does not read notices: it is read with 'any', which an app endpoint, a job and a webhook hold",
+					})
 				}
 				await expect(call(intake, 'notices.get', 'n1')).rejects.toBeInstanceOf(CapabilityError)
 			},
@@ -171,9 +172,10 @@ describe("an application table read with 'any'", () => {
 	test('a scoped site reads nothing of it, through a Ref or a Within', async () => {
 		await invoke('query', async (db) => {
 			for (const capability of [alice.within('workspace', 'notes.read', ['w1']), alice.ref('workspace', 'notes.read', 'w1')]) {
-				await expect(call(db.app(capability), 'notices.list')).rejects.toThrow(
-					"a scoped site does not read notices: it is read with 'any', which an app endpoint, a job and a webhook hold",
-				)
+				await expect(call(db.app(capability), 'notices.list')).rejects.toMatchObject({
+					reason: 'wrong_capability',
+					message: "a scoped site does not read notices: it is read with 'any', which an app endpoint, a job and a webhook hold",
+				})
 				await expect(call(db.app(capability), 'notices.get', 'n1')).rejects.toBeInstanceOf(CapabilityError)
 			}
 		})
@@ -185,8 +187,25 @@ describe("an application table read with 'any'", () => {
 		const Id = z.object({ id: z.string() })
 		const rows = await sql(Id)`select id from notices where ${sql.scope(alice.app('reports.run'), 'notices')} order by id`
 		expect(rows).toEqual([{ id: 'n1' }, { id: 'n2' }])
+		// A when keyed by the action narrows only its writes, so the read renders unconditioned.
+		const edited = await sql(Id)`select id from notices where ${sql.scope(alice.app('notices.edit'), 'notices')} order by id`
+		expect(edited).toEqual([{ id: 'n1' }, { id: 'n2' }])
 		expect(() => sql.scope(alice.publicApp('intake.submit'), 'notices')).toThrow(CapabilityError)
 		expect(() => sql.scope(alice.within('workspace', 'notes.read', ['w1']), 'notices')).toThrow(CapabilityError)
 		await transaction.rollback()
+	})
+
+	test('a when keyed by an action that writes nothing is refused: it would narrow nothing', () => {
+		expect(() =>
+			defineTables(vocabulary, columns)({
+				notices: {
+					scope: { app: 'notices of the whole board' },
+					actions: { read: 'any', insert: 'notices.edit' },
+					insert: ['body', 'status', 'internal'],
+					columns: { internal: { read: 'notices.audit' } },
+					when: { 'notices.audit': { status: { eq: 'open' } } },
+				},
+			})
+		).toThrow("notices: when.notices.audit narrows nothing: the table is read with 'any'")
 	})
 })

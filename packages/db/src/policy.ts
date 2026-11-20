@@ -1641,6 +1641,23 @@ function tableActionNames(table: LinkedTable): NameSet {
 	return nameSet(names)
 }
 
+/** The actions that write a table: its insert, update and delete actions and its columns' own write actions. */
+function writeActionNames(table: LinkedTable): NameSet {
+	const names: string[] = []
+	const lists = [table.actions.insert, table.actions.update, table.actions.delete]
+	for (let list = 0; list < lists.length; list++) {
+		const actions = lists[list] ?? []
+		for (let index = 0; index < actions.length; index++) {
+			names[names.length] = actions[index] ?? ''
+		}
+	}
+	const writes = ownKeys(table.columnWrites)
+	for (let index = 0; index < writes.length; index++) {
+		names[names.length] = ownEntry(table.columnWrites, writes[index] ?? '') ?? ''
+	}
+	return nameSet(names)
+}
+
 /**
  * `when`: action → the condition a row must meet for it. An insert action's condition is judged on the inserted row and
  * the existing rows its paths reach (`insertProblem`); a reference table is read by every site and takes none.
@@ -1666,6 +1683,11 @@ function parseWhen(
 		const action = actions[index] ?? ''
 		if (!inSet(named, action)) {
 			throw new PolicyError(`${table.name}: when.${action} names an action the table does not name (${namesOf(named).join(', ')})`)
+		}
+		if (table.actions.readAny && !inSet(writeActionNames(table), action)) {
+			throw new PolicyError(
+				`${table.name}: when.${action} narrows nothing: the table is read with 'any', and a when narrows only the writes of an action that inserts, updates or deletes`,
+			)
 		}
 		const what = `${table.name}: when.${action}`
 		const condition = parseCondition(ownEntry(declared, action), root, tables, what, hops)
