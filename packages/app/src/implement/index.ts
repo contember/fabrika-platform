@@ -10,6 +10,9 @@ export {
 	type EmailSenderCapabilities,
 	mayRetryDelivery,
 } from '@fabrika/email'
+// The options of `ctx.members.assign` by address, and the languages IAM speaks, which an application that keeps a
+// person's language narrows its own value to.
+export type { InvitationOptions, Locale } from '@fabrika/auth-core'
 export type { FileCollectionHandle, FileCollectionReader, FileListing, ListedFile, OpenedFile } from '../files/handle'
 export { FILE_SWEEP_JOB } from '../files/kinds'
 export {
