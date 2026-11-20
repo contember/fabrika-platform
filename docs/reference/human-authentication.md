@@ -291,7 +291,8 @@ The sign-in an application's proxy starts names the language the application
 left for the browser on its own host: an application may set the host-only
 `__Host-fabrika_locale` cookie (`LOCALE_COOKIE` in `@fabrika/auth-core`; `Secure`,
 `Path=/`, no `Domain`, as the prefix requires) to one of the languages above,
-from its server or its page, and the proxy adds that value to IAM's login URL
+from its server or its page (`rememberSignInLocale` of `@fabrika/app/client`
+writes it from an SPA), and the proxy adds that value to IAM's login URL
 as `?locale=`. A value IAM does not speak is not passed on. The proxy decides
 exactly as without it, on Cloudflare and Zerops alike, and the cookie reaches
 the application with its other cookies. An invitation's "sign in first" sends

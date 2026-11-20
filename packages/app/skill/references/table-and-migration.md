@@ -52,10 +52,10 @@ export const vocabulary = defineVocabulary({
 - `locale: 'cs'` (or `'en'`, `'uk'`) and `displayName: 'Tasks'` beside `app` set the language and the name IAM uses for
   the application on its sign-in, password and invitation pages and e-mails. Without `locale` IAM speaks the browser's
   language where it speaks it, else its default, `en`. A person's own language, named on their invitation
-  (`references/endpoint.md`), beats the application's. The SPA may leave the language a person chose for the sign-in
-  its proxy starts: a host-only cookie `LOCALE_COOKIE` (`@fabrika/app/client`) set to `'en'`, `'cs'` or `'uk'`, for
-  example `document.cookie = '__Host-fabrika_locale=uk; Path=/; Secure; SameSite=Lax; Max-Age=31536000'`. The proxy adds
-  it to IAM's sign-in as `?locale=`; it picks words only and is never a credential. Without `displayName` the sign-in and password pages and mails name no application, and an invitation
+  (`references/endpoint.md`), beats the application's. Where the SPA lets a person pick a language, it calls
+  `rememberSignInLocale('uk')` of `@fabrika/app/client` (`isLocale` narrows a string first; `null` forgets it): the
+  host-only `__Host-fabrika_locale` cookie it writes makes the sign-in its proxy starts on this browser speak that
+  language. It picks words only and is never a credential. Without `displayName` the sign-in and password pages and mails name no application, and an invitation
   names it by its id (`tasks@prod`). The approver sees each change.
 - `mail` beside them words IAM's e-mails in the application's own way: per message (`invitation`, `enrollment`,
   `reset`) and language, a one-line `subject` and a plain `text` with `{{name}}` placeholders, for example
