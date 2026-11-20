@@ -71,7 +71,7 @@ describe('the header limit of an application server on Zerops', () => {
 			storageHostname: null,
 			runtimePackages: [],
 			sourceMaps: null,
-		}).join('\n')
+		}, 'build').join('\n')
 		expect(commands).toContain(`exec bun --max-http-header-size=${APPLICATION_SERVER_MAX_HEADER_BYTES} fabrika/entry.generated.ts`)
 	})
 

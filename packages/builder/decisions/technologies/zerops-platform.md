@@ -44,11 +44,12 @@ truth: stable `id`, `schema`, `pipeline` and `target` with `platform: 'zerops'`.
   `build.buildCommands`; every other key is refused. The platform generates the
   rest: a frozen install, the application's `bun test`, a reinstall, the
   generated entrypoint, `tsc` (with `web/`), `fabrika-check`, the deploy gate on the contract's
-  health path, and the `run` section. Its init commands run `fabrika db migrate`
-  and `fabrika db codegen --verify`, then its
+  health path, and the `run` section. With a database, the build then migrates a throwaway
+  PostgreSQL and runs `fabrika db codegen --verify` on it; its init command runs
+  `fabrika db migrate`, then its
   start script runs `fabrika/entry.generated.ts`; each `c.cron` job becomes a crontab entry
-  `fabrika job run <name>`. The build has no database, so the database tests skip
-  there and run nowhere else. Run them against a test database before you push.
+  `fabrika job run <name>`. The application's own tests run before that database exists, so
+  its database tests skip there and run nowhere else. Run them against a test database before you push.
 - Commit the Bun lockfile at the app repository root, and commit what
   `fabrika db codegen` writes. Never edit a
   generated file (`fabrika/entry.generated.ts`, `src/db/schema.generated.ts`) by hand;

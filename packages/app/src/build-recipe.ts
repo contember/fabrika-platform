@@ -26,6 +26,14 @@ const SERVE: readonly string[] = ['bun', `--max-http-header-size=${APPLICATION_S
 const MIGRATE: readonly string[] = [FABRIKA_BIN, 'db', 'migrate']
 const PLATFORM_TSCONFIG = 'fabrika/tsconfig.platform.json'
 
+/** The application CLI's arguments that fail when the committed schema types are stale, run from the application root. */
+export const SCHEMA_TYPES_CHECK: readonly string[] = ['db', 'codegen', '--verify']
+
+/** The Alpine package of the throwaway PostgreSQL: the major of the platform's application databases (`postgresql:*@18`). */
+const BUILD_POSTGRES_PACKAGE = 'postgresql18'
+/** The throwaway cluster's directory, outside the source root, so nothing of it is deployed. */
+const BUILD_POSTGRES_DIR = '/tmp/fabrika-build-postgres'
+
 /**
  * The compiler options of the platform's type check; the application's own `tsconfig.json` and its `paths` are not read.
  * It covers the SPA under `web/` too: Bun bundles the SPA without checking its types.
@@ -68,7 +76,7 @@ const bunEvalCommand = (script: readonly string[]): string => {
 	return `bun -e "${source}"`
 }
 
-// The build has no database, so every Postgres-backed test file skips and the run still passes. This command runs the
+// The tests run before any database, so every Postgres-backed test file skips and the run still passes. This command runs the
 // tests as before and then says how many files did not run, so a green test step does not read as a tested database.
 const TESTS_COMMAND = bunEvalCommand([
 	"const child = Bun.spawn([process.execPath, 'test', '--isolate', '--pass-with-no-tests'], { stdout: 'inherit', stderr: 'pipe' });",
@@ -97,8 +105,12 @@ export interface ContractRecipeInput {
 	readonly sourceRoot: string
 	/** The absolute directory the built application runs from: each generated script starts there. */
 	readonly runtimeRoot: string
-	/** With a database, every container migrates and checks its schema before the server starts. */
-	readonly database: boolean
+	/**
+	 * Without a database, `false`. With one, every container migrates before the server starts, and the schema check
+	 * runs where `schemaChecks` says: `build` on a throwaway PostgreSQL the build installs with `sudo apk` (an Alpine build
+	 * image), `init` at every container start, after the migrations.
+	 */
+	readonly database: false | { readonly schemaChecks: 'build' | 'init' }
 	/** Whether the build uploads its source maps, last and never failing the build. */
 	readonly sourceMaps: boolean
 	readonly jobs: readonly { readonly name: string; readonly schedule: string }[]
@@ -135,12 +147,49 @@ export interface ContractRecipe {
 }
 
 /**
+ * One build command that migrates a throwaway PostgreSQL from scratch with the application's migrations, runs the schema
+ * check on it and stops it. It is one command because each build command runs in its own shell. The cluster listens on
+ * a unix socket in a private directory only, behind a random password. A failed step names itself. The cleanup is armed
+ * before the password is written and stays armed to the end: every exit, a signal's too, stops the cluster and removes
+ * its directory.
+ */
+const buildSchemaChecksCommand = (appId: string): string => {
+	const data = `${BUILD_POSTGRES_DIR}/data`
+	const stop = (mode: 'fast' | 'immediate'): string => `pg_ctl --pgdata=${data} --mode=${mode} stop >/dev/null`
+	const failed = (check: string): string => `|| { echo "fabrika: the build check failed: ${check}" >&2; exit 1; }`
+	const command = [
+		'set -eu',
+		'umask 077',
+		`sudo apk add --no-cache --quiet ${BUILD_POSTGRES_PACKAGE}`,
+		// A signal runs the EXIT trap only through an `exit` of its own, in POSIX `sh` and BusyBox `sh` alike.
+		`trap "${stop('immediate')} 2>&1 || true; rm -rf ${BUILD_POSTGRES_DIR}" EXIT`,
+		'trap "exit 130" INT',
+		'trap "exit 143" TERM',
+		`rm -rf ${BUILD_POSTGRES_DIR}`,
+		`mkdir ${BUILD_POSTGRES_DIR}`,
+		'PW=$(od -An -N16 -tx1 /dev/urandom | tr -dc 0-9a-f)',
+		`printf %s "$PW" > ${BUILD_POSTGRES_DIR}/password`,
+		`initdb --pgdata=${data} --username=fabrika --auth=scram-sha-256 --pwfile=${BUILD_POSTGRES_DIR}/password --no-sync --no-instructions >/dev/null`,
+		`rm ${BUILD_POSTGRES_DIR}/password`,
+		`pg_ctl --pgdata=${data} --log=${BUILD_POSTGRES_DIR}/server.log --wait --options="-c listen_addresses= -c unix_socket_directories=${BUILD_POSTGRES_DIR} -c fsync=off" start >/dev/null || { cat ${BUILD_POSTGRES_DIR}/server.log >&2; exit 1; }`,
+		`export FABRIKA_APP_ID=${appId} FABRIKA_APP_DATABASE_URL="postgresql://fabrika:$PW@localhost/postgres?path=${BUILD_POSTGRES_DIR}"`,
+		`${MIGRATE.join(' ')} ${failed('the migrations (fabrika db migrate)')}`,
+		`${[FABRIKA_BIN, ...SCHEMA_TYPES_CHECK].join(' ')} ${failed('schema types are stale (fabrika db codegen --verify)')}`,
+		`${stop('fast')} || ${stop('immediate')}`,
+	].join('\n')
+	// Zerops may resolve a braced `${name}` in a build command as its own variable; an unbraced `$NAME` reaches the shell.
+	if (command.includes('${')) throw new Error('the build schema checks must expand no braced variable')
+	return command
+}
+
+/**
  * The recipe of one contract application. The application's tests run first: they are authored code, so everything
  * after them is reinstalled, regenerated or checked again. They run `--isolate`, as the application skill runs them: a
  * test file's DOM globals otherwise leak into the next file. `tsc` runs before the checker, as in the skill's loop: the
  * usual quick fix of a type error is a cast or an `any`, which only the checker refuses, so the checker is the last word
- * on the code. The build has no database, so the schema checks run as init scripts, after the migrations and before the
- * readiness window opens.
+ * on the code. With a database, the schema check runs last, on a throwaway PostgreSQL the build migrates from scratch,
+ * and only the migrations run at container start; a build image without `apk` runs it as an init script instead, after
+ * the migrations and before the readiness window opens.
  */
 export function contractRecipe(input: ContractRecipeInput): ContractRecipe {
 	const { appId, checkRelease, sourceRoot, runtimeRoot } = input
@@ -150,13 +199,16 @@ export function contractRecipe(input: ContractRecipeInput): ContractRecipe {
 		throw new Error('a job name or schedule is not one a generated crontab line may carry')
 	}
 	const script = (lines: readonly string[]): readonly string[] => ['#!/bin/sh', 'set -eu', `cd ${runtimeRoot}`, ...lines]
-	const init = input.database
-		? [
+	const { database } = input
+	const init = database === false
+		? []
+		: [
 			{ path: MIGRATE_SCRIPT, lines: script([`FABRIKA_APP_ID=${appId} exec ${MIGRATE.join(' ')}`]) },
 			// The committed schema types must match the migrated schema.
-			{ path: VERIFY_SCRIPT, lines: script([`FABRIKA_APP_ID=${appId} exec ${FABRIKA_BIN} db codegen --verify`]) },
+			...(database.schemaChecks === 'init'
+				? [{ path: VERIFY_SCRIPT, lines: script([`FABRIKA_APP_ID=${appId} exec ${[FABRIKA_BIN, ...SCHEMA_TYPES_CHECK].join(' ')}`]) }]
+				: []),
 		]
-		: []
 	const tests: ContractCheck = { name: 'tests', command: TESTS_COMMAND }
 	const tsc: ContractCheck = {
 		name: 'tsc',
@@ -175,6 +227,7 @@ export function contractRecipe(input: ContractRecipeInput): ContractRecipe {
 			{ write: PLATFORM_TSCONFIG, lines: [PLATFORM_TSCONFIG_CONTENTS] },
 			{ run: tsc.command },
 			{ run: check.command },
+			...(database !== false && database.schemaChecks === 'build' ? [{ run: buildSchemaChecksCommand(appId) }] : []),
 			...init.map((generated) => ({ write: generated.path, lines: generated.lines })),
 			{ write: START_SCRIPT, lines: script([`exec ${SERVE.join(' ')}`]) },
 			// After every check, so a map is uploaded only for a build that can deploy; the report line says how it went.

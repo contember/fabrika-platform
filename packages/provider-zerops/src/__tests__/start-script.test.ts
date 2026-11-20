@@ -1,6 +1,7 @@
-// The generated init commands and start script of a contract application, run in Zerops' order against a REAL Postgres
-// with the real `fabrika` CLI: a committed `schema.generated.ts` that no longer matches the migrated schema fails an
-// init command, which stops the activation before the server starts. Skips cleanly without FABRIKA_TEST_POSTGRES_URL;
+// The generated init commands and start script of a contract application whose build cannot install a database (a build
+// image other than Alpine), run in Zerops' order against a REAL Postgres with the real `fabrika` CLI: a committed
+// `schema.generated.ts` that no longer matches the migrated schema fails an init command, which stops the activation
+// before the server starts. Skips cleanly without FABRIKA_TEST_POSTGRES_URL;
 // the URL is a credential and is never printed.
 
 import { afterAll, describe, expect, test } from 'bun:test'
@@ -41,7 +42,7 @@ const SCRIPTS = ['fabrika/migrate.generated.sh', 'fabrika/verify.generated.sh', 
 /** Runs every init command, then the start script, stopping at the first failure as Zerops stops the activation. */
 const activate = async (root: string, execution: ZeropsLockedExecution): Promise<{ code: number; stdout: string; stderr: string }> => {
 	const output = { stdout: '', stderr: '' }
-	for (const command of [...generatedInitCommands(execution), 'sh /var/www/fabrika/start.generated.sh']) {
+	for (const command of [...generatedInitCommands(execution, 'init'), 'sh /var/www/fabrika/start.generated.sh']) {
 		const step = await sh(root, ['-c', command.replaceAll('/var/www', root)])
 		output.stdout += step.stdout
 		output.stderr += step.stderr
@@ -69,7 +70,7 @@ const generatedApplication = async (execution: ZeropsLockedExecution): Promise<s
 	const root = mkdtempSync(join(tmpdir(), 'fabrika-start-script-'))
 	roots.push(root)
 	mkdirSync(join(root, 'fabrika'))
-	for (const command of generatedBuildCommands(execution).filter((line) => line.includes('.generated.sh'))) {
+	for (const command of generatedBuildCommands(execution, 'init').filter((line) => line.includes('.generated.sh'))) {
 		expect((await sh(root, ['-c', command])).code).toBe(0)
 	}
 	for (const script of SCRIPTS) {

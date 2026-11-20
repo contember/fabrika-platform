@@ -100,8 +100,7 @@ discards all local data, including the retained MinIO volume and credentials.
 ## The Notes container
 
 The `notes` service runs `examples/zerops-app` as the platform starts a contract
-application on Zerops: the source's own `./node_modules/.bin/fabrika` runs `db migrate` and `db codegen --verify`,
-then the generated entrypoint
+application on Zerops: the source's own `./node_modules/.bin/fabrika` runs `db migrate`, then the generated entrypoint
 (`fabrika/entry.generated.ts`, which preparation writes, as the platform build does).
 Preparation writes the variables a deploy writes: `notes.env` holds the database URL,
 the proxy secret and the bucket credentials, `notes-contract.env` the digest of the
@@ -155,8 +154,8 @@ table `note_labels` with its policy and migration, a migration that declares a t
 approval marks "needs closer review"), and the regenerated code and tests. It also holds one commit per
 release fixture, the example as a released tag holds it ([The compatibility suite](#the-compatibility-suite)).
 `deployable.test.ts` checks the application and agent change archives as a production build does: the checker, and
-on Postgres `fabrika db migrate` and `fabrika db codegen --verify`. Preparation stores their manifests and archives
-under `.state/source-fixtures/`. Their commits do not depend on the enclosing
+on Postgres the build's schema check, `fabrika db migrate` and `fabrika db codegen --verify`. Preparation stores their
+manifests and archives under `.state/source-fixtures/`. Their commits do not depend on the enclosing
 checkout's HEAD, index, or uncommitted files. Control receives the platform
 fixture's immutable proxy source pin. Conflicting existing pins require an
 explicit reset; preparation does not silently change a persisted namespace's source.
@@ -219,8 +218,10 @@ it:
    empty database;
 2. pushes the release's commit through the keyed connection's webhook. Control reads it with the bundled reader of its
    minor, the suite approves the diff in the console, and the deploy runs to the emulator. The composition follows it:
-   the release's source with its packages installed from npm, the entrypoint its own framework writes, its own
-   `fabrika` for the init commands, and the digest and endpoint table the deploy wrote. A healthy container means the
+   the release's source with its packages installed from npm, the entrypoint its own framework writes, the platform
+   build's schema check with its own `fabrika` (`db migrate` and `db codegen --verify`, in a one-off Notes container,
+   since the emulator runs no build), its own `fabrika db migrate` at start, and the digest
+   and endpoint table the deploy wrote. A healthy container means the
    release's startup digest check passed;
 3. calls Notes through the proxy: a service key creates and lists notes, a path no row serves and a key without
    `notes.write` are refused with 403, an anonymous call is sent to sign in, and the local admin, signed in on the
