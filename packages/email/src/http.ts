@@ -61,8 +61,8 @@ function isRedirect(response: Response): boolean {
 }
 
 function redirectError(label: string, status: number): EmailDeliveryError {
-	const shown = status === 0 ? 'redirect' : `${status}`
-	return new EmailDeliveryError(`${label} answered with a redirect (${shown}), which is not followed`, {
+	const shown = status === 0 ? '' : ` (HTTP ${status})`
+	return new EmailDeliveryError(`${label} answered with a redirect${shown}, which is not followed`, {
 		code: 'provider_rejected',
 		...(status === 0 ? {} : { httpStatus: status }),
 	})

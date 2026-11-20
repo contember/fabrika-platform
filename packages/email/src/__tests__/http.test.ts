@@ -73,7 +73,7 @@ describe('postToProvider', () => {
 		}))
 		expect(arrivals).toEqual([])
 		expect([error.code, error.httpStatus, error.retryable, error.outcome]).toEqual(['provider_rejected', status, false, 'not_sent'])
-		expect(error.message).toBe(`Test answered with a redirect (${status}), which is not followed`)
+		expect(error.message).toBe(`Test answered with a redirect (HTTP ${status}), which is not followed`)
 	})
 
 	test('sends every request with redirect: manual', async () => {
@@ -107,7 +107,7 @@ describe('postToProvider', () => {
 		expect([error.code, error.httpStatus, error.message]).toEqual([
 			'provider_rejected',
 			undefined,
-			'Test answered with a redirect (redirect), which is not followed',
+			'Test answered with a redirect, which is not followed',
 		])
 	})
 })
@@ -140,7 +140,7 @@ describe('the platform relay behind a redirect', () => {
 		const error = await caught(sender.send(message, new AbortController().signal))
 		expect(arrivals).toEqual([])
 		expect([error.code, error.httpStatus]).toEqual(['provider_rejected', status])
-		expect(error.message).toBe(`Platform mail answered with a redirect (${status}), which is not followed`)
+		expect(error.message).toBe(`Platform mail answered with a redirect (HTTP ${status}), which is not followed`)
 		// Not retried even over the idempotent relay: the same URL answers the same redirect.
 		expect(mayRetryDelivery(error, PLATFORM_MAIL_CAPABILITIES)).toBe(false)
 	})
