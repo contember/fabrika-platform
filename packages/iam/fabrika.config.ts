@@ -9,7 +9,7 @@
 import { type EmailTransportConfig, readEmailTransportConfig } from '@fabrika/email'
 import { isHttpOrigin } from '@fabrika/email/platform'
 import { builtinEmailProviders } from '@fabrika/email/providers'
-import { D1Database, defineApp, type ResourceContext, Worker } from '@fabrika/provider-cloudflare'
+import { D1Database, defineApp, platformNames, type ResourceContext, Worker } from '@fabrika/provider-cloudflare'
 
 // Keep the legacy Oblaka namespace so the first fabrika deploy continues the existing cf-state.
 const IAM_APP_ID = 'propustka'
@@ -232,10 +232,11 @@ export const buildIamWorker = (ctx: ResourceContext, source: EnvironmentSource =
 
 	const runtimeConfig: RemoteConfig | 'local' = env === 'local' ? 'local' : remoteConfig(env, ctx.domain, source)
 	const domain = runtimeConfig === 'local' ? undefined : runtimeConfig.domain
+	const names = platformNames(source)
 
 	return new Worker({
 		dir: '.',
-		name: 'propustka-worker',
+		name: names.iamWorker,
 		main: './src/index.ts',
 		compatibility_flags: ['nodejs_compat_v2'],
 		compatibility_date: '2025-10-01',
@@ -245,7 +246,7 @@ export const buildIamWorker = (ctx: ResourceContext, source: EnvironmentSource =
 		// Daily prune of auth_log; see scheduled() in src/index.ts.
 		triggers: { crons: ['0 3 * * *'] },
 		bindings: {
-			DB: new D1Database({ name: 'propustka', migrationsDir: './migrations', locationHint: 'weur' }),
+			DB: new D1Database({ name: names.iamDatabase, migrationsDir: './migrations', locationHint: 'weur' }),
 		},
 		vars: {
 			ENVIRONMENT: env,

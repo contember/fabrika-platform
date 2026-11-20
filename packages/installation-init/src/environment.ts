@@ -59,6 +59,12 @@ export async function configureEnvironment(
 	const protection = await createEnvironment(repo, environment, effects.attempt)
 	config.onProtection?.(protection)
 
+	// Variables first, in the caller's order: a workflow run that starts before init finishes, or a run of init that
+	// stops halfway, never sees an Environment whose credentials are set and whose configuration is not.
+	for (const [name, value] of Object.entries(vars)) {
+		await effects.run({ command: 'gh', args: ['variable', 'set', name, '--repo', repo, '--env', environment, '--body', value], cwd: ANCHOR })
+		ok(`variable ${name} set`)
+	}
 	for (const [name, value] of Object.entries(secrets)) {
 		if (value === '') {
 			warn(`Skipping secret ${name} — no value (the workflow will fail without it; set it manually).`)
@@ -67,11 +73,33 @@ export async function configureEnvironment(
 		await effects.run({ command: 'gh', args: ['secret', 'set', name, '--repo', repo, '--env', environment], cwd: ANCHOR, stdin: value })
 		ok(`secret ${name} set`)
 	}
-	for (const [name, value] of Object.entries(vars)) {
-		await effects.run({ command: 'gh', args: ['variable', 'set', name, '--repo', repo, '--env', environment, '--body', value], cwd: ANCHOR })
-		ok(`variable ${name} set`)
-	}
 	detail(`Recommended hardening — require your own approval before a deploy: ${environmentReviewerCommand(repo, environment)}`)
+}
+
+const variableLineSchema = z.object({ name: z.string(), value: z.string() })
+
+/**
+ * The variables an Environment already holds, or null when the repository or the Environment does not exist. Any other
+ * failure throws: a caller decides from the answer whether an installation already exists, and must not guess.
+ */
+export async function environmentVariables(
+	repo: string,
+	environment: string,
+	gh: GhAttempt = attempt,
+): Promise<Readonly<Record<string, string>> | null> {
+	const path = `repos/${repo}/environments/${environment}/variables`
+	const result = await gh({ command: 'gh', args: ['api', '--paginate', path, '--jq', '.variables[] | {name, value}'], cwd: ANCHOR })
+	if (result.exitCode !== 0) {
+		if (ghHttpStatus(result) === 404) return null
+		throw new Error(`\`gh api ${path}\` failed (${unavailableReason(result)}).`)
+	}
+	const variables: Record<string, string> = {}
+	for (const line of result.stdout.split('\n')) {
+		if (line.trim() === '') continue
+		const variable = variableLineSchema.parse(JSON.parse(line))
+		variables[variable.name] = variable.value
+	}
+	return variables
 }
 
 /**

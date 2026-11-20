@@ -125,6 +125,65 @@ describe('defineApp(control config)', () => {
 		expect(binding(worker, 'RUNNER_SVC')).toBeUndefined()
 	})
 
+	/** The remote name a service binding resolves to in `env`, as oblaka writes it into the generated config. */
+	const remoteService = (value: unknown, env: string): unknown => {
+		if (!(value instanceof ServiceReference)) throw new Error('expected a ServiceReference')
+		return value.configureBinding({ config: {}, binding: 'X', env }).services?.[0]?.service
+	}
+
+	/** The `name` option of a resource binding. */
+	const nameOf = (value: unknown): unknown => {
+		if (!(value instanceof D1Database || value instanceof R2Bucket || value instanceof Queue)) throw new Error('expected a resource')
+		return value.options.name
+	}
+
+	test.each([
+		['', 'vozka-proxy', 'vozka', 'vozka-run-logs', 'vozka-deploy', 'fabrika-mail', 'propustka-worker', 'operations', 'vozka-runner'],
+		['legacy', 'vozka-proxy', 'vozka', 'vozka-run-logs', 'vozka-deploy', 'fabrika-mail', 'propustka-worker', 'operations', 'vozka-runner'],
+		[
+			'fabrika',
+			'fabrika-control-proxy',
+			'fabrika-control',
+			'fabrika-run-logs',
+			'fabrika-deploy',
+			'fabrika-control-mail',
+			'fabrika-iam',
+			'fabrika-operations',
+			'fabrika-runner',
+		],
+	])(
+		'FABRIKA_CLOUDFLARE_NAMES=%p names every resource of the installation',
+		(scheme, proxyName, controlName, logs, queue, mail, iam, operations, runner) => {
+			withEnvironment({ FABRIKA_CLOUDFLARE_NAMES: scheme }, () => {
+				const proxy = config.resources({ env: 'prod', domain: 'control.test.example.com' })
+				expect(proxy.options.name).toBe(proxyName)
+				expect(remoteService(binding(proxy, 'IAM'), 'prod')).toBe(`prod-${iam}`)
+				const app = application(proxy)
+				expect(app.options.name).toBe(controlName)
+				expect(nameOf(binding(app, 'DB'))).toBe(controlName)
+				expect(nameOf(binding(app, 'RUN_LOGS'))).toBe(logs)
+				expect(nameOf(binding(app, 'DEPLOY_QUEUE'))).toBe(queue)
+				expect(nameOf(binding(app, 'MAIL_QUEUE'))).toBe(mail)
+				expect(nameOf(binding(app, 'MAIL_CONTENT'))).toBe(`${mail}-content`)
+				expect(remoteService(binding(app, 'IAM'), 'prod')).toBe(`prod-${iam}`)
+				expect(remoteService(binding(app, 'OPERATIONS'), 'prod')).toBe(`prod-${operations}`)
+				expect(remoteService(binding(app, 'RUNNER_SVC'), 'prod')).toBe(`prod-${runner}`)
+				// What every application deploy binds: IAM's exact remote name, not one the application's env would prefix.
+				expect(app.options.vars?.['FABRIKA_IAM_SERVICE']).toBe(`prod-${iam}`)
+			})
+		},
+	)
+
+	test('a local Worker names no IAM service for application deploys', () => {
+		expect(application(buildControlWorker({ env: 'local' })).options.vars?.['FABRIKA_IAM_SERVICE']).toBeUndefined()
+	})
+
+	test('an unknown name scheme refuses the deploy instead of guessing one', () => {
+		withEnvironment({ FABRIKA_CLOUDFLARE_NAMES: 'fabirka' }, () => {
+			expect(() => config.resources({ env: 'prod' })).toThrow('FABRIKA_CLOUDFLARE_NAMES must be `fabrika` or `legacy`, not `fabirka`')
+		})
+	})
+
 	test('domain from ctx flows into the FABRIKA_CONTROL_DOMAIN var', () => {
 		const worker = application(config.resources({ env: 'stage', domain: 'control.test.example.com' }))
 		expect(worker.options.vars?.['FABRIKA_CONTROL_DOMAIN']).toBe('control.test.example.com')

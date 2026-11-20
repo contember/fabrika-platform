@@ -29,6 +29,12 @@ export const CROSS_ORIGINS_ENV = 'FABRIKA_CROSS_ORIGINS'
 /** The executor's copy of `CloudflareRunnerJob.operationsOrigin`: the origin of the environment's Operations ingest. */
 export const OPERATIONS_ORIGIN_ENV = 'FABRIKA_OPERATIONS_ORIGIN'
 
+/** The executor's copy of `CloudflareRunnerJob.iamService`: IAM's Worker by its remote name, which every application binds. */
+export const IAM_SERVICE_ENV = 'FABRIKA_IAM_SERVICE'
+
+/** A Worker's remote name as Cloudflare accepts one: lowercase letters, digits and dashes, at most 63, no leading dash. */
+export const isWorkerName = (value: string): boolean => /^[a-z0-9][a-z0-9-]{0,62}$/.test(value)
+
 /** The executor's copy of `CloudflareRunnerJob.applicationObjects`: JSON `{ object, objects }`, the pointer Control records. */
 export const APPLICATION_OBJECTS_ENV = 'FABRIKA_RUNNER_APPLICATION_OBJECTS'
 

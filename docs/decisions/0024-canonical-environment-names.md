@@ -47,9 +47,13 @@ The naming rules cover configuration names only. These durable identities keep t
 even when they contain legacy words:
 
 - registered app and infrastructure ids (`vozka`, `propustka`, `vozka-runner`);
-- Cloudflare Worker, D1, R2, queue, and container application names (`vozka`,
-  `propustka-worker`, `vozka-runner`, `vozka-proxy`, `vozka-run-logs`, `vozka-deploy`,
-  `vozka-deploy-runner`);
+- the Cloudflare Worker, D1, R2, queue, container application and oblaka state namespace names of an installation
+  that exists. An installation fixes its names when it is created, in `FABRIKA_CLOUDFLARE_NAMES`, a variable of its
+  GitHub Environment: `platform init` records `fabrika` for a new one (`fabrika-control`, `fabrika-iam`,
+  `fabrika-runner`, `fabrika-operations`, …), and one created before the variable existed has none and keeps the
+  legacy names (`vozka`, `propustka-worker`, `vozka-runner`, `vozka-proxy`, `vozka-run-logs`, `vozka-deploy`,
+  `vozka-deploy-runner`). `@fabrika/provider-cloudflare`'s `platform-names.ts` holds both sets, and every component
+  config reads its names from it;
 - Durable Object migration tags and bindings in the committed `wrangler.jsonc` files;
 - Postgres migration bundle names, migration filenames, ledger tables, and advisory lock ids
   ([ADR-0017](0017-service-owned-postgres-migrations.md));
@@ -67,6 +71,10 @@ adoption or data-migration plan.
   operator forgot. An optional setting under a retired name falls back to its default.
 - Generated configuration (`zerops.yaml`, the scaffolded GitHub Actions workflow) emits only
   canonical names. Tests assert that no `VOZKA_` or `PROPUSTKA_` string appears in them.
+- A new Cloudflare installation shares no resource name with an older one in the same account, so it never adopts
+  the older one's database, bucket or queue. An existing installation keeps its names on every upgrade: the variable
+  is absent from its Environment, and `platform upgrade` does not write one. Moving it onto the new names is a data
+  migration that is not built ([backlog 291](../backlog/291-an-existing-cloudflare-installation-keeps-its-legacy-names.md)).
 - A repo-wide search for legacy words still finds durable values and the TypeScript constant
   `VOZKA_APP_ID`, whose value is the durable app id `vozka`. A legacy word in a value is not a
   missed rename.
@@ -82,3 +90,9 @@ adoption or data-migration plan.
 - **Rename durable identities in the same sweep.** Makes dashboards consistent, but several
   names are adoption keys or migration history. Renaming them risks duplicate resources, lost
   bindings, or disconnected data.
+- **One set of Cloudflare names for every installation, legacy or new.** Keeps one code path. Rejected: oblaka adopts
+  an existing `${env}-${name}`, so a new installation in an account that holds an older one (or the predecessor
+  products) would take over its D1 databases, buckets, queues and state.
+- **A different env prefix for new installations** (`fabrika-vozka` instead of `prod-vozka`). Avoids the collision
+  with no new names. Rejected: the legacy words stay in every new installation, and the env is also the application
+  environments' prefix.

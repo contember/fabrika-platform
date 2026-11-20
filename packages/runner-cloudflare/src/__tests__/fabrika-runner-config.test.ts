@@ -36,6 +36,26 @@ describe('defineApp(runner config)', () => {
 		expect(logs.options.name).toBe('vozka-run-logs')
 	})
 
+	test.each([
+		['legacy', 'vozka-runner', 'vozka-deploy-runner', 'vozka-run-logs'],
+		['fabrika', 'fabrika-runner', 'fabrika-deploy-runner', 'fabrika-run-logs'],
+	])('FABRIKA_CLOUDFLARE_NAMES=%p names the Worker, its container and the shared bucket', (scheme, workerName, containerName, logs) => {
+		const before = process.env['FABRIKA_CLOUDFLARE_NAMES']
+		process.env['FABRIKA_CLOUDFLARE_NAMES'] = scheme
+		try {
+			const worker = buildRunnerWorker({ env: 'prod' })
+			expect(worker.options.name).toBe(workerName)
+			const container = binding(worker, 'RUNNER')
+			const bucket = binding(worker, 'RUN_LOGS')
+			if (!(container instanceof Container) || !(bucket instanceof R2Bucket)) throw new Error('RUNNER and RUN_LOGS must be bound')
+			expect(container.options.name).toBe(containerName)
+			expect(bucket.options.name).toBe(logs)
+		} finally {
+			if (before === undefined) delete process.env['FABRIKA_CLOUDFLARE_NAMES']
+			else process.env['FABRIKA_CLOUDFLARE_NAMES'] = before
+		}
+	})
+
 	test.each(['local', 'stage', 'prod'])('%s builds the account-owned image from this checkout', (env) => {
 		const container = binding(buildRunnerWorker({ env }), 'RUNNER')
 		if (!(container instanceof Container)) throw new Error(`${env}: RUNNER must be a Container`)

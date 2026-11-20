@@ -833,6 +833,32 @@ describe('Cloudflare control provider', () => {
 		expect(cloudflareRunnerJobSchema.safeParse(jobs[0]).success).toBe(true)
 	})
 
+	test("sends IAM's Worker by the name Control was deployed with, and none when it has none", async () => {
+		const jobsWith = async (iamService: string | undefined): Promise<CloudflareRunnerJob[]> => {
+			const jobs: CloudflareRunnerJob[] = []
+			const provider = createCloudflareControlProvider({
+				accountId: 'account-1',
+				apiToken: 'token-1',
+				runnerKey: 'test-runner-key',
+				...(iamService === undefined ? {} : { iamService }),
+				...sourceOptions,
+				prepareClone: async (source) => ({ repoUrl: source.repoUrl }),
+				startRun: async (job) => {
+					jobs.push(job)
+					return { state: 'succeeded' }
+				},
+				cancelRun: async () => {},
+			})
+			await provider.deploy(deployInput())
+			return jobs
+		}
+		const named = await jobsWith('prod-fabrika-iam')
+		expect(named.map((job) => job.iamService)).toEqual(['prod-fabrika-iam'])
+		expect(cloudflareRunnerJobSchema.safeParse(named[0]).success).toBe(true)
+		expect((await jobsWith(undefined)).map((job) => 'iamService' in job)).toEqual([false])
+		expect((await jobsWith('')).map((job) => 'iamService' in job)).toEqual([false])
+	})
+
 	test('rejects another provider before registration is stored', () => {
 		const provider = createCloudflareControlProvider({
 			accountId: 'account-1',
@@ -918,6 +944,10 @@ describe('Cloudflare control provider', () => {
 			expect(cloudflareRunnerJobSchema.safeParse({ ...valid, operationsOrigin }).success).toBe(false)
 		}
 		expect(cloudflareRunnerJobSchema.safeParse({ ...valid, installationApps: ['notes@prod', 'api@production'] }).success).toBe(true)
+		expect(cloudflareRunnerJobSchema.safeParse({ ...valid, iamService: 'prod-fabrika-iam' }).success).toBe(true)
+		for (const iamService of ['', 'Prod-Iam', '-prod', 'prod iam', 'prod/iam', 'a'.repeat(64)]) {
+			expect(cloudflareRunnerJobSchema.safeParse({ ...valid, iamService }).success).toBe(false)
+		}
 		for (const id of ['notes', 'notes@prod@eu', '@prod', 'notes@', 'notes @prod']) {
 			expect(cloudflareRunnerJobSchema.safeParse({ ...valid, installationApps: [id] }).success).toBe(false)
 		}

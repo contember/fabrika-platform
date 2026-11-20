@@ -541,6 +541,22 @@ describe('Runner pipeline', () => {
 		expect(absent).not.toHaveProperty('FABRIKA_INSTALLATION_APPS')
 	})
 
+	test("IAM's Worker reaches the executor by the name Control sent, and no job-supplied name replaces or plants it", async () => {
+		const rec: RecordedSpawn[] = []
+		const spawn = makeSpawner(rec, () => ({ exitCode: 0 }))
+		const executorEnv = async (job: CloudflareRunnerJob) => {
+			rec.length = 0
+			await new Runner(job, makeEnv(spawn)).run()
+			return rec.find((r) => r.spec.command === 'fabrika-cloudflare-executor')?.spec.env
+		}
+
+		const sent = await executorEnv(baseJob({ iamService: 'prod-fabrika-iam', secrets: { FABRIKA_IAM_SERVICE: 'prod-other' } }))
+		expect(sent?.['FABRIKA_IAM_SERVICE']).toBe('prod-fabrika-iam')
+
+		const absent = await executorEnv(baseJob({ vars: { FABRIKA_IAM_SERVICE: 'prod-other' } }))
+		expect(absent).not.toHaveProperty('FABRIKA_IAM_SERVICE')
+	})
+
 	test("the environment's cross origins reach the executor as JSON, and no job-supplied name replaces or plants them", async () => {
 		const rec: RecordedSpawn[] = []
 		const spawn = makeSpawner(rec, () => ({ exitCode: 0 }))

@@ -4,6 +4,7 @@ import type { InstallationCli, InstallationCommand } from '@fabrika/provider-con
 import { resolve } from 'node:path'
 import { parseCloudflareArgs, platformComponents } from '../cli-args'
 import { deployCloudflareConfig } from '../command'
+import { platformNames } from '../platform-names'
 import type { PlatformIamTarget } from '../provider'
 import { defaultReconcileSchema } from '../schema'
 import { initCommand } from './init'
@@ -63,6 +64,8 @@ const deployPlatform = async (argv: readonly string[], forceDryRun: boolean): Pr
 	const args = parseCloudflareArgs(['platform', 'deploy', ...argv, ...(forceDryRun ? ['--dry-run'] : [])])
 	const env = args.env ?? 'prod'
 	const stateNamespace = process.env['CLOUDFLARE_STATE_NAMESPACE']
+	// Read once, before any component's config runs: every component of one deploy takes the same scheme.
+	const names = platformNames(process.env)
 	const iam = platformIam()
 	const rootCwd = process.cwd()
 	for (const component of platformComponents(args)) {
@@ -79,8 +82,9 @@ const deployPlatform = async (argv: readonly string[], forceDryRun: boolean): Pr
 				dryRun: args.dryRun,
 				platformResources: 'allow',
 				...(iam === undefined ? {} : { platformIam: iam }),
-				// Honoured because the scaffolded workflow states it on the IAM stage; absent elsewhere.
-				...(stateNamespace === undefined ? {} : { stateNamespace }),
+				// An explicit namespace wins: a workflow scaffolded before the scheme existed names IAM's.
+				...(stateNamespace === undefined || stateNamespace === '' ? {} : { stateNamespace }),
+				stateNamespaces: names.stateNamespaces,
 			})
 			console.info(`${result.appId} → ${result.env}: ${result.status}`)
 			if (result.status === 'failed') {

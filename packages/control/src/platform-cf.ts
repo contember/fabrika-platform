@@ -64,6 +64,8 @@ export interface WorkerBindings
 	CLOUDFLARE_ACCOUNT_ID?: string
 	/** Account-wide deploy credential. It is passed to the runner only for a live deploy. */
 	CLOUDFLARE_API_TOKEN?: string
+	/** IAM's Worker by its remote name, which every application deploy binds (`fabrika.config.ts` writes it). */
+	FABRIKA_IAM_SERVICE?: string
 	/**
 	 * The runner Worker — the deploy EXECUTOR, over a service binding. Split into its own worker so a deploy
 	 * of fabrika never resets the container running that deploy. OPTIONAL because it is declared
@@ -338,6 +340,7 @@ export function cloudflareControlProvider(bindings: WorkerBindings, env: Env, se
 		accountId: bindings.CLOUDFLARE_ACCOUNT_ID ?? '',
 		apiToken: bindings.CLOUDFLARE_API_TOKEN ?? '',
 		runnerKey: env.FABRIKA_RUNNER_KEY ?? '',
+		...(bindings.FABRIKA_IAM_SERVICE === undefined ? {} : { iamService: bindings.FABRIKA_IAM_SERVICE }),
 		installationApps: () => cloudflareDeployments(env.REPOSITORIES),
 		resolveSource: source.resolveSource,
 		prepareClone: async (selected, signal, sourceBinding) => {

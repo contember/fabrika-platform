@@ -10,7 +10,9 @@ import {
 	APPROVED_ACCESS_FILE_ENV,
 	CROSS_ORIGINS_ENV,
 	DEPLOY_VALUES_FILE_ENV,
+	IAM_SERVICE_ENV,
 	INSTALLATION_APPS_ENV,
+	isWorkerName,
 	OPERATIONS_ORIGIN_ENV,
 	type RunnerApprovedAccess,
 	runnerApprovedAccessSchema,
@@ -119,6 +121,13 @@ export const parseInstallationApps = (raw: string | undefined): readonly AppEnvi
 	})
 }
 
+/** Decode `FABRIKA_IAM_SERVICE`, IAM's Worker as Control names it. Undefined when absent; a malformed one fails the deploy. */
+export const parseIamService = (raw: string | undefined): string | undefined => {
+	if (raw === undefined || raw === '') return undefined
+	if (!isWorkerName(raw)) throw new Error(`${IAM_SERVICE_ENV} is not a Worker name`)
+	return raw
+}
+
 /**
  * Read the access Control approved for this run from the file at `FABRIKA_APPROVED_ACCESS_FILE`, as the runner
  * writes it. Undefined when no runner set it (a local deploy); a file that is unreadable or malformed fails the deploy
@@ -182,6 +191,8 @@ export interface CloudflareCommandDeployOptions {
 	readonly cwd?: string
 	readonly dryRun?: boolean
 	readonly stateNamespace?: string
+	/** The platform deploy's namespace per component, by the config's app id; `stateNamespace` wins over it. */
+	readonly stateNamespaces?: Readonly<Record<string, string>>
 	readonly managedVarNames?: readonly string[]
 	/** Defaults to `refuse`: only fabrika deploying its own components may name a platform resource. */
 	readonly platformResources?: 'refuse' | 'allow'
@@ -210,6 +221,8 @@ export const deployCloudflareConfig = async (options: CloudflareCommandDeployOpt
 	const crossOrigins = parseCrossOrigins(environmentValue(CROSS_ORIGINS_ENV))
 	const operationsOrigin = environmentValue(OPERATIONS_ORIGIN_ENV)
 	const applicationObjects = parseApplicationObjectsEnvironment(environmentValue(APPLICATION_OBJECTS_ENV))
+	const iamService = parseIamService(environmentValue(IAM_SERVICE_ENV))
+	const stateNamespace = options.stateNamespace ?? options.stateNamespaces?.[loaded.config.id]
 	return deploy({
 		appId: loaded.config.id,
 		env: options.env,
@@ -219,10 +232,11 @@ export const deployCloudflareConfig = async (options: CloudflareCommandDeployOpt
 		...(returnOrigins === undefined ? {} : { returnOrigins }),
 		...(installationApps === undefined ? {} : { installationApps }),
 		...(applicationObjects === undefined ? {} : { applicationObjects }),
+		...(iamService === undefined ? {} : { iamService }),
 		...approved,
 		cwd: loaded.cwd,
 		configPath: loaded.absolutePath,
-		...(options.stateNamespace === undefined ? {} : { stateNamespace: options.stateNamespace }),
+		...(stateNamespace === undefined ? {} : { stateNamespace }),
 		secrets: declaredValues(loaded.config.pipeline?.secrets, authored),
 		vars: declaredValues(loaded.config.pipeline?.vars, authored),
 		// The runner hands what Control handed its job; parsed here, where it enters the executor.

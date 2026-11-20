@@ -27,8 +27,8 @@ import { buildRunDeps, iamSchemaDeps, locks, operationsReleaseDeps, opsTransport
  * `controlEnv` is what makes one `Env` serve both: it presents the raw bindings (`this.env`) as the
  * ports everything downstream is written against. Two of the five need no adapter at all.
  */
-/** The mail relay's queue, whatever environment prefix the deploy gives it. */
-const MAIL_QUEUE_SUFFIX = 'fabrika-mail'
+/** The mail relay's queue under either resource name scheme (`<env>-fabrika-mail`, `<env>-fabrika-control-mail`). */
+const MAIL_QUEUE_SUFFIX = '-mail'
 
 /** Anonymous reads of a GitHub App's public page before GitHub's rate limit is the answer (the client's maximum). */
 const SHARED_EGRESS_PUBLIC_APP_ATTEMPTS = 4

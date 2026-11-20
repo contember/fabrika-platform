@@ -158,14 +158,21 @@ this one import.
   - exactly one application config beside the platform proxy's: "only the application Worker and its proxy
     are deployable";
   - on every name it binds — the Worker's own name, `services`, D1, R2, queues, containers, workflows, a
-    Durable Object's `script_name` — no `PLATFORM_RESOURCE_NAMES` name and no other application's name. The
-    bound is on the REMOTE name: an env name may contain `-`, so env `prod-propustka` + Worker `worker` lands on
-    IAM's `prod-propustka-worker`; a remote name that equals or ends with `-<platform name>` is refused. The
-    state namespace is matched exactly, because `KVStateStorage` uses it verbatim;
+    Durable Object's `script_name` — no `PLATFORM_RESOURCE_NAMES` name (both schemes of `src/platform-names.ts`,
+    whatever the installation uses) and no other application's name. The bound is on the REMOTE name: an env name
+    may contain `-`, so env `prod-propustka` + Worker `worker` lands on IAM's `prod-propustka-worker`; a remote name
+    that equals or ends with `-<platform name>` is refused. The state namespace is matched exactly, because
+    `KVStateStorage` uses it verbatim;
   - an application config has no `routes`, and `workers_dev` and `preview_urls` are `false`. Cloudflare turns
     both URLs on by default. Only the proxy the deployer built is routed, and only on the run's own domain.
     Repository code holds the account token, so on Cloudflare this is a strong default, not a boundary
     (backlog 86).
+- **An application binds IAM's Worker by the remote name Control names** (`CloudflareRunnerJob.iamService` →
+  `FABRIKA_IAM_SERVICE` → `CloudflareDeployRun.iamService`), which `IamApplicationReference` writes over the
+  `${env}-propustka-worker` the application's own `iamServiceReference()` emits, in the application Worker and its
+  proxy, and the bounds check. IAM deploys in the installation's env (`prod`), an application in its own, so the
+  env-prefixed name is a Worker that does not exist outside `prod`. Control's Worker carries the name as its
+  `FABRIKA_IAM_SERVICE` var. A job without it (an older Control, a local deploy) keeps `${env}-propustka-worker`.
 - **An app binds IAM only at its `PropustkaApplication` entrypoint** (`iamServiceReference()`,
   `IAM_APPLICATION_ENTRYPOINT` in `src/proxy.ts`), and so does the proxy Worker the deployer builds. IAM's
   default export also issues and revokes keys and approves devices, which only platform components
@@ -246,7 +253,7 @@ this one import.
 - **`deploy-worker` deploys the generated configs in dependency order** (`src/deploy-order.ts`), not oblaka's,
   which lists the proxy first. wrangler refuses a service binding to a script with no deployment yet (code 10145),
   so on a first deploy every Worker another generated config binds as a service goes before its binder: the
-  application Worker, then `<app>-proxy` (Control's `vozka`, then `vozka-proxy`). A cycle among them is refused.
+  application Worker, then `<app>-proxy` (Control's Worker, then its proxy). A cycle among them is refused.
   The application's stale secrets are swept only after every Worker is deployed, so a failed sweep fails the run
   without leaving the new application behind the old proxy.
 - **Every application's proxy Worker is the platform's (ADR-0048).** The config's `resources` returns the
@@ -298,6 +305,16 @@ stays the runner container's `fabrika-cloudflare-executor`.
 ## Platform installation (`./installation`, `src/installation/`)
 
 The Cloudflare implementation of `@fabrika/provider-contract/installation`; `@fabrika/cli` loads it.
+
+**An installation's resource names are fixed at its creation** (ADR-0024). `src/platform-names.ts` holds both sets:
+`legacy` (`vozka`, `propustka-worker`, `operations`, …) and `fabrika` (`fabrika-control`, `fabrika-iam`,
+`fabrika-operations`, …), with one oblaka state namespace per component. `FABRIKA_CLOUDFLARE_NAMES`, a variable of the
+installation's GitHub Environment that the workflow passes to every stage, selects one; unset is `legacy`. Init records
+`fabrika` for a new installation and keeps what an existing Environment or the env file says (`ensurePlatformNames`),
+and refuses when the two disagree. Every component config (control, IAM, Operations, the runner) reads its names from
+`platformNames(process.env)`, and `platform deploy` passes the scheme's state namespace per component (an explicit
+`CLOUDFLARE_STATE_NAMESPACE` wins, as an older workflow sets one for IAM). Never rename a legacy name: it is the live
+name of an existing installation's data.
 `fabrika platform init --provider=cloudflare <account>` stands up an account's platform base and
 scaffolds a workflow that deploys IAM, Operations, then the runner/control pair — every stage through
 `platform deploy`, because each names a platform resource. `plan` and `deploy` take either the

@@ -44,6 +44,9 @@ jobs:
     env:
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      # The resource names this installation was created with (`fabrika` from init; unset on an older installation,
+      # which keeps the legacy names). Every stage names its Workers, databases, buckets and queues by it.
+      FABRIKA_CLOUDFLARE_NAMES: ${{ vars.FABRIKA_CLOUDFLARE_NAMES }}
     steps:
       - name: Checkout this repo (base config + pinned refs)
         uses: actions/checkout@v5
@@ -128,7 +131,6 @@ jobs:
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_STATE_NAMESPACE: propustka-state
           FABRIKA_CONTROL_DOMAIN: ${{ vars.FABRIKA_IAM_HOSTNAME }}
           # Non-secret config (Environment Variables).
           FABRIKA_IAM_HUMAN_EMAIL_DOMAINS: ${{ vars.FABRIKA_IAM_HUMAN_EMAIL_DOMAINS }}

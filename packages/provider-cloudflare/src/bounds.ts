@@ -5,7 +5,7 @@ import { dirname, resolve } from 'node:path'
 import type { GeneratedConfig, Worker } from 'oblaka-iac'
 import { CloudflareClient } from 'oblaka-iac/src/client'
 import { ResourceProcessor } from 'oblaka-iac/src/commands/resource-processor'
-import { PLATFORM_RESOURCE_NAMES } from './plan'
+import { PLATFORM_RESOURCE_NAMES } from './platform-names'
 import {
 	CLOUDFLARE_PROXY_WORKER_DIR,
 	IAM_APPLICATION_ENTRYPOINT,
@@ -31,6 +31,11 @@ export interface DeploymentBounds {
 	readonly iamAppId: string
 	/** Every Cloudflare deployment of the installation in Control's registry; their names are refused. Empty outside a run. */
 	readonly installation: readonly AppEnvironment[]
+	/**
+	 * IAM's Worker by its remote name, as Control names the installation's. Absent (a local deploy, an older Control),
+	 * `${env}-propustka-worker`, the name every installation had before it could choose another.
+	 */
+	readonly iamService?: string
 	/** The remote name of the proxy Worker the deployer built, or null when it built none. */
 	readonly proxy: string | null
 	/**
@@ -174,14 +179,16 @@ export const generateWranglerConfigs = async (definition: Worker, env: string): 
 interface ApplicationNames {
 	readonly self: AppEnvironment
 	readonly installation: readonly AppEnvironment[]
+	/** The remote name of the IAM Worker the application binds. */
+	readonly iam: string
 }
 
-const applicationNames = ({ env, iamAppId, installation }: DeploymentBounds): ApplicationNames => {
+const applicationNames = ({ env, iamAppId, installation, iamService }: DeploymentBounds): ApplicationNames => {
 	const self = parseAppEnvironmentId(iamAppId)
 	if (self === null || self.env !== env) {
 		throw new Error(`cloudflare: \`${iamAppId}\` is not the application id of environment \`${env}\``)
 	}
-	return { self, installation }
+	return { self, installation, iam: iamService ?? (env === 'local' ? IAM_SERVICE : `${env}-${IAM_SERVICE}`) }
 }
 
 /**
@@ -252,8 +259,7 @@ const assertServices = (
 	holder: IamBindingHolder,
 	connectors: Readonly<Record<string, string>>,
 ): void => {
-	const env = names.self.env
-	const iam = env === 'local' ? IAM_SERVICE : `${env}-${IAM_SERVICE}`
+	const iam = names.iam
 	for (const entry of entries(config.services, worker, 'services')) {
 		const service = field(entry, 'service')
 		const entrypoint = field(entry, 'entrypoint')

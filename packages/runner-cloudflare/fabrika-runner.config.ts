@@ -14,7 +14,7 @@
 //
 // Local dev still uses oblaka directly via the `oblaka.ts` shim, which calls `buildRunnerWorker` below.
 
-import { Container, defineApp, R2Bucket, type ResourceContext, Worker } from '@fabrika/provider-cloudflare'
+import { Container, defineApp, platformNames, R2Bucket, type ResourceContext, Worker } from '@fabrika/provider-cloudflare'
 
 /** Container instance type per stage — dev locally, larger off-local; any other env → basic. */
 const instanceTypeFor = (env: string): 'dev' | 'basic' | 'standard' => {
@@ -35,10 +35,11 @@ const instanceTypeFor = (env: string): 'dev' | 'basic' | 'standard' => {
 export const buildRunnerWorker = (ctx: ResourceContext): Worker => {
 	const { env } = ctx
 	const instanceType = instanceTypeFor(env)
+	const names = platformNames(process.env)
 
 	return new Worker({
 		dir: '.',
-		name: 'vozka-runner',
+		name: names.runnerWorker,
 		main: './src/worker.ts',
 		compatibility_flags: ['nodejs_compat'],
 		compatibility_date: '2025-05-25',
@@ -59,7 +60,7 @@ export const buildRunnerWorker = (ctx: ResourceContext): Worker => {
 			// (CF app names are account-global + tied to a DO namespace): the old `prod-vozka-runner` app
 			// stays bound to fabrika until fabrika redeploys without its Container, so this one must not clash.
 			RUNNER: new Container({
-				name: 'vozka-deploy-runner',
+				name: names.runnerContainer,
 				className: 'RunnerContainer',
 				// Every account builds from its pinned fabrika checkout; no cross-account image tag exists.
 				image: '../runner-container/Dockerfile',
@@ -70,7 +71,7 @@ export const buildRunnerWorker = (ctx: ResourceContext): Worker => {
 				rolloutActiveGracePeriod: 1_200,
 			}),
 			// Run logs + terminal status, keyed by run id — the control plane's bucket, ADOPTED by name.
-			RUN_LOGS: new R2Bucket({ name: 'vozka-run-logs' }),
+			RUN_LOGS: new R2Bucket({ name: names.runLogs }),
 		},
 	})
 }
