@@ -4,7 +4,7 @@ version: 0.9.0-dev.18
 description: >
   How to write and change a Fabrika application: src/vocabulary.ts, db/migrations/, src/db/tables.ts, the
   slices' endpoints.ts with their handlers, fabrika.contract.ts, jobs, files, webhooks, share links, connectors
-  and the generated tests. Use whenever the repository has a fabrika.contract.ts, or the task adds an endpoint,
+  and the tests. Use whenever the repository has a fabrika.contract.ts, or the task adds an endpoint,
   a table, a migration, an action or a role.
 ---
 
@@ -253,8 +253,8 @@ Which promise the types, the checker, boot, the runtime or the approver keeps, a
 ## Rules
 
 - Data work first, external calls after. The invocation's one transaction rolls back on a throw; IAM, object storage
-  and connector calls do not. An endpoint the generated tests cover calls no outside service (a provider's API): it
-  records an outbox row, and a job makes the call (`references/jobs.md`).
+  and connector calls do not. An endpoint calls no outside service (a provider's API): it records an outbox row,
+  and a job makes the call (`references/jobs.md`).
 - An endpoint never sends e-mail; it has no `ctx.mail`. It records an outbox row, declares `kicks: ['<job>']` and calls `ctx.kick('<job>')`, which
   starts that job once its transaction committed. The job declares `mailer` and sends with `ctx.mail`, under a key
   derived from the row, and sends again only where `ctx.mail.mayRetry(error)` allows it (`references/jobs.md`).
@@ -263,12 +263,12 @@ Which promise the types, the checker, boot, the runtime or the approver keeps, a
   spawn a process; it still has no `as`, `any` or key literal, the application never imports it, and `tools/` holds
   no `package.json`. Its tests run in the platform build, so they test its logic, without a keychain or a network.
 - Never log an error object, a request, headers or the environment.
-- Never edit a generated file (`src/db/schema.generated.ts`, the generated tests, `fabrika/entry.generated.ts`,
+- Never edit a generated file (`src/db/schema.generated.ts`, `fabrika/entry.generated.ts`,
   `fabrika/migrations.generated.ts`, `fabrika/contract.generated.ts`, `fabrika/connect/`) or a committed migration. Regenerate the file; write a new migration.
 
 ## Ask the human first
 
-- A 401, a 403 or a failing generated test: never loosen the contract, a role, a policy or a test to pass. Tell the
+- A 401 or a 403 a test did not expect: never loosen the contract, a role, a policy or a test to pass. Tell the
   human which action or role the caller lacks.
 - When the task does not already ask for it, before you add a role, a grant, an action, a declared deviation, an
   anonymous endpoint (a public procedure, its file field, a webhook, a link), an export or an import, or a job, or before you drop or rename a
@@ -283,19 +283,17 @@ checker run before you have written anything proves nothing.
 
 1. Write the slice and its tests. A schema change first adds a migration and runs `migrate` and `codegen`; a
    handler-only change needs neither.
-2. Run `test-scaffold` when an endpoint, its access or a table policy changed.
-3. Run `bun test --isolate` until it passes. Bun strips the types and runs the tests without checking them, so this is
+2. Run `bun test --isolate` until it passes. Bun strips the types and runs the tests without checking them, so this is
    the cheap loop.
-4. Then run `tsc` and `fabrika-check` once each, in that order, at the end. The checker reads the tests too (a cast, a
-   skipped or assertion-free test, a generated test's hash).
-5. After a finding, fix it and re-run only what that fix needs: the step that found it and any later one. A checker fix
+3. Then run `tsc` and `fabrika-check` once each, in that order, at the end. The checker reads the tests too (a cast, a
+   skipped or assertion-free test).
+4. After a finding, fix it and re-run only what that fix needs: the step that found it and any later one. A checker fix
    re-runs `tsc` only when it changed a type (a removed cast does), and the tests only when it changed what code does.
 
 ```bash
 bunx fabrika db new <slug>                                  # a new migration file
 export FABRIKA_APP_ID=tasks FABRIKA_APP_DATABASE_URL="$FABRIKA_TEST_POSTGRES_URL"
 bunx fabrika db migrate && bunx fabrika db codegen          # writes src/db/schema.generated.ts
-bunx fabrika db test-scaffold                               # writes the generated tests; commit them
 bun test --isolate                                          # until it passes; needs FABRIKA_TEST_POSTGRES_URL; a skip proves nothing
 bunx tsc --noEmit                                           # once, at the end
 bunx fabrika-check .                                        # once, after tsc; refusals fail; hints print below them
@@ -323,11 +321,10 @@ checker hints on a mutation that declares `egress` or `connect` (`cloudflare-hel
 ```bash
 bunx fabrika db new <slug>                                  # a new SQLite migration file
 bunx fabrika db codegen                                     # applies the migrations in memory; writes src/db/schema.generated.ts
-bunx fabrika db test-scaffold                               # the generated tests, on @fabrika/db/testing-sqlite
 bun test --isolate                                          # no database URL; then tsc and fabrika-check as above
 ```
 
-A generated file changes only through its command (`codegen`, `test-scaffold`); running it is the loop, not an edit.
+A generated file changes only through its command (`codegen`); running it is the loop, not an edit.
 Format and lint only the files you wrote, with the repository's own tools: in the fabrika-platform repository
 `bunx dprint fmt <files>` and `bunx oxlint <files>`, and never a generated file. An application outside that
 repository has neither configuration: use the formatter its own repository configures, or none, and never add a configuration unasked; tsc and `fabrika-check` are its gates. `FABRIKA_APP_ID` is lowercase letters, digits and `-`. An applied file is immutable: while you still
@@ -347,7 +344,7 @@ Read the one you need before you write that part. Together they are one applicat
 their errors, the caller, the components, routing, theming, screen tests), `table-and-migration.md`, `endpoint.md`
 (access forms, several capabilities, which `over`, the caller's scopes, handles, lists and aggregates, `fromRow`,
 `ctx.sql`, audited CSV downloads, `admission` and `limits`, the HTTP shape and `redirect()`, signed tokens, `egress`,
-`ctx.url`, a mount's `compatibility`, another origin, members and labels), `tests.md` (generated tests, seeds, `testKit`, a reused scope, a caller's label, confirming a file ran),
+`ctx.url`, a mount's `compatibility`, another origin, members and labels), `tests.md` (`testKit`, a reused scope, a caller's label, confirming a file ran),
 `errors.md` (checker findings, type errors, runtime answers), `dev.md` (the seed and the preview), `jobs.md` (which dimension `ctx.within` names, the UTC
 day, queue tables and `claim`, e-mail through `ctx.mail` with attachments and unsubscribe, the outbox and `kicks`),
 `files.md` and `webhooks-links-connectors.md`, all under `references/`. Three are applications of their own:
@@ -364,5 +361,5 @@ conditions, `readThrough`, `reveals` and `memberReveals`).
 - Jobs are cron only and app-wide: no `ctx.jobs.enqueue`, no job per scope. A `ctx.kick` starts a run of its job, now
   or at `{ at }`; it carries nothing, and the job finds its work in a queue table with `claim`. A list write is off the road (`sql`).
 - A read across tables (a join, a filter over a related table, an aggregate over several) is off the road (`sql`).
-- An MCP workspace has no shell, so `codegen` and `test-scaffold` cannot run there. Tell the human; never write a
+- An MCP workspace has no shell, so `codegen` cannot run there. Tell the human; never write a
   generated file by hand.

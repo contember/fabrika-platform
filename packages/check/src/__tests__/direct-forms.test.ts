@@ -1,6 +1,5 @@
 import { describe, expect, test } from 'bun:test'
 import type { RuleId } from '../finding'
-import { generatedTestHeader } from '../rules/tests'
 import { check, CLEAN_APPLICATION, CLEAN_CONTRACT, CLEAN_SCHEMAS, locations } from './helpers'
 
 /** A form written out directly; D11 accepts that aliased or indirect forms escape, but these must not. */
@@ -529,27 +528,12 @@ const refused: readonly DirectForm[] = [
 		},
 		expected: ['zerops.yaml:5:1', 'zerops.yaml:6:1'],
 	},
-	{
-		name: 'a generated-test header moved off the first line',
-		rule: 'generated-test-hash',
-		files: { 'src/db/__tests__/notes.isolation.test.ts': '' },
-		expected: ['src/db/__tests__/notes.isolation.test.ts:2:1'],
-	},
 ]
-
-const body = "import { expect, test } from 'bun:test'\n\ntest('w2 is 404 for w1', () => {\n\texpect(404).toBe(404)\n})\n"
-
-const withGeneratedHeader = async (files: Readonly<Record<string, string>>): Promise<Readonly<Record<string, string>>> => {
-	const path = 'src/db/__tests__/notes.isolation.test.ts'
-	if (files[path] === undefined) return files
-	const weakened = body.replace('expect(404).toBe(404)', 'expect(true).toBe(true)')
-	return { ...files, [path]: `\n${await generatedTestHeader(body)}\n${weakened}` }
-}
 
 describe('directly spelled forms are refused', () => {
 	for (const form of refused) {
 		test(`${form.rule}: ${form.name}`, async () => {
-			expect(locations(await check(await withGeneratedHeader(form.files)), form.rule)).toEqual([...form.expected])
+			expect(locations(await check(form.files), form.rule)).toEqual([...form.expected])
 		})
 	}
 })

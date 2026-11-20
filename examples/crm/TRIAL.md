@@ -4,8 +4,8 @@ Inputs for part 3 of WU11 in `docs/archive/sprint-2026-10-11-paved-road-framewor
 `fabrika-app` skill files of `@fabrika/app` (`packages/app/skill/`) and a copy of `examples/crm` with one endpoint
 group removed. It writes that group from the brief below. The pass: at most 3 tsc and checker runs per group in total
 (tsc and `fabrika-check` added together), no edited generated file, and no loosened access to make a test pass. Record
-every tsc and checker run, and how many of them failed. Regenerating files with `fabrika db codegen` or `fabrika db
-test-scaffold` is the skill's loop, not an edit.
+every tsc and checker run, and how many of them failed. Regenerating a file with `fabrika db codegen` is the skill's loop,
+not an edit.
 
 ## The groups
 
@@ -29,23 +29,17 @@ For the group under trial, from the root of a fabrika-platform checkout that sti
 3. In `fabrika.contract.ts`, delete the group's imports and its keys in `c.rpc('/api', { … })`. For group C also delete
    the `jobs: { overdue }` section. Leave the
    `attachments` group and file kind, the SPA mount and the health check.
-4. Delete `src/__tests__/endpoint-access.test.ts` (the agent regenerates it with `fabrika db test-scaffold`) and the
-   authored tests that call the group: `src/__tests__/crm.test.ts` always, `src/deals/__tests__/deals.test.ts` and
+4. Delete the authored tests that call the group: `src/__tests__/crm.test.ts` always, `src/deals/__tests__/deals.test.ts` and
    `src/tasks/__tests__/overdue.test.ts` (it creates a company and a deal) for A and B. Keep them for the judge.
-5. In `src/__tests__/endpoint-access.fixtures.ts`, delete every `seeds` and `members` entry of a removed endpoint, and
-   keep the others (the checker refuses an entry of an endpoint that does not exist): for B the two `api.deals.*` seeds
-   and `members['api.deals.assign']`, for C `members['api.tasks.create']`. A, D and E change nothing there.
-6. Delete the SPA, which calls every group by name and is not part of the trial: `web/`, `build-web.ts`, the
+5. Delete the SPA, which calls every group by name and is not part of the trial: `web/`, `build-web.ts`, the
    `build:web` script of `package.json`, the `- bun run build:web` line of `zerops.yaml`, and `"web/**/*"` from the
    `include` of `tsconfig.json`. Delete this file too.
-7. Run `bun install` at the checkout's root, then in the copy `bunx fabrika db test-scaffold`. The copy starts green:
-   `bunx tsc --noEmit`, `bunx fabrika-check .` (0 refusals, 0 hints) and `bun test --isolate` with
-   `FABRIKA_TEST_POSTGRES_URL` set. Checked on WU22 beside `examples/crm` for C (139 tests pass) and E (143),
-   and on WU25 for B (111).
+6. Run `bun install` at the checkout's root. The copy starts green: `bunx tsc --noEmit`, `bunx fabrika-check .`
+   (0 refusals, 0 hints) and `bun test --isolate` with `FABRIKA_TEST_POSTGRES_URL` set.
 
 Everything else is the agent's starting point and stays unchanged: the rest of `package.json`, `tsconfig.json` and
 `zerops.yaml`, `fabrika.config.ts`, `src/vocabulary.ts`, `db/migrations/20261012120000_crm.sql`,
-`src/db/schema.generated.ts`, `src/db/tables.ts`, `src/db/__tests__/*.policy-isolation.test.ts`, `src/app-kit.ts`,
+`src/db/schema.generated.ts`, `src/db/tables.ts`, `src/app-kit.ts`,
 `src/app.ts`, `src/schemas.ts`, `src/orgs/logic.ts` and the other groups' slices. No group needs a new migration, table policy, action or
 role. An agent that adds one must ask first (the skill's "Ask the human first"); count it as a deviation from the
 brief.
@@ -144,8 +138,8 @@ member of that org may see its people.
 - **Runs.** Count each `tsc --noEmit` and each `fabrika-check` the agent starts for the group, both tools together.
   Pass: at most 3 in total. Report the number of failing runs beside it (a run with an error or a refusal); it is a
   metric, not a pass criterion.
-- **Generated files.** `git diff` of the copy shows no hand edit of `src/db/schema.generated.ts` or of a generated
-  test: `fabrika-check`'s `generated-test-hash` refuses one, and `bunx fabrika db codegen --verify` the schema.
+- **Generated files.** `git diff` of the copy shows no hand edit of `src/db/schema.generated.ts`:
+  `bunx fabrika db codegen --verify` refuses one.
 - **Access.** Compare the group's endpoint table with the reference: `compileContract` of both, or Control's
   `classifyAccess` with the reference as the baseline. Pass: no endpoint with a wider action or access form than the
   brief needs, no new role or grant, no new declared deviation.

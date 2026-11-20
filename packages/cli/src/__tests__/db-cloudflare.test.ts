@@ -1,17 +1,13 @@
 // `fabrika db` for an application on Cloudflare, whose `fabrika.config.ts` is `@fabrika/provider-cloudflare`'s: its
 // data layer is SQLite in its Durable Object (ADR-0065), so no command needs a database URL.
 
-import { checkApplication, formatFinding } from '@fabrika/check'
 import { generateSqliteSchema } from '@fabrika/db/codegen-sqlite'
 import { SQLITE_FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations-sqlite'
-import { afterAll, describe, expect, setDefaultTimeout, test } from 'bun:test'
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { afterAll, describe, expect, test } from 'bun:test'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { runDbCommand } from '../db'
-
-// The scaffold cases run the whole checker over a copied fixture, and test-isolation runs every generated case.
-setDefaultTimeout(30_000)
 
 const CLOUDFLARE_CONFIG =
 	"import { defineApp } from '@fabrika/provider-cloudflare'\n\nexport default defineApp({ id: 'notes', resources: () => [] })\n"
@@ -99,50 +95,5 @@ describe('fabrika db on Cloudflare', () => {
 		const root = appRoot(ZEROPS_CONFIG)
 		expect(await failure(run(root, 'migrate'))).toBe('FABRIKA_APP_ID is required')
 		expect(await failure(run(root, 'codegen'))).toBe('FABRIKA_APP_ID is required')
-	})
-})
-
-/** The fixture application whose generated tests are committed for Postgres; its migrations are also valid SQLite. */
-const ISOLATION_APP = join(import.meta.dir, 'fixtures', 'isolation-app')
-const GENERATED = [
-	...['note_comments', 'notes', 'notices', 'organizations', 'workspace_events', 'workspaces'].map((table) =>
-		`src/db/__tests__/${table}.policy-isolation.test.ts`
-	),
-	'src/__tests__/endpoint-access.test.ts',
-]
-
-const isolationApp = (config: string): string => {
-	const root = appRoot(config)
-	cpSync(ISOLATION_APP, root, { recursive: true })
-	return root
-}
-
-describe('the generated tests on Cloudflare', () => {
-	test('test-scaffold writes them on the SQLite kit, and the checker accepts them', async () => {
-		const root = isolationApp(CLOUDFLARE_CONFIG)
-		expect((await run(root, 'test-scaffold')).split('\n').filter((line) => line !== '')).toEqual(GENERATED)
-		for (const path of GENERATED) {
-			const text = readFileSync(join(root, path), 'utf8')
-			expect(text).toContain("import { testDatabase } from '@fabrika/db/testing-sqlite'\n")
-			expect(text).not.toContain("from '@fabrika/db/testing'\n")
-		}
-		expect((await checkApplication({ root })).map(formatFinding).filter((line) => line.includes('generated-test-hash'))).toEqual([])
-	})
-
-	test('test-scaffold of a Zerops application writes the committed tests on the Postgres kit', async () => {
-		const root = isolationApp(ZEROPS_CONFIG)
-		await run(root, 'test-scaffold')
-		for (const path of GENERATED) {
-			const text = readFileSync(join(root, path), 'utf8')
-			expect(text).toBe(readFileSync(join(ISOLATION_APP, path), 'utf8'))
-			expect(text).toContain("import { testDatabase } from '@fabrika/db/testing'\n")
-		}
-	})
-
-	test('test-isolation runs them with no database URL', async () => {
-		const root = isolationApp(CLOUDFLARE_CONFIG)
-		symlinkSync(join(import.meta.dir, '..', '..', 'node_modules'), join(root, 'node_modules'))
-		await run(root, 'test-scaffold')
-		expect(await run(root, 'test-isolation', [], { PATH: process.env['PATH'] })).toBe('108 generated cases passed\n')
 	})
 })

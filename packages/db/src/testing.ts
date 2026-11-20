@@ -266,7 +266,7 @@ const TEST_SCHEMA = /^app_test_[0-9a-f]{16}$/
 const TEST_ROLE = /^(?:app|run)_(test_[0-9a-f]{16})$/
 /**
  * Why an abandoned family is left alone: `DROP ROLE` of a role that still owns something in another database of the
- * cluster, and a family another provisioner created (a `test-isolation` run's), which only it administers.
+ * cluster, and a family another provisioner created, which only it administers.
  */
 const LEFT_TO_ITS_OWNER: ReadonlySet<unknown> = new Set(['2BP01', '42501'])
 

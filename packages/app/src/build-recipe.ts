@@ -153,12 +153,8 @@ export function contractRecipe(input: ContractRecipeInput): ContractRecipe {
 	const init = input.database
 		? [
 			{ path: MIGRATE_SCRIPT, lines: script([`FABRIKA_APP_ID=${appId} exec ${MIGRATE.join(' ')}`]) },
-			// The committed schema types must match the migrated schema, and every generated isolation test must pass on a
-			// throwaway schema.
-			{
-				path: VERIFY_SCRIPT,
-				lines: script([`FABRIKA_APP_ID=${appId} ${FABRIKA_BIN} db codegen --verify`, `FABRIKA_APP_ID=${appId} exec ${FABRIKA_BIN} db test-isolation`]),
-			},
+			// The committed schema types must match the migrated schema.
+			{ path: VERIFY_SCRIPT, lines: script([`FABRIKA_APP_ID=${appId} exec ${FABRIKA_BIN} db codegen --verify`]) },
 		]
 		: []
 	const tests: ContractCheck = { name: 'tests', command: TESTS_COMMAND }

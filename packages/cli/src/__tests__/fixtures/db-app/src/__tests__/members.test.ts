@@ -1,6 +1,5 @@
 // The members of a workspace as its lead manages them, through the kit's own IAM: an invitation its addressee accepts, a
-// member the lead removes. Each allowed call has a refused twin. It boots a data layer of its own, beside the generated
-// endpoint access test's.
+// member the lead removes. Each allowed call has a refused twin.
 
 import { createClient } from '@fabrika/app/client'
 import { serve } from '@fabrika/app/implement'

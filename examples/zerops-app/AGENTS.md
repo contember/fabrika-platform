@@ -245,8 +245,8 @@ Which promise the types, the checker, boot, the runtime or the approver keeps, a
 ## Rules
 
 - Data work first, external calls after. The invocation's one transaction rolls back on a throw; IAM, object storage
-  and connector calls do not. An endpoint the generated tests cover calls no outside service (a provider's API): it
-  records an outbox row, and a job makes the call (`references/jobs.md`).
+  and connector calls do not. An endpoint calls no outside service (a provider's API): it records an outbox row,
+  and a job makes the call (`references/jobs.md`).
 - An endpoint never sends e-mail; it has no `ctx.mail`. It records an outbox row, declares `kicks: ['<job>']` and calls `ctx.kick('<job>')`, which
   starts that job once its transaction committed. The job declares `mailer` and sends with `ctx.mail`, under a key
   derived from the row, and sends again only where `ctx.mail.mayRetry(error)` allows it (`references/jobs.md`).
@@ -255,12 +255,12 @@ Which promise the types, the checker, boot, the runtime or the approver keeps, a
   spawn a process; it still has no `as`, `any` or key literal, the application never imports it, and `tools/` holds
   no `package.json`. Its tests run in the platform build, so they test its logic, without a keychain or a network.
 - Never log an error object, a request, headers or the environment.
-- Never edit a generated file (`src/db/schema.generated.ts`, the generated tests, `fabrika/entry.generated.ts`,
+- Never edit a generated file (`src/db/schema.generated.ts`, `fabrika/entry.generated.ts`,
   `fabrika/migrations.generated.ts`, `fabrika/contract.generated.ts`, `fabrika/connect/`) or a committed migration. Regenerate the file; write a new migration.
 
 ## Ask the human first
 
-- A 401, a 403 or a failing generated test: never loosen the contract, a role, a policy or a test to pass. Tell the
+- A 401 or a 403 a test did not expect: never loosen the contract, a role, a policy or a test to pass. Tell the
   human which action or role the caller lacks.
 - When the task does not already ask for it, before you add a role, a grant, an action, a declared deviation, an
   anonymous endpoint (a public procedure, its file field, a webhook, a link), an export or an import, or a job, or before you drop or rename a
@@ -275,19 +275,17 @@ checker run before you have written anything proves nothing.
 
 1. Write the slice and its tests. A schema change first adds a migration and runs `migrate` and `codegen`; a
    handler-only change needs neither.
-2. Run `test-scaffold` when an endpoint, its access or a table policy changed.
-3. Run `bun test --isolate` until it passes. Bun strips the types and runs the tests without checking them, so this is
+2. Run `bun test --isolate` until it passes. Bun strips the types and runs the tests without checking them, so this is
    the cheap loop.
-4. Then run `tsc` and `fabrika-check` once each, in that order, at the end. The checker reads the tests too (a cast, a
-   skipped or assertion-free test, a generated test's hash).
-5. After a finding, fix it and re-run only what that fix needs: the step that found it and any later one. A checker fix
+3. Then run `tsc` and `fabrika-check` once each, in that order, at the end. The checker reads the tests too (a cast, a
+   skipped or assertion-free test).
+4. After a finding, fix it and re-run only what that fix needs: the step that found it and any later one. A checker fix
    re-runs `tsc` only when it changed a type (a removed cast does), and the tests only when it changed what code does.
 
 ```bash
 bunx fabrika db new <slug>                                  # a new migration file
 export FABRIKA_APP_ID=tasks FABRIKA_APP_DATABASE_URL="$FABRIKA_TEST_POSTGRES_URL"
 bunx fabrika db migrate && bunx fabrika db codegen          # writes src/db/schema.generated.ts
-bunx fabrika db test-scaffold                               # writes the generated tests; commit them
 bun test --isolate                                          # until it passes; needs FABRIKA_TEST_POSTGRES_URL; a skip proves nothing
 bunx tsc --noEmit                                           # once, at the end
 bunx fabrika-check .                                        # once, after tsc; refusals fail; hints print below them
@@ -315,11 +313,10 @@ checker hints on a mutation that declares `egress` or `connect` (`cloudflare-hel
 ```bash
 bunx fabrika db new <slug>                                  # a new SQLite migration file
 bunx fabrika db codegen                                     # applies the migrations in memory; writes src/db/schema.generated.ts
-bunx fabrika db test-scaffold                               # the generated tests, on @fabrika/db/testing-sqlite
 bun test --isolate                                          # no database URL; then tsc and fabrika-check as above
 ```
 
-A generated file changes only through its command (`codegen`, `test-scaffold`); running it is the loop, not an edit.
+A generated file changes only through its command (`codegen`); running it is the loop, not an edit.
 Format and lint only the files you wrote, with the repository's own tools: in the fabrika-platform repository
 `bunx dprint fmt <files>` and `bunx oxlint <files>`, and never a generated file. An application outside that
 repository has neither configuration: use the formatter its own repository configures, or none, and never add a configuration unasked; tsc and `fabrika-check` are its gates. `FABRIKA_APP_ID` is lowercase letters, digits and `-`. An applied file is immutable: while you still
@@ -339,7 +336,7 @@ Read the one you need before you write that part. Together they are one applicat
 their errors, the caller, the components, routing, theming, screen tests), `table-and-migration.md`, `endpoint.md`
 (access forms, several capabilities, which `over`, the caller's scopes, handles, lists and aggregates, `fromRow`,
 `ctx.sql`, audited CSV downloads, `admission` and `limits`, the HTTP shape and `redirect()`, signed tokens, `egress`,
-`ctx.url`, a mount's `compatibility`, another origin, members and labels), `tests.md` (generated tests, seeds, `testKit`, a reused scope, a caller's label, confirming a file ran),
+`ctx.url`, a mount's `compatibility`, another origin, members and labels), `tests.md` (`testKit`, a reused scope, a caller's label, confirming a file ran),
 `errors.md` (checker findings, type errors, runtime answers), `dev.md` (the seed and the preview), `jobs.md` (which dimension `ctx.within` names, the UTC
 day, queue tables and `claim`, e-mail through `ctx.mail` with attachments and unsubscribe, the outbox and `kicks`),
 `files.md` and `webhooks-links-connectors.md`, all under `references/`. Three are applications of their own:
@@ -356,7 +353,7 @@ conditions, `readThrough`, `reveals` and `memberReveals`).
 - Jobs are cron only and app-wide: no `ctx.jobs.enqueue`, no job per scope. A `ctx.kick` starts a run of its job, now
   or at `{ at }`; it carries nothing, and the job finds its work in a queue table with `claim`. A list write is off the road (`sql`).
 - A read across tables (a join, a filter over a related table, an aggregate over several) is off the road (`sql`).
-- An MCP workspace has no shell, so `codegen` and `test-scaffold` cannot run there. Tell the human; never write a
+- An MCP workspace has no shell, so `codegen` cannot run there. Tell the human; never write a
   generated file by hand.
 
 ---
@@ -549,9 +546,9 @@ export default serve(contract, { database: scoped(tables) })
   waits for the kicked runs.
 - `src/app.ts` composes and does nothing else. A dependency built from the application's own variables is
   `defineDeps(build)`, passed as `serve(contract, { database, deps })` and read in a handler with `get()`. Never read
-  `process.env`. `build` runs at every boot, the generated tests' too, which pass no variable: read a variable when
-  the dependency is used, and fail there (`src/links.ts` in `references/public-intake.md`). A handler of an endpoint the
-  generated tests cover records an outbox row instead, and a job calls the dependency (`references/endpoint.md`).
+  `process.env`. `build` runs at every boot, a test kit's too, which passes only the variables a test gives it: read a
+  variable when the dependency is used, and fail there (`src/links.ts` in `references/public-intake.md`). An endpoint
+  records an outbox row instead, and a job calls the dependency (`references/endpoint.md`).
   E-mail needs no dependency: a job that declares `mailer` sends through `ctx.mail` (`references/jobs.md`).
 
 ## The deploy surface (Zerops)
@@ -616,8 +613,8 @@ resolves every dependency afresh. `fabrika app build` refuses a base that cannot
 use.
 
 The platform's build runs the tests, writes the entrypoint, runs `fabrika-check` and the type check. Its init commands
-run `fabrika db migrate`, `fabrika db codegen --verify` and `fabrika db test-isolation` before the server starts: a
-version does not go live until every generated test passes. It writes every `FABRIKA_*` variable; never set one.
+run `fabrika db migrate` and `fabrika db codegen --verify` before the server starts: a version whose generated schema
+does not match its migrations does not go live. It writes every `FABRIKA_*` variable; never set one.
 
 ## The deploy surface (Cloudflare)
 
@@ -957,8 +954,7 @@ export const WorkloadRow = z.strictObject({
 - Optional or nullable: on a create, a field the caller may leave out is `.optional()`, never a required
   `z.nullable(…)`, and the handler writes `?? null` (`NewTask.dueOn`). On an edit, a field the caller must send is required (`EditTask.title`), one the caller may
   clear is `z.nullable(…)` (`EditTask.dueOn`), and a patch that sends only what changed takes `.optional()` fields: an
-  update that sets no column writes nothing and answers the row's current `{ id, version }`. The generated cases send
-  no optional field and `null` for a nullable one (`references/tests.md`).
+  update that sets no column writes nothing and answers the row's current `{ id, version }`.
 - A query that needs no input declares none: `r.query({ output, access })`, and the SPA calls it with no argument,
   `api.members.orgs()`.
 
@@ -984,12 +980,11 @@ export const WorkloadRow = z.strictObject({
   not a proof that the person controls it. Mail "send it to me"
   there and take no recipient from the input (`references/public-intake.md`). A `machine` caller
   (`{ kind: 'service', id, label }`) has no address. `label` is for display: the address as the person spelled it.
-- **An endpoint the generated tests cover calls no outside service.** They boot without your variables, so a handler
-  that calls one answers 500 in each case, and a request cannot undo the call when its transaction rolls back. Such an
+- **An endpoint calls no outside service.** A request cannot undo the call when its transaction rolls back. Such an
   endpoint records an outbox row in its transaction, and a job makes the call with an attempt count and an idempotency
-  key (`references/jobs.md`). A call that is the request's whole purpose lives in a `{ member: true }` endpoint, which
-  they do not cover. The framework's own calls (IAM, the file store, `ctx.connect`) are not outside.
-- **An endpoint never sends e-mail**, covered or not: it has no `ctx.mail`. It records the message in an outbox row
+  key (`references/jobs.md`). A call that is the request's whole purpose lives in a `{ member: true }` endpoint. The
+  framework's own calls (IAM, the file store, `ctx.connect`) are not outside.
+- **An endpoint never sends e-mail**: it has no `ctx.mail`. It records the message in an outbox row
   and declares `kicks: ['<job>']` on the mutation and calls `ctx.kick('<job>')`, so the job that declares `mailer`
   sends it within seconds of the commit (`references/jobs.md`; the test e-mail in `references/public-intake.md`).
 - `ctx.principal.label` is a `string`, never `null`: the label IAM holds for the person (the one its directory
@@ -1065,9 +1060,7 @@ copyToTask: r.mutation({
   `ctx.within`, `ctx.db.app`, `ctx.members` or `ctx.links`.
 - The `from` fields are gone from `input`, as under a single `on` or `in`: `input.toTaskId` is a type error. Each id
   is its capability's value, `ctx.capabilities.to.value`.
-- The generated tests add a denied case per capability, except an `over` one whose action another one needs on its
-  dimension, a container of it or a dimension inside it: every caller that passes that one is answered the list. Two
-  capabilities may share an action. A join or a lock over many rows still needs `sql`.
+- Two capabilities may share an action. A join or a lock over many rows still needs `sql`.
 
 ### The methods of each handle
 
@@ -1431,7 +1424,7 @@ export const reports = app.group({ callers: ['human'] }, (r) => ({
   level holds no OR: `where (<the whole filter>) and ${…}`, `join projects p on p.id = t.project_id and ${…}`. The tag
   does not read where it stands, which relation it filters or which columns a `set` assigns: the approver does, and a
   fragment under an `or` widens the statement to every row. Never scope by hand with `ctx.target.value` alone: it drops
-  the chain. The generated tests check that an `in` endpoint with `sql` leaks nothing of another scope.
+  the chain.
 - Rows are parsed like `fromRow` (snake_case to camelCase), then by the schema. Postgres sends `bigint` and `numeric`
   as text: cast a count (`count(*)::int`), and a sum to the type its output declares (`::int` for an integer sum that
   fits, `::float8` for a fractional one), or keep it a string. A sum over no rows is `null`: `coalesce(sum(…), 0)`.
@@ -1478,7 +1471,7 @@ above is one. `format: 'xlsx'` writes a spreadsheet instead, from the same rows.
 `unscoped: { tasks: 'read' }` gives `ctx.db.unscoped.tasks` with no scope predicate (every org), still guarded and in
 the invocation's transaction. `'write'` (a mutation, a job, a webhook) also inserts, updates and removes; an insert
 then names the chain columns itself. Use it for an operator's cross-scope view, never to dodge a capability the caller
-should hold. The generated tests skip the other-scope leak case for such an endpoint.
+should hold.
 
 ## Admission and limits
 
@@ -1746,38 +1739,36 @@ architecture, and a refusal's allowed form is the one fix that passes. There is 
 
 The refusals agents meet most, and their fix:
 
-| Rule                           | Means                                                                                                                                                                                                                                                     | Fix                                                                                                               |
-| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `literal`                      | the shell (contract, vocabulary, tables, groups, schemas) holds a computed value or call                                                                                                                                                                  | literal objects, `z.*` calls and imported literal consts; move logic into `.handle(…)`                            |
-| `contract`                     | the contract does not compile (a reserved role, an unknown action, a wrong field)                                                                                                                                                                         | the message names the field                                                                                       |
-| `package-replacement`          | `package.json` names the app under `@fabrika/*`, or a dependency is `workspace:*`                                                                                                                                                                         | another name; a registry range such as `^0.0.4`                                                                   |
-| `generated-test-hash`          | a generated test is missing, edited or stale                                                                                                                                                                                                              | `bunx fabrika db test-scaffold`, and commit what it writes                                                        |
-| `endpoint-fixture`             | an endpoint's input cannot be sampled, a fixture or seed names no endpoint, a member, invitation or link field no endpoint that reads, cancels or revokes one, a file names no file field or a path outside the application, or a refusal is `validation` | a literal in `src/__tests__/endpoint-access.fixtures.ts` (`references/tests.md`)                                  |
-| `raw-sql`                      | a driver's `sql` (imported from `bun`, Kysely, `postgres`)                                                                                                                                                                                                | the handles, or `sql: 'read'` and `ctx.sql`                                                                       |
-| `forbidden-import`             | a driver, an S3 client, `jose`, `node:http`, `child_process`                                                                                                                                                                                              | the handles, a file column with `ctx.files`, a connector                                                          |
-| `forbidden-global`             | `Bun.sql`, `Bun.serve`, `Bun.spawn`; `globalThis`, `window`, `self`, `global` or `Bun` in a server module                                                                                                                                                 | the handles; state lives in a table, not in a global; `crypto.randomUUID()` for an id                             |
-| `env-read`                     | `process.env`, `Bun.env`                                                                                                                                                                                                                                  | `defineDeps(build)`, which receives the application's variables                                                   |
-| `client-identity`              | an input field `userId`, `ownerId`, `createdBy`, `tenantId`, `workspaceId`                                                                                                                                                                                | the access form's `from`, `ctx.principal.id`, or `createdBy` in the policy                                        |
-| `type-assertion`               | `as T` (other than `as const`), `<T>x`                                                                                                                                                                                                                    | fix the type; `fromRow` parses a row into a schema's type                                                         |
-| `sensitive-log`                | a log of an error object, a request, headers or the environment                                                                                                                                                                                           | log a short fixed message                                                                                         |
-| `migration-name`               | a migration not named `YYYYMMDDHHMMSS_slug.sql` (UTC)                                                                                                                                                                                                     | `bunx fabrika db new <slug>`                                                                                      |
-| `migration-edited`             | a migration already on the main branch, edited (even a comment), renamed or deleted                                                                                                                                                                       | restore the file; put the change in a new migration (`bunx fabrika db new <slug>`)                                |
-| `test-only-import`             | `@fabrika/app/testing`, `@fabrika/app/react/testing`, `@fabrika/db/testing` or `@fabrika/db/testing-sqlite` outside a test file                                                                                                                           | import them only from `*.test.ts` or `__tests__/`                                                                 |
-| `spa-server-import`            | the SPA loads a server module                                                                                                                                                                                                                             | the SPA imports `@fabrika/app/client`, the contract, `src/schemas.ts` and `src/shared/`                           |
-| `shared-import`                | a module under `src/shared/` loads a slice, `src/db/`, `@fabrika/*` or a builtin                                                                                                                                                                          | a shared module imports `zod/v4` and other shared modules only                                                    |
-| `tool-import`                  | a module outside `tools/` loads a developer's tool under `tools/`                                                                                                                                                                                         | move what both need under `src/` (`src/shared/`) and import it from the tool                                      |
-| `skipped-test`                 | `.skip`, `.only`, `.todo`                                                                                                                                                                                                                                 | run the test                                                                                                      |
-| `file-column-migration`        | a file column without `REFERENCES fabrika_files (id)` or without an index it leads                                                                                                                                                                        | both, in a new migration (`references/table-and-migration.md`)                                                    |
-| `on-conflict-index`            | `insert(…, { onConflict: { columns } })` whose columns are no unique index the migrations create                                                                                                                                                          | a `UNIQUE` constraint or a `CREATE UNIQUE INDEX` without `WHERE` on exactly those columns                         |
-| `access-view-key`              | a table that names an access view has no single-column primary or unique key on its key                                                                                                                                                                   | a `PRIMARY KEY` or `UNIQUE` on that column alone (`references/relations.md`)                                      |
-| `cross-app-fetch`              | a `fetch` of an absolute URL under no origin a site declares in `egress`, or one a job's `egress: 'public'` refuses (an IP address, `localhost`)                                                                                                          | `egress: ['https://…']` on the site that calls it (`references/endpoint.md`)                                      |
-| `url-endpoint`                 | `ctx.url('<id>')` names no procedure of the contract                                                                                                                                                                                                      | the endpoint id `<mount>.<group>.<procedure>`                                                                     |
-| `cloudflare-scan`              | on Cloudflare, a file kind with `scan: true`                                                                                                                                                                                                              | the kind without `scan`, and no public procedure that takes its files                                             |
-| `cloudflare-job-segment`       | on Cloudflare, a job whose `limits.timeoutMs` exceeds one 14-minute segment                                                                                                                                                                               | at most 14 minutes: claim a bounded batch per run, and the next run takes the rest                                |
-| `cloudflare-current-timestamp` | on Cloudflare, `DEFAULT CURRENT_TIMESTAMP` in a migration: SQLite stores `YYYY-MM-DD HH:MM:SS`, which every read of the table refuses                                                                                                                     | `DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`, in a new migration                                             |
-| `cloudflare-framework-name`    | on Cloudflare, a `fabrika_*` name in a migration, quoted or not                                                                                                                                                                                           | your own tables, and `REFERENCES fabrika_files (id)` for a file column                                            |
-| `migration-refused`            | a migration statement Control refuses (a function, an object or a form the platform does not admit)                                                                                                                                                       | a new migration that does without it; a key in a SQLite backfill: the UUID expression in `table-and-migration.md` |
-| `backup-schema`                | on Cloudflare, a schema the backup cannot copy: a key back into its own table that a `CHECK` reads, or that is `NOT NULL`                                                                                                                                 | a nullable key no `CHECK` names, or no such key; a new migration, before any further one deploys                  |
+| Rule                           | Means                                                                                                                                            | Fix                                                                                                               |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
+| `literal`                      | the shell (contract, vocabulary, tables, groups, schemas) holds a computed value or call                                                         | literal objects, `z.*` calls and imported literal consts; move logic into `.handle(…)`                            |
+| `contract`                     | the contract does not compile (a reserved role, an unknown action, a wrong field)                                                                | the message names the field                                                                                       |
+| `package-replacement`          | `package.json` names the app under `@fabrika/*`, or a dependency is `workspace:*`                                                                | another name; a registry range such as `^0.0.4`                                                                   |
+| `raw-sql`                      | a driver's `sql` (imported from `bun`, Kysely, `postgres`)                                                                                       | the handles, or `sql: 'read'` and `ctx.sql`                                                                       |
+| `forbidden-import`             | a driver, an S3 client, `jose`, `node:http`, `child_process`                                                                                     | the handles, a file column with `ctx.files`, a connector                                                          |
+| `forbidden-global`             | `Bun.sql`, `Bun.serve`, `Bun.spawn`; `globalThis`, `window`, `self`, `global` or `Bun` in a server module                                        | the handles; state lives in a table, not in a global; `crypto.randomUUID()` for an id                             |
+| `env-read`                     | `process.env`, `Bun.env`                                                                                                                         | `defineDeps(build)`, which receives the application's variables                                                   |
+| `client-identity`              | an input field `userId`, `ownerId`, `createdBy`, `tenantId`, `workspaceId`                                                                       | the access form's `from`, `ctx.principal.id`, or `createdBy` in the policy                                        |
+| `type-assertion`               | `as T` (other than `as const`), `<T>x`                                                                                                           | fix the type; `fromRow` parses a row into a schema's type                                                         |
+| `sensitive-log`                | a log of an error object, a request, headers or the environment                                                                                  | log a short fixed message                                                                                         |
+| `migration-name`               | a migration not named `YYYYMMDDHHMMSS_slug.sql` (UTC)                                                                                            | `bunx fabrika db new <slug>`                                                                                      |
+| `migration-edited`             | a migration already on the main branch, edited (even a comment), renamed or deleted                                                              | restore the file; put the change in a new migration (`bunx fabrika db new <slug>`)                                |
+| `test-only-import`             | `@fabrika/app/testing`, `@fabrika/app/react/testing`, `@fabrika/db/testing` or `@fabrika/db/testing-sqlite` outside a test file                  | import them only from `*.test.ts` or `__tests__/`                                                                 |
+| `spa-server-import`            | the SPA loads a server module                                                                                                                    | the SPA imports `@fabrika/app/client`, the contract, `src/schemas.ts` and `src/shared/`                           |
+| `shared-import`                | a module under `src/shared/` loads a slice, `src/db/`, `@fabrika/*` or a builtin                                                                 | a shared module imports `zod/v4` and other shared modules only                                                    |
+| `tool-import`                  | a module outside `tools/` loads a developer's tool under `tools/`                                                                                | move what both need under `src/` (`src/shared/`) and import it from the tool                                      |
+| `skipped-test`                 | `.skip`, `.only`, `.todo`                                                                                                                        | run the test                                                                                                      |
+| `file-column-migration`        | a file column without `REFERENCES fabrika_files (id)` or without an index it leads                                                               | both, in a new migration (`references/table-and-migration.md`)                                                    |
+| `on-conflict-index`            | `insert(…, { onConflict: { columns } })` whose columns are no unique index the migrations create                                                 | a `UNIQUE` constraint or a `CREATE UNIQUE INDEX` without `WHERE` on exactly those columns                         |
+| `access-view-key`              | a table that names an access view has no single-column primary or unique key on its key                                                          | a `PRIMARY KEY` or `UNIQUE` on that column alone (`references/relations.md`)                                      |
+| `cross-app-fetch`              | a `fetch` of an absolute URL under no origin a site declares in `egress`, or one a job's `egress: 'public'` refuses (an IP address, `localhost`) | `egress: ['https://…']` on the site that calls it (`references/endpoint.md`)                                      |
+| `url-endpoint`                 | `ctx.url('<id>')` names no procedure of the contract                                                                                             | the endpoint id `<mount>.<group>.<procedure>`                                                                     |
+| `cloudflare-scan`              | on Cloudflare, a file kind with `scan: true`                                                                                                     | the kind without `scan`, and no public procedure that takes its files                                             |
+| `cloudflare-job-segment`       | on Cloudflare, a job whose `limits.timeoutMs` exceeds one 14-minute segment                                                                      | at most 14 minutes: claim a bounded batch per run, and the next run takes the rest                                |
+| `cloudflare-current-timestamp` | on Cloudflare, `DEFAULT CURRENT_TIMESTAMP` in a migration: SQLite stores `YYYY-MM-DD HH:MM:SS`, which every read of the table refuses            | `DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`, in a new migration                                             |
+| `cloudflare-framework-name`    | on Cloudflare, a `fabrika_*` name in a migration, quoted or not                                                                                  | your own tables, and `REFERENCES fabrika_files (id)` for a file column                                            |
+| `migration-refused`            | a migration statement Control refuses (a function, an object or a form the platform does not admit)                                              | a new migration that does without it; a key in a SQLite backfill: the UUID expression in `table-and-migration.md` |
+| `backup-schema`                | on Cloudflare, a schema the backup cannot copy: a key back into its own table that a `CHECK` reads, or that is `NOT NULL`                        | a nullable key no `CHECK` names, or no such key; a new migration, before any further one deploys                  |
 
 The hints:
 
@@ -1789,8 +1780,6 @@ The hints:
 | `cross-slice-queries`  | a slice loads another slice's `queries.ts`                                                               | move the function, or call that slice's endpoint                                       |
 | `sql-undeclared`       | `ctx.sql` in a handler whose endpoint declares no `sql`                                                  | add `sql: 'read'` (or `'write'`) to that endpoint                                      |
 | `cloudflare-held-call` | on Cloudflare, a mutation that declares `egress` or `connect` holds the whole environment while it waits | record a row and `ctx.kick('<job>')`; the job makes the call outside `ctx.transaction` |
-
-The first run may report only the contract's refusals: the generated-test findings appear once the contract compiles.
 
 ## Type errors
 
@@ -2259,8 +2248,7 @@ export const erase = app.cron('30 2 * * *', {
 installs ClamAV and runs the scan job. No scanner runs on Cloudflare: the deploy and the boot refuse a kind with
 `scan: true` there, and so a public procedure with a file field. A file answer is 409 `file_not_ready` until then and 409 `file_rejected` once
 the file is `rejected`; a list shows each file's `status`, so show it rather than a broken link. In a test, the scan runs with
-`kit.runJob(FILE_SCAN_JOB)` and a `scanner` passed to `testKit` (`references/tests.md`); the generated tests pass their
-own seeded files.
+`kit.runJob(FILE_SCAN_JOB)` and a `scanner` passed to `testKit` (`references/tests.md`).
 
 - A scanning kind admits at most 100 MiB per file (`maxBytes`) and not `application/gzip`; an empty upload is
   400 `empty`.
@@ -3185,7 +3173,7 @@ export interface Links {
 	open(sealed: string): Promise<string>
 }
 
-/** Read when a link is used: the generated tests boot the application without its variables. */
+/** Read when a link is used: a test kit boots the application without its variables. */
 const variable = (env: Readonly<Record<string, unknown>>, name: string) => {
 	const value = env[name]
 	if (typeof value !== 'string' || value === '') {
@@ -4110,20 +4098,6 @@ export const candidates = app.group({ callers: ['human'] }, (r) => ({
   `over` and `on`, which serve a scoped grant too.
 - `over: 'candidate'` lists every candidate a caller holds `candidates.read` on. HR holds it globally, so
   `ctx.within.values` is `'all'`.
-- The generated case of `decide` sends the first status (`new`) to a record that is `new`, which `canMove` refuses
-  with 409. Give it an input in `src/__tests__/endpoint-access.fixtures.ts`:
-
-```ts src/__tests__/endpoint-access.fixtures.ts
-export const fixtures = {
-	'api.candidates.decide': {
-		id: '00000000-0000-4000-8000-000000000000',
-		expectVersion: 1,
-		status: 'screening',
-		note: null,
-		reasonId: null,
-	},
-}
-```
 
 ## The code list an HR lead edits
 
@@ -4409,13 +4383,6 @@ export const testMails = app.cron('* * * * *', {
 
 ## Tests
 
-- The generated tests cover HR's endpoints, the files and the link's procedures: the endpoint access kit asks each
-  link procedure as a holder of a key bound to a seeded candidate. Each `app` endpoint gets two cases: a holder of
-  its action in one candidate only is 403, and a global holder reaches it. `positions`, `reasons`,
-  `candidate_exports` and `test_mails` get a policy probe of their actions, held globally and in one scope, and of a scoped site that
-  reads every row with the read action and none with another. The probe of `candidates` also lists every candidate
-  from an `app` endpoint of `candidates.export`, its `appRead`. An endpoint that `issues` gets the cases of any `on`
-  endpoint: the generated tests' stand-in IAM issues its link (`references/tests.md`).
 - Test the export's own action beside its refused twin: a global holder of `candidates.export` downloads the file, a
   global holder of only `candidates.read` gets 403.
 - Your own test of a link procedure makes the holder `kit.testCaller([{ action: 'candidates.verify', scope: { type:
@@ -6124,14 +6091,12 @@ export default defineApp({
 })
 ```
 
-Without a PostgreSQL service the platform runs no `fabrika db migrate`, no codegen check and no generated test at
-start. `zerops.yaml` holds only `build.base` until the application has an SPA to build.
+Without a PostgreSQL service the platform runs no `fabrika db migrate` and no codegen check at start. `zerops.yaml` holds only `build.base` until the application has an SPA to build.
 
 ## The first test
 
-`bunx fabrika db test-scaffold` writes nothing for this application and says so: the generated tests start with the
-first table (its policy test, then the endpoint access test over its rows). `bun test` fails on an application with no test file, and the platform's
-build runs it, so write the first test yourself:
+`bun test` fails on an application with no test file, and the platform's build runs it, so write the first test
+yourself:
 
 ```ts src/__tests__/orgs.test.ts
 import { createClient } from '@fabrika/app/client'
@@ -6177,7 +6142,6 @@ When the application first stores something, in this order:
 3. `src/db/tables.ts` with the table's policy, over the generated `columns`.
 4. `defineApp(vocabulary, tables)` in `src/app-kit.ts`, `serve(contract, { database: scoped(tables) })` in
    `src/app.ts`, and `compileContract(contract, tables)` in `fabrika.config.ts`.
-5. `bunx fabrika db test-scaffold`: it now writes the generated tests. Commit them.
 
 ## The skill itself
 
@@ -6343,8 +6307,8 @@ INSERT INTO priorities (code, label, rank) VALUES ('low', 'Low', 1), ('normal', 
   table policy is refused, and an `over` list cannot reach the table from an outer dimension.
 - `version INTEGER NOT NULL` makes `expectVersion` and the 409 work; `created_by TEXT NOT NULL` with `createdBy` in
   the policy records the caller. The data layer generates `id` and writes `version` and `created_by`.
-- A column with a fixed set of values is an `ENUM` type, not a `CHECK` on text: the generated tests fill text columns
-  with markers, which a `CHECK` refuses.
+- A column with a fixed set of values is an `ENUM` type, not a `CHECK` on text: codegen types an enum as its literal
+  union.
 - Codegen types: `date` is a `YYYY-MM-DD` string; `timestamptz` reads a `Date` and takes a `Date` or a strict ISO 8601 string with `Z` or an offset;
   `int8` and `numeric` are strings; an enum is its literal union. `bytea`, arrays and domains are refused.
 - A column of JSON is `jsonb` (`json` is refused: it keeps whitespace and duplicate keys). It reads as `unknown`: parse it
@@ -6386,8 +6350,7 @@ database enforces foreign keys.
   refused, so declare it. A `STRICT` table admits only `INTEGER`, `REAL`, `TEXT` and `BLOB`, so a table with a
   `BOOLEAN`, `TIMESTAMP`, `DATE` or `JSONB` column is not `STRICT`. `ctx.sql` reads a `JSONB` column as its text, or
   as a number when the value is one; parse the text with `JSON.parse`.
-- SQLite has no `ENUM`: a column with a fixed set of values is `TEXT` with `CHECK (<column> IN ('a', 'b'))`. The
-  generated tests write its first value.
+- SQLite has no `ENUM`: a column with a fixed set of values is `TEXT` with `CHECK (<column> IN ('a', 'b'))`.
 - No transaction control (`BEGIN`, `COMMIT`, `SAVEPOINT`) and no Postgres syntax (`timestamptz`, `::` casts,
   `GENERATED ALWAYS AS IDENTITY`, `CREATE TYPE`).
 - SQLite has no `gen_random_uuid()`. A backfill that inserts rows gives each one a key with this expression, a UUID v4
@@ -6559,128 +6522,14 @@ policy; without one only `ctx.sql` reads it. With one, `ctx.db` reads it like a 
 - A column of a type the data layer does not read (an array, `numeric` on SQLite) is left out, and every codegen run
   names it. On SQLite an expression has a type only through `CAST(… AS INTEGER | REAL | TEXT)`; on Postgres cast a
   count you want as a number (`count(*)::int4`).
-- `fabrika db test-scaffold` writes no policy isolation test for a view: its parent's cases cover the rows it reads.
 
 ---
 
-# references/tests.md — generated tests, seeds and your own tests
+# references/tests.md — your own tests
 
-## The generated tests
-
-`bunx fabrika db test-scaffold` writes them from the contract and the table policies, and deletes the ones it no
-longer writes. Commit them; never edit, format or import them (`generated-test-hash`).
-
-- `src/db/__tests__/<table>.policy-isolation.test.ts`: the data layer keeps each table's rows in their scope.
-- `src/__tests__/endpoint-access.test.ts`: every `on` and `in` endpoint refuses another scope's object (404 or 403);
-  every `on` and `over` endpoint, and every `in` endpoint that declares `sql`, answers nothing of another scope; a
-  caller with only an endpoint's write action, plus what IAM requires of it (below), reaches its own object (200). An
-  `app` or `creates` endpoint refuses a holder of its action in one scope only (403) and answers a global holder. An
-  endpoint of several `capabilities` adds a denied case per capability (none for an `over` one whose action another one
-  needs on its dimension, a container of it or a dimension inside it, which gets a `// Not checked:` line instead). A
-  public procedure answers anyone without a credential, or, behind a challenge, refuses a caller without a solved one.
-  A file input is sent as a generated file of its kind, or as the file the fixtures name (`files`, below); a `GET`
-  procedure's input goes in its URL.
-- Their kit stands in for IAM, as `testKit` does (below): it creates a scope, assigns or invites a member and issues a
-  link under IAM's rules for the caller's grants. A repeated invitation answers the open one, `resend` restarts its
-  7 days, and an organization's address is refused for an external role (`internal_mailbox`). So the caller of an endpoint with the dimension's `members.manage`
-  holds it on the object itself, with one role the assigned role's `assignableBy` names and the assigned role's
-  actions: the membership roles the input names, or every one of the dimension when it names none. The caller of an
-  endpoint that `issues` also holds the actions its link grants.
-
-Run them after every change of the contract or the tables. The platform runs them at every start, and the
-application is not ready until each passes. A failing generated test is a bug in the handler, the policy or the
-fixtures, never in the test: do not loosen access to make it pass. A case that throws instead of failing an
-assertion names what the generator could not build: an input the schema refuses, an input the handler refused (400),
-which the fixtures below supply, or a `SeedLimitError` of the seed (below). Do not reshape the contract or the schema
-around one; ask the human.
-
-## Fixtures and seeds
-
-`src/__tests__/endpoint-access.fixtures.ts` is yours, read statically (plain literals only):
-
-```ts src/__tests__/endpoint-access.fixtures.ts
-export const seeds = { 'api.tasks.close': { status: 'doing' } }
-export const members = { 'api.tasks.assign': ['assignee'] }
-```
-
-- `export const fixtures = { '<endpoint id>': { … } }` is an input for an endpoint whose schema the scaffold cannot
-  sample, such as a `regex` (a webhook's account):
-  `{ 'api.integrations.connectGithub': { orgId: 'acme', account: 'installation:1' } }`. The checker names each missing one,
-  and one of an endpoint that does not exist (`endpoint-fixture`). The access form's `from` field is
-  replaced by the seeded scope.
-- A `from` field that admits a fixed set of values (`z.enum(['eu', 'us', 'apac'])`, a literal or a union of them) gets
-  two of them, one per scope: an enum's first two in sorted order, a union's first two as written. A row the table that owns the dimension already holds
-  under that key (a migration wrote the regions) is used as it is; a row the case inserts is removed once it is over.
-  Such a stored row takes no `seeds` or `pins`, and a field of one value cannot be asked from two scopes: both fail the
-  case.
-- `members['<endpoint id>']` lists the input fields that name a picked person the handler checks with
-  `ctx.members.get` (`assign`'s `assignee`). The generated cases send a real member of the object's org there; without
-  it they send a sample, the handler answers 400, and the case fails.
-- `invitations['<endpoint id>']` and `links['<endpoint id>']` list the input fields that name an invitation an endpoint
-  cancels (`ctx.members.revoke(ctx.target, { invitationId })`) or a share link it revokes (`ctx.links.revoke(id)`):
-  `export const invitations = { 'api.members.cancel': ['invitationId'] }`. The generated cases send one their stand-in
-  IAM holds there: an invitation open in the object's value, a link of the endpoint's mount that the case's caller
-  issued. Without it they send a sample, IAM answers 404, and the case fails.
-- `seeds['<endpoint id>']` is the state its precondition needs, written into the row of the table that owns the
-  endpoint's dimension in both scopes: `close` answers 409 for an open task, so the seed makes it `doing`. A seed
-  sets neither a column that places the row nor a text column that holds a marker; a text column a CHECK lists the
-  values of, and a foreign key, it may set.
-- `rows['<endpoint id>']` names the input fields that address a row in the endpoint's scope, with that row's table:
-  `export const rows = { 'api.tasks.editComment': { commentId: 'task_comments' } }`. The generated cases seed one row
-  of the table in each scope and send its key there. Under `on` and `in` the table lies directly in the object or
-  target (a child table of the table that owns it, or a table it contains), and a table owns the dimension; under
-  `over` the dimension lists the table. The checker refuses anything else (`endpoint-fixture`). An endpoint with
-  `capabilities` names the capability whose scope the row lies in: `'api.tasks.copyToTask#from': { id:
-  'task_attachments' }`. Without it they send a sample, the handler finds no row (404), and the case fails.
-- `appRows['<endpoint id>']` gives the rows of application tables (`scope: { app }`) that the endpoint's handler reads
-  for the caller's own scope, by table, with the columns they need: `export const appRows = { 'portal.guide': { guides:
-  { active: true } } }`. Each of its leak and own-object cases seeds one row of each before it asks and removes them
-  once it is over, with every row that refers to them (a download the handler logged), so a handler that reads the
-  newest guide answers 200 instead of 404, and no other endpoint's case finds the row. A foreign key from one given row
-  to another holds that row's key. A text column may be given; the key, the version, the creator and a file column may
-  not (a file column holds a live, scanned file). Only application tables, and only for an endpoint with a leak or an
-  own-object case: the checker refuses a table in a scope, which `rows` and `seeds` address (`endpoint-fixture`).
-- `files['<endpoint id>']` names, by file field, a file of the repository that every case of the endpoint sends there
-  instead of the generated one, a path from the application's root:
-  `export const files = { 'api.skills.publish': { package: 'src/__tests__/fixtures/skill.zip' } }`. Give one when the
-  handler inspects the content (a package it unpacks, a document it parses) and answers 400 to the generated file, which
-  has only the leading bytes of its type. Commit the file; keep it small and free of real data. The kit sends it with the
-  first type of the field's kind its bytes are, and a file it cannot read, or of none of those types, fails the case. The
-  checker refuses a field that holds no file and a path that leaves the application, starts with `.` or has characters
-  other than letters, digits, `_`, `-`, `.` and `/` (`endpoint-fixture`).
-- `pins['<endpoint id>']` gives text columns of the row the endpoint addresses (the row of the table that owns its
-  dimension) a known value instead of the seed's marker: `export const pins = { 'api.skills.publish': { slug:
-  'published-skill' } }`, when the handler ties the column to the input or to the file in `files` (a package whose
-  `SKILL.md` names the skill's slug). The own scope's row holds the value, the other scope's `<value>-other`, which a
-  leak case still looks for in the own scope's answer. A pin of a column that places the row, or of no text column,
-  fails the case; the checker refuses one of an endpoint without an addressed row (`endpoint-fixture`).
-- `refusals['<endpoint id>']` lists the error types of the 400s the endpoint's handler answers with when its rule ties
-  the row to the input and the scope is the other one: `export const refusals = { 'api.skills.publish':
-  ['skill_frontmatter'] }`, beside the pin above. A leak case asks from the other scope first, whose pinned value the
-  package does not name; that request may answer one of them. The own case passes on 200 or one of them, and the
-  denial cases still expect 404 or 403. The answer a leak case checks, the own scope's, still fails on it, because an
-  answer that holds nothing proves no isolation: pin the row and give the file so that the own scope succeeds. Any
-  other 400 fails the case, and the checker refuses `validation`, an input the schema refuses (`endpoint-fixture`).
-- The endpoint id is `<mount>.<group>.<endpoint>` (`api.tasks.close`).
-- The seed of the tests fills every text column with a marker and every other required column with a sample of its
-  type: an enum's first label, `1`, `false`, today. A number column that a `UNIQUE` index or the primary key covers
-  gets the next number above the largest among the rows that share the index's other columns with it instead (`1`
-  under a fresh parent, `2` for the insert case beside the seeded row; the whole column for a one-column index), so
-  the row collides with no row of the table. A column with a `DEFAULT` keeps it (`status` is `open`). A column a
-  `CHECK` names gets the first value of an `IN (…)` list, or `null` where it is nullable. A foreign key outside the
-  containment chain is `null` where it is nullable, and otherwise references an existing row of a reference or
-  application table, or a row the seed inserts (of a dimension or child table always a fresh one, in a scope of its
-  own), however deep its own required keys go. When the database refuses a seeded row for a `CHECK` or a `UNIQUE`
-  index, the seed tries other values in the columns it names: `null`, the values the `CHECK` lists or compares with
-  (`IN (0, 12, 21)`, `BETWEEN 2000 AND 2100`, `kind = 'pickup'`), other samples of the type (another day, the other
-  boolean), a fresh referenced row (so `a <> b` and a unique foreign key hold). The insert case's values come from a
-  probe row the database accepted. What the seed still cannot satisfy fails the test with a `SeedLimitError` that names
-  the constraint: a limit of the generator, not a bug of the handler. Keep the constraint as the domain needs it, and
-  ask the human when the limit blocks the tests.
-- A generated case's input is a sample of the schema: no optional field, `null` for a nullable one, an enum's first
-  value, the shortest string its bounds admit (`'x'`), the smallest number, `false`, a fixed value for a format
-  (`uuid`, `email`, `iso.date`). When that input meets a precondition (`close` of an `open` task is 409), seed the
-  state, or give the whole input in `fixtures`.
+The proxy and the data layer enforce the access forms and the table policies, and fabrika tests that enforcement
+itself: an application writes no test of it. Test what your code decides. A leak sweep in the test kit, which asks
+every endpoint as a caller of one scope and looks for rows of another, is planned.
 
 ## Your own tests
 
@@ -6806,10 +6655,9 @@ if (postgres !== null) {
   A skip proves nothing. To confirm a file ran, run it alone (`bun test --isolate src/tasks`) and check that the pass
   count is its number of tests, or set `FABRIKA_TEST_POSTGRES_REQUIRED=1`: a missing URL then fails the file.
 - On Cloudflare import `testDatabase` from `@fabrika/db/testing-sqlite` instead, with the same options: it migrates a
-  fresh in-memory SQLite database as the Durable Object does, needs no URL and never answers `null`. The generated tests
-  already use it. A process migrates once and starts each later database as a copy;
-  `testDatabaseTemplate({ migrations, label, seed })` keeps a migrated and seeded database that
-  `testDatabase({ migrations, label, template })` starts as a copy of.
+  fresh in-memory SQLite database as the Durable Object does, needs no URL and never answers `null`. A process migrates
+  once and starts each later database as a copy; `testDatabaseTemplate({ migrations, label, seed })` keeps a migrated
+  and seeded database that `testDatabase({ migrations, label, template })` starts as a copy of.
 - `statusOf(call)` answers 200 when the call resolves and the status of the application's refusal otherwise; any other
   failure (no answer, a bug in the test) is rethrown. Import it beside `testKit`; do not write your own.
 - `kit.testCaller(grants, { kind })` makes a caller: a grant is a role or an action, in one scope or global. A
@@ -6906,7 +6754,7 @@ if (postgres !== null) {
   reaches the kit's stand-in IAM under the job's own key, so a job that declares `issues` issues and revokes links in a
   plain `testKit` and under `fabrika app dev`, as IAM allows it: for its declared mount only.
 - A mutation that kicks (`kicks`, `ctx.kick`) starts its job in the background of the call. `kit.drain()` waits for
-  those runs, and `kit.runJob` first waits for them; every generated access case drains before it answers. The kicked
+  those runs, and `kit.runJob` first waits for them. The kicked
   run may start at once, so arm a fault before the call, never between the call and the run.
 - `await kit.runDueJobs({ within: 3 * 3600000 })` runs every job with a wake due now or within `within` milliseconds
   (0 by default) once, as the Cloudflare object's alarm runs it: a cron job's next fire, a kick, a failed run's retry.
@@ -6935,9 +6783,8 @@ if (postgres !== null) {
 - `testKit` takes no `deps`, and a test may not start a server (`Bun.serve` is `forbidden-global`). Stand in for an
   outbound dependency through its variables: `env` points it at a test URL, and `spyOn(globalThis, 'fetch')` answers
   that URL only and passes every other request on to the real `fetch`.
-- `defineDeps(build)` runs at every boot, the generated tests' too, which set no application variable: read a variable
-  where it is used, not in `build` (`references/public-intake.md`). A handler that calls an outbound dependency fails its
-  generated cases with 500, so an endpoint they cover writes an outbox row a job sends (`references/endpoint.md`).
+- `defineDeps(build)` runs at every boot, a kit's too, which sets only the variables its `env` names: read a variable
+  where it is used, not in `build` (`references/public-intake.md`).
 - Run with `bun test --isolate`: each file starts with fresh modules. A large suite runs faster as
   `bun test --parallel=4 --no-isolate`: a worker compiles the contract once and runs many files, and a later `testKit`
   of the application takes its data layer over from the previous file's kit, which must have drained the work its
@@ -7009,7 +6856,7 @@ export const integrations = app.group({ callers: ['human'] }, (r) => ({
   account)` with a capability on the bound value (`ctx.target`, an org here), in its transaction; `unbind(ref, id)`
   removes one. The `Ref` must come from an IAM grant: one held through a relation, a member reveal or a secondary
   path is refused, because the binding would outlive the rows that hold it. A GitHub account is `installation:<id>` or `repository:<id>`. The answer carries the secret and the URL
-  once. The generated tests need a fixture for its input (`references/tests.md`).
+  once.
 - The framework checks the signature, the account and the input (undeclared fields are dropped).
   `ctx.refs['<action>']` is a `Ref` of the bound org for each declared action.
 - It claims the delivery key (a digest of the binding and the body) under a lease before the handler runs, marks it

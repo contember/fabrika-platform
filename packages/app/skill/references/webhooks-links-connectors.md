@@ -54,7 +54,7 @@ export const integrations = app.group({ callers: ['human'] }, (r) => ({
   account)` with a capability on the bound value (`ctx.target`, an org here), in its transaction; `unbind(ref, id)`
   removes one. The `Ref` must come from an IAM grant: one held through a relation, a member reveal or a secondary
   path is refused, because the binding would outlive the rows that hold it. A GitHub account is `installation:<id>` or `repository:<id>`. The answer carries the secret and the URL
-  once. The generated tests need a fixture for its input (`references/tests.md`).
+  once.
 - The framework checks the signature, the account and the input (undeclared fields are dropped).
   `ctx.refs['<action>']` is a `Ref` of the bound org for each declared action.
 - It claims the delivery key (a digest of the binding and the body) under a lease before the handler runs, marks it

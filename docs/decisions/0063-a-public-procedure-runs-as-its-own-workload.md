@@ -152,8 +152,6 @@ The application then takes a public request in this order, each refusal with its
 
 - The endpoint access kit asks a public procedure as anyone (`kit.anyone(endpoint, input)`), with no credential, from a
   page of its own origin.
-- `fabrika db test-scaffold` writes one case per public procedure: anyone reaches it, or, behind a challenge, is refused
-  without a solved one.
 
 ## Consequences
 

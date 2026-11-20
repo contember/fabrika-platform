@@ -2,7 +2,6 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { checkApplication } from '../check'
 import type { Finding, RuleId } from '../finding'
-import { generatedTests, scaffoldInputs } from '../scaffold'
 
 export const check = (files: Readonly<Record<string, string>>): Promise<Finding[]> =>
 	checkApplication({ root: '/application', files: new Map(Object.entries(files)) })
@@ -62,14 +61,4 @@ const CLEAN_SOURCES = new Map([
 	['src/db/schema.generated.ts', CLEAN_SCHEMA_GENERATED],
 ])
 
-const cleanInputs = scaffoldInputs(CLEAN_SOURCES)
-
-/** What `fabrika db test-scaffold` writes for the clean application, by path. */
-export const CLEAN_GENERATED_TESTS: ReadonlyMap<string, string> = new Map(
-	[...(await generatedTests(cleanInputs.policies, cleanInputs.artifact))].map(([path, test]) => [path, test.text]),
-)
-
-export const CLEAN_APPLICATION: Readonly<Record<string, string>> = {
-	...Object.fromEntries(CLEAN_SOURCES),
-	...Object.fromEntries(CLEAN_GENERATED_TESTS),
-}
+export const CLEAN_APPLICATION: Readonly<Record<string, string>> = Object.fromEntries(CLEAN_SOURCES)

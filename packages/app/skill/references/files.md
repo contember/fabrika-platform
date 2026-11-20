@@ -378,8 +378,7 @@ export const erase = app.cron('30 2 * * *', {
 installs ClamAV and runs the scan job. No scanner runs on Cloudflare: the deploy and the boot refuse a kind with
 `scan: true` there, and so a public procedure with a file field. A file answer is 409 `file_not_ready` until then and 409 `file_rejected` once
 the file is `rejected`; a list shows each file's `status`, so show it rather than a broken link. In a test, the scan runs with
-`kit.runJob(FILE_SCAN_JOB)` and a `scanner` passed to `testKit` (`references/tests.md`); the generated tests pass their
-own seeded files.
+`kit.runJob(FILE_SCAN_JOB)` and a `scanner` passed to `testKit` (`references/tests.md`).
 
 - A scanning kind admits at most 100 MiB per file (`maxBytes`) and not `application/gzip`; an empty upload is
   400 `empty`.

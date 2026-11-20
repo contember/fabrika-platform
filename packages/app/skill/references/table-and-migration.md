@@ -145,8 +145,8 @@ INSERT INTO priorities (code, label, rank) VALUES ('low', 'Low', 1), ('normal', 
   table policy is refused, and an `over` list cannot reach the table from an outer dimension.
 - `version INTEGER NOT NULL` makes `expectVersion` and the 409 work; `created_by TEXT NOT NULL` with `createdBy` in
   the policy records the caller. The data layer generates `id` and writes `version` and `created_by`.
-- A column with a fixed set of values is an `ENUM` type, not a `CHECK` on text: the generated tests fill text columns
-  with markers, which a `CHECK` refuses.
+- A column with a fixed set of values is an `ENUM` type, not a `CHECK` on text: codegen types an enum as its literal
+  union.
 - Codegen types: `date` is a `YYYY-MM-DD` string; `timestamptz` reads a `Date` and takes a `Date` or a strict ISO 8601 string with `Z` or an offset;
   `int8` and `numeric` are strings; an enum is its literal union. `bytea`, arrays and domains are refused.
 - A column of JSON is `jsonb` (`json` is refused: it keeps whitespace and duplicate keys). It reads as `unknown`: parse it
@@ -188,8 +188,7 @@ database enforces foreign keys.
   refused, so declare it. A `STRICT` table admits only `INTEGER`, `REAL`, `TEXT` and `BLOB`, so a table with a
   `BOOLEAN`, `TIMESTAMP`, `DATE` or `JSONB` column is not `STRICT`. `ctx.sql` reads a `JSONB` column as its text, or
   as a number when the value is one; parse the text with `JSON.parse`.
-- SQLite has no `ENUM`: a column with a fixed set of values is `TEXT` with `CHECK (<column> IN ('a', 'b'))`. The
-  generated tests write its first value.
+- SQLite has no `ENUM`: a column with a fixed set of values is `TEXT` with `CHECK (<column> IN ('a', 'b'))`.
 - No transaction control (`BEGIN`, `COMMIT`, `SAVEPOINT`) and no Postgres syntax (`timestamptz`, `::` casts,
   `GENERATED ALWAYS AS IDENTITY`, `CREATE TYPE`).
 - SQLite has no `gen_random_uuid()`. A backfill that inserts rows gives each one a key with this expression, a UUID v4
@@ -361,4 +360,3 @@ policy; without one only `ctx.sql` reads it. With one, `ctx.db` reads it like a 
 - A column of a type the data layer does not read (an array, `numeric` on SQLite) is left out, and every codegen run
   names it. On SQLite an expression has a type only through `CAST(… AS INTEGER | REAL | TEXT)`; on Postgres cast a
   count you want as a number (`count(*)::int4`).
-- `fabrika db test-scaffold` writes no policy isolation test for a view: its parent's cases cover the rows it reads.

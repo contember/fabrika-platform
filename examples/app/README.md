@@ -12,23 +12,22 @@ The rules an agent follows when it changes this application are `@fabrika/app`'s
 
 ## What is where
 
-| File                                                         | What it is                                                                                                          |
-| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------- |
-| `src/vocabulary.ts`                                          | The vocabulary: dimensions (a `note` lies in a `project`), actions, roles.                                          |
-| `db/migrations/*.sql`                                        | The application's SQLite migrations (STRICT tables, timestamps as UTC ISO text), applied by its Durable Object.     |
-| `src/db/tables.ts`                                           | The table policies over `src/db/schema.generated.ts`, which `fabrika db codegen` writes from the migrations.        |
-| `src/app-kit.ts`                                             | `defineApp(vocabulary, tables)`: the kit.                                                                           |
-| `src/schemas.ts`                                             | The input and output schemas.                                                                                       |
-| `src/access/endpoints.ts`                                    | The endpoints that answer from the caller's own grants, each with its callers, access form and `.handle(…)`.        |
-| `src/notes/endpoints.ts`                                     | A project's notes: a write that may carry a file, a read, the file's download, and the `review` job.                |
-| `fabrika.contract.ts`                                        | `app.contract(…)`: the `/api` and `/notes` mounts, the SPA, the health check, the `attachments` file kind, the job. |
-| `web/`, `build-web.ts`                                       | The SPA (`site`, at `/`, for every member): a page that names the signed-in person; `bun run build:web` builds it.  |
-| `src/app.ts`                                                 | `serve(contract, { database: scoped(tables) })`.                                                                    |
-| `fabrika/entry.generated.ts`                                 | The Worker entrypoint `fabrika app build` writes, with `fabrika/{migrations,contract}.generated.ts`. Do not edit.   |
-| `fabrika.config.ts`                                          | The deploy surface: `defineApp({ id: 'example-app' })` and the SPA build as `pipeline.build`, the whole of it.      |
-| `oblaka.ts`, `lopata.config.ts`                              | A local run of the proxy, the application with its Durable Object and bucket, and IAM over service bindings.        |
-| `src/__tests__/app.test.ts`                                  | The endpoints behind the production proxy decision (`testKit`) on `@fabrika/db/testing-sqlite`, denials included.   |
-| `src/__tests__/endpoint-access.test.ts`, `src/db/__tests__/` | The generated tests `fabrika db test-scaffold` writes; do not edit them.                                            |
+| File                            | What it is                                                                                                          |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `src/vocabulary.ts`             | The vocabulary: dimensions (a `note` lies in a `project`), actions, roles.                                          |
+| `db/migrations/*.sql`           | The application's SQLite migrations (STRICT tables, timestamps as UTC ISO text), applied by its Durable Object.     |
+| `src/db/tables.ts`              | The table policies over `src/db/schema.generated.ts`, which `fabrika db codegen` writes from the migrations.        |
+| `src/app-kit.ts`                | `defineApp(vocabulary, tables)`: the kit.                                                                           |
+| `src/schemas.ts`                | The input and output schemas.                                                                                       |
+| `src/access/endpoints.ts`       | The endpoints that answer from the caller's own grants, each with its callers, access form and `.handle(…)`.        |
+| `src/notes/endpoints.ts`        | A project's notes: a write that may carry a file, a read, the file's download, and the `review` job.                |
+| `fabrika.contract.ts`           | `app.contract(…)`: the `/api` and `/notes` mounts, the SPA, the health check, the `attachments` file kind, the job. |
+| `web/`, `build-web.ts`          | The SPA (`site`, at `/`, for every member): a page that names the signed-in person; `bun run build:web` builds it.  |
+| `src/app.ts`                    | `serve(contract, { database: scoped(tables) })`.                                                                    |
+| `fabrika/entry.generated.ts`    | The Worker entrypoint `fabrika app build` writes, with `fabrika/{migrations,contract}.generated.ts`. Do not edit.   |
+| `fabrika.config.ts`             | The deploy surface: `defineApp({ id: 'example-app' })` and the SPA build as `pipeline.build`, the whole of it.      |
+| `oblaka.ts`, `lopata.config.ts` | A local run of the proxy, the application with its Durable Object and bucket, and IAM over service bindings.        |
+| `src/__tests__/app.test.ts`     | The endpoints behind the production proxy decision (`testKit`) on `@fabrika/db/testing-sqlite`, denials included.   |
 
 The application runs in one Durable Object per environment, over its SQLite
 ([ADR-0065](../../docs/decisions/0065-an-application-on-cloudflare-runs-in-one-durable-object-per-environment.md)). The
@@ -55,7 +54,6 @@ After a change to the contract or the handlers:
 
 ```bash
 bunx fabrika db codegen         # after a migration: rewrites src/db/schema.generated.ts
-bunx fabrika db test-scaffold   # after a contract or table change: rewrites the generated tests
 bun run build       # fabrika app build --provider=cloudflare: rewrites fabrika/entry.generated.ts, migrations.generated.ts and contract.generated.ts
 bun run check       # fabrika-check: the Cloudflare build does not run it yet
 bun run typecheck

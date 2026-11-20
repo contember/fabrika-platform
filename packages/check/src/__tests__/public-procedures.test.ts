@@ -5,7 +5,6 @@ import { ContractError } from '@fabrika/app/contract'
 import { describe, expect, test } from 'bun:test'
 import { join } from 'node:path'
 import { ContractSourceError, readContractSource } from '../contract'
-import { ENDPOINT_ACCESS_TEST, generatedTests, scaffoldInputs } from '../scaffold'
 import { readTree } from './colocated-helpers'
 
 const ROOT = join(import.meta.dir, '..', '..', '..', 'app', 'src', '__tests__', 'public-fixture')
@@ -106,16 +105,5 @@ describe('public procedures in the static reader', () => {
 			"procedure 'api.catalog.products': challenge.action \"a.b\" is not a widget action (allowed: at most 32 letters, digits, '_' or '-', such as 'register')",
 			"procedure 'api.catalog.products': http.path '/api/products' lies under mount 'api' ('/api'), which serves its paths itself (allowed: a path outside every mount's prefix, such as '/register')",
 		])
-	})
-
-	test('the scaffold writes a case per public procedure: anyone reaches it, or is refused without a solved challenge', async () => {
-		const challenged = withProducts(
-			"products: r.query({ input: z.strictObject({ challengeToken: z.string() }), output: Products, access: { public: true }, actions: ['catalog.read'], admission: { challenge: { provider: 'turnstile', secret: 'TURNSTILE_SECRET' } } })",
-		)
-		const inputs = scaffoldInputs(challenged)
-		const endpoints = (await generatedTests(inputs.policies, inputs.artifact, inputs.fixtures)).get(ENDPOINT_ACCESS_TEST)
-		expect(endpoints?.cases).toContain('api.intake.register: anyone reaches it with no credential, running with intake.register')
-		expect(endpoints?.cases).toContain('api.catalog.products: anyone without a solved challenge is 400')
-		expect(endpoints?.text).toContain("await kit.anyone('api.intake.register', ")
 	})
 })

@@ -5,9 +5,9 @@
 import { describe, expect, test } from 'bun:test'
 import { join } from 'node:path'
 import { checkApplication } from '../check'
+import { readContractSource } from '../contract'
 import type { RuleId } from '../finding'
 import { checkCloudflareContract } from '../rules/cloudflare'
-import { scaffoldInputs } from '../scaffold'
 import { readTree } from './colocated-helpers'
 
 const CLOUDFLARE_CONFIG =
@@ -41,7 +41,7 @@ describe('cloudflare-held-call', () => {
 	})
 
 	test('hints on a mutation that declares connect', () => {
-		const artifact = scaffoldInputs(application(true)).artifact
+		const artifact = readContractSource(application(true))
 		if (artifact === null) throw new Error('the fixture compiles no contract')
 		const declared = { ...artifact.declared, 'api.deals.create': { sql: null, unscoped: {}, connect: ['catalog'], issues: null } }
 		const hints = checkCloudflareContract({ ...artifact, declared }).filter((finding) => finding.rule === 'cloudflare-held-call')
@@ -138,7 +138,7 @@ describe('cloudflare-view-trigger', () => {
 
 describe('cloudflare-job-segment', () => {
 	test('refuses a job longer than one 14-minute segment, naming the job, its timeout, the cap and the chunking form', () => {
-		const artifact = scaffoldInputs(application(true)).artifact
+		const artifact = readContractSource(application(true))
 		if (artifact === null) throw new Error('the fixture compiles no contract')
 		const job = (timeoutMs: number) => ({ schedule: '0 3 * * *', actions: [], scope: { kind: 'app' as const }, timeoutMs, retries: 0 })
 		const refusals = checkCloudflareContract({ ...artifact, jobs: { nightly: job(14 * 60_000 + 1), hourly: job(14 * 60_000) } })

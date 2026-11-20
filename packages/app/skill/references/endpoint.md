@@ -45,8 +45,7 @@ export const WorkloadRow = z.strictObject({
 - Optional or nullable: on a create, a field the caller may leave out is `.optional()`, never a required
   `z.nullable(…)`, and the handler writes `?? null` (`NewTask.dueOn`). On an edit, a field the caller must send is required (`EditTask.title`), one the caller may
   clear is `z.nullable(…)` (`EditTask.dueOn`), and a patch that sends only what changed takes `.optional()` fields: an
-  update that sets no column writes nothing and answers the row's current `{ id, version }`. The generated cases send
-  no optional field and `null` for a nullable one (`references/tests.md`).
+  update that sets no column writes nothing and answers the row's current `{ id, version }`.
 - A query that needs no input declares none: `r.query({ output, access })`, and the SPA calls it with no argument,
   `api.members.orgs()`.
 
@@ -72,12 +71,11 @@ export const WorkloadRow = z.strictObject({
   not a proof that the person controls it. Mail "send it to me"
   there and take no recipient from the input (`references/public-intake.md`). A `machine` caller
   (`{ kind: 'service', id, label }`) has no address. `label` is for display: the address as the person spelled it.
-- **An endpoint the generated tests cover calls no outside service.** They boot without your variables, so a handler
-  that calls one answers 500 in each case, and a request cannot undo the call when its transaction rolls back. Such an
+- **An endpoint calls no outside service.** A request cannot undo the call when its transaction rolls back. Such an
   endpoint records an outbox row in its transaction, and a job makes the call with an attempt count and an idempotency
-  key (`references/jobs.md`). A call that is the request's whole purpose lives in a `{ member: true }` endpoint, which
-  they do not cover. The framework's own calls (IAM, the file store, `ctx.connect`) are not outside.
-- **An endpoint never sends e-mail**, covered or not: it has no `ctx.mail`. It records the message in an outbox row
+  key (`references/jobs.md`). A call that is the request's whole purpose lives in a `{ member: true }` endpoint. The
+  framework's own calls (IAM, the file store, `ctx.connect`) are not outside.
+- **An endpoint never sends e-mail**: it has no `ctx.mail`. It records the message in an outbox row
   and declares `kicks: ['<job>']` on the mutation and calls `ctx.kick('<job>')`, so the job that declares `mailer`
   sends it within seconds of the commit (`references/jobs.md`; the test e-mail in `references/public-intake.md`).
 - `ctx.principal.label` is a `string`, never `null`: the label IAM holds for the person (the one its directory
@@ -153,9 +151,7 @@ copyToTask: r.mutation({
   `ctx.within`, `ctx.db.app`, `ctx.members` or `ctx.links`.
 - The `from` fields are gone from `input`, as under a single `on` or `in`: `input.toTaskId` is a type error. Each id
   is its capability's value, `ctx.capabilities.to.value`.
-- The generated tests add a denied case per capability, except an `over` one whose action another one needs on its
-  dimension, a container of it or a dimension inside it: every caller that passes that one is answered the list. Two
-  capabilities may share an action. A join or a lock over many rows still needs `sql`.
+- Two capabilities may share an action. A join or a lock over many rows still needs `sql`.
 
 ### The methods of each handle
 
@@ -519,7 +515,7 @@ export const reports = app.group({ callers: ['human'] }, (r) => ({
   level holds no OR: `where (<the whole filter>) and ${…}`, `join projects p on p.id = t.project_id and ${…}`. The tag
   does not read where it stands, which relation it filters or which columns a `set` assigns: the approver does, and a
   fragment under an `or` widens the statement to every row. Never scope by hand with `ctx.target.value` alone: it drops
-  the chain. The generated tests check that an `in` endpoint with `sql` leaks nothing of another scope.
+  the chain.
 - Rows are parsed like `fromRow` (snake_case to camelCase), then by the schema. Postgres sends `bigint` and `numeric`
   as text: cast a count (`count(*)::int`), and a sum to the type its output declares (`::int` for an integer sum that
   fits, `::float8` for a fractional one), or keep it a string. A sum over no rows is `null`: `coalesce(sum(…), 0)`.
@@ -566,7 +562,7 @@ above is one. `format: 'xlsx'` writes a spreadsheet instead, from the same rows.
 `unscoped: { tasks: 'read' }` gives `ctx.db.unscoped.tasks` with no scope predicate (every org), still guarded and in
 the invocation's transaction. `'write'` (a mutation, a job, a webhook) also inserts, updates and removes; an insert
 then names the chain columns itself. Use it for an operator's cross-scope view, never to dodge a capability the caller
-should hold. The generated tests skip the other-scope leak case for such an endpoint.
+should hold.
 
 ## Admission and limits
 

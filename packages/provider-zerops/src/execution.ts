@@ -49,10 +49,9 @@ export interface ZeropsContractJob {
 export const ZEROPS_SCAN_MIN_RAM_GB = 2
 
 /**
- * The RAM in GB a container of an application with a database starts with. Its init commands run `fabrika db
- * test-isolation`, whose CLI and `bun test` child together peak at 161 MiB of anonymous memory for the Notes example
- * and 225 MiB for the CRM example (measured locally, 2026-10-15), beside Bun's own mapped binary. Zerops' 0.125 GB
- * floor kills that within a second, faster than vertical autoscaling reacts.
+ * The RAM in GB a container of an application with a database starts with. It was measured when the init commands
+ * also ran `fabrika db test-isolation` (161 MiB for the Notes example, 225 MiB for the CRM one, 2026-10-15), which
+ * Zerops' 0.125 GB floor killed within a second. They now migrate and check the schema only; not measured since.
  */
 export const ZEROPS_START_MIN_RAM_GB = 0.5
 

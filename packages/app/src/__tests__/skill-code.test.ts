@@ -252,13 +252,12 @@ describe('the code blocks of the agent skill', () => {
 	}
 
 	// An agent that copies a recipe runs fabrika-check next: a recipe the checker refuses, or hints at, teaches the wrong
-	// form. The skill shows no generated test; `fabrika db test-scaffold` writes them. The base application and each
-	// variant show their own slices, not one contract and one migration history that compose every reference file, so
-	// over them the rules of the whole application are left out.
+	// form. The base application and each variant show their own slices, not one contract and one migration history that
+	// compose every reference file, so over them the rules of the whole application are left out.
 	const WHOLE_APPLICATION_RULES: readonly string[] = ['contract', 'file-column-migration']
 	const checkerFindings = async (app: SkillApp, files: ReadonlyMap<string, string>, skipped: readonly string[] = []): Promise<string[]> => {
 		const findings = await checkApplication({ root: app.root, files: new Map([...generatedFiles(app), ...files]) })
-		return findings.filter((finding) => finding.rule !== 'generated-test-hash' && !skipped.includes(finding.rule)).map(formatFinding)
+		return findings.filter((finding) => !skipped.includes(finding.rule)).map(formatFinding)
 	}
 
 	test('the checker finds nothing in the application', async () => {

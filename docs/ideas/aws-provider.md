@@ -78,8 +78,8 @@ Fabrika runner exists on AWS either.
    (`@fabrika/app/build`), the same recipe `packages/provider-zerops/src/execution.ts` renders into a `zerops.yaml` today.
    The build runs the checker, uploads source maps to Operations (the `artifactUpload` of the contract) and pushes
    the image to ECR. The image digest, not a tag, goes into the task definition.
-3. Control registers a task definition: the application container, an init container that runs `fabrika db migrate`,
-   `fabrika db codegen --verify` and `fabrika db test-isolation`, the managed environment, and secrets by reference.
+3. Control registers a task definition: the application container, an init container that runs `fabrika db migrate`
+   and `fabrika db codegen --verify`, the managed environment, and secrets by reference.
 4. Control updates the ECS service and polls the deployment until it is `COMPLETED` or rolled back. The container
    health check requests the contract's health endpoint, which is what Zerops' readiness check does.
 
@@ -377,7 +377,7 @@ outright. Neither is true today.
 
 ## Open questions before any code
 
-- Does RDS's `rds_superuser` run `provisionPostgresRoles` and `fabrika db test-isolation` unchanged?
+- Does RDS's `rds_superuser` run `provisionPostgresRoles` unchanged?
 - Does Bun.SQL connect with `sslmode=verify-full` to RDS with the RDS CA bundle?
 - Does `Bun.S3Client` accept rotating credentials, or does the store need to be recreated on expiry?
 - Is PostgreSQL 18 available on RDS in eu-central-1, or do installations on AWS run 17?

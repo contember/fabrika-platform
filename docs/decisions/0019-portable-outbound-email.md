@@ -199,7 +199,7 @@ job declaring `mailer: 'own'` uses refuses the boot.
 
 ### 6. Local development and tests
 
-- The test kit passes a Memory sender as a boot option, so generated tests need no variables. A test reads what was
+- The test kit passes a Memory sender as a boot option, so a test needs no mail variable. A test reads what was
   accepted and what was handed off, and injects refusals, outages and lost answers.
 - `fabrika app dev` shows one structured mail view for IAM's and the application's messages: recipient, subject,
   text, the HTML body in a sandboxed frame, the key and the outcome. A seed reads the same list.

@@ -11,13 +11,6 @@ export const GENERATED_ENTRY_FILE = 'fabrika/entry.generated.ts'
 /** Where a Cloudflare deploy stages the SPA mounts' built files (`@fabrika/provider-cloudflare`): build output, never source. */
 export const STAGED_ASSETS_DIR = 'fabrika/assets/'
 export const MIGRATIONS_DIR = 'db/migrations/'
-/** Where `fabrika db test-scaffold` writes the policy isolation tests, `<table>.policy-isolation.test.ts`. */
-export const POLICY_TESTS_DIR = 'src/db/__tests__/'
-export const POLICY_TEST_SUFFIX = '.policy-isolation.test.ts'
-/** The generated endpoint access tests; they import `src/app.ts`, whose default export they boot. */
-export const ENDPOINT_ACCESS_TEST = 'src/__tests__/endpoint-access.test.ts'
-/** The inputs the author gives the endpoint access tests where the scaffold cannot sample one; read, never run. */
-export const ENDPOINT_FIXTURES_FILE = 'src/__tests__/endpoint-access.fixtures.ts'
 export const ZEROPS_FILES = ['zerops.yaml', 'zerops.yml'] as const
 
 /** The application architecture (docs/reference/application-architecture.md): where each layer's code lives. */
@@ -31,7 +24,7 @@ export const SCHEMAS_DIR = 'src/schemas/'
  * its own directory.
  */
 export const SHARED_DIR = 'src/shared/'
-/** `src/db/`: the tables, the generated schema and their generated tests; never a slice. */
+/** `src/db/`: the tables and the generated schema; never a slice. */
 export const DATABASE_DIR = 'src/db/'
 /** A slice is a directory `src/<slice>/` that holds these modules, each optional. */
 export const SLICE_ENDPOINTS_FILE = 'endpoints.ts'

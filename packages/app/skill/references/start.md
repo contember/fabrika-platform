@@ -109,14 +109,12 @@ export default defineApp({
 })
 ```
 
-Without a PostgreSQL service the platform runs no `fabrika db migrate`, no codegen check and no generated test at
-start. `zerops.yaml` holds only `build.base` until the application has an SPA to build.
+Without a PostgreSQL service the platform runs no `fabrika db migrate` and no codegen check at start. `zerops.yaml` holds only `build.base` until the application has an SPA to build.
 
 ## The first test
 
-`bunx fabrika db test-scaffold` writes nothing for this application and says so: the generated tests start with the
-first table (its policy test, then the endpoint access test over its rows). `bun test` fails on an application with no test file, and the platform's
-build runs it, so write the first test yourself:
+`bun test` fails on an application with no test file, and the platform's build runs it, so write the first test
+yourself:
 
 ```ts src/__tests__/orgs.test.ts
 import { createClient } from '@fabrika/app/client'
@@ -162,7 +160,6 @@ When the application first stores something, in this order:
 3. `src/db/tables.ts` with the table's policy, over the generated `columns`.
 4. `defineApp(vocabulary, tables)` in `src/app-kit.ts`, `serve(contract, { database: scoped(tables) })` in
    `src/app.ts`, and `compileContract(contract, tables)` in `fabrika.config.ts`.
-5. `bunx fabrika db test-scaffold`: it now writes the generated tests. Commit them.
 
 ## The skill itself
 

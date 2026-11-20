@@ -433,9 +433,8 @@ input and the HTTP shape (§11).
   then stays on the road. The proxy checks every requirement; the runtime mints each capability through the one issuer,
   in declared order, the first refusal answering (`on` 404, `in` and `over` 403); the handler reads
   `ctx.capabilities.<name>` and binds each with `ctx.db.on`, `.in` or `.over`. An endpoint of several capabilities has
-  no `ctx.target`, `ctx.within`, `ctx.db.app`, members or links. The generated tests add a denied case per
-  capability, except an `over` one whose action another one needs on its dimension, a container of it or a dimension
-  inside it. `creates`, `app` and an export take no `capabilities`.
+  no `ctx.target`, `ctx.within`, `ctx.db.app`, members or links. `creates`, `app` and an export take no
+  `capabilities`.
 
 `capabilities` removes one cause of off-road reach, not all. Reads across tables (joins, filters over related tables,
 aggregates) and locks over many rows still need `sql`.
@@ -630,8 +629,8 @@ The default is `'unchecked'`.
 - Data security is not statically provable. A handler with `sql: 'write'` can write any row the runtime role can;
   the proxy, the approval and the role are what bound it, not the framework.
 - The framework generates no data endpoint. Each operation an application wants (an upload, a file list, a webhook
-  binding, an anonymous submission) is a procedure of a few lines that the approval reads like any other and the
-  generated access tests cover. A helper the handler calls keeps it short; a helper adds no reach, because the
+  binding, an anonymous submission) is a procedure of a few lines that the approval reads like any other. A
+  helper the handler calls keeps it short; a helper adds no reach, because the
   capability it uses comes from `ctx`.
 - Less reach goes off the road: an operation over two dimensions (`capabilities`), an outbox drain (`claim`) and an
   idempotent write (`onConflict`) stay on it. Reads across tables (joins, filters over related tables, aggregates) and

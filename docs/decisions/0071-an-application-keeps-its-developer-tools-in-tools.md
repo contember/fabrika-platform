@@ -26,8 +26,8 @@ rules for application code.
 We will treat `tools/` at the application root as a developer's tools.
 
 - A module under `tools/` (its tests included) is checked only for how it is written (`type-assertion`, `any-type`,
-  `suppression-comment`, `capability-widening`), `key-literal`, `package-replacement`, `generated-test-import` and the
-  rules of its tests. Every other rule is lifted there.
+  `suppression-comment`, `capability-widening`), `key-literal`, `package-replacement` and the rules of its
+  tests. Every other rule is lifted there.
 - `tool-import` (a refusal) refuses a value load or re-export of a module under `tools/` from any module outside it:
   a server module, the SPA, a test, `fabrika.config.ts`, through an import map, a `tsconfig` path or a literal
   `import()`. A type-only import is erased and stays, as everywhere.
@@ -47,8 +47,8 @@ We will treat `tools/` at the application root as a developer's tools.
   loads it. A Cloudflare deploy bundles from the generated entrypoint and never reaches it.
 - An application's own build commands could still run a tool. They are the author's, and the checker never claimed to
   judge them.
-- A tool's tests are tests like any other: the platform build's tests step (`bun test` over the repository) runs them,
-  and `fabrika db test-isolation` does not, since it runs the generated tests by path. That step runs before
+- A tool's tests are tests like any other: the platform build's tests step (`bun test` over the repository) runs them.
+  That step runs before
   `fabrika-check`, so the checker never vouched for what a test does in the build, in `tools/` or anywhere else. A
   tool's test must therefore pass in the build: it tests the tool's logic, and reaches no keychain and no network.
 - The checker's rules are the framework API: an application meets the change when it raises its `@fabrika/check` pin.

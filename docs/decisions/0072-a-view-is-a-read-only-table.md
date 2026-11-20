@@ -75,9 +75,7 @@ a scope over them is as sound as that SQL.
 7. **The artifact marks a view.** A view's `TablePolicyArtifact` carries `view: true`, absent for a table, so every
    existing artifact keeps its digest. The approval diff says `New view policy …` and reports a table that becomes a
    view or stops being one; the database code lines show the view's SQL as before.
-8. **The generated tests do not seed a view.** `fabrika db test-scaffold` writes no policy isolation case for a view,
-   the endpoint access kit seeds none, and an endpoint fixture's row field may not name one: its rows come from other
-   tables. The parent's cases still run.
+8. **The test kits do not seed a view.** The endpoint access kit seeds none: its rows come from other tables.
 9. **A child view's `when` narrows its reads, and a view holds no other access field.** `when: { <action>: <condition> }`
    narrows a read action of a child view as it narrows a table's ([ADR-0073](0073-a-relation-grant-is-application-data-read-on-every-statement.md)),
    after the parent subquery. A path may start at the view's parent column, which the parse takes for a foreign key to

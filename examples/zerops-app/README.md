@@ -12,26 +12,24 @@ directly.
 
 ## What is where
 
-| File                                                         | What it is                                                                                         |
-| ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------- |
-| `src/vocabulary.ts`                                          | The authorization vocabulary: dimensions, actions, roles.                                          |
-| `src/db/tables.ts`                                           | The table policies of `notes` and `note_attachments`: scope, actions, writable and file columns.   |
-| `src/app-kit.ts`                                             | `defineApp(vocabulary, tables)`: the kit every endpoint is built with.                             |
-| `src/schemas.ts`                                             | The inputs, outputs and limits the shell and the SPA share.                                        |
-| `src/notes/endpoints.ts`                                     | The notes slice: each endpoint with its `.handle(…)`, and the `purge` job.                         |
-| `src/attachments/endpoints.ts`                               | A note's attachments: upload a file into a row, list, download and remove them.                    |
-| `src/guests/endpoints.ts`                                    | Staff invite a guest, a person from outside the organization, into a workspace by e-mail.          |
-| `fabrika.contract.ts`                                        | Who may call what: the `/api` and `/people` mounts, the SPA, `attachments`, `purge`, the health.   |
-| `src/app.ts`                                                 | `serve(contract, { database: scoped(tables) })`, which the generated entrypoint boots.             |
-| `db/migrations/`                                             | Plain SQL of the application's schema; the last two adopt the old `attachments` file collection.   |
-| `src/db/schema.generated.ts`                                 | Written by `fabrika db codegen` from the migrated schema.                                          |
-| `src/db/__tests__/`, `src/__tests__/endpoint-access.test.ts` | Written by `fabrika db test-scaffold`; the platform runs them at container start. Never edited.    |
-| `src/__tests__/endpoint-access.fixtures.ts`                  | The state the generated tests seed: a note in the trash, and an attachment row of the note.        |
-| `src/__tests__/notes.test.ts`                                | The author's own tests, through `testKit`: each allowed call has a refused twin; the job runs too. |
-| `web/`, `build-web.ts`                                       | The SPA, its error reporting, and its build through `@fabrika/check/bun-plugin` (no handlers).     |
-| `fabrika.config.ts`                                          | The deploy surface: a database, a bucket and the runtime, the compiled contract, its proxy table.  |
-| `fabrika.cheap.config.ts`                                    | The cheap tier: the bucket and the runtime, on the namespace's shared PostgreSQL.                  |
-| `zerops.yaml`                                                | The build base and the SPA build. The platform generates the rest of the setup (ADR-0043).         |
+| File                           | What it is                                                                                         |
+| ------------------------------ | -------------------------------------------------------------------------------------------------- |
+| `src/vocabulary.ts`            | The authorization vocabulary: dimensions, actions, roles.                                          |
+| `src/db/tables.ts`             | The table policies of `notes` and `note_attachments`: scope, actions, writable and file columns.   |
+| `src/app-kit.ts`               | `defineApp(vocabulary, tables)`: the kit every endpoint is built with.                             |
+| `src/schemas.ts`               | The inputs, outputs and limits the shell and the SPA share.                                        |
+| `src/notes/endpoints.ts`       | The notes slice: each endpoint with its `.handle(…)`, and the `purge` job.                         |
+| `src/attachments/endpoints.ts` | A note's attachments: upload a file into a row, list, download and remove them.                    |
+| `src/guests/endpoints.ts`      | Staff invite a guest, a person from outside the organization, into a workspace by e-mail.          |
+| `fabrika.contract.ts`          | Who may call what: the `/api` and `/people` mounts, the SPA, `attachments`, `purge`, the health.   |
+| `src/app.ts`                   | `serve(contract, { database: scoped(tables) })`, which the generated entrypoint boots.             |
+| `db/migrations/`               | Plain SQL of the application's schema; the last two adopt the old `attachments` file collection.   |
+| `src/db/schema.generated.ts`   | Written by `fabrika db codegen` from the migrated schema.                                          |
+| `src/__tests__/notes.test.ts`  | The author's own tests, through `testKit`: each allowed call has a refused twin; the job runs too. |
+| `web/`, `build-web.ts`         | The SPA, its error reporting, and its build through `@fabrika/check/bun-plugin` (no handlers).     |
+| `fabrika.config.ts`            | The deploy surface: a database, a bucket and the runtime, the compiled contract, its proxy table.  |
+| `fabrika.cheap.config.ts`      | The cheap tier: the bucket and the runtime, on the namespace's shared PostgreSQL.                  |
+| `zerops.yaml`                  | The build base and the SPA build. The platform generates the rest of the setup (ADR-0043).         |
 
 `fabrika/entry.generated.ts` and `dist/` are not committed: the platform build writes them, and the local stack writes
 the entrypoint.
@@ -45,8 +43,8 @@ contract, the table policies and the migrations at the commit; a change that wid
 to approve it in the console.
 
 On Zerops the platform owns the setup. The build runs the SPA build (`bun run build:web`), then installs, runs
-`bun test`, writes the entrypoint, runs `fabrika-check` and the type check. The init commands run `fabrika db migrate`, `fabrika db codegen --verify` and
-`fabrika db test-isolation`, then the start script runs the server; the crontab runs `fabrika job run purge`. Every `FABRIKA_*` variable is
+`bun test`, writes the entrypoint, runs `fabrika-check` and the type check. The init commands run `fabrika db migrate` and `fabrika db codegen --verify`,
+then the start script runs the server; the crontab runs `fabrika job run purge`. Every `FABRIKA_*` variable is
 the platform's: the database URL from `notesdb`, the storage from `notesfiles`, the IAM issuer and audience, the proxy
 secret, the contract digest and the Operations DSN.
 
@@ -59,7 +57,7 @@ and IAM sends the invitation; `guest` is the one role declared `external`, and `
 ## Running it
 
 ```bash
-FABRIKA_TEST_POSTGRES_URL=postgres://… bun run test   # bun test --isolate: the author's and the generated tests
+FABRIKA_TEST_POSTGRES_URL=postgres://… bun run test   # bun test --isolate: the author's tests
 bun run typecheck
 bunx fabrika-check .
 ```
@@ -75,7 +73,6 @@ After a change to the contract or the table policies:
 fabrika db new <slug>                                   # a new migration; never edit a committed one
 FABRIKA_APP_ID=notes FABRIKA_APP_DATABASE_URL=postgres://… fabrika db migrate
 FABRIKA_APP_ID=notes FABRIKA_APP_DATABASE_URL=postgres://… fabrika db codegen
-fabrika db test-scaffold                                # a precondition's state goes to seeds in endpoint-access.fixtures.ts
 ```
 
 In fabrika-platform, `bun run local:smoke` deploys this directory through Control and the Zerops emulator and serves

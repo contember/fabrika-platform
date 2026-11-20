@@ -273,7 +273,6 @@ services:
       - >-
         ./node_modules/.bin/fabrika db migrate &&
         ./node_modules/.bin/fabrika db codegen --verify &&
-        ./node_modules/.bin/fabrika db test-isolation &&
         exec bun --max-http-header-size=65536 fabrika/entry.generated.ts
     # `notes-workloads.env` holds the jobs' and webhooks' keys (`workload-keys.ts`), `notes-membership.env` IAM's
     # membership transport (`membership-key.ts`); `up` writes both before Notes starts.
