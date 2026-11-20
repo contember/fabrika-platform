@@ -80,10 +80,11 @@ as `dropped`: an operator's decision, never a silent loss.
 - A service gets its providers from its composition, as a name-to-factory map (`EmailProviderRegistry`), not from a
   closed switch. Each provider declares its variables and parses them; the common ones are `FABRIKA_EMAIL_PROVIDER`,
   `FABRIKA_EMAIL_FROM` and `FABRIKA_EMAIL_FROM_NAME`.
-- The built-in, env-selectable providers are **AhaSend**, **Cloudflare** (Email Service's Email Sending),
+- The built-in, env-selectable providers are **AhaSend**, **Brevo**, **Cloudflare** (Email Service's Email Sending),
   **Lettermint**, **Postmark**, **Resend** and **SmartEmailing**, all over `fetch` and all on one HTTP adapter base, so
   a provider is its own mapping and nothing more. Resend, AhaSend and Lettermint are idempotent and synchronous.
-  Postmark and Cloudflare are synchronous with no idempotency key. SmartEmailing is neither. What each offers and what it has been checked against is the
+  Postmark and Cloudflare are synchronous with no idempotency key. Brevo is synchronous and keeps a key for 30 minutes
+  only, so it counts as not idempotent. SmartEmailing is neither. What each offers and what it has been checked against is the
   [reference's table](../reference/outbound-email.md#built-in-providers).
 - **Broadcast mail is marked, not inferred.** A message of a send to many recipients carries `broadcast: true` and
   needs an unsubscribe URL. Providers keep broadcast mail apart from transactional mail: Postmark has a broadcast
@@ -345,6 +346,12 @@ with 404. Its senders reach it over the platform transport
   transactional mail only, so it has no `broadcast` capability and refuses a broadcast message before any I/O; an
   installation on it sends no newsletters. Its 5 MiB message bound leaves 3 MiB of attachments. Only its accepted
   answer is checked live ([backlog 241](../backlog/241-verify-the-cloudflare-email-adapter-on-a-live-account.md)).
+- **Brevo's limits.** It dedupes a key for 30 minutes, while the relay's dispatcher retries for about 8.5 hours, so it
+  reports itself not idempotent: an unknown outcome over it needs a person, and a repeated key answers
+  `idempotency_conflict` without saying whether the content matched. It writes no unsubscribe header (Brevo's `headers`
+  take no standard one), so it sends no broadcast mail. It is checked only against a stubbed `fetch`
+  ([backlog 289](../backlog/289-verify-the-brevo-email-adapter-on-a-live-account.md)). A capability that states how long a
+  transport keeps a key, so that a retry inside the window may go, was not added for one provider.
 - Every adapter sends one message per call (`maxBatch: 1`); batches are
   [backlog 186](../backlog/186-send-email-in-batches.md).
 - SMTP-only installations need a future adapter or an HTTP mail gateway. SMTP is not emulated through runtime-specific code in IAM.

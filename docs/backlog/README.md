@@ -170,4 +170,5 @@ rest of custom domains, a client address on a dedicated IPv4, a release and reco
 - [287](287-an-attachments-row-schema-is-not-compared-with-its-approved-columns.md): An attachment's cells are validated by the evaluated row schema, not the approved columns.
 - [288](288-reader-input-discovery-parses-every-held-module-each-round.md): Control's import discovery parses every held module in each round, so a deep import chain can exceed the Worker's CPU limit.
 - [289](289-caller-rows-reach-only-the-global-case.md): The endpoint access kit seeds the caller's own record only for a global case, cannot key it by the principal id, and issues caller ids that are not UUIDs.
+- [289](289-verify-the-brevo-email-adapter-on-a-live-account.md): The Brevo email adapter is verified only against a stubbed `fetch`; its idempotency key, text-only body, unsubscribe headers and refusals wait for a live account.
 - [10](10-app-scope-secrets-on-zerops.md) — Control refuses an `app`-scoped secret on Zerops today; record that as the decision, or replicate per service.
