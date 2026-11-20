@@ -61,12 +61,15 @@ export type LeakOutcome =
 	| { readonly answered: false; readonly status: number; readonly leaked: readonly string[] }
 
 /**
- * A leak case of a query asked three times: `changed` is whether the own scope's answer changed when only rows that lie
- * in no scope of the case were added (an aggregation that ignores the scope), `null` when it was not compared (a
- * mutation, a refused answer, or an answer that changes between two asks by itself). `unvaried` are the tables the
- * seeder could not add a row to, which the comparison therefore did not vary.
+ * The leak sweep's outcome of one case: the other scope's values the first own answer held, how a query's answer
+ * compared once rows were added outside the caller's scopes, and what kept the case from checking all of it.
  */
-export type SweepOutcome = LeakOutcome & { readonly changed: boolean | null; readonly unvaried: readonly string[] }
+export interface SweepOutcome {
+	readonly leaked: readonly string[]
+	/** `not-compared` for a mutation, a case that never reached its own answer and a refused own answer. */
+	readonly differential: 'same' | 'changed' | 'unstable' | 'not-compared'
+	readonly hints: readonly string[]
+}
 
 /** `answered` unless the caller got a 401, a 403 or a 5xx; otherwise that status. */
 export type ReachOutcome = { readonly answered: true } | { readonly answered: false; readonly status: number }
@@ -102,9 +105,8 @@ export interface EndpointAccessKit {
 	 */
 	own(endpoint: string, input: Readonly<Record<string, unknown>>, seed?: Seed, appRows?: AppRows): Promise<DeniedOutcome>
 	/**
-	 * The leak sweep's case: `leaked`, and on a query, the own scope asked again after one row of every dimension and
-	 * child table was added in two fresh chains, which no caller of the case holds. An answer that changes shows an
-	 * aggregation or a lookup that ignores the scope, which holds no value of another scope to find.
+	 * `leaked`, and on a query the own scope asked again after rows were added in two fresh chains no caller holds: a
+	 * changed answer is a count or a lookup that ignores the scope. Never throws for what it cannot set up; that is a hint.
 	 */
 	swept(endpoint: string, input: Readonly<Record<string, unknown>>, seed?: Seed, appRows?: AppRows): Promise<SweepOutcome>
 	/**
@@ -279,6 +281,9 @@ export type Grant =
 	| { readonly role: string; readonly scope: { readonly type: string; readonly value: string } }
 
 const randomHex = (): string => crypto.randomUUID().replaceAll('-', '').slice(0, 8)
+
+/** What a case that could not be set up says: the kit's own message, which names the endpoint and what it lacks. */
+const messageOf = (error: unknown): string => (error instanceof Error ? error.message : 'the case could not be set up')
 
 const errorSchema = z.object({ error: z.object({ type: z.string() }) })
 
@@ -692,15 +697,15 @@ export function endpointAccessKit<DB, P>(
 			}
 			if (declared) {
 				throw new Error(
-					`${row.id}: the handler answered its declared refusal (400 ${type}), which only the own case takes; this case proves nothing on it until the fixtures give what the handler needs (pins, files, fixtures) (${text})`,
+					`${row.id}: the handler answered its declared refusal (400 ${type}), which only the own case takes; this case proves nothing on it until it is given what the handler needs (pins, files, its input) (${text})`,
 				)
 			}
 			throw new Error(
 				type === 'validation'
-					? `${row.id}: the case's input does not match the endpoint's input schema; correct its fixture (${text})`
+					? `${row.id}: the case's input does not match the endpoint's input schema; correct its input (${text})`
 					: `${row.id}: the handler refused the case's input (400 ${
 						type ?? 'without a type'
-					}); the case cannot reach what it tests until its fixtures give what the handler needs: a picked person in members, a row of its object in rows, the state in seeds, a file it accepts in files, the whole input in fixtures, or the refusal it answers in refusals (${text})`,
+					}); the case cannot reach what it tests until it is given what the handler needs: a picked person (GENERATED_MEMBER) or a row of its object (GENERATED_ROW_PREFIX) in its input, the state in seeds, a file it accepts in files, or the refusal it answers in refusals (${text})`,
 			)
 		}
 		return { status: response.status, text }
@@ -1123,14 +1128,42 @@ export function endpointAccessKit<DB, P>(
 			},
 			async swept(endpoint, input, seed = {}, appRows = {}) {
 				const row = endpointOf(endpoint)
-				const leak = await leakCase(endpoint, input, seed, appRows)
-				const first = await leak.askOwn()
+				let leak: Awaited<ReturnType<typeof leakCase>>
+				let first: readonly Answer[]
+				try {
+					leak = await leakCase(endpoint, input, seed, appRows)
+					first = await leak.askOwn()
+				} catch (error) {
+					return { leaked: [], differential: 'not-compared', hints: [messageOf(error)] }
+				}
 				const outcome = leakOutcome(first, leak.values)
-				if (!row.readOnly || !outcome.answered) return { ...outcome, changed: null, unvaried: [] }
-				const again = await leak.askOwn()
-				if (!sameAnswers(first, again)) return { ...outcome, changed: null, unvaried: [] }
+				const { leaked } = outcome
+				if (!outcome.answered) {
+					return { leaked, differential: 'not-compared', hints: [`its own scope was answered ${outcome.status}, so no answer was checked`] }
+				}
+				if (!row.readOnly) return { leaked, differential: 'not-compared', hints: [] }
+				const unstable = (why: string): SweepOutcome => ({
+					leaked,
+					differential: 'unstable',
+					hints: [`${why}, so the sweep did not compare it with rows added elsewhere`],
+				})
+				let again: readonly Answer[]
+				try {
+					again = await leak.askOwn()
+				} catch (error) {
+					return unstable(`asked again with nothing changed, it failed (${messageOf(error)})`)
+				}
+				if (!sameAnswers(first, again)) {
+					return unstable("its answer changed between two asks with nothing changed (a time, the caller's id, a member made per ask)")
+				}
 				const unvaried = await seedElsewhere()
-				return { ...outcome, changed: !sameAnswers(again, await leak.askOwn()), unvaried }
+				const hints = unvaried.length === 0 ? [] : [`the seeder could not add a row to ${unvaried.join(', ')}, so the sweep did not vary them`]
+				try {
+					return { leaked, differential: sameAnswers(again, await leak.askOwn()) ? 'same' : 'changed', hints }
+				} catch {
+					// It answered twice alike, and fails once rows were added outside its scopes: they changed its answer.
+					return { leaked, differential: 'changed', hints }
+				}
 			},
 			async own(endpoint, input, seed = {}, appRows = {}) {
 				const row = endpointOf(endpoint)
@@ -1261,10 +1294,34 @@ export function endpointAccessKit<DB, P>(
 			if (failures.length > 1) throw new AggregateError(failures, 'the cleanup of the case failed')
 			return outcome.value
 		}
+	// The sweep's case keeps what it found when its cleanup fails, and says so in a hint instead.
+	const sweptDrained: EndpointAccessKit['swept'] = async (...args) => {
+		const removals: (() => Promise<void>)[] = []
+		const cleanup = async (): Promise<number> => {
+			let failed = 0
+			for (const step of [() => kit.drain(), ...removals]) {
+				try {
+					await step()
+				} catch {
+					failed++
+				}
+			}
+			return failed
+		}
+		let outcome: SweepOutcome
+		try {
+			outcome = await accessKitOf(removals).swept(...args)
+		} catch (error) {
+			await cleanup()
+			throw error
+		}
+		const failed = await cleanup()
+		return failed === 0 ? outcome : { ...outcome, hints: [...outcome.hints, `${failed} cleanup step(s) failed, so later cases may meet its rows`] }
+	}
 	return Object.freeze({
 		denied: drained((cases) => cases.denied),
 		leaked: drained((cases) => cases.leaked),
-		swept: drained((cases) => cases.swept),
+		swept: sweptDrained,
 		own: drained((cases) => cases.own),
 		scoped: drained((cases) => cases.scoped),
 		global: drained((cases) => cases.global),

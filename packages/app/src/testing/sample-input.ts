@@ -37,11 +37,21 @@ function admits(shape: NumberShape, value: number): boolean {
 	return shape.multipleOf === null || Number.isInteger(value / shape.multipleOf)
 }
 
+/** The first of a few candidates the bounds admit: the lower bound, a small number, the upper bound, the middle. */
 function sampleNumber(shape: NumberShape): number | undefined {
-	const step = shape.multipleOf ?? 1
-	const start = shape.min ?? (shape.max === null ? 1 : Math.min(1, shape.max))
-	const first = Math.ceil(start / step) * step
-	return [first, first + step].find((candidate) => admits(shape, candidate))
+	const step = shape.multipleOf ?? (shape.int ? 1 : undefined)
+	const snap = (value: number): number => (step === undefined ? value : Math.ceil(value / step) * step)
+	const below = (value: number): number => (step === undefined ? value : Math.floor(value / step) * step)
+	const { min, max } = shape
+	const candidates = [
+		...(min === null ? [] : [snap(min), snap(min) + (step ?? 1), step === undefined ? min + 0.5 : snap(min) + step]),
+		1,
+		0,
+		-1,
+		...(max === null ? [] : [below(max), below(max) - (step ?? 1), step === undefined ? max - 0.5 : below(max) - step]),
+		...(min !== null && max !== null ? [snap((min + max) / 2), (min + max) / 2] : []),
+	]
+	return candidates.find((candidate) => admits(shape, candidate))
 }
 
 function field(shape: SchemaShape): Field {

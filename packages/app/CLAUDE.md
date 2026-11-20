@@ -58,7 +58,8 @@ bun test src/__tests__/public-egress.test.ts    # a cron job's egress: 'public':
 bun test src/__tests__/public-egress-pinning.test.ts  # what a pinned hop relies on in Bun: Host, the certificate checked against the TLS serverName, no pooled connection (TLS half needs openssl)
 bun test src/__tests__/request-budget.test.ts   # a writing mutation past REQUEST_BUDGET_MS: aborted, 500, nothing written (10 s; needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/outbox-rule.test.ts      # endpointAccessKit's cases of an outbox write and of an outbound call (needs FABRIKA_TEST_POSTGRES_URL)
-bun test src/__tests__/leak-sweep.test.ts       # the leak sweep's case: a count that forgets its scope, found only by the differential (needs FABRIKA_TEST_POSTGRES_URL)
+bun test src/__tests__/leak-sweep.test.ts       # the sweep's plan and hints; its cases: a count that forgets its scope, found only by the differential (cases need FABRIKA_TEST_POSTGRES_URL)
+bun test src/__tests__/sample-input.test.ts     # the sweep's sample of an input schema
 bun test src/__tests__/job-types.test.ts        # the job handler mistakes, compiled by tsc
 bun test src/__tests__/connect.test.ts          # an export and an import, each in its own test kit
 bun test src/__tests__/connect-hardening.test.ts # captured connect methods, a hostile owner, budgets and deadlines
@@ -1085,9 +1086,10 @@ vocabulary (`packages/db/CLAUDE.md`).
   **The leak sweep is opt-in and generates no file.** `leakSweep` compiles the contract, plans a case per endpoint
   `on`, `in` or `over` called by a person or a script (none for one that declares `unscoped`, a hint instead), and
   runs each through `endpointAccessKit`'s `swept`: `leaked`, then, on a query, the own scope asked again, and once more
-  after `seedWorlds` added a row of every dimension and child table in fresh chains; a changed answer is a leak. A case
-  fails only on a leak; a throw of the kit, a refused own answer, an answer that changes by itself and a table the
-  seeder could not vary are hints, printed after the run. `@fabrika/check` requires no sweep.
+  after `seedWorlds` added a row of every dimension and child table in fresh chains; a changed answer, or a refusal
+  that appears only then, is a leak. `swept` never throws for what it cannot set up: that, a refused own answer, an
+  answer that changes by itself, a table the seeder could not vary and a failed cleanup are hints, and a leak the first
+  answer showed stays found. A case fails only on a leak. `@fabrika/check` requires no sweep.
   `policyIsolationKit` defines a probe contract over the application's vocabulary whose
   procedures each run one operation of `@fabrika/db/testing`'s `tableProbe`, served by
   `testKit` on a `scoped(tables)` layer of its own: it proves the policy, not the
