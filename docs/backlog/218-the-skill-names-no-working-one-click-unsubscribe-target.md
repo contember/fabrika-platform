@@ -41,4 +41,4 @@ the same URL with a GET, which a POST-only procedure does not answer.
 `packages/app/skill/references/jobs.md`, `packages/app/skill/references/endpoint.md`, `packages/app/src/contract/build.ts`,
 `packages/proxy-core/src/authorize.ts`, the generated tests or the kit for the witness.
 
-<!-- Origin: the Schrack CRM's move to Postmark on v0.8.2 (session crm-8e, 2026-10-23). -->
+<!-- Origin: one application's move to Postmark on v0.8.2 (2026-10-23). -->

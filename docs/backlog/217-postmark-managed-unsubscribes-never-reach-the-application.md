@@ -18,8 +18,8 @@ text and the HTML, and keeps whoever uses either in its suppression list. The ap
 works, but an unsubscribe through Postmark's link or footer reaches only Postmark. The next broadcast to that person is
 refused (406, `provider_rejected`), and over the relay the application does not even learn that (backlog 194 item 27).
 
-The Schrack CRM withdraws marketing consent on unsubscribe, so its consent records and Postmark's suppression list
-drift apart, and nothing tells the operator or the application.
+An application that withdraws marketing consent on unsubscribe sees its consent records and Postmark's suppression
+list drift apart, and nothing tells the operator or the application.
 
 Postmark lets an account set a stream's unsubscribe handling to `None` (the application's own headers and link are
 sent unchanged), but only with Postmark support's approval. Nothing in the installation guide tells the operator to ask.
@@ -45,4 +45,4 @@ Done when a live Postmark unsubscribe through the footer reaches a test applicat
 `packages/email/src/postmark.ts`, `packages/control/src/mail-relay/`, `docs/reference/outbound-email.md`,
 `packages/provider-zerops/src/installation/guide.md`, ADR-0019.
 
-<!-- Origin: the Schrack CRM's move to Postmark on v0.8.2 (session crm-8e, 2026-10-23). -->
+<!-- Origin: one application's move to Postmark on v0.8.2 (2026-10-23). -->
