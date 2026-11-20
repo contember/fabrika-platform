@@ -38,6 +38,7 @@ describe("IAM's relay fallback", () => {
 					refusing('mail_not_configured', 503),
 					refusing('invalid_configuration'),
 					refusing('malformed_response', 404),
+					refusing('provider_rejected', 308),
 				]
 			) {
 				const own = direct()
@@ -50,7 +51,7 @@ describe("IAM's relay fallback", () => {
 				expect(result).toEqual({ status: 'accepted', provider: 'resend', messageId: 'resend-1' })
 				expect([relay.sent, own.sent, refusals.length]).toEqual([1, 1, 1])
 			}
-			expect(warn).toHaveBeenCalledTimes(4)
+			expect(warn).toHaveBeenCalledTimes(5)
 			expect(warn.mock.calls.flat().join('\n')).not.toContain(message.to)
 		} finally {
 			warn.mockRestore()
