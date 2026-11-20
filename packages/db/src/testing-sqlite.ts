@@ -241,10 +241,21 @@ function definitions(tokens: readonly Token[]): Token[][] {
 const TABLE_CONSTRAINTS: ReadonlySet<string> = new Set(['CONSTRAINT', 'CHECK', 'PRIMARY', 'UNIQUE', 'FOREIGN'])
 
 /** The value of a text or number literal token, a number possibly after a minus sign; `undefined` for any other token. */
+/** The words before which a `-` is a sign, not a subtraction: the operators that take an operand after them. */
+const OPERAND_FOLLOWS = new Set(['AND', 'OR', 'NOT', 'BETWEEN', 'IN', 'IS', 'LIKE', 'GLOB', 'CASE', 'WHEN', 'THEN', 'ELSE', 'CHECK'])
+
+/** Whether `token` ends an operand, so a `-` after it subtracts (`a-1`) rather than signs a number (`> -1`). */
+function endsOperand(token: Token | undefined): boolean {
+	if (token === undefined) return false
+	if (token.kind === 'name' || token.kind === 'string') return true
+	if (token.kind === 'word') return !OPERAND_FOLLOWS.has(token.text.toUpperCase())
+	return token.text === ')' || /^(?:[0-9]|\.[0-9])/.test(token.text)
+}
+
 function literalOf(tokens: readonly Token[], index: number): { readonly value: CheckLiteral; readonly width: number } | undefined {
 	const token = tokens[index]
 	if (token?.kind === 'string') return { value: token.text, width: 1 }
-	const negative = isPunctuation(token, '-')
+	const negative = isPunctuation(token, '-') && !endsOperand(tokens[index - 1])
 	const number = negative ? tokens[index + 1] : token
 	if (number?.kind !== 'other' || !/^(?:[0-9]|\.[0-9])/.test(number.text)) return undefined
 	const value = Number(number.text)

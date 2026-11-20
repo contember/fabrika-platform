@@ -214,25 +214,41 @@ const tidArray = (ctids: Iterable<string>): string => `{${[...ctids].map((ctid) 
  * `IN` list as Postgres prints it.
  */
 const IN_LIST = /^CHECK \(\(\(?"?([^"()\s]+)"?\)?(?:::[a-z ]+)? = ANY \(\(?ARRAY\[(.+)\]\)?(?:::[a-z ]+\[\])?\)\)\)$/
-const LITERAL = /'((?:[^']|'')*)'::/g
+const LITERAL = /'((?:[^']|'')*)'::([a-z ]+)/g
+const QUOTED_ITEM = /^\(?'((?:[^']|'')*)'::([a-z ]+)\)?$/
 const LIST_NUMBER = /^\(?(-?[0-9]+(?:\.[0-9]+)?)\)?(?:::[a-z ]+)?$/
 /** A string literal of a printed definition, or a number outside one that no name or other number touches. */
-const DEFINITION_LITERAL = /'((?:[^']|'')*)'|(?<![\w$."])(-?[0-9]+(?:\.[0-9]+)?)(?![\w$.])/g
+const DEFINITION_LITERAL = /'((?:[^']|'')*)'(?:::([a-z ]+))?|(?<![\w$."])(-?[0-9]+(?:\.[0-9]+)?)(?![\w$.])/g
+/** Postgres prints a negative number constant quoted and cast, `'-5'::integer`. */
+const NUMBER_CAST = /^(?:smallint|integer|bigint|numeric|real|double precision)$/
+const NUMBER_TEXT = /^-?[0-9]+(?:\.[0-9]+)?$/
+
+/** A quoted constant of a printed definition: a number where it is cast to a number type, else its text. */
+function quotedValue(quoted: string, cast: string | undefined): CheckLiteral {
+	const text = quoted.replaceAll("''", "'")
+	return cast !== undefined && NUMBER_CAST.test(cast.trim()) && NUMBER_TEXT.test(text) ? Number(text) : text
+}
 
 /** The values of a one-column `IN` list, or none for any other CHECK. */
 function listedValues(definition: string, columns: readonly string[]): CheckLiteral[] {
 	const listed = IN_LIST.exec(definition)
 	if (listed === null || columns.length !== 1 || listed[1] !== columns[0]) return []
 	const items = listed[2] ?? ''
-	const texts = [...items.matchAll(LITERAL)].map((match) => (match[1] ?? '').replaceAll("''", "'"))
-	if (texts.length > 0) return texts
-	const numbers = items.split(', ').map((item) => LIST_NUMBER.exec(item)?.[1])
-	return numbers.every((number) => number !== undefined) ? numbers.map(Number) : []
+	const quoted = [...items.matchAll(LITERAL)]
+	// A text list is read by its literals, which may hold the separator; a number list item by item.
+	if (quoted.some((match) => !NUMBER_CAST.test((match[2] ?? '').trim()))) return quoted.map((match) => quotedValue(match[1] ?? '', match[2]))
+	const numbers = items.split(', ').map((item) => {
+		const constant = QUOTED_ITEM.exec(item)
+		if (constant !== null) return quotedValue(constant[1] ?? '', constant[2])
+		const number = LIST_NUMBER.exec(item)?.[1]
+		return number === undefined ? undefined : Number(number)
+	})
+	return numbers.every((number) => typeof number === 'number') ? numbers.filter((number) => typeof number === 'number') : []
 }
 
 /** Every text and number literal of a CHECK as Postgres prints it. */
 function definitionLiterals(definition: string): CheckLiteral[] {
-	return [...definition.matchAll(DEFINITION_LITERAL)].map((match) => match[1] === undefined ? Number(match[2]) : match[1].replaceAll("''", "'"))
+	return [...definition.matchAll(DEFINITION_LITERAL)].map((match) => match[1] === undefined ? Number(match[3]) : quotedValue(match[1], match[2]))
 }
 
 /** A CHECK or foreign key violation of a seeded row, as the generator limit it is; `undefined` for any other failure. */

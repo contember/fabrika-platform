@@ -1180,6 +1180,20 @@ export function testSeeding(backend: SeedingBackend): TestSeeding {
 		return worldRow(row, [], holds)
 	}
 
+	/** `work`, after which a failure removes the rows it recorded in `inserted` before it rethrows. */
+	async function removedOnFailure<T>(inserted: readonly InsertedRow[], what: string, work: () => Promise<T>): Promise<T> {
+		try {
+			return await work()
+		} catch (error) {
+			try {
+				await backend.remove(inserted)
+			} catch (cleanup) {
+				throw new AggregateError([error, cleanup], `the isolation fixture could not ${what}, nor remove what it had seeded`)
+			}
+			throw error
+		}
+	}
+
 	/**
 	 * A seeded row's values of the policy's update columns, which its CHECKs accepted: as written, as stored where the
 	 * database filled the column (a default), or a sample where the stored value is no plain value.
@@ -1286,7 +1300,7 @@ export function testSeeding(backend: SeedingBackend): TestSeeding {
 			const key = scopeValue(table, scope.key, scope.mode === 'dimension' ? scope.dimension : table, 'under')
 			const markers: string[] = []
 			const inserted: InsertedRow[] = []
-			await insert(models, table, placement(model, values, key), markers, 0, inserted)
+			await removedOnFailure(inserted, 'seed the row', () => insert(models, table, placement(model, values, key), markers, 0, inserted))
 			inserted.push({ table, match: new Map([[scope.key, key]]) })
 			return { key, markers, remove: () => backend.remove(inserted) }
 		},
@@ -1301,9 +1315,11 @@ export function testSeeding(backend: SeedingBackend): TestSeeding {
 			const values = new Map((beside?.chain ?? []).map((link) => [link.type, link.value]))
 			const ungrouped = new Set(model.chain.filter((link) => !values.has(link.dimension)).map((link) => link.column))
 			const placed: InsertedRow[] = []
-			await placeContainers(models, model, values, 'probe', 0, placed)
 			const key = scopeValue(table, scope.key, scope.mode === 'dimension' ? scope.dimension : table, 'probe')
-			const { row } = await insert(models, table, placement(model, values, key), [], 0, undefined, ungrouped)
+			const { row } = await removedOnFailure(placed, 'insert a probe row', async () => {
+				await placeContainers(models, model, values, 'probe', 0, placed)
+				return insert(models, table, placement(model, values, key), [], 0, undefined, ungrouped)
+			})
 			await backend.remove([{ table, match: new Map([[scope.key, key]]) }, ...placed])
 			const sample: Record<string, SampleValue> = {}
 			for (const column of columnsOf(table)) {

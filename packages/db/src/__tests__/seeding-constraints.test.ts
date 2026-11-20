@@ -96,6 +96,8 @@ CREATE TABLE plans (
 	once_on TEXT,
 	CHECK ((cadence = 'once') = (once_on IS NOT NULL))
 );
+CREATE TABLE debts (id TEXT PRIMARY KEY, delta INTEGER NOT NULL CHECK (delta <= -5), level INTEGER NOT NULL CHECK (level IN (-1, 0, 1)));
+CREATE TABLE margins (id TEXT PRIMARY KEY, spare INTEGER NOT NULL CHECK (spare - 7 > 0));
 CREATE TABLE items (id TEXT PRIMARY KEY, name TEXT NOT NULL);
 CREATE TABLE variants (
 	id TEXT PRIMARY KEY,
@@ -134,6 +136,8 @@ interface DB {
 	moves: { id: string; purpose: string; direction: string }
 	returns: { id: string; purpose: string; direction: string }
 	plans: { id: string; cadence: string; once_on: string | null }
+	debts: { id: string; delta: number; level: number }
+	margins: { id: string; spare: number }
 	items: { id: string; name: string }
 	variants: { id: string; item_id: string; base_item_id: string }
 	days: { id: string; day: string }
@@ -189,6 +193,8 @@ const columns: TypedColumnList<DB> = {
 		foreignKeys: [{ columns: ['purpose', 'direction'], table: 'purpose_directions', references: ['purpose', 'direction'] }],
 	},
 	plans: { columns: ['id', 'cadence', 'once_on'], foreignKeys: [] },
+	debts: { columns: ['id', 'delta', 'level'], foreignKeys: [] },
+	margins: { columns: ['id', 'spare'], foreignKeys: [] },
 	items: { columns: ['id', 'name'], foreignKeys: [] },
 	variants: {
 		columns: ['id', 'item_id', 'base_item_id'],
@@ -238,6 +244,8 @@ const tables = defineTables(vocabulary, columns)({
 	purpose_directions: { scope: { reference: 'the directions of each purpose' }, actions: { read: 'rows.read' } },
 	moves: app('a move for a purpose in one of its directions'),
 	returns: app('a return for a purpose, inbound unless it says otherwise'),
+	debts: app('a negative delta'),
+	margins: app('a spare above seven'),
 	items: app('items'),
 	variants: app('a variant of another item'),
 	days: app('one row a day'),
@@ -291,6 +299,13 @@ for (const [dialect, database] of [['SQLite', sqlite], ['Postgres', postgres]] a
 			expect(Number(season['year'])).toBeGreaterThanOrEqual(2000)
 			expect(Number(season['year'])).toBeLessThanOrEqual(2100)
 			expect(Number(season['week'])).toBeGreaterThanOrEqual(3)
+		})
+
+		test('a negative bound, a list with negative numbers and a subtraction take values they admit', async () => {
+			const debt = await row('debts')
+			expect(Number(debt['delta'])).toBeLessThanOrEqual(-5)
+			expect([-1, 0, 1]).toContain(Number(debt['level']))
+			expect(Number((await row('margins'))['spare'])).toBeGreaterThan(7)
 		})
 
 		test('a value that requires another column fills both consistently', async () => {
