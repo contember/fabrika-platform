@@ -41,7 +41,7 @@ export const TERMINAL_RELEASE_PATH = '/auth/terminals/release'
 
 /**
  * `GET` renders the enrolment form to a login that may enrol; `POST` enrols. A browser without a login is sent to sign
- * in and back here. Every refusal names no application, so it speaks the installation's language.
+ * in and back here. The form and every refusal name no application, so they speak the reader's language (`readerLocale`).
  */
 export async function handleTerminalEnrolment(request: Request, services: Services, requestId: string): Promise<Response> {
 	if (request.method === 'POST') {
@@ -53,9 +53,14 @@ export async function handleTerminalEnrolment(request: Request, services: Servic
 		return new Response(null, { status: 302, headers: redirectHeaders(`/auth/login?redirect=${encodeURIComponent(back)}`) })
 	}
 	if (!await mayEnrol(services, login)) {
-		return authFailurePage(INSTALLATION_PRESENTATION, { kind: 'terminal_enrolment_not_allowed' }, 403)
+		return authFailurePage(enrolmentPresentation(request), { kind: 'terminal_enrolment_not_allowed' }, 403)
 	}
 	return terminalEnrolPage({ brand: await installationBrand(services), locale: readerLocale(request) })
+}
+
+/** A refusal of the enrolment: IAM's own words, without the logo, in the reader's language. */
+function enrolmentPresentation(request: Request): AppPresentation {
+	return { ...INSTALLATION_PRESENTATION, locale: readerLocale(request) }
 }
 
 /**
@@ -65,15 +70,15 @@ export async function handleTerminalEnrolment(request: Request, services: Servic
  */
 async function enrol(request: Request, services: Services, requestId: string): Promise<Response> {
 	if (!sameOrigin(request, services.config)) {
-		return authFailurePage(INSTALLATION_PRESENTATION, { kind: 'cross_origin' }, 403)
+		return authFailurePage(enrolmentPresentation(request), { kind: 'cross_origin' }, 403)
 	}
 	const login = await currentLogin(request, services)
 	if (login === null || !await mayEnrol(services, login)) {
-		return authFailurePage(INSTALLATION_PRESENTATION, { kind: 'terminal_enrolment_not_allowed' }, 403)
+		return authFailurePage(enrolmentPresentation(request), { kind: 'terminal_enrolment_not_allowed' }, 403)
 	}
 	const form = await readForm(request)
 	if (form === null) {
-		return authFailurePage(INSTALLATION_PRESENTATION, { kind: 'malformed_form' }, 400)
+		return authFailurePage(enrolmentPresentation(request), { kind: 'malformed_form' }, 400)
 	}
 	const label = terminalLabel(stringValue(form.get('label')) ?? '')
 	if (label === null) {
@@ -115,7 +120,7 @@ async function enrol(request: Request, services: Services, requestId: string): P
 		])
 	} catch (err) {
 		logError(`terminal enrolment could not be recorded for request '${requestId}'`, err)
-		return authFailurePage(INSTALLATION_PRESENTATION, { kind: 'terminal_enrolment_unavailable' }, 503)
+		return authFailurePage(enrolmentPresentation(request), { kind: 'terminal_enrolment_unavailable' }, 503)
 	}
 
 	const response = terminalEnrolledPage(label, await installationBrand(services), readerLocale(request))

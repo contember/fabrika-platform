@@ -319,6 +319,11 @@ describe("the browser's language", () => {
 		// A value IAM does not speak names nothing.
 		expect(await lang(await n.send(new Request(`${ORIGIN}/auth/forgot-password?app=notes%40prod&locale=de`)))).toBe('cs')
 		expect(await lang(await n.send(new Request(`${ORIGIN}/auth/logout`, { headers: UKRAINIAN_BROWSER })))).toBe('uk')
+		// Terminal enrolment names no application either: its refusal follows the browser too.
+		const session = `${SESSION_COOKIE}=${await n.h.signSession(n.owner.id, { authenticationMethod: 'password', idpSub: null })}`
+		const refused = await n.send(new Request(`${ORIGIN}/auth/terminals/enroll`, { headers: { ...UKRAINIAN_BROWSER, Cookie: session } }))
+		expect(refused.status).toBe(403)
+		expect(await lang(refused)).toBe('uk')
 	})
 })
 
