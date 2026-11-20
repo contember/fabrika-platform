@@ -41,11 +41,10 @@ every application.**
    not depend on it.
 5. **The sign-in an application's proxy starts carries the application's word for the browser.** An application may
    write `__Host-fabrika_locale` on its own host (the name and `LOCALE_PARAM` are `@fabrika/auth-core`'s; an SPA calls
-   `rememberSignInLocale` of `@fabrika/app/client`); the proxy
-   adds its value, when it is a language IAM speaks, to the login URL as `?locale=`. The proxy decides exactly as
-   without it: the status, the reason, the return URL and the handoff are unchanged, and the cookie is not a
-   credential (it does not start with `__Host-px_`, so it reaches the application). One rule in `@fabrika/proxy-core`
-   serves the Cloudflare proxy Worker and the Zerops proxy alike.
+   `rememberSignInLocale` of `@fabrika/app/client`); the proxy adds its value, when it is a language IAM speaks, to
+   the login URL as `?locale=`. The proxy decides exactly as without it: the status, the reason, the return URL and
+   the handoff are unchanged, and the cookie is not a credential (it does not start with `__Host-px_`, so it reaches
+   the application). One rule in `@fabrika/proxy-core` serves the Cloudflare proxy Worker and the Zerops proxy alike.
 6. **An invitation's "sign in first" remembers the person's language.** It sends the browser to the application's
    address, whose proxy starts a sign-in that IAM's `?locale=` cannot reach, so the answer sets
    `__Host-fabrika_locale` on IAM's host to the invitation's language (else the link's). The sign-in that follows
