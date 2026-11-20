@@ -985,6 +985,7 @@ function bootOnce(app: ContractImplementation, options: BootOptions, binding: Bi
 						facilities: siteFacilities(facilitiesOf(artifact, row), bound.declaration),
 						connect: siteConnect(connect.get(id), bound.declaration),
 						site: servedSite(procedure.type, bound),
+						...(mount.kind === 'rpc' ? { group: true } : {}),
 						...egressOf(bound),
 						...bindsOf(id, bound.declaration, artifact, problems),
 						...admissionOf(id, artifact, options, problems),

@@ -123,7 +123,7 @@ import {
 } from './membership'
 import { multipartBoundary, MultipartError, multipartParts, type MultipartReader } from './multipart'
 import { paramsObject, urlParams } from './params'
-import { pageCallerOf, presentedBy, type Principal } from './principal'
+import { globalHolds, pageCallerOf, presentedBy, type Principal } from './principal'
 import { project, ProjectionRefusedError } from './project'
 import { bucketsOf, DEFAULT_ADMISSION, type InFlightShare, type ProcedureAdmission, requestClient } from './public'
 import { type TerminalIdentification, terminalIdentification } from './terminals'
@@ -255,6 +255,8 @@ export type ServedEndpoint =
 		readonly facilities: Facilities
 		/** An export procedure: its request may only read. */
 		readonly readOnly?: true
+		/** A group procedure of an RPC mount, whose `ctx.holds` reports its caller's global grants; a link or export procedure has none. */
+		readonly group?: true
 		/** `ctx.connect`, for an endpoint an import's `usedBy` names. */
 		readonly connect?: readonly ImportWire[]
 		/** A staged-kit site, which gets `ctx.db`; a handler `implement` bound has none. */
@@ -735,6 +737,7 @@ export class ContractRuntime {
 							signal,
 							client: requestClient(request, this.#parts.clientVouched),
 							url: this.#parts.url,
+							...(served.group === true ? { holds: globalHolds(caller.perms, this.#parts.actions) } : {}),
 							...access.context,
 							...this.#facilities(served.facilities, served.row, membership, access.context['target'], {
 								credential: caller.token,

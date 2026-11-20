@@ -374,6 +374,15 @@ type ConnectContext<K extends KitTypes, Cn extends readonly string[]> = [Cn] ext
 type TerminalsContext<K extends KitTypes> = K['terminal'] extends true ? { readonly terminals: TerminalIdentification }
 	: { readonly terminals: Unavailable<"the application declares no terminal: terminal: { identify: '/identify' } in the vocabulary"> }
 
+/**
+ * `ctx.holds('<action>')`: whether the caller holds an action of the vocabulary as a global grant, read from its verified
+ * token. It grants no reach (`ctx.db` stays the access form's) and asks IAM nothing: an `if` on it is the handler's own
+ * authorization, such as a flag the output carries.
+ */
+export interface HoldsContext<K extends KitTypes> {
+	holds(action: K['action']): boolean
+}
+
 /** What the handler of an RPC endpoint receives, for mount callers `Caller`, kind `Kind` and its declaration. */
 export type EndpointContext<
 	K extends KitTypes,
@@ -383,6 +392,7 @@ export type EndpointContext<
 	D extends Declared<SqlMode, unknown, readonly string[], string>,
 > =
 	& RequestContext<PrincipalOf<Caller>>
+	& HoldsContext<K>
 	& CapabilityContext<Acc>
 	& MembersContext<K, Acc>
 	& LinksContext<Acc, Of<D, 'issues'>>
