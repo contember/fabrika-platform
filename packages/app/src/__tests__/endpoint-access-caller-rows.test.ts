@@ -59,6 +59,15 @@ const shifts = app.group({ callers: ['human'] }, (r) => ({
 			return { nickname: card.nickname }
 		}),
 }))
+// The same lookup for a script: a global case of each kind asks as the kit's one global principal.
+const scripts = app.group({ callers: ['machine'] }, (r) => ({
+	mine: r.query({ output: Card, access: { action: 'shifts.read', app: true } })
+		.handle(async ({ ctx }) => {
+			const card = (await ctx.db.app.people.list({ where: [['principal_id', '=', ctx.principal.id]], limit: 1 })).items[0]
+			if (card === undefined) throw new ForbiddenError('No card is bound to this account.')
+			return { nickname: card.nickname }
+		}),
+}))
 const Done = z.strictObject({ count: z.number() })
 const pages = app.group({ callers: ['human'] }, (r) => ({
 	// A page and its first version, by the caller's card.
@@ -81,13 +90,13 @@ const pages = app.group({ callers: ['human'] }, (r) => ({
 			return { count: listed.length }
 		}),
 }))
-const contract = app.contract((c) => ({ api: c.rpc('/api', { shifts, pages }) }))
+const contract = app.contract((c) => ({ api: c.rpc('/api', { shifts, pages }), bots: c.rpc('/bots', { scripts }) }))
 
 const migrations = mkdtempSync(join(tmpdir(), 'caller-rows-'))
 writeFileSync(
 	join(migrations, '20261120120000_init.sql'),
 	[
-		'CREATE TABLE people (id TEXT PRIMARY KEY NOT NULL, nickname TEXT NOT NULL, principal_id TEXT UNIQUE);',
+		'CREATE TABLE people (id TEXT PRIMARY KEY NOT NULL, nickname TEXT NOT NULL UNIQUE, principal_id TEXT UNIQUE);',
 		'CREATE TABLE pages (id TEXT PRIMARY KEY NOT NULL, title TEXT NOT NULL);',
 		'CREATE TABLE page_versions (id TEXT PRIMARY KEY NOT NULL, page_id TEXT NOT NULL REFERENCES pages (id), author_id TEXT NOT NULL REFERENCES people (id));',
 		'',
@@ -100,7 +109,6 @@ afterAll(async () => {
 })
 
 describe("the rows a global case's caller holds", () => {
-	// A new kit's first caller has the id the last kit's first caller had, so a record left behind would answer it.
 	test("with them, each global case's caller finds its own record; without them, the handler refuses it", async () => {
 		const seeded = endpointAccessKit(serve(contract, { database: scoped(tables) }), tables, database, {
 			callerRows: { people: { principal_id: GENERATED_CALLER } },
@@ -117,5 +125,13 @@ describe("the rows a global case's caller holds", () => {
 		})
 		expect(await kit.global('api.pages.create', {})).toEqual({ answered: true })
 		expect(await kit.global('api.pages.overview', {})).toEqual({ answered: true })
+	})
+
+	test('a person and a script share the record, so a value it holds under a unique index is seeded once', async () => {
+		const kit = endpointAccessKit(serve(contract, { database: scoped(tables) }), tables, database, {
+			callerRows: { people: { principal_id: GENERATED_CALLER, nickname: 'the operator' } },
+		})
+		expect(await kit.global('api.shifts.mine', {})).toEqual({ answered: true })
+		expect(await kit.global('bots.scripts.mine', {})).toEqual({ answered: true })
 	})
 })
