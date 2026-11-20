@@ -407,6 +407,20 @@ describe('every page a person invited in their language reaches', () => {
 		const unhinted = await n.send(post(path.replace('&locale=uk', ''), { token }))
 		expect(unhinted.status).toBe(401)
 		expect(cookieOf(unhinted, LOCALE_COOKIE)).toBe(`${LOCALE_COOKIE}=uk`)
+		expect(await lang(unhinted)).toBe('uk')
+	})
+
+	test('without the application\'s address its "sign in first" sends IAM\'s own sign-in the invitation\'s language', async () => {
+		const n = await notes()
+		await n.f.repositories.handoff.setReturnOrigins(APP, [])
+		await invitee(n)
+		const { path, token } = await invited(n)
+		const signInFirst = await n.send(post(path.replace('&locale=uk', ''), { token }))
+		expect(signInFirst.status).toBe(401)
+		expect(cookieOf(signInFirst, LOCALE_COOKIE)).toBeNull()
+		const html = await signInFirst.text()
+		expect(html).toContain('<html lang="uk">')
+		expect(html).toContain(`href="${ORIGIN}/auth/login?locale=uk&amp;redirect=`)
 	})
 
 	test('a "sign in first" of an invitation that names no language remembers none', async () => {

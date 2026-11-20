@@ -1,7 +1,14 @@
-import type { Locale } from '@fabrika/auth-core'
 import type { InstallationBrand } from '@fabrika/proxy-core/brand'
 import { z } from 'zod'
-import { actionLandingOrigin, type AppPresentation, appQuery, landingUrl, localeQuery, presentationFor } from '../app-presentation'
+import {
+	actionLandingOrigin,
+	type AppPresentation,
+	appQuery,
+	landingUrl,
+	localeQuery,
+	presentationFor,
+	withPersonLocale,
+} from '../app-presentation'
 import { type InvitationRow, principalStatus } from '../db'
 import { type RequestContext } from '../env'
 import { acceptCreatingPrincipal, acceptInvitation, INVITATION_ACCEPT_PATH, invitationOffer } from '../membership'
@@ -89,7 +96,8 @@ export async function handleInvitation(request: Request, services: Services, ctx
 				status: 403,
 			})
 		}
-		return signInFirst(services, linked, parseLocale(offer.invitation.locale) ?? linked.personLocale)
+		// The invitation's own language beats the link's, as on every other page of this flow.
+		return signInFirst(services, withPersonLocale(linked, parseLocale(offer.invitation.locale)))
 	}
 	const principal = await services.repositories.principals.getPrincipalById(session.principal_id)
 	if (principal === null || principalStatus(principal) === 'disabled') {
@@ -182,7 +190,7 @@ function creationRefused(
 		case 'not_eligible':
 			return invitationOutcomePage({ presentation, title: (t) => t.unavailableTitle, text: (t) => t.roleNotEligible, status: 403 })
 		case 'sign_in':
-			return signInFirst(services, presentation, presentation.personLocale)
+			return signInFirst(services, presentation)
 	}
 }
 
@@ -190,9 +198,11 @@ function creationRefused(
  * The page that asks the person to sign in with the invited address and open the link again. The application's own
  * address signs the browser in through its handoff; without one, IAM's own sign-in does. The handoff's sign-in page is
  * built from the proxy's bounce and carries no `?locale=` of IAM's, so the person's language, where IAM knows it, is
- * remembered for this browser (`rememberLocaleCookie`) and that page speaks it too. It picks words only.
+ * remembered for this browser (`rememberLocaleCookie`) and that page speaks it too. IAM's own sign-in carries it as
+ * `?locale=`. It picks words only.
  */
-function signInFirst(services: Services, presentation: AppPresentation, locale: Locale | null): Response {
+function signInFirst(services: Services, presentation: AppPresentation): Response {
+	const locale = presentation.personLocale
 	const landing = landingUrl(presentation)
 	const response = invitationOutcomePage({
 		presentation,
