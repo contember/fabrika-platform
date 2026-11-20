@@ -2,10 +2,10 @@
 // catalogs at run time too, so a key that exists but renders nothing, or a locale `LOCALES` names that has no catalog,
 // fails here, and every branch of every function (each failure, each password problem, each acceptance) is rendered.
 
-import { LOCALES } from '@fabrika/auth-core'
+import { type InvitationAcceptance, LOCALES } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import type { AuthFailure } from '../auth/failure'
-import { type Catalog, catalogFor, type InvitationAcceptance } from '../catalog'
+import { type Catalog, catalogFor } from '../catalog'
 import type { PasswordProblem } from '../password-policy'
 
 const FAILURES: readonly AuthFailure[] = [
