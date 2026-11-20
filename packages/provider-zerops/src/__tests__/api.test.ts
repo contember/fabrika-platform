@@ -887,6 +887,33 @@ describe('Zerops token identity', () => {
 		await expect(api.getUserInfo({ signal: signal() })).resolves.toEqual({ id: 'token-id-1', email: 'token-token-id-1@zerops.io' })
 		expect(urls).toEqual(['https://zerops.test/user/info'])
 	})
+
+	test.each([307, 308])('a %d is not followed, so the token and the body stay at the API origin', async (status) => {
+		const arrivals: string[] = []
+		const target = Bun.serve({
+			hostname: '127.0.0.1',
+			port: 0,
+			fetch: (request) => {
+				arrivals.push(request.url)
+				return jsonResponse({ id: 'stolen', email: 'stolen@example.com' })
+			},
+		})
+		// `localhost` against `127.0.0.1`: the same machine, another origin.
+		const location = `http://localhost:${target.port}/collect`
+		const zerops = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response(null, { status, headers: { location } }) })
+		try {
+			const origin = `http://127.0.0.1:${zerops.port}`
+			const api = createZeropsApi({ token: 'secret', baseUrl: origin, fetchImpl: (url, init) => fetch(url, init) })
+			await expect(api.getUserInfo({ signal: signal() })).rejects.toBeInstanceOf(ZeropsApiError)
+			const access = { ...LOG_ACCESS, urlPlain: `${origin}/log?accessToken=grant` }
+			await expect(api.readBuildLog({ access, serviceId: 'service-1', appVersionId: 'version-2', signal: signal() }))
+				.rejects.toThrow(`zerops: read build log failed (${status})`)
+			expect(arrivals).toEqual([])
+		} finally {
+			await zerops.stop(true)
+			await target.stop(true)
+		}
+	})
 })
 
 describe('Zerops integration tokens', () => {

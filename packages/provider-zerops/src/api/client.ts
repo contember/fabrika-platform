@@ -159,6 +159,8 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 				headers,
 				body: init.body === undefined ? undefined : JSON.stringify(init.body),
 				signal: init.signal,
+				// The bearer and the body must never reach a redirect target; a 3xx is not ok below.
+				redirect: 'manual',
 			})
 		} catch (error) {
 			if (init.signal.aborted || isAbortError(error)) throw abortError()
@@ -528,7 +530,7 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 			const readWindow = async (terms: string): Promise<{ lines: ZeropsLogLine[]; error: unknown }> => {
 				try {
 					const url = `${access.urlPlain}${separator}${terms}&limit=${limit ?? 200}`
-					const response = await doFetch(url, { headers: { authorization: `Bearer ${access.accessToken}` }, signal })
+					const response = await doFetch(url, { headers: { authorization: `Bearer ${access.accessToken}` }, signal, redirect: 'manual' })
 					if (!response.ok) {
 						throw new Error(`zerops: read build log failed (${response.status})`)
 					}
