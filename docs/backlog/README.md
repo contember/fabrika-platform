@@ -43,21 +43,19 @@ rest of custom domains, a client address on a dedicated IPv4, a release and reco
 - [94](94-an-older-iam-schema-can-land-after-a-newer-one.md) — IAM holds one vocabulary per app but runs are serialized per environment, so two environments (or a run recovered late) can leave the older schema in IAM.
 - [95](95-close-release-recovery-without-frozen-context.md) — Decide durable release intent, exact artifact evidence and expiry semantics before repairing runs whose original release context is absent.
 - [96](96-operations-sees-only-failed-job-runs.md) — Operations ingest takes error events only, so a successful job run, its duration and its start never reach the console; job reports ride the public ingest key.
-- [97](97-the-generated-tests-have-no-move-case.md) — The generated tests have no `move` case, though `capabilities` now hands an endpoint the two `Ref`s a move needs.
 - [98](98-application-migrations-have-no-destructive-change-rules.md) — The checker accepts a dropped column, a rename or a `GRANT` in an application migration; the expand-only rules are not built (the runner already refuses the `GRANT`).
 - [99](99-no-check-builds-the-runner-image.md) — No CI job builds or smoke-tests the runner image, and its `bun install` runs without a lockfile.
 - [100](100-a-principal-in-many-scopes-gets-no-token.md) — One permission entry per action and scope meets the 24 KiB application token bound at about 150 entries; a compact claim shape and the 1000-value `Within` cap remain.
 - [103](103-runs-keeps-an-unused-pending-access-column.md) — Nothing reads or writes `runs.pending_access_json` since contractless applications are refused; a later migration drops it.
 - [116](116-verify-the-paved-road-zerops-facts-on-a-real-account.md) — New roles on an HA service's direct port and the unmeasured half of ClamAV (build `freshclam`, a scan run, peak memory) need one live sitting.
 - [117](117-an-application-test-cannot-inject-a-database-fault.md) — The checker refuses Bun's SQL and `process.env` in tests too; only the job clock can fail an attempt.
-- [122](122-a-generated-case-cannot-seed-a-child-rows-state.md) — `rows` seeds no child row state; the own case expects exactly 200.
+- [122](122-a-generated-case-cannot-seed-a-child-rows-state.md) — The leak sweep cannot seed a child row's state, and a mutation's 409 passes without a hint.
 - [135](135-deleting-a-zerops-secret-named-like-a-descriptor-variable-is-forbidden.md) — A Zerops secret named like a `run.envVariables` entry can fail to delete with `userDataDeleteForbidden`.
 - [154](154-an-endpoint-reads-its-own-target-only-under-an-action-its-table-names.md) — The skill's "reads its own target, whatever its action" holds only for actions the table names.
 - [155](155-creating-a-top-level-value-makes-the-creator-its-member.md) — `creates` makes the creator a member; staff cannot create a value without joining it.
 - [159](159-an-application-directory-page-and-an-expired-role-regrant.md) — A 100-person directory page exceeds D1's bind limit; an expired global role cannot be regranted.
 - [161](161-app-dev-review-findings.md) — The kit's share links never expire, and an app dev seed error can print a record key.
 - [160](160-an-xlsx-text-cell-loses-carriage-returns.md) — An XLSX text cell loses its CR.
-- [162](162-the-generated-tests-have-no-column-write-case.md) — A column's own write action is enforced, but no generated policy test proves it.
 - [163](163-the-installation-hosts-send-no-hsts.md) — Only an `https` application host gets HSTS; IAM's and Control's hosts get none.
 - [164](164-a-job-without-handle-prints-the-builders-type.md) — A job, webhook, link or export procedure without `.handle` prints the builder's type, not a one-line fix.
 - [165](165-app-dev-has-no-stand-in-for-an-import.md) — `fabrika app dev` stands in for a form's challenge and an outside HTTP provider, not for a `connect` import.
@@ -108,7 +106,7 @@ rest of custom domains, a client address on a dedicated IPv4, a release and reco
 - [223](223-terminal-authority-outlives-the-terminal-in-a-membership-change.md): A membership change made on a terminal rests on the terminal's grants and outlives sign-out, release or revoke.
 - [230](230-a-zerops-platform-deploy-rebuilds-every-service.md): A Zerops platform deploy rebuilds all four services every time, and a bring-up compiles Caddy for 5 min.
 - [231](231-operator-traps-of-an-mcp-authoring-bring-up.md): MCP authoring bring-up traps: `put` loses bucket provenance, no `authoring` flag, a bare `forbidden`, `admin` offered for a contract app.
-- [232](232-the-platform-build-runs-no-postgres-backed-test.md): The Zerops build skips every Postgres-backed application test; a throwaway Postgres in the build container would run them.
+- [232](232-the-platform-build-runs-no-postgres-backed-test.md): No Postgres-backed application test runs on the platform, the leak sweep included; a throwaway Postgres in the build container would run them.
 - [233](233-platform-services-share-postgres-server-sessions.md): On Zerops one Postgres server session serves IAM, Operations and Control in turn; the services connect through pgBouncer on `portTls`; measure its mode, check what leaks between services, and decide whether to connect directly.
 - [224](224-terminal-follow-ups.md): Smaller gaps of terminals: sign-out without `Sec-Fetch-Site`, re-enrolment, sign-out of a personal login.
 - [225](225-password-minimum-follow-ups.md): Smaller gaps of the installation's minimum password length: audit, an upper cap, the console page.
@@ -144,9 +142,9 @@ rest of custom domains, a client address on a dedicated IPv4, a release and reco
 - [260](260-an-operator-cannot-remove-an-authors-sandbox.md): An operator cannot delete a dev environment or app while an author keeps a sandbox; the 409 names an owner-only tool.
 - [261](261-a-dev-schema-reconcile-revokes-keys-other-sandboxes-hold.md): IAM's schema reconcile revokes keys that other sandboxes of a dev environment still get handed as fresh.
 - [262](262-report-a-replaced-archived-sandbox-and-the-box-operator-steps.md): `ensure` replaces an `ARCHIVED` sandbox without reporting the lost database, and the Box release's operator steps (one reload, a base rebuild) are undocumented.
-- [263](263-rows-fixture-review-findings.md): An `in` report's leak case cannot seed a named row whose table allows one per target; the checker misses a field named under two capability keys.
-- [264](264-a-case-writes-into-a-stored-scope-row.md): A mutation's generated case writes into a scope row a migration wrote (a known enum value), and nothing restores it.
-- [265](265-known-scope-values-collide-in-a-container-or-a-shared-from-field.md): Known enum values stored in one container, or a `from` field two capabilities share, give both callers one grant.
+- [263](263-rows-fixture-review-findings.md): The leak sweep cannot seed a named row of an `in` endpoint whose table allows one row per target.
+- [264](264-a-case-writes-into-a-stored-scope-row.md): A leak sweep case writes into a scope row a migration wrote, and nothing restores it.
+- [265](265-known-scope-values-collide-in-a-container-or-a-shared-from-field.md): The leak sweep reports a false leak when both known scope values lie in one container.
 - [266](266-fleet-wide-framework-upgrades.md): For each application below the platform's framework release, an upgrade workspace, `run_checks` in a dev sandbox and a pull request.
 - [267](267-every-application-as-an-mcp-server.md): The proxy serves `/mcp` on an application host with tools from the contract's opted-in procedures; an ADR on application data reaching external models comes first.
 - [268](268-opice-journeys-as-a-stage-gate-and-production-checks.md): opice browser journeys gate a stage run and run against production as a health check; the browser runtime per provider is undecided.
@@ -170,6 +168,6 @@ rest of custom domains, a client address on a dedicated IPv4, a release and reco
 - [286](286-access-view-statements-without-a-test.md): Aggregates, queue claims, deletes, moves and unowned-node inserts through an access view have no test.
 - [287](287-an-attachments-row-schema-is-not-compared-with-its-approved-columns.md): An attachment's cells are validated by the evaluated row schema, not the approved columns.
 - [288](288-reader-input-discovery-parses-every-held-module-each-round.md): Control's import discovery parses every held module in each round, so a deep import chain can exceed the Worker's CPU limit.
-- [289](289-caller-rows-reach-only-the-global-case.md): The endpoint access kit seeds the caller's own record only for a global case, cannot key it by the principal id, and issues caller ids that are not UUIDs.
+- [289](289-caller-rows-reach-only-the-global-case.md): The leak sweep's callers carry no caller rows and no principal-shaped id, so a handler that needs a caller's record answers 403.
 - [290](290-verify-the-brevo-email-adapter-on-a-live-account.md): The Brevo email adapter is verified only against a stubbed `fetch`; its idempotency key, text-only body, unsubscribe headers and refusals wait for a live account.
 - [10](10-app-scope-secrets-on-zerops.md) — Control refuses an `app`-scoped secret on Zerops today; record that as the decision, or replicate per service.

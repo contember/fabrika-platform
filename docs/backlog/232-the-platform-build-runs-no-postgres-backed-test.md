@@ -6,9 +6,9 @@ blocked-by: []
 
 # 232 — The platform build runs no Postgres-backed application test
 
-**Summary.** The Zerops build has no database, so every test file that opens `testDatabase` skips. Only the generated
-isolation tests run on the platform, at container start. Recommended: a throwaway Postgres inside the build container,
-with a skip turned into a failure. Effort M; it needs live Zerops facts first.
+**Summary.** The Zerops build has no database, so every test file that opens `testDatabase` skips, the opt-in leak
+sweep included. No Postgres-backed test runs on the platform at all. Recommended: a throwaway Postgres inside the build
+container, with a skip turned into a failure. Effort M; it needs live Zerops facts first.
 
 ## Problem
 
@@ -18,21 +18,22 @@ with a skip turned into a failure. Effort M; it needs live Zerops facts first.
 Postgres-backed tests` and registers no test, so the step passes. An end-to-end stage deploy of the Notes example
 skipped four such files.
 
-The deploy's init commands run `fabrika db test-isolation` against a throwaway schema of the application's database.
-That command runs only the generated files (policy isolation and endpoint access), whose bytes the checker compares
-with what the scaffold writes. The author's own Postgres-backed tests (for example `examples/crm`'s `overdue.test.ts`
-and `deals.test.ts`) run nowhere on the platform.
+The deploy's init commands migrate and check the schema (and refresh ClamAV's signatures for a scanning application);
+no test runs there. The framework generates no test files any more, and
+`fabrika db test-isolation` runs nothing. So the author's own Postgres-backed tests (for example `examples/crm`'s
+`overdue.test.ts` and `deals.test.ts`) and its leak sweep (`examples/crm/src/__tests__/leak-sweep.test.ts`) run
+nowhere on the platform.
 
 The build's tests command now says so: it counts the skip lines and prints
 `fabrika-tests: N Postgres-backed test files did not run, because the build has no database: <labels>`, which the run
-log relays. The count includes the generated files, which run again at container start.
+log relays.
 
 ## Options
 
 | Option                                                                        | Runs authored code against                                | Gates the deploy        | Cost                                                                         | Verdict                  |
 | ----------------------------------------------------------------------------- | --------------------------------------------------------- | ----------------------- | ---------------------------------------------------------------------------- | ------------------------ |
 | A. Throwaway Postgres in the build container                                  | a local, empty cluster that dies with the build container | yes, before any version | Postgres install and `initdb` per build (cache unverified); one more process | **recommended**          |
-| B. Authored DB tests in the deploy's init commands, on a scratch schema/role  | the environment's real database server                    | yes, at activation      | every container start already pays the CRM's ~3 min of generated cases       | rejected                 |
+| B. Authored DB tests in the deploy's init commands, on a scratch schema/role  | the environment's real database server                    | yes, at activation      | every container start pays the application's whole database suite            | rejected                 |
 | C. Only in the dev environment's `run_checks`                                 | the dev environment's database                            | no                      | none in the build; needs a test credential in the dev container              | complement, not the gate |
 | D. Honest reporting only                                                      | nothing                                                   | no                      | none                                                                         | done (the report above)  |
 | E. Require a green check run of the application's own CI on the pinned commit | the application's CI database                             | yes, through GitHub     | every application needs a CI with Postgres; Control trusts a foreign result  | rejected                 |
@@ -44,8 +45,8 @@ log relays. The count includes the generated files, which run again at container
   of the build base must carry the same Postgres major as the application's service (`postgresql:*@18`); an
   extension that a migration needs must be installed too; and every build pays the install unless Zerops keeps the
   prepared build image.
-- **B.** `test-isolation` is safe because the platform wrote the cases it runs. An authored test is arbitrary code,
-  and the init command runs where the provisioning credential of the real database is reachable. A scratch schema
+- **B.** An authored test is arbitrary code, and the init command runs where the provisioning credential of the real
+  database is reachable. A scratch schema
   and a separate role do not change that: the code chooses what it connects to. It would also run on every
   container start, before the readiness window opens.
 - **C.** Useful for the fast loop, but it gates nothing, and it is safe only where the dev environment's database is

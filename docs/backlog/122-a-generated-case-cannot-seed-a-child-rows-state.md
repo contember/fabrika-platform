@@ -1,35 +1,30 @@
 ---
 id: 122
-title: A generated case cannot seed a child row's state
+title: The leak sweep cannot seed a child row's state and says nothing when a mutation answers 409
 blocked-by: []
 ---
 
-# 122 — A generated case cannot seed a child row's state
+# 122 — The leak sweep cannot seed a child row's state and says nothing when a mutation answers 409
 
-**Summary.** The seed now leaves a foreign key outside the chain `null` or references a reference row, satisfies an
-`IN` list CHECK, names what it cannot seed (`SeedLimitError`), `rows` names a row by id under every access form with
-a scope (`on`, `in`, `over` and each capability), and `appRows` seeds a row of an application table, in a state, that a
-leak and an own case read (the guide a link holder downloads). Two limits of the evidence remain. Effort: S–M.
+**Summary.** A row the sweep seeds for a `GENERATED_ROW_PREFIX` input gets sampled state, and `seeds` covers only the
+addressed row, so a mutation whose precondition is a child row in a state answers 409. The sweep counts that as answered
+and prints no hint, so the endpoint's write path is never checked and nobody is told. Effort: S–M.
 
 ## Problem
 
-- **A child row's state.** `rows` (`src/__tests__/endpoint-access.fixtures.ts`) seeds one row of the named table in
-  each scope's object with sampled values (`seedUnder`, `packages/db/src/testing.ts`). A link mutation whose
-  precondition is a child row in a state (an open request, a delivery not yet sent) gets the first value of the
-  state's enum or `IN` list, which may not be the one the handler needs.
-- **The own case expects exactly 200** (`packages/check/src/scaffold.ts`, `endpointCases`). A mutation whose honest
-  answer to "nothing to do" is 409 needs a seed of the state that makes it act.
+`seedUnder` (`packages/db/src/testing.ts`) gives the named row the first value of its state's enum or `IN` list, which
+may not be the one the handler needs. `leakOutcome` (`packages/app/src/testing/endpoint-access.ts`) treats any answer
+but 401, 403, 404 and 5xx as answered, so a precondition's 409 passes silently.
 
 ## Approach / acceptance
 
-- Consider the general form of relational fixtures: named rows (a child row, a reference row, a row in a state) that
-  the kit seeds in both worlds, with their own values, and a case refers to by name.
-- Witness: the isolation fixture (`packages/cli/src/__tests__/fixtures/isolation-app/`) gains a link mutation whose
-  precondition is a child row in a state, and its regenerated tests pass.
+- Let the sweep's options give a named row its values (a child row, a row in a state), seeded in both worlds.
+- Print a hint when an asked mutation answers 409, naming the option that would give it the state it needs.
+- Witness: a link mutation whose precondition is a child row in a state reaches its handler in the sweep.
 
 ## Touch points
 
-`packages/db/src/testing.ts`, `packages/check/src/{endpoint-fixtures.ts,scaffold.ts}`,
-`packages/app/src/testing/endpoint-access.ts`, `packages/app/skill/references/tests.md`.
+`packages/db/src/testing.ts`, `packages/app/src/testing/endpoint-access.ts`, `packages/app/src/testing/leak-sweep.ts`,
+`packages/app/skill/references/tests.md`.
 
-<!-- Origin: the paved-road sprint, WU21 (the private dogfood), and a second application built on the paved road. -->
+<!-- Origin: the paved-road sprint (WU21); rescoped to the leak sweep after the generated tests were removed. -->
