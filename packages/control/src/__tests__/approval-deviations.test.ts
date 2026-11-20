@@ -7,10 +7,13 @@ import { readContractSource } from '@fabrika/check/contract'
 import { waitsForApproval } from '@fabrika/control-contract'
 import type { BlobStore } from '@fabrika/platform'
 import { uuidv7 } from '@fabrika/platform'
-import { migrationChecksum } from '@fabrika/platform-node'
+import { migrationChecksum, readPostgresMigrationBundle } from '@fabrika/platform-node'
 import type { DataLossStatement, MigrationDataLoss } from '@fabrika/platform-node/sql'
 import type { ControlProvider } from '@fabrika/provider-contract'
 import { describe, expect, test } from 'bun:test'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { toAppEnvDto } from '../api/registry/registration'
 import { completeApprovalUseCase } from '../approval/api'
 import { snapshotDeviations } from '../approval/diff'
@@ -26,10 +29,12 @@ import {
 } from '../approval/read'
 import { type AccessSnapshot, approvedSnapshot, parseSnapshot, serializePublished, serializeSnapshot, snapshotDigest } from '../approval/snapshot'
 import type { ControlRepositories } from '../db'
+import { gitHubCommitSource } from '../github/source/commit-files'
+import { GitHubMetadataClient } from '../github/source/metadata'
 import { executeDeploy, type RunDeps } from '../run-lifecycle'
 import { VaultSecretResolver } from '../secret-resolver'
 import { classifyAccess, type WordedChange, wordsOf } from './helpers/access'
-import { memoryCommits } from './helpers/commits'
+import { frameworkLockfile, memoryCommits } from './helpers/commits'
 import { BASE } from './helpers/contracts'
 import { createHarness } from './helpers/harness'
 import { AUDIT_TRIGGER_MIGRATION, kitFiles, type KitOptions, NOTES_MIGRATION } from './helpers/kit-contract'
@@ -400,6 +405,57 @@ describe('a migration the environment applied, changed since', () => {
 			expect(log).toContain(`access: db/migrations/${NOTES_MIGRATION.name}: an applied migration changed; leave it ${allowed}`)
 			expect(log).toContain(`deploy failed: an applied migration changed: db/migrations/${NOTES_MIGRATION.name}; leave it ${allowed}`)
 			expect((await environment(w, 'stage')).published_run_id).toBe(published)
+		}
+	})
+
+	test('a migration applied in one environment, edited, deploys to another where it never ran', async () => {
+		const w = await world()
+		expect((await deploy(w, 'stage')).status).toBe('succeeded')
+
+		w.files = commitOf({}, [edited])
+		await publish(w, 'prod')
+		const prod = await environment(w, 'prod')
+		const log = w.logs.get(`runs/${prod.published_run_id ?? ''}/logs.ndjson`) ?? ''
+		expect(log).not.toContain('an applied migration changed')
+	})
+
+	test('a BOM-only edit passes Control, whose decoder drops a leading BOM, and the Postgres runner still refuses it', async () => {
+		const bom = new Uint8Array([0xef, 0xbb, 0xbf])
+		const text = new TextEncoder().encode(NOTES_MIGRATION.sql)
+		const withBom = new Uint8Array([...bom, ...text])
+		const files = new Map<string, Uint8Array<ArrayBuffer>>(
+			Object.entries({ ...commitOf({}, []), 'bun.lock': frameworkLockfile() }).map(([path, body]) => [path, new TextEncoder().encode(body)]),
+		)
+		files.set(`db/migrations/${NOTES_MIGRATION.name}`, withBom)
+		const tree = 'd'.repeat(40)
+		const github = new GitHubMetadataClient({
+			fetch: (input) => {
+				const url = new URL(input.toString())
+				const path = decodeURIComponent(url.pathname)
+				if (path === `/repos/acme/notes/commits/${COMMIT}`) return Promise.resolve(Response.json({ sha: COMMIT, commit: { tree: { sha: tree } } }))
+				if (path === `/repos/acme/notes/git/trees/${tree}`) {
+					const entries = [...files.keys()].map((file) => ({ path: file, sha: 'b'.repeat(40), type: 'blob', mode: '100644' }))
+					return Promise.resolve(Response.json({ sha: tree, truncated: false, tree: entries }))
+				}
+				const body = files.get(path.slice('/repos/acme/notes/contents/'.length))
+				return Promise.resolve(body === undefined ? new Response(null, { status: 404 }) : new Response(body))
+			},
+		})
+		const source = gitHubCommitSource(github, {
+			repositoryToken: () => Promise.reject(new Error('a public repository needs no token')),
+			ownerConnectionToken: () => Promise.resolve(undefined),
+		})
+		const commit = await source.open({ repoUrl: 'github.com/acme/notes', commitSha: COMMIT, signal: new AbortController().signal })
+		const snapshot = await readAccessSnapshot(commit, '', 'notes', { applied })
+		expect(snapshot.migrations).toEqual(applied)
+
+		const directory = mkdtempSync(join(tmpdir(), 'bom-migration-'))
+		try {
+			writeFileSync(join(directory, NOTES_MIGRATION.name), withBom)
+			const [runnerFile] = readPostgresMigrationBundle({ name: 'app', directory }).migrations
+			expect(migrationChecksum(runnerFile?.sql ?? '')).not.toBe(applied[0]?.checksum)
+		} finally {
+			rmSync(directory, { recursive: true })
 		}
 	})
 

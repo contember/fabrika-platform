@@ -715,7 +715,9 @@ other environment, before the provider prepares anything, and the write maps a r
   (`appliedMigrations`, `publish.ts`, which `unheldDataChanges` reads too), never the publication: a publication
   precedes the provider, so a file whose deploy failed may still change. Files compare as the runners compare them: the
   SHA-256 of the text, byte for byte (the snapshot's checksum is `migrationChecksum`'s), only `.sql` directly in
-  `db/migrations`; a recorded file the commit no longer holds passes, as both runners tolerate it. Each file is one
+  `db/migrations`. One exception: the commit's `TextDecoder` drops a leading UTF-8 BOM, which the Postgres runner's
+  `readFileSync` keeps, so a BOM-only edit passes Control and the runner refuses it. Keep the decoder: keeping the BOM
+  would change the stored checksum of every such file and refuse it on the first deploy after an upgrade; a recorded file the commit no longer holds passes, as both runners tolerate it. Each file is one
   `access:` line in the run log, and the run fails naming them. A dev bootstrap (its sandbox's database is not the
   environment's) and the re-read of a stored candidate compare nothing. A file applied by a run that failed later, or by
   one before any succeeded run stored a snapshot, is left to the runners' own check (Postgres `verifyChecksums`, SQLite

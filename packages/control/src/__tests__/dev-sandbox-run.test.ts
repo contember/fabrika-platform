@@ -322,6 +322,21 @@ describe('a dev bootstrap', () => {
 		expect(parseClassification(run?.classification_json ?? '{}').baselineRunId).toBe(one.runId)
 	})
 
+	test("a bootstrap compares its migrations with no other workspace's run: each sandbox migrates its own database", async () => {
+		const w = await world()
+		const first = await readySandbox(w)
+		const second = await readySandbox(w)
+		const tags = 'CREATE TABLE tags (id uuid PRIMARY KEY, label text NOT NULL);\n'
+		const at = (sql: string): RunDeps => ({
+			...deps(w),
+			commits: memoryCommits({ 'fabrika.contract.ts': BASE, 'db/migrations/20261012090000_tags.sql': sql }),
+		})
+		expect((await bootstrap(w, first, at(tags))).status).toBe('succeeded')
+		const edited = await bootstrap(w, second, at(`${tags}-- labels\n`))
+		expect(edited.status).toBe('succeeded')
+		expect(w.logs.get(`runs/${edited.runId}/logs.ndjson`) ?? '').not.toContain('an applied migration changed')
+	})
+
 	test('a workspace without a ready sandbox fails the run in one line and deploys nothing', async () => {
 		const w = await world()
 		const workspaceId = uuidv7()

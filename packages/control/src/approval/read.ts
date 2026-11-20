@@ -249,8 +249,9 @@ function readDatabaseCode(
 
 /**
  * The runners' checksum rule (ADR-0017): a file the ledger records refuses the deploy when the SHA-256 of its text
- * differs, byte for byte, line ends and whitespace included. A recorded file the commit no longer holds is tolerated, as
- * both runners tolerate a database ahead of the code; a file no runner applies is not compared.
+ * differs, byte for byte, line ends and whitespace included, except a leading UTF-8 BOM: the commit's decoder drops it
+ * and the Postgres runner keeps it, so a BOM-only edit is left to the runner. A recorded file the commit no longer holds
+ * is tolerated, as both runners tolerate a database ahead of the code; a file no runner applies is not compared.
  */
 function changedAppliedMigrations(applied: readonly MigrationEntry[], migrations: readonly MigrationEntry[]): string[] {
 	const recorded = new Map(applied.filter(({ name }) => isBundledMigration(name)).map((entry) => [entry.name, entry.checksum]))
