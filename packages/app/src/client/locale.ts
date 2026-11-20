@@ -13,7 +13,7 @@ const MAX_AGE_SECONDS = 365 * 24 * 60 * 60
  * The `document.cookie` assignment that keeps `locale` for this host, or clears it for `null`. The `__Host-` prefix
  * makes the browser require `Secure` and `Path=/` and refuse a `Domain`, so the cookie stays on this host only.
  */
-export function signInLocaleCookie(locale: Locale | null): string {
+export function localeCookieAssignment(locale: Locale | null): string {
 	return locale === null
 		? `${LOCALE_COOKIE}=; Path=/; Secure; SameSite=Lax; Max-Age=0`
 		: `${LOCALE_COOKIE}=${locale}; Path=/; Secure; SameSite=Lax; Max-Age=${MAX_AGE_SECONDS}`
@@ -26,6 +26,6 @@ export function signInLocaleCookie(locale: Locale | null): string {
 export function rememberSignInLocale(locale: Locale | null): void {
 	const document: unknown = Reflect.get(globalThis, 'document')
 	if (typeof document === 'object' && document !== null) {
-		Reflect.set(document, 'cookie', signInLocaleCookie(locale))
+		Reflect.set(document, 'cookie', localeCookieAssignment(locale))
 	}
 }

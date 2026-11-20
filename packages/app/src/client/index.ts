@@ -19,6 +19,6 @@ export {
 	type ProcedureCall,
 	type ResultOf,
 } from './contract'
-export { rememberSignInLocale, signInLocaleCookie } from './locale'
+export { rememberSignInLocale } from './locale'
 export { shareKey } from './share'
 export { type BounceOption, RpcError, type RpcFetch } from './transport'
