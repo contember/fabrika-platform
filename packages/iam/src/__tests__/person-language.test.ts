@@ -19,6 +19,7 @@ import { handleAuth } from '../auth/routes'
 import { assignMember, createScope, requestDelegation } from '../membership'
 import { pkceChallenge } from '../oidc'
 import type { PasswordHasher, StoredPasswordHash } from '../password-crypto'
+import { issuePasswordAction } from '../password-service'
 import { browserLocale, chooseLocale, LOCALE_COOKIE } from '../person-locale'
 import { hashToken } from '../secret'
 import { createHarness, type Harness } from './helpers/harness'
@@ -211,6 +212,33 @@ describe("an invitation that names the person's language", () => {
 		expect(signInHtml).toContain('<html lang="uk">')
 		expect(signInHtml).toContain('<h1>Вхід до застосунку Poznámky</h1>')
 		expect(await lang(await n.send(handoffLogin()))).toBe('cs')
+	})
+
+	test("an administrator's password action is mailed in the person's language, else IAM's default", async () => {
+		const n = await notes()
+		const person = await invitee(n)
+		const issue = async () => {
+			const principal = await n.f.repositories.principals.getPrincipalById(person.id)
+			if (principal === null) throw new Error('no principal')
+			const audit = {
+				requestId: 'req-admin',
+				principalId: n.owner.id,
+				principalLabel: 'owner',
+				app: 'propustka',
+				action: 'iam.password.reset.issue',
+				resourceType: 'principal',
+			}
+			return issuePasswordAction(n.f.services, { principal, purpose: 'reset', issuedBy: n.owner.id, presentation: INSTALLATION_PRESENTATION }, {
+				audit,
+				enableEnrollment: false,
+			})
+		}
+		expect((await issue()).message?.subject).toBe('Reset your Fabrika password')
+		await n.f.repositories.principals.setLocale(person.id, 'uk')
+		const action = await issue()
+		expect(action.message?.subject).toBe('Відновлення пароля')
+		expect(new URL(action.url).search).toBe('?locale=uk')
+		expect(await lang(await n.send(new Request(action.url)))).toBe('uk')
 	})
 
 	test('a sign-in of a person without a language clears the one a previous person left on the browser', async () => {
