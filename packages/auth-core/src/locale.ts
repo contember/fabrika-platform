@@ -13,6 +13,18 @@ export function isLocale(value: unknown): value is Locale {
 	return LOCALES.some((locale) => locale === value)
 }
 
+/**
+ * The cookie that names the language a browser reads fabrika's pages in, host-only on whichever host wrote it: IAM's
+ * on IAM's host, an application's on its own. An application's proxy passes the value on its host to IAM's sign-in as
+ * `LOCALE_PARAM`. It picks words and nothing else: no credential, landing or authority depends on it, and a value
+ * that is not a `Locale` counts as none. Its name does not start with `FABRIKA_COOKIE_PREFIX`, so the proxy leaves it
+ * on the request it sends an application.
+ */
+export const LOCALE_COOKIE = '__Host-fabrika_locale'
+
+/** The query parameter IAM's pages read the reader's language from: IAM's own links and the proxy's sign-in bounce. */
+export const LOCALE_PARAM = 'locale'
+
 /** The longest display name, in code points: it is a page heading and part of an e-mail subject. */
 export const MAX_DISPLAY_NAME_LENGTH = 80
 
