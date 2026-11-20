@@ -203,13 +203,13 @@ describe('a provider newer than the application', () => {
 			kind: 'transport',
 			transport: { variables: brevoVariables, secretNames: new Set(['FABRIKA_EMAIL_BREVO_API_KEY']) },
 		}
-		for (const framework of ['0.9.0-dev.15', '0.9.0-dev.16', '0.9.0', '0.9.1', '1.0.0']) {
+		for (const framework of ['0.9.0-dev.17', '0.9.0-dev.18', '0.9.0', '0.9.1', '1.0.0']) {
 			expect(installationMailEnvironment(brevo, needs, framework)).toEqual(brevoVariables)
 		}
-		for (const framework of ['0.9.0-dev.14', '0.9.0-cloudflare.1', '0.8.2']) {
+		for (const framework of ['0.9.0-dev.16', '0.9.0-dev.15', '0.9.0-cloudflare.1', '0.8.2']) {
 			const refusal = (): unknown => installationMailEnvironment(brevo, needs, framework)
 			expect(refusal).toThrow(
-				`the installation's provider \`brevo\` is unknown to framework ${framework}, which this version pins: it needs 0.9.0-dev.15 or newer`,
+				`the installation's provider \`brevo\` is unknown to framework ${framework}, which this version pins: it needs 0.9.0-dev.17 or newer`,
 			)
 			expect(refusal).not.toThrow('xkeysib-private-key')
 		}

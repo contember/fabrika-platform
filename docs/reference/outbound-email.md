@@ -159,7 +159,7 @@ A new provider is one module (its sender and its `EmailProvider` declaration), i
 without one), its `package.json` export, a unit test and a conformance harness. Control compares a release without a
 prerelease tag by its version alone, so `0.9.0` also admits the `0.9.0-dev.*` prereleases published before
 `cloudflare`; a provider added between two prereleases names the first prerelease that holds it, as `brevo` names
-`0.9.0-dev.15`, and Control then compares the prerelease too. The installers, the
+`0.9.0-dev.17`, and Control then compares the prerelease too. The installers, the
 Cloudflare workflow and its README read the registry, so neither needs an edit.
 
 A provider that takes a shorter idempotency key than the contract's 256 characters gets one through

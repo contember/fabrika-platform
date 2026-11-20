@@ -34,7 +34,7 @@ export const builtinEmailProviderVariables: readonly EmailProviderVariable[] = O
  */
 export const builtinEmailProviderSince = {
 	ahasend: '0.8.2',
-	brevo: '0.9.0-dev.15',
+	brevo: '0.9.0-dev.17',
 	cloudflare: '0.9.0',
 	lettermint: '0.8.2',
 	postmark: '0.8.2',
