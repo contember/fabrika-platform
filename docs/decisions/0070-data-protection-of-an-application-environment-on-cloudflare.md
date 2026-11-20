@@ -1,7 +1,7 @@
 ---
 id: 0070
 title: Data protection of an application environment on Cloudflare
-status: proposed
+status: accepted
 date: 2026-10-25
 ---
 
@@ -448,8 +448,9 @@ included, refuses one whose `JSON.stringify` exceeds 4 MiB in UTF-8.
 
 - A Cloudflare environment has a daily backup that was restored once before it counts, and recovering old data never
   rewinds the data that serves.
-- Each daily backup puts the environment in `read-only` for as long as the export takes: seconds for the tens of MB
-  typical of an internal application, unmeasured until a live run.
+- Each daily backup puts the environment in `read-only` for as long as the export takes. Measured live (2026-11-20) on
+  a 909-byte dump of 13 tables: the whole backup, the rehearsal after `open` included, took 14 s; tens of MB are
+  unmeasured.
 - An environment's bucket holds 30 daily backups and the pre-migration ones. Every part but the last takes 8 MiB, so a
   dump of small, compressible rows is mostly padding.
 - A schema the rule refuses (§2) cannot be backed up: a `WITHOUT ROWID` or virtual table, a table whose rowid no name
@@ -458,11 +459,14 @@ included, refuses one whose `JSON.stringify` exceeds 4 MiB in UTF-8.
 - Text survives byte for byte, valid UTF-8 or not; as hex it doubles in size before compression.
 - No trigger fires while a backup loads; the importer drops the triggers and recreates them from the manifest.
 - A side restore makes the service unavailable from the moment the original turns `inspect` until the pointer deploy
-  completes. It adds one name to `FABRIKA_APPLICATION_OBJECTS` until the original is deleted, and the list holds 16.
+  completes; live (2026-11-20) that deploy took 72 s, and the whole restore 6.5 min, 2.5 of them waiting for the
+  maintenance pass. It adds one name to `FABRIKA_APPLICATION_OBJECTS` until the original is deleted, and the list holds 16.
 - The dump format is versioned, and a reader refuses a format it does not know. A change to the encoding or the hash is
   a new format.
-- What only a live account shows is built against the probes' dry runs and unconfirmed: point-in-time recovery and its
-  reset, R2's multipart limits, workerd decompressing a member with a large header comment, and the bookmark format.
+- A side restore ran on a live account (2026-11-20): point-in-time recovery, its reset and the bookmark format hold on
+  the happy path (the sentinel was gone and the ledger matched; the rows at T were not read, backlog 294). Still built against the probes' dry runs and unconfirmed: its failure boundaries, R2's multipart
+  limits for a dump of more than one part, and workerd decompressing a member with a large header comment (backlog
+  293). No Control verb yet exports the rewound original (§9 step 7, backlog 294).
 - On Zerops an application has no object, and nothing changes.
 - **Rollout.** Backups, the migration phase and the side restore ship in framework 0.9.0, gated by
   `servesDataOperations`, which holds from `0.9.0-dev.5`: the 0.9.0 prereleases published before it serve the channel's

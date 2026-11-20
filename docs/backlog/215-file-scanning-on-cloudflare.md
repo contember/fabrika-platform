@@ -19,7 +19,7 @@ run there.
 
 A scanner reachable from the object: a Cloudflare Container running ClamAV with fresh signatures, called by the
 object's scan sweep over a service binding, writing its verdict through the same `fabrika_files` transitions as on
-Bun. Witness: the file-scan suite on Lopata with the container stubbed, and once live (213).
+Bun. Witness: the file-scan suite on Lopata with the container stubbed, and once on a live installation.
 
 ## Touch points
 

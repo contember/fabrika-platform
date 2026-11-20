@@ -13,8 +13,10 @@ it to fact without a probe.
   (wrangler `define`), not in a variable; an application's manifest is 13 KB and more.
 - **`wrangler deploy --secrets-file <file>`** uploads secrets with the version, from wrangler 4.74.0; secrets of
   earlier deployments are kept unless `--keep-secrets` says otherwise (`wrangler deploy --help`). A plain variable not
-  in the new config is dropped by the deploy. _Not verified live:_ that one upload turns a plain variable into a
-  secret of the same name.
+  in the new config is dropped by the deploy.
+- **One deploy turns a plain variable into a secret of the same name.** Probed live (2026-11-20), through a Control
+  deploy of an application Worker: a version whose config no longer declares the plain `EXAMPLE_TOKEN` and whose
+  secrets file carries it leaves the Worker with `EXAMPLE_TOKEN` as `secret_text`, in one deploy.
 
 ## D1
 
@@ -56,9 +58,23 @@ it to fact without a probe.
   on local workerd: a violating insert throws `FOREIGN KEY constraint failed: SQLITE_CONSTRAINT`.
 - **`sql.exec` binds `?` parameters**, as Kysely's SQLite compiler emits them. Probed on local workerd through the
   application's own statements.
+- **The provider's migration applies to an existing Worker.** Probed live (2026-11-20): a deploy that adds the
+  provider's `new_sqlite_classes` step (tag `v0001`) to an application Worker deployed without a Durable Object leaves
+  it with migration tag `v0001` and a SQLite-backed namespace. _Not verified live:_ a Worker whose own config already
+  used that tag (backlog 216 item 3).
+- **Point-in-time recovery rewinds an object and resets it.** Probed live (2026-11-20), through a side restore
+  (ADR-0070 §9): `getBookmarkForTime` answers a bookmark for a time seven minutes back, `onNextSessionRestoreBookmark`
+  then an abort restores the object at its next session, and a KV sentinel written after that time is gone. A bookmark
+  reads like `00000000-000000ca-00005129-<32 hex>`. Not probed: an abort before the undo bookmark persists, a lost undo
+  answer, a foreign bookmark, restore time at 10 MB and 1 GB (backlog 293).
 
 ## R2
 
+- **A 40 MB upload streams into a multipart object.** Probed live (2026-11-20): an application file of 40,000,000
+  bytes, sent as one multipart form request through the proxy, reads back with an equal SHA-256; the request took
+  23.6 s. The framework writes a file from `R2_PART_BYTES` (8 MiB) up as an R2 multipart upload
+  (`packages/app/src/cloudflare/r2-files.ts`); uploads of 9, 17, 25 and 33 MB (multipart) and of 1 and 7 MB (one
+  conditional `put`) also read back intact.
 - **A conditional put refuses an existing key.** Probed on local workerd: `put(key, body, { onlyIf: { etagDoesNotMatch:
   '*' } })` on an existing key answers `null` and keeps the object. An etag passed to `onlyIf` is unquoted; R2 refuses
   a quoted one.
@@ -71,4 +87,5 @@ it to fact without a probe.
   `x` on a service binding to a `WorkerEntrypoint`; calling a method the entrypoint lacks throws `The RPC receiver
   does not implement the method`. Probed on local workerd.
 - **A large `define`.** Probed locally: a 233,280-character manifest string builds (`wrangler deploy --dry-run`,
-  291 KiB) and the Worker reads it back intact. _Not verified live:_ the account accepting the upload.
+  291 KiB) and the Worker reads it back intact. Probed live (2026-11-20): the account accepts a proxy Worker of
+  545,747 bytes whose `define` bakes a 219,931-byte manifest of 700 endpoints, and the proxy serves.
