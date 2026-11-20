@@ -447,7 +447,7 @@ describe('buildArtifact refuses a declaration the types would refuse', () => {
 
 	test('a locale IAM does not speak, and a display name that is not one short line', () => {
 		expect(build({ ...base, locale: 'de', displayName: ' Notes\n' })).toEqual([
-			"locale: 'de' is not a language IAM speaks (allowed: 'en', 'cs')",
+			"locale: 'de' is not a language IAM speaks (allowed: 'en', 'cs', 'uk')",
 			'displayName: is empty or starts or ends with whitespace',
 		])
 		expect(build({ ...base, displayName: 'N'.repeat(81) })).toEqual(['displayName: is longer than 80 characters'])

@@ -2,7 +2,7 @@
 // it shows. The contract declares both; IAM's catalog covers every locale here, so adding one fails its typecheck.
 
 /** The languages IAM renders its pages and its own e-mails in. */
-export const LOCALES = ['en', 'cs'] as const
+export const LOCALES = ['en', 'cs', 'uk'] as const
 
 export type Locale = (typeof LOCALES)[number]
 
