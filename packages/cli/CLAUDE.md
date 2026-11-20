@@ -218,8 +218,9 @@ arguments and reports.
     anonymous; it sets the cookie the application never sees), `accept` (an invitation the stand-in IAM sent),
     `state` (the toolbar's JSON), `toolbar.js`, `outbox/<id>` (a captured request, as text) and `mail/<id>` (a job's
     message, or an invitation's e-mail as IAM writes it: `devKit`'s `invitationMail`, in the language IAM chooses, from
-    `@fabrika/auth-core`'s `iamMessageTemplate`, never strings of this package; its fields, its text, and its HTML in a
-    `sandbox=""` `srcdoc` frame under the page's own CSP). Every `text/html` 200 of an SPA or link mount gets the toolbar's
+    `@fabrika/auth-core`'s `iamMessageTemplate`, never strings of this package, with its row's accept or continue-as
+    button, since the frame's link opens nothing; its fields, its text, and its HTML in a `sandbox=""` `srcdoc` frame
+    under the page's own CSP, marked `lang` when the message's language is not the page's). Every `text/html` 200 of an SPA or link mount gets the toolbar's
     same-origin script tag; the kit's CSP already admits it, so `app dev` changes no header the kit answers.
   - The UI (`src/app-dev-ui.ts`) is self-contained HTML, CSS and a shadow-DOM script, colored by `--fd-*` custom
     properties, light and dark. The picker answers its own strict CSP and runs no script.

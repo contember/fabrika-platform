@@ -1914,7 +1914,7 @@ const api = createClient(contract, 'api', { fetch: kit.browser(editor) })
   (`iamMessageTemplate` of `@fabrika/auth-core`): in the invitation's language, else the one the mailbox's person keeps
   from an earlier accepted invitation, else the application's, from the application's `mail` template of that
   language or IAM's own wording, with the dev accept route as its link. The page around it keeps the application's
-  language. Every request the process sends to
+  language and offers the row's accept (or continue-as) button, since a link inside the frame opens nothing. Every request the process sends to
   `https://outbox.invalid` (`DEV_OUTBOX_ORIGIN`, the dev outbox, for another outside service) is captured, answered
   200 and listed in a section of its own. A `ctx.kick` starts its job; cron schedules do not run.
   What the seed throws is printed with its stack, and so is what a request's 5xx or a job attempt threw

@@ -34,6 +34,7 @@ import {
 	type CurrentView,
 	type DevView,
 	invitationMailPage,
+	type MailAction,
 	mailPage,
 	type MailView,
 	newestMail,
@@ -366,6 +367,14 @@ async function serveDevKit(
 	const invitationMailOf = (invitation: SentInvitation) =>
 		dev.invitationMail(invitation.id, new URL(acceptHref(invitation.id, firstSpa), `http://${urlHost}:${port}`).toString())
 
+	/** What an invitation offers: accept it while it is open, or continue as the invitee who accepted it here. */
+	const invitationActions = (invitation: SentInvitation, next: string): MailAction[] =>
+		invitation.status === 'open'
+			? [{ label: text.accept, href: acceptHref(invitation.id, next) }]
+			: invitation.status === 'accepted' && invitees.has(invitation.id)
+			? [{ label: text.continueAs, href: chooseHref({ invitation: invitation.id }, next) }]
+			: []
+
 	/** The values a membership role is offered in: the seed's, then those its personas hold. */
 	const valuesOf = (dimension: string): { readonly value: string; readonly label: string }[] => {
 		const values = [...(seeded.scopes.get(dimension) ?? [])]
@@ -404,25 +413,23 @@ async function serveDevKit(
 		mail: newestMail([
 			...dev.invitations().map((invitation): MailView => {
 				const label = text.invitation(invitation.role, scopeLabel(invitation.scope.type, invitation.scope.value))
-				const main = invitation.status === 'open'
-					? [{ label: text.accept, href: acceptHref(invitation.id, next) }]
-					: invitation.status === 'accepted' && invitees.has(invitation.id)
-					? [{ label: text.continueAs, href: chooseHref({ invitation: invitation.id }, next) }]
-					: []
+				const mail = invitationMailOf(invitation)
 				return {
 					to: invitation.email,
-					subject: invitationMailOf(invitation)?.subject ?? label,
+					subject: mail?.subject ?? label,
+					subjectLocale: mail === undefined ? null : invitation.mailLocale,
 					note: `${label} · ${invitation.mailLocale}`,
 					at: invitation.sentAt * 1000,
 					key: null,
 					status: invitation.status,
 					answer: null,
-					actions: [...main, { label: text.openMessage, href: `${MAIL_PATH}${invitation.id}` }],
+					actions: [...invitationActions(invitation, next), { label: text.openMessage, href: `${MAIL_PATH}${invitation.id}` }],
 				}
 			}),
 			...dev.mails().map((sent): MailView => ({
 				to: sent.to,
 				subject: sent.subject,
+				subjectLocale: null,
 				at: Date.parse(sent.at),
 				key: sent.key,
 				status: sent.outcome === 'accepted' ? 'sent' : sent.outcome,
@@ -554,7 +561,7 @@ async function serveDevKit(
 		const invitation = dev.invitations().find((candidate) => `${MAIL_PATH}${candidate.id}` === path)
 		const mail = invitation === undefined ? undefined : invitationMailOf(invitation)
 		if (invitation === undefined || mail === undefined) return plain(404, 'no such mail in app dev')
-		return new Response(invitationMailPage(view, invitation, mail), { headers: PAGE_HEADERS })
+		return new Response(invitationMailPage(view, invitation, mail, invitationActions(invitation, firstSpa)), { headers: PAGE_HEADERS })
 	}
 
 	const devRoute = (request: Request, url: URL): Response | null => {

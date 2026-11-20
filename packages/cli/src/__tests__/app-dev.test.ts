@@ -197,6 +197,7 @@ describe("app dev's mail view, without serving", () => {
 	const row = (subject: string, at: number): MailView => ({
 		to: 'a@example.test',
 		subject,
+		subjectLocale: null,
 		at,
 		key: null,
 		status: 'sent',
@@ -259,8 +260,11 @@ describe("app dev's mail view, without serving", () => {
 			subject: 'Запрошення до застосунку Shop',
 			text: 'Вас запрошено <до> Shop.',
 			html: '<p>Вас запрошено</p><script>alert(1)</script>',
-		})
+		}, [{ label: 'Accept invitation', href: '/__fabrika/dev/accept?invitation=invitation-1&next=%2F' }])
 		expect(page).toContain('<html lang="en">')
+		expect(page).toContain('<h1 lang="uk">Запрошення до застосунку Shop</h1>')
+		expect(page).toContain('<pre class="text" lang="uk">')
+		expect(page).toContain('<a class="button quiet" href="/__fabrika/dev/accept?invitation=invitation-1&amp;next=%2F">Accept invitation</a>')
 		expect(page).toContain('<dt>Language</dt><dd>uk</dd>')
 		expect(page).toContain('<dt>State</dt><dd>waiting</dd>')
 		expect(page).toContain('Вас запрошено &lt;до&gt; Shop.')
@@ -473,12 +477,19 @@ describe.skipIf(url === '')('fabrika app dev on the template application, seeded
 		expect(message).toContain('Petra Nováková píše:')
 		expect(message).toContain('Join us for the brand review.')
 		expect(message).toContain(`${origin}__fabrika/dev/accept?invitation=${id}`)
+		// The link inside the sandboxed frame opens nothing, so the page offers what the row offers.
+		expect(message).toContain(`<a class="button quiet" href="/__fabrika/dev/accept?invitation=${id}&amp;next=%2F">Přijmout pozvánku</a>`)
 		const marta = await chosen(new URL(accept, origin).href, '/')
 		expect(await meOf(marta)).toBe('marta@studio.example')
 		expect(await titlesOf(marta)).toContain('Interview notes, week 41')
 		const after = await stateOf(origin, marta)
 		expect(after.current.name).toBe('marta@studio.example')
 		expect(after.mail[0]?.detail).toBe('Pozvánka: guest v Design · cs · Komu: marta@studio.example · přijata')
+		const reopened = await (await fetch(`${origin}__fabrika/dev/mail/${id}`)).text()
+		// Once accepted, the page offers to continue as its invitee instead (the message itself still says to accept).
+		const actions = /<p class="actions">.*?<\/p>/.exec(reopened)?.[0] ?? ''
+		expect(actions).toContain('>Pokračovat jako tato osoba</a>')
+		expect(actions).not.toContain('Přijmout pozvánku')
 		expect(after.mail[0]?.action?.label).toBe('Pokračovat jako tato osoba')
 		const again = await fetch(new URL(accept, origin), { redirect: 'manual' })
 		expect(again.status).toBe(409)
@@ -543,6 +554,9 @@ describe.skipIf(url === '')('fabrika app dev on an application with a share link
 		// The page around it speaks the application's language; the message is the invitee's.
 		expect(message).toContain('<html lang="en">')
 		expect(message).toContain('<dt>Language</dt><dd>uk</dd>')
+		expect(message).toContain('<h1 lang="uk">Запрошення до застосунку Cards</h1>')
+		expect(page).toContain('<span class="subject" lang="uk">Запрошення до застосунку Cards</span>')
+		expect(page).toContain('<span class="subject">You are invited to Cards</span>')
 		expect(message).toContain('Вас запрошено до застосунку Cards з роллю member (board).')
 		expect(message).toContain(`${origin}__fabrika/dev/accept?invitation=${id}`)
 		expect((await fetch(`${origin}__fabrika/dev/mail/invitation-unknown`)).status).toBe(404)

@@ -62,6 +62,8 @@ export interface MailView {
 	readonly to: string
 	/** The subject the addressee reads: an invitation's in the language IAM writes it in. */
 	readonly subject: string
+	/** The language the subject is written in when it is not the page's (an invitation's `mailLocale`); otherwise `null`. */
+	readonly subjectLocale: Locale | null
 	/** One more line of what it is: an invitation's role, scope value and language; `null` for a job's message. */
 	readonly note: string | null
 	/** When it was sent, in ms: an invitation's latest send, or a job's handoff. */
@@ -411,7 +413,7 @@ h2 + .grid, h2 + .rows { margin-top: 14px; }
 .row .meta .grants { font-family: var(--fd-mono); font-size: 12px; overflow-wrap: anywhere; }
 .row .control { display: flex; gap: 8px; align-items: center; }
 .row .meta.stack { flex-direction: column; align-items: flex-start; gap: 2px; }
-.actions { margin-top: 24px; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 24px; }
 .subject { font-weight: 600; color: var(--fd-text); font-size: 15px; }
 .to { font-size: 13px; color: var(--fd-muted); overflow-wrap: anywhere; }
 input { font: inherit; font-size: 14px; height: 34px; padding: 0 10px; width: 200px; border: 1px solid var(--fd-border-strong); border-radius: 8px; background: var(--fd-bg); color: var(--fd-text); }
@@ -444,7 +446,10 @@ const badges = (list: readonly Badge[]): string =>
 		? ''
 		: `<div class="badges">${list.map((badge) => `<span class="badge ${badge.tone}">${escapeHtml(badge.text)}</span>`).join('')}</div>`
 
-function page(view: Pick<DevView, 'locale' | 'title' | 'current'>, heading: string, body: string): string {
+/** The `lang` attribute of text written in `locale` on a page in another language; none when they agree. */
+const langOf = (page: Locale, locale: Locale | null): string => (locale === null || locale === page ? '' : ` lang="${locale}"`)
+
+function page(view: Pick<DevView, 'locale' | 'title' | 'current'>, heading: string, body: string, headingLocale: Locale | null = null): string {
 	const text = stringsOf(view.locale)
 	const now = view.current === null
 		? `<span>${escapeHtml(text.now)}:</span> <strong>${escapeHtml(text.nobody)}</strong>`
@@ -464,7 +469,7 @@ function page(view: Pick<DevView, 'locale' | 'title' | 'current'>, heading: stri
 		escapeHtml(text.preview)
 	}</span></span><span class="now">${now}</span></div></header>
 <main>
-<h1>${escapeHtml(heading)}</h1>
+<h1${langOf(view.locale, headingLocale)}>${escapeHtml(heading)}</h1>
 ${body}
 </main>
 </body>
@@ -514,7 +519,7 @@ function mailRows(mail: readonly MailView[], text: Strings, locale: Locale): str
 	return `<div class="rows">${
 		mail.map((item) => {
 			const when = [...(item.key === null ? [] : [item.key]), timeOf(locale, item.at)].join(' · ')
-			return `<div class="row"><span class="meta stack"><span class="subject">${escapeHtml(item.subject)}</span>${
+			return `<div class="row"><span class="meta stack"><span class="subject"${langOf(locale, item.subjectLocale)}>${escapeHtml(item.subject)}</span>${
 				item.note === null ? '' : `<span class="to">${escapeHtml(item.note)}</span>`
 			}<span class="to">${escapeHtml(text.to)}: ${escapeHtml(item.to)}</span><span class="to">${escapeHtml(when)}</span></span><span class="badge">${
 				escapeHtml(text.status[item.status])
@@ -585,15 +590,20 @@ export function noticePage(view: Pick<DevView, 'locale' | 'title' | 'current' | 
 
 /**
  * One message: its fields, its text, and its HTML in a frame that runs no script, has no origin and submits nothing. The
- * frame's document inherits the page's policy (`default-src 'none'`), so it loads nothing.
+ * frame's document inherits the page's policy (`default-src 'none'`), so it loads nothing, and a link in it opens
+ * nothing, so what the message offers is a button beside the way back. `messageLocale` is the message's language when it
+ * is not the page's.
  */
 function messagePage(
 	view: Pick<DevView, 'locale' | 'title' | 'current' | 'pickerHref'>,
 	subject: string,
 	fields: readonly (readonly [string, string | null])[],
 	message: { readonly text: string; readonly html: string | null },
+	actions: readonly MailAction[] = [],
+	messageLocale: Locale | null = null,
 ): string {
 	const text = stringsOf(view.locale)
+	const lang = langOf(view.locale, messageLocale)
 	const html = message.html === null
 		? `<div class="empty">${escapeHtml(text.noHtml)}</div>`
 		: `<iframe class="mail-html" sandbox="" referrerpolicy="no-referrer" title="${escapeHtml(text.html)}" srcdoc="${
@@ -602,10 +612,13 @@ function messagePage(
 	return page(
 		view,
 		subject,
-		`<p class="actions"><a class="button quiet" href="${escapeHtml(view.pickerHref)}">${escapeHtml(text.back)}</a></p>
+		`<p class="actions"><a class="button quiet" href="${escapeHtml(view.pickerHref)}">${escapeHtml(text.back)}</a>${
+			actions.map((action) => `<a class="button quiet" href="${escapeHtml(action.href)}">${escapeHtml(action.label)}</a>`).join('')
+		}</p>
 <dl class="fields">${fields.map(([name, value]) => (value === null ? '' : `<dt>${escapeHtml(name)}</dt><dd>${escapeHtml(value)}</dd>`)).join('')}</dl>
-<section aria-labelledby="text"><h2 id="text">${escapeHtml(text.text)}</h2><pre class="text">${escapeHtml(message.text)}</pre></section>
+<section aria-labelledby="text"><h2 id="text">${escapeHtml(text.text)}</h2><pre class="text"${lang}>${escapeHtml(message.text)}</pre></section>
 <section aria-labelledby="html"><h2 id="html">${escapeHtml(text.html)}</h2>${html}</section>`,
+		messageLocale,
 	)
 }
 
@@ -628,21 +641,30 @@ export function mailPage(view: Pick<DevView, 'locale' | 'title' | 'current' | 'p
 /**
  * The e-mail the stand-in IAM would have sent for an invitation, as IAM writes it: in the language it chose
  * (`mailLocale`), from the application's template of that language or IAM's own wording. The page around it speaks the
- * application's language; only the message is the invitee's.
+ * application's language; only the message is the invitee's. `actions` are what its row offers (accept it, continue as
+ * its invitee).
  */
 export function invitationMailPage(
 	view: Pick<DevView, 'locale' | 'title' | 'current' | 'pickerHref'>,
 	invitation: SentInvitation,
 	mail: RenderedMessage,
+	actions: readonly MailAction[] = [],
 ): string {
 	const text = stringsOf(view.locale)
-	return messagePage(view, mail.subject, [
-		[text.to, invitation.email],
-		[text.subject, mail.subject],
-		[text.language, invitation.mailLocale],
-		[text.state, text.status[invitation.status]],
-		[text.sentAt, timeOf(view.locale, invitation.sentAt * 1000)],
-	], mail)
+	return messagePage(
+		view,
+		mail.subject,
+		[
+			[text.to, invitation.email],
+			[text.subject, mail.subject],
+			[text.language, invitation.mailLocale],
+			[text.state, text.status[invitation.status]],
+			[text.sentAt, timeOf(view.locale, invitation.sentAt * 1000)],
+		],
+		mail,
+		actions,
+		invitation.mailLocale,
+	)
 }
 
 /** What the toolbar renders: its labels and the view, with every caller already put into words. */
