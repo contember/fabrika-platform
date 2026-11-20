@@ -194,11 +194,11 @@ for (const [dialect, database] of [['SQLite', sqlite], ['Postgres', postgres]] a
 }
 
 describe.skipIf(postgres === null)('the numbers the isolation seed writes, on Postgres only', () => {
-	test('the update sample of a number the database filled is taken once both worlds are written', async () => {
+	test('the update value of a number the database filled is the number it gave the row, which no other row holds', async () => {
 		if (postgres === null) return
-		// The identity gives the own row 1 and the other 2: a sample taken between the two would be 2, the other's.
+		// The identity gives the own row 1 and the other 2.
 		const worlds = await postgres.seedWorlds(tables, 'tickets')
-		expect([worlds.own.updates['seq'], worlds.other.updates['seq']]).toEqual([3, 3])
+		expect([worlds.own.updates['seq'], worlds.other.updates['seq']]).toEqual([1, 2])
 	})
 
 	test('a NULLS NOT DISTINCT index groups the rows its null key column holds', async () => {

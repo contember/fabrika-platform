@@ -91,9 +91,9 @@ describe.skipIf(!hasPostgres)('the isolation seed on Postgres', () => {
 		}
 	})
 
-	test('an updatable column the seed left to its default is updated with a sample, never with null', async () => {
+	test('an updatable column the seed left to its default is updated with the value the database stored', async () => {
 		const worlds = await postgres.seedWorlds(tables, 'tasks')
-		expect(worlds.own.updates['priority']).toBe(1)
+		expect(worlds.own.updates['priority']).toBe(3)
 		expect(worlds.own.updates['due_on']).toEqual(expect.any(String))
 	})
 })

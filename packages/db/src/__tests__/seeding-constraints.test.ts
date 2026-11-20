@@ -90,6 +90,12 @@ CREATE TABLE returns (
 	direction TEXT NOT NULL DEFAULT 'in',
 	FOREIGN KEY (purpose, direction) REFERENCES purpose_directions (purpose, direction)
 );
+CREATE TABLE plans (
+	id TEXT PRIMARY KEY,
+	cadence TEXT NOT NULL DEFAULT 'monthly' CHECK (cadence IN ('monthly', 'once')),
+	once_on TEXT,
+	CHECK ((cadence = 'once') = (once_on IS NOT NULL))
+);
 CREATE TABLE items (id TEXT PRIMARY KEY, name TEXT NOT NULL);
 CREATE TABLE variants (
 	id TEXT PRIMARY KEY,
@@ -127,6 +133,7 @@ interface DB {
 	purpose_directions: { purpose: string; direction: string }
 	moves: { id: string; purpose: string; direction: string }
 	returns: { id: string; purpose: string; direction: string }
+	plans: { id: string; cadence: string; once_on: string | null }
 	items: { id: string; name: string }
 	variants: { id: string; item_id: string; base_item_id: string }
 	days: { id: string; day: string }
@@ -181,6 +188,7 @@ const columns: TypedColumnList<DB> = {
 		columns: ['id', 'purpose', 'direction'],
 		foreignKeys: [{ columns: ['purpose', 'direction'], table: 'purpose_directions', references: ['purpose', 'direction'] }],
 	},
+	plans: { columns: ['id', 'cadence', 'once_on'], foreignKeys: [] },
 	items: { columns: ['id', 'name'], foreignKeys: [] },
 	variants: {
 		columns: ['id', 'item_id', 'base_item_id'],
@@ -217,6 +225,11 @@ const tables = defineTables(vocabulary, columns)({
 	rates: app('a rate is one of a list'),
 	seasons: app('a year in a range'),
 	claims: app('a witness by key or by name'),
+	plans: {
+		scope: { app: 'a cadence, monthly unless it says otherwise' },
+		actions: { read: 'rows.read', update: 'rows.write' },
+		update: ['cadence', 'once_on'],
+	},
 	invoices: app('a supplier with its document'),
 	retirements: app('ended by someone, or not ended'),
 	sites: app('a site of an owner'),
@@ -316,6 +329,14 @@ for (const [dialect, database] of [['SQLite', sqlite], ['Postgres', postgres]] a
 			// A key column with a default the key fills too: the default alone may name no row the other column picks.
 			const returned = await row('returns')
 			expect([['stock', 'in'], ['repair', 'out']]).toContainEqual([String(returned['purpose']), String(returned['direction'])])
+		})
+
+		test('the update values of a seeded row are the values it holds, a default the database filled included', async () => {
+			if (database === null) return
+			const { key, updates } = await database.seedRow(tables, 'plans')
+			expect(updates).toEqual({ cadence: 'monthly', once_on: null })
+			await seeded('plans', key)
+			await tableProbe(layer, 'plans').update(authority.app('rows.write'), key, updates)
 		})
 
 		test('two foreign keys a CHECK keeps apart reference two rows', async () => {

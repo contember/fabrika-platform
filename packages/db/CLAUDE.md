@@ -290,7 +290,9 @@ pass a recording one); `Database.fromEngine` takes another engine (`openSqlite`)
   seeding answers with another row (see above) and reports once none passes. `sampleInsert` inserts a probe row placed
   as the insert will place it, judged by the database, removes it, and answers its values (every required insert
   column, and each one a CHECK names); it reads the number when it samples, so the caller inserts the values before
-  the next sample; `seedWorlds` samples both worlds' updates once both rows are written. Each kit reads its
+  the next sample. A seeded row's `updates` are the values it holds, as written or as the database stored them (a
+  default), so the update case writes a row its CHECKs accepted; only a stored value it cannot write back (JSON, bytes)
+  is sampled, once both worlds are written. Each kit reads its
   unique indexes and the group's next number (`uniqueIndexes`, `nextNumber`); `testing-shared.ts` decides where they
   apply.
 - **A throwaway schema is held by its advisory lock for its whole life.** The lock (SHA-256 of

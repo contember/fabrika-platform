@@ -39,7 +39,7 @@ export interface WorldRow {
 	 * share link's chain is this list.
 	 */
 	readonly chain: readonly { readonly type: string; readonly value: string }[]
-	/** The row's values of the policy's update columns, as seeded. */
+	/** The row's values of the policy's update columns: as seeded, or as stored where the database filled them. */
 	readonly updates: Readonly<Record<string, SampleValue>>
 	/**
 	 * The distinct value written into every text column the fixture filled itself, in this row and in its containers.
@@ -56,7 +56,7 @@ export interface WorldRow {
 /** One seeded row of an application table, which lies in no dimension. */
 export interface ApplicationRow {
 	readonly key: string
-	/** The row's values of the policy's update columns, as seeded. */
+	/** The row's values of the policy's update columns: as seeded, or as stored where the database filled them. */
 	readonly updates: Readonly<Record<string, SampleValue>>
 	/** The distinct value written into every text column the fixture filled itself. */
 	readonly markers: readonly string[]
@@ -374,6 +374,14 @@ function applicationRowError(refusal: ApplicationRowRefusal): Error {
 }
 
 /** A key value as the database returned it, for the foreign key that references it. */
+/** `value` as the fixture can write it back, or `undefined` when it is none it writes (a JSON object, bytes). */
+function plainValue(value: unknown): SampleValue | undefined {
+	if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
+		return value
+	}
+	return value instanceof Date ? value : undefined
+}
+
 function keyValue(value: unknown, where: string): SampleValue {
 	if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
 		return value
@@ -1081,7 +1089,12 @@ export function testSeeding(backend: SeedingBackend): TestSeeding {
 		pins: Readonly<Record<string, string>>,
 		scopes: ScopeValues,
 		inserted: InsertedRow[],
-	): Promise<{ readonly world: Omit<WorldRow, 'updates'>; readonly row: ReadonlyMap<string, SampleValue> }> {
+	): Promise<{
+		readonly world: Omit<WorldRow, 'updates'>
+		readonly row: ReadonlyMap<string, SampleValue>
+		/** The row as stored, its defaults filled. */
+		readonly holds: Readonly<Record<string, unknown>>
+	}> {
 		const markers: string[] = []
 		const scope = model.scope
 		if (scope.mode !== 'dimension' && scope.mode !== 'child') {
@@ -1097,7 +1110,7 @@ export function testSeeding(backend: SeedingBackend): TestSeeding {
 		if (own !== undefined) {
 			values.set(own, key)
 		}
-		const worldRow = (row: ReadonlyMap<string, SampleValue>, stored: readonly string[]) => {
+		const worldRow = (row: ReadonlyMap<string, SampleValue>, stored: readonly string[], holds: Readonly<Record<string, unknown>> = {}) => {
 			const chain = [
 				...(own === undefined ? [] : [{ type: own, value: key }]),
 				...links.flatMap((link) => {
@@ -1113,7 +1126,7 @@ export function testSeeding(backend: SeedingBackend): TestSeeding {
 				markers,
 				stored,
 			}
-			return { world: seeded, row }
+			return { world: seeded, row, holds }
 		}
 		if (own !== undefined && stored.has(own)) {
 			if (Object.keys(seed).length > 0 || Object.keys(pins).length > 0) {
@@ -1162,16 +1175,25 @@ export function testSeeding(backend: SeedingBackend): TestSeeding {
 			assigned.set(name, pinned)
 			markers.push(pinned)
 		}
-		const { row } = await insert(models, model.name, assigned, markers, 0, inserted)
+		const { row, stored: holds } = await insert(models, model.name, assigned, markers, 0, inserted)
 		inserted.push({ table: model.name, match: new Map([[scope.key, key]]) })
-		return worldRow(row, [])
+		return worldRow(row, [], holds)
 	}
 
-	/** A seeded row's values of the policy's update columns: as written, or a sample where the database filled the column. */
-	async function updatesOf(model: TableModel, row: ReadonlyMap<string, SampleValue>): Promise<Record<string, SampleValue>> {
+	/**
+	 * A seeded row's values of the policy's update columns, which its CHECKs accepted: as written, as stored where the
+	 * database filled the column (a default), or a sample where the stored value is no plain value.
+	 */
+	async function updatesOf(
+		model: TableModel,
+		row: ReadonlyMap<string, SampleValue>,
+		stored: Readonly<Record<string, unknown>> = {},
+	): Promise<Record<string, SampleValue>> {
 		const updates: Record<string, SampleValue> = {}
 		for (const name of namesOf(model.update)) {
-			updates[name] = row.get(name) ?? await updateSample(model.name, name)
+			const written = row.get(name)
+			const kept = written === undefined ? plainValue(stored[name]) : written
+			updates[name] = kept === undefined ? await updateSample(model.name, name) : kept
 		}
 		return updates
 	}
@@ -1201,8 +1223,8 @@ export function testSeeding(backend: SeedingBackend): TestSeeding {
 			// Sampled once both rows are written: a number a unique index covers is the next above what the table holds.
 			return {
 				dimension,
-				own: { ...own.world, updates: await updatesOf(model, own.row) },
-				other: { ...other.world, updates: await updatesOf(model, other.row) },
+				own: { ...own.world, updates: await updatesOf(model, own.row, own.holds) },
+				other: { ...other.world, updates: await updatesOf(model, other.row, other.holds) },
 				remove: () => backend.remove(inserted),
 			}
 		},
@@ -1210,8 +1232,8 @@ export function testSeeding(backend: SeedingBackend): TestSeeding {
 			const { models, model } = scopedModel(tables, table)
 			checkApplicationValues(models, { [table]: values })
 			const markers: string[] = []
-			const { key, row } = await seedApplicationRow(models, model, values, new Map(), markers)
-			return { key, updates: await updatesOf(model, row), markers }
+			const { key, row, stored } = await seedApplicationRow(models, model, values, new Map(), markers)
+			return { key, updates: await updatesOf(model, row, stored), markers }
 		},
 		async seedApplicationRows(tables, rows) {
 			const models = tableModels(tables)
