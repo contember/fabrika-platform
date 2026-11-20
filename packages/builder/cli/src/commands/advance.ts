@@ -28,6 +28,12 @@ export async function cmdAdvance(argv: string[]): Promise<number> {
 
 	const { state } = await resolvePhaseState(ctx.repoRoot, ctx.fabrikaDir, ctx.sessionId)
 	const phase = phaseById(state.current)
+	if (phase.id === 'build') {
+		console.error(
+			`[fabrika] build is the last phase; nothing follows it. Record each issue with \`fabrika builder build done <ID>\`; \`fabrika builder build status\` shows the board.`,
+		)
+		return 1
+	}
 	const problems: string[] = []
 
 	if (!producesSatisfied(ctx.repoRoot, phase)) {

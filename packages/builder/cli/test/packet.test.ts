@@ -132,6 +132,8 @@ test('build phase packet uses the build After-OK line', () => {
 	const packet = renderPacket(derivePhase(fx.root, reviewed))
 	expect(packet).toContain(`## Phase 7/${PHASE_COUNT} - Build`)
 	expect(packet).toContain('Skills:  fabrika, opice-author')
+	expect(packet).toContain("Gate:    (none - `fabrika builder build done <ID>` runs each issue's check)")
+	expect(packet).not.toContain('gate open build')
 	expect(packet).toContain('fabrika builder build')
 })
 

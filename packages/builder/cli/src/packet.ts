@@ -52,6 +52,8 @@ export function renderPacket(state: PhaseState, opts: RenderOpts = {}): string {
 		lines.push(`Gate:    ${write}fabrika builder gate open ${phase.id} --view ${view} && fabrika builder gate wait`)
 	} else if (phase.reviewedAt) {
 		lines.push(`Gate:    (none - reviewed at the ${phase.reviewedAt} gate, with the next phase's output)`)
+	} else if (phase.id === 'build') {
+		lines.push(`Gate:    (none - \`fabrika builder build done <ID>\` runs each issue's check)`)
 	} else {
 		lines.push(`Gate:    (none - deterministic compile step; review optional)`)
 	}

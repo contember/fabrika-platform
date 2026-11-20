@@ -1,9 +1,7 @@
-import { mkdirSync, writeFileSync } from 'fs'
-import { dirname, join } from 'path'
+import { join } from 'path'
 import { parseArgs } from 'util'
 import { GATE_CHANGES } from '../../../shared/gate'
-import { BUILD_REVIEW_PATH, describeEvidence, renderBuildReview } from '../build-review'
-import { type BuildEvidence, type BuildPlan, planBuild, readBoard, record } from '../build-status'
+import { type BuildEvidence, type BuildPlan, describeEvidence, planBuild, readBoard, record } from '../build-status'
 import { resolveStackPointer, unsupportedProfileNote } from '../catalog'
 import { resolveContext } from '../context'
 import { consumeGate, postBuildEvent } from '../daemon-client'
@@ -98,14 +96,6 @@ export async function cmdBuild(argv: string[]): Promise<number> {
 			return await reportProgress(issues, ctx.fabrikaDir)
 		}
 
-		case 'review': {
-			const path = join(ctx.repoRoot, BUILD_REVIEW_PATH)
-			mkdirSync(dirname(path), { recursive: true })
-			writeFileSync(path, renderBuildReview(issues, readBoard(ctx.fabrikaDir), new Date()))
-			console.log(path)
-			return 0
-		}
-
 		case 'block': {
 			if (!idArg || !byId(idArg)) {
 				console.error(`[fabrika] build block <ISSUE-ID> --reason "…" — unknown or missing issue id.`)
@@ -115,7 +105,7 @@ export async function cmdBuild(argv: string[]): Promise<number> {
 			record(ctx.fabrikaDir, idArg, 'blocked', reason, new Date().toISOString())
 			await postBuildEvent({ issue: idArg, status: 'blocked', message: reason })
 			console.log(`[fabrika] ⚠ ${idArg} blocked: ${reason}`)
-			console.log(`[fabrika] continuing to independent issues; collect blocked at final review.`)
+			console.log(`[fabrika] continuing to independent issues; the end of the build lists the blocked ones.`)
 			return await reportProgress(issues, ctx.fabrikaDir)
 		}
 
@@ -227,7 +217,7 @@ async function reportProgress(issues: Issue[], fabrikaDir: string): Promise<numb
 	if (plan.complete) return await reportComplete(plan, issues.length)
 	printBoard(plan)
 	if (!plan.next && plan.waiting.length) {
-		console.error(`\n[fabrika] nothing buildable: ${plan.waiting.length} waiting on blocked deps (see final review).`)
+		console.error(`\n[fabrika] nothing buildable: ${plan.waiting.length} waiting on blocked deps (see the blocked issues).`)
 	}
 	return 0
 }
@@ -236,10 +226,10 @@ async function reportComplete(plan: BuildPlan, total: number): Promise<number> {
 	await postBuildEvent({ status: 'info', message: `build complete: ${plan.done.length}/${total} green` })
 	console.log(
 		`\n[fabrika] ✓ build complete — ${plan.done.length}/${total} issues green`
-			+ (plan.blocked.length ? `, ${plan.blocked.length} blocked (see final review).` : '.'),
+			+ (plan.blocked.length ? `, ${plan.blocked.length} blocked (listed below).` : '.'),
 	)
 	if (plan.blocked.length) {
-		console.log(`\nBlocked (final review):`)
+		console.log(`\nBlocked (tell the human what each one needs):`)
 		for (const b of plan.blocked) console.log(`  ⚠ ${b.id}  ${b.goal}`)
 	}
 	return 0
@@ -315,7 +305,6 @@ function renderOrchestrationBrief(plan: BuildPlan, repoRoot: string, profile: st
 		`             they point to, and scaffold from current APIs (your memory is likely stale).`,
 		`Record:      fabrika builder build done <ID> [--verify "<command>"]   |   fabrika builder build block <ID> --reason "…"`,
 		`             (done RUNS the issue's check and refuses on red; both write status.json + stream a BuildEvent)`,
-		`Review:      fabrika builder build review && fabrika builder gate open build --view ${BUILD_REVIEW_PATH}`,
 		`Detail:      fabrika builder build --issue <ID>   (re-emit one issue's full packet)`,
 	].join('\n') + '\n'
 }

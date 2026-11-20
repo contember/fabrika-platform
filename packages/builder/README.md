@@ -10,7 +10,7 @@ The builder runs seven deterministic phases:
 4. technology
 5. opice test skeletons
 6. implementation issues
-7. build
+7. build (no gate: `build done` runs each issue's check)
 
 Design is not a phase of its own. `induce` adds a design checkpoint issue, `ISSUE-004`, after the foundation issues and
 before every feature: the agent themes the running application through the UI kit's `--fui-*` tokens, and the human
@@ -82,7 +82,6 @@ fabrika builder build [--issue <ID>] [--assisted]
 fabrika builder build done <ID> [--verify "<command>"]
 fabrika builder build block <ID> --reason "<text>"
 fabrika builder build status
-fabrika builder build review
 ```
 
 The default profile is `zerops-app`. `--profile cf-app` selects the same paved road on Cloudflare: a contract application in one Durable Object per environment. The builder's `connect` and `deploy` work with a Zerops installation only, so a `cf-app` application is deployed by the installation's own Control. The other presets (`cf-lightweight`, `cf-fat`, `cf-internal-app`, `contember-app`, `content-site`) are kept for reference but are unsupported: they leave the contract, the proxy, the kit and the checker. `init`, the tech packet and the build brief warn when one is selected. `init` never replaces a project's profile; to move a project to a supported preset, change `profile` in `.fabrika/config.json` and revisit `.fabrika/architecture/tech.md`.

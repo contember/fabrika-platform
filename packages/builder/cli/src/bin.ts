@@ -42,7 +42,7 @@ Usage:
   fabrika builder build done <ID> [--verify <cmd>]   Run the issue's check; record it as done only when green
                                                     A design checkpoint takes [--waive-contrast] instead
   fabrika builder build block <ID> --reason <text>   Record an issue as blocked
-  fabrika builder build status | review              Print the board | write the build gate view from it
+  fabrika builder build status                       Print the board
 
 Environment:
   FABRIKA_PORT         Daemon port (default 19410)

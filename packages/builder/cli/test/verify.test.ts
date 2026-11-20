@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
-import { describeEvidence } from '../src/build-review'
+import { describeEvidence } from '../src/build-status'
 import { readBoard } from '../src/build-status'
 import { gitState } from '../src/verify'
 import { type Fixture, makeFixture } from './helpers'
