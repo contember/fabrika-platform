@@ -209,8 +209,11 @@ follows an edit of `zerops.yaml`.
 - **Only a contract application.** `fabrika app build` also refuses a plain credential in the run section of an
   application without a contract, against the `notSecret` list of its config, which the stored manifest does not carry.
   Its run would skip that check, so such an application keeps the earlier behaviour: the mismatch fails the run and its
-  line names `fabrika app build --env` and `apps environments put`. A contract application's executed setup has no
-  `run` section and no build variables (above), so the check finds nothing there that the parse lets through.
+  line names `fabrika app build --env` and `apps environments put`. For a contract application the check differs in
+  scope: `fabrika app build` reads the `envVariables` and `routing.headers` of every setup of `zerops.yaml`, the run's
+  parse only the setup that runs, which may hold neither (above). So another setup of the file, one this application
+  never runs, can now carry a value that looks like a credential, and Control stores it with the manifest. It never
+  reaches a Zerops service of this application; it was already readable in the repository.
 - **Not checked at deploy.** The build base against `bun.lock` is checked by `fabrika app build` and the builder, not by
   the run; a base that cannot read the lockfile fails the Zerops build instead. The approval diff of
   [ADR-0050](0050-approved-access.md) covers access, not the build, so a changed `zerops.yaml` is not an approval item.

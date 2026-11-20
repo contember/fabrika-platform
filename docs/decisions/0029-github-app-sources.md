@@ -151,9 +151,12 @@ them.
 **Zerops delivery, in-process in Control.** For each deploy, Control:
 
 1. Resolves the requested ref to one exact commit in one pass over the ref's archive: the pax global
-   header names the commit, and the root `zerops.yaml` hashed in passing must equal the descriptor digest
-   embedded in the registered provider artifact, or the run fails before any Zerops or Operations state is
-   created. The run's access snapshot is a second pass over the commit's archive, which keeps the files it
+   header names the commit, and the root `zerops.yaml` is hashed in passing against the descriptor digest
+   embedded in the registered provider artifact. On a mismatch a contract application's run registers the
+   commit's `zerops.yaml` through the registration's own parse and resolves again at that commit
+   ([ADR-0043](0043-validate-and-render-one-zerops-descriptor-meaning.md)); an application without a contract, a
+   dev bootstrap and a run of a workspace branch fail before any Zerops or Operations state is created. The run's
+   access snapshot is a second pass over the commit's archive, which keeps the files it
    may read. No step reads the repository through a rate-counted REST request, except a file the snapshot
    pass did not keep and the platform tree check below.
 2. Creates the Zerops application version and records its id
@@ -210,7 +213,10 @@ them.
 - Validation runs during the PUT, so a rejected archive aborts an upload in flight. The run settles
   the archive verdict before blaming the transport, and the pre-trigger cleanup deletes the version.
 - A GitHub change to the tarball redirect or format fails the deploy at the redirect check.
-- Changing the repository-root `zerops.yaml` requires rebuilding and re-registering the artifact.
+- A changed repository-root `zerops.yaml` reaches a contract application with its next deploy, which registers it
+  ([ADR-0043](0043-validate-and-render-one-zerops-descriptor-meaning.md)). An application without a contract still
+  rebuilds and re-registers the artifact, and a dev bootstrap or a run of a workspace branch fails until the
+  environment's manifest has it.
 - An orphan window remains between GitHub accepting the manifest conversion and the vault write. An
   App lost in that window must be deleted and recreated.
 - Deleting or disconnecting a connection, rotating a private key, moving an application to another
