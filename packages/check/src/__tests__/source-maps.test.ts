@@ -91,6 +91,30 @@ describe('the upload', () => {
 		const failed = await uploadSourceMaps({ ...DESTINATION, bearer: BEARER }, collection, () => Promise.reject(new Error('unreachable')))
 		expect(failed).toEqual({ uploaded: 0, state: 'incomplete' })
 	})
+
+	test.each([307, 308])('a %d is not followed, so the bearer and the map stay at the destination', async (status) => {
+		const arrivals: string[] = []
+		const target = Bun.serve({
+			hostname: '127.0.0.1',
+			port: 0,
+			fetch: (request) => {
+				arrivals.push(request.url)
+				return new Response(null, { status: 201 })
+			},
+		})
+		// `localhost` against `127.0.0.1`: the same machine, another origin.
+		const location = `http://localhost:${target.port}/collect`
+		const operations = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response(null, { status, headers: { location } }) })
+		try {
+			const destination = { ...DESTINATION, url: `http://127.0.0.1:${operations.port}/api/artifacts/source-maps/`, bearer: BEARER }
+			const result = await uploadSourceMaps(destination, { artifacts: [artifact], incomplete: false }, (input, init) => fetch(input, init))
+			expect(result).toEqual({ uploaded: 0, state: 'incomplete' })
+			expect(arrivals).toEqual([])
+		} finally {
+			await operations.stop(true)
+			await target.stop(true)
+		}
+	})
 })
 
 describe('fabrika-source-maps', () => {

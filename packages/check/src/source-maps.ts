@@ -144,6 +144,8 @@ export async function uploadSourceMaps(
 				},
 				body: artifact.body,
 				signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
+				// The bearer and the map must never reach a redirect target; a 3xx is not ok below.
+				redirect: 'manual',
 			})
 			if (response.ok) uploaded++
 			else incomplete = true
