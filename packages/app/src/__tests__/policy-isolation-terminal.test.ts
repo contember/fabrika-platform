@@ -1,6 +1,6 @@
-// The isolation kits of an application whose vocabulary names a terminal's identification page: each probe contract
-// keeps the application's SPA mounts, so the public mount that serves the page is still there when the probe is built.
-// On SQLite, which needs no service.
+// The isolation kits of an application whose vocabulary names a terminal's identification page: each probe serves that
+// page from a public mount of its own, so it builds whatever the application's mounts are named and whatever variables
+// their pages read, which the kit does not set. On SQLite, which needs no service.
 
 import { defineApp, defineVocabulary } from '@fabrika/app/contract'
 import { appPolicyIsolationKit, policyIsolationKit } from '@fabrika/app/testing/isolation'
@@ -35,9 +35,10 @@ const tables = defineTables(vocabulary, columns)({
 	shifts: { scope: { app: 'the shift templates' }, actions: { read: 'attendance.read', insert: 'attendance.record' }, insert: ['label'] },
 })
 
+// The kiosk mount shares its name with the probe's own mount, and both pages read a variable the kit leaves unset.
 const contract = defineApp(vocabulary, tables).contract((c) => ({
-	kiosk: c.spa('/kiosk', { dir: 'dist', access: { public: true } }),
-	site: c.spa('/', { dir: 'dist', access: { member: true } }),
+	probe: c.spa('/kiosk', { dir: 'dist', access: { public: true }, browserConfig: ['KIOSK_TITLE'] }),
+	site: c.spa('/', { dir: 'dist', access: { member: true }, browserConfig: ['SIGNUP_URL'] }),
 }))
 
 const directory = mkdtempSync(join(tmpdir(), 'fabrika-policy-isolation-terminal-'))
