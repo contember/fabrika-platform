@@ -616,6 +616,27 @@ describe('the stand-in answers an invitation as IAM does: the open one again, a 
 		expect(membership.invitations().map((sent) => sent.sentAt)).toEqual([opened + 24 * 60 * 60])
 	})
 
+	test("an invitation keeps the person's language it names; a resend that names one replaces it, one that names none keeps it", async () => {
+		const membership = standIn()
+		const assign = async (invitation: { readonly locale?: 'uk' | 'cs'; readonly resend?: boolean }) =>
+			membership.rpc.assignMember({
+				...as(owner),
+				delegation: await delegation(membership, owner, 'api.members.invite'),
+				scope: ACME,
+				role: 'editor',
+				member: { email: 'ann@example.test' },
+				invitation,
+			})
+		await assign({ locale: 'uk' })
+		expect(membership.invitations().map((sent) => sent.locale)).toEqual(['uk'])
+		await assign({ resend: true })
+		expect(membership.invitations().map((sent) => sent.locale)).toEqual(['uk'])
+		await assign({ resend: true, locale: 'cs' })
+		expect(membership.invitations().map((sent) => sent.locale)).toEqual(['cs'])
+		await invite(membership, 'bo@example.test')
+		expect(membership.invitations().find((sent) => sent.email === 'bo@example.test')).not.toHaveProperty('locale')
+	})
+
 	test('a cancelled or expired invitation is no longer open: the next one has a new id; a repeated cancel answers the same', async () => {
 		const membership = standIn()
 		const first = await invite(membership)

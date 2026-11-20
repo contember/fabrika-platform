@@ -36,6 +36,8 @@ export interface PasswordActionTokenRow {
 	created_at: number
 	/** The application the action keeps (`presentationFor`), or NULL for one on the installation itself. */
 	app: string | null
+	/** The language its mail was written in, which the page its link opens speaks too; NULL before migration 0031. */
+	locale: string | null
 }
 
 /** A new action token: only its hash is stored. */
@@ -46,6 +48,7 @@ export interface ActionTokenInput {
 	issuedBy?: string | null
 	expiresAt: number
 	app?: string | null
+	locale?: string | null
 }
 
 export interface PasswordLoginThrottleRow {
@@ -239,9 +242,19 @@ export class PasswordRepository {
 			this.db.prepare(`UPDATE password_action_tokens SET consumed_at = ?
 				WHERE principal_id = ? AND purpose = ? AND consumed_at IS NULL`).bind(now, input.principalId, input.purpose),
 			this.db.prepare(`INSERT INTO password_action_tokens
-				(id, principal_id, purpose, token_hash, issued_by, expires_at, consumed_at, consumption_id, created_at, app)
-				VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)`)
-				.bind(id, input.principalId, input.purpose, input.tokenHash, input.issuedBy ?? null, input.expiresAt, now, input.app ?? null),
+				(id, principal_id, purpose, token_hash, issued_by, expires_at, consumed_at, consumption_id, created_at, app, locale)
+				VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?)`)
+				.bind(
+					id,
+					input.principalId,
+					input.purpose,
+					input.tokenHash,
+					input.issuedBy ?? null,
+					input.expiresAt,
+					now,
+					input.app ?? null,
+					input.locale ?? null,
+				),
 			...(issuance === undefined ? [] : [auditEventStatement(this.db, issuance.audit)]),
 		])
 	}

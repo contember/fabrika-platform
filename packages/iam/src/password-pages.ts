@@ -1,4 +1,4 @@
-import { DEFAULT_LOCALE, type Locale } from '@fabrika/auth-core'
+import type { Locale } from '@fabrika/auth-core'
 import type { InstallationBrand } from '@fabrika/proxy-core/brand'
 import { PAGE_STYLE, pageBody } from '@fabrika/proxy-core/page-style'
 import { type AppPresentation, appQuery, landingUrl } from './app-presentation'
@@ -175,11 +175,13 @@ export function logoutPage(input: {
 	readonly landingOrigin: string | null
 	/** The installation's logo (`installationBrand`), or null for the fabrika mark. */
 	readonly brand: InstallationBrand | null
+	/** The reader's language (`readerLocale`): the sign-out names no application. */
+	readonly locale: Locale
 }): Response {
-	const text = catalogFor(DEFAULT_LOCALE).pages
+	const text = catalogFor(input.locale).pages
 	const query = input.redirect === null ? '' : `?redirect=${encodeURIComponent(input.redirect)}`
 	return htmlPage({
-		locale: DEFAULT_LOCALE,
+		locale: input.locale,
 		brand: input.brand,
 		title: text.logout.title,
 		content: `<h1>${escapeHtml(text.logout.title)}</h1><p>${escapeHtml(text.logout.text)}</p>
@@ -193,11 +195,13 @@ export function logoutPage(input: {
 /** Where an administrator enrols the browser it uses as a terminal (ADR-0067). */
 export const TERMINAL_ENROL_PATH = '/auth/terminals/enroll'
 
-/** The enrolment form. It names no application, so it speaks the installation's language. */
-export function terminalEnrolPage(input: { readonly brand: InstallationBrand | null; readonly labelProblem?: boolean }): Response {
-	const text = catalogFor(DEFAULT_LOCALE).pages.terminal
+/** The enrolment form. It names no application, so it speaks the reader's language (`readerLocale`). */
+export function terminalEnrolPage(
+	input: { readonly brand: InstallationBrand | null; readonly locale: Locale; readonly labelProblem?: boolean },
+): Response {
+	const text = catalogFor(input.locale).pages.terminal
 	return htmlPage({
-		locale: DEFAULT_LOCALE,
+		locale: input.locale,
 		brand: input.brand,
 		title: text.enrolTitle,
 		content: `<h1>${escapeHtml(text.enrolTitle)}</h1>${
@@ -212,10 +216,10 @@ export function terminalEnrolPage(input: { readonly brand: InstallationBrand | n
 }
 
 /** What an enrolled browser shows: the administrator is signed out and the terminal is named. */
-export function terminalEnrolledPage(label: string, brand: InstallationBrand | null): Response {
-	const text = catalogFor(DEFAULT_LOCALE).pages.terminal
+export function terminalEnrolledPage(label: string, brand: InstallationBrand | null, locale: Locale): Response {
+	const text = catalogFor(locale).pages.terminal
 	return htmlPage({
-		locale: DEFAULT_LOCALE,
+		locale,
 		brand,
 		title: text.enrolledTitle,
 		content: `<h1>${escapeHtml(text.enrolledTitle)}</h1><p>${escapeHtml(text.enrolledText(label))}</p>`,

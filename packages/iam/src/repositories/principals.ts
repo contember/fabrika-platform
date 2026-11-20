@@ -19,6 +19,11 @@ export interface PrincipalRow {
 	affiliation: PrincipalAffiliation
 	/** Moved on by every removal of one of its grants (`grantRemovalStatement`); an acceptance writes only under the one it checked. */
 	grant_revision: number
+	/**
+	 * The language the person reads IAM in, as an accepted invitation named it (`InvitationOptions.locale`), or NULL for
+	 * none: their application's then. Parsed at read; a value IAM no longer speaks counts as none.
+	 */
+	locale: string | null
 }
 
 /** Derived principal status — invited (not activated) → active → disabled. */
@@ -83,6 +88,14 @@ export class PrincipalRepository {
 
 	async getPrincipalById(id: string): Promise<PrincipalRow | null> {
 		return this.db.prepare('SELECT * FROM principals WHERE id = ?').bind(id).first<PrincipalRow>()
+	}
+
+	/**
+	 * Keep `locale` as the language the person reads IAM in. It picks words and nothing else, so it is written alone,
+	 * outside any principal's lock order, and leaves no audit record: no grant, credential or session depends on it.
+	 */
+	async setLocale(id: string, locale: string): Promise<void> {
+		await this.db.prepare('UPDATE principals SET locale = ? WHERE id = ?').bind(locale, id).run()
 	}
 
 	/** Resolve a user by mailbox. `email` is normalized here, so any spelling of it finds the same row. */

@@ -31,10 +31,10 @@ export async function handleLogin(
 		url.searchParams.get(AUTH_HANDOFF_CHALLENGE_PARAM),
 	)
 	if (reading.kind === 'refused') {
-		return authFailurePage(await presentationFor(services, url.searchParams.get('app')), reading.failure, 400)
+		return authFailurePage(await presentationFor(services, url.searchParams.get('app'), { request }), reading.failure, 400)
 	}
 	const handoff = handoffOf(reading)
-	const presentation = await presentationFor(services, handoff?.app ?? null)
+	const presentation = await presentationFor(services, handoff?.app ?? null, { request })
 	// A handoff's destination is already validated against the app's registry, so `safeRedirect` must
 	// not get a say: it admits IAM's own origin only, which by definition excludes the app host this
 	// exists for. Passing its refusal to the form would send the login to the installation's landing.
@@ -100,9 +100,11 @@ async function loginChoseApp(services: Services, login: SessionRow, app: string)
  * same handoff, whose verifier the app's proxy still holds.
  */
 export async function handleAccountChoice(request: Request, services: Services, requestId: string): Promise<Response> {
-	if (!sameOrigin(request, services.config)) return authFailurePage(await installationPresentation(services), { kind: 'cross_origin' }, 403)
+	if (!sameOrigin(request, services.config)) {
+		return authFailurePage(await installationPresentation(services, { request }), { kind: 'cross_origin' }, 403)
+	}
 	const form = await readForm(request)
-	if (form === null) return authFailurePage(await installationPresentation(services), { kind: 'malformed_form' }, 400)
+	if (form === null) return authFailurePage(await installationPresentation(services, { request }), { kind: 'malformed_form' }, 400)
 	const app = stringValue(form.get('app'))
 	const reading = await readHandoff(
 		services,
@@ -111,7 +113,7 @@ export async function handleAccountChoice(request: Request, services: Services, 
 		stringValue(form.get(AUTH_HANDOFF_STATE_PARAM)),
 		stringValue(form.get(AUTH_HANDOFF_CHALLENGE_PARAM)),
 	)
-	const presentation = await presentationFor(services, app)
+	const presentation = await presentationFor(services, app, { request })
 	if (reading.kind === 'refused') return authFailurePage(presentation, reading.failure, 400)
 	const handoff = handoffOf(reading)
 	const decision = form.get('decision')

@@ -6,6 +6,7 @@
 // and a platform component that implements `IamRpc` does not have to.
 
 import type { ContractArtifact, DimensionArtifact, EndpointRow } from './contract'
+import { isLocale, type Locale, LOCALES } from './locale'
 import type { PrincipalAffiliation, Scope } from './types'
 
 /**
@@ -174,17 +175,24 @@ export const MAX_INVITATION_MESSAGE_LENGTH = 1000
  * What an invitation by address carries besides its role. `label` is the invited person's company as the application
  * names it, `message` the inviter's personal note; both are plain text IAM escapes wherever it inserts them. `resend`
  * rotates the open invitation's link, restarts its lifetime and sends it again; without it, repeating an invitation
- * answers the open one and sends nothing.
+ * answers the open one and sends nothing. `locale` is the invited person's language, when the application knows it: IAM
+ * writes the invitation and the pages its link opens in it, and its acceptance keeps it as the person's, so IAM's later
+ * e-mails (a password reset) and pages speak it too. Without one, IAM speaks the language the person already has, else the
+ * application's. A resend that names one replaces the stored one.
  */
 export interface InvitationOptions {
 	readonly label?: string
 	readonly message?: string
 	readonly resend?: boolean
+	readonly locale?: Locale
 }
 
-/** Why IAM refuses an invitation's label or message, or `null`. A message may break lines; nothing else is a control character. */
+/** Why IAM refuses an invitation's label, message or locale, or `null`. A message may break lines; nothing else is a control character. */
 export function invitationOptionsProblem(options: InvitationOptions): string | null {
-	const { label, message } = options
+	const { label, message, locale } = options
+	if (locale !== undefined && !isLocale(locale)) {
+		return `an invitation locale is one of ${LOCALES.map((value) => `'${value}'`).join(', ')}`
+	}
 	if (label !== undefined && (label.length > MAX_INVITATION_LABEL_LENGTH || /\p{Cc}/u.test(label))) {
 		return `an invitation label is at most ${MAX_INVITATION_LABEL_LENGTH} characters on one line`
 	}

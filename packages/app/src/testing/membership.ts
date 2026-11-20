@@ -29,6 +29,7 @@ import {
 	type ListAppMembersResult,
 	type ListMembersInput,
 	type ListMembersResult,
+	type Locale,
 	matchAction,
 	MAX_APP_MEMBERS_PAGE,
 	MAX_LINK_CHAIN_LENGTH,
@@ -147,6 +148,8 @@ export interface SentInvitation {
 	/** When it was last sent, in seconds: when it was opened, or its latest resend. */
 	readonly sentAt: number
 	readonly status: 'open' | 'accepted' | 'cancelled' | 'expired'
+	/** The invited person's language, as the invitation (or its latest resend) named it; absent when it named none. */
+	readonly locale?: Locale
 }
 
 /**
@@ -171,6 +174,7 @@ interface KitInvitation {
 	readonly closed: 'cancelled' | 'accepted' | null
 	/** The principal that opened it, whose authority IAM checks again at acceptance; `null` for a seeded one. */
 	readonly inviter: string | null
+	readonly locale: Locale | null
 }
 
 /** A share link the stand-in issued; a revoked one is still found, so a repeated revoke answers the same. */
@@ -483,16 +487,27 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 			&& invitation.email === email
 		)
 
-	const openNew = (scope: Scope, role: string, email: string, inviter: string | null): KitInvitation => {
+	const openNew = (scope: Scope, role: string, email: string, inviter: string | null, locale: Locale | null = null): KitInvitation => {
 		const sentAt = now()
-		const invitation = { id: `invitation-${randomId()}`, scope, role, email, expiresAt: sentAt + INVITATION_TTL_SECONDS, sentAt, closed: null, inviter }
+		const invitation = {
+			id: `invitation-${randomId()}`,
+			scope,
+			role,
+			email,
+			expiresAt: sentAt + INVITATION_TTL_SECONDS,
+			sentAt,
+			closed: null,
+			inviter,
+			locale,
+		}
 		invitations.set(invitation.id, invitation)
 		return invitation
 	}
 
-	const resent = (invitation: KitInvitation): KitInvitation => {
+	/** As IAM, a resend that names a language replaces the stored one; one that names none keeps it. */
+	const resent = (invitation: KitInvitation, locale: Locale | null): KitInvitation => {
 		const sentAt = now()
-		return { ...invitation, expiresAt: sentAt + INVITATION_TTL_SECONDS, sentAt }
+		return { ...invitation, expiresAt: sentAt + INVITATION_TTL_SECONDS, sentAt, locale: locale ?? invitation.locale }
 	}
 
 	/** Spends the request's grant before its binding is compared, as IAM does, so each attempt is single use. */
@@ -588,7 +603,7 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 		const problem = manageProblem(caller, input.scope) ?? roleProblem(caller, input.scope, input.role)
 		if (problem !== null) return problem
 		if ('principalId' in input.member) {
-			if (input.invitation !== undefined) return invalid('a label, a message and a resend go with an invitation by address')
+			if (input.invitation !== undefined) return invalid('a label, a message, a locale and a resend go with an invitation by address')
 			const { principalId } = input.member
 			const target = callers.all().find(({ caller: candidate }) => candidate.id === principalId && candidate.kind === 'human')?.caller
 			if (target === undefined) return NOT_FOUND
@@ -606,9 +621,9 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 		// As IAM: a repeat answers the open invitation and sends nothing; a resend gives it a new link and 7 days.
 		const open = openInvitation(input.scope, input.role, email)
 		const invitation = open === undefined
-			? openNew(input.scope, input.role, email, caller.id)
+			? openNew(input.scope, input.role, email, caller.id, input.invitation?.locale ?? null)
 			: input.invitation?.resend === true
-			? resent(open)
+			? resent(open, input.invitation.locale ?? null)
 			: open
 		invitations.set(invitation.id, invitation)
 		asked.push({
@@ -764,7 +779,7 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 		return link === undefined || link.revoked ? undefined : { id: link.id, mount: link.mount, chain: link.chain }
 	}
 	const invitationsSent = (): readonly SentInvitation[] =>
-		[...invitations.values()].map(({ id, email, role, scope, expiresAt, sentAt, closed }) => ({
+		[...invitations.values()].map(({ id, email, role, scope, expiresAt, sentAt, closed, locale }) => ({
 			id,
 			email,
 			role,
@@ -772,6 +787,7 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 			expiresAt,
 			sentAt,
 			status: closed ?? (expiresAt > now() ? 'open' : 'expired'),
+			...(locale === null ? {} : { locale }),
 		}))
 	const accept = (invitationId: string, recipient?: TestCaller): AcceptedInvitation => {
 		const invitation = invitations.get(invitationId)

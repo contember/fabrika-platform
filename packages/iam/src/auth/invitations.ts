@@ -1,6 +1,6 @@
 import type { InstallationBrand } from '@fabrika/proxy-core/brand'
 import { z } from 'zod'
-import { actionLandingOrigin, type AppPresentation, landingUrl, presentationFor } from '../app-presentation'
+import { actionLandingOrigin, type AppPresentation, appQuery, landingUrl, presentationFor } from '../app-presentation'
 import { type InvitationRow, principalStatus } from '../db'
 import { type RequestContext } from '../env'
 import { acceptCreatingPrincipal, acceptInvitation, INVITATION_ACCEPT_PATH, invitationOffer } from '../membership'
@@ -29,7 +29,7 @@ const tokenSchema = z.string().max(512).regex(/^[A-Za-z0-9_-]{32,}$/)
  * registered origin, where the application's proxy signs the browser in through the normal handoff.
  */
 export async function handleInvitation(request: Request, services: Services, ctx: RequestContext, requestId: string): Promise<Response> {
-	const linked = await presentationFor(services, new URL(request.url).searchParams.get('app'))
+	const linked = await presentationFor(services, new URL(request.url).searchParams.get('app'), { request })
 	if (request.method === 'GET') {
 		return invitationPage(linked)
 	}
@@ -56,7 +56,7 @@ export async function handleInvitation(request: Request, services: Services, ctx
 		// The new account would replace the browser's session silently, and the application would keep the old identity.
 		if ((await currentSession(request, services)) !== null) {
 			return invitationOutcomePage({
-				presentation: await presentationFor(services, offer.invitation.app, linked.brand),
+				presentation: await presentationFor(services, offer.invitation.app, { request, brand: linked.brand, locale: offer.invitation.locale }),
 				title: (t) => t.otherAccountTitle,
 				text: (t) => t.otherAccountText(offer.invitation.email),
 				status: 409,
@@ -67,7 +67,7 @@ export async function handleInvitation(request: Request, services: Services, ctx
 		if (password !== null) {
 			return createAndAccept(request, services, ctx, { invitation: offer.invitation, token: token.data, password, requestId, brand: linked.brand })
 		}
-		const presentation = await presentationFor(services, offer.invitation.app, linked.brand)
+		const presentation = await presentationFor(services, offer.invitation.app, { request, brand: linked.brand, locale: offer.invitation.locale })
 		return invitationPasswordPage({
 			presentation,
 			landingOrigin: await actionLandingOrigin(services, presentation),
@@ -81,14 +81,14 @@ export async function handleInvitation(request: Request, services: Services, ctx
 		if (offer.kind === 'no_account') {
 			// A sign-in form would be a dead end: no principal holds the mailbox and no sign-in here creates one.
 			return invitationOutcomePage({
-				presentation: await presentationFor(services, offer.invitation.app, linked.brand),
+				presentation: await presentationFor(services, offer.invitation.app, { request, brand: linked.brand, locale: offer.invitation.locale }),
 				title: (t) => t.noAccountTitle,
 				text: (t) => t.noAccountText(offer.invitation.email),
 				status: 403,
 			})
 		}
 		// The application's own address signs the browser in through its handoff, in its language; without one, IAM's.
-		const signIn = landingUrl(linked) ?? ownSignIn(services, linked.app)
+		const signIn = landingUrl(linked) ?? ownSignIn(services, linked)
 		return invitationOutcomePage({
 			presentation: linked,
 			title: (t) => t.signInFirstTitle,
@@ -115,7 +115,7 @@ export async function handleInvitation(request: Request, services: Services, ctx
 		}
 	}
 	const { invitation } = outcome
-	const presentation = await presentationFor(services, invitation.app, linked.brand)
+	const presentation = await presentationFor(services, invitation.app, { request, brand: linked.brand, locale: invitation.locale ?? principal.locale })
 	const landing = landingUrl(presentation)
 	if (landing !== null) {
 		return new Response(null, { status: 302, headers: redirectHeaders(landing) })
@@ -148,7 +148,7 @@ async function createAndAccept(
 	},
 ): Promise<Response> {
 	const { invitation } = input
-	const presentation = await presentationFor(services, invitation.app, input.brand)
+	const presentation = await presentationFor(services, invitation.app, { request, brand: input.brand, locale: invitation.locale })
 	const minLength = await passwordMinLength(services)
 	const policy = validatePassword(input.password, minLength, { email: invitation.email, label: invitation.email })
 	if (!policy.ok) {
@@ -193,15 +193,14 @@ function creationRefused(
 				title: (t) => t.signInFirstTitle,
 				text: (t) => t.signInFirstText,
 				status: 401,
-				signIn: landingUrl(presentation) ?? ownSignIn(services, presentation.app),
+				signIn: landingUrl(presentation) ?? ownSignIn(services, presentation),
 			})
 	}
 }
 
 /** IAM's own sign-in, back to this page: the browser opens the invitation link again there. */
-function ownSignIn(services: Services, app: string | null): string {
-	const accept = new URL(INVITATION_ACCEPT_PATH, services.config.issuer)
-	if (app !== null) accept.searchParams.set('app', app)
+function ownSignIn(services: Services, presentation: AppPresentation): string {
+	const accept = new URL(`${INVITATION_ACCEPT_PATH}${appQuery(presentation)}`, services.config.issuer)
 	const signIn = new URL('/auth/login', services.config.issuer)
 	signIn.searchParams.set('redirect', accept.toString())
 	return signIn.toString()

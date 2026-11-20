@@ -16,7 +16,7 @@ import { issueSession, type LoginRefusal, refuseLogin } from './sessions'
 
 export async function handleOidcStart(request: Request, services: Services, env: AuthEnv): Promise<Response> {
 	const url = new URL(request.url)
-	const linked = await presentationFor(services, url.searchParams.get('app'))
+	const linked = await presentationFor(services, url.searchParams.get('app'), { request })
 	if (!services.config.authentication.oidc.enabled) return authFailurePage(linked, { kind: 'oidc_disabled' }, 404)
 	const reading = await readHandoff(
 		services,
@@ -71,7 +71,7 @@ export async function handleCallback(
 	const state = url.searchParams.get('state')
 	const flight = await decodeFlight(env, readCookie(request.headers.get('Cookie'), OIDC_COOKIE))
 	// The flight we signed names the application the login started from; its refusals speak that language.
-	const presentation = await presentationFor(services, flight?.app ?? null)
+	const presentation = await presentationFor(services, flight?.app ?? null, { request })
 	if (!services.config.authentication.oidc.enabled || services.oidc === null) {
 		return authFailureEndingFlight(presentation, { kind: 'oidc_disabled' }, 404)
 	}

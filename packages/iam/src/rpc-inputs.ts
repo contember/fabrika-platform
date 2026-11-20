@@ -1,3 +1,4 @@
+import { LOCALES } from '@fabrika/auth-core'
 import { z } from 'zod'
 
 const optionalString = z.string().nullish().transform((value) => value ?? undefined)
@@ -63,7 +64,10 @@ export const assignMemberSchema = z.object({
 	scope: memberScopeSchema,
 	role: z.string(),
 	member: z.union([z.object({ principalId: z.string() }).strict(), z.object({ email: z.string() }).strict()]),
-	invitation: z.object({ label: z.string().optional(), message: z.string().optional(), resend: z.boolean().optional() }).strict().optional(),
+	invitation: z
+		.object({ label: z.string().optional(), message: z.string().optional(), resend: z.boolean().optional(), locale: z.enum(LOCALES).optional() })
+		.strict()
+		.optional(),
 }).catch(rejectRpcInput)
 export const revokeMemberSchema = z.object({
 	...caller,

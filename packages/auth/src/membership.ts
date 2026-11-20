@@ -56,7 +56,7 @@ export class IamMembership {
 		return this.binding.createScope({ ...this.caller(caller), delegation, dimension })
 	}
 
-	/** `invitation` goes with an address only: its label, message and resend (`InvitationOptions`). */
+	/** `invitation` goes with an address only: its label, message, locale and resend (`InvitationOptions`). */
 	assignMember(
 		caller: MembershipRequestCaller,
 		delegation: string,

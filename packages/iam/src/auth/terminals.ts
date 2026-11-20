@@ -10,6 +10,7 @@ import { installationBrand } from '../installation-brand'
 import { logError } from '../log'
 import { randomToken } from '../oidc'
 import { authFailurePage, TERMINAL_ENROL_PATH, terminalEnrolledPage, terminalEnrolPage } from '../password-pages'
+import { readerLocale } from '../person-locale'
 import { unixNow } from '../repositories/sql'
 import { resolvePermissionsAt } from '../resolve'
 import { hashToken } from '../secret'
@@ -54,7 +55,7 @@ export async function handleTerminalEnrolment(request: Request, services: Servic
 	if (!await mayEnrol(services, login)) {
 		return authFailurePage(INSTALLATION_PRESENTATION, { kind: 'terminal_enrolment_not_allowed' }, 403)
 	}
-	return terminalEnrolPage({ brand: await installationBrand(services) })
+	return terminalEnrolPage({ brand: await installationBrand(services), locale: readerLocale(request) })
 }
 
 /**
@@ -76,7 +77,7 @@ async function enrol(request: Request, services: Services, requestId: string): P
 	}
 	const label = terminalLabel(stringValue(form.get('label')) ?? '')
 	if (label === null) {
-		return terminalEnrolPage({ brand: await installationBrand(services), labelProblem: true })
+		return terminalEnrolPage({ brand: await installationBrand(services), locale: readerLocale(request), labelProblem: true })
 	}
 
 	const terminalId = uuidv7()
@@ -117,7 +118,7 @@ async function enrol(request: Request, services: Services, requestId: string): P
 		return authFailurePage(INSTALLATION_PRESENTATION, { kind: 'terminal_enrolment_unavailable' }, 503)
 	}
 
-	const response = terminalEnrolledPage(label, await installationBrand(services))
+	const response = terminalEnrolledPage(label, await installationBrand(services), readerLocale(request))
 	response.headers.append('Set-Cookie', terminalCookie(token))
 	response.headers.append('Set-Cookie', clearCookie(SESSION_COOKIE, { path: '/' }))
 	return response
@@ -254,7 +255,7 @@ export async function handleTerminalRelease(request: Request, services: Services
 	const url = new URL(request.url)
 	const app = url.searchParams.get('app')
 	const redirect = url.searchParams.get('redirect')
-	const presentation = await presentationFor(services, app)
+	const presentation = await presentationFor(services, app, { request })
 	if (app === null || app === '' || redirect === null || redirect === '') {
 		return authFailurePage(presentation, { kind: 'no_return_address' }, 400)
 	}

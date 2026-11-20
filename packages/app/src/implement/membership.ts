@@ -295,6 +295,7 @@ function invitationOptionsOf(options: InvitationOptions | undefined): Invitation
 		...(options.label === undefined ? {} : { label: options.label }),
 		...(options.message === undefined ? {} : { message: options.message }),
 		...(options.resend === undefined ? {} : { resend: options.resend }),
+		...(options.locale === undefined ? {} : { locale: options.locale }),
 	}
 }
 
