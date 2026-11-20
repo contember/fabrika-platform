@@ -192,6 +192,28 @@ describe('a provider newer than the application', () => {
 		expect(refusal).not.toThrow('cf-private-token')
 	})
 
+	test('Brevo is handed from the prerelease that holds it on, and refused to an earlier prerelease', () => {
+		const brevoVariables = {
+			FABRIKA_EMAIL_PROVIDER: 'brevo',
+			FABRIKA_EMAIL_FROM: 'mail@example.test',
+			FABRIKA_EMAIL_BREVO_API_KEY: 'xkeysib-private-key',
+		}
+		const brevo: InstallationMail = {
+			kind: 'transport',
+			transport: { variables: brevoVariables, secretNames: new Set(['FABRIKA_EMAIL_BREVO_API_KEY']) },
+		}
+		for (const framework of ['0.9.0-dev.15', '0.9.0-dev.16', '0.9.0', '0.9.1', '1.0.0']) {
+			expect(installationMailEnvironment(brevo, needs, framework)).toEqual(brevoVariables)
+		}
+		for (const framework of ['0.9.0-dev.14', '0.9.0-cloudflare.1', '0.8.2']) {
+			const refusal = (): unknown => installationMailEnvironment(brevo, needs, framework)
+			expect(refusal).toThrow(
+				`the installation's provider \`brevo\` is unknown to framework ${framework}, which this version pins: it needs 0.9.0-dev.15 or newer`,
+			)
+			expect(refusal).not.toThrow('xkeysib-private-key')
+		}
+	})
+
 	test('every built-in provider states its release', () => {
 		expect(Object.keys(builtinEmailProviderSince).sort()).toEqual(Object.keys(builtinEmailProviders).sort())
 	})

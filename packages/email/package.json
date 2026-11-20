@@ -35,6 +35,11 @@
 			"types": "./src/ahasend.ts",
 			"default": "./src/ahasend.ts"
 		},
+		"./brevo": {
+			"bun": "./src/brevo.ts",
+			"types": "./src/brevo.ts",
+			"default": "./src/brevo.ts"
+		},
 		"./cloudflare": {
 			"bun": "./src/cloudflare.ts",
 			"types": "./src/cloudflare.ts",

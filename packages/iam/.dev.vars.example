@@ -25,6 +25,8 @@ FABRIKA_EMAIL_POSTMARK_SERVER_TOKEN=
 # ahasend: the account ID is no secret, but the provider needs both
 FABRIKA_EMAIL_AHASEND_API_KEY=
 FABRIKA_EMAIL_AHASEND_ACCOUNT_ID=
+# brevo
+FABRIKA_EMAIL_BREVO_API_KEY=
 # cloudflare: the account ID is no secret, but the provider needs both
 FABRIKA_EMAIL_CLOUDFLARE_API_TOKEN=
 FABRIKA_EMAIL_CLOUDFLARE_ACCOUNT_ID=

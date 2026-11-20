@@ -221,7 +221,7 @@ describe('IAM resource graph', () => {
 		delete noKey['FABRIKA_EMAIL_RESEND_API_KEY']
 		expect(() => buildIamWorker({ env: 'prod', domain: REMOTE_DOMAIN }, noKey)).toThrow('FABRIKA_EMAIL_RESEND_API_KEY')
 		expect(() => iamPipelineVars({ ...REMOTE_SOURCE, FABRIKA_EMAIL_PROVIDER: 'smtp' })).toThrow(
-			'FABRIKA_EMAIL_PROVIDER must be none or one of: ahasend, cloudflare, lettermint, postmark, resend, smartemailing',
+			'FABRIKA_EMAIL_PROVIDER must be none or one of: ahasend, brevo, cloudflare, lettermint, postmark, resend, smartemailing',
 		)
 	})
 
