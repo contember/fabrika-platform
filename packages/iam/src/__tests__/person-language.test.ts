@@ -388,6 +388,51 @@ describe('every page a person invited in their language reaches', () => {
 		expect(await other.text()).toContain('<h1>Ви ввійшли з іншим обліковим записом</h1>')
 	})
 
+	test('its "sign in first" remembers the language for the sign-in the application\'s proxy starts', async () => {
+		const n = await notes()
+		await invitee(n)
+		const { path, token } = await invited(n)
+		const signInFirst = await n.send(post(path, { token }))
+		expect(signInFirst.status).toBe(401)
+		expect(await signInFirst.text()).toContain(`href="${LANDING}/"`)
+		expect(cookieOf(signInFirst, LOCALE_COOKIE)).toBe(`${LOCALE_COOKIE}=uk`)
+		expect(signInFirst.headers.getSetCookie().find((cookie) => cookie.startsWith(`${LOCALE_COOKIE}=`))).toContain('HttpOnly; Secure; SameSite=Lax')
+		// The application's address bounces the browser to a sign-in without `?locale=`; the cookie makes it speak Ukrainian.
+		const signIn = await n.send(handoffLogin({ Cookie: `${LOCALE_COOKIE}=uk` }))
+		expect(await signIn.text()).toContain('<h1>Вхід до застосунку Poznámky</h1>')
+
+		// The invitation's own language counts even when the form's query lost the link's `?locale=`.
+		const unhinted = await n.send(post(path.replace('&locale=uk', ''), { token }))
+		expect(unhinted.status).toBe(401)
+		expect(cookieOf(unhinted, LOCALE_COOKIE)).toBe(`${LOCALE_COOKIE}=uk`)
+	})
+
+	test('a "sign in first" of an invitation that names no language remembers none', async () => {
+		const n = await notes()
+		await invitee(n)
+		await n.invite(INVITEE)
+		const { url, token } = linkOf(lastMail(n.email))
+		const signInFirst = await n.send(post(`${url.pathname}${url.search}`, { token }))
+		expect(signInFirst.status).toBe(401)
+		expect(await lang(signInFirst)).toBe('cs')
+		expect(cookieOf(signInFirst, LOCALE_COOKIE)).toBeNull()
+	})
+
+	test("the proxy's bounce with the application host's language speaks it, and the form keeps the handoff", async () => {
+		const n = await notes()
+		const bounced = handoffLogin()
+		const url = new URL(bounced.url)
+		url.searchParams.set('locale', 'uk')
+		const page = await n.send(new Request(url))
+		expect(page.status).toBe(200)
+		const html = await page.text()
+		expect(html).toContain('<html lang="uk">')
+		expect(html).toContain('action="/auth/login?locale=uk"')
+		expect(html).toContain(`name="state" value="${HANDOFF_STATE}"`)
+		expect(html).toContain(`name="code_challenge" value="${HANDOFF_CHALLENGE}"`)
+		expect(await lang(await n.send(handoffLogin()))).toBe('cs')
+	})
+
 	test("IAM's sign-in reached with the language keeps it through a refused password and its links", async () => {
 		const n = await notes()
 		await invitee(n)

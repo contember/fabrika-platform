@@ -975,7 +975,7 @@ function acceptanceEvent(invitation: InvitationRow, principalId: string, request
 export type InvitationOffer =
 	| { readonly kind: 'invalid' }
 	| { readonly kind: 'not_allowed' }
-	| { readonly kind: 'sign_in' }
+	| { readonly kind: 'sign_in'; readonly invitation: InvitationRow }
 	| { readonly kind: 'no_account'; readonly invitation: InvitationRow }
 	| { readonly kind: 'create'; readonly invitation: InvitationRow }
 
@@ -986,7 +986,7 @@ export async function invitationOffer(services: Services, token: string): Promis
 	}
 	const acceptance = await invitationAcceptance(services, invitation)
 	if (acceptance === 'sign_in') {
-		return { kind: 'sign_in' }
+		return { kind: 'sign_in', invitation }
 	}
 	if (acceptance === 'no_account') {
 		return { kind: 'no_account', invitation }
