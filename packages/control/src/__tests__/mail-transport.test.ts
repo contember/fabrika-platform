@@ -1,6 +1,7 @@
 import { CONTRACT_FORMAT, type ContractArtifact, type DeclaredReach } from '@fabrika/auth-core'
 import { builtinEmailProviders, builtinEmailProviderSince } from '@fabrika/email/providers'
 import { describe, expect, test } from 'bun:test'
+import { z } from 'zod'
 import {
 	CLOUDFLARE_MAIL_REMEDY,
 	type InstallationMail,
@@ -216,6 +217,27 @@ describe('a provider newer than the application', () => {
 
 	test('every built-in provider states its release', () => {
 		expect(Object.keys(builtinEmailProviderSince).sort()).toEqual(Object.keys(builtinEmailProviders).sort())
+	})
+
+	// A floor names the release after the newest one published without its provider. The source version names the last
+	// release cut, so the source holds every provider, or a provider still unreleased names the very next prerelease. A
+	// bump that cut the release holding it under another name would refuse it to that release, and this fails then.
+	test('every provider floor is held by the source version, or is its next prerelease', async () => {
+		const manifest = z.object({ version: z.string() }).parse(await Bun.file(new URL('../../../app/package.json', import.meta.url)).json())
+		const next = /^(\d+\.\d+\.\d+-[0-9A-Za-z-]+\.)(\d+)$/.exec(manifest.version)
+		for (const [provider, since] of Object.entries(builtinEmailProviderSince)) {
+			if (since === null) continue
+			const mail: InstallationMail = { kind: 'transport', transport: { variables: { FABRIKA_EMAIL_PROVIDER: provider }, secretNames: new Set() } }
+			const held = ((): boolean => {
+				try {
+					installationMailEnvironment(mail, needs, manifest.version)
+					return true
+				} catch {
+					return false
+				}
+			})()
+			if (!held) expect([provider, since]).toEqual([provider, next === null ? manifest.version : `${next[1]}${Number(next[2]) + 1}`])
+		}
 	})
 })
 
