@@ -12,6 +12,7 @@ import {
 	CONTRACT_FILE,
 	GENERATED_ENTRY_FILE,
 	isCheckedFile,
+	isGeneratedModule,
 	isIgnoredSegment,
 	isJsonFile,
 	isServerModule,
@@ -53,7 +54,7 @@ import { checkBackupPlan, checkMigrationClassification } from './rules/platform-
 import { checkKeyLiteralNode, checkRuntimeNode, crossAppFetchMessage, rawSqlBindings } from './rules/runtime'
 import { checkStructureNode, checkStructureReferences, checkToolPackages, structurePlace } from './rules/structure'
 import { checkMockModule, checkTestNode, checkTestSuiteConfig } from './rules/tests'
-import { checkComments, checkTypeNode } from './rules/types'
+import { checkCapabilityNode, checkComments, checkTypeNode } from './rules/types'
 import { moduleSlice, sliceFinding } from './slice'
 import { BUNFIG_FILE, checkTrustedResolution } from './trust'
 
@@ -121,21 +122,24 @@ interface ContractDependent {
  * module` of a trusted package and the rules of its tests. Every other module rule guards code that runs in the
  * application.
  */
-const checkToolModule = (module: ParsedModule, findings: Finding[]): void => {
+const checkToolModule = (module: ParsedModule, generated: boolean, findings: Finding[]): void => {
 	const report = reporter(module.file, findings)
 	const isTest = isTestFile(module.file)
 	walk(module.program, (node, ancestors) => {
 		checkKeyLiteralNode(node, report)
-		checkTypeNode(node, report)
+		if (!generated) checkTypeNode(node, report)
+		checkCapabilityNode(node, report)
 		checkAmbientModule(node, report)
 		if (isTest) checkTestNode(node, ancestors, report)
 		checkMockModule(node, report)
 	})
-	checkComments(module.comments, report)
+	if (!generated) checkComments(module.comments, report)
 }
 
+/** A generated module (`isGeneratedModule`) is not held to `type-assertion`, `any-type`, `suppression-comment` and the hints. */
 const checkSourceModule = (
 	module: ParsedModule,
+	generated: boolean,
 	references: readonly ModuleReference[],
 	mappings: ImportMappings,
 	files: ReadonlyMap<string, string>,
@@ -171,17 +175,18 @@ const checkSourceModule = (
 		},
 	}
 	const trusted = trustedBindings(module.file, module.program, mappings)
-	const place = structurePlace(module.file, isGeneratedEntry)
+	const place = structurePlace(module.file, isGeneratedEntry, generated)
 	walk(module.program, (node, ancestors) => {
 		checkRuntimeNode(node, ancestors, context)
 		checkFrameworkWrite(node, ancestors, trusted, report)
-		checkTypeNode(node, report)
+		if (!generated) checkTypeNode(node, report)
+		checkCapabilityNode(node, report)
 		checkAmbientModule(node, report)
 		if (isTest) checkTestNode(node, ancestors, report)
 		checkMockModule(node, report)
 		checkStructureNode(place, node, report)
 	})
-	checkComments(module.comments, report)
+	if (!generated) checkComments(module.comments, report)
 	checkModuleReferences(module.file, references, mappings, exists, report, isGeneratedEntry, isTest)
 }
 
@@ -283,6 +288,7 @@ export const checkApplication = async (input: CheckInput): Promise<Finding[]> =>
 	const findings: Finding[] = []
 	const modules = new Map<string, ParsedModule>()
 	const references = new Map<string, readonly ModuleReference[]>()
+	const generated = new Set<string>()
 	const dependent: ContractDependent = { fetches: [], urls: [], inserts: [] }
 	const checkedPaths = [...tree.files.keys()].filter(isCheckedFile).sort()
 	const mappings = readImportMappings(tree.files)
@@ -313,12 +319,14 @@ export const checkApplication = async (input: CheckInput): Promise<Finding[]> =>
 		modules.set(path, parsed.module)
 		const referencesOfModule = moduleReferences(parsed.module.program)
 		references.set(path, referencesOfModule)
-		if (isToolModule(path)) checkToolModule(parsed.module, findings)
-		else checkSourceModule(parsed.module, referencesOfModule, mappings, tree.files, findings, dependent)
+		const isGenerated = isGeneratedModule(path, parsed.module.comments)
+		if (isGenerated) generated.add(path)
+		if (isToolModule(path)) checkToolModule(parsed.module, isGenerated, findings)
+		else checkSourceModule(parsed.module, isGenerated, referencesOfModule, mappings, tree.files, findings, dependent)
 	}
 	const structure = { files: tree.files, mappings, referencesOf: (path: string) => references.get(path) ?? [] }
 	for (const path of modules.keys()) {
-		checkStructureReferences(structure, structurePlace(path, path === GENERATED_ENTRY_FILE), reporter(path, findings))
+		checkStructureReferences(structure, structurePlace(path, path === GENERATED_ENTRY_FILE, generated.has(path)), reporter(path, findings))
 	}
 
 	// The contract rules read each module's shell slice: a colocated handler, and what only it uses, is application

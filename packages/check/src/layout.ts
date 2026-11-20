@@ -1,3 +1,5 @@
+import type { Comment } from './ast'
+
 /** Where an application keeps what the checker reads. Paths are relative to the application root. */
 export const CONTRACT_FILE = 'fabrika.contract.ts'
 /** The provider-authored application config, whose `defineApp` names the provider. */
@@ -59,6 +61,19 @@ export const isServerModule = (path: string): boolean => path.startsWith(SERVER_
 export const isToolModule = (path: string): boolean => path.startsWith(TOOLS_DIR)
 
 export const isJsonFile = (path: string): boolean => path.endsWith('.json')
+
+const GENERATED_NAME = /\.(?:gen|generated)\.(?:[mc]?[jt]s|[jt]sx)$/
+const GENERATED_MARKER = /@generated|auto-generated/i
+
+/**
+ * A module a generator writes: named `<name>.gen.<ext>` or `<name>.generated.<ext>`, with a comment that starts on its
+ * first line and says so (`@generated` or `auto-generated`, in any case). The rules about how source is written do not
+ * apply to it; every rule about what it does still does.
+ */
+export const isGeneratedModule = (path: string, comments: readonly Comment[]): boolean => {
+	const [first] = comments
+	return GENERATED_NAME.test(path) && first !== undefined && first.position.line === 1 && GENERATED_MARKER.test(first.text)
+}
 
 /** Whether the checker reads this file at all. */
 export const isCheckedFile = (path: string): boolean => {

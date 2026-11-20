@@ -17,6 +17,7 @@ const admitsAnyString = (type: AstNode): boolean => {
 const referencedName = (typeName: AstNode | undefined): string | undefined =>
 	typeName?.type === 'TSQualifiedName' ? identifierName(child(typeName, 'right')) : identifierName(typeName)
 
+/** `type-assertion` and `any-type`: how a module's own source is written, which a generated module is not held to. */
 export const checkTypeNode = (node: AstNode, report: Report): void => {
 	switch (node.type) {
 		case 'TSAsExpression':
@@ -27,22 +28,22 @@ export const checkTypeNode = (node: AstNode, report: Report): void => {
 			return
 		case 'TSAnyKeyword':
 			report(node, 'any-type', '`any` switches type checking off', 'the concrete type, or `unknown` narrowed by a check')
-			return
-		case 'TSTypeReference': {
-			const name = referencedName(child(node, 'typeName'))
-			if (name === undefined || !CAPABILITIES.has(name)) return
-			const typeArguments = child(node, 'typeArguments')
-			const parameters = typeArguments === undefined ? [] : children(typeArguments, 'params')
-			if (parameters.some((parameter) => parameter !== null && admitsAnyString(parameter))) {
-				report(
-					node,
-					'capability-widening',
-					`${name}<string, …> widens a capability to any dimension or action`,
-					`${name}<'<dimension>', '<action>'> with literal names`,
-				)
-			}
-			return
-		}
+	}
+}
+
+export const checkCapabilityNode = (node: AstNode, report: Report): void => {
+	if (node.type !== 'TSTypeReference') return
+	const name = referencedName(child(node, 'typeName'))
+	if (name === undefined || !CAPABILITIES.has(name)) return
+	const typeArguments = child(node, 'typeArguments')
+	const parameters = typeArguments === undefined ? [] : children(typeArguments, 'params')
+	if (parameters.some((parameter) => parameter !== null && admitsAnyString(parameter))) {
+		report(
+			node,
+			'capability-widening',
+			`${name}<string, …> widens a capability to any dimension or action`,
+			`${name}<'<dimension>', '<action>'> with literal names`,
+		)
 	}
 }
 
