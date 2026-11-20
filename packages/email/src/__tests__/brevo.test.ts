@@ -72,6 +72,14 @@ describe('BrevoEmailSender', () => {
 		expect(brevoHtmlOfText("it's\r\nok")).toBe('it&#39;s<br>\nok')
 	})
 
+	test('a blank HTML body is replaced by the text, since Brevo requires a body', async () => {
+		const { fetch, requests } = capturing(accepted)
+		const sender = new BrevoEmailSender({ apiKey: 'xkeysib-secret', from, fetch })
+		for (const html of ['', ' \n\t']) await sender.send({ ...message, html }, signal)
+		for (const request of requests) expect(await request.json()).toMatchObject({ htmlContent: 'Your account is ready.' })
+		expect(requests).toHaveLength(2)
+	})
+
 	test('a message sender name replaces the transport one, and a name over 70 characters is refused without a request', async () => {
 		const { fetch, requests } = capturing(accepted)
 		const sender = new BrevoEmailSender({ apiKey: 'xkeysib-secret', from: { address: 'auth@example.test', name: 'Fabrika' }, fetch })

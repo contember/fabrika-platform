@@ -268,8 +268,8 @@ known.
 `POST https://api.brevo.com/v3/smtp/email`, with the account's API key in the `api-key` header. The sender is
 `sender: {email, name}`, the recipient `to: [{email}]`, the reply-to `replyTo: {email}`, the bodies `htmlContent` and
 `textContent`, and an attachment `name` and base64 `content`. Brevo requires an HTML body when a request names no
-template, so a text-only message carries its text, HTML-escaped with each line break a `<br>`, as `htmlContent` too.
-A 201 carries the `messageId`; one without it is `malformed_response`.
+template, so a text-only message, or one whose HTML is blank, carries its text, HTML-escaped with each line break a
+`<br>`, as `htmlContent` too. A 201 carries the `messageId`; one without it is `malformed_response`.
 
 Brevo dedupes an idempotency key that its guide places in the request's `headers` as `idempotencyKey`, a UUID, for 30
 minutes. The adapter sends the message's key there as a UUID derived from it (the first 16 bytes of its SHA-256 with the

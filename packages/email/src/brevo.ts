@@ -92,8 +92,9 @@ export class BrevoEmailSender extends HttpEmailSender {
 				sender: { email: this.from.address, ...(name === undefined ? {} : { name }) },
 				to: [{ email: message.to }],
 				subject: message.subject,
-				// Brevo requires an HTML body without a template; a text-only message gets its text as HTML.
-				htmlContent: message.html ?? brevoHtmlOfText(message.text),
+				// Brevo requires an HTML body without a template; a message without one, or with a blank one, gets its text
+				// as HTML, so the recipient never sees an empty message.
+				htmlContent: message.html === undefined || message.html.trim() === '' ? brevoHtmlOfText(message.text) : message.html,
 				textContent: message.text,
 				...(message.replyTo === undefined ? {} : { replyTo: { email: message.replyTo } }),
 				headers: { idempotencyKey: await brevoIdempotencyKey(message.idempotencyKey) },
