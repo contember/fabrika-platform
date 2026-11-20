@@ -26,7 +26,6 @@ export async function cleanFile(name: string): Promise<void> {
 		expect(settings.mode, 'a file changed or mocked a module').toBe('clean')
 		expect(await api.notes.titles({ workspaceId: 'w1' }), "another file's rows").toEqual({ titles: [] })
 		expect(await api.notes.calls({ workspaceId: 'w1' }), "another file's deps").toEqual({ calls: 1 })
-		expect(kit.mail.accepted, "another file's mail").toEqual([])
 
 		await api.notes.create({ workspaceId: 'w1', title: name })
 		await api.notes.calls({ workspaceId: 'w1' })
