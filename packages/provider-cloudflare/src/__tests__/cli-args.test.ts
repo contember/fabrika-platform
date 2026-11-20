@@ -8,6 +8,7 @@ import { parseCloudflareArgs, platformComponents } from '../cli-args'
 import {
 	parseApplicationObjectsEnvironment,
 	parseCrossOrigins,
+	parseIamService,
 	parseInstallationApps,
 	parseReturnOrigins,
 	readApprovedAccess,
@@ -90,6 +91,17 @@ describe('parseInstallationApps', () => {
 		expect(() => parseInstallationApps('notes@prod')).toThrow('FABRIKA_INSTALLATION_APPS is not a JSON array')
 		expect(() => parseInstallationApps('{"notes":"prod"}')).toThrow('is not a JSON array of strings')
 		expect(() => parseInstallationApps('["notes"]')).toThrow('holds `notes`, which is not `<app>@<env>`')
+	})
+})
+
+describe('parseIamService', () => {
+	test('reads the Worker name the runner writes; absent or empty is none, and a malformed one fails the deploy', () => {
+		expect(parseIamService('prod-fabrika-iam')).toBe('prod-fabrika-iam')
+		expect(parseIamService(undefined)).toBeUndefined()
+		expect(parseIamService('')).toBeUndefined()
+		for (const raw of ['Prod', 'prod iam', '-prod', 'prod/iam']) {
+			expect(() => parseIamService(raw)).toThrow('FABRIKA_IAM_SERVICE is not a Worker name')
+		}
 	})
 })
 

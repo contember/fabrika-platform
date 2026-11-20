@@ -582,7 +582,18 @@ that already exists; on Zerops the first bring-up is `platform install`, which c
 also create the project it installs into; it is two passes, because a proxy that
 has never been deployed publishes no hostname for the manifest to carry.
 `fabrika platform <command> --provider=<name> --help` prints the installation's own
-surface. The CLI maps the official `cloudflare` and `zerops` ids to
+surface.
+
+A Cloudflare installation names its own Workers, databases, buckets, queues and oblaka state namespaces by one scheme,
+the `FABRIKA_CLOUDFLARE_NAMES` variable of its GitHub Environment: `fabrika` (`prod-fabrika-control`,
+`prod-fabrika-iam`, `fabrika-iam-state`, …), which `init` records for a new installation, or `legacy`
+(`prod-vozka`, `prod-propustka-worker`, `propustka-state`, …), which an installation without the variable keeps. A
+re-run of `init` keeps the scheme an existing Environment already uses and refuses an installer env file that names
+another, because oblaka adopts resources by name and a renamed resource starts empty. Control passes IAM's Worker name to every application deploy, so an application binds
+the IAM of its own installation whatever the scheme
+([ADR-0024](../decisions/0024-canonical-environment-names.md); moving an existing installation is backlog 291).
+
+The CLI maps the official `cloudflare` and `zerops` ids to
 `@fabrika/provider-<cloud>/installation` and treats any other provider value as an importable package
 specifier.
 

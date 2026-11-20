@@ -14,6 +14,7 @@ import {
 	type CloudflareRunnerJob,
 	CROSS_ORIGINS_ENV,
 	DEPLOY_VALUES_FILE_ENV,
+	IAM_SERVICE_ENV,
 	INSTALLATION_APPS_ENV,
 	OPERATIONS_ORIGIN_ENV,
 	RUNNER_OUTCOME_FILE_ENV,
@@ -475,6 +476,8 @@ export class Runner {
 		env[RUNNER_OUTCOME_FILE_ENV] = this.outcomeFilePath
 		if (this.job.installationApps === undefined) delete env[INSTALLATION_APPS_ENV]
 		else env[INSTALLATION_APPS_ENV] = JSON.stringify(this.job.installationApps)
+		if (this.job.iamService === undefined) delete env[IAM_SERVICE_ENV]
+		else env[IAM_SERVICE_ENV] = this.job.iamService
 		if (this.job.crossOrigins === undefined) delete env[CROSS_ORIGINS_ENV]
 		else env[CROSS_ORIGINS_ENV] = JSON.stringify(this.job.crossOrigins)
 		if (this.job.applicationObjects === undefined) delete env[APPLICATION_OBJECTS_ENV]

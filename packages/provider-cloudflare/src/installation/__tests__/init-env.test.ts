@@ -4,7 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { envPath, openEnvFile } from '../envfile'
-import { type Collected, ensureRunnerKey, ensureVaultKey, environmentPayload, finalNotes, readResumeValue } from '../init'
+import { type Collected, ensurePlatformNames, ensureRunnerKey, ensureVaultKey, environmentPayload, finalNotes, readResumeValue } from '../init'
 
 const RESUMED_NAMES: readonly string[] = [
 	'FABRIKA_CONTROL_VAULT_KEY',
@@ -30,6 +30,7 @@ const COLLECTED: Collected = {
 	humanEmailDomains: [],
 	email: { kind: 'none' },
 	bootstrapAdmins: ['ops@example.com'],
+	platformNames: 'fabrika',
 }
 
 /** Point XDG at a throwaway directory and open a real env file for the length of one test. */
@@ -145,6 +146,69 @@ describe('Cloudflare installer runner key', () => {
 		})
 
 		expect([...Object.keys(payload.secrets), ...Object.keys(payload.vars)].filter((name) => /^(GH|GITHUB)_/.test(name))).toEqual([])
+	})
+})
+
+describe('Cloudflare installer resource names', () => {
+	const INPUT = { account: 'acme', repo: 'acme/fabrika-platform-acme' }
+	/** The Environment the installation already has, as `gh` answers it; null when there is none. */
+	const effects = (existing: Readonly<Record<string, string>> | null) => ({ environmentVariables: () => Promise.resolve(existing) })
+
+	const decided = async (source: Readonly<Record<string, string>>, existing: Readonly<Record<string, string>> | null) => {
+		let scheme: unknown
+		let saved: string | undefined
+		await withOpenEnvFile(async () => {
+			await captured(async () => {
+				scheme = await ensurePlatformNames(INPUT, source, effects(existing))
+			})
+			saved = process.env['FABRIKA_CLOUDFLARE_NAMES']
+			delete process.env['FABRIKA_CLOUDFLARE_NAMES']
+		})
+		return { scheme, saved }
+	}
+
+	test('a new installation takes the fabrika names and saves them for a resumed run', async () => {
+		expect(await decided({}, null)).toEqual({ scheme: 'fabrika', saved: 'fabrika' })
+		expect(await decided({}, {})).toEqual({ scheme: 'fabrika', saved: 'fabrika' })
+	})
+
+	test('an installation whose Environment predates the switch keeps the legacy names', async () => {
+		expect(await decided({}, { FABRIKA_CONTROL_DOMAIN: 'fabrika.example.com' })).toEqual({ scheme: 'legacy', saved: 'legacy' })
+	})
+
+	test('an existing installation keeps the names its Environment records, and a resumed run the ones it saved', async () => {
+		expect(await decided({}, { FABRIKA_CLOUDFLARE_NAMES: 'fabrika', FABRIKA_CONTROL_DOMAIN: 'x' })).toEqual({ scheme: 'fabrika', saved: 'fabrika' })
+		expect(await decided({ FABRIKA_CLOUDFLARE_NAMES: 'legacy' }, null)).toEqual({ scheme: 'legacy', saved: 'legacy' })
+		expect(await decided({ FABRIKA_CLOUDFLARE_NAMES: 'fabrika' }, { FABRIKA_CLOUDFLARE_NAMES: 'fabrika' })).toEqual({
+			scheme: 'fabrika',
+			saved: 'fabrika',
+		})
+	})
+
+	test('an env file that disagrees with the Environment stops init before anything is written', async () => {
+		await expect(decided({ FABRIKA_CLOUDFLARE_NAMES: 'fabrika' }, { FABRIKA_CONTROL_DOMAIN: 'x' })).rejects.toThrow(
+			'The installer env file names the resources `fabrika`, but the acme Environment on acme/fabrika-platform-acme `legacy`',
+		)
+	})
+
+	test('the GitHub Environment carries the scheme as a variable', () => {
+		const payload = environmentPayload(COLLECTED, {
+			vaultKey: 'vault',
+			provisioning: 'px_key',
+			operationsSyncKey: 'ops',
+			runnerKey: 'runner-key-value',
+			signingKeys: '[]',
+		})
+		expect(payload.vars['FABRIKA_CLOUDFLARE_NAMES']).toBe('fabrika')
+		expect(
+			environmentPayload({ ...COLLECTED, platformNames: 'legacy' }, {
+				vaultKey: 'vault',
+				provisioning: 'px_key',
+				operationsSyncKey: 'ops',
+				runnerKey: 'runner-key-value',
+				signingKeys: '[]',
+			}).vars['FABRIKA_CLOUDFLARE_NAMES'],
+		).toBe('legacy')
 	})
 })
 

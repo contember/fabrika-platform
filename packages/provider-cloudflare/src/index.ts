@@ -30,8 +30,17 @@ export { deployCloudflareConfig, loadCloudflareCommandConfig } from './command'
 export type { CloudflareCommandDeployOptions, LoadedCloudflareCommandConfig } from './command'
 export { cloudflareStoredTargetCodec, createCloudflareControlProvider } from './control'
 export type { CloudflareCloneSource, CloudflareControlOptions, CloudflareRunnerJob, CloudflareStoredTarget } from './control'
-export { buildPlan, findMigratableDatabases, PLATFORM_RESOURCE_NAMES } from './plan'
+export { buildPlan, findMigratableDatabases } from './plan'
 export type { CloudflareStep, CloudflareStepKind, MigratableDatabase } from './plan'
+export {
+	PLATFORM_NAMES_ENV,
+	PLATFORM_RESOURCE_NAMES,
+	type PlatformNames,
+	platformNames,
+	type PlatformNameScheme,
+	platformNameScheme,
+	platformNamesOf,
+} from './platform-names'
 export {
 	type CloudflareDeployerOptions,
 	type CloudflareDeployResult,

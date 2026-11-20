@@ -499,7 +499,8 @@ whose jobs declare `mailer: 'installation'`.
   as the Bun process does at boot. An invalid one makes Control refuse each deploy that
   hands the set, and the refusal names the Cloudflare operator step
   (`CLOUDFLARE_MAIL_REMEDY`). A provider no longer selected leaves its credentials as
-  Worker secrets of IAM (`prod-propustka-worker`) and of Control (`prod-vozka`); neither
+  Worker secrets of IAM (`prod-fabrika-iam`, or `prod-propustka-worker` on an installation created with the legacy
+  names) and of Control (`prod-fabrika-control`, or `prod-vozka`); neither
   reads them, and `wrangler secret delete <NAME> --name <worker>` removes each one
   (`CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` name the account).
 - **The deploy's order.** Control's deploy uploads the Worker version before it writes

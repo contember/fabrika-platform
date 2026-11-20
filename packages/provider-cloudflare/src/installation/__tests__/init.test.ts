@@ -243,6 +243,10 @@ const recorder = (options: { readonly confirms?: Record<string, boolean>; readon
 				recorded.effects.push(`repositoryExists ${repo}`)
 				return Promise.resolve(false)
 			},
+			environmentVariables: (repo, environment) => {
+				recorded.effects.push(`environmentVariables ${repo} ${environment}`)
+				return Promise.resolve(null)
+			},
 			listAccounts: () => {
 				recorded.effects.push('listAccounts')
 				return Promise.resolve([{ id: 'cf-account', name: 'Acme' }])
@@ -315,6 +319,7 @@ describe('Cloudflare init flow', () => {
 			'verifyToken',
 			'findZone fabrika.example.com',
 			'findZone errors.example.com',
+			'environmentVariables acme/fabrika-platform acme',
 			'repositoryExists acme/fabrika-platform',
 			'scaffold',
 			'configureEnvironment',
@@ -335,8 +340,10 @@ describe('Cloudflare init flow', () => {
 			FABRIKA_IAM_PASSWORD_ENABLED: 'true',
 			FABRIKA_EMAIL_PROVIDER: 'none',
 			FABRIKA_IAM_BOOTSTRAP_ADMINS: '["ops@example.com"]',
+			FABRIKA_CLOUDFLARE_NAMES: 'fabrika',
 		})
 		expect(persisted['CLOUDFLARE_ACCOUNT_ID']).toBe('cf-account')
+		expect(persisted['FABRIKA_CLOUDFLARE_NAMES']).toBe('fabrika')
 		expect(persisted['FABRIKA_IAM_PASSWORD_ENABLED']).toBe('true')
 		expect(output).not.toContain(API_TOKEN)
 	})
@@ -408,6 +415,7 @@ describe('Cloudflare init flow', () => {
 			FABRIKA_IAM_HUMAN_EMAIL_DOMAINS: '["example.com","example.org"]',
 			FABRIKA_EMAIL_FROM: 'Fabrika <auth@example.com>',
 			FABRIKA_IAM_BOOTSTRAP_ADMINS: '["ops@example.com"]',
+			FABRIKA_CLOUDFLARE_NAMES: 'fabrika',
 		})
 		const secrets = environment?.secrets ?? {}
 		expect(Object.keys(secrets).sort()).toEqual([

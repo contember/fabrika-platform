@@ -32,7 +32,13 @@ import {
 } from './contract-support'
 // `./runner` is this module: keep every import here clear of `oblaka-iac`, which the runner packages
 // cannot typecheck (they do not relax the two strict flags the raw TS needs).
-import { applicationObjectsSchema, type RunnerApprovedAccess, runnerApprovedAccessSchema, type RunnerIamReconcile } from './runner-protocol'
+import {
+	applicationObjectsSchema,
+	isWorkerName,
+	type RunnerApprovedAccess,
+	runnerApprovedAccessSchema,
+	type RunnerIamReconcile,
+} from './runner-protocol'
 
 export * from './runner-protocol'
 
@@ -73,6 +79,8 @@ export interface CloudflareRunnerJob {
 	readonly operationsOrigin?: string
 	/** `<app>@<env>` of every Cloudflare deployment in Control's registry; the deploy refuses another application's names. */
 	readonly installationApps?: readonly string[]
+	/** IAM's Worker by its remote name; the application and its proxy bind it whatever env they deploy in. */
+	readonly iamService?: string
 	/** What the deployed proxy enforces and the application starts as; every run but a dry one carries it. */
 	readonly approvedAccess?: RunnerApprovedAccess
 	/** The serving object and the listed objects Control records (ADR-0070 §9); absent, the deployer's defaults. */
@@ -163,6 +171,7 @@ export const cloudflareRunnerJobSchema = z.object({
 	crossOrigins: z.array(z.string().refine(isCrossOrigin)).max(MAX_CROSS_ORIGINS).optional(),
 	operationsOrigin: z.string().refine((origin) => isPolicyOrigin(origin, ['https:', 'http:'])).optional(),
 	installationApps: z.array(z.string().refine((id) => !hasUnsafeChars(id) && parseAppEnvironmentId(id) !== null)).optional(),
+	iamService: z.string().refine(isWorkerName).optional(),
 	approvedAccess: runnerApprovedAccessSchema.optional(),
 	applicationObjects: applicationObjectsSchema.optional(),
 	dryRun: z.boolean().optional(),
@@ -208,6 +217,8 @@ export interface CloudflareControlOptions {
 	readonly accountId: string
 	readonly apiToken: string
 	readonly runnerKey: string
+	/** IAM's Worker by its remote name, sent with each job; absent, the deployer binds `${env}-propustka-worker`. */
+	readonly iamService?: string
 	/** Every Cloudflare deployment in Control's registry, sent with each job so another application's names are refused. */
 	installationApps?(signal: AbortSignal): Promise<readonly AppEnvironment[]>
 	resolveSource(input: ProviderSourceResolutionInput): Promise<ProviderSourceResolution>
@@ -338,6 +349,7 @@ const buildJob = async (options: CloudflareControlOptions, input: ProviderDeploy
 			: { crossOrigins: input.environment.crossOrigins }),
 		...(input.environment.operationsOrigin === undefined ? {} : { operationsOrigin: input.environment.operationsOrigin }),
 		...(installationApps === undefined ? {} : { installationApps }),
+		...(options.iamService === undefined || options.iamService === '' ? {} : { iamService: options.iamService }),
 		...(approvedAccess === undefined ? {} : { approvedAccess }),
 		...(input.applicationObjects === undefined ? {} : { applicationObjects: input.applicationObjects }),
 		...(input.dryRun ? { dryRun: true } : {}),

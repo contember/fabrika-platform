@@ -122,6 +122,19 @@ describe('IAM resource graph', () => {
 		expect(() => buildIamWorker({ env: 'stage' }, REMOTE_SOURCE)).toThrow('FABRIKA_IAM_HOSTNAME')
 	})
 
+	test.each([
+		[undefined, 'propustka-worker', 'propustka'],
+		['legacy', 'propustka-worker', 'propustka'],
+		['fabrika', 'fabrika-iam', 'fabrika-iam'],
+	])('FABRIKA_CLOUDFLARE_NAMES=%p names the Worker and its database', (scheme, workerName, databaseName) => {
+		const source = scheme === undefined ? REMOTE_SOURCE : { ...REMOTE_SOURCE, FABRIKA_CLOUDFLARE_NAMES: scheme }
+		const worker = buildIamWorker({ env: 'prod', domain: REMOTE_DOMAIN }, source)
+		expect(worker.options.name).toBe(workerName)
+		const database = worker.options.bindings?.['DB']
+		if (!(database instanceof D1Database)) throw new Error('DB must be a D1 database')
+		expect(database.options.name).toBe(databaseName)
+	})
+
 	test('defaults missing authentication flags to OIDC-only', () => {
 		const source = { ...REMOTE_SOURCE }
 		delete source['FABRIKA_IAM_OIDC_ENABLED']

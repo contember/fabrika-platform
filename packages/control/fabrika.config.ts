@@ -20,6 +20,7 @@ import {
 	createCloudflareProxyWorker,
 	D1Database,
 	defineApp,
+	platformNames,
 	Queue,
 	R2Bucket,
 	type ResourceContext,
@@ -109,10 +110,11 @@ export const buildControlApplicationWorker = (ctx: ResourceContext): Worker => {
 	const operationsArtifactOrigin = process.env['OPERATIONS_ARTIFACT_ORIGIN']
 	const bootstrapAdmins = process.env['FABRIKA_CONTROL_BOOTSTRAP_ADMINS'] ?? '[]'
 	const iamUrl = resolveIamUrl(isLocal)
+	const names = platformNames(process.env)
 
 	return new Worker({
 		dir: '.',
-		name: 'vozka',
+		name: names.controlWorker,
 		main: './src/index.ts',
 		compatibility_flags: ['nodejs_compat'],
 		compatibility_date: '2025-05-25',
@@ -148,22 +150,24 @@ export const buildControlApplicationWorker = (ctx: ResourceContext): Worker => {
 			// injects them into provider jobs without persisting credentials in the registry.
 			CLOUDFLARE_ACCOUNT_ID: process.env['CLOUDFLARE_ACCOUNT_ID'] ?? '',
 			FABRIKA_IAM_ISSUER: iamUrl,
+			// IAM's Worker by its remote name: an application deploy binds it exactly, whatever env the application is in.
+			...(isLocal ? {} : { FABRIKA_IAM_SERVICE: `${env}-${names.iamWorker}` }),
 			...(operationsArtifactOrigin === undefined || operationsArtifactOrigin === ''
 				? {}
 				: { OPERATIONS_ARTIFACT_ORIGIN: operationsArtifactOrigin }),
 		},
 		bindings: {
 			// Run logs + terminal status, keyed by run id (runs/<id>/logs.ndjson, runs/<id>/status.json).
-			RUN_LOGS: new R2Bucket({ name: 'vozka-run-logs' }),
+			RUN_LOGS: new R2Bucket({ name: names.runLogs }),
 			// Registry + run history + the per-app-env deploy LOCKS: a `deploy_locks` row per `<app>:<env>`
 			// serializes deploys of the same target (it replaced a Durable Object — see src/deploy-locks.ts),
 			// so two triggers can't race on cf-state / wrangler / IAM. D1 is region-specific → pinned
 			// to EU West. Migrations in ./migrations.
-			DB: new D1Database({ name: 'vozka', migrationsDir: './migrations', locationHint: 'weur' }),
+			DB: new D1Database({ name: names.controlDatabase, migrationsDir: './migrations', locationHint: 'weur' }),
 			// Deploy job queue: producer (POST /webhooks/github/:connectionId + triggerDeploy) + consumer (queue()).
 			// A run is enqueued by id; the consumer loads it from D1, assembles the job, and runs it.
 			DEPLOY_QUEUE: new Queue({
-				name: 'vozka-deploy',
+				name: names.deployQueue,
 				binding: 'both',
 				consumer: {
 					// One deploy at a time per message; a deploy is long, so a small batch + generous
@@ -178,24 +182,24 @@ export const buildControlApplicationWorker = (ctx: ResourceContext): Worker => {
 			// maintenance) and consumer (queue()). The dispatcher settles or requeues its row on every send failure, so a
 			// redelivery is only for an unexpected throw; maintenance re-enqueues a message whose job was lost.
 			MAIL_QUEUE: new Queue({
-				name: 'fabrika-mail',
+				name: names.mailQueue,
 				binding: 'both',
 				consumer: { maxBatchSize: 1, maxRetries: 5, retryDelay: 60 },
 			}),
 			// The relay's message content, one object per message (src/db/mail-messages.ts): a D1 row holds at most
 			// 2,000,000 bytes, and the relay accepts more. Only this Worker binds it; the runner never does.
-			MAIL_CONTENT: new R2Bucket({ name: 'fabrika-mail-content' }),
+			MAIL_CONTENT: new R2Bucket({ name: names.mailContent }),
 			// IAM is bound in EVERY environment, local included: src/iam.ts verifies an IAM-issued token
 			// and has no local mode to fall back on, and the proxy Worker in front of this one already
 			// binds the same service unconditionally. Local dev therefore wants `packages/iam`'s
 			// `bun run dev` running alongside, exactly as `examples/app` does.
-			IAM: new ServiceReference('propustka-worker'),
+			IAM: new ServiceReference(names.iamWorker),
 			// Off-local only: Operations, and the runner Worker — the deploy executor the queue consumer hands
 			// each run to (RUNNER_SVC.startRun). The runner is its OWN Worker so a deploy of fabrika
 			// never resets the container running it — deployed out-of-band (packages/runner-cloudflare bootstrap).
 			...(isLocal ? {} : {
-				OPERATIONS: new ServiceReference('operations'),
-				RUNNER_SVC: new ServiceReference('vozka-runner'),
+				OPERATIONS: new ServiceReference(names.operationsWorker),
+				RUNNER_SVC: new ServiceReference(names.runnerWorker),
 			}),
 		},
 	})
@@ -203,14 +207,16 @@ export const buildControlApplicationWorker = (ctx: ResourceContext): Worker => {
 
 export const buildControlWorker = (ctx: ResourceContext): Worker => {
 	const iamUrl = resolveIamUrl(ctx.env === 'local')
+	const names = platformNames(process.env)
 	return createCloudflareProxyWorker({
-		name: 'vozka-proxy',
+		name: names.controlProxy,
 		app: buildControlApplicationWorker(ctx),
 		appId: CONTROL_APP_ID,
 		appHost: ctx.domain ?? 'localhost',
 		// A Worker serves no MCP: the console's table without its `oauth` row.
 		installation: serviceProxyTable(controlServiceContract({ mcp: false }), { oauth: false }),
 		domain: ctx.domain,
+		iamService: names.iamWorker,
 		iamUrl,
 	})
 }

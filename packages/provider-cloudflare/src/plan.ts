@@ -46,30 +46,6 @@ export const findMigratableDatabases = (worker: Worker): MigratableDatabase[] =>
 	return databases
 }
 
-/**
- * Every resource name fabrika's own components declare (control, IAM, Operations, the runner and the
- * installation's oblaka state). oblaka ADOPTS an existing `${env}-${name}`, so a checkout that names
- * one would take over the platform's own Worker, database or bucket.
- */
-export const PLATFORM_RESOURCE_NAMES: ReadonlySet<string> = new Set([
-	'vozka',
-	'vozka-proxy',
-	'vozka-runner',
-	'vozka-deploy',
-	'vozka-deploy-runner',
-	'fabrika-mail',
-	'fabrika-mail-content',
-	'vozka-run-logs',
-	'propustka',
-	'propustka-worker',
-	'propustka-state',
-	'operations',
-	'operations-proxy',
-	'operations-payloads',
-	'operations-ingest',
-	'operations-ingest-dlq',
-])
-
 const ENTRY_BUILD = '`fabrika app build --provider=cloudflare`'
 
 /** `regeneratesEntry`: the release pins the generated entry, so the build step always runs, after `pipeline.build`. */

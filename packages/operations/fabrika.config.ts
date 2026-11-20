@@ -3,6 +3,7 @@ import {
 	createCloudflareProxyWorker,
 	D1Database,
 	defineApp,
+	platformNames,
 	Queue,
 	R2Bucket,
 	type ResourceContext,
@@ -24,11 +25,12 @@ const resolveIamUrl = (isLocal: boolean): string => process.env['FABRIKA_IAM_ISS
 export const buildOperationsWorker = (ctx: ResourceContext): Worker => {
 	const isLocal = ctx.env === 'local'
 	const publicHost = ctx.domain ?? ''
-	const deadLetterQueue = `${ctx.env}-operations-ingest-dlq`
+	const names = platformNames(process.env)
+	const deadLetterQueue = `${ctx.env}-${names.operationsIngestDlq}`
 	const iamUrl = resolveIamUrl(isLocal)
 	return new Worker({
 		dir: '.',
-		name: 'operations',
+		name: names.operationsWorker,
 		main: './src/worker.ts',
 		compatibility_flags: ['nodejs_compat_v2'],
 		compatibility_date: '2025-10-01',
@@ -43,10 +45,10 @@ export const buildOperationsWorker = (ctx: ResourceContext): Worker => {
 			FABRIKA_IAM_ISSUER: iamUrl,
 		},
 		bindings: {
-			DB: new D1Database({ name: 'operations', migrationsDir: './migrations', locationHint: 'weur' }),
-			PAYLOADS: new R2Bucket({ name: 'operations-payloads' }),
+			DB: new D1Database({ name: names.operationsDatabase, migrationsDir: './migrations', locationHint: 'weur' }),
+			PAYLOADS: new R2Bucket({ name: names.operationsPayloads }),
 			INGEST_QUEUE: new Queue({
-				name: 'operations-ingest',
+				name: names.operationsIngest,
 				binding: 'both',
 				consumer: {
 					maxBatchSize: 50,
@@ -57,13 +59,13 @@ export const buildOperationsWorker = (ctx: ResourceContext): Worker => {
 				},
 			}),
 			INGEST_DLQ: new Queue({
-				name: 'operations-ingest-dlq',
+				name: names.operationsIngestDlq,
 				binding: 'consumer',
 				consumer: { maxBatchSize: 50, maxBatchTimeout: 5, maxRetries: 10 },
 			}),
 			// Bound in EVERY environment, local included: `src/auth.ts` verifies an IAM-issued token and
 			// has no local mode, and the proxy Worker in front of this one binds the same service anyway.
-			IAM: new ServiceReference('propustka-worker'),
+			IAM: new ServiceReference(names.iamWorker),
 		},
 	})
 }
@@ -71,13 +73,15 @@ export const buildOperationsWorker = (ctx: ResourceContext): Worker => {
 export const buildOperationsProxy = (ctx: ResourceContext): Worker => {
 	const publicHost = ctx.domain ?? ''
 	const iamUrl = resolveIamUrl(ctx.env === 'local')
+	const names = platformNames(process.env)
 	return createCloudflareProxyWorker({
-		name: 'operations-proxy',
+		name: names.operationsProxy,
 		app: buildOperationsWorker(ctx),
 		appId: OPERATIONS_APP_ID,
 		appHost: publicHost === '' ? 'localhost' : publicHost,
 		domain: ctx.domain,
 		installation: serviceProxyTable(OPERATIONS_PUBLIC_SERVICE, { oauth: false }),
+		iamService: names.iamWorker,
 		iamUrl,
 	})
 }

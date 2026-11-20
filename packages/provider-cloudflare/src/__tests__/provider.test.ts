@@ -199,6 +199,8 @@ const deploy = (
 		/** `false` deploys the config as it is, without the schema the helper adds to a contract application's. */
 		readonly declaresSchema?: false
 		readonly installationApps?: readonly AppEnvironment[]
+		/** IAM's Worker by its remote name, as Control names it; none by default. */
+		readonly iamService?: string
 		readonly platformIam?: PlatformIamTarget
 		/** The pointer Control records; none by default. */
 		readonly applicationObjects?: ApplicationObjects
@@ -250,6 +252,7 @@ const deploy = (
 				},
 			}),
 		...(options.installationApps === undefined ? {} : { installationApps: options.installationApps }),
+		...(options.iamService === undefined ? {} : { iamService: options.iamService }),
 		...(options.applicationObjects === undefined ? {} : { applicationObjects: options.applicationObjects }),
 		dryRun: options.dryRun ?? false,
 		signal: options.signal ?? new AbortController().signal,
@@ -749,6 +752,39 @@ describe('Cloudflare provider', () => {
 
 		const toIam = config({ resources: () => bindingIam(iamServiceReference()) })
 		await expect(deploy(rec, toIam)).resolves.toMatchObject({ status: 'succeeded' })
+	})
+
+	test("binds the application and its proxy to the IAM Worker Control names, whatever the application's env", async () => {
+		const result = await deploy(rec, config({ resources: () => bindingIam(iamServiceReference()) }), { iamService: 'prod-fabrika-iam' })
+		expect(result.status).toBe('succeeded')
+		const configs = (await generateWranglerConfigs(provisioned().root, 'stage')).configs.map((item) => item.config)
+		const iamOf = (name: string) => configs.find((generated) => generated.name === name)?.services?.find((entry) => entry.binding === 'IAM')
+		expect(iamOf('stage-demo')).toEqual({
+			binding: 'IAM',
+			service: 'prod-fabrika-iam',
+			entrypoint: IAM_APPLICATION_ENTRYPOINT,
+			props: { app: 'demo@stage', worker: 'application' },
+		})
+		expect(iamOf('stage-demo-proxy')).toEqual({
+			binding: 'IAM',
+			service: 'prod-fabrika-iam',
+			entrypoint: IAM_APPLICATION_ENTRYPOINT,
+			props: { app: 'demo@stage' },
+		})
+	})
+
+	test('with an IAM Worker named, a binding to the env-prefixed one is a binding to a platform resource', async () => {
+		const result = await deploy(rec, config({ resources: () => bindingIam(iamServiceReference()) }), {
+			iamService: 'prod-fabrika-iam',
+			generatedServices: [{
+				binding: 'IAM',
+				service: 'stage-propustka-worker',
+				entrypoint: IAM_APPLICATION_ENTRYPOINT,
+				props: { app: 'demo@stage', worker: 'application' },
+			}],
+		})
+		expect(result.status).toBe('failed')
+		expect(stepError(result, 'deploy-worker')).toContain('which would take over the Fabrika platform resource `propustka-worker`')
 	})
 
 	test("refuses IAM's default entrypoint and any entrypoint but the application one", async () => {

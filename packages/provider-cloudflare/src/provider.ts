@@ -107,7 +107,7 @@ const assertRunning = (signal: AbortSignal): void => {
 /** What composing an application's Worker graph reads of a run; a local run (`composeLocalApplication`) supplies it too. */
 type ApplicationTarget = Pick<
 	CloudflareDeployRun,
-	'appId' | 'env' | 'domain' | 'crossOrigins' | 'operationsOrigin' | 'managedEnvironment' | 'vars' | 'secrets' | 'applicationObjects'
+	'appId' | 'env' | 'domain' | 'crossOrigins' | 'operationsOrigin' | 'iamService' | 'managedEnvironment' | 'vars' | 'secrets' | 'applicationObjects'
 >
 
 /** The bindings the platform writes into a contract application's Worker (ADR-0065). */
@@ -326,14 +326,14 @@ const connectorBindings = (contract: ContractArtifact | null): Readonly<Record<s
 	)
 
 /** The application Worker's `IAM` binding, written by the deployer so that it names this deployment (ADR-0067 §3). */
-const withIamIdentity = (authored: Worker, iamAppId: string): Worker => {
+const withIamIdentity = (authored: Worker, iamAppId: string, iamService: string | undefined): Worker => {
 	const application = applicationWorker(authored)
 	const declared = application.options.bindings?.['IAM']
 	// A skipped binding or a resource under the name is no IAM binding; oblaka provisions it, and the bounds check whatever it emits.
 	if (!declared || 'getId' in declared) return authored
 	const configured = new Worker({
 		...application.options,
-		bindings: { ...application.options.bindings, IAM: new IamApplicationReference(iamAppId, 'application', declared) },
+		bindings: { ...application.options.bindings, IAM: new IamApplicationReference(iamAppId, 'application', declared, iamService) },
 	})
 	return replaceApplicationWorker(authored, configured)
 }
@@ -406,6 +406,7 @@ const platformProxied = (authored: Worker, served: ServedContract, run: Applicat
 		...(run.crossOrigins === undefined ? {} : { crossOrigins: run.crossOrigins }),
 		endpoints: contractProxyTable(served.contract, served.digest, { ops }),
 		...operationsOrigin(run),
+		...(run.iamService === undefined ? {} : { iamRemoteService: run.iamService }),
 		iamUrl: managedValue(run.managedEnvironment, FABRIKA_IAM_ISSUER) ?? '',
 	})
 }
@@ -756,6 +757,11 @@ export interface CloudflareDeployRun {
 	readonly approved?: RunnerApprovedAccess
 	/** Every Cloudflare deployment of the installation in Control's registry; a name of another application is refused. */
 	readonly installationApps?: readonly AppEnvironment[]
+	/**
+	 * IAM's Worker by its remote name, as Control names the installation's; the application and its proxy bind it whatever
+	 * env they deploy in. Absent (a local deploy, an older Control), they bind `${env}-propustka-worker`.
+	 */
+	readonly iamService?: string
 	/** The serving object and the listed objects Control records (ADR-0070 §9); absent, `application` and `rehearsal`. */
 	readonly applicationObjects?: ApplicationObjects
 	readonly dryRun: boolean
@@ -819,7 +825,9 @@ export const createCloudflareDeployer = (options: CloudflareDeployerOptions) => 
 	const alarms = release !== undefined && servesAlarms(release)
 	const runtime = platformResources === 'refuse' && contract !== null && objectRuntime ? applicationRuntime(run, contract, entry, alarms) : null
 	const managed = withManagedEnvironment(loaded.config, proxied, run, contractEnvironment(run.managedEnvironment, served))
-	const identified = platformResources === 'refuse' ? withIamIdentity(managed.worker, appEnvironmentId(run.appId, run.env)) : managed.worker
+	const identified = platformResources === 'refuse'
+		? withIamIdentity(managed.worker, appEnvironmentId(run.appId, run.env), run.iamService)
+		: managed.worker
 	const connected = withConnectorBindings(identified, connectors)
 	// An application Worker that declares its own `assets` keeps them; otherwise the platform stages the mounts' files.
 	const mounts = runtime !== null && contract !== null ? assetMounts(contract) : []
@@ -833,6 +841,7 @@ export const createCloudflareDeployer = (options: CloudflareDeployerOptions) => 
 		platformResources,
 		iamAppId: appEnvironmentId(run.appId, run.env),
 		installation: run.installationApps ?? [],
+		...(run.iamService === undefined ? {} : { iamService: run.iamService }),
 		proxy: proxied === authored ? null : `${run.env}-${run.appId}-proxy`,
 		connectors: Object.fromEntries(Object.entries(connectors).map(([binding, owner]) => [binding, remoteName(run.env, owner)])),
 		frameworkVariables: {
@@ -933,7 +942,7 @@ export const composeLocalApplication = (options: LocalApplicationOptions): Worke
 		managed.worker,
 		new Worker({ ...application.options, vars: { ...application.options.vars, ...managed.secrets } }),
 	)
-	const identified = withIamIdentity(withSecrets, iamAppId)
+	const identified = withIamIdentity(withSecrets, iamAppId, undefined)
 	const connected = withConnectorBindings(identified, connectorBindings(contract))
 	// As a deploy: a Worker that declares its own `assets` keeps them; otherwise the staged mounts are bound as `ASSETS`.
 	const mounts = assetMounts(contract)

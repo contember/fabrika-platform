@@ -21,6 +21,7 @@ import {
 	confirmations,
 	detail,
 	type EnvironmentConfig,
+	environmentVariables,
 	generateSigningKeys,
 	generateVaultKey,
 	ghRepoExists,
@@ -35,6 +36,7 @@ import {
 	url,
 	warn,
 } from '@fabrika/installation-init'
+import { PLATFORM_NAMES_ENV, type PlatformNameScheme, platformNameScheme } from '../platform-names'
 import { type CfAccount, type CfZone, findZone, listAccounts, selectAccount, verifyToken } from './cloudflare'
 import { envPath, fromEnv, openEnvFile, persistEnv } from './envfile'
 import { type InitInput, parseInitAccount, parseInitArgs, PLACEHOLDER_OIDC_CLIENT_ID, rerunCommand } from './init-options'
@@ -62,6 +64,8 @@ export interface Collected {
 	/** IAM's mail transport. */
 	email: InstallationEmail
 	bootstrapAdmins: string[]
+	/** The resource names the installation's components take (`ensurePlatformNames`). */
+	platformNames: PlatformNameScheme
 }
 
 const ENVIRONMENT_SOURCE: Readonly<Record<string, string | undefined>> = process.env
@@ -76,6 +80,8 @@ export function readResumeValue(source: Readonly<Record<string, string | undefin
 export interface InitEffects {
 	/** Only decides how the scaffold confirmation is phrased; the scaffold itself re-reads it. */
 	repositoryExists(repo: string): Promise<boolean>
+	/** The variables the installation's GitHub Environment holds, or null when it does not exist yet. */
+	environmentVariables(repo: string, environment: string): Promise<Readonly<Record<string, string>> | null>
 	listAccounts(token: string): Promise<CfAccount[]>
 	/** Best effort: `false` means "could not confirm", never "invalid". */
 	verifyToken(token: string, accountId: string): Promise<boolean>
@@ -183,6 +189,7 @@ export function consoleInitCollaborators(input: InitInput): InitCollaborators {
 		),
 		effects: {
 			repositoryExists: (repo) => ghRepoExists(repo),
+			environmentVariables: (repo, environment) => environmentVariables(repo, environment),
 			listAccounts: (token) => listAccounts(token),
 			verifyToken: (token, accountId) => verifyToken(token, accountId),
 			findZone: (token, hostname) => findZone(token, hostname),
@@ -245,6 +252,7 @@ export function environmentPayload(
 				: {}),
 			// The same first-admin emails admit the operator to IAM itself (its own bootstrap hatch).
 			FABRIKA_IAM_BOOTSTRAP_ADMINS: JSON.stringify(collected.bootstrapAdmins),
+			[PLATFORM_NAMES_ENV]: collected.platformNames,
 		},
 	}
 }
@@ -325,6 +333,7 @@ async function collect(input: InitInput, cfAccount: CfAccount, effects: InitEffe
 		await persistEnv('FABRIKA_IAM_OIDC_CLIENT_ID', oidc.clientId)
 	}
 	await ensureEmailSettings(input.email)
+	const platformNames = await ensurePlatformNames(input, ENVIRONMENT_SOURCE, effects)
 
 	return {
 		account: input.account,
@@ -342,7 +351,36 @@ async function collect(input: InitInput, cfAccount: CfAccount, effects: InitEffe
 		humanEmailDomains: oidc === undefined ? [] : [...oidc.humanEmailDomains],
 		email: input.email,
 		bootstrapAdmins: [...input.bootstrapAdmins],
+		platformNames,
 	}
+}
+
+/**
+ * The resource names of this installation (`FABRIKA_CLOUDFLARE_NAMES`). A new installation takes `fabrika`. One that
+ * exists keeps the names it was created with, and one created before the switch existed keeps `legacy`: a rename would
+ * leave its live database, buckets and queues behind under the old names.
+ */
+export async function ensurePlatformNames(
+	input: Pick<InitInput, 'account' | 'repo'>,
+	source: Readonly<Record<string, string | undefined>>,
+	effects: Pick<InitEffects, 'environmentVariables'>,
+): Promise<PlatformNameScheme> {
+	step('Resource names')
+	const saved = readResumeValue(source, PLATFORM_NAMES_ENV)
+	const fromFile = saved === undefined ? undefined : platformNameScheme({ [PLATFORM_NAMES_ENV]: saved })
+	const existing = await effects.environmentVariables(input.repo, input.account)
+	// An Environment that holds anything belongs to an installation; without the switch it predates it.
+	const fromEnvironment = existing === null || Object.keys(existing).length === 0 ? undefined : platformNameScheme(existing)
+	if (fromFile !== undefined && fromEnvironment !== undefined && fromFile !== fromEnvironment) {
+		throw new Error(
+			`The installer env file names the resources \`${fromFile}\`, but the ${input.account} Environment on ${input.repo} \`${fromEnvironment}\`. `
+				+ `Set ${PLATFORM_NAMES_ENV} in the env file to the Environment's value: the deployed resources carry those names.`,
+		)
+	}
+	const scheme = fromFile ?? fromEnvironment ?? 'fabrika'
+	await persistEnv(PLATFORM_NAMES_ENV, scheme)
+	ok(scheme === 'fabrika' ? 'Resource names: fabrika-*.' : 'Resource names: legacy (vozka-*, propustka-*), as this installation was created.')
+	return scheme
 }
 
 /**

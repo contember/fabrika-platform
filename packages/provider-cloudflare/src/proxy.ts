@@ -22,8 +22,13 @@ interface CloudflareProxyWorkerBase {
 	readonly appHost: string
 	/** Optional Cloudflare custom domain for the proxy Worker. */
 	readonly domain?: string
-	/** IAM service name. The global default is the platform IAM Worker. */
+	/** IAM service name, which oblaka prefixes with the env. The global default is the platform IAM Worker. */
 	readonly iamService?: string
+	/**
+	 * IAM's Worker by its exact remote name, which an application's proxy binds whatever env it deploys in. Only an
+	 * application's proxy takes it; a platform service's binds `iamService` in its own env.
+	 */
+	readonly iamRemoteService?: string
 	/** IAM origin used for login redirects and token issuer validation. */
 	readonly iamUrl?: string
 }
@@ -97,12 +102,15 @@ export class IamApplicationReference implements Binding {
 		private readonly app: string,
 		private readonly holder: IamBindingHolder,
 		private readonly declared: Binding = iamServiceReference(),
+		/** IAM's exact remote name, which replaces the env-prefixed one the declared binding writes; absent, that one stays. */
+		private readonly remoteService?: string,
 	) {}
 
 	configureBinding(args: Parameters<Binding['configureBinding']>[0]): ReturnType<Binding['configureBinding']> {
 		const config = this.declared.configureBinding(args)
 		const props = iamBindingProps(this.app, this.holder)
-		const services = (config.services ?? []).map((entry) => entry.binding === args.binding ? { ...entry, props } : entry)
+		const service = this.remoteService === undefined ? {} : { service: this.remoteService }
+		const services = (config.services ?? []).map((entry) => entry.binding === args.binding ? { ...entry, ...service, props } : entry)
 		return { ...config, services }
 	}
 }
@@ -148,7 +156,7 @@ export function createCloudflareProxyWorker(options: CloudflareProxyWorkerOption
 		define: { [PROXY_MANIFEST_DEFINE]: JSON.stringify(encodeProxyManifestJson(manifest)) },
 		vars: { FABRIKA_IAM_ISSUER: options.iamUrl ?? '' },
 		bindings: {
-			IAM: options.installation === undefined ? new IamApplicationReference(options.appId, 'proxy', iam) : iam,
+			IAM: options.installation === undefined ? new IamApplicationReference(options.appId, 'proxy', iam, options.iamRemoteService) : iam,
 			APP: options.app,
 		},
 	})
