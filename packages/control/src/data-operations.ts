@@ -67,6 +67,7 @@ import {
 import type { DataOperationDto } from '@fabrika/control-contract'
 import { type DeployLocks, uuidv7 } from '@fabrika/platform'
 import { abortableWait, isLeaseLoss, ProviderInvocationAbort } from '@fabrika/provider-contract'
+import { isBundledMigration } from './approval/snapshot'
 import type {
 	BackupCheckpoint,
 	BackupPartRow,
@@ -459,7 +460,7 @@ export async function pendingMigrations(
 	candidate: readonly { readonly name: string }[],
 	signal: AbortSignal,
 ): Promise<PendingMigrations> {
-	const bundled = candidate.map(({ name }) => name).filter((name) => name.endsWith('.sql') && !name.includes('/'))
+	const bundled = candidate.map(({ name }) => name).filter(isBundledMigration)
 	if (bundled.length === 0) return { kind: 'known', pending: [] }
 	// An installation without a vault holds no ops key, so it reaches no object.
 	if (ops === undefined) return { kind: 'unknown', reason: 'no_channel' }

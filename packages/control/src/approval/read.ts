@@ -1,7 +1,8 @@
 // Reading a run's access snapshot at its pinned commit (ADR-0050 §1): the contract graph and `src/db/tables.ts` through
 // the static reader of the framework release the application pins (ADR-0062), which executes nothing (ADR-0005), the
 // migration list with checksums, and the database code the migrations declare, through the classifier the runner
-// applies them with (ADR-0017).
+// applies them with (ADR-0017). A migration the environment applied and the commit changed is refused here, before the
+// build, by the checksum rule the runners refuse it with.
 
 import { sha256Hex } from '@fabrika/auth-core'
 import { CONTRACT_FILE, CONTRACT_LIMITS, lockedRegistryVersion, LOCKFILE, MIGRATIONS_DIR } from '@fabrika/check/contract'
@@ -17,7 +18,7 @@ import {
 import type { CommitFiles } from '../github/source/commit-files'
 import type { SnapshotContract } from './formats'
 import { type ContractReader, FRAMEWORK_PACKAGE, FrameworkReleaseRefused, readerFor, type ReaderOutcome } from './readers'
-import { type AccessSnapshot, type MigrationEntry, storedSnapshotFits } from './snapshot'
+import { type AccessSnapshot, isBundledMigration, type MigrationEntry, storedSnapshotFits } from './snapshot'
 
 /** What one snapshot read may cost: files, rounds of import discovery, bytes per file and in all. */
 export const SNAPSHOT_LIMITS = {
@@ -112,18 +113,50 @@ export class ContractMissing extends Error {
 	}
 }
 
+const APPLIED_MIGRATION_ALLOWED = 'as applied and put the change in a new migration (`bunx fabrika db new <slug>`)'
+
+/**
+ * Migrations the environment applied whose text changed since: every runner refuses the deploy (ADR-0017), but only
+ * after the build. `lines` holds one line per file, under the application root.
+ */
+export class AppliedMigrationsChanged extends Error {
+	override readonly name = 'AppliedMigrationsChanged'
+	readonly lines: readonly string[]
+
+	constructor(readonly files: readonly string[]) {
+		const one = files.length === 1
+		super(
+			`${one ? 'an applied migration' : `${files.length} applied migrations`} changed: ${files.join(', ')}; leave ${
+				one ? 'it' : 'each'
+			} ${APPLIED_MIGRATION_ALLOWED}`,
+		)
+		this.lines = files.map((file) => `${file}: an applied migration changed; leave it ${APPLIED_MIGRATION_ALLOWED}`)
+	}
+}
+
+/** What `readAccessSnapshot` knows of the environment's migrations, and the dialect it classifies them in. */
+export interface SnapshotReadOptions {
+	/**
+	 * The migrations the environment's published snapshot holds: as the runner skips an applied file, a refused statement
+	 * in one of them, unchanged, does not refuse the read.
+	 */
+	readonly settled?: readonly MigrationEntry[]
+	/** The migrations the environment's database applied, each as it ran: a file among them whose text changed is refused. */
+	readonly applied?: readonly MigrationEntry[]
+	/** The database the provider runs the application's migrations on. */
+	readonly dialect?: MigrationDialect
+}
+
 /**
  * The snapshot of the application at `root` (repository-relative, `''` for the root) in `commit`. A commit without
- * `fabrika.contract.ts` is refused (`ContractMissing`), whatever its configuration says. `settled` are the migrations
- * the environment's published snapshot holds: as the runner skips an applied file, a refused statement in one of them,
- * unchanged, does not refuse the read. `dialect` is the database the provider runs the application's migrations on.
+ * `fabrika.contract.ts` is refused (`ContractMissing`), whatever its configuration says, and one that changed an
+ * `applied` migration (`AppliedMigrationsChanged`).
  */
 export async function readAccessSnapshot(
 	commit: CommitFiles,
 	root: string,
 	appId: string,
-	settled: readonly MigrationEntry[] = [],
-	dialect: MigrationDialect = 'postgres',
+	{ settled = [], applied = [], dialect = 'postgres' }: SnapshotReadOptions = {},
 ): Promise<AccessSnapshot> {
 	const inRepository = (path: string): string => (root === '' ? path : `${root}/${path}`)
 	const exists = (path: string): boolean => commit.paths.has(inRepository(path))
@@ -131,6 +164,8 @@ export async function readAccessSnapshot(
 	const framework = await readFrameworkRelease(commit, inRepository)
 	const reader = readerFor(framework)
 	const migrations = await readMigrations(commit, root)
+	const changed = changedAppliedMigrations(applied, migrations)
+	if (changed.length > 0) throw new AppliedMigrationsChanged(changed.map((name) => `${MIGRATIONS_DIR}${name}`))
 	const files = new Map<string, string>()
 	let chars = 0
 	for (let round = 0;; round++) {
@@ -210,6 +245,17 @@ function readDatabaseCode(
 		fileAdoptions: classified.files.flatMap((file) => file.adoptions),
 		dataLoss: classified.files.flatMap((file) => file.dataLoss),
 	}
+}
+
+/**
+ * The runners' checksum rule (ADR-0017): a file the ledger records refuses the deploy when the SHA-256 of its text
+ * differs, byte for byte, line ends and whitespace included, except a leading UTF-8 BOM: the commit's decoder drops it
+ * and the Postgres runner keeps it, so a BOM-only edit is left to the runner. A recorded file the commit no longer holds
+ * is tolerated, as both runners tolerate a database ahead of the code; a file no runner applies is not compared.
+ */
+function changedAppliedMigrations(applied: readonly MigrationEntry[], migrations: readonly MigrationEntry[]): string[] {
+	const recorded = new Map(applied.filter(({ name }) => isBundledMigration(name)).map((entry) => [entry.name, entry.checksum]))
+	return migrations.filter(({ name, checksum }) => recorded.has(name) && recorded.get(name) !== checksum).map(({ name }) => name)
 }
 
 interface ReadMigration extends MigrationEntry {

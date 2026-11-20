@@ -121,6 +121,8 @@ export interface AccessClassification {
 export function classifyAccess(baseline: AccessSnapshot, candidate: AccessSnapshot): AccessClassification {
 	const changes = new Changes()
 	compareContracts(changes, baseline.contract, candidate.contract)
+	// A changed file that the environment's last succeeded run applied is refused before this (`AppliedMigrationsChanged`):
+	// a `changes` line is a file published but never run, as when the deploy that published it failed.
 	compareKeyed(changes, 'migration', byName(baseline.migrations), byName(candidate.migrations), {
 		added: (name) => `New migration \`${name}\``,
 		removed: (name) => `Migration \`${name}\` is removed`,
