@@ -84,8 +84,8 @@ as `dropped`: an operator's decision, never a silent loss.
   **Lettermint**, **Postmark**, **Resend** and **SmartEmailing**, all over `fetch` and all on one HTTP adapter base, so
   a provider is its own mapping and nothing more. Resend, AhaSend and Lettermint are idempotent and synchronous.
   Postmark and Cloudflare are synchronous with no idempotency key. Brevo is synchronous and keeps a key for 30 minutes
-  only, so it counts as not idempotent. SmartEmailing is neither. What each offers and what it has been checked against is the
-  [reference's table](../reference/outbound-email.md#built-in-providers).
+  only, so it counts as not idempotent. SmartEmailing is neither. What each offers and what it has been checked against
+  is the [reference's table](../reference/outbound-email.md#built-in-providers).
 - **Broadcast mail is marked, not inferred.** A message of a send to many recipients carries `broadcast: true` and
   needs an unsubscribe URL. Providers keep broadcast mail apart from transactional mail: Postmark has a broadcast
   stream and pauses a server whose transactional stream carries it, Lettermint a broadcast route on separate

@@ -40,8 +40,8 @@ On an account with a verified sender domain:
 
 1. Send a text-only message and an HTML message with an attachment and a reply-to, and record each request and answer
    and the received message.
-2. Send the same message twice under one key inside the window, and once after it; repeat a key whose first request was refused; send a message with unsubscribe
-   headers; provoke a bad key, an unauthorised IP address, an unverified sender, an oversized message.
+2. Send the same message twice under one key inside the window, and once after it; repeat a key whose first request was
+   refused; send a message with unsubscribe headers; provoke a bad key, an unauthorised IP address, an unverified sender, an oversized message.
 3. Correct the adapter's mapping, its capabilities and its tests (`brevo.test.ts`, the conformance harness's answers) to
    the recorded answers.
 4. Record the confirmed facts in `docs/reference/outbound-email.md` and mark the provider `live` in its table.
