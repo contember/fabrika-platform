@@ -296,7 +296,7 @@ fails the run). It classifies the snapshot against the environment's active snap
 `app_envs.published_run_id`). A step off the paved road — a site's declared `sql`, `unscoped`, `connect` or link
 issuing, or a migration's database code — is a widening line marked "needs closer review", not a refusal; the
 console's environment page lists the published snapshot's, beside its surface: every endpoint under its most exposed
-caller (`snapshotSurface`). A migration statement the classifier does not know to keep every stored value is its own
+caller (`snapshotSurface`), and its access by role (`snapshotAccessMap`), which the approval detail shows for the candidate too. A migration statement the classifier does not know to keep every stored value is its own
 line that needs closer review: worded when it deletes data (`DROP TABLE`, `DROP COLUMN`, any `DROP … CASCADE`,
 `TRUNCATE`, `DELETE`), overwrites it (`UPDATE`, an upsert, `ALTER COLUMN … TYPE`) or calls a function the migrations
 declare, "may change data" otherwise (ADR-0050 lists what keeps every value). The platform backs the database up before

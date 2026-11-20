@@ -526,6 +526,13 @@ outside the `deploy.*` wildcard, so the `operator` role does not grant it.
   (anyone, share links, other apps, machines, signed-in people), in the approval's words, with what else opens it —
   another origin, a file it answers, its body limit, its rate buckets and challenge, a webhook's signature
   (`AppEnvDto.surface`, `snapshotSurface`). It reads only the published snapshot, so it shows what the proxy serves.
+- **The environment page and the approval detail read the access by role**: each role, where it is granted, who
+  assigns it and which new values grant it to their creator, the actions it holds directly or through a relation (with
+  the rows that confer it), and per action the endpoints a person or a script calls with it, the tables it reaches with
+  where their rows lie and every other path to them (a path column, a reveal, an access view, a condition), the stored
+  files, and the people and share links it manages; the endpoints any member reaches are listed once
+  (`AppEnvDto.accessMap`, `ApprovalDto.accessMap`, `snapshotAccessMap`). The approval detail shows the candidate's, so an
+  approver reads the whole access the run would publish to people and scripts beside the change.
 
 **Invariant: only a human user principal approves an access change.** No credential that an agent or a
 workload can hold completes an approval.

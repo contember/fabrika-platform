@@ -1,6 +1,7 @@
 import { createPage, Link, useNavigate } from '@buzola/router'
 import { CONTROL_ACTIONS } from '@fabrika/control-contract'
 import { useState } from 'react'
+import { AccessMapSection } from '../../components/app-detail/AccessMapSection'
 import { ApprovalsSection } from '../../components/app-detail/ApprovalsSection'
 import { BuildConfigSection } from '../../components/app-detail/BuildConfigSection'
 import { DeviationsSection } from '../../components/app-detail/DeviationsSection'
@@ -88,6 +89,7 @@ export default createPage()
 				<DataLinks appId={app.id} envs={envs} />
 				<ApprovalsSection appId={app.id} envs={envs} onDone={invalidate} />
 				<SurfaceSection envs={envs} />
+				<AccessMapSection envs={envs} />
 				<DeviationsSection envs={envs} />
 				<SecretsSection appId={app.id} secrets={secrets} envs={envs} onDone={invalidate} />
 				<VariablesSection appId={app.id} vars={vars} envs={envs} onDone={invalidate} />

@@ -271,11 +271,72 @@ export interface AppEnvDto {
 	deviationSubjects: DeviationSubjectDto[]
 	/** The published snapshot's endpoints as the outside reaches them, most exposed first; empty until a run publishes one. */
 	surface: SurfaceEndpointDto[]
+	/**
+	 * The published snapshot's roles and what each action of theirs reaches; empty until a run publishes one. Absent from
+	 * a Control released before it.
+	 */
+	accessMap?: AccessMapDto
 	namespaceId: string | null
 	provider: string
 	target: ProviderEnvelopeDto
 	artifact: ProviderEnvelopeDto
 	createdAt: number
+}
+
+/**
+ * A contract's access read by role: each role and the actions it holds, and, once per action, the endpoints that require
+ * it and the tables it reaches. Actions are listed once, so a large contract does not repeat its endpoints per role.
+ */
+export interface AccessMapDto {
+	roles: AccessMapRoleDto[]
+	/** Every action a role holds, by name, in name order. */
+	actions: AccessMapActionDto[]
+	/** The endpoints any member reaches, whatever role it holds, by path. */
+	memberEndpoints: AccessMapEndpointDto[]
+}
+
+export interface AccessMapRoleDto {
+	role: string
+	/** The dimension a membership role is granted in; null for an application-wide role, granted globally. */
+	scope: string | null
+	/** The roles whose holders assign it in a value of `scope`; empty for an application-wide role. */
+	assignableBy: string[]
+	/** The dimensions whose new values grant it to their creator, in name order. */
+	creatorOf: string[]
+	/** An external principal may hold it (ADR-0051). */
+	external: boolean
+	/** The actions it grants, in name order. */
+	actions: string[]
+	/** The actions its holder holds at each node a row of the relation names them at, by relation, in name order. */
+	via: { relation: string; dimension: string; actions: string[]; conferredBy: string[] }[]
+}
+
+/** An endpoint a role's holder may call: `access` says where its action must be held (`on deal`, `app-wide`). */
+export interface AccessMapEndpointDto {
+	id: string
+	method: EndpointMethod
+	path: string
+	access: string
+	/** The callers among role holders: `human` (a person), `machine` (a script's key). */
+	callers: string[]
+}
+
+export interface AccessMapActionDto {
+	action: string
+	description: string
+	/** The endpoints whose requirement names it and that a person or a script calls, by path. */
+	endpoints: AccessMapEndpointDto[]
+	/** What it does to people: `manage the members of each org`, `list the application's members`. */
+	members: string[]
+	/** The share links it issues: `issue share links of shared to a note, which grant notes.read`. */
+	links: string[]
+	/**
+	 * The tables it reaches, by name: what it does there, where their rows lie (in org, app-wide), and `also` the other
+	 * paths it reaches them through or that their rows open (a path column, a reveal, an access view, a condition).
+	 */
+	tables: { table: string; lies: string; operations: string[]; also: string[] }[]
+	/** The stored files it reads, uploads or deletes: `read, upload the files of attachments (rows of notes)`. */
+	files: string[]
 }
 
 /** One endpoint, job or migration of a published snapshot and its steps off the paved road. */
@@ -697,6 +758,12 @@ export interface ApprovalDto {
 	 * A removed endpoint is not among them. Empty for a run that stored no snapshot, and on the approvals list.
 	 */
 	endpoints: SurfaceEndpointDto[]
+	/**
+	 * The candidate's roles and what each action of theirs reaches: the access the run would publish to people and
+	 * scripts, by role (workloads and other applications are the change's). Absent on the approvals list, for a run that
+	 * stored no snapshot, and from a Control released before it.
+	 */
+	accessMap?: AccessMapDto
 	/**
 	 * The human who approved it, once one did. `holds` is false once the approval lapsed: an older run of the environment
 	 * published another change first, the change still widens against it, and the run waits for a new approval (ADR-0050

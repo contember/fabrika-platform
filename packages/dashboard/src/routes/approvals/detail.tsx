@@ -1,6 +1,7 @@
 import { createPage, Link } from '@buzola/router'
 import { type ApprovalView, approvalView, type ChangeGroup, type ChangeRow, type SubjectRow, waitsForApproval } from '@fabrika/control-contract'
 import { useState } from 'react'
+import { AccessMapView } from '../../components/AccessMap'
 import { CloserReview } from '../../components/CloserReview'
 import { ConfirmDialog } from '../../components/ConfirmDialog'
 import { Icon, type IconName } from '../../components/Icon'
@@ -92,6 +93,19 @@ export default createPage()
 				</section>
 
 				<AccessChangeView view={view} approval={approval} />
+
+				{approval.accessMap !== undefined && approval.accessMap.roles.length > 0 && (
+					<section>
+						<div className="section-head">
+							<Icon name="shield" size={15} />
+							<h2>Access by role, after this change</h2>
+						</div>
+						<p className="hint">
+							What each role may do once the run publishes: the actions it holds, the endpoints that require each one, and the tables and people they reach.
+						</p>
+						<AccessMapView map={approval.accessMap} />
+					</section>
+				)}
 
 				{waiting && <Decision approval={approval} onDone={invalidate} />}
 			</>
