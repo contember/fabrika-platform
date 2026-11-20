@@ -71,8 +71,10 @@ it to fact without a probe.
 ## R2
 
 - **A 40 MB upload streams into a multipart object.** Probed live (2026-11-20): an application file of 40,000,000
-  bytes, sent as one multipart form request through the proxy, is written in 8 MiB parts and reads back with an equal
-  SHA-256; the request took 23.6 s. Uploads of 1, 7, 9, 17, 25 and 33 MB behave the same.
+  bytes, sent as one multipart form request through the proxy, reads back with an equal SHA-256; the request took
+  23.6 s. The framework writes a file from `R2_PART_BYTES` (8 MiB) up as an R2 multipart upload
+  (`packages/app/src/cloudflare/r2-files.ts`); uploads of 9, 17, 25 and 33 MB (multipart) and of 1 and 7 MB (one
+  conditional `put`) also read back intact.
 - **A conditional put refuses an existing key.** Probed on local workerd: `put(key, body, { onlyIf: { etagDoesNotMatch:
   '*' } })` on an existing key answers `null` and keeps the object. An etag passed to `onlyIf` is unquoted; R2 refuses
   a quoted one.

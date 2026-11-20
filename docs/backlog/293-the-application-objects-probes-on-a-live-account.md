@@ -25,9 +25,11 @@ of 9, nothing else:
    `alarm()`; exhausted retries.
 5. A timer set inside a `storage.transaction` callback.
 6. The default CPU limit per alarm and per request; `limits.cpu_ms`.
-7. PITR: abort before the undo bookmark persists, lost undo response, foreign bookmark, restore time at 10 MB and 1 GB.
+7. PITR: abort before the undo bookmark persists, lost undo response, foreign bookmark, restore time at 10 MB and 1 GB;
+   restoring to an earlier `getCurrentBookmark()` equals undo; an alarm after a restore.
 8. `sql.databaseSize`, cursor `rowsWritten`, `defer_foreign_keys`, the `typeof`/`cast` projection.
-9. R2 multipart from an object for a dump of more than one part; export and import throughput.
+9. R2 multipart from an object for a dump of more than one part, and workerd decompressing its padded members; export
+   and import throughput.
 10. The account's cron-trigger limit.
 
 ## Approach / acceptance

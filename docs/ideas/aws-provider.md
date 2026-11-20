@@ -318,7 +318,7 @@ evaluated here.
   path) that Zerops does not, so it never gets as cheap, and every extra database instance is a visible line.
 - **Two providers to keep current.** Every change to the delivery path, the managed environment or the proxy has to be
   made and verified twice (three times with Cloudflare). Without a live installation on AWS the provider rots; a
-  provider without a live installation is untested by definition (compare `reference/cloudflare-platform.md`).
+  provider without a live installation is untested by definition (compare [`cloudflare-platform.md`](../reference/cloudflare-platform.md)).
 - **IAM is a security boundary Fabrika has not owned before.** Control's role must be able to create namespaces and
   must not be able to touch the platform. A mistake there is worse than on Zerops, where the token's reach is one
   project.
