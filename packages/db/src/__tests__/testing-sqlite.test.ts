@@ -409,9 +409,9 @@ CREATE TABLE blobs (id TEXT PRIMARY KEY, payload BLOB NOT NULL);
 		expect([row?.['title']]).toEqual([...worlds.own.markers])
 	})
 
-	test('an updatable column the seed left to its default is updated with a sample, never with null', async () => {
+	test('an updatable column the seed left to its default is updated with the value the database stored', async () => {
 		const worlds = await sqlite.seedWorlds(typedTables, 'tasks')
-		expect(worlds.own.updates['priority']).toBe(1)
+		expect(worlds.own.updates['priority']).toBe(3)
 		expect(worlds.own.updates['due_on']).toEqual(expect.any(String))
 		expect(worlds.own.updates['done']).toBe(false)
 	})
