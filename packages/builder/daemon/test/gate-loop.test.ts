@@ -4,6 +4,7 @@ import { dirname, join, resolve } from 'path'
 import { fileURLToPath } from 'url'
 import { readApprovals, writeApprovals } from '../../shared/approvals'
 import { derivePhase } from '../../shared/derive'
+import { sessionMetaSchema, uiPhaseStateSchema } from '../../shared/index'
 import { builderDaemonUrl } from '../../shared/urls'
 import { type RunningDaemon, startDaemon } from '../src/index'
 import { scratchDir } from './scratch'
@@ -499,6 +500,50 @@ describe('gate interactive loop', () => {
 		const approvals = readApprovals(repo)
 		expect(Object.keys(approvals ?? {}).sort()).toEqual(['flows', 'skeletons', 'tech', 'vision'])
 		expect(derivePhase(repo).current).toBe('build')
+
+		rmSync(repo, { recursive: true, force: true })
+	})
+
+	test('the build names no gate of its own, and a gate opened inside it is the open gate the dashboard answers', async () => {
+		const sessionId = 'gate-loop-inside-build'
+		const repo = scratchDir('fabrika-inside-build-repo-')
+		writeIntent(repo)
+		writeFlow(repo)
+		writeFileSync(join(repo, '.fabrika', 'architecture', 'tech.md'), '# tech')
+		mkdirSync(join(repo, 'tests', 'browser'), { recursive: true })
+		writeFileSync(join(repo, 'tests', 'browser', 'checkout.test.ts'), '// skeleton')
+		mkdirSync(join(repo, '.fabrika', 'issues'), { recursive: true })
+		writeFileSync(join(repo, '.fabrika', 'issues', 'ISSUE-001.md'), '# issue')
+		for (const gate of ['vision', 'flows', 'tech', 'skeletons']) {
+			await openGate(sessionId, gate)
+			const ws = await openSocket(`${wsBase}/ws/session/${sessionId}`)
+			ws.send(JSON.stringify({ type: 'submit', feedback: 'Fine.', responses: [{ id: 'verdict', value: 'Approve' }] }))
+			await new Promise((r) => setTimeout(r, 100))
+			ws.close()
+			await fetch(`${base}/api/session/${sessionId}/feedback/consume`, { method: 'POST' })
+		}
+		const phaseUrl = `${base}/api/phase?root=${encodeURIComponent(join(repo, '.fabrika'))}&session=${sessionId}`
+		const meta = async () => sessionMetaSchema.parse(await (await fetch(`${base}/api/session/${sessionId}/meta`)).json())
+
+		const phase = uiPhaseStateSchema.parse(await (await fetch(phaseUrl)).json())
+		expect(phase.current).toBe('build')
+		expect(phase.gateName).toBeUndefined()
+		expect((await meta()).gate).toBeNull()
+
+		await openGate(sessionId, 'design-checkpoint')
+		expect((await meta()).gate).toBe('design-checkpoint')
+
+		const browser = await openSocket(`${wsBase}/ws/session/${sessionId}`)
+		browser.send(JSON.stringify({ type: 'submit', feedback: 'Looks right.', responses: [{ id: 'verdict', value: 'Approve' }] }))
+		await new Promise((r) => setTimeout(r, 100))
+		browser.close()
+		const submitted = await meta()
+		expect(submitted.gate).toBe('design-checkpoint')
+		expect(submitted.revisions.at(-1)).toMatchObject({ label: 'design-checkpoint', hasFeedback: true, feedbackConsumed: false })
+
+		const consumed = await fetch(`${base}/api/session/${sessionId}/gate/design-checkpoint/consume`, { method: 'POST' })
+		expect(await consumed.json()).toMatchObject({ verdict: 'approve' })
+		expect((await meta()).gate).toBeNull()
 
 		rmSync(repo, { recursive: true, force: true })
 	})
