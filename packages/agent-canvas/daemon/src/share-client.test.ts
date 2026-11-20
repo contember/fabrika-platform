@@ -97,6 +97,30 @@ describe('revokeShareOnWorker', () => {
 		recordFetch(() => Response.json({ error: 'Unauthorized' }, { status: 401 }))
 		await expect(revokeShareOnWorker('https://share.test', 'abc123', 'wrong')).rejects.toThrow('401')
 	})
+
+	test.each([307, 308])('a %d is not followed, so neither the share nor the owner token leaves the worker', async (status) => {
+		const arrivals: string[] = []
+		const target = Bun.serve({
+			hostname: '127.0.0.1',
+			port: 0,
+			fetch: (request) => {
+				arrivals.push(request.url)
+				return Response.json({ ok: true })
+			},
+		})
+		// `localhost` against `127.0.0.1`: the same machine, another origin.
+		const location = `http://localhost:${target.port}/collect`
+		const worker = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response(null, { status, headers: { location } }) })
+		try {
+			const endpoint = `http://127.0.0.1:${worker.port}`
+			await expect(createShare(payload, { endpoint, authToken: 'push-token' })).rejects.toThrow(`returned ${status}`)
+			await expect(revokeShareOnWorker(endpoint, 'abc123', 'owner')).rejects.toThrow(`${status}`)
+			expect(arrivals).toEqual([])
+		} finally {
+			await worker.stop(true)
+			await target.stop(true)
+		}
+	})
 })
 
 const wireEntry = (overrides: Partial<WireFeedbackEntry> = {}): WireFeedbackEntry => ({
