@@ -91,16 +91,13 @@ export function browserLocale(header: string | null): Locale | null {
 	return ranges[0]?.locale ?? null
 }
 
-/** The `Set-Cookie` that remembers `locale` for this browser's next page here (`LOCALE_COOKIE`). */
-export function localeCookie(locale: Locale): string {
-	return serializeCookie(LOCALE_COOKIE, locale, { httpOnly: true, secure: true, sameSite: 'Lax', maxAge: LOCALE_COOKIE_MAX_AGE_SECONDS })
-}
-
 /**
  * The `Set-Cookie` a sign-in of a person with `locale` (null for none) answers with: it remembers theirs, or clears a
  * language the browser still holds from someone else; null when there is nothing to change.
  */
 export function signInLocaleCookie(request: Request, locale: Locale | null): string | null {
-	if (locale !== null) return localeCookie(locale)
+	if (locale !== null) {
+		return serializeCookie(LOCALE_COOKIE, locale, { httpOnly: true, secure: true, sameSite: 'Lax', maxAge: LOCALE_COOKIE_MAX_AGE_SECONDS })
+	}
 	return readCookie(request.headers.get('Cookie'), LOCALE_COOKIE) === null ? null : clearCookie(LOCALE_COOKIE)
 }

@@ -56,7 +56,7 @@ export interface Reader {
 }
 
 /** The presentation of IAM's own page, in the reader's language (else the installation's) and with its logo. */
-export async function installationPresentation(services: Services, reader: Reader = {}): Promise<AppPresentation> {
+export async function installationPresentation(services: Services, reader: Reader): Promise<AppPresentation> {
 	return { ...readerPresentation(INSTALLATION_PRESENTATION, null, reader), brand: await brandOf(services, reader) }
 }
 
@@ -70,7 +70,7 @@ const MAX_APP_ID_LENGTH = 200
  * forged `app` can only pick another registered application's language and address. The language is the reader's
  * where one is known, else the application's (`chooseLocale`).
  */
-export async function presentationFor(services: Services, app: string | null, reader: Reader = {}): Promise<AppPresentation> {
+export async function presentationFor(services: Services, app: string | null, reader: Reader): Promise<AppPresentation> {
 	if (app === null || app === '' || app.length > MAX_APP_ID_LENGTH) {
 		return installationPresentation(services, reader)
 	}

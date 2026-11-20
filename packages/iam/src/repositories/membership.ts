@@ -507,7 +507,7 @@ export class MembershipRepository {
 	 * invitation when it was still open, and `audit` is written exactly then.
 	 */
 	async rotateInvitation(
-		input: { id: string; tokenHash: string; expiresAt: number; companyLabel: string | null; message: string | null; locale?: string | null },
+		input: { id: string; tokenHash: string; expiresAt: number; companyLabel: string | null; message: string | null; locale: string | null },
 		audit?: AuditEventInput,
 	): Promise<InvitationRow | null> {
 		const now = unixNow()
@@ -517,7 +517,7 @@ export class MembershipRepository {
 					locale = COALESCE(?, locale)
 				WHERE id = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?
 				RETURNING *`,
-			binds: [input.tokenHash, input.expiresAt, input.companyLabel, input.message, input.locale ?? null, input.id, now],
+			binds: [input.tokenHash, input.expiresAt, input.companyLabel, input.message, input.locale, input.id, now],
 		}
 		const [rotated] = await this.writer.run<InvitationRow>([rotate], audit)
 		return rotated ?? null

@@ -1,13 +1,12 @@
 import type { InstallationBrand } from '@fabrika/proxy-core/brand'
 import { z } from 'zod'
-import { actionLandingOrigin, type AppPresentation, appQuery, landingUrl, presentationFor } from '../app-presentation'
+import { actionLandingOrigin, type AppPresentation, appQuery, landingUrl, localeQuery, presentationFor } from '../app-presentation'
 import { type InvitationRow, principalStatus } from '../db'
 import { type RequestContext } from '../env'
 import { acceptCreatingPrincipal, acceptInvitation, INVITATION_ACCEPT_PATH, invitationOffer } from '../membership'
 import { passwordMinLength } from '../password-minimum'
 import { authFailurePage, invitationOutcomePage, invitationPage, invitationPasswordPage } from '../password-pages'
 import { validatePassword } from '../password-policy'
-import { LOCALE_PARAM } from '../person-locale'
 import type { Services } from '../services'
 import { methodNotAllowed, readForm, redirectHeaders, sameOrigin, stringValue } from './http'
 import { currentSession, issueSession } from './sessions'
@@ -202,9 +201,8 @@ function creationRefused(
 /** IAM's own sign-in, back to this page: the browser opens the invitation link again there. */
 function ownSignIn(services: Services, presentation: AppPresentation): string {
 	const accept = new URL(`${INVITATION_ACCEPT_PATH}${appQuery(presentation)}`, services.config.issuer)
-	const signIn = new URL('/auth/login', services.config.issuer)
-	signIn.searchParams.set('redirect', accept.toString())
 	// The sign-in page speaks the person's language too, not only the invitation page it returns to.
-	if (presentation.personLocale !== null) signIn.searchParams.set(LOCALE_PARAM, presentation.personLocale)
+	const signIn = new URL(`/auth/login${localeQuery(presentation)}`, services.config.issuer)
+	signIn.searchParams.set('redirect', accept.toString())
 	return signIn.toString()
 }
