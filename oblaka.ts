@@ -1,10 +1,21 @@
-import { define } from '@fabrika/provider-cloudflare'
-import { buildExampleProxy } from './fabrika.config'
+import { compileContract } from '@fabrika/app/contract'
+import { composeLocalApplication, define, stageLocalAssets } from '@fabrika/provider-cloudflare'
+import config from './fabrika.config'
+import { contract } from './fabrika.contract'
+import { tables } from './src/db/tables'
 
-// A standalone proxy + app composition that consumes the IAM Worker over service bindings. A deploy
-// takes only the application Worker, and the platform builds the proxy from its contract (ADR-0048); this
-// local run puts the same proxy in front so the boundary runs on its own.
+/** Where `bun run dev` in `packages/iam` serves IAM, the issuer of the local run's tokens. */
+const LOCAL_IAM_ORIGIN = 'http://localhost:18191'
+
+// A local run of the proxy + app composition a deploy builds, over IAM's service binding. A deploy never reads this
+// file: the deployer composes the same Workers from the config and the contract itself.
 //
 // `iamServiceReference()` resolves to the deployed IAM Worker by name, at its `PropustkaApplication` entrypoint.
 // Locally, lopata wires the two workers in-process (see lopata.config.ts).
-export default define(({ env }) => buildExampleProxy({ env }))
+const compiled = compileContract(contract, tables)
+
+// The `site` mount's files, staged into `fabrika/assets` by the deploy's code. oblaka imports this module before it
+// calls `define`, so `bun run build:web` must have written `dist/web` first.
+const assets = await stageLocalAssets(compiled, import.meta.dir)
+
+export default define(({ env }) => composeLocalApplication({ config, contract: compiled, assets, iamOrigin: LOCAL_IAM_ORIGIN, env }))
