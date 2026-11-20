@@ -125,7 +125,8 @@ function urlHost(value: string): string | null {
 
 /**
  * `facility` with each of its methods run outside any site's scope: a framework facility a handler calls, whose own
- * requests are the platform's, not the site's.
+ * requests are the platform's, not the site's. Only property reads reach the facility: `in`, `instanceof` and key
+ * listings see a copy of its own fields.
  */
 export function platformFacility<T extends object>(facility: T): T {
 	// The target is an unfrozen copy: a Proxy must answer a frozen property with its own value, never with a wrapper.
