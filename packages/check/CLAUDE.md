@@ -201,7 +201,7 @@ The hints (severity `hint`; the architecture's not in test files, the generated 
 | `cloudflare-held-call` | for an application on Cloudflare: a mutation of the compiled contract that declares `egress` or `connect`; it waits for that call inside the object's transaction, which holds the whole environment |
 
 **Generated modules** (`isGeneratedModule` in `layout.ts`): a source file named `<name>.gen.<ext>` or
-`<name>.generated.<ext>` whose first comment starts on line 1 and holds `@generated` or `auto-generated` (any case),
+`<name>.generated.<ext>` that opens with a comment on line 1, before any statement, holding `@generated` or `auto-generated` (any case),
 as `fabrika db codegen`, `fabrika app build` and `@buzola/codegen` write them. A generator's output is not held to how
 source is written: `type-assertion`, `any-type`, `suppression-comment` and the architecture's four hints skip it.
 Every other rule applies to it in full, `capability-widening`, `spa-server-import`, `env-read` and the literal subset

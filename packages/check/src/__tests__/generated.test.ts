@@ -4,7 +4,7 @@ import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Finding } from '../finding'
-import { check } from './helpers'
+import { check, CLEAN_APPLICATION, CLEAN_SCHEMA_GENERATED } from './helpers'
 
 /** The exact output of `@buzola/codegen` 0.0.28 for a routes directory of a layout, two pages and a not-found page. */
 const BUZOLA_GEN = readFileSync(join(import.meta.dir, 'fixtures', 'buzola.gen.ts.fixture'), 'utf8')
@@ -28,11 +28,12 @@ describe('generated modules', () => {
 		expect(await check(files)).toEqual([])
 	})
 
-	test('the same source is refused under another name, without the header, or with the header below the first line', async () => {
+	test('the same source is refused under another name, without the header, or with the header below the first line or after code', async () => {
 		const files = {
 			'src/reports/view.ts': `${HEADER}${STYLE_ONLY}`,
 			'src/reports/plain.gen.ts': STYLE_ONLY,
 			'src/reports/late.gen.ts': `\n${HEADER}${STYLE_ONLY}`,
+			'src/reports/trailing.gen.ts': "export const parsed = JSON.parse('1') as number // @generated\n",
 		}
 		const expected = (file: string, line: number): string[] => [
 			`${file}:${line}:1 suppression-comment`,
@@ -43,6 +44,7 @@ describe('generated modules', () => {
 		expect(described(await check(files))).toEqual([
 			...expected('src/reports/late.gen.ts', 3),
 			...expected('src/reports/plain.gen.ts', 1),
+			'src/reports/trailing.gen.ts:1:23 type-assertion',
 			...expected('src/reports/view.ts', 2),
 		])
 	})
@@ -60,6 +62,21 @@ describe('generated modules', () => {
 			'web/client.gen.ts:2:1 forbidden-import',
 			'web/client.gen.ts:2:1 spa-server-import',
 		])
+	})
+
+	test('a generated tools/ module still gets capability-widening and key-literal', async () => {
+		const files = {
+			'tools/wide.gen.ts': `${HEADER}import type { Ref } from '@fabrika/app'\nexport type Wide = Ref<string, string>\nexport const key = 'px_live'\n`,
+		}
+		expect(described(await check(files))).toEqual(['tools/wide.gen.ts:3:20 capability-widening', 'tools/wide.gen.ts:4:20 key-literal'])
+	})
+
+	test('a generated module in the contract graph is still held to the literal subset', async () => {
+		const columns = 'export const columns: TypedColumnList<DB> = '
+		if (!CLEAN_SCHEMA_GENERATED.includes(columns)) throw new Error(`the clean schema has no '${columns}'`)
+		const schema = HEADER + CLEAN_SCHEMA_GENERATED.replace(columns, 'export const columns = ').replace(/\n$/, ' as TypedColumnList<DB>\n')
+		const findings = await check({ ...CLEAN_APPLICATION, 'src/db/schema.generated.ts': schema })
+		expect(described(findings)).toEqual(['src/db/schema.generated.ts:8:24 literal'])
 	})
 
 	test("@buzola/codegen 0.0.28's output passes; under another name only its eslint-disable header is refused", async () => {

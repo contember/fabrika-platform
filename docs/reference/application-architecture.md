@@ -292,7 +292,7 @@ An import is judged by the file or package Bun loads for it:
 | `handler-location`     | hint     | `.handle(…)` on a `query`, `mutation`, `cron`, `webhook` or `export` procedure outside `src/<slice>/endpoints.ts`                                                                                                                                                                                                                        |
 | `data-access-location` | hint     | `ctx.db` or `ctx.sql` outside `src/<slice>/endpoints.ts` and `queries.ts` (`logic.ts` reports `logic-data-access`)                                                                                                                                                                                                                       |
 
-- Hints do not apply to test files, the generated entrypoint or a generated module (named `*.gen.ts` or `*.generated.ts`,
+- Hints do not apply to test files, the generated entrypoint or a generated module (named `*.gen.<ext>` or `*.generated.<ext>`,
   its first line a comment that says `@generated` or `auto-generated`; `packages/check/CLAUDE.md`).
 - A hint is syntactic: destructuring `ctx`, or passing a handle into a helper module, escapes it. The runtime binds
   every handle to its invocation; the hints only keep the structure readable.

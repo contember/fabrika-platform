@@ -319,7 +319,7 @@ export const checkApplication = async (input: CheckInput): Promise<Finding[]> =>
 		modules.set(path, parsed.module)
 		const referencesOfModule = moduleReferences(parsed.module.program)
 		references.set(path, referencesOfModule)
-		const isGenerated = isGeneratedModule(path, parsed.module.comments)
+		const isGenerated = isGeneratedModule(path, parsed.module)
 		if (isGenerated) generated.add(path)
 		if (isToolModule(path)) checkToolModule(parsed.module, isGenerated, findings)
 		else checkSourceModule(parsed.module, isGenerated, referencesOfModule, mappings, tree.files, findings, dependent)
