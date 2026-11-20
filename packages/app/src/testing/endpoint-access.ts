@@ -100,7 +100,8 @@ export interface EndpointAccessKit {
 	scoped(endpoint: string, input: Readonly<Record<string, unknown>>): Promise<DeniedOutcome>
 	/**
 	 * An `app` or a `creates` endpoint asked by a caller who holds its action as a global grant, and nothing else:
-	 * `answered` unless the answer is a 401, a 403 or a 5xx. The kit's `callerRows` are seeded for that caller first.
+	 * `answered` unless the answer is a 401, a 403 or a 5xx. The caller is the kit's one global caller of its kind, whose
+	 * `callerRows` are seeded before its first case and kept.
 	 */
 	global(endpoint: string, input: Readonly<Record<string, unknown>>): Promise<ReachOutcome>
 	/**
@@ -145,8 +146,8 @@ export interface EndpointAccessOptions {
 	/**
 	 * The rows of application tables that the caller of each global case holds, by table, each with its columns: the
 	 * caller's own record a handler looks up before it answers (a person's card bound to the account). A column whose
-	 * value is `fabrika:caller` (`GENERATED_CALLER`) gets the caller's id. Seeded before the case asks and removed once
-	 * it is over. `callerRows` of the fixtures.
+	 * value is `fabrika:caller` (`GENERATED_CALLER`) gets the caller's id. The global cases of a kind share one caller,
+	 * whose rows are seeded before its first case and kept for the kit's life. `callerRows` of the fixtures.
 	 */
 	readonly callerRows?: AppRows
 }
@@ -517,24 +518,48 @@ export function endpointAccessKit<DB, P>(
 		return parent?.mode === 'dimension' ? (parent.container?.dimension ?? parent.dimension) : undefined
 	}
 
-	/** A new caller holding `grants`; an action without a scope is held globally. */
-	const callerFor = (row: ActionEndpoint, grants: readonly TestGrant<AnyContract>[]): { readonly caller: TestCaller; readonly fetch: RpcFetch } => {
-		if (row.callers.some((caller) => caller === 'human')) {
-			const caller = kit.testCaller(grants)
+	/** The kind of caller the kit asks `row` as: a person where it admits one, else a script. */
+	const callerKindOf = (row: ActionEndpoint): 'human' | 'machine' => {
+		if (row.callers.some((caller) => caller === 'human')) return 'human'
+		if (row.callers.some((caller) => caller === 'machine')) return 'machine'
+		throw new Error(`${row.id} admits neither a human nor a machine caller`)
+	}
+
+	/** A new caller holding `grants`, under `id` when given; an action without a scope is held globally. */
+	const callerFor = (
+		row: ActionEndpoint,
+		grants: readonly TestGrant<AnyContract>[],
+		id?: string,
+	): { readonly caller: TestCaller; readonly fetch: RpcFetch } => {
+		const named = id === undefined ? {} : { id }
+		if (callerKindOf(row) === 'human') {
+			const caller = kit.testCaller(grants, named)
 			return { caller, fetch: kit.browser(caller) }
 		}
-		if (row.callers.some((caller) => caller === 'machine')) {
-			const caller = kit.testCaller(grants, { kind: 'machine' })
-			return {
-				caller,
-				fetch: (input, init) => {
-					const headers = new Headers(init?.headers)
-					headers.set('Authorization', `Bearer ${caller.key ?? ''}`)
-					return kit.fetch(input, { ...init, headers })
-				},
-			}
+		const caller = kit.testCaller(grants, { kind: 'machine', ...named })
+		return {
+			caller,
+			fetch: (input, init) => {
+				const headers = new Headers(init?.headers)
+				headers.set('Authorization', `Bearer ${caller.key ?? ''}`)
+				return kit.fetch(input, { ...init, headers })
+			},
 		}
-		throw new Error(`${row.id} admits neither a human nor a machine caller`)
+	}
+
+	// The principal of every global case, one per kind, and whether its `callerRows` are seeded. They are seeded before
+	// its first case and kept, as production keeps a person's card: a row a handler wrote that refers to them (a page's
+	// version by its author) stays for the next case, which a removal would take with them.
+	const globalCallers = new Map<'human' | 'machine', string>()
+	const seededCallers = new Set<string>()
+	const globalCallerOf = async (row: ActionEndpoint): Promise<string> => {
+		const kind = callerKindOf(row)
+		const id = globalCallers.get(kind) ?? crypto.randomUUID()
+		globalCallers.set(kind, id)
+		const rows = boundTo(options.callerRows ?? {}, id)
+		if (!seededCallers.has(id) && Object.keys(rows).length > 0) await postgres.seedApplicationRows(tables, rows)
+		seededCallers.add(id)
+		return id
 	}
 
 	/**
@@ -1083,8 +1108,7 @@ export function endpointAccessKit<DB, P>(
 			},
 			async global(endpoint, input) {
 				const row = globalEndpointOf(endpoint)
-				const { caller, fetch } = callerFor(row, [{ action: row.action }])
-				await seedAppRows(boundTo(options.callerRows ?? {}, caller.id))
+				const { fetch } = callerFor(row, [{ action: row.action }], await globalCallerOf(row))
 				const { status } = await askAs(row, fetch, input)
 				// Neither form refuses with 404, so a 404 is the handler's own answer (a row the sampled input names is missing).
 				return status >= 500 || status === 401 || status === 403 ? { answered: false, status } : { answered: true }

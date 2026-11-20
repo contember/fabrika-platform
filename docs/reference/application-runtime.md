@@ -2077,8 +2077,8 @@ not run`. Of them only the generated isolation tests run again, at container sta
   account, `ctx.principal.id`) refuses the fresh caller of a global case, so the author gives that record once for the
   whole application: `export const callerRows = { <table>: { <column>: <value> } }`, application tables only, a column
   valued `'fabrika:caller'` (`GENERATED_CALLER`) getting the caller's id. The scaffold hands it to `endpointAccessKit`,
-  which seeds those rows for the caller of each `app` and `creates` global case before it asks and removes them once
-  the case is over. The rule of the rows is `appRows`' (`applicationRowsPlan`); a row it refuses is an
+  which seeds those rows once for its one global caller of each kind (a UUID), the caller of every `app` and `creates`
+  global case, and keeps them: a row a handler wrote that refers to them stays for the next case, as in production. The rule of the rows is `appRows`' (`applicationRowsPlan`); a row it refuses is an
   `endpoint-fixture` finding.
 - **Registration.** The generated files take `test`, `describe`, `expect` and `afterAll` from
   `@fabrika/app/testing/isolation`. The platform run preloads `@fabrika/app/testing/preload`,
