@@ -402,28 +402,44 @@ export class Within<D extends string, A extends string> implements WithinCapabil
 }
 
 /**
- * One action held as a global grant, in one request: what an `app` endpoint's `ctx.db.app` is built from. The proxy
- * admitted the request only for a caller who holds the action without a scope.
+ * Actions held as a global grant, in one request: what an `app` endpoint's `ctx.db.app` is built from. The proxy
+ * admitted the request only for a caller who holds one of them without a scope. An `app` endpoint's holds its one
+ * action; an `anyOf` endpoint's the listed actions the caller holds, which reach what any of them reaches.
  */
 export class AppCapability<A extends string> implements AppCapabilityType<A> {
 	declare readonly '~capability': { readonly kind: 'app'; readonly action: A }
-	readonly #action: A
+	readonly #actions: readonly [A, ...A[]]
 	readonly #grant: AppGrant
 	readonly #frame: RequestFrame
 	readonly #issuer: object
 
-	constructor(token: typeof MINT, issuer: object, frame: RequestFrame, action: A, principal: string, isPublic: boolean) {
+	constructor(token: typeof MINT, issuer: object, frame: RequestFrame, actions: readonly [A, ...A[]], principal: string, isPublic: boolean) {
 		if (token !== MINT) {
 			throw new CapabilityRefusedError('not_minted', 'an app capability is minted by the framework only; declare access: { action, app: true }')
 		}
-		this.#action = action
-		this.#grant = freeze({ kind: 'app', action, principal, public: isPublic })
+		this.#actions = freeze([...actions])
+		this.#grant = freeze({ kind: 'app', actions: this.#actions, principal, public: isPublic })
 		this.#frame = frame
 		this.#issuer = issuer
 	}
 
+	/** The one action held. An `anyOf` endpoint's capability of several has none to name: read `actions`, or `ctx.holds`. */
 	get action(): A {
-		return this.#action
+		const [action, ...more] = this.#actions
+		if (more.length > 0) {
+			throw new CapabilityRefusedError(
+				'wrong_capability',
+				`this app capability holds several actions (${
+					this.#actions.join(', ')
+				}), so it has no one action: read ctx.app.actions, or ask ctx.holds('<action>')`,
+			)
+		}
+		return action
+	}
+
+	/** Every action held, sorted for an `anyOf` endpoint: one for any other. */
+	get actions(): readonly [A, ...A[]] {
+		return this.#actions
 	}
 
 	static {
@@ -522,6 +538,8 @@ export interface CapabilityMint {
 		revealing?: readonly ContainerGrant[],
 	): Within<D, A>
 	app<A extends string>(frame: RequestFrame, action: A, principal: string): AppCapability<A>
+	/** An `anyOf` endpoint's capability: the listed actions the caller holds as global grants, at least one. */
+	anyOf<A extends string>(frame: RequestFrame, actions: readonly [A, ...A[]], principal: string): AppCapability<A>
 	/** A public procedure's workload action: an `app` capability that never reads a table read with `'any'`. */
 	publicApp<A extends string>(frame: RequestFrame, action: A, principal: string): AppCapability<A>
 }
@@ -567,10 +585,13 @@ export function createCapabilityIssuer(): CapabilityIssuer {
 			return new Within(MINT, issuer, frame, dimension, action, principal, values, containers, contained, relations, revealing)
 		},
 		app<A extends string>(frame: RequestFrame, action: A, principal: string): AppCapability<A> {
-			return new AppCapability(MINT, issuer, frame, action, principal, false)
+			return new AppCapability(MINT, issuer, frame, [action], principal, false)
+		},
+		anyOf<A extends string>(frame: RequestFrame, actions: readonly [A, ...A[]], principal: string): AppCapability<A> {
+			return new AppCapability(MINT, issuer, frame, actions, principal, false)
 		},
 		publicApp<A extends string>(frame: RequestFrame, action: A, principal: string): AppCapability<A> {
-			return new AppCapability(MINT, issuer, frame, action, principal, true)
+			return new AppCapability(MINT, issuer, frame, [action], principal, true)
 		},
 	})
 	const authority: CapabilityAuthority = freeze({
@@ -580,7 +601,7 @@ export function createCapabilityIssuer(): CapabilityIssuer {
 				throw new CapabilityRefusedError('not_minted', 'not a capability the framework minted: pass the ctx.target or ctx.within of this request')
 			}
 			const { grant, frame } = bound
-			const what = `${describeGrant(grant)} for '${grant.action}'`
+			const what = `${describeGrant(grant)} for '${grant.kind === 'app' ? grant.actions.join("', '") : grant.action}'`
 			if (frame.ended) {
 				throw new CapabilityRefusedError(
 					'ended',

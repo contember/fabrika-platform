@@ -446,6 +446,8 @@ function describeRequirement(row: CredentialedEndpoint): string {
 			return 'a permission in this application'
 		case 'action':
 			return `'${requirement.action}' in some scope`
+		case 'anyOf':
+			return `any of ${requirement.actions.map((action) => `'${action}'`).join(', ')} as a global grant`
 		case 'capabilities':
 			return `each of ${Object.values(requirement.capabilities).map((capability) => `'${capability.action}'`).join(', ')} in some scope`
 	}
@@ -779,6 +781,9 @@ export class ContractRuntime {
 			if (error instanceof MaintenanceFenceError) {
 				outcome = 'open'
 			}
+			if (heldActionsRefused(served.row, caller, error)) {
+				throw new ForbiddenError('The actions the caller holds do not allow this operation')
+			}
 			throw error
 		} finally {
 			budget?.clear()
@@ -950,6 +955,14 @@ export class ContractRuntime {
 		}
 		if (row.requirement.kind === 'capabilities') {
 			return await this.#capabilities(row.requirement, caller, input, frame)
+		}
+		if (row.requirement.kind === 'anyOf') {
+			// `#authorize` ran `satisfies`, which `anyOf` meets only with a global grant of a listed action.
+			const [first, ...rest] = row.requirement.actions.filter((action) => caller.perms.some((entry) => permits([entry], action)))
+			if (first === undefined) {
+				throw new ForbiddenError(`The caller holds none of '${row.id}''s actions as a global grant`)
+			}
+			return { context: { app: this.#parts.mint.anyOf(frame, [first, ...rest], caller.subject) }, input }
 		}
 		const { action, access } = row.requirement
 		switch (access.form) {
@@ -2268,6 +2281,21 @@ function serverError(status: number): Response {
 	return status === 503
 		? jsonResponse({ error: { type: 'unavailable', message: 'Service unavailable' } }, 503)
 		: jsonResponse({ error: { type: 'internal', message: 'Internal error' } }, status)
+}
+
+/**
+ * The data layer refusing an action in an `anyOf` endpoint to a caller who holds only some of the listed actions: a
+ * holder of more might have been allowed, so it is the caller's 403. Under every listed action no caller could be, so
+ * it stays the code's fault (a 500, recorded). Read by name, as `errorResponse` reads `@fabrika/db` errors.
+ */
+function heldActionsRefused(row: EndpointRow, caller: Caller, error: unknown): boolean {
+	if (
+		row.requirement?.kind !== 'anyOf' || !(error instanceof Error) || error.name !== 'CapabilityError'
+		|| Reflect.get(error, 'reason') !== 'wrong_action'
+	) {
+		return false
+	}
+	return row.requirement.actions.some((action) => !caller.perms.some((entry) => permits([entry], action)))
 }
 
 /**

@@ -64,7 +64,8 @@ function notesOf(contract: ContractArtifact, roots: ReadonlySet<string>, row: En
 /** The dimensions whose value the endpoint reads from the request (`in`, or `on` an input field), each once. */
 function assertedValues(row: EndpointRow): string[] {
 	const requirement = row.requirement
-	if (requirement === null || requirement.kind === 'member') return []
+	// `anyOf` reads no scope from the request: its actions are held application-wide.
+	if (requirement === null || requirement.kind === 'member' || requirement.kind === 'anyOf') return []
 	const forms = requirement.kind === 'action' ? [requirement.access] : Object.values(requirement.capabilities).map((capability) => capability.access)
 	const dimensions = forms.flatMap((access) => (access.form === 'in' || (access.form === 'on' && access.from !== null) ? [access.dimension] : []))
 	return [...new Set(dimensions)].sort()

@@ -106,10 +106,14 @@ export interface WithinGrant {
 	readonly revealing: readonly ContainerGrant[]
 }
 
-/** An `app` endpoint's grant: the action everywhere in the application, which the proxy checked was held globally. */
+/**
+ * An `app` endpoint's grant: the actions held everywhere in the application, which the proxy checked were held globally.
+ * One action for `access: { action, app: true }`; for `anyOf`, every listed action the caller holds, which act as the
+ * actions of one role: an operation, a column or a `when` admits the grant when one of them admits it.
+ */
 export interface AppGrant {
 	readonly kind: 'app'
-	readonly action: string
+	readonly actions: readonly [string, ...string[]]
 	readonly principal: string
 	/** A public procedure's workload: it reaches only the tables that name its action, never one read with `'any'`. */
 	readonly public: boolean

@@ -193,7 +193,8 @@ Per request, after the proxy has admitted it, the framework runs these steps in 
    ([ADR-0040](0040-share-one-token-verifier.md)).
 3. Check that the token's principal kind is one of the mount's callers.
 4. Check the endpoint's requirement: `member` (any permission of this application), the action in
-   some scope, for the `app` form the action held as a global grant, and for `capabilities` each of its actions.
+   some scope, for the `app` form the action held as a global grant, for `anyOf` one of its actions held as a
+   global grant, and for `capabilities` each of its actions.
 5. For a session request that is not `GET`, require `Sec-Fetch-Site: same-origin`, and the body codec of the
    endpoint's HTTP shape (§11): `application/json`, `multipart/form-data` for an input with file fields, or
    `application/x-www-form-urlencoded` where declared.
@@ -430,7 +431,7 @@ procedure (an IAM link key with its share SPA) and an export procedure (a consum
 contract) share one procedure engine. Public access is an access form, not a kind (§10). The body codec follows the
 input and the HTTP shape (§11).
 
-### 10. Access forms: public, and several capabilities
+### 10. Access forms: public, several capabilities, and any of several actions
 
 - **`access: { public: true }`** on an RPC procedure says anyone may call it. Its top-level `actions` say what the
   handler may do. It runs as the endpoint's own workload, which IAM signs for, and the data layer narrows its reach
@@ -443,6 +444,20 @@ input and the HTTP shape (§11).
   `ctx.capabilities.<name>` and binds each with `ctx.db.on`, `.in` or `.over`. An endpoint of several capabilities has
   no `ctx.target`, `ctx.within`, `ctx.db.app`, members or links. `creates`, `app` and an export take no
   `capabilities`.
+- **`access: { anyOf: ['<action>', …], app: true }`** admits a caller that holds any of two to sixteen actions as a
+  global grant. The proxy checks it as one requirement. The handler's `ctx.app` holds the listed actions the caller
+  holds, and `ctx.db.app` reaches the union of what each held action reaches alone, never a row of one action with a
+  column of another. A read answers the rows any held action's `when` admits; a column with its own read action
+  shows only where that action reads every row (no `when` of its own) or is the only held one reading. An update
+  runs under the held update actions that each write every column it changes, and only their `when` admits the row;
+  when none does, it is refused. An insert writes the table's one insert list, so every held insert action covers it
+  and their `when` conditions admit the row together. An insert that updates on a conflict needs one held action that
+  both inserts and updates, and updates the conflicting row only under such an action whose own `when` admitted the
+  inserted row. A file column without its own read action opens on every row a list answers, since each was admitted
+  by a read action that alone reads it; a get through a held action that does not read keeps it closed. The data
+  layer's refusal of the held actions is the caller's 403 when it holds only some of the listed actions; under all of
+  them no caller could be allowed, so it stays a 500, the code's fault. An `anyOf` endpoint has no members, links or delegation, and takes no `capabilities` or `creates`. The scoped
+  forms do not take `anyOf`.
 
 `capabilities` removes one cause of off-road reach, not all. Reads across tables (joins, filters over related tables,
 aggregates) and locks over many rows still need `sql`.

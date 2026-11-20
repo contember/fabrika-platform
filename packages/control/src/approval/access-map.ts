@@ -121,6 +121,12 @@ function requiredAccess(row: EndpointRow, action: string): AccessMapEndpointDto[
 	const requirement = row.requirement
 	const callers = roleCallers(row)
 	if (requirement === null || requirement.kind === 'member' || callers.length === 0) return []
+	if (requirement.kind === 'anyOf') {
+		// Any one listed action admits the caller, application-wide; the others stand in for it, none is needed beside it.
+		if (!requirement.actions.includes(action)) return []
+		const others = requirement.actions.filter((other) => other !== action)
+		return [{ id: row.id, method: row.method, path: row.path, access: `app-wide, or with ${others.join(' or ')} instead`, callers }]
+	}
 	const capabilities = requirement.kind === 'action' ? [requirement] : Object.values(requirement.capabilities)
 	const phrases = capabilities.flatMap((capability, index) => {
 		if (capability.action !== action) return []

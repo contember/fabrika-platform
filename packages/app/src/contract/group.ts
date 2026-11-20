@@ -23,6 +23,7 @@ import type {
 } from './context'
 import type { ProcedureType } from './declaration'
 import type {
+	AnyOfAccess,
 	AppAccess,
 	CapabilitiesAccess,
 	CapabilityAccess,
@@ -331,7 +332,7 @@ export interface PendingEndpoint {
  */
 export interface GroupKit<K extends KitTypes, Caller extends RpcCaller> {
 	query<
-		const Acc extends GroupAccess<Caller, QueryAccess<K['action'], K['dimension'], InputOf<I>>>,
+		const Acc extends GroupAccess<Caller, QueryAccess<K['action'], K['dimension'], InputOf<I>> | AnyOfAccess<K['action']>>,
 		O extends Schema,
 		I extends InputSchema | null = null,
 		const S extends 'read' = never,
@@ -360,7 +361,7 @@ export interface GroupKit<K extends KitTypes, Caller extends RpcCaller> {
 		K['tokens']
 	>
 	mutation<
-		const Acc extends GroupAccess<Caller, MutationAccess<K['action'], K['dimension'], K['creatable'], InputOf<I>>>,
+		const Acc extends GroupAccess<Caller, MutationAccess<K['action'], K['dimension'], K['creatable'], InputOf<I>> | AnyOfAccess<K['action']>>,
 		O extends Schema,
 		I extends InputSchema | null = null,
 		const S extends SqlMode = never,

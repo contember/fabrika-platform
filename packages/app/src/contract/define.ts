@@ -230,6 +230,14 @@ export interface AppAccess<A extends string> {
 	readonly action: A
 	readonly app: true
 }
+/**
+ * Any one of two to sixteen actions held as a global grant (a group procedure's only): `ctx.app` holds the listed actions
+ * the caller holds, and `ctx.db.app` reaches what any of them reaches.
+ */
+export interface AnyOfAccess<A extends string> {
+	readonly anyOf: readonly [A, A, ...A[]]
+	readonly app: true
+}
 export interface LinkAccess<A extends string> {
 	readonly action: A
 }

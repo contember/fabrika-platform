@@ -402,9 +402,30 @@ export function actionCondition(model: TableModel, action: string, now: Date): O
  * one shape the guard admits a condition in, so a condition never stands in for the reach.
  */
 export function conditioned(model: TableModel, action: string, branch: OperationNode | 'all', now: Date): OperationNode {
+	return conditionedAny(model, [action], branch, now)
+}
+
+/**
+ * `branch`, narrowed as one role holding `actions` is: `<reach> and ((<when a>) or (<when b>))`, a row passing where any
+ * action's condition admits it, and unnarrowed when one of them has none. `actions` are those that allow the operation,
+ * at least one; for one action this is `conditioned`.
+ */
+export function conditionedAny(model: TableModel, actions: readonly string[], branch: OperationNode | 'all', now: Date): OperationNode {
 	const reach = branch === 'all' ? ValueNode.createImmediate(true) : branch
-	const condition = actionCondition(model, action, now)
-	return condition === undefined ? reach : AndNode.create(reach, ParensNode.create(condition))
+	if (actions.length === 0) {
+		throw new CapabilityError('unenforceable', `no action allows this operation on ${model.name}`)
+	}
+	const conditions: OperationNode[] = []
+	for (let index = 0; index < actions.length; index++) {
+		const action = actions[index]
+		if (action === undefined) continue
+		const condition = actionCondition(model, action, now)
+		if (condition === undefined) {
+			return reach
+		}
+		conditions[conditions.length] = ParensNode.create(condition)
+	}
+	return AndNode.create(reach, anyOf(conditions))
 }
 
 /**

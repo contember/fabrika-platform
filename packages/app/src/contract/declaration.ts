@@ -147,6 +147,8 @@ export type AccessDeclaration =
 	| { readonly action: string; readonly on: string; readonly from: string }
 	| { readonly action: string; readonly creates: string }
 	| { readonly action: string; readonly app: true }
+	/** Any one of several actions as a global grant; `buildArtifact` refuses it outside an RPC mount's procedure. */
+	| { readonly anyOf: readonly string[]; readonly app: true }
 	| { readonly capabilities: Readonly<Record<string, CapabilityDeclaration>> }
 	/** Anyone calls it; its handler runs as the procedure's own workload, with its top-level `actions`. RPC only. */
 	| { readonly public: true }

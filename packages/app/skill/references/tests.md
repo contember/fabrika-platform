@@ -293,7 +293,8 @@ leakSweep(
   sum that forgets its scope holds no foreign value, but it changes).
 - It fails only on a leak. What it cannot check is a hint printed after the run: an input no sample of the schema
   admits, a row the seeder cannot write, an answer other than the handler's (a 400, a 404 of a row the input names),
-  an endpoint that declares `unscoped`. Nothing requires the sweep, and an application that does not call it runs none.
+  an endpoint that declares `unscoped`, an `anyOf` endpoint (application-wide, so no scope of its own to compare).
+  Nothing requires the sweep, and an application that does not call it runs none.
 - `leakSweep(app, tables, database, { inputs, seeds })` answers a hint: `inputs` are fields laid over the sample, by
   endpoint id (`GENERATED_MEMBER` for a member of the target's scope, `` `${GENERATED_ROW_PREFIX}<table>` `` for a row
   of that table seeded in the target, both from `@fabrika/app/testing/isolation`); `seeds` are column values of the

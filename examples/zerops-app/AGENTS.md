@@ -1035,6 +1035,35 @@ dimension value takes `access: { action, app: true }`.
   keep their own forms.
 - The approver sees it as "app-wide: a global grant", and a change of an endpoint to or from `app: true` widens.
 
+### One endpoint for several actions: `anyOf`
+
+A screen several application-wide roles read, each with its own reach, is one endpoint, not one per action:
+`access: { anyOf: ['cash.read', 'cash.audit', 'cash.manage'], app: true }` on a group query or mutation.
+
+- The proxy admits a caller who holds any listed action as a global grant; a grant in a scope only is 403. List two to
+  sixteen distinct actions of the vocabulary; their order does not matter.
+- `ctx.app` holds the listed actions the caller holds (`ctx.app.actions`), and `ctx.db.app` reaches the union of what
+  each held action reaches alone: a table operation whose action list names a held action, and a row that the `when`
+  of any held action admits (a held action without a `when` admits every row). A column with its own read action
+  shows only where that action reads every row (no `when` of its own) or is the only held one reading; otherwise it
+  is hidden. An update runs only under held actions that each write every column it changes, and only their `when`
+  admits the row; when none does, it is refused, so update the columns of each action apart. An insert writes the
+  table's one insert list under any held insert action; `onConflict: { do: 'update' }` needs one held action that
+  both inserts and updates the table, under its own `when`. A file column opens on every row a list answers; a get
+  through a held action that does not read the table keeps it closed. A save that took several mutations, one per
+  action, is one `anyOf` mutation in one transaction.
+- A refusal of the data layer answers 403 to a caller holding only some listed actions, and 500 to one holding all of
+  them: then no caller could be allowed, so the handler's code is at fault and the failure is recorded.
+- `ctx.holds('<action>')` tells the handler which of them the caller holds: `canClose: ctx.holds('cash.manage')`.
+- The types hide every column of its own read action, because which actions are held is known only per request; read
+  such a column in an endpoint of that action. `ctx.app.action` is unavailable: read `ctx.app.actions`, or ask
+  `ctx.holds`.
+- An `anyOf` endpoint has no `ctx.target`, `ctx.within`, `ctx.members`, links or delegation, and takes no `capabilities`,
+  `creates` or `issues`. A link procedure, an export, a public procedure and the scoped forms (`on`, `in`, `over`)
+  take no `anyOf`.
+- The approver sees "holding any of `cash.audit`, `cash.manage`, `cash.read` globally"; an action the list gains
+  widens, one it loses narrows.
+
 ### Several capabilities: `capabilities`
 
 An operation that reads one object and writes another (a copy from one deal to another, a handover between two
@@ -6830,7 +6859,8 @@ leakSweep(
   sum that forgets its scope holds no foreign value, but it changes).
 - It fails only on a leak. What it cannot check is a hint printed after the run: an input no sample of the schema
   admits, a row the seeder cannot write, an answer other than the handler's (a 400, a 404 of a row the input names),
-  an endpoint that declares `unscoped`. Nothing requires the sweep, and an application that does not call it runs none.
+  an endpoint that declares `unscoped`, an `anyOf` endpoint (application-wide, so no scope of its own to compare).
+  Nothing requires the sweep, and an application that does not call it runs none.
 - `leakSweep(app, tables, database, { inputs, seeds })` answers a hint: `inputs` are fields laid over the sample, by
   endpoint id (`GENERATED_MEMBER` for a member of the target's scope, `` `${GENERATED_ROW_PREFIX}<table>` `` for a row
   of that table seeded in the target, both from `@fabrika/app/testing/isolation`); `seeds` are column values of the

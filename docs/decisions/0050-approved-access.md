@@ -169,7 +169,8 @@ covers:
 
 - endpoint callers, access forms (the `app` form named as a global grant, each capability of `capabilities` by its
   name and form), input domains and output shapes (a file output by its kind, a `redirect()` by where it may send a
-  caller), and each endpoint's HTTP shape;
+  caller), and each endpoint's HTTP shape. An `anyOf` requirement is compared by action: an action the list gains
+  widens, one it loses narrows; `action` → `anyOf` widens by the actions added;
 - containment, roles and their actions, membership rules;
 - **the member directory an endpoint may read** (`ctx.members`, recorded in the artifact's `directories`): the
   runtime grants it by the access form alone, so its line says what the handler can do ("can list the members of
@@ -330,7 +331,8 @@ compares the callers each endpoint that now answers one admits with the callers 
 
 "The same callers" is read narrowly. Two signed-in endpoints admit the same callers when they have the same kind, the
 same requirement, the same caller kinds and the same delegation (`endpointDelegation`, which the proxy applies too). A requirement whose scope is read from a path parameter is never the same,
-because a broader route reads it from another segment. A `link` caller is the same only on an endpoint of the same link
+because a broader route reads it from another segment. After an `anyOf` endpoint, one whose requirement is the `app` form of a listed
+action, or an `anyOf` whose list the removed one's contains, admits no caller more. A `link` caller is the same only on an endpoint of the same link
 mount, because a link key reaches only its own mount. An anonymous health check or public SPA admits anyone, so a
 signed-in endpoint after it admits fewer and another of those two kinds the same. A public procedure, a form and a
 webhook turn callers away themselves, with a challenge, a bucket or a signature, so whatever takes over their paths
@@ -358,7 +360,10 @@ whole table or a whole column stays a removal.
   table with the table's read action (one row with any action the table names), writes it with the operation's
   action, and reads every row of each dimension and child table whose read action is its own. The proxy admits only a
   global holder, so the form is a requirement change like any other: an endpoint that becomes `app: true`, or stops
-  being one, widens. An application table's actions are compared as any table's are.
+  being one, widens. An application table's actions are compared as any table's are. An `anyOf` endpoint's capability
+  holds the listed actions the caller holds globally and reaches the union of what each of them reaches alone (a
+  column of its own read action only where that action reads every row or is the only one reading; an update only
+  under an action that writes every column it changes), so its list is what the diff compares.
 - **A column read action** (`columns: { c: { read } }`) is the only action that reads, filters and sorts that
   column. A new one narrows; a removed one widens (above).
 - **A column write action** (`columns: { c: { write } }`) lets a capability of that action update exactly its

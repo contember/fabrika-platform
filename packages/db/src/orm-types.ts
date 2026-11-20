@@ -319,11 +319,30 @@ type NamedActions<E extends IndexedTable> = (E['actions'][keyof E['actions']] | 
 
 type Names<E extends IndexedTable, A extends string> = [A] extends [NamedActions<E>] ? true : false
 
+/**
+ * Whether an action of `A` is one of `Allowed`. An `app` capability of several actions, an `anyOf` endpoint's, allows
+ * what any of them allows, as one role holding them; the runtime refuses an operation none of the held ones allows.
+ */
+type AnyAllowed<A extends string, Allowed> = [Extract<A, Allowed>] extends [never] ? false : true
+
+/** `U`'s members as one object: the columns any action of an `app` capability updates, with their values. */
+type Merged<U> = (U extends unknown ? (value: U) => void : never) extends (value: infer I) => void ? I : never
+
 type Operation = 'insert' | 'update' | 'delete'
 
-/** `Member` in a mutation whose action is the table's `Op` action; otherwise the message that says which fix applies. */
-type Write<T extends string, E extends IndexedTable, Op extends Operation, A extends string, K extends DataKind, Member> = K extends 'mutation'
-	? [A] extends [E['actions'][Op]] ? Member
+/**
+ * `Member` in a mutation whose action is the table's `Op` action (`Allowed`, any action of an `app` capability's);
+ * otherwise the message that says which fix applies.
+ */
+type Write<
+	T extends string,
+	E extends IndexedTable,
+	Op extends Operation,
+	A extends string,
+	K extends DataKind,
+	Member,
+	Allowed extends boolean = [A] extends [E['actions'][Op]] ? true : false,
+> = K extends 'mutation' ? Allowed extends true ? Member
 	: Unavailable<`${Op} on ${T} needs the action '${E['actions'][Op] & string}', and this endpoint holds '${A}'`>
 	: K extends 'job' ? Unavailable<'a job writes inside ctx.transaction((tx) => …): use tx.db there'>
 	: Unavailable<`${Op extends 'delete' ? 'remove' : Op} writes, so it runs only in a mutation: declare the endpoint with r.mutation`>
@@ -336,17 +355,26 @@ type UpdateRefusal<T extends string, E extends IndexedTable, A extends string> =
 
 /**
  * `Member` in a mutation whose action updates columns of the table (the update action, or a column's own write
- * action); otherwise the message that says which fix applies.
+ * action; `Allowed`, any action of an `app` capability's); otherwise the message that says which fix applies.
  */
-type Update<T extends string, E extends IndexedTable, A extends string, K extends DataKind, Member> = K extends 'mutation'
-	? [A] extends [keyof E['writes']] ? Member : Unavailable<UpdateRefusal<T, E, A>>
+type Update<
+	T extends string,
+	E extends IndexedTable,
+	A extends string,
+	K extends DataKind,
+	Member,
+	Allowed extends boolean = [A] extends [keyof E['writes']] ? true : false,
+> = K extends 'mutation' ? Allowed extends true ? Member : Unavailable<UpdateRefusal<T, E, A>>
 	: K extends 'job' ? Unavailable<'a job writes inside ctx.transaction((tx) => …): use tx.db there'>
 	: Unavailable<'update writes, so it runs only in a mutation: declare the endpoint with r.mutation'>
 
 /** An update's values: any non-empty subset of the columns a capability of `A` updates; an empty one is refused. */
 type UpdateValuesOf<E extends IndexedTable, A extends string> = E['writes'][A & keyof E['writes']]
 
-type Read<T extends string, E extends IndexedTable, A extends string, Member> = Names<E, A> extends true ? Member
+/** An `app` capability's update values: the columns any of its actions updates, one action's as `UpdateValuesOf`. */
+type AppUpdateValuesOf<E extends IndexedTable, A extends string> = Merged<UpdateValuesOf<E, A>>
+
+type Read<T extends string, E extends IndexedTable, A extends string, Member, Allowed extends boolean = Names<E, A>> = Allowed extends true ? Member
 	: Unavailable<`${T} does not name the action '${A}': read it from an endpoint whose action ${T} names, or declare unscoped`>
 
 /** One page of a keyset list; `next` is the cursor `after` takes, `null` on the last page. */
@@ -465,13 +493,17 @@ export type WithinTables<Ix extends AnyDbIndex, D extends string, A extends stri
 	readonly [T in WithinIn<Ix, D>]: WithinRows<T, Ix['tables'][T], A, K>
 }
 
-/** `Member` where `ctx.db.app` of action `A` lists the application table: by its read action, or any action for `'any'`. */
+/**
+ * `Member` where `ctx.db.app` of action `A` lists the application table: by its read action, or any action for `'any'`;
+ * an action of `A`'s does for an `anyOf` endpoint.
+ */
 type AppList<T extends string, E extends IndexedTable, A extends string, Member> = [E['readsAny']] extends [true] ? Member
-	: A extends E['actions']['read'] ? Member
+	: AnyAllowed<A, E['actions']['read']> extends true ? Member
 	: Unavailable<ListRefusal<T, E, A>>
 
-/** `Member` where `ctx.db.app` of action `A` reads a row of the application table by its key. */
-type AppGet<T extends string, E extends IndexedTable, A extends string, Member> = [E['readsAny']] extends [true] ? Member : Read<T, E, A, Member>
+/** `Member` where `ctx.db.app` of action `A` (any of them) reads a row of the application table by its key. */
+type AppGet<T extends string, E extends IndexedTable, A extends string, Member> = [E['readsAny']] extends [true] ? Member
+	: Read<T, E, A, Member, AnyAllowed<A, NamedActions<E>>>
 
 /** `Member` where a public procedure of action `A` reads the application table: under its read action, never `'any'`. */
 type PublicRead<T extends string, E extends IndexedTable, A extends string, Member> = [E['readsAny']] extends [true] ? Unavailable<
@@ -480,7 +512,11 @@ type PublicRead<T extends string, E extends IndexedTable, A extends string, Memb
 	: A extends E['actions']['read'] ? Member
 	: Unavailable<ListRefusal<T, E, A>>
 
-/** An application table under the capability of an `app` endpoint of action `A`, in a site of kind `K`. */
+/**
+ * An application table under the capability of an `app` endpoint of action `A`, in a site of kind `K`; an `anyOf`
+ * endpoint's `A` is its listed actions, and an operation any of them allows is typed. A column with its own read action
+ * stays hidden there (`RowFor`): which listed actions the caller holds is known only at run time.
+ */
 export interface ApplicationRows<T extends string, E extends IndexedTable, A extends string, K extends DataKind> {
 	readonly list: AppList<T, E, A, (options?: ListOptions<RowFor<E, A>>) => Promise<ListPage<RowFor<E, A>>>>
 	readonly count: AppList<T, E, A, (options?: CountOptions<RowFor<E, A>>) => Promise<number>>
@@ -493,15 +529,16 @@ export interface ApplicationRows<T extends string, E extends IndexedTable, A ext
 		: Unavailable<'getForUpdate locks the row, so it runs only in a mutation: declare the endpoint with r.mutation'>
 	/** Leases due rows of a queue table: a job's drain, before its transactions. */
 	readonly claim: Claim<T, E, A, K>
-	readonly insert: Write<T, E, 'insert', A, K, InsertMethod<E>>
+	readonly insert: Write<T, E, 'insert', A, K, InsertMethod<E>, AnyAllowed<A, E['actions']['insert']>>
 	readonly update: Update<
 		T,
 		E,
 		A,
 		K,
-		(key: string, values: { [C in keyof UpdateValuesOf<E, A>]: UpdateValuesOf<E, A>[C] }, ...version: VersionArguments<E>) => Promise<Saved<E>>
+		(key: string, values: { [C in keyof AppUpdateValuesOf<E, A>]: AppUpdateValuesOf<E, A>[C] }, ...version: VersionArguments<E>) => Promise<Saved<E>>,
+		AnyAllowed<A, keyof E['writes']>
 	>
-	readonly remove: Write<T, E, 'delete', A, K, (key: string, ...version: VersionArguments<E>) => Promise<void>>
+	readonly remove: Write<T, E, 'delete', A, K, (key: string, ...version: VersionArguments<E>) => Promise<void>, AnyAllowed<A, E['actions']['delete']>>
 }
 
 /**
@@ -562,15 +599,17 @@ export type PublicApplicationTables<Ix extends AnyDbIndex, A extends string, K e
  * (`RowFor`), or only how many rows match. A count-only action has no `aggregate`: a group or a minimum is a value.
  */
 export interface AppRecordRows<T extends string, E extends IndexedTable, A extends string> {
-	readonly list: [A] extends [E['actions']['read'] | E['appRead']] ? (options?: ListOptions<RowFor<E, A>>) => Promise<ListPage<RowFor<E, A>>>
+	readonly list: AnyAllowed<A, E['actions']['read'] | E['appRead']> extends true
+		? (options?: ListOptions<RowFor<E, A>>) => Promise<ListPage<RowFor<E, A>>>
 		: Unavailable<
 			`a list of ${T} needs its read action '${E['actions']['read'] & string}' or an action of its appRead, and this endpoint holds '${A}'`
 		>
-	readonly count: [A] extends [E['actions']['read'] | E['appRead'] | E['appCount']] ? (options?: CountOptions<RowFor<E, A>>) => Promise<number>
+	readonly count: AnyAllowed<A, E['actions']['read'] | E['appRead'] | E['appCount']> extends true
+		? (options?: CountOptions<RowFor<E, A>>) => Promise<number>
 		: Unavailable<
 			`a count of ${T} needs its read action '${E['actions']['read'] & string}' or an action of its appRead or appCount, and this endpoint holds '${A}'`
 		>
-	readonly aggregate: [A] extends [E['actions']['read'] | E['appRead']]
+	readonly aggregate: AnyAllowed<A, E['actions']['read'] | E['appRead']> extends true
 		? <const S extends AggregateSpec<RowFor<E, A>>>(spec: S) => Promise<AggregateRow<RowFor<E, A>, S>[]>
 		: Unavailable<
 			`an aggregate of ${T} needs its read action '${

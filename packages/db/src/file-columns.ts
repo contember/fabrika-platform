@@ -9,7 +9,7 @@ import type { Primitive } from './description'
 import { NotFoundError, QueryRefusedError } from './errors'
 import { fileHoldingOf, fileReference, holdsFile } from './file-references'
 import { isPlainIdentifier } from './identifier'
-import type { TableModel } from './policy'
+import { includes, type ReadReach, readsAsAction, type TableModel } from './policy'
 import { claimStoredFile, lockStoredFile, stampStoredFile, storedFilesMetadata } from './stored-files'
 
 /** Where a site's file references belong, and what claiming a pending one needs. */
@@ -25,33 +25,47 @@ export interface FileBinding {
 }
 
 /**
- * Whether a reference read with `action` lets its holder serve, open and copy the file: the table's or the column's
- * read action, or a table read action among `held`, the actions a job holds over the whole application. A column with
- * its own read action is answered only under that action (`visibleFor`), so `held` never widens it. A table read with
- * `'any'` admits whoever read the row: the store refused every other reader.
+ * Whether a reference read under `reach` (one action, or an `anyOf` endpoint's held actions that read the row) lets its
+ * holder serve, open and copy the file: a table read action, or the column's own read action, that reads every answered
+ * row alone (`readsAsAction`), or a table read action among `held`, the actions a job holds over the whole application.
+ * When every action of the reach is a table read action, each answered row was admitted by one that alone reads it,
+ * so a column without its own read action is readable. A column with its own read action is answered only under that
+ * action (`visibleThrough`), so `held` never widens it. A table read with `'any'` admits whoever read the row: the
+ * store refused every other reader.
  */
-function readsFile(model: TableModel, column: string, action: string, held: NameSet): boolean {
+function readsFile(model: TableModel, column: string, reach: ReadReach, held: NameSet): boolean {
 	const own = hasOwn(model.columnReads, column) ? model.columnReads[column] : undefined
 	if (own !== undefined) {
-		return own === action
+		return readsAsAction(model, own, reach)
 	}
-	if (model.actions.readAny) {
+	if (model.actions.readAny || readsThroughEvery(model, reach)) {
 		return true
 	}
 	const reads = model.actions.read
 	for (let index = 0; index < reads.length; index++) {
 		const read = reads[index]
-		if (read === action || inSet(held, read)) {
+		if (read !== undefined && (readsAsAction(model, read, reach) || inSet(held, read))) {
 			return true
 		}
 	}
 	return false
 }
 
+/** Whether the reach holds at least one action and each is one of the table's read actions. */
+function readsThroughEvery(model: TableModel, reach: ReadReach): boolean {
+	const actions = reach.actions
+	for (let index = 0; index < actions.length; index++) {
+		if (!includes(model.actions.read, actions[index])) {
+			return false
+		}
+	}
+	return actions.length > 0
+}
+
 const NONE_HELD: NameSet = nameSet([])
 
 /**
- * Puts a file reference in each file column of `rows`, read with `action` in `session`: one statement loads every
+ * Puts a file reference in each file column of `rows`, read under `reach` in `session`: one statement loads every
  * file's metadata. Without a binding (a store's own runner) the columns keep their ids. `held` (a queue claim's) adds
  * the actions the site holds over the whole application: a reference is readable when one of them reads the table.
  */
@@ -60,7 +74,7 @@ export async function answerFiles<R>(
 	binding: FileBinding | undefined,
 	session: Session,
 	rows: R[],
-	action: string,
+	reach: ReadReach,
 	held: NameSet = NONE_HELD,
 ): Promise<R[]> {
 	const columns = ownKeys(model.files)
@@ -90,7 +104,7 @@ export async function answerFiles<R>(
 			if (meta === undefined) {
 				throw new QueryRefusedError('unexpected_row', `${model.name}.${column} references a file that is not stored`)
 			}
-			defineValue(row, column, fileReference(meta, binding.holder, readsFile(model, column, action, held)))
+			defineValue(row, column, fileReference(meta, binding.holder, readsFile(model, column, reach, held)))
 		}
 	}
 	return rows
