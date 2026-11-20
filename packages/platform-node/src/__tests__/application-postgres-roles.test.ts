@@ -5,6 +5,7 @@
 
 import { SQL } from 'bun'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+import { createHash } from 'node:crypto'
 import {
 	applicationDatabaseRoles,
 	applicationMigrationLockKey,
@@ -12,9 +13,8 @@ import {
 	definePostgresApplicationMigrations,
 	dropApplicationDatabase,
 } from '../application-postgres-migrations.js'
-import { postgresRoleUrl } from '../application-postgres-roles.js'
+import { postgresRoleUrl, quotedIdentifier } from '../application-postgres-roles.js'
 import type { PostgresMigration } from '../postgres-migrations.js'
-import { changeCreateOnDatabase, createTestProvisioner, TEST_PROVISIONER_LIFETIME_MINUTES } from '../postgres-test-provisioner.js'
 import { PostgresDatabase } from '../sql-postgres.js'
 import { hasPostgres, postgresUrl, skipReason } from './helpers/postgres.js'
 
@@ -88,13 +88,22 @@ function createRoleOnly(): Provisioner {
 	}
 }
 
+/**
+ * Every grant or revoke on a database changes its one `pg_database` row, and two concurrent changes of that row fail with
+ * `tuple concurrently updated`, so each change waits for this transaction-level lock first.
+ */
+const DATABASE_GRANT_LOCK_KEY: number = createHash('sha256').update('fabrika-db:database-grants', 'utf8').digest().readUIntBE(0, 6) + 1
+
 /** CREATE on the test database for `role`, through the lock every run that changes the database's row takes. */
 async function changeCreate(change: 'grant' | 'revoke', role: string): Promise<void> {
 	const admin = PostgresDatabase.connect(superuserUrl, { max: 1 })
 	try {
 		const database = await admin.prepare('SELECT current_database() AS name').first<{ name: string }>()
 		if (database === null) throw new Error('the test database has no name')
-		await changeCreateOnDatabase(admin, change, role, database.name)
+		const statement = change === 'grant'
+			? `GRANT CREATE ON DATABASE ${quotedIdentifier(database.name)} TO ${quotedIdentifier(role)}`
+			: `REVOKE CREATE ON DATABASE ${quotedIdentifier(database.name)} FROM ${quotedIdentifier(role)}`
+		await admin.batch([admin.prepare(`SELECT pg_catalog.pg_advisory_xact_lock(${DATABASE_GRANT_LOCK_KEY})`), admin.prepare(statement)])
 	} finally {
 		await admin.close()
 	}
@@ -435,174 +444,6 @@ describe.skipIf(!hasPostgres)('the application role family', () => {
 		} finally {
 			await changeCreate('revoke', name)
 			await as(superuserUrl, (sql) => sql.unsafe(`DROP ROLE ${name}`))
-		}
-	})
-
-	test('a throwaway test provisioner creates role families, reaches no application, and drops what it left behind', async () => {
-		const liveId = `roles-${hex()}`
-		const live = definePostgresApplicationMigrations({ appId: liveId, directory: '/unused' })
-		await live.migrate(superuserUrl, NOTES)
-		const provisioner = await createTestProvisioner(superuserUrl)
-		const abandoned = definePostgresApplicationMigrations({ appId: `test-${hex()}`, directory: '/unused' })
-		try {
-			expect(new URL(provisioner.url).username).toMatch(/^fabrika_tests_[0-9a-f]{16}$/)
-			await abandoned.migrate(provisioner.url, NOTES)
-			expect(await refusal(provisioner.url, `SELECT * FROM ${live.schema}.notes`)).toContain(`permission denied for schema ${live.schema}`)
-			expect(await refusal(provisioner.url, `ALTER ROLE ${live.roles.runtime} PASSWORD 'x'`)).toContain('permission denied to alter role')
-			expect(await refusal(provisioner.url, `GRANT pg_execute_server_program TO ${abandoned.roles.runtime}`)).toContain(
-				'permission denied to grant role',
-			)
-		} finally {
-			await provisioner.drop()
-			await dropApplicationDatabase(superuserUrl, liveId)
-		}
-		const left = await as(
-			superuserUrl,
-			(sql) =>
-				sql.unsafe('SELECT rolname FROM pg_roles WHERE rolname IN ($1, $2, $3) UNION ALL SELECT nspname FROM pg_namespace WHERE nspname = $4', [
-					new URL(provisioner.url).username,
-					abandoned.roles.migration,
-					abandoned.roles.runtime,
-					abandoned.schema,
-				]),
-		)
-		expect([...left]).toEqual([])
-	})
-
-	test('a provisioner logs in for a bounded time only', async () => {
-		const provisioner = await createTestProvisioner(superuserUrl)
-		try {
-			const validity = await as(superuserUrl, (sql) =>
-				sql.unsafe(
-					`SELECT rolvaliduntil > now() + interval '${TEST_PROVISIONER_LIFETIME_MINUTES - 1} minutes'
-						AND rolvaliduntil <= now() + interval '${TEST_PROVISIONER_LIFETIME_MINUTES} minutes' AS bounded FROM pg_roles WHERE rolname = $1`,
-					[new URL(provisioner.url).username],
-				))
-			expect([...validity]).toEqual([{ bounded: true }])
-		} finally {
-			await provisioner.drop()
-		}
-	})
-
-	// A run killed before `drop()` (a container's memory limit) leaves its provisioner and what it created behind.
-	test('the next provisioner sweeps what killed runs left behind, and keeps a provisioner still valid or still in use', async () => {
-		const leftover = await createTestProvisioner(superuserUrl)
-		const leftoverFamily = definePostgresApplicationMigrations({ appId: `test-${hex()}`, directory: '/unused' })
-		await leftoverFamily.migrate(leftover.url, NOTES)
-		const connected = await createTestProvisioner(superuserUrl)
-		const throughFamily = await createTestProvisioner(superuserUrl)
-		const throughFamilyApp = definePostgresApplicationMigrations({ appId: `test-${hex()}`, directory: '/unused' })
-		await throughFamilyApp.migrate(throughFamily.url, NOTES)
-		const concurrent = await createTestProvisioner(superuserUrl)
-		const connectedSession = new SQL({ url: connected.url, adapter: 'postgres', max: 1, prepare: false })
-		const familySession = new SQL({
-			url: postgresRoleUrl(throughFamily.url, throughFamilyApp.roles.runtime),
-			adapter: 'postgres',
-			max: 1,
-			prepare: false,
-		})
-		const previousRelease = `fabrika_tests_${hex()}${hex().slice(0, 4)}`
-		let next: Awaited<ReturnType<typeof createTestProvisioner>> | undefined
-		try {
-			await connectedSession.unsafe('SELECT 1')
-			await familySession.unsafe('SELECT 1')
-			// A release before VALID UNTIL created its provisioner without one.
-			await as(superuserUrl, (sql) => sql.unsafe(`CREATE ROLE ${previousRelease} LOGIN CREATEROLE NOINHERIT`))
-			await changeCreate('grant', previousRelease)
-			await as(superuserUrl, async (sql) => {
-				for (const provisioner of [leftover, connected, throughFamily]) {
-					await sql.unsafe(`ALTER ROLE ${new URL(provisioner.url).username} VALID UNTIL '2000-01-01'`)
-				}
-			})
-			next = await createTestProvisioner(superuserUrl)
-			const name = (provisioner: { readonly url: string }): string => new URL(provisioner.url).username
-			expect(next.swept).toContain(name(leftover))
-			expect(next.swept).toContain(previousRelease)
-			expect(next.swept).not.toContain(name(connected))
-			expect(next.swept).not.toContain(name(throughFamily))
-			expect(next.swept).not.toContain(name(concurrent))
-			const present = await as(superuserUrl, (sql) =>
-				sql.unsafe(
-					`SELECT 'role ' || rolname AS name FROM pg_roles WHERE rolname = ANY(string_to_array($1, ','))
-						UNION ALL SELECT 'schema ' || nspname FROM pg_namespace WHERE nspname = ANY(string_to_array($1, ',')) ORDER BY 1`,
-					[[
-						name(leftover),
-						leftoverFamily.roles.migration,
-						leftoverFamily.roles.runtime,
-						leftoverFamily.schema,
-						previousRelease,
-						name(connected),
-						name(throughFamily),
-						throughFamilyApp.roles.runtime,
-						throughFamilyApp.schema,
-						name(concurrent),
-					].join(',')],
-				))
-			expect([...present].map((row) => row.name)).toEqual(
-				[
-					`role ${name(connected)}`,
-					`role ${name(throughFamily)}`,
-					`role ${throughFamilyApp.roles.migration}`,
-					`role ${throughFamilyApp.roles.runtime}`,
-					`schema ${throughFamilyApp.schema}`,
-					`role ${name(concurrent)}`,
-				].sort(),
-			)
-		} finally {
-			await connectedSession.close()
-			await familySession.close()
-			for (const provisioner of [connected, throughFamily, concurrent, ...(next === undefined ? [] : [next])]) await provisioner.drop()
-		}
-	})
-
-	// A Zerops service's own user held CREATE without GRANT OPTION: Postgres warned and granted nothing.
-	test('a provisioning credential that cannot grant CREATE on the database is refused, not left to a later permission denied', async () => {
-		const previous = createRoleOnly()
-		await previous.setUp()
-		const bystander = `fabrika_bystander_${hex()}`
-		await as(superuserUrl, (sql) => sql.unsafe(`CREATE ROLE ${bystander}`))
-		await changeCreate('grant', bystander)
-		const admin = PostgresDatabase.connect(previous.url(), { max: 1 })
-		try {
-			const database = (await admin.prepare('SELECT current_database() AS name').first<{ name: string }>())?.name ?? ''
-			const refusal = 'it must own the database, be a superuser, or hold CREATE on it WITH GRANT OPTION'
-			await expect(createTestProvisioner(previous.url())).rejects.toThrow(`could not grant CREATE on the database ${database} to fabrika_tests_`)
-			await expect(createTestProvisioner(previous.url())).rejects.toThrow(refusal)
-			await expect(changeCreateOnDatabase(admin, 'revoke', bystander, database)).rejects.toThrow(
-				`could not revoke CREATE on the database ${database} from ${bystander}: ${refusal}`,
-			)
-			const created = await as(superuserUrl, (sql) =>
-				sql.unsafe(
-					"SELECT count(*)::int AS roles FROM pg_auth_members m JOIN pg_roles r ON r.oid = m.roleid WHERE m.member = to_regrole($1) AND r.rolname LIKE 'fabrika_tests_%'",
-					[new URL(previous.url()).username],
-				))
-			expect([...created]).toEqual([{ roles: 0 }])
-		} finally {
-			await admin.close()
-			await changeCreate('revoke', bystander)
-			await as(superuserUrl, (sql) => sql.unsafe(`DROP ROLE ${bystander}`))
-			await previous.tearDown()
-		}
-	})
-
-	test('concurrent grants and revokes on the one database row all succeed: each waits for the shared lock', async () => {
-		const names = Array.from({ length: 8 }, () => `fabrika_grant_${hex()}`)
-		await as(superuserUrl, async (sql) => {
-			for (const name of names) await sql.unsafe(`CREATE ROLE ${name}`)
-		})
-		try {
-			const outcomes = await Promise.allSettled(names.map(async (name) => {
-				for (let round = 0; round < 5; round++) {
-					await changeCreate('grant', name)
-					await changeCreate('revoke', name)
-				}
-			}))
-			expect(outcomes.filter((outcome) => outcome.status === 'rejected')).toEqual([])
-		} finally {
-			for (const name of names) {
-				await changeCreate('revoke', name)
-				await as(superuserUrl, (sql) => sql.unsafe(`DROP ROLE ${name}`))
-			}
 		}
 	})
 
