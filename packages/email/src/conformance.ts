@@ -280,6 +280,20 @@ function describeHttpSender(harness: EmailSenderHttpHarness): void {
 		expect(current.requests).toHaveLength(0)
 	})
 
+	test('refuses an attachment of a file type outside the ones it says it sends, without a request', async () => {
+		const current = httpCase(async (request) => harness.answers.accepted(request))
+		const allowed = current.sender.capabilities.attachmentExtensions
+		if (allowed === undefined || current.sender.capabilities.maxAttachmentBytes === undefined) return
+		const extension = ['json', 'svg', 'webp', 'bin'].find((candidate) => !allowed.includes(candidate))
+		if (extension === undefined) throw new Error('every probe extension is allowed: pick another')
+		const message: EmailMessage = {
+			...ATTACHMENT_MESSAGE,
+			attachments: [{ filename: `report.${extension}`, contentType: 'application/octet-stream', content: ONE_BYTE }],
+		}
+		await expectRejection(() => current.sender.send(message, new AbortController().signal), 'invalid_message', () => MESSAGE_MARKERS)
+		expect(current.requests).toHaveLength(0)
+	})
+
 	test('refuses a body shorter than it says it sends, counted in characters once trimmed, without a request', async () => {
 		const current = httpCase(async (request) => harness.answers.accepted(request))
 		const min = current.sender.capabilities.minBodyLength

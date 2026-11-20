@@ -315,6 +315,7 @@ const SenderCapabilities = z.object({
 	listUnsubscribe: z.boolean().optional(),
 	maxAttachmentBytes: z.int().positive().optional(),
 	refusedAttachmentExtensions: z.array(z.string()).readonly().optional(),
+	attachmentExtensions: z.array(z.string()).readonly().optional(),
 	minBodyLength: z.int().positive().optional(),
 	broadcast: z.boolean().optional(),
 })
