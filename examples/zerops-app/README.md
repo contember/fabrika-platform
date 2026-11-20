@@ -65,9 +65,9 @@ bunx fabrika-check .
 ```
 
 Without `FABRIKA_TEST_POSTGRES_URL` every database test skips, and a skip proves nothing. `bun run build:web` writes
-the SPA to `dist/web`. `--isolate` is required
-because the generated endpoint access test and `notes.test.ts` both boot the application, and its data layer binds
-once per process.
+the SPA to `dist/web`. `--isolate` gives each test file fresh
+modules; `bun test --parallel=4 --no-isolate` runs the files in shared processes, faster, where a later kit of the
+application takes its data layer over from the previous file's.
 
 After a change to the contract or the table policies:
 

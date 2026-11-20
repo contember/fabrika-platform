@@ -59,7 +59,7 @@ bunx fabrika db test-scaffold   # after a contract or table change: rewrites the
 bun run build       # fabrika app build --provider=cloudflare: rewrites fabrika/entry.generated.ts, migrations.generated.ts and contract.generated.ts
 bun run check       # fabrika-check: the Cloudflare build does not run it yet
 bun run typecheck
-bun run test        # bun test --isolate: the generated endpoint access test boots the same application
+bun run test        # bun test --isolate: each test file starts with fresh modules
 ```
 
 `tsconfig.json` leaves out `fabrika.config.ts` and `oblaka.ts`: they import oblaka's raw TypeScript source, which does

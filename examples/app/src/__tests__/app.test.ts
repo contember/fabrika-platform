@@ -1,6 +1,6 @@
 // The example's endpoints behind the production proxy decision, with test callers of the contract's roles, over the
-// application's SQLite schema. Runs with `bun test --isolate`: the generated endpoint access test boots the same
-// application, and its data layer binds once per process.
+// application's SQLite schema. Runs with `bun test --isolate`, and beside the generated endpoint access test in one
+// process: a later kit of the application takes its data layer over.
 
 import { createClient, RpcError } from '@fabrika/app/client'
 import { statusOf, testKit } from '@fabrika/app/testing'

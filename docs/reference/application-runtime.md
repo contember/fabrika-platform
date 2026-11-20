@@ -1800,8 +1800,11 @@ proxy decision and a stand-in for IAM; it has no test-runner dependency. An
 application on `@fabrika/db` passes its connection as `options.database`, which the kit
 hands to `boot` as a runtime adapter does; without one it does not boot. A test of the
 author's that boots the application on a database runs beside the generated endpoint
-access test only under `bun test --isolate`: the data layer binds once per process. The
-template's `test` script passes it.
+access test in one process too: a later kit of the same application takes its data layer
+over from the earlier one, which must have drained the work its requests left, and boots on
+the contract the process already compiled and hashed. The template's `test` script passes
+`--isolate`, which gives each file fresh modules; `bun test --parallel=N --no-isolate` runs
+many files per worker, and needs files that leave no module state, clock or mock behind.
 
 ```ts
 const kit = testKit(app, { database: postgres.database }) // app: the default export of src/app.ts
@@ -1990,8 +1993,8 @@ not run`. Of them only the generated isolation tests run again, at container sta
   refused by an update or a remove of another action.
 - **Endpoint access tests**, one file `src/__tests__/endpoint-access.test.ts`, from the
   contract. `endpointAccessKit` boots the application's own `src/app.ts` (its default
-  export, `serve(…)`) through the test kit, on the application's own data layer, once: that layer
-  binds once per process. It boots with the kit's stand-in IAM (above), which records each write it allowed and
+  export, `serve(…)`) through the test kit, on the application's own data layer, once per file; a
+  later kit in the same process takes that layer over. It boots with the kit's stand-in IAM (above), which records each write it allowed and
   seeds the invitations and links a case names. A case's caller of an endpoint that manages members holds, on its target's
   value, the action, one assigning role of each role the input names (every membership role of the dimension when it
   names none) and those roles' actions; one of an endpoint that issues links also holds the actions the links grant.
