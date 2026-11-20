@@ -33,9 +33,10 @@ and table policies, jobs and kicks, webhooks, public procedures, file kinds (sto
 installation mail all run there. On 0.8 its Worker was stateless, and the deploy refused each of them.
 
 0.9 generates no access or isolation tests: the proxy and the data layer enforce the access forms and the policies, and
-fabrika tests that enforcement itself. Delete `src/db/__tests__/*.policy-isolation.test.ts`,
-`src/__tests__/endpoint-access.test.ts` and `src/__tests__/endpoint-access.fixtures.ts`, and any formatter exclude of
-them. `fabrika db test-scaffold` is gone, `fabrika db test-isolation` runs nothing (a platform up to 0.9.0-dev.18 still
+fabrika tests that enforcement itself. Once the platform that deploys the application runs this release or a newer
+one, delete `src/db/__tests__/*.policy-isolation.test.ts`, `src/__tests__/endpoint-access.test.ts` and
+`src/__tests__/endpoint-access.fixtures.ts`, and any formatter exclude of them. A platform up to 0.9.0-dev.18 builds
+the application with its own checker, which refuses a deploy without them. `fabrika db test-scaffold` is gone, `fabrika db test-isolation` runs nothing (a platform up to 0.9.0-dev.18 still
 calls it), and the checker no longer reports
 `generated-test-hash`, `endpoint-fixture` or `generated-test-import`. On Zerops the init commands run `fabrika db
 migrate` and `fabrika db codegen --verify` only. The application's own tests stay.

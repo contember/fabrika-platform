@@ -1,9 +1,6 @@
-// The data layer enforces every table policy an application can declare, not only the ones a fixture spells out:
-// seeded worlds of random policies (a top-level and a contained dimension table, a child of either, an application
-// table; actions shared or apart, writes or none, a version, a column with its own read action, app reach), each table
-// probed through the production pipeline by the isolation kit, and every answer compared with what the policy says it
-// must be. A failure names its seed, which rebuilds the same world. SQLite always; Postgres when
-// FABRIKA_TEST_POSTGRES_URL is set (it skips cleanly otherwise).
+// Every table policy is enforced as declared: seeded worlds of random policies, each table probed through the
+// production pipeline by the isolation kit and compared with what its policy says. A failure names its seed, which
+// rebuilds the world. SQLite always; Postgres when FABRIKA_TEST_POSTGRES_URL is set.
 
 import { defineApp, defineVocabulary } from '@fabrika/app/contract'
 import { appPolicyIsolationKit, policyIsolationKit } from '@fabrika/app/testing/isolation'
@@ -185,7 +182,6 @@ type Outcomes = Record<string, unknown>
 function expectedScoped(table: TableName, shape: TableShape): Outcomes {
 	const child = table === 'items'
 	const contained = child || table === 'projects'
-	const writes = shape.update !== null
 	const expected: Outcomes = {
 		'get own': 200,
 		'get other': 404,
@@ -202,7 +198,7 @@ function expectedScoped(table: TableName, shape: TableShape): Outcomes {
 		expected['insert other'] = 403
 	}
 	if (shape.update !== null) {
-		if (writes) expected['update own'] = 200
+		expected['update own'] = 200
 		expected['update other'] = 404
 		if (child) expected['update crossed'] = 404
 		if (shape.update !== shape.read) expected['update with read'] = { status: 200, refused: true }
