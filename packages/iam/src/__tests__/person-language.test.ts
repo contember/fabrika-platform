@@ -410,7 +410,7 @@ describe('every page a person invited in their language reaches', () => {
 		expect(await lang(unhinted)).toBe('uk')
 	})
 
-	test('without the application\'s address its "sign in first" sends IAM\'s own sign-in the invitation\'s language', async () => {
+	test("without the application's address its \"sign in first\" sends IAM's own sign-in the invitation's language", async () => {
 		const n = await notes()
 		await n.f.repositories.handoff.setReturnOrigins(APP, [])
 		await invitee(n)

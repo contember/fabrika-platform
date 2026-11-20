@@ -1,14 +1,6 @@
 import type { InstallationBrand } from '@fabrika/proxy-core/brand'
 import { z } from 'zod'
-import {
-	actionLandingOrigin,
-	type AppPresentation,
-	appQuery,
-	landingUrl,
-	localeQuery,
-	presentationFor,
-	withPersonLocale,
-} from '../app-presentation'
+import { actionLandingOrigin, type AppPresentation, appQuery, landingUrl, localeQuery, presentationFor, withPersonLocale } from '../app-presentation'
 import { type InvitationRow, principalStatus } from '../db'
 import { type RequestContext } from '../env'
 import { acceptCreatingPrincipal, acceptInvitation, INVITATION_ACCEPT_PATH, invitationOffer } from '../membership'
