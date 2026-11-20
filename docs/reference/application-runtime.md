@@ -89,7 +89,7 @@ export default serve(contract, { database: scoped(tables) })
   a handler ([ADR-0012](../decisions/0012-fabrika-app-runtime.md)). A procedure that anyone may call declares
   `access: { public: true }` and the `actions` its handler holds ([Public procedures](#public-procedures)).
 - The shell is literal: the reader and Control read each module as its slice, without the `.handle(…)` bodies.
-- `defineVocabulary` also takes `locale` (`'en'` or `'cs'`) and `displayName`: the language and the name of the
+- `defineVocabulary` also takes `locale` (`'en'`, `'cs'` or `'uk'`) and `displayName`: the language and the name of the
   application on IAM's sign-in, password and invitation pages and e-mails. The artifact carries each only when it is
   declared, so a contract without them keeps its digest; `schemaFromContract` hands them to IAM, and a change is a line
   the approver reads.

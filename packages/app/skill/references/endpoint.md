@@ -733,7 +733,11 @@ containing it, that declares `members`: a task endpoint reads its org's. A dimen
 - A partner company's people: a role with `external: true` whose `assignableBy` names an app-wide staff role.
   `assign(ref, { email }, 'partner', { label: company.name, message })` mails the invitation with the company's name
   (≤ 200 characters, one line) and a note (≤ 1000 characters); a new address chooses its password from the mail and
-  lands in the application. `{ resend: true }` sends an open invitation again with a new link and 7 days;
+  lands in the application. `{ locale: 'uk' }` (`'en'`, `'cs'` or `'uk'`) is the invited person's own language when the
+  application knows it, for example from the inviter's form or the person's record: IAM writes the invitation and the
+  pages its link opens in it and keeps it as the person's, so their later password mail and pages speak it too, and a
+  browser they signed in with keeps it on IAM's sign-in page. Without it the person keeps the language they have, else the
+  application's `locale`. `{ resend: true }` sends an open invitation again with a new link and 7 days;
   `revoke(ref, { invitationId })` cancels one; `revoke(ref, { principalId })` removes a person, whose access ends
   within the 300 s token lifetime. An address the organization names is refused (409 `internal_mailbox`). A company's
   deactivation is the application's own flag: check it where the endpoint loads the company row.

@@ -49,9 +49,10 @@ export const vocabulary = defineVocabulary({
   `members: { manage, list }` on a dimension gives `ctx.members` to the endpoints on, in or below it: a lookup of one
   member everywhere, the list with `list`, management with `manage` (`references/endpoint.md`).
 - `admin` is reserved: IAM defines it for every application. `defineVocabulary` refuses it.
-- `locale: 'cs'` (or `'en'`) and `displayName: 'Tasks'` beside `app` set the language and the name IAM uses for the
-  application on its sign-in, password and invitation pages and e-mails. Without `locale` IAM speaks its default
-  language, `en`. Without `displayName` the sign-in and password pages and mails name no application, and an invitation
+- `locale: 'cs'` (or `'en'`, `'uk'`) and `displayName: 'Tasks'` beside `app` set the language and the name IAM uses for
+  the application on its sign-in, password and invitation pages and e-mails. Without `locale` IAM speaks the browser's
+  language where it speaks it, else its default, `en`. A person's own language, named on their invitation
+  (`references/endpoint.md`), beats the application's. Without `displayName` the sign-in and password pages and mails name no application, and an invitation
   names it by its id (`tasks@prod`). The approver sees each change.
 - `mail` beside them words IAM's e-mails in the application's own way: per message (`invitation`, `enrollment`,
   `reset`) and language, a one-line `subject` and a plain `text` with `{{name}}` placeholders, for example
