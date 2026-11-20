@@ -79,7 +79,8 @@ async function register(base: string, input: RegisterAppRequest): Promise<void> 
 		fetch: (url, init) => {
 			const headers = new Headers(init?.headers)
 			for (const [name, value] of Object.entries(authHeaders())) headers.set(name, value)
-			return fetch(url, { ...init, headers })
+			// The Access client secret is a custom header, which a followed redirect would carry along.
+			return fetch(url, { ...init, headers, redirect: 'manual' })
 		},
 	})
 	try {
