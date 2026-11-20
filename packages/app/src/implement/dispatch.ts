@@ -513,9 +513,7 @@ export class ContractRuntime {
 				// An expected refusal, not a failure: nothing it wrote was kept, and the caller retries.
 				return maintenanceRefusal()
 			}
-			const response = heldActionsRefused(plan, error)
-				? toErrorResponse(new ForbiddenError('The actions the caller holds do not allow this operation'))
-				: errorResponse(error, where)
+			const response = errorResponse(error, where)
 			if (response.status >= 500) {
 				const failure = { endpoint: where, selected, requestId: request.headers.get(REQUEST_ID_HEADER), status: response.status, error }
 				const delivery = this.#parts.failures.record(failure)
@@ -782,6 +780,9 @@ export class ContractRuntime {
 			// The fence refuses inside the transaction, before its COMMIT: a known rollback, so what it staged goes now.
 			if (error instanceof MaintenanceFenceError) {
 				outcome = 'open'
+			}
+			if (heldActionsRefused(served.row, caller, error)) {
+				throw new ForbiddenError('The actions the caller holds do not allow this operation')
 			}
 			throw error
 		} finally {
@@ -2283,18 +2284,24 @@ function serverError(status: number): Response {
 }
 
 /**
+ * The data layer refusing an action in an `anyOf` endpoint to a caller who holds only some of the listed actions: a
+ * holder of more might have been allowed, so it is the caller's 403. Under every listed action no caller could be, so
+ * it stays the code's fault (a 500, recorded). Read by name, as `errorResponse` reads `@fabrika/db` errors.
+ */
+function heldActionsRefused(row: EndpointRow, caller: Caller, error: unknown): boolean {
+	if (
+		row.requirement?.kind !== 'anyOf' || !(error instanceof Error) || error.name !== 'CapabilityError'
+		|| Reflect.get(error, 'reason') !== 'wrong_action'
+	) {
+		return false
+	}
+	return row.requirement.actions.some((action) => !caller.perms.some((entry) => permits([entry], action)))
+}
+
+/**
  * One envelope, `{ error: { type, message, issues? } }`. A client error keeps its own message and issues; every
  * 5xx and every refused capability answers a fixed message; what made a 5xx reaches only `FailureReports`, as a code.
  */
-/**
- * The data layer refusing an action in an `anyOf` endpoint: which of its listed actions the caller holds decided that, not
- * the application's code, so it is the caller's 403. Read by name, as `errorResponse` reads `@fabrika/db` errors.
- */
-function heldActionsRefused(plan: EndpointPlan, error: unknown): boolean {
-	return plan.outcome === 'endpoint' && plan.endpoint.requirement?.kind === 'anyOf' && error instanceof Error && error.name === 'CapabilityError'
-		&& Reflect.get(error, 'reason') === 'wrong_action'
-}
-
 export function errorResponse(error: unknown, where: string): Response {
 	if (isStructuralError(error) && error.httpStatus < 500) {
 		return toErrorResponse(error)

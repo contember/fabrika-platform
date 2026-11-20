@@ -2353,10 +2353,44 @@ export function prepareApplicationInsert(context: TableContext, capability: unkn
 	const { grant, actions } = appGrant(context, capability, 'insert')
 	// Every insert action writes the table's one insert list, so each held one writes all of `values`: only their conditions differ.
 	const row = readValues(values, context.model.insert, 'insert', context.model)
-	const conflict = onConflictOf(context, options, grant.actions, row)
+	// Only an insert action that also updates may update on a conflict: never one action's insert with another's update.
+	const declared = onConflictOf(context, options, actions, row)
 	stampInsert(context, grant, row, keyOf(context.model), uuidv7())
-	const judged = checkInserted(context, actions, grant.principal, row)
+	const conflict = declared?.mode === 'update' ? upsertingActions(context.model, declared, row) : declared
+	const judged = checkInserted(context, conflict?.mode === 'update' ? conflict.actions : actions, grant.principal, row)
 	return { row, writer: grant.principal, destination: undefined, conflict, judged, narrowed: [] }
+}
+
+/**
+ * An upsert under several actions that each insert and update: only those whose own condition admits the inserted row
+ * may update the conflicting one, so the update runs under an action whose insert alone was allowed. A condition that
+ * follows a path is judged only in the transaction, after the update chose its actions, so several such are refused.
+ */
+function upsertingActions(model: TableModel, conflict: OnConflict, row: ReadonlyMap<string, Primitive | null>): OnConflict {
+	if (conflict.actions.length < 2) {
+		return conflict
+	}
+	const now = new Date()
+	const admitting: string[] = []
+	for (let index = 0; index < conflict.actions.length; index++) {
+		const action = conflict.actions[index] ?? ''
+		const condition = ownEntry(model.when, action)
+		if (condition !== undefined && readPaths(condition).length > 0) {
+			throw new CapabilityError(
+				'unenforceable',
+				`an insert into ${model.name} that updates on a conflict under ${
+					conflict.actions.join(', ')
+				} would pair a condition that follows a path with another action's: upsert from an endpoint of one of them`,
+			)
+		}
+		if (condition === undefined || rowSatisfies(condition, row, now)) {
+			admitting[admitting.length] = action
+		}
+	}
+	// None admits the row: keep them all, and the insert's own check refuses it.
+	return admitting.length === 0
+		? conflict
+		: freeze({ columns: conflict.columns, mode: conflict.mode, updates: conflict.updates, actions: freeze(admitting) })
 }
 
 /** A child table's insert under the parent its `Ref` names, whose chain is checked against the database. */

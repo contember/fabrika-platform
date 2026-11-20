@@ -406,8 +406,16 @@ and aggregates) only when X is held and either the table has no `when` for X, so
 or X is the only held action reaching the operation; otherwise it is hidden. An update keeps the held update actions
 whose columns (a column write action's included) cover every column it changes and ORs only their `when`; when none
 covers, it is refused (`wrong_action`). An insert needs no such rule: every insert action writes the table's one
-insert list. Under an `anyOf` endpoint the data layer's `wrong_action` refusal answers 403, because which listed
-actions the caller holds decided it; elsewhere it stays a 500, a fault of the handler's code. An insert under several
+insert list. An insert with `onConflict: { do: 'update' }` needs a held action that both inserts and updates the table
+(`wrong_action` otherwise), and updates the conflicting row only under those of them whose own `when` admits the
+inserted row, so one action's insert never maps a unique value to a row only another action updates; `do: 'nothing'`
+is unchanged. A file column without its own read action opens (serves, copies) wherever every action of the read's
+reach is a table read action, as on a list, because each answered row was admitted by one that alone reads it; a get
+whose reach includes a held action that does not read keeps the strict rule, one read action that reads every answered
+row alone. A file column with its own read action follows the column rule above. Under an `anyOf` endpoint the data
+layer's `wrong_action` refusal answers 403 when the caller holds only some of the listed actions, because a holder of
+more might have been allowed; a caller holding every listed action gets a 500, since no caller could be allowed and the
+fault is the handler's code, and so is it outside `anyOf`. An insert under several
 held actions with a `when` that follows a foreign key is refused (`unenforceable`), `ctx.sql.scope` is refused when a
 held action has a `when`, and a claim or a join needs a capability of one action. The types allow an operation one
 listed action allows and hide every column of its own read action; `ctx.app.action` is unavailable (read

@@ -7,15 +7,19 @@
 
 import { beforeEach, describe, expect, test } from 'bun:test'
 import { CapabilityError, ConflictError, NotFoundError, QueryRefusedError } from '../errors'
+import type { FileBinding } from '../file-columns'
+import { holdsFile } from '../file-references'
 import { bindScopedDatabase, type DataAccess, dataAccessOf, type DataHandles, type DataSite } from '../framework'
 import type { DataKind } from '../orm-types'
-import { defineTables } from '../policy'
+import { defineTables, readTables } from '../policy'
 import { openSqlite } from '../sqlite'
 import { bunSqliteStorage } from '../sqlite-bun'
 import { scoped } from '../store'
+import { storedFiles } from '../stored-files'
 import type { ApplicationTables, DbIndex, Tables, Unavailable } from '../tables'
 import type { TypedColumnList } from '../vocabulary-tables'
 import { TestAuthority } from './fixtures/authority'
+import { sqliteFramework } from './fixtures/sqlite-framework'
 
 const vocabulary = {
 	app: 'desk',
@@ -30,6 +34,10 @@ const vocabulary = {
 		'staff.audit': 'Read every staff record with its bonus',
 		'staff.edit': 'Rename the sales staff',
 		'staff.flag': 'Flag your own staff records',
+		'acc.signup': 'Sign up an account',
+		'acc.edit': 'Edit the sales accounts',
+		'acc.sales': 'Sign up and edit the sales accounts',
+		'acc.hr': 'Sign up and edit the hr accounts',
 	},
 	roles: {},
 } as const
@@ -39,6 +47,7 @@ interface DB {
 	entries: { id: string; amount: number }
 	tallies: { id: string; result: string | null; attempts: number; next_attempt_at: string | null; version: number }
 	people: { id: string; name: string; dept: string; owner: string; salary: number; bonus: number; flag: string | null }
+	accounts: { id: string; email: string; dept: string; note: string; secret: string }
 }
 
 const columns: TypedColumnList<DB> = {
@@ -46,6 +55,7 @@ const columns: TypedColumnList<DB> = {
 	entries: { columns: ['id', 'amount'], foreignKeys: [], notNull: ['id', 'amount'] },
 	tallies: { columns: ['id', 'result', 'attempts', 'next_attempt_at', 'version'], foreignKeys: [], timestamps: ['next_attempt_at'] },
 	people: { columns: ['id', 'name', 'dept', 'owner', 'salary', 'bonus', 'flag'], foreignKeys: [] },
+	accounts: { columns: ['id', 'email', 'dept', 'note', 'secret'], foreignKeys: [] },
 }
 
 const tables = defineTables(vocabulary, columns)({
@@ -87,6 +97,14 @@ const tables = defineTables(vocabulary, columns)({
 			'staff.flag': { owner: { eq: 'alice' } },
 		},
 	},
+	// One action that only inserts, one that only updates, and two that do both, each in its own department.
+	accounts: {
+		scope: { app: 'the accounts of every department' },
+		actions: { read: 'acc.edit', insert: ['acc.signup', 'acc.sales', 'acc.hr'], update: ['acc.edit', 'acc.sales', 'acc.hr'] },
+		insert: ['email', 'dept', 'note'],
+		update: ['note'],
+		when: { 'acc.edit': { dept: { eq: 'sales' } }, 'acc.sales': { dept: { eq: 'sales' } }, 'acc.hr': { dept: { eq: 'hr' } } },
+	},
 })
 
 type Policies = typeof tables extends Tables<DB, infer P> ? P : never
@@ -126,6 +144,10 @@ beforeEach(async () => {
 	storage.sql.exec(
 		"insert into people (id, name, dept, owner, salary, bonus) values ('alice', 'Alice', 'hr', 'alice', 200, 20), ('bob', 'Bob', 'sales', 'bob', 100, 10), ('carol', 'Carol', 'sales', 'alice', 300, 30)",
 	)
+	storage.sql.exec(
+		"create table accounts (id text not null primary key, email text not null unique, dept text not null, note text not null, secret text not null default 'kept')",
+	)
+	storage.sql.exec("insert into accounts (id, email, dept, note) values ('a1', 'bob@x', 'sales', 'first'), ('a2', 'alice@x', 'hr', 'first')")
 	const layer = scoped(tables)
 	bindScopedDatabase(layer, { database: openSqlite(storage), capabilities: alice })
 	data = dataAccessOf(layer)
@@ -341,5 +363,131 @@ describe('the union of what each held action reaches alone', () => {
 			.toBeInstanceOf(NotFoundError)
 		await expect(invoke('mutation', async (db) => await call(db.app(alice.app('staff.flag')), 'people.update', 'carol', { name: 'x' }))).rejects
 			.toBeInstanceOf(QueryRefusedError)
+	})
+})
+
+describe('an insert that updates on a conflict', () => {
+	const accounts = (): unknown[] => storage.sql.exec('select id, email, dept, note from accounts order by id').toArray()
+	const unchanged = [{ id: 'a1', email: 'bob@x', dept: 'sales', note: 'first' }, { id: 'a2', email: 'alice@x', dept: 'hr', note: 'first' }]
+	const upsert = (actions: readonly [string, ...string[]], values: Readonly<Record<string, unknown>>, mode: 'update' | 'nothing') =>
+		invoke(
+			'mutation',
+			async (db) => await call(db.app(alice.anyOf(actions)), 'accounts.insert', values, { onConflict: { columns: ['email'], do: mode } }),
+		)
+
+	test("one action's insert never pairs with another's update; a conflict that updates nothing still works", async () => {
+		// acc.signup inserts and acc.edit updates: neither does both, so neither alone nor the two together upsert.
+		await expect(upsert(['acc.edit', 'acc.signup'], { email: 'bob@x', dept: 'sales', note: 'over' }, 'update')).rejects.toBeInstanceOf(CapabilityError)
+		await expect(upsert(['acc.signup'], { email: 'bob@x', dept: 'sales', note: 'over' }, 'update')).rejects.toBeInstanceOf(CapabilityError)
+		expect(accounts()).toEqual(unchanged)
+		expect(await upsert(['acc.edit', 'acc.signup'], { email: 'bob@x', dept: 'sales', note: 'over' }, 'nothing')).toEqual({ inserted: false })
+		expect(await upsert(['acc.edit', 'acc.signup'], { email: 'carol@x', dept: 'hr', note: 'new' }, 'nothing')).toMatchObject({ inserted: true })
+		expect(accounts()).toHaveLength(3)
+	})
+
+	test("an action that inserts and updates upserts under its own when, never under another such action's", async () => {
+		const sales = await invoke(
+			'mutation',
+			async (db) =>
+				await call(db.app(alice.app('acc.sales')), 'accounts.insert', { email: 'bob@x', dept: 'sales', note: 'mine' }, {
+					onConflict: { columns: ['email'], do: 'update' },
+				}),
+		)
+		expect(sales).toMatchObject({ id: 'a1', inserted: false })
+		// alice@x is hr: acc.sales inserts the given sales row, acc.hr would update the stored hr row; no one action does both.
+		await expect(upsert(['acc.sales', 'acc.hr'], { email: 'alice@x', dept: 'sales', note: 'paired' }, 'update')).rejects.toBeInstanceOf(ConflictError)
+		expect(await upsert(['acc.sales', 'acc.hr'], { email: 'alice@x', dept: 'hr', note: 'hr' }, 'update')).toMatchObject({ id: 'a2', inserted: false })
+		expect(accounts()).toEqual([{ id: 'a1', email: 'bob@x', dept: 'sales', note: 'mine' }, { id: 'a2', email: 'alice@x', dept: 'hr', note: 'hr' }])
+	})
+})
+
+describe('a file column under several read actions', () => {
+	const fileVocabulary = {
+		dimensions: { branch: {} },
+		actions: { 'staff.read': 'Read the sales badges', 'staff.self': 'Read your own badges and their photo', 'staff.edit': 'Edit the sales badges' },
+	}
+	const fileColumns = { badges: { columns: ['id', 'dept', 'owner', 'card', 'photo'], foreignKeys: [] } }
+	const filePolicies = {
+		badges: {
+			scope: { app: 'the badges of every department' },
+			actions: { read: ['staff.read', 'staff.self'], update: 'staff.edit' },
+			update: ['dept'],
+			files: { card: 'cards', photo: 'photos' },
+			columns: { photo: { read: 'staff.self' } },
+			when: { 'staff.read': { dept: { eq: 'sales' } }, 'staff.self': { owner: { eq: 'alice' } }, 'staff.edit': { dept: { eq: 'sales' } } },
+		},
+	}
+	const BADGES = `CREATE TABLE badges (
+	id TEXT PRIMARY KEY, dept TEXT NOT NULL, owner TEXT NOT NULL,
+	card TEXT NOT NULL REFERENCES fabrika_files (id), photo TEXT NOT NULL REFERENCES fabrika_files (id)
+) STRICT;`
+	let files: Record<string, string>
+	let badges: DataAccess
+
+	beforeEach(async () => {
+		const framework = await sqliteFramework(BADGES)
+		const stored = storedFiles(() => ({ database: framework.database, capabilities: alice }))
+		files = {}
+		for (const name of ['bobCard', 'bobPhoto', 'aliceCard', 'alicePhoto']) {
+			const id = Bun.randomUUIDv7()
+			const kind = name.endsWith('Card') ? 'cards' : 'photos'
+			await stored.stage({ id, kind, objectKey: `${kind}/${id}`, contentType: 'image/png', name: null, request: 'seed' })
+			await stored.written(id, { size: 3, sha256: 'c'.repeat(64) })
+			files[name] = id
+		}
+		framework.exec(
+			"insert into badges (id, dept, owner, card, photo) values ('b1', 'sales', 'bob', ?, ?), ('b2', 'hr', 'alice', ?, ?)",
+			files['bobCard'] ?? '',
+			files['bobPhoto'] ?? '',
+			files['aliceCard'] ?? '',
+			files['alicePhoto'] ?? '',
+		)
+		const layer = scoped(readTables(fileColumns, filePolicies, fileVocabulary))
+		bindScopedDatabase(layer, { database: framework.database, capabilities: alice })
+		badges = dataAccessOf(layer)
+	})
+
+	/** What `work` reads under `actions`, and the files whose references it may open. */
+	async function readBadges(actions: readonly [string, ...string[]], work: (handle: unknown) => Promise<unknown>) {
+		const holder = {}
+		const binding: FileBinding = { holder, request: 'read', graceMs: 3_600_000, scans: () => false }
+		const transaction = badges.invocation(true)
+		const site: DataSite = {
+			kind: 'query',
+			unscoped: {},
+			principal: 'user:alice',
+			files: binding,
+			check: () => undefined,
+			session: () => transaction.session(),
+		}
+		try {
+			const answer = await work(badges.handles(site).app(alice.anyOf(actions)))
+			const readable = Object.keys(files).filter((name) => holdsFile(holder, files[name] ?? '')).sort()
+			return { answer, readable }
+		} finally {
+			await transaction.rollback()
+		}
+	}
+	const columnsOf = (page: unknown): string[][] => {
+		const items: unknown = Reflect.get(Object(page), 'items')
+		return Array.isArray(items) ? items.map((item: unknown) => Object.keys(Object(item)).sort()).sort() : []
+	}
+
+	test("a list under read actions only opens every listed row's file; its own action's file only where that action alone reads", async () => {
+		// Each listed row was admitted by a read action that alone reads its card: both cards open; the photo is staff.self's.
+		const both = await readBadges(['staff.read', 'staff.self'], (handle) => call(handle, 'badges.list'))
+		expect(columnsOf(both.answer)).toEqual([['card', 'dept', 'id', 'owner'], ['card', 'dept', 'id', 'owner']])
+		expect(both.readable).toEqual(['aliceCard', 'bobCard'])
+		// staff.self alone reads here (staff.edit reads nothing): its photo is answered and opens.
+		const own = await readBadges(['staff.edit', 'staff.self'], (handle) => call(handle, 'badges.list'))
+		expect(columnsOf(own.answer)).toEqual([['card', 'dept', 'id', 'owner', 'photo']])
+		expect(own.readable).toEqual(['aliceCard', 'alicePhoto'])
+	})
+
+	test('a get through a held action that does not read keeps the file closed', async () => {
+		// The get reaches b1 through staff.read or staff.edit, and staff.edit does not read the table.
+		const got = await readBadges(['staff.read', 'staff.edit'], (handle) => call(handle, 'badges.get', 'b1'))
+		expect(Object.keys(Object(got.answer)).sort()).toEqual(['card', 'dept', 'id', 'owner'])
+		expect(got.readable).toEqual([])
 	})
 })

@@ -1047,9 +1047,13 @@ A screen several application-wide roles read, each with its own reach, is one en
   of any held action admits (a held action without a `when` admits every row). A column with its own read action
   shows only where that action reads every row (no `when` of its own) or is the only held one reading; otherwise it
   is hidden. An update runs only under held actions that each write every column it changes, and only their `when`
-  admits the row; when none does, it is refused with 403, so update the columns of each action apart. An insert
-  writes the table's one insert list under any held insert action. A save that took several mutations, one per
+  admits the row; when none does, it is refused, so update the columns of each action apart. An insert writes the
+  table's one insert list under any held insert action; `onConflict: { do: 'update' }` needs one held action that
+  both inserts and updates the table, under its own `when`. A file column opens on every row a list answers; a get
+  through a held action that does not read the table keeps it closed. A save that took several mutations, one per
   action, is one `anyOf` mutation in one transaction.
+- A refusal of the data layer answers 403 to a caller holding only some listed actions, and 500 to one holding all of
+  them: then no caller could be allowed, so the handler's code is at fault and the failure is recorded.
 - `ctx.holds('<action>')` tells the handler which of them the caller holds: `canClose: ctx.holds('cash.manage')`.
 - The types hide every column of its own read action, because which actions are held is known only per request; read
   such a column in an endpoint of that action. `ctx.app.action` is unavailable: read `ctx.app.actions`, or ask

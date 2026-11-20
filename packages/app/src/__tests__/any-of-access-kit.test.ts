@@ -1,8 +1,9 @@
 // The leak sweep and the endpoint access kit over an application with `anyOf` endpoints (`any-of-fixture/`): the sweep
 // plans without throwing and names each `anyOf` endpoint as one it does not ask; the kit's `scoped` case holds every listed
-// action in one scope only (403), and its `global` case asks once per listed action, each holder of only that one. The
-// kit's cases skip cleanly when FABRIKA_TEST_POSTGRES_URL is unset.
+// action in one scope only (403), and its `global` case asks once per listed action, each holder of only that one, and
+// once with every listed action held. The kit's cases skip cleanly when FABRIKA_TEST_POSTGRES_URL is unset.
 
+import { defineApp } from '@fabrika/app/contract'
 import { serve } from '@fabrika/app/implement'
 import { scoped } from '@fabrika/db'
 import { testDatabase } from '@fabrika/db/testing'
@@ -10,10 +11,12 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { z } from 'zod/v4'
 import { endpointAccessKit } from '../testing/endpoint-access'
 import { planSweep } from '../testing/leak-sweep'
 import { contract } from './any-of-fixture/fabrika.contract'
 import { tables } from './any-of-fixture/src/db/tables'
+import { vocabulary } from './any-of-fixture/src/vocabulary'
 
 const MIGRATION = `
 CREATE TABLE desks (
@@ -66,5 +69,23 @@ describe.skipIf(postgres === null)('the endpoint access kit over anyOf endpoints
 	test('each listed action held alone globally is asked: the list answers each, the write refuses the one its table does not name', async () => {
 		expect(await kit?.global('api.cash.list', {})).toEqual({ answered: true })
 		expect(await kit?.global('api.cash.record', { deskId: 'd', amount: 1 })).toEqual({ answered: false, status: 403 })
+	})
+})
+
+describe.skipIf(postgres === null)('the endpoint access kit over an anyOf endpoint that fails only under every listed action', () => {
+	const app = defineApp(vocabulary, tables)
+	// Answers each listed action held alone, and fails where the actions meet: only the call holding them all finds it.
+	const combined = app.group({ callers: ['human'] }, (r) => ({
+		board: r.query({ output: z.strictObject({}), access: { anyOf: ['cash.read', 'cash.audit'], app: true } }).handle(({ ctx }) => {
+			if (ctx.app.actions.length > 1) throw new Error('the reaches of two actions met')
+			return {}
+		}),
+	}))
+	const kit = postgres === null
+		? null
+		: endpointAccessKit(serve(app.contract((c) => ({ api: c.rpc('/api', { combined }) })), { database: scoped(tables) }), tables, postgres)
+
+	test('global asks once more with every listed action held, and reports its 500', async () => {
+		expect(await kit?.global('api.combined.board', {})).toEqual({ answered: false, status: 500 })
 	})
 })

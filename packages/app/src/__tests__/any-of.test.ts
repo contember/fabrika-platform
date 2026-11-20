@@ -149,7 +149,7 @@ describe('one action of an app capability', () => {
 	})
 })
 
-describe('a data-layer refusal outside an anyOf endpoint', () => {
+describe('a data-layer refusal no held actions could avoid', () => {
 	const single = defineApp(vocabulary, tables)
 	/** Inserts into `entries` on a handle whose type refuses it, as a handler that defeated the types would. */
 	async function insertUntyped(handle: unknown): Promise<unknown> {
@@ -158,20 +158,31 @@ describe('a data-layer refusal outside an anyOf endpoint', () => {
 		if (typeof insert !== 'function') throw new TypeError('entries has no insert')
 		return await Reflect.apply(insert, entries, [{ desk_id: 'd', amount: 1 }])
 	}
+	// `entries` names only cash.manage: neither endpoint lists it, so no caller is ever allowed this insert.
 	const misfiled = single.group({ callers: ['human'] }, (r) => ({
 		write: r.mutation({ output: z.strictObject({}), access: { action: 'cash.audit', app: true } }).handle(async ({ ctx }) => {
+			await insertUntyped(ctx.db.app)
+			return {}
+		}),
+		writeAny: r.mutation({ output: z.strictObject({}), access: { anyOf: ['cash.read', 'cash.audit'], app: true } }).handle(async ({ ctx }) => {
 			await insertUntyped(ctx.db.app)
 			return {}
 		}),
 	}))
 	const misfiledContract = single.contract((c) => ({ api: c.rpc('/api', { misfiled }) }))
 
-	test('stays a 500: a single-action endpoint that writes a table its action does not name is a fault of its code', async () => {
+	test('stays a 500 for a caller holding every listed action, and is a 403 only for one holding some of them', async () => {
 		const own = await testDatabase({ migrations: new URL('./any-of-fixture/db/migrations/', import.meta.url), label: 'any-of.test.ts single' })
 		try {
 			const ownKit = testKit(serve(misfiledContract, { database: scoped(tables) }), { database: own.database })
-			const client = createClient(misfiledContract, 'api', { fetch: ownKit.browser(ownKit.testCaller([{ action: 'cash.audit' }])) })
-			expect(await statusOf(client.misfiled.write())).toBe(500)
+			const as = (...actions: Action[]) =>
+				createClient(misfiledContract, 'api', { fetch: ownKit.browser(ownKit.testCaller(actions.map((action) => ({ action })))) })
+			// A single-action endpoint that writes a table its action does not name is a fault of its code.
+			expect(await statusOf(as('cash.audit').misfiled.write())).toBe(500)
+			// Under every listed action the refusal is the code's fault too, so it is recorded as one.
+			expect(await statusOf(as('cash.read', 'cash.audit').misfiled.writeAny())).toBe(500)
+			// A holder of some only cannot tell the code's fault from its own reach: it is refused.
+			expect(await statusOf(as('cash.read').misfiled.writeAny())).toBe(403)
 		} finally {
 			await own.close()
 		}

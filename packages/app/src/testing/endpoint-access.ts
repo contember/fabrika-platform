@@ -117,8 +117,8 @@ export interface EndpointAccessKit {
 	scoped(endpoint: string, input: Readonly<Record<string, unknown>>): Promise<DeniedOutcome>
 	/**
 	 * An `app` or a `creates` endpoint asked by a caller who holds its action as a global grant, and nothing else, and an
-	 * `anyOf` endpoint by one such caller per listed action, each of whom must be answered: `answered` unless an answer is
-	 * a 401, a 403 or a 5xx. The caller is the kit's one global principal, a person or a
+	 * `anyOf` endpoint by one such caller per listed action and one holding them all, each of whom must be answered:
+	 * `answered` unless an answer is a 401, a 403 or a 5xx. The caller is the kit's one global principal, a person or a
 	 * script as the endpoint admits, whose `callerRows` are seeded before its first case and kept.
 	 */
 	global(endpoint: string, input: Readonly<Record<string, unknown>>): Promise<ReachOutcome>
@@ -1241,10 +1241,14 @@ export function endpointAccessKit<DB, P>(
 				return status >= 500 || status === 401 || status === 403 || challenged ? { answered: false, status } : { answered: true }
 			},
 			async global(endpoint, input) {
-				// An `anyOf` endpoint is asked once per listed action, by a caller who holds only that one: each must be answered.
-				for (const row of globalEndpointsOf(endpoint)) {
-					const { fetch } = callerFor(row, [{ action: row.action }], await globalCallerId())
-					const { status } = await askAs(row, fetch, input)
+				// An `anyOf` endpoint is asked once per listed action, by a caller who holds only that one, and once by a caller
+				// who holds them all, where one action's reach could meet another's: each must be answered.
+				const rows = globalEndpointsOf(endpoint)
+				const holdings = rows.map((row) => [{ action: row.action }])
+				if (rows.length > 1) holdings.push(rows.map((row) => ({ action: row.action })))
+				for (const holding of holdings) {
+					const { fetch } = callerFor(rows[0], holding, await globalCallerId())
+					const { status } = await askAs(rows[0], fetch, input)
 					// No such form refuses with 404, so a 404 is the handler's own answer (a row the sampled input names is missing).
 					if (status >= 500 || status === 401 || status === 403) return { answered: false, status }
 				}

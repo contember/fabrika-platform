@@ -451,8 +451,12 @@ input and the HTTP shape (§11).
   shows only where that action reads every row (no `when` of its own) or is the only held one reading. An update
   runs under the held update actions that each write every column it changes, and only their `when` admits the row;
   when none does, it is refused. An insert writes the table's one insert list, so every held insert action covers it
-  and their `when` conditions admit the row together. The data layer's refusal of the held actions is the caller's
-  403. An `anyOf` endpoint has no members, links or delegation, and takes no `capabilities` or `creates`. The scoped
+  and their `when` conditions admit the row together. An insert that updates on a conflict needs one held action that
+  both inserts and updates, and updates the conflicting row only under such an action whose own `when` admitted the
+  inserted row. A file column without its own read action opens on every row a list answers, since each was admitted
+  by a read action that alone reads it; a get through a held action that does not read keeps it closed. The data
+  layer's refusal of the held actions is the caller's 403 when it holds only some of the listed actions; under all of
+  them no caller could be allowed, so it stays a 500, the code's fault. An `anyOf` endpoint has no members, links or delegation, and takes no `capabilities` or `creates`. The scoped
   forms do not take `anyOf`.
 
 `capabilities` removes one cause of off-road reach, not all. Reads across tables (joins, filters over related tables,
