@@ -11,6 +11,11 @@ import ts from 'typescript-platform'
 // object literal names a credential in `headers`, or passes a `Headers` variable the same function gives a credential
 // with `.set`/`.append`. Headers built in another function, or an init spread into the literal (a fetch wrapper), are
 // not seen, so the rule itself (CLAUDE.md, Critical Invariants) still applies to them.
+//
+// To satisfy a reported `file:line`, add `redirect: 'manual'` to that init and make the caller treat a 3xx as not ok.
+// Any explicit `redirect` passes the scan, so `redirect: 'follow'` is the deliberate opt-out for a request that must
+// follow one and whose credential a redirect cannot carry (a presigned URL); say why beside it.
+// `fixtures/credentialed-fetch.ts` shows each form, marked `// flagged` or `// passes:`.
 
 const root = resolve(import.meta.dir, '../..')
 const CREDENTIAL = /authorization|bearer|api[-_]?key|secret|token/i
@@ -89,6 +94,8 @@ describe('an outbound request that carries a credential', () => {
 
 	test('the scan finds each plain form', () => {
 		const path = join(import.meta.dir, 'fixtures/credentialed-fetch.ts')
-		expect(redirectFollowingCredentials(path).map((at) => Number(at.split(':').at(-1)))).toEqual([5, 7, 9, 14, 15])
+		const flagged = readFileSync(path, 'utf8').split('\n').flatMap((line, index) => line.endsWith('// flagged') ? [index + 1] : [])
+		expect(flagged.length).toBeGreaterThan(0)
+		expect(redirectFollowingCredentials(path).map((at) => Number(at.split(':').at(-1)))).toEqual(flagged)
 	})
 })
