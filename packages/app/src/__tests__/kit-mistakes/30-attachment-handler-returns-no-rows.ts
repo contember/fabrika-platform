@@ -11,8 +11,8 @@ const DealExport = attachment({
 })
 
 export const deals = app.group({ callers: ['human'] }, (r) => ({
-	// mistake: an attachment's handler returns the rows, not a page of them
 	exportDeals: r.query({ input: OrgInput, output: DealExport, access: { action: 'crm.read', over: 'org' } })
+		// mistake: an attachment's handler returns the rows, not a page of them
 		.handle(async ({ ctx }) => {
 			const page = await ctx.db.within.deals.list({ limit: 100 })
 			return { items: page.items.map((deal) => ({ title: deal.title, stage: deal.stage })) }

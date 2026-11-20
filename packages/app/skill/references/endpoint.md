@@ -2,8 +2,8 @@
 
 An endpoint is declared and handled in one place: `r.query({ input, output, access, … }).handle(async ({ input,
 ctx }) => …)` inside `app.group({ callers }, (r) => ({ … }))` of a slice's `endpoints.ts`. The kit types the handler by
-its endpoint: a field the output does not declare, a handle the access form does not give and a write in a query are
-type errors at their line.
+its endpoint: a missing or mistyped output field, a handle the access form does not give and a write in a query are
+type errors at their line. A returned field the output does not declare is no error: the answer drops it.
 
 ## Schemas
 
@@ -412,6 +412,8 @@ Mount every group in `fabrika.contract.ts`:
 - `fromRow(Schema, row)` turns snake_case columns into the schema's camelCase fields, a `Date` into ISO text, drops a
   column the schema does not declare, and parses the rest. `fromPage(Schema, page)` does it for every row of a
   `list` answer and keeps its `next`: the whole handler of a list is `fromPage(Item, await ….list({ … }))`.
+- A row always reaches an output through `fromRow`: the answer drops every field the output does not declare, so a raw
+  row returned as is loses its snake_case columns silently when the output's camelCase fields are optional.
 - `RowOf<typeof tables, '<table>'>` (`@fabrika/db/tables`) is the row a table's read action reads, for a function that
   takes one: `const toTask = (row: RowOf<typeof tables, 'tasks'>) => fromRow(Task, row)`.
 

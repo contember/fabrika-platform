@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { expectMistakes } from './type-fixtures'
 
 const EXPECTED: Readonly<Record<string, string>> = {
-	'05-handler-returns-undeclared-field.ts': "handler 'api.notes.get' returns fields the contract output does not declare. Return only declared fields",
+	'05-handler-returns-mistyped-field.ts': "Type 'number' is not assignable to type 'string'",
 	'06-handler-for-undeclared-endpoint.ts': "'api.notes.adminDump' is not in the contract. Declare the endpoint in fabrika.contract.ts first.",
 	'07-missing-handler.ts': "Property 'remove' is missing",
 	'08-input-field-removed-by-on.ts': "Property 'id' does not exist on type",

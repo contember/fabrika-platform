@@ -420,15 +420,9 @@ describe('output projection', () => {
 				api: {
 					me: ({ ctx }) => ({ id: ctx.principal.id, label: ctx.principal.label }),
 					notes: {
-						list: ({ ctx }) => {
-							const items: { id: string; title: string }[] = notes.list(ctx.within)
-							return { items }
-						},
-						get: ({ ctx }) => {
-							// Widened without a cast: the row still carries internalScore and workspaceId at runtime.
-							const note: { id: string; title: string } = notes.get(ctx.target)
-							return note
-						},
+						// Each row carries internalScore and workspaceId, which the output does not declare.
+						list: ({ ctx }) => ({ items: notes.list(ctx.within) }),
+						get: ({ ctx }) => notes.get(ctx.target),
 						create: ({ input, ctx }) => view(notes.insert(ctx.target, input.title)),
 						remove: ({ ctx }) => ({ deleted: ctx.target.value }),
 					},
@@ -467,11 +461,7 @@ describe('union projection', () => {
 		deps: () => null,
 		handlers: () => ({
 			api: {
-				measure: () => {
-					// Widened without a cast: the value still carries an undeclared field at runtime.
-					const value: { value: number; count: number } = { value: 1, count: 2, ...{ secret: 'internal' } }
-					return value
-				},
+				measure: () => ({ value: 1, count: 2, secret: 'internal' }),
 				short: () => ({ value: 'abc' }),
 			},
 		}),

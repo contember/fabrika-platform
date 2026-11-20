@@ -4,9 +4,7 @@
 
 import type { EndpointCache, RpcCaller } from '@fabrika/auth-core'
 import type { AnyDbIndex, ReadOnlyUnscoped, Unavailable, UnscopedDeclaration, UnscopedMode } from '@fabrika/db/tables'
-import type { Snake } from '../from-row'
-import type { ExtraKeys, HandlerInput, IsAny } from '../implement/types'
-import type { AttachmentBrand } from './attachment'
+import type { HandlerInput } from '../implement/types'
 import type {
 	CheckedAccess,
 	Declared,
@@ -218,8 +216,6 @@ type HttpField<Q, Acc> = { readonly http?: HttpOption<Q & NoInfer<NotLoose<Q>>> 
  */
 export type OwnPathOption<Acc> = [Acc] extends [PublicAccess] ? { readonly path?: `/${string}` } : unknown
 
-type Returned<F> = F extends (args: never) => infer R ? Awaited<R> : never
-
 /** The last member of a union, in the order the compiler holds it. */
 type LastOf<U> = (U extends unknown ? (member: () => U) => void : never) extends (member: infer I) => void ? I extends () => infer L ? L : never
 	: never
@@ -227,31 +223,6 @@ type LastOf<U> = (U extends unknown ? (member: () => U) => void : never) extends
 /** `'a' | 'b'` → `'a, b'`, for a message. */
 export type ListOf<U extends string, Listed extends string = ''> = [U] extends [never] ? Listed
 	: ListOf<Exclude<U, LastOf<U>>, Listed extends '' ? LastOf<U> & string : `${LastOf<U> & string}, ${Listed}`>
-
-/** The fields, at any depth, that a handler `F` returns and the output `O` does not declare. */
-export type UndeclaredFields<F, O extends Schema> = ExtraKeys<Returned<F>, SchemaInput<O>>
-
-/** An object with a camelCase field, which a database row names in snake_case. */
-type HasCamel<V> = { [K in keyof V]: K extends string ? (Snake<K> extends K ? never : K) : never }[keyof V]
-
-/**
- * A database row returned where the output declares camelCase fields: its snake_case columns, of any value, at the
- * depth the output has them. `.handle` admits it so that `ExactReturn` can name `fromRow` in one line.
- */
-type RowShaped<V> = V extends readonly (infer Item)[] ? readonly RowShaped<Item>[]
-	: V extends object
-		? [HasCamel<V>] extends [never] ? { readonly [K in keyof V]: RowShaped<V[K]> } : { readonly [K in keyof V as Snake<K & string>]: unknown }
-	: V
-
-/**
- * What a kit handler `F` may return: the output, or — only when `F` returns one — a database row of it, which
- * `ExactReturn` refuses with the fix, as it refuses anything but rows from an attachment's handler. Any other mistake
- * keeps the compiler's own message about the output.
- */
-export type HandlerReturn<F, O extends Schema> = [Returned<F>] extends [SchemaInput<O>] ? SchemaInput<O>
-	: [O] extends [AttachmentBrand] ? unknown
-	: [Returned<F>] extends [RowShaped<SchemaInput<O>>] ? RowShaped<SchemaInput<O>>
-	: SchemaInput<O>
 
 /** A kit endpoint's handler, returning `R`; `X` adds what its HTTP shape reads beside the input (`query`). */
 export type KitHandler<In, Ctx, R, X = unknown> = (args: { readonly input: In; readonly ctx: Ctx } & X) => R | Promise<R>
@@ -279,21 +250,6 @@ export interface HttpOption<Q> {
 	readonly cache?: EndpointCache
 }
 
-/**
- * What `.handle` answers: the endpoint, or a message the group refuses at the endpoint's line — when the handler
- * returns a database row where the output is camelCase, anything but rows for an attachment, or, at any depth, a
- * field the output does not declare. A field whose type is an error elsewhere in the handler is not reported again here.
- */
-export type ExactReturn<F, O extends Schema, E> = [Returned<F>] extends [SchemaInput<O>] ? [UndeclaredFields<F, O>] extends [never] ? E
-	: IsAny<UndeclaredFields<F, O>> extends true ? E
-	: Unavailable<`the handler returns ${ListOf<UndeclaredFields<F, O> & string>}, which the output does not declare: return only declared fields`>
-	: [O] extends [AttachmentBrand] ? Unavailable<'an attachment handler returns its rows: an array of its row schema, with nothing around it'>
-	: Unavailable<
-		`the handler returns a database row (${ListOf<
-			UndeclaredFields<F, O> & string
-		>}) where the output is camelCase: map it with fromRow(Schema, row) from @fabrika/app`
-	>
-
 /** A declared, handled endpoint: what a group holds. Its type keeps the declaration and drops the handler's. */
 export interface Endpoint<T extends ProcedureType, I extends InputSchema | null, O extends Schema, Acc, D> extends Procedure<T, I, O, Acc> {
 	readonly declared: D
@@ -302,23 +258,22 @@ export interface Endpoint<T extends ProcedureType, I extends InputSchema | null,
 /**
  * An endpoint before `.handle`: a group refuses it. `Tk` are the kit's token purposes: a signed token field of the input
  * reaches the handler as the claims of its purpose.
- * The parameters are declared invariant, stricter than their structure: measuring that variance through `ExactReturn`
- * exceeds TypeScript 7's instantiation limit (TS2589), and the compiler does not check an `in out` annotation.
  */
 export interface EndpointBuilder<
-	in out T extends ProcedureType,
-	in out I extends InputSchema | null,
-	in out O extends Schema,
-	in out Acc,
-	in out D,
-	in out Ctx,
-	in out X = unknown,
-	in out Tk = Record<never, never>,
+	T extends ProcedureType,
+	I extends InputSchema | null,
+	O extends Schema,
+	Acc,
+	D,
+	Ctx,
+	X = unknown,
+	Tk = Record<never, never>,
 > extends PendingEndpoint {
-	/** The endpoint's handler, typed by its access form and declaration; it may return only the output's fields. */
-	handle<const F extends KitHandler<WithClaims<HandlerInput<I, Acc>, Tk>, Ctx, HandlerReturn<F, O>, X>>(
-		handler: F,
-	): ExactReturn<F, O, Endpoint<T, I, O, Acc, D>>
+	/**
+	 * The endpoint's handler, typed by its access form and declaration. It returns the output's fields; a field the output
+	 * does not declare is dropped from the answer.
+	 */
+	handle(handler: KitHandler<WithClaims<HandlerInput<I, Acc>, Tk>, Ctx, SchemaInput<O>, X>): Endpoint<T, I, O, Acc, D>
 }
 
 /** What every endpoint builder has and no handled endpoint has. */

@@ -911,8 +911,8 @@ ARCHIVE_KEY=dev
 
 An endpoint is declared and handled in one place: `r.query({ input, output, access, … }).handle(async ({ input,
 ctx }) => …)` inside `app.group({ callers }, (r) => ({ … }))` of a slice's `endpoints.ts`. The kit types the handler by
-its endpoint: a field the output does not declare, a handle the access form does not give and a write in a query are
-type errors at their line.
+its endpoint: a missing or mistyped output field, a handle the access form does not give and a write in a query are
+type errors at their line. A returned field the output does not declare is no error: the answer drops it.
 
 ## Schemas
 
@@ -1321,6 +1321,8 @@ Mount every group in `fabrika.contract.ts`:
 - `fromRow(Schema, row)` turns snake_case columns into the schema's camelCase fields, a `Date` into ISO text, drops a
   column the schema does not declare, and parses the rest. `fromPage(Schema, page)` does it for every row of a
   `list` answer and keeps its `next`: the whole handler of a list is `fromPage(Item, await ….list({ … }))`.
+- A row always reaches an output through `fromRow`: the answer drops every field the output does not declare, so a raw
+  row returned as is loses its snake_case columns silently when the output's camelCase fields are optional.
 - `RowOf<typeof tables, '<table>'>` (`@fabrika/db/tables`) is the row a table's read action reads, for a function that
   takes one: `const toTask = (row: RowOf<typeof tables, 'tasks'>) => fromRow(Task, row)`.
 
@@ -1816,13 +1818,14 @@ The hints:
 
 ## Type errors
 
-A kit error lands on the line of the mistake, in one or two lines that name the fix. Read the last line first.
+A kit error lands on the line of the mistake, in one or two lines that name the fix. A handler's return that does not
+fit the output is the exception: a raw row for a camelCase output, or an attachment handler that returns a page instead
+of its rows, prints the whole types over several lines. Read the last line first.
 
 | The compiler says                                                               | Fix                                                                     |
 | ------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
 | `add .handle(…) to tasks.get: every endpoint takes its handler beside it`       | add the handler; when the handler exists, fix the error inside it first |
-| `the handler returns version, which the output does not declare`                | return only the output's fields                                         |
-| `… where the output is camelCase: map it with fromRow(Schema, row)`             | `fromRow(Schema, row)`                                                  |
+| `Property 'dueAt' is missing in type …` where a handler returns a row           | `fromRow(Schema, row)` maps snake_case columns to the output's fields   |
 | `update on tasks needs the action 'tasks.write', and this endpoint holds '…'`   | the endpoint's action, a column write action, or a separate endpoint    |
 | `getForUpdate locks the row, so it runs only in a mutation`                     | `r.mutation`                                                            |
 | `update acts on one object: declare access with on`                             | access `on`, not `in` or `over`                                         |
@@ -1839,6 +1842,10 @@ A kit error lands on the line of the mistake, in one or two lines that name the 
 | `Property 'margin' does not exist on type 'Omit<DealsTable, "margin">'`         | the column has its own read action, which this capability lacks         |
 | `Type 'Date' is not assignable to type 'string'` on a `date` column             | a `YYYY-MM-DD` string                                                   |
 | `Cannot find module '@fabrika/…'` and implicit `any`s everywhere                | `bun install` (at the repository root in a monorepo)                    |
+
+A returned field the output does not declare is no error: the answer drops it. A misnamed optional field is therefore
+dropped without a word, and so is every optional camelCase field of a raw row returned as is. A row always reaches an
+output through `fromRow(Schema, row)`.
 
 ## Runtime answers
 

@@ -116,6 +116,9 @@ type FromFields<Acc> = Acc extends { readonly capabilities: infer C } ? { [N in 
 /** The field one access form reads, for each member of a form typed as a union; `never` for a form that reads none. */
 type FieldRead<F> = F extends { readonly from: infer K extends string } ? K : never
 
+/** An `any` access comes from an error elsewhere in the declaration; the handler then reads the input as parsed. */
+type IsAny<T> = 0 extends 1 & T ? true : false
+
 /**
  * The input as the runtime hands it to the handler: without the `from` fields and frozen under a form that reads one and
  * under every `capabilities` access (`Object.freeze` in `takeField` and `#capabilities`); as parsed under any other.
@@ -222,48 +225,11 @@ export type HandlersOf<C, Snap = unknown> =
 	& JobHandlersOf<C>
 	& ExportHandlersOf<C>
 
-// ── Exactness: no handler outside the contract, no field outside the declared output ────────────
+// ── Exactness: no handler outside the contract ────────────
 
-/** An `any` comes from an error elsewhere in the handler; reporting it here too would only add noise. */
-export type IsAny<T> = 0 extends 1 & T ? true : false
-
-/**
- * Fields of `R` that the output `O` does not declare. Each member of a union `R` is paired with `O` on its own, and a
- * member that fits one branch of a union `O` has none.
- */
-export type ExtraKeys<R, O> = IsAny<R> extends true ? never
-	: R extends unknown ? true extends (O extends unknown ? ([ExtraKeysOf<R, O>] extends [never] ? true : false) : never) ? never
-		: ExtraKeysOf<R, O>
-	: never
-
-/**
- * Optional keys that can hold only `undefined`: TypeScript adds them when it widens object literals of different
- * shapes to one type (`{ x } | { x, y }` read as `{ x, y?: undefined }`). They carry no value, and projection drops them.
- */
-type EmptyKeys<R> = { [K in keyof R]-?: object extends Pick<R, K> ? ([Exclude<R[K], undefined>] extends [never] ? K : never) : never }[keyof R]
-
-type ExtraKeysOf<R, O> = R extends readonly (infer RE)[] ? (O extends readonly (infer OE)[] ? ExtraKeys<RE, OE> : never)
-	: R extends object
-		? O extends object ? Exclude<keyof R, keyof O | EmptyKeys<R>> | { [Q in keyof R & keyof O]: ExtraKeys<R[Q], O[Q]> }[keyof R & keyof O]
-		: never
-	: never
-
-type Returned<F> = F extends (args: never) => infer R ? Awaited<R> : never
-
-type Undeclared<F, Expected> = ExtraKeys<Returned<F>, Returned<Expected>>
-
-/** No undeclared field, or a field whose type is an error reported where it arose. */
-type NoneOrError<U> = [U] extends [never] ? true : IsAny<U>
-
+/** Each handler of the tree names an endpoint of the contract. */
 type ExactTree<H, E, Path extends string> = {
-	readonly [K in keyof H]: K extends keyof E ? E[K] extends (args: never) => unknown ? NoneOrError<Undeclared<H[K], E[K]>> extends true ? H[K]
-			: {
-				readonly [_ in `handler '${Path}${K & string}' returns fields the contract output does not declare. Return only declared fields`]: Undeclared<
-					H[K],
-					E[K]
-				>
-			}
-		: ExactTree<H[K], E[K], `${Path}${K & string}.`>
+	readonly [K in keyof H]: K extends keyof E ? E[K] extends (args: never) => unknown ? H[K] : ExactTree<H[K], E[K], `${Path}${K & string}.`>
 		: `'${Path}${K & string}' is not in the contract. Declare the endpoint in fabrika.contract.ts first.`
 }
 
