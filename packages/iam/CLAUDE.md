@@ -565,7 +565,9 @@ fails if that stops being true — it is the guard, not documentation of one.
   every page it showed before. All of them pick words only: `principals.locale` is written alone (`setLocale`),
   outside any principal's lock order and without an audit record. Why the person's language is theirs on the whole
   installation: ADR-0077.
-  `messageTemplateFor` (`src/messages.ts`) is the one place a message's template is chosen. A refused browser-facing request answers
+  `messageTemplateFor` (`src/messages.ts`) is the one place a message's template is chosen. The e-mails' words and
+  their rendering live in `@fabrika/auth-core` (`iamMailCatalog`, `iamMessageTemplate`), which `src/catalog/` spreads
+  into each language's catalog, so `fabrika app dev`'s stand-in IAM shows exactly the mail IAM sends. A refused browser-facing request answers
   `authFailurePage` with a typed `AuthFailure`, in the request's language where an application is known before the
   refusal; a failure before any application is known, logout and the terminal pages speak the reader's language
   (`readerLocale`: the request's hints, else the default). The account question speaks the signed-in principal's
@@ -602,7 +604,7 @@ fails if that stops being true — it is the guard, not documentation of one.
   for one that names `{{appUrl}}` while the app has no registered return origin (`landingUrl`). IAM builds the action
   URL; the text carries every value as is, the subject with control characters collapsed and cut to the sender's
   `MAX_EMAIL_SUBJECT_LENGTH`. Without `html` the HTML part is IAM's: the escaped text as paragraphs and the catalog's
-  button. With it, `renderHtml` writes each token, never the source: the subset's elements, the literal text (no `<`,
+  button. With it, `renderHtml` (`@fabrika/auth-core`'s `iam-mail.ts`) writes each token, never the source: the subset's elements, the literal text (no `<`,
   no bare `&`), every value escaped and each `href` the escaped URL it names. Never render an application's HTML by
   string substitution over its source, and never log a template's body. A message or a language without a row is the
   catalog's.

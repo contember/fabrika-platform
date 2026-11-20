@@ -1,6 +1,5 @@
-import { escapeHtml } from '../html'
-import type { Catalog, RenderedMessage } from './index'
-import { quotedNote } from './quoted-note'
+import { iamMailCatalog } from '@fabrika/auth-core'
+import type { Catalog } from './index'
 
 export const uk: Catalog = {
 	pages: {
@@ -147,47 +146,8 @@ export const uk: Catalog = {
 				'Це запрошення недійсне, застаріле, скасоване або вже використане. Якщо ви його ще не прийняли, попросіть того, хто вас запросив, надіслати його ще раз.',
 		},
 	},
-	messages: {
-		invitation: ({ appName, role, scope, inviterLabel, companyLabel, message, actionUrl, acceptance }) => {
-			const what = `до застосунку ${appName} з роллю ${role} (${scope})${companyLabel === '' ? '' : `, організація: ${companyLabel}`}`
-			const note = message === '' ? null : { intro: `${inviterLabel} пише:`, message }
-			const accept = {
-				create:
-					'Щоб прийняти запрошення, відкрийте це одноразове посилання. Якщо у вас тут уже є обліковий запис, спочатку увійдіть із цією адресою; якщо немає, ви створите пароль.',
-				sign_in: 'Щоб прийняти запрошення, відкрийте це одноразове посилання й увійдіть із цією адресою.',
-				no_account:
-					'Для цієї адреси тут ще немає облікового запису, і це запрошення його не створює. Попросіть того, хто вас запросив, створити його, а потім відкрийте це одноразове посилання й увійдіть, щоб прийняти запрошення.',
-			}[acceptance]
-			return {
-				subject: `Запрошення до застосунку ${appName}`,
-				text: [`Вас запрошено ${what}.`, ...(note === null ? [] : [note.intro, note.message]), accept, actionUrl, IGNORE_INVITATION].join('\n\n'),
-				html: `<p>Вас запрошено ${escapeHtml(what)}.</p>${quotedNote(note)}<p>${escapeHtml(accept)}</p><p><a href="${
-					escapeHtml(actionUrl)
-				}">Прийняти запрошення</a></p><p>${escapeHtml(IGNORE_INVITATION)}</p>`,
-			}
-		},
-		enrollment: ({ appName, actionUrl }) =>
-			passwordMessage(
-				appName === null ? 'Створення пароля' : `Створення пароля для застосунку ${appName}`,
-				'створити пароль',
-				actionUrl,
-			),
-		reset: ({ appName, actionUrl }) =>
-			passwordMessage(
-				appName === null ? 'Відновлення пароля' : `Відновлення пароля для застосунку ${appName}`,
-				'відновити пароль',
-				actionUrl,
-			),
-	},
-	applicationMail: {
-		button: { invitation: 'Прийняти запрошення', enrollment: 'Створити пароль', reset: 'Відновити пароль' },
-		expiry: (expiresAt) => `${expiryFormat.format(new Date(expiresAt * 1000))} UTC`,
-	},
+	...iamMailCatalog('uk'),
 }
-
-const IGNORE_INVITATION = 'Якщо ви не очікували цього запрошення, просто проігноруйте цей лист.'
-
-const expiryFormat = new Intl.DateTimeFormat('uk', { dateStyle: 'long', timeStyle: 'short', timeZone: 'UTC' })
 
 const plural = new Intl.PluralRules('uk')
 
@@ -200,15 +160,5 @@ function characters(count: number): string {
 			return 'символи'
 		default:
 			return 'символів'
-	}
-}
-
-function passwordMessage(subject: string, action: string, actionUrl: string): RenderedMessage {
-	return {
-		subject,
-		text: `Скористайтеся цим одноразовим посиланням, щоб ${action}:\n\n${actionUrl}\n\nЯкщо ви цього не запитували, просто проігноруйте цей лист.`,
-		html: `<p>Скористайтеся цим одноразовим посиланням, щоб ${escapeHtml(action)}:</p><p><a href="${escapeHtml(actionUrl)}">${
-			escapeHtml(subject)
-		}</a></p><p>Якщо ви цього не запитували, просто проігноруйте цей лист.</p>`,
 	}
 }

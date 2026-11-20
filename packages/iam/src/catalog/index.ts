@@ -2,12 +2,14 @@
 // or the template that inserts it escapes it. `catalogs` must name every locale and each one every key, so a missing
 // translation fails the typecheck.
 
-import type { Locale, MessageKind } from '@fabrika/auth-core'
+import type { IamMailCatalog, Locale } from '@fabrika/auth-core'
 import type { AuthFailure } from '../auth/failure'
 import type { PasswordProblem } from '../password-policy'
 import { cs } from './cs'
 import { en } from './en'
 import { uk } from './uk'
+
+export type { InvitationAcceptance, MessageValues, RenderedMessage } from '@fabrika/auth-core'
 
 export interface PageText {
 	/** The words before fabrika's mark and name in the footer of every page: "Runs on [mark] fabrika". */
@@ -110,67 +112,9 @@ export interface PageText {
 	}
 }
 
-/** A rendered e-mail: the subject and both bodies, from the same values. */
-export interface RenderedMessage {
-	readonly subject: string
-	readonly text: string
-	readonly html: string
-}
-
-/**
- * The closed set of values each IAM message is rendered from. Every value is plain text; a template escapes it. IAM
- * builds the action URL itself, and a template places it. `expiresAt` is the link's expiry in seconds since the epoch.
- */
-export interface MessageValues {
-	readonly invitation: {
-		readonly appName: string
-		readonly role: string
-		readonly scope: string
-		readonly recipient: string
-		readonly inviterLabel: string
-		/** The invited person's company, as the inviting application names it; empty when the invitation names none. */
-		readonly companyLabel: string
-		/** The inviter's personal message; empty when the invitation carries none. */
-		readonly message: string
-		readonly actionUrl: string
-		readonly expiresAt: number
-		/** How the mailbox's owner accepts, as IAM can tell when it sends; it picks IAM's words, and is no placeholder. */
-		readonly acceptance: InvitationAcceptance
-	}
-	readonly enrollment: PasswordActionValues
-	readonly reset: PasswordActionValues
-}
-
-/**
- * How the owner of an invitation's mailbox accepts it. `create`: no principal holds the mailbox and accepting creates
- * one with the password its owner chooses (ADR-0051). `sign_in`: a principal holds it, or single sign-on would admit
- * it, so its owner signs in and accepts. `no_account`: neither, so the owner cannot accept until someone gives the
- * mailbox an account.
- */
-export type InvitationAcceptance = 'create' | 'sign_in' | 'no_account'
-
-export interface PasswordActionValues {
-	/** The application the action returns to; `null` for an action on the installation itself. */
-	readonly appName: string | null
-	readonly recipient: string
-	readonly actionUrl: string
-	readonly expiresAt: number
-}
-
-/** One template per message. IAM's catalog supplies a default set per language. */
-export type MessageTemplates = { readonly [K in MessageKind]: (values: MessageValues[K]) => RenderedMessage }
-
-/** IAM's words around an application's own wording of a message: the HTML part's button and the expiry. */
-export interface ApplicationMailText {
-	readonly button: { readonly [K in MessageKind]: string }
-	/** `expiresAt` in seconds since the epoch, as the `{{expiry}}` placeholder shows it. */
-	readonly expiry: (expiresAt: number) => string
-}
-
-export interface Catalog {
+/** IAM's words: its pages here, and its e-mails as `@fabrika/auth-core` words them (`iamMailCatalog`). */
+export interface Catalog extends IamMailCatalog {
 	readonly pages: PageText
-	readonly messages: MessageTemplates
-	readonly applicationMail: ApplicationMailText
 }
 
 const catalogs: { readonly [L in Locale]: Catalog } = { en, cs, uk }

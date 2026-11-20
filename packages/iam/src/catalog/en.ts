@@ -1,6 +1,5 @@
-import { escapeHtml } from '../html'
-import type { Catalog, RenderedMessage } from './index'
-import { quotedNote } from './quoted-note'
+import { iamMailCatalog } from '@fabrika/auth-core'
+import type { Catalog } from './index'
 
 export const en: Catalog = {
 	pages: {
@@ -145,55 +144,5 @@ export const en: Catalog = {
 				'This invitation is invalid, expired, cancelled or already used. If you have not accepted it yet, ask the person who invited you to send it again.',
 		},
 	},
-	messages: {
-		invitation: ({ appName, role, scope, inviterLabel, companyLabel, message, actionUrl, acceptance }) => {
-			const what = `${scope} of ${appName} as ${role}${companyLabel === '' ? '' : `, for ${companyLabel}`}`
-			const note = message === '' ? null : { intro: `${inviterLabel} writes:`, message }
-			const accept = {
-				create: 'Open this one-time link to accept. With an account here, sign in with this address first; without one, you choose a password.',
-				sign_in: 'Open this one-time link and sign in with this address to accept.',
-				no_account:
-					'There is no account for this address here yet, and this invitation does not create one. Ask the person who invited you to have one set up, then open this one-time link and sign in to accept.',
-			}[acceptance]
-			return {
-				subject: `You are invited to ${appName}`,
-				text: [`You are invited to join a ${what}.`, ...(note === null ? [] : [note.intro, note.message]), accept, actionUrl, IGNORE_INVITATION].join(
-					'\n\n',
-				),
-				html: `<p>You are invited to join a ${escapeHtml(what)}.</p>${quotedNote(note)}<p>${escapeHtml(accept)}</p><p><a href="${
-					escapeHtml(actionUrl)
-				}">Accept the invitation</a></p><p>${escapeHtml(IGNORE_INVITATION)}</p>`,
-			}
-		},
-		enrollment: ({ appName, actionUrl }) =>
-			passwordMessage(
-				appName === null ? 'Set your Fabrika password' : `Set your password for ${appName}`,
-				appName === null ? 'set your Fabrika password' : `set your password for ${appName}`,
-				actionUrl,
-			),
-		reset: ({ appName, actionUrl }) =>
-			passwordMessage(
-				appName === null ? 'Reset your Fabrika password' : `Reset your password for ${appName}`,
-				appName === null ? 'reset your Fabrika password' : `reset your password for ${appName}`,
-				actionUrl,
-			),
-	},
-	applicationMail: {
-		button: { invitation: 'Accept the invitation', enrollment: 'Set your password', reset: 'Reset your password' },
-		expiry: (expiresAt) => `${expiryFormat.format(new Date(expiresAt * 1000))} UTC`,
-	},
-}
-
-const IGNORE_INVITATION = 'If you did not expect this, you can ignore this email.'
-
-const expiryFormat = new Intl.DateTimeFormat('en-GB', { dateStyle: 'long', timeStyle: 'short', timeZone: 'UTC' })
-
-function passwordMessage(subject: string, action: string, actionUrl: string): RenderedMessage {
-	return {
-		subject,
-		text: `Use this one-time link to ${action}:\n\n${actionUrl}\n\nIf you did not request this, you can ignore this email.`,
-		html: `<p>Use this one-time link to ${escapeHtml(action)}:</p><p><a href="${escapeHtml(actionUrl)}">${
-			escapeHtml(subject)
-		}</a></p><p>If you did not request this, you can ignore this email.</p>`,
-	}
+	...iamMailCatalog('en'),
 }
