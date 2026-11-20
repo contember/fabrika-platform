@@ -18,7 +18,8 @@ container, with a skip turned into a failure. Effort M; it needs live Zerops fac
 Postgres-backed tests` and registers no test, so the step passes. An end-to-end stage deploy of the Notes example
 skipped four such files.
 
-The deploy's init commands migrate and check the schema only; the framework generates no test files any more, and
+The deploy's init commands migrate and check the schema (and refresh ClamAV's signatures for a scanning application);
+no test runs there. The framework generates no test files any more, and
 `fabrika db test-isolation` runs nothing. So the author's own Postgres-backed tests (for example `examples/crm`'s
 `overdue.test.ts` and `deals.test.ts`) and its leak sweep (`examples/crm/src/__tests__/leak-sweep.test.ts`) run
 nowhere on the platform.

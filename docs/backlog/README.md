@@ -49,6 +49,7 @@ rest of custom domains, a client address on a dedicated IPv4, a release and reco
 - [103](103-runs-keeps-an-unused-pending-access-column.md) — Nothing reads or writes `runs.pending_access_json` since contractless applications are refused; a later migration drops it.
 - [116](116-verify-the-paved-road-zerops-facts-on-a-real-account.md) — New roles on an HA service's direct port and the unmeasured half of ClamAV (build `freshclam`, a scan run, peak memory) need one live sitting.
 - [117](117-an-application-test-cannot-inject-a-database-fault.md) — The checker refuses Bun's SQL and `process.env` in tests too; only the job clock can fail an attempt.
+- [122](122-a-generated-case-cannot-seed-a-child-rows-state.md) — The leak sweep cannot seed a child row's state, and a mutation's 409 passes without a hint.
 - [135](135-deleting-a-zerops-secret-named-like-a-descriptor-variable-is-forbidden.md) — A Zerops secret named like a `run.envVariables` entry can fail to delete with `userDataDeleteForbidden`.
 - [154](154-an-endpoint-reads-its-own-target-only-under-an-action-its-table-names.md) — The skill's "reads its own target, whatever its action" holds only for actions the table names.
 - [155](155-creating-a-top-level-value-makes-the-creator-its-member.md) — `creates` makes the creator a member; staff cannot create a value without joining it.
@@ -141,6 +142,9 @@ rest of custom domains, a client address on a dedicated IPv4, a release and reco
 - [260](260-an-operator-cannot-remove-an-authors-sandbox.md): An operator cannot delete a dev environment or app while an author keeps a sandbox; the 409 names an owner-only tool.
 - [261](261-a-dev-schema-reconcile-revokes-keys-other-sandboxes-hold.md): IAM's schema reconcile revokes keys that other sandboxes of a dev environment still get handed as fresh.
 - [262](262-report-a-replaced-archived-sandbox-and-the-box-operator-steps.md): `ensure` replaces an `ARCHIVED` sandbox without reporting the lost database, and the Box release's operator steps (one reload, a base rebuild) are undocumented.
+- [263](263-rows-fixture-review-findings.md): The leak sweep cannot seed a named row of an `in` endpoint whose table allows one row per target.
+- [264](264-a-case-writes-into-a-stored-scope-row.md): A leak sweep case writes into a scope row a migration wrote, and nothing restores it.
+- [265](265-known-scope-values-collide-in-a-container-or-a-shared-from-field.md): The leak sweep reports a false leak when both known scope values lie in one container.
 - [266](266-fleet-wide-framework-upgrades.md): For each application below the platform's framework release, an upgrade workspace, `run_checks` in a dev sandbox and a pull request.
 - [267](267-every-application-as-an-mcp-server.md): The proxy serves `/mcp` on an application host with tools from the contract's opted-in procedures; an ADR on application data reaching external models comes first.
 - [268](268-opice-journeys-as-a-stage-gate-and-production-checks.md): opice browser journeys gate a stage run and run against production as a health check; the browser runtime per provider is undecided.
@@ -164,5 +168,6 @@ rest of custom domains, a client address on a dedicated IPv4, a release and reco
 - [286](286-access-view-statements-without-a-test.md): Aggregates, queue claims, deletes, moves and unowned-node inserts through an access view have no test.
 - [287](287-an-attachments-row-schema-is-not-compared-with-its-approved-columns.md): An attachment's cells are validated by the evaluated row schema, not the approved columns.
 - [288](288-reader-input-discovery-parses-every-held-module-each-round.md): Control's import discovery parses every held module in each round, so a deep import chain can exceed the Worker's CPU limit.
+- [289](289-caller-rows-reach-only-the-global-case.md): The leak sweep's callers carry no caller rows and no principal-shaped id, so a handler that needs a caller's record answers 403.
 - [290](290-verify-the-brevo-email-adapter-on-a-live-account.md): The Brevo email adapter is verified only against a stubbed `fetch`; its idempotency key, text-only body, unsubscribe headers and refusals wait for a live account.
 - [10](10-app-scope-secrets-on-zerops.md) — Control refuses an `app`-scoped secret on Zerops today; record that as the decision, or replicate per service.
