@@ -12,7 +12,8 @@ import { type IsolationWorlds, type SampleValue, tableProbe, type TestDatabase }
 import { MemoryFileObjects } from '@fabrika/platform/testing'
 import { z } from 'zod/v4'
 import { createClient } from '../client/contract'
-import { type AnyContract, defineContract, type FileKind } from '../contract/define'
+import { type SpaAccessDeclaration, SURFACE_SECTIONS } from '../contract/declaration'
+import { type AnyContract, defineContract, type FileKind, type SpaMount } from '../contract/define'
 import { implement } from '../implement/implement'
 import type { TestGrant } from './caller'
 import { testKit } from './kit'
@@ -176,6 +177,25 @@ function fileKindsOf(contract: AnyContract): Readonly<Record<string, FileKind>> 
 	return Object.fromEntries(Object.entries(contract.surface.files ?? {}).filter((entry): entry is [string, FileKind] => entry[1].kind === 'file-kind'))
 }
 
+/** The SPA mounts of `contract`: each probe mounts them too, so the page its vocabulary names (a terminal's) is served. */
+function spaMountsOf(contract: AnyContract): Readonly<Record<string, SpaMount<SpaAccessDeclaration>>> {
+	const sections: readonly string[] = SURFACE_SECTIONS
+	return Object.fromEntries(
+		Object.entries(contract.surface).filter((entry): entry is [string, SpaMount<SpaAccessDeclaration>] =>
+			!sections.includes(entry[0]) && isSpaMount(entry[1])
+		),
+	)
+}
+
+function isSpaMount(value: unknown): boolean {
+	return typeof value === 'object' && value !== null && 'kind' in value && value.kind === 'spa'
+}
+
+/** What every probe keeps of `contract` beside its own `probe` mount: its file kinds and its SPA mounts. */
+function keptOf(contract: AnyContract) {
+	return { ...spaMountsOf(contract), files: fileKindsOf(contract) }
+}
+
 /** A write's outcome: 200 when it ran, the status otherwise. */
 async function wrote(run: () => Promise<unknown>): Promise<IsolationOutcome> {
 	return { status: await statusOf(run()) }
@@ -184,7 +204,7 @@ async function wrote(run: () => Promise<unknown>): Promise<IsolationOutcome> {
 function dimensionProbe(contract: AnyContract, dimension: string, list: string, actions: ProbeActions) {
 	const { read } = actions
 	return defineContract(contract.vocabulary, (c) => ({
-		files: fileKindsOf(contract),
+		...keptOf(contract),
 		probe: c.rpc('/probe', { callers: ['human'] }, {
 			get: c.query({ input: ById, output: Columns, access: { action: read, on: dimension, from: 'id' } }),
 			list: c.query({ output: Keys, access: { action: read, over: list } }),
@@ -201,7 +221,7 @@ function dimensionProbe(contract: AnyContract, dimension: string, list: string, 
 function childProbe(contract: AnyContract, parent: string, list: string, actions: ProbeActions) {
 	const { read } = actions
 	return defineContract(contract.vocabulary, (c) => ({
-		files: fileKindsOf(contract),
+		...keptOf(contract),
 		probe: c.rpc('/probe', { callers: ['human'] }, {
 			get: c.query({ input: ChildByKey, output: Columns, access: { action: read, on: parent, from: 'parent' } }),
 			list: c.query({ output: Keys, access: { action: read, over: list } }),
@@ -224,7 +244,7 @@ function otherAction(actions: ProbeActions): string | null {
 function appProbe(contract: AnyContract, actions: ProbeActions) {
 	const { read } = actions
 	return defineContract(contract.vocabulary, (c) => ({
-		files: fileKindsOf(contract),
+		...keptOf(contract),
 		probe: c.rpc('/probe', { callers: ['human'] }, {
 			get: c.query({ input: ById, output: Columns, access: { action: read, app: true } }),
 			list: c.query({ output: Keys, access: { action: read, app: true } }),
@@ -240,7 +260,7 @@ function appProbe(contract: AnyContract, actions: ProbeActions) {
 /** Scoped sites over an application table: `over` the vocabulary's first dimension, of its read action and of another. */
 function scopedAppProbe(contract: AnyContract, actions: ProbeActions, dimension: string) {
 	return defineContract(contract.vocabulary, (c) => ({
-		files: fileKindsOf(contract),
+		...keptOf(contract),
 		probe: c.rpc('/probe', { callers: ['human'] }, {
 			list: c.query({ output: Keys, access: { action: actions.read, over: dimension } }),
 			listWithOther: c.query({ output: Refused, access: { action: otherAction(actions) ?? actions.read, over: dimension } }),
@@ -416,7 +436,7 @@ export function appPolicyIsolationKit<C extends AnyContract, DB, P>(
 /** `app` endpoints of one action over a dimension or child table: what its `appRead` and `appCount` reach. */
 function appReachProbe(contract: AnyContract, action: string) {
 	return defineContract(contract.vocabulary, (c) => ({
-		files: fileKindsOf(contract),
+		...keptOf(contract),
 		probe: c.rpc('/probe', { callers: ['human'] }, {
 			list: c.query({ output: Keys, access: { action, app: true } }),
 			count: c.query({ output: Count, access: { action, app: true } }),
