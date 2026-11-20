@@ -642,16 +642,17 @@ describe('the stand-in answers an invitation as IAM does: the open one again, a 
 		const membershipOf = (overrides: Partial<Pick<typeof artifact, 'locale' | 'displayName' | 'mail'>> = {}) =>
 			kitMembership(
 				{ ...artifact, ...overrides },
-				callersOf([{ caller: owner, memberships: [{ role: 'owner', scope: ACME }] }]),
+				callersOf([{ caller: owner, memberships: [{ role: 'owner', scope: ACME }] }, { caller: coOwner, memberships: [{ role: 'owner', scope: ACME }] }]),
 			)
 		const assign = async (
 			membership: ReturnType<typeof membershipOf>,
 			email: string,
 			invitation: { readonly locale?: 'uk' | 'cs' | 'en'; readonly message?: string; readonly label?: string; readonly resend?: boolean } = {},
+			sender = owner,
 		) => {
 			const invited = await membership.rpc.assignMember({
-				...as(owner),
-				delegation: await delegation(membership, owner, 'api.members.invite'),
+				...as(sender),
+				delegation: await delegation(membership, sender, 'api.members.invite'),
 				scope: ACME,
 				role: 'editor',
 				member: { email },
@@ -705,6 +706,16 @@ describe('the stand-in answers an invitation as IAM does: the open one again, a 
 			expect(membership.invitations().find((sent) => sent.id === next)?.mailLocale).toBe('uk')
 			await assign(membership, 'ann@example.test', { locale: 'en', resend: true })
 			expect(membership.invitations().find((sent) => sent.id === next)?.mailLocale).toBe('en')
+		})
+
+		test('a resend keeps the message it names none for, and names the member who sent it again, as IAM names its caller', async () => {
+			const membership = membershipOf()
+			const id = await assign(membership, 'ann@example.test', { message: 'Welcome aboard' })
+			expect(membership.invitationMail(id, ACCEPT)?.text).toContain('owner@notes.test writes:')
+			await assign(membership, 'ann@example.test', { resend: true }, coOwner)
+			const resent = membership.invitationMail(id, ACCEPT)?.text
+			expect(resent).toContain('co-owner@notes.test writes:')
+			expect(resent).toContain('Welcome aboard')
 		})
 	})
 

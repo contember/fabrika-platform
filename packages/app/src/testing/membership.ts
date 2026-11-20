@@ -194,7 +194,7 @@ interface KitInvitation {
 	/** The principal that opened it, whose authority IAM checks again at acceptance; `null` for a seeded one. */
 	readonly inviter: string | null
 	readonly locale: Locale | null
-	/** The inviter's label, as its e-mail names them; empty for a seeded one. */
+	/** The label of the member who sent it last, as its e-mail names them; empty for a seeded one never resent. */
 	readonly inviterLabel: string
 	readonly companyLabel: string | null
 	readonly message: string | null
@@ -551,8 +551,11 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 		return invitation
 	}
 
-	/** As IAM, a resend that names a language, a label or a message replaces the stored one; one that names none keeps it. */
-	const resent = (invitation: KitInvitation, options: InvitationOptions): KitInvitation => {
+	/**
+	 * As IAM, a resend that names a language, a label or a message replaces the stored one; one that names none keeps it.
+	 * Its e-mail names the member who sent it again, as IAM's names its caller.
+	 */
+	const resent = (invitation: KitInvitation, sender: TestCaller, options: InvitationOptions): KitInvitation => {
 		const sentAt = now()
 		const locale = options.locale ?? invitation.locale
 		return {
@@ -560,6 +563,7 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 			expiresAt: sentAt + INVITATION_TTL_SECONDS,
 			sentAt,
 			locale,
+			inviterLabel: sender.label ?? '',
 			companyLabel: nonEmpty(options.label) ?? invitation.companyLabel,
 			message: nonEmpty(options.message) ?? invitation.message,
 			...sendFacts(invitation.email, invitation.role, locale),
@@ -679,7 +683,7 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 		const invitation = open === undefined
 			? openNew(input.scope, input.role, email, caller, input.invitation)
 			: input.invitation?.resend === true
-			? resent(open, input.invitation)
+			? resent(open, caller, input.invitation)
 			: open
 		invitations.set(invitation.id, invitation)
 		asked.push({
