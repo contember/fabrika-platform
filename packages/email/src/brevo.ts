@@ -9,6 +9,7 @@ import { base64Of } from './content.js'
 import { EmailDeliveryError, type EmailMessage, type EmailSenderCapabilities } from './email.js'
 import { credentialVariable, type HttpEmailRequest, HttpEmailSender, type HttpEmailSenderOptions, isCredential } from './http-sender.js'
 import type { ProviderResponse } from './http.js'
+import { extensionOf } from './validation.js'
 
 const BREVO_SEND_URL = 'https://api.brevo.com/v3/smtp/email'
 const brevoSuccessSchema = z.object({ messageId: z.string() })
@@ -25,7 +26,7 @@ const BREVO_MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
  * The extensions Brevo takes an attachment with, from its API reference. It takes no media type: it derives it from the
  * file name, so the adapter refuses any other file before the request instead of losing the message to a 400.
  */
-export const BREVO_ATTACHMENT_EXTENSIONS: ReadonlySet<string> = new Set(
+const BREVO_ATTACHMENT_EXTENSIONS: ReadonlySet<string> = new Set(
 	('xlsx xls ods docx docm doc csv pdf txt gif jpg jpeg png tif tiff rtf bmp cgm css shtml html htm zip xml ppt pptx tar ez ics mobi msg pub '
 		+ 'eps odt mp3 m4a m4v wma ogg flac wav aif aifc aiff mp4 mov avi mkv mpeg mpg wmv pkpass xlsm').split(' '),
 )
@@ -59,9 +60,9 @@ export class BrevoEmailSender extends HttpEmailSender {
 		idempotent: false,
 		confirmation: 'sync',
 		maxBatch: 1,
-		// Brevo takes no standard header in `headers`, so `List-Unsubscribe` is not known to reach the recipient, and
-		// without it no broadcast message is sent.
 		maxAttachmentBytes: BREVO_MAX_ATTACHMENT_BYTES,
+		// No `listUnsubscribe`, and so no `broadcast`: Brevo takes no standard header in `headers`, so `List-Unsubscribe`
+		// is not known to reach the recipient.
 	}
 	readonly #apiKey: string
 
@@ -115,6 +116,7 @@ export class BrevoEmailSender extends HttpEmailSender {
 		if (status === 402 || (code !== undefined && NO_CREDITS_CODES.has(code))) {
 			return new EmailDeliveryError(`Brevo account has no credits left (${status})`, { code: 'quota_exceeded', httpStatus: status })
 		}
+		// A 429 or a 5xx keeps the meaning of its status whatever its code.
 		if (code === undefined || status >= 500 || status === 429) return undefined
 		if (DUPLICATE_CODES.has(code)) {
 			// Brevo took a request under this key, or an identical one, and does not say whether its content matched.
@@ -134,7 +136,7 @@ export class BrevoEmailSender extends HttpEmailSender {
  * The message's key as Brevo takes it, a UUID: the first 16 bytes of its SHA-256 with the version 4 and variant bits
  * set. One key is always one UUID, so a retry sends the same one; Brevo recommends a version 4 UUID.
  */
-export async function brevoIdempotencyKey(key: string): Promise<string> {
+async function brevoIdempotencyKey(key: string): Promise<string> {
 	const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(key))).slice(0, 16)
 	bytes[6] = ((bytes[6] ?? 0) & 0x0f) | 0x40
 	bytes[8] = ((bytes[8] ?? 0) & 0x3f) | 0x80
@@ -146,12 +148,6 @@ export async function brevoIdempotencyKey(key: string): Promise<string> {
 export function brevoHtmlOfText(text: string): string {
 	const escaped = text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#39;')
 	return escaped.replace(/\r\n|\r|\n/g, '<br>\n')
-}
-
-/** The extension after the last dot, lowercase; empty without one. */
-function extensionOf(filename: string): string {
-	const dot = filename.lastIndexOf('.')
-	return dot < 0 ? '' : filename.slice(dot + 1).toLowerCase()
 }
 
 const brevoVariablesSchema = z.object({ FABRIKA_EMAIL_BREVO_API_KEY: credentialVariable })

@@ -228,14 +228,12 @@ describe('a provider newer than the application', () => {
 		for (const [provider, since] of Object.entries(builtinEmailProviderSince)) {
 			if (since === null) continue
 			const mail: InstallationMail = { kind: 'transport', transport: { variables: { FABRIKA_EMAIL_PROVIDER: provider }, secretNames: new Set() } }
-			const held = ((): boolean => {
-				try {
-					installationMailEnvironment(mail, needs, manifest.version)
-					return true
-				} catch {
-					return false
-				}
-			})()
+			let held = true
+			try {
+				installationMailEnvironment(mail, needs, manifest.version)
+			} catch {
+				held = false
+			}
 			if (!held) expect([provider, since]).toEqual([provider, next === null ? manifest.version : `${next[1]}${Number(next[2]) + 1}`])
 		}
 	})

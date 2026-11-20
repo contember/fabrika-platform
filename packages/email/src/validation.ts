@@ -107,7 +107,7 @@ export function validateEmailBodies(message: EmailMessage, capabilities: EmailSe
 }
 
 /** The extension after the last dot, lowercase; empty without one. */
-function extensionOf(filename: string): string {
+export function extensionOf(filename: string): string {
 	const dot = filename.lastIndexOf('.')
 	return dot < 0 ? '' : filename.slice(dot + 1).toLowerCase()
 }

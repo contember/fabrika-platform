@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { z } from 'zod'
-import { brevoEmailProvider, BrevoEmailSender, brevoHtmlOfText, brevoIdempotencyKey } from '../brevo.js'
+import { brevoEmailProvider, BrevoEmailSender, brevoHtmlOfText } from '../brevo.js'
 import { readEmailTransportConfig } from '../config.js'
 import { EmailDeliveryError, type EmailFetch, mayRetryDelivery } from '../email.js'
 
@@ -28,6 +28,10 @@ function capturing(response: () => Response): { fetch: EmailFetch; requests: Req
 
 const accepted = (): Response => Response.json({ messageId: '<brevo-1@smtp-relay.mailin.fr>' }, { status: 201 })
 
+/** A sender whose every request is answered by `response`. */
+const answering = (response: () => Response): BrevoEmailSender =>
+	new BrevoEmailSender({ apiKey: 'xkeysib-secret', from, fetch: capturing(response).fetch })
+
 describe('BrevoEmailSender', () => {
 	test('sends the documented request with the API key and the key as a UUID', async () => {
 		const { fetch, requests } = capturing(accepted)
@@ -51,16 +55,23 @@ describe('BrevoEmailSender', () => {
 			htmlContent: '<p>Ready.</p>',
 			textContent: 'Your account is ready.',
 			replyTo: { email: 'help@example.test' },
-			headers: { idempotencyKey: await brevoIdempotencyKey('welcome/user-1') },
+			headers: { idempotencyKey: expect.stringMatching(UUID) },
 		})
 	})
 
 	test('one key is always one UUID, and another key another', async () => {
-		const first = await brevoIdempotencyKey('welcome/user-1')
-		expect(first).toMatch(UUID)
-		expect(await brevoIdempotencyKey('welcome/user-1')).toBe(first)
-		expect(await brevoIdempotencyKey('welcome/user-2')).not.toBe(first)
-		expect(await brevoIdempotencyKey('x'.repeat(256))).toMatch(UUID)
+		const { fetch, requests } = capturing(accepted)
+		const sender = new BrevoEmailSender({ apiKey: 'xkeysib-secret', from, fetch })
+		for (const idempotencyKey of ['welcome/user-1', 'welcome/user-1', 'welcome/user-2', 'x'.repeat(256)]) {
+			await sender.send({ ...message, idempotencyKey }, signal)
+		}
+		const bodySchema = z.object({ headers: z.object({ idempotencyKey: z.string().regex(UUID) }) })
+		const [first, retry, other, long] = await Promise.all(
+			requests.map(async (request) => bodySchema.parse(await request.json()).headers.idempotencyKey),
+		)
+		expect(retry).toBe(first)
+		expect(other).not.toBe(first)
+		expect(long).not.toBe(first)
 	})
 
 	test('a text-only message carries its text, escaped, as the HTML body Brevo requires', async () => {
@@ -84,10 +95,12 @@ describe('BrevoEmailSender', () => {
 		const { fetch, requests } = capturing(accepted)
 		const sender = new BrevoEmailSender({ apiKey: 'xkeysib-secret', from: { address: 'auth@example.test', name: 'Fabrika' }, fetch })
 		await sender.send({ ...message, fromName: 'Support' }, signal)
+		await sender.send({ ...message, fromName: 'x'.repeat(70) }, signal)
 		expect(await requests[0]?.json()).toMatchObject({ sender: { email: 'auth@example.test', name: 'Support' } })
+		expect(await requests[1]?.json()).toMatchObject({ sender: { name: 'x'.repeat(70) } })
 
 		expect((await caught(sender.send({ ...message, fromName: 'x'.repeat(71) }, signal))).code).toBe('invalid_message')
-		expect(requests).toHaveLength(1)
+		expect(requests).toHaveLength(2)
 		expect(() => new BrevoEmailSender({ apiKey: 'xkeysib-secret', from: { address: 'auth@example.test', name: 'x'.repeat(71) } })).toThrow(
 			'Brevo sender name is longer than 70 characters',
 		)
@@ -120,11 +133,11 @@ describe('BrevoEmailSender', () => {
 		expect(requests).toHaveLength(0)
 	})
 
-	test('a refusal is read by its status and code', async () => {
-		const answer = (status: number, code?: string) =>
-			capturing(() => code === undefined ? new Response('private outage', { status }) : Response.json({ code, message: `private ${code}` }, { status }))
-				.fetch
-		const send = (fetch: EmailFetch) => caught(new BrevoEmailSender({ apiKey: 'xkeysib-secret', from, fetch }).send(message, signal))
+	test('a refusal is read by its status and code, and an answer without a code (an HTML error page) by its status alone', async () => {
+		const answer = (status: number, code?: string) => (): Response =>
+			code === undefined
+				? new Response('<html><body>private proxy page</body></html>', { status, headers: { 'Content-Type': 'text/html' } })
+				: Response.json({ code, message: `private ${code}` }, { status })
 		const cases: readonly [number, string | undefined, string][] = [
 			[400, 'invalid_parameter', 'provider_rejected'],
 			[400, 'missing_parameter', 'provider_rejected'],
@@ -135,40 +148,31 @@ describe('BrevoEmailSender', () => {
 			[400, 'api-key not found', 'provider_unauthorized'],
 			[400, 'account_under_validation', 'provider_unauthorized'],
 			[400, 'Insufficient credits', 'quota_exceeded'],
+			[400, undefined, 'provider_rejected'],
 			[401, 'unauthorized', 'provider_unauthorized'],
 			[401, undefined, 'provider_unauthorized'],
 			[402, 'not_enough_credits', 'quota_exceeded'],
 			[402, undefined, 'quota_exceeded'],
 			[403, 'permission_denied', 'provider_unauthorized'],
 			[404, 'document_not_found', 'provider_rejected'],
+			[413, undefined, 'provider_rejected'],
 			[429, 'too_many_requests', 'rate_limited'],
-			[500, undefined, 'provider_unavailable'],
+			[502, undefined, 'provider_unavailable'],
 			[503, 'unavailable', 'provider_unavailable'],
 		]
 		for (const [status, code, expected] of cases) {
-			const error = await send(answer(status, code))
-			expect([status, code, error.code]).toEqual([status, code, expected])
+			const error = await caught(answering(answer(status, code)).send(message, signal))
+			expect([status, code, error.code, error.httpStatus]).toEqual([status, code, expected, status])
 			expect(error.message).not.toContain('private')
 		}
 	})
 
 	test('the one retry rule leaves an unknown outcome to a person and retries what did not leave', async () => {
-		const sender = new BrevoEmailSender({ apiKey: 'xkeysib-secret', from })
-		const outage = await caught(
-			new BrevoEmailSender({ apiKey: 'xkeysib-secret', from, fetch: capturing(() => new Response('', { status: 502 })).fetch }).send(message, signal),
-		)
-		const limited = await caught(
-			new BrevoEmailSender({ apiKey: 'xkeysib-secret', from, fetch: capturing(() => new Response('', { status: 429 })).fetch }).send(message, signal),
-		)
-		expect(mayRetryDelivery(outage, sender.capabilities)).toBe(false)
-		expect(mayRetryDelivery(limited, sender.capabilities)).toBe(true)
-	})
-
-	test('a 201 without a message id is a malformed answer', async () => {
-		const error = await caught(
-			new BrevoEmailSender({ apiKey: 'xkeysib-secret', from, fetch: capturing(() => Response.json({}, { status: 201 })).fetch }).send(message, signal),
-		)
-		expect(error.code).toBe('malformed_response')
+		const failing = (status: number) => answering(() => new Response('', { status }))
+		const outage = failing(502)
+		const limited = failing(429)
+		expect(mayRetryDelivery(await caught(outage.send(message, signal)), outage.capabilities)).toBe(false)
+		expect(mayRetryDelivery(await caught(limited.send(message, signal)), limited.capabilities)).toBe(true)
 	})
 
 	test('validates its configuration before any request, its credential first', () => {
@@ -183,7 +187,7 @@ describe('BrevoEmailSender', () => {
 		expect(() => new BrevoEmailSender({ apiKey: 'xkeysib-secret', from, timeoutMs: 0 })).toThrow('Brevo timeout is invalid')
 	})
 
-	test('carries unicode names and subjects unchanged, and a name of exactly 70 characters', async () => {
+	test('carries unicode names and subjects unchanged', async () => {
 		const { fetch, requests } = capturing(accepted)
 		const sender = new BrevoEmailSender({ apiKey: 'xkeysib-secret', from, fetch })
 		const subject = `Vítejte 👋 שלום ${'ž'.repeat(980)}`
@@ -191,14 +195,12 @@ describe('BrevoEmailSender', () => {
 			{ ...message, to: 'ada+tag@xn--bcher-kva.example', subject, fromName: 'Žluťoučký kůň 🐴 مرحبا', replyTo: "o'brien@example.test" },
 			signal,
 		)
-		await sender.send({ ...message, fromName: 'x'.repeat(70) }, signal)
 		expect(await requests[0]?.json()).toMatchObject({
 			sender: { name: 'Žluťoučký kůň 🐴 مرحبا' },
 			to: [{ email: 'ada+tag@xn--bcher-kva.example' }],
 			subject,
 			replyTo: { email: "o'brien@example.test" },
 		})
-		expect(await requests[1]?.json()).toMatchObject({ sender: { name: 'x'.repeat(70) } })
 	})
 
 	test('refuses a header injection in the name, the subject or the reply-to without a request', async () => {
@@ -220,34 +222,19 @@ describe('BrevoEmailSender', () => {
 	})
 
 	test('an accepted answer is read by its message id whatever its 2xx status, and anything else is malformed', async () => {
-		const answering = (response: Response) =>
-			new BrevoEmailSender({ apiKey: 'xkeysib-secret', from, fetch: capturing(() => response).fetch }).send(message, signal)
-		await expect(answering(Response.json({ messageId: '<a@b>', extra: true }, { status: 200 }))).resolves.toMatchObject({ messageId: '<a@b>' })
+		const sent = (response: Response) => answering(() => response).send(message, signal)
+		await expect(sent(Response.json({ messageId: '<a@b>', extra: true }, { status: 200 }))).resolves.toMatchObject({ messageId: '<a@b>' })
 		for (
 			const body of [
+				Response.json({}, { status: 201 }),
 				Response.json({ messageId: 42 }, { status: 201 }),
 				Response.json({ messageId: '' }, { status: 201 }),
 				Response.json({ messageIds: ['<a@b>'] }, { status: 201 }),
 				new Response('<html>private ok</html>', { status: 201 }),
 			]
 		) {
-			const error = await caught(answering(body))
+			const error = await caught(sent(body))
 			expect([error.code, error.message.includes('private')]).toEqual(['malformed_response', false])
-		}
-	})
-
-	test('an HTML error page is read by its status alone, without its text', async () => {
-		const page = (status: number) => new Response('<html><body>private proxy page</body></html>', { status, headers: { 'Content-Type': 'text/html' } })
-		for (
-			const [status, expected] of [[400, 'provider_rejected'], [401, 'provider_unauthorized'], [402, 'quota_exceeded'], [413, 'provider_rejected'], [
-				502,
-				'provider_unavailable',
-			]] as const
-		) {
-			const error = await caught(
-				new BrevoEmailSender({ apiKey: 'xkeysib-secret', from, fetch: capturing(() => page(status)).fetch }).send(message, signal),
-			)
-			expect([status, error.code, error.httpStatus, error.message.includes('private')]).toEqual([status, expected, status, false])
 		}
 	})
 
