@@ -15,11 +15,13 @@ import {
 	type EndpointRow,
 	FILE_RESPONSE_KINDS,
 	fileKindsIn,
+	isAnyOfList,
 	isOwnWorkloadName,
 	JOB_MAILERS,
 	JOB_SITE_PREFIX,
 	LOCALES,
 	mailTemplateProblems,
+	MAX_ANY_OF,
 	MAX_CACHE_AGE_SECONDS,
 	type MessageKind,
 	type NumberShape,
@@ -176,6 +178,11 @@ const capabilityForm = z.discriminatedUnion('form', [
 const requirement = z.discriminatedUnion('kind', [
 	z.strictObject({ kind: z.literal('member') }),
 	z.strictObject({ kind: z.literal('action'), action, access: accessForm }),
+	z.strictObject({
+		kind: z.literal('anyOf'),
+		actions: z.tuple([action, action], action).refine(isAnyOfList, `two to ${MAX_ANY_OF} distinct actions, sorted`),
+		access: z.strictObject({ form: z.literal('app') }),
+	}),
 	z.strictObject({
 		kind: z.literal('capabilities'),
 		capabilities: record(z.strictObject({ action, access: capabilityForm })).refine(

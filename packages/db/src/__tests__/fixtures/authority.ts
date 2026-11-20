@@ -156,12 +156,17 @@ export class TestAuthority implements CapabilityAuthority {
 
 	/** The capability of an `app` endpoint: `action` held as a global grant. */
 	app<const A extends string>(action: A): AppCapability<A> {
-		return new TestApp({ kind: 'app', action, principal: this.#principal, public: false }, this)
+		return new TestApp({ kind: 'app', actions: [action], principal: this.#principal, public: false }, this)
+	}
+
+	/** The capability of an `anyOf` endpoint: the listed actions the caller holds, each as a global grant. */
+	anyOf<const A extends string>(actions: readonly [A, ...A[]]): AppCapability<A> {
+		return new TestApp({ kind: 'app', actions, principal: this.#principal, public: false }, this)
 	}
 
 	/** A public procedure's workload action: an `app` capability that reads no table read with `'any'`. */
 	publicApp<const A extends string>(action: A): AppCapability<A> {
-		return new TestApp({ kind: 'app', action, principal: this.#principal, public: true }, this)
+		return new TestApp({ kind: 'app', actions: [action], principal: this.#principal, public: true }, this)
 	}
 
 	row(grant: Omit<RowGrant, 'kind'>): RowRef<string, string> {

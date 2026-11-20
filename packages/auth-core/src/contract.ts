@@ -264,7 +264,7 @@ export interface BodyAdmission {
  * `action` is that action in some scope, global included, and only globally under the `app` form. The access form is
  * what the framework then resolves.
  */
-export type EndpointRequirement = MemberRequirement | ActionRequirement | CapabilitiesRequirement
+export type EndpointRequirement = MemberRequirement | ActionRequirement | AnyOfRequirement | CapabilitiesRequirement
 
 export interface MemberRequirement {
 	readonly kind: 'member'
@@ -274,6 +274,24 @@ export interface ActionRequirement {
 	readonly kind: 'action'
 	readonly action: string
 	readonly access: AccessForm
+}
+
+/**
+ * Any one of several actions (`access: { anyOf, app: true }`), each held as a global grant, the `app` form's rule: two to
+ * `MAX_ANY_OF` distinct actions, sorted, so the order in the source does not change the digest.
+ */
+export interface AnyOfRequirement {
+	readonly kind: 'anyOf'
+	readonly actions: readonly [string, string, ...string[]]
+	readonly access: { readonly form: 'app' }
+}
+
+/** The most actions an `anyOf` requirement lists. */
+export const MAX_ANY_OF = 16
+
+/** Whether `actions` is an `anyOf` list as a row carries it: two to `MAX_ANY_OF` actions, strictly ascending. */
+export function isAnyOfList(actions: readonly string[]): boolean {
+	return actions.length >= 2 && actions.length <= MAX_ANY_OF && actions.every((action, index) => index === 0 || (actions[index - 1] ?? '') < action)
 }
 
 /**

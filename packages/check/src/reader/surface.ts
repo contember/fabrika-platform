@@ -82,7 +82,7 @@ const CONTRACT_ALLOWED = 'export const contract = app.contract((c) => ({ … }))
 /** Which builders a surface is written with: `defineContract`'s `c`, or the staged kit's (`app.*` and its `c`). */
 type Form = 'surface' | 'kit'
 const ACCESS_ALLOWED =
-	'{ member: true }, { action, over }, { action, in, from }, { action, on, from }, { action, creates }, { action, app: true }, { capabilities: { <name>: … } } or { public: true }'
+	"{ member: true }, { action, over }, { action, in, from }, { action, on, from }, { action, creates }, { action, app: true }, { anyOf: ['<action>', …], app: true }, { capabilities: { <name>: … } } or { public: true }"
 const CAPABILITY_ALLOWED = '{ action, over }, { action, in, from } or { action, on, from }'
 
 type Entries = ReadonlyMap<string, LiteralValue>
@@ -1057,6 +1057,12 @@ function isApp(fields: Entries): boolean {
 	return hasKeys(fields, ['action', 'app']) && app?.kind === 'boolean' && app.value
 }
 
+/** `{ anyOf: [...], app: true }`: `app` is the literal `true`; `buildArtifact` checks the list. */
+function isAnyOf(fields: Entries): boolean {
+	const app = fields.get('app')
+	return hasKeys(fields, ['anyOf', 'app']) && app?.kind === 'boolean' && app.value
+}
+
 /** `{ public: true }`: `public` is the literal `true`. */
 function isPublic(fields: Entries): boolean {
 	const open = fields.get('public')
@@ -1084,6 +1090,9 @@ function accessDeclaration(value: LiteralValue | undefined, at: BuilderValue): A
 	}
 	if (isApp(fields)) {
 		return { action: field('action'), app: true }
+	}
+	if (isAnyOf(fields)) {
+		return { anyOf: texts(fields.get('anyOf'), value ?? at, 'access.anyOf'), app: true }
 	}
 	if (isPublic(fields)) {
 		return { public: true }

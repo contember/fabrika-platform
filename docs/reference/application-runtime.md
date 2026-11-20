@@ -355,7 +355,8 @@ Per request, in this order:
 5. the token's caller kind must be one of the mount's callers: a user token is
    `human`, a service token `machine`, an anonymous token (a share link) `link` (403);
 6. the requirement: `member` is any permission, an action is that action in some
-   scope, and under the `app` form that action held as a global grant (403);
+   scope, under the `app` form that action held as a global grant, and under `anyOf` any one of its actions held as a
+   global grant (403);
 7. admission: a request without `Authorization` that is not a `GET` needs
    `Sec-Fetch-Site: same-origin` (403). On a credentialed row the proxy sends a bearer request's
    `Authorization` as `Bearer <the minted token>`, never the caller's `px_` key, and sends a session request
@@ -390,8 +391,22 @@ Per request, in this order:
 | `{ action, on, from }`               | `ctx.target` with its containment chain                               | 404 when missing or not held                            |
 | `{ action, creates }`                | `ctx.created`, the value IAM generated                                | 503 without the proxy's delegation grant; IAM's refusal |
 | `{ action, app: true }`              | `ctx.app`, the action application-wide                                | 403 (at the proxy) unless the action is a global grant  |
+| `{ anyOf: [a, b, …], app: true }`    | `ctx.app`, the listed actions the caller holds, application-wide      | 403 (at the proxy) unless one is a global grant         |
 | `{ capabilities: { <name>: … } }`    | `ctx.capabilities.<name>`, one `Ref` or `Within` per named capability | each capability's own refusal, in declared order        |
 | `{ public: true }` (RPC mounts only) | no capability of a caller: the handler runs as its own workload       | — (admission only)                                      |
+
+**Any of several actions.** `access: { anyOf: ['cash.read', 'cash.audit', 'cash.manage'], app: true }` on a group
+procedure admits a caller that holds any of two to sixteen distinct actions of the vocabulary as a global grant; the row
+lists them sorted, so their order in the source changes no digest. `ctx.app` holds H, the listed actions the verified
+token holds globally (`ctx.app.actions`; never empty), and `ctx.db.app` reaches what H reaches together: an operation
+is allowed when its action list names a held action, a column of its own read or write action when H holds it, and a
+`when` keyed by an action is an OR over the held actions the table names for the operation, a held action without one
+admitting every row. An insert under several held actions with a `when` that follows a foreign key is refused
+(`unenforceable`), `ctx.sql.scope` is refused when a held action has a `when`, and a claim needs a capability of one
+action. The types allow an operation one listed action allows and hide every column of its own read action. An
+`anyOf` endpoint has no `ctx.target`, `ctx.within`, `ctx.members`, links or delegation, and takes no `capabilities`,
+`creates`, `issues`, link, export or public form; the scoped forms do not take `anyOf` (`any-of.test.ts`,
+`any-of-sqlite.test.ts`).
 
 **Several capabilities.** `access: { capabilities: { request: { action, on, from }, records: { action, over } } }`
 names at least two capabilities, each an `on`, `in` or `over` form. The proxy checks every requirement, and the runtime
@@ -501,7 +516,7 @@ whose own `declared` differs does not boot. The API matrix:
 | `in`               | `ctx.db.target.get()` (the container); `.<table>.list`                                                                                                                                                                                                                                                                                                 | `ctx.db.target.<table>.insert(v)` for a table whose list dimension is the target and whose insert action is the endpoint's                              |
 | `over`             | `ctx.db.within.<table>.list({ where, orderBy, limit, after })` (keyset), `count`, `aggregate`; every table whose chain holds the dimension                                                                                                                                                                                                             | — (a list write is not on the road: `unscoped` or `sql`)                                                                                                |
 | `creates`          | —                                                                                                                                                                                                                                                                                                                                                      | `ctx.db.created.<table>.insert(v)`: the new scope's own row, then `in`-style inserts into it                                                            |
-| `app`              | `ctx.db.app.<table>`: an application table's `list`, `count`, `aggregate` (read action) and `get(id)` (any action it names); every dimension and child table's `list`, `count`, `aggregate`, all rows, where the endpoint's action is its read action or one of its `appRead` (with that action's columns), and `count` only for one of its `appCount` | an application table's `getForUpdate(id)`, `insert(v)`, `update(id, v, { expectVersion })`, `remove(id, { expectVersion })` with the operation's action |
+| `app`, `anyOf`     | `ctx.db.app.<table>`: an application table's `list`, `count`, `aggregate` (read action) and `get(id)` (any action it names); every dimension and child table's `list`, `count`, `aggregate`, all rows, where the endpoint's action is its read action or one of its `appRead` (with that action's columns), and `count` only for one of its `appCount` | an application table's `getForUpdate(id)`, `insert(v)`, `update(id, v, { expectVersion })`, `remove(id, { expectVersion })` with the operation's action |
 | `member`           | no application data                                                                                                                                                                                                                                                                                                                                    | no application data                                                                                                                                     |
 | any                | `ctx.db.reference.<table>` reads; `ctx.principal`; `ctx.members` on, in or below a dimension with members (management for `manage`)                                                                                                                                                                                                                    | —                                                                                                                                                       |
 | `on`, `in`, `over` | `ctx.db.app.<table>`: an application table's `list`, `count`, `aggregate` and `get(id)`, every row, where the endpoint's action is its read action                                                                                                                                                                                                     | — (no write: an `app` endpoint writes it)                                                                                                               |

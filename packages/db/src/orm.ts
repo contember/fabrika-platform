@@ -42,7 +42,7 @@ import {
 	withCursorColumns,
 } from './nodes'
 import type { DataKind, TargetForm, UnscopedMode } from './orm-types'
-import { accessTablesOf, delegates, modelOf, namesAction, type TableModels, updatableBy, visibleFor } from './policy'
+import { accessTablesOf, delegates, modelOf, namesAction, type TableModels, updatableBy, updatableByAny, visibleFor, visibleForAny } from './policy'
 import { type SqlSite, type SqlTag, sqlTag } from './sql'
 import {
 	actionShape,
@@ -64,6 +64,7 @@ import {
 	type DataLayerRuntime,
 	dialectOf,
 	heldAction,
+	heldActions,
 	insertPrepared,
 	insertRow,
 	keyOf,
@@ -344,7 +345,7 @@ function targetRow(
 	const onOnly = (operation: string) => `${operation} acts on one object: declare access with on`
 	const get = bound(site, async () => {
 		const grant = namedRef(context, capability, dimension)
-		return selectOne(context, run, targetPredicate(context, grant), visibleFor(context.model, grant.action), grant.action)
+		return selectOne(context, run, targetPredicate(context, grant), visibleFor(context.model, grant.action), [grant.action])
 	})
 	const lock = bound(site, async () => {
 		const grant = namedRef(context, capability, dimension)
@@ -363,7 +364,7 @@ function targetRow(
 		if (row === undefined) {
 			throw new NotFoundError(`${context.model.name} not found`)
 		}
-		await answerFiles(context.model, run.files, session, [row], grant.action)
+		await answerFiles(context.model, run.files, session, [row], [grant.action])
 		return row
 	})
 	const getForUpdate = site.kind === 'job'
@@ -396,14 +397,14 @@ function childRows(context: TableContext, site: DataSite, run: Runner, capabilit
 	return freeze({
 		list: bound(site, async (options?: unknown) => {
 			const grant = namedRef(context, capability, parent)
-			return listRows(context, run, parentPredicate(context, grant), visibleFor(context.model, grant.action), options, [key], grant.action)
+			return listRows(context, run, parentPredicate(context, grant), visibleFor(context.model, grant.action), options, [key], [grant.action])
 		}),
 		get: bound(site, async (id: unknown) => {
 			const grant = namedRef(context, capability, parent)
 			if (typeof id !== 'string' || id.length === 0) {
 				throw new QueryRefusedError('row_address', `a ${context.model.name} row is addressed by its ${key}, a non-empty string`)
 			}
-			return selectOne(context, run, parentPredicate(context, grant, id), visibleFor(context.model, grant.action), grant.action)
+			return selectOne(context, run, parentPredicate(context, grant, id), visibleFor(context.model, grant.action), [grant.action])
 		}),
 		insert: writing(
 			site,
@@ -430,7 +431,7 @@ function containedRows(context: TableContext, site: DataSite, run: Runner, capab
 		list: bound(site, async (options?: unknown) => {
 			const grant = namedRef(context, capability, dimension)
 			const scope = refScope(context, context.model, context.model.chain, grant, new Date())
-			return listRows(context, run, scope, visibleFor(context.model, grant.action), options, [keyOf(context.model)], grant.action)
+			return listRows(context, run, scope, visibleFor(context.model, grant.action), options, [keyOf(context.model)], [grant.action])
 		}),
 		insert: writing(
 			site,
@@ -487,7 +488,7 @@ function listedRows(
 		claim: claiming(parts, context, site, capability),
 		list: bound(site, async (options?: unknown) => {
 			const predicate = scope()
-			return listRows(context, run, predicate, visible(), options, key, heldAction(context, capability))
+			return listRows(context, run, predicate, visible(), options, key, [heldAction(context, capability)])
 		}),
 		count: bound(site, async (options?: unknown) => {
 			const predicate = scope()
@@ -517,25 +518,25 @@ function applicationTables(parts: DataLayerParts, site: DataSite, run: Runner, c
 			const rows = applicationRows(parts, context, site, run, capability)
 			setOwn(handle, model.name, site.public === true ? publicApplicationRows(context, site, run, capability, rows) : freeze(rows))
 		} else if (site.public !== true && (model.scope.mode === 'dimension' || model.scope.mode === 'child')) {
-			setOwn(handle, model.name, appRecordRows(context, site, run, capability, grant.action))
+			setOwn(handle, model.name, appRecordRows(context, site, run, capability, grant.actions))
 		}
 	}
 	return freeze(handle)
 }
 
 /**
- * A dimension or child table under an `app` capability of `action`, read-only and every row, with the columns that
- * action reads (`visibleFor`): listed and aggregated with its read action or an action of its `appRead`, counted with
+ * A dimension or child table under an `app` capability of `actions`, read-only and every row, with the columns those
+ * actions read (`visibleForAny`): listed and aggregated with its read action or an action of its `appRead`, counted with
  * those or an action of its `appCount`.
  */
-function appRecordRows(context: TableContext, site: DataSite, run: Runner, capability: unknown, action: string): object {
-	const visible = visibleFor(context.model, action)
+function appRecordRows(context: TableContext, site: DataSite, run: Runner, capability: unknown, actions: readonly string[]): object {
+	const visible = visibleForAny(context.model, actions)
 	const shape = actionShape(context.model, visible)
 	const key = [keyOf(context.model)]
 	return freeze({
 		list: bound(
 			site,
-			async (options?: unknown) => listRows(context, run, appRecordPredicate(context, capability, 'rows'), visible, options, key, action),
+			async (options?: unknown) => listRows(context, run, appRecordPredicate(context, capability, 'rows'), visible, options, key, actions),
 		),
 		count: bound(site, async (options?: unknown) => countRows(context, run, appRecordPredicate(context, capability, 'counts'), visible, options)),
 		aggregate: bound(
@@ -565,22 +566,23 @@ function scopedApplicationRows(context: TableContext, site: DataSite, run: Runne
 	const key = [keyOf(model)]
 	const scope = () => scopedApplicationRead(context, capability)
 	return freeze({
-		list: bound(site, async (options?: unknown) => listRows(context, run, scope(), visible, options, key, heldAction(context, capability))),
+		list: bound(site, async (options?: unknown) => listRows(context, run, scope(), visible, options, key, [heldAction(context, capability)])),
 		count: bound(site, async (options?: unknown) => countRows(context, run, scope(), visible, options)),
 		aggregate: bound(site, async <Row>(spec: AggregateSpec<Row>) => aggregateRows(context, run, scope(), context.shape, spec)),
 		get: bound(
 			site,
 			async (id: unknown) =>
-				selectOne(context, run, scopedApplicationRead(context, capability, appKeyPredicate(model, id)), visible, heldAction(context, capability)),
+				selectOne(context, run, scopedApplicationRead(context, capability, appKeyPredicate(model, id)), visible, [heldAction(context, capability)]),
 		),
 	})
 }
 
 /**
- * An `app` capability whose action the application table names, or any but a public procedure's on a table read with
- * `'any'`: it reads one row with the columns of its action.
+ * An `app` capability with an action the application table names, or any but a public procedure's on a table read with
+ * `'any'`: it reads one row with the columns of every action it holds (`held`), within the conditions of those the
+ * table names (`named`), any one admitting the row.
  */
-function namedApp(context: TableContext, capability: unknown): string {
+function namedApp(context: TableContext, capability: unknown): { readonly held: readonly string[]; readonly named: readonly string[] } {
 	const grant = runtimeOf(context.connection).capabilities.resolve(capability)
 	const table = context.model.name
 	if (grant.kind !== 'app') {
@@ -589,15 +591,22 @@ function namedApp(context: TableContext, capability: unknown): string {
 	if (context.model.actions.readAny) {
 		// Refuses a public procedure's grant, which reads no table read with 'any'.
 		appListPredicate(context, capability)
-		return grant.action
+		return { held: grant.actions, named: grant.actions }
 	}
-	if (!namesAction(context.model, grant.action)) {
+	const named: string[] = []
+	for (let index = 0; index < grant.actions.length; index++) {
+		const action = grant.actions[index]
+		if (action !== undefined && namesAction(context.model, action)) {
+			named[named.length] = action
+		}
+	}
+	if (named.length === 0) {
 		throw new CapabilityError(
 			'wrong_action',
-			`${table} does not name the action '${grant.action}': read it from an app endpoint whose action ${table} names`,
+			`${table} does not name the action '${grant.actions.join("', '")}': read it from an app endpoint whose action ${table} names`,
 		)
 	}
-	return grant.action
+	return { held: grant.actions, named }
 }
 
 /**
@@ -613,30 +622,30 @@ function applicationRows(
 ): Readonly<Record<string, unknown>> {
 	const model = context.model
 	const table = model.name
-	const visible = () => visibleFor(model, heldAction(context, capability))
+	const visible = () => visibleForAny(model, heldActions(context, capability))
 	const key = [keyOf(model)]
 	const getForUpdate = site.kind === 'job'
 		? refused(site, 'read_only', 'a job writes inside ctx.transaction((tx) => …): use tx.db there')
 		: site.kind === 'query'
 		? refused(site, 'read_only', 'getForUpdate locks the row, so it runs only in a mutation: declare the endpoint with r.mutation')
 		: bound(site, async (id: unknown) => {
-			const action = namedApp(context, capability)
-			const scope = appGetScope(model, action, id)
-			const node = lockedSelectNode(table, visibleFor(model, action), scope, model.dates)
+			const { held, named } = namedApp(context, capability)
+			const scope = appGetScope(model, named, id)
+			const node = lockedSelectNode(table, visibleForAny(model, held), scope, model.dates)
 			const session = await run.read()
 			const rows = await session.run(node, { root: 'SelectQueryNode', table, joins: {}, scope, lock: 'update', subqueries: context.subqueries })
 			const [row] = answerRows(dialectOf(context), table, rowColumnsOf(model), rows)
 			if (row === undefined) {
 				throw new NotFoundError(`${table} not found`)
 			}
-			await answerFiles(model, run.files, session, [row], action)
+			await answerFiles(model, run.files, session, [row], held)
 			return row
 		})
 	return {
 		list: bound(
 			site,
 			async (options?: unknown) =>
-				listRows(context, run, appListPredicate(context, capability), visible(), options, key, heldAction(context, capability)),
+				listRows(context, run, appListPredicate(context, capability), visible(), options, key, heldActions(context, capability)),
 		),
 		count: bound(site, async (options?: unknown) => countRows(context, run, appListPredicate(context, capability), visible(), options)),
 		aggregate: bound(
@@ -644,8 +653,8 @@ function applicationRows(
 			async <Row>(spec: AggregateSpec<Row>) => aggregateRows(context, run, appListPredicate(context, capability), actionShape(model, visible()), spec),
 		),
 		get: bound(site, async (id: unknown) => {
-			const action = namedApp(context, capability)
-			return selectOne(context, run, appGetScope(model, action, id), visibleFor(model, action), action)
+			const { held, named } = namedApp(context, capability)
+			return selectOne(context, run, appGetScope(model, named, id), visibleForAny(model, held), held)
 		}),
 		getForUpdate,
 		claim: claiming(parts, context, site, capability),
@@ -655,9 +664,9 @@ function applicationRows(
 			async (values: unknown, options?: unknown) => insertPrepared(context, run, prepareApplicationInsert(context, capability, values, options)),
 		),
 		update: writing(site, 'update', async (id: unknown, values: unknown, ...options: unknown[]) => {
-			const grant = updatingApp(context, capability)
-			const changes = readValues(values, updatableBy(model, grant.action), 'update', model)
-			return updateRow(context, run, { scope: appKeyScope(model, grant.action, id) }, changes, versionArgument(context, options))
+			const updating = updatingApp(context, capability)
+			const changes = readValues(values, updatableByAny(model, updating), 'update', model)
+			return updateRow(context, run, { scope: appKeyScope(model, updating, id) }, changes, versionArgument(context, options))
 		}),
 		remove: writing(site, 'remove', async (id: unknown, ...options: unknown[]) => {
 			await removeRow(context, run, { scope: appRowPredicate(context, capability, id, 'delete') }, versionArgument(context, options))
@@ -698,19 +707,19 @@ function publicApplicationRows(
 		aggregate: rows['aggregate'],
 		get: bound(site, async (id: unknown) => {
 			appListPredicate(context, capability)
-			const action = heldAction(context, capability)
-			return selectOne(context, run, appKeyScope(model, action, id), visibleFor(model, action), action)
+			const held = heldActions(context, capability)
+			return selectOne(context, run, appKeyScope(model, held, id), visibleForAny(model, held), held)
 		}),
 		getForUpdate: refusal('lock'),
 		claim: refusal('claim'),
 		update: writing(site, 'update', async (id: unknown, values: unknown, ...options: unknown[]) => {
 			tokenRow('update', id)
-			const grant = updatingApp(context, capability)
-			const changes = readValues(values, updatableBy(model, grant.action), 'update', model)
+			const updating = updatingApp(context, capability)
+			const changes = readValues(values, updatableByAny(model, updating), 'update', model)
 			const saved = await updateRow<Readonly<Record<string, unknown>>>(
 				context,
 				run,
-				{ scope: appKeyScope(model, grant.action, id) },
+				{ scope: appKeyScope(model, updating, id) },
 				changes,
 				versionArgument(context, options),
 			)
@@ -804,7 +813,7 @@ async function claimRows(
 ): Promise<readonly Readonly<Record<string, unknown>>[]> {
 	const model = context.model
 	const table = model.name
-	const { grant, scope } = claimScope(context, capability)
+	const { grant, action, scope } = claimScope(context, capability)
 	const queue = model.queue
 	const version = model.version
 	if (queue === undefined || version === undefined) {
@@ -815,7 +824,7 @@ async function claimRows(
 		throw new QueryRefusedError('list_page', 'claim takes { limit }: attempts count claims, so claim only what the run will reach')
 	}
 	const limit = limitOf(options['limit'])
-	const visible = visibleFor(model, grant.action)
+	const visible = visibleFor(model, action)
 	const conditions = conditionsOf(context, actionShape(model, visible), options['where'])
 	if (scope === undefined) {
 		return []
@@ -898,7 +907,7 @@ async function claimRows(
 				site.files,
 				session,
 				answerRows(dialect, table, rowColumnsOf(model), rows),
-				grant.action,
+				[action],
 				nameSet(site.holds ?? []),
 			),
 			claimed,
@@ -914,7 +923,7 @@ async function claimRows(
 		for (const name of chain) {
 			links.set(name, String(row[name]))
 		}
-		const ref = runtimeOf(context.connection).capabilities.row({ table, action: grant.action, principal: grant.principal, id, chain: links })
+		const ref = runtimeOf(context.connection).capabilities.row({ table, action, principal: grant.principal, id, chain: links })
 		const answered: Record<string, unknown> = {}
 		for (const name of visible) {
 			setOwn(answered, name, row[name])
@@ -1067,7 +1076,7 @@ function unscopedRows(context: TableContext, site: DataSite, run: Runner, mode: 
 	return freeze({
 		list: bound(
 			site,
-			async (options?: unknown) => listRows(context, run, everything(), visible, options, keyed ? [keyOf(model)] : visible, unscopedRead),
+			async (options?: unknown) => listRows(context, run, everything(), visible, options, keyed ? [keyOf(model)] : visible, [unscopedRead]),
 		),
 		count: bound(site, async (options?: unknown) => countRows(context, run, everything(), visible, options)),
 		aggregate: bound(site, async <Row>(spec: AggregateSpec<Row>) => aggregateRows(context, run, everything(), context.shape, spec)),
@@ -1081,7 +1090,7 @@ function unscopedRows(context: TableContext, site: DataSite, run: Runner, mode: 
 			if (row === undefined) {
 				throw new NotFoundError(`${table} not found`)
 			}
-			await answerFiles(model, run.files, session, [row], unscopedRead)
+			await answerFiles(model, run.files, session, [row], [unscopedRead])
 			return row
 		}),
 		insert: write('insert', async (values: unknown) => insertUnscoped(context, run, site.principal, values)),
@@ -1315,7 +1324,7 @@ async function listRows(
 	visible: readonly string[],
 	input: unknown,
 	tiebreak: readonly string[],
-	action?: string,
+	actions?: readonly string[],
 ): Promise<{ readonly items: Readonly<Record<string, unknown>>[]; readonly next: string | null }> {
 	const table = context.model.name
 	const options = readOptions(input, ['where', 'orderBy', 'limit', 'after'], 'list')
@@ -1346,7 +1355,7 @@ async function listRows(
 	const last = page[page.length - 1]
 	const items = page.map((row) => withoutCursor(row, order))
 	return {
-		items: action === undefined ? items : await answerFiles(context.model, run.files, session, items, action),
+		items: actions === undefined ? items : await answerFiles(context.model, run.files, session, items, actions),
 		next: rows.length > limit && last !== undefined ? encodeCursor(last, order) : null,
 	}
 }

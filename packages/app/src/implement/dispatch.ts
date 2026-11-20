@@ -446,6 +446,8 @@ function describeRequirement(row: CredentialedEndpoint): string {
 			return 'a permission in this application'
 		case 'action':
 			return `'${requirement.action}' in some scope`
+		case 'anyOf':
+			return `any of ${requirement.actions.map((action) => `'${action}'`).join(', ')} as a global grant`
 		case 'capabilities':
 			return `each of ${Object.values(requirement.capabilities).map((capability) => `'${capability.action}'`).join(', ')} in some scope`
 	}
@@ -950,6 +952,14 @@ export class ContractRuntime {
 		}
 		if (row.requirement.kind === 'capabilities') {
 			return await this.#capabilities(row.requirement, caller, input, frame)
+		}
+		if (row.requirement.kind === 'anyOf') {
+			// `#authorize` ran `satisfies`, which `anyOf` meets only with a global grant of a listed action.
+			const [first, ...rest] = row.requirement.actions.filter((action) => caller.perms.some((entry) => permits([entry], action)))
+			if (first === undefined) {
+				throw new ForbiddenError(`The caller holds none of '${row.id}''s actions as a global grant`)
+			}
+			return { context: { app: this.#parts.mint.anyOf(frame, [first, ...rest], caller.subject) }, input }
 		}
 		const { action, access } = row.requirement
 		switch (access.form) {

@@ -6,6 +6,7 @@ import {
 	type AccessRelation,
 	activeRow,
 	conditioned,
+	conditionedAny,
 	everyPath,
 	gateTerms,
 	heldThrough,
@@ -833,7 +834,8 @@ function checkWriteTarget(context: TableContext, grant: CapabilityGrant, use: 'u
 		throw new CapabilityError('table_kind', `a scoped site writes no application table: ${statement} needs the capability of an app endpoint`)
 	}
 	const actions = model.actions[use]
-	if (includes(actions, grant.action)) {
+	const held = grantActions(grant)
+	if (admitted(held, actions).length > 0) {
 		return
 	}
 	const columnWrites: string[] = []
@@ -845,11 +847,39 @@ function checkWriteTarget(context: TableContext, grant: CapabilityGrant, use: 'u
 	if (actions.length === 0 && columnWrites.length === 0) {
 		throw new CapabilityError('undeclared_operation', `${statement}: its policy declares no ${use} action`)
 	}
-	if (!includes(columnWrites, grant.action)) {
+	if (admitted(held, columnWrites).length === 0) {
 		const needs = actions.length === 0 ? [] : [`its ${use} action ${actions.join(' or ')}`]
 		if (columnWrites.length > 0) needs[needs.length] = `a column's own write action (${columnWrites.join(', ')})`
-		throw new CapabilityError('wrong_action', `${statement} needs ${needs.join(' or ')}; the capability holds ${grant.action}`)
+		throw new CapabilityError('wrong_action', `${statement} needs ${needs.join(' or ')}; the capability holds ${held.join(', ')}`)
 	}
+}
+
+/** The actions a grant holds: an `app` grant's (several for an `anyOf` endpoint), or any other grant's one. */
+export function grantActions(grant: CapabilityGrant): readonly string[] {
+	return grant.kind === 'app' ? grant.actions : [grant.action]
+}
+
+/** The actions of `held` that `allowed` lists: those that allow an operation, as any one of them does. */
+function admitted(held: readonly string[], allowed: readonly string[]): string[] {
+	const found: string[] = []
+	for (let index = 0; index < held.length; index++) {
+		const action = held[index]
+		if (action !== undefined && includes(allowed, action)) {
+			found[found.length] = action
+		}
+	}
+	return found
+}
+
+/** The first of `actions` the table narrows with a `when`: a fragment, which renders column tests only, cannot hold it. */
+function heldCondition(model: TableModel, actions: readonly string[]): string | undefined {
+	for (let index = 0; index < actions.length; index++) {
+		const action = actions[index]
+		if (action !== undefined && hasOwn(model.when, action)) {
+			return action
+		}
+	}
+	return undefined
 }
 
 /**
@@ -876,10 +906,13 @@ export function scopeTerms(context: TableContext, capability: unknown, use: Scop
 		&& (grant.relations.length > 0 || (grant.kind === 'ref' && (grant.revealing.length > 0 || grant.paths.length > 0)))
 	// An `'any'` read is unconditioned: a `when` keyed by the action narrows only its writes.
 	const readsEvery = grant.kind === 'app' && use === 'read' && readsAny(context, grant)
-	if (held || (!readsEvery && hasOwn(model.when, grant.action))) {
+	const conditionedBy = readsEvery ? undefined : heldCondition(model, grantActions(grant))
+	if (held || conditionedBy !== undefined) {
 		throw new CapabilityError(
 			'unenforceable',
-			`ctx.sql.scope cannot render a relation, a member reveal, a secondary path or a condition of ${grant.action} on ${model.name}: read it through ctx.db`,
+			`ctx.sql.scope cannot render a relation, a member reveal, a secondary path or a condition of ${
+				conditionedBy ?? grantActions(grant).join(', ')
+			} on ${model.name}: read it through ctx.db`,
 		)
 	}
 	// Nor the subquery through the parent row, which alone places a child view's rows.
@@ -1014,30 +1047,61 @@ export function updatingRef(context: TableContext, capability: unknown, dimensio
  */
 export type AppReach = 'rows' | 'counts'
 
-/** Refuses an `app` capability whose action does not reach `reach` of a dimension or child table. */
-function checkRecordReach(context: TableContext, grant: AppGrant, reach: AppReach): void {
+/**
+ * The actions of an `app` capability that reach `reach` of a dimension or child table, at least one: its read action and
+ * its `appRead`, and for `counts` its `appCount` too. Refuses a capability none of whose actions does.
+ */
+function recordReach(context: TableContext, grant: AppGrant, reach: AppReach): readonly string[] {
 	const model = context.model
 	const { appRead, appCount } = model.actions
 	const read = model.actions.read.join(' or ')
-	if (
-		includes(model.actions.read, grant.action) || includes(appRead, grant.action) || (reach === 'counts' && includes(appCount, grant.action))
-	) {
-		return
+	const reaching = admitted(grant.actions, model.actions.read)
+	const reads = admitted(grant.actions, appRead)
+	for (let index = 0; index < reads.length; index++) {
+		reaching[reaching.length] = reads[index] ?? ''
 	}
-	if (includes(appCount, grant.action)) {
+	const counts = admitted(grant.actions, appCount)
+	if (reach === 'counts') {
+		for (let index = 0; index < counts.length; index++) {
+			reaching[reaching.length] = counts[index] ?? ''
+		}
+	}
+	if (reaching.length > 0) {
+		return reaching
+	}
+	const held = grant.actions.join(', ')
+	if (counts.length > 0) {
 		throw new CapabilityError(
 			'wrong_action',
-			`an app capability of ${grant.action} only counts ${model.name} (its appCount): it reads no row, so list, aggregate and a scope fragment need its read action ${read}${
+			`an app capability of ${held} only counts ${model.name} (its appCount): it reads no row, so list, aggregate and a scope fragment need its read action ${read}${
 				appRead.length === 0 ? '' : ` or one of its appRead (${appRead.join(', ')})`
 			}`,
 		)
 	}
 	throw new CapabilityError(
 		'wrong_action',
-		`an app capability of ${grant.action} does not reach ${model.name}: ctx.db.app lists it for its read action ${read}${
+		`an app capability of ${held} does not reach ${model.name}: ctx.db.app lists it for its read action ${read}${
 			appRead.length === 0 ? '' : ` or one of its appRead (${appRead.join(', ')})`
 		} only`,
 	)
+}
+
+/** The actions of an `app` capability the application table names; refuses a capability none of whose actions it names. */
+function namedActions(model: TableModel, grant: AppGrant): readonly string[] {
+	const named: string[] = []
+	for (let index = 0; index < grant.actions.length; index++) {
+		const action = grant.actions[index]
+		if (action !== undefined && namesAction(model, action)) {
+			named[named.length] = action
+		}
+	}
+	if (named.length === 0) {
+		throw new CapabilityError(
+			'wrong_action',
+			`an app capability of ${grant.actions.join(', ')} does not reach ${model.name}: ${model.name} does not name the action`,
+		)
+	}
+	return named
 }
 
 /**
@@ -1049,12 +1113,7 @@ function checkAppReach(context: TableContext, grant: AppGrant): void {
 	const model = context.model
 	const mode = model.scope.mode
 	if (mode === 'app') {
-		if (!namesAction(model, grant.action)) {
-			throw new CapabilityError(
-				'wrong_action',
-				`an app capability of ${grant.action} does not reach ${model.name}: ${model.name} does not name the action`,
-			)
-		}
+		namedActions(model, grant)
 		return
 	}
 	if (mode !== 'dimension' && mode !== 'child') {
@@ -1063,7 +1122,7 @@ function checkAppReach(context: TableContext, grant: AppGrant): void {
 			`an app capability does not reach ${model.name}: ctx.db.app lists application, dimension and child tables only`,
 		)
 	}
-	checkRecordReach(context, grant, 'rows')
+	recordReach(context, grant, 'rows')
 }
 
 /**
@@ -1082,8 +1141,7 @@ export function appRecordPredicate(context: TableContext, capability: unknown, r
 	if (model.scope.mode !== 'dimension' && model.scope.mode !== 'child') {
 		throw new CapabilityError('table_kind', `${model.name} is not a dimension or child table`)
 	}
-	checkRecordReach(context, grant, reach)
-	return conditioned(model, grant.action, 'all', new Date())
+	return conditionedAny(model, recordReach(context, grant, reach), 'all', new Date())
 }
 
 /** An `app` capability addresses a row by its key, and writes, only in an application table. */
@@ -1097,10 +1155,11 @@ function checkApplicationTable(context: TableContext, operation: Operation): voi
 }
 
 /**
- * The capability of an `app` endpoint for `operation` on `table`: its action is that operation's. An application table
- * is written with it, and a dimension or child table read with it.
+ * The capability of an `app` endpoint for `operation` on `table`, and its actions that are that operation's, at least
+ * one (none for a read of a table read with `'any'`). An application table is written with it, and a dimension or child
+ * table read with it.
  */
-function appGrant(context: TableContext, capability: unknown, operation: Operation): AppGrant {
+function appGrant(context: TableContext, capability: unknown, operation: Operation): AppOperation {
 	const grant = runtimeOf(context.connection).capabilities.resolve(capability)
 	const table = context.model.name
 	if (grant.kind !== 'app') {
@@ -1110,11 +1169,29 @@ function appGrant(context: TableContext, capability: unknown, operation: Operati
 		checkApplicationTable(context, operation)
 	}
 	if (operation === 'read' && readsAny(context, grant)) {
-		return grant
+		return { grant, actions: [] }
 	}
 	checkAppReach(context, grant)
-	checkAction(context, operation, grant.action)
-	return grant
+	return { grant, actions: operationActions(context, operation, grant) }
+}
+
+/** An `app` capability and those of its actions that allow one operation. */
+interface AppOperation {
+	readonly grant: AppGrant
+	readonly actions: readonly string[]
+}
+
+/** The actions of `grant` that allow `operation` on the table, at least one; `checkAction` over a set. */
+function operationActions(context: TableContext, operation: Operation, grant: AppGrant): readonly string[] {
+	const actions = requiredActions(context, operation)
+	const allowing = admitted(grant.actions, actions)
+	if (allowing.length === 0) {
+		throw new CapabilityError(
+			'wrong_action',
+			`${operation} on ${context.model.name} requires ${actions.join(' or ')}; the capability holds ${grant.actions.join(', ')}`,
+		)
+	}
+	return allowing
 }
 
 /**
@@ -1135,18 +1212,20 @@ function readsAny(context: TableContext, grant: AppGrant): boolean {
 	return true
 }
 
-/** The rows `grant` reads of `context`'s table within `branch`: narrowed by its action's condition, unless read with `'any'`. */
-function appReadPredicate(context: TableContext, grant: AppGrant, branch: OperationNode | 'all'): OperationNode {
+/**
+ * The rows `held`, the read actions of an `app` capability, read of `context`'s table within `branch`: narrowed by their
+ * conditions, any one admitting a row, unless the table is read with `'any'`.
+ */
+function appReadPredicate(context: TableContext, held: AppOperation, branch: OperationNode | 'all'): OperationNode {
 	if (context.model.scope.mode === 'app' && context.model.actions.readAny) {
 		return branch === 'all' ? ValueNode.createImmediate(true) : branch
 	}
-	return conditioned(context.model, grant.action, branch, new Date())
+	return conditionedAny(context.model, held.actions, branch, new Date())
 }
 
 /** Every row a capability of an `app` endpoint reads in `table`, by the table's read action or `'any'`: `true`. */
 export function appListPredicate(context: TableContext, capability: unknown): OperationNode {
-	const grant = appGrant(context, capability, 'read')
-	return appReadPredicate(context, grant, 'all')
+	return appReadPredicate(context, appGrant(context, capability, 'read'), 'all')
 }
 
 /**
@@ -1181,9 +1260,9 @@ export function scopedApplicationRead(context: TableContext, capability: unknown
 /** One row of an application table by its key, for an `app` capability of `operation`'s action. */
 export function appRowPredicate(context: TableContext, capability: unknown, key: unknown, operation: Operation): OperationNode {
 	checkApplicationTable(context, operation)
-	const grant = appGrant(context, capability, operation)
+	const held = appGrant(context, capability, operation)
 	const row = appKeyPredicate(context.model, key)
-	return operation === 'read' ? appReadPredicate(context, grant, row) : conditioned(context.model, grant.action, row, new Date())
+	return operation === 'read' ? appReadPredicate(context, held, row) : conditionedAny(context.model, held.actions, row, new Date())
 }
 
 /**
@@ -1193,15 +1272,20 @@ export function appRowPredicate(context: TableContext, capability: unknown, key:
 export function claimScope(
 	context: TableContext,
 	capability: unknown,
-): { readonly grant: AppGrant | WithinGrant; readonly scope: OperationNode | undefined } {
+): { readonly grant: AppGrant | WithinGrant; readonly action: string; readonly scope: OperationNode | undefined } {
 	const model = context.model
 	const grant = runtimeOf(context.connection).capabilities.resolve(capability)
 	if (model.queue === undefined) {
 		throw new CapabilityError('undeclared_operation', `${model.name} is not a queue table: its policy declares no queue`)
 	}
 	if (grant.kind === 'app') {
-		const held = appGrant(context, capability, 'update')
-		return { grant: held, scope: conditioned(model, held.action, 'all', new Date()) }
+		const [action, ...more] = grant.actions
+		// A claimed row's `row.ref` is finished under one action; only a job claims, and its `ctx.app(action)` holds one.
+		if (more.length > 0) {
+			throw new CapabilityError('wrong_capability', `a claim of ${model.name} needs a capability of one action, got one of ${grant.actions.join(', ')}`)
+		}
+		appGrant(context, capability, 'update')
+		return { grant, action, scope: conditioned(model, action, 'all', new Date()) }
 	}
 	if (grant.kind !== 'within') {
 		throw new CapabilityError('wrong_capability', `a claim of ${model.name} needs a Within or an app capability, got ${describeGrant(grant)}`)
@@ -1217,7 +1301,7 @@ export function claimScope(
 			`a Within of ${grant.dimension} does not reach ${model.name}: its containment chain does not hold ${grant.dimension}`,
 		)
 	}
-	return { grant, scope: withinPredicate(context, column, grant, 'update') }
+	return { grant, action: grant.action, scope: withinPredicate(context, column, grant, 'update') }
 }
 
 /**
@@ -1243,14 +1327,14 @@ export function claimedRowPredicate(context: TableContext, capability: unknown, 
 	return conditioned(model, grant.action, allOf(terms), new Date())
 }
 
-/** The row of an application table `key` names, as `action` reaches it: within the action's condition. */
-export function appKeyScope(model: TableModel, action: string, key: unknown): OperationNode {
-	return conditioned(model, action, appKeyPredicate(model, key), new Date())
+/** The row of an application table `key` names, as `actions` reach it: within their conditions, any one admitting it. */
+export function appKeyScope(model: TableModel, actions: readonly string[], key: unknown): OperationNode {
+	return conditionedAny(model, actions, appKeyPredicate(model, key), new Date())
 }
 
-/** The row `key` names, as a read by key with `action` reaches it: unconditioned in a table read with `'any'`. */
-export function appGetScope(model: TableModel, action: string, key: unknown): OperationNode {
-	return model.actions.readAny ? appKeyPredicate(model, key) : appKeyScope(model, action, key)
+/** The row `key` names, as a read by key with `actions` reaches it: unconditioned in a table read with `'any'`. */
+export function appGetScope(model: TableModel, actions: readonly string[], key: unknown): OperationNode {
+	return model.actions.readAny ? appKeyPredicate(model, key) : appKeyScope(model, actions, key)
 }
 
 /** The row of an application table `key` names. */
@@ -1262,10 +1346,10 @@ export function appKeyPredicate(model: TableModel, key: unknown): OperationNode 
 }
 
 /**
- * The capability of an `app` endpoint whose action updates columns of an application table: its update action, or a
- * column's own write action. Which columns it updates follows from the action (`updatableBy`).
+ * The actions of an `app` endpoint's capability that update columns of an application table, at least one: its update
+ * action, or a column's own write action. Which columns they update follows from them (`updatableByAny`).
  */
-export function updatingApp(context: TableContext, capability: unknown): AppGrant {
+export function updatingApp(context: TableContext, capability: unknown): readonly string[] {
 	const grant = runtimeOf(context.connection).capabilities.resolve(capability)
 	const table = context.model.name
 	if (grant.kind !== 'app') {
@@ -1276,12 +1360,11 @@ export function updatingApp(context: TableContext, capability: unknown): AppGran
 	if (actions.length === 0) {
 		throw new CapabilityError('undeclared_operation', `${table} allows no update; its policy declares no update action`)
 	}
-	for (let index = 0; index < actions.length; index++) {
-		if (actions[index] === grant.action) {
-			return grant
-		}
+	const updating = admitted(grant.actions, actions)
+	if (updating.length === 0) {
+		throw new CapabilityError('wrong_action', `update on ${table} requires ${actions.join(' or ')}; the capability holds ${grant.actions.join(', ')}`)
 	}
-	throw new CapabilityError('wrong_action', `update on ${table} requires ${actions.join(' or ')}; the capability holds ${grant.action}`)
+	return updating
 }
 
 export function childObjectPredicate(context: TableContext, parent: unknown, key: unknown, operation: Operation): OperationNode {
@@ -1331,9 +1414,28 @@ export function fencedWork<T>(runtime: DataLayerRuntime, work: (transaction: Ses
 	return fence === null ? session.transaction(work) : fencedTransaction(session, fence, work)
 }
 
-/** The action a capability holds, which its operation's checks already admitted. */
+/**
+ * The one action a capability holds, which its operation's checks already admitted. An `anyOf` endpoint's `app`
+ * capability that holds several is refused: it reads through `ctx.db.app`, which takes `heldActions`.
+ */
 export function heldAction(context: TableContext, capability: unknown): string {
-	return runtimeOf(context.connection).capabilities.resolve(capability).action
+	const grant = runtimeOf(context.connection).capabilities.resolve(capability)
+	if (grant.kind !== 'app') {
+		return grant.action
+	}
+	const [action, ...more] = grant.actions
+	if (more.length > 0) {
+		throw new CapabilityError(
+			'wrong_capability',
+			`this read takes a capability of one action, got one of ${grant.actions.join(', ')}: read through ctx.db.app`,
+		)
+	}
+	return action
+}
+
+/** Every action a capability holds: an `anyOf` endpoint's `app` capability holds several, any other one. */
+export function heldActions(context: TableContext, capability: unknown): readonly string[] {
+	return grantActions(runtimeOf(context.connection).capabilities.resolve(capability))
 }
 
 function storeRunner(context: TableContext): Runner {
@@ -1522,14 +1624,14 @@ function joinedColumns(context: TableContext, state: SelectState): RowColumns {
 
 /**
  * One row by its scope predicate, with `visible` columns (the table's read action's, unless a capability reads its own).
- * `action` is what read it: each file column then answers a reference that reads the file only under a read action.
+ * `actions` are what read it: each file column then answers a reference that reads the file only under a read action.
  */
 export async function selectOne<O>(
 	context: TableContext,
 	run: Runner,
 	scope: OperationNode,
 	visible = context.model.visible,
-	action?: string,
+	actions?: readonly string[],
 ): Promise<O> {
 	const start = startSelect(context.shape)
 	const state = finishSelect(start, start)
@@ -1541,8 +1643,8 @@ export async function selectOne<O>(
 	if (row === undefined) {
 		throw new NotFoundError(`${context.model.name} not found`)
 	}
-	if (action !== undefined) {
-		await answerFiles(context.model, run.files, session, [row], action)
+	if (actions !== undefined) {
+		await answerFiles(context.model, run.files, session, [row], actions)
 	}
 	return row
 }
@@ -1683,20 +1785,20 @@ export interface OnConflict {
 	readonly mode: 'nothing' | 'update'
 	/** The values given for the table's update columns: what `update` sets on the conflicting row. */
 	readonly updates: ReadonlyMap<string, Primitive | null>
-	/** The capability's action, whose condition the conflicting row must satisfy to be updated. */
-	readonly action: string
+	/** The capability's update actions, one of whose conditions the conflicting row must satisfy to be updated. */
+	readonly actions: readonly string[]
 }
 
 const CONFLICT_FIELDS = nameSet(['columns', 'do'])
 
 /**
  * The `onConflict` of an insert's options, read through own data properties; `undefined` without options. `'update'`
- * also needs the capability's action to be one of the table's update actions.
+ * also needs one of the capability's `actions` to be one of the table's update actions.
  */
 export function onConflictOf(
 	context: TableContext,
 	options: unknown,
-	action: string,
+	actions: readonly string[],
 	given: ReadonlyMap<string, Primitive | null>,
 ): OnConflict | undefined {
 	if (options === undefined) {
@@ -1727,13 +1829,14 @@ export function onConflictOf(
 		throw new QueryRefusedError('on_conflict', "onConflict.do takes 'nothing' or 'update'")
 	}
 	const updates = new Map<string, Primitive | null>()
+	const updating = admitted(actions, model.actions.update)
 	if (mode === 'update') {
-		if (!includes(model.actions.update, action)) {
+		if (updating.length === 0) {
 			throw new CapabilityError(
 				'wrong_action',
 				`an insert of ${model.name} that updates on a conflict also needs its update action ${
 					model.actions.update.join(' or ') || '(none)'
-				}; the capability holds ${action}`,
+				}; the capability holds ${actions.join(', ')}`,
 			)
 		}
 		const columns = namesOf(model.update)
@@ -1745,7 +1848,7 @@ export function onConflictOf(
 			}
 		}
 	}
-	return freeze({ columns: freeze(columns), mode, updates, action })
+	return freeze({ columns: freeze(columns), mode, updates, actions: freeze(updating) })
 }
 
 /** A plain object's own data properties, each one of `allowed`; the options of an insert or its `onConflict`. */
@@ -1823,7 +1926,7 @@ async function insertOnConflict(
 		}
 		matches[matches.length] = equals(model.name, name, value)
 	}
-	const scope = conflict.mode === 'update' ? conditioned(model, conflict.action, insertedScope(context, values), new Date()) : undefined
+	const scope = conflict.mode === 'update' ? conditionedAny(model, conflict.actions, insertedScope(context, values), new Date()) : undefined
 	for (let attempt = 0; attempt < 2; attempt++) {
 		const node = insertNode(model.name, values, answer(context), conflict.columns)
 		const [row] = await transaction.run<Readonly<Record<string, unknown>>>(node, {
@@ -2145,30 +2248,30 @@ export function prepareDimensionInsert(context: TableContext, target: unknown, v
 	const scope = dimensionScope(context.model)
 	const grant = refGrant(context, target, listDimension(scope), 'insert')
 	const row = readValues(values, context.model.insert, 'insert', context.model)
-	const conflict = onConflictOf(context, options, grant.action, row)
+	const conflict = onConflictOf(context, options, [grant.action], row)
 	if (scope.container === undefined) {
 		// The object does not exist yet; this only refuses a chain the table has no column for.
 		linkValues(context.model.name, [{ dimension: scope.dimension, column: scope.key }], grant)
 		stampInsert(context, grant, row, scope.key, grant.id)
-		const judged = checkInserted(context, grant, row)
+		const judged = checkInserted(context, [grant.action], grant.principal, row)
 		// No destination to check again after the write, so a condition with a path holds nothing here.
 		narrowedDestination(context, grant, row, false)
 		return { row, writer: grant.principal, destination: undefined, conflict, judged, narrowed: [] }
 	}
 	stampInsert(context, grant, row, scope.key, uuidv7())
 	stampChain(row, linkValues(context.model.name, context.model.chain, grant))
-	const judged = checkInserted(context, grant, row)
+	const judged = checkInserted(context, [grant.action], grant.principal, row)
 	const held = narrowedDestination(context, grant, row, true)
 	return { row, writer: grant.principal, destination: held.destination, conflict, judged, narrowed: held.narrowed }
 }
 
 /** An application table's insert, for an `app` capability of its insert action: a new key, no containment. */
 export function prepareApplicationInsert(context: TableContext, capability: unknown, values: unknown, options?: unknown): PreparedInsert {
-	const grant = appGrant(context, capability, 'insert')
+	const { grant, actions } = appGrant(context, capability, 'insert')
 	const row = readValues(values, context.model.insert, 'insert', context.model)
-	const conflict = onConflictOf(context, options, grant.action, row)
+	const conflict = onConflictOf(context, options, grant.actions, row)
 	stampInsert(context, grant, row, keyOf(context.model), uuidv7())
-	const judged = checkInserted(context, grant, row)
+	const judged = checkInserted(context, actions, grant.principal, row)
 	return { row, writer: grant.principal, destination: undefined, conflict, judged, narrowed: [] }
 }
 
@@ -2177,10 +2280,10 @@ export function prepareChildInsert(context: TableContext, parent: unknown, value
 	const scope = childScope(context)
 	const grant = refGrant(context, parent, scope.parent.dimension, 'insert')
 	const row = readValues(values, context.model.insert, 'insert', context.model)
-	const conflict = onConflictOf(context, options, grant.action, row)
+	const conflict = onConflictOf(context, options, [grant.action], row)
 	stampInsert(context, grant, row, scope.key, uuidv7())
 	stampChain(row, linkValues(context.model.name, context.model.chain, grant))
-	const judged = checkInserted(context, grant, row)
+	const judged = checkInserted(context, [grant.action], grant.principal, row)
 	const held = narrowedDestination(context, grant, row, true)
 	return { row, writer: grant.principal, destination: held.destination, conflict, judged, narrowed: held.narrowed }
 }
@@ -2195,16 +2298,13 @@ const DAY_MS = 86_400_000
  */
 function checkInserted(
 	context: TableContext,
-	grant: { readonly action: string; readonly principal: string },
+	actions: readonly string[],
+	principal: string,
 	row: ReadonlyMap<string, Primitive | null>,
 ): JudgedInsert | undefined {
 	const model = context.model
 	const now = new Date()
-	const condition = ownEntry(model.when, grant.action)
-	const judged = condition === undefined || readPaths(condition).length === 0 ? undefined : { action: grant.action, condition }
-	if (condition !== undefined && judged === undefined && !rowSatisfies(condition, row, now)) {
-		throw new ConflictError(`the row is outside what ${grant.action} inserts into ${model.name}`)
-	}
+	const judged = insertCondition(model, actions, row, now)
 	for (let index = 0; index < model.confers.length; index++) {
 		const source = model.confers[index]
 		if (source === undefined) {
@@ -2215,7 +2315,7 @@ function checkInserted(
 			throw new CapabilityError('undeclared_operation', `${model.name} confers ${source.relation} and states no assign, so no handler inserts a row`)
 		}
 		// A principal through a path is resolved in the insert's transaction (`checkPrincipalAssign`).
-		if (!assign.self && source.principalPath === undefined && row.get(source.principal) === grant.principal) {
+		if (!assign.self && source.principalPath === undefined && row.get(source.principal) === principal) {
 			throw new ConflictError(`a row of ${model.name} names its writer in ${source.relation}, which assign.self does not allow`)
 		}
 		if (assign.maxDays !== undefined && source.expires !== undefined) {
@@ -2229,6 +2329,46 @@ function checkInserted(
 		}
 	}
 	return judged
+}
+
+/**
+ * The insert actions' condition on the row, as one role holding `actions` is narrowed: a row any of them admits passes,
+ * and one without a condition admits every row. A pathless condition is judged here; one that follows a path is
+ * answered for the transaction to judge, which holds one such condition only, so several are refused.
+ */
+function insertCondition(
+	model: TableModel,
+	actions: readonly string[],
+	row: ReadonlyMap<string, Primitive | null>,
+	now: Date,
+): JudgedInsert | undefined {
+	const pathed: JudgedInsert[] = []
+	for (let index = 0; index < actions.length; index++) {
+		const action = actions[index]
+		if (action === undefined) continue
+		const condition = ownEntry(model.when, action)
+		if (condition === undefined) {
+			return undefined
+		}
+		if (readPaths(condition).length > 0) {
+			pathed[pathed.length] = { action, condition }
+		} else if (rowSatisfies(condition, row, now)) {
+			return undefined
+		}
+	}
+	const [only, ...more] = pathed
+	if (only === undefined) {
+		throw new ConflictError(`the row is outside what ${actions.join(' or ')} inserts into ${model.name}`)
+	}
+	if (more.length > 0) {
+		throw new CapabilityError(
+			'unenforceable',
+			`an insert into ${model.name} under ${
+				actions.join(', ')
+			} would be judged by several conditions that follow paths: insert from an endpoint of one of them`,
+		)
+	}
+	return only
 }
 
 /**

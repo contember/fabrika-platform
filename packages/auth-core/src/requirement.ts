@@ -8,8 +8,8 @@ import type { PermissionEntry } from './types'
  * Whether a token's permissions meet an endpoint's requirement. This is authorization, not a gate: it reads only the
  * token. `member` is any permission of this application; an action is that action in some scope, global included.
  * The access form narrows it to one scope afterwards, against the application's own data. The `app` form is the
- * action held as a global grant, so an entry scoped to any value does not meet it. Several capabilities need every
- * one of their actions. `authenticated`, which only an installation row carries, needs no permission.
+ * action held as a global grant, so an entry scoped to any value does not meet it; `anyOf` is one of its actions held so.
+ * Several capabilities need every one of their actions. `authenticated`, which only an installation row carries, needs no permission.
  */
 export function satisfies(requirement: EndpointRequirement | AuthenticatedRequirement, perms: readonly PermissionEntry[]): boolean {
 	if (requirement.kind === 'authenticated') {
@@ -17,6 +17,9 @@ export function satisfies(requirement: EndpointRequirement | AuthenticatedRequir
 	}
 	if (requirement.kind === 'member') {
 		return perms.length > 0
+	}
+	if (requirement.kind === 'anyOf') {
+		return requirement.actions.some((action) => perms.some((entry) => permits([entry], action)))
 	}
 	if (requirement.kind === 'capabilities') {
 		return Object.values(requirement.capabilities).every((capability) => holdsAction(capability, perms))

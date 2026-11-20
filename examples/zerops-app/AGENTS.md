@@ -1035,6 +1035,26 @@ dimension value takes `access: { action, app: true }`.
   keep their own forms.
 - The approver sees it as "app-wide: a global grant", and a change of an endpoint to or from `app: true` widens.
 
+### One endpoint for several actions: `anyOf`
+
+A screen several application-wide roles read, each with its own reach, is one endpoint, not one per action:
+`access: { anyOf: ['cash.read', 'cash.audit', 'cash.manage'], app: true }` on a group query or mutation.
+
+- The proxy admits a caller who holds any listed action as a global grant; a grant in a scope only is 403. List two to
+  sixteen distinct actions of the vocabulary; their order does not matter.
+- `ctx.app` holds the listed actions the caller holds (`ctx.app.actions`), and `ctx.db.app` reaches what any of them
+  reaches: a table operation whose action list names a held action, a column whose own action is held, and a row that
+  the `when` of any held action admits (a held action without a `when` admits every row). A save that took several
+  mutations, one per action, is one `anyOf` mutation in one transaction.
+- `ctx.holds('<action>')` tells the handler which of them the caller holds: `canClose: ctx.holds('cash.manage')`.
+- The types hide every column of its own read action, because which actions are held is known only per request; read
+  such a column in an endpoint of that action.
+- An `anyOf` endpoint has no `ctx.target`, `ctx.within`, `ctx.members`, links or delegation, and takes no `capabilities`,
+  `creates` or `issues`. A link procedure, an export, a public procedure and the scoped forms (`on`, `in`, `over`)
+  take no `anyOf`.
+- The approver sees "holding any of `cash.audit`, `cash.manage`, `cash.read` globally"; an action the list gains
+  widens, one it loses narrows.
+
 ### Several capabilities: `capabilities`
 
 An operation that reads one object and writes another (a copy from one deal to another, a handover between two

@@ -5,6 +5,7 @@
  */
 
 import {
+	canonicalJson,
 	type ContractArtifact,
 	contractDigest,
 	type EndpointRow,
@@ -17,6 +18,7 @@ import {
 	OPS_ROW_ID,
 	OPS_ROW_PATH,
 	requirementDigest,
+	sha256Hex,
 } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
@@ -475,6 +477,62 @@ describe('contract apps — the endpoint table', () => {
 		for (const row of [posted, form, forever]) {
 			expect(parseProxyManifest({ apps: [{ ...app, endpoints: [...app.endpoints, row] }] })).toBeNull()
 		}
+	})
+})
+
+describe('contract apps — an anyOf requirement', () => {
+	const rules = {
+		id: 'api.cash.detail',
+		kind: 'query',
+		method: 'POST',
+		path: '/api/cash.detail',
+		callers: ['human'],
+		admission: { contentTypes: ['application/json'], maxBytes: null },
+	} as const
+	const withActions = (actions: readonly [string, string, ...string[]]) =>
+		endpointRow({ ...rules, requirement: { kind: 'anyOf', actions, access: { form: 'app' } } })
+	const parsedWith = (row: unknown) => parseProxyManifest({ apps: [{ ...contractAppWith([]), endpoints: [row] }] })
+	const actions = (count: number): [string, string, ...string[]] => {
+		const names = Array.from({ length: count }, (_, index) => `cash.a${String(index).padStart(2, '0')}`)
+		const [first = '', second = '', ...rest] = names
+		return [first, second, ...rest]
+	}
+
+	test('accepts a sorted list of two to sixteen distinct actions, as the producer emits it', () => {
+		for (const row of [withActions(['cash.audit', 'cash.read']), withActions(actions(16))]) {
+			expect(parsedWith(row)?.apps[0]).toMatchObject({ endpoints: [row] })
+		}
+	})
+
+	// Each refused row carries its true digest, so only the list rule refuses it.
+	test.each<[string, [string, string, ...string[]]]>([
+		['an unsorted list', ['cash.read', 'cash.audit']],
+		['a duplicate action', ['cash.audit', 'cash.audit']],
+		['a 17th action', actions(17)],
+	])('refuses %s', (_name, list) => {
+		expect(parsedWith(withActions(list))).toBeNull()
+	})
+
+	test('refuses a single action, which is the app form', () => {
+		const two = withActions(['cash.audit', 'cash.read'])
+		// The digest of a row the types cannot express, computed as requirementDigest computes it; the first line proves the recipe.
+		const digestOf = (requirement: unknown) =>
+			`sha256:${
+				sha256Hex(
+					canonicalJson({
+						kind: rules.kind,
+						method: rules.method,
+						path: rules.path,
+						callers: rules.callers,
+						requirement,
+						admission: rules.admission,
+						delegation: null,
+					}),
+				)
+			}`
+		expect(digestOf(two.requirement)).toBe(two.digest)
+		const requirement = { kind: 'anyOf', actions: ['cash.audit'], access: { form: 'app' } }
+		expect(parsedWith({ ...two, requirement, digest: digestOf(requirement) })).toBeNull()
 	})
 })
 

@@ -200,6 +200,11 @@ export type CapabilityContext<Acc> = Acc extends InvalidAccess ? {
 			readonly within: Within<D, A>
 			readonly target: Unavailable<'an over endpoint holds ctx.within, the scopes it may list in: declare access with on or in for ctx.target'>
 		}
+	: Acc extends { readonly anyOf: readonly (infer A extends string)[]; readonly app: true } ? {
+			readonly app: AppCapability<A>
+			readonly target: Unavailable<'an anyOf endpoint holds ctx.app, its held actions application-wide: declare access with on or in for ctx.target'>
+			readonly within: Unavailable<'an anyOf endpoint holds ctx.app, its held actions application-wide: declare access with over for ctx.within'>
+		}
 	: Acc extends { readonly action: infer A extends string; readonly app: true } ? {
 			readonly app: AppCapability<A>
 			readonly target: Unavailable<'an app endpoint holds ctx.app, its action application-wide: declare access with on or in for ctx.target'>
@@ -285,6 +290,11 @@ type AccessData<Ix extends AnyDbIndex, K extends DataKind, Acc> = Acc extends In
 			readonly app: ScopedAppData<Ix, A>
 			readonly target: Unavailable<'an over endpoint lists through ctx.db.within: declare access with on or in for ctx.db.target'>
 		}
+	: Acc extends { readonly anyOf: readonly (infer A extends string)[]; readonly app: true } ? {
+			readonly app: AppData<Ix, A, K>
+			readonly target: Unavailable<'an anyOf endpoint reaches its data through ctx.db.app: declare access with on or in for ctx.db.target'>
+			readonly within: Unavailable<'an anyOf endpoint reaches its data through ctx.db.app: declare access with over for ctx.db.within'>
+		}
 	: Acc extends { readonly action: infer A extends string; readonly app: true } ? {
 			readonly app: AppData<Ix, A, K>
 			readonly target: Unavailable<'an app endpoint reaches its data through ctx.db.app: declare access with on or in for ctx.db.target'>
@@ -338,8 +348,12 @@ type DirectoryContext<K extends KitTypes, N extends string, A extends string> = 
  * otherwise the directory of the nearest dimension, its own or one containing it, that declares members. IAM checks the
  * endpoint's own action for a lookup and `members.list` for a list, so the type promises what IAM answers.
  */
-type MembersContext<K extends KitTypes, Acc> = Acc extends { readonly action: infer A extends string; readonly app: true }
-	? ApplicationMembersContext<K, A>
+type MembersContext<K extends KitTypes, Acc> = Acc extends { readonly anyOf: readonly string[] } ? {
+		readonly members: Unavailable<
+			"an anyOf endpoint reaches no member directory: declare access: { action: '<members.list>', app: true } for ctx.members"
+		>
+	}
+	: Acc extends { readonly action: infer A extends string; readonly app: true } ? ApplicationMembersContext<K, A>
 	: TargetOf<Acc> extends readonly [infer D extends string, infer A extends string]
 		? A extends MembersOf<K, D>['manage'] ? { readonly members: MemberManagement<D, A, K['role']> }
 		: [DirectoryOf<K, D>] extends [never] ? { readonly members: Unavailable<`neither ${D} nor a dimension containing it declares members`> }

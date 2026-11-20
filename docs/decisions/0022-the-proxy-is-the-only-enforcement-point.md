@@ -281,8 +281,8 @@ endpoint:
    redirect of rule 4. When `human` is not a caller, the answer is 401, never a login redirect.
 5. **Requirement.** The token must satisfy the endpoint's requirement: `member` (any permission of this
    application), the action in some scope, for the `app` access form the action held as a global grant (an
-   entry without a scope), because the endpoint reaches data of the whole application, and for `capabilities` each of
-   its actions in some scope ([ADR-0012](0012-fabrika-app-runtime.md) §10). Otherwise the answer is 403. A
+   entry without a scope), because the endpoint reaches data of the whole application, for `anyOf` any one of its
+   actions held as a global grant, and for `capabilities` each of its actions in some scope ([ADR-0012](0012-fabrika-app-runtime.md) §10). Otherwise the answer is 403. A
    `capabilities` requirement derives no delegation.
    This is `satisfies` of `@fabrika/auth-core`; the application repeats it as authorization and adds no check.
 6. **Admission.** A session-authenticated request that is not `GET` must carry
@@ -841,15 +841,15 @@ nothing. The surface serves no `requestDelegation`: only the proxy obtains a gra
   namespace declares `admission.origins` or its environment lists an origin, the operator re-pins that namespace
   (`namespaces update --proxy-source=current`). Control cannot refuse this deploy: it does not record the pin's
   release, and the 0.5 proxy of the window reads the field.
-- **A new row form needs a proxy that reads it.** A `public` row, a `capabilities` requirement, a file-response
-  profile, a `cache` field and a webhook's `authorization: 'forward'` are each refused by an older proxy's strict parser, so a manifest that holds one never
+- **A new row form needs a proxy that reads it.** A `public` row, a `capabilities` requirement, an `anyOf`
+  requirement, a file-response profile, a `cache` field and a webhook's `authorization: 'forward'` are each refused by an older proxy's strict parser, so a manifest that holds one never
   reaches a proxy that would serve it without its rule. **Rollout:** a contract without them keeps every digest byte
   for byte. On Cloudflare the runner deploys the proxy Worker with the application. On Zerops Control refuses, before
   any effect, a deploy whose contract holds a row that no older release's proxy parses, while the namespace's proxy
   source is another than the one it deploys new placements from, and names the re-pin
   (`fabrika control namespaces update --namespace=<id> --proxy-source=current`). It judges each row with the strict
   row parser of 0.4.8, 0.5.5 and 0.6.0, the newest patch of each minor before 0.7 in the window
-  ([ADR-0062](0062-a-platform-release-serves-older-framework-releases.md)), so the five forms above are refused, and so
+  ([ADR-0062](0062-a-platform-release-serves-older-framework-releases.md)), so the six forms above are refused, and so
   is any later one, without a list to keep. 0.7.0's parser is not a judge: Control does not record a pin's release, and
   a form only 0.7 reads would then reach a namespace pinned to 0.4–0.6, whose parser refuses the whole manifest. A row
   one of the judges parses deploys: every row of a 0.4, 0.5 or 0.6 application, and every row of a 0.7 or 0.8 one that

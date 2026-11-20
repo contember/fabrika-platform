@@ -25,15 +25,16 @@ export interface FileBinding {
 }
 
 /**
- * Whether a reference read with `action` lets its holder serve, open and copy the file: the table's or the column's
- * read action, or a table read action among `held`, the actions a job holds over the whole application. A column with
- * its own read action is answered only under that action (`visibleFor`), so `held` never widens it. A table read with
- * `'any'` admits whoever read the row: the store refused every other reader.
+ * Whether a reference read with `actions` (one, or an `anyOf` endpoint's held set) lets its holder serve, open and copy
+ * the file: the table's or the column's read action among them, or a table read action among `held`, the actions a job
+ * holds over the whole application. A column with its own read action is answered only under that action
+ * (`visibleFor`), so `held` never widens it. A table read with `'any'` admits whoever read the row: the store refused
+ * every other reader.
  */
-function readsFile(model: TableModel, column: string, action: string, held: NameSet): boolean {
+function readsFile(model: TableModel, column: string, actions: readonly string[], held: NameSet): boolean {
 	const own = hasOwn(model.columnReads, column) ? model.columnReads[column] : undefined
 	if (own !== undefined) {
-		return own === action
+		return listed(actions, own)
 	}
 	if (model.actions.readAny) {
 		return true
@@ -41,7 +42,16 @@ function readsFile(model: TableModel, column: string, action: string, held: Name
 	const reads = model.actions.read
 	for (let index = 0; index < reads.length; index++) {
 		const read = reads[index]
-		if (read === action || inSet(held, read)) {
+		if ((read !== undefined && listed(actions, read)) || inSet(held, read)) {
+			return true
+		}
+	}
+	return false
+}
+
+function listed(actions: readonly string[], action: string): boolean {
+	for (let index = 0; index < actions.length; index++) {
+		if (actions[index] === action) {
 			return true
 		}
 	}
@@ -51,7 +61,7 @@ function readsFile(model: TableModel, column: string, action: string, held: Name
 const NONE_HELD: NameSet = nameSet([])
 
 /**
- * Puts a file reference in each file column of `rows`, read with `action` in `session`: one statement loads every
+ * Puts a file reference in each file column of `rows`, read with `actions` in `session`: one statement loads every
  * file's metadata. Without a binding (a store's own runner) the columns keep their ids. `held` (a queue claim's) adds
  * the actions the site holds over the whole application: a reference is readable when one of them reads the table.
  */
@@ -60,7 +70,7 @@ export async function answerFiles<R>(
 	binding: FileBinding | undefined,
 	session: Session,
 	rows: R[],
-	action: string,
+	actions: readonly string[],
 	held: NameSet = NONE_HELD,
 ): Promise<R[]> {
 	const columns = ownKeys(model.files)
@@ -90,7 +100,7 @@ export async function answerFiles<R>(
 			if (meta === undefined) {
 				throw new QueryRefusedError('unexpected_row', `${model.name}.${column} references a file that is not stored`)
 			}
-			defineValue(row, column, fileReference(meta, binding.holder, readsFile(model, column, action, held)))
+			defineValue(row, column, fileReference(meta, binding.holder, readsFile(model, column, actions, held)))
 		}
 	}
 	return rows

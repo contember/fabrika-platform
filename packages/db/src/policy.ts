@@ -1053,6 +1053,24 @@ export function updatableBy(model: TableModel, action: string): NameSet {
 	return nameSet(columns)
 }
 
+/**
+ * The columns any of `actions` updates in `model`, as one role holding them: the union of `updatableBy` over them.
+ * One action's set is `updatableBy`'s own.
+ */
+export function updatableByAny(model: TableModel, actions: readonly string[]): NameSet {
+	if (actions.length === 1) {
+		return updatableBy(model, actions[0] ?? '')
+	}
+	const columns: string[] = []
+	for (let index = 0; index < actions.length; index++) {
+		const names = namesOf(updatableBy(model, actions[index] ?? ''))
+		for (let position = 0; position < names.length; position++) {
+			columns[columns.length] = names[position] ?? ''
+		}
+	}
+	return nameSet(columns)
+}
+
 /** Whether the table names `action`: one of its table actions, or a column's own write action. */
 export function namesAction(model: TableModel, action: string): boolean {
 	const { read, insert, update, delete: remove } = model.actions
@@ -1073,12 +1091,20 @@ export function namesAction(model: TableModel, action: string): boolean {
  * one. A capability reads its own row, so a write `Ref` sees the columns of its action and none of another's.
  */
 export function visibleFor(model: TableModel, action: string): readonly string[] {
+	return visibleForAny(model, [action])
+}
+
+/**
+ * The columns a capability holding `actions` reads, as one role holding them: every one that declares no read action of
+ * its own, or one of these.
+ */
+export function visibleForAny(model: TableModel, actions: readonly string[]): readonly string[] {
 	const columns = namesOf(model.columns)
 	const visible: string[] = []
 	for (let index = 0; index < columns.length; index++) {
 		const name = columns[index] ?? ''
 		const declared = hasOwn(model.columnReads, name) ? model.columnReads[name] : undefined
-		if (declared === undefined || declared === action) {
+		if (declared === undefined || includes(actions, declared)) {
 			visible[visible.length] = name
 		}
 	}

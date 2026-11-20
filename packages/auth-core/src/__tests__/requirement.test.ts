@@ -9,6 +9,7 @@ const workspace = (value: string): Scope => ({ type: 'workspace', value })
 const member: EndpointRequirement = { kind: 'member' }
 const deleteNote: EndpointRequirement = { kind: 'action', action: 'notes.delete', access: { form: 'on', dimension: 'note', from: 'id' } }
 const manageLists: EndpointRequirement = { kind: 'action', action: 'codelists.manage', access: { form: 'app' } }
+const cashDesk: EndpointRequirement = { kind: 'anyOf', actions: ['cash.audit', 'cash.read'], access: { form: 'app' } }
 const handover: EndpointRequirement = {
 	kind: 'capabilities',
 	capabilities: {
@@ -27,6 +28,9 @@ describe('satisfies refuses', () => {
 		['the app form, with a wildcard held in one scope only', manageLists, [grant('*', workspace('w1')), grant('codelists.manage', workspace('w2'))]],
 		['the app form, with another action held globally', manageLists, [grant('codelists.read')]],
 		['several capabilities, with one action held and the other not', handover, [grant('requests.handover', workspace('w1'))]],
+		['anyOf, with no listed action held', cashDesk, [grant('cash.manage')]],
+		['anyOf, with every listed action held in a scope only', cashDesk, [grant('cash.read', workspace('w1')), grant('cash.audit', workspace('w2'))]],
+		['anyOf, with a wildcard held in a scope only', cashDesk, [grant('cash.*', workspace('w1'))]],
 		['an action that only shares a string prefix', { kind: 'action', action: 'notes.read', access: { form: 'over', dimension: 'workspace' } }, [
 			grant('notes.readall'),
 		]],
@@ -48,6 +52,9 @@ describe('satisfies admits', () => {
 		['the app form, with the action held globally', manageLists, [grant('codelists.read', workspace('w1')), grant('codelists.manage')]],
 		['the app form, with a wildcard held globally', manageLists, [grant('codelists.*')]],
 		['several capabilities, each action held in some scope', handover, [grant('requests.handover', workspace('w1')), grant('records.read')]],
+		['anyOf, with the first listed action held globally', cashDesk, [grant('cash.audit')]],
+		['anyOf, with the second held globally and the first only in a scope', cashDesk, [grant('cash.audit', workspace('w1')), grant('cash.read')]],
+		['anyOf, with a wildcard that covers a listed action globally', cashDesk, [grant('cash.*')]],
 	])('%s', (_name, requirement, perms) => {
 		expect(satisfies(requirement, perms)).toBe(true)
 	})

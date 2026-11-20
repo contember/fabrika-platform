@@ -1315,7 +1315,7 @@ const ADMITS_NO_MORE: { readonly [Field in keyof EndpointRow]-?: (after: Endpoin
 	requirement: (after, before) => {
 		if (before.requirement === null) return opensToAnyone(before)
 		if (after.requirement === null || readsPathParameter(after) || readsPathParameter(before)) return false
-		return canonicalJson(after.requirement) === canonicalJson(before.requirement)
+		return requirementAdmitsNoMore(after.requirement, before.requirement)
 	},
 	callers: (after, before) => {
 		if (before.requirement === null) return opensToAnyone(before)
@@ -1339,6 +1339,23 @@ const ADMITS_NO_MORE: { readonly [Field in keyof EndpointRow]-?: (after: Endpoin
 	source: () => true,
 	input: () => true,
 	output: () => true,
+}
+
+/**
+ * Whether requirement `after` admits only callers `before` admits. The same requirement does; so does, under an `anyOf`
+ * `before`, the `app` form of an action it lists, or an `anyOf` whose list its own contains. Total over the kinds of
+ * `before`, so a new one fails the typecheck here until it is decided.
+ */
+export function requirementAdmitsNoMore(after: EndpointRequirement, before: EndpointRequirement): boolean {
+	switch (before.kind) {
+		case 'member':
+		case 'action':
+		case 'capabilities':
+			return canonicalJson(after) === canonicalJson(before)
+		case 'anyOf':
+			if (after.kind === 'anyOf') return after.actions.every((action) => before.actions.includes(action))
+			return after.kind === 'action' && after.access.form === 'app' && before.actions.includes(after.action)
+	}
 }
 
 /** An anonymous endpoint that turns no caller away: anyone who asks gets the answer. */
@@ -1380,7 +1397,7 @@ function endpointChanges(id: string, from: EndpointRow, to: EndpointRow): RuledL
 		...ruled('endpoint.kind', valueChange(`${name} kind`, from.kind, to.kind)),
 		...ruled('endpoint.route', valueChange(`${name} route`, `${from.method} ${from.path}`, `${to.method} ${to.path}`)),
 		...ruled('endpoint.callers', setChanges(name, from.callers, to.callers, 'gains caller', 'loses caller')),
-		...ruled('endpoint.requirement', valueChange(`${name} requirement`, from.requirement, to.requirement)),
+		...ruled('endpoint.requirement', requirementChanges(name, from.requirement, to.requirement)),
 		...admissionChanges(name, from, to),
 		...ruled('endpoint.cross-origin', crossOriginChanges(name, from.crossOrigin, to.crossOrigin)),
 		...ruled('endpoint.cache', cacheChange(name, from.cache, to.cache)),
@@ -1388,6 +1405,28 @@ function endpointChanges(id: string, from: EndpointRow, to: EndpointRow): RuledL
 		...ruled('endpoint.input', schemaChanges({ endpoint: name, side: 'input', path: '' }, from.input, to.input)),
 		...ruled('endpoint.output', outputChanges(name, from.output, to.output)),
 	])
+}
+
+/**
+ * A requirement's change. Between the `app` form of one action and `anyOf`, or two `anyOf` lists, each action whose
+ * global holders it now admits widens and each it no longer admits narrows; any other change widens as a whole.
+ */
+function requirementChanges(name: string, from: EndpointRequirement | null, to: EndpointRequirement | null): Line[] {
+	const before = globalActions(from)
+	const after = globalActions(to)
+	if (before === null || after === null || (from?.kind !== 'anyOf' && to?.kind !== 'anyOf')) {
+		return valueChange(`${name} requirement`, from, to)
+	}
+	return setLines(before, after, {
+		added: (action) => widening(`${name} admits callers holding \`${action}\` globally`),
+		removed: (action) => narrowing(`${name} no longer admits callers holding \`${action}\` globally`),
+	})
+}
+
+/** The actions a requirement admits a caller for, any one held as a global grant: an `app`-form action, an `anyOf` list. */
+function globalActions(requirement: EndpointRequirement | null): readonly string[] | null {
+	if (requirement?.kind === 'anyOf') return requirement.actions
+	return requirement?.kind === 'action' && requirement.access.form === 'app' ? [requirement.action] : null
 }
 
 /**
@@ -1709,6 +1748,7 @@ function audience(row: EndpointRow): string {
 /** What a credentialed caller must hold: `who are members`, or `` with `notes.read` (on `note`) ``. */
 export function requirementPhrase(requirement: EndpointRequirement): string {
 	if (requirement.kind === 'member') return 'who are members'
+	if (requirement.kind === 'anyOf') return `holding any of ${requirement.actions.map((action) => `\`${action}\``).join(', ')} globally`
 	if (requirement.kind === 'capabilities') {
 		const each = Object.entries(requirement.capabilities).map(([name, { action, access }]) =>
 			`\`${action}\` (${access.form} \`${access.dimension}\`, as \`${name}\`)`

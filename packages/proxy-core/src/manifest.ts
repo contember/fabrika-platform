@@ -16,7 +16,9 @@ import {
 	FILE_RESPONSE_KINDS,
 	type InstallationEndpointRow,
 	type InstallationEndpointTable,
+	isAnyOfList,
 	isDigest,
+	MAX_ANY_OF,
 	MAX_CACHE_AGE_SECONDS,
 	OPS_CONTENT_TYPE,
 	OPS_METHOD,
@@ -273,6 +275,11 @@ const capabilitySchema = z.object({ action: nameSchema, access: capabilityFormSc
 const requirementSchema = z.discriminatedUnion('kind', [
 	z.object({ kind: z.literal('member') }).strict(),
 	z.object({ kind: z.literal('action'), action: nameSchema, access: accessFormSchema }).strict(),
+	z.object({
+		kind: z.literal('anyOf'),
+		actions: z.tuple([nameSchema, nameSchema]).rest(nameSchema).refine(isAnyOfList, `two to ${MAX_ANY_OF} distinct actions, sorted`),
+		access: z.object({ form: z.literal('app') }).strict(),
+	}).strict(),
 	z.object({
 		kind: z.literal('capabilities'),
 		capabilities: z.record(nameSchema, capabilitySchema).refine((capabilities) => Object.keys(capabilities).length >= 2, 'at least two capabilities'),

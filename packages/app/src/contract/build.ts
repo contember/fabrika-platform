@@ -46,6 +46,7 @@ import {
 	type MailTemplate,
 	mailTemplateProblems,
 	type MailTemplates,
+	MAX_ANY_OF,
 	MAX_CACHE_AGE_SECONDS,
 	MESSAGE_KINDS,
 	type MessageKind,
@@ -1675,6 +1676,9 @@ class ArtifactBuilder {
 		if ('capabilities' in access) {
 			return this.#capabilities(where, procedure, access)
 		}
+		if ('anyOf' in access) {
+			return this.#anyOf(where, access)
+		}
 		const form = accessForm(access)
 		if (form === null) {
 			this.#problem(
@@ -1747,6 +1751,33 @@ class ArtifactBuilder {
 			capabilities[name] = { action: form.action, access: form.access }
 		}
 		return { kind: 'capabilities', capabilities }
+	}
+
+	/**
+	 * Any one of two to `MAX_ANY_OF` distinct actions of the vocabulary, each held as a global grant, with nothing beside
+	 * `app: true`: no `creates`, no `capabilities`, no scoped form. Sorted, so the order in the source keeps the digest.
+	 */
+	#anyOf(where: string, access: { readonly anyOf: readonly string[]; readonly app: true }): EndpointRequirement | null {
+		const allowed = `{ anyOf: ['<action>', …], app: true }, two to ${MAX_ANY_OF} distinct actions`
+		const listed: unknown = access.anyOf
+		if (!hasExactKeys(access, ['anyOf', 'app']) || access.app !== true || !Array.isArray(listed)) {
+			this.#problem(where, `access ${JSON.stringify(access)} is not the anyOf form (allowed: ${allowed}; it takes no other key)`)
+			return null
+		}
+		const actions: string[] = listed.filter((action) => typeof action === 'string')
+		if (actions.length !== listed.length || actions.length < 2 || actions.length > MAX_ANY_OF) {
+			this.#problem(where, `access.anyOf lists ${listed.length === 1 ? 'one action' : `${listed.length} actions`} (allowed: ${allowed})`)
+			return null
+		}
+		this.#unique(where, 'access.anyOf', actions)
+		for (const action of actions) {
+			this.#knownAction(where, action)
+		}
+		const [first, second, ...rest] = [...actions].sort()
+		if (first === undefined || second === undefined) {
+			return null
+		}
+		return { kind: 'anyOf', actions: [first, second, ...rest], access: { form: 'app' } }
 	}
 
 	#linkRequirement(where: string, access: LinkAccessDeclaration, mount: LinkMountDeclaration<SchemaShape>): EndpointRequirement | null {
@@ -2021,15 +2052,15 @@ class ArtifactBuilder {
 			// `#exports` refused the app form already: a description needs one dimension.
 			return null
 		}
-		if (first.kind === 'capabilities') {
-			// `#exports` refused several capabilities already: a consumer's key holds one action.
+		if (first.kind === 'capabilities' || first.kind === 'anyOf') {
+			// `#exports` refused several capabilities and `anyOf` already: a consumer's key holds one action.
 			return null
 		}
 		const description: EndpointRequirement = first.kind === 'member' || dimension === null
 			? first
 			: { kind: 'action', action: first.action, access: { form: 'over', dimension } }
 		const same = requirements.every((requirement) =>
-			requirement !== null && requirement.kind !== 'capabilities' && (requirement.kind === 'member'
+			requirement !== null && requirement.kind !== 'capabilities' && requirement.kind !== 'anyOf' && (requirement.kind === 'member'
 				? description.kind === 'member'
 				: description.kind === 'action' && requirement.action === description.action && dimensionOf(requirement) === dimension)
 		)
@@ -2897,9 +2928,10 @@ function accessForm(access: AccessDeclaration): ResolvedAccess | null {
 			? { form: 'action', action: access.action, access: { form: 'creates', dimension: access.creates } }
 			: null
 	}
-	if ('app' in access) {
+	if ('action' in access && 'app' in access) {
 		return hasExactKeys(access, ['action', 'app']) && access.app === true ? { form: 'action', action: access.action, access: { form: 'app' } } : null
 	}
+	// `anyOf` is no single action: `#requirement` reads it before this, and a capability is never one.
 	return null
 }
 

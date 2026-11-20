@@ -193,7 +193,8 @@ Per request, after the proxy has admitted it, the framework runs these steps in 
    ([ADR-0040](0040-share-one-token-verifier.md)).
 3. Check that the token's principal kind is one of the mount's callers.
 4. Check the endpoint's requirement: `member` (any permission of this application), the action in
-   some scope, for the `app` form the action held as a global grant, and for `capabilities` each of its actions.
+   some scope, for the `app` form the action held as a global grant, for `anyOf` one of its actions held as a
+   global grant, and for `capabilities` each of its actions.
 5. For a session request that is not `GET`, require `Sec-Fetch-Site: same-origin`, and the body codec of the
    endpoint's HTTP shape (§11): `application/json`, `multipart/form-data` for an input with file fields, or
    `application/x-www-form-urlencoded` where declared.
@@ -430,7 +431,7 @@ procedure (an IAM link key with its share SPA) and an export procedure (a consum
 contract) share one procedure engine. Public access is an access form, not a kind (§10). The body codec follows the
 input and the HTTP shape (§11).
 
-### 10. Access forms: public, and several capabilities
+### 10. Access forms: public, several capabilities, and any of several actions
 
 - **`access: { public: true }`** on an RPC procedure says anyone may call it. Its top-level `actions` say what the
   handler may do. It runs as the endpoint's own workload, which IAM signs for, and the data layer narrows its reach
@@ -443,6 +444,11 @@ input and the HTTP shape (§11).
   `ctx.capabilities.<name>` and binds each with `ctx.db.on`, `.in` or `.over`. An endpoint of several capabilities has
   no `ctx.target`, `ctx.within`, `ctx.db.app`, members or links. `creates`, `app` and an export take no
   `capabilities`.
+- **`access: { anyOf: ['<action>', …], app: true }`** admits a caller that holds any of two to sixteen actions as a
+  global grant. The proxy checks it as one requirement. The handler's `ctx.app` holds the listed actions the caller
+  holds, and `ctx.db.app` reaches what any of them reaches: a table operation, a column and a `when` condition each
+  admit the request when one held action admits it. An `anyOf` endpoint has no members, links or delegation, and
+  takes no `capabilities` or `creates`. The scoped forms do not take `anyOf`.
 
 `capabilities` removes one cause of off-road reach, not all. Reads across tables (joins, filters over related tables,
 aggregates) and locks over many rows still need `sql`.
