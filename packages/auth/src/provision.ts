@@ -95,6 +95,8 @@ export async function reconcileSchema(options: ReconcileSchemaOptions): Promise<
 		headers,
 		body: JSON.stringify(schema),
 		signal,
+		// The admin bearer and the body must never reach a redirect target; a 3xx is not ok below.
+		redirect: 'manual',
 	})
 	if (!response.ok) {
 		throw new ReconcileSchemaError(`PUT /admin/apps/${app}/schema failed (${response.status}): ${await detail(response)}`, response.status)
@@ -111,6 +113,7 @@ export async function reconcileSchema(options: ReconcileSchemaOptions): Promise<
 		headers,
 		body: JSON.stringify({ method: 'apps.setReturnOrigins', input: { app, origins: [...returnOrigins] } }),
 		signal,
+		redirect: 'manual',
 	})
 	const failure = registration.ok ? await rpcError(registration) : await detail(registration)
 	if (failure !== null) {
