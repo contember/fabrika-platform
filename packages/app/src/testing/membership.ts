@@ -855,16 +855,16 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 	const invitationMail = (invitationId: string, actionUrl: string, appUrl: string | null = null): RenderedMessage | undefined => {
 		const invitation = invitations.get(invitationId)
 		if (invitation === undefined) return undefined
-		const template = artifact.mail?.invitation?.[invitation.mailLocale] ?? null
+		const displayName = artifact.displayName ?? artifact.app
 		const render = iamMessageTemplate('invitation', {
 			locale: invitation.mailLocale,
-			template,
-			displayName: artifact.displayName ?? artifact.app,
+			template: artifact.mail?.invitation?.[invitation.mailLocale] ?? null,
+			displayName,
 			appUrl,
 			maxSubjectLength: MAX_EMAIL_SUBJECT_LENGTH,
 		})
 		return render({
-			appName: artifact.displayName ?? artifact.app,
+			appName: displayName,
 			role: invitation.role,
 			scope: invitation.scope.type,
 			recipient: invitation.email,
