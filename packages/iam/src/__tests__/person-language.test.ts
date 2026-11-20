@@ -177,6 +177,24 @@ describe("an invitation that names the person's language", () => {
 		expect((await n.f.repositories.principals.getPrincipalById(person.id))?.locale).toBe('uk')
 	})
 
+	test('an acceptance whose language cannot be written still accepts', async () => {
+		const n = await notes()
+		const person = await invitee(n)
+		await n.invite(INVITEE, { locale: 'uk' })
+		const { url, token } = linkOf(lastMail(n.email))
+		const principals = n.f.repositories.principals
+		const setLocale = principals.setLocale
+		principals.setLocale = () => Promise.reject(new Error('locale write refused'))
+		try {
+			const cookie = `${SESSION_COOKIE}=${await n.h.signSession(person.id, { authenticationMethod: 'password', idpSub: null })}`
+			const accepted = await n.send(post(`${url.pathname}${url.search}`, { token }, { Cookie: cookie }))
+			expect(accepted.status).toBe(302)
+		} finally {
+			principals.setLocale = setLocale
+		}
+		expect((await principals.getPrincipalById(person.id))?.locale).toBeNull()
+	})
+
 	test("the person's later reset is Ukrainian in a Czech application, and the browser keeps the language", async () => {
 		const n = await notes()
 		const person = await invitee(n)

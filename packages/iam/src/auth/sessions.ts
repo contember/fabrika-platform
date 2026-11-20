@@ -113,7 +113,14 @@ export async function issueSession(
 	headers.append('Set-Cookie', sessionCookie(sessionToken))
 	// A person with a language of their own keeps it on this browser's next sign-in page here (`LOCALE_COOKIE`); one
 	// without clears the language a previous person left on a shared browser.
-	const locale = signInLocaleCookie(request, parseLocale((await services.repositories.principals.getPrincipalById(input.principalId))?.locale))
+	// The session has committed and the cookie picks words only: a failed read leaves the remembered language as it is.
+	const locale = await services.repositories.principals.getPrincipalById(input.principalId).then(
+		(principal) => signInLocaleCookie(request, parseLocale(principal?.locale)),
+		(err: unknown) => {
+			logError(`the language of login for request '${input.requestId}' could not be read`, err)
+			return null
+		},
+	)
 	if (locale !== null) {
 		headers.append('Set-Cookie', locale)
 	}

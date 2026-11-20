@@ -900,10 +900,15 @@ export async function acceptInvitation(
 	if (accepted !== 'accepted') {
 		return { ok: false, reason: accepted === 'not_allowed' ? 'not_allowed' : 'invalid' }
 	}
-	// The language the inviting application named becomes the person's: IAM's later mail and pages speak it.
+	// The language the inviting application named becomes the person's: IAM's later mail and pages speak it. The
+	// acceptance has committed, and a language picks words only, so a failed write is logged, not answered.
 	const locale = parseLocale(invitation.locale)
 	if (locale !== null && locale !== principal.locale) {
-		await services.repositories.principals.setLocale(principal.id, locale)
+		try {
+			await services.repositories.principals.setLocale(principal.id, locale)
+		} catch (err) {
+			logError(`the language of accepted invitation '${invitation.id}' could not be kept`, err)
+		}
 	}
 	return { ok: true, invitation }
 }
