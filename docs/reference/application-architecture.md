@@ -2,7 +2,7 @@
 
 Where the code of a Fabrika application goes, and what each part may import and call. Every application, the
 examples and the template follow this layout. `fabrika-check` reads it: a break of platform integrity is a
-**refusal**, which fails the check; a step out of the structure is a **hint**, which it prints and does not fail on.
+**refusal**, which fails the check; a step out of the structure is a **hint**, which it reports and does not fail on.
 The serving API itself (`ctx`, access forms, the test kit) is in
 [`application-runtime.md`](application-runtime.md).
 

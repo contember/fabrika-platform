@@ -196,9 +196,8 @@ WU5, WU6, WU7 and WU9 are independent of each other. WU8 follows WU7.
   `@fabrika/provider-<id>/cli`. `packages/cli/src/index.ts` lost its provider switches; a command a provider does not
   declare is refused with its id. Zerops' namespace planning moved to `provider-zerops/src/namespace-cli.ts`; the CLI
   keeps the Control RPC half (origin, credential, transport, printing), so no provider depends on `control-contract`.
-  Not done: the checker's descriptor rule (`check/src/rules/crontab.ts`). `fabrika-check` runs in the build as
-  `bun x -p @fabrika/check@<release>` with no provider installed, so taking the rule from the provider changes what the
-  checker depends on or how the build runs it — a decision. App and namespace commands take a provider id only, and the
+  The checker's descriptor rule (`check/src/rules/crontab.ts`) was later removed: a deploy refuses every authored `run`
+  key and generates the crontab from the contract. App and namespace commands take a provider id only, and the
   Control token stays out of the provider's environment. Reviewed by an independent agent: its P1 (a test that did not
   typecheck), its P2 (a module specifier on `/cli`) and the cheap P3s fixed.
 - **WU9 (first slice).** `@fabrika/installation-init` now holds the generated secrets (`secrets.ts`), fabrika's half of
