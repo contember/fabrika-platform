@@ -167,7 +167,6 @@ interface Pinning {
 	readonly removals: (() => Promise<void>)[]
 }
 
-/** Seeded worlds, their removal taken by the case when they hold pinned values or known scope values. */
 /** `rows` with each `fabrika:caller` value replaced by the caller's id. */
 const boundTo = (rows: AppRows, callerId: string): AppRows =>
 	Object.fromEntries(
@@ -177,6 +176,7 @@ const boundTo = (rows: AppRows, callerId: string): AppRows =>
 		]),
 	)
 
+/** Seeded worlds, their removal taken by the case when they hold pinned values or known scope values. */
 const pinned = <W extends { readonly remove: () => Promise<void> }>(worlds: W, pinning: Pinning, scopes: ScopeValues): W => {
 	if (Object.keys(pinning.pins).length > 0 || Object.keys(scopes).length > 0) pinning.removals.push(worlds.remove)
 	return worlds

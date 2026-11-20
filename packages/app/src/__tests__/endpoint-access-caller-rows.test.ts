@@ -57,17 +57,14 @@ afterAll(async () => {
 })
 
 describe("the rows a global case's caller holds", () => {
-	test("with them, each global case's caller finds its own record", async () => {
-		const kit = endpointAccessKit(serve(contract, { database: scoped(tables) }), tables, database, {
+	// A new kit's first caller has the id the last kit's first caller had, so a record left behind would answer it.
+	test("with them, each global case's caller finds its own record; without them, the handler refuses it", async () => {
+		const seeded = endpointAccessKit(serve(contract, { database: scoped(tables) }), tables, database, {
 			callerRows: { people: { principal_id: GENERATED_CALLER } },
 		})
-		expect(await kit.global('api.shifts.mine', {})).toEqual({ answered: true })
-		expect(await kit.global('api.shifts.mine', {})).toEqual({ answered: true })
-	})
-
-	// A new kit's first caller has the id the last kit's first caller had, so a record left behind would answer it.
-	test('without them, a handler that looks up the caller refuses it: no case left its record behind', async () => {
-		const kit = endpointAccessKit(serve(contract, { database: scoped(tables) }), tables, database)
-		expect(await kit.global('api.shifts.mine', {})).toEqual({ answered: false, status: 403 })
+		expect(await seeded.global('api.shifts.mine', {})).toEqual({ answered: true })
+		expect(await seeded.global('api.shifts.mine', {})).toEqual({ answered: true })
+		const bare = endpointAccessKit(serve(contract, { database: scoped(tables) }), tables, database)
+		expect(await bare.global('api.shifts.mine', {})).toEqual({ answered: false, status: 403 })
 	})
 })
