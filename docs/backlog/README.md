@@ -99,7 +99,8 @@ rest of custom domains, a client address on a dedicated IPv4, a release and reco
 - [210](210-platform-review-fix-follow-ups.md): Thirteen P3s the reviews of the platform review's fixes left: cost default, device bucket, test gaps, run trigger.
 - [211](211-zerops-preset-review-follow-ups.md): Minor findings of the Zerops presets review: adoption refusal on republish/update, the backup live row, restore history, hourly on `standard`, the admin hop's request id.
 - [212](212-the-console-shows-no-database-backups.md): The console shows no database backups; a provider-owned read of each database's schedule, newest and oldest restore point.
-- [213](213-the-cloudflare-application-runtime-is-unverified-on-a-live-account.md): The secrets upload, the object's migration on an existing Worker and a large upload are unverified on a live account.
+- [293](293-the-application-objects-probes-on-a-live-account.md): The application object's probes still lack live rows, beyond the happy path of PITR and the upload half of R2 multipart, and the example's opice suite has not run on a Cloudflare installation.
+- [294](294-control-cannot-export-a-restored-original.md): A side restore rewinds the original object, but no Control verb exports or reads it, so its rows at the target time cannot be recovered.
 - [215](215-file-scanning-on-cloudflare.md): A scanning file kind is refused on Cloudflare: no ClamAV runs in a Worker.
 - [216](216-cloudflare-application-runtime-follow-ups.md): Smaller gaps of the Cloudflare application runtime.
 - [217](217-postmark-managed-unsubscribes-never-reach-the-application.md): An unsubscribe through Postmark's own link or footer reaches only Postmark; the application's consent records drift.
