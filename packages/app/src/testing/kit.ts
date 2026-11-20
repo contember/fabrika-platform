@@ -52,7 +52,7 @@ import type { FILE_SWEEP_JOB } from '../files/kinds'
 import type { FILE_SCAN_JOB, FileScanner } from '../files/scan'
 import { boot, type BootOptions, type CompiledContract, type ContractApp } from '../implement/boot'
 import { type ChallengeFetch, MINIMAL_CHALLENGE_WORK } from '../implement/challenge'
-import { type ConnectFetch, connectVariables } from '../implement/connect'
+import { type ConnectFetch, connectVariables, deepFreeze } from '../implement/connect'
 import type { SpaAssets } from '../implement/dispatch'
 import type { HandlerErrorSink } from '../implement/failures'
 import type { ApplicationEnvironment, ContractImplementation } from '../implement/implement'
@@ -201,7 +201,10 @@ export interface TestKit<C extends AnyContract> {
 	 * unreferenced files. Needs the application's data layer on Postgres.
 	 */
 	runJob(name: JobName<C> | typeof FILE_SCAN_JOB | typeof FILE_SWEEP_JOB, options?: JobRunOptions): Promise<JobRunResult>
-	/** Waits for the work requests left running: the runs a site's `ctx.kick` sent, a failure's report. */
+	/**
+	 * Waits for the work requests left running (the runs a site's `ctx.kick` sent, a failure's report) and for the
+	 * requests and job runs of this kit not yet answered.
+	 */
 	drain(): Promise<void>
 	/**
 	 * Runs every job with a wake due now or within `within` ms (0 by default) once, as the Cloudflare object's alarm
@@ -333,9 +336,10 @@ function compiledOnce(app: ContractImplementation): KitContract {
 	const tables = app.database?.tables ?? NO_TABLES
 	const cached = compiled.get(app.contract)
 	if (cached !== undefined && cached.tables === tables) return cached.kit
-	const artifact = compileContract(app.contract, tables)
+	// Frozen through: every later kit of the process boots the same objects, and the digest was taken of them as they are.
+	const artifact = deepFreeze(compileContract(app.contract, tables))
 	const contract: CompiledContract = Object.freeze({ artifact, digest: kitContractDigest(artifact) })
-	const kit: KitContract = Object.freeze({ contract, table: contractProxyTable(artifact, contract.digest) })
+	const kit: KitContract = deepFreeze({ contract, table: contractProxyTable(artifact, contract.digest) })
 	compiled.set(app.contract, { tables, kit })
 	return kit
 }
@@ -705,20 +709,29 @@ export function bootTestKit<C extends AnyContract>(
 		},
 	}
 
+	// The requests, job runs and due-job runs still running: a takeover waits for them, since they read the binding it moves.
+	const running = new Set<Promise<void>>()
 	let retired = false
-	/** Throws once a later kit of the same application took the data layer over. */
-	const live = (): void => {
+	/** Runs `work` as a call of this kit, refused once a later kit of the same application took the data layer over. */
+	const call = <T>(work: () => Promise<T>): Promise<T> => {
 		if (retired) {
-			throw new Error(`this test kit of '${name}' was replaced by a later testKit of the same application in this process; use that one`)
+			return Promise.reject(
+				new Error(`this test kit of '${name}' was replaced by a later testKit of the same application in this process; use that one`),
+			)
 		}
+		const result = work()
+		const settled = result.then(() => undefined, () => undefined)
+		running.add(settled)
+		void settled.then(() => running.delete(settled))
+		return result
 	}
 	if (layer !== null) {
 		heldLayers.set(layer, {
 			retire() {
 				if (retired) return
-				if (background.size > 0) {
+				if (background.size > 0 || running.size > 0) {
 					throw new Error(
-						`a test kit of '${name}' in this process still runs work its requests left (a kicked job, a report); await kit.drain() before its test file ends`,
+						`a test kit of '${name}' in this process still runs a request, a job or work its requests left (a kicked job, a report); await them and kit.drain() before its test file ends`,
 					)
 				}
 				retired = true
@@ -728,8 +741,8 @@ export function bootTestKit<C extends AnyContract>(
 		})
 	}
 
-	const kitFetch: RpcFetch = async (input, init) => {
-		live()
+	const kitFetch: RpcFetch = (input, init) => call(() => forward(input, init))
+	const forward: RpcFetch = async (input, init) => {
 		const request = await toRequest(origin, input, init)
 		if (new URL(request.url).origin !== origin) {
 			throw new TypeError(`the test kit serves only ${origin}, not ${new URL(request.url).origin}`)
@@ -778,22 +791,28 @@ export function bootTestKit<C extends AnyContract>(
 		}
 	}
 
-	const drain = async (): Promise<void> => {
+	/** The work requests left running; a job run waits for it, and must not wait for itself. */
+	const drainBackground = async (): Promise<void> => {
 		while (background.size > 0) {
 			await Promise.all(background)
 		}
 	}
-
-	const runJob = async (name: string, runOptions?: JobRunOptions): Promise<JobRunResult> => {
-		live()
-		await drain()
-		return application.jobs.run(name, runOptions)
+	const drain = async (): Promise<void> => {
+		while (background.size > 0 || running.size > 0) {
+			await Promise.all([...background, ...running])
+		}
 	}
+
+	const runJob = (name: string, runOptions?: JobRunOptions): Promise<JobRunResult> =>
+		call(async () => {
+			await drainBackground()
+			return application.jobs.run(name, runOptions)
+		})
 
 	// The cron fires `runDueJobs` ran early, as `<key>@<due>`: a run schedules the same fire again from the real now.
 	const ranEarly = new Set<string>()
-	const runDueJobs = async (dueOptions: { readonly within?: number } = {}): Promise<readonly DueJobRun[]> => {
-		live()
+	const runDueJobs = (dueOptions: { readonly within?: number } = {}): Promise<readonly DueJobRun[]> => call(() => runDue(dueOptions))
+	const runDue = async (dueOptions: { readonly within?: number }): Promise<readonly DueJobRun[]> => {
 		const within = dueOptions.within ?? 0
 		if (!Number.isFinite(within) || within < 0) {
 			throw new TypeError('runDueJobs({ within }) takes milliseconds, 0 or more')
@@ -804,7 +823,7 @@ export function bootTestKit<C extends AnyContract>(
 				"runDueJobs runs the jobs over the application's data layer: serve(contract, { database: scoped(tables) }) and testKit(app, { database })",
 			)
 		}
-		await drain()
+		await drainBackground()
 		await scheduler.repair()
 		const { jobs: leases, wakes } = frameworkTablesOf(app.database)
 		const now = (await leases.now()).getTime()

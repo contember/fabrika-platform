@@ -94,9 +94,26 @@ describe('a later test kit of the same application', () => {
 		})
 		await writerOf(first).notes.create({ workspaceId: 'w1', title: 'kicks a job' })
 		const database = await freshDatabase()
-		expect(() => testKit(implementation, { database })).toThrow('still runs work its requests left')
+		expect(() => testKit(implementation, { database })).toThrow('work its requests left')
 		finish()
 		await first.drain()
+		const second = testKit(implementation, { database })
+		expect(await writerOf(second).notes.titles({ workspaceId: 'w1' })).toEqual({ titles: [] })
+		await second.drain()
+	})
+
+	test('is refused while a call of the earlier kit still runs, until a drain waited for it', async () => {
+		const first = testKit(implementation, { database: await freshDatabase() })
+		held = new Promise((resolve) => {
+			finish = resolve
+		})
+		const run = first.runJob('settle')
+		const database = await freshDatabase()
+		expect(() => testKit(implementation, { database })).toThrow('still runs a request, a job')
+		const drained = first.drain()
+		finish()
+		await drained
+		expect(await run).toEqual({ status: 'succeeded', attempts: 1 })
 		const second = testKit(implementation, { database })
 		expect(await writerOf(second).notes.titles({ workspaceId: 'w1' })).toEqual({ titles: [] })
 		await second.drain()

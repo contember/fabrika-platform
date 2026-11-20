@@ -1039,8 +1039,9 @@ vocabulary (`packages/db/CLAUDE.md`).
   process (`compiledOnce`, by contract and tables) and hashes it natively (`kitContractDigest`, equal to
   `contractDigest`); `boot` reads that artifact through `BootOptions.compiledContract`, which only the kit passes. A
   later `testKit` of the same `scoped(tables)` layer takes the layer over: the earlier kit stops its kicks, releases its
-  binding (`ContractApp.release`) and throws on every later request, job or due-job run. A kit whose requests left work
-  running (a kicked job) is not taken over: the next kit throws until it was drained. Everything else is a new boot's.
+  binding (`ContractApp.release`) and throws on every later request, job or due-job run. A kit with a request or job run
+  still running, or work its requests left (a kicked job), is not taken over: the next kit throws until `kit.drain()`
+  waited for them. The shared artifact and proxy table are frozen through. Everything else is a new boot's.
 - The kit stands in for Control and IAM for workloads too: each job and webhook gets a random `px_` key, and the
   kit's token exchange signs its declared actions for it, with the kit's own key. A job's key and the tokens signed for
   it are its credential at `kitMembership`'s link operations (`jobByCredential`), held to IAM's rules for a job: its
@@ -1080,7 +1081,7 @@ vocabulary (`packages/db/CLAUDE.md`).
   procedures each run one operation of `@fabrika/db/testing`'s `tableProbe`, served by
   `testKit` on a `scoped(tables)` layer of its own: it proves the policy, not the
   application. `endpointAccessKit` boots the application's own `serve(…)` through
-  `standInIamKit`, once, because the application's layer binds once per process, with in-memory object
+  `standInIamKit`, once per file (a later kit in the process takes the application's layer over), with in-memory object
   storage: `kit.file` seeds one file per scope through the real upload endpoint. A case's file input is `sampleFile`'s file
   of its kind (the type's leading bytes and a marker), or the author's file fixture (`EndpointAccessOptions.files`, by
   endpoint and field, read once and typed by its bytes), for a handler that inspects the content. A 400 whose type the
