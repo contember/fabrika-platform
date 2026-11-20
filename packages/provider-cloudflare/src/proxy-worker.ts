@@ -203,7 +203,8 @@ function proxyHandler(env: CloudflareProxyEnv, manifest: ProxyManifest, verify: 
 
 		let answer: Response
 		try {
-			answer = await upstream.fetch(new Request(request, { headers: upstreamHeaders }))
+			// `manual`, as an incoming request already is: the application's own redirect is the answer, passed to the caller.
+			answer = await upstream.fetch(new Request(request, { headers: upstreamHeaders, redirect: 'manual' }))
 		} catch {
 			// Nothing of the error is answered or logged: it can carry the upstream request, a token header included.
 			answer = failure(502, 'bad gateway', request, download, manifest)
