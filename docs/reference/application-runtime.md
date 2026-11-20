@@ -2018,7 +2018,8 @@ each: `start`, `app-setup`, `table-and-migration`, `endpoint`, `jobs`, `files`, 
 - Control's MCP server answers it from the read-only tool `get_app_rules`, which its `instructions` name: the body, or
   one reference file by `topic`, headed by the version, with a warning when the workspace given as `workspaceId` pins
   an `@fabrika/app` range the version is outside;
-- the template's `AGENTS.md` is `renderAgentsFile`: the body and every reference file under a generated-file marker.
+- the template's `AGENTS.md` is `renderAgentsFile`: the body under a generated-file marker, then an index of the
+  reference files, each with its topic, its heading and its path in the installed `@fabrika/app`.
   The template is `examples/zerops-app`, and `packages/app`'s `agent-skill.test.ts` fails when its `AGENTS.md` is not
   the rendered file.
 

@@ -34,12 +34,17 @@ describe('the agent skill', () => {
 		}
 	})
 
-	test('the AGENTS.md of an application is the skill body and every reference file under a generated-file marker', () => {
+	test('the AGENTS.md of an application is the skill body and an index of the reference files under a generated-file marker', () => {
 		const skill = readAppAgentSkill()
 		const agents = renderAgentsFile(skill)
 		expect(agents).toStartWith(`<!-- Generated from skill/ of @fabrika/app ${skill.version}. Change those files, not this one. -->\n\n`)
 		expect(agents).toContain(skill.body)
-		for (const reference of skill.references) expect(agents).toContain(`\n---\n\n${reference.text}`)
+		expect(agents).toContain("Control's MCP tool `get_app_rules` answers each under its topic")
+		for (const reference of skill.references) {
+			const heading = reference.text.split('\n', 1)[0]?.replace(`# ${reference.path} — `, '')
+			expect(agents).toContain(`\n- \`${reference.topic}\`: ${heading} (\`node_modules/@fabrika/app/skill/${reference.path}\`)\n`)
+			expect(agents).not.toContain(reference.text)
+		}
 	})
 
 	test("the template's AGENTS.md is the rendered file: regenerate it, never edit it", () => {

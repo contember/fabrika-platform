@@ -70,8 +70,34 @@ export function installedAppAgentSkill(appRoot: string): AppAgentSkill | null {
 	}
 }
 
-/** The `AGENTS.md` of an application repository: the skill's body, then each reference file. */
+/** Where an application finds a reference file's full text: the `@fabrika/app` it installed ships `skill/`. */
+const INSTALLED_REFERENCES = `node_modules/@fabrika/app/skill/${REFERENCES_DIR}`
+
+/** What a reference file holds: its first line after `# references/<topic>.md — `. */
+const referenceSummary = (reference: AppAgentSkillReference): string => {
+	const heading = `# ${reference.path} — `
+	const first = reference.text.split('\n', 1)[0] ?? ''
+	if (!first.startsWith(heading)) throw new Error(`@fabrika/app: skill/${reference.path} does not start with '${heading}'`)
+	return first.slice(heading.length)
+}
+
+/**
+ * The `AGENTS.md` of an application repository: the skill's body, then an index of the reference files and where their
+ * full text is. The references stay out: an agent reads AGENTS.md whole, and they are thousands of lines.
+ */
 export function renderAgentsFile(skill: AppAgentSkill): string {
 	const marker = `<!-- Generated from skill/ of @fabrika/app ${skill.version}. Change those files, not this one. -->\n\n`
-	return marker + [skill.body, ...skill.references.map((reference) => reference.text)].join('\n---\n\n')
+	const index = [
+		'## Reference files',
+		'',
+		`The rules above name reference files under \`${REFERENCES_DIR}/\`. Their full text ships with the installed`
+		+ ` \`@fabrika/app\`, in \`${INSTALLED_REFERENCES}/<file>\`, and Control's MCP tool \`get_app_rules\` answers each`
+		+ ' under its topic, the file name without `.md`. Read the one you need before you write that part.',
+		'',
+		...skill.references.map((reference) =>
+			`- \`${reference.topic}\`: ${referenceSummary(reference)} (\`${INSTALLED_REFERENCES}/${reference.topic}.md\`)`
+		),
+		'',
+	].join('\n')
+	return `${marker}${skill.body}\n---\n\n${index}`
 }
