@@ -242,7 +242,9 @@ languages above; IAM refuses any other (`invalid_request`). IAM then:
    refusals speak it too;
 4. after each sign-in of a principal with a language of its own, remembers it
    for that browser in the host-only `__Host-fabrika_locale` cookie (one year,
-   `HttpOnly`, `SameSite=Lax`), which the next sign-in page here reads.
+   `HttpOnly`, `Secure`, `SameSite=Lax`), which the next sign-in page here
+   reads; a sign-in of a principal without one clears it, so a shared browser
+   does not keep the previous person's.
 
 A resend that names a language replaces the stored one; one that names none
 keeps it. An invitation that names none is written in the language the
@@ -261,8 +263,8 @@ A page takes its language from the first of these that names one IAM speaks:
 6. the installation's default, `en`.
 
 An e-mail has no request, so it takes the person's language, else the
-application's, else the default; a forgot-password e-mail is written in the
-language of the page that asked for it. The application's language ranks above
+application's, else the default; a forgot-password e-mail to a person without a
+language of their own is written in the language of the page that asked for it. The application's language ranks above
 the browser's, so an application that declares one shows every page it showed
 before; only a language the person was given wins over it. An application that
 serves people of several languages either names each person's on their

@@ -213,6 +213,24 @@ describe("an invitation that names the person's language", () => {
 		expect(await lang(await n.send(handoffLogin()))).toBe('cs')
 	})
 
+	test('a sign-in of a person without a language clears the one a previous person left on the browser', async () => {
+		const n = await notes()
+		await invitee(n)
+		const reset = async (headers: Record<string, string>) => {
+			await n.send(post(`/auth/forgot-password?app=${encodeURIComponent(APP)}`, { email: INVITEE }))
+			await n.f.ctx.settle()
+			const { url, token } = linkOf(lastMail(n.email))
+			expect(`${url.pathname}${url.search}`).toBe('/auth/password/reset?app=notes%40prod')
+			const response = await n.send(post(`${url.pathname}${url.search}`, { token, password: PASSWORD }, headers))
+			expect(response.status).toBe(302)
+			return response
+		}
+		const shared = await reset({ Cookie: `${LOCALE_COOKIE}=uk` })
+		expect(cookieOf(shared, LOCALE_COOKIE)).toBe(`${LOCALE_COOKIE}=`)
+		expect(shared.headers.getSetCookie().find((cookie) => cookie.startsWith(`${LOCALE_COOKIE}=`))).toContain('Max-Age=0')
+		expect(cookieOf(await reset({}), LOCALE_COOKIE)).toBeNull()
+	})
+
 	test('an invitation that names none speaks the language the invited person already has', async () => {
 		const n = await notes()
 		const person = await invitee(n)

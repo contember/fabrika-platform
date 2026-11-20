@@ -557,9 +557,10 @@ fails if that stops being true — it is the guard, not documentation of one.
   language beats the application's (`src/person-locale.ts`, `chooseLocale`): an invitation's `locale`
   (`membership_invitations.locale`, from `InvitationOptions.locale`) becomes `principals.locale` at acceptance; a
   password action keeps the language of its mail (`password_action_tokens.locale`); a link's `?locale=` (`appQuery`)
-  and the `__Host-fabrika_locale` cookie, set by `issueSession` for a principal with a language, carry it to pages
-  that know no person yet. The application's `locale` ranks above the browser's `Accept-Language`, which decides only
-  where no application declares one, so an application with a locale keeps every page it showed before. All of them
+  and the `__Host-fabrika_locale` cookie, set by `issueSession` for a principal with a language (and cleared by one
+  without), carry it to pages that know no person yet. The application's `locale` ranks above the browser's
+  `Accept-Language`, which decides only where no application declares one, so an application with a locale keeps
+  every page it showed before. All of them
   pick words only: `principals.locale` is written alone (`setLocale`), outside any principal's lock order and
   without an audit record.
   `messageTemplateFor` (`src/messages.ts`) is the one place a message's template is chosen. A refused browser-facing request answers

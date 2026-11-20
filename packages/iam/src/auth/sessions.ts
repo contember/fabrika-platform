@@ -7,7 +7,7 @@ import { type AuthenticationMethod, type PrincipalRow, principalStatus, type Ses
 import { type RequestContext } from '../env'
 import { logError } from '../log'
 import { randomToken } from '../oidc'
-import { localeCookie, parseLocale } from '../person-locale'
+import { parseLocale, signInLocaleCookie } from '../person-locale'
 import { resolvePermissionsAt } from '../resolve'
 import { hashToken } from '../secret'
 import { type Services } from '../services'
@@ -111,10 +111,11 @@ export async function issueSession(
 		: await handoffLocation(services, input.handoff, sessionId)
 	const headers = redirectHeaders(location)
 	headers.append('Set-Cookie', sessionCookie(sessionToken))
-	// A person with a language of their own keeps it on this browser's next sign-in page here (`LOCALE_COOKIE`).
-	const locale = parseLocale((await services.repositories.principals.getPrincipalById(input.principalId))?.locale)
+	// A person with a language of their own keeps it on this browser's next sign-in page here (`LOCALE_COOKIE`); one
+	// without clears the language a previous person left on a shared browser.
+	const locale = signInLocaleCookie(request, parseLocale((await services.repositories.principals.getPrincipalById(input.principalId))?.locale))
 	if (locale !== null) {
-		headers.append('Set-Cookie', localeCookie(locale))
+		headers.append('Set-Cookie', locale)
 	}
 	if (input.clearOidc === true) {
 		for (const cookie of endingFlightCookies()) {

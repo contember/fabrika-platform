@@ -3,12 +3,13 @@
 // a hint for words and nothing else: none of them decides a landing, an origin or an authority.
 
 import { DEFAULT_LOCALE, isLocale, type Locale } from '@fabrika/auth-core'
-import { readCookie, serializeCookie } from './auth/cookies'
+import { clearCookie, readCookie, serializeCookie } from './auth/cookies'
 
 /**
  * The language a browser last signed in with here, for the pages IAM shows before it knows who is reading: a sign-in
- * page reads it, so a person whose language differs from the application's keeps theirs after the first visit.
- * Host-only, like every cookie IAM writes, and words only: nothing reads it as a claim about the person.
+ * page reads it, so a person whose language differs from the application's keeps theirs after the first visit. A
+ * sign-in of a person without a language of their own clears it, so a shared browser does not keep the previous
+ * person's. Host-only, like every cookie IAM writes, and words only: nothing reads it as a claim about the person.
  */
 export const LOCALE_COOKIE = '__Host-fabrika_locale'
 
@@ -75,7 +76,7 @@ export function readerLocale(request: Request | null | undefined): Locale {
  */
 export function browserLocale(header: string | null): Locale | null {
 	if (header === null || header === '') return null
-	const ranges = header.split(',').slice(0, MAX_LANGUAGE_RANGES).flatMap((part, index) => {
+	const ranges = header.split(',', MAX_LANGUAGE_RANGES).flatMap((part, index) => {
 		const [range = '', ...parameters] = part.split(';').map((piece) => piece.trim())
 		let weight = 1
 		for (const parameter of parameters) {
@@ -93,4 +94,13 @@ export function browserLocale(header: string | null): Locale | null {
 /** The `Set-Cookie` that remembers `locale` for this browser's next page here (`LOCALE_COOKIE`). */
 export function localeCookie(locale: Locale): string {
 	return serializeCookie(LOCALE_COOKIE, locale, { httpOnly: true, secure: true, sameSite: 'Lax', maxAge: LOCALE_COOKIE_MAX_AGE_SECONDS })
+}
+
+/**
+ * The `Set-Cookie` a sign-in of a person with `locale` (null for none) answers with: it remembers theirs, or clears a
+ * language the browser still holds from someone else; null when there is nothing to change.
+ */
+export function signInLocaleCookie(request: Request, locale: Locale | null): string | null {
+	if (locale !== null) return localeCookie(locale)
+	return readCookie(request.headers.get('Cookie'), LOCALE_COOKIE) === null ? null : clearCookie(LOCALE_COOKIE)
 }
