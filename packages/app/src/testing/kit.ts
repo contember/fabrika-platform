@@ -362,13 +362,13 @@ export function testKit<C extends AnyContract>(app: ContractImplementation<C>, o
 	return bootTestKit(app, options).kit
 }
 
-/** The kit of the isolation kits' cases, and its stand-in IAM, which seeds the invitations and links a case names. */
+/** The kit of the endpoint access kit's cases, and its stand-in IAM, which seeds the invitations and links a case names. */
 export interface StandInIamKit<C extends AnyContract> {
 	readonly kit: TestKit<C>
 	readonly standIn: KitMembership
 }
 
-/** The kit of the isolation kits' cases, with a handle on its stand-in IAM to seed what a case names. */
+/** The kit of the endpoint access kit's cases, with a handle on its stand-in IAM to seed what a case names. */
 export function standInIamKit<C extends AnyContract>(
 	app: ContractImplementation<C>,
 	options: Omit<TestKitOptions, 'membership'> = {},

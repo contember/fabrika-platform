@@ -1,4 +1,5 @@
-// The test functions the isolation kits' cases register through. A run that preloads `@fabrika/app/testing/preload`
+// The test functions the leak sweep, and the suites that import them from `@fabrika/app/testing/isolation`, register
+// through. A run that preloads `@fabrika/app/testing/preload`
 // captures Bun's own `test`, `describe`, `expect` and `afterAll` before any application module loads, so a
 // `mock.module('bun:test', …)` in application code cannot replace what the kits use. Each case counts
 // the `expect` calls it ran; one that ran none fails, whatever the runner reports.
@@ -19,7 +20,7 @@ function isRunner(value: unknown): value is TestRunner {
 		&& ['test', 'describe', 'expect', 'afterAll'].every((name) => typeof Reflect.get(value, name) === 'function')
 }
 
-/** Captures Bun's test functions process-wide, once; the platform's preload calls it before the application loads. */
+/** Captures Bun's test functions process-wide, once; a run that preloads `@fabrika/app/testing/preload` calls it first. */
 export function installTestRunner(): void {
 	if (isRunner(Reflect.get(globalThis, RUNNER))) {
 		return
@@ -46,7 +47,7 @@ export function test(name: string, body: () => Promise<void>): void {
 		const before = expectCalls
 		await body()
 		if (expectCalls === before) {
-			throw new Error(`the generated case '${name}' ran no expect, so it proved nothing`)
+			throw new Error(`the case '${name}' ran no expect, so it proved nothing`)
 		}
 	})
 }

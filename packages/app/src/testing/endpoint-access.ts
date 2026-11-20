@@ -392,7 +392,7 @@ const cleanScanner: FileScanner = {
 }
 
 /**
- * The variables `boot` requires of `app` that a generated case never uses: each challenge's secret and site key, since
+ * The variables `boot` requires of `app` that a case of the kit never uses: each challenge's secret and site key, since
  * no case solves a challenge, and each SPA mount's `public` variables, since no case reads a page's config. The kit's
  * challenge stand-in refuses every token, so no verification leaves the process.
  */
