@@ -10,6 +10,7 @@ import {
 	AUTH_HANDOFF_STATE_PARAM,
 	invitationOptionsProblem,
 	type Locale,
+	LOCALE_COOKIE,
 	SESSION_COOKIE,
 } from '@fabrika/auth-core'
 import type { EmailMessage } from '@fabrika/email'
@@ -22,7 +23,7 @@ import { assignMember, createScope, requestDelegation } from '../membership'
 import { pkceChallenge } from '../oidc'
 import type { PasswordHasher, StoredPasswordHash } from '../password-crypto'
 import { issuePasswordAction } from '../password-service'
-import { browserLocale, chooseLocale, LOCALE_COOKIE } from '../person-locale'
+import { browserLocale, chooseLocale } from '../person-locale'
 import { hashToken } from '../secret'
 import { createHarness, type Harness } from './helpers/harness'
 import {
@@ -390,24 +391,16 @@ describe('every page a person invited in their language reaches', () => {
 		expect(await other.text()).toContain('<h1>Ви ввійшли з іншим обліковим записом</h1>')
 	})
 
-	test('its "sign in first" remembers the language for the sign-in the application\'s proxy starts', async () => {
+	test("its \"sign in first\" remembers the invitation's language on IAM's host, even without the link's ?locale=", async () => {
 		const n = await notes()
 		await invitee(n)
 		const { path, token } = await invited(n)
-		const signInFirst = await n.send(post(path, { token }))
+		const signInFirst = await n.send(post(path.replace('&locale=uk', ''), { token }))
 		expect(signInFirst.status).toBe(401)
-		expect(await signInFirst.text()).toContain(`href="${LANDING}/"`)
-		expect(cookieOf(signInFirst, LOCALE_COOKIE)).toBe(`${LOCALE_COOKIE}=uk`)
-		expect(signInFirst.headers.getSetCookie().find((cookie) => cookie.startsWith(`${LOCALE_COOKIE}=`))).toContain('HttpOnly; Secure; SameSite=Lax')
-		// The application's address bounces the browser to a sign-in without `?locale=`; the cookie makes it speak Ukrainian.
-		const signIn = await n.send(handoffLogin({ Cookie: `${LOCALE_COOKIE}=uk` }))
-		expect(await signIn.text()).toContain('<h1>Вхід до застосунку Poznámky</h1>')
-
-		// The invitation's own language counts even when the form's query lost the link's `?locale=`.
-		const unhinted = await n.send(post(path.replace('&locale=uk', ''), { token }))
-		expect(unhinted.status).toBe(401)
-		expect(cookieOf(unhinted, LOCALE_COOKIE)).toBe(`${LOCALE_COOKIE}=uk`)
-		expect(await lang(unhinted)).toBe('uk')
+		expect(await lang(signInFirst)).toBe('uk')
+		const remembered = signInFirst.headers.getSetCookie().find((cookie) => cookie.startsWith(`${LOCALE_COOKIE}=`))
+		expect(remembered).toStartWith(`${LOCALE_COOKIE}=uk;`)
+		expect(remembered).toContain('HttpOnly; Secure; SameSite=Lax')
 	})
 
 	test("without the application's address its \"sign in first\" sends IAM's own sign-in the invitation's language", async () => {
@@ -432,21 +425,6 @@ describe('every page a person invited in their language reaches', () => {
 		expect(signInFirst.status).toBe(401)
 		expect(await lang(signInFirst)).toBe('cs')
 		expect(cookieOf(signInFirst, LOCALE_COOKIE)).toBeNull()
-	})
-
-	test("the proxy's bounce with the application host's language speaks it, and the form keeps the handoff", async () => {
-		const n = await notes()
-		const bounced = handoffLogin()
-		const url = new URL(bounced.url)
-		url.searchParams.set('locale', 'uk')
-		const page = await n.send(new Request(url))
-		expect(page.status).toBe(200)
-		const html = await page.text()
-		expect(html).toContain('<html lang="uk">')
-		expect(html).toContain('action="/auth/login?locale=uk"')
-		expect(html).toContain(`name="state" value="${HANDOFF_STATE}"`)
-		expect(html).toContain(`name="code_challenge" value="${HANDOFF_CHALLENGE}"`)
-		expect(await lang(await n.send(handoffLogin()))).toBe('cs')
 	})
 
 	test("IAM's sign-in reached with the language keeps it through a refused password and its links", async () => {
@@ -512,8 +490,17 @@ describe("the application's proxy and IAM, end to end", () => {
 		if (location === null) throw new Error('no bounce')
 		return new Request(location, iamCookie === undefined ? {} : { headers: { Cookie: iamCookie } })
 	}
-	const hiddenFields = (html: string) =>
-		Object.fromEntries([...html.matchAll(/<input type="hidden" name="([^"]+)" value="([^"]*)"/g)].map((m) => [m[1], m[2]?.replaceAll('&amp;', '&')]))
+	/** The sign-in page's form: where it posts and its hidden fields, the proxy's handoff among them. */
+	function signInForm(html: string): { action: string; fields: Record<string, string> } {
+		const action = /<form method="post" action="([^"]+)"/.exec(html)?.[1]
+		if (action === undefined) throw new Error('no sign-in form')
+		const hidden = html.matchAll(/<input type="hidden" name="([^"]+)" value="([^"]*)"/g)
+		return { action, fields: Object.fromEntries([...hidden].map(([, name = '', value = '']) => [name, value.replaceAll('&amp;', '&')])) }
+	}
+	const signIn = (html: string, headers: Record<string, string> = {}) => {
+		const { action, fields } = signInForm(html)
+		return post(action, { ...fields, email: INVITEE, password: 'the old long passphrase' }, headers)
+	}
 
 	test('an invitation\'s "sign in first" reaches a sign-in in its language, which then signs the browser in to the application', async () => {
 		const n = await notes()
@@ -534,14 +521,8 @@ describe("the application's proxy and IAM, end to end", () => {
 		expect(html).toContain('<html lang="uk">')
 		expect(html).toContain('<h1>Вхід до застосунку Poznámky</h1>')
 
-		// The page's form carries the proxy's handoff, and signing in returns the browser to the application.
-		const action = /<form method="post" action="([^"]+)"/.exec(html)?.[1]
-		if (action === undefined) throw new Error('no sign-in form')
-		const fields = hiddenFields(html)
-		expect(fields.state).toBe(new URL(bounced.url).searchParams.get('state') ?? '')
-		const signedIn = await n.send(
-			post(action, { ...fields, email: INVITEE, password: 'the old long passphrase' }, { Cookie: remembered ?? '' }),
-		)
+		// Signing in through the page's form, which carries the proxy's handoff, returns the browser to the application.
+		const signedIn = await n.send(signIn(html, { Cookie: remembered ?? '' }))
 		expect(signedIn.status).toBe(302)
 		expect(signedIn.headers.get('location')?.startsWith(`${LANDING}/`)).toBe(true)
 		// The person has no language of their own until they accept, so the sign-in clears the cookie as any such
@@ -553,19 +534,22 @@ describe("the application's proxy and IAM, end to end", () => {
 		expect((await n.send(post(invitation, { token }, { Cookie: session }))).status).toBe(302)
 
 		// Accepting kept the language as the person's: their next sign-in through the proxy remembers it again.
-		const again = await n.send(await bounce())
-		const againHtml = await again.text()
-		const againAction = /<form method="post" action="([^"]+)"/.exec(againHtml)?.[1] ?? ''
-		const next = await n.send(post(againAction, { ...hiddenFields(againHtml), email: INVITEE, password: 'the old long passphrase' }))
+		const next = await n.send(signIn(await (await n.send(await bounce())).text()))
 		expect(next.status).toBe(302)
 		expect(cookieOf(next, LOCALE_COOKIE)).toBe(`${LOCALE_COOKIE}=uk`)
 	})
 
-	test("the language the application left on its own host reaches IAM's sign-in through its proxy", async () => {
+	test("the language the application left on its own host reaches IAM's sign-in through its proxy, and its form keeps it", async () => {
 		const n = await notes()
 		const bounced = await bounce(`theme=dark; ${LOCALE_COOKIE}=uk`)
-		expect(new URL(bounced.url).searchParams.get('locale')).toBe('uk')
-		expect(await lang(await n.send(bounced))).toBe('uk')
+		const query = new URL(bounced.url).searchParams
+		expect(query.get('locale')).toBe('uk')
+		const html = await (await n.send(bounced)).text()
+		expect(html).toContain('<html lang="uk">')
+		const { action, fields } = signInForm(html)
+		expect(action).toBe('/auth/login?locale=uk')
+		expect(fields['state']).toBe(query.get('state') ?? '')
+		expect(fields['code_challenge']).toBe(query.get('code_challenge') ?? '')
 		expect(await lang(await n.send(await bounce('theme=dark')))).toBe('cs')
 		expect(await lang(await n.send(await bounce(`${LOCALE_COOKIE}=de`)))).toBe('cs')
 	})
