@@ -213,7 +213,9 @@ describe('issuerJwks', () => {
 		const location = `http://localhost:${target.port}/jwks.json`
 		const redirecting = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response(null, { status, headers: { location } }) })
 		try {
-			await expect(issuerJwks(`http://127.0.0.1:${redirecting.port}`).getJwks()).rejects.toThrow('no usable key set')
+			await expect(issuerJwks(`http://127.0.0.1:${redirecting.port}`).getJwks()).rejects.toThrow(
+				`no usable key set: it answered ${status}, a redirect, which is not followed; set FABRIKA_IAM_ISSUER`,
+			)
 			expect(arrivals).toEqual([])
 		} finally {
 			await redirecting.stop(true)
