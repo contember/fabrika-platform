@@ -36,6 +36,7 @@ import { refuseInProduction } from '@fabrika/db/production'
 import { MemoryEmailSender } from '@fabrika/email/memory'
 import type { FileObjectStore } from '@fabrika/platform'
 import { type IamGateway, REQUEST_ID_HEADER, stripFabrikaCookies } from '@fabrika/proxy-core'
+import { type ContractProxyTable, contractProxyTable } from '@fabrika/proxy-core/manifest'
 import { exportJWK, generateKeyPair, SignJWT } from 'jose'
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
@@ -318,18 +319,25 @@ export function kitContractDigest(artifact: ContractArtifact): string {
 
 const NO_TABLES: Readonly<Record<string, never>> = Object.freeze({})
 
-/** Each contract this process compiled, with the tables it was compiled against. */
-const compiled = new WeakMap<object, { readonly tables: object; readonly contract: CompiledContract }>()
+/** A contract the kit compiled, and the endpoint table its proxy enforces. */
+interface KitContract {
+	readonly contract: CompiledContract
+	readonly table: ContractProxyTable
+}
 
-/** `app`'s contract compiled and hashed once per process, however many test files boot it. */
-function compiledOnce(app: ContractImplementation): CompiledContract {
+/** Each contract this process compiled, with the tables it was compiled against. */
+const compiled = new WeakMap<object, { readonly tables: object; readonly kit: KitContract }>()
+
+/** `app`'s contract compiled and hashed once per process, and its endpoint table built once, however many test files boot it. */
+function compiledOnce(app: ContractImplementation): KitContract {
 	const tables = app.database?.tables ?? NO_TABLES
 	const cached = compiled.get(app.contract)
-	if (cached !== undefined && cached.tables === tables) return cached.contract
+	if (cached !== undefined && cached.tables === tables) return cached.kit
 	const artifact = compileContract(app.contract, tables)
 	const contract: CompiledContract = Object.freeze({ artifact, digest: kitContractDigest(artifact) })
-	compiled.set(app.contract, { tables, contract })
-	return contract
+	const kit: KitContract = Object.freeze({ contract, table: contractProxyTable(artifact, contract.digest) })
+	compiled.set(app.contract, { tables, kit })
+	return kit
 }
 
 /** A kit holding its application's data layer, until a later kit of the same application in this process takes it over. */
@@ -389,7 +397,7 @@ export function bootTestKit<C extends AnyContract>(
 	const appId = `${name}@${TEST_ENVIRONMENT}`
 	const host = `${name}.test`
 	const origin = `https://${host}`
-	const compiledContract = compiledOnce(app)
+	const { contract: compiledContract, table } = compiledOnce(app)
 	const { artifact } = compiledContract
 	const signing = generateKeyPair(TOKEN_ALG)
 	const jwks: Promise<Jwks> = signing.then(async ({ publicKey }) => {
@@ -678,7 +686,7 @@ export function bootTestKit<C extends AnyContract>(
 	}
 
 	const proxy = endpointProxy({
-		artifact,
+		table,
 		appId,
 		host,
 		iam,
