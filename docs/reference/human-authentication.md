@@ -251,6 +251,15 @@ keeps it. An invitation that names none is written in the language the
 mailbox's principal already has, else the application's. Every one of these is
 a hint for words: none decides a landing, an origin or an authority.
 
+The principal's language belongs to the person on the installation, not to the
+application that named it: once an invitation that names one is accepted, IAM's
+pages and e-mails for every application speak it, including one that declares
+a `locale` of its own. The most recently accepted invitation that names a
+language replaces the stored one, so applications that name different languages
+for the same person take turns. IAM tells no application which language a
+person keeps, and the forgot-password page answers alike whichever it is. A
+principal's language is removed with the principal.
+
 A page takes its language from the first of these that names one IAM speaks:
 
 1. the person's own, as IAM stored it for the flow (the invitation's, the
