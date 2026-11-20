@@ -3,7 +3,10 @@
 
 import { type Locale, LOCALE_COOKIE } from '@fabrika/auth-core'
 
-/** A year: the cookie is a preference the page renews whenever the person picks a language again. */
+/**
+ * A year: the cookie is a preference the page renews whenever the person picks a language again. Safari caps a cookie
+ * a script writes at seven days, so a page that wants it kept longer there calls `rememberSignInLocale` on each visit.
+ */
 const MAX_AGE_SECONDS = 365 * 24 * 60 * 60
 
 /**
