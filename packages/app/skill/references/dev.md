@@ -75,6 +75,13 @@ export default seed
   the subject, the key the job passed, the time and the transport's answer. It opens to every field, the text, and the
   HTML in a sandboxed frame that runs no script and loads nothing. `dev.mail.refuse('provider_rejected')` in the seed
   previews a refused one; `dev.mail.heal()` ends it.
+- An invitation's row shows the subject IAM would send, its role, scope value and the e-mail's language, and opens to
+  the e-mail as IAM writes it: in the invitation's `locale`, else the language the person kept from an invitation they
+  accepted, else the application's `locale`, from the application's `mail` template of that language or IAM's own
+  wording. To preview what an invitee in another language receives, have the seed call an endpoint that passes
+  `{ locale: 'uk' }` to `ctx.members.assign`. The page around it stays in the application's language, and its button
+  accepts the invitation (the link inside the frame opens nothing). There is no password mail to preview: the stand-in
+  signs no password.
 - The seed's second argument reads what left the application: `outside.mails()` is every message a job handed to the
   stand-in, oldest first (`{ id, at, to, subject, text, html, key, transportKey, answer, outcome, delivered, … }`), so
   the seed can open a link the application mailed. Run the job first (`dev.runJob('<job>')`), or let a mutation's
@@ -97,7 +104,7 @@ ARCHIVE_KEY=dev
   anonymous, the link pages, the mail IAM and the application's jobs sent, and the dev outbox. It speaks the vocabulary's `locale` and shows its `displayName`.
 - Every SPA page carries a toolbar in the bottom corner: who you are, the personas to switch to (the page reloads as
   that caller), the picker, the link pages, the mail and the dev outbox. An invitation's link accepts it; the browser
-  is the invited person from then on. A job's message opens at `/__fabrika/dev/mail/<id>`.
+  is the invited person from then on. A job's message and an invitation's e-mail open at `/__fabrika/dev/mail/<id>`.
 - The choice stays in a cookie the application never sees. The data is gone when the command stops.
 - It serves this machine only (`--host` is a loopback address, `--port=0` picks a free port), answers no request
   addressed to another host name, and runs no cron job on its schedule: the seed runs one with `dev.runJob`, a test with `kit.runJob`. A mutation's
