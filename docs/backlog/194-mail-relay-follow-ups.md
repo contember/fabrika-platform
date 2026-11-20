@@ -22,9 +22,6 @@ blocked-by: []
    final `installation:*` row at any age.
 5. **A failed enqueue at acceptance waits up to 10 minutes.** The row is `queued` and the sender's retry finds the
    existing row and enqueues nothing; maintenance re-enqueues it after `MAIL_STALE_QUEUED_S`.
-6. **The relay accepts attachments the installation's transport cannot send.** It checks against
-   `PLATFORM_MAIL_CAPABILITIES` (10 MiB), not against Control's transport. Over SmartEmailing, which sends no
-   attachments, the message is accepted and then fails `invalid_message` at dispatch.
 7. **IAM's key is derived on every request.** `authenticate` computes `installationMailKey` per request; compute it
    once at boot.
 

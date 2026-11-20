@@ -185,6 +185,14 @@ describe('the mail dispatcher', () => {
 		expect(d.sender?.handoffs).toEqual([])
 	})
 
+	test('a stored attachment the transport refuses fails as invalid_message and sends nothing', async () => {
+		const d = dispatcher(new MemoryEmailSender({ capabilities: { attachmentExtensions: ['pdf'] } }))
+		const content = new Uint8Array(4)
+		const id = await stored(d.messages, { message: { ...MESSAGE, attachments: [{ filename: 'data.json', contentType: 'application/json', content }] } })
+		expect(await d.dispatch(id)).toEqual({ status: 'failed', code: 'invalid_message' })
+		expect(d.sender?.handoffs).toEqual([])
+	})
+
 	test('a message that is not queued, or does not exist, is skipped without a send', async () => {
 		const d = dispatcher()
 		for (const state of ['held', 'dropped'] satisfies MailMessageState[]) {

@@ -3,7 +3,7 @@
 // dispatcher when it passes. Runtime-neutral: the Bun process hands it a `MailRelay`, and so does the Worker when it
 // binds its queue and content bucket.
 
-import type { EmailMessage, EmailSenderCapabilities } from '@fabrika/email'
+import { EmailDeliveryError, type EmailMessage, type EmailSenderCapabilities, validateEmailAttachments, validateEmailBroadcast } from '@fabrika/email'
 import {
 	encodePlatformMailRequest,
 	hashPlatformKey,
@@ -109,10 +109,11 @@ async function record(deps: MailAcceptDeps, sender: string, message: EmailMessag
 	const fingerprint = await platformMailFingerprint(message)
 	// Refused now, while the job can still tell, rather than failed at dispatch: the transport would refuse it there.
 	// A retry of a message recorded before the transport changed gets that message's answer, as any retry does.
-	if (message.broadcast === true && deps.transportCapabilities !== null && deps.transportCapabilities.broadcast !== true) {
+	const refusal = deps.transportCapabilities === null ? null : transportRefusal(message, deps.transportCapabilities)
+	if (refusal !== null) {
 		const recorded = await deps.messages.find(sender, message.idempotencyKey)
 		if (recorded !== null) return replayAnswer(recorded, fingerprint)
-		console.info('mail relay: a broadcast message refused: the transport sends none')
+		console.info(`mail relay: a message refused: ${refusal}`)
 		return refuse('invalid_message')
 	}
 	const domain = recipientDomain(message.to)
@@ -131,6 +132,18 @@ async function record(deps: MailAcceptDeps, sender: string, message: EmailMessag
 	if (row.state === 'queued') await enqueueMailDispatch(deps.queue, row.id)
 	console.info(`mail relay: message ${row.id} accepted as ${row.state}`)
 	return platformMailAnswerResponse({ status: 'accepted', messageId: row.id })
+}
+
+/** Why Control's transport would refuse the message (a broadcast, or its attachments), or `null`. A fixed text, never content. */
+function transportRefusal(message: EmailMessage, capabilities: EmailSenderCapabilities): string | null {
+	try {
+		validateEmailBroadcast(message, capabilities, 'the transport')
+		validateEmailAttachments(message, capabilities, 'the transport')
+	} catch (cause) {
+		if (cause instanceof EmailDeliveryError) return cause.message
+		throw cause
+	}
+	return null
 }
 
 /** A repeated key: the recorded message's answer when the content is the same, a conflict when it is not. */
