@@ -167,6 +167,11 @@ The proxy's endpoint decision and procedure requirements are complementary:
 A `.require()` check does not replace the proxy's decision. The proxy's decision
 cannot replace an object-level check whose scope depends on application data.
 
+`ctx.holds('<action>')` of a group procedure (callers `human` or `machine`) answers whether the verified token holds an
+action of the vocabulary as a global grant, the `app` form's rule: a scoped grant, a relation's included, is not held.
+It is information for the handler's own authorization, such as a flag the output carries. It grants no reach (`ctx.db`
+stays the access form's) and asks IAM nothing. A public, link or export procedure has none.
+
 The token a contract application receives is at most `MAX_APPLICATION_TOKEN_BYTES` (24 KiB). On a bearer request it
 arrives twice, in `X-Fabrika-Token` and in `Authorization`. On Zerops the platform's start script runs the application's
 Bun with `--max-http-header-size=65536`, which leaves 16 KiB for the request's own headers and cookies. A token any

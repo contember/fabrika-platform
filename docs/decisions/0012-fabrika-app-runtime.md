@@ -140,8 +140,8 @@ query are type errors at the endpoint's line.
   each by its name (`ctx.capabilities.<name>`, §10). A workload site (a job, a webhook bound to `'app'`, a public
   procedure) mints `ctx.app('<action>')` for a declared action its token carries. Capabilities are bound to their
   request and checked at runtime too, because TypeScript cannot prevent every widening.
-- `ctx.holds('<action>')` on a credentialed RPC procedure answers whether the caller's verified token holds an action
-  of the vocabulary as a global grant, the `app` form's rule. It is information for the handler's own authorization (a
+- `ctx.holds('<action>')` on a group procedure (callers `human` or `machine`) answers whether the caller's verified
+  token holds an action of the vocabulary as a global grant, the `app` form's rule. It is information for the handler's own authorization (a
   flag the output carries, a branch): it grants no reach, `ctx.db` stays the access form's, and it asks IAM nothing.
 - Errors come from `@fabrika/app` (`ConflictError`, `NotFoundError`, `BadRequestError`) and map to 400, 403, 404
   and 409 with one envelope.

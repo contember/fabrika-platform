@@ -22,19 +22,16 @@ type Expect<T extends true> = T
 /** `holds` takes an action of the vocabulary and nothing else. */
 export type HoldsTakesVocabularyActions = Expect<Equal<Parameters<HoldsContext<Kit>['holds']>[0], 'notes.read' | 'notes.write'>>
 
-const Held = z.strictObject({ read: z.boolean(), write: z.boolean(), unknown: z.boolean() })
+const Held = z.strictObject({ read: z.boolean(), write: z.boolean() })
 
 const notes = app.group({ callers: ['human', 'machine'] }, (r) => ({
 	appWide: r.query({ output: Held, access: { action: 'notes.read', app: true } }).handle(({ ctx }) => ({
 		read: ctx.holds('notes.read'),
 		write: ctx.holds('notes.write'),
-		// Outside the vocabulary: the types refuse it, and at run time it holds nothing, whatever a wildcard grants.
-		unknown: Reflect.apply(ctx.holds, undefined, ['notes.delete']) === true,
 	})),
 	inWorkspace: r.query({ output: Held, access: { action: 'notes.read', over: 'workspace' } }).handle(({ ctx }) => ({
 		read: ctx.holds('notes.read'),
 		write: ctx.holds('notes.write'),
-		unknown: false,
 	})),
 }))
 
@@ -52,11 +49,10 @@ const inW1 = { type: 'workspace', value: 'w1' } as const
 
 describe('ctx.holds', () => {
 	test('reports the global grants the token carries, the endpoint’s own action included', async () => {
-		expect(await asCaller([{ action: 'notes.read' }]).notes.appWide()).toEqual({ read: true, write: false, unknown: false })
+		expect(await asCaller([{ action: 'notes.read' }]).notes.appWide()).toEqual({ read: true, write: false })
 		expect(await asCaller([{ action: 'notes.read' }, { action: 'notes.write' }]).notes.appWide()).toEqual({
 			read: true,
 			write: true,
-			unknown: false,
 		})
 	})
 
@@ -64,12 +60,11 @@ describe('ctx.holds', () => {
 		expect(await asCaller([{ action: 'notes.read' }, { action: 'notes.write', scope: inW1 }]).notes.appWide()).toEqual({
 			read: true,
 			write: false,
-			unknown: false,
 		})
 	})
 
 	test('a role held globally holds each of its actions', async () => {
-		expect(await asCaller([{ role: 'editor' }]).notes.appWide()).toEqual({ read: true, write: true, unknown: false })
+		expect(await asCaller([{ role: 'editor' }]).notes.appWide()).toEqual({ read: true, write: true })
 	})
 
 	test('a wildcard entry holds every action of the vocabulary it covers, and none outside it', () => {
@@ -84,8 +79,7 @@ describe('ctx.holds', () => {
 		expect(await asCaller([{ action: 'notes.read', scope: inW1 }, { action: 'notes.write' }]).notes.inWorkspace()).toEqual({
 			read: false,
 			write: true,
-			unknown: false,
 		})
-		expect(await asScript([{ action: 'notes.read' }]).notes.appWide()).toEqual({ read: true, write: false, unknown: false })
+		expect(await asScript([{ action: 'notes.read' }]).notes.appWide()).toEqual({ read: true, write: false })
 	})
 })

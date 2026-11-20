@@ -255,6 +255,8 @@ export type ServedEndpoint =
 		readonly facilities: Facilities
 		/** An export procedure: its request may only read. */
 		readonly readOnly?: true
+		/** A group procedure of an RPC mount, whose `ctx.holds` reports its caller's global grants; a link or export procedure has none. */
+		readonly group?: true
 		/** `ctx.connect`, for an endpoint an import's `usedBy` names. */
 		readonly connect?: readonly ImportWire[]
 		/** A staged-kit site, which gets `ctx.db`; a handler `implement` bound has none. */
@@ -735,7 +737,7 @@ export class ContractRuntime {
 							signal,
 							client: requestClient(request, this.#parts.clientVouched),
 							url: this.#parts.url,
-							holds: globalHolds(caller.perms, this.#parts.actions),
+							...(served.group === true ? { holds: globalHolds(caller.perms, this.#parts.actions) } : {}),
 							...access.context,
 							...this.#facilities(served.facilities, served.row, membership, access.context['target'], {
 								credential: caller.token,

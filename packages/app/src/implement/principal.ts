@@ -130,7 +130,7 @@ export function pageCallerOf(principal: UserPrincipal, perms: readonly Permissio
 }
 
 /**
- * `ctx.holds(action)` of an RPC procedure: whether the verified token holds `action`, an action of the contract, as a
+ * `ctx.holds(action)` of a group procedure: whether the verified token holds `action`, an action of the contract, as a
  * global grant, the `app` form's rule. Information for the handler's own authorization: it grants no reach, builds no
  * `ctx.db` and asks IAM nothing.
  */
