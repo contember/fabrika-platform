@@ -207,10 +207,10 @@ frame-ancestor protection.
 ## Language and the application
 
 IAM renders its pages (sign-in, forgot password, set password, invitation and
-their outcomes) and its own e-mails from a catalog in `en` and `cs`. An
-application chooses the language and its display name with `locale` and
-`displayName` in its contract's vocabulary; IAM reconciles both with the schema.
-The words stay IAM's, and every inserted value is escaped.
+their outcomes, sign-out, terminal enrolment) and its own e-mails from a catalog
+in `en`, `cs` and `uk`. An application chooses its language and its display name
+with `locale` and `displayName` in its contract's vocabulary; IAM reconciles both
+with the schema. The words stay IAM's, and every inserted value is escaped.
 
 The application of a request is:
 
@@ -219,13 +219,74 @@ The application of a request is:
 - a password action's stored application: the one its forgot-password request
   came from.
 
-An application IAM does not know, or one without a `locale`, gets the
-installation's default language, `en`. Without a `displayName`, the sign-in and
-password pages and mails name no application, and an invitation names it by its
-id. An administrator's action and IAM's own
-forgot-password page also use the default. A link's `?app=` only picks words;
-where a completed action or invitation lands is decided by the stored
-application and its registered return origin.
+An application IAM does not know, or one without a `locale`, has no language of
+its own. Without a `displayName`, the sign-in and password pages and mails name
+no application, and an invitation names it by its id. A link's `?app=` only
+picks words; where a completed action or invitation lands is decided by the
+stored application and its registered return origin.
+
+### The person's language
+
+A person may read IAM in a language other than their application's. The
+inviting application names it on the invitation (`InvitationOptions.locale`,
+`ctx.members.assign(ref, { email }, role, { locale: 'uk' })`), as one of the
+languages above; IAM refuses any other (`invalid_request`). IAM then:
+
+1. writes the invitation e-mail in it, and its link carries `&locale=` so the
+   accept page, which knows no invitation before its form is posted, speaks it;
+2. at acceptance keeps it as the principal's (`principals.locale`), for an
+   existing principal and for one the acceptance creates;
+3. writes the principal's later password e-mails in it, from IAM's own
+   forgot-password page or an administrator alike, and keeps it on the password
+   action (`password_action_tokens.locale`), so the set-password page and its
+   refusals speak it too;
+4. after each sign-in of a principal with a language of its own, remembers it
+   for that browser in the host-only `__Host-fabrika_locale` cookie (one year,
+   `HttpOnly`, `Secure`, `SameSite=Lax`), which the next sign-in page here
+   reads; a sign-in of a principal without one clears it, so a shared browser
+   does not keep the previous person's.
+
+A resend that names a language replaces the stored one; one that names none
+keeps it. An invitation that names none is written in the language the
+mailbox's principal already has, else the application's. Every one of these is
+a hint for words: none decides a landing, an origin or an authority.
+
+The principal's language belongs to the person on the installation, not to the
+application that named it
+([ADR-0077](../decisions/0077-a-person-reads-iam-in-their-own-language.md)):
+once an invitation that names one is accepted, IAM's pages and e-mails for every
+application speak it, including one that declares a `locale` of its own. The
+most recently accepted invitation that names a language replaces the stored
+one. IAM tells no application which language a person keeps, and the
+forgot-password page answers alike whichever it is. A principal's language is
+removed with the principal.
+
+A page takes its language from the first of these that names one IAM speaks:
+
+1. the person's own, as IAM stored it for the flow (the invitation's, the
+   password action's, the accepting principal's, and on the account question
+   the signed-in principal's);
+2. a link's or a form's `?locale=`, which the links and forms IAM builds for a
+   person whose language it knows carry on, its own sign-in included (the
+   return from an SSO provider does not);
+3. the remembered cookie;
+4. the application's `locale`;
+5. the browser's `Accept-Language`, by weight, each range matched by its
+   primary subtag (`uk-UA` is `uk`);
+6. the installation's default, `en`.
+
+An e-mail has no request, so it takes the person's language, else the
+application's, else the default; a forgot-password e-mail to a person without a
+language of their own is written in the language of the page that asked for it.
+An application that declares a language shows every page it showed before; only
+a language the person was given wins over it. An application that serves people
+of several languages either names each person's on their invitation or declares
+no `locale` and lets the browser choose. A stored value IAM no longer speaks
+counts as none. The sign-in an application's proxy starts carries no
+`?locale=`, so on a browser where the person has not signed in yet it follows
+the remembered, the application's or the browser's language, including the
+sign-in an invitation's "sign in first" sends them to; the invitation link they
+then open again speaks theirs.
 
 An application may also word IAM's e-mails itself with `mail` in its vocabulary:
 per message (`invitation`, `enrollment`, `reset`) and language, a one-line
@@ -233,8 +294,10 @@ subject and a plain text with `{{name}}` placeholders from a closed set per
 message. The text must place `{{actionUrl}}`, the link IAM builds. IAM fills the
 placeholders, sends the text as filled, and builds the HTML part itself: the
 escaped text as paragraphs and its own button to the link. The checker refuses
-an unknown placeholder or a text without the link, and so does the reconcile. A
-message or a language without a template gets IAM's catalog wording.
+an unknown placeholder or a text without the link, and so does the reconcile.
+IAM picks the template of the e-mail's language, the person's where it knows
+one, so an application that serves people of several languages words each of
+them. A message or a language without a template gets IAM's catalog wording.
 
 A template may carry its own `html` body instead of IAM's, in a closed subset
 (`mailHtmlTokens` in `@fabrika/auth-core`): text structure only, no attribute but
@@ -251,7 +314,8 @@ An application invites an address to a membership role through IAM's
 
 1. IAM stores a random token's hash with the application, the value, the role
    and the normalized mailbox, and mails a one-time link to
-   `/auth/invitations/accept?app=<app>#token=…`. Repeating the invitation answers the open
+   `/auth/invitations/accept?app=<app>#token=…` (with `&locale=` when the
+   invitation names the person's language). Repeating the invitation answers the open
    one and sends nothing. It expires after 7 days.
 2. Without an email sender there are no invitations (`invitations_disabled`).
    Assigning an existing principal by id still works.

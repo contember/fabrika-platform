@@ -553,11 +553,21 @@ fails if that stops being true — it is the guard, not documentation of one.
   login's `?app=`, a link's or a form's `?app=`/`app`, an invitation's app, or a password action's stored
   `password_action_tokens.app`; `presentationFor` names one only when IAM knows it (a presentation row or a
   registered return origin) and answers the installation's (`DEFAULT_LOCALE`, no name) otherwise, a stored locale
-  IAM no longer speaks included. A hint picks words and a registered landing, never authority. There is no
-  `principals.locale`: an app-less action (IAM's own forgot-password, an administrator's) speaks the default.
+  IAM no longer speaks included. A hint picks words and a registered landing, never authority. A person's own
+  language beats the application's (`src/person-locale.ts`, `chooseLocale`): an invitation's `locale`
+  (`membership_invitations.locale`, from `InvitationOptions.locale`) becomes `principals.locale` at acceptance; a
+  password action keeps the language of its mail (`password_action_tokens.locale`); a link's `?locale=` (`appQuery`)
+  and the `__Host-fabrika_locale` cookie, set by `issueSession` for a principal with a language (and cleared by one
+  without), carry it to pages that know no person yet. The application's `locale` ranks above the browser's
+  `Accept-Language`, which decides only where no application declares one, so an application with a locale keeps
+  every page it showed before. All of them pick words only: `principals.locale` is written alone (`setLocale`),
+  outside any principal's lock order and without an audit record. Why the person's language is theirs on the whole
+  installation: ADR-0077.
   `messageTemplateFor` (`src/messages.ts`) is the one place a message's template is chosen. A refused browser-facing request answers
   `authFailurePage` with a typed `AuthFailure`, in the request's language where an application is known before the
-  refusal; a failure before any application is known, and logout, speak the default.
+  refusal; a failure before any application is known, logout and the terminal pages speak the reader's language
+  (`readerLocale`: the request's hints, else the default). The account question speaks the signed-in principal's
+  language. A form or link to IAM's own sign-in carries only `localeQuery` (its `?app=` would name a handoff).
 - **THE INSTALLATION'S LOGO IS AN INSTALLATION ADMINISTRATOR'S, AND EVERY PAGE READS IT AT RENDER** (ADR-0066,
   `installation_brand`, `src/installation-brand.ts`). One row, key 1: `brand.get`, `brand.set` and `brand.clear` of
   `/admin/rpc` all require `iam.admin` (Control reads it with the provisioning key), never a user administrator. `set`

@@ -99,14 +99,15 @@ export async function handlePasswordLogin(
 	requestId: string,
 ): Promise<Response> {
 	if (!services.config.authentication.password.enabled) {
-		return authFailurePage(await installationPresentation(services), { kind: 'password_disabled' }, 404)
+		return authFailurePage(await installationPresentation(services, { request }), { kind: 'password_disabled' }, 404)
 	}
-	// Before the form is read no application is known, so these refusals speak the installation's language.
+	// Before the form is read no application is known, so these refusals speak the reader's language.
 	const refused = (reason: LoginRefusal, failure: AuthFailure, status: number) =>
 		refuseLogin(
 			services,
+			request,
 			{ requestId, principalId: null, reason },
-			async () => authFailurePage(await installationPresentation(services), failure, status),
+			async () => authFailurePage(await installationPresentation(services, { request }), failure, status),
 		)
 	if (!sameOrigin(request, services.config)) return refused('login_cross_origin', { kind: 'cross_origin' }, 403)
 	const form = await readForm(request)
@@ -122,13 +123,18 @@ export async function handlePasswordLogin(
 		stringValue(form.get(AUTH_HANDOFF_CHALLENGE_PARAM)),
 	)
 	if (reading.kind === 'refused') {
-		const presentation = await presentationFor(services, stringValue(form.get('app')))
-		return refuseLogin(services, { requestId, principalId: null, reason: 'handoff_refused' }, () => authFailurePage(presentation, reading.failure, 400))
+		const presentation = await presentationFor(services, stringValue(form.get('app')), { request })
+		return refuseLogin(
+			services,
+			request,
+			{ requestId, principalId: null, reason: 'handoff_refused' },
+			() => authFailurePage(presentation, reading.failure, 400),
+		)
 	}
 	const handoff = handoffOf(reading)
 	const redirect = handoffRedirectOr(handoff, stringValue(form.get('redirect')), services)
 	const retry = {
-		presentation: await presentationFor(services, handoff?.app ?? null),
+		presentation: await presentationFor(services, handoff?.app ?? null, { request }),
 		redirect,
 		oidcEnabled: services.config.authentication.oidc.enabled,
 		forgotEnabled: services.email !== null,
@@ -137,6 +143,7 @@ export async function handlePasswordLogin(
 	if (!login.success) {
 		return refuseLogin(
 			services,
+			request,
 			{ requestId, principalId: null, reason: 'password_malformed' },
 			() => loginPage({ ...retry, invalidCredentials: true }),
 		)
@@ -218,6 +225,7 @@ export async function handlePasswordLogin(
 	}
 	return refuseLogin(
 		services,
+		request,
 		{
 			requestId,
 			principalId: lookup.status === 'found' ? lookup.principal.id : null,
@@ -245,7 +253,7 @@ export async function handleForgotPassword(
 ): Promise<Response> {
 	// The application the sign-in came from, named by the link and the form's `?app=`: the action keeps it, so the mail
 	// and the pages speak its language and the completed reset lands in it.
-	const presentation = await presentationFor(services, new URL(request.url).searchParams.get('app'))
+	const presentation = await presentationFor(services, new URL(request.url).searchParams.get('app'), { request })
 	if (!services.config.authentication.password.enabled) return authFailurePage(presentation, { kind: 'password_disabled' }, 404)
 	if (request.method === 'GET') return forgotPasswordPage({ presentation })
 	if (request.method !== 'POST') return methodNotAllowed()
@@ -332,7 +340,7 @@ export async function handlePasswordAction(
 	requestId: string,
 ): Promise<Response> {
 	// The link's `?app=` is a hint for the page's words and its `form-action`; the stored action decides where it lands.
-	const linked = await presentationFor(services, new URL(request.url).searchParams.get('app'))
+	const linked = await presentationFor(services, new URL(request.url).searchParams.get('app'), { request })
 	if (!services.config.authentication.password.enabled) return authFailurePage(linked, { kind: 'password_disabled' }, 404)
 	const minLength = await passwordMinLength(services)
 	if (request.method === 'GET') {
@@ -348,7 +356,7 @@ export async function handlePasswordAction(
 	const tokenHash = await hashToken(submittedToken)
 	const action = await services.repositories.passwords.inspectActionToken(tokenHash, purpose)
 	if (action === null) return invalidActionPage(linked)
-	const presentation = await presentationFor(services, action.app, linked.brand)
+	const presentation = await presentationFor(services, action.app, { request, brand: linked.brand, locale: action.locale })
 	const principal = await services.repositories.principals.getPrincipalById(action.principal_id)
 	if (principal === null || principal.disabled_at !== null) return invalidActionPage(presentation)
 	const policy = validatePassword(password, minLength, { email: principal.email, label: principal.label })

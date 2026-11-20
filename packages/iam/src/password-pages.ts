@@ -1,7 +1,7 @@
-import { DEFAULT_LOCALE, type Locale } from '@fabrika/auth-core'
+import type { Locale } from '@fabrika/auth-core'
 import type { InstallationBrand } from '@fabrika/proxy-core/brand'
 import { PAGE_STYLE, pageBody } from '@fabrika/proxy-core/page-style'
-import { type AppPresentation, appQuery, landingUrl } from './app-presentation'
+import { type AppPresentation, appQuery, landingUrl, localeQuery } from './app-presentation'
 import type { AuthFailure } from './auth/failure'
 import type { Handoff } from './auth/handoff'
 import { catalogFor, type PageText } from './catalog'
@@ -38,14 +38,16 @@ export function loginPage(input: {
 		: `&app=${encodeURIComponent(input.app)}&state=${encodeURIComponent(input.handoffState ?? '')}&code_challenge=${
 			encodeURIComponent(input.handoffChallenge ?? '')
 		}`
-	const oidcUrl = `/auth/oidc/start?redirect=${encodeURIComponent(input.redirect ?? '')}${appQueryPart}`
+	// The reader's own language rides both too, so a refused password and a refused SSO start keep speaking it.
+	const locale = localeQuery(input.presentation)
+	const oidcUrl = `/auth/oidc/start?redirect=${encodeURIComponent(input.redirect ?? '')}${appQueryPart}${locale.replace('?', '&')}`
 	const title = text.signIn.title(input.presentation.displayName)
 	return htmlPage({
 		locale: input.presentation.locale,
 		brand: input.presentation.brand,
 		title,
 		content: `<h1>${escapeHtml(title)}</h1>${message(input.invalidCredentials === true ? text.signIn.invalidCredentials : undefined)}
-		<form method="post" action="/auth/login">
+		<form method="post" action="${escapeHtml(`/auth/login${locale}`)}">
 			<input type="hidden" name="redirect" value="${escapeHtml(input.redirect ?? '')}">
 			${input.app === undefined ? '' : `<input type="hidden" name="app" value="${escapeHtml(input.app)}">`}
 			${input.handoffState === undefined ? '' : `<input type="hidden" name="state" value="${escapeHtml(input.handoffState)}">`}
@@ -89,7 +91,7 @@ export function chooseAccountPage(input: {
 		brand: input.presentation.brand,
 		title,
 		content: `<h1>${escapeHtml(title)}</h1><p>${escapeHtml(text.signedInAs)} <strong>${escapeHtml(input.label)}</strong>.</p>
-		<form method="post" action="${ACCOUNT_CHOICE_PATH}">
+		<form method="post" action="${escapeHtml(`${ACCOUNT_CHOICE_PATH}${localeQuery(input.presentation)}`)}">
 			<input type="hidden" name="app" value="${escapeHtml(handoff.app)}">
 			<input type="hidden" name="redirect" value="${escapeHtml(handoff.returnUrl)}">
 			<input type="hidden" name="state" value="${escapeHtml(handoff.state)}">
@@ -109,7 +111,7 @@ export function chooseAccountPage(input: {
 export function forgotPasswordPage(input: { readonly presentation: AppPresentation; readonly sent?: boolean }): Response {
 	const { presentation } = input
 	const text = catalogFor(presentation.locale).pages
-	const back = landingUrl(presentation) ?? '/auth/login'
+	const back = landingUrl(presentation) ?? `/auth/login${localeQuery(presentation)}`
 	const content = input.sent === true
 		? `<h1>${escapeHtml(text.forgot.sentTitle)}</h1><p>${escapeHtml(text.forgot.sentText)}</p><p><a href="${escapeHtml(back)}">${
 			escapeHtml(text.forgot.back)
@@ -175,11 +177,13 @@ export function logoutPage(input: {
 	readonly landingOrigin: string | null
 	/** The installation's logo (`installationBrand`), or null for the fabrika mark. */
 	readonly brand: InstallationBrand | null
+	/** The reader's language (`readerLocale`): the sign-out names no application. */
+	readonly locale: Locale
 }): Response {
-	const text = catalogFor(DEFAULT_LOCALE).pages
+	const text = catalogFor(input.locale).pages
 	const query = input.redirect === null ? '' : `?redirect=${encodeURIComponent(input.redirect)}`
 	return htmlPage({
-		locale: DEFAULT_LOCALE,
+		locale: input.locale,
 		brand: input.brand,
 		title: text.logout.title,
 		content: `<h1>${escapeHtml(text.logout.title)}</h1><p>${escapeHtml(text.logout.text)}</p>
@@ -193,11 +197,13 @@ export function logoutPage(input: {
 /** Where an administrator enrols the browser it uses as a terminal (ADR-0067). */
 export const TERMINAL_ENROL_PATH = '/auth/terminals/enroll'
 
-/** The enrolment form. It names no application, so it speaks the installation's language. */
-export function terminalEnrolPage(input: { readonly brand: InstallationBrand | null; readonly labelProblem?: boolean }): Response {
-	const text = catalogFor(DEFAULT_LOCALE).pages.terminal
+/** The enrolment form. It names no application, so it speaks the reader's language (`readerLocale`). */
+export function terminalEnrolPage(
+	input: { readonly brand: InstallationBrand | null; readonly locale: Locale; readonly labelProblem?: boolean },
+): Response {
+	const text = catalogFor(input.locale).pages.terminal
 	return htmlPage({
-		locale: DEFAULT_LOCALE,
+		locale: input.locale,
 		brand: input.brand,
 		title: text.enrolTitle,
 		content: `<h1>${escapeHtml(text.enrolTitle)}</h1>${
@@ -212,10 +218,10 @@ export function terminalEnrolPage(input: { readonly brand: InstallationBrand | n
 }
 
 /** What an enrolled browser shows: the administrator is signed out and the terminal is named. */
-export function terminalEnrolledPage(label: string, brand: InstallationBrand | null): Response {
-	const text = catalogFor(DEFAULT_LOCALE).pages.terminal
+export function terminalEnrolledPage(label: string, brand: InstallationBrand | null, locale: Locale): Response {
+	const text = catalogFor(locale).pages.terminal
 	return htmlPage({
-		locale: DEFAULT_LOCALE,
+		locale,
 		brand,
 		title: text.enrolledTitle,
 		content: `<h1>${escapeHtml(text.enrolledTitle)}</h1><p>${escapeHtml(text.enrolledText(label))}</p>`,

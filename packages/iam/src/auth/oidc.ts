@@ -16,7 +16,7 @@ import { issueSession, type LoginRefusal, refuseLogin } from './sessions'
 
 export async function handleOidcStart(request: Request, services: Services, env: AuthEnv): Promise<Response> {
 	const url = new URL(request.url)
-	const linked = await presentationFor(services, url.searchParams.get('app'))
+	const linked = await presentationFor(services, url.searchParams.get('app'), { request })
 	if (!services.config.authentication.oidc.enabled) return authFailurePage(linked, { kind: 'oidc_disabled' }, 404)
 	const reading = await readHandoff(
 		services,
@@ -29,17 +29,18 @@ export async function handleOidcStart(request: Request, services: Services, env:
 		return authFailurePage(linked, reading.failure, 400)
 	}
 	const handoff = handoffOf(reading)
-	return startOidc(services, env, handoffRedirectOr(handoff, url.searchParams.get('redirect'), services), handoff)
+	return startOidc(request, services, env, handoffRedirectOr(handoff, url.searchParams.get('redirect'), services), handoff)
 }
 
 export async function startOidc(
+	request: Request,
 	services: Services,
 	env: AuthEnv,
 	redirect: string | null,
 	handoff: Handoff | null = null,
 ): Promise<Response> {
 	if (!services.config.authentication.oidc.enabled || services.oidc === null) {
-		return authFailurePage(await presentationFor(services, handoff?.app ?? null), { kind: 'oidc_disabled' }, 404)
+		return authFailurePage(await presentationFor(services, handoff?.app ?? null, { request }), { kind: 'oidc_disabled' }, 404)
 	}
 	const { verifier, challenge } = await generatePkce()
 	const state = randomToken(16)
@@ -71,7 +72,7 @@ export async function handleCallback(
 	const state = url.searchParams.get('state')
 	const flight = await decodeFlight(env, readCookie(request.headers.get('Cookie'), OIDC_COOKIE))
 	// The flight we signed names the application the login started from; its refusals speak that language.
-	const presentation = await presentationFor(services, flight?.app ?? null)
+	const presentation = await presentationFor(services, flight?.app ?? null, { request })
 	if (!services.config.authentication.oidc.enabled || services.oidc === null) {
 		return authFailureEndingFlight(presentation, { kind: 'oidc_disabled' }, 404)
 	}
@@ -79,7 +80,7 @@ export async function handleCallback(
 	// state nonce; leaving it behind on a failure kept both replayable for the rest of their 600s.
 	// Every refusal is a refused login, logged before the answer.
 	const refuse = (reason: LoginRefusal, failure: AuthFailure, status: number): Promise<Response> =>
-		refuseLogin(services, { requestId, principalId: null, reason }, () => authFailureEndingFlight(presentation, failure, status))
+		refuseLogin(services, request, { requestId, principalId: null, reason }, () => authFailureEndingFlight(presentation, failure, status))
 
 	// CSRF: the state echoed by the IdP must match the one in the flight WE signed.
 	if (!code || !state || !flight || flight.state !== state) {

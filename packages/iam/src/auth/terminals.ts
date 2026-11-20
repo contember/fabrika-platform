@@ -10,6 +10,7 @@ import { installationBrand } from '../installation-brand'
 import { logError } from '../log'
 import { randomToken } from '../oidc'
 import { authFailurePage, TERMINAL_ENROL_PATH, terminalEnrolledPage, terminalEnrolPage } from '../password-pages'
+import { readerLocale } from '../person-locale'
 import { unixNow } from '../repositories/sql'
 import { resolvePermissionsAt } from '../resolve'
 import { hashToken } from '../secret'
@@ -40,7 +41,7 @@ export const TERMINAL_RELEASE_PATH = '/auth/terminals/release'
 
 /**
  * `GET` renders the enrolment form to a login that may enrol; `POST` enrols. A browser without a login is sent to sign
- * in and back here. Every refusal names no application, so it speaks the installation's language.
+ * in and back here. The form and every refusal name no application, so they speak the reader's language (`readerLocale`).
  */
 export async function handleTerminalEnrolment(request: Request, services: Services, requestId: string): Promise<Response> {
 	if (request.method === 'POST') {
@@ -52,9 +53,17 @@ export async function handleTerminalEnrolment(request: Request, services: Servic
 		return new Response(null, { status: 302, headers: redirectHeaders(`/auth/login?redirect=${encodeURIComponent(back)}`) })
 	}
 	if (!await mayEnrol(services, login)) {
-		return authFailurePage(INSTALLATION_PRESENTATION, { kind: 'terminal_enrolment_not_allowed' }, 403)
+		return authFailurePage(readerFailure(request), { kind: 'terminal_enrolment_not_allowed' }, 403)
 	}
-	return terminalEnrolPage({ brand: await installationBrand(services) })
+	return terminalEnrolPage({ brand: await installationBrand(services), locale: readerLocale(request) })
+}
+
+/**
+ * A refusal that names no application (the enrolment's, a terminal completion's): IAM's own words, without the logo, in
+ * the reader's language.
+ */
+function readerFailure(request: Request): AppPresentation {
+	return { ...INSTALLATION_PRESENTATION, locale: readerLocale(request) }
 }
 
 /**
@@ -64,19 +73,19 @@ export async function handleTerminalEnrolment(request: Request, services: Servic
  */
 async function enrol(request: Request, services: Services, requestId: string): Promise<Response> {
 	if (!sameOrigin(request, services.config)) {
-		return authFailurePage(INSTALLATION_PRESENTATION, { kind: 'cross_origin' }, 403)
+		return authFailurePage(readerFailure(request), { kind: 'cross_origin' }, 403)
 	}
 	const login = await currentLogin(request, services)
 	if (login === null || !await mayEnrol(services, login)) {
-		return authFailurePage(INSTALLATION_PRESENTATION, { kind: 'terminal_enrolment_not_allowed' }, 403)
+		return authFailurePage(readerFailure(request), { kind: 'terminal_enrolment_not_allowed' }, 403)
 	}
 	const form = await readForm(request)
 	if (form === null) {
-		return authFailurePage(INSTALLATION_PRESENTATION, { kind: 'malformed_form' }, 400)
+		return authFailurePage(readerFailure(request), { kind: 'malformed_form' }, 400)
 	}
 	const label = terminalLabel(stringValue(form.get('label')) ?? '')
 	if (label === null) {
-		return terminalEnrolPage({ brand: await installationBrand(services), labelProblem: true })
+		return terminalEnrolPage({ brand: await installationBrand(services), locale: readerLocale(request), labelProblem: true })
 	}
 
 	const terminalId = uuidv7()
@@ -114,10 +123,10 @@ async function enrol(request: Request, services: Services, requestId: string): P
 		])
 	} catch (err) {
 		logError(`terminal enrolment could not be recorded for request '${requestId}'`, err)
-		return authFailurePage(INSTALLATION_PRESENTATION, { kind: 'terminal_enrolment_unavailable' }, 503)
+		return authFailurePage(readerFailure(request), { kind: 'terminal_enrolment_unavailable' }, 503)
 	}
 
-	const response = terminalEnrolledPage(label, await installationBrand(services))
+	const response = terminalEnrolledPage(label, await installationBrand(services), readerLocale(request))
 	response.headers.append('Set-Cookie', terminalCookie(token))
 	response.headers.append('Set-Cookie', clearCookie(SESSION_COOKIE, { path: '/' }))
 	return response
@@ -220,14 +229,14 @@ export async function handleTerminalCompletion(request: Request, services: Servi
 	const id = new URL(request.url).searchParams.get(IDENTIFICATION_QUERY_PARAMETER) ?? ''
 	const browser = await browserTerminal(request, services)
 	if (browser === null || id === '' || id.length > MAX_IDENTIFICATION_ID_LENGTH) {
-		return authFailurePage(INSTALLATION_PRESENTATION, { kind: 'terminal_completion_refused' }, 403)
+		return authFailurePage(readerFailure(request), { kind: 'terminal_completion_refused' }, 403)
 	}
 	const { terminals, sessions } = services.repositories
 	try {
 		const completed = await terminals.completeIdentification(await hashToken(id), browser.terminal.principal_id, unixNow())
 		const login = completed?.session_id == null ? null : await sessions.getActiveSessionById(completed.session_id)
 		if (completed === null || login === null) {
-			return authFailurePage(INSTALLATION_PRESENTATION, { kind: 'terminal_completion_refused' }, 403)
+			return authFailurePage(readerFailure(request), { kind: 'terminal_completion_refused' }, 403)
 		}
 		const location = await handoffLocation(services, {
 			app: completed.app,
@@ -238,7 +247,7 @@ export async function handleTerminalCompletion(request: Request, services: Servi
 		return new Response(null, { status: 302, headers: redirectHeaders(location) })
 	} catch (err) {
 		logError(`a terminal identification could not be completed for request '${requestId}'`, err)
-		return authFailurePage(INSTALLATION_PRESENTATION, { kind: 'login_unavailable' }, 503)
+		return authFailurePage(readerFailure(request), { kind: 'login_unavailable' }, 503)
 	}
 }
 
@@ -254,7 +263,7 @@ export async function handleTerminalRelease(request: Request, services: Services
 	const url = new URL(request.url)
 	const app = url.searchParams.get('app')
 	const redirect = url.searchParams.get('redirect')
-	const presentation = await presentationFor(services, app)
+	const presentation = await presentationFor(services, app, { request })
 	if (app === null || app === '' || redirect === null || redirect === '') {
 		return authFailurePage(presentation, { kind: 'no_return_address' }, 400)
 	}

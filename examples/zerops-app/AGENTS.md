@@ -1645,7 +1645,11 @@ containing it, that declares `members`: a task endpoint reads its org's. A dimen
 - A partner company's people: a role with `external: true` whose `assignableBy` names an app-wide staff role.
   `assign(ref, { email }, 'partner', { label: company.name, message })` mails the invitation with the company's name
   (≤ 200 characters, one line) and a note (≤ 1000 characters); a new address chooses its password from the mail and
-  lands in the application. `{ resend: true }` sends an open invitation again with a new link and 7 days;
+  lands in the application. `{ locale: 'uk' }` (a `Locale` of `@fabrika/app/implement`: `'en'`, `'cs'` or `'uk'`) is the
+  invited person's own language when the application knows it, for example from the inviter's form or the person's
+  record: IAM writes the invitation and the pages its link opens in it and keeps it as the person's, so their later
+  password mail and pages speak it too, and a browser they signed in with keeps it on IAM's sign-in page. Without it the
+  person keeps the language they have, else the application's `locale`. `{ resend: true }` sends an open invitation again with a new link and 7 days;
   `revoke(ref, { invitationId })` cancels one; `revoke(ref, { principalId })` removes a person, whose access ends
   within the 300 s token lifetime. An address the organization names is refused (409 `internal_mailbox`). A company's
   deactivation is the application's own flag: check it where the endpoint loads the company row.
@@ -6243,9 +6247,10 @@ export const vocabulary = defineVocabulary({
   `members: { manage, list }` on a dimension gives `ctx.members` to the endpoints on, in or below it: a lookup of one
   member everywhere, the list with `list`, management with `manage` (`references/endpoint.md`).
 - `admin` is reserved: IAM defines it for every application. `defineVocabulary` refuses it.
-- `locale: 'cs'` (or `'en'`) and `displayName: 'Tasks'` beside `app` set the language and the name IAM uses for the
-  application on its sign-in, password and invitation pages and e-mails. Without `locale` IAM speaks its default
-  language, `en`. Without `displayName` the sign-in and password pages and mails name no application, and an invitation
+- `locale: 'cs'` (or `'en'`, `'uk'`) and `displayName: 'Tasks'` beside `app` set the language and the name IAM uses for
+  the application on its sign-in, password and invitation pages and e-mails. Without `locale` IAM speaks the browser's
+  language where it speaks it, else its default, `en`. A person's own language, named on their invitation
+  (`references/endpoint.md`), beats the application's. Without `displayName` the sign-in and password pages and mails name no application, and an invitation
   names it by its id (`tasks@prod`). The approver sees each change.
 - `mail` beside them words IAM's e-mails in the application's own way: per message (`invitation`, `enrollment`,
   `reset`) and language, a one-line `subject` and a plain `text` with `{{name}}` placeholders, for example

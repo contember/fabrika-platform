@@ -71,6 +71,7 @@ import { logError } from './log'
 import { EMAIL_SEND_DEADLINE_MS, renderEmail } from './messages'
 import { randomToken } from './oidc'
 import type { StoredPasswordHash } from './password-crypto'
+import { parseLocale } from './person-locale'
 import { unixNow } from './repositories/sql'
 import { authorityDeadline, type HeldEntry, resolveAuthorityAt } from './resolve'
 import { BUILTIN_ROLES } from './roles'
@@ -421,7 +422,7 @@ export async function assignMember(services: Services, env: CallerEnv, ctx: Requ
 
 	if ('principalId' in input.member) {
 		if (input.invitation !== undefined) {
-			return invalid('a label, a message and a resend go with an invitation by address')
+			return invalid('a label, a message, a locale and a resend go with an invitation by address')
 		}
 		const target = await services.repositories.principals.getPrincipalById(input.member.principalId)
 		if (target === null || target.type !== 'user') {
@@ -481,6 +482,7 @@ async function invite(
 	}
 	const companyLabel = nonEmpty(options.label)
 	const message = nonEmpty(options.message)
+	const locale = options.locale ?? null
 	const token = randomToken(32)
 	const tokenHash = await hashToken(token)
 	const expiresAt = unixNow() + INVITATION_TTL_SECONDS
@@ -501,6 +503,7 @@ async function invite(
 		expiresAt,
 		companyLabel,
 		message,
+		locale,
 	}, (invitationId) => event('iam.member.invite', invitationId))
 	let invitation = opened.invitation
 	if (!opened.created) {
@@ -508,7 +511,7 @@ async function invite(
 			return invitedResult(invitation)
 		}
 		const rotated = await services.repositories.membership.rotateInvitation(
-			{ id: invitation.id, tokenHash, expiresAt, companyLabel, message },
+			{ id: invitation.id, tokenHash, expiresAt, companyLabel, message, locale },
 			event('iam.member.reinvite', invitation.id),
 		)
 		if (rotated === null) {
@@ -559,7 +562,10 @@ function nonEmpty(value: string | undefined): string | null {
 	return value === undefined || value === '' ? null : value
 }
 
-/** The invitation's e-mail, with the link to `token`, in its application's language and wording. */
+/**
+ * The invitation's e-mail, with the link to `token`, in its application's wording: in the language the invitation names,
+ * else the language the mailbox's principal keeps, else the application's.
+ */
 async function invitationEmail(
 	services: Services,
 	caller: MemberCaller,
@@ -569,7 +575,8 @@ async function invitationEmail(
 	idempotencyKey: string,
 ): Promise<EmailMessage> {
 	// An e-mail shows no logo, so the brand is not read.
-	const presentation = await presentationFor(services, invitation.app, null)
+	const holder = invitation.locale === null ? await services.repositories.principals.getUserByEmail(invitation.email) : null
+	const presentation = await presentationFor(services, invitation.app, { brand: null, locale: invitation.locale ?? holder?.locale ?? null })
 	// The query names the application for the page's language; the fragment never reaches an access log, and the
 	// page copies it into its POST form in the browser.
 	const url = new URL(`${INVITATION_ACCEPT_PATH}${appQuery(presentation)}`, services.config.issuer)
@@ -892,6 +899,16 @@ export async function acceptInvitation(
 	}
 	if (accepted !== 'accepted') {
 		return { ok: false, reason: accepted === 'not_allowed' ? 'not_allowed' : 'invalid' }
+	}
+	// The language the inviting application named becomes the person's: IAM's later mail and pages speak it. The
+	// acceptance has committed, and a language picks words only, so a failed write is logged, not answered.
+	const locale = parseLocale(invitation.locale)
+	if (locale !== null && locale !== principal.locale) {
+		try {
+			await services.repositories.principals.setLocale(principal.id, locale)
+		} catch (err) {
+			logError(`the language of accepted invitation '${invitation.id}' could not be kept`, err)
+		}
 	}
 	return { ok: true, invitation }
 }

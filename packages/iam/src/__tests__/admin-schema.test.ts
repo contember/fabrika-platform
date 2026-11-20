@@ -254,7 +254,7 @@ describe('PUT/GET /admin/apps/:app/schema', () => {
 		const locale = await run(h, req('/admin/apps/opice/schema', 'PUT', token, { ...SCHEMA, locale: 'de' }))
 		expect(locale.status).toBe(400)
 		const localeBody: { error: string } = await locale.json()
-		expect(localeBody.error).toBe("locale must be one of 'en', 'cs'")
+		expect(localeBody.error).toBe("locale must be one of 'en', 'cs', 'uk'")
 		const name = await run(h, req('/admin/apps/opice/schema', 'PUT', token, { ...SCHEMA, displayName: 'Opice\nBcc: x' }))
 		expect(name.status).toBe(400)
 		const nameBody: { error: string } = await name.json()

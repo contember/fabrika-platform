@@ -39,6 +39,8 @@ export interface InvitationRow {
 	company_label: string | null
 	/** The inviter's personal message (plain text), or NULL. */
 	message: string | null
+	/** The invited person's language as the inviting application named it, or NULL: the application's then. */
+	locale: string | null
 }
 
 /** One membership-role grant in a value, with the principal it belongs to and its last sign-in to the app. */
@@ -453,17 +455,28 @@ export class MembershipRepository {
 		expiresAt: number
 		companyLabel?: string | null
 		message?: string | null
+		locale?: string | null
 	}, audit?: (invitationId: string) => AuditEventInput): Promise<{ invitation: InvitationRow; created: boolean }> {
 		const now = unixNow()
 		const id = uuidv7()
 		const key = [input.app, input.scope.type, input.scope.value, input.roleKey, input.email]
 		const opened = this.writer.changed([{
 			sql: `INSERT INTO membership_invitations
-					(id, token_hash, app, scope_type, scope_value, role_key, email, invited_by, expires_at, created_at, company_label, message)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+					(id, token_hash, app, scope_type, scope_value, role_key, email, invited_by, expires_at, created_at, company_label, message, locale)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 				ON CONFLICT (app, scope_type, scope_value, role_key, email) WHERE accepted_at IS NULL AND revoked_at IS NULL DO NOTHING
 				RETURNING *`,
-			binds: [id, input.tokenHash, ...key, input.invitedBy, input.expiresAt, now, input.companyLabel ?? null, input.message ?? null],
+			binds: [
+				id,
+				input.tokenHash,
+				...key,
+				input.invitedBy,
+				input.expiresAt,
+				now,
+				input.companyLabel ?? null,
+				input.message ?? null,
+				input.locale ?? null,
+			],
 		}], audit?.(id))
 		const results = await this.db.batch<InvitationRow>([
 			this.db
@@ -490,20 +503,21 @@ export class MembershipRepository {
 
 	/**
 	 * Give an open invitation a new link and a new lifetime (a resend): the old token's hash is replaced, so its link
-	 * stops working. A label or message the call names replaces the stored one; NULL keeps it. Answers the invitation
-	 * when it was still open, and `audit` is written exactly then.
+	 * stops working. A label, message or locale the call names replaces the stored one; NULL keeps it. Answers the
+	 * invitation when it was still open, and `audit` is written exactly then.
 	 */
 	async rotateInvitation(
-		input: { id: string; tokenHash: string; expiresAt: number; companyLabel: string | null; message: string | null },
+		input: { id: string; tokenHash: string; expiresAt: number; companyLabel: string | null; message: string | null; locale: string | null },
 		audit?: AuditEventInput,
 	): Promise<InvitationRow | null> {
 		const now = unixNow()
 		const rotate: SqlChange = {
 			sql: `UPDATE membership_invitations
-				SET token_hash = ?, expires_at = ?, company_label = COALESCE(?, company_label), message = COALESCE(?, message)
+				SET token_hash = ?, expires_at = ?, company_label = COALESCE(?, company_label), message = COALESCE(?, message),
+					locale = COALESCE(?, locale)
 				WHERE id = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?
 				RETURNING *`,
-			binds: [input.tokenHash, input.expiresAt, input.companyLabel, input.message, input.id, now],
+			binds: [input.tokenHash, input.expiresAt, input.companyLabel, input.message, input.locale, input.id, now],
 		}
 		const [rotated] = await this.writer.run<InvitationRow>([rotate], audit)
 		return rotated ?? null
@@ -665,8 +679,8 @@ export class MembershipRepository {
 		const eligible = eligibleGrantBinds({ principalId, app: invitation.app, roleKey: invitation.role_key })
 		const accepted = `EXISTS (SELECT 1 FROM membership_invitations WHERE id = ? AND acceptance_id = ?)`
 		const create = this.writer.changed([{
-			sql: `INSERT INTO principals (id, type, external_id, email, label, activated_at, created_at, affiliation)
-				SELECT ?, 'user', NULL, ?, ?, ?, ?, 'external'
+			sql: `INSERT INTO principals (id, type, external_id, email, label, activated_at, created_at, affiliation, locale)
+				SELECT ?, 'user', NULL, ?, ?, ?, ?, 'external', ?
 				WHERE EXISTS (
 						SELECT 1 FROM membership_invitations
 						WHERE id = ? AND token_hash = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?)
@@ -679,6 +693,7 @@ export class MembershipRepository {
 				invitation.email,
 				now,
 				now,
+				invitation.locale,
 				invitation.id,
 				invitation.token_hash,
 				now,

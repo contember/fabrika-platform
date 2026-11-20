@@ -8,6 +8,7 @@ import { TERMINAL_COMPLETE_PATH } from '../identification'
 import { installationBrand } from '../installation-brand'
 import { INVITATION_ACCEPT_PATH } from '../membership'
 import { ACCOUNT_CHOICE_PATH, logoutPage, TERMINAL_ENROL_PATH } from '../password-pages'
+import { readerLocale } from '../person-locale'
 import { generateRequestId } from '../request-id'
 import type { Services } from '../services'
 import { getSigner } from '../signing'
@@ -89,6 +90,7 @@ export async function handleAuth(
 				redirect,
 				landingOrigin: redirect === null ? await installationConsole(services) : null,
 				brand: await installationBrand(services),
+				locale: readerLocale(request),
 			})
 		}
 		return methodNotAllowed()

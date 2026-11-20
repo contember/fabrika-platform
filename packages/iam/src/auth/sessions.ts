@@ -7,6 +7,7 @@ import { type AuthenticationMethod, type PrincipalRow, principalStatus, type Ses
 import { type RequestContext } from '../env'
 import { logError } from '../log'
 import { randomToken } from '../oidc'
+import { parseLocale, signInLocaleCookie } from '../person-locale'
 import { resolvePermissionsAt } from '../resolve'
 import { hashToken } from '../secret'
 import { type Services } from '../services'
@@ -100,7 +101,7 @@ export async function issueSession(
 		})
 	} catch (err) {
 		logError(`login could not be recorded for request '${input.requestId}'`, err)
-		return authFailurePage(await installationPresentation(services), { kind: 'login_unavailable' }, 503)
+		return authFailurePage(await installationPresentation(services, { request }), { kind: 'login_unavailable' }, 503)
 	}
 
 	// The IAM cookie is set either way: it is what spares the NEXT handoff, to this or any other app, a
@@ -110,6 +111,19 @@ export async function issueSession(
 		: await handoffLocation(services, input.handoff, sessionId)
 	const headers = redirectHeaders(location)
 	headers.append('Set-Cookie', sessionCookie(sessionToken))
+	// A person with a language of their own keeps it on this browser's next sign-in page here (`LOCALE_COOKIE`); one
+	// without clears the language a previous person left on a shared browser.
+	// The session has committed and the cookie picks words only: a failed read leaves the remembered language as it is.
+	const locale = await services.repositories.principals.getPrincipalById(input.principalId).then(
+		(principal) => signInLocaleCookie(request, parseLocale(principal?.locale)),
+		(err: unknown) => {
+			logError(`the language of login for request '${input.requestId}' could not be read`, err)
+			return null
+		},
+	)
+	if (locale !== null) {
+		headers.append('Set-Cookie', locale)
+	}
 	if (input.clearOidc === true) {
 		for (const cookie of endingFlightCookies()) {
 			headers.append('Set-Cookie', cookie)
@@ -140,6 +154,7 @@ export type LoginRefusal =
 
 export async function refuseLogin(
 	services: Services,
+	request: Request,
 	entry: { requestId: string; principalId: string | null; reason: LoginRefusal },
 	answer: () => Response | Promise<Response>,
 ): Promise<Response> {
@@ -154,7 +169,7 @@ export async function refuseLogin(
 		})
 	} catch (err) {
 		logError(`a refused login could not be recorded for request '${entry.requestId}'`, err)
-		return authFailurePage(await installationPresentation(services), { kind: 'login_unavailable' }, 503)
+		return authFailurePage(await installationPresentation(services, { request }), { kind: 'login_unavailable' }, 503)
 	}
 	return answer()
 }
@@ -174,10 +189,12 @@ export async function administersIam(services: Services, principalId: string): P
  * and leaves the session as it was.
  */
 export async function handleLogout(request: Request, services: Services, requestId: string): Promise<Response> {
-	// Logout names no application, like its confirmation page: these answers speak the installation's language.
-	if (!sameOrigin(request, services.config)) return authFailurePage(await installationPresentation(services), { kind: 'cross_origin' }, 403)
+	// Logout names no application, like its confirmation page: these answers speak the reader's language.
+	if (!sameOrigin(request, services.config)) {
+		return authFailurePage(await installationPresentation(services, { request }), { kind: 'cross_origin' }, 403)
+	}
 	if (!await endLogin(request, services, requestId)) {
-		return authFailurePage(await installationPresentation(services), { kind: 'logout_unavailable' }, 503)
+		return authFailurePage(await installationPresentation(services, { request }), { kind: 'logout_unavailable' }, 503)
 	}
 	const url = new URL(request.url)
 	return signedOutRedirect(safeRedirect(url.searchParams.get('redirect'), services.config) ?? await installationLanding(services))

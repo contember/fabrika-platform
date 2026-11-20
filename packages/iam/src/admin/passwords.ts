@@ -30,7 +30,7 @@ async function passwordDelivery(
 		return fail(403, `without an email sender, only an installation administrator receives a password ${purpose} link`)
 	}
 	// The token, the enrollment opt-in and the record commit together; the email is an effect after that.
-	// An administrator's action belongs to the installation: its page and mail speak IAM's default language.
+	// An administrator's action belongs to the installation: its page and mail speak the person's language, else IAM's default.
 	const action = await issuePasswordAction(c.services, { principal, purpose, issuedBy: c.admin.id, presentation: INSTALLATION_PRESENTATION }, {
 		audit: adminEvent(c, { action: `iam.password.${purpose}.issue`, resourceType: 'principal', resourceId: principal.id, metadata: { delivery } }),
 		enableEnrollment: purpose === 'enrollment',

@@ -1,10 +1,11 @@
 import { AUTH_HANDOFF_CHALLENGE_PARAM, AUTH_HANDOFF_STATE_PARAM } from '@fabrika/auth-core'
-import { type AppPresentation, installationPresentation, presentationFor } from '../app-presentation'
+import { type AppPresentation, installationPresentation, presentationFor, withPersonLocale } from '../app-presentation'
 import { LOCAL_DEV_ADMIN_EMAIL, LOCAL_DEV_ADMIN_ID } from '../auth'
 import { type SessionRow } from '../db'
 
 import { type RequestContext } from '../env'
 import { authFailurePage, chooseAccountPage, loginPage } from '../password-pages'
+import { parseLocale } from '../person-locale'
 import { resolveUserPrincipal } from '../resolve'
 import { type Services } from '../services'
 import { type Handoff, handoffLocation, handoffLoginUrl, handoffOf, handoffRedirectOr, loginDestinationFields, readHandoff } from './handoff'
@@ -31,10 +32,10 @@ export async function handleLogin(
 		url.searchParams.get(AUTH_HANDOFF_CHALLENGE_PARAM),
 	)
 	if (reading.kind === 'refused') {
-		return authFailurePage(await presentationFor(services, url.searchParams.get('app')), reading.failure, 400)
+		return authFailurePage(await presentationFor(services, url.searchParams.get('app'), { request }), reading.failure, 400)
 	}
 	const handoff = handoffOf(reading)
-	const presentation = await presentationFor(services, handoff?.app ?? null)
+	const presentation = await presentationFor(services, handoff?.app ?? null, { request })
 	// A handoff's destination is already validated against the app's registry, so `safeRedirect` must
 	// not get a say: it admits IAM's own origin only, which by definition excludes the app host this
 	// exists for. Passing its refusal to the form would send the login to the installation's landing.
@@ -50,7 +51,8 @@ export async function handleLogin(
 				return new Response(null, { status: 302, headers: redirectHeaders(await handoffLocation(services, handoff, login.session.id)) })
 			}
 			return chooseAccountPage({
-				presentation,
+				// The signed-in person is known: their own language beats the browser's hints and the application's.
+				presentation: withPersonLocale(presentation, parseLocale(login.principal.locale)),
 				label: login.principal.label,
 				handoff,
 				redirectOrigin: (await loginDestinationFields(services, handoff, redirect)).redirectOrigin,
@@ -75,7 +77,7 @@ export async function handleLogin(
 			...await loginDestinationFields(services, handoff, redirect),
 		})
 	}
-	return startOidc(services, env, redirect, handoff)
+	return startOidc(request, services, env, redirect, handoff)
 }
 
 /**
@@ -100,9 +102,11 @@ async function loginChoseApp(services: Services, login: SessionRow, app: string)
  * same handoff, whose verifier the app's proxy still holds.
  */
 export async function handleAccountChoice(request: Request, services: Services, requestId: string): Promise<Response> {
-	if (!sameOrigin(request, services.config)) return authFailurePage(await installationPresentation(services), { kind: 'cross_origin' }, 403)
+	if (!sameOrigin(request, services.config)) {
+		return authFailurePage(await installationPresentation(services, { request }), { kind: 'cross_origin' }, 403)
+	}
 	const form = await readForm(request)
-	if (form === null) return authFailurePage(await installationPresentation(services), { kind: 'malformed_form' }, 400)
+	if (form === null) return authFailurePage(await installationPresentation(services, { request }), { kind: 'malformed_form' }, 400)
 	const app = stringValue(form.get('app'))
 	const reading = await readHandoff(
 		services,
@@ -111,7 +115,7 @@ export async function handleAccountChoice(request: Request, services: Services, 
 		stringValue(form.get(AUTH_HANDOFF_STATE_PARAM)),
 		stringValue(form.get(AUTH_HANDOFF_CHALLENGE_PARAM)),
 	)
-	const presentation = await presentationFor(services, app)
+	const presentation = await presentationFor(services, app, { request })
 	if (reading.kind === 'refused') return authFailurePage(presentation, reading.failure, 400)
 	const handoff = handoffOf(reading)
 	const decision = form.get('decision')
@@ -139,6 +143,7 @@ async function handleLocalLogin(
 	if (!resolved.ok) {
 		return refuseLogin(
 			services,
+			request,
 			{ requestId, principalId: null, reason: 'local_login_refused' },
 			() => authFailurePage(presentation, { kind: 'login_refused', reason: `local ${resolved.reason}` }, 403),
 		)

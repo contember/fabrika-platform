@@ -7,6 +7,7 @@ import type { AuthFailure } from '../auth/failure'
 import type { PasswordProblem } from '../password-policy'
 import { cs } from './cs'
 import { en } from './en'
+import { uk } from './uk'
 
 export interface PageText {
 	/** The words before fabrika's mark and name in the footer of every page: "Runs on [mark] fabrika". */
@@ -172,7 +173,7 @@ export interface Catalog {
 	readonly applicationMail: ApplicationMailText
 }
 
-const catalogs: { readonly [L in Locale]: Catalog } = { en, cs }
+const catalogs: { readonly [L in Locale]: Catalog } = { en, cs, uk }
 
 export function catalogFor(locale: Locale): Catalog {
 	return catalogs[locale]
