@@ -1,8 +1,8 @@
-import { DEFAULT_LOCALE, displayNameProblem, isLocale, type Locale } from '@fabrika/auth-core'
+import { DEFAULT_LOCALE, displayNameProblem, isLocale, type Locale, LOCALE_PARAM } from '@fabrika/auth-core'
 import type { InstallationBrand } from '@fabrika/proxy-core/brand'
 import { installationBrand } from './installation-brand'
 import { normalizeOrigin } from './origin'
-import { chooseLocale, LOCALE_PARAM, parseLocale, requestLocales } from './person-locale'
+import { chooseLocale, parseLocale, requestLocales } from './person-locale'
 import type { AppPresentationRow } from './repositories/app-schema'
 import type { Services } from './services'
 

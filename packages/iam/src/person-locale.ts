@@ -5,15 +5,6 @@
 import { DEFAULT_LOCALE, isLocale, type Locale, LOCALE_COOKIE, LOCALE_PARAM } from '@fabrika/auth-core'
 import { clearCookie, readCookie, serializeCookie } from './auth/cookies'
 
-/**
- * `LOCALE_COOKIE` on IAM's host is the language a browser last signed in with here, or was last asked to sign in with
- * by an invitation, for the pages IAM shows before it knows who is reading: a sign-in page reads it, so a person whose
- * language differs from the application's keeps theirs after the first visit. A sign-in of a person without a
- * language of their own clears it, so a shared browser does not keep the previous person's. Host-only, like every
- * cookie IAM writes, and words only: nothing reads it as a claim about the person.
- */
-export { LOCALE_COOKIE, LOCALE_PARAM } from '@fabrika/auth-core'
-
 /** A year: the cookie is a preference, renewed by each sign-in of a person with a language of their own. */
 const LOCALE_COOKIE_MAX_AGE_SECONDS = 365 * 24 * 60 * 60
 
@@ -101,8 +92,11 @@ export function signInLocaleCookie(request: Request, locale: Locale | null): str
 }
 
 /**
- * The `Set-Cookie` that remembers `locale` for this browser's next sign-in page here: a sign-in's, and an invitation's
- * "sign in first", whose sign-in goes through the application's proxy and so carries no `?locale=` of IAM's.
+ * The `Set-Cookie` that remembers `locale` in `LOCALE_COOKIE` on IAM's host, for the pages IAM shows before it knows
+ * who is reading: a sign-in page reads it, so a person whose language differs from the application's keeps theirs
+ * after the first visit. A sign-in writes it, and so does an invitation's "sign in first", whose sign-in the
+ * application's proxy starts without a `?locale=` of IAM's. Host-only, like every cookie IAM writes, and words only:
+ * nothing reads it as a claim about the person.
  */
 export function rememberLocaleCookie(locale: Locale): string {
 	return serializeCookie(LOCALE_COOKIE, locale, { httpOnly: true, secure: true, sameSite: 'Lax', maxAge: LOCALE_COOKIE_MAX_AGE_SECONDS })
