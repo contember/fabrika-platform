@@ -15,6 +15,11 @@ export interface MigrationEntry {
 	readonly checksum: string
 }
 
+/** A file the build bundles and the runners apply: a `.sql` file directly in `db/migrations`. A name is relative to it. */
+export function isBundledMigration(name: string): boolean {
+	return name.endsWith('.sql') && !name.includes('/')
+}
+
 export interface AccessSnapshot {
 	readonly version: 1
 	/**

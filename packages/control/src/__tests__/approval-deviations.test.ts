@@ -7,6 +7,7 @@ import { readContractSource } from '@fabrika/check/contract'
 import { waitsForApproval } from '@fabrika/control-contract'
 import type { BlobStore } from '@fabrika/platform'
 import { uuidv7 } from '@fabrika/platform'
+import { migrationChecksum } from '@fabrika/platform-node'
 import type { DataLossStatement, MigrationDataLoss } from '@fabrika/platform-node/sql'
 import type { ControlProvider } from '@fabrika/provider-contract'
 import { describe, expect, test } from 'bun:test'
@@ -15,7 +16,14 @@ import { completeApprovalUseCase } from '../approval/api'
 import { snapshotDeviations } from '../approval/diff'
 import { classifyAccess as classifyWithFacts } from '../approval/diff'
 import { parseClassification, type StoredClassification } from '../approval/publish'
-import { readAccessSnapshot, SNAPSHOT_LIMITS, snapshotReads, SnapshotRefused } from '../approval/read'
+import {
+	AppliedMigrationsChanged,
+	readAccessSnapshot,
+	SNAPSHOT_LIMITS,
+	type SnapshotReadOptions,
+	snapshotReads,
+	SnapshotRefused,
+} from '../approval/read'
 import { type AccessSnapshot, approvedSnapshot, parseSnapshot, serializePublished, serializeSnapshot, snapshotDigest } from '../approval/snapshot'
 import type { ControlRepositories } from '../db'
 import { executeDeploy, type RunDeps } from '../run-lifecycle'
@@ -37,6 +45,10 @@ interface World {
 	files: Record<string, string>
 	/** The provider's `applicationDialect`; absent means Postgres. */
 	dialect?: 'postgres' | 'sqlite'
+	/** How the provider's next deploys end; absent means `succeeded`. */
+	deployState?: 'succeeded' | 'failed'
+	/** How many deploys reached the provider. */
+	deploys: number
 }
 
 const migrationFiles = (...migrations: readonly { name: string; sql: string }[]): Record<string, string> =>
@@ -49,14 +61,17 @@ const commitOf = (options: KitOptions = {}, migrations = [NOTES_MIGRATION]): Rec
 
 const ENVELOPE = JSON.stringify({ provider: 'harbor', version: 1, payload: {} })
 
-function provider(dialect?: 'postgres' | 'sqlite'): ControlProvider {
+function provider(w: World): ControlProvider {
 	return {
 		id: 'harbor',
 		normalizeRegistration: (input) => input,
 		applicationRoot: () => '',
 		resolveSource: () => Promise.resolve({ commitSha: COMMIT }),
-		deploy: () => Promise.resolve({ state: 'succeeded' }),
-		...(dialect === undefined ? {} : { applicationDialect: dialect }),
+		deploy: () => {
+			w.deploys++
+			return Promise.resolve({ state: w.deployState ?? 'succeeded' })
+		},
+		...(w.dialect === undefined ? {} : { applicationDialect: w.dialect }),
 	}
 }
 
@@ -69,7 +84,7 @@ function deps(w: World): RunDeps {
 	}
 	return {
 		repositories: w.db,
-		provider: provider(w.dialect),
+		provider: provider(w),
 		secrets: new VaultSecretResolver({}),
 		lock: makeFakeLock(w.db),
 		queue: { send: () => Promise.resolve() },
@@ -92,7 +107,7 @@ async function world(): Promise<World> {
 			providerArtifactJson: ENVELOPE,
 		})
 	}
-	return { db, logs: new Map(), files: commitOf() }
+	return { db, logs: new Map(), files: commitOf(), deploys: 0 }
 }
 
 interface Deployed {
@@ -146,7 +161,7 @@ const closer = (classification: { readonly changes: readonly WordedChange[] }): 
 
 async function snapshotOf(files: Record<string, string>, settled: AccessSnapshot['migrations'] = []): Promise<AccessSnapshot> {
 	const commit = await memoryCommits(files).open({ repoUrl: 'github.com/acme/notes', commitSha: COMMIT, signal: new AbortController().signal })
-	return readAccessSnapshot(commit, '', 'notes', settled)
+	return readAccessSnapshot(commit, '', 'notes', { settled })
 }
 
 async function environment(w: World, env: string) {
@@ -308,6 +323,97 @@ describe('database code in the reviewed snapshot', () => {
 		// An edit of the settled file is classified again, as the runner refuses it again.
 		const edited = commitOf({}, [NOTES_MIGRATION, { ...legacy, sql: `${legacy.sql}\n` }])
 		await expect(snapshotOf(edited, settled)).rejects.toEqual(new SnapshotRefused('migrations-refused', 1))
+	})
+})
+
+describe('a migration the environment applied, changed since', () => {
+	const TAGS_MIGRATION = { name: '20261012100000_tags.sql', sql: 'CREATE TABLE tags (id uuid PRIMARY KEY, workspace_id text NOT NULL);\n' }
+	const applied = [{ name: NOTES_MIGRATION.name, checksum: sha256Hex(NOTES_MIGRATION.sql) }]
+	const edited = { ...NOTES_MIGRATION, sql: `${NOTES_MIGRATION.sql}-- notes and their audit\n` }
+	const allowed = 'as applied and put the change in a new migration (`bunx fabrika db new <slug>`)'
+
+	const read = async (files: Record<string, string>, options: SnapshotReadOptions): Promise<AccessSnapshot> =>
+		readAccessSnapshot(
+			await memoryCommits(files).open({ repoUrl: 'github.com/acme/notes', commitSha: COMMIT, signal: new AbortController().signal }),
+			'',
+			'notes',
+			options,
+		)
+	const refusal = async (files: Record<string, string>, options: SnapshotReadOptions): Promise<AppliedMigrationsChanged> => {
+		try {
+			await read(files, options)
+		} catch (error) {
+			if (error instanceof AppliedMigrationsChanged) return error
+			throw error
+		}
+		throw new Error('the read was not refused')
+	}
+
+	test('is refused on either dialect, one line per file, byte for byte as the runners compare', async () => {
+		const crlf = { ...NOTES_MIGRATION, sql: NOTES_MIGRATION.sql.replaceAll('\n', '\r\n') }
+		const trailingSpace = { ...NOTES_MIGRATION, sql: NOTES_MIGRATION.sql.replace(';\n', '; \n') }
+		for (const dialect of ['postgres', 'sqlite'] as const) {
+			for (const changed of [edited, crlf, trailingSpace]) {
+				const error = await refusal(commitOf({}, [changed, TAGS_MIGRATION]), { applied, dialect })
+				expect(error.lines).toEqual([`db/migrations/${NOTES_MIGRATION.name}: an applied migration changed; leave it ${allowed}`])
+				expect(error.message).toBe(`an applied migration changed: db/migrations/${NOTES_MIGRATION.name}; leave it ${allowed}`)
+			}
+		}
+		const both = [...applied, { name: TAGS_MIGRATION.name, checksum: sha256Hex(TAGS_MIGRATION.sql) }]
+		const twice = await refusal(commitOf({}, [edited, { ...TAGS_MIGRATION, sql: `${TAGS_MIGRATION.sql}\n` }]), { applied: both })
+		expect(twice.lines).toHaveLength(2)
+		expect(twice.message).toBe(
+			`2 applied migrations changed: db/migrations/${NOTES_MIGRATION.name}, db/migrations/${TAGS_MIGRATION.name}; leave each ${allowed}`,
+		)
+	})
+
+	test('an unchanged, a new or a removed one, a first deploy and a file no runner applies are not refused', async () => {
+		for (const dialect of ['postgres', 'sqlite'] as const) {
+			const unchangedAndNew = await read(commitOf({}, [NOTES_MIGRATION, TAGS_MIGRATION]), { applied, dialect })
+			expect(unchangedAndNew.migrations.map(({ name }) => name)).toEqual([NOTES_MIGRATION.name, TAGS_MIGRATION.name])
+			// Both runners tolerate a ledger row without its file: the database ahead of the code after a rollback.
+			const removed = [...applied, { name: TAGS_MIGRATION.name, checksum: sha256Hex(TAGS_MIGRATION.sql) }]
+			expect((await read(commitOf({}, [NOTES_MIGRATION]), { applied: removed, dialect })).migrations).toHaveLength(1)
+			expect((await read(commitOf({}, [edited]), { applied: [], dialect })).migrations).toHaveLength(1)
+		}
+		// The checksum a snapshot records is the one the runners record, so both compare the same bytes.
+		const crlf = { ...TAGS_MIGRATION, sql: 'CREATE TABLE tags (id uuid PRIMARY KEY, label text NOT NULL); -- štítky \r\n' }
+		const [, recordedTags] = (await read(commitOf({}, [NOTES_MIGRATION, crlf]), {})).migrations
+		expect(recordedTags).toEqual({ name: crlf.name, checksum: migrationChecksum(crlf.sql) })
+		const notApplied = { name: 'seed/demo.sql', sql: '-- demo rows\n' }
+		const recorded = [...applied, { name: notApplied.name, checksum: sha256Hex('-- other rows\n') }]
+		expect((await read(commitOf({}, [NOTES_MIGRATION, notApplied]), { applied: recorded })).migrations).toHaveLength(2)
+	})
+
+	test('a deploy that changed one fails before the provider, names the file in the run log, and publishes nothing', async () => {
+		for (const dialect of [undefined, 'sqlite'] as const) {
+			const w = await world()
+			if (dialect !== undefined) w.dialect = dialect
+			expect((await deploy(w, 'stage')).status).toBe('succeeded')
+			const published = (await environment(w, 'stage')).published_run_id
+
+			w.files = commitOf({}, [edited])
+			const refused = await deploy(w, 'stage')
+			expect({ dialect, status: refused.status, classification: refused.classification }).toEqual({ dialect, status: 'failed', classification: null })
+			expect(w.deploys).toBe(1)
+			const log = w.logs.get(`runs/${refused.runId}/logs.ndjson`) ?? ''
+			expect(log).toContain(`access: db/migrations/${NOTES_MIGRATION.name}: an applied migration changed; leave it ${allowed}`)
+			expect(log).toContain(`deploy failed: an applied migration changed: db/migrations/${NOTES_MIGRATION.name}; leave it ${allowed}`)
+			expect((await environment(w, 'stage')).published_run_id).toBe(published)
+		}
+	})
+
+	test('a migration published by a deploy that failed may still change: a publication is not what the database applied', async () => {
+		const w = await world()
+		w.deployState = 'failed'
+		expect((await deploy(w, 'stage')).status).toBe('failed')
+		expect((await environment(w, 'stage')).published_run_id).not.toBeNull()
+
+		w.deployState = 'succeeded'
+		w.files = commitOf({}, [edited])
+		const fixed = await deploy(w, 'stage')
+		expect(fixed.status).toBe('succeeded')
+		expect(wordsOf(classified(fixed).changes)).toContainEqual({ effect: 'widens', line: `Migration \`${NOTES_MIGRATION.name}\` changes` })
 	})
 })
 

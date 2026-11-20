@@ -292,7 +292,8 @@ Right after the provider pins the run's commit, Control reads the run's **access
 ([ADR-0050](../decisions/0050-approved-access.md), `packages/control/src/approval/`): the contract graph and
 `src/db/tables.ts` through the static reader of `@fabrika/check/contract`, which executes nothing, and every
 `db/migrations/` file with its SHA-256 and the database code the runner's classifier finds in it (a refused statement
-fails the run). It classifies the snapshot against the environment's active snapshot (that of
+fails the run, and so does a file the environment's last succeeded run deployed whose text changed since, one run-log
+line per file, before the build). It classifies the snapshot against the environment's active snapshot (that of
 `app_envs.published_run_id`). A step off the paved road — a site's declared `sql`, `unscoped`, `connect` or link
 issuing, or a migration's database code — is a widening line marked "needs closer review", not a refusal; the
 console's environment page lists the published snapshot's, beside its surface: every endpoint under its most exposed

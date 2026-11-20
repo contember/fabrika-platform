@@ -426,10 +426,19 @@ migrated database.
 The pre-1.0 squash rule does not cover application ledgers. An application
 migration that has run is immutable: a changed checksum fails the run, and a
 change is a new file. The checksum is the file's raw text, so a comment counts:
-the rule stays "never touch it", not "touch only what does not run". Neither
-Control nor the build has the history to see the edit before the run fails,
-so `fabrika-check`, run in a git work tree, refuses a migration that differs
-from the merge base of HEAD and the remote's default branch (`migration-edited`). Every new or changed
+the rule stays "never touch it", not "touch only what does not run". Control
+refuses the run before the build when the commit changed a file that the
+environment's last succeeded run deployed: that run's stored snapshot records
+each file's checksum, computed as the runners compute it, and each changed file
+is one line in the run log. The runner's check stays the backstop for what that
+record cannot show: a file applied by a run that failed later, or an environment
+none of whose succeeded runs stored a snapshot. The record can also be ahead of
+the database (one reset outside a run, a Cloudflare object not yet booted on the
+version), where Control refuses an edit the runner would take; the file is
+restored either way. Neither Control nor the build has
+the history to see the edit before the push, so `fabrika-check`, run in a git
+work tree, refuses a migration that differs from the merge base of HEAD and the
+remote's default branch (`migration-edited`). Every new or changed
 migration file is a widening in the approval diff
 ([ADR-0050](0050-approved-access.md)); that part is work unit B7.
 
@@ -455,7 +464,8 @@ migration file is a widening in the approval diff
 - IAM and Control still share a database failure and capacity domain. This ADR
   fixes migration ownership, not storage isolation.
 - An application's edited migration fails its next deploy instead of silently
-  diverging from the schema it describes.
+  diverging from the schema it describes: before the build when the
+  environment's last succeeded run deployed it, otherwise in the runner.
 - A migration that waits on a lock fails the deploy within the timeout. The
   application author must retry or split it.
 - An application migration may write a trigger, a function, a view or a

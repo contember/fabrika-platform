@@ -1,6 +1,6 @@
 // A migration that a shared branch already holds, edited, renamed or deleted in the tree being checked. Every runner
 // keeps the SHA-256 of each applied file and refuses a deploy whose file changed after it ran (ADR-0017), and Control
-// and the deploy see one commit, not its history: the checker is where the edit can be named before the push.
+// refuses it at the run's snapshot; neither sees history, so the checker is where the edit can be named before the push.
 
 import type { Finding } from '../finding'
 import { MIGRATIONS_DIR } from '../layout'

@@ -22,13 +22,14 @@ import type { LeaseFence } from '../lease'
 import { mailCustodyRefusal } from '../mail-transport'
 import { type AccessEffect, type AccessOutcome, classifyAccess, isJobStartLine } from './diff'
 import { relationGrantsRefusal } from './enforcement'
-import { ContractMissing, readAccessSnapshot, snapshotReads, SnapshotRefused } from './read'
+import { AppliedMigrationsChanged, ContractMissing, readAccessSnapshot, snapshotReads, SnapshotRefused } from './read'
 import { FrameworkReleaseRefused } from './readers'
 import {
 	type AccessSnapshot,
 	type ActiveSnapshot,
 	approvedAccess,
 	approvedSnapshot,
+	type MigrationEntry,
 	parseSnapshot,
 	serializePublished,
 	serializeSnapshot,
@@ -239,7 +240,9 @@ async function readCandidate(
 	invocation: PublicationInvocation,
 	input: PublicationInput,
 ): Promise<AccessSnapshot> {
-	const snapshot = await readAtCommit(deps, invocation.signal, input)
+	// A dev bootstrap migrates its workspace's sandbox, which the environment's succeeded runs do not describe.
+	const applied = input.workspaceBaseline === undefined ? await appliedMigrations(deps.repositories.runs, input.run) : []
+	const snapshot = await readAtCommit(deps, invocation.signal, input, applied)
 	await invocation.write((fence) => deps.repositories.runs.recordRunSnapshot(input.run.id, serializeSnapshot(snapshot), fence))
 	return snapshot
 }
@@ -256,7 +259,7 @@ export async function rereadDataLoss(
 ): Promise<readonly MigrationDataLoss[] | null> {
 	let reread: AccessSnapshot
 	try {
-		reread = await readAtCommit(deps, signal, input)
+		reread = await readAtCommit(deps, signal, input, [])
 	} catch {
 		signal.throwIfAborted()
 		return null
@@ -268,10 +271,21 @@ export async function rereadDataLoss(
 	return same ? reread.dataLoss ?? [] : null
 }
 
+/**
+ * The migrations the environment's database applied, as the snapshot of its last succeeded run records them. Not the
+ * published snapshot: a publication precedes the provider, and a run that failed after it may not have run its
+ * migrations, so its files may still be edited. A succeeded snapshot this release cannot read holds none.
+ */
+export async function appliedMigrations(runs: ControlRepositories['runs'], run: RunRow): Promise<readonly MigrationEntry[]> {
+	const running = await runs.getLatestSucceededRunWithSnapshot({ appId: run.app_id, env: run.env })
+	return readableSnapshot(running?.snapshot_json ?? null)?.migrations ?? []
+}
+
 async function readAtCommit(
 	deps: { readonly repositories: ControlRepositories; readonly commits: CommitSource },
 	signal: AbortSignal,
 	input: PublicationInput,
+	applied: readonly MigrationEntry[],
 ): Promise<AccessSnapshot> {
 	try {
 		const root = input.root
@@ -286,13 +300,14 @@ async function readAtCommit(
 			signal,
 		})
 		const settled = approvedSnapshot(await requireAppEnv(deps.repositories, input.run)).snapshot.migrations
-		return await readAccessSnapshot(commit, root, input.app.id, settled, input.dialect)
+		return await readAccessSnapshot(commit, root, input.app.id, { settled, applied, dialect: input.dialect })
 	} catch (error) {
 		signal.throwIfAborted()
 		if (error instanceof ContractMissing) input.log(`access: ${error.message}`)
 		// Its line names only versions the release pattern admitted and fixed file names, never other checkout text.
 		if (error instanceof FrameworkReleaseRefused) input.log(`access: ${error.message}`)
 		if (error instanceof SnapshotRefused) input.log(`access: ${error.message}; ${refusalHint(error)}`)
+		if (error instanceof AppliedMigrationsChanged) { for (const line of error.lines) input.log(`access: ${line}`) }
 		if (error instanceof SourceRateLimited) input.log(`access: the commit's files cannot be read: ${error.message}`)
 		else if (error instanceof SourceFailure) input.log(`access: the commit's files cannot be read (${error.code})`)
 		throw error

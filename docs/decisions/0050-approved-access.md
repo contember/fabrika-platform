@@ -111,7 +111,10 @@ else of the handler code reaches the snapshot; the checker's structure hints sta
 
 A migration file the classifier refuses (an escape from the schema, the transaction or the platform) fails the
 read, as the runner would refuse it, except a file the environment's published snapshot holds with the same
-checksum: the runner skips an applied file, so a stricter classifier cannot lock an application out. The read is
+checksum: the runner skips an applied file, so a stricter classifier cannot lock an application out. A migration file
+the environment's last succeeded run deployed fails the read when its checksum changed, one line per file, as every
+runner refuses an applied file that changed ([ADR-0017](0017-service-owned-postgres-migrations.md)); it is compared
+with that run's stored snapshot, not the published one, because a publication precedes the provider. The read is
 bounded: 256 shell files, and 16 Mi characters of migration text, which the classifier reads at once.
 
 Uploads carry no proxy table and no IAM schema. A snapshot comes only from the commit.

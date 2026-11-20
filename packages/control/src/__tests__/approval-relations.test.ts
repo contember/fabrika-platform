@@ -456,7 +456,7 @@ describe("a table's access view in the approval diff", () => {
 				commitSha: 'c'.repeat(40),
 				signal: new AbortController().signal,
 			})
-			return readAccessSnapshot(commit, '', 'notes', [])
+			return readAccessSnapshot(commit, '', 'notes')
 		}
 		const before = await read(files())
 		const after = await read(files({ access: "{ member: { view: 'shared_notes', row: 'note_id', principal: 'principal_id' } }" }))
@@ -474,7 +474,7 @@ describe("a table's access view in the approval diff", () => {
 			commitSha: 'c'.repeat(40),
 			signal: new AbortController().signal,
 		})
-		const after = await readAccessSnapshot(commit, '', 'notes', [])
+		const after = await readAccessSnapshot(commit, '', 'notes')
 		const decided = lines(snapshot(source), after).find(({ line }) => line.includes('shared_notes') && line.startsWith('Migration'))
 		expect(decided?.line).toContain('an access view: its SQL decides who relation `member` on `notes` reaches')
 		expect(decided?.review).toBe('closer')
@@ -513,7 +513,7 @@ describe('access tables in the migrations', () => {
 			signal: new AbortController().signal,
 		})
 		const settled = applied === undefined ? [] : [{ name: '20261012100000_applied.sql', checksum: sha256Hex(applied) }]
-		return readAccessSnapshot(commit, '', 'notes', settled)
+		return readAccessSnapshot(commit, '', 'notes', { settled })
 	}
 
 	test('a function that writes a table that confers a relation, or one its principal path reads, refuses the read', async () => {

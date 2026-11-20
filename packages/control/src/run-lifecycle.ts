@@ -46,7 +46,7 @@ import {
 import { lifecycleEnvelopeSchema } from './api/provider-envelope'
 import { dataLossBeyond } from './approval/diff'
 import { protectedRunRefusal } from './approval/human'
-import { type PublicationInput, type PublishedCandidate, publishRunSnapshot, readableSnapshot, rereadDataLoss } from './approval/publish'
+import { appliedMigrations, type PublicationInput, type PublishedCandidate, publishRunSnapshot, rereadDataLoss } from './approval/publish'
 import { type AccessSnapshot, approvedProviderAccess, approvedSnapshot, type ProviderAccessFields } from './approval/snapshot'
 import { connectorAddresses } from './connectors'
 import {
@@ -1116,8 +1116,7 @@ async function unheldDataChanges(
 	reread: () => Promise<readonly MigrationDataLoss[] | null>,
 	log: (line: string) => void,
 ): Promise<readonly string[]> {
-	const running = await runs.getLatestSucceededRunWithSnapshot({ appId: run.app_id, env: run.env })
-	const held = readableSnapshot(running?.snapshot_json ?? null)?.migrations ?? []
+	const held = await appliedMigrations(runs, run)
 	const candidate = published.snapshot
 	const heldChecksums = new Map(held.map((entry) => [entry.name, entry.checksum]))
 	const unheld = candidate.migrations.filter((entry) => heldChecksums.get(entry.name) !== entry.checksum).map((entry) => entry.name)
