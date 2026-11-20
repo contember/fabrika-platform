@@ -1,8 +1,9 @@
 # references/tests.md — your own tests
 
 The proxy and the data layer enforce the access forms and the table policies, and fabrika tests that enforcement
-itself: an application writes no test of it. Test what your code decides. A leak sweep in the test kit, which asks
-every endpoint as a caller of one scope and looks for rows of another, is planned.
+itself: an application writes no test of it. Test what your code decides. A handler can still leak what it reads
+outside the access form (`ctx.sql` without its scope fragment, a cache kept between requests): the leak sweep looks for
+that, if the application opts in.
 
 ## Your own tests
 
@@ -265,6 +266,40 @@ if (postgres !== null) {
   of seeded keys, no hook registered when its module loads, no clock or `mock.module` left set. Import the test kits
   from test files only (`test-only-import`).
 - No `.skip`, `.only` or test without an assertion, and no `mock.module` of `bun:test` or `@fabrika/*`.
+
+## The leak sweep (opt in)
+
+One call asks every endpoint that answers rows of a scope (`on`, `in` and `over`) from two scopes that share no value,
+the cases planned in memory from the contract:
+
+```ts src/__tests__/leak-sweep.test.ts
+import { leakSweep } from '@fabrika/app/testing/isolation'
+import { testDatabase } from '@fabrika/db/testing'
+import app from '../app'
+import { tables } from '../db/tables'
+
+leakSweep(
+	app,
+	tables,
+	await testDatabase({
+		migrations: new URL('../../db/migrations/', import.meta.url),
+		label: 'leak-sweep.test.ts',
+	}),
+)
+```
+
+- A caller of one scope asks after a caller of another. The case fails when the answer holds a value of the other
+  scope's rows, or when a query's answer changes after rows were added in scopes its caller does not hold (a count or a
+  sum that forgets its scope holds no foreign value, but it changes).
+- It fails only on a leak. What it cannot check is a hint printed after the run: an input no sample of the schema
+  admits, a row the seeder cannot write, an answer other than the handler's (a 400, a 404 of a row the input names),
+  an endpoint that declares `unscoped`. Nothing requires the sweep, and an application that does not call it runs none.
+- `leakSweep(app, tables, database, { inputs, seeds })` answers a hint: `inputs` are fields laid over the sample, by
+  endpoint id (`GENERATED_MEMBER` for a member of the target's scope, `` `${GENERATED_ROW_PREFIX}<table>` `` for a row
+  of that table seeded in the target, both from `@fabrika/app/testing/isolation`); `seeds` are column values of the
+  row the endpoint addresses (a precondition's state, `{ stage: 'won' }`).
+- It needs a database that can seed (`@fabrika/db/testing` on Postgres, `@fabrika/db/testing-sqlite` on SQLite);
+  without `FABRIKA_TEST_POSTGRES_URL` the Postgres one skips, and so does the sweep.
 
 ## Clicking through the screens
 

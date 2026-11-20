@@ -58,6 +58,7 @@ bun test src/__tests__/public-egress.test.ts    # a cron job's egress: 'public':
 bun test src/__tests__/public-egress-pinning.test.ts  # what a pinned hop relies on in Bun: Host, the certificate checked against the TLS serverName, no pooled connection (TLS half needs openssl)
 bun test src/__tests__/request-budget.test.ts   # a writing mutation past REQUEST_BUDGET_MS: aborted, 500, nothing written (10 s; needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/outbox-rule.test.ts      # endpointAccessKit's cases of an outbox write and of an outbound call (needs FABRIKA_TEST_POSTGRES_URL)
+bun test src/__tests__/leak-sweep.test.ts       # the leak sweep's case: a count that forgets its scope, found only by the differential (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/job-types.test.ts        # the job handler mistakes, compiled by tsc
 bun test src/__tests__/connect.test.ts          # an export and an import, each in its own test kit
 bun test src/__tests__/connect-hardening.test.ts # captured connect methods, a hostile owner, budgets and deadlines
@@ -172,7 +173,11 @@ src/
     challenge.ts      passingChallenge: a siteverify stand-in that passes every token, devKit's default;
                       TURNSTILE_TEST_TOKEN, the test widget's token devKit admits at every submission;
                       solveChallengeAt, which fetches an ALTCHA challenge and solves it (kit.solveChallenge)
-    isolation.ts      @fabrika/app/testing/isolation: the kits behind fabrika's own enforcement tests; pending removal
+    isolation.ts      @fabrika/app/testing/isolation: leakSweep, which an application opts into, and the kits behind it
+                      and behind fabrika's own enforcement tests
+    leak-sweep.ts     leakSweep: one case per on, in and over endpoint, planned in memory from the contract; fails only
+                      on a leak, prints a hint for what it cannot check
+    sample-input.ts   sampleOf: an input a schema shape admits, which the sweep sends when the author gives none
     policy-isolation.ts  policyIsolationKit and appPolicyIsolationKit: a probe contract over one table's policy
     endpoint-access.ts   endpointAccessKit: the application's own endpoints, asked from two scopes
     runner.ts         the test functions the isolation kits' cases register through
@@ -1076,7 +1081,13 @@ vocabulary (`packages/db/CLAUDE.md`).
   `fetch`): run them with `bun test --isolate src/react`. The root `bun run test` runs them in `test:dom`.
 - **The isolation kits (`@fabrika/app/testing/isolation`) add no second pipeline.** They back fabrika's own
   enforcement tests (`policy-enforcement.property.test.ts` and the kit tests over `access-fixture/`,
-  `members-fixture/` and `app-wide-fixture/`) and are pending removal; the skill teaches no application to use them.
+  `members-fixture/` and `app-wide-fixture/`) and the leak sweep; the skill teaches an application `leakSweep` only.
+  **The leak sweep is opt-in and generates no file.** `leakSweep` compiles the contract, plans a case per endpoint
+  `on`, `in` or `over` called by a person or a script (none for one that declares `unscoped`, a hint instead), and
+  runs each through `endpointAccessKit`'s `swept`: `leaked`, then, on a query, the own scope asked again, and once more
+  after `seedWorlds` added a row of every dimension and child table in fresh chains; a changed answer is a leak. A case
+  fails only on a leak; a throw of the kit, a refused own answer, an answer that changes by itself and a table the
+  seeder could not vary are hints, printed after the run. `@fabrika/check` requires no sweep.
   `policyIsolationKit` defines a probe contract over the application's vocabulary whose
   procedures each run one operation of `@fabrika/db/testing`'s `tableProbe`, served by
   `testKit` on a `scoped(tables)` layer of its own: it proves the policy, not the

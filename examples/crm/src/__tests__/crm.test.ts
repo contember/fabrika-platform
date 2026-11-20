@@ -1,7 +1,7 @@
 // The CRM's endpoints as its people call them, behind the production proxy decision. Each allowed call has a refused
-// twin: another org, a role without the action, no credential. Runs with `bun test --isolate`, and beside the
-// generated endpoint access test in one process: a later kit of the application takes its data layer over. The deals
-// slice has its own file (src/deals/__tests__/deals.test.ts).
+// twin: another org, a role without the action, no credential. Runs with `bun test --isolate`, and beside the leak
+// sweep in one process: a later kit of the application takes its data layer over. The deals slice has its own file
+// (src/deals/__tests__/deals.test.ts).
 
 import { createClient } from '@fabrika/app/client'
 import { statusOf, type TestCaller, testKit } from '@fabrika/app/testing'
