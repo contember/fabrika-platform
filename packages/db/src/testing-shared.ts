@@ -83,12 +83,31 @@ export interface SeededRow {
 }
 
 /**
- * What the isolation fixture cannot seed for a schema: a CHECK its values fail, a required foreign key to a scoped table
- * outside the containment chain. It is a limit of the generator, named with the constraint or the column, never a
- * failure of the handler or the policy a case is about.
+ * What the isolation fixture cannot seed for a schema: a CHECK or a unique index no row it tries passes, a required
+ * foreign key whose referenced row it cannot seed. It is a limit of the generator, named with the constraint or the
+ * column, never a failure of the handler or the policy a case is about.
  */
 export class SeedLimitError extends Error {
 	override readonly name = 'SeedLimitError'
+}
+
+/** The constraint a seeded row failed, as a backend reads it off the database's error. */
+export interface Violation {
+	readonly kind: 'check' | 'unique' | 'foreign'
+	/** The constraint's name, or for an unnamed CHECK on SQLite its expression, as the database reports it. */
+	readonly name: string
+	/** The columns the database names (SQLite's unique error); `undefined` where the seeding looks them up by `name`. */
+	readonly columns?: readonly string[]
+}
+
+/** A seed limit of a row the database refused, with the constraint it failed: the seeding tries another row. */
+export class ConstraintLimitError extends SeedLimitError {
+	readonly violation: Violation
+
+	constructor(message: string, violation: Violation) {
+		super(message)
+		this.violation = violation
+	}
 }
 
 /** One row of a table in each of two containment chains that share no value. */
@@ -197,8 +216,12 @@ export interface SeedColumn {
 	readonly number: boolean
 	/** A JSON column (`jsonb`, `JSONB`): its value is a JSON value, bound as the layer binds it (`seedBinding`). */
 	readonly json: boolean
-	/** A sample of the column's type for a required column the test does not care about; a `SeedLimitError` for a type it cannot fill. */
-	readonly sample: () => Primitive
+	/**
+	 * A sample of the column's type for a required column the test does not care about; a `SeedLimitError` for a type it
+	 * cannot fill. `variant` 0 is the plain sample; a higher one differs from the lower ones where the type allows (another
+	 * day, the other boolean, a larger number), for a unique index whose other columns the row cannot vary.
+	 */
+	readonly sample: (variant: number) => Primitive
 }
 
 /** A CHECK constraint of the schema, by the columns it names. */
@@ -207,8 +230,13 @@ export interface CheckConstraint {
 	readonly table: string
 	readonly columns: readonly string[]
 	/** The values of a one-column `IN (…)` list the fixture writes in its place, first one first; empty for any other CHECK. */
-	readonly values: readonly string[]
+	readonly values: readonly CheckLiteral[]
+	/** Every text and number literal of the expression: what the fixture tries in the columns it names when a row fails it. */
+	readonly literals: readonly CheckLiteral[]
 }
+
+/** A literal of a CHECK expression. */
+export type CheckLiteral = string | number
 
 /**
  * A unique index of the schema (a primary key's or a UNIQUE constraint's included), by its key columns. Only an index of
@@ -279,34 +307,39 @@ export interface SeedingBackend {
 }
 
 /** The seed limit of a CHECK a seeded row fails. */
-export function checkLimit(constraint: string, table: string): SeedLimitError {
-	return new SeedLimitError(
-		`the isolation fixture cannot satisfy the CHECK ${constraint} of ${table}: it writes a text marker or a sample of the type there; give the column an IN list, a default, or make it nullable`,
+export function checkLimit(constraint: string, table: string): ConstraintLimitError {
+	return new ConstraintLimitError(
+		`the isolation fixture cannot satisfy the CHECK ${constraint} of ${table}: no row it tried passes it (the values the CHECK names, null where a column admits it, samples of each type, fresh referenced rows)`,
+		{ kind: 'check', name: constraint },
 	)
 }
 
 /** The seed limit of a foreign key a seeded row breaks. */
-export function foreignKeyLimit(constraint: string, table: string): SeedLimitError {
-	return new SeedLimitError(`the isolation fixture's row of ${table} breaks the foreign key ${constraint}`)
+export function foreignKeyLimit(constraint: string, table: string): ConstraintLimitError {
+	return new ConstraintLimitError(`the isolation fixture's row of ${table} breaks the foreign key ${constraint}`, {
+		kind: 'foreign',
+		name: constraint,
+	})
 }
 
 /** The seed limit of a number column a unique index covers whose type holds no number above the largest of the row's group. */
 export function uniqueLimit(index: string, table: string, column: string): SeedLimitError {
 	return new SeedLimitError(
-		`the isolation fixture cannot satisfy the unique index ${index} of ${table}: ${column} holds no number above its largest value; give the column a default or make it nullable`,
+		`the isolation fixture cannot satisfy the unique index ${index} of ${table}: ${column} holds no number above its largest value`,
 	)
 }
 
 /** The seed limit of a row whose values another row of the table already holds under a unique index. */
-export function uniqueValueLimit(index: string, table: string): SeedLimitError {
-	return new SeedLimitError(
-		`the isolation fixture cannot satisfy the unique index ${index} of ${table}: it writes a sample of each column's type there, which another row holds; give a column of it a default, or make it nullable`,
+export function uniqueValueLimit(index: string, table: string, columns?: readonly string[]): ConstraintLimitError {
+	return new ConstraintLimitError(
+		`the isolation fixture cannot satisfy the unique index ${index} of ${table}: every row it tried holds values another row holds there (samples of each type, the values a CHECK names, fresh referenced rows)`,
+		columns === undefined ? { kind: 'unique', name: index } : { kind: 'unique', name: index, columns },
 	)
 }
 
 /** The seed limit of a required column whose type the fixture has no sample of. */
 export function typeLimit(table: string, column: string, type: string): SeedLimitError {
-	return new SeedLimitError(`the isolation fixture cannot fill ${table}.${column} (${type}); give the column a default or make it nullable`)
+	return new SeedLimitError(`the isolation fixture cannot fill ${table}.${column} (${type}): it has no sample of that type`)
 }
 
 /**
@@ -395,7 +428,76 @@ function ownerOf(models: TableModels, dimension: string): TableModel | undefined
 }
 
 /** How many referenced rows deep the fixture follows required foreign keys outside the chain before it gives up. */
-const MAX_REFERENCE_DEPTH = 4
+const MAX_REFERENCE_DEPTH = 16
+/** How many rows the fixture tries for one insert before it reports the last constraint they failed. */
+const MAX_ROW_ATTEMPTS = 64
+/** How many samples of its type the fixture tries in a column whose values a constraint may refuse. */
+const SAMPLE_VARIANTS = 4
+
+/** One way to fill a slot of a row: its values, given the row so far; a `SeedLimitError` when it has none. */
+interface SlotOption {
+	/** It reads the row's other values (a number a unique index numbers within its group), so it is taken last and never kept. */
+	readonly grouped: boolean
+	readonly values: (row: ReadonlyMap<string, SampleValue>) => Promise<ReadonlyMap<string, SampleValue>>
+}
+
+/** Columns the fixture fills together (one column, or a foreign key's open columns) and the ways it may fill them, first first. */
+interface Slot {
+	readonly columns: readonly string[]
+	readonly options: readonly SlotOption[]
+}
+
+/** An option whose values do not depend on the row, computed once: a fresh referenced row is inserted only once. */
+function keptOption(compute: () => Promise<ReadonlyMap<string, SampleValue>>): SlotOption {
+	let values: Promise<ReadonlyMap<string, SampleValue>> | undefined
+	return { grouped: false, values: () => (values ??= compute()) }
+}
+
+function valueOption(name: string, value: SampleValue): SlotOption {
+	return { grouped: false, values: async () => new Map([[name, value]]) }
+}
+
+/** The values a literal of a CHECK suggests for `column`: a number and its neighbours in a number column, a text in a text column. */
+function literalValues(column: SeedColumn, literal: CheckLiteral): SampleValue[] {
+	if (column.number) return typeof literal === 'number' && Number.isSafeInteger(literal) ? [literal, literal + 1, literal - 1] : []
+	return column.text && typeof literal === 'string' ? [literal] : []
+}
+
+/** The first usable option of `slot` from `choice[index]` on, which `choice` then records; `undefined` when none is. */
+async function pickOption(
+	slot: Slot,
+	choice: number[],
+	index: number,
+	row: ReadonlyMap<string, SampleValue>,
+): Promise<{ readonly values: ReadonlyMap<string, SampleValue> } | { readonly error: SeedLimitError }> {
+	let refused: SeedLimitError | undefined
+	for (let at = choice[index] ?? 0; at < slot.options.length; at++) {
+		const option = slot.options[at]
+		if (option === undefined) continue
+		try {
+			const values = await option.values(row)
+			choice[index] = at
+			return { values }
+		} catch (error) {
+			if (!(error instanceof SeedLimitError)) throw error
+			refused = error
+		}
+	}
+	return { error: refused ?? new SeedLimitError('the isolation fixture has no value to try') }
+}
+
+/** The next combination of the `involved` slots' options, the first involved changing first; `false` once all were tried. */
+function advanceChoice(slots: readonly Slot[], choice: number[], involved: readonly number[]): boolean {
+	for (const index of involved) {
+		const at = choice[index] ?? 0
+		if (at + 1 < (slots[index]?.options.length ?? 0)) {
+			choice[index] = at + 1
+			return true
+		}
+		choice[index] = 0
+	}
+	return false
+}
 /** The digest of the empty object a seeded file stands for. */
 const EMPTY_SHA256 = createHash('sha256').digest('hex')
 
@@ -446,17 +548,22 @@ export function testSeeding(backend: SeedingBackend): TestSeeding {
 	 * and the number 1, which a bounded CHECK passes as before. A key column `row` holds no value for yet is left out of
 	 * the group, which only widens it; an index the row holds `null` in never conflicts, unless its nulls are not distinct.
 	 */
-	async function nextNumberOf(table: string, column: SeedColumn, row: ReadonlyMap<string, SampleValue>): Promise<SampleValue> {
+	async function nextNumberOf(
+		table: string,
+		column: SeedColumn,
+		row: ReadonlyMap<string, SampleValue>,
+		ungrouped: ReadonlySet<string> = new Set(),
+	): Promise<SampleValue> {
 		const covering = (await uniqueIndexesOf(table)).filter((index) => index.columns.includes(column.name))
 		const groups: Map<string, SampleValue>[] = []
 		for (const index of covering) {
 			const group = new Map<string, SampleValue>()
 			for (const other of index.columns) {
-				if (other !== column.name && row.has(other)) group.set(other, row.get(other) ?? null)
+				if (other !== column.name && row.has(other) && !ungrouped.has(other)) group.set(other, row.get(other) ?? null)
 			}
 			if (index.nullsNotDistinct || ![...group.values()].includes(null)) groups.push(group)
 		}
-		if (groups.length === 0) return column.sample()
+		if (groups.length === 0) return column.sample(0)
 		const next = await backend.nextNumber(table, column.name, groups)
 		if (next === undefined) throw uniqueLimit(covering.map((index) => index.name).join(', '), table, column.name)
 		return next
@@ -466,28 +573,7 @@ export function testSeeding(backend: SeedingBackend): TestSeeding {
 	async function requiredSample(table: string, column: SeedColumn): Promise<SampleValue> {
 		const checked = await checkedValue(table, column)
 		if (checked !== undefined) return checked
-		return (await numbered(table, column)) ? nextNumberOf(table, column, new Map()) : column.sample()
-	}
-
-	/**
-	 * Writes into `row` a value for each of `columns`: `chosen`'s (a file, a CHECK's value, a marker, a null), else, for a
-	 * number a unique index covers, its next number once every other column places the row in its group, else a sample
-	 * of its type.
-	 */
-	async function fillRow(
-		table: string,
-		columns: readonly SeedColumn[],
-		row: Map<string, SampleValue>,
-		chosen: (column: SeedColumn) => Promise<SampleValue | undefined>,
-	): Promise<void> {
-		const later: SeedColumn[] = []
-		for (const column of columns) {
-			const value = await chosen(column)
-			if (value !== undefined) row.set(column.name, value)
-			else if (await numbered(table, column)) later.push(column)
-			else row.set(column.name, column.sample())
-		}
-		for (const column of later) row.set(column.name, await nextNumberOf(table, column, row))
+		return (await numbered(table, column)) ? nextNumberOf(table, column, new Map()) : column.sample(0)
 	}
 
 	function columnsOf(table: string): readonly SeedColumn[] {
@@ -518,46 +604,127 @@ export function testSeeding(backend: SeedingBackend): TestSeeding {
 		return isMarkable(column) && !keyed && (await checksOn(table, column.name)).length === 0
 	}
 
+	/** The open columns of `key` as the referenced row holds them. */
+	function keyValues(key: ForeignKey, open: readonly string[], row: Readonly<Record<string, unknown>>): Map<string, SampleValue> {
+		const values = new Map<string, SampleValue>()
+		key.columns.forEach((name, index) => {
+			const referenced = key.references[index] ?? ''
+			if (open.includes(name)) values.set(name, keyValue(row[referenced], `${key.table}.${referenced}`))
+		})
+		return values
+	}
+
 	/**
-	 * The values of a foreign key outside the containment chain: `null` where every open column admits it, else the
-	 * key of a row of the referenced table, an existing one (a reference table's rows come from a migration) or one the
-	 * fixture inserts, which `inserted` records when given. A required key to a dimension or child table is refused: its
-	 * row would lie in another chain.
+	 * The ways to fill a foreign key outside the containment chain: `null` where every open column admits it, an existing
+	 * row of an unscoped table (a reference table's rows come from a migration), and a row the fixture inserts, which
+	 * `inserted` records when given. A row of a dimension or child table is always a fresh one: an existing one lies in
+	 * another chain. The key's columns the row already holds (a tenant-holding key's ancestors) the referenced row holds too.
 	 */
-	async function referencedKey(
+	async function referenceSlot(
 		models: TableModels,
 		table: string,
 		key: ForeignKey,
 		open: readonly string[],
+		assigned: ReadonlyMap<string, SampleValue>,
 		depth: number,
 		inserted?: InsertedRow[],
-	) {
+	): Promise<Slot> {
 		const columns = columnsOf(table)
-		const values = new Map<string, SampleValue>()
+		const options: SlotOption[] = []
 		if (open.every((name) => columns.find((column) => column.name === name)?.nullable === true)) {
-			for (const name of open) values.set(name, null)
-			return values
+			options.push({ grouped: false, values: async () => new Map(open.map((name) => [name, null])) })
 		}
+		const fixed = new Map<string, SampleValue>()
+		key.columns.forEach((name, index) => {
+			if (!open.includes(name)) fixed.set(key.references[index] ?? '', assigned.get(name) ?? null)
+		})
 		const target = modelOf(models, key.table)
 		const scoped = target?.scope.mode === 'dimension' || target?.scope.mode === 'child'
-		if (scoped || open.length !== key.columns.length || key.table === table || depth >= MAX_REFERENCE_DEPTH) {
+		const refused = key.table === table
+			? 'which references its own table'
+			: depth >= MAX_REFERENCE_DEPTH
+			? `whose referenced rows nest deeper than ${MAX_REFERENCE_DEPTH}`
+			: undefined
+		if (refused === undefined) {
+			if (!scoped) {
+				options.push(keptOption(async () => {
+					const existing = await backend.firstRow(key.table, key.references, fixed)
+					if (existing === undefined) throw new SeedLimitError(`the isolation fixture finds no row of ${key.table} to reference`)
+					return keyValues(key, open, existing)
+				}))
+			}
+			options.push(keptOption(async () => keyValues(key, open, await freshRow(models, key, fixed, depth + 1, inserted))))
+		}
+		if (options.length === 0) {
 			throw new SeedLimitError(
-				`the isolation fixture cannot fill ${table}.${
-					open.join(', ')
-				}: a required foreign key to ${key.table} outside the containment chain; give the column a default or make it nullable`,
+				`the isolation fixture cannot fill ${table}.${open.join(', ')}: a required foreign key to ${key.table} outside the containment chain, ${refused}`,
 			)
 		}
-		const existing = await backend.firstRow(key.table, key.references)
-		const row = existing ?? (await insert(models, key.table, new Map(), [], depth + 1, inserted)).stored
-		const match = new Map<string, SampleValue>()
-		key.columns.forEach((name, index) => {
-			const referenced = key.references[index] ?? ''
-			const value = keyValue(row[referenced], `${key.table}.${referenced}`)
-			values.set(name, value)
-			match.set(referenced, value)
-		})
-		if (existing === undefined) inserted?.push({ table: key.table, match })
-		return values
+		return { columns: open, options }
+	}
+
+	/**
+	 * Gives each dimension of `model`'s chain that `values` lacks a fresh value, and inserts the row of each such
+	 * container a table owns, outermost first; `inserted` records them when given.
+	 */
+	async function placeContainers(
+		models: TableModels,
+		model: TableModel,
+		values: Map<string, string>,
+		world: string,
+		depth: number,
+		inserted?: InsertedRow[],
+	): Promise<void> {
+		for (let index = model.chain.length - 1; index >= 0; index--) {
+			const link = model.chain[index]
+			if (link === undefined || values.has(link.dimension)) continue
+			const value = scopeValue(model.name, link.column, link.dimension, world)
+			values.set(link.dimension, value)
+			const owner = ownerOf(models, link.dimension)
+			if (owner === undefined || owner.name === model.name || owner.scope.mode !== 'dimension') continue
+			await insert(models, owner.name, placement(owner, values, value), [], depth, inserted)
+			inserted?.push({ table: owner.name, match: new Map([[owner.scope.key, value]]) })
+		}
+	}
+
+	/**
+	 * A fresh row of the table `key` references, holding `fixed` (referenced column → value), as stored. A row of a dimension
+	 * or child table lies in the chain `fixed` holds of it, else in fresh values with containers of its own.
+	 */
+	async function freshRow(
+		models: TableModels,
+		key: ForeignKey,
+		fixed: ReadonlyMap<string, SampleValue>,
+		depth: number,
+		inserted?: InsertedRow[],
+	): Promise<Readonly<Record<string, unknown>>> {
+		const target = modelOf(models, key.table)
+		const scope = target?.scope
+		if (target === undefined || scope === undefined || (scope.mode !== 'dimension' && scope.mode !== 'child')) {
+			const { stored } = await insert(models, key.table, fixed, [], depth, inserted)
+			inserted?.push({
+				table: key.table,
+				match: new Map(key.references.map((name) => [name, keyValue(stored[name], `${key.table}.${name}`)])),
+			})
+			return stored
+		}
+		if (fixed.has(scope.key)) {
+			throw new SeedLimitError(`the isolation fixture cannot insert a row of ${key.table} whose key the referencing row fixes`)
+		}
+		const values = new Map<string, string>()
+		for (const link of target.chain) {
+			const value = fixed.get(link.column)
+			if (value !== undefined && value !== null) values.set(link.dimension, String(value))
+		}
+		await placeContainers(models, target, values, 'referenced', depth, inserted)
+		const rowKey = scopeValue(target.name, scope.key, scope.mode === 'dimension' ? scope.dimension : target.name, 'referenced')
+		const assigned = placement(target, values, rowKey)
+		for (const [name, value] of fixed) {
+			if (!assigned.has(name)) assigned.set(name, value)
+		}
+		const { stored } = await insert(models, target.name, assigned, [], depth, inserted)
+		inserted?.push({ table: target.name, match: new Map([[scope.key, rowKey]]) })
+		return stored
 	}
 
 	/** A value of `dimension` for the column that carries it: a uuid, or text that names the world it belongs to. */
@@ -582,11 +749,74 @@ export function testSeeding(backend: SeedingBackend): TestSeeding {
 	}
 
 	/**
-	 * Inserts one row: `assigned` as given, a file column a seeded file, a foreign key outside the chain `null` or referencing a row, a column a CHECK
-	 * names its `IN` list's first value or `null`, every other text column a marker and every other required column a
-	 * sample. Answers what the fixture wrote, and the row as stored (its database defaults filled). A CHECK or a foreign
-	 * key the values still fail is a `SeedLimitError` that names the constraint. `inserted` records every row a foreign
-	 * key or a file column made it insert, not the row itself.
+	 * The ways to fill `column`: a file column a seeded file; a column a CHECK names the `IN` list's first value or `null`,
+	 * then every value the CHECKs naming it list or compare with, and samples of its type; a text column a marker; any other
+	 * nullable column `null`; a number a unique index covers its next number in the row's group; else samples of its type.
+	 */
+	async function columnSlot(
+		model: TableModel | undefined,
+		table: string,
+		column: SeedColumn,
+		markers: string[],
+		inserted: InsertedRow[] | undefined,
+		ungrouped: ReadonlySet<string>,
+	): Promise<Slot> {
+		const name = column.name
+		const single = (value: SampleValue): ReadonlyMap<string, SampleValue> => new Map([[name, value]])
+		const sampled = (variant: number): SlotOption => ({ grouped: false, values: async () => single(column.sample(variant)) })
+		const samples = Array.from({ length: SAMPLE_VARIANTS }, (_, variant) => sampled(variant))
+		const next: SlotOption = { grouped: true, values: async (row) => single(await nextNumberOf(table, column, row, ungrouped)) }
+		const kind = model !== undefined && Object.hasOwn(model.files, name) ? model.files[name] : undefined
+		if (kind !== undefined) {
+			return {
+				columns: [name],
+				options: [keptOption(async () => single(await seedFile(kind, inserted))), ...(column.nullable ? [valueOption(name, null)] : [])],
+			}
+		}
+		const named = await checksOn(table, name)
+		const isNumbered = await numbered(table, column)
+		if (named.length > 0) {
+			const checked = await checkedValue(table, column)
+			const first = checked === undefined ? (isNumbered ? next : sampled(0)) : valueOption(name, checked)
+			const tried: SampleValue[] = column.nullable ? [null] : []
+			for (const check of named) {
+				for (const literal of [...check.values, ...check.literals]) tried.push(...literalValues(column, literal))
+			}
+			const listed = [...new Set(tried)].filter((value) => value !== checked).map((value) => valueOption(name, value))
+			return { columns: [name], options: [first, ...listed, ...(isNumbered ? [next] : []), ...samples] }
+		}
+		if (await holdsMarker(model, table, column)) {
+			return {
+				columns: [name],
+				options: [keptOption(async () => {
+					const marker = `m${randomHex()}${randomHex()}`
+					markers.push(marker)
+					return single(marker)
+				})],
+			}
+		}
+		if (column.nullable) return { columns: [name], options: [valueOption(name, null)] }
+		return { columns: [name], options: isNumbered ? [next] : samples }
+	}
+
+	/** The columns of the constraint a row failed, or `undefined` when the seeding cannot tell (an index on an expression). */
+	async function violatedColumns(table: string, violation: Violation): Promise<readonly string[] | undefined> {
+		if (violation.columns !== undefined) return violation.columns
+		if (violation.kind === 'check') {
+			checks ??= backend.checks()
+			return (await checks).find((check) => check.table === table && check.name === violation.name)?.columns
+		}
+		return (await uniqueIndexesOf(table)).find((index) => index.name === violation.name)?.columns
+	}
+
+	/**
+	 * Inserts one row: `assigned` as given, every other column a database default leaves open filled by its slot
+	 * (`columnSlot`, `referenceSlot`), each slot's first option first. When the database refuses the row for a CHECK or
+	 * a unique index, the fixture tries the next combination of the options of the slots that constraint names (all of
+	 * them when it names none it can read), up to `MAX_ROW_ATTEMPTS` rows; the last refusal is the `SeedLimitError`.
+	 * Answers what the fixture wrote, and the row as stored (its database defaults filled). `inserted` records every row
+	 * a foreign key or a file column made it insert, not the row itself. A number a unique index covers is numbered within
+	 * its group without the columns in `ungrouped` (a container the row will not lie in).
 	 */
 	async function insert(
 		models: TableModels,
@@ -595,39 +825,67 @@ export function testSeeding(backend: SeedingBackend): TestSeeding {
 		markers: string[],
 		depth = 0,
 		inserted?: InsertedRow[],
+		ungrouped: ReadonlySet<string> = new Set(),
 	): Promise<{ readonly row: ReadonlyMap<string, SampleValue>; readonly stored: Readonly<Record<string, unknown>> }> {
 		const model = modelOf(models, table)
 		const columns = columnsOf(table)
 		// A column with a database default keeps it unless the fixture assigned it, a foreign key's included.
 		const defaulted = new Set(columns.filter((column) => column.defaulted).map((column) => column.name))
-		const keyed = new Map<string, SampleValue>()
+		const slots: Slot[] = []
+		const slotted = new Set<string>()
 		for (const key of model?.foreignKeys ?? []) {
-			const open = key.columns.filter((column) => !assigned.has(column) && !defaulted.has(column))
+			const open = key.columns.filter((column) => !assigned.has(column) && !defaulted.has(column) && !slotted.has(column))
 			if (open.length === 0) continue
-			for (const [name, value] of await referencedKey(models, table, key, open, depth, inserted)) keyed.set(name, value)
+			slots.push(await referenceSlot(models, table, key, open, assigned, depth, inserted))
+			for (const name of open) slotted.add(name)
 		}
-		const row = new Map<string, SampleValue>()
-		const open: SeedColumn[] = []
 		for (const column of columns) {
-			const name = column.name
 			// An assigned `null` is the fixture's value too, never a gap to fill.
-			const given = assigned.has(name) ? assigned : keyed.has(name) ? keyed : undefined
-			if (given !== undefined) row.set(name, given.get(name) ?? null)
-			else if (!column.defaulted) open.push(column)
+			if (assigned.has(column.name) || column.defaulted || slotted.has(column.name)) continue
+			slots.push(await columnSlot(model, table, column, markers, inserted, ungrouped))
 		}
-		await fillRow(table, open, row, async (column) => {
-			const kind = model !== undefined && Object.hasOwn(model.files, column.name) ? model.files[column.name] : undefined
-			if (kind !== undefined) return seedFile(kind, inserted)
-			const checked = await checkedValue(table, column)
-			if (checked !== undefined) return checked
-			if (await holdsMarker(model, table, column)) {
-				const marker = `m${randomHex()}${randomHex()}`
-				markers.push(marker)
-				return marker
+		// A slot that numbers within the row's group is filled once every other slot placed the row.
+		const order = [...slots.keys()].sort((left, right) =>
+			Number(slots[left]?.options.some((option) => option.grouped)) - Number(slots[right]?.options.some((option) => option.grouped))
+		)
+		const choice = slots.map(() => 0)
+		const involved: number[] = []
+		// The refusal of the row the fixture prefers, which the error names once no other row passes.
+		let refused: SeedLimitError | undefined
+		for (let attempt = 0; attempt < MAX_ROW_ATTEMPTS; attempt++) {
+			const row = new Map(assigned)
+			let complete = true
+			for (const index of order) {
+				const slot = slots[index]
+				if (slot === undefined) continue
+				const picked = await pickOption(slot, choice, index, row)
+				if ('error' in picked) {
+					// No option of the slot is usable from its current one on: the next combination, or the reason.
+					if ((choice[index] ?? 0) === 0 || !involved.includes(index)) throw picked.error
+					refused ??= picked.error
+					complete = false
+					break
+				}
+				for (const [name, value] of picked.values) row.set(name, value)
 			}
-			return column.nullable ? null : undefined
-		})
-		return { row, stored: await backend.insert(table, row) }
+			if (complete) {
+				try {
+					return { row, stored: await backend.insert(table, row) }
+				} catch (error) {
+					if (!(error instanceof ConstraintLimitError) || error.violation.kind === 'foreign') throw error
+					refused ??= error
+					const named = await violatedColumns(table, error.violation)
+					const touched = [...slots.keys()].filter((index) => named === undefined || (slots[index]?.columns ?? []).some((name) => named.includes(name)))
+					// A constraint over the assigned columns only has nothing to try.
+					if (touched.length === 0) throw error
+					for (const index of touched) {
+						if (!involved.includes(index)) involved.push(index)
+					}
+				}
+			}
+			if (!advanceChoice(slots, choice, involved)) break
+		}
+		throw refused ?? new SeedLimitError(`the isolation fixture tried ${MAX_ROW_ATTEMPTS} rows of ${table}`)
 	}
 
 	/** The columns a model's row is placed by: its own key when it owns a dimension, and each link of its chain. */
@@ -851,7 +1109,7 @@ export function testSeeding(backend: SeedingBackend): TestSeeding {
 			assigned.set(name, pinned)
 			markers.push(pinned)
 		}
-		const { row } = await insert(models, model.name, assigned, markers)
+		const { row } = await insert(models, model.name, assigned, markers, 0, inserted)
 		inserted.push({ table: model.name, match: new Map([[scope.key, key]]) })
 		return worldRow(row, [])
 	}
@@ -959,29 +1217,26 @@ export function testSeeding(backend: SeedingBackend): TestSeeding {
 		},
 		async sampleInsert(tables, table, beside) {
 			const { models, model } = scopedModel(tables, table)
-			const values: Record<string, SampleValue> = {}
-			const columns = columnsOf(table)
-			const required = columns.filter((column) => inSet(model.insert, column.name) && isRequired(column))
-			for (const key of model.foreignKeys) {
-				const open = key.columns.filter((name) => required.some((column) => column.name === name))
-				if (open.length === 0) continue
-				for (const [name, value] of await referencedKey(models, table, key, open, 0)) values[name] = value
+			const scope = model.scope
+			if (scope.mode !== 'dimension' && scope.mode !== 'child' && scope.mode !== 'app') {
+				throw new Error(`${table} is a ${scope.mode} table; no store inserts into it`)
 			}
-			// The row as the insert will write it: in `beside`'s containers, which the handler places it in.
-			const containers = new Map((beside?.chain ?? []).map((link) => [link.type, link.value]))
-			const row = new Map<string, SampleValue>()
-			for (const link of model.chain) {
-				const value = containers.get(link.dimension)
-				if (value !== undefined) row.set(link.column, value)
+			// A probe row the database judges, placed as the insert will place it (in `beside`'s containers, else in fresh
+			// ones it removes with the probe), numbered within the containers known; its values are the sample.
+			const values = new Map((beside?.chain ?? []).map((link) => [link.type, link.value]))
+			const ungrouped = new Set(model.chain.filter((link) => !values.has(link.dimension)).map((link) => link.column))
+			const placed: InsertedRow[] = []
+			await placeContainers(models, model, values, 'probe', 0, placed)
+			const key = scopeValue(table, scope.key, scope.mode === 'dimension' ? scope.dimension : table, 'probe')
+			const { row } = await insert(models, table, placement(model, values, key), [], 0, undefined, ungrouped)
+			await backend.remove([{ table, match: new Map([[scope.key, key]]) }, ...placed])
+			const sample: Record<string, SampleValue> = {}
+			for (const column of columnsOf(table)) {
+				if (!inSet(model.insert, column.name) || !row.has(column.name)) continue
+				// A nullable column a CHECK ties to another is written as the probe held it; any other is left to the insert.
+				if (isRequired(column) || (await checksOn(table, column.name)).length > 0) sample[column.name] = row.get(column.name) ?? null
 			}
-			for (const [name, value] of Object.entries(values)) row.set(name, value)
-			const open = required.filter((column) => !(column.name in values))
-			await fillRow(table, open, row, async (column) => {
-				const kind = Object.hasOwn(model.files, column.name) ? model.files[column.name] : undefined
-				return kind === undefined ? checkedValue(table, column) : seedFile(kind)
-			})
-			for (const column of open) values[column.name] = row.get(column.name) ?? null
-			return values
+			return sample
 		},
 		seededObjects: () => [...seededObjects],
 	}

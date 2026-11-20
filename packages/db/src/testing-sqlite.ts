@@ -21,6 +21,7 @@ import type { TableProbe } from './store'
 import {
 	type CheckConstraint,
 	checkLimit,
+	type CheckLiteral,
 	foreignKeyLimit,
 	groupsWhere,
 	type InsertedRow,
@@ -79,20 +80,25 @@ function baseType(declared: string): string {
 	return declared.trim().toUpperCase().replace(/\s*\(.*\)$/s, '')
 }
 
-/** A sample for a required column the test does not care about, by the declared types `@fabrika/db/codegen-sqlite` accepts. */
-function sampleOf(table: string, column: string, declared: string): Primitive {
+/**
+ * A sample for a required column the test does not care about, by the declared types `@fabrika/db/codegen-sqlite`
+ * accepts; `variant` above 0 is another value of the type (`SeedColumn.sample`).
+ */
+function sampleOf(table: string, column: string, declared: string, variant: number): Primitive {
 	const type = baseType(declared)
 	if (type === 'UUID') return crypto.randomUUID()
 	if (TEXT_TYPES.has(type)) return `s${randomHex()}`
-	if (NUMBER_TYPES.has(type)) return 1
-	if (type === 'BOOLEAN') return false
+	if (NUMBER_TYPES.has(type)) return 1 + variant
+	if (type === 'BOOLEAN') return variant % 2 === 1
 	// A day is `YYYY-MM-DD` and a timestamp ISO text in UTC: the forms the layer writes and reads on SQLite.
-	if (type === 'DATE') return new Date().toISOString().slice(0, 10)
-	if (TIMESTAMP_TYPES.has(type)) return new Date().toISOString()
+	if (type === 'DATE') return new Date(Date.now() + variant * DAY_MS).toISOString().slice(0, 10)
+	if (TIMESTAMP_TYPES.has(type)) return new Date(Date.now() + variant * 1000).toISOString()
 	// A JSON string: a seed value has no object form, and `seedBinding` writes it as the layer would.
-	if (type === 'JSONB') return 'sample'
+	if (type === 'JSONB') return variant === 0 ? 'sample' : `sample-${variant}`
 	throw typeLimit(table, column, declared)
 }
+
+const DAY_MS = 86_400_000
 
 const tableRows = z.array(z.object({ name: z.string(), wr: z.number() }))
 const columnRows = z.array(
@@ -123,7 +129,7 @@ function readColumns(exec: Exec): SeedColumn[] {
 				uuid: type === 'UUID',
 				number: NUMBER_TYPES.has(type),
 				json: type === 'JSONB',
-				sample: () => sampleOf(table.name, column.name, column.type),
+				sample: (variant) => sampleOf(table.name, column.name, column.type, variant),
 			})
 		}
 	}
@@ -234,8 +240,32 @@ function definitions(tokens: readonly Token[]): Token[][] {
 
 const TABLE_CONSTRAINTS: ReadonlySet<string> = new Set(['CONSTRAINT', 'CHECK', 'PRIMARY', 'UNIQUE', 'FOREIGN'])
 
-/** The values of `<column> IN ('a', 'b', …)`, parenthesized or not, or none for any other expression. */
-function listedValues(expression: readonly Token[], column: string): string[] {
+/** The value of a text or number literal token, a number possibly after a minus sign; `undefined` for any other token. */
+function literalOf(tokens: readonly Token[], index: number): { readonly value: CheckLiteral; readonly width: number } | undefined {
+	const token = tokens[index]
+	if (token?.kind === 'string') return { value: token.text, width: 1 }
+	const negative = isPunctuation(token, '-')
+	const number = negative ? tokens[index + 1] : token
+	if (number?.kind !== 'other' || !/^(?:[0-9]|\.[0-9])/.test(number.text)) return undefined
+	const value = Number(number.text)
+	if (!Number.isFinite(value)) return undefined
+	return { value: negative ? -value : value, width: negative ? 2 : 1 }
+}
+
+/** Every text and number literal of a CHECK expression. */
+function expressionLiterals(expression: readonly Token[]): CheckLiteral[] {
+	const literals: CheckLiteral[] = []
+	for (let index = 0; index < expression.length; index++) {
+		const literal = literalOf(expression, index)
+		if (literal === undefined) continue
+		literals.push(literal.value)
+		index += literal.width - 1
+	}
+	return literals
+}
+
+/** The values of `<column> IN ('a', 'b', …)` or `IN (1, 2, …)`, parenthesized or not, or none for any other expression. */
+function listedValues(expression: readonly Token[], column: string): CheckLiteral[] {
 	let tokens = expression
 	while (isPunctuation(tokens[0], '(') && closing(tokens, 0) === tokens.length - 1) {
 		tokens = tokens.slice(1, -1)
@@ -252,18 +282,18 @@ function listedValues(expression: readonly Token[], column: string): string[] {
 	if (!named || subject.text.toLowerCase() !== column.toLowerCase() || !isWord(tokens[list], 'IN') || !isPunctuation(tokens[list + 1], '(')) return []
 	if (!isPunctuation(tokens.at(-1), ')') || closing(tokens, list + 1) !== tokens.length - 1) return []
 	const items = tokens.slice(list + 2, -1)
-	const values: string[] = []
-	for (let index = 0; index < items.length; index++) {
-		const item = items[index]
-		if (index % 2 === 1) {
-			if (!isPunctuation(item, ',')) return []
-		} else if (item?.kind === 'string') {
-			values.push(item.text)
-		} else {
-			return []
-		}
+	const values: CheckLiteral[] = []
+	let index = 0
+	while (index < items.length) {
+		const literal = literalOf(items, index)
+		if (literal === undefined) return []
+		values.push(literal.value)
+		index += literal.width
+		if (index === items.length) return values
+		if (!isPunctuation(items[index], ',')) return []
+		index += 1
 	}
-	return items.length % 2 === 1 ? values : []
+	return []
 }
 
 /** Every CHECK of a table as `sqlite_schema` stores its `CREATE TABLE`: a column's and the table's, by the columns it names. */
@@ -300,6 +330,7 @@ function tableChecks(table: string, sql: string, columns: readonly string[]): Ch
 				table,
 				columns: [...named],
 				values: named.size === 1 && only !== undefined ? listedValues(expression, only) : [],
+				literals: expressionLiterals(expression),
 			})
 			index = close
 		}
@@ -416,9 +447,14 @@ function seedLimit(error: unknown, table: string): SeedLimitError | undefined {
 	if (check !== null) return checkLimit(check[1] ?? 'unnamed', table)
 	// SQLite names no foreign key in its error.
 	if (message.startsWith('FOREIGN KEY constraint failed')) return foreignKeyLimit('unnamed', table)
-	// SQLite names a unique index by its columns in its error: `UNIQUE constraint failed: t.a, t.b`.
+	// SQLite names a unique index by its columns in its error, `UNIQUE constraint failed: t.a, t.b`, or one on an
+	// expression by its name, `UNIQUE constraint failed: index 'i'`.
 	const unique = /^UNIQUE constraint failed: (.*)$/s.exec(message)
-	if (unique !== null) return uniqueValueLimit(`(${unique[1] ?? 'unnamed'})`, table)
+	if (unique !== null) {
+		const named = unique[1] ?? 'unnamed'
+		const columns = named.startsWith('index ') ? undefined : named.split(', ').map((column) => column.slice(column.indexOf('.') + 1))
+		return uniqueValueLimit(`(${named})`, table, columns)
+	}
 	return undefined
 }
 

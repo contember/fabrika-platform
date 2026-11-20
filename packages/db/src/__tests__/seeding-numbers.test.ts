@@ -188,7 +188,7 @@ for (const [dialect, database] of [['SQLite', sqlite], ['Postgres', postgres]] a
 			if (database === null) return
 			const badged = database.seedWorlds(tables, 'badges')
 			await expect(badged).rejects.toThrow(SeedLimitError)
-			await expect(badged).rejects.toThrow(/the unique index \S+ of badges: it writes a sample of each column's type there, which another row holds/)
+			await expect(badged).rejects.toThrow(/the unique index \S+ of badges: every row it tried holds values another row holds there/)
 		})
 	})
 }

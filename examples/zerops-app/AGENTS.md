@@ -6668,14 +6668,15 @@ export const members = { 'api.tasks.assign': ['assignee'] }
   under a fresh parent, `2` for the insert case beside the seeded row; the whole column for a one-column index), so
   the row collides with no row of the table. A column with a `DEFAULT` keeps it (`status` is `open`). A column a
   `CHECK` names gets the first value of an `IN (…)` list, or `null` where it is nullable. A foreign key outside the
-  containment chain is `null` where it is nullable, and otherwise references an existing or a seeded row of a
-  reference or application table. What the seed cannot satisfy (another `CHECK` on a required text column, a unique
-  number column whose type holds no larger number, a `UNIQUE` index whose sampled values another row holds, such as a
-  date, an enum or a boolean unique on its own, a required key to a dimension or child table outside the chain) fails
-  the test with a `SeedLimitError` that names the constraint: a limit of the generator, not a bug of the handler. The
-  numbering reads only a `UNIQUE` index of plain columns with no `WHERE`. A collision the seed does not write itself (a
-  non-number column unique within the parent, which the insert case's row shares with the seeded one) answers 500 in
-  the insert case. Keep the column as the domain needs it, and ask the human when the limit blocks the tests.
+  containment chain is `null` where it is nullable, and otherwise references an existing row of a reference or
+  application table, or a row the seed inserts (of a dimension or child table always a fresh one, in a scope of its
+  own), however deep its own required keys go. When the database refuses a seeded row for a `CHECK` or a `UNIQUE`
+  index, the seed tries other values in the columns it names: `null`, the values the `CHECK` lists or compares with
+  (`IN (0, 12, 21)`, `BETWEEN 2000 AND 2100`, `kind = 'pickup'`), other samples of the type (another day, the other
+  boolean), a fresh referenced row (so `a <> b` and a unique foreign key hold). The insert case's values come from a
+  probe row the database accepted. What the seed still cannot satisfy fails the test with a `SeedLimitError` that names
+  the constraint: a limit of the generator, not a bug of the handler. Keep the constraint as the domain needs it, and
+  ask the human when the limit blocks the tests.
 - A generated case's input is a sample of the schema: no optional field, `null` for a nullable one, an enum's first
   value, the shortest string its bounds admit (`'x'`), the smallest number, `false`, a fixed value for a format
   (`uuid`, `email`, `iso.date`). When that input meets a precondition (`close` of an `open` task is 409), seed the

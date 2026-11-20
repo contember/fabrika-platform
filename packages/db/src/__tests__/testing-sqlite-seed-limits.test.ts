@@ -189,14 +189,20 @@ describe('the isolation fixture over constrained columns on SQLite', () => {
 		await expect(sqlite.seedUnder(tables, 'badges', worlds.own)).rejects.toThrow('badges does not lie in a team')
 	})
 
-	test('an unsatisfiable CHECK and a required key to a scoped table are generator limits, named', async () => {
+	test('an unsatisfiable CHECK is a generator limit, named', async () => {
 		const badge = sqlite.seedWorlds(tables, 'badges')
 		await expect(badge).rejects.toBeInstanceOf(SeedLimitError)
 		await expect(sqlite.seedWorlds(tables, 'badges')).rejects.toThrow('cannot satisfy the CHECK badges_code_check of badges')
 		await expect(sqlite.seedWorlds(tables, 'stamps')).rejects.toThrow('cannot satisfy the CHECK length(code) = 3 of stamps')
-		await expect(sqlite.seedWorlds(tables, 'links')).rejects.toThrow(
-			'cannot fill links.team_id: a required foreign key to teams outside the containment chain',
-		)
+	})
+
+	test('a required foreign key to a dimension table outside the chain references a fresh row of it, removed with the worlds', async () => {
+		const worlds = await sqlite.seedWorlds(tables, 'links')
+		const own = await tableProbe(layer, 'links').get(authority.ref('link', 'teams.read', worlds.own.key))
+		const other = await tableProbe(layer, 'links').get(authority.ref('link', 'teams.read', worlds.other.key))
+		expect(own['team_id']).toEqual(expect.any(String))
+		expect(own['team_id']).not.toBe(other['team_id'])
+		await worlds.remove()
 	})
 
 	test('a probe insert samples a required foreign key and an IN list too', async () => {

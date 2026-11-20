@@ -105,8 +105,13 @@ table, with the author's values in any column it does not stamp or fill with a f
 in foreign-key order and linked (every table's values checked before the first insert, and a table that fails removes the rows seeded before it), with a `remove` that deletes them, the rows their required foreign keys and file columns made it insert, and every row that refers to any of them, however deep, each locked once found and all deleted in one statement (a foreign key is checked at its end, so rows that refer to each other go together); `seedUnder` seeds a row in a seeded row's object (a child row a fixture names); `tableProbe` reaches one table of a layer by
 name. `@fabrika/app/testing/isolation` builds the policy isolation and endpoint access tests on them. Every text
 column the seeding fills holds a distinct marker, so a leaked value is recognised anywhere in an answer, except a
-foreign key outside the chain (`null`, or the key of a reference or application row) and a column a CHECK names (an
-`IN` list's first value, or `null`). What the seeding cannot satisfy is a `SeedLimitError` naming the constraint.
+foreign key outside the chain (`null`, the key of an existing reference or application row, or of a fresh row the
+seeding inserts, a dimension or child table's always fresh and in a chain of its own) and a column a CHECK names (an
+`IN` list's first value, or `null`). The database judges each seeded row: when it refuses one for a CHECK or a unique
+index, the seeding tries the next combination of the values of the columns that constraint names (null, the values its
+CHECKs list or compare with, other samples of the type, a fresh referenced row), up to `MAX_ROW_ATTEMPTS` rows, and it
+follows required foreign keys `MAX_REFERENCE_DEPTH` rows deep. What it still cannot satisfy is a `SeedLimitError`
+naming the constraint the preferred row failed; the schema keeps its constraints.
 There is no generated `move` case yet ([backlog 97](../../docs/backlog/97-the-generated-tests-have-no-move-case.md)):
 `t.move` needs the source and the target `Ref`, which an endpoint gets through `access: { capabilities }`.
 `@fabrika/db/testing-sqlite` is the same half for an application on Cloudflare: its `testDatabase({ migrations, label })`
@@ -280,9 +285,12 @@ pass a recording one); `Database.fromEngine` takes another engine (`openSqlite`)
   the largest of the row's group, and at least 1. The group is the rows that hold the index's other columns as the row
   does (a null only under `NULLS NOT DISTINCT`), filled last so they are known (`sampleInsert` takes them from the
   `beside` row's containers); a column not known widens it. A type that holds no such number and a largest that is
-  `NaN` or infinite are a `SeedLimitError` naming the index, and so is a seeded row's own unique violation (23505, or
-  SQLite's `UNIQUE constraint failed`). `sampleInsert` reads the number when it samples, so the caller inserts the values
-  before the next sample; `seedWorlds` samples both worlds' updates once both rows are written. Each kit reads its
+  `NaN` or infinite are a `SeedLimitError` naming the index. A seeded row's own unique violation (23505, or SQLite's
+  `UNIQUE constraint failed`) and a CHECK violation (23514) are a `ConstraintLimitError` with the constraint, which the
+  seeding answers with another row (see above) and reports once none passes. `sampleInsert` inserts a probe row placed
+  as the insert will place it, judged by the database, removes it, and answers its values (every required insert
+  column, and each one a CHECK names); it reads the number when it samples, so the caller inserts the values before
+  the next sample; `seedWorlds` samples both worlds' updates once both rows are written. Each kit reads its
   unique indexes and the group's next number (`uniqueIndexes`, `nextNumber`); `testing-shared.ts` decides where they
   apply.
 - **A throwaway schema is held by its advisory lock for its whole life.** The lock (SHA-256 of

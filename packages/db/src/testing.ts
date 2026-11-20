@@ -26,6 +26,7 @@ import type { TableProbe } from './store'
 import {
 	type CheckConstraint,
 	checkLimit,
+	type CheckLiteral,
 	foreignKeyLimit,
 	groupsWhere,
 	type InsertedRow,
@@ -90,28 +91,33 @@ function quoted(identifier: string): string {
 	return `"${identifier}"`
 }
 
-/** A sample for a required column the test does not care about, by the types `@fabrika/db/codegen` accepts. */
-function sampleOf(table: string, column: CatalogColumn): Primitive {
+const DAY_MS = 86_400_000
+
+/**
+ * A sample for a required column the test does not care about, by the types `@fabrika/db/codegen` accepts; `variant`
+ * above 0 is another value of the type (`SeedColumn.sample`).
+ */
+function sampleOf(table: string, column: CatalogColumn, variant: number): Primitive {
 	if (column.type_type === 'e') {
-		const [first] = column.enum_labels
-		if (first !== undefined) {
-			return first
+		const label = column.enum_labels[variant % Math.max(column.enum_labels.length, 1)]
+		if (label !== undefined) {
+			return label
 		}
 	}
 	const type = column.type_name
 	if (type === 'uuid') return crypto.randomUUID()
 	if (TEXT_TYPES.has(type)) return `s${randomHex()}`
 	// Bun.SQL reads an int8 and a numeric as text.
-	if (NUMBER_TYPES.has(type)) return type === 'int8' || type === 'numeric' ? '1' : 1
-	if (type === 'bool') return false
+	if (NUMBER_TYPES.has(type)) return type === 'int8' || type === 'numeric' ? String(1 + variant) : 1 + variant
+	if (type === 'bool') return variant % 2 === 1
 	// ISO text, not a Date: the seed binds past the layer's compiler, where Bun.SQL would send Date#toString(). A day is
 	// `YYYY-MM-DD`, since the probe's insert sends it through the layer, which takes a `date` only so.
-	if (type === 'date') return new Date().toISOString().slice(0, 10)
-	if (type === 'timestamp' || type === 'timestamptz') return new Date().toISOString()
-	if (type === 'time' || type === 'timetz') return '12:00:00'
-	if (type === 'interval') return '1 hour'
+	if (type === 'date') return new Date(Date.now() + variant * DAY_MS).toISOString().slice(0, 10)
+	if (type === 'timestamp' || type === 'timestamptz') return new Date(Date.now() + variant * 1000).toISOString()
+	if (type === 'time' || type === 'timetz') return `12:00:${String(variant % 60).padStart(2, '0')}`
+	if (type === 'interval') return `${1 + variant} hour`
 	// A JSON string: a seed value has no object form, and `seedBinding` writes it as the layer would.
-	if (type === 'jsonb') return 'sample'
+	if (type === 'jsonb') return variant === 0 ? 'sample' : `sample-${variant}`
 	throw typeLimit(table, column.column_name, type)
 }
 
@@ -127,7 +133,7 @@ function seedColumn(column: CatalogColumn): SeedColumn {
 		uuid: column.type_name === 'uuid',
 		number: column.type_type !== 'e' && NUMBER_TYPES.has(column.type_name),
 		json: column.type_type === 'b' && column.type_category !== 'A' && column.type_name === 'jsonb',
-		sample: () => sampleOf(column.table_name, column),
+		sample: (variant) => sampleOf(column.table_name, column, variant),
 	}
 }
 
@@ -203,15 +209,30 @@ const ctidRows = z.array(z.object({ ctid: z.string() }))
 /** Ctids as one array literal parameter, `{"(0,1)","(0,2)"}`: the driver mis-binds a JS array. */
 const tidArray = (ctids: Iterable<string>): string => `{${[...ctids].map((ctid) => `"${ctid}"`).join(',')}}`
 
-/** `CHECK ((status = ANY (ARRAY['open'::text, 'done'::text])))`, a one-column `IN` list as Postgres prints it. */
+/**
+ * `CHECK ((status = ANY (ARRAY['open'::text, 'done'::text])))` or `CHECK ((rate = ANY (ARRAY[0, 12])))`, a one-column
+ * `IN` list as Postgres prints it.
+ */
 const IN_LIST = /^CHECK \(\(\(?"?([^"()\s]+)"?\)?(?:::[a-z ]+)? = ANY \(\(?ARRAY\[(.+)\]\)?(?:::[a-z ]+\[\])?\)\)\)$/
 const LITERAL = /'((?:[^']|'')*)'::/g
+const LIST_NUMBER = /^\(?(-?[0-9]+(?:\.[0-9]+)?)\)?(?:::[a-z ]+)?$/
+/** A string literal of a printed definition, or a number outside one that no name or other number touches. */
+const DEFINITION_LITERAL = /'((?:[^']|'')*)'|(?<![\w$."])(-?[0-9]+(?:\.[0-9]+)?)(?![\w$.])/g
 
 /** The values of a one-column `IN` list, or none for any other CHECK. */
-function listedValues(definition: string, columns: readonly string[]): string[] {
+function listedValues(definition: string, columns: readonly string[]): CheckLiteral[] {
 	const listed = IN_LIST.exec(definition)
 	if (listed === null || columns.length !== 1 || listed[1] !== columns[0]) return []
-	return [...(listed[2] ?? '').matchAll(LITERAL)].map((match) => (match[1] ?? '').replaceAll("''", "'"))
+	const items = listed[2] ?? ''
+	const texts = [...items.matchAll(LITERAL)].map((match) => (match[1] ?? '').replaceAll("''", "'"))
+	if (texts.length > 0) return texts
+	const numbers = items.split(', ').map((item) => LIST_NUMBER.exec(item)?.[1])
+	return numbers.every((number) => number !== undefined) ? numbers.map(Number) : []
+}
+
+/** Every text and number literal of a CHECK as Postgres prints it. */
+function definitionLiterals(definition: string): CheckLiteral[] {
+	return [...definition.matchAll(DEFINITION_LITERAL)].map((match) => match[1] === undefined ? Number(match[2]) : match[1].replaceAll("''", "'"))
 }
 
 /** A CHECK or foreign key violation of a seeded row, as the generator limit it is; `undefined` for any other failure. */
@@ -396,6 +417,7 @@ export async function testDatabase(options: TestDatabaseOptions): Promise<TestDa
 				table: row.table_name,
 				columns: row.columns,
 				values: listedValues(row.definition, row.columns),
+				literals: definitionLiterals(row.definition),
 			})),
 		uniqueIndexes: async () =>
 			uniqueRows.parse(await lock.unsafe(UNIQUE_QUERY, [schema])).map((row) => ({
