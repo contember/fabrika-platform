@@ -57,13 +57,16 @@ export interface StructurePlace {
 	readonly part: SlicePart | undefined
 	/** A test or the generated entrypoint: the structure hints do not apply to it. */
 	readonly exempt: boolean
+	/** A generated module (`isGeneratedModule`): the hints do not apply to it, the refusals do. */
+	readonly generated: boolean
 }
 
-export const structurePlace = (file: string, isGeneratedEntry: boolean): StructurePlace => ({
+export const structurePlace = (file: string, isGeneratedEntry: boolean, generated: boolean): StructurePlace => ({
 	file,
 	slice: sliceOf(file),
 	part: slicePart(file),
 	exempt: isGeneratedEntry || isTestFile(file),
+	generated,
 })
 
 /** What the structure rules read beyond one module: every module's references, and how Bun resolves them. */
@@ -254,7 +257,7 @@ export const checkStructureReferences = (graph: StructureGraph, place: Structure
 		if (place.file.startsWith(SPA_DIR) && !place.exempt) checkSpaReference(graph, reference, targets, report)
 		if (isSharedModule(place.file) && !place.exempt) checkSharedReference(reference, targets, report)
 		if (isLayerModule(place.file)) checkLayerReference(graph, place, reference, targets, report)
-		if (place.exempt) continue
+		if (place.exempt || place.generated) continue
 		if (place.part === 'logic') checkLogicReference(reference, targets, report)
 		else if (place.slice !== undefined) checkSliceReference(place, reference, targets, report)
 	}
@@ -293,7 +296,7 @@ const dataAccess = (node: AstNode): string | undefined => {
 
 /** The architecture's hints at one node: a handler outside `endpoints.ts`, data access outside `endpoints.ts`/`queries.ts`. */
 export const checkStructureNode = (place: StructurePlace, node: AstNode, report: Report): void => {
-	if (place.exempt) return
+	if (place.exempt || place.generated) return
 	const handle = handledProcedure(node)?.handle
 	if (handle !== undefined && place.part !== 'endpoints') {
 		report(

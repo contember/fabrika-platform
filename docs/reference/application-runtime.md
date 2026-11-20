@@ -1712,7 +1712,7 @@ line that breaks it), **checker** (`fabrika-check`, a refusal fails the build), 
 **review** (a line of the approval diff, `packages/control/src/approval/diff.ts`, that a human approves on a protected
 environment, ADR-0050). The data layer runs in the application's process: it stops honest mistakes and makes a bypass
 conspicuous, and the checker's refusal of casts, `any` and suppression comments
-(`packages/check/src/rules/types.ts:25`, `:29`, `:57`) keeps the types honest. The lift column names the declarations
+(`packages/check/src/rules/types.ts:26`, `:30`, `:58`; a generator's output is exempt, `isGeneratedModule`) keeps the types honest. The lift column names the declarations
 that step past a row; each is a closer-review line of the approval diff when it is new or its reach grows
 (`diff.ts:251`). Within the application's own tables a `sql` statement is bounded only by the text rules and, on
 Postgres, the runtime role, so where `sql` lifts a row, the approver's review is what holds. "None" means no declaration lifts it; a migration is then the only way, and its database code is

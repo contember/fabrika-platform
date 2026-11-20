@@ -11,7 +11,7 @@ static contract reader (B1), which Control runs on the files of a commit.
 
 ```bash
 bun run typecheck
-bun test                    # rules · direct-forms · structure · spike-contract · cli · reader · differential · colocated · colocated-scale · dialect
+bun test                    # rules · direct-forms · generated · structure · spike-contract · cli · reader · differential · colocated · colocated-scale · dialect
 bun src/cli.ts <app-root>   # what an application's build runs as `fabrika-check`
 ```
 
@@ -124,7 +124,9 @@ Tests: `rules.test.ts` holds a refused and an allowed fixture for each rule id b
 `structure.test.ts` holds over `fixtures/architecture-app/` (a two-slice application in the target layout, its sources
 named `*.ts.fixture` so this repository's typecheck skips them; until the reader reads that form, only the
 architecture's rules are asserted on it); `direct-forms.test.ts` holds the
-directly spelled forms each rule must also refuse, and the documented escapes. `reader.test.ts` holds every refusal
+directly spelled forms each rule must also refuse, and the documented escapes. `generated.test.ts` holds the generated
+modules: what they skip, what still applies, and `@buzola/codegen` 0.0.28's exact output
+(`fixtures/buzola.gen.ts.fixture`). `reader.test.ts` holds every refusal
 of the reader and its budget; `differential.test.ts` compiles each fixture contract from source and from the evaluated
 module and expects the same artifact and canonical bytes (`fixtures/reader-forms/` holds every form the reader
 accepts; `fixtures/clean-app/` is the clean application of the rule tests). Its paired cases (`fixtures/paired/`,
@@ -150,8 +152,8 @@ reads stale module state across plugin builds in one process. `colocated-scale.t
 | `unchecked-import`             | an import outside what the checker reads: above the root, absolute or `file:`, into `node_modules`/`dist`/a dot-directory/`fabrika/assets`, also through an import map or `tsconfig` path; `import()`, `require()`, `module.require()` or `import.meta.require()` of a computed specifier; a loader called through `.call`/`.apply`/`.bind` or `Reflect.apply`; `process.getBuiltinModule`; `import.meta.resolve`/`resolveSync`, `require.resolve`/`cache`, `Bun.resolve`/`resolveSync`; `module`/`node:module`, `resolve`/`resolveSync` from `bun`; a symbolic link; a relative import with two candidates or into a directory with a `package.json`; configuration that can redirect a trusted package (below) |
 | `forbidden-global`             | `Bun.sql`/`SQL`/`S3Client`/`s3`/`serve`/`connect`/`listen`/`udpSocket`/`fetch`/`spawn`/`spawnSync`/`$`, the same from `bun` by any load or re-export, `Bun` as a bare value; in a server module (under `src/`, not a test) any value use of `globalThis`, `global`, `self`, `window`, `Bun` or `WebSocket` (a `typeof` test, type positions and a name the module binds itself (a declaration, a parameter, a value import) stay; an ambient `declare` binds nothing)                                                                                                                                                                                                                                            |
 | `raw-sql`                      | a driver's or a builder's SQL: importing `sql`; a call, tagged template or `.raw`/`lit`/`ref`/`id`/`table`/`val`/`join`/`unsafe` of a name the module binds to an imported or loaded `sql` (alias included); a `<x>.sql` tagged template and `<x>.sql.<helper>`; never `ctx.sql(Row)` and its template, nor a parameter that holds the declared tag, whatever its name                                                                                                                                                                                                                                                                                                                                           |
-| `type-assertion`, `any-type`   | `as T` and `<T>x` except `as const`; `any` anywhere                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `suppression-comment`          | `@ts-ignore`, `@ts-expect-error`, `@ts-nocheck`, `biome-ignore`, `eslint-disable`, `oxlint-disable`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `type-assertion`, `any-type`   | `as T` and `<T>x` except `as const`; `any` anywhere; not in a generated module                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `suppression-comment`          | `@ts-ignore`, `@ts-expect-error`, `@ts-nocheck`, `biome-ignore`, `eslint-disable`, `oxlint-disable`; not in a generated module                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `capability-widening`          | `Ref<…>` / `Within<…>` with `string`, or a union containing it, as a type argument                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `prototype-assignment`         | writes and `delete` through `.prototype`/`.__proto__`/`Object.getPrototypeOf(…)`, `setPrototypeOf`, `defineProperty`/`assign` onto them                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `framework-write`              | a write to a member of a value imported or loaded from `@fabrika/*` or `zod`, also through a package import map (assignment, also in a pattern, `++`, `delete`, `Object.defineProperty`/`defineProperties`/`assign`/`setPrototypeOf`, `Reflect.set`/`defineProperty`/`deleteProperty`/`setPrototypeOf`); a write through a prototype is `prototype-assignment`                                                                                                                                                                                                                                                                                                                                                   |
@@ -187,7 +189,7 @@ reads stale module state across plugin builds in one process. `colocated-scale.t
 | `shared-import`                | in a module under `src/shared/` (not a test): a value load of anything but `zod/v4`, `@fabrika/app/schema` and other modules under `src/shared/` (a slice, `src/db/`, `@fabrika/*`, a builtin)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `tool-import`                  | in a module outside `tools/` (a test and `fabrika.config.ts` included): a value load or re-export of a module under `tools/`, also through an import map, a `tsconfig` path or a literal `import()` (a type-only import stays); a `package.json` under `tools/`                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 
-The hints (severity `hint`; the architecture's not in test files or the generated entrypoint):
+The hints (severity `hint`; the architecture's not in test files, the generated entrypoint or a generated module):
 
 | Rule id                | Reports                                                                                                                                                                                              |
 | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -197,6 +199,13 @@ The hints (severity `hint`; the architecture's not in test files or the generate
 | `data-access-location` | `ctx.db` or `ctx.sql` outside a slice's `endpoints.ts`, `queries.ts` and `logic.ts`                                                                                                                  |
 | `sql-undeclared`       | `ctx.sql` or `tx.sql` in a `.handle(…)` whose procedure options (an object literal, no spread) declare no `sql`; names the site                                                                      |
 | `cloudflare-held-call` | for an application on Cloudflare: a mutation of the compiled contract that declares `egress` or `connect`; it waits for that call inside the object's transaction, which holds the whole environment |
+
+**Generated modules** (`isGeneratedModule` in `layout.ts`): a source file named `<name>.gen.<ext>` or
+`<name>.generated.<ext>` that opens with a comment on line 1, before any statement, holding `@generated` or `auto-generated` (any case),
+as `fabrika db codegen`, `fabrika app build` and `@buzola/codegen` write them. A generator's output is not held to how
+source is written: `type-assertion`, `any-type`, `suppression-comment` and the architecture's four hints skip it.
+Every other rule applies to it in full, `capability-widening`, `spa-server-import`, `env-read` and the literal subset
+of the contract graph included. One fixed convention, no per-file or per-rule switch; it is a documented escape (below).
 
 ## The literal subset (shared with B1)
 
@@ -335,7 +344,10 @@ Each has a fixture in `direct-forms.test.ts` that asserts it passes, so that clo
 
 - test registrations in a helper module that a test file imports (test rules apply to test files by name);
 - outside `src/`, `process` reached through a computed member and destructured (`const { env } = globalThis['process']`);
-- an alias of `fetch`; a renamed capability type (`Ref as R`); a namespace alias of the test API.
+- an alias of `fetch`; a renamed capability type (`Ref as R`); a namespace alias of the test API;
+- a hand-written module named and headed as a generated one (`a.gen.ts` opening with `// @generated`) escapes
+  `type-assertion`, `any-type`, `suppression-comment` and the architecture's hints; every rule about what it does,
+  and its loads, still applies (`generated.test.ts`).
 
 ## Invariants
 
@@ -343,7 +355,9 @@ Each has a fixture in `direct-forms.test.ts` that asserts it passes, so that clo
   switch. Every escape hatch would be the first thing an agent reaches for when a rule blocks it. A suppression
   comment meant for another tool is itself a finding. `tools/` is not one: moving code there takes it out of the
   application, because nothing the application runs may load it (`tool-import`). Never let a configuration name
-  another such directory, nor narrow `tool-import`.
+  another such directory, nor narrow `tool-import`. Nor is the generated-module convention: it is fixed (a name and a
+  header), lifts only the rules about how source is written, and never a rule about what code does; never widen it to
+  a rule of the second kind or let a configuration name its files.
 - **Every finding names the allowed form.** Over MCP the build log is the agent's only feedback, so a finding
   without a way forward is a dead end. Keep `allowed` concrete.
 - **One static resolver.** Rules that need to know what a name denotes ask `ModuleGraph`; do not add a second

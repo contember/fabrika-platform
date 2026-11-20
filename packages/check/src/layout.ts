@@ -1,3 +1,5 @@
+import { children, type ParsedModule, positionOf } from './ast'
+
 /** Where an application keeps what the checker reads. Paths are relative to the application root. */
 export const CONTRACT_FILE = 'fabrika.contract.ts'
 /** The provider-authored application config, whose `defineApp` names the provider. */
@@ -59,6 +61,23 @@ export const isServerModule = (path: string): boolean => path.startsWith(SERVER_
 export const isToolModule = (path: string): boolean => path.startsWith(TOOLS_DIR)
 
 export const isJsonFile = (path: string): boolean => path.endsWith('.json')
+
+const GENERATED_NAME = /\.(?:gen|generated)\.(?:[mc]?[jt]s|[jt]sx)$/
+const GENERATED_MARKER = /@generated|auto-generated/i
+
+/**
+ * A module a generator writes: named `<name>.gen.<ext>` or `<name>.generated.<ext>`, opening with a comment on its first
+ * line, before any statement, that says so (`@generated` or `auto-generated`, in any case). The rules about how source
+ * is written do not apply to it; every rule about what it does still does.
+ */
+export const isGeneratedModule = (path: string, module: Pick<ParsedModule, 'program' | 'comments'>): boolean => {
+	const [header] = module.comments
+	if (!GENERATED_NAME.test(path) || header === undefined || header.position.line !== 1 || !GENERATED_MARKER.test(header.text)) return false
+	const [statement] = children(module.program, 'body')
+	if (statement === undefined || statement === null) return true
+	const start = positionOf(statement)
+	return header.position.line < start.line || (header.position.line === start.line && header.position.column < start.column)
+}
 
 /** Whether the checker reads this file at all. */
 export const isCheckedFile = (path: string): boolean => {
