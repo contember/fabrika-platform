@@ -276,6 +276,12 @@ export const GENERATED_ROW_CAPABILITY = '@'
  */
 export const GENERATED_FILE_PREFIX = 'fabrika:file:'
 
+/**
+ * The value of a column of a caller row (`callerRows` of `endpoint-access.fixtures.ts`): the endpoint access kit writes
+ * the id of the case's caller there, so a handler that looks up the caller's own record (`ctx.principal.id`) finds it.
+ */
+export const GENERATED_CALLER = 'fabrika:caller'
+
 export const JSON_ADMISSION: BodyAdmission = { contentTypes: ['application/json'], maxBytes: null }
 
 /** `/api` + `notes.list` → `/api/notes.list`; a root prefix does not double the `/`. */

@@ -10,13 +10,16 @@
 // (a package a handler inspects), by input field, relative to the application's root; `refusals` the error types of the
 // 400s an endpoint's handler answers its own object with when no fixture can meet its domain rule, which the kit then
 // counts as the handler's answer; `pins` known values of text columns of the row an endpoint addresses (a skill's slug a
-// package must name), the own scope's, which the kit writes there instead of a marker.
+// package must name), the own scope's, which the kit writes there instead of a marker; `callerRows` the rows of
+// application tables the caller of every global case holds (a person's card bound to the account), by table, a column
+// valued `fabrika:caller` getting the caller's id, which the kit seeds before each global case asks.
 // Read from source, never executed, within the reader's budget: `export const fixtures = { '<endpoint id>': { … } }`,
 // `export const seeds = { '<endpoint id>': { <column>: <value> } }`, `export const members = { '<endpoint id>':
 // ['<field>'] }` (`invitations`, `links` alike), `export const rows = { '<endpoint id>': { <field>: '<table>' } }` and
 // `export const appRows = { '<endpoint id>': { <table>: { <column>: <value> } } }`, `export const files = { '<endpoint
 // id>': { <field>: '<path>' } }`, `export const refusals = { '<endpoint id>': ['<error type>'] }` and `export const pins
-// = { '<endpoint id>': { <column>: '<value>' } }`, plain literals only.
+// = { '<endpoint id>': { <column>: '<value>' } }`, and `export const callerRows = { <table>: { <column>: <value> } }`,
+// plain literals only.
 // Browser-safe.
 
 import { type AstNode, child, children, identifierName, nodeDepth, parseModule, positionOf, staticKey, staticString } from './ast'
@@ -35,6 +38,7 @@ export const APP_ROWS_EXPORT = 'appRows'
 export const FILES_EXPORT = 'files'
 export const REFUSALS_EXPORT = 'refusals'
 export const PINS_EXPORT = 'pins'
+export const CALLER_ROWS_EXPORT = 'callerRows'
 
 /** The exports that list strings by endpoint id: the input fields the kit fills with something it holds, and the refusals. */
 const FIELD_EXPORTS = [MEMBERS_EXPORT, INVITATIONS_EXPORT, LINKS_EXPORT, REFUSALS_EXPORT] as const
@@ -42,7 +46,7 @@ type FieldExport = (typeof FIELD_EXPORTS)[number]
 const isFieldExport = (name: string | undefined): name is FieldExport => FIELD_EXPORTS.some((field) => field === name)
 
 const ALLOWED =
-	"export const fixtures = { 'api.notes.get': { id: '…' } }, export const seeds = { 'api.deals.reopen': { stage: 'won' } }, export const members = { 'api.deals.assign': ['ownerId'] }, export const invitations = { 'api.members.cancel': ['invitationId'] }, export const links = { 'api.notes.unshare': ['linkId'] }, export const rows = { 'api.notes.editComment': { commentId: 'note_comments' } }, export const appRows = { 'portal.guide': { guides: { active: true } } }, export const files = { 'api.skills.publish': { package: 'src/__tests__/fixtures/skill.zip' } }, export const refusals = { 'api.skills.publish': ['skill_frontmatter'] } and export const pins = { 'api.skills.publish': { slug: 'sample-skill' } }: string keys, and strings, numbers, booleans, null, arrays and objects"
+	"export const fixtures = { 'api.notes.get': { id: '…' } }, export const seeds = { 'api.deals.reopen': { stage: 'won' } }, export const members = { 'api.deals.assign': ['ownerId'] }, export const invitations = { 'api.members.cancel': ['invitationId'] }, export const links = { 'api.notes.unshare': ['linkId'] }, export const rows = { 'api.notes.editComment': { commentId: 'note_comments' } }, export const appRows = { 'portal.guide': { guides: { active: true } } }, export const files = { 'api.skills.publish': { package: 'src/__tests__/fixtures/skill.zip' } }, export const refusals = { 'api.skills.publish': ['skill_frontmatter'] } and export const pins = { 'api.skills.publish': { slug: 'sample-skill' } } and export const callerRows = { people: { principal_id: 'fabrika:caller' } }: string keys, and strings, numbers, booleans, null, arrays and objects"
 
 type ById = Readonly<Record<string, Readonly<Record<string, Sample>>>>
 
@@ -67,6 +71,8 @@ export interface EndpointFixtures {
 	readonly refusals: Readonly<Record<string, readonly string[]>>
 	/** The own scope's value of each pinned text column of the row the endpoint addresses, by endpoint id. */
 	readonly pins: Readonly<Record<string, Readonly<Record<string, string>>>>
+	/** The rows of application tables the caller of every global case holds, by table, each with its columns. */
+	readonly callerRows: Readonly<Record<string, Readonly<Record<string, Sample>>>>
 }
 
 export const NO_FIXTURES: EndpointFixtures = {
@@ -80,6 +86,7 @@ export const NO_FIXTURES: EndpointFixtures = {
 	files: {},
 	refusals: {},
 	pins: {},
+	callerRows: {},
 }
 
 /**
@@ -151,13 +158,14 @@ function byId(
 	const value = literal(init)
 	if (!value.ok) return { ok: false, findings: [finding(value.at, 'not a plain literal')] }
 	const all = value.value
+	const keyed = name === CALLER_ROWS_EXPORT ? 'table' : 'endpoint id'
 	if (!isSampleObject(all)) {
-		return { ok: false, findings: [finding(init, `the ${name} are an object keyed by endpoint id`)] }
+		return { ok: false, findings: [finding(init, `the ${name} are an object keyed by ${keyed}`)] }
 	}
 	const entries: Record<string, Readonly<Record<string, Sample>>> = {}
 	for (const [id, entry] of Object.entries(all)) {
 		if (!isSampleObject(entry)) {
-			const of = name === SEEDS_EXPORT ? 'columns' : name === APP_ROWS_EXPORT ? 'tables' : 'input fields'
+			const of = name === SEEDS_EXPORT || name === CALLER_ROWS_EXPORT ? 'columns' : name === APP_ROWS_EXPORT ? 'tables' : 'input fields'
 			return { ok: false, findings: [finding(init, `the ${name} of ${id} is not an object of ${of}`)] }
 		}
 		entries[id] = entry
@@ -224,7 +232,7 @@ export function readEndpointFixtures(
 		if (
 			statement?.type !== 'ExportNamedDeclaration' || declarator === null || declarator === undefined
 			|| (name !== FIXTURES_EXPORT && name !== SEEDS_EXPORT && name !== ROWS_EXPORT && name !== APP_ROWS_EXPORT && name !== FILES_EXPORT
-				&& name !== PINS_EXPORT && !isFieldExport(name))
+				&& name !== PINS_EXPORT && name !== CALLER_ROWS_EXPORT && !isFieldExport(name))
 			|| read.has(name)
 			|| (isFieldExport(name) && fields.has(name))
 		) {
@@ -233,7 +241,7 @@ export function readEndpointFixtures(
 				findings: [
 					finding(
 						statement ?? undefined,
-						`the file holds export const ${FIXTURES_EXPORT}, ${SEEDS_EXPORT}, ${MEMBERS_EXPORT}, ${INVITATIONS_EXPORT}, ${LINKS_EXPORT}, ${ROWS_EXPORT}, ${APP_ROWS_EXPORT}, ${FILES_EXPORT}, ${REFUSALS_EXPORT} and ${PINS_EXPORT} = { … }, each at most once`,
+						`the file holds export const ${FIXTURES_EXPORT}, ${SEEDS_EXPORT}, ${MEMBERS_EXPORT}, ${INVITATIONS_EXPORT}, ${LINKS_EXPORT}, ${ROWS_EXPORT}, ${APP_ROWS_EXPORT}, ${FILES_EXPORT}, ${REFUSALS_EXPORT}, ${PINS_EXPORT} and ${CALLER_ROWS_EXPORT} = { … }, each at most once`,
 					),
 				],
 			}
@@ -296,6 +304,7 @@ export function readEndpointFixtures(
 				]),
 			),
 			pins: stringsById(read.get(PINS_EXPORT) ?? {}),
+			callerRows: read.get(CALLER_ROWS_EXPORT) ?? {},
 			files: Object.fromEntries(
 				Object.entries(read.get(FILES_EXPORT) ?? {}).map(([id, named]) => [
 					id,
