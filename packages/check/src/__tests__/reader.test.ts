@@ -470,6 +470,9 @@ describe('the resource budget', () => {
 	const padded = (count: number, chars: number): ReadonlyMap<string, string> =>
 		importing(Array.from({ length: count }, (_, index) => `export const P${index} = 1\n// ${'x'.repeat(chars)}\n`))
 
+	// A test that parses a full node budget takes seconds on a CI runner and can pass bun's default of 5 s.
+	const DENSE_READ_MS = 30_000
+
 	/** `count` modules of one array literal each, `elements` syntax nodes apiece: under the byte limits, dense in nodes. */
 	const dense = (count: number, elements: number, declaration: 'const' | 'type'): ReadonlyMap<string, string> =>
 		importing(
@@ -509,13 +512,16 @@ describe('the resource budget', () => {
 		expect(refusal(files)).toEqual([
 			`src/p1.ts:1:1 contract fabrika.contract.ts and its modules hold over ${CONTRACT_LIMITS.astNodes} syntax nodes`,
 		])
-		expect(readContractSource(dense(2, CONTRACT_LIMITS.astNodes / 2 - 1000, 'const'))).toEqual(readContractSource(application(BASE)))
 		const findings = await check(Object.fromEntries(files))
 		const budget = findings.filter((finding) => finding.rule === 'contract').map((finding) => `${finding.file} ${finding.message}`)
 		expect(budget).toHaveLength(1)
 		const held = /^fabrika\.contract\.ts fabrika\.contract\.ts and its modules hold (\d+) syntax nodes, over the budget of (\d+)$/.exec(budget[0] ?? '')
 		expect([Number(held?.[1]) > CONTRACT_LIMITS.astNodes, Number(held?.[2])]).toEqual([true, CONTRACT_LIMITS.astNodes])
-	})
+	}, DENSE_READ_MS)
+
+	test('modules just under the node budget are read', () => {
+		expect(readContractSource(dense(2, CONTRACT_LIMITS.astNodes / 2 - 1000, 'const'))).toEqual(readContractSource(application(BASE)))
+	}, DENSE_READ_MS)
 
 	test('the checker refuses a tables graph over the budget, as the reader does', async () => {
 		const tables = `export const tables = 1\n// ${'x'.repeat(CONTRACT_LIMITS.moduleBytes)}\n`
@@ -531,7 +537,7 @@ describe('the resource budget', () => {
 
 	test('top-level type declarations are not counted against the node budget', () => {
 		expect(readContractSource(dense(2, CONTRACT_LIMITS.astNodes / 2 + 1, 'type'))).toEqual(readContractSource(application(BASE)))
-	})
+	}, DENSE_READ_MS)
 })
 
 describe('the reader reads src/db/tables.ts into the policies @fabrika/db parses', () => {
