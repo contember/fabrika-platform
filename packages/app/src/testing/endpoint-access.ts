@@ -414,8 +414,8 @@ export const managerGrants = (
 }
 
 /**
- * The endpoint access kit of `app`, whose data layer is `scoped(tables)`, over `postgres`. It boots `app` once, so the
- * application's layer is bound here and nowhere else in the process.
+ * The endpoint access kit of `app`, whose data layer is `scoped(tables)`, over `postgres`. It boots `app` once, through the
+ * test kit: a later kit of `app` in the same process (the next test file's) takes the application's layer over.
  */
 export function endpointAccessKit<DB, P>(
 	app: ContractImplementation<AnyContract>,
