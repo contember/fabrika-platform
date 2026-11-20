@@ -1035,6 +1035,12 @@ vocabulary (`packages/db/CLAUDE.md`).
   `FABRIKA_IAM_RPC_KEY`, both written by the platform; on Cloudflare the `IAM` binding.
 - `options.database` is the connection `boot` binds a `scoped(tables)` database to, as
   the runtime adapter supplies it; the kit compiles the artifact exactly as `boot` does.
+- **One process runs many test files** (`bun test --parallel=N --no-isolate`). The kit compiles a contract once per
+  process (`compiledOnce`, by contract and tables) and hashes it natively (`kitContractDigest`, equal to
+  `contractDigest`); `boot` reads that artifact through `BootOptions.compiledContract`, which only the kit passes. A
+  later `testKit` of the same `scoped(tables)` layer takes the layer over: the earlier kit stops its kicks, releases its
+  binding (`ContractApp.release`) and throws on every later request, job or due-job run. A kit whose requests left work
+  running (a kicked job) is not taken over: the next kit throws until it was drained. Everything else is a new boot's.
 - The kit stands in for Control and IAM for workloads too: each job and webhook gets a random `px_` key, and the
   kit's token exchange signs its declared actions for it, with the kit's own key. A job's key and the tokens signed for
   it are its credential at `kitMembership`'s link operations (`jobByCredential`), held to IAM's rules for a job: its

@@ -31,7 +31,7 @@ import {
 	workloadKeyVariable,
 } from '@fabrika/auth-core'
 import type { Database } from '@fabrika/db'
-import { frameworkTablesOf, type LeaseFence } from '@fabrika/db/framework'
+import { frameworkTablesOf, isScopedDatabase, type LeaseFence } from '@fabrika/db/framework'
 import { refuseInProduction } from '@fabrika/db/production'
 import { MemoryEmailSender } from '@fabrika/email/memory'
 import type { FileObjectStore } from '@fabrika/platform'
@@ -332,7 +332,20 @@ function compiledOnce(app: ContractImplementation): CompiledContract {
 	return contract
 }
 
-/** Boots `app` the way its generated entrypoint would, behind the test proxy and IAM. Throws `BootError` like `boot`. */
+/** A kit holding its application's data layer, until a later kit of the same application in this process takes it over. */
+interface HeldLayer {
+	retire(): void
+}
+
+/** The kit that holds each `scoped(tables)` layer this process booted. */
+const heldLayers = new WeakMap<object, HeldLayer>()
+
+/**
+ * Boots `app` the way its generated entrypoint would, behind the test proxy and IAM. Throws `BootError` like `boot`.
+ *
+ * One process may run many test files: a later kit of the same application takes its data layer over from the
+ * earlier one, which then refuses every request, and boots on the contract this process already compiled.
+ */
 export function testKit<C extends AnyContract>(app: ContractImplementation<C>, options: TestKitOptions = {}): TestKit<C> {
 	return bootTestKit(app, options).kit
 }
@@ -465,6 +478,10 @@ export function bootTestKit<C extends AnyContract>(
 	)
 	const signToken = (purpose: string, claims: unknown, signOptions: { readonly days: number }): string =>
 		kitTokens.context('the test kit', [purpose]).sign(purpose, claims, signOptions)
+	const layer = app.database !== null && isScopedDatabase(app.database) ? app.database : null
+	if (layer !== null) {
+		heldLayers.get(layer)?.retire()
+	}
 	const application: ContractApp = boot(app, {
 		compiledContract,
 		environment: {
@@ -680,7 +697,31 @@ export function bootTestKit<C extends AnyContract>(
 		},
 	}
 
+	let retired = false
+	/** Throws once a later kit of the same application took the data layer over. */
+	const live = (): void => {
+		if (retired) {
+			throw new Error(`this test kit of '${name}' was replaced by a later testKit of the same application in this process; use that one`)
+		}
+	}
+	if (layer !== null) {
+		heldLayers.set(layer, {
+			retire() {
+				if (retired) return
+				if (background.size > 0) {
+					throw new Error(
+						`a test kit of '${name}' in this process still runs work its requests left (a kicked job, a report); await kit.drain() before its test file ends`,
+					)
+				}
+				retired = true
+				application.stopKicks()
+				application.release()
+			},
+		})
+	}
+
 	const kitFetch: RpcFetch = async (input, init) => {
+		live()
 		const request = await toRequest(origin, input, init)
 		if (new URL(request.url).origin !== origin) {
 			throw new TypeError(`the test kit serves only ${origin}, not ${new URL(request.url).origin}`)
@@ -736,6 +777,7 @@ export function bootTestKit<C extends AnyContract>(
 	}
 
 	const runJob = async (name: string, runOptions?: JobRunOptions): Promise<JobRunResult> => {
+		live()
 		await drain()
 		return application.jobs.run(name, runOptions)
 	}
@@ -743,6 +785,7 @@ export function bootTestKit<C extends AnyContract>(
 	// The cron fires `runDueJobs` ran early, as `<key>@<due>`: a run schedules the same fire again from the real now.
 	const ranEarly = new Set<string>()
 	const runDueJobs = async (dueOptions: { readonly within?: number } = {}): Promise<readonly DueJobRun[]> => {
+		live()
 		const within = dueOptions.within ?? 0
 		if (!Number.isFinite(within) || within < 0) {
 			throw new TypeError('runDueJobs({ within }) takes milliseconds, 0 or more')

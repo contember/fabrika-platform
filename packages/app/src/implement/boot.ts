@@ -218,6 +218,11 @@ export interface ContractApp {
 	readonly jobs: ContractJobs
 	/** Aborts every kicked run in flight; a later kick starts none; the schedule recovers their work. */
 	stopKicks(): void
+	/**
+	 * Disconnects the `scoped(tables)` layer this boot bound, so a later boot of the application binds it again: the test
+	 * kit's next file of one process. This runtime must serve nothing afterwards. No runtime adapter calls it.
+	 */
+	release(): void
 }
 
 /** Everything that stops a contract application from starting, with where it is and what to do. */
@@ -1146,5 +1151,6 @@ function bootOnce(app: ContractImplementation, options: BootOptions, binding: Bi
 		fetch: (request: Request, exec?: RequestExecutionContext) => runtime.fetch(request, exec),
 		jobs: jobs.jobs,
 		stopKicks: jobs.stopKicks,
+		release: () => binding.release?.(),
 	})
 }

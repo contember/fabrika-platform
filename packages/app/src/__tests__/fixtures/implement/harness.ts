@@ -271,6 +271,7 @@ export function bootApp(app: ContractImplementation, options: Partial<BootOption
 		},
 		jobs: runtime.jobs,
 		stopKicks: runtime.stopKicks,
+		release: runtime.release,
 	}
 }
 
