@@ -22,6 +22,8 @@ and no `broadcast`. The documentation leaves these open, and the adapter guesses
   whether Brevo checks the UUID's version is not known;
 - the HTTP status of a repeated key (`duplicate_parameter`) and of `duplicate_request`, and whether a repeat inside the
   window ever answers the first `messageId` instead of a refusal;
+- whether Brevo keeps the key of a request it refused: the adapter retries a 429 or a 402 under the same key, and a key
+  kept from the refusal would answer that retry `duplicate_parameter`, which leaves a message never sent to a person;
 - whether a text-only request (no `htmlContent`) is accepted: the reference marks `htmlContent` required without a
   template, so the adapter always sends one, rendered from the text when the message has no HTML;
 - whether `List-Unsubscribe` and `List-Unsubscribe-Post` in `headers` reach the recipient; the reference says standard
@@ -38,7 +40,7 @@ On an account with a verified sender domain:
 
 1. Send a text-only message and an HTML message with an attachment and a reply-to, and record each request and answer
    and the received message.
-2. Send the same message twice under one key inside the window, and once after it; send a message with unsubscribe
+2. Send the same message twice under one key inside the window, and once after it; repeat a key whose first request was refused; send a message with unsubscribe
    headers; provoke a bad key, an unauthorised IP address, an unverified sender, an oversized message.
 3. Correct the adapter's mapping, its capabilities and its tests (`brevo.test.ts`, the conformance harness's answers) to
    the recorded answers.
