@@ -76,8 +76,8 @@ blocked-by: []
 27. **An application learns nothing of a final failure either.** `PlatformEmailSender.send` (`packages/email/src/platform.ts`)
     returns `accepted` with the relay's message id, and the relay has no read of that message's later state, so a job
     records the message as sent. When the dispatcher ends it `failed` or `unknown`, only Control's Mail page shows it.
-    Seen in the Schrack CRM on Postmark: a recipient who unsubscribed through Postmark's footer has the next broadcast
-    refused (406, `provider_rejected`), and the CRM still shows it as sent. A fix for item 19 should serve both senders:
+    Seen in one installation on Postmark: a recipient who unsubscribed through Postmark's footer has the next broadcast
+    refused (406, `provider_rejected`), and the application still shows it as sent. A fix for item 19 should serve both senders:
     a status read by message id under the sender's own key, or a callback, not an IAM-only path.
 28. **The relay still accepts some messages its transport refuses.** It refuses a broadcast and attachments Control's
     transport does not send, but not an `unsubscribeUrl` over a transport without `listUnsubscribe` (Brevo,
