@@ -1,10 +1,11 @@
 import { AUTH_HANDOFF_CHALLENGE_PARAM, AUTH_HANDOFF_STATE_PARAM } from '@fabrika/auth-core'
-import { type AppPresentation, installationPresentation, presentationFor } from '../app-presentation'
+import { type AppPresentation, installationPresentation, presentationFor, withPersonLocale } from '../app-presentation'
 import { LOCAL_DEV_ADMIN_EMAIL, LOCAL_DEV_ADMIN_ID } from '../auth'
 import { type SessionRow } from '../db'
 
 import { type RequestContext } from '../env'
 import { authFailurePage, chooseAccountPage, loginPage } from '../password-pages'
+import { parseLocale } from '../person-locale'
 import { resolveUserPrincipal } from '../resolve'
 import { type Services } from '../services'
 import { type Handoff, handoffLocation, handoffLoginUrl, handoffOf, handoffRedirectOr, loginDestinationFields, readHandoff } from './handoff'
@@ -50,7 +51,8 @@ export async function handleLogin(
 				return new Response(null, { status: 302, headers: redirectHeaders(await handoffLocation(services, handoff, login.session.id)) })
 			}
 			return chooseAccountPage({
-				presentation,
+				// The signed-in person is known: their own language beats the browser's hints and the application's.
+				presentation: withPersonLocale(presentation, parseLocale(login.principal.locale)),
 				label: login.principal.label,
 				handoff,
 				redirectOrigin: (await loginDestinationFields(services, handoff, redirect)).redirectOrigin,
@@ -75,7 +77,7 @@ export async function handleLogin(
 			...await loginDestinationFields(services, handoff, redirect),
 		})
 	}
-	return startOidc(services, env, redirect, handoff)
+	return startOidc(request, services, env, redirect, handoff)
 }
 
 /**
@@ -141,6 +143,7 @@ async function handleLocalLogin(
 	if (!resolved.ok) {
 		return refuseLogin(
 			services,
+			request,
 			{ requestId, principalId: null, reason: 'local_login_refused' },
 			() => authFailurePage(presentation, { kind: 'login_refused', reason: `local ${resolved.reason}` }, 403),
 		)

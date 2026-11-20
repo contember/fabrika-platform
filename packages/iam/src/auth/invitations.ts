@@ -7,6 +7,7 @@ import { acceptCreatingPrincipal, acceptInvitation, INVITATION_ACCEPT_PATH, invi
 import { passwordMinLength } from '../password-minimum'
 import { authFailurePage, invitationOutcomePage, invitationPage, invitationPasswordPage } from '../password-pages'
 import { validatePassword } from '../password-policy'
+import { LOCALE_PARAM } from '../person-locale'
 import type { Services } from '../services'
 import { methodNotAllowed, readForm, redirectHeaders, sameOrigin, stringValue } from './http'
 import { currentSession, issueSession } from './sessions'
@@ -203,5 +204,7 @@ function ownSignIn(services: Services, presentation: AppPresentation): string {
 	const accept = new URL(`${INVITATION_ACCEPT_PATH}${appQuery(presentation)}`, services.config.issuer)
 	const signIn = new URL('/auth/login', services.config.issuer)
 	signIn.searchParams.set('redirect', accept.toString())
+	// The sign-in page speaks the person's language too, not only the invitation page it returns to.
+	if (presentation.personLocale !== null) signIn.searchParams.set(LOCALE_PARAM, presentation.personLocale)
 	return signIn.toString()
 }

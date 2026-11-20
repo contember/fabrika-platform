@@ -53,13 +53,16 @@ export async function handleTerminalEnrolment(request: Request, services: Servic
 		return new Response(null, { status: 302, headers: redirectHeaders(`/auth/login?redirect=${encodeURIComponent(back)}`) })
 	}
 	if (!await mayEnrol(services, login)) {
-		return authFailurePage(enrolmentPresentation(request), { kind: 'terminal_enrolment_not_allowed' }, 403)
+		return authFailurePage(readerFailure(request), { kind: 'terminal_enrolment_not_allowed' }, 403)
 	}
 	return terminalEnrolPage({ brand: await installationBrand(services), locale: readerLocale(request) })
 }
 
-/** A refusal of the enrolment: IAM's own words, without the logo, in the reader's language. */
-function enrolmentPresentation(request: Request): AppPresentation {
+/**
+ * A refusal that names no application (the enrolment's, a terminal completion's): IAM's own words, without the logo, in
+ * the reader's language.
+ */
+function readerFailure(request: Request): AppPresentation {
 	return { ...INSTALLATION_PRESENTATION, locale: readerLocale(request) }
 }
 
@@ -70,15 +73,15 @@ function enrolmentPresentation(request: Request): AppPresentation {
  */
 async function enrol(request: Request, services: Services, requestId: string): Promise<Response> {
 	if (!sameOrigin(request, services.config)) {
-		return authFailurePage(enrolmentPresentation(request), { kind: 'cross_origin' }, 403)
+		return authFailurePage(readerFailure(request), { kind: 'cross_origin' }, 403)
 	}
 	const login = await currentLogin(request, services)
 	if (login === null || !await mayEnrol(services, login)) {
-		return authFailurePage(enrolmentPresentation(request), { kind: 'terminal_enrolment_not_allowed' }, 403)
+		return authFailurePage(readerFailure(request), { kind: 'terminal_enrolment_not_allowed' }, 403)
 	}
 	const form = await readForm(request)
 	if (form === null) {
-		return authFailurePage(enrolmentPresentation(request), { kind: 'malformed_form' }, 400)
+		return authFailurePage(readerFailure(request), { kind: 'malformed_form' }, 400)
 	}
 	const label = terminalLabel(stringValue(form.get('label')) ?? '')
 	if (label === null) {
@@ -120,7 +123,7 @@ async function enrol(request: Request, services: Services, requestId: string): P
 		])
 	} catch (err) {
 		logError(`terminal enrolment could not be recorded for request '${requestId}'`, err)
-		return authFailurePage(enrolmentPresentation(request), { kind: 'terminal_enrolment_unavailable' }, 503)
+		return authFailurePage(readerFailure(request), { kind: 'terminal_enrolment_unavailable' }, 503)
 	}
 
 	const response = terminalEnrolledPage(label, await installationBrand(services), readerLocale(request))
@@ -226,14 +229,14 @@ export async function handleTerminalCompletion(request: Request, services: Servi
 	const id = new URL(request.url).searchParams.get(IDENTIFICATION_QUERY_PARAMETER) ?? ''
 	const browser = await browserTerminal(request, services)
 	if (browser === null || id === '' || id.length > MAX_IDENTIFICATION_ID_LENGTH) {
-		return authFailurePage(INSTALLATION_PRESENTATION, { kind: 'terminal_completion_refused' }, 403)
+		return authFailurePage(readerFailure(request), { kind: 'terminal_completion_refused' }, 403)
 	}
 	const { terminals, sessions } = services.repositories
 	try {
 		const completed = await terminals.completeIdentification(await hashToken(id), browser.terminal.principal_id, unixNow())
 		const login = completed?.session_id == null ? null : await sessions.getActiveSessionById(completed.session_id)
 		if (completed === null || login === null) {
-			return authFailurePage(INSTALLATION_PRESENTATION, { kind: 'terminal_completion_refused' }, 403)
+			return authFailurePage(readerFailure(request), { kind: 'terminal_completion_refused' }, 403)
 		}
 		const location = await handoffLocation(services, {
 			app: completed.app,
@@ -244,7 +247,7 @@ export async function handleTerminalCompletion(request: Request, services: Servi
 		return new Response(null, { status: 302, headers: redirectHeaders(location) })
 	} catch (err) {
 		logError(`a terminal identification could not be completed for request '${requestId}'`, err)
-		return authFailurePage(INSTALLATION_PRESENTATION, { kind: 'login_unavailable' }, 503)
+		return authFailurePage(readerFailure(request), { kind: 'login_unavailable' }, 503)
 	}
 }
 

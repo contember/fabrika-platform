@@ -254,8 +254,11 @@ a hint for words: none decides a landing, an origin or an authority.
 A page takes its language from the first of these that names one IAM speaks:
 
 1. the person's own, as IAM stored it for the flow (the invitation's, the
-   password action's, the accepting principal's);
-2. a link's or a form's `?locale=`;
+   password action's, the accepting principal's, and on the account question
+   the signed-in principal's);
+2. a link's or a form's `?locale=`, which the links and forms IAM builds for a
+   person whose language it knows carry on, its own sign-in included (the
+   return from an SSO provider does not);
 3. the remembered cookie;
 4. the application's `locale`;
 5. the browser's `Accept-Language`, by weight, each range matched by its
@@ -269,7 +272,11 @@ the browser's, so an application that declares one shows every page it showed
 before; only a language the person was given wins over it. An application that
 serves people of several languages either names each person's on their
 invitation or declares no `locale` and lets the browser choose. A stored value
-IAM no longer speaks counts as none.
+IAM no longer speaks counts as none. The sign-in an application's proxy starts
+carries no `?locale=`, so on a browser where the person has not signed in yet
+it follows the remembered, the application's or the browser's language, including the sign-in
+an invitation's "sign in first" sends them to; the invitation link they then
+open again speaks theirs.
 
 An application may also word IAM's e-mails itself with `mail` in its vocabulary:
 per message (`invitation`, `enrollment`, `reset`) and language, a one-line

@@ -294,6 +294,100 @@ describe("an invitation that names the person's language", () => {
 	})
 })
 
+describe('every page a person invited in their language reaches', () => {
+	/** The invitation link's path and query, and its token: the person's language rides the query (`&locale=uk`). */
+	async function invited(n: Notes, address = INVITEE, role = 'editor') {
+		await n.invite(address, { role, locale: 'uk' })
+		const { url, token } = linkOf(lastMail(n.email))
+		return { path: `${url.pathname}${url.search}`, token }
+	}
+	const sessionOf = async (n: Notes, person: Person) =>
+		`${SESSION_COOKIE}=${await n.h.signSession(person.id, { authenticationMethod: 'password', idpSub: null })}`
+
+	test('a used, an expired and a mistyped link are refused in it', async () => {
+		const n = await notes()
+		const person = await invitee(n)
+		const { path, token } = await invited(n)
+		const cookie = await sessionOf(n, person)
+		expect((await n.send(post(path, { token }, { Cookie: cookie }))).status).toBe(302)
+		const used = await n.send(post(path, { token }, { Cookie: cookie }))
+		expect(used.status).toBe(400)
+		const usedHtml = await used.text()
+		expect(usedHtml).toContain('<html lang="uk">')
+		expect(usedHtml).toContain('<h1>Посилання недоступне</h1>')
+
+		const again = await invited(n, 'another@example.test')
+		n.h.sqlite.run('UPDATE membership_invitations SET expires_at = 1 WHERE accepted_at IS NULL')
+		expect(await lang(await n.send(post(again.path, { token: again.token })))).toBe('uk')
+		expect(await lang(await n.send(post(again.path, { token: 'not a token' })))).toBe('uk')
+	})
+
+	test('a browser signed in as someone else, or not signed in, is answered in it', async () => {
+		const n = await notes()
+		await invitee(n)
+		const { path, token } = await invited(n)
+		const wrong = await n.send(post(path, { token }, { Cookie: await sessionOf(n, n.owner) }))
+		expect(wrong.status).toBe(403)
+		expect(await wrong.text()).toContain('<h1>Запрошення для іншої адреси</h1>')
+
+		const signInFirst = await n.send(post(path, { token }))
+		expect(signInFirst.status).toBe(401)
+		const html = await signInFirst.text()
+		expect(html).toContain('<html lang="uk">')
+		expect(html).toContain('<h1>Спочатку увійдіть</h1>')
+
+		const external = await invited(n, NEWCOMER, 'partner')
+		const other = await n.send(post(external.path, { token: external.token }, { Cookie: await sessionOf(n, n.owner) }))
+		expect(other.status).toBe(409)
+		expect(await other.text()).toContain('<h1>Ви ввійшли з іншим обліковим записом</h1>')
+	})
+
+	test("IAM's sign-in reached with the language keeps it through a refused password and its links", async () => {
+		const n = await notes()
+		await invitee(n)
+		const page = await n.send(new Request(`${ORIGIN}/auth/login?locale=uk`))
+		const html = await page.text()
+		expect(html).toContain('<html lang="uk">')
+		expect(html).toContain('action="/auth/login?locale=uk"')
+		expect(html).toContain('href="/auth/forgot-password?locale=uk"')
+
+		const refused = await n.send(post('/auth/login?locale=uk', { email: INVITEE, password: 'not the passphrase at all' }))
+		expect(refused.status).toBe(401)
+		expect(await refused.text()).toContain('Неправильна електронна адреса або пароль.')
+
+		// The recovery page's way back is the sign-in in the same language.
+		const sent = await n.send(post('/auth/forgot-password?locale=uk', { email: INVITEE }))
+		await n.f.ctx.settle()
+		expect(await sent.text()).toContain('href="/auth/login?locale=uk"')
+	})
+
+	test("the account question speaks the signed-in person's own language, and its answer keeps it", async () => {
+		const n = await notes()
+		const person = await invitee(n)
+		await n.f.repositories.principals.setLocale(person.id, 'uk')
+		const cookie = await sessionOf(n, person)
+		// A login older than a minute that holds no session at the app is asked before it is used.
+		n.h.sqlite.run('UPDATE sessions SET created_at = created_at - 3600 WHERE principal_id = ?', [person.id])
+		const question = await n.send(handoffLogin({ Cookie: cookie }))
+		expect(question.status).toBe(200)
+		const html = await question.text()
+		expect(html).toContain('<html lang="uk">')
+		expect(html).toContain('<h1>Перехід до застосунку Poznámky</h1>')
+		expect(html).toContain('action="/auth/login/account?locale=uk"')
+		const malformed = await n.send(post('/auth/login/account?locale=uk', { decision: 'neither' }, { Cookie: cookie }))
+		expect(await lang(malformed)).toBe('uk')
+	})
+
+	test("a terminal completion's refusal follows the browser", async () => {
+		const n = await notes()
+		const refused = await n.send(
+			new Request(`${ORIGIN}/auth/terminals/complete?identification=unknown`, { headers: { 'Accept-Language': 'uk-UA' } }),
+		)
+		expect(refused.status).toBe(403)
+		expect(await lang(refused)).toBe('uk')
+	})
+})
+
 describe("the browser's language", () => {
 	const UKRAINIAN_BROWSER = { 'Accept-Language': 'uk-UA,uk;q=0.9,en;q=0.8' }
 

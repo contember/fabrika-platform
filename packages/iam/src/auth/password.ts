@@ -105,6 +105,7 @@ export async function handlePasswordLogin(
 	const refused = (reason: LoginRefusal, failure: AuthFailure, status: number) =>
 		refuseLogin(
 			services,
+			request,
 			{ requestId, principalId: null, reason },
 			async () => authFailurePage(await installationPresentation(services, { request }), failure, status),
 		)
@@ -123,7 +124,12 @@ export async function handlePasswordLogin(
 	)
 	if (reading.kind === 'refused') {
 		const presentation = await presentationFor(services, stringValue(form.get('app')), { request })
-		return refuseLogin(services, { requestId, principalId: null, reason: 'handoff_refused' }, () => authFailurePage(presentation, reading.failure, 400))
+		return refuseLogin(
+			services,
+			request,
+			{ requestId, principalId: null, reason: 'handoff_refused' },
+			() => authFailurePage(presentation, reading.failure, 400),
+		)
 	}
 	const handoff = handoffOf(reading)
 	const redirect = handoffRedirectOr(handoff, stringValue(form.get('redirect')), services)
@@ -137,6 +143,7 @@ export async function handlePasswordLogin(
 	if (!login.success) {
 		return refuseLogin(
 			services,
+			request,
 			{ requestId, principalId: null, reason: 'password_malformed' },
 			() => loginPage({ ...retry, invalidCredentials: true }),
 		)
@@ -218,6 +225,7 @@ export async function handlePasswordLogin(
 	}
 	return refuseLogin(
 		services,
+		request,
 		{
 			requestId,
 			principalId: lookup.status === 'found' ? lookup.principal.id : null,

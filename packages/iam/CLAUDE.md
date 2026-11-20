@@ -565,8 +565,9 @@ fails if that stops being true — it is the guard, not documentation of one.
   without an audit record.
   `messageTemplateFor` (`src/messages.ts`) is the one place a message's template is chosen. A refused browser-facing request answers
   `authFailurePage` with a typed `AuthFailure`, in the request's language where an application is known before the
-  refusal; a failure before any application is known, and logout, speak the reader's language (`readerLocale`:
-  the request's hints, else the default).
+  refusal; a failure before any application is known, logout and the terminal pages speak the reader's language
+  (`readerLocale`: the request's hints, else the default). The account question speaks the signed-in principal's
+  language. A form or link to IAM's own sign-in carries only `localeQuery` (its `?app=` would name a handoff).
 - **THE INSTALLATION'S LOGO IS AN INSTALLATION ADMINISTRATOR'S, AND EVERY PAGE READS IT AT RENDER** (ADR-0066,
   `installation_brand`, `src/installation-brand.ts`). One row, key 1: `brand.get`, `brand.set` and `brand.clear` of
   `/admin/rpc` all require `iam.admin` (Control reads it with the provisioning key), never a user administrator. `set`

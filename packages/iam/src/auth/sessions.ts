@@ -147,6 +147,7 @@ export type LoginRefusal =
 
 export async function refuseLogin(
 	services: Services,
+	request: Request,
 	entry: { requestId: string; principalId: string | null; reason: LoginRefusal },
 	answer: () => Response | Promise<Response>,
 ): Promise<Response> {
@@ -161,7 +162,7 @@ export async function refuseLogin(
 		})
 	} catch (err) {
 		logError(`a refused login could not be recorded for request '${entry.requestId}'`, err)
-		return authFailurePage(await installationPresentation(services), { kind: 'login_unavailable' }, 503)
+		return authFailurePage(await installationPresentation(services, { request }), { kind: 'login_unavailable' }, 503)
 	}
 	return answer()
 }

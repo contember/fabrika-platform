@@ -168,3 +168,11 @@ export function appQuery(presentation: AppPresentation): string {
 	const text = query.toString()
 	return text === '' ? '' : `?${text}`
 }
+
+/**
+ * The query that carries only the reader's own language (`?locale=`), for a link or a form to a page whose application
+ * travels elsewhere: IAM's sign-in, whose `?app=` names a handoff. Empty when the words follow the application.
+ */
+export function localeQuery(presentation: AppPresentation): string {
+	return presentation.personLocale === null ? '' : `?${new URLSearchParams({ [LOCALE_PARAM]: presentation.personLocale })}`
+}
