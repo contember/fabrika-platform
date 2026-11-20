@@ -883,13 +883,15 @@ export function testSeeding(backend: SeedingBackend): TestSeeding {
 	): Promise<{ readonly row: ReadonlyMap<string, SampleValue>; readonly stored: Readonly<Record<string, unknown>> }> {
 		const model = modelOf(models, table)
 		const columns = columnsOf(table)
-		// A column with a database default keeps it unless the fixture assigned it, a foreign key's included.
+		// A column with a database default keeps it unless the fixture assigned it or fills a foreign key over it.
 		const defaulted = new Set(columns.filter((column) => column.defaulted).map((column) => column.name))
 		const slots: Slot[] = []
 		const slotted = new Set<string>()
 		for (const key of model?.foreignKeys ?? []) {
-			const open = key.columns.filter((column) => !assigned.has(column) && !defaulted.has(column) && !slotted.has(column))
-			if (open.length === 0) continue
+			const open = key.columns.filter((column) => !assigned.has(column) && !slotted.has(column))
+			// A key whose columns all have defaults keeps them; one the fixture fills fills its defaulted columns too, which
+			// alone may name no row the key's other columns pick.
+			if (open.every((column) => defaulted.has(column))) continue
 			slots.push(await referenceSlot(models, table, key, open, assigned, depth, inserted))
 			for (const name of open) slotted.add(name)
 		}

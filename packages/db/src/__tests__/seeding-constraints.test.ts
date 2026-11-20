@@ -84,6 +84,12 @@ CREATE TABLE moves (
 	direction TEXT NOT NULL,
 	FOREIGN KEY (purpose, direction) REFERENCES purpose_directions (purpose, direction)
 );
+CREATE TABLE returns (
+	id TEXT PRIMARY KEY,
+	purpose TEXT NOT NULL,
+	direction TEXT NOT NULL DEFAULT 'in',
+	FOREIGN KEY (purpose, direction) REFERENCES purpose_directions (purpose, direction)
+);
 CREATE TABLE items (id TEXT PRIMARY KEY, name TEXT NOT NULL);
 CREATE TABLE variants (
 	id TEXT PRIMARY KEY,
@@ -120,6 +126,7 @@ interface DB {
 	purposes: { code: string }
 	purpose_directions: { purpose: string; direction: string }
 	moves: { id: string; purpose: string; direction: string }
+	returns: { id: string; purpose: string; direction: string }
 	items: { id: string; name: string }
 	variants: { id: string; item_id: string; base_item_id: string }
 	days: { id: string; day: string }
@@ -170,6 +177,10 @@ const columns: TypedColumnList<DB> = {
 			{ columns: ['purpose', 'direction'], table: 'purpose_directions', references: ['purpose', 'direction'] },
 		],
 	},
+	returns: {
+		columns: ['id', 'purpose', 'direction'],
+		foreignKeys: [{ columns: ['purpose', 'direction'], table: 'purpose_directions', references: ['purpose', 'direction'] }],
+	},
 	items: { columns: ['id', 'name'], foreignKeys: [] },
 	variants: {
 		columns: ['id', 'item_id', 'base_item_id'],
@@ -213,6 +224,7 @@ const tables = defineTables(vocabulary, columns)({
 	purposes: { scope: { reference: 'the purposes a migration lists' }, actions: { read: 'rows.read' } },
 	purpose_directions: { scope: { reference: 'the directions of each purpose' }, actions: { read: 'rows.read' } },
 	moves: app('a move for a purpose in one of its directions'),
+	returns: app('a return for a purpose, inbound unless it says otherwise'),
 	items: app('items'),
 	variants: app('a variant of another item'),
 	days: app('one row a day'),
@@ -301,6 +313,9 @@ for (const [dialect, database] of [['SQLite', sqlite], ['Postgres', postgres]] a
 			expect(visit['site_id']).toEqual(expect.any(String))
 			const move = await row('moves')
 			expect([['stock', 'in'], ['repair', 'out']]).toContainEqual([String(move['purpose']), String(move['direction'])])
+			// A key column with a default the key fills too: the default alone may name no row the other column picks.
+			const returned = await row('returns')
+			expect([['stock', 'in'], ['repair', 'out']]).toContainEqual([String(returned['purpose']), String(returned['direction'])])
 		})
 
 		test('two foreign keys a CHECK keeps apart reference two rows', async () => {
