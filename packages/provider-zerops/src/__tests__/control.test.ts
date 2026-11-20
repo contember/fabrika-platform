@@ -1392,6 +1392,75 @@ describe('Zerops ControlProvider lifecycle', () => {
 		expect(recorded.calls).toEqual([])
 	})
 
+	describe("a deploy's commit with another zerops.yaml (ADR-0043)", () => {
+		const contractConfig: ZeropsAppConfig = {
+			id: 'notes',
+			target: {
+				platform: 'zerops',
+				services: () => [{ hostname: 'notes', type: 'alpine/bun@1.3' }],
+				contract: notesArtifact,
+				proxy: { upstream: 'notes:3000', ...contractProxyTable(notesArtifact) },
+			},
+		}
+		const descriptor = (buildCommands: string): string => `zerops:\n  - setup: notes\n    build:\n      buildCommands: [${buildCommands}]\n`
+		const registeredFor = async (target: ZeropsAppConfig, contents: string) =>
+			environment({
+				artifact: {
+					provider: 'zerops',
+					version: zeropsArtifactCodec.version,
+					payload: zeropsArtifactCodec.encode(compileFabrikaManifest(target, 'prod', await createZeropsArtifactSourceDescriptor(contents))),
+				},
+			})
+		const withSourceDescriptor = () => {
+			const hook = createTestControlProvider({ accessToken: 'zt-secret', api: makeApi(recorded) }).withSourceDescriptor
+			if (hook === undefined) throw new Error('the Zerops provider re-registers a commit descriptor')
+			return hook
+		}
+
+		test("a contract application's edited build commands replace the descriptor, and nothing else", async () => {
+			const registered = await registeredFor(contractConfig, descriptor('bun install'))
+			const edited = descriptor('bun install, bun run build')
+			const next = await withSourceDescriptor()({ environment: registered, path: 'zerops.yaml', contents: edited })
+			if (next === null) throw new Error('a contract application is re-registered')
+			const before = zeropsArtifactCodec.decode(registered.artifact.payload)
+			const after = zeropsArtifactCodec.decode(next.payload)
+			expect(after.target.sourceDescriptor).toEqual(await createZeropsArtifactSourceDescriptor(edited))
+			expect({ ...after, target: { ...after.target, sourceDescriptor: before.target.sourceDescriptor } }).toEqual(before)
+			expect(next.version).toBe(zeropsArtifactCodec.version)
+			expect(recorded.calls).toEqual([])
+
+			// The deploy builds with the commit's commands, read from the artifact it was handed.
+			const builds: string[] = []
+			const base = makeApi(recorded)
+			const control = createTestControlProvider({
+				accessToken: 'zt-secret',
+				api: {
+					...base,
+					buildAndDeployAppVersion: async (input) => {
+						builds.push(input.zeropsYaml)
+						return base.buildAndDeployAppVersion(input)
+					},
+				},
+			})
+			expect(await control.deploy({ ...deployInput(recorded), environment: { ...registered, artifact: next } })).toEqual({ state: 'succeeded' })
+			expect(builds).toHaveLength(1)
+			expect(builds[0]).toContain('bun run build')
+		})
+
+		test('a key the registration refuses names itself, and nothing is returned', async () => {
+			const registered = await registeredFor(contractConfig, descriptor('bun install'))
+			const refused = 'zerops:\n  - setup: notes\n    run:\n      start: bun server.ts\n'
+			await expect(withSourceDescriptor()({ environment: registered, path: 'zerops.yaml', contents: refused })).rejects.toThrow(
+				'zerops.yaml setup `notes` sets `run.start`',
+			)
+		})
+
+		test('an application without a contract keeps its manifest: its build checks more than its registration does', async () => {
+			const registered = await registeredFor(config, descriptor('bun install'))
+			expect(await withSourceDescriptor()({ environment: registered, path: 'zerops.yaml', contents: descriptor('bun run build') })).toBeNull()
+		})
+	})
+
 	test('routes two keyed connections through their exact resolve and upload bindings', async () => {
 		const calls: string[] = []
 		const source: ZeropsSourcePort = {

@@ -40,7 +40,8 @@ import { cancelDeploy, type DeployJobMessage, executeDeploy, parseProviderEnvelo
 import { appSecretPurpose, type SecretResolver, VaultSecretResolver } from '../secret-resolver'
 import { buildControlRpcDeps, buildRunDeps } from '../services'
 import { zeropsControlProvider, zeropsGitHubSources } from '../zerops/provider'
-import { contractCommits } from './helpers/commits'
+import { contractCommits, memoryCommits } from './helpers/commits'
+import { healthOnly } from './helpers/contracts'
 import { createHarness, queryRows } from './helpers/harness'
 import { allowAllAuth } from './helpers/iam'
 import { fixtureCatalogApplied, fixtureProtect, fixtureRuns, heldLeases, makeFakeLock } from './helpers/lock'
@@ -582,6 +583,181 @@ describe('provider-neutral run lifecycle', () => {
 			+ '(`fabrika app build --env=prod`), send it with `fabrika control apps environments put --provider=memory --app=app --env=prod '
 			+ `--manifest=fabrika.manifest.json${flags}\`, and deploy again`,
 		])
+	})
+
+	describe('a commit whose zerops.yaml is not the registered one (ADR-0043)', () => {
+		const DESCRIPTOR_COMMIT = 'c'.repeat(40)
+		const registered = (contents: string): ProviderEnvelope => envelope('memory', `artifact:${contents}`)
+
+		/** A provider whose artifact is its descriptor's text, and whose resolution checks it as Zerops' source port does. */
+		function descriptorProvider(
+			inputs: ProviderDeployInput[],
+			committed: string,
+			register: ControlProvider['withSourceDescriptor'],
+		): { provider: ControlProvider; resolutions: Array<{ ref: string; expected: string | undefined }> } {
+			const resolutions: Array<{ ref: string; expected: string | undefined }> = []
+			const provider = makeProvider(inputs, { state: 'succeeded' })
+			provider.resolveSource = (input) => {
+				resolutions.push({ ref: input.app.source.ref, expected: input.expectedCommitSha })
+				const expected = String(input.environment.artifact.payload)
+				if (expected === 'artifact' || expected === `artifact:${committed}`) {
+					return Promise.resolve({ commitSha: input.expectedCommitSha ?? DESCRIPTOR_COMMIT })
+				}
+				const detail = { path: 'zerops.yaml', commitSha: DESCRIPTOR_COMMIT, expectedSha256: 'e'.repeat(64), actualSha256: 'a'.repeat(64) }
+				return Promise.reject(new SourceDescriptorMismatch('resolve', detail))
+			}
+			if (register !== undefined) provider.withSourceDescriptor = register
+			return { provider, resolutions }
+		}
+
+		async function seedRegistered(db: ControlRepositories, contents: string): Promise<{ runId: string; generation: number }> {
+			const runId = await seedRun(db)
+			const row = await db.registry.getAppEnv('app', 'prod')
+			if (row === null) throw new Error('seeded environment missing')
+			const stored = await db.registry.upsertAppEnv({
+				appId: 'app',
+				env: 'prod',
+				domain: row.domain,
+				publicOrigin: row.public_origin,
+				namespaceId: null,
+				provider: 'memory',
+				providerTargetJson: row.provider_target_json,
+				providerArtifactJson: JSON.stringify(registered(contents)),
+			}, { generation: row.generation })
+			return { runId, generation: stored.generation }
+		}
+
+		const commitsWith = (descriptor: string) => memoryCommits({ 'fabrika.contract.ts': healthOnly('app'), 'zerops.yaml': descriptor })
+
+		test('registers the edited file from the commit before anything reads it, and deploys with it', async () => {
+			const { db } = createHarness()
+			const { runId, generation } = await seedRegistered(db, 'build: [bun install]')
+			const inputs: ProviderDeployInput[] = []
+			const offered: Array<{ path: string; contents: string; artifact: ProviderEnvelope }> = []
+			const { provider, resolutions } = descriptorProvider(inputs, 'build: [bun install, bun run build]', (input) => {
+				offered.push({ path: input.path, contents: input.contents, artifact: input.environment.artifact })
+				return Promise.resolve(registered(input.contents))
+			})
+			const deps = { ...makeDeps(db, provider), commits: commitsWith('build: [bun install, bun run build]') }
+			const stored = memoryLogs()
+			deps.logs = stored.logs
+
+			expect((await executeDeploy(deps, { runId })).status).toBe('succeeded')
+			expect(offered).toEqual([{ path: 'zerops.yaml', contents: 'build: [bun install, bun run build]', artifact: registered('build: [bun install]') }])
+			// The second resolution is pinned to the commit the file was read at.
+			expect(resolutions).toEqual([
+				{ ref: 'refs/heads/deploy/prod', expected: undefined },
+				{ ref: DESCRIPTOR_COMMIT, expected: DESCRIPTOR_COMMIT },
+			])
+			const row = await db.registry.getAppEnv('app', 'prod')
+			expect(row?.provider_artifact_json).toBe(JSON.stringify(registered('build: [bun install, bun run build]')))
+			expect(inputs[0]?.environment.artifact).toEqual(registered('build: [bun install, bun run build]'))
+			// The re-registration and the publication each advanced it once.
+			expect(row?.generation).toBe(generation + 2)
+			const response = await getRunLogUseCase({ repositories: db, logs: stored.logs, auth: allowAllAuth() }, runId)
+			expect(response.lines.map((line) => line.text)).toContain(
+				`registration: app/prod now builds with the zerops.yaml of commit ${DESCRIPTOR_COMMIT} (sha256 ${'a'.repeat(64)}, was ${'e'.repeat(64)})`,
+			)
+		})
+
+		test('an unchanged file registers nothing', async () => {
+			const { db } = createHarness()
+			const { runId, generation } = await seedRegistered(db, 'build: [bun install]')
+			let offered = 0
+			const { provider } = descriptorProvider([], 'build: [bun install]', (input) => {
+				offered++
+				return Promise.resolve(registered(input.contents))
+			})
+
+			expect((await executeDeploy({ ...makeDeps(db, provider), commits: commitsWith('build: [bun install]') }, { runId })).status).toBe('succeeded')
+			expect(offered).toBe(0)
+			const row = await db.registry.getAppEnv('app', 'prod')
+			expect(row?.provider_artifact_json).toBe(JSON.stringify(registered('build: [bun install]')))
+			expect(row?.generation).toBe(generation + 1)
+		})
+
+		test('a file the registration refuses fails the run before any build, naming the key, and registers nothing', async () => {
+			const { db } = createHarness()
+			const { runId } = await seedRegistered(db, 'build: [bun install]')
+			const inputs: ProviderDeployInput[] = []
+			const refusal = 'invalid fabrika manifest: zerops.yaml setup `app` sets `run.start`; the platform generates the run section'
+			const { provider } = descriptorProvider(inputs, 'run: {start: bun x}', () => Promise.reject(new Error(refusal)))
+			const deps = { ...makeDeps(db, provider), commits: commitsWith('run: {start: bun x}') }
+			const stored = memoryLogs()
+			deps.logs = stored.logs
+
+			expect((await executeDeploy(deps, { runId })).status).toBe('failed')
+			expect(inputs).toEqual([])
+			expect((await db.registry.getAppEnv('app', 'prod'))?.provider_artifact_json).toBe(JSON.stringify(registered('build: [bun install]')))
+			const response = await getRunLogUseCase({ repositories: db, logs: stored.logs, auth: allowAllAuth() }, runId)
+			expect(response.lines.map((line) => line.text)).toEqual([
+				`deploy failed: zerops.yaml at commit ${DESCRIPTOR_COMMIT} cannot be registered for app/prod, so nothing was built: ${refusal}`,
+			])
+		})
+
+		test('an artifact the provider does not re-register fails with the manual remedy, as before', async () => {
+			const { db } = createHarness()
+			const { runId } = await seedRegistered(db, 'build: [bun install]')
+			const { provider } = descriptorProvider([], 'build: [bun run build]', () => Promise.resolve(null))
+			const deps = { ...makeDeps(db, provider), commits: commitsWith('build: [bun run build]') }
+			const stored = memoryLogs()
+			deps.logs = stored.logs
+
+			expect((await executeDeploy(deps, { runId })).status).toBe('failed')
+			expect((await db.registry.getAppEnv('app', 'prod'))?.provider_artifact_json).toBe(JSON.stringify(registered('build: [bun install]')))
+			const response = await getRunLogUseCase({ repositories: db, logs: stored.logs, auth: allowAllAuth() }, runId)
+			expect(response.lines.map((line) => line.text).join('\n')).toContain('(`fabrika app build --env=prod`)')
+		})
+
+		test("a workspace branch's run does not re-register its environment", async () => {
+			const { db } = createHarness()
+			await seedRegistered(db, 'build: [bun install]')
+			let offered = 0
+			const { provider } = descriptorProvider([], 'build: [bun run build]', (input) => {
+				offered++
+				return Promise.resolve(registered(input.contents))
+			})
+			const runId = uuidv7()
+			await db.runs.createRun({ id: runId, appId: 'app', env: 'prod', ref: 'refs/heads/fabrika/workspace-1', trigger: 'manual', actor: 'user:test' })
+
+			expect((await executeDeploy({ ...makeDeps(db, provider), commits: commitsWith('build: [bun run build]') }, { runId })).status).toBe('failed')
+			expect(offered).toBe(0)
+			expect((await db.registry.getAppEnv('app', 'prod'))?.provider_artifact_json).toBe(JSON.stringify(registered('build: [bun install]')))
+		})
+
+		test('a registry write that lands first fails the run instead of being overwritten', async () => {
+			const { db } = createHarness()
+			const { runId } = await seedRegistered(db, 'build: [bun install]')
+			const inputs: ProviderDeployInput[] = []
+			const { provider } = descriptorProvider(inputs, 'build: [bun run build]', async (input) => {
+				// An operator's `environments put` between the run's read and its write.
+				const row = await db.registry.getAppEnv('app', 'prod')
+				if (row === null) throw new Error('seeded environment missing')
+				await db.registry.upsertAppEnv({
+					appId: 'app',
+					env: 'prod',
+					domain: row.domain,
+					publicOrigin: row.public_origin,
+					namespaceId: null,
+					provider: 'memory',
+					providerTargetJson: row.provider_target_json,
+					providerArtifactJson: JSON.stringify(registered('build: [operator]')),
+				}, { generation: row.generation })
+				return registered(input.contents)
+			})
+			const deps = { ...makeDeps(db, provider), commits: commitsWith('build: [bun run build]') }
+			const stored = memoryLogs()
+			deps.logs = stored.logs
+
+			expect((await executeDeploy(deps, { runId })).status).toBe('failed')
+			expect(inputs).toEqual([])
+			expect((await db.registry.getAppEnv('app', 'prod'))?.provider_artifact_json).toBe(JSON.stringify(registered('build: [operator]')))
+			const response = await getRunLogUseCase({ repositories: db, logs: stored.logs, auth: allowAllAuth() }, runId)
+			// After its publication, which a lost write does not undo; the provider never ran.
+			expect(response.lines.map((line) => line.text).at(-1)).toBe(
+				'deploy failed: the registration of app/prod changed while this run registered the zerops.yaml of its commit; deploy again',
+			)
+		})
 	})
 
 	test('does not resolve source during a dry run', async () => {

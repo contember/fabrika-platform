@@ -22,6 +22,7 @@ import {
 	sandboxHostKeyPurpose,
 	workspacePublication,
 } from '../dev/sandbox-keys'
+import { SourceDescriptorMismatch } from '../github/source/failure'
 import type { IamSchemaPort } from '../iam-schema'
 import { VaultPlatformTransport } from '../platform-transport'
 import { VaultProxySecrets } from '../proxy-secret'
@@ -40,6 +41,7 @@ const COMMIT = 'c'.repeat(40)
 const DOMAIN = 'dev.notes.test'
 const CONTROL_ORIGIN = 'https://control.example.test'
 const ENVELOPE = JSON.stringify({ provider: 'harbor', version: 1, payload: {} })
+const ENVELOPE_EDITED = { provider: 'harbor', version: 1, payload: { descriptor: 'edited' } }
 const SOURCE_KEY = platformTransportVariables('source').key
 /** When the keys a fake reconcile hands expire. */
 const KEYS_EXPIRE_AT = 4_000_000_000
@@ -354,6 +356,39 @@ describe('a dev bootstrap', () => {
 		expect(w.deploys).toEqual([])
 		expect([...w.logs.values()].join('\n')).toContain(`deploy failed: the sandbox of workspace ${workspaceId} is not ready (creating)`)
 		expect((await w.db.registry.getAppEnv('notes', 'dev'))?.generation).toBe(0)
+	})
+
+	test("a changed zerops.yaml does not re-register the dev environment, which every workspace's sandbox shares", async () => {
+		const w = await world()
+		const workspaceId = await readySandbox(w)
+		const runDeps = deps(w)
+		let offered = 0
+		const detail = { path: 'zerops.yaml', commitSha: COMMIT, expectedSha256: 'e'.repeat(64), actualSha256: 'a'.repeat(64) }
+		runDeps.provider = {
+			...runDeps.provider,
+			resolveSource: () => Promise.reject(new SourceDescriptorMismatch('resolve', detail)),
+			withSourceDescriptor: () => {
+				offered++
+				return Promise.resolve(ENVELOPE_EDITED)
+			},
+		}
+		const runId = uuidv7()
+		// Outside the workspace branches, so only the sandbox keeps it from re-registering.
+		await w.db.runs.createRun({
+			id: runId,
+			appId: 'notes',
+			env: 'dev',
+			ref: 'refs/heads/main',
+			trigger: 'manual',
+			actor: 'user:test',
+			lane: workspaceId,
+		})
+
+		expect((await executeDeploy(runDeps, { runId })).status).toBe('failed')
+		expect(offered).toBe(0)
+		expect(w.deploys).toEqual([])
+		expect((await w.db.registry.getAppEnv('notes', 'dev'))?.provider_artifact_json).toBe(ENVELOPE)
+		expect([...w.logs.values()].join('\n')).toContain('(descriptor_mismatch)')
 	})
 
 	test('without a vault the bootstrap fails naming FABRIKA_CONTROL_VAULT_KEY', async () => {

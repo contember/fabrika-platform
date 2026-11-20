@@ -32,7 +32,9 @@ import {
 	ProviderInvocationAbort,
 	type ProviderNamespaceMemberRouting,
 	type ProviderReconcileOutcome,
+	type ProviderRegistration,
 	type ProviderSourceBinding,
+	type ProviderSourceResolution,
 	type ProviderTerminalOutcome,
 } from '@fabrika/provider-contract'
 import {
@@ -105,6 +107,7 @@ import { type OperationsReleaseProjectionDeps, projectOperationsRun } from './op
 import { type OpsKeysPort, reconcileOpsKey } from './ops-key'
 import type { PlatformTransportPort } from './platform-transport'
 import type { ProxySecrets } from './proxy-secret'
+import { isWorkspaceRef } from './ref-match'
 import { projectedReturnOrigins } from './return-origins'
 import { appSecretPurpose, providerKeepsSecrets, type SecretResolver } from './secret-resolver'
 import { longestTokenLifetime, type TokenKeysPort } from './token-keys'
@@ -723,17 +726,39 @@ async function deployUnder(
 			const expectedCommitSha = startedRun.commit_sha === null
 				? undefined
 				: immutableGitObjectId(startedRun.commit_sha, 'recorded commit')
-			const resolution = await resolveSource({
-				runId,
-				app: registration.app,
-				environment: registration.environment,
-				...(expectedCommitSha === undefined ? {} : { expectedCommitSha }),
-				...(sourceBinding === undefined ? {} : { sourceBinding }),
-				signal: invocation.work.signal,
-			}).catch((error: unknown) => {
+			const resolve = (at: { readonly registration: ProviderRegistration; readonly commitSha: string | undefined }) =>
+				resolveSource({
+					runId,
+					app: at.registration.app,
+					environment: at.registration.environment,
+					...(at.commitSha === undefined ? {} : { expectedCommitSha: at.commitSha }),
+					...(sourceBinding === undefined ? {} : { sourceBinding }),
+					signal: invocation.work.signal,
+				})
+			let resolution: ProviderSourceResolution
+			/** Stores the artifact this run re-registered, once its publication passed any approval it needed. */
+			let storeRegistration: (() => Promise<void>) | null = null
+			try {
+				resolution = await resolve({ registration, commitSha: expectedCommitSha })
+			} catch (error) {
 				if (!(error instanceof SourceDescriptorMismatch)) throw error
-				throw error.withRemedy(descriptorMismatchRemedy(deps.provider.id, appEnv, error.detail))
-			})
+				const reregistered = await reregisterSourceDescriptor(deps, {
+					invocation,
+					run: startedRun,
+					app,
+					appEnv,
+					registration,
+					sandbox,
+					...(sourceBinding === undefined ? {} : { sourceBinding }),
+					detail: error.detail,
+					resolve,
+					log: (line) => runLogs.log(line),
+				})
+				if (reregistered === null) throw error.withRemedy(descriptorMismatchRemedy(deps.provider.id, appEnv, error.detail))
+				registration = reregistered.registration
+				resolution = reregistered.resolution
+				storeRegistration = reregistered.store
+			}
 			const commitSha = immutableGitObjectId(resolution.commitSha, 'resolved commit')
 			await invocation.boundary()
 			if (expectedCommitSha !== undefined && commitSha !== expectedCommitSha) {
@@ -783,6 +808,7 @@ async function deployUnder(
 				await invocation.write((fence) => deps.repositories.devSandboxes.recordPublishedRunUnderLease(sandbox.workspaceId, runId, fence))
 				startedRun = await invocation.boundary()
 			}
+			if (storeRegistration !== null) await storeRegistration()
 			approvedRow = await currentAppEnv(deps.repositories, appEnv)
 			registration = { ...registration, environment: withAccess(registration.environment, approvedProviderAccess(approvedRow)) }
 		}
@@ -1197,9 +1223,92 @@ function operationLine(result: DriveResult, operation: DataOperationRow, recorde
 	return `${named} stopped at ${operation.step} without an answer from the environment's object; ${after}`
 }
 
+/** The read cap of a commit's build descriptor; the provider refuses one over its own, smaller limit. */
+const SOURCE_DESCRIPTOR_READ_LIMIT = 1024 * 1024
+
+/**
+ * A deploy whose commit carries a build descriptor the registered artifact does not (ADR-0043): the artifact with the
+ * commit's descriptor, validated by the provider as a registration is and resolved at that commit, which the run deploys,
+ * and `store`, which the run calls once its publication passed any approval it needed. Null when this run does not
+ * re-register it, and the mismatch stands.
+ *
+ * `store` writes under the run's lease, so a second run of the environment waits for this one, and only while the stored
+ * artifact is still the one the run read, so a registration that lands in between fails the run rather than being
+ * overwritten.
+ */
+async function reregisterSourceDescriptor(
+	deps: Pick<RunDeps, 'provider' | 'commits' | 'repositories'>,
+	input: {
+		readonly invocation: RunInvocation
+		readonly run: RunRow
+		readonly app: AppRow
+		readonly appEnv: AppEnvRow
+		readonly registration: ProviderRegistration
+		readonly sandbox: DevBootstrapSandbox | null
+		readonly sourceBinding?: ProviderSourceBinding
+		readonly detail: SourceDescriptorMismatchDetail
+		readonly resolve: (at: { readonly registration: ProviderRegistration; readonly commitSha: string }) => Promise<ProviderSourceResolution>
+		readonly log: (line: string) => void
+	},
+): Promise<
+	{ readonly registration: ProviderRegistration; readonly resolution: ProviderSourceResolution; readonly store: () => Promise<void> } | null
+> {
+	const withSourceDescriptor = deps.provider.withSourceDescriptor
+	// A dev sandbox shares its environment's registration with every other workspace, and a workspace branch reaches an
+	// environment's registration only once it is merged into a ref outside the workspaces.
+	if (withSourceDescriptor === undefined || input.sandbox !== null || isWorkspaceRef(input.run.ref)) return null
+	const commits = deps.commits
+	if (commits === undefined) throw new Error('no commit source is configured to read the build descriptor')
+	const { detail } = input
+	const commitSha = immutableGitObjectId(detail.commitSha, 'descriptor commit')
+	const signal = input.invocation.work.signal
+	const files = await commits.open({
+		repoUrl: input.app.repo_url,
+		commitSha,
+		wanted: (path) => path === detail.path,
+		...(input.sourceBinding === undefined ? {} : { sourceBinding: input.sourceBinding }),
+		signal,
+	})
+	const contents = await files.read(detail.path, SOURCE_DESCRIPTOR_READ_LIMIT)
+	const coordinates = `${input.appEnv.app_id}/${input.appEnv.env}`
+	let artifact: ProviderEnvelope | null
+	try {
+		artifact = await withSourceDescriptor({ environment: input.registration.environment, path: detail.path, contents })
+	} catch (error) {
+		signal.throwIfAborted()
+		const reason = error instanceof Error ? error.message : 'refused'
+		throw new Error(`${detail.path} at commit ${commitSha} cannot be registered for ${coordinates}, so nothing was built: ${reason}`)
+	}
+	if (artifact === null) return null
+	// At the commit the descriptor was read at, whatever the requested ref names by now.
+	const registration: ProviderRegistration = {
+		app: providerAppAtCommit(input.registration.app, commitSha),
+		environment: { ...input.registration.environment, artifact },
+	}
+	const resolution = await input.resolve({ registration, commitSha })
+	const artifactJson = JSON.stringify(artifact)
+	const store = async (): Promise<void> => {
+		await input.invocation.boundary()
+		const stored = await deps.repositories.registry.replaceAppEnvArtifactForRun(
+			input.run.id,
+			input.appEnv.provider_artifact_json,
+			artifactJson,
+			input.invocation.lease.fence(),
+		)
+		if (stored === null) {
+			await input.invocation.boundary()
+			throw new Error(`the registration of ${coordinates} changed while this run registered the ${detail.path} of its commit; deploy again`)
+		}
+		input.log(
+			`registration: ${coordinates} now builds with the ${detail.path} of commit ${commitSha} (sha256 ${detail.actualSha256}, was ${detail.expectedSha256})`,
+		)
+	}
+	return { registration, resolution, store }
+}
+
 /**
  * What an operator does when the descriptor at the deployed commit is not the one the environment's manifest was built
- * from. Deploying again alone fails the same way, and either side can be the newer one: a manifest built from a working
+ * from, and the run did not re-register it (`reregisterSourceDescriptor`). Deploying again alone fails the same way, and either side can be the newer one: a manifest built from a working
  * tree that was not pushed, or a descriptor changed after the manifest was built.
  *
  * Only a provider whose source port checks a descriptor throws `SourceDescriptorMismatch`, and today that is Zerops

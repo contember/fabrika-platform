@@ -2,7 +2,13 @@ import { type DeployLocks, type SqlDatabase, SqlDeployLocks, type SqlStatement }
 import type { ProviderSourceBinding } from '@fabrika/provider-contract'
 import { type LeaseFence, namespaceLeaseKey, runLeaseKey } from '../lease'
 import { WORKSPACE_REF_PREFIX } from '../ref-match'
-import { appCoordinateLockStatements, appRowLockStatement, coordinateLockStatements, defaultProtected } from './coordinate-lock'
+import {
+	appCoordinateLockStatements,
+	appRowLockStatement,
+	coordinateLockStatements,
+	defaultProtected,
+	runCoordinateLockStatements,
+} from './coordinate-lock'
 import {
 	AppEnvChangedError,
 	type AppEnvExpectation,
@@ -942,6 +948,32 @@ export class ControlRegistryRepository {
 					AND NOT EXISTS (SELECT 1 FROM runs WHERE runs.app_id = app_envs.app_id AND runs.env = app_envs.env AND runs.status = 'running')
 					AND (? = 0 OR authoring = 0)
 				RETURNING *`).bind(value ? 1 : 0, appId, env, key, fence.holder, fence.nowMs, value ? 1 : 0),
+		])
+		return results[leading.length]?.results[0] ?? null
+	}
+
+	/**
+	 * Replace the artifact of the environment a deploy run deploys, from inside that run (ADR-0043): only while the run
+	 * holds its lease and runs uncancelled, and only while the stored artifact is still the one it read. Not at a
+	 * generation: the run's own publication advances that. Null when one of those no longer holds.
+	 */
+	async replaceAppEnvArtifactForRun(runId: string, expectedArtifactJson: string, artifactJson: string, fence: LeaseFence): Promise<AppEnvRow | null> {
+		const leading = [
+			this.d1.prepare(`UPDATE deploy_locks SET holder = holder
+				WHERE lock_key = (SELECT app_id || ':' || env FROM runs WHERE id = ?)
+					AND holder = ? AND expires_at > ?`).bind(runId, fence.holder, fence.nowMs),
+			...runCoordinateLockStatements(this.d1, runId),
+		]
+		const results = await this.d1.batch<AppEnvRow>([
+			...leading,
+			this.d1.prepare(`UPDATE app_envs SET provider_artifact_json = ?, generation = generation + 1
+				WHERE provider_artifact_json = ?
+					AND EXISTS (SELECT 1 FROM runs
+						WHERE runs.id = ? AND runs.app_id = app_envs.app_id AND runs.env = app_envs.env
+							AND runs.status = 'running' AND runs.cancel_requested_at IS NULL)
+					AND EXISTS (SELECT 1 FROM deploy_locks
+						WHERE lock_key = app_envs.app_id || ':' || app_envs.env AND holder = ? AND expires_at > ?)
+				RETURNING *`).bind(artifactJson, expectedArtifactJson, runId, fence.holder, fence.nowMs),
 		])
 		return results[leading.length]?.results[0] ?? null
 	}

@@ -32,6 +32,7 @@ import { MIGRATION_GUIDE } from '../approval/readers'
 import { type AccessSnapshot, approvedSnapshot, parseSnapshot, serializeSnapshot } from '../approval/snapshot'
 import { LIST_FAILED_CODE } from '../data-operations'
 import type { AppEnvRow, ControlRepositories, RunRow } from '../db'
+import { SourceDescriptorMismatch } from '../github/source/failure'
 import { acquireLease, type LeaseFence, runLeaseKey } from '../lease'
 import { type InstallationMail, NO_INSTALLATION_MAIL } from '../mail-transport'
 import { type MembershipKeyIssuer, VaultMembershipTransport } from '../membership-transport'
@@ -424,6 +425,39 @@ describe('approved access through the run lifecycle', () => {
 		expect(await published(w, 'prod')).toEqual({ runId: parked.runId, generation: 2 })
 		// The provider backs the database up before the version that runs the migration starts; the first deploy needed none.
 		expect(w.deploys.map((input) => input.backupBeforeMigrations)).toEqual([undefined, { migrations: ['0001_purge.sql'] }])
+	})
+
+	test("a parked run stores its commit's zerops.yaml only once a person approved it (ADR-0043)", async () => {
+		const w = world()
+		await seed(w)
+		expect((await deploy(w, 'prod')).status).toBe('succeeded')
+		const registeredDescriptor = (payload: unknown): unknown =>
+			typeof payload === 'object' && payload !== null && 'descriptor' in payload ? payload.descriptor : undefined
+		const withDescriptor = (base: RunDeps): RunDeps => ({
+			...base,
+			provider: {
+				...base.provider,
+				resolveSource: (input) => {
+					const committed = w.files['zerops.yaml']
+					if (registeredDescriptor(input.environment.artifact.payload) === committed) return Promise.resolve({ commitSha: COMMIT })
+					const detail = { path: 'zerops.yaml', commitSha: COMMIT, expectedSha256: 'e'.repeat(64), actualSha256: 'a'.repeat(64) }
+					return Promise.reject(new SourceDescriptorMismatch('resolve', detail))
+				},
+				withSourceDescriptor: (input) => Promise.resolve({ provider: 'harbor', version: 1, payload: { descriptor: input.contents } }),
+			},
+		})
+		const edited = JSON.stringify({ provider: 'harbor', version: 1, payload: { descriptor: 'build: [bun run build]' } })
+
+		w.files = { ...DELETES_NOTES, 'zerops.yaml': 'build: [bun run build]' }
+		const parked = uuidv7()
+		await w.db.runs.createRun({ id: parked, appId: 'notes', env: 'prod', ref: 'refs/heads/main', trigger: 'manual', actor: 'user:test' })
+		expect((await executeDeploy(withDescriptor(deps(w)), { runId: parked })).status).toBe('awaiting_approval')
+		expect((await w.db.registry.getAppEnv('notes', 'prod'))?.provider_artifact_json).toBe(HARBOR_ARTIFACT)
+
+		await approve(w, parked)
+		expect((await executeDeploy(withDescriptor(deps(w)), { runId: parked })).status).toBe('succeeded')
+		expect((await w.db.registry.getAppEnv('notes', 'prod'))?.provider_artifact_json).toBe(edited)
+		expect(w.deploys.at(-1)?.environment.artifact).toEqual(JSON.parse(edited))
 	})
 
 	test('a migration that deletes data is backed up on every deploy until a version that holds it succeeds', async () => {

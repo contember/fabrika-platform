@@ -95,6 +95,9 @@ bun test
 - **No application may reference a `superUserPassword` variable, of any host** (`platformOnlyServiceReference`,
   `src/service-references.ts`, ADR-0017). The superuser is the provisioning credential, in the same container
   environment as application code. The same three paths refuse it, and so does the source descriptor's executed setup.
+- **A deploy re-registers a contract application's changed `zerops.yaml` (ADR-0043)** through `withSourceDescriptor`
+  (`src/control.ts`): the stored manifest with the commit's descriptor, through `parseFabrikaManifest` and nothing
+  else. It answers null for an application without a contract, whose build also runs `assertNoAuthoredPlainCredential`.
 - **An application service cannot expose itself or choose its own build (ADR-0043), with no approval
   path.** `REFUSED_APPLICATION_SERVICE_FIELDS` (`src/manifest.ts`) refuses an `objectStoragePolicy` other
   than `private`, any `objectStorageRawPolicy`, `buildFromGit`, `zeropsYaml`, `mount` or `startWithoutCode`, and an

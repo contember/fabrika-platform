@@ -351,8 +351,11 @@ service pipeline and polls its app-version; once the version is ACTIVE, Control 
 the IAM schema, as it does after a deploy on any provider.
 
 Control delivers the repository itself. Before the Operations release context
-exists, control resolves the requested ref and fails the run when the
-`zerops.yaml` digest at the resolved commit differs from the registered artifact.
+exists, control resolves the requested ref. When the `zerops.yaml` digest at the
+resolved commit differs from the registered artifact, a contract application's
+run deploys with the commit's file and registers it once its publication passed,
+or fails naming the key the registration refuses; any other run fails
+([ADR-0043](../decisions/0043-validate-and-render-one-zerops-descriptor-meaning.md)).
 The deploy then runs `apply-import → verify-exposure → write-service-env →
 raise-start-memory → size-database → reserve-version → upload-source → trigger-build → await-version`
 (`packages/provider-zerops/src/plan.ts`). `raise-start-memory` raises the deploy service's minimum

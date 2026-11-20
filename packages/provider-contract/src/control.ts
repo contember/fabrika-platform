@@ -132,6 +132,13 @@ export interface ProviderSourceResolutionInput {
 	readonly signal: AbortSignal
 }
 
+/** The build descriptor of a deploy's commit: its repository path and its text. */
+export interface ProviderSourceDescriptorInput {
+	readonly environment: ProviderEnvironment
+	readonly path: string
+	readonly contents: string
+}
+
 /** The exact source revision a provider resolved before starting deploy work. */
 export interface ProviderSourceResolution {
 	readonly commitSha: string
@@ -673,6 +680,13 @@ export interface ControlProvider {
 	/** Absent means core stores the registration as submitted. */
 	normalizeRegistration?(input: ProviderRegistrationInput): ProviderRegistration
 	resolveSource?(input: ProviderSourceResolutionInput): Promise<ProviderSourceResolution>
+	/**
+	 * The environment's artifact with the build descriptor a deploy's commit carries, validated as a registration is; it
+	 * throws a refusal that names the refused key. Control calls it from a deploy run whose commit holds a descriptor the
+	 * registered artifact does not, deploys with the result, and stores it once the run's publication passed (ADR-0043).
+	 * Null when the provider does not re-register this artifact from a commit; absent means it re-registers none.
+	 */
+	withSourceDescriptor?(input: ProviderSourceDescriptorInput): Promise<ProviderEnvelope | null>
 	/**
 	 * Mutation-free check of a candidate's compatibility with its placement. Control calls it before publishing the
 	 * snapshot, under the namespace lease, on every publication attempt. The candidate is not yet approved access.

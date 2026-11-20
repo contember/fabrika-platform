@@ -13,6 +13,7 @@ import type {
 	ProviderRegistration,
 	ProviderRegistrationInput,
 	ProviderSourceBinding,
+	ProviderSourceDescriptorInput,
 	ProviderSourceResolution,
 	ProviderSourceResolutionInput,
 } from '@fabrika/provider-contract'
@@ -32,8 +33,10 @@ import { createdServices, type ExposureAlerter, isObjectStorageType } from './ex
 import { assertAuthoredManagedInputs, assertAuthoredManagedName, assertNoFrameworkReference } from './managed-env'
 import {
 	assertFabrikaManifestCoordinates,
+	createZeropsArtifactSourceDescriptor,
 	type FabrikaManifest,
 	manifestServiceHostnames,
+	parseFabrikaManifest,
 	renderFabrikaImportYaml,
 	renderFabrikaProvisioningYaml,
 	verifyZeropsArtifactSourceDescriptor,
@@ -320,6 +323,23 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 		return { commitSha: result.commitSha }
 	}
 
+	/**
+	 * The artifact with the commit's `zerops.yaml`, through the parse a registration's decode runs (ADR-0043). Only a
+	 * contract application's: `fabrika app build` checks the run section of any other for plain credentials, with the
+	 * `notSecret` list of its config, which the stored manifest does not carry.
+	 */
+	const withSourceDescriptor = async (input: ProviderSourceDescriptorInput): Promise<ProviderEnvelope | null> => {
+		const artifact = artifactFor(input.environment)
+		if (artifact.target.contract === undefined) return null
+		if (input.path !== artifact.target.sourceDescriptor.path) {
+			throw new Error(`zerops: the build descriptor is ${artifact.target.sourceDescriptor.path}, not ${input.path}`)
+		}
+		const sourceDescriptor = await createZeropsArtifactSourceDescriptor(input.contents)
+		const candidate = { ...artifact, target: { ...artifact.target, sourceDescriptor } }
+		const manifest = parseFabrikaManifest(zeropsArtifactCodec.encode(candidate), { appId: input.environment.appId, env: input.environment.env })
+		return envelope(zeropsArtifactCodec, manifest)
+	}
+
 	/** The namespace's sandbox host, which runs the workspace sandboxes of its dev environment; null until it is created. */
 	const sandboxHostOf = (environment: ProviderEnvironment): ZeropsNamespaceSandboxHost | null => {
 		const { target, namespaceTarget } = decodeEnvironment(environment)
@@ -395,6 +415,7 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 			}
 		},
 		resolveSource,
+		withSourceDescriptor,
 		validateAccess: ({ environment, access }) => {
 			const placement = resolvedEnvironment(environment, { requireReady: true })
 			assertNamespaceProxyReads(placement.namespace.id, access, placement.namespaceTarget.proxySource, options.namespaces)
