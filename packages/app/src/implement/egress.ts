@@ -128,13 +128,14 @@ function urlHost(value: string): string | null {
  * requests are the platform's, not the site's.
  */
 export function platformFacility<T extends object>(facility: T): T {
-	return new Proxy(facility, {
-		get(target, property) {
-			const value: unknown = Reflect.get(target, property, target)
+	// The target is an unfrozen copy: a Proxy must answer a frozen property with its own value, never with a wrapper.
+	return new Proxy({ ...facility }, {
+		get(_copy, property) {
+			const value: unknown = Reflect.get(facility, property, facility)
 			if (typeof value !== 'function') {
 				return value
 			}
-			return (...args: unknown[]): unknown => scope.exit(() => Reflect.apply(value, target, args))
+			return (...args: unknown[]): unknown => scope.exit(() => Reflect.apply(value, facility, args))
 		},
 	})
 }

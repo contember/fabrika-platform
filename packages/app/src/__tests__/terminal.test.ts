@@ -4,6 +4,7 @@
 
 import { defineApp, defineVocabulary } from '@fabrika/app/contract'
 import { BootError, serve } from '@fabrika/app/implement'
+import { testKit } from '@fabrika/app/testing'
 import { appSchemaSchema } from '@fabrika/auth'
 import {
 	type AssertIdentityInput,
@@ -246,6 +247,30 @@ describe('ctx.terminals', () => {
 	test('a contract that declares a terminal does not boot without an IAM transport for it', () => {
 		expect(() => bootApp(app)).toThrow(BootError)
 		expect(() => bootApp(app)).toThrow(/declares a terminal, and the runtime adapter supplies no IAM transport/)
+	})
+
+	test('a frozen IAM transport is asked like any other', async () => {
+		const credential = await token('user', [grant('attendance.record')])
+		const sent = await send(bootApp(app, { terminals: Object.freeze(fakeTerminals().rpc) }), '/api/kiosk.identify', {
+			token: credential,
+			body: { id: 'ident-1', principalId: 'person-7' },
+		})
+		expect(resultOf(sent)).toEqual({
+			terminal: 'Entrance',
+			completionUrl: 'https://iam.notes.test/auth/terminals/complete?identification=i1',
+			refused: null,
+		})
+	})
+
+	test("the test kit's IAM answers that no identification is open", async () => {
+		const kit = testKit(app)
+		const clerk = kit.testCaller([{ role: 'clerk' }])
+		const response = await kit.browser(clerk)('/api/kiosk.identify', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ id: 'ident-1', principalId: 'person-7' }),
+		})
+		expect(await response.json()).toEqual({ result: { terminal: null, completionUrl: null, refused: 'not_found' } })
 	})
 
 	test('maps every answer without a runtime: the reasons a handler cannot change are server faults', async () => {
