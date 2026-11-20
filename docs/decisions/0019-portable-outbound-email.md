@@ -350,7 +350,7 @@ with 404. Its senders reach it over the platform transport
   reports itself not idempotent: an unknown outcome over it needs a person, and a repeated key answers
   `idempotency_conflict` without saying whether the content matched. It writes no unsubscribe header (Brevo's `headers`
   take no standard one), so it sends no broadcast mail. It is checked only against a stubbed `fetch`
-  ([backlog 289](../backlog/289-verify-the-brevo-email-adapter-on-a-live-account.md)). A capability that states how long a
+  ([backlog 290](../backlog/290-verify-the-brevo-email-adapter-on-a-live-account.md)). A capability that states how long a
   transport keeps a key, so that a retry inside the window may go, was not added for one provider.
 - Every adapter sends one message per call (`maxBatch: 1`); batches are
   [backlog 186](../backlog/186-send-email-in-batches.md).

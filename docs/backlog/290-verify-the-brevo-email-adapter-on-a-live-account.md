@@ -1,10 +1,10 @@
 ---
-id: 289
+id: 290
 title: Verify the Brevo email adapter on a live account
 blocked-by: []
 ---
 
-# 289 — Verify the Brevo email adapter on a live account
+# 290 — Verify the Brevo email adapter on a live account
 
 **Summary.** The Brevo adapter follows Brevo's transactional email API reference and its idempotency guide (November
 2026) and passes the conformance kit against a stubbed `fetch` only. Confirm its unverified points on a live account

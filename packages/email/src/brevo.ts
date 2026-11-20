@@ -1,5 +1,5 @@
 // Brevo's transactional email API (https://developers.brevo.com/reference/sendtransacemail), built from its
-// documentation in November 2026 and checked only against a stubbed fetch (backlog 289). A 201 carries the message id.
+// documentation in November 2026 and checked only against a stubbed fetch (backlog 290). A 201 carries the message id.
 // Brevo dedupes a repeated `idempotencyKey` for 30 minutes only, while a relay or an outbox retries for hours, so the
 // adapter sends the key but does not report itself idempotent: an unknown outcome over Brevo waits for a person.
 
@@ -19,7 +19,7 @@ const brevoErrorSchema = z.object({ code: z.string() })
 const BREVO_MAX_NAME_LENGTH = 70
 /**
  * Brevo bounds a transactional message at 20 MB with its attachments base64; 10 MiB of bytes leaves room for the
- * bodies. Its help center also mentions 4 MB per file, which is not enforced here (backlog 289).
+ * bodies. Its help center also mentions 4 MB per file, which is not enforced here (backlog 290).
  */
 const BREVO_MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
 /**

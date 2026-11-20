@@ -128,7 +128,7 @@ conformance kit against a stubbed `fetch`.
 | provider        | idempotent | confirmation | unsubscribe | attachments | broadcast                            | checked against                                                                                                                             |
 | --------------- | ---------- | ------------ | ----------- | ----------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
 | `ahasend`       | yes        | `sync`       | yes         | 12 MiB      | from its Marketing domain, unchecked | live, 2026-10-22                                                                                                                            |
-| `brevo`         | no         | `sync`       | no          | 10 MiB      | no                                   | stubbed ([backlog 289](../backlog/289-verify-the-brevo-email-adapter-on-a-live-account.md))                                                 |
+| `brevo`         | no         | `sync`       | no          | 10 MiB      | no                                   | stubbed ([backlog 290](../backlog/290-verify-the-brevo-email-adapter-on-a-live-account.md))                                                 |
 | `cloudflare`    | no         | `sync`       | yes         | 3 MiB       | no                                   | accepted answer live, 2026-10-25; refusals stubbed ([backlog 241](../backlog/241-verify-the-cloudflare-email-adapter-on-a-live-account.md)) |
 | `lettermint`    | yes        | `sync`       | yes         | 15 MiB      | its broadcast route, unchecked       | live, 2026-10-22                                                                                                                            |
 | `postmark`      | no         | `sync`       | yes         | 10 MiB      | its broadcast stream                 | live, 2026-10-22                                                                                                                            |
@@ -295,7 +295,7 @@ is `quota_exceeded`; `unauthorized`, `Authentication failed`, `api-key not found
 that limits its API keys to authorised IP addresses refuses a request from any other with a 401: Workers and Zerops send
 from addresses that change, so turn the restriction off for the key's account, or the mail fails
 `provider_unauthorized`. Not checked live
-([backlog 289](../backlog/289-verify-the-brevo-email-adapter-on-a-live-account.md)).
+([backlog 290](../backlog/290-verify-the-brevo-email-adapter-on-a-live-account.md)).
 
 ## Cloudflare adapter
 
