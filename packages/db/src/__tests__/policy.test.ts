@@ -319,6 +319,7 @@ describe('an application table', () => {
 		expect(model?.chain).toEqual([])
 		expect(model?.actions).toEqual({
 			read: ['notes.read'],
+			readAny: false,
 			insert: ['notes.admin'],
 			update: ['notes.admin'],
 			delete: ['notes.admin'],
@@ -343,6 +344,40 @@ describe('an application table', () => {
 			'settings: id is stamped by the layer; remove it from insert and update',
 		)
 		expect(() => withSettings({ ...settings, columns: { id: { read: 'notes.admin' } } })).toThrow('settings: the key id takes no action of its own')
+	})
+
+	test("is read with 'any': no read action of its own, its writes keep theirs, and the artifact says 'any'", () => {
+		const anyRead = { ...settings, actions: { ...settings.actions, read: 'any' } }
+		const defined = withSettings(anyRead)
+		expect(modelOf(tableModels(defined), 'settings')?.actions).toEqual({
+			read: [],
+			readAny: true,
+			insert: ['notes.admin'],
+			update: ['notes.admin'],
+			delete: ['notes.admin'],
+			appRead: [],
+			appCount: [],
+		})
+		const artifact = tablePolicies(defined)['settings']
+		expect(artifact?.actions.read).toBe('any')
+	})
+
+	test("refuses 'any' for every other operation and every other kind of table", () => {
+		expect(() => withSettings({ ...settings, actions: { ...settings.actions, insert: 'any' } })).toThrow(PolicyError)
+		expect(() => define(columns, { notes: { ...notes, actions: { ...notes.actions, read: 'any' } }, note_comments: comments, countries })).toThrow(
+			"notes: actions.read 'any' is for an application table; a dimension, child or reference table names its read actions",
+		)
+		expect(() => define(columns, { notes, note_comments: comments, countries: { ...countries, actions: { read: 'any' } } })).toThrow(
+			"countries: actions.read 'any' is for an application table",
+		)
+		expect(() => withSettings({ ...settings, actions: { ...settings.actions, read: ['any'] } })).toThrow(PolicyError)
+	})
+
+	test("refuses a vocabulary that declares the action 'any'", () => {
+		const declaring = { ...vocabulary, actions: { ...actions, any: 'Anything' } }
+		expect(() => readTables(listOf(columns, keys), { notes, note_comments: comments, countries }, declaring)).toThrow(
+			"the vocabulary may not declare the action 'any'",
+		)
 	})
 })
 

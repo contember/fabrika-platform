@@ -412,12 +412,12 @@ export class AppCapability<A extends string> implements AppCapabilityType<A> {
 	readonly #frame: RequestFrame
 	readonly #issuer: object
 
-	constructor(token: typeof MINT, issuer: object, frame: RequestFrame, action: A, principal: string) {
+	constructor(token: typeof MINT, issuer: object, frame: RequestFrame, action: A, principal: string, isPublic: boolean) {
 		if (token !== MINT) {
 			throw new CapabilityRefusedError('not_minted', 'an app capability is minted by the framework only; declare access: { action, app: true }')
 		}
 		this.#action = action
-		this.#grant = freeze({ kind: 'app', action, principal })
+		this.#grant = freeze({ kind: 'app', action, principal, public: isPublic })
 		this.#frame = frame
 		this.#issuer = issuer
 	}
@@ -522,6 +522,8 @@ export interface CapabilityMint {
 		revealing?: readonly ContainerGrant[],
 	): Within<D, A>
 	app<A extends string>(frame: RequestFrame, action: A, principal: string): AppCapability<A>
+	/** A public procedure's workload action: an `app` capability that never reads a table read with `'any'`. */
+	publicApp<A extends string>(frame: RequestFrame, action: A, principal: string): AppCapability<A>
 }
 
 /** A mint and the one authority that accepts what it mints. */
@@ -565,7 +567,10 @@ export function createCapabilityIssuer(): CapabilityIssuer {
 			return new Within(MINT, issuer, frame, dimension, action, principal, values, containers, contained, relations, revealing)
 		},
 		app<A extends string>(frame: RequestFrame, action: A, principal: string): AppCapability<A> {
-			return new AppCapability(MINT, issuer, frame, action, principal)
+			return new AppCapability(MINT, issuer, frame, action, principal, false)
+		},
+		publicApp<A extends string>(frame: RequestFrame, action: A, principal: string): AppCapability<A> {
+			return new AppCapability(MINT, issuer, frame, action, principal, true)
 		},
 	})
 	const authority: CapabilityAuthority = freeze({

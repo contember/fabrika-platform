@@ -93,6 +93,12 @@ where the capability's action is its read action or one of `actions.appRead`, wi
 `actions.appCount` (`appRecordPredicate`, `checkRecordReach`, `appRecordRows`): a group or a minimum is a row's value.
 A scoped site's `ctx.db.app` (a `Ref` or a `Within`) lists every application table read-only, and reads one (every
 row, its read action's columns) only where the capability's action is its read action (`scopedApplicationRead`).
+An application table may be read with `'any'` (`READ_ANY`, `ActionModel.readAny`, `read` empty): every `app` grant reads
+it, whatever its action, but a public procedure's (`AppGrant.public`, minted by `publicApp`), which `readsAny` refuses;
+a scoped site's `scopedApplicationRead` refuses it too. The read is unconditioned (`appReadPredicate`, `appGetScope`):
+a `when` there narrows only its action's writes. A column with its own read action keeps it (`visibleFor`). The policy
+parse refuses `'any'` on any other operation and kind of table, and a vocabulary that declares an action named `any`;
+the types read it as `IndexedTable.readsAny`, with `actions.read` `never`.
 
 `@fabrika/db/testing` is the database half of the test kits:
 `testDatabase` migrates a fresh `app_test_<hex>` schema with its own role family through `@fabrika/platform-node`'s

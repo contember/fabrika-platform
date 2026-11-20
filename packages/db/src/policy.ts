@@ -1,3 +1,4 @@
+import { READ_ANY } from '@fabrika/auth-core'
 import type { Insertable, Selectable, SelectType, Updateable } from 'kysely'
 import {
 	freeze,
@@ -58,11 +59,18 @@ export interface ApplicationScope<Col extends string> {
 /** One action, or a list of them: a table that staff and a public procedure both read names both actions. */
 export type TableAction<A extends string> = A | readonly A[]
 
+export { READ_ANY }
+
 export interface TableActions<A extends string> {
 	readonly read: TableAction<A>
 	readonly insert?: TableAction<A>
 	readonly update?: TableAction<A>
 	readonly delete?: TableAction<A>
+}
+
+/** An application table's actions: its read may be `'any'` instead of its actions (`READ_ANY`). */
+export interface ApplicationActions<A extends string> extends Omit<TableActions<A>, 'read'> {
+	readonly read: TableAction<A> | typeof READ_ANY
 }
 
 /**
@@ -223,7 +231,9 @@ export interface ChildPolicy<Table extends string, Col extends string, A extends
 }
 
 /** An application table: written like a dimension table, by an `app` endpoint whose action is the operation's. */
-export interface ApplicationPolicy<Col extends string, A extends string, V extends Col = Col> extends WritablePolicy<Col, A, V> {
+export interface ApplicationPolicy<Col extends string, A extends string, V extends Col = Col>
+	extends WritablePolicy<Col, A, V, ApplicationActions<A>>
+{
 	readonly scope: ApplicationScope<Col>
 }
 
@@ -287,9 +297,17 @@ export type ScopeModel =
 	| { readonly mode: 'reference'; readonly reason: string }
 	| { readonly mode: 'app'; readonly reason: string; readonly key: string }
 
-/** Each operation's actions: any one of them allows it. `read` names at least one; an empty list allows no operation. */
+/**
+ * Each operation's actions: any one of them allows it. `read` names at least one, unless `readAny`; an empty list
+ * allows no operation.
+ */
 export interface ActionModel {
 	readonly read: readonly string[]
+	/**
+	 * An application table read with `'any'`: every `app` endpoint, job and webhook reads it, whatever its action; never a
+	 * public procedure or a scoped site. `read` is empty then, and a `when` narrows only the writes of its action.
+	 */
+	readonly readAny: boolean
 	readonly insert: readonly string[]
 	readonly update: readonly string[]
 	readonly delete: readonly string[]
@@ -591,6 +609,9 @@ function parseVocabulary(input: unknown): VocabularyModel {
 		}
 	}
 	const actions = ownKeys(plainRecord(ownEntry(vocabulary, 'actions'), 'the vocabulary actions'))
+	if (includes(actions, READ_ANY)) {
+		throw new PolicyError(`the vocabulary may not declare the action '${READ_ANY}': a table's actions.read says '${READ_ANY}' for every action`)
+	}
 	const relationsInput = ownEntry(vocabulary, 'relations')
 	const relations: Record<string, string> = {}
 	if (relationsInput !== undefined) {
@@ -1201,7 +1222,13 @@ function parseActions(
 		}
 		return distinctActions(table, value, `actions.${field}`, action)
 	}
-	const read = operation('read')
+	const readAny = ownEntry(actions, 'read') === READ_ANY
+	if (readAny && !hasOwn(scope, 'app')) {
+		throw new PolicyError(
+			`${table}: actions.read 'any' is for an application table; a dimension, child or reference table names its read actions`,
+		)
+	}
+	const read = readAny ? freeze([]) : operation('read')
 	const records = hasOwn(scope, 'dimension') || hasOwn(scope, 'child')
 	const kind = hasOwn(scope, 'app') ? 'an application table' : 'a reference table'
 	const reach = (field: 'appRead' | 'appCount'): readonly string[] => {
@@ -1232,7 +1259,7 @@ function parseActions(
 			throw new PolicyError(`${table}: actions.appRead and actions.appCount both name ${name}`)
 		}
 	}
-	return freeze({ read, insert: operation('insert'), update: operation('update'), delete: operation('delete'), appRead, appCount })
+	return freeze({ read, readAny, insert: operation('insert'), update: operation('update'), delete: operation('delete'), appRead, appCount })
 }
 
 /** A plain array of distinct actions of the vocabulary, at least one. */
@@ -2898,11 +2925,20 @@ type ScopeOf<P, T> = PolicyOf<P, T> extends { readonly scope: infer S } ? S : ne
 
 export type Operation = 'read' | 'insert' | 'update' | 'delete'
 
-/** The action, or the union of the actions, of operation `Op` on table `T`; `never` when the policy names none. */
+/**
+ * The action, or the union of the actions, of operation `Op` on table `T`; `never` when the policy names none, and for
+ * the read of a table read with `'any'` (`ReadsAny`).
+ */
 export type ActionOf<P, T, Op extends Operation> = PolicyOf<P, T> extends { readonly actions: infer Acts }
-	? Acts extends { readonly [K in Op]: infer A } ? A extends string ? A : A extends readonly (infer L extends string)[] ? L : never
+	? Acts extends { readonly [K in Op]: infer A } ? A extends typeof READ_ANY ? never
+		: A extends string ? A
+		: A extends readonly (infer L extends string)[] ? L
+		: never
 	: never
 	: never
+
+/** Whether table `T` is read with `'any'`: by every `app` endpoint, job and webhook, whatever its action. */
+export type ReadsAny<P, T> = PolicyOf<P, T> extends { readonly actions: { readonly read: typeof READ_ANY } } ? true : false
 
 export type DimensionOf<P, T> = ScopeOf<P, T> extends { readonly dimension: infer D extends string } ? D : never
 export type ContainerOf<P, T> = ScopeOf<P, T> extends { readonly in: { readonly dimension: infer D extends string } } ? D : never

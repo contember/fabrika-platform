@@ -849,6 +849,12 @@ export interface CspSource {
  */
 export type TableActionArtifact = string | readonly string[]
 
+/**
+ * An application table's `actions.read` that every `app` endpoint, job and webhook reads with, whatever its action; never
+ * a public procedure, a scoped site, a link or an export. No vocabulary may declare an action of this name.
+ */
+export const READ_ANY = 'any'
+
 export interface TablePolicyArtifact {
 	readonly scope: TableScope
 	/** An inbox's read action is `read`; it has no write action, because only its form appends. */

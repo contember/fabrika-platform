@@ -111,6 +111,8 @@ export interface AppGrant {
 	readonly kind: 'app'
 	readonly action: string
 	readonly principal: string
+	/** A public procedure's workload: it reaches only the tables that name its action, never one read with `'any'`. */
+	readonly public: boolean
 }
 
 /** A row a claim leased: the table, its key, and the containment it had then, column by column. */

@@ -4,6 +4,7 @@
 import type { ConditionPolicy } from './conditions'
 import type {
 	AccessPolicy,
+	ApplicationActions,
 	ColumnList,
 	ColumnPolicies,
 	ConfersPolicy,
@@ -218,7 +219,7 @@ type ReferenceViewPolicy<Col extends string, A extends string> = ReferencePolicy
 }
 
 /** An application table's scope: why its rows belong to no dimension; `key` defaults to `id`. */
-type AuthoredApplicationPolicy<Col extends string, A extends string, Ver extends Col> = WritableFields<Col, A, Ver> & {
+type AuthoredApplicationPolicy<Col extends string, A extends string, Ver extends Col> = WritableFields<Col, A, Ver, ApplicationActions<A>> & {
 	readonly scope: { readonly app: string } & KeyField<Col>
 }
 

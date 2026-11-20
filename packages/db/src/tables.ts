@@ -21,6 +21,7 @@ import {
 	accessTablesOf,
 	type MemberRevealModel,
 	modelOf,
+	READ_ANY,
 	type RelationSource,
 	type RevealModel,
 	type ScopeModel,
@@ -174,7 +175,7 @@ function artifactOf(model: TableModel): TablePolicyArtifact {
 	return {
 		scope: scopeOf(model.scope),
 		actions: {
-			read: actionArtifact(model.actions.read) ?? noReadAction(model.name),
+			read: model.actions.readAny ? READ_ANY : actionArtifact(model.actions.read) ?? noReadAction(model.name),
 			insert: actionArtifact(model.actions.insert),
 			update: actionArtifact(model.actions.update),
 			delete: actionArtifact(model.actions.delete),

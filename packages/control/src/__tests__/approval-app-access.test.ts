@@ -95,6 +95,28 @@ describe('application-wide data in the approval diff', () => {
 		})
 	})
 
+	test("an application table read with 'any' says who reads it, and a read list becoming 'any', or the way back, widens", () => {
+		const files = fixture()
+		const tables = files.get(TABLES) ?? ''
+		const LISTED = "actions: { read: 'audit.read', insert: 'candidates.export' }"
+		expect(tables).toContain(LISTED)
+		const any = new Map(files)
+		any.set(TABLES, tables.replace(LISTED, "actions: { read: 'any', insert: 'candidates.export' }"))
+		expect(classifyAccess(snapshot(null), snapshot(any)).changes).toContainEqual({
+			effect: 'widens',
+			line:
+				'New application table `exports` (the log of every export across all candidates), read with `any` (every app endpoint, job and webhook), inserted with `candidates.export`',
+		})
+		const widened = classifyAccess(snapshot(files), snapshot(any))
+		expect(widened.outcome).toBe('widening')
+		expect(widened.changes).toEqual([
+			{ effect: 'widens', line: 'Table `exports` is read with `any` (every app endpoint, job and webhook) instead of `audit.read`' },
+		])
+		expect(classifyAccess(snapshot(any), snapshot(files)).changes).toEqual([
+			{ effect: 'widens', line: 'Table `exports` is read with `audit.read` instead of `any` (every app endpoint, job and webhook)' },
+		])
+	})
+
 	test('an endpoint whose requirement becomes the app form widens, and so does the way back', () => {
 		const files = fixture()
 		const over = new Map(files)

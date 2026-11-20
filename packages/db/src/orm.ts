@@ -49,6 +49,7 @@ import {
 	aggregateRows,
 	type AggregateSpec,
 	answer,
+	appGetScope,
 	appKeyPredicate,
 	appKeyScope,
 	appListPredicate,
@@ -575,12 +576,20 @@ function scopedApplicationRows(context: TableContext, site: DataSite, run: Runne
 	})
 }
 
-/** An `app` capability whose action the application table names: it reads one row with the columns of its action. */
+/**
+ * An `app` capability whose action the application table names, or any but a public procedure's on a table read with
+ * `'any'`: it reads one row with the columns of its action.
+ */
 function namedApp(context: TableContext, capability: unknown): string {
 	const grant = runtimeOf(context.connection).capabilities.resolve(capability)
 	const table = context.model.name
 	if (grant.kind !== 'app') {
 		throw new CapabilityError('wrong_capability', `a read of ${table} here needs the capability of an app endpoint, got ${describeGrant(grant)}`)
+	}
+	if (context.model.actions.readAny) {
+		// Refuses a public procedure's grant, which reads no table read with 'any'.
+		appListPredicate(context, capability)
+		return grant.action
 	}
 	if (!namesAction(context.model, grant.action)) {
 		throw new CapabilityError(
@@ -612,7 +621,7 @@ function applicationRows(
 		? refused(site, 'read_only', 'getForUpdate locks the row, so it runs only in a mutation: declare the endpoint with r.mutation')
 		: bound(site, async (id: unknown) => {
 			const action = namedApp(context, capability)
-			const scope = appKeyScope(model, action, id)
+			const scope = appGetScope(model, action, id)
 			const node = lockedSelectNode(table, visibleFor(model, action), scope, model.dates)
 			const session = await run.read()
 			const rows = await session.run(node, { root: 'SelectQueryNode', table, joins: {}, scope, lock: 'update', subqueries: context.subqueries })
@@ -636,7 +645,7 @@ function applicationRows(
 		),
 		get: bound(site, async (id: unknown) => {
 			const action = namedApp(context, capability)
-			return selectOne(context, run, appKeyScope(model, action, id), visibleFor(model, action), action)
+			return selectOne(context, run, appGetScope(model, action, id), visibleFor(model, action), action)
 		}),
 		getForUpdate,
 		claim: claiming(parts, context, site, capability),

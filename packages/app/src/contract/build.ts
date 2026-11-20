@@ -56,6 +56,7 @@ import {
 	type ProcedureArtifact,
 	type ProcedureChallenge,
 	PUBLIC_EGRESS,
+	READ_ANY,
 	type RoleArtifact,
 	type SchemaShape,
 	type ScopeBinding,
@@ -2596,7 +2597,11 @@ class ArtifactBuilder {
 		for (const [name, table] of Object.entries(this.#tables)) {
 			const where = `table '${name}'`
 			const { read, insert, update, delete: remove, appRead = [], appCount = [] } = table.actions
-			for (const action of [read, insert, update, remove].flatMap(tableActions).concat(appRead, appCount)) {
+			const readAny = read === READ_ANY
+			if (readAny && table.scope.mode !== 'app') {
+				this.#problem(where, `is read with '${READ_ANY}', which only an application table is; name its read actions`)
+			}
+			for (const action of [readAny ? null : read, insert, update, remove].flatMap(tableActions).concat(appRead, appCount)) {
 				this.#knownAction(where, action)
 			}
 			const scope = table.scope
