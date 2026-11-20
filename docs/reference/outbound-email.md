@@ -283,14 +283,16 @@ content matched, so the outcome is unknown and a person decides.
 Capabilities: not idempotent, `sync`, and `maxAttachmentBytes` of 10 MiB: Brevo bounds a message at 20 MB with its
 attachments base64. Brevo takes no media type for an attachment and derives it from the file name, and it takes only
 the extensions its API reference lists (`BREVO_ATTACHMENT_EXTENSIONS`), so the adapter refuses any other file, and a
-sender name over Brevo's 70 characters, as `invalid_message` before the request. Brevo's `headers` take no standard
+message's sender name over Brevo's 70 characters, as `invalid_message` before the request. A configured sender name
+(`FABRIKA_EMAIL_FROM_NAME`, or the display name in `FABRIKA_EMAIL_FROM`) over 70 characters is refused earlier, as an
+invalid configuration when IAM, Control or an installer reads the transport. Brevo's `headers` take no standard
 header, so the adapter writes no `List-Unsubscribe` and has neither `listUnsubscribe` nor `broadcast`: it sends
 transactional mail only.
 
 A refusal carries a documented `code`, read only to classify it: a 402, `not_enough_credits` or `Insufficient credits`
 is `quota_exceeded`; `unauthorized`, `permission_denied` and `account_under_validation` are `provider_unauthorized`;
 every other answer by its status (401 and 403 `provider_unauthorized`, 429 `rate_limited`, 5xx
-`provider_unavailable`, any other 400 `provider_rejected`). An account that limits its API keys to authorised IP
+`provider_unavailable`, any other 4xx `provider_rejected`). An account that limits its API keys to authorised IP
 addresses refuses a request from any other with a 401: Workers and Zerops send from addresses that change, so turn the
 restriction off for the key's account, or the mail fails `provider_unauthorized`. Not checked live
 ([backlog 289](../backlog/289-verify-the-brevo-email-adapter-on-a-live-account.md)).

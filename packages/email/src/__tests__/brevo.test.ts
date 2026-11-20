@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { z } from 'zod'
 import { brevoEmailProvider, BrevoEmailSender, brevoHtmlOfText, brevoIdempotencyKey } from '../brevo.js'
+import { readEmailTransportConfig } from '../config.js'
 import { EmailDeliveryError, type EmailFetch, mayRetryDelivery } from '../email.js'
 
 const signal = new AbortController().signal
@@ -165,5 +166,16 @@ describe('BrevoEmailSender', () => {
 		expect(refused).toThrow('FABRIKA_EMAIL_BREVO_API_KEY is missing or invalid')
 		expect(refused).not.toThrow('private key')
 		expect(brevoEmailProvider.variables).toEqual([{ name: 'FABRIKA_EMAIL_BREVO_API_KEY', secret: true, required: true }])
+	})
+
+	test('an installation selects it by name, and its configuration is refused before any send', () => {
+		const registry = { brevo: brevoEmailProvider }
+		const env = { FABRIKA_EMAIL_PROVIDER: 'brevo', FABRIKA_EMAIL_FROM: 'auth@example.test', FABRIKA_EMAIL_BREVO_API_KEY: 'xkeysib-secret' }
+		expect(readEmailTransportConfig(env, registry)).toMatchObject({ kind: 'provider', provider: 'brevo' })
+		const refusal = (variables: Record<string, string>): unknown => readEmailTransportConfig({ ...env, ...variables }, registry)
+		expect(() => refusal({ FABRIKA_EMAIL_BREVO_API_KEY: '' })).toThrow('FABRIKA_EMAIL_BREVO_API_KEY is missing')
+		expect(() => refusal({ FABRIKA_EMAIL_FROM: '' })).toThrow('FABRIKA_EMAIL_FROM is missing')
+		expect(() => refusal({ FABRIKA_EMAIL_FROM_NAME: 'x'.repeat(71) })).toThrow('Brevo sender name is longer than 70 characters')
+		expect(() => refusal({ FABRIKA_EMAIL_FROM: `${'x'.repeat(71)} <auth@example.test>` })).toThrow('Brevo sender name is longer than 70 characters')
 	})
 })
