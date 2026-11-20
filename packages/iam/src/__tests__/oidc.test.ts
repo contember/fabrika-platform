@@ -209,8 +209,11 @@ describe('discovery', () => {
 
 	test.each([301, 302, 307, 308])('a %d from discovery is not followed, so a foreign document cannot pick the endpoints', async (status) => {
 		// Echoes the configured issuer, so the issuer check alone would accept it.
-		const idp = crossOriginRedirect(status, (request, issuer) =>
-			Response.json({ issuer, authorization_endpoint: `${request.url}/a`, token_endpoint: `${request.url}/t`, jwks_uri: `${request.url}/k` }))
+		const idp = crossOriginRedirect(
+			status,
+			(request, issuer) =>
+				Response.json({ issuer, authorization_endpoint: `${request.url}/a`, token_endpoint: `${request.url}/t`, jwks_uri: `${request.url}/k` }),
+		)
 		try {
 			const error = await new OidcClient({ ...CONFIG, issuer: idp.origin }).metadata().catch((reason: unknown) => reason)
 			expect(error instanceof Error && error.message).toStartWith(
