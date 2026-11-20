@@ -1,7 +1,7 @@
 export { type ApplicationTree, checkApplication, type CheckInput, readApplicationTree } from './check'
 export { type ApplicationDialect, applicationDialect } from './dialect'
 export { type Finding, formatFinding, RULE_IDS, type RuleId } from './finding'
-export { CONFIG_FILE, CONTRACT_FILE, GENERATED_ENTRY_FILE, MIGRATIONS_DIR, TABLES_FILE, ZEROPS_FILES } from './layout'
+export { CONFIG_FILE, CONTRACT_FILE, GENERATED_ENTRY_FILE, MIGRATIONS_DIR, TABLES_FILE } from './layout'
 export { readMigrationBase } from './migration-base'
 export { type PackedSet, type PackedTarball, readPackedSet } from './packed'
 export type { MigrationBase } from './rules/migration-history'

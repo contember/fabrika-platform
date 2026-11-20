@@ -28,6 +28,13 @@ export async function cmdAdvance(argv: string[]): Promise<number> {
 
 	const { state } = await resolvePhaseState(ctx.repoRoot, ctx.fabrikaDir, ctx.sessionId)
 	const phase = phaseById(state.current)
+	const next = PHASES[phaseIndex(phase.id) + 1]
+	if (next === undefined) {
+		console.error(
+			`[fabrika] ${phase.id} is the last phase; nothing follows it. Record each issue with \`fabrika builder build done <ID>\`; \`fabrika builder build status\` shows the board.`,
+		)
+		return 1
+	}
 	const problems: string[] = []
 
 	if (!producesSatisfied(ctx.repoRoot, phase)) {
@@ -89,14 +96,8 @@ export async function cmdAdvance(argv: string[]): Promise<number> {
 
 	recordApproval(ctx.repoRoot, phase.id, values.force, reviewedRevision)
 
-	const idx = phaseIndex(phase.id)
-	const next = idx + 1 < PHASES.length ? PHASES[idx + 1] : null
-	if (next) {
-		console.log(`OK: phase ${phase.number}/${PHASE_COUNT} (${phase.id}) satisfied.`)
-		console.log(`Next -> phase ${next.number}/${PHASE_COUNT} - ${next.title}. Run \`fabrika builder next\`.`)
-	} else {
-		console.log(`OK: all ${PHASE_COUNT} phases satisfied. Run \`fabrika builder build\`.`)
-	}
+	console.log(`OK: phase ${phase.number}/${PHASE_COUNT} (${phase.id}) satisfied.`)
+	console.log(`Next -> phase ${next.number}/${PHASE_COUNT} - ${next.title}. Run \`fabrika builder next\`.`)
 	return 0
 }
 

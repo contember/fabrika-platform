@@ -4,8 +4,8 @@ description: >
   Phase 7 (build) playbook. The MAIN Fabrika session reads this and drives the
   build: it does NOT hand-code the whole DAG — it fans out implementer
   subagents directly (one per issue, in isolated git worktrees), supervises them, gates
-  each on a green opice `bun test`, guards the frozen invariants, and escalates
-  blocked issues to a final review. The concrete work list is the induced issue
+  each on a green opice `bun test`, guards the frozen invariants, and reports
+  blocked issues to the human at the end. The concrete work list is the induced issue
   DAG, read live from `fabrika builder build status` / `.fabrika/issues/ISSUE-*.md` — this
   file is the METHOD and the files are the DATA.
 
@@ -160,7 +160,7 @@ fabrika builder build block <ISSUE-ID> --reason "…"            # escalate; con
 - Call `done` only after the invariant check (§5) as well: a green run of a
   hollow invariant is still not done.
 - On a genuinely stuck issue: `block` it with a precise reason, **keep going** on
-  independent issues, and collect all blocked issues for the final review. Don't
+  independent issues, and collect all blocked issues for the end. Don't
   let one blocked issue stall the DAG.
 - Keep the user oriented: narrate what you're fanning out, what's green, what's
   blocked. They steer by moving around the dashboard.
@@ -172,11 +172,9 @@ done and the rest is blocked):
 
 - run the **full** `bun test` once more in the integrated tree — all scenarios +
   invariants green together, not just per-worktree,
-- generate the build gate's view from the recorded checks and open it:
-  `fabrika builder build review && fabrika builder gate open build --view .fabrika/build/review.jsx`.
-  Do not hand-write it. Add to the conversation what the view cannot show:
-  what is needed to unblock each blocked issue, and any invariant you could
-  not satisfy honestly.
+- tell the human what is needed to unblock each blocked issue, and any
+  invariant you could not satisfy honestly. The build has no closing gate:
+  `build done` already ran each issue's check.
 
 ## Rules
 
@@ -187,4 +185,4 @@ done and the rest is blocked):
   block`. Never invent issue ordering.
 - **Reference, not templates; live sources, not memory.** Look up current APIs.
 - **Freeze intent: never weaken an invariant to go green.** Adversarially verify.
-- **Blocked ≠ stuck.** Escalate and continue; collect at the final review.
+- **Blocked ≠ stuck.** Escalate and continue; report them at the end.

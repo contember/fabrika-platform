@@ -1,9 +1,8 @@
-import { compileJsx } from '@fabrika/canvas-kernel/server'
 import { afterEach, expect, test } from 'bun:test'
 import { existsSync, readFileSync } from 'fs'
 import { dirname, join, resolve } from 'path'
 import { fileURLToPath } from 'url'
-import { type Fixture, makeFixture } from './helpers'
+import { approve, type Fixture, makeFixture } from './helpers'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const BIN = resolve(HERE, '../src/bin.ts')
@@ -181,6 +180,19 @@ test('advance blocks with a checklist when produces are missing', async () => {
 	expect(stderr).toContain('missing produce: .fabrika/intent/brief.md')
 })
 
+test('advance refuses the build, the last phase, and names what records its issues', async () => {
+	fx = makeFixture(true, { approvals: true })
+	for (const path of ['.fabrika/intent/brief.md', '.fabrika/intent/glossary.md', '.fabrika/principles/principles.md']) fx.write(path)
+	for (const path of ['.fabrika/architecture/flows/login.flow.md', '.fabrika/architecture/tech.md', 'tests/browser/login.test.ts']) fx.write(path)
+	fx.write('.fabrika/issues/ISSUE-001.md')
+	approve(fx.root, ['vision', 'flows', 'tech', 'skeletons'], true)
+
+	const { code, stderr } = await run(['advance', '--dir', fx.root])
+	expect(code).toBe(1)
+	expect(stderr).toContain('build is the last phase')
+	expect(stderr).toContain('fabrika builder build done <ID>')
+})
+
 test('next without init fails clearly', async () => {
 	fx = makeFixture(false) // not inited
 	const { code, stderr } = await run(['next', '--dir', fx.root])
@@ -249,16 +261,6 @@ test('build done runs the check itself, records its evidence, and refuses a red 
 	expect(Object.keys(board)).toEqual(['ISSUE-101'])
 	expect(board['ISSUE-101'].status).toBe('done')
 	expect(board['ISSUE-101'].evidence).toMatchObject({ command: 'bun test tests/browser/cart.test.ts', exitCode: 0, commit: null, dirty: false })
-
-	const review = await run(['build', 'review', '--dir', fx.root])
-	expect(review.code).toBe(0)
-	const view = readFileSync(join(fx.root, '.fabrika/build/review.jsx'), 'utf-8')
-	const text = view.replace(/\\u([0-9a-f]{4})/g, (_, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)))
-	expect(text).toContain('bun test tests/browser/cart.test.ts · exit 0')
-	expect(text).toContain('no recorded check')
-	expect(view).toContain(`<Choice id="verdict" label="Verdict" required options={['Approve', 'Request changes']} />`)
-	const compiled = await compileJsx(view, { tempDir: fx.root })
-	expect(compiled.ok).toBe(true)
 })
 
 test('build done refuses a red acceptance file, and --verify never replaces one', async () => {

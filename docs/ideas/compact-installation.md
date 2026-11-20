@@ -26,8 +26,8 @@ projects. Staging applications stay in an ordinary `cheap` namespace (ADR-0006).
   rejected: Control would rebuild the proxy in front of itself, and one bad entry would fail the rebuild that fronts IAM.
 - **The superuser (ADR-0017).** Today an application's `FABRIKA_APP_DATABASE_URL` is its database's superuser. In a shared
   service that reaches IAM. Control instead creates, per application, a role `prov_<id>` (`CREATEROLE`, no superuser) and a
-  database `app_<id>` it owns, and writes the existing variable pointing there. `provisionPostgresRoles` and
-  `createTestProvisioner` already accept a CREATEROLE caller (since v0.4.0), so the application side does not change.
+  database `app_<id>` it owns, and writes the existing variable pointing there. `provisionPostgresRoles` already
+  accepts a CREATEROLE caller (since v0.4.0), so the application side does not change.
   One database per application, not a schema in `db`, because advisory locks, schemas and `CREATE` are per database: a role
   in the platform database could hold IAM's public migration lock key (IAM migrates on every start, without a timeout) or
   shadow IAM's unqualified tables through a schema named `db` on the default `search_path`. `REVOKE CONNECT ON DATABASE db

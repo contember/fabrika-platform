@@ -41,6 +41,9 @@ calls it), and the checker no longer reports
 `generated-test-hash`, `endpoint-fixture` or `generated-test-import`. On Zerops the init commands run `fabrika db
 migrate` and `fabrika db codegen --verify` only. The application's own tests stay.
 
+`fabrika-check` prints the number of hints instead of listing them; `fabrika-check --hints` lists them as 0.8 did. A
+script that reads the hints from its output passes `--hints`. Refusals and the exit status do not change.
+
 On Postgres the runtime role reads a view but no longer writes or locks one. A `ctx.sql` `'write'` site that inserts,
 updates or deletes through a view, or locks one with `FOR UPDATE`/`FOR SHARE` (also a bare lock over a join that reads a
 view), fails with `permission denied for view …` once the pin is raised; the migrate still passes. Write the view's base

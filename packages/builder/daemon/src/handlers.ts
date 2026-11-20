@@ -1,4 +1,11 @@
-import { type AssertReadable, type CanvasScope, compileJsx, type SessionManager, watchSession } from '@fabrika/canvas-kernel/server'
+import {
+	type AssertReadable,
+	type CanvasScope,
+	compileJsx,
+	type RevisionInfo,
+	type SessionManager,
+	watchSession,
+} from '@fabrika/canvas-kernel/server'
 import { jsonResponse, type Route } from '@fabrika/daemon-kit'
 import { existsSync, readdirSync, readFileSync, statSync } from 'fs'
 import { basename, dirname, extname, join } from 'path'
@@ -52,6 +59,15 @@ function gateOracleFor(sm: SessionManager): GateOracle {
 			return { reviewed: false, verdict: 'none', revision: null }
 		},
 	}
+}
+
+/**
+ * The gate a reviewer can answer now: the latest revision's label while its feedback is not consumed. A gated phase's
+ * packet names its own gate; the build has none, and this is how a gate opened inside it (the design checkpoint) is answered.
+ */
+function openGate(revisions: readonly RevisionInfo[]): string | null {
+	const latest = revisions.at(-1)
+	return latest?.label && !latest.feedbackConsumed ? latest.label : null
 }
 
 interface CanvasSelection {
@@ -245,6 +261,7 @@ export function createHandlers(ctx: HandlerContext): Route[] {
 			const config = platform.storage.config(project)
 			return jsonResponse({
 				projectRoot: project.projectRoot,
+				gate: null,
 				currentRevision: 0,
 				revisions: [],
 				canvasFiles: [],
@@ -254,6 +271,7 @@ export function createHandlers(ctx: HandlerContext): Route[] {
 		}
 		return jsonResponse({
 			projectRoot: session.projectRoot,
+			gate: openGate(session.revisions),
 			currentRevision: session.currentRevision,
 			revisions: session.revisions,
 			canvasFiles: session.canvasFiles,

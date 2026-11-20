@@ -81,16 +81,6 @@ interface RuleCase {
 	readonly good: Readonly<Record<string, string>>
 }
 
-const ZEROPS_YAML = `zerops:
-  - setup: app
-    run:
-      start: bun fabrika/entry.generated.ts
-      crontab:
-        - timing: '0 3 * * *'
-          command: fabrika job run purgeDeleted
-          allContainers: false
-`
-
 const cases: readonly RuleCase[] = [
 	{
 		rule: 'parse-error',
@@ -821,25 +811,6 @@ const cases: readonly RuleCase[] = [
 		},
 	},
 	{
-		rule: 'crontab',
-		bad: {
-			...CLEAN_APPLICATION,
-			'zerops.yaml': `zerops:
-  - setup: app
-    run:
-      start: bun loop.ts & bun fabrika/entry.generated.ts
-      crontab:
-        - timing: '0 4 * * *'
-          command: fabrika job run purgeDeleted
-        - timing: '* * * * *'
-          command: bun scripts/cleanup.ts
-          allContainers: false
-`,
-		},
-		expected: ['zerops.yaml:4:1', 'zerops.yaml:7:1', 'zerops.yaml:7:1', 'zerops.yaml:9:1'],
-		good: { ...CLEAN_APPLICATION, 'zerops.yaml': ZEROPS_YAML },
-	},
-	{
 		rule: 'mock-module',
 		bad: {
 			'src/app.ts': [
@@ -1108,29 +1079,6 @@ describe('no suppression syntax', () => {
 	test('a comment naming the checker does not silence a finding', async () => {
 		const findings = await check({ 'src/a.ts': '// fabrika-check-ignore env-read\nexport const url = process.env.DATABASE_URL\n' })
 		expect(locations(findings, 'env-read')).toEqual(['src/a.ts:2:20'])
-	})
-})
-
-describe('the crontab follows the contract', () => {
-	const crontab = (entries: string) => ({
-		...CLEAN_APPLICATION,
-		'zerops.yaml': `zerops:\n  - setup: app\n    run:\n      start: bun server.ts\n${entries}`,
-	})
-
-	test('a contract job with no crontab entry is reported', async () => {
-		expect(locations(await check(crontab('')), 'crontab')).toEqual(['zerops.yaml:2:1'])
-	})
-
-	test('a second entry for the same job is reported', async () => {
-		const entry = "        - timing: '0 3 * * *'\n          command: fabrika job run purgeDeleted\n          allContainers: false\n"
-		const findings = await check(crontab(`      crontab:\n${entry}${entry}`))
-		expect(findings.filter((finding) => finding.rule === 'crontab').map((finding) => finding.message)).toEqual([
-			"job 'purgeDeleted' has a second crontab entry",
-		])
-	})
-
-	test('a zerops.yaml that does not parse is reported, not thrown', async () => {
-		expect(locations(await check({ 'zerops.yaml': 'zerops: [\n' }), 'crontab')).toEqual(['zerops.yaml:1:1'])
 	})
 })
 

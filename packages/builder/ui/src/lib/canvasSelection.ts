@@ -41,3 +41,16 @@ export function revisionForPhase(revisions: readonly RevisionMeta[], phase: Phas
 	}
 	return null
 }
+
+/**
+ * The gate the focused view answers: the current phase's own gate, else the session's open gate (one opened inside the
+ * build) only while the focused revision is that gate, because a submit lands on the open gate's revision.
+ */
+export function focusedGateName(
+	phaseGate: string | null | undefined,
+	openGate: string | null | undefined,
+	focused: RevisionMeta | null,
+): string | null {
+	if (phaseGate) return phaseGate
+	return openGate && focused?.label === openGate ? openGate : null
+}

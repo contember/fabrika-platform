@@ -98,10 +98,9 @@ const PHASE_TABLE: Record<PhaseId, Omit<Phase, 'id' | 'number'>> = {
 		reads: ['.fabrika/issues/ISSUE-*.md', 'tests/browser/*.test.ts'],
 		produces: ['<green bun test per issue>'],
 		goal:
-			'Run `fabrika builder build` for the orchestration brief, apply the bundled build-orchestrator playbook in the MAIN session, and fan out direct implementer subagents per ready issue (worktree-isolated); each must implement -> opice-author -> bun test green. Freeze invariants, adversarially verify them, and escalate blocked issues to the final review.',
-		gate: true,
-		gateView: '.fabrika/build/review.jsx',
-		gateViewCommand: 'fabrika builder build review',
+			'Run `fabrika builder build` for the orchestration brief, apply the bundled build-orchestrator playbook in the MAIN session, and fan out direct implementer subagents per ready issue (worktree-isolated); each must implement -> opice-author -> bun test green. Freeze invariants, adversarially verify them, and report blocked issues to the human at the end.',
+		// The last phase has no gate: `build done` runs each issue's check, and nothing follows to advance to.
+		gate: false,
 		skills: ['fabrika', 'opice-author'],
 	},
 }

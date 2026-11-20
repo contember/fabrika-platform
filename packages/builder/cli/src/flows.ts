@@ -1,7 +1,7 @@
 import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from 'fs'
 import { join } from 'path'
 import { GATE_APPROVE, GATE_CHANGES, GATE_VERDICT_ID } from '../../shared/gate'
-import { literal } from './build-review'
+import { literal } from './canvas-literal'
 import { extractFrontMatter, list, scalar } from './frontmatter'
 import { readSkeletons } from './skeletons'
 

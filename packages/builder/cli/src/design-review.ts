@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, realpathSync, statSync } from 'fs'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'path'
 import { GATE_APPROVE, GATE_CHANGES, GATE_VERDICT_ID } from '../../shared/gate'
-import { literal } from './build-review'
+import { literal } from './canvas-literal'
 import { checkContrast, contrastRatio, type ContrastResult, formatRatio, parseColor, readThemeBlocks, type ThemeMode, tokenHex } from './contrast'
 import { extractFrontMatter, list, scalar } from './frontmatter'
 
@@ -139,7 +139,7 @@ export function summarizeContrast(contrast: DesignContrast): string {
 export const VARIANT_CHOICE_ID = 'variant'
 
 /**
- * The design checkpoint's view: generated, like the build review, so the reviewer sees computed ratios, not claimed ones.
+ * The design checkpoint's view: generated, like the flows review, so the reviewer sees computed ratios, not claimed ones.
  * With variants, each is shown side by side with a required choice; the preview shows only the applied stylesheet.
  * `withDesign`: `design.md` exists, so the view shows the recorded decisions beside the computed values.
  */

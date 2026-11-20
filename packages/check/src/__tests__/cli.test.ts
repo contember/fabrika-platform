@@ -73,6 +73,34 @@ describe('fabrika-check', () => {
 		expect(result.stderr).toBe('fabrika-check: 1 refusal, 0 hints\n')
 	})
 
+	test('lists the refusals and only counts the hints, unless --hints asks for them; the exit status is the same', async () => {
+		const root = await application({
+			...CLEAN_APPLICATION,
+			'src/config.ts': 'export const url = process.env.DATABASE_URL\n',
+			'src/notes/format.ts': 'export const titles = async ({ ctx }) => ctx.db.within.notes.list()\n',
+		})
+
+		const counted = await run(root)
+		const listed = await run('--hints', root)
+
+		expect(counted.code).toBe(1)
+		expect(counted.stdout.split('\n').map((line) => line.split(' ').slice(0, 2).join(' '))).toEqual([
+			'src/config.ts:1:20 env-read',
+			'1 hint',
+			'',
+		])
+		expect(counted.stdout).toContain('fabrika-check --hints lists them')
+		expect(listed.code).toBe(1)
+		expect(listed.stdout.split('\n').map((line) => line.split(' ').slice(0, 2).join(' '))).toEqual([
+			'src/config.ts:1:20 env-read',
+			'Hints —',
+			'src/notes/format.ts:1:42 data-access-location',
+			'',
+		])
+		expect(counted.stderr).toBe('fabrika-check: 1 refusal, 1 hint\n')
+		expect(listed.stderr).toBe(counted.stderr)
+	})
+
 	test('reads no build output, installed package or dot-directory', async () => {
 		const root = await application({
 			...CLEAN_APPLICATION,

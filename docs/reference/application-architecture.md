@@ -2,7 +2,7 @@
 
 Where the code of a Fabrika application goes, and what each part may import and call. Every application, the
 examples and the template follow this layout. `fabrika-check` reads it: a break of platform integrity is a
-**refusal**, which fails the check; a step out of the structure is a **hint**, which it prints and does not fail on.
+**refusal**, which fails the check; a step out of the structure is a **hint**, which it reports and does not fail on.
 The serving API itself (`ctx`, access forms, the test kit) is in
 [`application-runtime.md`](application-runtime.md).
 
@@ -298,6 +298,7 @@ An import is judged by the file or package Bun loads for it:
   every handle to its invocation; the hints only keep the structure readable.
 - Hints are checker output only. They are not part of the contract, the approval snapshot or its digest, so a hint
   costs no approval.
-- `fabrika-check` prints the refusals, then the hints under their own heading, then a count on stderr. It exits 0
-  when only hints remain. There is no suppression syntax for either.
+- `fabrika-check` prints the refusals, then one line with the number of hints, then a count on stderr; `--hints`
+  lists the hints under their own heading instead of that line. It exits 0 when only hints remain. There is no
+  suppression syntax for either.
 - Every other rule of the checker is a refusal; [`packages/check/CLAUDE.md`](../../packages/check/CLAUDE.md) lists them.

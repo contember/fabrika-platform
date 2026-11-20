@@ -137,3 +137,14 @@ export function planBuild(issues: Issue[], board: BuildBoard): BuildPlan {
 		complete: ready.length === 0 && waiting.length === 0 && done.length + blocked.length === issues.length && issues.length > 0,
 	}
 }
+
+const VERDICT_TEXT: Record<GateVerdict, string> = { approve: 'approved', changes: 'changes requested', none: 'no verdict' }
+
+/** One line of what the builder ran for an issue, where and when. */
+export function describeEvidence(evidence: BuildEvidence): string {
+	const commit = `${evidence.commit === null ? 'no commit' : `at ${evidence.commit.slice(0, 7)}`}${evidence.dirty ? ' with uncommitted changes' : ''}`
+	const result = evidence.verdict === undefined
+		? `exit ${evidence.exitCode} · ${(evidence.durationMs / 1000).toFixed(1)} s`
+		: VERDICT_TEXT[evidence.verdict]
+	return `${evidence.command} · ${result} · ${commit} · ${evidence.at}`
+}

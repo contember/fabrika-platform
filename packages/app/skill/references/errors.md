@@ -2,9 +2,12 @@
 
 ## The checker: refusals and hints
 
-`bunx fabrika-check .` prints one finding per line, `<file>:<line>:<col> <rule> <what> (allowed form: <fix>)`.
-Refusals come first and fail the check; hints follow under their own heading and do not. Fix both: a hint is the
-architecture, and a refusal's allowed form is the one fix that passes. There is no suppression syntax.
+`bunx fabrika-check .` prints one refusal per line, `<file>:<line>:<col> <rule> <what> (allowed form: <fix>)`, then
+the number of hints. Refusals fail the check; hints do not. `bunx fabrika-check --hints .` lists the hints too, in the
+same form under their own heading. Control's `run_checks` and the platform build run the checker without `--hints`, so
+they show only the number: an agent without a shell cannot list the hints, and checks the files it changed against the
+hint table below. Fix the refusals and the hints in the files you changed: a hint is the architecture,
+and a refusal's allowed form is the one fix that passes. There is no suppression syntax.
 
 The refusals agents meet most, and their fix:
 

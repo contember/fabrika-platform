@@ -70,7 +70,6 @@ export {
 	readPostgresMigrationBundle,
 	type ReadPostgresMigrationBundleOptions,
 } from './postgres-migrations'
-export { createTestProvisioner, type TestProvisioner } from './postgres-test-provisioner'
 export {
 	definePostgresServiceMigrations,
 	postgresMigrationResultMessage,

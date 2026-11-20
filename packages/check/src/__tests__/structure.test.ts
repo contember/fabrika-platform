@@ -423,6 +423,7 @@ describe('fabrika-check', () => {
 
 	const run = async (
 		files: Readonly<Record<string, string>>,
+		...args: string[]
 	): Promise<{ readonly code: number; readonly stdout: string; readonly stderr: string }> => {
 		const root = await mkdtemp(join(tmpdir(), 'fabrika-check-structure-'))
 		roots.push(root)
@@ -430,15 +431,23 @@ describe('fabrika-check', () => {
 			await mkdir(dirname(join(root, path)), { recursive: true })
 			await writeFile(join(root, path), text)
 		}
-		const child = Bun.spawn(['bun', CLI, root], { stdout: 'pipe', stderr: 'pipe' })
+		const child = Bun.spawn(['bun', CLI, ...args, root], { stdout: 'pipe', stderr: 'pipe' })
 		const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()])
 		return { code, stdout, stderr }
 	}
 
 	const HINTED = { ...CLEAN_APPLICATION, 'src/notes/format.ts': 'export const titles = async ({ ctx }) => ctx.db.within.notes.list()\n' }
 
-	test('exits 0 with hints only, and prints them under their own heading', async () => {
+	test('exits 0 with hints only, and counts them without listing them', async () => {
 		const result = await run(HINTED)
+
+		expect(result.code).toBe(0)
+		expect(result.stdout).toBe('1 hint not listed (hints do not fail the check): fabrika-check --hints lists them\n')
+		expect(result.stderr).toBe('fabrika-check: 0 refusals, 1 hint\n')
+	})
+
+	test('--hints lists them under their own heading', async () => {
+		const result = await run(HINTED, '--hints')
 
 		expect(result.code).toBe(0)
 		expect(result.stdout).toBe(
@@ -485,7 +494,7 @@ describe('fabrika-check', () => {
 	})
 
 	test('exits 1 with a refusal, and prints the refusals before the hints', async () => {
-		const result = await run({ ...HINTED, 'web/main.ts': "import { tables } from '../src/db/tables'\n\nexport const shown = tables\n" })
+		const result = await run({ ...HINTED, 'web/main.ts': "import { tables } from '../src/db/tables'\n\nexport const shown = tables\n" }, '--hints')
 
 		expect(result.code).toBe(1)
 		expect(result.stdout.split('\n').map((line) => line.split(' ')[0])).toEqual([
